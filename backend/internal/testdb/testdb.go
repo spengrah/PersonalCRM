@@ -50,14 +50,16 @@ import (
 
 	"personal-crm/backend/internal/db"
 
+	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivermigrate"
 )
 
 const (
 	// baseDBName is the only base test database the harness will operate on.
-	// The env URL MUST point at this database before any DDL runs (D6a).
+	// The env URL MUST point at this database before any DDL runs.
 	baseDBName = "personal_crm_test"
 
 	// templateDBName is the template the per-package and per-test clones are
@@ -68,11 +70,11 @@ const (
 	clonePrefix = "personal_crm_test_clone_"
 
 	// markerTable is a one-row table inside the template recording the hash of
-	// the migration + River inputs the template was built from (D10).
+	// the migration + River inputs the template was built from.
 	markerTable = "_testdb_template_marker"
 
 	// maintenanceDBName is the maintenance database the admin connection
-	// targets so CREATE/DROP DATABASE run outside any user schema (D9).
+	// targets so CREATE/DROP DATABASE run outside any user schema.
 	maintenanceDBName = "postgres"
 
 	// templateBuildAdvisoryLockID serializes template build/check and clone
@@ -88,8 +90,8 @@ var dbNamePattern = regexp.MustCompile(`^personal_crm_test_(template|clone_[0-9a
 
 // originalBaseURL captures the env database URL as it was at SetupPackage entry,
 // BEFORE the package clone rewrite of DATABASE_URL. NewEphemeralClone derives
-// its admin + clone URLs from this, never from the (rewritten) live env var
-// (D4 step 2). Set once by SetupPackage.
+// its admin + clone URLs from this, never from the (rewritten) live env var.
+// Set once by SetupPackage.
 var originalBaseURL string
 
 // migrationsPath is captured from SetupPackage's WithMigrationsPath option so
@@ -119,8 +121,8 @@ func WithMigrationsPath(p string) Option {
 // then drops the clone. Returns the exit code for the caller to os.Exit.
 //
 // If neither DATABASE_URL nor TEST_DATABASE_URL is set, it skips cloning and
-// runs the tests directly (D12) — the existing per-test DATABASE_URL-unset
-// guards then self-skip the integration tests, exactly as today.
+// runs the tests directly — the existing per-test DATABASE_URL-unset guards
+// then self-skip the integration tests, exactly as today.
 func SetupPackage(m *testing.M, opts ...Option) int {
 	var o options
 	for _, opt := range opts {
@@ -138,7 +140,7 @@ func SetupPackage(m *testing.M, opts ...Option) int {
 
 	ctx := context.Background()
 
-	// D6a: refuse to run any DDL unless the env base DB is exactly
+	// Refuse to run any DDL unless the env base DB is exactly
 	// personal_crm_test. A mis-set TEST_DATABASE_URL pointing at the dev DB
 	// (personal_crm) must fail loudly before any CREATE/DROP can execute.
 	baseName, err := dbNameFromURL(baseURL)
@@ -152,14 +154,14 @@ func SetupPackage(m *testing.M, opts ...Option) int {
 	}
 
 	// Ensure the template exists and matches the current migration + River
-	// inputs (D3). Acquires + releases the advisory lock internally.
+	// inputs. Acquires + releases the advisory lock internally.
 	if err := ensureTemplate(ctx, baseURL, o.migrationsPath); err != nil {
 		fmt.Fprintf(os.Stderr, "testdb: ensure template: %v\n", err)
 		return 1
 	}
 
-	// Create this package's private clone (D4 step 5 / D11a: under the lock,
-	// after re-verifying the template marker).
+	// Create this package's private clone under the advisory lock, after
+	// re-verifying the template marker.
 	cloneName, cloneConnURL, err := createCloneFromTemplate(ctx, baseURL, o.migrationsPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "testdb: create package clone: %v\n", err)
@@ -176,7 +178,7 @@ func SetupPackage(m *testing.M, opts ...Option) int {
 	code := m.Run()
 
 	// Best-effort drop of the package clone. Failure is logged, never fatal —
-	// leaked clones are reaped by `make test-clean-clones` (D13).
+	// leaked clones are reaped by `make test-clean-clones`.
 	if err := dropDatabase(ctx, baseURL, cloneName); err != nil {
 		fmt.Fprintf(os.Stderr, "testdb: drop package clone %s (non-fatal): %v\n", cloneName, err)
 	}
@@ -184,8 +186,8 @@ func SetupPackage(m *testing.M, opts ...Option) int {
 	return code
 }
 
-// NewEphemeralClone returns a fresh clone URL + cleanup func for a single test
-// (D5). Used by schema-mutation tests that roll the schema down/up: a mid-test
+// NewEphemeralClone returns a fresh clone URL + cleanup func for a single
+// test. Used by schema-mutation tests that roll the schema down/up: a mid-test
 // failure dirties only this ephemeral clone, never the package clone or
 // siblings. The clone is derived from originalBaseURL / the template, NOT from
 // the (rewritten) package-clone DATABASE_URL.
@@ -209,11 +211,12 @@ func NewEphemeralClone(t testing.TB) (cloneConnURL string, drop func()) {
 	return cloneConnURL, drop
 }
 
-// CleanClones drops every leaked personal_crm_test_clone_* database (D13). It
-// is the explicit-sweep entrypoint invoked ONLY by `make test-clean-clones`
-// via the standalone go-run cmd; it never runs during `go test`. The template
-// and base are never touched. Every drop is routed through
-// assertDroppableTestDBName.
+// CleanClones drops every leaked personal_crm_test_clone_* database. It is the
+// explicit-sweep entrypoint invoked ONLY by `make test-clean-clones` via the
+// standalone go-run cmd; it never runs during `go test`. The template and base
+// are never touched. Every drop is routed through assertDroppableTestDBName.
+// Returns a non-nil error if any guarded drop fails, so the make target exits
+// non-zero when leaked clones remain.
 func CleanClones() error {
 	baseURL := envBaseURL()
 	if baseURL == "" {
@@ -235,7 +238,7 @@ func CleanClones() error {
 	defer func() { _ = admin.Close(ctx) }()
 
 	// Pattern: clones are clonePrefix + hex. The literal `_` after `clone` is
-	// escaped so it is not a LIKE single-char wildcard (D7).
+	// escaped so it is not a LIKE single-char wildcard.
 	pattern := `personal_crm_test_clone\_%`
 	rows, err := admin.Query(ctx, `SELECT datname FROM pg_database WHERE datname LIKE $1 ESCAPE '\'`, pattern)
 	if err != nil {
@@ -256,20 +259,25 @@ func CleanClones() error {
 	}
 
 	var dropped int
+	var dropErrs []error
 	for _, name := range names {
 		if err := assertDroppableTestDBName(name); err != nil {
 			// Defense in depth: the LIKE pattern should already exclude
-			// non-clone names, but never drop a name the guard rejects.
-			fmt.Fprintf(os.Stderr, "testdb.CleanClones: skipping non-droppable %q: %v\n", name, err)
+			// non-clone names, but never drop a name the guard rejects. A
+			// matching-but-rejected name is unexpected, so surface it.
+			dropErrs = append(dropErrs, fmt.Errorf("skip non-droppable %q: %w", name, err))
 			continue
 		}
 		if err := dropDatabaseConn(ctx, admin, name); err != nil {
-			fmt.Fprintf(os.Stderr, "testdb.CleanClones: drop %s (non-fatal): %v\n", name, err)
+			dropErrs = append(dropErrs, err)
 			continue
 		}
 		dropped++
 	}
 	fmt.Fprintf(os.Stderr, "testdb.CleanClones: dropped %d leaked clone(s)\n", dropped)
+	if len(dropErrs) > 0 {
+		return fmt.Errorf("testdb.CleanClones: %d clone(s) could not be dropped: %w", len(dropErrs), errors.Join(dropErrs...))
+	}
 	return nil
 }
 
@@ -316,8 +324,7 @@ func ensureTemplate(ctx context.Context, baseURL, migPath string) error {
 // buildTemplate creates the template DB, runs migrations into it, and writes
 // the marker. Must be called while holding the advisory lock. Disconnects from
 // the template fully before returning so a subsequent CREATE ... TEMPLATE
-// against it (under the same lock by a cloner) cannot fail on a live session
-// (D11).
+// against it (under the same lock by a cloner) cannot fail on a live session.
 func buildTemplate(ctx context.Context, admin *pgx.Conn, baseURL, migPath, wantHash string) error {
 	if err := createDatabaseConn(ctx, admin, templateDBName); err != nil {
 		return fmt.Errorf("create template: %w", err)
@@ -395,8 +402,19 @@ func readTemplateMarker(ctx context.Context, baseURL string) (hash string, ok bo
 
 	err = conn.QueryRow(ctx, `SELECT hash FROM `+markerTable+` LIMIT 1`).Scan(&hash)
 	if err != nil {
-		// Missing table or no row → treat as marker-absent (rebuild).
-		return "", false, nil //nolint:nilerr // intentional: any read failure means "no usable marker"
+		// Expected "no usable marker" cases → rebuild: the marker table does
+		// not exist yet (template built by a prior incompatible harness, or a
+		// partial build), or it exists but is empty.
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", false, nil
+		}
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UndefinedTable {
+			return "", false, nil
+		}
+		// Anything else (connection failure, permission error, etc.) is a real
+		// error that must be surfaced rather than silently rebuilding.
+		return "", false, fmt.Errorf("read template marker: %w", err)
 	}
 	return hash, true, nil
 }
@@ -406,7 +424,7 @@ func readTemplateMarker(ctx context.Context, baseURL string) (hash string, ok bo
 // ---------------------------------------------------------------------------
 
 // createCloneFromTemplate ensures the template is current, then creates a fresh
-// clone under the advisory lock after re-verifying the template marker (D11a).
+// clone under the advisory lock after re-verifying the template marker.
 // Returns the clone DB name and the full connection URL pointed at it.
 func createCloneFromTemplate(ctx context.Context, baseURL, migPath string) (cloneName, cloneConnURL string, err error) {
 	wantHash, err := templateHashFromInputs(migPath)
@@ -451,7 +469,7 @@ func createCloneFromTemplate(ctx context.Context, baseURL, migPath string) (clon
 }
 
 // ---------------------------------------------------------------------------
-// Name guards (the safety core, D6)
+// Name guards (the safety core)
 // ---------------------------------------------------------------------------
 
 // assertCreatableTestDBName accepts only the template and clone_<hex> names.
@@ -473,9 +491,9 @@ func assertDroppableTestDBName(name string) error {
 	return nil
 }
 
-// assertBaseDBName requires the env base DB to be exactly personal_crm_test
-// (D6a). Used once at SetupPackage entry to make DDL against the dev DB
-// structurally impossible.
+// assertBaseDBName requires the env base DB to be exactly personal_crm_test.
+// Used once at SetupPackage entry to make DDL against the dev DB structurally
+// impossible.
 func assertBaseDBName(name string) error {
 	if name != baseDBName {
 		return fmt.Errorf("refusing to run testdb harness: base database is %q, expected %q", name, baseDBName)
@@ -484,7 +502,7 @@ func assertBaseDBName(name string) error {
 }
 
 // ---------------------------------------------------------------------------
-// DDL helpers (raw-SQL allow-list, D7) — all name-guarded.
+// DDL helpers (raw-SQL allow-list) — all name-guarded.
 // ---------------------------------------------------------------------------
 
 // createDatabaseConn runs CREATE DATABASE after the creatable-name guard.
@@ -578,7 +596,7 @@ func withAdvisoryLock(ctx context.Context, conn *pgx.Conn, fn func() error) (ret
 }
 
 // ---------------------------------------------------------------------------
-// URL derivation (D9)
+// URL derivation
 // ---------------------------------------------------------------------------
 
 // withDatabase parses baseURL, replaces only the database path segment with
@@ -602,7 +620,7 @@ func dbNameFromURL(rawURL string) (string, error) {
 }
 
 // connectAdmin opens a single admin connection to the maintenance DB derived
-// from baseURL, so CREATE/DROP DATABASE run outside any user schema (D9).
+// from baseURL, so CREATE/DROP DATABASE run outside any user schema.
 func connectAdmin(ctx context.Context, baseURL string) (*pgx.Conn, error) {
 	adminConnURL, err := withDatabase(baseURL, maintenanceDBName)
 	if err != nil {
@@ -612,7 +630,7 @@ func connectAdmin(ctx context.Context, baseURL string) (*pgx.Conn, error) {
 }
 
 // ---------------------------------------------------------------------------
-// Template hash (D3)
+// Template hash
 // ---------------------------------------------------------------------------
 
 // riverMigrationFingerprint is the version + SQL content of a single River

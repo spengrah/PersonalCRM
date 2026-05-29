@@ -303,7 +303,7 @@ test-integration:
 
 test-integration-slow:
 	@echo "Running backend slow integration tests..."
-	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test -tags integration_testdb -count=1 ./tests/... -v -run '$(BACKEND_SLOW_TESTS_REGEX)'
+	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test -tags integration_testdb -count=1 ./tests/... ./internal/todoist/... ./internal/testdb/... -v -run '$(BACKEND_SLOW_TESTS_REGEX)'
 
 # Sweep leaked per-package / per-test clone databases
 # (personal_crm_test_clone_*). Crashed processes (SIGKILL between clone
