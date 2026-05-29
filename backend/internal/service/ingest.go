@@ -66,22 +66,6 @@ const (
 // MacHostHandler.CommitCursor.
 var ErrHostRevokedDuringBatch = errors.New("host revoked during ingest batch")
 
-// allowedExternalContactSources is the set of envelope.Source values the
-// external_contact.* inline handler accepts. Mismatches surface as
-// PAYLOAD_INVARIANT. Extend when a new daemon-side source ships.
-var allowedExternalContactSources = map[string]struct{}{
-	"icloud_contacts": {},
-	"anarlog_humans":  {},
-}
-
-// allowedMeetingNoteSources is the set of envelope.Source values the
-// meeting_note.* inline handler accepts. Currently only the
-// daemon-emitted anarlog_sessions source. Mismatches surface as
-// PAYLOAD_INVARIANT.
-var allowedMeetingNoteSources = map[string]struct{}{
-	"anarlog_sessions": {},
-}
-
 // reExternalContactUpsertSourceID matches the envelope SourceID shape
 // for external_contact.upserted events: `<entity_uuid>@<sha256-hex>`.
 // The entity portion may not contain `@`; the hash is exactly 64 hex
@@ -389,61 +373,22 @@ func NewIngestService(
 	}
 }
 
-// hostAuthAllowedKinds is the single source of truth for which event
-// kinds may be submitted via the host-auth path. Daemon-emitted kinds
-// extend the set as they land (currently raw_message.* for Messages
-// staging + external_contact.* for the iCloud Contacts watcher).
-//
-// Symmetric: kinds in this set are REJECTED on the global-API-key
-// path. These kinds have exactly one producer — the Mac daemon — so
-// an internal Pi publisher writing one would either be a bug or a
-// hostile actor with the global key.
-var hostAuthAllowedKinds = map[events.Kind]struct{}{
-	events.KindRawMessageReceived:      {},
-	events.KindRawMessageSent:          {},
-	events.KindExternalContactUpserted: {},
-	events.KindExternalContactDeleted:  {},
-	events.KindMeetingNoteRecorded:     {},
-	events.KindMeetingNoteDeleted:      {},
-	events.KindCallReceived:            {},
-	events.KindCallSent:                {},
-}
-
-// isHostOnlyKind reports whether the kind is in the host-auth
-// allowlist (i.e., daemon-emitted only). Used on BOTH sides of the
+// isHostOnlyKind reports whether the kind is a daemon-push kind (i.e.,
+// belongs to one of the daemonFamilies, so it may be submitted ONLY via
+// the host-auth path). Derived from the descriptor table — a kind is
+// host-only iff it has a kindToFamily entry. Used on BOTH sides of the
 // auth dispatch:
-//   - on the host-auth path, kinds NOT in this set are rejected as
+//   - on the host-auth path, kinds NOT host-only are rejected as
 //     "host-auth doesn't accept this kind"
-//   - on the global-API-key path, kinds IN this set are rejected as
+//   - on the global-API-key path, host-only kinds are rejected as
 //     "this kind requires host-auth"
+//
+// These kinds have exactly one producer — the Mac daemon — so an
+// internal Pi publisher writing one would either be a bug or a hostile
+// actor with the global key.
 func isHostOnlyKind(k events.Kind) bool {
-	_, ok := hostAuthAllowedKinds[k]
+	_, ok := kindToFamily[k]
 	return ok
-}
-
-// isRawMessageKind reports whether the kind is one of the
-// raw_message.* daemon-emitted events. Used by the dispatch loop to
-// pick between handleRawMessage and the external_contact handlers.
-func isRawMessageKind(k events.Kind) bool {
-	return k == events.KindRawMessageReceived || k == events.KindRawMessageSent
-}
-
-// isExternalContactKind reports whether the kind is one of the
-// external_contact.* daemon-emitted events.
-func isExternalContactKind(k events.Kind) bool {
-	return k == events.KindExternalContactUpserted || k == events.KindExternalContactDeleted
-}
-
-// isMeetingNoteKind reports whether the kind is one of the
-// meeting_note.* daemon-emitted events.
-func isMeetingNoteKind(k events.Kind) bool {
-	return k == events.KindMeetingNoteRecorded || k == events.KindMeetingNoteDeleted
-}
-
-// isCallKind reports whether the kind is one of the call.* daemon-emitted
-// phone-call events.
-func isCallKind(k events.Kind) bool {
-	return k == events.KindCallReceived || k == events.KindCallSent
 }
 
 // pendingAggregateKey is the (source, contactID) pair used to dedupe
@@ -587,27 +532,10 @@ func (s *IngestService) IngestBatch(
 		// kinds only). Done BEFORE opening the savepoint so a clean
 		// failure doesn't even open one. The handler's pre-validation
 		// already enforced required-field presence; we cross-check the
-		// envelope/payload pair.
-		if isRawMessageKind(env.Kind) {
-			if rejection := verifyRawMessageInvariants(env, *hostID); rejection != nil {
-				rejection.Index = originalIdx
-				perEventRejections = append(perEventRejections, *rejection)
-				continue
-			}
-		} else if isExternalContactKind(env.Kind) {
-			if rejection := verifyExternalContactInvariants(env, *hostID); rejection != nil {
-				rejection.Index = originalIdx
-				perEventRejections = append(perEventRejections, *rejection)
-				continue
-			}
-		} else if isMeetingNoteKind(env.Kind) {
-			if rejection := verifyMeetingNoteInvariants(env, *hostID); rejection != nil {
-				rejection.Index = originalIdx
-				perEventRejections = append(perEventRejections, *rejection)
-				continue
-			}
-		} else if isCallKind(env.Kind) {
-			if rejection := verifyCallInvariants(env, *hostID); rejection != nil {
+		// envelope/payload pair. Routing is table-driven: the family
+		// descriptor owns which verifier runs for the kind.
+		if fam, ok := kindToFamily[env.Kind]; ok {
+			if rejection := fam.verify(env, *hostID); rejection != nil {
 				rejection.Index = originalIdx
 				perEventRejections = append(perEventRejections, *rejection)
 				continue
@@ -681,9 +609,15 @@ func (s *IngestService) IngestBatch(
 		var pendingFollowUps []func(context.Context)
 
 		if runInline {
-			switch {
-			case isRawMessageKind(env.Kind):
-				contactID, rejection := s.handleRawMessage(ctx, sp, env, *hostID)
+			// Inline dispatch is table-driven: the family descriptor owns
+			// which handler runs for the kind and threads its outputs back
+			// through the uniform dispatch tuple. The post-handler
+			// bookkeeping (rollback on rejection, pendingAggregate for
+			// raw_message, pendingNA/pendingFollowUps for meeting_note,
+			// batchPostCommit for call) is identical to the prior per-arm
+			// switch — only the routing is centralized.
+			if fam, ok := kindToFamily[env.Kind]; ok {
+				contactID, naItem, postCommits, rejection := fam.dispatch(s, ctx, sp, env, *hostID)
 				if rejection != nil {
 					rejection.Index = originalIdx
 					perEventRejections = append(perEventRejections, *rejection)
@@ -695,58 +629,8 @@ func (s *IngestService) IngestBatch(
 				if contactID != nil {
 					pendingAggregate[pendingAggregateKey{Source: env.Source, ContactID: *contactID}] = struct{}{}
 				}
-			case env.Kind == events.KindExternalContactUpserted:
-				if rejection := s.handleExternalContactUpserted(ctx, sp, env, *hostID); rejection != nil {
-					rejection.Index = originalIdx
-					perEventRejections = append(perEventRejections, *rejection)
-					if rbErr := sp.Rollback(ctx); rbErr != nil {
-						return 0, 0, nil, nil, fmt.Errorf("rollback savepoint for rejected index %d (original %d): %w", i, originalIdx, rbErr)
-					}
-					continue
-				}
-			case env.Kind == events.KindExternalContactDeleted:
-				if rejection := s.handleExternalContactDeleted(ctx, sp, env, *hostID); rejection != nil {
-					rejection.Index = originalIdx
-					perEventRejections = append(perEventRejections, *rejection)
-					if rbErr := sp.Rollback(ctx); rbErr != nil {
-						return 0, 0, nil, nil, fmt.Errorf("rollback savepoint for rejected index %d (original %d): %w", i, originalIdx, rbErr)
-					}
-					continue
-				}
-			case env.Kind == events.KindMeetingNoteRecorded:
-				naItem, followUps, rejection := s.handleMeetingNoteRecorded(ctx, sp, env, *hostID)
-				if rejection != nil {
-					rejection.Index = originalIdx
-					perEventRejections = append(perEventRejections, *rejection)
-					if rbErr := sp.Rollback(ctx); rbErr != nil {
-						return 0, 0, nil, nil, fmt.Errorf("rollback savepoint for rejected index %d (original %d): %w", i, originalIdx, rbErr)
-					}
-					continue
-				}
 				pendingNA = naItem
-				pendingFollowUps = followUps
-			case env.Kind == events.KindMeetingNoteDeleted:
-				if rejection := s.handleMeetingNoteDeleted(ctx, sp, env, *hostID); rejection != nil {
-					rejection.Index = originalIdx
-					perEventRejections = append(perEventRejections, *rejection)
-					if rbErr := sp.Rollback(ctx); rbErr != nil {
-						return 0, 0, nil, nil, fmt.Errorf("rollback savepoint for rejected index %d (original %d): %w", i, originalIdx, rbErr)
-					}
-					continue
-				}
-			case isCallKind(env.Kind):
-				postCommit, rejection := s.handleCall(ctx, sp, env, *hostID, env.Kind == events.KindCallSent)
-				if rejection != nil {
-					rejection.Index = originalIdx
-					perEventRejections = append(perEventRejections, *rejection)
-					if rbErr := sp.Rollback(ctx); rbErr != nil {
-						return 0, 0, nil, nil, fmt.Errorf("rollback savepoint for rejected index %d (original %d): %w", i, originalIdx, rbErr)
-					}
-					continue
-				}
-				if postCommit != nil {
-					batchPostCommit = append(batchPostCommit, postCommit)
-				}
+				pendingFollowUps = postCommits
 			}
 		}
 
@@ -931,7 +815,7 @@ func verifyRawMessageInvariants(env *events.Envelope, authenticatedHostID uuid.U
 			Message: "payload host_id does not match authenticated host",
 		}
 	}
-	if env.Source != "messages" {
+	if _, ok := rawMessageAllowedSources[env.Source]; !ok {
 		return &IngestPerEventRejection{
 			Code:    ingestRejectPayloadInvariant,
 			Message: fmt.Sprintf("env.source %q not supported on raw_message kinds", env.Source),
@@ -1067,7 +951,7 @@ func commonExternalContactInvariants(
 			Message: "payload host_id does not match authenticated host",
 		}
 	}
-	if _, ok := allowedExternalContactSources[env.Source]; !ok {
+	if _, ok := externalContactAllowedSources[env.Source]; !ok {
 		return &IngestPerEventRejection{
 			Code:    ingestRejectPayloadInvariant,
 			Message: fmt.Sprintf("env.source %q not supported on external_contact.* kinds", env.Source),
@@ -1639,7 +1523,7 @@ func commonMeetingNoteInvariants(
 			Message: "payload host_id does not match authenticated host",
 		}
 	}
-	if _, ok := allowedMeetingNoteSources[env.Source]; !ok {
+	if _, ok := meetingNoteAllowedSources[env.Source]; !ok {
 		return &IngestPerEventRejection{
 			Code:    ingestRejectPayloadInvariant,
 			Message: fmt.Sprintf("env.source %q not supported on meeting_note.* kinds", env.Source),

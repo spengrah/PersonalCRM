@@ -14,13 +14,6 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// allowedCallSources is the set of envelope.Source values the call.*
-// inline handler accepts. Mismatches surface as PAYLOAD_INVARIANT.
-// Extend when a new daemon-side phone-call source ships.
-var allowedCallSources = map[string]struct{}{
-	repository.InteractionSourcePhoneCalls: {},
-}
-
 // verifyCallInvariants enforces the cross-field consistency properties
 // for call.* envelopes. Returns a *IngestPerEventRejection (caller fills
 // in Index) on any violation, nil on success.
@@ -52,7 +45,7 @@ func verifyCallInvariants(env *events.Envelope, authenticatedHostID uuid.UUID) *
 			Message: "payload host_id does not match authenticated host",
 		}
 	}
-	if _, ok := allowedCallSources[env.Source]; !ok {
+	if _, ok := callAllowedSources[env.Source]; !ok {
 		return &IngestPerEventRejection{
 			Code:    ingestRejectPayloadInvariant,
 			Message: fmt.Sprintf("env.source %q not supported on call kinds", env.Source),
