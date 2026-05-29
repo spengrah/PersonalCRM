@@ -74,7 +74,6 @@ func TestPhoneCallMigration055(t *testing.T) {
 	phoneCallRepo := repository.NewPhoneCallRepository(database.Queries)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	contactRepo := repository.NewContactRepository(database.Queries)
-	macHostRepo := repository.NewMacHostRepository(database.Queries)
 
 	suffix := uuid.NewString()[:8]
 
@@ -94,14 +93,16 @@ func TestPhoneCallMigration055(t *testing.T) {
 
 	// Case 2: a phone_call row blocks the down migration.
 	t.Run("DownRefusesPhoneCallRows", func(t *testing.T) {
-		// Seed a per-test host for FK + cleanup.
-		host, err := macHostRepo.SeedRevokedHostForTest(ctx,
-			"mig-pc-host-"+suffix+"-2", "0.0.0", 1, "h2-"+suffix)
-		require.NoError(t, err)
-
+		// phone_call.mac_host_id is nullable (ON DELETE SET NULL), and the
+		// 055-down guard only counts phone_call rows — it does not inspect
+		// mac_host_id. We leave MacHostID nil rather than seeding a host: the
+		// SeedRevokedMacHost query RETURNs api_key_rotated_at, a column added
+		// by migration 057, which does not exist on this clone rolled down to
+		// 055. (TestMacHostMigrations seeds via SeedMacHost, which RETURNs only
+		// id and is therefore schema-version-agnostic.)
 		uniqueID := "mig-pc-call-" + suffix + "-2"
 		answered := true
-		_, err = phoneCallRepo.UpsertCall(ctx, repository.UpsertPhoneCallParams{
+		_, err := phoneCallRepo.UpsertCall(ctx, repository.UpsertPhoneCallParams{
 			CallUniqueID:    uniqueID,
 			PeerHandle:      "+15551234567",
 			PeerNormalized:  "+15551234567",
@@ -110,7 +111,7 @@ func TestPhoneCallMigration055(t *testing.T) {
 			Answered:        &answered,
 			DurationSeconds: 1,
 			StartedAt:       accelerated.GetCurrentTime().Truncate(time.Microsecond),
-			MacHostID:       &host.ID,
+			MacHostID:       nil,
 		})
 		require.NoError(t, err)
 
