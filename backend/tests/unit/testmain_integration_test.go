@@ -4,6 +4,8 @@ package unit
 
 import (
 	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 
 	"personal-crm/backend/internal/testdb"
@@ -18,4 +20,16 @@ import (
 // DB-backed tests self-skip on unset DATABASE_URL / testing.Short().
 func TestMain(m *testing.M) {
 	os.Exit(testdb.SetupPackage(m, testdb.WithMigrationsPath(migrationsPathForUnit())))
+}
+
+// migrationsPathForUnit returns the absolute path to backend/migrations. Lives
+// in this tagged bridge because the per-package clone harness is the only
+// caller; under the no-tag unit build it is not compiled.
+func migrationsPathForUnit() string {
+	if p := os.Getenv("MIGRATIONS_PATH"); p != "" && filepath.IsAbs(p) {
+		return p
+	}
+	_, filename, _, _ := runtime.Caller(0)
+	testDir := filepath.Dir(filename) // backend/tests/unit
+	return filepath.Join(testDir, "..", "..", "migrations")
 }

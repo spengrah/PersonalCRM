@@ -695,17 +695,19 @@ func riverMigrationFingerprints() ([]riverMigrationFingerprint, error) {
 // unit-testable with fixtures.
 func templateHash(migrationFiles [][]byte, riverMigrations []riverMigrationFingerprint) string {
 	h := sha256.New()
+	// hash.Hash.Write never returns an error (documented contract), so the
+	// Fprintf return values are intentionally discarded.
 	for _, f := range migrationFiles {
 		// Length-prefix each input so concatenation is unambiguous.
-		fmt.Fprintf(h, "f%d:", len(f))
-		h.Write(f)
+		_, _ = fmt.Fprintf(h, "f%d:", len(f))
+		_, _ = h.Write(f)
 	}
 	// River migrations come from AllVersions sorted by version; hash version +
 	// both SQL bodies so a rewrite of an existing migration also invalidates.
 	for _, rm := range riverMigrations {
-		fmt.Fprintf(h, "r%d:%d:%d:", rm.version, len(rm.sqlUp), len(rm.sqlDown))
-		h.Write([]byte(rm.sqlUp))
-		h.Write([]byte(rm.sqlDown))
+		_, _ = fmt.Fprintf(h, "r%d:%d:%d:", rm.version, len(rm.sqlUp), len(rm.sqlDown))
+		_, _ = h.Write([]byte(rm.sqlUp))
+		_, _ = h.Write([]byte(rm.sqlDown))
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }

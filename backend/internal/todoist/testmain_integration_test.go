@@ -4,6 +4,8 @@ package todoist
 
 import (
 	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 
 	"personal-crm/backend/internal/testdb"
@@ -20,4 +22,17 @@ import (
 // DB-backed tests self-skip on unset DATABASE_URL / testing.Short().
 func TestMain(m *testing.M) {
 	os.Exit(testdb.SetupPackage(m, testdb.WithMigrationsPath(migrationsPathForTest())))
+}
+
+// migrationsPathForTest returns the absolute path to backend/migrations from
+// the location of this test file. Lives in this tagged bridge because the
+// per-package clone harness is the only caller; under the no-tag unit build it
+// is not compiled.
+func migrationsPathForTest() string {
+	if path := os.Getenv("MIGRATIONS_PATH"); path != "" && filepath.IsAbs(path) {
+		return path
+	}
+	_, filename, _, _ := runtime.Caller(0)
+	testDir := filepath.Dir(filename) // backend/internal/todoist
+	return filepath.Join(testDir, "..", "..", "migrations")
 }

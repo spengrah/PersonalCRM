@@ -56,14 +56,6 @@ func newServiceSuiteDB(t *testing.T) (*db.Database, context.Context) {
 	return database, ctx
 }
 
-func migrationsPathForUnit() string {
-	// Preferred: explicit env var (matches what Makefile's make test sets).
-	if p := os.Getenv("MIGRATIONS_PATH"); p != "" {
-		return p
-	}
-	return "../../migrations"
-}
-
 // TestSyncService_TriggerSync_UsesEnqueuerWhenSet verifies that when
 // SetRiverEnqueuer has been called, TriggerSync routes through the
 // repository's atomic-claim helper and does NOT run the provider inline.

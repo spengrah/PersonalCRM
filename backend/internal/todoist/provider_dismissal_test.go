@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"path/filepath"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -222,18 +220,6 @@ func cancelledContext() context.Context {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	return ctx
-}
-
-// migrationsPathForTest returns the absolute path to backend/migrations from the
-// location of this test file. Same-package test, so we can't reuse
-// tests/integration_test.go's getMigrationsPath helper.
-func migrationsPathForTest() string {
-	if path := os.Getenv("MIGRATIONS_PATH"); path != "" && filepath.IsAbs(path) {
-		return path
-	}
-	_, filename, _, _ := runtime.Caller(0)
-	testDir := filepath.Dir(filename) // backend/internal/todoist
-	return filepath.Join(testDir, "..", "..", "migrations")
 }
 
 // createDismissalContact creates a contact with cadence set, a full set of
