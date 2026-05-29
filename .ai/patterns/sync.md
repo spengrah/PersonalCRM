@@ -9,8 +9,22 @@
 | Todoist | `todoist` | `fetch_all` | `backend/internal/todoist/provider.go` |
 | Messages | `messages` | `push` | `backend/internal/messages/provider.go` |
 | iCloud Contacts | `icloud_contacts` | `push` | `backend/internal/icloudcontacts/provider.go` |
+| Phone & FaceTime | `phone_calls` | `push` | `backend/internal/phonecalls/provider.go` |
 
-Providers are registered in `backend/cmd/crm-api/main.go` via `providerRegistry.Register()`.
+The poll-strategy providers register themselves in
+`backend/cmd/crm-api/main.go` via `providerRegistry.Register()`. The three
+**push** providers register through one helper,
+`push.RegisterPushProviders(providerRegistry)`
+(`backend/internal/push/push.go`), which main.go calls once.
+
+**Not every push source has a provider stub.** The `anarlog_humans` and
+`anarlog_sessions` push sources are accepted by the ingest pipeline but
+have NO `SyncProvider` registration by design — they are not poll-able and
+the scheduler never needs a push-strategy entry to skip for them. So the
+ProviderRegistry covers exactly three of the five push sources. The
+daemonFamily descriptor's `providerStubSources` field encodes which
+sources MUST have a stub; the agreement test cross-checks it against the
+registry built by `push.RegisterPushProviders`.
 
 ### Sync Strategies
 
@@ -25,6 +39,55 @@ Push-strategy rows live in `external_sync_state` keyed by
 `(source, account_id)` where `account_id = mac_host.id`. The daemon owns
 the cursor JSON shape; the Pi treats it as opaque TEXT. The three-stage
 transactional CAS lives in `SyncRepository.CommitMacHostCursor`.
+
+### Daemon Event Families (the descriptor table)
+
+Daemon-push events (the ones submitted with host-auth, never on the
+global-API-key path) are grouped into four **families**, one descriptor
+per family, in `backend/internal/service/ingest_registry.go`:
+
+| Family | Kinds | Allowed sources | Stub sources | Writes interactions |
+|--------|-------|-----------------|--------------|---------------------|
+| `raw_message` | `raw_message.received/.sent` | `messages` | `messages` | yes (`messages`) |
+| `external_contact` | `external_contact.upserted/.deleted` | `icloud_contacts`, `anarlog_humans` | `icloud_contacts` | no |
+| `meeting_note` | `meeting_note.recorded/.deleted` | `anarlog_sessions` | — (none) | yes (`anarlog_sessions`) |
+| `call` | `call.received/.sent` | `phone_calls` | `phone_calls` | yes (`phone_calls`) |
+
+The `daemonFamily` table is the single source of truth for: the host-auth
+allowlist (`isHostOnlyKind` is derived — a kind is host-only iff it has a
+`kindToFamily` entry), the per-family invariant verifier, the per-family
+allowed envelope-source set, and the inline-dispatch routing. The
+`IngestBatch` Step-2 invariant routing and Step-5 inline dispatch are
+single `kindToFamily[env.Kind]` lookups.
+
+**Adding a new push source** = add or extend a descriptor entry here, then
+update the agreement test's expected literals. The pieces that live in
+other packages (`events.AllKinds`/`kindPayloadTypes`,
+`mac.AllowedPushSources`, the `interaction.source` SQL CHECK, the provider
+stubs) are NOT driven from this table — the import graph forbids it — but
+they are cross-checked against it:
+
+- `TestDaemonFamilies_AgreeWithRegistries`
+  (`backend/internal/service/ingest_registry_test.go`, `package
+  service_test`) asserts the descriptor agrees set-for-set with
+  `events.AllKinds`/`kindPayloadTypes`, `mac.AllowedPushSources`, the
+  `repository.InteractionSource*` constants, and the registry built by
+  `push.RegisterPushProviders`, plus per-family mapping pins that catch
+  cross-family metadata swaps.
+- `TestInteractionSourceCheck_AgreesWithDescriptorAndConstants`
+  (`backend/tests/`, live-DB) parses the live `interaction_source_check`
+  via `pg_get_constraintdef` and asserts it equals the
+  `InteractionSource*` constants set-for-set, and that every
+  interaction-writing family's `interactionSource` is in it. The CHECK is
+  KEPT (not migrated to a lookup table) — it mixes daemon-push and
+  Pi-internal sources, a different concern from this table.
+
+**Grep guard:** `scripts/check-ingest-registry.sh` (wired into `make lint`
++ `make ci-test` + a CI step) fails if the `IngestBatch` body names any
+event kind (constant or dotted string literal) or any per-family
+predicate. Routing must go through the descriptor table; a stray
+`events.KindFoo` inside `IngestBatch` is a lint failure. Handler/verifier
+bodies OUTSIDE `IngestBatch` legitimately name kinds and are out of scope.
 
 ---
 

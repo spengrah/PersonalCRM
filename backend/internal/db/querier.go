@@ -458,6 +458,15 @@ type Querier interface {
 	GetIdentityByIdentifier(ctx context.Context, arg GetIdentityByIdentifierParams) (*ExternalIdentity, error)
 	// Interaction queries
 	GetInteraction(ctx context.Context, id pgtype.UUID) (*Interaction, error)
+	// Test assertion — returns the rendered definition of the
+	// interaction_source_check CHECK constraint via pg_get_constraintdef.
+	// Scoped by (conrelid, conname) because constraint names are NOT
+	// globally unique — scoping to the interaction relation avoids a future
+	// cross-table/-schema name collision. The descriptor-vs-CHECK agreement
+	// test parses the returned ARRAY[...] string literals to assert the
+	// live CHECK set equals the repository.InteractionSource* constants.
+	// Read-only catalog access; production code never calls this.
+	GetInteractionSourceCheckDef(ctx context.Context) (string, error)
 	// Legacy lookup for action-kind rows (no new creator path; preserved for
 	// pre-migration rows). Multiple action rows are possible per
 	// contact/provider; this returns the most recent.

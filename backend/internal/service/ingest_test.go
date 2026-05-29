@@ -82,9 +82,12 @@ func TestIngestService_RejectsLenMismatchOnOriginalIndices(t *testing.T) {
 // match + staging upsert, aggregator enqueue) are covered by the
 // integration tests under backend/tests/api/.
 
-// TestIsHostOnlyKind_Whitelist verifies the allowlist contains exactly
-// the daemon-emitted raw_message.* + external_contact.* kinds and
-// rejects all others. Locks the allowlist contract at the unit level.
+// TestIsHostOnlyKind_Whitelist verifies the allowlist contains the
+// daemon-emitted kinds (raw_message.* / external_contact.* /
+// meeting_note.* / call.*) and rejects all others. Locks the allowlist
+// contract at the unit level. (external_contact.* / meeting_note.* /
+// call.* membership is asserted by the dedicated TestIsHostOnlyKind_*
+// tests below.)
 func TestIsHostOnlyKind_Whitelist(t *testing.T) {
 	require.True(t, isHostOnlyKind(events.KindRawMessageReceived))
 	require.True(t, isHostOnlyKind(events.KindRawMessageSent))
@@ -102,12 +105,16 @@ func TestIsHostOnlyKind_Whitelist(t *testing.T) {
 	}
 }
 
-// TestIsRawMessageKind verifies the helper.
-func TestIsRawMessageKind(t *testing.T) {
-	require.True(t, isRawMessageKind(events.KindRawMessageReceived))
-	require.True(t, isRawMessageKind(events.KindRawMessageSent))
-	require.False(t, isRawMessageKind(events.KindMessageReceived))
-	require.False(t, isRawMessageKind(events.KindCalendarAttended))
+// TestRawMessageKindRouting verifies the raw_message.* kinds route to
+// the raw_message family via the descriptor table and that unrelated
+// kinds do not.
+func TestRawMessageKindRouting(t *testing.T) {
+	require.Equal(t, "raw_message", kindToFamily[events.KindRawMessageReceived].name)
+	require.Equal(t, "raw_message", kindToFamily[events.KindRawMessageSent].name)
+	_, ok := kindToFamily[events.KindMessageReceived]
+	require.False(t, ok)
+	_, ok = kindToFamily[events.KindCalendarAttended]
+	require.False(t, ok)
 }
 
 // TestVerifyRawMessageInvariants_HappyPath confirms a well-formed
@@ -289,11 +296,12 @@ func TestIsHostOnlyKind_IncludesExternalContact(t *testing.T) {
 	require.True(t, isHostOnlyKind(events.KindExternalContactDeleted))
 }
 
-func TestIsExternalContactKind(t *testing.T) {
-	require.True(t, isExternalContactKind(events.KindExternalContactUpserted))
-	require.True(t, isExternalContactKind(events.KindExternalContactDeleted))
-	require.False(t, isExternalContactKind(events.KindRawMessageReceived))
-	require.False(t, isExternalContactKind(events.KindMessageReceived))
+func TestExternalContactKindRouting(t *testing.T) {
+	require.Equal(t, "external_contact", kindToFamily[events.KindExternalContactUpserted].name)
+	require.Equal(t, "external_contact", kindToFamily[events.KindExternalContactDeleted].name)
+	require.Equal(t, "raw_message", kindToFamily[events.KindRawMessageReceived].name)
+	_, ok := kindToFamily[events.KindMessageReceived]
+	require.False(t, ok)
 }
 
 func TestVerifyExternalContactInvariants_HappyPath_Upsert(t *testing.T) {
@@ -326,7 +334,7 @@ func TestVerifyExternalContactInvariants_HostMismatch(t *testing.T) {
 func TestVerifyExternalContactInvariants_SourceMismatch(t *testing.T) {
 	host := uuid.New()
 	env := validUpsertedEnv(host, "CN-1")
-	env.Source = "gcontacts" // not in allowedExternalContactSources
+	env.Source = "gcontacts" // not in the external_contact family's allowed sources
 	rej := verifyExternalContactInvariants(env, host)
 	require.NotNil(t, rej)
 	require.Contains(t, rej.Message, "not supported")
@@ -1096,11 +1104,12 @@ func (r *recordingExternalContactWriter) UpsertTx(
 // ----------------------------------------------------------------------------
 
 // TestIsMeetingNoteKind exercises the kind-classifier helper.
-func TestIsMeetingNoteKind(t *testing.T) {
-	require.True(t, isMeetingNoteKind(events.KindMeetingNoteRecorded))
-	require.True(t, isMeetingNoteKind(events.KindMeetingNoteDeleted))
-	require.False(t, isMeetingNoteKind(events.KindExternalContactUpserted))
-	require.False(t, isMeetingNoteKind(events.KindMessageReceived))
+func TestMeetingNoteKindRouting(t *testing.T) {
+	require.Equal(t, "meeting_note", kindToFamily[events.KindMeetingNoteRecorded].name)
+	require.Equal(t, "meeting_note", kindToFamily[events.KindMeetingNoteDeleted].name)
+	require.Equal(t, "external_contact", kindToFamily[events.KindExternalContactUpserted].name)
+	_, ok := kindToFamily[events.KindMessageReceived]
+	require.False(t, ok)
 }
 
 // validMeetingNoteRecordedEnv constructs a structurally-valid envelope
@@ -1148,7 +1157,7 @@ func TestVerifyMeetingNoteInvariants_HostMismatch(t *testing.T) {
 func TestVerifyMeetingNoteInvariants_SourceMismatch(t *testing.T) {
 	host := uuid.New()
 	env := validMeetingNoteRecordedEnv(t, host, uuid.NewString())
-	env.Source = "icloud_contacts" // not in allowedMeetingNoteSources
+	env.Source = "icloud_contacts" // not in the meeting_note family's allowed sources
 	rej := verifyMeetingNoteInvariants(env, host)
 	require.NotNil(t, rej)
 	require.Contains(t, rej.Message, "not supported")

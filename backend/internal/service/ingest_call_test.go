@@ -154,7 +154,7 @@ func TestVerifyCallInvariants_HostIDMismatch(t *testing.T) {
 func TestVerifyCallInvariants_RejectsUnknownSource(t *testing.T) {
 	host := uuid.New()
 	env := validCallEnv(t, events.KindCallReceived, host, "uniq-4")
-	env.Source = "skype" // not in allowedCallSources
+	env.Source = "skype" // not in the call family's allowed sources
 	rej := verifyCallInvariants(env, host)
 	require.NotNil(t, rej)
 	require.Equal(t, ingestRejectPayloadInvariant, rej.Code)
@@ -224,14 +224,14 @@ func TestVerifyCallInvariants_RejectsUnnormalizablePeer(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// isCallKind / isHostOnlyKind allowlist tests (T8, T9 — partial).
+// call kind routing / isHostOnlyKind allowlist tests (T8, T9 — partial).
 // ---------------------------------------------------------------------------
 
-func TestIsCallKind(t *testing.T) {
-	require.True(t, isCallKind(events.KindCallReceived))
-	require.True(t, isCallKind(events.KindCallSent))
-	require.False(t, isCallKind(events.KindRawMessageReceived))
-	require.False(t, isCallKind(events.KindExternalContactUpserted))
+func TestCallKindRouting(t *testing.T) {
+	require.Equal(t, "call", kindToFamily[events.KindCallReceived].name)
+	require.Equal(t, "call", kindToFamily[events.KindCallSent].name)
+	require.Equal(t, "raw_message", kindToFamily[events.KindRawMessageReceived].name)
+	require.Equal(t, "external_contact", kindToFamily[events.KindExternalContactUpserted].name)
 }
 
 func TestIsHostOnlyKind_IncludesCalls(t *testing.T) {
