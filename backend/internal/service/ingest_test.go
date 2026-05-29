@@ -82,9 +82,12 @@ func TestIngestService_RejectsLenMismatchOnOriginalIndices(t *testing.T) {
 // match + staging upsert, aggregator enqueue) are covered by the
 // integration tests under backend/tests/api/.
 
-// TestIsHostOnlyKind_Whitelist verifies the allowlist contains exactly
-// the daemon-emitted raw_message.* + external_contact.* kinds and
-// rejects all others. Locks the allowlist contract at the unit level.
+// TestIsHostOnlyKind_Whitelist verifies the allowlist contains the
+// daemon-emitted kinds (raw_message.* / external_contact.* /
+// meeting_note.* / call.*) and rejects all others. Locks the allowlist
+// contract at the unit level. (external_contact.* / meeting_note.* /
+// call.* membership is asserted by the dedicated TestIsHostOnlyKind_*
+// tests below.)
 func TestIsHostOnlyKind_Whitelist(t *testing.T) {
 	require.True(t, isHostOnlyKind(events.KindRawMessageReceived))
 	require.True(t, isHostOnlyKind(events.KindRawMessageSent))

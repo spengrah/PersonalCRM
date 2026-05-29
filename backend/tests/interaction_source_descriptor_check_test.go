@@ -17,19 +17,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// checkDefShapeRe asserts the rendered constraint is the expected
-// `source = ANY (ARRAY[...]::text)` form. PostgreSQL 16 renders an
-// IN (...) CHECK this way; if a future PG ever renders it as IN (...)
-// the test fails loudly here rather than silently mis-parsing.
-var checkDefShapeRe = regexp.MustCompile(`source = ANY \(ARRAY\[.*\]\)`)
+// checkDefShapeRe asserts the rendered constraint is EXACTLY the
+// `CHECK ((source = ANY (ARRAY[...])))` form PostgreSQL 16 produces for a
+// single source-membership predicate. The pattern is fully anchored
+// (^...$) so a widened constraint that bolts an extra permissive clause
+// onto the ANY (e.g. `... OR source = 'x'`) fails the shape match instead
+// of slipping through a substring search — the literal parser only sees
+// the ARRAY members, so without this anchor an added OR-clause would
+// widen the live set undetected. If a future PG ever renders it as
+// IN (...) the test also fails loudly here rather than mis-parsing.
+var checkDefShapeRe = regexp.MustCompile(`^CHECK \(\(source = ANY \(ARRAY\[[^]]*\]\)\)\)$`)
 
 // checkDefLiteralRe extracts each quoted source literal from the rendered
 // ARRAY[...] — every element is `'value'::text`.
 var checkDefLiteralRe = regexp.MustCompile(`'([^']+)'::text`)
 
 // TestInteractionSourceCheck_AgreesWithDescriptorAndConstants is the
-// live-DB half of #342 Decision 1. It parses the actual
-// interaction_source_check membership from the running PostgreSQL via
+// live-DB half of the interaction.source agreement: the CHECK constraint
+// is kept (not migrated to a lookup table), so this test pins it. It
+// parses the actual interaction_source_check membership from the running
+// PostgreSQL via
 // pg_get_constraintdef and asserts, set-for-set:
 //
 //	live CHECK set  ==  all repository.InteractionSource* constants

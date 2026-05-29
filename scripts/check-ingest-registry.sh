@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# check-ingest-registry.sh — grep guard for #342's descriptor table.
+# check-ingest-registry.sh — grep guard for the daemonFamily descriptor
+# table.
 #
 # Enforces that the IngestBatch function body in
 # backend/internal/service/ingest.go routes EVERY daemon-push kind

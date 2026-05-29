@@ -15,9 +15,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestDaemonFamilies_AgreeWithRegistries is the centerpiece "mechanical
-// prevention" for #342. It reads service.DaemonFamilyViews() and asserts
-// the descriptor table agrees set-for-set (and per-family mapping-for-
+// TestDaemonFamilies_AgreeWithRegistries is the centerpiece mechanical
+// guard against the daemon-push "add a source in N places" ritual
+// drifting. It reads service.DaemonFamilyViews() and asserts the
+// descriptor table agrees set-for-set (and per-family mapping-for-
 // mapping) with every other place the daemon-push ritual is duplicated:
 // events.AllKinds / kindPayloadTypes, mac.AllowedPushSources, the
 // repository.InteractionSource* constants, and the push ProviderRegistry
