@@ -127,8 +127,10 @@ func setupAtomicTxTestEnv(t *testing.T) (*atomicTxTestEnv, func()) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	// Migrations are applied once into the template; the per-package clone
+	// (testdb.SetupPackage in testmain_integration_test.go) inherits the
+	// fully-migrated schema, so no inline db.RunMigrations is needed here.
 	ctx := context.Background()
-	require.NoError(t, db.RunMigrations(ctx, databaseURL, migrationsPathForTest()))
 
 	database, err := db.NewDatabase(ctx, config.DatabaseConfig{
 		URL:               databaseURL,

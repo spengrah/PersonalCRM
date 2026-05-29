@@ -138,10 +138,9 @@ func newProviderTestEnv(t *testing.T) *providerTestEnv {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
-	if err := db.RunMigrations(context.Background(), databaseURL, migrationsPathForTest()); err != nil {
-		t.Fatalf("run migrations: %v", err)
-	}
-
+	// Migrations are applied once into the template; the per-package clone
+	// (testdb.SetupPackage in testmain_integration_test.go) inherits the
+	// fully-migrated schema, so no inline db.RunMigrations is needed here.
 	ctx := context.Background()
 	database, err := db.NewDatabase(ctx, config.DatabaseConfig{
 		URL:               databaseURL,

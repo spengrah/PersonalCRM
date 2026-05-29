@@ -3,7 +3,6 @@ package tests
 import (
 	"bufio"
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -35,23 +34,10 @@ func getMigrationsPath() string {
 	return filepath.Join(testDir, "..", "migrations")
 }
 
-// TestMain applies database migrations once per `go test` invocation before
-// running any tests in this package. Individual test helpers used to each call
-// db.RunMigrations, which paid the River migrator pgxpool + advisory-lock cost
-// on every call. Running it once here is behavior-preserving (migrations are
-// idempotent) and cuts CI integration-test time substantially.
-//
-// If DATABASE_URL is unset, migrations are skipped here; individual tests will
-// then skip themselves via their existing DATABASE_URL guards.
-func TestMain(m *testing.M) {
-	if databaseURL := os.Getenv("DATABASE_URL"); databaseURL != "" {
-		if err := db.RunMigrations(context.Background(), databaseURL, getMigrationsPath()); err != nil {
-			fmt.Fprintf(os.Stderr, "TestMain: failed to run migrations: %v\n", err)
-			os.Exit(1)
-		}
-	}
-	os.Exit(m.Run())
-}
+// TestMain lives in testmain_integration_test.go (build-tagged) and clones a
+// per-package template database via testdb.SetupPackage. The getMigrationsPath
+// helper below is shared between the tagged bridge and the migration tests in
+// this package, so it stays untagged here.
 
 // TestRunMigrations_Integration tests the migration runner
 func TestRunMigrations_Integration(t *testing.T) {
