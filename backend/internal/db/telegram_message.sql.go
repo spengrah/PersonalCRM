@@ -394,6 +394,45 @@ func (q *Queries) GetTelegramMessage(ctx context.Context, arg GetTelegramMessage
 	return &i, err
 }
 
+const GetTelegramMessageByIDForTest = `-- name: GetTelegramMessageByIDForTest :one
+SELECT id, telegram_message_id, telegram_chat_id, chat_type, chat_title, message_text, message_type, sent_at, edited_at, is_outgoing, reply_to_msg_id, peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone, matched_contact_id, interaction_id, processed_at, deleted_at, created_at, peer_entity_resolved, claimed_at, claimed_session_ref FROM telegram_message WHERE id = $1
+`
+
+// Test-only: fetches a row by id WITHOUT the deleted_at IS NULL filter, so the
+// all-fields-populated test can read back a row whose deleted_at is set.
+// Production code MUST NOT call this (it would return soft-deleted rows).
+func (q *Queries) GetTelegramMessageByIDForTest(ctx context.Context, id pgtype.UUID) (*TelegramMessage, error) {
+	row := q.db.QueryRow(ctx, GetTelegramMessageByIDForTest, id)
+	var i TelegramMessage
+	err := row.Scan(
+		&i.ID,
+		&i.TelegramMessageID,
+		&i.TelegramChatID,
+		&i.ChatType,
+		&i.ChatTitle,
+		&i.MessageText,
+		&i.MessageType,
+		&i.SentAt,
+		&i.EditedAt,
+		&i.IsOutgoing,
+		&i.ReplyToMsgID,
+		&i.PeerUserID,
+		&i.PeerUsername,
+		&i.PeerFirstName,
+		&i.PeerLastName,
+		&i.PeerPhone,
+		&i.MatchedContactID,
+		&i.InteractionID,
+		&i.ProcessedAt,
+		&i.DeletedAt,
+		&i.CreatedAt,
+		&i.PeerEntityResolved,
+		&i.ClaimedAt,
+		&i.ClaimedSessionRef,
+	)
+	return &i, err
+}
+
 const HardDeleteTelegramMessagesByChatIDRange = `-- name: HardDeleteTelegramMessagesByChatIDRange :exec
 
 DELETE FROM telegram_message
@@ -416,6 +455,111 @@ type HardDeleteTelegramMessagesByChatIDRangeParams struct {
 func (q *Queries) HardDeleteTelegramMessagesByChatIDRange(ctx context.Context, arg HardDeleteTelegramMessagesByChatIDRangeParams) error {
 	_, err := q.db.Exec(ctx, HardDeleteTelegramMessagesByChatIDRange, arg.Lo, arg.Hi)
 	return err
+}
+
+const InsertFullTelegramMessageForTest = `-- name: InsertFullTelegramMessageForTest :one
+INSERT INTO telegram_message (
+    telegram_message_id, telegram_chat_id, chat_type, chat_title,
+    message_text, message_type, sent_at, edited_at, is_outgoing,
+    reply_to_msg_id, peer_user_id, peer_username, peer_first_name,
+    peer_last_name, peer_phone, matched_contact_id, interaction_id,
+    processed_at, deleted_at, peer_entity_resolved, claimed_at,
+    claimed_session_ref
+) VALUES (
+    $1, $2, $3, $4,
+    $5, $6, $7, $8, $9,
+    $10, $11, $12, $13,
+    $14, $15, $16, $17,
+    $18, $19, $20, $21,
+    $22
+)
+RETURNING id, telegram_message_id, telegram_chat_id, chat_type, chat_title, message_text, message_type, sent_at, edited_at, is_outgoing, reply_to_msg_id, peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone, matched_contact_id, interaction_id, processed_at, deleted_at, created_at, peer_entity_resolved, claimed_at, claimed_session_ref
+`
+
+type InsertFullTelegramMessageForTestParams struct {
+	TelegramMessageID  int32              `json:"telegram_message_id"`
+	TelegramChatID     int64              `json:"telegram_chat_id"`
+	ChatType           string             `json:"chat_type"`
+	ChatTitle          pgtype.Text        `json:"chat_title"`
+	MessageText        pgtype.Text        `json:"message_text"`
+	MessageType        string             `json:"message_type"`
+	SentAt             pgtype.Timestamptz `json:"sent_at"`
+	EditedAt           pgtype.Timestamptz `json:"edited_at"`
+	IsOutgoing         bool               `json:"is_outgoing"`
+	ReplyToMsgID       pgtype.Int4        `json:"reply_to_msg_id"`
+	PeerUserID         pgtype.Int8        `json:"peer_user_id"`
+	PeerUsername       pgtype.Text        `json:"peer_username"`
+	PeerFirstName      pgtype.Text        `json:"peer_first_name"`
+	PeerLastName       pgtype.Text        `json:"peer_last_name"`
+	PeerPhone          pgtype.Text        `json:"peer_phone"`
+	MatchedContactID   pgtype.UUID        `json:"matched_contact_id"`
+	InteractionID      pgtype.UUID        `json:"interaction_id"`
+	ProcessedAt        pgtype.Timestamptz `json:"processed_at"`
+	DeletedAt          pgtype.Timestamptz `json:"deleted_at"`
+	PeerEntityResolved bool               `json:"peer_entity_resolved"`
+	ClaimedAt          pgtype.Timestamptz `json:"claimed_at"`
+	ClaimedSessionRef  pgtype.Text        `json:"claimed_session_ref"`
+}
+
+// Test-only: inserts a telegram_message row with EVERY column explicitly set
+// (including the system-managed columns UpsertTelegramMessage leaves NULL:
+// matched_contact_id, interaction_id, processed_at, deleted_at, claimed_at,
+// claimed_session_ref). Used by the all-fields-populated regression test so a
+// future explicit SELECT list that drops a column is caught by a non-zero read.
+// Production code MUST NOT call this.
+func (q *Queries) InsertFullTelegramMessageForTest(ctx context.Context, arg InsertFullTelegramMessageForTestParams) (*TelegramMessage, error) {
+	row := q.db.QueryRow(ctx, InsertFullTelegramMessageForTest,
+		arg.TelegramMessageID,
+		arg.TelegramChatID,
+		arg.ChatType,
+		arg.ChatTitle,
+		arg.MessageText,
+		arg.MessageType,
+		arg.SentAt,
+		arg.EditedAt,
+		arg.IsOutgoing,
+		arg.ReplyToMsgID,
+		arg.PeerUserID,
+		arg.PeerUsername,
+		arg.PeerFirstName,
+		arg.PeerLastName,
+		arg.PeerPhone,
+		arg.MatchedContactID,
+		arg.InteractionID,
+		arg.ProcessedAt,
+		arg.DeletedAt,
+		arg.PeerEntityResolved,
+		arg.ClaimedAt,
+		arg.ClaimedSessionRef,
+	)
+	var i TelegramMessage
+	err := row.Scan(
+		&i.ID,
+		&i.TelegramMessageID,
+		&i.TelegramChatID,
+		&i.ChatType,
+		&i.ChatTitle,
+		&i.MessageText,
+		&i.MessageType,
+		&i.SentAt,
+		&i.EditedAt,
+		&i.IsOutgoing,
+		&i.ReplyToMsgID,
+		&i.PeerUserID,
+		&i.PeerUsername,
+		&i.PeerFirstName,
+		&i.PeerLastName,
+		&i.PeerPhone,
+		&i.MatchedContactID,
+		&i.InteractionID,
+		&i.ProcessedAt,
+		&i.DeletedAt,
+		&i.CreatedAt,
+		&i.PeerEntityResolved,
+		&i.ClaimedAt,
+		&i.ClaimedSessionRef,
+	)
+	return &i, err
 }
 
 const ListDistinctUnmatchedPeers = `-- name: ListDistinctUnmatchedPeers :many
