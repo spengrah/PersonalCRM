@@ -167,6 +167,10 @@ DUP_FINGERPRINTS=$(
 )
 
 violation_count=0
+# Feed the loop via process substitution (a pipe/FD, NOT a here-document temp
+# file) so the guard cannot fail open if /tmp is read-only — a here-string
+# would silently skip the loop and still exit 0. The loop runs in the current
+# shell (not a pipe subshell) so violation_count survives.
 while IFS= read -r fp; do
   [[ -z "$fp" ]] && continue
   if is_allowlisted "$fp"; then
@@ -186,7 +190,7 @@ while IFS= read -r fp; do
   echo "      queries: $locs" >&2
   echo "      columns: $cols" >&2
   violation_count=$((violation_count + 1))
-done <<< "$DUP_FINGERPRINTS"
+done < <(printf '%s\n' "$DUP_FINGERPRINTS")
 
 if (( violation_count > 0 )); then
   echo >&2
