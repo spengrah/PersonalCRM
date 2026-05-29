@@ -551,6 +551,10 @@ type Querier interface {
 	GetTelegramChannelState(ctx context.Context, channelID int64) (*TelegramChannelState, error)
 	GetTelegramChatConfig(ctx context.Context, telegramChatID int64) (*TelegramChatConfig, error)
 	GetTelegramMessage(ctx context.Context, arg GetTelegramMessageParams) (*TelegramMessage, error)
+	// Test-only: fetches a row by id WITHOUT the deleted_at IS NULL filter, so the
+	// all-fields-populated test can read back a row whose deleted_at is set.
+	// Production code MUST NOT call this (it would return soft-deleted rows).
+	GetTelegramMessageByIDForTest(ctx context.Context, id pgtype.UUID) (*TelegramMessage, error)
 	GetTelegramSession(ctx context.Context) (*TelegramSession, error)
 	GetTelegramUpdateState(ctx context.Context, userID int64) (*TelegramUpdateState, error)
 	// Probe used by the dispatch loop's revive-bypass: when a duplicate
@@ -619,6 +623,13 @@ type Querier interface {
 	// already holds the claim. Callers treat 0 as "someone else wrote this
 	// event; return nil without mutating state".
 	InsertEventConsumerClaim(ctx context.Context, arg InsertEventConsumerClaimParams) (int64, error)
+	// Test-only: inserts a telegram_message row with EVERY column explicitly set
+	// (including the system-managed columns UpsertTelegramMessage leaves NULL:
+	// matched_contact_id, interaction_id, processed_at, deleted_at, claimed_at,
+	// claimed_session_ref). Used by the all-fields-populated regression test so a
+	// future explicit SELECT list that drops a column is caught by a non-zero read.
+	// Production code MUST NOT call this.
+	InsertFullTelegramMessageForTest(ctx context.Context, arg InsertFullTelegramMessageForTestParams) (*TelegramMessage, error)
 	// First-commit insert path. ON CONFLICT DO NOTHING handles the
 	// concurrent-first-write race: the loser gets zero rows, re-reads the
 	// now-committed state, and surfaces ErrCursorBaseMismatch with the

@@ -297,3 +297,33 @@ WHERE peer_user_id = @peer_user_id
 DELETE FROM telegram_message
 WHERE telegram_chat_id >= sqlc.arg(lo)
   AND telegram_chat_id <= sqlc.arg(hi);
+
+-- name: InsertFullTelegramMessageForTest :one
+-- Test-only: inserts a telegram_message row with EVERY column explicitly set
+-- (including the system-managed columns UpsertTelegramMessage leaves NULL:
+-- matched_contact_id, interaction_id, processed_at, deleted_at, claimed_at,
+-- claimed_session_ref). Used by the all-fields-populated regression test so a
+-- future explicit SELECT list that drops a column is caught by a non-zero read.
+-- Production code MUST NOT call this.
+INSERT INTO telegram_message (
+    telegram_message_id, telegram_chat_id, chat_type, chat_title,
+    message_text, message_type, sent_at, edited_at, is_outgoing,
+    reply_to_msg_id, peer_user_id, peer_username, peer_first_name,
+    peer_last_name, peer_phone, matched_contact_id, interaction_id,
+    processed_at, deleted_at, peer_entity_resolved, claimed_at,
+    claimed_session_ref
+) VALUES (
+    @telegram_message_id, @telegram_chat_id, @chat_type, @chat_title,
+    @message_text, @message_type, @sent_at, @edited_at, @is_outgoing,
+    @reply_to_msg_id, @peer_user_id, @peer_username, @peer_first_name,
+    @peer_last_name, @peer_phone, @matched_contact_id, @interaction_id,
+    @processed_at, @deleted_at, @peer_entity_resolved, @claimed_at,
+    @claimed_session_ref
+)
+RETURNING *;
+
+-- name: GetTelegramMessageByIDForTest :one
+-- Test-only: fetches a row by id WITHOUT the deleted_at IS NULL filter, so the
+-- all-fields-populated test can read back a row whose deleted_at is set.
+-- Production code MUST NOT call this (it would return soft-deleted rows).
+SELECT * FROM telegram_message WHERE id = @id;
