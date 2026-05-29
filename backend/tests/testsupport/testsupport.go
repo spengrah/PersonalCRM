@@ -2,9 +2,9 @@
 // integration test packages (tests, tests/river, tests/scheduler, ...).
 //
 // It is deliberately UNTAGGED (no //go:build integration_testdb) and imports
-// only the Go standard library. The files that consume it — the moved River
-// and scheduler test files — are themselves untagged and must still compile
-// under the no-tag unit build before they self-skip on an unset DATABASE_URL.
+// only the Go standard library. The files that consume it — the River and
+// scheduler test files — are themselves untagged and must still compile under
+// the no-tag unit build before they self-skip on an unset DATABASE_URL.
 // A build-tagged helper package would leave those untagged importers with no
 // buildable dependency under the no-tag build. Keeping testsupport untagged
 // and stdlib-only avoids that.
@@ -30,7 +30,7 @@ const longTestsEnvVar = "LONG_TESTS"
 // runtime.Caller(0) resolves to the file that defines this function
 // (backend/tests/testsupport/testsupport.go, two levels below backend/), the
 // "../../migrations" join always resolves to backend/migrations regardless of
-// which package calls GetMigrationsPath. The #360 TestMain bridges inject the
+// which package calls GetMigrationsPath. The TestMain bridges inject the
 // result explicitly via testdb.WithMigrationsPath, so the value is computed
 // once at the call site and passed in.
 func GetMigrationsPath() string {
