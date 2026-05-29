@@ -1,15 +1,17 @@
+//go:build integration_testdb
+
 package api
 
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"testing"
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/testdb"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
@@ -33,63 +35,22 @@ import (
 //
 // The test uses a dedicated migration helper that walks the migrations
 // dir step-by-step (rather than the shared TestMain `db.RunMigrations`)
-// so it can exercise individual up/down boundaries. Other tests in
-// this package depend on the full migration set being applied; we
-// restore that state in t.Cleanup before returning.
+// so it can exercise individual up/down boundaries. It runs against its
+// own ephemeral clone (testdb.NewEphemeralClone), so the mid-test schema
+// rollback cannot affect the package clone or sibling packages, and the
+// clone is dropped wholesale on cleanup.
 func TestMacHostMigrations(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
-	// Gated by MAC_HOST_MIGRATION_TEST because this test mutates the
-	// shared integration DB schema (rolls down to migration 046,
-	// applies 047/048, then rolls forward again). `go test ./...`
-	// runs packages in parallel by default, and during the brief
-	// window when the schema is rolled down, other integration
-	// packages hitting the same DATABASE_URL would see a missing
-	// mac_host table or other partially-migrated state.
-	//
-	// LONG_TESTS=1 is not enough on its own — the Makefile's
-	// test-integration target runs `go test ./tests/...
-	// ./internal/todoist/...` which puts these packages in parallel
-	// scope. Run this test by itself with:
-	//
-	//   DATABASE_URL=... MAC_HOST_MIGRATION_TEST=1 go test \
-	//     -run TestMacHostMigrations ./tests/api/...
-	//
-	// The CI workflow that wants to exercise it should invoke it
-	// directly (not as part of `go test ./tests/...`).
-	if os.Getenv("MAC_HOST_MIGRATION_TEST") == "" {
-		t.Skip("MAC_HOST_MIGRATION_TEST not set; this test mutates shared schema and must run in isolation")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+
+	// Dedicated ephemeral clone: this test rolls the schema down to 046 and
+	// re-applies 047/048. On its own clone the rollback is harmless, and the
+	// clone is dropped on cleanup — no HEAD-restore needed.
+	databaseURL, drop := testdb.NewEphemeralClone(t)
+	t.Cleanup(drop)
 
 	ctx := context.Background()
-
-	// Restore the schema to HEAD on exit so subsequent tests in the
-	// shared DB see a fully-migrated state. Includes a force-cleanup
-	// path in case an unexpected assertion left the migration state
-	// dirty — without this, every downstream test in this run fails
-	// with `Dirty database version N. Fix and force version.`
-	t.Cleanup(func() {
-		m, err := newMigrator(databaseURL)
-		if err != nil {
-			t.Logf("cleanup migrator: %v", err)
-			return
-		}
-		defer closeMigrator(t, m)
-		if version, dirty, vErr := m.Version(); vErr == nil && dirty {
-			t.Logf("cleanup: forcing migration version %d (was dirty)", version)
-			if fErr := m.Force(int(version)); fErr != nil {
-				t.Logf("cleanup force: %v", fErr)
-			}
-		}
-		if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-			t.Logf("cleanup Up: %v", err)
-		}
-	})
 
 	// Roll down to 046 so we can re-apply 047 + 048 from scratch.
 	mig, err := newMigrator(databaseURL)
