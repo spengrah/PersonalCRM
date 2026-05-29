@@ -42,27 +42,44 @@ is_allowlisted() {
   return 1
 }
 
-# Emit one line "<table>|<sorted col list>\t<file>:<query>" per qualifying
-# query. The awk script accumulates each query's full text (queries are
-# delimited by "-- name:" markers and a trailing ";"), then extracts the first
-# top-level SELECT...FROM projection and fingerprints it. Skips SELECT *,
-# DISTINCT, aggregate-only, and SELECT 1 — the same shapes the Go test skips.
+# Emit one line "<table>|<sorted col list>\t<file>:<line>:<query>" per
+# qualifying query (line = the -- name: marker line). The awk script
+# accumulates each query's full text (queries are delimited by "-- name:"
+# markers), then extracts the outermost top-level SELECT...FROM projection and
+# fingerprints it. Skips SELECT *, DISTINCT, aggregate-only, and SELECT 1 — the
+# same shapes the Go test skips — and like the Go test reaches the outer SELECT
+# of a WITH (CTE) query rather than the CTE's inner SELECT.
 extract_one_file() {
   awk -v fname="$1" '
     function trim(s) { gsub(/^[ \t\n]+|[ \t\n]+$/, "", s); return s }
-    function emit(   text, sp, fp, after, table, proj, depth, i, ch, cur, n, parts, c, cols, k, key, j, out, ncols, hasplain) {
+    function emit(   text, sp, fp, after, table, proj, depth, i, ch, cur, n, parts, c, cols, k, key, j, out, ncols, hasplain, selpos) {
       text = buf
       buf = ""
       if (qname == "") return
-      # Find the first SELECT (case-insensitive).
-      if (!match(text, /[sS][eE][lL][eE][cC][tT][ \t\n]/)) return
-      text = substr(text, RSTART + RLENGTH)
+      # Find the OUTERMOST SELECT — the first SELECT at paren-depth 0. CTEs
+      # (WITH ... AS (SELECT ...)) and subqueries nest their SELECT inside
+      # parentheses (depth >= 1), so depth-0 scoping skips them and lands on
+      # the main outer SELECT. Mirrors findTopLevelKeyword in the Go test.
+      depth = 0; selpos = 0
+      for (i = 1; i <= length(text); i++) {
+        ch = substr(text, i, 1)
+        if (ch == "(") { depth++; continue }
+        if (ch == ")") { if (depth > 0) depth--; continue }
+        if (depth == 0 && toupper(substr(text, i, 6)) == "SELECT" \
+            && (i == 1 || substr(text, i-1, 1) ~ /[^a-zA-Z0-9_]/) \
+            && (substr(text, i+6, 1) ~ /[ \t\n]/)) {
+          selpos = i + 6
+          break
+        }
+      }
+      if (selpos == 0) return
+      text = substr(text, selpos)
       # Walk to the first top-level FROM, accumulating the projection.
       depth = 0; proj = ""; table = ""; i = 1
       while (i <= length(text)) {
         # Top-level FROM keyword bounded by non-word chars.
         if (depth == 0 && toupper(substr(text, i, 4)) == "FROM" \
-            && (i == 1 || substr(text, i-1, 1) ~ /[ \t\n(]/) \
+            && (i == 1 || substr(text, i-1, 1) ~ /[^a-zA-Z0-9_]/) \
             && (substr(text, i+4, 1) ~ /[ \t\n]/)) {
           after = trim(substr(text, i + 4))
           if (match(after, /^[a-zA-Z_][a-zA-Z0-9_]*/))
@@ -90,15 +107,18 @@ extract_one_file() {
         else cur = cur ch
       }
       parts[++n] = cur
-      # Keep bare-identifier columns; require at least one plain column.
+      # Keep ALL top-level terms (columns AND expressions) with whitespace
+      # collapsed — matching the Go test, which fingerprints the full term
+      # list. Track whether at least one term is a bare identifier (the
+      # hasPlainColumn gate); a projection of only expressions/aggregates is
+      # not a hand-maintained column list and is skipped.
       k = 0; hasplain = 0
       for (i = 1; i <= n; i++) {
         c = tolower(trim(parts[i]))
+        gsub(/[ \t]+/, " ", c)
         if (c == "" || c == "*") continue
-        if (index(c, "(") > 0) continue
-        if (index(c, " as ") > 0) continue
         cols[++k] = c
-        if (c !~ /[ \t]/) hasplain = 1
+        if (index(c, "(") == 0 && index(c, " as ") == 0 && c !~ /[ \t]/) hasplain = 1
       }
       ncols = k
       delete parts
@@ -112,11 +132,12 @@ extract_one_file() {
       out = cols[1]
       for (i = 2; i <= ncols; i++) out = out ", " cols[i]
       delete cols
-      printf "%s|%s\t%s:%s\n", table, out, fname, qname
+      printf "%s|%s\t%s:%d:%s\n", table, out, fname, qline, qname
     }
     /^--[ \t]*name:/ {
       emit()
       qname = $3
+      qline = FNR
       next
     }
     {
@@ -128,7 +149,7 @@ extract_one_file() {
   ' "$1"
 }
 
-# Collect "<fingerprint>\t<file>:<query>" lines across all source files.
+# Collect "<fingerprint>\t<file>:<line>:<query>" lines across all source files.
 # Avoids bash-4 associative arrays for portability to the system bash 3.2.
 ALL=""
 while IFS= read -r f; do

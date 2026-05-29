@@ -72,19 +72,28 @@ func TestTelegramMessage_AllFieldsPopulatedOnRead(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Per-run chat-ID range for clean cleanup. The range is a single chat ID
-	// here; HardDeleteTelegramMessagesByChatIDRange purges [lo, hi] inclusive.
+	// Dedicated chat-ID for this test. HardDeleteTelegramMessagesByChatIDRange
+	// purges [lo, hi] inclusive.
 	const chatID int64 = 920001
+
+	purgeRow := func() {
+		_ = database.Queries.HardDeleteTelegramMessagesByChatIDRange(ctx, db.HardDeleteTelegramMessagesByChatIDRangeParams{
+			Lo: chatID,
+			Hi: chatID,
+		})
+	}
+	// Pre-clean: an interrupted prior run could have left this row behind, and
+	// InsertFullTelegramMessageForTest would then hit the
+	// (telegram_chat_id, telegram_message_id) unique before this run gets to
+	// prove anything. Purge first.
+	purgeRow()
 
 	t.Cleanup(func() {
 		// Hard-delete the seeded message first (it FK-references the
 		// interaction and contact via ON DELETE SET NULL, so order is not
 		// strictly required, but deleting the child first keeps cleanup
 		// independent of FK rules).
-		_ = database.Queries.HardDeleteTelegramMessagesByChatIDRange(ctx, db.HardDeleteTelegramMessagesByChatIDRangeParams{
-			Lo: chatID,
-			Hi: chatID,
-		})
+		purgeRow()
 		_ = interactionRepo.SoftDeleteInteraction(ctx, interaction.ID)
 		_ = contactRepo.SoftDeleteContact(ctx, contact.ID)
 	})

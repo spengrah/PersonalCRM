@@ -66,10 +66,8 @@ type selectProjection struct {
 var (
 	// Splits a query block's leading marker line: "-- name: Foo :one".
 	queryNameRe = regexp.MustCompile(`(?m)^--\s*name:\s*(\S+)`)
-	// Captures the first SELECT ... FROM <table>. The projection is captured
-	// non-greedily up to the first top-level FROM; depth handling below rejects
-	// matches where the FROM was inside parentheses.
-	selectFromRe = regexp.MustCompile(`(?is)\bSELECT\b(.*?)\bFROM\b\s+([a-z_][a-z0-9_]*)`)
+	// Matches the table identifier immediately after a FROM keyword.
+	tableNameRe = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*`)
 )
 
 // TestNoDuplicatedFullRowSelectLists walks backend/internal/db/queries/*.sql,
@@ -174,25 +172,41 @@ func extractSelectProjections(file, content string) []selectProjection {
 	return out
 }
 
-// parseProjection extracts the top-level SELECT projection from a single query
-// block. Returns ok=false for blocks that are not a parseable full-row-style
-// explicit projection (non-SELECT, SELECT *, DISTINCT, aggregate-only,
-// existence probe, or a FROM nested inside parentheses).
+// parseProjection extracts the OUTERMOST (top-level) SELECT projection from a
+// single query block. CTEs (WITH ... AS (SELECT ...)) and subqueries are
+// nested inside parentheses, so their SELECTs sit at paren-depth >= 1; the main
+// query's SELECT is the first SELECT keyword at depth 0. We scan to that SELECT
+// (so WITH queries are checked at their real outer projection, not skipped),
+// then capture the projection up to the matching top-level FROM. Returns
+// ok=false for blocks that are not a parseable full-row-style explicit
+// projection (non-SELECT, SELECT *, DISTINCT, aggregate-only, existence probe,
+// or a query with no top-level FROM).
 func parseProjection(block string) (selectProjection, bool) {
-	match := selectFromRe.FindStringSubmatch(block)
-	if match == nil {
-		return selectProjection{}, false
-	}
-	projection := strings.TrimSpace(match[1])
-	table := strings.ToLower(match[2])
+	// Strip line comments so the -- name: marker and inline comments don't
+	// confuse keyword scanning. Comments run to end of line.
+	clean := stripLineComments(block)
 
-	// Reject when the captured SELECT...FROM straddles a parenthesis boundary
-	// (e.g. SELECT ... (SELECT x FROM y) ...): the projection segment must be
-	// balanced, otherwise the FROM we matched belongs to a subquery, not the
-	// outer SELECT.
-	if !parensBalanced(projection) {
+	selStart, ok := findTopLevelKeyword(clean, "select", 0)
+	if !ok {
 		return selectProjection{}, false
 	}
+	afterSelect := selStart + len("select")
+
+	fromStart, ok := findTopLevelKeyword(clean, "from", afterSelect)
+	if !ok {
+		// No top-level FROM (e.g. SELECT without FROM) — nothing to fingerprint.
+		return selectProjection{}, false
+	}
+
+	projection := strings.TrimSpace(clean[afterSelect:fromStart])
+
+	// Read the table identifier after FROM.
+	afterFrom := strings.TrimLeft(clean[fromStart+len("from"):], " \t\n")
+	tableMatch := tableNameRe.FindString(afterFrom)
+	if tableMatch == "" {
+		return selectProjection{}, false
+	}
+	table := strings.ToLower(tableMatch)
 
 	lower := strings.ToLower(projection)
 	switch {
@@ -294,21 +308,70 @@ func splitTopLevel(s string) []string {
 	return out
 }
 
-// parensBalanced reports whether s has matched parentheses.
-func parensBalanced(s string) bool {
+// stripLineComments removes -- line comments (the comment runs to end of
+// line). String literals in these query files do not contain "--", so a naive
+// strip is safe and keeps keyword scanning from tripping over the -- name:
+// marker and inline comments.
+func stripLineComments(s string) string {
+	var b strings.Builder
+	for _, line := range strings.Split(s, "\n") {
+		if idx := strings.Index(line, "--"); idx >= 0 {
+			line = line[:idx]
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// findTopLevelKeyword returns the byte index of the first occurrence of the
+// (lowercase) SQL keyword at paren-depth 0 at or after start, matched
+// case-insensitively and bounded by non-identifier characters. Depth-0 scoping
+// is what lets the analyzer skip CTE/subquery SELECTs (which sit inside
+// parentheses) and find the main query's outer SELECT/FROM.
+func findTopLevelKeyword(s, keyword string, start int) (int, bool) {
 	depth := 0
-	for _, r := range s {
-		switch r {
+	lower := strings.ToLower(s)
+	for i := start; i < len(s); i++ {
+		switch s[i] {
 		case '(':
 			depth++
+			continue
 		case ')':
-			depth--
-			if depth < 0 {
-				return false
+			if depth > 0 {
+				depth--
 			}
+			continue
 		}
+		if depth != 0 {
+			continue
+		}
+		if i+len(keyword) > len(s) {
+			break
+		}
+		if lower[i:i+len(keyword)] != keyword {
+			continue
+		}
+		// Word-boundary check: the char before and after must not be an
+		// identifier character.
+		if i > 0 && isIdentByte(s[i-1]) {
+			continue
+		}
+		after := i + len(keyword)
+		if after < len(s) && isIdentByte(s[after]) {
+			continue
+		}
+		return i, true
 	}
-	return depth == 0
+	return 0, false
+}
+
+// isIdentByte reports whether b can be part of a SQL identifier.
+func isIdentByte(b byte) bool {
+	return b == '_' ||
+		(b >= 'a' && b <= 'z') ||
+		(b >= 'A' && b <= 'Z') ||
+		(b >= '0' && b <= '9')
 }
 
 // itoa is a tiny strconv.Itoa to keep the import list minimal.
@@ -370,6 +433,42 @@ SELECT * FROM widget WHERE name = $1;
 	}
 }
 
+// TestSelectListDetector_ReachesOuterSelectOfCTE proves the analyzer examines
+// the OUTER projection of a WITH (CTE) query rather than locking onto the
+// CTE's inner SELECT. Two WITH queries whose outer SELECT shares an identical
+// bare-column projection must fingerprint identically — a false-negative hole
+// that existed when the analyzer matched the first SELECT in the block.
+func TestSelectListDetector_ReachesOuterSelectOfCTE(t *testing.T) {
+	const cteDupSrc = `-- name: WithQueryA :many
+WITH names AS (
+  SELECT unnest($1::text[]) as nm
+)
+SELECT alpha, beta, gamma FROM widget WHERE id = $2;
+
+-- name: WithQueryB :many
+WITH names AS (
+  SELECT unnest($1::text[]) as nm
+)
+SELECT alpha, beta, gamma FROM widget WHERE name = $2;
+`
+	projs := extractSelectProjections("synthetic_cte.sql", cteDupSrc)
+	if len(projs) != 2 {
+		t.Fatalf("expected 2 outer projections from CTE queries, got %d: %+v", len(projs), projs)
+	}
+	for _, p := range projs {
+		if p.table != "widget" {
+			t.Errorf("expected outer table 'widget', got %q (analyzer locked onto the CTE's inner SELECT)", p.table)
+		}
+		if p.numColumns != 3 {
+			t.Errorf("expected 3 outer columns, got %d", p.numColumns)
+		}
+	}
+	fp := func(p selectProjection) string { return p.table + "|" + p.normalized }
+	if fp(projs[0]) != fp(projs[1]) {
+		t.Errorf("expected identical outer-projection fingerprints, got %q vs %q", fp(projs[0]), fp(projs[1]))
+	}
+}
+
 // TestSelectListDetector_SkipsNonFullRowShapes asserts the shapes that must NOT
 // be flagged are correctly skipped: DISTINCT ON, aggregate-only, SELECT 1,
 // and single-occurrence narrow projections (a lone explicit projection is
@@ -398,6 +497,19 @@ SELECT 1 FROM widget WHERE id = $1;`,
 			name: "star",
 			src: `-- name: GetAll :one
 SELECT * FROM widget WHERE id = $1;`,
+		},
+		{
+			// A WITH query whose outer projection is all aliased expressions
+			// (the shape of contact.sql's FindSimilarContactsBatch) is not a
+			// hand-maintained bare-column list, so it must be skipped — but the
+			// analyzer must still reach the outer SELECT to make that call.
+			name: "cte aliased-expression outer projection",
+			src: `-- name: BatchThing :many
+WITH cand AS (
+  SELECT unnest($1::text[]) as nm
+)
+SELECT c.id::text as cid, c.name::text as cname, similarity(c.name, cand.nm) as sim
+FROM widget c CROSS JOIN cand;`,
 		},
 	}
 	for _, tc := range cases {
