@@ -1,4 +1,4 @@
-package tests
+package scheduler
 
 import (
 	"context"
@@ -14,6 +14,7 @@ import (
 	"personal-crm/backend/internal/scheduler"
 	"personal-crm/backend/internal/service"
 	syncpkg "personal-crm/backend/internal/sync"
+	"personal-crm/backend/tests/testsupport"
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
@@ -43,7 +44,7 @@ func TestPeriodicTick_EndToEndEnqueueWithAtomicClaim(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	cfg.Database.MigrationsPath = getMigrationsPath()
+	cfg.Database.MigrationsPath = testsupport.GetMigrationsPath()
 
 	// Migrations are applied once by TestMain.
 
@@ -173,7 +174,7 @@ func TestPeriodicTick_EndToEndEnqueueWithAtomicClaim(t *testing.T) {
 // downstream sync_provider_account jobs (registry empty → service
 // returns empty due list → tick Work returns nil fast).
 func TestPeriodicTick_FiresOnStart(t *testing.T) {
-	requireLongTests(t)
+	testsupport.RequireLongTests(t)
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set, skipping integration test")
@@ -182,7 +183,7 @@ func TestPeriodicTick_FiresOnStart(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	cfg.Database.MigrationsPath = getMigrationsPath()
+	cfg.Database.MigrationsPath = testsupport.GetMigrationsPath()
 
 	// Migrations are applied once by TestMain.
 

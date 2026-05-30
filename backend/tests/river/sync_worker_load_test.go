@@ -1,4 +1,4 @@
-package tests
+package river
 
 import (
 	"context"
@@ -16,6 +16,7 @@ import (
 	"personal-crm/backend/internal/scheduler"
 	"personal-crm/backend/internal/service"
 	syncpkg "personal-crm/backend/internal/sync"
+	"personal-crm/backend/tests/testsupport"
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
@@ -85,7 +86,7 @@ func (p *loadTestProvider) Sync(ctx context.Context, state *repository.SyncState
 //
 // The test's budget is bounded: windowBudget caps total runtime.
 func TestSyncWorker_LoadNoDuplicateConcurrentSyncs(t *testing.T) {
-	requireLongTests(t)
+	testsupport.RequireLongTests(t)
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set, skipping integration test")
@@ -97,7 +98,7 @@ func TestSyncWorker_LoadNoDuplicateConcurrentSyncs(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	cfg.Database.MigrationsPath = getMigrationsPath()
+	cfg.Database.MigrationsPath = testsupport.GetMigrationsPath()
 	// Migrations are applied once by TestMain.
 
 	database, err := db.NewDatabase(ctx, cfg.Database)
