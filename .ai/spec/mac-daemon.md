@@ -9,7 +9,7 @@
 
 ## Summary
 
-Defines a new Mac-side daemon, `crm-mac` (Swift, launchd-managed), that runs on the user's MacBook and ingests local data sources unreachable from the Pi backend. The daemon publishes events to the existing `/api/v1/ingest/events` endpoint and heartbeats host status to a new `mac_host` model. It establishes six logical data sources (Messages.app, Phone/FaceTime call history, WhatsApp, iCloud Contacts, Anarlog humans, Anarlog sessions) and a phased build order with v1 shipping the daemon framework plus Messages and iCloud Contacts.
+Defines a new Mac-side daemon, `crm-mac` (Swift, launchd-managed), that runs on the user's MacBook and ingests local data sources unreachable from the Pi backend. The daemon publishes events to the existing `/api/v1/ingest/events` endpoint and heartbeats host status to a new `mac_host` model. It establishes five logical data sources (Messages.app, Phone/FaceTime call history, iCloud Contacts, Anarlog humans, Anarlog sessions) and a phased build order with v1 shipping the daemon framework plus Messages and iCloud Contacts.
 
 Local LLM inference on the Mac is **explicitly out of scope** for this spec.
 
@@ -32,18 +32,18 @@ Local LLM inference on the Mac is **explicitly out of scope** for this spec.
 - Attachment content/files (only metadata: type tag, optionally filename/MIME/size when cheap).
 - Mac-side data sources we don't need: Mail.app, Notes.app, Reminders.app, Calendar.app, Signal, Photos.app, Voice Memos.
 - Browser extension companion.
+- WhatsApp ingestion — re-scoped to an on-Pi integration via `whatsmeow` (issue #363), mirroring Telegram: a long-running Go client on the Pi, not a Mac local-DB reader. It reuses the source-neutral aggregation pipeline (`backend/internal/messaging/aggregation`) and the `whatsapp` identifier type (`identity/normalize.go`); the #363 work adds its own `interaction.source='whatsapp'` value + staging table. The Mac-local-store design (Core Data DB, FDA, snapshot reading, mutation-scan edits) does not transfer to a network client.
 
 ---
 
 ## Vision
 
-The Mac daemon ingests six logical data sources, publishing events to the Pi:
+The Mac daemon ingests five logical data sources, publishing events to the Pi:
 
 | Source | Strategy | Identifier type emitted | Content fidelity | Backfill floor | Discovery? |
 |---|---|---|---|---|---|
 | `messages` (iMessage + SMS via Messages.app) | event stream | `phone`, `email` (generic — see Identifier Types below) | full text + type tag | 2026-01-01 | no |
 | `phone_calls` (Phone + FaceTime via CallHistoryDB) | event stream | `phone`, `email` (generic; channel via `service` column) | direction, duration, answered/missed, voicemail-presence flag, service tag | 2026-01-01 | no |
-| `whatsapp` | event stream | `whatsapp` | full text + type tag | 2026-01-01 | no |
 | `icloud_contacts` | entity sync | n/a (matches via contact methods) | full entity, into existing `external_contact` table | all current | yes |
 | `anarlog_humans` | entity sync | `anarlog_human_id` (new) | full entity | all current | yes |
 | `anarlog_sessions` | event stream | participants by `anarlog_human_id` | `_meta.json` + `_summary.md` + optional `_memo.md` | 2026-01-01 | no |
@@ -53,7 +53,6 @@ The Mac daemon ingests six logical data sources, publishing events to the Pi:
 **Polling cadence (per source):**
 - `messages`: scheduled ~60-90s
 - `phone_calls`: scheduled ~60-90s (same cadence as `messages` — both are user-perceived realtime sources gated on the same FDA-protected sqlite stores)
-- `whatsapp`: scheduled ~60-90s
 - `icloud_contacts`: scheduled ~15min (full delta via `CNChangeHistoryFetchRequest`)
 - `anarlog_humans`: scheduled ~5min (mtime-based)
 - `anarlog_sessions`: **event-driven via FSEvents**, hourly safety poll for catchup and tombstone detection
@@ -74,7 +73,7 @@ The Mac daemon ingests six logical data sources, publishing events to the Pi:
 
 **Internal components:**
 - **Source readers** — one Swift module per source. Isolated; a crashing reader does not affect others.
-- **Per-source scheduler** — each source has either an `NSBackgroundActivityScheduler` activity (messages, whatsapp, icloud_contacts, anarlog_humans) or an FSEvents source + safety poll (anarlog_sessions). See "Scheduling determinism" note in Failure Modes.
+- **Per-source scheduler** — each source has either an `NSBackgroundActivityScheduler` activity (messages, icloud_contacts, anarlog_humans) or an FSEvents source + safety poll (anarlog_sessions). See "Scheduling determinism" note in Failure Modes.
 - **Pi client** — `URLSession` with API key auth from Keychain. Retries with bounded exponential backoff. Chunked batch uploads (~500 events per push). No local queue.
 - **Heartbeat reporter** — every ~60s, POSTs rich status to `/api/v1/host/<id>/heartbeat`. Heartbeat payload defined below under "Observability."
 - **CLI dispatcher** — `swift-argument-parser` subcommands.
@@ -112,7 +111,7 @@ The pairing token model means there's no admin/bootstrap key in widespread use �
 
 **Lifecycle — uninstall:** removes service, binary, keychain, config. Does NOT delete Pi-side `mac_host` row or staging data — that's a separate `DELETE /api/v1/host/<id>` from the Pi UI.
 
-**Permissions:** Full Disk Access (chat.db; WhatsApp likely not required since sandbox container is user-readable), Contacts permission (native `requestAccess`), Files & Folders for Anarlog path. `doctor` enumerates and provides `x-apple.systempreferences:` deep links.
+**Permissions:** Full Disk Access (chat.db), Contacts permission (native `requestAccess`), Files & Folders for Anarlog path. `doctor` enumerates and provides `x-apple.systempreferences:` deep links.
 
 **Testing & CI:** structure Swift modules so OS-permission-mediated code (Full Disk Access for chat.db, `CNContactStore` consent, Files & Folders) is a thin shell over pure-logic modules — chat.db parsing against a fixture SQLite file, identifier filtering, push payload serialization, pairing client logic, cursor/state management. CI runs `swift build` + `swift test` as the `mac-daemon-tests` job inside `.github/workflows/ci.yml` on `macos-15` (pinned), path-filtered to `mac-daemon/**` so Pi-side PRs don't burn macOS minutes (macOS runners are ~10× Linux cost). Integration tests that require TCC permissions, real iCloud state, or live `~/Library/Messages/chat.db` access live behind a `make test-daemon-local` target run on the developer's Mac before push — not in CI. The first Swift PR (daemon skeleton) lands this CI job so all subsequent Swift PRs have signal from day one.
 
@@ -125,7 +124,7 @@ The pairing token model means there's no admin/bootstrap key in widespread use �
 - **Identifier types emitted:** generic `phone` and `email`. Channel/provenance carried in `source='messages'`. Rationale: Messages.app delivers both iMessage and SMS uniformly; `imessage_*` identifier types in the existing codebase are semantically misleading (SMS is not iMessage) and will be retired in a cleanup migration. Identifier type describes identifier shape; source describes the integration. See "Identifier Types" appendix.
 - **Content:** message text, `is_from_me`, `date`, `guid` (per-message stable ID — used as primary dedup key), `chat.guid`, group flag, reply-to, `message_type` tag (text/photo/audio/video/document/other) inferred from `attachment.uti` or `mime_type`. Optional attachment metadata: filename, size, mime_type (no content).
 - **Group chat attribution:** ONE interaction is created — for the sender only. Other participants in a group chat are NOT marked as having "contacted" the user when a third party sends. Matches Telegram's current behavior (see `backend/internal/telegram/aggregation.go`). Group chat participant *membership* is recorded in the staging table for context but does not produce per-participant interactions.
-- **Aggregation:** v1 prerequisite. Telegram's existing aggregator (`backend/internal/telegram/aggregation.go`) is extracted into a shared `backend/internal/messaging/aggregation` package with a source-neutral interface. Burst-windowing, reply bridging, direction inference (inbound/outbound/mutual) all carry over unchanged. Mac-specific staging tables (`messages_message`, `whatsapp_message`) satisfy the shared aggregator's interface. The aggregator's input filter is the **claim-aware** filter: `processed_at IS NULL AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')` — extends Telegram's existing `ListUnprocessedByContact` query. Concurrency is handled by **per-`(contact_id, source)` River job serialization** (the aggregator runs as a single River job keyed on `(contact_id, source)`); no PostgreSQL advisory lock needed. The key includes source so `messages` and `whatsapp` jobs for the same contact can run in parallel without contention. **Two-path output**, matching Telegram exactly:
+- **Aggregation:** v1 prerequisite. Telegram's existing aggregator (`backend/internal/telegram/aggregation.go`) is extracted into a shared `backend/internal/messaging/aggregation` package with a source-neutral interface. Burst-windowing, reply bridging, direction inference (inbound/outbound/mutual) all carry over unchanged. The Mac-specific staging table (`messages_message`) satisfies the shared aggregator's interface. The aggregator's input filter is the **claim-aware** filter: `processed_at IS NULL AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')` — extends Telegram's existing `ListUnprocessedByContact` query. Concurrency is handled by **per-`(contact_id, source)` River job serialization** (the aggregator runs as a single River job keyed on `(contact_id, source)`); no PostgreSQL advisory lock needed. The key includes source so jobs for different sources (e.g. `messages` and `telegram`) on the same contact can run in parallel without contention. **Two-path output**, matching Telegram exactly:
   - **Extend path:** if a session resolves to a recent existing interaction in window (same contact + chat + same-or-mutual direction), the aggregator extends that interaction via direct `ContactService.ExtendInteraction` call AND marks the staging rows `processed_at = NOW()` + `interaction_id = <existing>` in the same call. **No event is published for extensions** — `cadence_updater` / `followup_manager` do not re-fire on conversation continuations (already the right product behavior per Telegram).
   - **Create path:** if no recent existing interaction matches, the aggregator publishes a `message.received` or `message.sent` event. The `InteractionRecorder` consumer creates the interaction row AND marks the staging rows processed atomically in the same tx (per the comment in `aggregation.go:323` — "gives us atomicity between the interaction row and the telegram_message.interaction_id FK").
 
@@ -161,25 +160,12 @@ The pairing token model means there's no admin/bootstrap key in widespread use �
 
   Outbound never bumps `last_contacted`. There is no `mutual` promotion path for calls (calls aren't bursted/bridged the way Messages are); a call you place and a call they return show up as two separate interactions on the timeline.
 - **Aggregation:** **none.** Calls are discrete events with explicit start time and duration — they are *not* burst-windowed. Each call event flows directly through the Pi ingest service inline (Stage 1 only), analogous to `meeting_note.recorded`: in the ingest tx, upsert `phone_call` staging row (dedup by `ZUNIQUE_ID`), match identifier to `contact_id`, and — *if the row qualifies per the interaction-semantics table above* — create one interaction with `source='phone_calls'` + duration/service/voicemail metadata, emit `interaction.recorded`. Rows that don't qualify (missed inbound, no voicemail) skip the interaction insert + `interaction.recorded` publish but the staging row is still upserted, matched, and marked `processed_at`. No Stage 2/3, no `claimed_at` / `claimed_session_ref` columns, no aggregator River job. (Architectural simplification vs `messages` paid by the source itself being simpler.)
-- **Edits / deletes:** CallHistoryDB rows are append-only in normal use. The Phone app's "Clear All Recents" action **does** delete rows; v1 treats deletions as out-of-scope (interactions stay in the CRM). v2 mutation-scan reader (same one needed for messages/whatsapp edits) covers the delete case via `(source, source_id)` reconciliation.
+- **Edits / deletes:** CallHistoryDB rows are append-only in normal use. The Phone app's "Clear All Recents" action **does** delete rows; v1 treats deletions as out-of-scope (interactions stay in the CRM). v2 mutation-scan reader (same one needed for messages edits) covers the delete case via `(source, source_id)` reconciliation.
 - **Permission:** Full Disk Access — same gate as `messages`. No new permission prompt if the user has already granted FDA for `messages`.
 - **Discovery role:** none. Same reasoning as `messages` — call handles are phones/emails that any contact source can already supply. Daemon-side filtering uses the same `known-identifiers` set.
 - **Sender filtering:** reuses the `messages` daemon-side filter unchanged. The daemon canonicalizes each call's peer handle and forwards only rows matching the known phone/email set. Spam calls, robocalls, businesses, unsaved numbers never leave the Mac.
 - **Identifier set source:** same `GET /api/v1/host/:id/known-identifiers` endpoint as `messages`. No new endpoint; the existing per-heartbeat refresh covers both sources.
 - **Cold-start race recovery (30-day backwards scan):** identical model to `messages`. When `known-identifiers` diff shows a newly-added identifier, the daemon scans the last 30 days of `ZCALLRECORD` for that handle and forwards any matches. Event-log `(source, source_id)` dedup absorbs overlap.
-
-#### `whatsapp`
-
-- **Source:** `~/Library/Group Containers/group.net.whatsapp.WhatsApp.shared/` — primary DB `ChatStorage.sqlite`. Secondary: `ContactsV2.sqlite`, `ExtChatDB/ExtChatDatabase.sqlite`. Read-only via GRDB.swift and backoff on `SQLITE_CANTOPEN`/`SQLITE_BUSY` (WhatsApp.app holds locks while running). **Every live-DB open MUST go through `SQLiteSnapshotReader.readOnlyURI(for:)`** (the single chokepoint that produces the read-only WAL-aware `file://<path>?mode=ro` URI — no `immutable=1`, no `cache=shared`). NEVER add `immutable=1`: it tells SQLite to ignore the WAL and serve only the main-file snapshot, so an immutable reader silently misses every uncheckpointed write. `phone_calls` shipped with `immutable=1` and missed every WAL-resident write for 8+ days because macOS rarely checkpoints CallHistoryDB; WhatsApp.app may have the same WAL-cadence pattern, so the WAL-aware `mode=ro` shape is the correct default. Each of the multiple SQLite DBs here must route through the helper individually (the `SQLiteURILiteralGuardTests` grep enforces one `readOnlyURI(...)` call per file DB open).
-- **Cursor:** `ZWAMESSAGE.ZSORT` (monotonic integer, indexed).
-- **Identifier type emitted:** `whatsapp`. Rationale: `whatsapp` is both a `contact_method.type` (added in migration 008) and an identifier_type with dual-mapping behavior (matches `contact_method.whatsapp` AND `contact_method.phone`). Functional matching difference vs generic `phone` — preserves matches against contacts that have explicitly tagged WhatsApp methods.
-- **Content:** message body (`ZWAMESSAGE.ZTEXT`), `ZSTANZAID` (server-side message ID — primary dedup key across hosts), chat JID, sender JID, `ZISFROMME`, group membership via `ZWAGROUPMEMBER`, media type tag from `ZWAMEDIAITEM.ZMEDIATYPE`. Optional media metadata: filename, size, no content.
-- **Group chat attribution:** same as `messages` — sender-only interactions.
-- **Aggregation:** same shared aggregation service (see `messages`).
-- **Edits / deletes / reactions:** WhatsApp's protocol supports edits and revoked messages. v1 scope same as messages — accept stored state at first ingestion; v2 mutation-scan reader covers updates. Reactions tracked as separate `ZWAMESSAGE` rows referencing the original; v1 stores them as plain messages (low value, low effort to filter later).
-- **Permission:** Full Disk Access likely NOT required (sandboxed user-readable). `doctor` probes; falls back to recommending FDA if access fails.
-- **Discovery:** none.
-- **Schema fragility:** Core Data schema is ORM-generated (Z-prefixed). Validate `Z_METADATA.version` on startup; use `PRAGMA table_info` to detect missing columns. Reader marks itself unhealthy with structured error on drift; other sources unaffected.
 
 #### `icloud_contacts`
 
@@ -258,11 +244,11 @@ Without a claim mechanism, the following race can lose work:
 - **Post-commit re-enqueue from Stage 3** ensures pass 2 is triggered immediately after every Stage 3 commit, maximizing the second case (extend wins) over the first (fragmentation).
 - **Stale-claim recovery (`claimed_at < NOW() - INTERVAL '5 minutes'`):** the recovery path is NOT to re-publish the create-event (event-log `(source, source_id)` dedup would suppress the retry). Instead, the aggregator detects that an event already exists for `claimed_session_ref` and **re-enqueues a River InteractionRecorder job for that existing event** (by event ID, not by re-publishing). The consumer processes the existing event row idempotently: if the interaction was already created, just complete the `MarkProcessed` step (clear `claimed_at`, set `processed_at`, set `interaction_id`); if not, create the interaction + mark in one tx. This makes Stage 3 retryable indefinitely without depending on event re-publication. **Bounds the worst-case stuck duration to the claim TTL.** If `claimed_session_ref` exists in claim but NOT in event log (impossible in practice given the same-tx claim+publish, but defensive): the aggregator clears the claim and treats rows as unclaimed (next pass re-emits cleanly).
 
-**Cursor commit safety:** the daemon commits the source cursor only after the ingest response (Stage 1 commit). At that point, staging rows are durable AND an aggregator job is queued. If Stage 2 or Stage 3 fails transiently, River retries. Daemon re-pushes after cursor-commit failure are absorbed by `(source, source_id)` event-log dedup AND by per-source staging-table unique constraints (`guid`, `stanza_id`, etc.).
+**Cursor commit safety:** the daemon commits the source cursor only after the ingest response (Stage 1 commit). At that point, staging rows are durable AND an aggregator job is queued. If Stage 2 or Stage 3 fails transiently, River retries. Daemon re-pushes after cursor-commit failure are absorbed by `(source, source_id)` event-log dedup AND by per-source staging-table unique constraints (`guid`, etc.).
 
 | Event kind | Status | Producer (Stage 1) | Consumer (Stage 2) | Stage-1 side effects | Stage-2 side effects |
 |---|---|---|---|---|---|
-| `raw_message.received`, `raw_message.sent` (messages, whatsapp) | **new daemon-emitted kinds** | daemon | (no event-bus consumer; processed by ingest service + aggregator job) | Stage 1: match identity, upsert staging row (dedup by Guid), enqueue aggregator job for affected `(contact_id, source)` | n/a — these events stay in the event-log as raw input record; not delivered to bus consumers |
+| `raw_message.received`, `raw_message.sent` (messages) | **new daemon-emitted kinds** | daemon | (no event-bus consumer; processed by ingest service + aggregator job) | Stage 1: match identity, upsert staging row (dedup by Guid), enqueue aggregator job for affected `(contact_id, source)` | n/a — these events stay in the event-log as raw input record; not delivered to bus consumers |
 | `message.received`, `message.sent` (create path, post-aggregation) | existing | Aggregator (Stage 2 River job) | `InteractionRecorder` (generalized) | published only when aggregator's create path applies — i.e., session has no recent existing interaction to extend. source_id = deterministic burst sourceRef | InteractionRecorder creates interaction row, atomically marks referenced staging rows processed via source-neutral StagingRepo.MarkProcessed, emits `interaction.recorded` |
 | (extend path) | n/a — no event | n/a | n/a | When aggregator finds a recent matching interaction, it extends via direct `ContactService.ExtendInteraction` and marks staging rows processed in the same call. No event is published — extensions intentionally do NOT re-fire cadence/followup consumers (matches Telegram's product behavior). | n/a |
 | `external_contact.upserted` (icloud_contacts, anarlog_humans) | new | Pi ingest service inline (Stage 1 only) | n/a — fully inline | upsert `external_contact` row, run identity match against contact methods, store event row for audit | n/a |
@@ -282,15 +268,15 @@ type MessageReceivedPayload struct {
     PeerRef           string     `json:"peer_ref"`          // e.g. "messages:+15551234567"
     MessageAt         time.Time  `json:"message_at"`
     Description       *string    `json:"description,omitempty"`
-    ExternalMessageID string     `json:"external_message_id,omitempty"`  // chat.db ROWID or WhatsApp Z_PK
+    ExternalMessageID string     `json:"external_message_id,omitempty"`  // chat.db ROWID
     Direction         string     `json:"direction,omitempty"`
-    MessageIDs        []uuid.UUID `json:"message_ids,omitempty"` // Source-neutral list of staging-row UUIDs (telegram_message, messages_message, or whatsapp_message)
+    MessageIDs        []uuid.UUID `json:"message_ids,omitempty"` // Source-neutral list of staging-row UUIDs (telegram_message or messages_message)
 
     // V2 fields (optional; populated by Mac daemon emitting raw_message.*, AND by Mac
     // aggregator emitting aggregated message.received/.sent for source-neutral session events):
     HostID           *uuid.UUID  `json:"host_id,omitempty"`             // mac_host.id provenance
-    Guid             *string     `json:"guid,omitempty"`                // iMessage guid OR WhatsApp stanza_id (raw_message events only)
-    ChatID           *string     `json:"chat_id,omitempty"`             // chat.db chat.guid, or WhatsApp JID
+    Guid             *string     `json:"guid,omitempty"`                // iMessage guid (raw_message events only)
+    ChatID           *string     `json:"chat_id,omitempty"`             // chat.db chat.guid
     PeerName         *string     `json:"peer_name,omitempty"`           // display name from chat partner (if available)
     RawText          *string     `json:"raw_text,omitempty"`            // full message body (raw_message events; condensed digest for aggregated)
     MessageType      *string     `json:"message_type,omitempty"`        // text/photo/audio/video/document/other
@@ -300,7 +286,7 @@ type MessageReceivedPayload struct {
 
 // MessageIDs (existing field) carries source-neutral staging-row UUIDs for ALL
 // sources post-aggregation. Telegram populates with telegram_message UUIDs; Mac
-// aggregator populates with messages_message or whatsapp_message UUIDs.
+// aggregator populates with messages_message UUIDs.
 // The generalized InteractionRecorder dispatches on event envelope source to mark
 // rows processed_at = NOW() via StagingRepo.MarkProcessed(ctx, source, ids).
 
@@ -314,7 +300,7 @@ type AttachmentMeta struct {
 
 V2 fields are populated by the Mac daemon. Telegram's existing producer continues emitting V1; existing consumer logic unchanged. The aggregator (extracted from telegram, now in `backend/internal/messaging/aggregation`) emits V1 or V2 events depending on source. `InteractionRecorder` consumes both; new V2 fields are passed through to the interaction row's metadata where useful.
 
-`interaction.source` CHECK constraint extended via migration to add `messages`, `phone_calls`, `whatsapp`, `anarlog_sessions`. `external_sync_state.strategy` CHECK constraint extended to add `push`.
+`interaction.source` CHECK constraint extended via migration to add `messages`, `phone_calls`, `anarlog_sessions`. `external_sync_state.strategy` CHECK constraint extended to add `push`.
 
 **Non-message event payloads (new):**
 
@@ -371,7 +357,7 @@ type MeetingNoteDeletedPayload struct {
 
 | Event kind | `source_id` value | Notes |
 |---|---|---|
-| `raw_message.received`, `raw_message.sent` (daemon → ingest) | iMessage `guid` (messages) or WhatsApp `stanza_id` (whatsapp) | Globally unique per message; second-host push returns `duplicate` |
+| `raw_message.received`, `raw_message.sent` (daemon → ingest) | iMessage `guid` (messages) | Globally unique per message; second-host push returns `duplicate` |
 | `message.received`, `message.sent` (aggregator → bus, **create path only**) | Telegram's existing deterministic burst `sourceRef` pattern: e.g., `messages:<chat_id>:<earliest_msg_guid>` (mirrors `backend/internal/telegram/aggregation.go:89` `sourceRef()` method) | Deterministic from the session's first message. If aggregator re-runs on the same message set (e.g., after River retry), source_id is stable → dedup absorbs duplicate emit. Note: the cross-batch fragmentation case is handled by the aggregator's **extend path** (no event), not by source_id semantics — see Aggregation section. |
 | `external_contact.upserted` (icloud_contacts, anarlog_humans) | `<entity_uuid>@<content_hash>` where content_hash = SHA-256 hex of the canonicalized event payload (excluding the source_id itself and the host_id) | Same content → same source_id → dedup as no-op. Content change → new source_id → new event. |
 | `external_contact.deleted` | `<entity_uuid>@deleted@<previous_content_hash>` where previous_content_hash is the SHA-256 of the last content state the daemon observed before this entity disappeared | Deterministic — re-push after cursor-commit failure produces the same source_id because the previous content hash is fixed. Supports delete → revive → delete: each revive cycle's last-observed content yields a different prior hash, so each subsequent delete is its own unique event. If the daemon doesn't know the previous content (e.g., daemon restart with no local cache), it falls back to fetching the entity's current content from `GET /known-ids` extended response (which can include last-content-hash per known ID) or uses sentinel `<entity_uuid>@deleted@unknown` — accepting one-time dedup against any prior `@unknown` delete for the same entity. |
@@ -385,16 +371,16 @@ New event kinds to add to `events/kinds.go`: `raw_message.received`, `raw_messag
 **Raw message payload schemas** (concrete Go types, distinct from `MessageReceivedPayload`):
 
 ```go
-// RawMessageReceivedPayload — emitted by Mac daemon for messages/whatsapp.
+// RawMessageReceivedPayload — emitted by Mac daemon for messages.
 // Carries the full raw data needed by the Pi ingest service to match identity,
 // upsert staging, and run aggregation. NOT consumed by any bus consumer —
 // processed inline within the ingest transaction.
 type RawMessageReceivedPayload struct {
     Version      int       `json:"version"` // start at 1
     HostID       uuid.UUID `json:"host_id"`
-    Source       string    `json:"source"`         // "messages" | "whatsapp"
-    Guid         string    `json:"guid"`           // iMessage guid OR WhatsApp stanza_id
-    ChatID       string    `json:"chat_id"`        // chat.db chat.guid OR WhatsApp JID
+    Source       string    `json:"source"`         // "messages"
+    Guid         string    `json:"guid"`           // iMessage guid
+    ChatID       string    `json:"chat_id"`        // chat.db chat.guid
     PeerHandle   string    `json:"peer_handle"`    // raw handle as observed (phone/email)
     PeerName     *string   `json:"peer_name,omitempty"`
     Text         *string   `json:"text,omitempty"` // full message body
@@ -416,7 +402,6 @@ The existing `MessageReceivedPayload` and `MessageSentPayload` (used post-aggreg
 
 - **`mac_host`** — `id` (UUID, stable across reinstalls via Keychain), `hostname`, `daemon_version`, `protocol_version`, `last_heartbeat_at`, `permissions` JSONB, `source_health` JSONB (per-source last_cursor, last_pushed_at, last_error, schema_version), `cursor_epoch` BIGINT (incremented when Pi restored from backup; daemon must match for pushes), `api_key_hash TEXT`, `api_key_revoked_at TIMESTAMPTZ`, `created_at`, `updated_at`. Table designed for multi-host future-proofing, **but v1 enforces single non-revoked host** via a partial unique index: `CREATE UNIQUE INDEX idx_mac_host_singleton ON mac_host ((true)) WHERE api_key_revoked_at IS NULL`. Multi-host operation requires resolving content-hash source_id collisions across hosts — explicitly deferred to a follow-up spec.
 - **`messages_message`** — staging table mirroring `telegram_message`. **Globally unique on `guid`** (iMessage's per-message stable ID — cross-host dedup). Columns include: `guid`, `chat_guid`, `peer_handle`, `peer_normalized`, `text`, `message_type`, `sent_at`, `is_outgoing`, `is_group_chat`, `matched_contact_id`, `interaction_id`, `mac_host_id` (provenance only), `processed_at` (NULL until Stage 3 commits), **`claimed_at` TIMESTAMPTZ** (NULL until aggregator's create path claims; cleared by InteractionRecorder when Stage 3 commits), **`claimed_session_ref` TEXT** (deterministic sourceRef of the pending create-event; cleared by Stage 3). Partial index on `(matched_contact_id) WHERE processed_at IS NULL AND claimed_at IS NULL` to support the aggregator's input filter efficiently.
-- **`whatsapp_message`** — staging table. **Globally unique on `stanza_id`** (WhatsApp server-side message ID). Same column shape as `messages_message` (including `claimed_at` and `claimed_session_ref`) with WhatsApp-specific JIDs. Schema details in implementation plan.
 - **`anarlog_session_message`** (or `meeting_note`) — staging table for anarlog session content. Unique on `anarlog_session_id` (UUID). Columns: session UUID, title, summary, memo, participants JSONB, created_at, `mac_host_id`. **No `claimed_at`/`claimed_session_ref` needed** — anarlog sessions are 1:1 with events (no burst aggregation), so the create-path race doesn't apply.
 - **`phone_call`** — staging table for Phone/FaceTime call records. **Globally unique on `call_unique_id`** (`ZCALLRECORD.ZUNIQUE_ID` — Continuity propagates the same value across paired devices, so two Macs pushing the same call dedup at the staging unique constraint). Columns: `call_unique_id`, `peer_handle`, `peer_normalized`, `service` (`voice` | `facetime_audio` | `facetime_video`), `direction` (`inbound` | `outbound`), `answered` BOOL (inbound only — see source section), `has_voicemail` BOOL (mirrors `ZHASMESSAGE`; always FALSE for outbound), `duration_seconds` INT, `started_at` TIMESTAMPTZ, `matched_contact_id`, `interaction_id` **NULLABLE** (NULL for missed-inbound-no-voicemail rows that intentionally did not produce an interaction; see `phone_calls` source section), `mac_host_id`, `processed_at`. **No `claimed_at`/`claimed_session_ref` needed** — calls are 1:1 with interactions when an interaction is created (no burst aggregation). `processed_at` is set in the same ingest tx as the optional interaction insert, regardless of whether an interaction was actually created — it reflects "ingest service has finished with this row", not "an interaction exists". The contact-timeline UI projects `phone_call` rows with `interaction_id IS NULL AND matched_contact_id IS NOT NULL` alongside `interaction` rows so missed-no-voicemail calls remain visible to the operator without affecting cadence.
 
@@ -428,7 +413,7 @@ The existing `MessageReceivedPayload` and `MessageSentPayload` (used post-aggreg
   - **Query rules for `deleted_at`:** every query against `external_contact` must filter `WHERE deleted_at IS NULL` unless explicitly working with tombstones. This includes: identity matching candidate lookups, import-candidate UI listings, duplicate-of-id resolution, rematch-worker scans, and per-source statistics. Mirrors the existing soft-delete pattern across the codebase (per `.ai/rules/core.md`). The upsert path (driven by `external_contact.upserted` events) NULLs out `deleted_at` if the row was previously tombstoned, restoring it transparently.
 - **`external_identity`** — used for `(identifier, identifier_type, source)` tracking. New identifier type `anarlog_human_id`. Existing `imessage_phone` / `imessage_email` types become unused; cleanup migration in a follow-up.
 - **`external_sync_state`** — one row per `(source, account_id)` where `account_id = mac_host.id`. Strategy CHECK constraint extended to include `'push'`. The existing `cursor TEXT` column is sufficient for opaque cursor storage.
-- **`interaction.source`** CHECK constraint extended to include `'messages'`, `'phone_calls'`, `'whatsapp'`, `'anarlog_sessions'`.
+- **`interaction.source`** CHECK constraint extended to include `'messages'`, `'phone_calls'`, `'anarlog_sessions'`.
 - **`sync_log`** — one entry per batch.
 - **`event` table + River workers** — unchanged.
 
@@ -444,7 +429,6 @@ Canonical names per surface. v1 migrations align Mac-introduced sources with the
 | Todoist (existing) | `todoist` | `todoist` | n/a | `todoist` | `todoist` | Todoist |
 | Messages.app (new) | `messages` | `messages` | n/a (no contact entity sync) | `messages` | `messages` | Messages |
 | Phone / FaceTime (new) | `phone_calls` | `phone_calls` | n/a (no contact entity sync) | `phone_calls` | `phone_calls` | Phone & FaceTime |
-| WhatsApp (new) | `whatsapp` | `whatsapp` | n/a | `whatsapp` | `whatsapp` | WhatsApp |
 | iCloud Contacts (new) | `icloud_contacts` | `icloud_contacts` | `icloud_contacts` | n/a (entity sync) | `icloud_contacts` | iCloud Contacts |
 | Anarlog Humans (new) | `anarlog_humans` | `anarlog_humans` | `anarlog_humans` | n/a (entity sync) | `anarlog_humans` | Anarlog Humans |
 | Anarlog Sessions (new) | `anarlog_sessions` | `anarlog_sessions` | n/a | `anarlog_sessions` | `anarlog_sessions` | Anarlog Sessions |
@@ -461,10 +445,9 @@ The 5 sources register in `ProviderRegistry` with new `Strategy=push` (added to 
 #### Per-source rematch workers
 
 Mirror Telegram's pattern. Run on `contact_method.created` (for phone/email-derived sources) and on `external_contact.upserted` (with `match_status=matched`) (for `anarlog_humans` → `anarlog_sessions` chain):
-- `whatsapp_rematch` — on `contact_method.created` with type phone or whatsapp
 - `anarlog_sessions_rematch` — on `external_contact.upserted` (with `match_status=matched`) for source=anarlog_humans
 
-**No `messages_rematch` worker.** Messages-source filtering happens **on the Mac daemon** (see "Sender filtering" + "Cold-start race recovery" under the `messages` source description). The daemon never forwards unmatched senders, so no staged-but-unmatched rows exist on the Pi to rematch. New `contact_method` rows are picked up by the daemon's next `known-identifiers` refresh, which triggers a 30-day backwards scan of chat.db for the newly-known sender. If WhatsApp later adopts the same daemon-side filter pattern, its rematch worker becomes redundant too.
+**No `messages_rematch` worker.** Messages-source filtering happens **on the Mac daemon** (see "Sender filtering" + "Cold-start race recovery" under the `messages` source description). The daemon never forwards unmatched senders, so no staged-but-unmatched rows exist on the Pi to rematch. New `contact_method` rows are picked up by the daemon's next `known-identifiers` refresh, which triggers a 30-day backwards scan of chat.db for the newly-known sender.
 
 **No `phone_calls_rematch` worker** — same reasoning as `messages`. The daemon's `known-identifiers` filter + 30-day backwards scan over `ZCALLRECORD` handles new-contact backfill identically.
 
@@ -509,7 +492,7 @@ DELETE /api/v1/host/:id                            # user uninstall path; cascad
 Cursors are managed on a **dedicated endpoint** rather than baked into the ingest contract — this preserves the existing `/api/v1/ingest/events` wire contract that other publishers depend on.
 
 **Cursor representation:** opaque `TEXT` per source. Pi never interprets the cursor value; it only stores and returns it. Per-source semantics:
-- `messages`, `whatsapp`: cursor is a JSON object `{"backfill_cursor": "<value>", "live_cursor": "<value>", "backfill_complete": bool}` — backfill and live progress coexist. `backfill_cursor` walks **backward** from the install-time `MAX(ROWID)` (or `MAX(ZSORT)`) toward 2026-01-01; `live_cursor` advances **forward** from the install-time max. When `backfill_complete=true`, only `live_cursor` is consulted on subsequent polls. Late-arriving historical rows (e.g., Messages sync from another device backfills past data) are picked up because the daemon polls from `live_cursor` forward only; rows older than `live_cursor` are not revisited, but the daemon emits them during the initial backward backfill pass. Acceptable tradeoff documented; v2 mutation-scan reader covers the long tail.
+- `messages`: cursor is a JSON object `{"backfill_cursor": "<value>", "live_cursor": "<value>", "backfill_complete": bool}` — backfill and live progress coexist. `backfill_cursor` walks **backward** from the install-time `MAX(ROWID)` toward 2026-01-01; `live_cursor` advances **forward** from the install-time max. When `backfill_complete=true`, only `live_cursor` is consulted on subsequent polls. Late-arriving historical rows (e.g., Messages sync from another device backfills past data) are picked up because the daemon polls from `live_cursor` forward only; rows older than `live_cursor` are not revisited, but the daemon emits them during the initial backward backfill pass. Acceptable tradeoff documented; v2 mutation-scan reader covers the long tail.
 - `icloud_contacts`: cursor is the opaque `CNChangeHistory` token (Apple-managed, persisted as base64 string). Backfill is a single bulk fetch on first run; no separate backfill_cursor. Token expiration → daemon performs full resync: fetches all contacts via `CNContactStore`, fetches `GET /known-ids` from Pi (returning source_ids the Pi has for this source/host), computes set diff. Contacts in Pi-set but not in current scan → emit `external_contact.deleted` events. Contacts in current scan but not in Pi-set → emit `external_contact.upserted`. Contacts in both → emit `upserted` (content-hash dedup absorbs no-ops).
 - `anarlog_humans`, `anarlog_sessions`: cursor is a JSON map `{uuid: {content_hash, mtime}}` snapshot of the last successful full scan. mtime is a cheap optimization (skip files with unchanged mtime), but **content_hash is the truth** — a file with same mtime but different hash IS re-pushed. Tombstones: UUIDs in previous cursor but absent from current scan are emitted as `*.deleted` events. On cursor-state loss (daemon reinstall, Pi restore, epoch mismatch), daemon fetches `GET /known-ids` from Pi and reconciles same as iCloud token-expiration flow.
 
@@ -519,7 +502,7 @@ Cursors are managed on a **dedicated endpoint** rather than baked into the inges
 3. `POST /api/v1/ingest/events` with batch. Existing 4xx/5xx error handling applies. Returns `{accepted, duplicate, rejected, errors}`.
 4. If batch outcome is "all rows accepted or duplicate; no rejections," daemon advances cursor: `POST /api/v1/host/:id/sync/:source/cursor` with `{cursor: "Y", epoch: 42, base_cursor: "X"}`.
 5. Pi validates `epoch` matches current `mac_host.cursor_epoch` AND `base_cursor` matches stored cursor for that source. On match: stores new cursor `Y`. On mismatch: returns `409 Conflict` with `{current_cursor, current_epoch}`. Daemon refetches and retries from step 2.
-6. If any events were rejected: daemon does NOT advance cursor. Next poll re-reads and re-pushes; staging-table unique constraints on `guid`/`stanza_id`/session UUID dedupe naturally.
+6. If any events were rejected: daemon does NOT advance cursor. Next poll re-reads and re-pushes; staging-table unique constraints on `guid`/session UUID dedupe naturally.
 
 **`cursor_epoch` semantics:** column on `mac_host`. Bumped manually (or via admin endpoint) whenever Pi is restored from backup or its sync state is reset. Forces daemons to refetch all cursors and reconcile. Protects against the "Pi restored to older state while daemon held newer cursor" failure mode.
 
@@ -536,7 +519,6 @@ Cursors are managed on a **dedicated endpoint** rather than baked into the inges
 
 Same message landing on two Macs is deduplicated at the staging-table unique constraint:
 - `messages_message`: unique on `guid` (iMessage's stable per-message ID). First push wins; second push is a no-op insert (returns existing row).
-- `whatsapp_message`: unique on `stanza_id`. Same model.
 - `anarlog_session_message`: unique on `anarlog_session_id`.
 
 `mac_host_id` on staging rows is provenance only. Interactions are created once per matched message; subsequent hosts pushing the same content noop on staging insert.
@@ -545,7 +527,7 @@ Same message landing on two Macs is deduplicated at the staging-table unique con
 
 - **New "Mac" settings page:** lists `mac_host` rows (single host in v1, multi-host display when 2nd registers); per-host shows connection status from heartbeat age, version + protocol version, permissions state (FDA/Contacts/Files), source-level health, "uninstall" button (calls `DELETE /api/v1/host/:id`).
 - **Five new sources auto-appear in the existing Integrations list.**
-- **Contact detail timeline:** messages, WhatsApp, Anarlog session interactions appear via existing `interaction.source` rendering; new source values get icons/labels.
+- **Contact detail timeline:** messages, Anarlog session interactions appear via existing `interaction.source` rendering; new source values get icons/labels.
 - **Discovery UI:** existing Import page gets icloud + anarlog contacts via `external_contact.source` filter, no new tables needed.
 - **No UI uses `identifier_type` directly** (verified via grep) — identifier_type is internal matching plumbing.
 
@@ -557,7 +539,6 @@ Same message landing on two Macs is deduplicated at the staging-table unique con
 | `messages` (email handles) | `email` (generic) | Same reasoning. |
 | `phone_calls` (voice + FaceTime audio) | `phone` (generic) | CallHistoryDB carries Continuity voice, native macOS Phone-app voice, and FaceTime audio uniformly; service tier recorded as a payload column, not in identifier type. |
 | `phone_calls` (FaceTime video to Apple ID) | `email` (generic) | FaceTime video calls placed to an Apple ID surface as an email handle in `ZADDRESS`. Same generic mapping as messages. |
-| `whatsapp` | `whatsapp` | Both a contact_method type and an identifier_type with functional dual-mapping (matches `contact_method.whatsapp` AND `contact_method.phone`). Loses match coverage if reduced to generic. |
 | `icloud_contacts` | n/a — matches via individual phone/email contact methods, same as `gcontacts` |
 | `anarlog_humans` | `anarlog_human_id` (new) | UUID identity space, no contact_method mapping; pure storage hook for future session→human→contact resolution. |
 | `anarlog_sessions` | (consumes) `anarlog_human_id` | Participant resolution flows through `external_identity` keyed on `anarlog_human_id`. |
@@ -574,11 +555,11 @@ Same message landing on two Macs is deduplicated at the staging-table unique con
 
 **Permission revoked:** reader emits structured permission error, marks itself unhealthy in heartbeat. `doctor` shows remediation. Other sources unaffected.
 
-**Source schema drift (chat.db, WhatsApp, Anarlog):** reader detects via `PRAGMA table_info` (SQLite) or whitelist-parsing failure (markdown). Marks unhealthy, includes specific column-name diff in heartbeat error. Ships a daemon update to fix.
+**Source schema drift (chat.db, Anarlog):** reader detects via `PRAGMA table_info` (SQLite) or whitelist-parsing failure (markdown). Marks unhealthy, includes specific column-name diff in heartbeat error. Ships a daemon update to fix.
 
 **Pi cursor / Mac cursor disagree:** governed by Cursor Protocol — `cursor_epoch` + `base_cursor` precondition. Daemon refetches on `409 Conflict`; safe even if Pi was restored mid-flight.
 
-**Duplicate ingestion:** staging-table unique constraints on content-level IDs (`guid`, `stanza_id`, anarlog UUID). Replays are safe noops. The event table's `UNIQUE (source, source_id) WHERE source_id IS NOT NULL` partial index (migration 036) provides a second idempotency layer at the event-log level.
+**Duplicate ingestion:** staging-table unique constraints on content-level IDs (`guid`, anarlog UUID). Replays are safe noops. The event table's `UNIQUE (source, source_id) WHERE source_id IS NOT NULL` partial index (migration 036) provides a second idempotency layer at the event-log level.
 
 **Backfill in progress + new live events:** Telegram's `backfill_cursor` + `live_cursor` pattern. Backfill completes at 2026-01-01 floor.
 
@@ -588,7 +569,7 @@ Same message landing on two Macs is deduplicated at the staging-table unique con
 
 **Version skew:** daemon's `protocol_version` reported in heartbeat. Pi defines `MIN_PROTOCOL_VERSION`; older daemons get a `412 Precondition Failed` with upgrade instructions. Skew is observable in the Pi UI ("Mac daemon version 1.2 is incompatible with this Pi version; upgrade with `crm-mac install --upgrade`").
 
-**Daemon-Pi clock skew:** all event timestamps come from source data (chat.db, WhatsApp, file mtimes, Anarlog frontmatter). Daemon clock is only used for `last_heartbeat_at` display purposes; minor skew is acceptable. Pi never trusts daemon-supplied "now."
+**Daemon-Pi clock skew:** all event timestamps come from source data (chat.db, file mtimes, Anarlog frontmatter). Daemon clock is only used for `last_heartbeat_at` display purposes; minor skew is acceptable. Pi never trusts daemon-supplied "now."
 
 ### 6. Observability
 
@@ -646,7 +627,7 @@ Validates the trickiest cross-cutting concerns (FDA permission, container allowl
 - `mac_host` table + endpoints (`POST /host` with pairing token; heartbeat; DELETE; GET)
 - Cursor protocol implementation (`cursor_epoch`, `base_cursor` validation)
 - `sync_strategy=push` added to enum; scheduler `ListDueAccounts` exclusion + regression test
-- **Shared aggregation extraction:** Telegram's `backend/internal/telegram/aggregation.go` (and its `interactionExtender` interface) extracted into `backend/internal/messaging/aggregation` with a source-neutral interface. The `messageRepo` dependency becomes a source-neutral interface implemented by per-source staging repositories (`messages_message`, `whatsapp_message`, existing `telegram_message`). Telegram's existing call site swapped to use the shared package — semantic behavior preserved verbatim. The aggregator continues to handle burst-windowing, reply bridging, direction inference, and the two-path output (extend vs create) identically across sources.
+- **Shared aggregation extraction:** Telegram's `backend/internal/telegram/aggregation.go` (and its `interactionExtender` interface) extracted into `backend/internal/messaging/aggregation` with a source-neutral interface. The `messageRepo` dependency becomes a source-neutral interface implemented by per-source staging repositories (`messages_message`, existing `telegram_message`). Telegram's existing call site swapped to use the shared package — semantic behavior preserved verbatim. The aggregator continues to handle burst-windowing, reply bridging, direction inference, and the two-path output (extend vs create) identically across sources.
 - **Ingest service generalization:** receives Mac-emitted events at `/api/v1/ingest/events`. For `raw_message.*` events, per batch in single tx: (1) match identifier → contact_id via existing `IdentityService.MatchOrCreate`; (2) upsert staging rows with `processed_at = NULL` (dedup by Guid); (3) record event rows; (4) enqueue aggregator River jobs deduplicated by `(contact_id, source)`. Stage 2 aggregator + Stage 3 InteractionRecorder run async; both already exist for Telegram (with minor source-neutralizing refactor). For `external_contact.*` and `meeting_note.*` events, ingest service does all domain work inline in the same tx — no async stages.
 - **Aggregator River job scheduling:** new River job kind `MessagingAggregateForContact(contact_id, source)`. Uniqueness key = (contact_id, source). When ingest stages new rows, it enqueues this job; if a job with the same key is already pending/running, the enqueue is a no-op (River's built-in dedup). Each job processes all **eligible** rows for that (contact, source) pair — the claim-aware filter `processed_at IS NULL AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')`. The job exits when no eligible rows remain; rows currently claimed by a pending create-event are intentionally skipped and will be drained by Stage 3's post-commit re-enqueue (or by stale-claim recovery if Stage 3 fails). This ensures per-contact serialization across batches.
 - **InteractionRecorder generalization:** the existing consumer is extended to use `StagingRepo.MarkProcessed(ctx, source, ids, interaction_id)` — a new source-neutral repository method that dispatches to the right per-source staging table. Today the consumer directly calls `telegram_message.MarkMessagesProcessed`; the refactor replaces this with the dispatching method without changing the consumer's flow semantics.
@@ -819,7 +800,7 @@ Small follow-on to v1 that reuses every cross-cutting concern v1 paid for (FDA p
 
 **Out of scope for v1.5:**
 - Voicemail audio + transcript on the contact timeline. Mac has no local copy (verified: no `~/Library/Voicemail/`, no `*.amr` files, no transcript columns in `ZCALLRECORD`). Surfacing voicemail content requires an iOS companion source — deferred indefinitely.
-- Delete handling. `ZCALLRECORD` rows are append-only in normal use; the Phone app's "Clear All Recents" deletes rows but v1.5 treats deletes as out-of-scope (interactions remain in the CRM). Same v2 mutation-scan reader pattern as `messages`/`whatsapp` will cover this when it lands.
+- Delete handling. `ZCALLRECORD` rows are append-only in normal use; the Phone app's "Clear All Recents" deletes rows but v1.5 treats deletes as out-of-scope (interactions remain in the CRM). Same v2 mutation-scan reader pattern as `messages` will cover this when it lands.
 
 **Outcome:** Phone and FaceTime calls (Continuity-mirrored, native macOS Phone app, FaceTime audio/video) appear on contact timelines with duration + service tier. Answered inbound calls and voicemail-leaving missed calls bump `last_contacted`; missed inbound calls without voicemail appear on the timeline as "missed call" but do not affect cadence (no content was delivered). Outbound calls — connected or not — bump `last_outreach_at` only.
 
@@ -836,30 +817,20 @@ Small follow-on to v1 that reuses every cross-cutting concern v1 paid for (FDA p
 - Tombstone events (`external_contact.deleted`, `meeting_note.deleted`).
 - `anarlog_sessions_rematch` worker on `external_contact.upserted` (with `match_status=matched`) for source=anarlog_humans.
 
-### v3 — WhatsApp
-
-- WhatsApp Mac client store discovery already done; see research findings.
-- Swift reader with Core Data schema validation via `Z_METADATA` and `PRAGMA table_info`.
-- `whatsapp_message` staging table (unique on `stanza_id`).
-- `whatsapp` identifier type wiring (existing in normalize.go).
-- `interaction.source` migration: add `whatsapp`.
-- `whatsapp_rematch` worker.
-- Lock contention handling (backoff on `SQLITE_BUSY`).
-
 ---
 
 ## Open questions
 
 Items deferred to implementation phase (genuine design decisions, not unresolved questions):
 
-- **Exact `messages_message` and `whatsapp_message` column lists** — implementation plan derives from chat.db / `ZWAMESSAGE` schemas captured in research findings.
+- **Exact `messages_message` column list** — implementation plan derives from the chat.db schema captured in research findings.
 - **Anarlog folder path UX edge cases** — `doctor` validation rules when path is configured but doesn't exist, or contains no `humans/`/`sessions/` subdirectories.
 - **Backfill progress UI** — Telegram pattern covers the data; whether to surface a progress bar in v1 is a small polish item.
 - **Pairing token UI** — exact UX of token generation and display in the Pi web UI. Functional design: button → token displayed in modal with copy-to-clipboard + countdown timer.
 
 Items intentionally **out of v1 scope, queued for follow-up specs:**
 
-- **Edit/delete/reaction sync for messages and WhatsApp** — needs a separate "mutation scan" reader pattern over a recent-N-day window.
+- **Edit/delete/reaction sync for messages** — needs a separate "mutation scan" reader pattern over a recent-N-day window.
 - **Anarlog transcript ingestion** — speaker diarization required before transcripts become CRM-useful.
 - **Cross-source unified discovery UI** — consolidate import candidates from multiple sources into a single ranked view.
 - **Cleanup migration to remove dead `imessage_phone`/`imessage_email` identifier types** — non-blocking; data has no producers.
