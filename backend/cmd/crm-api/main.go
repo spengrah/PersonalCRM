@@ -1328,7 +1328,7 @@ func run() int {
 				logger.Info().Msg("calendar handler initialized for testing (no OAuth)")
 			}
 
-			testHandler := handlers.NewTestHandler(database, testExternalRepo, contactService, testCalendarRepo, macHostRepo)
+			testHandler := handlers.NewTestHandler(database, testExternalRepo, contactService, testCalendarRepo, macHostRepo, meetingNoteRepoForIngest)
 			testRoutes := v1.Group("/test")
 			{
 				testRoutes.POST("/seed/contacts", testHandler.SeedContacts)
@@ -1336,6 +1336,7 @@ func run() int {
 				testRoutes.POST("/seed/overdue-contacts", testHandler.SeedOverdueContacts)
 				testRoutes.POST("/seed/calendar-events", testHandler.SeedCalendarEvents)
 				testRoutes.POST("/seed/mac-hosts", testHandler.SeedMacHost)
+				testRoutes.POST("/seed/meeting-notes", testHandler.SeedMeetingNotes)
 				testRoutes.POST("/cleanup", testHandler.Cleanup)
 				testRoutes.POST("/trigger-error", testHandler.TriggerError)
 			}

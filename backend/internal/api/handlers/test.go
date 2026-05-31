@@ -23,12 +23,13 @@ import (
 // TestHandler handles test data management endpoints
 // These endpoints are only available when CRM_ENV=testing or CRM_ENV=test
 type TestHandler struct {
-	database     *db.Database
-	externalRepo *repository.ExternalContactRepository
-	contactSvc   *service.ContactService
-	calendarRepo *repository.CalendarEventRepository
-	macHostRepo  *repository.MacHostRepository
-	validator    *validator.Validate
+	database        *db.Database
+	externalRepo    *repository.ExternalContactRepository
+	contactSvc      *service.ContactService
+	calendarRepo    *repository.CalendarEventRepository
+	macHostRepo     *repository.MacHostRepository
+	meetingNoteRepo *repository.MeetingNoteRepository
+	validator       *validator.Validate
 }
 
 // NewTestHandler creates a new test handler
@@ -38,14 +39,16 @@ func NewTestHandler(
 	contactSvc *service.ContactService,
 	calendarRepo *repository.CalendarEventRepository,
 	macHostRepo *repository.MacHostRepository,
+	meetingNoteRepo *repository.MeetingNoteRepository,
 ) *TestHandler {
 	return &TestHandler{
-		database:     database,
-		externalRepo: externalRepo,
-		contactSvc:   contactSvc,
-		calendarRepo: calendarRepo,
-		macHostRepo:  macHostRepo,
-		validator:    validator.New(),
+		database:        database,
+		externalRepo:    externalRepo,
+		contactSvc:      contactSvc,
+		calendarRepo:    calendarRepo,
+		macHostRepo:     macHostRepo,
+		meetingNoteRepo: meetingNoteRepo,
+		validator:       validator.New(),
 	}
 }
 
@@ -57,7 +60,7 @@ type SeedExternalContactInput struct {
 	DisplayName  string         `json:"display_name,omitempty" validate:"omitempty,max=255"`
 	FirstName    string         `json:"first_name,omitempty" validate:"omitempty,max=255"`
 	LastName     string         `json:"last_name,omitempty" validate:"omitempty,max=255"`
-	Source       string         `json:"source,omitempty" validate:"omitempty,oneof=test telegram gcontacts gcal_attendee icloud_contacts"`
+	Source       string         `json:"source,omitempty" validate:"omitempty,oneof=test telegram gcontacts gcal_attendee icloud_contacts anarlog_humans anarlog_title"`
 	Emails       []string       `json:"emails,omitempty"`
 	Phones       []string       `json:"phones,omitempty"`
 	Organization string         `json:"organization,omitempty"`
@@ -565,6 +568,10 @@ func parseUUID(s string) (uuid.UUID, error) {
 // CleanupRequest represents the request to cleanup test data
 type CleanupRequest struct {
 	Prefix string `json:"prefix" validate:"required,min=1,max=50"`
+	// HostID, when set, also hard-deletes every meeting_note owned by that
+	// mac_host (seeded session UUIDs are random, so there is no prefix to
+	// match on — cleanup is by host instead).
+	HostID string `json:"host_id,omitempty" validate:"omitempty,uuid"`
 }
 
 // CleanupResponse represents the response from cleanup
@@ -653,6 +660,20 @@ func (h *TestHandler) Cleanup(c *gin.Context) {
 	if err := tx.Commit(ctx); err != nil {
 		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to commit transaction", err.Error())
 		return
+	}
+
+	// Meeting notes are seeded with random session UUIDs scoped to a host,
+	// so cleanup is by host id rather than by prefix.
+	if req.HostID != "" {
+		hostID, parseErr := uuid.Parse(req.HostID)
+		if parseErr != nil {
+			api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "invalid host_id", parseErr.Error())
+			return
+		}
+		if err := h.meetingNoteRepo.TestHardDeleteByHostID(ctx, hostID); err != nil {
+			api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to delete meeting notes", err.Error())
+			return
+		}
 	}
 
 	api.SendSuccess(c, http.StatusOK, CleanupResponse{
@@ -772,6 +793,118 @@ func (h *TestHandler) TriggerError(c *gin.Context) {
 	default:
 		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Test error triggered", message)
 	}
+}
+
+// SeedMeetingNoteInput describes one meeting_note row to seed. Only the
+// orphan_needs_review state is supported here (no candidate snapshot is
+// required), which is what the Imports Interactions E2E exercises:
+// the amber badge, the orphan card, "Log as impromptu", the empty state,
+// the ?session deep-link highlight, and the tab alias. Conflict rows need
+// a well-formed conflict_candidates snapshot referencing real events and
+// are covered by the backend integration tests instead.
+type SeedMeetingNoteInput struct {
+	AnarlogSessionID string `json:"anarlog_session_id" validate:"required,uuid"`
+	Title            string `json:"title,omitempty" validate:"omitempty,max=500"`
+	Summary          string `json:"summary,omitempty" validate:"omitempty,max=2000"`
+}
+
+// SeedMeetingNotesRequest seeds orphan meeting_note rows against a paired
+// mac_host so the Imports Interactions tab has rows to render. The host id
+// scopes cleanup (the seeded session UUIDs are caller-supplied but cleanup
+// is by host).
+type SeedMeetingNotesRequest struct {
+	HostID string                 `json:"host_id" validate:"required,uuid"`
+	Notes  []SeedMeetingNoteInput `json:"notes" validate:"required,min=1,max=50,dive"`
+}
+
+// SeedMeetingNotesResponse reports the created meeting_note ids.
+type SeedMeetingNotesResponse struct {
+	Created int      `json:"created"`
+	IDs     []string `json:"ids"`
+}
+
+// SeedMeetingNotes creates orphan_needs_review meeting_note rows for E2E.
+// @Summary Seed orphan meeting notes for testing
+// @Description Create orphan_needs_review meeting_note rows for e2e testing
+// @Tags test
+// @Accept json
+// @Produce json
+// @Param body body SeedMeetingNotesRequest true "Seed request"
+// @Success 201 {object} api.APIResponse{data=SeedMeetingNotesResponse}
+// @Failure 400 {object} api.APIResponse{error=api.APIError}
+// @Failure 500 {object} api.APIResponse{error=api.APIError}
+// @Router /test/seed/meeting-notes [post]
+func (h *TestHandler) SeedMeetingNotes(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	var req SeedMeetingNotesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Invalid request body", err.Error())
+		return
+	}
+	if err := h.validator.Struct(req); err != nil {
+		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Validation failed", err.Error())
+		return
+	}
+
+	hostID, err := uuid.Parse(req.HostID)
+	if err != nil {
+		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "invalid host_id", err.Error())
+		return
+	}
+
+	tx, err := h.database.Pool.Begin(ctx)
+	if err != nil {
+		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to start transaction", err.Error())
+		return
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	now := accelerated.GetCurrentTime()
+	ids := make([]string, 0, len(req.Notes))
+	for _, note := range req.Notes {
+		sessionID, parseErr := uuid.Parse(note.AnarlogSessionID)
+		if parseErr != nil {
+			api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "invalid anarlog_session_id", parseErr.Error())
+			return
+		}
+
+		params := repository.InsertMeetingNoteParams{
+			AnarlogSessionID: sessionID,
+			MacHostID:        &hostID,
+			LinkageState:     repository.LinkageStateOrphanNeedsReview,
+			MeetingAt:        now,
+			// Empty hashes are accepted by the column CHECK; an orphan has
+			// no conflict_candidates snapshot.
+			InputHash:       "",
+			ResolvedSetHash: "",
+		}
+		if note.Title != "" {
+			title := note.Title
+			params.Title = &title
+		}
+		if note.Summary != "" {
+			summary := note.Summary
+			params.Summary = &summary
+		}
+
+		row, insErr := h.meetingNoteRepo.InsertMeetingNoteTx(ctx, tx, params)
+		if insErr != nil {
+			api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to create meeting note", insErr.Error())
+			return
+		}
+		ids = append(ids, row.ID.String())
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to commit transaction", err.Error())
+		return
+	}
+
+	api.SendSuccess(c, http.StatusCreated, SeedMeetingNotesResponse{
+		Created: len(ids),
+		IDs:     ids,
+	}, nil)
 }
 
 // escapeSQLLikeWildcards escapes SQL LIKE pattern wildcards (% and _)
