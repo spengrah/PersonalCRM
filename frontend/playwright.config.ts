@@ -79,6 +79,9 @@ export default defineConfig({
         MIGRATIONS_PATH: 'migrations',
         CRM_ENV: 'testing',
         ENABLE_EXTERNAL_SYNC: 'true',
+        // The Imports Interactions tab calls GET /meeting-notes/needs-attention,
+        // which is only registered when event-bus ingest is enabled.
+        EVENT_BUS_INGEST_ENABLED: process.env.EVENT_BUS_INGEST_ENABLED || 'true',
       },
     },
   ],
