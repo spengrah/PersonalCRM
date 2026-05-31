@@ -10,6 +10,7 @@ Reusable React/TypeScript patterns for consistency across the frontend codebase.
 | `useContactNote`, `useCreateNote`, etc. | Notes | `use-contact-note.ts` |
 | `useCalendarEvents`, `useCreateCalendarEvent` | Calendar | `use-calendar.ts` |
 | `useImportCandidates`, `useImportContact` | Imports | `use-imports.ts` |
+| `useInteractionsQueue`, `useResolveLink`, `useAnarlogTitleDiscovery`, `useResolveDiscoveryToken` | Imports — Interactions tab + Anarlog discovery | `use-interactions-queue.ts` |
 | `useMergeContacts` | Contact merge | `use-merge.ts` |
 | `useSyncStates`, `useTriggerSync` | Sync status | `use-sync-states.ts` |
 | `useGoogleAccounts`, `useConnectGoogle` | Google OAuth | `use-google-accounts.ts` |

@@ -328,7 +328,9 @@ v1 := router.Group("/api/v1")
 | **Imports** | `/imports/candidates` | GET | ImportHandler | Import candidates |
 | | `/imports/:id/import` | POST | ImportHandler | Import as new contact |
 | | `/imports/:id/link` | POST | ImportHandler | Link to existing |
-| **Meeting Notes** | `/meeting-notes/needs-attention` | GET | MeetingNoteHandler | List meeting_note rows in `conflict_pending` or `orphan_needs_review`. Optional `?host_id=<uuid>` to scope by mac_host. |
+| | `/imports/anarlog-title` | GET | AnarlogDiscoveryHandler | List grouped `anarlog_title` discovery tokens (People tab), ranked by evidence count, with distinct session-title evidence. |
+| | `/imports/anarlog-title/resolve` | POST | AnarlogDiscoveryHandler | Resolve a whole token group. Body `{"normalized_token","action":"import"\|"link"\|"ignore",...}`; server re-derives all sibling rows. Response carries `contact_id` for import/link. |
+| **Meeting Notes** | `/meeting-notes/needs-attention` | GET | MeetingNoteHandler | List meeting_note rows in `conflict_pending` or `orphan_needs_review` (Interactions tab). Optional `?host_id=<uuid>` to scope by mac_host. Each conflict candidate carries `attendees [{name, matched}]`. Co-gated with `/ingest/events` by `EVENT_BUS_INGEST_ENABLED`. |
 | | `/meeting-notes/:id/resolve-link` | POST | MeetingNoteHandler | Resolve a `conflict_pending` row. Body is a discriminated union: `{"action":"link","kind":"event"\|"phone_call","id":"<uuid>"}` or `{"action":"none_of_these"}`. |
 | **Todoist** | `/todoist/settings` | GET/PATCH | TodoistHandler | Todoist settings |
 | | `/todoist/projects` | GET | TodoistHandler | List projects |
