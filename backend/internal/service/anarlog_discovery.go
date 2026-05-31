@@ -212,12 +212,13 @@ func (s *AnarlogDiscoveryService) cleanupOrphanContact(ctx context.Context, id u
 	_ = s.contacts.DeleteContact(ctx, id)
 }
 
-// resolveLink applies optional name/cadence to an existing contact, then
-// batch-marks every sibling 'matched'. When neither name nor cadence is
-// supplied the contact write is skipped entirely (the existence check
-// still runs for FK safety). The sibling mark is gated on a successful
-// (or skipped) contact write so a failed edit is never silently
-// swallowed.
+// resolveLink claims the token group by batch-marking every sibling
+// 'matched', then applies optional name/cadence to the existing contact.
+// The claim runs FIRST so a concurrent resolve that already took the group
+// (zero rows marked) is rejected BEFORE any contact edit — a lost race never
+// leaves a stray profile change on the target. When neither name nor cadence
+// is supplied the contact write is skipped entirely (the existence check
+// still runs for FK safety).
 func (s *AnarlogDiscoveryService) resolveLink(ctx context.Context, req ResolveTokenRequest) (*ResolveTokenResult, error) {
 	if req.CRMContactID == nil {
 		return nil, errors.New("link action requires crm_contact_id")
@@ -230,6 +231,17 @@ func (s *AnarlogDiscoveryService) resolveLink(ctx context.Context, req ResolveTo
 			return nil, ErrDiscoveryContactMissing
 		}
 		return nil, fmt.Errorf("read link target contact: %w", err)
+	}
+
+	// Claim the group first. Zero rows means a concurrent resolve already
+	// took it; reject before touching the contact so the lost race applies
+	// no edit.
+	marked, err := s.externalRepo.MarkAnarlogTitleSiblingsMatchedByToken(ctx, req.NormalizedToken, contactID)
+	if err != nil {
+		return nil, fmt.Errorf("mark siblings matched: %w", err)
+	}
+	if marked == 0 {
+		return nil, ErrTokenGroupNotFound
 	}
 
 	// Apply name/cadence only when supplied. UpdateContact is a
@@ -256,15 +268,6 @@ func (s *AnarlogDiscoveryService) resolveLink(ctx context.Context, req ResolveTo
 		}
 	}
 
-	marked, err := s.externalRepo.MarkAnarlogTitleSiblingsMatchedByToken(ctx, req.NormalizedToken, contactID)
-	if err != nil {
-		return nil, fmt.Errorf("mark siblings matched: %w", err)
-	}
-	if marked == 0 {
-		// A concurrent resolve claimed the group between our read and our
-		// mark. No new entity was created, so report the group as gone.
-		return nil, ErrTokenGroupNotFound
-	}
 	id := contactID
 	return &ResolveTokenResult{Action: DiscoveryActionLink, ContactID: &id}, nil
 }

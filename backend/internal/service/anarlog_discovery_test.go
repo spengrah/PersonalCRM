@@ -28,9 +28,9 @@ type stubDiscoveryRepo struct {
 	ignoreMarkCalled bool
 
 	// importMarkRows/matchMarkRows control the affected-row count the batch
-	// marks report. They default to -1, which the methods treat as "1 row"
-	// (the happy path), so tests opt into the zero-row concurrent-resolve
-	// case explicitly by setting them to 0.
+	// marks report. The struct zero-value (unset) is the happy path (1 row
+	// marked); tests opt into the zero-row concurrent-resolve case by setting
+	// the field to a negative sentinel (see markRowsOrDefault).
 	importMarkRows int64
 	matchMarkRows  int64
 	importMarkErr  error
@@ -360,7 +360,9 @@ func TestResolveToken_LinkMissingContact(t *testing.T) {
 	require.False(t, repo.matchMarkCalled) // FK miss → no sibling mark
 }
 
-func TestResolveToken_LinkUpdateFailureLeavesSiblingsUnmarked(t *testing.T) {
+func TestResolveToken_LinkUpdateFailureSurfacesError(t *testing.T) {
+	// The group is claimed first, then the optional edit fails. The error is
+	// surfaced to the caller (not swallowed); the siblings stay marked.
 	contactID := uuid.New()
 	repo := &stubDiscoveryRepo{siblings: []repository.ExternalContact{anarlogTitleSibling()}}
 	contacts := &stubDiscoveryContacts{
@@ -376,7 +378,32 @@ func TestResolveToken_LinkUpdateFailureLeavesSiblingsUnmarked(t *testing.T) {
 		CRMContactID:    &contactID,
 	})
 	require.Error(t, err)
-	require.False(t, repo.matchMarkCalled) // update failed → no silent edit loss
+	require.True(t, repo.matchMarkCalled)  // claim ran before the edit
+	require.True(t, contacts.updateCalled) // edit attempted after the claim
+}
+
+func TestResolveToken_LinkZeroRowsAppliesNoEdit(t *testing.T) {
+	// A concurrent resolve claimed the group: the matched mark touches zero
+	// rows. The optional name/cadence edit must NOT be applied — a lost race
+	// leaves no stray profile change on the target contact.
+	contactID := uuid.New()
+	repo := &stubDiscoveryRepo{
+		siblings:      []repository.ExternalContact{anarlogTitleSibling()},
+		matchMarkRows: -1, // force zero rows marked
+	}
+	contacts := &stubDiscoveryContacts{existing: &repository.Contact{ID: contactID, FullName: "Stay"}}
+	svc := NewAnarlogDiscoveryService(repo, contacts)
+
+	_, err := svc.ResolveToken(context.Background(), ResolveTokenRequest{
+		NormalizedToken: "lena",
+		Action:          DiscoveryActionLink,
+		Name:            strptr("Renamed"),
+		Cadence:         strptr("monthly"),
+		CRMContactID:    &contactID,
+	})
+	require.ErrorIs(t, err, ErrTokenGroupNotFound)
+	require.True(t, repo.matchMarkCalled)
+	require.False(t, contacts.updateCalled) // lost race → no edit
 }
 
 func TestListGroups_Passthrough(t *testing.T) {

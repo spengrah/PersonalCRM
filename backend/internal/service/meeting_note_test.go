@@ -129,7 +129,7 @@ func TestCandidatePreview_EventAttendeesMatchedFlag(t *testing.T) {
 	require.False(t, preview.Attendees[2].Matched)
 
 	// Every matched:true name is in the matched-name set (no false
-	// positives) — the weaker, true property from Decision 3.
+	// positives) — matched flags are a subset signal, not a count.
 	for _, a := range preview.Attendees {
 		if a.Matched {
 			require.Equal(t, "Alice Matched", a.Name)

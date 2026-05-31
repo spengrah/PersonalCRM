@@ -78,7 +78,7 @@ func TestNeedsAttention_EnrichedAttendees(t *testing.T) {
 
 	meetingAt := time.Date(2026, 5, 20, 9, 0, 0, 0, time.UTC)
 	// Two candidate events BOTH matching contactA so the overlap against
-	// the implied set ({contactA}) is tied at 1 → no Step 3 winner → row
+	// the implied set ({contactA}) is tied at 1 → no strict winner → row
 	// lands conflict_pending. The first event lists contactA (matched + in
 	// implied set) and contactB (a matched CONTACT but NOT in the implied
 	// set) as named attendees, so the projection must emphasize ONLY
