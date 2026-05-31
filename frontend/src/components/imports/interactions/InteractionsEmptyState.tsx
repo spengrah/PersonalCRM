@@ -4,7 +4,7 @@ import { CheckCircle } from 'lucide-react'
 
 /**
  * Shown on the Interactions tab when conflicts + orphans are both zero.
- * Discovery may still render below on the People tab.
+ * Name candidates may still render below on the People tab.
  */
 export function InteractionsEmptyState() {
   return (

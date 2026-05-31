@@ -26,14 +26,14 @@ import { SubTabs, type ImportsTab } from '@/components/imports/interactions/SubT
 import { ConflictCard } from '@/components/imports/interactions/ConflictCard'
 import { OrphanCard } from '@/components/imports/interactions/OrphanCard'
 import { InteractionsEmptyState } from '@/components/imports/interactions/InteractionsEmptyState'
-import { DiscoveryRow } from '@/components/imports/interactions/DiscoveryRow'
-import { DiscoveryModal } from '@/components/imports/interactions/DiscoveryModal'
+import { NameCandidateRow } from '@/components/imports/interactions/NameCandidateRow'
+import { NameCandidateModal } from '@/components/imports/interactions/NameCandidateModal'
 import { useImportCandidates, useIgnoreCandidate, useTriggerSync } from '@/hooks/use-imports'
 import {
   useInteractionsQueue,
   useResolveLink,
-  useAnarlogTitleDiscovery,
-  useResolveDiscoveryToken,
+  useAnarlogTitleCandidates,
+  useResolveNameCandidate,
 } from '@/hooks/use-interactions-queue'
 import { useGoogleAccounts } from '@/hooks/use-google-accounts'
 import { getCandidateDisplayName } from '@/lib/candidate-display'
@@ -42,7 +42,7 @@ import type {
   ImportCandidatesListParams,
   NeedsAttentionItem,
   NeedsAttentionCandidate,
-  DiscoveryGroup,
+  NameCandidateGroup,
 } from '@/types/import'
 
 // Constants
@@ -331,10 +331,10 @@ function ImportsPageInner() {
     mode: 'import',
   })
   const [actionInProgress, setActionInProgress] = useState<string | null>(null)
-  // Discovery modal: index into the discovery queue, or null when closed.
-  const [discoveryModalIndex, setDiscoveryModalIndex] = useState<number | null>(null)
+  // Name-candidate modal: index into the name-candidate queue, or null when closed.
+  const [nameCandidateModalIndex, setNameCandidateModalIndex] = useState<number | null>(null)
   // Token whose ignore/resolve mutation is in flight (disables its row).
-  const [discoveryBusyToken, setDiscoveryBusyToken] = useState<string | null>(null)
+  const [nameCandidateBusyToken, setNameCandidateBusyToken] = useState<string | null>(null)
   // Meeting-note id whose resolve mutation is in flight (disables its card).
   const [resolveBusyId, setResolveBusyId] = useState<string | null>(null)
 
@@ -344,14 +344,14 @@ function ImportsPageInner() {
   const syncMutation = useTriggerSync()
 
   const { data: attentionItems, isLoading: attentionLoading } = useInteractionsQueue()
-  const { data: discoveryGroups, isLoading: discoveryLoading } = useAnarlogTitleDiscovery()
+  const { data: nameCandidateGroups, isLoading: nameCandidateLoading } = useAnarlogTitleCandidates()
   const resolveLinkMutation = useResolveLink()
-  const resolveDiscoveryMutation = useResolveDiscoveryToken()
+  const resolveNameCandidateMutation = useResolveNameCandidate()
 
   const items = useMemo(() => attentionItems ?? [], [attentionItems])
-  const groups = useMemo(() => discoveryGroups ?? [], [discoveryGroups])
-  // Amber badge = conflicts + orphans (every needs-attention row). Discovery
-  // is deliberately NOT counted here.
+  const groups = useMemo(() => nameCandidateGroups ?? [], [nameCandidateGroups])
+  // Amber badge = conflicts + orphans (every needs-attention row). Name
+  // candidates are deliberately NOT counted here.
   const attentionCount = items.length
 
   const setTab = useCallback(
@@ -573,12 +573,12 @@ function ImportsPageInner() {
     }
   }
 
-  // --- People tab: discovery token resolution ---
+  // --- People tab: name-candidate token resolution ---
 
-  const handleIgnoreToken = async (group: DiscoveryGroup) => {
-    setDiscoveryBusyToken(group.normalized_token)
+  const handleIgnoreToken = async (group: NameCandidateGroup) => {
+    setNameCandidateBusyToken(group.normalized_token)
     try {
-      await resolveDiscoveryMutation.mutateAsync({
+      await resolveNameCandidateMutation.mutateAsync({
         normalized_token: group.normalized_token,
         action: 'ignore',
       })
@@ -589,7 +589,7 @@ function ImportsPageInner() {
         message: err instanceof Error ? err.message : 'Failed to ignore name',
       })
     } finally {
-      setDiscoveryBusyToken(null)
+      setNameCandidateBusyToken(null)
     }
   }
 
@@ -753,13 +753,13 @@ function ImportsPageInner() {
               </div>
             )}
 
-            {/* Discovery: names found in session titles */}
-            <DiscoverySection
+            {/* Name candidates: names found in session titles */}
+            <NameCandidateSection
               groups={groups}
-              loading={discoveryLoading}
-              busyToken={discoveryBusyToken}
+              loading={nameCandidateLoading}
+              busyToken={nameCandidateBusyToken}
               onCreate={group =>
-                setDiscoveryModalIndex(
+                setNameCandidateModalIndex(
                   groups.findIndex(g => g.normalized_token === group.normalized_token)
                 )
               }
@@ -781,12 +781,12 @@ function ImportsPageInner() {
         />
       )}
 
-      {/* Discovery modal (People-tab token groups) */}
-      {discoveryModalIndex !== null && groups.length > 0 && (
-        <DiscoveryModal
+      {/* Name-candidate modal (People-tab token groups) */}
+      {nameCandidateModalIndex !== null && groups.length > 0 && (
+        <NameCandidateModal
           groups={groups}
-          initialIndex={Math.min(discoveryModalIndex, groups.length - 1)}
-          onClose={() => setDiscoveryModalIndex(null)}
+          initialIndex={Math.min(nameCandidateModalIndex, groups.length - 1)}
+          onClose={() => setNameCandidateModalIndex(null)}
           onSuccess={message => setNotification({ type: 'success', message })}
           onError={message => setNotification({ type: 'error', message })}
         />
@@ -859,23 +859,23 @@ function InteractionsTab({
   )
 }
 
-// --- People tab: discovery section (names found in session titles) ---
+// --- People tab: name-candidate section (names found in session titles) ---
 
-function DiscoverySection({
+function NameCandidateSection({
   groups,
   loading,
   busyToken,
   onCreate,
   onIgnore,
 }: {
-  groups: DiscoveryGroup[]
+  groups: NameCandidateGroup[]
   loading: boolean
   busyToken: string | null
-  onCreate: (group: DiscoveryGroup) => void
-  onIgnore: (group: DiscoveryGroup) => void
+  onCreate: (group: NameCandidateGroup) => void
+  onIgnore: (group: NameCandidateGroup) => void
 }) {
-  // Hide the section entirely when there is nothing to discover (keeps the
-  // People tab quiet for the common no-discovery case).
+  // Hide the section entirely when there are no name candidates (keeps the
+  // People tab quiet for the common empty case).
   if (loading || groups.length === 0) return null
 
   return (
@@ -887,7 +887,7 @@ function DiscoverySection({
       </div>
       <div className="space-y-2.5">
         {groups.map(group => (
-          <DiscoveryRow
+          <NameCandidateRow
             key={group.normalized_token}
             group={group}
             busy={busyToken === group.normalized_token}

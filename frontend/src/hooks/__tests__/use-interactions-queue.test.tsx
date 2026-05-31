@@ -5,8 +5,8 @@ import type { ReactNode } from 'react'
 import {
   useInteractionsQueue,
   useResolveLink,
-  useAnarlogTitleDiscovery,
-  useResolveDiscoveryToken,
+  useAnarlogTitleCandidates,
+  useResolveNameCandidate,
 } from '../use-interactions-queue'
 
 vi.mock('@/lib/imports-api', () => ({
@@ -14,7 +14,7 @@ vi.mock('@/lib/imports-api', () => ({
     getNeedsAttention: vi.fn(),
     resolveLink: vi.fn(),
     getAnarlogTitleGroups: vi.fn(),
-    resolveDiscoveryToken: vi.fn(),
+    resolveNameCandidate: vi.fn(),
   },
 }))
 
@@ -34,7 +34,7 @@ const mockedApi = importsApi as unknown as {
   getNeedsAttention: ReturnType<typeof vi.fn>
   resolveLink: ReturnType<typeof vi.fn>
   getAnarlogTitleGroups: ReturnType<typeof vi.fn>
-  resolveDiscoveryToken: ReturnType<typeof vi.fn>
+  resolveNameCandidate: ReturnType<typeof vi.fn>
 }
 const mockedInvalidateFor = invalidateFor as ReturnType<typeof vi.fn>
 
@@ -77,13 +77,13 @@ describe('use-interactions-queue hooks', () => {
     expect(result.current.data).toEqual(items)
   })
 
-  it('useAnarlogTitleDiscovery fetches grouped tokens', async () => {
+  it('useAnarlogTitleCandidates fetches grouped tokens', async () => {
     const groups = [
       { normalized_token: 'lena', token_display: 'Lena', evidence_count: 2, session_titles: [] },
     ]
     mockedApi.getAnarlogTitleGroups.mockResolvedValueOnce(groups)
 
-    const { result } = renderHook(() => useAnarlogTitleDiscovery(), {
+    const { result } = renderHook(() => useAnarlogTitleCandidates(), {
       wrapper: createWrapper(queryClient),
     })
 
@@ -133,27 +133,27 @@ describe('use-interactions-queue hooks', () => {
     expect(mockedInvalidateFor).toHaveBeenCalledTimes(1)
   })
 
-  it('useResolveDiscoveryToken passes the response contact_id for import/link', async () => {
-    mockedApi.resolveDiscoveryToken.mockResolvedValueOnce({ action: 'import', contact_id: 'c-9' })
+  it('useResolveNameCandidate passes the response contact_id for import/link', async () => {
+    mockedApi.resolveNameCandidate.mockResolvedValueOnce({ action: 'import', contact_id: 'c-9' })
 
-    const { result } = renderHook(() => useResolveDiscoveryToken(), {
+    const { result } = renderHook(() => useResolveNameCandidate(), {
       wrapper: createWrapper(queryClient),
     })
     result.current.mutate({ normalized_token: 'lena', action: 'import' })
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
 
-    expect(mockedInvalidateFor).toHaveBeenCalledWith('discovery:resolved', 'c-9')
+    expect(mockedInvalidateFor).toHaveBeenCalledWith('name-candidate:resolved', 'c-9')
   })
 
-  it('useResolveDiscoveryToken passes undefined contact_id for ignore', async () => {
-    mockedApi.resolveDiscoveryToken.mockResolvedValueOnce({ action: 'ignore' })
+  it('useResolveNameCandidate passes undefined contact_id for ignore', async () => {
+    mockedApi.resolveNameCandidate.mockResolvedValueOnce({ action: 'ignore' })
 
-    const { result } = renderHook(() => useResolveDiscoveryToken(), {
+    const { result } = renderHook(() => useResolveNameCandidate(), {
       wrapper: createWrapper(queryClient),
     })
     result.current.mutate({ normalized_token: 'lena', action: 'ignore' })
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
 
-    expect(mockedInvalidateFor).toHaveBeenCalledWith('discovery:resolved', undefined)
+    expect(mockedInvalidateFor).toHaveBeenCalledWith('name-candidate:resolved', undefined)
   })
 })

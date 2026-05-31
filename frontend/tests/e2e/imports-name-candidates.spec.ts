@@ -1,10 +1,10 @@
 import { test, expect } from './fixtures'
 import { createTestAPI, TestAPI } from './helpers/test-api'
 
-// People-tab discovery: grouped anarlog_title tokens lifted from session
+// People-tab name candidates: grouped anarlog_title tokens lifted from session
 // titles. Each (token, session) pair is one external_contact row; the Imports
 // UI groups them by normalized token and resolves the whole group in one call.
-test.describe('Imports discovery (anarlog_title) @area:imports', () => {
+test.describe('Imports name candidates (anarlog_title) @area:imports', () => {
   let testApi: TestAPI
   // A per-run unique token so parallel workers don't collide on grouping.
   let token: string
@@ -40,7 +40,7 @@ test.describe('Imports discovery (anarlog_title) @area:imports', () => {
     await testApi.cleanup()
   })
 
-  test('renders the discovery section with the grouped token and evidence count', async ({
+  test('renders the name-candidate section with the grouped token and evidence count', async ({
     page,
   }) => {
     await page.goto('/imports')
@@ -52,8 +52,8 @@ test.describe('Imports discovery (anarlog_title) @area:imports', () => {
     await expect(page.getByText(/Seen in 2 session titles/).first()).toBeVisible()
   })
 
-  // Scope to THIS test's discovery row so parallel workers' seeded tokens
-  // don't cross-trigger (the discovery list accumulates across workers).
+  // Scope to THIS test's name-candidate row so parallel workers' seeded tokens
+  // don't cross-trigger (the name-candidate list accumulates across workers).
   const myRow = (page: import('@playwright/test').Page) =>
     page
       .locator('div')
@@ -72,7 +72,7 @@ test.describe('Imports discovery (anarlog_title) @area:imports', () => {
 
     // The modal opens in the name-only branch: no contact-methods section,
     // just name + cadence + the info note. The pager opens at this token.
-    const dialog = page.getByRole('dialog', { name: /Create contact from discovered name/ })
+    const dialog = page.getByRole('dialog', { name: /Create contact from name candidate/ })
     await expect(dialog.getByText(/No contact methods/)).toBeVisible()
     await expect(dialog.getByLabel('Name')).toHaveValue(display)
 
@@ -85,7 +85,7 @@ test.describe('Imports discovery (anarlog_title) @area:imports', () => {
     const res = await resolved
     expect(res.ok()).toBeTruthy()
 
-    // The token group leaves the discovery list after resolution.
+    // The token group leaves the name-candidate list after resolution.
     await expect(page.getByText(display, { exact: true })).toHaveCount(0, { timeout: 10000 })
   })
 
@@ -102,7 +102,7 @@ test.describe('Imports discovery (anarlog_title) @area:imports', () => {
       .getByRole('button', { name: /Create contact/ })
       .first()
       .click()
-    const dialog = page.getByRole('dialog', { name: /Create contact from discovered name/ })
+    const dialog = page.getByRole('dialog', { name: /Create contact from name candidate/ })
     await expect(dialog.getByText(/No contact methods/)).toBeVisible()
 
     // Toggle to link mode and pick the seeded contact.

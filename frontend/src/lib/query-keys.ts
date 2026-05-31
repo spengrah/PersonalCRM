@@ -31,7 +31,7 @@ export const importKeys = {
   detail: (id: string) => [...importKeys.details(), id] as const,
   // Interactions tab: conflict + orphan queue (GET /meeting-notes/needs-attention).
   needsAttention: () => [...importKeys.all, 'needs-attention'] as const,
-  // People tab: grouped anarlog_title discovery (GET /imports/anarlog-title).
+  // People tab: grouped anarlog_title name candidates (GET /imports/anarlog-title).
   anarlogTitle: () => [...importKeys.all, 'anarlog-title'] as const,
 }
 

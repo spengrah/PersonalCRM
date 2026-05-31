@@ -25,8 +25,8 @@ vi.mock('@/hooks/use-google-accounts', () => ({
 vi.mock('@/hooks/use-interactions-queue', () => ({
   useInteractionsQueue: vi.fn(),
   useResolveLink: vi.fn(),
-  useAnarlogTitleDiscovery: vi.fn(),
-  useResolveDiscoveryToken: vi.fn(),
+  useAnarlogTitleCandidates: vi.fn(),
+  useResolveNameCandidate: vi.fn(),
 }))
 
 vi.mock('@/components/layout/navigation', () => ({
@@ -54,18 +54,18 @@ import { useGoogleAccounts } from '@/hooks/use-google-accounts'
 import {
   useInteractionsQueue,
   useResolveLink,
-  useAnarlogTitleDiscovery,
-  useResolveDiscoveryToken,
+  useAnarlogTitleCandidates,
+  useResolveNameCandidate,
 } from '@/hooks/use-interactions-queue'
 
 /** Reset the interactions-queue hooks to a quiet default (no items, no
- * discovery, idle mutations) so existing People-tab tests are unaffected. */
+ * name candidates, idle mutations) so existing People-tab tests are unaffected. */
 function mockInteractionsQueueDefaults() {
   vi.mocked(useInteractionsQueue).mockReturnValue({
     data: [],
     isLoading: false,
   } as any)
-  vi.mocked(useAnarlogTitleDiscovery).mockReturnValue({
+  vi.mocked(useAnarlogTitleCandidates).mockReturnValue({
     data: [],
     isLoading: false,
   } as any)
@@ -73,7 +73,7 @@ function mockInteractionsQueueDefaults() {
     mutateAsync: vi.fn(),
     isPending: false,
   } as any)
-  vi.mocked(useResolveDiscoveryToken).mockReturnValue({
+  vi.mocked(useResolveNameCandidate).mockReturnValue({
     mutateAsync: vi.fn(),
     isPending: false,
   } as any)
@@ -681,7 +681,7 @@ describe('ImportsPage - Telegram @username', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Sub-tabs (People / Interactions), discovery, and deep-link behavior
+// Sub-tabs (People / Interactions), name candidates, and deep-link behavior
 // ---------------------------------------------------------------------------
 
 const conflictItem = {
@@ -715,14 +715,14 @@ const orphanItem = {
   candidates: [],
 }
 
-const discoveryGroup = {
+const nameCandidateGroup = {
   normalized_token: 'lena',
   token_display: 'Lena',
   evidence_count: 2,
   session_titles: ['1:1 with Lena'],
 }
 
-describe('ImportsPage - Sub-tabs and discovery', () => {
+describe('ImportsPage - Sub-tabs and name candidates', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockSearchParams = new URLSearchParams()
@@ -750,17 +750,17 @@ describe('ImportsPage - Sub-tabs and discovery', () => {
     expect(screen.getByText('Filter:')).toBeInTheDocument()
   })
 
-  it('shows the amber badge with the conflict + orphan count (discovery excluded)', () => {
+  it('shows the amber badge with the conflict + orphan count (name candidates excluded)', () => {
     vi.mocked(useInteractionsQueue).mockReturnValue({
       data: [conflictItem, orphanItem],
       isLoading: false,
     } as any)
-    vi.mocked(useAnarlogTitleDiscovery).mockReturnValue({
-      data: [discoveryGroup],
+    vi.mocked(useAnarlogTitleCandidates).mockReturnValue({
+      data: [nameCandidateGroup],
       isLoading: false,
     } as any)
     render(<ImportsPage />, { wrapper: createWrapper() })
-    // Badge = 2 (two needs-attention rows); the discovery group is not counted.
+    // Badge = 2 (two needs-attention rows); the name-candidate group is not counted.
     expect(screen.getByLabelText('2 needing attention')).toHaveTextContent('2')
   })
 
@@ -799,9 +799,9 @@ describe('ImportsPage - Sub-tabs and discovery', () => {
     expect(mockReplace).toHaveBeenCalledWith(expect.stringContaining('tab=interactions'))
   })
 
-  it('renders the discovery section under the People tab', () => {
-    vi.mocked(useAnarlogTitleDiscovery).mockReturnValue({
-      data: [discoveryGroup],
+  it('renders the name-candidate section under the People tab', () => {
+    vi.mocked(useAnarlogTitleCandidates).mockReturnValue({
+      data: [nameCandidateGroup],
       isLoading: false,
     } as any)
     render(<ImportsPage />, { wrapper: createWrapper() })

@@ -78,10 +78,10 @@ test.describe('Imports Interactions tab @area:imports', () => {
   test('wires the orphan "Log as impromptu" action to the resolve-link endpoint', async ({
     page,
   }) => {
-    // NOTE: the merged resolve-link endpoint (PRs 3/5) only transitions
-    // conflict_pending rows; resolving an orphan_needs_review row through it
-    // is a separate backend concern outside this PR's discovery slice. This
-    // test asserts the orphan card's action is present and dispatches the
+    // NOTE: the resolve-link endpoint only transitions conflict_pending rows;
+    // resolving an orphan_needs_review row through it returns 409 today. That
+    // backend state-machine gap is tracked separately in issue #368. This test
+    // asserts the orphan card's action is present and dispatches the
     // resolve-link request (the UI deliverable), without asserting the
     // backend transition.
     await page.goto('/imports?tab=interactions')

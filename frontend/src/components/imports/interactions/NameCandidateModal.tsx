@@ -6,8 +6,8 @@ import { Button } from '@/components/ui/button'
 import { Select } from '@/components/ui/select'
 import { ContactSelector } from '@/components/ui/contact-selector'
 import { useContacts } from '@/hooks/use-contacts'
-import { useResolveDiscoveryToken } from '@/hooks/use-interactions-queue'
-import type { DiscoveryGroup } from '@/types/import'
+import { useResolveNameCandidate } from '@/hooks/use-interactions-queue'
+import type { NameCandidateGroup } from '@/types/import'
 
 // Cadence options mirror the import-link modal's kept controls.
 const cadenceOptions = [
@@ -20,11 +20,11 @@ const cadenceOptions = [
   { value: 'annual', label: 'Annual' },
 ]
 
-type DiscoveryMode = 'import' | 'link'
+type NameCandidateMode = 'import' | 'link'
 
-interface DiscoveryModalProps {
-  /** The discovery queue the pager iterates. */
-  groups: DiscoveryGroup[]
+interface NameCandidateModalProps {
+  /** The name-candidate queue the pager iterates. */
+  groups: NameCandidateGroup[]
   /** Index in `groups` to open at. */
   initialIndex: number
   onClose: () => void
@@ -33,30 +33,30 @@ interface DiscoveryModalProps {
 }
 
 /**
- * The discovery "Create contact…" modal — a name-only sibling of the
+ * The name-candidate "Create contact…" modal — a name-only sibling of the
  * import/link modal. It keeps the same shell (header pager, editable
  * name, Import/Link toggle, ContactSelector, cadence Select, footer) but
  * has NO contact-methods apparatus (Anarlog only captured a name) and
  * resolves the WHOLE token group via the token-group endpoint rather than
  * a per-row import/link/ignore mutation.
  */
-export function DiscoveryModal({
+export function NameCandidateModal({
   groups,
   initialIndex,
   onClose,
   onSuccess,
   onError,
-}: DiscoveryModalProps) {
+}: NameCandidateModalProps) {
   // The modal owns a local copy of the queue so resolved tokens can be
   // removed from the pager without waiting on a refetch.
-  const [queue, setQueue] = useState<DiscoveryGroup[]>(groups)
+  const [queue, setQueue] = useState<NameCandidateGroup[]>(groups)
   const [index, setIndex] = useState(initialIndex)
-  const [mode, setMode] = useState<DiscoveryMode>('import')
+  const [mode, setMode] = useState<NameCandidateMode>('import')
   const [name, setName] = useState('')
   const [cadence, setCadence] = useState('')
   const [contactId, setContactId] = useState<string | undefined>()
 
-  const resolveMutation = useResolveDiscoveryToken()
+  const resolveMutation = useResolveNameCandidate()
   const { data: contactsData } = useContacts({ limit: 500 })
   const contacts = useMemo(() => contactsData?.contacts ?? [], [contactsData])
 
@@ -132,7 +132,7 @@ export function DiscoveryModal({
       }}
       role="dialog"
       aria-modal="true"
-      aria-label="Create contact from discovered name"
+      aria-label="Create contact from name candidate"
     >
       <div className="w-full max-w-xl overflow-hidden rounded-lg border border-gray-200 bg-white shadow-lg">
         {/* Header pager */}
@@ -168,13 +168,13 @@ export function DiscoveryModal({
             </span>
             <div className="flex-1">
               <label
-                htmlFor="discovery-name"
+                htmlFor="name-candidate-name"
                 className="block text-xs font-medium uppercase tracking-wide text-gray-500"
               >
                 Name
               </label>
               <input
-                id="discovery-name"
+                id="name-candidate-name"
                 type="text"
                 value={name}
                 onChange={e => setName(e.target.value)}

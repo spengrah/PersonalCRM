@@ -46,7 +46,7 @@
     "tags": ["@area:contact-merge", "@area:contacts"]
   },
   {
-    "pattern": "^frontend/tests/e2e/imports(-[a-z]+)?\\.spec\\.ts$",
+    "pattern": "^frontend/tests/e2e/imports(-[a-z]+)*\\.spec\\.ts$",
     "tags": ["@area:imports"]
   },
   {

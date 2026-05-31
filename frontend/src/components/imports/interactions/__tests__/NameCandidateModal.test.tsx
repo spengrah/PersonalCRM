@@ -4,19 +4,19 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 vi.mock('@/hooks/use-interactions-queue', () => ({
-  useResolveDiscoveryToken: vi.fn(),
+  useResolveNameCandidate: vi.fn(),
 }))
 
 vi.mock('@/hooks/use-contacts', () => ({
   useContacts: vi.fn(),
 }))
 
-import { DiscoveryModal } from '../DiscoveryModal'
-import { useResolveDiscoveryToken } from '@/hooks/use-interactions-queue'
+import { NameCandidateModal } from '../NameCandidateModal'
+import { useResolveNameCandidate } from '@/hooks/use-interactions-queue'
 import { useContacts } from '@/hooks/use-contacts'
-import type { DiscoveryGroup } from '@/types/import'
+import type { NameCandidateGroup } from '@/types/import'
 
-const groups: DiscoveryGroup[] = [
+const groups: NameCandidateGroup[] = [
   {
     normalized_token: 'lena',
     token_display: 'Lena',
@@ -36,7 +36,7 @@ let mutateAsync: ReturnType<typeof vi.fn>
 beforeEach(() => {
   vi.clearAllMocks()
   mutateAsync = vi.fn().mockResolvedValue({ action: 'import', contact_id: 'c-1' })
-  vi.mocked(useResolveDiscoveryToken).mockReturnValue({
+  vi.mocked(useResolveNameCandidate).mockReturnValue({
     mutateAsync,
     isPending: false,
   } as any)
@@ -47,10 +47,10 @@ beforeEach(() => {
   } as any)
 })
 
-describe('DiscoveryModal', () => {
+describe('NameCandidateModal', () => {
   it('opens at the given index with the token pre-filled as the name', () => {
     render(
-      <DiscoveryModal
+      <NameCandidateModal
         groups={groups}
         initialIndex={0}
         onClose={() => {}}
@@ -64,7 +64,7 @@ describe('DiscoveryModal', () => {
 
   it('shows the no-methods info note and session-title evidence (never a MethodSelector)', () => {
     render(
-      <DiscoveryModal
+      <NameCandidateModal
         groups={groups}
         initialIndex={0}
         onClose={() => {}}
@@ -75,7 +75,7 @@ describe('DiscoveryModal', () => {
     expect(screen.getByText(/No contact methods/)).toBeInTheDocument()
     expect(screen.getByText('Evidence · session titles')).toBeInTheDocument()
     expect(screen.getByText('1:1 with Lena')).toBeInTheDocument()
-    // No contact-methods apparatus in the discovery branch: the modal exposes
+    // No contact-methods apparatus in the name-candidate branch: the modal exposes
     // only name + cadence + (link mode) contact selector — never the method
     // import/conflict UI used by the candidate modal.
     expect(screen.queryByText(/Import Methods/i)).not.toBeInTheDocument()
@@ -86,7 +86,7 @@ describe('DiscoveryModal', () => {
     const user = userEvent.setup()
     const onSuccess = vi.fn()
     render(
-      <DiscoveryModal
+      <NameCandidateModal
         groups={groups}
         initialIndex={0}
         onClose={() => {}}
@@ -114,7 +114,7 @@ describe('DiscoveryModal', () => {
     mutateAsync.mockResolvedValue({ action: 'link', contact_id: 'contact-1' })
     const user = userEvent.setup()
     render(
-      <DiscoveryModal
+      <NameCandidateModal
         groups={groups}
         initialIndex={0}
         onClose={() => {}}
@@ -145,7 +145,7 @@ describe('DiscoveryModal', () => {
 
   it('blocks the link action until a contact is picked', () => {
     render(
-      <DiscoveryModal
+      <NameCandidateModal
         groups={groups}
         initialIndex={0}
         onClose={() => {}}
@@ -161,7 +161,7 @@ describe('DiscoveryModal', () => {
     mutateAsync.mockResolvedValue({ action: 'ignore' })
     const user = userEvent.setup()
     render(
-      <DiscoveryModal
+      <NameCandidateModal
         groups={groups}
         initialIndex={0}
         onClose={() => {}}
@@ -180,7 +180,7 @@ describe('DiscoveryModal', () => {
   it('pages forward to the next token group', async () => {
     const user = userEvent.setup()
     render(
-      <DiscoveryModal
+      <NameCandidateModal
         groups={groups}
         initialIndex={0}
         onClose={() => {}}

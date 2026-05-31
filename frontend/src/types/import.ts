@@ -113,7 +113,7 @@ export interface LinkContactResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Anarlog interactions-queue (Interactions tab) + discovery (People tab) types
+// Anarlog interactions-queue (Interactions tab) + name candidates (People tab) types
 // ---------------------------------------------------------------------------
 
 /** One attendee label on a conflict candidate. `matched` is a best-effort
@@ -186,8 +186,8 @@ export interface ResolveLinkResponse {
   interactions_created: ResolveLinkInteraction[]
 }
 
-/** A grouped anarlog_title discovery token (People tab). */
-export interface DiscoveryGroup {
+/** A grouped anarlog_title name candidate (People tab). */
+export interface NameCandidateGroup {
   normalized_token: string
   token_display: string
   evidence_count: number
@@ -195,7 +195,7 @@ export interface DiscoveryGroup {
 }
 
 /** Request body for POST /imports/anarlog-title/resolve. */
-export interface ResolveDiscoveryTokenRequest {
+export interface ResolveNameCandidateRequest {
   normalized_token: string
   action: 'import' | 'link' | 'ignore'
   name?: string
@@ -205,7 +205,7 @@ export interface ResolveDiscoveryTokenRequest {
 
 /** Response from POST /imports/anarlog-title/resolve. `contact_id` is present
  * for import (newly created) and link (the linked contact), omitted for ignore. */
-export interface ResolveDiscoveryTokenResponse {
+export interface ResolveNameCandidateResponse {
   action: 'import' | 'link' | 'ignore'
   contact_id?: string
 }

@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { importsApi } from '@/lib/imports-api'
 import { importKeys, invalidateFor } from '@/lib/query-invalidation'
-import type { ResolveLinkRequest, ResolveDiscoveryTokenRequest } from '@/types/import'
+import type { ResolveLinkRequest, ResolveNameCandidateRequest } from '@/types/import'
 
 // Interactions tab: the conflict + orphan queue (all hosts).
 export function useInteractionsQueue() {
@@ -34,8 +34,8 @@ export function useResolveLink() {
   })
 }
 
-// People tab: grouped anarlog_title discovery tokens.
-export function useAnarlogTitleDiscovery() {
+// People tab: grouped anarlog_title name candidates.
+export function useAnarlogTitleCandidates() {
   return useQuery({
     queryKey: importKeys.anarlogTitle(),
     queryFn: () => importsApi.getAnarlogTitleGroups(),
@@ -44,15 +44,14 @@ export function useAnarlogTitleDiscovery() {
 }
 
 // Resolve a whole anarlog_title token group (import / link / ignore).
-// Invalidates the discovery list + contact lists/overdue; and the affected
+// Invalidates the name-candidate list + contact lists/overdue; and the affected
 // contact's detail key when the response carries a contact_id (import:
 // created id; link: crm_contact_id).
-export function useResolveDiscoveryToken() {
+export function useResolveNameCandidate() {
   return useMutation({
-    mutationFn: (request: ResolveDiscoveryTokenRequest) =>
-      importsApi.resolveDiscoveryToken(request),
+    mutationFn: (request: ResolveNameCandidateRequest) => importsApi.resolveNameCandidate(request),
     onSuccess: response => {
-      invalidateFor('discovery:resolved', response.contact_id)
+      invalidateFor('name-candidate:resolved', response.contact_id)
     },
   })
 }

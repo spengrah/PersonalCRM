@@ -3,24 +3,24 @@
 import { useState } from 'react'
 import { MessageCircle, UserPlus, Ban } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import type { DiscoveryGroup } from '@/types/import'
+import type { NameCandidateGroup } from '@/types/import'
 
-interface DiscoveryRowProps {
-  group: DiscoveryGroup
+interface NameCandidateRowProps {
+  group: NameCandidateGroup
   busy?: boolean
-  /** Opens the discovery modal (which hosts the Import/Link toggle). */
-  onCreate: (group: DiscoveryGroup) => void
+  /** Opens the name-candidate modal (which hosts the Import/Link toggle). */
+  onCreate: (group: NameCandidateGroup) => void
   /** Ignores the whole token group ("Not a person"). */
-  onIgnore: (group: DiscoveryGroup) => void
+  onIgnore: (group: NameCandidateGroup) => void
 }
 
 /**
- * A discovery row: a name lifted from session titles, ranked by evidence.
+ * A name-candidate row: a name lifted from session titles, ranked by evidence.
  * Dashed avatar + "from title · low confidence" chip make clear it is NOT
  * a confirmed contact. "Create contact…" opens the extended modal (which
  * hosts the Import/Link toggle); "Not a person" ignores the token group.
  */
-export function DiscoveryRow({ group, busy, onCreate, onIgnore }: DiscoveryRowProps) {
+export function NameCandidateRow({ group, busy, onCreate, onIgnore }: NameCandidateRowProps) {
   const [open, setOpen] = useState(false)
   const titles = group.session_titles ?? []
   const count = group.evidence_count

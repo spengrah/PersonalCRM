@@ -346,7 +346,7 @@ describe('importsApi', () => {
   })
 
   describe('getAnarlogTitleGroups', () => {
-    it('fetches grouped discovery tokens', async () => {
+    it('fetches grouped name candidates', async () => {
       const groups = [
         { normalized_token: 'lena', token_display: 'Lena', evidence_count: 2, session_titles: [] },
       ]
@@ -363,7 +363,7 @@ describe('importsApi', () => {
     })
   })
 
-  describe('resolveDiscoveryToken', () => {
+  describe('resolveNameCandidate', () => {
     it('posts the token-group resolve body', async () => {
       ;(global.fetch as any).mockResolvedValueOnce({
         ok: true,
@@ -372,7 +372,7 @@ describe('importsApi', () => {
       })
 
       const body = { normalized_token: 'lena', action: 'import' as const, cadence: 'monthly' }
-      const result = await importsApi.resolveDiscoveryToken(body)
+      const result = await importsApi.resolveNameCandidate(body)
       expect(result).toEqual({ action: 'import', contact_id: 'c-1' })
       const fetchCall = (global.fetch as any).mock.calls[0]
       expect(fetchCall[0]).toContain('/api/v1/imports/anarlog-title/resolve')

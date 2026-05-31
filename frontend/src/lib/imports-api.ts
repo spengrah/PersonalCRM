@@ -10,9 +10,9 @@ import type {
   NeedsAttentionItem,
   ResolveLinkRequest,
   ResolveLinkResponse,
-  DiscoveryGroup,
-  ResolveDiscoveryTokenRequest,
-  ResolveDiscoveryTokenResponse,
+  NameCandidateGroup,
+  ResolveNameCandidateRequest,
+  ResolveNameCandidateResponse,
 } from '@/types/import'
 
 export const importsApi = {
@@ -90,17 +90,17 @@ export const importsApi = {
     return apiClient.post<ResolveLinkResponse>(`/api/v1/meeting-notes/${id}/resolve-link`, request)
   },
 
-  // People tab: grouped anarlog_title discovery tokens.
-  getAnarlogTitleGroups: async (): Promise<DiscoveryGroup[]> => {
-    const data = await apiClient.get<DiscoveryGroup[]>('/api/v1/imports/anarlog-title')
+  // People tab: grouped anarlog_title name candidates.
+  getAnarlogTitleGroups: async (): Promise<NameCandidateGroup[]> => {
+    const data = await apiClient.get<NameCandidateGroup[]>('/api/v1/imports/anarlog-title')
     return data || []
   },
 
   // Resolve a whole anarlog_title token group: import / link / ignore.
-  resolveDiscoveryToken: async (
-    request: ResolveDiscoveryTokenRequest
-  ): Promise<ResolveDiscoveryTokenResponse> => {
-    return apiClient.post<ResolveDiscoveryTokenResponse>(
+  resolveNameCandidate: async (
+    request: ResolveNameCandidateRequest
+  ): Promise<ResolveNameCandidateResponse> => {
+    return apiClient.post<ResolveNameCandidateResponse>(
       '/api/v1/imports/anarlog-title/resolve',
       request
     )

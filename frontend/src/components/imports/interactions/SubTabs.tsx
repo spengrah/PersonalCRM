@@ -13,7 +13,7 @@ interface SubTabsProps {
  * Underline sub-tab bar for the Imports page: People / Interactions.
  * Driven by the `?tab` URL param (the parent owns the URL). The
  * Interactions tab carries an amber count badge of conflicts + orphans
- * (discovery is NOT counted).
+ * (name candidates are NOT counted).
  */
 export function SubTabs({ active, attentionCount, onChange }: SubTabsProps) {
   return (

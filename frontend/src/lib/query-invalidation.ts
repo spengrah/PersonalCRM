@@ -34,7 +34,7 @@ export type DomainEvent =
   | 'import:synced' // sync completed
   // Anarlog interactions-queue events
   | 'meeting-note:resolved' // a conflict/orphan was resolved (This one / None of these / impromptu)
-  | 'discovery:resolved' // an anarlog_title token group was imported/linked/ignored
+  | 'name-candidate:resolved' // an anarlog_title token group was imported/linked/ignored
   // Contact task events
   | 'task:created' // action task created
   | 'task:deleted' // task link removed
@@ -102,12 +102,12 @@ const invalidationRules: Record<DomainEvent, InvalidationKey[]> = {
     (contactId: string) => contactTaskKeys.forContact(contactId),
   ],
 
-  // Resolving an anarlog_title token group removes it from the discovery
+  // Resolving an anarlog_title token group removes it from the name-candidate
   // list; import creates a contact and link mutates cadence/contact_by, so
   // the contact lists + overdue queue may shift. The affected contact's
   // detail key is invalidated when a contactId is supplied (import: the
   // created id; link: crm_contact_id).
-  'discovery:resolved': [
+  'name-candidate:resolved': [
     importKeys.anarlogTitle(),
     importKeys.lists(),
     contactKeys.lists(),

@@ -7,8 +7,12 @@ import { SessionLede } from '../SessionLede'
 import { InteractionsEmptyState } from '../InteractionsEmptyState'
 import { OrphanCard } from '../OrphanCard'
 import { ConflictCard } from '../ConflictCard'
-import { DiscoveryRow } from '../DiscoveryRow'
-import type { NeedsAttentionItem, NeedsAttentionCandidate, DiscoveryGroup } from '@/types/import'
+import { NameCandidateRow } from '../NameCandidateRow'
+import type {
+  NeedsAttentionItem,
+  NeedsAttentionCandidate,
+  NameCandidateGroup,
+} from '@/types/import'
 
 describe('SubTabs', () => {
   it('renders both tabs and marks the active one selected', () => {
@@ -175,22 +179,22 @@ describe('ConflictCard', () => {
   })
 })
 
-const group: DiscoveryGroup = {
+const group: NameCandidateGroup = {
   normalized_token: 'lena',
   token_display: 'Lena',
   evidence_count: 2,
   session_titles: ['1:1 with Lena', 'Lena / sync'],
 }
 
-describe('DiscoveryRow', () => {
+describe('NameCandidateRow', () => {
   it('renders the display token and the low-confidence chip', () => {
-    render(<DiscoveryRow group={group} onCreate={() => {}} onIgnore={() => {}} />)
+    render(<NameCandidateRow group={group} onCreate={() => {}} onIgnore={() => {}} />)
     expect(screen.getByText('Lena')).toBeInTheDocument()
     expect(screen.getByText(/low confidence/)).toBeInTheDocument()
   })
 
   it('expands to show the session-title evidence', () => {
-    render(<DiscoveryRow group={group} onCreate={() => {}} onIgnore={() => {}} />)
+    render(<NameCandidateRow group={group} onCreate={() => {}} onIgnore={() => {}} />)
     // Evidence is collapsed until the toggle is clicked.
     expect(screen.queryByText('1:1 with Lena')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /Seen in 2 session titles/ }))
@@ -201,7 +205,7 @@ describe('DiscoveryRow', () => {
   it('wires the create and ignore callbacks', () => {
     const onCreate = vi.fn()
     const onIgnore = vi.fn()
-    render(<DiscoveryRow group={group} onCreate={onCreate} onIgnore={onIgnore} />)
+    render(<NameCandidateRow group={group} onCreate={onCreate} onIgnore={onIgnore} />)
     fireEvent.click(screen.getByRole('button', { name: /Create contact/ }))
     expect(onCreate).toHaveBeenCalledWith(group)
     fireEvent.click(screen.getByRole('button', { name: /Not a person/ }))

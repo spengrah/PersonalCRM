@@ -12,8 +12,8 @@ const SOURCE_DISPLAY_MAP: Record<string, SourceDisplayInfo> = {
   icloud_contacts: { label: 'iCloud Contacts', icon: Cloud },
   telegram: { label: 'Telegram', icon: Send },
   // anarlog_humans candidates flow through the ordinary candidate queue;
-  // anarlog_title discovery rows live behind the dedicated People-tab
-  // discovery section and never carry this badge.
+  // anarlog_title name-candidate rows live behind the dedicated People-tab
+  // name-candidates section and never carry this badge.
   anarlog_humans: { label: 'Anarlog', icon: MessageCircle },
 }
 
