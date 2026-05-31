@@ -26,7 +26,10 @@ export function NameCandidateRow({ group, busy, onCreate, onIgnore }: NameCandid
   const count = group.evidence_count
 
   return (
-    <div className="rounded-lg border border-gray-200 bg-white px-3.5 py-3">
+    <div
+      data-testid={`name-candidate-row-${group.normalized_token}`}
+      className="rounded-lg border border-gray-200 bg-white px-3.5 py-3"
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-3">
           <span className="flex h-[34px] w-[34px] flex-shrink-0 items-center justify-center rounded-full border border-dashed border-gray-300 bg-gray-50 text-sm font-semibold text-gray-400">
