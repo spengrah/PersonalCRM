@@ -597,11 +597,11 @@ final class OrphanNotificationCenterTests: XCTestCase {
         ])
         let center = makeCenter(presenter: presenter, opener: opener, lookup: lookup)
 
-        // Orphan tap → opens session dir URL.
+        // Orphan tap → launches the Anarlog app via the bare scheme.
         await center.handleTap(reason: "orphan", sessionUUID: Self.session1)
         var opened = await opener.recordedOpenedURLs()
         XCTAssertEqual(opened.count, 1)
-        XCTAssertEqual(opened[0], sessionDir)
+        XCTAssertEqual(opened[0], URL(string: "hyprnote://"))
 
         // Conflict tap → opens Pi UI deep link.
         await center.handleTap(reason: "conflict", sessionUUID: Self.session2)

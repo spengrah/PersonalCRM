@@ -6,8 +6,8 @@
 //
 //   consume(needsAttention:) — fired from AnarlogSessionsSourcePlugin
 //     after every successful publish. Items carry (sessionID, reason)
-//     only; the title + time + click target come from the local
-//     filesystem via SessionMetadataLookup.
+//     only; the title + time come from the local filesystem via
+//     SessionMetadataLookup.
 //
 //   reconcile() — fired (a) once on first heartbeat success at
 //     startup, (b) every 300s by NotificationReconcileLoopPlugin.

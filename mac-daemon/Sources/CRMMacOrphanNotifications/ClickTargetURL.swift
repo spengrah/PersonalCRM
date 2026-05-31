@@ -8,16 +8,19 @@ import Foundation
 
 /// Decides which URL to open when a notification is tapped.
 ///
-/// Orphan notifications open the local session directory
-/// (`metadata.sessionDirURL`); the user lands in Finder ready to
-/// edit `_meta.json.participants`.
+/// Orphan notifications launch (or focus) the Anarlog app via the
+/// bare `hyprnote://` scheme so the user can re-tag the session
+/// in-app. Anarlog exposes no per-note deep link, so the bare app
+/// scheme is the only available target — it cannot scope to the
+/// specific session.
 ///
-/// Conflict notifications open the Pi UI's needs-attention tab
-/// pre-scoped to the specific session via query params.
+/// Conflict notifications open the Pi UI's Interactions tab
+/// (`tab=interactions`) pre-scoped to the specific session via
+/// query params.
 ///
-/// Returns nil for unknown reasons, missing orphan metadata, or
-/// any URL-construction failure. The caller logs + no-ops the
-/// tap.
+/// Returns nil for unknown reasons or conflict URL-construction
+/// failure. The orphan branch always returns the app scheme (it no
+/// longer depends on metadata). The caller logs + no-ops the tap.
 public func clickTargetURL(
     reason: String,
     sessionUUID: String,
@@ -26,7 +29,11 @@ public func clickTargetURL(
 ) -> URL? {
     switch reason {
     case NotificationReason.orphan:
-        return metadata?.sessionDirURL
+        // Launch/focus the Anarlog app so the user can re-tag the
+        // session in-app. Anarlog has no per-note deep link, so the
+        // bare scheme is the only available target. Independent of
+        // metadata — always non-nil.
+        return URL(string: "hyprnote://")
     case NotificationReason.conflict:
         // Build via URLComponents so the session UUID is
         // percent-encoded safely. String concat would silently
@@ -39,7 +46,7 @@ public func clickTargetURL(
             : comps.path
         comps.path = basePath + "/imports"
         comps.queryItems = [
-            URLQueryItem(name: "tab", value: "needs-attention"),
+            URLQueryItem(name: "tab", value: "interactions"),
             URLQueryItem(name: "session", value: sessionUUID),
         ]
         return comps.url
