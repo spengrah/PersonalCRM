@@ -111,3 +111,101 @@ export interface LinkContactResponse {
   external_contact: ImportCandidate
   rematch_job_id?: string | null
 }
+
+// ---------------------------------------------------------------------------
+// Anarlog session-attention (Interactions tab) + discovery (People tab) types
+// ---------------------------------------------------------------------------
+
+/** One attendee label on a conflict candidate. `matched` is a best-effort
+ * flag for visual emphasis only; the authoritative shared count is
+ * `overlap_count` on the candidate. */
+export interface NeedsAttentionAttendee {
+  name: string
+  matched: boolean
+}
+
+/** Preview block for a single conflict candidate. */
+export interface NeedsAttentionCandidatePreview {
+  title?: string
+  attendee_count?: number
+  peer_handle?: string
+  attendees?: NeedsAttentionAttendee[]
+}
+
+/** A single candidate within a conflict item's `candidates` array. */
+export interface NeedsAttentionCandidate {
+  kind: 'event' | 'phone_call'
+  id: string
+  occurred_at: string
+  overlap_count: number
+  target_missing: boolean
+  preview: NeedsAttentionCandidatePreview | null
+}
+
+/** A row in the needs-attention response: a conflict (with candidates) or an
+ * orphan (no candidates). */
+export interface NeedsAttentionItem {
+  id: string
+  anarlog_session_id: string
+  mac_host_id: string | null
+  title: string | null
+  summary_excerpt: string | null
+  meeting_at: string
+  linkage_state: string
+  candidates: NeedsAttentionCandidate[] | null
+}
+
+/** Request body for POST /meeting-notes/:id/resolve-link. */
+export interface ResolveLinkRequest {
+  action: 'link' | 'none_of_these'
+  kind?: 'event' | 'phone_call'
+  id?: string
+}
+
+/** An interaction created by a resolve-link (carries the affected contact). */
+export interface ResolveLinkInteraction {
+  id: string
+  contact_id: string
+  source_ref: string
+  occurred_at: string
+  direction: string
+}
+
+/** Response from POST /meeting-notes/:id/resolve-link. */
+export interface ResolveLinkResponse {
+  meeting_note: {
+    id: string
+    anarlog_session_id: string
+    title: string | null
+    linkage_state: string
+    linked_kind: string | null
+    linked_id: string | null
+    mac_host_id: string | null
+    meeting_at: string
+  }
+  interactions_created: ResolveLinkInteraction[]
+}
+
+/** A grouped anarlog_title discovery token (People tab). */
+export interface DiscoveryGroup {
+  normalized_token: string
+  token_display: string
+  evidence_count: number
+  session_titles: string[]
+}
+
+/** Request body for POST /imports/anarlog-title/resolve. */
+export interface ResolveDiscoveryTokenRequest {
+  normalized_token: string
+  action: 'import' | 'link' | 'ignore'
+  name?: string
+  cadence?: string
+  crm_contact_id?: string
+}
+
+/** Response from POST /imports/anarlog-title/resolve. `contact_id` is present
+ * for import (newly created) and link (the linked contact), omitted for ignore. */
+export interface ResolveDiscoveryTokenResponse {
+  action: 'import' | 'link' | 'ignore'
+  contact_id?: string
+}

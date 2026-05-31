@@ -29,6 +29,10 @@ export const importKeys = {
   list: (params: ImportCandidatesListParams) => [...importKeys.lists(), params] as const,
   details: () => [...importKeys.all, 'detail'] as const,
   detail: (id: string) => [...importKeys.details(), id] as const,
+  // Interactions tab: conflict + orphan queue (GET /meeting-notes/needs-attention).
+  needsAttention: () => [...importKeys.all, 'needs-attention'] as const,
+  // People tab: grouped anarlog_title discovery (GET /imports/anarlog-title).
+  anarlogTitle: () => [...importKeys.all, 'anarlog-title'] as const,
 }
 
 // System query keys

@@ -298,4 +298,86 @@ describe('importsApi', () => {
       expect(fetchCall[0]).toContain('/api/v1/sync/icloud/trigger')
     })
   })
+
+  describe('getNeedsAttention', () => {
+    it('fetches the conflict + orphan queue', async () => {
+      const items = [{ id: 'mn-1', candidates: [] }]
+      ;(global.fetch as any).mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true, data: items }),
+      })
+
+      const result = await importsApi.getNeedsAttention()
+      expect(result).toEqual(items)
+      const fetchCall = (global.fetch as any).mock.calls[0]
+      expect(fetchCall[0]).toContain('/api/v1/meeting-notes/needs-attention')
+    })
+
+    it('returns an empty array when data is null', async () => {
+      ;(global.fetch as any).mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true, data: null }),
+      })
+      const result = await importsApi.getNeedsAttention()
+      expect(result).toEqual([])
+    })
+  })
+
+  describe('resolveLink', () => {
+    it('posts the resolve-link body', async () => {
+      ;(global.fetch as any).mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          success: true,
+          data: { meeting_note: { id: 'mn-1' }, interactions_created: [] },
+        }),
+      })
+
+      const body = { action: 'link' as const, kind: 'event' as const, id: 'evt-1' }
+      await importsApi.resolveLink('mn-1', body)
+      const fetchCall = (global.fetch as any).mock.calls[0]
+      expect(fetchCall[0]).toContain('/api/v1/meeting-notes/mn-1/resolve-link')
+      expect(fetchCall[1].method).toBe('POST')
+      expect(JSON.parse(fetchCall[1].body)).toEqual(body)
+    })
+  })
+
+  describe('getAnarlogTitleGroups', () => {
+    it('fetches grouped discovery tokens', async () => {
+      const groups = [
+        { normalized_token: 'lena', token_display: 'Lena', evidence_count: 2, session_titles: [] },
+      ]
+      ;(global.fetch as any).mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true, data: groups }),
+      })
+
+      const result = await importsApi.getAnarlogTitleGroups()
+      expect(result).toEqual(groups)
+      const fetchCall = (global.fetch as any).mock.calls[0]
+      expect(fetchCall[0]).toContain('/api/v1/imports/anarlog-title')
+    })
+  })
+
+  describe('resolveDiscoveryToken', () => {
+    it('posts the token-group resolve body', async () => {
+      ;(global.fetch as any).mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true, data: { action: 'import', contact_id: 'c-1' } }),
+      })
+
+      const body = { normalized_token: 'lena', action: 'import' as const, cadence: 'monthly' }
+      const result = await importsApi.resolveDiscoveryToken(body)
+      expect(result).toEqual({ action: 'import', contact_id: 'c-1' })
+      const fetchCall = (global.fetch as any).mock.calls[0]
+      expect(fetchCall[0]).toContain('/api/v1/imports/anarlog-title/resolve')
+      expect(fetchCall[1].method).toBe('POST')
+      expect(JSON.parse(fetchCall[1].body)).toEqual(body)
+    })
+  })
 })
