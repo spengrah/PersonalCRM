@@ -3,8 +3,8 @@ import { importsApi } from '@/lib/imports-api'
 import { importKeys, invalidateFor } from '@/lib/query-invalidation'
 import type { ResolveLinkRequest, ResolveDiscoveryTokenRequest } from '@/types/import'
 
-// Interactions tab: conflict + orphan queue (all hosts).
-export function useSessionsNeedingAttention() {
+// Interactions tab: the conflict + orphan queue (all hosts).
+export function useInteractionsQueue() {
   return useQuery({
     queryKey: importKeys.needsAttention(),
     queryFn: () => importsApi.getNeedsAttention(),

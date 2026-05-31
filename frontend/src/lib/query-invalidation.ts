@@ -32,7 +32,7 @@ export type DomainEvent =
   | 'import:linked' // linked to existing contact
   | 'import:ignored' // marked as ignored
   | 'import:synced' // sync completed
-  // Anarlog session-attention events
+  // Anarlog interactions-queue events
   | 'meeting-note:resolved' // a conflict/orphan was resolved (This one / None of these / impromptu)
   | 'discovery:resolved' // an anarlog_title token group was imported/linked/ignored
   // Contact task events

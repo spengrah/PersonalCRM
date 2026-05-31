@@ -113,7 +113,7 @@ export interface LinkContactResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Anarlog session-attention (Interactions tab) + discovery (People tab) types
+// Anarlog interactions-queue (Interactions tab) + discovery (People tab) types
 // ---------------------------------------------------------------------------
 
 /** One attendee label on a conflict candidate. `matched` is a best-effort

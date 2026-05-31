@@ -3,11 +3,11 @@ import { renderHook, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import {
-  useSessionsNeedingAttention,
+  useInteractionsQueue,
   useResolveLink,
   useAnarlogTitleDiscovery,
   useResolveDiscoveryToken,
-} from '../use-session-attention'
+} from '../use-interactions-queue'
 
 vi.mock('@/lib/imports-api', () => ({
   importsApi: {
@@ -53,7 +53,7 @@ function createWrapper(queryClient: QueryClient) {
   }
 }
 
-describe('use-session-attention hooks', () => {
+describe('use-interactions-queue hooks', () => {
   let queryClient: QueryClient
 
   beforeEach(() => {
@@ -65,11 +65,11 @@ describe('use-session-attention hooks', () => {
     queryClient.clear()
   })
 
-  it('useSessionsNeedingAttention fetches the queue', async () => {
+  it('useInteractionsQueue fetches the queue', async () => {
     const items = [{ id: 'mn-1', candidates: [] }]
     mockedApi.getNeedsAttention.mockResolvedValueOnce(items)
 
-    const { result } = renderHook(() => useSessionsNeedingAttention(), {
+    const { result } = renderHook(() => useInteractionsQueue(), {
       wrapper: createWrapper(queryClient),
     })
 

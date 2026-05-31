@@ -22,8 +22,23 @@ vi.mock('@/hooks/use-google-accounts', () => ({
   useGoogleAccounts: vi.fn(),
 }))
 
+vi.mock('@/hooks/use-interactions-queue', () => ({
+  useInteractionsQueue: vi.fn(),
+  useResolveLink: vi.fn(),
+  useAnarlogTitleDiscovery: vi.fn(),
+  useResolveDiscoveryToken: vi.fn(),
+}))
+
 vi.mock('@/components/layout/navigation', () => ({
   Navigation: () => <div>Navigation</div>,
+}))
+
+// App Router navigation: the page derives tab/session state from the URL.
+const mockReplace = vi.fn()
+let mockSearchParams = new URLSearchParams()
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ replace: mockReplace, push: vi.fn() }),
+  useSearchParams: () => mockSearchParams,
 }))
 
 import ImportsPage from '../page'
@@ -36,6 +51,33 @@ import {
 } from '@/hooks/use-imports'
 import { useContacts, useContact } from '@/hooks/use-contacts'
 import { useGoogleAccounts } from '@/hooks/use-google-accounts'
+import {
+  useInteractionsQueue,
+  useResolveLink,
+  useAnarlogTitleDiscovery,
+  useResolveDiscoveryToken,
+} from '@/hooks/use-interactions-queue'
+
+/** Reset the interactions-queue hooks to a quiet default (no items, no
+ * discovery, idle mutations) so existing People-tab tests are unaffected. */
+function mockInteractionsQueueDefaults() {
+  vi.mocked(useInteractionsQueue).mockReturnValue({
+    data: [],
+    isLoading: false,
+  } as any)
+  vi.mocked(useAnarlogTitleDiscovery).mockReturnValue({
+    data: [],
+    isLoading: false,
+  } as any)
+  vi.mocked(useResolveLink).mockReturnValue({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  } as any)
+  vi.mocked(useResolveDiscoveryToken).mockReturnValue({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  } as any)
+}
 
 const createWrapper = () => {
   const queryClient = new QueryClient({
@@ -52,6 +94,9 @@ const createWrapper = () => {
 describe('ImportsPage - Suggested Matches', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockSearchParams = new URLSearchParams()
+    mockReplace.mockClear()
+    mockInteractionsQueueDefaults()
 
     // Default mock implementations
     vi.mocked(useImportAsContact).mockReturnValue({
@@ -394,6 +439,9 @@ describe('ImportsPage - Suggested Matches', () => {
 describe('ImportsPage - Source Filter', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockSearchParams = new URLSearchParams()
+    mockReplace.mockClear()
+    mockInteractionsQueueDefaults()
 
     // Default mock implementations
     vi.mocked(useImportAsContact).mockReturnValue({
@@ -540,6 +588,9 @@ describe('ImportsPage - Source Filter', () => {
 describe('ImportsPage - Telegram @username', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockSearchParams = new URLSearchParams()
+    mockReplace.mockClear()
+    mockInteractionsQueueDefaults()
 
     vi.mocked(useImportAsContact).mockReturnValue({
       mutateAsync: vi.fn(),
