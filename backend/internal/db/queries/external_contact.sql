@@ -253,12 +253,14 @@ WHERE source = 'anarlog_title'
     AND deleted_at IS NULL
 ORDER BY id ASC;
 
--- name: MarkAnarlogTitleSiblingsImportedByToken :exec
+-- name: MarkAnarlogTitleSiblingsImportedByToken :execrows
 -- Single-statement batch mark for the action=import resolve path: every
 -- live unmatched sibling for the token flips to 'imported' and points at
 -- the newly created CRM contact atomically. The WHERE predicate mirrors
 -- FindAnarlogTitleSiblingsByToken EXACTLY (incl. duplicate_of_id IS NULL)
--- so the mark touches precisely the row set the service inspected.
+-- so the mark touches precisely the row set the service inspected. Returns
+-- the affected-row count so the service can detect a concurrent resolve
+-- (zero rows) and roll back the contact it just created.
 UPDATE external_contact SET
     crm_contact_id = sqlc.arg('crm_contact_id'),
     match_status = 'imported',
@@ -269,11 +271,13 @@ WHERE source = 'anarlog_title'
     AND duplicate_of_id IS NULL
     AND deleted_at IS NULL;
 
--- name: MarkAnarlogTitleSiblingsMatchedByToken :exec
+-- name: MarkAnarlogTitleSiblingsMatchedByToken :execrows
 -- Single-statement batch mark for the action=link resolve path: every
 -- live unmatched sibling for the token flips to 'matched' and points at
 -- the linked CRM contact atomically. Same predicate as the imported and
--- ignored variants.
+-- ignored variants. Returns the affected-row count so the service can
+-- surface a clean not-found when a concurrent resolve already claimed the
+-- group (zero rows).
 UPDATE external_contact SET
     crm_contact_id = sqlc.arg('crm_contact_id'),
     match_status = 'matched',

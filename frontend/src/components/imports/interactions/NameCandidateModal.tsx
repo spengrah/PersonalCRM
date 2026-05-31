@@ -92,7 +92,9 @@ export function NameCandidateModal({
   }
 
   const resolve = async (action: 'import' | 'link' | 'ignore') => {
-    if (action !== 'ignore' && !name.trim()) {
+    // Only import needs a name (it names the new contact). Link attaches
+    // evidence to the chosen existing contact and must NOT rename it.
+    if (action === 'import' && !name.trim()) {
       onError('Contact name cannot be empty.')
       return
     }
@@ -104,16 +106,19 @@ export function NameCandidateModal({
       await resolveMutation.mutateAsync({
         normalized_token: group.normalized_token,
         action,
-        name: action === 'ignore' ? undefined : name.trim() || undefined,
+        // Send the name only for import; sending it on link would overwrite
+        // the linked contact's existing name with the token text.
+        name: action === 'import' ? name.trim() || undefined : undefined,
         cadence: action === 'ignore' ? undefined : cadence || undefined,
         crm_contact_id: action === 'link' ? contactId : undefined,
       })
+      const linkedName = contacts.find(c => c.id === contactId)?.full_name ?? group.token_display
       onSuccess(
         action === 'ignore'
           ? `${group.token_display} ignored`
           : action === 'import'
             ? `${name.trim()} created`
-            : `${name.trim()} linked`
+            : `${linkedName} linked`
       )
       advanceAfterResolve()
     } catch (error) {

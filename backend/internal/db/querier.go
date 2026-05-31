@@ -834,13 +834,17 @@ type Querier interface {
 	// live unmatched sibling for the token flips to 'imported' and points at
 	// the newly created CRM contact atomically. The WHERE predicate mirrors
 	// FindAnarlogTitleSiblingsByToken EXACTLY (incl. duplicate_of_id IS NULL)
-	// so the mark touches precisely the row set the service inspected.
-	MarkAnarlogTitleSiblingsImportedByToken(ctx context.Context, arg MarkAnarlogTitleSiblingsImportedByTokenParams) error
+	// so the mark touches precisely the row set the service inspected. Returns
+	// the affected-row count so the service can detect a concurrent resolve
+	// (zero rows) and roll back the contact it just created.
+	MarkAnarlogTitleSiblingsImportedByToken(ctx context.Context, arg MarkAnarlogTitleSiblingsImportedByTokenParams) (int64, error)
 	// Single-statement batch mark for the action=link resolve path: every
 	// live unmatched sibling for the token flips to 'matched' and points at
 	// the linked CRM contact atomically. Same predicate as the imported and
-	// ignored variants.
-	MarkAnarlogTitleSiblingsMatchedByToken(ctx context.Context, arg MarkAnarlogTitleSiblingsMatchedByTokenParams) error
+	// ignored variants. Returns the affected-row count so the service can
+	// surface a clean not-found when a concurrent resolve already claimed the
+	// group (zero rows).
+	MarkAnarlogTitleSiblingsMatchedByToken(ctx context.Context, arg MarkAnarlogTitleSiblingsMatchedByTokenParams) (int64, error)
 	// Mark an event as having updated last_contacted for its contacts
 	MarkLastContactedUpdated(ctx context.Context, id pgtype.UUID) error
 	// Non-tx variant. Mirror of MarkTelegramMessagesProcessed — used by the

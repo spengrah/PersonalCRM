@@ -817,28 +817,32 @@ func (r *ExternalContactRepository) FindAnarlogTitleSiblingsByToken(ctx context.
 
 // MarkAnarlogTitleSiblingsImportedByToken flips every live unmatched
 // sibling for the token to 'imported' and points it at the newly created
-// CRM contact, in a single atomic statement.
-func (r *ExternalContactRepository) MarkAnarlogTitleSiblingsImportedByToken(ctx context.Context, normalizedToken string, contactID uuid.UUID) error {
-	if err := r.queries.MarkAnarlogTitleSiblingsImportedByToken(ctx, db.MarkAnarlogTitleSiblingsImportedByTokenParams{
+// CRM contact, in a single atomic statement. Returns the number of rows
+// marked so the caller can detect a concurrent resolve (zero rows).
+func (r *ExternalContactRepository) MarkAnarlogTitleSiblingsImportedByToken(ctx context.Context, normalizedToken string, contactID uuid.UUID) (int64, error) {
+	rows, err := r.queries.MarkAnarlogTitleSiblingsImportedByToken(ctx, db.MarkAnarlogTitleSiblingsImportedByTokenParams{
 		CrmContactID:    uuidToPgUUID(contactID),
 		NormalizedToken: normalizedToken,
-	}); err != nil {
-		return fmt.Errorf("mark anarlog_title siblings imported: %w", err)
+	})
+	if err != nil {
+		return 0, fmt.Errorf("mark anarlog_title siblings imported: %w", err)
 	}
-	return nil
+	return rows, nil
 }
 
 // MarkAnarlogTitleSiblingsMatchedByToken flips every live unmatched
 // sibling for the token to 'matched' and points it at the linked CRM
-// contact, in a single atomic statement.
-func (r *ExternalContactRepository) MarkAnarlogTitleSiblingsMatchedByToken(ctx context.Context, normalizedToken string, contactID uuid.UUID) error {
-	if err := r.queries.MarkAnarlogTitleSiblingsMatchedByToken(ctx, db.MarkAnarlogTitleSiblingsMatchedByTokenParams{
+// contact, in a single atomic statement. Returns the number of rows
+// marked so the caller can detect a concurrent resolve (zero rows).
+func (r *ExternalContactRepository) MarkAnarlogTitleSiblingsMatchedByToken(ctx context.Context, normalizedToken string, contactID uuid.UUID) (int64, error) {
+	rows, err := r.queries.MarkAnarlogTitleSiblingsMatchedByToken(ctx, db.MarkAnarlogTitleSiblingsMatchedByTokenParams{
 		CrmContactID:    uuidToPgUUID(contactID),
 		NormalizedToken: normalizedToken,
-	}); err != nil {
-		return fmt.Errorf("mark anarlog_title siblings matched: %w", err)
+	})
+	if err != nil {
+		return 0, fmt.Errorf("mark anarlog_title siblings matched: %w", err)
 	}
-	return nil
+	return rows, nil
 }
 
 // MarkAnarlogTitleSiblingsIgnoredByToken flips every live unmatched

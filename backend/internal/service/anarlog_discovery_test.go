@@ -27,6 +27,14 @@ type stubDiscoveryRepo struct {
 	matchMarkCalled  bool
 	ignoreMarkCalled bool
 
+	// importMarkRows/matchMarkRows control the affected-row count the batch
+	// marks report. They default to -1, which the methods treat as "1 row"
+	// (the happy path), so tests opt into the zero-row concurrent-resolve
+	// case explicitly by setting them to 0.
+	importMarkRows int64
+	matchMarkRows  int64
+	importMarkErr  error
+
 	findErr error
 }
 
@@ -39,17 +47,35 @@ func (s *stubDiscoveryRepo) FindAnarlogTitleSiblingsByToken(ctx context.Context,
 	}
 	return s.siblings, nil
 }
-func (s *stubDiscoveryRepo) MarkAnarlogTitleSiblingsImportedByToken(ctx context.Context, token string, id uuid.UUID) error {
+func (s *stubDiscoveryRepo) MarkAnarlogTitleSiblingsImportedByToken(ctx context.Context, token string, id uuid.UUID) (int64, error) {
 	s.importMarkCalled = true
 	s.importedToken = token
 	s.importedContact = id
-	return nil
+	if s.importMarkErr != nil {
+		return 0, s.importMarkErr
+	}
+	return markRowsOrDefault(s.importMarkRows), nil
 }
-func (s *stubDiscoveryRepo) MarkAnarlogTitleSiblingsMatchedByToken(ctx context.Context, token string, id uuid.UUID) error {
+func (s *stubDiscoveryRepo) MarkAnarlogTitleSiblingsMatchedByToken(ctx context.Context, token string, id uuid.UUID) (int64, error) {
 	s.matchMarkCalled = true
 	s.matchedToken = token
 	s.matchedContact = id
-	return nil
+	return markRowsOrDefault(s.matchMarkRows), nil
+}
+
+// markRowsOrDefault maps a stub's configured row count to the value the
+// batch mark reports. The struct zero-value (unset) means the happy path
+// (1 row marked); a negative value is the opt-in sentinel for the zero-row
+// concurrent-resolve case.
+func markRowsOrDefault(v int64) int64 {
+	switch {
+	case v < 0:
+		return 0
+	case v == 0:
+		return 1
+	default:
+		return v
+	}
 }
 func (s *stubDiscoveryRepo) MarkAnarlogTitleSiblingsIgnoredByToken(ctx context.Context, token string) error {
 	s.ignoreMarkCalled = true
@@ -69,6 +95,8 @@ type stubDiscoveryContacts struct {
 	createCalled   bool
 	updateCalled   bool
 	createdContact *repository.Contact
+	deleteCalled   bool
+	deletedID      uuid.UUID
 }
 
 func (s *stubDiscoveryContacts) GetContact(ctx context.Context, id uuid.UUID) (*repository.Contact, error) {
@@ -99,6 +127,11 @@ func (s *stubDiscoveryContacts) UpdateContact(ctx context.Context, id uuid.UUID,
 		return nil, uuid.Nil, s.updateErr
 	}
 	return &repository.Contact{ID: id, FullName: req.FullName, Cadence: req.Cadence}, uuid.Nil, nil
+}
+func (s *stubDiscoveryContacts) DeleteContact(ctx context.Context, id uuid.UUID) error {
+	s.deleteCalled = true
+	s.deletedID = id
+	return nil
 }
 
 func strptr(s string) *string { return &s }
@@ -167,6 +200,67 @@ func TestResolveToken_ImportNameOverride(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, "Lena Smith", contacts.createdReq.FullName)
+}
+
+func TestResolveToken_ImportZeroRowsRollsBackOrphanContact(t *testing.T) {
+	// A concurrent resolve claimed the group between our read and our mark:
+	// the import mark touches zero rows. The contact we just created must be
+	// rolled back and the group reported as already gone.
+	repo := &stubDiscoveryRepo{
+		siblings:       []repository.ExternalContact{anarlogTitleSibling()},
+		importMarkRows: -1, // force zero rows marked
+	}
+	contacts := &stubDiscoveryContacts{}
+	svc := NewAnarlogDiscoveryService(repo, contacts)
+
+	res, err := svc.ResolveToken(context.Background(), ResolveTokenRequest{
+		NormalizedToken: "lena",
+		Action:          DiscoveryActionImport,
+	})
+	require.ErrorIs(t, err, ErrTokenGroupNotFound)
+	require.Nil(t, res)
+	require.True(t, contacts.createCalled)
+	require.True(t, contacts.deleteCalled) // orphan rolled back
+	require.Equal(t, contacts.createdContact.ID, contacts.deletedID)
+}
+
+func TestResolveToken_ImportMarkErrorRollsBackOrphanContact(t *testing.T) {
+	// The mark itself errors after the contact was created. The contact must
+	// be rolled back so a mid-flow DB failure never strands an orphan.
+	repo := &stubDiscoveryRepo{
+		siblings:      []repository.ExternalContact{anarlogTitleSibling()},
+		importMarkErr: errors.New("db down"),
+	}
+	contacts := &stubDiscoveryContacts{}
+	svc := NewAnarlogDiscoveryService(repo, contacts)
+
+	_, err := svc.ResolveToken(context.Background(), ResolveTokenRequest{
+		NormalizedToken: "lena",
+		Action:          DiscoveryActionImport,
+	})
+	require.Error(t, err)
+	require.True(t, contacts.createCalled)
+	require.True(t, contacts.deleteCalled)
+}
+
+func TestResolveToken_LinkZeroRowsReportsNotFound(t *testing.T) {
+	// A concurrent resolve claimed the group: the matched mark touches zero
+	// rows. No new entity was created, so report the group as gone.
+	contactID := uuid.New()
+	repo := &stubDiscoveryRepo{
+		siblings:      []repository.ExternalContact{anarlogTitleSibling()},
+		matchMarkRows: -1, // force zero rows marked
+	}
+	contacts := &stubDiscoveryContacts{existing: &repository.Contact{ID: contactID, FullName: "Stay"}}
+	svc := NewAnarlogDiscoveryService(repo, contacts)
+
+	_, err := svc.ResolveToken(context.Background(), ResolveTokenRequest{
+		NormalizedToken: "lena",
+		Action:          DiscoveryActionLink,
+		CRMContactID:    &contactID,
+	})
+	require.ErrorIs(t, err, ErrTokenGroupNotFound)
+	require.True(t, repo.matchMarkCalled)
 }
 
 func TestResolveToken_LinkWithNameAndCadencePreservesProfile(t *testing.T) {

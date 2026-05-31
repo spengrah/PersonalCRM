@@ -35,8 +35,8 @@ var ErrDiscoveryContactMissing = errors.New("link target contact not found")
 type discoveryGroupRepo interface {
 	ListAnarlogTitleGroups(ctx context.Context) ([]repository.AnarlogTitleGroup, error)
 	FindAnarlogTitleSiblingsByToken(ctx context.Context, normalizedToken string) ([]repository.ExternalContact, error)
-	MarkAnarlogTitleSiblingsImportedByToken(ctx context.Context, normalizedToken string, contactID uuid.UUID) error
-	MarkAnarlogTitleSiblingsMatchedByToken(ctx context.Context, normalizedToken string, contactID uuid.UUID) error
+	MarkAnarlogTitleSiblingsImportedByToken(ctx context.Context, normalizedToken string, contactID uuid.UUID) (int64, error)
+	MarkAnarlogTitleSiblingsMatchedByToken(ctx context.Context, normalizedToken string, contactID uuid.UUID) (int64, error)
 	MarkAnarlogTitleSiblingsIgnoredByToken(ctx context.Context, normalizedToken string) error
 }
 
@@ -49,6 +49,10 @@ type discoveryContactWriter interface {
 	GetContact(ctx context.Context, id uuid.UUID) (*repository.Contact, error)
 	CreateContact(ctx context.Context, req repository.CreateContactRequest, methods []ContactMethodInput) (*repository.Contact, uuid.UUID, error)
 	UpdateContact(ctx context.Context, id uuid.UUID, req repository.UpdateContactRequest, methods []ContactMethodInput, replaceMethods bool) (*repository.Contact, uuid.UUID, error)
+	// DeleteContact backs orphan cleanup: when the import mark touches zero
+	// siblings (a concurrent resolve already claimed the group), the contact
+	// just created is soft-deleted so the race never strands a duplicate.
+	DeleteContact(ctx context.Context, id uuid.UUID) error
 }
 
 // AnarlogDiscoveryService implements the discovery list + token-group
@@ -182,11 +186,30 @@ func (s *AnarlogDiscoveryService) resolveImport(ctx context.Context, req Resolve
 	if err != nil {
 		return nil, fmt.Errorf("create contact for token group: %w", err)
 	}
-	if err := s.externalRepo.MarkAnarlogTitleSiblingsImportedByToken(ctx, req.NormalizedToken, contact.ID); err != nil {
-		return nil, fmt.Errorf("mark siblings imported: %w", err)
+	marked, markErr := s.externalRepo.MarkAnarlogTitleSiblingsImportedByToken(ctx, req.NormalizedToken, contact.ID)
+	if markErr != nil {
+		// The mark failed after the contact was created. Roll back the new
+		// contact so a mid-flow DB error never strands an orphan.
+		s.cleanupOrphanContact(ctx, contact.ID)
+		return nil, fmt.Errorf("mark siblings imported: %w", markErr)
+	}
+	if marked == 0 {
+		// A concurrent resolve claimed the group between our read and our
+		// mark. The contact we just created has no siblings pointing at it;
+		// soft-delete it and report the group as already gone.
+		s.cleanupOrphanContact(ctx, contact.ID)
+		return nil, ErrTokenGroupNotFound
 	}
 	id := contact.ID
 	return &ResolveTokenResult{Action: DiscoveryActionImport, ContactID: &id}, nil
+}
+
+// cleanupOrphanContact best-effort soft-deletes a contact that was created
+// for an import that could not claim its sibling group. A cleanup failure is
+// not surfaced to the caller (the original outcome already determines the
+// response); the stray contact is recoverable by the user.
+func (s *AnarlogDiscoveryService) cleanupOrphanContact(ctx context.Context, id uuid.UUID) {
+	_ = s.contacts.DeleteContact(ctx, id)
 }
 
 // resolveLink applies optional name/cadence to an existing contact, then
@@ -233,8 +256,14 @@ func (s *AnarlogDiscoveryService) resolveLink(ctx context.Context, req ResolveTo
 		}
 	}
 
-	if err := s.externalRepo.MarkAnarlogTitleSiblingsMatchedByToken(ctx, req.NormalizedToken, contactID); err != nil {
+	marked, err := s.externalRepo.MarkAnarlogTitleSiblingsMatchedByToken(ctx, req.NormalizedToken, contactID)
+	if err != nil {
 		return nil, fmt.Errorf("mark siblings matched: %w", err)
+	}
+	if marked == 0 {
+		// A concurrent resolve claimed the group between our read and our
+		// mark. No new entity was created, so report the group as gone.
+		return nil, ErrTokenGroupNotFound
 	}
 	id := contactID
 	return &ResolveTokenResult{Action: DiscoveryActionLink, ContactID: &id}, nil

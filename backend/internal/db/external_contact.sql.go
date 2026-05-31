@@ -982,7 +982,7 @@ func (q *Queries) MarkAnarlogTitleSiblingsIgnoredByToken(ctx context.Context, no
 	return err
 }
 
-const MarkAnarlogTitleSiblingsImportedByToken = `-- name: MarkAnarlogTitleSiblingsImportedByToken :exec
+const MarkAnarlogTitleSiblingsImportedByToken = `-- name: MarkAnarlogTitleSiblingsImportedByToken :execrows
 UPDATE external_contact SET
     crm_contact_id = $1,
     match_status = 'imported',
@@ -1003,13 +1003,18 @@ type MarkAnarlogTitleSiblingsImportedByTokenParams struct {
 // live unmatched sibling for the token flips to 'imported' and points at
 // the newly created CRM contact atomically. The WHERE predicate mirrors
 // FindAnarlogTitleSiblingsByToken EXACTLY (incl. duplicate_of_id IS NULL)
-// so the mark touches precisely the row set the service inspected.
-func (q *Queries) MarkAnarlogTitleSiblingsImportedByToken(ctx context.Context, arg MarkAnarlogTitleSiblingsImportedByTokenParams) error {
-	_, err := q.db.Exec(ctx, MarkAnarlogTitleSiblingsImportedByToken, arg.CrmContactID, arg.NormalizedToken)
-	return err
+// so the mark touches precisely the row set the service inspected. Returns
+// the affected-row count so the service can detect a concurrent resolve
+// (zero rows) and roll back the contact it just created.
+func (q *Queries) MarkAnarlogTitleSiblingsImportedByToken(ctx context.Context, arg MarkAnarlogTitleSiblingsImportedByTokenParams) (int64, error) {
+	result, err := q.db.Exec(ctx, MarkAnarlogTitleSiblingsImportedByToken, arg.CrmContactID, arg.NormalizedToken)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
-const MarkAnarlogTitleSiblingsMatchedByToken = `-- name: MarkAnarlogTitleSiblingsMatchedByToken :exec
+const MarkAnarlogTitleSiblingsMatchedByToken = `-- name: MarkAnarlogTitleSiblingsMatchedByToken :execrows
 UPDATE external_contact SET
     crm_contact_id = $1,
     match_status = 'matched',
@@ -1029,10 +1034,15 @@ type MarkAnarlogTitleSiblingsMatchedByTokenParams struct {
 // Single-statement batch mark for the action=link resolve path: every
 // live unmatched sibling for the token flips to 'matched' and points at
 // the linked CRM contact atomically. Same predicate as the imported and
-// ignored variants.
-func (q *Queries) MarkAnarlogTitleSiblingsMatchedByToken(ctx context.Context, arg MarkAnarlogTitleSiblingsMatchedByTokenParams) error {
-	_, err := q.db.Exec(ctx, MarkAnarlogTitleSiblingsMatchedByToken, arg.CrmContactID, arg.NormalizedToken)
-	return err
+// ignored variants. Returns the affected-row count so the service can
+// surface a clean not-found when a concurrent resolve already claimed the
+// group (zero rows).
+func (q *Queries) MarkAnarlogTitleSiblingsMatchedByToken(ctx context.Context, arg MarkAnarlogTitleSiblingsMatchedByTokenParams) (int64, error) {
+	result, err := q.db.Exec(ctx, MarkAnarlogTitleSiblingsMatchedByToken, arg.CrmContactID, arg.NormalizedToken)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const ReviveExternalContact = `-- name: ReviveExternalContact :one

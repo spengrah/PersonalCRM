@@ -110,11 +110,11 @@ func (f *fakeDiscoveryRepo) ListAnarlogTitleGroups(ctx context.Context) ([]repos
 func (f *fakeDiscoveryRepo) FindAnarlogTitleSiblingsByToken(ctx context.Context, token string) ([]repository.ExternalContact, error) {
 	return f.siblings, nil
 }
-func (f *fakeDiscoveryRepo) MarkAnarlogTitleSiblingsImportedByToken(ctx context.Context, token string, id uuid.UUID) error {
-	return nil
+func (f *fakeDiscoveryRepo) MarkAnarlogTitleSiblingsImportedByToken(ctx context.Context, token string, id uuid.UUID) (int64, error) {
+	return 1, nil
 }
-func (f *fakeDiscoveryRepo) MarkAnarlogTitleSiblingsMatchedByToken(ctx context.Context, token string, id uuid.UUID) error {
-	return nil
+func (f *fakeDiscoveryRepo) MarkAnarlogTitleSiblingsMatchedByToken(ctx context.Context, token string, id uuid.UUID) (int64, error) {
+	return 1, nil
 }
 func (f *fakeDiscoveryRepo) MarkAnarlogTitleSiblingsIgnoredByToken(ctx context.Context, token string) error {
 	return nil
@@ -132,6 +132,9 @@ func (f *fakeDiscoveryContacts) CreateContact(ctx context.Context, req repositor
 }
 func (f *fakeDiscoveryContacts) UpdateContact(ctx context.Context, id uuid.UUID, req repository.UpdateContactRequest, methods []service.ContactMethodInput, replaceMethods bool) (*repository.Contact, uuid.UUID, error) {
 	return &repository.Contact{ID: id, FullName: req.FullName}, uuid.Nil, nil
+}
+func (f *fakeDiscoveryContacts) DeleteContact(ctx context.Context, id uuid.UUID) error {
+	return nil
 }
 
 // TestResolveAnarlogTitle_UnknownToken — an empty sibling set maps to 404.

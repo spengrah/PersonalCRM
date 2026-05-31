@@ -266,8 +266,8 @@ func (s *MeetingNoteService) resolveToLinked(ctx context.Context, tx pgx.Tx, pri
 }
 
 // resolveNoneOfThese implements the action="none_of_these" branch by
-// re-running Step 4 logic with the row's persisted participants and a
-// freshly-extracted title-match set.
+// re-running the no-candidates branch of decideLinkage with the row's
+// persisted participants and a freshly-extracted title-match set.
 func (s *MeetingNoteService) resolveNoneOfThese(ctx context.Context, tx pgx.Tx, prior *repository.MeetingNote) (*repository.MeetingNote, []CreatedInteraction, []func(context.Context), error) {
 	resolvedTagged, err := s.reResolveTagged(ctx, tx, prior.Participants)
 	if err != nil {
@@ -324,7 +324,7 @@ func (s *MeetingNoteService) resolveNoneOfThese(ctx context.Context, tx pgx.Tx, 
 		return nil, nil, nil, fmt.Errorf("compute resolved set hash: %w", err)
 	}
 
-	// Force zero candidates so decideLinkage walks the Step 4 path.
+	// Force zero candidates so decideLinkage walks the no-candidates path.
 	newState, _, _, desired, _ := decideLinkage(
 		events.MeetingNoteRecordedPayload{Title: prior.Title, MeetingAt: prior.MeetingAt},
 		prior.AnarlogSessionID,
@@ -534,7 +534,7 @@ func runFollowUpBestEffort(ctx context.Context, fn func(context.Context)) {
 // corresponds to a CONTACT in the session's implied set; it drives only
 // visual emphasis. The authoritative shared-count meter is driven by
 // OverlapCount on the candidate, NOT by counting Matched flags (the two
-// are decoupled — see Decision 3 in the PR plan).
+// are deliberately decoupled).
 type NeedsAttentionAttendee struct {
 	Name    string `json:"name"`
 	Matched bool   `json:"matched"`
@@ -719,9 +719,9 @@ func (s *MeetingNoteService) candidatePreview(ctx context.Context, kind string, 
 // emphasis set. An attendee is flagged matched when its display label
 // (display_name, or email local-part fallback) case-insensitively
 // matches a name in that set. The count of matched flags is NOT
-// guaranteed to equal OverlapCount — the meter count stays authoritative
-// (Decision 3). A name-resolution failure is logged + skipped so a
-// missing contact never fails the whole list.
+// guaranteed to equal OverlapCount — the meter count stays authoritative.
+// A name-resolution failure is logged + skipped so a missing contact never
+// fails the whole list.
 func (s *MeetingNoteService) eventAttendees(ctx context.Context, evt *repository.CalendarEvent, impliedSet map[uuid.UUID]struct{}) ([]NeedsAttentionAttendee, error) {
 	matchedNames := s.matchedContactNames(ctx, evt.MatchedContactIDs, impliedSet)
 	out := make([]NeedsAttentionAttendee, 0, len(evt.Attendees))

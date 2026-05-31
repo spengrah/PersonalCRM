@@ -141,6 +141,9 @@ describe('NameCandidateModal', () => {
         })
       )
     })
+    // Link must NOT carry a name — sending the prefilled token would rename
+    // the linked contact. Only import names a (new) contact.
+    expect(mutateAsync.mock.calls[0][0].name).toBeUndefined()
   })
 
   it('blocks the link action until a contact is picked', () => {
