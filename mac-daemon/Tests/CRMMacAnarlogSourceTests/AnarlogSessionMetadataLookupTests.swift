@@ -137,8 +137,8 @@ final class AnarlogSessionMetadataLookupTests: XCTestCase {
 
     func testReturnsSessionDirWhenMetaMissing() async throws {
         // Session dir exists but _meta.json is missing — still
-        // return the sessionDirURL so an orphan click can open
-        // the dir in Finder.
+        // return the sessionDirURL as session metadata (title/time
+        // stay nil).
         let fs = makeFS()
         fs.putDir(sessionDir)
         let lookup = AnarlogSessionMetadataLookup(

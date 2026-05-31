@@ -23,9 +23,8 @@ public struct SessionMetadata: Sendable, Equatable {
     /// Session creation time from `_meta.json.created_at`. Nil when
     /// unavailable; the notification omits the time suffix.
     public let createdAt: Date?
-    /// File URL of the session directory (the click target for
-    /// orphan notifications). Nil when the directory doesn't exist
-    /// on disk.
+    /// File URL of the session directory on disk. Nil when the
+    /// directory doesn't exist.
     public let sessionDirURL: URL?
 
     public init(title: String?, createdAt: Date?, sessionDirURL: URL?) {

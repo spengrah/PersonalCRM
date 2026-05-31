@@ -1,6 +1,6 @@
 // WorkspaceOpener — façade over NSWorkspace.shared.open(_:) so
 // tap-handler tests can assert which URL was opened without
-// actually launching Finder / the user's browser.
+// actually opening any URL (app launch, Finder, or browser).
 import Foundation
 import AppKit
 

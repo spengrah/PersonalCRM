@@ -16,7 +16,7 @@ This spec defines how the Pi backend links sessions to existing calendar events 
 - **Time-overlap is the primary linkage signal.** With participant overlap used as the tiebreaker when multiple candidates fall within the window.
 - **Conservative title parsing.** Title-extracted name tokens never auto-create interactions on their own. They are used only for (a) disambiguating among multiple time-overlap candidates and (b) feeding the discovery candidates flow.
 - **Mac-side orphan surfacing.** Untagged sessions with no time-overlap candidates produce no interactions and no Pi-side review queue. Instead the daemon raises a persistent macOS notification prompting the user to tag the session in Anarlog. The next sync picks up the change naturally.
-- **Pi-side conflict surfacing.** Ambiguous time-overlap conflicts that can't be auto-resolved via participant signal are surfaced in the Pi `/imports` page as a new "Sessions needing attention" tab.
+- **Pi-side conflict surfacing.** Ambiguous time-overlap conflicts that can't be auto-resolved via participant signal are surfaced in the Pi `/imports` page under a new **Interactions** tab (conflicts + orphans).
 
 ## Data model
 
@@ -148,13 +148,82 @@ When a session file's content hash changes (`_meta.json`, `_summary.md`, or `_me
 
 This pattern protects against contact renames (a title-matched interaction's basis disappears) and against re-tagging (humans added or removed in Anarlog).
 
-## Conflict-resolution UX (Pi-side)
+## Imports UI (PR 7)
 
-A new tab on `/imports` titled "Sessions needing attention" lists all `meeting_note` rows with `linkage_state IN ('conflict_pending', 'orphan_needs_review')`. (The latter is rare in practice — most orphans get resolved via the Mac notification round-trip — but the queue exists as a fallback.)
+Design finalized via Claude Design (handoff: `designs/handoffs/2026-05-anarlog-sessions-attention/`). Built on the **production** Tailwind palette (not the unshipped Aged Artisanal skin); no new color tokens. The handoff's `anarlog-sessions.jsx` is the 1:1 React reference and `IMPLEMENTATION-DIFF.md` the repo-side change list. Colour semantics: amber = needs attention/conflict; green = resolved/empty; blue = the matching signal (overlap pips, tagged people, time drift); gray-dashed = title-derived low-confidence.
 
-Each row shows: session title, time, summary excerpt, and (for conflicts) the candidate events/calls with their participant-overlap counts and a one-click "this one" / "none of these" action. Picking "this one" sets `(linked_kind, linked_id)` and transitions to `linked`. "None of these" promotes the session to the zero-candidate flow (re-runs Step 4 / Step 5 logic).
+### Information architecture
 
-> **Visual design TBD.** Layout, copy, badge style, empty-state, conflict-card structure, and integration into the existing Imports page are all open. UI design will be done separately via Claude Design and integrated in a final UI PR (see [PR staging](#pr-staging) below).
+`/imports` gains two underline-style sub-tabs — **People** and **Interactions** — with tab state held in the URL. The conflict notification deep-links onto the Interactions tab. PR 7 makes **`interactions`** the canonical param end to end: a **companion daemon change** updates the click-URL builder (`mac-daemon/Sources/CRMMacOrphanNotifications/ClickTargetURL.swift`) to emit `/imports?tab=interactions&session=<anarlog_session_uuid>` (it currently emits `tab=needs-attention`). To stay safe across the deploy gap, the UI also accepts `needs-attention` as a **transitional** inbound alias, dropped in a follow-up once the renamed daemon is deployed. (The daemon computes the click URL at tap time, so once its binary updates even already-delivered persistent notifications emit the new value — there is no permanent reason to keep the alias.)
+
+- **People** (default tab; param `people`) — the single home for "people to add". The existing unmatched-candidate cards, now including `anarlog_humans` (exposed via a new `Anarlog` entry in `SOURCE_FILTERS` + `source-display.ts`). Below the candidate list and its pager sits a distinct **"Names found in session titles"** discovery section for `anarlog_title` tokens (see Discovery below).
+- **Interactions** (param `interactions`; see the deep-link note above for the transitional `needs-attention` alias) — currently the actionable, interaction-blocking Anarlog states `conflict_pending` and `orphan_needs_review`. Named generally on purpose: this tab is the intended future home for conflict-resolution / import actions on interaction & session items from other sources too (added as needed, not in this PR). Carries an **amber count badge** (`bg-amber-600 text-white`) = conflicts + orphans; discovery is deliberately **not** counted here. An empty state ("Nothing needs attention") shows when both are zero. The `session=<anarlog_session_uuid>` param (sent by the daemon's conflict deep-link) is matched against each item's `anarlog_session_id` to scroll to and highlight that card.
+
+Rationale for placing discovery under People rather than the Interactions tab: the Interactions tab stays scoped to interaction-level items that block logging, while everything you might add to the CRM as a person (rich candidates + weak title tokens) lives under the People tab.
+
+### Conflict card
+
+Compact-table treatment (the densest of the three explored; the card and radio treatments in the exploration canvas are dropped). Structure:
+
+- **Session lede:** message icon, session title, `Anarlog session` badge, time, and a quoted summary excerpt. (The mock's "In this session" implied-participant chips and the session duration are deferred — see Fidelity below.)
+- **Candidate table** — columns `Candidate | Time | Overlap`, one row per time-overlap candidate, with a per-row `This one`:
+  - *Candidate:* kind icon (calendar/phone), candidate title (or peer handle for phone calls), and the candidate's attendee names (matched names emphasized).
+  - *Time:* the candidate's time plus drift from the session start, computed client-side (`occurred_at − meeting_at`).
+  - *Overlap:* a pip-per-attendee meter (matched attendees filled blue) plus an "N shared" label.
+- **Footer:** `None of these — log as impromptu`.
+
+Actions:
+
+- `This one` → `POST /api/v1/meeting-notes/{id}/resolve-link {action:"link", kind, id}` → `linkage_state='linked'`. The row shows a brief green confirmation, then leaves the queue and the badge decrements.
+- `None of these — log as impromptu` → `POST .../resolve-link {action:"none_of_these"}` → zero-candidate flow → `linked_impromptu`. **No confirm step** — the action is explicit and low-frequency.
+
+Both endpoints already exist (merged in PRs 3/5).
+
+### Orphan card
+
+Same session lede plus a neutral note ("No calendar event or call matched this time. Usually fixed by tagging participants in Anarlog, then it re-syncs.") and two actions: `Open Anarlog` and `Log as impromptu` (→ the `none_of_these` flow). The queue is intentionally thin — no manual "link to an event…" search, since orphans are normally resolved via the Mac tagging round-trip and the Pi queue is only a fallback.
+
+**`Open Anarlog` launches the app, not the specific session.** Anarlog (fastrepl/anarlog, a Tauri app) registers a custom URL scheme, but its deep-link handler routes only auth/billing/integration callbacks — there is **no note/session-open deep link** (`apps/desktop/src/shared/hooks/useDeeplinkHandler.ts`). So the button fires the bare scheme to launch/focus the app, and the user opens the session (whose title is shown on the card) themselves. This is preferred over opening the session directory in Finder — the on-disk session files are machine-format and not human-readable, so the folder is unhelpful. Implementation: a plain `<a href>` / `window.location` to the scheme; the OS hands the URL to the registered app even though no in-app route consumes it. Scheme value: **`hyprnote://`** (the stable build, `com.hyprnote.stable`); it is build-channel-specific (staging uses `hyprnote-staging://`), but for this single-user deployment hard-coding the stable scheme is fine — just note it in case the channel ever changes.
+
+**In the companion daemon PR (alongside the param rename):** the macOS orphan notification currently opens the session directory in Finder (`ClickTargetURL.swift`, orphan branch returns `sessionDirURL`); switch it to fire `hyprnote://` so it launches Anarlog — matching this card's `Open Anarlog` and the same "on-disk files are useless" rationale. The conflict branch of that function is already being changed for the `tab` rename, so both edits land together.
+
+**Later follow-up (out of scope):** if Anarlog upstream adds a real note-open deep link (e.g. `hyprnote://note/<id>`), revisit targeting the specific session on both surfaces — pending confirmation that Anarlog's note id maps to the daemon's session UUID.
+
+### Discovery (`anarlog_title`)
+
+Weak, name-only candidates lifted from session titles, **grouped by normalized token** and ranked by evidence count. Rendered as low-confidence rows (dashed avatar, "from title · low confidence" chip, expandable session-title evidence) under the People tab. Per row:
+
+- `Create contact…` / `Link contact` — opens the **existing `import-link-modal.tsx`** in a name-only branch keyed on `candidate.source === 'anarlog_title'`: the Contact Methods apparatus (`MethodSelector`/`ConflictResolver`) is hidden and replaced by an info note ("No contact methods — Anarlog only captured a name…") plus the session-title evidence list; the header pager, editable name, Import/Link toggle, `ContactSelector` (link mode), and cadence are kept. The pager iterates the grouped discovery queue.
+- `Not a person` — ignores the whole token group.
+
+Accepting (import or link) or ignoring a token resolves **all** sibling `external_contact` rows for that normalized token in one call.
+
+### Backend slice (new in PR 7)
+
+The conflict/orphan path is fully built (PRs 1–6); the discovery path is not. PR 7 adds:
+
+- **Grouped discovery query** — a sqlc query grouping `external_contact` rows where `source='anarlog_title'` and `match_status='unmatched'` by normalized token, returning per group: normalized token, evidence count, member row-ids, and distinct session-title evidence.
+- **List endpoint** — `GET /api/v1/imports/anarlog-title` returning the grouped tokens, feeding the discovery section.
+- **Token-group resolution** — `POST /api/v1/imports/anarlog-title/resolve {normalized_token, action:"import"|"link"|"ignore", …}`. The server re-resolves every sibling row for the token and applies the action atomically (reusing the existing import/link service for a representative row; siblings are marked imported/matched/ignored). Body-based — the token is not in the URL path — to avoid encoding pitfalls and stale client-supplied id lists.
+- **Needs-attention candidate enrichment** — extend the `needs-attention` candidate projection (`NeedsAttentionCandidate`/`…Preview`) to include per-candidate attendees `[{name, matched}]`, where `matched` reflects membership in the session's implied set, so the conflict table can render attendee names and the overlap meter. The session's own implied-participant chips and the duration field are out of scope for v1.
+
+### Frontend (net-new)
+
+- Types for the needs-attention items/candidates and the discovery groups.
+- Hooks: `useSessionsNeedingAttention` (GET needs-attention), `useResolveLink` (POST resolve-link), `useAnarlogTitleDiscovery` (GET grouped discovery), `useResolveDiscoveryToken` (token-group import/link/ignore), with invalidation wired into `query-invalidation.ts`.
+- Components under `frontend/src/components/imports/session-attention/`: `SubTabs`, `SessionLede`, `OverlapMeter`, `ConflictCard` (+ `CandidateTable`), `OrphanCard`, `DiscoveryRow`, `ResolvedCard`, `AttentionEmptyState`.
+- `import-link-modal.tsx` extended with the name-only branch (extended, not forked).
+- `SOURCE_FILTERS` + `source-display.ts` gain an `Anarlog` entry for `anarlog_humans`.
+- `?tab=interactions` selects the Interactions tab (`?tab=needs-attention` accepted as a transitional alias until the renamed daemon ships — see deep-link note); the `?session=<uuid>` param is consumed (scroll-to + highlight the matching `anarlog_session_id`) and then cleared mount-only via `router.replace()` so a page refresh does not re-trigger the deep-link.
+- **Companion Mac-daemon change** (`mac-daemon/Sources/CRMMacOrphanNotifications/ClickTargetURL.swift` + its unit tests; own daemon build/release alongside PR 7) — two edits to the same click-URL builder: (1) rename the conflict deep-link param `needs-attention` → `interactions` (the UI's transitional alias covers the deploy gap, removed in a follow-up once the renamed daemon is deployed); (2) switch the orphan branch from opening the session directory in Finder (`sessionDirURL`) to firing `hyprnote://` to launch Anarlog.
+
+### Fidelity
+
+Conflict-card participant detail ships at "middle" fidelity: per-candidate attendee names + matched flags (the real disambiguation signal) are included; the lede's implied-participant chips and the session duration are deferred to keep the backend surface small. Time-drift is computed client-side from `occurred_at − meeting_at`.
+
+### Walk-in supplemental (Step 5)
+
+No UI. Walk-in interactions are created silently on auto-linked sessions and appear on the contact's timeline like any other interaction.
 
 ## Orphan notification UX (Mac-side)
 
@@ -162,12 +231,14 @@ The daemon consumes `needs_attention` items from the ingest response. For each `
 
 - Raise a macOS user notification using `UNNotificationRequest` configured as an alert (persistent — stays in Notification Center until the user dismisses).
 - Notification body: session title, time, brief instruction ("Tag participants in Anarlog").
-- Click action: open the session's directory or `_meta.json` in the user's default file handler (Anarlog or Finder).
+- Click action: launch Anarlog via `hyprnote://` (PR 7 companion change). As shipped in PR 6 this opened the session directory in Finder; see the note below.
 - The daemon persists pending orphan session UUIDs in a small SQLite table so notification state survives daemon restart. An entry is cleared when a subsequent sync confirms the session has transitioned out of `orphan_needs_review`.
 
-For `reason: 'conflict'` notifications: same persistent-alert mechanism, but the click action opens a deep link to the `/imports` "Sessions needing attention" tab in the user's browser (Pi UI via Tailscale URL configured at pairing time).
+For `reason: 'conflict'` notifications: same persistent-alert mechanism, but the click action opens a deep link to the `/imports` Interactions tab in the user's browser (Pi UI via Tailscale URL configured at pairing time).
 
-> **Visual design TBD.** Notification copy, click affordances, and the Notification Center grouping behavior will be finalized alongside the Pi UI work via Claude Design.
+> **Shipped in PR 6** (`#339` + follow-ups; `mac-daemon/Sources/CRMMacOrphanNotifications/`). As shipped, the click-action contract (`ClickTargetURL.swift`) is: **orphan** → open the session directory (`metadata.sessionDirURL`) in Finder; **conflict** → open `/imports?tab=needs-attention&session=<anarlog_session_uuid>`.
+>
+> **PR 7's companion daemon edit changes both** (see Imports UI → Frontend → Companion Mac-daemon change): **orphan** → fire `hyprnote://` to launch Anarlog (on-disk files aren't human-readable); **conflict** → emit `tab=interactions` (the Pi UI accepts `needs-attention` as a transitional alias during the deploy gap). Notification copy stays as the daemon implements it.
 
 ## PR staging
 
@@ -179,9 +250,9 @@ Backend-first. UI is intentionally deferred to the last PR(s) so design (done se
 4. **Title parsing utility + discovery flow** — implements extraction, the name-string matcher extension to `backend/internal/matching/`, and the `external_contact source='anarlog_title'` upsert path. Wires discovery for orphan-with-tags and for any other session that runs extraction.
 5. **Step 3 participant-signal disambiguation** — extends Step 2 to handle 2+ candidates via implied contact set. Introduces `conflict_pending` state. Backend API exposes endpoints to list and resolve conflicts.
 6. **Mac-side orphan notification flow** — daemon consumes `needs_attention` from ingest responses, raises persistent macOS notifications, persists state, clears on resolution.
-7. **UI** — Pi `/imports` "Sessions needing attention" tab + Anarlog-title weak candidates section. Visual design TBD via Claude Design; this PR integrates the design output.
+7. **Imports UI** — see [Imports UI (PR 7)](#imports-ui-pr-7). Frontend: the two-sub-tab `/imports` (**People** — incl. `anarlog_humans` as a new source + the grouped `anarlog_title` discovery section; **Interactions** — the conflict/orphan queue). Backend slice: grouped `anarlog_title` discovery query + list endpoint + token-group resolve endpoint, plus per-candidate attendee enrichment on the needs-attention projection. The conflict/orphan `needs-attention` and `resolve-link` endpoints already landed in PRs 3/5 and are reused as-is. Companion Mac-daemon change (`ClickTargetURL.swift` + tests): (1) rename the conflict deep-link param `needs-attention` → `interactions` (UI keeps a transitional alias, removed in a follow-up); (2) switch the orphan notification from Finder (`sessionDirURL`) to `hyprnote://` (launch Anarlog).
 
-PRs 2–6 land in sequence on the backend. PR 7 is the only one that blocks on UI design work, which can proceed in parallel from PR 1 onward.
+**Status:** PRs 1–6 are merged — the migration, daemon Anarlog readers, ingest/linkage, title-parsing + discovery upsert, Step 3 disambiguation, and the Mac orphan/conflict notification flow (`#339` + follow-ups) all shipped. **PR 7 is the only one remaining** — it carries the entire frontend plus the discovery backend slice above (the grouped `anarlog_title` query, token-group resolve endpoint, and needs-attention attendee enrichment — none of which were built in 2–6).
 
 ## Out of scope (for this phase)
 
@@ -194,7 +265,8 @@ PRs 2–6 land in sequence on the backend. PR 7 is the only one that blocks on U
 ## Open questions
 
 - **Stopword list for title extraction** — initial seed is small (`1:1`, `sync`, `catchup`, etc.); expand iteratively from observed false positives in dogfooding.
-- **Conflict-resolution endpoint shape** — `POST /api/v1/meeting-notes/{id}/resolve-link {kind, id}` vs a more generic action API. Decide at PR 5.
+- **Conflict-resolution endpoint shape** — RESOLVED at PR 5: `POST /api/v1/meeting-notes/{id}/resolve-link {action:"link"|"none_of_these", kind, id}`.
+- **Discovery token-group resolution endpoint** — RESOLVED at PR 7: body-based `POST /api/v1/imports/anarlog-title/resolve {normalized_token, action}` resolving all sibling rows for the token; token not in the URL path.
 - **`matching.MatchByFullName` placement** — could live in `matching/` (existing fuzzy package) or in a new `matching/name.go` file. Trace existing patterns at PR 4.
 - **Notification deep-link URL** — daemon needs the Pi UI base URL. Likely captured at pairing time and stored in daemon config. Confirm at PR 6.
 - **Recovery from missed `needs_attention`** — if the daemon crashes or drops an ingest response before raising a notification, the pending state is invisible to the user. Mitigation: a `GET /api/v1/meeting-notes/needs-attention?host_id=...` endpoint the daemon can poll on startup to reconcile its local notification table. Decide at PR 6.

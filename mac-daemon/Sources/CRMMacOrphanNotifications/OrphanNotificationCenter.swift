@@ -6,8 +6,8 @@
 //
 //   consume(needsAttention:) — fired from AnarlogSessionsSourcePlugin
 //     after every successful publish. Items carry (sessionID, reason)
-//     only; the title + time + click target come from the local
-//     filesystem via SessionMetadataLookup.
+//     only; the title + time come from the local filesystem via
+//     SessionMetadataLookup.
 //
 //   reconcile() — fired (a) once on first heartbeat success at
 //     startup, (b) every 300s by NotificationReconcileLoopPlugin.
@@ -255,7 +255,7 @@ public actor OrphanNotificationCenter {
     /// Forward the ingest response's needs_attention entries
     /// through the notification pipeline. Each entry is rendered
     /// using the local filesystem (via SessionMetadataLookup) for
-    /// title/time/click-target.
+    /// title/time.
     ///
     /// De-dup posture: a (sessionUUID, reason) with an existing
     /// `queued` entry is skipped. An existing `denied`/`failed`

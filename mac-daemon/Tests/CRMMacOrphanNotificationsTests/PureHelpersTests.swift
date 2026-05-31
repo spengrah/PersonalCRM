@@ -95,7 +95,9 @@ final class PureHelpersTests: XCTestCase {
 
     // MARK: - clickTargetURL
 
-    func testOrphanReturnsSessionDirectoryURL() {
+    func testOrphanReturnsAnarlogAppURL() {
+        // Result is independent of metadata: pass non-nil metadata
+        // and assert the bare Anarlog scheme, not the session dir.
         let dir = URL(fileURLWithPath: "/tmp/anarlog/sessions/deadbeef-1111-2222-3333-444455556666")
         let metadata = SessionMetadata(title: "X", createdAt: nil, sessionDirURL: dir)
         let url = clickTargetURL(
@@ -103,24 +105,28 @@ final class PureHelpersTests: XCTestCase {
             sessionUUID: "deadbeef-1111-2222-3333-444455556666",
             metadata: metadata,
             piURL: URL(string: "https://pi.example")!)
-        XCTAssertEqual(url, dir)
+        XCTAssertEqual(url, URL(string: "hyprnote://"))
     }
 
-    func testOrphanReturnsNilWhenMetadataNil() {
-        XCTAssertNil(clickTargetURL(
-            reason: "orphan",
-            sessionUUID: "deadbeef-1111-2222-3333-444455556666",
-            metadata: nil,
-            piURL: URL(string: "https://pi.example")!))
+    func testOrphanReturnsAppURLEvenWhenMetadataNil() {
+        XCTAssertEqual(
+            clickTargetURL(
+                reason: "orphan",
+                sessionUUID: "deadbeef-1111-2222-3333-444455556666",
+                metadata: nil,
+                piURL: URL(string: "https://pi.example")!),
+            URL(string: "hyprnote://"))
     }
 
-    func testOrphanReturnsNilWhenMetadataLacksSessionDir() {
+    func testOrphanReturnsAppURLEvenWhenMetadataLacksSessionDir() {
         let metadata = SessionMetadata(title: "X", createdAt: nil, sessionDirURL: nil)
-        XCTAssertNil(clickTargetURL(
-            reason: "orphan",
-            sessionUUID: "deadbeef-1111-2222-3333-444455556666",
-            metadata: metadata,
-            piURL: URL(string: "https://pi.example")!))
+        XCTAssertEqual(
+            clickTargetURL(
+                reason: "orphan",
+                sessionUUID: "deadbeef-1111-2222-3333-444455556666",
+                metadata: metadata,
+                piURL: URL(string: "https://pi.example")!),
+            URL(string: "hyprnote://"))
     }
 
     func testConflictReturnsPiUIDeepLink() {
@@ -135,7 +141,7 @@ final class PureHelpersTests: XCTestCase {
         let q = comps.queryItems ?? []
         let tab = q.first(where: { $0.name == "tab" })?.value
         let session = q.first(where: { $0.name == "session" })?.value
-        XCTAssertEqual(tab, "needs-attention")
+        XCTAssertEqual(tab, "interactions")
         XCTAssertEqual(session, "deadbeef-1111-2222-3333-444455556666")
     }
 

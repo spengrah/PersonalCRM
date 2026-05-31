@@ -54,8 +54,9 @@ public struct AnarlogSessionMetadataLookup: SessionMetadataLookup {
         let metaPath = sessionDir.appendingPathComponent("_meta.json", isDirectory: false).path
         guard filesystem.exists(metaPath) else {
             // Session dir exists but no _meta.json yet — still
-            // return the sessionDirURL so an orphan-click can
-            // open the directory in Finder. Title/time stay nil.
+            // return the sessionDirURL as session metadata (the
+            // orphan click launches the Anarlog app, not Finder).
+            // Title/time stay nil.
             return SessionMetadata(
                 title: nil, createdAt: nil, sessionDirURL: sessionDir)
         }
