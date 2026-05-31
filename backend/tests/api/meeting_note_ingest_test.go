@@ -222,6 +222,7 @@ func setupMeetingNoteIngestEnv(t *testing.T) *meetingNoteIngestEnv {
 		titleMatcher,
 		titleDiscoveryWriter,
 		contactSvc,
+		contactRepo,
 	)
 	meetingNoteHandler := handlers.NewMeetingNoteHandler(meetingNoteService)
 	// Wiring mirrors production main.go: resolve-link stays under

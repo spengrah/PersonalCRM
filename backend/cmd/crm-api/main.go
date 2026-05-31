@@ -524,6 +524,7 @@ func run() int {
 		titleMatcher,
 		titleDiscoveryWriter,
 		contactService,
+		contactRepo,
 	)
 	meetingNoteHandler := handlers.NewMeetingNoteHandler(meetingNoteService)
 
