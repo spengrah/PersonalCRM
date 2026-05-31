@@ -130,6 +130,67 @@ func (q *Queries) DeleteExternalContactsBySourceAccount(ctx context.Context, arg
 	return err
 }
 
+const FindAnarlogTitleSiblingsByToken = `-- name: FindAnarlogTitleSiblingsByToken :many
+SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash FROM external_contact
+WHERE source = 'anarlog_title'
+    AND metadata->>'token_normalized' = $1::text
+    AND match_status = 'unmatched'
+    AND duplicate_of_id IS NULL
+    AND deleted_at IS NULL
+ORDER BY id ASC
+`
+
+// Returns every live unmatched anarlog_title sibling row for a normalized
+// token. ORDER BY id ASC so the lowest-id row is a stable representative
+// for the reuse-existing-import-service resolve path. The predicate
+// mirrors ListAnarlogTitleGroups (and the batch-mark queries) EXACTLY so
+// the resolve service inspects the same row set it later marks.
+func (q *Queries) FindAnarlogTitleSiblingsByToken(ctx context.Context, normalizedToken string) ([]*ExternalContact, error) {
+	rows, err := q.db.Query(ctx, FindAnarlogTitleSiblingsByToken, normalizedToken)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ExternalContact{}
+	for rows.Next() {
+		var i ExternalContact
+		if err := rows.Scan(
+			&i.ID,
+			&i.Source,
+			&i.SourceID,
+			&i.AccountID,
+			&i.DisplayName,
+			&i.FirstName,
+			&i.LastName,
+			&i.Emails,
+			&i.Phones,
+			&i.Addresses,
+			&i.Organization,
+			&i.JobTitle,
+			&i.Birthday,
+			&i.PhotoUrl,
+			&i.CrmContactID,
+			&i.MatchStatus,
+			&i.DuplicateOfID,
+			&i.Etag,
+			&i.Metadata,
+			&i.SyncedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+			&i.HostID,
+			&i.LastContentHash,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const FindExternalContactsByEmail = `-- name: FindExternalContactsByEmail :many
 SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash FROM external_contact
 WHERE emails @> $1::jsonb
@@ -553,6 +614,71 @@ func (q *Queries) ListAllUnmatchedExternalContacts(ctx context.Context, arg List
 	return items, nil
 }
 
+const ListAnarlogTitleGroups = `-- name: ListAnarlogTitleGroups :many
+SELECT
+    (ec.metadata->>'token_normalized')::text                 AS normalized_token,
+    MAX(ec.metadata->>'token_display')::text                 AS token_display,
+    COUNT(DISTINCT ec.id)                                    AS evidence_count,
+    array_agg(DISTINCT ec.id ORDER BY ec.id)::uuid[]         AS member_ids,
+    array_remove(
+        array_agg(DISTINCT mn.title ORDER BY mn.title), NULL
+    )::text[]                                                AS session_titles
+FROM external_contact ec
+LEFT JOIN meeting_note mn
+    ON mn.anarlog_session_id = (ec.metadata->>'session_uuid')::uuid
+    AND mn.deleted_at IS NULL
+WHERE ec.source = 'anarlog_title'
+    AND ec.match_status = 'unmatched'
+    AND ec.duplicate_of_id IS NULL
+    AND ec.deleted_at IS NULL
+GROUP BY ec.metadata->>'token_normalized'
+ORDER BY evidence_count DESC, normalized_token ASC
+`
+
+type ListAnarlogTitleGroupsRow struct {
+	NormalizedToken string        `json:"normalized_token"`
+	TokenDisplay    string        `json:"token_display"`
+	EvidenceCount   int64         `json:"evidence_count"`
+	MemberIds       []pgtype.UUID `json:"member_ids"`
+	SessionTitles   []string      `json:"session_titles"`
+}
+
+// Groups unmatched anarlog_title weak candidates by normalized token,
+// one group per token, for the People-tab discovery surface. The
+// ranking signal is evidence_count = number of member external_contact
+// rows for the token (one row per (token, session) pair via the
+// deterministic source_id). The LEFT JOIN to meeting_note pulls the
+// human-readable session titles for display only; a tombstoned session
+// still counts via its member row even when its title is NULL. Both
+// array_agg calls carry an explicit ORDER BY so element order is
+// deterministic across runs (flake-free tests + stable UI). Casts to
+// text[]/uuid[] keep the generated Go types concrete.
+func (q *Queries) ListAnarlogTitleGroups(ctx context.Context) ([]*ListAnarlogTitleGroupsRow, error) {
+	rows, err := q.db.Query(ctx, ListAnarlogTitleGroups)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListAnarlogTitleGroupsRow{}
+	for rows.Next() {
+		var i ListAnarlogTitleGroupsRow
+		if err := rows.Scan(
+			&i.NormalizedToken,
+			&i.TokenDisplay,
+			&i.EvidenceCount,
+			&i.MemberIds,
+			&i.SessionTitles,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListEnrichmentsBySource = `-- name: ListEnrichmentsBySource :many
 SELECT id, contact_id, source, account_id, field, external_contact_id, original_value, enriched_at FROM contact_enrichment
 WHERE source = $1
@@ -834,6 +960,79 @@ func (q *Queries) ListUnmatchedExternalContacts(ctx context.Context, arg ListUnm
 		return nil, err
 	}
 	return items, nil
+}
+
+const MarkAnarlogTitleSiblingsIgnoredByToken = `-- name: MarkAnarlogTitleSiblingsIgnoredByToken :exec
+UPDATE external_contact SET
+    match_status = 'ignored',
+    updated_at = NOW()
+WHERE source = 'anarlog_title'
+    AND metadata->>'token_normalized' = $1::text
+    AND match_status = 'unmatched'
+    AND duplicate_of_id IS NULL
+    AND deleted_at IS NULL
+`
+
+// Single-statement batch mark for the action=ignore ("Not a person")
+// resolve path: every live unmatched sibling for the token flips to
+// 'ignored'. No crm_contact_id is set. Same predicate as the other two
+// batch marks.
+func (q *Queries) MarkAnarlogTitleSiblingsIgnoredByToken(ctx context.Context, normalizedToken string) error {
+	_, err := q.db.Exec(ctx, MarkAnarlogTitleSiblingsIgnoredByToken, normalizedToken)
+	return err
+}
+
+const MarkAnarlogTitleSiblingsImportedByToken = `-- name: MarkAnarlogTitleSiblingsImportedByToken :exec
+UPDATE external_contact SET
+    crm_contact_id = $1,
+    match_status = 'imported',
+    updated_at = NOW()
+WHERE source = 'anarlog_title'
+    AND metadata->>'token_normalized' = $2::text
+    AND match_status = 'unmatched'
+    AND duplicate_of_id IS NULL
+    AND deleted_at IS NULL
+`
+
+type MarkAnarlogTitleSiblingsImportedByTokenParams struct {
+	CrmContactID    pgtype.UUID `json:"crm_contact_id"`
+	NormalizedToken string      `json:"normalized_token"`
+}
+
+// Single-statement batch mark for the action=import resolve path: every
+// live unmatched sibling for the token flips to 'imported' and points at
+// the newly created CRM contact atomically. The WHERE predicate mirrors
+// FindAnarlogTitleSiblingsByToken EXACTLY (incl. duplicate_of_id IS NULL)
+// so the mark touches precisely the row set the service inspected.
+func (q *Queries) MarkAnarlogTitleSiblingsImportedByToken(ctx context.Context, arg MarkAnarlogTitleSiblingsImportedByTokenParams) error {
+	_, err := q.db.Exec(ctx, MarkAnarlogTitleSiblingsImportedByToken, arg.CrmContactID, arg.NormalizedToken)
+	return err
+}
+
+const MarkAnarlogTitleSiblingsMatchedByToken = `-- name: MarkAnarlogTitleSiblingsMatchedByToken :exec
+UPDATE external_contact SET
+    crm_contact_id = $1,
+    match_status = 'matched',
+    updated_at = NOW()
+WHERE source = 'anarlog_title'
+    AND metadata->>'token_normalized' = $2::text
+    AND match_status = 'unmatched'
+    AND duplicate_of_id IS NULL
+    AND deleted_at IS NULL
+`
+
+type MarkAnarlogTitleSiblingsMatchedByTokenParams struct {
+	CrmContactID    pgtype.UUID `json:"crm_contact_id"`
+	NormalizedToken string      `json:"normalized_token"`
+}
+
+// Single-statement batch mark for the action=link resolve path: every
+// live unmatched sibling for the token flips to 'matched' and points at
+// the linked CRM contact atomically. Same predicate as the imported and
+// ignored variants.
+func (q *Queries) MarkAnarlogTitleSiblingsMatchedByToken(ctx context.Context, arg MarkAnarlogTitleSiblingsMatchedByTokenParams) error {
+	_, err := q.db.Exec(ctx, MarkAnarlogTitleSiblingsMatchedByToken, arg.CrmContactID, arg.NormalizedToken)
+	return err
 }
 
 const ReviveExternalContact = `-- name: ReviveExternalContact :one
