@@ -4,8 +4,8 @@ import (
 	"context"
 	"os"
 	"testing"
-	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/anarlog"
 	"personal-crm/backend/internal/cadence"
 	"personal-crm/backend/internal/config"
@@ -114,7 +114,7 @@ func (e *discoveryTestEnv) seedMeetingNote(t *testing.T, sessionUUID uuid.UUID, 
 		// evidence-only fixture.
 		InputHash:       "",
 		ResolvedSetHash: "",
-		MeetingAt:       time.Now().UTC(),
+		MeetingAt:       accelerated.GetCurrentTime(),
 	})
 	require.NoError(t, err)
 	require.NoError(t, tx.Commit(ctx))
