@@ -69,7 +69,7 @@ final class KnownIdentifiersRestartDeltaTests: XCTestCase {
         XCTAssertEqual(baseM, ["+15550000001", "+15550000002"])
     }
 
-    // MARK: - per-source independence (R9)
+    // MARK: - per-source independence
 
     func testPerSourceIndependentDrain() async {
         // After a replace adding {C}, messages drains {C} AND phone_calls
@@ -101,7 +101,7 @@ final class KnownIdentifiersRestartDeltaTests: XCTestCase {
         XCTAssertEqual(drainedAfterReadd, ["+15550000003"])
     }
 
-    // MARK: - non-destructive scan-queue drain (R1)
+    // MARK: - non-destructive scan-queue drain
 
     func testNonDestructiveDrainRollbackViaReturnInFlight() async {
         let cache = KnownIdentifiersCache(
@@ -166,7 +166,7 @@ final class KnownIdentifiersRestartDeltaTests: XCTestCase {
         XCTAssertEqual(drained, ["+15550000009"])
     }
 
-    // MARK: - persistableBaseline (single-writer P0 fix)
+    // MARK: - persistableBaseline (single-writer baseline)
 
     func testPersistableBaselineNilWhenNoBaseline() async {
         let cache = KnownIdentifiersCache(consumers: [.messages])

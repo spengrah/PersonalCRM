@@ -381,6 +381,41 @@ final class CallHistoryScanExecutionTests: XCTestCase {
         let finalCursor = await transport.currentDecodedCursor()
         XCTAssertEqual(finalCursor?.pendingScans.count, 0, "operator scan dequeued on exhaustion")
     }
+
+    // MARK: - Phase B conflict aborts the tick
+
+    func testPhaseBConflictAbortsTickWithoutOverwriting() async throws {
+        // 5 calls, budget 2. Commit #1 = Phase A enqueue (succeeds).
+        // Commit #2 = Phase B progress advance → forced 409 conflict.
+        // The tick must abort: the Phase-B progress is NOT durably
+        // committed, and the row-emitting batches + final commit must
+        // NOT run against the now-stale working cursor.
+        let dbURL = try makeCallHistoryDB(callCount: 5)
+        let store = makeStateStore()
+        let seeded = inactiveBatchCursor()
+        try store.save(DaemonState(schemaVersion: 1))
+        let cache = KnownIdentifiersCache(
+            baselines: [.phoneCalls: []], consumers: [.phoneCalls])
+        await cache.replace(with: ["+15550000001"])
+
+        let transport = PhoneStatefulCursorTransport(
+            initialCursor: try PhoneCallsCursorCodec.encode(seeded),
+            conflictAtOrAfter: 2)
+        let sink = PhonePublisherSink()
+        let plugin = makePlugin(dbURL: dbURL, store: store, cache: cache,
+                                transport: transport, publisherSink: sink,
+                                maxRowsPerTick: 2)
+
+        try await plugin.tick()
+
+        // The persisted cursor reflects ONLY the Phase-A enqueue commit:
+        // one pending scan, nil progress (the rejected Phase-B commit
+        // never advanced it).
+        let finalCursor = await transport.currentDecodedCursor()
+        XCTAssertEqual(finalCursor?.pendingScans.count, 1, "scan entry still queued after abort")
+        XCTAssertNil(finalCursor?.pendingScans.first?.progressBelowZDate,
+                     "Phase-B progress NOT durably committed under conflict")
+    }
 }
 
 /// Records the IngestEvents the publisher sends, in order.
@@ -399,11 +434,18 @@ final class PhoneStatefulCursorTransport: @unchecked Sendable {
     private let lock = NSLock()
     private var currentCursor: String
     private var committedCursors: [String] = []
+    private var commitAttempts = 0
     private let failCommits: Bool
+    /// When set, the (1-based) commit at this index and beyond returns a
+    /// 409 cursor-conflict (the cursor is NOT updated). Lets tests force
+    /// a conflict on a SPECIFIC commit (e.g. the Phase-B re-commit) while
+    /// earlier commits succeed.
+    private let conflictAtOrAfter: Int?
 
-    init(initialCursor: String = "", failCommits: Bool = false) {
+    init(initialCursor: String = "", failCommits: Bool = false, conflictAtOrAfter: Int? = nil) {
         self.currentCursor = initialCursor
         self.failCommits = failCommits
+        self.conflictAtOrAfter = conflictAtOrAfter
     }
 
     func asTransport() -> TransportFunc {
@@ -424,6 +466,17 @@ final class PhoneStatefulCursorTransport: @unchecked Sendable {
             if method == "POST", url.path.hasSuffix("/cursor") {
                 if failCommits {
                     return (Data(#"{"error":{"code":"boom","message":"forced"}}"#.utf8), http(500))
+                }
+                lock.lock(); commitAttempts += 1; let attempt = commitAttempts; lock.unlock()
+                if let threshold = conflictAtOrAfter, attempt >= threshold {
+                    // 409 cursor-conflict: cursor NOT updated (the daemon
+                    // refreshes its base + aborts the tick).
+                    let body = """
+                        {"success":false,
+                         "error":{"code":"EPOCH_MISMATCH","message":"epoch mismatch"},
+                         "data":{"current_cursor":\(Self.jsonString(currentCursor)),"current_epoch":9}}
+                        """
+                    return (Data(body.utf8), http(409))
                 }
                 if let bodyData = request.httpBody,
                    let obj = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],

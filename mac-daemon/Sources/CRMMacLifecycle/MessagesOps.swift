@@ -135,14 +135,14 @@ public final class MessagesOps: Sendable {
         let current = try await piClient.getCursor(auth: auth, source: "messages")
         var working = (try? MessagesCursorCodec.decode(current.cursor))
             ?? MessagesCursor(backfillFloorSentAt: backfillFloor)
-        let sinceDate = Date().addingTimeInterval(-since)
-        let scan = PendingScan(normalizedHandle: canonical, since: sinceDate)
-        // Bounded queue: drop oldest on overflow.
-        if working.pendingScans.count >= MessagesCursor.pendingScansCap {
-            working.pendingScans.removeFirst()
-            logger.warning("messages scan: pending-scan cap reached; dropped oldest", metadata: [:])
-        }
-        working.pendingScans.append(scan)
+        // Never scan below the backfill floor — rows older than it are
+        // never emitted, so a wider `--since` would just waste work.
+        let sinceDate = max(Date().addingTimeInterval(-since), backfillFloor)
+        // Coverage-dedup: at most one entry per handle, keeping the WIDER
+        // window. A wider window resets progress so the larger range is
+        // re-walked; an equal-or-narrower window leaves the existing
+        // entry untouched. Mirrors the source tick's merge.
+        mergePendingScan(into: &working.pendingScans, handle: canonical, since: sinceDate)
         let nextJSON = try MessagesCursorCodec.encode(working)
         do {
             try await piClient.commitCursor(
@@ -161,6 +161,28 @@ public final class MessagesOps: Sendable {
         logger.info("messages scan: pending scan queued", metadata: [
             "handle": .private(canonical),
         ])
+    }
+
+    /// Merge identifier `handle` into a pendingScans list with
+    /// COVERAGE-DEDUP (at most one entry per handle, keeping the wider
+    /// window) + cap (drop oldest on overflow). Keeps the operator path
+    /// idempotent and consistent with the source tick's merge.
+    private func mergePendingScan(
+        into scans: inout [PendingScan],
+        handle: String,
+        since: Date
+    ) {
+        if let idx = scans.firstIndex(where: { $0.normalizedHandle == handle }) {
+            if since < scans[idx].since {
+                scans[idx] = PendingScan(normalizedHandle: handle, since: since)
+            }
+            return
+        }
+        scans.append(PendingScan(normalizedHandle: handle, since: since))
+        if scans.count > MessagesCursor.pendingScansCap {
+            scans.removeFirst(scans.count - MessagesCursor.pendingScansCap)
+            logger.warning("messages scan: pending-scan cap reached; dropped oldest", metadata: [:])
+        }
     }
 
     private func acquireOrThrow() throws {

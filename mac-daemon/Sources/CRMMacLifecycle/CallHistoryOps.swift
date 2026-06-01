@@ -124,14 +124,14 @@ public final class CallHistoryOps: Sendable {
         let current = try await piClient.getCursor(auth: auth, source: "phone_calls")
         var working = (try? PhoneCallsCursorWireCodec.decode(current.cursor))
             ?? PhoneCallsCursorWire(backfillFloorSentAt: backfillFloor)
-        let sinceDate = Date().addingTimeInterval(-since)
-        let scan = PhoneCallsCursorPendingScan(normalizedHandle: canonical, since: sinceDate)
-        // Bounded queue: drop oldest on overflow.
-        if working.pendingScans.count >= PhoneCallsCursorWire.pendingScansCap {
-            working.pendingScans.removeFirst()
-            logger.warning("call-history scan: pending-scan cap reached; dropped oldest", metadata: [:])
-        }
-        working.pendingScans.append(scan)
+        // Never scan below the backfill floor — rows older than it are
+        // never emitted, so a wider `--since` would just waste work.
+        let sinceDate = max(Date().addingTimeInterval(-since), backfillFloor)
+        // Coverage-dedup: at most one entry per handle, keeping the WIDER
+        // window. A wider window resets progress so the larger range is
+        // re-walked; an equal-or-narrower window leaves the existing
+        // entry untouched. Mirrors the source tick's merge.
+        mergePendingScan(into: &working.pendingScans, handle: canonical, since: sinceDate)
         let nextJSON = try PhoneCallsCursorWireCodec.encode(working)
         do {
             try await piClient.commitCursor(
@@ -150,6 +150,29 @@ public final class CallHistoryOps: Sendable {
         logger.info("call-history scan: pending scan queued", metadata: [
             "handle": .private(canonical),
         ])
+    }
+
+    /// Merge identifier `handle` into a pendingScans list with
+    /// COVERAGE-DEDUP (at most one entry per handle, keeping the wider
+    /// window) + cap (drop oldest on overflow). Keeps the operator path
+    /// idempotent and consistent with the source tick's merge.
+    private func mergePendingScan(
+        into scans: inout [PhoneCallsCursorPendingScan],
+        handle: String,
+        since: Date
+    ) {
+        if let idx = scans.firstIndex(where: { $0.normalizedHandle == handle }) {
+            if since < scans[idx].since {
+                scans[idx] = PhoneCallsCursorPendingScan(
+                    normalizedHandle: handle, since: since)
+            }
+            return
+        }
+        scans.append(PhoneCallsCursorPendingScan(normalizedHandle: handle, since: since))
+        if scans.count > PhoneCallsCursorWire.pendingScansCap {
+            scans.removeFirst(scans.count - PhoneCallsCursorWire.pendingScansCap)
+            logger.warning("call-history scan: pending-scan cap reached; dropped oldest", metadata: [:])
+        }
     }
 
     private func acquireOrThrow() throws {

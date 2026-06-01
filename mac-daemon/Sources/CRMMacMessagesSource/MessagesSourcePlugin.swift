@@ -180,9 +180,14 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
         // Phase B — execute pending scans (resumable), gated on
         // hasFetched (NOT isPopulated). An empty-but-fetched CRM still
         // adjudicates pending scans (drops an operator scan for a
-        // now-removed contact); a not-yet-fetched cache defers them.
+        // now-removed contact); a not-yet-fetched cache defers them. A
+        // scan-commit conflict aborts the rest of the tick: `working` is
+        // now stale relative to the refreshed Pi cursor, so the
+        // row-emitting batches + final commit must NOT run against it.
         if await cache.hasFetched {
-            await runPendingScans(pool: pool, working: &working)
+            if await runPendingScans(pool: pool, working: &working) == .aborted {
+                return
+            }
         }
 
         // Sender filter ready?  If the known-identifiers cache hasn't
@@ -421,8 +426,12 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
     /// advance the entry's progress (still queued) or dequeue it on
     /// confirmed exhaustion. Re-commits the cursor after each entry's
     /// progress/dequeue so a crash recovers from the persisted cursor.
-    private func runPendingScans(pool: DatabasePool, working: inout MessagesCursor) async {
-        guard !working.pendingScans.isEmpty else { return }
+    ///
+    /// Returns `.aborted` on a scan-commit conflict/failure: `working`
+    /// is then stale relative to the refreshed Pi cursor, so the caller
+    /// must stop the tick rather than re-commit it.
+    private func runPendingScans(pool: DatabasePool, working: inout MessagesCursor) async -> ScanEnqueueResult {
+        guard !working.pendingScans.isEmpty else { return .ok }
         // Iterate by handle snapshot; mutate working.pendingScans in
         // place as each entry advances or completes.
         let handles = working.pendingScans.map(\.normalizedHandle)
@@ -432,15 +441,15 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
             guard let entry = working.pendingScans.first(where: { $0.normalizedHandle == handle }) else {
                 continue
             }
-            // Membership check (R4): drop scans for handles not in the
-            // current known set — operator typo / removed contact.
+            // Membership check: drop scans for handles not in the current
+            // known set — operator typo / removed contact.
             let known = await cache.contains(handle)
             if !known {
                 working.pendingScans.removeAll { $0.normalizedHandle == handle }
                 logger.warning("messages scan: handle not in known set; dropping", metadata: [
                     "handle": .private(handle),
                 ])
-                if case .aborted = await commitAfterScanMutation(working) { return }
+                if case .aborted = await commitAfterScanMutation(working) { return .aborted }
                 continue
             }
 
@@ -457,7 +466,7 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
                 }
             } catch let dbError as DatabaseError where isFDAError(dbError) {
                 await markUnhealthy(reason: "fda_required")
-                return
+                return .aborted
             } catch {
                 logger.warning("messages scan: read failed; holding entry", metadata: [
                     "error": .private(String(describing: error)),
@@ -498,8 +507,9 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
                         progressBelowRowID: lowest)
                 }
             }
-            if case .aborted = await commitAfterScanMutation(working) { return }
+            if case .aborted = await commitAfterScanMutation(working) { return .aborted }
         }
+        return .ok
     }
 
     /// Commit `working` after a scan entry's progress/dequeue mutation.
