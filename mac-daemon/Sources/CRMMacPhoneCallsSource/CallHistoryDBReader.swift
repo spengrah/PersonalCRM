@@ -130,6 +130,124 @@ public enum CallHistoryDBReader {
         return CallCursorPoint(zdate: zd, zPK: pk)
     }
 
+    /// Shared SELECT column list (aliased) for ZCALLRECORD reads. Both
+    /// `fetchPage` and the identifier-scoped `CallHistoryScanReader`
+    /// project the same columns so `mapRow` can map either's rows.
+    static let selectColumns = """
+        SELECT
+            Z_PK              AS z_pk,
+            ZUNIQUE_ID        AS unique_id,
+            ZADDRESS          AS address,
+            ZORIGINATED       AS originated,
+            ZANSWERED         AS answered,
+            ZDURATION         AS duration,
+            ZSERVICE_PROVIDER AS service_provider,
+            ZCALLTYPE         AS call_type,
+            ZHASMESSAGE       AS has_message,
+            ZDATE             AS zdate
+        FROM ZCALLRECORD
+        """
+
+    /// Outcome of mapping one fetched row (aliased per `selectColumns`).
+    enum MappedRow {
+        /// Row had no usable (ZDATE, Z_PK) coordinate — not even
+        /// counted toward scanned bounds.
+        case malformed
+        /// Row inspected at `point` but skipped (corrupt date, empty
+        /// address, unmappable service). `serviceUnknown` is true only
+        /// for the service-derivation-failed case.
+        case skipped(point: CallCursorPoint, serviceUnknown: Bool)
+        /// Row kept; `point` is its (ZDATE, Z_PK) coordinate.
+        case kept(CallHistoryRow, point: CallCursorPoint)
+    }
+
+    /// Map one fetched GRDB row (aliased per `selectColumns`) to a
+    /// `MappedRow`, applying every per-row skip filter (corrupt ZDATE,
+    /// empty address, unmappable service). Shared by `fetchPage` and
+    /// `CallHistoryScanReader` so both apply identical filtering.
+    static func mapRow(_ row: Row) -> MappedRow {
+        guard let zPK: Int64 = row["z_pk"],
+              let zdate: Double = row["zdate"] else {
+            return .malformed
+        }
+        let point = CallCursorPoint(zdate: zdate, zPK: zPK)
+
+        // Corrupt date sentinel: zdate <= 0 or below the ~2016-Nov
+        // floor. These rows are very rare in real data and almost
+        // always indicate corruption.
+        if zdate <= 0 || zdate < Self.dateSentinelFloor {
+            return .skipped(point: point, serviceUnknown: false)
+        }
+
+        guard let uniqueID: String = row["unique_id"], !uniqueID.isEmpty else {
+            return .skipped(point: point, serviceUnknown: false)
+        }
+
+        let address: String? = row["address"]
+        let trimmedAddress = address?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let trimmedAddress, !trimmedAddress.isEmpty else {
+            // Missing/empty address: skip — no peer to attribute to.
+            return .skipped(point: point, serviceUnknown: false)
+        }
+
+        let originatedRaw: Int64 = (row["originated"] as Int64?) ?? 0
+        let originated = originatedRaw != 0
+
+        let answeredColumn: Int64? = row["answered"]
+        let answered: Bool? = {
+            if originated {
+                // Outbound: ZANSWERED is unreliable; force NULL.
+                return nil
+            }
+            guard let v = answeredColumn else { return false }
+            return v != 0
+        }()
+
+        let durationRaw: Double = (row["duration"] as Double?) ?? 0
+        let duration = Int32(max(0, durationRaw.rounded()))
+
+        let provider: String? = row["service_provider"]
+        let callType: Int64? = row["call_type"]
+        // Service derivation is purely a row-level concern; we run it
+        // here so the reader can count unknown-service rows and skip
+        // them before payload shaping touches them.
+        if ServiceDerivation.resolve(provider: provider, callType: callType) == nil {
+            return .skipped(point: point, serviceUnknown: true)
+        }
+
+        let hasMessageRaw: Int64 = (row["has_message"] as Int64?) ?? 0
+        // ZHASMESSAGE is inbound-only on iOS/macOS (the column is
+        // reused for outbound greetings, which we don't surface).
+        // Force false outbound regardless of source data.
+        let hasMessage = !originated && hasMessageRaw != 0
+
+        let startedAt = Date(timeIntervalSince1970: Self.appleEpochOffset + zdate)
+
+        return .kept(CallHistoryRow(
+            zPK: zPK,
+            uniqueID: uniqueID,
+            address: trimmedAddress,
+            originated: originated,
+            answered: answered,
+            duration: duration,
+            serviceProvider: provider,
+            callType: callType,
+            hasMessage: hasMessage,
+            startedAt: startedAt), point: point)
+    }
+
+    /// Choose the lexicographically smaller/larger of an optional
+    /// running bound and a new point. Exposed package-internal so
+    /// `CallHistoryScanReader` can track its lowest inspected point.
+    static func lexExtend(
+        _ current: CallCursorPoint?,
+        _ point: CallCursorPoint,
+        choose: LexChoice
+    ) -> CallCursorPoint {
+        guard let current else { return point }
+        return lex(current, point, choose: choose)
+    }
+
     /// Fetch up to `limit` rows in `direction` order. The reader applies
     /// every per-row skip filter (empty ZADDRESS, corrupt ZDATE,
     /// unmappable service) and reports a service_unknown counter.
@@ -158,18 +276,7 @@ public enum CallHistoryDBReader {
         }
 
         let sql = """
-            SELECT
-                Z_PK              AS z_pk,
-                ZUNIQUE_ID        AS unique_id,
-                ZADDRESS          AS address,
-                ZORIGINATED       AS originated,
-                ZANSWERED         AS answered,
-                ZDURATION         AS duration,
-                ZSERVICE_PROVIDER AS service_provider,
-                ZCALLTYPE         AS call_type,
-                ZHASMESSAGE       AS has_message,
-                ZDATE             AS zdate
-            FROM ZCALLRECORD
+            \(Self.selectColumns)
             WHERE \(whereClause)
             ORDER BY \(order)
             LIMIT ?
@@ -185,82 +292,21 @@ public enum CallHistoryDBReader {
         var scannedMax: CallCursorPoint?
 
         for row in rawRows {
-            guard let zPK: Int64 = row["z_pk"],
-                  let zdate: Double = row["zdate"] else {
+            switch mapRow(row) {
+            case .malformed:
                 continue
+            case .skipped(let point, let unknown):
+                // Track every (ZDATE, Z_PK) we inspected, even rows we
+                // ultimately skip. The caller advances the cursor past
+                // skipped rows so all-rejected pages don't stall.
+                scannedMin = lexExtend(scannedMin, point, choose: .min)
+                scannedMax = lexExtend(scannedMax, point, choose: .max)
+                if unknown { serviceUnknown += 1 }
+            case .kept(let mapped, let point):
+                scannedMin = lexExtend(scannedMin, point, choose: .min)
+                scannedMax = lexExtend(scannedMax, point, choose: .max)
+                kept.append(mapped)
             }
-            // Track every (ZDATE, Z_PK) we inspected, even rows we
-            // ultimately skip. The caller advances the cursor past
-            // skipped rows so all-rejected pages don't stall.
-            let point = CallCursorPoint(zdate: zdate, zPK: zPK)
-            if scannedMin == nil { scannedMin = point }
-            if scannedMax == nil { scannedMax = point }
-            scannedMin = lex(scannedMin!, point, choose: .min)
-            scannedMax = lex(scannedMax!, point, choose: .max)
-
-            // Corrupt date sentinel: zdate <= 0 or below the
-            // ~2016-Nov floor. These rows are very rare in real data
-            // and almost always indicate corruption.
-            if zdate <= 0 || zdate < Self.dateSentinelFloor {
-                continue
-            }
-
-            guard let uniqueID: String = row["unique_id"], !uniqueID.isEmpty else {
-                continue
-            }
-
-            let address: String? = row["address"]
-            let trimmedAddress = address?.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmedAddress == nil || trimmedAddress!.isEmpty {
-                // Missing/empty address: skip — no peer to attribute to.
-                continue
-            }
-
-            let originatedRaw: Int64 = (row["originated"] as Int64?) ?? 0
-            let originated = originatedRaw != 0
-
-            let answeredColumn: Int64? = row["answered"]
-            let answered: Bool? = {
-                if originated {
-                    // Outbound: ZANSWERED is unreliable; force NULL.
-                    return nil
-                }
-                guard let v = answeredColumn else { return false }
-                return v != 0
-            }()
-
-            let durationRaw: Double = (row["duration"] as Double?) ?? 0
-            let duration = Int32(max(0, durationRaw.rounded()))
-
-            let provider: String? = row["service_provider"]
-            let callType: Int64? = row["call_type"]
-            // Service derivation is purely a row-level concern; we run
-            // it here so the reader can count unknown-service rows and
-            // skip them before payload shaping touches them.
-            if ServiceDerivation.resolve(provider: provider, callType: callType) == nil {
-                serviceUnknown += 1
-                continue
-            }
-
-            let hasMessageRaw: Int64 = (row["has_message"] as Int64?) ?? 0
-            // ZHASMESSAGE is inbound-only on iOS/macOS (the column is
-            // reused for outbound greetings, which we don't surface).
-            // Force false outbound regardless of source data.
-            let hasMessage = !originated && hasMessageRaw != 0
-
-            let startedAt = Date(timeIntervalSince1970: Self.appleEpochOffset + zdate)
-
-            kept.append(CallHistoryRow(
-                zPK: zPK,
-                uniqueID: uniqueID,
-                address: trimmedAddress,
-                originated: originated,
-                answered: answered,
-                duration: duration,
-                serviceProvider: provider,
-                callType: callType,
-                hasMessage: hasMessage,
-                startedAt: startedAt))
         }
 
         let bounds: (min: CallCursorPoint, max: CallCursorPoint)?
@@ -278,7 +324,7 @@ public enum CallHistoryDBReader {
 
     // MARK: - lex compare helpers
 
-    private enum LexChoice { case min, max }
+    enum LexChoice { case min, max }
     private static func lex(_ a: CallCursorPoint, _ b: CallCursorPoint,
                              choose: LexChoice) -> CallCursorPoint {
         let cmp: Bool
