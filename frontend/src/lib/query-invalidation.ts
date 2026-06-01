@@ -32,6 +32,9 @@ export type DomainEvent =
   | 'import:linked' // linked to existing contact
   | 'import:ignored' // marked as ignored
   | 'import:synced' // sync completed
+  // Anarlog interactions-queue events
+  | 'meeting-note:resolved' // a conflict/orphan was resolved (This one / None of these / impromptu)
+  | 'name-candidate:resolved' // an anarlog_title token group was imported/linked/ignored
   // Contact task events
   | 'task:created' // action task created
   | 'task:deleted' // task link removed
@@ -85,6 +88,32 @@ const invalidationRules: Record<DomainEvent, InvalidationKey[]> = {
   'import:ignored': [importKeys.lists()],
   // Sync trigger updates sync states; completion may add new candidates
   'import:synced': [importKeys.lists(), syncKeys.states()],
+
+  // Resolving a conflict/orphan always removes the card from the
+  // Interactions queue + decrements the badge, even when zero walk-in
+  // interactions were created. The static keys fire unconditionally; the
+  // per-contact keys are invalidated per affected contact when
+  // interactions_created is non-empty (the caller loops with a contactId).
+  'meeting-note:resolved': [
+    importKeys.needsAttention(),
+    contactKeys.lists(),
+    contactKeys.overdue(),
+    (contactId: string) => contactKeys.detail(contactId),
+    (contactId: string) => contactTaskKeys.forContact(contactId),
+  ],
+
+  // Resolving an anarlog_title token group removes it from the name-candidate
+  // list; import creates a contact and link mutates cadence/contact_by, so
+  // the contact lists + overdue queue may shift. The affected contact's
+  // detail key is invalidated when a contactId is supplied (import: the
+  // created id; link: crm_contact_id).
+  'name-candidate:resolved': [
+    importKeys.anarlogTitle(),
+    importKeys.lists(),
+    contactKeys.lists(),
+    contactKeys.overdue(),
+    (contactId: string) => contactKeys.detail(contactId),
+  ],
 
   // Contact task events
   'task:created': [contactTaskKeys.lists()],

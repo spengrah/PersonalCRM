@@ -22,8 +22,23 @@ vi.mock('@/hooks/use-google-accounts', () => ({
   useGoogleAccounts: vi.fn(),
 }))
 
+vi.mock('@/hooks/use-interactions-queue', () => ({
+  useInteractionsQueue: vi.fn(),
+  useResolveLink: vi.fn(),
+  useAnarlogTitleCandidates: vi.fn(),
+  useResolveNameCandidate: vi.fn(),
+}))
+
 vi.mock('@/components/layout/navigation', () => ({
   Navigation: () => <div>Navigation</div>,
+}))
+
+// App Router navigation: the page derives tab/session state from the URL.
+const mockReplace = vi.fn()
+let mockSearchParams = new URLSearchParams()
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ replace: mockReplace, push: vi.fn() }),
+  useSearchParams: () => mockSearchParams,
 }))
 
 import ImportsPage from '../page'
@@ -36,6 +51,33 @@ import {
 } from '@/hooks/use-imports'
 import { useContacts, useContact } from '@/hooks/use-contacts'
 import { useGoogleAccounts } from '@/hooks/use-google-accounts'
+import {
+  useInteractionsQueue,
+  useResolveLink,
+  useAnarlogTitleCandidates,
+  useResolveNameCandidate,
+} from '@/hooks/use-interactions-queue'
+
+/** Reset the interactions-queue hooks to a quiet default (no items, no
+ * name candidates, idle mutations) so existing People-tab tests are unaffected. */
+function mockInteractionsQueueDefaults() {
+  vi.mocked(useInteractionsQueue).mockReturnValue({
+    data: [],
+    isLoading: false,
+  } as any)
+  vi.mocked(useAnarlogTitleCandidates).mockReturnValue({
+    data: [],
+    isLoading: false,
+  } as any)
+  vi.mocked(useResolveLink).mockReturnValue({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  } as any)
+  vi.mocked(useResolveNameCandidate).mockReturnValue({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  } as any)
+}
 
 const createWrapper = () => {
   const queryClient = new QueryClient({
@@ -52,6 +94,9 @@ const createWrapper = () => {
 describe('ImportsPage - Suggested Matches', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockSearchParams = new URLSearchParams()
+    mockReplace.mockClear()
+    mockInteractionsQueueDefaults()
 
     // Default mock implementations
     vi.mocked(useImportAsContact).mockReturnValue({
@@ -394,6 +439,9 @@ describe('ImportsPage - Suggested Matches', () => {
 describe('ImportsPage - Source Filter', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockSearchParams = new URLSearchParams()
+    mockReplace.mockClear()
+    mockInteractionsQueueDefaults()
 
     // Default mock implementations
     vi.mocked(useImportAsContact).mockReturnValue({
@@ -540,6 +588,9 @@ describe('ImportsPage - Source Filter', () => {
 describe('ImportsPage - Telegram @username', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockSearchParams = new URLSearchParams()
+    mockReplace.mockClear()
+    mockInteractionsQueueDefaults()
 
     vi.mocked(useImportAsContact).mockReturnValue({
       mutateAsync: vi.fn(),
@@ -626,5 +677,158 @@ describe('ImportsPage - Telegram @username', () => {
     expect(screen.queryByText('Unknown')).not.toBeInTheDocument()
     // Chip is suppressed — no duplicate link rendered for the same handle
     expect(screen.queryByRole('link', { name: '@daledobeck' })).not.toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sub-tabs (People / Interactions), name candidates, and deep-link behavior
+// ---------------------------------------------------------------------------
+
+const conflictItem = {
+  id: 'mn-conflict',
+  anarlog_session_id: 'sess-conflict',
+  mac_host_id: null,
+  title: 'Ambiguous meeting',
+  summary_excerpt: 'Could be either.',
+  meeting_at: '2026-05-01T15:00:00Z',
+  linkage_state: 'conflict_pending',
+  candidates: [
+    {
+      kind: 'event',
+      id: 'evt-1',
+      occurred_at: '2026-05-01T15:05:00Z',
+      overlap_count: 1,
+      target_missing: false,
+      preview: { title: 'Project sync', attendees: [{ name: 'Matched', matched: true }] },
+    },
+  ],
+}
+
+const orphanItem = {
+  id: 'mn-orphan',
+  anarlog_session_id: 'sess-orphan',
+  mac_host_id: null,
+  title: 'Hallway chat',
+  summary_excerpt: null,
+  meeting_at: '2026-05-01T16:00:00Z',
+  linkage_state: 'orphan_needs_review',
+  candidates: [],
+}
+
+const nameCandidateGroup = {
+  normalized_token: 'lena',
+  token_display: 'Lena',
+  evidence_count: 2,
+  session_titles: ['1:1 with Lena'],
+}
+
+describe('ImportsPage - Sub-tabs and name candidates', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockSearchParams = new URLSearchParams()
+    mockReplace.mockClear()
+    mockInteractionsQueueDefaults()
+    vi.mocked(useImportAsContact).mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as any)
+    vi.mocked(useLinkCandidate).mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as any)
+    vi.mocked(useIgnoreCandidate).mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as any)
+    vi.mocked(useTriggerSync).mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as any)
+    vi.mocked(useGoogleAccounts).mockReturnValue({ data: [] } as any)
+    vi.mocked(useContacts).mockReturnValue({
+      data: { contacts: [], total: 0, page: 1, limit: 500 },
+    } as any)
+    vi.mocked(useContact).mockReturnValue({ data: undefined } as any)
+    vi.mocked(useImportCandidates).mockReturnValue({
+      data: { candidates: [], total: 0, page: 1, limit: 20, pages: 0 },
+      isLoading: false,
+      error: null,
+    } as any)
+  })
+
+  it('defaults to the People tab and shows the source filter', () => {
+    render(<ImportsPage />, { wrapper: createWrapper() })
+    expect(screen.getByRole('tab', { name: /People/ })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByText('Filter:')).toBeInTheDocument()
+  })
+
+  it('shows the amber badge with the conflict + orphan count (name candidates excluded)', () => {
+    vi.mocked(useInteractionsQueue).mockReturnValue({
+      data: [conflictItem, orphanItem],
+      isLoading: false,
+    } as any)
+    vi.mocked(useAnarlogTitleCandidates).mockReturnValue({
+      data: [nameCandidateGroup],
+      isLoading: false,
+    } as any)
+    render(<ImportsPage />, { wrapper: createWrapper() })
+    // Badge = 2 (two needs-attention rows); the name-candidate group is not counted.
+    expect(screen.getByLabelText('2 needing attention')).toHaveTextContent('2')
+  })
+
+  it('switches to the Interactions tab via ?tab=interactions and renders conflict + orphan cards', () => {
+    mockSearchParams = new URLSearchParams('tab=interactions')
+    vi.mocked(useInteractionsQueue).mockReturnValue({
+      data: [conflictItem, orphanItem],
+      isLoading: false,
+    } as any)
+    render(<ImportsPage />, { wrapper: createWrapper() })
+    expect(screen.getByRole('tab', { name: /Interactions/ })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    // Conflict candidate + orphan affordances are present; source filter is hidden.
+    expect(screen.getByText('Project sync')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Open Anarlog/ })).toBeInTheDocument()
+    expect(screen.queryByText('Filter:')).not.toBeInTheDocument()
+  })
+
+  it('shows the empty state on Interactions when the queue is empty', () => {
+    mockSearchParams = new URLSearchParams('tab=interactions')
+    render(<ImportsPage />, { wrapper: createWrapper() })
+    expect(screen.getByText('Nothing needs attention')).toBeInTheDocument()
+  })
+
+  it('normalizes the ?tab=needs-attention alias to interactions on mount', () => {
+    mockSearchParams = new URLSearchParams('tab=needs-attention')
+    render(<ImportsPage />, { wrapper: createWrapper() })
+    // Lands on Interactions...
+    expect(screen.getByRole('tab', { name: /Interactions/ })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    // ...and rewrites the URL to the canonical param.
+    expect(mockReplace).toHaveBeenCalledWith(expect.stringContaining('tab=interactions'))
+  })
+
+  it('renders the name-candidate section under the People tab', () => {
+    vi.mocked(useAnarlogTitleCandidates).mockReturnValue({
+      data: [nameCandidateGroup],
+      isLoading: false,
+    } as any)
+    render(<ImportsPage />, { wrapper: createWrapper() })
+    expect(screen.getByText('Names found in session titles')).toBeInTheDocument()
+    expect(screen.getByText('Lena')).toBeInTheDocument()
+  })
+
+  it('consumes ?session by highlighting the matching card and stripping the param', () => {
+    mockSearchParams = new URLSearchParams('tab=interactions&session=sess-orphan')
+    vi.mocked(useInteractionsQueue).mockReturnValue({
+      data: [conflictItem, orphanItem],
+      isLoading: false,
+    } as any)
+    render(<ImportsPage />, { wrapper: createWrapper() })
+    // The session param is consumed and stripped (replace called without session).
+    expect(mockReplace).toHaveBeenCalled()
+    const lastCall = mockReplace.mock.calls.at(-1)?.[0] as string
+    expect(lastCall).not.toContain('session=')
+    expect(lastCall).toContain('tab=interactions')
+  })
+
+  it('switching tabs updates ?tab and drops any session param', async () => {
+    const user = userEvent.setup()
+    render(<ImportsPage />, { wrapper: createWrapper() })
+    await user.click(screen.getByRole('tab', { name: /Interactions/ }))
+    expect(mockReplace).toHaveBeenCalledWith(expect.stringContaining('tab=interactions'))
+    const call = mockReplace.mock.calls.at(-1)?.[0] as string
+    expect(call).not.toContain('session=')
   })
 })

@@ -278,6 +278,12 @@ type Querier interface {
 	// read-only operator diagnostics; the production dedupe path uses
 	// InsertEventConsumerClaim's rows-inserted signal instead of polling.
 	ExistsEventConsumerClaim(ctx context.Context, arg ExistsEventConsumerClaimParams) (bool, error)
+	// Returns every live unmatched anarlog_title sibling row for a normalized
+	// token. ORDER BY id ASC so the lowest-id row is a stable representative
+	// for the reuse-existing-import-service resolve path. The predicate
+	// mirrors ListAnarlogTitleGroups (and the batch-mark queries) EXACTLY so
+	// the resolve service inspects the same row set it later marks.
+	FindAnarlogTitleSiblingsByToken(ctx context.Context, normalizedToken string) ([]*ExternalContact, error)
 	// Returns candidate calendar_event rows for the meeting_note.recorded
 	// linkage-detection algorithm. Filters out cancelled events. Backed by
 	// idx_calendar_event_start (partial index on start_time WHERE
@@ -663,6 +669,17 @@ type Querier interface {
 	// List all OAuth credentials
 	ListAllOAuthCredentials(ctx context.Context) ([]*OauthCredential, error)
 	ListAllUnmatchedExternalContacts(ctx context.Context, arg ListAllUnmatchedExternalContactsParams) ([]*ExternalContact, error)
+	// Groups unmatched anarlog_title weak candidates by normalized token,
+	// one group per token, for the People-tab discovery surface. The
+	// ranking signal is evidence_count = number of member external_contact
+	// rows for the token (one row per (token, session) pair via the
+	// deterministic source_id). The LEFT JOIN to meeting_note pulls the
+	// human-readable session titles for display only; a tombstoned session
+	// still counts via its member row even when its title is NULL. Both
+	// array_agg calls carry an explicit ORDER BY so element order is
+	// deterministic across runs (flake-free tests + stable UI). Casts to
+	// text[]/uuid[] keep the generated Go types concrete.
+	ListAnarlogTitleGroups(ctx context.Context) ([]*ListAnarlogTitleGroupsRow, error)
 	// Returns the deduplicated canonicalized value set for the given
 	// contact_method types, scoped to non-deleted contacts. Ordered
 	// alphabetically by value_normalized for deterministic daemon-side diff.
@@ -808,6 +825,26 @@ type Querier interface {
 	ListUpcomingEventsForContact(ctx context.Context, arg ListUpcomingEventsForContactParams) ([]*CalendarEvent, error)
 	// List upcoming events that have matched CRM contacts
 	ListUpcomingEventsWithContacts(ctx context.Context, arg ListUpcomingEventsWithContactsParams) ([]*CalendarEvent, error)
+	// Single-statement batch mark for the action=ignore ("Not a person")
+	// resolve path: every live unmatched sibling for the token flips to
+	// 'ignored'. No crm_contact_id is set. Same predicate as the other two
+	// batch marks.
+	MarkAnarlogTitleSiblingsIgnoredByToken(ctx context.Context, normalizedToken string) error
+	// Single-statement batch mark for the action=import resolve path: every
+	// live unmatched sibling for the token flips to 'imported' and points at
+	// the newly created CRM contact atomically. The WHERE predicate mirrors
+	// FindAnarlogTitleSiblingsByToken EXACTLY (incl. duplicate_of_id IS NULL)
+	// so the mark touches precisely the row set the service inspected. Returns
+	// the affected-row count so the service can detect a concurrent resolve
+	// (zero rows) and roll back the contact it just created.
+	MarkAnarlogTitleSiblingsImportedByToken(ctx context.Context, arg MarkAnarlogTitleSiblingsImportedByTokenParams) (int64, error)
+	// Single-statement batch mark for the action=link resolve path: every
+	// live unmatched sibling for the token flips to 'matched' and points at
+	// the linked CRM contact atomically. Same predicate as the imported and
+	// ignored variants. Returns the affected-row count so the service can
+	// surface a clean not-found when a concurrent resolve already claimed the
+	// group (zero rows).
+	MarkAnarlogTitleSiblingsMatchedByToken(ctx context.Context, arg MarkAnarlogTitleSiblingsMatchedByTokenParams) (int64, error)
 	// Mark an event as having updated last_contacted for its contacts
 	MarkLastContactedUpdated(ctx context.Context, id pgtype.UUID) error
 	// Non-tx variant. Mirror of MarkTelegramMessagesProcessed — used by the

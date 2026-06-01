@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import {
   RefreshCw,
   Mail,
@@ -15,15 +16,34 @@ import {
   CloudDownload,
   Calendar,
   Send,
+  MessageCircle,
 } from 'lucide-react'
 import { Navigation } from '@/components/layout/navigation'
 import { Button } from '@/components/ui/button'
 import { Pagination } from '@/components/ui/pagination'
 import { ImportLinkModal } from '@/components/imports/import-link-modal'
+import { SubTabs, type ImportsTab } from '@/components/imports/interactions/SubTabs'
+import { ConflictCard } from '@/components/imports/interactions/ConflictCard'
+import { OrphanCard } from '@/components/imports/interactions/OrphanCard'
+import { InteractionsEmptyState } from '@/components/imports/interactions/InteractionsEmptyState'
+import { NameCandidateRow } from '@/components/imports/interactions/NameCandidateRow'
+import { NameCandidateModal } from '@/components/imports/interactions/NameCandidateModal'
 import { useImportCandidates, useIgnoreCandidate, useTriggerSync } from '@/hooks/use-imports'
+import {
+  useInteractionsQueue,
+  useResolveLink,
+  useAnarlogTitleCandidates,
+  useResolveNameCandidate,
+} from '@/hooks/use-interactions-queue'
 import { useGoogleAccounts } from '@/hooks/use-google-accounts'
 import { getCandidateDisplayName } from '@/lib/candidate-display'
-import type { ImportCandidate, ImportCandidatesListParams } from '@/types/import'
+import type {
+  ImportCandidate,
+  ImportCandidatesListParams,
+  NeedsAttentionItem,
+  NeedsAttentionCandidate,
+  NameCandidateGroup,
+} from '@/types/import'
 
 // Constants
 const DEFAULT_PAGE_SIZE = 20
@@ -33,7 +53,16 @@ const SOURCE_FILTERS = [
   { value: 'gcal_attendee', label: 'Calendar' },
   { value: 'icloud_contacts', label: 'iCloud Contacts' },
   { value: 'telegram', label: 'Telegram' },
+  { value: 'anarlog_humans', label: 'Anarlog' },
 ] as const
+
+/** Normalize the inbound `?tab` param to a canonical tab. `needs-attention`
+ * is a transitional alias for `interactions`; everything else (including
+ * `people` and unknown values) resolves to People. */
+function normalizeTab(raw: string | null): ImportsTab {
+  if (raw === 'interactions' || raw === 'needs-attention') return 'interactions'
+  return 'people'
+}
 
 // Trusted domains for photo URLs (Google profile photos)
 const TRUSTED_PHOTO_DOMAINS = ['googleusercontent.com', 'google.com', 'gstatic.com']
@@ -254,6 +283,36 @@ function CandidateCard({
 }
 
 export default function ImportsPage() {
+  // useSearchParams requires a Suspense boundary in the App Router.
+  return (
+    <Suspense fallback={<ImportsPageFallback />}>
+      <ImportsPageInner />
+    </Suspense>
+  )
+}
+
+function ImportsPageFallback() {
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <Navigation />
+      <div className="max-w-5xl mx-auto py-6 sm:px-6 lg:px-8">
+        <div className="space-y-4">
+          {[...Array(5)].map((_, i) => (
+            <div key={i} className="h-24 bg-gray-200 rounded-lg animate-pulse"></div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ImportsPageInner() {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const tabParam = searchParams.get('tab')
+  const sessionParam = searchParams.get('session')
+  const activeTab = normalizeTab(tabParam)
+
   const [params, setParams] = useState<ImportCandidatesListParams>({
     page: 1,
     limit: DEFAULT_PAGE_SIZE,
@@ -272,11 +331,78 @@ export default function ImportsPage() {
     mode: 'import',
   })
   const [actionInProgress, setActionInProgress] = useState<string | null>(null)
+  // Name-candidate modal: index into the name-candidate queue, or null when closed.
+  const [nameCandidateModalIndex, setNameCandidateModalIndex] = useState<number | null>(null)
+  // Token whose ignore/resolve mutation is in flight (disables its row).
+  const [nameCandidateBusyToken, setNameCandidateBusyToken] = useState<string | null>(null)
+  // Meeting-note id whose resolve mutation is in flight (disables its card).
+  const [resolveBusyId, setResolveBusyId] = useState<string | null>(null)
 
   const { data, isLoading, error } = useImportCandidates(params)
   const { data: googleAccounts } = useGoogleAccounts()
   const ignoreMutation = useIgnoreCandidate()
   const syncMutation = useTriggerSync()
+
+  const { data: attentionItems, isLoading: attentionLoading } = useInteractionsQueue()
+  const { data: nameCandidateGroups, isLoading: nameCandidateLoading } = useAnarlogTitleCandidates()
+  const resolveLinkMutation = useResolveLink()
+  const resolveNameCandidateMutation = useResolveNameCandidate()
+
+  const items = useMemo(() => attentionItems ?? [], [attentionItems])
+  const groups = useMemo(() => nameCandidateGroups ?? [], [nameCandidateGroups])
+  // Amber badge = conflicts + orphans (every needs-attention row). Name
+  // candidates are deliberately NOT counted here.
+  const attentionCount = items.length
+
+  const setTab = useCallback(
+    (tab: ImportsTab) => {
+      const next = new URLSearchParams(searchParams.toString())
+      next.set('tab', tab)
+      // Switching tabs is a user action that should not re-trigger the
+      // session deep-link, so drop any lingering session param.
+      next.delete('session')
+      router.replace(`/imports?${next.toString()}`)
+    },
+    [router, searchParams]
+  )
+
+  // Highlighted card (briefly emphasized after a `?session` deep-link).
+  const [highlightedSession, setHighlightedSession] = useState<string | null>(null)
+  const cardRefs = useRef<Record<string, HTMLDivElement | null>>({})
+
+  // Normalize the transitional `needs-attention` alias to the canonical
+  // `interactions` value in the URL on mount so a bookmark/share captures
+  // the canonical param.
+  useEffect(() => {
+    if (tabParam === 'needs-attention') {
+      const next = new URLSearchParams(searchParams.toString())
+      next.set('tab', 'interactions')
+      router.replace(`/imports?${next.toString()}`)
+    }
+    // Only re-run when the raw param changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabParam])
+
+  // Consume the `?session=<uuid>` deep-link: scroll to + highlight the
+  // matching Interactions card, then strip the param so a refresh does not
+  // re-trigger it (mirrors the one-time-action query-param pattern).
+  useEffect(() => {
+    if (!sessionParam || activeTab !== 'interactions') return
+    if (attentionLoading) return
+    const match = items.find(i => i.anarlog_session_id === sessionParam)
+    if (match) {
+      setHighlightedSession(match.id)
+      cardRefs.current[match.id]?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      const fade = setTimeout(() => setHighlightedSession(null), 2500)
+      // Strip the consumed session param without touching the tab.
+      const next = new URLSearchParams(searchParams.toString())
+      next.delete('session')
+      router.replace(`/imports?${next.toString()}`)
+      return () => clearTimeout(fade)
+    }
+    // Re-run when the deep-link inputs or the loaded item set changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionParam, activeTab, attentionLoading, items])
 
   // Open the unified modal for import/link at the given index
   const openModal = (index: number, mode: 'import' | 'link' = 'import') => {
@@ -403,6 +529,70 @@ export default function ImportsPage() {
     }))
   }
 
+  // --- Interactions tab: conflict / orphan resolution ---
+
+  const handlePickCandidate = async (
+    item: NeedsAttentionItem,
+    candidate: NeedsAttentionCandidate
+  ) => {
+    setResolveBusyId(item.id)
+    try {
+      await resolveLinkMutation.mutateAsync({
+        id: item.id,
+        request: { action: 'link', kind: candidate.kind, id: candidate.id },
+      })
+      setNotification({ type: 'success', message: `${item.title || 'Session'} linked` })
+    } catch (err) {
+      setNotification({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Failed to resolve session',
+      })
+    } finally {
+      setResolveBusyId(null)
+    }
+  }
+
+  const handleLogImpromptu = async (item: NeedsAttentionItem) => {
+    setResolveBusyId(item.id)
+    try {
+      await resolveLinkMutation.mutateAsync({
+        id: item.id,
+        request: { action: 'none_of_these' },
+      })
+      setNotification({
+        type: 'success',
+        message: `${item.title || 'Session'} logged as impromptu`,
+      })
+    } catch (err) {
+      setNotification({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Failed to resolve session',
+      })
+    } finally {
+      setResolveBusyId(null)
+    }
+  }
+
+  // --- People tab: name-candidate token resolution ---
+
+  const handleIgnoreToken = async (group: NameCandidateGroup) => {
+    setNameCandidateBusyToken(group.normalized_token)
+    try {
+      await resolveNameCandidateMutation.mutateAsync({
+        normalized_token: group.normalized_token,
+        action: 'ignore',
+      })
+      setNotification({ type: 'success', message: `${group.token_display} ignored` })
+    } catch (err) {
+      setNotification({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Failed to ignore name',
+      })
+    } finally {
+      setNameCandidateBusyToken(null)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
       <Navigation />
@@ -437,25 +627,10 @@ export default function ImportsPage() {
           </div>
         </div>
 
-        {/* Source filter */}
-        <div className="mb-6 flex items-center gap-2">
-          <span className="text-sm text-gray-500">Filter:</span>
-          {SOURCE_FILTERS.map(filter => (
-            <button
-              key={filter.value}
-              onClick={() => handleSourceFilter(filter.value)}
-              className={`px-3 py-1.5 text-sm rounded-full transition-colors ${
-                (params.source || '') === filter.value
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-              }`}
-            >
-              {filter.label}
-            </button>
-          ))}
-        </div>
+        {/* Sub-tabs (People / Interactions) — driven by the ?tab param */}
+        <SubTabs active={activeTab} attentionCount={attentionCount} onChange={setTab} />
 
-        {/* Notification */}
+        {/* Notification (shared across tabs) */}
         {notification && (
           <Notification
             type={notification.type}
@@ -464,92 +639,137 @@ export default function ImportsPage() {
           />
         )}
 
-        {/* Error state */}
-        {error && (
-          <div className="bg-red-50 border border-red-200 rounded-md p-4 mb-6">
-            <div className="flex">
-              <AlertCircle className="h-5 w-5 text-red-400" />
-              <div className="ml-3">
-                <h3 className="text-sm font-medium text-red-800">
-                  Error loading import candidates
-                </h3>
-                <p className="mt-1 text-sm text-red-700">
-                  {error instanceof Error ? error.message : 'An unexpected error occurred'}
-                </p>
+        {activeTab === 'interactions' ? (
+          <InteractionsTab
+            items={items}
+            loading={attentionLoading}
+            busyId={resolveBusyId}
+            highlightedSession={highlightedSession}
+            cardRefs={cardRefs}
+            onPick={handlePickCandidate}
+            onLogImpromptu={handleLogImpromptu}
+          />
+        ) : (
+          <>
+            {/* Source filter (People tab only) */}
+            <div className="mb-6 flex items-center gap-2">
+              <span className="text-sm text-gray-500">Filter:</span>
+              {SOURCE_FILTERS.map(filter => (
+                <button
+                  key={filter.value}
+                  onClick={() => handleSourceFilter(filter.value)}
+                  className={`px-3 py-1.5 text-sm rounded-full transition-colors ${
+                    (params.source || '') === filter.value
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  {filter.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Error state */}
+            {error && (
+              <div className="bg-red-50 border border-red-200 rounded-md p-4 mb-6">
+                <div className="flex">
+                  <AlertCircle className="h-5 w-5 text-red-400" />
+                  <div className="ml-3">
+                    <h3 className="text-sm font-medium text-red-800">
+                      Error loading import candidates
+                    </h3>
+                    <p className="mt-1 text-sm text-red-700">
+                      {error instanceof Error ? error.message : 'An unexpected error occurred'}
+                    </p>
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
-        )}
+            )}
 
-        {/* Loading state */}
-        {isLoading && (
-          <div className="space-y-4">
-            {[...Array(5)].map((_, i) => (
-              <div key={i} className="h-24 bg-gray-200 rounded-lg animate-pulse"></div>
-            ))}
-          </div>
-        )}
+            {/* Loading state */}
+            {isLoading && (
+              <div className="space-y-4">
+                {[...Array(5)].map((_, i) => (
+                  <div key={i} className="h-24 bg-gray-200 rounded-lg animate-pulse"></div>
+                ))}
+              </div>
+            )}
 
-        {/* Empty state */}
-        {!isLoading && !error && data?.candidates.length === 0 && (
-          <div className="text-center py-12 bg-white rounded-lg border border-gray-200">
-            <CloudDownload className="mx-auto h-12 w-12 text-gray-400" />
-            <h3 className="mt-2 text-sm font-medium text-gray-900">No import candidates</h3>
-            <p className="mt-1 text-sm text-gray-500">
-              All contacts from Google have been imported or are already linked.
-            </p>
-            <div className="mt-6 flex justify-center space-x-2">
-              <Button
-                variant="outline"
-                onClick={handleSyncContacts}
-                loading={syncMutation.isPending}
-              >
-                <RefreshCw className="w-4 h-4 mr-2" />
-                Sync Contacts
-              </Button>
-              <Button
-                variant="outline"
-                onClick={handleSyncCalendar}
-                loading={syncMutation.isPending}
-              >
-                <Calendar className="w-4 h-4 mr-2" />
-                Sync Calendar
-              </Button>
-            </div>
-          </div>
-        )}
+            {/* Empty state */}
+            {!isLoading && !error && data?.candidates.length === 0 && (
+              <div className="text-center py-12 bg-white rounded-lg border border-gray-200">
+                <CloudDownload className="mx-auto h-12 w-12 text-gray-400" />
+                <h3 className="mt-2 text-sm font-medium text-gray-900">No import candidates</h3>
+                <p className="mt-1 text-sm text-gray-500">
+                  All contacts from Google have been imported or are already linked.
+                </p>
+                <div className="mt-6 flex justify-center space-x-2">
+                  <Button
+                    variant="outline"
+                    onClick={handleSyncContacts}
+                    loading={syncMutation.isPending}
+                  >
+                    <RefreshCw className="w-4 h-4 mr-2" />
+                    Sync Contacts
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={handleSyncCalendar}
+                    loading={syncMutation.isPending}
+                  >
+                    <Calendar className="w-4 h-4 mr-2" />
+                    Sync Calendar
+                  </Button>
+                </div>
+              </div>
+            )}
 
-        {/* Candidates list */}
-        {!isLoading && !error && data && data.candidates.length > 0 && (
-          <div className="space-y-3">
-            {data.candidates.map((candidate, index) => (
-              <CandidateCard
-                key={candidate.id}
-                candidate={candidate}
-                onImport={() => openModal(index, 'import')}
-                onLink={() => openModal(index, 'link')}
-                onIgnore={() => handleIgnore(candidate)}
-                importLoading={false}
-                ignoreLoading={actionInProgress === candidate.id && ignoreMutation.isPending}
-              />
-            ))}
-          </div>
-        )}
+            {/* Candidates list */}
+            {!isLoading && !error && data && data.candidates.length > 0 && (
+              <div className="space-y-3">
+                {data.candidates.map((candidate, index) => (
+                  <CandidateCard
+                    key={candidate.id}
+                    candidate={candidate}
+                    onImport={() => openModal(index, 'import')}
+                    onLink={() => openModal(index, 'link')}
+                    onIgnore={() => handleIgnore(candidate)}
+                    importLoading={false}
+                    ignoreLoading={actionInProgress === candidate.id && ignoreMutation.isPending}
+                  />
+                ))}
+              </div>
+            )}
 
-        {/* Pagination */}
-        {data && data.pages > 1 && (
-          <div className="mt-6">
-            <Pagination
-              page={data.page}
-              pages={data.pages}
-              total={data.total}
-              onPageChange={p => setParams(prev => ({ ...prev, page: p }))}
+            {/* Pagination */}
+            {data && data.pages > 1 && (
+              <div className="mt-6">
+                <Pagination
+                  page={data.page}
+                  pages={data.pages}
+                  total={data.total}
+                  onPageChange={p => setParams(prev => ({ ...prev, page: p }))}
+                />
+              </div>
+            )}
+
+            {/* Name candidates: names found in session titles */}
+            <NameCandidateSection
+              groups={groups}
+              loading={nameCandidateLoading}
+              busyToken={nameCandidateBusyToken}
+              onCreate={group =>
+                setNameCandidateModalIndex(
+                  groups.findIndex(g => g.normalized_token === group.normalized_token)
+                )
+              }
+              onIgnore={handleIgnoreToken}
             />
-          </div>
+          </>
         )}
       </div>
 
-      {/* Import/Link modal */}
+      {/* Import/Link modal (People-tab candidate queue) */}
       {modalState.open && data?.candidates && data.candidates.length > 0 && (
         <ImportLinkModal
           candidates={data.candidates}
@@ -560,6 +780,122 @@ export default function ImportsPage() {
           onError={message => setNotification({ type: 'error', message })}
         />
       )}
+
+      {/* Name-candidate modal (People-tab token groups) */}
+      {nameCandidateModalIndex !== null && groups.length > 0 && (
+        <NameCandidateModal
+          groups={groups}
+          initialIndex={Math.min(nameCandidateModalIndex, groups.length - 1)}
+          onClose={() => setNameCandidateModalIndex(null)}
+          onSuccess={message => setNotification({ type: 'success', message })}
+          onError={message => setNotification({ type: 'error', message })}
+        />
+      )}
+    </div>
+  )
+}
+
+// --- Interactions tab (conflict + orphan queue) ---
+
+function InteractionsTab({
+  items,
+  loading,
+  busyId,
+  highlightedSession,
+  cardRefs,
+  onPick,
+  onLogImpromptu,
+}: {
+  items: NeedsAttentionItem[]
+  loading: boolean
+  busyId: string | null
+  highlightedSession: string | null
+  cardRefs: React.MutableRefObject<Record<string, HTMLDivElement | null>>
+  onPick: (item: NeedsAttentionItem, candidate: NeedsAttentionCandidate) => void
+  onLogImpromptu: (item: NeedsAttentionItem) => void
+}) {
+  if (loading) {
+    return (
+      <div className="space-y-4">
+        {[...Array(3)].map((_, i) => (
+          <div key={i} className="h-32 bg-gray-200 rounded-lg animate-pulse"></div>
+        ))}
+      </div>
+    )
+  }
+
+  if (items.length === 0) {
+    return <InteractionsEmptyState />
+  }
+
+  return (
+    <div className="space-y-4">
+      {items.map(item => {
+        const isOrphan = (item.candidates ?? []).length === 0
+        return (
+          <div
+            key={item.id}
+            ref={el => {
+              cardRefs.current[item.id] = el
+            }}
+            className={`rounded-lg transition-shadow ${
+              highlightedSession === item.id ? 'ring-2 ring-amber-400 ring-offset-2' : ''
+            }`}
+          >
+            {isOrphan ? (
+              <OrphanCard item={item} busy={busyId === item.id} onLogImpromptu={onLogImpromptu} />
+            ) : (
+              <ConflictCard
+                item={item}
+                busy={busyId === item.id}
+                onPick={onPick}
+                onLogImpromptu={onLogImpromptu}
+              />
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// --- People tab: name-candidate section (names found in session titles) ---
+
+function NameCandidateSection({
+  groups,
+  loading,
+  busyToken,
+  onCreate,
+  onIgnore,
+}: {
+  groups: NameCandidateGroup[]
+  loading: boolean
+  busyToken: string | null
+  onCreate: (group: NameCandidateGroup) => void
+  onIgnore: (group: NameCandidateGroup) => void
+}) {
+  // Hide the section entirely when there are no name candidates (keeps the
+  // People tab quiet for the common empty case).
+  if (loading || groups.length === 0) return null
+
+  return (
+    <div className="mt-10">
+      <div className="mb-3 flex items-center gap-2">
+        <MessageCircle className="h-4 w-4 text-gray-400" />
+        <h3 className="text-sm font-semibold text-gray-900">Names found in session titles</h3>
+        <span className="text-xs text-gray-400">low confidence · from Anarlog</span>
+      </div>
+      <div className="space-y-2.5">
+        {groups.map(group => (
+          <NameCandidateRow
+            key={group.normalized_token}
+            group={group}
+            busy={busyToken === group.normalized_token}
+            onCreate={onCreate}
+            onIgnore={onIgnore}
+          />
+        ))}
+      </div>
     </div>
   )
 }

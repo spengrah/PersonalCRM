@@ -53,7 +53,7 @@ vi.mock('@/components/providers/rematch-jobs-provider', () => ({
 import { importsApi } from '@/lib/imports-api'
 import { invalidateFor } from '@/lib/query-invalidation'
 
-const mockedImportsApi = importsApi as {
+const mockedImportsApi = importsApi as unknown as {
   getCandidates: ReturnType<typeof vi.fn>
   getCandidate: ReturnType<typeof vi.fn>
   importCandidate: ReturnType<typeof vi.fn>

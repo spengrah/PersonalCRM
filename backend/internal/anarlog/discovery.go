@@ -103,6 +103,14 @@ func (w *DiscoveryWriter) UpsertTitleCandidateTx(
 	return nil
 }
 
+// ComputeAnarlogTitleSourceIDForTest exposes the deterministic
+// source_id recipe to integration tests so they can read back a seeded
+// anarlog_title row by (token, session). TEST ONLY — production code
+// uses the unexported computeAnarlogTitleSourceID via UpsertTitleCandidateTx.
+func ComputeAnarlogTitleSourceIDForTest(normalizedToken string, sessionUUID uuid.UUID) string {
+	return computeAnarlogTitleSourceID(normalizedToken, sessionUUID)
+}
+
 // computeAnarlogTitleSourceID returns the lowercase-hex SHA-256 of
 // (normalizedToken || sessionUUID.String()) per the spec recipe.
 // `||` is byte concatenation with NO separator (faithful to the spec

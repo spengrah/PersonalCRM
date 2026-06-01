@@ -7,6 +7,12 @@ import type {
   ImportContactResponse,
   LinkContactRequest,
   LinkContactResponse,
+  NeedsAttentionItem,
+  ResolveLinkRequest,
+  ResolveLinkResponse,
+  NameCandidateGroup,
+  ResolveNameCandidateRequest,
+  ResolveNameCandidateResponse,
 } from '@/types/import'
 
 export const importsApi = {
@@ -69,5 +75,34 @@ export const importsApi = {
     return apiClient.post<void>(`/api/v1/sync/${source}/trigger`, {
       account_id: accountId,
     })
+  },
+
+  // Interactions tab: conflict + orphan queue. The UI wants all hosts, so
+  // no host_id is passed.
+  getNeedsAttention: async (): Promise<NeedsAttentionItem[]> => {
+    const data = await apiClient.get<NeedsAttentionItem[]>('/api/v1/meeting-notes/needs-attention')
+    return data || []
+  },
+
+  // Resolve a conflict/orphan: link to a candidate (This one) or log as
+  // impromptu (None of these / Log as impromptu).
+  resolveLink: async (id: string, request: ResolveLinkRequest): Promise<ResolveLinkResponse> => {
+    return apiClient.post<ResolveLinkResponse>(`/api/v1/meeting-notes/${id}/resolve-link`, request)
+  },
+
+  // People tab: grouped anarlog_title name candidates.
+  getAnarlogTitleGroups: async (): Promise<NameCandidateGroup[]> => {
+    const data = await apiClient.get<NameCandidateGroup[]>('/api/v1/imports/anarlog-title')
+    return data || []
+  },
+
+  // Resolve a whole anarlog_title token group: import / link / ignore.
+  resolveNameCandidate: async (
+    request: ResolveNameCandidateRequest
+  ): Promise<ResolveNameCandidateResponse> => {
+    return apiClient.post<ResolveNameCandidateResponse>(
+      '/api/v1/imports/anarlog-title/resolve',
+      request
+    )
   },
 }

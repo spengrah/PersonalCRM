@@ -1,0 +1,304 @@
+// Package service — AnarlogDiscoveryService owns the People-tab
+// "discovery" surface for anarlog_title weak candidates: the grouped
+// list of normalized-token groups and the token-group resolve flow
+// (import / link / ignore). It reuses the existing contact create/update
+// service methods for the representative row, then atomically fans the
+// outcome out to every sibling row via single-statement batch marks.
+package service
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+
+	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/repository"
+
+	"github.com/google/uuid"
+)
+
+// ErrTokenGroupNotFound is returned by ResolveToken when no live
+// unmatched sibling rows exist for the supplied normalized token —
+// either the token never existed or the group was already resolved.
+// Handler maps to 404.
+var ErrTokenGroupNotFound = errors.New("anarlog_title token group not found")
+
+// ErrDiscoveryContactMissing is returned by ResolveToken for the link
+// action when the supplied crm_contact_id does not resolve to a live
+// contact. Handler maps to 404 (FK-safety: surface a clean not-found
+// rather than a 500 from the downstream FK violation).
+var ErrDiscoveryContactMissing = errors.New("link target contact not found")
+
+// discoveryGroupRepo is the narrow external_contact surface the
+// discovery service needs. Concrete is *repository.ExternalContactRepository.
+type discoveryGroupRepo interface {
+	ListAnarlogTitleGroups(ctx context.Context) ([]repository.AnarlogTitleGroup, error)
+	FindAnarlogTitleSiblingsByToken(ctx context.Context, normalizedToken string) ([]repository.ExternalContact, error)
+	MarkAnarlogTitleSiblingsImportedByToken(ctx context.Context, normalizedToken string, contactID uuid.UUID) (int64, error)
+	MarkAnarlogTitleSiblingsMatchedByToken(ctx context.Context, normalizedToken string, contactID uuid.UUID) (int64, error)
+	MarkAnarlogTitleSiblingsIgnoredByToken(ctx context.Context, normalizedToken string) error
+}
+
+// discoveryContactWriter is the narrow contact surface the discovery
+// service needs. Concrete is *ContactService. CreateContact and
+// UpdateContact are both error-returning and cadence-sole-writer-safe
+// (UpdateContact routes cadence through CadenceUpdater.ApplyContactByOverride);
+// GetContact backs the link FK check and the full-profile preserve read.
+type discoveryContactWriter interface {
+	GetContact(ctx context.Context, id uuid.UUID) (*repository.Contact, error)
+	CreateContact(ctx context.Context, req repository.CreateContactRequest, methods []ContactMethodInput) (*repository.Contact, uuid.UUID, error)
+	UpdateContact(ctx context.Context, id uuid.UUID, req repository.UpdateContactRequest, methods []ContactMethodInput, replaceMethods bool) (*repository.Contact, uuid.UUID, error)
+	// DeleteContact backs orphan cleanup: when the import mark touches zero
+	// siblings (a concurrent resolve already claimed the group), the contact
+	// just created is soft-deleted so the race never strands a duplicate.
+	DeleteContact(ctx context.Context, id uuid.UUID) error
+}
+
+// AnarlogDiscoveryService implements the discovery list + token-group
+// resolve flow.
+type AnarlogDiscoveryService struct {
+	externalRepo discoveryGroupRepo
+	contacts     discoveryContactWriter
+}
+
+// NewAnarlogDiscoveryService constructs the service bound to its narrow
+// dependencies.
+func NewAnarlogDiscoveryService(externalRepo discoveryGroupRepo, contacts discoveryContactWriter) *AnarlogDiscoveryService {
+	return &AnarlogDiscoveryService{externalRepo: externalRepo, contacts: contacts}
+}
+
+// DiscoveryGroup is the projected view of one normalized-token group
+// returned to the handler. EvidenceCount is the authoritative ranking
+// signal (member-row count); SessionTitles are display-only.
+type DiscoveryGroup struct {
+	NormalizedToken string   `json:"normalized_token"`
+	TokenDisplay    string   `json:"token_display"`
+	EvidenceCount   int64    `json:"evidence_count"`
+	SessionTitles   []string `json:"session_titles"`
+}
+
+// ListGroups returns the discovery groups ranked by evidence count.
+func (s *AnarlogDiscoveryService) ListGroups(ctx context.Context) ([]DiscoveryGroup, error) {
+	if s.externalRepo == nil {
+		return nil, errors.New("anarlog discovery service not configured")
+	}
+	groups, err := s.externalRepo.ListAnarlogTitleGroups(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list anarlog_title groups: %w", err)
+	}
+	out := make([]DiscoveryGroup, 0, len(groups))
+	for _, g := range groups {
+		titles := g.SessionTitles
+		if titles == nil {
+			titles = []string{}
+		}
+		out = append(out, DiscoveryGroup{
+			NormalizedToken: g.NormalizedToken,
+			TokenDisplay:    g.TokenDisplay,
+			EvidenceCount:   g.EvidenceCount,
+			SessionTitles:   titles,
+		})
+	}
+	return out, nil
+}
+
+// Discovery resolve actions.
+const (
+	DiscoveryActionImport = "import"
+	DiscoveryActionLink   = "link"
+	DiscoveryActionIgnore = "ignore"
+)
+
+// ResolveTokenRequest captures a validated token-group resolve choice.
+// The handler is responsible for validating Action (oneof) and Cadence
+// (oneof) before calling.
+type ResolveTokenRequest struct {
+	NormalizedToken string
+	Action          string
+	// Name overrides the contact name for import (defaults to the
+	// title-cased token); for link, when non-nil it updates the linked
+	// contact's name.
+	Name *string
+	// Cadence, when non-nil, sets the cadence on the created (import) or
+	// linked (link) contact. Validated oneof at the handler.
+	Cadence *string
+	// CRMContactID is required for the link action.
+	CRMContactID *uuid.UUID
+}
+
+// ResolveTokenResult is returned by ResolveToken. ContactID is the
+// created contact id (import) or the linked crm_contact_id (link), and
+// nil for ignore. The handler serializes it so the frontend can
+// invalidate the affected contact's detail key.
+type ResolveTokenResult struct {
+	Action    string
+	ContactID *uuid.UUID
+}
+
+// ResolveToken applies the import/link/ignore flow to an entire
+// anarlog_title token group. The sibling set is re-derived server-side
+// from the token; a client-supplied id list is never trusted. The
+// representative (lowest-id) row anchors the reuse-existing-import-service
+// contract, then the outcome fans out atomically to every sibling via a
+// single-statement batch mark.
+func (s *AnarlogDiscoveryService) ResolveToken(ctx context.Context, req ResolveTokenRequest) (*ResolveTokenResult, error) {
+	if s.externalRepo == nil || s.contacts == nil {
+		return nil, errors.New("anarlog discovery service not configured")
+	}
+
+	siblings, err := s.externalRepo.FindAnarlogTitleSiblingsByToken(ctx, req.NormalizedToken)
+	if err != nil {
+		return nil, fmt.Errorf("find token siblings: %w", err)
+	}
+	if len(siblings) == 0 {
+		return nil, ErrTokenGroupNotFound
+	}
+
+	switch req.Action {
+	case DiscoveryActionIgnore:
+		if err := s.externalRepo.MarkAnarlogTitleSiblingsIgnoredByToken(ctx, req.NormalizedToken); err != nil {
+			return nil, fmt.Errorf("mark siblings ignored: %w", err)
+		}
+		return &ResolveTokenResult{Action: DiscoveryActionIgnore}, nil
+
+	case DiscoveryActionImport:
+		return s.resolveImport(ctx, req, &siblings[0])
+
+	case DiscoveryActionLink:
+		return s.resolveLink(ctx, req)
+
+	default:
+		return nil, fmt.Errorf("unknown discovery action %q", req.Action)
+	}
+}
+
+// resolveImport creates a CRM contact via the existing import path, then
+// batch-marks every sibling 'imported'. The representative carries the
+// title-cased token as the default name.
+func (s *AnarlogDiscoveryService) resolveImport(ctx context.Context, req ResolveTokenRequest, representative *repository.ExternalContact) (*ResolveTokenResult, error) {
+	name := discoveryDefaultName(req.Name, req.NormalizedToken, representative)
+	createReq := repository.CreateContactRequest{
+		FullName: name,
+		Cadence:  req.Cadence,
+	}
+	contact, _, err := s.contacts.CreateContact(ctx, createReq, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create contact for token group: %w", err)
+	}
+	marked, markErr := s.externalRepo.MarkAnarlogTitleSiblingsImportedByToken(ctx, req.NormalizedToken, contact.ID)
+	if markErr != nil {
+		// The mark failed after the contact was created. Roll back the new
+		// contact so a mid-flow DB error never strands an orphan.
+		s.cleanupOrphanContact(ctx, contact.ID)
+		return nil, fmt.Errorf("mark siblings imported: %w", markErr)
+	}
+	if marked == 0 {
+		// A concurrent resolve claimed the group between our read and our
+		// mark. The contact we just created has no siblings pointing at it;
+		// soft-delete it and report the group as already gone.
+		s.cleanupOrphanContact(ctx, contact.ID)
+		return nil, ErrTokenGroupNotFound
+	}
+	id := contact.ID
+	return &ResolveTokenResult{Action: DiscoveryActionImport, ContactID: &id}, nil
+}
+
+// cleanupOrphanContact best-effort soft-deletes a contact that was created
+// for an import that could not claim its sibling group. A cleanup failure is
+// not surfaced to the caller (the original outcome already determines the
+// response); the stray contact is recoverable by the user.
+func (s *AnarlogDiscoveryService) cleanupOrphanContact(ctx context.Context, id uuid.UUID) {
+	_ = s.contacts.DeleteContact(ctx, id)
+}
+
+// resolveLink claims the token group by batch-marking every sibling
+// 'matched', then applies optional name/cadence to the existing contact.
+// The claim runs FIRST so a concurrent resolve that already took the group
+// (zero rows marked) is rejected BEFORE any contact edit — a lost race never
+// leaves a stray profile change on the target. When neither name nor cadence
+// is supplied the contact write is skipped entirely (the existence check
+// still runs for FK safety).
+func (s *AnarlogDiscoveryService) resolveLink(ctx context.Context, req ResolveTokenRequest) (*ResolveTokenResult, error) {
+	if req.CRMContactID == nil {
+		return nil, errors.New("link action requires crm_contact_id")
+	}
+	contactID := *req.CRMContactID
+
+	existing, err := s.contacts.GetContact(ctx, contactID)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			return nil, ErrDiscoveryContactMissing
+		}
+		return nil, fmt.Errorf("read link target contact: %w", err)
+	}
+
+	// Claim the group first. Zero rows means a concurrent resolve already
+	// took it; reject before touching the contact so the lost race applies
+	// no edit.
+	marked, err := s.externalRepo.MarkAnarlogTitleSiblingsMatchedByToken(ctx, req.NormalizedToken, contactID)
+	if err != nil {
+		return nil, fmt.Errorf("mark siblings matched: %w", err)
+	}
+	if marked == 0 {
+		return nil, ErrTokenGroupNotFound
+	}
+
+	// Apply name/cadence only when supplied. UpdateContact is a
+	// full-profile overwrite, so build a preserved request from the
+	// existing contact and overlay only the supplied fields. When
+	// neither is supplied, skip the write entirely.
+	if req.Name != nil || req.Cadence != nil {
+		updateReq := repository.UpdateContactRequest{
+			FullName:     existing.FullName,
+			Location:     existing.Location,
+			Birthday:     existing.Birthday,
+			HowMet:       existing.HowMet,
+			Cadence:      existing.Cadence,
+			ProfilePhoto: existing.ProfilePhoto,
+		}
+		if req.Name != nil {
+			updateReq.FullName = *req.Name
+		}
+		if req.Cadence != nil {
+			updateReq.Cadence = req.Cadence
+		}
+		if _, _, uErr := s.contacts.UpdateContact(ctx, contactID, updateReq, nil, false); uErr != nil {
+			return nil, fmt.Errorf("update link target contact: %w", uErr)
+		}
+	}
+
+	id := contactID
+	return &ResolveTokenResult{Action: DiscoveryActionLink, ContactID: &id}, nil
+}
+
+// discoveryDefaultName picks the contact name for an import: the
+// caller's override when supplied and non-blank, else the
+// representative's display_name (already title-cased by the discovery
+// writer), else the title-cased normalized token as a last resort.
+func discoveryDefaultName(override *string, normalizedToken string, representative *repository.ExternalContact) string {
+	if override != nil && strings.TrimSpace(*override) != "" {
+		return strings.TrimSpace(*override)
+	}
+	if representative != nil && representative.DisplayName != nil && strings.TrimSpace(*representative.DisplayName) != "" {
+		return strings.TrimSpace(*representative.DisplayName)
+	}
+	return titleCaseToken(normalizedToken)
+}
+
+// titleCaseToken upper-cases the first byte of an ASCII-lowercased
+// token. Mirrors the discovery writer's asciiTitleCase so a fallback
+// name matches the on-disk display token shape.
+func titleCaseToken(s string) string {
+	if s == "" {
+		return s
+	}
+	lower := strings.ToLower(s)
+	first := lower[0]
+	if first >= 'a' && first <= 'z' {
+		b := []byte(lower)
+		b[0] = first - 'a' + 'A'
+		return string(b)
+	}
+	return lower
+}

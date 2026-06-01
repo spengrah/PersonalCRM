@@ -51,7 +51,14 @@ export interface SeedExternalContactInput {
   display_name?: string
   first_name?: string
   last_name?: string
-  source?: 'test' | 'telegram' | 'gcontacts' | 'gcal_attendee'
+  source?:
+    | 'test'
+    | 'telegram'
+    | 'gcontacts'
+    | 'gcal_attendee'
+    | 'icloud_contacts'
+    | 'anarlog_humans'
+    | 'anarlog_title'
   emails?: string[]
   phones?: string[]
   organization?: string
@@ -110,8 +117,38 @@ export interface SeedCalendarEventsResponse {
   ids: string[]
 }
 
+export interface SeedMacHostRequest {
+  hostname?: string
+  daemon_version?: string
+  protocol_version?: number
+  permissions?: Record<string, unknown>
+  source_health?: Record<string, unknown>
+}
+
+export interface SeedMacHostResponse {
+  host_id: string
+}
+
+export interface SeedMeetingNoteInput {
+  anarlog_session_id: string
+  title?: string
+  summary?: string
+}
+
+export interface SeedMeetingNotesRequest {
+  host_id: string
+  notes: SeedMeetingNoteInput[]
+}
+
+export interface SeedMeetingNotesResponse {
+  created: number
+  ids: string[]
+}
+
 export interface CleanupRequest {
   prefix: string
+  // When set, also hard-deletes the host's seeded meeting_note rows.
+  host_id?: string
 }
 
 export interface CleanupResponse {
@@ -135,6 +172,9 @@ export interface TriggerErrorRequest {
  */
 export class TestAPI {
   private _prefix: string
+  // The most recently seeded mac_host, so cleanup() can scope meeting_note
+  // deletion to this test's host without the caller threading the id.
+  private _seededHostId: string | null = null
 
   constructor(
     private request: APIRequestContext,
@@ -251,6 +291,68 @@ export class TestAPI {
   }
 
   /**
+   * Deletes every existing mac_host so the singleton unique index is free
+   * before seeding a fresh host. The mac_host table allows only one host
+   * at a time, so paired-host tests must run serially and reset first.
+   */
+  async resetMacHosts(): Promise<void> {
+    const resp = await this.request.get(`${API_BASE_URL}/api/v1/host`, { headers: API_HEADERS })
+    if (!resp.ok()) return
+    const json = (await resp.json()) as { data?: Array<{ id: string }> }
+    for (const host of json.data ?? []) {
+      await this.request.delete(`${API_BASE_URL}/api/v1/host/${host.id}`, { headers: API_HEADERS })
+    }
+  }
+
+  /**
+   * Seeds a paired mac_host row and remembers its id so cleanup() can scope
+   * meeting_note deletion to it. Returns the host id.
+   */
+  async seedMacHost(req: SeedMacHostRequest = {}): Promise<string> {
+    const response = await this.request.post(`${API_BASE_URL}/api/v1/test/seed/mac-hosts`, {
+      headers: API_HEADERS,
+      data: {
+        hostname: req.hostname ?? `${this.prefix}-host`,
+        protocol_version: req.protocol_version ?? 1,
+        ...req,
+      },
+    })
+
+    if (!response.ok()) {
+      const body = await response.text()
+      throw new Error(`Failed to seed mac host: ${response.status()} ${body}`)
+    }
+
+    const data = await response.json()
+    const hostId = (data.data as SeedMacHostResponse).host_id
+    this._seededHostId = hostId
+    return hostId
+  }
+
+  /**
+   * Seeds orphan meeting_note rows against a paired host so the Imports
+   * Interactions tab has rows to render. Caller supplies the session UUIDs
+   * (used by the ?session deep-link). Cleanup is by host id.
+   */
+  async seedMeetingNotes(
+    hostId: string,
+    notes: SeedMeetingNoteInput[]
+  ): Promise<SeedMeetingNotesResponse> {
+    const response = await this.request.post(`${API_BASE_URL}/api/v1/test/seed/meeting-notes`, {
+      headers: API_HEADERS,
+      data: { host_id: hostId, notes } satisfies SeedMeetingNotesRequest,
+    })
+
+    if (!response.ok()) {
+      const body = await response.text()
+      throw new Error(`Failed to seed meeting notes: ${response.status()} ${body}`)
+    }
+
+    const data = await response.json()
+    return data.data as SeedMeetingNotesResponse
+  }
+
+  /**
    * Seeds a note (notepad) for a contact.
    * Notes are stored in a separate note table with category='notepad'.
    * Useful for testing notes display and editing on contact pages.
@@ -276,6 +378,7 @@ export class TestAPI {
       headers: API_HEADERS,
       data: {
         prefix: this.prefix,
+        ...(this._seededHostId ? { host_id: this._seededHostId } : {}),
       } satisfies CleanupRequest,
     })
 

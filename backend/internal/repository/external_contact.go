@@ -112,6 +112,23 @@ type UpsertTelegramDiscoveryCandidateRequest struct {
 	SyncedAt    *time.Time     `json:"synced_at,omitempty"`
 }
 
+// AnarlogTitleGroup is one normalized-token group of anarlog_title weak
+// candidates surfaced on the People-tab discovery section. EvidenceCount
+// is the number of member external_contact rows for the token (the
+// authoritative ranking signal); SessionTitles are the distinct
+// human-readable session titles joined from meeting_note (display only —
+// may be shorter than EvidenceCount when a source session was
+// tombstoned). MemberIDs is for diagnostics/tests; the resolve path
+// re-derives the sibling set server-side from the token and never trusts
+// a client-supplied id list.
+type AnarlogTitleGroup struct {
+	NormalizedToken string      `json:"normalized_token"`
+	TokenDisplay    string      `json:"token_display"`
+	EvidenceCount   int64       `json:"evidence_count"`
+	MemberIDs       []uuid.UUID `json:"member_ids"`
+	SessionTitles   []string    `json:"session_titles"`
+}
+
 // UpsertExternalContactRequest holds parameters for creating/updating an external contact
 type UpsertExternalContactRequest struct {
 	Source       string         `json:"source"`
@@ -743,4 +760,97 @@ func (r *ExternalContactRepository) CountByHostAndSource(
 func (r *ExternalContactRepository) DeleteBySourceForTest(ctx context.Context, source string) error {
 	_, err := r.queries.DeleteExternalContactsBySourceForTest(ctx, source)
 	return err
+}
+
+// ListAnarlogTitleGroups returns the normalized-token groups of
+// unmatched anarlog_title weak candidates for the discovery surface,
+// ranked by member-row evidence count. Each group carries its distinct
+// session titles (joined from meeting_note) for display.
+func (r *ExternalContactRepository) ListAnarlogTitleGroups(ctx context.Context) ([]AnarlogTitleGroup, error) {
+	rows, err := r.queries.ListAnarlogTitleGroups(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list anarlog_title groups: %w", err)
+	}
+	out := make([]AnarlogTitleGroup, 0, len(rows))
+	for _, row := range rows {
+		memberIDs := make([]uuid.UUID, 0, len(row.MemberIds))
+		for _, mid := range row.MemberIds {
+			if mid.Valid {
+				memberIDs = append(memberIDs, uuid.UUID(mid.Bytes))
+			}
+		}
+		titles := row.SessionTitles
+		if titles == nil {
+			titles = []string{}
+		}
+		out = append(out, AnarlogTitleGroup{
+			NormalizedToken: row.NormalizedToken,
+			TokenDisplay:    row.TokenDisplay,
+			EvidenceCount:   row.EvidenceCount,
+			MemberIDs:       memberIDs,
+			SessionTitles:   titles,
+		})
+	}
+	return out, nil
+}
+
+// FindAnarlogTitleSiblingsByToken returns every live unmatched
+// anarlog_title sibling row for a normalized token, ordered by id ASC so
+// the lowest-id row is a deterministic representative for the resolve
+// path. An empty slice means the token group is already resolved (or
+// never existed) — the resolve service maps that to a 404.
+func (r *ExternalContactRepository) FindAnarlogTitleSiblingsByToken(ctx context.Context, normalizedToken string) ([]ExternalContact, error) {
+	dbContacts, err := r.queries.FindAnarlogTitleSiblingsByToken(ctx, normalizedToken)
+	if err != nil {
+		return nil, fmt.Errorf("find anarlog_title siblings: %w", err)
+	}
+	contacts := make([]ExternalContact, 0, len(dbContacts))
+	for _, dbContact := range dbContacts {
+		contact, convErr := convertDbExternalContact(dbContact)
+		if convErr != nil {
+			continue
+		}
+		contacts = append(contacts, *contact)
+	}
+	return contacts, nil
+}
+
+// MarkAnarlogTitleSiblingsImportedByToken flips every live unmatched
+// sibling for the token to 'imported' and points it at the newly created
+// CRM contact, in a single atomic statement. Returns the number of rows
+// marked so the caller can detect a concurrent resolve (zero rows).
+func (r *ExternalContactRepository) MarkAnarlogTitleSiblingsImportedByToken(ctx context.Context, normalizedToken string, contactID uuid.UUID) (int64, error) {
+	rows, err := r.queries.MarkAnarlogTitleSiblingsImportedByToken(ctx, db.MarkAnarlogTitleSiblingsImportedByTokenParams{
+		CrmContactID:    uuidToPgUUID(contactID),
+		NormalizedToken: normalizedToken,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("mark anarlog_title siblings imported: %w", err)
+	}
+	return rows, nil
+}
+
+// MarkAnarlogTitleSiblingsMatchedByToken flips every live unmatched
+// sibling for the token to 'matched' and points it at the linked CRM
+// contact, in a single atomic statement. Returns the number of rows
+// marked so the caller can detect a concurrent resolve (zero rows).
+func (r *ExternalContactRepository) MarkAnarlogTitleSiblingsMatchedByToken(ctx context.Context, normalizedToken string, contactID uuid.UUID) (int64, error) {
+	rows, err := r.queries.MarkAnarlogTitleSiblingsMatchedByToken(ctx, db.MarkAnarlogTitleSiblingsMatchedByTokenParams{
+		CrmContactID:    uuidToPgUUID(contactID),
+		NormalizedToken: normalizedToken,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("mark anarlog_title siblings matched: %w", err)
+	}
+	return rows, nil
+}
+
+// MarkAnarlogTitleSiblingsIgnoredByToken flips every live unmatched
+// sibling for the token to 'ignored' ("Not a person"), in a single
+// atomic statement. No crm_contact_id is set.
+func (r *ExternalContactRepository) MarkAnarlogTitleSiblingsIgnoredByToken(ctx context.Context, normalizedToken string) error {
+	if err := r.queries.MarkAnarlogTitleSiblingsIgnoredByToken(ctx, normalizedToken); err != nil {
+		return fmt.Errorf("mark anarlog_title siblings ignored: %w", err)
+	}
+	return nil
 }

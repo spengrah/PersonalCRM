@@ -209,6 +209,99 @@ UPDATE external_contact SET
 WHERE id = $1
   AND deleted_at IS NULL;
 
+-- name: ListAnarlogTitleGroups :many
+-- Groups unmatched anarlog_title weak candidates by normalized token,
+-- one group per token, for the People-tab discovery surface. The
+-- ranking signal is evidence_count = number of member external_contact
+-- rows for the token (one row per (token, session) pair via the
+-- deterministic source_id). The LEFT JOIN to meeting_note pulls the
+-- human-readable session titles for display only; a tombstoned session
+-- still counts via its member row even when its title is NULL. Both
+-- array_agg calls carry an explicit ORDER BY so element order is
+-- deterministic across runs (flake-free tests + stable UI). Casts to
+-- text[]/uuid[] keep the generated Go types concrete.
+SELECT
+    (ec.metadata->>'token_normalized')::text                 AS normalized_token,
+    MAX(ec.metadata->>'token_display')::text                 AS token_display,
+    COUNT(DISTINCT ec.id)                                    AS evidence_count,
+    array_agg(DISTINCT ec.id ORDER BY ec.id)::uuid[]         AS member_ids,
+    array_remove(
+        array_agg(DISTINCT mn.title ORDER BY mn.title), NULL
+    )::text[]                                                AS session_titles
+FROM external_contact ec
+LEFT JOIN meeting_note mn
+    ON mn.anarlog_session_id = (ec.metadata->>'session_uuid')::uuid
+    AND mn.deleted_at IS NULL
+WHERE ec.source = 'anarlog_title'
+    AND ec.match_status = 'unmatched'
+    AND ec.duplicate_of_id IS NULL
+    AND ec.deleted_at IS NULL
+GROUP BY ec.metadata->>'token_normalized'
+ORDER BY evidence_count DESC, normalized_token ASC;
+
+-- name: FindAnarlogTitleSiblingsByToken :many
+-- Returns every live unmatched anarlog_title sibling row for a normalized
+-- token. ORDER BY id ASC so the lowest-id row is a stable representative
+-- for the reuse-existing-import-service resolve path. The predicate
+-- mirrors ListAnarlogTitleGroups (and the batch-mark queries) EXACTLY so
+-- the resolve service inspects the same row set it later marks.
+SELECT * FROM external_contact
+WHERE source = 'anarlog_title'
+    AND metadata->>'token_normalized' = sqlc.arg('normalized_token')::text
+    AND match_status = 'unmatched'
+    AND duplicate_of_id IS NULL
+    AND deleted_at IS NULL
+ORDER BY id ASC;
+
+-- name: MarkAnarlogTitleSiblingsImportedByToken :execrows
+-- Single-statement batch mark for the action=import resolve path: every
+-- live unmatched sibling for the token flips to 'imported' and points at
+-- the newly created CRM contact atomically. The WHERE predicate mirrors
+-- FindAnarlogTitleSiblingsByToken EXACTLY (incl. duplicate_of_id IS NULL)
+-- so the mark touches precisely the row set the service inspected. Returns
+-- the affected-row count so the service can detect a concurrent resolve
+-- (zero rows) and roll back the contact it just created.
+UPDATE external_contact SET
+    crm_contact_id = sqlc.arg('crm_contact_id'),
+    match_status = 'imported',
+    updated_at = NOW()
+WHERE source = 'anarlog_title'
+    AND metadata->>'token_normalized' = sqlc.arg('normalized_token')::text
+    AND match_status = 'unmatched'
+    AND duplicate_of_id IS NULL
+    AND deleted_at IS NULL;
+
+-- name: MarkAnarlogTitleSiblingsMatchedByToken :execrows
+-- Single-statement batch mark for the action=link resolve path: every
+-- live unmatched sibling for the token flips to 'matched' and points at
+-- the linked CRM contact atomically. Same predicate as the imported and
+-- ignored variants. Returns the affected-row count so the service can
+-- surface a clean not-found when a concurrent resolve already claimed the
+-- group (zero rows).
+UPDATE external_contact SET
+    crm_contact_id = sqlc.arg('crm_contact_id'),
+    match_status = 'matched',
+    updated_at = NOW()
+WHERE source = 'anarlog_title'
+    AND metadata->>'token_normalized' = sqlc.arg('normalized_token')::text
+    AND match_status = 'unmatched'
+    AND duplicate_of_id IS NULL
+    AND deleted_at IS NULL;
+
+-- name: MarkAnarlogTitleSiblingsIgnoredByToken :exec
+-- Single-statement batch mark for the action=ignore ("Not a person")
+-- resolve path: every live unmatched sibling for the token flips to
+-- 'ignored'. No crm_contact_id is set. Same predicate as the other two
+-- batch marks.
+UPDATE external_contact SET
+    match_status = 'ignored',
+    updated_at = NOW()
+WHERE source = 'anarlog_title'
+    AND metadata->>'token_normalized' = sqlc.arg('normalized_token')::text
+    AND match_status = 'unmatched'
+    AND duplicate_of_id IS NULL
+    AND deleted_at IS NULL;
+
 -- name: FindExternalContactsByEmail :many
 SELECT * FROM external_contact
 WHERE emails @> $1::jsonb

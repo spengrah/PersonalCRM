@@ -54,6 +54,13 @@ type MeetingNoteResolveWriter interface {
 	ClearMeetingNoteConflictTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, newState string, newResolvedSetHash string) (*repository.MeetingNote, error)
 }
 
+// ContactNameReader is the narrow read surface MeetingNoteService needs
+// to map a matched CONTACT id back onto an attendee label for the
+// needs-attention projection. Concrete is *repository.ContactRepository.
+type ContactNameReader interface {
+	GetContact(ctx context.Context, id uuid.UUID) (*repository.Contact, error)
+}
+
 // ErrResolveLinkRowNotFound is returned by MeetingNoteService.ResolveLink
 // when the meeting_note row does not exist. Handler maps to 404.
 var ErrResolveLinkRowNotFound = errors.New("meeting_note not found")
@@ -86,6 +93,7 @@ type MeetingNoteService struct {
 	titleMatcher    IngestTitleMatcher
 	titleDiscovery  IngestTitleDiscoveryWriter
 	contactRecorder ContactInteractionRecorder
+	contactNames    ContactNameReader
 }
 
 // NewMeetingNoteService constructs a MeetingNoteService bound to its
@@ -99,6 +107,7 @@ func NewMeetingNoteService(
 	titleMatcher IngestTitleMatcher,
 	titleDiscovery IngestTitleDiscoveryWriter,
 	contactRecorder ContactInteractionRecorder,
+	contactNames ContactNameReader,
 ) *MeetingNoteService {
 	return &MeetingNoteService{
 		database:        database,
@@ -109,6 +118,7 @@ func NewMeetingNoteService(
 		titleMatcher:    titleMatcher,
 		titleDiscovery:  titleDiscovery,
 		contactRecorder: contactRecorder,
+		contactNames:    contactNames,
 	}
 }
 
@@ -256,8 +266,8 @@ func (s *MeetingNoteService) resolveToLinked(ctx context.Context, tx pgx.Tx, pri
 }
 
 // resolveNoneOfThese implements the action="none_of_these" branch by
-// re-running Step 4 logic with the row's persisted participants and a
-// freshly-extracted title-match set.
+// re-running the no-candidates branch of decideLinkage with the row's
+// persisted participants and a freshly-extracted title-match set.
 func (s *MeetingNoteService) resolveNoneOfThese(ctx context.Context, tx pgx.Tx, prior *repository.MeetingNote) (*repository.MeetingNote, []CreatedInteraction, []func(context.Context), error) {
 	resolvedTagged, err := s.reResolveTagged(ctx, tx, prior.Participants)
 	if err != nil {
@@ -314,7 +324,7 @@ func (s *MeetingNoteService) resolveNoneOfThese(ctx context.Context, tx pgx.Tx, 
 		return nil, nil, nil, fmt.Errorf("compute resolved set hash: %w", err)
 	}
 
-	// Force zero candidates so decideLinkage walks the Step 4 path.
+	// Force zero candidates so decideLinkage walks the no-candidates path.
 	newState, _, _, desired, _ := decideLinkage(
 		events.MeetingNoteRecordedPayload{Title: prior.Title, MeetingAt: prior.MeetingAt},
 		prior.AnarlogSessionID,
@@ -519,13 +529,27 @@ func runFollowUpBestEffort(ctx context.Context, fn func(context.Context)) {
 	fn(ctx)
 }
 
+// NeedsAttentionAttendee is one attendee label on a conflict candidate.
+// Matched is a best-effort, name-based flag indicating the attendee
+// corresponds to a CONTACT in the session's implied set; it drives only
+// visual emphasis. The authoritative shared-count meter is driven by
+// OverlapCount on the candidate, NOT by counting Matched flags (the two
+// are deliberately decoupled).
+type NeedsAttentionAttendee struct {
+	Name    string `json:"name"`
+	Matched bool   `json:"matched"`
+}
+
 // NeedsAttentionCandidatePreview is a sparse projection of a candidate
 // row, sufficient for the UI to disambiguate. Sub-fields populated per
 // kind ("event" → Title + AttendeeCount; "phone_call" → PeerHandle).
+// Attendees carries per-attendee labels + a best-effort matched flag for
+// the conflict table's candidate cell + overlap meter.
 type NeedsAttentionCandidatePreview struct {
-	Title         *string `json:"title,omitempty"`
-	AttendeeCount *int    `json:"attendee_count,omitempty"`
-	PeerHandle    *string `json:"peer_handle,omitempty"`
+	Title         *string                  `json:"title,omitempty"`
+	AttendeeCount *int                     `json:"attendee_count,omitempty"`
+	PeerHandle    *string                  `json:"peer_handle,omitempty"`
+	Attendees     []NeedsAttentionAttendee `json:"attendees,omitempty"`
 }
 
 // NeedsAttentionCandidate is a single row in the candidates array on a
@@ -592,7 +616,15 @@ func (s *MeetingNoteService) ListNeedsAttention(ctx context.Context, hostID *uui
 			if uErr := json.Unmarshal(row.ConflictCandidates, &snap); uErr != nil {
 				return nil, fmt.Errorf("decode conflict_candidates for meeting_note %s: %w", row.ID, uErr)
 			}
-			cands, projErr := s.projectCandidates(ctx, snap)
+			// Recompute the session's implied CONTACT set (tagged ∪
+			// title-matched) at read time so the per-attendee matched flag
+			// reflects current truth. Best-effort: a recompute failure
+			// degrades to no emphasis rather than failing the whole list.
+			impliedSet, isErr := s.computeImpliedSet(ctx, row.Participants, row.Title)
+			if isErr != nil {
+				return nil, isErr
+			}
+			cands, projErr := s.projectCandidates(ctx, snap, impliedSet)
 			if projErr != nil {
 				return nil, projErr
 			}
@@ -606,8 +638,9 @@ func (s *MeetingNoteService) ListNeedsAttention(ctx context.Context, hostID *uui
 // projectCandidates enriches each snapshot entry with a preview block
 // read from the target row. When the target is missing (ErrNotFound)
 // the entry stays with TargetMissing=true and a nil preview; transient
-// read errors propagate so the list endpoint can return 500.
-func (s *MeetingNoteService) projectCandidates(ctx context.Context, snap []repository.ConflictCandidateSummary) ([]NeedsAttentionCandidate, error) {
+// read errors propagate so the list endpoint can return 500. impliedSet
+// is the session's implied CONTACT set used to flag matched attendees.
+func (s *MeetingNoteService) projectCandidates(ctx context.Context, snap []repository.ConflictCandidateSummary, impliedSet map[uuid.UUID]struct{}) ([]NeedsAttentionCandidate, error) {
 	out := make([]NeedsAttentionCandidate, 0, len(snap))
 	for _, c := range snap {
 		entry := NeedsAttentionCandidate{
@@ -616,7 +649,7 @@ func (s *MeetingNoteService) projectCandidates(ctx context.Context, snap []repos
 			OccurredAt:   c.OccurredAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
 			OverlapCount: c.OverlapCount,
 		}
-		preview, missing, err := s.candidatePreview(ctx, c.Kind, c.ID)
+		preview, missing, err := s.candidatePreview(ctx, c.Kind, c.ID, impliedSet)
 		if err != nil {
 			return nil, err
 		}
@@ -633,7 +666,9 @@ func (s *MeetingNoteService) projectCandidates(ctx context.Context, snap []repos
 // up; callers degrade to a missing preview but the surface above
 // (ListNeedsAttention) propagates the error so transient DB issues
 // don't silently masquerade as user-visible "missing target" state.
-func (s *MeetingNoteService) candidatePreview(ctx context.Context, kind string, id uuid.UUID) (*NeedsAttentionCandidatePreview, bool, error) {
+// impliedSet flags which attendees correspond to a CONTACT in the
+// session's implied set (best-effort, name-based for events).
+func (s *MeetingNoteService) candidatePreview(ctx context.Context, kind string, id uuid.UUID, impliedSet map[uuid.UUID]struct{}) (*NeedsAttentionCandidatePreview, bool, error) {
 	if s.linkageTargets == nil {
 		return nil, true, nil
 	}
@@ -647,9 +682,14 @@ func (s *MeetingNoteService) candidatePreview(ctx context.Context, kind string, 
 			return nil, false, fmt.Errorf("read calendar event preview: %w", err)
 		}
 		count := len(evt.Attendees)
+		attendees, aErr := s.eventAttendees(ctx, evt, impliedSet)
+		if aErr != nil {
+			return nil, false, aErr
+		}
 		return &NeedsAttentionCandidatePreview{
 			Title:         evt.Title,
 			AttendeeCount: &count,
+			Attendees:     attendees,
 		}, false, nil
 	case repository.LinkedKindPhoneCall:
 		call, err := s.linkageTargets.GetPhoneCallByID(ctx, id)
@@ -660,12 +700,126 @@ func (s *MeetingNoteService) candidatePreview(ctx context.Context, kind string, 
 			return nil, false, fmt.Errorf("read phone_call preview: %w", err)
 		}
 		handle := call.PeerHandle
+		matched := false
+		if call.MatchedContactID != nil {
+			_, matched = impliedSet[*call.MatchedContactID]
+		}
 		return &NeedsAttentionCandidatePreview{
 			PeerHandle: &handle,
+			Attendees:  []NeedsAttentionAttendee{{Name: handle, Matched: matched}},
 		}, false, nil
 	default:
 		return nil, true, nil
 	}
+}
+
+// eventAttendees projects an event's attendee labels with a best-effort
+// matched flag. The matched-CONTACT subset visible to the session is
+// MatchedContactIDs ∩ impliedSet; those contacts' full_names form the
+// emphasis set. An attendee is flagged matched when its display label
+// (display_name, or email local-part fallback) case-insensitively
+// matches a name in that set. The count of matched flags is NOT
+// guaranteed to equal OverlapCount — the meter count stays authoritative.
+// A name-resolution failure is logged + skipped so a missing contact never
+// fails the whole list.
+func (s *MeetingNoteService) eventAttendees(ctx context.Context, evt *repository.CalendarEvent, impliedSet map[uuid.UUID]struct{}) ([]NeedsAttentionAttendee, error) {
+	matchedNames := s.matchedContactNames(ctx, evt.MatchedContactIDs, impliedSet)
+	out := make([]NeedsAttentionAttendee, 0, len(evt.Attendees))
+	for _, att := range evt.Attendees {
+		label := attendeeLabel(att)
+		_, matched := matchedNames[strings.ToLower(strings.TrimSpace(label))]
+		out = append(out, NeedsAttentionAttendee{Name: label, Matched: matched})
+	}
+	return out, nil
+}
+
+// matchedContactNames resolves the lowercased full_names of the contacts
+// in MatchedContactIDs ∩ impliedSet. The intersection is small
+// (typically 1-3), so per-id GetContact is cheap. A not-found contact is
+// skipped (the link may have gone stale); the empty map degrades to no
+// emphasis without failing the list.
+func (s *MeetingNoteService) matchedContactNames(ctx context.Context, matchedContactIDs []uuid.UUID, impliedSet map[uuid.UUID]struct{}) map[string]struct{} {
+	names := make(map[string]struct{})
+	if s.contactNames == nil {
+		return names
+	}
+	for _, cid := range matchedContactIDs {
+		if _, ok := impliedSet[cid]; !ok {
+			continue
+		}
+		contact, err := s.contactNames.GetContact(ctx, cid)
+		if err != nil {
+			// Stale link or transient miss — best-effort, drop emphasis
+			// for this contact rather than failing the projection.
+			logger.Warn().
+				Str("contact_id", cid.String()).
+				Err(err).
+				Msg("needs-attention: matched contact name lookup failed")
+			continue
+		}
+		names[strings.ToLower(strings.TrimSpace(contact.FullName))] = struct{}{}
+	}
+	return names
+}
+
+// attendeeLabel picks the display label for an attendee: the display
+// name when present, else the email local-part, else the bare email.
+func attendeeLabel(att repository.Attendee) string {
+	if dn := strings.TrimSpace(att.DisplayName); dn != "" {
+		return dn
+	}
+	email := strings.TrimSpace(att.Email)
+	if at := strings.IndexByte(email, '@'); at > 0 {
+		return email[:at]
+	}
+	return email
+}
+
+// computeImpliedSet recomputes the session's implied CONTACT set
+// (tagged-participant contacts ∪ title-matched contacts) at read time,
+// using the same recipe as resolveNoneOfThese. Runs inside a short
+// read-only tx because the tagged-participant lookup is tx-bound. Used
+// only by the needs-attention projection; a recompute failure surfaces
+// so the list endpoint returns 500 rather than emphasizing the wrong
+// names.
+func (s *MeetingNoteService) computeImpliedSet(ctx context.Context, participants []string, title *string) (map[uuid.UUID]struct{}, error) {
+	set := make(map[uuid.UUID]struct{})
+	if s.database == nil {
+		return set, nil
+	}
+
+	txErr := pgx.BeginTxFunc(ctx, s.database.Pool, pgx.TxOptions{AccessMode: pgx.ReadOnly}, func(tx pgx.Tx) error {
+		resolvedTagged, err := s.reResolveTagged(ctx, tx, participants)
+		if err != nil {
+			return err
+		}
+		for _, r := range resolvedTagged {
+			set[r.ContactID] = struct{}{}
+		}
+
+		titleStr := ""
+		if title != nil {
+			titleStr = *title
+		}
+		if s.titleMatcher == nil {
+			return nil
+		}
+		for _, token := range anarlog.ExtractNameTokens(titleStr) {
+			match, mErr := s.titleMatcher.MatchTitleToken(ctx, token)
+			if mErr != nil {
+				return fmt.Errorf("match title token %q: %w", token, mErr)
+			}
+			if match == nil {
+				continue
+			}
+			set[match.Contact.ID] = struct{}{}
+		}
+		return nil
+	})
+	if txErr != nil {
+		return nil, fmt.Errorf("compute implied set: %w", txErr)
+	}
+	return set, nil
 }
 
 // truncateRunes returns s truncated to at most max runes. Produces

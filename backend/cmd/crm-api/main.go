@@ -524,6 +524,7 @@ func run() int {
 		titleMatcher,
 		titleDiscoveryWriter,
 		contactService,
+		contactRepo,
 	)
 	meetingNoteHandler := handlers.NewMeetingNoteHandler(meetingNoteService)
 
@@ -656,6 +657,7 @@ func run() int {
 	var identityHandler *handlers.IdentityHandler
 	var oauthHandler *handlers.OAuthHandler
 	var importHandler *handlers.ImportHandler
+	var anarlogDiscoveryHandler *handlers.AnarlogDiscoveryHandler
 	var calendarHandler *handlers.CalendarHandler
 	var todoistHandler *handlers.TodoistHandler
 	var contactTaskHandler *handlers.ContactTaskHandler
@@ -808,6 +810,12 @@ func run() int {
 
 		// Initialize import handler
 		importHandler = handlers.NewImportHandler(externalContactRepo, identityServiceForIngest, contactService, importMatchService, enrichmentService)
+
+		// Anarlog-title discovery surface (People-tab grouped weak
+		// candidates + token-group resolve). Reuses the external_contact
+		// repo and ContactService — both already constructed above.
+		anarlogDiscoveryService := service.NewAnarlogDiscoveryService(externalContactRepo, contactService)
+		anarlogDiscoveryHandler = handlers.NewAnarlogDiscoveryHandler(anarlogDiscoveryService)
 
 		logger.Info().Msg("external sync infrastructure enabled")
 	}
@@ -1276,6 +1284,14 @@ func run() int {
 				imports := v1.Group("/imports")
 				{
 					imports.GET("/candidates", importHandler.ListImportCandidates)
+					// Static anarlog-title discovery routes are declared
+					// BEFORE the /:id param route so Gin's tree inserts the
+					// static segment first and /imports/anarlog-title cannot
+					// be shadowed by the :id match.
+					if anarlogDiscoveryHandler != nil {
+						imports.GET("/anarlog-title", anarlogDiscoveryHandler.ListAnarlogTitle)
+						imports.POST("/anarlog-title/resolve", anarlogDiscoveryHandler.ResolveAnarlogTitle)
+					}
 					imports.GET("/:id", importHandler.GetImportCandidate)
 					imports.POST("/:id/import", importHandler.ImportContact)
 					imports.POST("/:id/link", importHandler.LinkContact)
@@ -1312,7 +1328,7 @@ func run() int {
 				logger.Info().Msg("calendar handler initialized for testing (no OAuth)")
 			}
 
-			testHandler := handlers.NewTestHandler(database, testExternalRepo, contactService, testCalendarRepo, macHostRepo)
+			testHandler := handlers.NewTestHandler(database, testExternalRepo, contactService, testCalendarRepo, macHostRepo, meetingNoteRepoForIngest)
 			testRoutes := v1.Group("/test")
 			{
 				testRoutes.POST("/seed/contacts", testHandler.SeedContacts)
@@ -1320,6 +1336,7 @@ func run() int {
 				testRoutes.POST("/seed/overdue-contacts", testHandler.SeedOverdueContacts)
 				testRoutes.POST("/seed/calendar-events", testHandler.SeedCalendarEvents)
 				testRoutes.POST("/seed/mac-hosts", testHandler.SeedMacHost)
+				testRoutes.POST("/seed/meeting-notes", testHandler.SeedMeetingNotes)
 				testRoutes.POST("/cleanup", testHandler.Cleanup)
 				testRoutes.POST("/trigger-error", testHandler.TriggerError)
 			}
