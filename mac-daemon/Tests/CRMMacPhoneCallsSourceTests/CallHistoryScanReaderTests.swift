@@ -245,11 +245,14 @@ final class CallHistoryScanReaderTests: XCTestCase {
         XCTAssertFalse(first.exhausted)
         XCTAssertEqual(first.lowestPoint?.zPK, 30)
 
+        // limit 2 so the single remaining row returns 1 < 2 → exhausted
+        // (a limit-1 page returning exactly 1 row would NOT yet report
+        // exhaustion — it takes a following empty page to confirm).
         let second = try scan(queue, handle: "+15550000001",
                               sinceUnix: unixFloor2026,
                               progressBelowZDate: first.lowestPoint?.zdate,
                               progressBelowZPK: first.lowestPoint?.zPK,
-                              limit: 1)
+                              limit: 2)
         XCTAssertEqual(second.rows.map(\.uniqueID), ["good"])
         XCTAssertTrue(second.exhausted)
     }
