@@ -138,6 +138,13 @@ public enum CallHistoryScanReader {
         for row in rawRows {
             switch CallHistoryDBReader.mapRow(row) {
             case .malformed:
+                // Unreachable on this query path: `.malformed` means a
+                // NULL/unreadable (ZDATE, Z_PK), but the WHERE clause
+                // requires `ZDATE >= ?` (NULL fails the comparison) and
+                // Z_PK is the non-null primary key. No coordinate to
+                // advance `lowest` past, so a page that somehow held one
+                // could not move the resume bound — guard the invariant.
+                assertionFailure("scan query returned a malformed (null-coordinate) call row")
                 continue
             case .skipped(let point, _):
                 lowest = CallHistoryDBReader.lexExtend(lowest, point, choose: .min)
