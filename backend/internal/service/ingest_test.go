@@ -1689,3 +1689,353 @@ func TestDecideLinkage_Step3_TiedTopFallsThroughToConflict(t *testing.T) {
 	require.Empty(t, desired)
 	require.Len(t, snap, 2)
 }
+
+// ----------------------------------------------------------------------------
+// coalesceCandidates — collapse same-meeting / dropped-redial candidates
+// ----------------------------------------------------------------------------
+
+func coalesceBoolPtr(b bool) *bool { return &b }
+
+func coalesceUUIDPtr(id uuid.UUID) *uuid.UUID { return &id }
+
+// TestNormalizeCoalesceTitle pins the title normalization shared between
+// the calendar projection and the service-layer coalescer. Exercised here
+// (service package) because make test-unit runs ./internal/service/... but
+// not ./internal/repository/....
+func TestNormalizeCoalesceTitle(t *testing.T) {
+	cases := []struct {
+		name string
+		in   *string
+		want string
+	}{
+		{"nil", nil, ""},
+		{"empty", stringPtr(""), ""},
+		{"trim", stringPtr("  Standup  "), "standup"},
+		{"collapse internal", stringPtr("Weekly   Sync"), "weekly sync"},
+		{"lowercase", stringPtr("WEEKLY sync"), "weekly sync"},
+		{"tabs and newlines", stringPtr("\tDaily\n"), "daily"},
+		{"whitespace only", stringPtr("   \t\n"), ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, repository.NormalizeCoalesceTitle(tc.in))
+		})
+	}
+}
+
+// eventCand builds an event LinkageCandidate with a normalized title.
+func eventCand(title string, occurredAt time.Time, attendees ...uuid.UUID) repository.LinkageCandidate {
+	return repository.LinkageCandidate{
+		Kind:               repository.LinkedKindEvent,
+		ID:                 uuid.New(),
+		OccurredAt:         occurredAt,
+		AttendeeContactIDs: attendees,
+		NormalizedTitle:    title,
+	}
+}
+
+// Calendar #370 ------------------------------------------------------------
+
+// TestDecideLinkage_Calendar_TwoSameTitleSameStart_CoalesceToOne_AutoLink:
+// two events, identical title + start, distinct rows/attendees → coalesced
+// to the most-attendees representative and auto-linked.
+func TestDecideLinkage_Calendar_TwoSameTitleSameStart_CoalesceToOne_AutoLink(t *testing.T) {
+	sessionID := uuid.New()
+	at := accelerated.GetCurrentTime()
+	more := eventCand("standup", at, uuid.New(), uuid.New())
+	fewer := eventCand("standup", at, uuid.New())
+	cands := []repository.LinkageCandidate{fewer, more}
+
+	state, kind, id, _, snap := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, cands, nil, nil)
+	require.Equal(t, repository.LinkageStateLinked, state)
+	require.NotNil(t, kind)
+	require.Equal(t, repository.LinkedKindEvent, *kind)
+	require.NotNil(t, id)
+	require.Equal(t, more.ID, *id, "representative is the candidate with more attendees")
+	require.Empty(t, snap, "single survivor takes case 1 (no conflict snapshot)")
+}
+
+// TestDecideLinkage_Calendar_TwoSameTitleDifferentStart_StayTwo_Conflict:
+// same title, start 1 min apart → not coalesced → conflict.
+func TestDecideLinkage_Calendar_TwoSameTitleDifferentStart_StayTwo_Conflict(t *testing.T) {
+	sessionID := uuid.New()
+	at := accelerated.GetCurrentTime()
+	cands := []repository.LinkageCandidate{
+		eventCand("standup", at),
+		eventCand("standup", at.Add(time.Minute)),
+	}
+	state, _, _, _, snap := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, cands, nil, nil)
+	require.Equal(t, repository.LinkageStateConflictPending, state)
+	require.Len(t, snap, 2)
+}
+
+// TestDecideLinkage_Calendar_TwoDifferentTitleSameStart_StayTwo_Conflict:
+// different titles, same start → not coalesced → conflict.
+func TestDecideLinkage_Calendar_TwoDifferentTitleSameStart_StayTwo_Conflict(t *testing.T) {
+	sessionID := uuid.New()
+	at := accelerated.GetCurrentTime()
+	cands := []repository.LinkageCandidate{
+		eventCand("standup", at),
+		eventCand("retro", at),
+	}
+	state, _, _, _, snap := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, cands, nil, nil)
+	require.Equal(t, repository.LinkageStateConflictPending, state)
+	require.Len(t, snap, 2)
+}
+
+// TestDecideLinkage_Calendar_EmptyTitleSameStart_StayTwo_Conflict: both
+// titles empty → never coalesced (no semantic identity) → conflict. Guards
+// the empty-title rule and TestDecideLinkage_MultipleCandidates_ConflictPending.
+func TestDecideLinkage_Calendar_EmptyTitleSameStart_StayTwo_Conflict(t *testing.T) {
+	sessionID := uuid.New()
+	at := accelerated.GetCurrentTime()
+	cands := []repository.LinkageCandidate{
+		eventCand("", at),
+		eventCand("", at),
+	}
+	state, _, _, _, snap := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, cands, nil, nil)
+	require.Equal(t, repository.LinkageStateConflictPending, state)
+	require.Len(t, snap, 2)
+}
+
+// TestDecideLinkage_Calendar_ThreeSameTitle_RepresentativeStableRegardlessOfOrder:
+// three same-group events; the most-attendees one wins, and a tie between
+// the other two breaks to lowest ID — stable across input order (map
+// iteration nondeterminism guard).
+func TestDecideLinkage_Calendar_ThreeSameTitle_RepresentativeStableRegardlessOfOrder(t *testing.T) {
+	sessionID := uuid.New()
+	at := accelerated.GetCurrentTime()
+	winner := eventCand("standup", at, uuid.New(), uuid.New()) // 2 attendees
+	tieA := eventCand("standup", at, uuid.New())               // 1 attendee
+	tieB := eventCand("standup", at, uuid.New())               // 1 attendee
+
+	orders := [][]repository.LinkageCandidate{
+		{winner, tieA, tieB},
+		{tieB, tieA, winner},
+		{tieA, winner, tieB},
+	}
+	for _, order := range orders {
+		state, _, id, _, _ := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, order, nil, nil)
+		require.Equal(t, repository.LinkageStateLinked, state)
+		require.NotNil(t, id)
+		require.Equal(t, winner.ID, *id, "most-attendees candidate always wins regardless of order")
+	}
+
+	// Tie sub-case: two candidates, equal attendee counts → lowest ID wins.
+	t1 := eventCand("retro", at, uuid.New())
+	t2 := eventCand("retro", at, uuid.New())
+	expected := t1.ID
+	if t2.ID.String() < t1.ID.String() {
+		expected = t2.ID
+	}
+	for _, order := range [][]repository.LinkageCandidate{{t1, t2}, {t2, t1}} {
+		state, _, id, _, _ := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, order, nil, nil)
+		require.Equal(t, repository.LinkageStateLinked, state)
+		require.NotNil(t, id)
+		require.Equal(t, expected, *id, "attendee-count tie breaks to lowest ID, stable across order")
+	}
+}
+
+// TestDecideLinkage_Calendar_DuplicatePairPlusDistinctThird_3to2_Conflict:
+// a true duplicate pair plus a genuinely-distinct third → coalesce 3→2 →
+// still conflict with a 2-entry snapshot. Guards against over-dropping.
+func TestDecideLinkage_Calendar_DuplicatePairPlusDistinctThird_3to2_Conflict(t *testing.T) {
+	sessionID := uuid.New()
+	at := accelerated.GetCurrentTime()
+	dupMore := eventCand("standup", at, uuid.New(), uuid.New())
+	dupFewer := eventCand("standup", at, uuid.New())
+	distinct := eventCand("retro", at)
+	cands := []repository.LinkageCandidate{dupMore, dupFewer, distinct}
+
+	state, _, _, _, snap := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, cands, nil, nil)
+	require.Equal(t, repository.LinkageStateConflictPending, state)
+	require.Len(t, snap, 2, "duplicate pair collapses to one; distinct third remains")
+	gotIDs := map[uuid.UUID]struct{}{}
+	for _, s := range snap {
+		gotIDs[s.ID] = struct{}{}
+	}
+	require.Contains(t, gotIDs, dupMore.ID, "more-attendees survivor of the pair")
+	require.Contains(t, gotIDs, distinct.ID, "genuinely-distinct third candidate")
+	require.NotContains(t, gotIDs, dupFewer.ID, "dropped duplicate")
+}
+
+// Phone #371 ---------------------------------------------------------------
+
+// phoneCand builds a phone_call LinkageCandidate. answered/interaction may
+// be nil.
+func phoneCand(peer, service, direction string, at time.Time, answered *bool, duration int32, interaction *uuid.UUID) repository.LinkageCandidate {
+	return repository.LinkageCandidate{
+		Kind:            repository.LinkedKindPhoneCall,
+		ID:              uuid.New(),
+		OccurredAt:      at,
+		PeerNormalized:  peer,
+		Service:         service,
+		Direction:       direction,
+		Answered:        answered,
+		DurationSeconds: duration,
+		InteractionID:   interaction,
+	}
+}
+
+// TestDecideLinkage_Phone_TwoSameNumberWithinWindow_CoalesceToOne_AutoLinkToConnected:
+// a dropped attempt + connected redial 30s apart → coalesced to the
+// connected/longer call and auto-linked.
+func TestDecideLinkage_Phone_TwoSameNumberWithinWindow_CoalesceToOne_AutoLinkToConnected(t *testing.T) {
+	sessionID := uuid.New()
+	at := accelerated.GetCurrentTime()
+	dropped := phoneCand("+15550000001", repository.PhoneCallServiceVoice, repository.PhoneCallDirectionInbound, at, coalesceBoolPtr(false), 0, nil)
+	connected := phoneCand("+15550000001", repository.PhoneCallServiceVoice, repository.PhoneCallDirectionInbound, at.Add(30*time.Second), coalesceBoolPtr(true), 120, coalesceUUIDPtr(uuid.New()))
+	cands := []repository.LinkageCandidate{dropped, connected}
+
+	state, kind, id, _, snap := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, cands, nil, nil)
+	require.Equal(t, repository.LinkageStateLinked, state)
+	require.NotNil(t, kind)
+	require.Equal(t, repository.LinkedKindPhoneCall, *kind)
+	require.NotNil(t, id)
+	require.Equal(t, connected.ID, *id, "representative is the answered/connected call")
+	require.Empty(t, snap)
+}
+
+// TestDecideLinkage_Phone_SameNumberOutsideWindow_StayTwo_Conflict: same
+// partition key, 6 min apart (> 5 min) → not coalesced → conflict.
+func TestDecideLinkage_Phone_SameNumberOutsideWindow_StayTwo_Conflict(t *testing.T) {
+	sessionID := uuid.New()
+	at := accelerated.GetCurrentTime()
+	cands := []repository.LinkageCandidate{
+		phoneCand("+15550000002", repository.PhoneCallServiceVoice, repository.PhoneCallDirectionInbound, at, coalesceBoolPtr(true), 60, nil),
+		phoneCand("+15550000002", repository.PhoneCallServiceVoice, repository.PhoneCallDirectionInbound, at.Add(6*time.Minute), coalesceBoolPtr(true), 60, nil),
+	}
+	state, _, _, _, snap := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, cands, nil, nil)
+	require.Equal(t, repository.LinkageStateConflictPending, state)
+	require.Len(t, snap, 2)
+}
+
+// TestDecideLinkage_Phone_DifferentNumbers_StayTwo_Conflict: distinct
+// numbers, same time → not coalesced → conflict.
+func TestDecideLinkage_Phone_DifferentNumbers_StayTwo_Conflict(t *testing.T) {
+	sessionID := uuid.New()
+	at := accelerated.GetCurrentTime()
+	cands := []repository.LinkageCandidate{
+		phoneCand("+15550000003", repository.PhoneCallServiceVoice, repository.PhoneCallDirectionInbound, at, coalesceBoolPtr(true), 60, nil),
+		phoneCand("+15550000004", repository.PhoneCallServiceVoice, repository.PhoneCallDirectionInbound, at, coalesceBoolPtr(true), 60, nil),
+	}
+	state, _, _, _, snap := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, cands, nil, nil)
+	require.Equal(t, repository.LinkageStateConflictPending, state)
+	require.Len(t, snap, 2)
+}
+
+// TestDecideLinkage_Phone_SameNumberDifferentDirection_StayTwo_Conflict:
+// same number+service, opposite directions, within window → not coalesced
+// (partition-key dimension guard) → conflict.
+func TestDecideLinkage_Phone_SameNumberDifferentDirection_StayTwo_Conflict(t *testing.T) {
+	sessionID := uuid.New()
+	at := accelerated.GetCurrentTime()
+	cands := []repository.LinkageCandidate{
+		phoneCand("+15550000005", repository.PhoneCallServiceVoice, repository.PhoneCallDirectionInbound, at, coalesceBoolPtr(false), 0, nil),
+		phoneCand("+15550000005", repository.PhoneCallServiceVoice, repository.PhoneCallDirectionOutbound, at.Add(30*time.Second), nil, 60, nil),
+	}
+	state, _, _, _, snap := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, cands, nil, nil)
+	require.Equal(t, repository.LinkageStateConflictPending, state)
+	require.Len(t, snap, 2)
+}
+
+// TestDecideLinkage_Phone_EmptyPeerNormalized_StayTwo_Conflict: both peers
+// empty/unknown → never coalesced → conflict.
+func TestDecideLinkage_Phone_EmptyPeerNormalized_StayTwo_Conflict(t *testing.T) {
+	sessionID := uuid.New()
+	at := accelerated.GetCurrentTime()
+	cands := []repository.LinkageCandidate{
+		phoneCand("", repository.PhoneCallServiceVoice, repository.PhoneCallDirectionInbound, at, coalesceBoolPtr(true), 60, nil),
+		phoneCand("", repository.PhoneCallServiceVoice, repository.PhoneCallDirectionInbound, at.Add(30*time.Second), coalesceBoolPtr(true), 60, nil),
+	}
+	state, _, _, _, snap := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, cands, nil, nil)
+	require.Equal(t, repository.LinkageStateConflictPending, state)
+	require.Len(t, snap, 2)
+}
+
+// TestDecideLinkage_Phone_RepresentativeTieBreak_DurationThenInteractionID:
+// two answered calls; one longer wins; a duration tie breaks to the one
+// with an InteractionID. Stable regardless of input order.
+func TestDecideLinkage_Phone_RepresentativeTieBreak_DurationThenInteractionID(t *testing.T) {
+	sessionID := uuid.New()
+	at := accelerated.GetCurrentTime()
+
+	// Duration tier: longer call wins.
+	longer := phoneCand("+15550000006", repository.PhoneCallServiceVoice, repository.PhoneCallDirectionInbound, at, coalesceBoolPtr(true), 180, nil)
+	shorter := phoneCand("+15550000006", repository.PhoneCallServiceVoice, repository.PhoneCallDirectionInbound, at.Add(20*time.Second), coalesceBoolPtr(true), 60, coalesceUUIDPtr(uuid.New()))
+	for _, order := range [][]repository.LinkageCandidate{{longer, shorter}, {shorter, longer}} {
+		state, _, id, _, _ := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, order, nil, nil)
+		require.Equal(t, repository.LinkageStateLinked, state)
+		require.NotNil(t, id)
+		require.Equal(t, longer.ID, *id, "greater duration wins over InteractionID presence")
+	}
+
+	// InteractionID tier: equal duration, one has a linked interaction.
+	withInteraction := phoneCand("+15550000007", repository.PhoneCallServiceVoice, repository.PhoneCallDirectionInbound, at, coalesceBoolPtr(true), 90, coalesceUUIDPtr(uuid.New()))
+	without := phoneCand("+15550000007", repository.PhoneCallServiceVoice, repository.PhoneCallDirectionInbound, at.Add(20*time.Second), coalesceBoolPtr(true), 90, nil)
+	for _, order := range [][]repository.LinkageCandidate{{withInteraction, without}, {without, withInteraction}} {
+		state, _, id, _, _ := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, order, nil, nil)
+		require.Equal(t, repository.LinkageStateLinked, state)
+		require.NotNil(t, id)
+		require.Equal(t, withInteraction.ID, *id, "duration tie breaks to the interaction-linked call")
+	}
+}
+
+// TestDecideLinkage_Phone_SingleLinkageCluster pins the consecutive-gap
+// sweep: A(0s),B(3m),C(6m) all chain into one cluster (A↔B and B↔C within
+// window, A↔C is not), but a single 6-min gap opens a second cluster.
+func TestDecideLinkage_Phone_SingleLinkageCluster(t *testing.T) {
+	sessionID := uuid.New()
+	at := accelerated.GetCurrentTime()
+
+	// Chain: three calls collapse to one via consecutive 3-min gaps.
+	a := phoneCand("+15550000008", repository.PhoneCallServiceVoice, repository.PhoneCallDirectionInbound, at, coalesceBoolPtr(false), 0, nil)
+	b := phoneCand("+15550000008", repository.PhoneCallServiceVoice, repository.PhoneCallDirectionInbound, at.Add(3*time.Minute), coalesceBoolPtr(true), 200, nil)
+	c := phoneCand("+15550000008", repository.PhoneCallServiceVoice, repository.PhoneCallDirectionInbound, at.Add(6*time.Minute), coalesceBoolPtr(false), 0, nil)
+	state, _, id, _, snap := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, []repository.LinkageCandidate{a, b, c}, nil, nil)
+	require.Equal(t, repository.LinkageStateLinked, state, "single-linkage chain collapses to one cluster")
+	require.NotNil(t, id)
+	require.Equal(t, b.ID, *id, "connected/longest call across the cluster is the representative")
+	require.Empty(t, snap)
+
+	// Contrast: a single 6-min gap exceeds the window → two clusters.
+	d := phoneCand("+15550000009", repository.PhoneCallServiceVoice, repository.PhoneCallDirectionInbound, at, coalesceBoolPtr(true), 60, nil)
+	e := phoneCand("+15550000009", repository.PhoneCallServiceVoice, repository.PhoneCallDirectionInbound, at.Add(6*time.Minute), coalesceBoolPtr(true), 60, nil)
+	state2, _, _, _, snap2 := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, []repository.LinkageCandidate{d, e}, nil, nil)
+	require.Equal(t, repository.LinkageStateConflictPending, state2)
+	require.Len(t, snap2, 2)
+}
+
+// Cross-kind guard ---------------------------------------------------------
+
+// TestDecideLinkage_CrossKind_OneEventOneCall_SameWindow_StayTwo_Conflict:
+// an event and a phone_call at the same instant are never coalesced across
+// kinds → conflict with a 2-entry snapshot.
+func TestDecideLinkage_CrossKind_OneEventOneCall_SameWindow_StayTwo_Conflict(t *testing.T) {
+	sessionID := uuid.New()
+	at := accelerated.GetCurrentTime()
+	cands := []repository.LinkageCandidate{
+		eventCand("standup", at),
+		phoneCand("+15550000010", repository.PhoneCallServiceVoice, repository.PhoneCallDirectionInbound, at, coalesceBoolPtr(true), 60, nil),
+	}
+	state, _, _, _, snap := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, cands, nil, nil)
+	require.Equal(t, repository.LinkageStateConflictPending, state)
+	require.Len(t, snap, 2)
+}
+
+// TestCoalesceCandidates_Idempotent: coalescing a coalesced slice is a
+// no-op (Decision 6) — underpins the caller's double-call observability.
+func TestCoalesceCandidates_Idempotent(t *testing.T) {
+	at := accelerated.GetCurrentTime()
+	cands := []repository.LinkageCandidate{
+		eventCand("standup", at, uuid.New(), uuid.New()),
+		eventCand("standup", at, uuid.New()),
+		eventCand("retro", at),
+		phoneCand("+15550000011", repository.PhoneCallServiceVoice, repository.PhoneCallDirectionInbound, at, coalesceBoolPtr(false), 0, nil),
+		phoneCand("+15550000011", repository.PhoneCallServiceVoice, repository.PhoneCallDirectionInbound, at.Add(30*time.Second), coalesceBoolPtr(true), 120, nil),
+	}
+	once := coalesceCandidates(cands)
+	twice := coalesceCandidates(once)
+	require.Equal(t, len(once), len(twice), "second pass is a no-op")
+	require.Equal(t, once, twice)
+}
