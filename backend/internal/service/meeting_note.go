@@ -66,7 +66,8 @@ type ContactNameReader interface {
 var ErrResolveLinkRowNotFound = errors.New("meeting_note not found")
 
 // ErrResolveLinkNotPending is returned when the row exists but is not in
-// linkage_state = 'conflict_pending'. Handler maps to 409.
+// one of the resolvable attention states (conflict_pending or
+// orphan_needs_review) — i.e. a terminal state. Handler maps to 409.
 var ErrResolveLinkNotPending = errors.New("meeting_note is not awaiting conflict resolution")
 
 // ErrResolveLinkSnapshotMissing is returned when the row is in
@@ -175,27 +176,46 @@ func (s *MeetingNoteService) ResolveLink(ctx context.Context, mnID uuid.UUID, in
 			}
 			return fmt.Errorf("read meeting_note: %w", err)
 		}
-		if prior.LinkageState != repository.LinkageStateConflictPending {
-			return ErrResolveLinkNotPending
-		}
-
-		if input != nil {
-			res, created, fus, ferr := s.resolveToLinked(ctx, tx, prior, *input)
+		// Only the two attention states are resolvable. conflict_pending
+		// runs the candidate-driven flow; orphan_needs_review accepts only
+		// the "Log as impromptu" (none_of_these) action. Any other state
+		// (terminal, soft-deleted, missing) is rejected as 409/404.
+		switch prior.LinkageState {
+		case repository.LinkageStateConflictPending:
+			if input != nil {
+				res, created, fus, ferr := s.resolveToLinked(ctx, tx, prior, *input)
+				if ferr != nil {
+					return ferr
+				}
+				result = &ResolveLinkResult{MeetingNote: res, InteractionsCreated: created}
+				followUps = fus
+				return nil
+			}
+			res, created, fus, ferr := s.resolveNoneOfThese(ctx, tx, prior)
 			if ferr != nil {
 				return ferr
 			}
 			result = &ResolveLinkResult{MeetingNote: res, InteractionsCreated: created}
 			followUps = fus
 			return nil
+		case repository.LinkageStateOrphanNeedsReview:
+			// An orphan has no candidate snapshot, so action="link" is
+			// meaningless — reject it as a non-candidate before reaching the
+			// forced-impromptu write. The orphan card never sends "link", so
+			// this is defense-in-depth against a malformed client.
+			if input != nil {
+				return ErrResolveLinkIDNotCandidate
+			}
+			res, created, fus, ferr := s.resolveOrphanToImpromptu(ctx, tx, prior)
+			if ferr != nil {
+				return ferr
+			}
+			result = &ResolveLinkResult{MeetingNote: res, InteractionsCreated: created}
+			followUps = fus
+			return nil
+		default:
+			return ErrResolveLinkNotPending
 		}
-
-		res, created, fus, ferr := s.resolveNoneOfThese(ctx, tx, prior)
-		if ferr != nil {
-			return ferr
-		}
-		result = &ResolveLinkResult{MeetingNote: res, InteractionsCreated: created}
-		followUps = fus
-		return nil
 	})
 	if txErr != nil {
 		return nil, txErr
@@ -350,6 +370,122 @@ func (s *MeetingNoteService) resolveNoneOfThese(ctx context.Context, tx pgx.Tx, 
 	}
 
 	updated, err := s.meetingWriter.ClearMeetingNoteConflictTx(ctx, tx, prior.ID, newState, newResolvedSetHash)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			return nil, nil, nil, ErrResolveLinkNotPending
+		}
+		return nil, nil, nil, fmt.Errorf("clear meeting_note conflict: %w", err)
+	}
+	return updated, created, followUps, nil
+}
+
+// resolveOrphanToImpromptu implements the "Log as impromptu" action on an
+// orphan_needs_review row. Unlike resolveNoneOfThese (which re-runs
+// decideLinkage and lets the zero-candidate sub-machine pick the state),
+// this FORCES linked_impromptu — the user has explicitly declared the
+// session a real meeting, and a participant-less orphan would otherwise
+// recompute straight back to orphan_needs_review and never leave the
+// queue.
+//
+// To keep the forced linked_impromptu state truthful, the branch creates
+// ONLY tagged-participant interactions, never title-derived ones (a
+// `:title:` interaction would, per spec, demand orphan_title_augmented).
+// It still runs the full title-match loop, but title matches feed the
+// resolved_set_hash ONLY — matched tokens produce no interaction, and
+// unmatched tokens are upserted as weak discovery candidates. The
+// persisted hash is computed over the UNION of tag-resolved ∪
+// title-matched contact IDs, byte-for-byte the recipe the daemon
+// recomputes (computeResolvedSetHash) — so an identical re-sync carries
+// the user's linked_impromptu decision forward via carry-forward instead
+// of recomputing a divergent orphan_title_augmented and creating a
+// `:title:` interaction.
+//
+// For a genuine orphan (no resolvable participants) resolvedTagged is
+// empty, desired is empty, and the row lands linked_impromptu with zero
+// interactions — a terminal outcome reached only via explicit user
+// decision, which the daemon path never produces on its own.
+func (s *MeetingNoteService) resolveOrphanToImpromptu(ctx context.Context, tx pgx.Tx, prior *repository.MeetingNote) (*repository.MeetingNote, []CreatedInteraction, []func(context.Context), error) {
+	resolvedTagged, err := s.reResolveTagged(ctx, tx, prior.Participants)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	// Tagged-participant interactions only — never title-derived.
+	desired := taggedImpromptuInteractions(prior.AnarlogSessionID, resolvedTagged)
+
+	// Run the full title-match loop (same recipe as resolveNoneOfThese)
+	// purely to collect title-matched contact IDs for the hash and to
+	// upsert unmatched tokens to discovery. Matched tokens deliberately
+	// produce no interaction here.
+	titleStr := ""
+	if prior.Title != nil {
+		titleStr = *prior.Title
+	}
+	titleTokens := anarlog.ExtractNameTokens(titleStr)
+	titleMatchedIDs := make([]uuid.UUID, 0, len(titleTokens))
+	titleUnmatched := make([]string, 0, len(titleTokens))
+	for _, token := range titleTokens {
+		if s.titleMatcher == nil {
+			titleUnmatched = append(titleUnmatched, token)
+			continue
+		}
+		match, mErr := s.titleMatcher.MatchTitleToken(ctx, token)
+		if mErr != nil {
+			return nil, nil, nil, fmt.Errorf("match title token %q: %w", token, mErr)
+		}
+		if match == nil {
+			titleUnmatched = append(titleUnmatched, token)
+			continue
+		}
+		// Dedup against resolvedTagged so a title token that is also a
+		// tagged participant contributes its interaction via the tagged
+		// path and is excluded from the title-matched set (same dedup the
+		// daemon does), preventing a double-count in the union hash.
+		alreadyTagged := false
+		for _, r := range resolvedTagged {
+			if r.ContactID == match.Contact.ID {
+				alreadyTagged = true
+				break
+			}
+		}
+		if alreadyTagged {
+			continue
+		}
+		titleMatchedIDs = append(titleMatchedIDs, match.Contact.ID)
+	}
+
+	resolvedIDs := make([]uuid.UUID, len(resolvedTagged))
+	for i, r := range resolvedTagged {
+		resolvedIDs[i] = r.ContactID
+	}
+	// Hash over the UNION (tag-resolved ∪ title-matched) — the same recipe
+	// the daemon recomputes on re-sync — even though title matches created
+	// no interaction. Hashing the tagged set alone would flip the row to
+	// orphan_title_augmented on the next identical sync and undo the user's
+	// decision.
+	newResolvedSetHash, err := computeResolvedSetHash(resolvedIDs, titleMatchedIDs)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("compute resolved set hash: %w", err)
+	}
+
+	created, followUps, err := s.writeDesiredInteractions(ctx, tx, prior, desired)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	// Surface unmatched title tokens as weak discovery candidates — the
+	// same rows the daemon-side ingest path would have created.
+	if s.titleDiscovery != nil {
+		for _, token := range titleUnmatched {
+			if dErr := s.titleDiscovery.UpsertTitleCandidateTx(ctx, tx, prior.AnarlogSessionID, strings.ToLower(token), token); dErr != nil {
+				return nil, nil, nil, fmt.Errorf("upsert title candidate %q: %w", token, dErr)
+			}
+		}
+	}
+
+	// Force linked_impromptu regardless of whether desired is empty — this
+	// is the behavioral difference from resolveNoneOfThese.
+	updated, err := s.meetingWriter.ClearMeetingNoteConflictTx(ctx, tx, prior.ID, repository.LinkageStateLinkedImpromptu, newResolvedSetHash)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			return nil, nil, nil, ErrResolveLinkNotPending

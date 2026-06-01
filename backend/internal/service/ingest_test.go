@@ -2058,3 +2058,37 @@ func TestCoalesceCandidates_Idempotent(t *testing.T) {
 	require.Equal(t, len(once), len(twice), "second pass is a no-op")
 	require.Equal(t, once, twice)
 }
+
+// TestTaggedImpromptuInteractions: the shared helper emits one
+// desiredInteraction per tagged contact with the canonical
+// anarlog:<session>:<contact> source_ref, and an empty (non-nil) slice
+// for empty input. Pins the contract shared by decideLinkage case-0 and
+// resolveOrphanToImpromptu so the two paths cannot drift.
+func TestTaggedImpromptuInteractions(t *testing.T) {
+	session := uuid.New()
+	cA := uuid.New()
+	cB := uuid.New()
+
+	t.Run("empty input → empty non-nil slice", func(t *testing.T) {
+		got := taggedImpromptuInteractions(session, nil)
+		require.NotNil(t, got)
+		require.Empty(t, got)
+	})
+
+	t.Run("one interaction per tagged contact with canonical source_ref", func(t *testing.T) {
+		tagged := []resolvedTag{
+			{AnarlogID: uuid.NewString(), ContactID: cA},
+			{AnarlogID: uuid.NewString(), ContactID: cB},
+		}
+		got := taggedImpromptuInteractions(session, tagged)
+		require.Len(t, got, 2)
+		require.Equal(t, cA, got[0].ContactID)
+		require.Equal(t, "anarlog:"+session.String()+":"+cA.String(), got[0].SourceRef)
+		require.Equal(t, cB, got[1].ContactID)
+		require.Equal(t, "anarlog:"+session.String()+":"+cB.String(), got[1].SourceRef)
+		// No :title: refs — this helper only shapes tagged interactions.
+		for _, d := range got {
+			require.NotContains(t, d.SourceRef, ":title:")
+		}
+	})
+}

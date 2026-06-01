@@ -195,13 +195,17 @@ WHERE id = sqlc.arg('id')
 RETURNING *;
 
 -- name: ClearMeetingNoteConflict :one
--- Promotes a conflict_pending row to the "none of these" Step 4 outcome
--- (linked_impromptu / orphan_title_augmented / orphan_needs_review).
--- Caller supplies the new state AND the new resolved_set_hash so the
--- next daemon-side carry-forward correctly preserves the user's
--- decision when matching inputs haven't changed. Clears linked_kind,
--- linked_id, conflict_candidates. Returns pgx.ErrNoRows when the row
--- is not in conflict_pending.
+-- Promotes a row in EITHER attention state (conflict_pending or
+-- orphan_needs_review) to a "none of these" outcome. For a
+-- conflict_pending row the caller derives the outcome from decideLinkage
+-- (linked_impromptu / orphan_title_augmented / orphan_needs_review); for
+-- an orphan_needs_review row the caller forces linked_impromptu (the
+-- "Log as impromptu" action). Caller supplies the new state AND the new
+-- resolved_set_hash so the next daemon-side carry-forward correctly
+-- preserves the user's decision when matching inputs haven't changed.
+-- Clears linked_kind, linked_id, conflict_candidates. Returns
+-- pgx.ErrNoRows when the row is in neither attention state (terminal,
+-- soft-deleted, or missing).
 UPDATE meeting_note SET
     linked_kind         = NULL,
     linked_id           = NULL,
@@ -210,7 +214,7 @@ UPDATE meeting_note SET
     resolved_set_hash   = sqlc.arg('new_resolved_set_hash')
 WHERE id = sqlc.arg('id')
   AND deleted_at IS NULL
-  AND linkage_state = 'conflict_pending'
+  AND linkage_state IN ('conflict_pending', 'orphan_needs_review')
 RETURNING *;
 
 -- name: TestHardDeleteMeetingNotesByHostID :exec

@@ -2475,13 +2475,7 @@ func decideLinkage(
 		if len(resolvedTagged) == 0 {
 			return repository.LinkageStateOrphanNeedsReview, nil, nil, nil, nil
 		}
-		out := make([]desiredInteraction, 0, len(resolvedTagged)+len(titleMatched))
-		for _, r := range resolvedTagged {
-			out = append(out, desiredInteraction{
-				ContactID: r.ContactID,
-				SourceRef: fmt.Sprintf("anarlog:%s:%s", sessionID.String(), r.ContactID.String()),
-			})
-		}
+		out := taggedImpromptuInteractions(sessionID, resolvedTagged)
 		if len(titleMatched) > 0 {
 			for _, tm := range titleMatched {
 				out = append(out, desiredInteraction{
@@ -2512,6 +2506,23 @@ func decideLinkage(
 		}
 		return repository.LinkageStateConflictPending, nil, nil, nil, snap
 	}
+}
+
+// taggedImpromptuInteractions builds one impromptu desiredInteraction per
+// resolved tagged contact with the canonical
+// `anarlog:<session>:<contact>` source_ref. Shared by decideLinkage's
+// zero-candidate branch and the user-driven "Log as impromptu" resolve so
+// the two paths cannot drift in how they shape the tagged interaction set.
+// Returns an empty (non-nil) slice for empty input.
+func taggedImpromptuInteractions(sessionID uuid.UUID, tagged []resolvedTag) []desiredInteraction {
+	out := make([]desiredInteraction, 0, len(tagged))
+	for _, r := range tagged {
+		out = append(out, desiredInteraction{
+			ContactID: r.ContactID,
+			SourceRef: fmt.Sprintf("anarlog:%s:%s", sessionID.String(), r.ContactID.String()),
+		})
+	}
+	return out
 }
 
 // stepFiveWalkins emits one walk-in supplemental desiredInteraction per
