@@ -1040,6 +1040,13 @@ type Querier interface {
 	// TEST ONLY. Hard-deletes external_contact rows whose source_id starts with
 	// the given prefix. Used by t.Cleanup to remove fixtures inserted by a test.
 	TestDeleteExternalContactsBySourceIDPrefix(ctx context.Context, prefix string) error
+	// TEST ONLY. Probe a calendar_event row with FOR UPDATE NOWAIT: returns the
+	// row if no conflicting lock is held, or fails immediately (lock_not_available)
+	// when another tx holds a conflicting lock (e.g. a FOR SHARE from the attended
+	// branch). Used by the Decision-3a lock-serialization integration test to
+	// prove the attended FOR SHARE conflicts with a concurrent FOR UPDATE without
+	// a sleep/timeout. Production code must NOT call this.
+	TestGetCalendarEventByIDForUpdateNoWait(ctx context.Context, id pgtype.UUID) (*CalendarEvent, error)
 	// TEST ONLY. Hard-deletes a calendar_event row by primary key. Used
 	// by integration tests that exercise the "target row vanished between
 	// snapshot and resolve-link" path. Production code must NOT call this.

@@ -638,6 +638,46 @@ func (q *Queries) MarkLastContactedUpdated(ctx context.Context, id pgtype.UUID) 
 	return err
 }
 
+const TestGetCalendarEventByIDForUpdateNoWait = `-- name: TestGetCalendarEventByIDForUpdateNoWait :one
+SELECT id, gcal_event_id, gcal_calendar_id, google_account_id, title, description, location, start_time, end_time, all_day, status, user_response, organizer_email, attendees, matched_contact_ids, synced_at, last_contacted_updated, created_at, updated_at, html_link FROM calendar_event
+WHERE id = $1
+FOR UPDATE NOWAIT
+`
+
+// TEST ONLY. Probe a calendar_event row with FOR UPDATE NOWAIT: returns the
+// row if no conflicting lock is held, or fails immediately (lock_not_available)
+// when another tx holds a conflicting lock (e.g. a FOR SHARE from the attended
+// branch). Used by the Decision-3a lock-serialization integration test to
+// prove the attended FOR SHARE conflicts with a concurrent FOR UPDATE without
+// a sleep/timeout. Production code must NOT call this.
+func (q *Queries) TestGetCalendarEventByIDForUpdateNoWait(ctx context.Context, id pgtype.UUID) (*CalendarEvent, error) {
+	row := q.db.QueryRow(ctx, TestGetCalendarEventByIDForUpdateNoWait, id)
+	var i CalendarEvent
+	err := row.Scan(
+		&i.ID,
+		&i.GcalEventID,
+		&i.GcalCalendarID,
+		&i.GoogleAccountID,
+		&i.Title,
+		&i.Description,
+		&i.Location,
+		&i.StartTime,
+		&i.EndTime,
+		&i.AllDay,
+		&i.Status,
+		&i.UserResponse,
+		&i.OrganizerEmail,
+		&i.Attendees,
+		&i.MatchedContactIds,
+		&i.SyncedAt,
+		&i.LastContactedUpdated,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.HtmlLink,
+	)
+	return &i, err
+}
+
 const TestHardDeleteCalendarEventByID = `-- name: TestHardDeleteCalendarEventByID :exec
 DELETE FROM calendar_event WHERE id = $1
 `

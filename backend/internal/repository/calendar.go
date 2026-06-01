@@ -454,6 +454,24 @@ func (r *CalendarEventRepository) GetByIDForShareTx(ctx context.Context, tx pgx.
 	return &event, nil
 }
 
+// TestGetByIDForUpdateNoWaitTx is a TEST-ONLY probe: it reads a
+// calendar_event with FOR UPDATE NOWAIT inside the caller's tx, returning a
+// lock-conflict error immediately (without blocking) when another tx holds
+// a conflicting lock on the row (e.g. the attended branch's FOR SHARE). Used
+// by the Decision-3a lock-serialization integration test. Production code
+// must NOT call this. Returns db.ErrNotFound when no row.
+func (r *CalendarEventRepository) TestGetByIDForUpdateNoWaitTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*CalendarEvent, error) {
+	dbEvent, err := db.New(tx).TestGetCalendarEventByIDForUpdateNoWait(ctx, uuidToPgUUID(id))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	event := convertDbCalendarEvent(dbEvent)
+	return &event, nil
+}
+
 // LockExistsByIDTx reports whether a calendar_event with the given UUID
 // exists, taking a FOR SHARE lock on it inside the caller's tx. Thin
 // adapter over GetByIDForShareTx that satisfies the InteractionRecorder's
