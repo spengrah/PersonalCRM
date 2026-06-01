@@ -133,32 +133,16 @@ struct DaemonCommand: AsyncParsableCommand {
             await knownIdentifiersCache.replace(with: canonical)
 
             // Persist each consumer's writable baseline (single writer).
-            for consumer in knownIdentifierConsumers {
-                // Capture the immutable observed set OUTSIDE the
-                // synchronous mutate closure (no actor read in-closure).
-                guard let observed = await knownIdentifiersCache.persistableBaseline(for: consumer) else {
-                    continue
-                }
-                let key = consumer.rawValue
-                let sorted = observed.sorted()
-                do {
-                    try await stateMutator.mutate { state in
-                        var map = state.knownIdentifierBaselines ?? [:]
-                        let existing = map[key]
-                        // No-op when unchanged (idempotent).
-                        if existing?.canonical == sorted { return }
-                        map[key] = KnownIdentifiersBaseline(
-                            canonical: sorted,
-                            // Preserve the first-seed time across writes.
-                            establishedAt: existing?.establishedAt ?? baselineClock.now())
-                        state.knownIdentifierBaselines = map
-                    }
-                } catch {
-                    logger.warning("known-identifiers baseline persist failed", metadata: [
-                        "source": .public(key),
-                        "error": .private(String(describing: error)),
-                    ])
-                }
+            do {
+                try await persistKnownIdentifierBaselines(
+                    cache: knownIdentifiersCache,
+                    consumers: knownIdentifierConsumers,
+                    mutator: stateMutator,
+                    now: { baselineClock.now() })
+            } catch {
+                logger.warning("known-identifiers baseline persist failed", metadata: [
+                    "error": .private(String(describing: error)),
+                ])
             }
         }
 

@@ -4,10 +4,11 @@
 // `persistableBaseline` and idempotently assign it to
 // DaemonState.knownIdentifierBaselines, preserving `establishedAt`.
 //
-// The DaemonCommand closure itself isn't unit-testable in isolation, so
-// this focused harness replicates its exact persist logic against a
-// real StateMutator + temp StateStore + the production cache, asserting
-// the single-writer invariants from the plan.
+// These tests invoke the SAME `persistKnownIdentifierBaselines` function
+// the production refresher calls (the DaemonCommand closure itself isn't
+// unit-testable in isolation), driving it against a real StateMutator +
+// temp StateStore + the production cache and asserting the single-writer
+// invariants from the plan.
 //
 // Synthetic handles only (+15550000001, +15550000002); no real PII.
 import XCTest
@@ -36,31 +37,15 @@ final class KnownIdentifiersBaselinePersistenceTests: XCTestCase {
         return StateMutator(store: store)
     }
 
-    /// Replicates the DaemonCommand refresher's per-source persist step:
-    /// read persistableBaseline OUTSIDE the mutate closure, then plain-
-    /// assign it inside (idempotent, establishedAt preserved).
+    /// Drives the production refresher persist step with a fixed clock.
     private func persistBaselines(
         cache: KnownIdentifiersCache,
         consumers: Set<SourceID>,
         mutator: StateMutator,
         now: Date
     ) async throws {
-        for consumer in consumers {
-            guard let observed = await cache.persistableBaseline(for: consumer) else {
-                continue
-            }
-            let key = consumer.rawValue
-            let sorted = observed.sorted()
-            try await mutator.mutate { state in
-                var map = state.knownIdentifierBaselines ?? [:]
-                let existing = map[key]
-                if existing?.canonical == sorted { return }
-                map[key] = KnownIdentifiersBaseline(
-                    canonical: sorted,
-                    establishedAt: existing?.establishedAt ?? now)
-                state.knownIdentifierBaselines = map
-            }
-        }
+        try await persistKnownIdentifierBaselines(
+            cache: cache, consumers: consumers, mutator: mutator, now: { now })
     }
 
     // MARK: - first-upgrade seed persists full set with zero scans
@@ -91,10 +76,15 @@ final class KnownIdentifiersBaselinePersistenceTests: XCTestCase {
         let cache = KnownIdentifiersCache(
             baselines: [.messages: []], consumers: [.messages])
         await cache.replace(with: ["+15550000001"])
+        // The identifier is owed a scan until its source tick durably
+        // enqueues it; drain + confirm so it joins the writable baseline.
+        _ = await cache.drainNewlyAdded(for: .messages)
+        await cache.confirmDrained(for: .messages)
 
         try await persistBaselines(cache: cache, consumers: [.messages],
                                    mutator: mutator, now: fixedNow)
         let first = try await mutator.read().knownIdentifierBaselines?["messages"]
+        XCTAssertEqual(first?.canonical, ["+15550000001"])
         XCTAssertEqual(first?.establishedAt, fixedNow)
 
         // A second persist with a DIFFERENT `now` must NOT change the

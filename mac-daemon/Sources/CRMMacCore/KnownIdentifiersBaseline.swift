@@ -48,3 +48,43 @@ public struct KnownIdentifiersBaseline: Codable, Equatable, Sendable {
         KnownIdentifiersBaseline(canonical: set.sorted(), establishedAt: establishedAt)
     }
 }
+
+/// Persist each consumer's writable baseline into
+/// DaemonState.knownIdentifierBaselines (single writer). For each
+/// consumer it reads `cache.persistableBaseline` — the observed known
+/// set MINUS identifiers still owed a durable scan enqueue — and plain-
+/// assigns it when it differs from the persisted value. The write is
+/// idempotent (no-op when unchanged) and preserves `establishedAt`
+/// across writes so it records the first-seed time, not the last update.
+///
+/// This is the heartbeat refresher's persist step. It lives here, called
+/// by both the production refresher and its focused test, so the test
+/// exercises the real code path rather than a replica.
+public func persistKnownIdentifierBaselines(
+    cache: KnownIdentifiersCache,
+    consumers: Set<SourceID>,
+    mutator: StateMutator,
+    now: @Sendable () -> Date
+) async throws {
+    for consumer in consumers {
+        // Capture the immutable observed set OUTSIDE the synchronous
+        // mutate closure (no actor read in-closure).
+        guard let observed = await cache.persistableBaseline(for: consumer) else {
+            continue
+        }
+        let key = consumer.rawValue
+        let sorted = observed.sorted()
+        let seedTime = now()
+        try await mutator.mutate { state in
+            var map = state.knownIdentifierBaselines ?? [:]
+            let existing = map[key]
+            // No-op when unchanged (idempotent).
+            if existing?.canonical == sorted { return }
+            map[key] = KnownIdentifiersBaseline(
+                canonical: sorted,
+                // Preserve the first-seed time across writes.
+                establishedAt: existing?.establishedAt ?? seedTime)
+            state.knownIdentifierBaselines = map
+        }
+    }
+}
