@@ -196,7 +196,7 @@ RETURNING *;
 
 -- name: ClearMeetingNoteConflict :one
 -- Promotes a row in EITHER attention state (conflict_pending or
--- orphan_needs_review) to a "none of these" Step 4 outcome. For a
+-- orphan_needs_review) to a "none of these" outcome. For a
 -- conflict_pending row the caller derives the outcome from decideLinkage
 -- (linked_impromptu / orphan_title_augmented / orphan_needs_review); for
 -- an orphan_needs_review row the caller forces linked_impromptu (the
