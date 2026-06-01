@@ -22,19 +22,9 @@ jobs:
       - uses: dorny/paths-filter@v3
         id: filter
         with:
-          filters: |
-            backend:
-              - 'backend/**'
-              - 'tests/**'
-              - 'go.mod'
-              - 'scripts/**'
-              - 'Makefile'
-              - '.github/workflows/ci.yml'
-            frontend:
-              - 'frontend/**'
-            mac_daemon:
-              - 'mac-daemon/**'
-              - '.github/workflows/ci.yml'
+          filters: ./path-filters.yml
+      - name: Check path-filters parity
+        run: bash scripts/ci/path-filters-parity-guard.sh
 
   backend-tests:
     name: Backend Tests

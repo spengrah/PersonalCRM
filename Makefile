@@ -281,7 +281,7 @@ mac-daemon:
 
 # Run Mac daemon Swift tests locally. Requires Xcode 16 (Swift 6 toolchain).
 # A CI-skipped chat.db smoke test reads ~/Library/Messages/chat.db; that
-# test only runs without the CI=1 env var (i.e. interactive dev runs).
+# test only runs without the CI=true env var (i.e. interactive dev runs).
 test-daemon-local:
 	@echo "Running Mac daemon Swift tests..."
 	@cd mac-daemon && swift test

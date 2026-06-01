@@ -33,6 +33,7 @@ These rules apply to all AI agents working on this project.
 Git pre-push hooks run automatically and may block push:
 
 - **Tests**: Runs lint and all test suites. Push blocked if tests fail.
+- **Swift (mac-daemon)**: When the push range touches `mac-daemon/**`, runs `CI=true make test-daemon-local` (`swift test`, CI marker set so real-Keychain/notification tests skip). Blocks push on failure. Skips with a warning (exit 0) if Xcode/XCTest is unavailable — that skip is the intended escape hatch, not a push bypass.
 
 ## Code Review Approval Criteria
 
@@ -161,6 +162,8 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 | Plain GIN on JSONB array used with `LOWER()` predicates | PostgreSQL cannot use `GIN(col jsonb_ops)` or `GIN(col jsonb_path_ops)` for `WHERE EXISTS(... LOWER(elem->>'k') = LOWER($1))`. Switching to plain GIN + `@>` rewrite silently drops case-insensitivity. Use a functional GIN over a STRICT IMMUTABLE helper that lowercases the projected values: `CREATE INDEX ... USING GIN(jsonb_array_lower_values(col, 'key'))` and rewrite the WHERE to `&& ARRAY[LOWER($1)]`. Also: scoping JSONB index work as "migration-only" is a trap — existing queries almost always need rewrites too |
 | `CREATE OR REPLACE FUNCTION` in a migration that is referenced by an index | Use plain `CREATE FUNCTION` for any function that backs a functional index. A future migration that tries to redefine it will fail loudly (duplicate object) instead of silently overwriting the body and invalidating the index — the loud failure forces the author to think about whether dependent indexes need rebuilding. Reserve `OR REPLACE` for trigger functions that aren't index-backed |
 | EXPLAIN ANALYZE with `SET enable_seqscan = off` | Honest perf measurement runs WITHOUT planner overrides. Forcing `enable_seqscan = off` proves only that the index is used when forced — not that it wins on real data. On small tables seq scan is genuinely faster, and an honest baseline catches that. Re-run with the override OFF before claiming an index will activate in prod |
+| Setting `CI=1` to skip mac-daemon real-system tests in a script | The Swift suite gates real-Keychain/notification tests on `environment["CI"] == "true"` (string `"true"`, NOT `"1"`). Use `CI=true`; `CI=1` leaves those tests running against the real login Keychain |
+| Adding a new path-trigger group | `path-filters.yml` (repo root) is the SINGLE source read by BOTH CI's dorny filter (`filters: ./path-filters.yml`) and the pre-push hook's group-aware parser (`file_in_group`). Keep it LCD: flat named groups of `'dir/**'` globs, no anchors/aliases/negation. The Go/frontend local gate keys off the `backend ∪ frontend` groups. The local Swift gate (`check_swift`) deliberately does NOT use the `mac_daemon` group — it uses a stricter literal `mac-daemon/` prefix test so a `ci.yml`-only push (which IS in the `mac_daemon` group, for CI's sake) does not run `swift test` locally |
 
 ### Never Do These
 
@@ -238,3 +241,4 @@ Cross-cutting concerns that require checking multiple locations:
 | New contact list filter param | 10 SQL queries + repo params + service count calls + handler query struct + frontend types + API client + contacts page + detail page listContext |
 | Semantic column to table with dedup logic | All FindInWindow queries (add param), unique constraints, repository signatures, service call sites, `make sqlc`, regression test for false-positive case |
 | New type or worker referenced from `cmd/crm-api/main.go` | Inline into `main.go` (single-file build convention). If inlining isn't feasible, update ALL build sites to package form `./cmd/crm-api`: `.github/workflows/ci.yml`, `Makefile` (6+ targets), `frontend/playwright.config.ts` webServer |
+| Path-filter groups (`path-filters.yml`) | CI dorny step (`.github/workflows/ci.yml` `changes` job) AND `scripts/hooks/pre-push` group-aware parser (`file_in_group` call sites + `check_swift`) AND the filter unit-test harness assertions |

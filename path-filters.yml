@@ -1,0 +1,30 @@
+# Single source of truth for path → which-tests-run mapping.
+# Read by BOTH:
+#   - CI: .github/workflows/ci.yml `changes` job (dorny/paths-filter@v3, filters: ./path-filters.yml)
+#   - Local: scripts/hooks/pre-push (group-aware bash parser, file_in_group)
+#
+# LCD constraint: flat named groups, each a plain list of 'dir/**' string globs.
+# NO YAML anchors/aliases, NO negation patterns — the bash parser is a dumb
+# line-scanner and dorny is the other consumer; keep it lowest-common-denominator.
+#
+# Group → consumer mapping:
+#   backend     → CI backend-tests + e2e-tests; local Go/frontend test suite (∪ frontend)
+#   frontend    → CI frontend-tests + e2e-tests; local Go/frontend test suite (∪ backend)
+#   mac_daemon  → CI mac-daemon-tests. NOTE: the local Swift gate (check_swift) does NOT
+#                 use this group; it uses a stricter literal 'mac-daemon/' prefix test, so a
+#                 ci.yml-only push runs mac-daemon-tests in CI but NOT swift test locally.
+
+backend:
+  - 'backend/**'
+  - 'tests/**'
+  - 'go.mod'
+  - 'go.sum'
+  - 'scripts/**'
+  - 'Makefile'
+  - '.github/workflows/ci.yml'
+  - 'path-filters.yml'
+frontend:
+  - 'frontend/**'
+mac_daemon:
+  - 'mac-daemon/**'
+  - '.github/workflows/ci.yml'

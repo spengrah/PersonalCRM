@@ -1,32 +1,18 @@
 #!/bin/bash
-# Unified pre-push hook: lint, test (parallel execution)
+# Unified pre-push hook: lint, swift (mac-daemon), test (parallel execution)
 #
 # Reads configuration from .ai/pre-push.json
 # Runs enabled checks; blocks push if any required check fails
 #
 # To bypass (not recommended): git push --no-verify
 
-set -e
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-cd "$PROJECT_ROOT"
 
 CONFIG_FILE=".ai/pre-push.json"
 
-if [[ ! -f "$CONFIG_FILE" ]]; then
-  echo "Warning: No $CONFIG_FILE found, skipping pre-push checks" >&2
-  exit 0
-fi
-
-# Temp files for parallel execution results
-LINT_RESULT=$(mktemp)
-TEST_RESULT=$(mktemp)
-trap "rm -f $LINT_RESULT $TEST_RESULT" EXIT
-
-echo "==============================================================" >&2
-echo "Pre-push: Running checks..." >&2
-echo "==============================================================" >&2
+# path-filters.yml is the single source of truth (shared with CI's dorny filter).
+FILTERS_FILE="path-filters.yml"
 
 # Check Claude review log for HEAD. Replaces the prior CI claude-review job —
 # /review-head writes the verdict to .ai/log/review/<HEAD-sha>.md, and the push
@@ -65,8 +51,6 @@ check_review_log() {
 
   echo "  [review] OK Claude review of ${head_sha:0:12}" >&2
 }
-
-check_review_log
 
 # Run lint commands
 run_lint() {
@@ -108,51 +92,64 @@ run_lint() {
   fi
 }
 
-# Check if a file matches any pattern in test-triggers.yml
-file_triggers_tests() {
-  local file="$1"
-  local triggers="test-triggers.yml"
-
-  [[ ! -f "$triggers" ]] && return 0  # No config = always run tests
-
-  # Parse YAML patterns (lines starting with '  - ')
+# file_in_group <file> <group>: true (0) if <file> matches any glob under the
+# <group:> top-level key in path-filters.yml. Group-aware: only patterns inside
+# the requested group are considered. Returns 1 (no match) when the filters file
+# is absent — "always run" is meaningless per-group; the absent-file fail-safe
+# lives in any_file_in_groups instead.
+file_in_group() {
+  local file="$1" group="$2"
+  [[ ! -f "$FILTERS_FILE" ]] && return 1
+  local in_group=0
   while IFS= read -r line; do
-    # Extract pattern from "  - 'pattern'" or "  - pattern"
+    # Top-level key (column 0, "name:") — enter/exit the target group.
+    if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*): ]]; then
+      if [[ "${BASH_REMATCH[1]}" == "$group" ]]; then in_group=1; else in_group=0; fi
+      continue
+    fi
+    [[ "$in_group" -eq 0 ]] && continue
+    # Pattern line "  - 'glob'".
     if [[ "$line" =~ ^[[:space:]]*-[[:space:]]+(.+)$ ]]; then
-      local pattern
-      pattern=$(echo "${BASH_REMATCH[1]}" | tr -d "'\"")
-
-      # Glob pattern (contains *)
+      local pattern; pattern=$(echo "${BASH_REMATCH[1]}" | tr -d "'\"")
       if [[ "$pattern" == *"*"* ]]; then
         # Convert glob to regex: ** = .*, * = [^/]*
-        # Use placeholder to avoid clobbering
         local regex="${pattern//\*\*/__DOUBLESTAR__}"
         regex="${regex//\*/$'[^/]*'}"
         regex="${regex//__DOUBLESTAR__/.*}"
-        if [[ "$file" =~ ^${regex}$ ]]; then
-          return 0  # File triggers tests
-        fi
-      # Exact match
+        [[ "$file" =~ ^${regex}$ ]] && return 0
       elif [[ "$file" == "$pattern" ]]; then
         return 0
       fi
     fi
-  done < "$triggers"
-
-  return 1  # File does not trigger tests
+  done < "$FILTERS_FILE"
+  return 1
 }
 
-# Check if any files in a list trigger tests
-any_file_triggers_tests() {
-  local changed_files="$1"
-  [[ -z "$changed_files" ]] && return 1  # No changes = no tests needed
-
+# any_file_in_groups <newline-file-list> <group...>: 0 if any file is in any group.
+# Fail-safe: if the filters file is missing, return 0 (run tests) — matches the
+# old "no config = always run tests" posture, but only for the Go/frontend gate.
+any_file_in_groups() {
+  local changed_files="$1"; shift
+  [[ -z "$changed_files" ]] && return 1
+  [[ ! -f "$FILTERS_FILE" ]] && return 0
   while IFS= read -r file; do
-    if file_triggers_tests "$file"; then
-      return 0  # At least one file triggers tests
-    fi
+    local g
+    for g in "$@"; do
+      file_in_group "$file" "$g" && return 0
+    done
   done <<< "$changed_files"
-  return 1  # No files trigger tests
+  return 1
+}
+
+# any_file_under_macdaemon <newline-file-list>: 0 if any line starts with "mac-daemon/".
+# The local Swift gate uses this stricter literal prefix test (NOT the mac_daemon
+# group) so a ci.yml-only push — which IS in the mac_daemon group for CI's sake —
+# does not run `swift test` locally, and the absent-filters-file fail-safe in
+# any_file_in_groups can never make the Swift gate over-fire on a non-daemon push.
+any_file_under_macdaemon() {
+  local files="$1"
+  [[ -z "$files" ]] && return 1
+  grep -q '^mac-daemon/' <<< "$files"
 }
 
 # Check if tests can be skipped
@@ -163,8 +160,8 @@ should_skip_tests() {
   local pushed_files
   pushed_files=$(git diff --name-only "$remote_branch"...HEAD 2>/dev/null)
 
-  if ! any_file_triggers_tests "$pushed_files"; then
-    return 0  # No code changes, skip tests
+  if ! any_file_in_groups "$pushed_files" backend frontend; then
+    return 0  # No Go/frontend changes, skip tests
   fi
 
   # Case 2: Tests already passed, no new trigger files since
@@ -175,7 +172,7 @@ should_skip_tests() {
     if [[ -n "$last_tested_commit" ]] && git rev-parse --verify "$last_tested_commit" >/dev/null 2>&1; then
       local files_since_test
       files_since_test=$(git diff --name-only "$last_tested_commit" HEAD 2>/dev/null)
-      if ! any_file_triggers_tests "$files_since_test"; then
+      if ! any_file_in_groups "$files_since_test" backend frontend; then
         return 0  # Only non-trigger files changed since tests passed
       fi
     fi
@@ -191,6 +188,45 @@ save_test_marker() {
   local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
   mkdir -p "$(dirname "$marker")"
   echo "{\"commit\": \"$commit\", \"timestamp\": \"$timestamp\"}" > "$marker"
+}
+
+# Swift (mac-daemon) gate: runs `CI=true make test-daemon-local` when the push
+# range touches mac-daemon/**. CI marker set so real-Keychain/notification tests
+# skip. Blocks push on failure; skips with a warning (exit 0) if Xcode/XCTest is
+# unavailable — the intended escape hatch, not a push bypass.
+check_swift() {
+  cd "$PROJECT_ROOT"  # run_lint's eval'd "cd frontend" leaks into this shell; restore root
+  local enabled
+  enabled=$(jq -r '.swift.enabled // false' "$CONFIG_FILE")
+  if [[ "$enabled" != "true" ]]; then
+    return 0
+  fi
+
+  local remote_branch changed
+  remote_branch=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null) || remote_branch="origin/main"
+  changed=$(git diff --name-only "$remote_branch"...HEAD 2>/dev/null) || changed=""
+
+  if ! any_file_under_macdaemon "$changed"; then
+    echo "  [swift] OK Skipped (no mac-daemon changes)" >&2
+    return 0
+  fi
+
+  if ! xcrun --find xctest >/dev/null 2>&1; then
+    echo "  [swift] WARN Skipping Swift tests (Xcode/XCTest not found — install full Xcode to gate locally)" >&2
+    return 0
+  fi
+
+  echo "  [swift] -> mac-daemon swift test (CI=true)" >&2
+  if CI=true make test-daemon-local >/dev/null 2>&1; then
+    echo "  [swift] OK mac-daemon swift test" >&2
+  else
+    echo "" >&2
+    echo "==============================================================" >&2
+    echo "FAILED: mac-daemon Swift tests failed. Fix before pushing." >&2
+    echo "  Re-run locally: CI=true make test-daemon-local" >&2
+    echo "==============================================================" >&2
+    exit 1
+  fi
 }
 
 # Run test commands
@@ -242,6 +278,31 @@ run_tests() {
   fi
 }
 
+# Allow tests to source this file for unit-testing the pure functions
+# (file_in_group / any_file_in_groups) without running the hook body.
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+  return 0 2>/dev/null || true
+fi
+
+set -e
+cd "$PROJECT_ROOT"
+
+if [[ ! -f "$CONFIG_FILE" ]]; then
+  echo "Warning: No $CONFIG_FILE found, skipping pre-push checks" >&2
+  exit 0
+fi
+
+# Temp files for parallel execution results
+LINT_RESULT=$(mktemp)
+TEST_RESULT=$(mktemp)
+trap "rm -f $LINT_RESULT $TEST_RESULT" EXIT
+
+echo "==============================================================" >&2
+echo "Pre-push: Running checks..." >&2
+echo "==============================================================" >&2
+
+check_review_log
+
 # Run lint first (fast, fail early)
 run_lint
 LINT_STATUS=$(cat "$LINT_RESULT")
@@ -253,6 +314,9 @@ if [[ "$LINT_STATUS" == "FAIL" ]]; then
   echo "=============================================================="
   exit 1
 fi
+
+# Swift gate (path-filtered, fast-fail before the heavy Go/frontend suite)
+check_swift
 
 # Run tests
 run_tests
