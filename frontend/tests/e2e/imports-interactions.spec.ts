@@ -75,28 +75,41 @@ test.describe('Imports Interactions tab @area:imports', () => {
     await expect(page).toHaveURL(/tab=interactions/)
   })
 
-  test('wires the orphan "Log as impromptu" action to the resolve-link endpoint', async ({
+  test('resolves the orphan via "Log as impromptu" (orphan_needs_review → linked_impromptu)', async ({
     page,
   }) => {
-    // NOTE: the resolve-link endpoint only transitions conflict_pending rows;
-    // resolving an orphan_needs_review row through it returns 409 today. That
-    // backend state-machine gap is tracked separately in issue #368. This test
-    // asserts the orphan card's action is present and dispatches the
-    // resolve-link request (the UI deliverable), without asserting the
-    // backend transition.
+    // The backend now transitions orphan_needs_review → linked_impromptu on
+    // resolve-link {none_of_these}, so the card actually leaves the queue.
+    // Both seeded orphans share meeting_at and the list orders only by
+    // meeting_at DESC, so we bind the click + assertions to titleA's card by
+    // its heading (never list position) and scope the disappearance check to
+    // the card heading (the success toast is a separate element and cannot
+    // satisfy a heading locator).
     await page.goto('/imports?tab=interactions')
     await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByText(titleA).first()).toBeVisible({ timeout: 10000 })
 
-    const dispatched = page.waitForRequest(
-      req => req.method() === 'POST' && req.url().includes('/resolve-link')
+    const headingA = page.getByRole('heading', { name: titleA })
+    const headingB = page.getByRole('heading', { name: titleB })
+    await expect(headingA).toBeVisible({ timeout: 10000 })
+
+    // The orphan card for titleA — scope the button click to it so list
+    // order can't pick the wrong card.
+    const cardA = page
+      .locator('div.border-l-gray-300')
+      .filter({ has: page.getByRole('heading', { name: titleA }) })
+
+    // Register the response wait BEFORE the click so a fast 200 isn't missed.
+    const responsePromise = page.waitForResponse(
+      res => res.url().includes('/resolve-link') && res.request().method() === 'POST',
+      { timeout: 10000 }
     )
-    await page
-      .getByRole('button', { name: /Log as impromptu/ })
-      .first()
-      .click()
-    const req = await dispatched
-    expect(req.postDataJSON()).toMatchObject({ action: 'none_of_these' })
+    await cardA.getByRole('button', { name: /Log as impromptu/ }).click()
+    const res = await responsePromise
+    expect(res.status()).toBe(200)
+
+    // The resolved card leaves the queue; the untouched sibling stays.
+    await expect(headingA).toHaveCount(0, { timeout: 10000 })
+    await expect(headingB).toBeVisible()
   })
 
   test('scrolls to and highlights the ?session deep-linked card', async ({ page }) => {
