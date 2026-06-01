@@ -73,4 +73,39 @@ final class MessagesCursorTests: XCTestCase {
     func testPendingScansCapConstant() {
         XCTAssertEqual(MessagesCursor.pendingScansCap, 256)
     }
+
+    func testPendingScanProgressRoundTrip() throws {
+        let original = MessagesCursor(
+            backfillFloorSentAt: floor,
+            pendingScans: [
+                PendingScan(normalizedHandle: "+15550000001",
+                            since: Date(timeIntervalSince1970: 1_775_000_000),
+                            progressBelowRowID: 4242),
+            ])
+        let encoded = try MessagesCursorCodec.encode(original)
+        XCTAssertTrue(encoded.contains("\"progress_below_rowid\""))
+        let decoded = try MessagesCursorCodec.decode(encoded)
+        XCTAssertEqual(decoded, original)
+        XCTAssertEqual(decoded?.pendingScans.first?.progressBelowRowID, 4242)
+    }
+
+    func testPendingScanWithoutProgressDecodesNil() throws {
+        // An operator-CLI-queued or pre-existing entry omits the
+        // progress field → nil ("not started").
+        let json = """
+            {
+                "backfill_floor_sent_at": "2026-01-01T00:00:00Z",
+                "backfill_complete": false,
+                "pending_scans": [
+                    {
+                        "normalized_handle": "+15550000001",
+                        "since": "2026-04-01T00:00:00Z"
+                    }
+                ]
+            }
+            """
+        let decoded = try MessagesCursorCodec.decode(json)
+        let scan = try XCTUnwrap(decoded?.pendingScans.first)
+        XCTAssertNil(scan.progressBelowRowID)
+    }
 }

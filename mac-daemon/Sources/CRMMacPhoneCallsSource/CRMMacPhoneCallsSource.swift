@@ -9,6 +9,7 @@
 //   - ServiceDerivation.swift     (ZSERVICE_PROVIDER, ZCALLTYPE) -> service
 //   - CallHistoryDBSchema.swift   whitelist + drift detection
 //   - CallHistoryDBReader.swift   GRDB-backed row iterator
+//   - CallHistoryScanReader.swift identifier-scoped resumable scan
 //   - PayloadShaping.swift        ZCALLRECORD row -> CallPayload
 //   - PhoneCallsCursor.swift      typealiases pointing at CRMMacCore wire
 //   - PhoneCallsPublisher.swift   /ingest/events batching

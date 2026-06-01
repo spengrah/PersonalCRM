@@ -14,14 +14,24 @@
 //     writers (Phone.app / FaceTime / Continuity).
 //   - Load cursor: piClient.getCursor("phone_calls") -> decode into
 //     PhoneCallsCursor; cache locally via StateMutator.
+//   - Phase A — durable scan enqueue: drain the known-identifiers
+//     cache's newly-added bucket (non-destructive), coverage-dedup +
+//     cap them into pendingScans with a 30-day window, and commit the
+//     cursor BEFORE executing any scan. On success confirm the drain;
+//     on failure return it so the next tick re-enqueues. Runs
+//     regardless of isPopulated.
+//   - Phase B — execute pending scans (gated on cache.hasFetched, NOT
+//     isPopulated): membership-check each entry, walk one budget-
+//     limited page via CallHistoryScanReader (resumable via the
+//     entry's (ZDATE, Z_PK) progress), publish, advance progress or
+//     dequeue on exhaustion, re-commit. Runs BEFORE the row-emitting
+//     batches.
 //   - Capture install-time MAX(ZDATE, Z_PK) on the first tick. The
 //     live cursor starts at (install_max.zdate, install_max.zPK - 1)
 //     so the first live tick's tuple tie-break includes the
 //     install_max row itself.
 //   - Sender filter: bail if KnownIdentifiersCache isn't populated
-//     yet (heartbeat will fill it). The newly-added queue is observed
-//     + logged but not consumed — identifier-scoped scans are
-//     deferred to a follow-up.
+//     yet (heartbeat will fill it) — the scan phases above already ran.
 //   - Backfill batch (descending) + live batch (ascending), each
 //     bounded by the shared PhoneCallsBudget.
 //   - If the in-memory cursor changed AND every batch was confirmed
@@ -31,7 +41,9 @@
 //
 // The plugin is the single owner of the GRDB DatabasePool, but shares
 // the KnownIdentifiersCache (in CRMMacCore) with CRMMacMessagesSource.
-// All writes to state.json funnel through StateMutator.
+// All writes to state.json funnel through StateMutator. The plugin
+// NEVER writes the persisted known-identifiers baseline — that is the
+// heartbeat refresher's job (single-writer model).
 import Foundation
 import GRDB
 import CRMMacCore
@@ -213,7 +225,37 @@ public actor PhoneCallsSourcePlugin: DataSourcePlugin {
             return
         }
 
-        // Sender filter populated?
+        var working = cursor
+
+        // Phase A — durable scan enqueue (commit-first). Drain the
+        // cache's newly-added bucket NON-DESTRUCTIVELY and merge it into
+        // working.pendingScans (coverage-dedup + cap), then commit the
+        // cursor with the enlarged queue BEFORE any scan executes. On
+        // commit success the drained identifiers are confirmed; on
+        // failure they are returned to the cache so the next tick
+        // re-enqueues. Runs regardless of isPopulated — a newly-known
+        // identifier must be durably queued even on a tick where the
+        // row-emitting batches skip.
+        if await runScanEnqueue(working: &working) == .aborted {
+            return
+        }
+
+        // Phase B — execute pending scans (resumable), gated on
+        // hasFetched (NOT isPopulated). An empty-but-fetched CRM still
+        // adjudicates pending scans (drops an operator scan for a
+        // now-removed contact); a not-yet-fetched cache defers them. A
+        // scan-commit conflict aborts the rest of the tick: `working` is
+        // now stale relative to the refreshed Pi cursor, so the
+        // row-emitting batches + final commit must NOT run against it.
+        if await cache.hasFetched {
+            if await runPendingScans(pool: pool, working: &working) == .aborted {
+                return
+            }
+        }
+
+        // Sender filter populated?  If the known-identifiers cache
+        // hasn't been populated yet, skip the row-emitting batches
+        // (heartbeat will fill it). The scan phases above already ran.
         let populated = await cache.isPopulated
         if !populated {
             logger.debug("phone_calls tick: known-identifiers cache empty; skipping", metadata: [:])
@@ -232,7 +274,6 @@ public actor PhoneCallsSourcePlugin: DataSourcePlugin {
         // backwardFromExclusive and live at the same tuple via
         // forwardFromExclusive — would skip the install_max row
         // forever.
-        var working = cursor
         if working.installMaxZDate == nil {
             do {
                 let maxPoint = try await pool.read { try CallHistoryDBReader.maxZDate(db: $0) }
@@ -265,16 +306,6 @@ public actor PhoneCallsSourcePlugin: DataSourcePlugin {
         var hadRejection = false
         var hadUnconfirmed = false
 
-        // Identifier-scoped 30-day backwards scan is deferred — we
-        // observe the newly-added queue for visibility but do NOT
-        // consume it (parity with the merged messages plugin).
-        let newlyAdded = await cache.drainNewlyAdded()
-        if !newlyAdded.isEmpty {
-            logger.info("phone_calls tick: newly-known contacts detected", metadata: [
-                "count": .public(String(newlyAdded.count)),
-            ])
-        }
-
         // Backfill batch (descending).
         if !working.backfillComplete, budget.rowsRemaining > 0 {
             let outcome = await runBackfillBatch(
@@ -299,38 +330,17 @@ public actor PhoneCallsSourcePlugin: DataSourcePlugin {
         // item we tried to publish was confirmed.
         let cursorChanged = working != cursor
         if cursorChanged && !hadRejection && !hadUnconfirmed {
-            do {
-                let newJSON = try PhoneCallsCursorCodec.encode(working)
-                try await piClient.commitCursor(
-                    auth: auth,
-                    source: "phone_calls",
-                    cursor: newJSON,
-                    baseCursor: lastCommittedCursorJSON,
-                    cursorEpoch: cachedEpoch,
-                    backfillComplete: working.backfillComplete)
-                let pushedAt = clock()
-                try await writeThroughCursor(
-                    newJSON,
-                    epoch: cachedEpoch,
-                    backfillComplete: working.backfillComplete,
-                    lastPushedAt: pushedAt)
-                cachedCursor = working
-                lastCommittedCursorJSON = newJSON
-                stickyLastPushedAt = pushedAt
+            switch await commitWorking(working) {
+            case .committed:
+                stickyLastPushedAt = clock()
                 stickyPushedCursor = formatLiveCursor(working) ?? stickyPushedCursor
                 logger.debug("phone_calls tick: cursor committed", metadata: [
                     "backfill_complete": .public(String(working.backfillComplete)),
                 ])
-            } catch let PiClientError.cursorConflict(_, current) {
-                logger.info("phone_calls tick: cursor conflict, refreshing", metadata: [
-                    "current_epoch": .public(current.currentEpoch.map(String.init) ?? "nil"),
-                ])
+            case .conflict:
                 _ = try? await loadOrFetchCursor(forceRefresh: true)
                 return
-            } catch {
-                logger.warning("phone_calls tick: cursor commit failed", metadata: [
-                    "error": .private(String(describing: error)),
-                ])
+            case .failed:
                 return
             }
         } else if hadRejection {
@@ -349,6 +359,263 @@ public actor PhoneCallsSourcePlugin: DataSourcePlugin {
             pushedCursorString: stickyPushedCursor,
             backfillComplete: working.backfillComplete))
     }
+
+    // MARK: - cursor commit helper
+
+    /// Result of a CAS cursor commit.
+    private enum CommitResult {
+        case committed
+        case conflict
+        case failed
+    }
+
+    /// CAS-commit `working` to the Pi (base = lastCommittedCursorJSON),
+    /// write through to local state.json, and update the in-memory
+    /// cache (`cachedCursor` / `lastCommittedCursorJSON`). Used by the
+    /// scan phases AND the final backfill/live commit so the CAS base
+    /// and write-through stay in lockstep across multiple commits per
+    /// tick. Does NOT touch the sticky health fields — the caller
+    /// updates those on a committed result for the row-emitting path.
+    private func commitWorking(_ working: PhoneCallsCursor) async -> CommitResult {
+        let newJSON: String
+        do {
+            newJSON = try PhoneCallsCursorCodec.encode(working)
+        } catch {
+            logger.warning("phone_calls tick: cursor encode failed", metadata: [
+                "error": .private(String(describing: error)),
+            ])
+            return .failed
+        }
+        do {
+            try await piClient.commitCursor(
+                auth: auth,
+                source: "phone_calls",
+                cursor: newJSON,
+                baseCursor: lastCommittedCursorJSON,
+                cursorEpoch: cachedEpoch,
+                backfillComplete: working.backfillComplete)
+            try await writeThroughCursor(
+                newJSON,
+                epoch: cachedEpoch,
+                backfillComplete: working.backfillComplete,
+                lastPushedAt: clock())
+            cachedCursor = working
+            lastCommittedCursorJSON = newJSON
+            return .committed
+        } catch let PiClientError.cursorConflict(_, current) {
+            logger.info("phone_calls tick: cursor conflict, refreshing", metadata: [
+                "current_epoch": .public(current.currentEpoch.map(String.init) ?? "nil"),
+            ])
+            return .conflict
+        } catch {
+            logger.warning("phone_calls tick: cursor commit failed", metadata: [
+                "error": .private(String(describing: error)),
+            ])
+            return .failed
+        }
+    }
+
+    // MARK: - Phase A: durable scan enqueue
+
+    private enum ScanEnqueueResult {
+        case ok
+        case aborted
+    }
+
+    /// Drain the cache's newly-added bucket (non-destructive), merge it
+    /// into `working.pendingScans` (coverage-dedup + cap) with a 30-day
+    /// window, and commit the cursor BEFORE any scan executes. On commit
+    /// success the drained identifiers are confirmed in the cache; on
+    /// failure they are returned so the next tick re-enqueues. Returns
+    /// `.aborted` when the tick must stop (commit failure/conflict).
+    private func runScanEnqueue(working: inout PhoneCallsCursor) async -> ScanEnqueueResult {
+        let drained = await cache.drainNewlyAdded(for: id)
+        if drained.isEmpty {
+            return .ok
+        }
+        logger.info("phone_calls tick: newly-known contacts detected", metadata: [
+            "count": .public(String(drained.count)),
+        ])
+        // Sort canonical-ascending so drop-oldest + queue order are
+        // deterministic across runs (the bucket is an unordered Set).
+        let since = clock().addingTimeInterval(-Self.scanWindowSeconds)
+        let scanSince = max(since, config.backfillFloor)
+        for handle in drained.sorted() {
+            mergePendingScan(
+                into: &working.pendingScans,
+                handle: handle,
+                since: scanSince)
+        }
+        switch await commitWorking(working) {
+        case .committed:
+            // Durably enqueued — the drained identifiers leave the
+            // cache's owed set, eligible for the next refresher persist.
+            await cache.confirmDrained(for: id)
+            return .ok
+        case .conflict:
+            // Not durable — return the drained identifiers so the next
+            // tick re-enqueues. The tick aborts (working is discarded).
+            await cache.returnInFlight(for: id)
+            _ = try? await loadOrFetchCursor(forceRefresh: true)
+            return .aborted
+        case .failed:
+            await cache.returnInFlight(for: id)
+            return .aborted
+        }
+    }
+
+    /// Merge identifier `handle` into a pendingScans list with
+    /// COVERAGE-DEDUP: at most one entry per handle, keeping the WIDER
+    /// window. A wider window (earlier `since`) resets progress to nil
+    /// so the larger range is re-walked; an equal-or-narrower window
+    /// leaves the existing entry (and its progress) untouched.
+    private func mergePendingScan(
+        into scans: inout [PhoneCallsCursorPendingScan],
+        handle: String,
+        since: Date
+    ) {
+        if let idx = scans.firstIndex(where: { $0.normalizedHandle == handle }) {
+            let existing = scans[idx]
+            if since < existing.since {
+                // Wider window: widen + reset progress to re-walk.
+                scans[idx] = PhoneCallsCursorPendingScan(
+                    normalizedHandle: handle,
+                    since: since,
+                    progressBelowZDate: nil,
+                    progressBelowZPK: nil)
+            }
+            // Equal-or-narrower: keep the existing entry + its progress.
+            return
+        }
+        var next = scans
+        next.append(PhoneCallsCursorPendingScan(normalizedHandle: handle, since: since))
+        // Bounded queue: drop oldest on overflow.
+        if next.count > PhoneCallsCursor.pendingScansCap {
+            next.removeFirst(next.count - PhoneCallsCursor.pendingScansCap)
+            logger.warning("phone_calls tick: pending-scan cap reached; dropped oldest", metadata: [:])
+        }
+        scans = next
+    }
+
+    // MARK: - Phase B: execute pending scans
+
+    /// Execute the pending scans in `working.pendingScans` (resumable,
+    /// budget-bound). For each entry: membership-check against the known
+    /// set (drop unknown handles), walk one budget-limited page
+    /// descending from the entry's (ZDATE, Z_PK) progress, publish, then
+    /// either advance the entry's progress (still queued) or dequeue it
+    /// on confirmed exhaustion. Re-commits the cursor after each entry's
+    /// progress/dequeue so a crash recovers from the persisted cursor.
+    ///
+    /// Returns `.aborted` on a scan-commit conflict/failure: `working`
+    /// is then stale relative to the refreshed Pi cursor, so the caller
+    /// must stop the tick rather than re-commit it.
+    private func runPendingScans(pool: DatabasePool, working: inout PhoneCallsCursor) async -> ScanEnqueueResult {
+        guard !working.pendingScans.isEmpty else { return .ok }
+        // Iterate by handle snapshot; mutate working.pendingScans in
+        // place as each entry advances or completes.
+        let handles = working.pendingScans.map(\.normalizedHandle)
+        var scanBudget = config.maxRowsPerTick
+        for handle in handles {
+            if scanBudget <= 0 { break }
+            guard let entry = working.pendingScans.first(where: { $0.normalizedHandle == handle }) else {
+                continue
+            }
+            // Membership check: drop scans for handles not in the
+            // current known set — operator typo / removed contact.
+            let known = await cache.contains(handle)
+            if !known {
+                working.pendingScans.removeAll { $0.normalizedHandle == handle }
+                logger.warning("phone_calls scan: handle not in known set; dropping", metadata: [
+                    "handle": .private(handle),
+                ])
+                if case .aborted = await commitAfterScanMutation(working) { return .aborted }
+                continue
+            }
+
+            let limit = min(scanBudget, PhoneCallsPublisher.maxEventsPerBatch)
+            // Never scan below the backfill floor at EXECUTION time —
+            // defense-in-depth against any already-committed entry whose
+            // `since` predates the floor (e.g. queued by an older build).
+            // Rows below the floor are never emitted.
+            let scanSince = max(entry.since, config.backfillFloor)
+            let page: CallHistoryScanPage
+            do {
+                page = try await pool.read { [canonicalizer] db in
+                    try CallHistoryScanReader.scanPage(
+                        db: db,
+                        canonicalHandle: handle,
+                        canonicalizer: canonicalizer,
+                        since: scanSince,
+                        progressBelowZDate: entry.progressBelowZDate,
+                        progressBelowZPK: entry.progressBelowZPK,
+                        limit: limit)
+                }
+            } catch let dbError as DatabaseError where isFDAError(dbError) {
+                await markUnhealthy(reason: "fda_required")
+                return .aborted
+            } catch {
+                logger.warning("phone_calls scan: read failed; holding entry", metadata: [
+                    "error": .private(String(describing: error)),
+                ])
+                continue
+            }
+
+            scanBudget -= page.rows.count
+
+            let publishItems = await filterAndShape(rows: page.rows)
+            let outcome = await publisher.publish(items: publishItems)
+
+            let confirmed: Bool
+            if publishItems.isEmpty {
+                confirmed = true
+            } else {
+                confirmed = outcome.rejected.isEmpty && outcome.unconfirmed == 0
+            }
+            if !confirmed {
+                // Publish failure: leave progress unchanged so the next
+                // tick retries from the same coordinate. Event-log dedup
+                // absorbs any re-emit.
+                logger.warning("phone_calls scan: publish unconfirmed; holding progress", metadata: [
+                    "handle": .private(handle),
+                ])
+                continue
+            }
+
+            if page.exhausted {
+                // Final short page confirmed-published → dequeue.
+                working.pendingScans.removeAll { $0.normalizedHandle == handle }
+            } else if let lowest = page.lowestPoint {
+                // Advance progress; entry stays queued for the next tick.
+                if let idx = working.pendingScans.firstIndex(where: { $0.normalizedHandle == handle }) {
+                    working.pendingScans[idx] = PhoneCallsCursorPendingScan(
+                        normalizedHandle: handle,
+                        since: entry.since,
+                        progressBelowZDate: lowest.zdate,
+                        progressBelowZPK: lowest.zPK)
+                }
+            }
+            if case .aborted = await commitAfterScanMutation(working) { return .aborted }
+        }
+        return .ok
+    }
+
+    /// Commit `working` after a scan entry's progress/dequeue mutation.
+    /// A conflict refreshes + aborts the remaining scans this tick.
+    private func commitAfterScanMutation(_ working: PhoneCallsCursor) async -> ScanEnqueueResult {
+        switch await commitWorking(working) {
+        case .committed:
+            return .ok
+        case .conflict:
+            _ = try? await loadOrFetchCursor(forceRefresh: true)
+            return .aborted
+        case .failed:
+            return .aborted
+        }
+    }
+
+    /// Automatic newly-known scans always use a 30-day window.
+    private static let scanWindowSeconds: TimeInterval = 30 * 24 * 60 * 60
 
     // MARK: - per-tick batch runners
 

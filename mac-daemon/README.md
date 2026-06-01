@@ -299,6 +299,18 @@ crm-mac start
 
 `--since` accepts a simple duration: `30d`, `12h`, `60m`, `3600s`.
 
+### `crm-mac call-history scan --identifier <handle> [--since 30d]`
+
+Queue a one-shot backwards scan over the Phone & FaceTime call history for a specific phone/email handle — the call-history analogue of `messages scan`.
+
+```bash
+crm-mac stop
+crm-mac call-history scan --identifier "+1-555-123-4567" --since 30d
+crm-mac start
+```
+
+`--since` accepts the same simple durations as `messages scan` (`30d`, `12h`, `60m`, `3600s`). The queued scan survives a daemon restart (it persists in the phone_calls cursor) and is drained on the next tick. `crm-mac status` shows the pending count under `phone_calls → pending_scans`. Event-log `(source, source_id)` dedup absorbs any overlap with natural backfill.
+
 ### `crm-mac configure anarlog ...`
 
 Configure the Anarlog notes reader sources. Both `anarlog_humans` and `anarlog_sessions` share a single root path (typically `~/Documents/notes/meetings`) and each has its own enable flag — both default false. The daemon must be stopped for all mutations.
@@ -360,6 +372,8 @@ The daemon acquires a POSIX advisory lock on `~/Library/Application Support/crm-
 
 ## Limitations (v1)
 
-- **Daemon-down + contact added → no auto-scan.** The daemon's known-identifiers cache hash detects offline contact-list changes but does NOT auto-queue a 30-day scan for every new identifier. Run `crm-mac messages scan --identifier <X>` manually if you want backfill for a specific newly-added contact.
+- **Automatic 30-day identifier-scoped backwards scan.** When a contact is added (online OR while the daemon was offline), both the messages and phone_calls sources auto-queue a 30-day backwards scan for each genuinely-new identifier and forward any matches. Offline additions are detected via a precise per-source diff against a persisted baseline (`current − persisted`), so ONLY real additions are scanned — never the whole identifier set. The first restart after upgrading to this build is a baseline-establishing event: it seeds the per-source baseline and enqueues zero scans; subsequent restarts diff against it. `crm-mac messages scan` / `crm-mac call-history scan` remain available for targeted manual scans.
+  - **Persisted-baseline at-rest footprint.** To compute the offline diff, the daemon persists each source's canonical known-identifier set (E.164 phones / lowercased emails — the same minimal representation already held in memory) into the protected `state.json`. No new identifier data leaves the Mac; this is local state only.
+  - **Accepted single-writer trade.** The persisted baseline is written by a single writer (the heartbeat refresher), and it never advances past an identifier whose scan isn't yet durable — so a genuinely-new identifier's scan is never lost across a crash. The deliberate residual: if the daemon restarts in the narrow window after an identifier is scanned online but before the next heartbeat persists the advanced baseline, that identifier may be re-enqueued for ONE redundant scan. It is bounded (one extra scan) and fully absorbed by the Pi's `(source, source_id)` event-log dedup — wasted work only, never a duplicate interaction.
 - **Outbound group attribution.** For outbound group messages the daemon attributes the outreach to the first non-self handle by `chat_handle_join.ROWID` order. v1 simplification: every outbound group message attributes to the same arbitrary peer.
 - **Outbound messages currently not emitted.** The reader's fetch query joins on `message.handle_id`, which is NULL for outbound rows in chat.db.

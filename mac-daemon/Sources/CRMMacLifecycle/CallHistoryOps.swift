@@ -1,17 +1,17 @@
-// CallHistoryOps — body of the CLI ops subcommand:
+// CallHistoryOps — body of the CLI ops subcommands:
 //   crm-mac call-history backfill --restart [--yes]
+//   crm-mac call-history scan --identifier <handle> [--since <duration>]
 //
-// Modifies the Pi-side phone_calls cursor via the GET -> mutate -> POST
-// CAS-commit flow. Mutating local state.json only would be silently
-// overwritten on the daemon's next tick when it re-fetches the
+// Both modify the Pi-side phone_calls cursor via the GET -> mutate ->
+// POST CAS-commit flow. Mutating local state.json only would be
+// silently overwritten on the daemon's next tick when it re-fetches the
 // (unchanged) cursor.
 //
-// Daemon-running guard: acquires the daemon's pidfile lock before any
-// Pi calls. If the daemon is up, the lock acquire throws and we
+// Daemon-running guard: both acquire the daemon's pidfile lock before
+// any Pi calls. If the daemon is up, the lock acquire throws and we
 // surface a user-facing message.
 //
-// This mirrors MessagesOps.backfillRestart's contract on a different
-// source.
+// This mirrors MessagesOps' contract on a different source.
 import Foundation
 import CRMMacCore
 import CRMMacPiClient
@@ -21,6 +21,7 @@ public enum CallHistoryOpsError: Error, Equatable, CustomStringConvertible {
     case piUnreachable(underlying: String)
     case cursorConflict
     case userDeclined
+    case invalidIdentifier(String)
     case opDescription(String)
 
     public var description: String {
@@ -33,6 +34,8 @@ public enum CallHistoryOpsError: Error, Equatable, CustomStringConvertible {
             return "cursor conflict: the daemon (or another ops) raced with this command. Retry."
         case .userDeclined:
             return "operator declined; no changes made."
+        case .invalidIdentifier(let s):
+            return "invalid identifier: \(s)"
         case .opDescription(let s):
             return s
         }
@@ -107,11 +110,95 @@ public final class CallHistoryOps: Sendable {
         logger.info("call-history backfill --restart: cursor reset", metadata: [:])
     }
 
+    /// Queue a targeted backwards scan for `identifier`. The next daemon
+    /// tick (operator-initiated start) drains the queue.
+    public func scan(identifier: String, since: TimeInterval) async throws {
+        let canonical = HandleNormalization.canonicalize(identifier)
+        if canonical.isEmpty {
+            throw CallHistoryOpsError.invalidIdentifier(identifier)
+        }
+
+        try acquireOrThrow()
+        defer { pidfileLock.release() }
+
+        let current = try await piClient.getCursor(auth: auth, source: "phone_calls")
+        var working = (try? PhoneCallsCursorWireCodec.decode(current.cursor))
+            ?? PhoneCallsCursorWire(backfillFloorSentAt: backfillFloor)
+        // Never scan below the backfill floor — rows older than it are
+        // never emitted, so a wider `--since` would just waste work.
+        let sinceDate = max(Date().addingTimeInterval(-since), backfillFloor)
+        // Coverage-dedup: at most one entry per handle, keeping the WIDER
+        // window. A wider window resets progress so the larger range is
+        // re-walked; an equal-or-narrower window leaves the existing
+        // entry untouched. Mirrors the source tick's merge.
+        mergePendingScan(into: &working.pendingScans, handle: canonical, since: sinceDate)
+        let nextJSON = try PhoneCallsCursorWireCodec.encode(working)
+        do {
+            try await piClient.commitCursor(
+                auth: auth,
+                source: "phone_calls",
+                cursor: nextJSON,
+                baseCursor: current.cursor,
+                cursorEpoch: current.cursorEpoch,
+                backfillComplete: working.backfillComplete)
+        } catch PiClientError.cursorConflict {
+            throw CallHistoryOpsError.cursorConflict
+        } catch {
+            throw CallHistoryOpsError.piUnreachable(
+                underlying: String(describing: error))
+        }
+        logger.info("call-history scan: pending scan queued", metadata: [
+            "handle": .private(canonical),
+        ])
+    }
+
+    /// Merge identifier `handle` into a pendingScans list with
+    /// COVERAGE-DEDUP (at most one entry per handle, keeping the wider
+    /// window) + cap (drop oldest on overflow). Keeps the operator path
+    /// idempotent and consistent with the source tick's merge.
+    private func mergePendingScan(
+        into scans: inout [PhoneCallsCursorPendingScan],
+        handle: String,
+        since: Date
+    ) {
+        if let idx = scans.firstIndex(where: { $0.normalizedHandle == handle }) {
+            if since < scans[idx].since {
+                scans[idx] = PhoneCallsCursorPendingScan(
+                    normalizedHandle: handle, since: since)
+            }
+            return
+        }
+        scans.append(PhoneCallsCursorPendingScan(normalizedHandle: handle, since: since))
+        if scans.count > PhoneCallsCursorWire.pendingScansCap {
+            scans.removeFirst(scans.count - PhoneCallsCursorWire.pendingScansCap)
+            logger.warning("call-history scan: pending-scan cap reached; dropped oldest", metadata: [:])
+        }
+    }
+
     private func acquireOrThrow() throws {
         do {
             try pidfileLock.acquire()
         } catch PidfileError.alreadyHeld(let pid) {
             throw CallHistoryOpsError.daemonRunning(pid: pid)
+        }
+    }
+
+    /// Helper for HandleNormalization, re-exported so tests don't need
+    /// to import CRMMacPhoneCallsSource (this target is Foundation-only
+    /// and stays free of GRDB).
+    ///
+    /// Returns the canonical form, mirroring
+    /// CRMMacMessagesSource.HandleNormalization.canonicalize. Email
+    /// shape (`@`) -> lowercase + trim; otherwise treat as phone +
+    /// normalize to E.164 (NANP for 10-digit).
+    private enum HandleNormalization {
+        static func canonicalize(_ raw: String) -> String {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { return "" }
+            if trimmed.contains("@") {
+                return NormalizationParity.normalizeEmail(trimmed)
+            }
+            return NormalizationParity.normalizePhoneE164(trimmed)
         }
     }
 }

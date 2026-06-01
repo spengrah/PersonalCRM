@@ -49,6 +49,18 @@ public struct DaemonState: Codable, Equatable, Sendable {
     /// Additive Codable field — defaults to 0 for existing
     /// `state.json` files written before this field existed.
     public var notificationMutationSequence: UInt64
+    /// Per-source persisted known-identifiers baseline, keyed by source
+    /// id (`"messages"`, `"phone_calls"`). Written ONLY by the
+    /// heartbeat refresher; read at daemon start to seed each source's
+    /// in-memory diff baseline so an offline restart enqueues 30-day
+    /// scans for the precise `current − persisted` delta only.
+    ///
+    /// Additive Codable field — defaults to nil for existing
+    /// `state.json` files written before this field existed. A nil map,
+    /// OR an absent key for a given source, is that source's
+    /// upgrade-boundary signal: the first heartbeat seeds the baseline
+    /// and enqueues NO scans.
+    public var knownIdentifierBaselines: [String: KnownIdentifiersBaseline]?
 
     public init(
         schemaVersion: Int = 1,
@@ -57,7 +69,8 @@ public struct DaemonState: Codable, Equatable, Sendable {
         lastKnownPiProtocolVersion: Int32? = nil,
         sources: [String: SourceState] = [:],
         pendingOrphanNotifications: [PendingOrphanNotification] = [],
-        notificationMutationSequence: UInt64 = 0
+        notificationMutationSequence: UInt64 = 0,
+        knownIdentifierBaselines: [String: KnownIdentifiersBaseline]? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.hostID = hostID
@@ -66,6 +79,7 @@ public struct DaemonState: Codable, Equatable, Sendable {
         self.sources = sources
         self.pendingOrphanNotifications = pendingOrphanNotifications
         self.notificationMutationSequence = notificationMutationSequence
+        self.knownIdentifierBaselines = knownIdentifierBaselines
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -76,6 +90,7 @@ public struct DaemonState: Codable, Equatable, Sendable {
         case sources
         case pendingOrphanNotifications
         case notificationMutationSequence
+        case knownIdentifierBaselines
     }
 
     public init(from decoder: Decoder) throws {
@@ -92,6 +107,9 @@ public struct DaemonState: Codable, Equatable, Sendable {
             forKey: .pendingOrphanNotifications) ?? []
         self.notificationMutationSequence = try c.decodeIfPresent(
             UInt64.self, forKey: .notificationMutationSequence) ?? 0
+        self.knownIdentifierBaselines = try c.decodeIfPresent(
+            [String: KnownIdentifiersBaseline].self,
+            forKey: .knownIdentifierBaselines)
     }
 }
 

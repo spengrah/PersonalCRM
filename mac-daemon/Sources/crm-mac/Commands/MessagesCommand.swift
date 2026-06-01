@@ -61,7 +61,7 @@ struct MessagesScanCommand: AsyncParsableCommand {
     var identifier: String
 
     @Option(name: .long,
-             help: "Scan window. ISO-8601 duration (e.g. '30d') or unset for default 30d.")
+             help: "Scan window as <number><unit> where unit is s/m/h/d (e.g. '30d'); default 30d.")
     var since: String = "30d"
 
     mutating func run() async throws {

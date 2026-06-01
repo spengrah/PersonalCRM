@@ -249,6 +249,7 @@ public struct PhoneCallsSourceStatus: Equatable {
     public let installMaxZDate: Double?
     public let installMaxZPK: Int64?
     public let backfillComplete: Bool
+    public let pendingScansCount: Int
 
     public init(
         liveCursorZDate: Double?,
@@ -257,7 +258,8 @@ public struct PhoneCallsSourceStatus: Equatable {
         backfillCursorZPK: Int64?,
         installMaxZDate: Double?,
         installMaxZPK: Int64?,
-        backfillComplete: Bool
+        backfillComplete: Bool,
+        pendingScansCount: Int
     ) {
         self.liveCursorZDate = liveCursorZDate
         self.liveCursorZPK = liveCursorZPK
@@ -266,6 +268,7 @@ public struct PhoneCallsSourceStatus: Equatable {
         self.installMaxZDate = installMaxZDate
         self.installMaxZPK = installMaxZPK
         self.backfillComplete = backfillComplete
+        self.pendingScansCount = pendingScansCount
     }
 
     /// Decoder mirroring PhoneCallsCursorWire's CodingKeys.
@@ -277,6 +280,7 @@ public struct PhoneCallsSourceStatus: Equatable {
         let installMaxZDate: Double?
         let installMaxZPK: Int64?
         let backfillComplete: Bool?
+        let pendingScans: [PendingScan]?
 
         enum CodingKeys: String, CodingKey {
             case backfillCursorZDate = "backfill_cursor_zdate"
@@ -286,6 +290,16 @@ public struct PhoneCallsSourceStatus: Equatable {
             case installMaxZDate     = "install_max_zdate"
             case installMaxZPK       = "install_max_z_pk"
             case backfillComplete    = "backfill_complete"
+            case pendingScans        = "pending_scans"
+        }
+
+        struct PendingScan: Decodable {
+            let normalizedHandle: String?
+            let since: Date?
+            enum CodingKeys: String, CodingKey {
+                case normalizedHandle = "normalized_handle"
+                case since
+            }
         }
     }
 
@@ -306,7 +320,8 @@ public struct PhoneCallsSourceStatus: Equatable {
             backfillCursorZPK: parsed.backfillCursorZPK,
             installMaxZDate: parsed.installMaxZDate,
             installMaxZPK: parsed.installMaxZPK,
-            backfillComplete: parsed.backfillComplete ?? false)
+            backfillComplete: parsed.backfillComplete ?? false,
+            pendingScansCount: parsed.pendingScans?.count ?? 0)
     }
 }
 
