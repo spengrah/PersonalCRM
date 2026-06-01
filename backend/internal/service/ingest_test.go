@@ -1939,6 +1939,23 @@ func TestDecideLinkage_Phone_SameNumberDifferentDirection_StayTwo_Conflict(t *te
 	require.Len(t, snap, 2)
 }
 
+// TestDecideLinkage_Phone_SameNumberDifferentService_StayTwo_Conflict:
+// same number+direction, different service (voice vs FaceTime audio),
+// within window → not coalesced (Service is part of the partition key)
+// → conflict. Pins Service as a semantically-significant dimension so
+// dropping it from the key would regress this test.
+func TestDecideLinkage_Phone_SameNumberDifferentService_StayTwo_Conflict(t *testing.T) {
+	sessionID := uuid.New()
+	at := accelerated.GetCurrentTime()
+	cands := []repository.LinkageCandidate{
+		phoneCand("+15550000012", repository.PhoneCallServiceVoice, repository.PhoneCallDirectionInbound, at, coalesceBoolPtr(true), 60, nil),
+		phoneCand("+15550000012", repository.PhoneCallServiceFaceTimeAudio, repository.PhoneCallDirectionInbound, at.Add(30*time.Second), coalesceBoolPtr(true), 60, nil),
+	}
+	state, _, _, _, snap := decideLinkage(events.MeetingNoteRecordedPayload{}, sessionID, cands, nil, nil)
+	require.Equal(t, repository.LinkageStateConflictPending, state)
+	require.Len(t, snap, 2)
+}
+
 // TestDecideLinkage_Phone_EmptyPeerNormalized_StayTwo_Conflict: both peers
 // empty/unknown → never coalesced → conflict.
 func TestDecideLinkage_Phone_EmptyPeerNormalized_StayTwo_Conflict(t *testing.T) {
@@ -2024,7 +2041,9 @@ func TestDecideLinkage_CrossKind_OneEventOneCall_SameWindow_StayTwo_Conflict(t *
 }
 
 // TestCoalesceCandidates_Idempotent: coalescing a coalesced slice is a
-// no-op (Decision 6) — underpins the caller's double-call observability.
+// no-op — underpins the caller's double-call observability (the caller
+// counts post-coalesce candidates without changing decideLinkage's
+// internal pass).
 func TestCoalesceCandidates_Idempotent(t *testing.T) {
 	at := accelerated.GetCurrentTime()
 	cands := []repository.LinkageCandidate{
