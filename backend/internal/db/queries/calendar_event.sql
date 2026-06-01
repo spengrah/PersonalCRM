@@ -174,3 +174,47 @@ SELECT * FROM calendar_event
 WHERE start_time BETWEEN sqlc.arg('window_start') AND sqlc.arg('window_end')
   AND status != 'cancelled'
 ORDER BY start_time ASC;
+
+-- name: DeleteCalendarEventByGcalID :exec
+-- Hard-deletes the stored calendar_event row keyed by its Google identity
+-- triple. Used by the decline/cancel remove branch. calendar_event has no
+-- deleted_at column — removal is a hard DELETE (cf. DeleteEventsByAccount).
+DELETE FROM calendar_event
+WHERE gcal_event_id = $1
+  AND gcal_calendar_id = $2
+  AND google_account_id = $3;
+
+-- name: MarkCalendarEventCancelledByGcalID :exec
+-- Off-mode deferral for the decline remove branch: marks a stored event
+-- cancelled (keyed by its Google identity triple) instead of deleting,
+-- when the event bus is unavailable. status='cancelled' excludes the row
+-- from ListPastEventsNeedingUpdate (status='confirmed') and from all
+-- contact-facing reads (status != 'cancelled'), so it neither re-fires
+-- calendar.attended nor strands an already-recorded interaction.
+UPDATE calendar_event
+SET status = 'cancelled',
+    updated_at = NOW()
+WHERE gcal_event_id = $1
+  AND gcal_calendar_id = $2
+  AND google_account_id = $3;
+
+-- name: GetCalendarEventByIDForShare :one
+-- Locking read used by the InteractionRecorder calendar.attended branch to
+-- serialize against a concurrent decline DELETE on the same row. FOR SHARE
+-- holds the row until the attended tx commits, so an interleaving decline
+-- DELETE either blocks (attended inserts, decline then soft-deletes) or has
+-- already committed (this read returns no row, attended skips the insert).
+SELECT * FROM calendar_event
+WHERE id = $1
+FOR SHARE;
+
+-- name: TestGetCalendarEventByIDForUpdateNoWait :one
+-- TEST ONLY. Probe a calendar_event row with FOR UPDATE NOWAIT: returns the
+-- row if no conflicting lock is held, or fails immediately (lock_not_available)
+-- when another tx holds a conflicting lock (e.g. a FOR SHARE from the attended
+-- branch). Used by the attended-vs-decline lock-serialization integration
+-- test to prove the attended FOR SHARE conflicts with a concurrent FOR UPDATE
+-- without a sleep/timeout. Production code must NOT call this.
+SELECT * FROM calendar_event
+WHERE id = $1
+FOR UPDATE NOWAIT;

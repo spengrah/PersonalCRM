@@ -176,8 +176,32 @@ func newRecorderWithStubs() (*InteractionRecorder, *stubWriter, *stubTGRepo, *st
 	tg := &stubTGRepo{}
 	b := &stubBus{}
 	c := &stubCadence{}
-	rec := NewInteractionRecorder(w, tg, b, c, nil)
+	// calendarLock is nil here: existing tests use placeholder (non-UUID)
+	// EventIDs and don't exercise the attended-vs-decline race, so the lock
+	// check is skipped. The skip test constructs its own recorder with a
+	// stubCalendarLocker + a UUID EventID.
+	rec := NewInteractionRecorder(w, tg, b, c, nil, nil)
 	return rec, w, tg, b, c
+}
+
+// stubCalendarLocker stubs the calendarEventLocker dependency. `exists`
+// controls whether the backing calendar_event is reported present; tests
+// for the attended-vs-decline race set exists=false to assert the recorder
+// skips the insert.
+type stubCalendarLocker struct {
+	exists  bool
+	calls   int
+	lastID  uuid.UUID
+	returnE error
+}
+
+func (s *stubCalendarLocker) LockExistsByIDTx(_ context.Context, _ pgx.Tx, id uuid.UUID) (bool, error) {
+	s.calls++
+	s.lastID = id
+	if s.returnE != nil {
+		return false, s.returnE
+	}
+	return s.exists, nil
 }
 
 // stubCadence captures HandleEvent calls so tests can assert the
@@ -303,6 +327,63 @@ func TestHandleEvent_CalendarAttended_CutoverFreshWrite_NoMarkProcessed(t *testi
 	require.Nil(t, w.lastReq.Description, "calendar payload without Title leaves description nil")
 	require.Equal(t, 1, b.publishCalls)
 	require.Zero(t, tg.calls, "calendar kind does not mark telegram messages processed")
+}
+
+// TestHandleEvent_CalendarAttended_SkipsInsertWhenEventDeleted is the
+// attended-after-delete unit guard: when the backing calendar_event was
+// already deleted (a decline won the race), the locking read reports the row
+// gone and the recorder skips the interaction insert entirely — no false
+// "attended" interaction is written.
+func TestHandleEvent_CalendarAttended_SkipsInsertWhenEventDeleted(t *testing.T) {
+	cid := uuid.New()
+	eventID := uuid.New()
+	w := &stubWriter{}
+	tg := &stubTGRepo{}
+	b := &stubBus{}
+	c := &stubCadence{}
+	locker := &stubCalendarLocker{exists: false}
+	rec := NewInteractionRecorder(w, tg, b, c, nil, locker)
+
+	env := mustEnv(t, events.KindCalendarAttended, events.CalendarAttendedPayload{
+		Version:    1,
+		ContactID:  cid,
+		EventID:    eventID.String(),
+		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+	})
+	interaction, postCommit, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	require.NoError(t, err)
+	require.Nil(t, interaction, "no interaction written when backing event deleted")
+	require.Nil(t, postCommit)
+	require.Equal(t, 1, locker.calls, "lock check ran once")
+	require.Equal(t, eventID, locker.lastID)
+	require.Zero(t, w.calls, "writer must not be invoked when the event is gone")
+	require.Zero(t, b.publishCalls, "no interaction.recorded published when skipped")
+}
+
+// TestHandleEvent_CalendarAttended_InsertsWhenEventPresent confirms the
+// happy path of the attended-after-delete guard: when the backing
+// calendar_event is present (lock acquired), the recorder proceeds with the
+// insert.
+func TestHandleEvent_CalendarAttended_InsertsWhenEventPresent(t *testing.T) {
+	cid := uuid.New()
+	eventID := uuid.New()
+	w := &stubWriter{}
+	tg := &stubTGRepo{}
+	b := &stubBus{}
+	c := &stubCadence{}
+	locker := &stubCalendarLocker{exists: true}
+	rec := NewInteractionRecorder(w, tg, b, c, nil, locker)
+
+	env := mustEnv(t, events.KindCalendarAttended, events.CalendarAttendedPayload{
+		Version:    1,
+		ContactID:  cid,
+		EventID:    eventID.String(),
+		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+	})
+	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	require.NoError(t, err)
+	require.Equal(t, 1, locker.calls)
+	require.Equal(t, 1, w.calls, "writer invoked when the event is present")
 }
 
 // TestHandleEvent_CalendarAttended_CopiesTitleToDescription asserts that

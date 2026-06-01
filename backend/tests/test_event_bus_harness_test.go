@@ -100,7 +100,7 @@ func setupTestEventBus(
 	stagingRegistry := repository.NewStagingProcessorRegistry(map[string]repository.StagingProcessor{
 		repository.InteractionSourceTelegram: repository.NewTelegramStagingProcessor(telegramMessageRepo),
 	})
-	recorder := consumer.NewInteractionRecorder(contactService, stagingRegistry, bus, cadenceUpdater, nil)
+	recorder := consumer.NewInteractionRecorder(contactService, stagingRegistry, bus, cadenceUpdater, nil, repository.NewCalendarEventRepository(database.Queries))
 	// Fill the shim's real worker now that bus + recorder exist.
 	shim.real = consumer.NewInteractionRecorderWorker(bus, database.Pool, recorder, nil)
 
@@ -180,7 +180,7 @@ func setupTestEventBusWithRematch(
 	stagingRegistry2 := repository.NewStagingProcessorRegistry(map[string]repository.StagingProcessor{
 		repository.InteractionSourceTelegram: repository.NewTelegramStagingProcessor(telegramMessageRepo),
 	})
-	recorder := consumer.NewInteractionRecorder(contactService, stagingRegistry2, bus, cadenceUpdater, nil)
+	recorder := consumer.NewInteractionRecorder(contactService, stagingRegistry2, bus, cadenceUpdater, nil, repository.NewCalendarEventRepository(database.Queries))
 	interactionShim.real = consumer.NewInteractionRecorderWorker(bus, database.Pool, recorder, nil)
 
 	rematchDispatcher := consumer.NewRematchDispatcher(rematchSvc)

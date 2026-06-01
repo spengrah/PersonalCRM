@@ -98,6 +98,19 @@ type cadenceDispatcher interface {
 	HandleEvent(ctx context.Context, tx pgx.Tx, env *events.Envelope) error
 }
 
+// calendarEventLocker is the narrow dependency that serializes a
+// calendar.attended insert against a concurrent decline DELETE on the
+// backing calendar_event row. LockExistsByIDTx takes a FOR SHARE lock on
+// the row (held until the caller's tx commits) and reports whether it
+// exists: false means the row was already deleted (a decline committed
+// first), so the recorder skips the attended insert to avoid stranding a
+// false interaction. Satisfied by *repository.CalendarEventRepository.
+// Unit tests that don't exercise calendar.attended pass a stub returning
+// (true, nil).
+type calendarEventLocker interface {
+	LockExistsByIDTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (bool, error)
+}
+
 // followUpDispatcher is the subset of *FollowUpManager the recorder
 // needs for the inline-apply path. Returns a post-commit closure (non-
 // nil on the refresh branch) that the recorder folds into its own
@@ -119,11 +132,12 @@ type followUpDispatcher interface {
 // event finds the claim row and returns nil without mutating contact
 // state — closing the queued-worker replay hole for manual corrections.
 type InteractionRecorder struct {
-	writer   interactionWriter
-	staging  stagingProcessor
-	bus      eventBusTx
-	cadence  cadenceDispatcher
-	followUp followUpDispatcher
+	writer       interactionWriter
+	staging      stagingProcessor
+	bus          eventBusTx
+	cadence      cadenceDispatcher
+	followUp     followUpDispatcher
+	calendarLock calendarEventLocker
 }
 
 // NewInteractionRecorder builds the consumer. staging may be nil for
@@ -132,21 +146,27 @@ type InteractionRecorder struct {
 // apply is the seam that closes the queued-worker replay hole for
 // manual corrections. followUp is inline-invoked post-publish so the
 // manual UI stays synchronous and the queued delivery becomes a
-// durable no-op via event_consumer_claim. Tests that don't care
-// about cadence / follow-up pass nil stubs.
+// durable no-op via event_consumer_claim. calendarLock serializes the
+// calendar.attended insert against a concurrent decline DELETE on the
+// backing calendar_event row; when nil the recorder skips the lock check
+// (no calendar race protection — acceptable for tests that don't exercise
+// calendar.attended). Tests that don't care about cadence / follow-up pass
+// nil stubs.
 func NewInteractionRecorder(
 	writer interactionWriter,
 	staging stagingProcessor,
 	bus eventBusTx,
 	cadence cadenceDispatcher,
 	followUp followUpDispatcher,
+	calendarLock calendarEventLocker,
 ) *InteractionRecorder {
 	return &InteractionRecorder{
-		writer:   writer,
-		staging:  staging,
-		bus:      bus,
-		cadence:  cadence,
-		followUp: followUp,
+		writer:       writer,
+		staging:      staging,
+		bus:          bus,
+		cadence:      cadence,
+		followUp:     followUp,
+		calendarLock: calendarLock,
 	}
 }
 
@@ -184,6 +204,30 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 			Str("kind", string(env.Kind)).
 			Msg("consumer: contact_id unresolved for kind; dropping")
 		return nil, nil, fmt.Errorf("consumer: contact_id unresolved for kind %s", env.Kind)
+	}
+
+	// calendar.attended: serialize against a concurrent decline DELETE on
+	// the backing calendar_event row. A locking FOR SHARE read of the event
+	// (by the payload's internal-UUID source_ref) is held until this tx
+	// commits, so an interleaving decline DELETE either blocks (we insert,
+	// the decline then soft-deletes) or has already committed (the row is
+	// gone → we skip the insert, leaving no false interaction). Skipping a
+	// past-attended insert when the event was declined is exactly the
+	// desired outcome.
+	if env.Kind == events.KindCalendarAttended && r.calendarLock != nil && req.SourceRef != nil {
+		eventID, parseErr := uuid.Parse(*req.SourceRef)
+		if parseErr != nil {
+			return nil, nil, fmt.Errorf("calendar.attended: source_ref %q not a calendar_event UUID: %w", *req.SourceRef, parseErr)
+		}
+		exists, lockErr := r.calendarLock.LockExistsByIDTx(ctx, tx, eventID)
+		if lockErr != nil {
+			return nil, nil, fmt.Errorf("lock backing calendar_event: %w", lockErr)
+		}
+		if !exists {
+			// Backing calendar_event already deleted (decline won the race).
+			// Skip the insert; no interaction, nil postCommit.
+			return nil, nil, nil
+		}
 	}
 
 	// Delegate to ContactService.RecordInteractionTx — single source of

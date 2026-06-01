@@ -464,6 +464,11 @@ func run() int {
 		eventBus,
 		cadenceUpdater,
 		followUpManager,
+		// calendarRepoForIngest satisfies calendarEventLocker: the
+		// calendar.attended branch takes a FOR SHARE lock on the backing
+		// calendar_event so a concurrent decline DELETE cannot strand a
+		// false interaction.
+		calendarRepoForIngest,
 	)
 
 	// IngestService — hoisted here so the call.* inline handler can
@@ -539,6 +544,15 @@ func run() int {
 	// further down. Until that branch runs (or in test/no-telegram
 	// modes), the holder dispatches to a logged-warn no-op.
 	river.AddWorker(riverWorkers, consumer.NewInteractionRecorderWorker(eventBus, database.Pool, interactionRecorder, aggregatorReenqueuerHolder))
+
+	// Calendar decline consumer: when a stored calendar_event is
+	// declined / cancelled / user-removed upstream, the publisher removes
+	// the row + emits calendar.declined per matched contact; this consumer
+	// soft-deletes the derived gcal interaction and recomputes the contact's
+	// date columns. Registered unconditionally — no events route to it when
+	// the publisher (CalendarSyncProvider) is in off mode.
+	calendarDeclineHandler := consumer.NewCalendarDeclineHandler(interactionRepo, contactRepo)
+	river.AddWorker(riverWorkers, consumer.NewCalendarDeclineHandlerWorker(eventBus, database.Pool, calendarDeclineHandler))
 
 	// Interaction-mode wiring gate. Cutover is the normal operating
 	// posture; off is the emergency-override retained so rollback can
@@ -755,6 +769,7 @@ func run() int {
 				identityService,
 				externalContactRepo,
 				pubBus,
+				database.Pool,
 			)
 			providerRegistry.Register(gcalProvider)
 			logger.Info().Msg("Google Calendar sync provider registered")

@@ -849,3 +849,212 @@ func (r *ContactRepository) ListContactsWithContactBy(ctx context.Context, limit
 
 	return contacts, nil
 }
+
+// RecomputeContactDatesAfterDeleteTx surgically rolls back the contact's
+// date columns after a derived interaction at `deletedAt` was soft-deleted.
+// It is the REMOVAL counterpart to CadenceUpdater's additive forward path:
+// a timestamp column is touched ONLY when the removed interaction was its
+// source (column == deletedAt), rolling to MAX(remaining live interactions
+// of its direction subset) or NULL when none remain — preserving creation-
+// set values and still-live later interactions. contact_by is decided in Go
+// via cadence.CalculateContactBy (environment-aware) so it matches the
+// forward writer exactly and never clobbers a Todoist/user override.
+//
+// Orchestration (all on the caller's tx): LockContactForDateRecompute
+// (FOR UPDATE on the contact row, as a separate statement) →
+// ComputeContactDatesAfterDelete (interaction aggregate + contact read, now at
+// a snapshot that includes any writer that committed while we waited for the
+// lock) → Go contact_by decision → WriteContactDatesAfterDelete. The lock is
+// held across the write so a concurrent cadence/interaction writer on the same
+// contact cannot interleave a stale overwrite, and the aggregate cannot miss a
+// concurrently-inserted interaction.
+//
+// Returns db.ErrNotFound when the contact was soft-deleted between the
+// decline publish and consume (the read filters deleted_at IS NULL); the
+// caller treats that as a benign no-op (the interaction is already
+// soft-deleted; a deleted contact needs no recompute).
+func (r *ContactRepository) RecomputeContactDatesAfterDeleteTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, deletedAt time.Time) error {
+	return recomputeContactDatesAfterDelete(ctx, db.New(tx), contactID, deletedAt)
+}
+
+// RecomputeContactDatesAfterDelete is the non-tx variant of
+// RecomputeContactDatesAfterDeleteTx, used for direct testing only. Its three
+// statements (LockContactForDateRecompute → ComputeContactDatesAfterDelete →
+// WriteContactDatesAfterDelete) run on the repository's base querier, i.e.
+// each in its own autocommit transaction.
+//
+// CONCURRENCY WARNING: because the statements do NOT share a transaction, the
+// LockContactForDateRecompute FOR UPDATE lock is released the instant that
+// statement commits — it does NOT hold across the aggregate read. This variant
+// therefore lacks the lock-then-aggregate serialization that closes the
+// concurrent-writer race, so it MUST NOT be wired into the production recompute
+// path. Production routes the recompute exclusively through
+// RecomputeContactDatesAfterDeleteTx, which holds the lock across all three
+// statements in the caller's single tx. This variant is safe only for
+// single-threaded direct tests.
+func (r *ContactRepository) RecomputeContactDatesAfterDelete(ctx context.Context, contactID uuid.UUID, deletedAt time.Time) error {
+	return recomputeContactDatesAfterDelete(ctx, r.queries, contactID, deletedAt)
+}
+
+// LockContactForDateRecomputeTx acquires the contact-row FOR UPDATE lock
+// inside the caller's tx. Exposed so the recompute lock-ordering regression
+// test can hold the lock from a concurrent tx. Returns db.ErrNotFound when
+// the contact is soft-deleted.
+func (r *ContactRepository) LockContactForDateRecomputeTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID) error {
+	if _, err := db.New(tx).LockContactForDateRecompute(ctx, uuidToPgUUID(contactID)); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return db.ErrNotFound
+		}
+		return err
+	}
+	return nil
+}
+
+// TestLockContactForUpdateNoWaitTx is a TEST-ONLY probe: it reads the contact
+// row with FOR UPDATE NOWAIT inside the caller's tx, returning a lock-conflict
+// error immediately (without blocking) when another tx holds a conflicting
+// lock on the row. Used by the recompute lock-ordering regression test.
+// Production code must NOT call this. Returns db.ErrNotFound when no row.
+func (r *ContactRepository) TestLockContactForUpdateNoWaitTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID) error {
+	if _, err := db.New(tx).TestLockContactForUpdateNoWait(ctx, uuidToPgUUID(contactID)); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return db.ErrNotFound
+		}
+		return err
+	}
+	return nil
+}
+
+// recomputeContactDatesAfterDelete is the shared orchestration body for the
+// tx and non-tx wrappers. Locks the contact row, reads the recomputed
+// timestamps + the fields the contact_by decision needs, decides contact_by
+// in Go, then writes.
+func recomputeContactDatesAfterDelete(ctx context.Context, q db.Querier, contactID uuid.UUID, deletedAt time.Time) error {
+	// Acquire the contact-row lock as a SEPARATE statement first: once held
+	// (waiting out any concurrent interaction/cadence writer), the subsequent
+	// ComputeContactDatesAfterDelete runs at a fresh snapshot that includes
+	// that writer's just-committed interaction rows, so the aggregate cannot
+	// miss a concurrently-inserted interaction.
+	if _, err := q.LockContactForDateRecompute(ctx, uuidToPgUUID(contactID)); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return db.ErrNotFound
+		}
+		return err
+	}
+
+	row, err := q.ComputeContactDatesAfterDelete(ctx, db.ComputeContactDatesAfterDeleteParams{
+		ID:          uuidToPgUUID(contactID),
+		DeletedAtTs: pgtype.Timestamptz{Time: deletedAt, Valid: true},
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return db.ErrNotFound
+		}
+		return err
+	}
+
+	newContactBy := decideContactByAfterDelete(row)
+
+	return q.WriteContactDatesAfterDelete(ctx, db.WriteContactDatesAfterDeleteParams{
+		NewLastContacted:     row.NewLastContacted,
+		NewLastInteractionAt: row.NewLastInteractionAt,
+		NewLastResponseAt:    row.NewLastResponseAt,
+		NewLastOutreachAt:    row.NewLastOutreachAt,
+		NewContactBy:         newContactBy,
+		ID:                   uuidToPgUUID(contactID),
+	})
+}
+
+// decideContactByAfterDelete computes the contact_by value to write after a
+// removal, mirroring the forward writer's environment-aware
+// cadence.CalculateContactBy. It NEVER clobbers a Todoist/user override:
+//
+//   - If last_contacted did not move (new == old) or there is no cadence,
+//     contact_by is preserved as-is.
+//   - Else, if the existing contact_by differs from what the cadence would
+//     have produced for old_last_contacted, a Todoist/user override landed
+//     since the interaction; contact_by is preserved.
+//   - Else (override-free), contact_by is re-derived from the new base
+//     (new_last_contacted, or created_at when it rolled to NULL) so the
+//     removed interaction's own contribution is undone exactly.
+func decideContactByAfterDelete(row *db.ComputeContactDatesAfterDeleteRow) pgtype.Date {
+	oldContactBy := row.OldContactBy
+
+	cadenceStr := ""
+	if row.Cadence.Valid {
+		cadenceStr = row.Cadence.String
+	}
+	if cadenceStr == "" {
+		return oldContactBy
+	}
+
+	oldLastContacted := pgTimestamptzToTimePtr(row.OldLastContacted)
+	newLastContacted := pgTimestamptzToTimePtr(row.NewLastContacted)
+
+	// last_contacted did not move → contact_by is not implicated; preserve.
+	if !lastContactedMoved(oldLastContacted, newLastContacted) {
+		return oldContactBy
+	}
+
+	cadenceType, err := cadence.ParseCadence(cadenceStr)
+	if err != nil {
+		return oldContactBy
+	}
+
+	// Override guard: if the stored contact_by differs from what the cadence
+	// would have produced for the old last_contacted, a Todoist/user override
+	// landed since the interaction; preserve it.
+	if oldLastContacted != nil && row.OldContactBy.Valid {
+		expectedOldCb := cadence.CalculateContactBy(*oldLastContacted, cadenceType)
+		if !contactByMatchesStoredDate(row.OldContactBy, expectedOldCb) {
+			return oldContactBy
+		}
+	}
+
+	// Override-free: re-derive contact_by from the new base. When
+	// last_contacted rolled to NULL, fall back to created_at so a cadence
+	// contact is never dropped from due tracking.
+	base := newLastContacted
+	if base == nil {
+		createdAt := pgTimestamptzToTimePtr(row.CreatedAt)
+		base = createdAt
+	}
+	if base == nil {
+		// No base to compute from (should not happen — created_at is NOT
+		// NULL). Preserve rather than write a garbage value.
+		return oldContactBy
+	}
+	newCb := cadence.CalculateContactBy(*base, cadenceType)
+	return pgtype.Date{Time: newCb, Valid: true}
+}
+
+// lastContactedMoved reports whether last_contacted changed between the
+// pre- and post-recompute values (including NULL transitions).
+func lastContactedMoved(old, new *time.Time) bool {
+	if old == nil && new == nil {
+		return false
+	}
+	if old == nil || new == nil {
+		return true
+	}
+	return !old.Equal(*new)
+}
+
+// contactByMatchesStoredDate reports whether the stored contact_by DATE
+// equals the cadence-derived expected value, compared at DATE precision.
+// contact_by is a DATE column, so the stored value is always day-precision
+// regardless of mode; the expected value is reduced to its date via
+// cadence.DateOnly (the same truncation the forward writer applies when it
+// stores contact_by). Comparing the resulting Y/M/D components mirrors the
+// existing contact_by parity tests (TestContactBy_* in backend/tests) and is
+// environment-independent. A mismatch means a Todoist/user override landed
+// since the interaction.
+func contactByMatchesStoredDate(stored pgtype.Date, expected time.Time) bool {
+	if !stored.Valid {
+		return false
+	}
+	sY, sM, sD := stored.Time.Date()
+	expectedDate := cadence.DateOnly(expected)
+	eY, eM, eD := expectedDate.Date()
+	return sY == eY && sM == eM && sD == eD
+}

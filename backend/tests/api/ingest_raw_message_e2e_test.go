@@ -140,7 +140,7 @@ func TestIngestRawMessage_E2E_StagesAggregatesAndCreatesInteraction(t *testing.T
 	stagingRegistry := repository.NewStagingProcessorRegistry(map[string]repository.StagingProcessor{
 		repository.InteractionSourceMessages: repository.NewMessagesStagingProcessor(messagesRepo),
 	})
-	recorder := consumer.NewInteractionRecorder(contactSvc, stagingRegistry, bus, cadenceUpdater, nil)
+	recorder := consumer.NewInteractionRecorder(contactSvc, stagingRegistry, bus, cadenceUpdater, nil, repository.NewCalendarEventRepository(database.Queries))
 	recorderShim.real = consumer.NewInteractionRecorderWorker(bus, database.Pool, recorder, nil)
 
 	// Now wire the ingest service + handler.

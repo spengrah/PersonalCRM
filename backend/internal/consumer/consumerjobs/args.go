@@ -150,6 +150,19 @@ type MessagingAggregateSweeperArgs struct{}
 // Kind returns the river job-kind identifier for the sweeper.
 func (MessagingAggregateSweeperArgs) Kind() string { return "messaging_aggregate_sweeper" }
 
+// CalendarDeclineHandlerJobArgs carries the event id that the
+// CalendarDeclineHandler worker should fetch and process. Enqueued for
+// every calendar.declined event by events.consumerJobsForKind. No
+// river:"unique" tag — there is no stale-claim recovery path for this
+// kind (replay is idempotent at the FindBySourceRefTx layer).
+type CalendarDeclineHandlerJobArgs struct {
+	EventID uuid.UUID `json:"event_id"`
+}
+
+// Kind returns the river job-kind identifier for CalendarDeclineHandler
+// jobs.
+func (CalendarDeclineHandlerJobArgs) Kind() string { return "calendar_decline_handler" }
+
 // RematchDispatcherJobArgs carries the event id + dedup-arg fields that
 // the RematchDispatcher worker processes. ContactID and RematchJobID
 // are duplicated from the event payload and carry the river:"unique"

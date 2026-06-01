@@ -10,6 +10,7 @@ import (
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 )
 
@@ -121,4 +122,66 @@ func TestPublishCalendarAttended_NilTitleOmittedFromJSON(t *testing.T) {
 	env := bus.calls[0]
 	require.NotContains(t, string(env.Payload), `"title"`,
 		"omitempty should elide nil title from payload JSON")
+}
+
+// capturingBusTx records every envelope passed to PublishTx. Used to assert
+// the calendar.declined envelope shape without running a full *events.Bus.
+// The tx is never dereferenced (the stub ignores it).
+type capturingBusTx struct {
+	calls []*events.Envelope
+}
+
+func (b *capturingBusTx) PublishTx(_ context.Context, _ pgx.Tx, env *events.Envelope) error {
+	b.calls = append(b.calls, env)
+	return nil
+}
+
+// TestPublishCalendarDeclinedTx_EnvelopeFields asserts the calendar.declined
+// envelope shape: Source=gcal, Kind=calendar.declined, ObservedAt=occurredAt,
+// payload EventID = the internal UUID. Critically, it asserts the SourceID
+// carries the "declined:" prefix (the P0-collision regression guard at the
+// publisher level — see publishCalendarDeclinedTx).
+func TestPublishCalendarDeclinedTx_EnvelopeFields(t *testing.T) {
+	bus := &capturingBusTx{}
+	internalUUID := uuid.NewString()
+	contact := uuid.New()
+	occurredAt := time.Date(2026, 4, 10, 15, 30, 0, 0, time.UTC)
+
+	require.NoError(t, publishCalendarDeclinedTx(context.Background(), bus, nil, contact, internalUUID, occurredAt))
+	require.Len(t, bus.calls, 1)
+
+	env := bus.calls[0]
+	require.Equal(t, repository.InteractionSourceGCal, env.Source)
+	require.Equal(t, events.KindCalendarDeclined, env.Kind)
+	require.True(t, occurredAt.Equal(env.ObservedAt))
+
+	// The declined: prefix keeps the decline event-log row disjoint from the
+	// attended row ("<internalUUID>:<contactID>"), so both consumers fire.
+	require.Equal(t, "declined:"+internalUUID+":"+contact.String(), env.SourceID)
+	require.True(t, strings.HasPrefix(env.SourceID, "declined:"),
+		"decline SourceID must carry the declined: prefix to avoid the attended-row collision")
+
+	var payload events.CalendarDeclinedPayload
+	require.NoError(t, events.Unmarshal(env, &payload))
+	require.Equal(t, contact, payload.ContactID)
+	require.Equal(t, internalUUID, payload.EventID,
+		"payload EventID must be the internal calendar_event.ID so the consumer's source_ref lookup matches")
+}
+
+// TestPublishCalendarDeclinedTx_SourceIDPerContact asserts two declines for
+// the same event but different contacts produce distinct (declined-prefixed)
+// SourceIDs, so each per-contact decline event row survives ingest.
+func TestPublishCalendarDeclinedTx_SourceIDPerContact(t *testing.T) {
+	bus := &capturingBusTx{}
+	internalUUID := uuid.NewString()
+	contactA := uuid.New()
+	contactB := uuid.New()
+	occurredAt := time.Date(2026, 4, 10, 15, 0, 0, 0, time.UTC)
+
+	require.NoError(t, publishCalendarDeclinedTx(context.Background(), bus, nil, contactA, internalUUID, occurredAt))
+	require.NoError(t, publishCalendarDeclinedTx(context.Background(), bus, nil, contactB, internalUUID, occurredAt))
+	require.Len(t, bus.calls, 2)
+	require.NotEqual(t, bus.calls[0].SourceID, bus.calls[1].SourceID)
+	require.Equal(t, "declined:"+internalUUID+":"+contactA.String(), bus.calls[0].SourceID)
+	require.Equal(t, "declined:"+internalUUID+":"+contactB.String(), bus.calls[1].SourceID)
 }

@@ -71,6 +71,20 @@ type Querier interface {
 	// transitions the row to completed.
 	CompleteFollowUpForContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactTask, error)
 	CompleteSyncLog(ctx context.Context, arg CompleteSyncLogParams) (*ExternalSyncLog, error)
+	// Returns the surgically-recomputed timestamp columns (each touched ONLY
+	// when the deleted interaction at @deleted_at_ts was its source: column =
+	// @deleted_at_ts → MAX(remaining live interactions of its subset), NULL when
+	// none remain; otherwise the existing value is preserved) plus the fields the
+	// Go caller needs to decide contact_by (old_last_contacted, old_contact_by,
+	// cadence, created_at). Direction subsets mirror CadenceApplyFlagsByDirection
+	// in reverse. NO cadence/contact_by arithmetic here — that is computed in Go
+	// via cadence.CalculateContactBy to match the forward writer exactly.
+	// MUST be preceded in the same tx by LockContactForDateRecompute so the
+	// interaction aggregate is computed at a snapshot that already reflects any
+	// concurrent writer that committed while waiting for the contact lock (the
+	// FOR UPDATE retained below re-takes the held lock; the load-bearing
+	// serialization is the prior LockContactForDateRecompute statement).
+	ComputeContactDatesAfterDelete(ctx context.Context, arg ComputeContactDatesAfterDeleteParams) (*ComputeContactDatesAfterDeleteRow, error)
 	CountAllUnmatchedExternalContacts(ctx context.Context) (int64, error)
 	CountContactInteractions(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountContactNotes(ctx context.Context, contactID pgtype.UUID) (int64, error)
@@ -190,6 +204,10 @@ type Querier interface {
 	// packages in parallel against the shared test DB.
 	DeleteAllMacHosts(ctx context.Context) (int64, error)
 	DeleteAllPairingTokens(ctx context.Context) (int64, error)
+	// Hard-deletes the stored calendar_event row keyed by its Google identity
+	// triple. Used by the decline/cancel remove branch. calendar_event has no
+	// deleted_at column — removal is a hard DELETE (cf. DeleteEventsByAccount).
+	DeleteCalendarEventByGcalID(ctx context.Context, arg DeleteCalendarEventByGcalIDParams) error
 	DeleteCalendarEventsByGcalEventIdPrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	DeleteCalendarEventsByTitlePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	DeleteContactMethodsByContact(ctx context.Context, contactID pgtype.UUID) error
@@ -426,6 +444,12 @@ type Querier interface {
 	GetCalendarEventByGcalID(ctx context.Context, arg GetCalendarEventByGcalIDParams) (*CalendarEvent, error)
 	// Look up an event by its UUID
 	GetCalendarEventByID(ctx context.Context, id pgtype.UUID) (*CalendarEvent, error)
+	// Locking read used by the InteractionRecorder calendar.attended branch to
+	// serialize against a concurrent decline DELETE on the same row. FOR SHARE
+	// holds the row until the attended tx commits, so an interleaving decline
+	// DELETE either blocks (attended inserts, decline then soft-deletes) or has
+	// already committed (this read returns no row, attended skips the insert).
+	GetCalendarEventByIDForShare(ctx context.Context, id pgtype.UUID) (*CalendarEvent, error)
 	// Contact queries
 	GetContact(ctx context.Context, id pgtype.UUID) (*Contact, error)
 	// Get a single note for a contact by category (e.g., 'notepad')
@@ -829,6 +853,20 @@ type Querier interface {
 	ListUpcomingEventsForContact(ctx context.Context, arg ListUpcomingEventsForContactParams) ([]*CalendarEvent, error)
 	// List upcoming events that have matched CRM contacts
 	ListUpcomingEventsWithContacts(ctx context.Context, arg ListUpcomingEventsWithContactsParams) ([]*CalendarEvent, error)
+	// Acquires a FOR UPDATE lock on the contact row before the date recompute
+	// reads the interaction aggregate. Run as a SEPARATE statement (in the
+	// caller's tx) BEFORE ComputeContactDatesAfterDelete: once this lock is held
+	// — waiting out any concurrent interaction/cadence writer, whose atomic
+	// (interaction INSERT + contact UPDATE) tx takes a conflicting row lock —
+	// the subsequent ComputeContactDatesAfterDelete statement runs at a fresh
+	// READ COMMITTED snapshot that INCLUDES that writer's just-committed
+	// interaction rows. Folding the lock into ComputeContactDatesAfterDelete's
+	// CTE is NOT sufficient: FOR UPDATE re-reads only the locked contact row at
+	// the post-wait snapshot, while the interaction aggregate in the same
+	// statement still sees the statement's original snapshot, so a concurrently
+	// committed interaction would be missed. Returns db.ErrNotFound (pgx.ErrNoRows)
+	// when the contact was soft-deleted.
+	LockContactForDateRecompute(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error)
 	// Single-statement batch mark for the action=ignore ("Not a person")
 	// resolve path: every live unmatched sibling for the token flips to
 	// 'ignored'. No crm_contact_id is set. Same predicate as the other two
@@ -849,6 +887,13 @@ type Querier interface {
 	// surface a clean not-found when a concurrent resolve already claimed the
 	// group (zero rows).
 	MarkAnarlogTitleSiblingsMatchedByToken(ctx context.Context, arg MarkAnarlogTitleSiblingsMatchedByTokenParams) (int64, error)
+	// Off-mode deferral for the decline remove branch: marks a stored event
+	// cancelled (keyed by its Google identity triple) instead of deleting,
+	// when the event bus is unavailable. status='cancelled' excludes the row
+	// from ListPastEventsNeedingUpdate (status='confirmed') and from all
+	// contact-facing reads (status != 'cancelled'), so it neither re-fires
+	// calendar.attended nor strands an already-recorded interaction.
+	MarkCalendarEventCancelledByGcalID(ctx context.Context, arg MarkCalendarEventCancelledByGcalIDParams) error
 	// Mark an event as having updated last_contacted for its contacts
 	MarkLastContactedUpdated(ctx context.Context, id pgtype.UUID) error
 	// Non-tx variant. Mirror of MarkTelegramMessagesProcessed — used by the
@@ -1011,6 +1056,13 @@ type Querier interface {
 	// TEST ONLY. Hard-deletes external_contact rows whose source_id starts with
 	// the given prefix. Used by t.Cleanup to remove fixtures inserted by a test.
 	TestDeleteExternalContactsBySourceIDPrefix(ctx context.Context, prefix string) error
+	// TEST ONLY. Probe a calendar_event row with FOR UPDATE NOWAIT: returns the
+	// row if no conflicting lock is held, or fails immediately (lock_not_available)
+	// when another tx holds a conflicting lock (e.g. a FOR SHARE from the attended
+	// branch). Used by the attended-vs-decline lock-serialization integration
+	// test to prove the attended FOR SHARE conflicts with a concurrent FOR UPDATE
+	// without a sleep/timeout. Production code must NOT call this.
+	TestGetCalendarEventByIDForUpdateNoWait(ctx context.Context, id pgtype.UUID) (*CalendarEvent, error)
 	// TEST ONLY. Hard-deletes a calendar_event row by primary key. Used
 	// by integration tests that exercise the "target row vanished between
 	// snapshot and resolve-link" path. Production code must NOT call this.
@@ -1043,6 +1095,12 @@ type Querier interface {
 	// enforces. sqlc.narg('emails') makes the parameter nullable so callers can
 	// exercise the NULL JSONB column case.
 	TestInsertExternalContactRawEmails(ctx context.Context, arg TestInsertExternalContactRawEmailsParams) (*ExternalContact, error)
+	// TEST ONLY. Probe a contact row with FOR UPDATE NOWAIT: fails immediately
+	// (lock_not_available) when another tx holds a conflicting lock on the row.
+	// Used by the recompute lock-ordering regression test to prove (without a
+	// sleep) that LockContactForDateRecompute is acquired as a blocking statement.
+	// Production code must NOT call this.
+	TestLockContactForUpdateNoWait(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error)
 	// TEST ONLY. Mirrors the legacy EXISTS / jsonb_array_elements form of
 	// FindEventsByAttendeeEmailUnmatchedForContact. Permanent regression guard.
 	// Callers must restrict input fixtures to well-formed JSONB arrays
@@ -1245,6 +1303,10 @@ type Querier interface {
 	// does NOT touch auth_state (which is managed by AuthSessionManager).
 	UpsertTelegramSessionData(ctx context.Context, arg UpsertTelegramSessionDataParams) (*TelegramSession, error)
 	UpsertTelegramUpdateState(ctx context.Context, arg UpsertTelegramUpdateStateParams) (*TelegramUpdateState, error)
+	// Writes the recomputed date columns. contact_by is passed pre-computed by
+	// the Go caller (cadence.CalculateContactBy, environment-aware) so the value
+	// matches the forward writer exactly; this query does no cadence arithmetic.
+	WriteContactDatesAfterDelete(ctx context.Context, arg WriteContactDatesAfterDeleteParams) error
 }
 
 var _ Querier = (*Queries)(nil)
