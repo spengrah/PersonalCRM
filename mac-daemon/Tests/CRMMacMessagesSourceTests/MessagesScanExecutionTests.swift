@@ -147,7 +147,7 @@ final class MessagesScanExecutionTests: XCTestCase {
         // scan row published (Phase A durability): the first committed
         // cursor that carried the handle was committed before the first
         // ingest event.
-        let firstEnqueueIndex = await transport.firstCommitIndexContaining("+15550000001")
+        let firstEnqueueIndex = transport.firstCommitIndexContaining("+15550000001")
         XCTAssertNotNil(firstEnqueueIndex, "a committed cursor must carry the enqueued scan")
 
         // The scanned message published with the right kind/source_id.
@@ -162,7 +162,7 @@ final class MessagesScanExecutionTests: XCTestCase {
 
         // After a fully-exhausted scan, the final committed cursor has an
         // empty pendingScans (the entry dequeued).
-        let finalCursor = await transport.currentDecodedCursor()
+        let finalCursor = transport.currentDecodedCursor()
         XCTAssertEqual(finalCursor?.pendingScans.count, 0,
                        "exhausted scan dequeued")
     }
@@ -226,7 +226,7 @@ final class MessagesScanExecutionTests: XCTestCase {
         let scanned = await sink.scannedSourceIDs()
         XCTAssertEqual(scanned, Set((100...104).map { "g\($0)" }),
                        "every scanned row published across the multi-tick walk")
-        let finalCursor = await transport.currentDecodedCursor()
+        let finalCursor = transport.currentDecodedCursor()
         XCTAssertEqual(finalCursor?.pendingScans.count, 0, "scan dequeued once exhausted")
     }
 
@@ -256,7 +256,7 @@ final class MessagesScanExecutionTests: XCTestCase {
 
         try await plugin.tick()
 
-        let finalCursor = await transport.currentDecodedCursor()
+        let finalCursor = transport.currentDecodedCursor()
         XCTAssertEqual(finalCursor?.pendingScans.count, 1, "scan entry still queued after abort")
         XCTAssertNil(finalCursor?.pendingScans.first?.progressBelowRowID,
                      "Phase-B progress NOT durably committed under conflict; no stale overwrite")
@@ -296,7 +296,7 @@ final class MessagesScanExecutionTests: XCTestCase {
 
         let events = await sink.allEvents()
         XCTAssertTrue(events.isEmpty, "unknown-handle scan publishes nothing")
-        let finalCursor = await transport.currentDecodedCursor()
+        let finalCursor = transport.currentDecodedCursor()
         XCTAssertEqual(finalCursor?.pendingScans.count, 0, "unknown-handle entry dropped")
     }
 
@@ -332,7 +332,7 @@ final class MessagesScanExecutionTests: XCTestCase {
         XCTAssertTrue(events.isEmpty, "no publish on a not-yet-fetched cache")
         // The entry survives — the seeded cursor is unchanged in the
         // transport (no commit removed it).
-        let finalCursor = await transport.currentDecodedCursor()
+        let finalCursor = transport.currentDecodedCursor()
         XCTAssertEqual(finalCursor?.pendingScans.count, 1,
                        "durable scan preserved on a startup-race tick")
     }
@@ -380,7 +380,7 @@ final class MessagesScanExecutionTests: XCTestCase {
                       "window-widen reset progress so the row is re-walked")
         // Exactly one merged entry existed (no duplicate); it dequeued
         // after exhaustion.
-        let finalCursor = await transport.currentDecodedCursor()
+        let finalCursor = transport.currentDecodedCursor()
         XCTAssertEqual(finalCursor?.pendingScans.count, 0)
     }
 }
@@ -426,7 +426,7 @@ final class StatefulCursorTransport: @unchecked Sendable {
             }
             // Cursor GET.
             if method == "GET", url.path.hasSuffix("/cursor") {
-                lock.lock(); let cur = currentCursor; lock.unlock()
+                let cur = lock.withLock { currentCursor }
                 let body = """
                     {"success":true,"data":{"cursor":\(Self.jsonString(cur)),"cursor_epoch":0,"backfill_complete":false}}
                     """
@@ -437,7 +437,10 @@ final class StatefulCursorTransport: @unchecked Sendable {
                 if failCommits {
                     return (Data(#"{"error":{"code":"boom","message":"forced"}}"#.utf8), http(500))
                 }
-                lock.lock(); commitAttempts += 1; let attempt = commitAttempts; lock.unlock()
+                let attempt = lock.withLock { () -> Int in
+                    commitAttempts += 1
+                    return commitAttempts
+                }
                 if let target = conflictOnlyAt, attempt == target {
                     let body = """
                         {"success":false,
@@ -449,10 +452,10 @@ final class StatefulCursorTransport: @unchecked Sendable {
                 if let bodyData = request.httpBody,
                    let obj = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],
                    let cursor = obj["cursor"] as? String {
-                    lock.lock()
-                    currentCursor = cursor
-                    committedCursors.append(cursor)
-                    lock.unlock()
+                    lock.withLock {
+                        currentCursor = cursor
+                        committedCursors.append(cursor)
+                    }
                 }
                 return (Data(#"{"success":true,"data":{"ok":true}}"#.utf8), http(200))
             }

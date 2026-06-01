@@ -160,7 +160,7 @@ final class CallHistoryScanExecutionTests: XCTestCase {
 
         // The cursor was committed with the pendingScans entry BEFORE any
         // scan row published (Phase A durability).
-        let firstEnqueueIndex = await transport.firstCommitIndexContaining("+15550000001")
+        let firstEnqueueIndex = transport.firstCommitIndexContaining("+15550000001")
         XCTAssertNotNil(firstEnqueueIndex, "a committed cursor must carry the enqueued scan")
 
         // The scanned call published with the right kind/source_id.
@@ -175,7 +175,7 @@ final class CallHistoryScanExecutionTests: XCTestCase {
 
         // After a fully-exhausted scan, the final committed cursor has an
         // empty pendingScans (the entry dequeued).
-        let finalCursor = await transport.currentDecodedCursor()
+        let finalCursor = transport.currentDecodedCursor()
         XCTAssertEqual(finalCursor?.pendingScans.count, 0,
                        "exhausted scan dequeued")
     }
@@ -234,7 +234,7 @@ final class CallHistoryScanExecutionTests: XCTestCase {
         let scanned = await sink.scannedSourceIDs()
         XCTAssertEqual(scanned, Set((100...104).map { "u\($0)" }),
                        "every scanned row published across the multi-tick walk")
-        let finalCursor = await transport.currentDecodedCursor()
+        let finalCursor = transport.currentDecodedCursor()
         XCTAssertEqual(finalCursor?.pendingScans.count, 0, "scan dequeued once exhausted")
     }
 
@@ -267,7 +267,7 @@ final class CallHistoryScanExecutionTests: XCTestCase {
 
         let events = await sink.allEvents()
         XCTAssertTrue(events.isEmpty, "unknown-handle scan publishes nothing")
-        let finalCursor = await transport.currentDecodedCursor()
+        let finalCursor = transport.currentDecodedCursor()
         XCTAssertEqual(finalCursor?.pendingScans.count, 0, "unknown-handle entry dropped")
     }
 
@@ -297,7 +297,7 @@ final class CallHistoryScanExecutionTests: XCTestCase {
 
         let events = await sink.allEvents()
         XCTAssertTrue(events.isEmpty, "no publish on a not-yet-fetched cache")
-        let finalCursor = await transport.currentDecodedCursor()
+        let finalCursor = transport.currentDecodedCursor()
         XCTAssertEqual(finalCursor?.pendingScans.count, 1,
                        "durable scan preserved on a startup-race tick")
     }
@@ -344,7 +344,7 @@ final class CallHistoryScanExecutionTests: XCTestCase {
         let scanned = await sink.scannedSourceIDs()
         XCTAssertTrue(scanned.contains("u100"),
                       "window-widen reset progress so the row is re-walked")
-        let finalCursor = await transport.currentDecodedCursor()
+        let finalCursor = transport.currentDecodedCursor()
         XCTAssertEqual(finalCursor?.pendingScans.count, 0)
     }
 
@@ -378,7 +378,7 @@ final class CallHistoryScanExecutionTests: XCTestCase {
 
         let scanned = await sink.scannedSourceIDs()
         XCTAssertTrue(scanned.contains("u100"), "operator-queued scan published the call")
-        let finalCursor = await transport.currentDecodedCursor()
+        let finalCursor = transport.currentDecodedCursor()
         XCTAssertEqual(finalCursor?.pendingScans.count, 0, "operator scan dequeued on exhaustion")
     }
 
@@ -413,7 +413,7 @@ final class CallHistoryScanExecutionTests: XCTestCase {
         // The persisted cursor reflects ONLY the Phase-A enqueue commit:
         // one pending scan, nil progress (the rejected Phase-B commit
         // never advanced it, AND no stale final commit landed).
-        let finalCursor = await transport.currentDecodedCursor()
+        let finalCursor = transport.currentDecodedCursor()
         XCTAssertEqual(finalCursor?.pendingScans.count, 1, "scan entry still queued after abort")
         XCTAssertNil(finalCursor?.pendingScans.first?.progressBelowZDate,
                      "Phase-B progress NOT durably committed under conflict; no stale overwrite")
@@ -462,7 +462,7 @@ final class PhoneStatefulCursorTransport: @unchecked Sendable {
                                 headerFields: ["Content-Type": "application/json"])!
             }
             if method == "GET", url.path.hasSuffix("/cursor") {
-                lock.lock(); let cur = currentCursor; lock.unlock()
+                let cur = lock.withLock { currentCursor }
                 let body = """
                     {"success":true,"data":{"cursor":\(Self.jsonString(cur)),"cursor_epoch":0,"backfill_complete":false}}
                     """
@@ -472,7 +472,10 @@ final class PhoneStatefulCursorTransport: @unchecked Sendable {
                 if failCommits {
                     return (Data(#"{"error":{"code":"boom","message":"forced"}}"#.utf8), http(500))
                 }
-                lock.lock(); commitAttempts += 1; let attempt = commitAttempts; lock.unlock()
+                let attempt = lock.withLock { () -> Int in
+                    commitAttempts += 1
+                    return commitAttempts
+                }
                 if let target = conflictOnlyAt, attempt == target {
                     // 409 cursor-conflict: cursor NOT updated (the daemon
                     // refreshes its base + aborts the tick).
@@ -486,10 +489,10 @@ final class PhoneStatefulCursorTransport: @unchecked Sendable {
                 if let bodyData = request.httpBody,
                    let obj = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],
                    let cursor = obj["cursor"] as? String {
-                    lock.lock()
-                    currentCursor = cursor
-                    committedCursors.append(cursor)
-                    lock.unlock()
+                    lock.withLock {
+                        currentCursor = cursor
+                        committedCursors.append(cursor)
+                    }
                 }
                 return (Data(#"{"success":true,"data":{"ok":true}}"#.utf8), http(200))
             }
