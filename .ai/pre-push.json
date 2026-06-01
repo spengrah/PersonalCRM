@@ -9,9 +9,13 @@
       { "name": "Frontend lint", "command": "cd frontend && bun run lint" }
     ]
   },
+  "swift": {
+    "enabled": true
+  },
   "test": {
     "enabled": true,
     "commands": [
+      { "name": "Pre-push filter unit tests", "command": "bash scripts/hooks/test/test-pre-push-filters.sh" },
       { "name": "Unit tests", "command": "make test-unit" },
       { "name": "Integration tests", "command": "make test-integration" },
       { "name": "Frontend tests", "command": "make test-frontend" },

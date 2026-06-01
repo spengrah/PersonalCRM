@@ -274,6 +274,8 @@ You can also run the full local suite via the project Makefile:
 make test-daemon-local
 ```
 
+The local pre-push hook runs this gate (as `CI=true make test-daemon-local`) when the push range touches `mac-daemon/**`, blocking the push on failure. It skips with a warning if Xcode/XCTest is unavailable.
+
 ## Operator commands
 
 ### `crm-mac messages backfill --restart`
