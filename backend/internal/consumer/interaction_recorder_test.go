@@ -178,16 +178,16 @@ func newRecorderWithStubs() (*InteractionRecorder, *stubWriter, *stubTGRepo, *st
 	c := &stubCadence{}
 	// calendarLock is nil here: existing tests use placeholder (non-UUID)
 	// EventIDs and don't exercise the attended-vs-decline race, so the lock
-	// check is skipped. The Decision-3a skip test constructs its own
-	// recorder with a stubCalendarLocker + a UUID EventID.
+	// check is skipped. The skip test constructs its own recorder with a
+	// stubCalendarLocker + a UUID EventID.
 	rec := NewInteractionRecorder(w, tg, b, c, nil, nil)
 	return rec, w, tg, b, c
 }
 
 // stubCalendarLocker stubs the calendarEventLocker dependency. `exists`
 // controls whether the backing calendar_event is reported present; tests
-// for the Decision-3a attended-vs-decline race set exists=false to assert
-// the recorder skips the insert.
+// for the attended-vs-decline race set exists=false to assert the recorder
+// skips the insert.
 type stubCalendarLocker struct {
 	exists  bool
 	calls   int
@@ -330,9 +330,9 @@ func TestHandleEvent_CalendarAttended_CutoverFreshWrite_NoMarkProcessed(t *testi
 }
 
 // TestHandleEvent_CalendarAttended_SkipsInsertWhenEventDeleted is the
-// Decision-3a unit guard: when the backing calendar_event was already
-// deleted (a decline won the race), the locking read reports the row gone
-// and the recorder skips the interaction insert entirely — no false
+// attended-after-delete unit guard: when the backing calendar_event was
+// already deleted (a decline won the race), the locking read reports the row
+// gone and the recorder skips the interaction insert entirely — no false
 // "attended" interaction is written.
 func TestHandleEvent_CalendarAttended_SkipsInsertWhenEventDeleted(t *testing.T) {
 	cid := uuid.New()
@@ -361,8 +361,9 @@ func TestHandleEvent_CalendarAttended_SkipsInsertWhenEventDeleted(t *testing.T) 
 }
 
 // TestHandleEvent_CalendarAttended_InsertsWhenEventPresent confirms the
-// happy path of the Decision-3a guard: when the backing calendar_event is
-// present (lock acquired), the recorder proceeds with the insert.
+// happy path of the attended-after-delete guard: when the backing
+// calendar_event is present (lock acquired), the recorder proceeds with the
+// insert.
 func TestHandleEvent_CalendarAttended_InsertsWhenEventPresent(t *testing.T) {
 	cid := uuid.New()
 	eventID := uuid.New()

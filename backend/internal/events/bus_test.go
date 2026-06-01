@@ -110,7 +110,7 @@ func TestConsumerJobsForKind_EmptyForDeferredKinds(t *testing.T) {
 
 // TestConsumerJobsForKind_CalendarDeclinedEnqueuesDeclineHandler asserts
 // that calendar.declined enqueues exactly one CalendarDeclineHandler river
-// job with MaxAttempts=5 (Decision 7).
+// job with MaxAttempts=5.
 func TestConsumerJobsForKind_CalendarDeclinedEnqueuesDeclineHandler(t *testing.T) {
 	eventID := uuid.New()
 	env := &Envelope{ID: eventID, Kind: KindCalendarDeclined}

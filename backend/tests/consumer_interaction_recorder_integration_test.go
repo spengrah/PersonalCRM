@@ -201,9 +201,9 @@ func newConsumerTestEnv(t *testing.T, ctx context.Context) *consumerTestEnv {
 
 // seedCalendarEvent inserts a stored calendar_event matched to the contact
 // and returns its internal UUID. calendar.attended events carry this UUID as
-// their EventID/source_ref; the InteractionRecorder's Decision-3a lock check
-// requires the backing row to exist for the attended insert to proceed (in
-// production the attended publish always reads from calendar_event).
+// their EventID/source_ref; the InteractionRecorder's attended-after-delete
+// lock check requires the backing row to exist for the attended insert to
+// proceed (in production the attended publish always reads from calendar_event).
 func (e *consumerTestEnv) seedCalendarEvent(t *testing.T, contactID uuid.UUID) uuid.UUID {
 	t.Helper()
 	accountID := "attended-backing-" + uuid.NewString()
@@ -282,8 +282,8 @@ func TestIntegration_CalendarAttended_CutoverWritesInteraction(t *testing.T) {
 
 	contactID := env.newContact(t, "calendar-attended-cutover")
 	// EventID is the backing calendar_event's internal UUID (production
-	// reality); the recorder's Decision-3a lock check requires the row to
-	// exist for the attended insert to proceed.
+	// reality); the recorder's attended-after-delete lock check requires the
+	// row to exist for the attended insert to proceed.
 	eventIDStr := env.seedCalendarEvent(t, contactID).String()
 	// Publishers build SourceID as event-id ":" contact-id so one
 	// upstream event can fan out to multiple contacts without
@@ -518,9 +518,9 @@ func TestIntegration_MissingContact_ConsumerReturnsNotFound(t *testing.T) {
 	env := newConsumerTestEnv(t, ctx)
 
 	missingID := uuid.New()
-	// Seed a backing calendar_event so the Decision-3a lock check passes and
-	// the consumer reaches the contact-existence check (which is what this
-	// test exercises). The event's matched_contact_ids references the
+	// Seed a backing calendar_event so the attended-after-delete lock check
+	// passes and the consumer reaches the contact-existence check (which is
+	// what this test exercises). The event's matched_contact_ids references the
 	// not-yet-created contact (UUID array, not an FK).
 	eventIDStr := env.seedCalendarEvent(t, missingID).String()
 	sourceID := eventIDStr + ":" + missingID.String()

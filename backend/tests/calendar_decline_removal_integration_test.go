@@ -9,7 +9,7 @@
 //     provenance-safety guards (creation value preserved, contact_by
 //     override preserved, NULL-out, per-direction, forward-writer parity)
 //   - decline replay idempotency
-//   - Decision-3a attended-after-delete guard (skip-when-deleted +
+//   - the attended-after-delete guard (skip-when-deleted +
 //     FOR SHARE / FOR UPDATE lock serialization)
 //   - the declined: SourceID namespace coexisting with the attended row
 package tests
@@ -446,8 +446,8 @@ func TestIntegration_CalendarDecline_ReplayIsNoOp(t *testing.T) {
 	assert.Nil(t, got.LastContacted)
 }
 
-// Test 8(a): Decision-3a skip-when-deleted — calendar.attended whose backing
-// calendar_event was deleted → no interaction written.
+// Test 8(a): attended-after-delete skip-when-deleted — calendar.attended whose
+// backing calendar_event was deleted → no interaction written.
 func TestIntegration_AttendedAfterDelete_SkipsInsert(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -472,7 +472,7 @@ func TestIntegration_AttendedAfterDelete_SkipsInsert(t *testing.T) {
 	require.ErrorIs(t, err, db.ErrNotFound)
 }
 
-// Test 8(b): Decision-3a lock-serialization — the attended FOR SHARE
+// Test 8(b): attended-after-delete lock-serialization — the attended FOR SHARE
 // conflicts with a concurrent FOR UPDATE NOWAIT (proving the lock is held),
 // without sleeps. Then the decline DELETE soft-deletes the just-written
 // interaction; and the reverse order (decline-first) skips the attended insert.

@@ -17,7 +17,7 @@ import (
 // mock-backed newTestProvider* factories leave eventBus + pool nil). The
 // cutover publish-before-delete + coexistence path is DB-backed and runs in
 // the CI integration suite, so it lives in
-// backend/tests/calendar_decline_removal_integration_test.go (driven through
+// backend/tests/calendar_decline_cutover_integration_test.go (driven through
 // RunProcessEventForTest with a real bus + pool).
 
 // TestProcessEvent_DeclinedEvent_OffMode_MarksCancelled asserts that a
@@ -79,10 +79,10 @@ func TestProcessEvent_DeclinedEvent_NeverStored_NoOp(t *testing.T) {
 }
 
 // TestProcessEvent_CancelledWithoutDateTime_ReachesRemoveBranch proves the
-// gate-before-parse fix (Decision 1): a cancelled delta arriving WITHOUT
-// Start/End DateTime still reaches the remove branch instead of erroring at
-// the time parse. The organizer is the user (synthesized "accepted"), so it
-// is the status='cancelled' clause that drives keep=false.
+// gate-before-parse fix: a cancelled delta arriving WITHOUT Start/End DateTime
+// still reaches the remove branch instead of erroring at the time parse. The
+// organizer is the user (synthesized "accepted"), so it is the
+// status='cancelled' clause that drives keep=false.
 func TestProcessEvent_CancelledWithoutDateTime_ReachesRemoveBranch(t *testing.T) {
 	ctx := context.Background()
 	storedID := uuid.New()

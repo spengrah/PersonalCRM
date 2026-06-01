@@ -128,7 +128,7 @@ type CalendarSyncProvider struct {
 	pool *pgxpool.Pool
 	// declineBus is the bus used by the cutover decline remove branch's
 	// per-contact PublishTx. It defaults to eventBus; tests substitute a
-	// failing stub via setDeclineBusForTest to assert publish-before-delete
+	// failing stub via SetDeclineBusForTest to assert publish-before-delete
 	// (a publish failure must leave the calendar_event row intact). The
 	// off-mode gate keys off the concrete eventBus/pool fields, not this one.
 	declineBus busTx
