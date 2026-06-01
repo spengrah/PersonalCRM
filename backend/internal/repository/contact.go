@@ -878,8 +878,20 @@ func (r *ContactRepository) RecomputeContactDatesAfterDeleteTx(ctx context.Conte
 }
 
 // RecomputeContactDatesAfterDelete is the non-tx variant of
-// RecomputeContactDatesAfterDeleteTx, used for direct testing. The two
-// queries run on the repository's base querier rather than a caller tx.
+// RecomputeContactDatesAfterDeleteTx, used for direct testing only. Its three
+// statements (LockContactForDateRecompute → ComputeContactDatesAfterDelete →
+// WriteContactDatesAfterDelete) run on the repository's base querier, i.e.
+// each in its own autocommit transaction.
+//
+// CONCURRENCY WARNING: because the statements do NOT share a transaction, the
+// LockContactForDateRecompute FOR UPDATE lock is released the instant that
+// statement commits — it does NOT hold across the aggregate read. This variant
+// therefore lacks the lock-then-aggregate serialization that closes the
+// concurrent-writer race, so it MUST NOT be wired into the production recompute
+// path. Production routes the recompute exclusively through
+// RecomputeContactDatesAfterDeleteTx, which holds the lock across all three
+// statements in the caller's single tx. This variant is safe only for
+// single-threaded direct tests.
 func (r *ContactRepository) RecomputeContactDatesAfterDelete(ctx context.Context, contactID uuid.UUID, deletedAt time.Time) error {
 	return recomputeContactDatesAfterDelete(ctx, r.queries, contactID, deletedAt)
 }
