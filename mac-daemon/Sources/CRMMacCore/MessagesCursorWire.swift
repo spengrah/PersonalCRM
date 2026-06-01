@@ -96,14 +96,31 @@ public struct MessagesCursorPendingScan: Codable, Equatable, Sendable {
     /// Lower bound for the scan window (chat.db message.date >= since).
     public let since: Date
 
-    public init(normalizedHandle: String, since: Date) {
+    /// Resume coordinate: the LOWEST chat.db `message.ROWID` already
+    /// confirmed-published for this scan. The next page reads
+    /// `... AND ROWID < progressBelowRowID` (descending walk). Nil
+    /// means "not started" — scan from the most recent matching row.
+    /// Additive Codable field; operator-CLI-queued and pre-existing
+    /// entries decode as nil.
+    public let progressBelowRowID: Int64?
+
+    public init(normalizedHandle: String, since: Date, progressBelowRowID: Int64? = nil) {
         self.normalizedHandle = normalizedHandle
         self.since = since
+        self.progressBelowRowID = progressBelowRowID
     }
 
     enum CodingKeys: String, CodingKey {
-        case normalizedHandle = "normalized_handle"
+        case normalizedHandle  = "normalized_handle"
         case since
+        case progressBelowRowID = "progress_below_rowid"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.normalizedHandle = try c.decode(String.self, forKey: .normalizedHandle)
+        self.since = try c.decode(Date.self, forKey: .since)
+        self.progressBelowRowID = try c.decodeIfPresent(Int64.self, forKey: .progressBelowRowID)
     }
 }
 
