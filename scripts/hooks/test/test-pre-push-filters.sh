@@ -63,6 +63,8 @@ assert_not_in_group "README.md" frontend
 assert_not_in_group "README.md" mac_daemon
 # Glob edge: broadened frontend/** superset check.
 assert_in_group     "frontend/playwright.config.ts" frontend
+# Anchor exclusion: frontend/** must not over-reach into a sibling dir like frontendx/.
+assert_not_in_group "frontendx/y.ts" frontend
 # Self-gating regression guard: the filter file routes to validation.
 assert_in_group     "path-filters.yml" backend
 
@@ -81,12 +83,12 @@ assert_true  "any_file_in_groups frontend-only -> Go suite run" \
 assert_false "any_file_in_groups empty range -> no Go run" \
   any_file_in_groups "" backend frontend
 
-# --- any_file_under_macdaemon: the stricter local Swift predicate (D5) ---
+# --- any_file_under_macdaemon: the stricter local Swift predicate ---
 # Daemon source fires the Swift gate.
 assert_true  "any_file_under_macdaemon daemon source -> fires" \
   any_file_under_macdaemon "mac-daemon/Sources/x.swift"
 # ci.yml-only push is in the mac_daemon GROUP but must NOT fire the LOCAL gate.
-assert_false "any_file_under_macdaemon ci.yml-only -> does NOT fire (D5 literal)" \
+assert_false "any_file_under_macdaemon ci.yml-only -> does NOT fire (ci.yml is in the mac_daemon group, but the local predicate is literal mac-daemon/)" \
   any_file_under_macdaemon ".github/workflows/ci.yml"
 # Backend-only and empty range do not fire.
 assert_false "any_file_under_macdaemon backend-only -> does NOT fire" \
