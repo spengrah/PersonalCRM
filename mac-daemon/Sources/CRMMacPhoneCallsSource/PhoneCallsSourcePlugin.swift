@@ -268,7 +268,7 @@ public actor PhoneCallsSourcePlugin: DataSourcePlugin {
         // Identifier-scoped 30-day backwards scan is deferred — we
         // observe the newly-added queue for visibility but do NOT
         // consume it (parity with the merged messages plugin).
-        let newlyAdded = await cache.drainNewlyAdded()
+        let newlyAdded = await cache.drainNewlyAdded(for: id)
         if !newlyAdded.isEmpty {
             logger.info("phone_calls tick: newly-known contacts detected", metadata: [
                 "count": .public(String(newlyAdded.count)),

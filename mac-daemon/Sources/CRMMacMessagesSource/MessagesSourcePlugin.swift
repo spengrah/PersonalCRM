@@ -199,7 +199,7 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
         // a future PR ships true identifier-scoped scans. README
         // documents this v1 behavior; tests cover the persistence
         // semantics.
-        let newlyAdded = await cache.drainNewlyAdded()
+        let newlyAdded = await cache.drainNewlyAdded(for: id)
         if !newlyAdded.isEmpty {
             logger.info("messages tick: newly-known contacts detected", metadata: [
                 "count": .public(String(newlyAdded.count)),

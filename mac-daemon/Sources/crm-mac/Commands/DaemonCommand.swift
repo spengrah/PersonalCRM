@@ -104,7 +104,7 @@ struct DaemonCommand: AsyncParsableCommand {
                 let n = HandleNormalization.canonicalize(email)
                 if !n.isEmpty { canonical.insert(n) }
             }
-            _ = await knownIdentifiersCache.replace(with: canonical)
+            await knownIdentifiersCache.replace(with: canonical)
         }
 
         let healthProvider = RegistryHealthProvider(
