@@ -2,12 +2,14 @@ package google
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 	"unicode"
 
 	"personal-crm/backend/internal/accelerated"
+	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/identity"
 	"personal-crm/backend/internal/logger"
@@ -17,6 +19,8 @@ import (
 	"personal-crm/backend/internal/sync"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/api/calendar/v3"
 	"google.golang.org/api/option"
 )
@@ -69,6 +73,10 @@ type calendarRepoInterface interface {
 	Upsert(ctx context.Context, req repository.UpsertCalendarEventRequest) (*repository.CalendarEvent, error)
 	ListPastEventsNeedingUpdate(ctx context.Context, before time.Time, limit int32) ([]repository.CalendarEvent, error)
 	MarkLastContactedUpdated(ctx context.Context, id uuid.UUID) error
+	// Decline/cancel remove branch.
+	GetByGcalID(ctx context.Context, gcalEventID, gcalCalendarID, googleAccountID string) (*repository.CalendarEvent, error)
+	DeleteByGcalIDTx(ctx context.Context, tx pgx.Tx, gcalEventID, gcalCalendarID, googleAccountID string) error
+	MarkCancelledByGcalID(ctx context.Context, gcalEventID, gcalCalendarID, googleAccountID string) error
 }
 
 // contactRepoInterface defines the methods needed from contact repository (for testability)
@@ -112,11 +120,19 @@ type CalendarSyncProvider struct {
 	// post-cutover — past-event publishes are skipped and
 	// last_contacted-from-calendar updates do NOT happen (spec §3.9).
 	eventBus *events.Bus
+	// pool is required by the cutover decline remove branch, which does
+	// N calendar.declined publishes + one calendar_event DELETE in a single
+	// atomic tx (publish-before-delete). Mirrors the Todoist provider's pool
+	// dependency. Nil when mode=off — the remove branch then defers cleanup
+	// by marking the stored row cancelled instead of publishing + deleting.
+	pool *pgxpool.Pool
 }
 
 // NewCalendarSyncProvider creates a new Google Calendar sync provider.
 // eventBus is required in cutover (default post-PR-6). Nil disables
-// past-event interaction writes entirely.
+// past-event interaction writes entirely. pool backs the decline remove
+// branch's atomic publish-before-delete tx; in off mode (nil eventBus or
+// nil pool) the branch defers cleanup via MarkCancelledByGcalID.
 func NewCalendarSyncProvider(
 	oauthService *OAuthService,
 	calendarRepo *repository.CalendarEventRepository,
@@ -124,6 +140,7 @@ func NewCalendarSyncProvider(
 	identityService *service.IdentityService,
 	externalContactRepo *repository.ExternalContactRepository,
 	eventBus *events.Bus,
+	pool *pgxpool.Pool,
 ) *CalendarSyncProvider {
 	return &CalendarSyncProvider{
 		oauthService:        oauthService,
@@ -132,6 +149,7 @@ func NewCalendarSyncProvider(
 		identityService:     identityService,
 		externalContactRepo: externalContactRepo,
 		eventBus:            eventBus,
+		pool:                pool,
 	}
 }
 
@@ -343,13 +361,36 @@ func (p *CalendarSyncProvider) incrementalSync(
 	return result, nil
 }
 
-// processEvent processes a single calendar event
+// processEvent processes a single calendar event.
+//
+// The keep decision is evaluated BEFORE time parsing and the all-day skip
+// (Decision 1): incremental-sync deltas for cancelled/declined events can
+// arrive with empty Start.DateTime/End.DateTime (Google sends a minimal
+// stub), so the remove branch must run without depending on inbound times.
+// The CRM stores a calendar_event only while the user has it accepted AND
+// it is not cancelled; any sync that observes it otherwise removes the
+// stored copy + its derived interactions.
 func (p *CalendarSyncProvider) processEvent(
 	ctx context.Context,
 	event *calendar.Event,
 	accountID string,
 ) error {
-	// Skip all-day events (holidays/birthdays, not meetings)
+	userResponse := p.getUserResponse(event, accountID)
+	status := getEventStatus(event)
+
+	keep := userResponse != nil && *userResponse == "accepted" && status != "cancelled"
+	if !keep {
+		// Decline / tentative / needsAction / user-removed / cancelled.
+		// Run the remove branch (keyed on event.Id, always present on any
+		// delta) BEFORE the all-day skip and the time parse: a previously-
+		// stored TIMED event arriving as a cancelled/declined stub (possibly
+		// all-day-shaped, possibly without DateTime) must still be cleaned up.
+		return p.removeDeclinedEvent(ctx, event.Id, accountID)
+	}
+
+	// Keep path. Skip all-day events (holidays/birthdays, not meetings).
+	// Accepted meetings always carry DateTime, so this is byte-for-byte
+	// identical to the pre-restructure keep-path behavior.
 	if event.Start.Date != "" {
 		logger.Debug().
 			Str("eventId", event.Id).
@@ -366,19 +407,6 @@ func (p *CalendarSyncProvider) processEvent(
 	endTime, err := time.Parse(time.RFC3339, event.End.DateTime)
 	if err != nil {
 		return fmt.Errorf("parse end time: %w", err)
-	}
-
-	// Determine user's response status
-	userResponse := p.getUserResponse(event, accountID)
-
-	// Only import events the user has firmly accepted
-	// Skip: declined, tentative, needsAction, and events where user is not an attendee
-	if userResponse == nil || *userResponse != "accepted" {
-		logger.Debug().
-			Str("eventId", event.Id).
-			Str("userResponse", ptrToStr(userResponse)).
-			Msg("skipping non-accepted event")
-		return nil
 	}
 
 	// Build attendee list
@@ -406,7 +434,7 @@ func (p *CalendarSyncProvider) processEvent(
 		StartTime:            startTime,
 		EndTime:              endTime,
 		AllDay:               false,
-		Status:               getEventStatus(event),
+		Status:               status,
 		UserResponse:         userResponse,
 		OrganizerEmail:       getOrganizerEmail(event),
 		Attendees:            attendees,
@@ -420,6 +448,83 @@ func (p *CalendarSyncProvider) processEvent(
 	if err != nil {
 		return fmt.Errorf("upsert calendar event: %w", err)
 	}
+	return nil
+}
+
+// removeDeclinedEvent removes a previously-stored calendar_event (and its
+// derived interactions) when the event is observed declined / tentative /
+// needsAction / user-removed / cancelled upstream. Keyed on the inbound
+// gcal event id (always present on any delta) — reads EndTime +
+// MatchedContactIDs from the STORED row, so it needs neither the inbound
+// Start/End DateTime nor the all-day discriminator.
+//
+// Cutover (eventBus + pool present): in ONE tx, publish a calendar.declined
+// per matched contact (carrying the stored row's INTERNAL ID so the decline
+// consumer's source_ref lookup matches), THEN delete the calendar_event.
+// Publish-before-delete: a publish failure rolls back the whole tx (event
+// rows + delete), and the next sync re-runs the branch cleanly. If the row
+// is already gone the next sync no-ops at GetByGcalID.
+//
+// Off mode (nil eventBus or nil pool): defer cleanup by marking the stored
+// row status='cancelled' rather than deleting. This stops re-firing
+// calendar.attended (ListPastEventsNeedingUpdate requires status='confirmed')
+// and hides the row from contact reads WITHOUT losing the only cleanup
+// handle for an already-recorded interaction — the cutover resume re-observes
+// the row and finishes the cleanup.
+func (p *CalendarSyncProvider) removeDeclinedEvent(ctx context.Context, gcalEventID, accountID string) error {
+	stored, err := p.calendarRepo.GetByGcalID(ctx, gcalEventID, "primary", accountID)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			// Never accepted/stored (the common case — the user has declined
+			// many invites that were never in the CRM). Do NOT emit a decline.
+			return nil
+		}
+		return fmt.Errorf("look up stored calendar event for decline: %w", err)
+	}
+
+	// Off mode: defer cleanup by marking cancelled (neither publish nor delete).
+	if p.eventBus == nil || p.pool == nil {
+		if err := p.calendarRepo.MarkCancelledByGcalID(ctx, gcalEventID, "primary", accountID); err != nil {
+			return fmt.Errorf("mark calendar event cancelled (off mode): %w", err)
+		}
+		logger.Debug().
+			Str("eventId", gcalEventID).
+			Msg("calendar: decline observed in off mode; marked stored event cancelled (deferred cleanup)")
+		return nil
+	}
+
+	// Cutover: publish-before-delete in one tx.
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin decline tx: %w", err)
+	}
+	defer func() {
+		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil &&
+			!errors.Is(rollbackErr, pgx.ErrTxClosed) {
+			logger.Warn().Err(rollbackErr).Str("eventId", gcalEventID).Msg("calendar: decline tx rollback failed")
+		}
+	}()
+
+	eventIDStr := stored.ID.String()
+	for _, contactID := range stored.MatchedContactIDs {
+		if pubErr := publishCalendarDeclinedTx(ctx, p.eventBus, tx, contactID, eventIDStr, stored.EndTime); pubErr != nil {
+			return fmt.Errorf("publish calendar.declined for contact %s: %w", contactID, pubErr)
+		}
+	}
+
+	if err := p.calendarRepo.DeleteByGcalIDTx(ctx, tx, gcalEventID, "primary", accountID); err != nil {
+		return fmt.Errorf("delete declined calendar event: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit decline tx: %w", err)
+	}
+
+	logger.Info().
+		Str("eventId", gcalEventID).
+		Str("internalId", eventIDStr).
+		Int("contacts", len(stored.MatchedContactIDs)).
+		Msg("calendar: removed declined/cancelled event + published decline per matched contact")
 	return nil
 }
 

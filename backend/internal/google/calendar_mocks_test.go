@@ -8,6 +8,7 @@ import (
 	"personal-crm/backend/internal/service"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // mockCalendarRepo is a mock implementation of calendarRepoInterface
@@ -24,6 +25,17 @@ type mockCalendarRepo struct {
 	markUpdatedCalled bool
 	markUpdatedIDs    []uuid.UUID
 	markUpdatedError  error
+
+	// Decline/cancel remove branch.
+	getByGcalIDResult *repository.CalendarEvent
+	getByGcalIDError  error
+	getByGcalIDCalled bool
+
+	deleteByGcalIDCalled bool
+	deleteByGcalIDError  error
+
+	markCancelledCalled bool
+	markCancelledError  error
 }
 
 func (m *mockCalendarRepo) Upsert(ctx context.Context, req repository.UpsertCalendarEventRequest) (*repository.CalendarEvent, error) {
@@ -60,6 +72,24 @@ func (m *mockCalendarRepo) MarkLastContactedUpdated(ctx context.Context, id uuid
 	m.markUpdatedCalled = true
 	m.markUpdatedIDs = append(m.markUpdatedIDs, id)
 	return m.markUpdatedError
+}
+
+func (m *mockCalendarRepo) GetByGcalID(ctx context.Context, gcalEventID, gcalCalendarID, googleAccountID string) (*repository.CalendarEvent, error) {
+	m.getByGcalIDCalled = true
+	if m.getByGcalIDError != nil {
+		return nil, m.getByGcalIDError
+	}
+	return m.getByGcalIDResult, nil
+}
+
+func (m *mockCalendarRepo) DeleteByGcalIDTx(ctx context.Context, tx pgx.Tx, gcalEventID, gcalCalendarID, googleAccountID string) error {
+	m.deleteByGcalIDCalled = true
+	return m.deleteByGcalIDError
+}
+
+func (m *mockCalendarRepo) MarkCancelledByGcalID(ctx context.Context, gcalEventID, gcalCalendarID, googleAccountID string) error {
+	m.markCancelledCalled = true
+	return m.markCancelledError
 }
 
 // mockContactRepo is a mock implementation of contactRepoInterface

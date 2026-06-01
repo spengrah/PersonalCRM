@@ -87,15 +87,15 @@ func TestConsumerJobsForKind_InteractionRecordedEnqueuesCadenceAndFollowUp(t *te
 // still have no active consumer return nil:
 //   - interaction.manual: inline-invoked by the manual UI handler
 //     (spec §3.4 "other consumers only").
-//   - calendar.declined, task.skipped: consumers for those kinds are
-//     not yet wired.
+//   - task.skipped: consumer for that kind is not yet wired.
 //
 // (contact_methods.added HAS a consumer now — see the dedicated
-// TestConsumerJobsForKind_ContactMethodsAdded tests below.)
+// TestConsumerJobsForKind_ContactMethodsAdded tests below.
+// calendar.declined HAS a consumer now — see
+// TestConsumerJobsForKind_CalendarDeclinedEnqueuesDeclineHandler.)
 func TestConsumerJobsForKind_EmptyForDeferredKinds(t *testing.T) {
 	deferred := []Kind{
 		KindInteractionManual,
-		KindCalendarDeclined,
 		KindTaskSkipped,
 	}
 	for _, k := range deferred {
@@ -106,6 +106,24 @@ func TestConsumerJobsForKind_EmptyForDeferredKinds(t *testing.T) {
 			require.Empty(t, jobs, "kind %s: expected empty consumer-job slice", k)
 		})
 	}
+}
+
+// TestConsumerJobsForKind_CalendarDeclinedEnqueuesDeclineHandler asserts
+// that calendar.declined enqueues exactly one CalendarDeclineHandler river
+// job with MaxAttempts=5 (Decision 7).
+func TestConsumerJobsForKind_CalendarDeclinedEnqueuesDeclineHandler(t *testing.T) {
+	eventID := uuid.New()
+	env := &Envelope{ID: eventID, Kind: KindCalendarDeclined}
+	jobs, err := consumerJobsForKind(env)
+	require.NoError(t, err)
+	require.Len(t, jobs, 1, "calendar.declined should enqueue exactly one consumer job")
+
+	args, ok := jobs[0].Args.(consumerjobs.CalendarDeclineHandlerJobArgs)
+	require.True(t, ok, "job args type must be CalendarDeclineHandlerJobArgs, got %T", jobs[0].Args)
+	require.Equal(t, eventID, args.EventID)
+	require.Equal(t, "calendar_decline_handler", args.Kind())
+	require.NotNil(t, jobs[0].Opts, "InsertOpts must be set to pin MaxAttempts")
+	require.Equal(t, 5, jobs[0].Opts.MaxAttempts)
 }
 
 // TestConsumerJobsForKind_ContactMethodsAdded asserts the PR 10 routing:

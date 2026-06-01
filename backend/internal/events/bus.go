@@ -55,13 +55,22 @@ type consumerJob struct {
 //     retries at enqueue time.
 //   - interaction.manual: inline-invoked by the manual UI handler; no
 //     async consumer.
-//   - calendar.declined, task.skipped: no consumer yet wired.
+//   - calendar.declined → CalendarDeclineHandler worker with
+//     MaxAttempts=5 (soft-deletes the derived gcal interaction + recomputes
+//     the contact's date columns when a calendar event is declined/
+//     cancelled/user-removed upstream).
+//   - task.skipped: no consumer yet wired.
 func consumerJobsForKind(env *Envelope) ([]consumerJob, error) {
 	switch env.Kind {
 	case KindMessageReceived, KindMessageSent, KindCalendarAttended,
 		KindTaskCompleted, KindTaskOutreachDetected:
 		return []consumerJob{{
 			Args: consumerjobs.InteractionRecorderJobArgs{EventID: env.ID},
+			Opts: &river.InsertOpts{MaxAttempts: 5},
+		}}, nil
+	case KindCalendarDeclined:
+		return []consumerJob{{
+			Args: consumerjobs.CalendarDeclineHandlerJobArgs{EventID: env.ID},
 			Opts: &river.InsertOpts{MaxAttempts: 5},
 		}}, nil
 	case KindInteractionRecorded:
