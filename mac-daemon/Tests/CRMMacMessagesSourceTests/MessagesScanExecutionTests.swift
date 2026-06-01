@@ -230,6 +230,38 @@ final class MessagesScanExecutionTests: XCTestCase {
         XCTAssertEqual(finalCursor?.pendingScans.count, 0, "scan dequeued once exhausted")
     }
 
+    // MARK: - Phase B conflict aborts the tick
+
+    func testPhaseBConflictAbortsTickWithoutOverwriting() async throws {
+        // 5 messages, budget 2. Commit #1 = Phase A enqueue (succeeds).
+        // Commit #2 = Phase B progress advance → forced 409 conflict
+        // (ONLY commit #2; a later commit would succeed). A regressed
+        // plugin that continued past the conflict would land a STALE
+        // final commit carrying advanced progress, failing the assertion.
+        let dbURL = try makeChatDB(messageCount: 5)
+        let store = makeStateStore()
+        let seeded = inactiveBatchCursor()
+        try store.save(DaemonState(schemaVersion: 1))
+        let cache = KnownIdentifiersCache(
+            baselines: [.messages: []], consumers: [.messages])
+        await cache.replace(with: ["+15550000001"])
+
+        let transport = StatefulCursorTransport(
+            initialCursor: try MessagesCursorCodec.encode(seeded),
+            conflictOnlyAt: 2)
+        let sink = PublisherSink()
+        let plugin = makePlugin(dbURL: dbURL, store: store, cache: cache,
+                                transport: transport, publisherSink: sink,
+                                maxRowsPerTick: 2)
+
+        try await plugin.tick()
+
+        let finalCursor = await transport.currentDecodedCursor()
+        XCTAssertEqual(finalCursor?.pendingScans.count, 1, "scan entry still queued after abort")
+        XCTAssertNil(finalCursor?.pendingScans.first?.progressBelowRowID,
+                     "Phase-B progress NOT durably committed under conflict; no stale overwrite")
+    }
+
     // MARK: - membership gate (hasFetched vs isPopulated)
 
     func testUnknownHandleDroppedWhenFetched() async throws {
@@ -369,11 +401,19 @@ final class StatefulCursorTransport: @unchecked Sendable {
     private let lock = NSLock()
     private var currentCursor: String
     private var committedCursors: [String] = []
+    private var commitAttempts = 0
     private let failCommits: Bool
+    /// When set, ONLY the (1-based) commit at exactly this index returns
+    /// a 409 cursor-conflict (cursor NOT updated); later commits succeed.
+    /// Forcing the conflict on a SINGLE commit lets the Phase-B abort
+    /// test detect a regression where a buggy plugin continues past the
+    /// conflict and lands a STALE final commit that would SUCCEED.
+    private let conflictOnlyAt: Int?
 
-    init(initialCursor: String = "", failCommits: Bool = false) {
+    init(initialCursor: String = "", failCommits: Bool = false, conflictOnlyAt: Int? = nil) {
         self.currentCursor = initialCursor
         self.failCommits = failCommits
+        self.conflictOnlyAt = conflictOnlyAt
     }
 
     func asTransport() -> TransportFunc {
@@ -396,6 +436,15 @@ final class StatefulCursorTransport: @unchecked Sendable {
             if method == "POST", url.path.hasSuffix("/cursor") {
                 if failCommits {
                     return (Data(#"{"error":{"code":"boom","message":"forced"}}"#.utf8), http(500))
+                }
+                lock.lock(); commitAttempts += 1; let attempt = commitAttempts; lock.unlock()
+                if let target = conflictOnlyAt, attempt == target {
+                    let body = """
+                        {"success":false,
+                         "error":{"code":"EPOCH_MISMATCH","message":"epoch mismatch"},
+                         "data":{"current_cursor":\(Self.jsonString(currentCursor)),"current_epoch":9}}
+                        """
+                    return (Data(body.utf8), http(409))
                 }
                 if let bodyData = request.httpBody,
                    let obj = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],

@@ -387,9 +387,11 @@ final class CallHistoryScanExecutionTests: XCTestCase {
     func testPhaseBConflictAbortsTickWithoutOverwriting() async throws {
         // 5 calls, budget 2. Commit #1 = Phase A enqueue (succeeds).
         // Commit #2 = Phase B progress advance → forced 409 conflict.
-        // The tick must abort: the Phase-B progress is NOT durably
-        // committed, and the row-emitting batches + final commit must
-        // NOT run against the now-stale working cursor.
+        // ONLY commit #2 conflicts; a later commit would SUCCEED — so a
+        // regressed plugin that continued past the conflict would land a
+        // STALE final commit (#3) carrying the advanced Phase-B progress,
+        // failing the nil-progress assertion below. The fixed plugin
+        // aborts the tick, so commit #3 never happens.
         let dbURL = try makeCallHistoryDB(callCount: 5)
         let store = makeStateStore()
         let seeded = inactiveBatchCursor()
@@ -400,7 +402,7 @@ final class CallHistoryScanExecutionTests: XCTestCase {
 
         let transport = PhoneStatefulCursorTransport(
             initialCursor: try PhoneCallsCursorCodec.encode(seeded),
-            conflictAtOrAfter: 2)
+            conflictOnlyAt: 2)
         let sink = PhonePublisherSink()
         let plugin = makePlugin(dbURL: dbURL, store: store, cache: cache,
                                 transport: transport, publisherSink: sink,
@@ -410,11 +412,11 @@ final class CallHistoryScanExecutionTests: XCTestCase {
 
         // The persisted cursor reflects ONLY the Phase-A enqueue commit:
         // one pending scan, nil progress (the rejected Phase-B commit
-        // never advanced it).
+        // never advanced it, AND no stale final commit landed).
         let finalCursor = await transport.currentDecodedCursor()
         XCTAssertEqual(finalCursor?.pendingScans.count, 1, "scan entry still queued after abort")
         XCTAssertNil(finalCursor?.pendingScans.first?.progressBelowZDate,
-                     "Phase-B progress NOT durably committed under conflict")
+                     "Phase-B progress NOT durably committed under conflict; no stale overwrite")
     }
 }
 
@@ -436,16 +438,19 @@ final class PhoneStatefulCursorTransport: @unchecked Sendable {
     private var committedCursors: [String] = []
     private var commitAttempts = 0
     private let failCommits: Bool
-    /// When set, the (1-based) commit at this index and beyond returns a
-    /// 409 cursor-conflict (the cursor is NOT updated). Lets tests force
-    /// a conflict on a SPECIFIC commit (e.g. the Phase-B re-commit) while
-    /// earlier commits succeed.
-    private let conflictAtOrAfter: Int?
+    /// When set, ONLY the (1-based) commit at exactly this index returns
+    /// a 409 cursor-conflict; the cursor is NOT updated for it but later
+    /// commits succeed normally. Forcing the conflict on a SINGLE commit
+    /// (not "at-or-after") is deliberate: it lets the Phase-B abort test
+    /// detect a regression where a buggy plugin continues after the
+    /// conflict and lands a STALE final commit — that later commit would
+    /// SUCCEED and overwrite, failing the assertion.
+    private let conflictOnlyAt: Int?
 
-    init(initialCursor: String = "", failCommits: Bool = false, conflictAtOrAfter: Int? = nil) {
+    init(initialCursor: String = "", failCommits: Bool = false, conflictOnlyAt: Int? = nil) {
         self.currentCursor = initialCursor
         self.failCommits = failCommits
-        self.conflictAtOrAfter = conflictAtOrAfter
+        self.conflictOnlyAt = conflictOnlyAt
     }
 
     func asTransport() -> TransportFunc {
@@ -468,7 +473,7 @@ final class PhoneStatefulCursorTransport: @unchecked Sendable {
                     return (Data(#"{"error":{"code":"boom","message":"forced"}}"#.utf8), http(500))
                 }
                 lock.lock(); commitAttempts += 1; let attempt = commitAttempts; lock.unlock()
-                if let threshold = conflictAtOrAfter, attempt >= threshold {
+                if let target = conflictOnlyAt, attempt == target {
                     // 409 cursor-conflict: cursor NOT updated (the daemon
                     // refreshes its base + aborts the tick).
                     let body = """

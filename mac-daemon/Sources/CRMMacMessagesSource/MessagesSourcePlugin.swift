@@ -454,13 +454,18 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
             }
 
             let limit = min(scanBudget, MessagesPublisher.maxEventsPerBatch)
+            // Never scan below the backfill floor at EXECUTION time —
+            // defense-in-depth against any already-committed entry whose
+            // `since` predates the floor (e.g. queued by an older build).
+            // Rows below the floor are never emitted.
+            let scanSince = max(entry.since, config.backfillFloor)
             let page: MessagesScanPage
             do {
                 page = try await pool.read { db in
                     try MessagesScanReader.scanPage(
                         db: db,
                         canonicalHandle: handle,
-                        since: entry.since,
+                        since: scanSince,
                         progressBelowRowID: entry.progressBelowRowID,
                         limit: limit)
                 }

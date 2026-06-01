@@ -185,4 +185,78 @@ final class CallHistoryOpsScanTests: XCTestCase {
             committed?.pendingScans.contains { $0.normalizedHandle == "+15550000000" } ?? true,
             "oldest entry dropped")
     }
+
+    // MARK: - floor clamp on an over-wide --since
+
+    func testScanClampsOverWideSinceToFloor() async throws {
+        // A 100-year --since would reach far below the 2026-01-01 floor;
+        // the queued entry's `since` must be clamped to the floor.
+        let emptyCursor = "{\"backfill_floor_sent_at\":\"2026-01-01T00:00:00Z\"}"
+        let transport = LifecycleMockTransport([
+            .respond(status: 200, data: getCursorResponse(emptyCursor)),
+            .respond(status: 200, data: Data(#"{"success":true,"data":{"ok":true}}"#.utf8)),
+        ])
+        let ops = makeOps(transport)
+        try await ops.scan(identifier: "+15550000001", since: 100 * 365 * 86400)
+
+        let committed = try committedCursor(transport)
+        XCTAssertEqual(committed?.pendingScans.first?.since, backfillFloor,
+                       "over-wide --since clamped to the backfill floor")
+    }
+
+    // MARK: - coverage-dedup (wider widens + resets, narrower preserved)
+
+    func testScanCoverageDedupWidensAndResetsProgress() async throws {
+        // Seed a NARROW entry (since = now − 1 day) with progress
+        // advanced, anchored to the real clock so a wider --since always
+        // widens regardless of the absolute test date.
+        let narrowSince = Date().addingTimeInterval(-86400) // now − 1 day
+        var seeded = PhoneCallsCursorWire(backfillFloorSentAt: backfillFloor)
+        seeded.pendingScans.append(PhoneCallsCursorPendingScan(
+            normalizedHandle: "+15550000001",
+            since: narrowSince,
+            progressBelowZDate: 800_000_000,
+            progressBelowZPK: 42))
+        let seededJSON = try PhoneCallsCursorWireCodec.encode(seeded)
+        let transport = LifecycleMockTransport([
+            .respond(status: 200, data: getCursorResponse(seededJSON)),
+            .respond(status: 200, data: Data(#"{"success":true,"data":{"ok":true}}"#.utf8)),
+        ])
+        let ops = makeOps(transport)
+        // A wider 60-day scan (now − 60d < now − 1d) widens + resets.
+        try await ops.scan(identifier: "+15550000001", since: 60 * 86400)
+
+        let committed = try committedCursor(transport)
+        XCTAssertEqual(committed?.pendingScans.count, 1, "one merged entry, no duplicate")
+        let entry = try XCTUnwrap(committed?.pendingScans.first)
+        XCTAssertLessThan(entry.since, narrowSince, "window widened to the earlier since")
+        XCTAssertNil(entry.progressBelowZDate, "wider window resets progress")
+        XCTAssertNil(entry.progressBelowZPK, "wider window resets progress")
+    }
+
+    func testScanCoverageDedupNarrowerPreservesExistingProgress() async throws {
+        // Seed a WIDE entry (since at the floor) with progress advanced.
+        var seeded = PhoneCallsCursorWire(backfillFloorSentAt: backfillFloor)
+        seeded.pendingScans.append(PhoneCallsCursorPendingScan(
+            normalizedHandle: "+15550000001",
+            since: backfillFloor,
+            progressBelowZDate: 800_000_000,
+            progressBelowZPK: 42))
+        let seededJSON = try PhoneCallsCursorWireCodec.encode(seeded)
+        let transport = LifecycleMockTransport([
+            .respond(status: 200, data: getCursorResponse(seededJSON)),
+            .respond(status: 200, data: Data(#"{"success":true,"data":{"ok":true}}"#.utf8)),
+        ])
+        let ops = makeOps(transport)
+        // A NARROWER 2-day scan must NOT shrink the window or reset
+        // progress.
+        try await ops.scan(identifier: "+15550000001", since: 2 * 86400)
+
+        let committed = try committedCursor(transport)
+        XCTAssertEqual(committed?.pendingScans.count, 1, "one entry, no duplicate")
+        let entry = try XCTUnwrap(committed?.pendingScans.first)
+        XCTAssertEqual(entry.since, backfillFloor, "narrower window does not shrink the entry")
+        XCTAssertEqual(entry.progressBelowZDate, 800_000_000, "existing progress preserved")
+        XCTAssertEqual(entry.progressBelowZPK, 42, "existing progress preserved")
+    }
 }
