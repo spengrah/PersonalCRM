@@ -443,6 +443,9 @@ func (s *MeetingNoteService) fetchCandidateAsLinkageTx(ctx context.Context, tx p
 			}
 			return nil, fmt.Errorf("read calendar event: %w", err)
 		}
+		// Coalescing-input fields intentionally left zero: this is a
+		// post-disambiguation projection of an already-chosen target and
+		// is never fed to coalesceCandidates.
 		return &repository.LinkageCandidate{
 			Kind:               repository.LinkedKindEvent,
 			ID:                 evt.ID,
@@ -462,6 +465,9 @@ func (s *MeetingNoteService) fetchCandidateAsLinkageTx(ctx context.Context, tx p
 			id := *call.MatchedContactID
 			peer = &id
 		}
+		// Coalescing-input fields intentionally left zero: this is a
+		// post-disambiguation projection of an already-chosen target and
+		// is never fed to coalesceCandidates.
 		return &repository.LinkageCandidate{
 			Kind:          repository.LinkedKindPhoneCall,
 			ID:            call.ID,

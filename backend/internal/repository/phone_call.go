@@ -231,10 +231,16 @@ func (r *PhoneCallRepository) FindLinkageCandidatesTx(ctx context.Context, tx pg
 		}
 		c := convertDbPhoneCall(row)
 		out = append(out, LinkageCandidate{
-			Kind:          LinkedKindPhoneCall,
-			ID:            c.ID,
-			OccurredAt:    c.StartedAt,
-			PeerContactID: c.MatchedContactID,
+			Kind:            LinkedKindPhoneCall,
+			ID:              c.ID,
+			OccurredAt:      c.StartedAt,
+			PeerContactID:   c.MatchedContactID,
+			PeerNormalized:  c.PeerNormalized,
+			Service:         c.Service,
+			Direction:       c.Direction,
+			DurationSeconds: c.DurationSeconds,
+			Answered:        c.Answered,
+			InteractionID:   c.InteractionID,
 		})
 	}
 	return out, nil

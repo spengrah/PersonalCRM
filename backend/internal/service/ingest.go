@@ -1555,6 +1555,12 @@ func commonMeetingNoteInvariants(
 // rows. 15 minutes per sidecar spec §Linkage detection algorithm.
 const linkageWindow = 15 * time.Minute
 
+// phoneCoalesceWindow is the maximum gap between two same-number
+// phone_call candidates for them to be treated as one interaction (a
+// dropped/unanswered attempt + its redial, or two halves of one
+// dropped-and-resumed call). Tunable.
+const phoneCoalesceWindow = 5 * time.Minute
+
 // shouldRunInlineOnDuplicate is the dispatch-loop probe that allows
 // the inline handler to run even when Bus.PublishTx flagged the event
 // as a duplicate. For meeting_note.recorded specifically there are two
@@ -1905,6 +1911,7 @@ func (s *IngestService) handleMeetingNoteRecorded(
 		finalLinkedID           *uuid.UUID
 		desired                 []desiredInteraction
 		candidatesLen           int
+		coalescedLen            int
 		interactionsCreated     int
 		interactionsDropped     int
 		conflictSnapshot        []repository.ConflictCandidateSummary
@@ -1944,6 +1951,12 @@ func (s *IngestService) handleMeetingNoteRecorded(
 			candidates = append(candidates, pcCands...)
 		}
 		candidatesLen = len(candidates)
+		// Post-coalesce count for observability — coalescedLen < candidatesLen
+		// means coalescing collapsed a mirrored-meeting / dropped-redial
+		// pair. decideLinkage runs the same idempotent pass internally; the
+		// redundant call is cheap (window candidate sets are single digits)
+		// and side-effect-free.
+		coalescedLen = len(coalesceCandidates(candidates))
 		finalLinkageState, finalLinkedKind, finalLinkedID, desired, conflictSnapshot = decideLinkage(p, sessionID, candidates, resolvedTagged, titleMatched)
 		if len(conflictSnapshot) > 0 {
 			// Observability — log the top overlap whether or not we
@@ -2231,6 +2244,7 @@ func (s *IngestService) handleMeetingNoteRecorded(
 		Str("event", "linkage_decision").
 		Str("session_id", p.SourceID).
 		Int("candidates", candidatesLen).
+		Int("coalesced_candidates", coalescedLen).
 		Str("linkage_state", finalLinkageState).
 		Str("linked_kind", linkedKindStr).
 		Str("linked_id", linkedIDStr).
@@ -2251,6 +2265,173 @@ func (s *IngestService) handleMeetingNoteRecorded(
 		Msg("meeting_note linkage decision")
 
 	return needs, followUps, nil
+}
+
+// coalesceCandidates collapses semantically-identical linkage candidates
+// within a kind so that two equivalents become one, before decideLinkage
+// runs its 0/1/2+ classification. Two genuinely-distinct DB rows that
+// represent the same real-world interaction — the same calendar meeting
+// mirrored across two series/calendars (#370), or a dropped attempt + its
+// redial to the same number (#371) — would otherwise force a spurious
+// 2+ conflict. Cross-kind candidates are NEVER compared (an event and a
+// phone_call in the same window stay two candidates).
+//
+// Survivors are emitted in the original input order (a single pass over
+// the input keeps the kept candidate of each group), so the output is
+// deterministic and independent of map iteration order. The function is
+// idempotent and side-effect-free: a coalesced slice has no remaining
+// coalescible groups, so a second pass is a no-op.
+func coalesceCandidates(candidates []repository.LinkageCandidate) []repository.LinkageCandidate {
+	if len(candidates) < 2 {
+		return candidates
+	}
+
+	var events, calls []repository.LinkageCandidate
+	for _, c := range candidates {
+		switch c.Kind {
+		case repository.LinkedKindEvent:
+			events = append(events, c)
+		case repository.LinkedKindPhoneCall:
+			calls = append(calls, c)
+		}
+	}
+
+	keep := make(map[uuid.UUID]struct{}, len(candidates))
+	for id := range coalesceCalendar(events) {
+		keep[id] = struct{}{}
+	}
+	for id := range coalescePhone(calls) {
+		keep[id] = struct{}{}
+	}
+
+	out := make([]repository.LinkageCandidate, 0, len(candidates))
+	for _, c := range candidates {
+		// Kinds other than event/phone_call are never grouped (none exist
+		// today); pass them through untouched. Grouped kinds survive iff
+		// they are their group's chosen representative.
+		if c.Kind != repository.LinkedKindEvent && c.Kind != repository.LinkedKindPhoneCall {
+			out = append(out, c)
+			continue
+		}
+		if _, ok := keep[c.ID]; ok {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// coalesceCalendar returns the set of event-candidate IDs that survive
+// the #370 same-meeting coalescing rule. Candidates are grouped by
+// (NormalizedTitle, OccurredAt); within each group of 2+ the
+// representative is the one with the most matched attendees, tie-broken
+// by lowest ID. Empty-title candidates carry no semantic identity and are
+// never coalesced (each survives on its own). The group key derives from
+// the UTC instant so two times that .Equal share a key regardless of
+// location.
+func coalesceCalendar(events []repository.LinkageCandidate) map[uuid.UUID]struct{} {
+	keep := make(map[uuid.UUID]struct{}, len(events))
+	groups := make(map[string][]repository.LinkageCandidate)
+	for _, c := range events {
+		if c.NormalizedTitle == "" {
+			keep[c.ID] = struct{}{}
+			continue
+		}
+		key := c.NormalizedTitle + "\x00" + c.OccurredAt.UTC().Format(time.RFC3339Nano)
+		groups[key] = append(groups[key], c)
+	}
+	for _, group := range groups {
+		rep := pickCalendarRepresentative(group)
+		keep[rep] = struct{}{}
+	}
+	return keep
+}
+
+// pickCalendarRepresentative returns the ID of the representative of a
+// calendar group: most matched attendees, then lowest ID. Collects to a
+// slice and sorts (never relies on map iteration order).
+func pickCalendarRepresentative(group []repository.LinkageCandidate) uuid.UUID {
+	ranked := append([]repository.LinkageCandidate(nil), group...)
+	sort.Slice(ranked, func(i, j int) bool {
+		ai, aj := len(ranked[i].AttendeeContactIDs), len(ranked[j].AttendeeContactIDs)
+		if ai != aj {
+			return ai > aj
+		}
+		return ranked[i].ID.String() < ranked[j].ID.String()
+	})
+	return ranked[0].ID
+}
+
+// coalescePhone returns the set of phone_call-candidate IDs that survive
+// the #371 dropped-redial coalescing rule. Candidates are partitioned by
+// (PeerNormalized, Service, Direction) — all semantically-significant
+// dimensions, so opposite-direction or different-service same-number rows
+// never collapse. Within a partition, a sort-then-sweep single-linkage
+// cluster groups candidates whose consecutive gap is within
+// phoneCoalesceWindow; the representative of each cluster is the connected
+// (answered) / longest / interaction-linked call, tie-broken by lowest ID.
+// Candidates with an empty PeerNormalized carry no key and are never
+// coalesced.
+func coalescePhone(calls []repository.LinkageCandidate) map[uuid.UUID]struct{} {
+	keep := make(map[uuid.UUID]struct{}, len(calls))
+	partitions := make(map[string][]repository.LinkageCandidate)
+	for _, c := range calls {
+		if c.PeerNormalized == "" {
+			keep[c.ID] = struct{}{}
+			continue
+		}
+		key := c.PeerNormalized + "\x00" + c.Service + "\x00" + c.Direction
+		partitions[key] = append(partitions[key], c)
+	}
+	for _, partition := range partitions {
+		sort.Slice(partition, func(i, j int) bool {
+			if !partition[i].OccurredAt.Equal(partition[j].OccurredAt) {
+				return partition[i].OccurredAt.Before(partition[j].OccurredAt)
+			}
+			return partition[i].ID.String() < partition[j].ID.String()
+		})
+		// Single-linkage sweep: open a new cluster whenever the gap from
+		// the PREVIOUS candidate exceeds the window (gap-between-consecutive,
+		// not gap-from-anchor) — matches "redial seconds later, possibly
+		// several times".
+		cluster := []repository.LinkageCandidate{partition[0]}
+		flush := func() {
+			keep[pickPhoneRepresentative(cluster)] = struct{}{}
+		}
+		for i := 1; i < len(partition); i++ {
+			if partition[i].OccurredAt.Sub(partition[i-1].OccurredAt) > phoneCoalesceWindow {
+				flush()
+				cluster = []repository.LinkageCandidate{partition[i]}
+				continue
+			}
+			cluster = append(cluster, partition[i])
+		}
+		flush()
+	}
+	return keep
+}
+
+// pickPhoneRepresentative returns the ID of the representative of a phone
+// cluster: prefer answered/connected, then greatest DurationSeconds, then
+// a non-nil InteractionID, final tie-break lowest ID. Collects to a slice
+// and sorts (never relies on map iteration order).
+func pickPhoneRepresentative(cluster []repository.LinkageCandidate) uuid.UUID {
+	ranked := append([]repository.LinkageCandidate(nil), cluster...)
+	answered := func(c repository.LinkageCandidate) bool {
+		return c.Answered != nil && *c.Answered
+	}
+	sort.Slice(ranked, func(i, j int) bool {
+		if ai, aj := answered(ranked[i]), answered(ranked[j]); ai != aj {
+			return ai
+		}
+		if ranked[i].DurationSeconds != ranked[j].DurationSeconds {
+			return ranked[i].DurationSeconds > ranked[j].DurationSeconds
+		}
+		if hi, hj := ranked[i].InteractionID != nil, ranked[j].InteractionID != nil; hi != hj {
+			return hi
+		}
+		return ranked[i].ID.String() < ranked[j].ID.String()
+	})
+	return ranked[0].ID
 }
 
 // decideLinkage implements the spec's linkage-detection algorithm.
@@ -2285,6 +2466,10 @@ func decideLinkage(
 	resolvedTagged []resolvedTag,
 	titleMatched []resolvedTitle,
 ) (state string, linkedKind *string, linkedID *uuid.UUID, desired []desiredInteraction, snapshot []repository.ConflictCandidateSummary) {
+	// Collapse semantically-identical candidates within a kind before the
+	// 0/1/2+ classification — a mirrored meeting or dropped-redial pair
+	// becomes one candidate and flows into the existing auto-link path.
+	candidates = coalesceCandidates(candidates)
 	switch len(candidates) {
 	case 0:
 		if len(resolvedTagged) == 0 {

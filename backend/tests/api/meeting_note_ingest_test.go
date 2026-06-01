@@ -5,6 +5,7 @@ import (
 	"context"
 	cryptorand "crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -398,8 +399,18 @@ func (e *meetingNoteIngestEnv) seedAnarlogHumanResolvingTo(t *testing.T, email s
 
 // seedCalendarEventInWindow inserts a calendar_event row centered at
 // the given start time with the given matched_contact_ids. Returns the
-// inserted event ID.
+// inserted event ID. Delegates to seedCalendarEventInWindowWithTitle with
+// the default per-run title.
 func (e *meetingNoteIngestEnv) seedCalendarEventInWindow(t *testing.T, startTime time.Time, matchedContactIDs []uuid.UUID) uuid.UUID {
+	t.Helper()
+	return e.seedCalendarEventInWindowWithTitle(t, startTime, e.sourceIDPrefix+"Test Event", matchedContactIDs)
+}
+
+// seedCalendarEventInWindowWithTitle inserts a calendar_event row with a
+// caller-controlled title (used by coalescing tests, which key on the
+// normalized title) and a per-call random GcalEventID so each seeded row
+// is a distinct DB row. Returns the inserted event ID.
+func (e *meetingNoteIngestEnv) seedCalendarEventInWindowWithTitle(t *testing.T, startTime time.Time, title string, matchedContactIDs []uuid.UUID) uuid.UUID {
 	t.Helper()
 	ctx := context.Background()
 	suffix := uuid.NewString()[:8]
@@ -407,7 +418,7 @@ func (e *meetingNoteIngestEnv) seedCalendarEventInWindow(t *testing.T, startTime
 		GcalEventID:       e.sourceIDPrefix + "cal-" + suffix,
 		GcalCalendarID:    "primary",
 		GoogleAccountID:   "test-account",
-		Title:             stringPtr(e.sourceIDPrefix + "Test Event"),
+		Title:             stringPtr(title),
 		StartTime:         startTime,
 		EndTime:           startTime.Add(time.Hour),
 		Status:            "confirmed",
@@ -422,29 +433,63 @@ func (e *meetingNoteIngestEnv) seedCalendarEventInWindow(t *testing.T, startTime
 // seedPhoneCallInWindow inserts a phone_call row started at the given
 // time, scoped to the env's paired mac_host_id for cleanup, with an
 // optional matched_contact_id (the call's peer). Returns the inserted
-// phone_call ID. The synthetic call_unique_id embeds the env's source
-// prefix so cleanup-by-host_id finds the row deterministically.
+// phone_call ID. Delegates to seedPhoneCallInWindowFull with the default
+// voice/inbound/answered/60s shape.
 func (e *meetingNoteIngestEnv) seedPhoneCallInWindow(t *testing.T, startedAt time.Time, peerContactID *uuid.UUID) uuid.UUID {
+	t.Helper()
+	answered := true
+	return e.seedPhoneCallInWindowFull(t, startedAt, "+15550000000", repository.PhoneCallServiceVoice, repository.PhoneCallDirectionInbound, &answered, 60, peerContactID)
+}
+
+// seedPhoneCallInWindowFull inserts a phone_call row exposing every
+// discriminating field the coalescing rules key on — peerNormalized,
+// service, direction, answered, durationSeconds — so tests can drive the
+// (PeerNormalized, Service, Direction) partition key and representative
+// selection. The synthetic call_unique_id embeds the env's source prefix
+// and a per-call random suffix so each seeded row is a distinct DB row,
+// cleaned up by mac_host_id. Returns the inserted phone_call ID.
+func (e *meetingNoteIngestEnv) seedPhoneCallInWindowFull(t *testing.T, startedAt time.Time, peerNormalized, service, direction string, answered *bool, durationSeconds int32, peerContactID *uuid.UUID) uuid.UUID {
 	t.Helper()
 	ctx := context.Background()
 	suffix := uuid.NewString()[:8]
 	hostID := e.pairedHostID
-	answered := true
 	call, err := e.phoneCallRepo.UpsertCall(ctx, repository.UpsertPhoneCallParams{
 		CallUniqueID:     e.sourceIDPrefix + "call-" + suffix,
-		PeerHandle:       "+15550000000",
-		PeerNormalized:   "+15550000000",
-		Service:          repository.PhoneCallServiceVoice,
-		Direction:        repository.PhoneCallDirectionInbound,
-		Answered:         &answered,
+		PeerHandle:       peerNormalized,
+		PeerNormalized:   peerNormalized,
+		Service:          service,
+		Direction:        direction,
+		Answered:         answered,
 		HasVoicemail:     false,
-		DurationSeconds:  60,
+		DurationSeconds:  durationSeconds,
 		StartedAt:        startedAt,
 		MatchedContactID: peerContactID,
 		MacHostID:        &hostID,
 	})
 	require.NoError(t, err)
 	return call.ID
+}
+
+// coalesceWindowAnchor is a fixed far-past instant the coalescing tests
+// hang their per-run window bases off of. Far enough from the existing
+// time.Date(2026,5,...) conflict-test constants that the ±15-min windows
+// never overlap.
+var coalesceWindowAnchor = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+
+// uniqueWindowBase returns a deterministic-but-run-unique instant for a
+// coalescing test's window, derived from the env's per-run random
+// sourceIDPrefix plus a per-test subOffset. Different runs land in
+// different windows (sourceIDPrefix is per-run random); within a run,
+// subOffsets ≥ 1 (hour) apart keep each test's ±15-min window disjoint.
+// This prevents an unrelated row from another test/run polluting the
+// window and flipping an expected 2→1 auto-link into a conflict.
+func (e *meetingNoteIngestEnv) uniqueWindowBase(subOffset int) time.Time {
+	sum := sha256.Sum256([]byte(e.sourceIDPrefix))
+	// Spread runs across ~100k hours (~11 years) so distinct runs almost
+	// never collide; the per-test subOffset (hours) keeps a run's tests
+	// well-separated.
+	runHours := int(binary.BigEndian.Uint32(sum[:4]) % 100000)
+	return coalesceWindowAnchor.Add(time.Duration(runHours+subOffset) * time.Hour)
 }
 
 // buildMNRecordedEvent constructs a meeting_note.recorded envelope ready
@@ -3003,9 +3048,13 @@ func TestResolveLink_PhoneCallPeerWalkinCorrect(t *testing.T) {
 	meetingAt := time.Date(2026, 5, 9, 11, 0, 0, 0, time.UTC)
 	// Two phone_call candidates so daemon-side lands in conflict_pending
 	// (case 2+ in decideLinkage). Each peer matches a different tagged
-	// contact, producing overlap=1 for both → no strict winner.
-	callA := env.seedPhoneCallInWindow(t, meetingAt.Add(1*time.Minute), &env.contactA)
-	env.seedPhoneCallInWindow(t, meetingAt.Add(2*time.Minute), &env.contactB)
+	// contact, producing overlap=1 for both → no strict winner. The two
+	// calls use DISTINCT peer numbers (a different real number resolves to
+	// each contact) so the dropped-redial coalescing pass does not collapse
+	// them — they are genuinely-different interactions, not a redial pair.
+	answered := true
+	callA := env.seedPhoneCallInWindowFull(t, meetingAt.Add(1*time.Minute), randomTestPhoneNumber(t), repository.PhoneCallServiceVoice, repository.PhoneCallDirectionInbound, &answered, 60, &env.contactA)
+	env.seedPhoneCallInWindowFull(t, meetingAt.Add(2*time.Minute), randomTestPhoneNumber(t), repository.PhoneCallServiceVoice, repository.PhoneCallDirectionInbound, &answered, 60, &env.contactB)
 
 	sessionUUID := env.newSessionUUID()
 	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Peer Walk-In Regression", []string{anarlogA, anarlogB})
@@ -3274,4 +3323,220 @@ func TestResolveLink_LinkThenResyncPreservesUserChoice(t *testing.T) {
 	require.Equal(t, eventA, *afterResync.LinkedID,
 		"linked_id stays pinned to the user's pick across re-sync")
 	require.Empty(t, afterResync.ConflictCandidates)
+}
+
+// ----------------------------------------------------------------------------
+// Candidate coalescing (#370 calendar mirror, #371 phone dropped-redial)
+// ----------------------------------------------------------------------------
+
+// randomTestPhoneNumber returns a per-call-unique +1555 number so phone
+// coalescing tests do not collide in the shared test DB's global phone
+// window query.
+func randomTestPhoneNumber(t *testing.T) string {
+	t.Helper()
+	var buf [4]byte
+	_, err := cryptorand.Read(buf[:])
+	require.NoError(t, err)
+	return fmt.Sprintf("+1555%07d", binary.BigEndian.Uint32(buf[:])%10000000)
+}
+
+// assertCalendarWindowExactly opens a read-only tx and asserts the
+// calendar linkage finder returns exactly the expected event IDs for the
+// ±linkageWindow around meetingAt — a loud backstop against an unrelated
+// row polluting the auto-link cases (where ConflictCandidates is empty by
+// design so membership cannot be asserted on the persisted row).
+func assertCalendarWindowExactly(t *testing.T, env *meetingNoteIngestEnv, meetingAt time.Time, expected ...uuid.UUID) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := env.database.Pool.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(ctx) }()
+	cands, err := env.calendarRepo.FindLinkageCandidatesTx(ctx, tx, meetingAt.Add(-15*time.Minute), meetingAt.Add(15*time.Minute))
+	require.NoError(t, err)
+	got := make([]uuid.UUID, 0, len(cands))
+	for _, c := range cands {
+		got = append(got, c.ID)
+	}
+	require.ElementsMatch(t, expected, got, "calendar window must contain exactly the seeded rows (no pollutant)")
+}
+
+// assertPhoneWindowExactly is the phone analogue of
+// assertCalendarWindowExactly.
+func assertPhoneWindowExactly(t *testing.T, env *meetingNoteIngestEnv, meetingAt time.Time, expected ...uuid.UUID) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := env.database.Pool.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(ctx) }()
+	cands, err := env.phoneCallRepo.FindLinkageCandidatesTx(ctx, tx, meetingAt.Add(-15*time.Minute), meetingAt.Add(15*time.Minute))
+	require.NoError(t, err)
+	got := make([]uuid.UUID, 0, len(cands))
+	for _, c := range cands {
+		got = append(got, c.ID)
+	}
+	require.ElementsMatch(t, expected, got, "phone window must contain exactly the seeded rows (no pollutant)")
+}
+
+// TestMeetingNote_CalendarCoalesce_SameMeetingMirrored: the same meeting
+// mirrored across two calendars/series (same title + start, distinct rows,
+// different matched-contact counts) coalesces to the more-attendees
+// representative and auto-links — no spurious conflict (#370).
+func TestMeetingNote_CalendarCoalesce_SameMeetingMirrored(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	meetingAt := env.uniqueWindowBase(1)
+	title := env.sourceIDPrefix + "Mirrored Standup"
+	rep := env.seedCalendarEventInWindowWithTitle(t, meetingAt, title, []uuid.UUID{env.contactA, env.contactB})
+	dup := env.seedCalendarEventInWindowWithTitle(t, meetingAt, title, []uuid.UUID{env.contactC})
+
+	assertCalendarWindowExactly(t, env, meetingAt, rep, dup)
+
+	sessionUUID := env.newSessionUUID()
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, title, nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp := parseMNIngestResp(t, w)
+	require.Equal(t, 1, resp.Accepted)
+	require.Empty(t, resp.NeedsAttention, "mirrored meeting coalesces and auto-links → no needs_attention")
+
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, row)
+	require.Equal(t, repository.LinkageStateLinked, row.LinkageState)
+	require.NotNil(t, row.LinkedKind)
+	require.Equal(t, repository.LinkedKindEvent, *row.LinkedKind)
+	require.NotNil(t, row.LinkedID)
+	require.Equal(t, rep, *row.LinkedID, "representative is the more-attendees mirror")
+	require.Empty(t, row.ConflictCandidates)
+}
+
+// TestMeetingNote_CalendarNoCoalesce_DifferentStart_StillConflict: two
+// same-title events 1 min apart are NOT coalesced (start differs) and
+// stay a conflict — guards against over-coalescing (#370 negative case).
+func TestMeetingNote_CalendarNoCoalesce_DifferentStart_StillConflict(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	meetingAt := env.uniqueWindowBase(2)
+	title := env.sourceIDPrefix + "Recurring Sync"
+	eventA := env.seedCalendarEventInWindowWithTitle(t, meetingAt, title, []uuid.UUID{env.contactA})
+	eventB := env.seedCalendarEventInWindowWithTitle(t, meetingAt.Add(time.Minute), title, []uuid.UUID{env.contactB})
+
+	sessionUUID := env.newSessionUUID()
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, title, nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp := parseMNIngestResp(t, w)
+	require.Equal(t, 1, resp.Accepted)
+	require.Len(t, resp.NeedsAttention, 1)
+	require.Equal(t, "conflict", resp.NeedsAttention[0].Reason)
+
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, row)
+	require.Equal(t, repository.LinkageStateConflictPending, row.LinkageState)
+	var snap []repository.ConflictCandidateSummary
+	require.NoError(t, json.Unmarshal(row.ConflictCandidates, &snap))
+	require.Len(t, snap, 2)
+	snapIDs := map[uuid.UUID]struct{}{}
+	for _, s := range snap {
+		snapIDs[s.ID] = struct{}{}
+	}
+	require.Contains(t, snapIDs, eventA)
+	require.Contains(t, snapIDs, eventB)
+}
+
+// TestMeetingNote_PhoneCoalesce_DroppedThenRedial: a dropped attempt
+// followed 30s later by the connected redial to the same number coalesces
+// to the connected call and auto-links — no spurious conflict (#371).
+func TestMeetingNote_PhoneCoalesce_DroppedThenRedial(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	meetingAt := env.uniqueWindowBase(3)
+	peer := randomTestPhoneNumber(t)
+	dropped := false
+	connected := true
+	droppedID := env.seedPhoneCallInWindowFull(t, meetingAt, peer, repository.PhoneCallServiceVoice, repository.PhoneCallDirectionInbound, &dropped, 0, nil)
+	connectedID := env.seedPhoneCallInWindowFull(t, meetingAt.Add(30*time.Second), peer, repository.PhoneCallServiceVoice, repository.PhoneCallDirectionInbound, &connected, 120, nil)
+
+	assertPhoneWindowExactly(t, env, meetingAt, droppedID, connectedID)
+
+	sessionUUID := env.newSessionUUID()
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, env.sourceIDPrefix+"Call Session", nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp := parseMNIngestResp(t, w)
+	require.Equal(t, 1, resp.Accepted)
+	require.Empty(t, resp.NeedsAttention, "dropped+redial coalesces and auto-links → no needs_attention")
+
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, row)
+	require.Equal(t, repository.LinkageStateLinked, row.LinkageState)
+	require.NotNil(t, row.LinkedKind)
+	require.Equal(t, repository.LinkedKindPhoneCall, *row.LinkedKind)
+	require.NotNil(t, row.LinkedID)
+	require.Equal(t, connectedID, *row.LinkedID, "representative is the connected call")
+	require.Empty(t, row.ConflictCandidates)
+}
+
+// TestMeetingNote_PhoneNoCoalesce_OutsideWindow_StillConflict: two
+// same-number calls 6 min apart (> phoneCoalesceWindow) are NOT coalesced
+// and stay a conflict (#371 negative case).
+func TestMeetingNote_PhoneNoCoalesce_OutsideWindow_StillConflict(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	meetingAt := env.uniqueWindowBase(4)
+	peer := randomTestPhoneNumber(t)
+	answered := true
+	callA := env.seedPhoneCallInWindowFull(t, meetingAt, peer, repository.PhoneCallServiceVoice, repository.PhoneCallDirectionInbound, &answered, 60, nil)
+	callB := env.seedPhoneCallInWindowFull(t, meetingAt.Add(6*time.Minute), peer, repository.PhoneCallServiceVoice, repository.PhoneCallDirectionInbound, &answered, 60, nil)
+
+	sessionUUID := env.newSessionUUID()
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, env.sourceIDPrefix+"Two Calls Session", nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp := parseMNIngestResp(t, w)
+	require.Equal(t, 1, resp.Accepted)
+	require.Len(t, resp.NeedsAttention, 1)
+	require.Equal(t, "conflict", resp.NeedsAttention[0].Reason)
+
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, row)
+	require.Equal(t, repository.LinkageStateConflictPending, row.LinkageState)
+	var snap []repository.ConflictCandidateSummary
+	require.NoError(t, json.Unmarshal(row.ConflictCandidates, &snap))
+	require.Len(t, snap, 2)
+	snapIDs := map[uuid.UUID]struct{}{}
+	for _, s := range snap {
+		snapIDs[s.ID] = struct{}{}
+	}
+	require.Contains(t, snapIDs, callA)
+	require.Contains(t, snapIDs, callB)
+}
+
+// TestMeetingNote_CrossKind_EventPlusCall_StillConflict: an event and a
+// phone_call in the same window are never coalesced across kinds and stay
+// a conflict (end-to-end cross-kind guard).
+func TestMeetingNote_CrossKind_EventPlusCall_StillConflict(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	meetingAt := env.uniqueWindowBase(5)
+	eventID := env.seedCalendarEventInWindowWithTitle(t, meetingAt, env.sourceIDPrefix+"Cross Kind Event", []uuid.UUID{env.contactA})
+	peer := randomTestPhoneNumber(t)
+	answered := true
+	callID := env.seedPhoneCallInWindowFull(t, meetingAt, peer, repository.PhoneCallServiceVoice, repository.PhoneCallDirectionInbound, &answered, 60, nil)
+
+	sessionUUID := env.newSessionUUID()
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, env.sourceIDPrefix+"Cross Kind Session", nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp := parseMNIngestResp(t, w)
+	require.Equal(t, 1, resp.Accepted)
+	require.Len(t, resp.NeedsAttention, 1)
+	require.Equal(t, "conflict", resp.NeedsAttention[0].Reason)
+
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, row)
+	require.Equal(t, repository.LinkageStateConflictPending, row.LinkageState)
+	var snap []repository.ConflictCandidateSummary
+	require.NoError(t, json.Unmarshal(row.ConflictCandidates, &snap))
+	require.Len(t, snap, 2)
+	snapIDs := map[uuid.UUID]struct{}{}
+	for _, s := range snap {
+		snapIDs[s.ID] = struct{}{}
+	}
+	require.Contains(t, snapIDs, eventID)
+	require.Contains(t, snapIDs, callID)
 }
