@@ -79,9 +79,11 @@ type Querier interface {
 	// cadence, created_at). Direction subsets mirror CadenceApplyFlagsByDirection
 	// in reverse. NO cadence/contact_by arithmetic here — that is computed in Go
 	// via cadence.CalculateContactBy to match the forward writer exactly.
-	// The contact row is locked FOR UPDATE so the read→Go-compute→write sequence
-	// is serialized against any concurrent cadence/interaction writer on the same
-	// contact (closes the lost-update window).
+	// MUST be preceded in the same tx by LockContactForDateRecompute so the
+	// interaction aggregate is computed at a snapshot that already reflects any
+	// concurrent writer that committed while waiting for the contact lock (the
+	// FOR UPDATE retained below re-takes the held lock; the load-bearing
+	// serialization is the prior LockContactForDateRecompute statement).
 	ComputeContactDatesAfterDelete(ctx context.Context, arg ComputeContactDatesAfterDeleteParams) (*ComputeContactDatesAfterDeleteRow, error)
 	CountAllUnmatchedExternalContacts(ctx context.Context) (int64, error)
 	CountContactInteractions(ctx context.Context, contactID pgtype.UUID) (int64, error)
@@ -851,6 +853,20 @@ type Querier interface {
 	ListUpcomingEventsForContact(ctx context.Context, arg ListUpcomingEventsForContactParams) ([]*CalendarEvent, error)
 	// List upcoming events that have matched CRM contacts
 	ListUpcomingEventsWithContacts(ctx context.Context, arg ListUpcomingEventsWithContactsParams) ([]*CalendarEvent, error)
+	// Acquires a FOR UPDATE lock on the contact row before the date recompute
+	// reads the interaction aggregate. Run as a SEPARATE statement (in the
+	// caller's tx) BEFORE ComputeContactDatesAfterDelete: once this lock is held
+	// — waiting out any concurrent interaction/cadence writer, whose atomic
+	// (interaction INSERT + contact UPDATE) tx takes a conflicting row lock —
+	// the subsequent ComputeContactDatesAfterDelete statement runs at a fresh
+	// READ COMMITTED snapshot that INCLUDES that writer's just-committed
+	// interaction rows. Folding the lock into ComputeContactDatesAfterDelete's
+	// CTE is NOT sufficient: FOR UPDATE re-reads only the locked contact row at
+	// the post-wait snapshot, while the interaction aggregate in the same
+	// statement still sees the statement's original snapshot, so a concurrently
+	// committed interaction would be missed. Returns db.ErrNotFound (pgx.ErrNoRows)
+	// when the contact was soft-deleted.
+	LockContactForDateRecompute(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error)
 	// Single-statement batch mark for the action=ignore ("Not a person")
 	// resolve path: every live unmatched sibling for the token flips to
 	// 'ignored'. No crm_contact_id is set. Same predicate as the other two
@@ -1079,6 +1095,12 @@ type Querier interface {
 	// enforces. sqlc.narg('emails') makes the parameter nullable so callers can
 	// exercise the NULL JSONB column case.
 	TestInsertExternalContactRawEmails(ctx context.Context, arg TestInsertExternalContactRawEmailsParams) (*ExternalContact, error)
+	// TEST ONLY. Probe a contact row with FOR UPDATE NOWAIT: fails immediately
+	// (lock_not_available) when another tx holds a conflicting lock on the row.
+	// Used by the recompute lock-ordering regression test to prove (without a
+	// sleep) that LockContactForDateRecompute is acquired as a blocking statement.
+	// Production code must NOT call this.
+	TestLockContactForUpdateNoWait(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error)
 	// TEST ONLY. Mirrors the legacy EXISTS / jsonb_array_elements form of
 	// FindEventsByAttendeeEmailUnmatchedForContact. Permanent regression guard.
 	// Callers must restrict input fixtures to well-formed JSONB arrays

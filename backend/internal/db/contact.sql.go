@@ -62,9 +62,11 @@ type ComputeContactDatesAfterDeleteRow struct {
 // cadence, created_at). Direction subsets mirror CadenceApplyFlagsByDirection
 // in reverse. NO cadence/contact_by arithmetic here — that is computed in Go
 // via cadence.CalculateContactBy to match the forward writer exactly.
-// The contact row is locked FOR UPDATE so the read→Go-compute→write sequence
-// is serialized against any concurrent cadence/interaction writer on the same
-// contact (closes the lost-update window).
+// MUST be preceded in the same tx by LockContactForDateRecompute so the
+// interaction aggregate is computed at a snapshot that already reflects any
+// concurrent writer that committed while waiting for the contact lock (the
+// FOR UPDATE retained below re-takes the held lock; the load-bearing
+// serialization is the prior LockContactForDateRecompute statement).
 func (q *Queries) ComputeContactDatesAfterDelete(ctx context.Context, arg ComputeContactDatesAfterDeleteParams) (*ComputeContactDatesAfterDeleteRow, error) {
 	row := q.db.QueryRow(ctx, ComputeContactDatesAfterDelete, arg.DeletedAtTs, arg.ID)
 	var i ComputeContactDatesAfterDeleteRow
@@ -770,6 +772,31 @@ func (q *Queries) ListOverdueContacts(ctx context.Context, arg ListOverdueContac
 	return items, nil
 }
 
+const LockContactForDateRecompute = `-- name: LockContactForDateRecompute :one
+SELECT id FROM contact
+WHERE id = $1 AND deleted_at IS NULL
+FOR UPDATE
+`
+
+// Acquires a FOR UPDATE lock on the contact row before the date recompute
+// reads the interaction aggregate. Run as a SEPARATE statement (in the
+// caller's tx) BEFORE ComputeContactDatesAfterDelete: once this lock is held
+// — waiting out any concurrent interaction/cadence writer, whose atomic
+// (interaction INSERT + contact UPDATE) tx takes a conflicting row lock —
+// the subsequent ComputeContactDatesAfterDelete statement runs at a fresh
+// READ COMMITTED snapshot that INCLUDES that writer's just-committed
+// interaction rows. Folding the lock into ComputeContactDatesAfterDelete's
+// CTE is NOT sufficient: FOR UPDATE re-reads only the locked contact row at
+// the post-wait snapshot, while the interaction aggregate in the same
+// statement still sees the statement's original snapshot, so a concurrently
+// committed interaction would be missed. Returns db.ErrNotFound (pgx.ErrNoRows)
+// when the contact was soft-deleted.
+func (q *Queries) LockContactForDateRecompute(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, LockContactForDateRecompute, id)
+	err := row.Scan(&id)
+	return id, err
+}
+
 const SearchContactIDs = `-- name: SearchContactIDs :many
 SELECT c.id FROM contact c
 LEFT JOIN (
@@ -1097,6 +1124,23 @@ WHERE id = $1 AND deleted_at IS NULL
 func (q *Queries) SoftDeleteContact(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, SoftDeleteContact, id)
 	return err
+}
+
+const TestLockContactForUpdateNoWait = `-- name: TestLockContactForUpdateNoWait :one
+SELECT id FROM contact
+WHERE id = $1 AND deleted_at IS NULL
+FOR UPDATE NOWAIT
+`
+
+// TEST ONLY. Probe a contact row with FOR UPDATE NOWAIT: fails immediately
+// (lock_not_available) when another tx holds a conflicting lock on the row.
+// Used by the recompute lock-ordering regression test to prove (without a
+// sleep) that LockContactForDateRecompute is acquired as a blocking statement.
+// Production code must NOT call this.
+func (q *Queries) TestLockContactForUpdateNoWait(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, TestLockContactForUpdateNoWait, id)
+	err := row.Scan(&id)
+	return id, err
 }
 
 const UpdateContact = `-- name: UpdateContact :one

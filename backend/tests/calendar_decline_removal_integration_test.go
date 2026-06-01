@@ -521,6 +521,100 @@ func TestIntegration_AttendedAfterDelete_LockSerialization(t *testing.T) {
 	assert.False(t, existsAfterDelete, "after the decline DELETE, the attended branch sees no row → skips the insert")
 }
 
+// TestIntegration_CalendarDecline_RecomputeSeesConcurrentInteraction is the
+// regression for the lock-then-aggregate ordering: the recompute acquires the
+// contact FOR UPDATE lock as a SEPARATE statement BEFORE reading the
+// interaction aggregate, so an interaction committed by a concurrent writer
+// (that held a conflicting contact lock) is NOT missed. Were the aggregate
+// folded into the FOR UPDATE statement, it would read the pre-wait snapshot
+// and roll last_contacted to NULL instead of to the concurrently-inserted
+// interaction.
+//
+// Deterministic interleave (no sleeps): tx A locks the contact + inserts a
+// new live inbound interaction (uncommitted); a goroutine starts the recompute
+// in tx B, which blocks on LockContactForDateRecompute; once B is provably
+// blocked (its lock probe from a third tx conflicts), commit A; B unblocks and
+// its aggregate must include A's interaction.
+func TestIntegration_CalendarDecline_RecomputeSeesConcurrentInteraction(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	ctx := context.Background()
+	e := newDeclineTestEnv(t, ctx)
+
+	base := accelerated.GetCurrentTime().Truncate(time.Microsecond)
+	mutualAt := base.AddDate(0, 0, 20)    // sources last_contacted, gets removed
+	concurrentAt := base.AddDate(0, 0, 5) // older inbound inserted concurrently
+	contact := e.newContact(t, nil, nil)
+
+	mutualRef := uuid.NewString()
+	e.seedGcalInteraction(t, contact.ID, mutualRef, repository.InteractionDirectionMutual, mutualAt)
+	// Soft-delete the sourcing mutual; without a remaining interaction the
+	// recompute would roll last_contacted to NULL.
+	require.NoError(t, e.interactionRepo.SoftDeleteInteraction(ctx, mustFindInteraction(t, e, contact.ID, mutualRef).ID))
+
+	// tx A: lock the contact (FOR UPDATE) + insert a new live inbound
+	// interaction, uncommitted. This is the concurrent writer.
+	concurrentRef := uuid.NewString()
+	t.Cleanup(func() {
+		_ = e.interactionRepo.HardDeleteInteractionsBySourceRefPrefix(ctx, repository.InteractionSourceGCal, concurrentRef)
+	})
+	txA, err := e.database.Pool.Begin(ctx)
+	require.NoError(t, err)
+	committedA := false
+	defer func() {
+		if !committedA {
+			_ = txA.Rollback(ctx)
+		}
+	}()
+	require.NoError(t, e.contactRepo.LockContactForDateRecomputeTx(ctx, txA, contact.ID))
+	ref := concurrentRef
+	_, err = e.interactionRepo.CreateInteractionTx(ctx, txA, repository.CreateInteractionRequest{
+		ContactID: contact.ID, Source: repository.InteractionSourceGCal, SourceRef: &ref,
+		OccurredAt: concurrentAt, Direction: repository.InteractionDirectionInbound,
+	})
+	require.NoError(t, err)
+
+	// Goroutine: run the recompute in its own tx B; it must block on the
+	// contact lock held by A.
+	recomputeDone := make(chan error, 1)
+	go func() {
+		recomputeDone <- pgx.BeginTxFunc(ctx, e.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+			return e.contactRepo.RecomputeContactDatesAfterDeleteTx(ctx, tx, contact.ID, mutualAt)
+		})
+	}()
+
+	// Prove B is blocked on the lock: a third tx's FOR UPDATE NOWAIT on the
+	// contact conflicts (A holds it). Also assert B has not finished yet.
+	require.Eventually(t, func() bool {
+		txC, err := e.database.Pool.Begin(ctx)
+		if err != nil {
+			return false
+		}
+		defer func() { _ = txC.Rollback(ctx) }()
+		conflict := e.contactRepo.TestLockContactForUpdateNoWaitTx(ctx, txC, contact.ID) != nil
+		return conflict
+	}, 5*time.Second, 20*time.Millisecond, "contact lock held by tx A (recompute tx B is blocked behind it)")
+	select {
+	case err := <-recomputeDone:
+		t.Fatalf("recompute completed before tx A committed (lock not acquired as a blocking statement): %v", err)
+	default:
+	}
+
+	// Commit A → its inbound interaction + lock release become visible. B
+	// unblocks and recomputes at a fresh snapshot that includes A's interaction.
+	require.NoError(t, txA.Commit(ctx))
+	committedA = true
+	require.NoError(t, <-recomputeDone, "recompute tx B completes after A commits")
+
+	got, err := e.contactRepo.GetContact(ctx, contact.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.LastContacted,
+		"recompute saw the concurrently-committed inbound interaction (would be NULL if the aggregate read the pre-lock snapshot)")
+	assert.Equal(t, concurrentAt.UTC(), got.LastContacted.UTC(),
+		"last_contacted rolls to the concurrently-inserted inbound interaction, not NULL")
+}
+
 // Test: declined: SourceID coexists with the attended row (P0-collision
 // regression). Publishing both an attended and a declined event for the same
 // internal UUID + contact yields TWO distinct event-log rows.

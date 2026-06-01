@@ -860,11 +860,14 @@ func (r *ContactRepository) ListContactsWithContactBy(ctx context.Context, limit
 // via cadence.CalculateContactBy (environment-aware) so it matches the
 // forward writer exactly and never clobbers a Todoist/user override.
 //
-// Orchestration (all on the caller's tx): ComputeContactDatesAfterDelete
-// (reads + FOR UPDATE locks the contact row, recomputes the timestamps) →
-// Go contact_by decision → WriteContactDatesAfterDelete. The FOR UPDATE lock
-// is held across the write so a concurrent cadence/interaction writer on the
-// same contact cannot interleave a stale overwrite.
+// Orchestration (all on the caller's tx): LockContactForDateRecompute
+// (FOR UPDATE on the contact row, as a separate statement) →
+// ComputeContactDatesAfterDelete (interaction aggregate + contact read, now at
+// a snapshot that includes any writer that committed while we waited for the
+// lock) → Go contact_by decision → WriteContactDatesAfterDelete. The lock is
+// held across the write so a concurrent cadence/interaction writer on the same
+// contact cannot interleave a stale overwrite, and the aggregate cannot miss a
+// concurrently-inserted interaction.
 //
 // Returns db.ErrNotFound when the contact was soft-deleted between the
 // decline publish and consume (the read filters deleted_at IS NULL); the
@@ -881,10 +884,52 @@ func (r *ContactRepository) RecomputeContactDatesAfterDelete(ctx context.Context
 	return recomputeContactDatesAfterDelete(ctx, r.queries, contactID, deletedAt)
 }
 
+// LockContactForDateRecomputeTx acquires the contact-row FOR UPDATE lock
+// inside the caller's tx. Exposed so the recompute lock-ordering regression
+// test can hold the lock from a concurrent tx. Returns db.ErrNotFound when
+// the contact is soft-deleted.
+func (r *ContactRepository) LockContactForDateRecomputeTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID) error {
+	if _, err := db.New(tx).LockContactForDateRecompute(ctx, uuidToPgUUID(contactID)); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return db.ErrNotFound
+		}
+		return err
+	}
+	return nil
+}
+
+// TestLockContactForUpdateNoWaitTx is a TEST-ONLY probe: it reads the contact
+// row with FOR UPDATE NOWAIT inside the caller's tx, returning a lock-conflict
+// error immediately (without blocking) when another tx holds a conflicting
+// lock on the row. Used by the recompute lock-ordering regression test.
+// Production code must NOT call this. Returns db.ErrNotFound when no row.
+func (r *ContactRepository) TestLockContactForUpdateNoWaitTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID) error {
+	if _, err := db.New(tx).TestLockContactForUpdateNoWait(ctx, uuidToPgUUID(contactID)); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return db.ErrNotFound
+		}
+		return err
+	}
+	return nil
+}
+
 // recomputeContactDatesAfterDelete is the shared orchestration body for the
-// tx and non-tx wrappers. Reads the recomputed timestamps + the fields the
-// contact_by decision needs, decides contact_by in Go, then writes.
+// tx and non-tx wrappers. Locks the contact row, reads the recomputed
+// timestamps + the fields the contact_by decision needs, decides contact_by
+// in Go, then writes.
 func recomputeContactDatesAfterDelete(ctx context.Context, q db.Querier, contactID uuid.UUID, deletedAt time.Time) error {
+	// Acquire the contact-row lock as a SEPARATE statement first: once held
+	// (waiting out any concurrent interaction/cadence writer), the subsequent
+	// ComputeContactDatesAfterDelete runs at a fresh snapshot that includes
+	// that writer's just-committed interaction rows, so the aggregate cannot
+	// miss a concurrently-inserted interaction.
+	if _, err := q.LockContactForDateRecompute(ctx, uuidToPgUUID(contactID)); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return db.ErrNotFound
+		}
+		return err
+	}
+
 	row, err := q.ComputeContactDatesAfterDelete(ctx, db.ComputeContactDatesAfterDeleteParams{
 		ID:          uuidToPgUUID(contactID),
 		DeletedAtTs: pgtype.Timestamptz{Time: deletedAt, Valid: true},
