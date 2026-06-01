@@ -467,7 +467,7 @@ func run() int {
 		// calendarRepoForIngest satisfies calendarEventLocker: the
 		// calendar.attended branch takes a FOR SHARE lock on the backing
 		// calendar_event so a concurrent decline DELETE cannot strand a
-		// false interaction (Decision 3a).
+		// false interaction.
 		calendarRepoForIngest,
 	)
 

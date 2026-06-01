@@ -458,8 +458,8 @@ func (r *CalendarEventRepository) GetByIDForShareTx(ctx context.Context, tx pgx.
 // calendar_event with FOR UPDATE NOWAIT inside the caller's tx, returning a
 // lock-conflict error immediately (without blocking) when another tx holds
 // a conflicting lock on the row (e.g. the attended branch's FOR SHARE). Used
-// by the Decision-3a lock-serialization integration test. Production code
-// must NOT call this. Returns db.ErrNotFound when no row.
+// by the attended-vs-decline lock-serialization integration test. Production
+// code must NOT call this. Returns db.ErrNotFound when no row.
 func (r *CalendarEventRepository) TestGetByIDForUpdateNoWaitTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*CalendarEvent, error) {
 	dbEvent, err := db.New(tx).TestGetCalendarEventByIDForUpdateNoWait(ctx, uuidToPgUUID(id))
 	if err != nil {

@@ -15,8 +15,10 @@ import (
 
 // These mock-based tests exercise the OFF-mode remove branch (the
 // mock-backed newTestProvider* factories leave eventBus + pool nil). The
-// cutover publish+delete+coexistence path is covered by the DB-backed
-// tests in calendar_decline_cutover_test.go and backend/tests/.
+// cutover publish-before-delete + coexistence path is DB-backed and runs in
+// the CI integration suite, so it lives in
+// backend/tests/calendar_decline_removal_integration_test.go (driven through
+// RunProcessEventForTest with a real bus + pool).
 
 // TestProcessEvent_DeclinedEvent_OffMode_MarksCancelled asserts that a
 // declined event with a previously-stored row marks the row cancelled

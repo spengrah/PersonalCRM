@@ -212,9 +212,9 @@ FOR SHARE;
 -- TEST ONLY. Probe a calendar_event row with FOR UPDATE NOWAIT: returns the
 -- row if no conflicting lock is held, or fails immediately (lock_not_available)
 -- when another tx holds a conflicting lock (e.g. a FOR SHARE from the attended
--- branch). Used by the Decision-3a lock-serialization integration test to
--- prove the attended FOR SHARE conflicts with a concurrent FOR UPDATE without
--- a sleep/timeout. Production code must NOT call this.
+-- branch). Used by the attended-vs-decline lock-serialization integration
+-- test to prove the attended FOR SHARE conflicts with a concurrent FOR UPDATE
+-- without a sleep/timeout. Production code must NOT call this.
 SELECT * FROM calendar_event
 WHERE id = $1
 FOR UPDATE NOWAIT;

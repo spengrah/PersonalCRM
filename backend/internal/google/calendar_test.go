@@ -275,8 +275,10 @@ func TestProcessEvent_SkipsAllDayEvents(t *testing.T) {
 	assert.True(t, isAllDay, "Event with Start.Date should be identified as all-day")
 }
 
-// TestProcessEvent_SkipsDeclinedEvents verifies that declined events are skipped
-func TestProcessEvent_SkipsDeclinedEvents(t *testing.T) {
+// TestGetUserResponse_DeclinedAttendee verifies getUserResponse reports a
+// declined self-attendee. The remove-branch behavior for declined events is
+// covered in calendar_decline_test.go.
+func TestGetUserResponse_DeclinedAttendee(t *testing.T) {
 	provider := NewCalendarSyncProvider(nil, nil, nil, nil, nil, nil, nil)
 	accountID := "user@example.com"
 

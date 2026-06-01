@@ -126,6 +126,12 @@ type CalendarSyncProvider struct {
 	// dependency. Nil when mode=off — the remove branch then defers cleanup
 	// by marking the stored row cancelled instead of publishing + deleting.
 	pool *pgxpool.Pool
+	// declineBus is the bus used by the cutover decline remove branch's
+	// per-contact PublishTx. It defaults to eventBus; tests substitute a
+	// failing stub via setDeclineBusForTest to assert publish-before-delete
+	// (a publish failure must leave the calendar_event row intact). The
+	// off-mode gate keys off the concrete eventBus/pool fields, not this one.
+	declineBus busTx
 }
 
 // NewCalendarSyncProvider creates a new Google Calendar sync provider.
@@ -150,6 +156,7 @@ func NewCalendarSyncProvider(
 		externalContactRepo: externalContactRepo,
 		eventBus:            eventBus,
 		pool:                pool,
+		declineBus:          eventBus,
 	}
 }
 
@@ -363,13 +370,13 @@ func (p *CalendarSyncProvider) incrementalSync(
 
 // processEvent processes a single calendar event.
 //
-// The keep decision is evaluated BEFORE time parsing and the all-day skip
-// (Decision 1): incremental-sync deltas for cancelled/declined events can
-// arrive with empty Start.DateTime/End.DateTime (Google sends a minimal
-// stub), so the remove branch must run without depending on inbound times.
-// The CRM stores a calendar_event only while the user has it accepted AND
-// it is not cancelled; any sync that observes it otherwise removes the
-// stored copy + its derived interactions.
+// The keep decision is evaluated BEFORE time parsing and the all-day skip:
+// incremental-sync deltas for cancelled/declined events can arrive with empty
+// Start.DateTime/End.DateTime (Google sends a minimal stub), so the remove
+// branch must run without depending on inbound times. The CRM stores a
+// calendar_event only while the user has it accepted AND it is not cancelled;
+// any sync that observes it otherwise removes the stored copy + its derived
+// interactions.
 func (p *CalendarSyncProvider) processEvent(
 	ctx context.Context,
 	event *calendar.Event,
@@ -507,7 +514,7 @@ func (p *CalendarSyncProvider) removeDeclinedEvent(ctx context.Context, gcalEven
 
 	eventIDStr := stored.ID.String()
 	for _, contactID := range stored.MatchedContactIDs {
-		if pubErr := publishCalendarDeclinedTx(ctx, p.eventBus, tx, contactID, eventIDStr, stored.EndTime); pubErr != nil {
+		if pubErr := publishCalendarDeclinedTx(ctx, p.declineBus, tx, contactID, eventIDStr, stored.EndTime); pubErr != nil {
 			return fmt.Errorf("publish calendar.declined for contact %s: %w", contactID, pubErr)
 		}
 	}
@@ -526,6 +533,22 @@ func (p *CalendarSyncProvider) removeDeclinedEvent(ctx context.Context, gcalEven
 		Int("contacts", len(stored.MatchedContactIDs)).
 		Msg("calendar: removed declined/cancelled event + published decline per matched contact")
 	return nil
+}
+
+// RunProcessEventForTest drives the unexported processEvent entry point so
+// cross-package integration tests (package tests) can exercise the full
+// keep/remove gate + cutover remove branch end-to-end against a real DB +
+// bus + pool. Production code must NOT call this.
+func (p *CalendarSyncProvider) RunProcessEventForTest(ctx context.Context, event *calendar.Event, accountID string) error {
+	return p.processEvent(ctx, event, accountID)
+}
+
+// SetDeclineBusForTest substitutes the bus used by the cutover decline remove
+// branch's per-contact PublishTx so a test can assert publish-before-delete
+// (a failing PublishTx must leave the calendar_event row intact). Production
+// code must NOT call this.
+func (p *CalendarSyncProvider) SetDeclineBusForTest(b busTx) {
+	p.declineBus = b
 }
 
 // getUserResponse extracts the user's response status from an event

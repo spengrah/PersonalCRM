@@ -48,11 +48,16 @@ type declineTestEnv struct {
 
 func newDeclineTestEnv(t *testing.T, ctx context.Context) *declineTestEnv {
 	t.Helper()
-	if os.Getenv("DATABASE_URL") == "" {
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
+	// Provision schema explicitly (CI has bare PostgreSQL without a
+	// pre-existing schema) for parity with sibling integration tests and the
+	// documented gotcha; idempotent under the package TestMain harness.
+	require.NoError(t, db.RunMigrations(ctx, databaseURL, getMigrationsPath()))
 	cfg := config.TestConfig()
-	cfg.Database.URL = os.Getenv("DATABASE_URL")
+	cfg.Database.URL = databaseURL
 	cfg.Database.MigrationsPath = getMigrationsPath()
 	database, err := db.NewDatabase(ctx, cfg.Database)
 	require.NoError(t, err)
