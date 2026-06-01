@@ -455,8 +455,12 @@ func (r *MeetingNoteRepository) ResolveMeetingNoteToLinkedTx(ctx context.Context
 
 // ClearMeetingNoteConflictTx clears (linked_kind, linked_id,
 // conflict_candidates) and sets linkage_state + resolved_set_hash to
-// the caller-supplied values. State-guarded to conflict_pending —
-// returns db.ErrNotFound when the row has moved on (caller maps to 409).
+// the caller-supplied values. State-guarded to the attention states
+// (conflict_pending or orphan_needs_review) — returns db.ErrNotFound
+// when the row has moved on to a terminal state (caller maps to 409).
+// Despite the name, this also promotes orphan_needs_review rows (the
+// "Log as impromptu" path forces linked_impromptu); the name is kept
+// to avoid rippling a rename through the generated db package.
 //
 // The caller passes the freshly-computed resolved_set_hash so the next
 // daemon-side carry-forward correctly preserves the user's decision
