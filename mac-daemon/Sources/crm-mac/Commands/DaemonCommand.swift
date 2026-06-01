@@ -71,7 +71,24 @@ struct DaemonCommand: AsyncParsableCommand {
         let chatDBPath = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Library/Messages/chat.db")
         let backfillFloor = MessagesCursorWire.defaultBackfillFloor
-        let knownIdentifiersCache = KnownIdentifiersCache()
+
+        // Known-identifiers cache, shared by messages + phone_calls.
+        // Seed each consumer's DIFF baseline from the persisted
+        // DaemonState.knownIdentifierBaselines so an offline-restart
+        // diff enqueues 30-day scans ONLY for genuine additions. A
+        // source ABSENT from the persisted map starts `noBaseline`
+        // (upgrade boundary → seed-on-first-fetch, no scans). The
+        // refresher is the SOLE writer of the persisted baseline.
+        let knownIdentifierConsumers: Set<SourceID> = [.messages, .phoneCalls]
+        var seededBaselines: [SourceID: Set<String>] = [:]
+        if let persisted = (try? await stateMutator.read())?.knownIdentifierBaselines {
+            for (key, value) in persisted {
+                seededBaselines[SourceID(rawValue: key)] = value.toSet()
+            }
+        }
+        let knownIdentifiersCache = KnownIdentifiersCache(
+            baselines: seededBaselines,
+            consumers: knownIdentifierConsumers)
         let publisher = MessagesPublisher(
             sender: { [piClient] auth, body in
                 try await piClient.ingestEvents(auth: auth, body: body)
@@ -92,8 +109,17 @@ struct DaemonCommand: AsyncParsableCommand {
             logger: logger)
 
         // KnownIdentifiers refresher: after each heartbeat, fetch the
-        // canonical phone+email set + replace the cache.
-        let refresher: KnownIdentifiersRefresher = { [piClient] in
+        // canonical phone+email set + replace the cache. The refresher
+        // is ALSO the SOLE writer of the persisted per-source baseline:
+        // after replace, it reads each source's `persistableBaseline`
+        // (the observed set MINUS identifiers still owed a durable scan
+        // enqueue) and plain-assigns it to
+        // DaemonState.knownIdentifierBaselines when it differs. The
+        // owed-scan exclusion guarantees the persisted baseline never
+        // advances past an identifier whose 30-day scan isn't durable
+        // yet. The source tick NEVER writes this field.
+        let baselineClock = ctx.clock
+        let refresher: KnownIdentifiersRefresher = { [piClient, stateMutator, logger, baselineClock] in
             let result = try await piClient.knownIdentifiers(auth: auth)
             var canonical: Set<String> = []
             for phone in result.phones {
@@ -105,6 +131,35 @@ struct DaemonCommand: AsyncParsableCommand {
                 if !n.isEmpty { canonical.insert(n) }
             }
             await knownIdentifiersCache.replace(with: canonical)
+
+            // Persist each consumer's writable baseline (single writer).
+            for consumer in knownIdentifierConsumers {
+                // Capture the immutable observed set OUTSIDE the
+                // synchronous mutate closure (no actor read in-closure).
+                guard let observed = await knownIdentifiersCache.persistableBaseline(for: consumer) else {
+                    continue
+                }
+                let key = consumer.rawValue
+                let sorted = observed.sorted()
+                do {
+                    try await stateMutator.mutate { state in
+                        var map = state.knownIdentifierBaselines ?? [:]
+                        let existing = map[key]
+                        // No-op when unchanged (idempotent).
+                        if existing?.canonical == sorted { return }
+                        map[key] = KnownIdentifiersBaseline(
+                            canonical: sorted,
+                            // Preserve the first-seed time across writes.
+                            establishedAt: existing?.establishedAt ?? baselineClock.now())
+                        state.knownIdentifierBaselines = map
+                    }
+                } catch {
+                    logger.warning("known-identifiers baseline persist failed", metadata: [
+                        "source": .public(key),
+                        "error": .private(String(describing: error)),
+                    ])
+                }
+            }
         }
 
         let healthProvider = RegistryHealthProvider(
