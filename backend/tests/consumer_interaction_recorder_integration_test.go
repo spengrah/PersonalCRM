@@ -33,6 +33,7 @@ type consumerTestEnv struct {
 	bus             *events.Bus
 	contactRepo     *repository.ContactRepository
 	interactionRepo *repository.InteractionRepository
+	calendarRepo    *repository.CalendarEventRepository
 	recorder        *consumer.InteractionRecorder
 	contactService  *service.ContactService
 	manualHandler   *service.ManualInteractionHandler
@@ -191,10 +192,37 @@ func newConsumerTestEnv(t *testing.T, ctx context.Context) *consumerTestEnv {
 		bus:             bus,
 		contactRepo:     contactRepo,
 		interactionRepo: interactionRepo,
+		calendarRepo:    repository.NewCalendarEventRepository(database.Queries),
 		recorder:        recorder,
 		contactService:  contactService,
 		manualHandler:   manualHandler,
 	}
+}
+
+// seedCalendarEvent inserts a stored calendar_event matched to the contact
+// and returns its internal UUID. calendar.attended events carry this UUID as
+// their EventID/source_ref; the InteractionRecorder's Decision-3a lock check
+// requires the backing row to exist for the attended insert to proceed (in
+// production the attended publish always reads from calendar_event).
+func (e *consumerTestEnv) seedCalendarEvent(t *testing.T, contactID uuid.UUID) uuid.UUID {
+	t.Helper()
+	accountID := "attended-backing-" + uuid.NewString()
+	title := "attended-backing-event"
+	stored, err := e.calendarRepo.Upsert(e.ctx, repository.UpsertCalendarEventRequest{
+		GcalEventID:       "evt-" + uuid.NewString(),
+		GcalCalendarID:    "primary",
+		GoogleAccountID:   accountID,
+		Title:             &title,
+		StartTime:         time.Date(2026, 4, 10, 11, 0, 0, 0, time.UTC),
+		EndTime:           time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+		Status:            "confirmed",
+		Attendees:         []repository.Attendee{},
+		MatchedContactIDs: []uuid.UUID{contactID},
+		SyncedAt:          time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = e.calendarRepo.DeleteEventsByAccount(e.ctx, accountID) })
+	return stored.ID
 }
 
 func (e *consumerTestEnv) newContact(t *testing.T, name string) uuid.UUID {
@@ -253,7 +281,10 @@ func TestIntegration_CalendarAttended_CutoverWritesInteraction(t *testing.T) {
 	env := newConsumerTestEnv(t, ctx)
 
 	contactID := env.newContact(t, "calendar-attended-cutover")
-	eventIDStr := uuid.NewString()
+	// EventID is the backing calendar_event's internal UUID (production
+	// reality); the recorder's Decision-3a lock check requires the row to
+	// exist for the attended insert to proceed.
+	eventIDStr := env.seedCalendarEvent(t, contactID).String()
 	// Publishers build SourceID as event-id ":" contact-id so one
 	// upstream event can fan out to multiple contacts without
 	// colliding on the event table's (source, source_id) dedupe.
@@ -303,7 +334,7 @@ func TestIntegration_CalendarAttended_TitlePreservedInInteraction(t *testing.T) 
 	env := newConsumerTestEnv(t, ctx)
 
 	contactID := env.newContact(t, "calendar-attended-title")
-	eventIDStr := uuid.NewString()
+	eventIDStr := env.seedCalendarEvent(t, contactID).String()
 	sourceID := eventIDStr + ":" + contactID.String()
 	occurredAt := time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)
 	title := "Quarterly sync with Alice"
@@ -341,7 +372,7 @@ func TestIntegration_CalendarAttended_Replay(t *testing.T) {
 	env := newConsumerTestEnv(t, ctx)
 
 	contactID := env.newContact(t, "calendar-attended-replay")
-	eventIDStr := uuid.NewString()
+	eventIDStr := env.seedCalendarEvent(t, contactID).String()
 	sourceID := eventIDStr + ":" + contactID.String()
 	occurredAt := time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)
 
@@ -487,7 +518,11 @@ func TestIntegration_MissingContact_ConsumerReturnsNotFound(t *testing.T) {
 	env := newConsumerTestEnv(t, ctx)
 
 	missingID := uuid.New()
-	eventIDStr := uuid.NewString()
+	// Seed a backing calendar_event so the Decision-3a lock check passes and
+	// the consumer reaches the contact-existence check (which is what this
+	// test exercises). The event's matched_contact_ids references the
+	// not-yet-created contact (UUID array, not an FK).
+	eventIDStr := env.seedCalendarEvent(t, missingID).String()
 	sourceID := eventIDStr + ":" + missingID.String()
 	occurredAt := time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)
 
