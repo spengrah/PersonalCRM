@@ -47,6 +47,27 @@ func (q *Queries) CountEventsForContact(ctx context.Context, contactID pgtype.UU
 	return count, err
 }
 
+const DeleteCalendarEventByGcalID = `-- name: DeleteCalendarEventByGcalID :exec
+DELETE FROM calendar_event
+WHERE gcal_event_id = $1
+  AND gcal_calendar_id = $2
+  AND google_account_id = $3
+`
+
+type DeleteCalendarEventByGcalIDParams struct {
+	GcalEventID     string `json:"gcal_event_id"`
+	GcalCalendarID  string `json:"gcal_calendar_id"`
+	GoogleAccountID string `json:"google_account_id"`
+}
+
+// Hard-deletes the stored calendar_event row keyed by its Google identity
+// triple. Used by the decline/cancel remove branch. calendar_event has no
+// deleted_at column — removal is a hard DELETE (cf. DeleteEventsByAccount).
+func (q *Queries) DeleteCalendarEventByGcalID(ctx context.Context, arg DeleteCalendarEventByGcalIDParams) error {
+	_, err := q.db.Exec(ctx, DeleteCalendarEventByGcalID, arg.GcalEventID, arg.GcalCalendarID, arg.GoogleAccountID)
+	return err
+}
+
 const DeleteEventsByAccount = `-- name: DeleteEventsByAccount :exec
 DELETE FROM calendar_event
 WHERE google_account_id = $1
@@ -229,6 +250,45 @@ LIMIT 1
 // Look up an event by its UUID
 func (q *Queries) GetCalendarEventByID(ctx context.Context, id pgtype.UUID) (*CalendarEvent, error) {
 	row := q.db.QueryRow(ctx, GetCalendarEventByID, id)
+	var i CalendarEvent
+	err := row.Scan(
+		&i.ID,
+		&i.GcalEventID,
+		&i.GcalCalendarID,
+		&i.GoogleAccountID,
+		&i.Title,
+		&i.Description,
+		&i.Location,
+		&i.StartTime,
+		&i.EndTime,
+		&i.AllDay,
+		&i.Status,
+		&i.UserResponse,
+		&i.OrganizerEmail,
+		&i.Attendees,
+		&i.MatchedContactIds,
+		&i.SyncedAt,
+		&i.LastContactedUpdated,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.HtmlLink,
+	)
+	return &i, err
+}
+
+const GetCalendarEventByIDForShare = `-- name: GetCalendarEventByIDForShare :one
+SELECT id, gcal_event_id, gcal_calendar_id, google_account_id, title, description, location, start_time, end_time, all_day, status, user_response, organizer_email, attendees, matched_contact_ids, synced_at, last_contacted_updated, created_at, updated_at, html_link FROM calendar_event
+WHERE id = $1
+FOR SHARE
+`
+
+// Locking read used by the InteractionRecorder calendar.attended branch to
+// serialize against a concurrent decline DELETE on the same row. FOR SHARE
+// holds the row until the attended tx commits, so an interleaving decline
+// DELETE either blocks (attended inserts, decline then soft-deletes) or has
+// already committed (this read returns no row, attended skips the insert).
+func (q *Queries) GetCalendarEventByIDForShare(ctx context.Context, id pgtype.UUID) (*CalendarEvent, error) {
+	row := q.db.QueryRow(ctx, GetCalendarEventByIDForShare, id)
 	var i CalendarEvent
 	err := row.Scan(
 		&i.ID,
@@ -537,6 +597,32 @@ func (q *Queries) ListUpcomingEventsWithContacts(ctx context.Context, arg ListUp
 		return nil, err
 	}
 	return items, nil
+}
+
+const MarkCalendarEventCancelledByGcalID = `-- name: MarkCalendarEventCancelledByGcalID :exec
+UPDATE calendar_event
+SET status = 'cancelled',
+    updated_at = NOW()
+WHERE gcal_event_id = $1
+  AND gcal_calendar_id = $2
+  AND google_account_id = $3
+`
+
+type MarkCalendarEventCancelledByGcalIDParams struct {
+	GcalEventID     string `json:"gcal_event_id"`
+	GcalCalendarID  string `json:"gcal_calendar_id"`
+	GoogleAccountID string `json:"google_account_id"`
+}
+
+// Off-mode deferral for the decline remove branch: marks a stored event
+// cancelled (keyed by its Google identity triple) instead of deleting,
+// when the event bus is unavailable. status='cancelled' excludes the row
+// from ListPastEventsNeedingUpdate (status='confirmed') and from all
+// contact-facing reads (status != 'cancelled'), so it neither re-fires
+// calendar.attended nor strands an already-recorded interaction.
+func (q *Queries) MarkCalendarEventCancelledByGcalID(ctx context.Context, arg MarkCalendarEventCancelledByGcalIDParams) error {
+	_, err := q.db.Exec(ctx, MarkCalendarEventCancelledByGcalID, arg.GcalEventID, arg.GcalCalendarID, arg.GoogleAccountID)
+	return err
 }
 
 const MarkLastContactedUpdated = `-- name: MarkLastContactedUpdated :exec

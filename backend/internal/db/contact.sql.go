@@ -11,6 +11,76 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const ComputeContactDatesAfterDelete = `-- name: ComputeContactDatesAfterDelete :one
+WITH agg AS (
+  SELECT
+    MAX(occurred_at) FILTER (WHERE direction IN ('inbound','mutual'))  AS new_non_outbound,
+    MAX(occurred_at) FILTER (WHERE direction IN ('outbound','mutual')) AS new_outreach
+  FROM interaction
+  WHERE contact_id = $2 AND deleted_at IS NULL
+),
+locked AS (
+  SELECT id, last_contacted, last_interaction_at, last_response_at,
+         last_outreach_at, contact_by, cadence, created_at
+  FROM contact
+  WHERE id = $2 AND deleted_at IS NULL
+  FOR UPDATE
+)
+SELECT
+  (CASE WHEN c.last_contacted      = $1::timestamptz THEN agg.new_non_outbound ELSE c.last_contacted      END)::timestamptz AS new_last_contacted,
+  (CASE WHEN c.last_interaction_at = $1::timestamptz THEN agg.new_non_outbound ELSE c.last_interaction_at END)::timestamptz AS new_last_interaction_at,
+  (CASE WHEN c.last_response_at    = $1::timestamptz THEN agg.new_non_outbound ELSE c.last_response_at    END)::timestamptz AS new_last_response_at,
+  (CASE WHEN c.last_outreach_at    = $1::timestamptz THEN agg.new_outreach     ELSE c.last_outreach_at    END)::timestamptz AS new_last_outreach_at,
+  c.last_contacted AS old_last_contacted,
+  c.contact_by     AS old_contact_by,
+  c.cadence        AS cadence,
+  c.created_at     AS created_at
+FROM locked c, agg
+`
+
+type ComputeContactDatesAfterDeleteParams struct {
+	DeletedAtTs pgtype.Timestamptz `json:"deleted_at_ts"`
+	ID          pgtype.UUID        `json:"id"`
+}
+
+type ComputeContactDatesAfterDeleteRow struct {
+	NewLastContacted     pgtype.Timestamptz `json:"new_last_contacted"`
+	NewLastInteractionAt pgtype.Timestamptz `json:"new_last_interaction_at"`
+	NewLastResponseAt    pgtype.Timestamptz `json:"new_last_response_at"`
+	NewLastOutreachAt    pgtype.Timestamptz `json:"new_last_outreach_at"`
+	OldLastContacted     pgtype.Timestamptz `json:"old_last_contacted"`
+	OldContactBy         pgtype.Date        `json:"old_contact_by"`
+	Cadence              pgtype.Text        `json:"cadence"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+}
+
+// Returns the surgically-recomputed timestamp columns (each touched ONLY
+// when the deleted interaction at @deleted_at_ts was its source: column =
+// @deleted_at_ts → MAX(remaining live interactions of its subset), NULL when
+// none remain; otherwise the existing value is preserved) plus the fields the
+// Go caller needs to decide contact_by (old_last_contacted, old_contact_by,
+// cadence, created_at). Direction subsets mirror CadenceApplyFlagsByDirection
+// in reverse. NO cadence/contact_by arithmetic here — that is computed in Go
+// via cadence.CalculateContactBy to match the forward writer exactly.
+// The contact row is locked FOR UPDATE so the read→Go-compute→write sequence
+// is serialized against any concurrent cadence/interaction writer on the same
+// contact (closes the lost-update window).
+func (q *Queries) ComputeContactDatesAfterDelete(ctx context.Context, arg ComputeContactDatesAfterDeleteParams) (*ComputeContactDatesAfterDeleteRow, error) {
+	row := q.db.QueryRow(ctx, ComputeContactDatesAfterDelete, arg.DeletedAtTs, arg.ID)
+	var i ComputeContactDatesAfterDeleteRow
+	err := row.Scan(
+		&i.NewLastContacted,
+		&i.NewLastInteractionAt,
+		&i.NewLastResponseAt,
+		&i.NewLastOutreachAt,
+		&i.OldLastContacted,
+		&i.OldContactBy,
+		&i.Cadence,
+		&i.CreatedAt,
+	)
+	return &i, err
+}
+
 const CountContacts = `-- name: CountContacts :one
 SELECT COUNT(*) FROM contact
 WHERE deleted_at IS NULL
@@ -1430,6 +1500,41 @@ func (q *Queries) UpdateContactResponseFields(ctx context.Context, arg UpdateCon
 		arg.IsManual,
 		arg.OccurredAt,
 		arg.ContactBy,
+		arg.ID,
+	)
+	return err
+}
+
+const WriteContactDatesAfterDelete = `-- name: WriteContactDatesAfterDelete :exec
+UPDATE contact SET
+  last_contacted      = $1::timestamptz,
+  last_interaction_at = $2::timestamptz,
+  last_response_at    = $3::timestamptz,
+  last_outreach_at    = $4::timestamptz,
+  contact_by          = $5::date,
+  updated_at = NOW()
+WHERE id = $6 AND deleted_at IS NULL
+`
+
+type WriteContactDatesAfterDeleteParams struct {
+	NewLastContacted     pgtype.Timestamptz `json:"new_last_contacted"`
+	NewLastInteractionAt pgtype.Timestamptz `json:"new_last_interaction_at"`
+	NewLastResponseAt    pgtype.Timestamptz `json:"new_last_response_at"`
+	NewLastOutreachAt    pgtype.Timestamptz `json:"new_last_outreach_at"`
+	NewContactBy         pgtype.Date        `json:"new_contact_by"`
+	ID                   pgtype.UUID        `json:"id"`
+}
+
+// Writes the recomputed date columns. contact_by is passed pre-computed by
+// the Go caller (cadence.CalculateContactBy, environment-aware) so the value
+// matches the forward writer exactly; this query does no cadence arithmetic.
+func (q *Queries) WriteContactDatesAfterDelete(ctx context.Context, arg WriteContactDatesAfterDeleteParams) error {
+	_, err := q.db.Exec(ctx, WriteContactDatesAfterDelete,
+		arg.NewLastContacted,
+		arg.NewLastInteractionAt,
+		arg.NewLastResponseAt,
+		arg.NewLastOutreachAt,
+		arg.NewContactBy,
 		arg.ID,
 	)
 	return err

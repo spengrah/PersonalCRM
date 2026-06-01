@@ -571,3 +571,53 @@ WHERE deleted_at IS NULL
   AND cadence != ''
 ORDER BY full_name ASC
 LIMIT $1;
+
+-- name: ComputeContactDatesAfterDelete :one
+-- Returns the surgically-recomputed timestamp columns (each touched ONLY
+-- when the deleted interaction at @deleted_at_ts was its source: column =
+-- @deleted_at_ts → MAX(remaining live interactions of its subset), NULL when
+-- none remain; otherwise the existing value is preserved) plus the fields the
+-- Go caller needs to decide contact_by (old_last_contacted, old_contact_by,
+-- cadence, created_at). Direction subsets mirror CadenceApplyFlagsByDirection
+-- in reverse. NO cadence/contact_by arithmetic here — that is computed in Go
+-- via cadence.CalculateContactBy to match the forward writer exactly.
+-- The contact row is locked FOR UPDATE so the read→Go-compute→write sequence
+-- is serialized against any concurrent cadence/interaction writer on the same
+-- contact (closes the lost-update window).
+WITH agg AS (
+  SELECT
+    MAX(occurred_at) FILTER (WHERE direction IN ('inbound','mutual'))  AS new_non_outbound,
+    MAX(occurred_at) FILTER (WHERE direction IN ('outbound','mutual')) AS new_outreach
+  FROM interaction
+  WHERE contact_id = sqlc.arg(id) AND deleted_at IS NULL
+),
+locked AS (
+  SELECT id, last_contacted, last_interaction_at, last_response_at,
+         last_outreach_at, contact_by, cadence, created_at
+  FROM contact
+  WHERE id = sqlc.arg(id) AND deleted_at IS NULL
+  FOR UPDATE
+)
+SELECT
+  (CASE WHEN c.last_contacted      = sqlc.arg(deleted_at_ts)::timestamptz THEN agg.new_non_outbound ELSE c.last_contacted      END)::timestamptz AS new_last_contacted,
+  (CASE WHEN c.last_interaction_at = sqlc.arg(deleted_at_ts)::timestamptz THEN agg.new_non_outbound ELSE c.last_interaction_at END)::timestamptz AS new_last_interaction_at,
+  (CASE WHEN c.last_response_at    = sqlc.arg(deleted_at_ts)::timestamptz THEN agg.new_non_outbound ELSE c.last_response_at    END)::timestamptz AS new_last_response_at,
+  (CASE WHEN c.last_outreach_at    = sqlc.arg(deleted_at_ts)::timestamptz THEN agg.new_outreach     ELSE c.last_outreach_at    END)::timestamptz AS new_last_outreach_at,
+  c.last_contacted AS old_last_contacted,
+  c.contact_by     AS old_contact_by,
+  c.cadence        AS cadence,
+  c.created_at     AS created_at
+FROM locked c, agg;
+
+-- name: WriteContactDatesAfterDelete :exec
+-- Writes the recomputed date columns. contact_by is passed pre-computed by
+-- the Go caller (cadence.CalculateContactBy, environment-aware) so the value
+-- matches the forward writer exactly; this query does no cadence arithmetic.
+UPDATE contact SET
+  last_contacted      = sqlc.narg(new_last_contacted)::timestamptz,
+  last_interaction_at = sqlc.narg(new_last_interaction_at)::timestamptz,
+  last_response_at    = sqlc.narg(new_last_response_at)::timestamptz,
+  last_outreach_at    = sqlc.narg(new_last_outreach_at)::timestamptz,
+  contact_by          = sqlc.narg(new_contact_by)::date,
+  updated_at = NOW()
+WHERE id = sqlc.arg(id) AND deleted_at IS NULL;

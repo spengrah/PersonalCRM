@@ -71,6 +71,18 @@ type Querier interface {
 	// transitions the row to completed.
 	CompleteFollowUpForContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactTask, error)
 	CompleteSyncLog(ctx context.Context, arg CompleteSyncLogParams) (*ExternalSyncLog, error)
+	// Returns the surgically-recomputed timestamp columns (each touched ONLY
+	// when the deleted interaction at @deleted_at_ts was its source: column =
+	// @deleted_at_ts → MAX(remaining live interactions of its subset), NULL when
+	// none remain; otherwise the existing value is preserved) plus the fields the
+	// Go caller needs to decide contact_by (old_last_contacted, old_contact_by,
+	// cadence, created_at). Direction subsets mirror CadenceApplyFlagsByDirection
+	// in reverse. NO cadence/contact_by arithmetic here — that is computed in Go
+	// via cadence.CalculateContactBy to match the forward writer exactly.
+	// The contact row is locked FOR UPDATE so the read→Go-compute→write sequence
+	// is serialized against any concurrent cadence/interaction writer on the same
+	// contact (closes the lost-update window).
+	ComputeContactDatesAfterDelete(ctx context.Context, arg ComputeContactDatesAfterDeleteParams) (*ComputeContactDatesAfterDeleteRow, error)
 	CountAllUnmatchedExternalContacts(ctx context.Context) (int64, error)
 	CountContactInteractions(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountContactNotes(ctx context.Context, contactID pgtype.UUID) (int64, error)
@@ -190,6 +202,10 @@ type Querier interface {
 	// packages in parallel against the shared test DB.
 	DeleteAllMacHosts(ctx context.Context) (int64, error)
 	DeleteAllPairingTokens(ctx context.Context) (int64, error)
+	// Hard-deletes the stored calendar_event row keyed by its Google identity
+	// triple. Used by the decline/cancel remove branch. calendar_event has no
+	// deleted_at column — removal is a hard DELETE (cf. DeleteEventsByAccount).
+	DeleteCalendarEventByGcalID(ctx context.Context, arg DeleteCalendarEventByGcalIDParams) error
 	DeleteCalendarEventsByGcalEventIdPrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	DeleteCalendarEventsByTitlePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	DeleteContactMethodsByContact(ctx context.Context, contactID pgtype.UUID) error
@@ -426,6 +442,12 @@ type Querier interface {
 	GetCalendarEventByGcalID(ctx context.Context, arg GetCalendarEventByGcalIDParams) (*CalendarEvent, error)
 	// Look up an event by its UUID
 	GetCalendarEventByID(ctx context.Context, id pgtype.UUID) (*CalendarEvent, error)
+	// Locking read used by the InteractionRecorder calendar.attended branch to
+	// serialize against a concurrent decline DELETE on the same row. FOR SHARE
+	// holds the row until the attended tx commits, so an interleaving decline
+	// DELETE either blocks (attended inserts, decline then soft-deletes) or has
+	// already committed (this read returns no row, attended skips the insert).
+	GetCalendarEventByIDForShare(ctx context.Context, id pgtype.UUID) (*CalendarEvent, error)
 	// Contact queries
 	GetContact(ctx context.Context, id pgtype.UUID) (*Contact, error)
 	// Get a single note for a contact by category (e.g., 'notepad')
@@ -849,6 +871,13 @@ type Querier interface {
 	// surface a clean not-found when a concurrent resolve already claimed the
 	// group (zero rows).
 	MarkAnarlogTitleSiblingsMatchedByToken(ctx context.Context, arg MarkAnarlogTitleSiblingsMatchedByTokenParams) (int64, error)
+	// Off-mode deferral for the decline remove branch: marks a stored event
+	// cancelled (keyed by its Google identity triple) instead of deleting,
+	// when the event bus is unavailable. status='cancelled' excludes the row
+	// from ListPastEventsNeedingUpdate (status='confirmed') and from all
+	// contact-facing reads (status != 'cancelled'), so it neither re-fires
+	// calendar.attended nor strands an already-recorded interaction.
+	MarkCalendarEventCancelledByGcalID(ctx context.Context, arg MarkCalendarEventCancelledByGcalIDParams) error
 	// Mark an event as having updated last_contacted for its contacts
 	MarkLastContactedUpdated(ctx context.Context, id pgtype.UUID) error
 	// Non-tx variant. Mirror of MarkTelegramMessagesProcessed — used by the
@@ -1245,6 +1274,10 @@ type Querier interface {
 	// does NOT touch auth_state (which is managed by AuthSessionManager).
 	UpsertTelegramSessionData(ctx context.Context, arg UpsertTelegramSessionDataParams) (*TelegramSession, error)
 	UpsertTelegramUpdateState(ctx context.Context, arg UpsertTelegramUpdateStateParams) (*TelegramUpdateState, error)
+	// Writes the recomputed date columns. contact_by is passed pre-computed by
+	// the Go caller (cadence.CalculateContactBy, environment-aware) so the value
+	// matches the forward writer exactly; this query does no cadence arithmetic.
+	WriteContactDatesAfterDelete(ctx context.Context, arg WriteContactDatesAfterDeleteParams) error
 }
 
 var _ Querier = (*Queries)(nil)
