@@ -5,6 +5,7 @@
 package repository
 
 import (
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,6 +25,35 @@ type LinkageCandidate struct {
 	OccurredAt         time.Time
 	AttendeeContactIDs []uuid.UUID
 	PeerContactID      *uuid.UUID
+
+	// Coalescing inputs — read only by the service-layer
+	// coalesceCandidates pass that collapses semantically-identical
+	// candidates within a kind before linkage classification. Populated
+	// by the two FindLinkageCandidatesTx projections from data they
+	// already read; left zero on any other construction site (which never
+	// feeds coalesceCandidates). Event candidates carry NormalizedTitle;
+	// phone_call candidates carry the rest.
+	NormalizedTitle string     // event: NormalizeCoalesceTitle(title); phone_call: ""
+	PeerNormalized  string     // phone_call: normalized peer number; event: ""
+	Service         string     // phone_call: voice/facetime_audio/...; event: ""
+	Direction       string     // phone_call: inbound/outbound; event: ""
+	DurationSeconds int32      // phone_call: call duration; event: 0
+	Answered        *bool      // phone_call: three-state (nil outbound / true / false); event: nil
+	InteractionID   *uuid.UUID // phone_call: linked interaction, if any; event: nil
+}
+
+// NormalizeCoalesceTitle normalizes a calendar event title for the
+// service-layer coalescing pass's same-meeting group key. It lowercases
+// and collapses internal/leading/trailing whitespace; a nil or
+// whitespace-only title normalizes to "". Exact normalized equality only
+// (no fuzzy matching), matching the "same normalized title" rule. Shared
+// between the calendar projection and the service-layer coalescer so both
+// derive identical keys.
+func NormalizeCoalesceTitle(title *string) string {
+	if title == nil {
+		return ""
+	}
+	return strings.ToLower(strings.Join(strings.Fields(*title), " "))
 }
 
 // ImpliedAttendeeSet returns the candidate's intrinsic participant

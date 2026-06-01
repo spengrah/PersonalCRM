@@ -420,6 +420,7 @@ func (r *CalendarEventRepository) FindLinkageCandidatesTx(ctx context.Context, t
 			ID:                 event.ID,
 			OccurredAt:         event.StartTime,
 			AttendeeContactIDs: event.MatchedContactIDs,
+			NormalizedTitle:    NormalizeCoalesceTitle(event.Title),
 		})
 	}
 	return out, nil
