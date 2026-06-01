@@ -216,7 +216,9 @@ func TestIntegration_DeclineCutover_RemovesEventAndInteractionThroughProcessEven
 	cad := "weekly"
 	contact := e.newContact(t, &cad)
 	gcalID := "evt-" + uuid.NewString()
-	endTime := accelerated.GetCurrentTime().AddDate(0, 0, -1) // past
+	// Truncate to microseconds so the Go anchor survives the timestamptz
+	// round-trip exactly (Postgres stores microsecond precision).
+	endTime := accelerated.GetCurrentTime().Truncate(time.Microsecond).AddDate(0, 0, -1) // past
 
 	stored := e.seedStoredEvent(t, gcalID, contact.ID, endTime)
 	internalRef := stored.ID.String()
@@ -285,7 +287,7 @@ func TestIntegration_DeclineCutover_PublishFailureLeavesRowIntact(t *testing.T) 
 
 	contact := e.newContact(t, nil)
 	gcalID := "evt-" + uuid.NewString()
-	endTime := accelerated.GetCurrentTime().AddDate(0, 0, -1)
+	endTime := accelerated.GetCurrentTime().Truncate(time.Microsecond).AddDate(0, 0, -1)
 	stored := e.seedStoredEvent(t, gcalID, contact.ID, endTime)
 
 	// Substitute a failing decline bus so the per-contact PublishTx errors

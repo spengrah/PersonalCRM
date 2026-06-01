@@ -195,7 +195,7 @@ func TestIntegration_CalendarDecline_NullOutWithCadenceFallback(t *testing.T) {
 	// Anchor the interaction AFTER creation so it wins forward-max and truly
 	// sources last_contacted + contact_by (a past occurredAt would be blocked
 	// by the created_at-based contact_by floor, masking the rollback path).
-	occurredAt := accelerated.GetCurrentTime().AddDate(0, 0, 30)
+	occurredAt := accelerated.GetCurrentTime().Truncate(time.Microsecond).AddDate(0, 0, 30)
 	// Contact created WITHOUT last_contacted so its only date source is the
 	// gcal interaction; contact_by initially derives from created_at.
 	contact := e.newContact(t, &cad, nil)
@@ -247,7 +247,9 @@ func TestIntegration_CalendarDecline_PerDirectionRollback(t *testing.T) {
 
 	cad := "weekly"
 	// Anchor after creation so the mutual sources contact_by via forward-max.
-	base := accelerated.GetCurrentTime()
+	// Truncate to microseconds so the Go-side anchors survive the
+	// timestamptz round-trip exactly (Postgres stores microsecond precision).
+	base := accelerated.GetCurrentTime().Truncate(time.Microsecond)
 	inbound := base.AddDate(0, 0, 10)
 	mutual := base.AddDate(0, 0, 20)
 	outbound := base.AddDate(0, 0, 30)
@@ -338,7 +340,7 @@ func TestIntegration_CalendarDecline_PreservesContactByOverride(t *testing.T) {
 
 	cad := "weekly"
 	// Anchor after creation so the interaction sources last_contacted.
-	occurredAt := accelerated.GetCurrentTime().AddDate(0, 0, 30)
+	occurredAt := accelerated.GetCurrentTime().Truncate(time.Microsecond).AddDate(0, 0, 30)
 	contact := e.newContact(t, &cad, nil)
 	sourceRef := uuid.NewString()
 	e.seedGcalInteraction(t, contact.ID, sourceRef, repository.InteractionDirectionMutual, occurredAt)
@@ -371,7 +373,7 @@ func TestIntegration_CalendarDecline_RollsBackContactByWhenNoOverride(t *testing
 
 	cad := "weekly"
 	// Anchor after creation so the interaction sources contact_by.
-	occurredAt := accelerated.GetCurrentTime().AddDate(0, 0, 30)
+	occurredAt := accelerated.GetCurrentTime().Truncate(time.Microsecond).AddDate(0, 0, 30)
 	contact := e.newContact(t, &cad, nil)
 	sourceRef := uuid.NewString()
 	e.seedGcalInteraction(t, contact.ID, sourceRef, repository.InteractionDirectionMutual, occurredAt)
@@ -404,7 +406,7 @@ func TestIntegration_CalendarDecline_ContactByForwardWriterParity(t *testing.T) 
 	e := newDeclineTestEnv(t, ctx)
 
 	cad := "monthly"
-	occurredAt := accelerated.GetCurrentTime().AddDate(0, 0, 30)
+	occurredAt := accelerated.GetCurrentTime().Truncate(time.Microsecond).AddDate(0, 0, 30)
 	contact := e.newContact(t, &cad, nil)
 	sourceRef := uuid.NewString()
 	e.seedGcalInteraction(t, contact.ID, sourceRef, repository.InteractionDirectionMutual, occurredAt)
