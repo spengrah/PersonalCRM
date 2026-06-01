@@ -3153,6 +3153,294 @@ func TestResolveLink_NoneOfTheseToOrphanTitleAugmented(t *testing.T) {
 	require.Contains(t, gotRefs, titleRef, "title-derived interaction created")
 }
 
+// resolveLinkResponse is the resolve-link success envelope, sufficient
+// to assert on interactions_created.
+type resolveLinkResponse struct {
+	Success bool `json:"success"`
+	Data    struct {
+		MeetingNote         json.RawMessage `json:"meeting_note"`
+		InteractionsCreated []struct {
+			ContactID string `json:"contact_id"`
+			SourceRef string `json:"source_ref"`
+		} `json:"interactions_created"`
+	} `json:"data"`
+}
+
+func parseResolveLinkResp(t *testing.T, w *httptest.ResponseRecorder) resolveLinkResponse {
+	t.Helper()
+	var r resolveLinkResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&r), "body: %s", w.Body.String())
+	return r
+}
+
+// buildMNRecordedEventWithSummary is buildMNRecordedEvent plus a Summary
+// field. Used to drive a content-changing re-sync (different
+// last_content_hash) while keeping the matching inputs (title,
+// participants, meeting_at → input_hash + resolved_set_hash) unchanged.
+func buildMNRecordedEventWithSummary(t *testing.T, hostID uuid.UUID, sessionUUID string, meetingAt time.Time, title, summary string, participantIDs []string) map[string]any {
+	t.Helper()
+	tp := title
+	sm := summary
+	p := events.MeetingNoteRecordedPayload{
+		Version:        1,
+		HostID:         hostID,
+		Source:         "anarlog_sessions",
+		SourceID:       sessionUUID,
+		Title:          &tp,
+		Summary:        &sm,
+		MeetingAt:      meetingAt,
+		ParticipantIDs: participantIDs,
+	}
+	pBytes, err := events.Marshal(events.KindMeetingNoteRecorded, p)
+	require.NoError(t, err)
+	hashHex, err := service.ComputeContentHash(pBytes)
+	require.NoError(t, err)
+	return map[string]any{
+		"source":      "anarlog_sessions",
+		"source_id":   sessionUUID + "@" + hashHex,
+		"kind":        string(events.KindMeetingNoteRecorded),
+		"payload":     json.RawMessage(pBytes),
+		"observed_at": accelerated.GetCurrentTime(),
+	}
+}
+
+// TestResolveLink_OrphanToImpromptu_Success — an orphan_needs_review row
+// (no candidates, no resolvable tagged humans) resolves to
+// linked_impromptu via "Log as impromptu" (none_of_these). State flips,
+// pointers stay nil, and no interaction is created (no resolved
+// participant to attach one to). The row also leaves the
+// needs-attention list.
+func TestResolveLink_OrphanToImpromptu_Success(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	sessionUUID := env.newSessionUUID()
+	meetingAt := time.Date(2026, 5, 11, 9, 0, 0, 0, time.UTC)
+	// No candidate, no participants → orphan_needs_review.
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Orphan To Impromptu", nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, row)
+	require.Equal(t, repository.LinkageStateOrphanNeedsReview, row.LinkageState, "sanity: lands orphan")
+
+	w = postResolveLink(t, env, row.ID.String(), map[string]any{"action": "none_of_these"})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp := parseResolveLinkResp(t, w)
+	require.Empty(t, resp.Data.InteractionsCreated, "no resolved participant → no interaction")
+
+	updated := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, updated)
+	require.Equal(t, repository.LinkageStateLinkedImpromptu, updated.LinkageState)
+	require.Nil(t, updated.LinkedKind)
+	require.Nil(t, updated.LinkedID)
+	require.Empty(t, updated.ConflictCandidates)
+	require.Empty(t, listSessionInteractions(t, env, sessionUUID))
+
+	// The resolved row left the needs-attention set.
+	naW := getNeedsAttention(t, env, env.pairedHostID.String())
+	require.Equal(t, http.StatusOK, naW.Code, "body: %s", naW.Body.String())
+	require.NotContains(t, naW.Body.String(), sessionUUID,
+		"resolved orphan must leave the needs-attention list")
+}
+
+// TestResolveLink_TerminalStatesReturn409 — the widened IN(...) guard
+// must still reject every terminal state. Table-driven over linked,
+// linked_impromptu, and orphan_title_augmented (the last shares the
+// orphan_ prefix and is the trap a sloppy LIKE 'orphan_%' guard would
+// admit). Each → 409.
+func TestResolveLink_TerminalStatesReturn409(t *testing.T) {
+	cases := []struct {
+		name  string
+		drive func(t *testing.T, env *meetingNoteIngestEnv) *repository.MeetingNote
+	}{
+		{
+			name: "linked",
+			drive: func(t *testing.T, env *meetingNoteIngestEnv) *repository.MeetingNote {
+				meetingAt := time.Date(2026, 5, 11, 10, 0, 0, 0, time.UTC)
+				env.seedCalendarEventInWindow(t, meetingAt, []uuid.UUID{env.contactA})
+				sessionUUID := env.newSessionUUID()
+				ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Terminal Linked", nil)
+				w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+				require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+				row := findMeetingNoteRow(t, env, sessionUUID)
+				require.NotNil(t, row)
+				require.Equal(t, repository.LinkageStateLinked, row.LinkageState, "single candidate auto-links")
+				return row
+			},
+		},
+		{
+			name: "linked_impromptu",
+			drive: func(t *testing.T, env *meetingNoteIngestEnv) *repository.MeetingNote {
+				suffix := strings.TrimSuffix(strings.TrimPrefix(env.sourceIDPrefix, "mn-ingest-"), "-")
+				anarlogA := env.seedAnarlogHumanResolvingTo(t, fmt.Sprintf("mn-test-0-%s@example.invalid", suffix))
+				meetingAt := time.Date(2026, 5, 11, 11, 0, 0, 0, time.UTC)
+				sessionUUID := env.newSessionUUID()
+				ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Terminal Impromptu", []string{anarlogA})
+				w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+				require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+				row := findMeetingNoteRow(t, env, sessionUUID)
+				require.NotNil(t, row)
+				require.Equal(t, repository.LinkageStateLinkedImpromptu, row.LinkageState)
+				return row
+			},
+		},
+		{
+			name: "orphan_title_augmented",
+			drive: func(t *testing.T, env *meetingNoteIngestEnv) *repository.MeetingNote {
+				suffix := strings.TrimSuffix(strings.TrimPrefix(env.sourceIDPrefix, "mn-ingest-"), "-")
+				anarlogA := env.seedAnarlogHumanResolvingTo(t, fmt.Sprintf("mn-test-0-%s@example.invalid", suffix))
+				tokenT := newTitleToken(t, env)
+				seedTitleContact(t, env, tokenT+" Brown")
+				meetingAt := time.Date(2026, 5, 11, 12, 0, 0, 0, time.UTC)
+				sessionUUID := env.newSessionUUID()
+				ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, tokenT+" sync", []string{anarlogA})
+				w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+				require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+				row := findMeetingNoteRow(t, env, sessionUUID)
+				require.NotNil(t, row)
+				require.Equal(t, repository.LinkageStateOrphanTitleAugmented, row.LinkageState,
+					"tagged + matched title → orphan_title_augmented")
+				return row
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := setupMeetingNoteIngestEnv(t)
+			row := tc.drive(t, env)
+			w := postResolveLink(t, env, row.ID.String(), map[string]any{"action": "none_of_these"})
+			require.Equal(t, http.StatusConflict, w.Code,
+				"terminal state %s must 409 — body: %s", tc.name, w.Body.String())
+		})
+	}
+}
+
+// TestResolveLink_OrphanLinkActionRejected — action="link" on an orphan
+// (which has no candidate snapshot) is rejected as 400, not 500.
+func TestResolveLink_OrphanLinkActionRejected(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	sessionUUID := env.newSessionUUID()
+	meetingAt := time.Date(2026, 5, 11, 13, 0, 0, 0, time.UTC)
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Orphan Link Rejected", nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, row)
+	require.Equal(t, repository.LinkageStateOrphanNeedsReview, row.LinkageState)
+
+	w = postResolveLink(t, env, row.ID.String(), map[string]any{
+		"action": "link",
+		"kind":   "event",
+		"id":     uuid.NewString(),
+	})
+	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+
+	// State unchanged — the rejected link is a no-op.
+	after := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, after)
+	require.Equal(t, repository.LinkageStateOrphanNeedsReview, after.LinkageState)
+}
+
+// TestResolveLink_OrphanToImpromptu_WithNewlyResolvableParticipant —
+// exercises the state↔interaction invariant AND the union-hash
+// carry-forward fix. Two DISTINCT contacts: T (the tagged human, made
+// resolvable AFTER ingest via import) and M (a title-matched contact,
+// resolvable from the title throughout). At ingest no tags resolve → the
+// row is orphan_needs_review even though M title-matches. After T is
+// imported, "Log as impromptu" creates exactly one interaction (T's
+// tagged anchor) and NO :title: interaction for M, and persists the
+// union hash so a content-changing re-sync carries linked_impromptu
+// forward instead of flipping to orphan_title_augmented.
+func TestResolveLink_OrphanToImpromptu_WithNewlyResolvableParticipant(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+
+	// M — title-matched contact, distinct from T, resolvable from the
+	// title throughout.
+	tokenM := newTitleToken(t, env)
+	contactM := seedTitleContact(t, env, tokenM+" Vance")
+
+	// T — tagged human that is NOT resolvable at ingest (unique email, no
+	// matching contact yet).
+	unmatchedEmail := "unmatched-" + uuid.NewString()[:8] + "@example.invalid"
+	anarlogT := env.seedAnarlogHumanResolvingTo(t, unmatchedEmail)
+
+	sessionUUID := env.newSessionUUID()
+	meetingAt := time.Date(2026, 5, 11, 14, 0, 0, 0, time.UTC)
+	title := tokenM + " sync"
+	rec := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, title, []string{anarlogT})
+	w := postMNIngest(t, env, map[string]any{"events": []any{rec}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	// At ingest: T unresolved, title alone doesn't lift the orphan.
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, row)
+	require.Equal(t, repository.LinkageStateOrphanNeedsReview, row.LinkageState,
+		"title match alone does not promote a no-tag orphan")
+	require.Empty(t, listSessionInteractions(t, env, sessionUUID))
+
+	// Make T resolvable via the real import/link handler (links T's
+	// anarlog_human identity to env.contactA).
+	ctx := context.Background()
+	external, err := env.externalRepo.GetBySource(ctx, "anarlog_humans", anarlogT, nil)
+	require.NoError(t, err)
+	require.NotNil(t, external)
+	linkBody, _ := json.Marshal(map[string]any{"crm_contact_id": env.contactA.String()})
+	linkReq := httptest.NewRequest(http.MethodPost,
+		"/api/v1/imports/candidates/"+external.ID.String()+"/link",
+		bytes.NewReader(linkBody))
+	linkReq.Header.Set("Content-Type", "application/json")
+	linkW := httptest.NewRecorder()
+	env.router.ServeHTTP(linkW, linkReq)
+	require.Equal(t, http.StatusOK, linkW.Code, "body: %s", linkW.Body.String())
+
+	// "Log as impromptu" on the orphan.
+	w = postResolveLink(t, env, row.ID.String(), map[string]any{"action": "none_of_these"})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp := parseResolveLinkResp(t, w)
+	require.Len(t, resp.Data.InteractionsCreated, 1, "exactly one interaction — T's tagged anchor")
+	require.Equal(t, "anarlog:"+sessionUUID+":"+env.contactA.String(), resp.Data.InteractionsCreated[0].SourceRef)
+
+	updated := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, updated)
+	require.Equal(t, repository.LinkageStateLinkedImpromptu, updated.LinkageState)
+
+	// The invariant: no :title: interaction for M (tagged-only rule).
+	ixs := listSessionInteractions(t, env, sessionUUID)
+	require.Len(t, ixs, 1, "tagged interaction only; no title-derived interaction")
+	titleRefM := "anarlog:" + sessionUUID + ":title:" + contactM.String()
+	for _, ix := range ixs {
+		require.NotNil(t, ix.SourceRef)
+		require.NotContains(t, *ix.SourceRef, ":title:", "no title-derived interaction in a forced-impromptu row")
+		require.NotEqual(t, titleRefM, *ix.SourceRef)
+	}
+
+	// Carry-forward guard (asserted behaviorally): re-ingest with the SAME
+	// matching inputs (title, participants, meeting_at → input_hash +
+	// union resolved_set_hash unchanged) but a CHANGED summary so
+	// last_content_hash differs and a genuine re-ingest runs the
+	// carry-forward branch. The row must STAY linked_impromptu and gain no
+	// :title: interaction for M. Had the resolve persisted hash(T) only,
+	// the re-ingest's hash(T ∪ M) would mismatch, fail carry-forward,
+	// re-run decideLinkage, and flip to orphan_title_augmented + create
+	// M's :title: interaction.
+	rec2 := buildMNRecordedEventWithSummary(t, env.pairedHostID, sessionUUID, meetingAt, title, "content changed for re-sync", []string{anarlogT})
+	w = postMNIngest(t, env, map[string]any{"events": []any{rec2}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted, "changed content → genuine re-ingest, not bus-dedup")
+
+	afterResync := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, afterResync)
+	require.Equal(t, repository.LinkageStateLinkedImpromptu, afterResync.LinkageState,
+		"union-hash carry-forward preserves the user's impromptu decision")
+	resyncIxs := listSessionInteractions(t, env, sessionUUID)
+	require.Len(t, resyncIxs, 1, "carry-forward creates no new interaction")
+	for _, ix := range resyncIxs {
+		require.NotNil(t, ix.SourceRef)
+		require.NotContains(t, *ix.SourceRef, ":title:", "no title interaction appears on re-sync")
+	}
+}
+
 // TestResolveLink_SnapshotMissingReturns422 (TC-SV10) — defensive
 // branch: a row in conflict_pending with conflict_candidates NULL must
 // fail with ErrResolveLinkSnapshotMissing → 422. The production ingest
