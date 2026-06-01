@@ -75,6 +75,7 @@ struct StatusCommand: ParsableCommand {
             print("    backfill_cursor:    \(backfillDate) (Z_PK=\(phoneCalls.backfillCursorZPK.map(String.init) ?? "nil"))")
             print("    install_max:        \(installMax) (Z_PK=\(phoneCalls.installMaxZPK.map(String.init) ?? "nil"))")
             print("    backfill_complete:  \(phoneCalls.backfillComplete)")
+            print("    pending_scans:      \(phoneCalls.pendingScansCount)")
         } else {
             print("  phone_calls: (no cursor committed yet)")
         }

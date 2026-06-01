@@ -3,9 +3,11 @@
 //
 // Top-level:
 //   crm-mac call-history backfill --restart [--yes]
+//   crm-mac call-history scan --identifier <handle> [--since <duration>]
 //   crm-mac call-history status
 //
-// `backfill` refuses to run while the daemon is up (pidfile-lock guard).
+// `backfill` + `scan` refuse to run while the daemon is up (pidfile-lock
+// guard) and commit Pi-side via the GET -> mutate -> POST CAS flow.
 // `status` is a read-only convenience that mirrors the phone_calls
 // slice of `crm-mac status` for callers who only want the source-
 // specific lines.
@@ -27,6 +29,7 @@ struct CallHistoryCommand: ParsableCommand {
         abstract: "Operator commands for the Phone & FaceTime call-history source.",
         subcommands: [
             CallHistoryBackfillCommand.self,
+            CallHistoryScanCommand.self,
             CallHistoryStatusCommand.self,
         ])
 }
@@ -53,6 +56,7 @@ struct CallHistoryStatusCommand: ParsableCommand {
             print("backfill_cursor=\(backfillDate) (Z_PK=\(phoneCalls.backfillCursorZPK.map(String.init) ?? "nil"))")
             print("install_max=\(installMax) (Z_PK=\(phoneCalls.installMaxZPK.map(String.init) ?? "nil"))")
             print("backfill_complete=\(phoneCalls.backfillComplete)")
+            print("pending_scans=\(phoneCalls.pendingScansCount)")
         } else {
             print("(no cursor committed yet)")
         }
@@ -83,6 +87,51 @@ struct CallHistoryBackfillCommand: AsyncParsableCommand {
         } catch let err as CallHistoryOpsError {
             FileHandle.standardError.write(Data("\(err.description)\n".utf8))
             throw ExitCode(4)
+        }
+    }
+}
+
+struct CallHistoryScanCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "scan",
+        abstract: "Queue a backwards scan for a specific identifier.")
+
+    @Option(name: .long, help: "Phone or email handle to scan for. Normalized before queuing.")
+    var identifier: String
+
+    @Option(name: .long,
+             help: "Scan window. ISO-8601 duration (e.g. '30d') or unset for default 30d.")
+    var since: String = "30d"
+
+    mutating func run() async throws {
+        let seconds = try parseSince(since)
+        let ops = try makeCallHistoryOps()
+        do {
+            try await ops.scan(identifier: identifier, since: seconds)
+            print("scan queued for \(identifier) (since=\(since)). Start the daemon to drain.")
+        } catch let err as CallHistoryOpsError {
+            FileHandle.standardError.write(Data("\(err.description)\n".utf8))
+            throw ExitCode(4)
+        }
+    }
+
+    /// Parse a simple duration like "30d", "12h", "60m", "3600s".
+    private func parseSince(_ raw: String) throws -> TimeInterval {
+        let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let unit = s.last else {
+            throw ValidationError("invalid --since: \(raw)")
+        }
+        let numericPart = String(s.dropLast())
+        guard let value = Double(numericPart), value >= 0 else {
+            throw ValidationError("invalid --since: \(raw)")
+        }
+        switch unit {
+        case "s": return value
+        case "m": return value * 60
+        case "h": return value * 60 * 60
+        case "d": return value * 60 * 60 * 24
+        default:
+            throw ValidationError("invalid --since unit (expected s/m/h/d): \(raw)")
         }
     }
 }
