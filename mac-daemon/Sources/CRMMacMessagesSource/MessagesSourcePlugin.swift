@@ -6,23 +6,35 @@
 //   2. Open chat.db DatabasePool (cached on first successful open).
 //   3. If no cached cursor: piClient.getMessagesCursor(...) -> decode
 //      into MessagesCursor; cache locally via StateMutator.
-//   4. If installMaxRowID == nil: capture MAX(ROWID) into the in-memory
-//      MessagesCursor (uncommitted; committed in step 8).
-//   5. Drain pendingScans (from cursor JSON): for each, run targeted
-//      30-day scan -> publish via MessagesPublisher.
-//   6. If backfillComplete == false: run a backfill batch (budget-
+//   4. Phase A — durable scan enqueue: drain the known-identifiers
+//      cache's newly-added bucket (non-destructive), coverage-dedup +
+//      cap them into pendingScans with a 30-day window, and commit the
+//      cursor BEFORE executing any scan. On success confirm the drain;
+//      on failure return it so the next tick re-enqueues.
+//   5. Phase B — execute pending scans (gated on cache.hasFetched, NOT
+//      isPopulated): membership-check each entry, walk one budget-
+//      limited page via MessagesScanReader (resumable via the entry's
+//      progress), publish, advance progress or dequeue on exhaustion,
+//      re-commit. Runs BEFORE the row-emitting batches.
+//   6. If the known-identifiers cache is not populated, skip the
+//      row-emitting batches (the scan phases already ran).
+//   7. If installMaxRowID == nil: capture MAX(ROWID) into the in-memory
+//      MessagesCursor (uncommitted; committed in step 10).
+//   8. If backfillComplete == false: run a backfill batch (budget-
 //      bound) -> publish -> advance backfillCursor downward.
-//   7. Run live batch (remaining budget): read message.ROWID > liveCursor
+//   9. Run live batch (remaining budget): read message.ROWID > liveCursor
 //      -> publish -> advance liveCursor upward.
-//   8. If the in-memory cursor changed AND every batch had
+//  10. If the in-memory cursor changed AND every batch had
 //      rejected == 0: commitMessagesCursor; on success write through
 //      to local state.json via StateMutator. On 409: refresh + abort.
 //      On transport error: log + leave local cache untouched -> return.
-//   9. Update source_health snapshot via the shared registry.
+//  11. Update source_health snapshot via the shared registry.
 //
 // The plugin is the single owner of the GRDB DatabasePool, the
 // KnownIdentifiersCache, and the messages source's slot in
 // SourceState. All writes to state.json funnel through StateMutator.
+// The plugin NEVER writes the persisted known-identifiers baseline —
+// that is the heartbeat refresher's job (single-writer model).
 import Foundation
 import GRDB
 import CRMMacCore
@@ -150,16 +162,39 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
             return
         }
 
+        var working = cursor
+
+        // Phase A — durable scan enqueue (commit-first).
+        // Drain the cache's newly-added bucket NON-DESTRUCTIVELY and
+        // merge it into working.pendingScans (coverage-dedup + cap),
+        // then commit the cursor with the enlarged queue BEFORE any scan
+        // executes. On commit success the drained identifiers are
+        // confirmed (durably enqueued); on failure they are returned to
+        // the cache so the next tick re-enqueues. This runs regardless
+        // of isPopulated — a newly-known identifier must be durably
+        // queued even on a tick where the row-emitting batches skip.
+        if await runScanEnqueue(working: &working) == .aborted {
+            return
+        }
+
+        // Phase B — execute pending scans (resumable), gated on
+        // hasFetched (NOT isPopulated). An empty-but-fetched CRM still
+        // adjudicates pending scans (drops an operator scan for a
+        // now-removed contact); a not-yet-fetched cache defers them.
+        if await cache.hasFetched {
+            await runPendingScans(pool: pool, working: &working)
+        }
+
         // Sender filter ready?  If the known-identifiers cache hasn't
-        // been populated yet, skip the tick (heartbeat will fill it).
+        // been populated yet, skip the row-emitting batches (heartbeat
+        // will fill it). The scan phases above already ran.
         let populated = await cache.isPopulated
         if !populated {
-            logger.debug("messages tick: known-identifiers cache empty; skipping", metadata: [:])
+            logger.debug("messages tick: known-identifiers cache empty; skipping batches", metadata: [:])
             return
         }
 
         // Capture install-time MAX(ROWID) if needed.
-        var working = cursor
         if working.installMaxRowID == nil {
             do {
                 let maxROWID = try await pool.read { try ChatDBReader.maxROWID(db: $0) } ?? 0
@@ -180,36 +215,6 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
             now: tickStart)
         var hadRejection = false
         var hadUnconfirmed = false
-
-        // Pending-scan + newly-known handling.
-        //
-        // V1 simplification: chat.db doesn't support an efficient
-        // identifier-scoped query, so the daemon doesn't execute
-        // identifier-scoped backwards scans. Both the operator-queued
-        // pendingScans (in the cursor JSON) and the in-memory
-        // newly-added queue are surfaced via logs + status output
-        // but NOT consumed here.
-        //
-        // The natural backfill descent already walks every message
-        // back to backfillFloorSentAt and the sender filter
-        // (KnownIdentifiersCache.contains) makes sure new contacts'
-        // messages emit as soon as backfill reaches them. The
-        // pendingScans queue is therefore kept (not cleared) so the
-        // operator can see queued items via `crm-mac status` until
-        // a future PR ships true identifier-scoped scans. README
-        // documents this v1 behavior; tests cover the persistence
-        // semantics.
-        let newlyAdded = await cache.drainNewlyAdded(for: id)
-        if !newlyAdded.isEmpty {
-            logger.info("messages tick: newly-known contacts detected", metadata: [
-                "count": .public(String(newlyAdded.count)),
-            ])
-        }
-        if !working.pendingScans.isEmpty {
-            logger.info("messages tick: pending scans observed (not executed in v1)", metadata: [
-                "count": .public(String(working.pendingScans.count)),
-            ])
-        }
 
         // Backfill batch (descending).
         if !working.backfillComplete, budget.rowsRemaining > 0 {
@@ -237,39 +242,17 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
         // failed rows.
         let cursorChanged = working != cursor
         if cursorChanged && !hadRejection && !hadUnconfirmed {
-            do {
-                let newJSON = try MessagesCursorCodec.encode(working)
-                try await piClient.commitCursor(
-                    auth: auth,
-                    source: "messages",
-                    cursor: newJSON,
-                    baseCursor: lastCommittedCursorJSON,
-                    cursorEpoch: cachedEpoch,
-                    backfillComplete: working.backfillComplete)
-                // Cache locally via StateMutator (write-through).
-                try await writeThroughCursor(
-                    newJSON,
-                    epoch: cachedEpoch,
-                    backfillComplete: working.backfillComplete,
-                    lastPushedAt: clock())
-                cachedCursor = working
-                lastCommittedCursorJSON = newJSON
+            switch await commitWorking(working) {
+            case .committed:
                 logger.debug("messages tick: cursor committed", metadata: [
                     "live_cursor": .public(String(working.liveCursor ?? 0)),
                     "backfill_cursor": .public(working.backfillCursor.map(String.init) ?? "nil"),
                     "backfill_complete": .public(String(working.backfillComplete)),
                 ])
-            } catch let PiClientError.cursorConflict(_, current) {
-                logger.info("messages tick: cursor conflict, refreshing", metadata: [
-                    "current_epoch": .public(current.currentEpoch.map(String.init) ?? "nil"),
-                ])
-                // Best-effort refresh; abort the tick.
+            case .conflict:
                 _ = try? await loadOrFetchCursor(forceRefresh: true)
                 return
-            } catch {
-                logger.warning("messages tick: cursor commit failed", metadata: [
-                    "error": .private(String(describing: error)),
-                ])
+            case .failed:
                 return
             }
         } else if hadRejection {
@@ -292,6 +275,249 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
             pushed: working.liveCursor,
             backfillComplete: working.backfillComplete))
     }
+
+    // MARK: - cursor commit helper
+
+    /// Result of a CAS cursor commit.
+    private enum CommitResult {
+        case committed
+        case conflict
+        case failed
+    }
+
+    /// CAS-commit `working` to the Pi (base = lastCommittedCursorJSON),
+    /// write through to local state.json, and update the in-memory
+    /// cache (`cachedCursor` / `lastCommittedCursorJSON`). Used by the
+    /// scan phases AND the final backfill/live commit so the CAS base
+    /// and write-through stay in lockstep across multiple commits per
+    /// tick.
+    private func commitWorking(_ working: MessagesCursor) async -> CommitResult {
+        let newJSON: String
+        do {
+            newJSON = try MessagesCursorCodec.encode(working)
+        } catch {
+            logger.warning("messages tick: cursor encode failed", metadata: [
+                "error": .private(String(describing: error)),
+            ])
+            return .failed
+        }
+        do {
+            try await piClient.commitCursor(
+                auth: auth,
+                source: "messages",
+                cursor: newJSON,
+                baseCursor: lastCommittedCursorJSON,
+                cursorEpoch: cachedEpoch,
+                backfillComplete: working.backfillComplete)
+            try await writeThroughCursor(
+                newJSON,
+                epoch: cachedEpoch,
+                backfillComplete: working.backfillComplete,
+                lastPushedAt: clock())
+            cachedCursor = working
+            lastCommittedCursorJSON = newJSON
+            return .committed
+        } catch let PiClientError.cursorConflict(_, current) {
+            logger.info("messages tick: cursor conflict, refreshing", metadata: [
+                "current_epoch": .public(current.currentEpoch.map(String.init) ?? "nil"),
+            ])
+            return .conflict
+        } catch {
+            logger.warning("messages tick: cursor commit failed", metadata: [
+                "error": .private(String(describing: error)),
+            ])
+            return .failed
+        }
+    }
+
+    // MARK: - Phase A: durable scan enqueue
+
+    private enum ScanEnqueueResult {
+        case ok
+        case aborted
+    }
+
+    /// Drain the cache's newly-added bucket (non-destructive), merge it
+    /// into `working.pendingScans` (coverage-dedup + cap) with a 30-day
+    /// window, and commit the cursor BEFORE any scan executes. On commit
+    /// success the drained identifiers are confirmed in the cache; on
+    /// failure they are returned so the next tick re-enqueues. Returns
+    /// `.aborted` when the tick must stop (commit failure/conflict).
+    private func runScanEnqueue(working: inout MessagesCursor) async -> ScanEnqueueResult {
+        let drained = await cache.drainNewlyAdded(for: id)
+        if drained.isEmpty {
+            return .ok
+        }
+        logger.info("messages tick: newly-known contacts detected", metadata: [
+            "count": .public(String(drained.count)),
+        ])
+        // Sort canonical-ascending so drop-oldest + queue order are
+        // deterministic across runs (the bucket is an unordered Set).
+        let since = clock().addingTimeInterval(-Self.scanWindowSeconds)
+        let floor = config.backfillFloor
+        let scanSince = max(since, floor)
+        for handle in drained.sorted() {
+            mergePendingScan(
+                into: &working.pendingScans,
+                handle: handle,
+                since: scanSince)
+        }
+        switch await commitWorking(working) {
+        case .committed:
+            // Durably enqueued — the drained identifiers leave the
+            // cache's owed set, eligible for the next refresher persist.
+            await cache.confirmDrained(for: id)
+            return .ok
+        case .conflict:
+            // Not durable — return the drained identifiers so the next
+            // tick re-enqueues. The tick aborts (working is discarded).
+            await cache.returnInFlight(for: id)
+            _ = try? await loadOrFetchCursor(forceRefresh: true)
+            return .aborted
+        case .failed:
+            await cache.returnInFlight(for: id)
+            return .aborted
+        }
+    }
+
+    /// Merge identifier `handle` into a pendingScans list with
+    /// COVERAGE-DEDUP: at most one entry per handle, keeping the WIDER
+    /// window. A wider window (earlier `since`) resets progress to nil
+    /// so the larger range is re-walked; an equal-or-narrower window
+    /// leaves the existing entry (and its progress) untouched.
+    private func mergePendingScan(
+        into scans: inout [PendingScan],
+        handle: String,
+        since: Date
+    ) {
+        if let idx = scans.firstIndex(where: { $0.normalizedHandle == handle }) {
+            let existing = scans[idx]
+            if since < existing.since {
+                // Wider window: widen + reset progress to re-walk.
+                scans[idx] = PendingScan(
+                    normalizedHandle: handle,
+                    since: since,
+                    progressBelowRowID: nil)
+            }
+            // Equal-or-narrower: keep the existing entry + its progress.
+            return
+        }
+        var next = scans
+        next.append(PendingScan(normalizedHandle: handle, since: since, progressBelowRowID: nil))
+        // Bounded queue: drop oldest on overflow.
+        if next.count > MessagesCursor.pendingScansCap {
+            next.removeFirst(next.count - MessagesCursor.pendingScansCap)
+            logger.warning("messages tick: pending-scan cap reached; dropped oldest", metadata: [:])
+        }
+        scans = next
+    }
+
+    // MARK: - Phase B: execute pending scans
+
+    /// Execute the pending scans in `working.pendingScans` (resumable,
+    /// budget-bound). For each entry: membership-check against the known
+    /// set (drop unknown handles), walk one budget-limited page
+    /// descending from the entry's progress, publish, then either
+    /// advance the entry's progress (still queued) or dequeue it on
+    /// confirmed exhaustion. Re-commits the cursor after each entry's
+    /// progress/dequeue so a crash recovers from the persisted cursor.
+    private func runPendingScans(pool: DatabasePool, working: inout MessagesCursor) async {
+        guard !working.pendingScans.isEmpty else { return }
+        // Iterate by handle snapshot; mutate working.pendingScans in
+        // place as each entry advances or completes.
+        let handles = working.pendingScans.map(\.normalizedHandle)
+        var scanBudget = config.maxRowsPerTick
+        for handle in handles {
+            if scanBudget <= 0 { break }
+            guard let entry = working.pendingScans.first(where: { $0.normalizedHandle == handle }) else {
+                continue
+            }
+            // Membership check (R4): drop scans for handles not in the
+            // current known set — operator typo / removed contact.
+            let known = await cache.contains(handle)
+            if !known {
+                working.pendingScans.removeAll { $0.normalizedHandle == handle }
+                logger.warning("messages scan: handle not in known set; dropping", metadata: [
+                    "handle": .private(handle),
+                ])
+                if case .aborted = await commitAfterScanMutation(working) { return }
+                continue
+            }
+
+            let limit = min(scanBudget, MessagesPublisher.maxEventsPerBatch)
+            let page: MessagesScanPage
+            do {
+                page = try await pool.read { db in
+                    try MessagesScanReader.scanPage(
+                        db: db,
+                        canonicalHandle: handle,
+                        since: entry.since,
+                        progressBelowRowID: entry.progressBelowRowID,
+                        limit: limit)
+                }
+            } catch let dbError as DatabaseError where isFDAError(dbError) {
+                await markUnhealthy(reason: "fda_required")
+                return
+            } catch {
+                logger.warning("messages scan: read failed; holding entry", metadata: [
+                    "error": .private(String(describing: error)),
+                ])
+                continue
+            }
+
+            scanBudget -= page.rows.count
+
+            let publishItems = await filterAndShape(rows: page.rows, isBackfill: true)
+            let outcome = await publisher.publish(items: publishItems)
+
+            let confirmed: Bool
+            if publishItems.isEmpty {
+                confirmed = true
+            } else {
+                confirmed = outcome.rejected.isEmpty && outcome.unconfirmed == 0
+            }
+            if !confirmed {
+                // Publish failure: leave progress unchanged so the next
+                // tick retries from the same coordinate. Event-log dedup
+                // absorbs any re-emit.
+                logger.warning("messages scan: publish unconfirmed; holding progress", metadata: [
+                    "handle": .private(handle),
+                ])
+                continue
+            }
+
+            if page.exhausted {
+                // Final short page confirmed-published → dequeue.
+                working.pendingScans.removeAll { $0.normalizedHandle == handle }
+            } else if let lowest = page.lowestRowID {
+                // Advance progress; entry stays queued for the next tick.
+                if let idx = working.pendingScans.firstIndex(where: { $0.normalizedHandle == handle }) {
+                    working.pendingScans[idx] = PendingScan(
+                        normalizedHandle: handle,
+                        since: entry.since,
+                        progressBelowRowID: lowest)
+                }
+            }
+            if case .aborted = await commitAfterScanMutation(working) { return }
+        }
+    }
+
+    /// Commit `working` after a scan entry's progress/dequeue mutation.
+    /// A conflict refreshes + aborts the remaining scans this tick.
+    private func commitAfterScanMutation(_ working: MessagesCursor) async -> ScanEnqueueResult {
+        switch await commitWorking(working) {
+        case .committed:
+            return .ok
+        case .conflict:
+            _ = try? await loadOrFetchCursor(forceRefresh: true)
+            return .aborted
+        case .failed:
+            return .aborted
+        }
+    }
+
+    /// Automatic newly-known scans always use a 30-day window.
+    private static let scanWindowSeconds: TimeInterval = 30 * 24 * 60 * 60
 
     // MARK: - per-tick batch runners
 
