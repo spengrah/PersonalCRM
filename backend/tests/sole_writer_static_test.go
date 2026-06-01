@@ -64,6 +64,7 @@ var cadenceWritingSymbols = map[string]struct{}{
 	"UpdateContactCadenceUnconditional": {},
 	"UpdateContactBy":                   {},
 	"UpdateContactByTx":                 {},
+	"WriteContactDatesAfterDelete":      {},
 	// Include CreateContact + UpdateContact so a future regression
 	// that adds a cadence column to either query is caught. Selector
 	// matching alone would flag every service-layer wrapper caller;
@@ -117,6 +118,15 @@ var allowedCallSites = map[string]string{
 	"internal/repository/contact.go:UpdateContactResponseFieldsTx":     "legacy wrapper (no production callers post-cutover)",
 	"internal/repository/contact.go:UpdateContactMutualFields":         "legacy wrapper (no production callers post-cutover)",
 	"internal/repository/contact.go:UpdateContactMutualFieldsTx":       "legacy wrapper (no production callers post-cutover)",
+
+	// Removal-path recompute after soft-deleting a declined calendar
+	// interaction: surgical backward correction keyed on the deleted
+	// interaction's occurred_at, contact_by computed via
+	// cadence.CalculateContactBy to match the forward writer; distinct
+	// from CadenceUpdater's additive forward path. recomputeContactDatesAfterDelete
+	// is the shared body that calls WriteContactDatesAfterDelete; the two
+	// exported wrappers (RecomputeContactDatesAfterDelete[Tx]) delegate to it.
+	"internal/repository/contact.go:recomputeContactDatesAfterDelete": "removal-path recompute (declined calendar interaction); distinct from CadenceUpdater forward path",
 }
 
 // TestCadenceSoleWriter_OnlyAllowedFilesCallCadenceSQL walks the Go AST

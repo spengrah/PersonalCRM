@@ -398,6 +398,80 @@ func (r *CalendarEventRepository) DeleteEventsByAccount(ctx context.Context, goo
 	return r.queries.DeleteEventsByAccount(ctx, googleAccountID)
 }
 
+// DeleteByGcalID hard-deletes the stored calendar_event row keyed by its
+// Google identity triple. Non-tx variant for completeness / future callers;
+// the decline remove branch uses DeleteByGcalIDTx. calendar_event has no
+// deleted_at column — removal is a hard DELETE.
+func (r *CalendarEventRepository) DeleteByGcalID(ctx context.Context, gcalEventID, gcalCalendarID, googleAccountID string) error {
+	return r.queries.DeleteCalendarEventByGcalID(ctx, db.DeleteCalendarEventByGcalIDParams{
+		GcalEventID:     gcalEventID,
+		GcalCalendarID:  gcalCalendarID,
+		GoogleAccountID: googleAccountID,
+	})
+}
+
+// DeleteByGcalIDTx is the tx-bound variant of DeleteByGcalID. Used by the
+// cutover decline remove branch so the delete commits atomically with the
+// calendar.declined publishes (publish-before-delete in one tx).
+func (r *CalendarEventRepository) DeleteByGcalIDTx(ctx context.Context, tx pgx.Tx, gcalEventID, gcalCalendarID, googleAccountID string) error {
+	return db.New(tx).DeleteCalendarEventByGcalID(ctx, db.DeleteCalendarEventByGcalIDParams{
+		GcalEventID:     gcalEventID,
+		GcalCalendarID:  gcalCalendarID,
+		GoogleAccountID: googleAccountID,
+	})
+}
+
+// MarkCancelledByGcalID marks the stored event cancelled (keyed by its
+// Google identity triple) instead of deleting it. Used by the off-mode
+// deferral branch of the decline remove path when the event bus is
+// unavailable: status='cancelled' excludes the row from re-firing
+// calendar.attended and from contact-facing reads without losing the row
+// (and any already-recorded interaction's only cleanup handle).
+func (r *CalendarEventRepository) MarkCancelledByGcalID(ctx context.Context, gcalEventID, gcalCalendarID, googleAccountID string) error {
+	return r.queries.MarkCalendarEventCancelledByGcalID(ctx, db.MarkCalendarEventCancelledByGcalIDParams{
+		GcalEventID:     gcalEventID,
+		GcalCalendarID:  gcalCalendarID,
+		GoogleAccountID: googleAccountID,
+	})
+}
+
+// GetByIDForShareTx is a locking read of a calendar_event by UUID inside
+// the caller's tx (SELECT ... FOR SHARE). Used by the InteractionRecorder
+// calendar.attended branch to serialize against a concurrent decline
+// DELETE on the same row: the FOR SHARE lock is held until the attended tx
+// commits, so an interleaving decline DELETE either blocks (attended
+// inserts first) or has already committed (this returns db.ErrNotFound and
+// the attended insert is skipped). Returns db.ErrNotFound when no row.
+func (r *CalendarEventRepository) GetByIDForShareTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*CalendarEvent, error) {
+	dbEvent, err := db.New(tx).GetCalendarEventByIDForShare(ctx, uuidToPgUUID(id))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	event := convertDbCalendarEvent(dbEvent)
+	return &event, nil
+}
+
+// LockExistsByIDTx reports whether a calendar_event with the given UUID
+// exists, taking a FOR SHARE lock on it inside the caller's tx. Thin
+// adapter over GetByIDForShareTx that satisfies the InteractionRecorder's
+// narrow calendarEventLocker interface (it only needs existence, not the
+// row). Returns (false, nil) for a missing row, (true, nil) when the row
+// is present (lock held until the tx commits), and (false, err) on any
+// other error.
+func (r *CalendarEventRepository) LockExistsByIDTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (bool, error) {
+	_, err := r.GetByIDForShareTx(ctx, tx, id)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 // FindLinkageCandidatesTx returns candidate calendar_event rows for the
 // meeting_note.recorded inline handler's linkage-detection algorithm.
 // Filters cancelled events and orders by start_time ASC. Calendar is
