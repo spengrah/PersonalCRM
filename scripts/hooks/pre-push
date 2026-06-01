@@ -195,6 +195,7 @@ save_test_marker() {
 # skip. Blocks push on failure; skips with a warning (exit 0) if Xcode/XCTest is
 # unavailable — the intended escape hatch, not a push bypass.
 check_swift() {
+  cd "$PROJECT_ROOT"  # run_lint's eval'd "cd frontend" leaks into this shell; restore root
   local enabled
   enabled=$(jq -r '.swift.enabled // false' "$CONFIG_FILE")
   if [[ "$enabled" != "true" ]]; then
