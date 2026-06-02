@@ -1151,6 +1151,17 @@ func NewFakeGmailFetcherFactoryForTest(funcs FakeGmailFetcherFuncs) func(ctx con
 	}
 }
 
+// NewFakeGmailFetcherFactoryByAccountForTest returns a fetcher factory that
+// picks the FakeGmailFetcherFuncs per accountID, so a cross-package test can
+// make one account's fetcher fail while another succeeds (the partial-failure
+// scan path) without reaching the unexported gmailFetcher. Production code must
+// NOT call this.
+func NewFakeGmailFetcherFactoryByAccountForTest(pick func(accountID string) FakeGmailFetcherFuncs) func(ctx context.Context, accountID string) (gmailFetcher, error) {
+	return func(_ context.Context, accountID string) (gmailFetcher, error) {
+		return &fakeGmailFetcher{funcs: pick(accountID)}, nil
+	}
+}
+
 // EncodeBase64URLForTest exposes the base64url encoding used for message body
 // data, so cross-package tests can build *gmail.Message bodies the provider
 // will decode. Production code must NOT call this.

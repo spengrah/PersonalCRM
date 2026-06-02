@@ -1,9 +1,9 @@
-// End-to-end coverage for GmailRematchHandler (Gmail integration phase 4).
+// End-to-end coverage for GmailRematchHandler.
 // These tests drive the REAL handler against a REAL events.Bus + database.Pool
 // and the REAL EmailInteractionConsumer (so derived interactions are asserted,
-// not just published events), with a FAKE gmailFetcher + injected me-set + a
-// stub accountLister (no OAuth touched). They prove the new-address backfill
-// seam:
+// not just published events), with a FAKE gmailFetcher + injected me-set + the
+// REAL SyncRepository seeded with enabled email sync states (no OAuth touched).
+// They prove the new-address backfill seam:
 //   - a new address scan publishes email.* events that the consumer turns into
 //     interactions with the right direction + cadence columns;
 //   - match-only (an unknown participant never creates a contact);
@@ -13,7 +13,19 @@
 //     provenance merges both accounts);
 //   - the rematch scan creates NO external_sync_state row (no cursor rewind);
 //   - the scan query floors at the backfill since-date and uses the
-//     single-address OR-group shape.
+//     single-address OR-group shape;
+//   - only ENABLED, non-disabled email accounts are scanned (no enabled state
+//     → no-op); any enabled-account scan failure surfaces an error;
+//   - each enabled account is scanned with its OWN metadata["backfill_since"].
+//
+// SHARED-DB CAUTION: ListEnabledSyncStates returns ALL enabled email states in
+// the shared personal_crm_test DB, so the handler scans every enabled email
+// account, not just this test's. Mitigations: each scenario seeds a per-test
+// random account id, the fake fetcher is account-agnostic (so a stray enabled
+// account only re-scans the same fake messages, collapsed by comms_message
+// upsert dedup keyed by (externalID, contactID)), every seeded state is
+// hard-deleted in t.Cleanup, and assertions are scoped to the test's OWN
+// freshly-created contact's rows — never a global state count.
 //
 // Addresses are placeholders; timestamps are accelerated.GetCurrentTime()-safe
 // (the localNoonAnchor helper from the email suite); all assertions go through
@@ -22,6 +34,7 @@ package tests
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strconv"
 	"strings"
@@ -42,8 +55,7 @@ import (
 )
 
 // Compile-time proof that GmailRematchHandler satisfies the rematch handler
-// interface phase 5 will register it under. The handler is unwired in phase 4,
-// so this is the only build site exercising the interface boundary until then.
+// interface it is registered under.
 var _ service.RematchHandler = (*google.GmailRematchHandler)(nil)
 
 // gmailRematchEnv bundles the real handler + provider + email consumer harness.
@@ -52,7 +64,7 @@ type gmailRematchEnv struct {
 	database        *db.Database
 	provider        *google.GmailSyncProvider
 	handler         *google.GmailRematchHandler
-	accounts        *stubAccountLister
+	accountIDs      []string
 	bus             *events.Bus
 	commsRepo       *repository.CommsMessageRepository
 	contactRepo     *repository.ContactRepository
@@ -63,20 +75,9 @@ type gmailRematchEnv struct {
 	syncRepo        *repository.SyncRepository
 }
 
-// stubAccountLister satisfies google's accountLister seam with canned account
-// ids — no OAuth. Each id becomes an OAuthCredentialStatus with AccountID set.
-type stubAccountLister struct {
-	accountIDs []string
-}
-
-func (s *stubAccountLister) ListAccounts(_ context.Context) ([]repository.OAuthCredentialStatus, error) {
-	out := make([]repository.OAuthCredentialStatus, 0, len(s.accountIDs))
-	for _, id := range s.accountIDs {
-		out = append(out, repository.OAuthCredentialStatus{AccountID: id})
-	}
-	return out, nil
-}
-
+// newGmailRematchEnv builds the harness and seeds an ENABLED email sync state
+// (backfill_since=2026-01-01) for each accountID so the handler's enablement
+// gate scans them. Pass nil/empty to seed nothing (the no-op gate test).
 func newGmailRematchEnv(t *testing.T, accountIDs []string) *gmailRematchEnv {
 	t.Helper()
 	if testing.Short() {
@@ -111,15 +112,14 @@ func newGmailRematchEnv(t *testing.T, accountIDs []string) *gmailRematchEnv {
 	bus, _ := setupTestEventBusForEmail(t, ctx, database, contactService)
 
 	provider := google.NewGmailSyncProvider(nil, commsRepo, bus, database.Pool)
-	accounts := &stubAccountLister{accountIDs: accountIDs}
-	handler := google.NewGmailRematchHandler(provider, accounts, commsRepo)
+	handler := google.NewGmailRematchHandler(provider, syncRepo, commsRepo)
 
-	return &gmailRematchEnv{
+	env := &gmailRematchEnv{
 		ctx:             ctx,
 		database:        database,
 		provider:        provider,
 		handler:         handler,
-		accounts:        accounts,
+		accountIDs:      accountIDs,
 		bus:             bus,
 		commsRepo:       commsRepo,
 		contactRepo:     contactRepo,
@@ -129,6 +129,33 @@ func newGmailRematchEnv(t *testing.T, accountIDs []string) *gmailRematchEnv {
 		eventRepo:       eventRepo,
 		syncRepo:        syncRepo,
 	}
+
+	// Seed an enabled email sync state per account so the handler's enablement
+	// gate scans them (default backfill_since).
+	for _, id := range accountIDs {
+		env.seedEnabledEmailState(t, id, "2026-01-01")
+	}
+	return env
+}
+
+// seedEnabledEmailState creates an ENABLED (email, accountID) sync state with
+// metadata["backfill_since"]=backfillSince via the repository (sqlc-backed, no
+// raw SQL) and registers a hard-delete cleanup so the shared test DB does not
+// accumulate enabled email states that pollute other tests.
+func (e *gmailRematchEnv) seedEnabledEmailState(t *testing.T, accountID, backfillSince string) {
+	t.Helper()
+	acct := accountID
+	_, err := e.syncRepo.CreateSyncState(e.ctx, repository.CreateSyncStateRequest{
+		Source:    "email",
+		AccountID: &acct,
+		Enabled:   true,
+		Strategy:  repository.SyncStrategyContactDriven,
+		Metadata:  map[string]any{"backfill_since": backfillSince},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = e.syncRepo.DeleteSyncStatesByAccountID(e.ctx, accountID)
+	})
 }
 
 func (e *gmailRematchEnv) newContactWithEmail(t *testing.T, name, email string) *repository.Contact {
@@ -256,7 +283,7 @@ func (e *gmailRematchEnv) waitForLastContacted(t *testing.T, contactID uuid.UUID
 func TestGmailRematch_NewAddressScan_DerivesInteractions(t *testing.T) {
 	e := newGmailRematchEnv(t, []string{"acct-" + uuid.NewString()[:8] + "@example.com"})
 	suffix := uuid.NewString()[:8]
-	me := e.accounts.accountIDs[0]
+	me := e.accountIDs[0]
 	addrA := "a-" + suffix + "@example.com"
 	contactA := e.newContactWithEmail(t, "Contact A "+suffix, addrA)
 
@@ -304,7 +331,7 @@ func TestGmailRematch_NewAddressScan_DerivesInteractions(t *testing.T) {
 func TestGmailRematch_MatchOnly_NoContactCreated(t *testing.T) {
 	e := newGmailRematchEnv(t, []string{"acct-" + uuid.NewString()[:8] + "@example.com"})
 	suffix := uuid.NewString()[:8]
-	me := e.accounts.accountIDs[0]
+	me := e.accountIDs[0]
 	addrA := "a-" + suffix + "@example.com"
 	unknown := "unknown-" + suffix + "@example.com"
 	contactA := e.newContactWithEmail(t, "Contact A "+suffix, addrA)
@@ -334,7 +361,7 @@ func TestGmailRematch_MatchOnly_NoContactCreated(t *testing.T) {
 func TestGmailRematch_FanOut_SharedAddress(t *testing.T) {
 	e := newGmailRematchEnv(t, []string{"acct-" + uuid.NewString()[:8] + "@example.com"})
 	suffix := uuid.NewString()[:8]
-	me := e.accounts.accountIDs[0]
+	me := e.accountIDs[0]
 	shared := "shared-" + suffix + "@example.com"
 	c1 := e.newContactWithEmail(t, "Contact One "+suffix, shared)
 	c2 := e.newContactWithEmail(t, "Contact Two "+suffix, shared)
@@ -414,6 +441,11 @@ func TestGmailRematch_MultipleAccounts_PerAccountSeen(t *testing.T) {
 
 // --- Scenario 5: no cursor side-effects -------------------------------------
 
+// The rematch reads the enabled email sync state (the enablement gate) but must
+// never WRITE one: no cursor advance, no last_sync/last_successful_sync bump
+// (spec §3.3 — steady-state cursors are not rewound). The state is seeded by
+// the harness (the gate requires it); we assert its cursor/sync fields stay
+// untouched after a rematch that DID scan + persist rows.
 func TestGmailRematch_NoCursorSideEffects(t *testing.T) {
 	account := "acct-" + uuid.NewString()[:8] + "@example.com"
 	e := newGmailRematchEnv(t, []string{account})
@@ -426,12 +458,17 @@ func TestGmailRematch_NoCursorSideEffects(t *testing.T) {
 	msg := gmailMsg("g-nocur", "thr", addrA, []string{account}, nil, nil, "S", "body", "<"+ext+">", localNoonAnchor().UnixMilli())
 	e.inject(newRecordingMessageStore([]*gmailapi.Message{msg}), map[string]struct{}{account: {}})
 
-	_, err := e.handler.Rematch(e.ctx, contactA.ID, addrA)
+	matched, err := e.handler.Rematch(e.ctx, contactA.ID, addrA)
 	require.NoError(t, err)
+	require.Equal(t, 1, matched, "the rematch did scan and persist a row")
 
-	// The rematch scan must NOT have created an external_sync_state row.
-	_, err = e.syncRepo.GetSyncStateBySource(e.ctx, "email", &account)
-	require.ErrorIs(t, err, db.ErrNotFound, "rematch must not create/touch an external_sync_state cursor row")
+	// The seeded state's cursor + sync timestamps are untouched: the rematch
+	// does NOT advance or rewind the steady-state cursor.
+	st, err := e.syncRepo.GetSyncStateBySource(e.ctx, "email", &account)
+	require.NoError(t, err)
+	require.Nil(t, st.SyncCursor, "rematch must not write a cursor")
+	require.Nil(t, st.LastSyncAt, "rematch must not bump last_sync_at")
+	require.Nil(t, st.LastSuccessfulSyncAt, "rematch must not bump last_successful_sync_at")
 }
 
 // --- Scenario 6: backfill floor honored + single-address OR-group -----------
@@ -464,4 +501,198 @@ func TestGmailRematch_BackfillFloorAndQueryShape(t *testing.T) {
 		// One address → exactly one OR-group, so no second group separator.
 		require.False(t, strings.Contains(q, ") OR ("), "single address yields exactly one OR-group")
 	}
+}
+
+// --- Scenario 7: enablement gate — no enabled email state → no-op -----------
+
+// TestGmailRematch_NoEnabledState_NoOp proves the P0 enablement gate: when the
+// account has no enabled, non-disabled email sync state, the rematch is a no-op
+// — it never builds a fetcher (so the scan never runs) and writes nothing. Two
+// sub-cases: (a) no state at all, (b) a status='disabled' state.
+func TestGmailRematch_NoEnabledState_NoOp(t *testing.T) {
+	t.Run("no_state_at_all", func(t *testing.T) {
+		// Seed NO email state for this env (nil account list).
+		e := newGmailRematchEnv(t, nil)
+		suffix := uuid.NewString()[:8]
+		me := "acct-" + suffix + "@example.com"
+		addrA := "a-" + suffix + "@example.com"
+		contactA := e.newContactWithEmail(t, "Contact A "+suffix, addrA)
+
+		// A fetcher that WOULD return a qualifying message if it were ever
+		// consulted — the gate must prevent that.
+		msg := gmailMsg("g-gate-a", "thr", addrA, []string{me}, nil, nil, "S", "body", "<gate-a-"+suffix+"@example.com>", localNoonAnchor().UnixMilli())
+		store := newRecordingMessageStore([]*gmailapi.Message{msg})
+		e.inject(store, map[string]struct{}{me: {}})
+
+		matched, err := e.handler.Rematch(e.ctx, contactA.ID, addrA)
+		require.NoError(t, err)
+		require.Equal(t, 0, matched, "no enabled email state → no matches")
+		require.Empty(t, store.queries, "fetcher must never be consulted (gate ran before any scan)")
+		require.Empty(t, store.getCalls, "no message body fetched")
+
+		rows, err := e.commsRepo.ListByContact(e.ctx, contactA.ID)
+		require.NoError(t, err)
+		require.Empty(t, rows, "no qualifying rows written for the contact")
+	})
+
+	t.Run("disabled_state", func(t *testing.T) {
+		// Seed an email state for this account, then DISABLE it via the
+		// enable/disable path. ListEnabledSyncStates filters status='disabled'.
+		e := newGmailRematchEnv(t, nil)
+		suffix := uuid.NewString()[:8]
+		me := "acct-" + suffix + "@example.com"
+		addrA := "a-" + suffix + "@example.com"
+		contactA := e.newContactWithEmail(t, "Contact A "+suffix, addrA)
+
+		acct := me
+		created, err := e.syncRepo.CreateSyncState(e.ctx, repository.CreateSyncStateRequest{
+			Source:    "email",
+			AccountID: &acct,
+			Enabled:   true,
+			Status:    repository.SyncStatusDisabled,
+			Strategy:  repository.SyncStrategyContactDriven,
+			Metadata:  map[string]any{"backfill_since": "2026-01-01"},
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = e.syncRepo.DeleteSyncStatesByAccountID(e.ctx, acct) })
+
+		// Belt-and-suspenders: also flip enabled=false so neither gate clause
+		// admits it (ListEnabledSyncStates requires enabled=TRUE AND
+		// status!='disabled').
+		_, err = e.syncRepo.UpdateSyncStateEnabled(e.ctx, created.ID, false)
+		require.NoError(t, err)
+
+		msg := gmailMsg("g-gate-d", "thr", addrA, []string{me}, nil, nil, "S", "body", "<gate-d-"+suffix+"@example.com>", localNoonAnchor().UnixMilli())
+		store := newRecordingMessageStore([]*gmailapi.Message{msg})
+		e.inject(store, map[string]struct{}{me: {}})
+
+		matched, err := e.handler.Rematch(e.ctx, contactA.ID, addrA)
+		require.NoError(t, err)
+		require.Equal(t, 0, matched, "disabled email state → no matches")
+		require.Empty(t, store.queries, "disabled account must not be scanned")
+
+		rows, err := e.commsRepo.ListByContact(e.ctx, contactA.ID)
+		require.NoError(t, err)
+		require.Empty(t, rows, "no qualifying rows written for the contact")
+	})
+}
+
+// --- Scenario 8: partial failure → returns error (River retries) ------------
+
+// TestGmailRematch_PartialFailure_ReturnsError proves the P1 fail-on-any-error
+// behavior: two enabled accounts X and Y, X's scan errors, Y's succeeds. The
+// handler returns a non-nil error (so River retries the whole idempotent job)
+// while preserving Y's partial progress in `matched`. The error carries the
+// failing OWN-mailbox account id RAW (operator triage) and must NOT contain the
+// third-party contact address being rematched.
+func TestGmailRematch_PartialFailure_ReturnsError(t *testing.T) {
+	suffix := uuid.NewString()[:8]
+	accountX := "x-" + suffix + "@example.com"
+	accountY := "y-" + suffix + "@example.com"
+	e := newGmailRematchEnv(t, []string{accountX, accountY})
+	addrA := "a-" + suffix + "@example.com"
+	contactA := e.newContactWithEmail(t, "Contact A "+suffix, addrA)
+
+	ext := "pf-" + suffix + "@example.com"
+	e.cleanupEvents(t, ext)
+	msg := gmailMsg("g-pf", "thr", addrA, []string{accountY}, nil, nil, "S", "body", "<"+ext+">", localNoonAnchor().UnixMilli())
+
+	// Account-keyed fetcher factory: account X always fails its list call;
+	// account Y returns the qualifying message and records its query.
+	yStore := newRecordingMessageStore([]*gmailapi.Message{msg})
+	listErr := errors.New("simulated gmail list outage")
+	e.provider.SetFetcherFactoryForTest(google.NewFakeGmailFetcherFactoryByAccountForTest(func(accountID string) google.FakeGmailFetcherFuncs {
+		if accountID == accountX {
+			return google.FakeGmailFetcherFuncs{
+				ListMessageIDs: func(_ context.Context, _, _ string) ([]google.GmailMessageRefForTest, string, error) {
+					return nil, "", listErr
+				},
+				GetMessage: func(_ context.Context, _ string) (*gmailapi.Message, error) { return nil, nil },
+			}
+		}
+		return yStore.fetcherFuncs()
+	}))
+	e.provider.SetMeSetForTest(map[string]struct{}{accountX: {}, accountY: {}})
+
+	matched, err := e.handler.Rematch(e.ctx, contactA.ID, addrA)
+	require.Error(t, err, "any enabled-account scan failure must surface an error so River retries")
+	require.Equal(t, 1, matched, "account Y's successful row is still counted (partial progress preserved)")
+
+	// PII posture: own-mailbox account id RAW for triage, NO third-party address.
+	require.Contains(t, err.Error(), accountX, "error names the failing own-mailbox account id (raw, for triage)")
+	require.NotContains(t, err.Error(), addrA, "error must NOT leak the third-party contact address")
+
+	// Account Y's row was persisted despite X's failure.
+	rows, err := e.commsRepo.ListByContact(e.ctx, contactA.ID)
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "account Y's qualifying row persisted")
+}
+
+// --- Scenario 9: per-account backfill_since honored -------------------------
+
+// TestGmailRematch_PerAccountBackfillSince proves the P2 fix: each enabled
+// account is scanned with its OWN metadata["backfill_since"], not a hardcoded
+// default. The inverse of TestGmailRematch_BackfillFloorAndQueryShape.
+func TestGmailRematch_PerAccountBackfillSince(t *testing.T) {
+	t.Run("explicit_backfill_since", func(t *testing.T) {
+		// Seed NO default state; create one with an explicit non-default floor.
+		e := newGmailRematchEnv(t, nil)
+		suffix := uuid.NewString()[:8]
+		account := "acct-" + suffix + "@example.com"
+		e.seedEnabledEmailState(t, account, "2026-03-15")
+
+		addrA := "a-" + suffix + "@example.com"
+		contactA := e.newContactWithEmail(t, "Contact A "+suffix, addrA)
+		ext := "bf-" + suffix + "@example.com"
+		e.cleanupEvents(t, ext)
+		msg := gmailMsg("g-bf", "thr", addrA, []string{account}, nil, nil, "S", "body", "<"+ext+">", localNoonAnchor().UnixMilli())
+		store := newRecordingMessageStore([]*gmailapi.Message{msg})
+		e.inject(store, map[string]struct{}{account: {}})
+
+		_, err := e.handler.Rematch(e.ctx, contactA.ID, addrA)
+		require.NoError(t, err)
+
+		require.NotEmpty(t, store.queries, "the scan must have issued at least one list query")
+		wantEpoch := time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC).Unix()
+		defaultEpoch := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Unix()
+		for _, q := range store.queries {
+			require.Contains(t, q, "after:"+strconv.FormatInt(wantEpoch, 10), "query floors at the per-account backfill_since")
+			require.NotContains(t, q, "after:"+strconv.FormatInt(defaultEpoch, 10), "must NOT use the hardcoded default floor")
+		}
+	})
+
+	t.Run("absent_backfill_since_falls_back_to_default", func(t *testing.T) {
+		// An enabled state with empty metadata falls back to 2026-01-01 through
+		// the new per-state wiring (proves backfillSinceEpoch's default path).
+		e := newGmailRematchEnv(t, nil)
+		suffix := uuid.NewString()[:8]
+		account := "acct-" + suffix + "@example.com"
+		acct := account
+		_, err := e.syncRepo.CreateSyncState(e.ctx, repository.CreateSyncStateRequest{
+			Source:    "email",
+			AccountID: &acct,
+			Enabled:   true,
+			Strategy:  repository.SyncStrategyContactDriven,
+			// No metadata → no backfill_since key.
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = e.syncRepo.DeleteSyncStatesByAccountID(e.ctx, acct) })
+
+		addrA := "a-" + suffix + "@example.com"
+		contactA := e.newContactWithEmail(t, "Contact A "+suffix, addrA)
+		ext := "bfd-" + suffix + "@example.com"
+		e.cleanupEvents(t, ext)
+		msg := gmailMsg("g-bfd", "thr", addrA, []string{account}, nil, nil, "S", "body", "<"+ext+">", localNoonAnchor().UnixMilli())
+		store := newRecordingMessageStore([]*gmailapi.Message{msg})
+		e.inject(store, map[string]struct{}{account: {}})
+
+		_, err = e.handler.Rematch(e.ctx, contactA.ID, addrA)
+		require.NoError(t, err)
+
+		require.NotEmpty(t, store.queries, "the scan must have issued at least one list query")
+		defaultEpoch := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Unix()
+		for _, q := range store.queries {
+			require.Contains(t, q, "after:"+strconv.FormatInt(defaultEpoch, 10), "absent backfill_since falls back to the default floor")
+		}
+	})
 }
