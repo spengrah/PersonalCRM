@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/url"
@@ -11,6 +12,7 @@ import (
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/google"
+	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/todoist"
 
 	"github.com/gin-gonic/gin"
@@ -25,6 +27,14 @@ type OAuthHandler struct {
 	stateStore   map[string]time.Time
 	stateStoreMu sync.RWMutex
 	frontendURL  string
+	// emailStateReconciler, when set, is invoked after a successful Google
+	// connect so a newly-connected account gets its email sync state without
+	// waiting for a reboot. Nil-default (off-mode / no-Google builds / when the
+	// event-bus interaction mode is off): the callback proceeds unchanged.
+	// Wired in main.go (cutover only) as a closure over
+	// SyncService.ReconcileEmailSyncStates, keeping the handler decoupled from
+	// the service package (no import cycle).
+	emailStateReconciler func(context.Context) error
 }
 
 // NewOAuthHandler creates a new OAuth handler
@@ -44,6 +54,13 @@ func NewOAuthHandler(googleOAuth google.OAuthServiceInterface, frontendURL strin
 // SetTodoistOAuth sets the Todoist OAuth service (allows adding after construction)
 func (h *OAuthHandler) SetTodoistOAuth(todoistOAuth todoist.OAuthServiceInterface) {
 	h.todoistOAuth = todoistOAuth
+}
+
+// SetEmailStateReconciler wires the callback invoked after a successful Google
+// connect to reconcile email sync states for the newly-connected account.
+// Nil-default; only populated in cutover mode (see main.go).
+func (h *OAuthHandler) SetEmailStateReconciler(reconcile func(context.Context) error) {
+	h.emailStateReconciler = reconcile
 }
 
 // HasTodoistOAuth returns true if Todoist OAuth is configured
@@ -179,6 +196,16 @@ func (h *OAuthHandler) GoogleCallback(c *gin.Context) {
 		params.Set("message", "exchange_failed")
 		c.Redirect(http.StatusFound, redirectBase+"?"+params.Encode())
 		return
+	}
+
+	// Reconcile email sync states so the newly-connected account gets its
+	// (store-only, NO-UI) email sweep without waiting for a reboot. Idempotent,
+	// so a re-connect of an already-reconciled account is a no-op. Non-fatal:
+	// the account is connected regardless; boot / the next connect retries.
+	if h.emailStateReconciler != nil {
+		if err := h.emailStateReconciler(c.Request.Context()); err != nil {
+			logger.Warn().Err(err).Msg("email sync reconciliation after Google connect failed (non-fatal)")
+		}
 	}
 
 	params := url.Values{}
