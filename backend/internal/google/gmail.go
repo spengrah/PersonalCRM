@@ -313,57 +313,17 @@ func (p *GmailSyncProvider) Sync(
 	}
 	chunks := buildORChunks(addresses, afterEpoch)
 
-	result := &sync.SyncResult{}
-	seen := make(map[string]struct{})
-	var maxInternalDateSecs int64
-	fetchedAny := false
-
-	for _, query := range chunks {
-		pageToken := ""
-		for {
-			refs, next, err := fetcher.ListMessageIDs(ctx, query, pageToken)
-			if err != nil {
-				// Hard failure: abort the sweep, return the prior cursor
-				// unchanged so the whole after:<prior> window re-runs.
-				return p.failResult(priorCursor), fmt.Errorf("list message ids: %w", err)
-			}
-			for _, ref := range refs {
-				if _, dup := seen[ref.ID]; dup {
-					continue // cross-chunk dedup: body already fetched this sweep
-				}
-				seen[ref.ID] = struct{}{}
-				fetchedAny = true
-
-				msg, err := fetcher.GetMessage(ctx, ref.ID)
-				if err != nil {
-					return p.failResult(priorCursor), fmt.Errorf("get message %s: %w", ref.ID, err)
-				}
-				rows, err := p.processMessage(ctx, msg, accountID, knownMap, meSet)
-				if err != nil {
-					return p.failResult(priorCursor), fmt.Errorf("process message %s: %w", ref.ID, err)
-				}
-				result.ItemsProcessed++
-
-				// Processed (even if zero qualifying rows) contributes its
-				// internalDate to the cursor advance.
-				if secs := msg.InternalDate / 1000; secs > maxInternalDateSecs {
-					maxInternalDateSecs = secs
-				}
-
-				for _, row := range rows {
-					if err := p.persistRow(ctx, row); err != nil {
-						return p.failResult(priorCursor), fmt.Errorf("persist row for message %s: %w", ref.ID, err)
-					}
-					result.ItemsMatched++
-				}
-			}
-			pageToken = next
-			if pageToken == "" {
-				break
-			}
-		}
+	processed, matched, maxInternalDateSecs, fetchedAny, err := p.scanChunks(ctx, fetcher, chunks, accountID, knownMap, meSet)
+	if err != nil {
+		// Hard failure: abort the sweep, return the prior cursor unchanged so
+		// the whole after:<prior> window re-runs next tick.
+		return p.failResult(priorCursor), fmt.Errorf("scan chunks: %w", err)
 	}
 
+	result := &sync.SyncResult{
+		ItemsProcessed: processed,
+		ItemsMatched:   matched,
+	}
 	result.NewCursor = computeNewCursor(fetchedAny, maxInternalDateSecs, priorCursorSecs, priorCursor, afterEpoch)
 
 	logger.Info().
@@ -375,6 +335,119 @@ func (p *GmailSyncProvider) Sync(
 		Msg("Gmail sync completed")
 
 	return result, nil
+}
+
+// scanChunks runs the fetch → per-call `seen` cross-chunk dedup → GetMessage →
+// processMessage → persistRow inner loop for one account against the given
+// chunk queries. It owns NEITHER cursor math NOR external_sync_state NOR
+// failResult — it returns the RAW error to the caller, which applies its own
+// failure semantics (Sync wraps it with failResult + cursor; ScanIdentifier
+// returns it directly).
+//
+// The `seen` set is created fresh INSIDE this call — a per-account, per-sweep
+// invariant (spec §3.1). Callers MUST NOT hoist it: a `seen` shared across
+// accounts would skip the same Message-ID in account B and defeat the
+// cross-account provenance merge.
+func (p *GmailSyncProvider) scanChunks(
+	ctx context.Context,
+	fetcher gmailFetcher,
+	chunks []string,
+	accountID string,
+	knownMap map[string][]uuid.UUID,
+	meSet map[string]struct{},
+) (processed, matched int, maxInternalDateSecs int64, fetchedAny bool, err error) {
+	seen := make(map[string]struct{})
+	for _, query := range chunks {
+		pageToken := ""
+		for {
+			refs, next, listErr := fetcher.ListMessageIDs(ctx, query, pageToken)
+			if listErr != nil {
+				return processed, matched, maxInternalDateSecs, fetchedAny, fmt.Errorf("list message ids: %w", listErr)
+			}
+			for _, ref := range refs {
+				if _, dup := seen[ref.ID]; dup {
+					continue // cross-chunk dedup: body already fetched this sweep
+				}
+				seen[ref.ID] = struct{}{}
+				fetchedAny = true
+
+				msg, getErr := fetcher.GetMessage(ctx, ref.ID)
+				if getErr != nil {
+					return processed, matched, maxInternalDateSecs, fetchedAny, fmt.Errorf("get message %s: %w", ref.ID, getErr)
+				}
+				rows, procErr := p.processMessage(ctx, msg, accountID, knownMap, meSet)
+				if procErr != nil {
+					return processed, matched, maxInternalDateSecs, fetchedAny, fmt.Errorf("process message %s: %w", ref.ID, procErr)
+				}
+				processed++
+
+				// Processed (even if zero qualifying rows) contributes its
+				// internalDate to the cursor advance.
+				if secs := msg.InternalDate / 1000; secs > maxInternalDateSecs {
+					maxInternalDateSecs = secs
+				}
+
+				for _, row := range rows {
+					if perr := p.persistRow(ctx, row); perr != nil {
+						return processed, matched, maxInternalDateSecs, fetchedAny, fmt.Errorf("persist row for message %s: %w", ref.ID, perr)
+					}
+					matched++
+				}
+			}
+			pageToken = next
+			if pageToken == "" {
+				break
+			}
+		}
+	}
+	return processed, matched, maxInternalDateSecs, fetchedAny, nil
+}
+
+// ScanIdentifier runs a one-shot, identifier-scoped historical Gmail scan for a
+// SINGLE normalized address against ONE connected account, reusing the
+// steady-state Sync pipeline (build chunk → list → per-sweep seen dedup →
+// GetMessage → processMessage → persistRow). It is the backfill seam for
+// GmailRematchHandler: it publishes email.received/sent + upserts comms_message
+// exactly as Sync does, but does NOT read or write external_sync_state
+// (steady-state cursors are not rewound — spec §3.3). Returns the number of
+// qualifying (message, contact) rows persisted.
+func (p *GmailSyncProvider) ScanIdentifier(
+	ctx context.Context,
+	accountID, addrNormalized string,
+	knownMap map[string][]uuid.UUID,
+	meSet map[string]struct{},
+	afterEpoch int64,
+) (matched int, err error) {
+	if p.bus == nil || p.pool == nil {
+		return 0, fmt.Errorf("gmail provider requires event bus and pool")
+	}
+
+	// A single address yields one OR-group → one chunk (or zero chunks if the
+	// address is sanitized away, e.g. malformed — nothing to scan).
+	chunks := buildORChunks([]string{addrNormalized}, afterEpoch)
+	if len(chunks) == 0 {
+		return 0, nil
+	}
+
+	fetcher, err := p.newFetcher(ctx, accountID)
+	if err != nil {
+		return 0, fmt.Errorf("build gmail fetcher: %w", err)
+	}
+
+	// scanChunks creates its own per-account `seen` set; no cursor math here.
+	_, matched, _, _, err = p.scanChunks(ctx, fetcher, chunks, accountID, knownMap, meSet)
+	if err != nil {
+		return matched, fmt.Errorf("scan identifier: %w", err)
+	}
+	return matched, nil
+}
+
+// MeSet builds the "me" set (the normalized address of every connected
+// account) via the provider's me-set factory. Exported so the rematch handler
+// can reuse the same seam tests override with SetMeSetForTest, routing an
+// injected me-set through with zero real OAuth.
+func (p *GmailSyncProvider) MeSet(ctx context.Context) (map[string]struct{}, error) {
+	return p.newMeSet(ctx)
 }
 
 // failResult returns a SyncResult that does NOT advance the cursor: NewCursor
