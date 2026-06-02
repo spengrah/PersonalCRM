@@ -671,6 +671,18 @@ func run() int {
 	enrichmentService := service.NewEnrichmentService(database, contactRepo, contactMethodRepo, enrichmentRepo, eventBus, rematchService)
 	enrichmentService.SetCadenceUpdater(cadenceUpdater)
 
+	// Address-book method reconcile: re-propagates address-book methods
+	// onto already-linked contacts (auto-propagate for matched, record
+	// suggestion for imported). Shared by the gcontacts forward hook and
+	// the icloud post-commit hook so the auto-vs-suggest + dup precedence
+	// logic lives in one place.
+	addressBookReconcileService := service.NewAddressBookReconcileService(
+		enrichmentService,
+		contactMethodRepo,
+		externalContactRepoForIngest,
+	)
+	ingestService.SetAddressBookReconciler(addressBookReconcileService)
+
 	// Rematch dispatcher consumer — subscribes to contact_methods.added
 	// events and runs RematchService.Run with per-contact mutex
 	// serialization. Always-on (no mode flag): a registered River
@@ -774,6 +786,7 @@ func run() int {
 				externalContactRepo,
 				enrichmentService,
 				identityService,
+				addressBookReconcileService,
 			)
 			providerRegistry.Register(gcontactsProvider)
 			logger.Info().Msg("Google Contacts sync provider registered")

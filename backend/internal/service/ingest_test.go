@@ -546,7 +546,7 @@ func TestHandleExternalContactUpserted_PostUpsertTombstoneTriggersRevive(t *test
 		externalContacts: stubExt,
 	}
 	env := validUpsertedEnv(hostID, "CN-race")
-	rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
+	_, rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
 	require.Nil(t, rej, "handler must not reject when revive succeeds")
 	require.Equal(t, 1, stubExt.reviveCalls, "ReviveTx must be called when post-upsert row is tombstoned")
 }
@@ -577,7 +577,7 @@ func TestHandleExternalContactUpserted_LiveUpsertSkipsRevive(t *testing.T) {
 		externalContacts: stubExt,
 	}
 	env := validUpsertedEnv(hostID, "CN-live")
-	rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
+	_, rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
 	require.Nil(t, rej)
 	require.Equal(t, 0, stubExt.reviveCalls, "ReviveTx must NOT be called on a live first-insert")
 }
@@ -647,7 +647,7 @@ func TestHandleExternalContactUpserted_PhonesLoopUsesSkipEmpty(t *testing.T) {
 	}
 	env := upsertEnvWithContactMethods(t, hostID, "CN-junk-phone",
 		nil, []string{"+", "   ", "+15551234567"})
-	rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
+	_, rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
 	require.Nil(t, rej, "handler must not reject under SkipEmpty")
 	// All three non-literal-empty phones reach the matcher; the real
 	// empty-after-normalization skip happens inside MatchOrCreateTx.
@@ -688,7 +688,7 @@ func TestHandleExternalContactUpserted_EmailsLoopUsesSkipEmpty(t *testing.T) {
 	}
 	env := upsertEnvWithContactMethods(t, hostID, "CN-junk-email",
 		[]string{"   ", "\t", "ok@example.com"}, nil)
-	rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
+	_, rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
 	require.Nil(t, rej, "handler must not reject under SkipEmpty")
 	require.Equal(t, 3, stubIdent.calls)
 	require.Len(t, stubIdent.requests, 3)
@@ -733,7 +733,7 @@ func TestHandleExternalContactUpserted_AllPhonesAndEmailsNormalizeToEmpty_StillA
 	}
 	env := upsertEnvWithContactMethods(t, hostID, "CN-all-junk",
 		[]string{"\t"}, []string{"+"})
-	rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
+	_, rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
 	require.Nil(t, rej, "handler must accept envelope even if all identifiers normalize to empty")
 	require.Equal(t, 2, stubIdent.calls, "both junk values now reach the matcher under SkipEmpty")
 	for i, pol := range stubIdent.policies {
@@ -782,7 +782,7 @@ func TestHandleExternalContactUpserted_MixedJunkAndValid_NilResultTolerance(t *t
 	env := upsertEnvWithContactMethods(t, hostID, "CN-mixed",
 		[]string{"   ", "ok@example.com"},
 		[]string{"+", "+15551234567"})
-	rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
+	_, rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
 	require.Nil(t, rej)
 	// All four non-literal-empty values reach the matcher in source order
 	// (emails loop first, then phones).
@@ -872,7 +872,7 @@ func TestHandleExternalContactUpserted_AnarlogBlockUsesFailEmpty(t *testing.T) {
 		Kind:     events.KindExternalContactUpserted,
 		Payload:  payload,
 	}
-	rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
+	_, rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
 	require.Nil(t, rej)
 	// Only the anarlog block calls the matcher (no emails/phones present).
 	require.Equal(t, []NormalizationPolicy{NormalizationFailEmpty}, stubIdent.policies)
@@ -933,7 +933,7 @@ func TestHandleExternalContactUpserted_WritesHostIDAndHash(t *testing.T) {
 		externalContacts: recorder,
 	}
 	env := validUpsertedEnv(hostID, "CN-fields")
-	rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
+	_, rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
 	require.Nil(t, rej)
 	require.NotNil(t, recorder.lastUpsert)
 	require.NotNil(t, recorder.lastUpsert.HostID, "HostID must be set on the upsert request")

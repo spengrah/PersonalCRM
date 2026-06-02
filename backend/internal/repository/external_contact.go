@@ -725,6 +725,57 @@ func (r *ExternalContactRepository) ListLinkedAddressBookExternalContactsForReco
 	return targets, nil
 }
 
+// ResolveReconcileTarget resolves a single live address-book row (by id)
+// into a ReconcileTarget using the same D2a precedence as the catchup
+// driver. For a duplicate row it reads the canonical to resolve the
+// effective contact/status; for a self-linked row the canonical lookup
+// is skipped. Returns (nil, nil) — a no-op signal — when the row is
+// missing/tombstoned, resolves to no live contact, or is effectively
+// ignored. Used by the forward hooks (gcontacts processContact, icloud
+// post-commit) so the dup-of-linked case reconciles the same way the
+// catchup does, not via a self-only shortcut.
+func (r *ExternalContactRepository) ResolveReconcileTarget(
+	ctx context.Context,
+	id uuid.UUID,
+) (*ReconcileTarget, error) {
+	row, err := r.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if row == nil {
+		return nil, nil
+	}
+
+	var canonContactID *uuid.UUID
+	canonStatus := MatchStatus("")
+	if row.DuplicateOfID != nil {
+		canon, canonErr := r.GetByID(ctx, *row.DuplicateOfID)
+		if canonErr != nil {
+			return nil, canonErr
+		}
+		// GetByID filters deleted_at IS NULL, so a tombstoned canonical
+		// surfaces as nil — leaving the row to fall back to its own
+		// contact/status (matches the LEFT JOIN ... canon.deleted_at IS
+		// NULL behavior of the catchup driver).
+		if canon != nil {
+			canonContactID = canon.CRMContactID
+			canonStatus = canon.MatchStatus
+		}
+	}
+
+	effectiveContactID, effectiveStatus, ok := resolveEffectiveReconcileState(
+		row.CRMContactID, row.MatchStatus, canonContactID, canonStatus,
+	)
+	if !ok {
+		return nil, nil
+	}
+	return &ReconcileTarget{
+		ExternalContact:    *row,
+		EffectiveContactID: effectiveContactID,
+		EffectiveStatus:    effectiveStatus,
+	}, nil
+}
+
 // resolveEffectiveReconcileState applies the D2a effective-contact +
 // effective-status precedence for a (possibly duplicate) address-book
 // row. selfContactID/selfStatus are the row's own; canonContactID/

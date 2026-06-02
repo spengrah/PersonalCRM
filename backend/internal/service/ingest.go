@@ -155,6 +155,25 @@ type ExternalContactWriter interface {
 	SoftDeleteTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) error
 }
 
+// AddressBookReconciler is the narrow surface the external_contact
+// upserted handler uses to re-propagate methods onto an already-linked
+// (or dup-of-linked) contact AFTER the batch tx commits. icloud is
+// push-only with no periodic resync, so this post-commit hook is the
+// ONLY forward path that closes the "icloud enriches nothing" leak —
+// it must fire on FIRST MATCH too, not only re-upsert. Optional: nil is
+// supported for tests that don't exercise the reconcile; the handler
+// then skips scheduling the post-commit closure. Concrete is
+// *AddressBookReconcileService (+ *repository.ExternalContactRepository
+// for target resolution); see the addressBookReconcilerAdapter wired in
+// main.go.
+type AddressBookReconciler interface {
+	// ResolveAndReconcile re-reads the committed row by id, resolves its
+	// effective contact + status (D2a precedence), and reconciles. A
+	// no-op for unmatched / ignored / unresolved rows. Runs on the
+	// default pool (never inside the ingest tx).
+	ResolveAndReconcile(ctx context.Context, externalID uuid.UUID) error
+}
+
 // HostLivenessChecker is the narrow surface IngestService needs to
 // acquire the row-level write lock on the authed host's mac_host row
 // inside the batch tx. Concrete is *repository.MacHostRepository. The
@@ -310,6 +329,21 @@ type IngestService struct {
 	followUp         FollowUpApplier
 	titleMatcher     IngestTitleMatcher
 	discovery        IngestTitleDiscoveryWriter
+	// addressBookReconciler re-propagates address-book methods onto
+	// already-linked contacts after the batch commits. Optional (nil-safe);
+	// wired post-construction via SetAddressBookReconciler so the big
+	// NewIngestService signature is unchanged.
+	addressBookReconciler AddressBookReconciler
+}
+
+// SetAddressBookReconciler injects the post-commit address-book method
+// reconciler. Optional — when unset, handleExternalContactUpserted skips
+// scheduling the reconcile closure (icloud method propagation then only
+// happens via the one-time catchup subcommand). Must be called before
+// the service handles concurrent batches. Mirrors EnrichmentService's
+// SetCadenceUpdater injection pattern.
+func (s *IngestService) SetAddressBookReconciler(r AddressBookReconciler) {
+	s.addressBookReconciler = r
 }
 
 // NewIngestService builds an IngestService. Per-kind dependencies may
@@ -991,15 +1025,26 @@ func commonExternalContactInvariants(
 //     intentionally skipped so a user's manually-resolved `imported` or
 //     `ignored` state is not silently flipped on a content edit.
 //
-// Returns nil on success; rejection != nil rolls back the savepoint.
+// Returns (postCommit, rejection). rejection != nil rolls back the
+// savepoint and postCommit is nil. On success, postCommit is a
+// best-effort closure (nil when no reconcile is scheduled) that the
+// dispatch loop runs AFTER the batch tx commits — it re-reads the
+// committed row and reconciles its methods onto the linked contact.
+// Running post-commit is load-bearing: EnrichContactFromExternal opens
+// its OWN tx, so calling it inside this savepoint would nest a
+// pool-acquired tx inside the open batch tx (deadlock/pool-stall risk).
+// Reading the row AFTER commit also sidesteps the stale-local-struct
+// problem (the `external` struct here does not reflect the in-tx
+// UpdateMatchTx write) — the committed DB row is the source of truth for
+// the freshly-set match on first insert.
 func (s *IngestService) handleExternalContactUpserted(
 	ctx context.Context,
 	tx pgx.Tx,
 	env *events.Envelope,
 	hostID uuid.UUID,
-) *IngestPerEventRejection {
+) (postCommit func(context.Context), rejection *IngestPerEventRejection) {
 	if s.identity == nil || s.externalContacts == nil {
-		return &IngestPerEventRejection{
+		return nil, &IngestPerEventRejection{
 			Code:    ingestRejectPayloadInvariant,
 			Message: "ingest service was not configured for external_contact processing",
 		}
@@ -1007,7 +1052,7 @@ func (s *IngestService) handleExternalContactUpserted(
 
 	var p events.ExternalContactUpsertedPayload
 	if err := json.Unmarshal(env.Payload, &p); err != nil {
-		return &IngestPerEventRejection{
+		return nil, &IngestPerEventRejection{
 			Code:    ingestRejectPayloadInvalid,
 			Message: fmt.Sprintf("decode external_contact.upserted payload: %s", err.Error()),
 		}
@@ -1029,7 +1074,7 @@ func (s *IngestService) handleExternalContactUpserted(
 	// GetBySourceTx is intentionally tombstone-aware.
 	prior, getErr := s.externalContacts.GetBySourceTx(ctx, tx, env.Source, p.EntityID, nil)
 	if getErr != nil && !errors.Is(getErr, db.ErrNotFound) {
-		return &IngestPerEventRejection{
+		return nil, &IngestPerEventRejection{
 			Code:    ingestRejectExternalContactGetFailed,
 			Message: fmt.Sprintf("pre-read external_contact: %s", getErr.Error()),
 		}
@@ -1073,7 +1118,7 @@ func (s *IngestService) handleExternalContactUpserted(
 	}
 	external, err := s.externalContacts.UpsertTx(ctx, tx, upsertReq)
 	if err != nil {
-		return &IngestPerEventRejection{
+		return nil, &IngestPerEventRejection{
 			Code:    ingestRejectExternalContactUpsertFailed,
 			Message: fmt.Sprintf("upsert external_contact: %s", err.Error()),
 		}
@@ -1088,7 +1133,7 @@ func (s *IngestService) handleExternalContactUpserted(
 	if needsRevive {
 		revived, err := s.externalContacts.ReviveTx(ctx, tx, external.ID)
 		if err != nil && !errors.Is(err, db.ErrNotFound) {
-			return &IngestPerEventRejection{
+			return nil, &IngestPerEventRejection{
 				Code:    ingestRejectExternalContactReviveFailed,
 				Message: fmt.Sprintf("revive external_contact: %s", err.Error()),
 			}
@@ -1147,7 +1192,7 @@ func (s *IngestService) handleExternalContactUpserted(
 			DisplayName:   p.DisplayName,
 		}, NormalizationSkipEmpty)
 		if err != nil {
-			return &IngestPerEventRejection{
+			return nil, &IngestPerEventRejection{
 				Code:    ingestRejectIdentityMatchFailed,
 				Message: fmt.Sprintf("identity match (email): %s", err.Error()),
 			}
@@ -1155,7 +1200,7 @@ func (s *IngestService) handleExternalContactUpserted(
 		if canSetMatchOnRow && !matched && result != nil && result.ContactID != nil {
 			if _, err := s.externalContacts.UpdateMatchTx(ctx, tx,
 				external.ID, result.ContactID, repository.MatchStatusMatched); err != nil {
-				return &IngestPerEventRejection{
+				return nil, &IngestPerEventRejection{
 					Code:    ingestRejectExternalContactUpdateMatchFailed,
 					Message: fmt.Sprintf("update external_contact match (email): %s", err.Error()),
 				}
@@ -1178,7 +1223,7 @@ func (s *IngestService) handleExternalContactUpserted(
 			DisplayName:   p.DisplayName,
 		}, NormalizationSkipEmpty)
 		if err != nil {
-			return &IngestPerEventRejection{
+			return nil, &IngestPerEventRejection{
 				Code:    ingestRejectIdentityMatchFailed,
 				Message: fmt.Sprintf("identity match (phone): %s", err.Error()),
 			}
@@ -1186,7 +1231,7 @@ func (s *IngestService) handleExternalContactUpserted(
 		if canSetMatchOnRow && !matched && result != nil && result.ContactID != nil {
 			if _, err := s.externalContacts.UpdateMatchTx(ctx, tx,
 				external.ID, result.ContactID, repository.MatchStatusMatched); err != nil {
-				return &IngestPerEventRejection{
+				return nil, &IngestPerEventRejection{
 					Code:    ingestRejectExternalContactUpdateMatchFailed,
 					Message: fmt.Sprintf("update external_contact match (phone): %s", err.Error()),
 				}
@@ -1217,7 +1262,7 @@ func (s *IngestService) handleExternalContactUpserted(
 			DisplayName:   p.DisplayName,
 		}, NormalizationFailEmpty)
 		if idErr != nil {
-			return &IngestPerEventRejection{
+			return nil, &IngestPerEventRejection{
 				Code:    ingestRejectIdentityMatchFailed,
 				Message: fmt.Sprintf("identity match (anarlog_human_id): %s", idErr.Error()),
 			}
@@ -1237,7 +1282,7 @@ func (s *IngestService) handleExternalContactUpserted(
 				ContactID:  *matchedContactID,
 				MatchType:  repository.MatchTypeExact,
 			}); linkErr != nil {
-				return &IngestPerEventRejection{
+				return nil, &IngestPerEventRejection{
 					Code:    ingestRejectIdentityMatchFailed,
 					Message: fmt.Sprintf("link anarlog_human_id identity to contact: %s", linkErr.Error()),
 				}
@@ -1245,7 +1290,26 @@ func (s *IngestService) handleExternalContactUpserted(
 		}
 	}
 
-	return nil
+	// Schedule a post-commit method reconcile for address-book rows.
+	// icloud_contacts is the only address-book source on this handler
+	// (anarlog_humans is out of scope — its own match/enrich flow). The
+	// closure re-reads the COMMITTED row, so it sees the freshly-set
+	// match on first insert (the local `external` struct is stale across
+	// UpdateMatchTx) and the preserved status on re-upsert. The
+	// reconciler internally resolves the effective contact/status (D2a
+	// dup precedence) and no-ops for unmatched/ignored rows, so it is
+	// safe to schedule whenever the row exists.
+	if s.addressBookReconciler != nil && env.Source == "icloud_contacts" && external != nil {
+		externalID := external.ID
+		reconciler := s.addressBookReconciler
+		postCommit = func(pcCtx context.Context) {
+			if err := reconciler.ResolveAndReconcile(pcCtx, externalID); err != nil {
+				logger.Warn().Err(err).Msg("icloud: post-commit method reconcile failed")
+			}
+		}
+	}
+
+	return postCommit, nil
 }
 
 // handleExternalContactDeleted runs the per-event domain logic for an
