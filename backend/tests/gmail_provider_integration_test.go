@@ -15,8 +15,11 @@
 //   - nil-account guard;
 //   - cross-account set-union provenance merge through the provider/upsert path.
 //
-// email.* kinds have no registered consumer yet, so the bus's live river
-// client enqueues nothing for them — the events just land in the event-log.
+// email.* kinds route to the email_interaction_consumer job (Gmail phase 3);
+// this harness registers a no-op worker for that kind so the provider's
+// publishes enqueue legally. These tests assert on the durable event-log row
+// + content rows, not the derived interaction (that is the consumer's own
+// suite, email_interaction_integration_test.go).
 package tests
 
 import (
@@ -82,9 +85,10 @@ func newGmailProviderEnv(t *testing.T) *gmailProviderEnv {
 	eventRepo := repository.NewEventRepository(database.Queries)
 	contactService := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, contactTaskRepo, nil, nil)
 
-	// Live bus via the shared harness. email.* kinds enqueue no consumer jobs,
-	// so the harness's recorder/cadence/followup workers are irrelevant — the
-	// events just land in the event-log.
+	// Live bus via the shared harness. email.* kinds enqueue an
+	// email_interaction_consumer job, drained by the harness's no-op email
+	// worker — these tests assert on the durable event-log row + content
+	// rows, not the derived interaction.
 	bus := setupTestEventBus(t, ctx, database, contactService)
 
 	provider := google.NewGmailSyncProvider(nil, commsRepo, bus, database.Pool)

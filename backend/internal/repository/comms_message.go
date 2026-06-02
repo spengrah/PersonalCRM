@@ -217,6 +217,27 @@ func (r *CommsMessageRepository) GetMessage(ctx context.Context, source, externa
 	return &msg, nil
 }
 
+// GetMessageTx is the tx-bound variant of GetMessage. The email-interaction
+// consumer uses it so the content-row read shares the worker's tx — the
+// whole read → branch → write → mark sequence runs on one consistent
+// snapshot (the "one tx" contract). Reuses the GetCommsMessage query via
+// db.New(tx); no new SQL. Returns db.ErrNotFound on miss.
+func (r *CommsMessageRepository) GetMessageTx(ctx context.Context, tx pgx.Tx, source, externalID string, contactID uuid.UUID) (*CommsMessage, error) {
+	dbMsg, err := db.New(tx).GetCommsMessage(ctx, db.GetCommsMessageParams{
+		Source:           source,
+		ExternalID:       externalID,
+		MatchedContactID: uuidToPgUUID(contactID),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	msg := convertDbCommsMessage(dbMsg)
+	return &msg, nil
+}
+
 // GetByID retrieves a content row by id. Returns db.ErrNotFound on miss.
 func (r *CommsMessageRepository) GetByID(ctx context.Context, id uuid.UUID) (*CommsMessage, error) {
 	dbMsg, err := r.queries.GetCommsMessageByID(ctx, uuidToPgUUID(id))

@@ -16,6 +16,17 @@ type Querier interface {
 	// can insert a fresh log row without leaving orphan 'running' rows behind.
 	// Requires migration 037 (widens the status CHECK).
 	AbandonRunningLogsForState(ctx context.Context, syncStateID pgtype.UUID) error
+	// Takes a transaction-scoped advisory lock keyed on an interaction
+	// aggregation source_ref. Used by the email-interaction consumer to
+	// serialize all jobs for the same (contact, thread, local-day)
+	// aggregation key, so the read-compute-write of the forward-only
+	// occurred_at guard is atomic per key. The lock auto-releases on
+	// commit/rollback. hashtextextended folds the source_ref string into the
+	// bigint advisory-lock key space; a rare hash collision only
+	// over-serializes two unrelated keys (a perf cost), never
+	// under-serializes (a correctness cost). Mirrors the per-account
+	// sync-enqueue lock in external_sync.sql.
+	AcquireSourceRefAggregateLock(ctx context.Context, lockKey string) error
 	AddContactTag(ctx context.Context, arg AddContactTagParams) error
 	// Atomically appends a contact to an event's matched_contact_ids iff it isn't
 	// already present. Does NOT reset last_contacted_updated — the rematch handler

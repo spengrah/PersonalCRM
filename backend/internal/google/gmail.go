@@ -150,9 +150,11 @@ type qualifiedRow struct {
 }
 
 // GmailSyncProvider implements sync.SyncProvider for Gmail. It is currently
-// inert: it is NOT registered in main.go, and although it publishes
-// email.received/email.sent, those kinds have no registered consumer yet, so
-// publishing only writes the durable event-log row.
+// inert: it is NOT registered in main.go, so the scheduler enqueues no Gmail
+// sweeps and no email.received/email.sent event is ever published in prod.
+// (The email-interaction consumer that derives interactions from those kinds
+// is wired as of phase 3, but it can only fire once this provider is
+// registered + enabled in phase 5.)
 type GmailSyncProvider struct {
 	oauthService *OAuthService
 	commsRepo    *repository.CommsMessageRepository

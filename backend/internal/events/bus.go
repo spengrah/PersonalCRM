@@ -59,6 +59,11 @@ type consumerJob struct {
 //     MaxAttempts=5 (soft-deletes the derived gcal interaction + recomputes
 //     the contact's date columns when a calendar event is declined/
 //     cancelled/user-removed upstream).
+//   - email.received / email.sent → EmailInteractionConsumer worker with
+//     MaxAttempts=5 (derives a per-(contact, thread, local-day) aggregated
+//     email interaction). Both kinds share one case (one job each). The
+//     consumer is production-inert until the Gmail provider is registered +
+//     enabled (phase 5) — no production code publishes email.* events.
 //   - task.skipped: no consumer yet wired.
 func consumerJobsForKind(env *Envelope) ([]consumerJob, error) {
 	switch env.Kind {
@@ -71,6 +76,11 @@ func consumerJobsForKind(env *Envelope) ([]consumerJob, error) {
 	case KindCalendarDeclined:
 		return []consumerJob{{
 			Args: consumerjobs.CalendarDeclineHandlerJobArgs{EventID: env.ID},
+			Opts: &river.InsertOpts{MaxAttempts: 5},
+		}}, nil
+	case KindEmailReceived, KindEmailSent:
+		return []consumerJob{{
+			Args: consumerjobs.EmailInteractionConsumerJobArgs{EventID: env.ID},
 			Opts: &river.InsertOpts{MaxAttempts: 5},
 		}}, nil
 	case KindInteractionRecorded:
