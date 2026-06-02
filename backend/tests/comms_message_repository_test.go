@@ -23,7 +23,7 @@ import (
 // soft-delete the contact), because the upsert does not clear deleted_at on
 // conflict and soft-deleted content rows would otherwise resurrect across runs
 // (gotcha table).
-func setupCommsMessageTest(t *testing.T) (context.Context, *repository.CommsMessageRepository, *repository.ContactRepository, *repository.ContactMethodRepository, func()) {
+func setupCommsMessageTest(t *testing.T) (context.Context, *repository.CommsMessageRepository, *repository.ContactRepository, *repository.ContactMethodRepository) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -39,12 +39,19 @@ func setupCommsMessageTest(t *testing.T) (context.Context, *repository.CommsMess
 	database, err := db.NewDatabase(ctx, cfg.Database)
 	require.NoError(t, err)
 
+	// Register the pool close via t.Cleanup BEFORE any row-cleanup callbacks
+	// are registered in the test body. t.Cleanup runs LIFO, so this close runs
+	// LAST — after newEmailContact's hard-delete/soft-delete callbacks — keeping
+	// the pool open through cleanup. (A returned cleanup func that callers
+	// `defer` would close the pool before t.Cleanup callbacks run, since Go runs
+	// test defers before t.Cleanup, silently leaking rows into the shared DB.)
+	t.Cleanup(database.Close)
+
 	repo := repository.NewCommsMessageRepository(database.Queries)
 	contactRepo := repository.NewContactRepository(database.Queries)
 	methodRepo := repository.NewContactMethodRepository(database.Queries)
 
-	cleanup := func() { database.Close() }
-	return ctx, repo, contactRepo, methodRepo, cleanup
+	return ctx, repo, contactRepo, methodRepo
 }
 
 // newEmailContact creates a contact and registers a cleanup that hard-deletes
@@ -136,8 +143,7 @@ func metadataFor(t *testing.T, accountID, gmailID string, extra map[string]any) 
 }
 
 func TestCommsMessageRepository_UpsertAndGet(t *testing.T) {
-	ctx, repo, contactRepo, _, cleanup := setupCommsMessageTest(t)
-	defer cleanup()
+	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
 	suffix := randomSuffix(t)
 	contact := newEmailContact(t, ctx, repo, contactRepo, "Test Comms Upsert "+suffix)
@@ -176,8 +182,7 @@ func TestCommsMessageRepository_UpsertAndGet(t *testing.T) {
 // keys). The repository must not depend on the caller pre-seeding
 // observed_accounts[] / account_gmail_ids.
 func TestCommsMessageRepository_UpsertSynthesizesProvenanceOnInsert(t *testing.T) {
-	ctx, repo, contactRepo, _, cleanup := setupCommsMessageTest(t)
-	defer cleanup()
+	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
 	suffix := randomSuffix(t)
 	contact := newEmailContact(t, ctx, repo, contactRepo, "Test Comms Synth "+suffix)
@@ -220,8 +225,7 @@ func TestCommsMessageRepository_UpsertSynthesizesProvenanceOnInsert(t *testing.T
 }
 
 func TestCommsMessageRepository_GetMessage_NotFound(t *testing.T) {
-	ctx, repo, contactRepo, _, cleanup := setupCommsMessageTest(t)
-	defer cleanup()
+	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
 	suffix := randomSuffix(t)
 	contact := newEmailContact(t, ctx, repo, contactRepo, "Test Comms NotFound "+suffix)
@@ -232,8 +236,7 @@ func TestCommsMessageRepository_GetMessage_NotFound(t *testing.T) {
 }
 
 func TestCommsMessageRepository_UpsertIdempotentSameAccount(t *testing.T) {
-	ctx, repo, contactRepo, _, cleanup := setupCommsMessageTest(t)
-	defer cleanup()
+	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
 	suffix := randomSuffix(t)
 	contact := newEmailContact(t, ctx, repo, contactRepo, "Test Comms Idem "+suffix)
@@ -257,8 +260,7 @@ func TestCommsMessageRepository_UpsertIdempotentSameAccount(t *testing.T) {
 }
 
 func TestCommsMessageRepository_CrossAccountProvenanceMerge(t *testing.T) {
-	ctx, repo, contactRepo, _, cleanup := setupCommsMessageTest(t)
-	defer cleanup()
+	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
 	suffix := randomSuffix(t)
 	contact := newEmailContact(t, ctx, repo, contactRepo, "Test Comms XAcct "+suffix)
@@ -296,8 +298,7 @@ func TestCommsMessageRepository_CrossAccountProvenanceMerge(t *testing.T) {
 }
 
 func TestCommsMessageRepository_SameAccountReplayAfterMerge(t *testing.T) {
-	ctx, repo, contactRepo, _, cleanup := setupCommsMessageTest(t)
-	defer cleanup()
+	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
 	suffix := randomSuffix(t)
 	contact := newEmailContact(t, ctx, repo, contactRepo, "Test Comms ReplayMerge "+suffix)
@@ -322,8 +323,7 @@ func TestCommsMessageRepository_SameAccountReplayAfterMerge(t *testing.T) {
 }
 
 func TestCommsMessageRepository_ContentImmutableOnConflict(t *testing.T) {
-	ctx, repo, contactRepo, _, cleanup := setupCommsMessageTest(t)
-	defer cleanup()
+	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
 	suffix := randomSuffix(t)
 	contact := newEmailContact(t, ctx, repo, contactRepo, "Test Comms Immutable "+suffix)
@@ -352,8 +352,7 @@ func TestCommsMessageRepository_ContentImmutableOnConflict(t *testing.T) {
 }
 
 func TestCommsMessageRepository_PerParticipantRowsDistinct(t *testing.T) {
-	ctx, repo, contactRepo, _, cleanup := setupCommsMessageTest(t)
-	defer cleanup()
+	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
 	suffix := randomSuffix(t)
 	contactA := newEmailContact(t, ctx, repo, contactRepo, "Test Comms PartA "+suffix)
@@ -380,15 +379,16 @@ func TestCommsMessageRepository_PerParticipantRowsDistinct(t *testing.T) {
 }
 
 func TestCommsMessageRepository_MarkProcessedTx(t *testing.T) {
-	ctx, repo, contactRepo, _, cleanup := setupCommsMessageTest(t)
-	defer cleanup()
+	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
 	databaseURL := os.Getenv("DATABASE_URL")
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	database, err := db.NewDatabase(ctx, cfg.Database)
 	require.NoError(t, err)
-	defer database.Close()
+	// Close this second pool via t.Cleanup (LIFO) so it outlives the
+	// interaction-cleanup callback registered below, which uses interactionRepo.
+	t.Cleanup(database.Close)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 
 	suffix := randomSuffix(t)
@@ -445,8 +445,7 @@ func TestCommsMessageRepository_MarkProcessedTx(t *testing.T) {
 }
 
 func TestCommsMessageRepository_ListByContactNewestFirst(t *testing.T) {
-	ctx, repo, contactRepo, _, cleanup := setupCommsMessageTest(t)
-	defer cleanup()
+	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
 	suffix := randomSuffix(t)
 	contact := newEmailContact(t, ctx, repo, contactRepo, "Test Comms List "+suffix)
@@ -472,8 +471,7 @@ func TestCommsMessageRepository_ListByContactNewestFirst(t *testing.T) {
 }
 
 func TestCommsMessageRepository_ListEmailIdentitiesForSync(t *testing.T) {
-	ctx, repo, contactRepo, methodRepo, cleanup := setupCommsMessageTest(t)
-	defer cleanup()
+	ctx, repo, contactRepo, methodRepo := setupCommsMessageTest(t)
 
 	suffix := randomSuffix(t)
 	sharedEmail := "shared-" + suffix + "@example.test"
