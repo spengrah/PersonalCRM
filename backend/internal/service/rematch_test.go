@@ -330,7 +330,7 @@ func TestRun_RetryAfterFailure_ResetsState(t *testing.T) {
 	}
 
 	// Swap in a successful handler for the retry and re-run.
-	svc.handlers["email"] = &stubHandler{typ: "email", matched: 5}
+	svc.handlers["email"] = []RematchHandler{&stubHandler{typ: "email", matched: 5}}
 	if err := svc.Run(context.Background(), jobID, contactID, methods); err != nil {
 		t.Fatalf("second Run: %v", err)
 	}
@@ -522,5 +522,163 @@ func TestToRematchMethods(t *testing.T) {
 	out := toRematchMethods(in)
 	if len(out) != 2 || out[0].Value != "x@y.z" || out[1].Value != "+15551212" {
 		t.Fatalf("unexpected output: %+v", out)
+	}
+}
+
+// --- fan-out (multiple handlers per type) -----------------------------------
+
+// TestRegister_AppendsMultipleHandlersForSameType pins that Register appends
+// rather than overwrites, so a type can fan out to several handlers (calendar +
+// gmail both rematch "email").
+func TestRegister_AppendsMultipleHandlersForSameType(t *testing.T) {
+	svc := NewRematchService()
+	svc.Register(&stubHandler{typ: "email"})
+	svc.Register(&stubHandler{typ: "email"})
+	if got := len(svc.handlers["email"]); got != 2 {
+		t.Fatalf("expected 2 handlers registered for email, got %d", got)
+	}
+}
+
+// TestRun_FanOut_BothEmailHandlersFire pins that Run dispatches to every
+// handler registered for a method type and sums their matched counts.
+func TestRun_FanOut_BothEmailHandlersFire(t *testing.T) {
+	svc := NewRematchService()
+	h1 := &stubHandler{typ: "email", matched: 2}
+	h2 := &stubHandler{typ: "email", matched: 3}
+	svc.Register(h1)
+	svc.Register(h2)
+
+	jobID := uuid.New()
+	contactID := uuid.New()
+	if err := svc.Run(context.Background(), jobID, contactID, []Method{{Type: "email", Value: "a@b.c"}}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if h1.callCount() != 1 {
+		t.Fatalf("expected handler 1 to fire once, got %d", h1.callCount())
+	}
+	if h2.callCount() != 1 {
+		t.Fatalf("expected handler 2 to fire once, got %d", h2.callCount())
+	}
+	job, err := svc.GetJob(jobID)
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if job.Status != JobStatusCompleted {
+		t.Fatalf("expected completed, got %s", job.Status)
+	}
+	if job.Matched != 5 {
+		t.Fatalf("expected Matched=5 (2+3 summed across handlers), got %d", job.Matched)
+	}
+}
+
+// TestRun_CalendarOnly_StillFires is the behavior-preserving invariant: with a
+// single handler registered for "email" (today's prod state — calendar only),
+// the refactor fires it exactly once and completes, identical to pre-refactor.
+func TestRun_CalendarOnly_StillFires(t *testing.T) {
+	svc := NewRematchService()
+	calendarLike := &stubHandler{typ: "email", matched: 7}
+	svc.Register(calendarLike)
+
+	jobID := uuid.New()
+	contactID := uuid.New()
+	if err := svc.Run(context.Background(), jobID, contactID, []Method{{Type: "email", Value: "a@b.c"}}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if calendarLike.callCount() != 1 {
+		t.Fatalf("expected the sole email handler to fire once, got %d", calendarLike.callCount())
+	}
+	job, err := svc.GetJob(jobID)
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if job.Status != JobStatusCompleted {
+		t.Fatalf("expected completed, got %s", job.Status)
+	}
+	if job.Matched != 7 {
+		t.Fatalf("expected Matched=7, got %d", job.Matched)
+	}
+}
+
+// TestRun_FanOut_NonEmailTypesUnaffected pins that fan-out is per-type: two
+// email handlers both fire, the telegram handler fires once, and counts sum
+// correctly across types.
+func TestRun_FanOut_NonEmailTypesUnaffected(t *testing.T) {
+	svc := NewRematchService()
+	email1 := &stubHandler{typ: "email", matched: 1}
+	email2 := &stubHandler{typ: "email", matched: 1}
+	telegram := &stubHandler{typ: "telegram", matched: 4}
+	svc.Register(email1)
+	svc.Register(email2)
+	svc.Register(telegram)
+
+	jobID := uuid.New()
+	contactID := uuid.New()
+	methods := []Method{
+		{Type: "email", Value: "a@b.c"},
+		{Type: "telegram", Value: "alice"},
+	}
+	if err := svc.Run(context.Background(), jobID, contactID, methods); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if email1.callCount() != 1 || email2.callCount() != 1 {
+		t.Fatalf("expected both email handlers to fire once each, got %d and %d",
+			email1.callCount(), email2.callCount())
+	}
+	if telegram.callCount() != 1 {
+		t.Fatalf("expected telegram handler to fire once, got %d", telegram.callCount())
+	}
+	job, err := svc.GetJob(jobID)
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if job.Matched != 6 {
+		t.Fatalf("expected Matched=6 (1+1 email + 4 telegram), got %d", job.Matched)
+	}
+}
+
+// TestRun_FanOut_FirstHandlerErrorFailsJob pins fail-fast across the fan-out:
+// the first handler's error fails the job and the second handler does NOT run.
+func TestRun_FanOut_FirstHandlerErrorFailsJob(t *testing.T) {
+	svc := NewRematchService()
+	errBoom := errors.New("boom")
+	failing := &stubHandler{typ: "email", err: errBoom}
+	second := &stubHandler{typ: "email", matched: 5}
+	svc.Register(failing)
+	svc.Register(second)
+
+	jobID := uuid.New()
+	runErr := svc.Run(context.Background(), jobID, uuid.New(), []Method{{Type: "email", Value: "a@b.c"}})
+	if !errors.Is(runErr, errBoom) {
+		t.Fatalf("expected Run to return the first handler's error, got %v", runErr)
+	}
+	if failing.callCount() != 1 {
+		t.Fatalf("expected failing handler to fire once, got %d", failing.callCount())
+	}
+	if second.callCount() != 0 {
+		t.Fatalf("expected second handler NOT to fire after fail-fast, got %d calls", second.callCount())
+	}
+	job, err := svc.GetJob(jobID)
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if job.Status != JobStatusFailed {
+		t.Fatalf("expected failed, got %s", job.Status)
+	}
+}
+
+// TestEligibleMethods_PresenceViaSliceLen pins that the eligibility presence
+// check is len(handlers[type]) > 0 — with multiple email handlers registered,
+// email is eligible and an unhandled type (phone) is not.
+func TestEligibleMethods_PresenceViaSliceLen(t *testing.T) {
+	svc := NewRematchService()
+	svc.Register(&stubHandler{typ: "email"})
+	svc.Register(&stubHandler{typ: "email"})
+
+	got := svc.EligibleMethods([]Method{
+		{Type: "email", Value: "a@b.c"},
+		{Type: "phone", Value: "+15551212"},
+	})
+	if len(got) != 1 || got[0].Type != "email" {
+		t.Fatalf("expected only email eligible, got %+v", got)
 	}
 }
