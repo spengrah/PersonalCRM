@@ -789,6 +789,31 @@ func run() int {
 			)
 			providerRegistry.Register(gcalProvider)
 			logger.Info().Msg("Google Calendar sync provider registered")
+
+			// Gmail provider + rematch handler: publisher-driven, so register
+			// ONLY in cutover mode. In off-mode pubBus is a nil *events.Bus;
+			// passing it into the provider's busTx interface field would create
+			// a non-nil-interface-wrapping-typed-nil and bypass the provider's
+			// own `bus == nil` guard, panicking on the first PublishTx. Off-mode
+			// is an emergency rollback posture where no publisher should run.
+			// commsMessageRepo is reused from the email-consumer wiring above.
+			if pubBus != nil {
+				gmailProvider := google.NewGmailSyncProvider(
+					googleOAuthService,
+					commsMessageRepo,
+					pubBus,
+					database.Pool,
+				)
+				providerRegistry.Register(gmailProvider)
+				rematchService.Register(google.NewGmailRematchHandler(
+					gmailProvider,
+					googleOAuthService,
+					commsMessageRepo,
+				))
+				logger.Info().Msg("Gmail sync provider + rematch handler registered")
+			} else {
+				logger.Warn().Msg("Gmail provider NOT registered: event-bus interaction mode=off (pubBus nil)")
+			}
 		}
 
 		// Register Todoist Cadence provider if OAuth is configured
@@ -835,6 +860,27 @@ func run() int {
 		logger.Info().Msg("Push providers registered (messages, icloud_contacts, phone_calls)")
 
 		syncService = service.NewSyncService(syncRepo, contactRepo, providerRegistry)
+
+		// Email enablement reconciliation (Gmail go-live). Only meaningful in
+		// cutover mode with a connected Google account: the Gmail provider is
+		// registered only when pubBus != nil, so there is no point reconciling
+		// email states no registered provider can serve. Wire the account
+		// lister + OAuth-connect hook, then run the idempotent boot
+		// reconciliation BEFORE riverClient.Start so the RunOnStart tick already
+		// sees the freshly-enabled email states.
+		if googleOAuthService != nil && pubBus != nil {
+			syncService.SetEmailAccountLister(googleOAuthService)
+			if oauthHandler != nil {
+				oauthHandler.SetEmailStateReconciler(func(ctx context.Context) error {
+					return syncService.ReconcileEmailSyncStates(ctx)
+				})
+			}
+			if err := syncService.ReconcileEmailSyncStates(ctx); err != nil {
+				// Non-fatal: the scheduler simply has nothing to do for email
+				// until states exist; the next connect or next boot retries.
+				logger.Warn().Err(err).Msg("boot email sync reconciliation failed (non-fatal)")
+			}
+		}
 
 		syncHandler = handlers.NewSyncHandler(syncService)
 		identityHandler = handlers.NewIdentityHandler(identityService)

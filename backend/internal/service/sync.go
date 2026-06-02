@@ -34,6 +34,10 @@ type SyncService struct {
 	// nil (e.g., early-boot or tests that don't construct a river client)
 	// TriggerSync falls back to the synchronous runSyncForState path.
 	enqueuer repository.JobEnqueuer
+	// emailAccountLister is set at boot by SetEmailAccountLister (cutover
+	// only). When nil (tests / no-Google builds / off-mode)
+	// ReconcileEmailSyncStates is a no-op. See email_reconcile.go.
+	emailAccountLister GoogleAccountLister
 }
 
 // NewSyncService creates a new sync service
