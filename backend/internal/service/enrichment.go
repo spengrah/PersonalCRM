@@ -628,9 +628,11 @@ func (s *EnrichmentService) enrichContactMethodsTx(
 			IsPrimary: false, // Never set primary for enriched methods
 		})
 		if err != nil {
+			// Do NOT log input.Value — a raw email/phone is PII under this
+			// repo's model. Type + error class is enough to diagnose; the
+			// method value is recoverable from the external_contact row.
 			logger.Warn().Err(err).
 				Str("type", input.Type).
-				Str("value", input.Value).
 				Msg("failed to add method from enrichment")
 			continue
 		}
