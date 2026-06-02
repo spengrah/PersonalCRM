@@ -168,9 +168,9 @@ type ExternalContactWriter interface {
 // main.go.
 type AddressBookReconciler interface {
 	// ResolveAndReconcile re-reads the committed row by id, resolves its
-	// effective contact + status (D2a precedence), and reconciles. A
-	// no-op for unmatched / ignored / unresolved rows. Runs on the
-	// default pool (never inside the ingest tx).
+	// effective contact + status (duplicate-aware precedence), and
+	// reconciles. A no-op for unmatched / ignored / unresolved rows. Runs
+	// on the default pool (never inside the ingest tx).
 	ResolveAndReconcile(ctx context.Context, externalID uuid.UUID) error
 }
 
@@ -1304,7 +1304,10 @@ func (s *IngestService) handleExternalContactUpserted(
 		reconciler := s.addressBookReconciler
 		postCommit = func(pcCtx context.Context) {
 			if err := reconciler.ResolveAndReconcile(pcCtx, externalID); err != nil {
-				logger.Warn().Err(err).Msg("icloud: post-commit method reconcile failed")
+				// No Err()/id attached: a downstream enrichment error can
+				// embed a normalized method value (PII). Log only that the
+				// post-commit reconcile failed for one row.
+				logger.Warn().Msg("icloud: post-commit method reconcile failed for one row")
 			}
 		}
 	}

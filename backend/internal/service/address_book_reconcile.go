@@ -101,9 +101,12 @@ func (s *AddressBookReconcileService) ReconcileAllAddressBookMethods(ctx context
 		if reconErr != nil {
 			summary.Failed++
 			// Ordinal-only log: never emit row/contact ids or method
-			// values (PII). The error class is safe to surface.
+			// values (PII). The downstream EnrichContactFromExternal error
+			// can embed a normalized method value (its audit-failure path),
+			// so we deliberately do NOT attach Err(reconErr) here — only the
+			// loop ordinal. Operators correlate the failure window with the
+			// process logs if a method-level detail is needed.
 			logger.Warn().
-				Err(reconErr).
 				Int("ordinal", i).
 				Msg("address-book method reconcile failed for one row; continuing")
 			continue

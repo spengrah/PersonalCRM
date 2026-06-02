@@ -108,12 +108,20 @@ type ExternalContact struct {
 	// suggestions). Stored in a dedicated JSONB column the producer
 	// upsert never writes, so it survives address-book resyncs. Written
 	// by the reconcile path; consumed by the suggestions surface.
-	PendingMethodSuggestions []PendingMethodSuggestion `json:"pending_method_suggestions,omitempty"`
+	//
+	// json:"-" — this field is NOT serialized through existing API
+	// responses (GET /imports/:id, LinkContactResponse) which marshal the
+	// repository struct directly. The suggestions surface reads it
+	// server-side via its own filtered query/DTO; leaking the raw column
+	// into current endpoints would surface inert state with no resolve
+	// semantics and is invisible to the current import UI.
+	PendingMethodSuggestions []PendingMethodSuggestion `json:"-"`
 	// DismissedMethodSuggestions is the append-only set of (type,value)
 	// the user has dismissed for this row (nil when nothing dismissed).
 	// The reconcile path subtracts these so a dismissed method is never
 	// re-suggested. Also a dedicated, upsert-surviving JSONB column.
-	DismissedMethodSuggestions []PendingMethodSuggestion `json:"dismissed_method_suggestions,omitempty"`
+	// json:"-" for the same reason as PendingMethodSuggestions.
+	DismissedMethodSuggestions []PendingMethodSuggestion `json:"-"`
 	// LastContentHash is the lowercase-hex SHA-256 of the JCS-
 	// canonicalized payload (minus host_id) that produced this row's
 	// current content. Written on every UPSERT for mac-daemon sources;

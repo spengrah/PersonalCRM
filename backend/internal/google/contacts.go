@@ -211,9 +211,19 @@ func (p *ContactsProvider) processContact(
 	// bypassing the duplicate-aware effective-status precedence and
 	// auto-pushing methods that should only be reconciled into the
 	// canonical contact (and only suggested when the canonical is curated).
-	if reread, rereadErr := p.externalRepo.GetByID(ctx, externalContact.ID); rereadErr == nil && reread != nil {
-		externalContact = reread
+	//
+	// Fail CLOSED: if the re-read errors, we cannot trust the local
+	// struct's duplicate_of_id, so we SKIP attemptMatch (running it on a
+	// stale struct could re-open the duplicate bypass) and still run the
+	// forward reconcile, which re-reads the row itself via
+	// ResolveReconcileTarget. The next sync retries the match cleanly.
+	reread, rereadErr := p.externalRepo.GetByID(ctx, externalContact.ID)
+	if rereadErr != nil || reread == nil {
+		logger.Warn().Err(rereadErr).Msg("gcontacts: re-read after duplicate check failed; skipping attemptMatch this sync")
+		p.reconcileMethods(ctx, externalContact.ID)
+		return nil
 	}
+	externalContact = reread
 
 	// Attempt to match to CRM contact
 	if err := p.attemptMatch(ctx, externalContact); err != nil {
@@ -242,7 +252,10 @@ func (p *ContactsProvider) reconcileMethods(ctx context.Context, externalID uuid
 		return
 	}
 	if err := p.reconciler.ResolveAndReconcile(ctx, externalID); err != nil {
-		logger.Warn().Err(err).Msg("gcontacts: method reconcile failed")
+		// No Err()/id attached: a downstream enrichment error can embed a
+		// normalized method value (PII under this repo's model). Log only
+		// that a reconcile failed for this sync item.
+		logger.Warn().Msg("gcontacts: method reconcile failed for one row")
 	}
 }
 

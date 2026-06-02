@@ -160,7 +160,7 @@ func TestProcessContact_ForwardReconcile_LinkedRowGainsMethod(t *testing.T) {
 // Forward hook + duplicate: a NEW row that matches an already-linked
 // contact's email is marked a duplicate by checkDuplicates, then its
 // unique method must reconcile into the canonical contact — NOT auto-pushed
-// via attemptMatch's match path (which the pre-fix stale-struct bug allowed).
+// via attemptMatch's match path (which a stale-struct read would allow).
 func TestProcessContact_ForwardReconcile_DupOfLinkedReconcilesToCanonical(t *testing.T) {
 	env := setupGcontactsForwardEnv(t)
 	ctx := context.Background()
