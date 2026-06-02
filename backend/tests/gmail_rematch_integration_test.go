@@ -41,6 +41,11 @@ import (
 	gmailapi "google.golang.org/api/gmail/v1"
 )
 
+// Compile-time proof that GmailRematchHandler satisfies the rematch handler
+// interface phase 5 will register it under. The handler is unwired in phase 4,
+// so this is the only build site exercising the interface boundary until then.
+var _ service.RematchHandler = (*google.GmailRematchHandler)(nil)
+
 // gmailRematchEnv bundles the real handler + provider + email consumer harness.
 type gmailRematchEnv struct {
 	ctx             context.Context
