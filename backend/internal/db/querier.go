@@ -143,6 +143,12 @@ type Querier interface {
 	// Count OAuth credentials for a provider
 	CountOAuthCredentials(ctx context.Context, provider string) (int64, error)
 	// Test-only count of river_job rows for the rematch_dispatcher kind
+	// enqueued for a contact (any rematch_job_id). Used by the address-book
+	// reconcile integration test to assert the matched-row auto-propagate
+	// published contact_methods.added (which enqueues a rematch dispatcher
+	// job) without needing the jobID. Avoids raw SQL in Go (core.md rule 2).
+	CountRematchDispatcherJobsByContact(ctx context.Context, contactID string) (int64, error)
+	// Test-only count of river_job rows for the rematch_dispatcher kind
 	// whose args JSON contains the given (contact_id, rematch_job_id)
 	// tuple. Used by rematch dedup integration tests to assert
 	// UniqueOpts{ByArgs} behavior without inlining raw SQL into Go test
