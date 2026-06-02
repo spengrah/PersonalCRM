@@ -2,44 +2,45 @@ package google
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 
-	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/matching"
 	"personal-crm/backend/internal/repository"
 )
 
-// accountLister is the narrow account-enumeration seam the rematch handler
-// needs. Production satisfies it with *OAuthService; tests satisfy it with a
-// stub so the handler needs no real OAuth. Mirrors the consumer-side
-// narrow-interface convention.
-type accountLister interface {
-	ListAccounts(ctx context.Context) ([]repository.OAuthCredentialStatus, error)
+// emailSyncStateLister is the narrow seam the rematch handler uses to find the
+// accounts whose email sync is enabled. Production satisfies it with
+// *repository.SyncRepository; tests satisfy it with the real repository seeded
+// with enabled email sync states. Mirrors the consumer-side narrow-interface
+// convention.
+type emailSyncStateLister interface {
+	ListEnabledSyncStates(ctx context.Context) ([]repository.SyncState, error)
 }
 
 // GmailRematchHandler implements service.RematchHandler for the "email"
 // identifier type. On contact_methods.added, it runs a one-shot
-// identifier-scoped historical Gmail scan across ALL connected Google accounts
-// for the newly-added address, publishing email.received/sent so the phase-3
-// EmailInteractionConsumer derives interactions. Match-only (never creates a
-// contact); fans out to every contact sharing the address. Steady-state account
-// cursors are NOT rewound (spec §3.3).
-//
-// INERT in production until phase 5: NOT registered in main.go. No production
-// code path constructs it.
+// identifier-scoped historical Gmail scan for the newly-added address across
+// the connected accounts whose email sync is ENABLED, publishing
+// email.received/sent so the EmailInteractionConsumer derives interactions.
+// Match-only (never creates a contact); fans out to every contact sharing the
+// address via the known-contact map. Steady-state account cursors are NOT
+// rewound (spec §3.3).
 type GmailRematchHandler struct {
 	provider  *GmailSyncProvider                 // owns fetch/process/persist + bus + pool
-	accounts  accountLister                      // enumerate connected accounts (prod: *OAuthService)
+	states    emailSyncStateLister               // enumerate ENABLED email sync states (prod: *repository.SyncRepository)
 	commsRepo *repository.CommsMessageRepository // load known-contact map (ListEmailIdentitiesForSync)
 }
 
 // NewGmailRematchHandler constructs a GmailRematchHandler. Production passes the
-// *OAuthService as the accountLister.
-func NewGmailRematchHandler(p *GmailSyncProvider, accounts accountLister, comms *repository.CommsMessageRepository) *GmailRematchHandler {
+// *repository.SyncRepository as the enabled-email-states lister.
+func NewGmailRematchHandler(p *GmailSyncProvider, states emailSyncStateLister, comms *repository.CommsMessageRepository) *GmailRematchHandler {
 	return &GmailRematchHandler{
 		provider:  p,
-		accounts:  accounts,
+		states:    states,
 		commsRepo: comms,
 	}
 }
@@ -48,14 +49,37 @@ func NewGmailRematchHandler(p *GmailSyncProvider, accounts accountLister, comms 
 func (h *GmailRematchHandler) IdentifierType() string { return "email" }
 
 // Rematch runs an identifier-scoped historical Gmail scan for the newly-added
-// address across every connected account. The scan is address-scoped, not
-// contact-scoped: it fans out to all contacts sharing the address via the
-// known-contact map (which already includes the just-added pair). contactID is
-// referenced only for log traceability.
-func (h *GmailRematchHandler) Rematch(ctx context.Context, contactID uuid.UUID, valueNormalized string) (int, error) {
+// address across every connected account whose email sync is enabled. The scan
+// is address-scoped, not contact-scoped: it fans out to all contacts sharing
+// the address via the known-contact map (which already includes the just-added
+// pair). contactID is referenced only for the rematch fan-out semantics, not
+// logged.
+func (h *GmailRematchHandler) Rematch(ctx context.Context, _ uuid.UUID, valueNormalized string) (int, error) {
 	// Defensive normalization, mirroring CalendarRematchHandler.
 	addr := matching.NormalizeEmail(valueNormalized)
 	if addr == "" {
+		return 0, nil
+	}
+
+	// Gate on the enabled email sync states FIRST so the no-op path does zero
+	// work (no identity-map build, no me-set, no fetcher). Only scan accounts
+	// whose email sync is enabled and non-disabled — the same gate the
+	// scheduler uses (ListEnabledSyncStates: enabled = TRUE AND status !=
+	// 'disabled'). An account that is never enabled (or disabled by the user)
+	// must not be scanned by the rematch.
+	states, err := h.states.ListEnabledSyncStates(ctx)
+	if err != nil {
+		return 0, err
+	}
+	var emailStates []repository.SyncState
+	for _, st := range states {
+		if st.Source == GmailSourceName && st.AccountID != nil && strings.TrimSpace(*st.AccountID) != "" {
+			emailStates = append(emailStates, st)
+		}
+	}
+	if len(emailStates) == 0 {
+		// No enabled email account → nothing to scan. No-op (no map/me-set/
+		// fetcher work, no writes).
 		return 0, nil
 	}
 
@@ -82,42 +106,31 @@ func (h *GmailRematchHandler) Rematch(ctx context.Context, contactID uuid.UUID, 
 		return 0, err
 	}
 
-	// The rematch scan holds no per-account external_sync_state row and must
-	// not read/write one (spec §3.3), so it floors at the default backfill
-	// since-date directly. backfillSinceEpoch is unexported but in-package.
-	afterEpoch := backfillSinceEpoch(nil)
-
-	accounts, err := h.accounts.ListAccounts(ctx)
-	if err != nil {
-		return 0, err
-	}
-
+	// Scan each enabled account with its OWN backfill floor (per-state
+	// metadata["backfill_since"], default 2026-01-01 — NOT a hardcoded floor).
+	// Re-running the whole scan is safe: the comms_message upsert dedup + the
+	// event (source, source_id) unique collapse re-fetched messages, so a River
+	// retry that re-scans an already-succeeded account produces no duplicate
+	// rows/interactions. This makes "fail the job if ANY enabled account scan
+	// fails" safe — River retries the whole set, bounded by the job's
+	// MaxAttempts.
 	matched := 0
-	allErrored := len(accounts) > 0
-	var lastErr error
-	for _, a := range accounts {
-		n, scanErr := h.provider.ScanIdentifier(ctx, a.AccountID, addr, knownMap, meSet, afterEpoch)
+	var scanErrs []error
+	for _, st := range emailStates {
+		afterEpoch := backfillSinceEpoch(st.Metadata)
+		n, scanErr := h.provider.ScanIdentifier(ctx, *st.AccountID, addr, knownMap, meSet, afterEpoch)
 		matched += n
 		if scanErr != nil {
-			// Continue-on-error: one account's Gmail outage should not fail the
-			// whole rematch (mirrors CalendarRematchHandler's housekeeping-error
-			// tolerance). Record the error in case every account fails.
-			lastErr = scanErr
-			logger.Warn().Err(scanErr).
-				Str("account", a.AccountID).
-				Str("contactId", contactID.String()).
-				Str("address", addr).
-				Msg("gmail rematch: account scan failed; continuing")
-			continue
+			// The account id is the operator's OWN connected mailbox, kept raw
+			// for triage (operational provenance); the rematched contact
+			// address is third-party PII and is deliberately NOT included here.
+			scanErrs = append(scanErrs, fmt.Errorf("account %s: %w", *st.AccountID, scanErr))
 		}
-		allErrored = false
 	}
-
-	// Only fail the job (so River retries the whole method set) when EVERY
-	// account errored AND nothing matched — otherwise partial success returns
-	// nil and the job completes.
-	if allErrored && matched == 0 && lastErr != nil {
-		return 0, lastErr
+	if len(scanErrs) > 0 {
+		// ANY enabled-account scan failed → fail the job so River retries the
+		// whole set rather than permanently stranding that account's history.
+		return matched, errors.Join(scanErrs...)
 	}
 	return matched, nil
 }

@@ -805,9 +805,12 @@ func run() int {
 					database.Pool,
 				)
 				providerRegistry.Register(gmailProvider)
+				// syncRepo is the enabled-email-states lister: the rematch scan
+				// runs only over accounts whose email sync is enabled (the same
+				// gate the scheduler uses), not every connected OAuth account.
 				rematchService.Register(google.NewGmailRematchHandler(
 					gmailProvider,
-					googleOAuthService,
+					syncRepo,
 					commsMessageRepo,
 				))
 				logger.Info().Msg("Gmail sync provider + rematch handler registered")
