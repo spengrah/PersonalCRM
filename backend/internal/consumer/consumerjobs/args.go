@@ -163,6 +163,23 @@ type CalendarDeclineHandlerJobArgs struct {
 // jobs.
 func (CalendarDeclineHandlerJobArgs) Kind() string { return "calendar_decline_handler" }
 
+// EmailInteractionConsumerJobArgs carries the event id that the
+// EmailInteractionConsumer worker should fetch and process. Enqueued for
+// every email.received / email.sent event by events.consumerJobsForKind.
+// No river:"unique" tag — the event table's (source, source_id) unique
+// index collapses cross-account / cursor-overlap duplicates of the SAME
+// (message, contact) into one enqueue at publish time, so river args
+// uniqueness would add nothing. Two DISTINCT messages in the same
+// (contact, thread, day) deliberately enqueue two distinct jobs; the
+// consumer serializes them with a per-source_ref advisory lock.
+type EmailInteractionConsumerJobArgs struct {
+	EventID uuid.UUID `json:"event_id"`
+}
+
+// Kind returns the river job-kind identifier for EmailInteractionConsumer
+// jobs.
+func (EmailInteractionConsumerJobArgs) Kind() string { return "email_interaction_consumer" }
+
 // RematchDispatcherJobArgs carries the event id + dedup-arg fields that
 // the RematchDispatcher worker processes. ContactID and RematchJobID
 // are duplicated from the event payload and carry the river:"unique"

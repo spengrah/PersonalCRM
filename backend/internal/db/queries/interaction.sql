@@ -170,3 +170,16 @@ WHERE source = 'anarlog_sessions'
   AND source_ref LIKE sqlc.arg('source_ref_prefix')
   AND deleted_at IS NULL
 ORDER BY source_ref;
+
+-- name: AcquireSourceRefAggregateLock :exec
+-- Takes a transaction-scoped advisory lock keyed on an interaction
+-- aggregation source_ref. Used by the email-interaction consumer to
+-- serialize all jobs for the same (contact, thread, local-day)
+-- aggregation key, so the read-compute-write of the forward-only
+-- occurred_at guard is atomic per key. The lock auto-releases on
+-- commit/rollback. hashtextextended folds the source_ref string into the
+-- bigint advisory-lock key space; a rare hash collision only
+-- over-serializes two unrelated keys (a perf cost), never
+-- under-serializes (a correctness cost). Mirrors the per-account
+-- sync-enqueue lock in external_sync.sql.
+SELECT pg_advisory_xact_lock(hashtextextended(sqlc.arg('lock_key')::text, 0));

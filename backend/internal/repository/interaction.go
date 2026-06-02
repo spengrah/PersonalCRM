@@ -429,6 +429,18 @@ func (r *InteractionRepository) CreateInteractionTx(ctx context.Context, tx pgx.
 	return &interaction, nil
 }
 
+// AcquireSourceRefLockTx takes a transaction-scoped advisory lock keyed on
+// the interaction aggregation source_ref, inside the caller's tx. The
+// email-interaction consumer calls it before FindBySourceRefTx so all jobs
+// for the same (contact, thread, local-day) aggregation key serialize: a
+// second same-key job blocks until the first commits (releasing the lock),
+// then proceeds with a fresh read. This makes the forward-only occurred_at
+// read-compute-write atomic per key. Cross-key jobs hash to different keys
+// and never block each other. The lock auto-releases on commit/rollback.
+func (r *InteractionRepository) AcquireSourceRefLockTx(ctx context.Context, tx pgx.Tx, sourceRef string) error {
+	return db.New(tx).AcquireSourceRefAggregateLock(ctx, sourceRef)
+}
+
 // FindBySourceRefTx is the tx-threaded variant of FindBySourceRef. Used by
 // the consumer's HandleEvent to dedup inside the caller's tx.
 func (r *InteractionRepository) FindBySourceRefTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, source string, sourceRef string) (*Interaction, error) {
