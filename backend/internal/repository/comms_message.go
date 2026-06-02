@@ -13,9 +13,9 @@ import (
 )
 
 // CommsMessage is the in-memory representation of a comms_message row — the
-// shared cross-source content store (Gmail integration phase 1; gchat/telegram/
-// messages migrate onto it later). One row = one message x one qualifying
-// contact (per-participant granularity). SourceMetadata carries raw JSON bytes
+// shared cross-source content store (email uses it now; gchat/telegram/messages
+// migrate onto it later). One row = one message x one qualifying contact
+// (per-participant granularity). SourceMetadata carries raw JSON bytes
 // end-to-end; callers marshal/unmarshal it.
 type CommsMessage struct {
 	ID                uuid.UUID
@@ -41,9 +41,13 @@ type CommsMessage struct {
 }
 
 // UpsertCommsMessageParams is the input for UpsertMessage. Content fields map
-// 1:1 to the columns; GmailMessageID is a non-column text param used only in
-// the provenance-merge DO UPDATE (it keys the per-account gmail-id map). When
-// AccountID is nil the merge files the gmail id under the '__unknown__' key.
+// 1:1 to the columns. AccountID + GmailMessageID drive the provenance merge on
+// BOTH the insert and the conflict paths: AccountID is unioned into
+// source_metadata.observed_accounts[] and GmailMessageID is filed under
+// source_metadata.account_gmail_ids.<account_id>. When AccountID is nil the
+// gmail id is filed under the '__unknown__' key. Any non-provenance keys the
+// caller puts in SourceMetadata (html body, attachments[], labels) are
+// preserved.
 type UpsertCommsMessageParams struct {
 	Source           string
 	ExternalID       string
@@ -141,11 +145,17 @@ func convertDbCommsMessage(m *db.CommsMessage) CommsMessage {
 // buildUpsertCommsMessageParams centralizes the pgtype conversion shared
 // between the tx and non-tx upsert paths, so both variants stay in lockstep.
 // GmailMessageID is a plain text param in the generated query (non-nullable
-// cast); a nil pointer maps to the empty string.
+// cast); a nil pointer maps to the empty string. SourceMetadata defaults to an
+// empty JSON object when nil/empty: the query casts it with `::jsonb` and folds
+// the observing account's provenance into it, so it must always be valid JSON.
 func buildUpsertCommsMessageParams(params UpsertCommsMessageParams) db.UpsertCommsMessageParams {
 	gmailMessageID := ""
 	if params.GmailMessageID != nil {
 		gmailMessageID = *params.GmailMessageID
+	}
+	sourceMetadata := params.SourceMetadata
+	if len(sourceMetadata) == 0 {
+		sourceMetadata = []byte("{}")
 	}
 	return db.UpsertCommsMessageParams{
 		Source:           params.Source,
@@ -159,7 +169,7 @@ func buildUpsertCommsMessageParams(params UpsertCommsMessageParams) db.UpsertCom
 		Direction:        params.Direction,
 		SentAt:           timeToPgTimestamptz(&params.SentAt),
 		AccountID:        stringToPgText(params.AccountID),
-		SourceMetadata:   params.SourceMetadata,
+		SourceMetadata:   sourceMetadata,
 		MatchedContactID: uuidToPgUUID(params.MatchedContactID),
 		GmailMessageID:   gmailMessageID,
 	}
@@ -177,9 +187,9 @@ func (r *CommsMessageRepository) UpsertMessage(ctx context.Context, params Upser
 	return &msg, nil
 }
 
-// UpsertMessageTx is the tx-bound variant of UpsertMessage. The provider
-// (phase 2) uses it for publish-before-mutate ordering so the content write
-// commits atomically with the event-log insert. Caller owns the tx lifecycle.
+// UpsertMessageTx is the tx-bound variant of UpsertMessage. The provider uses
+// it for publish-before-mutate ordering so the content write commits atomically
+// with the event-log insert. Caller owns the tx lifecycle.
 func (r *CommsMessageRepository) UpsertMessageTx(ctx context.Context, tx pgx.Tx, params UpsertCommsMessageParams) (*CommsMessage, error) {
 	dbMsg, err := db.New(tx).UpsertCommsMessage(ctx, buildUpsertCommsMessageParams(params))
 	if err != nil {
@@ -256,8 +266,8 @@ func (r *CommsMessageRepository) MarkProcessedTx(ctx context.Context, tx pgx.Tx,
 
 // ListEmailIdentitiesForSync returns every (normalized email, contact) pair for
 // non-deleted contacts. The mapping is many-to-one: a shared address maps to
-// several contacts, one pair each (spec §3.1). The Gmail provider (phase 2)
-// builds its known-contact map from this.
+// several contacts, one pair each (spec §3.1). The Gmail provider builds its
+// known-contact map from this.
 func (r *CommsMessageRepository) ListEmailIdentitiesForSync(ctx context.Context) ([]EmailIdentity, error) {
 	rows, err := r.queries.ListEmailIdentitiesForSync(ctx)
 	if err != nil {
@@ -286,9 +296,11 @@ func (r *CommsMessageRepository) HardDeleteByContact(ctx context.Context, contac
 }
 
 // CommsStagingProcessor adapts *CommsMessageRepository to the source-neutral
-// StagingProcessor interface. Registered into the StagingProcessorRegistry in
-// phase 5 (main.go wiring) — not here, because no email consumer dispatches to
-// it until phase 3.
+// StagingProcessor interface. It is wired into the StagingProcessorRegistry by
+// main.go only once an email consumer exists to dispatch through it; until then
+// the adapter is provided but unregistered (the registry is consulted solely by
+// the interaction-recorder consumer, so registering it early would be inert).
+// See .ai/spec/2026-06-01-gmail-integration-design.md §8.
 type CommsStagingProcessor struct{ repo *CommsMessageRepository }
 
 // NewCommsStagingProcessor builds the email-source staging processor adapter.

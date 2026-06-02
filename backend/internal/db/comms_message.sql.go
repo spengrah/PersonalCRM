@@ -25,8 +25,8 @@ type GetCommsMessageParams struct {
 	MatchedContactID pgtype.UUID `json:"matched_contact_id"`
 }
 
-// Natural-key lookup used by the (phase-3) consumer to locate the content row
-// for a (source, external_id, contact) tuple. deleted_at filtered.
+// Natural-key lookup used by the email interaction consumer to locate the
+// content row for a (source, external_id, contact) tuple. deleted_at filtered.
 func (q *Queries) GetCommsMessage(ctx context.Context, arg GetCommsMessageParams) (*CommsMessage, error) {
 	row := q.db.QueryRow(ctx, GetCommsMessage, arg.Source, arg.ExternalID, arg.MatchedContactID)
 	var i CommsMessage
@@ -189,20 +189,48 @@ INSERT INTO comms_message (
 ) VALUES (
     $1, $2, $3, $4, $5, $6,
     $7, $8, $9, $10, $11,
-    $12, $13
-)
-ON CONFLICT (source, external_id, matched_contact_id) WHERE deleted_at IS NULL
-DO UPDATE SET
     -- LEVEL 3 (outermost): set the per-account gmail id under
     -- account_gmail_ids.<account_id>. Lands only because LEVEL 2 seeded the
     -- parent object first (jsonb_set does NOT create intermediate parents).
-    source_metadata = jsonb_set(
+    jsonb_set(
         -- LEVEL 2: SEED the account_gmail_ids parent to its existing value (or
         -- '{}'). REQUIRED — without it, level 3's nested-path set is a silent
-        -- no-op and the gmail-id map is dropped. Verified against live PG16.
+        -- no-op and the gmail-id map is dropped.
         jsonb_set(
-            -- LEVEL 1 (innermost): union observed_accounts[] (add @account_id
-            -- only if absent).
+            -- LEVEL 1 (innermost): union observed_accounts[] into the caller's
+            -- metadata (add @account_id only if absent).
+            jsonb_set(
+                $12::jsonb,
+                '{observed_accounts}',
+                CASE
+                    WHEN $11::text IS NULL THEN
+                        COALESCE($12::jsonb->'observed_accounts', '[]'::jsonb)
+                    WHEN COALESCE($12::jsonb->'observed_accounts', '[]'::jsonb)
+                         @> to_jsonb(ARRAY[$11::text]) THEN
+                        COALESCE($12::jsonb->'observed_accounts', '[]'::jsonb)
+                    ELSE
+                        COALESCE($12::jsonb->'observed_accounts', '[]'::jsonb)
+                            || to_jsonb(ARRAY[$11::text])
+                END,
+                TRUE
+            ),
+            '{account_gmail_ids}',
+            COALESCE($12::jsonb->'account_gmail_ids', '{}'::jsonb),
+            TRUE
+        ),
+        ARRAY['account_gmail_ids', COALESCE($11::text, '__unknown__')],
+        to_jsonb($13::text),
+        TRUE
+    ),
+    $14
+)
+ON CONFLICT (source, external_id, matched_contact_id) WHERE deleted_at IS NULL
+DO UPDATE SET
+    -- Identical three-level merge, applied to the STORED metadata so the
+    -- conflicting account's provenance is unioned in without disturbing the
+    -- first writer's content keys.
+    source_metadata = jsonb_set(
+        jsonb_set(
             jsonb_set(
                 comms_message.source_metadata,
                 '{observed_accounts}',
@@ -223,7 +251,7 @@ DO UPDATE SET
             TRUE
         ),
         ARRAY['account_gmail_ids', COALESCE($11::text, '__unknown__')],
-        to_jsonb($14::text),
+        to_jsonb($13::text),
         TRUE
     )
 WHERE comms_message.deleted_at IS NULL
@@ -243,17 +271,23 @@ type UpsertCommsMessageParams struct {
 	SentAt           pgtype.Timestamptz `json:"sent_at"`
 	AccountID        pgtype.Text        `json:"account_id"`
 	SourceMetadata   []byte             `json:"source_metadata"`
-	MatchedContactID pgtype.UUID        `json:"matched_contact_id"`
 	GmailMessageID   string             `json:"gmail_message_id"`
+	MatchedContactID pgtype.UUID        `json:"matched_contact_id"`
 }
 
 // Insert-or-merge by the partial unique (source, external_id, matched_contact_id)
 // WHERE deleted_at IS NULL. Content fields are IMMUTABLE on conflict (first
-// writer wins). On conflict we merge provenance by SET-UNION (spec §5.2/§5.4):
+// writer wins). Provenance is merged by SET-UNION on BOTH the insert and the
+// conflict paths, so the observing account is recorded regardless of what
+// @source_metadata the caller passes (even '{}' or NULL):
 //   - add @account_id to source_metadata.observed_accounts[] only if absent
 //   - record this account's per-mailbox gmail id under
-//     source_metadata.account_gmail_ids.<account_id>
+//     source_metadata.account_gmail_ids.<account_id> (or '__unknown__' when the
+//     account is NULL — the nomsgid/missing-account edge)
 //
+// The same three-level jsonb_set expression is applied to the caller's metadata
+// on insert and to the stored metadata on conflict; non-provenance keys the
+// caller supplies (html body, attachments[], labels, to/cc/bcc) are preserved.
 // The merge is idempotent: a same-account cursor-overlap replay re-runs this
 // upsert and neither grows observed_accounts[] (already present) nor changes
 // the gmail-id (stable per account). The ON CONFLICT clause MUST name the
@@ -272,8 +306,8 @@ func (q *Queries) UpsertCommsMessage(ctx context.Context, arg UpsertCommsMessage
 		arg.SentAt,
 		arg.AccountID,
 		arg.SourceMetadata,
-		arg.MatchedContactID,
 		arg.GmailMessageID,
+		arg.MatchedContactID,
 	)
 	var i CommsMessage
 	err := row.Scan(

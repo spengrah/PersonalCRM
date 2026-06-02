@@ -169,6 +169,56 @@ func TestCommsMessageRepository_UpsertAndGet(t *testing.T) {
 	assert.Equal(t, externalID, byID.ExternalID)
 }
 
+// TestCommsMessageRepository_UpsertSynthesizesProvenanceOnInsert proves the
+// upsert records the observing account's provenance from the AccountID +
+// GmailMessageID params on the INSERT path, even when the caller passes no
+// provenance keys (nil metadata, or a metadata blob carrying only content
+// keys). The repository must not depend on the caller pre-seeding
+// observed_accounts[] / account_gmail_ids.
+func TestCommsMessageRepository_UpsertSynthesizesProvenanceOnInsert(t *testing.T) {
+	ctx, repo, contactRepo, _, cleanup := setupCommsMessageTest(t)
+	defer cleanup()
+
+	suffix := randomSuffix(t)
+	contact := newEmailContact(t, ctx, repo, contactRepo, "Test Comms Synth "+suffix)
+	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
+
+	// (a) nil metadata → provenance synthesized from params alone.
+	idNil := "<msgid-synth-nil-" + suffix + ">"
+	pNil := baseUpsertParams(idNil, contact.ID, sentAt, "accA", "gidA", nil)
+	msgNil, err := repo.UpsertMessage(ctx, pNil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"accA"}, observedAccounts(t, msgNil.SourceMetadata))
+	assert.Equal(t, map[string]string{"accA": "gidA"}, accountGmailIDs(t, msgNil.SourceMetadata))
+
+	// (b) caller metadata carries only a content key → provenance added, content key preserved.
+	idContent := "<msgid-synth-content-" + suffix + ">"
+	contentOnly, err := json.Marshal(map[string]any{"html": "<b>x</b>"})
+	require.NoError(t, err)
+	pContent := baseUpsertParams(idContent, contact.ID, sentAt, "accA", "gidA", contentOnly)
+	msgContent, err := repo.UpsertMessage(ctx, pContent)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"accA"}, observedAccounts(t, msgContent.SourceMetadata))
+	assert.Equal(t, map[string]string{"accA": "gidA"}, accountGmailIDs(t, msgContent.SourceMetadata))
+	assert.Equal(t, "<b>x</b>", decodeMetadata(t, msgContent.SourceMetadata)["html"])
+
+	// (c) nil account_id → gmail id filed under '__unknown__', observed_accounts empty.
+	idNoAcct := "<msgid-synth-noacct-" + suffix + ">"
+	pNoAcct := repository.UpsertCommsMessageParams{
+		Source:           repository.InteractionSourceEmail,
+		ExternalID:       idNoAcct,
+		Direction:        repository.InteractionDirectionInbound,
+		SentAt:           sentAt,
+		AccountID:        nil,
+		GmailMessageID:   strPtr("gidZ"),
+		MatchedContactID: contact.ID,
+	}
+	msgNoAcct, err := repo.UpsertMessage(ctx, pNoAcct)
+	require.NoError(t, err)
+	assert.Empty(t, observedAccounts(t, msgNoAcct.SourceMetadata))
+	assert.Equal(t, map[string]string{"__unknown__": "gidZ"}, accountGmailIDs(t, msgNoAcct.SourceMetadata))
+}
+
 func TestCommsMessageRepository_GetMessage_NotFound(t *testing.T) {
 	ctx, repo, contactRepo, _, cleanup := setupCommsMessageTest(t)
 	defer cleanup()
@@ -221,9 +271,10 @@ func TestCommsMessageRepository_CrossAccountProvenanceMerge(t *testing.T) {
 	_, err := repo.UpsertMessage(ctx, baseUpsertParams(externalID, contact.ID, sentAt, "accA", "gidA", mdA))
 	require.NoError(t, err)
 
-	// Account B observes the same Message-ID with a different body/subject.
-	mdB := metadataFor(t, "accB", "gidB", map[string]any{"html": "<b>B</b>"})
-	paramsB := baseUpsertParams(externalID, contact.ID, sentAt, "accB", "gidB", mdB)
+	// Account B observes the same Message-ID with a different body/subject and
+	// NO pre-seeded provenance metadata — the conflict-path merge must union B
+	// in from the AccountID/GmailMessageID params, not from B's metadata blob.
+	paramsB := baseUpsertParams(externalID, contact.ID, sentAt, "accB", "gidB", nil)
 	paramsB.Body = strPtr("DIFFERENT body")
 	paramsB.Subject = strPtr("DIFFERENT subject")
 	paramsB.Direction = repository.InteractionDirectionOutbound

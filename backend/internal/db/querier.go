@@ -450,8 +450,8 @@ type Querier interface {
 	// DELETE either blocks (attended inserts, decline then soft-deletes) or has
 	// already committed (this read returns no row, attended skips the insert).
 	GetCalendarEventByIDForShare(ctx context.Context, id pgtype.UUID) (*CalendarEvent, error)
-	// Natural-key lookup used by the (phase-3) consumer to locate the content row
-	// for a (source, external_id, contact) tuple. deleted_at filtered.
+	// Natural-key lookup used by the email interaction consumer to locate the
+	// content row for a (source, external_id, contact) tuple. deleted_at filtered.
 	GetCommsMessage(ctx context.Context, arg GetCommsMessageParams) (*CommsMessage, error)
 	GetCommsMessageByID(ctx context.Context, id pgtype.UUID) (*CommsMessage, error)
 	// Contact queries
@@ -1268,10 +1268,16 @@ type Querier interface {
 	UpsertCalendarEvent(ctx context.Context, arg UpsertCalendarEventParams) (*CalendarEvent, error)
 	// Insert-or-merge by the partial unique (source, external_id, matched_contact_id)
 	// WHERE deleted_at IS NULL. Content fields are IMMUTABLE on conflict (first
-	// writer wins). On conflict we merge provenance by SET-UNION (spec §5.2/§5.4):
+	// writer wins). Provenance is merged by SET-UNION on BOTH the insert and the
+	// conflict paths, so the observing account is recorded regardless of what
+	// @source_metadata the caller passes (even '{}' or NULL):
 	//   - add @account_id to source_metadata.observed_accounts[] only if absent
 	//   - record this account's per-mailbox gmail id under
-	//     source_metadata.account_gmail_ids.<account_id>
+	//     source_metadata.account_gmail_ids.<account_id> (or '__unknown__' when the
+	//     account is NULL — the nomsgid/missing-account edge)
+	// The same three-level jsonb_set expression is applied to the caller's metadata
+	// on insert and to the stored metadata on conflict; non-provenance keys the
+	// caller supplies (html body, attachments[], labels, to/cc/bcc) are preserved.
 	// The merge is idempotent: a same-account cursor-overlap replay re-runs this
 	// upsert and neither grows observed_accounts[] (already present) nor changes
 	// the gmail-id (stable per account). The ON CONFLICT clause MUST name the
