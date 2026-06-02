@@ -313,8 +313,9 @@ func (s *RematchService) pruneTerminalJobs() {
 func (s *RematchService) Run(ctx context.Context, jobID, contactID uuid.UUID, methods []Method) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
+			// contactId is a third-party contact UUID; jobId attributes the run
+			// without logging it.
 			logger.Error().
-				Str("contactId", contactID.String()).
 				Str("jobId", jobID.String()).
 				Interface("panic", r).
 				Msg("rematch: job panicked")
@@ -347,8 +348,10 @@ func (s *RematchService) Run(ctx context.Context, jobID, contactID uuid.UUID, me
 		for _, handler := range hs {
 			n, handlerErr := handler.Rematch(ctx, contactID, m.Value)
 			if handlerErr != nil {
+				// contactId is a third-party contact UUID; jobId + type attribute
+				// the failure without logging it.
 				logger.Warn().Err(handlerErr).
-					Str("contactId", contactID.String()).
+					Str("jobId", jobID.String()).
 					Str("type", m.Type).
 					Msg("rematch: handler failed")
 				j.setFailed(handlerErr)

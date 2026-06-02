@@ -105,7 +105,10 @@ func (f *gmailServiceFetcher) ListMessageIDs(ctx context.Context, query, pageTok
 func (f *gmailServiceFetcher) GetMessage(ctx context.Context, id string) (*gmail.Message, error) {
 	msg, err := f.svc.Users.Messages.Get(gmailUserID, id).Format("full").Context(ctx).Do()
 	if err != nil {
-		return nil, fmt.Errorf("get message %s: %w", id, err)
+		// id is a per-mailbox Gmail message id (third-party identifier); hash it
+		// so the error (which flows into River logs) carries no raw third-party
+		// reference while staying correlatable.
+		return nil, fmt.Errorf("get message %s: %w", hashIdentifier(id), err)
 	}
 	return msg, nil
 }
@@ -376,11 +379,13 @@ func (p *GmailSyncProvider) scanChunks(
 
 				msg, getErr := fetcher.GetMessage(ctx, ref.ID)
 				if getErr != nil {
-					return processed, matched, maxInternalDateSecs, fetchedAny, fmt.Errorf("get message %s: %w", ref.ID, getErr)
+					// ref.ID is a per-mailbox Gmail message id (third-party);
+					// hash it so the error in River logs carries no raw id.
+					return processed, matched, maxInternalDateSecs, fetchedAny, fmt.Errorf("get message %s: %w", hashIdentifier(ref.ID), getErr)
 				}
 				rows, procErr := p.processMessage(ctx, msg, accountID, knownMap, meSet)
 				if procErr != nil {
-					return processed, matched, maxInternalDateSecs, fetchedAny, fmt.Errorf("process message %s: %w", ref.ID, procErr)
+					return processed, matched, maxInternalDateSecs, fetchedAny, fmt.Errorf("process message %s: %w", hashIdentifier(ref.ID), procErr)
 				}
 				processed++
 
@@ -392,7 +397,7 @@ func (p *GmailSyncProvider) scanChunks(
 
 				for _, row := range rows {
 					if perr := p.persistRow(ctx, row); perr != nil {
-						return processed, matched, maxInternalDateSecs, fetchedAny, fmt.Errorf("persist row for message %s: %w", ref.ID, perr)
+						return processed, matched, maxInternalDateSecs, fetchedAny, fmt.Errorf("persist row for message %s: %w", hashIdentifier(ref.ID), perr)
 					}
 					matched++
 				}

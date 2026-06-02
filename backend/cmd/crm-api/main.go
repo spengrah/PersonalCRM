@@ -561,8 +561,9 @@ func run() int {
 	// (found-branch extend/promote). cadenceUpdater + followUpManager are the
 	// SAME instances the InteractionRecorder uses, so the create branch's
 	// inline cadence/follow-up apply shares the durable event-claim store.
-	// Registered unconditionally — no events route to it until the Gmail
-	// provider is registered + enabled (phase 5), so it is production-inert.
+	// Registered unconditionally; it processes the email.received /
+	// email.sent events the Gmail provider publishes in production (and
+	// stays idle when no such event is routed, e.g. event-bus off mode).
 	commsMessageRepo := repository.NewCommsMessageRepository(database.Queries)
 	emailInteractionConsumer := consumer.NewEmailInteractionConsumer(
 		contactService, commsMessageRepo, interactionRepo, contactService,

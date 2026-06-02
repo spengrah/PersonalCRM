@@ -62,8 +62,8 @@ type consumerJob struct {
 //   - email.received / email.sent → EmailInteractionConsumer worker with
 //     MaxAttempts=5 (derives a per-(contact, thread, local-day) aggregated
 //     email interaction). Both kinds share one case (one job each). The
-//     consumer is production-inert until the Gmail provider is registered +
-//     enabled (phase 5) — no production code publishes email.* events.
+//     Gmail provider publishes these events in production; the consumer
+//     stays idle when no such event is routed (e.g. event-bus off mode).
 //   - task.skipped: no consumer yet wired.
 func consumerJobsForKind(env *Envelope) ([]consumerJob, error) {
 	switch env.Kind {

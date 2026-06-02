@@ -35,9 +35,8 @@ const (
 // GoogleAccountLister is the narrow account-enumeration seam
 // ReconcileEmailSyncStates needs. Production satisfies it with
 // *google.OAuthService; tests satisfy it with a stub so the reconciliation
-// needs no real OAuth. Mirrors the accountLister convention in
-// google/gmail_rematch.go and keeps the service package free of a google
-// import.
+// needs no real OAuth. Follows the narrow-interface convention used across the
+// google package and keeps the service package free of a google import.
 type GoogleAccountLister interface {
 	ListAccounts(ctx context.Context) ([]repository.OAuthCredentialStatus, error)
 }
