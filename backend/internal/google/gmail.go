@@ -38,9 +38,18 @@ const (
 	// GmailDefaultInterval is the default sync interval for Gmail (every 15
 	// minutes), matching the calendar provider's tick.
 	GmailDefaultInterval = 15 * time.Minute
-	// gmailCategoryFilter restricts the search to the Primary category, the
-	// only category that carries 1:1 correspondence (spec §2.2).
-	gmailCategoryFilter = "category:primary"
+	// gmailCategoryFilter excludes Gmail's bulk-mail categories
+	// (Promotions/Social/Updates/Forums) so a known contact's promotional/bulk
+	// mail stays out of the cadence signal (spec §2.2). It is a NEGATIVE filter
+	// on purpose: an earlier `category:primary` positive filter matched NOTHING
+	// on accounts where the category tabs are disabled (the Primary category is
+	// unpopulated there), silently ingesting zero messages. Negative exclusions
+	// degrade gracefully — on accounts with categories off they exclude nothing,
+	// so all known-contact mail flows through; on accounts with categories on
+	// they still drop bulk mail. The real noise gate is the known-contact
+	// `from:/to:/cc:/bcc:` address filter, which already excludes all
+	// non-contact mail.
+	gmailCategoryFilter = "-category:promotions -category:social -category:updates -category:forums"
 	// gmailChunkByteCap caps the URL-encoded length of a single chunk query at
 	// ~6 KB, well under the practical ~8 KB GET-URL limit (spec §3.1/§7).
 	gmailChunkByteCap = 6000

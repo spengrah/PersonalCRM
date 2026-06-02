@@ -127,7 +127,7 @@ func TestBuildORChunks_BasicShapeAndPrefix(t *testing.T) {
 	chunks := buildORChunks([]string{"b@example.com", "a@example.com"}, 1700000000)
 	require.Len(t, chunks, 1)
 	q := chunks[0]
-	require.True(t, strings.HasPrefix(q, "category:primary after:1700000000 ("), "got %q", q)
+	require.True(t, strings.HasPrefix(q, "-category:promotions -category:social -category:updates -category:forums after:1700000000 ("), "got %q", q)
 	// Sorted: a before b.
 	require.Less(t, strings.Index(q, "a@example.com"), strings.Index(q, "b@example.com"))
 	require.Contains(t, q, "(from:a@example.com OR to:a@example.com OR cc:a@example.com OR bcc:a@example.com)")
