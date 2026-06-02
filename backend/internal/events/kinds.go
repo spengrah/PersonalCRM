@@ -26,6 +26,16 @@ const (
 	KindInteractionManual    Kind = "interaction.manual"
 	KindContactMethodsAdded  Kind = "contact_methods.added"
 
+	// Email raw-signal events — published by the Gmail sync provider
+	// (backend/internal/google/gmail.go) per qualifying (message, contact,
+	// direction). Lightweight payload (EmailEventPayload); the full body /
+	// subject / html live in comms_message. These kinds have NO registered
+	// consumer in consumerJobsForKind yet, so publishing them is durable but
+	// unconsumed (the event-log row lands, no job is enqueued) until the
+	// phase-3 email-interaction consumer is wired.
+	KindEmailReceived Kind = "email.received"
+	KindEmailSent     Kind = "email.sent"
+
 	// Derived event — emitted by the InteractionRecorder consumer (spec
 	// §3.4.1) atomically with an interaction row insert. PR 2 declares
 	// the constant; PR 5 introduces the consumer that emits it.
@@ -85,6 +95,8 @@ var AllKinds = []Kind{
 	KindTaskOutreachDetected,
 	KindInteractionManual,
 	KindContactMethodsAdded,
+	KindEmailReceived,
+	KindEmailSent,
 	KindInteractionRecorded,
 	KindRawMessageReceived,
 	KindRawMessageSent,
@@ -238,6 +250,29 @@ type ContactMethodsAddedPayload struct {
 	ContactID    uuid.UUID          `json:"contact_id"`
 	Methods      []ContactMethodRef `json:"methods"`
 	RematchJobID uuid.UUID          `json:"rematch_job_id"`
+}
+
+// EmailEventPayload is the payload for KindEmailReceived and KindEmailSent,
+// published by the Gmail sync provider. Lightweight — ids + metadata only;
+// the full body / subject / html live in comms_message (located by a later
+// consumer via the natural key external_id + matched_contact_id). One struct
+// serves both kinds; the discriminator is the kind, mirroring CallPayload.
+//
+// LocalDay is the calendar day of SentAt in the server's time.Local (the
+// timezone backend/internal/cadence/date.go uses for date-only cadence math).
+// It is carried so a later thread-day aggregation consumer can build the
+// "<contact>:<thread>:<day>" source_ref without re-deriving the timezone.
+// ThreadID and Subject are likewise derived once at publish time from data the
+// provider already has, keeping the durable event row a complete hand-off.
+type EmailEventPayload struct {
+	Version    int       `json:"version"` // start at 1
+	ContactID  uuid.UUID `json:"contact_id"`
+	ExternalID string    `json:"external_id"` // RFC822 Message-ID or nomsgid fallback
+	ThreadID   string    `json:"thread_id"`   // Gmail threadId
+	LocalDay   string    `json:"local_day"`   // YYYY-MM-DD in time.Local
+	SentAt     time.Time `json:"sent_at"`
+	Direction  string    `json:"direction"` // "inbound" | "outbound" (mirrors kind)
+	Subject    *string   `json:"subject,omitempty"`
 }
 
 // InteractionRecordedPayload is the payload for KindInteractionRecorded,
@@ -510,6 +545,8 @@ var kindPayloadTypes = map[Kind]reflect.Type{
 	KindTaskOutreachDetected:    reflect.TypeOf(TaskOutreachDetectedPayload{}),
 	KindInteractionManual:       reflect.TypeOf(InteractionManualPayload{}),
 	KindContactMethodsAdded:     reflect.TypeOf(ContactMethodsAddedPayload{}),
+	KindEmailReceived:           reflect.TypeOf(EmailEventPayload{}),
+	KindEmailSent:               reflect.TypeOf(EmailEventPayload{}),
 	KindInteractionRecorded:     reflect.TypeOf(InteractionRecordedPayload{}),
 	KindRawMessageReceived:      reflect.TypeOf(RawMessageReceivedPayload{}),
 	KindRawMessageSent:          reflect.TypeOf(RawMessageSentPayload{}),
