@@ -116,7 +116,7 @@ const TestInsertExternalContactRawEmails = `-- name: TestInsertExternalContactRa
 
 INSERT INTO external_contact (source, source_id, display_name, emails)
 VALUES ($1::text, $2::text, $3::text, $4::jsonb)
-RETURNING id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash
+RETURNING id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash, pending_method_suggestions, dismissed_method_suggestions
 `
 
 type TestInsertExternalContactRawEmailsParams struct {
@@ -169,6 +169,8 @@ func (q *Queries) TestInsertExternalContactRawEmails(ctx context.Context, arg Te
 		&i.DeletedAt,
 		&i.HostID,
 		&i.LastContentHash,
+		&i.PendingMethodSuggestions,
+		&i.DismissedMethodSuggestions,
 	)
 	return &i, err
 }
@@ -235,7 +237,7 @@ func (q *Queries) TestParityFindEventsByAttendeeEmailUnmatchedForContactLegacy(c
 }
 
 const TestParityFindExternalContactsByNormalizedEmailLegacy = `-- name: TestParityFindExternalContactsByNormalizedEmailLegacy :many
-SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash FROM external_contact
+SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash, pending_method_suggestions, dismissed_method_suggestions FROM external_contact
 WHERE EXISTS (
     SELECT 1 FROM jsonb_array_elements(emails) AS e
     WHERE LOWER(e->>'value') = LOWER($1)
@@ -284,6 +286,8 @@ func (q *Queries) TestParityFindExternalContactsByNormalizedEmailLegacy(ctx cont
 			&i.DeletedAt,
 			&i.HostID,
 			&i.LastContentHash,
+			&i.PendingMethodSuggestions,
+			&i.DismissedMethodSuggestions,
 		); err != nil {
 			return nil, err
 		}

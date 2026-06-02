@@ -15,6 +15,7 @@ import (
 
 	"personal-crm/backend/internal/messages"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/service"
 
 	"github.com/google/uuid"
 )
@@ -365,6 +366,81 @@ func TestRunRematchStrandedDelegates(t *testing.T) {
 	}
 }
 
+type fakeReconcileRunner struct {
+	result service.ReconcileAllResult
+	err    error
+	calls  int
+}
+
+func (f *fakeReconcileRunner) ReconcileAllAddressBookMethods(_ context.Context) (service.ReconcileAllResult, error) {
+	f.calls++
+	if f.err != nil {
+		return service.ReconcileAllResult{}, f.err
+	}
+	return f.result, nil
+}
+
+func TestRunReconcileAddressBookMethodsHappy(t *testing.T) {
+	deps, stdout, _, _, _, _ := newTestDeps()
+	reconcile := &fakeReconcileRunner{result: service.ReconcileAllResult{
+		Scanned: 20, MethodsAutoApplied: 13, SuggestionsRecorded: 7, Failed: 0,
+	}}
+	deps.reconcile = reconcile
+
+	err := run(context.Background(), runOptions{reconcileAddressBook: true}, deps)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if reconcile.calls != 1 {
+		t.Fatalf("expected 1 reconcile call, got %d", reconcile.calls)
+	}
+	out := stdout.String()
+	for _, want := range []string{"scanned:               20", "methods_auto_applied:  13", "suggestions_recorded:  7", "failed:                0"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q: %s", want, out)
+		}
+	}
+}
+
+func TestRunReconcileAddressBookMethodsFailedExitsNonZero(t *testing.T) {
+	deps, stdout, _, _, _, _ := newTestDeps()
+	reconcile := &fakeReconcileRunner{result: service.ReconcileAllResult{
+		Scanned: 5, MethodsAutoApplied: 2, SuggestionsRecorded: 1, Failed: 2,
+	}}
+	deps.reconcile = reconcile
+
+	err := run(context.Background(), runOptions{reconcileAddressBook: true}, deps)
+	if err == nil {
+		t.Fatal("expected non-nil error when some rows failed (non-zero exit)")
+	}
+	// Summary still printed even on failure.
+	if !strings.Contains(stdout.String(), "failed:                2") {
+		t.Fatalf("expected summary printed with failed count, got %q", stdout.String())
+	}
+}
+
+func TestRunReconcileAddressBookMethodsError(t *testing.T) {
+	deps, _, _, _, _, _ := newTestDeps()
+	deps.reconcile = &fakeReconcileRunner{err: errors.New("list failed")}
+
+	err := run(context.Background(), runOptions{reconcileAddressBook: true}, deps)
+	if err == nil {
+		t.Fatal("expected error when reconcile runner errors")
+	}
+}
+
+func TestRunReconcileMutualExclusion(t *testing.T) {
+	deps, _, _, _, _, _ := newTestDeps()
+	deps.reconcile = &fakeReconcileRunner{}
+	err := run(context.Background(), runOptions{
+		reconcileAddressBook: true,
+		listHosts:            true,
+	}, deps)
+	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("expected mutual-exclusion error, got %v", err)
+	}
+}
+
 func TestParseArgsAllFlags(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -407,6 +483,15 @@ func TestParseArgsAllFlags(t *testing.T) {
 			func(t *testing.T, o runOptions) {
 				if !o.rematchStranded {
 					t.Fatal("rematch flag not set")
+				}
+			},
+		},
+		{
+			"reconcile-address-book-methods",
+			[]string{"--reconcile-address-book-methods"},
+			func(t *testing.T, o runOptions) {
+				if !o.reconcileAddressBook {
+					t.Fatal("reconcile-address-book-methods flag not set")
 				}
 			},
 		},

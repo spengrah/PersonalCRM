@@ -539,8 +539,28 @@ func (h *ImportHandler) LinkContact(c *gin.Context) {
 		return
 	}
 
+	// A link is "curated" when the request engaged any of the modal's
+	// curation controls — method selections, conflict resolutions, an
+	// explicit cadence, or a name override. This is the SAME signal used
+	// below to pick the WithSelections enrichment path. A curated link
+	// lands as `imported` so the address-book method reconcile treats a
+	// missing method as a possible intentional deselection (suggest, not
+	// auto-push); a bare link with no curation signal stays `matched`
+	// (an un-applied method there is a genuine gap → auto-propagate).
+	//
+	// Known residual (closed in the suggestions-surface PR): opening the
+	// modal, deselecting ALL methods, and linking with no cadence/name/
+	// conflict sends no curation signal (the frontend sends
+	// selected_methods: undefined), so it is indistinguishable from a
+	// bare auto-match and classifies as `matched`.
+	curated := len(req.SelectedMethods) > 0 || len(req.ConflictResolutions) > 0 || req.Cadence != nil || req.Name != nil
+	linkStatus := repository.MatchStatusMatched
+	if curated {
+		linkStatus = repository.MatchStatusImported
+	}
+
 	// Update match status
-	updated, err := h.externalRepo.UpdateMatch(ctx, id, &crmContactID, repository.MatchStatusMatched)
+	updated, err := h.externalRepo.UpdateMatch(ctx, id, &crmContactID, linkStatus)
 	if err != nil {
 		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to link contact", err.Error())
 		return
@@ -551,7 +571,7 @@ func (h *ImportHandler) LinkContact(c *gin.Context) {
 		enrichErr    error
 		rematchJobID uuid.UUID
 	)
-	if len(req.SelectedMethods) > 0 || len(req.ConflictResolutions) > 0 || req.Cadence != nil || req.Name != nil {
+	if curated {
 		rematchJobID, enrichErr = h.enricher.EnrichContactFromExternalWithSelections(
 			ctx,
 			crmContactID,

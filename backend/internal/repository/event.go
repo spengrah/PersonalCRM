@@ -165,3 +165,12 @@ func (r *EventRepository) CountRematchDispatcherJobs(ctx context.Context, contac
 		RematchJobID: rematchJobID.String(),
 	})
 }
+
+// CountRematchDispatcherJobsByContact returns the number of
+// rematch_dispatcher river_job rows enqueued for a contact (any
+// rematch_job_id). Test-only helper for the address-book reconcile
+// integration test — proves the matched-row auto-propagate published
+// contact_methods.added without needing the jobID.
+func (r *EventRepository) CountRematchDispatcherJobsByContact(ctx context.Context, contactID uuid.UUID) (int64, error) {
+	return r.queries.CountRematchDispatcherJobsByContact(ctx, contactID.String())
+}

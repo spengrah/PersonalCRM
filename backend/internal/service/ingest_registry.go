@@ -121,7 +121,14 @@ var externalContactFamily = daemonFamily{
 	) {
 		switch env.Kind {
 		case events.KindExternalContactUpserted:
-			return nil, nil, nil, s.handleExternalContactUpserted(ctx, sp, env, hostID)
+			postCommit, rejection := s.handleExternalContactUpserted(ctx, sp, env, hostID)
+			if rejection != nil {
+				return nil, nil, nil, rejection
+			}
+			if postCommit != nil {
+				return nil, nil, []func(context.Context){postCommit}, nil
+			}
+			return nil, nil, nil, nil
 		case events.KindExternalContactDeleted:
 			return nil, nil, nil, s.handleExternalContactDeleted(ctx, sp, env, hostID)
 		default:

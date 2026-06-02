@@ -13,6 +13,7 @@ import (
 	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/sync"
 
+	"github.com/google/uuid"
 	"google.golang.org/api/option"
 	"google.golang.org/api/people/v1"
 )
@@ -32,20 +33,29 @@ type ContactsProvider struct {
 	externalRepo    *repository.ExternalContactRepository
 	enricher        *service.EnrichmentService
 	identityService *service.IdentityService
+	// reconciler re-propagates address-book methods onto already-linked
+	// (or duplicate-of-linked) contacts on every resync, closing the
+	// "enrich once at first match then never again" leak. May be nil in
+	// tests that don't exercise the forward reconcile.
+	reconciler *service.AddressBookReconcileService
 }
 
-// NewContactsProvider creates a new Google Contacts sync provider
+// NewContactsProvider creates a new Google Contacts sync provider. The
+// reconciler may be nil for unit tests that don't exercise the forward
+// reconcile hook.
 func NewContactsProvider(
 	oauthService *OAuthService,
 	externalRepo *repository.ExternalContactRepository,
 	enricher *service.EnrichmentService,
 	identityService *service.IdentityService,
+	reconciler *service.AddressBookReconcileService,
 ) *ContactsProvider {
 	return &ContactsProvider{
 		oauthService:    oauthService,
 		externalRepo:    externalRepo,
 		enricher:        enricher,
 		identityService: identityService,
+		reconciler:      reconciler,
 	}
 }
 
@@ -188,17 +198,65 @@ func (p *ContactsProvider) processContact(
 		return fmt.Errorf("upsert external contact: %w", err)
 	}
 
-	// Check for duplicates across accounts
+	// Check for duplicates across accounts. This may mark the row as a
+	// duplicate (sets duplicate_of_id in the DB) but does NOT update the
+	// local externalContact struct.
 	if err := p.checkDuplicates(ctx, externalContact); err != nil {
 		logger.Debug().Err(err).Msg("duplicate check failed")
 	}
+
+	// Re-read so attemptMatch sees a freshly-set duplicate_of_id. Without
+	// this, a row just marked duplicate (whose CRMContactID is still nil)
+	// would skip attemptMatch's duplicate guard and auto-enrich directly —
+	// bypassing the duplicate-aware effective-status precedence and
+	// auto-pushing methods that should only be reconciled into the
+	// canonical contact (and only suggested when the canonical is curated).
+	//
+	// Fail CLOSED: if the re-read errors, we cannot trust the local
+	// struct's duplicate_of_id, so we SKIP attemptMatch (running it on a
+	// stale struct could re-open the duplicate bypass) and still run the
+	// forward reconcile, which re-reads the row itself via
+	// ResolveReconcileTarget. The next sync retries the match cleanly.
+	reread, rereadErr := p.externalRepo.GetByID(ctx, externalContact.ID)
+	if rereadErr != nil || reread == nil {
+		logger.Warn().Err(rereadErr).Msg("gcontacts: re-read after duplicate check failed; skipping attemptMatch this sync")
+		p.reconcileMethods(ctx, externalContact.ID)
+		return nil
+	}
+	externalContact = reread
 
 	// Attempt to match to CRM contact
 	if err := p.attemptMatch(ctx, externalContact); err != nil {
 		logger.Debug().Err(err).Msg("match attempt failed")
 	}
 
+	// Forward reconcile: re-propagate methods onto an already-linked (or
+	// duplicate-of-linked) contact. This is what closes the leak — the
+	// attemptMatch early-return enriches only at FIRST match, so a method
+	// the address book gains later for an already-linked person never
+	// reaches the CRM contact without this step. Best-effort: a reconcile
+	// failure must not fail the whole sync item.
+	p.reconcileMethods(ctx, externalContact.ID)
+
 	return nil
+}
+
+// reconcileMethods resolves the (possibly duplicate) row to its effective
+// contact + status and reconciles its methods (auto-propagate for
+// matched, record suggestion for imported). No-op when the reconciler is
+// unwired, the row is unmatched / not a dup-of-linked, or the row is
+// effectively ignored. Best-effort: errors are logged, never propagated,
+// since address-book sync items must not fail on a reconcile hiccup.
+func (p *ContactsProvider) reconcileMethods(ctx context.Context, externalID uuid.UUID) {
+	if p.reconciler == nil {
+		return
+	}
+	if err := p.reconciler.ResolveAndReconcile(ctx, externalID); err != nil {
+		// No Err()/id attached: a downstream enrichment error can embed a
+		// normalized method value (PII under this repo's model). Log only
+		// that a reconcile failed for this sync item.
+		logger.Warn().Msg("gcontacts: method reconcile failed for one row")
+	}
 }
 
 // convertPersonToRequest converts a Google Person to an upsert request

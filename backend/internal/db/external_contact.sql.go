@@ -131,7 +131,7 @@ func (q *Queries) DeleteExternalContactsBySourceAccount(ctx context.Context, arg
 }
 
 const FindAnarlogTitleSiblingsByToken = `-- name: FindAnarlogTitleSiblingsByToken :many
-SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash FROM external_contact
+SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash, pending_method_suggestions, dismissed_method_suggestions FROM external_contact
 WHERE source = 'anarlog_title'
     AND metadata->>'token_normalized' = $1::text
     AND match_status = 'unmatched'
@@ -180,6 +180,8 @@ func (q *Queries) FindAnarlogTitleSiblingsByToken(ctx context.Context, normalize
 			&i.DeletedAt,
 			&i.HostID,
 			&i.LastContentHash,
+			&i.PendingMethodSuggestions,
+			&i.DismissedMethodSuggestions,
 		); err != nil {
 			return nil, err
 		}
@@ -192,7 +194,7 @@ func (q *Queries) FindAnarlogTitleSiblingsByToken(ctx context.Context, normalize
 }
 
 const FindExternalContactsByEmail = `-- name: FindExternalContactsByEmail :many
-SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash FROM external_contact
+SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash, pending_method_suggestions, dismissed_method_suggestions FROM external_contact
 WHERE emails @> $1::jsonb
   AND duplicate_of_id IS NULL
   AND deleted_at IS NULL
@@ -234,6 +236,8 @@ func (q *Queries) FindExternalContactsByEmail(ctx context.Context, dollar_1 []by
 			&i.DeletedAt,
 			&i.HostID,
 			&i.LastContentHash,
+			&i.PendingMethodSuggestions,
+			&i.DismissedMethodSuggestions,
 		); err != nil {
 			return nil, err
 		}
@@ -246,7 +250,7 @@ func (q *Queries) FindExternalContactsByEmail(ctx context.Context, dollar_1 []by
 }
 
 const FindExternalContactsByNormalizedEmail = `-- name: FindExternalContactsByNormalizedEmail :many
-SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash FROM external_contact
+SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash, pending_method_suggestions, dismissed_method_suggestions FROM external_contact
 WHERE jsonb_array_lower_values(emails, 'value') && ARRAY[LOWER($1)]
   AND duplicate_of_id IS NULL
   AND deleted_at IS NULL
@@ -292,6 +296,8 @@ func (q *Queries) FindExternalContactsByNormalizedEmail(ctx context.Context, low
 			&i.DeletedAt,
 			&i.HostID,
 			&i.LastContentHash,
+			&i.PendingMethodSuggestions,
+			&i.DismissedMethodSuggestions,
 		); err != nil {
 			return nil, err
 		}
@@ -304,7 +310,7 @@ func (q *Queries) FindExternalContactsByNormalizedEmail(ctx context.Context, low
 }
 
 const FindExternalContactsBySourceAndSourceID = `-- name: FindExternalContactsBySourceAndSourceID :many
-SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash FROM external_contact
+SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash, pending_method_suggestions, dismissed_method_suggestions FROM external_contact
 WHERE source = $1
   AND source_id = $2
   AND match_status = 'unmatched'
@@ -355,6 +361,8 @@ func (q *Queries) FindExternalContactsBySourceAndSourceID(ctx context.Context, a
 			&i.DeletedAt,
 			&i.HostID,
 			&i.LastContentHash,
+			&i.PendingMethodSuggestions,
+			&i.DismissedMethodSuggestions,
 		); err != nil {
 			return nil, err
 		}
@@ -432,7 +440,7 @@ func (q *Queries) GetEnrichmentsForContact(ctx context.Context, contactID pgtype
 
 const GetExternalContact = `-- name: GetExternalContact :one
 
-SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash FROM external_contact
+SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash, pending_method_suggestions, dismissed_method_suggestions FROM external_contact
 WHERE id = $1
   AND deleted_at IS NULL
 `
@@ -468,12 +476,14 @@ func (q *Queries) GetExternalContact(ctx context.Context, id pgtype.UUID) (*Exte
 		&i.DeletedAt,
 		&i.HostID,
 		&i.LastContentHash,
+		&i.PendingMethodSuggestions,
+		&i.DismissedMethodSuggestions,
 	)
 	return &i, err
 }
 
 const GetExternalContactBySource = `-- name: GetExternalContactBySource :one
-SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash FROM external_contact
+SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash, pending_method_suggestions, dismissed_method_suggestions FROM external_contact
 WHERE source = $1 AND source_id = $2 AND COALESCE(account_id, '') = COALESCE($3, '')
 `
 
@@ -517,6 +527,8 @@ func (q *Queries) GetExternalContactBySource(ctx context.Context, arg GetExterna
 		&i.DeletedAt,
 		&i.HostID,
 		&i.LastContentHash,
+		&i.PendingMethodSuggestions,
+		&i.DismissedMethodSuggestions,
 	)
 	return &i, err
 }
@@ -554,7 +566,7 @@ func (q *Queries) IgnoreExternalContact(ctx context.Context, id pgtype.UUID) err
 }
 
 const ListAllUnmatchedExternalContacts = `-- name: ListAllUnmatchedExternalContacts :many
-SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash FROM external_contact
+SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash, pending_method_suggestions, dismissed_method_suggestions FROM external_contact
 WHERE match_status = 'unmatched'
   AND source != 'anarlog_title'
   AND duplicate_of_id IS NULL
@@ -603,6 +615,8 @@ func (q *Queries) ListAllUnmatchedExternalContacts(ctx context.Context, arg List
 			&i.DeletedAt,
 			&i.HostID,
 			&i.LastContentHash,
+			&i.PendingMethodSuggestions,
+			&i.DismissedMethodSuggestions,
 		); err != nil {
 			return nil, err
 		}
@@ -722,7 +736,7 @@ func (q *Queries) ListEnrichmentsBySource(ctx context.Context, arg ListEnrichmen
 }
 
 const ListExternalContactsBySource = `-- name: ListExternalContactsBySource :many
-SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash FROM external_contact
+SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash, pending_method_suggestions, dismissed_method_suggestions FROM external_contact
 WHERE source = $1
   AND ($2::text IS NULL OR account_id = $2)
   AND deleted_at IS NULL
@@ -777,6 +791,8 @@ func (q *Queries) ListExternalContactsBySource(ctx context.Context, arg ListExte
 			&i.DeletedAt,
 			&i.HostID,
 			&i.LastContentHash,
+			&i.PendingMethodSuggestions,
+			&i.DismissedMethodSuggestions,
 		); err != nil {
 			return nil, err
 		}
@@ -789,7 +805,7 @@ func (q *Queries) ListExternalContactsBySource(ctx context.Context, arg ListExte
 }
 
 const ListExternalContactsForCRMContact = `-- name: ListExternalContactsForCRMContact :many
-SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash FROM external_contact
+SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash, pending_method_suggestions, dismissed_method_suggestions FROM external_contact
 WHERE crm_contact_id = $1
   AND deleted_at IS NULL
 ORDER BY source, account_id
@@ -830,6 +846,8 @@ func (q *Queries) ListExternalContactsForCRMContact(ctx context.Context, crmCont
 			&i.DeletedAt,
 			&i.HostID,
 			&i.LastContentHash,
+			&i.PendingMethodSuggestions,
+			&i.DismissedMethodSuggestions,
 		); err != nil {
 			return nil, err
 		}
@@ -893,8 +911,118 @@ func (q *Queries) ListKnownExternalContactIDsByHostAndSource(ctx context.Context
 	return items, nil
 }
 
+const ListLinkedAddressBookExternalContactsForReconcile = `-- name: ListLinkedAddressBookExternalContactsForReconcile :many
+SELECT
+    ec.id, ec.source, ec.source_id, ec.account_id, ec.display_name, ec.first_name, ec.last_name, ec.emails, ec.phones, ec.addresses, ec.organization, ec.job_title, ec.birthday, ec.photo_url, ec.crm_contact_id, ec.match_status, ec.duplicate_of_id, ec.etag, ec.metadata, ec.synced_at, ec.created_at, ec.updated_at, ec.deleted_at, ec.host_id, ec.last_content_hash, ec.pending_method_suggestions, ec.dismissed_method_suggestions,
+    canon.crm_contact_id AS canon_crm_contact_id,
+    canon.match_status   AS canon_match_status
+FROM external_contact ec
+LEFT JOIN external_contact canon
+    ON ec.duplicate_of_id = canon.id
+   AND canon.deleted_at IS NULL
+WHERE ec.source = ANY($1::text[])
+  AND ec.deleted_at IS NULL
+  AND (ec.crm_contact_id IS NOT NULL OR canon.crm_contact_id IS NOT NULL)
+ORDER BY ec.id
+`
+
+type ListLinkedAddressBookExternalContactsForReconcileRow struct {
+	ID                         pgtype.UUID        `json:"id"`
+	Source                     string             `json:"source"`
+	SourceID                   string             `json:"source_id"`
+	AccountID                  pgtype.Text        `json:"account_id"`
+	DisplayName                pgtype.Text        `json:"display_name"`
+	FirstName                  pgtype.Text        `json:"first_name"`
+	LastName                   pgtype.Text        `json:"last_name"`
+	Emails                     []byte             `json:"emails"`
+	Phones                     []byte             `json:"phones"`
+	Addresses                  []byte             `json:"addresses"`
+	Organization               pgtype.Text        `json:"organization"`
+	JobTitle                   pgtype.Text        `json:"job_title"`
+	Birthday                   pgtype.Date        `json:"birthday"`
+	PhotoUrl                   pgtype.Text        `json:"photo_url"`
+	CrmContactID               pgtype.UUID        `json:"crm_contact_id"`
+	MatchStatus                pgtype.Text        `json:"match_status"`
+	DuplicateOfID              pgtype.UUID        `json:"duplicate_of_id"`
+	Etag                       pgtype.Text        `json:"etag"`
+	Metadata                   []byte             `json:"metadata"`
+	SyncedAt                   pgtype.Timestamptz `json:"synced_at"`
+	CreatedAt                  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt                  pgtype.Timestamptz `json:"updated_at"`
+	DeletedAt                  pgtype.Timestamptz `json:"deleted_at"`
+	HostID                     pgtype.UUID        `json:"host_id"`
+	LastContentHash            pgtype.Text        `json:"last_content_hash"`
+	PendingMethodSuggestions   []byte             `json:"pending_method_suggestions"`
+	DismissedMethodSuggestions []byte             `json:"dismissed_method_suggestions"`
+	CanonCrmContactID          pgtype.UUID        `json:"canon_crm_contact_id"`
+	CanonMatchStatus           pgtype.Text        `json:"canon_match_status"`
+}
+
+// Driver query for the address-book method reconcile (forward hooks +
+// one-time catchup). Returns every live address-book row that is itself
+// linked OR is a duplicate of a (live) canonical row, joining to the
+// canonical so the Go reconcile can apply the effective-status
+// precedence (`ignored > imported > matched`) WITHOUT a self-first
+// COALESCE (which would let a dup's stale `matched` win over a canonical
+// `imported`). The canonical columns are explicitly aliased so the
+// generated struct does not collide with the row's own columns.
+//
+// The reconcile is restricted to address-book sources via the
+// caller-supplied `sources` array (`{'gcontacts','icloud_contacts'}`);
+// telegram / gcal_attendee / anarlog_* are out of scope (their own
+// match/enrich flows). ORDER BY ec.id keeps the catchup deterministic.
+func (q *Queries) ListLinkedAddressBookExternalContactsForReconcile(ctx context.Context, sources []string) ([]*ListLinkedAddressBookExternalContactsForReconcileRow, error) {
+	rows, err := q.db.Query(ctx, ListLinkedAddressBookExternalContactsForReconcile, sources)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListLinkedAddressBookExternalContactsForReconcileRow{}
+	for rows.Next() {
+		var i ListLinkedAddressBookExternalContactsForReconcileRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Source,
+			&i.SourceID,
+			&i.AccountID,
+			&i.DisplayName,
+			&i.FirstName,
+			&i.LastName,
+			&i.Emails,
+			&i.Phones,
+			&i.Addresses,
+			&i.Organization,
+			&i.JobTitle,
+			&i.Birthday,
+			&i.PhotoUrl,
+			&i.CrmContactID,
+			&i.MatchStatus,
+			&i.DuplicateOfID,
+			&i.Etag,
+			&i.Metadata,
+			&i.SyncedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+			&i.HostID,
+			&i.LastContentHash,
+			&i.PendingMethodSuggestions,
+			&i.DismissedMethodSuggestions,
+			&i.CanonCrmContactID,
+			&i.CanonMatchStatus,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListUnmatchedExternalContacts = `-- name: ListUnmatchedExternalContacts :many
-SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash FROM external_contact
+SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash, pending_method_suggestions, dismissed_method_suggestions FROM external_contact
 WHERE source = $1
   AND source != 'anarlog_title'
   AND match_status = 'unmatched'
@@ -951,6 +1079,8 @@ func (q *Queries) ListUnmatchedExternalContacts(ctx context.Context, arg ListUnm
 			&i.DeletedAt,
 			&i.HostID,
 			&i.LastContentHash,
+			&i.PendingMethodSuggestions,
+			&i.DismissedMethodSuggestions,
 		); err != nil {
 			return nil, err
 		}
@@ -1051,7 +1181,7 @@ UPDATE external_contact SET
     updated_at = NOW()
 WHERE id = $1
   AND deleted_at IS NOT NULL
-RETURNING id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash
+RETURNING id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash, pending_method_suggestions, dismissed_method_suggestions
 `
 
 // Clears deleted_at on a tombstoned row. Defensive WHERE deleted_at IS NOT
@@ -1086,6 +1216,116 @@ func (q *Queries) ReviveExternalContact(ctx context.Context, id pgtype.UUID) (*E
 		&i.DeletedAt,
 		&i.HostID,
 		&i.LastContentHash,
+		&i.PendingMethodSuggestions,
+		&i.DismissedMethodSuggestions,
+	)
+	return &i, err
+}
+
+const SetDismissedMethodSuggestionsForTest = `-- name: SetDismissedMethodSuggestionsForTest :one
+UPDATE external_contact SET
+    dismissed_method_suggestions = $2,
+    updated_at = NOW()
+WHERE id = $1
+  AND deleted_at IS NULL
+RETURNING id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash, pending_method_suggestions, dismissed_method_suggestions
+`
+
+type SetDismissedMethodSuggestionsForTestParams struct {
+	ID        pgtype.UUID `json:"id"`
+	Dismissed []byte      `json:"dismissed"`
+}
+
+// TEST ONLY: pre-seeds the dismissed_method_suggestions column so the
+// dismissed-skip reconcile test can verify a dismissed (type,value) is
+// not re-suggested. The production dismissal path appends via a read-
+// modify-write; this direct setter exists only so integration tests can
+// establish the pre-state without raw SQL in Go.
+func (q *Queries) SetDismissedMethodSuggestionsForTest(ctx context.Context, arg SetDismissedMethodSuggestionsForTestParams) (*ExternalContact, error) {
+	row := q.db.QueryRow(ctx, SetDismissedMethodSuggestionsForTest, arg.ID, arg.Dismissed)
+	var i ExternalContact
+	err := row.Scan(
+		&i.ID,
+		&i.Source,
+		&i.SourceID,
+		&i.AccountID,
+		&i.DisplayName,
+		&i.FirstName,
+		&i.LastName,
+		&i.Emails,
+		&i.Phones,
+		&i.Addresses,
+		&i.Organization,
+		&i.JobTitle,
+		&i.Birthday,
+		&i.PhotoUrl,
+		&i.CrmContactID,
+		&i.MatchStatus,
+		&i.DuplicateOfID,
+		&i.Etag,
+		&i.Metadata,
+		&i.SyncedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+		&i.HostID,
+		&i.LastContentHash,
+		&i.PendingMethodSuggestions,
+		&i.DismissedMethodSuggestions,
+	)
+	return &i, err
+}
+
+const SetExternalContactMethodSuggestions = `-- name: SetExternalContactMethodSuggestions :one
+UPDATE external_contact SET
+    pending_method_suggestions = $2,
+    updated_at = NOW()
+WHERE id = $1
+  AND deleted_at IS NULL
+RETURNING id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash, pending_method_suggestions, dismissed_method_suggestions
+`
+
+type SetExternalContactMethodSuggestionsParams struct {
+	ID      pgtype.UUID `json:"id"`
+	Pending []byte      `json:"pending"`
+}
+
+// Overwrite-not-append write of the pending suggestion set for a linked
+// row. The Go wrapper passes SQL NULL when the recomputed set is empty,
+// so a method later added by another path clears the stale suggestion on
+// the next reconcile. Writes the DEDICATED column, never `metadata` —
+// so it survives the wholesale-metadata-replace producer upserts.
+func (q *Queries) SetExternalContactMethodSuggestions(ctx context.Context, arg SetExternalContactMethodSuggestionsParams) (*ExternalContact, error) {
+	row := q.db.QueryRow(ctx, SetExternalContactMethodSuggestions, arg.ID, arg.Pending)
+	var i ExternalContact
+	err := row.Scan(
+		&i.ID,
+		&i.Source,
+		&i.SourceID,
+		&i.AccountID,
+		&i.DisplayName,
+		&i.FirstName,
+		&i.LastName,
+		&i.Emails,
+		&i.Phones,
+		&i.Addresses,
+		&i.Organization,
+		&i.JobTitle,
+		&i.Birthday,
+		&i.PhotoUrl,
+		&i.CrmContactID,
+		&i.MatchStatus,
+		&i.DuplicateOfID,
+		&i.Etag,
+		&i.Metadata,
+		&i.SyncedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+		&i.HostID,
+		&i.LastContentHash,
+		&i.PendingMethodSuggestions,
+		&i.DismissedMethodSuggestions,
 	)
 	return &i, err
 }
@@ -1132,7 +1372,7 @@ UPDATE external_contact SET
     updated_at = NOW()
 WHERE id = $1
   AND deleted_at IS NULL
-RETURNING id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash
+RETURNING id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash, pending_method_suggestions, dismissed_method_suggestions
 `
 
 type UpdateExternalContactMatchParams struct {
@@ -1173,6 +1413,8 @@ func (q *Queries) UpdateExternalContactMatch(ctx context.Context, arg UpdateExte
 		&i.DeletedAt,
 		&i.HostID,
 		&i.LastContentHash,
+		&i.PendingMethodSuggestions,
+		&i.DismissedMethodSuggestions,
 	)
 	return &i, err
 }
@@ -1225,7 +1467,7 @@ ON CONFLICT (source, source_id, COALESCE(account_id, '')) DO UPDATE SET
     synced_at         = EXCLUDED.synced_at,
     last_content_hash = EXCLUDED.last_content_hash,
     updated_at        = NOW()
-RETURNING id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash
+RETURNING id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash, pending_method_suggestions, dismissed_method_suggestions
 `
 
 type UpsertExternalContactParams struct {
@@ -1316,6 +1558,8 @@ func (q *Queries) UpsertExternalContact(ctx context.Context, arg UpsertExternalC
 		&i.DeletedAt,
 		&i.HostID,
 		&i.LastContentHash,
+		&i.PendingMethodSuggestions,
+		&i.DismissedMethodSuggestions,
 	)
 	return &i, err
 }
@@ -1331,7 +1575,7 @@ ON CONFLICT (source, source_id, COALESCE(account_id, '')) DO UPDATE SET
     metadata     = external_contact.metadata || EXCLUDED.metadata,
     synced_at    = EXCLUDED.synced_at,
     updated_at   = NOW()
-RETURNING id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash
+RETURNING id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash, pending_method_suggestions, dismissed_method_suggestions
 `
 
 type UpsertTelegramDiscoveryCandidateParams struct {
@@ -1383,6 +1627,8 @@ func (q *Queries) UpsertTelegramDiscoveryCandidate(ctx context.Context, arg Upse
 		&i.DeletedAt,
 		&i.HostID,
 		&i.LastContentHash,
+		&i.PendingMethodSuggestions,
+		&i.DismissedMethodSuggestions,
 	)
 	return &i, err
 }

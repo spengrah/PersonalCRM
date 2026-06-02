@@ -25,6 +25,24 @@ func (q *Queries) CountEventsBySource(ctx context.Context, source string) (int64
 	return count, err
 }
 
+const CountRematchDispatcherJobsByContact = `-- name: CountRematchDispatcherJobsByContact :one
+SELECT COUNT(*) FROM river_job
+WHERE kind = 'rematch_dispatcher'
+  AND (args->>'contact_id') = $1::text
+`
+
+// Test-only count of river_job rows for the rematch_dispatcher kind
+// enqueued for a contact (any rematch_job_id). Used by the address-book
+// reconcile integration test to assert the matched-row auto-propagate
+// published contact_methods.added (which enqueues a rematch dispatcher
+// job) without needing the jobID. Avoids raw SQL in Go (core.md rule 2).
+func (q *Queries) CountRematchDispatcherJobsByContact(ctx context.Context, contactID string) (int64, error) {
+	row := q.db.QueryRow(ctx, CountRematchDispatcherJobsByContact, contactID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const CountRematchDispatcherJobsByContactAndJob = `-- name: CountRematchDispatcherJobsByContactAndJob :one
 SELECT COUNT(*) FROM river_job
 WHERE kind = 'rematch_dispatcher'

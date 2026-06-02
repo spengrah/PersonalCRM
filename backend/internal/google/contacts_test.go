@@ -11,7 +11,7 @@ import (
 )
 
 func TestContactsProvider_Config(t *testing.T) {
-	provider := NewContactsProvider(nil, nil, nil, nil)
+	provider := NewContactsProvider(nil, nil, nil, nil, nil)
 	config := provider.Config()
 
 	assert.Equal(t, ContactsSourceName, config.Name)
@@ -23,7 +23,7 @@ func TestContactsProvider_Config(t *testing.T) {
 }
 
 func TestContactsProvider_ConvertPersonToRequest(t *testing.T) {
-	provider := NewContactsProvider(nil, nil, nil, nil)
+	provider := NewContactsProvider(nil, nil, nil, nil, nil)
 	accountID := "test@gmail.com"
 
 	tests := []struct {
@@ -204,7 +204,7 @@ func TestContactsProvider_ConvertPersonToRequest(t *testing.T) {
 }
 
 func TestContactsProvider_ConvertPersonToRequest_EmptyPerson(t *testing.T) {
-	provider := NewContactsProvider(nil, nil, nil, nil)
+	provider := NewContactsProvider(nil, nil, nil, nil, nil)
 	accountID := "test@gmail.com"
 
 	person := &people.Person{
@@ -229,7 +229,7 @@ func TestContactsProvider_ConvertPersonToRequest_EmptyPerson(t *testing.T) {
 }
 
 func TestContactsProvider_ConvertPersonToRequest_PartialBirthday(t *testing.T) {
-	provider := NewContactsProvider(nil, nil, nil, nil)
+	provider := NewContactsProvider(nil, nil, nil, nil, nil)
 	accountID := "test@gmail.com"
 
 	// Birthday with only month and day (no year) should not be set
@@ -251,7 +251,7 @@ func TestContactsProvider_ConvertPersonToRequest_PartialBirthday(t *testing.T) {
 }
 
 func TestContactsProvider_ConvertPersonToRequest_EmailPrimary(t *testing.T) {
-	provider := NewContactsProvider(nil, nil, nil, nil)
+	provider := NewContactsProvider(nil, nil, nil, nil, nil)
 	accountID := "test@gmail.com"
 
 	person := &people.Person{

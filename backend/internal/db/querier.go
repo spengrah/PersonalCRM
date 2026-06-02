@@ -143,6 +143,12 @@ type Querier interface {
 	// Count OAuth credentials for a provider
 	CountOAuthCredentials(ctx context.Context, provider string) (int64, error)
 	// Test-only count of river_job rows for the rematch_dispatcher kind
+	// enqueued for a contact (any rematch_job_id). Used by the address-book
+	// reconcile integration test to assert the matched-row auto-propagate
+	// published contact_methods.added (which enqueues a rematch dispatcher
+	// job) without needing the jobID. Avoids raw SQL in Go (core.md rule 2).
+	CountRematchDispatcherJobsByContact(ctx context.Context, contactID string) (int64, error)
+	// Test-only count of river_job rows for the rematch_dispatcher kind
 	// whose args JSON contains the given (contact_id, rematch_job_id)
 	// tuple. Used by rematch dedup integration tests to assert
 	// UniqueOpts{ByArgs} behavior without inlining raw SQL into Go test
@@ -810,6 +816,20 @@ type Querier interface {
 	// excluded — the daemon's set-diff reconciliation requires that rows
 	// the Pi has soft-deleted are NOT reported as known.
 	ListKnownMeetingNoteIDsByHost(ctx context.Context, macHostID pgtype.UUID) ([]*ListKnownMeetingNoteIDsByHostRow, error)
+	// Driver query for the address-book method reconcile (forward hooks +
+	// one-time catchup). Returns every live address-book row that is itself
+	// linked OR is a duplicate of a (live) canonical row, joining to the
+	// canonical so the Go reconcile can apply the effective-status
+	// precedence (`ignored > imported > matched`) WITHOUT a self-first
+	// COALESCE (which would let a dup's stale `matched` win over a canonical
+	// `imported`). The canonical columns are explicitly aliased so the
+	// generated struct does not collide with the row's own columns.
+	//
+	// The reconcile is restricted to address-book sources via the
+	// caller-supplied `sources` array (`{'gcontacts','icloud_contacts'}`);
+	// telegram / gcal_attendee / anarlog_* are out of scope (their own
+	// match/enrich flows). ORDER BY ec.id keeps the catchup deterministic.
+	ListLinkedAddressBookExternalContactsForReconcile(ctx context.Context, sources []string) ([]*ListLinkedAddressBookExternalContactsForReconcileRow, error)
 	ListMacHosts(ctx context.Context) ([]*MacHost, error)
 	// List all managed tasks for a provider (for reconciliation)
 	ListManagedContactTasks(ctx context.Context, provider string) ([]*ListManagedContactTasksRow, error)
@@ -1048,6 +1068,18 @@ type Querier interface {
 	// issues item_add to keep Todoist in sync, and records the resulting ID
 	// without flipping the row back to 'managed'.
 	SetContactTaskExternalIDOnly(ctx context.Context, arg SetContactTaskExternalIDOnlyParams) error
+	// TEST ONLY: pre-seeds the dismissed_method_suggestions column so the
+	// dismissed-skip reconcile test can verify a dismissed (type,value) is
+	// not re-suggested. The production dismissal path appends via a read-
+	// modify-write; this direct setter exists only so integration tests can
+	// establish the pre-state without raw SQL in Go.
+	SetDismissedMethodSuggestionsForTest(ctx context.Context, arg SetDismissedMethodSuggestionsForTestParams) (*ExternalContact, error)
+	// Overwrite-not-append write of the pending suggestion set for a linked
+	// row. The Go wrapper passes SQL NULL when the recomputed set is empty,
+	// so a method later added by another path clears the stale suggestion on
+	// the next reconcile. Writes the DEDICATED column, never `metadata` —
+	// so it survives the wholesale-metadata-replace producer upserts.
+	SetExternalContactMethodSuggestions(ctx context.Context, arg SetExternalContactMethodSuggestionsParams) (*ExternalContact, error)
 	SetTelegramChannelPts(ctx context.Context, arg SetTelegramChannelPtsParams) error
 	SetTelegramDate(ctx context.Context, arg SetTelegramDateParams) error
 	SetTelegramPts(ctx context.Context, arg SetTelegramPtsParams) error
