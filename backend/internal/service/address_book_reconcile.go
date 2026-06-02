@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"personal-crm/backend/internal/identity"
+	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
@@ -60,6 +61,54 @@ func NewAddressBookReconcileService(
 type ReconcileResult struct {
 	MethodsAutoApplied  int
 	SuggestionsRecorded int
+}
+
+// addressBookReconcileSources is the fixed set of address-book sources
+// the one-time catchup reconciles. Telegram / gcal_attendee / anarlog_*
+// are out of scope (their own match/enrich flows).
+var addressBookReconcileSources = []string{"gcontacts", "icloud_contacts"}
+
+// ReconcileAllResult is the catchup summary. Failed counts rows whose
+// reconcile errored (the loop continues past them); the catchup exits
+// non-zero iff Failed > 0.
+type ReconcileAllResult struct {
+	Scanned             int
+	MethodsAutoApplied  int
+	SuggestionsRecorded int
+	Failed              int
+}
+
+// ReconcileAllAddressBookMethods runs the one-time catchup: it lists
+// every live linked-or-dup-of-linked address-book row and reconciles
+// each. Continue-on-error — a single row's failure is logged with a
+// NON-IDENTIFYING ordinal index only (no externalID/contactID/email/
+// source — all PII under this repo's model) and tallied in Failed; the
+// loop proceeds. Idempotent (D6), so a re-run after fixing the cause is
+// safe. No transaction spans the loop (each enrich owns its own tx).
+func (s *AddressBookReconcileService) ReconcileAllAddressBookMethods(ctx context.Context) (ReconcileAllResult, error) {
+	targets, err := s.externalRepo.ListLinkedAddressBookExternalContactsForReconcile(ctx, addressBookReconcileSources)
+	if err != nil {
+		return ReconcileAllResult{}, fmt.Errorf("list linked address-book contacts for reconcile: %w", err)
+	}
+
+	var summary ReconcileAllResult
+	summary.Scanned = len(targets)
+	for i, target := range targets {
+		res, reconErr := s.ReconcileLinkedExternalContactMethods(ctx, target)
+		if reconErr != nil {
+			summary.Failed++
+			// Ordinal-only log: never emit row/contact ids or method
+			// values (PII). The error class is safe to surface.
+			logger.Warn().
+				Err(reconErr).
+				Int("ordinal", i).
+				Msg("address-book method reconcile failed for one row; continuing")
+			continue
+		}
+		summary.MethodsAutoApplied += res.MethodsAutoApplied
+		summary.SuggestionsRecorded += res.SuggestionsRecorded
+	}
+	return summary, nil
 }
 
 // ResolveAndReconcile resolves an external_contact row (by id) to its

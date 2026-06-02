@@ -11,6 +11,25 @@
 //	                              MessagingAggregateForContactArgs River
 //	                              jobs per newly-matched contact.
 //
+//	--reconcile-address-book-methods
+//	                              One-time catchup for the address-book
+//	                              method leak: re-propagate any address
+//	                              book (gcontacts / icloud_contacts)
+//	                              method missing from an already-linked
+//	                              CRM contact. Auto-applies for
+//	                              auto-`matched` rows; records a pending
+//	                              suggestion for user-`imported` rows.
+//	                              Continue-on-error; exits non-zero iff
+//	                              any row failed. Idempotent — safe to
+//	                              re-run after fixing a failure cause.
+//	                              NOTE: pre-existing rows that were modal-
+//	                              linked-with-deselections BEFORE the
+//	                              LinkContact curated-status change are
+//	                              stored `matched`, so this one-time run
+//	                              may auto-apply a previously-deselected
+//	                              method (bounded; user-recoverable by
+//	                              deleting the method).
+//
 //	--mint-pairing-token          Mint a single-use pairing token for
 //	                              `crm-mac install --pair`. Optional
 //	                              --hostname-label is operator-side
@@ -58,6 +77,7 @@ import (
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/consumer/consumerjobs"
 	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/messages"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
@@ -92,27 +112,36 @@ type rematchRunner interface {
 	RematchStranded(ctx context.Context) (*messages.RematchStrandedResult, error)
 }
 
+// reconcileRunner is the narrow interface
+// --reconcile-address-book-methods needs. Production wires this to
+// *service.AddressBookReconcileService.ReconcileAllAddressBookMethods.
+type reconcileRunner interface {
+	ReconcileAllAddressBookMethods(ctx context.Context) (service.ReconcileAllResult, error)
+}
+
 // adminDeps groups the four subcommand dependencies. Tests inject
 // fakes for each interface; the production wiring builds a single
 // MacHostService and a small adapter for rematch.
 type adminDeps struct {
-	tokens  tokenMinter
-	hosts   hostLister
-	revoker hostRevoker
-	rematch rematchRunner
-	stdout  io.Writer
-	stderr  io.Writer
+	tokens    tokenMinter
+	hosts     hostLister
+	revoker   hostRevoker
+	rematch   rematchRunner
+	reconcile reconcileRunner
+	stdout    io.Writer
+	stderr    io.Writer
 }
 
 // runOptions captures parsed flags. Exposed as a struct so tests can
 // drive run() directly without re-parsing argv.
 type runOptions struct {
-	rematchStranded  bool
-	mintPairingToken bool
-	hostnameLabel    string
-	listHosts        bool
-	revokeHostID     string
-	rotateHostID     string
+	rematchStranded      bool
+	reconcileAddressBook bool
+	mintPairingToken     bool
+	hostnameLabel        string
+	listHosts            bool
+	revokeHostID         string
+	rotateHostID         string
 }
 
 func main() {
@@ -166,6 +195,9 @@ func validateSubcommand(opts runOptions) error {
 	if opts.rematchStranded {
 		active++
 	}
+	if opts.reconcileAddressBook {
+		active++
+	}
 	if opts.mintPairingToken {
 		active++
 	}
@@ -180,11 +212,11 @@ func validateSubcommand(opts runOptions) error {
 	}
 	if active == 0 {
 		return errors.New("no subcommand specified; pass exactly one of " +
-			"--messages-rematch-stranded, --mint-pairing-token, --list-hosts, --revoke-host <uuid>, --rotate-host-key <uuid>")
+			"--messages-rematch-stranded, --reconcile-address-book-methods, --mint-pairing-token, --list-hosts, --revoke-host <uuid>, --rotate-host-key <uuid>")
 	}
 	if active > 1 {
 		return errors.New("subcommand flags are mutually exclusive; pass exactly one of " +
-			"--messages-rematch-stranded, --mint-pairing-token, --list-hosts, --revoke-host <uuid>, --rotate-host-key <uuid>")
+			"--messages-rematch-stranded, --reconcile-address-book-methods, --mint-pairing-token, --list-hosts, --revoke-host <uuid>, --rotate-host-key <uuid>")
 	}
 	return nil
 }
@@ -196,6 +228,10 @@ func parseArgs(args []string) (runOptions, error) {
 	var opts runOptions
 	fs.BoolVar(&opts.rematchStranded, "messages-rematch-stranded", false,
 		"Retroactively match stranded messages_message rows and enqueue aggregator jobs.")
+	fs.BoolVar(&opts.reconcileAddressBook, "reconcile-address-book-methods", false,
+		"One-time catchup: re-propagate address-book (gcontacts/icloud) methods "+
+			"missing from already-linked contacts (auto-apply for matched, record "+
+			"suggestion for imported). Continue-on-error; exits non-zero iff any row failed.")
 	fs.BoolVar(&opts.mintPairingToken, "mint-pairing-token", false,
 		"Mint a single-use pairing token for `crm-mac install --pair`.")
 	fs.StringVar(&opts.hostnameLabel, "hostname-label", "",
@@ -233,6 +269,8 @@ func run(ctx context.Context, opts runOptions, deps adminDeps) error {
 		return runRotateHostKey(ctx, opts, deps)
 	case opts.rematchStranded:
 		return runRematchStranded(ctx, deps)
+	case opts.reconcileAddressBook:
+		return runReconcileAddressBookMethods(ctx, deps)
 	}
 	return errors.New("unreachable")
 }
@@ -351,6 +389,29 @@ func runRematchStranded(ctx context.Context, deps adminDeps) error {
 	return nil
 }
 
+// runReconcileAddressBookMethods runs the one-time address-book method
+// catchup and prints a counts-only summary (no PII). Returns a non-nil
+// error iff any row failed so the process exits non-zero — the operator
+// can fix the cause and re-run safely (idempotent).
+func runReconcileAddressBookMethods(ctx context.Context, deps adminDeps) error {
+	res, err := deps.reconcile.ReconcileAllAddressBookMethods(ctx)
+	if err != nil {
+		return fmt.Errorf("reconcile address-book methods: %w", err)
+	}
+	if _, err := fmt.Fprintf(deps.stdout, "reconcile-address-book-methods summary:\n"+
+		"  scanned:               %d\n"+
+		"  methods_auto_applied:  %d\n"+
+		"  suggestions_recorded:  %d\n"+
+		"  failed:                %d\n",
+		res.Scanned, res.MethodsAutoApplied, res.SuggestionsRecorded, res.Failed); err != nil {
+		return fmt.Errorf("write summary: %w", err)
+	}
+	if res.Failed > 0 {
+		return fmt.Errorf("%d row(s) failed to reconcile (see logs); re-run after fixing the cause", res.Failed)
+	}
+	return nil
+}
+
 // buildProductionDeps wires up the production service stack. Returns
 // a cleanup function to call before exit (releases the river client).
 func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.Database) (adminDeps, func(), error) {
@@ -361,6 +422,13 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 	// service owns execution.
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &noopMessagingAggregateWorker{})
+	// The address-book reconcile auto-applies methods and publishes
+	// contact_methods.added, which enqueues a RematchDispatcher job. The
+	// admin binary is insert-only — register a noop worker so River
+	// accepts the kind at Insert time; the always-running crm-api service
+	// owns dispatcher execution (it re-fetches the event and runs the
+	// real handlers).
+	river.AddWorker(workers, &noopRematchDispatcherWorker{})
 	riverClient, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
 		JobTimeout: cfg.River.JobTimeout,
 		Queues: map[string]river.QueueConfig{
@@ -400,12 +468,34 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 		riverClient:     riverClient,
 	}
 
+	// Address-book method reconcile catchup. Wires a real event bus +
+	// EnrichmentService so the matched-row auto-propagation publishes
+	// contact_methods.added (enqueuing a RematchDispatcher job the
+	// running crm-api processes). Lightweight no-op rematch handlers for
+	// email/phone make those method types "eligible" so the publish
+	// fires; the admin process never runs the handler bodies — only the
+	// crm-api dispatcher does, re-deriving from the event payload.
+	rematchService := service.NewRematchService()
+	rematchService.Register(noopRematchHandler{idType: "email"})
+	rematchService.Register(noopRematchHandler{idType: "phone"})
+	contactRepo := repository.NewContactRepository(database.Queries)
+	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
+	enrichmentRepo := repository.NewEnrichmentRepository(database.Queries)
+	eventBus := events.NewBus(database.Pool, riverClient, repository.NewEventRepository(database.Queries))
+	enrichmentService := service.NewEnrichmentService(
+		database, contactRepo, contactMethodRepo, enrichmentRepo, eventBus, rematchService,
+	)
+	addressBookReconcile := service.NewAddressBookReconcileService(
+		enrichmentService, contactMethodRepo, externalContactRepo,
+	)
+
 	cleanup := func() {}
 	return adminDeps{
-		tokens:  hostService,
-		hosts:   hostService,
-		revoker: hostService,
-		rematch: rematch,
+		tokens:    hostService,
+		hosts:     hostService,
+		revoker:   hostService,
+		rematch:   rematch,
+		reconcile: addressBookReconcile,
 	}, cleanup, nil
 }
 
@@ -450,4 +540,34 @@ type noopMessagingAggregateWorker struct {
 
 func (w *noopMessagingAggregateWorker) Work(_ context.Context, _ *river.Job[consumerjobs.MessagingAggregateForContactArgs]) error {
 	return nil
+}
+
+// noopRematchDispatcherWorker satisfies River's "every enqueued kind
+// must have a registered worker" rule for the RematchDispatcher jobs the
+// address-book reconcile enqueues via the event bus. Execution lives in
+// crm-api; the admin process never runs the worker — Start is never
+// called on the client.
+type noopRematchDispatcherWorker struct {
+	river.WorkerDefaults[consumerjobs.RematchDispatcherJobArgs]
+}
+
+func (w *noopRematchDispatcherWorker) Work(_ context.Context, _ *river.Job[consumerjobs.RematchDispatcherJobArgs]) error {
+	return nil
+}
+
+// noopRematchHandler is a type-only rematch handler registered for the
+// email/phone method types so EnrichmentService.EligibleMethods reports
+// auto-applied address-book methods as eligible — which is what makes
+// the event bus publish contact_methods.added (enqueuing the
+// RematchDispatcher job). Its Rematch body is never invoked in the admin
+// process: the always-running crm-api owns dispatch and re-derives the
+// rematch work from the persisted event with its own real handlers.
+type noopRematchHandler struct {
+	idType string
+}
+
+func (h noopRematchHandler) IdentifierType() string { return h.idType }
+
+func (h noopRematchHandler) Rematch(_ context.Context, _ uuid.UUID, _ string) (int, error) {
+	return 0, nil
 }
