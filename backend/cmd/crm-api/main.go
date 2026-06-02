@@ -678,6 +678,7 @@ func run() int {
 	// logic lives in one place.
 	addressBookReconcileService := service.NewAddressBookReconcileService(
 		enrichmentService,
+		contactRepo,
 		contactMethodRepo,
 		externalContactRepoForIngest,
 	)

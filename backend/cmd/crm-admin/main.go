@@ -486,7 +486,7 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 		database, contactRepo, contactMethodRepo, enrichmentRepo, eventBus, rematchService,
 	)
 	addressBookReconcile := service.NewAddressBookReconcileService(
-		enrichmentService, contactMethodRepo, externalContactRepo,
+		enrichmentService, contactRepo, contactMethodRepo, externalContactRepo,
 	)
 
 	cleanup := func() {}

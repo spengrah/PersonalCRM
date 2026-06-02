@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
+	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/identity"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
@@ -37,19 +39,22 @@ import (
 //   - anything else → no-op.
 type AddressBookReconcileService struct {
 	enricher     *EnrichmentService
+	contactRepo  *repository.ContactRepository
 	methodRepo   *repository.ContactMethodRepository
 	externalRepo *repository.ExternalContactRepository
 }
 
-// NewAddressBookReconcileService builds the reconcile service. All three
+// NewAddressBookReconcileService builds the reconcile service. All
 // dependencies are required.
 func NewAddressBookReconcileService(
 	enricher *EnrichmentService,
+	contactRepo *repository.ContactRepository,
 	methodRepo *repository.ContactMethodRepository,
 	externalRepo *repository.ExternalContactRepository,
 ) *AddressBookReconcileService {
 	return &AddressBookReconcileService{
 		enricher:     enricher,
+		contactRepo:  contactRepo,
 		methodRepo:   methodRepo,
 		externalRepo: externalRepo,
 	}
@@ -151,6 +156,20 @@ func (s *AddressBookReconcileService) ReconcileLinkedExternalContactMethods(
 ) (ReconcileResult, error) {
 	if target.EffectiveContactID == uuid.Nil {
 		return ReconcileResult{}, nil
+	}
+
+	// Liveness guard: a contact soft-delete (UPDATE contact.deleted_at)
+	// does NOT clear external_contact.crm_contact_id, so an address-book
+	// row can still point at a soft-deleted contact. Skip such rows — the
+	// matched branch would otherwise error forever (EnrichContactFrom
+	// External's GetContact filters deleted_at) and the imported branch
+	// would record suggestions for a dead contact. GetContact filters
+	// soft-deletes, so ErrNotFound here means "gone" → no-op.
+	if _, err := s.contactRepo.GetContact(ctx, target.EffectiveContactID); err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			return ReconcileResult{}, nil
+		}
+		return ReconcileResult{}, fmt.Errorf("verify contact liveness: %w", err)
 	}
 
 	switch target.EffectiveStatus {

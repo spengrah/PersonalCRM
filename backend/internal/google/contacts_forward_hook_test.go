@@ -60,7 +60,7 @@ func setupGcontactsForwardEnv(t *testing.T) *gcontactsForwardEnv {
 	// forward-hook assertion is on the method landing, not the rematch
 	// event, which the reconcile integration suite covers).
 	enrichSvc := service.NewEnrichmentService(database, contactRepo, methodRepo, enrichmentRepo, nil, nil)
-	reconcile := service.NewAddressBookReconcileService(enrichSvc, methodRepo, externalRepo)
+	reconcile := service.NewAddressBookReconcileService(enrichSvc, contactRepo, methodRepo, externalRepo)
 
 	provider := NewContactsProvider(nil, externalRepo, enrichSvc, identitySvc, reconcile)
 

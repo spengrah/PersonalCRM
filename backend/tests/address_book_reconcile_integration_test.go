@@ -63,7 +63,7 @@ func setupABReconcileEnv(t *testing.T) *abReconcileEnv {
 	bus := setupTestEventBusWithRematch(t, context.Background(), database, contactService, rematchSvc)
 
 	enrichmentSvc := service.NewEnrichmentService(database, contactRepo, methodRepo, enrichmentRepo, bus, rematchSvc)
-	reconcile := service.NewAddressBookReconcileService(enrichmentSvc, methodRepo, externalRepo)
+	reconcile := service.NewAddressBookReconcileService(enrichmentSvc, contactRepo, methodRepo, externalRepo)
 
 	return &abReconcileEnv{
 		database:     database,
@@ -216,6 +216,44 @@ func TestABReconcile_Ignored_Skips(t *testing.T) {
 	after, err := env.externalRepo.GetByID(ctx, external.ID)
 	require.NoError(t, err)
 	require.Nil(t, after.PendingMethodSuggestions, "ignored row must not record suggestions")
+}
+
+// --- soft-deleted CRM contact -> skip (no error, no suggestion) --------
+// A contact soft-delete leaves external_contact.crm_contact_id pointing at
+// the dead contact; the reconcile must skip it rather than fail forever
+// (matched) or record suggestions for a dead contact (imported).
+
+func TestABReconcile_SoftDeletedContact_MatchedSkips(t *testing.T) {
+	env := setupABReconcileEnv(t)
+	ctx := context.Background()
+	email := "softdel-matched-" + abSuffix() + "@example.com"
+	contact, external := seedLinkedExternal(t, ctx, env, "gcontacts", repository.MatchStatusMatched, []string{email})
+
+	require.NoError(t, env.contactRepo.SoftDeleteContact(ctx, contact.ID))
+
+	// Skips cleanly (no error) — would otherwise error on GetContact.
+	require.NoError(t, env.reconcile.ResolveAndReconcile(ctx, external.ID))
+}
+
+func TestABReconcile_SoftDeletedContact_ImportedSkips(t *testing.T) {
+	env := setupABReconcileEnv(t)
+	ctx := context.Background()
+	email := "softdel-imported-" + abSuffix() + "@example.com"
+	contact, external := seedLinkedExternal(t, ctx, env, "gcontacts", repository.MatchStatusImported, []string{email})
+
+	require.NoError(t, env.contactRepo.SoftDeleteContact(ctx, contact.ID))
+
+	res, err := env.reconcile.ReconcileLinkedExternalContactMethods(ctx, repository.ReconcileTarget{
+		ExternalContact:    *external,
+		EffectiveContactID: contact.ID,
+		EffectiveStatus:    repository.MatchStatusImported,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 0, res.SuggestionsRecorded, "must not record suggestions for a soft-deleted contact")
+
+	after, err := env.externalRepo.GetByID(ctx, external.ID)
+	require.NoError(t, err)
+	require.Nil(t, after.PendingMethodSuggestions, "no suggestion written for a soft-deleted contact")
 }
 
 // --- dedup: method already on contact is neither re-added nor suggested -
