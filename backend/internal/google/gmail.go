@@ -1000,7 +1000,7 @@ func (p *GmailSyncProvider) RunProcessMessageForTest(
 }
 
 // SetFetcherFactoryForTest overrides the per-account fetcher factory so tests
-// inject a fake gmailFetcher with no OAuth/token state (the OAuth seam, D1).
+// inject a fake gmailFetcher with no OAuth/token state (the OAuth seam).
 func (p *GmailSyncProvider) SetFetcherFactoryForTest(factory func(ctx context.Context, accountID string) (gmailFetcher, error)) {
 	p.newFetcher = factory
 }
