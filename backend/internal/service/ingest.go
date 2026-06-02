@@ -1296,9 +1296,9 @@ func (s *IngestService) handleExternalContactUpserted(
 	// closure re-reads the COMMITTED row, so it sees the freshly-set
 	// match on first insert (the local `external` struct is stale across
 	// UpdateMatchTx) and the preserved status on re-upsert. The
-	// reconciler internally resolves the effective contact/status (D2a
-	// dup precedence) and no-ops for unmatched/ignored rows, so it is
-	// safe to schedule whenever the row exists.
+	// reconciler internally resolves the effective contact/status
+	// (duplicate-aware precedence) and no-ops for unmatched/ignored rows,
+	// so it is safe to schedule whenever the row exists.
 	if s.addressBookReconciler != nil && env.Source == "icloud_contacts" && external != nil {
 		externalID := external.ID
 		reconciler := s.addressBookReconciler

@@ -330,7 +330,7 @@ ORDER BY source, account_id;
 -- Driver query for the address-book method reconcile (forward hooks +
 -- one-time catchup). Returns every live address-book row that is itself
 -- linked OR is a duplicate of a (live) canonical row, joining to the
--- canonical so the Go reconcile can apply the D2a effective-status
+-- canonical so the Go reconcile can apply the effective-status
 -- precedence (`ignored > imported > matched`) WITHOUT a self-first
 -- COALESCE (which would let a dup's stale `matched` win over a canonical
 -- `imported`). The canonical columns are explicitly aliased so the
@@ -355,10 +355,10 @@ ORDER BY ec.id;
 
 -- name: SetExternalContactMethodSuggestions :one
 -- Overwrite-not-append write of the pending suggestion set for a linked
--- row. The Go wrapper passes SQL NULL when the recomputed set is empty
--- (D6 empty-clears), so a method later added by another path clears the
--- stale suggestion on the next reconcile. Writes the DEDICATED column,
--- never `metadata` — survives producer upserts (D4).
+-- row. The Go wrapper passes SQL NULL when the recomputed set is empty,
+-- so a method later added by another path clears the stale suggestion on
+-- the next reconcile. Writes the DEDICATED column, never `metadata` —
+-- so it survives the wholesale-metadata-replace producer upserts.
 UPDATE external_contact SET
     pending_method_suggestions = sqlc.arg('pending'),
     updated_at = NOW()
@@ -369,9 +369,9 @@ RETURNING *;
 -- name: SetDismissedMethodSuggestionsForTest :one
 -- TEST ONLY: pre-seeds the dismissed_method_suggestions column so the
 -- dismissed-skip reconcile test can verify a dismissed (type,value) is
--- not re-suggested. Production dismissal (PR 2) appends via a read-
--- modify-write path; this direct setter exists only so integration
--- tests can establish the pre-state without raw SQL in Go.
+-- not re-suggested. The production dismissal path appends via a read-
+-- modify-write; this direct setter exists only so integration tests can
+-- establish the pre-state without raw SQL in Go.
 UPDATE external_contact SET
     dismissed_method_suggestions = sqlc.arg('dismissed'),
     updated_at = NOW()

@@ -105,6 +105,18 @@ func setupExtContactIngestEnv(t *testing.T) *extContactIngestEnv {
 		nil,      // discovery unused
 		nil,      // phoneCallLinkage unused
 	)
+	// Wire the address-book method reconciler so the icloud post-commit
+	// forward hook fires. nil bus/registry on the enrichment service → the
+	// auto path adds methods but skips the rematch publish (the forward-
+	// hook assertions are on method propagation / suggestion recording,
+	// not the rematch event). The reconciler is nil-safe and a no-op for
+	// rows that don't resolve to a linked contact, so wiring it here does
+	// not change the behavior of the existing non-reconcile tests.
+	enrichmentRepo := repository.NewEnrichmentRepository(database.Queries)
+	enrichSvc := service.NewEnrichmentService(database, contactRepo, contactMethodRepo, enrichmentRepo, nil, nil)
+	addressBookReconcile := service.NewAddressBookReconcileService(enrichSvc, contactMethodRepo, externalRepo)
+	ingestService.SetAddressBookReconciler(addressBookReconcile)
+
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 
 	gin.SetMode(gin.TestMode)
@@ -336,6 +348,117 @@ func TestIngestExternalContact_Upserted_FirstInsert_EmailMatch(t *testing.T) {
 	require.NotNil(t, row.CRMContactID, "email match → crm_contact_id should be set")
 	require.Equal(t, env.seededContact, *row.CRMContactID)
 	require.Equal(t, repository.MatchStatusMatched, row.MatchStatus)
+}
+
+// icloudForwardSuffix returns a short per-test suffix to avoid cross-test
+// trigram / email collisions on the shared DB.
+func icloudForwardSuffix() string { return uuid.NewString()[:8] }
+
+// seedContactWithEmailForward creates a CRM contact with the given email
+// method (registers cleanup) so an icloud upsert carrying that email
+// auto-matches it.
+func seedContactWithEmailForward(t *testing.T, env *extContactIngestEnv, name, email string) uuid.UUID {
+	t.Helper()
+	ctx := context.Background()
+	c, err := env.contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: name})
+	require.NoError(t, err)
+	_, err = env.cmRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
+		ContactID: c.ID, Type: "email", Value: email,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		cleanCtx := context.Background()
+		_ = env.cmRepo.DeleteContactMethodsByContact(cleanCtx, c.ID)
+		_ = env.contactRepo.HardDeleteContact(cleanCtx, c.ID)
+	})
+	return c.ID
+}
+
+func contactHasEmailMethod(t *testing.T, env *extContactIngestEnv, contactID uuid.UUID, email string) bool {
+	t.Helper()
+	methods, err := env.cmRepo.ListContactMethodsByContact(context.Background(), contactID)
+	require.NoError(t, err)
+	for _, m := range methods {
+		if m.ValueNormalized == strings.ToLower(email) {
+			return true
+		}
+	}
+	return false
+}
+
+// icloud FIRST MATCH: a never-before-linked icloud row whose email matches
+// an existing contact, plus a SECOND email not yet on the contact. The
+// post-commit reconcile must auto-propagate the second email — proving the
+// icloud-enriches-nothing root cause is fixed and that it fires on first
+// match (built from the committed row, not the stale in-handler struct).
+func TestIngestExternalContact_Upserted_FirstMatch_PostCommitReconcileAutoPropagates(t *testing.T) {
+	env := setupExtContactIngestEnv(t)
+	sfx := icloudForwardSuffix()
+	matchEmail := "icloud-match-" + sfx + "@example.com"
+	extraEmail := "icloud-extra-" + sfx + "@example.com"
+	entityID := env.sourceIDPrefix + "firstmatch-" + sfx
+
+	contactID := seedContactWithEmailForward(t, env, "Icloud FirstMatch "+sfx, matchEmail)
+
+	ev := buildExtUpsertEvent(t, env.pairedHostID, entityID, func(p *events.ExternalContactUpsertedPayload) {
+		p.Emails = []events.ExternalContactMethodValue{{Value: matchEmail}, {Value: extraEmail}}
+	})
+	w := postIngestExt(t, env, &env.pairedHostID, env.pairedHostKey, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, parseIngestResp(t, w).Accepted)
+
+	row := findExtRow(t, env, entityID)
+	require.NotNil(t, row)
+	require.NotNil(t, row.CRMContactID)
+	require.Equal(t, contactID, *row.CRMContactID)
+	require.Equal(t, repository.MatchStatusMatched, row.MatchStatus)
+
+	require.True(t, contactHasEmailMethod(t, env, contactID, extraEmail),
+		"icloud first-match post-commit reconcile must auto-propagate the extra email")
+}
+
+// icloud re-upsert of an IMPORTED (user-curated) row: a payload gaining a
+// new email must RECORD a suggestion, NOT auto-apply it — proving the
+// preserved-status path (not a hardcoded matched).
+func TestIngestExternalContact_Upserted_ReUpsertImported_RecordsSuggestionNotAutoApply(t *testing.T) {
+	env := setupExtContactIngestEnv(t)
+	sfx := icloudForwardSuffix()
+	matchEmail := "icloud-imp-match-" + sfx + "@example.com"
+	newEmail := "icloud-imp-new-" + sfx + "@example.com"
+	entityID := env.sourceIDPrefix + "imported-" + sfx
+
+	contactID := seedContactWithEmailForward(t, env, "Icloud Imported "+sfx, matchEmail)
+
+	// First insert + match, then flip the row to imported (simulating a
+	// prior user curation), so the re-upsert preserves imported.
+	ev1 := buildExtUpsertEvent(t, env.pairedHostID, entityID, func(p *events.ExternalContactUpsertedPayload) {
+		p.Emails = []events.ExternalContactMethodValue{{Value: matchEmail}}
+	})
+	w := postIngestExt(t, env, &env.pairedHostID, env.pairedHostKey, map[string]any{"events": []any{ev1}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	row := findExtRow(t, env, entityID)
+	require.NotNil(t, row)
+	require.NotNil(t, row.CRMContactID)
+	_, err := env.externalRepo.UpdateMatch(context.Background(), row.ID, row.CRMContactID, repository.MatchStatusImported)
+	require.NoError(t, err)
+
+	// Re-upsert with the same content hash would dedup-skip the handler, so
+	// add the new email to change the payload (and thus the hash).
+	ev2 := buildExtUpsertEvent(t, env.pairedHostID, entityID, func(p *events.ExternalContactUpsertedPayload) {
+		p.Emails = []events.ExternalContactMethodValue{{Value: matchEmail}, {Value: newEmail}}
+	})
+	w = postIngestExt(t, env, &env.pairedHostID, env.pairedHostKey, map[string]any{"events": []any{ev2}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	// Imported row must NOT auto-apply the new email...
+	require.False(t, contactHasEmailMethod(t, env, contactID, newEmail),
+		"imported icloud row must not auto-apply a newly-arrived method")
+	// ...and the new email must be recorded as a pending suggestion.
+	after := findExtRow(t, env, entityID)
+	require.NotNil(t, after)
+	require.Equal(t, repository.MatchStatusImported, after.MatchStatus, "re-upsert must preserve imported")
+	require.Len(t, after.PendingMethodSuggestions, 1, "the new method must be recorded as a suggestion")
+	require.Equal(t, strings.ToLower(newEmail), after.PendingMethodSuggestions[0].Value)
 }
 
 func TestIngestExternalContact_Upserted_ReUpsertPreservesMatchState(t *testing.T) {

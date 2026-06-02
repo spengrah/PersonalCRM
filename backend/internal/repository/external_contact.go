@@ -58,7 +58,7 @@ type PendingMethodSuggestion struct {
 // contact + effective match status for the method reconcile. The
 // driver query (ListLinkedAddressBookExternalContactsForReconcile)
 // joins a duplicate row to its canonical and the repository computes the
-// D2a precedence (`ignored > imported > matched`); the service then
+// precedence (`ignored > imported > matched`); the service then
 // branches on EffectiveStatus. ExternalContact is the row whose
 // emails[]/phones[] carry the methods to reconcile (for a duplicate,
 // the dup's own methods reconcile against the CANONICAL's contact).
@@ -106,8 +106,8 @@ type ExternalContact struct {
 	// PendingMethodSuggestions is the current un-applied missing-method
 	// set recorded for a linked `imported` address-book row (nil when no
 	// suggestions). Stored in a dedicated JSONB column the producer
-	// upsert never writes, so it survives address-book resyncs. Inert in
-	// PR 1 (written by the reconcile path, read by the PR-2 surface).
+	// upsert never writes, so it survives address-book resyncs. Written
+	// by the reconcile path; consumed by the suggestions surface.
 	PendingMethodSuggestions []PendingMethodSuggestion `json:"pending_method_suggestions,omitempty"`
 	// DismissedMethodSuggestions is the append-only set of (type,value)
 	// the user has dismissed for this row (nil when nothing dismissed).
@@ -679,7 +679,7 @@ func parseMethodSuggestions(raw []byte) []PendingMethodSuggestion {
 // ListLinkedAddressBookExternalContactsForReconcile returns every live
 // address-book row (source ∈ sources) that is itself linked OR is a
 // duplicate of a live canonical row, each resolved to its effective CRM
-// contact + effective match status per the D2a precedence
+// contact + effective match status per the precedence
 // (`ignored > imported > matched`). Rows whose effective status is
 // `ignored` or that resolve to no live contact are dropped here so the
 // caller never has to re-apply the precedence.
@@ -726,7 +726,7 @@ func (r *ExternalContactRepository) ListLinkedAddressBookExternalContactsForReco
 }
 
 // ResolveReconcileTarget resolves a single live address-book row (by id)
-// into a ReconcileTarget using the same D2a precedence as the catchup
+// into a ReconcileTarget using the same precedence as the catchup
 // driver. For a duplicate row it reads the canonical to resolve the
 // effective contact/status; for a self-linked row the canonical lookup
 // is skipped. Returns (nil, nil) — a no-op signal — when the row is
@@ -776,7 +776,7 @@ func (r *ExternalContactRepository) ResolveReconcileTarget(
 	}, nil
 }
 
-// resolveEffectiveReconcileState applies the D2a effective-contact +
+// resolveEffectiveReconcileState applies the effective-contact +
 // effective-status precedence for a (possibly duplicate) address-book
 // row. selfContactID/selfStatus are the row's own; canonContactID/
 // canonStatus are its canonical's (nil/"" when the row is not a dup or
@@ -823,9 +823,9 @@ func resolveEffectiveReconcileState(
 }
 
 // SetMethodSuggestions overwrites the pending suggestion set for a row.
-// An empty/nil slice writes SQL NULL (D6 empty-clears), so a method
-// later applied by another path clears the stale suggestion on the next
-// reconcile. Writes the dedicated column, never `metadata`.
+// An empty/nil slice writes SQL NULL, so a method later applied by
+// another path clears the stale suggestion on the next reconcile. Writes
+// the dedicated column, never `metadata`.
 func (r *ExternalContactRepository) SetMethodSuggestions(
 	ctx context.Context,
 	id uuid.UUID,
@@ -853,8 +853,8 @@ func (r *ExternalContactRepository) SetMethodSuggestions(
 }
 
 // SetDismissedMethodSuggestionsForTest pre-seeds the
-// dismissed_method_suggestions column. TEST ONLY — production dismissal
-// (PR 2) appends via a read-modify-write path; this exists so
+// dismissed_method_suggestions column. TEST ONLY — the production
+// dismissal path appends via a read-modify-write; this exists so
 // integration tests can establish the dismissed pre-state without raw
 // SQL in Go.
 func (r *ExternalContactRepository) SetDismissedMethodSuggestionsForTest(

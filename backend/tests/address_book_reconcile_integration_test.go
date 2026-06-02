@@ -168,7 +168,7 @@ func TestABReconcile_Matched_AutoPropagates(t *testing.T) {
 	// published contact_methods.added (the email type has a registered
 	// handler in this harness), which enqueues a rematch_dispatcher job
 	// for the contact. This proves the auto path goes through the rematch
-	// fan-out (D1), not the event-skipping SyncMethodsFromExternal.
+	// fan-out, not the event-skipping SyncMethodsFromExternal.
 	jobs, err := env.eventRepo.CountRematchDispatcherJobsByContact(ctx, contact.ID)
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, jobs, int64(1), "matched auto-propagate must enqueue a rematch dispatcher job")
@@ -357,8 +357,8 @@ func TestABReconcile_EmptySet_ClearsPendingToNull(t *testing.T) {
 	require.Nil(t, after.PendingMethodSuggestions, "recomputed-empty set must clear the column to NULL")
 }
 
-// --- producer-upsert-survival (D4 / P1-2): the dedicated columns survive
-// a wholesale UpsertExternalContact (which replaces metadata). -----------
+// --- producer-upsert-survival: the dedicated columns survive a
+// wholesale UpsertExternalContact (which replaces metadata). ------------
 
 func TestABReconcile_ProducerUpsertPreservesSuggestionColumns(t *testing.T) {
 	env := setupABReconcileEnv(t)

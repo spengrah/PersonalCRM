@@ -198,9 +198,21 @@ func (p *ContactsProvider) processContact(
 		return fmt.Errorf("upsert external contact: %w", err)
 	}
 
-	// Check for duplicates across accounts
+	// Check for duplicates across accounts. This may mark the row as a
+	// duplicate (sets duplicate_of_id in the DB) but does NOT update the
+	// local externalContact struct.
 	if err := p.checkDuplicates(ctx, externalContact); err != nil {
 		logger.Debug().Err(err).Msg("duplicate check failed")
+	}
+
+	// Re-read so attemptMatch sees a freshly-set duplicate_of_id. Without
+	// this, a row just marked duplicate (whose CRMContactID is still nil)
+	// would skip attemptMatch's duplicate guard and auto-enrich directly —
+	// bypassing the duplicate-aware effective-status precedence and
+	// auto-pushing methods that should only be reconciled into the
+	// canonical contact (and only suggested when the canonical is curated).
+	if reread, rereadErr := p.externalRepo.GetByID(ctx, externalContact.ID); rereadErr == nil && reread != nil {
+		externalContact = reread
 	}
 
 	// Attempt to match to CRM contact

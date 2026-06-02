@@ -6,9 +6,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestResolveEffectiveReconcileState exercises the D2a precedence
-// (ignored > imported > matched) for a (possibly duplicate) address-book
-// row. Pure function — no DB.
+// TestResolveEffectiveReconcileState exercises the effective-status
+// precedence (ignored > imported > matched) for a (possibly duplicate)
+// address-book row. Pure function — no DB.
 func TestResolveEffectiveReconcileState(t *testing.T) {
 	selfID := uuid.New()
 	canonID := uuid.New()

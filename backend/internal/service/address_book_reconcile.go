@@ -23,15 +23,17 @@ import (
 // EnrichmentService / Repository → DB.
 //
 // The auto-vs-suggest branch keys off the effective match status the
-// caller resolved (D2a precedence is applied in the repository's
-// ListLinkedAddressBookExternalContactsForReconcile / the forward
-// hooks):
+// caller resolved (the duplicate-aware precedence — ignored > imported >
+// matched — is applied by the repository's
+// ListLinkedAddressBookExternalContactsForReconcile / ResolveReconcileTarget
+// before this service is called):
 //   - matched  → AUTO-PROPAGATE missing methods via
 //     EnrichContactFromExternal (publishes KindContactMethodsAdded →
 //     rematch fan-out incl. GmailRematchHandler).
-//   - imported → RECORD the missing set as a pending suggestion (inert
-//     in PR 1; the PR-2 surface reads it). Always overwrites, clearing
-//     to SQL NULL when the recomputed set is empty.
+//   - imported → RECORD the missing set as a pending suggestion (no reader
+//     yet — the suggestions surface that consumes it is a later change).
+//     Always overwrites, clearing to SQL NULL when the recomputed set is
+//     empty.
 //   - anything else → no-op.
 type AddressBookReconcileService struct {
 	enricher     *EnrichmentService
@@ -83,8 +85,9 @@ type ReconcileAllResult struct {
 // each. Continue-on-error — a single row's failure is logged with a
 // NON-IDENTIFYING ordinal index only (no externalID/contactID/email/
 // source — all PII under this repo's model) and tallied in Failed; the
-// loop proceeds. Idempotent (D6), so a re-run after fixing the cause is
-// safe. No transaction spans the loop (each enrich owns its own tx).
+// loop proceeds. Idempotent (a clean re-run after fixing the cause adds
+// nothing), so re-running is safe. No transaction spans the loop (each
+// enrich owns its own tx).
 func (s *AddressBookReconcileService) ReconcileAllAddressBookMethods(ctx context.Context) (ReconcileAllResult, error) {
 	targets, err := s.externalRepo.ListLinkedAddressBookExternalContactsForReconcile(ctx, addressBookReconcileSources)
 	if err != nil {
@@ -112,9 +115,10 @@ func (s *AddressBookReconcileService) ReconcileAllAddressBookMethods(ctx context
 }
 
 // ResolveAndReconcile resolves an external_contact row (by id) to its
-// effective contact + status via the repository's D2a precedence, then
-// reconciles. A no-op (nil error) when the row is missing/tombstoned,
-// unmatched, ignored, or resolves to no live contact. Used by the icloud
+// effective contact + status via the repository's duplicate-aware
+// precedence, then reconciles. A no-op (nil error) when the row is
+// missing/tombstoned, unmatched, ignored, or resolves to no live
+// contact. Used by the icloud
 // post-commit hook, where only the committed row id is known and the
 // resolution must read the freshly-committed match state. Satisfies the
 // service.AddressBookReconciler interface.
@@ -160,6 +164,14 @@ func (s *AddressBookReconcileService) ReconcileLinkedExternalContactMethods(
 // added via a pre/post dedup-key diff. EnrichContactFromExternal only
 // adds missing methods and publishes KindContactMethodsAdded for the
 // added set, so re-running is idempotent (zero added → no event).
+//
+// EnrichContactFromExternal's method-insert loop logs and continues on a
+// per-method insert error (it does not abort the call), so a partial
+// silent failure would otherwise be invisible. We compute the expected
+// missing set from the external row's methods and compare it to the
+// actually-applied delta; a shortfall is surfaced as an error so the
+// catchup counts the row as failed (and exits non-zero) rather than
+// reporting a false success.
 func (s *AddressBookReconcileService) autoPropagate(
 	ctx context.Context,
 	contactID uuid.UUID,
@@ -169,6 +181,19 @@ func (s *AddressBookReconcileService) autoPropagate(
 	if err != nil {
 		return ReconcileResult{}, err
 	}
+
+	// Expected methods to add: the external row's methods (deduped within
+	// the set) that are absent from the contact. EnrichContactFromExternal
+	// adds the full external set (not the dismissed-filtered suggestion
+	// set), so dismissals are NOT subtracted here.
+	expected := make(map[string]bool)
+	for _, m := range BuildMethodsFromExternal(external) {
+		key := methodDedupKey(m.Type, m.Value)
+		if !before[key] {
+			expected[key] = true
+		}
+	}
+
 	if _, err := s.enricher.EnrichContactFromExternal(ctx, contactID, external); err != nil {
 		return ReconcileResult{}, fmt.Errorf("auto-propagate methods: %w", err)
 	}
@@ -182,13 +207,19 @@ func (s *AddressBookReconcileService) autoPropagate(
 			added++
 		}
 	}
+	if added < len(expected) {
+		return ReconcileResult{MethodsAutoApplied: added}, fmt.Errorf(
+			"auto-propagate incomplete: %d of %d expected methods applied (silent insert failure)",
+			added, len(expected))
+	}
 	return ReconcileResult{MethodsAutoApplied: added}, nil
 }
 
 // recordSuggestions computes the missing-method set (external methods −
 // contact methods − dismissed) for the effective contact and overwrites
 // pending_method_suggestions with it. An empty set clears the column to
-// SQL NULL (D6).
+// SQL NULL, so a method later applied elsewhere drops the stale
+// suggestion on the next reconcile.
 func (s *AddressBookReconcileService) recordSuggestions(
 	ctx context.Context,
 	contactID uuid.UUID,
@@ -210,8 +241,8 @@ func (s *AddressBookReconcileService) recordSuggestions(
 
 // missingMethodSuggestions returns the external contact's methods that
 // are absent from the CRM contact AND not already dismissed. Stored as
-// normalized (type, value) pairs so the PR-2 list/resolve and the
-// dismissed-set subtraction key on the same dedup space.
+// normalized (type, value) pairs so the suggestion list/resolve surface
+// and the dismissed-set subtraction key on the same dedup space.
 //
 // contactID is the EFFECTIVE contact (for a dup, the canonical's
 // contact, resolved by the driver query / forward hook). external is the
