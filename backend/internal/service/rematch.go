@@ -152,7 +152,10 @@ func (j *job) resetForRun() {
 // spawns Run on the detached context; production code publishes events
 // and relies on the consumer to dispatch.
 type RematchService struct {
-	handlers     map[string]RematchHandler
+	// handlers maps an identifier type to ALL handlers registered for it.
+	// Register appends, so a single type (e.g. "email") can fan out to
+	// multiple handlers — calendar and gmail both rematch "email" addresses.
+	handlers     map[string][]RematchHandler
 	jobs         sync.Map // uuid.UUID -> *job
 	contactLocks sync.Map // uuid.UUID -> *sync.Mutex
 
@@ -165,15 +168,18 @@ type RematchService struct {
 // Callers register handlers via Register before use.
 func NewRematchService() *RematchService {
 	return &RematchService{
-		handlers:    make(map[string]RematchHandler),
+		handlers:    make(map[string][]RematchHandler),
 		detachedCtx: func() context.Context { return context.Background() },
 	}
 }
 
 // Register adds a handler for a specific identifier type. Intended to be
-// called at startup before any jobs run.
+// called at startup before any jobs run. Multiple handlers may register for
+// the same type; each registration appends, and Run dispatches to all of
+// them in registration order.
 func (s *RematchService) Register(h RematchHandler) {
-	s.handlers[h.IdentifierType()] = h
+	t := h.IdentifierType()
+	s.handlers[t] = append(s.handlers[t], h)
 }
 
 // jobRetention bounds how long terminal jobs remain queryable via GetJob.
@@ -228,7 +234,7 @@ func (s *RematchService) EligibleMethods(methods []Method) []Method {
 	}
 	eligible := make([]Method, 0, len(methods))
 	for _, m := range methods {
-		if _, ok := s.handlers[m.Type]; ok {
+		if len(s.handlers[m.Type]) > 0 {
 			eligible = append(eligible, m)
 		}
 	}
@@ -245,7 +251,7 @@ func (s *RematchService) EligibleMethods(methods []Method) []Method {
 func (s *RematchService) StartRematchForContact(contactID uuid.UUID, methods []Method) uuid.UUID {
 	eligible := make([]Method, 0, len(methods))
 	for _, m := range methods {
-		if _, ok := s.handlers[m.Type]; ok {
+		if len(s.handlers[m.Type]) > 0 {
 			eligible = append(eligible, m)
 		}
 	}
@@ -330,20 +336,26 @@ func (s *RematchService) Run(ctx context.Context, jobID, contactID uuid.UUID, me
 	defer lock.Unlock()
 
 	for _, m := range j.methods {
-		handler, ok := s.handlers[m.Type]
-		if !ok {
+		hs := s.handlers[m.Type]
+		if len(hs) == 0 {
 			continue
 		}
-		n, handlerErr := handler.Rematch(ctx, contactID, m.Value)
-		if handlerErr != nil {
-			logger.Warn().Err(handlerErr).
-				Str("contactId", contactID.String()).
-				Str("type", m.Type).
-				Msg("rematch: handler failed")
-			j.setFailed(handlerErr)
-			return handlerErr
+		// Fan out to every handler registered for this type. Fail-fast on the
+		// first handler error (the job fails and River retries the whole method
+		// set); the matched count sums across all handlers. Handlers are
+		// idempotent, so a retry re-running an already-succeeded handler is safe.
+		for _, handler := range hs {
+			n, handlerErr := handler.Rematch(ctx, contactID, m.Value)
+			if handlerErr != nil {
+				logger.Warn().Err(handlerErr).
+					Str("contactId", contactID.String()).
+					Str("type", m.Type).
+					Msg("rematch: handler failed")
+				j.setFailed(handlerErr)
+				return handlerErr
+			}
+			j.addMatched(n)
 		}
-		j.addMatched(n)
 	}
 	j.setCompleted()
 	return nil
