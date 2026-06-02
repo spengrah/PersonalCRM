@@ -565,3 +565,91 @@ func TestGmailProvider_CrossAccountProvenanceMerge(t *testing.T) {
 	require.Equal(t, gmailX, gmailIDs[accountX])
 	require.Equal(t, gmailY, gmailIDs[accountY])
 }
+
+// --- onboarding empty-cursor backfill window (spec §3.2) --------------------
+
+// TestGmailProvider_Onboarding_EmptyCursor_BackfillSince drives the full
+// onboarding seam through Sync end-to-end: a nil SyncCursor + a backfill_since
+// metadata override must (a) floor the scan query at the override epoch, (b)
+// persist a qualifying message dated after the floor, (c) advance the cursor to
+// the message's internalDate seconds, and (d) be idempotent on a second sweep
+// with the returned cursor. Complements (does not duplicate) the resolveAfterFloor
+// / computeNewCursor helper unit tests, which exercise the functions in isolation.
+func TestGmailProvider_Onboarding_EmptyCursor_BackfillSince(t *testing.T) {
+	e := newGmailProviderEnv(t)
+	suffix := uuid.NewString()[:8]
+	me := "me-" + suffix + "@example.com"
+	addrA := "a-" + suffix + "@example.com"
+	contactA := e.newEmailContactWithMethod(t, "Contact A "+suffix, addrA)
+
+	ext := "onb-" + suffix + "@example.com"
+	e.cleanupEvents(t, ext)
+
+	// backfill_since override floors the scan at 2026-03-01.
+	override := "2026-03-01"
+	overrideEpoch := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC).Unix()
+	// A message dated AFTER the floor must be scanned and persisted.
+	msgEpochSecs := time.Date(2026, 3, 15, 9, 0, 0, 0, time.UTC).Unix()
+	msg := gmailMsg("g-onb", "thr", addrA, []string{me}, nil, nil, "S", "body", "<"+ext+">", msgEpochSecs*1000)
+
+	// A query-recording fetcher proves the metadata override flows into the
+	// after:<epoch> floor (the query-agnostic fakeMessageStore returns the
+	// message regardless of query, so we capture the query explicitly here).
+	var capturedQueries []string
+	e.provider.SetFetcherFactoryForTest(google.NewFakeGmailFetcherFactoryForTest(google.FakeGmailFetcherFuncs{
+		ListMessageIDs: func(_ context.Context, query, pageToken string) ([]google.GmailMessageRefForTest, string, error) {
+			if pageToken != "" {
+				return nil, "", nil
+			}
+			capturedQueries = append(capturedQueries, query)
+			return []google.GmailMessageRefForTest{{ID: msg.Id, ThreadID: msg.ThreadId}}, "", nil
+		},
+		GetMessage: func(_ context.Context, id string) (*gmailapi.Message, error) {
+			if id == msg.Id {
+				return msg, nil
+			}
+			return nil, fmt.Errorf("message %s not found", id)
+		},
+	}))
+	e.provider.SetMeSetForTest(map[string]struct{}{me: {}})
+
+	// Onboarding: nil cursor + backfill_since metadata override.
+	state := &repository.SyncState{
+		Source:    "email",
+		AccountID: &me,
+		Metadata:  map[string]any{"backfill_since": override},
+	}
+
+	result, err := e.provider.Sync(e.ctx, state, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.ItemsProcessed)
+	require.Equal(t, 1, result.ItemsMatched)
+	require.Equal(t, fmt.Sprintf("%d", msgEpochSecs), result.NewCursor, "cursor advances to the message internalDate seconds")
+
+	// Query floored at the override epoch, not the default 2026-01-01.
+	require.NotEmpty(t, capturedQueries)
+	for _, q := range capturedQueries {
+		require.Contains(t, q, fmt.Sprintf("after:%d", overrideEpoch), "scan floors at the backfill_since override")
+	}
+
+	// Content row + event persisted.
+	rows, err := e.commsRepo.ListByContact(e.ctx, contactA.ID)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, ext, rows[0].ExternalID)
+	_, err = e.eventRepo.FindEventBySource(e.ctx, "email", ext+":"+contactA.ID.String())
+	require.NoError(t, err)
+
+	// Second sweep with the returned cursor is idempotent (no duplicate row).
+	state2 := &repository.SyncState{
+		Source:     "email",
+		AccountID:  &me,
+		SyncCursor: &result.NewCursor,
+		Metadata:   map[string]any{"backfill_since": override},
+	}
+	_, err = e.provider.Sync(e.ctx, state2, nil)
+	require.NoError(t, err)
+	rows, err = e.commsRepo.ListByContact(e.ctx, contactA.ID)
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "second sweep must not add a duplicate content row")
+}
