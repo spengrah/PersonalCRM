@@ -79,3 +79,17 @@ WHERE cm.type = ANY($1::text[])
   AND cm.value_normalized <> ''
   AND c.deleted_at IS NULL
 ORDER BY cm.value_normalized ASC;
+
+-- name: ListEmailIdentitiesForSync :many
+-- Returns (value_normalized, contact_id) for every email contact_method of a
+-- non-deleted contact. MANY-TO-ONE allowed: a shared address (joint inbox /
+-- collision) maps to multiple contacts and each pair is returned so the Gmail
+-- provider can fan out to all owners (spec §3.1). value_normalized is already
+-- lowercased by the contact_method trigger. Ordered deterministically.
+SELECT cm.value_normalized, cm.contact_id
+FROM contact_method cm
+JOIN contact c ON c.id = cm.contact_id
+WHERE cm.type = 'email'
+  AND cm.value_normalized <> ''
+  AND c.deleted_at IS NULL
+ORDER BY cm.value_normalized ASC, cm.contact_id ASC;
