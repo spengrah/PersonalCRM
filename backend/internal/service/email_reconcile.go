@@ -67,7 +67,7 @@ func (s *SyncService) SetEmailAccountLister(lister GoogleAccountLister) {
 //     cursors/backfill on already-enabled accounts, or re-enable an account the
 //     user manually disabled.
 //
-// The scope check (DD-4) runs per account on BOTH branches so an account whose
+// The scope check runs per account on BOTH branches so an account whose
 // gmail.readonly was granted only after its state was created still surfaces the
 // warning until reconnected.
 //
@@ -142,8 +142,8 @@ func (s *SyncService) ReconcileEmailSyncStates(ctx context.Context) error {
 // its OAuth messages.list call until the user reconnects through the existing
 // Google connect flow (which re-requests the full scope set). Store-only / NO-UI
 // feature: there is no reconnect prompt to surface, so the operator log is the
-// honest minimal handling (DD-4). The account id is the user's own connected
-// mailbox address (already in oauth_credential); logging it at value level is
+// honest minimal handling. The account id is the user's own connected mailbox
+// address (already in oauth_credential); logging it at value level is
 // operational provenance, not third-party PII.
 func (s *SyncService) warnIfMissingGmailScope(account repository.OAuthCredentialStatus) {
 	for _, scope := range account.Scopes {
