@@ -493,7 +493,10 @@ func TestGmailRematch_BackfillFloorAndQueryShape(t *testing.T) {
 	backfillEpoch := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Unix()
 	for _, q := range store.queries {
 		require.Contains(t, q, "after:"+strconv.FormatInt(backfillEpoch, 10), "query floors at the default backfill since-date")
-		require.Contains(t, q, "category:primary", "query restricts to the primary category")
+		require.Contains(t, q, "-category:promotions", "query excludes the promotions category")
+		require.Contains(t, q, "-category:social", "query excludes the social category")
+		require.Contains(t, q, "-category:updates", "query excludes the updates category")
+		require.Contains(t, q, "-category:forums", "query excludes the forums category")
 		require.Contains(t, q, "from:"+addrA, "single-address OR-group includes from:")
 		require.Contains(t, q, "to:"+addrA, "single-address OR-group includes to:")
 		require.Contains(t, q, "cc:"+addrA, "single-address OR-group includes cc:")

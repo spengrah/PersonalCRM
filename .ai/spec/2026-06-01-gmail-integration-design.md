@@ -30,7 +30,7 @@ Add Gmail as a backend sync source that ingests **full email content** for email
 
 ### Why
 
-Email is a primary communication channel that currently leaves no trace in the CRM. Syncing it means `last_contacted` / `last_outreach_at` update automatically from real correspondence, contact timelines reflect email exchanges, and a faithful copy of message bodies is stored locally for later AI summarization/meeting-prep. Restricting to known contacts + the Primary category keeps the cadence signal clean and avoids ingesting newsletters, receipts, and bulk mail.
+Email is a primary communication channel that currently leaves no trace in the CRM. Syncing it means `last_contacted` / `last_outreach_at` update automatically from real correspondence, contact timelines reflect email exchanges, and a faithful copy of message bodies is stored locally for later AI summarization/meeting-prep. Restricting to known contacts + excluding Gmail's bulk-mail categories keeps the cadence signal clean and avoids ingesting newsletters, receipts, and bulk mail.
 
 ### Key Decisions (from design session)
 
@@ -40,7 +40,7 @@ Email is a primary communication channel that currently leaves no trace in the C
 | Discovery | **None** — known contacts only, match-or-skip | Gmail is too noisy to be a contact source; user adds contacts elsewhere |
 | Content scope | Full plaintext body (canonical) + retained HTML + attachment metadata | "Ingest full content"; substrate for later AI. Telegram/iMessage already store full bodies |
 | UI | **None in this feature** | Store-only; emails appear on the timeline as interaction line-items like other sources |
-| Category filter | `category:primary` only (skip Promotions/Social/Updates/Forums, SPAM, TRASH) | Keeps cadence/`last_contacted` signal to real 1:1 correspondence |
+| Category filter | Negative exclusions `-category:promotions -category:social -category:updates -category:forums` (SPAM/TRASH excluded by default) | Keeps cadence/`last_contacted` signal to real correspondence. A positive `category:primary` matches NOTHING on accounts where the Gmail category tabs are disabled (Primary is unpopulated there), so negative exclusions are used: they degrade gracefully (exclude nothing when categories are off, still drop bulk mail when on). The known-contact address filter is the real noise gate |
 | Fetch strategy | Combined search query per account (`from:/to:/cc:/bcc:` OR-set, chunked by encoded byte length) | tens of list calls/sweep vs ~1,044 for per-contact, identical body-fetch cost; both fetch only known-contact mail |
 | Incremental cursor | `after:<epoch-seconds>` per account, stored in `external_sync_state.sync_cursor` | Gmail `after:` supports second precision; overlap re-fetch absorbed by dedup |
 | Cross-account dedup | RFC822 `Message-ID` header | Stable across all mailboxes; the Gmail per-mailbox `id` is not |
@@ -62,7 +62,7 @@ Email is a primary communication channel that currently leaves no trace in the C
 ### 2.1 User Stories
 
 1. **Connect once** — having connected a Google account (already supported), email sync begins automatically for that account; no extra consent because `gmail.readonly` is already granted.
-2. **Automatic cadence** — when I exchange Primary-category email with a known contact, `last_contacted` (inbound/mutual) or `last_outreach_at` (outbound) updates without manual logging.
+2. **Automatic cadence** — when I exchange non-bulk email with a known contact, `last_contacted` (inbound/mutual) or `last_outreach_at` (outbound) updates without manual logging.
 3. **Email on the timeline** — email exchanges appear as interactions on the contact, aggregated per thread per day, with a direction signal.
 4. **Follow-ups** — an outbound email to a contact participates in the existing outreach/follow-up lifecycle (a follow-up task is created/refreshed on outbound, same as Telegram/calls).
 5. **No surprises** — emails from people not in my CRM are never ingested and never create contacts; bulk/promotional mail from known contacts is excluded.
@@ -72,8 +72,8 @@ Email is a primary communication channel that currently leaves no trace in the C
 
 | Item | Synced | Details |
 |------|--------|---------|
-| Primary-category mail to/from a known contact | Yes | The core target |
-| Promotions / Social / Updates / Forums | No | Excluded via `category:primary` |
+| Non-bulk mail to/from a known contact | Yes | The core target |
+| Promotions / Social / Updates / Forums | No | Excluded via `-category:promotions -category:social -category:updates -category:forums` — but only effective when the account has Gmail category tabs enabled; the known-contact address filter is the primary noise gate |
 | SPAM / TRASH | No | Excluded |
 | Drafts | No | Not sent/received |
 | Email involving zero known contacts | No | Query never returns it (server-side `from:/to:/cc:/bcc:` filter) |
@@ -106,7 +106,7 @@ Email is a primary communication channel that currently leaves no trace in the C
 For each connected account, each sweep (default every 15 min via the existing scheduler tick):
 
 1. Load the known-contact email map: `{ normalized_email → []contact_id }` for all email `contact_method`s of non-deleted contacts (new repository query — the framework's `contacts []Contact` slice is **not** hydrated with methods, so the provider loads its own map). The map value is a **slice** because addresses are only unique per `(contact_id, type, value_normalized)`, not globally — a shared address (e.g., a couple's joint inbox, or a data-entry collision) can belong to several contacts, and each must get its own interaction. Ambiguous-address counts are logged.
-2. Build OR-chunks of `(from:<addr> OR to:<addr> OR cc:<addr> OR bcc:<addr>)` clauses — one group per address, covering every recipient dimension the participant rule uses (§4.1). Chunk by **encoded query byte length** with a conservative cap (≈6 KB, well under the practical ~8 KB GET-URL limit; no documented `q` length limit exists) rather than a fixed address count. Each chunk query is: `category:primary after:<cursor_epoch> ( <group> OR <group> ... )`.
+2. Build OR-chunks of `(from:<addr> OR to:<addr> OR cc:<addr> OR bcc:<addr>)` clauses — one group per address, covering every recipient dimension the participant rule uses (§4.1). Chunk by **encoded query byte length** with a conservative cap (≈6 KB, well under the practical ~8 KB GET-URL limit; no documented `q` length limit exists) rather than a fixed address count. Each chunk query is: `-category:promotions -category:social -category:updates -category:forums after:<cursor_epoch> ( <group> OR <group> ... )`.
 3. Page through each chunk (`users.messages.list`, 5 units), keeping a **per-account, per-sweep `seen` set of Gmail message ids**. A message whose participants' addresses fall into different chunks is returned by more than one chunk query, so fetch `users.messages.get?format=full` (20 units) only for ids not yet in `seen` — this prevents redundant body fetches (and quota spend) for cross-chunk duplicates. Every returned message already involves a known contact, so nothing fetched is wasted on non-contacts.
 4. For each message, resolve qualifying `(contact, direction)` participants (§4.1) against the in-memory map (**match-only — never create a contact**), fanning out to **all** contacts that share a matched address. Persist + publish per qualifying participant (§5.2).
 5. Advance the account cursor to the max `internalDate` processed in the sweep. Re-fetch overlap on the next sweep is harmless — dedup on `(source, external_id, contact)` and on the event `(source, source_id)` make ingestion idempotent.
@@ -117,7 +117,7 @@ When email sync is first enabled for an account (cursor empty), run the same chu
 
 ### 3.3 New-contact / new-address backfill
 
-Adding an email address to a contact already fires `KindContactMethodsAdded`, which today triggers `CalendarRematchHandler`. Register a parallel **`GmailRematchHandler`** for the `email` method type that runs an identifier-scoped historical query across all connected accounts: `category:primary after:<backfill_since> (from:<new addr> OR to:<new addr> OR cc:<new addr> OR bcc:<new addr>)`. This mirrors the messages integration's "30-day identifier-scoped backwards scan."
+Adding an email address to a contact already fires `KindContactMethodsAdded`, which today triggers `CalendarRematchHandler`. Register a parallel **`GmailRematchHandler`** for the `email` method type that runs an identifier-scoped historical query across all connected accounts: `-category:promotions -category:social -category:updates -category:forums after:<backfill_since> (from:<new addr> OR to:<new addr> OR cc:<new addr> OR bcc:<new addr>)`. This mirrors the messages integration's "30-day identifier-scoped backwards scan."
 
 **Required refactor:** `RematchService` today stores exactly one handler per method type (`map[string]RematchHandler`; `Register` overwrites the slot), and `CalendarRematchHandler` already returns `IdentifierType() == "email"`. Registering Gmail naively would clobber calendar. Change `RematchService` to hold **multiple handlers per type** (`map[string][]RematchHandler`, `Register` appends, dispatch fans out to all), then register both calendar and Gmail for `email`. (Alternative considered and rejected: a composite email handler — fan-out is cleaner and extensible to future per-type handlers.) Steady-state account cursors are not rewound; this is a targeted one-shot scan for the new identifier.
 
@@ -276,7 +276,7 @@ Migrating `telegram_message` and `messages_message` onto `comms_message`. The `S
 |---------|---------|-------|
 | Sync interval | 15 min | `SourceConfig.DefaultInterval` |
 | Backfill start date | 2026-01-01 | `external_sync_state.metadata.backfill_since` |
-| Category filter | `category:primary` | provider constant |
+| Category filter | `-category:promotions -category:social -category:updates -category:forums` | provider constant (negative exclusions; robust when Gmail category tabs are disabled) |
 | OR-chunk budget | ≈6 KB encoded query | provider constant (byte-budgeted, not a fixed address count) |
 | Aggregation day timezone | server `time.Local` | matches `backend/internal/cadence/date.go`; test DST/date-boundary behavior |
 | Enablement | reconciliation creates/enables an `email` state per Google credential | **not** auto-provided by the scheduler — see below |
