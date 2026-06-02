@@ -88,6 +88,10 @@ func TestConsumerJobsForKind_InteractionRecordedEnqueuesCadenceAndFollowUp(t *te
 //   - interaction.manual: inline-invoked by the manual UI handler
 //     (spec §3.4 "other consumers only").
 //   - task.skipped: consumer for that kind is not yet wired.
+//   - email.received / email.sent: published by GmailSyncProvider, but the
+//     email-interaction consumer + routing land in a later phase. Until then
+//     publishing is durable-but-unconsumed — the event-log row is inserted
+//     and zero consumer jobs are enqueued.
 //
 // (contact_methods.added HAS a consumer now — see the dedicated
 // TestConsumerJobsForKind_ContactMethodsAdded tests below.
@@ -97,6 +101,8 @@ func TestConsumerJobsForKind_EmptyForDeferredKinds(t *testing.T) {
 	deferred := []Kind{
 		KindInteractionManual,
 		KindTaskSkipped,
+		KindEmailReceived,
+		KindEmailSent,
 	}
 	for _, k := range deferred {
 		t.Run(string(k), func(t *testing.T) {

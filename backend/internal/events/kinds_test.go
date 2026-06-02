@@ -301,6 +301,67 @@ func TestMarshalUnmarshal_ContactMethodsAdded(t *testing.T) {
 	require.Equal(t, original, decoded)
 }
 
+// TestMarshalUnmarshal_EmailEventPayload round-trips an EmailEventPayload
+// under both email kinds, asserting every field survives including the
+// optional Subject pointer. One struct serves both kinds; the kind is the
+// only discriminator.
+func TestMarshalUnmarshal_EmailEventPayload(t *testing.T) {
+	subject := "Lunch next week?"
+	cid := uuid.New()
+
+	t.Run("received", func(t *testing.T) {
+		original := EmailEventPayload{
+			Version:    1,
+			ContactID:  cid,
+			ExternalID: "<msg-abc@example.com>",
+			ThreadID:   "thread-xyz",
+			LocalDay:   "2026-04-10",
+			SentAt:     time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+			Direction:  "inbound",
+			Subject:    &subject,
+		}
+		raw, err := Marshal(KindEmailReceived, original)
+		require.NoError(t, err)
+		env := &Envelope{Kind: KindEmailReceived, Payload: raw}
+		var decoded EmailEventPayload
+		require.NoError(t, Unmarshal(env, &decoded))
+		require.Equal(t, original, decoded)
+	})
+
+	t.Run("sent_nil_subject", func(t *testing.T) {
+		original := EmailEventPayload{
+			Version:    1,
+			ContactID:  cid,
+			ExternalID: "nomsgid:user@example.com:gmail-1",
+			ThreadID:   "thread-2",
+			LocalDay:   "2026-04-11",
+			SentAt:     time.Date(2026, 4, 11, 9, 30, 0, 0, time.UTC),
+			Direction:  "outbound",
+		}
+		raw, err := Marshal(KindEmailSent, original)
+		require.NoError(t, err)
+		require.NotContains(t, string(raw), "subject",
+			"omitempty should elide a nil Subject from JSON")
+		env := &Envelope{Kind: KindEmailSent, Payload: raw}
+		var decoded EmailEventPayload
+		require.NoError(t, Unmarshal(env, &decoded))
+		require.Equal(t, original, decoded)
+		require.Nil(t, decoded.Subject)
+	})
+
+	t.Run("kind_mismatch_on_unmarshal", func(t *testing.T) {
+		raw, err := Marshal(KindEmailReceived, EmailEventPayload{Version: 1, ContactID: cid})
+		require.NoError(t, err)
+		// Decoding an email.received envelope into the calendar payload type
+		// must be rejected by the registry's kind-vs-type guard.
+		env := &Envelope{Kind: KindEmailReceived, Payload: raw}
+		var wrong CalendarAttendedPayload
+		err = Unmarshal(env, &wrong)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "decodes to")
+	})
+}
+
 func TestMarshalUnmarshal_InteractionRecorded(t *testing.T) {
 	ref := "tg:123:456"
 	original := InteractionRecordedPayload{
@@ -535,9 +596,10 @@ func TestKindPayloadTypes_CoversAllKinds(t *testing.T) {
 // daemon-emitted raw_message.* kinds (messages source), plus the two
 // external_contact.* kinds (iCloud Contacts source), plus the two
 // meeting_note.* kinds (anarlog_sessions source), plus the two call.*
-// kinds (phone_calls source, v1.5).
+// kinds (phone_calls source, v1.5), plus the two email.* kinds (Gmail
+// source, published by GmailSyncProvider).
 func TestAllKinds_ExpectedCount(t *testing.T) {
-	require.Len(t, AllKinds, 18)
+	require.Len(t, AllKinds, 20)
 }
 
 // TestIsKnownKind_CoversAllKinds is the positive side: every Kind declared
@@ -595,6 +657,14 @@ func buildCanonicalPayload(t *testing.T, kind Kind) json.RawMessage {
 		return raw
 	case KindContactMethodsAdded:
 		raw, err := Marshal(kind, ContactMethodsAddedPayload{Version: 1, ContactID: cid, Methods: []ContactMethodRef{{Type: "email", Value: "a@b.com"}}, RematchJobID: uuid.New()})
+		require.NoError(t, err)
+		return raw
+	case KindEmailReceived, KindEmailSent:
+		direction := "inbound"
+		if kind == KindEmailSent {
+			direction = "outbound"
+		}
+		raw, err := Marshal(kind, EmailEventPayload{Version: 1, ContactID: cid, ExternalID: "<msg-1@example.com>", ThreadID: "thread-1", LocalDay: "2026-04-10", SentAt: at, Direction: direction})
 		require.NoError(t, err)
 		return raw
 	case KindInteractionRecorded:
