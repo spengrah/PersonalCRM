@@ -450,6 +450,10 @@ type Querier interface {
 	// DELETE either blocks (attended inserts, decline then soft-deletes) or has
 	// already committed (this read returns no row, attended skips the insert).
 	GetCalendarEventByIDForShare(ctx context.Context, id pgtype.UUID) (*CalendarEvent, error)
+	// Natural-key lookup used by the (phase-3) consumer to locate the content row
+	// for a (source, external_id, contact) tuple. deleted_at filtered.
+	GetCommsMessage(ctx context.Context, arg GetCommsMessageParams) (*CommsMessage, error)
+	GetCommsMessageByID(ctx context.Context, id pgtype.UUID) (*CommsMessage, error)
 	// Contact queries
 	GetContact(ctx context.Context, id pgtype.UUID) (*Contact, error)
 	// Get a single note for a contact by category (e.g., 'notepad')
@@ -604,6 +608,11 @@ type Querier interface {
 	// explicitly to tombstoned rows because the live partial-unique index
 	// already covers the live-row case.
 	GetTombstonedMeetingNoteBySessionID(ctx context.Context, anarlogSessionID pgtype.UUID) (*MeetingNote, error)
+	// Test-only cleanup helper (scoped by matched_contact_id). Hard delete because
+	// the upsert does not clear deleted_at on conflict, so soft-deleted rows would
+	// resurrect across shared-DB test runs (gotcha table). Production code MUST NOT
+	// call this.
+	HardDeleteCommsMessagesByContact(ctx context.Context, matchedContactID pgtype.UUID) error
 	HardDeleteContact(ctx context.Context, id pgtype.UUID) error
 	// Test-only: hard-deletes event rows whose (source, source_id) match the
 	// given source and a LIKE-prefix on source_id. Used by integration tests
@@ -715,6 +724,8 @@ type Querier interface {
 	// SET of canonical phones/emails, not the contact mapping, so DISTINCT
 	// collapses the same value across multiple contacts.
 	ListCanonicalIdentifiersByType(ctx context.Context, dollar_1 []string) ([]string, error)
+	// Per-contact content, newest first (backs idx_comms_message_contact_sent).
+	ListCommsMessagesByContact(ctx context.Context, matchedContactID pgtype.UUID) ([]*CommsMessage, error)
 	// Lightweight query returning only IDs for navigation
 	ListContactIDs(ctx context.Context, arg ListContactIDsParams) ([]pgtype.UUID, error)
 	// Lightweight query returning only IDs with sorting for navigation
@@ -752,6 +763,12 @@ type Querier interface {
 	// source of truth for "in-flight" — this query only needs to filter
 	// out 'disabled' rows whose next_sync_at has come due.
 	ListDueSyncStates(ctx context.Context, nextSyncAt pgtype.Timestamptz) ([]*ExternalSyncState, error)
+	// Returns (value_normalized, contact_id) for every email contact_method of a
+	// non-deleted contact. MANY-TO-ONE allowed: a shared address (joint inbox /
+	// collision) maps to multiple contacts and each pair is returned so the Gmail
+	// provider can fan out to all owners (spec §3.1). value_normalized is already
+	// lowercased by the contact_method trigger. Ordered deterministically.
+	ListEmailIdentitiesForSync(ctx context.Context) ([]*ListEmailIdentitiesForSyncRow, error)
 	ListEnabledSyncStates(ctx context.Context) ([]*ExternalSyncState, error)
 	ListEnrichmentsBySource(ctx context.Context, arg ListEnrichmentsBySourceParams) ([]*ContactEnrichment, error)
 	// List events by Google account within a date range
@@ -894,6 +911,14 @@ type Querier interface {
 	// contact-facing reads (status != 'cancelled'), so it neither re-fires
 	// calendar.attended nor strands an already-recorded interaction.
 	MarkCalendarEventCancelledByGcalID(ctx context.Context, arg MarkCalendarEventCancelledByGcalIDParams) error
+	// Link content rows to the aggregated interaction + set processed_at. Email
+	// aggregation uses a deterministic source_ref and never claims rows, so there
+	// is NO session-scope predicate here (unlike messages_message): the @session_ref
+	// arg is part of the shared StagingProcessor signature but intentionally unused
+	// in the email predicate. Idempotent: a replay finds rows already processed
+	// (processed_at IS NOT NULL) and affects 0 rows, which the consumer treats as
+	// the expected replay case.
+	MarkCommsMessagesProcessed(ctx context.Context, arg MarkCommsMessagesProcessedParams) (int64, error)
 	// Mark an event as having updated last_contacted for its contacts
 	MarkLastContactedUpdated(ctx context.Context, id pgtype.UUID) error
 	// Non-tx variant. Mirror of MarkTelegramMessagesProcessed — used by the
@@ -1241,6 +1266,17 @@ type Querier interface {
 	// so newly matched contacts can be processed. Otherwise we preserve the processed state
 	// to avoid duplicates.
 	UpsertCalendarEvent(ctx context.Context, arg UpsertCalendarEventParams) (*CalendarEvent, error)
+	// Insert-or-merge by the partial unique (source, external_id, matched_contact_id)
+	// WHERE deleted_at IS NULL. Content fields are IMMUTABLE on conflict (first
+	// writer wins). On conflict we merge provenance by SET-UNION (spec §5.2/§5.4):
+	//   - add @account_id to source_metadata.observed_accounts[] only if absent
+	//   - record this account's per-mailbox gmail id under
+	//     source_metadata.account_gmail_ids.<account_id>
+	// The merge is idempotent: a same-account cursor-overlap replay re-runs this
+	// upsert and neither grows observed_accounts[] (already present) nor changes
+	// the gmail-id (stable per account). The ON CONFLICT clause MUST name the
+	// partial index's WHERE predicate so Postgres infers the partial unique index.
+	UpsertCommsMessage(ctx context.Context, arg UpsertCommsMessageParams) (*CommsMessage, error)
 	// Insert or update a note for a contact by category (atomic operation for concurrent safety)
 	// Note: This uses the unique index on (contact_id) WHERE category = 'notepad'
 	UpsertContactNoteByCategory(ctx context.Context, arg UpsertContactNoteByCategoryParams) (*Note, error)

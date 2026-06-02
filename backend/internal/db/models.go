@@ -83,6 +83,29 @@ type CalendarEvent struct {
 	HtmlLink             pgtype.Text        `json:"html_link"`
 }
 
+type CommsMessage struct {
+	ID                pgtype.UUID        `json:"id"`
+	Source            string             `json:"source"`
+	ExternalID        string             `json:"external_id"`
+	ThreadID          pgtype.Text        `json:"thread_id"`
+	Subject           pgtype.Text        `json:"subject"`
+	Body              pgtype.Text        `json:"body"`
+	Snippet           pgtype.Text        `json:"snippet"`
+	PeerHandle        pgtype.Text        `json:"peer_handle"`
+	PeerNormalized    pgtype.Text        `json:"peer_normalized"`
+	Direction         string             `json:"direction"`
+	SentAt            pgtype.Timestamptz `json:"sent_at"`
+	AccountID         pgtype.Text        `json:"account_id"`
+	SourceMetadata    []byte             `json:"source_metadata"`
+	MatchedContactID  pgtype.UUID        `json:"matched_contact_id"`
+	InteractionID     pgtype.UUID        `json:"interaction_id"`
+	ClaimedAt         pgtype.Timestamptz `json:"claimed_at"`
+	ClaimedSessionRef pgtype.Text        `json:"claimed_session_ref"`
+	ProcessedAt       pgtype.Timestamptz `json:"processed_at"`
+	DeletedAt         pgtype.Timestamptz `json:"deleted_at"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+}
+
 type Connection struct {
 	ID           pgtype.UUID        `json:"id"`
 	ContactAID   pgtype.UUID        `json:"contact_a_id"`

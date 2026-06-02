@@ -21,6 +21,7 @@ const (
 	InteractionSourceMessages        = "messages"
 	InteractionSourceAnarlogSessions = "anarlog_sessions"
 	InteractionSourcePhoneCalls      = "phone_calls"
+	InteractionSourceEmail           = "email"
 )
 
 // Interaction direction constants

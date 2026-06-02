@@ -205,6 +205,46 @@ func (q *Queries) ListContactMethodsByContact(ctx context.Context, contactID pgt
 	return items, nil
 }
 
+const ListEmailIdentitiesForSync = `-- name: ListEmailIdentitiesForSync :many
+SELECT cm.value_normalized, cm.contact_id
+FROM contact_method cm
+JOIN contact c ON c.id = cm.contact_id
+WHERE cm.type = 'email'
+  AND cm.value_normalized <> ''
+  AND c.deleted_at IS NULL
+ORDER BY cm.value_normalized ASC, cm.contact_id ASC
+`
+
+type ListEmailIdentitiesForSyncRow struct {
+	ValueNormalized string      `json:"value_normalized"`
+	ContactID       pgtype.UUID `json:"contact_id"`
+}
+
+// Returns (value_normalized, contact_id) for every email contact_method of a
+// non-deleted contact. MANY-TO-ONE allowed: a shared address (joint inbox /
+// collision) maps to multiple contacts and each pair is returned so the Gmail
+// provider can fan out to all owners (spec §3.1). value_normalized is already
+// lowercased by the contact_method trigger. Ordered deterministically.
+func (q *Queries) ListEmailIdentitiesForSync(ctx context.Context) ([]*ListEmailIdentitiesForSyncRow, error) {
+	rows, err := q.db.Query(ctx, ListEmailIdentitiesForSync)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListEmailIdentitiesForSyncRow{}
+	for rows.Next() {
+		var i ListEmailIdentitiesForSyncRow
+		if err := rows.Scan(&i.ValueNormalized, &i.ContactID); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const SetContactMethodPrimary = `-- name: SetContactMethodPrimary :exec
 UPDATE contact_method cm
 SET is_primary = $2,
