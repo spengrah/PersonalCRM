@@ -1,4 +1,4 @@
-// End-to-end coverage for the Gmail sync provider (phase 2), driven through
+// End-to-end coverage for the inert Gmail sync provider, driven through
 // the REAL GmailSyncProvider.Sync with a real *events.Bus + database.Pool and a
 // FAKE gmailFetcher + injected M-set (no stored OAuth credential needed). The
 // in-package google tests exercise the pure helpers + processMessage; these
@@ -15,7 +15,7 @@
 //   - nil-account guard;
 //   - cross-account set-union provenance merge through the provider/upsert path.
 //
-// email.* kinds have no registered consumer in phase 2, so the bus's live river
+// email.* kinds have no registered consumer yet, so the bus's live river
 // client enqueues nothing for them — the events just land in the event-log.
 package tests
 
@@ -82,9 +82,9 @@ func newGmailProviderEnv(t *testing.T) *gmailProviderEnv {
 	eventRepo := repository.NewEventRepository(database.Queries)
 	contactService := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, contactTaskRepo, nil, nil)
 
-	// Live bus via the shared harness. For phase-2 email.* kinds enqueue no
-	// consumer jobs, so the harness's recorder/cadence/followup workers are
-	// irrelevant — the events just land in the event-log.
+	// Live bus via the shared harness. email.* kinds enqueue no consumer jobs,
+	// so the harness's recorder/cadence/followup workers are irrelevant — the
+	// events just land in the event-log.
 	bus := setupTestEventBus(t, ctx, database, contactService)
 
 	provider := google.NewGmailSyncProvider(nil, commsRepo, bus, database.Pool)
@@ -233,7 +233,7 @@ func syncState(accountID, cursor string) *repository.SyncState {
 	return st
 }
 
-// --- §7.2.1: full sweep → content rows + events ---
+// --- full sweep → content rows + events ---
 
 func TestGmailProvider_FullSweep_ContentAndEvents(t *testing.T) {
 	e := newGmailProviderEnv(t)
@@ -290,7 +290,7 @@ func TestGmailProvider_FullSweep_ContentAndEvents(t *testing.T) {
 	require.Equal(t, events.KindEmailSent, outEnv.Kind)
 }
 
-// --- §7.2.2: cross-chunk seen dedup at sweep level ---
+// --- cross-chunk seen dedup at sweep level ---
 
 func TestGmailProvider_CrossChunkSeenDedup(t *testing.T) {
 	e := newGmailProviderEnv(t)
@@ -325,7 +325,7 @@ func TestGmailProvider_CrossChunkSeenDedup(t *testing.T) {
 	require.Equal(t, 1, store.getCalls["g-span"], "body should be fetched exactly once across chunks")
 }
 
-// --- §7.2.3: match-only (unknown participant never creates a contact) ---
+// --- match-only (unknown participant never creates a contact) ---
 
 func TestGmailProvider_MatchOnly_NoContactCreated(t *testing.T) {
 	e := newGmailProviderEnv(t)
@@ -353,7 +353,7 @@ func TestGmailProvider_MatchOnly_NoContactCreated(t *testing.T) {
 	require.Empty(t, matches, "unknown address must not have produced a contact")
 }
 
-// --- §7.2.4: cursor-overlap idempotency ---
+// --- cursor-overlap idempotency ---
 
 func TestGmailProvider_CursorOverlapIdempotent(t *testing.T) {
 	e := newGmailProviderEnv(t)
@@ -380,7 +380,7 @@ func TestGmailProvider_CursorOverlapIdempotent(t *testing.T) {
 	require.Equal(t, []string{me}, observedAccounts(t, got.SourceMetadata))
 }
 
-// --- §7.2.5: publish-before-mutate ---
+// --- publish-before-mutate ---
 
 func TestGmailProvider_PublishBeforeMutate_RollsBack(t *testing.T) {
 	e := newGmailProviderEnv(t)
@@ -402,7 +402,7 @@ func TestGmailProvider_PublishBeforeMutate_RollsBack(t *testing.T) {
 	require.Empty(t, aRows, "the content upsert must have rolled back with the failed publish")
 }
 
-// --- §7.2.6: nomsgid fallback persistence ---
+// --- nomsgid fallback persistence ---
 
 func TestGmailProvider_NomsgidFallback(t *testing.T) {
 	e := newGmailProviderEnv(t)
@@ -430,7 +430,7 @@ func TestGmailProvider_NomsgidFallback(t *testing.T) {
 	require.Equal(t, events.KindEmailReceived, env.Kind)
 }
 
-// --- §7.2.7: cursor edge cases ---
+// --- cursor edge cases ---
 
 func TestGmailProvider_AllBystanderSweepAdvancesCursor(t *testing.T) {
 	e := newGmailProviderEnv(t)
@@ -507,7 +507,7 @@ func TestGmailProvider_HardFailureLeavesCursorUnchanged(t *testing.T) {
 	require.Equal(t, "1700000900", result.NewCursor)
 }
 
-// --- §7.2.8: nil-account guard ---
+// --- nil-account guard ---
 
 func TestGmailProvider_NilAccount_Errors(t *testing.T) {
 	e := newGmailProviderEnv(t)
@@ -517,7 +517,7 @@ func TestGmailProvider_NilAccount_Errors(t *testing.T) {
 	require.Nil(t, result)
 }
 
-// --- §7.2.9: cross-account provenance set-union MERGE ---
+// --- cross-account provenance set-union MERGE ---
 
 func TestGmailProvider_CrossAccountProvenanceMerge(t *testing.T) {
 	e := newGmailProviderEnv(t)

@@ -54,7 +54,7 @@ const (
 // the handler-level email validator, but the external-enrichment path
 // (BuildMethodsFromExternal) does not validate, so a stray space, quote, or
 // paren could corrupt the OR-group. We restrict to a conservative email-safe
-// set and skip anything else (D5 query-term sanitization).
+// set and skip anything else.
 var emailSafeTermRegex = regexp.MustCompile(`^[a-z0-9@._+%-]+$`)
 
 // htmlTagRegex strips HTML tags during the text/html → plaintext fallback.
@@ -118,7 +118,7 @@ type attachmentMeta struct {
 
 // emailMetadata is the non-provenance JSON the provider assembles into
 // comms_message.source_metadata. The provenance keys (observed_accounts,
-// account_gmail_ids) are added by the phase-1 upsert query, NOT here.
+// account_gmail_ids) are added by the UpsertCommsMessage query, NOT here.
 type emailMetadata struct {
 	HTML        string           `json:"html,omitempty"`
 	Attachments []attachmentMeta `json:"attachments,omitempty"`
@@ -149,8 +149,8 @@ type qualifiedRow struct {
 	Metadata       []byte
 }
 
-// GmailSyncProvider implements sync.SyncProvider for Gmail. It is fully inert
-// in phase 2: it is NOT registered in main.go, and although it publishes
+// GmailSyncProvider implements sync.SyncProvider for Gmail. It is currently
+// inert: it is NOT registered in main.go, and although it publishes
 // email.received/email.sent, those kinds have no registered consumer yet, so
 // publishing only writes the durable event-log row.
 type GmailSyncProvider struct {
@@ -170,7 +170,7 @@ type GmailSyncProvider struct {
 	// newMeSet builds the "me" set (the normalized address of every connected
 	// account). Defaulted to an impl that calls oauthService.ListAccounts;
 	// tests override via SetMeSetForTest so the M-set is injected with no OAuth
-	// state — symmetric with newFetcher (D4).
+	// state — symmetric with newFetcher.
 	newMeSet func(ctx context.Context) (map[string]struct{}, error)
 }
 
@@ -322,12 +322,12 @@ func (p *GmailSyncProvider) Sync(
 			refs, next, err := fetcher.ListMessageIDs(ctx, query, pageToken)
 			if err != nil {
 				// Hard failure: abort the sweep, return the prior cursor
-				// unchanged so the whole after:<prior> window re-runs (D10).
+				// unchanged so the whole after:<prior> window re-runs.
 				return p.failResult(priorCursor), fmt.Errorf("list message ids: %w", err)
 			}
 			for _, ref := range refs {
 				if _, dup := seen[ref.ID]; dup {
-					continue // cross-chunk dedup: body already fetched (D6)
+					continue // cross-chunk dedup: body already fetched this sweep
 				}
 				seen[ref.ID] = struct{}{}
 				fetchedAny = true
@@ -343,7 +343,7 @@ func (p *GmailSyncProvider) Sync(
 				result.ItemsProcessed++
 
 				// Processed (even if zero qualifying rows) contributes its
-				// internalDate to the cursor advance (D11).
+				// internalDate to the cursor advance.
 				if secs := msg.InternalDate / 1000; secs > maxInternalDateSecs {
 					maxInternalDateSecs = secs
 				}
@@ -376,9 +376,9 @@ func (p *GmailSyncProvider) Sync(
 }
 
 // failResult returns a SyncResult that does NOT advance the cursor: NewCursor
-// is the prior cursor verbatim so the after:<prior> window re-runs next tick
-// (D10). A blank prior cursor stays blank — there is nothing to advance past on
-// a first-sweep failure, and the next tick re-derives the onboarding floor.
+// is the prior cursor verbatim so the after:<prior> window re-runs next tick.
+// A blank prior cursor stays blank — there is nothing to advance past on a
+// first-sweep failure, and the next tick re-derives the onboarding floor.
 func (p *GmailSyncProvider) failResult(priorCursor string) *sync.SyncResult {
 	return &sync.SyncResult{NewCursor: priorCursor}
 }
@@ -388,7 +388,7 @@ func (p *GmailSyncProvider) failResult(priorCursor string) *sync.SyncResult {
 // Each row is its own tx so a single bad message can't strand a whole sweep and
 // no tx spans network I/O (content is already in memory). SourceID is
 // per-(message, contact) so a message qualifying N contacts produces N distinct
-// event rows (D10).
+// event rows (avoids the multi-entity (source, source_id) collapse).
 func (p *GmailSyncProvider) persistRow(ctx context.Context, row qualifiedRow) (err error) {
 	kind := events.KindEmailReceived
 	if row.Direction == "outbound" {
@@ -484,7 +484,7 @@ func backfillSinceEpoch(metadata map[string]any) int64 {
 	return t.Unix()
 }
 
-// computeNewCursor implements the cursor-write contract (D11). It NEVER returns
+// computeNewCursor implements the cursor-write contract. It NEVER returns
 // an empty string (an empty NewCursor would NULL-clear the stored cursor and
 // trigger a full re-backfill):
 //   - ≥1 message fetched: advance to max(maxInternalDateSecs, priorCursorSecs),
@@ -509,7 +509,7 @@ func computeNewCursor(fetchedAny bool, maxInternalDateSecs, priorCursorSecs int6
 // sanitizeAddresses filters the address list to terms safe to embed in a Gmail
 // `q` operator. Addresses that are empty, contain whitespace, or contain a
 // character outside the conservative email-safe set are dropped (and logged) so
-// a single malformed contact_method can't corrupt a chunk query (D5).
+// a single malformed contact_method can't corrupt a chunk query.
 func sanitizeAddresses(addresses []string) []string {
 	out := make([]string, 0, len(addresses))
 	for _, a := range addresses {
@@ -622,7 +622,7 @@ func (p *GmailSyncProvider) processMessage(
 
 	// Ordered, deduped recipient buckets (raw+normalized aligned) for the
 	// deterministic outbound peer-handle precedence (To, then Cc, then Bcc;
-	// header order within a bucket) (D8).
+	// header order within a bucket).
 	orderedRecipients := buildOrderedRecipients(toRaw, toNorm, ccRaw, ccNorm, bccRaw, bccNorm)
 
 	contentSubject := strPtrIfNotEmpty(subject)
@@ -713,7 +713,7 @@ type orderedRecipient struct {
 
 // buildOrderedRecipients concatenates the recipient buckets in fixed order (To,
 // Cc, Bcc), each in header-listed order, deduping by normalized address so a
-// repeated address keeps its first (highest-precedence) position (D8).
+// repeated address keeps its first (highest-precedence) position.
 func buildOrderedRecipients(toRaw, toNorm, ccRaw, ccNorm, bccRaw, bccNorm []string) []orderedRecipient {
 	var out []orderedRecipient
 	seen := make(map[string]struct{})
@@ -739,7 +739,7 @@ func buildOrderedRecipients(toRaw, toNorm, ccRaw, ccNorm, bccRaw, bccNorm []stri
 // firstContactRecipient returns the first ordered recipient whose normalized
 // address is in the contact's address set, giving the deterministic outbound
 // peer-handle (To wins over Cc wins over Bcc; first-listed wins within a
-// bucket) (D8).
+// bucket).
 func firstContactRecipient(recipients []orderedRecipient, addrSet map[string]struct{}) (raw, normalized string, ok bool) {
 	for _, r := range recipients {
 		if _, in := addrSet[r.normalized]; in {
@@ -856,13 +856,26 @@ func epochMillisToTime(millis int64) time.Time {
 	return time.UnixMilli(millis).UTC()
 }
 
+// isAttachmentPart reports whether a MIME part is an attachment: it has a
+// filename, or its body is an external attachment referenced by AttachmentId
+// (inline images and some forwarded parts carry an attachment id without a
+// filename). Either signal means the part's bytes live out-of-band, so we
+// record metadata only and never treat it as the message body.
+func isAttachmentPart(part *gmail.MessagePart) bool {
+	if part.Filename != "" {
+		return true
+	}
+	return part.Body != nil && part.Body.AttachmentId != ""
+}
+
 // extractContent MIME-walks payload, returning the canonical plaintext body,
 // the raw HTML body (when present), and attachment metadata. It prefers the
 // first text/plain part; if none exists anywhere, it strips the first text/html
 // part to plaintext for the body and retains the raw HTML. A part is an
-// attachment when it has a non-empty filename; only metadata is collected (no
-// content is fetched). Returns an error only on a base64 decode failure of a
-// chosen body part.
+// attachment when it has a non-empty filename and/or a Body.AttachmentId
+// (inline attachments often carry an attachment id without a filename); only
+// metadata is collected (no content is fetched). Returns an error only on a
+// base64 decode failure of a chosen body part.
 func extractContent(payload *gmail.MessagePart) (body, htmlBody string, attachments []attachmentMeta, err error) {
 	if payload == nil {
 		return "", "", nil, nil
@@ -874,7 +887,7 @@ func extractContent(payload *gmail.MessagePart) (body, htmlBody string, attachme
 			return
 		}
 		mimeType := strings.ToLower(part.MimeType)
-		if part.Filename != "" {
+		if isAttachmentPart(part) {
 			size := int64(0)
 			if part.Body != nil {
 				size = part.Body.Size
@@ -944,8 +957,8 @@ func stripHTML(s string) string {
 
 // buildMetadataJSON assembles the non-provenance source_metadata JSON the
 // provider owns (html, attachments, labels, from/to/cc/bcc). The provenance
-// keys (observed_accounts, account_gmail_ids) are added by the phase-1 upsert
-// query, not here.
+// keys (observed_accounts, account_gmail_ids) are added by the
+// UpsertCommsMessage query, not here.
 func buildMetadataJSON(htmlBody string, attachments []attachmentMeta, labels []string, fromRaw string, toRaw, ccRaw, bccRaw []string) []byte {
 	meta := emailMetadata{
 		HTML:        htmlBody,
@@ -993,7 +1006,7 @@ func (p *GmailSyncProvider) SetFetcherFactoryForTest(factory func(ctx context.Co
 }
 
 // SetMeSetForTest overrides the me-set factory so tests inject the connected-
-// account address set with no OAuth state (D4).
+// account address set with no OAuth state.
 func (p *GmailSyncProvider) SetMeSetForTest(meSet map[string]struct{}) {
 	p.newMeSet = func(context.Context) (map[string]struct{}, error) {
 		return meSet, nil

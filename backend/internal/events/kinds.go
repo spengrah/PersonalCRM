@@ -32,7 +32,7 @@ const (
 	// subject / html live in comms_message. These kinds have NO registered
 	// consumer in consumerJobsForKind yet, so publishing them is durable but
 	// unconsumed (the event-log row lands, no job is enqueued) until the
-	// phase-3 email-interaction consumer is wired.
+	// email-interaction consumer is wired.
 	KindEmailReceived Kind = "email.received"
 	KindEmailSent     Kind = "email.sent"
 

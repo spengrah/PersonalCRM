@@ -108,7 +108,7 @@ func (f *fakeFetcher) GetMessage(_ context.Context, id string) (*gmail.Message, 
 	return msg, nil
 }
 
-// --- D3: Config ---
+// --- Config ---
 
 func TestGmailSyncProvider_Config(t *testing.T) {
 	p := NewGmailSyncProvider(nil, nil, nil, nil)
@@ -121,7 +121,7 @@ func TestGmailSyncProvider_Config(t *testing.T) {
 	require.Equal(t, GmailDefaultInterval, cfg.DefaultInterval)
 }
 
-// --- §7.1.1: OR-chunk byte budgeting + sanitization ---
+// --- OR-chunk byte budgeting + sanitization ---
 
 func TestBuildORChunks_BasicShapeAndPrefix(t *testing.T) {
 	chunks := buildORChunks([]string{"b@example.com", "a@example.com"}, 1700000000)
@@ -196,7 +196,7 @@ func TestSanitizeAddresses_OnlyMalformed_Empty(t *testing.T) {
 	require.Empty(t, sanitizeAddresses([]string{"a b@example.com", "x()@example.com", "  "}))
 }
 
-// --- §7.1.3: MIME body extraction ---
+// --- MIME body extraction ---
 
 func TestExtractContent_PlainTextOnly(t *testing.T) {
 	body, htmlBody, atts, err := extractContent(plainTextPart("hello world"))
@@ -287,7 +287,30 @@ func TestExtractContent_NilPayload(t *testing.T) {
 	require.Empty(t, atts)
 }
 
-// --- §7.1.4: Message-ID extraction + fallback ---
+func TestExtractContent_AttachmentIDWithoutFilename_StillCollected(t *testing.T) {
+	// Inline images and some forwarded parts carry an AttachmentId but no
+	// filename — they must still be recorded as attachment metadata and must
+	// NOT be treated as the message body.
+	payload := &gmail.MessagePart{
+		MimeType: "multipart/mixed",
+		Parts: []*gmail.MessagePart{
+			plainTextPart("body text"),
+			{
+				MimeType: "image/png",
+				Body:     &gmail.MessagePartBody{AttachmentId: "att-inline-1", Size: 512},
+			},
+		},
+	}
+	body, _, atts, err := extractContent(payload)
+	require.NoError(t, err)
+	require.Equal(t, "body text", body)
+	require.Len(t, atts, 1)
+	require.Equal(t, "image/png", atts[0].MimeType)
+	require.Equal(t, int64(512), atts[0].Size)
+	require.Empty(t, atts[0].Filename)
+}
+
+// --- Message-ID extraction + fallback ---
 
 func TestExtractExternalID_PresentTrimmed(t *testing.T) {
 	h := newHeaderLookup(&gmail.MessagePart{Headers: []*gmail.MessagePartHeader{
@@ -308,7 +331,7 @@ func TestExtractExternalID_CaseInsensitiveHeaderName(t *testing.T) {
 	require.Equal(t, "lower@example.com", extractExternalID(h, "me@example.com", "gmail-1"))
 }
 
-// --- §7.1.5: participant/direction rule ---
+// --- participant/direction rule ---
 
 func buildMessage(t *testing.T, id, threadID, from string, to, cc, bcc []string, subject, body, msgID string, internalDateMillis int64) *gmail.Message {
 	t.Helper()
@@ -470,7 +493,7 @@ func TestProcessMessage_InboundForA_RecipientBNotQualifying(t *testing.T) {
 	require.Equal(t, "inbound", rows[0].Direction)
 }
 
-// --- §7.1.6: ambiguous shared-address fan-out ---
+// --- ambiguous shared-address fan-out ---
 
 func TestProcessMessage_AmbiguousSharedAddress_FansOut(t *testing.T) {
 	p := newProviderForResolution()
@@ -494,7 +517,7 @@ func TestProcessMessage_AmbiguousSharedAddress_FansOut(t *testing.T) {
 	require.True(t, ids[contactB])
 }
 
-// --- §7.1.5 (display-name parsing) + peer-handle precedence (D8) ---
+// --- display-name parsing + peer-handle precedence ---
 
 func TestProcessMessage_PeerHandlePrecedence_ToWinsOverCc(t *testing.T) {
 	p := newProviderForResolution()
@@ -613,7 +636,7 @@ func TestProcessMessage_MetadataCarriesAttachmentsAndHTML(t *testing.T) {
 	require.Equal(t, []string{"me@example.com"}, meta.To)
 }
 
-// --- §7.1.7: local_day boundary in time.Local (incl. DST) ---
+// --- local_day boundary in time.Local (incl. DST) ---
 
 func TestComputeLocalDay_PureForm_AcrossMidnight(t *testing.T) {
 	loc, err := time.LoadLocation("America/New_York")
@@ -652,7 +675,7 @@ func TestComputeLocalDay_ReadsGlobalTimeLocal(t *testing.T) {
 	require.Equal(t, "2026-11-01", computeLocalDay(instant, time.Local))
 }
 
-// --- cursor helpers (D11) ---
+// --- cursor helpers ---
 
 func TestComputeNewCursor_FetchedAdvancesMonotonic(t *testing.T) {
 	// max(maxInternalDate, prior) — never below prior.
@@ -688,14 +711,38 @@ func TestResolveAfterFloor_EmptyCursor_MetadataOverride(t *testing.T) {
 	require.Equal(t, expected, after)
 }
 
-// --- §7.1.2: cross-chunk seen dedup (fetcher call count) at the Sync seam ---
-// (Full Sync sweep is exercised in the integration test; here we assert the
-// dedup mechanic directly against the fake fetcher.)
+// --- cross-chunk seen dedup ---
+//
+// The per-id `seen` set lives inside Sync, whose body fetch + persist need a
+// real bus + pool, so the end-to-end "body fetched once across chunks"
+// assertion lives in the integration test (TestGmailProvider_CrossChunkSeenDedup).
+// Here we unit-test the precondition that makes that scenario reachable: the
+// chunk builder splits a large address set across multiple OR-chunks, and the
+// fake fetcher hands the SAME message id back from more than one chunk query —
+// which is exactly when Sync's seen set must suppress the duplicate body fetch.
 
-func TestFakeFetcher_RecordsGetCalls(t *testing.T) {
+func TestCrossChunkDedup_Precondition_SameIDFromTwoChunks(t *testing.T) {
+	// A large address set forces multiple OR-chunks.
+	var addrs []string
+	for i := 0; i < 200; i++ {
+		addrs = append(addrs, fmt.Sprintf("user%03d@example.com", i))
+	}
+	chunks := buildORChunks(addrs, 1700000000)
+	require.Greater(t, len(chunks), 1, "address set must span multiple chunks")
+
+	// A message returned by both the first and the last chunk query.
 	f := newFakeFetcher()
-	f.messages["g1"] = &gmail.Message{Id: "g1"}
-	_, _ = f.GetMessage(context.Background(), "g1")
-	_, _ = f.GetMessage(context.Background(), "g1")
-	require.Equal(t, 2, f.getCalls["g1"])
+	f.messages["g-span"] = &gmail.Message{Id: "g-span"}
+	f.listPages[chunks[0]] = [][]gmailMessageRef{{{ID: "g-span"}}}
+	f.listPages[chunks[len(chunks)-1]] = [][]gmailMessageRef{{{ID: "g-span"}}}
+
+	// Both chunk queries hand back the same id (the cross-chunk duplicate Sync's
+	// seen set must collapse to a single GetMessage).
+	page0, _, err := f.ListMessageIDs(context.Background(), chunks[0], "")
+	require.NoError(t, err)
+	pageN, _, err := f.ListMessageIDs(context.Background(), chunks[len(chunks)-1], "")
+	require.NoError(t, err)
+	require.Len(t, page0, 1)
+	require.Len(t, pageN, 1)
+	require.Equal(t, page0[0].ID, pageN[0].ID)
 }
