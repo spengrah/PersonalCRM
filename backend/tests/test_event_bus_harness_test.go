@@ -71,6 +71,13 @@ func setupTestEventBus(
 	// no-op workers drain the queue without doing any work.
 	river.AddWorker(workers, &cadenceUpdaterNoopWorker{})
 	river.AddWorker(workers, &followUpManagerNoopWorker{})
+	// email.received / email.sent now route to the email_interaction_consumer
+	// kind (Gmail phase 3). Register a no-op worker so suites that publish
+	// email.* through this harness (e.g. the Gmail provider sweep tests, which
+	// assert on the durable event + content rows, not the derived interaction)
+	// can enqueue legally. Suites that want the REAL email consumer use
+	// setupTestEventBusForEmail.
+	river.AddWorker(workers, &emailInteractionNoopWorker{})
 
 	client, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
 		Queues: map[string]river.QueueConfig{
@@ -154,6 +161,7 @@ func setupTestEventBusWithRematch(
 	river.AddWorker(workers, interactionShim)
 	river.AddWorker(workers, &cadenceUpdaterNoopWorker{})
 	river.AddWorker(workers, &followUpManagerNoopWorker{})
+	river.AddWorker(workers, &emailInteractionNoopWorker{})
 	rematchShim := &deferredRematchWorker{}
 	river.AddWorker(workers, rematchShim)
 
@@ -196,6 +204,164 @@ func setupTestEventBusWithRematch(
 	})
 
 	return bus
+}
+
+// setupTestEventBusForEmail wires a live river client for the email
+// integration suite with THREE real workers (vs. the noop cadence/follow-up
+// of setupTestEventBus):
+//
+//  1. EmailInteractionConsumerWorker (subject under test) — registered for
+//     the email_interaction_consumer kind.
+//  2. The REAL CadenceUpdaterWorker, wired to the SAME CadenceUpdater
+//     instance the email consumer's create branch uses inline, so the async
+//     cadence_updater job enqueued by interaction.recorded actually writes
+//     cadence columns. (In practice the create branch's inline cadence apply
+//     wins the durable claim, so the async worker no-ops — but registering
+//     the real worker exercises the claim/no-op semantics exactly as prod,
+//     and catches a regression where the inline path stops firing.)
+//  3. A REAL FollowUpManagerWorker constructed in mode=off so the
+//     followup_manager job enqueued by interaction.recorded drains cleanly
+//     without Todoist wiring. The email consumer's inline followUp dep is
+//     wired to the same off-mode manager. Cadence — not follow-up task
+//     creation — is the load-bearing phase-3 assertion (§9), so off-mode
+//     keeps the harness lean while draining the queue legally.
+//
+// Chicken-and-egg: the bus needs the email consumer (which needs the
+// contactService as writer/aggregator), and the consumer needs the bus to
+// publish interaction.recorded. Resolved with the same shim pattern as
+// setupTestEventBus. Returns the live bus + the InteractionRepository
+// (callers assert via FindBySourceRef) + the CommsMessageRepository (callers
+// seed content rows + assert interaction_id/processed_at linkage).
+func setupTestEventBusForEmail(
+	t *testing.T,
+	ctx context.Context,
+	database *db.Database,
+	contactService *service.ContactService,
+) (*events.Bus, *consumer.EmailInteractionConsumer) {
+	t.Helper()
+
+	eventRepo := repository.NewEventRepository(database.Queries)
+	contactRepo := repository.NewContactRepository(database.Queries)
+	contactRepo.SetPool(database.Pool)
+	interactionRepo := repository.NewInteractionRepository(database.Queries)
+	commsMessageRepo := repository.NewCommsMessageRepository(database.Queries)
+	claimRepo := repository.NewEventConsumerClaimRepository(database.Queries)
+
+	cfg := config.TestConfig()
+	if cfg.River.WorkerConcurrency <= 0 {
+		cfg.River.WorkerConcurrency = 4
+	}
+
+	cadenceUpdater := consumer.NewCadenceUpdater(
+		claimRepo, contactRepo, database.Queries,
+		consumer.CadenceModeCutover,
+		false,
+	)
+	contactService.SetCadenceUpdater(cadenceUpdater)
+
+	// Off-mode FollowUpManager: cutover-only Todoist deps are nil (gated on
+	// mode == cutover per NewFollowUpManager's doc comment).
+	followUpManager := consumer.NewFollowUpManager(
+		consumer.FollowUpModeOff,
+		claimRepo, contactRepo, nil, nil, interactionRepo, nil,
+		database.Pool, nil, nil, "", cfg.Watchdog,
+	)
+
+	workers := river.NewWorkers()
+	emailShim := &deferredEmailWorker{}
+	river.AddWorker(workers, emailShim)
+	cadenceShim := &deferredCadenceWorker{}
+	river.AddWorker(workers, cadenceShim)
+	followUpShim := &deferredFollowUpWorker{}
+	river.AddWorker(workers, followUpShim)
+
+	client, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
+		Queues: map[string]river.QueueConfig{
+			river.QueueDefault: {MaxWorkers: cfg.River.WorkerConcurrency},
+		},
+		Workers:  workers,
+		TestOnly: true,
+	})
+	require.NoError(t, err)
+
+	bus := events.NewBus(database.Pool, client, eventRepo)
+
+	emailConsumer := consumer.NewEmailInteractionConsumer(
+		contactService, commsMessageRepo, interactionRepo, contactService,
+		bus, cadenceUpdater, followUpManager,
+	)
+	emailShim.real = consumer.NewEmailInteractionConsumerWorker(bus, database.Pool, emailConsumer)
+	cadenceShim.real = consumer.NewCadenceUpdaterWorker(bus, database.Pool, cadenceUpdater)
+	followUpShim.real = consumer.NewFollowUpManagerWorker(bus, database.Pool, followUpManager)
+
+	require.NoError(t, client.Start(ctx))
+	t.Cleanup(func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer stopCancel()
+		_ = client.Stop(stopCtx)
+	})
+
+	return bus, emailConsumer
+}
+
+// deferredEmailWorker / deferredCadenceWorker / deferredFollowUpWorker mirror
+// deferredRecorderWorker: register a River worker on the bundle before the
+// real worker (which needs the bus, which needs the client) exists.
+type deferredEmailWorker struct {
+	river.WorkerDefaults[consumerjobs.EmailInteractionConsumerJobArgs]
+	real *consumer.EmailInteractionConsumerWorker
+}
+
+func (w *deferredEmailWorker) Work(ctx context.Context, j *river.Job[consumerjobs.EmailInteractionConsumerJobArgs]) error {
+	if w.real == nil {
+		return fmt.Errorf("deferredEmailWorker invoked before real worker assignment")
+	}
+	return w.real.Work(ctx, j)
+}
+
+func (w *deferredEmailWorker) Timeout(j *river.Job[consumerjobs.EmailInteractionConsumerJobArgs]) time.Duration {
+	if w.real == nil {
+		return 30 * time.Second
+	}
+	return w.real.Timeout(j)
+}
+
+type deferredCadenceWorker struct {
+	river.WorkerDefaults[consumerjobs.CadenceUpdaterJobArgs]
+	real *consumer.CadenceUpdaterWorker
+}
+
+func (w *deferredCadenceWorker) Work(ctx context.Context, j *river.Job[consumerjobs.CadenceUpdaterJobArgs]) error {
+	if w.real == nil {
+		return fmt.Errorf("deferredCadenceWorker invoked before real worker assignment")
+	}
+	return w.real.Work(ctx, j)
+}
+
+func (w *deferredCadenceWorker) Timeout(j *river.Job[consumerjobs.CadenceUpdaterJobArgs]) time.Duration {
+	if w.real == nil {
+		return 30 * time.Second
+	}
+	return w.real.Timeout(j)
+}
+
+type deferredFollowUpWorker struct {
+	river.WorkerDefaults[consumerjobs.FollowUpManagerJobArgs]
+	real *consumer.FollowUpManagerWorker
+}
+
+func (w *deferredFollowUpWorker) Work(ctx context.Context, j *river.Job[consumerjobs.FollowUpManagerJobArgs]) error {
+	if w.real == nil {
+		return fmt.Errorf("deferredFollowUpWorker invoked before real worker assignment")
+	}
+	return w.real.Work(ctx, j)
+}
+
+func (w *deferredFollowUpWorker) Timeout(j *river.Job[consumerjobs.FollowUpManagerJobArgs]) time.Duration {
+	if w.real == nil {
+		return 30 * time.Second
+	}
+	return w.real.Timeout(j)
 }
 
 // deferredRematchWorker is the rematch counterpart to
@@ -302,6 +468,22 @@ func (*followUpManagerNoopWorker) Work(_ context.Context, _ *river.Job[consumerj
 }
 
 func (*followUpManagerNoopWorker) Timeout(_ *river.Job[consumerjobs.FollowUpManagerJobArgs]) time.Duration {
+	return 30 * time.Second
+}
+
+// emailInteractionNoopWorker satisfies the email_interaction_consumer kind
+// for harnesses that publish email.* but don't exercise the real email
+// consumer (e.g. the Gmail provider sweep tests). Drains the job without DB
+// side effects.
+type emailInteractionNoopWorker struct {
+	river.WorkerDefaults[consumerjobs.EmailInteractionConsumerJobArgs]
+}
+
+func (*emailInteractionNoopWorker) Work(_ context.Context, _ *river.Job[consumerjobs.EmailInteractionConsumerJobArgs]) error {
+	return nil
+}
+
+func (*emailInteractionNoopWorker) Timeout(_ *river.Job[consumerjobs.EmailInteractionConsumerJobArgs]) time.Duration {
 	return 30 * time.Second
 }
 

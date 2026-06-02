@@ -88,21 +88,17 @@ func TestConsumerJobsForKind_InteractionRecordedEnqueuesCadenceAndFollowUp(t *te
 //   - interaction.manual: inline-invoked by the manual UI handler
 //     (spec §3.4 "other consumers only").
 //   - task.skipped: consumer for that kind is not yet wired.
-//   - email.received / email.sent: published by GmailSyncProvider, but the
-//     email-interaction consumer + routing land in a later phase. Until then
-//     publishing is durable-but-unconsumed — the event-log row is inserted
-//     and zero consumer jobs are enqueued.
 //
 // (contact_methods.added HAS a consumer now — see the dedicated
 // TestConsumerJobsForKind_ContactMethodsAdded tests below.
 // calendar.declined HAS a consumer now — see
-// TestConsumerJobsForKind_CalendarDeclinedEnqueuesDeclineHandler.)
+// TestConsumerJobsForKind_CalendarDeclinedEnqueuesDeclineHandler.
+// email.received / email.sent HAVE a consumer now — see
+// TestConsumerJobsForKind_EmailEnqueuesEmailConsumer.)
 func TestConsumerJobsForKind_EmptyForDeferredKinds(t *testing.T) {
 	deferred := []Kind{
 		KindInteractionManual,
 		KindTaskSkipped,
-		KindEmailReceived,
-		KindEmailSent,
 	}
 	for _, k := range deferred {
 		t.Run(string(k), func(t *testing.T) {
@@ -130,6 +126,28 @@ func TestConsumerJobsForKind_CalendarDeclinedEnqueuesDeclineHandler(t *testing.T
 	require.Equal(t, "calendar_decline_handler", args.Kind())
 	require.NotNil(t, jobs[0].Opts, "InsertOpts must be set to pin MaxAttempts")
 	require.Equal(t, 5, jobs[0].Opts.MaxAttempts)
+}
+
+// TestConsumerJobsForKind_EmailEnqueuesEmailConsumer asserts that each of
+// email.received / email.sent enqueues exactly one EmailInteractionConsumer
+// river job with MaxAttempts=5 and the event id threaded through.
+func TestConsumerJobsForKind_EmailEnqueuesEmailConsumer(t *testing.T) {
+	for _, k := range []Kind{KindEmailReceived, KindEmailSent} {
+		t.Run(string(k), func(t *testing.T) {
+			eventID := uuid.New()
+			env := &Envelope{ID: eventID, Kind: k}
+			jobs, err := consumerJobsForKind(env)
+			require.NoError(t, err)
+			require.Len(t, jobs, 1, "kind %s should enqueue exactly one consumer job", k)
+
+			args, ok := jobs[0].Args.(consumerjobs.EmailInteractionConsumerJobArgs)
+			require.True(t, ok, "job args type must be EmailInteractionConsumerJobArgs, got %T", jobs[0].Args)
+			require.Equal(t, eventID, args.EventID)
+			require.Equal(t, "email_interaction_consumer", args.Kind())
+			require.NotNil(t, jobs[0].Opts, "InsertOpts must be set to pin MaxAttempts")
+			require.Equal(t, 5, jobs[0].Opts.MaxAttempts)
+		})
+	}
 }
 
 // TestConsumerJobsForKind_ContactMethodsAdded asserts the PR 10 routing:

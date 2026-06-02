@@ -554,6 +554,22 @@ func run() int {
 	calendarDeclineHandler := consumer.NewCalendarDeclineHandler(interactionRepo, contactRepo)
 	river.AddWorker(riverWorkers, consumer.NewCalendarDeclineHandlerWorker(eventBus, database.Pool, calendarDeclineHandler))
 
+	// Email-interaction consumer: derives a per-(contact, thread, local-day)
+	// aggregated interaction from email.received / email.sent events + their
+	// comms_message content rows. contactService fills both the
+	// interactionWriter slot (create branch) and the emailAggregator slot
+	// (found-branch extend/promote). cadenceUpdater + followUpManager are the
+	// SAME instances the InteractionRecorder uses, so the create branch's
+	// inline cadence/follow-up apply shares the durable event-claim store.
+	// Registered unconditionally — no events route to it until the Gmail
+	// provider is registered + enabled (phase 5), so it is production-inert.
+	commsMessageRepo := repository.NewCommsMessageRepository(database.Queries)
+	emailInteractionConsumer := consumer.NewEmailInteractionConsumer(
+		contactService, commsMessageRepo, interactionRepo, contactService,
+		eventBus, cadenceUpdater, followUpManager,
+	)
+	river.AddWorker(riverWorkers, consumer.NewEmailInteractionConsumerWorker(eventBus, database.Pool, emailInteractionConsumer))
+
 	// Interaction-mode wiring gate. Cutover is the normal operating
 	// posture; off is the emergency-override retained so rollback can
 	// silence publisher-driven paths without a code change. A deploy in
