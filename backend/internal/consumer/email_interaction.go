@@ -61,9 +61,8 @@ type emailAggregator interface {
 //     nothing (cadence delivery path #2).
 //  4. Link the content row via MarkProcessedTx on every branch.
 //
-// Inert in production until the Gmail provider is registered + enabled
-// (phase 5): no production code publishes email.* events, so this consumer
-// only fires when a test publishes one directly.
+// The Gmail provider publishes email.received/email.sent in production, so this
+// consumer derives the corresponding interaction from each such event.
 type EmailInteractionConsumer struct {
 	writer       interactionWriter
 	comms        commsLocator
@@ -142,12 +141,12 @@ func (c *EmailInteractionConsumer) HandleEvent(ctx context.Context, tx pgx.Tx, e
 	// source_ref = "<contact_uuid>:<thread_id>:<local_day>". Built from the
 	// provider-computed LocalDay (already in time.Local at publish time),
 	// NOT re-derived from SentAt — the durable event row is a complete
-	// hand-off (spec §5.2 / Decision 5). An empty ThreadID still forms an
+	// hand-off (spec §5.2). An empty ThreadID still forms an
 	// internally-consistent "<uuid>::<day>" key, unique per contact/day;
 	// Gmail always sets threadId, so this is defensive only.
 	sourceRef := p.ContactID.String() + ":" + p.ThreadID + ":" + p.LocalDay
 
-	// Per-source_ref serialization lock (Decision 8), taken BEFORE the read
+	// Per-source_ref serialization lock, taken BEFORE the read
 	// so the whole find → branch → write (occurred_at) → mark is atomic per
 	// aggregation key. A second same-key job blocks here until the first
 	// commits, then sees the committed aggregate on its FindBySourceRefTx and
@@ -157,7 +156,7 @@ func (c *EmailInteractionConsumer) HandleEvent(ctx context.Context, tx pgx.Tx, e
 		return nil, fmt.Errorf("acquire source_ref lock: %w", err)
 	}
 
-	// Locate the content row inside the tx (Decision 2). A miss is an
+	// Locate the content row inside the tx. A miss is an
 	// anomaly — publish-before-mutate commits the content row in the SAME
 	// provider tx as the event, so by the time this job runs the row is
 	// committed and visible. ErrNotFound therefore means a content-row
@@ -182,7 +181,7 @@ func (c *EmailInteractionConsumer) HandleEvent(ctx context.Context, tx pgx.Tx, e
 	var postCommit func(context.Context)
 
 	if errors.Is(err, db.ErrNotFound) {
-		// Create branch (Decision 1): reuse the InteractionRecorder's
+		// Create branch: reuse the InteractionRecorder's
 		// package-private create sequence so the email create path is
 		// indistinguishable from any other recorded interaction.
 		ref := sourceRef
@@ -209,7 +208,7 @@ func (c *EmailInteractionConsumer) HandleEvent(ctx context.Context, tx pgx.Tx, e
 			// branch sound even if the lock were removed: treat res.Interaction
 			// as the found row and apply this message's extend/promote +
 			// forward-only timestamp rather than silently marking it processed
-			// (a lost-update — Decision 1 P1 fix). No second interaction.recorded
+			// (which would be a lost update). No second interaction.recorded
 			// is published; the found path publishes nothing.
 			pc, aggErr := c.aggregate(ctx, tx, &p, res.Interaction)
 			if aggErr != nil {
@@ -239,7 +238,7 @@ func (c *EmailInteractionConsumer) HandleEvent(ctx context.Context, tx pgx.Tx, e
 	}
 
 	// Link the content row to the interaction it rolled into, on every
-	// branch (Decision 6). Zero affected means this message's own row was
+	// branch. Zero affected means this message's own row was
 	// already processed on a prior run (genuine re-delivery) — benign under
 	// the tx-bound read + per-key lock, so we don't error on it.
 	if _, err := c.comms.MarkProcessedTx(ctx, tx, []uuid.UUID{commsMsg.ID}, interactionID, sourceRef); err != nil {
@@ -250,7 +249,7 @@ func (c *EmailInteractionConsumer) HandleEvent(ctx context.Context, tx pgx.Tx, e
 }
 
 // aggregate applies the found-branch extend/promote to an existing
-// interaction with the forward-only timestamp guard (Decision 4). Used by
+// interaction with the forward-only timestamp guard. Used by
 // both the genuine found branch and the create branch's res.IsReplay
 // fall-through.
 func (c *EmailInteractionConsumer) aggregate(

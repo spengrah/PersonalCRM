@@ -2,7 +2,9 @@ package google
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -103,7 +105,10 @@ func (f *gmailServiceFetcher) ListMessageIDs(ctx context.Context, query, pageTok
 func (f *gmailServiceFetcher) GetMessage(ctx context.Context, id string) (*gmail.Message, error) {
 	msg, err := f.svc.Users.Messages.Get(gmailUserID, id).Format("full").Context(ctx).Do()
 	if err != nil {
-		return nil, fmt.Errorf("get message %s: %w", id, err)
+		// id is a per-mailbox Gmail message id (third-party identifier); hash it
+		// so the error (which flows into River logs) carries no raw third-party
+		// reference while staying correlatable.
+		return nil, fmt.Errorf("get message %s: %w", hashIdentifier(id), err)
 	}
 	return msg, nil
 }
@@ -149,12 +154,13 @@ type qualifiedRow struct {
 	Metadata       []byte
 }
 
-// GmailSyncProvider implements sync.SyncProvider for Gmail. It is currently
-// inert: it is NOT registered in main.go, so the scheduler enqueues no Gmail
-// sweeps and no email.received/email.sent event is ever published in prod.
-// (The email-interaction consumer that derives interactions from those kinds
-// is wired as of phase 3, but it can only fire once this provider is
-// registered + enabled in phase 5.)
+// GmailSyncProvider implements sync.SyncProvider for Gmail. It is store-only:
+// each qualifying message is upserted into comms_message and the matching
+// email.received/email.sent event is published in the same tx
+// (publish-before-mutate), and the EmailInteractionConsumer derives the
+// interaction from that event. The provider holds the event bus and pgxpool
+// directly because publish-before-mutate is its entire purpose; a nil bus or
+// pool is a programming error caught by the Sync guard (no off mode).
 type GmailSyncProvider struct {
 	oauthService *OAuthService
 	commsRepo    *repository.CommsMessageRepository
@@ -283,7 +289,7 @@ func (p *GmailSyncProvider) Sync(
 	for addr, contacts := range knownMap {
 		if len(contacts) > 1 {
 			logger.Debug().
-				Str("address", addr).
+				Str("address", hashIdentifier(addr)).
 				Int("contacts", len(contacts)).
 				Msg("gmail: ambiguous shared address maps to multiple contacts")
 		}
@@ -373,11 +379,13 @@ func (p *GmailSyncProvider) scanChunks(
 
 				msg, getErr := fetcher.GetMessage(ctx, ref.ID)
 				if getErr != nil {
-					return processed, matched, maxInternalDateSecs, fetchedAny, fmt.Errorf("get message %s: %w", ref.ID, getErr)
+					// ref.ID is a per-mailbox Gmail message id (third-party);
+					// hash it so the error in River logs carries no raw id.
+					return processed, matched, maxInternalDateSecs, fetchedAny, fmt.Errorf("get message %s: %w", hashIdentifier(ref.ID), getErr)
 				}
 				rows, procErr := p.processMessage(ctx, msg, accountID, knownMap, meSet)
 				if procErr != nil {
-					return processed, matched, maxInternalDateSecs, fetchedAny, fmt.Errorf("process message %s: %w", ref.ID, procErr)
+					return processed, matched, maxInternalDateSecs, fetchedAny, fmt.Errorf("process message %s: %w", hashIdentifier(ref.ID), procErr)
 				}
 				processed++
 
@@ -389,7 +397,7 @@ func (p *GmailSyncProvider) scanChunks(
 
 				for _, row := range rows {
 					if perr := p.persistRow(ctx, row); perr != nil {
-						return processed, matched, maxInternalDateSecs, fetchedAny, fmt.Errorf("persist row for message %s: %w", ref.ID, perr)
+						return processed, matched, maxInternalDateSecs, fetchedAny, fmt.Errorf("persist row for message %s: %w", hashIdentifier(ref.ID), perr)
 					}
 					matched++
 				}
@@ -498,7 +506,9 @@ func (p *GmailSyncProvider) persistRow(ctx context.Context, row qualifiedRow) (e
 	defer func() {
 		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil &&
 			!errors.Is(rollbackErr, pgx.ErrTxClosed) {
-			logger.Warn().Err(rollbackErr).Str("externalId", row.ExternalID).Msg("gmail: tx rollback failed")
+			// ExternalID is the RFC822 Message-ID, a third-party identifier, so
+			// it is dropped from the log; source keeps the line attributable.
+			logger.Warn().Err(rollbackErr).Str("source", GmailSourceName).Msg("gmail: tx rollback failed")
 		}
 	}()
 
@@ -593,7 +603,7 @@ func sanitizeAddresses(addresses []string) []string {
 			continue
 		}
 		if !emailSafeTermRegex.MatchString(a) {
-			logger.Debug().Str("address", a).Msg("gmail: skipping address unsafe for query term")
+			logger.Debug().Str("address", hashIdentifier(a)).Msg("gmail: skipping address unsafe for query term")
 			continue
 		}
 		out = append(out, a)
@@ -1059,6 +1069,22 @@ func urlQueryEscape(s string) string {
 	return url.QueryEscape(s)
 }
 
+// hashIdentifier returns a short, stable, non-reversible tag for a THIRD-PARTY
+// identifier (a contact's email address) so Gmail-path logs can correlate lines
+// for the same value within/across runs without writing a real third party's
+// address into the operator log. It is NEVER applied to the connected-account
+// (own-mailbox) address, which is operational provenance and logged raw. Empty
+// input returns "" so an empty field stays empty rather than hashing to a
+// constant. Lowercased before hashing so header-casing variants share one tag.
+func hashIdentifier(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(strings.ToLower(v)))
+	return "sha256:" + hex.EncodeToString(sum[:])[:12]
+}
+
 // --- Test-only shims. Production code must NOT call these. ---
 
 // RunProcessMessageForTest drives the unexported processMessage entry point so
@@ -1127,6 +1153,17 @@ func NewFakeGmailFetcherFactoryForTest(funcs FakeGmailFetcherFuncs) func(ctx con
 	fetcher := &fakeGmailFetcher{funcs: funcs}
 	return func(context.Context, string) (gmailFetcher, error) {
 		return fetcher, nil
+	}
+}
+
+// NewFakeGmailFetcherFactoryByAccountForTest returns a fetcher factory that
+// picks the FakeGmailFetcherFuncs per accountID, so a cross-package test can
+// make one account's fetcher fail while another succeeds (the partial-failure
+// scan path) without reaching the unexported gmailFetcher. Production code must
+// NOT call this.
+func NewFakeGmailFetcherFactoryByAccountForTest(pick func(accountID string) FakeGmailFetcherFuncs) func(ctx context.Context, accountID string) (gmailFetcher, error) {
+	return func(_ context.Context, accountID string) (gmailFetcher, error) {
+		return &fakeGmailFetcher{funcs: pick(accountID)}, nil
 	}
 }
 
