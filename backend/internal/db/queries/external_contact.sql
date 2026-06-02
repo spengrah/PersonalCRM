@@ -326,6 +326,59 @@ WHERE crm_contact_id = $1
   AND deleted_at IS NULL
 ORDER BY source, account_id;
 
+-- name: ListLinkedAddressBookExternalContactsForReconcile :many
+-- Driver query for the address-book method reconcile (forward hooks +
+-- one-time catchup). Returns every live address-book row that is itself
+-- linked OR is a duplicate of a (live) canonical row, joining to the
+-- canonical so the Go reconcile can apply the D2a effective-status
+-- precedence (`ignored > imported > matched`) WITHOUT a self-first
+-- COALESCE (which would let a dup's stale `matched` win over a canonical
+-- `imported`). The canonical columns are explicitly aliased so the
+-- generated struct does not collide with the row's own columns.
+--
+-- The reconcile is restricted to address-book sources via the
+-- caller-supplied `sources` array (`{'gcontacts','icloud_contacts'}`);
+-- telegram / gcal_attendee / anarlog_* are out of scope (their own
+-- match/enrich flows). ORDER BY ec.id keeps the catchup deterministic.
+SELECT
+    ec.*,
+    canon.crm_contact_id AS canon_crm_contact_id,
+    canon.match_status   AS canon_match_status
+FROM external_contact ec
+LEFT JOIN external_contact canon
+    ON ec.duplicate_of_id = canon.id
+   AND canon.deleted_at IS NULL
+WHERE ec.source = ANY(sqlc.arg('sources')::text[])
+  AND ec.deleted_at IS NULL
+  AND (ec.crm_contact_id IS NOT NULL OR canon.crm_contact_id IS NOT NULL)
+ORDER BY ec.id;
+
+-- name: SetExternalContactMethodSuggestions :one
+-- Overwrite-not-append write of the pending suggestion set for a linked
+-- row. The Go wrapper passes SQL NULL when the recomputed set is empty
+-- (D6 empty-clears), so a method later added by another path clears the
+-- stale suggestion on the next reconcile. Writes the DEDICATED column,
+-- never `metadata` — survives producer upserts (D4).
+UPDATE external_contact SET
+    pending_method_suggestions = sqlc.arg('pending'),
+    updated_at = NOW()
+WHERE id = $1
+  AND deleted_at IS NULL
+RETURNING *;
+
+-- name: SetDismissedMethodSuggestionsForTest :one
+-- TEST ONLY: pre-seeds the dismissed_method_suggestions column so the
+-- dismissed-skip reconcile test can verify a dismissed (type,value) is
+-- not re-suggested. Production dismissal (PR 2) appends via a read-
+-- modify-write path; this direct setter exists only so integration
+-- tests can establish the pre-state without raw SQL in Go.
+UPDATE external_contact SET
+    dismissed_method_suggestions = sqlc.arg('dismissed'),
+    updated_at = NOW()
+WHERE id = $1
+  AND deleted_at IS NULL
+RETURNING *;
+
 -- name: DeleteExternalContactsBySourceAccount :exec
 DELETE FROM external_contact
 WHERE source = $1 AND COALESCE(account_id, '') = COALESCE($2, '');

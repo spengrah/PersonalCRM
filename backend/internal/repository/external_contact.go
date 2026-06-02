@@ -44,6 +44,30 @@ type AddressEntry struct {
 	Type      string `json:"type,omitempty"`
 }
 
+// PendingMethodSuggestion is one (type,value) entry in the
+// pending_method_suggestions / dismissed_method_suggestions JSONB
+// columns. Value is the normalized method value (the reconcile path
+// stores normalized values so dedup against contact methods and against
+// the dismissed set is direct).
+type PendingMethodSuggestion struct {
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
+
+// ReconcileTarget is one address-book row resolved to its effective CRM
+// contact + effective match status for the method reconcile. The
+// driver query (ListLinkedAddressBookExternalContactsForReconcile)
+// joins a duplicate row to its canonical and the repository computes the
+// D2a precedence (`ignored > imported > matched`); the service then
+// branches on EffectiveStatus. ExternalContact is the row whose
+// emails[]/phones[] carry the methods to reconcile (for a duplicate,
+// the dup's own methods reconcile against the CANONICAL's contact).
+type ReconcileTarget struct {
+	ExternalContact    ExternalContact
+	EffectiveContactID uuid.UUID
+	EffectiveStatus    MatchStatus
+}
+
 // ExternalContact represents an external contact from Google/iCloud
 type ExternalContact struct {
 	ID            uuid.UUID      `json:"id"`
@@ -79,6 +103,17 @@ type ExternalContact struct {
 	// is claimed by the next non-NULL emit; non-NULL ownership is
 	// preserved thereafter across all subsequent upserts.
 	HostID *uuid.UUID `json:"host_id,omitempty"`
+	// PendingMethodSuggestions is the current un-applied missing-method
+	// set recorded for a linked `imported` address-book row (nil when no
+	// suggestions). Stored in a dedicated JSONB column the producer
+	// upsert never writes, so it survives address-book resyncs. Inert in
+	// PR 1 (written by the reconcile path, read by the PR-2 surface).
+	PendingMethodSuggestions []PendingMethodSuggestion `json:"pending_method_suggestions,omitempty"`
+	// DismissedMethodSuggestions is the append-only set of (type,value)
+	// the user has dismissed for this row (nil when nothing dismissed).
+	// The reconcile path subtracts these so a dismissed method is never
+	// re-suggested. Also a dedicated, upsert-surviving JSONB column.
+	DismissedMethodSuggestions []PendingMethodSuggestion `json:"dismissed_method_suggestions,omitempty"`
 	// LastContentHash is the lowercase-hex SHA-256 of the JCS-
 	// canonicalized payload (minus host_id) that produced this row's
 	// current content. Written on every UPSERT for mac-daemon sources;
@@ -170,6 +205,44 @@ func NewExternalContactRepository(queries db.Querier) *ExternalContactRepository
 	return &ExternalContactRepository{queries: queries}
 }
 
+// reconcileRowToDbExternalContact projects the ec.* columns of a
+// ListLinkedAddressBookExternalContactsForReconcileRow back into a
+// db.ExternalContact so convertDbExternalContact can decode it. The
+// canon_* columns are handled separately by the caller. The two structs
+// share identical field names/types for the ec.* projection; this is a
+// straight field copy.
+func reconcileRowToDbExternalContact(row *db.ListLinkedAddressBookExternalContactsForReconcileRow) *db.ExternalContact {
+	return &db.ExternalContact{
+		ID:                         row.ID,
+		Source:                     row.Source,
+		SourceID:                   row.SourceID,
+		AccountID:                  row.AccountID,
+		DisplayName:                row.DisplayName,
+		FirstName:                  row.FirstName,
+		LastName:                   row.LastName,
+		Emails:                     row.Emails,
+		Phones:                     row.Phones,
+		Addresses:                  row.Addresses,
+		Organization:               row.Organization,
+		JobTitle:                   row.JobTitle,
+		Birthday:                   row.Birthday,
+		PhotoUrl:                   row.PhotoUrl,
+		CrmContactID:               row.CrmContactID,
+		MatchStatus:                row.MatchStatus,
+		DuplicateOfID:              row.DuplicateOfID,
+		Etag:                       row.Etag,
+		Metadata:                   row.Metadata,
+		SyncedAt:                   row.SyncedAt,
+		CreatedAt:                  row.CreatedAt,
+		UpdatedAt:                  row.UpdatedAt,
+		DeletedAt:                  row.DeletedAt,
+		HostID:                     row.HostID,
+		LastContentHash:            row.LastContentHash,
+		PendingMethodSuggestions:   row.PendingMethodSuggestions,
+		DismissedMethodSuggestions: row.DismissedMethodSuggestions,
+	}
+}
+
 // convertDbExternalContact converts a database external contact to a repository model
 func convertDbExternalContact(dbContact *db.ExternalContact) (*ExternalContact, error) {
 	contact := &ExternalContact{
@@ -259,6 +332,14 @@ func convertDbExternalContact(dbContact *db.ExternalContact) (*ExternalContact, 
 	} else {
 		contact.Metadata = map[string]any{}
 	}
+
+	// Pending / dismissed method suggestions: nil-safe. A NULL column
+	// (the default for every row not touched by the reconcile path)
+	// leaves the slice nil, which the reconcile / suggestion-list logic
+	// treats as "none". A malformed value is also coerced to nil rather
+	// than failing the whole row conversion.
+	contact.PendingMethodSuggestions = parseMethodSuggestions(dbContact.PendingMethodSuggestions)
+	contact.DismissedMethodSuggestions = parseMethodSuggestions(dbContact.DismissedMethodSuggestions)
 
 	// Convert timestamps
 	if dbContact.SyncedAt.Valid {
@@ -578,6 +659,177 @@ func (r *ExternalContactRepository) ListForCRMContact(ctx context.Context, crmCo
 		contacts = append(contacts, *contact)
 	}
 	return contacts, nil
+}
+
+// parseMethodSuggestions decodes a pending/dismissed_method_suggestions
+// JSONB column into a slice. nil/empty bytes (SQL NULL) → nil slice.
+// A malformed value → nil (the row is still usable; a bad suggestion
+// cache must not poison reconcile).
+func parseMethodSuggestions(raw []byte) []PendingMethodSuggestion {
+	if len(raw) == 0 {
+		return nil
+	}
+	var out []PendingMethodSuggestion
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+// ListLinkedAddressBookExternalContactsForReconcile returns every live
+// address-book row (source ∈ sources) that is itself linked OR is a
+// duplicate of a live canonical row, each resolved to its effective CRM
+// contact + effective match status per the D2a precedence
+// (`ignored > imported > matched`). Rows whose effective status is
+// `ignored` or that resolve to no live contact are dropped here so the
+// caller never has to re-apply the precedence.
+func (r *ExternalContactRepository) ListLinkedAddressBookExternalContactsForReconcile(
+	ctx context.Context,
+	sources []string,
+) ([]ReconcileTarget, error) {
+	rows, err := r.queries.ListLinkedAddressBookExternalContactsForReconcile(ctx, sources)
+	if err != nil {
+		return nil, fmt.Errorf("list linked address-book external contacts: %w", err)
+	}
+	targets := make([]ReconcileTarget, 0, len(rows))
+	for _, row := range rows {
+		contact, convErr := convertDbExternalContact(reconcileRowToDbExternalContact(row))
+		if convErr != nil {
+			continue
+		}
+
+		// Resolve the canonical's contact + status (a duplicate row joins
+		// to its canonical; a self-linked row has no canonical).
+		var canonContactID *uuid.UUID
+		if row.CanonCrmContactID.Valid {
+			id := uuid.UUID(row.CanonCrmContactID.Bytes)
+			canonContactID = &id
+		}
+		canonStatus := MatchStatus("")
+		if row.CanonMatchStatus.Valid {
+			canonStatus = MatchStatus(row.CanonMatchStatus.String)
+		}
+
+		effectiveContactID, effectiveStatus, ok := resolveEffectiveReconcileState(
+			contact.CRMContactID, contact.MatchStatus, canonContactID, canonStatus,
+		)
+		if !ok {
+			continue
+		}
+		targets = append(targets, ReconcileTarget{
+			ExternalContact:    *contact,
+			EffectiveContactID: effectiveContactID,
+			EffectiveStatus:    effectiveStatus,
+		})
+	}
+	return targets, nil
+}
+
+// resolveEffectiveReconcileState applies the D2a effective-contact +
+// effective-status precedence for a (possibly duplicate) address-book
+// row. selfContactID/selfStatus are the row's own; canonContactID/
+// canonStatus are its canonical's (nil/"" when the row is not a dup or
+// the canonical is gone).
+//
+//   - Effective contact = canonical's contact if present (the canonical
+//     is the source of truth; a dup's own crm_contact_id may be stale),
+//     else the row's own.
+//   - Effective status = most-conservative of the two via
+//     `ignored > imported > matched`: if EITHER is ignored → skip
+//     (ok=false); else if EITHER is imported → imported; else if EITHER
+//     is matched → matched; else skip.
+//
+// ok=false means "do not reconcile this row" (ignored, or no live
+// contact resolved).
+func resolveEffectiveReconcileState(
+	selfContactID *uuid.UUID,
+	selfStatus MatchStatus,
+	canonContactID *uuid.UUID,
+	canonStatus MatchStatus,
+) (uuid.UUID, MatchStatus, bool) {
+	// Sticky-ignore dominates: an ignored row (or a dup of / pointing at
+	// an ignored canonical) must never reconcile or suggest.
+	if selfStatus == MatchStatusIgnored || canonStatus == MatchStatusIgnored {
+		return uuid.Nil, "", false
+	}
+
+	effectiveContactID := canonContactID
+	if effectiveContactID == nil {
+		effectiveContactID = selfContactID
+	}
+	if effectiveContactID == nil {
+		return uuid.Nil, "", false
+	}
+
+	switch {
+	case selfStatus == MatchStatusImported || canonStatus == MatchStatusImported:
+		return *effectiveContactID, MatchStatusImported, true
+	case selfStatus == MatchStatusMatched || canonStatus == MatchStatusMatched:
+		return *effectiveContactID, MatchStatusMatched, true
+	default:
+		return uuid.Nil, "", false
+	}
+}
+
+// SetMethodSuggestions overwrites the pending suggestion set for a row.
+// An empty/nil slice writes SQL NULL (D6 empty-clears), so a method
+// later applied by another path clears the stale suggestion on the next
+// reconcile. Writes the dedicated column, never `metadata`.
+func (r *ExternalContactRepository) SetMethodSuggestions(
+	ctx context.Context,
+	id uuid.UUID,
+	pending []PendingMethodSuggestion,
+) (*ExternalContact, error) {
+	var pendingJSON []byte
+	if len(pending) > 0 {
+		marshalled, err := json.Marshal(pending)
+		if err != nil {
+			return nil, fmt.Errorf("marshal pending method suggestions: %w", err)
+		}
+		pendingJSON = marshalled
+	}
+	dbContact, err := r.queries.SetExternalContactMethodSuggestions(ctx, db.SetExternalContactMethodSuggestionsParams{
+		ID:      pgtype.UUID{Bytes: id, Valid: true},
+		Pending: pendingJSON,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, fmt.Errorf("set method suggestions: %w", err)
+	}
+	return convertDbExternalContact(dbContact)
+}
+
+// SetDismissedMethodSuggestionsForTest pre-seeds the
+// dismissed_method_suggestions column. TEST ONLY — production dismissal
+// (PR 2) appends via a read-modify-write path; this exists so
+// integration tests can establish the dismissed pre-state without raw
+// SQL in Go.
+func (r *ExternalContactRepository) SetDismissedMethodSuggestionsForTest(
+	ctx context.Context,
+	id uuid.UUID,
+	dismissed []PendingMethodSuggestion,
+) (*ExternalContact, error) {
+	var dismissedJSON []byte
+	if len(dismissed) > 0 {
+		marshalled, err := json.Marshal(dismissed)
+		if err != nil {
+			return nil, fmt.Errorf("marshal dismissed method suggestions: %w", err)
+		}
+		dismissedJSON = marshalled
+	}
+	dbContact, err := r.queries.SetDismissedMethodSuggestionsForTest(ctx, db.SetDismissedMethodSuggestionsForTestParams{
+		ID:        pgtype.UUID{Bytes: id, Valid: true},
+		Dismissed: dismissedJSON,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, fmt.Errorf("set dismissed method suggestions (test): %w", err)
+	}
+	return convertDbExternalContact(dbContact)
 }
 
 // Delete removes an external contact
