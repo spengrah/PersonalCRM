@@ -235,6 +235,11 @@ func (s *GmailCorrespondenceSuggester) aggregate(
 			// A row whose metadata won't parse is skipped, not fatal.
 			continue
 		}
+		// Track which unknown addresses this single message contributed to, so
+		// an address appearing in more than one bucket of the SAME message (e.g.
+		// both To and Cc) counts as one message, not two — message_count is a
+		// per-message tally, not a per-occurrence one.
+		seenThisRow := make(map[string]struct{})
 		for _, p := range meta.participants() {
 			normAddr := matching.NormalizeEmail(p.address)
 			if normAddr == "" {
@@ -254,12 +259,15 @@ func (s *GmailCorrespondenceSuggester) aggregate(
 				}
 				byAddress[normAddr] = agg
 			}
-			agg.messageCount++
+			if _, dup := seenThisRow[normAddr]; !dup {
+				seenThisRow[normAddr] = struct{}{}
+				agg.messageCount++
+				if row.MatchedContactID != uuid.Nil {
+					agg.coOccurrence[row.MatchedContactID]++
+				}
+			}
 			if name := strings.TrimSpace(p.name); name != "" {
 				agg.namesSeen = appendUnique(agg.namesSeen, name)
-			}
-			if row.MatchedContactID != uuid.Nil {
-				agg.coOccurrence[row.MatchedContactID]++
 			}
 		}
 	}

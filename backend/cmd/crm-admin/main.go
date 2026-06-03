@@ -149,7 +149,7 @@ type correspondenceScanner interface {
 	Run(ctx context.Context, since time.Time) (int, error)
 }
 
-// adminDeps groups the four subcommand dependencies. Tests inject
+// adminDeps groups the per-subcommand dependencies. Tests inject
 // fakes for each interface; the production wiring builds a single
 // MacHostService and a small adapter for rematch.
 type adminDeps struct {

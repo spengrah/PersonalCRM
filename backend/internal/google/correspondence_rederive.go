@@ -124,9 +124,16 @@ func (s *CorrespondenceNameRederiveService) RederiveNames(ctx context.Context, s
 func (s *CorrespondenceNameRederiveService) processRow(ctx context.Context, row repository.MissingParticipantNamesRow, result *CorrespondenceRederiveResult) {
 	accountID, gmailID, ok := resolveRefetchTarget(row)
 	if !ok {
+		// No Gmail call made — no pacing needed (and we must not slow a backlog
+		// that is mostly account-less rows).
 		result.SkippedNoGmailID++
 		return
 	}
+
+	// Every path below makes at least one Gmail re-fetch, so pace after the call
+	// regardless of outcome — a 404/failure-heavy backlog would otherwise hammer
+	// Gmail back-to-back. Defer keeps the single sleep on all return paths.
+	defer s.sleep(rederiveInterCallDelay)
 
 	names, err := s.refetchWithRetry(ctx, accountID, gmailID)
 	if err != nil {
@@ -157,7 +164,6 @@ func (s *CorrespondenceNameRederiveService) processRow(ctx context.Context, row 
 	if affected > 0 {
 		result.Rederived++
 	}
-	s.sleep(rederiveInterCallDelay)
 }
 
 // refetchWithRetry calls the provider re-fetch, retrying transient (429/5xx)

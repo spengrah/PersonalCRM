@@ -163,12 +163,13 @@ func (q *Queries) HardDeleteCommsMessagesByContact(ctx context.Context, matchedC
 }
 
 const ListCommsMessageParticipantsSince = `-- name: ListCommsMessageParticipantsSince :many
-SELECT matched_contact_id, sent_at, source_metadata
-FROM comms_message
-WHERE source = 'email'
-  AND deleted_at IS NULL
-  AND sent_at >= $1
-ORDER BY sent_at DESC, id
+SELECT cm.matched_contact_id, cm.sent_at, cm.source_metadata
+FROM comms_message cm
+JOIN contact c ON c.id = cm.matched_contact_id AND c.deleted_at IS NULL
+WHERE cm.source = 'email'
+  AND cm.deleted_at IS NULL
+  AND cm.sent_at >= $1
+ORDER BY cm.sent_at DESC, cm.id
 `
 
 type ListCommsMessageParticipantsSinceRow struct {
@@ -182,7 +183,11 @@ type ListCommsMessageParticipantsSinceRow struct {
 // plus the index-aligned from_name/to_names/cc_names/bcc_names. matched_contact_id
 // is the known contact the message qualified for (the co-occurring contact the
 // producer records as evidence). Bounded by @since to keep each scan cheap; the
-// scan is idempotent so re-running the same window is harmless.
+// scan is idempotent so re-running the same window is harmless. The INNER JOIN on
+// a live contact drops rows whose matched contact was soft-deleted: a contact's
+// soft-delete (UPDATE deleted_at) does NOT cascade to its comms_message rows (the
+// FK cascade only fires on a hard DELETE), so without this join the producer would
+// keep mining correspondence with a deleted contact.
 func (q *Queries) ListCommsMessageParticipantsSince(ctx context.Context, since pgtype.Timestamptz) ([]*ListCommsMessageParticipantsSinceRow, error) {
 	rows, err := q.db.Query(ctx, ListCommsMessageParticipantsSince, since)
 	if err != nil {
@@ -253,14 +258,15 @@ func (q *Queries) ListCommsMessagesByContact(ctx context.Context, matchedContact
 }
 
 const ListCommsMessagesMissingParticipantNames = `-- name: ListCommsMessagesMissingParticipantNames :many
-SELECT id, account_id, source_metadata
-FROM comms_message
-WHERE source = 'email'
-  AND deleted_at IS NULL
-  AND sent_at >= $1
-  AND id > $2
-  AND NOT (source_metadata ? 'from_name')
-ORDER BY id
+SELECT cm.id, cm.account_id, cm.source_metadata
+FROM comms_message cm
+JOIN contact c ON c.id = cm.matched_contact_id AND c.deleted_at IS NULL
+WHERE cm.source = 'email'
+  AND cm.deleted_at IS NULL
+  AND cm.sent_at >= $1
+  AND cm.id > $2
+  AND NOT (cm.source_metadata ? 'from_name')
+ORDER BY cm.id
 LIMIT $3
 `
 
@@ -282,7 +288,10 @@ type ListCommsMessagesMissingParticipantNamesRow struct {
 // capture shipped), paged by id > @after_id so the runner advances the cursor
 // regardless of per-row outcome — a skipped/failed row never blocks later rows
 // (livelock avoidance). account_id + source_metadata.account_gmail_ids together
-// locate the per-mailbox gmail id to re-fetch.
+// locate the per-mailbox gmail id to re-fetch. The INNER JOIN on a live contact
+// drops rows whose matched contact was soft-deleted (soft-delete does not cascade
+// to comms_message), so the re-derivation never spends Gmail quota re-fetching
+// mail for a deleted contact.
 func (q *Queries) ListCommsMessagesMissingParticipantNames(ctx context.Context, arg ListCommsMessagesMissingParticipantNamesParams) ([]*ListCommsMessagesMissingParticipantNamesRow, error) {
 	rows, err := q.db.Query(ctx, ListCommsMessagesMissingParticipantNames, arg.Since, arg.AfterID, arg.BatchSize)
 	if err != nil {

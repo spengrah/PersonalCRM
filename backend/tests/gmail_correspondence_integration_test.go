@@ -206,6 +206,34 @@ func TestCorrespondence_ProducerEmitsCandidateWithSuggestedMatch(t *testing.T) {
 	require.Equal(t, contact.ID.String(), match.ContactID)
 }
 
+func TestCorrespondence_SkipsSoftDeletedContactRows(t *testing.T) {
+	// A contact's soft-delete (UPDATE deleted_at) does NOT cascade to its
+	// comms_message rows — the FK cascade only fires on a hard DELETE. The
+	// producer's scan query INNER-JOINs a live contact, so once the matched
+	// contact is soft-deleted its correspondence must stop surfacing candidates.
+	ownAddr := uniqueAddr("me")
+	e := newCorrespondenceEnv(t, ownAddr)
+
+	fullName := "Correspondence Deleted " + uuid.New().String()[:6]
+	contact := e.seedContact(t, fullName)
+	unknownAddr := uniqueAddr("deleted")
+	normAddr := matching.NormalizeEmail(unknownAddr)
+	e.cleanupExternal(t, normAddr)
+
+	e.seedMessage(t, contact.ID, "ext-"+uuid.New().String(), ownAddr, "gmail-1",
+		nameMetadata(t, unknownAddr, fullName, ownAddr))
+
+	// Soft-delete the matched contact; its comms_message row stays live.
+	require.NoError(t, e.contactRepo.SoftDeleteContact(e.ctx, contact.ID))
+
+	_, err := e.suggester.Run(e.ctx, accelerated.GetCurrentTime().Add(-google.CorrespondenceWindow))
+	require.NoError(t, err)
+
+	row, err := e.externalRepo.GetBySource(e.ctx, google.CorrespondenceSource, normAddr, nil)
+	require.NoError(t, err)
+	require.Nil(t, row, "a soft-deleted contact's correspondence must not surface a candidate")
+}
+
 func TestCorrespondence_LinkAddsMethodAndDispatchesRematch(t *testing.T) {
 	ownAddr := uniqueAddr("me")
 	e := newCorrespondenceEnv(t, ownAddr)

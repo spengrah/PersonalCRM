@@ -264,6 +264,80 @@ func TestCorrespondence_ParticipantExtractionAndNamelessSkip(t *testing.T) {
 	require.Equal(t, "named@example.com", ext.upserts[0].SourceID)
 }
 
+func TestCorrespondence_NameSliceShorterThanAddresses(t *testing.T) {
+	// Defensive index-alignment: a names slice shorter than its address slice
+	// (a parse mismatch, or a row written before all buckets carried names)
+	// must pair the present names by index and leave the trailing addresses
+	// name-less rather than panic or mis-pair.
+	contactID := uuid.New()
+	comms := &fakeCorrespondenceComms{
+		rows: []repository.CommsMessageParticipantRow{{
+			MatchedContactID: contactID,
+			SourceMetadata: metaJSON(t, correspondenceMetadata{
+				From: "me@example.com", FromName: "Me",
+				// Two addresses, one name → addr[0] pairs with "Named Person";
+				// addr[1] (extra@) gets an empty name and is dropped by the gate.
+				To:      []string{"named@example.com", "extra@example.com"},
+				ToNames: []string{"Named Person"},
+			}),
+		}},
+	}
+	contacts := &fakeCorrespondenceContacts{
+		matches: map[string][]repository.ContactMatch{
+			"Named Person": {contactMatch(contactID, "Named Person", 0.8)},
+		},
+		names: map[uuid.UUID]string{contactID: "Named Person"},
+	}
+	ext := newFakeExternal()
+	s := newSuggester(comms, contacts, ext, map[string]struct{}{"me@example.com": {}})
+
+	n, err := s.Run(context.Background(), accelerated.GetCurrentTime().Add(-time.Hour))
+	require.NoError(t, err)
+	require.Equal(t, 1, n, "only the index-aligned named address qualifies")
+	require.Len(t, ext.upserts, 1)
+	require.Equal(t, "named@example.com", ext.upserts[0].SourceID,
+		"the name must pair with addr[0], not the unnamed extra address")
+}
+
+func TestCorrespondence_MessageCountDedupsWithinRow(t *testing.T) {
+	// One message that lists the same unknown address in BOTH To and Cc must
+	// count as ONE message, not two — message_count is a per-message tally.
+	contactID := uuid.New()
+	comms := &fakeCorrespondenceComms{
+		rows: []repository.CommsMessageParticipantRow{{
+			MatchedContactID: contactID,
+			SourceMetadata: metaJSON(t, correspondenceMetadata{
+				From: "me@example.com", FromName: "Me",
+				To:      []string{"dup@example.com"},
+				ToNames: []string{"Full Name"},
+				Cc:      []string{"dup@example.com"},
+				CcNames: []string{"Full Name"},
+			}),
+		}},
+	}
+	contacts := &fakeCorrespondenceContacts{
+		matches: map[string][]repository.ContactMatch{
+			"Full Name": {contactMatch(contactID, "Full Name", 0.8)},
+		},
+		names: map[uuid.UUID]string{contactID: "Full Name"},
+	}
+	ext := newFakeExternal()
+	s := newSuggester(comms, contacts, ext, map[string]struct{}{"me@example.com": {}})
+
+	n, err := s.Run(context.Background(), accelerated.GetCurrentTime().Add(-time.Hour))
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+	require.Len(t, ext.upserts, 1)
+
+	var meta struct {
+		MessageCount int `json:"message_count"`
+	}
+	b, err := json.Marshal(ext.upserts[0].Metadata)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(b, &meta))
+	require.Equal(t, 1, meta.MessageCount, "same address in To+Cc of one message counts once")
+}
+
 func TestCorrespondence_DedupByAddress(t *testing.T) {
 	contactID := uuid.New()
 	rowFor := func(name string) repository.CommsMessageParticipantRow {

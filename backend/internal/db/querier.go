@@ -761,7 +761,11 @@ type Querier interface {
 	// plus the index-aligned from_name/to_names/cc_names/bcc_names. matched_contact_id
 	// is the known contact the message qualified for (the co-occurring contact the
 	// producer records as evidence). Bounded by @since to keep each scan cheap; the
-	// scan is idempotent so re-running the same window is harmless.
+	// scan is idempotent so re-running the same window is harmless. The INNER JOIN on
+	// a live contact drops rows whose matched contact was soft-deleted: a contact's
+	// soft-delete (UPDATE deleted_at) does NOT cascade to its comms_message rows (the
+	// FK cascade only fires on a hard DELETE), so without this join the producer would
+	// keep mining correspondence with a deleted contact.
 	ListCommsMessageParticipantsSince(ctx context.Context, since pgtype.Timestamptz) ([]*ListCommsMessageParticipantsSinceRow, error)
 	// Per-contact content, newest first (backs idx_comms_message_contact_sent).
 	ListCommsMessagesByContact(ctx context.Context, matchedContactID pgtype.UUID) ([]*CommsMessage, error)
@@ -771,7 +775,10 @@ type Querier interface {
 	// capture shipped), paged by id > @after_id so the runner advances the cursor
 	// regardless of per-row outcome — a skipped/failed row never blocks later rows
 	// (livelock avoidance). account_id + source_metadata.account_gmail_ids together
-	// locate the per-mailbox gmail id to re-fetch.
+	// locate the per-mailbox gmail id to re-fetch. The INNER JOIN on a live contact
+	// drops rows whose matched contact was soft-deleted (soft-delete does not cascade
+	// to comms_message), so the re-derivation never spends Gmail quota re-fetching
+	// mail for a deleted contact.
 	ListCommsMessagesMissingParticipantNames(ctx context.Context, arg ListCommsMessagesMissingParticipantNamesParams) ([]*ListCommsMessagesMissingParticipantNamesRow, error)
 	// Lightweight query returning only IDs for navigation
 	ListContactIDs(ctx context.Context, arg ListContactIDsParams) ([]pgtype.UUID, error)

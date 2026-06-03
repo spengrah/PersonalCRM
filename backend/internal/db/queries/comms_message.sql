@@ -140,13 +140,18 @@ WHERE matched_contact_id = @matched_contact_id;
 -- plus the index-aligned from_name/to_names/cc_names/bcc_names. matched_contact_id
 -- is the known contact the message qualified for (the co-occurring contact the
 -- producer records as evidence). Bounded by @since to keep each scan cheap; the
--- scan is idempotent so re-running the same window is harmless.
-SELECT matched_contact_id, sent_at, source_metadata
-FROM comms_message
-WHERE source = 'email'
-  AND deleted_at IS NULL
-  AND sent_at >= @since
-ORDER BY sent_at DESC, id;
+-- scan is idempotent so re-running the same window is harmless. The INNER JOIN on
+-- a live contact drops rows whose matched contact was soft-deleted: a contact's
+-- soft-delete (UPDATE deleted_at) does NOT cascade to its comms_message rows (the
+-- FK cascade only fires on a hard DELETE), so without this join the producer would
+-- keep mining correspondence with a deleted contact.
+SELECT cm.matched_contact_id, cm.sent_at, cm.source_metadata
+FROM comms_message cm
+JOIN contact c ON c.id = cm.matched_contact_id AND c.deleted_at IS NULL
+WHERE cm.source = 'email'
+  AND cm.deleted_at IS NULL
+  AND cm.sent_at >= @since
+ORDER BY cm.sent_at DESC, cm.id;
 
 -- name: ListCommsMessagesMissingParticipantNames :many
 -- Keyset-paged rows for the one-time historical display-name re-derivation
@@ -155,15 +160,19 @@ ORDER BY sent_at DESC, id;
 -- capture shipped), paged by id > @after_id so the runner advances the cursor
 -- regardless of per-row outcome — a skipped/failed row never blocks later rows
 -- (livelock avoidance). account_id + source_metadata.account_gmail_ids together
--- locate the per-mailbox gmail id to re-fetch.
-SELECT id, account_id, source_metadata
-FROM comms_message
-WHERE source = 'email'
-  AND deleted_at IS NULL
-  AND sent_at >= @since
-  AND id > @after_id
-  AND NOT (source_metadata ? 'from_name')
-ORDER BY id
+-- locate the per-mailbox gmail id to re-fetch. The INNER JOIN on a live contact
+-- drops rows whose matched contact was soft-deleted (soft-delete does not cascade
+-- to comms_message), so the re-derivation never spends Gmail quota re-fetching
+-- mail for a deleted contact.
+SELECT cm.id, cm.account_id, cm.source_metadata
+FROM comms_message cm
+JOIN contact c ON c.id = cm.matched_contact_id AND c.deleted_at IS NULL
+WHERE cm.source = 'email'
+  AND cm.deleted_at IS NULL
+  AND cm.sent_at >= @since
+  AND cm.id > @after_id
+  AND NOT (cm.source_metadata ? 'from_name')
+ORDER BY cm.id
 LIMIT @batch_size;
 
 -- name: BackfillCommsMessageParticipantNames :execrows
