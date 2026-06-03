@@ -28,20 +28,21 @@ test.describe('Imports suggestions surface @area:imports', () => {
     await page.waitForLoadState('domcontentloaded')
 
     // The card renders "‹contact› — N new methods" (contact name is prefixed
-    // by the seed route).
-    const card = page.getByText(`${testApi.prefix}-Suggest Target — 1 new method`)
-    await expect(card.first()).toBeVisible({ timeout: 10000 })
+    // by the seed route). Scope to THIS worker's card to stay parallel-safe.
+    const cardText = `${testApi.prefix}-Suggest Target — 1 new method`
+    const card = page.locator('div.border', { hasText: cardText }).first()
+    await expect(card).toBeVisible({ timeout: 10000 })
 
     // Review opens the enrich-locked body: fixed contact header, NO
-    // ContactSelector, NO Import, the method value listed.
-    await page.getByRole('button', { name: 'Review' }).first().click()
+    // ContactSelector, NO Import.
+    await card.getByRole('button', { name: 'Review' }).click()
     await expect(page.getByText(`Adding to ${testApi.prefix}-Suggest Target`)).toBeVisible()
     await expect(page.getByRole('button', { name: /Import as New/i })).toHaveCount(0)
     await expect(page.getByPlaceholder(/Search for a contact/i)).toHaveCount(0)
 
     // Confirm adds the method; the card disappears from the list.
     await page.getByRole('button', { name: 'Confirm' }).click()
-    await expect(page.getByText(`${testApi.prefix}-Suggest Target — 1 new method`)).toHaveCount(0, {
+    await expect(page.getByText(cardText)).toHaveCount(0, {
       timeout: 10000,
     })
   })
@@ -57,9 +58,10 @@ test.describe('Imports suggestions surface @area:imports', () => {
     await page.waitForLoadState('domcontentloaded')
 
     const cardText = `${testApi.prefix}-Dismiss Target — 1 new method`
-    await expect(page.getByText(cardText).first()).toBeVisible({ timeout: 10000 })
+    const card = page.locator('div.border', { hasText: cardText }).first()
+    await expect(card).toBeVisible({ timeout: 10000 })
 
-    await page.getByRole('button', { name: 'Dismiss' }).first().click()
+    await card.getByRole('button', { name: 'Dismiss' }).click()
     await expect(page.getByText(cardText)).toHaveCount(0, { timeout: 10000 })
 
     // Reload: the dismissed suggestion stays gone (sticky).
@@ -84,12 +86,19 @@ test.describe('Imports suggestions surface @area:imports', () => {
     const cardName = `${testApi.prefix}-LinkOnly Person`
     await expect(page.getByText(cardName).first()).toBeVisible({ timeout: 10000 })
 
-    // The card has no Import button (only Link + ignore).
-    const card = page.locator('div', { hasText: cardName }).last()
-    await expect(card.getByRole('button', { name: /^Import$/ })).toHaveCount(0)
+    // Scope to the candidate card via its heading, then walk up to the card
+    // container (the bordered wrapper holding the action buttons).
+    const card = page
+      .locator('div.border', { has: page.getByRole('heading', { name: cardName }) })
+      .first()
 
-    // Open the modal via Link — the Import-mode toggle is absent.
-    await card.getByRole('button', { name: /Link/i }).first().click()
+    // The card has no Import button (link-only source) — only Link + ignore.
+    await expect(card.getByRole('button', { name: 'Import' })).toHaveCount(0)
+
+    // Open the modal via the Link button (no suggested match → "Link (select)").
+    await card.getByRole('button', { name: /Link/i }).click()
+
+    // The modal is locked to link mode — the Import-mode toggle is absent.
     await expect(page.getByRole('button', { name: /Import as New/i })).toHaveCount(0)
     await expect(page.getByRole('button', { name: /Link to Existing/i })).toHaveCount(0)
   })

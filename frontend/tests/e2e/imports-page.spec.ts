@@ -43,15 +43,17 @@ test.describe('Imports Page @area:imports', () => {
     if (response.ok()) {
       const data = await response.json()
       if (data.data?.length === 0 || data.meta?.pagination?.total === 0) {
-        const candidatesResponse = page.waitForResponse(
+        // The People tab loads the unified suggestions endpoint (the
+        // candidate list is composed into it), so wait on that.
+        const suggestionsResponse = page.waitForResponse(
           res =>
             res.request().method() === 'GET' &&
-            res.url().includes('/api/v1/imports/candidates') &&
+            res.url().includes('/api/v1/imports/suggestions') &&
             res.url().includes('source=gcontacts')
         )
 
         await page.getByRole('button', { name: 'Google Contacts' }).click()
-        await candidatesResponse
+        await suggestionsResponse
 
         // Empty state should show specific messaging
         await expect(page.getByText(/No import candidates/i)).toBeVisible()
