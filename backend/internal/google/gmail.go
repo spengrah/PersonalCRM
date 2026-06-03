@@ -27,6 +27,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/api/gmail/v1"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
 )
 
@@ -133,6 +134,22 @@ type attachmentMeta struct {
 // emailMetadata is the non-provenance JSON the provider assembles into
 // comms_message.source_metadata. The provenance keys (observed_accounts,
 // account_gmail_ids) are added by the UpsertCommsMessage query, NOT here.
+//
+// The *Name(s) fields carry the parsed display names index-aligned with their
+// bare-address siblings (FromName ↔ From; ToNames[i] ↔ To[i]; etc.). They are
+// additive: the bare-address keys keep their original shape so existing
+// consumers and the provenance-merge JSON contract are undisturbed. The
+// correspondence-enrichment producer pairs each address with its display name
+// to trigram-match unknown correspondents against CRM contacts. A header
+// without a display part stores the empty string at that index.
+//
+// FromName deliberately has NO omitempty: it is always written (even as "")
+// so every row ingested after display-name capture shipped carries the
+// from_name key. The historical re-derivation selects rows with NO from_name
+// key; if a bare-From row omitted the key it would look "pre-capture" forever
+// and be re-fetched on every catchup run. Always writing the key marks a row
+// as "names already captured at ingest". (ToNames/CcNames/BccNames keep
+// omitempty — they are not part of the re-derivation predicate.)
 type emailMetadata struct {
 	HTML        string           `json:"html,omitempty"`
 	Attachments []attachmentMeta `json:"attachments,omitempty"`
@@ -141,6 +158,10 @@ type emailMetadata struct {
 	To          []string         `json:"to,omitempty"`
 	Cc          []string         `json:"cc,omitempty"`
 	Bcc         []string         `json:"bcc,omitempty"`
+	FromName    string           `json:"from_name"`
+	ToNames     []string         `json:"to_names,omitempty"`
+	CcNames     []string         `json:"cc_names,omitempty"`
+	BccNames    []string         `json:"bcc_names,omitempty"`
 }
 
 // qualifiedRow is the provider's internal per-(message, contact, direction)
@@ -459,6 +480,59 @@ func (p *GmailSyncProvider) ScanIdentifier(
 	return matched, nil
 }
 
+// RefetchParticipantNames re-fetches one already-ingested message by its
+// per-mailbox Gmail id and re-parses the From/To/Cc/Bcc display names. It is
+// the re-fetch seam for the one-time historical display-name re-derivation
+// (crm-admin --rederive-correspondence-names): the bare addresses stored at
+// first ingest cannot recover the display names, so the runner must re-fetch
+// the original headers. Reuses the existing fetcher + name-returning parsers;
+// tests inject a fake fetcher via SetFetcherFactoryForTest (no OAuth).
+//
+// Error classification (so the runner can distinguish a since-deleted message
+// from a retryable failure): a Gmail 404 → errCorrespondenceUnavailable
+// (PERMANENT — count SkippedUnavailable, never a non-zero exit); a 429/5xx →
+// errCorrespondenceTransient (retryable). Other errors propagate as-is and the
+// runner counts them Failed.
+func (p *GmailSyncProvider) RefetchParticipantNames(ctx context.Context, accountID, gmailMessageID string) (repository.ParticipantNames, error) {
+	fetcher, err := p.newFetcher(ctx, accountID)
+	if err != nil {
+		return repository.ParticipantNames{}, fmt.Errorf("build gmail fetcher: %w", err)
+	}
+	msg, err := fetcher.GetMessage(ctx, gmailMessageID)
+	if err != nil {
+		return repository.ParticipantNames{}, classifyRefetchError(err)
+	}
+	headers := newHeaderLookup(msg.Payload)
+	_, _, fromName := parseSingleAddress(headers.first("From"))
+	_, _, toNames := parseAddressList(headers.first("To"))
+	_, _, ccNames := parseAddressList(headers.first("Cc"))
+	_, _, bccNames := parseAddressList(headers.first("Bcc"))
+	return repository.ParticipantNames{
+		FromName: fromName,
+		ToNames:  toNames,
+		CcNames:  ccNames,
+		BccNames: bccNames,
+	}, nil
+}
+
+// classifyRefetchError maps a GetMessage error to a permanent
+// (errCorrespondenceUnavailable) or transient (errCorrespondenceTransient)
+// sentinel the re-derivation runner branches on. A googleapi 404 is permanent
+// (the message is gone upstream); 429 / 5xx are transient (backoff + retry).
+// Anything else is returned wrapped (the runner counts it Failed).
+func classifyRefetchError(err error) error {
+	var apiErr *googleapi.Error
+	if errors.As(err, &apiErr) {
+		switch {
+		case apiErr.Code == 404:
+			return fmt.Errorf("%w: %v", errCorrespondenceUnavailable, err)
+		case apiErr.Code == 429 || (apiErr.Code >= 500 && apiErr.Code < 600):
+			return fmt.Errorf("%w: %v", errCorrespondenceTransient, err)
+		}
+	}
+	return fmt.Errorf("refetch message: %w", err)
+}
+
 // MeSet builds the "me" set (the normalized address of every connected
 // account) via the provider's me-set factory. Exported so the rematch handler
 // can reuse the same seam tests override with SetMeSetForTest, routing an
@@ -683,16 +757,17 @@ func (p *GmailSyncProvider) processMessage(
 
 	headers := newHeaderLookup(msg.Payload)
 	subject := headers.first("Subject")
-	fromRaw, fromNorm := parseSingleAddress(headers.first("From"))
-	toRaw, toNorm := parseAddressList(headers.first("To"))
-	ccRaw, ccNorm := parseAddressList(headers.first("Cc"))
-	bccRaw, bccNorm := parseAddressList(headers.first("Bcc"))
+	fromRaw, fromNorm, fromName := parseSingleAddress(headers.first("From"))
+	toRaw, toNorm, toNames := parseAddressList(headers.first("To"))
+	ccRaw, ccNorm, ccNames := parseAddressList(headers.first("Cc"))
+	bccRaw, bccNorm, bccNames := parseAddressList(headers.first("Bcc"))
 
 	externalID := extractExternalID(headers, accountID, msg.Id)
 	localDay := computeLocalDay(epochMillisToTime(msg.InternalDate), time.Local)
 	sentAt := epochMillisToTime(msg.InternalDate)
 
-	metadata := buildMetadataJSON(htmlBody, attachments, msg.LabelIds, fromRaw, toRaw, ccRaw, bccRaw)
+	metadata := buildMetadataJSON(htmlBody, attachments, msg.LabelIds,
+		fromRaw, toRaw, ccRaw, bccRaw, fromName, toNames, ccNames, bccNames)
 
 	// Recipient set R (normalized To ∪ Cc ∪ Bcc), and whether M ∩ R ≠ ∅.
 	recipientSet := make(map[string]struct{})
@@ -881,33 +956,39 @@ func (h headerLookup) first(name string) string {
 }
 
 // parseSingleAddress parses a single-address header (From). Returns the raw and
-// normalized address. On parse failure it falls back to trimming the raw value.
-func parseSingleAddress(header string) (raw, normalized string) {
+// normalized address plus the parsed display name (empty when the header had no
+// display part or failed to parse). On parse failure it falls back to trimming
+// the raw value. The name return is additive — existing callers ignore it.
+func parseSingleAddress(header string) (raw, normalized, name string) {
 	header = strings.TrimSpace(header)
 	if header == "" {
-		return "", ""
+		return "", "", ""
 	}
 	if addr, err := mail.ParseAddress(header); err == nil {
-		return addr.Address, matching.NormalizeEmail(addr.Address)
+		return addr.Address, matching.NormalizeEmail(addr.Address), strings.TrimSpace(addr.Name)
 	}
-	return header, matching.NormalizeEmail(header)
+	return header, matching.NormalizeEmail(header), ""
 }
 
 // parseAddressList parses an address-list header (To/Cc/Bcc) robustly. On a
 // ParseAddressList failure it falls back to a lenient comma-split so a single
-// malformed recipient doesn't drop the whole list. Raw and normalized slices
-// are index-aligned.
-func parseAddressList(header string) (raws, normalized []string) {
+// malformed recipient doesn't drop the whole list. The raw, normalized, and
+// name slices are index-aligned on BOTH paths (a recipient with no display part
+// gets an empty-string name at its index), so the correspondence producer can
+// pair names[i] with the address at the same index. The names return is
+// additive — existing callers ignore it.
+func parseAddressList(header string) (raws, normalized, names []string) {
 	header = strings.TrimSpace(header)
 	if header == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if addrs, err := mail.ParseAddressList(header); err == nil {
 		for _, a := range addrs {
 			raws = append(raws, a.Address)
 			normalized = append(normalized, matching.NormalizeEmail(a.Address))
+			names = append(names, strings.TrimSpace(a.Name))
 		}
-		return raws, normalized
+		return raws, normalized, names
 	}
 	for _, part := range strings.Split(header, ",") {
 		part = strings.TrimSpace(part)
@@ -915,13 +996,16 @@ func parseAddressList(header string) (raws, normalized []string) {
 			continue
 		}
 		raw := part
+		name := ""
 		if addr, err := mail.ParseAddress(part); err == nil {
 			raw = addr.Address
+			name = strings.TrimSpace(addr.Name)
 		}
 		raws = append(raws, raw)
 		normalized = append(normalized, matching.NormalizeEmail(raw))
+		names = append(names, name)
 	}
-	return raws, normalized
+	return raws, normalized, names
 }
 
 // extractExternalID reads the RFC822 Message-ID header (trimming surrounding
@@ -1050,10 +1134,20 @@ func stripHTML(s string) string {
 }
 
 // buildMetadataJSON assembles the non-provenance source_metadata JSON the
-// provider owns (html, attachments, labels, from/to/cc/bcc). The provenance
-// keys (observed_accounts, account_gmail_ids) are added by the
-// UpsertCommsMessage query, not here.
-func buildMetadataJSON(htmlBody string, attachments []attachmentMeta, labels []string, fromRaw string, toRaw, ccRaw, bccRaw []string) []byte {
+// provider owns (html, attachments, labels, from/to/cc/bcc + their index-aligned
+// display names). The provenance keys (observed_accounts, account_gmail_ids) are
+// added by the UpsertCommsMessage query, not here. The *Name(s) slices stay
+// index-aligned with their address siblings (the parsers guarantee this on both
+// the happy path and the lenient comma-split fallback).
+func buildMetadataJSON(
+	htmlBody string,
+	attachments []attachmentMeta,
+	labels []string,
+	fromRaw string,
+	toRaw, ccRaw, bccRaw []string,
+	fromName string,
+	toNames, ccNames, bccNames []string,
+) []byte {
 	meta := emailMetadata{
 		HTML:        htmlBody,
 		Attachments: attachments,
@@ -1062,6 +1156,10 @@ func buildMetadataJSON(htmlBody string, attachments []attachmentMeta, labels []s
 		To:          toRaw,
 		Cc:          ccRaw,
 		Bcc:         bccRaw,
+		FromName:    fromName,
+		ToNames:     toNames,
+		CcNames:     ccNames,
+		BccNames:    bccNames,
 	}
 	b, err := json.Marshal(meta)
 	if err != nil {

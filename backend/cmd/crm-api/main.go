@@ -709,6 +709,12 @@ func run() int {
 	var googleOAuthService *google.OAuthService
 	var todoistOAuthService *todoist.OAuthService
 	var externalContactRepo *repository.ExternalContactRepository
+	// gmailCorrespondenceSuggester is declared at the outer function scope so
+	// the periodic-job registration block (~300 lines below) can see it; it is
+	// assigned only inside the nested pubBus != nil Gmail block and stays nil in
+	// off-mode / no-OAuth deployments. The registration site nil-checks it
+	// before adding the worker (mirrors syncService's declare-assign-nil-check).
+	var gmailCorrespondenceSuggester *google.GmailCorrespondenceSuggester
 
 	if cfg.Features.EnableExternalSync {
 		syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
@@ -829,7 +835,18 @@ func run() int {
 					syncRepo,
 					commsMessageRepo,
 				))
-				logger.Info().Msg("Gmail sync provider + rematch handler registered")
+				// Correspondence-enrichment producer: mines stored email
+				// participants for unknown addresses that strong-match an existing
+				// contact, surfacing each as a link-only candidate. Reuses the
+				// provider's MeSet seam for the own-account set. Assigned to the
+				// outer var so the periodic-job block can register its scan worker.
+				gmailCorrespondenceSuggester = google.NewGmailCorrespondenceSuggester(
+					commsMessageRepo,
+					contactRepo,
+					externalContactRepo,
+					gmailProvider.MeSet,
+				)
+				logger.Info().Msg("Gmail sync provider + rematch handler + correspondence suggester registered")
 			} else {
 				logger.Warn().Msg("Gmail provider NOT registered: event-bus interaction mode=off (pubBus nil)")
 			}
@@ -1148,6 +1165,23 @@ func run() int {
 			river.PeriodicInterval(5*time.Minute),
 			func() (river.JobArgs, *river.InsertOpts) {
 				return scheduler.SchedulerTickArgs{}, nil
+			},
+			&river.PeriodicJobOpts{RunOnStart: true},
+		))
+	}
+
+	// Register the gmail_correspondence scan periodic job (6h). Guarded on the
+	// suggester being non-nil (only set in cutover mode with Gmail OAuth), so
+	// off-mode / no-OAuth deployments never register a worker over a nil
+	// scanner. RunOnStart so the discovery pass runs at boot.
+	if cfg.Features.EnableExternalSync && gmailCorrespondenceSuggester != nil {
+		river.AddWorker(riverWorkers, scheduler.NewGmailCorrespondenceScanWorker(
+			gmailCorrespondenceSuggester, google.CorrespondenceWindow,
+		))
+		riverClient.PeriodicJobs().Add(river.NewPeriodicJob(
+			river.PeriodicInterval(6*time.Hour),
+			func() (river.JobArgs, *river.InsertOpts) {
+				return scheduler.GmailCorrespondenceScanArgs{}, nil
 			},
 			&river.PeriodicJobOpts{RunOnStart: true},
 		))

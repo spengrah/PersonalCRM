@@ -570,3 +570,60 @@ func TestInteractionSourceCheck_AcceptsEmail(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, repository.InteractionSourceEmail, interaction.Source)
 }
+
+// TestBackfillParticipantNames_AdditiveMergeAndIdempotent pins the additive
+// merge contract directly at the SQL level: BackfillParticipantNames ADDS the
+// four display-name keys onto a name-less row while preserving ALL existing
+// content + provenance keys, and a second call is a no-op (the NOT (?
+// 'from_name') guard → 0 rows).
+func TestBackfillParticipantNames_AdditiveMergeAndIdempotent(t *testing.T) {
+	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
+
+	suffix := randomSuffix(t)
+	contact := newEmailContact(t, ctx, repo, contactRepo, "Test Backfill Names "+suffix)
+
+	// Seed a name-less row carrying full content + provenance keys.
+	externalID := "<msgid-backfill-" + suffix + ">"
+	md := metadataFor(t, "accA", "gidA", map[string]any{
+		"from":    "unknown@example.test",
+		"to":      []string{"me@example.test"},
+		"subject": "Original Subject",
+		"html":    "<p>original</p>",
+	})
+	seeded, err := repo.UpsertMessage(ctx, baseUpsertParams(externalID, contact.ID, accelerated.GetCurrentTime().Truncate(time.Microsecond), "accA", "gidA", md))
+	require.NoError(t, err)
+
+	// First backfill ADDS the name keys.
+	affected, err := repo.BackfillParticipantNames(ctx, seeded.ID, repository.ParticipantNames{
+		FromName: "Unknown Person",
+		ToNames:  []string{"Me"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), affected)
+
+	got, err := repo.GetByID(ctx, seeded.ID)
+	require.NoError(t, err)
+	merged := decodeMetadata(t, got.SourceMetadata)
+	// Name keys added.
+	require.Equal(t, "Unknown Person", merged["from_name"])
+	require.Equal(t, []any{"Me"}, merged["to_names"])
+	require.Contains(t, merged, "cc_names")
+	require.Contains(t, merged, "bcc_names")
+	// All pre-existing content + provenance keys preserved.
+	require.Equal(t, "unknown@example.test", merged["from"])
+	require.Equal(t, "Original Subject", merged["subject"])
+	require.Equal(t, "<p>original</p>", merged["html"])
+	require.Contains(t, merged, "observed_accounts")
+	require.Contains(t, merged, "account_gmail_ids")
+
+	// Second backfill is a no-op (idempotent — row already has from_name).
+	affected2, err := repo.BackfillParticipantNames(ctx, seeded.ID, repository.ParticipantNames{
+		FromName: "DIFFERENT Name",
+	})
+	require.NoError(t, err)
+	require.Equal(t, int64(0), affected2, "guard: a row that already has from_name is a no-op")
+
+	got2, err := repo.GetByID(ctx, seeded.ID)
+	require.NoError(t, err)
+	require.Equal(t, "Unknown Person", decodeMetadata(t, got2.SourceMetadata)["from_name"], "name not overwritten")
+}

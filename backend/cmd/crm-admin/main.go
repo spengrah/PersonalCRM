@@ -30,6 +30,20 @@
 //	                              method (bounded; user-recoverable by
 //	                              deleting the method).
 //
+//	--rederive-correspondence-names
+//	                              One-time catchup for the gmail_correspondence
+//	                              source: re-fetch already-ingested email
+//	                              messages from Gmail and additively populate
+//	                              participant display names in comms_message
+//	                              metadata (preserving all existing content +
+//	                              provenance), then run a full-range producer
+//	                              pass so the historical backlog surfaces as
+//	                              link candidates. Continue-on-error; exits
+//	                              non-zero iff any row FAILED (Skipped* do not
+//	                              fail). Idempotent — safe to re-run. Requires
+//	                              Google OAuth credentials; built lazily so
+//	                              other subcommands work on Google-less hosts.
+//
 //	--mint-pairing-token          Mint a single-use pairing token for
 //	                              `crm-mac install --pair`. Optional
 //	                              --hostname-label is operator-side
@@ -78,6 +92,7 @@ import (
 	"personal-crm/backend/internal/consumer/consumerjobs"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
+	"personal-crm/backend/internal/google"
 	"personal-crm/backend/internal/messages"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
@@ -119,7 +134,22 @@ type reconcileRunner interface {
 	ReconcileAllAddressBookMethods(ctx context.Context) (service.ReconcileAllResult, error)
 }
 
-// adminDeps groups the four subcommand dependencies. Tests inject
+// rederiveRunner is the narrow interface --rederive-correspondence-names needs
+// for step 1 (re-fetch + additive name backfill). Production wires this to
+// *google.CorrespondenceNameRederiveService.RederiveNames.
+type rederiveRunner interface {
+	RederiveNames(ctx context.Context, since time.Time) (google.CorrespondenceRederiveResult, error)
+}
+
+// correspondenceScanner is the narrow interface --rederive-correspondence-names
+// needs for step 2 (the one-time full-range producer pass over the re-derived
+// backlog). Production wires this to
+// *google.GmailCorrespondenceSuggester.Run.
+type correspondenceScanner interface {
+	Run(ctx context.Context, since time.Time) (int, error)
+}
+
+// adminDeps groups the per-subcommand dependencies. Tests inject
 // fakes for each interface; the production wiring builds a single
 // MacHostService and a small adapter for rematch.
 type adminDeps struct {
@@ -128,20 +158,27 @@ type adminDeps struct {
 	revoker   hostRevoker
 	rematch   rematchRunner
 	reconcile reconcileRunner
-	stdout    io.Writer
-	stderr    io.Writer
+	// rederive + correspondence are built LAZILY (only when
+	// --rederive-correspondence-names is set) because they require Google OAuth
+	// credentials; building them unconditionally would break every other
+	// subcommand on a Google-less host. Nil for all other subcommands.
+	rederive       rederiveRunner
+	correspondence correspondenceScanner
+	stdout         io.Writer
+	stderr         io.Writer
 }
 
 // runOptions captures parsed flags. Exposed as a struct so tests can
 // drive run() directly without re-parsing argv.
 type runOptions struct {
-	rematchStranded      bool
-	reconcileAddressBook bool
-	mintPairingToken     bool
-	hostnameLabel        string
-	listHosts            bool
-	revokeHostID         string
-	rotateHostID         string
+	rematchStranded        bool
+	reconcileAddressBook   bool
+	rederiveCorrespondence bool
+	mintPairingToken       bool
+	hostnameLabel          string
+	listHosts              bool
+	revokeHostID           string
+	rotateHostID           string
 }
 
 func main() {
@@ -176,7 +213,7 @@ func runMain(args []string) error {
 	}
 	defer database.Close()
 
-	deps, cleanup, err := buildProductionDeps(ctx, cfg, database)
+	deps, cleanup, err := buildProductionDeps(ctx, cfg, database, opts)
 	if err != nil {
 		return err
 	}
@@ -198,6 +235,9 @@ func validateSubcommand(opts runOptions) error {
 	if opts.reconcileAddressBook {
 		active++
 	}
+	if opts.rederiveCorrespondence {
+		active++
+	}
 	if opts.mintPairingToken {
 		active++
 	}
@@ -212,11 +252,11 @@ func validateSubcommand(opts runOptions) error {
 	}
 	if active == 0 {
 		return errors.New("no subcommand specified; pass exactly one of " +
-			"--messages-rematch-stranded, --reconcile-address-book-methods, --mint-pairing-token, --list-hosts, --revoke-host <uuid>, --rotate-host-key <uuid>")
+			"--messages-rematch-stranded, --reconcile-address-book-methods, --rederive-correspondence-names, --mint-pairing-token, --list-hosts, --revoke-host <uuid>, --rotate-host-key <uuid>")
 	}
 	if active > 1 {
 		return errors.New("subcommand flags are mutually exclusive; pass exactly one of " +
-			"--messages-rematch-stranded, --reconcile-address-book-methods, --mint-pairing-token, --list-hosts, --revoke-host <uuid>, --rotate-host-key <uuid>")
+			"--messages-rematch-stranded, --reconcile-address-book-methods, --rederive-correspondence-names, --mint-pairing-token, --list-hosts, --revoke-host <uuid>, --rotate-host-key <uuid>")
 	}
 	return nil
 }
@@ -232,6 +272,12 @@ func parseArgs(args []string) (runOptions, error) {
 		"One-time catchup: re-propagate address-book (gcontacts/icloud) methods "+
 			"missing from already-linked contacts (auto-apply for matched, record "+
 			"suggestion for imported). Continue-on-error; exits non-zero iff any row failed.")
+	fs.BoolVar(&opts.rederiveCorrespondence, "rederive-correspondence-names", false,
+		"One-time catchup: re-fetch already-ingested email messages from Gmail and "+
+			"additively populate participant display names in comms_message metadata, "+
+			"then run a full-range gmail_correspondence producer pass so the historical "+
+			"backlog surfaces as link candidates. Continue-on-error; exits non-zero iff "+
+			"any row failed. Idempotent — safe to re-run. Requires Google OAuth creds.")
 	fs.BoolVar(&opts.mintPairingToken, "mint-pairing-token", false,
 		"Mint a single-use pairing token for `crm-mac install --pair`.")
 	fs.StringVar(&opts.hostnameLabel, "hostname-label", "",
@@ -271,6 +317,8 @@ func run(ctx context.Context, opts runOptions, deps adminDeps) error {
 		return runRematchStranded(ctx, deps)
 	case opts.reconcileAddressBook:
 		return runReconcileAddressBookMethods(ctx, deps)
+	case opts.rederiveCorrespondence:
+		return runRederiveCorrespondenceNames(ctx, deps)
 	}
 	return errors.New("unreachable")
 }
@@ -412,9 +460,59 @@ func runReconcileAddressBookMethods(ctx context.Context, deps adminDeps) error {
 	return nil
 }
 
+// correspondenceBackfillFloor is the lower bound for the one-time
+// re-derivation + full-range producer pass. It matches the Gmail onboarding
+// backfill floor (the earliest mail the integration ever ingested), so the
+// catchup covers the entire stored backlog.
+const correspondenceBackfillFloor = "2026-01-01"
+
+// runRederiveCorrespondenceNames runs the one-time historical catchup in two
+// ordered phases over the full range: (1) re-fetch + additively backfill
+// participant display names, then (2) a full-range gmail_correspondence
+// producer pass so the now-named backlog surfaces as candidates. Phase 2 runs
+// even when phase 1 had per-row failures — successfully re-derived older rows
+// must still be evaluated. Prints a counts-only summary; returns a non-nil
+// error iff any row FAILED (Skipped* outcomes do NOT fail the run), so the
+// operator can fix the cause and re-run safely (idempotent).
+func runRederiveCorrespondenceNames(ctx context.Context, deps adminDeps) error {
+	since, err := time.Parse("2006-01-02", correspondenceBackfillFloor)
+	if err != nil {
+		return fmt.Errorf("parse backfill floor: %w", err)
+	}
+
+	res, err := deps.rederive.RederiveNames(ctx, since)
+	if err != nil {
+		return fmt.Errorf("rederive correspondence names: %w", err)
+	}
+
+	// Full-range producer pass — runs regardless of phase-1 per-row failures.
+	upserted, err := deps.correspondence.Run(ctx, since)
+	if err != nil {
+		return fmt.Errorf("correspondence producer pass: %w", err)
+	}
+
+	if _, err := fmt.Fprintf(deps.stdout, "rederive-correspondence-names summary:\n"+
+		"  scanned:              %d\n"+
+		"  rederived:            %d\n"+
+		"  skipped_no_gmail_id:  %d\n"+
+		"  skipped_unavailable:  %d\n"+
+		"  failed:               %d\n"+
+		"  candidates_upserted:  %d\n",
+		res.Scanned, res.Rederived, res.SkippedNoGmailID, res.SkippedUnavailable, res.Failed, upserted); err != nil {
+		return fmt.Errorf("write summary: %w", err)
+	}
+	if res.Failed > 0 {
+		return fmt.Errorf("%d row(s) failed to re-derive (see logs); re-run after fixing the cause", res.Failed)
+	}
+	return nil
+}
+
 // buildProductionDeps wires up the production service stack. Returns
-// a cleanup function to call before exit (releases the river client).
-func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.Database) (adminDeps, func(), error) {
+// a cleanup function to call before exit (releases the river client). opts
+// gates lazily-built dependencies: the correspondence re-derivation stack
+// requires Google OAuth and is built ONLY when --rederive-correspondence-names
+// is set, so every other subcommand keeps working on a Google-less host.
+func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.Database, opts runOptions) (adminDeps, func(), error) {
 	// River client configured as an inserter only. We register a
 	// noop worker for MessagingAggregateForContactArgs so River
 	// accepts the kind at Insert time without actually running the
@@ -489,14 +587,38 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 		enrichmentService, contactRepo, contactMethodRepo, externalContactRepo,
 	)
 
-	cleanup := func() {}
-	return adminDeps{
+	deps := adminDeps{
 		tokens:    hostService,
 		hosts:     hostService,
 		revoker:   hostService,
 		rematch:   rematch,
 		reconcile: addressBookReconcile,
-	}, cleanup, nil
+	}
+
+	// LAZY: build the correspondence re-derivation stack ONLY for
+	// --rederive-correspondence-names. google.NewOAuthService errors when
+	// Google creds are absent; building it unconditionally would break every
+	// other subcommand on a Google-less host. The Gmail provider is
+	// constructed with the real event bus + pool, but the re-derive seams
+	// (RefetchParticipantNames, MeSet) and the producer (Run) never publish, so
+	// no email events are emitted by this one-shot binary.
+	if opts.rederiveCorrespondence {
+		oauthRepo := repository.NewOAuthRepository(database.Queries)
+		syncRepo := repository.NewSyncRepository(database.Queries)
+		oauthService, err := google.NewOAuthService(cfg, oauthRepo, syncRepo)
+		if err != nil {
+			return adminDeps{}, nil, fmt.Errorf("--rederive-correspondence-names requires Google OAuth credentials: %w", err)
+		}
+		commsRepo := repository.NewCommsMessageRepository(database.Queries)
+		gmailProvider := google.NewGmailSyncProvider(oauthService, commsRepo, eventBus, database.Pool)
+		deps.rederive = google.NewCorrespondenceNameRederiveService(commsRepo, gmailProvider)
+		deps.correspondence = google.NewGmailCorrespondenceSuggester(
+			commsRepo, contactRepo, externalContactRepo, gmailProvider.MeSet,
+		)
+	}
+
+	cleanup := func() {}
+	return deps, cleanup, nil
 }
 
 // rematchAdapter wraps messages.RematchStranded so it conforms to

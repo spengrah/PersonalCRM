@@ -133,3 +133,80 @@ WHERE id = ANY(@message_ids::uuid[])
 -- call this.
 DELETE FROM comms_message
 WHERE matched_contact_id = @matched_contact_id;
+
+-- name: ListCommsMessageParticipantsSince :many
+-- Stream recent email content rows for the correspondence-enrichment scan:
+-- source_metadata carries the from/to/cc/bcc participant lists (bare addresses)
+-- plus the index-aligned from_name/to_names/cc_names/bcc_names. matched_contact_id
+-- is the known contact the message qualified for (the co-occurring contact the
+-- producer records as evidence). Bounded by @since to keep each scan cheap; the
+-- scan is idempotent so re-running the same window is harmless. The INNER JOIN on
+-- a live contact drops rows whose matched contact was soft-deleted: a contact's
+-- soft-delete (UPDATE deleted_at) does NOT cascade to its comms_message rows (the
+-- FK cascade only fires on a hard DELETE), so without this join the producer would
+-- keep mining correspondence with a deleted contact.
+SELECT cm.matched_contact_id, cm.sent_at, cm.source_metadata
+FROM comms_message cm
+JOIN contact c ON c.id = cm.matched_contact_id AND c.deleted_at IS NULL
+WHERE cm.source = 'email'
+  AND cm.deleted_at IS NULL
+  AND cm.sent_at >= @since
+ORDER BY cm.sent_at DESC, cm.id;
+
+-- name: ListCommsMessagesMissingParticipantNames :many
+-- Keyset-paged rows for the one-time historical display-name re-derivation
+-- (crm-admin --rederive-correspondence-names). Returns email rows at/after
+-- @since that lack the from_name key (i.e. ingested before display-name
+-- capture shipped), paged by id > @after_id so the runner advances the cursor
+-- regardless of per-row outcome — a skipped/failed row never blocks later rows
+-- (livelock avoidance). account_id + source_metadata.account_gmail_ids together
+-- locate the per-mailbox gmail id to re-fetch. The INNER JOIN on a live contact
+-- drops rows whose matched contact was soft-deleted (soft-delete does not cascade
+-- to comms_message), so the re-derivation never spends Gmail quota re-fetching
+-- mail for a deleted contact.
+SELECT cm.id, cm.account_id, cm.source_metadata
+FROM comms_message cm
+JOIN contact c ON c.id = cm.matched_contact_id AND c.deleted_at IS NULL
+WHERE cm.source = 'email'
+  AND cm.deleted_at IS NULL
+  AND cm.sent_at >= @since
+  AND cm.id > @after_id
+  AND NOT (cm.source_metadata ? 'from_name')
+ORDER BY cm.id
+LIMIT @batch_size;
+
+-- name: BackfillCommsMessageParticipantNames :execrows
+-- Additively merge the four display-name keys onto an EXISTING row's stored
+-- source_metadata, preserving every existing content key (from/to/cc/bcc/
+-- subject/html/attachments/labels) and the provenance keys (observed_accounts/
+-- account_gmail_ids). A nested jsonb_set chain (create_missing=true per key) —
+-- NOT a wholesale replace, which would destroy provenance + content. The caller
+-- passes non-NULL JSON arrays ([] when empty) for *_names so jsonb_set never
+-- writes a JSON null. Guarded by NOT (? 'from_name') so a row already
+-- re-derived (or concurrently re-ingested with names) is a no-op (0 rows) —
+-- idempotent across runs.
+UPDATE comms_message
+SET source_metadata = jsonb_set(
+    jsonb_set(
+        jsonb_set(
+            jsonb_set(
+                source_metadata,
+                '{from_name}',
+                to_jsonb(@from_name::text),
+                TRUE
+            ),
+            '{to_names}',
+            @to_names::jsonb,
+            TRUE
+        ),
+        '{cc_names}',
+        @cc_names::jsonb,
+        TRUE
+    ),
+    '{bcc_names}',
+    @bcc_names::jsonb,
+    TRUE
+)
+WHERE id = @id
+  AND deleted_at IS NULL
+  AND NOT (source_metadata ? 'from_name');
