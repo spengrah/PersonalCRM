@@ -227,11 +227,11 @@ type GmailSyncProvider struct {
 	// discoverer runs the in-sync correspondence-discovery hook over each
 	// fetched message's From/To/Cc participants (between fetch and storage),
 	// surfacing unknown addresses that strong-match an existing contact as
-	// link-only candidates. Wired in cutover mode via SetCorrespondence
-	// Discoverer; nil-safe — when nil the hook is a no-op, so every existing
-	// constructor call site keeps working unchanged. Discovery is best-effort:
-	// a discovery error is logged, never returned from Sync/ScanIdentifier, so
-	// it can't rewind the cursor or strand email ingest.
+	// link-only candidates. Wired in cutover mode via
+	// SetCorrespondenceDiscoverer; nil-safe — when nil the hook is a no-op, so
+	// every existing constructor call site keeps working unchanged. Discovery
+	// is best-effort: a discovery error is logged, never returned from
+	// Sync/ScanIdentifier, so it can't rewind the cursor or strand email ingest.
 	discoverer *CorrespondenceDiscoverer
 }
 
@@ -832,8 +832,8 @@ func appendParticipants(out []participant, raws, names []string) []participant {
 }
 
 // discoveryCoOccurIDs returns the set of known contact ids present on a
-// message's From/To/Cc participants (BCC-free by construction — collect
-// DiscoveryParticipants never emits Bcc). This is the co-occurring-contact
+// message's From/To/Cc participants (BCC-free by construction —
+// collectDiscoveryParticipants never emits Bcc). This is the co-occurring-contact
 // evidence the candidate records: the KNOWN contacts on the message, never the
 // suggested match. It deliberately does NOT reuse processMessage's
 // candidateContacts set (which is built over To ∪ Cc ∪ Bcc), so a Bcc'd known
@@ -1574,10 +1574,10 @@ func (p *GmailSyncProvider) RunProcessMessageForTest(
 	return p.processMessage(ctx, msg, accountID, knownMap, meSet)
 }
 
-// RunDiscoverParticipantsForTest drives the unexported collectDiscovery
-// Participants entry point so cross-package tests can assert participant
-// collection (From/To/Cc, no Bcc) against real *gmail.Message structs. The
-// returned pairs are exposed as DiscoveryParticipantForTest values.
+// RunDiscoverParticipantsForTest drives the unexported
+// collectDiscoveryParticipants entry point so cross-package tests can assert
+// participant collection (From/To/Cc, no Bcc) against real *gmail.Message
+// structs. The returned pairs are exposed as DiscoveryParticipantForTest values.
 func (p *GmailSyncProvider) RunDiscoverParticipantsForTest(msg *gmail.Message) []DiscoveryParticipantForTest {
 	parts := p.collectDiscoveryParticipants(msg)
 	out := make([]DiscoveryParticipantForTest, 0, len(parts))

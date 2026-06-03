@@ -24,7 +24,9 @@ So the discovery logic is correct; it's pointed at the wrong data. **It must run
 
 Run the discovery gate on **every fetched message's participants**, independent of the storage gate.
 
-**Preferred design — in-sync hook (no extra Gmail fetching):** in the sync's per-message process loop, where each fetched message is already parsed, additionally run the discovery gate on its From/To/Cc participants (the message is already fetched + parsed for `processMessage`). This is the literal "between fetch and storage" placement and adds **zero** new Gmail API calls. It runs over the windowed catch-up (covers the backlog once) and steady-state recent windows (cheap).
+**Preferred design — in-sync hook (no extra Gmail fetching):** in the sync's per-message process loop, where each fetched message is already parsed, additionally run the discovery gate on its From/To/Cc participants (the message is already fetched + parsed for `processMessage`). This is the literal "between fetch and storage" placement and adds **zero** new Gmail API calls. It covers steady-state (future windows) automatically and the historical backlog *whenever the windowed sync replays that range*.
+
+**Backlog caveat (resolved in planning):** the in-sync hook does NOT auto-replay the Jan→now backlog for accounts whose cursor has already advanced to ~now (the production main accounts are there). The hook only examines what the fetch loop actually fetches, and at steady state that's only new leading-edge windows. To surface the historical backlog, the operator runs the **already-existing** `crm-admin --reset-gmail-backfill-cursors` ONCE after deploy — it rewinds enabled Gmail cursors to the 2026-01-01 floor so the windowed catch-up replays the full range with the hook live. This is a one-time runbook step (no new code); see the execution plan's deploy runbook for the exact sequence (including the retired-River-kind drain).
 
 The existing `GmailCorrespondenceSuggester` (which mines `comms_message`) is **superseded** as the candidate source — planning to decide whether to remove it or keep a thin fallback.
 
@@ -48,7 +50,7 @@ The existing `GmailCorrespondenceSuggester` (which mines `comms_message`) is **s
 
 ## Acceptance
 
-After deploy, a sync pass surfaces on the order of the validated **~27 candidates / 26 contacts** for the main account (it will differ as mail changes; the signal is "tens, not zero"). Candidates appear in the People-tab suggestion surface for confirm/dismiss.
+After deploy **plus the one-time `crm-admin --reset-gmail-backfill-cursors` runbook step** (which rewinds the already-advanced cursors so the windowed catch-up replays Jan→now with the hook live), the catch-up surfaces on the order of the validated **~27 candidates / 26 contacts** for the main account (it will differ as mail changes; the signal is "tens, not zero"). Steady-state ticks thereafter discover from new windows automatically. Candidates appear in the People-tab suggestion surface for confirm/dismiss.
 
 ---
 
