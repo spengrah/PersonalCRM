@@ -28,7 +28,7 @@ Run the discovery gate on **every fetched message's participants**, independent 
 
 **Backlog caveat (resolved in planning):** the in-sync hook does NOT auto-replay the Jan→now backlog for accounts whose cursor has already advanced to ~now (the production main accounts are there). The hook only examines what the fetch loop actually fetches, and at steady state that's only new leading-edge windows. To surface the historical backlog, the operator runs the **already-existing** `crm-admin --reset-gmail-backfill-cursors` ONCE after deploy — it rewinds enabled Gmail cursors to the 2026-01-01 floor so the windowed catch-up replays the full range with the hook live. This is a one-time runbook step (no new code); see the execution plan's deploy runbook for the exact sequence (including the retired-River-kind drain).
 
-The existing `GmailCorrespondenceSuggester` (which mines `comms_message`) is **superseded** as the candidate source — planning to decide whether to remove it or keep a thin fallback.
+The existing `GmailCorrespondenceSuggester` (which mines `comms_message`) is **removed** as the candidate source: the in-sync hook is the single producer. The 6h periodic stored-row scan and the `crm-admin` phase-2 producer pass are deleted with it, so there is no double-upsert. The `crm-admin --rederive-correspondence-names` subcommand keeps only its phase-1 display-name backfill.
 
 ---
 
@@ -62,12 +62,12 @@ After deploy **plus the one-time `crm-admin --reset-gmail-backfill-cursors` runb
 
 ---
 
-## Open questions for planning
+## Open questions (resolved in planning + implementation)
 
-1. **In-sync hook vs. a separate scheduled discovery scan** (the spec prefers the in-sync hook — no extra fetch; the planner should confirm against the sync loop's structure and the windowed-cursor interaction).
-2. **Remove vs. keep** the existing `comms_message`-mining `GmailCorrespondenceSuggester` once discovery moves into the fetch loop.
-3. **Idempotency / cadence:** the in-sync hook re-examines each window's fetched mail; ensure upserts are idempotent and the per-sync cost is bounded (it already iterates these messages for `processMessage`).
-4. Whether the all-accounts run (not just the main account) needs any per-account guards.
+1. **In-sync hook vs. a separate scheduled discovery scan** → **in-sync hook.** Literal "between fetch and storage" placement, zero new Gmail calls. The historical backlog is covered by the one-time `crm-admin --reset-gmail-backfill-cursors` runbook step (see "Backlog caveat" above), since already-advanced cursors don't re-fetch the backlog at steady state.
+2. **Remove vs. keep** the `comms_message`-mining `GmailCorrespondenceSuggester` → **removed** (the in-sync hook is the single producer; the 6h periodic scan + the `crm-admin` phase-2 pass are deleted with it; no double-upsert).
+3. **Idempotency / cadence** → per-sync-pass aggregation (one `FindSimilarContacts` per new unknown ≥2-token name), idempotent per-address upserts, sticky-ignore preserved. The aggregate map is a per-pass LOCAL threaded as a param (never a provider field), so concurrent account syncs don't race.
+4. **All-accounts per-account guards** → none needed; the candidate row is keyed `(gmail_correspondence, address)` with `accountID=nil`, so two accounts observing the same unknown address upsert the same row idempotently.
 
 ---
 
