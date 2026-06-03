@@ -32,6 +32,9 @@ export type DomainEvent =
   | 'import:linked' // linked to existing contact
   | 'import:ignored' // marked as ignored
   | 'import:synced' // sync completed
+  // Method-suggestion events (unified suggestions surface)
+  | 'method-suggestion:resolved' // pending methods confirmed onto a contact
+  | 'method-suggestion:dismissed' // pending methods dismissed
   // Anarlog interactions-queue events
   | 'meeting-note:resolved' // a conflict/orphan was resolved (This one / None of these / impromptu)
   | 'name-candidate:resolved' // an anarlog_title token group was imported/linked/ignored
@@ -80,14 +83,28 @@ const invalidationRules: Record<DomainEvent, InvalidationKey[]> = {
   ],
 
   // Import events
-  // Importing creates a new contact, so invalidate both imports and contacts
-  'import:imported': [importKeys.lists(), contactKeys.lists()],
+  // Importing creates a new contact, so invalidate both imports and contacts.
+  // The suggestions surface composes the same candidate list, so it must
+  // refresh too.
+  'import:imported': [importKeys.lists(), importKeys.suggestionsLists(), contactKeys.lists()],
   // Linking enriches an existing contact
-  'import:linked': [importKeys.lists(), contactKeys.lists()],
-  // Ignoring only affects the imports list
-  'import:ignored': [importKeys.lists()],
+  'import:linked': [importKeys.lists(), importKeys.suggestionsLists(), contactKeys.lists()],
+  // Ignoring only affects the imports + suggestions lists
+  'import:ignored': [importKeys.lists(), importKeys.suggestionsLists()],
   // Sync trigger updates sync states; completion may add new candidates
-  'import:synced': [importKeys.lists(), syncKeys.states()],
+  'import:synced': [importKeys.lists(), importKeys.suggestionsLists(), syncKeys.states()],
+
+  // Resolving method suggestions enriches an already-linked contact, so the
+  // suggestions surface + contact lists/detail refresh. The affected
+  // contact's detail key is invalidated via the factory pattern.
+  'method-suggestion:resolved': [
+    importKeys.suggestionsLists(),
+    importKeys.lists(),
+    contactKeys.lists(),
+    (contactId: string) => contactKeys.detail(contactId),
+  ],
+  // Dismissing only mutates the suggestions surface (no contact change).
+  'method-suggestion:dismissed': [importKeys.suggestionsLists()],
 
   // Resolving a conflict/orphan always removes the card from the
   // Interactions queue + decrements the badge, even when zero walk-in

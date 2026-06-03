@@ -59,6 +59,7 @@ export interface SeedExternalContactInput {
     | 'icloud_contacts'
     | 'anarlog_humans'
     | 'anarlog_title'
+    | 'gmail_correspondence'
   emails?: string[]
   phones?: string[]
   organization?: string
@@ -74,6 +75,24 @@ export interface SeedExternalContactsRequest {
 export interface SeedExternalContactsResponse {
   created: number
   ids: string[]
+}
+
+export interface SeedMethodSuggestionMethodInput {
+  type: 'email' | 'phone'
+  value: string
+}
+
+export interface SeedMethodSuggestionsRequest {
+  prefix: string
+  contact_name: string
+  source?: 'gcontacts' | 'icloud_contacts'
+  pending: SeedMethodSuggestionMethodInput[]
+  dismissed?: SeedMethodSuggestionMethodInput[]
+}
+
+export interface SeedMethodSuggestionsResponse {
+  external_contact_id: string
+  contact_id: string
 }
 
 export interface SeedOverdueContactInput {
@@ -238,6 +257,34 @@ export class TestAPI {
 
     const data = await response.json()
     return data.data as SeedExternalContactsResponse
+  }
+
+  /**
+   * Seeds a linked `imported` address-book row carrying pending (and
+   * optional dismissed) method suggestions, plus the CRM contact it links
+   * to. Used to drive the method-suggestion card on the People tab.
+   */
+  async seedMethodSuggestions(
+    input: Omit<SeedMethodSuggestionsRequest, 'prefix'>
+  ): Promise<SeedMethodSuggestionsResponse> {
+    const response = await this.request.post(
+      `${API_BASE_URL}/api/v1/test/seed/method-suggestions`,
+      {
+        headers: API_HEADERS,
+        data: {
+          prefix: this.prefix,
+          ...input,
+        } satisfies SeedMethodSuggestionsRequest,
+      }
+    )
+
+    if (!response.ok()) {
+      const body = await response.text()
+      throw new Error(`Failed to seed method suggestions: ${response.status()} ${body}`)
+    }
+
+    const data = await response.json()
+    return data.data as SeedMethodSuggestionsResponse
   }
 
   /**

@@ -136,6 +136,10 @@
     "tags": ["@area:imports"]
   },
   {
+    "pattern": "^frontend/src/hooks/use-suggestions\\.ts$",
+    "tags": ["@area:imports"]
+  },
+  {
     "pattern": "^frontend/src/hooks/use-interactions-queue\\.ts$",
     "tags": ["@area:imports"]
   },

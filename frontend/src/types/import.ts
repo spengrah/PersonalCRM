@@ -48,6 +48,79 @@ export interface ImportCandidatesListResponse {
   pages: number
 }
 
+// ---------------------------------------------------------------------------
+// Unified suggestions surface (method group + confidence-ranked candidates)
+// ---------------------------------------------------------------------------
+
+export type SuggestionKind = 'contact' | 'method'
+export type CandidateAction = 'import' | 'link' | 'ignore'
+
+/** One pending (type, value) method on a method-suggestion. */
+export interface MethodSuggestionMethod {
+  type: string
+  value: string
+}
+
+/** A method suggestion for an already-linked contact (confirm / dismiss). */
+export interface MethodSuggestion {
+  external_contact_id: string
+  contact_id: string
+  contact_name: string
+  source: string
+  methods: MethodSuggestionMethod[]
+}
+
+/** The contact variant wraps the existing ImportCandidate plus the
+ * server-declared allowed actions (link-only policy). */
+export interface CandidateSuggestion extends ImportCandidate {
+  allowed_actions: CandidateAction[]
+}
+
+/** A queue entry in the unified suggestions list. */
+export type SuggestionItem =
+  | { kind: 'contact'; candidate: CandidateSuggestion }
+  | { kind: 'method'; suggestion: MethodSuggestion }
+
+export interface SuggestionsListParams {
+  page?: number
+  limit?: number
+  source?: string
+}
+
+export interface SuggestionsListResponse {
+  items: SuggestionItem[]
+  // Candidate-group pagination meta (the method group rides above the fold
+  // on page 1 and is excluded from the page math).
+  total: number
+  page: number
+  limit: number
+  pages: number
+}
+
+/** Request body for POST /imports/suggestions/:id/methods/resolve. */
+export interface ResolveMethodSuggestionsRequest {
+  methods?: MethodSuggestionMethod[]
+}
+
+/** Request body for POST /imports/suggestions/:id/methods/dismiss. */
+export interface DismissMethodSuggestionsRequest {
+  methods?: MethodSuggestionMethod[]
+}
+
+/** Response from POST /imports/suggestions/:id/methods/resolve. */
+export interface ResolveMethodSuggestionsResponse {
+  external_contact_id: string
+  contact_id: string
+  resolved_count: number
+  rematch_job_id?: string | null
+}
+
+/** Response from POST /imports/suggestions/:id/methods/dismiss. */
+export interface DismissMethodSuggestionsResponse {
+  external_contact_id: string
+  dismissed_count: number
+}
+
 // Types for enhanced import/link with method selection
 
 /** A contact method from an external source with original type info */
@@ -78,6 +151,10 @@ export interface LinkContactRequest {
   conflict_resolutions?: Record<string, 'use_crm' | 'use_external'>
   cadence?: string
   name?: string // Optional custom name (updates CRM contact name if provided)
+  // True when the modal rendered the method-selection UI and the user made
+  // a selection decision (even deselect-all). Closes the §4 residual where
+  // a deselect-all link was classified `matched` instead of `imported`.
+  methods_curated?: boolean
 }
 
 /** Type of conflict between external and CRM methods */

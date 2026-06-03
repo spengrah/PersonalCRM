@@ -13,6 +13,12 @@ vi.mock('@/hooks/use-imports', () => ({
   useTriggerSync: vi.fn(),
 }))
 
+vi.mock('@/hooks/use-suggestions', () => ({
+  useSuggestions: vi.fn(),
+  useResolveMethodSuggestions: vi.fn(),
+  useDismissMethodSuggestions: vi.fn(),
+}))
+
 vi.mock('@/hooks/use-contacts', () => ({
   useContacts: vi.fn(),
   useContact: vi.fn(),
@@ -49,6 +55,11 @@ import {
   useIgnoreCandidate,
   useTriggerSync,
 } from '@/hooks/use-imports'
+import {
+  useSuggestions,
+  useResolveMethodSuggestions,
+  useDismissMethodSuggestions,
+} from '@/hooks/use-suggestions'
 import { useContacts, useContact } from '@/hooks/use-contacts'
 import { useGoogleAccounts } from '@/hooks/use-google-accounts'
 import {
@@ -79,6 +90,47 @@ function mockInteractionsQueueDefaults() {
   } as any)
 }
 
+/** Set the People-tab list data. The page reads useSuggestions (items
+ * union); the modal's internal candidate-array refetch reads
+ * useImportCandidates. Both are populated from the same candidate array so
+ * existing assertions on candidate rendering keep working. */
+function setListData(
+  candidates: any[],
+  meta: { total?: number; page?: number; limit?: number; pages?: number } = {}
+) {
+  const m = {
+    total: meta.total ?? candidates.length,
+    page: meta.page ?? 1,
+    limit: meta.limit ?? 20,
+    pages: meta.pages ?? 1,
+  }
+  vi.mocked(useSuggestions).mockReturnValue({
+    data: {
+      items: candidates.map(candidate => ({ kind: 'contact', candidate })),
+      ...m,
+    },
+    isLoading: false,
+    error: null,
+  } as any)
+  vi.mocked(useImportCandidates).mockReturnValue({
+    data: { candidates, ...m },
+    isLoading: false,
+    error: null,
+  } as any)
+}
+
+/** Quiet defaults for the method-suggestion mutations. */
+function mockMethodSuggestionDefaults() {
+  vi.mocked(useResolveMethodSuggestions).mockReturnValue({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  } as any)
+  vi.mocked(useDismissMethodSuggestions).mockReturnValue({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  } as any)
+}
+
 const createWrapper = () => {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -97,6 +149,7 @@ describe('ImportsPage - Suggested Matches', () => {
     mockSearchParams = new URLSearchParams()
     mockReplace.mockClear()
     mockInteractionsQueueDefaults()
+    mockMethodSuggestionDefaults()
 
     // Default mock implementations
     vi.mocked(useImportAsContact).mockReturnValue({
@@ -151,30 +204,23 @@ describe('ImportsPage - Suggested Matches', () => {
   })
 
   it('shows "Link to [Name]" when candidate has suggested match', () => {
-    vi.mocked(useImportCandidates).mockReturnValue({
-      data: {
-        candidates: [
-          {
-            id: 'candidate-1',
-            source: 'gcontacts',
-            display_name: 'John Doe',
-            emails: ['john@example.com'],
-            phones: [],
-            suggested_match: {
-              contact_id: 'contact-1',
-              contact_name: 'John Smith',
-              confidence: 0.85,
-            },
+    setListData(
+      [
+        {
+          id: 'candidate-1',
+          source: 'gcontacts',
+          display_name: 'John Doe',
+          emails: ['john@example.com'],
+          phones: [],
+          suggested_match: {
+            contact_id: 'contact-1',
+            contact_name: 'John Smith',
+            confidence: 0.85,
           },
-        ],
-        total: 1,
-        page: 1,
-        limit: 20,
-        pages: 1,
-      },
-      isLoading: false,
-      error: null,
-    } as any)
+        },
+      ],
+      { total: 1, page: 1, limit: 20, pages: 1 }
+    )
 
     render(<ImportsPage />, { wrapper: createWrapper() })
 
@@ -182,26 +228,19 @@ describe('ImportsPage - Suggested Matches', () => {
   })
 
   it('shows "Link (select)" when candidate has no suggested match', () => {
-    vi.mocked(useImportCandidates).mockReturnValue({
-      data: {
-        candidates: [
-          {
-            id: 'candidate-1',
-            source: 'gcontacts',
-            display_name: 'Jane Doe',
-            emails: ['jane@example.com'],
-            phones: [],
-            // No suggested_match
-          },
-        ],
-        total: 1,
-        page: 1,
-        limit: 20,
-        pages: 1,
-      },
-      isLoading: false,
-      error: null,
-    } as any)
+    setListData(
+      [
+        {
+          id: 'candidate-1',
+          source: 'gcontacts',
+          display_name: 'Jane Doe',
+          emails: ['jane@example.com'],
+          phones: [],
+          // No suggested_match
+        },
+      ],
+      { total: 1, page: 1, limit: 20, pages: 1 }
+    )
 
     render(<ImportsPage />, { wrapper: createWrapper() })
 
@@ -209,38 +248,31 @@ describe('ImportsPage - Suggested Matches', () => {
   })
 
   it('displays candidates with matches before those without', () => {
-    vi.mocked(useImportCandidates).mockReturnValue({
-      data: {
-        candidates: [
-          {
-            id: 'candidate-with-match',
-            source: 'gcontacts',
-            display_name: 'John Doe',
-            emails: [],
-            phones: [],
-            suggested_match: {
-              contact_id: 'contact-1',
-              contact_name: 'John Smith',
-              confidence: 0.85,
-            },
+    setListData(
+      [
+        {
+          id: 'candidate-with-match',
+          source: 'gcontacts',
+          display_name: 'John Doe',
+          emails: [],
+          phones: [],
+          suggested_match: {
+            contact_id: 'contact-1',
+            contact_name: 'John Smith',
+            confidence: 0.85,
           },
-          {
-            id: 'candidate-without-match',
-            source: 'gcontacts',
-            display_name: 'Jane Doe',
-            emails: [],
-            phones: [],
-            // No suggested_match
-          },
-        ],
-        total: 2,
-        page: 1,
-        limit: 20,
-        pages: 1,
-      },
-      isLoading: false,
-      error: null,
-    } as any)
+        },
+        {
+          id: 'candidate-without-match',
+          source: 'gcontacts',
+          display_name: 'Jane Doe',
+          emails: [],
+          phones: [],
+          // No suggested_match
+        },
+      ],
+      { total: 2, page: 1, limit: 20, pages: 1 }
+    )
 
     render(<ImportsPage />, { wrapper: createWrapper() })
 
@@ -255,30 +287,23 @@ describe('ImportsPage - Suggested Matches', () => {
   it('opens modal with pre-selected contact when clicking suggested match', async () => {
     const user = userEvent.setup()
 
-    vi.mocked(useImportCandidates).mockReturnValue({
-      data: {
-        candidates: [
-          {
-            id: 'candidate-1',
-            source: 'gcontacts',
-            display_name: 'John Doe',
-            emails: ['john@example.com'],
-            phones: [],
-            suggested_match: {
-              contact_id: 'contact-1',
-              contact_name: 'John Smith',
-              confidence: 0.85,
-            },
+    setListData(
+      [
+        {
+          id: 'candidate-1',
+          source: 'gcontacts',
+          display_name: 'John Doe',
+          emails: ['john@example.com'],
+          phones: [],
+          suggested_match: {
+            contact_id: 'contact-1',
+            contact_name: 'John Smith',
+            confidence: 0.85,
           },
-        ],
-        total: 1,
-        page: 1,
-        limit: 20,
-        pages: 1,
-      },
-      isLoading: false,
-      error: null,
-    } as any)
+        },
+      ],
+      { total: 1, page: 1, limit: 20, pages: 1 }
+    )
 
     render(<ImportsPage />, { wrapper: createWrapper() })
 
@@ -297,30 +322,23 @@ describe('ImportsPage - Suggested Matches', () => {
   })
 
   it('shows confidence score in button for high confidence matches', () => {
-    vi.mocked(useImportCandidates).mockReturnValue({
-      data: {
-        candidates: [
-          {
-            id: 'candidate-1',
-            source: 'gcontacts',
-            display_name: 'John Doe',
-            emails: ['john@example.com'],
-            phones: [],
-            suggested_match: {
-              contact_id: 'contact-1',
-              contact_name: 'John Smith',
-              confidence: 0.95, // Very high confidence
-            },
+    setListData(
+      [
+        {
+          id: 'candidate-1',
+          source: 'gcontacts',
+          display_name: 'John Doe',
+          emails: ['john@example.com'],
+          phones: [],
+          suggested_match: {
+            contact_id: 'contact-1',
+            contact_name: 'John Smith',
+            confidence: 0.95, // Very high confidence
           },
-        ],
-        total: 1,
-        page: 1,
-        limit: 20,
-        pages: 1,
-      },
-      isLoading: false,
-      error: null,
-    } as any)
+        },
+      ],
+      { total: 1, page: 1, limit: 20, pages: 1 }
+    )
 
     render(<ImportsPage />, { wrapper: createWrapper() })
 
@@ -329,50 +347,43 @@ describe('ImportsPage - Suggested Matches', () => {
   })
 
   it('handles multiple candidates with different match states', () => {
-    vi.mocked(useImportCandidates).mockReturnValue({
-      data: {
-        candidates: [
-          {
-            id: 'candidate-1',
-            source: 'gcontacts',
-            display_name: 'John Doe',
-            emails: [],
-            phones: [],
-            suggested_match: {
-              contact_id: 'contact-1',
-              contact_name: 'John Smith',
-              confidence: 0.85,
-            },
+    setListData(
+      [
+        {
+          id: 'candidate-1',
+          source: 'gcontacts',
+          display_name: 'John Doe',
+          emails: [],
+          phones: [],
+          suggested_match: {
+            contact_id: 'contact-1',
+            contact_name: 'John Smith',
+            confidence: 0.85,
           },
-          {
-            id: 'candidate-2',
-            source: 'gcontacts',
-            display_name: 'Jane Doe',
-            emails: [],
-            phones: [],
-            suggested_match: {
-              contact_id: 'contact-2',
-              contact_name: 'Jane Johnson',
-              confidence: 0.75,
-            },
+        },
+        {
+          id: 'candidate-2',
+          source: 'gcontacts',
+          display_name: 'Jane Doe',
+          emails: [],
+          phones: [],
+          suggested_match: {
+            contact_id: 'contact-2',
+            contact_name: 'Jane Johnson',
+            confidence: 0.75,
           },
-          {
-            id: 'candidate-3',
-            source: 'gcontacts',
-            display_name: 'Bob Wilson',
-            emails: [],
-            phones: [],
-            // No match
-          },
-        ],
-        total: 3,
-        page: 1,
-        limit: 20,
-        pages: 1,
-      },
-      isLoading: false,
-      error: null,
-    } as any)
+        },
+        {
+          id: 'candidate-3',
+          source: 'gcontacts',
+          display_name: 'Bob Wilson',
+          emails: [],
+          phones: [],
+          // No match
+        },
+      ],
+      { total: 3, page: 1, limit: 20, pages: 1 }
+    )
 
     render(<ImportsPage />, { wrapper: createWrapper() })
 
@@ -390,30 +401,23 @@ describe('ImportsPage - Suggested Matches', () => {
   it('closes modal when clicking Cancel', async () => {
     const user = userEvent.setup()
 
-    vi.mocked(useImportCandidates).mockReturnValue({
-      data: {
-        candidates: [
-          {
-            id: 'candidate-1',
-            source: 'gcontacts',
-            display_name: 'John Doe',
-            emails: [],
-            phones: [],
-            suggested_match: {
-              contact_id: 'contact-1',
-              contact_name: 'John Smith',
-              confidence: 0.85,
-            },
+    setListData(
+      [
+        {
+          id: 'candidate-1',
+          source: 'gcontacts',
+          display_name: 'John Doe',
+          emails: [],
+          phones: [],
+          suggested_match: {
+            contact_id: 'contact-1',
+            contact_name: 'John Smith',
+            confidence: 0.85,
           },
-        ],
-        total: 1,
-        page: 1,
-        limit: 20,
-        pages: 1,
-      },
-      isLoading: false,
-      error: null,
-    } as any)
+        },
+      ],
+      { total: 1, page: 1, limit: 20, pages: 1 }
+    )
 
     render(<ImportsPage />, { wrapper: createWrapper() })
 
@@ -442,6 +446,7 @@ describe('ImportsPage - Source Filter', () => {
     mockSearchParams = new URLSearchParams()
     mockReplace.mockClear()
     mockInteractionsQueueDefaults()
+    mockMethodSuggestionDefaults()
 
     // Default mock implementations
     vi.mocked(useImportAsContact).mockReturnValue({
@@ -481,17 +486,7 @@ describe('ImportsPage - Source Filter', () => {
       data: undefined,
     } as any)
 
-    vi.mocked(useImportCandidates).mockReturnValue({
-      data: {
-        candidates: [],
-        total: 0,
-        page: 1,
-        limit: 20,
-        pages: 0,
-      },
-      isLoading: false,
-      error: null,
-    } as any)
+    setListData([], { total: 0, page: 1, limit: 20, pages: 0 })
   })
 
   it('displays source filter buttons', () => {
@@ -524,10 +519,8 @@ describe('ImportsPage - Source Filter', () => {
     const googleContactsButton = screen.getByRole('button', { name: 'Google Contacts' })
     await user.click(googleContactsButton)
 
-    // useImportCandidates should be called with source filter
-    expect(useImportCandidates).toHaveBeenCalledWith(
-      expect.objectContaining({ source: 'gcontacts' })
-    )
+    // useSuggestions should be called with the source filter
+    expect(useSuggestions).toHaveBeenCalledWith(expect.objectContaining({ source: 'gcontacts' }))
   })
 
   it('clicking Calendar filter updates selection', async () => {
@@ -537,8 +530,8 @@ describe('ImportsPage - Source Filter', () => {
     const calendarButton = screen.getByRole('button', { name: 'Calendar' })
     await user.click(calendarButton)
 
-    // useImportCandidates should be called with source filter
-    expect(useImportCandidates).toHaveBeenCalledWith(
+    // useSuggestions should be called with the source filter
+    expect(useSuggestions).toHaveBeenCalledWith(
       expect.objectContaining({ source: 'gcal_attendee' })
     )
   })
@@ -550,10 +543,8 @@ describe('ImportsPage - Source Filter', () => {
     const telegramButton = screen.getByRole('button', { name: 'Telegram' })
     await user.click(telegramButton)
 
-    // useImportCandidates should be called with source filter
-    expect(useImportCandidates).toHaveBeenCalledWith(
-      expect.objectContaining({ source: 'telegram' })
-    )
+    // useSuggestions should be called with the source filter
+    expect(useSuggestions).toHaveBeenCalledWith(expect.objectContaining({ source: 'telegram' }))
   })
 
   it('clicking All Sources removes source filter', async () => {
@@ -568,8 +559,8 @@ describe('ImportsPage - Source Filter', () => {
     const allSourcesButton = screen.getByRole('button', { name: 'All Sources' })
     await user.click(allSourcesButton)
 
-    // useImportCandidates should be called without source filter (undefined)
-    const lastCall = vi.mocked(useImportCandidates).mock.calls.pop()
+    // useSuggestions should be called without source filter (undefined)
+    const lastCall = vi.mocked(useSuggestions).mock.calls.pop()
     expect(lastCall?.[0]?.source).toBeUndefined()
   })
 
@@ -581,7 +572,7 @@ describe('ImportsPage - Source Filter', () => {
     await user.click(calendarButton)
 
     // Should reset page to 1 when changing filter
-    expect(useImportCandidates).toHaveBeenCalledWith(expect.objectContaining({ page: 1 }))
+    expect(useSuggestions).toHaveBeenCalledWith(expect.objectContaining({ page: 1 }))
   })
 })
 
@@ -591,6 +582,7 @@ describe('ImportsPage - Telegram @username', () => {
     mockSearchParams = new URLSearchParams()
     mockReplace.mockClear()
     mockInteractionsQueueDefaults()
+    mockMethodSuggestionDefaults()
 
     vi.mocked(useImportAsContact).mockReturnValue({
       mutateAsync: vi.fn(),
@@ -616,26 +608,19 @@ describe('ImportsPage - Telegram @username', () => {
   })
 
   it('renders @username chip for Telegram candidate with a handle', () => {
-    vi.mocked(useImportCandidates).mockReturnValue({
-      data: {
-        candidates: [
-          {
-            id: 'tg-candidate-1',
-            source: 'telegram',
-            display_name: 'Dale Dobeck',
-            emails: [],
-            phones: [],
-            metadata: { username: '@daledobeck' },
-          },
-        ],
-        total: 1,
-        page: 1,
-        limit: 20,
-        pages: 1,
-      },
-      isLoading: false,
-      error: null,
-    } as any)
+    setListData(
+      [
+        {
+          id: 'tg-candidate-1',
+          source: 'telegram',
+          display_name: 'Dale Dobeck',
+          emails: [],
+          phones: [],
+          metadata: { username: '@daledobeck' },
+        },
+      ],
+      { total: 1, page: 1, limit: 20, pages: 1 }
+    )
 
     render(<ImportsPage />, { wrapper: createWrapper() })
 
@@ -649,25 +634,18 @@ describe('ImportsPage - Telegram @username', () => {
   })
 
   it('falls back to @username heading and hides the chip when no names are set', () => {
-    vi.mocked(useImportCandidates).mockReturnValue({
-      data: {
-        candidates: [
-          {
-            id: 'tg-candidate-2',
-            source: 'telegram',
-            emails: [],
-            phones: [],
-            metadata: { username: '@daledobeck' },
-          },
-        ],
-        total: 1,
-        page: 1,
-        limit: 20,
-        pages: 1,
-      },
-      isLoading: false,
-      error: null,
-    } as any)
+    setListData(
+      [
+        {
+          id: 'tg-candidate-2',
+          source: 'telegram',
+          emails: [],
+          phones: [],
+          metadata: { username: '@daledobeck' },
+        },
+      ],
+      { total: 1, page: 1, limit: 20, pages: 1 }
+    )
 
     render(<ImportsPage />, { wrapper: createWrapper() })
 
@@ -728,6 +706,7 @@ describe('ImportsPage - Sub-tabs and name candidates', () => {
     mockSearchParams = new URLSearchParams()
     mockReplace.mockClear()
     mockInteractionsQueueDefaults()
+    mockMethodSuggestionDefaults()
     vi.mocked(useImportAsContact).mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as any)
     vi.mocked(useLinkCandidate).mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as any)
     vi.mocked(useIgnoreCandidate).mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as any)
@@ -737,11 +716,7 @@ describe('ImportsPage - Sub-tabs and name candidates', () => {
       data: { contacts: [], total: 0, page: 1, limit: 500 },
     } as any)
     vi.mocked(useContact).mockReturnValue({ data: undefined } as any)
-    vi.mocked(useImportCandidates).mockReturnValue({
-      data: { candidates: [], total: 0, page: 1, limit: 20, pages: 0 },
-      isLoading: false,
-      error: null,
-    } as any)
+    setListData([], { total: 0, page: 1, limit: 20, pages: 0 })
   })
 
   it('defaults to the People tab and shows the source filter', () => {

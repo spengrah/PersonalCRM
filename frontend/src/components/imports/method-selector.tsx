@@ -23,12 +23,18 @@ interface MethodSelectorProps {
   state: MethodState
   /** Callback when checkbox is toggled */
   onToggle: () => void
-  /** Callback when type is changed (only used for emails, which support subtypes) */
-  onTypeChange: (type: ContactMethodType) => void
+  /** Callback when type is changed (only used for emails, which support
+   * subtypes). Optional — omit it (with lockType) in the method-suggestion
+   * body where the (type,value) is fixed and the type must not be changed. */
+  onTypeChange?: (type: ContactMethodType) => void
   /** Whether the selector is disabled */
   disabled?: boolean
   /** Whether this is an email (vs phone/handle). When false, no type dropdown is shown. */
   isEmail: boolean
+  /** When true, render a static type label even for emails (no dropdown).
+   * Used by the method-suggestion body, where the submitted (type,value)
+   * must match the pending entry exactly and the type cannot be reassigned. */
+  lockType?: boolean
   /** Whether this method is marked as primary */
   isPrimary?: boolean
   /** Callback when primary star is clicked */
@@ -44,6 +50,7 @@ export function MethodSelector({
   onTypeChange,
   disabled = false,
   isEmail,
+  lockType = false,
   isPrimary = false,
   onPrimaryToggle,
 }: MethodSelectorProps) {
@@ -99,11 +106,14 @@ export function MethodSelector({
         <span className="text-sm text-gray-900 truncate block">{value}</span>
       </div>
 
-      {/* Type selector */}
-      {isEmail && selected ? (
+      {/* Type selector — emails get a subtype dropdown UNLESS locked. When
+          lockType is set (method-suggestion body), the type is fixed and
+          rendered as a static label so the submitted (type,value) matches
+          the pending entry. */}
+      {isEmail && selected && !lockType ? (
         <Select
           value={selectedType}
-          onChange={e => onTypeChange(e.target.value as ContactMethodType)}
+          onChange={e => onTypeChange?.(e.target.value as ContactMethodType)}
           disabled={disabled}
           className="w-32 text-sm"
           aria-label="Email type"

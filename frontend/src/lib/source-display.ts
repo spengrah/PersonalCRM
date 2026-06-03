@@ -1,4 +1,4 @@
-import { Users, Calendar, Send, Cloud, MessageCircle, HelpCircle } from 'lucide-react'
+import { Users, Calendar, Send, Cloud, MessageCircle, Mail, HelpCircle } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
 export interface SourceDisplayInfo {
@@ -15,6 +15,9 @@ const SOURCE_DISPLAY_MAP: Record<string, SourceDisplayInfo> = {
   // anarlog_title name-candidate rows live behind the dedicated People-tab
   // name-candidates section and never carry this badge.
   anarlog_humans: { label: 'Anarlog', icon: MessageCircle },
+  // gmail_correspondence is a link-only source (the link-only candidate and
+  // the method-suggestion card both render this label).
+  gmail_correspondence: { label: 'Email correspondence', icon: Mail },
 }
 
 /**

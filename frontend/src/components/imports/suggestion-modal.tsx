@@ -18,8 +18,15 @@ import {
 import { detectMethodConflicts, areNamesSimilar } from '@/lib/method-conflict-detection'
 import { getCandidateDisplayName } from '@/lib/candidate-display'
 import { getSourceDisplay } from '@/lib/source-display'
-import type { ImportCandidate, SelectedMethod, MethodComparison } from '@/types/import'
+import { sourceAllowsImport } from '@/lib/candidate-actions'
+import type {
+  ImportCandidate,
+  MethodSuggestion,
+  SelectedMethod,
+  MethodComparison,
+} from '@/types/import'
 import type { ContactMethodType } from '@/types/contact'
+import { MethodSuggestionResolver } from './method-suggestion-resolver'
 
 // Trusted domains for photo URLs
 const TRUSTED_PHOTO_DOMAINS = ['googleusercontent.com', 'google.com', 'gstatic.com']
@@ -44,7 +51,51 @@ function isPhotoUrlTrusted(url: string): boolean {
   }
 }
 
-interface ImportLinkModalProps {
+/** The item the SuggestionModal shell is resolving: a contact candidate
+ * (import/link/ignore, with candidate-array navigation) or a method
+ * suggestion (enrich-locked confirm/dismiss). */
+export type SuggestionModalItem =
+  | {
+      kind: 'contact'
+      candidates: ImportCandidate[]
+      initialIndex: number
+      initialMode?: 'import' | 'link'
+    }
+  | { kind: 'method'; suggestion: MethodSuggestion }
+
+interface SuggestionModalProps {
+  item: SuggestionModalItem
+  onClose: () => void
+  onSuccess: (message: string) => void
+  onError: (message: string) => void
+}
+
+/** Thin shell: dispatches to the contact-candidate body or the
+ * method-suggestion body based on the item kind. */
+export function SuggestionModal({ item, onClose, onSuccess, onError }: SuggestionModalProps) {
+  if (item.kind === 'method') {
+    return (
+      <MethodSuggestionResolver
+        suggestion={item.suggestion}
+        onClose={onClose}
+        onSuccess={onSuccess}
+        onError={onError}
+      />
+    )
+  }
+  return (
+    <ContactCandidateResolver
+      candidates={item.candidates}
+      initialIndex={item.initialIndex}
+      initialMode={item.initialMode}
+      onClose={onClose}
+      onSuccess={onSuccess}
+      onError={onError}
+    />
+  )
+}
+
+interface ContactCandidateResolverProps {
   /** List of candidates to process */
   candidates: ImportCandidate[]
   /** Initial index in the candidates array */
@@ -68,14 +119,14 @@ interface MethodSelection {
   isEmail: boolean
 }
 
-export function ImportLinkModal({
+function ContactCandidateResolver({
   candidates: initialCandidates,
   initialIndex,
   initialMode = 'import',
   onClose,
   onSuccess,
   onError,
-}: ImportLinkModalProps) {
+}: ContactCandidateResolverProps) {
   const [currentIndex, setCurrentIndex] = useState(initialIndex)
   const [mode, setMode] = useState<ModalMode>(initialMode)
   const [selectedContactId, setSelectedContactId] = useState<string | undefined>()
@@ -106,6 +157,18 @@ export function ImportLinkModal({
   const candidate = candidates[currentIndex]
   const displayName = candidate ? getCandidateDisplayName(candidate) : ''
   const sourceInfo = candidate ? getSourceDisplay(candidate.source) : null
+  // Link-only sources (e.g. gmail_correspondence) cannot create a new
+  // contact. Derived from the source via the shared policy mirror — NOT a
+  // response field, since the 1000-candidate refetch above doesn't carry
+  // allowed_actions. The server is the authority/enforcer.
+  const linkOnly = candidate ? !sourceAllowsImport(candidate.source) : false
+
+  // Force link mode for a link-only source (Import is absent).
+  useEffect(() => {
+    if (linkOnly && mode !== 'link') {
+      setMode('link')
+    }
+  }, [linkOnly, mode])
 
   // Fetch contacts for link mode selector
   const { data: contactsData } = useContacts({ limit: 500 })
@@ -434,12 +497,21 @@ export function ImportLinkModal({
         ? editedName.trim()
         : undefined
 
+    // §4 residual: send methods_curated ONLY when the candidate actually
+    // offered methods to curate (the modal rendered the method-selection
+    // UI). A deselect-all then link sends methods_curated:true with an
+    // empty selected_methods, so the backend classifies the link as
+    // `imported` (not `matched`). A zero-method candidate offered no
+    // curation choice → omit the flag → stays `matched`.
+    const offeredMethodCuration = methodSelections.size > 0
+
     try {
       await linkMutation.mutateAsync({
         id: candidate.id,
         request: {
           crm_contact_id: selectedContactId,
-          selected_methods: selectedMethods.length > 0 ? selectedMethods : undefined,
+          selected_methods: offeredMethodCuration ? selectedMethods : undefined,
+          methods_curated: offeredMethodCuration || undefined,
           conflict_resolutions: Object.keys(resolutions).length > 0 ? resolutions : undefined,
           cadence,
           name: nameToSend,
@@ -677,37 +749,40 @@ export function ImportLinkModal({
           </div>
         </div>
 
-        {/* Mode toggle */}
-        <div className="px-6 py-3 border-b">
-          <div className="flex rounded-lg border border-gray-200 p-1 bg-gray-50">
-            <button
-              onClick={() => setMode('import')}
-              disabled={isLoading}
-              className={clsx(
-                'flex-1 px-4 py-2 text-sm font-medium rounded-md transition-colors flex items-center justify-center gap-2',
-                mode === 'import'
-                  ? 'bg-white text-gray-900 shadow-sm'
-                  : 'text-gray-600 hover:text-gray-900'
-              )}
-            >
-              <UserPlus className="w-4 h-4" />
-              Import as New
-            </button>
-            <button
-              onClick={() => setMode('link')}
-              disabled={isLoading}
-              className={clsx(
-                'flex-1 px-4 py-2 text-sm font-medium rounded-md transition-colors flex items-center justify-center gap-2',
-                mode === 'link'
-                  ? 'bg-white text-gray-900 shadow-sm'
-                  : 'text-gray-600 hover:text-gray-900'
-              )}
-            >
-              <Link2 className="w-4 h-4" />
-              Link to Existing
-            </button>
+        {/* Mode toggle — hidden for link-only sources (Import is absent;
+            the modal is locked to link mode). */}
+        {!linkOnly && (
+          <div className="px-6 py-3 border-b">
+            <div className="flex rounded-lg border border-gray-200 p-1 bg-gray-50">
+              <button
+                onClick={() => setMode('import')}
+                disabled={isLoading}
+                className={clsx(
+                  'flex-1 px-4 py-2 text-sm font-medium rounded-md transition-colors flex items-center justify-center gap-2',
+                  mode === 'import'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900'
+                )}
+              >
+                <UserPlus className="w-4 h-4" />
+                Import as New
+              </button>
+              <button
+                onClick={() => setMode('link')}
+                disabled={isLoading}
+                className={clsx(
+                  'flex-1 px-4 py-2 text-sm font-medium rounded-md transition-colors flex items-center justify-center gap-2',
+                  mode === 'link'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900'
+                )}
+              >
+                <Link2 className="w-4 h-4" />
+                Link to Existing
+              </button>
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Link mode: Contact selector */}
         {mode === 'link' && (
