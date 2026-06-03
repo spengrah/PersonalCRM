@@ -611,7 +611,7 @@ func TestRunRederiveCorrespondenceNamesFailedExitsNonZero(t *testing.T) {
 	deps, stdout, _, _, _, _ := newTestDeps()
 	log := &[]string{}
 	// Partial failure: some rows failed, but successfully re-derived rows must
-	// still get the full-range producer pass (P2).
+	// still get the full-range producer pass.
 	deps.rederive = &fakeRederiveRunner{
 		result: google.CorrespondenceRederiveResult{Scanned: 5, Rederived: 3, Failed: 2},
 		log:    log,

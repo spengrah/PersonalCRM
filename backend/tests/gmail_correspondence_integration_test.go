@@ -1,4 +1,4 @@
-// Integration coverage for the gmail_correspondence enrichment source (C).
+// Integration coverage for the gmail_correspondence enrichment source.
 // Drives the REAL producer, repos, ImportMatchService, EnrichmentService (with
 // a live event bus + River client), and the re-derivation runner (with a fake
 // Gmail fetcher via the provider's exported test seam) against the shared test
@@ -10,7 +10,8 @@
 //     KindContactMethodsAdded rematch (the inherited backfill hand-off — async
 //     scan completion is covered by gmail_rematch_integration_test.go, not here);
 //   - sticky-ignore is preserved across producer re-runs (no clobber);
-//   - the import endpoint returns 403 for this link-only source (B's teeth);
+//   - the import endpoint returns 403 for this link-only source (the shared
+//     import-suggestions surface's server-side link-only enforcement);
 //   - the one-time re-derivation re-fetches name-less rows, ADDS the name keys
 //     while preserving all existing content + provenance (the additive-merge
 //     invariant), and the producer then surfaces the previously-hidden backlog;
@@ -48,7 +49,7 @@ import (
 	gmailapi "google.golang.org/api/gmail/v1"
 )
 
-// correspondenceEnv bundles a real DB + the repos/services the C tests drive.
+// correspondenceEnv bundles a real DB + the repos/services these tests drive.
 type correspondenceEnv struct {
 	ctx          context.Context
 	database     *db.Database

@@ -467,7 +467,7 @@ func runReconcileAddressBookMethods(ctx context.Context, deps adminDeps) error {
 const correspondenceBackfillFloor = "2026-01-01"
 
 // runRederiveCorrespondenceNames runs the one-time historical catchup in two
-// ordered phases over the full range (2b.4): (1) re-fetch + additively backfill
+// ordered phases over the full range: (1) re-fetch + additively backfill
 // participant display names, then (2) a full-range gmail_correspondence
 // producer pass so the now-named backlog surfaces as candidates. Phase 2 runs
 // even when phase 1 had per-row failures — successfully re-derived older rows
@@ -598,8 +598,8 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 	// LAZY: build the correspondence re-derivation stack ONLY for
 	// --rederive-correspondence-names. google.NewOAuthService errors when
 	// Google creds are absent; building it unconditionally would break every
-	// other subcommand on a Google-less host (the P1 fix). The Gmail provider
-	// is constructed with the real event bus + pool, but the re-derive seams
+	// other subcommand on a Google-less host. The Gmail provider is
+	// constructed with the real event bus + pool, but the re-derive seams
 	// (RefetchParticipantNames, MeSet) and the producer (Run) never publish, so
 	// no email events are emitted by this one-shot binary.
 	if opts.rederiveCorrespondence {

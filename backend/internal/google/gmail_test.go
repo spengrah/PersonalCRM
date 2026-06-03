@@ -684,6 +684,14 @@ func TestProcessMessage_MetadataNoDisplayNameStoresEmpty(t *testing.T) {
 	// empty name as "no display name → skip at the ≥2-token gate".
 	require.Equal(t, []string{""}, meta.ToNames)
 	require.Len(t, meta.ToNames, len(meta.To))
+
+	// The from_name key is ALWAYS written (even empty) so a bare-From row
+	// ingested after capture is not mistaken for a pre-capture row by the
+	// re-derivation predicate (NOT ? 'from_name').
+	var rawMeta map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(rows[0].Metadata, &rawMeta))
+	_, present := rawMeta["from_name"]
+	require.True(t, present, "from_name key must be present even when empty")
 }
 
 func TestParseSingleAddress_Name(t *testing.T) {

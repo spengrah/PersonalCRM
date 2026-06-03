@@ -2,11 +2,12 @@ import { test, expect } from './fixtures'
 import { createTestAPI, TestAPI } from './helpers/test-api'
 import { navigateModalToCandidate } from './helpers/imports-helpers'
 
-// gmail_correspondence source (C): a link-only candidate carries an evidence
-// badge (co-occurring contact + message count) and links to an existing
-// contact, adding the email as a contact method. Data is seeded per-worker for
-// parallel isolation. The link-only Import-hidden policy is B's; this spec
-// covers C's net-new evidence badge + the end-to-end link.
+// gmail_correspondence source: a link-only candidate carries an evidence badge
+// (co-occurring contact + message count) and links to an existing contact,
+// adding the email as a contact method. Data is seeded per-worker for parallel
+// isolation. The link-only Import-hidden policy is enforced by the shared
+// import-suggestions surface; this spec covers the evidence badge + the
+// end-to-end link.
 test.describe('Imports gmail_correspondence evidence @area:imports', () => {
   let testApi: TestAPI
 
@@ -47,7 +48,7 @@ test.describe('Imports gmail_correspondence evidence @area:imports', () => {
       .locator('div.border', { has: page.getByRole('heading', { name: cardName }) })
       .first()
 
-    // C's net-new UI: the evidence badge (co-occurring contact + message count).
+    // The evidence badge: co-occurring contact + message count.
     await expect(card.getByText(`Seen with ${testApi.prefix}-Correspondence Person`)).toBeVisible()
     await expect(card.getByText('4 messages')).toBeVisible()
 

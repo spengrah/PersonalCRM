@@ -163,11 +163,19 @@ func (s *GmailCorrespondenceSuggester) Run(ctx context.Context, since time.Time)
 	aggregates := s.aggregate(rows, known, own)
 
 	upserted := 0
+	failed := 0
+	var firstErr error
 	for _, agg := range aggregates {
 		ok, err := s.evaluateAndUpsert(ctx, agg)
 		if err != nil {
-			// Continue-on-error: one bad address must not abort the whole scan.
-			// River retries the periodic job on the next tick anyway.
+			// Continue-on-error so one bad address does not abort the whole
+			// scan, but remember the failure: a swallowed DB error would let the
+			// worker / catchup report success while silently emitting nothing
+			// (e.g. a DB outage), so Run surfaces an aggregated error at the end.
+			failed++
+			if firstErr == nil {
+				firstErr = err
+			}
 			logger.Warn().
 				Err(err).
 				Str("address", hashIdentifier(agg.address)).
@@ -184,6 +192,9 @@ func (s *GmailCorrespondenceSuggester) Run(ctx context.Context, since time.Time)
 			Int("candidates_upserted", upserted).
 			Int("addresses_scanned", len(aggregates)).
 			Msg("gmail_correspondence: scan upserted candidates")
+	}
+	if failed > 0 {
+		return upserted, fmt.Errorf("gmail_correspondence scan: %d of %d addresses failed (first: %w)", failed, len(aggregates), firstErr)
 	}
 	return upserted, nil
 }

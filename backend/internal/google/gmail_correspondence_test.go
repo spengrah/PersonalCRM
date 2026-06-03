@@ -32,9 +32,14 @@ type fakeCorrespondenceContacts struct {
 	// matches keyed by exact search name → matches returned (already sorted).
 	matches map[string][]repository.ContactMatch
 	names   map[uuid.UUID]string
+	// lastThreshold records the threshold the producer passed on the most
+	// recent FindSimilarContacts call so a test can pin the floor-minus-epsilon
+	// SQL workaround.
+	lastThreshold float64
 }
 
-func (f *fakeCorrespondenceContacts) FindSimilarContacts(_ context.Context, name string, _ float64, _ int32) ([]repository.ContactMatch, error) {
+func (f *fakeCorrespondenceContacts) FindSimilarContacts(_ context.Context, name string, threshold float64, _ int32) ([]repository.ContactMatch, error) {
+	f.lastThreshold = threshold
 	return f.matches[name], nil
 }
 
@@ -150,6 +155,13 @@ func TestCorrespondence_GateExactBoundary(t *testing.T) {
 	n, err := s.Run(context.Background(), accelerated.GetCurrentTime().Add(-time.Hour))
 	require.NoError(t, err)
 	require.Equal(t, 1, n, "exact-0.60 similarity must qualify")
+	// Pin the floor-minus-epsilon SQL workaround: the producer must query the
+	// strict-`>` SQL with a threshold strictly below 0.60 so an exact-0.60 row
+	// is returned (then the Go-side `>=` re-check qualifies it). A regression to
+	// passing 0.60 would silently drop exact-0.60 matches.
+	require.Less(t, contacts.lastThreshold, correspondenceSimThreshold,
+		"FindSimilarContacts must be called with a floor strictly below 0.60")
+	require.Equal(t, correspondenceSimFloor, contacts.lastThreshold)
 }
 
 func TestCorrespondence_GateRejectsBelowThreshold(t *testing.T) {

@@ -142,6 +142,14 @@ type attachmentMeta struct {
 // correspondence-enrichment producer pairs each address with its display name
 // to trigram-match unknown correspondents against CRM contacts. A header
 // without a display part stores the empty string at that index.
+//
+// FromName deliberately has NO omitempty: it is always written (even as "")
+// so every row ingested after display-name capture shipped carries the
+// from_name key. The historical re-derivation selects rows with NO from_name
+// key; if a bare-From row omitted the key it would look "pre-capture" forever
+// and be re-fetched on every catchup run. Always writing the key marks a row
+// as "names already captured at ingest". (ToNames/CcNames/BccNames keep
+// omitempty — they are not part of the re-derivation predicate.)
 type emailMetadata struct {
 	HTML        string           `json:"html,omitempty"`
 	Attachments []attachmentMeta `json:"attachments,omitempty"`
@@ -150,7 +158,7 @@ type emailMetadata struct {
 	To          []string         `json:"to,omitempty"`
 	Cc          []string         `json:"cc,omitempty"`
 	Bcc         []string         `json:"bcc,omitempty"`
-	FromName    string           `json:"from_name,omitempty"`
+	FromName    string           `json:"from_name"`
 	ToNames     []string         `json:"to_names,omitempty"`
 	CcNames     []string         `json:"cc_names,omitempty"`
 	BccNames    []string         `json:"bcc_names,omitempty"`
