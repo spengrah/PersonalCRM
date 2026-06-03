@@ -59,7 +59,8 @@ func setupLinkCuratedEnv(t *testing.T) *linkCuratedEnv {
 	// nil bus/registry → enrichment skips publish (no rematch wiring needed
 	// for the status-classification assertion).
 	enrichSvc := service.NewEnrichmentService(database, contactRepo, methodRepo, enrichmentRepo, nil, nil)
-	handler := handlers.NewImportHandler(externalRepo, identitySvc, contactSvc, matchSvc, enrichSvc)
+	suggestionSvc := service.NewSuggestionService(externalRepo, contactRepo, methodRepo, enrichSvc, matchSvc, database)
+	handler := handlers.NewImportHandler(externalRepo, identitySvc, contactSvc, matchSvc, enrichSvc, suggestionSvc)
 
 	return &linkCuratedEnv{
 		database:     database,

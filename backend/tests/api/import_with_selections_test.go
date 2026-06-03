@@ -56,9 +56,10 @@ func setupImportTestRouter() (*gin.Engine, *repository.ExternalContactRepository
 	matchService := service.NewImportMatchService(contactRepo)
 	enrichmentService := service.NewEnrichmentService(database, contactRepo, contactMethodRepo, enrichmentRepo, nil, nil)
 	enrichmentService.SetCadenceUpdater(cadenceUpdater)
+	suggestionService := service.NewSuggestionService(externalRepo, contactRepo, contactMethodRepo, enrichmentService, matchService, database)
 
 	// Create handler
-	importHandler := handlers.NewImportHandler(externalRepo, nil, contactService, matchService, enrichmentService)
+	importHandler := handlers.NewImportHandler(externalRepo, nil, contactService, matchService, enrichmentService, suggestionService)
 
 	router := gin.New()
 	router.Use(api.RequestIDMiddleware())
