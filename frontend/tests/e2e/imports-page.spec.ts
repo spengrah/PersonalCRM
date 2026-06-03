@@ -58,12 +58,19 @@ test.describe('Imports Page @area:imports', () => {
         // gcontacts is shared across parallel workers, so a concurrent test
         // may seed a candidate between this test's pre-flight and the render
         // (TOCTOU). The empty state shows only when the live list is empty;
-        // otherwise the candidate list renders. Accept either valid terminal
-        // state so the assertion is not a flaky gate, while still proving the
-        // empty-state copy when gcontacts is genuinely empty.
+        // otherwise the candidate list renders. Poll for either valid
+        // terminal state so the assertion is not a flaky gate, while still
+        // proving the empty-state copy when gcontacts is genuinely empty.
         const emptyState = page.getByText(/No import candidates/i)
-        const candidateList = page.locator('[class*="border-gray-200"]')
-        await expect(emptyState.or(candidateList.first())).toBeVisible({ timeout: 10000 })
+        const candidateList = page.locator('[class*="border-gray-200"]').first()
+        await expect
+          .poll(
+            async () =>
+              (await emptyState.isVisible().catch(() => false)) ||
+              (await candidateList.isVisible().catch(() => false)),
+            { timeout: 10000 }
+          )
+          .toBe(true)
         if (await emptyState.isVisible().catch(() => false)) {
           await expect(page.getByText(/All contacts from Google have been imported/i)).toBeVisible()
         }
