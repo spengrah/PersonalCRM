@@ -27,6 +27,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/api/gmail/v1"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
 )
 
@@ -469,6 +470,59 @@ func (p *GmailSyncProvider) ScanIdentifier(
 		return matched, fmt.Errorf("scan identifier: %w", err)
 	}
 	return matched, nil
+}
+
+// RefetchParticipantNames re-fetches one already-ingested message by its
+// per-mailbox Gmail id and re-parses the From/To/Cc/Bcc display names. It is
+// the re-fetch seam for the one-time historical display-name re-derivation
+// (crm-admin --rederive-correspondence-names): the bare addresses stored at
+// first ingest cannot recover the display names, so the runner must re-fetch
+// the original headers. Reuses the existing fetcher + name-returning parsers;
+// tests inject a fake fetcher via SetFetcherFactoryForTest (no OAuth).
+//
+// Error classification (so the runner can distinguish a since-deleted message
+// from a retryable failure): a Gmail 404 → errCorrespondenceUnavailable
+// (PERMANENT — count SkippedUnavailable, never a non-zero exit); a 429/5xx →
+// errCorrespondenceTransient (retryable). Other errors propagate as-is and the
+// runner counts them Failed.
+func (p *GmailSyncProvider) RefetchParticipantNames(ctx context.Context, accountID, gmailMessageID string) (repository.ParticipantNames, error) {
+	fetcher, err := p.newFetcher(ctx, accountID)
+	if err != nil {
+		return repository.ParticipantNames{}, fmt.Errorf("build gmail fetcher: %w", err)
+	}
+	msg, err := fetcher.GetMessage(ctx, gmailMessageID)
+	if err != nil {
+		return repository.ParticipantNames{}, classifyRefetchError(err)
+	}
+	headers := newHeaderLookup(msg.Payload)
+	_, _, fromName := parseSingleAddress(headers.first("From"))
+	_, _, toNames := parseAddressList(headers.first("To"))
+	_, _, ccNames := parseAddressList(headers.first("Cc"))
+	_, _, bccNames := parseAddressList(headers.first("Bcc"))
+	return repository.ParticipantNames{
+		FromName: fromName,
+		ToNames:  toNames,
+		CcNames:  ccNames,
+		BccNames: bccNames,
+	}, nil
+}
+
+// classifyRefetchError maps a GetMessage error to a permanent
+// (errCorrespondenceUnavailable) or transient (errCorrespondenceTransient)
+// sentinel the re-derivation runner branches on. A googleapi 404 is permanent
+// (the message is gone upstream); 429 / 5xx are transient (backoff + retry).
+// Anything else is returned wrapped (the runner counts it Failed).
+func classifyRefetchError(err error) error {
+	var apiErr *googleapi.Error
+	if errors.As(err, &apiErr) {
+		switch {
+		case apiErr.Code == 404:
+			return fmt.Errorf("%w: %v", errCorrespondenceUnavailable, err)
+		case apiErr.Code == 429 || (apiErr.Code >= 500 && apiErr.Code < 600):
+			return fmt.Errorf("%w: %v", errCorrespondenceTransient, err)
+		}
+	}
+	return fmt.Errorf("refetch message: %w", err)
 }
 
 // MeSet builds the "me" set (the normalized address of every connected
