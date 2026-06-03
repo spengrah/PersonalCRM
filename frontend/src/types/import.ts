@@ -16,6 +16,10 @@ export interface ImportCandidateMetadata {
   discovered_at?: string
   // Telegram peer metadata (source: 'telegram'). Stored with leading '@'.
   username?: string
+  // Gmail correspondence evidence (source: 'gmail_correspondence').
+  display_names_seen?: string[]
+  co_occurring_contact?: { id: string; name?: string }
+  message_count?: number
 }
 
 export interface ImportCandidate {
