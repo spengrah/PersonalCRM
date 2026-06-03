@@ -83,12 +83,16 @@ describe('query-invalidation', () => {
     })
 
     describe('import events', () => {
-      it('invalidates import and contact lists on import:imported', () => {
+      it('invalidates import, suggestions, and contact lists on import:imported', () => {
         invalidateFor('import:imported')
 
-        expect(mockInvalidateQueries).toHaveBeenCalledTimes(2)
+        expect(mockInvalidateQueries).toHaveBeenCalledTimes(3)
         expect(mockInvalidateQueries).toHaveBeenCalledWith({
           queryKey: importKeys.lists(),
+        })
+        // The suggestions surface composes the same candidate list.
+        expect(mockInvalidateQueries).toHaveBeenCalledWith({
+          queryKey: importKeys.suggestionsLists(),
         })
         // Cross-domain: importing creates a new contact
         expect(mockInvalidateQueries).toHaveBeenCalledWith({
@@ -96,12 +100,15 @@ describe('query-invalidation', () => {
         })
       })
 
-      it('invalidates import and contact lists on import:linked', () => {
+      it('invalidates import, suggestions, and contact lists on import:linked', () => {
         invalidateFor('import:linked')
 
-        expect(mockInvalidateQueries).toHaveBeenCalledTimes(2)
+        expect(mockInvalidateQueries).toHaveBeenCalledTimes(3)
         expect(mockInvalidateQueries).toHaveBeenCalledWith({
           queryKey: importKeys.lists(),
+        })
+        expect(mockInvalidateQueries).toHaveBeenCalledWith({
+          queryKey: importKeys.suggestionsLists(),
         })
         // Cross-domain: linking enriches an existing contact
         expect(mockInvalidateQueries).toHaveBeenCalledWith({
@@ -109,24 +116,50 @@ describe('query-invalidation', () => {
         })
       })
 
-      it('invalidates only import lists on import:ignored', () => {
+      it('invalidates import and suggestions lists on import:ignored', () => {
         invalidateFor('import:ignored')
-
-        expect(mockInvalidateQueries).toHaveBeenCalledTimes(1)
-        expect(mockInvalidateQueries).toHaveBeenCalledWith({
-          queryKey: importKeys.lists(),
-        })
-      })
-
-      it('invalidates import lists and sync states on import:synced', () => {
-        invalidateFor('import:synced')
 
         expect(mockInvalidateQueries).toHaveBeenCalledTimes(2)
         expect(mockInvalidateQueries).toHaveBeenCalledWith({
           queryKey: importKeys.lists(),
         })
         expect(mockInvalidateQueries).toHaveBeenCalledWith({
+          queryKey: importKeys.suggestionsLists(),
+        })
+      })
+
+      it('invalidates import lists, suggestions, and sync states on import:synced', () => {
+        invalidateFor('import:synced')
+
+        expect(mockInvalidateQueries).toHaveBeenCalledTimes(3)
+        expect(mockInvalidateQueries).toHaveBeenCalledWith({
+          queryKey: importKeys.lists(),
+        })
+        expect(mockInvalidateQueries).toHaveBeenCalledWith({
+          queryKey: importKeys.suggestionsLists(),
+        })
+        expect(mockInvalidateQueries).toHaveBeenCalledWith({
           queryKey: syncKeys.states(),
+        })
+      })
+
+      it('invalidates suggestions, import, and contact on method-suggestion:resolved', () => {
+        invalidateFor('method-suggestion:resolved', 'contact-1')
+
+        expect(mockInvalidateQueries).toHaveBeenCalledWith({
+          queryKey: importKeys.suggestionsLists(),
+        })
+        expect(mockInvalidateQueries).toHaveBeenCalledWith({
+          queryKey: contactKeys.detail('contact-1'),
+        })
+      })
+
+      it('invalidates only suggestions on method-suggestion:dismissed', () => {
+        invalidateFor('method-suggestion:dismissed')
+
+        expect(mockInvalidateQueries).toHaveBeenCalledTimes(1)
+        expect(mockInvalidateQueries).toHaveBeenCalledWith({
+          queryKey: importKeys.suggestionsLists(),
         })
       })
     })
@@ -144,6 +177,8 @@ describe('query-invalidation', () => {
         'import:linked',
         'import:ignored',
         'import:synced',
+        'method-suggestion:resolved',
+        'method-suggestion:dismissed',
       ]
 
       // This test verifies the type definitions are correct

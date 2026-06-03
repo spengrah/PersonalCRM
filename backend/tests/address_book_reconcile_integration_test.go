@@ -25,6 +25,8 @@ type abReconcileEnv struct {
 	externalRepo *repository.ExternalContactRepository
 	eventRepo    *repository.EventRepository
 	reconcile    *service.AddressBookReconcileService
+	enrich       *service.EnrichmentService
+	matchSvc     *service.ImportMatchService
 }
 
 // setupABReconcileEnv wires a real reconcile service with a live event
@@ -64,6 +66,7 @@ func setupABReconcileEnv(t *testing.T) *abReconcileEnv {
 
 	enrichmentSvc := service.NewEnrichmentService(database, contactRepo, methodRepo, enrichmentRepo, bus, rematchSvc)
 	reconcile := service.NewAddressBookReconcileService(enrichmentSvc, contactRepo, methodRepo, externalRepo)
+	matchSvc := service.NewImportMatchService(contactRepo)
 
 	return &abReconcileEnv{
 		database:     database,
@@ -72,6 +75,8 @@ func setupABReconcileEnv(t *testing.T) *abReconcileEnv {
 		externalRepo: externalRepo,
 		eventRepo:    eventRepo,
 		reconcile:    reconcile,
+		enrich:       enrichmentSvc,
+		matchSvc:     matchSvc,
 	}
 }
 

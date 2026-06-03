@@ -30,17 +30,17 @@ test.describe('Imports People tab — Anarlog source @area:imports', () => {
       },
     ])
 
-    const candidatesResponse = page.waitForResponse(
+    const suggestionsResponse = page.waitForResponse(
       res =>
         res.request().method() === 'GET' &&
-        res.url().includes('/api/v1/imports/candidates') &&
+        res.url().includes('/api/v1/imports/suggestions') &&
         res.url().includes('source=anarlog_humans')
     )
 
     await page.goto('/imports')
     await page.waitForLoadState('domcontentloaded')
     await page.getByRole('button', { name: 'Anarlog', exact: true }).click()
-    await candidatesResponse
+    await suggestionsResponse
 
     // The seeded candidate card is visible (display name is prefixed by the
     // seed route).

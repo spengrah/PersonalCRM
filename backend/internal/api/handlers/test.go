@@ -60,7 +60,7 @@ type SeedExternalContactInput struct {
 	DisplayName  string         `json:"display_name,omitempty" validate:"omitempty,max=255"`
 	FirstName    string         `json:"first_name,omitempty" validate:"omitempty,max=255"`
 	LastName     string         `json:"last_name,omitempty" validate:"omitempty,max=255"`
-	Source       string         `json:"source,omitempty" validate:"omitempty,oneof=test telegram gcontacts gcal_attendee icloud_contacts anarlog_humans anarlog_title"`
+	Source       string         `json:"source,omitempty" validate:"omitempty,oneof=test telegram gcontacts gcal_attendee icloud_contacts anarlog_humans anarlog_title gmail_correspondence"`
 	Emails       []string       `json:"emails,omitempty"`
 	Phones       []string       `json:"phones,omitempty"`
 	Organization string         `json:"organization,omitempty"`
@@ -200,6 +200,152 @@ func (h *TestHandler) SeedExternalContacts(c *gin.Context) {
 		Created: len(ids),
 		IDs:     ids,
 	}, nil)
+}
+
+// SeedMethodSuggestionMethodInput is one pending/dismissed (type,value)
+// method to seed onto an address-book row.
+type SeedMethodSuggestionMethodInput struct {
+	Type  string `json:"type" validate:"required,oneof=email phone telegram discord twitter signal gchat whatsapp"`
+	Value string `json:"value" validate:"required,max=255"`
+}
+
+// SeedMethodSuggestionsRequest seeds a linked `imported` address-book row
+// carrying pending_method_suggestions (the method-suggestion card), plus
+// the CRM contact it links to. The existing SeedExternalContacts helper
+// cannot link a row or set the JSONB columns, so this dedicated test
+// endpoint exists for the suggestions E2E. All writes go through repository
+// methods + test-only sqlc setters (no raw SQL).
+type SeedMethodSuggestionsRequest struct {
+	Prefix string `json:"prefix" validate:"required,min=1,max=50"`
+	// ContactName is the linked contact's name (prefix is prepended for
+	// cleanup). The seeded contact carries no methods, so the pending
+	// suggestions are not pre-applied.
+	ContactName string `json:"contact_name" validate:"required,min=1,max=255"`
+	// Source must be an address-book source (the suggestion surface is
+	// v1-scoped to these).
+	Source    string                            `json:"source,omitempty" validate:"omitempty,oneof=gcontacts icloud_contacts"`
+	Pending   []SeedMethodSuggestionMethodInput `json:"pending" validate:"required,min=1,max=20,dive"`
+	Dismissed []SeedMethodSuggestionMethodInput `json:"dismissed,omitempty" validate:"omitempty,max=20,dive"`
+}
+
+// SeedMethodSuggestionsResponse echoes the seeded ids for assertions.
+type SeedMethodSuggestionsResponse struct {
+	ExternalContactID string `json:"external_contact_id"`
+	ContactID         string `json:"contact_id"`
+}
+
+// SeedMethodSuggestions creates a linked `imported` address-book row with
+// pending (and optional dismissed) method suggestions.
+// @Summary Seed method suggestions for testing
+// @Description Create a linked imported address-book row with pending_method_suggestions for e2e
+// @Tags test
+// @Accept json
+// @Produce json
+// @Param body body SeedMethodSuggestionsRequest true "Seed request"
+// @Success 201 {object} api.APIResponse{data=SeedMethodSuggestionsResponse}
+// @Failure 400 {object} api.APIResponse{error=api.APIError}
+// @Failure 500 {object} api.APIResponse{error=api.APIError}
+// @Router /test/seed/method-suggestions [post]
+func (h *TestHandler) SeedMethodSuggestions(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	var req SeedMethodSuggestionsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Invalid request body", err.Error())
+		return
+	}
+	if err := h.validator.Struct(req); err != nil {
+		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Validation failed", err.Error())
+		return
+	}
+
+	source := req.Source
+	if source == "" {
+		source = "gcontacts"
+	}
+
+	now := accelerated.GetCurrentTime()
+
+	// 1. Create the CRM contact (prefixed name for cleanup; no methods so
+	//    the pending suggestions are not pre-applied).
+	fullName := req.Prefix + "-" + req.ContactName
+	contact, _, err := h.contactSvc.CreateContact(ctx, repository.CreateContactRequest{
+		FullName:      fullName,
+		LastContacted: &now,
+	}, nil)
+	if err != nil {
+		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to create contact", err.Error())
+		return
+	}
+
+	// 2. Upsert an address-book external_contact row carrying the pending
+	//    method values as its emails/phones (so they are appliable), then
+	//    link it as `imported`.
+	emails := make([]repository.EmailEntry, 0, len(req.Pending))
+	phones := make([]repository.PhoneEntry, 0, len(req.Pending))
+	for _, m := range req.Pending {
+		switch m.Type {
+		case "email":
+			emails = append(emails, repository.EmailEntry{Value: m.Value})
+		case "phone":
+			phones = append(phones, repository.PhoneEntry{Value: m.Value})
+		}
+	}
+
+	displayName := req.Prefix + "-" + req.ContactName
+	external, err := h.externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+		Source:      source,
+		SourceID:    fmt.Sprintf("%s-method-suggestion", req.Prefix),
+		DisplayName: &displayName,
+		Emails:      emails,
+		Phones:      phones,
+		SyncedAt:    &now,
+	})
+	if err != nil {
+		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to create external contact", err.Error())
+		return
+	}
+
+	if _, err := h.externalRepo.UpdateMatch(ctx, external.ID, &contact.ID, repository.MatchStatusImported); err != nil {
+		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to link external contact", err.Error())
+		return
+	}
+
+	// 3. Set pending_method_suggestions (normalized values, mirroring the
+	//    reconcile path's storage).
+	pending := normalizeSeedSuggestions(req.Pending)
+	if _, err := h.externalRepo.SetMethodSuggestions(ctx, external.ID, pending); err != nil {
+		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to set pending suggestions", err.Error())
+		return
+	}
+
+	// 4. Optionally pre-seed dismissed_method_suggestions.
+	if len(req.Dismissed) > 0 {
+		dismissed := normalizeSeedSuggestions(req.Dismissed)
+		if _, err := h.externalRepo.SetDismissedMethodSuggestionsForTest(ctx, external.ID, dismissed); err != nil {
+			api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to set dismissed suggestions", err.Error())
+			return
+		}
+	}
+
+	api.SendSuccess(c, http.StatusCreated, SeedMethodSuggestionsResponse{
+		ExternalContactID: external.ID.String(),
+		ContactID:         contact.ID.String(),
+	}, nil)
+}
+
+// normalizeSeedSuggestions converts seed method inputs to repository
+// suggestion entries with normalized values (matching the reconcile
+// path's storage convention).
+func normalizeSeedSuggestions(inputs []SeedMethodSuggestionMethodInput) []repository.PendingMethodSuggestion {
+	out := make([]repository.PendingMethodSuggestion, 0, len(inputs))
+	for _, m := range inputs {
+		out = append(out, repository.PendingMethodSuggestion{
+			Type:  m.Type,
+			Value: repository.NormalizeContactMethodValue(m.Type, m.Value),
+		})
+	}
+	return out
 }
 
 // SeedContactMethodInput represents a contact method for seeding

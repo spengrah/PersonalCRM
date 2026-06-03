@@ -701,6 +701,7 @@ func run() int {
 	var identityHandler *handlers.IdentityHandler
 	var oauthHandler *handlers.OAuthHandler
 	var importHandler *handlers.ImportHandler
+	var suggestionHandler *handlers.SuggestionHandler
 	var anarlogDiscoveryHandler *handlers.AnarlogDiscoveryHandler
 	var calendarHandler *handlers.CalendarHandler
 	var todoistHandler *handlers.TodoistHandler
@@ -903,8 +904,22 @@ func run() int {
 		syncHandler = handlers.NewSyncHandler(syncService)
 		identityHandler = handlers.NewIdentityHandler(identityService)
 
+		// Suggestion service composes the method-suggestion group with the
+		// confidence-ranked candidate list and runs resolve/dismiss. Shared
+		// by the import handler (its candidate sort) and the suggestion
+		// handler (the new People-tab surface).
+		suggestionService := service.NewSuggestionService(
+			externalContactRepo,
+			contactRepo,
+			contactMethodRepo,
+			enrichmentService,
+			importMatchService,
+			database,
+		)
+		suggestionHandler = handlers.NewSuggestionHandler(suggestionService)
+
 		// Initialize import handler
-		importHandler = handlers.NewImportHandler(externalContactRepo, identityServiceForIngest, contactService, importMatchService, enrichmentService)
+		importHandler = handlers.NewImportHandler(externalContactRepo, identityServiceForIngest, contactService, importMatchService, enrichmentService, suggestionService)
 
 		// Anarlog-title discovery surface (People-tab grouped weak
 		// candidates + token-group resolve). Reuses the external_contact
@@ -1387,6 +1402,14 @@ func run() int {
 						imports.GET("/anarlog-title", anarlogDiscoveryHandler.ListAnarlogTitle)
 						imports.POST("/anarlog-title/resolve", anarlogDiscoveryHandler.ResolveAnarlogTitle)
 					}
+					// Static suggestions routes are likewise declared BEFORE
+					// the /:id param route so the literal `suggestions`
+					// segment is not shadowed by the :id wildcard.
+					if suggestionHandler != nil {
+						imports.GET("/suggestions", suggestionHandler.ListSuggestions)
+						imports.POST("/suggestions/:id/methods/resolve", suggestionHandler.ResolveMethodSuggestions)
+						imports.POST("/suggestions/:id/methods/dismiss", suggestionHandler.DismissMethodSuggestions)
+					}
 					imports.GET("/:id", importHandler.GetImportCandidate)
 					imports.POST("/:id/import", importHandler.ImportContact)
 					imports.POST("/:id/link", importHandler.LinkContact)
@@ -1428,6 +1451,7 @@ func run() int {
 			{
 				testRoutes.POST("/seed/contacts", testHandler.SeedContacts)
 				testRoutes.POST("/seed/external-contacts", testHandler.SeedExternalContacts)
+				testRoutes.POST("/seed/method-suggestions", testHandler.SeedMethodSuggestions)
 				testRoutes.POST("/seed/overdue-contacts", testHandler.SeedOverdueContacts)
 				testRoutes.POST("/seed/calendar-events", testHandler.SeedCalendarEvents)
 				testRoutes.POST("/seed/mac-hosts", testHandler.SeedMacHost)

@@ -13,6 +13,13 @@ import type {
   NameCandidateGroup,
   ResolveNameCandidateRequest,
   ResolveNameCandidateResponse,
+  SuggestionItem,
+  SuggestionsListParams,
+  SuggestionsListResponse,
+  ResolveMethodSuggestionsRequest,
+  ResolveMethodSuggestionsResponse,
+  DismissMethodSuggestionsRequest,
+  DismissMethodSuggestionsResponse,
 } from '@/types/import'
 
 export const importsApi = {
@@ -43,6 +50,52 @@ export const importsApi = {
   // Get single import candidate
   getCandidate: async (id: string): Promise<ImportCandidate> => {
     return apiClient.get<ImportCandidate>(`/api/v1/imports/${id}`)
+  },
+
+  // Get the unified suggestions list (method group + confidence-ranked
+  // candidates). The `data` array IS the SuggestionItem list; pagination
+  // meta reflects the candidate group only.
+  getSuggestions: async (params: SuggestionsListParams = {}): Promise<SuggestionsListResponse> => {
+    const queryParams = {
+      page: params.page || 1,
+      limit: params.limit || 20,
+      ...(params.source && { source: params.source }),
+    }
+
+    const response = await apiClient.getWithMeta<SuggestionItem[]>(
+      '/api/v1/imports/suggestions',
+      queryParams
+    )
+
+    return {
+      items: response.data || [],
+      total: response.meta?.pagination?.total || 0,
+      page: response.meta?.pagination?.page || 1,
+      limit: response.meta?.pagination?.limit || 20,
+      pages: response.meta?.pagination?.pages || 0,
+    }
+  },
+
+  // Confirm selected pending methods for an already-linked contact.
+  resolveMethodSuggestions: async (
+    id: string,
+    request: ResolveMethodSuggestionsRequest
+  ): Promise<ResolveMethodSuggestionsResponse> => {
+    return apiClient.post<ResolveMethodSuggestionsResponse>(
+      `/api/v1/imports/suggestions/${id}/methods/resolve`,
+      request
+    )
+  },
+
+  // Dismiss selected (or all) pending methods for a row.
+  dismissMethodSuggestions: async (
+    id: string,
+    request: DismissMethodSuggestionsRequest
+  ): Promise<DismissMethodSuggestionsResponse> => {
+    return apiClient.post<DismissMethodSuggestionsResponse>(
+      `/api/v1/imports/suggestions/${id}/methods/dismiss`,
+      request
+    )
   },
 
   // Import candidate as new CRM contact

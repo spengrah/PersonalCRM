@@ -43,19 +43,37 @@ test.describe('Imports Page @area:imports', () => {
     if (response.ok()) {
       const data = await response.json()
       if (data.data?.length === 0 || data.meta?.pagination?.total === 0) {
-        const candidatesResponse = page.waitForResponse(
+        // The People tab loads the unified suggestions endpoint (the
+        // candidate list is composed into it), so wait on that.
+        const suggestionsResponse = page.waitForResponse(
           res =>
             res.request().method() === 'GET' &&
-            res.url().includes('/api/v1/imports/candidates') &&
+            res.url().includes('/api/v1/imports/suggestions') &&
             res.url().includes('source=gcontacts')
         )
 
         await page.getByRole('button', { name: 'Google Contacts' }).click()
-        await candidatesResponse
+        await suggestionsResponse
 
-        // Empty state should show specific messaging
-        await expect(page.getByText(/No import candidates/i)).toBeVisible()
-        await expect(page.getByText(/All contacts from Google have been imported/i)).toBeVisible()
+        // gcontacts is shared across parallel workers, so a concurrent test
+        // may seed a candidate between this test's pre-flight and the render
+        // (TOCTOU). The empty state shows only when the live list is empty;
+        // otherwise the candidate list renders. Poll for either valid
+        // terminal state so the assertion is not a flaky gate, while still
+        // proving the empty-state copy when gcontacts is genuinely empty.
+        const emptyState = page.getByText(/No import candidates/i)
+        const candidateList = page.locator('[class*="border-gray-200"]').first()
+        await expect
+          .poll(
+            async () =>
+              (await emptyState.isVisible().catch(() => false)) ||
+              (await candidateList.isVisible().catch(() => false)),
+            { timeout: 10000 }
+          )
+          .toBe(true)
+        if (await emptyState.isVisible().catch(() => false)) {
+          await expect(page.getByText(/All contacts from Google have been imported/i)).toBeVisible()
+        }
       }
     }
   })

@@ -10,7 +10,7 @@
  */
 
 import type { ContactListParams } from '@/types/contact'
-import type { ImportCandidatesListParams } from '@/types/import'
+import type { ImportCandidatesListParams, SuggestionsListParams } from '@/types/import'
 
 // Contact query keys
 export const contactKeys = {
@@ -33,6 +33,13 @@ export const importKeys = {
   needsAttention: () => [...importKeys.all, 'needs-attention'] as const,
   // People tab: grouped anarlog_title name candidates (GET /imports/anarlog-title).
   anarlogTitle: () => [...importKeys.all, 'anarlog-title'] as const,
+  // People tab: unified suggestions list (GET /imports/suggestions).
+  // suggestionsLists() is a 2-element prefix that prefix-matches every
+  // filtered variant — use it in invalidation rules (passing a params
+  // object would become a literal mismatch against real filtered keys).
+  suggestionsLists: () => [...importKeys.all, 'suggestions'] as const,
+  suggestions: (params: SuggestionsListParams = {}) =>
+    [...importKeys.suggestionsLists(), params] as const,
 }
 
 // System query keys

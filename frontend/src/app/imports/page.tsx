@@ -21,14 +21,16 @@ import {
 import { Navigation } from '@/components/layout/navigation'
 import { Button } from '@/components/ui/button'
 import { Pagination } from '@/components/ui/pagination'
-import { ImportLinkModal } from '@/components/imports/import-link-modal'
+import { SuggestionModal, type SuggestionModalItem } from '@/components/imports/suggestion-modal'
+import { MethodSuggestionCard } from '@/components/imports/method-suggestion-card'
 import { SubTabs, type ImportsTab } from '@/components/imports/interactions/SubTabs'
 import { ConflictCard } from '@/components/imports/interactions/ConflictCard'
 import { OrphanCard } from '@/components/imports/interactions/OrphanCard'
 import { InteractionsEmptyState } from '@/components/imports/interactions/InteractionsEmptyState'
 import { NameCandidateRow } from '@/components/imports/interactions/NameCandidateRow'
 import { NameCandidateModal } from '@/components/imports/interactions/NameCandidateModal'
-import { useImportCandidates, useIgnoreCandidate, useTriggerSync } from '@/hooks/use-imports'
+import { useIgnoreCandidate, useTriggerSync } from '@/hooks/use-imports'
+import { useSuggestions, useDismissMethodSuggestions } from '@/hooks/use-suggestions'
 import {
   useInteractionsQueue,
   useResolveLink,
@@ -37,9 +39,12 @@ import {
 } from '@/hooks/use-interactions-queue'
 import { useGoogleAccounts } from '@/hooks/use-google-accounts'
 import { getCandidateDisplayName } from '@/lib/candidate-display'
+import { sourceAllowsImport } from '@/lib/candidate-actions'
 import type {
   ImportCandidate,
-  ImportCandidatesListParams,
+  SuggestionItem,
+  SuggestionsListParams,
+  MethodSuggestion,
   NeedsAttentionItem,
   NeedsAttentionCandidate,
   NameCandidateGroup,
@@ -74,6 +79,20 @@ function isPhotoUrlTrusted(url: string): boolean {
   } catch {
     return false
   }
+}
+
+/** Header summary for the unified People tab: counts the method-suggestion
+ * group and the candidate group, which are different kinds of work
+ * (confirm methods vs import/link a contact). */
+function headerSummary(methodCount: number, candidateTotal: number): string {
+  const parts: string[] = []
+  if (methodCount > 0) {
+    parts.push(`${methodCount} method suggestion${methodCount > 1 ? 's' : ''}`)
+  }
+  if (candidateTotal > 0) {
+    parts.push(`${candidateTotal} contact${candidateTotal > 1 ? 's' : ''} to review`)
+  }
+  return parts.join(' · ')
 }
 
 // Inline notification component
@@ -250,10 +269,14 @@ function CandidateCard({
 
         {/* Right side: Actions */}
         <div className="flex items-center space-x-2 ml-4">
-          <Button size="sm" onClick={onImport} loading={importLoading} disabled={ignoreLoading}>
-            <UserPlus className="w-4 h-4 mr-1" />
-            Import
-          </Button>
+          {/* Import is hidden for link-only sources (server policy mirror —
+              gated on the source, not a response field). */}
+          {sourceAllowsImport(candidate.source) && (
+            <Button size="sm" onClick={onImport} loading={importLoading} disabled={ignoreLoading}>
+              <UserPlus className="w-4 h-4 mr-1" />
+              Import
+            </Button>
+          )}
           <Button
             size="sm"
             variant="outline"
@@ -313,7 +336,7 @@ function ImportsPageInner() {
   const sessionParam = searchParams.get('session')
   const activeTab = normalizeTab(tabParam)
 
-  const [params, setParams] = useState<ImportCandidatesListParams>({
+  const [params, setParams] = useState<SuggestionsListParams>({
     page: 1,
     limit: DEFAULT_PAGE_SIZE,
   })
@@ -321,15 +344,9 @@ function ImportsPageInner() {
     type: 'success' | 'error'
     message: string
   } | null>(null)
-  const [modalState, setModalState] = useState<{
-    open: boolean
-    index: number
-    mode: 'import' | 'link'
-  }>({
-    open: false,
-    index: 0,
-    mode: 'import',
-  })
+  // The unified modal opens on either a contact candidate (with array
+  // navigation) or a method suggestion (enrich-locked single target).
+  const [modalItem, setModalItem] = useState<SuggestionModalItem | null>(null)
   const [actionInProgress, setActionInProgress] = useState<string | null>(null)
   // Name-candidate modal: index into the name-candidate queue, or null when closed.
   const [nameCandidateModalIndex, setNameCandidateModalIndex] = useState<number | null>(null)
@@ -338,10 +355,28 @@ function ImportsPageInner() {
   // Meeting-note id whose resolve mutation is in flight (disables its card).
   const [resolveBusyId, setResolveBusyId] = useState<string | null>(null)
 
-  const { data, isLoading, error } = useImportCandidates(params)
+  const { data, isLoading, error } = useSuggestions(params)
   const { data: googleAccounts } = useGoogleAccounts()
   const ignoreMutation = useIgnoreCandidate()
+  const dismissMethodMutation = useDismissMethodSuggestions()
   const syncMutation = useTriggerSync()
+
+  // Split the unified item list into the method group (rendered first) and
+  // the contact candidates (the array the contact-modal navigates).
+  const methodSuggestions = useMemo<MethodSuggestion[]>(
+    () =>
+      (data?.items || [])
+        .filter((it): it is Extract<SuggestionItem, { kind: 'method' }> => it.kind === 'method')
+        .map(it => it.suggestion),
+    [data?.items]
+  )
+  const candidateItems = useMemo<ImportCandidate[]>(
+    () =>
+      (data?.items || [])
+        .filter((it): it is Extract<SuggestionItem, { kind: 'contact' }> => it.kind === 'contact')
+        .map(it => it.candidate),
+    [data?.items]
+  )
 
   const { data: attentionItems, isLoading: attentionLoading } = useInteractionsQueue()
   const { data: nameCandidateGroups, isLoading: nameCandidateLoading } = useAnarlogTitleCandidates()
@@ -404,13 +439,45 @@ function ImportsPageInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionParam, activeTab, attentionLoading, items])
 
-  // Open the unified modal for import/link at the given index
-  const openModal = (index: number, mode: 'import' | 'link' = 'import') => {
-    setModalState({ open: true, index, mode })
+  // Open the contact-candidate body at the given index (within the candidate
+  // group, not the unified item list).
+  const openCandidateModal = (index: number, mode: 'import' | 'link' = 'import') => {
+    setModalItem({
+      kind: 'contact',
+      candidates: candidateItems,
+      initialIndex: index,
+      initialMode: mode,
+    })
+  }
+
+  // Open the enrich-locked method-suggestion body for a single suggestion.
+  const openMethodModal = (suggestion: MethodSuggestion) => {
+    setModalItem({ kind: 'method', suggestion })
   }
 
   const closeModal = () => {
-    setModalState({ open: false, index: 0, mode: 'import' })
+    setModalItem(null)
+  }
+
+  const handleDismissMethodSuggestion = async (suggestion: MethodSuggestion) => {
+    setActionInProgress(suggestion.external_contact_id)
+    try {
+      await dismissMethodMutation.mutateAsync({
+        id: suggestion.external_contact_id,
+        request: {},
+      })
+      setNotification({
+        type: 'success',
+        message: `Dismissed suggestions for ${suggestion.contact_name}`,
+      })
+    } catch (error) {
+      setNotification({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'Failed to dismiss suggestions',
+      })
+    } finally {
+      setActionInProgress(null)
+    }
   }
 
   const handleIgnore = async (candidate: ImportCandidate) => {
@@ -610,9 +677,9 @@ function ImportsPageInner() {
             <p className="mt-2 text-sm text-gray-500">
               {isLoading
                 ? 'Loading...'
-                : data?.total
-                  ? `${data.total} contacts available to import from Google Contacts and Calendar`
-                  : 'No contacts to import'}
+                : methodSuggestions.length > 0 || (data?.total ?? 0) > 0
+                  ? headerSummary(methodSuggestions.length, data?.total ?? 0)
+                  : 'Nothing to review'}
             </p>
           </div>
           <div className="mt-4 flex md:mt-0 md:ml-4 space-x-2">
@@ -696,50 +763,68 @@ function ImportsPageInner() {
             )}
 
             {/* Empty state */}
-            {!isLoading && !error && data?.candidates.length === 0 && (
-              <div className="text-center py-12 bg-white rounded-lg border border-gray-200">
-                <CloudDownload className="mx-auto h-12 w-12 text-gray-400" />
-                <h3 className="mt-2 text-sm font-medium text-gray-900">No import candidates</h3>
-                <p className="mt-1 text-sm text-gray-500">
-                  All contacts from Google have been imported or are already linked.
-                </p>
-                <div className="mt-6 flex justify-center space-x-2">
-                  <Button
-                    variant="outline"
-                    onClick={handleSyncContacts}
-                    loading={syncMutation.isPending}
-                  >
-                    <RefreshCw className="w-4 h-4 mr-2" />
-                    Sync Contacts
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={handleSyncCalendar}
-                    loading={syncMutation.isPending}
-                  >
-                    <Calendar className="w-4 h-4 mr-2" />
-                    Sync Calendar
-                  </Button>
+            {!isLoading &&
+              !error &&
+              methodSuggestions.length === 0 &&
+              candidateItems.length === 0 && (
+                <div className="text-center py-12 bg-white rounded-lg border border-gray-200">
+                  <CloudDownload className="mx-auto h-12 w-12 text-gray-400" />
+                  <h3 className="mt-2 text-sm font-medium text-gray-900">No import candidates</h3>
+                  <p className="mt-1 text-sm text-gray-500">
+                    All contacts from Google have been imported or are already linked.
+                  </p>
+                  <div className="mt-6 flex justify-center space-x-2">
+                    <Button
+                      variant="outline"
+                      onClick={handleSyncContacts}
+                      loading={syncMutation.isPending}
+                    >
+                      <RefreshCw className="w-4 h-4 mr-2" />
+                      Sync Contacts
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={handleSyncCalendar}
+                      loading={syncMutation.isPending}
+                    >
+                      <Calendar className="w-4 h-4 mr-2" />
+                      Sync Calendar
+                    </Button>
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
 
-            {/* Candidates list */}
-            {!isLoading && !error && data && data.candidates.length > 0 && (
-              <div className="space-y-3">
-                {data.candidates.map((candidate, index) => (
-                  <CandidateCard
-                    key={candidate.id}
-                    candidate={candidate}
-                    onImport={() => openModal(index, 'import')}
-                    onLink={() => openModal(index, 'link')}
-                    onIgnore={() => handleIgnore(candidate)}
-                    importLoading={false}
-                    ignoreLoading={actionInProgress === candidate.id && ignoreMutation.isPending}
-                  />
-                ))}
-              </div>
-            )}
+            {/* Suggestions list: method group first (page 1 only, server
+                orders it on top), then the confidence-ranked candidates. */}
+            {!isLoading &&
+              !error &&
+              (methodSuggestions.length > 0 || candidateItems.length > 0) && (
+                <div className="space-y-3">
+                  {methodSuggestions.map(suggestion => (
+                    <MethodSuggestionCard
+                      key={suggestion.external_contact_id}
+                      suggestion={suggestion}
+                      onReview={() => openMethodModal(suggestion)}
+                      onDismiss={() => handleDismissMethodSuggestion(suggestion)}
+                      dismissLoading={
+                        actionInProgress === suggestion.external_contact_id &&
+                        dismissMethodMutation.isPending
+                      }
+                    />
+                  ))}
+                  {candidateItems.map((candidate, index) => (
+                    <CandidateCard
+                      key={candidate.id}
+                      candidate={candidate}
+                      onImport={() => openCandidateModal(index, 'import')}
+                      onLink={() => openCandidateModal(index, 'link')}
+                      onIgnore={() => handleIgnore(candidate)}
+                      importLoading={false}
+                      ignoreLoading={actionInProgress === candidate.id && ignoreMutation.isPending}
+                    />
+                  ))}
+                </div>
+              )}
 
             {/* Pagination */}
             {data && data.pages > 1 && (
@@ -769,12 +854,10 @@ function ImportsPageInner() {
         )}
       </div>
 
-      {/* Import/Link modal (People-tab candidate queue) */}
-      {modalState.open && data?.candidates && data.candidates.length > 0 && (
-        <ImportLinkModal
-          candidates={data.candidates}
-          initialIndex={modalState.index}
-          initialMode={modalState.mode}
+      {/* Unified suggestion modal (contact candidate OR method suggestion) */}
+      {modalItem && (
+        <SuggestionModal
+          item={modalItem}
           onClose={closeModal}
           onSuccess={message => setNotification({ type: 'success', message })}
           onError={message => setNotification({ type: 'error', message })}

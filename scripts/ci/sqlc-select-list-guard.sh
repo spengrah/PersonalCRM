@@ -31,6 +31,13 @@ QUERIES_DIR="backend/internal/db/queries"
 #   columns; SELECT * would leak secrets.
 ALLOWLIST=(
   "oauth_credential|account_id, account_name, created_at, expires_at, id, provider, scopes, updated_at"
+  # ListLinkedAddressBookExternalContactsForReconcile and
+  # ListExternalContactsWithPendingMethodSuggestions deliberately share a
+  # canonical-join projection (canon_crm_contact_id + canon_match_status +
+  # ec.*) so both resolve the effective contact via the same precedence; the
+  # shared projection must stay identical, not be split to SELECT *. Mirrors
+  # allowedDuplicateProjections in backend/tests/sqlc_select_list_static_test.go.
+  "external_contact|canon.crm_contact_id as canon_crm_contact_id, canon.match_status as canon_match_status, ec.*"
 )
 
 is_allowlisted() {

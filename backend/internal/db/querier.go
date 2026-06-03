@@ -508,6 +508,11 @@ type Querier interface {
 	// never tombstone, so the broader read does not affect them. Callers that
 	// want live-only rows must check `DeletedAt == nil` after the call.
 	GetExternalContactBySource(ctx context.Context, arg GetExternalContactBySourceParams) (*ExternalContact, error)
+	// Row-locked read of a live row for the resolve/dismiss read-modify-write.
+	// The caller runs this + SetExternalContactPendingAndDismissed in ONE
+	// pgx.Tx so each action's own read-modify-write is atomic (a single
+	// action cannot half-clobber its own suggestion columns).
+	GetExternalContactForUpdate(ctx context.Context, id pgtype.UUID) (*ExternalContact, error)
 	// External identity queries for cross-platform contact identity matching
 	GetIdentityByID(ctx context.Context, id pgtype.UUID) (*ExternalIdentity, error)
 	GetIdentityByIdentifier(ctx context.Context, arg GetIdentityByIdentifierParams) (*ExternalIdentity, error)
@@ -794,6 +799,13 @@ type Querier interface {
 	ListEventsForContact(ctx context.Context, arg ListEventsForContactParams) ([]*CalendarEvent, error)
 	ListExternalContactsBySource(ctx context.Context, arg ListExternalContactsBySourceParams) ([]*ExternalContact, error)
 	ListExternalContactsForCRMContact(ctx context.Context, crmContactID pgtype.UUID) ([]*ExternalContact, error)
+	// Address-book rows carrying non-empty pending_method_suggestions, joined
+	// to the canonical so the repo can apply the SAME effective-status
+	// precedence (ignored > imported > matched) as the reconcile driver via
+	// resolveEffectiveReconcileState — NOT a self-first COALESCE. Scoped to
+	// the caller-supplied address-book sources, with an optional People-tab
+	// source filter (empty = no chip).
+	ListExternalContactsWithPendingMethodSuggestions(ctx context.Context, arg ListExternalContactsWithPendingMethodSuggestionsParams) ([]*ListExternalContactsWithPendingMethodSuggestionsRow, error)
 	ListIdentitiesBySource(ctx context.Context, arg ListIdentitiesBySourceParams) ([]*ExternalIdentity, error)
 	ListIdentitiesForContact(ctx context.Context, contactID pgtype.UUID) ([]*ExternalIdentity, error)
 	// Returns (source_id, last_content_hash) for every live
@@ -1080,6 +1092,13 @@ type Querier interface {
 	// the next reconcile. Writes the DEDICATED column, never `metadata` —
 	// so it survives the wholesale-metadata-replace producer upserts.
 	SetExternalContactMethodSuggestions(ctx context.Context, arg SetExternalContactMethodSuggestionsParams) (*ExternalContact, error)
+	// Atomically rewrite BOTH suggestion columns. Resolve passes the
+	// unchanged dismissed set through and clears confirmed entries from
+	// pending; dismiss appends to dismissed and drops the same entries from
+	// pending. The Go layer computes both final sets from the FOR UPDATE
+	// re-read (never trusting a stale client row); an empty slice marshals to
+	// nil bytes → SQL NULL.
+	SetExternalContactPendingAndDismissed(ctx context.Context, arg SetExternalContactPendingAndDismissedParams) (*ExternalContact, error)
 	SetTelegramChannelPts(ctx context.Context, arg SetTelegramChannelPtsParams) error
 	SetTelegramDate(ctx context.Context, arg SetTelegramDateParams) error
 	SetTelegramPts(ctx context.Context, arg SetTelegramPtsParams) error

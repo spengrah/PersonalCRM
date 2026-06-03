@@ -9,18 +9,23 @@ test.describe('Imports Modal @area:imports', () => {
     test.beforeEach(async ({ request }, testInfo) => {
       testApi = createTestAPI(request, testInfo)
 
-      // Seed multiple candidates for navigation testing
+      // Seed multiple candidates for navigation testing. Source is
+      // gcontacts so the modal renders the friendly "Google Contacts" label
+      // (the friendly-source-names test asserts on it).
       await testApi.seedExternalContacts([
         {
           display_name: 'Modal Test Contact A',
+          source: 'gcontacts',
           emails: ['modal-test-a@example.com'],
         },
         {
           display_name: 'Modal Test Contact B',
+          source: 'gcontacts',
           emails: ['modal-test-b@example.com'],
         },
         {
           display_name: 'Modal Test Contact C',
+          source: 'gcontacts',
           emails: ['modal-test-c@example.com'],
         },
       ])
@@ -156,12 +161,16 @@ test.describe('Imports Modal @area:imports', () => {
       await candidateCard.getByRole('button', { name: /Import/i }).click()
       await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
 
-      // Should show "Google Contacts" instead of "gcontacts" in the modal
-      // The seeded contacts are from gcontacts source
-      // The source info is in a paragraph element inside the modal, not the filter button
-      // Look for the source display paragraph that contains an SVG icon
-      const sourceDisplay = page.locator('p.text-gray-500').filter({ hasText: 'Google Contacts' })
-      await expect(sourceDisplay.first()).toBeVisible()
+      // The modal refetches all candidates and navigates by index, so steer
+      // it to this worker's candidate before asserting on the source label.
+      await navigateModalToCandidate(page, displayName)
+
+      // The modal shows the friendly source label "Google Contacts" (from
+      // getSourceDisplay) rather than the raw "gcontacts". It renders in the
+      // header's text-gray-500 source span next to the source icon.
+      await expect(
+        page.locator('span.text-gray-500').filter({ hasText: 'Google Contacts' }).first()
+      ).toBeVisible()
     })
 
     test('should have transparent backdrop with blur', async ({ page }) => {

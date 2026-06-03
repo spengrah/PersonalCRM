@@ -49,6 +49,14 @@ var allowedDuplicateProjections = map[string]string{
 	// refresh_token_encrypted, encryption_nonce, token_type). Converting to
 	// SELECT * would start selecting secret material — a security regression.
 	"oauth_credential|account_id, account_name, created_at, expires_at, id, provider, scopes, updated_at": "intentional narrow projection excluding encrypted token columns; SELECT * would leak secrets",
+	// ListLinkedAddressBookExternalContactsForReconcile (reconcile driver) and
+	// ListExternalContactsWithPendingMethodSuggestions (suggestions surface)
+	// both join the canonical row to expose canon_crm_contact_id +
+	// canon_match_status alongside ec.*, so the repository can apply the SAME
+	// effective-status precedence (resolveEffectiveReconcileState) in both.
+	// The shared canonical projection is the point — it must stay identical so
+	// both paths resolve the effective contact the same way.
+	"external_contact|canon.crm_contact_id as canon_crm_contact_id, canon.match_status as canon_match_status, ec.*": "shared canonical join projection so the reconcile driver and the suggestions list both resolve the effective contact via resolveEffectiveReconcileState",
 }
 
 // selectProjection holds one query's extracted SELECT projection.

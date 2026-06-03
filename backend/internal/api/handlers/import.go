@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -44,6 +43,7 @@ type ImportHandler struct {
 	contactSvc     *service.ContactService
 	matchSvc       *service.ImportMatchService
 	enricher       *service.EnrichmentService
+	suggestionSvc  *service.SuggestionService
 	validator      *validator.Validate
 	postImportHook PostImportHook
 }
@@ -59,14 +59,16 @@ func NewImportHandler(
 	contactSvc *service.ContactService,
 	matchSvc *service.ImportMatchService,
 	enricher *service.EnrichmentService,
+	suggestionSvc *service.SuggestionService,
 ) *ImportHandler {
 	return &ImportHandler{
-		externalRepo: externalRepo,
-		identitySvc:  identitySvc,
-		contactSvc:   contactSvc,
-		matchSvc:     matchSvc,
-		enricher:     enricher,
-		validator:    validator.New(),
+		externalRepo:  externalRepo,
+		identitySvc:   identitySvc,
+		contactSvc:    contactSvc,
+		matchSvc:      matchSvc,
+		enricher:      enricher,
+		suggestionSvc: suggestionSvc,
+		validator:     validator.New(),
 	}
 }
 
@@ -120,6 +122,16 @@ type LinkRequest struct {
 	ConflictResolutions map[string]string     `json:"conflict_resolutions,omitempty"` // value -> "use_crm" | "use_external"
 	Cadence             *string               `json:"cadence,omitempty" validate:"omitempty,oneof=weekly biweekly monthly quarterly biannual annual"`
 	Name                *string               `json:"name,omitempty"`
+	// MethodsCurated is true when the candidate offered methods to select
+	// (the modal rendered the method-selection UI) and the user made a
+	// selection decision — even if SelectedMethods ends up empty (user
+	// deselected all). It distinguishes an explicit empty selection from a
+	// bare auto-match, since a nil slice and an explicit [] are
+	// indistinguishable in Go after JSON unmarshal. The frontend sets it
+	// ONLY when the candidate actually had methods to curate (a
+	// zero-method candidate offered no curation choice → false → stays
+	// matched).
+	MethodsCurated bool `json:"methods_curated,omitempty"`
 }
 
 // ImportContactResponse wraps the created contact along with an optional rematch job ID.
@@ -165,78 +177,22 @@ func (h *ImportHandler) ListImportCandidates(c *gin.Context) {
 	// Check for source filter
 	source := c.Query("source")
 
-	var contacts []repository.ExternalContact
-	var err error
-
-	// Fetch all candidates up to MaxCandidatesForSorting to enable global sorting
-	// by confidence score across all pages. We can't use DB pagination here because
-	// confidence scores are calculated in-memory via findBestMatch().
-	if source != "" {
-		contacts, err = h.externalRepo.ListUnmatched(ctx, source, MaxCandidatesForSorting, 0)
-		if err != nil {
-			api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to list candidates", err.Error())
-			return
-		}
-	} else {
-		contacts, err = h.externalRepo.ListAllUnmatched(ctx, MaxCandidatesForSorting, 0)
-		if err != nil {
-			api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to list candidates", err.Error())
-			return
-		}
-	}
-
-	// Convert external contacts to pointers for batch matching
-	contactPtrs := make([]*repository.ExternalContact, len(contacts))
-	for i := range contacts {
-		contactPtrs[i] = &contacts[i]
-	}
-
-	// Find all matches in a single batch query (fixes N+1 query problem)
-	suggestedMatches, err := h.matchSvc.FindBestMatchesBatch(ctx, contactPtrs)
+	// Build the confidence-sorted candidate list via the shared service
+	// helper (the single sort implementation, also used by the suggestions
+	// surface). We fetch all candidates up to MaxCandidatesForSorting
+	// because confidence scores are computed in-memory and can't be sorted
+	// at the DB level.
+	sorted, err := h.suggestionSvc.BuildSortedCandidates(ctx, source, MaxCandidatesForSorting)
 	if err != nil {
-		logger.Warn().Err(err).Msg("failed to find suggested matches in batch")
-		// Continue with nil matches on error
-		suggestedMatches = make([]*service.ImportSuggestedMatch, len(contacts))
+		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to list candidates", err.Error())
+		return
 	}
 
-	// Convert to response format using pre-computed matches
-	candidates := make([]ImportCandidateResponse, 0, len(contacts))
-	for i := range contacts {
-		candidate := h.toImportCandidateResponse(&contacts[i], suggestedMatches[i])
-		candidates = append(candidates, candidate)
+	// Convert to response format, preserving the service's sort order.
+	candidates := make([]ImportCandidateResponse, 0, len(sorted))
+	for i := range sorted {
+		candidates = append(candidates, h.toImportCandidateResponse(&sorted[i].External, sorted[i].Match))
 	}
-
-	// Sort candidates: by confidence descending, then alphabetically for those without matches
-	sort.Slice(candidates, func(i, j int) bool {
-		iMatch := candidates[i].SuggestedMatch
-		jMatch := candidates[j].SuggestedMatch
-
-		// Both have matches: sort by confidence descending
-		if iMatch != nil && jMatch != nil {
-			return iMatch.Confidence > jMatch.Confidence
-		}
-
-		// One has match: matched comes first
-		if iMatch != nil {
-			return true
-		}
-		if jMatch != nil {
-			return false
-		}
-
-		// Neither has match: sort alphabetically by display name, empty names last
-		iName := getCandidateDisplayName(candidates[i].DisplayName, candidates[i].FirstName, candidates[i].LastName, candidates[i].Metadata, candidates[i].Source)
-		jName := getCandidateDisplayName(candidates[j].DisplayName, candidates[j].FirstName, candidates[j].LastName, candidates[j].Metadata, candidates[j].Source)
-
-		// Empty names sort to end
-		if iName == "" && jName != "" {
-			return false
-		}
-		if iName != "" && jName == "" {
-			return true
-		}
-		return iName < jName
-	})
 
 	// Apply pagination after sorting
 	total := int64(len(candidates))
@@ -346,6 +302,14 @@ func (h *ImportHandler) ImportContact(c *gin.Context) {
 	// Check if already imported/matched
 	if external.MatchStatus != repository.MatchStatusUnmatched {
 		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Contact already processed", string(external.MatchStatus))
+		return
+	}
+
+	// Link-only policy (server-side teeth): a link-only source can never
+	// create a NEW CRM contact. Hiding the Import button in the UI is not
+	// enough — a crafted request must be rejected here.
+	if service.IsLinkOnlySource(external.Source) {
+		api.SendError(c, http.StatusForbidden, api.ErrCodeValidation, "This source cannot be imported as a new contact", external.Source)
 		return
 	}
 
@@ -548,12 +512,12 @@ func (h *ImportHandler) LinkContact(c *gin.Context) {
 	// auto-push); a bare link with no curation signal stays `matched`
 	// (an un-applied method there is a genuine gap → auto-propagate).
 	//
-	// Known residual (closed in the suggestions-surface PR): opening the
-	// modal, deselecting ALL methods, and linking with no cadence/name/
-	// conflict sends no curation signal (the frontend sends
-	// selected_methods: undefined), so it is indistinguishable from a
-	// bare auto-match and classifies as `matched`.
-	curated := len(req.SelectedMethods) > 0 || len(req.ConflictResolutions) > 0 || req.Cadence != nil || req.Name != nil
+	// MethodsCurated covers the deselect-all case: the modal rendered the
+	// method-selection UI and the user deselected everything, sending an
+	// empty selection that is indistinguishable from a bare auto-match by
+	// slice-emptiness alone. The explicit boolean makes that an `imported`
+	// link, not a `matched` one.
+	curated := req.MethodsCurated || len(req.SelectedMethods) > 0 || len(req.ConflictResolutions) > 0 || req.Cadence != nil || req.Name != nil
 	linkStatus := repository.MatchStatusMatched
 	if curated {
 		linkStatus = repository.MatchStatusImported
@@ -685,6 +649,13 @@ func (h *ImportHandler) IgnoreContact(c *gin.Context) {
 
 // toImportCandidateResponse converts an external contact to the API response format
 func (h *ImportHandler) toImportCandidateResponse(contact *repository.ExternalContact, suggestedMatch *service.ImportSuggestedMatch) ImportCandidateResponse {
+	return buildImportCandidateResponse(contact, suggestedMatch)
+}
+
+// buildImportCandidateResponse converts an external contact + its suggested
+// match into the candidate API response. Package-level so both the import
+// handler and the suggestions handler build identical candidate payloads.
+func buildImportCandidateResponse(contact *repository.ExternalContact, suggestedMatch *service.ImportSuggestedMatch) ImportCandidateResponse {
 	var responseMatch *SuggestedMatch
 	if suggestedMatch != nil {
 		responseMatch = &SuggestedMatch{
