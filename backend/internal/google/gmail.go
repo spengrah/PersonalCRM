@@ -133,6 +133,14 @@ type attachmentMeta struct {
 // emailMetadata is the non-provenance JSON the provider assembles into
 // comms_message.source_metadata. The provenance keys (observed_accounts,
 // account_gmail_ids) are added by the UpsertCommsMessage query, NOT here.
+//
+// The *Name(s) fields carry the parsed display names index-aligned with their
+// bare-address siblings (FromName ↔ From; ToNames[i] ↔ To[i]; etc.). They are
+// additive: the bare-address keys keep their original shape so existing
+// consumers and the provenance-merge JSON contract are undisturbed. The
+// correspondence-enrichment producer pairs each address with its display name
+// to trigram-match unknown correspondents against CRM contacts. A header
+// without a display part stores the empty string at that index.
 type emailMetadata struct {
 	HTML        string           `json:"html,omitempty"`
 	Attachments []attachmentMeta `json:"attachments,omitempty"`
@@ -141,6 +149,10 @@ type emailMetadata struct {
 	To          []string         `json:"to,omitempty"`
 	Cc          []string         `json:"cc,omitempty"`
 	Bcc         []string         `json:"bcc,omitempty"`
+	FromName    string           `json:"from_name,omitempty"`
+	ToNames     []string         `json:"to_names,omitempty"`
+	CcNames     []string         `json:"cc_names,omitempty"`
+	BccNames    []string         `json:"bcc_names,omitempty"`
 }
 
 // qualifiedRow is the provider's internal per-(message, contact, direction)
@@ -683,16 +695,17 @@ func (p *GmailSyncProvider) processMessage(
 
 	headers := newHeaderLookup(msg.Payload)
 	subject := headers.first("Subject")
-	fromRaw, fromNorm := parseSingleAddress(headers.first("From"))
-	toRaw, toNorm := parseAddressList(headers.first("To"))
-	ccRaw, ccNorm := parseAddressList(headers.first("Cc"))
-	bccRaw, bccNorm := parseAddressList(headers.first("Bcc"))
+	fromRaw, fromNorm, fromName := parseSingleAddress(headers.first("From"))
+	toRaw, toNorm, toNames := parseAddressList(headers.first("To"))
+	ccRaw, ccNorm, ccNames := parseAddressList(headers.first("Cc"))
+	bccRaw, bccNorm, bccNames := parseAddressList(headers.first("Bcc"))
 
 	externalID := extractExternalID(headers, accountID, msg.Id)
 	localDay := computeLocalDay(epochMillisToTime(msg.InternalDate), time.Local)
 	sentAt := epochMillisToTime(msg.InternalDate)
 
-	metadata := buildMetadataJSON(htmlBody, attachments, msg.LabelIds, fromRaw, toRaw, ccRaw, bccRaw)
+	metadata := buildMetadataJSON(htmlBody, attachments, msg.LabelIds,
+		fromRaw, toRaw, ccRaw, bccRaw, fromName, toNames, ccNames, bccNames)
 
 	// Recipient set R (normalized To ∪ Cc ∪ Bcc), and whether M ∩ R ≠ ∅.
 	recipientSet := make(map[string]struct{})
@@ -881,33 +894,39 @@ func (h headerLookup) first(name string) string {
 }
 
 // parseSingleAddress parses a single-address header (From). Returns the raw and
-// normalized address. On parse failure it falls back to trimming the raw value.
-func parseSingleAddress(header string) (raw, normalized string) {
+// normalized address plus the parsed display name (empty when the header had no
+// display part or failed to parse). On parse failure it falls back to trimming
+// the raw value. The name return is additive — existing callers ignore it.
+func parseSingleAddress(header string) (raw, normalized, name string) {
 	header = strings.TrimSpace(header)
 	if header == "" {
-		return "", ""
+		return "", "", ""
 	}
 	if addr, err := mail.ParseAddress(header); err == nil {
-		return addr.Address, matching.NormalizeEmail(addr.Address)
+		return addr.Address, matching.NormalizeEmail(addr.Address), strings.TrimSpace(addr.Name)
 	}
-	return header, matching.NormalizeEmail(header)
+	return header, matching.NormalizeEmail(header), ""
 }
 
 // parseAddressList parses an address-list header (To/Cc/Bcc) robustly. On a
 // ParseAddressList failure it falls back to a lenient comma-split so a single
-// malformed recipient doesn't drop the whole list. Raw and normalized slices
-// are index-aligned.
-func parseAddressList(header string) (raws, normalized []string) {
+// malformed recipient doesn't drop the whole list. The raw, normalized, and
+// name slices are index-aligned on BOTH paths (a recipient with no display part
+// gets an empty-string name at its index), so the correspondence producer can
+// pair names[i] with the address at the same index. The names return is
+// additive — existing callers ignore it.
+func parseAddressList(header string) (raws, normalized, names []string) {
 	header = strings.TrimSpace(header)
 	if header == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if addrs, err := mail.ParseAddressList(header); err == nil {
 		for _, a := range addrs {
 			raws = append(raws, a.Address)
 			normalized = append(normalized, matching.NormalizeEmail(a.Address))
+			names = append(names, strings.TrimSpace(a.Name))
 		}
-		return raws, normalized
+		return raws, normalized, names
 	}
 	for _, part := range strings.Split(header, ",") {
 		part = strings.TrimSpace(part)
@@ -915,13 +934,16 @@ func parseAddressList(header string) (raws, normalized []string) {
 			continue
 		}
 		raw := part
+		name := ""
 		if addr, err := mail.ParseAddress(part); err == nil {
 			raw = addr.Address
+			name = strings.TrimSpace(addr.Name)
 		}
 		raws = append(raws, raw)
 		normalized = append(normalized, matching.NormalizeEmail(raw))
+		names = append(names, name)
 	}
-	return raws, normalized
+	return raws, normalized, names
 }
 
 // extractExternalID reads the RFC822 Message-ID header (trimming surrounding
@@ -1050,10 +1072,20 @@ func stripHTML(s string) string {
 }
 
 // buildMetadataJSON assembles the non-provenance source_metadata JSON the
-// provider owns (html, attachments, labels, from/to/cc/bcc). The provenance
-// keys (observed_accounts, account_gmail_ids) are added by the
-// UpsertCommsMessage query, not here.
-func buildMetadataJSON(htmlBody string, attachments []attachmentMeta, labels []string, fromRaw string, toRaw, ccRaw, bccRaw []string) []byte {
+// provider owns (html, attachments, labels, from/to/cc/bcc + their index-aligned
+// display names). The provenance keys (observed_accounts, account_gmail_ids) are
+// added by the UpsertCommsMessage query, not here. The *Name(s) slices stay
+// index-aligned with their address siblings (the parsers guarantee this on both
+// the happy path and the lenient comma-split fallback).
+func buildMetadataJSON(
+	htmlBody string,
+	attachments []attachmentMeta,
+	labels []string,
+	fromRaw string,
+	toRaw, ccRaw, bccRaw []string,
+	fromName string,
+	toNames, ccNames, bccNames []string,
+) []byte {
 	meta := emailMetadata{
 		HTML:        htmlBody,
 		Attachments: attachments,
@@ -1062,6 +1094,10 @@ func buildMetadataJSON(htmlBody string, attachments []attachmentMeta, labels []s
 		To:          toRaw,
 		Cc:          ccRaw,
 		Bcc:         bccRaw,
+		FromName:    fromName,
+		ToNames:     toNames,
+		CcNames:     ccNames,
+		BccNames:    bccNames,
 	}
 	b, err := json.Marshal(meta)
 	if err != nil {

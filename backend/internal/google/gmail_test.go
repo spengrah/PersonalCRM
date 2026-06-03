@@ -636,6 +636,97 @@ func TestProcessMessage_MetadataCarriesAttachmentsAndHTML(t *testing.T) {
 	require.Equal(t, []string{"me@example.com"}, meta.To)
 }
 
+func TestProcessMessage_MetadataCapturesDisplayNames(t *testing.T) {
+	p := newProviderForResolution()
+	contactA := uuid.New()
+	knownMap := map[string][]uuid.UUID{"contact@example.com": {contactA}}
+	meSet := map[string]struct{}{"me@example.com": {}}
+	// From carries a display name; To has two recipients, one with a name and
+	// one bare. The metadata must store bare addresses unchanged plus aligned
+	// display-name slices.
+	msg := buildMessage(t, "g1", "t1", "\"Contact A\" <contact@example.com>",
+		[]string{"\"My Self\" <me@example.com>", "bare@example.com"}, nil, nil,
+		"S", "b", "<dn@example.com>", 1700000000000)
+
+	rows, err := p.RunProcessMessageForTest(context.Background(), msg, "me@example.com", knownMap, meSet)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+
+	var meta emailMetadata
+	require.NoError(t, json.Unmarshal(rows[0].Metadata, &meta))
+	// Bare addresses unchanged.
+	require.Equal(t, "contact@example.com", meta.From)
+	require.Equal(t, []string{"me@example.com", "bare@example.com"}, meta.To)
+	// Display names captured, index-aligned.
+	require.Equal(t, "Contact A", meta.FromName)
+	require.Equal(t, []string{"My Self", ""}, meta.ToNames)
+	require.Len(t, meta.ToNames, len(meta.To))
+}
+
+func TestProcessMessage_MetadataNoDisplayNameStoresEmpty(t *testing.T) {
+	p := newProviderForResolution()
+	contactA := uuid.New()
+	knownMap := map[string][]uuid.UUID{"contact@example.com": {contactA}}
+	meSet := map[string]struct{}{"me@example.com": {}}
+	// No display parts anywhere.
+	msg := buildMessage(t, "g1", "t1", "contact@example.com",
+		[]string{"me@example.com"}, nil, nil, "S", "b", "<nodn@example.com>", 1700000000000)
+
+	rows, err := p.RunProcessMessageForTest(context.Background(), msg, "me@example.com", knownMap, meSet)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+
+	var meta emailMetadata
+	require.NoError(t, json.Unmarshal(rows[0].Metadata, &meta))
+	require.Equal(t, "", meta.FromName)
+	// The name slice stays index-aligned with the address slice: one recipient
+	// with no display part → one empty-string name. The producer treats an
+	// empty name as "no display name → skip at the ≥2-token gate".
+	require.Equal(t, []string{""}, meta.ToNames)
+	require.Len(t, meta.ToNames, len(meta.To))
+}
+
+func TestParseSingleAddress_Name(t *testing.T) {
+	raw, norm, name := parseSingleAddress("\"Contact A\" <Contact.A@Example.com>")
+	require.Equal(t, "Contact.A@Example.com", raw)
+	require.Equal(t, "contact.a@example.com", norm)
+	require.Equal(t, "Contact A", name)
+
+	raw, norm, name = parseSingleAddress("bare@example.com")
+	require.Equal(t, "bare@example.com", raw)
+	require.Equal(t, "bare@example.com", norm)
+	require.Equal(t, "", name)
+
+	raw, norm, name = parseSingleAddress("")
+	require.Equal(t, "", raw)
+	require.Equal(t, "", norm)
+	require.Equal(t, "", name)
+}
+
+func TestParseAddressList_NamesIndexAligned(t *testing.T) {
+	// Happy path: ParseAddressList succeeds; names aligned to addresses.
+	raws, norms, names := parseAddressList("\"First Last\" <first@example.com>, bare@example.com")
+	require.Equal(t, []string{"first@example.com", "bare@example.com"}, raws)
+	require.Equal(t, []string{"first@example.com", "bare@example.com"}, norms)
+	require.Equal(t, []string{"First Last", ""}, names)
+	require.Len(t, names, len(raws))
+
+	// Empty header → all nil.
+	raws, norms, names = parseAddressList("")
+	require.Nil(t, raws)
+	require.Nil(t, norms)
+	require.Nil(t, names)
+}
+
+func TestParseAddressList_CommaSplitFallbackAligned(t *testing.T) {
+	// A malformed entry forces the lenient comma-split fallback. The name/raw
+	// slices must stay the same length so the producer never mis-pairs a name
+	// to the wrong address.
+	raws, _, names := parseAddressList("\"Valid Name\" <ok@example.com>, @@@broken")
+	require.Len(t, names, len(raws))
+	require.GreaterOrEqual(t, len(raws), 1)
+}
+
 // --- local_day boundary in time.Local (incl. DST) ---
 
 func TestComputeLocalDay_PureForm_AcrossMidnight(t *testing.T) {
