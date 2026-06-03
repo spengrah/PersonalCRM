@@ -36,13 +36,14 @@
 //	                              messages from Gmail and additively populate
 //	                              participant display names in comms_message
 //	                              metadata (preserving all existing content +
-//	                              provenance), then run a full-range producer
-//	                              pass so the historical backlog surfaces as
-//	                              link candidates. Continue-on-error; exits
+//	                              provenance). Continue-on-error; exits
 //	                              non-zero iff any row FAILED (Skipped* do not
 //	                              fail). Idempotent — safe to re-run. Requires
 //	                              Google OAuth credentials; built lazily so
 //	                              other subcommands work on Google-less hosts.
+//	                              NOTE: candidate discovery now runs in-sync on
+//	                              the Gmail fetch loop, not here; this subcommand
+//	                              only backfills display names.
 //
 //	--reset-gmail-backfill-cursors
 //	                              Rewind enabled Gmail sync cursors to each
@@ -146,14 +147,6 @@ type rederiveRunner interface {
 	RederiveNames(ctx context.Context, since time.Time) (google.CorrespondenceRederiveResult, error)
 }
 
-// correspondenceScanner is the narrow interface --rederive-correspondence-names
-// needs for step 2 (the one-time full-range producer pass over the re-derived
-// backlog). Production wires this to
-// *google.GmailCorrespondenceSuggester.Run.
-type correspondenceScanner interface {
-	Run(ctx context.Context, since time.Time) (int, error)
-}
-
 // gmailBackfillCursorResetter is the narrow interface
 // --reset-gmail-backfill-cursors needs. Production wires this to
 // *service.EmailBackfillCursorResetService.ResetGmailBackfillCursors.
@@ -170,15 +163,14 @@ type adminDeps struct {
 	revoker   hostRevoker
 	rematch   rematchRunner
 	reconcile reconcileRunner
-	// rederive + correspondence are built LAZILY (only when
-	// --rederive-correspondence-names is set) because they require Google OAuth
-	// credentials; building them unconditionally would break every other
-	// subcommand on a Google-less host. Nil for all other subcommands.
-	rederive       rederiveRunner
-	correspondence correspondenceScanner
-	gmailReset     gmailBackfillCursorResetter
-	stdout         io.Writer
-	stderr         io.Writer
+	// rederive is built LAZILY (only when --rederive-correspondence-names is
+	// set) because it requires Google OAuth credentials; building it
+	// unconditionally would break every other subcommand on a Google-less host.
+	// Nil for all other subcommands.
+	rederive   rederiveRunner
+	gmailReset gmailBackfillCursorResetter
+	stdout     io.Writer
+	stderr     io.Writer
 }
 
 // runOptions captures parsed flags. Exposed as a struct so tests can
@@ -291,10 +283,10 @@ func parseArgs(args []string) (runOptions, error) {
 			"suggestion for imported). Continue-on-error; exits non-zero iff any row failed.")
 	fs.BoolVar(&opts.rederiveCorrespondence, "rederive-correspondence-names", false,
 		"One-time catchup: re-fetch already-ingested email messages from Gmail and "+
-			"additively populate participant display names in comms_message metadata, "+
-			"then run a full-range gmail_correspondence producer pass so the historical "+
-			"backlog surfaces as link candidates. Continue-on-error; exits non-zero iff "+
-			"any row failed. Idempotent — safe to re-run. Requires Google OAuth creds.")
+			"additively populate participant display names in comms_message metadata "+
+			"(candidate discovery now runs in-sync on the Gmail fetch loop, not here). "+
+			"Continue-on-error; exits non-zero iff any row failed. Idempotent — safe to "+
+			"re-run. Requires Google OAuth creds.")
 	fs.BoolVar(&opts.resetGmailBackfill, "reset-gmail-backfill-cursors", false,
 		"Rewind enabled Gmail sync cursors to each row's backfill floor, mark them due, "+
 			"and clear error state. Prints counts only.")
@@ -496,20 +488,21 @@ func runResetGmailBackfillCursors(ctx context.Context, deps adminDeps) error {
 	return nil
 }
 
-// correspondenceBackfillFloor is the lower bound for the one-time
-// re-derivation + full-range producer pass. It matches the Gmail onboarding
-// backfill floor (the earliest mail the integration ever ingested), so the
-// catchup covers the entire stored backlog.
+// correspondenceBackfillFloor is the lower bound for the one-time display-name
+// re-derivation. It matches the Gmail onboarding backfill floor (the earliest
+// mail the integration ever ingested), so the catchup covers the entire stored
+// backlog.
 const correspondenceBackfillFloor = "2026-01-01"
 
-// runRederiveCorrespondenceNames runs the one-time historical catchup in two
-// ordered phases over the full range: (1) re-fetch + additively backfill
-// participant display names, then (2) a full-range gmail_correspondence
-// producer pass so the now-named backlog surfaces as candidates. Phase 2 runs
-// even when phase 1 had per-row failures — successfully re-derived older rows
-// must still be evaluated. Prints a counts-only summary; returns a non-nil
-// error iff any row FAILED (Skipped* outcomes do NOT fail the run), so the
-// operator can fix the cause and re-run safely (idempotent).
+// runRederiveCorrespondenceNames runs the one-time historical display-name
+// re-derivation over the full range: re-fetch already-ingested email messages
+// and additively backfill participant display names into comms_message
+// metadata (preserving all existing content + provenance). Candidate discovery
+// now runs in-sync on the Gmail fetch loop (between fetch and storage), not
+// here, so this subcommand no longer runs a producer pass. Prints a counts-only
+// summary; returns a non-nil error iff any row FAILED (Skipped* outcomes do NOT
+// fail the run), so the operator can fix the cause and re-run safely
+// (idempotent).
 func runRederiveCorrespondenceNames(ctx context.Context, deps adminDeps) error {
 	since, err := time.Parse("2006-01-02", correspondenceBackfillFloor)
 	if err != nil {
@@ -521,20 +514,13 @@ func runRederiveCorrespondenceNames(ctx context.Context, deps adminDeps) error {
 		return fmt.Errorf("rederive correspondence names: %w", err)
 	}
 
-	// Full-range producer pass — runs regardless of phase-1 per-row failures.
-	upserted, err := deps.correspondence.Run(ctx, since)
-	if err != nil {
-		return fmt.Errorf("correspondence producer pass: %w", err)
-	}
-
 	if _, err := fmt.Fprintf(deps.stdout, "rederive-correspondence-names summary:\n"+
 		"  scanned:              %d\n"+
 		"  rederived:            %d\n"+
 		"  skipped_no_gmail_id:  %d\n"+
 		"  skipped_unavailable:  %d\n"+
-		"  failed:               %d\n"+
-		"  candidates_upserted:  %d\n",
-		res.Scanned, res.Rederived, res.SkippedNoGmailID, res.SkippedUnavailable, res.Failed, upserted); err != nil {
+		"  failed:               %d\n",
+		res.Scanned, res.Rederived, res.SkippedNoGmailID, res.SkippedUnavailable, res.Failed); err != nil {
 		return fmt.Errorf("write summary: %w", err)
 	}
 	if res.Failed > 0 {
@@ -637,8 +623,8 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 	// Google creds are absent; building it unconditionally would break every
 	// other subcommand on a Google-less host. The Gmail provider is
 	// constructed with the real event bus + pool, but the re-derive seams
-	// (RefetchParticipantNames, MeSet) and the producer (Run) never publish, so
-	// no email events are emitted by this one-shot binary.
+	// (RefetchParticipantNames, MeSet) never publish, so no email events are
+	// emitted by this one-shot binary.
 	if opts.rederiveCorrespondence {
 		oauthRepo := repository.NewOAuthRepository(database.Queries)
 		syncRepo := repository.NewSyncRepository(database.Queries)
@@ -649,9 +635,6 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 		commsRepo := repository.NewCommsMessageRepository(database.Queries)
 		gmailProvider := google.NewGmailSyncProvider(oauthService, commsRepo, eventBus, database.Pool)
 		deps.rederive = google.NewCorrespondenceNameRederiveService(commsRepo, gmailProvider)
-		deps.correspondence = google.NewGmailCorrespondenceSuggester(
-			commsRepo, contactRepo, externalContactRepo, gmailProvider.MeSet,
-		)
 	}
 
 	cleanup := func() {}

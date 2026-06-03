@@ -756,17 +756,6 @@ type Querier interface {
 	// SET of canonical phones/emails, not the contact mapping, so DISTINCT
 	// collapses the same value across multiple contacts.
 	ListCanonicalIdentifiersByType(ctx context.Context, dollar_1 []string) ([]string, error)
-	// Stream recent email content rows for the correspondence-enrichment scan:
-	// source_metadata carries the from/to/cc/bcc participant lists (bare addresses)
-	// plus the index-aligned from_name/to_names/cc_names/bcc_names. matched_contact_id
-	// is the known contact the message qualified for (the co-occurring contact the
-	// producer records as evidence). Bounded by @since to keep each scan cheap; the
-	// scan is idempotent so re-running the same window is harmless. The INNER JOIN on
-	// a live contact drops rows whose matched contact was soft-deleted: a contact's
-	// soft-delete (UPDATE deleted_at) does NOT cascade to its comms_message rows (the
-	// FK cascade only fires on a hard DELETE), so without this join the producer would
-	// keep mining correspondence with a deleted contact.
-	ListCommsMessageParticipantsSince(ctx context.Context, since pgtype.Timestamptz) ([]*ListCommsMessageParticipantsSinceRow, error)
 	// Per-contact content, newest first (backs idx_comms_message_contact_sent).
 	ListCommsMessagesByContact(ctx context.Context, matchedContactID pgtype.UUID) ([]*CommsMessage, error)
 	// Keyset-paged rows for the one-time historical display-name re-derivation

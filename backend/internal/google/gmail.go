@@ -223,6 +223,16 @@ type GmailSyncProvider struct {
 	// tests override via SetMeSetForTest so the M-set is injected with no OAuth
 	// state — symmetric with newFetcher.
 	newMeSet func(ctx context.Context) (map[string]struct{}, error)
+
+	// discoverer runs the in-sync correspondence-discovery hook over each
+	// fetched message's From/To/Cc participants (between fetch and storage),
+	// surfacing unknown addresses that strong-match an existing contact as
+	// link-only candidates. Wired in cutover mode via
+	// SetCorrespondenceDiscoverer; nil-safe — when nil the hook is a no-op, so
+	// every existing constructor call site keeps working unchanged. Discovery
+	// is best-effort: a discovery error is logged, never returned from
+	// Sync/ScanIdentifier, so it can't rewind the cursor or strand email ingest.
+	discoverer *CorrespondenceDiscoverer
 }
 
 // NewGmailSyncProvider builds the Gmail provider. bus and pool are REQUIRED:
@@ -267,6 +277,15 @@ func NewGmailSyncProvider(
 		return meSet, nil
 	}
 	return p
+}
+
+// SetCorrespondenceDiscoverer wires the in-sync correspondence-discovery hook.
+// Unlike SetMeSetForTest/SetBusForTest this is PRODUCTION wiring (main.go calls
+// it in cutover mode), not a test seam: the provider has 9 constructor call
+// sites, so a setter avoids a constructor-signature churn while keeping the
+// hook nil-safe (a no-op) for every site that doesn't wire it.
+func (p *GmailSyncProvider) SetCorrespondenceDiscoverer(d *CorrespondenceDiscoverer) {
+	p.discoverer = d
 }
 
 // Config returns the provider's configuration.
@@ -369,6 +388,19 @@ func (p *GmailSyncProvider) Sync(
 		addresses = append(addresses, addr)
 	}
 
+	// Per-pass correspondence-discovery state (Q3): a LOCAL aggregate map +
+	// known-address set threaded down into the window loop, evaluated once after
+	// the loop. It MUST be local (not a provider field): the provider is a
+	// shared singleton and River runs SyncProviderAccount jobs for different
+	// accounts concurrently, so a field would be clobbered across concurrent
+	// account syncs. knownSet is the key set of knownMap (every known
+	// contact_method address), used to drop known addresses from discovery.
+	discoveryAgg := make(map[string]*correspondenceAggregate)
+	knownSet := make(map[string]struct{}, len(knownMap))
+	for addr := range knownMap {
+		knownSet[addr] = struct{}{}
+	}
+
 	result := &sync.SyncResult{}
 	windowsScanned := 0
 	fetchedMessages := make(map[string]*gmail.Message)
@@ -388,7 +420,7 @@ func (p *GmailSyncProvider) Sync(
 		}
 		chunks := buildWindowORChunks(addresses, window.StartEpoch, window.EndEpoch)
 
-		scanned, err := p.scanWindowChunks(ctx, fetcher, chunks, accountID, knownMap, meSet, window, fetchedMessages)
+		scanned, err := p.scanWindowChunks(ctx, fetcher, chunks, accountID, knownMap, meSet, window, fetchedMessages, knownSet, discoveryAgg)
 		if err != nil {
 			// Hard failure: abort the sweep, return the stored cursor unchanged
 			// so no unproven window is skipped on the next tick.
@@ -401,6 +433,11 @@ func (p *GmailSyncProvider) Sync(
 		cursorState.BoundaryHashes = hashesToSet(scanned.BoundaryHashes)
 		windowsScanned++
 	}
+
+	// Best-effort correspondence discovery over the per-pass aggregate. Logged,
+	// never fatal: a FindSimilarContacts/Upsert hiccup must NOT rewind the
+	// cursor, zero result, or fail the sync — email ingest is the primary job.
+	p.runDiscovery(ctx, accountID, discoveryAgg)
 
 	if windowsScanned == 0 {
 		result.NewCursor = priorCursor
@@ -457,6 +494,8 @@ func (p *GmailSyncProvider) scanWindowChunks(
 	meSet map[string]struct{},
 	window gmailScanWindow,
 	fetchedMessages map[string]*gmail.Message,
+	knownSet map[string]struct{},
+	discoveryAgg map[string]*correspondenceAggregate,
 ) (gmailWindowScanResult, error) {
 	var result gmailWindowScanResult
 	seen := make(map[string]struct{})
@@ -513,6 +552,12 @@ func (p *GmailSyncProvider) scanWindowChunks(
 					}
 					result.Matched++
 				}
+
+				// In-sync correspondence discovery: fold this fetched message's
+				// From/To/Cc participants into the per-pass aggregate, regardless
+				// of whether the storage gate qualified it. No-op when no
+				// discoverer is wired.
+				p.foldDiscovery(msg, knownMap, knownSet, meSet, discoveryAgg)
 			}
 			pageToken = next
 			if pageToken == "" {
@@ -540,6 +585,8 @@ func (p *GmailSyncProvider) scanChunks(
 	accountID string,
 	knownMap map[string][]uuid.UUID,
 	meSet map[string]struct{},
+	knownSet map[string]struct{},
+	discoveryAgg map[string]*correspondenceAggregate,
 ) (processed, matched int, err error) {
 	seen := make(map[string]struct{})
 	for _, query := range chunks {
@@ -573,6 +620,10 @@ func (p *GmailSyncProvider) scanChunks(
 					}
 					matched++
 				}
+
+				// In-sync correspondence discovery over the rematch backfill seam
+				// (harmless + idempotent). No-op when no discoverer is wired.
+				p.foldDiscovery(msg, knownMap, knownSet, meSet, discoveryAgg)
 			}
 			pageToken = next
 			if pageToken == "" {
@@ -614,11 +665,26 @@ func (p *GmailSyncProvider) ScanIdentifier(
 		return 0, fmt.Errorf("build gmail fetcher: %w", err)
 	}
 
+	// Per-call correspondence-discovery state (local, like Sync's): the rematch
+	// backfill seam runs discovery too, idempotently. knownSet is the key set of
+	// knownMap.
+	discoveryAgg := make(map[string]*correspondenceAggregate)
+	knownSet := make(map[string]struct{}, len(knownMap))
+	for addr := range knownMap {
+		knownSet[addr] = struct{}{}
+	}
+
 	// scanChunks creates its own per-account `seen` set; no cursor math here.
-	_, matched, err = p.scanChunks(ctx, fetcher, chunks, accountID, knownMap, meSet)
+	_, matched, err = p.scanChunks(ctx, fetcher, chunks, accountID, knownMap, meSet, knownSet, discoveryAgg)
 	if err != nil {
 		return matched, fmt.Errorf("scan identifier: %w", err)
 	}
+
+	// Best-effort discovery: logged, NEVER returned. GmailRematchHandler treats
+	// any ScanIdentifier error as a job failure, so a discovery hiccup must not
+	// fail the contact-method rematch backfill.
+	p.runDiscovery(ctx, accountID, discoveryAgg)
+
 	return matched, nil
 }
 
@@ -681,6 +747,114 @@ func classifyRefetchError(err error) error {
 // injected me-set through with zero real OAuth.
 func (p *GmailSyncProvider) MeSet(ctx context.Context) (map[string]struct{}, error) {
 	return p.newMeSet(ctx)
+}
+
+// foldDiscovery folds one fetched message's From/To/Cc participants into the
+// per-pass discovery aggregate. No-op when no discoverer is wired (the common
+// case for the many constructor call sites that never call
+// SetCorrespondenceDiscoverer). The known/own filtering and the BCC-free
+// co-occurrence id set are computed here so aggregateParticipants stays a pure
+// fold.
+func (p *GmailSyncProvider) foldDiscovery(
+	msg *gmail.Message,
+	knownMap map[string][]uuid.UUID,
+	knownSet, meSet map[string]struct{},
+	discoveryAgg map[string]*correspondenceAggregate,
+) {
+	if p.discoverer == nil {
+		return
+	}
+	parts := p.collectDiscoveryParticipants(msg)
+	coOccurIDs := discoveryCoOccurIDs(parts, knownMap)
+	aggregateParticipants(parts, knownSet, meSet, coOccurIDs, discoveryAgg)
+}
+
+// runDiscovery evaluates the per-pass discovery aggregate once, best-effort. A
+// discovery error is logged (not returned) so it can NEVER rewind the cursor,
+// fail the sync sweep, or fail the rematch backfill. No-op when no discoverer
+// is wired or the aggregate is empty.
+func (p *GmailSyncProvider) runDiscovery(ctx context.Context, accountID string, discoveryAgg map[string]*correspondenceAggregate) {
+	if p.discoverer == nil || len(discoveryAgg) == 0 {
+		return
+	}
+	upserted, err := p.discoverer.EvaluateAddresses(ctx, sortedAggregates(discoveryAgg))
+	if err != nil {
+		logger.Warn().
+			Err(err).
+			Str("source", GmailSourceName).
+			Str("account", accountID).
+			Msg("gmail: correspondence discovery had per-address failures (non-fatal)")
+		return
+	}
+	if upserted > 0 {
+		logger.Info().
+			Str("source", GmailSourceName).
+			Str("account", accountID).
+			Int("candidates_upserted", upserted).
+			Msg("gmail: correspondence discovery upserted candidates")
+	}
+}
+
+// collectDiscoveryParticipants extracts the (display_name, address) pairs from a
+// fetched message's From, To, and Cc headers using the SAME parsers
+// processMessage uses. Bcc is intentionally omitted from discovery per spec;
+// Gmail strips it from sent copies and it is out of scope.
+func (p *GmailSyncProvider) collectDiscoveryParticipants(msg *gmail.Message) []participant {
+	headers := newHeaderLookup(msg.Payload)
+	fromRaw, _, fromName := parseSingleAddress(headers.first("From"))
+	toRaws, _, toNames := parseAddressList(headers.first("To"))
+	ccRaws, _, ccNames := parseAddressList(headers.first("Cc"))
+
+	out := make([]participant, 0, 1+len(toRaws)+len(ccRaws))
+	if fromRaw != "" {
+		out = append(out, participant{name: fromName, address: fromRaw})
+	}
+	out = appendParticipants(out, toRaws, toNames)
+	out = appendParticipants(out, ccRaws, ccNames)
+	return out
+}
+
+// appendParticipants pairs each raw address with its index-aligned name (a
+// missing name becomes ""), skipping empty addresses. The parsers guarantee the
+// raw + name slices are index-aligned.
+func appendParticipants(out []participant, raws, names []string) []participant {
+	for i, addr := range raws {
+		if addr == "" {
+			continue
+		}
+		name := ""
+		if i < len(names) {
+			name = names[i]
+		}
+		out = append(out, participant{name: name, address: addr})
+	}
+	return out
+}
+
+// discoveryCoOccurIDs returns the set of known contact ids present on a
+// message's From/To/Cc participants (BCC-free by construction —
+// collectDiscoveryParticipants never emits Bcc). This is the co-occurring-contact
+// evidence the candidate records: the KNOWN contacts on the message, never the
+// suggested match. It deliberately does NOT reuse processMessage's
+// candidateContacts set (which is built over To ∪ Cc ∪ Bcc), so a Bcc'd known
+// contact can never leak into discovery evidence.
+func discoveryCoOccurIDs(parts []participant, knownMap map[string][]uuid.UUID) []uuid.UUID {
+	seen := make(map[uuid.UUID]struct{})
+	var out []uuid.UUID
+	for _, part := range parts {
+		norm := matching.NormalizeEmail(part.address)
+		if norm == "" {
+			continue
+		}
+		for _, id := range knownMap[norm] {
+			if _, dup := seen[id]; dup {
+				continue
+			}
+			seen[id] = struct{}{}
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // failResult returns a SyncResult that does NOT advance the cursor: NewCursor
@@ -1398,6 +1572,28 @@ func (p *GmailSyncProvider) RunProcessMessageForTest(
 	meSet map[string]struct{},
 ) ([]qualifiedRow, error) {
 	return p.processMessage(ctx, msg, accountID, knownMap, meSet)
+}
+
+// RunDiscoverParticipantsForTest drives the unexported
+// collectDiscoveryParticipants entry point so cross-package tests can assert
+// participant collection (From/To/Cc, no Bcc) against real *gmail.Message
+// structs. The returned pairs are exposed as DiscoveryParticipantForTest values.
+func (p *GmailSyncProvider) RunDiscoverParticipantsForTest(msg *gmail.Message) []DiscoveryParticipantForTest {
+	parts := p.collectDiscoveryParticipants(msg)
+	out := make([]DiscoveryParticipantForTest, 0, len(parts))
+	for _, part := range parts {
+		out = append(out, DiscoveryParticipantForTest{Name: part.name, Address: part.address})
+	}
+	return out
+}
+
+// DiscoveryParticipantForTest is the exported view of a discovery participant
+// (display_name, address) pair, so cross-package tests can assert
+// collectDiscoveryParticipants output without reaching the unexported
+// participant type. Production code must NOT use this.
+type DiscoveryParticipantForTest struct {
+	Name    string
+	Address string
 }
 
 // SetFetcherFactoryForTest overrides the per-account fetcher factory so tests
