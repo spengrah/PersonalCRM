@@ -43,13 +43,14 @@ export function MethodSuggestionResolver({
   const sourceInfo = getSourceDisplay(suggestion.source)
   const SourceIcon = sourceInfo.icon || HelpCircle
 
-  // Per-method selection state, keyed by the pending value (normalized).
+  // Per-method selection state, keyed by `type:value` so two methods that
+  // share a value under different types (e.g. email vs phone) never collide.
   // Pre-select all by default.
   const [selected, setSelected] = useState<Map<string, boolean>>(new Map())
 
   useEffect(() => {
     const next = new Map<string, boolean>()
-    suggestion.methods.forEach(m => next.set(m.value, true))
+    suggestion.methods.forEach(m => next.set(methodKey(m.type, m.value), true))
     setSelected(next)
   }, [suggestion.methods])
 
@@ -72,23 +73,15 @@ export function MethodSuggestionResolver({
     }
   }, [suggestion])
 
-  // Map a pending value back to its (type) for the selection submit and for
-  // the MethodSelector's selectedType. The submitted (type,value) must match
-  // the pending entry exactly (the backend validates by key).
-  const typeByValue = useMemo(() => {
-    const map = new Map<string, string>()
-    suggestion.methods.forEach(m => map.set(m.value, m.type))
-    return map
-  }, [suggestion.methods])
-
   const comparisons = useMemo<MethodComparison[]>(() => {
     return detectMethodConflicts(adapter, contact?.methods || [])
   }, [adapter, contact?.methods])
 
-  const toggle = useCallback((value: string) => {
+  const toggle = useCallback((type: string, value: string) => {
     setSelected(prev => {
       const next = new Map(prev)
-      next.set(value, !next.get(value))
+      const k = methodKey(type, value)
+      next.set(k, !next.get(k))
       return next
     })
   }, [])
@@ -96,7 +89,7 @@ export function MethodSuggestionResolver({
   const selectedMethods = useMemo<MethodSuggestionMethod[]>(() => {
     const out: MethodSuggestionMethod[] = []
     suggestion.methods.forEach(m => {
-      if (selected.get(m.value)) out.push({ type: m.type, value: m.value })
+      if (selected.get(methodKey(m.type, m.value))) out.push({ type: m.type, value: m.value })
     })
     return out
   }, [suggestion.methods, selected])
@@ -144,16 +137,20 @@ export function MethodSuggestionResolver({
 
   const renderSelector = (comp: MethodComparison) => {
     const value = comp.external_value
-    const type = (typeByValue.get(value) || comp.suggested_crm_type) as ContactMethodType
+    // The detector's suggested_crm_type is the pending method's type for the
+    // email/phone adapter, so it is the exact (type,value) the backend
+    // validates against.
+    const type = comp.suggested_crm_type as ContactMethodType
     const isEmail = type === 'email'
+    const k = methodKey(type, value)
     return (
       <MethodSelector
-        key={value}
+        key={k}
         value={value}
-        selected={comp.conflict_type === 'identical' ? false : Boolean(selected.get(value))}
+        selected={comp.conflict_type === 'identical' ? false : Boolean(selected.get(k))}
         selectedType={type}
         state={comp.state}
-        onToggle={() => toggle(value)}
+        onToggle={() => toggle(type, value)}
         disabled={isLoading || comp.conflict_type === 'identical'}
         isEmail={isEmail}
         lockType
@@ -242,4 +239,10 @@ export function MethodSuggestionResolver({
       </div>
     </div>
   )
+}
+
+/** Selection-map key: `type:value`, so a value shared across two method
+ * types never collides. Mirrors the backend's type-scoped dedup space. */
+function methodKey(type: string, value: string): string {
+  return `${type}:${value}`
 }

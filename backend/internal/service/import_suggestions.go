@@ -371,6 +371,17 @@ func (s *SuggestionService) buildMethodSuggestionItems(ctx context.Context, sour
 			Methods:     displayable,
 		})
 	}
+
+	// Sort the method group by contact name (then external id as a
+	// deterministic tie-break) — the SQL ORDER BY ec.id is only for a
+	// stable scan; the displayed group is name-ordered after effective-
+	// contact resolution.
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].ContactName != items[j].ContactName {
+			return items[i].ContactName < items[j].ContactName
+		}
+		return items[i].ExternalID.String() < items[j].ExternalID.String()
+	})
 	return items, nil
 }
 

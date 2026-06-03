@@ -935,7 +935,7 @@ function ContactCandidateResolver({
             <Button variant="outline" onClick={onClose} disabled={isLoading}>
               Cancel
             </Button>
-            {mode === 'import' ? (
+            {mode === 'import' && !linkOnly ? (
               <Button
                 onClick={handleImport}
                 loading={importMutation.isPending}

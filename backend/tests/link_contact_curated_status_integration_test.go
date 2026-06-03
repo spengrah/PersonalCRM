@@ -86,6 +86,45 @@ func (env *linkCuratedEnv) callLink(t *testing.T, externalID string, body handle
 	return w.Code
 }
 
+// callImport drives the ImportContact handler with the given external id +
+// optional request body and returns the HTTP status.
+func (env *linkCuratedEnv) callImport(t *testing.T, externalID string, body *handlers.ImportRequest) int {
+	t.Helper()
+	var reader *bytes.Reader
+	if body != nil {
+		payload, err := json.Marshal(body)
+		require.NoError(t, err)
+		reader = bytes.NewReader(payload)
+	} else {
+		reader = bytes.NewReader(nil)
+	}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Params = gin.Params{{Key: "id", Value: externalID}}
+	c.Request = httptest.NewRequest(http.MethodPost, "/imports/"+externalID+"/import", reader)
+	c.Request.Header.Set("Content-Type", "application/json")
+	env.handler.ImportContact(c)
+	return w.Code
+}
+
+// seedUnmatchedExternalSource seeds an unmatched external_contact row for an
+// arbitrary source (used to exercise the link-only import guard).
+func (env *linkCuratedEnv) seedUnmatchedExternalSource(t *testing.T, ctx context.Context, source string) *repository.ExternalContact {
+	t.Helper()
+	sfx := abSuffix()
+	display := "Link Only Ext " + sfx
+	external, err := env.externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+		Source:      source,
+		SourceID:    source + "-linkonly-" + sfx,
+		DisplayName: &display,
+		Emails:      []repository.EmailEntry{{Value: "linkonly-" + sfx + "@example.com"}},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = env.externalRepo.Delete(ctx, external.ID) })
+	return external
+}
+
 func (env *linkCuratedEnv) seedUnmatchedExternal(t *testing.T, ctx context.Context) (*repository.Contact, *repository.ExternalContact) {
 	t.Helper()
 	sfx := abSuffix()
@@ -156,4 +195,63 @@ func TestLinkContact_Bare_LandsMatched(t *testing.T) {
 	after, err := env.externalRepo.GetByID(ctx, external.ID)
 	require.NoError(t, err)
 	assert.Equal(t, repository.MatchStatusMatched, after.MatchStatus)
+}
+
+// §4 residual: MethodsCurated=true with empty/nil SelectedMethods (the
+// deselect-all case) → match_status='imported', NOT 'matched'. Before the
+// methods_curated discriminator, this was indistinguishable from a bare
+// link and wrongly classified as 'matched'.
+func TestLinkContact_MethodsCuratedDeselectAll_LandsImported(t *testing.T) {
+	env := setupLinkCuratedEnv(t)
+	ctx := context.Background()
+	contact, external := env.seedUnmatchedExternal(t, ctx)
+
+	code := env.callLink(t, external.ID.String(), handlers.LinkRequest{
+		CRMContactID:   contact.ID.String(),
+		MethodsCurated: true,
+		// SelectedMethods deliberately nil — the user deselected all.
+	})
+	require.Equal(t, http.StatusOK, code)
+
+	after, err := env.externalRepo.GetByID(ctx, external.ID)
+	require.NoError(t, err)
+	assert.Equal(t, repository.MatchStatusImported, after.MatchStatus)
+}
+
+// Link-only import guard: a gmail_correspondence external row cannot be
+// imported as a new contact → 403, and the row stays unmatched.
+func TestImportContact_LinkOnlySource_Forbidden(t *testing.T) {
+	env := setupLinkCuratedEnv(t)
+	ctx := context.Background()
+	external := env.seedUnmatchedExternalSource(t, ctx, "gmail_correspondence")
+
+	code := env.callImport(t, external.ID.String(), nil)
+	require.Equal(t, http.StatusForbidden, code)
+
+	after, err := env.externalRepo.GetByID(ctx, external.ID)
+	require.NoError(t, err)
+	assert.Equal(t, repository.MatchStatusUnmatched, after.MatchStatus, "row must stay unmatched after a rejected import")
+}
+
+// Control: a non-link-only source (gcontacts) still imports successfully,
+// proving the guard is scoped to link-only sources only.
+func TestImportContact_OrdinarySource_Imports(t *testing.T) {
+	env := setupLinkCuratedEnv(t)
+	ctx := context.Background()
+	external := env.seedUnmatchedExternalSource(t, ctx, "gcontacts")
+	t.Cleanup(func() {
+		// The import creates a CRM contact named after the display_name;
+		// clean it up so the shared DB doesn't accumulate.
+		after, _ := env.externalRepo.GetByID(ctx, external.ID)
+		if after != nil && after.CRMContactID != nil {
+			_ = env.contactRepo.HardDeleteContact(ctx, *after.CRMContactID)
+		}
+	})
+
+	code := env.callImport(t, external.ID.String(), nil)
+	require.Equal(t, http.StatusCreated, code)
+
+	after, err := env.externalRepo.GetByID(ctx, external.ID)
+	require.NoError(t, err)
+	assert.Equal(t, repository.MatchStatusImported, after.MatchStatus)
 }

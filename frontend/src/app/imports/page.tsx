@@ -81,6 +81,20 @@ function isPhotoUrlTrusted(url: string): boolean {
   }
 }
 
+/** Header summary for the unified People tab: counts the method-suggestion
+ * group and the candidate group, which are different kinds of work
+ * (confirm methods vs import/link a contact). */
+function headerSummary(methodCount: number, candidateTotal: number): string {
+  const parts: string[] = []
+  if (methodCount > 0) {
+    parts.push(`${methodCount} method suggestion${methodCount > 1 ? 's' : ''}`)
+  }
+  if (candidateTotal > 0) {
+    parts.push(`${candidateTotal} contact${candidateTotal > 1 ? 's' : ''} to review`)
+  }
+  return parts.join(' · ')
+}
+
 // Inline notification component
 function Notification({
   type,
@@ -663,9 +677,9 @@ function ImportsPageInner() {
             <p className="mt-2 text-sm text-gray-500">
               {isLoading
                 ? 'Loading...'
-                : data?.total
-                  ? `${data.total} contacts available to import from Google Contacts and Calendar`
-                  : 'No contacts to import'}
+                : methodSuggestions.length > 0 || (data?.total ?? 0) > 0
+                  ? headerSummary(methodSuggestions.length, data?.total ?? 0)
+                  : 'Nothing to review'}
             </p>
           </div>
           <div className="mt-4 flex md:mt-0 md:ml-4 space-x-2">
