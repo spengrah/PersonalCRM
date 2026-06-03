@@ -497,12 +497,12 @@ function ContactCandidateResolver({
         ? editedName.trim()
         : undefined
 
-    // §4 residual: send methods_curated ONLY when the candidate actually
-    // offered methods to curate (the modal rendered the method-selection
-    // UI). A deselect-all then link sends methods_curated:true with an
-    // empty selected_methods, so the backend classifies the link as
-    // `imported` (not `matched`). A zero-method candidate offered no
-    // curation choice → omit the flag → stays `matched`.
+    // Send methods_curated ONLY when the candidate actually offered methods
+    // to curate (the modal rendered the method-selection UI). A deselect-all
+    // then link sends methods_curated:true with an empty selected_methods, so
+    // the backend classifies the link as `imported` (not `matched`). A
+    // zero-method candidate offered no curation choice → omit the flag →
+    // stays `matched`.
     const offeredMethodCuration = methodSelections.size > 0
 
     try {

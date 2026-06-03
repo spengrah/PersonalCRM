@@ -404,6 +404,14 @@ func (s *SuggestionService) ResolveMethodSuggestions(
 		return ResolveResult{}, err
 	}
 
+	// Read the contact's current methods BEFORE opening the lock tx — this is
+	// read-only drift-defense state, so keeping it off the tx avoids a
+	// pool-in-transaction read while the row is locked.
+	existing, err := s.contactMethodKeySet(ctx, effectiveContactID)
+	if err != nil {
+		return ResolveResult{}, err
+	}
+
 	var confirm []repository.PendingMethodSuggestion
 	lockedExternal := external
 	txErr := pgx.BeginTxFunc(ctx, s.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
@@ -413,10 +421,6 @@ func (s *SuggestionService) ResolveMethodSuggestions(
 		}
 		lockedExternal = locked
 
-		existing, methErr := s.contactMethodKeySet(ctx, effectiveContactID)
-		if methErr != nil {
-			return methErr
-		}
 		currentExternalKeys := externalMethodKeySet(locked)
 		livePending := subtractDismissed(locked.PendingMethodSuggestions, locked.DismissedMethodSuggestions)
 		requestedSet := requestedKeySet(requested) // nil → "all"
@@ -486,6 +490,13 @@ func (s *SuggestionService) DismissMethodSuggestions(
 		return DismissResult{}, err
 	}
 
+	// Read the contact's current methods BEFORE the lock tx (read-only
+	// drift-defense state), avoiding a pool-in-transaction read.
+	existing, err := s.contactMethodKeySet(ctx, effectiveContactID)
+	if err != nil {
+		return DismissResult{}, err
+	}
+
 	var dismissedCount int
 	txErr := pgx.BeginTxFunc(ctx, s.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
 		locked, lockErr := s.externalRepo.GetForUpdateTx(ctx, tx, externalID)
@@ -493,10 +504,6 @@ func (s *SuggestionService) DismissMethodSuggestions(
 			return lockErr
 		}
 
-		existing, methErr := s.contactMethodKeySet(ctx, effectiveContactID)
-		if methErr != nil {
-			return methErr
-		}
 		currentExternalKeys := externalMethodKeySet(locked)
 		livePending := subtractDismissed(locked.PendingMethodSuggestions, locked.DismissedMethodSuggestions)
 		requestedSet := requestedKeySet(requested) // nil → "all actionable"

@@ -172,9 +172,9 @@ test.describe('Imports suggestions surface @area:imports', () => {
     // The modal closes (or advances) and the unmatched candidate leaves the
     // People list. Close the modal, then assert the candidate card is gone
     // from the list (the same-named CRM contact still exists elsewhere, so
-    // scope to the list card via its heading + Import/Link affordances).
+    // scope to the list card via its heading). The toHaveCount assertion
+    // retries on the live UI, so no networkidle wait is needed.
     await page.keyboard.press('Escape')
-    await page.waitForLoadState('networkidle')
     await expect(
       page.locator('div.border', { has: page.getByRole('heading', { name: cardName }) })
     ).toHaveCount(0, { timeout: 10000 })

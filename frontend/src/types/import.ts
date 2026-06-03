@@ -152,8 +152,9 @@ export interface LinkContactRequest {
   cadence?: string
   name?: string // Optional custom name (updates CRM contact name if provided)
   // True when the modal rendered the method-selection UI and the user made
-  // a selection decision (even deselect-all). Closes the §4 residual where
-  // a deselect-all link was classified `matched` instead of `imported`.
+  // a selection decision (even deselect-all). Lets the backend classify a
+  // deselect-all link as `imported` rather than `matched` (a nil and an
+  // explicit empty selection are otherwise indistinguishable server-side).
   methods_curated?: boolean
 }
 
