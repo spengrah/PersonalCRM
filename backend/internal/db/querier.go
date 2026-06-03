@@ -824,6 +824,7 @@ type Querier interface {
 	// lowercased by the contact_method trigger. Ordered deterministically.
 	ListEmailIdentitiesForSync(ctx context.Context) ([]*ListEmailIdentitiesForSyncRow, error)
 	ListEnabledSyncStates(ctx context.Context) ([]*ExternalSyncState, error)
+	ListEnabledSyncStatesBySource(ctx context.Context, source string) ([]*ExternalSyncState, error)
 	ListEnrichmentsBySource(ctx context.Context, arg ListEnrichmentsBySourceParams) ([]*ContactEnrichment, error)
 	// List events by Google account within a date range
 	ListEventsByAccountAndDateRange(ctx context.Context, arg ListEventsByAccountAndDateRangeParams) ([]*CalendarEvent, error)
@@ -1054,6 +1055,7 @@ type Querier interface {
 	// Replace source contact ID with target contact ID in calendar event matched_contact_ids array
 	// Uses array_replace for efficient in-place replacement
 	ReplaceContactInCalendarEvents(ctx context.Context, arg ReplaceContactInCalendarEventsParams) error
+	ResetSyncStateBackfillCursor(ctx context.Context, arg ResetSyncStateBackfillCursorParams) (*ExternalSyncState, error)
 	ResetTelegramChatConfigBackfill(ctx context.Context, telegramChatID int64) error
 	// Sets linked_kind, linked_id, linkage_state='linked',
 	// conflict_candidates=NULL on a row currently in linkage_state =

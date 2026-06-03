@@ -20,7 +20,9 @@ package tests
 import (
 	"context"
 	"os"
+	"strconv"
 	"testing"
+	"time"
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/db"
@@ -186,6 +188,101 @@ func TestReconcileEmail_IdempotentRerun_NoDuplicatesNoReset(t *testing.T) {
 
 	// Assert exactly one row for this account across all sync states.
 	require.Equal(t, 1, e.countEmailStatesForAccount(t, acct))
+}
+
+// --- operator reset: enabled email cursors only -----------------------------
+
+func TestResetGmailBackfillCursors_ResetsOnlyEnabledEmailStates(t *testing.T) {
+	e := newReconcileEnv(t)
+	enabledAcct := uniqueAccount("reset-enabled")
+	defaultAcct := uniqueAccount("reset-default")
+	disabledAcct := uniqueAccount("reset-disabled")
+	otherAcct := uniqueAccount("reset-other")
+	for _, acct := range []string{enabledAcct, defaultAcct, disabledAcct, otherAcct} {
+		e.cleanupAccount(t, acct)
+	}
+
+	enabled, err := e.syncRepo.CreateSyncState(e.ctx, repository.CreateSyncStateRequest{
+		Source:    "email",
+		AccountID: &enabledAcct,
+		Enabled:   true,
+		Strategy:  repository.SyncStrategyContactDriven,
+		Metadata:  map[string]any{"backfill_since": "2026-03-15", "extra": "keep-me"},
+	})
+	require.NoError(t, err)
+	oldCursor := "9999999999"
+	_, err = e.syncRepo.UpdateSyncStateSuccess(e.ctx, enabled.ID, accelerated.GetCurrentTime().Add(24*time.Hour), &oldCursor)
+	require.NoError(t, err)
+	errMsg := "previous failure"
+	_, err = e.syncRepo.UpdateSyncStateStatus(e.ctx, enabled.ID, repository.SyncStatusError, &errMsg)
+	require.NoError(t, err)
+
+	defaultMeta, err := e.syncRepo.CreateSyncState(e.ctx, repository.CreateSyncStateRequest{
+		Source:    "email",
+		AccountID: &defaultAcct,
+		Enabled:   true,
+		Strategy:  repository.SyncStrategyContactDriven,
+	})
+	require.NoError(t, err)
+	_, err = e.syncRepo.UpdateSyncStateSuccess(e.ctx, defaultMeta.ID, accelerated.GetCurrentTime().Add(24*time.Hour), &oldCursor)
+	require.NoError(t, err)
+
+	disabled, err := e.syncRepo.CreateSyncState(e.ctx, repository.CreateSyncStateRequest{
+		Source:    "email",
+		AccountID: &disabledAcct,
+		Enabled:   false,
+		Status:    repository.SyncStatusDisabled,
+		Strategy:  repository.SyncStrategyContactDriven,
+		Metadata:  map[string]any{"backfill_since": "2026-04-01"},
+	})
+	require.NoError(t, err)
+
+	other, err := e.syncRepo.CreateSyncState(e.ctx, repository.CreateSyncStateRequest{
+		Source:    "calendar",
+		AccountID: &otherAcct,
+		Enabled:   true,
+		Strategy:  repository.SyncStrategyFetchAll,
+	})
+	require.NoError(t, err)
+	otherNext := accelerated.GetCurrentTime().Add(48 * time.Hour)
+	_, err = e.syncRepo.UpdateSyncStateSuccess(e.ctx, other.ID, otherNext, &oldCursor)
+	require.NoError(t, err)
+
+	resetSvc := service.NewEmailBackfillCursorResetService(e.syncRepo)
+	before := accelerated.GetCurrentTime()
+	res, err := resetSvc.ResetGmailBackfillCursors(e.ctx)
+	after := accelerated.GetCurrentTime()
+	require.NoError(t, err)
+	require.Equal(t, service.EmailBackfillCursorResetResult{Scanned: 2, Reset: 2}, res)
+
+	enabledAfter := e.getEmailState(t, enabledAcct)
+	require.NotNil(t, enabledAfter.SyncCursor)
+	require.Equal(t, strconv.FormatInt(time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC).Unix(), 10), *enabledAfter.SyncCursor)
+	require.Equal(t, repository.SyncStatusIdle, enabledAfter.Status)
+	require.Nil(t, enabledAfter.ErrorMessage)
+	require.Equal(t, int32(0), enabledAfter.ErrorCount)
+	require.NotNil(t, enabledAfter.NextSyncAt)
+	require.False(t, enabledAfter.NextSyncAt.Before(before))
+	require.False(t, enabledAfter.NextSyncAt.After(after))
+	require.Equal(t, "2026-03-15", enabledAfter.Metadata["backfill_since"])
+	require.Equal(t, "keep-me", enabledAfter.Metadata["extra"])
+
+	defaultAfter := e.getEmailState(t, defaultAcct)
+	require.NotNil(t, defaultAfter.SyncCursor)
+	require.Equal(t, strconv.FormatInt(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Unix(), 10), *defaultAfter.SyncCursor)
+
+	disabledAfter, err := e.syncRepo.GetSyncState(e.ctx, disabled.ID)
+	require.NoError(t, err)
+	require.False(t, disabledAfter.Enabled)
+	require.Equal(t, repository.SyncStatusDisabled, disabledAfter.Status)
+	require.Nil(t, disabledAfter.SyncCursor)
+
+	otherAfter, err := e.syncRepo.GetSyncState(e.ctx, other.ID)
+	require.NoError(t, err)
+	require.NotNil(t, otherAfter.SyncCursor)
+	require.Equal(t, oldCursor, *otherAfter.SyncCursor)
+	require.NotNil(t, otherAfter.NextSyncAt)
+	require.WithinDuration(t, otherNext, *otherAfter.NextSyncAt, time.Millisecond)
 }
 
 // --- respects a user-disabled state (never re-enabled) ----------------------

@@ -111,7 +111,7 @@ func TestGmailGoLive_RegisteredProvider_SchedulerSweep_ProducesInteractionsAndCa
 		_ = syncRepo.DeleteSyncStatesByAccountID(ctx, account)
 	})
 
-	sentAt := localNoonAnchor()
+	sentAt := gmailPastNoonAnchor()
 	inbound := gmailMsg("glv-in", "thr-in", addr, []string{account}, nil, nil, "In", "hi", "<"+inExt+">", sentAt.UnixMilli())
 	outbound := gmailMsg("glv-out", "thr-out", account, []string{addr}, nil, nil, "Out", "yo", "<"+outExt+">", sentAt.Add(time.Hour).UnixMilli())
 	// Message between "me" and an unknown address only — a bystander to the
@@ -141,6 +141,18 @@ func TestGmailGoLive_RegisteredProvider_SchedulerSweep_ProducesInteractionsAndCa
 	require.NoError(t, err)
 	require.True(t, created.Enabled)
 	require.Nil(t, created.SyncCursor, "cursor empty before first sweep")
+
+	// Anchor the backfill floor a few days behind the fixture so one sweep's
+	// catch-up always reaches it, independent of the calendar date the suite
+	// runs on. With the default 2026-01-01 floor, the fixed per-run window cap
+	// would eventually stop covering "yesterday" as wall-clock advances.
+	md := created.Metadata
+	if md == nil {
+		md = map[string]any{}
+	}
+	md["backfill_since"] = sentAt.Add(-72 * time.Hour).Format("2006-01-02")
+	_, err = syncRepo.UpdateSyncStateMetadata(ctx, created.ID, md)
+	require.NoError(t, err)
 
 	// Drive the sweep through the worker entry point: RunAccountSync fetches
 	// fresh state from the registry-backed provider, runs Sync, and writes the

@@ -8,6 +8,7 @@ import (
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
+	syncpkg "personal-crm/backend/internal/sync"
 )
 
 const (
@@ -17,13 +18,6 @@ const (
 	// literal so the service layer does not import the google package (which
 	// would invert the dependency direction).
 	emailSyncSource = "email"
-
-	// emailBackfillSince is the onboarding floor written into a newly-created
-	// email sync state's metadata. It must match the value the Gmail provider
-	// reads from metadata["backfill_since"] (google.gmailDefaultBackfillSince);
-	// even an absent/empty value defaults to the same date inside the provider,
-	// so this is belt-and-suspenders alignment, not a hard coupling.
-	emailBackfillSince = "2026-01-01"
 
 	// gmailReadonlyScope is the OAuth scope a connected Google account needs for
 	// the email sweep to authenticate against Gmail. Defined as a literal so the
@@ -59,7 +53,7 @@ func (s *SyncService) SetEmailAccountLister(lister GoogleAccountLister) {
 //   - create-if-absent ONLY. For each account it probes
 //     GetSyncStateBySource("email", &accountID); on db.ErrNotFound it creates a
 //     per-account state (enabled=true, strategy=contact_driven,
-//     metadata={"backfill_since": emailBackfillSince}, empty cursor, NULL
+//     metadata={"backfill_since": sync.EmailBackfillSinceDefault}, empty cursor, NULL
 //     next_sync_at → immediately due on the next tick).
 //   - a found state is left COMPLETELY untouched: no re-enable, no metadata
 //     rewrite, no cursor reset. Re-running must never duplicate states, reset
@@ -114,7 +108,7 @@ func (s *SyncService) ReconcileEmailSyncStates(ctx context.Context) error {
 			AccountID: &acctID,
 			Enabled:   true,
 			Strategy:  repository.SyncStrategyContactDriven,
-			Metadata:  map[string]any{"backfill_since": emailBackfillSince},
+			Metadata:  map[string]any{"backfill_since": syncpkg.EmailBackfillSinceDefault},
 			// NextSyncAt left nil → NULL → immediately due on the next tick.
 		}); createErr != nil {
 			if isUniqueViolation(createErr) {

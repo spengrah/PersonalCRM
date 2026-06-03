@@ -776,38 +776,148 @@ func TestComputeLocalDay_ReadsGlobalTimeLocal(t *testing.T) {
 
 // --- cursor helpers ---
 
-func TestComputeNewCursor_FetchedAdvancesMonotonic(t *testing.T) {
-	// max(maxInternalDate, prior) — never below prior.
-	require.Equal(t, "200", computeNewCursor(true, 200, 100, "100", 50))
-	require.Equal(t, "100", computeNewCursor(true, 80, 100, "100", 50), "out-of-order older message must not pull floor back")
+func TestParseGmailCursor_NumericCursor(t *testing.T) {
+	got := parseGmailCursor("1700000000", nil)
+	require.Equal(t, int64(1700000000), got.CompletedThrough)
+	require.Empty(t, got.BoundaryHashes)
 }
 
-func TestComputeNewCursor_ZeroFetched_PreservesPriorCursor(t *testing.T) {
-	require.Equal(t, "12345", computeNewCursor(false, 0, 12345, "12345", 50))
-}
-
-func TestComputeNewCursor_ZeroFetched_EmptyPrior_WritesBackfillEpoch(t *testing.T) {
-	require.Equal(t, "1735689600", computeNewCursor(false, 0, 0, "", 1735689600))
-}
-
-func TestResolveAfterFloor_NumericCursor(t *testing.T) {
-	prior, after := resolveAfterFloor("1700000000", nil)
-	require.Equal(t, int64(1700000000), prior)
-	require.Equal(t, int64(1700000000), after)
-}
-
-func TestResolveAfterFloor_EmptyCursor_UsesBackfillSince(t *testing.T) {
+func TestParseGmailCursor_EmptyCursor_UsesBackfillSince(t *testing.T) {
 	expected := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Unix()
-	prior, after := resolveAfterFloor("", nil)
-	require.Equal(t, int64(0), prior)
-	require.Equal(t, expected, after)
+	got := parseGmailCursor("", nil)
+	require.Equal(t, expected, got.CompletedThrough)
+	require.Empty(t, got.BoundaryHashes)
 }
 
-func TestResolveAfterFloor_EmptyCursor_MetadataOverride(t *testing.T) {
+func TestParseGmailCursor_EmptyCursor_MetadataOverride(t *testing.T) {
 	expected := time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC).Unix()
-	prior, after := resolveAfterFloor("", map[string]any{"backfill_since": "2026-03-15"})
-	require.Equal(t, int64(0), prior)
-	require.Equal(t, expected, after)
+	got := parseGmailCursor("", map[string]any{"backfill_since": "2026-03-15"})
+	require.Equal(t, expected, got.CompletedThrough)
+	require.Empty(t, got.BoundaryHashes)
+}
+
+func TestParseGmailCursor_JSONCursor(t *testing.T) {
+	got := parseGmailCursor(`{"v":2,"completed_through":1700000000,"boundary_hashes":["h2","h1","h1"]}`, nil)
+	require.Equal(t, int64(1700000000), got.CompletedThrough)
+	require.Contains(t, got.BoundaryHashes, "h1")
+	require.Contains(t, got.BoundaryHashes, "h2")
+	require.Len(t, got.BoundaryHashes, 2)
+}
+
+func TestEncodeGmailCursor_SortsBoundaryHashesAndUsesArray(t *testing.T) {
+	encoded := encodeGmailCursor(gmailCursorState{
+		CompletedThrough: 1700000000,
+		BoundaryHashes:   map[string]struct{}{"h2": {}, "h1": {}},
+	})
+	require.JSONEq(t, `{"v":2,"completed_through":1700000000,"boundary_hashes":["h1","h2"]}`, encoded)
+
+	encoded = encodeGmailCursor(gmailCursorState{CompletedThrough: 1700000000})
+	require.JSONEq(t, `{"v":2,"completed_through":1700000000,"boundary_hashes":[]}`, encoded)
+}
+
+func TestBuildWindowORChunks_AddsBroadAfterBeforeBounds(t *testing.T) {
+	start := time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC).Unix()
+	end := time.Date(2026, 3, 17, 12, 0, 0, 0, time.UTC).Unix()
+	chunks := buildWindowORChunks([]string{"b@example.com", "a@example.com"}, start, end)
+	require.Len(t, chunks, 1)
+	q := chunks[0]
+	queryAfter, queryBefore := gmailSearchQueryBounds(start, end)
+	require.True(t, strings.HasPrefix(q, fmt.Sprintf("%s after:%d before:%d (", gmailCategoryFilter, queryAfter, queryBefore)), "got %q", q)
+	require.Less(t, strings.Index(q, "a@example.com"), strings.Index(q, "b@example.com"))
+	require.LessOrEqual(t, len(url.QueryEscape(q)), gmailChunkByteCap)
+}
+
+func TestScanWindowChunks_FiltersByInternalDateAndStoresBoundaryHashes(t *testing.T) {
+	p := newProviderForResolution()
+	f := newFakeFetcher()
+	start := int64(1000)
+	end := int64(1100)
+	query := "q"
+	f.listPages[query] = [][]gmailMessageRef{
+		{{ID: "older"}, {ID: "inside"}},
+		{{ID: "boundary"}, {ID: "future"}},
+	}
+	f.messages["older"] = &gmail.Message{Id: "older", InternalDate: (start - 1) * 1000}
+	f.messages["inside"] = &gmail.Message{Id: "inside", InternalDate: (start + 10) * 1000}
+	f.messages["boundary"] = &gmail.Message{Id: "boundary", InternalDate: end * 1000}
+	f.messages["future"] = &gmail.Message{Id: "future", InternalDate: (end + 1) * 1000}
+
+	res, err := p.scanWindowChunks(context.Background(), f, []string{query}, "account@example.com", nil, nil, gmailScanWindow{
+		StartEpoch:          start,
+		EndEpoch:            end,
+		PriorBoundaryHashes: map[string]struct{}{},
+	}, map[string]*gmail.Message{})
+	require.NoError(t, err)
+	require.Equal(t, 2, res.Processed)
+	require.Equal(t, 0, res.Matched)
+	require.Equal(t, []string{hashGmailMessageID("boundary")}, res.BoundaryHashes)
+	require.Equal(t, 1, f.getCalls["older"], "out-of-window messages still need internalDate inspection")
+	require.Equal(t, 1, f.getCalls["future"])
+}
+
+func TestScanWindowChunks_PriorBoundarySkipsReplayAllowsNewSameSecond(t *testing.T) {
+	p := newProviderForResolution()
+	f := newFakeFetcher()
+	start := int64(1000)
+	end := int64(1100)
+	query := "q"
+	f.listPages[query] = [][]gmailMessageRef{{{ID: "replayed"}, {ID: "late-indexed"}}}
+	f.messages["replayed"] = &gmail.Message{Id: "replayed", InternalDate: start * 1000}
+	f.messages["late-indexed"] = &gmail.Message{Id: "late-indexed", InternalDate: start*1000 + 999}
+
+	res, err := p.scanWindowChunks(context.Background(), f, []string{query}, "account@example.com", nil, nil, gmailScanWindow{
+		StartEpoch: start,
+		EndEpoch:   end,
+		PriorBoundaryHashes: map[string]struct{}{
+			hashGmailMessageID("replayed"): {},
+		},
+	}, map[string]*gmail.Message{})
+	require.NoError(t, err)
+	require.Equal(t, 1, res.Processed)
+	require.Equal(t, 0, f.getCalls["replayed"], "known boundary id is skipped by identity hash before refetch")
+	require.Equal(t, 1, f.getCalls["late-indexed"], "new id at the same boundary second is still eligible")
+}
+
+func TestScanWindowChunks_ReusesFetchedMessageAcrossOverlappingWindows(t *testing.T) {
+	p := newProviderForResolution()
+	f := newFakeFetcher()
+	firstQuery := "w1"
+	secondQuery := "w2"
+	f.listPages[firstQuery] = [][]gmailMessageRef{{{ID: "overlap"}}}
+	f.listPages[secondQuery] = [][]gmailMessageRef{{{ID: "overlap"}}}
+	f.messages["overlap"] = &gmail.Message{Id: "overlap", InternalDate: 1150 * 1000}
+
+	fetchedMessages := map[string]*gmail.Message{}
+	first, err := p.scanWindowChunks(context.Background(), f, []string{firstQuery}, "account@example.com", nil, nil, gmailScanWindow{
+		StartEpoch:          1000,
+		EndEpoch:            1100,
+		PriorBoundaryHashes: map[string]struct{}{},
+	}, fetchedMessages)
+	require.NoError(t, err)
+	require.Equal(t, 0, first.Processed, "neighboring overlap fetch is outside the exact first window")
+	require.Equal(t, 1, f.getCalls["overlap"])
+
+	second, err := p.scanWindowChunks(context.Background(), f, []string{secondQuery}, "account@example.com", nil, nil, gmailScanWindow{
+		StartEpoch:          1100,
+		EndEpoch:            1200,
+		PriorBoundaryHashes: map[string]struct{}{},
+	}, fetchedMessages)
+	require.NoError(t, err)
+	require.Equal(t, 1, second.Processed, "cached body is still processed in its exact window")
+	require.Equal(t, 1, f.getCalls["overlap"], "overlap body is fetched once across the run")
+}
+
+func TestScanWindowChunks_ListFailureReturnsError(t *testing.T) {
+	p := newProviderForResolution()
+	f := newFakeFetcher()
+	f.listErr = fmt.Errorf("forced list error")
+
+	_, err := p.scanWindowChunks(context.Background(), f, []string{"q"}, "account@example.com", nil, nil, gmailScanWindow{
+		StartEpoch:          1000,
+		EndEpoch:            1100,
+		PriorBoundaryHashes: map[string]struct{}{},
+	}, map[string]*gmail.Message{})
+	require.Error(t, err)
 }
 
 // --- cross-chunk seen dedup ---

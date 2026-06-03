@@ -10,8 +10,8 @@
 //   - cursor-overlap idempotency (no duplicate rows / events / provenance growth);
 //   - publish-before-mutate (a failing PublishTx leaves no content row);
 //   - nomsgid fallback persistence;
-//   - cursor edge cases (all-bystander advances; zero-fetched preserves; hard
-//     failure leaves cursor unchanged);
+//   - cursor edge cases (all-bystander and empty windows advance; hard failure
+//     leaves cursor unchanged);
 //   - nil-account guard;
 //   - cross-account set-union provenance merge through the provider/upsert path.
 //
@@ -24,13 +24,16 @@ package tests
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
@@ -163,6 +166,9 @@ func (s *fakeMessageStore) fetcherFuncs() google.FakeGmailFetcherFuncs {
 			}
 			refs := make([]google.GmailMessageRefForTest, 0, len(s.messages))
 			for _, m := range s.messages {
+				if !fakeMessageMatchesQuery(m, query) {
+					continue
+				}
 				refs = append(refs, google.GmailMessageRefForTest{ID: m.Id, ThreadID: m.ThreadId})
 			}
 			return refs, "", nil
@@ -180,6 +186,28 @@ func (s *fakeMessageStore) fetcherFuncs() google.FakeGmailFetcherFuncs {
 			return nil, fmt.Errorf("message %s not found", id)
 		},
 	}
+}
+
+func fakeMessageMatchesQuery(msg *gmailapi.Message, query string) bool {
+	secs := msg.InternalDate / 1000
+	if after, ok := fakeQueryEpoch(query, "after:"); ok && secs < after {
+		return false
+	}
+	if before, ok := fakeQueryEpoch(query, "before:"); ok && secs > before {
+		return false
+	}
+	return true
+}
+
+func fakeQueryEpoch(query, prefix string) (int64, bool) {
+	for _, part := range strings.Fields(query) {
+		if !strings.HasPrefix(part, prefix) {
+			continue
+		}
+		v, err := strconv.ParseInt(strings.TrimPrefix(part, prefix), 10, 64)
+		return v, err == nil
+	}
+	return 0, false
 }
 
 // inject wires the store as the provider's fetcher + sets the me-set.
@@ -230,11 +258,36 @@ func (failingBus) PublishTx(_ context.Context, _ pgx.Tx, _ *events.Envelope) err
 }
 
 func syncState(accountID, cursor string) *repository.SyncState {
-	st := &repository.SyncState{Source: "email", AccountID: &accountID}
+	st := &repository.SyncState{
+		Source:    "email",
+		AccountID: &accountID,
+		Metadata:  map[string]any{"backfill_since": "2023-11-01"},
+	}
 	if cursor != "" {
 		st.SyncCursor = &cursor
 	}
 	return st
+}
+
+type gmailCursorForTest struct {
+	Version          int      `json:"v"`
+	CompletedThrough int64    `json:"completed_through"`
+	BoundaryHashes   []string `json:"boundary_hashes"`
+}
+
+func decodeGmailCursor(t *testing.T, cursor string) gmailCursorForTest {
+	t.Helper()
+	var decoded gmailCursorForTest
+	require.NoError(t, json.Unmarshal([]byte(cursor), &decoded))
+	require.Equal(t, 2, decoded.Version)
+	return decoded
+}
+
+func expectCursorAtLeast(t *testing.T, cursor string, minEpoch int64) gmailCursorForTest {
+	t.Helper()
+	decoded := decodeGmailCursor(t, cursor)
+	require.GreaterOrEqual(t, decoded.CompletedThrough, minEpoch)
+	return decoded
 }
 
 // --- full sweep → content rows + events ---
@@ -261,7 +314,7 @@ func TestGmailProvider_FullSweep_ContentAndEvents(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, result.ItemsProcessed)
 	require.Equal(t, 2, result.ItemsMatched)
-	require.Equal(t, "1700000200", result.NewCursor) // max internalDate (epoch secs)
+	expectCursorAtLeast(t, result.NewCursor, 1700000200)
 
 	aRows, err := e.commsRepo.ListByContact(e.ctx, contactA.ID)
 	require.NoError(t, err)
@@ -453,14 +506,14 @@ func TestGmailProvider_AllBystanderSweepAdvancesCursor(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, result.ItemsProcessed)
 	require.Equal(t, 0, result.ItemsMatched)
-	require.Equal(t, "1700000800", result.NewCursor, "processed-but-not-persisted message still advances the cursor")
+	expectCursorAtLeast(t, result.NewCursor, 1700000800)
 
 	aRows, err := e.commsRepo.ListByContact(e.ctx, contactA.ID)
 	require.NoError(t, err)
 	require.Empty(t, aRows)
 }
 
-func TestGmailProvider_ZeroFetchedPreservesCursor(t *testing.T) {
+func TestGmailProvider_ZeroFetchedAdvancesCompletedWindows(t *testing.T) {
 	e := newGmailProviderEnv(t)
 	suffix := uuid.NewString()[:8]
 	me := "me-" + suffix + "@example.com"
@@ -469,17 +522,103 @@ func TestGmailProvider_ZeroFetchedPreservesCursor(t *testing.T) {
 
 	e.inject(newFakeMessageStore(nil), map[string]struct{}{me: {}})
 
-	// With a prior cursor, the same value is re-written verbatim.
-	result, err := e.provider.Sync(e.ctx, syncState(me, "1699999999"), nil)
+	// Empty but fully scanned windows are proven complete and advance.
+	priorEpoch := int64(1699999999)
+	result, err := e.provider.Sync(e.ctx, syncState(me, fmt.Sprintf("%d", priorEpoch)), nil)
 	require.NoError(t, err)
-	require.Equal(t, "1699999999", result.NewCursor)
+	decoded := decodeGmailCursor(t, result.NewCursor)
+	require.Greater(t, decoded.CompletedThrough, priorEpoch)
 
-	// With an empty prior cursor (onboarding, nothing fetched), the
-	// backfill_since epoch is written (never empty → no NULL-clear).
+	// With an empty prior cursor, the metadata backfill floor is upgraded into
+	// the v2 cursor and advanced through completed empty windows.
 	result, err = e.provider.Sync(e.ctx, syncState(me, ""), nil)
 	require.NoError(t, err)
-	expectedBackfill := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Unix()
-	require.Equal(t, fmt.Sprintf("%d", expectedBackfill), result.NewCursor)
+	expectedBackfill := time.Date(2023, 11, 1, 0, 0, 0, 0, time.UTC).Unix()
+	decoded = decodeGmailCursor(t, result.NewCursor)
+	require.Greater(t, decoded.CompletedThrough, expectedBackfill)
+}
+
+func TestGmailProvider_CatchUpScansSuccessiveWindowsInOneRun(t *testing.T) {
+	e := newGmailProviderEnv(t)
+	suffix := uuid.NewString()[:8]
+	me := "me-" + suffix + "@example.com"
+	addrA := "a-" + suffix + "@example.com"
+	contactA := e.newEmailContactWithMethod(t, "Contact A "+suffix, addrA)
+
+	start := accelerated.GetCurrentTime().UTC().Add(-28 * 24 * time.Hour).Truncate(time.Second).Unix()
+	msgEpochs := []int64{
+		start + int64((1 * time.Hour).Seconds()),
+		start + int64((8 * 24 * time.Hour).Seconds()),
+		start + int64((15 * 24 * time.Hour).Seconds()),
+	}
+	var messages []*gmailapi.Message
+	for i, epoch := range msgEpochs {
+		ext := fmt.Sprintf("catchup-%d-%s@example.com", i, suffix)
+		e.cleanupEvents(t, ext)
+		messages = append(messages, gmailMsg(
+			fmt.Sprintf("g-catchup-%d", i),
+			"thr",
+			addrA,
+			[]string{me},
+			nil,
+			nil,
+			"S",
+			"body",
+			"<"+ext+">",
+			epoch*1000,
+		))
+	}
+
+	tooNewExt := "catchup-new-" + suffix + "@example.com"
+	e.cleanupEvents(t, tooNewExt)
+	tooNewEpoch := accelerated.GetCurrentTime().UTC().Add(-1 * time.Minute).Unix()
+	messages = append(messages, gmailMsg("g-catchup-new", "thr", addrA, []string{me}, nil, nil, "S", "body", "<"+tooNewExt+">", tooNewEpoch*1000))
+
+	e.inject(newFakeMessageStore(messages), map[string]struct{}{me: {}})
+
+	beforeSafe := accelerated.GetCurrentTime().UTC().Add(-10 * time.Minute).Unix()
+	result, err := e.provider.Sync(e.ctx, syncState(me, fmt.Sprintf("%d", start)), nil)
+	afterSafe := accelerated.GetCurrentTime().UTC().Add(-10 * time.Minute).Unix()
+	require.NoError(t, err)
+	require.Equal(t, 3, result.ItemsProcessed)
+	require.Equal(t, 3, result.ItemsMatched)
+	cursor := decodeGmailCursor(t, result.NewCursor)
+	require.GreaterOrEqual(t, cursor.CompletedThrough, beforeSafe)
+	require.LessOrEqual(t, cursor.CompletedThrough, afterSafe)
+
+	rows, err := e.commsRepo.ListByContact(e.ctx, contactA.ID)
+	require.NoError(t, err)
+	require.Len(t, rows, 3, "all eligible messages below the final cursor are inserted")
+	for _, row := range rows {
+		require.NotEqual(t, tooNewExt, row.ExternalID, "message inside the safety lag must not be ingested yet")
+	}
+}
+
+func TestGmailProvider_BoundaryOverlapSkipsOnlySeenMessageIDs(t *testing.T) {
+	e := newGmailProviderEnv(t)
+	suffix := uuid.NewString()[:8]
+	me := "me-" + suffix + "@example.com"
+	addrA := "a-" + suffix + "@example.com"
+	contactA := e.newEmailContactWithMethod(t, "Contact A "+suffix, addrA)
+
+	start := accelerated.GetCurrentTime().UTC().Add(-21 * 24 * time.Hour).Truncate(time.Second).Unix()
+	boundaryEpoch := start + int64((7 * 24 * time.Hour).Seconds())
+	ext := "boundary-" + suffix + "@example.com"
+	e.cleanupEvents(t, ext)
+	msg := gmailMsg("g-boundary-"+suffix, "thr", addrA, []string{me}, nil, nil, "S", "body", "<"+ext+">", boundaryEpoch*1000)
+	store := newFakeMessageStore([]*gmailapi.Message{msg})
+	e.inject(store, map[string]struct{}{me: {}})
+
+	result, err := e.provider.Sync(e.ctx, syncState(me, fmt.Sprintf("%d", start)), nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.ItemsProcessed)
+	require.Equal(t, 1, result.ItemsMatched)
+	require.Equal(t, 1, store.getCalls[msg.Id], "boundary replay should be skipped by Gmail message id hash")
+
+	rows, err := e.commsRepo.ListByContact(e.ctx, contactA.ID)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, ext, rows[0].ExternalID)
 }
 
 func TestGmailProvider_HardFailureLeavesCursorUnchanged(t *testing.T) {
@@ -508,7 +647,7 @@ func TestGmailProvider_HardFailureLeavesCursorUnchanged(t *testing.T) {
 	delete(store.forcedGetErr, "g-hf")
 	result, err = e.provider.Sync(e.ctx, syncState(me, priorCursor), nil)
 	require.NoError(t, err)
-	require.Equal(t, "1700000900", result.NewCursor)
+	expectCursorAtLeast(t, result.NewCursor, 1700000900)
 }
 
 // --- nil-account guard ---
@@ -570,11 +709,10 @@ func TestGmailProvider_CrossAccountProvenanceMerge(t *testing.T) {
 
 // TestGmailProvider_Onboarding_EmptyCursor_BackfillSince drives the full
 // onboarding seam through Sync end-to-end: a nil SyncCursor + a backfill_since
-// metadata override must (a) floor the scan query at the override epoch, (b)
+// metadata override must (a) start the proven window at the override epoch, (b)
 // persist a qualifying message dated after the floor, (c) advance the cursor to
-// the message's internalDate seconds, and (d) be idempotent on a second sweep
-// with the returned cursor. Complements (does not duplicate) the resolveAfterFloor
-// / computeNewCursor helper unit tests, which exercise the functions in isolation.
+// a completed window, and (d) be idempotent on a second sweep with the returned
+// cursor.
 func TestGmailProvider_Onboarding_EmptyCursor_BackfillSince(t *testing.T) {
 	e := newGmailProviderEnv(t)
 	suffix := uuid.NewString()[:8]
@@ -624,13 +762,14 @@ func TestGmailProvider_Onboarding_EmptyCursor_BackfillSince(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, result.ItemsProcessed)
 	require.Equal(t, 1, result.ItemsMatched)
-	require.Equal(t, fmt.Sprintf("%d", msgEpochSecs), result.NewCursor, "cursor advances to the message internalDate seconds")
+	expectCursorAtLeast(t, result.NewCursor, msgEpochSecs)
 
-	// Query floored at the override epoch, not the default 2026-01-01.
+	// The first query is widened around the override floor; exact inclusion is
+	// enforced with internalDate after fetching.
 	require.NotEmpty(t, capturedQueries)
-	for _, q := range capturedQueries {
-		require.Contains(t, q, fmt.Sprintf("after:%d", overrideEpoch), "scan floors at the backfill_since override")
-	}
+	firstAfter, ok := fakeQueryEpoch(capturedQueries[0], "after:")
+	require.True(t, ok, "first query should include after:")
+	require.Equal(t, overrideEpoch-int64((48*time.Hour)/time.Second), firstAfter)
 
 	// Content row + event persisted.
 	rows, err := e.commsRepo.ListByContact(e.ctx, contactA.ID)

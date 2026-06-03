@@ -311,6 +311,21 @@ func (r *SyncRepository) ListEnabledSyncStates(ctx context.Context) ([]SyncState
 	return states, nil
 }
 
+// ListEnabledSyncStatesBySource retrieves enabled sync states for one source.
+func (r *SyncRepository) ListEnabledSyncStatesBySource(ctx context.Context, source string) ([]SyncState, error) {
+	dbStates, err := r.queries.ListEnabledSyncStatesBySource(ctx, source)
+	if err != nil {
+		return nil, err
+	}
+
+	states := make([]SyncState, len(dbStates))
+	for i, dbState := range dbStates {
+		states[i] = convertDbSyncState(dbState)
+	}
+
+	return states, nil
+}
+
 // ListDueSyncStates retrieves sync states that are due for syncing
 func (r *SyncRepository) ListDueSyncStates(ctx context.Context, now time.Time) ([]SyncState, error) {
 	dbStates, err := r.queries.ListDueSyncStates(ctx, pgtype.Timestamptz{Time: now, Valid: true})
@@ -389,6 +404,27 @@ func (r *SyncRepository) UpdateSyncStateSuccess(ctx context.Context, id uuid.UUI
 		ID:         uuidToPgUUID(id),
 		NextSyncAt: pgtype.Timestamptz{Time: nextSyncAt, Valid: true},
 		SyncCursor: stringToPgText(cursor),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+
+	state := convertDbSyncState(dbState)
+	return &state, nil
+}
+
+// ResetSyncStateBackfillCursor rewinds a sync state's cursor and marks it due.
+func (r *SyncRepository) ResetSyncStateBackfillCursor(ctx context.Context, id uuid.UUID, cursor string, nextSyncAt time.Time) (*SyncState, error) {
+	dbState, err := r.queries.ResetSyncStateBackfillCursor(ctx, db.ResetSyncStateBackfillCursorParams{
+		ID:         uuidToPgUUID(id),
+		SyncCursor: pgtype.Text{String: cursor, Valid: true},
+		NextSyncAt: pgtype.Timestamptz{
+			Time:  nextSyncAt,
+			Valid: true,
+		},
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

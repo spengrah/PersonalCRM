@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/matching"
@@ -54,11 +55,23 @@ const (
 	// gmailChunkByteCap caps the URL-encoded length of a single chunk query at
 	// ~6 KB, well under the practical ~8 KB GET-URL limit (spec §3.1/§7).
 	gmailChunkByteCap = 6000
-	// gmailDefaultBackfillSince is the onboarding floor used when an account
-	// has no cursor and no metadata override (spec §3.2/§7).
-	gmailDefaultBackfillSince = "2026-01-01"
 	// gmailUserID is Gmail's special-value alias for the authenticated account.
 	gmailUserID = "me"
+	// gmailWindowSpan bounds each proven cursor window. Catch-up scans several
+	// windows per run, but the cursor only moves after a whole window is listed,
+	// paged, fetched, and filtered successfully.
+	gmailWindowSpan = 7 * 24 * time.Hour
+	// gmailMaxWindowsPerSync lets a rewound account catch up promptly while
+	// keeping one run bounded against unexpectedly large mailboxes or Gmail
+	// rate limits.
+	gmailMaxWindowsPerSync = 24
+	// gmailSearchSafetyLag leaves recent Gmail index churn out of the proven
+	// window. A later run picks it up once the index has had time to settle.
+	gmailSearchSafetyLag = 10 * time.Minute
+	// gmailSearchBoundaryOverlap compensates for Gmail search date operators
+	// behaving coarser than internalDate. The query is deliberately broad and
+	// the provider applies the exact internalDate window in Go.
+	gmailSearchBoundaryOverlap = 48 * time.Hour
 )
 
 // emailSafeTermRegex matches an address that is safe to embed verbatim in a
@@ -118,7 +131,7 @@ func (f *gmailServiceFetcher) GetMessage(ctx context.Context, id string) (*gmail
 		// id is a per-mailbox Gmail message id (third-party identifier); hash it
 		// so the error (which flows into River logs) carries no raw third-party
 		// reference while staying correlatable.
-		return nil, fmt.Errorf("get message %s: %w", hashIdentifier(id), err)
+		return nil, fmt.Errorf("get message %s: %w", hashGmailMessageID(id), err)
 	}
 	return msg, nil
 }
@@ -335,53 +348,189 @@ func (p *GmailSyncProvider) Sync(
 		return nil, fmt.Errorf("build gmail fetcher: %w", err)
 	}
 
-	// Resolve the after: floor. An empty cursor means onboarding — fall back to
-	// backfill_since (default 2026-01-01) converted to epoch seconds.
 	priorCursor := ""
 	if state.SyncCursor != nil {
 		priorCursor = *state.SyncCursor
 	}
-	priorCursorSecs, afterEpoch := resolveAfterFloor(priorCursor, state.Metadata)
+	cursorState := parseGmailCursor(priorCursor, state.Metadata)
+	safeHorizon := accelerated.GetCurrentTime().UTC().Add(-gmailSearchSafetyLag).Unix()
+	if safeHorizon <= cursorState.CompletedThrough {
+		logger.Info().
+			Str("source", GmailSourceName).
+			Str("account", accountID).
+			Int64("completed_through", cursorState.CompletedThrough).
+			Int64("safe_horizon", safeHorizon).
+			Msg("Gmail sync has no closed window to scan")
+		return &sync.SyncResult{NewCursor: priorCursor}, nil
+	}
 
 	addresses := make([]string, 0, len(knownMap))
 	for addr := range knownMap {
 		addresses = append(addresses, addr)
 	}
-	chunks := buildORChunks(addresses, afterEpoch)
 
-	processed, matched, maxInternalDateSecs, fetchedAny, err := p.scanChunks(ctx, fetcher, chunks, accountID, knownMap, meSet)
-	if err != nil {
-		// Hard failure: abort the sweep, return the prior cursor unchanged so
-		// the whole after:<prior> window re-runs next tick.
-		return p.failResult(priorCursor), fmt.Errorf("scan chunks: %w", err)
+	result := &sync.SyncResult{}
+	windowsScanned := 0
+	fetchedMessages := make(map[string]*gmail.Message)
+	for windowsScanned < gmailMaxWindowsPerSync && cursorState.CompletedThrough < safeHorizon {
+		windowEnd := cursorState.CompletedThrough + int64(gmailWindowSpan/time.Second)
+		if windowEnd > safeHorizon {
+			windowEnd = safeHorizon
+		}
+		if windowEnd <= cursorState.CompletedThrough {
+			break
+		}
+
+		window := gmailScanWindow{
+			StartEpoch:          cursorState.CompletedThrough,
+			EndEpoch:            windowEnd,
+			PriorBoundaryHashes: cursorState.BoundaryHashes,
+		}
+		chunks := buildWindowORChunks(addresses, window.StartEpoch, window.EndEpoch)
+
+		scanned, err := p.scanWindowChunks(ctx, fetcher, chunks, accountID, knownMap, meSet, window, fetchedMessages)
+		if err != nil {
+			// Hard failure: abort the sweep, return the stored cursor unchanged
+			// so no unproven window is skipped on the next tick.
+			return p.failResult(priorCursor), fmt.Errorf("scan window: %w", err)
+		}
+
+		result.ItemsProcessed += scanned.Processed
+		result.ItemsMatched += scanned.Matched
+		cursorState.CompletedThrough = windowEnd
+		cursorState.BoundaryHashes = hashesToSet(scanned.BoundaryHashes)
+		windowsScanned++
 	}
 
-	result := &sync.SyncResult{
-		ItemsProcessed: processed,
-		ItemsMatched:   matched,
+	if windowsScanned == 0 {
+		result.NewCursor = priorCursor
+	} else {
+		result.NewCursor = encodeGmailCursor(cursorState)
 	}
-	result.NewCursor = computeNewCursor(fetchedAny, maxInternalDateSecs, priorCursorSecs, priorCursor, afterEpoch)
 
 	logger.Info().
 		Str("source", GmailSourceName).
 		Str("account", accountID).
 		Int("processed", result.ItemsProcessed).
 		Int("matched", result.ItemsMatched).
-		Str("cursor", result.NewCursor).
+		Int("windows_scanned", windowsScanned).
+		Int64("completed_through", cursorState.CompletedThrough).
+		Int("boundary_count", len(cursorState.BoundaryHashes)).
 		Msg("Gmail sync completed")
 
 	return result, nil
 }
 
-// scanChunks runs the fetch → per-call `seen` cross-chunk dedup → GetMessage →
-// processMessage → persistRow inner loop for one account against the given
-// chunk queries. It owns NEITHER cursor math NOR external_sync_state NOR
-// failResult — it returns the RAW error to the caller, which applies its own
-// failure semantics (Sync wraps it with failResult + cursor; ScanIdentifier
-// returns it directly).
+type gmailCursorState struct {
+	CompletedThrough int64
+	BoundaryHashes   map[string]struct{}
+}
+
+type gmailCursorJSON struct {
+	Version          int      `json:"v"`
+	CompletedThrough int64    `json:"completed_through"`
+	BoundaryHashes   []string `json:"boundary_hashes"`
+}
+
+type gmailScanWindow struct {
+	StartEpoch          int64
+	EndEpoch            int64
+	PriorBoundaryHashes map[string]struct{}
+}
+
+type gmailWindowScanResult struct {
+	Processed      int
+	Matched        int
+	BoundaryHashes []string
+}
+
+// scanWindowChunks runs one closed cursor window. Gmail's search operators are
+// intentionally broad; each fetched message is filtered by internalDate seconds
+// before processing so coarse search-boundary behavior cannot skip mail inside
+// the proven window.
+func (p *GmailSyncProvider) scanWindowChunks(
+	ctx context.Context,
+	fetcher gmailFetcher,
+	chunks []string,
+	accountID string,
+	knownMap map[string][]uuid.UUID,
+	meSet map[string]struct{},
+	window gmailScanWindow,
+	fetchedMessages map[string]*gmail.Message,
+) (gmailWindowScanResult, error) {
+	var result gmailWindowScanResult
+	seen := make(map[string]struct{})
+	boundaryHashes := make(map[string]struct{})
+	if fetchedMessages == nil {
+		fetchedMessages = make(map[string]*gmail.Message)
+	}
+
+	for _, query := range chunks {
+		pageToken := ""
+		for {
+			refs, next, listErr := fetcher.ListMessageIDs(ctx, query, pageToken)
+			if listErr != nil {
+				return result, fmt.Errorf("list message ids: %w", listErr)
+			}
+			for _, ref := range refs {
+				idHash := hashGmailMessageID(ref.ID)
+				if _, dup := seen[idHash]; dup {
+					continue
+				}
+				seen[idHash] = struct{}{}
+
+				if _, replay := window.PriorBoundaryHashes[idHash]; replay {
+					continue
+				}
+
+				msg, fetched := fetchedMessages[idHash]
+				if !fetched {
+					var getErr error
+					msg, getErr = fetcher.GetMessage(ctx, ref.ID)
+					if getErr != nil {
+						return result, fmt.Errorf("get message %s: %w", idHash, getErr)
+					}
+					fetchedMessages[idHash] = msg
+				}
+
+				msgEpoch := msg.InternalDate / 1000
+				if msgEpoch < window.StartEpoch || msgEpoch > window.EndEpoch {
+					continue
+				}
+				if msgEpoch == window.EndEpoch {
+					boundaryHashes[idHash] = struct{}{}
+				}
+
+				rows, procErr := p.processMessage(ctx, msg, accountID, knownMap, meSet)
+				if procErr != nil {
+					return result, fmt.Errorf("process message %s: %w", idHash, procErr)
+				}
+				result.Processed++
+
+				for _, row := range rows {
+					if perr := p.persistRow(ctx, row); perr != nil {
+						return result, fmt.Errorf("persist row for message %s: %w", idHash, perr)
+					}
+					result.Matched++
+				}
+			}
+			pageToken = next
+			if pageToken == "" {
+				break
+			}
+		}
+	}
+
+	result.BoundaryHashes = setToSortedHashes(boundaryHashes)
+	return result, nil
+}
+
+// scanChunks runs ScanIdentifier's fetch → per-call `seen` cross-chunk dedup →
+// GetMessage → processMessage → persistRow inner loop for one account against
+// the given chunk queries. It does not read or write steady-state cursors.
 //
 // The `seen` set is created fresh INSIDE this call — a per-account, per-sweep
-// invariant (spec §3.1). Callers MUST NOT hoist it: a `seen` shared across
+// invariant. Callers MUST NOT hoist it: a `seen` shared across
 // accounts would skip the same Message-ID in account B and defeat the
 // cross-account provenance merge.
 func (p *GmailSyncProvider) scanChunks(
@@ -391,43 +540,36 @@ func (p *GmailSyncProvider) scanChunks(
 	accountID string,
 	knownMap map[string][]uuid.UUID,
 	meSet map[string]struct{},
-) (processed, matched int, maxInternalDateSecs int64, fetchedAny bool, err error) {
+) (processed, matched int, err error) {
 	seen := make(map[string]struct{})
 	for _, query := range chunks {
 		pageToken := ""
 		for {
 			refs, next, listErr := fetcher.ListMessageIDs(ctx, query, pageToken)
 			if listErr != nil {
-				return processed, matched, maxInternalDateSecs, fetchedAny, fmt.Errorf("list message ids: %w", listErr)
+				return processed, matched, fmt.Errorf("list message ids: %w", listErr)
 			}
 			for _, ref := range refs {
 				if _, dup := seen[ref.ID]; dup {
 					continue // cross-chunk dedup: body already fetched this sweep
 				}
 				seen[ref.ID] = struct{}{}
-				fetchedAny = true
 
 				msg, getErr := fetcher.GetMessage(ctx, ref.ID)
 				if getErr != nil {
 					// ref.ID is a per-mailbox Gmail message id (third-party);
 					// hash it so the error in River logs carries no raw id.
-					return processed, matched, maxInternalDateSecs, fetchedAny, fmt.Errorf("get message %s: %w", hashIdentifier(ref.ID), getErr)
+					return processed, matched, fmt.Errorf("get message %s: %w", hashGmailMessageID(ref.ID), getErr)
 				}
 				rows, procErr := p.processMessage(ctx, msg, accountID, knownMap, meSet)
 				if procErr != nil {
-					return processed, matched, maxInternalDateSecs, fetchedAny, fmt.Errorf("process message %s: %w", hashIdentifier(ref.ID), procErr)
+					return processed, matched, fmt.Errorf("process message %s: %w", hashGmailMessageID(ref.ID), procErr)
 				}
 				processed++
 
-				// Processed (even if zero qualifying rows) contributes its
-				// internalDate to the cursor advance.
-				if secs := msg.InternalDate / 1000; secs > maxInternalDateSecs {
-					maxInternalDateSecs = secs
-				}
-
 				for _, row := range rows {
 					if perr := p.persistRow(ctx, row); perr != nil {
-						return processed, matched, maxInternalDateSecs, fetchedAny, fmt.Errorf("persist row for message %s: %w", hashIdentifier(ref.ID), perr)
+						return processed, matched, fmt.Errorf("persist row for message %s: %w", hashGmailMessageID(ref.ID), perr)
 					}
 					matched++
 				}
@@ -438,7 +580,7 @@ func (p *GmailSyncProvider) scanChunks(
 			}
 		}
 	}
-	return processed, matched, maxInternalDateSecs, fetchedAny, nil
+	return processed, matched, nil
 }
 
 // ScanIdentifier runs a one-shot, identifier-scoped historical Gmail scan for a
@@ -473,7 +615,7 @@ func (p *GmailSyncProvider) ScanIdentifier(
 	}
 
 	// scanChunks creates its own per-account `seen` set; no cursor math here.
-	_, matched, _, _, err = p.scanChunks(ctx, fetcher, chunks, accountID, knownMap, meSet)
+	_, matched, err = p.scanChunks(ctx, fetcher, chunks, accountID, knownMap, meSet)
 	if err != nil {
 		return matched, fmt.Errorf("scan identifier: %w", err)
 	}
@@ -625,53 +767,71 @@ func (p *GmailSyncProvider) persistRow(ctx context.Context, row qualifiedRow) (e
 	return nil
 }
 
-// resolveAfterFloor derives the after:<epoch> floor and the prior cursor in
-// epoch seconds. On an empty/unparseable cursor (onboarding) the floor is
-// backfill_since (default 2026-01-01), and priorCursorSecs is 0. On a numeric
-// cursor the floor is that value and priorCursorSecs mirrors it.
-func resolveAfterFloor(cursor string, metadata map[string]any) (priorCursorSecs, afterEpoch int64) {
-	if secs, err := strconv.ParseInt(strings.TrimSpace(cursor), 10, 64); err == nil && secs > 0 {
-		return secs, secs
+// parseGmailCursor accepts the legacy numeric cursor and the v2 JSON cursor.
+// Empty or invalid cursors fall back to the configured backfill floor.
+func parseGmailCursor(cursor string, metadata map[string]any) gmailCursorState {
+	cursor = strings.TrimSpace(cursor)
+	if cursor == "" {
+		return gmailCursorState{CompletedThrough: backfillSinceEpoch(metadata), BoundaryHashes: map[string]struct{}{}}
 	}
-	return 0, backfillSinceEpoch(metadata)
-}
 
-// backfillSinceEpoch reads metadata["backfill_since"] (a YYYY-MM-DD string,
-// default 2026-01-01) and converts it to epoch seconds in UTC.
-func backfillSinceEpoch(metadata map[string]any) int64 {
-	since := gmailDefaultBackfillSince
-	if metadata != nil {
-		if v, ok := metadata["backfill_since"].(string); ok && strings.TrimSpace(v) != "" {
-			since = strings.TrimSpace(v)
+	if secs, err := strconv.ParseInt(cursor, 10, 64); err == nil && secs > 0 {
+		return gmailCursorState{CompletedThrough: secs, BoundaryHashes: map[string]struct{}{}}
+	}
+
+	var encoded gmailCursorJSON
+	if err := json.Unmarshal([]byte(cursor), &encoded); err == nil &&
+		encoded.Version == 2 &&
+		encoded.CompletedThrough > 0 {
+		return gmailCursorState{
+			CompletedThrough: encoded.CompletedThrough,
+			BoundaryHashes:   hashesToSet(encoded.BoundaryHashes),
 		}
 	}
-	t, err := time.Parse("2006-01-02", since)
+
+	return gmailCursorState{CompletedThrough: backfillSinceEpoch(metadata), BoundaryHashes: map[string]struct{}{}}
+}
+
+func encodeGmailCursor(state gmailCursorState) string {
+	encoded := gmailCursorJSON{
+		Version:          2,
+		CompletedThrough: state.CompletedThrough,
+		BoundaryHashes:   setToSortedHashes(state.BoundaryHashes),
+	}
+	b, err := json.Marshal(encoded)
 	if err != nil {
-		t, _ = time.Parse("2006-01-02", gmailDefaultBackfillSince)
+		return strconv.FormatInt(state.CompletedThrough, 10)
 	}
-	return t.Unix()
+	return string(b)
 }
 
-// computeNewCursor implements the cursor-write contract. It NEVER returns
-// an empty string (an empty NewCursor would NULL-clear the stored cursor and
-// trigger a full re-backfill):
-//   - ≥1 message fetched: advance to max(maxInternalDateSecs, priorCursorSecs),
-//     monotonic so an out-of-order older message can't pull the floor back.
-//   - zero messages fetched: re-write the prior cursor verbatim (idempotent
-//     no-advance); on an empty prior cursor, write the backfill_since epoch so
-//     the next sweep doesn't re-scan from the dawn of time.
-func computeNewCursor(fetchedAny bool, maxInternalDateSecs, priorCursorSecs int64, priorCursor string, afterEpoch int64) string {
-	if fetchedAny {
-		advanced := maxInternalDateSecs
-		if priorCursorSecs > advanced {
-			advanced = priorCursorSecs
+func hashesToSet(hashes []string) map[string]struct{} {
+	out := make(map[string]struct{}, len(hashes))
+	for _, h := range hashes {
+		h = strings.TrimSpace(h)
+		if h == "" {
+			continue
 		}
-		return strconv.FormatInt(advanced, 10)
+		out[h] = struct{}{}
 	}
-	if strings.TrimSpace(priorCursor) != "" {
-		return priorCursor
+	return out
+}
+
+func setToSortedHashes(set map[string]struct{}) []string {
+	if len(set) == 0 {
+		return []string{}
 	}
-	return strconv.FormatInt(afterEpoch, 10)
+	out := make([]string, 0, len(set))
+	for h := range set {
+		out = append(out, h)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// backfillSinceEpoch reads the shared email backfill floor from sync metadata.
+func backfillSinceEpoch(metadata map[string]any) int64 {
+	return sync.EmailBackfillFloorEpoch(metadata)
 }
 
 // sanitizeAddresses filters the address list to terms safe to embed in a Gmail
@@ -702,13 +862,25 @@ func sanitizeAddresses(addresses []string) []string {
 // participant-dimension coverage invariant). Addresses are sorted for
 // deterministic chunk contents. Returns no chunks for an empty address list.
 func buildORChunks(addresses []string, afterEpoch int64) []string {
+	prefix := fmt.Sprintf("%s after:%d", gmailCategoryFilter, afterEpoch)
+	return buildORChunksWithPrefix(addresses, prefix)
+}
+
+// buildWindowORChunks builds Sync's closed-window queries. The Gmail search
+// bounds are intentionally wider than the proven internalDate window; exact
+// inclusion/exclusion happens after GetMessage using internalDate seconds.
+func buildWindowORChunks(addresses []string, startEpoch, endEpoch int64) []string {
+	queryAfter, queryBefore := gmailSearchQueryBounds(startEpoch, endEpoch)
+	prefix := fmt.Sprintf("%s after:%d before:%d", gmailCategoryFilter, queryAfter, queryBefore)
+	return buildORChunksWithPrefix(addresses, prefix)
+}
+
+func buildORChunksWithPrefix(addresses []string, prefix string) []string {
 	safe := sanitizeAddresses(addresses)
 	if len(safe) == 0 {
 		return nil
 	}
 	sort.Strings(safe)
-
-	prefix := fmt.Sprintf("%s after:%d", gmailCategoryFilter, afterEpoch)
 
 	var chunks []string
 	var groups []string
@@ -730,6 +902,15 @@ func buildORChunks(addresses []string, afterEpoch int64) []string {
 	}
 	flush()
 	return chunks
+}
+
+func gmailSearchQueryBounds(startEpoch, endEpoch int64) (afterEpoch, beforeEpoch int64) {
+	afterEpoch = time.Unix(startEpoch, 0).UTC().Add(-gmailSearchBoundaryOverlap).Unix()
+	if afterEpoch < 0 {
+		afterEpoch = 0
+	}
+	beforeEpoch = time.Unix(endEpoch, 0).UTC().Add(gmailSearchBoundaryOverlap).Unix()
+	return afterEpoch, beforeEpoch
 }
 
 // encodedLen returns the URL-encoded byte length of a query — the dimension the
@@ -1189,6 +1370,18 @@ func hashIdentifier(v string) string {
 		return ""
 	}
 	sum := sha256.Sum256([]byte(strings.ToLower(v)))
+	return "sha256:" + hex.EncodeToString(sum[:])[:12]
+}
+
+// hashGmailMessageID hashes a per-mailbox Gmail message id as an exact opaque
+// identifier. Unlike email-address hashing, it is case-sensitive because the id
+// itself is the identity key used by boundary replay suppression.
+func hashGmailMessageID(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(v))
 	return "sha256:" + hex.EncodeToString(sum[:])[:12]
 }
 
