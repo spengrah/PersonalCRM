@@ -99,19 +99,25 @@ test.describe('Imports suggestions surface @area:imports', () => {
     // Open the modal via the Link button (no suggested match → "Link (select)").
     await card.getByRole('button', { name: /Link/i }).click()
 
+    // The modal refetches ALL candidates and navigates by index, so steer it
+    // to THIS worker's link-only candidate before asserting on its controls.
+    await navigateModalToCandidate(page, cardName)
+
     // The modal is locked to link mode — the Import-mode toggle is absent.
     await expect(page.getByRole('button', { name: /Import as New/i })).toHaveCount(0)
     await expect(page.getByRole('button', { name: /Link to Existing/i })).toHaveCount(0)
   })
 
   test('§4 residual: deselect-all link removes the candidate', async ({ page }) => {
-    // Seed a CRM contact + a same-named gcontacts candidate so the modal
-    // opens with the contact auto-selected (suggested match).
+    // Seed a CRM contact + a same-named candidate so the modal opens with the
+    // contact auto-selected (suggested match). Use icloud_contacts (not
+    // gcontacts) so this candidate does not pollute the gcontacts-scoped
+    // empty-state test under parallel runs.
     await testApi.seedContacts([{ full_name: 'Deselect Target' }])
     await testApi.seedExternalContacts([
       {
         display_name: 'Deselect Target',
-        source: 'gcontacts',
+        source: 'icloud_contacts',
         emails: [`deselect-${testApi.prefix}@example.invalid`],
       },
     ])
