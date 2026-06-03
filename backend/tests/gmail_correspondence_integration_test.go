@@ -1,38 +1,31 @@
-// Integration coverage for the gmail_correspondence enrichment source.
-// Drives the REAL producer, repos, ImportMatchService, EnrichmentService (with
-// a live event bus + River client), and the re-derivation runner (with a fake
-// Gmail fetcher via the provider's exported test seam) against the shared test
-// DB. Proves:
-//   - the producer turns name-bearing comms_message participants into
-//     gmail_correspondence external_contact rows with the expected evidence +
-//     suggested_match;
-//   - linking a candidate adds the email as a contact_method and dispatches the
-//     KindContactMethodsAdded rematch (the inherited backfill hand-off — async
-//     scan completion is covered by gmail_rematch_integration_test.go, not here);
-//   - sticky-ignore is preserved across producer re-runs (no clobber);
-//   - the import endpoint returns 403 for this link-only source (the shared
-//     import-suggestions surface's server-side link-only enforcement);
-//   - the one-time re-derivation re-fetches name-less rows, ADDS the name keys
-//     while preserving all existing content + provenance (the additive-merge
-//     invariant), and the producer then surfaces the previously-hidden backlog;
-//   - the re-derivation is idempotent.
+// Integration coverage for the in-sync gmail_correspondence DISCOVERY hook.
+// Drives the REAL GmailSyncProvider.Sync with a real *events.Bus + database.Pool
+// + a FAKE gmailFetcher (no OAuth/HTTP) and a real CorrespondenceDiscoverer
+// wired via SetCorrespondenceDiscoverer, against the shared test DB. Proves:
+//   - DISCOVERY RUNS BETWEEN FETCH AND STORAGE (the key regression): a fetched
+//     multi-party message that does NOT pass the storage gate (so it is never
+//     stored in comms_message) STILL yields a gmail_correspondence candidate,
+//     with the suggested match recomputed from the Cc display name and the
+//     co-occurring-contact evidence drawn from the KNOWN contact on the message
+//     (never the suggested match);
+//   - linking a produced candidate adds the email as a contact_method and
+//     dispatches the KindContactMethodsAdded rematch (the inherited backfill
+//     hand-off);
+//   - a discovery error is NON-FATAL to the sync sweep: Sync returns no error,
+//     the cursor advances, the storage-gate-passing message IS stored, and the
+//     candidate is NOT upserted (discovery failed, logged not propagated).
 //
 // All seeding goes through repositories (sqlc-only); addresses/names are
-// placeholders; times use accelerated.GetCurrentTime().
+// per-test-suffixed placeholders; times use accelerated.GetCurrentTime().
 package tests
 
 import (
 	"context"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
+	"errors"
 	"os"
 	"testing"
 	"time"
 
-	"personal-crm/backend/internal/accelerated"
-	"personal-crm/backend/internal/api"
-	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
@@ -41,7 +34,6 @@ import (
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
-	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
@@ -49,20 +41,20 @@ import (
 	gmailapi "google.golang.org/api/gmail/v1"
 )
 
-// correspondenceEnv bundles a real DB + the repos/services these tests drive.
-type correspondenceEnv struct {
+// discoveryEnv bundles a real provider + bus + repos for the discovery tests.
+type discoveryEnv struct {
 	ctx          context.Context
 	database     *db.Database
+	provider     *google.GmailSyncProvider
 	commsRepo    *repository.CommsMessageRepository
 	contactRepo  *repository.ContactRepository
 	methodRepo   *repository.ContactMethodRepository
 	externalRepo *repository.ExternalContactRepository
 	eventRepo    *repository.EventRepository
 	matchService *service.ImportMatchService
-	suggester    *google.GmailCorrespondenceSuggester
 }
 
-func newCorrespondenceEnv(t *testing.T, ownAddr string) *correspondenceEnv {
+func newDiscoveryEnv(t *testing.T) *discoveryEnv {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -82,86 +74,75 @@ func newCorrespondenceEnv(t *testing.T, ownAddr string) *correspondenceEnv {
 
 	commsRepo := repository.NewCommsMessageRepository(database.Queries)
 	contactRepo := repository.NewContactRepository(database.Queries)
+	contactRepo.SetPool(database.Pool)
 	methodRepo := repository.NewContactMethodRepository(database.Queries)
 	externalRepo := repository.NewExternalContactRepository(database.Queries)
 	eventRepo := repository.NewEventRepository(database.Queries)
+	interactionRepo := repository.NewInteractionRepository(database.Queries)
+	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
+	contactService := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, contactTaskRepo, nil, nil)
 
-	suggester := google.NewGmailCorrespondenceSuggester(
-		commsRepo, contactRepo, externalRepo,
-		func(context.Context) (map[string]struct{}, error) {
-			return map[string]struct{}{matching.NormalizeEmail(ownAddr): {}}, nil
-		},
-	)
+	// Sync early-returns when bus == nil, so wire a live bus + pool (the shared
+	// harness). email.* kinds are drained by the harness's no-op email worker.
+	bus := setupTestEventBus(t, ctx, database, contactService)
 
-	return &correspondenceEnv{
+	provider := google.NewGmailSyncProvider(nil, commsRepo, bus, database.Pool)
+
+	return &discoveryEnv{
 		ctx:          ctx,
 		database:     database,
+		provider:     provider,
 		commsRepo:    commsRepo,
 		contactRepo:  contactRepo,
 		methodRepo:   methodRepo,
 		externalRepo: externalRepo,
 		eventRepo:    eventRepo,
 		matchService: service.NewImportMatchService(contactRepo),
-		suggester:    suggester,
 	}
 }
 
-// uniqueAddr returns a per-test unique placeholder address so parallel/shared-DB
-// runs do not collide on the producer's source_id dedup.
-func uniqueAddr(prefix string) string {
-	return prefix + "-" + uuid.New().String()[:8] + "@example.test"
-}
-
-// seedCorrespondenceContact creates a CRM contact and registers cleanup of its
-// comms_message rows, methods, and the contact itself.
-func (e *correspondenceEnv) seedContact(t *testing.T, fullName string) *repository.Contact {
+// seedContactWithMethod creates a CRM contact with one email method (so it is a
+// KNOWN contact in the sync's knownMap) and registers cleanup.
+func (e *discoveryEnv) seedContactWithMethod(t *testing.T, name, email string) *repository.Contact {
 	t.Helper()
-	c, err := e.contactRepo.CreateContact(e.ctx, repository.CreateContactRequest{FullName: fullName})
+	contact, err := e.contactRepo.CreateContact(e.ctx, repository.CreateContactRequest{FullName: name})
+	require.NoError(t, err)
+	_, err = e.methodRepo.CreateContactMethod(e.ctx, repository.CreateContactMethodRequest{
+		ContactID: contact.ID,
+		Type:      "email",
+		Value:     email,
+		IsPrimary: true,
+	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_ = e.commsRepo.HardDeleteByContact(e.ctx, c.ID)
-		_ = e.contactRepo.SoftDeleteContact(e.ctx, c.ID)
+		_ = e.commsRepo.HardDeleteByContact(e.ctx, contact.ID)
+		_ = e.contactRepo.SoftDeleteContact(e.ctx, contact.ID)
 	})
-	return c
+	return contact
 }
 
-// nameMetadata builds a source_metadata blob with a single From participant
-// carrying both the bare address and the display name (the post-capture shape).
-func nameMetadata(t *testing.T, fromAddr, fromName, ownAddr string) []byte {
+// seedContactNoMethod creates a CRM contact with NO email method (so it is only
+// trigram-matchable by name, never in the known-address set) and registers
+// cleanup.
+func (e *discoveryEnv) seedContactNoMethod(t *testing.T, name string) *repository.Contact {
 	t.Helper()
-	b, err := json.Marshal(map[string]any{
-		"from":      fromAddr,
-		"from_name": fromName,
-		"to":        []string{ownAddr},
-		"to_names":  []string{"Me"},
-		"subject":   "Hello",
-		"html":      "<p>body</p>",
-	})
+	contact, err := e.contactRepo.CreateContact(e.ctx, repository.CreateContactRequest{FullName: name})
 	require.NoError(t, err)
-	return b
+	t.Cleanup(func() {
+		_ = e.commsRepo.HardDeleteByContact(e.ctx, contact.ID)
+		_ = e.contactRepo.SoftDeleteContact(e.ctx, contact.ID)
+	})
+	return contact
 }
 
-// seedMessage upserts one email comms_message row for the contact.
-func (e *correspondenceEnv) seedMessage(t *testing.T, contactID uuid.UUID, externalID, account, gmailID string, metadata []byte) {
-	t.Helper()
-	acct := account
-	gid := gmailID
-	_, err := e.commsRepo.UpsertMessage(e.ctx, repository.UpsertCommsMessageParams{
-		Source:           repository.InteractionSourceEmail,
-		ExternalID:       externalID,
-		Direction:        repository.InteractionDirectionInbound,
-		SentAt:           accelerated.GetCurrentTime().Add(-24 * time.Hour),
-		AccountID:        &acct,
-		SourceMetadata:   metadata,
-		MatchedContactID: contactID,
-		GmailMessageID:   &gid,
-	})
-	require.NoError(t, err)
+// wireDiscoverer attaches a real CorrespondenceDiscoverer to the provider.
+func (e *discoveryEnv) wireDiscoverer() {
+	e.provider.SetCorrespondenceDiscoverer(google.NewCorrespondenceDiscoverer(e.contactRepo, e.externalRepo))
 }
 
-// cleanupExternal registers a hard-delete of a produced candidate so the
-// shared DB does not accumulate gmail_correspondence rows across runs.
-func (e *correspondenceEnv) cleanupExternal(t *testing.T, sourceID string) {
+// cleanupExternal hard-deletes a produced candidate so the shared DB does not
+// accumulate gmail_correspondence rows across runs.
+func (e *discoveryEnv) cleanupExternal(t *testing.T, sourceID string) {
 	t.Helper()
 	t.Cleanup(func() {
 		row, _ := e.externalRepo.GetBySource(e.ctx, google.CorrespondenceSource, sourceID, nil)
@@ -171,77 +152,117 @@ func (e *correspondenceEnv) cleanupExternal(t *testing.T, sourceID string) {
 	})
 }
 
-func TestCorrespondence_ProducerEmitsCandidateWithSuggestedMatch(t *testing.T) {
-	ownAddr := uniqueAddr("me")
-	e := newCorrespondenceEnv(t, ownAddr)
+// cleanupEvents hard-deletes durable email.* event rows produced by a sweep.
+func (e *discoveryEnv) cleanupEvents(t *testing.T, externalIDPrefix string) {
+	t.Helper()
+	t.Cleanup(func() {
+		_ = e.eventRepo.HardDeleteEventsBySourceAndSourceIDPrefix(e.ctx, "email", externalIDPrefix+"%")
+	})
+}
 
-	fullName := "Correspondence Alpha " + uuid.New().String()[:6]
-	contact := e.seedContact(t, fullName)
-	unknownAddr := uniqueAddr("alpha")
-	e.cleanupExternal(t, matching.NormalizeEmail(unknownAddr))
+// discoverySyncState builds a sync state at the legacy backfill floor so the
+// windowed sync reaches a 2023-era seeded message in its first pass (the same
+// floor + epoch the provider sweep tests use).
+func discoverySyncState(accountID string) *repository.SyncState {
+	return &repository.SyncState{
+		Source:    "email",
+		AccountID: &accountID,
+		Metadata:  map[string]any{"backfill_since": "2023-11-01"},
+	}
+}
 
-	e.seedMessage(t, contact.ID, "ext-"+uuid.New().String(), ownAddr, "gmail-1",
-		nameMetadata(t, unknownAddr, fullName, ownAddr))
+// 1. KEY REGRESSION: discovery runs between fetch and storage.
+func TestDiscovery_RunsBetweenFetchAndStorage(t *testing.T) {
+	e := newDiscoveryEnv(t)
+	e.wireDiscoverer()
+	suffix := uuid.NewString()[:8]
 
-	n, err := e.suggester.Run(e.ctx, accelerated.GetCurrentTime().Add(-google.CorrespondenceWindow))
+	me := "me-" + suffix + "@example.com"
+	addrA := "a-" + suffix + "@example.com"          // KNOWN contact A (has method)
+	other := "peer-other-" + suffix + "@example.com" // non-own, non-contact recipient
+	patAddr := "peer-pat-" + suffix + "@example.com" // unknown Cc → candidate
+	patNorm := matching.NormalizeEmail(patAddr)
+	patName := "Pat Carter " + suffix
+
+	contactA := e.seedContactWithMethod(t, "Known Alpha "+suffix, addrA)
+	contactB := e.seedContactNoMethod(t, patName) // trigram-matched by name only
+	e.cleanupExternal(t, patNorm)
+	e.cleanupEvents(t, "disc-"+suffix)
+
+	// From=A (known), To=other (non-own non-contact), Cc=Pat (unknown, ≥2-token
+	// name matching contact B). The storage gate drops this: for A, inbound needs
+	// own-account ∈ recipients (false — only `other`+Pat are recipients);
+	// outbound needs sender==own (false — sender is A). So zero qualifiedRows.
+	msg := gmailMsg("g-disc-"+suffix, "thr-"+suffix, "Known Alpha <"+addrA+">",
+		[]string{other}, []string{patName + " <" + patAddr + ">"}, nil,
+		"Subj", "body", "<disc-"+suffix+"@example.com>", 1700000100000)
+	e.provider.SetFetcherFactoryForTest(google.NewFakeGmailFetcherFactoryForTest(newFakeMessageStore([]*gmailapi.Message{msg}).fetcherFuncs()))
+	e.provider.SetMeSetForTest(map[string]struct{}{me: {}})
+
+	result, err := e.provider.Sync(e.ctx, discoverySyncState(me), nil)
 	require.NoError(t, err)
-	require.GreaterOrEqual(t, n, 1)
 
-	row, err := e.externalRepo.GetBySource(e.ctx, google.CorrespondenceSource, matching.NormalizeEmail(unknownAddr), nil)
+	// (a) The storage gate dropped the message — zero comms_message rows for A.
+	require.Equal(t, 0, result.ItemsMatched, "storage gate must store nothing for this message")
+	aRows, err := e.commsRepo.ListByContact(e.ctx, contactA.ID)
 	require.NoError(t, err)
-	require.NotNil(t, row, "producer must emit a gmail_correspondence candidate")
+	require.Empty(t, aRows, "no comms_message row stored (message did not pass the storage gate)")
+
+	// (b) Discovery still produced a gmail_correspondence candidate for the Cc.
+	row, err := e.externalRepo.GetBySource(e.ctx, google.CorrespondenceSource, patNorm, nil)
+	require.NoError(t, err)
+	require.NotNil(t, row, "discovery must surface a candidate from the fetched (unstored) message")
 	require.Equal(t, repository.MatchStatusUnmatched, row.MatchStatus)
 	require.NotNil(t, row.DisplayName)
-	require.Equal(t, fullName, *row.DisplayName)
-	require.Equal(t, float64(1), row.Metadata["message_count"])
-	co, ok := row.Metadata["co_occurring_contact"].(map[string]any)
-	require.True(t, ok, "co_occurring_contact evidence present")
-	require.Equal(t, contact.ID.String(), co["id"])
+	require.Equal(t, patName, *row.DisplayName)
 
-	// The surface recomputes suggested_match from display_name → the seeded
-	// same-named contact.
+	// (c) Suggested match recomputed from display_name → contact B.
 	match, err := e.matchService.FindBestMatch(e.ctx, row)
 	require.NoError(t, err)
 	require.NotNil(t, match, "suggested match recomputed from display_name")
-	require.Equal(t, contact.ID.String(), match.ContactID)
+	require.Equal(t, contactB.ID.String(), match.ContactID, "suggested match is the name-matched contact B")
+
+	// (d) Co-occurring-contact evidence is the KNOWN contact A (on From), NOT B.
+	co, ok := row.Metadata["co_occurring_contact"].(map[string]any)
+	require.True(t, ok, "co_occurring_contact evidence present")
+	require.Equal(t, contactA.ID.String(), co["id"], "evidence is the known co-occurring contact A")
+	require.NotEqual(t, contactB.ID.String(), co["id"], "evidence must NOT be the suggested match B")
 }
 
-func TestCorrespondence_SkipsSoftDeletedContactRows(t *testing.T) {
-	// A contact's soft-delete (UPDATE deleted_at) does NOT cascade to its
-	// comms_message rows — the FK cascade only fires on a hard DELETE. The
-	// producer's scan query INNER-JOINs a live contact, so once the matched
-	// contact is soft-deleted its correspondence must stop surfacing candidates.
-	ownAddr := uniqueAddr("me")
-	e := newCorrespondenceEnv(t, ownAddr)
+// 2. Link a produced candidate → method added → rematch dispatched.
+func TestDiscovery_LinkAddsMethodAndDispatchesRematch(t *testing.T) {
+	e := newDiscoveryEnv(t)
+	e.wireDiscoverer()
+	suffix := uuid.NewString()[:8]
 
-	fullName := "Correspondence Deleted " + uuid.New().String()[:6]
-	contact := e.seedContact(t, fullName)
-	unknownAddr := uniqueAddr("deleted")
-	normAddr := matching.NormalizeEmail(unknownAddr)
-	e.cleanupExternal(t, normAddr)
+	me := "me-" + suffix + "@example.com"
+	addrA := "a-" + suffix + "@example.com"
+	other := "peer-other-" + suffix + "@example.com"
+	patAddr := "peer-pat-" + suffix + "@example.com"
+	patNorm := matching.NormalizeEmail(patAddr)
+	patName := "Pat Linker " + suffix
 
-	e.seedMessage(t, contact.ID, "ext-"+uuid.New().String(), ownAddr, "gmail-1",
-		nameMetadata(t, unknownAddr, fullName, ownAddr))
+	_ = e.seedContactWithMethod(t, "Known Beta "+suffix, addrA)
+	contactB := e.seedContactNoMethod(t, patName)
+	e.cleanupExternal(t, patNorm)
+	e.cleanupEvents(t, "disclink-"+suffix)
 
-	// Soft-delete the matched contact; its comms_message row stays live.
-	require.NoError(t, e.contactRepo.SoftDeleteContact(e.ctx, contact.ID))
+	msg := gmailMsg("g-disclink-"+suffix, "thr-"+suffix, "Known Beta <"+addrA+">",
+		[]string{other}, []string{patName + " <" + patAddr + ">"}, nil,
+		"Subj", "body", "<disclink-"+suffix+"@example.com>", 1700000100000)
+	e.provider.SetFetcherFactoryForTest(google.NewFakeGmailFetcherFactoryForTest(newFakeMessageStore([]*gmailapi.Message{msg}).fetcherFuncs()))
+	e.provider.SetMeSetForTest(map[string]struct{}{me: {}})
 
-	_, err := e.suggester.Run(e.ctx, accelerated.GetCurrentTime().Add(-google.CorrespondenceWindow))
+	_, err := e.provider.Sync(e.ctx, discoverySyncState(me), nil)
 	require.NoError(t, err)
-
-	row, err := e.externalRepo.GetBySource(e.ctx, google.CorrespondenceSource, normAddr, nil)
+	row, err := e.externalRepo.GetBySource(e.ctx, google.CorrespondenceSource, patNorm, nil)
 	require.NoError(t, err)
-	require.Nil(t, row, "a soft-deleted contact's correspondence must not surface a candidate")
-}
-
-func TestCorrespondence_LinkAddsMethodAndDispatchesRematch(t *testing.T) {
-	ownAddr := uniqueAddr("me")
-	e := newCorrespondenceEnv(t, ownAddr)
+	require.NotNil(t, row, "discovery produced the candidate to link")
 
 	// Live River client + event bus so the link publishes KindContactMethodsAdded
-	// and enqueues a RematchDispatcher job (the inherited backfill hand-off).
+	// and enqueues a RematchDispatcher job.
 	workers := river.NewWorkers()
-	river.AddWorker(workers, &correspondenceDispatcherNoopWorker{})
+	river.AddWorker(workers, &discoveryDispatcherNoopWorker{})
 	riverClient, err := river.NewClient(riverpgxv5.New(e.database.Pool), &river.Config{
 		Queues:   map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: 1}},
 		Workers:  workers,
@@ -257,231 +278,134 @@ func TestCorrespondence_LinkAddsMethodAndDispatchesRematch(t *testing.T) {
 
 	bus := events.NewBus(e.database.Pool, riverClient, e.eventRepo)
 	rematchSvc := service.NewRematchService()
-	rematchSvc.Register(correspondenceEmailEligibleHandler{})
+	rematchSvc.Register(discoveryEmailEligibleHandler{})
 	enrichmentRepo := repository.NewEnrichmentRepository(e.database.Queries)
 	enrichment := service.NewEnrichmentService(e.database, e.contactRepo, e.methodRepo, enrichmentRepo, bus, rematchSvc)
 
-	fullName := "Correspondence Beta " + uuid.New().String()[:6]
-	contact := e.seedContact(t, fullName)
-	unknownAddr := uniqueAddr("beta")
-	normAddr := matching.NormalizeEmail(unknownAddr)
-	e.cleanupExternal(t, normAddr)
-
-	e.seedMessage(t, contact.ID, "ext-"+uuid.New().String(), ownAddr, "gmail-1",
-		nameMetadata(t, unknownAddr, fullName, ownAddr))
-
-	_, err = e.suggester.Run(e.ctx, accelerated.GetCurrentTime().Add(-google.CorrespondenceWindow))
-	require.NoError(t, err)
-	row, err := e.externalRepo.GetBySource(e.ctx, google.CorrespondenceSource, normAddr, nil)
-	require.NoError(t, err)
-	require.NotNil(t, row)
-
-	// Link: enrich the contact with the candidate's email (the modal's link path).
 	jobID, err := enrichment.EnrichContactFromExternalWithSelections(
-		e.ctx, contact.ID, row,
-		[]service.MethodSelection{{OriginalValue: normAddr, Type: "email"}},
+		e.ctx, contactB.ID, row,
+		[]service.MethodSelection{{OriginalValue: patNorm, Type: "email"}},
 		nil, nil, nil,
 	)
 	require.NoError(t, err)
 	require.NotEqual(t, uuid.Nil, jobID, "email handler eligible → a rematch job id is returned")
 
-	// (a) the email is now a contact_method on the linked contact.
-	methods, err := e.methodRepo.ListContactMethodsByContact(e.ctx, contact.ID)
+	// (a) the email is now a contact_method on the linked contact B.
+	methods, err := e.methodRepo.ListContactMethodsByContact(e.ctx, contactB.ID)
 	require.NoError(t, err)
 	found := false
 	for _, m := range methods {
-		if m.Value == normAddr && m.Type == "email" {
+		if m.Value == patNorm && m.Type == "email" {
 			found = true
 		}
 	}
 	require.True(t, found, "linked email must be added as a contact_method")
 
-	// (b) the rematch was dispatched: a contact_methods.added event published +
-	// a RematchDispatcher job enqueued for (contact, jobID).
-	count, err := e.eventRepo.CountRematchDispatcherJobs(e.ctx, contact.ID, jobID)
+	// (b) the rematch was dispatched: a contact_methods.added event + a
+	// RematchDispatcher job for (contact, jobID).
+	count, err := e.eventRepo.CountRematchDispatcherJobs(e.ctx, contactB.ID, jobID)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), count, "exactly one rematch dispatcher job enqueued")
 }
 
-func TestCorrespondence_StickyIgnoreNoClobber(t *testing.T) {
-	ownAddr := uniqueAddr("me")
-	e := newCorrespondenceEnv(t, ownAddr)
+// 3. Discovery error is NON-FATAL to the sync sweep: a failing discovery upsert
+// must not error Sync, rewind the cursor, or strand a storable comms_message
+// row. Drive the failure via a fake external repo whose Upsert errors for the
+// qualifying address.
+func TestDiscovery_ErrorNonFatalToSync(t *testing.T) {
+	e := newDiscoveryEnv(t)
+	suffix := uuid.NewString()[:8]
 
-	fullName := "Correspondence Gamma " + uuid.New().String()[:6]
-	contact := e.seedContact(t, fullName)
-	unknownAddr := uniqueAddr("gamma")
-	normAddr := matching.NormalizeEmail(unknownAddr)
-	e.cleanupExternal(t, normAddr)
+	me := "me-" + suffix + "@example.com"
+	addrA := "a-" + suffix + "@example.com"
+	other := "peer-other-" + suffix + "@example.com"
+	patAddr := "peer-pat-" + suffix + "@example.com"
+	patNorm := matching.NormalizeEmail(patAddr)
+	patName := "Pat Failer " + suffix
 
-	e.seedMessage(t, contact.ID, "ext-"+uuid.New().String(), ownAddr, "gmail-1",
-		nameMetadata(t, unknownAddr, fullName, ownAddr))
+	contactA := e.seedContactWithMethod(t, "Known Gamma "+suffix, addrA)
+	_ = e.seedContactNoMethod(t, patName)
+	e.cleanupExternal(t, patNorm)
+	e.cleanupEvents(t, "discfail-"+suffix)
+	e.cleanupEvents(t, "discstore-"+suffix)
 
-	// First run produces the candidate; ignore it.
-	_, err := e.suggester.Run(e.ctx, accelerated.GetCurrentTime().Add(-google.CorrespondenceWindow))
-	require.NoError(t, err)
-	row, err := e.externalRepo.GetBySource(e.ctx, google.CorrespondenceSource, normAddr, nil)
-	require.NoError(t, err)
-	require.NotNil(t, row)
-	require.NoError(t, e.externalRepo.Ignore(e.ctx, row.ID))
-
-	// Re-run the producer: the ignored row must STAY ignored (the upsert's
-	// DO UPDATE SET never touches match_status) and must NOT reappear unmatched.
-	_, err = e.suggester.Run(e.ctx, accelerated.GetCurrentTime().Add(-google.CorrespondenceWindow))
-	require.NoError(t, err)
-
-	after, err := e.externalRepo.GetBySource(e.ctx, google.CorrespondenceSource, normAddr, nil)
-	require.NoError(t, err)
-	require.NotNil(t, after)
-	require.Equal(t, repository.MatchStatusIgnored, after.MatchStatus, "ignored row not clobbered to unmatched")
-
-	unmatched, err := e.externalRepo.ListAllUnmatched(e.ctx, 1000, 0)
-	require.NoError(t, err)
-	for _, u := range unmatched {
-		require.NotEqual(t, normAddr, u.SourceID, "ignored candidate must not reappear in the unmatched list")
+	// Discoverer whose external Upsert errors for the qualifying Cc address.
+	failExt := &failingUpsertExternal{
+		inner:  e.externalRepo,
+		failOn: map[string]struct{}{patNorm: {}},
 	}
+	e.provider.SetCorrespondenceDiscoverer(google.NewCorrespondenceDiscoverer(e.contactRepo, failExt))
+
+	// Message 1: the discovery-triggering multi-party message (storage gate misses).
+	discMsg := gmailMsg("g-discfail-"+suffix, "thr-f-"+suffix, "Known Gamma <"+addrA+">",
+		[]string{other}, []string{patName + " <" + patAddr + ">"}, nil,
+		"Subj", "body", "<discfail-"+suffix+"@example.com>", 1700000100000)
+	// Message 2: a clean you↔contact message that DOES pass the storage gate
+	// (inbound: A → me), so we can assert ingest is not stranded by the
+	// discovery failure.
+	storeMsg := gmailMsg("g-discstore-"+suffix, "thr-s-"+suffix, "Known Gamma <"+addrA+">",
+		[]string{me}, nil, nil,
+		"Stored", "stored body", "<discstore-"+suffix+"@example.com>", 1700000200000)
+
+	e.provider.SetFetcherFactoryForTest(google.NewFakeGmailFetcherFactoryForTest(
+		newFakeMessageStore([]*gmailapi.Message{discMsg, storeMsg}).fetcherFuncs()))
+	e.provider.SetMeSetForTest(map[string]struct{}{me: {}})
+
+	result, err := e.provider.Sync(e.ctx, discoverySyncState(me), nil)
+
+	// (a) Sync returns no error despite the discovery upsert failure.
+	require.NoError(t, err, "a discovery error must be logged, not returned from Sync")
+	// (b) the cursor advanced (a fresh v2 cursor, not the blank prior).
+	require.NotEmpty(t, result.NewCursor, "cursor must advance — discovery failure must not rewind it")
+	// (c) the storage-gate-passing message IS persisted.
+	require.GreaterOrEqual(t, result.ItemsMatched, 1, "the clean you↔contact message must still be stored")
+	aRows, err := e.commsRepo.ListByContact(e.ctx, contactA.ID)
+	require.NoError(t, err)
+	require.NotEmpty(t, aRows, "the clean inbound message is stored despite the discovery failure")
+	// (d) the candidate is NOT upserted (discovery failed for it).
+	row, err := e.externalRepo.GetBySource(e.ctx, google.CorrespondenceSource, patNorm, nil)
+	require.NoError(t, err)
+	require.Nil(t, row, "the failing discovery upsert produced no candidate")
 }
 
-func TestCorrespondence_ImportEndpointForbidden(t *testing.T) {
-	ownAddr := uniqueAddr("me")
-	e := newCorrespondenceEnv(t, ownAddr)
-
-	// Seed a gmail_correspondence candidate directly.
-	normAddr := matching.NormalizeEmail(uniqueAddr("delta"))
-	e.cleanupExternal(t, normAddr)
-	name := "Correspondence Delta"
-	row, err := e.externalRepo.Upsert(e.ctx, repository.UpsertExternalContactRequest{
-		Source:      google.CorrespondenceSource,
-		SourceID:    normAddr,
-		DisplayName: &name,
-		Emails:      []repository.EmailEntry{{Value: normAddr}},
-	})
-	require.NoError(t, err)
-	require.NotNil(t, row)
-
-	// Wire the import handler + POST the import endpoint.
-	contactService := service.NewContactService(e.database, e.contactRepo, e.methodRepo,
-		repository.NewInteractionRepository(e.database.Queries), repository.NewContactTaskRepository(e.database.Queries), nil, nil)
-	enrichmentRepo := repository.NewEnrichmentRepository(e.database.Queries)
-	enrichment := service.NewEnrichmentService(e.database, e.contactRepo, e.methodRepo, enrichmentRepo, nil, nil)
-	suggestionService := service.NewSuggestionService(e.externalRepo, e.contactRepo, e.methodRepo, enrichment, e.matchService, e.database)
-	importHandler := handlers.NewImportHandler(e.externalRepo, nil, contactService, e.matchService, enrichment, suggestionService)
-
-	gin.SetMode(gin.TestMode)
-	router := gin.New()
-	router.Use(api.RequestIDMiddleware())
-	v1 := router.Group("/api/v1")
-	v1.Group("/imports").POST("/:id/import", importHandler.ImportContact)
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/imports/"+row.ID.String()+"/import", nil)
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusForbidden, rec.Code, "link-only source must reject import; body: %s", rec.Body.String())
+// failingUpsertExternal wraps the real external repo but errors on Upsert for a
+// set of source_ids — the discovery failure seam (no DB error injection needed).
+type failingUpsertExternal struct {
+	inner  *repository.ExternalContactRepository
+	failOn map[string]struct{}
 }
 
-func TestCorrespondence_RederivationEndToEndAndIdempotent(t *testing.T) {
-	ownAddr := uniqueAddr("me")
-	e := newCorrespondenceEnv(t, ownAddr)
-
-	fullName := "Correspondence Epsilon " + uuid.New().String()[:6]
-	contact := e.seedContact(t, fullName)
-	unknownAddr := uniqueAddr("epsilon")
-	normAddr := matching.NormalizeEmail(unknownAddr)
-	e.cleanupExternal(t, normAddr)
-
-	account := ownAddr
-	gmailID := "gmail-rederive-" + uuid.New().String()[:8]
-	externalID := "ext-" + uuid.New().String()
-
-	// Seed a NAME-LESS row (pre-capture shape): bare from/to + full content +
-	// account_gmail_ids provenance, but no *_name keys.
-	namelessMeta, err := json.Marshal(map[string]any{
-		"from":    unknownAddr,
-		"to":      []string{ownAddr},
-		"subject": "Original Subject",
-		"html":    "<p>original body</p>",
-	})
-	require.NoError(t, err)
-	e.seedMessage(t, contact.ID, externalID, account, gmailID, namelessMeta)
-
-	// Producer over the name-less row yields nothing (no display name).
-	n0, err := e.suggester.Run(e.ctx, accelerated.GetCurrentTime().Add(-google.CorrespondenceWindow))
-	require.NoError(t, err)
-	pre, err := e.externalRepo.GetBySource(e.ctx, google.CorrespondenceSource, normAddr, nil)
-	require.NoError(t, err)
-	require.Nil(t, pre, "name-less row must not surface (n0=%d)", n0)
-
-	// Provider with a fake fetcher that supplies display-name headers for the
-	// re-fetch (no OAuth).
-	provider := google.NewGmailSyncProvider(nil, e.commsRepo, nil, e.database.Pool)
-	provider.SetFetcherFactoryForTest(google.NewFakeGmailFetcherFactoryForTest(google.FakeGmailFetcherFuncs{
-		GetMessage: func(_ context.Context, id string) (*gmailapi.Message, error) {
-			require.Equal(t, gmailID, id)
-			return &gmailapi.Message{
-				Id: id,
-				Payload: &gmailapi.MessagePart{
-					Headers: []*gmailapi.MessagePartHeader{
-						{Name: "From", Value: "\"" + fullName + "\" <" + unknownAddr + ">"},
-						{Name: "To", Value: ownAddr},
-					},
-				},
-			}, nil
-		},
-	}))
-
-	runner := google.NewCorrespondenceNameRederiveService(e.commsRepo, provider)
-	since := accelerated.GetCurrentTime().Add(-google.CorrespondenceWindow)
-	res, err := runner.RederiveNames(e.ctx, since)
-	require.NoError(t, err)
-	require.GreaterOrEqual(t, res.Rederived, 1)
-	require.Equal(t, 0, res.Failed)
-
-	// Additive-merge invariant: the row now has the name keys AND still has its
-	// original content + provenance keys.
-	msg, err := e.commsRepo.GetMessage(e.ctx, repository.InteractionSourceEmail, externalID, contact.ID)
-	require.NoError(t, err)
-	var merged map[string]any
-	require.NoError(t, json.Unmarshal(msg.SourceMetadata, &merged))
-	require.Equal(t, fullName, merged["from_name"], "name key added")
-	require.Equal(t, unknownAddr, merged["from"], "original from preserved")
-	require.Equal(t, "Original Subject", merged["subject"], "original subject preserved")
-	require.Equal(t, "<p>original body</p>", merged["html"], "original html preserved")
-	require.Contains(t, merged, "account_gmail_ids", "provenance preserved")
-	require.Contains(t, merged, "observed_accounts", "provenance preserved")
-
-	// Producer over the full range now surfaces the previously-hidden backlog.
-	_, err = e.suggester.Run(e.ctx, since)
-	require.NoError(t, err)
-	row, err := e.externalRepo.GetBySource(e.ctx, google.CorrespondenceSource, normAddr, nil)
-	require.NoError(t, err)
-	require.NotNil(t, row, "re-derived backlog now surfaces as a candidate")
-
-	// Idempotency: a second re-derivation re-derives nothing (NOT (? 'from_name')).
-	res2, err := runner.RederiveNames(e.ctx, since)
-	require.NoError(t, err)
-	require.Equal(t, 0, res2.Rederived, "second run re-derives nothing")
+func (f *failingUpsertExternal) GetBySource(ctx context.Context, source, sourceID string, accountID *string) (*repository.ExternalContact, error) {
+	return f.inner.GetBySource(ctx, source, sourceID, accountID)
 }
 
-// correspondenceEmailEligibleHandler makes the "email" method type eligible so
-// the enrichment link publishes KindContactMethodsAdded. The admin/test process
-// never runs the handler body — only the crm-api dispatcher does.
-type correspondenceEmailEligibleHandler struct{}
+func (f *failingUpsertExternal) Upsert(ctx context.Context, req repository.UpsertExternalContactRequest) (*repository.ExternalContact, error) {
+	if _, bad := f.failOn[req.SourceID]; bad {
+		return nil, errors.New("forced discovery upsert failure")
+	}
+	return f.inner.Upsert(ctx, req)
+}
 
-func (correspondenceEmailEligibleHandler) IdentifierType() string { return "email" }
-func (correspondenceEmailEligibleHandler) Rematch(context.Context, uuid.UUID, string) (int, error) {
+// discoveryEmailEligibleHandler makes the "email" method type eligible so the
+// enrichment link publishes KindContactMethodsAdded.
+type discoveryEmailEligibleHandler struct{}
+
+func (discoveryEmailEligibleHandler) IdentifierType() string { return "email" }
+func (discoveryEmailEligibleHandler) Rematch(context.Context, uuid.UUID, string) (int, error) {
 	return 0, nil
 }
 
-// correspondenceDispatcherNoopWorker satisfies River's registered-kind rule so
-// the live client accepts RematchDispatcher inserts; we assert row counts, not
+// discoveryDispatcherNoopWorker satisfies River's registered-kind rule so the
+// live client accepts RematchDispatcher inserts; we assert row counts, not
 // execution.
-type correspondenceDispatcherNoopWorker struct {
-	river.WorkerDefaults[correspondenceDispatcherNoopArgs]
+type discoveryDispatcherNoopWorker struct {
+	river.WorkerDefaults[discoveryDispatcherNoopArgs]
 }
 
-func (*correspondenceDispatcherNoopWorker) Work(context.Context, *river.Job[correspondenceDispatcherNoopArgs]) error {
+func (*discoveryDispatcherNoopWorker) Work(context.Context, *river.Job[discoveryDispatcherNoopArgs]) error {
 	return nil
 }
 
-type correspondenceDispatcherNoopArgs struct{}
+type discoveryDispatcherNoopArgs struct{}
 
-func (correspondenceDispatcherNoopArgs) Kind() string { return "rematch_dispatcher" }
+func (discoveryDispatcherNoopArgs) Kind() string { return "rematch_dispatcher" }

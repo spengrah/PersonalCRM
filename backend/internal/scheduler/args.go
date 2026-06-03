@@ -37,12 +37,3 @@ type PairingTokenJanitorArgs struct{}
 
 // Kind implements river.JobArgs.
 func (PairingTokenJanitorArgs) Kind() string { return "pairing_token_janitor" }
-
-// GmailCorrespondenceScanArgs are the args for the periodic
-// GmailCorrespondenceScanWorker. Empty: the worker computes its own
-// recent-window `since` at run time, so the periodic scheduler inserts it
-// without per-tick parameter resolution.
-type GmailCorrespondenceScanArgs struct{}
-
-// Kind implements river.JobArgs.
-func (GmailCorrespondenceScanArgs) Kind() string { return "gmail_correspondence_scan" }

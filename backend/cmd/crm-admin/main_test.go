@@ -622,25 +622,7 @@ func (f *fakeRederiveRunner) RederiveNames(_ context.Context, since time.Time) (
 	return f.result, nil
 }
 
-type fakeCorrespondenceScanner struct {
-	upserted int
-	err      error
-	since    time.Time
-	log      *[]string
-}
-
-func (f *fakeCorrespondenceScanner) Run(_ context.Context, since time.Time) (int, error) {
-	f.since = since
-	if f.log != nil {
-		*f.log = append(*f.log, "producer")
-	}
-	if f.err != nil {
-		return 0, f.err
-	}
-	return f.upserted, nil
-}
-
-func TestRunRederiveCorrespondenceNamesHappyAndOrdering(t *testing.T) {
+func TestRunRederiveCorrespondenceNamesHappy(t *testing.T) {
 	deps, stdout, _, _, _, _ := newTestDeps()
 	log := &[]string{}
 	rederive := &fakeRederiveRunner{
@@ -649,21 +631,15 @@ func TestRunRederiveCorrespondenceNamesHappyAndOrdering(t *testing.T) {
 		},
 		log: log,
 	}
-	scanner := &fakeCorrespondenceScanner{upserted: 4, log: log}
 	deps.rederive = rederive
-	deps.correspondence = scanner
 
 	err := run(context.Background(), runOptions{rederiveCorrespondence: true}, deps)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Ordering: re-derive FIRST, then the full-range producer pass.
-	if len(*log) != 2 || (*log)[0] != "rederive" || (*log)[1] != "producer" {
-		t.Fatalf("expected [rederive producer], got %v", *log)
-	}
-	// Both phases use the same full-range floor (2026-01-01).
-	if !rederive.since.Equal(scanner.since) {
-		t.Fatalf("phases used different since: %v vs %v", rederive.since, scanner.since)
+	// Only the re-derive phase runs now; candidate discovery moved in-sync.
+	if len(*log) != 1 || (*log)[0] != "rederive" {
+		t.Fatalf("expected [rederive], got %v", *log)
 	}
 	if rederive.since.Format("2006-01-02") != correspondenceBackfillFloor {
 		t.Fatalf("expected since=%s, got %v", correspondenceBackfillFloor, rederive.since)
@@ -675,71 +651,44 @@ func TestRunRederiveCorrespondenceNamesHappyAndOrdering(t *testing.T) {
 		"skipped_no_gmail_id:  2",
 		"skipped_unavailable:  1",
 		"failed:               0",
-		"candidates_upserted:  4",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("output missing %q: %s", want, out)
 		}
+	}
+	// The retired producer pass must no longer be summarized.
+	if strings.Contains(out, "candidates_upserted") {
+		t.Fatalf("candidates_upserted must be gone from the summary: %s", out)
 	}
 }
 
 func TestRunRederiveCorrespondenceNamesFailedExitsNonZero(t *testing.T) {
 	deps, stdout, _, _, _, _ := newTestDeps()
 	log := &[]string{}
-	// Partial failure: some rows failed, but successfully re-derived rows must
-	// still get the full-range producer pass.
 	deps.rederive = &fakeRederiveRunner{
 		result: google.CorrespondenceRederiveResult{Scanned: 5, Rederived: 3, Failed: 2},
 		log:    log,
 	}
-	scanner := &fakeCorrespondenceScanner{upserted: 1, log: log}
-	deps.correspondence = scanner
 
 	err := run(context.Background(), runOptions{rederiveCorrespondence: true}, deps)
 	if err == nil {
 		t.Fatal("expected non-nil error when some rows failed")
-	}
-	// The producer pass still ran despite the failures.
-	if len(*log) != 2 || (*log)[1] != "producer" {
-		t.Fatalf("expected producer to run after partial failure, log=%v", *log)
 	}
 	if !strings.Contains(stdout.String(), "failed:               2") {
 		t.Fatalf("expected summary printed with failed count, got %q", stdout.String())
 	}
 }
 
-func TestRunRederiveCorrespondenceNamesRederiveErrorSkipsProducer(t *testing.T) {
+func TestRunRederiveCorrespondenceNamesRederiveErrorFails(t *testing.T) {
 	deps, _, _, _, _, _ := newTestDeps()
 	log := &[]string{}
 	deps.rederive = &fakeRederiveRunner{err: errors.New("list failed"), log: log}
-	deps.correspondence = &fakeCorrespondenceScanner{log: log}
 
 	err := run(context.Background(), runOptions{rederiveCorrespondence: true}, deps)
 	if err == nil {
 		t.Fatal("expected error when the re-derive phase hard-errors")
 	}
-	// A hard error in phase 1 aborts before the producer pass.
 	if len(*log) != 1 || (*log)[0] != "rederive" {
-		t.Fatalf("expected producer NOT to run after a hard re-derive error, log=%v", *log)
-	}
-}
-
-func TestRunRederiveCorrespondenceNamesProducerErrorFails(t *testing.T) {
-	deps, _, _, _, _, _ := newTestDeps()
-	log := &[]string{}
-	deps.rederive = &fakeRederiveRunner{
-		result: google.CorrespondenceRederiveResult{Scanned: 3, Rederived: 3},
-		log:    log,
-	}
-	// The full-range producer pass fails (e.g. a DB outage); the catchup must
-	// surface that as a non-zero exit even though re-derivation itself succeeded.
-	deps.correspondence = &fakeCorrespondenceScanner{err: errors.New("scan failed"), log: log}
-
-	err := run(context.Background(), runOptions{rederiveCorrespondence: true}, deps)
-	if err == nil {
-		t.Fatal("expected error when the full-range producer pass errors")
-	}
-	if len(*log) != 2 || (*log)[1] != "producer" {
-		t.Fatalf("expected the producer pass to run after a clean re-derive, log=%v", *log)
+		t.Fatalf("expected only the re-derive phase to run, log=%v", *log)
 	}
 }

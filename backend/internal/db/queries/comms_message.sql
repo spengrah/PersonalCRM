@@ -134,25 +134,6 @@ WHERE id = ANY(@message_ids::uuid[])
 DELETE FROM comms_message
 WHERE matched_contact_id = @matched_contact_id;
 
--- name: ListCommsMessageParticipantsSince :many
--- Stream recent email content rows for the correspondence-enrichment scan:
--- source_metadata carries the from/to/cc/bcc participant lists (bare addresses)
--- plus the index-aligned from_name/to_names/cc_names/bcc_names. matched_contact_id
--- is the known contact the message qualified for (the co-occurring contact the
--- producer records as evidence). Bounded by @since to keep each scan cheap; the
--- scan is idempotent so re-running the same window is harmless. The INNER JOIN on
--- a live contact drops rows whose matched contact was soft-deleted: a contact's
--- soft-delete (UPDATE deleted_at) does NOT cascade to its comms_message rows (the
--- FK cascade only fires on a hard DELETE), so without this join the producer would
--- keep mining correspondence with a deleted contact.
-SELECT cm.matched_contact_id, cm.sent_at, cm.source_metadata
-FROM comms_message cm
-JOIN contact c ON c.id = cm.matched_contact_id AND c.deleted_at IS NULL
-WHERE cm.source = 'email'
-  AND cm.deleted_at IS NULL
-  AND cm.sent_at >= @since
-ORDER BY cm.sent_at DESC, cm.id;
-
 -- name: ListCommsMessagesMissingParticipantNames :many
 -- Keyset-paged rows for the one-time historical display-name re-derivation
 -- (crm-admin --rederive-correspondence-names). Returns email rows at/after
