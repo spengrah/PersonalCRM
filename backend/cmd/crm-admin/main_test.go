@@ -647,3 +647,23 @@ func TestRunRederiveCorrespondenceNamesRederiveErrorSkipsProducer(t *testing.T) 
 		t.Fatalf("expected producer NOT to run after a hard re-derive error, log=%v", *log)
 	}
 }
+
+func TestRunRederiveCorrespondenceNamesProducerErrorFails(t *testing.T) {
+	deps, _, _, _, _, _ := newTestDeps()
+	log := &[]string{}
+	deps.rederive = &fakeRederiveRunner{
+		result: google.CorrespondenceRederiveResult{Scanned: 3, Rederived: 3},
+		log:    log,
+	}
+	// The full-range producer pass fails (e.g. a DB outage); the catchup must
+	// surface that as a non-zero exit even though re-derivation itself succeeded.
+	deps.correspondence = &fakeCorrespondenceScanner{err: errors.New("scan failed"), log: log}
+
+	err := run(context.Background(), runOptions{rederiveCorrespondence: true}, deps)
+	if err == nil {
+		t.Fatal("expected error when the full-range producer pass errors")
+	}
+	if len(*log) != 2 || (*log)[1] != "producer" {
+		t.Fatalf("expected the producer pass to run after a clean re-derive, log=%v", *log)
+	}
+}

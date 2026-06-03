@@ -3,6 +3,7 @@ package google
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -51,14 +52,20 @@ func (f *fakeCorrespondenceContacts) GetContact(_ context.Context, id uuid.UUID)
 }
 
 // fakeCorrespondenceExternal records upserts and serves a seeded sticky-ignore
-// row. Keyed by source_id (the normalized address).
+// row. Keyed by source_id (the normalized address). upsertErr maps a source_id
+// to an error the Upsert should return (to exercise the continue-on-error /
+// aggregate-error path).
 type fakeCorrespondenceExternal struct {
-	existing map[string]*repository.ExternalContact
-	upserts  []repository.UpsertExternalContactRequest
+	existing  map[string]*repository.ExternalContact
+	upserts   []repository.UpsertExternalContactRequest
+	upsertErr map[string]error
 }
 
 func newFakeExternal() *fakeCorrespondenceExternal {
-	return &fakeCorrespondenceExternal{existing: map[string]*repository.ExternalContact{}}
+	return &fakeCorrespondenceExternal{
+		existing:  map[string]*repository.ExternalContact{},
+		upsertErr: map[string]error{},
+	}
 }
 
 func (f *fakeCorrespondenceExternal) GetBySource(_ context.Context, _, sourceID string, _ *string) (*repository.ExternalContact, error) {
@@ -66,6 +73,9 @@ func (f *fakeCorrespondenceExternal) GetBySource(_ context.Context, _, sourceID 
 }
 
 func (f *fakeCorrespondenceExternal) Upsert(_ context.Context, req repository.UpsertExternalContactRequest) (*repository.ExternalContact, error) {
+	if err := f.upsertErr[req.SourceID]; err != nil {
+		return nil, err
+	}
 	f.upserts = append(f.upserts, req)
 	row := &repository.ExternalContact{
 		Source:      req.Source,
@@ -406,6 +416,50 @@ func TestCorrespondence_EmptyInputNoError(t *testing.T) {
 	n, err := s.Run(context.Background(), accelerated.GetCurrentTime().Add(-time.Hour))
 	require.NoError(t, err)
 	require.Equal(t, 0, n)
+}
+
+// A per-address upsert failure must NOT abort the scan (the other address still
+// upserts) but Run must return the successful count AND a non-nil aggregated
+// error, so the worker retries / the catchup fails instead of reporting an
+// empty-but-successful scan.
+func TestCorrespondence_PerAddressErrorAggregated(t *testing.T) {
+	goodContact := uuid.New()
+	badContact := uuid.New()
+	comms := &fakeCorrespondenceComms{
+		rows: []repository.CommsMessageParticipantRow{
+			{
+				MatchedContactID: goodContact,
+				SourceMetadata: metaJSON(t, correspondenceMetadata{
+					From: "me@example.com", FromName: "Me",
+					To: []string{"good@example.com"}, ToNames: []string{"Good Person"},
+				}),
+			},
+			{
+				MatchedContactID: badContact,
+				SourceMetadata: metaJSON(t, correspondenceMetadata{
+					From: "me@example.com", FromName: "Me",
+					To: []string{"bad@example.com"}, ToNames: []string{"Bad Person"},
+				}),
+			},
+		},
+	}
+	contacts := &fakeCorrespondenceContacts{
+		matches: map[string][]repository.ContactMatch{
+			"Good Person": {contactMatch(goodContact, "Good Person", 0.8)},
+			"Bad Person":  {contactMatch(badContact, "Bad Person", 0.8)},
+		},
+		names: map[uuid.UUID]string{goodContact: "Good Person", badContact: "Bad Person"},
+	}
+	ext := newFakeExternal()
+	ext.upsertErr["bad@example.com"] = errors.New("db down")
+	s := newSuggester(comms, contacts, ext, map[string]struct{}{"me@example.com": {}})
+
+	n, err := s.Run(context.Background(), accelerated.GetCurrentTime().Add(-time.Hour))
+	require.Error(t, err, "an upsert failure must surface as a non-nil Run error")
+	require.Contains(t, err.Error(), "failed")
+	require.Equal(t, 1, n, "the surviving address still upserts and is counted")
+	require.Len(t, ext.upserts, 1)
+	require.Equal(t, "good@example.com", ext.upserts[0].SourceID)
 }
 
 func TestBestDisplayName(t *testing.T) {
