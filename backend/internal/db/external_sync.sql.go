@@ -541,6 +541,50 @@ func (q *Queries) ListEnabledSyncStates(ctx context.Context) ([]*ExternalSyncSta
 	return items, nil
 }
 
+const ListEnabledSyncStatesBySource = `-- name: ListEnabledSyncStatesBySource :many
+SELECT id, source, account_id, enabled, status, strategy, last_sync_at, last_successful_sync_at, next_sync_at, sync_cursor, error_message, error_count, metadata, created_at, updated_at FROM external_sync_state
+WHERE source = $1
+  AND enabled = TRUE
+  AND status != 'disabled'
+ORDER BY account_id
+`
+
+func (q *Queries) ListEnabledSyncStatesBySource(ctx context.Context, source string) ([]*ExternalSyncState, error) {
+	rows, err := q.db.Query(ctx, ListEnabledSyncStatesBySource, source)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ExternalSyncState{}
+	for rows.Next() {
+		var i ExternalSyncState
+		if err := rows.Scan(
+			&i.ID,
+			&i.Source,
+			&i.AccountID,
+			&i.Enabled,
+			&i.Status,
+			&i.Strategy,
+			&i.LastSyncAt,
+			&i.LastSuccessfulSyncAt,
+			&i.NextSyncAt,
+			&i.SyncCursor,
+			&i.ErrorMessage,
+			&i.ErrorCount,
+			&i.Metadata,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListRecentSyncLogs = `-- name: ListRecentSyncLogs :many
 SELECT id, sync_state_id, source, account_id, started_at, completed_at, status, items_processed, items_matched, items_created, error_message, metadata, created_at FROM external_sync_log
 ORDER BY started_at DESC
@@ -667,6 +711,47 @@ func (q *Queries) ListSyncStates(ctx context.Context) ([]*ExternalSyncState, err
 		return nil, err
 	}
 	return items, nil
+}
+
+const ResetSyncStateBackfillCursor = `-- name: ResetSyncStateBackfillCursor :one
+UPDATE external_sync_state
+SET sync_cursor = $1,
+    next_sync_at = $2,
+    status = 'idle',
+    error_message = NULL,
+    error_count = 0,
+    updated_at = NOW()
+WHERE id = $3
+RETURNING id, source, account_id, enabled, status, strategy, last_sync_at, last_successful_sync_at, next_sync_at, sync_cursor, error_message, error_count, metadata, created_at, updated_at
+`
+
+type ResetSyncStateBackfillCursorParams struct {
+	SyncCursor pgtype.Text        `json:"sync_cursor"`
+	NextSyncAt pgtype.Timestamptz `json:"next_sync_at"`
+	ID         pgtype.UUID        `json:"id"`
+}
+
+func (q *Queries) ResetSyncStateBackfillCursor(ctx context.Context, arg ResetSyncStateBackfillCursorParams) (*ExternalSyncState, error) {
+	row := q.db.QueryRow(ctx, ResetSyncStateBackfillCursor, arg.SyncCursor, arg.NextSyncAt, arg.ID)
+	var i ExternalSyncState
+	err := row.Scan(
+		&i.ID,
+		&i.Source,
+		&i.AccountID,
+		&i.Enabled,
+		&i.Status,
+		&i.Strategy,
+		&i.LastSyncAt,
+		&i.LastSuccessfulSyncAt,
+		&i.NextSyncAt,
+		&i.SyncCursor,
+		&i.ErrorMessage,
+		&i.ErrorCount,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return &i, err
 }
 
 const UpdateMacHostSyncCursor = `-- name: UpdateMacHostSyncCursor :one

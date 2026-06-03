@@ -28,7 +28,7 @@
 // freshly-created contact's rows — never a global state count.
 //
 // Addresses are placeholders; timestamps are accelerated.GetCurrentTime()-safe
-// (the localNoonAnchor helper from the email suite); all assertions go through
+// (the Gmail past-noon helper); all assertions go through
 // repositories (no raw SQL).
 package tests
 
@@ -292,7 +292,7 @@ func TestGmailRematch_NewAddressScan_DerivesInteractions(t *testing.T) {
 	e.cleanupEvents(t, inExt)
 	e.cleanupEvents(t, outExt)
 
-	sentAt := localNoonAnchor()
+	sentAt := gmailPastNoonAnchor()
 	inbound := gmailMsg("g-in", "thr-in", addrA, []string{me}, nil, nil, "In", "hi", "<"+inExt+">", sentAt.UnixMilli())
 	outbound := gmailMsg("g-out", "thr-out", me, []string{addrA}, nil, nil, "Out", "yo", "<"+outExt+">", sentAt.Add(time.Hour).UnixMilli())
 	e.inject(newRecordingMessageStore([]*gmailapi.Message{inbound, outbound}), map[string]struct{}{me: {}})
@@ -338,7 +338,7 @@ func TestGmailRematch_MatchOnly_NoContactCreated(t *testing.T) {
 
 	e.cleanupEvents(t, "mo-"+suffix+"@example.com")
 	// Message between "me" and an UNKNOWN address only (A is not a participant).
-	msg := gmailMsg("g-mo", "thr", unknown, []string{me}, nil, nil, "S", "body", "<mo-"+suffix+"@example.com>", localNoonAnchor().UnixMilli())
+	msg := gmailMsg("g-mo", "thr", unknown, []string{me}, nil, nil, "S", "body", "<mo-"+suffix+"@example.com>", gmailPastNoonAnchor().UnixMilli())
 	e.inject(newRecordingMessageStore([]*gmailapi.Message{msg}), map[string]struct{}{me: {}})
 
 	// Rematch for A's address, but the message has no A participant → no rows.
@@ -368,7 +368,7 @@ func TestGmailRematch_FanOut_SharedAddress(t *testing.T) {
 
 	ext := "fan-" + suffix + "@example.com"
 	e.cleanupEvents(t, ext)
-	msg := gmailMsg("g-fan", "thr", shared, []string{me}, nil, nil, "S", "body", "<"+ext+">", localNoonAnchor().UnixMilli())
+	msg := gmailMsg("g-fan", "thr", shared, []string{me}, nil, nil, "S", "body", "<"+ext+">", gmailPastNoonAnchor().UnixMilli())
 	e.inject(newRecordingMessageStore([]*gmailapi.Message{msg}), map[string]struct{}{me: {}})
 
 	matched, err := e.handler.Rematch(e.ctx, c1.ID, shared)
@@ -410,7 +410,7 @@ func TestGmailRematch_MultipleAccounts_PerAccountSeen(t *testing.T) {
 	// The SAME Message-ID observed in both mailboxes: same gmail message id so
 	// the fetcher's per-id counter measures cross-account scanning. Both
 	// accounts share the me-set so cross-account provenance detection fires.
-	sentAt := localNoonAnchor()
+	sentAt := gmailPastNoonAnchor()
 	msg := gmailMsg("g-shared", "thr", addrA, []string{accountX, accountY}, nil, nil, "S", "body", "<"+ext+">", sentAt.UnixMilli())
 	store := newRecordingMessageStore([]*gmailapi.Message{msg})
 	e.inject(store, map[string]struct{}{accountX: {}, accountY: {}})
@@ -455,7 +455,7 @@ func TestGmailRematch_NoCursorSideEffects(t *testing.T) {
 
 	ext := "nocur-" + suffix + "@example.com"
 	e.cleanupEvents(t, ext)
-	msg := gmailMsg("g-nocur", "thr", addrA, []string{account}, nil, nil, "S", "body", "<"+ext+">", localNoonAnchor().UnixMilli())
+	msg := gmailMsg("g-nocur", "thr", addrA, []string{account}, nil, nil, "S", "body", "<"+ext+">", gmailPastNoonAnchor().UnixMilli())
 	e.inject(newRecordingMessageStore([]*gmailapi.Message{msg}), map[string]struct{}{account: {}})
 
 	matched, err := e.handler.Rematch(e.ctx, contactA.ID, addrA)
@@ -482,7 +482,7 @@ func TestGmailRematch_BackfillFloorAndQueryShape(t *testing.T) {
 
 	ext := "shape-" + suffix + "@example.com"
 	e.cleanupEvents(t, ext)
-	msg := gmailMsg("g-shape", "thr", addrA, []string{account}, nil, nil, "S", "body", "<"+ext+">", localNoonAnchor().UnixMilli())
+	msg := gmailMsg("g-shape", "thr", addrA, []string{account}, nil, nil, "S", "body", "<"+ext+">", gmailPastNoonAnchor().UnixMilli())
 	store := newRecordingMessageStore([]*gmailapi.Message{msg})
 	e.inject(store, map[string]struct{}{account: {}})
 
@@ -523,7 +523,7 @@ func TestGmailRematch_NoEnabledState_NoOp(t *testing.T) {
 
 		// A fetcher that WOULD return a qualifying message if it were ever
 		// consulted — the gate must prevent that.
-		msg := gmailMsg("g-gate-a", "thr", addrA, []string{me}, nil, nil, "S", "body", "<gate-a-"+suffix+"@example.com>", localNoonAnchor().UnixMilli())
+		msg := gmailMsg("g-gate-a", "thr", addrA, []string{me}, nil, nil, "S", "body", "<gate-a-"+suffix+"@example.com>", gmailPastNoonAnchor().UnixMilli())
 		store := newRecordingMessageStore([]*gmailapi.Message{msg})
 		e.inject(store, map[string]struct{}{me: {}})
 
@@ -565,7 +565,7 @@ func TestGmailRematch_NoEnabledState_NoOp(t *testing.T) {
 		_, err = e.syncRepo.UpdateSyncStateEnabled(e.ctx, created.ID, false)
 		require.NoError(t, err)
 
-		msg := gmailMsg("g-gate-d", "thr", addrA, []string{me}, nil, nil, "S", "body", "<gate-d-"+suffix+"@example.com>", localNoonAnchor().UnixMilli())
+		msg := gmailMsg("g-gate-d", "thr", addrA, []string{me}, nil, nil, "S", "body", "<gate-d-"+suffix+"@example.com>", gmailPastNoonAnchor().UnixMilli())
 		store := newRecordingMessageStore([]*gmailapi.Message{msg})
 		e.inject(store, map[string]struct{}{me: {}})
 
@@ -598,7 +598,7 @@ func TestGmailRematch_PartialFailure_ReturnsError(t *testing.T) {
 
 	ext := "pf-" + suffix + "@example.com"
 	e.cleanupEvents(t, ext)
-	msg := gmailMsg("g-pf", "thr", addrA, []string{accountY}, nil, nil, "S", "body", "<"+ext+">", localNoonAnchor().UnixMilli())
+	msg := gmailMsg("g-pf", "thr", addrA, []string{accountY}, nil, nil, "S", "body", "<"+ext+">", gmailPastNoonAnchor().UnixMilli())
 
 	// Account-keyed fetcher factory: account X always fails its list call;
 	// account Y returns the qualifying message and records its query.
@@ -648,7 +648,7 @@ func TestGmailRematch_PerAccountBackfillSince(t *testing.T) {
 		contactA := e.newContactWithEmail(t, "Contact A "+suffix, addrA)
 		ext := "bf-" + suffix + "@example.com"
 		e.cleanupEvents(t, ext)
-		msg := gmailMsg("g-bf", "thr", addrA, []string{account}, nil, nil, "S", "body", "<"+ext+">", localNoonAnchor().UnixMilli())
+		msg := gmailMsg("g-bf", "thr", addrA, []string{account}, nil, nil, "S", "body", "<"+ext+">", gmailPastNoonAnchor().UnixMilli())
 		store := newRecordingMessageStore([]*gmailapi.Message{msg})
 		e.inject(store, map[string]struct{}{account: {}})
 
@@ -685,7 +685,7 @@ func TestGmailRematch_PerAccountBackfillSince(t *testing.T) {
 		contactA := e.newContactWithEmail(t, "Contact A "+suffix, addrA)
 		ext := "bfd-" + suffix + "@example.com"
 		e.cleanupEvents(t, ext)
-		msg := gmailMsg("g-bfd", "thr", addrA, []string{account}, nil, nil, "S", "body", "<"+ext+">", localNoonAnchor().UnixMilli())
+		msg := gmailMsg("g-bfd", "thr", addrA, []string{account}, nil, nil, "S", "body", "<"+ext+">", gmailPastNoonAnchor().UnixMilli())
 		store := newRecordingMessageStore([]*gmailapi.Message{msg})
 		e.inject(store, map[string]struct{}{account: {}})
 

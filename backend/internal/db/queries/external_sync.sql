@@ -17,6 +17,13 @@ SELECT * FROM external_sync_state
 WHERE enabled = TRUE AND status != 'disabled'
 ORDER BY source, account_id;
 
+-- name: ListEnabledSyncStatesBySource :many
+SELECT * FROM external_sync_state
+WHERE source = @source
+  AND enabled = TRUE
+  AND status != 'disabled'
+ORDER BY account_id;
+
 -- name: ListDueSyncStates :many
 -- The 'syncing' status value stays in the CHECK constraint for
 -- down-migration safety but is no longer written by any code path.
@@ -114,6 +121,17 @@ UPDATE external_sync_state
 SET sync_cursor = $2,
     updated_at = NOW()
 WHERE id = $1;
+
+-- name: ResetSyncStateBackfillCursor :one
+UPDATE external_sync_state
+SET sync_cursor = @sync_cursor,
+    next_sync_at = @next_sync_at,
+    status = 'idle',
+    error_message = NULL,
+    error_count = 0,
+    updated_at = NOW()
+WHERE id = @id
+RETURNING *;
 
 -- name: UpdateSyncStateMetadata :one
 UPDATE external_sync_state

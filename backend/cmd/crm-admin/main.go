@@ -44,6 +44,11 @@
 //	                              Google OAuth credentials; built lazily so
 //	                              other subcommands work on Google-less hosts.
 //
+//	--reset-gmail-backfill-cursors
+//	                              Rewind enabled Gmail sync cursors to each
+//	                              row's backfill floor, mark them due, and
+//	                              clear error state. Prints counts only.
+//
 //	--mint-pairing-token          Mint a single-use pairing token for
 //	                              `crm-mac install --pair`. Optional
 //	                              --hostname-label is operator-side
@@ -121,8 +126,8 @@ type hostRevoker interface {
 }
 
 // rematchRunner is the narrow interface --messages-rematch-stranded
-// needs. Defined for symmetry with the new flags so all four
-// subcommands can be exercised by test doubles.
+// needs. Defined for symmetry with the other flags so subcommands can be
+// exercised by test doubles.
 type rematchRunner interface {
 	RematchStranded(ctx context.Context) (*messages.RematchStrandedResult, error)
 }
@@ -149,6 +154,13 @@ type correspondenceScanner interface {
 	Run(ctx context.Context, since time.Time) (int, error)
 }
 
+// gmailBackfillCursorResetter is the narrow interface
+// --reset-gmail-backfill-cursors needs. Production wires this to
+// *service.EmailBackfillCursorResetService.ResetGmailBackfillCursors.
+type gmailBackfillCursorResetter interface {
+	ResetGmailBackfillCursors(ctx context.Context) (service.EmailBackfillCursorResetResult, error)
+}
+
 // adminDeps groups the per-subcommand dependencies. Tests inject
 // fakes for each interface; the production wiring builds a single
 // MacHostService and a small adapter for rematch.
@@ -164,6 +176,7 @@ type adminDeps struct {
 	// subcommand on a Google-less host. Nil for all other subcommands.
 	rederive       rederiveRunner
 	correspondence correspondenceScanner
+	gmailReset     gmailBackfillCursorResetter
 	stdout         io.Writer
 	stderr         io.Writer
 }
@@ -174,6 +187,7 @@ type runOptions struct {
 	rematchStranded        bool
 	reconcileAddressBook   bool
 	rederiveCorrespondence bool
+	resetGmailBackfill     bool
 	mintPairingToken       bool
 	hostnameLabel          string
 	listHosts              bool
@@ -238,6 +252,9 @@ func validateSubcommand(opts runOptions) error {
 	if opts.rederiveCorrespondence {
 		active++
 	}
+	if opts.resetGmailBackfill {
+		active++
+	}
 	if opts.mintPairingToken {
 		active++
 	}
@@ -252,11 +269,11 @@ func validateSubcommand(opts runOptions) error {
 	}
 	if active == 0 {
 		return errors.New("no subcommand specified; pass exactly one of " +
-			"--messages-rematch-stranded, --reconcile-address-book-methods, --rederive-correspondence-names, --mint-pairing-token, --list-hosts, --revoke-host <uuid>, --rotate-host-key <uuid>")
+			"--messages-rematch-stranded, --reconcile-address-book-methods, --rederive-correspondence-names, --reset-gmail-backfill-cursors, --mint-pairing-token, --list-hosts, --revoke-host <uuid>, --rotate-host-key <uuid>")
 	}
 	if active > 1 {
 		return errors.New("subcommand flags are mutually exclusive; pass exactly one of " +
-			"--messages-rematch-stranded, --reconcile-address-book-methods, --rederive-correspondence-names, --mint-pairing-token, --list-hosts, --revoke-host <uuid>, --rotate-host-key <uuid>")
+			"--messages-rematch-stranded, --reconcile-address-book-methods, --rederive-correspondence-names, --reset-gmail-backfill-cursors, --mint-pairing-token, --list-hosts, --revoke-host <uuid>, --rotate-host-key <uuid>")
 	}
 	return nil
 }
@@ -278,6 +295,9 @@ func parseArgs(args []string) (runOptions, error) {
 			"then run a full-range gmail_correspondence producer pass so the historical "+
 			"backlog surfaces as link candidates. Continue-on-error; exits non-zero iff "+
 			"any row failed. Idempotent — safe to re-run. Requires Google OAuth creds.")
+	fs.BoolVar(&opts.resetGmailBackfill, "reset-gmail-backfill-cursors", false,
+		"Rewind enabled Gmail sync cursors to each row's backfill floor, mark them due, "+
+			"and clear error state. Prints counts only.")
 	fs.BoolVar(&opts.mintPairingToken, "mint-pairing-token", false,
 		"Mint a single-use pairing token for `crm-mac install --pair`.")
 	fs.StringVar(&opts.hostnameLabel, "hostname-label", "",
@@ -319,6 +339,8 @@ func run(ctx context.Context, opts runOptions, deps adminDeps) error {
 		return runReconcileAddressBookMethods(ctx, deps)
 	case opts.rederiveCorrespondence:
 		return runRederiveCorrespondenceNames(ctx, deps)
+	case opts.resetGmailBackfill:
+		return runResetGmailBackfillCursors(ctx, deps)
 	}
 	return errors.New("unreachable")
 }
@@ -460,6 +482,20 @@ func runReconcileAddressBookMethods(ctx context.Context, deps adminDeps) error {
 	return nil
 }
 
+func runResetGmailBackfillCursors(ctx context.Context, deps adminDeps) error {
+	res, err := deps.gmailReset.ResetGmailBackfillCursors(ctx)
+	if err != nil {
+		return fmt.Errorf("reset gmail backfill cursors: %w", err)
+	}
+	if _, err := fmt.Fprintf(deps.stdout, "reset-gmail-backfill-cursors summary:\n"+
+		"  scanned: %d\n"+
+		"  reset:   %d\n",
+		res.Scanned, res.Reset); err != nil {
+		return fmt.Errorf("write summary: %w", err)
+	}
+	return nil
+}
+
 // correspondenceBackfillFloor is the lower bound for the one-time
 // re-derivation + full-range producer pass. It matches the Gmail onboarding
 // backfill floor (the earliest mail the integration ever ingested), so the
@@ -588,11 +624,12 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 	)
 
 	deps := adminDeps{
-		tokens:    hostService,
-		hosts:     hostService,
-		revoker:   hostService,
-		rematch:   rematch,
-		reconcile: addressBookReconcile,
+		tokens:     hostService,
+		hosts:      hostService,
+		revoker:    hostService,
+		rematch:    rematch,
+		reconcile:  addressBookReconcile,
+		gmailReset: service.NewEmailBackfillCursorResetService(syncRepo),
 	}
 
 	// LAZY: build the correspondence re-derivation stack ONLY for

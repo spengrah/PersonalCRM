@@ -111,7 +111,7 @@ func TestGmailGoLive_RegisteredProvider_SchedulerSweep_ProducesInteractionsAndCa
 		_ = syncRepo.DeleteSyncStatesByAccountID(ctx, account)
 	})
 
-	sentAt := localNoonAnchor()
+	sentAt := gmailPastNoonAnchor()
 	inbound := gmailMsg("glv-in", "thr-in", addr, []string{account}, nil, nil, "In", "hi", "<"+inExt+">", sentAt.UnixMilli())
 	outbound := gmailMsg("glv-out", "thr-out", account, []string{addr}, nil, nil, "Out", "yo", "<"+outExt+">", sentAt.Add(time.Hour).UnixMilli())
 	// Message between "me" and an unknown address only — a bystander to the

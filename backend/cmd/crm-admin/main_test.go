@@ -79,6 +79,20 @@ func (f *fakeRematchRunner) RematchStranded(_ context.Context) (*messages.Rematc
 	return f.result, nil
 }
 
+type fakeGmailBackfillResetter struct {
+	result service.EmailBackfillCursorResetResult
+	err    error
+	calls  int
+}
+
+func (f *fakeGmailBackfillResetter) ResetGmailBackfillCursors(_ context.Context) (service.EmailBackfillCursorResetResult, error) {
+	f.calls++
+	if f.err != nil {
+		return service.EmailBackfillCursorResetResult{}, f.err
+	}
+	return f.result, nil
+}
+
 func newTestDeps() (adminDeps, *bytes.Buffer, *fakeTokenMinter, *fakeHostLister, *fakeHostRevoker, *fakeRematchRunner) {
 	stdout := &bytes.Buffer{}
 	tokens := &fakeTokenMinter{
@@ -88,13 +102,15 @@ func newTestDeps() (adminDeps, *bytes.Buffer, *fakeTokenMinter, *fakeHostLister,
 	hosts := &fakeHostLister{}
 	revoker := &fakeHostRevoker{}
 	rematch := &fakeRematchRunner{result: &messages.RematchStrandedResult{}}
+	gmailReset := &fakeGmailBackfillResetter{}
 	return adminDeps{
-		tokens:  tokens,
-		hosts:   hosts,
-		revoker: revoker,
-		rematch: rematch,
-		stdout:  stdout,
-		stderr:  &bytes.Buffer{},
+		tokens:     tokens,
+		hosts:      hosts,
+		revoker:    revoker,
+		rematch:    rematch,
+		gmailReset: gmailReset,
+		stdout:     stdout,
+		stderr:     &bytes.Buffer{},
 	}, stdout, tokens, hosts, revoker, rematch
 }
 
@@ -367,6 +383,46 @@ func TestRunRematchStrandedDelegates(t *testing.T) {
 	}
 }
 
+func TestRunResetGmailBackfillCursorsCountsOnly(t *testing.T) {
+	deps, stdout, _, _, _, _ := newTestDeps()
+	reset := &fakeGmailBackfillResetter{
+		result: service.EmailBackfillCursorResetResult{Scanned: 3, Reset: 2},
+	}
+	deps.gmailReset = reset
+
+	err := run(context.Background(), runOptions{resetGmailBackfill: true}, deps)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if reset.calls != 1 {
+		t.Fatalf("expected 1 reset call, got %d", reset.calls)
+	}
+	out := stdout.String()
+	for _, want := range []string{"reset-gmail-backfill-cursors summary:", "scanned: 3", "reset:   2"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q: %s", want, out)
+		}
+	}
+	for _, forbidden := range []string{"account_id", "sync_cursor", "example.com"} {
+		if strings.Contains(out, forbidden) {
+			t.Fatalf("output must be counts-only; found %q in %s", forbidden, out)
+		}
+	}
+}
+
+func TestRunResetGmailBackfillCursorsError(t *testing.T) {
+	deps, _, _, _, _, _ := newTestDeps()
+	deps.gmailReset = &fakeGmailBackfillResetter{err: errors.New("db down")}
+
+	err := run(context.Background(), runOptions{resetGmailBackfill: true}, deps)
+	if err == nil {
+		t.Fatal("expected reset error")
+	}
+	if !strings.Contains(err.Error(), "reset gmail backfill cursors") {
+		t.Fatalf("expected wrapped reset error, got %v", err)
+	}
+}
+
 type fakeReconcileRunner struct {
 	result service.ReconcileAllResult
 	err    error
@@ -442,6 +498,17 @@ func TestRunReconcileMutualExclusion(t *testing.T) {
 	}
 }
 
+func TestRunResetGmailBackfillMutualExclusion(t *testing.T) {
+	deps, _, _, _, _, _ := newTestDeps()
+	err := run(context.Background(), runOptions{
+		resetGmailBackfill: true,
+		rematchStranded:    true,
+	}, deps)
+	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("expected mutual-exclusion error, got %v", err)
+	}
+}
+
 func TestParseArgsAllFlags(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -511,6 +578,15 @@ func TestParseArgsAllFlags(t *testing.T) {
 			func(t *testing.T, o runOptions) {
 				if !o.rederiveCorrespondence {
 					t.Fatal("rederive-correspondence-names flag not set")
+				}
+			},
+		},
+		{
+			"reset-gmail-backfill-cursors",
+			[]string{"--reset-gmail-backfill-cursors"},
+			func(t *testing.T, o runOptions) {
+				if !o.resetGmailBackfill {
+					t.Fatal("reset-gmail-backfill-cursors flag not set")
 				}
 			},
 		},
