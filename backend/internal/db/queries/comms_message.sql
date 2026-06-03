@@ -133,3 +133,17 @@ WHERE id = ANY(@message_ids::uuid[])
 -- call this.
 DELETE FROM comms_message
 WHERE matched_contact_id = @matched_contact_id;
+
+-- name: ListCommsMessageParticipantsSince :many
+-- Stream recent email content rows for the correspondence-enrichment scan:
+-- source_metadata carries the from/to/cc/bcc participant lists (bare addresses)
+-- plus the index-aligned from_name/to_names/cc_names/bcc_names. matched_contact_id
+-- is the known contact the message qualified for (the co-occurring contact the
+-- producer records as evidence). Bounded by @since to keep each scan cheap; the
+-- scan is idempotent so re-running the same window is harmless.
+SELECT matched_contact_id, sent_at, source_metadata
+FROM comms_message
+WHERE source = 'email'
+  AND deleted_at IS NULL
+  AND sent_at >= @since
+ORDER BY sent_at DESC, id;

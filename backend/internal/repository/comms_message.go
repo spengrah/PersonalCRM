@@ -316,6 +316,38 @@ func (r *CommsMessageRepository) HardDeleteByContact(ctx context.Context, contac
 	return r.queries.HardDeleteCommsMessagesByContact(ctx, uuidToPgUUID(contactID))
 }
 
+// CommsMessageParticipantRow is one recent email content row projected for the
+// correspondence-enrichment scan: the qualifying contact (the co-occurring
+// contact), when it was sent, and the raw source_metadata JSON (carrying the
+// from/to/cc/bcc participant lists + their display names). The producer
+// unmarshals SourceMetadata itself.
+type CommsMessageParticipantRow struct {
+	MatchedContactID uuid.UUID
+	SentAt           time.Time
+	SourceMetadata   []byte
+}
+
+// ListParticipantsSince streams recent email content rows (sent_at >= since)
+// for the correspondence-enrichment producer. Newest first; bounded by since.
+func (r *CommsMessageRepository) ListParticipantsSince(ctx context.Context, since time.Time) ([]CommsMessageParticipantRow, error) {
+	rows, err := r.queries.ListCommsMessageParticipantsSince(ctx, timeToPgTimestamptz(&since))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CommsMessageParticipantRow, 0, len(rows))
+	for _, row := range rows {
+		pr := CommsMessageParticipantRow{SourceMetadata: row.SourceMetadata}
+		if row.MatchedContactID.Valid {
+			pr.MatchedContactID = uuid.UUID(row.MatchedContactID.Bytes)
+		}
+		if row.SentAt.Valid {
+			pr.SentAt = row.SentAt.Time
+		}
+		out = append(out, pr)
+	}
+	return out, nil
+}
+
 // CommsStagingProcessor adapts *CommsMessageRepository to the source-neutral
 // StagingProcessor interface. It is wired into the StagingProcessorRegistry by
 // main.go only once an email consumer exists to dispatch through it; until then

@@ -103,6 +103,47 @@ func (q *Queries) HardDeleteCommsMessagesByContact(ctx context.Context, matchedC
 	return err
 }
 
+const ListCommsMessageParticipantsSince = `-- name: ListCommsMessageParticipantsSince :many
+SELECT matched_contact_id, sent_at, source_metadata
+FROM comms_message
+WHERE source = 'email'
+  AND deleted_at IS NULL
+  AND sent_at >= $1
+ORDER BY sent_at DESC, id
+`
+
+type ListCommsMessageParticipantsSinceRow struct {
+	MatchedContactID pgtype.UUID        `json:"matched_contact_id"`
+	SentAt           pgtype.Timestamptz `json:"sent_at"`
+	SourceMetadata   []byte             `json:"source_metadata"`
+}
+
+// Stream recent email content rows for the correspondence-enrichment scan:
+// source_metadata carries the from/to/cc/bcc participant lists (bare addresses)
+// plus the index-aligned from_name/to_names/cc_names/bcc_names. matched_contact_id
+// is the known contact the message qualified for (the co-occurring contact the
+// producer records as evidence). Bounded by @since to keep each scan cheap; the
+// scan is idempotent so re-running the same window is harmless.
+func (q *Queries) ListCommsMessageParticipantsSince(ctx context.Context, since pgtype.Timestamptz) ([]*ListCommsMessageParticipantsSinceRow, error) {
+	rows, err := q.db.Query(ctx, ListCommsMessageParticipantsSince, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListCommsMessageParticipantsSinceRow{}
+	for rows.Next() {
+		var i ListCommsMessageParticipantsSinceRow
+		if err := rows.Scan(&i.MatchedContactID, &i.SentAt, &i.SourceMetadata); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListCommsMessagesByContact = `-- name: ListCommsMessagesByContact :many
 SELECT id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at FROM comms_message
 WHERE matched_contact_id = $1
