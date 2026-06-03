@@ -54,9 +54,12 @@ test.describe('Imports gmail_correspondence evidence @area:imports', () => {
     // Link-only: no Import button on the card.
     await expect(card.getByRole('button', { name: 'Import' })).toHaveCount(0)
 
-    // Open the modal via Link, steer it to THIS worker's candidate, and link.
+    // Open the modal via Link. This is a link-only source, so the modal is
+    // locked to link mode (no Import/Link toggle buttons) — wait for the
+    // always-present Link Contact submit button instead, then steer the modal
+    // to THIS worker's candidate.
     await card.getByRole('button', { name: /Link/i }).click()
-    await expect(page.getByRole('button', { name: /Link to Existing/i })).toBeVisible()
+    await expect(page.getByRole('button', { name: /Link Contact/i })).toBeVisible()
     await navigateModalToCandidate(page, cardName)
 
     // Ensure a contact is selected (the trigram match usually pre-selects it).
