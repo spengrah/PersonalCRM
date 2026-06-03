@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
+
 	"github.com/riverqueue/river"
 	"github.com/stretchr/testify/require"
 )
@@ -28,9 +30,9 @@ func TestGmailCorrespondenceScanWorker_ComputesRecentWindow(t *testing.T) {
 	scanner := &stubCorrespondenceScanner{count: 3}
 	w := NewGmailCorrespondenceScanWorker(scanner, window)
 
-	before := time.Now().Add(-window)
+	before := accelerated.GetCurrentTime().Add(-window)
 	err := w.Work(context.Background(), &river.Job[GmailCorrespondenceScanArgs]{})
-	after := time.Now().Add(-window)
+	after := accelerated.GetCurrentTime().Add(-window)
 
 	require.NoError(t, err)
 	require.Equal(t, 1, scanner.called)

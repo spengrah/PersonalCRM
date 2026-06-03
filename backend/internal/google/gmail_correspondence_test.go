@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
@@ -116,7 +117,7 @@ func TestCorrespondence_GateQualifiesAtThreshold(t *testing.T) {
 	ext := newFakeExternal()
 	s := newSuggester(comms, contacts, ext, map[string]struct{}{"me@example.com": {}})
 
-	n, err := s.Run(context.Background(), time.Now().Add(-time.Hour))
+	n, err := s.Run(context.Background(), accelerated.GetCurrentTime().Add(-time.Hour))
 	require.NoError(t, err)
 	require.Equal(t, 1, n)
 	require.Len(t, ext.upserts, 1)
@@ -146,7 +147,7 @@ func TestCorrespondence_GateExactBoundary(t *testing.T) {
 	ext := newFakeExternal()
 	s := newSuggester(comms, contacts, ext, map[string]struct{}{"me@example.com": {}})
 
-	n, err := s.Run(context.Background(), time.Now().Add(-time.Hour))
+	n, err := s.Run(context.Background(), accelerated.GetCurrentTime().Add(-time.Hour))
 	require.NoError(t, err)
 	require.Equal(t, 1, n, "exact-0.60 similarity must qualify")
 }
@@ -170,7 +171,7 @@ func TestCorrespondence_GateRejectsBelowThreshold(t *testing.T) {
 	ext := newFakeExternal()
 	s := newSuggester(comms, contacts, ext, map[string]struct{}{"me@example.com": {}})
 
-	n, err := s.Run(context.Background(), time.Now().Add(-time.Hour))
+	n, err := s.Run(context.Background(), accelerated.GetCurrentTime().Add(-time.Hour))
 	require.NoError(t, err)
 	require.Equal(t, 0, n, "sub-0.60 must be rejected")
 	require.Empty(t, ext.upserts)
@@ -196,7 +197,7 @@ func TestCorrespondence_GateRejectsBareFirstName(t *testing.T) {
 	ext := newFakeExternal()
 	s := newSuggester(comms, contacts, ext, map[string]struct{}{"me@example.com": {}})
 
-	n, err := s.Run(context.Background(), time.Now().Add(-time.Hour))
+	n, err := s.Run(context.Background(), accelerated.GetCurrentTime().Add(-time.Hour))
 	require.NoError(t, err)
 	require.Equal(t, 0, n, "bare first name must be rejected by the ≥2-token gate")
 	require.Empty(t, ext.upserts)
@@ -234,7 +235,7 @@ func TestCorrespondence_ParticipantExtractionAndNamelessSkip(t *testing.T) {
 	ext := newFakeExternal()
 	s := newSuggester(comms, contacts, ext, map[string]struct{}{"me@example.com": {}})
 
-	n, err := s.Run(context.Background(), time.Now().Add(-time.Hour))
+	n, err := s.Run(context.Background(), accelerated.GetCurrentTime().Add(-time.Hour))
 	require.NoError(t, err)
 	require.Equal(t, 1, n)
 	require.Len(t, ext.upserts, 1)
@@ -267,7 +268,7 @@ func TestCorrespondence_DedupByAddress(t *testing.T) {
 	ext := newFakeExternal()
 	s := newSuggester(comms, contacts, ext, map[string]struct{}{"me@example.com": {}})
 
-	n, err := s.Run(context.Background(), time.Now().Add(-time.Hour))
+	n, err := s.Run(context.Background(), accelerated.GetCurrentTime().Add(-time.Hour))
 	require.NoError(t, err)
 	require.Equal(t, 1, n, "three rows for one address → one candidate")
 	require.Len(t, ext.upserts, 1)
@@ -308,7 +309,7 @@ func TestCorrespondence_SkipKnownAndOwn(t *testing.T) {
 		"own2@example.com": {},
 	})
 
-	n, err := s.Run(context.Background(), time.Now().Add(-time.Hour))
+	n, err := s.Run(context.Background(), accelerated.GetCurrentTime().Add(-time.Hour))
 	require.NoError(t, err)
 	require.Equal(t, 0, n, "known and own-account addresses are never emitted")
 	require.Empty(t, ext.upserts)
@@ -340,7 +341,7 @@ func TestCorrespondence_StickyIgnoreNoClobber(t *testing.T) {
 	}
 	s := newSuggester(comms, contacts, ext, map[string]struct{}{"me@example.com": {}})
 
-	n, err := s.Run(context.Background(), time.Now().Add(-time.Hour))
+	n, err := s.Run(context.Background(), accelerated.GetCurrentTime().Add(-time.Hour))
 	require.NoError(t, err)
 	require.Equal(t, 0, n)
 	require.Empty(t, ext.upserts, "ignored row → no redundant write")
@@ -367,7 +368,7 @@ func TestCorrespondence_CoOccurringContactEvidence(t *testing.T) {
 	ext := newFakeExternal()
 	s := newSuggester(comms, contacts, ext, map[string]struct{}{"me@example.com": {}})
 
-	_, err := s.Run(context.Background(), time.Now().Add(-time.Hour))
+	_, err := s.Run(context.Background(), accelerated.GetCurrentTime().Add(-time.Hour))
 	require.NoError(t, err)
 	require.Len(t, ext.upserts, 1)
 
@@ -390,7 +391,7 @@ func TestCorrespondence_EmptyInputNoError(t *testing.T) {
 	ext := newFakeExternal()
 	s := newSuggester(comms, contacts, ext, map[string]struct{}{})
 
-	n, err := s.Run(context.Background(), time.Now().Add(-time.Hour))
+	n, err := s.Run(context.Background(), accelerated.GetCurrentTime().Add(-time.Hour))
 	require.NoError(t, err)
 	require.Equal(t, 0, n)
 }

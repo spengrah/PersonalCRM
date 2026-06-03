@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
@@ -133,7 +134,7 @@ func TestRederive_HappyPath(t *testing.T) {
 	fetcher.names["gmail-1"] = repository.ParticipantNames{FromName: "Sender Name", ToNames: []string{"Me"}}
 	s := newRederiveService(comms, fetcher)
 
-	res, err := s.RederiveNames(context.Background(), time.Now().Add(-time.Hour))
+	res, err := s.RederiveNames(context.Background(), accelerated.GetCurrentTime().Add(-time.Hour))
 	require.NoError(t, err)
 	require.Equal(t, 1, res.Scanned)
 	require.Equal(t, 1, res.Rederived)
@@ -153,7 +154,7 @@ func TestRederive_SkippedNoGmailID(t *testing.T) {
 	fetcher := newFakeRederiveFetcher()
 	s := newRederiveService(comms, fetcher)
 
-	res, err := s.RederiveNames(context.Background(), time.Now().Add(-time.Hour))
+	res, err := s.RederiveNames(context.Background(), accelerated.GetCurrentTime().Add(-time.Hour))
 	require.NoError(t, err)
 	require.Equal(t, 3, res.Scanned)
 	require.Equal(t, 3, res.SkippedNoGmailID)
@@ -170,7 +171,7 @@ func TestRederive_SkippedUnavailableNotFailed(t *testing.T) {
 	fetcher.errs["gone-1"] = fmt.Errorf("%w: 404", errCorrespondenceUnavailable)
 	s := newRederiveService(comms, fetcher)
 
-	res, err := s.RederiveNames(context.Background(), time.Now().Add(-time.Hour))
+	res, err := s.RederiveNames(context.Background(), accelerated.GetCurrentTime().Add(-time.Hour))
 	require.NoError(t, err)
 	require.Equal(t, 1, res.SkippedUnavailable)
 	require.Equal(t, 0, res.Failed, "a since-deleted message must NOT count as Failed (no non-zero exit)")
@@ -186,7 +187,7 @@ func TestRederive_TransientRetriesThenSucceeds(t *testing.T) {
 	fetcher.names["flaky-1"] = repository.ParticipantNames{FromName: "Recovered Name"}
 	s := newRederiveService(comms, fetcher)
 
-	res, err := s.RederiveNames(context.Background(), time.Now().Add(-time.Hour))
+	res, err := s.RederiveNames(context.Background(), accelerated.GetCurrentTime().Add(-time.Hour))
 	require.NoError(t, err)
 	require.Equal(t, 1, res.Rederived)
 	require.Equal(t, 0, res.Failed)
@@ -202,7 +203,7 @@ func TestRederive_TransientExhaustedIsFailed(t *testing.T) {
 	fetcher.transient["always-429"] = 99 // never recovers within the retry budget
 	s := newRederiveService(comms, fetcher)
 
-	res, err := s.RederiveNames(context.Background(), time.Now().Add(-time.Hour))
+	res, err := s.RederiveNames(context.Background(), accelerated.GetCurrentTime().Add(-time.Hour))
 	require.NoError(t, err)
 	require.Equal(t, 0, res.Rederived)
 	require.Equal(t, 1, res.Failed)
@@ -225,7 +226,7 @@ func TestRederive_LivelockGuardTerminates(t *testing.T) {
 	fetcher.errs["gone"] = fmt.Errorf("%w: 404", errCorrespondenceUnavailable)
 	s := newRederiveService(comms, fetcher)
 
-	res, err := s.RederiveNames(context.Background(), time.Now().Add(-time.Hour))
+	res, err := s.RederiveNames(context.Background(), accelerated.GetCurrentTime().Add(-time.Hour))
 	require.NoError(t, err)
 	require.Equal(t, 3, res.Scanned, "all rows visited exactly once despite none being rewritten")
 	require.Equal(t, 2, res.SkippedNoGmailID)
@@ -244,13 +245,13 @@ func TestRederive_IdempotentSecondRun(t *testing.T) {
 	fetcher.names["gmail-1"] = repository.ParticipantNames{FromName: "Sender Name"}
 	s := newRederiveService(comms, fetcher)
 
-	res1, err := s.RederiveNames(context.Background(), time.Now().Add(-time.Hour))
+	res1, err := s.RederiveNames(context.Background(), accelerated.GetCurrentTime().Add(-time.Hour))
 	require.NoError(t, err)
 	require.Equal(t, 1, res1.Rederived)
 
 	// Second run: the fake marks backfilled rows done (mirrors the SQL's
 	// NOT (? 'from_name') guard), so the keyset returns nothing.
-	res2, err := s.RederiveNames(context.Background(), time.Now().Add(-time.Hour))
+	res2, err := s.RederiveNames(context.Background(), accelerated.GetCurrentTime().Add(-time.Hour))
 	require.NoError(t, err)
 	require.Equal(t, 0, res2.Scanned)
 	require.Equal(t, 0, res2.Rederived)
