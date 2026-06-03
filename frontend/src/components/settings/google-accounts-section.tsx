@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { Mail, Plus, Trash2, CheckCircle, AlertCircle, Info, RefreshCcw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { SyncBadge, PermissionBadge } from '@/components/settings/sync-badge'
+import { SyncBadge } from '@/components/settings/sync-badge'
 import { useGoogleAccounts, useRevokeGoogleAccount } from '@/hooks/use-google-accounts'
 import {
   useSyncStates,
@@ -73,6 +73,28 @@ export function GoogleAccountsSection() {
         message: errorMessage.includes('authentication')
           ? 'Authentication failed. Please reconnect your account.'
           : `Failed to start contacts sync: ${errorMessage}`,
+      })
+    } finally {
+      setSyncingAccount(null)
+    }
+  }
+
+  const handleSyncEmail = async (accountId: string) => {
+    setSyncingAccount(`email-${accountId}`)
+    try {
+      await triggerSyncMutation.mutateAsync({ source: 'email', accountId })
+      setNotification({
+        type: 'success',
+        message: 'Gmail sync started!',
+      })
+    } catch (error) {
+      console.error('Gmail sync error:', error)
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      setNotification({
+        type: 'error',
+        message: errorMessage.includes('authentication')
+          ? 'Authentication failed. Please reconnect your account.'
+          : `Failed to start Gmail sync: ${errorMessage}`,
       })
     } finally {
       setSyncingAccount(null)
@@ -284,9 +306,14 @@ export function GoogleAccountsSection() {
                   Permissions & Sync
                 </p>
                 <div className="flex flex-wrap gap-2">
-                  {/* Gmail - simple badge (no sync) */}
+                  {/* Gmail - sync badge */}
                   {account.scopes?.includes('https://www.googleapis.com/auth/gmail.readonly') && (
-                    <PermissionBadge label="Gmail (read)" />
+                    <SyncBadge
+                      label="Gmail"
+                      syncState={getSyncStateForAccount(syncStates, 'email', account.account_id)}
+                      onSync={() => handleSyncEmail(account.account_id)}
+                      loading={syncingAccount === `email-${account.account_id}`}
+                    />
                   )}
                   {/* Calendar - sync badge */}
                   {account.scopes?.includes(

@@ -20,6 +20,32 @@ test.describe('Settings Page @area:settings', () => {
     expect(hasConnectButton || hasConfigMessage).toBe(true)
   })
 
+  test('should display Google Accounts section with optional Gmail sync badge', async ({
+    page,
+  }) => {
+    await page.goto('/settings', { waitUntil: 'networkidle' })
+    await page.reload({ waitUntil: 'networkidle' })
+
+    // Google Accounts section heading should always render
+    await expect(page.getByRole('heading', { name: 'Google Accounts', exact: true })).toBeVisible()
+
+    // The Gmail sync badge only appears when an account with the gmail.readonly
+    // scope is connected (depends on backend GOOGLE_* env vars + a real account).
+    // If present, its refresh button must be accessible and not permanently disabled.
+    const gmailBadge = page.locator('div').filter({ hasText: /^Gmail/ })
+    const hasGmailBadge = await gmailBadge
+      .first()
+      .isVisible()
+      .catch(() => false)
+
+    if (hasGmailBadge) {
+      const refreshButton = gmailBadge.first().getByRole('button')
+      await expect(refreshButton).toBeVisible()
+      // Button may be transiently disabled while syncing, but not absent/hidden.
+      await expect(refreshButton).toBeEnabled({ timeout: 5000 })
+    }
+  })
+
   test('should display settings page with export and import sections', async ({ page }) => {
     await page.goto('/settings')
 
