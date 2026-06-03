@@ -366,6 +366,53 @@ WHERE id = $1
   AND deleted_at IS NULL
 RETURNING *;
 
+-- name: GetExternalContactForUpdate :one
+-- Row-locked read of a live row for the resolve/dismiss read-modify-write.
+-- The caller runs this + SetExternalContactPendingAndDismissed in ONE
+-- pgx.Tx so each action's own read-modify-write is atomic (a single
+-- action cannot half-clobber its own suggestion columns).
+SELECT * FROM external_contact
+WHERE id = sqlc.arg('id')
+  AND deleted_at IS NULL
+FOR UPDATE;
+
+-- name: SetExternalContactPendingAndDismissed :one
+-- Atomically rewrite BOTH suggestion columns. Resolve passes the
+-- unchanged dismissed set through and clears confirmed entries from
+-- pending; dismiss appends to dismissed and drops the same entries from
+-- pending. The Go layer computes both final sets from the FOR UPDATE
+-- re-read (never trusting a stale client row); an empty slice marshals to
+-- nil bytes → SQL NULL.
+UPDATE external_contact SET
+    pending_method_suggestions   = sqlc.arg('pending'),
+    dismissed_method_suggestions = sqlc.arg('dismissed'),
+    updated_at = NOW()
+WHERE id = sqlc.arg('id')
+  AND deleted_at IS NULL
+RETURNING *;
+
+-- name: ListExternalContactsWithPendingMethodSuggestions :many
+-- Address-book rows carrying non-empty pending_method_suggestions, joined
+-- to the canonical so the repo can apply the SAME effective-status
+-- precedence (ignored > imported > matched) as the reconcile driver via
+-- resolveEffectiveReconcileState — NOT a self-first COALESCE. Scoped to
+-- the caller-supplied address-book sources, with an optional People-tab
+-- source filter (empty = no chip).
+SELECT
+    ec.*,
+    canon.crm_contact_id AS canon_crm_contact_id,
+    canon.match_status   AS canon_match_status
+FROM external_contact ec
+LEFT JOIN external_contact canon
+    ON ec.duplicate_of_id = canon.id
+   AND canon.deleted_at IS NULL
+WHERE ec.source = ANY(sqlc.arg('sources')::text[])
+  AND ec.deleted_at IS NULL
+  AND ec.pending_method_suggestions IS NOT NULL
+  AND jsonb_array_length(ec.pending_method_suggestions) > 0
+  AND (sqlc.arg('source_filter')::text = '' OR ec.source = sqlc.arg('source_filter')::text)
+ORDER BY ec.id;
+
 -- name: SetDismissedMethodSuggestionsForTest :one
 -- TEST ONLY: pre-seeds the dismissed_method_suggestions column so the
 -- dismissed-skip reconcile test can verify a dismissed (type,value) is

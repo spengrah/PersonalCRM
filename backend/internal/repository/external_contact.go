@@ -68,6 +68,18 @@ type ReconcileTarget struct {
 	EffectiveStatus    MatchStatus
 }
 
+// PendingMethodSuggestionRow is one address-book row carrying a non-empty
+// pending_method_suggestions set, resolved to its effective CRM contact +
+// the contact's display name for the suggestions surface. External is the
+// row whose emails[]/phones[] carry the methods; EffectiveContactID is the
+// canonical-resolved contact (self or, for a duplicate, the canonical's)
+// so dup rows are usable.
+type PendingMethodSuggestionRow struct {
+	External           ExternalContact
+	EffectiveContactID uuid.UUID
+	ContactFullName    string
+}
+
 // ExternalContact represents an external contact from Google/iCloud
 type ExternalContact struct {
 	ID            uuid.UUID      `json:"id"`
@@ -220,6 +232,44 @@ func NewExternalContactRepository(queries db.Querier) *ExternalContactRepository
 // share identical field names/types for the ec.* projection; this is a
 // straight field copy.
 func reconcileRowToDbExternalContact(row *db.ListLinkedAddressBookExternalContactsForReconcileRow) *db.ExternalContact {
+	return &db.ExternalContact{
+		ID:                         row.ID,
+		Source:                     row.Source,
+		SourceID:                   row.SourceID,
+		AccountID:                  row.AccountID,
+		DisplayName:                row.DisplayName,
+		FirstName:                  row.FirstName,
+		LastName:                   row.LastName,
+		Emails:                     row.Emails,
+		Phones:                     row.Phones,
+		Addresses:                  row.Addresses,
+		Organization:               row.Organization,
+		JobTitle:                   row.JobTitle,
+		Birthday:                   row.Birthday,
+		PhotoUrl:                   row.PhotoUrl,
+		CrmContactID:               row.CrmContactID,
+		MatchStatus:                row.MatchStatus,
+		DuplicateOfID:              row.DuplicateOfID,
+		Etag:                       row.Etag,
+		Metadata:                   row.Metadata,
+		SyncedAt:                   row.SyncedAt,
+		CreatedAt:                  row.CreatedAt,
+		UpdatedAt:                  row.UpdatedAt,
+		DeletedAt:                  row.DeletedAt,
+		HostID:                     row.HostID,
+		LastContentHash:            row.LastContentHash,
+		PendingMethodSuggestions:   row.PendingMethodSuggestions,
+		DismissedMethodSuggestions: row.DismissedMethodSuggestions,
+	}
+}
+
+// pendingSuggestionRowToDbExternalContact projects the ec.* columns of a
+// ListExternalContactsWithPendingMethodSuggestionsRow back into a
+// db.ExternalContact so convertDbExternalContact can decode it. The
+// canon_* columns are handled separately by the caller. The two structs
+// share identical field names/types for the ec.* projection; this is a
+// straight field copy (mirrors reconcileRowToDbExternalContact).
+func pendingSuggestionRowToDbExternalContact(row *db.ListExternalContactsWithPendingMethodSuggestionsRow) *db.ExternalContact {
 	return &db.ExternalContact{
 		ID:                         row.ID,
 		Source:                     row.Source,
@@ -669,6 +719,22 @@ func (r *ExternalContactRepository) ListForCRMContact(ctx context.Context, crmCo
 	return contacts, nil
 }
 
+// addressBookSuggestionSources is the fixed address-book source set the
+// method-suggestion surface reads from (mirrors the reconcile driver's
+// scope). The two JSONB suggestion columns are v1-scoped to these
+// sources, so the list query is restricted to them.
+var addressBookSuggestionSources = []string{"gcontacts", "icloud_contacts"}
+
+// marshalMethodSuggestions marshals a pending/dismissed suggestion slice
+// to JSONB bytes. A nil/empty slice returns nil bytes, which the SQL
+// writers store as SQL NULL.
+func marshalMethodSuggestions(suggestions []PendingMethodSuggestion) ([]byte, error) {
+	if len(suggestions) == 0 {
+		return nil, nil
+	}
+	return json.Marshal(suggestions)
+}
+
 // parseMethodSuggestions decodes a pending/dismissed_method_suggestions
 // JSONB column into a slice. nil/empty bytes (SQL NULL) → nil slice.
 // A malformed value → nil (the row is still usable; a bad suggestion
@@ -839,13 +905,9 @@ func (r *ExternalContactRepository) SetMethodSuggestions(
 	id uuid.UUID,
 	pending []PendingMethodSuggestion,
 ) (*ExternalContact, error) {
-	var pendingJSON []byte
-	if len(pending) > 0 {
-		marshalled, err := json.Marshal(pending)
-		if err != nil {
-			return nil, fmt.Errorf("marshal pending method suggestions: %w", err)
-		}
-		pendingJSON = marshalled
+	pendingJSON, err := marshalMethodSuggestions(pending)
+	if err != nil {
+		return nil, fmt.Errorf("marshal pending method suggestions: %w", err)
 	}
 	dbContact, err := r.queries.SetExternalContactMethodSuggestions(ctx, db.SetExternalContactMethodSuggestionsParams{
 		ID:      pgtype.UUID{Bytes: id, Valid: true},
@@ -858,6 +920,124 @@ func (r *ExternalContactRepository) SetMethodSuggestions(
 		return nil, fmt.Errorf("set method suggestions: %w", err)
 	}
 	return convertDbExternalContact(dbContact)
+}
+
+// GetForUpdateTx row-locks a live external_contact row inside the
+// caller's tx (SELECT … FOR UPDATE). The resolve/dismiss read-modify-
+// write runs this + SetMethodSuggestionSetsTx in ONE tx so each action's
+// own RMW is atomic. Returns db.ErrNotFound when the row is tombstoned or
+// gone. Caller owns the tx lifecycle.
+func (r *ExternalContactRepository) GetForUpdateTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	id uuid.UUID,
+) (*ExternalContact, error) {
+	dbContact, err := db.New(tx).GetExternalContactForUpdate(ctx, pgtype.UUID{Bytes: id, Valid: true})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	return convertDbExternalContact(dbContact)
+}
+
+// SetMethodSuggestionSetsTx atomically rewrites BOTH suggestion columns
+// inside the caller's tx. Resolve passes the unchanged dismissed set and a
+// pending set cleared of confirmed entries; dismiss passes the appended
+// dismissed set and a pending set cleared of the dismissed entries. Each
+// nil/empty slice marshals to nil bytes → SQL NULL. Returns db.ErrNotFound
+// when the row is tombstoned or gone. Caller owns the tx lifecycle.
+func (r *ExternalContactRepository) SetMethodSuggestionSetsTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	id uuid.UUID,
+	pending, dismissed []PendingMethodSuggestion,
+) (*ExternalContact, error) {
+	pendingJSON, err := marshalMethodSuggestions(pending)
+	if err != nil {
+		return nil, fmt.Errorf("marshal pending method suggestions: %w", err)
+	}
+	dismissedJSON, err := marshalMethodSuggestions(dismissed)
+	if err != nil {
+		return nil, fmt.Errorf("marshal dismissed method suggestions: %w", err)
+	}
+	dbContact, err := db.New(tx).SetExternalContactPendingAndDismissed(ctx, db.SetExternalContactPendingAndDismissedParams{
+		ID:        pgtype.UUID{Bytes: id, Valid: true},
+		Pending:   pendingJSON,
+		Dismissed: dismissedJSON,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, fmt.Errorf("set method suggestion sets: %w", err)
+	}
+	return convertDbExternalContact(dbContact)
+}
+
+// ListPendingMethodSuggestionRows returns every live address-book row
+// carrying a non-empty pending_method_suggestions set, resolved to its
+// effective CRM contact (self or canonical) via the same precedence as
+// the reconcile driver. sourceFilter scopes to a single source when
+// non-empty (the People-tab chip); empty returns all address-book
+// sources. Rows that resolve to no live effective contact, or to an
+// effectively-ignored row, are dropped here. Each surviving row carries
+// the effective contact's full name for the card label.
+func (r *ExternalContactRepository) ListPendingMethodSuggestionRows(
+	ctx context.Context,
+	sourceFilter string,
+) ([]PendingMethodSuggestionRow, error) {
+	rows, err := r.queries.ListExternalContactsWithPendingMethodSuggestions(ctx, db.ListExternalContactsWithPendingMethodSuggestionsParams{
+		Sources:      addressBookSuggestionSources,
+		SourceFilter: sourceFilter,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list external contacts with pending method suggestions: %w", err)
+	}
+
+	out := make([]PendingMethodSuggestionRow, 0, len(rows))
+	for _, row := range rows {
+		contact, convErr := convertDbExternalContact(pendingSuggestionRowToDbExternalContact(row))
+		if convErr != nil {
+			continue
+		}
+
+		var canonContactID *uuid.UUID
+		if row.CanonCrmContactID.Valid {
+			id := uuid.UUID(row.CanonCrmContactID.Bytes)
+			canonContactID = &id
+		}
+		canonStatus := MatchStatus("")
+		if row.CanonMatchStatus.Valid {
+			canonStatus = MatchStatus(row.CanonMatchStatus.String)
+		}
+
+		effectiveContactID, _, ok := resolveEffectiveReconcileState(
+			contact.CRMContactID, contact.MatchStatus, canonContactID, canonStatus,
+		)
+		if !ok {
+			continue
+		}
+
+		// The effective contact's name for the card label. GetContact
+		// filters deleted_at IS NULL, so a soft-deleted effective contact
+		// drops the row here (liveness guard).
+		dbContact, nameErr := r.queries.GetContact(ctx, pgtype.UUID{Bytes: effectiveContactID, Valid: true})
+		if nameErr != nil {
+			if errors.Is(nameErr, pgx.ErrNoRows) {
+				continue
+			}
+			return nil, fmt.Errorf("get contact for pending suggestion row: %w", nameErr)
+		}
+
+		out = append(out, PendingMethodSuggestionRow{
+			External:           *contact,
+			EffectiveContactID: effectiveContactID,
+			ContactFullName:    dbContact.FullName,
+		})
+	}
+	return out, nil
 }
 
 // SetDismissedMethodSuggestionsForTest pre-seeds the

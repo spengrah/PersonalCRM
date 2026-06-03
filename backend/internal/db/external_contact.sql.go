@@ -533,6 +533,52 @@ func (q *Queries) GetExternalContactBySource(ctx context.Context, arg GetExterna
 	return &i, err
 }
 
+const GetExternalContactForUpdate = `-- name: GetExternalContactForUpdate :one
+SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash, pending_method_suggestions, dismissed_method_suggestions FROM external_contact
+WHERE id = $1
+  AND deleted_at IS NULL
+FOR UPDATE
+`
+
+// Row-locked read of a live row for the resolve/dismiss read-modify-write.
+// The caller runs this + SetExternalContactPendingAndDismissed in ONE
+// pgx.Tx so each action's own read-modify-write is atomic (a single
+// action cannot half-clobber its own suggestion columns).
+func (q *Queries) GetExternalContactForUpdate(ctx context.Context, id pgtype.UUID) (*ExternalContact, error) {
+	row := q.db.QueryRow(ctx, GetExternalContactForUpdate, id)
+	var i ExternalContact
+	err := row.Scan(
+		&i.ID,
+		&i.Source,
+		&i.SourceID,
+		&i.AccountID,
+		&i.DisplayName,
+		&i.FirstName,
+		&i.LastName,
+		&i.Emails,
+		&i.Phones,
+		&i.Addresses,
+		&i.Organization,
+		&i.JobTitle,
+		&i.Birthday,
+		&i.PhotoUrl,
+		&i.CrmContactID,
+		&i.MatchStatus,
+		&i.DuplicateOfID,
+		&i.Etag,
+		&i.Metadata,
+		&i.SyncedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+		&i.HostID,
+		&i.LastContentHash,
+		&i.PendingMethodSuggestions,
+		&i.DismissedMethodSuggestions,
+	)
+	return &i, err
+}
+
 const HasEnrichmentForField = `-- name: HasEnrichmentForField :one
 SELECT EXISTS(
     SELECT 1 FROM contact_enrichment
@@ -848,6 +894,116 @@ func (q *Queries) ListExternalContactsForCRMContact(ctx context.Context, crmCont
 			&i.LastContentHash,
 			&i.PendingMethodSuggestions,
 			&i.DismissedMethodSuggestions,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListExternalContactsWithPendingMethodSuggestions = `-- name: ListExternalContactsWithPendingMethodSuggestions :many
+SELECT
+    ec.id, ec.source, ec.source_id, ec.account_id, ec.display_name, ec.first_name, ec.last_name, ec.emails, ec.phones, ec.addresses, ec.organization, ec.job_title, ec.birthday, ec.photo_url, ec.crm_contact_id, ec.match_status, ec.duplicate_of_id, ec.etag, ec.metadata, ec.synced_at, ec.created_at, ec.updated_at, ec.deleted_at, ec.host_id, ec.last_content_hash, ec.pending_method_suggestions, ec.dismissed_method_suggestions,
+    canon.crm_contact_id AS canon_crm_contact_id,
+    canon.match_status   AS canon_match_status
+FROM external_contact ec
+LEFT JOIN external_contact canon
+    ON ec.duplicate_of_id = canon.id
+   AND canon.deleted_at IS NULL
+WHERE ec.source = ANY($1::text[])
+  AND ec.deleted_at IS NULL
+  AND ec.pending_method_suggestions IS NOT NULL
+  AND jsonb_array_length(ec.pending_method_suggestions) > 0
+  AND ($2::text = '' OR ec.source = $2::text)
+ORDER BY ec.id
+`
+
+type ListExternalContactsWithPendingMethodSuggestionsParams struct {
+	Sources      []string `json:"sources"`
+	SourceFilter string   `json:"source_filter"`
+}
+
+type ListExternalContactsWithPendingMethodSuggestionsRow struct {
+	ID                         pgtype.UUID        `json:"id"`
+	Source                     string             `json:"source"`
+	SourceID                   string             `json:"source_id"`
+	AccountID                  pgtype.Text        `json:"account_id"`
+	DisplayName                pgtype.Text        `json:"display_name"`
+	FirstName                  pgtype.Text        `json:"first_name"`
+	LastName                   pgtype.Text        `json:"last_name"`
+	Emails                     []byte             `json:"emails"`
+	Phones                     []byte             `json:"phones"`
+	Addresses                  []byte             `json:"addresses"`
+	Organization               pgtype.Text        `json:"organization"`
+	JobTitle                   pgtype.Text        `json:"job_title"`
+	Birthday                   pgtype.Date        `json:"birthday"`
+	PhotoUrl                   pgtype.Text        `json:"photo_url"`
+	CrmContactID               pgtype.UUID        `json:"crm_contact_id"`
+	MatchStatus                pgtype.Text        `json:"match_status"`
+	DuplicateOfID              pgtype.UUID        `json:"duplicate_of_id"`
+	Etag                       pgtype.Text        `json:"etag"`
+	Metadata                   []byte             `json:"metadata"`
+	SyncedAt                   pgtype.Timestamptz `json:"synced_at"`
+	CreatedAt                  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt                  pgtype.Timestamptz `json:"updated_at"`
+	DeletedAt                  pgtype.Timestamptz `json:"deleted_at"`
+	HostID                     pgtype.UUID        `json:"host_id"`
+	LastContentHash            pgtype.Text        `json:"last_content_hash"`
+	PendingMethodSuggestions   []byte             `json:"pending_method_suggestions"`
+	DismissedMethodSuggestions []byte             `json:"dismissed_method_suggestions"`
+	CanonCrmContactID          pgtype.UUID        `json:"canon_crm_contact_id"`
+	CanonMatchStatus           pgtype.Text        `json:"canon_match_status"`
+}
+
+// Address-book rows carrying non-empty pending_method_suggestions, joined
+// to the canonical so the repo can apply the SAME effective-status
+// precedence (ignored > imported > matched) as the reconcile driver via
+// resolveEffectiveReconcileState — NOT a self-first COALESCE. Scoped to
+// the caller-supplied address-book sources, with an optional People-tab
+// source filter (empty = no chip).
+func (q *Queries) ListExternalContactsWithPendingMethodSuggestions(ctx context.Context, arg ListExternalContactsWithPendingMethodSuggestionsParams) ([]*ListExternalContactsWithPendingMethodSuggestionsRow, error) {
+	rows, err := q.db.Query(ctx, ListExternalContactsWithPendingMethodSuggestions, arg.Sources, arg.SourceFilter)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListExternalContactsWithPendingMethodSuggestionsRow{}
+	for rows.Next() {
+		var i ListExternalContactsWithPendingMethodSuggestionsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Source,
+			&i.SourceID,
+			&i.AccountID,
+			&i.DisplayName,
+			&i.FirstName,
+			&i.LastName,
+			&i.Emails,
+			&i.Phones,
+			&i.Addresses,
+			&i.Organization,
+			&i.JobTitle,
+			&i.Birthday,
+			&i.PhotoUrl,
+			&i.CrmContactID,
+			&i.MatchStatus,
+			&i.DuplicateOfID,
+			&i.Etag,
+			&i.Metadata,
+			&i.SyncedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+			&i.HostID,
+			&i.LastContentHash,
+			&i.PendingMethodSuggestions,
+			&i.DismissedMethodSuggestions,
+			&i.CanonCrmContactID,
+			&i.CanonMatchStatus,
 		); err != nil {
 			return nil, err
 		}
@@ -1297,6 +1453,63 @@ type SetExternalContactMethodSuggestionsParams struct {
 // so it survives the wholesale-metadata-replace producer upserts.
 func (q *Queries) SetExternalContactMethodSuggestions(ctx context.Context, arg SetExternalContactMethodSuggestionsParams) (*ExternalContact, error) {
 	row := q.db.QueryRow(ctx, SetExternalContactMethodSuggestions, arg.ID, arg.Pending)
+	var i ExternalContact
+	err := row.Scan(
+		&i.ID,
+		&i.Source,
+		&i.SourceID,
+		&i.AccountID,
+		&i.DisplayName,
+		&i.FirstName,
+		&i.LastName,
+		&i.Emails,
+		&i.Phones,
+		&i.Addresses,
+		&i.Organization,
+		&i.JobTitle,
+		&i.Birthday,
+		&i.PhotoUrl,
+		&i.CrmContactID,
+		&i.MatchStatus,
+		&i.DuplicateOfID,
+		&i.Etag,
+		&i.Metadata,
+		&i.SyncedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+		&i.HostID,
+		&i.LastContentHash,
+		&i.PendingMethodSuggestions,
+		&i.DismissedMethodSuggestions,
+	)
+	return &i, err
+}
+
+const SetExternalContactPendingAndDismissed = `-- name: SetExternalContactPendingAndDismissed :one
+UPDATE external_contact SET
+    pending_method_suggestions   = $1,
+    dismissed_method_suggestions = $2,
+    updated_at = NOW()
+WHERE id = $3
+  AND deleted_at IS NULL
+RETURNING id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash, pending_method_suggestions, dismissed_method_suggestions
+`
+
+type SetExternalContactPendingAndDismissedParams struct {
+	Pending   []byte      `json:"pending"`
+	Dismissed []byte      `json:"dismissed"`
+	ID        pgtype.UUID `json:"id"`
+}
+
+// Atomically rewrite BOTH suggestion columns. Resolve passes the
+// unchanged dismissed set through and clears confirmed entries from
+// pending; dismiss appends to dismissed and drops the same entries from
+// pending. The Go layer computes both final sets from the FOR UPDATE
+// re-read (never trusting a stale client row); an empty slice marshals to
+// nil bytes → SQL NULL.
+func (q *Queries) SetExternalContactPendingAndDismissed(ctx context.Context, arg SetExternalContactPendingAndDismissedParams) (*ExternalContact, error) {
+	row := q.db.QueryRow(ctx, SetExternalContactPendingAndDismissed, arg.Pending, arg.Dismissed, arg.ID)
 	var i ExternalContact
 	err := row.Scan(
 		&i.ID,
