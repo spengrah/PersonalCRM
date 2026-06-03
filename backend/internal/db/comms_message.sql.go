@@ -11,6 +11,65 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const BackfillCommsMessageParticipantNames = `-- name: BackfillCommsMessageParticipantNames :execrows
+UPDATE comms_message
+SET source_metadata = jsonb_set(
+    jsonb_set(
+        jsonb_set(
+            jsonb_set(
+                source_metadata,
+                '{from_name}',
+                to_jsonb($1::text),
+                TRUE
+            ),
+            '{to_names}',
+            $2::jsonb,
+            TRUE
+        ),
+        '{cc_names}',
+        $3::jsonb,
+        TRUE
+    ),
+    '{bcc_names}',
+    $4::jsonb,
+    TRUE
+)
+WHERE id = $5
+  AND deleted_at IS NULL
+  AND NOT (source_metadata ? 'from_name')
+`
+
+type BackfillCommsMessageParticipantNamesParams struct {
+	FromName string      `json:"from_name"`
+	ToNames  []byte      `json:"to_names"`
+	CcNames  []byte      `json:"cc_names"`
+	BccNames []byte      `json:"bcc_names"`
+	ID       pgtype.UUID `json:"id"`
+}
+
+// Additively merge the four display-name keys onto an EXISTING row's stored
+// source_metadata, preserving every existing content key (from/to/cc/bcc/
+// subject/html/attachments/labels) and the provenance keys (observed_accounts/
+// account_gmail_ids). A nested jsonb_set chain (create_missing=true per key) —
+// NOT a wholesale replace, which would destroy provenance + content. The caller
+// passes non-NULL JSON arrays ([] when empty) for *_names so jsonb_set never
+// writes a JSON null. Guarded by NOT (? 'from_name') so a row already
+// re-derived (or concurrently re-ingested with names) is a no-op (0 rows) —
+// idempotent across runs.
+func (q *Queries) BackfillCommsMessageParticipantNames(ctx context.Context, arg BackfillCommsMessageParticipantNamesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, BackfillCommsMessageParticipantNames,
+		arg.FromName,
+		arg.ToNames,
+		arg.CcNames,
+		arg.BccNames,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const GetCommsMessage = `-- name: GetCommsMessage :one
 SELECT id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at FROM comms_message
 WHERE source = $1
@@ -183,6 +242,57 @@ func (q *Queries) ListCommsMessagesByContact(ctx context.Context, matchedContact
 			&i.DeletedAt,
 			&i.CreatedAt,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListCommsMessagesMissingParticipantNames = `-- name: ListCommsMessagesMissingParticipantNames :many
+SELECT id, account_id, source_metadata
+FROM comms_message
+WHERE source = 'email'
+  AND deleted_at IS NULL
+  AND sent_at >= $1
+  AND id > $2
+  AND NOT (source_metadata ? 'from_name')
+ORDER BY id
+LIMIT $3
+`
+
+type ListCommsMessagesMissingParticipantNamesParams struct {
+	Since     pgtype.Timestamptz `json:"since"`
+	AfterID   pgtype.UUID        `json:"after_id"`
+	BatchSize int32              `json:"batch_size"`
+}
+
+type ListCommsMessagesMissingParticipantNamesRow struct {
+	ID             pgtype.UUID `json:"id"`
+	AccountID      pgtype.Text `json:"account_id"`
+	SourceMetadata []byte      `json:"source_metadata"`
+}
+
+// Keyset-paged rows for the one-time historical display-name re-derivation
+// (crm-admin --rederive-correspondence-names). Returns email rows at/after
+// @since that lack the from_name key (i.e. ingested before display-name
+// capture shipped), paged by id > @after_id so the runner advances the cursor
+// regardless of per-row outcome — a skipped/failed row never blocks later rows
+// (livelock avoidance). account_id + source_metadata.account_gmail_ids together
+// locate the per-mailbox gmail id to re-fetch.
+func (q *Queries) ListCommsMessagesMissingParticipantNames(ctx context.Context, arg ListCommsMessagesMissingParticipantNamesParams) ([]*ListCommsMessagesMissingParticipantNamesRow, error) {
+	rows, err := q.db.Query(ctx, ListCommsMessagesMissingParticipantNames, arg.Since, arg.AfterID, arg.BatchSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListCommsMessagesMissingParticipantNamesRow{}
+	for rows.Next() {
+		var i ListCommsMessagesMissingParticipantNamesRow
+		if err := rows.Scan(&i.ID, &i.AccountID, &i.SourceMetadata); err != nil {
 			return nil, err
 		}
 		items = append(items, &i)

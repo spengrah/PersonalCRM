@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -346,6 +347,77 @@ func (r *CommsMessageRepository) ListParticipantsSince(ctx context.Context, sinc
 		out = append(out, pr)
 	}
 	return out, nil
+}
+
+// MissingParticipantNamesRow is one keyset-paged row the historical
+// display-name re-derivation must re-fetch: the row id (and keyset cursor),
+// the connected account that observed it, and the stored source_metadata
+// (carrying account_gmail_ids to resolve the per-mailbox gmail id).
+type MissingParticipantNamesRow struct {
+	ID             uuid.UUID
+	AccountID      *string
+	SourceMetadata []byte
+}
+
+// ListMissingParticipantNames keyset-pages email rows (sent_at >= since,
+// id > afterID) that lack the from_name key, in id order, capped at batchSize.
+// The runner advances afterID = max(id) of each returned batch regardless of
+// per-row outcome, so a skipped/failed row never blocks later rows.
+func (r *CommsMessageRepository) ListMissingParticipantNames(ctx context.Context, since time.Time, afterID uuid.UUID, batchSize int32) ([]MissingParticipantNamesRow, error) {
+	rows, err := r.queries.ListCommsMessagesMissingParticipantNames(ctx, db.ListCommsMessagesMissingParticipantNamesParams{
+		Since:     timeToPgTimestamptz(&since),
+		AfterID:   uuidToPgUUID(afterID),
+		BatchSize: batchSize,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]MissingParticipantNamesRow, 0, len(rows))
+	for _, row := range rows {
+		mr := MissingParticipantNamesRow{SourceMetadata: row.SourceMetadata}
+		if row.ID.Valid {
+			mr.ID = uuid.UUID(row.ID.Bytes)
+		}
+		if row.AccountID.Valid {
+			mr.AccountID = &row.AccountID.String
+		}
+		out = append(out, mr)
+	}
+	return out, nil
+}
+
+// ParticipantNames is the set of re-derived display names for one message,
+// index-aligned with the row's stored from/to/cc/bcc address lists.
+type ParticipantNames struct {
+	FromName string
+	ToNames  []string
+	CcNames  []string
+	BccNames []string
+}
+
+// BackfillParticipantNames additively merges the re-derived display names onto
+// an existing row's source_metadata, preserving all existing content +
+// provenance keys. The *_names slices are marshalled to non-NULL JSON arrays
+// ([] when empty) so the SQL jsonb_set never writes a JSON null. Returns the
+// number of rows affected (0 when the row already has names — idempotent).
+func (r *CommsMessageRepository) BackfillParticipantNames(ctx context.Context, id uuid.UUID, names ParticipantNames) (int64, error) {
+	toJSON := func(s []string) []byte {
+		if s == nil {
+			s = []string{}
+		}
+		b, err := json.Marshal(s)
+		if err != nil {
+			return []byte("[]")
+		}
+		return b
+	}
+	return r.queries.BackfillCommsMessageParticipantNames(ctx, db.BackfillCommsMessageParticipantNamesParams{
+		ID:       uuidToPgUUID(id),
+		FromName: names.FromName,
+		ToNames:  toJSON(names.ToNames),
+		CcNames:  toJSON(names.CcNames),
+		BccNames: toJSON(names.BccNames),
+	})
 }
 
 // CommsStagingProcessor adapts *CommsMessageRepository to the source-neutral

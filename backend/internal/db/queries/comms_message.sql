@@ -147,3 +147,57 @@ WHERE source = 'email'
   AND deleted_at IS NULL
   AND sent_at >= @since
 ORDER BY sent_at DESC, id;
+
+-- name: ListCommsMessagesMissingParticipantNames :many
+-- Keyset-paged rows for the one-time historical display-name re-derivation
+-- (crm-admin --rederive-correspondence-names). Returns email rows at/after
+-- @since that lack the from_name key (i.e. ingested before display-name
+-- capture shipped), paged by id > @after_id so the runner advances the cursor
+-- regardless of per-row outcome — a skipped/failed row never blocks later rows
+-- (livelock avoidance). account_id + source_metadata.account_gmail_ids together
+-- locate the per-mailbox gmail id to re-fetch.
+SELECT id, account_id, source_metadata
+FROM comms_message
+WHERE source = 'email'
+  AND deleted_at IS NULL
+  AND sent_at >= @since
+  AND id > @after_id
+  AND NOT (source_metadata ? 'from_name')
+ORDER BY id
+LIMIT @batch_size;
+
+-- name: BackfillCommsMessageParticipantNames :execrows
+-- Additively merge the four display-name keys onto an EXISTING row's stored
+-- source_metadata, preserving every existing content key (from/to/cc/bcc/
+-- subject/html/attachments/labels) and the provenance keys (observed_accounts/
+-- account_gmail_ids). A nested jsonb_set chain (create_missing=true per key) —
+-- NOT a wholesale replace, which would destroy provenance + content. The caller
+-- passes non-NULL JSON arrays ([] when empty) for *_names so jsonb_set never
+-- writes a JSON null. Guarded by NOT (? 'from_name') so a row already
+-- re-derived (or concurrently re-ingested with names) is a no-op (0 rows) —
+-- idempotent across runs.
+UPDATE comms_message
+SET source_metadata = jsonb_set(
+    jsonb_set(
+        jsonb_set(
+            jsonb_set(
+                source_metadata,
+                '{from_name}',
+                to_jsonb(@from_name::text),
+                TRUE
+            ),
+            '{to_names}',
+            @to_names::jsonb,
+            TRUE
+        ),
+        '{cc_names}',
+        @cc_names::jsonb,
+        TRUE
+    ),
+    '{bcc_names}',
+    @bcc_names::jsonb,
+    TRUE
+)
+WHERE id = @id
+  AND deleted_at IS NULL
+  AND NOT (source_metadata ? 'from_name');

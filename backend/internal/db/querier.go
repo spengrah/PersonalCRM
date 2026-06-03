@@ -41,6 +41,16 @@ type Querier interface {
 	// uses NOW(), so the test must rewrite the DB clock for those rows).
 	// Production code MUST NOT call this.
 	BackdateTelegramMessageClaim(ctx context.Context, messageIds []pgtype.UUID) error
+	// Additively merge the four display-name keys onto an EXISTING row's stored
+	// source_metadata, preserving every existing content key (from/to/cc/bcc/
+	// subject/html/attachments/labels) and the provenance keys (observed_accounts/
+	// account_gmail_ids). A nested jsonb_set chain (create_missing=true per key) —
+	// NOT a wholesale replace, which would destroy provenance + content. The caller
+	// passes non-NULL JSON arrays ([] when empty) for *_names so jsonb_set never
+	// writes a JSON null. Guarded by NOT (? 'from_name') so a row already
+	// re-derived (or concurrently re-ingested with names) is a no-op (0 rows) —
+	// idempotent across runs.
+	BackfillCommsMessageParticipantNames(ctx context.Context, arg BackfillCommsMessageParticipantNamesParams) (int64, error)
 	BulkLinkIdentitiesToContact(ctx context.Context, arg BulkLinkIdentitiesToContactParams) error
 	// Admin operation. Bumps cursor_epoch so the daemon discards its
 	// local cursor cache on next heartbeat. Currently used only by the
@@ -755,6 +765,14 @@ type Querier interface {
 	ListCommsMessageParticipantsSince(ctx context.Context, since pgtype.Timestamptz) ([]*ListCommsMessageParticipantsSinceRow, error)
 	// Per-contact content, newest first (backs idx_comms_message_contact_sent).
 	ListCommsMessagesByContact(ctx context.Context, matchedContactID pgtype.UUID) ([]*CommsMessage, error)
+	// Keyset-paged rows for the one-time historical display-name re-derivation
+	// (crm-admin --rederive-correspondence-names). Returns email rows at/after
+	// @since that lack the from_name key (i.e. ingested before display-name
+	// capture shipped), paged by id > @after_id so the runner advances the cursor
+	// regardless of per-row outcome — a skipped/failed row never blocks later rows
+	// (livelock avoidance). account_id + source_metadata.account_gmail_ids together
+	// locate the per-mailbox gmail id to re-fetch.
+	ListCommsMessagesMissingParticipantNames(ctx context.Context, arg ListCommsMessagesMissingParticipantNamesParams) ([]*ListCommsMessagesMissingParticipantNamesRow, error)
 	// Lightweight query returning only IDs for navigation
 	ListContactIDs(ctx context.Context, arg ListContactIDsParams) ([]pgtype.UUID, error)
 	// Lightweight query returning only IDs with sorting for navigation
