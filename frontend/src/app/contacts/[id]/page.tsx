@@ -16,7 +16,7 @@ import { useContactNote, useSaveContactNote } from '@/hooks/use-contact-note'
 import { useContactTasks } from '@/hooks/use-contact-tasks'
 import { useKeyboardNavigation } from '@/hooks/use-keyboard-navigation'
 import { ContactNavigationBar } from '@/components/contacts/contact-navigation-bar'
-import { formatDateOnly, formatRelativeTime } from '@/lib/utils'
+import { formatBirthday, formatRelativeTime } from '@/lib/utils'
 import {
   Edit,
   Trash2,
@@ -470,7 +470,7 @@ export default function ContactDetailPage() {
                   <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
                     <div className="flex items-center">
                       <Calendar className="w-4 h-4 mr-2 text-gray-400" />
-                      {formatDateOnly(contact.birthday)}
+                      {formatBirthday(contact.birthday)}
                     </div>
                   </dd>
                 </div>

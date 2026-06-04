@@ -23,7 +23,7 @@ import { Button } from '@/components/ui/button'
 import { Pagination } from '@/components/ui/pagination'
 import { Navigation } from '@/components/layout/navigation'
 import { FORM_CONTROL_WITH_ICON, FORM_SELECT_BASE } from '@/lib/form-classes'
-import { formatDateOnly, formatCadence } from '@/lib/utils'
+import { formatDateOnly, formatCadence, formatBirthday } from '@/lib/utils'
 import type { Contact, ContactListParams } from '@/types/contact'
 
 type SortField =
@@ -273,7 +273,7 @@ function ContactsTable({
               </td>
               <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-500">
                 {contact.birthday
-                  ? formatDateOnly(contact.birthday, {
+                  ? formatBirthday(contact.birthday, {
                       year: '2-digit',
                       month: 'numeric',
                       day: 'numeric',

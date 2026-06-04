@@ -11,6 +11,7 @@
       "@area:overdue",
       "@area:settings",
       "@area:navigation",
+      "@area:birthdays",
       "@area:error-boundary"
     ]
   },
@@ -26,6 +27,7 @@
       "@area:overdue",
       "@area:settings",
       "@area:navigation",
+      "@area:birthdays",
       "@area:error-boundary"
     ]
   },
@@ -36,6 +38,10 @@
   {
     "pattern": "^frontend/tests/e2e/contacts\\.spec\\.ts$",
     "tags": ["@area:contacts", "@area:overdue"]
+  },
+  {
+    "pattern": "^frontend/tests/e2e/birthdays\\.spec\\.ts$",
+    "tags": ["@area:birthdays"]
   },
   {
     "pattern": "^frontend/tests/e2e/contact-navigation\\.spec\\.ts$",
@@ -80,6 +86,10 @@
   {
     "pattern": "^frontend/src/app/contacts/",
     "tags": ["@area:contacts", "@area:contact-navigation", "@area:contact-merge", "@area:overdue"]
+  },
+  {
+    "pattern": "^frontend/src/app/birthdays/",
+    "tags": ["@area:birthdays"]
   },
   {
     "pattern": "^frontend/src/app/imports/",
@@ -189,6 +199,10 @@
       "@area:navigation",
       "@area:error-boundary"
     ]
+  },
+  {
+    "pattern": "^frontend/src/lib/utils\\.ts$",
+    "tags": ["@area:contacts", "@area:birthdays"]
   },
   {
     "pattern": "^frontend/src/lib/contacts-api\\.ts$",

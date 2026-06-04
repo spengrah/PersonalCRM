@@ -15,6 +15,7 @@ import {
   getContactMethodLabel,
   getPrimaryAndSecondaryMethods,
 } from '@/lib/contact-methods'
+import { getLocalCalendarDayDifference } from '@/lib/utils'
 import type { ContactMethod, OverdueContact } from '@/types/contact'
 import { clsx } from 'clsx'
 
@@ -57,14 +58,14 @@ function OverdueContactCard({ contact }: { contact: OverdueContact }) {
   const formatLastContacted = (lastContacted?: string) => {
     if (!lastContacted) return 'Never contacted'
     const date = new Date(lastContacted)
-    const now = currentTime // Use accelerated time instead of new Date()
-    const diffTime = now.getTime() - date.getTime()
-    const diffDays = Math.ceil(Math.abs(diffTime) / (1000 * 60 * 60 * 24))
+    if (Number.isNaN(date.getTime())) return ''
 
-    // Handle future dates (data anomaly from time acceleration)
-    if (diffTime < 0) {
-      if (diffDays === 1) return 'in 1 day'
-      return `in ${diffDays} days`
+    const diffDays = getLocalCalendarDayDifference(date, currentTime)
+
+    if (diffDays < 0) {
+      const futureDays = Math.abs(diffDays)
+      if (futureDays === 1) return 'in 1 day'
+      return `in ${futureDays} days`
     }
 
     if (diffDays === 0) return 'Today'
