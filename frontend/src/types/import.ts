@@ -42,6 +42,7 @@ export interface ImportCandidatesListParams {
   page?: number
   limit?: number
   source?: string
+  include_unresolved_telegram?: boolean
 }
 
 export interface ImportCandidatesListResponse {
@@ -50,6 +51,7 @@ export interface ImportCandidatesListResponse {
   page: number
   limit: number
   pages: number
+  hidden_unresolved_telegram_count: number
 }
 
 // ---------------------------------------------------------------------------
@@ -89,6 +91,7 @@ export interface SuggestionsListParams {
   page?: number
   limit?: number
   source?: string
+  include_unresolved_telegram?: boolean
 }
 
 export interface SuggestionsListResponse {
@@ -99,6 +102,7 @@ export interface SuggestionsListResponse {
   page: number
   limit: number
   pages: number
+  hidden_unresolved_telegram_count: number
 }
 
 /** Request body for POST /imports/suggestions/:id/methods/resolve. */

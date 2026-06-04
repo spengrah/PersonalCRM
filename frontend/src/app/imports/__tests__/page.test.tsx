@@ -35,6 +35,19 @@ vi.mock('@/hooks/use-interactions-queue', () => ({
   useResolveNameCandidate: vi.fn(),
 }))
 
+vi.mock('@/lib/imports-api', () => ({
+  importsApi: {
+    getSuggestions: vi.fn().mockResolvedValue({
+      items: [],
+      total: 0,
+      page: 1,
+      limit: 20,
+      pages: 0,
+      hidden_unresolved_telegram_count: 0,
+    }),
+  },
+}))
+
 vi.mock('@/components/layout/navigation', () => ({
   Navigation: () => <div>Navigation</div>,
 }))
@@ -96,13 +109,20 @@ function mockInteractionsQueueDefaults() {
  * existing assertions on candidate rendering keep working. */
 function setListData(
   candidates: any[],
-  meta: { total?: number; page?: number; limit?: number; pages?: number } = {}
+  meta: {
+    total?: number
+    page?: number
+    limit?: number
+    pages?: number
+    hidden_unresolved_telegram_count?: number
+  } = {}
 ) {
   const m = {
     total: meta.total ?? candidates.length,
     page: meta.page ?? 1,
     limit: meta.limit ?? 20,
     pages: meta.pages ?? 1,
+    hidden_unresolved_telegram_count: meta.hidden_unresolved_telegram_count ?? 0,
   }
   vi.mocked(useSuggestions).mockReturnValue({
     data: {
@@ -245,6 +265,32 @@ describe('ImportsPage - Suggested Matches', () => {
     render(<ImportsPage />, { wrapper: createWrapper() })
 
     expect(screen.getByRole('button', { name: 'Link (select)' })).toBeInTheDocument()
+  })
+
+  it('toggles unresolved Telegram visibility for the suggestions query', async () => {
+    const user = userEvent.setup()
+    setListData([], {
+      total: 0,
+      page: 1,
+      limit: 20,
+      pages: 0,
+      hidden_unresolved_telegram_count: 6,
+    })
+
+    render(<ImportsPage />, { wrapper: createWrapper() })
+
+    const toggle = screen.getByRole('switch', {
+      name: 'Show unresolved (6)',
+    })
+    expect(toggle).toHaveAttribute('aria-checked', 'false')
+
+    await user.click(toggle)
+
+    expect(useSuggestions).toHaveBeenLastCalledWith({
+      page: 1,
+      limit: 20,
+      include_unresolved_telegram: true,
+    })
   })
 
   it('displays candidates with matches before those without', () => {

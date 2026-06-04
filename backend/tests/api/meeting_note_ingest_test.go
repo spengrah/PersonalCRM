@@ -2229,7 +2229,7 @@ func TestMeetingNote_TitleMatch_CountQueryExcludesAnarlogTitle(t *testing.T) {
 	// depth `source != 'anarlog_title'` filter zeroes out every row
 	// regardless of what other tests in the shared DB are doing. True
 	// invariant assertion, resistant to parallel test pollution.
-	srcCount, err := env.externalRepo.CountUnmatched(ctx, "anarlog_title")
+	srcCount, err := env.externalRepo.CountUnmatched(ctx, "anarlog_title", false)
 	require.NoError(t, err)
 	require.Equal(t, int64(0), srcCount,
 		"CountUnmatched(anarlog_title) MUST be 0 — filter excludes all rows")
@@ -2241,7 +2241,7 @@ func TestMeetingNote_TitleMatch_CountQueryExcludesAnarlogTitle(t *testing.T) {
 		"the raw row exists in external_contact (sanity check)")
 
 	// Per-source list MUST be empty (filter excludes all anarlog_title rows).
-	imports, err := env.externalRepo.ListUnmatched(ctx, "anarlog_title", 100, 0)
+	imports, err := env.externalRepo.ListUnmatched(ctx, "anarlog_title", 100, 0, false)
 	require.NoError(t, err)
 	require.Empty(t, imports,
 		"ListUnmatched(anarlog_title) MUST be empty — filter excludes all rows")
@@ -2252,7 +2252,7 @@ func TestMeetingNote_TitleMatch_CountQueryExcludesAnarlogTitle(t *testing.T) {
 	sid, err := uuid.Parse(sessionUUID)
 	require.NoError(t, err)
 	wroteSourceID := computeTestAnarlogTitleSourceID(strings.ToLower(tokenJ), sid)
-	allImports, err := env.externalRepo.ListAllUnmatched(ctx, 1000, 0)
+	allImports, err := env.externalRepo.ListAllUnmatched(ctx, 1000, 0, false)
 	require.NoError(t, err)
 	for _, row := range allImports {
 		require.NotEqual(t, "anarlog_title", row.Source,
@@ -2260,7 +2260,7 @@ func TestMeetingNote_TitleMatch_CountQueryExcludesAnarlogTitle(t *testing.T) {
 		require.NotEqual(t, wroteSourceID, row.SourceID,
 			"ListAllUnmatched MUST NOT include our specific anarlog_title row")
 	}
-	allCount, err := env.externalRepo.CountAllUnmatched(ctx)
+	allCount, err := env.externalRepo.CountAllUnmatched(ctx, false)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, allCount, int64(0))
 	require.LessOrEqual(t, allCount, int64(len(allImports))+50,

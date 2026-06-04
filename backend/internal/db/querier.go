@@ -106,7 +106,7 @@ type Querier interface {
 	// FOR UPDATE retained below re-takes the held lock; the load-bearing
 	// serialization is the prior LockContactForDateRecompute statement).
 	ComputeContactDatesAfterDelete(ctx context.Context, arg ComputeContactDatesAfterDeleteParams) (*ComputeContactDatesAfterDeleteRow, error)
-	CountAllUnmatchedExternalContacts(ctx context.Context) (int64, error)
+	CountAllUnmatchedExternalContacts(ctx context.Context, includeUnresolvedTelegram bool) (int64, error)
 	CountContactInteractions(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountContactNotes(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountContactTasksByProvider(ctx context.Context, arg CountContactTasksByProviderParams) (int64, error)
@@ -126,6 +126,7 @@ type Querier interface {
 	//   - duplicate_of_id IS NULL: excludes merge-dupe rows that the import
 	//     UI doesn't surface.
 	CountExternalContactsByHostAndSource(ctx context.Context, hostID pgtype.UUID) ([]*CountExternalContactsByHostAndSourceRow, error)
+	CountHiddenUnresolvedTelegramContacts(ctx context.Context, sourceFilter string) (int64, error)
 	CountIdentitiesBySource(ctx context.Context, source string) (int64, error)
 	// Counts river_job rows that represent an in-flight SyncProviderAccountJob
 	// for the given (source, account_id). Used by
@@ -189,7 +190,7 @@ type Querier interface {
 	// Per-source count; mirrors ListUnmatched's anarlog_title exclusion
 	// so list+count cardinality stays consistent regardless of caller-
 	// supplied source.
-	CountUnmatchedExternalContacts(ctx context.Context, source string) (int64, error)
+	CountUnmatchedExternalContacts(ctx context.Context, arg CountUnmatchedExternalContactsParams) (int64, error)
 	CountUnmatchedIdentities(ctx context.Context) (int64, error)
 	// Counts messages about to be linked for a given peer. Read BEFORE
 	// OnPeerLinked so the matched-count reporting observes the pre-link state.

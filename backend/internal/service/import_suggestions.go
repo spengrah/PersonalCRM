@@ -84,21 +84,23 @@ type MethodSuggestionItem struct {
 // BOTH the method group and the candidate group; Page/Limit paginate the
 // candidate group only (the method group rides above the fold on page 1).
 type SuggestionListParams struct {
-	Source string
-	Page   int
-	Limit  int
+	Source                    string
+	Page                      int
+	Limit                     int
+	IncludeUnresolvedTelegram bool
 }
 
 // SuggestionList is the composed read-model: the method-suggestion group
 // (page 1 only) plus the page's slice of confidence-ranked candidates, with
 // candidate-group pagination meta.
 type SuggestionList struct {
-	Methods        []MethodSuggestionItem
-	Candidates     []CandidateWithMatch
-	CandidateTotal int
-	Page           int
-	Limit          int
-	Pages          int
+	Methods                       []MethodSuggestionItem
+	Candidates                    []CandidateWithMatch
+	CandidateTotal                int
+	HiddenUnresolvedTelegramCount int64
+	Page                          int
+	Limit                         int
+	Pages                         int
 }
 
 // ResolveResult is the outcome of confirming pending methods. Applied is
@@ -122,8 +124,9 @@ type DismissResult struct {
 // matching the rest of the service package's composition style.
 type suggestionExternalRepo interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*repository.ExternalContact, error)
-	ListUnmatched(ctx context.Context, source string, limit, offset int32) ([]repository.ExternalContact, error)
-	ListAllUnmatched(ctx context.Context, limit, offset int32) ([]repository.ExternalContact, error)
+	ListUnmatched(ctx context.Context, source string, limit, offset int32, includeUnresolvedTelegram bool) ([]repository.ExternalContact, error)
+	ListAllUnmatched(ctx context.Context, limit, offset int32, includeUnresolvedTelegram bool) ([]repository.ExternalContact, error)
+	CountHiddenUnresolvedTelegram(ctx context.Context, source string) (int64, error)
 	ListPendingMethodSuggestionRows(ctx context.Context, sourceFilter string) ([]repository.PendingMethodSuggestionRow, error)
 	ResolveReconcileTarget(ctx context.Context, id uuid.UUID) (*repository.ReconcileTarget, error)
 	GetForUpdateTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*repository.ExternalContact, error)
@@ -199,13 +202,13 @@ func NewSuggestionService(
 // match, and sorts by confidence descending, then alphabetically by display
 // name (empty names last). This is the SINGLE sort implementation shared by
 // the existing /imports/candidates handler and the suggestions surface.
-func (s *SuggestionService) BuildSortedCandidates(ctx context.Context, source string, maxCandidates int32) ([]CandidateWithMatch, error) {
+func (s *SuggestionService) BuildSortedCandidates(ctx context.Context, source string, maxCandidates int32, includeUnresolvedTelegram bool) ([]CandidateWithMatch, error) {
 	var contacts []repository.ExternalContact
 	var err error
 	if source != "" {
-		contacts, err = s.externalRepo.ListUnmatched(ctx, source, maxCandidates, 0)
+		contacts, err = s.externalRepo.ListUnmatched(ctx, source, maxCandidates, 0, includeUnresolvedTelegram)
 	} else {
-		contacts, err = s.externalRepo.ListAllUnmatched(ctx, maxCandidates, 0)
+		contacts, err = s.externalRepo.ListAllUnmatched(ctx, maxCandidates, 0, includeUnresolvedTelegram)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("list unmatched candidates: %w", err)
@@ -291,9 +294,13 @@ func (s *SuggestionService) ListSuggestions(ctx context.Context, params Suggesti
 	}
 
 	// Candidate group: shared sorted build, then paginate.
-	candidates, err := s.BuildSortedCandidates(ctx, params.Source, maxCandidates)
+	candidates, err := s.BuildSortedCandidates(ctx, params.Source, maxCandidates, params.IncludeUnresolvedTelegram)
 	if err != nil {
 		return SuggestionList{}, err
+	}
+	hiddenCount, err := s.externalRepo.CountHiddenUnresolvedTelegram(ctx, params.Source)
+	if err != nil {
+		return SuggestionList{}, fmt.Errorf("count hidden unresolved telegram candidates: %w", err)
 	}
 	total := len(candidates)
 	offset := (page - 1) * limit
@@ -320,12 +327,13 @@ func (s *SuggestionService) ListSuggestions(ctx context.Context, params Suggesti
 	}
 
 	return SuggestionList{
-		Methods:        methods,
-		Candidates:     pageCandidates,
-		CandidateTotal: total,
-		Page:           page,
-		Limit:          limit,
-		Pages:          pages,
+		Methods:                       methods,
+		Candidates:                    pageCandidates,
+		CandidateTotal:                total,
+		HiddenUnresolvedTelegramCount: hiddenCount,
+		Page:                          page,
+		Limit:                         limit,
+		Pages:                         pages,
 	}, nil
 }
 

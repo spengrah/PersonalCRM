@@ -31,6 +31,7 @@ export const importsApi = {
       page: params.page || 1,
       limit: params.limit || 20,
       ...(params.source && { source: params.source }),
+      ...(params.include_unresolved_telegram && { include_unresolved_telegram: true }),
     }
 
     const response = await apiClient.getWithMeta<ImportCandidate[]>(
@@ -44,6 +45,7 @@ export const importsApi = {
       page: response.meta?.pagination?.page || 1,
       limit: response.meta?.pagination?.limit || 20,
       pages: response.meta?.pagination?.pages || 0,
+      hidden_unresolved_telegram_count: response.meta?.hidden_unresolved_telegram_count || 0,
     }
   },
 
@@ -60,6 +62,7 @@ export const importsApi = {
       page: params.page || 1,
       limit: params.limit || 20,
       ...(params.source && { source: params.source }),
+      ...(params.include_unresolved_telegram && { include_unresolved_telegram: true }),
     }
 
     const response = await apiClient.getWithMeta<SuggestionItem[]>(
@@ -73,6 +76,7 @@ export const importsApi = {
       page: response.meta?.pagination?.page || 1,
       limit: response.meta?.pagination?.limit || 20,
       pages: response.meta?.pagination?.pages || 0,
+      hidden_unresolved_telegram_count: response.meta?.hidden_unresolved_telegram_count || 0,
     }
   },
 

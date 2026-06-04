@@ -27,6 +27,7 @@ interface ApiResponse<T = unknown> {
       limit: number
       pages: number
     }
+    hidden_unresolved_telegram_count?: number
   }
 }
 

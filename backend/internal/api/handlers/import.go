@@ -176,15 +176,21 @@ func (h *ImportHandler) ListImportCandidates(c *gin.Context) {
 
 	// Check for source filter
 	source := c.Query("source")
+	includeUnresolvedTelegram := includeUnresolvedTelegramParam(c)
 
 	// Build the confidence-sorted candidate list via the shared service
 	// helper (the single sort implementation, also used by the suggestions
 	// surface). We fetch all candidates up to MaxCandidatesForSorting
 	// because confidence scores are computed in-memory and can't be sorted
 	// at the DB level.
-	sorted, err := h.suggestionSvc.BuildSortedCandidates(ctx, source, MaxCandidatesForSorting)
+	sorted, err := h.suggestionSvc.BuildSortedCandidates(ctx, source, MaxCandidatesForSorting, includeUnresolvedTelegram)
 	if err != nil {
 		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to list candidates", err.Error())
+		return
+	}
+	hiddenCount, err := h.externalRepo.CountHiddenUnresolvedTelegram(ctx, source)
+	if err != nil {
+		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to count hidden candidates", err.Error())
 		return
 	}
 
@@ -214,6 +220,7 @@ func (h *ImportHandler) ListImportCandidates(c *gin.Context) {
 	}
 
 	api.SendSuccess(c, http.StatusOK, paginatedCandidates, &api.Meta{
+		HiddenUnresolvedTelegramCount: hiddenCount,
 		Pagination: &api.PaginationMeta{
 			Page:  page,
 			Limit: limit,

@@ -15,3 +15,15 @@ export function getCandidateDisplayName(candidate: ImportCandidate): string {
   }
   return 'Unknown'
 }
+
+export function isUnresolvedTelegramCandidate(candidate: ImportCandidate): boolean {
+  return (
+    candidate.source === 'telegram' &&
+    !candidate.display_name?.trim() &&
+    !candidate.first_name?.trim() &&
+    !candidate.last_name?.trim() &&
+    !candidate.metadata?.username?.trim() &&
+    candidate.emails.length === 0 &&
+    candidate.phones.length === 0
+  )
+}

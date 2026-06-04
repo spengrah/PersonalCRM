@@ -571,12 +571,13 @@ func (r *ExternalContactRepository) UpsertTelegramDiscoveryCandidate(
 	return convertDbExternalContact(dbContact)
 }
 
-// ListUnmatched returns unmatched external contacts for a source
-func (r *ExternalContactRepository) ListUnmatched(ctx context.Context, source string, limit, offset int32) ([]ExternalContact, error) {
+// ListUnmatched returns unmatched external contacts for a source.
+func (r *ExternalContactRepository) ListUnmatched(ctx context.Context, source string, limit, offset int32, includeUnresolvedTelegram bool) ([]ExternalContact, error) {
 	dbContacts, err := r.queries.ListUnmatchedExternalContacts(ctx, db.ListUnmatchedExternalContactsParams{
-		Source: source,
-		Limit:  limit,
-		Offset: offset,
+		Source:                    source,
+		IncludeUnresolvedTelegram: includeUnresolvedTelegram,
+		PageLimit:                 limit,
+		PageOffset:                offset,
 	})
 	if err != nil {
 		return nil, err
@@ -593,11 +594,12 @@ func (r *ExternalContactRepository) ListUnmatched(ctx context.Context, source st
 	return contacts, nil
 }
 
-// ListAllUnmatched returns all unmatched external contacts across sources
-func (r *ExternalContactRepository) ListAllUnmatched(ctx context.Context, limit, offset int32) ([]ExternalContact, error) {
+// ListAllUnmatched returns all unmatched external contacts across sources.
+func (r *ExternalContactRepository) ListAllUnmatched(ctx context.Context, limit, offset int32, includeUnresolvedTelegram bool) ([]ExternalContact, error) {
 	dbContacts, err := r.queries.ListAllUnmatchedExternalContacts(ctx, db.ListAllUnmatchedExternalContactsParams{
-		Limit:  limit,
-		Offset: offset,
+		IncludeUnresolvedTelegram: includeUnresolvedTelegram,
+		PageLimit:                 limit,
+		PageOffset:                offset,
 	})
 	if err != nil {
 		return nil, err
@@ -614,14 +616,24 @@ func (r *ExternalContactRepository) ListAllUnmatched(ctx context.Context, limit,
 	return contacts, nil
 }
 
-// CountUnmatched returns the count of unmatched contacts for a source
-func (r *ExternalContactRepository) CountUnmatched(ctx context.Context, source string) (int64, error) {
-	return r.queries.CountUnmatchedExternalContacts(ctx, source)
+// CountUnmatched returns the count of unmatched contacts for a source.
+func (r *ExternalContactRepository) CountUnmatched(ctx context.Context, source string, includeUnresolvedTelegram bool) (int64, error) {
+	return r.queries.CountUnmatchedExternalContacts(ctx, db.CountUnmatchedExternalContactsParams{
+		Source:                    source,
+		IncludeUnresolvedTelegram: includeUnresolvedTelegram,
+	})
 }
 
-// CountAllUnmatched returns the count of all unmatched contacts
-func (r *ExternalContactRepository) CountAllUnmatched(ctx context.Context) (int64, error) {
-	return r.queries.CountAllUnmatchedExternalContacts(ctx)
+// CountAllUnmatched returns the count of all unmatched contacts.
+func (r *ExternalContactRepository) CountAllUnmatched(ctx context.Context, includeUnresolvedTelegram bool) (int64, error) {
+	return r.queries.CountAllUnmatchedExternalContacts(ctx, includeUnresolvedTelegram)
+}
+
+// CountHiddenUnresolvedTelegram returns the number of unresolved Telegram
+// candidates hidden by default for the given source filter. Empty source
+// means all sources; non-Telegram sources naturally return zero.
+func (r *ExternalContactRepository) CountHiddenUnresolvedTelegram(ctx context.Context, source string) (int64, error) {
+	return r.queries.CountHiddenUnresolvedTelegramContacts(ctx, source)
 }
 
 // UpdateMatch updates the CRM contact ID and match status. Returns
