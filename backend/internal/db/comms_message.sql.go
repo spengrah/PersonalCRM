@@ -674,6 +674,21 @@ func (q *Queries) MarkCommsMessagesProcessedForSession(ctx context.Context, arg 
 	return result.RowsAffected(), nil
 }
 
+const SoftDeleteCommsMessageByID = `-- name: SoftDeleteCommsMessageByID :exec
+UPDATE comms_message
+SET deleted_at = NOW()
+WHERE id = $1
+  AND deleted_at IS NULL
+`
+
+// Test-only helper: soft-deletes a single comms_message row by id, simulating
+// the upstream delete a chat provider would observe. Used by the delete-no-op
+// aggregation test. Production delete paths live in PR 2.
+func (q *Queries) SoftDeleteCommsMessageByID(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, SoftDeleteCommsMessageByID, id)
+	return err
+}
+
 const UpsertCommsMessage = `-- name: UpsertCommsMessage :one
 INSERT INTO comms_message (
     source, external_id, thread_id, subject, body, snippet,

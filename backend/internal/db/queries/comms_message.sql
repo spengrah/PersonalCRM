@@ -334,3 +334,12 @@ WHERE id = ANY(@message_ids::uuid[])
 UPDATE comms_message
 SET claimed_at = NOW() - INTERVAL '10 minutes'
 WHERE id = ANY(@message_ids::uuid[]);
+
+-- name: SoftDeleteCommsMessageByID :exec
+-- Test-only helper: soft-deletes a single comms_message row by id, simulating
+-- the upstream delete a chat provider would observe. Used by the delete-no-op
+-- aggregation test. Production delete paths live in PR 2.
+UPDATE comms_message
+SET deleted_at = NOW()
+WHERE id = @id
+  AND deleted_at IS NULL;

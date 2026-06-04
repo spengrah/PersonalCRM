@@ -1217,6 +1217,10 @@ type Querier interface {
 	// own short-lived tx (plan Decision 5). Consumer does NOT call this —
 	// consumer reads prev from the event payload (plan Decision 2a).
 	SnapshotContactCadenceFields(ctx context.Context, id pgtype.UUID) (*SnapshotContactCadenceFieldsRow, error)
+	// Test-only helper: soft-deletes a single comms_message row by id, simulating
+	// the upstream delete a chat provider would observe. Used by the delete-no-op
+	// aggregation test. Production delete paths live in PR 2.
+	SoftDeleteCommsMessageByID(ctx context.Context, id pgtype.UUID) error
 	SoftDeleteContact(ctx context.Context, id pgtype.UUID) error
 	// Tombstones a live row. Defensive WHERE deleted_at IS NULL keeps the
 	// statement idempotent against a concurrent delete. crm_contact_id,

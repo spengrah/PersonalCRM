@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/messaging/aggregation"
 	"personal-crm/backend/internal/repository"
 
@@ -82,9 +83,9 @@ func TestGChatAdapter_SourceRefPrefixEscape(t *testing.T) {
 func TestMapCommsMessage_Projection(t *testing.T) {
 	id := uuid.New()
 	interactionID := uuid.New()
-	claimedAt := time.Now().UTC().Truncate(time.Microsecond)
+	claimedAt := accelerated.GetCurrentTime().UTC().Truncate(time.Microsecond)
 	sessionRef := "gchat:spaces/AAA:spaces/AAA/messages/1"
-	sentAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	sentAt := accelerated.GetCurrentTime().UTC().Add(-time.Hour).Truncate(time.Microsecond)
 	thread := "spaces/AAA"
 
 	t.Run("outbound row with all fields", func(t *testing.T) {
@@ -154,7 +155,7 @@ func TestMapCommsMessage_ReplyTargetID(t *testing.T) {
 		ExternalID: "spaces/AAA/messages/9",
 		ThreadID:   strPtr("spaces/AAA"),
 		Direction:  repository.InteractionDirectionInbound,
-		SentAt:     time.Now().UTC(),
+		SentAt:     accelerated.GetCurrentTime().UTC(),
 	}
 
 	withMeta := func(m map[string]any) []byte {

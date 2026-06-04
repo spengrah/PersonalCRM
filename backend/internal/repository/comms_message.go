@@ -645,6 +645,13 @@ func (r *CommsMessageRepository) BackdateClaim(ctx context.Context, messageIDs [
 	return r.queries.BackdateCommsMessageClaim(ctx, pgIDs)
 }
 
+// SoftDeleteByID is a test-only helper that soft-deletes a single
+// comms_message row by id (simulating an upstream provider delete). Used by the
+// delete-no-op aggregation test. Production delete paths land in PR 2.
+func (r *CommsMessageRepository) SoftDeleteByID(ctx context.Context, id uuid.UUID) error {
+	return r.queries.SoftDeleteCommsMessageByID(ctx, uuidToPgUUID(id))
+}
+
 // CommsSourceContactLister adapts *CommsMessageRepository to the source-neutral
 // scheduler.UnprocessedContactLister interface, pinning a source. The sweeper's
 // interface is single-source (ListUnprocessedContactIDs(ctx)) but comms_message
