@@ -389,9 +389,9 @@ func run() int {
 			repository.InteractionSourceMessages: repository.NewMessagesStagingProcessor(messagesMessageRepo),
 			// GChat create-path: the InteractionRecorder consumer marks
 			// comms_message(source='gchat') rows processed via this
-			// session-scoped processor (decision 8b). Without it the
-			// recorder's zero-rows-affected rollback fires and the engine
-			// reprocesses forever. Inert until PR 2/PR 3 write gchat rows.
+			// session-scoped processor. Without it the recorder's
+			// zero-rows-affected rollback fires and the engine reprocesses
+			// forever. Inert until a chat provider writes gchat rows.
 			repository.InteractionSourceGChat: repository.NewCommsSessionStagingProcessor(commsMessageRepo),
 		},
 	)
@@ -1056,13 +1056,12 @@ func run() int {
 		repository.InteractionSourceMessages,
 	)
 
-	// GChat aggregation engine over comms_message (PR 1 of the GChat
-	// integration, #337). LIVE but INERT: the engine/worker/sweeper/
-	// reenqueuer for gchat run on every tick, but every query is
-	// source='gchat'-scoped and returns zero rows until PR 2/PR 3 land the
-	// provider + enablement that write comms_message(source='gchat') rows.
-	// Burst/reply windows hard-coded here (matching how messages hard-codes
-	// its constants); the GCHAT_* env-var overrides are PR 2/PR 3 scope.
+	// GChat aggregation engine over comms_message. LIVE but INERT: the
+	// engine/worker/sweeper/reenqueuer for gchat run on every tick, but every
+	// query is source='gchat'-scoped and returns zero rows until a provider +
+	// enablement write comms_message(source='gchat') rows. Burst/reply windows
+	// are hard-coded here (matching how messages hard-codes its constants);
+	// env-var overrides are out of scope for now.
 	gchatEnqueuer := consumer.NewRiverInteractionRecorderEnqueuer(riverClient)
 	const gchatBurstWindowHours = 2
 	const gchatReplyBridgeHours = 48

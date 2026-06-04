@@ -35,9 +35,9 @@ type gchatTestEnv struct {
 
 // setupGChatEngineTest wires the FULL create-path harness: a live river client
 // with the InteractionRecorder worker, a StagingProcessorRegistry containing
-// the gchat session-scoped processor (decision 8b), and a GChat aggregation
-// engine constructed with database.Pool as TxBeginner so the create path takes
-// the ClaimRowsTx + PublishTx branch (NOT the non-tx fallback). This is the
+// the gchat session-scoped processor, and a GChat aggregation engine
+// constructed with database.Pool as TxBeginner so the create path takes the
+// ClaimRowsTx + PublishTx branch (NOT the non-tx fallback). This is the
 // regression guard for the gchat StagingProcessor registry seam: without the
 // gchat entry the recorder's zero-rows-affected rollback fires and no
 // interaction is ever recorded.
@@ -196,11 +196,11 @@ func softDeleteCommsRow(e *gchatTestEnv, id uuid.UUID) error {
 	return e.commsRepo.SoftDeleteByID(e.ctx, id)
 }
 
-// TestGChatEngine_BurstCreatePath validates the full create-path wiring
-// (decision 8b): 3 same-direction gchat rows within 2h for one contact+space
-// produce ONE interaction with the burst description, and all 3 rows get
-// processed_at + interaction_id set. This test FAILS OUTRIGHT if the gchat
-// StagingProcessor entry is missing (recorder's zero-rows rollback fires).
+// TestGChatEngine_BurstCreatePath validates the full create-path wiring:
+// 3 same-direction gchat rows within 2h for one contact+space produce ONE
+// interaction with the burst description, and all 3 rows get processed_at +
+// interaction_id set. This test FAILS OUTRIGHT if the gchat StagingProcessor
+// entry is missing (recorder's zero-rows rollback fires).
 func TestGChatEngine_BurstCreatePath(t *testing.T) {
 	e := setupGChatEngineTest(t)
 	suffix := randomSuffix(t)
@@ -373,8 +373,8 @@ func TestGChatEngine_ClearStaleClaimTx(t *testing.T) {
 }
 
 // TestGChatEngine_MarkProcessedForSessionBoundaryShift is the direct repo-level
-// guard for decision 8b's session predicate: a row claimed for a MATCHING
-// session ref is marked processed; a DIFFERENT session ref is rejected (zero
+// guard for the session-scoped mark-processed predicate: a row claimed for a
+// MATCHING session ref is marked processed; a DIFFERENT session ref is rejected (zero
 // rows affected — the recorder's rollback trigger).
 func TestGChatEngine_MarkProcessedForSessionBoundaryShift(t *testing.T) {
 	e := setupGChatEngineTest(t)

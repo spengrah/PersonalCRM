@@ -324,7 +324,7 @@ func (r *CommsMessageRepository) ListEmailIdentitiesForSync(ctx context.Context)
 // source_type) triple for non-deleted contacts whose contact_method type is
 // 'gchat' or 'email'. The mapping is many-to-one (shared address → multiple
 // contacts). The GChat provider builds its dual-source known-contact map from
-// this (PR 2). Rows with an invalid contact_id are skipped defensively.
+// this. Rows with an invalid contact_id are skipped defensively.
 func (r *CommsMessageRepository) ListGChatIdentitiesForSync(ctx context.Context) ([]GChatIdentity, error) {
 	rows, err := r.queries.ListGChatIdentitiesForSync(ctx)
 	if err != nil {
@@ -525,13 +525,16 @@ func (r *CommsMessageRepository) ListUnprocessedChatsByContactForSource(ctx cont
 }
 
 // GetMessageByReplyTargetForSource resolves the row a reply points at, scoped
-// to a (source, chat) pair, by the target message's own external_id. Returns
+// to a (source, contact, chat) triple, by the target message's own external_id.
+// Scoping to contactID is load-bearing: comms_message is per-contact, so an
+// unscoped lookup could return a different contact's fanned-out row. Returns
 // db.ErrNotFound on miss.
-func (r *CommsMessageRepository) GetMessageByReplyTargetForSource(ctx context.Context, source, chatID, replyTargetID string) (*CommsMessage, error) {
+func (r *CommsMessageRepository) GetMessageByReplyTargetForSource(ctx context.Context, source string, contactID uuid.UUID, chatID, replyTargetID string) (*CommsMessage, error) {
 	dbMsg, err := r.queries.GetCommsMessageByReplyTarget(ctx, db.GetCommsMessageByReplyTargetParams{
-		Source:        source,
-		ThreadID:      pgtype.Text{String: chatID, Valid: true},
-		ReplyTargetID: replyTargetID,
+		Source:           source,
+		MatchedContactID: uuidToPgUUID(contactID),
+		ThreadID:         pgtype.Text{String: chatID, Valid: true},
+		ReplyTargetID:    replyTargetID,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -647,7 +650,7 @@ func (r *CommsMessageRepository) BackdateClaim(ctx context.Context, messageIDs [
 
 // SoftDeleteByID is a test-only helper that soft-deletes a single
 // comms_message row by id (simulating an upstream provider delete). Used by the
-// delete-no-op aggregation test. Production delete paths land in PR 2.
+// delete-no-op aggregation test. There is no production chat delete path yet.
 func (r *CommsMessageRepository) SoftDeleteByID(ctx context.Context, id uuid.UUID) error {
 	return r.queries.SoftDeleteCommsMessageByID(ctx, uuidToPgUUID(id))
 }

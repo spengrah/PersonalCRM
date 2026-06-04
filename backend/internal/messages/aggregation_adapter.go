@@ -172,8 +172,10 @@ func (a *messagesMessageStoreAdapter) ListUnprocessedByContactAndChat(ctx contex
 
 // GetMessageByReplyTarget resolves the message referenced by a reply.
 // The messages source uses opaque string guids — no parse step is
-// needed (telegram has to parse int64; we don't).
-func (a *messagesMessageStoreAdapter) GetMessageByReplyTarget(ctx context.Context, chatID, replyTargetID string) (aggregation.Message, bool, error) {
+// needed (telegram has to parse int64; we don't). contactID is ignored:
+// messages_message rows are keyed by a globally-unique guid, so the
+// lookup is already contact-correct (one row per message).
+func (a *messagesMessageStoreAdapter) GetMessageByReplyTarget(ctx context.Context, _ uuid.UUID, chatID, replyTargetID string) (aggregation.Message, bool, error) {
 	row, err := a.repo.GetMessageByReplyTarget(ctx, chatID, replyTargetID)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {

@@ -229,24 +229,36 @@ func (q *Queries) GetCommsMessageByID(ctx context.Context, id pgtype.UUID) (*Com
 const GetCommsMessageByReplyTarget = `-- name: GetCommsMessageByReplyTarget :one
 SELECT id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at FROM comms_message
 WHERE source = $1
-  AND thread_id = $2
-  AND external_id = $3
+  AND matched_contact_id = $2
+  AND thread_id = $3
+  AND external_id = $4
   AND deleted_at IS NULL
 `
 
 type GetCommsMessageByReplyTargetParams struct {
-	Source        string      `json:"source"`
-	ThreadID      pgtype.Text `json:"thread_id"`
-	ReplyTargetID string      `json:"reply_target_id"`
+	Source           string      `json:"source"`
+	MatchedContactID pgtype.UUID `json:"matched_contact_id"`
+	ThreadID         pgtype.Text `json:"thread_id"`
+	ReplyTargetID    string      `json:"reply_target_id"`
 }
 
 // Resolves the row a reply points at. comms_message has NO reply_to column;
 // the reply target is itself a stored message, looked up by its own external_id
-// within the same (source, thread/chat) scope. Used by the aggregator's
-// explicit-reply-bridge path. Intentionally does NOT filter processed_at — a
-// reply can target an already-processed message (the whole point of bridging).
+// within the same (source, contact, thread/chat) scope. Used by the
+// aggregator's explicit-reply-bridge path. Scoping to matched_contact_id is
+// load-bearing: comms_message is per-contact (a shared address fans out to one
+// row per matched contact), so an unscoped lookup could return a DIFFERENT
+// contact's row, whose interaction_id points at that other contact's
+// interaction — which the bridge would then wrongly promote to mutual.
+// Intentionally does NOT filter processed_at — a reply can target an
+// already-processed message (the whole point of bridging).
 func (q *Queries) GetCommsMessageByReplyTarget(ctx context.Context, arg GetCommsMessageByReplyTargetParams) (*CommsMessage, error) {
-	row := q.db.QueryRow(ctx, GetCommsMessageByReplyTarget, arg.Source, arg.ThreadID, arg.ReplyTargetID)
+	row := q.db.QueryRow(ctx, GetCommsMessageByReplyTarget,
+		arg.Source,
+		arg.MatchedContactID,
+		arg.ThreadID,
+		arg.ReplyTargetID,
+	)
 	var i CommsMessage
 	err := row.Scan(
 		&i.ID,
@@ -683,7 +695,7 @@ WHERE id = $1
 
 // Test-only helper: soft-deletes a single comms_message row by id, simulating
 // the upstream delete a chat provider would observe. Used by the delete-no-op
-// aggregation test. Production delete paths live in PR 2.
+// aggregation test. There is no production chat delete path yet.
 func (q *Queries) SoftDeleteCommsMessageByID(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, SoftDeleteCommsMessageByID, id)
 	return err

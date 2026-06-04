@@ -84,11 +84,13 @@ func TestCommsSourceParameterizedQueries_IsolateSources(t *testing.T) {
 }
 
 // TestGetMessageByReplyTargetForSource verifies the reply-target getter:
-// resolves a row by its own external_id within the (source, space) scope,
-// returns db.ErrNotFound for a missing target, and is space-scoped (a target
-// in a different space is not found).
+// resolves a row by its own external_id within the (source, contact, space)
+// scope, returns db.ErrNotFound for a missing target, is space-scoped (a target
+// in a different space is not found), and is CONTACT-scoped — the same address
+// fanned out to two contacts must resolve to the querying contact's own row,
+// never the other contact's.
 func TestGetMessageByReplyTargetForSource(t *testing.T) {
-	ctx, commsRepo, contactRepo, _ := setupCommsMessageTest(t)
+	ctx, commsRepo, contactRepo, methodRepo := setupCommsMessageTest(t)
 	suffix := randomSuffix(t)
 
 	contact := newEmailContact(t, ctx, commsRepo, contactRepo, "Reply Target "+suffix)
@@ -100,16 +102,34 @@ func TestGetMessageByReplyTargetForSource(t *testing.T) {
 	row1 := upsertGChatRow(t, ctx, commsRepo, contact.ID, spaceA, extID1, repository.InteractionDirectionInbound, base)
 	_ = upsertGChatRow(t, ctx, commsRepo, contact.ID, spaceA, "gchat-rt2-"+suffix, repository.InteractionDirectionInbound, base.Add(time.Minute))
 
-	// Hit: row1 resolved by its external_id within spaceA.
-	got, err := commsRepo.GetMessageByReplyTargetForSource(ctx, repository.InteractionSourceGChat, spaceA, extID1)
+	// Hit: row1 resolved by its external_id within spaceA for this contact.
+	got, err := commsRepo.GetMessageByReplyTargetForSource(ctx, repository.InteractionSourceGChat, contact.ID, spaceA, extID1)
 	require.NoError(t, err)
 	assert.Equal(t, row1.ID, got.ID)
 
 	// Miss: non-existent target.
-	_, err = commsRepo.GetMessageByReplyTargetForSource(ctx, repository.InteractionSourceGChat, spaceA, "no-such-id-"+suffix)
+	_, err = commsRepo.GetMessageByReplyTargetForSource(ctx, repository.InteractionSourceGChat, contact.ID, spaceA, "no-such-id-"+suffix)
 	assert.ErrorIs(t, err, db.ErrNotFound)
 
 	// Space-scoped: the same external_id looked up in a DIFFERENT space is not found.
-	_, err = commsRepo.GetMessageByReplyTargetForSource(ctx, repository.InteractionSourceGChat, spaceB, extID1)
+	_, err = commsRepo.GetMessageByReplyTargetForSource(ctx, repository.InteractionSourceGChat, contact.ID, spaceB, extID1)
 	assert.ErrorIs(t, err, db.ErrNotFound)
+
+	// Contact-scoped (fanout defense): a SECOND contact with the SAME address
+	// gets its own fanned-out row for the SAME (space, external_id). Each
+	// contact's lookup must return its OWN row, never the other's. An unscoped
+	// query would non-deterministically return one of the two and could
+	// cross-link interactions.
+	_ = methodRepo // contact_method not needed; fanout is modeled directly via per-contact rows
+	other := newEmailContact(t, ctx, commsRepo, contactRepo, "Reply Target Other "+suffix)
+	otherRow := upsertGChatRow(t, ctx, commsRepo, other.ID, spaceA, extID1, repository.InteractionDirectionInbound, base)
+
+	gotSelf, err := commsRepo.GetMessageByReplyTargetForSource(ctx, repository.InteractionSourceGChat, contact.ID, spaceA, extID1)
+	require.NoError(t, err)
+	assert.Equal(t, row1.ID, gotSelf.ID, "contact's lookup must return its own row")
+
+	gotOther, err := commsRepo.GetMessageByReplyTargetForSource(ctx, repository.InteractionSourceGChat, other.ID, spaceA, extID1)
+	require.NoError(t, err)
+	assert.Equal(t, otherRow.ID, gotOther.ID, "other contact's lookup must return the other contact's row")
+	assert.NotEqual(t, row1.ID, otherRow.ID, "the two contacts' fanned-out rows are distinct")
 }

@@ -264,11 +264,17 @@ ORDER BY thread_id ASC;
 -- name: GetCommsMessageByReplyTarget :one
 -- Resolves the row a reply points at. comms_message has NO reply_to column;
 -- the reply target is itself a stored message, looked up by its own external_id
--- within the same (source, thread/chat) scope. Used by the aggregator's
--- explicit-reply-bridge path. Intentionally does NOT filter processed_at — a
--- reply can target an already-processed message (the whole point of bridging).
+-- within the same (source, contact, thread/chat) scope. Used by the
+-- aggregator's explicit-reply-bridge path. Scoping to matched_contact_id is
+-- load-bearing: comms_message is per-contact (a shared address fans out to one
+-- row per matched contact), so an unscoped lookup could return a DIFFERENT
+-- contact's row, whose interaction_id points at that other contact's
+-- interaction — which the bridge would then wrongly promote to mutual.
+-- Intentionally does NOT filter processed_at — a reply can target an
+-- already-processed message (the whole point of bridging).
 SELECT * FROM comms_message
 WHERE source = @source
+  AND matched_contact_id = @matched_contact_id
   AND thread_id = @thread_id
   AND external_id = @reply_target_id
   AND deleted_at IS NULL;
@@ -338,7 +344,7 @@ WHERE id = ANY(@message_ids::uuid[]);
 -- name: SoftDeleteCommsMessageByID :exec
 -- Test-only helper: soft-deletes a single comms_message row by id, simulating
 -- the upstream delete a chat provider would observe. Used by the delete-no-op
--- aggregation test. Production delete paths live in PR 2.
+-- aggregation test. There is no production chat delete path yet.
 UPDATE comms_message
 SET deleted_at = NOW()
 WHERE id = @id

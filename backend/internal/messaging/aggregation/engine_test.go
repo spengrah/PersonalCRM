@@ -125,7 +125,7 @@ func (s *fakeStore) ListUnprocessedByContactAndChat(_ context.Context, contactID
 	return s.byContactAndChat[contactID.String()+"|"+chatID], nil
 }
 
-func (s *fakeStore) GetMessageByReplyTarget(_ context.Context, chatID, replyTargetID string) (Message, bool, error) {
+func (s *fakeStore) GetMessageByReplyTarget(_ context.Context, _ uuid.UUID, chatID, replyTargetID string) (Message, bool, error) {
 	msg, ok := s.byReplyTarget[chatID+"|"+replyTargetID]
 	return msg, ok, nil
 }
@@ -661,9 +661,12 @@ func TestEngine_FakeSource_ExplicitReplyBridge(t *testing.T) {
 	finder := &fakeFinder{
 		// Time-based bridge fails (no outbound in window).
 		findRecentOutboundErr: db.ErrNotFound,
-		// GetInteraction returns the existing outbound row.
+		// GetInteraction returns the existing outbound row, owned by the
+		// same contact we're aggregating for (the cross-contact guard
+		// requires existing.ContactID == contactID).
 		getInteractionRet: &repository.Interaction{
 			ID:        priorOutboundID,
+			ContactID: contactID,
 			Source:    "fakesrc",
 			Direction: repository.InteractionDirectionOutbound,
 		},
@@ -679,6 +682,67 @@ func TestEngine_FakeSource_ExplicitReplyBridge(t *testing.T) {
 	require.Len(t, store.markProcessedCalls, 1)
 	assert.Equal(t, priorOutboundID, store.markProcessedCalls[0].interactionID)
 	assert.Empty(t, publisher.envelopes)
+}
+
+// TestEngine_FakeSource_ExplicitReplyBridge_RejectsOtherContact locks the
+// cross-contact guard: if the referenced reply-target resolves to an
+// interaction owned by a DIFFERENT contact (as can happen for per-contact
+// content stores where a shared address fans out), the engine must NOT promote
+// it. Instead it falls through to the create path (publishes a new event).
+func TestEngine_FakeSource_ExplicitReplyBridge_RejectsOtherContact(t *testing.T) {
+	ctx := context.Background()
+	base := accelerated.GetCurrentTime()
+	contactID := uuid.New()
+	otherContactID := uuid.New()
+	priorOutboundID := uuid.New()
+
+	adapter := fakeAdapter{name: "fakesrc"}
+	store := newFakeStore()
+
+	replyTarget := "outboundExt"
+	inbound := Message{
+		ID:            uuid.New(),
+		ChatID:        "chatA",
+		ExternalID:    "i1",
+		IsOutgoing:    false,
+		SentAt:        base.Add(100 * time.Hour), // outside time-bridge window
+		ReplyTargetID: &replyTarget,
+	}
+	store.byContactAndChat[contactID.String()+"|chatA"] = []Message{inbound}
+
+	referenced := Message{
+		ID:            uuid.New(),
+		ChatID:        "chatA",
+		ExternalID:    replyTarget,
+		IsOutgoing:    true,
+		SentAt:        base,
+		InteractionID: &priorOutboundID,
+	}
+	store.byReplyTarget["chatA|"+replyTarget] = referenced
+
+	finder := &fakeFinder{
+		// Both time-bridge lookups miss so the only path that could promote
+		// is the explicit-reply bridge — which must be rejected here.
+		findRecentOutboundErr:       db.ErrNotFound,
+		findRecentBySourceAndDirErr: db.ErrNotFound,
+		// The referenced interaction is owned by ANOTHER contact.
+		getInteractionRet: &repository.Interaction{
+			ID:        priorOutboundID,
+			ContactID: otherContactID,
+			Source:    "fakesrc",
+			Direction: repository.InteractionDirectionOutbound,
+		},
+	}
+	promoter := &fakePromoter{}
+	publisher := &fakePublisher{}
+
+	engine := NewEngine(adapter, store, finder, promoter, &fakeExtender{}, publisher, 2, 48, nil, nil, nil)
+	require.NoError(t, engine.AggregateForContact(ctx, contactID, "chatA"))
+
+	// No promotion of the other contact's interaction.
+	assert.Empty(t, promoter.calls, "must NOT promote an interaction owned by a different contact")
+	// Falls through to the create path: a fresh event is published.
+	require.Len(t, publisher.envelopes, 1, "rejecting the cross-contact bridge falls through to the create path")
 }
 
 // TestEngine_FakeSource_NoMatch_PublishesCreateEvent asserts the
@@ -844,8 +908,8 @@ func (s *perContactErroringStore) ListUnprocessedByContact(ctx context.Context, 
 func (s *perContactErroringStore) ListUnprocessedByContactAndChat(ctx context.Context, contactID uuid.UUID, chatID string) ([]Message, error) {
 	return s.inner.ListUnprocessedByContactAndChat(ctx, contactID, chatID)
 }
-func (s *perContactErroringStore) GetMessageByReplyTarget(ctx context.Context, chatID, replyTargetID string) (Message, bool, error) {
-	return s.inner.GetMessageByReplyTarget(ctx, chatID, replyTargetID)
+func (s *perContactErroringStore) GetMessageByReplyTarget(ctx context.Context, contactID uuid.UUID, chatID, replyTargetID string) (Message, bool, error) {
+	return s.inner.GetMessageByReplyTarget(ctx, contactID, chatID, replyTargetID)
 }
 func (s *perContactErroringStore) MarkProcessed(ctx context.Context, messageIDs []uuid.UUID, interactionID uuid.UUID) error {
 	return s.inner.MarkProcessed(ctx, messageIDs, interactionID)

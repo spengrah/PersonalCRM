@@ -25,9 +25,9 @@ const GChatSourceName = repository.InteractionSourceGChat
 
 // replyTargetMetadataKey is the source_metadata key under which an explicit
 // reply's target message resource name is stored (spec §5.X.3). No provider
-// writes this key in PR 1 (explicit-reply bridging is deferred), so the
-// projection's ReplyTargetID is always nil here — but wiring it now means
-// PR 2/PR 3 (or a later explicit-reply follow-up) need not touch the adapter.
+// writes this key yet (explicit-reply bridging is deferred), so the
+// projection's ReplyTargetID is currently always nil — but wiring the field
+// here means a later explicit-reply provider need not touch the adapter.
 const replyTargetMetadataKey = "reply_target_external_id"
 
 // NewGChatAggregationEngine constructs a shared aggregator engine configured
@@ -182,9 +182,12 @@ func (a *commsMessageStoreAdapter) ListUnprocessedByContactAndChat(ctx context.C
 
 // GetMessageByReplyTarget resolves the message referenced by a reply. The
 // reply target is itself a stored comms_message row, looked up by its own
-// external_id within the same (source, chat) scope.
-func (a *commsMessageStoreAdapter) GetMessageByReplyTarget(ctx context.Context, chatID, replyTargetID string) (aggregation.Message, bool, error) {
-	row, err := a.repo.GetMessageByReplyTargetForSource(ctx, a.source, chatID, replyTargetID)
+// external_id within the same (source, contact, chat) scope. comms_message is
+// per-contact (a shared address fans out to one row per matched contact), so
+// the lookup MUST be scoped to contactID — otherwise it could return another
+// contact's row whose interaction would then be wrongly bridged.
+func (a *commsMessageStoreAdapter) GetMessageByReplyTarget(ctx context.Context, contactID uuid.UUID, chatID, replyTargetID string) (aggregation.Message, bool, error) {
+	row, err := a.repo.GetMessageByReplyTargetForSource(ctx, a.source, contactID, chatID, replyTargetID)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			return aggregation.Message{}, false, nil

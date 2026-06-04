@@ -101,15 +101,23 @@ type MessageStore interface {
 	ListUnprocessedByContactAndChat(ctx context.Context, contactID uuid.UUID, chatID string) ([]Message, error)
 
 	// GetMessageByReplyTarget resolves the message referenced by a
-	// reply (Message.ReplyTargetID). The returned Message includes its
-	// InteractionID and IsOutgoing so tryExplicitReplyBridge can verify
-	// the bridged interaction exists and the message direction is
-	// correct.
+	// reply (Message.ReplyTargetID), scoped to the contact being
+	// aggregated. The returned Message includes its InteractionID and
+	// IsOutgoing so tryExplicitReplyBridge can verify the bridged
+	// interaction exists and the message direction is correct.
+	//
+	// contactID scopes the lookup to the current contact's row. This
+	// matters for per-contact content stores (comms_message), where a
+	// shared/fanned-out reply target produces one row per matched contact
+	// — an unscoped lookup could return a different contact's row whose
+	// InteractionID points at that other contact's interaction. Stores
+	// keyed by a globally-unique message id (telegram/messages guids)
+	// may ignore contactID since their lookup is already contact-correct.
 	//
 	// Returns (msg, true, nil) on hit; (Message{}, false, nil) if not
 	// found OR if the source-specific ID cannot be parsed; non-nil
 	// error only on infrastructure failure.
-	GetMessageByReplyTarget(ctx context.Context, chatID, replyTargetID string) (Message, bool, error)
+	GetMessageByReplyTarget(ctx context.Context, contactID uuid.UUID, chatID, replyTargetID string) (Message, bool, error)
 
 	// MarkProcessed sets processed_at and interaction_id on the rows
 	// AND clears claim columns. Non-tx variant; used by the engine's
