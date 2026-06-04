@@ -42,6 +42,10 @@ func NewSuggestionHandler(suggestionSvc *service.SuggestionService) *SuggestionH
 	return &SuggestionHandler{suggestionSvc: suggestionSvc}
 }
 
+func includeUnresolvedTelegramParam(c *gin.Context) bool {
+	return c.Query("include_unresolved_telegram") == "true"
+}
+
 // MethodSuggestionResponse is the method-kind queue entry. Methods are the
 // pending (type, normalized-value) pairs displayable for confirmation.
 type MethodSuggestionResponse struct {
@@ -104,9 +108,10 @@ func (h *SuggestionHandler) ListSuggestions(c *gin.Context) {
 	}
 
 	list, err := h.suggestionSvc.ListSuggestions(ctx, service.SuggestionListParams{
-		Source: c.Query("source"),
-		Page:   page,
-		Limit:  limit,
+		Source:                    c.Query("source"),
+		Page:                      page,
+		Limit:                     limit,
+		IncludeUnresolvedTelegram: includeUnresolvedTelegramParam(c),
 	}, MaxCandidatesForSorting)
 	if err != nil {
 		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to list suggestions", err.Error())
@@ -133,6 +138,7 @@ func (h *SuggestionHandler) ListSuggestions(c *gin.Context) {
 	}
 
 	api.SendSuccess(c, http.StatusOK, items, &api.Meta{
+		HiddenUnresolvedTelegramCount: list.HiddenUnresolvedTelegramCount,
 		Pagination: &api.PaginationMeta{
 			Page:  list.Page,
 			Limit: list.Limit,

@@ -2,6 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   RefreshCw,
   Mail,
@@ -39,8 +40,10 @@ import {
   useResolveNameCandidate,
 } from '@/hooks/use-interactions-queue'
 import { useGoogleAccounts } from '@/hooks/use-google-accounts'
-import { getCandidateDisplayName } from '@/lib/candidate-display'
+import { getCandidateDisplayName, isUnresolvedTelegramCandidate } from '@/lib/candidate-display'
 import { sourceAllowsImport } from '@/lib/candidate-actions'
+import { importsApi } from '@/lib/imports-api'
+import { importKeys } from '@/lib/query-invalidation'
 import type {
   ImportCandidate,
   SuggestionItem,
@@ -151,6 +154,7 @@ function CandidateCard({
   ignoreLoading: boolean
 }) {
   const displayName = getCandidateDisplayName(candidate)
+  const unresolvedTelegram = isUnresolvedTelegramCandidate(candidate)
 
   // Get meeting context for calendar attendees
   const meetingContext =
@@ -228,6 +232,12 @@ function CandidateCard({
                 <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
                   <Users className="w-3 h-3 mr-1" />
                   {correspondenceLabel}
+                </span>
+              )}
+              {unresolvedTelegram && (
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
+                  <MessageCircle className="w-3 h-3 mr-1" />
+                  Unresolved Telegram peer
                 </span>
               )}
             </div>
@@ -358,6 +368,7 @@ function ImportsPageFallback() {
 function ImportsPageInner() {
   const router = useRouter()
   const searchParams = useSearchParams()
+  const queryClient = useQueryClient()
   const tabParam = searchParams.get('tab')
   const sessionParam = searchParams.get('session')
   const activeTab = normalizeTab(tabParam)
@@ -473,6 +484,7 @@ function ImportsPageInner() {
       candidates: candidateItems,
       initialIndex: index,
       initialMode: mode,
+      includeUnresolvedTelegram: Boolean(params.include_unresolved_telegram),
     })
   }
 
@@ -622,6 +634,31 @@ function ImportsPageInner() {
     }))
   }
 
+  const handleUnresolvedTelegramToggle = () => {
+    setParams(prev => ({
+      ...prev,
+      page: 1,
+      include_unresolved_telegram: !prev.include_unresolved_telegram || undefined,
+    }))
+  }
+
+  useEffect(() => {
+    if (activeTab !== 'people') return
+    if (isLoading || error) return
+    if (params.include_unresolved_telegram) return
+    if ((data?.hidden_unresolved_telegram_count ?? 0) === 0) return
+
+    const nextParams: SuggestionsListParams = {
+      ...params,
+      include_unresolved_telegram: true,
+    }
+    queryClient.prefetchQuery({
+      queryKey: importKeys.suggestions(nextParams),
+      queryFn: () => importsApi.getSuggestions(nextParams),
+      staleTime: 1000 * 60 * 2,
+    })
+  }, [activeTab, data?.hidden_unresolved_telegram_count, error, isLoading, params, queryClient])
+
   // --- Interactions tab: conflict / orphan resolution ---
 
   const handlePickCandidate = async (
@@ -745,7 +782,7 @@ function ImportsPageInner() {
         ) : (
           <>
             {/* Source filter (People tab only) */}
-            <div className="mb-6 flex items-center gap-2">
+            <div className="mb-6 flex flex-wrap items-center gap-2">
               <span className="text-sm text-gray-500">Filter:</span>
               {SOURCE_FILTERS.map(filter => (
                 <button
@@ -760,6 +797,36 @@ function ImportsPageInner() {
                   {filter.label}
                 </button>
               ))}
+              {((data?.hidden_unresolved_telegram_count ?? 0) > 0 ||
+                params.include_unresolved_telegram) && (
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={Boolean(params.include_unresolved_telegram)}
+                  onClick={handleUnresolvedTelegramToggle}
+                  className="mt-2 inline-flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 sm:mt-0 sm:ml-auto"
+                >
+                  <span
+                    className={`relative inline-flex h-5 w-9 flex-shrink-0 rounded-full transition-colors ${
+                      params.include_unresolved_telegram ? 'bg-blue-600' : 'bg-gray-300'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 translate-y-0.5 rounded-full bg-white shadow-sm transition-transform ${
+                        params.include_unresolved_telegram
+                          ? 'translate-x-[18px]'
+                          : 'translate-x-0.5'
+                      }`}
+                    />
+                  </span>
+                  <span>
+                    Show unresolved
+                    {(data?.hidden_unresolved_telegram_count ?? 0) > 0
+                      ? ` (${data?.hidden_unresolved_telegram_count})`
+                      : ''}
+                  </span>
+                </button>
+              )}
             </div>
 
             {/* Error state */}

@@ -16,7 +16,7 @@ import {
   useImportCandidates,
 } from '@/hooks/use-imports'
 import { detectMethodConflicts, areNamesSimilar } from '@/lib/method-conflict-detection'
-import { getCandidateDisplayName } from '@/lib/candidate-display'
+import { getCandidateDisplayName, isUnresolvedTelegramCandidate } from '@/lib/candidate-display'
 import { getSourceDisplay } from '@/lib/source-display'
 import { sourceAllowsImport } from '@/lib/candidate-actions'
 import type {
@@ -60,6 +60,7 @@ export type SuggestionModalItem =
       candidates: ImportCandidate[]
       initialIndex: number
       initialMode?: 'import' | 'link'
+      includeUnresolvedTelegram?: boolean
     }
   | { kind: 'method'; suggestion: MethodSuggestion }
 
@@ -88,6 +89,7 @@ export function SuggestionModal({ item, onClose, onSuccess, onError }: Suggestio
       candidates={item.candidates}
       initialIndex={item.initialIndex}
       initialMode={item.initialMode}
+      includeUnresolvedTelegram={item.includeUnresolvedTelegram}
       onClose={onClose}
       onSuccess={onSuccess}
       onError={onError}
@@ -102,6 +104,8 @@ interface ContactCandidateResolverProps {
   initialIndex: number
   /** Initial mode - 'import' or 'link' */
   initialMode?: 'import' | 'link'
+  /** Whether unresolved Telegram rows are visible in modal navigation */
+  includeUnresolvedTelegram?: boolean
   /** Callback when modal is closed */
   onClose: () => void
   /** Callback when an action completes successfully */
@@ -123,6 +127,7 @@ function ContactCandidateResolver({
   candidates: initialCandidates,
   initialIndex,
   initialMode = 'import',
+  includeUnresolvedTelegram = false,
   onClose,
   onSuccess,
   onError,
@@ -147,7 +152,11 @@ function ContactCandidateResolver({
 
   // Fetch all candidates for the modal (not limited by page pagination)
   // Note: We need to pass page: 1 explicitly to ensure consistent query params
-  const { data: allCandidatesData, isSuccess } = useImportCandidates({ page: 1, limit: 1000 })
+  const { data: allCandidatesData, isSuccess } = useImportCandidates({
+    page: 1,
+    limit: 1000,
+    include_unresolved_telegram: includeUnresolvedTelegram,
+  })
   // Use fetched data once query succeeds, otherwise fall back to initialCandidates
   const candidates =
     isSuccess && allCandidatesData?.candidates?.length
@@ -156,6 +165,7 @@ function ContactCandidateResolver({
 
   const candidate = candidates[currentIndex]
   const displayName = candidate ? getCandidateDisplayName(candidate) : ''
+  const unresolvedTelegram = candidate ? isUnresolvedTelegramCandidate(candidate) : false
   const sourceInfo = candidate ? getSourceDisplay(candidate.source) : null
   // Link-only sources (e.g. gmail_correspondence) cannot create a new
   // contact. Derived from the source via the shared policy mirror — NOT a
@@ -441,6 +451,10 @@ function ContactCandidateResolver({
     // Validate name
     if (!editedName.trim()) {
       onError('Contact name cannot be empty. Please enter a valid name.')
+      return
+    }
+    if (unresolvedTelegram && editedName.trim() === displayName) {
+      onError('Enter a name before importing this unresolved Telegram peer.')
       return
     }
     const selectedMethods = buildSelectedMethods()

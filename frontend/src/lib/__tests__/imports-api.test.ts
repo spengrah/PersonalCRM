@@ -36,6 +36,7 @@ describe('importsApi', () => {
               limit: 20,
               pages: 1,
             },
+            hidden_unresolved_telegram_count: 6,
           },
         }),
       })
@@ -47,6 +48,7 @@ describe('importsApi', () => {
       expect(result.page).toBe(1)
       expect(result.limit).toBe(20)
       expect(result.pages).toBe(1)
+      expect(result.hidden_unresolved_telegram_count).toBe(6)
 
       const fetchCall = (global.fetch as any).mock.calls[0]
       expect(fetchCall[0]).toContain('/api/v1/imports/candidates')
@@ -89,6 +91,23 @@ describe('importsApi', () => {
       expect(fetchCall[0]).toContain('source=gcontacts')
     })
 
+    it('passes unresolved Telegram visibility when enabled', async () => {
+      ;(global.fetch as any).mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          success: true,
+          data: [],
+          meta: { pagination: { total: 0, page: 1, limit: 20, pages: 0 } },
+        }),
+      })
+
+      await importsApi.getCandidates({ include_unresolved_telegram: true })
+
+      const fetchCall = (global.fetch as any).mock.calls[0]
+      expect(fetchCall[0]).toContain('include_unresolved_telegram=true')
+    })
+
     it('handles empty response gracefully', async () => {
       ;(global.fetch as any).mockResolvedValueOnce({
         ok: true,
@@ -103,6 +122,7 @@ describe('importsApi', () => {
       expect(result.page).toBe(1)
       expect(result.limit).toBe(20)
       expect(result.pages).toBe(0)
+      expect(result.hidden_unresolved_telegram_count).toBe(0)
     })
 
     it('throws ApiError on HTTP 404', async () => {

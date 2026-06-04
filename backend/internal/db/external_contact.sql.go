@@ -17,10 +17,44 @@ WHERE match_status = 'unmatched'
   AND source != 'anarlog_title'
   AND duplicate_of_id IS NULL
   AND deleted_at IS NULL
+  AND (
+    $1::bool
+    OR NOT (
+      source = 'telegram'
+      AND NULLIF(BTRIM(COALESCE(display_name, '')), '') IS NULL
+      AND NULLIF(BTRIM(COALESCE(first_name, '')), '') IS NULL
+      AND NULLIF(BTRIM(COALESCE(last_name, '')), '') IS NULL
+      AND NULLIF(BTRIM(COALESCE(metadata->>'username', '')), '') IS NULL
+      AND COALESCE(jsonb_array_length(emails), 0) = 0
+      AND COALESCE(jsonb_array_length(phones), 0) = 0
+    )
+  )
 `
 
-func (q *Queries) CountAllUnmatchedExternalContacts(ctx context.Context) (int64, error) {
-	row := q.db.QueryRow(ctx, CountAllUnmatchedExternalContacts)
+func (q *Queries) CountAllUnmatchedExternalContacts(ctx context.Context, includeUnresolvedTelegram bool) (int64, error) {
+	row := q.db.QueryRow(ctx, CountAllUnmatchedExternalContacts, includeUnresolvedTelegram)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const CountHiddenUnresolvedTelegramContacts = `-- name: CountHiddenUnresolvedTelegramContacts :one
+SELECT COUNT(*) FROM external_contact
+WHERE source = 'telegram'
+  AND ($1::text = '' OR source = $1::text)
+  AND match_status = 'unmatched'
+  AND duplicate_of_id IS NULL
+  AND deleted_at IS NULL
+  AND NULLIF(BTRIM(COALESCE(display_name, '')), '') IS NULL
+  AND NULLIF(BTRIM(COALESCE(first_name, '')), '') IS NULL
+  AND NULLIF(BTRIM(COALESCE(last_name, '')), '') IS NULL
+  AND NULLIF(BTRIM(COALESCE(metadata->>'username', '')), '') IS NULL
+  AND COALESCE(jsonb_array_length(emails), 0) = 0
+  AND COALESCE(jsonb_array_length(phones), 0) = 0
+`
+
+func (q *Queries) CountHiddenUnresolvedTelegramContacts(ctx context.Context, sourceFilter string) (int64, error) {
+	row := q.db.QueryRow(ctx, CountHiddenUnresolvedTelegramContacts, sourceFilter)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -33,13 +67,30 @@ WHERE source = $1
   AND match_status = 'unmatched'
   AND duplicate_of_id IS NULL
   AND deleted_at IS NULL
+  AND (
+    $2::bool
+    OR NOT (
+      source = 'telegram'
+      AND NULLIF(BTRIM(COALESCE(display_name, '')), '') IS NULL
+      AND NULLIF(BTRIM(COALESCE(first_name, '')), '') IS NULL
+      AND NULLIF(BTRIM(COALESCE(last_name, '')), '') IS NULL
+      AND NULLIF(BTRIM(COALESCE(metadata->>'username', '')), '') IS NULL
+      AND COALESCE(jsonb_array_length(emails), 0) = 0
+      AND COALESCE(jsonb_array_length(phones), 0) = 0
+    )
+  )
 `
+
+type CountUnmatchedExternalContactsParams struct {
+	Source                    string `json:"source"`
+	IncludeUnresolvedTelegram bool   `json:"include_unresolved_telegram"`
+}
 
 // Per-source count; mirrors ListUnmatched's anarlog_title exclusion
 // so list+count cardinality stays consistent regardless of caller-
 // supplied source.
-func (q *Queries) CountUnmatchedExternalContacts(ctx context.Context, source string) (int64, error) {
-	row := q.db.QueryRow(ctx, CountUnmatchedExternalContacts, source)
+func (q *Queries) CountUnmatchedExternalContacts(ctx context.Context, arg CountUnmatchedExternalContactsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, CountUnmatchedExternalContacts, arg.Source, arg.IncludeUnresolvedTelegram)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -617,17 +668,30 @@ WHERE match_status = 'unmatched'
   AND source != 'anarlog_title'
   AND duplicate_of_id IS NULL
   AND deleted_at IS NULL
+  AND (
+    $1::bool
+    OR NOT (
+      source = 'telegram'
+      AND NULLIF(BTRIM(COALESCE(display_name, '')), '') IS NULL
+      AND NULLIF(BTRIM(COALESCE(first_name, '')), '') IS NULL
+      AND NULLIF(BTRIM(COALESCE(last_name, '')), '') IS NULL
+      AND NULLIF(BTRIM(COALESCE(metadata->>'username', '')), '') IS NULL
+      AND COALESCE(jsonb_array_length(emails), 0) = 0
+      AND COALESCE(jsonb_array_length(phones), 0) = 0
+    )
+  )
 ORDER BY source, display_name
-LIMIT $1 OFFSET $2
+LIMIT $3 OFFSET $2
 `
 
 type ListAllUnmatchedExternalContactsParams struct {
-	Limit  int32 `json:"limit"`
-	Offset int32 `json:"offset"`
+	IncludeUnresolvedTelegram bool  `json:"include_unresolved_telegram"`
+	PageOffset                int32 `json:"page_offset"`
+	PageLimit                 int32 `json:"page_limit"`
 }
 
 func (q *Queries) ListAllUnmatchedExternalContacts(ctx context.Context, arg ListAllUnmatchedExternalContactsParams) ([]*ExternalContact, error) {
-	rows, err := q.db.Query(ctx, ListAllUnmatchedExternalContacts, arg.Limit, arg.Offset)
+	rows, err := q.db.Query(ctx, ListAllUnmatchedExternalContacts, arg.IncludeUnresolvedTelegram, arg.PageOffset, arg.PageLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -1184,14 +1248,27 @@ WHERE source = $1
   AND match_status = 'unmatched'
   AND duplicate_of_id IS NULL
   AND deleted_at IS NULL
+  AND (
+    $2::bool
+    OR NOT (
+      source = 'telegram'
+      AND NULLIF(BTRIM(COALESCE(display_name, '')), '') IS NULL
+      AND NULLIF(BTRIM(COALESCE(first_name, '')), '') IS NULL
+      AND NULLIF(BTRIM(COALESCE(last_name, '')), '') IS NULL
+      AND NULLIF(BTRIM(COALESCE(metadata->>'username', '')), '') IS NULL
+      AND COALESCE(jsonb_array_length(emails), 0) = 0
+      AND COALESCE(jsonb_array_length(phones), 0) = 0
+    )
+  )
 ORDER BY display_name
-LIMIT $2 OFFSET $3
+LIMIT $4 OFFSET $3
 `
 
 type ListUnmatchedExternalContactsParams struct {
-	Source string `json:"source"`
-	Limit  int32  `json:"limit"`
-	Offset int32  `json:"offset"`
+	Source                    string `json:"source"`
+	IncludeUnresolvedTelegram bool   `json:"include_unresolved_telegram"`
+	PageOffset                int32  `json:"page_offset"`
+	PageLimit                 int32  `json:"page_limit"`
 }
 
 // Per-source query; anarlog_title rows are intentionally NOT exposed
@@ -1201,7 +1278,12 @@ type ListUnmatchedExternalContactsParams struct {
 // injection), this query returns empty rather than leaking weak
 // discovery rows into the per-source UI.
 func (q *Queries) ListUnmatchedExternalContacts(ctx context.Context, arg ListUnmatchedExternalContactsParams) ([]*ExternalContact, error) {
-	rows, err := q.db.Query(ctx, ListUnmatchedExternalContacts, arg.Source, arg.Limit, arg.Offset)
+	rows, err := q.db.Query(ctx, ListUnmatchedExternalContacts,
+		arg.Source,
+		arg.IncludeUnresolvedTelegram,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
 	if err != nil {
 		return nil, err
 	}

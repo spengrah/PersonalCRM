@@ -196,7 +196,7 @@ func TestExternalContactSweep_ListUnmatched_FiltersTombstone(t *testing.T) {
 		_ = database.Queries.TestDeleteExternalContactsBySourceIDPrefix(cleanCtx, prefix)
 	})
 
-	listed, err := repo.ListUnmatched(ctx, "gcontacts", 1000, 0)
+	listed, err := repo.ListUnmatched(ctx, "gcontacts", 1000, 0, false)
 	require.NoError(t, err)
 	foundLive := false
 	for _, r := range listed {
@@ -243,7 +243,7 @@ func TestExternalContactSweep_ListAllUnmatched_FiltersTombstone(t *testing.T) {
 		_ = database.Queries.TestDeleteExternalContactsBySourceIDPrefix(cleanCtx, prefix)
 	})
 
-	listed, err := repo.ListAllUnmatched(ctx, 1000, 0)
+	listed, err := repo.ListAllUnmatched(ctx, 1000, 0, false)
 	require.NoError(t, err)
 	foundLive := false
 	for _, r := range listed {
@@ -296,9 +296,87 @@ func TestExternalContactSweep_CountUnmatched_ExcludesTombstone(t *testing.T) {
 		_ = database.Queries.TestDeleteExternalContactsBySourceIDPrefix(cleanCtx, prefix)
 	})
 
-	count, err := repo.CountUnmatched(ctx, source)
+	count, err := repo.CountUnmatched(ctx, source, false)
 	require.NoError(t, err)
 	require.Equal(t, int64(2), count, "tombstoned row must not be counted")
+}
+
+func TestExternalContactUnmatched_HidesUnresolvedTelegramByDefault(t *testing.T) {
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+	ctx := context.Background()
+	cfg := config.TestConfig()
+	cfg.Database.URL = databaseURL
+	database, err := db.NewDatabase(ctx, cfg.Database)
+	require.NoError(t, err)
+	t.Cleanup(func() { database.Close() })
+
+	repo := repository.NewExternalContactRepository(database.Queries)
+	prefix := "tg-hidden-" + uuid.NewString()[:8] + "-"
+	syncedAt := accelerated.GetCurrentTime()
+	t.Cleanup(func() {
+		cleanCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = database.Queries.TestDeleteExternalContactsBySourceIDPrefix(cleanCtx, prefix)
+	})
+
+	hidden, err := repo.Upsert(ctx, repository.UpsertExternalContactRequest{
+		Source:   "telegram",
+		SourceID: prefix + "hidden",
+		SyncedAt: &syncedAt,
+	})
+	require.NoError(t, err)
+	withUsername, err := repo.Upsert(ctx, repository.UpsertExternalContactRequest{
+		Source:   "telegram",
+		SourceID: prefix + "username",
+		Metadata: map[string]any{"username": "@visible"},
+		SyncedAt: &syncedAt,
+	})
+	require.NoError(t, err)
+	displayName := "Visible Telegram"
+	withName, err := repo.Upsert(ctx, repository.UpsertExternalContactRequest{
+		Source:      "telegram",
+		SourceID:    prefix + "name",
+		DisplayName: &displayName,
+		SyncedAt:    &syncedAt,
+	})
+	require.NoError(t, err)
+	withEmail, err := repo.Upsert(ctx, repository.UpsertExternalContactRequest{
+		Source:   "telegram",
+		SourceID: prefix + "email",
+		Emails:   []repository.EmailEntry{{Value: prefix + "visible@example.invalid"}},
+		SyncedAt: &syncedAt,
+	})
+	require.NoError(t, err)
+
+	defaultRows, err := repo.ListUnmatched(ctx, "telegram", 1000, 0, false)
+	require.NoError(t, err)
+	defaultIDs := externalIDs(defaultRows)
+	require.NotContains(t, defaultIDs, hidden.ID)
+	require.Contains(t, defaultIDs, withUsername.ID)
+	require.Contains(t, defaultIDs, withName.ID)
+	require.Contains(t, defaultIDs, withEmail.ID)
+
+	includedRows, err := repo.ListUnmatched(ctx, "telegram", 1000, 0, true)
+	require.NoError(t, err)
+	require.Contains(t, externalIDs(includedRows), hidden.ID)
+
+	hiddenCount, err := repo.CountHiddenUnresolvedTelegram(ctx, "telegram")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), hiddenCount)
+	hiddenCountAll, err := repo.CountHiddenUnresolvedTelegram(ctx, "")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), hiddenCountAll)
+	hiddenCountOther, err := repo.CountHiddenUnresolvedTelegram(ctx, "gcontacts")
+	require.NoError(t, err)
+	require.Equal(t, int64(0), hiddenCountOther)
+
+	hiddenAfterList, err := repo.GetByID(ctx, hidden.ID)
+	require.NoError(t, err)
+	require.NotNil(t, hiddenAfterList)
+	require.Equal(t, repository.MatchStatusUnmatched, hiddenAfterList.MatchStatus)
 }
 
 func TestExternalContactSweep_FindByNormalizedEmail_FiltersTombstone(t *testing.T) {
@@ -362,6 +440,14 @@ func TestExternalContactSweep_ListForCRMContact_FiltersTombstone(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, results, 1, "tombstoned external_contact must not surface in ListForCRMContact")
 	require.Equal(t, live.ID, results[0].ID)
+}
+
+func externalIDs(rows []repository.ExternalContact) map[uuid.UUID]bool {
+	out := make(map[uuid.UUID]bool, len(rows))
+	for _, row := range rows {
+		out[row.ID] = true
+	}
+	return out
 }
 
 func TestExternalContactSweep_RoundTrip_ReviveAfterSoftDelete(t *testing.T) {

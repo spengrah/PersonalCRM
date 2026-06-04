@@ -23,7 +23,8 @@ type APIError struct {
 
 // Meta represents metadata for responses (pagination, etc.)
 type Meta struct {
-	Pagination *PaginationMeta `json:"pagination,omitempty"`
+	Pagination                    *PaginationMeta `json:"pagination,omitempty"`
+	HiddenUnresolvedTelegramCount int64           `json:"hidden_unresolved_telegram_count,omitempty"`
 }
 
 // PaginationMeta represents pagination metadata

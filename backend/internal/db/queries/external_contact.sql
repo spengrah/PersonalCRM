@@ -148,13 +148,25 @@ LIMIT $3 OFFSET $4;
 -- injection), this query returns empty rather than leaking weak
 -- discovery rows into the per-source UI.
 SELECT * FROM external_contact
-WHERE source = $1
+WHERE source = sqlc.arg('source')
   AND source != 'anarlog_title'
   AND match_status = 'unmatched'
   AND duplicate_of_id IS NULL
   AND deleted_at IS NULL
+  AND (
+    sqlc.arg('include_unresolved_telegram')::bool
+    OR NOT (
+      source = 'telegram'
+      AND NULLIF(BTRIM(COALESCE(display_name, '')), '') IS NULL
+      AND NULLIF(BTRIM(COALESCE(first_name, '')), '') IS NULL
+      AND NULLIF(BTRIM(COALESCE(last_name, '')), '') IS NULL
+      AND NULLIF(BTRIM(COALESCE(metadata->>'username', '')), '') IS NULL
+      AND COALESCE(jsonb_array_length(emails), 0) = 0
+      AND COALESCE(jsonb_array_length(phones), 0) = 0
+    )
+  )
 ORDER BY display_name
-LIMIT $2 OFFSET $3;
+LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
 
 -- name: ListAllUnmatchedExternalContacts :many
 SELECT * FROM external_contact
@@ -162,26 +174,76 @@ WHERE match_status = 'unmatched'
   AND source != 'anarlog_title'
   AND duplicate_of_id IS NULL
   AND deleted_at IS NULL
+  AND (
+    sqlc.arg('include_unresolved_telegram')::bool
+    OR NOT (
+      source = 'telegram'
+      AND NULLIF(BTRIM(COALESCE(display_name, '')), '') IS NULL
+      AND NULLIF(BTRIM(COALESCE(first_name, '')), '') IS NULL
+      AND NULLIF(BTRIM(COALESCE(last_name, '')), '') IS NULL
+      AND NULLIF(BTRIM(COALESCE(metadata->>'username', '')), '') IS NULL
+      AND COALESCE(jsonb_array_length(emails), 0) = 0
+      AND COALESCE(jsonb_array_length(phones), 0) = 0
+    )
+  )
 ORDER BY source, display_name
-LIMIT $1 OFFSET $2;
+LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
 
 -- name: CountUnmatchedExternalContacts :one
 -- Per-source count; mirrors ListUnmatched's anarlog_title exclusion
 -- so list+count cardinality stays consistent regardless of caller-
 -- supplied source.
 SELECT COUNT(*) FROM external_contact
-WHERE source = $1
+WHERE source = sqlc.arg('source')
   AND source != 'anarlog_title'
   AND match_status = 'unmatched'
   AND duplicate_of_id IS NULL
-  AND deleted_at IS NULL;
+  AND deleted_at IS NULL
+  AND (
+    sqlc.arg('include_unresolved_telegram')::bool
+    OR NOT (
+      source = 'telegram'
+      AND NULLIF(BTRIM(COALESCE(display_name, '')), '') IS NULL
+      AND NULLIF(BTRIM(COALESCE(first_name, '')), '') IS NULL
+      AND NULLIF(BTRIM(COALESCE(last_name, '')), '') IS NULL
+      AND NULLIF(BTRIM(COALESCE(metadata->>'username', '')), '') IS NULL
+      AND COALESCE(jsonb_array_length(emails), 0) = 0
+      AND COALESCE(jsonb_array_length(phones), 0) = 0
+    )
+  );
 
 -- name: CountAllUnmatchedExternalContacts :one
 SELECT COUNT(*) FROM external_contact
 WHERE match_status = 'unmatched'
   AND source != 'anarlog_title'
   AND duplicate_of_id IS NULL
-  AND deleted_at IS NULL;
+  AND deleted_at IS NULL
+  AND (
+    sqlc.arg('include_unresolved_telegram')::bool
+    OR NOT (
+      source = 'telegram'
+      AND NULLIF(BTRIM(COALESCE(display_name, '')), '') IS NULL
+      AND NULLIF(BTRIM(COALESCE(first_name, '')), '') IS NULL
+      AND NULLIF(BTRIM(COALESCE(last_name, '')), '') IS NULL
+      AND NULLIF(BTRIM(COALESCE(metadata->>'username', '')), '') IS NULL
+      AND COALESCE(jsonb_array_length(emails), 0) = 0
+      AND COALESCE(jsonb_array_length(phones), 0) = 0
+    )
+  );
+
+-- name: CountHiddenUnresolvedTelegramContacts :one
+SELECT COUNT(*) FROM external_contact
+WHERE source = 'telegram'
+  AND (sqlc.arg('source_filter')::text = '' OR source = sqlc.arg('source_filter')::text)
+  AND match_status = 'unmatched'
+  AND duplicate_of_id IS NULL
+  AND deleted_at IS NULL
+  AND NULLIF(BTRIM(COALESCE(display_name, '')), '') IS NULL
+  AND NULLIF(BTRIM(COALESCE(first_name, '')), '') IS NULL
+  AND NULLIF(BTRIM(COALESCE(last_name, '')), '') IS NULL
+  AND NULLIF(BTRIM(COALESCE(metadata->>'username', '')), '') IS NULL
+  AND COALESCE(jsonb_array_length(emails), 0) = 0
+  AND COALESCE(jsonb_array_length(phones), 0) = 0;
 
 -- name: UpdateExternalContactMatch :one
 -- Filter `deleted_at IS NULL` so a tombstoned row cannot have its
