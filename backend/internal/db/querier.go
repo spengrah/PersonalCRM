@@ -33,6 +33,10 @@ type Querier interface {
 	// records interactions directly for past events (see rematch plan Design
 	// Decision 6) so the scheduler race is avoided at the source.
 	AppendMatchedContact(ctx context.Context, arg AppendMatchedContactParams) error
+	// Test-only helper: ages the claim past the 5-minute TTL so a fresh
+	// aggregate pass can re-claim a stale claim. Mirror of
+	// BackdateMessagesMessageClaim. Production code MUST NOT call this.
+	BackdateCommsMessageClaim(ctx context.Context, messageIds []pgtype.UUID) error
 	// Test-only helper: ages the claim past the 5-minute TTL. Production
 	// code MUST NOT call this.
 	BackdateMessagesMessageClaim(ctx context.Context, messageIds []pgtype.UUID) error
@@ -56,6 +60,11 @@ type Querier interface {
 	// local cursor cache on next heartbeat. Currently used only by the
 	// repository layer; no admin endpoint is wired to it yet.
 	BumpMacHostCursorEpoch(ctx context.Context, id pgtype.UUID) (int64, error)
+	// Race-safe conditional claim — mirror of ClaimMessagesMessages. No @source
+	// filter needed: id is the PK and globally unique; the caller already scoped to
+	// source when it listed the rows. Returns the IDs actually claimed so the engine
+	// can detect partial claims.
+	ClaimCommsMessages(ctx context.Context, arg ClaimCommsMessagesParams) ([]pgtype.UUID, error)
 	// Race-safe conditional claim — same predicate shape as
 	// ClaimTelegramMessages. Returns the IDs actually claimed so the engine
 	// can detect partial claims.
@@ -81,6 +90,11 @@ type Querier interface {
 	// carrying the expected stale session_ref. Used when the engine
 	// detected a recovery pass but FindEventBySource returned no row.
 	ClearMessagesMessageStaleClaim(ctx context.Context, arg ClearMessagesMessageStaleClaimParams) error
+	// Defensive recovery branch: clears claim columns for rows still carrying the
+	// expected stale session_ref. Mirror of ClearMessagesMessageStaleClaim. Used
+	// when the engine detected a recovery pass but FindEventBySource returned no
+	// row.
+	ClearStaleCommsClaim(ctx context.Context, arg ClearStaleCommsClaimParams) error
 	// Defensive recovery branch: clears claim columns for rows still
 	// carrying the expected stale session_ref but for which no event-log row
 	// could be found. Scoped to that exact stale ref to avoid clobbering a
@@ -482,6 +496,12 @@ type Querier interface {
 	// content row for a (source, external_id, contact) tuple. deleted_at filtered.
 	GetCommsMessage(ctx context.Context, arg GetCommsMessageParams) (*CommsMessage, error)
 	GetCommsMessageByID(ctx context.Context, id pgtype.UUID) (*CommsMessage, error)
+	// Resolves the row a reply points at. comms_message has NO reply_to column;
+	// the reply target is itself a stored message, looked up by its own external_id
+	// within the same (source, thread/chat) scope. Used by the aggregator's
+	// explicit-reply-bridge path. Intentionally does NOT filter processed_at — a
+	// reply can target an already-processed message (the whole point of bridging).
+	GetCommsMessageByReplyTarget(ctx context.Context, arg GetCommsMessageByReplyTargetParams) (*CommsMessage, error)
 	// Contact queries
 	GetContact(ctx context.Context, id pgtype.UUID) (*Contact, error)
 	// Get a single note for a contact by category (e.g., 'notepad')
@@ -829,6 +849,21 @@ type Querier interface {
 	// the caller-supplied address-book sources, with an optional People-tab
 	// source filter (empty = no chip).
 	ListExternalContactsWithPendingMethodSuggestions(ctx context.Context, arg ListExternalContactsWithPendingMethodSuggestionsParams) ([]*ListExternalContactsWithPendingMethodSuggestionsRow, error)
+	// Dual-source variant of ListEmailIdentitiesForSync for the Google Chat
+	// provider. Returns (value_normalized, contact_id, source_type) for every
+	// gchat OR email contact_method of a non-deleted contact. GChat sender
+	// addresses ARE emails, so the provider's known-identity map must consider
+	// both a dedicated 'gchat' method AND any plain 'email' method. The
+	// source_type projection (cm.type, 'gchat' or 'email') is the discriminator.
+	// MANY-TO-ONE allowed: a shared address maps to multiple contacts and each
+	// pair is returned so the provider can fan out to all owners (spec §6).
+	// value_normalized is already lowercased+trimmed by the contact_method
+	// trigger for BOTH types (normalize_contact_method_value, migrations/021/022),
+	// so gchat and email values normalize identically — case-insensitivity is
+	// inherited, not re-implemented. Empty-normalized values are excluded.
+	// The cm.type ASC tiebreaker keeps iteration / test assertions stable when
+	// the same address has both a gchat and an email method on one contact.
+	ListGChatIdentitiesForSync(ctx context.Context) ([]*ListGChatIdentitiesForSyncRow, error)
 	ListIdentitiesBySource(ctx context.Context, arg ListIdentitiesBySourceParams) ([]*ExternalIdentity, error)
 	ListIdentitiesForContact(ctx context.Context, contactID pgtype.UUID) ([]*ExternalIdentity, error)
 	// Returns (source_id, last_content_hash) for every live
@@ -913,6 +948,32 @@ type Querier interface {
 	// discovery rows into the per-source UI.
 	ListUnmatchedExternalContacts(ctx context.Context, arg ListUnmatchedExternalContactsParams) ([]*ExternalContact, error)
 	ListUnmatchedIdentities(ctx context.Context, arg ListUnmatchedIdentitiesParams) ([]*ExternalIdentity, error)
+	// Eligible rows for a contact within one source. Orders by thread_id then
+	// sent_at — thread_id carries the chat scope, mirroring messages' ORDER BY
+	// chat_guid, sent_at.
+	ListUnprocessedCommsByContact(ctx context.Context, arg ListUnprocessedCommsByContactParams) ([]*CommsMessage, error)
+	// Eligible rows for a (contact, thread/chat) pair within one source.
+	// @thread_id is the chat scope (the GChat space resource name).
+	ListUnprocessedCommsByContactAndChat(ctx context.Context, arg ListUnprocessedCommsByContactAndChatParams) ([]*CommsMessage, error)
+	// Distinct thread_id (chat scope) values for a contact with at least one
+	// eligible row within one source. Backs the PerSourceChatListerRegistry entry
+	// (the worker's per-chat loop), mirroring ListUnprocessedMessagesChatsByContact.
+	// NOT a MessageStore interface method. thread_id is nullable on comms_message;
+	// the Go wrapper filters NULLs defensively (chat sources always write it
+	// non-null).
+	ListUnprocessedCommsChatsByContact(ctx context.Context, arg ListUnprocessedCommsChatsByContactParams) ([]pgtype.Text, error)
+	// =====================================================================
+	// Source-parameterized aggregation-engine queries (GChat is the first
+	// chat source on comms_message; Telegram/Messages migrate onto these
+	// later). Every query takes @source so the shared comms_message table
+	// isolates rows by source. Predicate shapes mirror messages_message.sql
+	// verbatim; the only structural difference is the @source filter and the
+	// thread_id column (vs. messages' chat_guid). All scope deleted_at IS NULL.
+	// =====================================================================
+	// Claim-aware filter — same predicate shape as ListUnprocessedMessagesContactIDs,
+	// plus the @source scope. matched_contact_id is NOT NULL on comms_message;
+	// the IS NOT NULL guard is retained for parity/safety (harmless).
+	ListUnprocessedCommsContactIDs(ctx context.Context, source string) ([]pgtype.UUID, error)
 	// Distinct contact IDs with at least one eligible (unprocessed AND
 	// unclaimed-or-stale) row. Used by AggregateAll batch mode after backfill
 	// and by the periodic aggregation sweeper.
@@ -977,14 +1038,37 @@ type Querier interface {
 	// contact-facing reads (status != 'cancelled'), so it neither re-fires
 	// calendar.attended nor strands an already-recorded interaction.
 	MarkCalendarEventCancelledByGcalID(ctx context.Context, arg MarkCalendarEventCancelledByGcalIDParams) error
-	// Link content rows to the aggregated interaction + set processed_at. Email
-	// aggregation uses a deterministic source_ref and never claims rows, so there
-	// is NO session-scope predicate here (unlike messages_message): the @session_ref
-	// arg is part of the shared StagingProcessor signature but intentionally unused
-	// in the email predicate. Idempotent: a replay finds rows already processed
-	// (processed_at IS NOT NULL) and affects 0 rows, which the consumer treats as
-	// the expected replay case.
+	// Link content rows to the aggregated interaction + set processed_at, AND
+	// clear claim columns. Two callers:
+	//   - email path (CommsStagingProcessor, tx-bound, via the email consumer):
+	//     email never claims rows, so the claim-clear is a provable NULL → NULL
+	//     no-op for email rows. There is NO session-scope predicate here (unlike
+	//     messages_message): the @session_ref arg is part of the shared
+	//     StagingProcessor signature but intentionally unused in the email path.
+	//   - chat non-tx engine path (commsMessageStoreAdapter.MarkProcessed, used by
+	//     the engine's extend/promote/bridge paths): those paths do not claim rows
+	//     or publish events, so the claim-clear keeps any leftover claim from a
+	//     prior pass from re-blocking the row. Mirrors MarkMessagesMessagesProcessed.
+	// Idempotent: a replay finds rows already processed (processed_at IS NOT NULL)
+	// and affects 0 rows, which the consumer treats as the expected replay case.
 	MarkCommsMessagesProcessed(ctx context.Context, arg MarkCommsMessagesProcessedParams) (int64, error)
+	// Tx-bound, session-scoped variant for the chat create-path. Mirror of
+	// MarkMessagesMessagesProcessedForSession — used by the InteractionRecorder
+	// consumer (via CommsSessionStagingProcessor) when processing a create-path
+	// event. The (claimed_session_ref = @session_ref OR IS NULL) predicate is the
+	// boundary-shift defense the recorder's zero-rows-affected rollback depends on:
+	// it rejects rows claimed for a DIFFERENT session while accepting rows the
+	// non-tx publish path left unclaimed. This is SEPARATE from the email
+	// MarkCommsMessagesProcessed (which has no session predicate — email never
+	// claims, so scoping by session would wrongly reject email rows).
+	//
+	// Returns rows affected. The consumer distinguishes three cases:
+	//   - affected == len(message_ids): happy path.
+	//   - affected == 0 on a fresh write: predicate filtered everything out
+	//     (boundary-shift race). Caller MUST roll back the tx.
+	//   - affected == 0 on a replay: expected; rows already linked on the
+	//     original attempt.
+	MarkCommsMessagesProcessedForSession(ctx context.Context, arg MarkCommsMessagesProcessedForSessionParams) (int64, error)
 	// Mark an event as having updated last_contacted for its contacts
 	MarkLastContactedUpdated(ctx context.Context, id pgtype.UUID) error
 	// Non-tx variant. Mirror of MarkTelegramMessagesProcessed — used by the

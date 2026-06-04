@@ -93,3 +93,26 @@ WHERE cm.type = 'email'
   AND cm.value_normalized <> ''
   AND c.deleted_at IS NULL
 ORDER BY cm.value_normalized ASC, cm.contact_id ASC;
+
+-- name: ListGChatIdentitiesForSync :many
+-- Dual-source variant of ListEmailIdentitiesForSync for the Google Chat
+-- provider. Returns (value_normalized, contact_id, source_type) for every
+-- gchat OR email contact_method of a non-deleted contact. GChat sender
+-- addresses ARE emails, so the provider's known-identity map must consider
+-- both a dedicated 'gchat' method AND any plain 'email' method. The
+-- source_type projection (cm.type, 'gchat' or 'email') is the discriminator.
+-- MANY-TO-ONE allowed: a shared address maps to multiple contacts and each
+-- pair is returned so the provider can fan out to all owners (spec §6).
+-- value_normalized is already lowercased+trimmed by the contact_method
+-- trigger for BOTH types (normalize_contact_method_value, migrations/021/022),
+-- so gchat and email values normalize identically — case-insensitivity is
+-- inherited, not re-implemented. Empty-normalized values are excluded.
+-- The cm.type ASC tiebreaker keeps iteration / test assertions stable when
+-- the same address has both a gchat and an email method on one contact.
+SELECT cm.value_normalized, cm.contact_id, cm.type AS source_type
+FROM contact_method cm
+JOIN contact c ON c.id = cm.contact_id
+WHERE cm.type IN ('gchat', 'email')
+  AND cm.value_normalized <> ''
+  AND c.deleted_at IS NULL
+ORDER BY cm.value_normalized ASC, cm.contact_id ASC, cm.type ASC;

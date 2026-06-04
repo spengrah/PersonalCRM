@@ -179,6 +179,41 @@ func TestNormalizeWhatsApp(t *testing.T) {
 	assert.Equal(t, "+15551234567", result)
 }
 
+// TestNormalizeGChat asserts a Google Chat sender address normalizes
+// identically to an email (lowercase + trim) — GChat addresses ARE emails,
+// matching the contact_method trigger's gchat handling exactly.
+func TestNormalizeGChat(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"mixed case", "John.Doe@Example.COM"},
+		{"leading/trailing whitespace", "  john.doe@example.com  "},
+		{"already normalized", "john.doe@example.com"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gchat := Normalize(tt.input, IdentifierTypeGChat)
+			email := Normalize(tt.input, IdentifierTypeEmail)
+			assert.Equal(t, email, gchat,
+				"gchat normalization must match email normalization")
+		})
+	}
+	assert.Equal(t, "john.doe@example.com",
+		Normalize("John.Doe@Example.COM", IdentifierTypeGChat))
+}
+
+// TestMapIdentifierTypeToContactMethodTypes_GChatReturnsNil is a regression
+// guard: IdentifierTypeGChat is intentionally absent from the mapping (§5.X.7
+// DEFERRED). The ListGChatIdentitiesForSync sqlc query is the single source of
+// truth for the (gchat, email) dual-source set; a mapping branch here would be
+// dead code and a second encoding that could drift. If someone adds a gchat
+// MatchOrCreate caller later, they must also revisit this rationale.
+func TestMapIdentifierTypeToContactMethodTypes_GChatReturnsNil(t *testing.T) {
+	result := MapIdentifierTypeToContactMethodTypes(IdentifierTypeGChat)
+	assert.Nil(t, result)
+}
+
 func TestNormalizeAnarlogHuman(t *testing.T) {
 	// Anarlog UUIDs are already canonical; Normalize trims whitespace
 	// and lowercases so case-mixed daemon emits compare equal to stored.

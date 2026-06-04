@@ -74,6 +74,18 @@ type EmailIdentity struct {
 	ContactID       uuid.UUID
 }
 
+// GChatIdentity is a (normalized address, contact, source_type) triple from
+// ListGChatIdentitiesForSync. Dual-source: SourceType is "gchat" or "email"
+// (GChat sender addresses ARE emails, so the provider considers both a
+// dedicated gchat method and any plain email method). Many-to-one: a shared
+// address maps to several contacts, one GChatIdentity per (address, contact,
+// type) row.
+type GChatIdentity struct {
+	ValueNormalized string
+	ContactID       uuid.UUID
+	SourceType      string
+}
+
 // CommsMessageRepository wraps the sqlc-generated comms_message queries.
 type CommsMessageRepository struct {
 	queries db.Querier
@@ -308,6 +320,30 @@ func (r *CommsMessageRepository) ListEmailIdentitiesForSync(ctx context.Context)
 	return out, nil
 }
 
+// ListGChatIdentitiesForSync returns every (normalized address, contact,
+// source_type) triple for non-deleted contacts whose contact_method type is
+// 'gchat' or 'email'. The mapping is many-to-one (shared address → multiple
+// contacts). The GChat provider builds its dual-source known-contact map from
+// this (PR 2). Rows with an invalid contact_id are skipped defensively.
+func (r *CommsMessageRepository) ListGChatIdentitiesForSync(ctx context.Context) ([]GChatIdentity, error) {
+	rows, err := r.queries.ListGChatIdentitiesForSync(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]GChatIdentity, 0, len(rows))
+	for _, row := range rows {
+		if !row.ContactID.Valid {
+			continue
+		}
+		out = append(out, GChatIdentity{
+			ValueNormalized: row.ValueNormalized,
+			ContactID:       uuid.UUID(row.ContactID.Bytes),
+			SourceType:      row.SourceType,
+		})
+	}
+	return out, nil
+}
+
 // HardDeleteByContact is a test-only helper that hard-deletes comms_message
 // rows by matched_contact_id. Used by integration tests for per-run cleanup;
 // soft-delete is unsafe because the upsert does not clear deleted_at on
@@ -404,4 +440,246 @@ func NewCommsStagingProcessor(repo *CommsMessageRepository) *CommsStagingProcess
 // MarkProcessedTx implements StagingProcessor.
 func (p *CommsStagingProcessor) MarkProcessedTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, interactionID uuid.UUID, sessionRef string) (int64, error) {
 	return p.repo.MarkProcessedTx(ctx, tx, messageIDs, interactionID, sessionRef)
+}
+
+// =====================================================================
+// Source-parameterized aggregation-engine methods. These back the GChat
+// (and future Telegram/Messages) MessageStore adapter, which pins a
+// `source` and erases the ForSource suffix. The comms_message table is
+// multi-source, so the source is an explicit param here (unlike the
+// single-source messages_message / telegram_message repos). Reuse the
+// conversions.go helpers (uuidToPgUUID, stringToPgText, etc.).
+// =====================================================================
+
+// ListUnprocessedContactIDsForSource returns distinct contact IDs with at
+// least one eligible (unprocessed AND unclaimed-or-stale) row for the source.
+func (r *CommsMessageRepository) ListUnprocessedContactIDsForSource(ctx context.Context, source string) ([]uuid.UUID, error) {
+	pgIDs, err := r.queries.ListUnprocessedCommsContactIDs(ctx, source)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]uuid.UUID, 0, len(pgIDs))
+	for _, pgID := range pgIDs {
+		if pgID.Valid {
+			ids = append(ids, uuid.UUID(pgID.Bytes))
+		}
+	}
+	return ids, nil
+}
+
+// ListUnprocessedByContactForSource returns eligible rows for a contact within
+// the source.
+func (r *CommsMessageRepository) ListUnprocessedByContactForSource(ctx context.Context, source string, contactID uuid.UUID) ([]CommsMessage, error) {
+	dbMsgs, err := r.queries.ListUnprocessedCommsByContact(ctx, db.ListUnprocessedCommsByContactParams{
+		Source:           source,
+		MatchedContactID: uuidToPgUUID(contactID),
+	})
+	if err != nil {
+		return nil, err
+	}
+	msgs := make([]CommsMessage, len(dbMsgs))
+	for i, m := range dbMsgs {
+		msgs[i] = convertDbCommsMessage(m)
+	}
+	return msgs, nil
+}
+
+// ListUnprocessedByContactAndChatForSource returns eligible rows for a
+// (contact, chat) pair within the source. chatID is stored in thread_id.
+func (r *CommsMessageRepository) ListUnprocessedByContactAndChatForSource(ctx context.Context, source string, contactID uuid.UUID, chatID string) ([]CommsMessage, error) {
+	dbMsgs, err := r.queries.ListUnprocessedCommsByContactAndChat(ctx, db.ListUnprocessedCommsByContactAndChatParams{
+		Source:           source,
+		MatchedContactID: uuidToPgUUID(contactID),
+		ThreadID:         pgtype.Text{String: chatID, Valid: true},
+	})
+	if err != nil {
+		return nil, err
+	}
+	msgs := make([]CommsMessage, len(dbMsgs))
+	for i, m := range dbMsgs {
+		msgs[i] = convertDbCommsMessage(m)
+	}
+	return msgs, nil
+}
+
+// ListUnprocessedChatsByContactForSource returns the distinct chat scopes
+// (thread_id values) for which the contact has at least one eligible row
+// within the source. Drives the messaging aggregator worker's per-chat loop.
+// thread_id is nullable on comms_message; NULL values are filtered out
+// defensively (chat sources always write it non-null).
+func (r *CommsMessageRepository) ListUnprocessedChatsByContactForSource(ctx context.Context, source string, contactID uuid.UUID) ([]string, error) {
+	rows, err := r.queries.ListUnprocessedCommsChatsByContact(ctx, db.ListUnprocessedCommsChatsByContactParams{
+		Source:           source,
+		MatchedContactID: uuidToPgUUID(contactID),
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(rows))
+	for _, t := range rows {
+		if t.Valid && t.String != "" {
+			out = append(out, t.String)
+		}
+	}
+	return out, nil
+}
+
+// GetMessageByReplyTargetForSource resolves the row a reply points at, scoped
+// to a (source, chat) pair, by the target message's own external_id. Returns
+// db.ErrNotFound on miss.
+func (r *CommsMessageRepository) GetMessageByReplyTargetForSource(ctx context.Context, source, chatID, replyTargetID string) (*CommsMessage, error) {
+	dbMsg, err := r.queries.GetCommsMessageByReplyTarget(ctx, db.GetCommsMessageByReplyTargetParams{
+		Source:        source,
+		ThreadID:      pgtype.Text{String: chatID, Valid: true},
+		ReplyTargetID: replyTargetID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	msg := convertDbCommsMessage(dbMsg)
+	return &msg, nil
+}
+
+// MarkMessagesProcessed sets processed_at + interaction_id + clears claim
+// columns. Non-tx variant; used by the engine's extend/promote/bridge paths
+// only (those paths do not claim rows or publish events). No source param: id =
+// ANY(...) is PK-scoped and the engine lists/processes per-source. Empty
+// messageIDs short-circuits to nil.
+func (r *CommsMessageRepository) MarkMessagesProcessed(ctx context.Context, messageIDs []uuid.UUID, interactionID uuid.UUID) error {
+	if len(messageIDs) == 0 {
+		return nil
+	}
+	pgIDs := make([]pgtype.UUID, len(messageIDs))
+	for i, id := range messageIDs {
+		pgIDs[i] = uuidToPgUUID(id)
+	}
+	_, err := r.queries.MarkCommsMessagesProcessed(ctx, db.MarkCommsMessagesProcessedParams{
+		InteractionID: uuidToPgUUID(interactionID),
+		MessageIds:    pgIDs,
+	})
+	return err
+}
+
+// MarkProcessedForSessionTx is the tx-bound, session-scoped mark-processed for
+// the chat create-path. The SQL predicate scopes the update to rows whose
+// claimed_session_ref matches sessionRef OR is NULL — defending against the
+// stale boundary-shift race while still working when the engine took the non-tx
+// publish path (NULL claimed_session_ref). Returns rows actually updated so the
+// recorder can detect the zero-rows boundary-shift case. Empty messageIDs
+// short-circuits to (0, nil).
+func (r *CommsMessageRepository) MarkProcessedForSessionTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, interactionID uuid.UUID, sessionRef string) (int64, error) {
+	if len(messageIDs) == 0 {
+		return 0, nil
+	}
+	pgIDs := make([]pgtype.UUID, len(messageIDs))
+	for i, id := range messageIDs {
+		pgIDs[i] = uuidToPgUUID(id)
+	}
+	return db.New(tx).MarkCommsMessagesProcessedForSession(ctx, db.MarkCommsMessagesProcessedForSessionParams{
+		InteractionID: uuidToPgUUID(interactionID),
+		MessageIds:    pgIDs,
+		SessionRef:    pgtype.Text{String: sessionRef, Valid: true},
+	})
+}
+
+// ClaimMessagesTx writes claim columns on rows still eligible. Used by the
+// aggregator engine's create-path tx. Returns the IDs actually claimed (via
+// RETURNING id); the caller compares against the requested set to detect
+// partial-claim races. Empty messageIDs short-circuits to nil.
+func (r *CommsMessageRepository) ClaimMessagesTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, sessionRef string) ([]uuid.UUID, error) {
+	if len(messageIDs) == 0 {
+		return nil, nil
+	}
+	pgIDs := make([]pgtype.UUID, len(messageIDs))
+	for i, id := range messageIDs {
+		pgIDs[i] = uuidToPgUUID(id)
+	}
+	claimed, err := db.New(tx).ClaimCommsMessages(ctx, db.ClaimCommsMessagesParams{
+		SessionRef: pgtype.Text{String: sessionRef, Valid: true},
+		MessageIds: pgIDs,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]uuid.UUID, 0, len(claimed))
+	for _, id := range claimed {
+		if id.Valid {
+			out = append(out, uuid.UUID(id.Bytes))
+		}
+	}
+	return out, nil
+}
+
+// ClearStaleClaimTx clears claim columns for rows still carrying the expected
+// stale session_ref. Used by the engine's defensive recovery branch when
+// FindEventBySource returned no row for the claimed session. Empty messageIDs
+// short-circuits to nil.
+func (r *CommsMessageRepository) ClearStaleClaimTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, expectedSessionRef string) error {
+	if len(messageIDs) == 0 {
+		return nil
+	}
+	pgIDs := make([]pgtype.UUID, len(messageIDs))
+	for i, id := range messageIDs {
+		pgIDs[i] = uuidToPgUUID(id)
+	}
+	return db.New(tx).ClearStaleCommsClaim(ctx, db.ClearStaleCommsClaimParams{
+		MessageIds:         pgIDs,
+		ExpectedSessionRef: pgtype.Text{String: expectedSessionRef, Valid: true},
+	})
+}
+
+// BackdateClaim is a test-only helper that ages the claim on the given rows
+// past the 5-minute TTL so a fresh aggregate pass can re-claim them.
+// Production code MUST NOT call this.
+func (r *CommsMessageRepository) BackdateClaim(ctx context.Context, messageIDs []uuid.UUID) error {
+	if len(messageIDs) == 0 {
+		return nil
+	}
+	pgIDs := make([]pgtype.UUID, len(messageIDs))
+	for i, id := range messageIDs {
+		pgIDs[i] = uuidToPgUUID(id)
+	}
+	return r.queries.BackdateCommsMessageClaim(ctx, pgIDs)
+}
+
+// CommsSourceContactLister adapts *CommsMessageRepository to the source-neutral
+// scheduler.UnprocessedContactLister interface, pinning a source. The sweeper's
+// interface is single-source (ListUnprocessedContactIDs(ctx)) but comms_message
+// is multi-source; this adapter binds the source so main.go references a built
+// type (single-file build convention) rather than an inline closure-struct.
+type CommsSourceContactLister struct {
+	repo   *CommsMessageRepository
+	source string
+}
+
+// NewCommsSourceContactLister builds the source-bound sweeper lister adapter.
+func NewCommsSourceContactLister(repo *CommsMessageRepository, source string) *CommsSourceContactLister {
+	return &CommsSourceContactLister{repo: repo, source: source}
+}
+
+// ListUnprocessedContactIDs implements scheduler.UnprocessedContactLister.
+func (l *CommsSourceContactLister) ListUnprocessedContactIDs(ctx context.Context) ([]uuid.UUID, error) {
+	return l.repo.ListUnprocessedContactIDsForSource(ctx, l.source)
+}
+
+// CommsSessionStagingProcessor adapts *CommsMessageRepository to the
+// source-neutral StagingProcessor interface for CHAT sources (gchat). It uses
+// the SESSION-scoped, claim-clearing MarkProcessedForSessionTx — unlike the
+// email CommsStagingProcessor, which uses the non-session MarkProcessedTx.
+// The chat create-path claims rows and publishes events; the recorder's
+// zero-rows-affected rollback depends on the session predicate, so reusing the
+// email processor here would break the boundary-shift defense.
+type CommsSessionStagingProcessor struct{ repo *CommsMessageRepository }
+
+// NewCommsSessionStagingProcessor builds the chat-source staging processor.
+func NewCommsSessionStagingProcessor(repo *CommsMessageRepository) *CommsSessionStagingProcessor {
+	return &CommsSessionStagingProcessor{repo: repo}
+}
+
+// MarkProcessedTx implements StagingProcessor (session-scoped).
+func (p *CommsSessionStagingProcessor) MarkProcessedTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, interactionID uuid.UUID, sessionRef string) (int64, error) {
+	return p.repo.MarkProcessedForSessionTx(ctx, tx, messageIDs, interactionID, sessionRef)
 }
