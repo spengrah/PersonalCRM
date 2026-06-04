@@ -414,19 +414,95 @@ type sweepCounters struct {
 // buildKnownMap loads the dual-source (gchat+email) known-contact map:
 // normalized address → []contactID.
 func (p *GChatSyncProvider) buildKnownMap(ctx context.Context) (map[string][]uuid.UUID, error) {
-	identities, err := p.commsRepo.ListGChatIdentitiesForSync(ctx)
+	return buildKnownMapFromIdentities(ctx, p.commsRepo)
+}
+
+// buildKnownMapFromIdentities builds the dual-source known-contact map
+// (normalized address → []contactID) from ListGChatIdentitiesForSync. Shared by
+// the steady-state sweep and the rematch handlers. The same (address, contact)
+// can appear under both a gchat and an email source_type row, so it dedups.
+func buildKnownMapFromIdentities(ctx context.Context, commsRepo *repository.CommsMessageRepository) (map[string][]uuid.UUID, error) {
+	identities, err := commsRepo.ListGChatIdentitiesForSync(ctx)
 	if err != nil {
 		return nil, err
 	}
 	knownMap := make(map[string][]uuid.UUID)
 	for _, id := range identities {
-		// Defensive dedup: the same (address, contact) can appear under both a
-		// gchat and an email source_type row.
 		if !containsUUID(knownMap[id.ValueNormalized], id.ContactID) {
 			knownMap[id.ValueNormalized] = append(knownMap[id.ValueNormalized], id.ContactID)
 		}
 	}
 	return knownMap, nil
+}
+
+// ScanIdentifier runs a one-shot, address-scoped historical scan for one
+// connected account: it iterates the account's spaces and upserts only the rows
+// that involve addrNormalized (inbound FROM the address, or outbound TO a space
+// where the address is a known co-member). knownMap is the FULL map (so
+// co-member/direction resolution matches the steady-state sweep); scanMap
+// restricts which rows actually get written to the just-added address. Re-running
+// is idempotent (the upsert dedup), so a River retry that re-scans an
+// already-succeeded account produces no duplicate rows. Returns the number of
+// rows upserted.
+func (p *GChatSyncProvider) ScanIdentifier(
+	ctx context.Context,
+	accountID, addrNormalized string,
+	knownMap map[string][]uuid.UUID,
+	meSet map[string]struct{},
+	afterCursor string,
+) (matched int, err error) {
+	contacts := knownMap[addrNormalized]
+	if len(contacts) == 0 {
+		// The address maps to no live contact (already removed, or never linked)
+		// → nothing to scan.
+		return 0, nil
+	}
+	scanMap := map[string][]uuid.UUID{addrNormalized: contacts}
+
+	fetcher, err := p.newFetcher(ctx, accountID)
+	if err != nil {
+		return 0, fmt.Errorf("build chat fetcher: %w", err)
+	}
+	spaces, err := paginateSpaces(ctx, fetcher)
+	if err != nil {
+		return 0, fmt.Errorf("list spaces: %w", err)
+	}
+
+	resolver := newCachedEmailResolver(fetcher, nil)
+	counters := &sweepCounters{}
+	for _, space := range spaces {
+		members, _, mErr := paginateMembers(ctx, fetcher, space.Name)
+		if mErr != nil {
+			return counters.matched, fmt.Errorf("list members: %w", mErr)
+		}
+		// Co-member resolution uses the FULL knownMap (so a space qualifies when
+		// the target address is one of its members); row-writing uses scanMap.
+		knownMembers := resolveKnownMembers(ctx, members, resolver, knownMap, meSet)
+		scanMembers := restrictKnownMembers(knownMembers, addrNormalized)
+		isDM := space.SpaceType == gchatSpaceTypeDM
+		if len(scanMembers) == 0 && !isDM {
+			// The target address is not a member of this space → it can still be
+			// the inbound SENDER, so we must still page messages. But to bound the
+			// scan we skip spaces where the address is neither a member nor (for a
+			// DM) the implicit peer — an inbound message from the address can only
+			// arrive in a space the address belongs to.
+			continue
+		}
+		if _, _, cErr := p.consumeContentWindow(ctx, fetcher, space, afterCursor, scanMembers, scanMap, meSet, resolver, accountID, counters); cErr != nil {
+			return counters.matched, fmt.Errorf("scan space: %w", cErr)
+		}
+	}
+	return counters.matched, nil
+}
+
+// restrictKnownMembers narrows a resolved known-member map to a single address
+// (for the rematch fan-out, so an outbound message only writes the just-added
+// contact's row, not every co-member's).
+func restrictKnownMembers(knownMembers map[string][]uuid.UUID, addr string) map[string][]uuid.UUID {
+	if contacts, ok := knownMembers[addr]; ok {
+		return map[string][]uuid.UUID{addr: contacts}
+	}
+	return map[string][]uuid.UUID{}
 }
 
 // consumeContentWindow pages a space's messages with create_time > cursor,

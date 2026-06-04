@@ -721,6 +721,15 @@ func run() int {
 	var todoistOAuthService *todoist.OAuthService
 	var externalContactRepo *repository.ExternalContactRepository
 
+	// GChat provider + enabled-state lister, hoisted to function scope so the
+	// LATE depth-0 gchatEngine block (below, OUTSIDE the EnableExternalSync block)
+	// can register the gchat rematch handlers. The provider is constructed but
+	// INTENTIONALLY NOT registered into providerRegistry (PR 2 is inert — the
+	// scheduler never runs it; enablement is PR 3). Both stay nil unless Google
+	// OAuth is configured AND external sync is enabled.
+	var gchatProvider *google.GChatSyncProvider
+	var gchatSyncStates google.GChatSyncStateLister
+
 	if cfg.Features.EnableExternalSync {
 		syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
 		identityRepo := repository.NewIdentityRepository(database.Queries)
@@ -855,6 +864,19 @@ func run() int {
 			} else {
 				logger.Warn().Msg("Gmail provider NOT registered: event-bus interaction mode=off (pubBus nil)")
 			}
+
+			// GChat provider (PR 2): constructed but NOT registered into
+			// providerRegistry — the scheduler must never run it (INERT). It is
+			// store-only + event-free, so unlike Gmail it does NOT gate on pubBus.
+			// gchatSyncStates = syncRepo is the enabled-state lister the gchat
+			// rematch handlers gate on (registered in the late depth-0 block).
+			gchatProvider = google.NewGChatSyncProvider(
+				googleOAuthService,
+				commsMessageRepo,
+				syncRepo,
+			)
+			gchatSyncStates = syncRepo
+			logger.Info().Msg("GChat sync provider constructed (inert: not registered into provider registry)")
 		}
 
 		// Register Todoist Cadence provider if OAuth is configured
@@ -1076,6 +1098,21 @@ func run() int {
 		database.Pool,
 		gchatEnqueuer,
 	)
+
+	// GChat rematch handlers (PR 2): registered when the provider was constructed
+	// (Google OAuth configured) AND external sync is enabled. They are provably
+	// inert until PR 3 enables a gchat sync state — each gates FIRST on
+	// ListEnabledSyncStates filtered to source='gchat' and returns (0, nil) when
+	// that set is empty (PR 2 enables zero gchat states). The email handler
+	// co-registers under "email" alongside Gmail/Calendar; its gchat-scoped gate
+	// means it no-ops while the others do their real work. The provider itself is
+	// NOT registered into providerRegistry (the scheduler never runs it).
+	if gchatProvider != nil && gchatSyncStates != nil {
+		rematchService.Register(google.NewGChatHandleRematchHandler(gchatProvider, gchatSyncStates, commsMessageRepo, gchatEngine))
+		rematchService.Register(google.NewGChatEmailRematchHandler(gchatProvider, gchatSyncStates, commsMessageRepo, gchatEngine))
+		logger.Info().Msg("GChat rematch handlers registered (inert until a gchat sync state is enabled)")
+	}
+
 	gchatReenqueuer := consumer.NewCommsAggregatorReenqueuer(
 		gchatEngine,
 		riverClient,
