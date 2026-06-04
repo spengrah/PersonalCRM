@@ -84,9 +84,10 @@ type CalendarEvent struct {
 }
 
 type CommsMessage struct {
-	ID                pgtype.UUID        `json:"id"`
-	Source            string             `json:"source"`
-	ExternalID        string             `json:"external_id"`
+	ID         pgtype.UUID `json:"id"`
+	Source     string      `json:"source"`
+	ExternalID string      `json:"external_id"`
+	// email: Gmail threadId; gchat/telegram/messages: space/chat scope resource name
 	ThreadID          pgtype.Text        `json:"thread_id"`
 	Subject           pgtype.Text        `json:"subject"`
 	Body              pgtype.Text        `json:"body"`

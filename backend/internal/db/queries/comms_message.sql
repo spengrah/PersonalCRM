@@ -112,16 +112,24 @@ WHERE matched_contact_id = @matched_contact_id
 ORDER BY sent_at DESC, id;
 
 -- name: MarkCommsMessagesProcessed :execrows
--- Link content rows to the aggregated interaction + set processed_at. Email
--- aggregation uses a deterministic source_ref and never claims rows, so there
--- is NO session-scope predicate here (unlike messages_message): the @session_ref
--- arg is part of the shared StagingProcessor signature but intentionally unused
--- in the email predicate. Idempotent: a replay finds rows already processed
--- (processed_at IS NOT NULL) and affects 0 rows, which the consumer treats as
--- the expected replay case.
+-- Link content rows to the aggregated interaction + set processed_at, AND
+-- clear claim columns. Two callers:
+--   - email path (CommsStagingProcessor, tx-bound, via the email consumer):
+--     email never claims rows, so the claim-clear is a provable NULL → NULL
+--     no-op for email rows. There is NO session-scope predicate here (unlike
+--     messages_message): the @session_ref arg is part of the shared
+--     StagingProcessor signature but intentionally unused in the email path.
+--   - chat non-tx engine path (commsMessageStoreAdapter.MarkProcessed, used by
+--     the engine's extend/promote/bridge paths): those paths do not claim rows
+--     or publish events, so the claim-clear keeps any leftover claim from a
+--     prior pass from re-blocking the row. Mirrors MarkMessagesMessagesProcessed.
+-- Idempotent: a replay finds rows already processed (processed_at IS NOT NULL)
+-- and affects 0 rows, which the consumer treats as the expected replay case.
 UPDATE comms_message
 SET processed_at = NOW(),
-    interaction_id = @interaction_id
+    interaction_id = @interaction_id,
+    claimed_at = NULL,
+    claimed_session_ref = NULL
 WHERE id = ANY(@message_ids::uuid[])
   AND processed_at IS NULL
   AND deleted_at IS NULL;
@@ -191,3 +199,153 @@ SET source_metadata = jsonb_set(
 WHERE id = @id
   AND deleted_at IS NULL
   AND NOT (source_metadata ? 'from_name');
+
+-- =====================================================================
+-- Source-parameterized aggregation-engine queries (GChat is the first
+-- chat source on comms_message; Telegram/Messages migrate onto these
+-- later). Every query takes @source so the shared comms_message table
+-- isolates rows by source. Predicate shapes mirror messages_message.sql
+-- verbatim; the only structural difference is the @source filter and the
+-- thread_id column (vs. messages' chat_guid). All scope deleted_at IS NULL.
+-- =====================================================================
+
+-- name: ListUnprocessedCommsContactIDs :many
+-- Claim-aware filter — same predicate shape as ListUnprocessedMessagesContactIDs,
+-- plus the @source scope. matched_contact_id is NOT NULL on comms_message;
+-- the IS NOT NULL guard is retained for parity/safety (harmless).
+SELECT DISTINCT matched_contact_id
+FROM comms_message
+WHERE source = @source
+  AND matched_contact_id IS NOT NULL
+  AND processed_at IS NULL
+  AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')
+  AND deleted_at IS NULL;
+
+-- name: ListUnprocessedCommsByContact :many
+-- Eligible rows for a contact within one source. Orders by thread_id then
+-- sent_at — thread_id carries the chat scope, mirroring messages' ORDER BY
+-- chat_guid, sent_at.
+SELECT * FROM comms_message
+WHERE source = @source
+  AND matched_contact_id = @matched_contact_id
+  AND processed_at IS NULL
+  AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')
+  AND deleted_at IS NULL
+ORDER BY thread_id, sent_at;
+
+-- name: ListUnprocessedCommsByContactAndChat :many
+-- Eligible rows for a (contact, thread/chat) pair within one source.
+-- @thread_id is the chat scope (the GChat space resource name).
+SELECT * FROM comms_message
+WHERE source = @source
+  AND matched_contact_id = @matched_contact_id
+  AND thread_id = @thread_id
+  AND processed_at IS NULL
+  AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')
+  AND deleted_at IS NULL
+ORDER BY sent_at;
+
+-- name: ListUnprocessedCommsChatsByContact :many
+-- Distinct thread_id (chat scope) values for a contact with at least one
+-- eligible row within one source. Backs the PerSourceChatListerRegistry entry
+-- (the worker's per-chat loop), mirroring ListUnprocessedMessagesChatsByContact.
+-- NOT a MessageStore interface method. thread_id is nullable on comms_message;
+-- the Go wrapper filters NULLs defensively (chat sources always write it
+-- non-null).
+SELECT DISTINCT thread_id
+FROM comms_message
+WHERE source = @source
+  AND matched_contact_id = @matched_contact_id
+  AND processed_at IS NULL
+  AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')
+  AND deleted_at IS NULL
+ORDER BY thread_id ASC;
+
+-- name: GetCommsMessageByReplyTarget :one
+-- Resolves the row a reply points at. comms_message has NO reply_to column;
+-- the reply target is itself a stored message, looked up by its own external_id
+-- within the same (source, contact, thread/chat) scope. Used by the
+-- aggregator's explicit-reply-bridge path. Scoping to matched_contact_id is
+-- load-bearing: comms_message is per-contact (a shared address fans out to one
+-- row per matched contact), so an unscoped lookup could return a DIFFERENT
+-- contact's row, whose interaction_id points at that other contact's
+-- interaction — which the bridge would then wrongly promote to mutual.
+-- Intentionally does NOT filter processed_at — a reply can target an
+-- already-processed message (the whole point of bridging).
+SELECT * FROM comms_message
+WHERE source = @source
+  AND matched_contact_id = @matched_contact_id
+  AND thread_id = @thread_id
+  AND external_id = @reply_target_id
+  AND deleted_at IS NULL;
+
+-- name: MarkCommsMessagesProcessedForSession :execrows
+-- Tx-bound, session-scoped variant for the chat create-path. Mirror of
+-- MarkMessagesMessagesProcessedForSession — used by the InteractionRecorder
+-- consumer (via CommsSessionStagingProcessor) when processing a create-path
+-- event. The (claimed_session_ref = @session_ref OR IS NULL) predicate is the
+-- boundary-shift defense the recorder's zero-rows-affected rollback depends on:
+-- it rejects rows claimed for a DIFFERENT session while accepting rows the
+-- non-tx publish path left unclaimed. This is SEPARATE from the email
+-- MarkCommsMessagesProcessed (which has no session predicate — email never
+-- claims, so scoping by session would wrongly reject email rows).
+--
+-- Returns rows affected. The consumer distinguishes three cases:
+--   - affected == len(message_ids): happy path.
+--   - affected == 0 on a fresh write: predicate filtered everything out
+--     (boundary-shift race). Caller MUST roll back the tx.
+--   - affected == 0 on a replay: expected; rows already linked on the
+--     original attempt.
+UPDATE comms_message
+SET processed_at = NOW(),
+    interaction_id = @interaction_id,
+    claimed_at = NULL,
+    claimed_session_ref = NULL
+WHERE id = ANY(@message_ids::uuid[])
+  AND (claimed_session_ref = @session_ref OR claimed_session_ref IS NULL)
+  AND processed_at IS NULL
+  AND deleted_at IS NULL;
+
+-- name: ClaimCommsMessages :many
+-- Race-safe conditional claim — mirror of ClaimMessagesMessages. No @source
+-- filter needed: id is the PK and globally unique; the caller already scoped to
+-- source when it listed the rows. Returns the IDs actually claimed so the engine
+-- can detect partial claims.
+UPDATE comms_message
+SET claimed_at = NOW(),
+    claimed_session_ref = @session_ref
+WHERE id = ANY(@message_ids::uuid[])
+  AND processed_at IS NULL
+  AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')
+  AND deleted_at IS NULL
+RETURNING id;
+
+-- name: ClearStaleCommsClaim :exec
+-- Defensive recovery branch: clears claim columns for rows still carrying the
+-- expected stale session_ref. Mirror of ClearMessagesMessageStaleClaim. Used
+-- when the engine detected a recovery pass but FindEventBySource returned no
+-- row.
+UPDATE comms_message
+SET claimed_at = NULL,
+    claimed_session_ref = NULL
+WHERE id = ANY(@message_ids::uuid[])
+  AND claimed_session_ref = @expected_session_ref
+  AND processed_at IS NULL
+  AND deleted_at IS NULL;
+
+-- name: BackdateCommsMessageClaim :exec
+-- Test-only helper: ages the claim past the 5-minute TTL so a fresh
+-- aggregate pass can re-claim a stale claim. Mirror of
+-- BackdateMessagesMessageClaim. Production code MUST NOT call this.
+UPDATE comms_message
+SET claimed_at = NOW() - INTERVAL '10 minutes'
+WHERE id = ANY(@message_ids::uuid[]);
+
+-- name: SoftDeleteCommsMessageByID :exec
+-- Test-only helper: soft-deletes a single comms_message row by id, simulating
+-- the upstream delete a chat provider would observe. Used by the delete-no-op
+-- aggregation test. There is no production chat delete path yet.
+UPDATE comms_message
+SET deleted_at = NOW()
+WHERE id = @id
+  AND deleted_at IS NULL;

@@ -985,3 +985,33 @@ func TestHandleEvent_RecordedEventSourceIDIsInteractionID(t *testing.T) {
 	require.NotNil(t, decoded.SourceRef)
 	require.Equal(t, "gcal-evt-sid", *decoded.SourceRef)
 }
+
+// TestMakeMessageRequest_SourceAllowlist pins the message.* create-path source
+// allowlist: telegram, messages, and gchat are accepted (each has an
+// aggregation engine that publishes KindMessageReceived/KindMessageSent), while
+// an arbitrary source is rejected before the DB write attempts.
+func TestMakeMessageRequest_SourceAllowlist(t *testing.T) {
+	cid := uuid.New()
+	at := time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)
+
+	for _, src := range []string{
+		repository.InteractionSourceTelegram,
+		repository.InteractionSourceMessages,
+		repository.InteractionSourceGChat,
+	} {
+		t.Run("accepts "+src, func(t *testing.T) {
+			req, err := makeMessageRequest(src, &cid, "ext-1", at, nil, repository.InteractionDirectionInbound)
+			require.NoError(t, err)
+			assert.Equal(t, src, req.Source)
+			assert.Equal(t, cid, req.ContactID)
+			require.NotNil(t, req.SourceRef)
+			assert.Equal(t, "ext-1", *req.SourceRef)
+		})
+	}
+
+	t.Run("rejects unknown source", func(t *testing.T) {
+		_, err := makeMessageRequest("whatsapp", &cid, "ext-1", at, nil, repository.InteractionDirectionInbound)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unsupported message source")
+	})
+}

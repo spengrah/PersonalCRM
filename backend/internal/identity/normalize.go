@@ -19,6 +19,12 @@ const (
 	IdentifierTypeIMessageEmail IdentifierType = "imessage_email"
 	IdentifierTypeIMessagePhone IdentifierType = "imessage_phone"
 	IdentifierTypeWhatsApp      IdentifierType = "whatsapp"
+	// IdentifierTypeGChat is the Google Chat sender address. Chat sender
+	// addresses ARE emails, so Normalize delegates to normalizeEmail
+	// (lowercase + trim) — identical to the contact_method trigger's
+	// handling of gchat values (migrations/021/022), so there is no
+	// Go-vs-trigger drift.
+	IdentifierTypeGChat IdentifierType = "gchat"
 	// IdentifierTypeAnarlogHuman is the anarlog-internal human UUID
 	// (UUID v4 string) emitted by the Mac daemon's anarlog_humans
 	// plugin. Used as the lookup key for resolving
@@ -38,6 +44,7 @@ const (
 	ContactMethodTypePhone    ContactMethodType = "phone"
 	ContactMethodTypeTelegram ContactMethodType = "telegram"
 	ContactMethodTypeWhatsApp ContactMethodType = "whatsapp"
+	ContactMethodTypeGChat    ContactMethodType = "gchat"
 )
 
 // nonDigitRegex matches any non-digit character
@@ -52,7 +59,7 @@ var nonDigitRegex = regexp.MustCompile(`\D`)
 //     lowercasing keeps lookups deterministic against the daemon's emit form)
 func Normalize(raw string, idType IdentifierType) string {
 	switch idType {
-	case IdentifierTypeEmail, IdentifierTypeIMessageEmail:
+	case IdentifierTypeEmail, IdentifierTypeIMessageEmail, IdentifierTypeGChat:
 		return normalizeEmail(raw)
 	case IdentifierTypePhone, IdentifierTypeIMessagePhone, IdentifierTypeWhatsApp:
 		return normalizePhone(raw)
@@ -101,6 +108,13 @@ func MapIdentifierTypeToContactMethodTypes(idType IdentifierType) []ContactMetho
 		return []ContactMethodType{ContactMethodTypePhone}
 	case IdentifierTypeWhatsApp:
 		return []ContactMethodType{ContactMethodTypeWhatsApp, ContactMethodTypePhone}
+	// IdentifierTypeGChat is intentionally absent: no caller invokes
+	// MatchOrCreate(IdentifierTypeGChat, ...) in the MVP, so a branch here
+	// would be dead code and a second encoding of the (gchat, email)
+	// dual-source set that could drift from the ListGChatIdentitiesForSync
+	// sqlc query — that query is the single source of truth for the set.
+	// If a future caller emerges, the WhatsApp branch above is the
+	// precedent shape (gchat → [gchat, email]).
 	default:
 		return nil
 	}

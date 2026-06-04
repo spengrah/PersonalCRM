@@ -84,7 +84,7 @@ func TestInteractionSourceCheck_AgreesWithDescriptorAndConstants(t *testing.T) {
 		liveSet[m[1]] = struct{}{}
 	}
 
-	// --- Assert live set == all 8 InteractionSource* constants (both
+	// --- Assert live set == all 9 InteractionSource* constants (both
 	// directions). ---
 	allConstants := []string{
 		repository.InteractionSourceManual,
@@ -95,6 +95,7 @@ func TestInteractionSourceCheck_AgreesWithDescriptorAndConstants(t *testing.T) {
 		repository.InteractionSourceAnarlogSessions,
 		repository.InteractionSourcePhoneCalls,
 		repository.InteractionSourceEmail,
+		repository.InteractionSourceGChat,
 	}
 	constantSet := make(map[string]struct{}, len(allConstants))
 	for _, c := range allConstants {

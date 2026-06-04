@@ -283,7 +283,7 @@ func (e *Engine) tryExplicitReplyBridge(ctx context.Context, contactID uuid.UUID
 		if msg.ReplyTargetID == nil {
 			continue
 		}
-		referenced, ok, err := e.store.GetMessageByReplyTarget(ctx, sess.chatID, *msg.ReplyTargetID)
+		referenced, ok, err := e.store.GetMessageByReplyTarget(ctx, contactID, sess.chatID, *msg.ReplyTargetID)
 		if err != nil || !ok {
 			continue
 		}
@@ -292,6 +292,16 @@ func (e *Engine) tryExplicitReplyBridge(ctx context.Context, contactID uuid.UUID
 		}
 		existing, err := e.finder.GetInteraction(ctx, *referenced.InteractionID)
 		if err != nil || existing.Source != source || existing.Direction != repository.InteractionDirectionOutbound {
+			continue
+		}
+		// Guard against cross-contact bridging: the referenced interaction
+		// MUST belong to the contact we are aggregating for. For per-contact
+		// content stores (comms_message), a shared/fanned-out reply target
+		// can resolve to a different contact's row, whose InteractionID
+		// points at that other contact's interaction. Promoting it here would
+		// mark the wrong contact mutual. Source-neutral defense for every
+		// MessageStore.
+		if existing.ContactID != contactID {
 			continue
 		}
 		if err := e.promoter.PromoteInteractionToMutual(ctx, existing.ID, contactID, sess.lastSentAt()); err != nil {

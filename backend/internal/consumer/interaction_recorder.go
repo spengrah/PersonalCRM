@@ -512,18 +512,26 @@ func extractMessageIDs(env *events.Envelope) ([]uuid.UUID, error) {
 	return nil, nil
 }
 
+// messageInteractionSources is the allowlist of sources permitted to flow
+// through the message.* create path. It is defense-in-depth — the CHECK
+// constraint on interaction.source is the durable contract, but this catches a
+// bad publisher before the DB write attempts. Each chat/messaging source whose
+// aggregation engine publishes KindMessageReceived/KindMessageSent must appear
+// here (telegram, messages, gchat).
+var messageInteractionSources = map[string]struct{}{
+	repository.InteractionSourceTelegram: {},
+	repository.InteractionSourceMessages: {},
+	repository.InteractionSourceGChat:    {},
+}
+
 // makeMessageRequest builds the RecordInteractionRequest for message.*
 // kinds. Shared by message.received and message.sent extract branches.
 // `source` is propagated from env.Source so a `source="messages"` event
 // produces a `source="messages"` interaction row (P0 invariant: the
-// message event's source name flows end-to-end). Allowlists
-// {telegram, messages} for defense-in-depth — the CHECK constraint on
-// interaction.source is the durable contract, but this catches a bad
-// publisher before the DB write attempts.
+// message event's source name flows end-to-end).
 func makeMessageRequest(source string, contactID *uuid.UUID, externalMessageID string, messageAt time.Time, description *string, direction string) (repository.RecordInteractionRequest, error) {
-	if source != repository.InteractionSourceTelegram && source != repository.InteractionSourceMessages {
-		return repository.RecordInteractionRequest{}, fmt.Errorf("unsupported message source %q (allowed: %s, %s)",
-			source, repository.InteractionSourceTelegram, repository.InteractionSourceMessages)
+	if _, ok := messageInteractionSources[source]; !ok {
+		return repository.RecordInteractionRequest{}, fmt.Errorf("unsupported message source %q (allowed: telegram, messages, gchat)", source)
 	}
 	var cid uuid.UUID
 	if contactID != nil {

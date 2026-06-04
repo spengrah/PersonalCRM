@@ -199,7 +199,10 @@ func (a *telegramMessageStoreAdapter) ListUnprocessedByContactAndChat(ctx contex
 	return out, nil
 }
 
-func (a *telegramMessageStoreAdapter) GetMessageByReplyTarget(ctx context.Context, chatID, replyTargetID string) (aggregation.Message, bool, error) {
+// GetMessageByReplyTarget ignores contactID: telegram_message rows are keyed
+// by a globally-unique (chat_id, message_id), so the lookup is already
+// contact-correct (one row per message, not per matched contact).
+func (a *telegramMessageStoreAdapter) GetMessageByReplyTarget(ctx context.Context, _ uuid.UUID, chatID, replyTargetID string) (aggregation.Message, bool, error) {
 	parsedChat, err := strconv.ParseInt(chatID, 10, 64)
 	if err != nil {
 		log.Warn().Err(err).Str("chat_id", chatID).Msg("telegram: reply-target chat_id is not int64-parseable; treating as not-found")

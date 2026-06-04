@@ -11,6 +11,20 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const BackdateCommsMessageClaim = `-- name: BackdateCommsMessageClaim :exec
+UPDATE comms_message
+SET claimed_at = NOW() - INTERVAL '10 minutes'
+WHERE id = ANY($1::uuid[])
+`
+
+// Test-only helper: ages the claim past the 5-minute TTL so a fresh
+// aggregate pass can re-claim a stale claim. Mirror of
+// BackdateMessagesMessageClaim. Production code MUST NOT call this.
+func (q *Queries) BackdateCommsMessageClaim(ctx context.Context, messageIds []pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, BackdateCommsMessageClaim, messageIds)
+	return err
+}
+
 const BackfillCommsMessageParticipantNames = `-- name: BackfillCommsMessageParticipantNames :execrows
 UPDATE comms_message
 SET source_metadata = jsonb_set(
@@ -70,6 +84,70 @@ func (q *Queries) BackfillCommsMessageParticipantNames(ctx context.Context, arg 
 	return result.RowsAffected(), nil
 }
 
+const ClaimCommsMessages = `-- name: ClaimCommsMessages :many
+UPDATE comms_message
+SET claimed_at = NOW(),
+    claimed_session_ref = $1
+WHERE id = ANY($2::uuid[])
+  AND processed_at IS NULL
+  AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')
+  AND deleted_at IS NULL
+RETURNING id
+`
+
+type ClaimCommsMessagesParams struct {
+	SessionRef pgtype.Text   `json:"session_ref"`
+	MessageIds []pgtype.UUID `json:"message_ids"`
+}
+
+// Race-safe conditional claim — mirror of ClaimMessagesMessages. No @source
+// filter needed: id is the PK and globally unique; the caller already scoped to
+// source when it listed the rows. Returns the IDs actually claimed so the engine
+// can detect partial claims.
+func (q *Queries) ClaimCommsMessages(ctx context.Context, arg ClaimCommsMessagesParams) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, ClaimCommsMessages, arg.SessionRef, arg.MessageIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ClearStaleCommsClaim = `-- name: ClearStaleCommsClaim :exec
+UPDATE comms_message
+SET claimed_at = NULL,
+    claimed_session_ref = NULL
+WHERE id = ANY($1::uuid[])
+  AND claimed_session_ref = $2
+  AND processed_at IS NULL
+  AND deleted_at IS NULL
+`
+
+type ClearStaleCommsClaimParams struct {
+	MessageIds         []pgtype.UUID `json:"message_ids"`
+	ExpectedSessionRef pgtype.Text   `json:"expected_session_ref"`
+}
+
+// Defensive recovery branch: clears claim columns for rows still carrying the
+// expected stale session_ref. Mirror of ClearMessagesMessageStaleClaim. Used
+// when the engine detected a recovery pass but FindEventBySource returned no
+// row.
+func (q *Queries) ClearStaleCommsClaim(ctx context.Context, arg ClearStaleCommsClaimParams) error {
+	_, err := q.db.Exec(ctx, ClearStaleCommsClaim, arg.MessageIds, arg.ExpectedSessionRef)
+	return err
+}
+
 const GetCommsMessage = `-- name: GetCommsMessage :one
 SELECT id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at FROM comms_message
 WHERE source = $1
@@ -122,6 +200,65 @@ WHERE id = $1
 
 func (q *Queries) GetCommsMessageByID(ctx context.Context, id pgtype.UUID) (*CommsMessage, error) {
 	row := q.db.QueryRow(ctx, GetCommsMessageByID, id)
+	var i CommsMessage
+	err := row.Scan(
+		&i.ID,
+		&i.Source,
+		&i.ExternalID,
+		&i.ThreadID,
+		&i.Subject,
+		&i.Body,
+		&i.Snippet,
+		&i.PeerHandle,
+		&i.PeerNormalized,
+		&i.Direction,
+		&i.SentAt,
+		&i.AccountID,
+		&i.SourceMetadata,
+		&i.MatchedContactID,
+		&i.InteractionID,
+		&i.ClaimedAt,
+		&i.ClaimedSessionRef,
+		&i.ProcessedAt,
+		&i.DeletedAt,
+		&i.CreatedAt,
+	)
+	return &i, err
+}
+
+const GetCommsMessageByReplyTarget = `-- name: GetCommsMessageByReplyTarget :one
+SELECT id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at FROM comms_message
+WHERE source = $1
+  AND matched_contact_id = $2
+  AND thread_id = $3
+  AND external_id = $4
+  AND deleted_at IS NULL
+`
+
+type GetCommsMessageByReplyTargetParams struct {
+	Source           string      `json:"source"`
+	MatchedContactID pgtype.UUID `json:"matched_contact_id"`
+	ThreadID         pgtype.Text `json:"thread_id"`
+	ReplyTargetID    string      `json:"reply_target_id"`
+}
+
+// Resolves the row a reply points at. comms_message has NO reply_to column;
+// the reply target is itself a stored message, looked up by its own external_id
+// within the same (source, contact, thread/chat) scope. Used by the
+// aggregator's explicit-reply-bridge path. Scoping to matched_contact_id is
+// load-bearing: comms_message is per-contact (a shared address fans out to one
+// row per matched contact), so an unscoped lookup could return a DIFFERENT
+// contact's row, whose interaction_id points at that other contact's
+// interaction — which the bridge would then wrongly promote to mutual.
+// Intentionally does NOT filter processed_at — a reply can target an
+// already-processed message (the whole point of bridging).
+func (q *Queries) GetCommsMessageByReplyTarget(ctx context.Context, arg GetCommsMessageByReplyTargetParams) (*CommsMessage, error) {
+	row := q.db.QueryRow(ctx, GetCommsMessageByReplyTarget,
+		arg.Source,
+		arg.MatchedContactID,
+		arg.ThreadID,
+		arg.ReplyTargetID,
+	)
 	var i CommsMessage
 	err := row.Scan(
 		&i.ID,
@@ -266,10 +403,215 @@ func (q *Queries) ListCommsMessagesMissingParticipantNames(ctx context.Context, 
 	return items, nil
 }
 
+const ListUnprocessedCommsByContact = `-- name: ListUnprocessedCommsByContact :many
+SELECT id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at FROM comms_message
+WHERE source = $1
+  AND matched_contact_id = $2
+  AND processed_at IS NULL
+  AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')
+  AND deleted_at IS NULL
+ORDER BY thread_id, sent_at
+`
+
+type ListUnprocessedCommsByContactParams struct {
+	Source           string      `json:"source"`
+	MatchedContactID pgtype.UUID `json:"matched_contact_id"`
+}
+
+// Eligible rows for a contact within one source. Orders by thread_id then
+// sent_at — thread_id carries the chat scope, mirroring messages' ORDER BY
+// chat_guid, sent_at.
+func (q *Queries) ListUnprocessedCommsByContact(ctx context.Context, arg ListUnprocessedCommsByContactParams) ([]*CommsMessage, error) {
+	rows, err := q.db.Query(ctx, ListUnprocessedCommsByContact, arg.Source, arg.MatchedContactID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*CommsMessage{}
+	for rows.Next() {
+		var i CommsMessage
+		if err := rows.Scan(
+			&i.ID,
+			&i.Source,
+			&i.ExternalID,
+			&i.ThreadID,
+			&i.Subject,
+			&i.Body,
+			&i.Snippet,
+			&i.PeerHandle,
+			&i.PeerNormalized,
+			&i.Direction,
+			&i.SentAt,
+			&i.AccountID,
+			&i.SourceMetadata,
+			&i.MatchedContactID,
+			&i.InteractionID,
+			&i.ClaimedAt,
+			&i.ClaimedSessionRef,
+			&i.ProcessedAt,
+			&i.DeletedAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListUnprocessedCommsByContactAndChat = `-- name: ListUnprocessedCommsByContactAndChat :many
+SELECT id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at FROM comms_message
+WHERE source = $1
+  AND matched_contact_id = $2
+  AND thread_id = $3
+  AND processed_at IS NULL
+  AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')
+  AND deleted_at IS NULL
+ORDER BY sent_at
+`
+
+type ListUnprocessedCommsByContactAndChatParams struct {
+	Source           string      `json:"source"`
+	MatchedContactID pgtype.UUID `json:"matched_contact_id"`
+	ThreadID         pgtype.Text `json:"thread_id"`
+}
+
+// Eligible rows for a (contact, thread/chat) pair within one source.
+// @thread_id is the chat scope (the GChat space resource name).
+func (q *Queries) ListUnprocessedCommsByContactAndChat(ctx context.Context, arg ListUnprocessedCommsByContactAndChatParams) ([]*CommsMessage, error) {
+	rows, err := q.db.Query(ctx, ListUnprocessedCommsByContactAndChat, arg.Source, arg.MatchedContactID, arg.ThreadID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*CommsMessage{}
+	for rows.Next() {
+		var i CommsMessage
+		if err := rows.Scan(
+			&i.ID,
+			&i.Source,
+			&i.ExternalID,
+			&i.ThreadID,
+			&i.Subject,
+			&i.Body,
+			&i.Snippet,
+			&i.PeerHandle,
+			&i.PeerNormalized,
+			&i.Direction,
+			&i.SentAt,
+			&i.AccountID,
+			&i.SourceMetadata,
+			&i.MatchedContactID,
+			&i.InteractionID,
+			&i.ClaimedAt,
+			&i.ClaimedSessionRef,
+			&i.ProcessedAt,
+			&i.DeletedAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListUnprocessedCommsChatsByContact = `-- name: ListUnprocessedCommsChatsByContact :many
+SELECT DISTINCT thread_id
+FROM comms_message
+WHERE source = $1
+  AND matched_contact_id = $2
+  AND processed_at IS NULL
+  AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')
+  AND deleted_at IS NULL
+ORDER BY thread_id ASC
+`
+
+type ListUnprocessedCommsChatsByContactParams struct {
+	Source           string      `json:"source"`
+	MatchedContactID pgtype.UUID `json:"matched_contact_id"`
+}
+
+// Distinct thread_id (chat scope) values for a contact with at least one
+// eligible row within one source. Backs the PerSourceChatListerRegistry entry
+// (the worker's per-chat loop), mirroring ListUnprocessedMessagesChatsByContact.
+// NOT a MessageStore interface method. thread_id is nullable on comms_message;
+// the Go wrapper filters NULLs defensively (chat sources always write it
+// non-null).
+func (q *Queries) ListUnprocessedCommsChatsByContact(ctx context.Context, arg ListUnprocessedCommsChatsByContactParams) ([]pgtype.Text, error) {
+	rows, err := q.db.Query(ctx, ListUnprocessedCommsChatsByContact, arg.Source, arg.MatchedContactID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.Text{}
+	for rows.Next() {
+		var thread_id pgtype.Text
+		if err := rows.Scan(&thread_id); err != nil {
+			return nil, err
+		}
+		items = append(items, thread_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListUnprocessedCommsContactIDs = `-- name: ListUnprocessedCommsContactIDs :many
+
+SELECT DISTINCT matched_contact_id
+FROM comms_message
+WHERE source = $1
+  AND matched_contact_id IS NOT NULL
+  AND processed_at IS NULL
+  AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')
+  AND deleted_at IS NULL
+`
+
+// =====================================================================
+// Source-parameterized aggregation-engine queries (GChat is the first
+// chat source on comms_message; Telegram/Messages migrate onto these
+// later). Every query takes @source so the shared comms_message table
+// isolates rows by source. Predicate shapes mirror messages_message.sql
+// verbatim; the only structural difference is the @source filter and the
+// thread_id column (vs. messages' chat_guid). All scope deleted_at IS NULL.
+// =====================================================================
+// Claim-aware filter — same predicate shape as ListUnprocessedMessagesContactIDs,
+// plus the @source scope. matched_contact_id is NOT NULL on comms_message;
+// the IS NOT NULL guard is retained for parity/safety (harmless).
+func (q *Queries) ListUnprocessedCommsContactIDs(ctx context.Context, source string) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, ListUnprocessedCommsContactIDs, source)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var matched_contact_id pgtype.UUID
+		if err := rows.Scan(&matched_contact_id); err != nil {
+			return nil, err
+		}
+		items = append(items, matched_contact_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const MarkCommsMessagesProcessed = `-- name: MarkCommsMessagesProcessed :execrows
 UPDATE comms_message
 SET processed_at = NOW(),
-    interaction_id = $1
+    interaction_id = $1,
+    claimed_at = NULL,
+    claimed_session_ref = NULL
 WHERE id = ANY($2::uuid[])
   AND processed_at IS NULL
   AND deleted_at IS NULL
@@ -280,19 +622,83 @@ type MarkCommsMessagesProcessedParams struct {
 	MessageIds    []pgtype.UUID `json:"message_ids"`
 }
 
-// Link content rows to the aggregated interaction + set processed_at. Email
-// aggregation uses a deterministic source_ref and never claims rows, so there
-// is NO session-scope predicate here (unlike messages_message): the @session_ref
-// arg is part of the shared StagingProcessor signature but intentionally unused
-// in the email predicate. Idempotent: a replay finds rows already processed
-// (processed_at IS NOT NULL) and affects 0 rows, which the consumer treats as
-// the expected replay case.
+// Link content rows to the aggregated interaction + set processed_at, AND
+// clear claim columns. Two callers:
+//   - email path (CommsStagingProcessor, tx-bound, via the email consumer):
+//     email never claims rows, so the claim-clear is a provable NULL → NULL
+//     no-op for email rows. There is NO session-scope predicate here (unlike
+//     messages_message): the @session_ref arg is part of the shared
+//     StagingProcessor signature but intentionally unused in the email path.
+//   - chat non-tx engine path (commsMessageStoreAdapter.MarkProcessed, used by
+//     the engine's extend/promote/bridge paths): those paths do not claim rows
+//     or publish events, so the claim-clear keeps any leftover claim from a
+//     prior pass from re-blocking the row. Mirrors MarkMessagesMessagesProcessed.
+//
+// Idempotent: a replay finds rows already processed (processed_at IS NOT NULL)
+// and affects 0 rows, which the consumer treats as the expected replay case.
 func (q *Queries) MarkCommsMessagesProcessed(ctx context.Context, arg MarkCommsMessagesProcessedParams) (int64, error) {
 	result, err := q.db.Exec(ctx, MarkCommsMessagesProcessed, arg.InteractionID, arg.MessageIds)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const MarkCommsMessagesProcessedForSession = `-- name: MarkCommsMessagesProcessedForSession :execrows
+UPDATE comms_message
+SET processed_at = NOW(),
+    interaction_id = $1,
+    claimed_at = NULL,
+    claimed_session_ref = NULL
+WHERE id = ANY($2::uuid[])
+  AND (claimed_session_ref = $3 OR claimed_session_ref IS NULL)
+  AND processed_at IS NULL
+  AND deleted_at IS NULL
+`
+
+type MarkCommsMessagesProcessedForSessionParams struct {
+	InteractionID pgtype.UUID   `json:"interaction_id"`
+	MessageIds    []pgtype.UUID `json:"message_ids"`
+	SessionRef    pgtype.Text   `json:"session_ref"`
+}
+
+// Tx-bound, session-scoped variant for the chat create-path. Mirror of
+// MarkMessagesMessagesProcessedForSession — used by the InteractionRecorder
+// consumer (via CommsSessionStagingProcessor) when processing a create-path
+// event. The (claimed_session_ref = @session_ref OR IS NULL) predicate is the
+// boundary-shift defense the recorder's zero-rows-affected rollback depends on:
+// it rejects rows claimed for a DIFFERENT session while accepting rows the
+// non-tx publish path left unclaimed. This is SEPARATE from the email
+// MarkCommsMessagesProcessed (which has no session predicate — email never
+// claims, so scoping by session would wrongly reject email rows).
+//
+// Returns rows affected. The consumer distinguishes three cases:
+//   - affected == len(message_ids): happy path.
+//   - affected == 0 on a fresh write: predicate filtered everything out
+//     (boundary-shift race). Caller MUST roll back the tx.
+//   - affected == 0 on a replay: expected; rows already linked on the
+//     original attempt.
+func (q *Queries) MarkCommsMessagesProcessedForSession(ctx context.Context, arg MarkCommsMessagesProcessedForSessionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, MarkCommsMessagesProcessedForSession, arg.InteractionID, arg.MessageIds, arg.SessionRef)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const SoftDeleteCommsMessageByID = `-- name: SoftDeleteCommsMessageByID :exec
+UPDATE comms_message
+SET deleted_at = NOW()
+WHERE id = $1
+  AND deleted_at IS NULL
+`
+
+// Test-only helper: soft-deletes a single comms_message row by id, simulating
+// the upstream delete a chat provider would observe. Used by the delete-no-op
+// aggregation test. There is no production chat delete path yet.
+func (q *Queries) SoftDeleteCommsMessageByID(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, SoftDeleteCommsMessageByID, id)
+	return err
 }
 
 const UpsertCommsMessage = `-- name: UpsertCommsMessage :one

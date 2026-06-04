@@ -373,6 +373,11 @@ func run() int {
 	// InteractionRecorder wiring so the consumer can mark messages
 	// processed in the same tx as the interaction insert).
 	telegramMessageRepo := repository.NewTelegramMessageRepository(database.Queries)
+	// Comms message repo (shared cross-source content store). Hoisted here
+	// so the staging registry below can add the gchat session-scoped
+	// processor; also reused by the email-consumer wiring + the gchat
+	// aggregation engine further down.
+	commsMessageRepo := repository.NewCommsMessageRepository(database.Queries)
 
 	// Source-neutral staging registry — InteractionRecorder dispatches
 	// MarkProcessedTx by env.Source to the right repository. Unknown
@@ -382,6 +387,12 @@ func run() int {
 		map[string]repository.StagingProcessor{
 			repository.InteractionSourceTelegram: repository.NewTelegramStagingProcessor(telegramMessageRepo),
 			repository.InteractionSourceMessages: repository.NewMessagesStagingProcessor(messagesMessageRepo),
+			// GChat create-path: the InteractionRecorder consumer marks
+			// comms_message(source='gchat') rows processed via this
+			// session-scoped processor. Without it the recorder's
+			// zero-rows-affected rollback fires and the engine reprocesses
+			// forever. Inert until a chat provider writes gchat rows.
+			repository.InteractionSourceGChat: repository.NewCommsSessionStagingProcessor(commsMessageRepo),
 		},
 	)
 
@@ -564,7 +575,7 @@ func run() int {
 	// Registered unconditionally; it processes the email.received /
 	// email.sent events the Gmail provider publishes in production (and
 	// stays idle when no such event is routed, e.g. event-bus off mode).
-	commsMessageRepo := repository.NewCommsMessageRepository(database.Queries)
+	// commsMessageRepo was hoisted earlier (above the staging registry).
 	emailInteractionConsumer := consumer.NewEmailInteractionConsumer(
 		contactService, commsMessageRepo, interactionRepo, contactService,
 		eventBus, cadenceUpdater, followUpManager,
@@ -1045,6 +1056,32 @@ func run() int {
 		repository.InteractionSourceMessages,
 	)
 
+	// GChat aggregation engine over comms_message. LIVE but INERT: the
+	// engine/worker/sweeper/reenqueuer for gchat run on every tick, but every
+	// query is source='gchat'-scoped and returns zero rows until a provider +
+	// enablement write comms_message(source='gchat') rows. Burst/reply windows
+	// are hard-coded here (matching how messages hard-codes its constants);
+	// env-var overrides are out of scope for now.
+	gchatEnqueuer := consumer.NewRiverInteractionRecorderEnqueuer(riverClient)
+	const gchatBurstWindowHours = 2
+	const gchatReplyBridgeHours = 48
+	gchatEngine := google.NewGChatAggregationEngine(
+		gchatBurstWindowHours,
+		gchatReplyBridgeHours,
+		commsMessageRepo,
+		interactionRepo,
+		contactService,
+		contactService,
+		eventBus,
+		database.Pool,
+		gchatEnqueuer,
+	)
+	gchatReenqueuer := consumer.NewCommsAggregatorReenqueuer(
+		gchatEngine,
+		riverClient,
+		repository.InteractionSourceGChat,
+	)
+
 	// Wire the per-source aggregator reenqueuer registry. The
 	// InteractionRecorderWorker holds the deferred holder; this
 	// assignment makes the post-commit reenqueue path live for both
@@ -1054,6 +1091,7 @@ func run() int {
 	// degrade cleanly).
 	reenqueuerEntries := map[string]consumer.AggregatorReenqueuer{
 		repository.InteractionSourceMessages: messagesReenqueuer,
+		repository.InteractionSourceGChat:    gchatReenqueuer,
 	}
 	if telegramManager != nil {
 		reenqueuerEntries[repository.InteractionSourceTelegram] = consumer.NewTelegramAggregatorReenqueuer(telegramManager.AggregationEngine())
@@ -1069,11 +1107,17 @@ func run() int {
 	chatListerRegistry := scheduler.NewPerSourceChatListerRegistry(
 		map[string]func(ctx context.Context, contactID uuid.UUID) ([]string, error){
 			repository.InteractionSourceMessages: messagesMessageRepo.ListUnprocessedChatsByContact,
+			// Source-bound closure: the comms repo method is multi-source
+			// (ListUnprocessedChatsByContactForSource), so bind 'gchat'.
+			repository.InteractionSourceGChat: func(ctx context.Context, contactID uuid.UUID) ([]string, error) {
+				return commsMessageRepo.ListUnprocessedChatsByContactForSource(ctx, repository.InteractionSourceGChat, contactID)
+			},
 		},
 	)
 	river.AddWorker(riverWorkers, scheduler.NewMessagingAggregateForContactWorker(
 		map[string]scheduler.ChatAwareAggregator{
 			repository.InteractionSourceMessages: messagesEngine,
+			repository.InteractionSourceGChat:    gchatEngine,
 		},
 		chatListerRegistry,
 	))
@@ -1084,6 +1128,10 @@ func run() int {
 	// a full interval before the safety net engages.
 	sweeperListers := map[string]scheduler.UnprocessedContactLister{
 		repository.InteractionSourceMessages: messagesMessageRepo,
+		// Source-bound adapter: comms_message is multi-source, so wrap the
+		// repo with a 'gchat'-pinned lister (built type, not inline struct,
+		// per the single-file build convention).
+		repository.InteractionSourceGChat: repository.NewCommsSourceContactLister(commsMessageRepo, repository.InteractionSourceGChat),
 	}
 	river.AddWorker(riverWorkers, scheduler.NewMessagingAggregateSweeperWorker(sweeperListers, riverClient))
 	riverClient.PeriodicJobs().Add(river.NewPeriodicJob(

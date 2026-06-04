@@ -245,6 +245,56 @@ func (q *Queries) ListEmailIdentitiesForSync(ctx context.Context) ([]*ListEmailI
 	return items, nil
 }
 
+const ListGChatIdentitiesForSync = `-- name: ListGChatIdentitiesForSync :many
+SELECT cm.value_normalized, cm.contact_id, cm.type AS source_type
+FROM contact_method cm
+JOIN contact c ON c.id = cm.contact_id
+WHERE cm.type IN ('gchat', 'email')
+  AND cm.value_normalized <> ''
+  AND c.deleted_at IS NULL
+ORDER BY cm.value_normalized ASC, cm.contact_id ASC, cm.type ASC
+`
+
+type ListGChatIdentitiesForSyncRow struct {
+	ValueNormalized string      `json:"value_normalized"`
+	ContactID       pgtype.UUID `json:"contact_id"`
+	SourceType      string      `json:"source_type"`
+}
+
+// Dual-source variant of ListEmailIdentitiesForSync for the Google Chat
+// provider. Returns (value_normalized, contact_id, source_type) for every
+// gchat OR email contact_method of a non-deleted contact. GChat sender
+// addresses ARE emails, so the provider's known-identity map must consider
+// both a dedicated 'gchat' method AND any plain 'email' method. The
+// source_type projection (cm.type, 'gchat' or 'email') is the discriminator.
+// MANY-TO-ONE allowed: a shared address maps to multiple contacts and each
+// pair is returned so the provider can fan out to all owners (spec §6).
+// value_normalized is already lowercased+trimmed by the contact_method
+// trigger for BOTH types (normalize_contact_method_value, migrations/021/022),
+// so gchat and email values normalize identically — case-insensitivity is
+// inherited, not re-implemented. Empty-normalized values are excluded.
+// The cm.type ASC tiebreaker keeps iteration / test assertions stable when
+// the same address has both a gchat and an email method on one contact.
+func (q *Queries) ListGChatIdentitiesForSync(ctx context.Context) ([]*ListGChatIdentitiesForSyncRow, error) {
+	rows, err := q.db.Query(ctx, ListGChatIdentitiesForSync)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListGChatIdentitiesForSyncRow{}
+	for rows.Next() {
+		var i ListGChatIdentitiesForSyncRow
+		if err := rows.Scan(&i.ValueNormalized, &i.ContactID, &i.SourceType); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const SetContactMethodPrimary = `-- name: SetContactMethodPrimary :exec
 UPDATE contact_method cm
 SET is_primary = $2,
