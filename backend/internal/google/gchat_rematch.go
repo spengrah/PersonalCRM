@@ -27,8 +27,8 @@ type GChatSyncStateLister interface {
 // runs a one-shot identifier-scoped historical GChat scan for the newly-added
 // address across the connected accounts whose GChat sync is ENABLED, upserting
 // comms_message(source='gchat') rows (NO events — the aggregation engine derives
-// interactions on its own pass). It is provably a no-op until PR 3 enables a
-// gchat sync state, because it gates FIRST on ListEnabledSyncStates filtered to
+// interactions on its own pass). It is provably a no-op until an enabled gchat
+// sync state exists, because it gates FIRST on ListEnabledSyncStates filtered to
 // source='gchat' and returns (0, nil) when that set is empty.
 type gchatRematchBase struct {
 	provider  *GChatSyncProvider
@@ -47,7 +47,7 @@ func (b *gchatRematchBase) rematch(ctx context.Context, contactID uuid.UUID, val
 
 	// Gate on the enabled GChat sync states FIRST so the no-op path does zero
 	// work (no identity-map build, no me-set, no fetcher). This is what makes the
-	// handlers inert until a gchat sync state is enabled (PR 3).
+	// handlers inert until a gchat sync state is enabled.
 	states, err := b.states.ListEnabledSyncStates(ctx)
 	if err != nil {
 		return 0, err

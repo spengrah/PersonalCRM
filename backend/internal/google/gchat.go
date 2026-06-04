@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 	chat "google.golang.org/api/chat/v1"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
 	people "google.golang.org/api/people/v1"
 )
@@ -144,6 +145,15 @@ func (f *chatServiceFetcher) ResolvePersonEmail(ctx context.Context, userName st
 		PersonFields("emailAddresses").
 		Context(ctx).Do()
 	if err != nil {
+		// A 404 means the person is not in the user's address book (or not
+		// resolvable under contacts.readonly) — that is a normal unresolved
+		// sender/member, NOT a failure. Return "" so the caller treats it as a
+		// bystander and the resolver caches a negative. Only transient/other
+		// errors (auth, quota, 5xx) propagate so the window aborts and retries.
+		var apiErr *googleapi.Error
+		if errors.As(err, &apiErr) && apiErr.Code == 404 {
+			return "", nil
+		}
 		return "", fmt.Errorf("resolve person %s: %w", hashIdentifier(userName), err)
 	}
 	return primaryNormalizedEmail(person), nil
@@ -327,21 +337,32 @@ func (p *GChatSyncProvider) Sync(
 	resolver := newCachedEmailResolver(fetcher, gcm.UserEmailCache)
 	counters := &sweepCounters{}
 	backfillFloor := gchatBackfillFloor(state.Metadata)
-	windowsUsed := 0
+	// Shared list-page budget for the WHOLE sweep (membership + content + edit
+	// passes across all spaces), decremented as pages are consumed. Once it hits
+	// zero the sweep stops advancing cursors; un-advanced spaces restart next
+	// tick (crash-safe).
+	budget := gchatMaxWindowsPerSync
 
 	for _, space := range spaces {
-		if windowsUsed >= gchatMaxWindowsPerSync {
+		if budget <= 0 {
 			break
 		}
 		members, fetchedPages, err := p.resolveMembership(ctx, fetcher, space, gcm)
-		windowsUsed += fetchedPages
+		budget -= fetchedPages
 		if err != nil {
 			// Transient membership error: abort THIS space (cursor unadvanced),
 			// continue with already-proven spaces. Don't fail the whole sweep.
 			logger.Warn().Err(err).Str("source", GChatSourceName).Msg("gchat: membership resolution failed; skipping space")
 			continue
 		}
-		knownMembers := resolveKnownMembers(ctx, members, resolver, knownMap, meSet)
+		knownMembers, err := resolveKnownMembers(ctx, members, resolver, knownMap, meSet)
+		if err != nil {
+			// Transient resolve error while resolving co-members: abort THIS space
+			// (cursor unadvanced) so the window retries next sweep with the full
+			// membership. Never advance the cursor on a partial fan-out.
+			logger.Warn().Err(err).Str("source", GChatSourceName).Msg("gchat: co-member resolution failed; skipping space")
+			continue
+		}
 
 		isDM := space.SpaceType == gchatSpaceTypeDM
 		if len(knownMembers) == 0 && !isDM {
@@ -350,8 +371,7 @@ func (p *GChatSyncProvider) Sync(
 		}
 
 		cur := gcm.cursorFor(space.Name, backfillFloor)
-		newCreateCursor, pages, err := p.consumeContentWindow(ctx, fetcher, space, cur.CreateCursor, knownMembers, knownMap, meSet, resolver, accountID, counters)
-		windowsUsed += pages
+		newCreateCursor, proven, err := p.consumeContentWindow(ctx, fetcher, space, cur.CreateCursor, knownMembers, knownMap, meSet, resolver, accountID, counters, &budget)
 		if err != nil {
 			// A list/resolve/upsert error mid-window leaves create_cursor
 			// UNADVANCED so the whole window restarts next sweep (idempotent via
@@ -359,19 +379,26 @@ func (p *GChatSyncProvider) Sync(
 			logger.Warn().Err(err).Str("source", GChatSourceName).Msg("gchat: content window aborted; cursor unadvanced")
 			continue
 		}
+		if !proven {
+			// Budget ran out before the window was fully paged → keep the original
+			// cursor (do NOT advance over an un-listed page) and stop the sweep.
+			break
+		}
 		cur.CreateCursor = newCreateCursor
 
 		// Bounded edit/delete reconciliation: re-list create_time within the
-		// trailing lookback with ShowDeleted, applying edits/deletes. A failure
-		// here does NOT roll back the content cursor we just proved (the edit
-		// pass is best-effort recovery, idempotent via the SQL guards), but the
-		// edit_cursor stays unadvanced so the window retries next sweep.
-		newEditCursor, editPages, editErr := p.reconcileEditsDeletes(ctx, fetcher, space, cur, backfillFloor, counters)
-		windowsUsed += editPages
-		if editErr != nil {
-			logger.Warn().Err(editErr).Str("source", GChatSourceName).Msg("gchat: edit/delete pass aborted; edit cursor unadvanced")
-		} else {
-			cur.EditCursor = newEditCursor
+		// trailing lookback with ShowDeleted, applying edits/deletes. Skip it when
+		// the shared budget is already exhausted (the content cursor we just
+		// proved is still persisted below). A failure here does NOT roll back the
+		// content cursor (the edit pass is best-effort, idempotent via the SQL
+		// guards), but edit_cursor stays unadvanced so the window retries.
+		if budget > 0 {
+			newEditCursor, editProven, editErr := p.reconcileEditsDeletes(ctx, fetcher, space, cur, backfillFloor, counters, &budget)
+			if editErr != nil {
+				logger.Warn().Err(editErr).Str("source", GChatSourceName).Msg("gchat: edit/delete pass aborted; edit cursor unadvanced")
+			} else if editProven {
+				cur.EditCursor = newEditCursor
+			}
 		}
 		gcm.setCursor(space.Name, cur)
 	}
@@ -470,14 +497,26 @@ func (p *GChatSyncProvider) ScanIdentifier(
 
 	resolver := newCachedEmailResolver(fetcher, nil)
 	counters := &sweepCounters{}
+	// The rematch scan is a one-shot historical backfill, not a steady-state
+	// tick, so it gets its OWN full page budget (the steady-state sweep budget
+	// does not apply). The cursor is not persisted here — re-running is
+	// idempotent via the upsert dedup — so partial-window proven-ness is moot.
+	budget := gchatMaxWindowsPerSync
 	for _, space := range spaces {
-		members, _, mErr := paginateMembers(ctx, fetcher, space.Name)
+		if budget <= 0 {
+			break
+		}
+		members, memberPages, mErr := paginateMembers(ctx, fetcher, space.Name)
+		budget -= memberPages
 		if mErr != nil {
 			return counters.matched, fmt.Errorf("list members: %w", mErr)
 		}
 		// Co-member resolution uses the FULL knownMap (so a space qualifies when
 		// the target address is one of its members); row-writing uses scanMap.
-		knownMembers := resolveKnownMembers(ctx, members, resolver, knownMap, meSet)
+		knownMembers, rErr := resolveKnownMembers(ctx, members, resolver, knownMap, meSet)
+		if rErr != nil {
+			return counters.matched, fmt.Errorf("resolve co-members: %w", rErr)
+		}
 		scanMembers := restrictKnownMembers(knownMembers, addrNormalized)
 		isDM := space.SpaceType == gchatSpaceTypeDM
 		if len(scanMembers) == 0 && !isDM {
@@ -488,7 +527,7 @@ func (p *GChatSyncProvider) ScanIdentifier(
 			// arrive in a space the address belongs to.
 			continue
 		}
-		if _, _, cErr := p.consumeContentWindow(ctx, fetcher, space, afterCursor, scanMembers, scanMap, meSet, resolver, accountID, counters); cErr != nil {
+		if _, _, cErr := p.consumeContentWindow(ctx, fetcher, space, afterCursor, scanMembers, scanMap, meSet, resolver, accountID, counters, &budget); cErr != nil {
 			return counters.matched, fmt.Errorf("scan space: %w", cErr)
 		}
 	}
@@ -506,9 +545,15 @@ func restrictKnownMembers(knownMembers map[string][]uuid.UUID, addr string) map[
 }
 
 // consumeContentWindow pages a space's messages with create_time > cursor,
-// upserts qualifying rows, and returns the new create_cursor (the max createTime
-// successfully processed) plus the number of list pages consumed. On any error
-// it returns the ORIGINAL cursor so the window restarts next sweep.
+// upserts qualifying rows, and returns the new create_cursor. proven is true
+// ONLY when the window was fully paged (next == "") — that is the only case the
+// caller may advance the cursor. When the SHARED sweep budget runs out mid-
+// window (more pages remain), it returns proven=false + the ORIGINAL cursor so
+// the whole window restarts next sweep (advancing maxCreate would risk skipping
+// an un-listed later page whose first message shares maxCreate's timestamp,
+// since the next sweep filters create_time > cursor). On any error it likewise
+// returns the original cursor. budget is the shared remaining-page allowance,
+// decremented per list page.
 func (p *GChatSyncProvider) consumeContentWindow(
 	ctx context.Context,
 	fetcher chatFetcher,
@@ -520,16 +565,22 @@ func (p *GChatSyncProvider) consumeContentWindow(
 	resolver *cachedEmailResolver,
 	accountID string,
 	counters *sweepCounters,
-) (newCursor string, pages int, err error) {
+	budget *int,
+) (newCursor string, proven bool, err error) {
 	filter := fmt.Sprintf(`create_time > "%s"`, createCursor)
 	maxCreate := createCursor
 	pageToken := ""
 	for {
+		if *budget <= 0 {
+			// Shared sweep budget exhausted before this window was fully paged →
+			// unproven, keep the original cursor.
+			return createCursor, false, nil
+		}
 		msgs, next, listErr := fetcher.ListMessages(ctx, space.Name, filter, false, pageToken)
 		if listErr != nil {
-			return createCursor, pages, fmt.Errorf("list messages: %w", listErr)
+			return createCursor, false, fmt.Errorf("list messages: %w", listErr)
 		}
-		pages++
+		*budget--
 		for _, m := range msgs {
 			if !qualifiableContentMessage(m) {
 				continue
@@ -538,7 +589,7 @@ func (p *GChatSyncProvider) consumeContentWindow(
 			if matchErr != nil {
 				// Transient resolve/upsert error: abort the window, keep the
 				// original cursor (do NOT advance past this message).
-				return createCursor, pages, matchErr
+				return createCursor, false, matchErr
 			}
 			if m.CreateTime > maxCreate {
 				maxCreate = m.CreateTime
@@ -546,16 +597,11 @@ func (p *GChatSyncProvider) consumeContentWindow(
 			counters.processed++
 		}
 		if next == "" {
-			break
+			// Fully paged → the window is proven, advance to maxCreate.
+			return maxCreate, true, nil
 		}
 		pageToken = next
-		if pages >= gchatMaxWindowsPerSync {
-			// Window budget exhausted mid-space: commit what we proved. maxCreate
-			// only reflects fully-upserted messages, so this is safe.
-			break
-		}
 	}
-	return maxCreate, pages, nil
 }
 
 // qualifiableContentMessage reports whether a content-pass message should be
@@ -582,10 +628,13 @@ func qualifiableContentMessage(m *chat.Message) bool {
 //     edit, whose SQL ::timestamptz guard authoritatively decides recency +
 //     idempotency (there is NO Go-side timestamp comparison).
 //
-// Returns the new edit_cursor (the max createTime seen) and the pages consumed.
-// On a list error it returns the ORIGINAL edit cursor so the window retries.
-// Edits/deletes of messages created before the lookback are an accepted
-// lost-update (the API offers no update_time/delete_time filter).
+// proven is true ONLY when the lookback window was fully paged (next == "") —
+// the only case the caller may advance edit_cursor. On a list error or shared-
+// budget exhaustion mid-window it returns the ORIGINAL edit cursor + proven=
+// false so the window retries next sweep. budget is the shared remaining-page
+// allowance, decremented per list page. Edits/deletes of messages created
+// before the lookback are an accepted lost-update (the API offers no
+// update_time/delete_time filter).
 func (p *GChatSyncProvider) reconcileEditsDeletes(
 	ctx context.Context,
 	fetcher chatFetcher,
@@ -593,37 +642,37 @@ func (p *GChatSyncProvider) reconcileEditsDeletes(
 	cur spaceCursor,
 	backfillFloor string,
 	counters *sweepCounters,
-) (newEditCursor string, pages int, err error) {
+	budget *int,
+) (newEditCursor string, proven bool, err error) {
 	floor := editLookbackFloor(cur.CreateCursor, backfillFloor)
 	filter := fmt.Sprintf(`create_time > "%s"`, floor)
 	maxCreate := cur.EditCursor
 	pageToken := ""
 	for {
+		if *budget <= 0 {
+			return cur.EditCursor, false, nil
+		}
 		msgs, next, listErr := fetcher.ListMessages(ctx, space.Name, filter, true, pageToken)
 		if listErr != nil {
-			return cur.EditCursor, pages, fmt.Errorf("list messages (show_deleted): %w", listErr)
+			return cur.EditCursor, false, fmt.Errorf("list messages (show_deleted): %w", listErr)
 		}
-		pages++
+		*budget--
 		for _, m := range msgs {
 			if m == nil || m.Name == "" {
 				continue
 			}
 			if applyErr := p.applyEditOrDelete(ctx, m, counters); applyErr != nil {
-				return cur.EditCursor, pages, applyErr
+				return cur.EditCursor, false, applyErr
 			}
 			if m.CreateTime > maxCreate {
 				maxCreate = m.CreateTime
 			}
 		}
 		if next == "" {
-			break
+			return maxCreate, true, nil
 		}
 		pageToken = next
-		if pages >= gchatMaxWindowsPerSync {
-			break
-		}
 	}
-	return maxCreate, pages, nil
 }
 
 // applyEditOrDelete applies one re-listed message's edit or delete to the stored

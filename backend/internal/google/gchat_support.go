@@ -266,18 +266,28 @@ func membershipNeedsRefresh(cached spaceMembers, lastActiveTime string, now time
 // normalized-address → []contactID entries they match, EXCLUDING any member
 // that resolves to one of the connected accounts' own emails (self is never a
 // co-member to fan out to). The map is keyed by normalized address.
+//
+// A resolver ERROR is propagated (NOT swallowed): a transient People API failure
+// for a co-member must abort the space's window so the cursor stays unadvanced
+// and the whole window retries next sweep. Swallowing it would silently drop the
+// member, produce a partial outbound fan-out, and then advance the cursor past
+// rows that were never persisted. A resolved-to-no-email member ("" with no
+// error) is simply not a known co-member.
 func resolveKnownMembers(
 	ctx context.Context,
 	members []string,
 	resolver *cachedEmailResolver,
 	knownMap map[string][]uuid.UUID,
 	meSet map[string]struct{},
-) map[string][]uuid.UUID {
+) (map[string][]uuid.UUID, error) {
 	out := make(map[string][]uuid.UUID)
 	for _, userName := range members {
 		email, err := resolver.resolve(ctx, userName)
-		if err != nil || email == "" {
-			continue // unresolved member → not a known co-member
+		if err != nil {
+			return nil, err
+		}
+		if email == "" {
+			continue // resolved to no email → not a known co-member
 		}
 		if inSet(meSet, email) {
 			continue // self
@@ -286,7 +296,7 @@ func resolveKnownMembers(
 			out[email] = contacts
 		}
 	}
-	return out
+	return out, nil
 }
 
 // --- cached email resolver -------------------------------------------

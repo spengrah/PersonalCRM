@@ -3,6 +3,7 @@ package google
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -183,12 +184,25 @@ func TestResolveKnownMembers_ResolvesAndExcludesSelf(t *testing.T) {
 	meSet := map[string]struct{}{"me@example.test": {}}
 
 	members := []string{"users/alice", "users/me", "users/unknown", "users/noemail"}
-	known := resolveKnownMembers(ctx, members, resolver, knownMap, meSet)
+	known, err := resolveKnownMembers(ctx, members, resolver, knownMap, meSet)
+	require.NoError(t, err)
 
 	// Only Alice is a known co-member; me is excluded, unknown is not in knownMap,
 	// noemail is unresolvable.
 	require.Len(t, known, 1)
 	assert.Equal(t, []uuid.UUID{alice}, known["alice@example.test"])
+}
+
+func TestResolveKnownMembers_PropagatesResolveError(t *testing.T) {
+	ctx := context.Background()
+	resolveErr := errors.New("people api transient")
+	fetcher := &fakeChatFetcher{funcs: FakeChatFetcherFuncs{
+		ResolvePersonEmail: func(context.Context, string) (string, error) { return "", resolveErr },
+	}}
+	resolver := newCachedEmailResolver(fetcher, nil)
+
+	_, err := resolveKnownMembers(ctx, []string{"users/alice"}, resolver, map[string][]uuid.UUID{}, map[string]struct{}{})
+	require.ErrorIs(t, err, resolveErr, "a transient co-member resolve error must propagate, not be swallowed")
 }
 
 func TestCachedEmailResolver_PositiveNegativeCachingAndTTL(t *testing.T) {
@@ -384,6 +398,77 @@ func TestFirstN(t *testing.T) {
 	assert.Equal(t, "abc", firstN("abc", 10))
 	// Rune-safe: a multi-byte rune is not split mid-byte.
 	assert.Equal(t, "héll", firstN("héllo", 4))
+}
+
+// TestConsumeContentWindow_BudgetExhaustionKeepsCursor proves that when the
+// shared budget runs out before a multi-page window is fully paged, the window
+// returns proven=false and the ORIGINAL cursor (so the caller does NOT advance
+// past an un-listed page).
+func TestConsumeContentWindow_BudgetExhaustionKeepsCursor(t *testing.T) {
+	ctx := context.Background()
+
+	// A fetcher that always reports another page (never returns next == "").
+	pageCalls := 0
+	fetcher := &fakeChatFetcher{funcs: FakeChatFetcherFuncs{
+		ListMessages: func(_ context.Context, _, _ string, showDeleted bool, _ string) ([]*chat.Message, string, error) {
+			pageCalls++
+			// No qualifying messages; always another page.
+			return nil, "next-token", nil
+		},
+		ResolvePersonEmail: func(context.Context, string) (string, error) { return "", nil },
+	}}
+	resolver := newCachedEmailResolver(fetcher, nil)
+	p := &GChatSyncProvider{}
+	counters := &sweepCounters{}
+	budget := 3
+	floor := "2026-01-01T00:00:00Z"
+
+	newCursor, proven, err := p.consumeContentWindow(ctx, fetcher,
+		&chat.Space{Name: "spaces/B", SpaceType: "SPACE"}, floor,
+		map[string][]uuid.UUID{}, map[string][]uuid.UUID{}, map[string]struct{}{},
+		resolver, "acct", counters, &budget)
+	require.NoError(t, err)
+	assert.False(t, proven, "an un-finished window is NOT proven")
+	assert.Equal(t, floor, newCursor, "cursor must NOT advance past an un-listed page")
+	assert.Equal(t, 0, budget, "budget fully consumed")
+	assert.Equal(t, 3, pageCalls, "exactly the budgeted number of pages were fetched")
+}
+
+// TestConsumeContentWindow_FullyPagedIsProven proves a window that pages to
+// completion (next == "") returns proven=true and advances to maxCreate.
+func TestConsumeContentWindow_FullyPagedIsProven(t *testing.T) {
+	ctx := context.Background()
+	alice := uuid.New()
+	msgTime := "2026-06-04T10:00:00Z"
+	fetcher := &fakeChatFetcher{funcs: FakeChatFetcherFuncs{
+		ListMessages: func(_ context.Context, _, _ string, _ bool, token string) ([]*chat.Message, string, error) {
+			if token == "" {
+				return []*chat.Message{humanMsg("spaces/B/messages/1", "users/alice", msgTime, "hi")}, "", nil
+			}
+			return nil, "", nil
+		},
+		ResolvePersonEmail: func(_ context.Context, u string) (string, error) {
+			if u == "users/alice" {
+				return "alice@example.test", nil
+			}
+			return "", nil
+		},
+	}}
+	resolver := newCachedEmailResolver(fetcher, nil)
+	p := &GChatSyncProvider{commsRepo: nil}
+	// Inbound from a known sender → classifyMessage returns Matched; but upsert
+	// needs commsRepo. To keep this DB-free, use a bystander (unknown) sender so
+	// no upsert happens but the page still advances maxCreate.
+	counters := &sweepCounters{}
+	budget := 10
+	floor := "2026-01-01T00:00:00Z"
+	newCursor, proven, err := p.consumeContentWindow(ctx, fetcher,
+		&chat.Space{Name: "spaces/B", SpaceType: "SPACE"}, floor,
+		map[string][]uuid.UUID{}, map[string][]uuid.UUID{"someone-else@example.test": {alice}}, map[string]struct{}{},
+		resolver, "acct", counters, &budget)
+	require.NoError(t, err)
+	assert.True(t, proven, "a fully-paged window is proven")
+	assert.Equal(t, msgTime, newCursor, "cursor advances to the max createTime seen")
 }
 
 func TestEditLookbackFloor(t *testing.T) {
