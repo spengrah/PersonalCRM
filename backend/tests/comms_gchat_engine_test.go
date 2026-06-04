@@ -250,6 +250,33 @@ func TestGChatEngine_ReplyBridgeToMutual(t *testing.T) {
 		require.Len(t, rows, 1)
 		assert.Equal(t, repository.InteractionDirectionMutual, rows[0].Direction)
 	})
+
+	t.Run("inbound after 48h stays two separate interactions", func(t *testing.T) {
+		contact := e.newGChatContact(t, "GChat NoBridge "+suffix)
+		space := "spaces/NOBRIDGE-" + suffix
+		// Outbound burst far in the past; inbound > 48h later, outside the
+		// time-window bridge (48h), so the outbound is NOT promoted.
+		base := accelerated.GetCurrentTime().Add(-100 * time.Hour).Truncate(time.Microsecond)
+
+		e.seedGChatRow(t, contact.ID, space, "gchat-nb-out1-"+suffix, repository.InteractionDirectionOutbound, base)
+		e.seedGChatRow(t, contact.ID, space, "gchat-nb-out2-"+suffix, repository.InteractionDirectionOutbound, base.Add(5*time.Minute))
+		e.seedGChatRow(t, contact.ID, space, "gchat-nb-in1-"+suffix, repository.InteractionDirectionInbound, base.Add(60*time.Hour))
+
+		require.NoError(t, e.engine.AggregateForContact(e.ctx, contact.ID, space))
+
+		// Two separate interactions: one outbound (the burst) + one inbound
+		// (the late reply). Neither is mutual.
+		rows := waitForInteractionCountExact(t, e.ctx, e.interactionRepo, contact.ID, 2, defaultInteractionWaitTimeout)
+		require.Len(t, rows, 2)
+		dirs := map[string]int{}
+		for _, r := range rows {
+			assert.NotEqual(t, repository.InteractionDirectionMutual, r.Direction,
+				"a reply outside the 48h window must NOT promote to mutual")
+			dirs[r.Direction]++
+		}
+		assert.Equal(t, 1, dirs[repository.InteractionDirectionOutbound], "one outbound interaction")
+		assert.Equal(t, 1, dirs[repository.InteractionDirectionInbound], "one inbound interaction")
+	})
 }
 
 // TestGChatEngine_EditNoOp proves the processed_at IS NULL filter protects an
