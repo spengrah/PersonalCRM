@@ -386,6 +386,23 @@ func TestFirstN(t *testing.T) {
 	assert.Equal(t, "héll", firstN("héllo", 4))
 }
 
+func TestEditLookbackFloor(t *testing.T) {
+	backfill := "2026-01-01T00:00:00Z"
+
+	// createCursor − 7d is AFTER the backfill floor → use the lookback.
+	got := editLookbackFloor("2026-06-04T00:00:00Z", backfill)
+	want := "2026-05-28T00:00:00Z" // 7 days before
+	assert.Equal(t, want, got)
+
+	// createCursor − 7d is BEFORE the backfill floor → clamp to backfill.
+	got = editLookbackFloor("2026-01-03T00:00:00Z", backfill)
+	assert.Equal(t, backfill, got)
+
+	// Unparseable createCursor → fall back to backfill (the safe wider scan).
+	got = editLookbackFloor("not-a-time", backfill)
+	assert.Equal(t, backfill, got)
+}
+
 func TestBuildContentMetadata(t *testing.T) {
 	space := &chat.Space{Name: "spaces/A", SpaceType: "SPACE"}
 	m := &chat.Message{

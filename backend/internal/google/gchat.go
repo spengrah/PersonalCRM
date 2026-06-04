@@ -2,11 +2,13 @@ package google
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
+	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/matching"
 	"personal-crm/backend/internal/repository"
@@ -33,6 +35,12 @@ const (
 	// cached id→email resolution) stays valid before a forced refetch, even when
 	// the space's lastActiveTime never advances. Caps People/Chat API quota.
 	gchatMembershipCacheTTL = 24 * time.Hour
+
+	// gchatEditLookbackWindow is how far before a space's create_cursor the
+	// edit/delete re-list reaches. Edits/deletes of messages CREATED within this
+	// trailing window are synced; older ones are an accepted lost-update (the
+	// Chat API filters only by create_time, never by update_time/delete_time).
+	gchatEditLookbackWindow = 7 * 24 * time.Hour
 
 	// gchatArchivedCursorGrace is how long an archived (disappeared) space's
 	// cursor is retained for restore-on-rediscovery before it is dropped.
@@ -352,6 +360,19 @@ func (p *GChatSyncProvider) Sync(
 			continue
 		}
 		cur.CreateCursor = newCreateCursor
+
+		// Bounded edit/delete reconciliation: re-list create_time within the
+		// trailing lookback with ShowDeleted, applying edits/deletes. A failure
+		// here does NOT roll back the content cursor we just proved (the edit
+		// pass is best-effort recovery, idempotent via the SQL guards), but the
+		// edit_cursor stays unadvanced so the window retries next sweep.
+		newEditCursor, editPages, editErr := p.reconcileEditsDeletes(ctx, fetcher, space, cur, backfillFloor, counters)
+		windowsUsed += editPages
+		if editErr != nil {
+			logger.Warn().Err(editErr).Str("source", GChatSourceName).Msg("gchat: edit/delete pass aborted; edit cursor unadvanced")
+		} else {
+			cur.EditCursor = newEditCursor
+		}
 		gcm.setCursor(space.Name, cur)
 	}
 
@@ -367,6 +388,8 @@ func (p *GChatSyncProvider) Sync(
 		Int("spaces", len(spaces)).
 		Int("spaces_skipped_no_known_member", counters.spacesSkippedNoKnownMember).
 		Int("senders_unresolved", counters.sendersUnresolved).
+		Int("edits_applied", counters.editsApplied).
+		Int("deletes_applied", counters.deletesApplied).
 		Msg("GChat sync completed")
 
 	return &syncpkg.SyncResult{
@@ -384,6 +407,8 @@ type sweepCounters struct {
 	matched                    int
 	spacesSkippedNoKnownMember int
 	sendersUnresolved          int
+	editsApplied               int
+	deletesApplied             int
 }
 
 // buildKnownMap loads the dual-source (gchat+email) known-contact map:
@@ -470,6 +495,119 @@ func qualifiableContentMessage(m *chat.Message) bool {
 		return false
 	}
 	return true
+}
+
+// reconcileEditsDeletes runs the bounded edit/delete pass for one space: re-list
+// create_time within the trailing lookback (max(create_cursor−7d, backfill
+// floor)) with ShowDeleted=true, and for each returned message:
+//   - DeletionMetadata != nil → soft-delete every stored row for the resource
+//     name (the row drops out of future aggregation);
+//   - LastUpdateTime set AND the body differs from the stored row → apply the
+//     edit, whose SQL ::timestamptz guard authoritatively decides recency +
+//     idempotency (there is NO Go-side timestamp comparison).
+//
+// Returns the new edit_cursor (the max createTime seen) and the pages consumed.
+// On a list error it returns the ORIGINAL edit cursor so the window retries.
+// Edits/deletes of messages created before the lookback are an accepted
+// lost-update (the API offers no update_time/delete_time filter).
+func (p *GChatSyncProvider) reconcileEditsDeletes(
+	ctx context.Context,
+	fetcher chatFetcher,
+	space *chat.Space,
+	cur spaceCursor,
+	backfillFloor string,
+	counters *sweepCounters,
+) (newEditCursor string, pages int, err error) {
+	floor := editLookbackFloor(cur.CreateCursor, backfillFloor)
+	filter := fmt.Sprintf(`create_time > "%s"`, floor)
+	maxCreate := cur.EditCursor
+	pageToken := ""
+	for {
+		msgs, next, listErr := fetcher.ListMessages(ctx, space.Name, filter, true, pageToken)
+		if listErr != nil {
+			return cur.EditCursor, pages, fmt.Errorf("list messages (show_deleted): %w", listErr)
+		}
+		pages++
+		for _, m := range msgs {
+			if m == nil || m.Name == "" {
+				continue
+			}
+			if applyErr := p.applyEditOrDelete(ctx, m, counters); applyErr != nil {
+				return cur.EditCursor, pages, applyErr
+			}
+			if m.CreateTime > maxCreate {
+				maxCreate = m.CreateTime
+			}
+		}
+		if next == "" {
+			break
+		}
+		pageToken = next
+		if pages >= gchatMaxWindowsPerSync {
+			break
+		}
+	}
+	return maxCreate, pages, nil
+}
+
+// applyEditOrDelete applies one re-listed message's edit or delete to the stored
+// rows. A tombstone soft-deletes all fanned-out rows; an edit (non-empty
+// LastUpdateTime + a body that differs from the stored row) is handed to the
+// SQL ::timestamptz guard. The Go pre-filter is BODY-ONLY — it never compares
+// timestamps (recency is decided in SQL).
+func (p *GChatSyncProvider) applyEditOrDelete(ctx context.Context, m *chat.Message, counters *sweepCounters) error {
+	if m.DeletionMetadata != nil {
+		n, err := p.commsRepo.SoftDeleteByExternalID(ctx, GChatSourceName, m.Name, accelerated.GetCurrentTime())
+		if err != nil {
+			return fmt.Errorf("soft-delete by external id: %w", err)
+		}
+		counters.deletesApplied += int(n)
+		return nil
+	}
+	if m.LastUpdateTime == "" {
+		return nil // never edited
+	}
+
+	// Body-only no-op-avoidance pre-check: only round-trip the edit UPDATE when
+	// the stored body actually differs. The stored row is fetched solely for its
+	// body; its last_update_time is NEVER string-compared here.
+	stored, err := p.commsRepo.GetLatestByExternalID(ctx, GChatSourceName, m.Name)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			return nil // nothing stored for this message → nothing to edit
+		}
+		return fmt.Errorf("get latest by external id: %w", err)
+	}
+	if stored.Body != nil && *stored.Body == m.Text {
+		return nil // body unchanged → skip the round-trip
+	}
+
+	body := m.Text
+	snippet := firstN(body, gchatSnippetMaxLen)
+	editedAt := accelerated.GetCurrentTime().UTC().Format(chatTimeLayout)
+	n, err := p.commsRepo.ApplyEditByExternalID(ctx, GChatSourceName, m.Name, &body, &snippet, editedAt, m.LastUpdateTime)
+	if err != nil {
+		return fmt.Errorf("apply edit by external id: %w", err)
+	}
+	// n == 0 means a concurrent sweep already applied this edit OR the stored
+	// last_update_time is already >= this one — not an error.
+	counters.editsApplied += int(n)
+	return nil
+}
+
+// editLookbackFloor returns max(createCursor − gchatEditLookbackWindow,
+// backfillFloor) as an RFC-3339 string. An unparseable createCursor falls back
+// to the backfill floor (the safe wider scan).
+func editLookbackFloor(createCursor, backfillFloor string) string {
+	created, err := parseChatTime(createCursor)
+	if err != nil {
+		return backfillFloor
+	}
+	lookback := created.Add(-gchatEditLookbackWindow).UTC().Format(chatTimeLayout)
+	if after, ok := chatTimeAfter(backfillFloor, lookback); ok && after {
+		return backfillFloor
+	}
+	return lookback
 }
 
 // messageClassification is the pure (DB-free) result of qualifying one message:
