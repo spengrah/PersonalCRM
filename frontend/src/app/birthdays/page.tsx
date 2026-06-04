@@ -4,7 +4,7 @@ import { Calendar, Cake, Gift, Users } from 'lucide-react'
 import { Navigation } from '@/components/layout/navigation'
 import { useContacts } from '@/hooks/use-contacts'
 import { useAcceleratedTime } from '@/hooks/use-accelerated-time'
-import { parseDateOnly } from '@/lib/utils'
+import { isPlaceholderBirthday, parseDateOnly } from '@/lib/utils'
 import type { Contact } from '@/types/contact'
 
 // Birthday data with calculated fields
@@ -13,34 +13,44 @@ interface BirthdayInfo {
   birthday: Date
   dayOfWeek: string
   monthDay: string
-  ageThisYear: number
+  ageThisYear?: number
   daysUntil: number
   isPastThisYear: boolean
   isNextYear?: boolean
 }
 
 // Calculate age turning this year
-function calculateAgeThisYear(birthday: Date, currentTime: Date): number {
-  const currentYear = currentTime.getFullYear()
+function calculateAgeThisYear(birthday: Date, year: number): number {
+  return year - birthday.getFullYear()
+}
 
-  // Age they turn this calendar year
-  return currentYear - birthday.getFullYear()
+function startOfLocalDay(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate())
+}
+
+function birthdayInYear(birthday: Date, year: number): Date {
+  return new Date(year, birthday.getMonth(), birthday.getDate())
+}
+
+function getNextBirthday(birthday: Date, currentTime: Date): Date {
+  const currentDay = startOfLocalDay(currentTime)
+  const currentYear = currentDay.getFullYear()
+  const birthdayThisYear = birthdayInYear(birthday, currentYear)
+
+  if (birthdayThisYear < currentDay) {
+    return birthdayInYear(birthday, currentYear + 1)
+  }
+
+  return birthdayThisYear
 }
 
 // Calculate days until next birthday
 function calculateDaysUntilBirthday(birthday: Date, currentTime: Date): number {
-  const currentYear = currentTime.getFullYear()
-
-  // Birthday this year
-  let nextBirthday = new Date(currentYear, birthday.getMonth(), birthday.getDate())
-
-  // If birthday already passed this year, calculate for next year
-  if (nextBirthday < currentTime) {
-    nextBirthday = new Date(currentYear + 1, birthday.getMonth(), birthday.getDate())
-  }
+  const currentDay = startOfLocalDay(currentTime)
+  const nextBirthday = getNextBirthday(birthday, currentTime)
 
   // Calculate difference in days
-  const diffTime = nextBirthday.getTime() - currentTime.getTime()
+  const diffTime = nextBirthday.getTime() - currentDay.getTime()
   return Math.ceil(diffTime / (1000 * 60 * 60 * 24))
 }
 
@@ -70,9 +80,10 @@ function getNextYearEarlyBirthdays(contacts: Contact[], currentTime: Date): Birt
       if (birthdayMonth > 3) return null
 
       const nextYear = currentTime.getFullYear() + 1
-      const nextYearBirthday = new Date(nextYear, birthday.getMonth(), birthday.getDate())
+      const currentDay = startOfLocalDay(currentTime)
+      const nextYearBirthday = birthdayInYear(birthday, nextYear)
       const daysUntil = Math.ceil(
-        (nextYearBirthday.getTime() - currentTime.getTime()) / (1000 * 60 * 60 * 24)
+        (nextYearBirthday.getTime() - currentDay.getTime()) / (1000 * 60 * 60 * 24)
       )
 
       return {
@@ -80,7 +91,9 @@ function getNextYearEarlyBirthdays(contacts: Contact[], currentTime: Date): Birt
         birthday: nextYearBirthday,
         dayOfWeek: nextYearBirthday.toLocaleDateString('en-US', { weekday: 'long' }),
         monthDay: nextYearBirthday.toLocaleDateString('en-US', { month: 'long', day: 'numeric' }),
-        ageThisYear: nextYear - birthday.getFullYear(),
+        ageThisYear: isPlaceholderBirthday(contact.birthday)
+          ? undefined
+          : calculateAgeThisYear(birthday, nextYear),
         daysUntil,
         isPastThisYear: false,
         isNextYear: true,
@@ -91,10 +104,10 @@ function getNextYearEarlyBirthdays(contacts: Contact[], currentTime: Date): Birt
 
 // Check if birthday already passed this year
 function isBirthdayPastThisYear(birthday: Date, currentTime: Date): boolean {
-  const currentYear = currentTime.getFullYear()
-  const birthdayThisYear = new Date(currentYear, birthday.getMonth(), birthday.getDate())
+  const currentDay = startOfLocalDay(currentTime)
+  const birthdayThisYear = birthdayInYear(birthday, currentDay.getFullYear())
 
-  return birthdayThisYear < currentTime
+  return birthdayThisYear < currentDay
 }
 
 // Process contacts to extract birthday information
@@ -106,13 +119,17 @@ function processBirthdayContacts(contacts: Contact[], currentTime: Date): Birthd
       if (!birthday) return null
 
       const daysUntil = calculateDaysUntilBirthday(birthday, currentTime)
+      const nextBirthday = getNextBirthday(birthday, currentTime)
+      const hasPlaceholderYear = isPlaceholderBirthday(contact.birthday)
 
       return {
         contact,
-        birthday,
-        dayOfWeek: birthday.toLocaleDateString('en-US', { weekday: 'long' }),
-        monthDay: birthday.toLocaleDateString('en-US', { month: 'long', day: 'numeric' }),
-        ageThisYear: calculateAgeThisYear(birthday, currentTime),
+        birthday: nextBirthday,
+        dayOfWeek: nextBirthday.toLocaleDateString('en-US', { weekday: 'long' }),
+        monthDay: nextBirthday.toLocaleDateString('en-US', { month: 'long', day: 'numeric' }),
+        ageThisYear: hasPlaceholderYear
+          ? undefined
+          : calculateAgeThisYear(birthday, currentTime.getFullYear()),
         daysUntil,
         isPastThisYear: isBirthdayPastThisYear(birthday, currentTime),
       }
@@ -140,6 +157,7 @@ function BirthdayCard({ birthdayInfo }: { birthdayInfo: BirthdayInfo }) {
 
   return (
     <div
+      data-testid="birthday-card"
       className={`
       bg-white rounded-lg shadow-sm border p-4 hover:shadow-md transition-shadow
       ${isToday ? 'border-pink-300 bg-pink-50' : ''}
@@ -178,12 +196,14 @@ function BirthdayCard({ birthdayInfo }: { birthdayInfo: BirthdayInfo }) {
         </div>
 
         <div className="text-right">
-          <p className="text-lg font-semibold text-gray-900">
-            {isPastDue ? `Turned ${ageThisYear}` : `Turning ${ageThisYear}`}
-            {isGiftPlanningTime && (
-              <span className="text-xs text-purple-600 ml-1">(next year)</span>
-            )}
-          </p>
+          {ageThisYear !== undefined && (
+            <p className="text-lg font-semibold text-gray-900">
+              {isPastDue ? `Turned ${ageThisYear}` : `Turning ${ageThisYear}`}
+              {isGiftPlanningTime && (
+                <span className="text-xs text-purple-600 ml-1">(next year)</span>
+              )}
+            </p>
+          )}
           <p
             className={`text-sm ${
               isToday

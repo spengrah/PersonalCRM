@@ -36,6 +36,46 @@ export function formatDateOnly(
   return date.toLocaleDateString(undefined, options)
 }
 
+const MS_PER_DAY = 1000 * 60 * 60 * 24
+
+export function getLocalCalendarDayDifference(date: Date, referenceDate: Date): number {
+  const dateDay = Date.UTC(date.getFullYear(), date.getMonth(), date.getDate())
+  const referenceDay = Date.UTC(
+    referenceDate.getFullYear(),
+    referenceDate.getMonth(),
+    referenceDate.getDate()
+  )
+
+  return Math.round((referenceDay - dateDay) / MS_PER_DAY)
+}
+
+// Imported year-less birthdays use this sentinel year until the data model can represent them explicitly.
+export const PLACEHOLDER_BIRTHDAY_YEAR = 1900
+
+export function isPlaceholderBirthday(dateString: string | undefined | null): boolean {
+  const date = parseDateOnly(dateString)
+  return date?.getFullYear() === PLACEHOLDER_BIRTHDAY_YEAR
+}
+
+export function formatBirthday(
+  dateString: string | undefined | null,
+  options: Intl.DateTimeFormatOptions = { year: 'numeric', month: 'short', day: 'numeric' }
+): string {
+  if (!isPlaceholderBirthday(dateString)) {
+    return formatDateOnly(dateString, options)
+  }
+
+  const monthDayOptions = { ...options }
+  delete monthDayOptions.year
+
+  if (!monthDayOptions.month && !monthDayOptions.day) {
+    monthDayOptions.month = 'short'
+    monthDayOptions.day = 'numeric'
+  }
+
+  return formatDateOnly(dateString, monthDayOptions)
+}
+
 /**
  * Format a cadence value for display.
  *
@@ -48,14 +88,15 @@ export function formatDateOnly(
  * @param dateString - ISO timestamp string
  * @returns Relative time string, or empty string if invalid
  */
-export function formatRelativeTime(dateString: string | undefined | null): string {
+export function formatRelativeTime(
+  dateString: string | undefined | null,
+  referenceDate: Date = new Date()
+): string {
   if (!dateString) return ''
   const date = new Date(dateString)
   if (isNaN(date.getTime())) return ''
 
-  const now = new Date()
-  const diffMs = now.getTime() - date.getTime()
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
+  const diffDays = getLocalCalendarDayDifference(date, referenceDate)
 
   if (diffDays < 0) return 'in the future'
   if (diffDays === 0) return 'today'

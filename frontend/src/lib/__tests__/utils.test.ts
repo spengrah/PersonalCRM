@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest'
-import { parseDateOnly, formatDateOnly, formatCadence } from '../utils'
+import {
+  parseDateOnly,
+  formatDateOnly,
+  formatBirthday,
+  isPlaceholderBirthday,
+  PLACEHOLDER_BIRTHDAY_YEAR,
+  formatCadence,
+  getLocalCalendarDayDifference,
+  formatRelativeTime,
+} from '../utils'
 
 describe('parseDateOnly', () => {
   it('parses YYYY-MM-DD format correctly', () => {
@@ -77,6 +86,95 @@ describe('formatDateOnly', () => {
   it('handles empty string input', () => {
     const result = formatDateOnly('')
     expect(result).toBe('')
+  })
+})
+
+describe('isPlaceholderBirthday', () => {
+  it('detects the sentinel placeholder birthday year', () => {
+    expect(isPlaceholderBirthday(`${PLACEHOLDER_BIRTHDAY_YEAR}-01-15`)).toBe(true)
+    expect(isPlaceholderBirthday(`${PLACEHOLDER_BIRTHDAY_YEAR}-01-15T00:00:00Z`)).toBe(true)
+  })
+
+  it('does not treat real birthday years or invalid dates as placeholders', () => {
+    expect(isPlaceholderBirthday('1990-01-15')).toBe(false)
+    expect(isPlaceholderBirthday('invalid-date')).toBe(false)
+    expect(isPlaceholderBirthday(null)).toBe(false)
+  })
+})
+
+describe('formatBirthday', () => {
+  it('omits the year for placeholder-year birthdays', () => {
+    const result = formatBirthday(`${PLACEHOLDER_BIRTHDAY_YEAR}-01-15`)
+
+    expect(result).toMatch(/Jan/)
+    expect(result).toMatch(/15/)
+    expect(result).not.toMatch(String(PLACEHOLDER_BIRTHDAY_YEAR))
+  })
+
+  it('omits the year from custom date options for placeholder-year birthdays', () => {
+    const result = formatBirthday(`${PLACEHOLDER_BIRTHDAY_YEAR}-01-15`, {
+      year: '2-digit',
+      month: 'numeric',
+      day: 'numeric',
+    })
+
+    expect(result).toMatch(/^1\/15$/)
+  })
+
+  it('preserves the requested year format for real birthday years', () => {
+    const result = formatBirthday('1990-01-15', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    })
+
+    expect(result).toMatch(/January/)
+    expect(result).toMatch(/15/)
+    expect(result).toMatch(/1990/)
+  })
+})
+
+describe('getLocalCalendarDayDifference', () => {
+  it('returns 0 for timestamps on the same local calendar day', () => {
+    const date = new Date(2026, 5, 4, 0, 5)
+    const referenceDate = new Date(2026, 5, 4, 23, 55)
+
+    expect(getLocalCalendarDayDifference(date, referenceDate)).toBe(0)
+  })
+
+  it('returns 1 for yesterday even when less than 24 hours elapsed', () => {
+    const date = new Date(2026, 5, 3, 23, 55)
+    const referenceDate = new Date(2026, 5, 4, 0, 5)
+
+    expect(getLocalCalendarDayDifference(date, referenceDate)).toBe(1)
+  })
+
+  it('returns negative days for future calendar dates', () => {
+    const date = new Date(2026, 5, 6, 0, 5)
+    const referenceDate = new Date(2026, 5, 4, 23, 55)
+
+    expect(getLocalCalendarDayDifference(date, referenceDate)).toBe(-2)
+  })
+
+  it('counts calendar days across daylight saving time changes', () => {
+    const date = new Date(2026, 2, 7, 12)
+    const referenceDate = new Date(2026, 2, 9, 12)
+
+    expect(getLocalCalendarDayDifference(date, referenceDate)).toBe(2)
+  })
+})
+
+describe('formatRelativeTime', () => {
+  it('returns today for timestamps earlier on the same calendar day', () => {
+    expect(
+      formatRelativeTime(new Date(2026, 5, 4, 0, 5).toISOString(), new Date(2026, 5, 4, 23, 55))
+    ).toBe('today')
+  })
+
+  it('returns yesterday for timestamps on the previous calendar day', () => {
+    expect(
+      formatRelativeTime(new Date(2026, 5, 3, 23, 55).toISOString(), new Date(2026, 5, 4, 0, 5))
+    ).toBe('yesterday')
   })
 })
 
