@@ -11,6 +11,104 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const ApplyCommsMessageEditByExternalID = `-- name: ApplyCommsMessageEditByExternalID :execrows
+
+UPDATE comms_message
+SET body = $1,
+    snippet = $2,
+    source_metadata = jsonb_set(
+        jsonb_set(
+            jsonb_set(
+                source_metadata,
+                '{previous_bodies}',
+                (
+                    SELECT COALESCE(jsonb_agg(prior_body), '[]'::jsonb)
+                    FROM (
+                        SELECT prior_body
+                        FROM jsonb_array_elements(
+                            CASE
+                                WHEN comms_message.body IS NULL THEN
+                                    COALESCE(source_metadata->'previous_bodies', '[]'::jsonb)
+                                ELSE
+                                    to_jsonb(ARRAY[comms_message.body])
+                                        || COALESCE(source_metadata->'previous_bodies', '[]'::jsonb)
+                            END
+                        ) AS prior_body
+                        LIMIT 3
+                    ) AS capped
+                ),
+                TRUE
+            ),
+            '{edited_at}',
+            to_jsonb($3::text),
+            TRUE
+        ),
+        '{last_update_time}',
+        to_jsonb($4::text),
+        TRUE
+    )
+WHERE source = $5
+  AND external_id = $6
+  AND deleted_at IS NULL
+  AND COALESCE(
+        NULLIF(source_metadata->>'last_update_time', '')::timestamptz,
+        '-infinity'::timestamptz
+      ) < ($4::text)::timestamptz
+`
+
+type ApplyCommsMessageEditByExternalIDParams struct {
+	Body           pgtype.Text `json:"body"`
+	Snippet        pgtype.Text `json:"snippet"`
+	EditedAt       string      `json:"edited_at"`
+	LastUpdateTime string      `json:"last_update_time"`
+	Source         string      `json:"source"`
+	ExternalID     string      `json:"external_id"`
+}
+
+// =====================================================================
+// GChat edit/delete reconciliation queries. Scoped by (source,
+// external_id) so they hit ALL fanned-out rows for one upstream message
+// (a message qualifying N contacts has N rows sharing external_id). All
+// scope deleted_at IS NULL.
+// =====================================================================
+// Apply an upstream message edit to every stored row for (source, external_id).
+// Updates body + snippet, pushes the row's prior body onto
+// source_metadata.previous_bodies[] (newest-first, capped at the last 3), and
+// records the edit's last_update_time + edited_at. processed_at, interaction_id,
+// and deleted_at are deliberately left untouched: the aggregation engine skips
+// rows with processed_at set, so a content edit never reprocesses the derived
+// interaction.
+//
+// RECENCY + IDEMPOTENCY GUARD: the WHERE clause compares the stored
+// last_update_time against @last_update_time as a TIMESTAMPTZ, not as a string.
+// RFC-3339 is NOT lexicographically ordered when fractional-second precision
+// varies (e.g. "...10:00:00Z" sorts after "...10:00:00.001Z" yet is earlier),
+// so a string compare would silently reject a legitimate newer edit. Casting
+// both sides to timestamptz compares real instants regardless of precision or
+// offset. NULLIF(...,”)::timestamptz handles never-edited rows (absent/empty
+// key -> NULL -> '-infinity' floor, so the first edit always passes). Because
+// only the first writer advances last_update_time, two connected accounts
+// observing the same edit in concurrent sweeps each attempt the UPDATE but only
+// one pushes previous_bodies[] — the second's predicate is false (0 rows).
+//
+// previous_bodies[] cap: prepend the row's CURRENT body (the soon-to-be-prior
+// value), then keep the first 3 elements (newest-first). A NULL current body is
+// not pushed (nothing to preserve).
+func (q *Queries) ApplyCommsMessageEditByExternalID(ctx context.Context, arg ApplyCommsMessageEditByExternalIDParams) (int64, error) {
+	result, err := q.db.Exec(ctx, ApplyCommsMessageEditByExternalID,
+		arg.Body,
+		arg.Snippet,
+		arg.EditedAt,
+		arg.LastUpdateTime,
+		arg.Source,
+		arg.ExternalID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const BackdateCommsMessageClaim = `-- name: BackdateCommsMessageClaim :exec
 UPDATE comms_message
 SET claimed_at = NOW() - INTERVAL '10 minutes'
@@ -259,6 +357,53 @@ func (q *Queries) GetCommsMessageByReplyTarget(ctx context.Context, arg GetComms
 		arg.ThreadID,
 		arg.ReplyTargetID,
 	)
+	var i CommsMessage
+	err := row.Scan(
+		&i.ID,
+		&i.Source,
+		&i.ExternalID,
+		&i.ThreadID,
+		&i.Subject,
+		&i.Body,
+		&i.Snippet,
+		&i.PeerHandle,
+		&i.PeerNormalized,
+		&i.Direction,
+		&i.SentAt,
+		&i.AccountID,
+		&i.SourceMetadata,
+		&i.MatchedContactID,
+		&i.InteractionID,
+		&i.ClaimedAt,
+		&i.ClaimedSessionRef,
+		&i.ProcessedAt,
+		&i.DeletedAt,
+		&i.CreatedAt,
+	)
+	return &i, err
+}
+
+const GetCommsMessageLatestByExternalID = `-- name: GetCommsMessageLatestByExternalID :one
+SELECT id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at FROM comms_message
+WHERE source = $1
+  AND external_id = $2
+  AND deleted_at IS NULL
+ORDER BY sent_at DESC, id
+LIMIT 1
+`
+
+type GetCommsMessageLatestByExternalIDParams struct {
+	Source     string `json:"source"`
+	ExternalID string `json:"external_id"`
+}
+
+// Read one stored row for (source, external_id), newest first, to supply the
+// current body for the provider's bodyDiffers no-op-avoidance pre-check. Fanned-
+// out rows share content, so any one row suffices. Used ONLY for body
+// comparison — NEVER for a Go-side timestamp/recency comparison (recency is the
+// SQL ::timestamptz guard in ApplyCommsMessageEditByExternalID).
+func (q *Queries) GetCommsMessageLatestByExternalID(ctx context.Context, arg GetCommsMessageLatestByExternalIDParams) (*CommsMessage, error) {
+	row := q.db.QueryRow(ctx, GetCommsMessageLatestByExternalID, arg.Source, arg.ExternalID)
 	var i CommsMessage
 	err := row.Scan(
 		&i.ID,
@@ -699,6 +844,32 @@ WHERE id = $1
 func (q *Queries) SoftDeleteCommsMessageByID(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, SoftDeleteCommsMessageByID, id)
 	return err
+}
+
+const SoftDeleteCommsMessagesByExternalID = `-- name: SoftDeleteCommsMessagesByExternalID :execrows
+UPDATE comms_message
+SET deleted_at = $1
+WHERE source = $2
+  AND external_id = $3
+  AND deleted_at IS NULL
+`
+
+type SoftDeleteCommsMessagesByExternalIDParams struct {
+	Now        pgtype.Timestamptz `json:"now"`
+	Source     string             `json:"source"`
+	ExternalID string             `json:"external_id"`
+}
+
+// Soft-delete every stored row for (source, external_id) — the production chat
+// delete path. Scoped by (source, external_id) so all fanned-out contacts'
+// rows drop out of future aggregation. Idempotent: an already-deleted message
+// affects 0 rows.
+func (q *Queries) SoftDeleteCommsMessagesByExternalID(ctx context.Context, arg SoftDeleteCommsMessagesByExternalIDParams) (int64, error) {
+	result, err := q.db.Exec(ctx, SoftDeleteCommsMessagesByExternalID, arg.Now, arg.Source, arg.ExternalID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const UpsertCommsMessage = `-- name: UpsertCommsMessage :one

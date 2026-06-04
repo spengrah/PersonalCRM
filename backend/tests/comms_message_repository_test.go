@@ -571,6 +571,215 @@ func TestInteractionSourceCheck_AcceptsEmail(t *testing.T) {
 	assert.Equal(t, repository.InteractionSourceEmail, interaction.Source)
 }
 
+// gchatUpsertParams builds an upsert input for a gchat row (the source the
+// edit/delete reconciliation queries serve in production). external_id is the
+// Chat message resource name; thread_id is the space resource name.
+func gchatUpsertParams(externalID string, contactID uuid.UUID, sentAt time.Time, body string) repository.UpsertCommsMessageParams {
+	return repository.UpsertCommsMessageParams{
+		Source:           repository.InteractionSourceGChat,
+		ExternalID:       externalID,
+		ThreadID:         strPtr("spaces/AAAA-" + externalID),
+		Body:             strPtr(body),
+		Snippet:          strPtr(body),
+		PeerHandle:       strPtr("peer@example.test"),
+		PeerNormalized:   strPtr("peer@example.test"),
+		Direction:        repository.InteractionDirectionInbound,
+		SentAt:           sentAt,
+		AccountID:        strPtr("accA"),
+		MatchedContactID: contactID,
+	}
+}
+
+// previousBodies extracts source_metadata.previous_bodies as a []string.
+func previousBodies(t *testing.T, raw []byte) []string {
+	t.Helper()
+	m := decodeMetadata(t, raw)
+	arr, ok := m["previous_bodies"].([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(arr))
+	for _, v := range arr {
+		out = append(out, v.(string))
+	}
+	return out
+}
+
+// TestApplyEditByExternalID_PreviousBodiesCapAndRecencyGuard pins the edit
+// query's two SQL-level contracts: (1) previous_bodies[] holds the last 3 prior
+// bodies newest-first across repeated edits; (2) the ::timestamptz recency guard
+// rejects a stale (or equal) last_update_time so concurrent same-edit
+// observation pushes previous_bodies[] exactly once. body/snippet/edited_at/
+// last_update_time are updated; processed_at/interaction_id/deleted_at untouched.
+func TestApplyEditByExternalID_PreviousBodiesCapAndRecencyGuard(t *testing.T) {
+	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
+
+	suffix := randomSuffix(t)
+	contact := newEmailContact(t, ctx, repo, contactRepo, "Test GChat Edit "+suffix)
+
+	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
+	externalID := "spaces/AAAA/messages/edit-" + suffix
+	seeded, err := repo.UpsertMessage(ctx, gchatUpsertParams(externalID, contact.ID, sentAt, "body v0"))
+	require.NoError(t, err)
+
+	src := repository.InteractionSourceGChat
+
+	// Edit 1 (prior body "body v0") at t1.
+	n, err := repo.ApplyEditByExternalID(ctx, src, externalID, strPtr("body v1"), strPtr("snip v1"), "2026-06-04T10:00:00Z", "2026-06-04T10:00:01Z")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), n)
+
+	// Edit 2 (prior body "body v1") at t2.
+	n, err = repo.ApplyEditByExternalID(ctx, src, externalID, strPtr("body v2"), strPtr("snip v2"), "2026-06-04T10:00:02Z", "2026-06-04T10:00:02Z")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), n)
+
+	// Edit 3 (prior body "body v2") at t3.
+	n, err = repo.ApplyEditByExternalID(ctx, src, externalID, strPtr("body v3"), strPtr("snip v3"), "2026-06-04T10:00:03Z", "2026-06-04T10:00:03Z")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), n)
+
+	// Edit 4 (prior body "body v3") at t4 — should drop "body v0" from the cap.
+	n, err = repo.ApplyEditByExternalID(ctx, src, externalID, strPtr("body v4"), strPtr("snip v4"), "2026-06-04T10:00:04Z", "2026-06-04T10:00:04Z")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), n)
+
+	got, err := repo.GetMessage(ctx, src, externalID, contact.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.Body)
+	assert.Equal(t, "body v4", *got.Body)
+	require.NotNil(t, got.Snippet)
+	assert.Equal(t, "snip v4", *got.Snippet)
+	// Newest-first, exactly the last 3 prior bodies (v0 dropped).
+	assert.Equal(t, []string{"body v3", "body v2", "body v1"}, previousBodies(t, got.SourceMetadata))
+	md := decodeMetadata(t, got.SourceMetadata)
+	assert.Equal(t, "2026-06-04T10:00:04Z", md["last_update_time"])
+	assert.Equal(t, "2026-06-04T10:00:04Z", md["edited_at"])
+	// Content-derived fields untouched by the edit path.
+	assert.Nil(t, got.ProcessedAt)
+	assert.Nil(t, got.InteractionID)
+	assert.Nil(t, got.DeletedAt)
+	assert.Equal(t, seeded.ID, got.ID)
+
+	// Recency guard: re-applying the SAME edit (equal last_update_time) is a
+	// no-op — 0 rows, previous_bodies unchanged (not double-pushed).
+	n, err = repo.ApplyEditByExternalID(ctx, src, externalID, strPtr("body v4 dup"), strPtr("snip dup"), "2026-06-04T10:00:99Z", "2026-06-04T10:00:04Z")
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), n, "equal last_update_time must not re-apply")
+
+	// Stale guard: an OLDER last_update_time is rejected too.
+	n, err = repo.ApplyEditByExternalID(ctx, src, externalID, strPtr("stale body"), strPtr("stale"), "2026-06-04T09:00:00Z", "2026-06-04T10:00:00Z")
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), n, "older last_update_time must be rejected")
+
+	got2, err := repo.GetMessage(ctx, src, externalID, contact.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got2.Body)
+	assert.Equal(t, "body v4", *got2.Body, "no-op edits left body unchanged")
+	assert.Equal(t, []string{"body v3", "body v2", "body v1"}, previousBodies(t, got2.SourceMetadata), "previous_bodies not double-pushed")
+}
+
+// TestApplyEditByExternalID_FractionalSecondOrdering proves the ::timestamptz
+// guard orders by real instant, not lexical RFC-3339: a higher-fractional-
+// precision newer edit applies, and a genuinely-older edit that sorts lexically
+// LATER is rejected. The "...10:00:00Z" vs "...10:00:00.001Z" pair is the exact
+// case a string compare would invert (the 'Z' byte sorts after '.').
+func TestApplyEditByExternalID_FractionalSecondOrdering(t *testing.T) {
+	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
+
+	suffix := randomSuffix(t)
+	contact := newEmailContact(t, ctx, repo, contactRepo, "Test GChat Frac "+suffix)
+	src := repository.InteractionSourceGChat
+	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
+
+	externalID := "spaces/AAAA/messages/frac-" + suffix
+	_, err := repo.UpsertMessage(ctx, gchatUpsertParams(externalID, contact.ID, sentAt, "frac v0"))
+	require.NoError(t, err)
+
+	// Seed last_update_time = "...10:00:00.001Z".
+	n, err := repo.ApplyEditByExternalID(ctx, src, externalID, strPtr("frac v1"), strPtr("frac v1"), "2026-06-04T10:00:00Z", "2026-06-04T10:00:00.001Z")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), n)
+
+	// Genuinely OLDER ("...10:00:00Z") but sorts lexically LATER than the stored
+	// "...10:00:00.001Z" → must be REJECTED by the timestamptz guard.
+	n, err = repo.ApplyEditByExternalID(ctx, src, externalID, strPtr("frac older"), strPtr("frac older"), "2026-06-04T10:00:00Z", "2026-06-04T10:00:00Z")
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), n, "lexically-later but chronologically-earlier edit must be rejected")
+
+	got, err := repo.GetMessage(ctx, src, externalID, contact.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.Body)
+	assert.Equal(t, "frac v1", *got.Body)
+
+	// Genuinely NEWER ("...10:00:00.002Z") → applies.
+	n, err = repo.ApplyEditByExternalID(ctx, src, externalID, strPtr("frac v2"), strPtr("frac v2"), "2026-06-04T10:00:01Z", "2026-06-04T10:00:00.002Z")
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), n)
+	got, err = repo.GetMessage(ctx, src, externalID, contact.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.Body)
+	assert.Equal(t, "frac v2", *got.Body)
+}
+
+// TestSoftDeleteByExternalID_AllFannedRows proves the production delete path
+// soft-deletes EVERY fanned-out row for (source, external_id) and is idempotent.
+func TestSoftDeleteByExternalID_AllFannedRows(t *testing.T) {
+	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
+
+	suffix := randomSuffix(t)
+	contactA := newEmailContact(t, ctx, repo, contactRepo, "Test GChat DelA "+suffix)
+	contactB := newEmailContact(t, ctx, repo, contactRepo, "Test GChat DelB "+suffix)
+	src := repository.InteractionSourceGChat
+	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
+
+	externalID := "spaces/AAAA/messages/del-" + suffix
+	_, err := repo.UpsertMessage(ctx, gchatUpsertParams(externalID, contactA.ID, sentAt, "del body"))
+	require.NoError(t, err)
+	_, err = repo.UpsertMessage(ctx, gchatUpsertParams(externalID, contactB.ID, sentAt, "del body"))
+	require.NoError(t, err)
+
+	now := accelerated.GetCurrentTime().Truncate(time.Microsecond)
+	n, err := repo.SoftDeleteByExternalID(ctx, src, externalID, now)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), n, "both fanned-out rows soft-deleted")
+
+	// Both rows now invisible to the deleted_at-filtered GetMessage.
+	_, err = repo.GetMessage(ctx, src, externalID, contactA.ID)
+	assert.True(t, errors.Is(err, db.ErrNotFound))
+	_, err = repo.GetMessage(ctx, src, externalID, contactB.ID)
+	assert.True(t, errors.Is(err, db.ErrNotFound))
+
+	// Idempotent: re-deleting affects 0 rows.
+	n, err = repo.SoftDeleteByExternalID(ctx, src, externalID, now)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), n)
+}
+
+// TestGetLatestByExternalID_NewestFirstAndNotFound pins the body-pre-check read:
+// it returns the newest row by (sent_at DESC, id) and ErrNotFound on miss.
+func TestGetLatestByExternalID_NewestFirstAndNotFound(t *testing.T) {
+	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
+
+	suffix := randomSuffix(t)
+	contact := newEmailContact(t, ctx, repo, contactRepo, "Test GChat Latest "+suffix)
+	src := repository.InteractionSourceGChat
+
+	externalID := "spaces/AAAA/messages/latest-" + suffix
+	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
+	_, err := repo.UpsertMessage(ctx, gchatUpsertParams(externalID, contact.ID, sentAt, "latest body"))
+	require.NoError(t, err)
+
+	got, err := repo.GetLatestByExternalID(ctx, src, externalID)
+	require.NoError(t, err)
+	require.NotNil(t, got.Body)
+	assert.Equal(t, "latest body", *got.Body)
+	assert.Equal(t, externalID, got.ExternalID)
+
+	_, err = repo.GetLatestByExternalID(ctx, src, "spaces/AAAA/messages/missing-"+suffix)
+	assert.True(t, errors.Is(err, db.ErrNotFound))
+}
+
 // TestBackfillParticipantNames_AdditiveMergeAndIdempotent pins the additive
 // merge contract directly at the SQL level: BackfillParticipantNames ADDS the
 // four display-name keys onto a name-less row while preserving ALL existing

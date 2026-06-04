@@ -349,3 +349,100 @@ UPDATE comms_message
 SET deleted_at = NOW()
 WHERE id = @id
   AND deleted_at IS NULL;
+
+-- =====================================================================
+-- GChat edit/delete reconciliation queries. Scoped by (source,
+-- external_id) so they hit ALL fanned-out rows for one upstream message
+-- (a message qualifying N contacts has N rows sharing external_id). All
+-- scope deleted_at IS NULL.
+-- =====================================================================
+
+-- name: ApplyCommsMessageEditByExternalID :execrows
+-- Apply an upstream message edit to every stored row for (source, external_id).
+-- Updates body + snippet, pushes the row's prior body onto
+-- source_metadata.previous_bodies[] (newest-first, capped at the last 3), and
+-- records the edit's last_update_time + edited_at. processed_at, interaction_id,
+-- and deleted_at are deliberately left untouched: the aggregation engine skips
+-- rows with processed_at set, so a content edit never reprocesses the derived
+-- interaction.
+--
+-- RECENCY + IDEMPOTENCY GUARD: the WHERE clause compares the stored
+-- last_update_time against @last_update_time as a TIMESTAMPTZ, not as a string.
+-- RFC-3339 is NOT lexicographically ordered when fractional-second precision
+-- varies (e.g. "...10:00:00Z" sorts after "...10:00:00.001Z" yet is earlier),
+-- so a string compare would silently reject a legitimate newer edit. Casting
+-- both sides to timestamptz compares real instants regardless of precision or
+-- offset. NULLIF(...,'')::timestamptz handles never-edited rows (absent/empty
+-- key -> NULL -> '-infinity' floor, so the first edit always passes). Because
+-- only the first writer advances last_update_time, two connected accounts
+-- observing the same edit in concurrent sweeps each attempt the UPDATE but only
+-- one pushes previous_bodies[] — the second's predicate is false (0 rows).
+--
+-- previous_bodies[] cap: prepend the row's CURRENT body (the soon-to-be-prior
+-- value), then keep the first 3 elements (newest-first). A NULL current body is
+-- not pushed (nothing to preserve).
+UPDATE comms_message
+SET body = @body,
+    snippet = @snippet,
+    source_metadata = jsonb_set(
+        jsonb_set(
+            jsonb_set(
+                source_metadata,
+                '{previous_bodies}',
+                (
+                    SELECT COALESCE(jsonb_agg(prior_body), '[]'::jsonb)
+                    FROM (
+                        SELECT prior_body
+                        FROM jsonb_array_elements(
+                            CASE
+                                WHEN comms_message.body IS NULL THEN
+                                    COALESCE(source_metadata->'previous_bodies', '[]'::jsonb)
+                                ELSE
+                                    to_jsonb(ARRAY[comms_message.body])
+                                        || COALESCE(source_metadata->'previous_bodies', '[]'::jsonb)
+                            END
+                        ) AS prior_body
+                        LIMIT 3
+                    ) AS capped
+                ),
+                TRUE
+            ),
+            '{edited_at}',
+            to_jsonb(@edited_at::text),
+            TRUE
+        ),
+        '{last_update_time}',
+        to_jsonb(@last_update_time::text),
+        TRUE
+    )
+WHERE source = @source
+  AND external_id = @external_id
+  AND deleted_at IS NULL
+  AND COALESCE(
+        NULLIF(source_metadata->>'last_update_time', '')::timestamptz,
+        '-infinity'::timestamptz
+      ) < (@last_update_time::text)::timestamptz;
+
+-- name: SoftDeleteCommsMessagesByExternalID :execrows
+-- Soft-delete every stored row for (source, external_id) — the production chat
+-- delete path. Scoped by (source, external_id) so all fanned-out contacts'
+-- rows drop out of future aggregation. Idempotent: an already-deleted message
+-- affects 0 rows.
+UPDATE comms_message
+SET deleted_at = @now
+WHERE source = @source
+  AND external_id = @external_id
+  AND deleted_at IS NULL;
+
+-- name: GetCommsMessageLatestByExternalID :one
+-- Read one stored row for (source, external_id), newest first, to supply the
+-- current body for the provider's bodyDiffers no-op-avoidance pre-check. Fanned-
+-- out rows share content, so any one row suffices. Used ONLY for body
+-- comparison — NEVER for a Go-side timestamp/recency comparison (recency is the
+-- SQL ::timestamptz guard in ApplyCommsMessageEditByExternalID).
+SELECT * FROM comms_message
+WHERE source = @source
+  AND external_id = @external_id
+  AND deleted_at IS NULL
+ORDER BY sent_at DESC, id
+LIMIT 1;

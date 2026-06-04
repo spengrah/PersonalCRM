@@ -655,6 +655,58 @@ func (r *CommsMessageRepository) SoftDeleteByID(ctx context.Context, id uuid.UUI
 	return r.queries.SoftDeleteCommsMessageByID(ctx, uuidToPgUUID(id))
 }
 
+// ApplyEditByExternalID applies an upstream edit to every stored row for
+// (source, external_id): updates body + snippet, pushes the prior body onto
+// source_metadata.previous_bodies[] (capped at the last 3), and records
+// last_update_time + edited_at. The SQL ::timestamptz recency guard decides
+// whether the edit is newer than the stored row, so this is idempotent under
+// concurrent same-edit observation. body/snippet are pointers (nil → SQL NULL);
+// editedAt and lastUpdateTime are RFC-3339 strings (lastUpdateTime is the
+// message's LastUpdateTime, cast ::timestamptz in the query). Returns the
+// number of rows updated (0 when the stored last_update_time is already >= the
+// new one). Production code MUST NOT compare lastUpdateTime in Go.
+func (r *CommsMessageRepository) ApplyEditByExternalID(ctx context.Context, source, externalID string, body, snippet *string, editedAt, lastUpdateTime string) (int64, error) {
+	return r.queries.ApplyCommsMessageEditByExternalID(ctx, db.ApplyCommsMessageEditByExternalIDParams{
+		Source:         source,
+		ExternalID:     externalID,
+		Body:           stringToPgText(body),
+		Snippet:        stringToPgText(snippet),
+		EditedAt:       editedAt,
+		LastUpdateTime: lastUpdateTime,
+	})
+}
+
+// SoftDeleteByExternalID soft-deletes every stored row for (source,
+// external_id) — the production chat delete path. Idempotent: an already-deleted
+// message affects 0 rows. Returns the number of rows soft-deleted.
+func (r *CommsMessageRepository) SoftDeleteByExternalID(ctx context.Context, source, externalID string, now time.Time) (int64, error) {
+	return r.queries.SoftDeleteCommsMessagesByExternalID(ctx, db.SoftDeleteCommsMessagesByExternalIDParams{
+		Source:     source,
+		ExternalID: externalID,
+		Now:        timeToPgTimestamptz(&now),
+	})
+}
+
+// GetLatestByExternalID reads one stored row for (source, external_id), newest
+// first, to supply the current body for the provider's bodyDiffers
+// no-op-avoidance pre-check. Returns db.ErrNotFound on miss. The returned row's
+// last_update_time MUST NOT be string-compared in Go to decide recency — that
+// decision belongs to the SQL ::timestamptz guard in ApplyEditByExternalID.
+func (r *CommsMessageRepository) GetLatestByExternalID(ctx context.Context, source, externalID string) (*CommsMessage, error) {
+	dbMsg, err := r.queries.GetCommsMessageLatestByExternalID(ctx, db.GetCommsMessageLatestByExternalIDParams{
+		Source:     source,
+		ExternalID: externalID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	msg := convertDbCommsMessage(dbMsg)
+	return &msg, nil
+}
+
 // CommsSourceContactLister adapts *CommsMessageRepository to the source-neutral
 // scheduler.UnprocessedContactLister interface, pinning a source. The sweeper's
 // interface is single-source (ListUnprocessedContactIDs(ctx)) but comms_message
