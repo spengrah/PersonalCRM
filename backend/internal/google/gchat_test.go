@@ -563,8 +563,14 @@ func TestMemberIDResolver_PropagatesFetcherError(t *testing.T) {
 	r := newMemberIDResolver(fetcher, nil, nil, &cap)
 	fp := memberSetFingerprint([]string{"users/1"})
 
-	_, _, err := r.resolve(ctx, "spaces/A", fp, "a@example.test", nil)
+	pageBudget := 5
+	_, _, err := r.resolve(ctx, "spaces/A", fp, "a@example.test", &pageBudget)
 	require.ErrorIs(t, err, wantErr, "a transient members.get error must propagate, not become a negative")
+	// An ISSUED members.get is a real API call regardless of outcome: it consumes
+	// both budgets even on error, so a persistently-failing space cannot blow past
+	// the bounds across many spaces in one sweep.
+	assert.Equal(t, 9, cap, "an errored members.get still consumes the resolve cap")
+	assert.Equal(t, 4, pageBudget, "an errored members.get still consumes the page budget")
 }
 
 // TestBuildKnownIDIndex_SeedsFromPositiveCacheZeroCalls proves the index is

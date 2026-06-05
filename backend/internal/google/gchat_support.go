@@ -74,7 +74,7 @@ type cachedUserID struct {
 // actual join/leave flips the fingerprint and invalidates the negative (so the
 // email is re-resolved before the cursor advances past new messages); mere
 // message activity does NOT change the fingerprint, so a hot space's negatives
-// are not churned (§3.2.1).
+// are not churned.
 type memberNegative struct {
 	ResolvedAt           string `json:"resolved_at"`
 	MemberSetFingerprint string `json:"member_set_fingerprint"`
@@ -405,7 +405,7 @@ func resolveKnownMembers(
 // space's member-id set. It SORTs + DEDUPs the canonical "users/{id}" names and
 // returns the sha256 hex of the newline-joined result, so the same member set
 // always yields the same fingerprint regardless of ListMembers page ordering.
-// An empty set yields a fixed sentinel. The fingerprint is the §3.2.1 stability
+// An empty set yields a fixed sentinel. The fingerprint is the
 // signal: it changes ONLY when membership actually changes (a join/leave), never
 // on mere message activity (which advances lastActiveTime but not the set).
 func memberSetFingerprint(members []string) string {
@@ -558,7 +558,7 @@ func newMemberIDResolver(
 }
 
 // resolve resolves one normalizedEmail to its canonical id within spaceName,
-// honoring/stamping caches per §3.2.1. fingerprint is the space's CURRENT
+// honoring/stamping caches. fingerprint is the space's CURRENT
 // member-set fingerprint (used both to honor a negative — only when its stamped
 // fingerprint matches — and to stamp a freshly-written negative). pageBudget is
 // the shared remaining-page allowance; a fresh members.get decrements BOTH the
@@ -601,7 +601,7 @@ func (r *memberIDResolver) resolve(
 		return "", notMember, nil
 	}
 
-	// UNKNOWN candidate — must resolve. Guard the caps in the §3.2.1 order:
+	// UNKNOWN candidate — must resolve. Guard the caps in this order:
 	// resolve-cap first (deferring an UNKNOWN candidate is resolution debt), then
 	// the shared page budget.
 	if r.cap != nil && *r.cap <= 0 {
@@ -611,15 +611,20 @@ func (r *memberIDResolver) resolve(
 		return "", deferredBudgetHit, nil
 	}
 
-	resolved, isNotMember, ferr := r.fetcher.ResolveMemberID(ctx, spaceName, normalizedEmail)
-	if ferr != nil {
-		return "", notMember, ferr
-	}
+	// Decrement BOTH budgets BEFORE the call: an issued members.get is a real API
+	// call whatever its outcome, so it must count against the per-sweep resolve cap
+	// AND the shared page budget even when it errors. Counting only on success
+	// would let a space with persistently-failing members.get (Sync logs+continues
+	// per space) re-issue calls every space and blow past both bounds.
 	if r.cap != nil {
 		*r.cap--
 	}
 	if pageBudget != nil {
 		*pageBudget--
+	}
+	resolved, isNotMember, ferr := r.fetcher.ResolveMemberID(ctx, spaceName, normalizedEmail)
+	if ferr != nil {
+		return "", notMember, ferr
 	}
 	now := accelerated.GetCurrentTime()
 	if isNotMember || resolved == "" {

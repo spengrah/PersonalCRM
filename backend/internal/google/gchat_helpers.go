@@ -245,7 +245,7 @@ type idMatch struct {
 // fresh members.get resolutions for the rest.
 //
 // members is the space's current "users/{id}" member set; fingerprint is its
-// member-set fingerprint (§3.2.1). knownMap is the dual-source known-contact
+// member-set fingerprint. knownMap is the dual-source known-contact
 // map (normalizedEmail → []contactID); meSet is the connected-account self set.
 // resolver is the reverse resolver; pageBudget is the shared page allowance.
 //
@@ -255,7 +255,7 @@ type idMatch struct {
 //     — the caller must NOT advance the cursor; treat like a partial page).
 //   - blockedByCapOnDebt: an UNKNOWN candidate could not be resolved because the
 //     per-sweep resolve-cap was exhausted (resolution debt — the caller holds
-//     THIS space's cursor until a later sweep drains the debt, §3.2.1).
+//     THIS space's cursor until a later sweep drains the debt).
 //
 // Candidate classification under the current fingerprint: POSITIVE (global
 // positive hit whose id ∈ members), NEGATIVE-VALID (per-space negative with a

@@ -42,7 +42,7 @@ const (
 	// single sweep may issue across ALL spaces (the reverse email→id resolutions).
 	// 50 is comfortably under quota, amortizes a cold 67-space start over a handful
 	// of 15-min ticks, and is sized to cover a single space's debt re-resolution
-	// set in one sweep (§3.2.1). When the cap is hit, remaining UNKNOWN candidates
+	// set in one sweep. When the cap is hit, remaining UNKNOWN candidates
 	// are left unresolved THIS sweep and HOLD their space's cursor (resolution
 	// debt) until a later tick resolves them. Revisit if prod logs show persistent
 	// spacesHeldByCapOnDebt.
@@ -91,7 +91,7 @@ const (
 	// gchatMetaSpaceMemberNegatives is the PER-(space,email) negative cache
 	// (space → normalizedEmail → memberNegative): "this known email is NOT a
 	// member of this space," stamped with the space's member-set fingerprint so a
-	// negative is only honored while membership is unchanged (see §3.2.1).
+	// negative is only honored while membership is unchanged.
 	gchatMetaSpaceMemberNegatives = "space_member_negatives"
 )
 
@@ -558,7 +558,7 @@ type sweepCounters struct {
 	sendersUnresolved          int
 	editsApplied               int
 	deletesApplied             int
-	// Reverse (email→id) resolution observability (§3.6).
+	// Reverse (email→id) resolution observability.
 	memberIDsResolved             int // fresh members.get → id that IS a member of its space
 	memberResolveDeferredCap      int // UNKNOWN candidates deferred this sweep (cap exhausted)
 	memberResolveNegativesWritten int // fresh members.get → not-a-member negatives written
@@ -624,7 +624,7 @@ func (p *GChatSyncProvider) ScanIdentifier(
 
 	resolver := newCachedEmailResolver(fetcher, nil)
 	// In-scan-only reverse resolver: seeded empty and NOT persisted back to
-	// metadata (§3.4) — this avoids a read-modify-write race with the sweep on the
+	// metadata — this avoids a read-modify-write race with the sweep on the
 	// same external_sync_state.metadata row. The resolve-cap does NOT apply to the
 	// scan (cap=nil): the scan resolves exactly ONE address per space, bounded only
 	// by the page budget. The in-scan memo dedups the address across spaces within
@@ -1056,25 +1056,33 @@ type MessageClassificationForTest struct {
 	Unresolved  bool
 }
 
-// IDMatchForTest is an exported constructor for the unexported idMatch so
-// cross-package tests can seed RunClassifyForTest's known-id index. Production
-// code must NOT use this.
-func IDMatchForTest(email string, contacts []uuid.UUID) idMatch {
-	return idMatch{Email: email, Contacts: contacts}
+// KnownSenderIDForTest is an exported DTO describing one entry of the reverse
+// (id→contact) index so cross-package tests can seed RunClassifyForTest WITHOUT
+// naming the unexported idMatch type. Production code must NOT use this.
+type KnownSenderIDForTest struct {
+	UserName string // canonical "users/{id}"
+	Email    string // the CRM email carried as the peer identity
+	Contacts []uuid.UUID
 }
 
 // RunClassifyForTest drives the DB-free classifyMessage for cross-package tests,
-// using a fake-fetcher-backed resolver. knownIDs is the reverse (email→id)
-// index (build values with IDMatchForTest). Production code must NOT call this.
+// using a fake-fetcher-backed resolver. knownIDs is the reverse (id→contact)
+// index, supplied as exported DTOs and converted to the internal index here so
+// no unexported type crosses the package boundary. Production code must NOT call
+// this.
 func RunClassifyForTest(
 	ctx context.Context,
 	m *chat.Message,
 	knownMembers map[string][]uuid.UUID,
 	knownMap map[string][]uuid.UUID,
-	knownIDs map[string]idMatch,
+	knownIDs []KnownSenderIDForTest,
 	meSet map[string]struct{},
 	resolver *CachedEmailResolverForTest,
 ) (MessageClassificationForTest, error) {
-	c, err := classifyMessage(ctx, m, knownMembers, knownMap, knownIDs, meSet, resolver.inner)
+	idx := make(map[string]idMatch, len(knownIDs))
+	for _, k := range knownIDs {
+		idx[k.UserName] = idMatch{Email: k.Email, Contacts: k.Contacts}
+	}
+	c, err := classifyMessage(ctx, m, knownMembers, knownMap, idx, meSet, resolver.inner)
 	return MessageClassificationForTest(c), err
 }
