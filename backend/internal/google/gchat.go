@@ -608,9 +608,9 @@ func (p *GChatSyncProvider) consumeContentWindow(
 				// original cursor (do NOT advance past this message).
 				return createCursor, false, matchErr
 			}
-			if m.CreateTime > maxCreate {
-				maxCreate = m.CreateTime
-			}
+			// Advance by INSTANT comparison, not lexical order, so varying
+			// fractional-second precision can't under-advance the cursor.
+			maxCreate = laterChatTime(maxCreate, m.CreateTime)
 			counters.processed++
 		}
 		if next == "" {
@@ -681,9 +681,9 @@ func (p *GChatSyncProvider) reconcileEditsDeletes(
 			if applyErr := p.applyEditOrDelete(ctx, m, counters); applyErr != nil {
 				return cur.EditCursor, false, applyErr
 			}
-			if m.CreateTime > maxCreate {
-				maxCreate = m.CreateTime
-			}
+			// Advance by INSTANT comparison, not lexical order (same fractional-
+			// second precision pitfall as the content pass).
+			maxCreate = laterChatTime(maxCreate, m.CreateTime)
 		}
 		if next == "" {
 			return maxCreate, true, nil

@@ -89,6 +89,20 @@ func chatTimeAfter(a, b string) (after, ok bool) {
 	return ta.After(tb), true
 }
 
+// laterChatTime returns the chronologically-later of current and candidate,
+// compared as INSTANTS (not lexicographically). It keeps current when candidate
+// is not strictly after it OR when either side is unparseable. This is the
+// cursor-advance primitive: a raw string > comparison is wrong because RFC-3339
+// is not lexically ordered across varying fractional-second precision (e.g.
+// "...:00.001Z" is chronologically newer than "...:00Z" but sorts smaller),
+// which would under-advance the cursor and re-list already-ingested messages.
+func laterChatTime(current, candidate string) string {
+	if after, ok := chatTimeAfter(candidate, current); ok && after {
+		return candidate
+	}
+	return current
+}
+
 // --- set + slice helpers ---------------------------------------------
 
 // inSet reports membership in a set of normalized addresses.

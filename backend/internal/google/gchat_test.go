@@ -471,6 +471,70 @@ func TestConsumeContentWindow_FullyPagedIsProven(t *testing.T) {
 	assert.Equal(t, msgTime, newCursor, "cursor advances to the max createTime seen")
 }
 
+// TestConsumeContentWindow_CursorAdvancesByInstantNotLexical proves the cursor
+// advances to the chronologically-latest createTime even when an EARLIER-listed
+// message has a HIGHER fractional-second precision than a same-second
+// later-listed message. "...00.001Z" is chronologically newer than "...00Z" but
+// sorts lexically SMALLER (the '.' byte < the 'Z' byte); a raw string compare
+// would leave the cursor at "...00Z" and re-list the ".001Z" message every
+// sweep. The cursor must end at "...00.001Z".
+func TestConsumeContentWindow_CursorAdvancesByInstantNotLexical(t *testing.T) {
+	ctx := context.Background()
+	fracMsg := "2026-06-04T10:00:00.001Z" // chronologically LATER, lexically SMALLER
+	zMsg := "2026-06-04T10:00:00Z"        // chronologically EARLIER, lexically LARGER
+	fetcher := &fakeChatFetcher{funcs: FakeChatFetcherFuncs{
+		ListMessages: func(_ context.Context, _, _ string, _ bool, token string) ([]*chat.Message, string, error) {
+			if token == "" {
+				// The ".001Z" message is listed FIRST; the same-second "Z" message
+				// SECOND. A lexical max would wrongly pick "Z" (the later string).
+				return []*chat.Message{
+					humanMsg("spaces/B/messages/frac", "users/x", fracMsg, "a"),
+					humanMsg("spaces/B/messages/z", "users/x", zMsg, "b"),
+				}, "", nil
+			}
+			return nil, "", nil
+		},
+		// Bystander sender → no upsert (DB-free), but createTime still advances.
+		ResolvePersonEmail: func(context.Context, string) (string, error) { return "stranger@example.test", nil },
+	}}
+	resolver := newCachedEmailResolver(fetcher, nil)
+	p := &GChatSyncProvider{commsRepo: nil}
+	counters := &sweepCounters{}
+	budget := 10
+	floor := "2026-01-01T00:00:00Z"
+	newCursor, proven, err := p.consumeContentWindow(ctx, fetcher,
+		&chat.Space{Name: "spaces/B", SpaceType: "SPACE"}, floor,
+		map[string][]uuid.UUID{}, map[string][]uuid.UUID{}, map[string]struct{}{},
+		resolver, "acct", counters, &budget)
+	require.NoError(t, err)
+	assert.True(t, proven)
+	assert.Equal(t, fracMsg, newCursor,
+		"cursor must advance to the chronologically-latest createTime, not the lexically-largest")
+}
+
+// TestLaterChatTime pins the instant-comparison cursor primitive directly.
+func TestLaterChatTime(t *testing.T) {
+	// Fractional-second: ".001Z" is chronologically later than "Z" despite
+	// sorting lexically smaller.
+	assert.Equal(t, "2026-06-04T10:00:00.001Z",
+		laterChatTime("2026-06-04T10:00:00Z", "2026-06-04T10:00:00.001Z"))
+	// Reverse order of args → same chronological winner.
+	assert.Equal(t, "2026-06-04T10:00:00.001Z",
+		laterChatTime("2026-06-04T10:00:00.001Z", "2026-06-04T10:00:00Z"))
+	// Strictly later candidate wins.
+	assert.Equal(t, "2026-06-04T11:00:00Z",
+		laterChatTime("2026-06-04T10:00:00Z", "2026-06-04T11:00:00Z"))
+	// Earlier candidate is ignored (keep current).
+	assert.Equal(t, "2026-06-04T11:00:00Z",
+		laterChatTime("2026-06-04T11:00:00Z", "2026-06-04T10:00:00Z"))
+	// Unparseable candidate → keep current (fallback).
+	assert.Equal(t, "2026-06-04T10:00:00Z",
+		laterChatTime("2026-06-04T10:00:00Z", "not-a-time"))
+	// Unparseable current → keep current (we can't prove candidate is later).
+	assert.Equal(t, "bad-current",
+		laterChatTime("bad-current", "2026-06-04T10:00:00Z"))
+}
+
 // TestPaginateMembers_BudgetIncomplete proves membership pagination stops and
 // signals incomplete=true when the shared budget runs out before the member
 // list is fully paged (so the caller does not act on a partial list).
