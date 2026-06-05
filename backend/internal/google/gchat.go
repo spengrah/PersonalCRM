@@ -40,12 +40,14 @@ const (
 
 	// gchatMaxMemberResolvesPerSync caps the number of FRESH members.get calls a
 	// single sweep may issue across ALL spaces (the reverse email→id resolutions).
-	// 50 is comfortably under quota, amortizes a cold 67-space start over a handful
-	// of 15-min ticks, and is sized to cover a single space's debt re-resolution
-	// set in one sweep. When the cap is hit, remaining UNKNOWN candidates
-	// are left unresolved THIS sweep and HOLD their space's cursor (resolution
-	// debt) until a later tick resolves them. Revisit if prod logs show persistent
-	// spacesHeldByCapOnDebt.
+	// 50 is comfortably under quota and amortizes a cold start over a handful of
+	// 15-min ticks. The cap bounds a BEST-EFFORT background warm-up: when it is
+	// hit, remaining UNKNOWN candidates are left unresolved THIS sweep (resolution
+	// debt) and resolve on a later tick — but this NEVER holds a space's cursor.
+	// Every space still pages its content window and advances its cursor using the
+	// matches already known. A deferred candidate's earlier messages are recovered
+	// by the rematch/backfill path or a manual cursor reset (go-forward by design).
+	// Tracked by spacesWarmupDeferred (observability only).
 	gchatMaxMemberResolvesPerSync = 50
 
 	// gchatMembershipCacheTTL bounds how long a cached space-member list (and a
@@ -458,12 +460,14 @@ func (p *GChatSyncProvider) Sync(
 
 		// Build the reverse (email→id) index: a known contact whose canonical id is
 		// a member of this space matches even when the People API can't resolve them
-		// (not-in-Contacts). This is the cursor-safety boundary — an UNKNOWN
-		// candidate deferred by the cap (blockedByCapOnDebt) HOLDS this space's
-		// cursor, and a page-budget exhaustion (blockedByBudget) is an incomplete
-		// window. Never advance over a window whose id resolution was incomplete.
-		// meIDs (the account's own ids in this space) are excluded so a stray
-		// alias resolving to the account's own id can never enter the index.
+		// (not-in-Contacts). id-resolution is a BEST-EFFORT background warm-up: it
+		// NEVER gates cursor advancement. A page-budget exhaustion (blockedByBudget)
+		// IS an incomplete window (a real API call could not be issued), so it still
+		// stops the sweep. But an UNKNOWN candidate deferred by the per-sweep resolve
+		// cap (blockedByCapOnDebt) does NOT hold the cursor — the space still pages
+		// its content with the members already known. meIDs (the account's own ids in
+		// this space) are excluded so a stray alias resolving to the account's own id
+		// can never enter the index.
 		knownIDs, spaceMeIDs, blockedByBudget, blockedByCapOnDebt, err := buildKnownIDIndex(ctx, space, members, fingerprint, knownMap, meSet, meIDs, idResolver, counters, &budget)
 		if err != nil {
 			logger.Warn().Err(err).Str("source", GChatSourceName).Msg("gchat: id-index resolution failed; skipping space")
@@ -475,21 +479,25 @@ func (p *GChatSyncProvider) Sync(
 			break
 		}
 		if blockedByCapOnDebt {
-			// Resolution debt: an UNKNOWN candidate could not be resolved within the
-			// per-sweep cap. HOLD this space's cursor (do NOT advance over its
-			// messages) but let other debt-free spaces continue this sweep. The debt
-			// is durable (persisted negative fingerprint vs. current member-set
-			// fingerprint), so the hold survives across sweeps until it drains.
-			counters.spacesHeldByCapOnDebt++
-			continue
+			// Id-resolution warm-up is incomplete for this space (the per-sweep
+			// resolve cap deferred an UNKNOWN candidate). This is NOT a reason to hold
+			// the cursor: process the content window with the matches already known
+			// (People-path co-members, inbound senders via knownMap, and
+			// globally-cached positives) and advance. The deferred candidate resolves
+			// on a later sweep; its earlier messages are recovered by the
+			// rematch/backfill path or a manual cursor reset (go-forward by design).
+			// This counter is observability only — it no longer changes any cursor
+			// outcome.
+			counters.spacesWarmupDeferred++
 		}
 
-		isDM := space.SpaceType == gchatSpaceTypeDM
-		if len(knownMembers) == 0 && len(knownIDs) == 0 && !isDM {
-			counters.spacesSkippedNoKnownMember++
-			continue
-		}
-
+		// Every non-incomplete space pages its content window. We deliberately do NOT
+		// skip a space with no currently-known member: classifyMessage matches an
+		// INBOUND sender via knownMap (the email-sender path) INDEPENDENT of current
+		// membership, so a former member who left the space still has matchable
+		// inbound history. consumeContentWindow advances the cursor on a proven
+		// (fully-paged) window or stops the sweep with the cursor unadvanced when the
+		// shared page budget runs out mid-window — unchanged semantics.
 		cur := gcm.cursorFor(space.Name, backfillFloor)
 		newCreateCursor, proven, err := p.consumeContentWindow(ctx, fetcher, space, cur.CreateCursor, knownMembers, knownMap, knownIDs, spaceMeIDs, meSet, resolver, accountID, counters, &budget)
 		if err != nil {
@@ -533,14 +541,13 @@ func (p *GChatSyncProvider) Sync(
 		Int("processed", counters.processed).
 		Int("matched", counters.matched).
 		Int("spaces", len(spaces)).
-		Int("spaces_skipped_no_known_member", counters.spacesSkippedNoKnownMember).
 		Int("senders_unresolved", counters.sendersUnresolved).
 		Int("edits_applied", counters.editsApplied).
 		Int("deletes_applied", counters.deletesApplied).
 		Int("member_ids_resolved", counters.memberIDsResolved).
 		Int("member_resolve_deferred_cap", counters.memberResolveDeferredCap).
 		Int("member_resolve_negatives_written", counters.memberResolveNegativesWritten).
-		Int("spaces_held_by_cap_on_debt", counters.spacesHeldByCapOnDebt).
+		Int("spaces_warmup_deferred", counters.spacesWarmupDeferred).
 		Msg("GChat sync completed")
 
 	return &syncpkg.SyncResult{
@@ -554,17 +561,16 @@ func (p *GChatSyncProvider) Sync(
 // SyncResult item counts (processed/matched → sync_log) and the structured
 // completion log line (the gchat-specific counters).
 type sweepCounters struct {
-	processed                  int
-	matched                    int
-	spacesSkippedNoKnownMember int
-	sendersUnresolved          int
-	editsApplied               int
-	deletesApplied             int
+	processed         int
+	matched           int
+	sendersUnresolved int
+	editsApplied      int
+	deletesApplied    int
 	// Reverse (email→id) resolution observability.
 	memberIDsResolved             int // fresh members.get → id that IS a member of its space
 	memberResolveDeferredCap      int // UNKNOWN candidates deferred this sweep (cap exhausted)
 	memberResolveNegativesWritten int // fresh members.get → not-a-member negatives written
-	spacesHeldByCapOnDebt         int // spaces whose cursor was held because debt couldn't drain within the cap
+	spacesWarmupDeferred          int // spaces whose id-resolution warm-up was deferred by the cap (NON-blocking; the cursor still advances)
 }
 
 // buildKnownMap loads the dual-source (gchat+email) known-contact map:

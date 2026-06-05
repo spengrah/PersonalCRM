@@ -717,15 +717,19 @@ func TestBuildKnownIDIndex_DiscoversMeIDFromCachedPositive(t *testing.T) {
 	assert.Equal(t, 0, calls, "the me-id discovery is cache-only — no fresh members.get")
 }
 
-// TestBuildKnownIDIndex_DebtHoldsCursor drives the resolution-debt model:
+// TestBuildKnownIDIndex_DeferredCapReturnsDebtFlagOnly drives the resolution-debt
+// classification. blockedByCapOnDebt is now PURELY informational (it drives the
+// spacesWarmupDeferred counter and no longer implies any cursor outcome — that is
+// a Sync-level concern, proven in the integration tests). The subtests assert the
+// resolver/index classification only:
 //
 //	(a) a NEGATIVE-VALID candidate is not debt → no resolve, blockedByCapOnDebt=false;
 //	(b) an UNKNOWN candidate (fingerprint-mismatched negative) with the cap
-//	    exhausted → deferredCapHit → blockedByCapOnDebt=true (cursor held), driven
-//	    purely by the persisted-negative-vs-current-fingerprint mismatch (no flag);
+//	    exhausted → deferredCapHit → blockedByCapOnDebt=true, driven purely by the
+//	    persisted-negative-vs-current-fingerprint mismatch (no transient flag);
 //	(c) priority — when the cap admits only N resolves, fingerprint-invalidated
 //	    candidates are resolved before never-seen ones.
-func TestBuildKnownIDIndex_DebtHoldsCursor(t *testing.T) {
+func TestBuildKnownIDIndex_DeferredCapReturnsDebtFlagOnly(t *testing.T) {
 	ctx := context.Background()
 	now := accelerated.GetCurrentTime()
 	fresh := now.Format(chatTimeLayout)
@@ -857,6 +861,170 @@ func TestBuildKnownIDIndex_ActivityDoesNotReincurDebt(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, idx, "users/absent", "a real membership change re-resolves the candidate")
 	assert.Equal(t, 1, calls, "exactly one re-resolve after the membership actually changed")
+}
+
+// TestBuildKnownIDIndex_SkipsResolutionWhenAllMembersCovered proves the lossless
+// skip: when every member id is already covered by an id-keyed signal (a me-id or
+// already in the global positive cache), the candidate-resolution loop is skipped
+// entirely — ZERO members.get calls and ZERO negatives written — because no fresh
+// resolution could ever newly attach to a known email. The index is seeded only
+// from the positive cache. Keyed strictly on id signals (never People-resolution).
+func TestBuildKnownIDIndex_SkipsResolutionWhenAllMembersCovered(t *testing.T) {
+	ctx := context.Background()
+	dave := uuid.New()
+	otherContact := uuid.New()
+	members := []string{"users/dave", "users/other", "users/me"}
+	fp := memberSetFingerprint(members)
+	now := accelerated.GetCurrentTime()
+
+	calls := 0
+	// The fetcher would resolve BOTH known emails if asked — but it must NOT be
+	// asked, because every member id is already covered.
+	fetcher := fakeIDFetcher(map[string]string{
+		"spaces/A|dave@example.test":  "users/dave",
+		"spaces/A|other@example.test": "users/other",
+	}, &calls)
+	// dave + other are already in the global positive cache; users/me is a me-id.
+	pos := map[string]cachedUserID{
+		"dave@example.test":  {UserName: "users/dave", ResolvedAt: now.Format(chatTimeLayout)},
+		"other@example.test": {UserName: "users/other", ResolvedAt: now.Format(chatTimeLayout)},
+	}
+	cap := 10
+	resolver := newMemberIDResolver(fetcher, pos, nil, &cap)
+
+	knownMap := map[string][]uuid.UUID{
+		"dave@example.test":  {dave},
+		"other@example.test": {otherContact},
+	}
+	meSet := map[string]struct{}{"me@example.test": {}}
+	meIDs := map[string]struct{}{"users/me": {}}
+	counters := &sweepCounters{}
+	budget := 10
+	idx, _, blockedBudget, blockedCap, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fp, knownMap, meSet, meIDs, resolver, counters, &budget)
+	require.NoError(t, err)
+	assert.False(t, blockedBudget)
+	assert.False(t, blockedCap, "no uncovered member id remains → no debt")
+
+	// Both contacts seeded from the positive cache.
+	assert.Equal(t, idMatch{Email: "dave@example.test", Contacts: []uuid.UUID{dave}}, idx["users/dave"])
+	assert.Equal(t, idMatch{Email: "other@example.test", Contacts: []uuid.UUID{otherContact}}, idx["users/other"])
+	assert.Equal(t, 0, calls, "every member id is covered (me-id or positive-cached) → zero members.get calls")
+	assert.Equal(t, 0, counters.memberResolveNegativesWritten, "no negatives written when the loop is skipped")
+	assert.Equal(t, 10, cap, "the resolve cap is untouched")
+}
+
+// TestBuildKnownIDIndex_StopsAfterAllUncoveredMemberIDsMatched proves the
+// SET-based early-exit. U_id contains TWO distinct uncovered member ids, and a
+// DUAL-SOURCE alias maps TWO known addresses to the SAME canonical id. A scalar
+// "count of successful resolutions" would terminate after the alias double-counts
+// (count reaches 2 while only ONE distinct uncovered id is attached), dropping the
+// second distinct member id. The set-based test continues until BOTH distinct
+// uncovered ids are attached, then STOPS (no further members.get).
+func TestBuildKnownIDIndex_StopsAfterAllUncoveredMemberIDsMatched(t *testing.T) {
+	ctx := context.Background()
+	dave := uuid.New()
+	daveAlt := uuid.New()
+	frank := uuid.New()
+	bystander := uuid.New()
+	// Two distinct uncovered member ids: users/dave and users/frank.
+	members := []string{"users/dave", "users/frank", "users/me"}
+	fp := memberSetFingerprint(members)
+
+	calls := 0
+	// Dual-source alias: dave@ and dave-alt@ BOTH resolve to users/dave (same
+	// canonical id reachable from two known addresses). frank@ resolves to
+	// users/frank. zzz-bystander@ resolves to a non-member id and sorts LAST, so it
+	// is the candidate the early-exit must skip once both uncovered ids are matched.
+	// Emails are sorted in classifyIDCandidates, so the resolution order is
+	// deterministic: dave-alt@, dave@, frank@, zzz-bystander@.
+	fetcher := fakeIDFetcher(map[string]string{
+		"spaces/A|dave@example.test":          "users/dave",
+		"spaces/A|dave-alt@example.test":      "users/dave",
+		"spaces/A|frank@example.test":         "users/frank",
+		"spaces/A|zzz-bystander@example.test": "users/elsewhere",
+	}, &calls)
+	cap := 10
+	resolver := newMemberIDResolver(fetcher, nil, nil, &cap)
+
+	knownMap := map[string][]uuid.UUID{
+		"dave@example.test":          {dave},
+		"dave-alt@example.test":      {daveAlt},
+		"frank@example.test":         {frank},
+		"zzz-bystander@example.test": {bystander},
+	}
+	meSet := map[string]struct{}{"me@example.test": {}}
+	// users/me is the account's own member id (covered via meIDs, as
+	// resolveKnownMembers would populate in the real sweep) → not part of U_id.
+	meIDs := map[string]struct{}{"users/me": {}}
+	counters := &sweepCounters{}
+	budget := 10
+	idx, _, blockedBudget, blockedCap, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fp, knownMap, meSet, meIDs, resolver, counters, &budget)
+	require.NoError(t, err)
+	assert.False(t, blockedBudget)
+	assert.False(t, blockedCap)
+
+	// (b) BOTH distinct uncovered member ids are attached.
+	require.Contains(t, idx, "users/dave", "the first uncovered member id is attached")
+	require.Contains(t, idx, "users/frank", "the second distinct uncovered member id is attached (a scalar count would have stopped before reaching it)")
+	// The dual-source alias unioned both contacts onto the shared id.
+	assert.ElementsMatch(t, []uuid.UUID{dave, daveAlt}, idx["users/dave"].Contacts, "both contacts sharing the canonical id are unioned, not last-writer-wins")
+
+	// (c) Once both uncovered ids matched, the loop STOPPED before zzz-bystander@.
+	// Resolution order: dave-alt@ (→users/dave), dave@ (→users/dave, unioned),
+	// frank@ (→users/frank, second distinct id matched), then the early-exit fires
+	// and zzz-bystander@ is NOT resolved → exactly THREE members.get calls.
+	// Critically, the early-exit did NOT fire after only the dave aliases (a scalar
+	// count==2 bug) — users/frank is present AND zzz-bystander@ was skipped only
+	// AFTER frank, proving the SET semantics.
+	assert.Equal(t, 3, calls, "the loop resolves until both distinct uncovered ids match, then stops before the trailing bystander candidate")
+}
+
+// TestBuildKnownIDIndex_DualSourceIdentityNotLost is the losslessness boundary.
+// A member id (users/dave) whose People-API resolution is a NON-known email
+// (looks like a bystander) is STILL matched, because a DIFFERENT known address
+// resolves (members.get) to that SAME canonical id. The optimization keys U_id on
+// id signals (me-id + positive cache) ONLY, never on People-resolution, so the
+// dual-source identity is never skipped/early-exited out. Built on the
+// ListGChatIdentitiesForSync dual-source shape: one contact with both a gchat and
+// an email value that differ.
+func TestBuildKnownIDIndex_DualSourceIdentityNotLost(t *testing.T) {
+	ctx := context.Background()
+	dave := uuid.New()
+	// users/dave is a member; People would resolve it to dave-people@ (a NON-known
+	// address — not in knownMap). But the contact is reachable via TWO known
+	// addresses (a gchat handle and an email), and the email resolves via
+	// members.get to users/dave.
+	members := []string{"users/dave", "users/me"}
+	fp := memberSetFingerprint(members)
+
+	calls := 0
+	// Only the known email resolves to users/dave; the gchat-handle alias is a
+	// no-member alias here (it would match in a different space). The point: U_id
+	// includes users/dave (People-resolved-to-non-known), so it IS resolved.
+	fetcher := fakeIDFetcher(map[string]string{
+		"spaces/A|dave-email@example.test": "users/dave",
+	}, &calls)
+	cap := 10
+	resolver := newMemberIDResolver(fetcher, nil, nil, &cap)
+
+	// Dual-source: the SAME contact carries both a gchat value and an email value.
+	knownMap := map[string][]uuid.UUID{
+		"dave-gchat@example.test": {dave},
+		"dave-email@example.test": {dave},
+	}
+	meSet := map[string]struct{}{"me@example.test": {}}
+	counters := &sweepCounters{}
+	budget := 10
+	idx, _, blockedBudget, blockedCap, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fp, knownMap, meSet, nil, resolver, counters, &budget)
+	require.NoError(t, err)
+	assert.False(t, blockedBudget)
+	assert.False(t, blockedCap)
+
+	// users/dave IS in the index — the optimization did NOT skip it on the basis
+	// that People resolves it to a non-known email. The contact matches.
+	require.Contains(t, idx, "users/dave", "a dual-source identity is matched via the alternate known address")
+	assert.Equal(t, []uuid.UUID{dave}, idx["users/dave"].Contacts)
+	assert.GreaterOrEqual(t, calls, 1, "the alternate known address WAS resolved (U_id keys on id signals, not People-resolution)")
 }
 
 func TestMembershipNeedsRefresh(t *testing.T) {
