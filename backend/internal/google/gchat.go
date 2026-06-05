@@ -93,6 +93,16 @@ type chatFetcher interface {
 	// normalized email via the People API. Returns "" (no error) when the person
 	// has no email or is not resolvable under the granted scope.
 	ResolvePersonEmail(ctx context.Context, userName string) (normalizedEmail string, err error)
+	// ResolveMemberID resolves a normalized email TO its canonical Chat user
+	// resource name ("users/{id}") within a space, via members.get with the email
+	// as the member alias. Unlike ResolvePersonEmail (which reads the caller's
+	// Contacts graph), this reads the space's membership graph, so it resolves a
+	// co-member even when that person is not in the user's Google Contacts.
+	// notMember is true (with no error) when the email is not a member of the
+	// space — the API returns HTTP 400 (unrecognized member) or 404 for that case;
+	// the caller treats it as a cacheable negative. Transient/auth errors
+	// propagate so the window aborts and retries.
+	ResolveMemberID(ctx context.Context, spaceName, normalizedEmail string) (canonicalUserName string, notMember bool, err error)
 }
 
 // chatServiceFetcher is the production chatFetcher backed by *chat.Service +
@@ -171,6 +181,36 @@ func (f *chatServiceFetcher) ResolvePersonEmail(ctx context.Context, userName st
 		return "", fmt.Errorf("resolve person %s: %w", hashIdentifier(userName), err)
 	}
 	return primaryNormalizedEmail(person), nil
+}
+
+// ResolveMemberID resolves a normalized email to its canonical "users/{id}"
+// within a space by calling members.get with the email as the membership alias.
+// The member resource name is space.Name + "/members/" + email — i.e. the BARE
+// email after "members/" (NOT "members/users/{email}"). The chat/v1 client
+// expands "{+name}" with reserved expansion, so the "@"/"." in the email are
+// preserved (no manual escaping). On success it returns the canonical
+// Member.Name (the alias is request-only; responses are always canonical). An
+// unrecognized member yields an HTTP 400 ("Invalid membership state, user,
+// group or request ID") — that, like a 404, means "not a member of this space",
+// so both map to notMember=true (a cacheable negative, NOT a window-aborting
+// error). Other errors (auth, quota, 5xx) propagate.
+func (f *chatServiceFetcher) ResolveMemberID(ctx context.Context, spaceName, normalizedEmail string) (string, bool, error) {
+	if spaceName == "" || normalizedEmail == "" {
+		return "", true, nil
+	}
+	name := spaceName + "/members/" + normalizedEmail
+	resp, err := f.chat.Spaces.Members.Get(name).Context(ctx).Do()
+	if err != nil {
+		var apiErr *googleapi.Error
+		if errors.As(err, &apiErr) && (apiErr.Code == 400 || apiErr.Code == 404) {
+			return "", true, nil
+		}
+		return "", false, fmt.Errorf("resolve member id for %s: %w", hashIdentifier(spaceName), err)
+	}
+	if resp == nil || resp.Member == nil {
+		return "", true, nil
+	}
+	return resp.Member.Name, false, nil
 }
 
 // primaryNormalizedEmail extracts the person's primary email (or the first

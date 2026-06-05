@@ -226,6 +226,11 @@ type FakeChatFetcherFuncs struct {
 	ListMembers        func(ctx context.Context, spaceName, pageToken string) ([]*chat.Membership, string, error)
 	ListMessages       func(ctx context.Context, spaceName, filter string, showDeleted bool, pageToken string) ([]*chat.Message, string, error)
 	ResolvePersonEmail func(ctx context.Context, userName string) (string, error)
+	// ResolveMemberID is optional: a fake that omits it defaults to "not a member
+	// of this space" (notMember=true, no error), so existing tests that exercise
+	// only the People-API email path compile and keep their current outcomes — the
+	// id path is purely additive.
+	ResolveMemberID func(ctx context.Context, spaceName, normalizedEmail string) (string, bool, error)
 }
 
 type fakeChatFetcher struct {
@@ -246,6 +251,15 @@ func (f *fakeChatFetcher) ListMessages(ctx context.Context, spaceName, filter st
 
 func (f *fakeChatFetcher) ResolvePersonEmail(ctx context.Context, userName string) (string, error) {
 	return f.funcs.ResolvePersonEmail(ctx, userName)
+}
+
+func (f *fakeChatFetcher) ResolveMemberID(ctx context.Context, spaceName, normalizedEmail string) (string, bool, error) {
+	if f.funcs.ResolveMemberID == nil {
+		// Default: the email is not a member of this space (the id path is purely
+		// additive, so a fake that doesn't opt in behaves as the email-only path).
+		return "", true, nil
+	}
+	return f.funcs.ResolveMemberID(ctx, spaceName, normalizedEmail)
 }
 
 // NewFakeChatFetcherFactoryForTest returns a fetcher factory (accountID-keyed,

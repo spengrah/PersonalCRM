@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"testing"
 	"time"
 
@@ -690,6 +691,83 @@ func TestConsumeContentWindow_DeepHistoryCompletesUnderRaisedBudget(t *testing.T
 		assert.Equal(t, floor, newCursor, "cursor must NOT advance past an un-listed page")
 		assert.Equal(t, 0, budget, "the tight budget is fully drained")
 		assert.Equal(t, 24, calls, "exactly the budgeted number of pages were fetched")
+	})
+}
+
+// TestChatServiceFetcher_ResolveMemberID_RequestPath pins the actual request the
+// godoc promises: members.get with the BARE email as the member resource-name
+// segment (NOT "members/users/{email}"), parsing the canonical Member.Name from
+// the response, and mapping the unrecognized-member statuses (400/404) to
+// notMember=true. Like TestListMessages_RequestsMaxPageSize, it stands up an
+// httptest.Server and points a real *chat.Service at it (no OAuth, no live
+// Google), so it guards against the doubled-prefix mistake at the production
+// seam where the unit fakes cannot.
+func TestChatServiceFetcher_ResolveMemberID_RequestPath(t *testing.T) {
+	t.Run("success_parses_canonical_id", func(t *testing.T) {
+		ctx := context.Background()
+		var gotPath string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotPath = r.URL.Path
+			w.Header().Set("Content-Type", "application/json")
+			// Membership response whose member carries the CANONICAL users/{id}
+			// (the request used the email alias; the response is always canonical).
+			_, _ = w.Write([]byte(`{"member":{"name":"users/123456789","type":"HUMAN"}}`))
+		}))
+		defer server.Close()
+
+		svc, err := chat.NewService(ctx, option.WithEndpoint(server.URL), option.WithoutAuthentication())
+		require.NoError(t, err)
+		fetcher := &chatServiceFetcher{chat: svc}
+
+		userName, notMember, err := fetcher.ResolveMemberID(ctx, "spaces/ABC", "person@example.test")
+		require.NoError(t, err)
+		assert.False(t, notMember)
+		assert.Equal(t, "users/123456789", userName)
+		// The bare email is the member segment — NOT "members/users/{email}".
+		assert.Equal(t, "/v1/spaces/ABC/members/person@example.test", gotPath,
+			"members.get must use the bare-email member resource name (reserved expansion preserves @/.)")
+	})
+
+	// A 400 (unrecognized member) and a 404 both mean "not a member of this
+	// space" — a cacheable negative, not an error.
+	for _, code := range []int{400, 404} {
+		code := code
+		t.Run("status_maps_to_notMember", func(t *testing.T) {
+			ctx := context.Background()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(code)
+				_, _ = w.Write([]byte(`{"error":{"code":` + strconv.Itoa(code) + `,"message":"Invalid membership state, user, group or request ID"}}`))
+			}))
+			defer server.Close()
+
+			svc, err := chat.NewService(ctx, option.WithEndpoint(server.URL), option.WithoutAuthentication())
+			require.NoError(t, err)
+			fetcher := &chatServiceFetcher{chat: svc}
+
+			userName, notMember, err := fetcher.ResolveMemberID(ctx, "spaces/ABC", "stranger@example.test")
+			require.NoError(t, err, "an unrecognized-member %d must be a cacheable negative, not an error", code)
+			assert.True(t, notMember)
+			assert.Empty(t, userName)
+		})
+	}
+
+	t.Run("server_error_propagates", func(t *testing.T) {
+		ctx := context.Background()
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(500)
+			_, _ = w.Write([]byte(`{"error":{"code":500,"message":"backend error"}}`))
+		}))
+		defer server.Close()
+
+		svc, err := chat.NewService(ctx, option.WithEndpoint(server.URL), option.WithoutAuthentication())
+		require.NoError(t, err)
+		fetcher := &chatServiceFetcher{chat: svc}
+
+		_, notMember, err := fetcher.ResolveMemberID(ctx, "spaces/ABC", "person@example.test")
+		require.Error(t, err, "a transient 5xx must propagate so the window aborts and retries")
+		assert.False(t, notMember)
 	})
 }
 
