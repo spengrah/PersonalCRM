@@ -277,6 +277,12 @@ type GChatSyncProvider struct {
 	// newMeSet builds the "me" set (the normalized address of every connected
 	// account). Tests override via SetMeSetForTest.
 	newMeSet func(ctx context.Context) (map[string]struct{}, error)
+
+	// memberResolveCapOverride, when non-nil, replaces gchatMaxMemberResolvesPerSync
+	// as the per-sweep reverse-resolve cap. Tests set it via
+	// SetMemberResolveCapForTest to drive the resolve-cap deferral (debt) path
+	// deterministically. nil in production (the default constant applies).
+	memberResolveCapOverride *int
 }
 
 // Ensure GChatSyncProvider implements the sync.SyncProvider interface.
@@ -413,6 +419,9 @@ func (p *GChatSyncProvider) Sync(
 	// negatives across the whole sweep, capped at gchatMaxMemberResolvesPerSync
 	// fresh members.get calls so a cold start amortizes over many ticks.
 	resolveCap := gchatMaxMemberResolvesPerSync
+	if p.memberResolveCapOverride != nil {
+		resolveCap = *p.memberResolveCapOverride
+	}
 	idResolver := newMemberIDResolver(fetcher, gcm.EmailUserIDs, gcm.SpaceMemberNegatives, &resolveCap)
 	counters := &sweepCounters{}
 	backfillFloor := gchatBackfillFloor(state.Metadata)

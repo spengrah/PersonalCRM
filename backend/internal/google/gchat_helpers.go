@@ -384,6 +384,20 @@ func (p *GChatSyncProvider) SetMeSetForTest(meSet map[string]struct{}) {
 	}
 }
 
+// SetMemberResolveCapForTest overrides the per-sweep reverse-resolve cap so a
+// test can drive the resolve-cap deferral (resolution-debt) path
+// deterministically. Production code must NOT call this.
+func (p *GChatSyncProvider) SetMemberResolveCapForTest(cap int) {
+	p.memberResolveCapOverride = &cap
+}
+
+// MemberSetFingerprintForTest exposes the member-set fingerprint hash so a
+// cross-package integration test can pre-seed a fingerprint-stamped negative in
+// metadata. Production code must NOT call this.
+func MemberSetFingerprintForTest(members []string) string {
+	return memberSetFingerprint(members)
+}
+
 // FakeChatFetcherFuncs lets a cross-package test supply a fake chatFetcher by
 // closures, since the chatFetcher interface is unexported. Build the fetcher
 // with NewFakeChatFetcherFactoryForTest and inject via SetFetcherFactoryForTest.
