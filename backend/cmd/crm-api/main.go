@@ -866,19 +866,22 @@ func run() int {
 				logger.Warn().Msg("Gmail provider NOT registered: event-bus interaction mode=off (pubBus nil)")
 			}
 
-			// GChat provider: constructed but NOT registered into
-			// providerRegistry — the scheduler must never run it until enablement
-			// exists (INERT). It is store-only + event-free, so unlike Gmail it
-			// does NOT gate on pubBus. gchatSyncStates = syncRepo is the
-			// enabled-state lister the gchat rematch handlers gate on (registered
-			// in the late depth-0 block).
+			// GChat provider: registered into providerRegistry so the scheduler
+			// can run it — this is the go-live switch (PR 3). It stays inert
+			// until enablement reconciliation creates an enabled gchat sync state
+			// (no state → ListDueSyncStates filters enabled=TRUE → nothing to
+			// dispatch). It is store-only + event-free, so unlike Gmail it does
+			// NOT gate on pubBus. gchatSyncStates = syncRepo is the enabled-state
+			// lister the gchat rematch handlers gate on (registered in the late
+			// depth-0 block).
 			gchatProvider = google.NewGChatSyncProvider(
 				googleOAuthService,
 				commsMessageRepo,
 				syncRepo,
 			)
 			gchatSyncStates = syncRepo
-			logger.Info().Msg("GChat sync provider constructed (inert: not registered into provider registry)")
+			providerRegistry.Register(gchatProvider)
+			logger.Info().Msg("GChat sync provider registered (inert until a gchat sync state is enabled)")
 		}
 
 		// Register Todoist Cadence provider if OAuth is configured
@@ -944,6 +947,31 @@ func run() int {
 				// Non-fatal: the scheduler simply has nothing to do for email
 				// until states exist; the next connect or next boot retries.
 				logger.Warn().Err(err).Msg("boot email sync reconciliation failed (non-fatal)")
+			}
+		}
+
+		// GChat enablement reconciliation (Chat go-live). Guarded ONLY by
+		// googleOAuthService != nil — NOT pubBus: GChat is store-only + event-free,
+		// so its registration + reconciliation are independent of the event-bus
+		// interaction mode (gating on pubBus would wrongly disable GChat in
+		// off-mode). The provider is registered above whenever Google OAuth is
+		// configured; here we wire the account lister + OAuth-connect hook, then
+		// run the idempotent, chat-scope-gated boot reconciliation BEFORE
+		// riverClient.Start so the RunOnStart tick already sees any freshly-enabled
+		// gchat states. No state is created until a connected account carries the
+		// chat scopes (re-consent), keeping the feature inert until the operator
+		// completes the Chat App config + re-consent.
+		if googleOAuthService != nil {
+			syncService.SetGChatAccountLister(googleOAuthService)
+			if oauthHandler != nil {
+				oauthHandler.SetGChatStateReconciler(func(ctx context.Context) error {
+					return syncService.ReconcileGChatSyncStates(ctx)
+				})
+			}
+			if err := syncService.ReconcileGChatSyncStates(ctx); err != nil {
+				// Non-fatal: the scheduler simply has nothing to do for gchat
+				// until states exist; the next connect or next boot retries.
+				logger.Warn().Err(err).Msg("boot gchat sync reconciliation failed (non-fatal)")
 			}
 		}
 

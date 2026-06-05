@@ -38,6 +38,11 @@ type SyncService struct {
 	// only). When nil (tests / no-Google builds / off-mode)
 	// ReconcileEmailSyncStates is a no-op. See email_reconcile.go.
 	emailAccountLister GoogleAccountLister
+	// gchatAccountLister is set at boot by SetGChatAccountLister. When nil
+	// (tests / no-Google builds) ReconcileGChatSyncStates is a no-op. A
+	// dedicated field (vs. reusing emailAccountLister) keeps gchat enablement
+	// independently nil-gated. See gchat_reconcile.go.
+	gchatAccountLister GoogleAccountLister
 }
 
 // NewSyncService creates a new sync service
