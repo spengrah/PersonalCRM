@@ -614,17 +614,17 @@ func TestBuildContentMetadata(t *testing.T) {
 	require.Len(t, atts, 1)
 }
 
-// TestConsumeContentWindow_DeepHistoryCompletesUnderRaisedBudget proves the
-// budget-raise half of the fix: a window that needs more pages than the OLD
-// budget (24) but fewer than the NEW budget (gchatMaxWindowsPerSync = 100)
-// strands its cursor under the old budget yet fully pages and advances under
-// the shipped constant.
+// TestConsumeContentWindow_DeepHistoryCompletesUnderRaisedBudget exercises the
+// budget boundary: a window that needs 30 pages strands its cursor under a tight
+// 24-page budget but fully pages and advances under gchatMaxWindowsPerSync (100).
+// This is the property that lets a deep-history space complete its backfill in a
+// single sweep.
 //
 // NOTE: the fake fetcher here ignores page size entirely — it returns a fixed
 // number of pages regardless of the requested page size. So this test validates
-// ONLY that a window needing >24 but <=100 pages completes under the shipped
-// constant. It does NOT and cannot prove production now requests larger pages;
-// the .PageSize(1000) request is pinned separately by
+// ONLY that a window needing >24 but <=100 pages completes under
+// gchatMaxWindowsPerSync. It does NOT and cannot prove the production list call
+// requests larger pages; the PageSize(1000) request is pinned separately by
 // TestListMessages_RequestsMaxPageSize.
 func TestConsumeContentWindow_DeepHistoryCompletesUnderRaisedBudget(t *testing.T) {
 	ctx := context.Background()
@@ -651,10 +651,10 @@ func TestConsumeContentWindow_DeepHistoryCompletesUnderRaisedBudget(t *testing.T
 	}
 	p := &GChatSyncProvider{}
 
-	// Sub-case A — passes under the SHIPPED constant (100): the 30-page window
-	// fully pages, proven=true, cursor advances to the latest createTime, and the
+	// Sub-case A — under gchatMaxWindowsPerSync (100) the 30-page window fully
+	// pages, proven=true, the cursor advances to the latest createTime, and the
 	// budget is decremented by exactly the pages consumed.
-	t.Run("completes_under_shipped_budget", func(t *testing.T) {
+	t.Run("completes_under_full_budget", func(t *testing.T) {
 		calls := 0
 		fetcher := newFetcher(&calls)
 		resolver := newCachedEmailResolver(fetcher, nil)
@@ -671,30 +671,30 @@ func TestConsumeContentWindow_DeepHistoryCompletesUnderRaisedBudget(t *testing.T
 		assert.Equal(t, gchatMaxWindowsPerSync-totalPages, budget, "budget decremented by exactly the pages consumed")
 	})
 
-	// Sub-case B — strands under the OLD budget (24, set as a local literal, NOT
-	// by mutating the constant): the same 30-page window cannot complete, returns
-	// proven=false + the original cursor, with the budget fully drained and
-	// exactly 24 pages fetched. This is the regression the fix removes.
-	t.Run("strands_under_old_budget", func(t *testing.T) {
+	// Sub-case B — under a tight 24-page budget (a local literal) the same 30-page
+	// window cannot complete: it returns proven=false + the original cursor, with
+	// the budget fully drained and exactly 24 pages fetched. This is the stranding
+	// behavior the raised budget avoids for realistically sized spaces.
+	t.Run("strands_under_tight_budget", func(t *testing.T) {
 		calls := 0
 		fetcher := newFetcher(&calls)
 		resolver := newCachedEmailResolver(fetcher, nil)
-		budget := 24 // pre-fix value, a local literal
+		budget := 24 // a tight budget smaller than the window's page count
 		counters := &sweepCounters{}
 		newCursor, proven, err := p.consumeContentWindow(ctx, fetcher,
 			&chat.Space{Name: "spaces/B", SpaceType: "SPACE"}, floor,
 			map[string][]uuid.UUID{}, map[string][]uuid.UUID{}, map[string]struct{}{},
 			resolver, "acct", counters, &budget)
 		require.NoError(t, err)
-		assert.False(t, proven, "a 30-page window cannot complete under the old 24-page budget")
+		assert.False(t, proven, "a 30-page window cannot complete under a 24-page budget")
 		assert.Equal(t, floor, newCursor, "cursor must NOT advance past an un-listed page")
-		assert.Equal(t, 0, budget, "old budget fully drained")
-		assert.Equal(t, 24, calls, "exactly the old-budget number of pages were fetched")
+		assert.Equal(t, 0, budget, "the tight budget is fully drained")
+		assert.Equal(t, 24, calls, "exactly the budgeted number of pages were fetched")
 	})
 }
 
-// TestListMessages_RequestsMaxPageSize pins the .PageSize(1000) half of the fix
-// at the production seam. The chatFetcher interface does not carry a page size
+// TestListMessages_RequestsMaxPageSize pins the PageSize(1000) request at the
+// production seam. The chatFetcher interface does not carry a page size
 // (it is set on the *chat.Service call builder, whose urlParams_ is unexported
 // and unreadable from a test), so we stand up an httptest.Server, point a real
 // *chat.Service at it via WithoutAuthentication (no OAuth, no live Google), and
