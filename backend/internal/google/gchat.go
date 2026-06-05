@@ -731,15 +731,17 @@ func restrictKnownMembers(knownMembers map[string][]uuid.UUID, addr string) map[
 }
 
 // consumeContentWindow pages a space's messages with create_time > cursor,
-// upserts qualifying rows, and returns the new create_cursor. proven is true
-// ONLY when the window was fully paged (next == "") — that is the only case the
-// caller may advance the cursor. When the SHARED sweep budget runs out mid-
-// window (more pages remain), it returns proven=false + the ORIGINAL cursor so
-// the whole window restarts next sweep (advancing maxCreate would risk skipping
-// an un-listed later page whose first message shares maxCreate's timestamp,
-// since the next sweep filters create_time > cursor). On any error it likewise
-// returns the original cursor. budget is the shared remaining-page allowance,
-// decremented per list page.
+// upserts qualifying rows, and returns the new create_cursor advanced to the
+// latest create_time across ALL listed messages (qualifiable or not — a
+// non-qualifiable message is still definitively examined, so the window need not
+// be re-paged for it). proven is true ONLY when the window was fully paged
+// (next == "") — that is the only case the caller may advance the cursor. When
+// the SHARED sweep budget runs out mid-window (more pages remain), it returns
+// proven=false + the ORIGINAL cursor so the whole window restarts next sweep
+// (advancing maxCreate would risk skipping an un-listed later page whose first
+// message shares maxCreate's timestamp, since the next sweep filters
+// create_time > cursor). On any error it likewise returns the original cursor.
+// budget is the shared remaining-page allowance, decremented per list page.
 func (p *GChatSyncProvider) consumeContentWindow(
 	ctx context.Context,
 	fetcher chatFetcher,
@@ -770,19 +772,29 @@ func (p *GChatSyncProvider) consumeContentWindow(
 		}
 		*budget--
 		for _, m := range msgs {
-			if !qualifiableContentMessage(m) {
+			if m == nil {
 				continue
 			}
-			matchErr := p.qualifyAndUpsert(ctx, m, space, knownMembers, knownMap, knownIDs, meIDs, meSet, resolver, accountID, counters)
-			if matchErr != nil {
-				// Transient resolve/upsert error: abort the window, keep the
-				// original cursor (do NOT advance past this message).
-				return createCursor, false, matchErr
+			if qualifiableContentMessage(m) {
+				matchErr := p.qualifyAndUpsert(ctx, m, space, knownMembers, knownMap, knownIDs, meIDs, meSet, resolver, accountID, counters)
+				if matchErr != nil {
+					// Transient resolve/upsert error: abort the window, keep the
+					// original cursor (do NOT advance past this message).
+					return createCursor, false, matchErr
+				}
+				counters.processed++
 			}
-			// Advance by INSTANT comparison, not lexical order, so varying
-			// fractional-second precision can't under-advance the cursor.
+			// Advance the watermark over EVERY listed message, qualifiable or not.
+			// A non-qualifiable message (bot/app sender, tombstone) has still been
+			// definitively examined and will never produce a row, so advancing past
+			// it on a proven window is safe and prevents a no-known-member or
+			// bot-only space from re-paging the same unmatched window every sweep
+			// (which would otherwise hold the cursor and consume shared page budget,
+			// reintroducing starvation). Advance by INSTANT comparison, not lexical
+			// order, so varying fractional-second precision can't under-advance the
+			// cursor. The edit/delete pass keeps its own trailing-lookback cursor, so
+			// advancing here loses no edit/delete coverage.
 			maxCreate = laterChatTime(maxCreate, m.CreateTime)
-			counters.processed++
 		}
 		if next == "" {
 			// Fully paged → the window is proven, advance to maxCreate.

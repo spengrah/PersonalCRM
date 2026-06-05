@@ -1309,6 +1309,54 @@ func TestConsumeContentWindow_FullyPagedIsProven(t *testing.T) {
 	assert.Equal(t, msgTime, newCursor, "cursor advances to the max createTime seen")
 }
 
+// TestConsumeContentWindow_NonQualifiableOnlyWindowStillAdvances proves a
+// fully-paged window whose messages are ALL non-qualifiable (bot/app senders,
+// tombstones) STILL advances the cursor to the latest create_time. Without this,
+// a no-known-member or bot-only space would re-page the same unmatched window
+// every sweep, holding its cursor and consuming the shared page budget —
+// reintroducing the starvation this hotfix removed.
+func TestConsumeContentWindow_NonQualifiableOnlyWindowStillAdvances(t *testing.T) {
+	ctx := context.Background()
+	earlier := "2026-06-04T10:00:00Z"
+	latest := "2026-06-04T11:00:00Z"
+	// A bot message (non-HUMAN sender) and a tombstone — both non-qualifiable.
+	botMsg := &chat.Message{
+		Name:       "spaces/B/messages/bot",
+		Sender:     &chat.User{Name: "users/bot", Type: "BOT"},
+		CreateTime: earlier,
+		Text:       "automated notice",
+	}
+	tombstone := &chat.Message{
+		Name:             "spaces/B/messages/gone",
+		Sender:           &chat.User{Name: "users/x", Type: gchatUserTypeHuman},
+		CreateTime:       latest,
+		DeletionMetadata: &chat.DeletionMetadata{},
+	}
+	fetcher := &fakeChatFetcher{funcs: FakeChatFetcherFuncs{
+		ListMessages: func(_ context.Context, _, _ string, _ bool, token string) ([]*chat.Message, string, error) {
+			if token == "" {
+				return []*chat.Message{botMsg, tombstone}, "", nil
+			}
+			return nil, "", nil
+		},
+		ResolvePersonEmail: func(context.Context, string) (string, error) { return "", nil },
+	}}
+	resolver := newCachedEmailResolver(fetcher, nil)
+	// nil commsRepo is safe: no qualifiable message means no upsert is attempted.
+	p := &GChatSyncProvider{commsRepo: nil}
+	counters := &sweepCounters{}
+	budget := 10
+	floor := "2026-01-01T00:00:00Z"
+	newCursor, proven, err := p.consumeContentWindow(ctx, fetcher,
+		&chat.Space{Name: "spaces/B", SpaceType: "SPACE"}, floor,
+		map[string][]uuid.UUID{}, map[string][]uuid.UUID{}, nil, nil, map[string]struct{}{},
+		resolver, "acct", counters, &budget)
+	require.NoError(t, err)
+	assert.True(t, proven, "a fully-paged window is proven even with no qualifiable messages")
+	assert.Equal(t, latest, newCursor, "the cursor advances over non-qualifiable messages to the latest create_time")
+	assert.Equal(t, 0, counters.processed, "no qualifiable message was processed/upserted")
+}
+
 // TestConsumeContentWindow_CursorAdvancesByInstantNotLexical proves the cursor
 // advances to the chronologically-latest createTime even when an EARLIER-listed
 // message has a HIGHER fractional-second precision than a same-second
