@@ -38,6 +38,16 @@ const (
 	// retries (idempotent via the upsert dedup).
 	gchatMaxWindowsPerSync = 100
 
+	// gchatMaxMemberResolvesPerSync caps the number of FRESH members.get calls a
+	// single sweep may issue across ALL spaces (the reverse email→id resolutions).
+	// 50 is comfortably under quota, amortizes a cold 67-space start over a handful
+	// of 15-min ticks, and is sized to cover a single space's debt re-resolution
+	// set in one sweep. When the cap is hit, remaining UNKNOWN candidates
+	// are left unresolved THIS sweep and HOLD their space's cursor (resolution
+	// debt) until a later tick resolves them. Revisit if prod logs show persistent
+	// spacesHeldByCapOnDebt.
+	gchatMaxMemberResolvesPerSync = 50
+
 	// gchatMembershipCacheTTL bounds how long a cached space-member list (and a
 	// cached id→email resolution) stays valid before a forced refetch, even when
 	// the space's lastActiveTime never advances. Caps People/Chat API quota.
@@ -73,6 +83,16 @@ const (
 	gchatMetaSpaceMembers    = "space_members"
 	gchatMetaUserEmailCache  = "user_email_cache"
 	gchatMetaMeIdentities    = "me_identities"
+	// gchatMetaEmailUserIDs is the GLOBAL positive cache (normalizedEmail →
+	// canonical "users/{id}") from the reverse resolver: a canonical id is the
+	// same person in every space, so once an email resolves anywhere it is reused
+	// everywhere with zero further members.get calls.
+	gchatMetaEmailUserIDs = "email_user_ids"
+	// gchatMetaSpaceMemberNegatives is the PER-(space,email) negative cache
+	// (space → normalizedEmail → memberNegative): "this known email is NOT a
+	// member of this space," stamped with the space's member-set fingerprint so a
+	// negative is only honored while membership is unchanged.
+	gchatMetaSpaceMemberNegatives = "space_member_negatives"
 )
 
 // chatFetcher is the narrow Google Chat + People read surface the provider
@@ -93,6 +113,16 @@ type chatFetcher interface {
 	// normalized email via the People API. Returns "" (no error) when the person
 	// has no email or is not resolvable under the granted scope.
 	ResolvePersonEmail(ctx context.Context, userName string) (normalizedEmail string, err error)
+	// ResolveMemberID resolves a normalized email TO its canonical Chat user
+	// resource name ("users/{id}") within a space, via members.get with the email
+	// as the member alias. Unlike ResolvePersonEmail (which reads the caller's
+	// Contacts graph), this reads the space's membership graph, so it resolves a
+	// co-member even when that person is not in the user's Google Contacts.
+	// notMember is true (with no error) when the email is not a member of the
+	// space — the API returns HTTP 400 (unrecognized member) or 404 for that case;
+	// the caller treats it as a cacheable negative. Transient/auth errors
+	// propagate so the window aborts and retries.
+	ResolveMemberID(ctx context.Context, spaceName, normalizedEmail string) (canonicalUserName string, notMember bool, err error)
 }
 
 // chatServiceFetcher is the production chatFetcher backed by *chat.Service +
@@ -173,6 +203,36 @@ func (f *chatServiceFetcher) ResolvePersonEmail(ctx context.Context, userName st
 	return primaryNormalizedEmail(person), nil
 }
 
+// ResolveMemberID resolves a normalized email to its canonical "users/{id}"
+// within a space by calling members.get with the email as the membership alias.
+// The member resource name is space.Name + "/members/" + email — i.e. the BARE
+// email after "members/" (NOT "members/users/{email}"). The chat/v1 client
+// expands "{+name}" with reserved expansion, so the "@"/"." in the email are
+// preserved (no manual escaping). On success it returns the canonical
+// Member.Name (the alias is request-only; responses are always canonical). An
+// unrecognized member yields an HTTP 400 ("Invalid membership state, user,
+// group or request ID") — that, like a 404, means "not a member of this space",
+// so both map to notMember=true (a cacheable negative, NOT a window-aborting
+// error). Other errors (auth, quota, 5xx) propagate.
+func (f *chatServiceFetcher) ResolveMemberID(ctx context.Context, spaceName, normalizedEmail string) (string, bool, error) {
+	if spaceName == "" || normalizedEmail == "" {
+		return "", true, nil
+	}
+	name := spaceName + "/members/" + normalizedEmail
+	resp, err := f.chat.Spaces.Members.Get(name).Context(ctx).Do()
+	if err != nil {
+		var apiErr *googleapi.Error
+		if errors.As(err, &apiErr) && (apiErr.Code == 400 || apiErr.Code == 404) {
+			return "", true, nil
+		}
+		return "", false, fmt.Errorf("resolve member id for %s: %w", hashIdentifier(spaceName), err)
+	}
+	if resp == nil || resp.Member == nil {
+		return "", true, nil
+	}
+	return resp.Member.Name, false, nil
+}
+
 // primaryNormalizedEmail extracts the person's primary email (or the first
 // email when none is flagged primary), normalized. Returns "" when the person
 // carries no email.
@@ -217,6 +277,12 @@ type GChatSyncProvider struct {
 	// newMeSet builds the "me" set (the normalized address of every connected
 	// account). Tests override via SetMeSetForTest.
 	newMeSet func(ctx context.Context) (map[string]struct{}, error)
+
+	// memberResolveCapOverride, when non-nil, replaces gchatMaxMemberResolvesPerSync
+	// as the per-sweep reverse-resolve cap. Tests set it via
+	// SetMemberResolveCapForTest to drive the resolve-cap deferral (debt) path
+	// deterministically. nil in production (the default constant applies).
+	memberResolveCapOverride *int
 }
 
 // Ensure GChatSyncProvider implements the sync.SyncProvider interface.
@@ -349,6 +415,14 @@ func (p *GChatSyncProvider) Sync(
 	reapStaleCursors(gcm, spaces, accelerated.GetCurrentTime())
 
 	resolver := newCachedEmailResolver(fetcher, gcm.UserEmailCache)
+	// The reverse (email→id) resolver shares the global positive cache + per-space
+	// negatives across the whole sweep, capped at gchatMaxMemberResolvesPerSync
+	// fresh members.get calls so a cold start amortizes over many ticks.
+	resolveCap := gchatMaxMemberResolvesPerSync
+	if p.memberResolveCapOverride != nil {
+		resolveCap = *p.memberResolveCapOverride
+	}
+	idResolver := newMemberIDResolver(fetcher, gcm.EmailUserIDs, gcm.SpaceMemberNegatives, &resolveCap)
 	counters := &sweepCounters{}
 	backfillFloor := gchatBackfillFloor(state.Metadata)
 	// Shared list-page budget for the WHOLE sweep (membership + content + edit
@@ -361,7 +435,7 @@ func (p *GChatSyncProvider) Sync(
 		if budget <= 0 {
 			break
 		}
-		members, incomplete, err := p.resolveMembership(ctx, fetcher, space, gcm, &budget)
+		members, fingerprint, incomplete, err := p.resolveMembership(ctx, fetcher, space, gcm, &budget)
 		if err != nil {
 			// Transient membership error: abort THIS space (cursor unadvanced),
 			// continue with already-proven spaces. Don't fail the whole sweep.
@@ -373,7 +447,7 @@ func (p *GChatSyncProvider) Sync(
 			// space (don't act on a partial member list); it retries next sweep.
 			break
 		}
-		knownMembers, err := resolveKnownMembers(ctx, members, resolver, knownMap, meSet)
+		knownMembers, meIDs, err := resolveKnownMembers(ctx, members, resolver, knownMap, meSet)
 		if err != nil {
 			// Transient resolve error while resolving co-members: abort THIS space
 			// (cursor unadvanced) so the window retries next sweep with the full
@@ -382,14 +456,42 @@ func (p *GChatSyncProvider) Sync(
 			continue
 		}
 
+		// Build the reverse (email→id) index: a known contact whose canonical id is
+		// a member of this space matches even when the People API can't resolve them
+		// (not-in-Contacts). This is the cursor-safety boundary — an UNKNOWN
+		// candidate deferred by the cap (blockedByCapOnDebt) HOLDS this space's
+		// cursor, and a page-budget exhaustion (blockedByBudget) is an incomplete
+		// window. Never advance over a window whose id resolution was incomplete.
+		// meIDs (the account's own ids in this space) are excluded so a stray
+		// alias resolving to the account's own id can never enter the index.
+		knownIDs, spaceMeIDs, blockedByBudget, blockedByCapOnDebt, err := buildKnownIDIndex(ctx, space, members, fingerprint, knownMap, meSet, meIDs, idResolver, counters, &budget)
+		if err != nil {
+			logger.Warn().Err(err).Str("source", GChatSourceName).Msg("gchat: id-index resolution failed; skipping space")
+			continue
+		}
+		if blockedByBudget {
+			// Shared page budget exhausted mid-resolution → incomplete window, stop
+			// the sweep (cursor unadvanced; restarts next tick).
+			break
+		}
+		if blockedByCapOnDebt {
+			// Resolution debt: an UNKNOWN candidate could not be resolved within the
+			// per-sweep cap. HOLD this space's cursor (do NOT advance over its
+			// messages) but let other debt-free spaces continue this sweep. The debt
+			// is durable (persisted negative fingerprint vs. current member-set
+			// fingerprint), so the hold survives across sweeps until it drains.
+			counters.spacesHeldByCapOnDebt++
+			continue
+		}
+
 		isDM := space.SpaceType == gchatSpaceTypeDM
-		if len(knownMembers) == 0 && !isDM {
+		if len(knownMembers) == 0 && len(knownIDs) == 0 && !isDM {
 			counters.spacesSkippedNoKnownMember++
 			continue
 		}
 
 		cur := gcm.cursorFor(space.Name, backfillFloor)
-		newCreateCursor, proven, err := p.consumeContentWindow(ctx, fetcher, space, cur.CreateCursor, knownMembers, knownMap, meSet, resolver, accountID, counters, &budget)
+		newCreateCursor, proven, err := p.consumeContentWindow(ctx, fetcher, space, cur.CreateCursor, knownMembers, knownMap, knownIDs, spaceMeIDs, meSet, resolver, accountID, counters, &budget)
 		if err != nil {
 			// A list/resolve/upsert error mid-window leaves create_cursor
 			// UNADVANCED so the whole window restarts next sweep (idempotent via
@@ -421,7 +523,7 @@ func (p *GChatSyncProvider) Sync(
 		gcm.setCursor(space.Name, cur)
 	}
 
-	if err := p.persistMetadata(ctx, state, gcm, resolver); err != nil {
+	if err := p.persistMetadata(ctx, state, gcm, resolver, idResolver); err != nil {
 		return nil, fmt.Errorf("persist gchat metadata: %w", err)
 	}
 
@@ -435,6 +537,10 @@ func (p *GChatSyncProvider) Sync(
 		Int("senders_unresolved", counters.sendersUnresolved).
 		Int("edits_applied", counters.editsApplied).
 		Int("deletes_applied", counters.deletesApplied).
+		Int("member_ids_resolved", counters.memberIDsResolved).
+		Int("member_resolve_deferred_cap", counters.memberResolveDeferredCap).
+		Int("member_resolve_negatives_written", counters.memberResolveNegativesWritten).
+		Int("spaces_held_by_cap_on_debt", counters.spacesHeldByCapOnDebt).
 		Msg("GChat sync completed")
 
 	return &syncpkg.SyncResult{
@@ -454,6 +560,11 @@ type sweepCounters struct {
 	sendersUnresolved          int
 	editsApplied               int
 	deletesApplied             int
+	// Reverse (email→id) resolution observability.
+	memberIDsResolved             int // fresh members.get → id that IS a member of its space
+	memberResolveDeferredCap      int // UNKNOWN candidates deferred this sweep (cap exhausted)
+	memberResolveNegativesWritten int // fresh members.get → not-a-member negatives written
+	spacesHeldByCapOnDebt         int // spaces whose cursor was held because debt couldn't drain within the cap
 }
 
 // buildKnownMap loads the dual-source (gchat+email) known-contact map:
@@ -514,6 +625,13 @@ func (p *GChatSyncProvider) ScanIdentifier(
 	}
 
 	resolver := newCachedEmailResolver(fetcher, nil)
+	// In-scan-only reverse resolver: seeded empty and NOT persisted back to
+	// metadata — this avoids a read-modify-write race with the sweep on the
+	// same external_sync_state.metadata row. The resolve-cap does NOT apply to the
+	// scan (cap=nil): the scan resolves exactly ONE address per space, bounded only
+	// by the page budget. The in-scan memo dedups the address across spaces within
+	// the run, so this is at most a handful of members.get calls per rematch event.
+	idResolver := newMemberIDResolver(fetcher, nil, nil, nil)
 	counters := &sweepCounters{}
 	// The rematch scan is a one-shot historical backfill. It gets its OWN full
 	// page budget. If the budget is exhausted before every space's window is
@@ -538,21 +656,52 @@ func (p *GChatSyncProvider) ScanIdentifier(
 		}
 		// Co-member resolution uses the FULL knownMap (so a space qualifies when
 		// the target address is one of its members); row-writing uses scanMap.
-		knownMembers, rErr := resolveKnownMembers(ctx, members, resolver, knownMap, meSet)
+		// meIDs are the account's own ids in this space (used to keep a scanned
+		// alias that resolves to the account's own id out of the id-match set).
+		knownMembers, meIDs, rErr := resolveKnownMembers(ctx, members, resolver, knownMap, meSet)
 		if rErr != nil {
 			return counters.matched, fmt.Errorf("resolve co-members: %w", rErr)
 		}
 		scanMembers := restrictKnownMembers(knownMembers, addrNormalized)
+
+		// Reverse id-resolution for the scanned address: resolve it to its canonical
+		// id in THIS space (members.get with the email alias) so a contact who is a
+		// member/sender but not in Google Contacts matches historical messages too.
+		// The scanned email carries through as the peer identity (same idMatch
+		// shape). A page-budget exhaustion mid-resolution fails the scan (the
+		// completeness invariant), exactly like a mid-window budget hit.
+		scanIDs := map[string]idMatch{}
+		fingerprint := memberSetFingerprint(members)
+		userName, status, sErr := idResolver.resolve(ctx, space.Name, fingerprint, addrNormalized, &budget)
+		if sErr != nil {
+			return counters.matched, fmt.Errorf("resolve scanned member id: %w", sErr)
+		}
+		if status == deferredBudgetHit {
+			return counters.matched, fmt.Errorf("rematch scan budget exhausted resolving member id: retry to finish backfill")
+		}
+		idIsMember := false
+		if _, isMe := meIDs[userName]; status == resolvedKnownID && !isMe {
+			for _, id := range members {
+				if id == userName {
+					idIsMember = true
+					break
+				}
+			}
+			if idIsMember {
+				scanIDs[userName] = idMatch{Email: addrNormalized, Contacts: contacts}
+			}
+		}
+
 		isDM := space.SpaceType == gchatSpaceTypeDM
-		if len(scanMembers) == 0 && !isDM {
-			// The target address is not a member of this space → it can still be
-			// the inbound SENDER, so we must still page messages. But to bound the
-			// scan we skip spaces where the address is neither a member nor (for a
-			// DM) the implicit peer — an inbound message from the address can only
-			// arrive in a space the address belongs to.
+		// Page the space when the address is an email-resolved member, an
+		// id-resolved member, OR a DM peer; otherwise it can still be the inbound
+		// SENDER only if it's a member, so skipping a non-member non-DM space is
+		// safe (an inbound message from the address arrives only in a space it
+		// belongs to).
+		if len(scanMembers) == 0 && !idIsMember && !isDM {
 			continue
 		}
-		_, proven, cErr := p.consumeContentWindow(ctx, fetcher, space, afterCursor, scanMembers, scanMap, meSet, resolver, accountID, counters, &budget)
+		_, proven, cErr := p.consumeContentWindow(ctx, fetcher, space, afterCursor, scanMembers, scanMap, scanIDs, meIDs, meSet, resolver, accountID, counters, &budget)
 		if cErr != nil {
 			return counters.matched, fmt.Errorf("scan space: %w", cErr)
 		}
@@ -592,6 +741,8 @@ func (p *GChatSyncProvider) consumeContentWindow(
 	createCursor string,
 	knownMembers map[string][]uuid.UUID,
 	knownMap map[string][]uuid.UUID,
+	knownIDs map[string]idMatch,
+	meIDs map[string]struct{},
 	meSet map[string]struct{},
 	resolver *cachedEmailResolver,
 	accountID string,
@@ -616,7 +767,7 @@ func (p *GChatSyncProvider) consumeContentWindow(
 			if !qualifiableContentMessage(m) {
 				continue
 			}
-			matchErr := p.qualifyAndUpsert(ctx, m, space, knownMembers, knownMap, meSet, resolver, accountID, counters)
+			matchErr := p.qualifyAndUpsert(ctx, m, space, knownMembers, knownMap, knownIDs, meIDs, meSet, resolver, accountID, counters)
 			if matchErr != nil {
 				// Transient resolve/upsert error: abort the window, keep the
 				// original cursor (do NOT advance past this message).
@@ -779,14 +930,48 @@ type messageClassification struct {
 // classifyMessage resolves the sender and decides direction + fan-out WITHOUT
 // touching the DB. A resolve error propagates (so the caller aborts the window
 // and retries). An unresolved sender or a bystander yields an empty Matched set.
+//
+// knownIDs is the per-space id index (sender/member "users/{id}" → idMatch),
+// built by buildKnownIDIndex from the global positive cache + fresh members.get
+// resolutions. It lets a sender id match a CRM contact even when the People API
+// (Contacts) cannot resolve that id to an email. The match precedence is:
+//
+//   - INBOUND id-path FIRST: if the sender id is in knownIDs (never me — meSet is
+//     excluded when the index is built), the message is inbound and the PEER is
+//     the sender, so SenderEmail is set to the matched idMatch.Email (so the peer
+//     columns carry the CRM email, not the empty People-API result).
+//   - else fall through to the People-API email path: OUTBOUND (sender ∈ meSet)
+//     fans out to the UNION of email-resolved known co-members AND id-resolved
+//     known members (the peer stays "me", unchanged); email-resolved INBOUND
+//     (sender's email ∈ knownMap) is sender-only as before; otherwise bystander.
 func classifyMessage(
 	ctx context.Context,
 	m *chat.Message,
 	knownMembers map[string][]uuid.UUID,
 	knownMap map[string][]uuid.UUID,
+	knownIDs map[string]idMatch,
+	meIDs map[string]struct{},
 	meSet map[string]struct{},
 	resolver *cachedEmailResolver,
 ) (messageClassification, error) {
+	// INBOUND id-path first: a sender id present in knownIDs is a known co-member
+	// resolved by canonical id (Contacts-independent). The peer is the sender, so
+	// carry the CRM email through SenderEmail for the peer columns. Defense-in-
+	// depth: never take the id-path for the account's own id (meIDs) — even though
+	// buildKnownIDIndex already excludes me-ids from knownIDs, this point-of-use
+	// guard makes a self-sender fall through to the email path (→ outbound), so a
+	// stray alias resolving to a me-id can never be stored as inbound from a
+	// contact.
+	if _, isMe := meIDs[m.Sender.Name]; !isMe {
+		if idm, ok := knownIDs[m.Sender.Name]; ok && len(idm.Contacts) > 0 {
+			return messageClassification{
+				SenderEmail: idm.Email,
+				Direction:   repository.InteractionDirectionInbound,
+				Matched:     idm.Contacts,
+			}, nil
+		}
+	}
+
 	senderEmail, err := resolver.resolve(ctx, m.Sender.Name)
 	if err != nil {
 		return messageClassification{}, fmt.Errorf("resolve sender: %w", err)
@@ -799,8 +984,9 @@ func classifyMessage(
 	switch {
 	case inSet(meSet, senderEmail):
 		c.Direction = repository.InteractionDirectionOutbound
-		// Fan out to every known co-member, EXCLUDING any self-contact.
-		c.Matched = flattenKnownMembers(knownMembers, meSet)
+		// Fan out to the UNION of email-resolved known co-members and id-resolved
+		// known members, EXCLUDING any self-contact (deduped by contact id).
+		c.Matched = flattenKnownMembersAndIDs(knownMembers, knownIDs, meSet)
 	case len(knownMap[senderEmail]) > 0:
 		c.Direction = repository.InteractionDirectionInbound
 		c.Matched = knownMap[senderEmail] // sender-only
@@ -819,12 +1005,14 @@ func (p *GChatSyncProvider) qualifyAndUpsert(
 	space *chat.Space,
 	knownMembers map[string][]uuid.UUID,
 	knownMap map[string][]uuid.UUID,
+	knownIDs map[string]idMatch,
+	meIDs map[string]struct{},
 	meSet map[string]struct{},
 	resolver *cachedEmailResolver,
 	accountID string,
 	counters *sweepCounters,
 ) error {
-	c, err := classifyMessage(ctx, m, knownMembers, knownMap, meSet, resolver)
+	c, err := classifyMessage(ctx, m, knownMembers, knownMap, knownIDs, meIDs, meSet, resolver)
 	if err != nil {
 		return err
 	}
@@ -882,16 +1070,34 @@ type MessageClassificationForTest struct {
 	Unresolved  bool
 }
 
+// KnownSenderIDForTest is an exported DTO describing one entry of the reverse
+// (id→contact) index so cross-package tests can seed RunClassifyForTest WITHOUT
+// naming the unexported idMatch type. Production code must NOT use this.
+type KnownSenderIDForTest struct {
+	UserName string // canonical "users/{id}"
+	Email    string // the CRM email carried as the peer identity
+	Contacts []uuid.UUID
+}
+
 // RunClassifyForTest drives the DB-free classifyMessage for cross-package tests,
-// using a fake-fetcher-backed resolver. Production code must NOT call this.
+// using a fake-fetcher-backed resolver. knownIDs is the reverse (id→contact)
+// index, supplied as exported DTOs and converted to the internal index here so
+// no unexported type crosses the package boundary. Production code must NOT call
+// this.
 func RunClassifyForTest(
 	ctx context.Context,
 	m *chat.Message,
 	knownMembers map[string][]uuid.UUID,
 	knownMap map[string][]uuid.UUID,
+	knownIDs []KnownSenderIDForTest,
+	meIDs map[string]struct{},
 	meSet map[string]struct{},
 	resolver *CachedEmailResolverForTest,
 ) (MessageClassificationForTest, error) {
-	c, err := classifyMessage(ctx, m, knownMembers, knownMap, meSet, resolver.inner)
+	idx := make(map[string]idMatch, len(knownIDs))
+	for _, k := range knownIDs {
+		idx[k.UserName] = idMatch{Email: k.Email, Contacts: k.Contacts}
+	}
+	c, err := classifyMessage(ctx, m, knownMembers, knownMap, idx, meIDs, meSet, resolver.inner)
 	return MessageClassificationForTest(c), err
 }

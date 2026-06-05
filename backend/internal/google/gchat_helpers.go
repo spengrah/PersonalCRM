@@ -3,11 +3,14 @@ package google
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"time"
 
 	chat "google.golang.org/api/chat/v1"
 
 	"github.com/google/uuid"
+
+	"personal-crm/backend/internal/accelerated"
 )
 
 // --- pagination ------------------------------------------------------
@@ -140,6 +143,27 @@ func flattenKnownMembers(knownMembers map[string][]uuid.UUID, meSet map[string]s
 	return out
 }
 
+// flattenKnownMembersAndIDs is the outbound fan-out recipient set: the UNION of
+// the email-resolved known co-members (flattenKnownMembers) and the id-resolved
+// known members (knownIDs values), deduped by contact id and self-excluded. An
+// idMatch's Email is checked against meSet defensively (the index already drops
+// meSet members, so this never fires in practice but keeps the self-exclusion
+// invariant local).
+func flattenKnownMembersAndIDs(knownMembers map[string][]uuid.UUID, knownIDs map[string]idMatch, meSet map[string]struct{}) []uuid.UUID {
+	out := flattenKnownMembers(knownMembers, meSet)
+	for _, idm := range knownIDs {
+		if inSet(meSet, idm.Email) {
+			continue
+		}
+		for _, c := range idm.Contacts {
+			if !containsUUID(out, c) {
+				out = append(out, c)
+			}
+		}
+	}
+	return out
+}
+
 // firstN returns the first n characters (runes) of s.
 func firstN(s string, n int) string {
 	if n <= 0 {
@@ -202,6 +226,192 @@ func buildContentMetadata(space *chat.Space, m *chat.Message) []byte {
 	return b
 }
 
+// --- known-id index (reverse email→id matching) ----------------------
+
+// idMatch is the value of the per-space known-id index: the CRM email that
+// resolved to a canonical id, plus the contact ids that email maps to. The
+// email is carried so an id-path match populates the peer columns with the CRM
+// email (an id-path People-API resolution is "", which would otherwise write an
+// empty peer).
+type idMatch struct {
+	Email    string
+	Contacts []uuid.UUID
+}
+
+// buildKnownIDIndex builds the per-space "users/{id}" → idMatch index that lets
+// a sender/member match a CRM contact by CANONICAL ID even when the People API
+// (Contacts) cannot resolve that id to an email. It has two zero-API-call
+// sources (global positive cache + the space's member-id list) plus bounded
+// fresh members.get resolutions for the rest.
+//
+// members is the space's current "users/{id}" member set; fingerprint is its
+// member-set fingerprint. knownMap is the dual-source known-contact
+// map (normalizedEmail → []contactID); meSet is the connected-account self set.
+// resolver is the reverse resolver; pageBudget is the shared page allowance.
+//
+// Returns:
+//   - knownIDs: the index. A member/sender id present here is a known contact.
+//   - blockedByBudget: a fresh resolution hit the page budget (incomplete window
+//     — the caller must NOT advance the cursor; treat like a partial page).
+//   - blockedByCapOnDebt: an UNKNOWN candidate could not be resolved because the
+//     per-sweep resolve-cap was exhausted (resolution debt — the caller holds
+//     THIS space's cursor until a later sweep drains the debt).
+//
+// Candidate classification under the current fingerprint: POSITIVE (global
+// positive hit whose id ∈ members), NEGATIVE-VALID (per-space negative with a
+// matching fingerprint, within TTL), or UNKNOWN (must resolve). UNKNOWN
+// fingerprint-invalidated candidates (a negative whose fingerprint no longer
+// matches — a membership change happened) get PRIORITY access to the cap over
+// never-seen candidates, so a one-time debt drains efficiently.
+// meIDs is the set of the account's OWN canonical ids within this space, seeded
+// by resolveKnownMembers (People-path) and extended here from the reverse
+// resolver's ALREADY-CACHED positives for the meSet emails (no fresh members.get,
+// no budget impact) — so a me-id already discovered in an earlier space is caught
+// even when People cannot resolve it (the not-in-Contacts me case). Any resolved
+// id in meIDs is dropped from the index so the inbound id-path can never fire for
+// the account itself, even if a stray non-meSet CRM alias resolves to the
+// account's own id. classifyMessage ALSO guards its inbound id-path with meIDs as
+// a defense-in-depth check at the point of use.
+func buildKnownIDIndex(
+	ctx context.Context,
+	space *chat.Space,
+	members []string,
+	fingerprint string,
+	knownMap map[string][]uuid.UUID,
+	meSet map[string]struct{},
+	meIDs map[string]struct{},
+	resolver *memberIDResolver,
+	counters *sweepCounters,
+	pageBudget *int,
+) (knownIDs map[string]idMatch, meIDsOut map[string]struct{}, blockedByBudget bool, blockedByCapOnDebt bool, err error) {
+	knownIDs = map[string]idMatch{}
+
+	// The member-id set of this space, for the "id ∈ members" check.
+	memberSet := make(map[string]struct{}, len(members))
+	for _, id := range members {
+		memberSet[id] = struct{}{}
+	}
+
+	// Extend meIDs from the reverse resolver's already-cached positives for the
+	// meSet emails (cache-only — no fresh members.get, no budget consumption, no
+	// negative writes). This catches a me-id discovered in an earlier space.
+	for meEmail := range meSet {
+		if id, ok := resolver.cachedPositive(meEmail); ok {
+			if _, already := meIDs[id]; !already {
+				// Copy-on-write so we never mutate the caller's map.
+				meIDs = mergeMeID(meIDs, id)
+			}
+		}
+	}
+	meIDsOut = meIDs // the (possibly extended) me-id set, for the classify guard
+
+	// Seed from the GLOBAL positive cache: every known email whose cached id is a
+	// member of this space matches with zero API calls. Track which emails are
+	// already matched so they are not re-resolved.
+	seeded := map[string]struct{}{}
+	for email, contacts := range knownMap {
+		if inSet(meSet, email) || len(contacts) == 0 {
+			continue
+		}
+		id, ok := resolver.cachedPositive(email)
+		if !ok {
+			continue
+		}
+		if _, isMe := meIDs[id]; isMe {
+			continue // the account's own id never enters the reverse index
+		}
+		if _, isMember := memberSet[id]; isMember {
+			knownIDs[id] = idMatch{Email: email, Contacts: contacts}
+			seeded[email] = struct{}{}
+		}
+	}
+
+	// Classify the remaining candidates and order them so fingerprint-invalidated
+	// (was-NEGATIVE-now-UNKNOWN) candidates get priority access to the cap.
+	priority, normal := classifyIDCandidates(space.Name, fingerprint, knownMap, meSet, seeded, resolver)
+
+	// Resolve priority candidates first, then never-seen ones (two ranges instead
+	// of a merged slice to avoid a per-call allocation in the hot per-space path).
+	for _, group := range [2][]string{priority, normal} {
+		for _, email := range group {
+			id, status, rerr := resolver.resolve(ctx, space.Name, fingerprint, email, pageBudget)
+			if rerr != nil {
+				return nil, nil, false, false, rerr
+			}
+			switch status {
+			case resolvedKnownID:
+				if _, isMe := meIDs[id]; isMe {
+					break // the account's own id never enters the reverse index
+				}
+				if _, isMember := memberSet[id]; isMember {
+					knownIDs[id] = idMatch{Email: email, Contacts: knownMap[email]}
+					counters.memberIDsResolved++
+				}
+				// A resolved id that is NOT a member of this space is a co-member of
+				// some OTHER space (the positive is global) — not a match here, but the
+				// global positive is now populated for future spaces.
+			case notMember:
+				counters.memberResolveNegativesWritten++
+			case deferredCapHit:
+				counters.memberResolveDeferredCap++
+				blockedByCapOnDebt = true
+			case deferredBudgetHit:
+				blockedByBudget = true
+				return knownIDs, meIDsOut, blockedByBudget, blockedByCapOnDebt, nil
+			}
+		}
+	}
+	return knownIDs, meIDsOut, blockedByBudget, blockedByCapOnDebt, nil
+}
+
+// mergeMeID returns a new set that is src plus id (copy-on-write so the caller's
+// map is never mutated). src may be nil.
+func mergeMeID(src map[string]struct{}, id string) map[string]struct{} {
+	out := make(map[string]struct{}, len(src)+1)
+	for k := range src {
+		out[k] = struct{}{}
+	}
+	out[id] = struct{}{}
+	return out
+}
+
+// classifyIDCandidates partitions the not-yet-matched known emails into those
+// whose per-space negative was invalidated by a fingerprint change (priority —
+// a membership change happened, so re-resolve first) and the rest (never-seen,
+// or no negative). meSet emails and already-seeded emails are skipped. Both
+// slices are sorted for deterministic ordering across runs.
+func classifyIDCandidates(
+	spaceName, fingerprint string,
+	knownMap map[string][]uuid.UUID,
+	meSet map[string]struct{},
+	seeded map[string]struct{},
+	resolver *memberIDResolver,
+) (priority, normal []string) {
+	for email, contacts := range knownMap {
+		if inSet(meSet, email) || len(contacts) == 0 {
+			continue
+		}
+		if _, ok := seeded[email]; ok {
+			continue
+		}
+		// A within-TTL, fingerprint-matching negative is NEGATIVE-VALID → not a
+		// candidate (no debt). Anything else is UNKNOWN → a candidate.
+		if neg, ok := resolver.negativeFor(spaceName, email); ok {
+			if !memberNegativeExpired(neg, accelerated.GetCurrentTime()) && neg.MemberSetFingerprint == fingerprint {
+				continue // NEGATIVE-VALID
+			}
+			// A stale negative (fingerprint changed or expired) is UNKNOWN with
+			// PRIORITY — a membership change happened, so drain it first.
+			priority = append(priority, email)
+			continue
+		}
+		normal = append(normal, email) // never seen → UNKNOWN
+	}
+	sort.Strings(priority)
+	sort.Strings(normal)
+	return priority, normal
+}
+
 // --- test seams ------------------------------------------------------
 
 // SetFetcherFactoryForTest overrides the per-account fetcher factory so tests
@@ -218,6 +428,20 @@ func (p *GChatSyncProvider) SetMeSetForTest(meSet map[string]struct{}) {
 	}
 }
 
+// SetMemberResolveCapForTest overrides the per-sweep reverse-resolve cap so a
+// test can drive the resolve-cap deferral (resolution-debt) path
+// deterministically. Production code must NOT call this.
+func (p *GChatSyncProvider) SetMemberResolveCapForTest(cap int) {
+	p.memberResolveCapOverride = &cap
+}
+
+// MemberSetFingerprintForTest exposes the member-set fingerprint hash so a
+// cross-package integration test can pre-seed a fingerprint-stamped negative in
+// metadata. Production code must NOT call this.
+func MemberSetFingerprintForTest(members []string) string {
+	return memberSetFingerprint(members)
+}
+
 // FakeChatFetcherFuncs lets a cross-package test supply a fake chatFetcher by
 // closures, since the chatFetcher interface is unexported. Build the fetcher
 // with NewFakeChatFetcherFactoryForTest and inject via SetFetcherFactoryForTest.
@@ -226,6 +450,11 @@ type FakeChatFetcherFuncs struct {
 	ListMembers        func(ctx context.Context, spaceName, pageToken string) ([]*chat.Membership, string, error)
 	ListMessages       func(ctx context.Context, spaceName, filter string, showDeleted bool, pageToken string) ([]*chat.Message, string, error)
 	ResolvePersonEmail func(ctx context.Context, userName string) (string, error)
+	// ResolveMemberID is optional: a fake that omits it defaults to "not a member
+	// of this space" (notMember=true, no error), so existing tests that exercise
+	// only the People-API email path compile and keep their current outcomes — the
+	// id path is purely additive.
+	ResolveMemberID func(ctx context.Context, spaceName, normalizedEmail string) (string, bool, error)
 }
 
 type fakeChatFetcher struct {
@@ -246,6 +475,15 @@ func (f *fakeChatFetcher) ListMessages(ctx context.Context, spaceName, filter st
 
 func (f *fakeChatFetcher) ResolvePersonEmail(ctx context.Context, userName string) (string, error) {
 	return f.funcs.ResolvePersonEmail(ctx, userName)
+}
+
+func (f *fakeChatFetcher) ResolveMemberID(ctx context.Context, spaceName, normalizedEmail string) (string, bool, error) {
+	if f.funcs.ResolveMemberID == nil {
+		// Default: the email is not a member of this space (the id path is purely
+		// additive, so a fake that doesn't opt in behaves as the email-only path).
+		return "", true, nil
+	}
+	return f.funcs.ResolveMemberID(ctx, spaceName, normalizedEmail)
 }
 
 // NewFakeChatFetcherFactoryForTest returns a fetcher factory (accountID-keyed,
@@ -281,10 +519,14 @@ func (r *CachedEmailResolverForTest) Resolve(ctx context.Context, userName strin
 // SweepCountersForTest is the exported view of the per-sweep counters so tests
 // can assert qualification outcomes. Production code must NOT use this.
 type SweepCountersForTest struct {
-	Processed                  int
-	Matched                    int
-	SpacesSkippedNoKnownMember int
-	SendersUnresolved          int
-	EditsApplied               int
-	DeletesApplied             int
+	Processed                     int
+	Matched                       int
+	SpacesSkippedNoKnownMember    int
+	SendersUnresolved             int
+	EditsApplied                  int
+	DeletesApplied                int
+	MemberIDsResolved             int
+	MemberResolveDeferredCap      int
+	MemberResolveNegativesWritten int
+	SpacesHeldByCapOnDebt         int
 }

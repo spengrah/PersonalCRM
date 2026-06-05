@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"testing"
 	"time"
 
@@ -67,7 +68,7 @@ func TestClassifyMessage_InboundSenderOnly(t *testing.T) {
 	meSet := map[string]struct{}{"me@example.test": {}}
 
 	m := humanMsg("spaces/S/messages/1", "users/alice", "2026-06-04T10:00:00Z", "hi all")
-	c, err := classifyMessage(ctx, m, knownMembers, knownMap, meSet, resolver)
+	c, err := classifyMessage(ctx, m, knownMembers, knownMap, nil, nil, meSet, resolver)
 	require.NoError(t, err)
 	assert.Equal(t, "inbound", c.Direction)
 	// Sender-only: exactly Alice, NOT Bob/Carol.
@@ -94,7 +95,7 @@ func TestClassifyMessage_OutboundFanOut(t *testing.T) {
 	meSet := map[string]struct{}{"me@example.test": {}}
 
 	m := humanMsg("spaces/S/messages/2", "users/me", "2026-06-04T10:01:00Z", "hello")
-	c, err := classifyMessage(ctx, m, knownMembers, knownMap, meSet, resolver)
+	c, err := classifyMessage(ctx, m, knownMembers, knownMap, nil, nil, meSet, resolver)
 	require.NoError(t, err)
 	assert.Equal(t, "outbound", c.Direction)
 	assert.ElementsMatch(t, []uuid.UUID{alice, bob}, c.Matched)
@@ -122,7 +123,7 @@ func TestClassifyMessage_OutboundExcludesSelfContact(t *testing.T) {
 	meSet := map[string]struct{}{"me@example.test": {}}
 
 	m := humanMsg("spaces/S/messages/3", "users/me", "2026-06-04T10:02:00Z", "hi")
-	c, err := classifyMessage(ctx, m, knownMembers, knownMap, meSet, resolver)
+	c, err := classifyMessage(ctx, m, knownMembers, knownMap, nil, nil, meSet, resolver)
 	require.NoError(t, err)
 	assert.Equal(t, "outbound", c.Direction)
 	// The self-contact must NOT receive a self-attributed outreach row.
@@ -141,17 +142,173 @@ func TestClassifyMessage_BystanderAndUnresolved(t *testing.T) {
 
 	// Bystander: sender neither me nor known.
 	mBy := humanMsg("spaces/S/messages/4", "users/stranger", "2026-06-04T10:03:00Z", "hey")
-	c, err := classifyMessage(ctx, mBy, nil, knownMap, meSet, resolver)
+	c, err := classifyMessage(ctx, mBy, nil, knownMap, nil, nil, meSet, resolver)
 	require.NoError(t, err)
 	assert.Empty(t, c.Matched)
 	assert.False(t, c.Unresolved)
 
 	// Unresolved sender: resolves to "" → flagged Unresolved, no rows.
 	mUn := humanMsg("spaces/S/messages/5", "users/ghost", "2026-06-04T10:04:00Z", "hey")
-	c, err = classifyMessage(ctx, mUn, nil, knownMap, meSet, resolver)
+	c, err = classifyMessage(ctx, mUn, nil, knownMap, nil, nil, meSet, resolver)
 	require.NoError(t, err)
 	assert.Empty(t, c.Matched)
 	assert.True(t, c.Unresolved)
+}
+
+// TestClassifyMessage_MatchesBySenderID is the headline DB-free behavior: a
+// sender id in knownIDs matches the contact even when the People API resolves
+// the id to "" (the not-in-Google-Contacts case). The peer email is carried
+// from the idMatch (not the empty People-API result).
+func TestClassifyMessage_MatchesBySenderID(t *testing.T) {
+	ctx := context.Background()
+	dave := uuid.New()
+	// The People API returns "" for users/dave (simulating not-in-Contacts).
+	resolver := staticResolver(t, map[string]string{"users/dave": ""}, nil)
+	knownMap := map[string][]uuid.UUID{"dave@example.test": {dave}}
+	meSet := map[string]struct{}{"me@example.test": {}}
+	knownIDs := map[string]idMatch{
+		"users/dave": {Email: "dave@example.test", Contacts: []uuid.UUID{dave}},
+	}
+
+	m := humanMsg("spaces/S/messages/d", "users/dave", "2026-06-04T10:00:00Z", "hi from dave")
+	c, err := classifyMessage(ctx, m, nil, knownMap, knownIDs, nil, meSet, resolver)
+	require.NoError(t, err)
+	assert.Equal(t, "inbound", c.Direction)
+	assert.Equal(t, []uuid.UUID{dave}, c.Matched, "the sender id matched the contact via the id path")
+	assert.Equal(t, "dave@example.test", c.SenderEmail, "the peer email is carried from the idMatch, not the empty People-API result")
+}
+
+// TestClassifyMessage_InboundIDPathYieldsToMeID is the defense-in-depth guard:
+// if a stray index entry maps the account's OWN id to a contact (the anomalous
+// self-alias case), the inbound id-path must NOT fire for the account's own
+// message — meIDs makes it fall through to the email path, where the sender (me)
+// is classified outbound, not inbound from that contact.
+func TestClassifyMessage_InboundIDPathYieldsToMeID(t *testing.T) {
+	ctx := context.Background()
+	strayContact := uuid.New()
+	// The account's own id resolves to its own email via the email path.
+	resolver := staticResolver(t, map[string]string{"users/me": "me@example.test"}, nil)
+	knownMap := map[string][]uuid.UUID{"me@example.test": {strayContact}}
+	meSet := map[string]struct{}{"me@example.test": {}}
+	// A stray index entry mapping the account's own id to a contact (what the
+	// build-time meIDs exclusion normally prevents — here we assert the
+	// point-of-use guard independently).
+	knownIDs := map[string]idMatch{
+		"users/me": {Email: "me@example.test", Contacts: []uuid.UUID{strayContact}},
+	}
+	meIDs := map[string]struct{}{"users/me": {}}
+
+	m := humanMsg("spaces/S/messages/self", "users/me", "2026-06-04T10:00:00Z", "my own message")
+	c, err := classifyMessage(ctx, m, nil, knownMap, knownIDs, meIDs, meSet, resolver)
+	require.NoError(t, err)
+	assert.Equal(t, "outbound", c.Direction, "the account's own message is outbound, never inbound from a stray self-alias contact")
+}
+
+// TestClassifyMessage_OutboundFanOutIncludesIDResolvedMembers proves an outbound
+// message fans out to the UNION of email-resolved and id-resolved known members,
+// deduped and self-excluded.
+func TestClassifyMessage_OutboundFanOutIncludesIDResolvedMembers(t *testing.T) {
+	ctx := context.Background()
+	alice := uuid.New()
+	dave := uuid.New()
+	resolver := staticResolver(t, map[string]string{"users/me": "me@example.test"}, nil)
+	knownMap := map[string][]uuid.UUID{
+		"alice@example.test": {alice},
+		"dave@example.test":  {dave},
+	}
+	// Alice is email-resolved; Dave is id-resolved (not in Contacts).
+	knownMembers := map[string][]uuid.UUID{"alice@example.test": {alice}}
+	knownIDs := map[string]idMatch{
+		"users/dave": {Email: "dave@example.test", Contacts: []uuid.UUID{dave}},
+	}
+	meSet := map[string]struct{}{"me@example.test": {}}
+
+	m := humanMsg("spaces/S/messages/o", "users/me", "2026-06-04T10:01:00Z", "team update")
+	c, err := classifyMessage(ctx, m, knownMembers, knownMap, knownIDs, nil, meSet, resolver)
+	require.NoError(t, err)
+	assert.Equal(t, "outbound", c.Direction)
+	assert.ElementsMatch(t, []uuid.UUID{alice, dave}, c.Matched, "fan-out unions email-resolved and id-resolved members")
+}
+
+// TestClassifyMessage_OutboundFanOutDedupsContact proves the union dedups a
+// contact that is present on BOTH the email-resolved and id-resolved sides (a
+// contact reachable both via Contacts and via canonical id). The index builder
+// guarantees meSet ids are never in knownIDs, so the inbound id-path's
+// meSet-independence is safe; self-exclusion of a meSet *email* member is
+// covered directly in TestFlattenKnownMembersAndIDs_UnionDedupSelfExclude.
+func TestClassifyMessage_OutboundFanOutDedupsContact(t *testing.T) {
+	ctx := context.Background()
+	alice := uuid.New()
+	resolver := staticResolver(t, map[string]string{"users/me": "me@example.test"}, nil)
+	knownMap := map[string][]uuid.UUID{"alice@example.test": {alice}}
+	knownMembers := map[string][]uuid.UUID{"alice@example.test": {alice}}
+	// Same contact also id-resolved (must dedup to a single row).
+	knownIDs := map[string]idMatch{
+		"users/alice": {Email: "alice@example.test", Contacts: []uuid.UUID{alice}},
+	}
+	meSet := map[string]struct{}{"me@example.test": {}}
+
+	m := humanMsg("spaces/S/messages/o2", "users/me", "2026-06-04T10:02:00Z", "hi")
+	c, err := classifyMessage(ctx, m, knownMembers, knownMap, knownIDs, nil, meSet, resolver)
+	require.NoError(t, err)
+	assert.Equal(t, "outbound", c.Direction)
+	assert.Equal(t, []uuid.UUID{alice}, c.Matched, "the shared contact appears once, not twice")
+}
+
+// TestFlattenKnownMembersAndIDs_UnionDedupSelfExclude pins the fan-out helper:
+// the union dedups across the email-resolved and id-resolved sides and drops any
+// id-resolved member whose email is in meSet (defensive self-exclusion).
+func TestFlattenKnownMembersAndIDs_UnionDedupSelfExclude(t *testing.T) {
+	alice := uuid.New()
+	dave := uuid.New()
+	meContact := uuid.New()
+	knownMembers := map[string][]uuid.UUID{"alice@example.test": {alice}}
+	knownIDs := map[string]idMatch{
+		"users/alice": {Email: "alice@example.test", Contacts: []uuid.UUID{alice}},  // dup of email side
+		"users/dave":  {Email: "dave@example.test", Contacts: []uuid.UUID{dave}},    // id-only
+		"users/me":    {Email: "me@example.test", Contacts: []uuid.UUID{meContact}}, // meSet → excluded
+	}
+	meSet := map[string]struct{}{"me@example.test": {}}
+
+	out := flattenKnownMembersAndIDs(knownMembers, knownIDs, meSet)
+	assert.ElementsMatch(t, []uuid.UUID{alice, dave}, out, "union dedups the shared contact and self-excludes the meSet id member")
+}
+
+// TestClassifyMessage_IDPathPreferredEmailFallback proves an id in knownIDs
+// matches WITHOUT calling the email resolver, while an id absent from knownIDs
+// falls through to the (still-working) email path.
+func TestClassifyMessage_IDPathPreferredEmailFallback(t *testing.T) {
+	ctx := context.Background()
+	dave := uuid.New()
+	erin := uuid.New()
+	calls := 0
+	resolver := staticResolver(t, map[string]string{
+		"users/erin": "erin@example.test", // email-resolvable
+		"users/dave": "",                  // not-in-Contacts
+	}, &calls)
+	knownMap := map[string][]uuid.UUID{
+		"dave@example.test": {dave},
+		"erin@example.test": {erin},
+	}
+	knownIDs := map[string]idMatch{
+		"users/dave": {Email: "dave@example.test", Contacts: []uuid.UUID{dave}},
+	}
+	meSet := map[string]struct{}{"me@example.test": {}}
+
+	// Dave: id path → no email resolver call.
+	mDave := humanMsg("spaces/S/messages/d", "users/dave", "2026-06-04T10:00:00Z", "x")
+	c, err := classifyMessage(ctx, mDave, nil, knownMap, knownIDs, nil, meSet, resolver)
+	require.NoError(t, err)
+	assert.Equal(t, []uuid.UUID{dave}, c.Matched)
+	assert.Equal(t, 0, calls, "an id-path match must not call the email resolver")
+
+	// Erin: absent from knownIDs → email path still matches.
+	mErin := humanMsg("spaces/S/messages/e", "users/erin", "2026-06-04T10:01:00Z", "y")
+	c, err = classifyMessage(ctx, mErin, nil, knownMap, knownIDs, nil, meSet, resolver)
+	require.NoError(t, err)
+	assert.Equal(t, "inbound", c.Direction)
+	assert.Equal(t, []uuid.UUID{erin}, c.Matched)
+	assert.Equal(t, 1, calls, "the absent id falls through to the email path")
 }
 
 func TestQualifiableContentMessage_FiltersBotsTombstonesNameless(t *testing.T) {
@@ -188,13 +345,18 @@ func TestResolveKnownMembers_ResolvesAndExcludesSelf(t *testing.T) {
 	meSet := map[string]struct{}{"me@example.test": {}}
 
 	members := []string{"users/alice", "users/me", "users/unknown", "users/noemail"}
-	known, err := resolveKnownMembers(ctx, members, resolver, knownMap, meSet)
+	known, meIDs, err := resolveKnownMembers(ctx, members, resolver, knownMap, meSet)
 	require.NoError(t, err)
 
 	// Only Alice is a known co-member; me is excluded, unknown is not in knownMap,
 	// noemail is unresolvable.
 	require.Len(t, known, 1)
 	assert.Equal(t, []uuid.UUID{alice}, known["alice@example.test"])
+
+	// The account's own member id is reported in meIDs (so the reverse id-index
+	// can exclude it).
+	assert.Contains(t, meIDs, "users/me")
+	assert.NotContains(t, meIDs, "users/alice")
 }
 
 func TestResolveKnownMembers_PropagatesResolveError(t *testing.T) {
@@ -205,7 +367,7 @@ func TestResolveKnownMembers_PropagatesResolveError(t *testing.T) {
 	}}
 	resolver := newCachedEmailResolver(fetcher, nil)
 
-	_, err := resolveKnownMembers(ctx, []string{"users/alice"}, resolver, map[string][]uuid.UUID{}, map[string]struct{}{})
+	_, _, err := resolveKnownMembers(ctx, []string{"users/alice"}, resolver, map[string][]uuid.UUID{}, map[string]struct{}{})
 	require.ErrorIs(t, err, resolveErr, "a transient co-member resolve error must propagate, not be swallowed")
 }
 
@@ -262,6 +424,439 @@ func TestCachedEmailResolver_PositiveNegativeCachingAndTTL(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "SHOULD-NOT-CALL", email) // refetched value
 	assert.Equal(t, 1, calls2, "expired cache entry refetched")
+}
+
+// fakeIDFetcher builds a fakeChatFetcher whose ResolveMemberID returns a fixed
+// (space,email)→id mapping and counts calls. A missing mapping entry returns
+// notMember. A space named in errSpaces returns a transient error.
+func fakeIDFetcher(mapping map[string]string, callCount *int) *fakeChatFetcher {
+	return &fakeChatFetcher{funcs: FakeChatFetcherFuncs{
+		ResolveMemberID: func(_ context.Context, spaceName, email string) (string, bool, error) {
+			if callCount != nil {
+				*callCount++
+			}
+			if id, ok := mapping[spaceName+"|"+email]; ok {
+				return id, false, nil
+			}
+			return "", true, nil
+		},
+	}}
+}
+
+func TestMemberIDResolver_GlobalPositiveReusedAcrossSpaces(t *testing.T) {
+	ctx := context.Background()
+	calls := 0
+	fetcher := fakeIDFetcher(map[string]string{
+		"spaces/A|person@example.test": "users/777",
+		"spaces/B|person@example.test": "users/777",
+	}, &calls)
+	cap := 10
+	r := newMemberIDResolver(fetcher, nil, nil, &cap)
+	fpA := memberSetFingerprint([]string{"users/777"})
+	fpB := memberSetFingerprint([]string{"users/777", "users/me"})
+
+	// First resolve in space A hits the fetcher.
+	id, status, err := r.resolve(ctx, "spaces/A", fpA, "person@example.test", nil)
+	require.NoError(t, err)
+	assert.Equal(t, resolvedKnownID, status)
+	assert.Equal(t, "users/777", id)
+	assert.Equal(t, 1, calls)
+
+	// Second resolve in space B reuses the GLOBAL positive — ZERO additional calls.
+	id, status, err = r.resolve(ctx, "spaces/B", fpB, "person@example.test", nil)
+	require.NoError(t, err)
+	assert.Equal(t, resolvedKnownID, status)
+	assert.Equal(t, "users/777", id)
+	assert.Equal(t, 1, calls, "the canonical id is space-independent; space B reuses the global positive")
+	assert.Equal(t, 9, cap, "only one fresh resolve consumed the cap")
+}
+
+func TestMemberIDResolver_NegativeIsPerSpace(t *testing.T) {
+	ctx := context.Background()
+	calls := 0
+	// person is a member of B only; absent from A.
+	fetcher := fakeIDFetcher(map[string]string{
+		"spaces/B|person@example.test": "users/888",
+	}, &calls)
+	cap := 10
+	r := newMemberIDResolver(fetcher, nil, nil, &cap)
+	fpA := memberSetFingerprint([]string{"users/me"})
+	fpB := memberSetFingerprint([]string{"users/888", "users/me"})
+
+	// A: not a member → negative for A.
+	_, status, err := r.resolve(ctx, "spaces/A", fpA, "person@example.test", nil)
+	require.NoError(t, err)
+	assert.Equal(t, notMember, status)
+	assert.Equal(t, 1, calls)
+
+	// The negative for A is re-served (within fingerprint) without a fetch.
+	_, status, err = r.resolve(ctx, "spaces/A", fpA, "person@example.test", nil)
+	require.NoError(t, err)
+	assert.Equal(t, notMember, status)
+	assert.Equal(t, 1, calls, "per-space negative re-served from cache")
+
+	// B: same email is STILL attempted (per-space negative does not block B) and
+	// resolves.
+	id, status, err := r.resolve(ctx, "spaces/B", fpB, "person@example.test", nil)
+	require.NoError(t, err)
+	assert.Equal(t, resolvedKnownID, status)
+	assert.Equal(t, "users/888", id)
+	assert.Equal(t, 2, calls, "a negative in A does not suppress a fresh resolve in B")
+}
+
+func TestMemberIDResolver_NegativeInvalidatedByFingerprintChange(t *testing.T) {
+	ctx := context.Background()
+	calls := 0
+	// Initially absent from A; after the "join" the mapping yields an id.
+	mapping := map[string]string{}
+	fetcher := &fakeChatFetcher{funcs: FakeChatFetcherFuncs{
+		ResolveMemberID: func(_ context.Context, spaceName, email string) (string, bool, error) {
+			calls++
+			if id, ok := mapping[spaceName+"|"+email]; ok {
+				return id, false, nil
+			}
+			return "", true, nil
+		},
+	}}
+	cap := 10
+	r := newMemberIDResolver(fetcher, nil, nil, &cap)
+	fpBefore := memberSetFingerprint([]string{"users/me"})
+	fpAfter := memberSetFingerprint([]string{"users/me", "users/999"})
+
+	// Sweep 1: absent → negative stamped with fpBefore.
+	_, status, err := r.resolve(ctx, "spaces/A", fpBefore, "joiner@example.test", nil)
+	require.NoError(t, err)
+	assert.Equal(t, notMember, status)
+	assert.Equal(t, 1, calls)
+
+	// Sweep 2 (new resolver instance to drop the in-sweep memo): the contact has
+	// joined → mapping yields the id AND the fingerprint flipped. The stale
+	// negative (stamped fpBefore) is NOT honored under fpAfter → re-resolved.
+	mapping["spaces/A|joiner@example.test"] = "users/999"
+	r2 := newMemberIDResolver(fetcher, r.snapshotPositives(), r.snapshotNegatives(), &cap)
+	id, status, err := r2.resolve(ctx, "spaces/A", fpAfter, "joiner@example.test", nil)
+	require.NoError(t, err)
+	assert.Equal(t, resolvedKnownID, status, "fingerprint flip invalidates the stale negative")
+	assert.Equal(t, "users/999", id)
+	assert.Equal(t, 2, calls)
+}
+
+func TestMemberIDResolver_ResolveCapDefers(t *testing.T) {
+	ctx := context.Background()
+	calls := 0
+	fetcher := fakeIDFetcher(map[string]string{
+		"spaces/A|a@example.test": "users/1",
+		"spaces/A|b@example.test": "users/2",
+	}, &calls)
+	cap := 1
+	r := newMemberIDResolver(fetcher, nil, nil, &cap)
+	fp := memberSetFingerprint([]string{"users/1", "users/2"})
+
+	// First fresh resolve consumes the cap.
+	_, status, err := r.resolve(ctx, "spaces/A", fp, "a@example.test", nil)
+	require.NoError(t, err)
+	assert.Equal(t, resolvedKnownID, status)
+	assert.Equal(t, 1, calls)
+	assert.Equal(t, 0, cap)
+
+	// Second fresh resolve is deferred (cap exhausted) — NO fetcher call.
+	_, status, err = r.resolve(ctx, "spaces/A", fp, "b@example.test", nil)
+	require.NoError(t, err)
+	assert.Equal(t, deferredCapHit, status)
+	assert.Equal(t, 1, calls, "the cap-exhausted candidate is not fetched this sweep")
+}
+
+func TestMemberIDResolver_BudgetExhaustionDefers(t *testing.T) {
+	ctx := context.Background()
+	calls := 0
+	fetcher := fakeIDFetcher(map[string]string{"spaces/A|a@example.test": "users/1"}, &calls)
+	cap := 10
+	r := newMemberIDResolver(fetcher, nil, nil, &cap)
+	fp := memberSetFingerprint([]string{"users/1"})
+
+	pageBudget := 0
+	_, status, err := r.resolve(ctx, "spaces/A", fp, "a@example.test", &pageBudget)
+	require.NoError(t, err)
+	assert.Equal(t, deferredBudgetHit, status)
+	assert.Equal(t, 0, calls, "a zero page budget defers without a fetch")
+	assert.Equal(t, 10, cap, "the resolve-cap is not consumed when the budget defers")
+}
+
+func TestMemberIDResolver_PropagatesFetcherError(t *testing.T) {
+	ctx := context.Background()
+	wantErr := errors.New("members.get transient")
+	fetcher := &fakeChatFetcher{funcs: FakeChatFetcherFuncs{
+		ResolveMemberID: func(context.Context, string, string) (string, bool, error) {
+			return "", false, wantErr
+		},
+	}}
+	cap := 10
+	r := newMemberIDResolver(fetcher, nil, nil, &cap)
+	fp := memberSetFingerprint([]string{"users/1"})
+
+	pageBudget := 5
+	_, _, err := r.resolve(ctx, "spaces/A", fp, "a@example.test", &pageBudget)
+	require.ErrorIs(t, err, wantErr, "a transient members.get error must propagate, not become a negative")
+	// An ISSUED members.get is a real API call regardless of outcome: it consumes
+	// both budgets even on error, so a persistently-failing space cannot blow past
+	// the bounds across many spaces in one sweep.
+	assert.Equal(t, 9, cap, "an errored members.get still consumes the resolve cap")
+	assert.Equal(t, 4, pageBudget, "an errored members.get still consumes the page budget")
+}
+
+// TestBuildKnownIDIndex_SeedsFromPositiveCacheZeroCalls proves the index is
+// seeded from the global positive cache with ZERO members.get calls when the
+// cached id is already a member of the space, and that a fresh resolve happens
+// only for an uncached non-negative email.
+func TestBuildKnownIDIndex_SeedsFromPositiveCacheZeroCalls(t *testing.T) {
+	ctx := context.Background()
+	dave := uuid.New()
+	frank := uuid.New()
+	members := []string{"users/dave", "users/frank", "users/me"}
+	fp := memberSetFingerprint(members)
+	now := accelerated.GetCurrentTime()
+
+	calls := 0
+	// frank is resolvable fresh; dave is pre-seeded in the positive cache.
+	fetcher := fakeIDFetcher(map[string]string{"spaces/A|frank@example.test": "users/frank"}, &calls)
+	pos := map[string]cachedUserID{"dave@example.test": {UserName: "users/dave", ResolvedAt: now.Format(chatTimeLayout)}}
+	cap := 10
+	resolver := newMemberIDResolver(fetcher, pos, nil, &cap)
+
+	knownMap := map[string][]uuid.UUID{
+		"dave@example.test":  {dave},
+		"frank@example.test": {frank},
+	}
+	meSet := map[string]struct{}{"me@example.test": {}}
+	counters := &sweepCounters{}
+	budget := 10
+	idx, _, blockedBudget, blockedCap, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fp, knownMap, meSet, nil, resolver, counters, &budget)
+	require.NoError(t, err)
+	assert.False(t, blockedBudget)
+	assert.False(t, blockedCap)
+
+	// dave seeded from the positive cache (zero calls); frank resolved fresh (one).
+	assert.Equal(t, idMatch{Email: "dave@example.test", Contacts: []uuid.UUID{dave}}, idx["users/dave"])
+	assert.Equal(t, idMatch{Email: "frank@example.test", Contacts: []uuid.UUID{frank}}, idx["users/frank"])
+	assert.Equal(t, 1, calls, "only the uncached email triggered a members.get")
+}
+
+// TestBuildKnownIDIndex_ExcludesMeIDs proves the account's own id never enters
+// the reverse index, even when a stray non-meSet CRM email (a contact carrying
+// the user's own alternate alias) resolves to the account's own canonical id —
+// from BOTH the global-positive seed path AND the fresh-resolve path. Without
+// the meIDs guard, the account's own outbound messages would misclassify as
+// inbound from that contact.
+func TestBuildKnownIDIndex_ExcludesMeIDs(t *testing.T) {
+	ctx := context.Background()
+	strayContact := uuid.New()
+	freshStray := uuid.New()
+	members := []string{"users/me", "users/other"}
+	fp := memberSetFingerprint(members)
+	now := accelerated.GetCurrentTime()
+
+	calls := 0
+	// A second stray alias resolves fresh to users/me too.
+	fetcher := fakeIDFetcher(map[string]string{"spaces/A|stray-fresh@example.test": "users/me"}, &calls)
+	// One stray alias is pre-seeded in the global positive cache as users/me.
+	pos := map[string]cachedUserID{"stray-seeded@example.test": {UserName: "users/me", ResolvedAt: now.Format(chatTimeLayout)}}
+	cap := 10
+	resolver := newMemberIDResolver(fetcher, pos, nil, &cap)
+
+	knownMap := map[string][]uuid.UUID{
+		"stray-seeded@example.test": {strayContact}, // a contact holding the user's own alias
+		"stray-fresh@example.test":  {freshStray},
+	}
+	meSet := map[string]struct{}{"me@example.test": {}}
+	meIDs := map[string]struct{}{"users/me": {}}
+	counters := &sweepCounters{}
+	budget := 10
+	idx, _, _, _, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fp, knownMap, meSet, meIDs, resolver, counters, &budget)
+	require.NoError(t, err)
+
+	// users/me must NOT be in the index from either path.
+	_, present := idx["users/me"]
+	assert.False(t, present, "the account's own id must never enter the reverse index")
+	assert.Empty(t, idx, "no contact is matched via a me-id alias")
+}
+
+// TestBuildKnownIDIndex_DiscoversMeIDFromCachedPositive proves meIDs is
+// authoritatively extended from the reverse resolver's already-cached positive
+// for the meSet email — even when the People-derived meIDs is EMPTY (the
+// not-in-Contacts me case). This closes the residual gap where People could not
+// identify the account's own member id. The discovery is cache-only (no fresh
+// members.get): the me-email's id was cached by an earlier space.
+func TestBuildKnownIDIndex_DiscoversMeIDFromCachedPositive(t *testing.T) {
+	ctx := context.Background()
+	strayContact := uuid.New()
+	members := []string{"users/me", "users/other"}
+	fp := memberSetFingerprint(members)
+	now := accelerated.GetCurrentTime()
+
+	calls := 0
+	fetcher := fakeIDFetcher(map[string]string{}, &calls)
+	// The account's own email is in the global positive cache as users/me (from an
+	// earlier space), AND a stray contact alias is cached as users/me too.
+	pos := map[string]cachedUserID{
+		"me@example.test":           {UserName: "users/me", ResolvedAt: now.Format(chatTimeLayout)},
+		"stray-seeded@example.test": {UserName: "users/me", ResolvedAt: now.Format(chatTimeLayout)},
+	}
+	cap := 10
+	resolver := newMemberIDResolver(fetcher, pos, nil, &cap)
+
+	knownMap := map[string][]uuid.UUID{"stray-seeded@example.test": {strayContact}}
+	meSet := map[string]struct{}{"me@example.test": {}}
+	// People-derived meIDs is EMPTY (People could not identify the me member id).
+	counters := &sweepCounters{}
+	budget := 10
+	idx, meIDsOut, _, _, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fp, knownMap, meSet, map[string]struct{}{}, resolver, counters, &budget)
+	require.NoError(t, err)
+
+	assert.Contains(t, meIDsOut, "users/me", "the me-id is discovered from the cached positive for the me-email")
+	assert.Empty(t, idx, "the stray contact alias is excluded because it resolves to the discovered me-id")
+	assert.Equal(t, 0, calls, "the me-id discovery is cache-only — no fresh members.get")
+}
+
+// TestBuildKnownIDIndex_DebtHoldsCursor drives the resolution-debt model:
+//
+//	(a) a NEGATIVE-VALID candidate is not debt → no resolve, blockedByCapOnDebt=false;
+//	(b) an UNKNOWN candidate (fingerprint-mismatched negative) with the cap
+//	    exhausted → deferredCapHit → blockedByCapOnDebt=true (cursor held), driven
+//	    purely by the persisted-negative-vs-current-fingerprint mismatch (no flag);
+//	(c) priority — when the cap admits only N resolves, fingerprint-invalidated
+//	    candidates are resolved before never-seen ones.
+func TestBuildKnownIDIndex_DebtHoldsCursor(t *testing.T) {
+	ctx := context.Background()
+	now := accelerated.GetCurrentTime()
+	fresh := now.Format(chatTimeLayout)
+
+	t.Run("negative_valid_is_not_debt", func(t *testing.T) {
+		absent := uuid.New()
+		members := []string{"users/me"}
+		fp := memberSetFingerprint(members)
+		calls := 0
+		fetcher := fakeIDFetcher(map[string]string{}, &calls)
+		neg := map[string]map[string]memberNegative{
+			"spaces/A": {"absent@example.test": {ResolvedAt: fresh, MemberSetFingerprint: fp}},
+		}
+		cap := 0 // cap exhausted, but a NEGATIVE-VALID candidate is not debt
+		resolver := newMemberIDResolver(fetcher, nil, neg, &cap)
+		knownMap := map[string][]uuid.UUID{"absent@example.test": {absent}}
+		counters := &sweepCounters{}
+		budget := 10
+		idx, _, _, blockedCap, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fp, knownMap, map[string]struct{}{"me@example.test": {}}, nil, resolver, counters, &budget)
+		require.NoError(t, err)
+		assert.Empty(t, idx)
+		assert.False(t, blockedCap, "a NEGATIVE-VALID candidate under the current fingerprint is not debt")
+		assert.Equal(t, 0, calls, "a valid negative is honored without a fetch")
+	})
+
+	t.Run("fingerprint_mismatch_is_debt_when_cap_exhausted", func(t *testing.T) {
+		joiner := uuid.New()
+		members := []string{"users/me", "users/joiner"} // joiner just joined → fingerprint flipped
+		fpNew := memberSetFingerprint(members)
+		calls := 0
+		fetcher := fakeIDFetcher(map[string]string{"spaces/A|joiner@example.test": "users/joiner"}, &calls)
+		// Persisted negative carries the OLD fingerprint (before the join).
+		neg := map[string]map[string]memberNegative{
+			"spaces/A": {"joiner@example.test": {ResolvedAt: fresh, MemberSetFingerprint: "old-fp"}},
+		}
+		cap := 0 // cap exhausted: the now-UNKNOWN candidate cannot resolve → debt
+		resolver := newMemberIDResolver(fetcher, nil, neg, &cap)
+		knownMap := map[string][]uuid.UUID{"joiner@example.test": {joiner}}
+		counters := &sweepCounters{}
+		budget := 10
+		idx, _, blockedBudget, blockedCap, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fpNew, knownMap, map[string]struct{}{"me@example.test": {}}, nil, resolver, counters, &budget)
+		require.NoError(t, err)
+		assert.Empty(t, idx, "the candidate could not resolve this sweep")
+		assert.False(t, blockedBudget)
+		assert.True(t, blockedCap, "the fingerprint mismatch alone makes the candidate UNKNOWN; cap exhaustion holds the cursor (no transient flag)")
+		assert.Equal(t, 0, calls, "the cap-exhausted candidate is not fetched")
+	})
+
+	t.Run("priority_invalidated_before_neverseen", func(t *testing.T) {
+		invalidated := uuid.New()
+		neverSeen := uuid.New()
+		members := []string{"users/me", "users/invalidated"}
+		fpNew := memberSetFingerprint(members)
+		calls := 0
+		fetcher := fakeIDFetcher(map[string]string{
+			"spaces/A|invalidated@example.test": "users/invalidated",
+			// neverseen would resolve too, but the cap admits only ONE.
+			"spaces/A|neverseen@example.test": "users/neverseen",
+		}, &calls)
+		neg := map[string]map[string]memberNegative{
+			"spaces/A": {"invalidated@example.test": {ResolvedAt: fresh, MemberSetFingerprint: "old-fp"}},
+		}
+		cap := 1 // only ONE fresh resolve allowed → the priority candidate wins
+		resolver := newMemberIDResolver(fetcher, nil, neg, &cap)
+		knownMap := map[string][]uuid.UUID{
+			"invalidated@example.test": {invalidated},
+			"neverseen@example.test":   {neverSeen},
+		}
+		counters := &sweepCounters{}
+		budget := 10
+		idx, _, _, blockedCap, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fpNew, knownMap, map[string]struct{}{"me@example.test": {}}, nil, resolver, counters, &budget)
+		require.NoError(t, err)
+		// The invalidated (priority) candidate consumed the single cap slot and
+		// matched; the never-seen one was deferred (debt) → cursor held.
+		assert.Contains(t, idx, "users/invalidated", "the fingerprint-invalidated candidate is resolved first")
+		assert.NotContains(t, idx, "users/neverseen")
+		assert.True(t, blockedCap, "the deferred never-seen candidate is debt")
+		assert.Equal(t, 1, calls, "exactly the single capped resolve was issued")
+	})
+}
+
+// TestBuildKnownIDIndex_ActivityDoesNotReincurDebt proves the no-starvation
+// fix: with an UNCHANGED member set (same fingerprint), repeated index builds
+// issue ZERO members.get calls for a known-absent contact and never set
+// blockedByCapOnDebt — mere activity does not re-incur debt. Contrast: when a
+// member is actually added (fingerprint flips), the affected candidate becomes
+// UNKNOWN and is re-resolved.
+func TestBuildKnownIDIndex_ActivityDoesNotReincurDebt(t *testing.T) {
+	ctx := context.Background()
+	now := accelerated.GetCurrentTime()
+	fresh := now.Format(chatTimeLayout)
+	absent := uuid.New()
+
+	members := []string{"users/me", "users/other"}
+	fp := memberSetFingerprint(members)
+	calls := 0
+	fetcher := fakeIDFetcher(map[string]string{}, &calls) // absent never resolves
+	neg := map[string]map[string]memberNegative{
+		"spaces/A": {"absent@example.test": {ResolvedAt: fresh, MemberSetFingerprint: fp}},
+	}
+	cap := 50
+	resolver := newMemberIDResolver(fetcher, nil, neg, &cap)
+	knownMap := map[string][]uuid.UUID{"absent@example.test": {absent}}
+	meSet := map[string]struct{}{"me@example.test": {}}
+
+	// Many sweeps with the SAME member set (fingerprint stable). Each uses a fresh
+	// resolver instance (drops the in-sweep memo) reading the persisted negatives.
+	for i := 0; i < 5; i++ {
+		r := newMemberIDResolver(fetcher, resolver.snapshotPositives(), resolver.snapshotNegatives(), &cap)
+		counters := &sweepCounters{}
+		budget := 10
+		idx, _, blockedBudget, blockedCap, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fp, knownMap, meSet, nil, r, counters, &budget)
+		require.NoError(t, err)
+		assert.Empty(t, idx)
+		assert.False(t, blockedBudget)
+		assert.False(t, blockedCap, "a stable fingerprint never re-incurs debt (sweep %d)", i)
+	}
+	assert.Equal(t, 0, calls, "no members.get calls across many stable-membership sweeps")
+
+	// Now a member is actually added → fingerprint flips → the absent candidate
+	// becomes UNKNOWN and IS re-resolved (here it resolves to a real id).
+	membersAfter := []string{"users/me", "users/other", "users/absent"}
+	fpAfter := memberSetFingerprint(membersAfter)
+	fetcher2 := fakeIDFetcher(map[string]string{"spaces/A|absent@example.test": "users/absent"}, &calls)
+	r := newMemberIDResolver(fetcher2, resolver.snapshotPositives(), resolver.snapshotNegatives(), &cap)
+	counters := &sweepCounters{}
+	budget := 10
+	idx, _, _, _, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, membersAfter, fpAfter, knownMap, meSet, nil, r, counters, &budget)
+	require.NoError(t, err)
+	assert.Contains(t, idx, "users/absent", "a real membership change re-resolves the candidate")
+	assert.Equal(t, 1, calls, "exactly one re-resolve after the membership actually changed")
 }
 
 func TestMembershipNeedsRefresh(t *testing.T) {
@@ -329,12 +924,21 @@ func TestReapStaleCursors_ArchiveRestoreDrop(t *testing.T) {
 }
 
 func TestGChatMetadata_RoundTrip(t *testing.T) {
+	// Use a recent resolved_at so the new id caches survive the prune-on-load.
+	recent := accelerated.GetCurrentTime().Add(-time.Hour).Format(chatTimeLayout)
 	g := &gchatMetadata{
 		SpaceCursors:    map[string]spaceCursor{"spaces/A": {CreateCursor: "2026-06-04T10:00:00Z", EditCursor: "2026-06-04T09:00:00Z"}},
 		ArchivedCursors: map[string]archivedCursor{"spaces/B": {CreateCursor: "x", ArchivedAt: "2026-06-04T08:00:00Z"}},
 		SpaceMembers:    map[string]spaceMembers{"spaces/A": {Version: "v1", FetchedAt: "2026-06-04T10:00:00Z", Members: []string{"users/a"}}},
 		UserEmailCache:  map[string]cachedEmail{"users/a": {Email: "a@example.test", ResolvedAt: "2026-06-04T10:00:00Z"}},
 		MeIdentities:    map[string]struct{}{"me@example.test": {}},
+		EmailUserIDs:    map[string]cachedUserID{"a@example.test": {UserName: "users/a", ResolvedAt: recent}},
+		SpaceMemberNegatives: map[string]map[string]memberNegative{
+			// Negative under spaces/A, which has a cached membership entry, so it
+			// survives the prune-on-load (a negative for a space with no cached
+			// membership is dropped — covered by TestPruneIDCaches).
+			"spaces/A": {"absent@example.test": {ResolvedAt: recent, MemberSetFingerprint: "fp-1"}},
+		},
 	}
 	// Preserve a non-gchat key to prove read-modify-write doesn't clobber it.
 	raw := map[string]any{"backfill_since": "2026-01-01", "some_other_key": 42}
@@ -356,6 +960,68 @@ func TestGChatMetadata_RoundTrip(t *testing.T) {
 	assert.Equal(t, g.SpaceMembers, reloaded.SpaceMembers)
 	assert.Equal(t, g.UserEmailCache, reloaded.UserEmailCache)
 	assert.Equal(t, g.MeIdentities, reloaded.MeIdentities)
+	// The two new id caches survive writeInto → loadGChatMetadata.
+	assert.Equal(t, g.EmailUserIDs, reloaded.EmailUserIDs)
+	assert.Equal(t, g.SpaceMemberNegatives, reloaded.SpaceMemberNegatives)
+}
+
+func TestMemberSetFingerprint_OrderIndependentAndChangeSensitive(t *testing.T) {
+	base := []string{"users/a", "users/b", "users/c"}
+	shuffled := []string{"users/c", "users/a", "users/b"}
+	withDup := []string{"users/b", "users/a", "users/c", "users/a"}
+
+	fp := memberSetFingerprint(base)
+	assert.Equal(t, fp, memberSetFingerprint(shuffled), "fingerprint is order-independent")
+	assert.Equal(t, fp, memberSetFingerprint(withDup), "fingerprint dedups before hashing")
+
+	// Adding a member changes the fingerprint (a join is detected).
+	assert.NotEqual(t, fp, memberSetFingerprint(append([]string{"users/d"}, base...)),
+		"adding a member must change the fingerprint")
+	// Removing a member changes the fingerprint (a leave is detected).
+	assert.NotEqual(t, fp, memberSetFingerprint([]string{"users/a", "users/b"}),
+		"removing a member must change the fingerprint")
+
+	// The empty set is a stable sentinel (and not equal to any non-empty hash).
+	assert.Equal(t, memberSetFingerprintEmpty, memberSetFingerprint(nil))
+	assert.Equal(t, memberSetFingerprintEmpty, memberSetFingerprint([]string{}))
+	assert.Equal(t, memberSetFingerprintEmpty, memberSetFingerprint([]string{""}), "blank ids are skipped")
+}
+
+func TestPruneIDCaches_DropsExpiredAndOrphanNegatives(t *testing.T) {
+	now := accelerated.GetCurrentTime()
+	fresh := now.Add(-time.Hour).Format(chatTimeLayout)
+	expired := now.Add(-25 * time.Hour).Format(chatTimeLayout)
+
+	g := &gchatMetadata{
+		SpaceMembers: map[string]spaceMembers{
+			"spaces/live": {Members: []string{"users/a"}},
+		},
+		EmailUserIDs: map[string]cachedUserID{
+			"keep@example.test": {UserName: "users/a", ResolvedAt: fresh},
+			"drop@example.test": {UserName: "users/b", ResolvedAt: expired},
+		},
+		SpaceMemberNegatives: map[string]map[string]memberNegative{
+			"spaces/live": {
+				"absent@example.test":  {ResolvedAt: fresh, MemberSetFingerprint: "fp"},
+				"expired@example.test": {ResolvedAt: expired, MemberSetFingerprint: "fp"},
+			},
+			// Orphan: no cached membership for this space → whole entry dropped.
+			"spaces/gone": {"x@example.test": {ResolvedAt: fresh, MemberSetFingerprint: "fp"}},
+		},
+	}
+	g.pruneIDCaches(now)
+
+	// Expired global positive dropped; fresh one kept.
+	assert.Contains(t, g.EmailUserIDs, "keep@example.test")
+	assert.NotContains(t, g.EmailUserIDs, "drop@example.test")
+
+	// Live-space negatives: expired dropped, fresh kept.
+	live := g.SpaceMemberNegatives["spaces/live"]
+	assert.Contains(t, live, "absent@example.test")
+	assert.NotContains(t, live, "expired@example.test")
+
+	// Orphan space (no cached membership) dropped entirely.
+	assert.NotContains(t, g.SpaceMemberNegatives, "spaces/gone")
 }
 
 func TestGChatMetadata_CursorForSeedsBackfillFloor(t *testing.T) {
@@ -429,7 +1095,7 @@ func TestConsumeContentWindow_BudgetExhaustionKeepsCursor(t *testing.T) {
 
 	newCursor, proven, err := p.consumeContentWindow(ctx, fetcher,
 		&chat.Space{Name: "spaces/B", SpaceType: "SPACE"}, floor,
-		map[string][]uuid.UUID{}, map[string][]uuid.UUID{}, map[string]struct{}{},
+		map[string][]uuid.UUID{}, map[string][]uuid.UUID{}, nil, nil, map[string]struct{}{},
 		resolver, "acct", counters, &budget)
 	require.NoError(t, err)
 	assert.False(t, proven, "an un-finished window is NOT proven")
@@ -468,7 +1134,7 @@ func TestConsumeContentWindow_FullyPagedIsProven(t *testing.T) {
 	floor := "2026-01-01T00:00:00Z"
 	newCursor, proven, err := p.consumeContentWindow(ctx, fetcher,
 		&chat.Space{Name: "spaces/B", SpaceType: "SPACE"}, floor,
-		map[string][]uuid.UUID{}, map[string][]uuid.UUID{"someone-else@example.test": {alice}}, map[string]struct{}{},
+		map[string][]uuid.UUID{}, map[string][]uuid.UUID{"someone-else@example.test": {alice}}, nil, nil, map[string]struct{}{},
 		resolver, "acct", counters, &budget)
 	require.NoError(t, err)
 	assert.True(t, proven, "a fully-paged window is proven")
@@ -508,7 +1174,7 @@ func TestConsumeContentWindow_CursorAdvancesByInstantNotLexical(t *testing.T) {
 	floor := "2026-01-01T00:00:00Z"
 	newCursor, proven, err := p.consumeContentWindow(ctx, fetcher,
 		&chat.Space{Name: "spaces/B", SpaceType: "SPACE"}, floor,
-		map[string][]uuid.UUID{}, map[string][]uuid.UUID{}, map[string]struct{}{},
+		map[string][]uuid.UUID{}, map[string][]uuid.UUID{}, nil, nil, map[string]struct{}{},
 		resolver, "acct", counters, &budget)
 	require.NoError(t, err)
 	assert.True(t, proven)
@@ -662,7 +1328,7 @@ func TestConsumeContentWindow_DeepHistoryCompletesUnderRaisedBudget(t *testing.T
 		counters := &sweepCounters{}
 		newCursor, proven, err := p.consumeContentWindow(ctx, fetcher,
 			&chat.Space{Name: "spaces/B", SpaceType: "SPACE"}, floor,
-			map[string][]uuid.UUID{}, map[string][]uuid.UUID{}, map[string]struct{}{},
+			map[string][]uuid.UUID{}, map[string][]uuid.UUID{}, nil, nil, map[string]struct{}{},
 			resolver, "acct", counters, &budget)
 		require.NoError(t, err)
 		assert.True(t, proven, "a 30-page window fully pages under the 100-page budget")
@@ -683,13 +1349,90 @@ func TestConsumeContentWindow_DeepHistoryCompletesUnderRaisedBudget(t *testing.T
 		counters := &sweepCounters{}
 		newCursor, proven, err := p.consumeContentWindow(ctx, fetcher,
 			&chat.Space{Name: "spaces/B", SpaceType: "SPACE"}, floor,
-			map[string][]uuid.UUID{}, map[string][]uuid.UUID{}, map[string]struct{}{},
+			map[string][]uuid.UUID{}, map[string][]uuid.UUID{}, nil, nil, map[string]struct{}{},
 			resolver, "acct", counters, &budget)
 		require.NoError(t, err)
 		assert.False(t, proven, "a 30-page window cannot complete under a 24-page budget")
 		assert.Equal(t, floor, newCursor, "cursor must NOT advance past an un-listed page")
 		assert.Equal(t, 0, budget, "the tight budget is fully drained")
 		assert.Equal(t, 24, calls, "exactly the budgeted number of pages were fetched")
+	})
+}
+
+// TestChatServiceFetcher_ResolveMemberID_RequestPath pins the actual request the
+// godoc promises: members.get with the BARE email as the member resource-name
+// segment (NOT "members/users/{email}"), parsing the canonical Member.Name from
+// the response, and mapping the unrecognized-member statuses (400/404) to
+// notMember=true. Like TestListMessages_RequestsMaxPageSize, it stands up an
+// httptest.Server and points a real *chat.Service at it (no OAuth, no live
+// Google), so it guards against the doubled-prefix mistake at the production
+// seam where the unit fakes cannot.
+func TestChatServiceFetcher_ResolveMemberID_RequestPath(t *testing.T) {
+	t.Run("success_parses_canonical_id", func(t *testing.T) {
+		ctx := context.Background()
+		var gotPath string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotPath = r.URL.Path
+			w.Header().Set("Content-Type", "application/json")
+			// Membership response whose member carries the CANONICAL users/{id}
+			// (the request used the email alias; the response is always canonical).
+			_, _ = w.Write([]byte(`{"member":{"name":"users/123456789","type":"HUMAN"}}`))
+		}))
+		defer server.Close()
+
+		svc, err := chat.NewService(ctx, option.WithEndpoint(server.URL), option.WithoutAuthentication())
+		require.NoError(t, err)
+		fetcher := &chatServiceFetcher{chat: svc}
+
+		userName, notMember, err := fetcher.ResolveMemberID(ctx, "spaces/ABC", "person@example.test")
+		require.NoError(t, err)
+		assert.False(t, notMember)
+		assert.Equal(t, "users/123456789", userName)
+		// The bare email is the member segment — NOT "members/users/{email}".
+		assert.Equal(t, "/v1/spaces/ABC/members/person@example.test", gotPath,
+			"members.get must use the bare-email member resource name (reserved expansion preserves @/.)")
+	})
+
+	// A 400 (unrecognized member) and a 404 both mean "not a member of this
+	// space" — a cacheable negative, not an error.
+	for _, code := range []int{400, 404} {
+		code := code
+		t.Run("status_maps_to_notMember", func(t *testing.T) {
+			ctx := context.Background()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(code)
+				_, _ = w.Write([]byte(`{"error":{"code":` + strconv.Itoa(code) + `,"message":"Invalid membership state, user, group or request ID"}}`))
+			}))
+			defer server.Close()
+
+			svc, err := chat.NewService(ctx, option.WithEndpoint(server.URL), option.WithoutAuthentication())
+			require.NoError(t, err)
+			fetcher := &chatServiceFetcher{chat: svc}
+
+			userName, notMember, err := fetcher.ResolveMemberID(ctx, "spaces/ABC", "stranger@example.test")
+			require.NoError(t, err, "an unrecognized-member %d must be a cacheable negative, not an error", code)
+			assert.True(t, notMember)
+			assert.Empty(t, userName)
+		})
+	}
+
+	t.Run("server_error_propagates", func(t *testing.T) {
+		ctx := context.Background()
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(500)
+			_, _ = w.Write([]byte(`{"error":{"code":500,"message":"backend error"}}`))
+		}))
+		defer server.Close()
+
+		svc, err := chat.NewService(ctx, option.WithEndpoint(server.URL), option.WithoutAuthentication())
+		require.NoError(t, err)
+		fetcher := &chatServiceFetcher{chat: svc}
+
+		_, notMember, err := fetcher.ResolveMemberID(ctx, "spaces/ABC", "person@example.test")
+		require.Error(t, err, "a transient 5xx must propagate so the window aborts and retries")
+		assert.False(t, notMember)
 	})
 }
 
