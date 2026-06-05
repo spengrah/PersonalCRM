@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -13,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	chat "google.golang.org/api/chat/v1"
+	"google.golang.org/api/option"
 	people "google.golang.org/api/people/v1"
 )
 
@@ -608,4 +612,130 @@ func TestBuildContentMetadata(t *testing.T) {
 	atts, ok := meta["attachments"].([]any)
 	require.True(t, ok)
 	require.Len(t, atts, 1)
+}
+
+// TestConsumeContentWindow_DeepHistoryCompletesUnderRaisedBudget proves the
+// budget-raise half of the fix: a window that needs more pages than the OLD
+// budget (24) but fewer than the NEW budget (gchatMaxWindowsPerSync = 100)
+// strands its cursor under the old budget yet fully pages and advances under
+// the shipped constant.
+//
+// NOTE: the fake fetcher here ignores page size entirely — it returns a fixed
+// number of pages regardless of the requested page size. So this test validates
+// ONLY that a window needing >24 but <=100 pages completes under the shipped
+// constant. It does NOT and cannot prove production now requests larger pages;
+// the .PageSize(1000) request is pinned separately by
+// TestListMessages_RequestsMaxPageSize.
+func TestConsumeContentWindow_DeepHistoryCompletesUnderRaisedBudget(t *testing.T) {
+	ctx := context.Background()
+	floor := "2026-01-01T00:00:00Z"
+	// The window needs exactly 30 pages to fully list: pages 1..29 each report
+	// another page (a bystander/unknown sender so no upsert and no commsRepo is
+	// needed), and page 30 returns next == "" with the latest message.
+	const totalPages = 30
+	latest := "2026-02-15T08:30:00Z"
+
+	newFetcher := func(callCount *int) *fakeChatFetcher {
+		return &fakeChatFetcher{funcs: FakeChatFetcherFuncs{
+			ListMessages: func(_ context.Context, _, _ string, _ bool, token string) ([]*chat.Message, string, error) {
+				*callCount++
+				if *callCount < totalPages {
+					// Bystander sender → no upsert; still a non-final page.
+					return []*chat.Message{humanMsg("spaces/B/messages/x", "users/stranger", "2026-02-01T00:00:00Z", "x")}, "next", nil
+				}
+				// Final page carries the latest createTime, no more pages.
+				return []*chat.Message{humanMsg("spaces/B/messages/last", "users/stranger", latest, "last")}, "", nil
+			},
+			ResolvePersonEmail: func(context.Context, string) (string, error) { return "stranger@example.test", nil },
+		}}
+	}
+	p := &GChatSyncProvider{}
+
+	// Sub-case A — passes under the SHIPPED constant (100): the 30-page window
+	// fully pages, proven=true, cursor advances to the latest createTime, and the
+	// budget is decremented by exactly the pages consumed.
+	t.Run("completes_under_shipped_budget", func(t *testing.T) {
+		calls := 0
+		fetcher := newFetcher(&calls)
+		resolver := newCachedEmailResolver(fetcher, nil)
+		budget := gchatMaxWindowsPerSync
+		counters := &sweepCounters{}
+		newCursor, proven, err := p.consumeContentWindow(ctx, fetcher,
+			&chat.Space{Name: "spaces/B", SpaceType: "SPACE"}, floor,
+			map[string][]uuid.UUID{}, map[string][]uuid.UUID{}, map[string]struct{}{},
+			resolver, "acct", counters, &budget)
+		require.NoError(t, err)
+		assert.True(t, proven, "a 30-page window fully pages under the 100-page budget")
+		assert.Equal(t, latest, newCursor, "cursor advances to the latest createTime")
+		assert.Equal(t, totalPages, calls, "exactly the 30 pages were fetched")
+		assert.Equal(t, gchatMaxWindowsPerSync-totalPages, budget, "budget decremented by exactly the pages consumed")
+	})
+
+	// Sub-case B — strands under the OLD budget (24, set as a local literal, NOT
+	// by mutating the constant): the same 30-page window cannot complete, returns
+	// proven=false + the original cursor, with the budget fully drained and
+	// exactly 24 pages fetched. This is the regression the fix removes.
+	t.Run("strands_under_old_budget", func(t *testing.T) {
+		calls := 0
+		fetcher := newFetcher(&calls)
+		resolver := newCachedEmailResolver(fetcher, nil)
+		budget := 24 // pre-fix value, a local literal
+		counters := &sweepCounters{}
+		newCursor, proven, err := p.consumeContentWindow(ctx, fetcher,
+			&chat.Space{Name: "spaces/B", SpaceType: "SPACE"}, floor,
+			map[string][]uuid.UUID{}, map[string][]uuid.UUID{}, map[string]struct{}{},
+			resolver, "acct", counters, &budget)
+		require.NoError(t, err)
+		assert.False(t, proven, "a 30-page window cannot complete under the old 24-page budget")
+		assert.Equal(t, floor, newCursor, "cursor must NOT advance past an un-listed page")
+		assert.Equal(t, 0, budget, "old budget fully drained")
+		assert.Equal(t, 24, calls, "exactly the old-budget number of pages were fetched")
+	})
+}
+
+// TestListMessages_RequestsMaxPageSize pins the .PageSize(1000) half of the fix
+// at the production seam. The chatFetcher interface does not carry a page size
+// (it is set on the *chat.Service call builder, whose urlParams_ is unexported
+// and unreadable from a test), so we stand up an httptest.Server, point a real
+// *chat.Service at it via WithoutAuthentication (no OAuth, no live Google), and
+// assert the recorded request's pageSize query parameter is 1000. We run it for
+// both showDeleted paths to make the "covers both passes" guarantee explicit —
+// the content pass (false) and the edit/delete pass (true) both route through
+// chatServiceFetcher.ListMessages.
+func TestListMessages_RequestsMaxPageSize(t *testing.T) {
+	for _, showDeleted := range []bool{false, true} {
+		showDeleted := showDeleted
+		name := "contentPass"
+		if showDeleted {
+			name = "editDeletePass"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			var gotQuery url.Values
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotQuery = r.URL.Query()
+				w.Header().Set("Content-Type", "application/json")
+				// {} decodes to an empty ListMessagesResponse (no messages, no
+				// next page token), so ListMessages returns cleanly.
+				_, _ = w.Write([]byte("{}"))
+			}))
+			defer server.Close()
+
+			svc, err := chat.NewService(ctx,
+				option.WithEndpoint(server.URL),
+				option.WithoutAuthentication())
+			require.NoError(t, err)
+			fetcher := &chatServiceFetcher{chat: svc}
+
+			msgs, next, err := fetcher.ListMessages(ctx, "spaces/B", `create_time > "2026-01-01T00:00:00Z"`, showDeleted, "")
+			require.NoError(t, err)
+			assert.Empty(t, msgs)
+			assert.Empty(t, next)
+
+			require.NotNil(t, gotQuery, "the server handler must have recorded a request")
+			assert.Equal(t, "1000", gotQuery.Get("pageSize"), "ListMessages must request the documented Chat API max page size")
+			// Bonus: documents that the create_time ASC ordering is preserved.
+			assert.Equal(t, "create_time ASC", gotQuery.Get("orderBy"))
+		})
+	}
 }
