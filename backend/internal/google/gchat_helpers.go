@@ -263,11 +263,15 @@ type idMatch struct {
 // fingerprint-invalidated candidates (a negative whose fingerprint no longer
 // matches — a membership change happened) get PRIORITY access to the cap over
 // never-seen candidates, so a one-time debt drains efficiently.
-// meIDs is the set of the account's OWN canonical ids within this space
-// (observed by resolveKnownMembers). Any resolved id in meIDs is dropped from
-// the index so the inbound id-path can never fire for the account itself — even
-// if a stray non-meSet alias resolves to the account's own id. This makes the
-// "knownIDs never contains a me-id" invariant enforced, not merely assumed.
+// meIDs is the set of the account's OWN canonical ids within this space, seeded
+// by resolveKnownMembers (People-path) and extended here from the reverse
+// resolver's ALREADY-CACHED positives for the meSet emails (no fresh members.get,
+// no budget impact) — so a me-id already discovered in an earlier space is caught
+// even when People cannot resolve it (the not-in-Contacts me case). Any resolved
+// id in meIDs is dropped from the index so the inbound id-path can never fire for
+// the account itself, even if a stray non-meSet CRM alias resolves to the
+// account's own id. classifyMessage ALSO guards its inbound id-path with meIDs as
+// a defense-in-depth check at the point of use.
 func buildKnownIDIndex(
 	ctx context.Context,
 	space *chat.Space,
@@ -279,7 +283,7 @@ func buildKnownIDIndex(
 	resolver *memberIDResolver,
 	counters *sweepCounters,
 	pageBudget *int,
-) (knownIDs map[string]idMatch, blockedByBudget bool, blockedByCapOnDebt bool, err error) {
+) (knownIDs map[string]idMatch, meIDsOut map[string]struct{}, blockedByBudget bool, blockedByCapOnDebt bool, err error) {
 	knownIDs = map[string]idMatch{}
 
 	// The member-id set of this space, for the "id ∈ members" check.
@@ -287,6 +291,19 @@ func buildKnownIDIndex(
 	for _, id := range members {
 		memberSet[id] = struct{}{}
 	}
+
+	// Extend meIDs from the reverse resolver's already-cached positives for the
+	// meSet emails (cache-only — no fresh members.get, no budget consumption, no
+	// negative writes). This catches a me-id discovered in an earlier space.
+	for meEmail := range meSet {
+		if id, ok := resolver.cachedPositive(meEmail); ok {
+			if _, already := meIDs[id]; !already {
+				// Copy-on-write so we never mutate the caller's map.
+				meIDs = mergeMeID(meIDs, id)
+			}
+		}
+	}
+	meIDsOut = meIDs // the (possibly extended) me-id set, for the classify guard
 
 	// Seed from the GLOBAL positive cache: every known email whose cached id is a
 	// member of this space matches with zero API calls. Track which emails are
@@ -319,7 +336,7 @@ func buildKnownIDIndex(
 		for _, email := range group {
 			id, status, rerr := resolver.resolve(ctx, space.Name, fingerprint, email, pageBudget)
 			if rerr != nil {
-				return nil, false, false, rerr
+				return nil, nil, false, false, rerr
 			}
 			switch status {
 			case resolvedKnownID:
@@ -340,11 +357,22 @@ func buildKnownIDIndex(
 				blockedByCapOnDebt = true
 			case deferredBudgetHit:
 				blockedByBudget = true
-				return knownIDs, blockedByBudget, blockedByCapOnDebt, nil
+				return knownIDs, meIDsOut, blockedByBudget, blockedByCapOnDebt, nil
 			}
 		}
 	}
-	return knownIDs, blockedByBudget, blockedByCapOnDebt, nil
+	return knownIDs, meIDsOut, blockedByBudget, blockedByCapOnDebt, nil
+}
+
+// mergeMeID returns a new set that is src plus id (copy-on-write so the caller's
+// map is never mutated). src may be nil.
+func mergeMeID(src map[string]struct{}, id string) map[string]struct{} {
+	out := make(map[string]struct{}, len(src)+1)
+	for k := range src {
+		out[k] = struct{}{}
+	}
+	out[id] = struct{}{}
+	return out
 }
 
 // classifyIDCandidates partitions the not-yet-matched known emails into those

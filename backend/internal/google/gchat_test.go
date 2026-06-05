@@ -68,7 +68,7 @@ func TestClassifyMessage_InboundSenderOnly(t *testing.T) {
 	meSet := map[string]struct{}{"me@example.test": {}}
 
 	m := humanMsg("spaces/S/messages/1", "users/alice", "2026-06-04T10:00:00Z", "hi all")
-	c, err := classifyMessage(ctx, m, knownMembers, knownMap, nil, meSet, resolver)
+	c, err := classifyMessage(ctx, m, knownMembers, knownMap, nil, nil, meSet, resolver)
 	require.NoError(t, err)
 	assert.Equal(t, "inbound", c.Direction)
 	// Sender-only: exactly Alice, NOT Bob/Carol.
@@ -95,7 +95,7 @@ func TestClassifyMessage_OutboundFanOut(t *testing.T) {
 	meSet := map[string]struct{}{"me@example.test": {}}
 
 	m := humanMsg("spaces/S/messages/2", "users/me", "2026-06-04T10:01:00Z", "hello")
-	c, err := classifyMessage(ctx, m, knownMembers, knownMap, nil, meSet, resolver)
+	c, err := classifyMessage(ctx, m, knownMembers, knownMap, nil, nil, meSet, resolver)
 	require.NoError(t, err)
 	assert.Equal(t, "outbound", c.Direction)
 	assert.ElementsMatch(t, []uuid.UUID{alice, bob}, c.Matched)
@@ -123,7 +123,7 @@ func TestClassifyMessage_OutboundExcludesSelfContact(t *testing.T) {
 	meSet := map[string]struct{}{"me@example.test": {}}
 
 	m := humanMsg("spaces/S/messages/3", "users/me", "2026-06-04T10:02:00Z", "hi")
-	c, err := classifyMessage(ctx, m, knownMembers, knownMap, nil, meSet, resolver)
+	c, err := classifyMessage(ctx, m, knownMembers, knownMap, nil, nil, meSet, resolver)
 	require.NoError(t, err)
 	assert.Equal(t, "outbound", c.Direction)
 	// The self-contact must NOT receive a self-attributed outreach row.
@@ -142,14 +142,14 @@ func TestClassifyMessage_BystanderAndUnresolved(t *testing.T) {
 
 	// Bystander: sender neither me nor known.
 	mBy := humanMsg("spaces/S/messages/4", "users/stranger", "2026-06-04T10:03:00Z", "hey")
-	c, err := classifyMessage(ctx, mBy, nil, knownMap, nil, meSet, resolver)
+	c, err := classifyMessage(ctx, mBy, nil, knownMap, nil, nil, meSet, resolver)
 	require.NoError(t, err)
 	assert.Empty(t, c.Matched)
 	assert.False(t, c.Unresolved)
 
 	// Unresolved sender: resolves to "" → flagged Unresolved, no rows.
 	mUn := humanMsg("spaces/S/messages/5", "users/ghost", "2026-06-04T10:04:00Z", "hey")
-	c, err = classifyMessage(ctx, mUn, nil, knownMap, nil, meSet, resolver)
+	c, err = classifyMessage(ctx, mUn, nil, knownMap, nil, nil, meSet, resolver)
 	require.NoError(t, err)
 	assert.Empty(t, c.Matched)
 	assert.True(t, c.Unresolved)
@@ -171,11 +171,37 @@ func TestClassifyMessage_MatchesBySenderID(t *testing.T) {
 	}
 
 	m := humanMsg("spaces/S/messages/d", "users/dave", "2026-06-04T10:00:00Z", "hi from dave")
-	c, err := classifyMessage(ctx, m, nil, knownMap, knownIDs, meSet, resolver)
+	c, err := classifyMessage(ctx, m, nil, knownMap, knownIDs, nil, meSet, resolver)
 	require.NoError(t, err)
 	assert.Equal(t, "inbound", c.Direction)
 	assert.Equal(t, []uuid.UUID{dave}, c.Matched, "the sender id matched the contact via the id path")
 	assert.Equal(t, "dave@example.test", c.SenderEmail, "the peer email is carried from the idMatch, not the empty People-API result")
+}
+
+// TestClassifyMessage_InboundIDPathYieldsToMeID is the defense-in-depth guard:
+// if a stray index entry maps the account's OWN id to a contact (the anomalous
+// self-alias case), the inbound id-path must NOT fire for the account's own
+// message — meIDs makes it fall through to the email path, where the sender (me)
+// is classified outbound, not inbound from that contact.
+func TestClassifyMessage_InboundIDPathYieldsToMeID(t *testing.T) {
+	ctx := context.Background()
+	strayContact := uuid.New()
+	// The account's own id resolves to its own email via the email path.
+	resolver := staticResolver(t, map[string]string{"users/me": "me@example.test"}, nil)
+	knownMap := map[string][]uuid.UUID{"me@example.test": {strayContact}}
+	meSet := map[string]struct{}{"me@example.test": {}}
+	// A stray index entry mapping the account's own id to a contact (what the
+	// build-time meIDs exclusion normally prevents — here we assert the
+	// point-of-use guard independently).
+	knownIDs := map[string]idMatch{
+		"users/me": {Email: "me@example.test", Contacts: []uuid.UUID{strayContact}},
+	}
+	meIDs := map[string]struct{}{"users/me": {}}
+
+	m := humanMsg("spaces/S/messages/self", "users/me", "2026-06-04T10:00:00Z", "my own message")
+	c, err := classifyMessage(ctx, m, nil, knownMap, knownIDs, meIDs, meSet, resolver)
+	require.NoError(t, err)
+	assert.Equal(t, "outbound", c.Direction, "the account's own message is outbound, never inbound from a stray self-alias contact")
 }
 
 // TestClassifyMessage_OutboundFanOutIncludesIDResolvedMembers proves an outbound
@@ -198,7 +224,7 @@ func TestClassifyMessage_OutboundFanOutIncludesIDResolvedMembers(t *testing.T) {
 	meSet := map[string]struct{}{"me@example.test": {}}
 
 	m := humanMsg("spaces/S/messages/o", "users/me", "2026-06-04T10:01:00Z", "team update")
-	c, err := classifyMessage(ctx, m, knownMembers, knownMap, knownIDs, meSet, resolver)
+	c, err := classifyMessage(ctx, m, knownMembers, knownMap, knownIDs, nil, meSet, resolver)
 	require.NoError(t, err)
 	assert.Equal(t, "outbound", c.Direction)
 	assert.ElementsMatch(t, []uuid.UUID{alice, dave}, c.Matched, "fan-out unions email-resolved and id-resolved members")
@@ -223,7 +249,7 @@ func TestClassifyMessage_OutboundFanOutDedupsContact(t *testing.T) {
 	meSet := map[string]struct{}{"me@example.test": {}}
 
 	m := humanMsg("spaces/S/messages/o2", "users/me", "2026-06-04T10:02:00Z", "hi")
-	c, err := classifyMessage(ctx, m, knownMembers, knownMap, knownIDs, meSet, resolver)
+	c, err := classifyMessage(ctx, m, knownMembers, knownMap, knownIDs, nil, meSet, resolver)
 	require.NoError(t, err)
 	assert.Equal(t, "outbound", c.Direction)
 	assert.Equal(t, []uuid.UUID{alice}, c.Matched, "the shared contact appears once, not twice")
@@ -271,14 +297,14 @@ func TestClassifyMessage_IDPathPreferredEmailFallback(t *testing.T) {
 
 	// Dave: id path → no email resolver call.
 	mDave := humanMsg("spaces/S/messages/d", "users/dave", "2026-06-04T10:00:00Z", "x")
-	c, err := classifyMessage(ctx, mDave, nil, knownMap, knownIDs, meSet, resolver)
+	c, err := classifyMessage(ctx, mDave, nil, knownMap, knownIDs, nil, meSet, resolver)
 	require.NoError(t, err)
 	assert.Equal(t, []uuid.UUID{dave}, c.Matched)
 	assert.Equal(t, 0, calls, "an id-path match must not call the email resolver")
 
 	// Erin: absent from knownIDs → email path still matches.
 	mErin := humanMsg("spaces/S/messages/e", "users/erin", "2026-06-04T10:01:00Z", "y")
-	c, err = classifyMessage(ctx, mErin, nil, knownMap, knownIDs, meSet, resolver)
+	c, err = classifyMessage(ctx, mErin, nil, knownMap, knownIDs, nil, meSet, resolver)
 	require.NoError(t, err)
 	assert.Equal(t, "inbound", c.Direction)
 	assert.Equal(t, []uuid.UUID{erin}, c.Matched)
@@ -604,7 +630,7 @@ func TestBuildKnownIDIndex_SeedsFromPositiveCacheZeroCalls(t *testing.T) {
 	meSet := map[string]struct{}{"me@example.test": {}}
 	counters := &sweepCounters{}
 	budget := 10
-	idx, blockedBudget, blockedCap, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fp, knownMap, meSet, nil, resolver, counters, &budget)
+	idx, _, blockedBudget, blockedCap, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fp, knownMap, meSet, nil, resolver, counters, &budget)
 	require.NoError(t, err)
 	assert.False(t, blockedBudget)
 	assert.False(t, blockedCap)
@@ -645,13 +671,50 @@ func TestBuildKnownIDIndex_ExcludesMeIDs(t *testing.T) {
 	meIDs := map[string]struct{}{"users/me": {}}
 	counters := &sweepCounters{}
 	budget := 10
-	idx, _, _, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fp, knownMap, meSet, meIDs, resolver, counters, &budget)
+	idx, _, _, _, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fp, knownMap, meSet, meIDs, resolver, counters, &budget)
 	require.NoError(t, err)
 
 	// users/me must NOT be in the index from either path.
 	_, present := idx["users/me"]
 	assert.False(t, present, "the account's own id must never enter the reverse index")
 	assert.Empty(t, idx, "no contact is matched via a me-id alias")
+}
+
+// TestBuildKnownIDIndex_DiscoversMeIDFromCachedPositive proves meIDs is
+// authoritatively extended from the reverse resolver's already-cached positive
+// for the meSet email — even when the People-derived meIDs is EMPTY (the
+// not-in-Contacts me case). This closes the residual gap where People could not
+// identify the account's own member id. The discovery is cache-only (no fresh
+// members.get): the me-email's id was cached by an earlier space.
+func TestBuildKnownIDIndex_DiscoversMeIDFromCachedPositive(t *testing.T) {
+	ctx := context.Background()
+	strayContact := uuid.New()
+	members := []string{"users/me", "users/other"}
+	fp := memberSetFingerprint(members)
+	now := accelerated.GetCurrentTime()
+
+	calls := 0
+	fetcher := fakeIDFetcher(map[string]string{}, &calls)
+	// The account's own email is in the global positive cache as users/me (from an
+	// earlier space), AND a stray contact alias is cached as users/me too.
+	pos := map[string]cachedUserID{
+		"me@example.test":           {UserName: "users/me", ResolvedAt: now.Format(chatTimeLayout)},
+		"stray-seeded@example.test": {UserName: "users/me", ResolvedAt: now.Format(chatTimeLayout)},
+	}
+	cap := 10
+	resolver := newMemberIDResolver(fetcher, pos, nil, &cap)
+
+	knownMap := map[string][]uuid.UUID{"stray-seeded@example.test": {strayContact}}
+	meSet := map[string]struct{}{"me@example.test": {}}
+	// People-derived meIDs is EMPTY (People could not identify the me member id).
+	counters := &sweepCounters{}
+	budget := 10
+	idx, meIDsOut, _, _, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fp, knownMap, meSet, map[string]struct{}{}, resolver, counters, &budget)
+	require.NoError(t, err)
+
+	assert.Contains(t, meIDsOut, "users/me", "the me-id is discovered from the cached positive for the me-email")
+	assert.Empty(t, idx, "the stray contact alias is excluded because it resolves to the discovered me-id")
+	assert.Equal(t, 0, calls, "the me-id discovery is cache-only — no fresh members.get")
 }
 
 // TestBuildKnownIDIndex_DebtHoldsCursor drives the resolution-debt model:
@@ -681,7 +744,7 @@ func TestBuildKnownIDIndex_DebtHoldsCursor(t *testing.T) {
 		knownMap := map[string][]uuid.UUID{"absent@example.test": {absent}}
 		counters := &sweepCounters{}
 		budget := 10
-		idx, _, blockedCap, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fp, knownMap, map[string]struct{}{"me@example.test": {}}, nil, resolver, counters, &budget)
+		idx, _, _, blockedCap, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fp, knownMap, map[string]struct{}{"me@example.test": {}}, nil, resolver, counters, &budget)
 		require.NoError(t, err)
 		assert.Empty(t, idx)
 		assert.False(t, blockedCap, "a NEGATIVE-VALID candidate under the current fingerprint is not debt")
@@ -703,7 +766,7 @@ func TestBuildKnownIDIndex_DebtHoldsCursor(t *testing.T) {
 		knownMap := map[string][]uuid.UUID{"joiner@example.test": {joiner}}
 		counters := &sweepCounters{}
 		budget := 10
-		idx, blockedBudget, blockedCap, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fpNew, knownMap, map[string]struct{}{"me@example.test": {}}, nil, resolver, counters, &budget)
+		idx, _, blockedBudget, blockedCap, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fpNew, knownMap, map[string]struct{}{"me@example.test": {}}, nil, resolver, counters, &budget)
 		require.NoError(t, err)
 		assert.Empty(t, idx, "the candidate could not resolve this sweep")
 		assert.False(t, blockedBudget)
@@ -733,7 +796,7 @@ func TestBuildKnownIDIndex_DebtHoldsCursor(t *testing.T) {
 		}
 		counters := &sweepCounters{}
 		budget := 10
-		idx, _, blockedCap, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fpNew, knownMap, map[string]struct{}{"me@example.test": {}}, nil, resolver, counters, &budget)
+		idx, _, _, blockedCap, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fpNew, knownMap, map[string]struct{}{"me@example.test": {}}, nil, resolver, counters, &budget)
 		require.NoError(t, err)
 		// The invalidated (priority) candidate consumed the single cap slot and
 		// matched; the never-seen one was deferred (debt) → cursor held.
@@ -774,7 +837,7 @@ func TestBuildKnownIDIndex_ActivityDoesNotReincurDebt(t *testing.T) {
 		r := newMemberIDResolver(fetcher, resolver.snapshotPositives(), resolver.snapshotNegatives(), &cap)
 		counters := &sweepCounters{}
 		budget := 10
-		idx, blockedBudget, blockedCap, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fp, knownMap, meSet, nil, r, counters, &budget)
+		idx, _, blockedBudget, blockedCap, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fp, knownMap, meSet, nil, r, counters, &budget)
 		require.NoError(t, err)
 		assert.Empty(t, idx)
 		assert.False(t, blockedBudget)
@@ -790,7 +853,7 @@ func TestBuildKnownIDIndex_ActivityDoesNotReincurDebt(t *testing.T) {
 	r := newMemberIDResolver(fetcher2, resolver.snapshotPositives(), resolver.snapshotNegatives(), &cap)
 	counters := &sweepCounters{}
 	budget := 10
-	idx, _, _, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, membersAfter, fpAfter, knownMap, meSet, nil, r, counters, &budget)
+	idx, _, _, _, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, membersAfter, fpAfter, knownMap, meSet, nil, r, counters, &budget)
 	require.NoError(t, err)
 	assert.Contains(t, idx, "users/absent", "a real membership change re-resolves the candidate")
 	assert.Equal(t, 1, calls, "exactly one re-resolve after the membership actually changed")
@@ -1032,7 +1095,7 @@ func TestConsumeContentWindow_BudgetExhaustionKeepsCursor(t *testing.T) {
 
 	newCursor, proven, err := p.consumeContentWindow(ctx, fetcher,
 		&chat.Space{Name: "spaces/B", SpaceType: "SPACE"}, floor,
-		map[string][]uuid.UUID{}, map[string][]uuid.UUID{}, nil, map[string]struct{}{},
+		map[string][]uuid.UUID{}, map[string][]uuid.UUID{}, nil, nil, map[string]struct{}{},
 		resolver, "acct", counters, &budget)
 	require.NoError(t, err)
 	assert.False(t, proven, "an un-finished window is NOT proven")
@@ -1071,7 +1134,7 @@ func TestConsumeContentWindow_FullyPagedIsProven(t *testing.T) {
 	floor := "2026-01-01T00:00:00Z"
 	newCursor, proven, err := p.consumeContentWindow(ctx, fetcher,
 		&chat.Space{Name: "spaces/B", SpaceType: "SPACE"}, floor,
-		map[string][]uuid.UUID{}, map[string][]uuid.UUID{"someone-else@example.test": {alice}}, nil, map[string]struct{}{},
+		map[string][]uuid.UUID{}, map[string][]uuid.UUID{"someone-else@example.test": {alice}}, nil, nil, map[string]struct{}{},
 		resolver, "acct", counters, &budget)
 	require.NoError(t, err)
 	assert.True(t, proven, "a fully-paged window is proven")
@@ -1111,7 +1174,7 @@ func TestConsumeContentWindow_CursorAdvancesByInstantNotLexical(t *testing.T) {
 	floor := "2026-01-01T00:00:00Z"
 	newCursor, proven, err := p.consumeContentWindow(ctx, fetcher,
 		&chat.Space{Name: "spaces/B", SpaceType: "SPACE"}, floor,
-		map[string][]uuid.UUID{}, map[string][]uuid.UUID{}, nil, map[string]struct{}{},
+		map[string][]uuid.UUID{}, map[string][]uuid.UUID{}, nil, nil, map[string]struct{}{},
 		resolver, "acct", counters, &budget)
 	require.NoError(t, err)
 	assert.True(t, proven)
@@ -1265,7 +1328,7 @@ func TestConsumeContentWindow_DeepHistoryCompletesUnderRaisedBudget(t *testing.T
 		counters := &sweepCounters{}
 		newCursor, proven, err := p.consumeContentWindow(ctx, fetcher,
 			&chat.Space{Name: "spaces/B", SpaceType: "SPACE"}, floor,
-			map[string][]uuid.UUID{}, map[string][]uuid.UUID{}, nil, map[string]struct{}{},
+			map[string][]uuid.UUID{}, map[string][]uuid.UUID{}, nil, nil, map[string]struct{}{},
 			resolver, "acct", counters, &budget)
 		require.NoError(t, err)
 		assert.True(t, proven, "a 30-page window fully pages under the 100-page budget")
@@ -1286,7 +1349,7 @@ func TestConsumeContentWindow_DeepHistoryCompletesUnderRaisedBudget(t *testing.T
 		counters := &sweepCounters{}
 		newCursor, proven, err := p.consumeContentWindow(ctx, fetcher,
 			&chat.Space{Name: "spaces/B", SpaceType: "SPACE"}, floor,
-			map[string][]uuid.UUID{}, map[string][]uuid.UUID{}, nil, map[string]struct{}{},
+			map[string][]uuid.UUID{}, map[string][]uuid.UUID{}, nil, nil, map[string]struct{}{},
 			resolver, "acct", counters, &budget)
 		require.NoError(t, err)
 		assert.False(t, proven, "a 30-page window cannot complete under a 24-page budget")

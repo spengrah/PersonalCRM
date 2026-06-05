@@ -464,7 +464,7 @@ func (p *GChatSyncProvider) Sync(
 		// window. Never advance over a window whose id resolution was incomplete.
 		// meIDs (the account's own ids in this space) are excluded so a stray
 		// alias resolving to the account's own id can never enter the index.
-		knownIDs, blockedByBudget, blockedByCapOnDebt, err := buildKnownIDIndex(ctx, space, members, fingerprint, knownMap, meSet, meIDs, idResolver, counters, &budget)
+		knownIDs, spaceMeIDs, blockedByBudget, blockedByCapOnDebt, err := buildKnownIDIndex(ctx, space, members, fingerprint, knownMap, meSet, meIDs, idResolver, counters, &budget)
 		if err != nil {
 			logger.Warn().Err(err).Str("source", GChatSourceName).Msg("gchat: id-index resolution failed; skipping space")
 			continue
@@ -491,7 +491,7 @@ func (p *GChatSyncProvider) Sync(
 		}
 
 		cur := gcm.cursorFor(space.Name, backfillFloor)
-		newCreateCursor, proven, err := p.consumeContentWindow(ctx, fetcher, space, cur.CreateCursor, knownMembers, knownMap, knownIDs, meSet, resolver, accountID, counters, &budget)
+		newCreateCursor, proven, err := p.consumeContentWindow(ctx, fetcher, space, cur.CreateCursor, knownMembers, knownMap, knownIDs, spaceMeIDs, meSet, resolver, accountID, counters, &budget)
 		if err != nil {
 			// A list/resolve/upsert error mid-window leaves create_cursor
 			// UNADVANCED so the whole window restarts next sweep (idempotent via
@@ -701,7 +701,7 @@ func (p *GChatSyncProvider) ScanIdentifier(
 		if len(scanMembers) == 0 && !idIsMember && !isDM {
 			continue
 		}
-		_, proven, cErr := p.consumeContentWindow(ctx, fetcher, space, afterCursor, scanMembers, scanMap, scanIDs, meSet, resolver, accountID, counters, &budget)
+		_, proven, cErr := p.consumeContentWindow(ctx, fetcher, space, afterCursor, scanMembers, scanMap, scanIDs, meIDs, meSet, resolver, accountID, counters, &budget)
 		if cErr != nil {
 			return counters.matched, fmt.Errorf("scan space: %w", cErr)
 		}
@@ -742,6 +742,7 @@ func (p *GChatSyncProvider) consumeContentWindow(
 	knownMembers map[string][]uuid.UUID,
 	knownMap map[string][]uuid.UUID,
 	knownIDs map[string]idMatch,
+	meIDs map[string]struct{},
 	meSet map[string]struct{},
 	resolver *cachedEmailResolver,
 	accountID string,
@@ -766,7 +767,7 @@ func (p *GChatSyncProvider) consumeContentWindow(
 			if !qualifiableContentMessage(m) {
 				continue
 			}
-			matchErr := p.qualifyAndUpsert(ctx, m, space, knownMembers, knownMap, knownIDs, meSet, resolver, accountID, counters)
+			matchErr := p.qualifyAndUpsert(ctx, m, space, knownMembers, knownMap, knownIDs, meIDs, meSet, resolver, accountID, counters)
 			if matchErr != nil {
 				// Transient resolve/upsert error: abort the window, keep the
 				// original cursor (do NOT advance past this message).
@@ -949,18 +950,26 @@ func classifyMessage(
 	knownMembers map[string][]uuid.UUID,
 	knownMap map[string][]uuid.UUID,
 	knownIDs map[string]idMatch,
+	meIDs map[string]struct{},
 	meSet map[string]struct{},
 	resolver *cachedEmailResolver,
 ) (messageClassification, error) {
 	// INBOUND id-path first: a sender id present in knownIDs is a known co-member
 	// resolved by canonical id (Contacts-independent). The peer is the sender, so
-	// carry the CRM email through SenderEmail for the peer columns.
-	if idm, ok := knownIDs[m.Sender.Name]; ok && len(idm.Contacts) > 0 {
-		return messageClassification{
-			SenderEmail: idm.Email,
-			Direction:   repository.InteractionDirectionInbound,
-			Matched:     idm.Contacts,
-		}, nil
+	// carry the CRM email through SenderEmail for the peer columns. Defense-in-
+	// depth: never take the id-path for the account's own id (meIDs) — even though
+	// buildKnownIDIndex already excludes me-ids from knownIDs, this point-of-use
+	// guard makes a self-sender fall through to the email path (→ outbound), so a
+	// stray alias resolving to a me-id can never be stored as inbound from a
+	// contact.
+	if _, isMe := meIDs[m.Sender.Name]; !isMe {
+		if idm, ok := knownIDs[m.Sender.Name]; ok && len(idm.Contacts) > 0 {
+			return messageClassification{
+				SenderEmail: idm.Email,
+				Direction:   repository.InteractionDirectionInbound,
+				Matched:     idm.Contacts,
+			}, nil
+		}
 	}
 
 	senderEmail, err := resolver.resolve(ctx, m.Sender.Name)
@@ -997,12 +1006,13 @@ func (p *GChatSyncProvider) qualifyAndUpsert(
 	knownMembers map[string][]uuid.UUID,
 	knownMap map[string][]uuid.UUID,
 	knownIDs map[string]idMatch,
+	meIDs map[string]struct{},
 	meSet map[string]struct{},
 	resolver *cachedEmailResolver,
 	accountID string,
 	counters *sweepCounters,
 ) error {
-	c, err := classifyMessage(ctx, m, knownMembers, knownMap, knownIDs, meSet, resolver)
+	c, err := classifyMessage(ctx, m, knownMembers, knownMap, knownIDs, meIDs, meSet, resolver)
 	if err != nil {
 		return err
 	}
@@ -1080,6 +1090,7 @@ func RunClassifyForTest(
 	knownMembers map[string][]uuid.UUID,
 	knownMap map[string][]uuid.UUID,
 	knownIDs []KnownSenderIDForTest,
+	meIDs map[string]struct{},
 	meSet map[string]struct{},
 	resolver *CachedEmailResolverForTest,
 ) (MessageClassificationForTest, error) {
@@ -1087,6 +1098,6 @@ func RunClassifyForTest(
 	for _, k := range knownIDs {
 		idx[k.UserName] = idMatch{Email: k.Email, Contacts: k.Contacts}
 	}
-	c, err := classifyMessage(ctx, m, knownMembers, knownMap, idx, meSet, resolver.inner)
+	c, err := classifyMessage(ctx, m, knownMembers, knownMap, idx, meIDs, meSet, resolver.inner)
 	return MessageClassificationForTest(c), err
 }
