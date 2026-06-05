@@ -610,7 +610,7 @@ func TestBuildKnownIDIndex_SeedsFromPositiveCacheZeroCalls(t *testing.T) {
 	assert.Equal(t, 1, calls, "only the uncached email triggered a members.get")
 }
 
-// TestBuildKnownIDIndex_DebtHoldsCursor drives the §3.2.1 debt model:
+// TestBuildKnownIDIndex_DebtHoldsCursor drives the resolution-debt model:
 //
 //	(a) a NEGATIVE-VALID candidate is not debt → no resolve, blockedByCapOnDebt=false;
 //	(b) an UNKNOWN candidate (fingerprint-mismatched negative) with the cap
@@ -700,7 +700,7 @@ func TestBuildKnownIDIndex_DebtHoldsCursor(t *testing.T) {
 	})
 }
 
-// TestBuildKnownIDIndex_ActivityDoesNotReincurDebt proves the round-4 starvation
+// TestBuildKnownIDIndex_ActivityDoesNotReincurDebt proves the no-starvation
 // fix: with an UNCHANGED member set (same fingerprint), repeated index builds
 // issue ZERO members.get calls for a known-absent contact and never set
 // blockedByCapOnDebt — mere activity does not re-incur debt. Contrast: when a

@@ -1080,7 +1080,7 @@ func TestGChatProvider_GlobalPositiveCachePersistsAndReused(t *testing.T) {
 }
 
 // TestGChatProvider_DebtHeldCursorAcrossTwoSweeps proves the debt-hold survives
-// the sweep in which membership changed (the round-3 two-sweep hole). The
+// the sweep in which membership changed (the two-sweep hole). The
 // resolve-cap is forced to 0 so the post-change re-resolution CANNOT happen on
 // the change sweep. Sweep B holds the cursor; sweep C (cap restored) drains the
 // debt and matches the message from sweep B's window.
@@ -1188,7 +1188,7 @@ func TestGChatProvider_DebtHeldCursorAcrossTwoSweeps(t *testing.T) {
 	assert.NotEqual(t, cursorBefore, spaceCursorFromMetadata(t, persistedC.Metadata, spaceName), "the cursor advances after the debt drains")
 }
 
-// TestGChatProvider_HotSpaceNoStarvation proves the round-4 starvation fix: a
+// TestGChatProvider_HotSpaceNoStarvation proves the starvation fix: a
 // space with a known-absent contact (negative written) and an UNCHANGED member
 // set across many sweeps — each adding a new message from a DIFFERENT known
 // member so lastActiveTime advances (membership refetches) but the member SET is
