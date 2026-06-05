@@ -263,6 +263,11 @@ type idMatch struct {
 // fingerprint-invalidated candidates (a negative whose fingerprint no longer
 // matches — a membership change happened) get PRIORITY access to the cap over
 // never-seen candidates, so a one-time debt drains efficiently.
+// meIDs is the set of the account's OWN canonical ids within this space
+// (observed by resolveKnownMembers). Any resolved id in meIDs is dropped from
+// the index so the inbound id-path can never fire for the account itself — even
+// if a stray non-meSet alias resolves to the account's own id. This makes the
+// "knownIDs never contains a me-id" invariant enforced, not merely assumed.
 func buildKnownIDIndex(
 	ctx context.Context,
 	space *chat.Space,
@@ -270,6 +275,7 @@ func buildKnownIDIndex(
 	fingerprint string,
 	knownMap map[string][]uuid.UUID,
 	meSet map[string]struct{},
+	meIDs map[string]struct{},
 	resolver *memberIDResolver,
 	counters *sweepCounters,
 	pageBudget *int,
@@ -294,6 +300,9 @@ func buildKnownIDIndex(
 		if !ok {
 			continue
 		}
+		if _, isMe := meIDs[id]; isMe {
+			continue // the account's own id never enters the reverse index
+		}
 		if _, isMember := memberSet[id]; isMember {
 			knownIDs[id] = idMatch{Email: email, Contacts: contacts}
 			seeded[email] = struct{}{}
@@ -304,28 +313,35 @@ func buildKnownIDIndex(
 	// (was-NEGATIVE-now-UNKNOWN) candidates get priority access to the cap.
 	priority, normal := classifyIDCandidates(space.Name, fingerprint, knownMap, meSet, seeded, resolver)
 
-	for _, email := range append(priority, normal...) {
-		id, status, rerr := resolver.resolve(ctx, space.Name, fingerprint, email, pageBudget)
-		if rerr != nil {
-			return nil, false, false, rerr
-		}
-		switch status {
-		case resolvedKnownID:
-			if _, isMember := memberSet[id]; isMember {
-				knownIDs[id] = idMatch{Email: email, Contacts: knownMap[email]}
-				counters.memberIDsResolved++
+	// Resolve priority candidates first, then never-seen ones (two ranges instead
+	// of a merged slice to avoid a per-call allocation in the hot per-space path).
+	for _, group := range [2][]string{priority, normal} {
+		for _, email := range group {
+			id, status, rerr := resolver.resolve(ctx, space.Name, fingerprint, email, pageBudget)
+			if rerr != nil {
+				return nil, false, false, rerr
 			}
-			// A resolved id that is NOT a member of this space is a co-member of
-			// some OTHER space (the positive is global) — not a match here, but the
-			// global positive is now populated for future spaces.
-		case notMember:
-			counters.memberResolveNegativesWritten++
-		case deferredCapHit:
-			counters.memberResolveDeferredCap++
-			blockedByCapOnDebt = true
-		case deferredBudgetHit:
-			blockedByBudget = true
-			return knownIDs, blockedByBudget, blockedByCapOnDebt, nil
+			switch status {
+			case resolvedKnownID:
+				if _, isMe := meIDs[id]; isMe {
+					break // the account's own id never enters the reverse index
+				}
+				if _, isMember := memberSet[id]; isMember {
+					knownIDs[id] = idMatch{Email: email, Contacts: knownMap[email]}
+					counters.memberIDsResolved++
+				}
+				// A resolved id that is NOT a member of this space is a co-member of
+				// some OTHER space (the positive is global) — not a match here, but the
+				// global positive is now populated for future spaces.
+			case notMember:
+				counters.memberResolveNegativesWritten++
+			case deferredCapHit:
+				counters.memberResolveDeferredCap++
+				blockedByCapOnDebt = true
+			case deferredBudgetHit:
+				blockedByBudget = true
+				return knownIDs, blockedByBudget, blockedByCapOnDebt, nil
+			}
 		}
 	}
 	return knownIDs, blockedByBudget, blockedByCapOnDebt, nil

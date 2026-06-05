@@ -447,7 +447,7 @@ func (p *GChatSyncProvider) Sync(
 			// space (don't act on a partial member list); it retries next sweep.
 			break
 		}
-		knownMembers, err := resolveKnownMembers(ctx, members, resolver, knownMap, meSet)
+		knownMembers, meIDs, err := resolveKnownMembers(ctx, members, resolver, knownMap, meSet)
 		if err != nil {
 			// Transient resolve error while resolving co-members: abort THIS space
 			// (cursor unadvanced) so the window retries next sweep with the full
@@ -462,7 +462,9 @@ func (p *GChatSyncProvider) Sync(
 		// candidate deferred by the cap (blockedByCapOnDebt) HOLDS this space's
 		// cursor, and a page-budget exhaustion (blockedByBudget) is an incomplete
 		// window. Never advance over a window whose id resolution was incomplete.
-		knownIDs, blockedByBudget, blockedByCapOnDebt, err := buildKnownIDIndex(ctx, space, members, fingerprint, knownMap, meSet, idResolver, counters, &budget)
+		// meIDs (the account's own ids in this space) are excluded so a stray
+		// alias resolving to the account's own id can never enter the index.
+		knownIDs, blockedByBudget, blockedByCapOnDebt, err := buildKnownIDIndex(ctx, space, members, fingerprint, knownMap, meSet, meIDs, idResolver, counters, &budget)
 		if err != nil {
 			logger.Warn().Err(err).Str("source", GChatSourceName).Msg("gchat: id-index resolution failed; skipping space")
 			continue
@@ -654,7 +656,9 @@ func (p *GChatSyncProvider) ScanIdentifier(
 		}
 		// Co-member resolution uses the FULL knownMap (so a space qualifies when
 		// the target address is one of its members); row-writing uses scanMap.
-		knownMembers, rErr := resolveKnownMembers(ctx, members, resolver, knownMap, meSet)
+		// meIDs are the account's own ids in this space (used to keep a scanned
+		// alias that resolves to the account's own id out of the id-match set).
+		knownMembers, meIDs, rErr := resolveKnownMembers(ctx, members, resolver, knownMap, meSet)
 		if rErr != nil {
 			return counters.matched, fmt.Errorf("resolve co-members: %w", rErr)
 		}
@@ -676,7 +680,7 @@ func (p *GChatSyncProvider) ScanIdentifier(
 			return counters.matched, fmt.Errorf("rematch scan budget exhausted resolving member id: retry to finish backfill")
 		}
 		idIsMember := false
-		if status == resolvedKnownID {
+		if _, isMe := meIDs[userName]; status == resolvedKnownID && !isMe {
 			for _, id := range members {
 				if id == userName {
 					idIsMember = true

@@ -319,13 +319,18 @@ func TestResolveKnownMembers_ResolvesAndExcludesSelf(t *testing.T) {
 	meSet := map[string]struct{}{"me@example.test": {}}
 
 	members := []string{"users/alice", "users/me", "users/unknown", "users/noemail"}
-	known, err := resolveKnownMembers(ctx, members, resolver, knownMap, meSet)
+	known, meIDs, err := resolveKnownMembers(ctx, members, resolver, knownMap, meSet)
 	require.NoError(t, err)
 
 	// Only Alice is a known co-member; me is excluded, unknown is not in knownMap,
 	// noemail is unresolvable.
 	require.Len(t, known, 1)
 	assert.Equal(t, []uuid.UUID{alice}, known["alice@example.test"])
+
+	// The account's own member id is reported in meIDs (so the reverse id-index
+	// can exclude it).
+	assert.Contains(t, meIDs, "users/me")
+	assert.NotContains(t, meIDs, "users/alice")
 }
 
 func TestResolveKnownMembers_PropagatesResolveError(t *testing.T) {
@@ -336,7 +341,7 @@ func TestResolveKnownMembers_PropagatesResolveError(t *testing.T) {
 	}}
 	resolver := newCachedEmailResolver(fetcher, nil)
 
-	_, err := resolveKnownMembers(ctx, []string{"users/alice"}, resolver, map[string][]uuid.UUID{}, map[string]struct{}{})
+	_, _, err := resolveKnownMembers(ctx, []string{"users/alice"}, resolver, map[string][]uuid.UUID{}, map[string]struct{}{})
 	require.ErrorIs(t, err, resolveErr, "a transient co-member resolve error must propagate, not be swallowed")
 }
 
@@ -599,7 +604,7 @@ func TestBuildKnownIDIndex_SeedsFromPositiveCacheZeroCalls(t *testing.T) {
 	meSet := map[string]struct{}{"me@example.test": {}}
 	counters := &sweepCounters{}
 	budget := 10
-	idx, blockedBudget, blockedCap, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fp, knownMap, meSet, resolver, counters, &budget)
+	idx, blockedBudget, blockedCap, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fp, knownMap, meSet, nil, resolver, counters, &budget)
 	require.NoError(t, err)
 	assert.False(t, blockedBudget)
 	assert.False(t, blockedCap)
@@ -608,6 +613,45 @@ func TestBuildKnownIDIndex_SeedsFromPositiveCacheZeroCalls(t *testing.T) {
 	assert.Equal(t, idMatch{Email: "dave@example.test", Contacts: []uuid.UUID{dave}}, idx["users/dave"])
 	assert.Equal(t, idMatch{Email: "frank@example.test", Contacts: []uuid.UUID{frank}}, idx["users/frank"])
 	assert.Equal(t, 1, calls, "only the uncached email triggered a members.get")
+}
+
+// TestBuildKnownIDIndex_ExcludesMeIDs proves the account's own id never enters
+// the reverse index, even when a stray non-meSet CRM email (a contact carrying
+// the user's own alternate alias) resolves to the account's own canonical id —
+// from BOTH the global-positive seed path AND the fresh-resolve path. Without
+// the meIDs guard, the account's own outbound messages would misclassify as
+// inbound from that contact.
+func TestBuildKnownIDIndex_ExcludesMeIDs(t *testing.T) {
+	ctx := context.Background()
+	strayContact := uuid.New()
+	freshStray := uuid.New()
+	members := []string{"users/me", "users/other"}
+	fp := memberSetFingerprint(members)
+	now := accelerated.GetCurrentTime()
+
+	calls := 0
+	// A second stray alias resolves fresh to users/me too.
+	fetcher := fakeIDFetcher(map[string]string{"spaces/A|stray-fresh@example.test": "users/me"}, &calls)
+	// One stray alias is pre-seeded in the global positive cache as users/me.
+	pos := map[string]cachedUserID{"stray-seeded@example.test": {UserName: "users/me", ResolvedAt: now.Format(chatTimeLayout)}}
+	cap := 10
+	resolver := newMemberIDResolver(fetcher, pos, nil, &cap)
+
+	knownMap := map[string][]uuid.UUID{
+		"stray-seeded@example.test": {strayContact}, // a contact holding the user's own alias
+		"stray-fresh@example.test":  {freshStray},
+	}
+	meSet := map[string]struct{}{"me@example.test": {}}
+	meIDs := map[string]struct{}{"users/me": {}}
+	counters := &sweepCounters{}
+	budget := 10
+	idx, _, _, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fp, knownMap, meSet, meIDs, resolver, counters, &budget)
+	require.NoError(t, err)
+
+	// users/me must NOT be in the index from either path.
+	_, present := idx["users/me"]
+	assert.False(t, present, "the account's own id must never enter the reverse index")
+	assert.Empty(t, idx, "no contact is matched via a me-id alias")
 }
 
 // TestBuildKnownIDIndex_DebtHoldsCursor drives the resolution-debt model:
@@ -637,7 +681,7 @@ func TestBuildKnownIDIndex_DebtHoldsCursor(t *testing.T) {
 		knownMap := map[string][]uuid.UUID{"absent@example.test": {absent}}
 		counters := &sweepCounters{}
 		budget := 10
-		idx, _, blockedCap, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fp, knownMap, map[string]struct{}{"me@example.test": {}}, resolver, counters, &budget)
+		idx, _, blockedCap, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fp, knownMap, map[string]struct{}{"me@example.test": {}}, nil, resolver, counters, &budget)
 		require.NoError(t, err)
 		assert.Empty(t, idx)
 		assert.False(t, blockedCap, "a NEGATIVE-VALID candidate under the current fingerprint is not debt")
@@ -659,7 +703,7 @@ func TestBuildKnownIDIndex_DebtHoldsCursor(t *testing.T) {
 		knownMap := map[string][]uuid.UUID{"joiner@example.test": {joiner}}
 		counters := &sweepCounters{}
 		budget := 10
-		idx, blockedBudget, blockedCap, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fpNew, knownMap, map[string]struct{}{"me@example.test": {}}, resolver, counters, &budget)
+		idx, blockedBudget, blockedCap, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fpNew, knownMap, map[string]struct{}{"me@example.test": {}}, nil, resolver, counters, &budget)
 		require.NoError(t, err)
 		assert.Empty(t, idx, "the candidate could not resolve this sweep")
 		assert.False(t, blockedBudget)
@@ -689,7 +733,7 @@ func TestBuildKnownIDIndex_DebtHoldsCursor(t *testing.T) {
 		}
 		counters := &sweepCounters{}
 		budget := 10
-		idx, _, blockedCap, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fpNew, knownMap, map[string]struct{}{"me@example.test": {}}, resolver, counters, &budget)
+		idx, _, blockedCap, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fpNew, knownMap, map[string]struct{}{"me@example.test": {}}, nil, resolver, counters, &budget)
 		require.NoError(t, err)
 		// The invalidated (priority) candidate consumed the single cap slot and
 		// matched; the never-seen one was deferred (debt) → cursor held.
@@ -730,7 +774,7 @@ func TestBuildKnownIDIndex_ActivityDoesNotReincurDebt(t *testing.T) {
 		r := newMemberIDResolver(fetcher, resolver.snapshotPositives(), resolver.snapshotNegatives(), &cap)
 		counters := &sweepCounters{}
 		budget := 10
-		idx, blockedBudget, blockedCap, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fp, knownMap, meSet, r, counters, &budget)
+		idx, blockedBudget, blockedCap, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fp, knownMap, meSet, nil, r, counters, &budget)
 		require.NoError(t, err)
 		assert.Empty(t, idx)
 		assert.False(t, blockedBudget)
@@ -746,7 +790,7 @@ func TestBuildKnownIDIndex_ActivityDoesNotReincurDebt(t *testing.T) {
 	r := newMemberIDResolver(fetcher2, resolver.snapshotPositives(), resolver.snapshotNegatives(), &cap)
 	counters := &sweepCounters{}
 	budget := 10
-	idx, _, _, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, membersAfter, fpAfter, knownMap, meSet, r, counters, &budget)
+	idx, _, _, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, membersAfter, fpAfter, knownMap, meSet, nil, r, counters, &budget)
 	require.NoError(t, err)
 	assert.Contains(t, idx, "users/absent", "a real membership change re-resolves the candidate")
 	assert.Equal(t, 1, calls, "exactly one re-resolve after the membership actually changed")
@@ -875,9 +919,9 @@ func TestMemberSetFingerprint_OrderIndependentAndChangeSensitive(t *testing.T) {
 		"removing a member must change the fingerprint")
 
 	// The empty set is a stable sentinel (and not equal to any non-empty hash).
-	assert.Equal(t, "empty", memberSetFingerprint(nil))
-	assert.Equal(t, "empty", memberSetFingerprint([]string{}))
-	assert.Equal(t, "empty", memberSetFingerprint([]string{""}), "blank ids are skipped")
+	assert.Equal(t, memberSetFingerprintEmpty, memberSetFingerprint(nil))
+	assert.Equal(t, memberSetFingerprintEmpty, memberSetFingerprint([]string{}))
+	assert.Equal(t, memberSetFingerprintEmpty, memberSetFingerprint([]string{""}), "blank ids are skipped")
 }
 
 func TestPruneIDCaches_DropsExpiredAndOrphanNegatives(t *testing.T) {

@@ -375,42 +375,57 @@ func membershipNeedsRefresh(cached spaceMembers, lastActiveTime string, now time
 // member, produce a partial outbound fan-out, and then advance the cursor past
 // rows that were never persisted. A resolved-to-no-email member ("" with no
 // error) is simply not a known co-member.
+// It ALSO returns the set of member ids that resolve to one of the connected
+// accounts' own emails (meIDs): these are the account's own canonical
+// "users/{id}" within this space, observed at zero extra API cost from the same
+// People-path resolutions. The caller uses meIDs to keep the account's own id
+// out of the reverse (id→contact) index, so a stray non-meSet alias that
+// resolves to the account's own id can never misclassify an outbound message as
+// inbound.
 func resolveKnownMembers(
 	ctx context.Context,
 	members []string,
 	resolver *cachedEmailResolver,
 	knownMap map[string][]uuid.UUID,
 	meSet map[string]struct{},
-) (map[string][]uuid.UUID, error) {
+) (known map[string][]uuid.UUID, meIDs map[string]struct{}, err error) {
 	out := make(map[string][]uuid.UUID)
+	meIDs = make(map[string]struct{})
 	for _, userName := range members {
-		email, err := resolver.resolve(ctx, userName)
-		if err != nil {
-			return nil, err
+		email, rErr := resolver.resolve(ctx, userName)
+		if rErr != nil {
+			return nil, nil, rErr
 		}
 		if email == "" {
 			continue // resolved to no email → not a known co-member
 		}
 		if inSet(meSet, email) {
-			continue // self
+			meIDs[userName] = struct{}{} // this member id is the account itself
+			continue                     // self
 		}
 		if contacts := knownMap[email]; len(contacts) > 0 {
 			out[email] = contacts
 		}
 	}
-	return out, nil
+	return out, meIDs, nil
 }
+
+// memberSetFingerprintEmpty is the empty-member-set sentinel. The "fp:" prefix
+// makes it obviously NOT a sha256 hex string (which is pure lowercase hex), so a
+// reader never mistakes the sentinel for a real hash and the two can never
+// collide.
+const memberSetFingerprintEmpty = "fp:empty"
 
 // memberSetFingerprint returns a deterministic, order-independent hash of a
 // space's member-id set. It SORTs + DEDUPs the canonical "users/{id}" names and
 // returns the sha256 hex of the newline-joined result, so the same member set
 // always yields the same fingerprint regardless of ListMembers page ordering.
-// An empty set yields a fixed sentinel. The fingerprint is the
-// signal: it changes ONLY when membership actually changes (a join/leave), never
-// on mere message activity (which advances lastActiveTime but not the set).
+// An empty set yields memberSetFingerprintEmpty. The fingerprint changes ONLY
+// when membership actually changes (a join/leave), never on mere message
+// activity (which advances lastActiveTime but not the set).
 func memberSetFingerprint(members []string) string {
 	if len(members) == 0 {
-		return "empty"
+		return memberSetFingerprintEmpty
 	}
 	uniq := make([]string, 0, len(members))
 	seen := make(map[string]struct{}, len(members))
@@ -425,7 +440,7 @@ func memberSetFingerprint(members []string) string {
 		uniq = append(uniq, m)
 	}
 	if len(uniq) == 0 {
-		return "empty"
+		return memberSetFingerprintEmpty
 	}
 	sort.Strings(uniq)
 	sum := sha256.Sum256([]byte(strings.Join(uniq, "\n")))
