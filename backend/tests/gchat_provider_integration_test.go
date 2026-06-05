@@ -739,3 +739,92 @@ func TestGChatRematchHandler_ScansAndAggregates(t *testing.T) {
 	assert.Equal(t, repository.InteractionSourceGChat, interactions[0].Source)
 	assert.Equal(t, repository.InteractionDirectionInbound, interactions[0].Direction)
 }
+
+// TestGChatProvider_MultiPageWindowPersistsCursor proves the end-to-end cursor
+// persistence wiring: a multi-page content window (paged via pageToken, ending
+// in next == "") fully pages within budget, advances its create_cursor to the
+// latest message's create_time, and that value is persisted to the JSONB
+// metadata column. This complements the DB-free budget test in the google
+// package — its job is the persistence path (window → setCursor → persistMetadata
+// → DB), not the budget boundary.
+func TestGChatProvider_MultiPageWindowPersistsCursor(t *testing.T) {
+	e := setupGChatProviderTest(t)
+	suffix := randomSuffix(t)
+
+	aliceEmail := "alice-" + suffix + "@example.test"
+	alice := e.newGChatProviderContact(t, "GChat Paged Alice "+suffix, string(repository.ContactMethodEmail), aliceEmail)
+
+	spaceName := "spaces/PAGED-" + suffix
+	accountID := "me-" + suffix + "@example.test"
+	e.newGChatSyncState(t, accountID, true, nil)
+
+	// Three content pages, oldest-first; the newest message (on the final page)
+	// sets the cursor the sweep must persist. Truncate to seconds so the RFC-3339
+	// string round-trips exactly through the cursor comparison.
+	base := accelerated.GetCurrentTime().Add(-3 * time.Hour).Truncate(time.Second)
+	msg1At := base
+	msg2At := base.Add(time.Hour)
+	latestAt := base.Add(2 * time.Hour)
+	latestCursor := chatRFC3339(latestAt)
+
+	funcs := google.FakeChatFetcherFuncs{
+		ListSpaces: func(context.Context, string) ([]*chat.Space, string, error) {
+			return []*chat.Space{space(spaceName, "SPACE")}, "", nil
+		},
+		ListMembers: func(context.Context, string, string) ([]*chat.Membership, string, error) {
+			return []*chat.Membership{membership("users/alice"), membership("users/me")}, "", nil
+		},
+		ListMessages: func(_ context.Context, _, _ string, showDeleted bool, token string) ([]*chat.Message, string, error) {
+			if showDeleted {
+				return nil, "", nil // edit/delete pass: nothing
+			}
+			// Content pass paged via pageToken: page 1 → "p2", page 2 → "p3",
+			// page 3 → "" (fully paged). The newest message is on the final page.
+			switch token {
+			case "":
+				return []*chat.Message{chatMessage(spaceName+"/messages/m1-"+suffix, "users/alice", "first", msg1At)}, "p2", nil
+			case "p2":
+				return []*chat.Message{chatMessage(spaceName+"/messages/m2-"+suffix, "users/alice", "second", msg2At)}, "p3", nil
+			case "p3":
+				return []*chat.Message{chatMessage(spaceName+"/messages/m3-"+suffix, "users/alice", "third", latestAt)}, "", nil
+			}
+			return nil, "", nil
+		},
+		ResolvePersonEmail: func(_ context.Context, userName string) (string, error) {
+			switch userName {
+			case "users/alice":
+				return aliceEmail, nil
+			case "users/me":
+				return accountID, nil
+			}
+			return "", nil
+		},
+	}
+	p := e.newProvider(t, map[string]struct{}{accountID: {}}, funcs)
+
+	state, err := e.syncRepo.GetSyncStateBySource(e.ctx, repository.InteractionSourceGChat, &accountID)
+	require.NoError(t, err)
+	result, err := p.Sync(e.ctx, state, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 3, result.ItemsProcessed, "all three pages' messages processed")
+
+	// A row exists for the newest message (proving the window paged to the end).
+	_, err = e.commsRepo.GetMessage(e.ctx, repository.InteractionSourceGChat, spaceName+"/messages/m3-"+suffix, alice.ID)
+	require.NoError(t, err)
+
+	// The persisted create_cursor equals the latest message's create_time. The
+	// JSONB metadata decodes into map[string]any, so space_cursors is a nested
+	// map[string]any keyed by space name, each entry itself a map[string]any with
+	// a "create_cursor" string (the spaceCursor JSON tags). Type-assert through
+	// that generic shape with require so a mismatch fails loudly.
+	persisted, err := e.syncRepo.GetSyncStateBySource(e.ctx, repository.InteractionSourceGChat, &accountID)
+	require.NoError(t, err)
+	require.NotNil(t, persisted.Metadata)
+	spaceCursors, ok := persisted.Metadata["space_cursors"].(map[string]any)
+	require.True(t, ok, "space_cursors must decode as a map[string]any")
+	entry, ok := spaceCursors[spaceName].(map[string]any)
+	require.True(t, ok, "this space's cursor entry must be present and a map[string]any")
+	createCursor, ok := entry["create_cursor"].(string)
+	require.True(t, ok, "create_cursor must be a string")
+	assert.Equal(t, latestCursor, createCursor, "persisted cursor must equal the latest message create_time")
+}
