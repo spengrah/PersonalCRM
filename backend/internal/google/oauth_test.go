@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/oauth2"
 	"google.golang.org/api/calendar/v3"
+	chat "google.golang.org/api/chat/v1"
 	"google.golang.org/api/gmail/v1"
 	"google.golang.org/api/people/v1"
 )
@@ -26,14 +27,20 @@ func TestScopes(t *testing.T) {
 	assert.Contains(t, Scopes, calendar.CalendarReadonlyScope, "Calendar readonly scope is required")
 	assert.Contains(t, Scopes, people.ContactsReadonlyScope, "Contacts readonly scope is required")
 
-	// Verify we have exactly 6 scopes (no more, no less)
-	assert.Len(t, Scopes, 6, "Should have exactly 6 scopes")
+	// Verify all three Google Chat readonly scopes are present (the membership
+	// scope is required for spaces.members.list under User authentication).
+	assert.Contains(t, Scopes, chat.ChatSpacesReadonlyScope, "Chat spaces readonly scope is required")
+	assert.Contains(t, Scopes, chat.ChatMessagesReadonlyScope, "Chat messages readonly scope is required")
+	assert.Contains(t, Scopes, chat.ChatMembershipsReadonlyScope, "Chat memberships readonly scope is required")
+
+	// Verify we have exactly 9 scopes (no more, no less)
+	assert.Len(t, Scopes, 9, "Should have exactly 9 scopes")
 }
 
 // TestScopes_Order verifies the scopes are in the expected order
 // OpenID scopes should come first, then API scopes
 func TestScopes_Order(t *testing.T) {
-	require.Len(t, Scopes, 6, "Expected 6 scopes")
+	require.Len(t, Scopes, 9, "Expected 9 scopes")
 
 	// OpenID scopes should be first
 	assert.Equal(t, "openid", Scopes[0], "openid should be first")
@@ -44,6 +51,9 @@ func TestScopes_Order(t *testing.T) {
 	assert.Equal(t, gmail.GmailReadonlyScope, Scopes[3])
 	assert.Equal(t, calendar.CalendarReadonlyScope, Scopes[4])
 	assert.Equal(t, people.ContactsReadonlyScope, Scopes[5])
+	assert.Equal(t, chat.ChatSpacesReadonlyScope, Scopes[6])
+	assert.Equal(t, chat.ChatMessagesReadonlyScope, Scopes[7])
+	assert.Equal(t, chat.ChatMembershipsReadonlyScope, Scopes[8])
 }
 
 // TestGetAuthURL_IncludesConsentPrompt verifies that the auth URL includes prompt=consent
@@ -131,7 +141,7 @@ func TestGetAuthURL_ScopeFormatting(t *testing.T) {
 
 	// Split by space and verify we have all scopes
 	scopeParts := strings.Fields(decodedScopes)
-	assert.GreaterOrEqual(t, len(scopeParts), 6, "Should have at least 6 scopes in the URL")
+	assert.GreaterOrEqual(t, len(scopeParts), 9, "Should have at least 9 scopes in the URL")
 }
 
 // TestGenerateState verifies that state generation produces unique, secure values
@@ -186,11 +196,14 @@ func TestOAuthService_ConfigConstruction(t *testing.T) {
 	}
 
 	// Verify the service's config has all required scopes
-	assert.Len(t, service.config.Scopes, 6, "Config should have 6 scopes")
+	assert.Len(t, service.config.Scopes, 9, "Config should have 9 scopes")
 	assert.Contains(t, service.config.Scopes, "openid")
 	assert.Contains(t, service.config.Scopes, "email")
 	assert.Contains(t, service.config.Scopes, "profile")
 	assert.Contains(t, service.config.Scopes, gmail.GmailReadonlyScope)
 	assert.Contains(t, service.config.Scopes, calendar.CalendarReadonlyScope)
 	assert.Contains(t, service.config.Scopes, people.ContactsReadonlyScope)
+	assert.Contains(t, service.config.Scopes, chat.ChatSpacesReadonlyScope)
+	assert.Contains(t, service.config.Scopes, chat.ChatMessagesReadonlyScope)
+	assert.Contains(t, service.config.Scopes, chat.ChatMembershipsReadonlyScope)
 }

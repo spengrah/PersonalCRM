@@ -33,6 +33,36 @@ type Querier interface {
 	// records interactions directly for past events (see rematch plan Design
 	// Decision 6) so the scheduler race is avoided at the source.
 	AppendMatchedContact(ctx context.Context, arg AppendMatchedContactParams) error
+	// =====================================================================
+	// GChat edit/delete reconciliation queries. Scoped by (source,
+	// external_id) so they hit ALL fanned-out rows for one upstream message
+	// (a message qualifying N contacts has N rows sharing external_id). All
+	// scope deleted_at IS NULL.
+	// =====================================================================
+	// Apply an upstream message edit to every stored row for (source, external_id).
+	// Updates body + snippet, pushes the row's prior body onto
+	// source_metadata.previous_bodies[] (newest-first, capped at the last 3), and
+	// records the edit's last_update_time + edited_at. processed_at, interaction_id,
+	// and deleted_at are deliberately left untouched: the aggregation engine skips
+	// rows with processed_at set, so a content edit never reprocesses the derived
+	// interaction.
+	//
+	// RECENCY + IDEMPOTENCY GUARD: the WHERE clause compares the stored
+	// last_update_time against @last_update_time as a TIMESTAMPTZ, not as a string.
+	// RFC-3339 is NOT lexicographically ordered when fractional-second precision
+	// varies (e.g. "...10:00:00Z" sorts after "...10:00:00.001Z" yet is earlier),
+	// so a string compare would silently reject a legitimate newer edit. Casting
+	// both sides to timestamptz compares real instants regardless of precision or
+	// offset. NULLIF(...,'')::timestamptz handles never-edited rows (absent/empty
+	// key -> NULL -> '-infinity' floor, so the first edit always passes). Because
+	// only the first writer advances last_update_time, two connected accounts
+	// observing the same edit in concurrent sweeps each attempt the UPDATE but only
+	// one pushes previous_bodies[] — the second's predicate is false (0 rows).
+	//
+	// previous_bodies[] cap: prepend the row's CURRENT body (the soon-to-be-prior
+	// value), then keep the first 3 elements (newest-first). A NULL current body is
+	// not pushed (nothing to preserve).
+	ApplyCommsMessageEditByExternalID(ctx context.Context, arg ApplyCommsMessageEditByExternalIDParams) (int64, error)
 	// Test-only helper: ages the claim past the 5-minute TTL so a fresh
 	// aggregate pass can re-claim a stale claim. Mirror of
 	// BackdateMessagesMessageClaim. Production code MUST NOT call this.
@@ -507,6 +537,12 @@ type Querier interface {
 	// Intentionally does NOT filter processed_at — a reply can target an
 	// already-processed message (the whole point of bridging).
 	GetCommsMessageByReplyTarget(ctx context.Context, arg GetCommsMessageByReplyTargetParams) (*CommsMessage, error)
+	// Read one stored row for (source, external_id), newest first, to supply the
+	// current body for the provider's bodyDiffers no-op-avoidance pre-check. Fanned-
+	// out rows share content, so any one row suffices. Used ONLY for body
+	// comparison — NEVER for a Go-side timestamp/recency comparison (recency is the
+	// SQL ::timestamptz guard in ApplyCommsMessageEditByExternalID).
+	GetCommsMessageLatestByExternalID(ctx context.Context, arg GetCommsMessageLatestByExternalIDParams) (*CommsMessage, error)
 	// Contact queries
 	GetContact(ctx context.Context, id pgtype.UUID) (*Contact, error)
 	// Get a single note for a contact by category (e.g., 'notepad')
@@ -1226,6 +1262,11 @@ type Querier interface {
 	// the upstream delete a chat provider would observe. Used by the delete-no-op
 	// aggregation test. There is no production chat delete path yet.
 	SoftDeleteCommsMessageByID(ctx context.Context, id pgtype.UUID) error
+	// Soft-delete every stored row for (source, external_id) — the production chat
+	// delete path. Scoped by (source, external_id) so all fanned-out contacts'
+	// rows drop out of future aggregation. Idempotent: an already-deleted message
+	// affects 0 rows.
+	SoftDeleteCommsMessagesByExternalID(ctx context.Context, arg SoftDeleteCommsMessagesByExternalIDParams) (int64, error)
 	SoftDeleteContact(ctx context.Context, id pgtype.UUID) error
 	// Tombstones a live row. Defensive WHERE deleted_at IS NULL keeps the
 	// statement idempotent against a concurrent delete. crm_contact_id,

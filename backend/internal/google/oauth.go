@@ -18,11 +18,19 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/calendar/v3"
+	chat "google.golang.org/api/chat/v1"
 	"google.golang.org/api/gmail/v1"
 	"google.golang.org/api/people/v1"
 )
 
-// Scopes defines the OAuth scopes requested for Google APIs
+// Scopes defines the OAuth scopes requested for Google APIs.
+//
+// The three chat.*.readonly scopes back the Google Chat sync provider:
+// chat.spaces.readonly lists the user's spaces, chat.messages.readonly lists
+// messages, and chat.memberships.readonly is REQUIRED for spaces.members.list
+// under User authentication (the membership-resolution path). Adding scopes
+// forces a one-time re-consent for already-connected accounts; existing
+// Gmail/Calendar tokens keep working with their previously-granted scopes.
 var Scopes = []string{
 	"openid",
 	"email",
@@ -30,6 +38,9 @@ var Scopes = []string{
 	gmail.GmailReadonlyScope,
 	calendar.CalendarReadonlyScope,
 	people.ContactsReadonlyScope,
+	chat.ChatSpacesReadonlyScope,
+	chat.ChatMessagesReadonlyScope,
+	chat.ChatMembershipsReadonlyScope,
 }
 
 // ProviderName is the identifier for Google OAuth credentials
