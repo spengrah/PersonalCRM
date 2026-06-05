@@ -330,12 +330,21 @@ func TestReapStaleCursors_ArchiveRestoreDrop(t *testing.T) {
 }
 
 func TestGChatMetadata_RoundTrip(t *testing.T) {
+	// Use a recent resolved_at so the new id caches survive the prune-on-load.
+	recent := accelerated.GetCurrentTime().Add(-time.Hour).Format(chatTimeLayout)
 	g := &gchatMetadata{
 		SpaceCursors:    map[string]spaceCursor{"spaces/A": {CreateCursor: "2026-06-04T10:00:00Z", EditCursor: "2026-06-04T09:00:00Z"}},
 		ArchivedCursors: map[string]archivedCursor{"spaces/B": {CreateCursor: "x", ArchivedAt: "2026-06-04T08:00:00Z"}},
 		SpaceMembers:    map[string]spaceMembers{"spaces/A": {Version: "v1", FetchedAt: "2026-06-04T10:00:00Z", Members: []string{"users/a"}}},
 		UserEmailCache:  map[string]cachedEmail{"users/a": {Email: "a@example.test", ResolvedAt: "2026-06-04T10:00:00Z"}},
 		MeIdentities:    map[string]struct{}{"me@example.test": {}},
+		EmailUserIDs:    map[string]cachedUserID{"a@example.test": {UserName: "users/a", ResolvedAt: recent}},
+		SpaceMemberNegatives: map[string]map[string]memberNegative{
+			// Negative under spaces/A, which has a cached membership entry, so it
+			// survives the prune-on-load (a negative for a space with no cached
+			// membership is dropped — covered by TestPruneIDCaches).
+			"spaces/A": {"absent@example.test": {ResolvedAt: recent, MemberSetFingerprint: "fp-1"}},
+		},
 	}
 	// Preserve a non-gchat key to prove read-modify-write doesn't clobber it.
 	raw := map[string]any{"backfill_since": "2026-01-01", "some_other_key": 42}
@@ -357,6 +366,68 @@ func TestGChatMetadata_RoundTrip(t *testing.T) {
 	assert.Equal(t, g.SpaceMembers, reloaded.SpaceMembers)
 	assert.Equal(t, g.UserEmailCache, reloaded.UserEmailCache)
 	assert.Equal(t, g.MeIdentities, reloaded.MeIdentities)
+	// The two new id caches survive writeInto → loadGChatMetadata.
+	assert.Equal(t, g.EmailUserIDs, reloaded.EmailUserIDs)
+	assert.Equal(t, g.SpaceMemberNegatives, reloaded.SpaceMemberNegatives)
+}
+
+func TestMemberSetFingerprint_OrderIndependentAndChangeSensitive(t *testing.T) {
+	base := []string{"users/a", "users/b", "users/c"}
+	shuffled := []string{"users/c", "users/a", "users/b"}
+	withDup := []string{"users/b", "users/a", "users/c", "users/a"}
+
+	fp := memberSetFingerprint(base)
+	assert.Equal(t, fp, memberSetFingerprint(shuffled), "fingerprint is order-independent")
+	assert.Equal(t, fp, memberSetFingerprint(withDup), "fingerprint dedups before hashing")
+
+	// Adding a member changes the fingerprint (a join is detected).
+	assert.NotEqual(t, fp, memberSetFingerprint(append([]string{"users/d"}, base...)),
+		"adding a member must change the fingerprint")
+	// Removing a member changes the fingerprint (a leave is detected).
+	assert.NotEqual(t, fp, memberSetFingerprint([]string{"users/a", "users/b"}),
+		"removing a member must change the fingerprint")
+
+	// The empty set is a stable sentinel (and not equal to any non-empty hash).
+	assert.Equal(t, "empty", memberSetFingerprint(nil))
+	assert.Equal(t, "empty", memberSetFingerprint([]string{}))
+	assert.Equal(t, "empty", memberSetFingerprint([]string{""}), "blank ids are skipped")
+}
+
+func TestPruneIDCaches_DropsExpiredAndOrphanNegatives(t *testing.T) {
+	now := accelerated.GetCurrentTime()
+	fresh := now.Add(-time.Hour).Format(chatTimeLayout)
+	expired := now.Add(-25 * time.Hour).Format(chatTimeLayout)
+
+	g := &gchatMetadata{
+		SpaceMembers: map[string]spaceMembers{
+			"spaces/live": {Members: []string{"users/a"}},
+		},
+		EmailUserIDs: map[string]cachedUserID{
+			"keep@example.test": {UserName: "users/a", ResolvedAt: fresh},
+			"drop@example.test": {UserName: "users/b", ResolvedAt: expired},
+		},
+		SpaceMemberNegatives: map[string]map[string]memberNegative{
+			"spaces/live": {
+				"absent@example.test":  {ResolvedAt: fresh, MemberSetFingerprint: "fp"},
+				"expired@example.test": {ResolvedAt: expired, MemberSetFingerprint: "fp"},
+			},
+			// Orphan: no cached membership for this space → whole entry dropped.
+			"spaces/gone": {"x@example.test": {ResolvedAt: fresh, MemberSetFingerprint: "fp"}},
+		},
+	}
+	g.pruneIDCaches(now)
+
+	// Expired global positive dropped; fresh one kept.
+	assert.Contains(t, g.EmailUserIDs, "keep@example.test")
+	assert.NotContains(t, g.EmailUserIDs, "drop@example.test")
+
+	// Live-space negatives: expired dropped, fresh kept.
+	live := g.SpaceMemberNegatives["spaces/live"]
+	assert.Contains(t, live, "absent@example.test")
+	assert.NotContains(t, live, "expired@example.test")
+
+	// Orphan space (no cached membership) dropped entirely.
+	assert.NotContains(t, g.SpaceMemberNegatives, "spaces/gone")
 }
 
 func TestGChatMetadata_CursorForSeedsBackfillFloor(t *testing.T) {

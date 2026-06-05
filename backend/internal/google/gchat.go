@@ -38,6 +38,16 @@ const (
 	// retries (idempotent via the upsert dedup).
 	gchatMaxWindowsPerSync = 100
 
+	// gchatMaxMemberResolvesPerSync caps the number of FRESH members.get calls a
+	// single sweep may issue across ALL spaces (the reverse email→id resolutions).
+	// 50 is comfortably under quota, amortizes a cold 67-space start over a handful
+	// of 15-min ticks, and is sized to cover a single space's debt re-resolution
+	// set in one sweep (§3.2.1). When the cap is hit, remaining UNKNOWN candidates
+	// are left unresolved THIS sweep and HOLD their space's cursor (resolution
+	// debt) until a later tick resolves them. Revisit if prod logs show persistent
+	// spacesHeldByCapOnDebt.
+	gchatMaxMemberResolvesPerSync = 50
+
 	// gchatMembershipCacheTTL bounds how long a cached space-member list (and a
 	// cached id→email resolution) stays valid before a forced refetch, even when
 	// the space's lastActiveTime never advances. Caps People/Chat API quota.
@@ -73,6 +83,16 @@ const (
 	gchatMetaSpaceMembers    = "space_members"
 	gchatMetaUserEmailCache  = "user_email_cache"
 	gchatMetaMeIdentities    = "me_identities"
+	// gchatMetaEmailUserIDs is the GLOBAL positive cache (normalizedEmail →
+	// canonical "users/{id}") from the reverse resolver: a canonical id is the
+	// same person in every space, so once an email resolves anywhere it is reused
+	// everywhere with zero further members.get calls.
+	gchatMetaEmailUserIDs = "email_user_ids"
+	// gchatMetaSpaceMemberNegatives is the PER-(space,email) negative cache
+	// (space → normalizedEmail → memberNegative): "this known email is NOT a
+	// member of this space," stamped with the space's member-set fingerprint so a
+	// negative is only honored while membership is unchanged (see §3.2.1).
+	gchatMetaSpaceMemberNegatives = "space_member_negatives"
 )
 
 // chatFetcher is the narrow Google Chat + People read surface the provider
@@ -401,13 +421,14 @@ func (p *GChatSyncProvider) Sync(
 		if budget <= 0 {
 			break
 		}
-		members, incomplete, err := p.resolveMembership(ctx, fetcher, space, gcm, &budget)
+		members, fingerprint, incomplete, err := p.resolveMembership(ctx, fetcher, space, gcm, &budget)
 		if err != nil {
 			// Transient membership error: abort THIS space (cursor unadvanced),
 			// continue with already-proven spaces. Don't fail the whole sweep.
 			logger.Warn().Err(err).Str("source", GChatSourceName).Msg("gchat: membership resolution failed; skipping space")
 			continue
 		}
+		_ = fingerprint // wired into buildKnownIDIndex in the id-matching step
 		if incomplete {
 			// Budget ran out before the membership was fully paged → skip this
 			// space (don't act on a partial member list); it retries next sweep.

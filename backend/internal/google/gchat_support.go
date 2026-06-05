@@ -2,8 +2,11 @@ package google
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"sort"
+	"strings"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
@@ -55,6 +58,28 @@ type cachedEmail struct {
 	ResolvedAt string `json:"resolved_at"`
 }
 
+// cachedUserID is one email→canonical-id resolution in the GLOBAL positive
+// cache (the reverse of cachedEmail). UserName is the canonical "users/{id}".
+// A canonical id is the same person in every space, so this cache is global
+// (not per-space) and reused everywhere once an email resolves anywhere.
+type cachedUserID struct {
+	UserName   string `json:"user_name"`
+	ResolvedAt string `json:"resolved_at"`
+}
+
+// memberNegative records that one known email is NOT a member of one space.
+// MemberSetFingerprint is the space's member-set fingerprint at the time the
+// negative was written: the negative is honored ONLY while within TTL AND its
+// fingerprint still matches the space's CURRENT member-set fingerprint. An
+// actual join/leave flips the fingerprint and invalidates the negative (so the
+// email is re-resolved before the cursor advances past new messages); mere
+// message activity does NOT change the fingerprint, so a hot space's negatives
+// are not churned (§3.2.1).
+type memberNegative struct {
+	ResolvedAt           string `json:"resolved_at"`
+	MemberSetFingerprint string `json:"member_set_fingerprint"`
+}
+
 // gchatMetadata is the typed view of the gchat-owned keys in
 // external_sync_state.metadata. It is read from state.Metadata at sweep start
 // and written back (read-modify-write — only the gchat keys) at sweep end.
@@ -64,17 +89,24 @@ type gchatMetadata struct {
 	SpaceMembers    map[string]spaceMembers
 	UserEmailCache  map[string]cachedEmail
 	MeIdentities    map[string]struct{}
+	// EmailUserIDs is the GLOBAL positive cache: normalizedEmail → canonical id.
+	EmailUserIDs map[string]cachedUserID
+	// SpaceMemberNegatives is the per-(space,email) negative cache:
+	// space.Name → normalizedEmail → memberNegative.
+	SpaceMemberNegatives map[string]map[string]memberNegative
 }
 
 // loadGChatMetadata decodes the gchat keys from the raw metadata map, tolerating
 // missing/malformed keys (a fresh state has none).
 func loadGChatMetadata(raw map[string]any) *gchatMetadata {
 	gcm := &gchatMetadata{
-		SpaceCursors:    map[string]spaceCursor{},
-		ArchivedCursors: map[string]archivedCursor{},
-		SpaceMembers:    map[string]spaceMembers{},
-		UserEmailCache:  map[string]cachedEmail{},
-		MeIdentities:    map[string]struct{}{},
+		SpaceCursors:         map[string]spaceCursor{},
+		ArchivedCursors:      map[string]archivedCursor{},
+		SpaceMembers:         map[string]spaceMembers{},
+		UserEmailCache:       map[string]cachedEmail{},
+		MeIdentities:         map[string]struct{}{},
+		EmailUserIDs:         map[string]cachedUserID{},
+		SpaceMemberNegatives: map[string]map[string]memberNegative{},
 	}
 	if raw == nil {
 		return gcm
@@ -83,6 +115,8 @@ func loadGChatMetadata(raw map[string]any) *gchatMetadata {
 	decodeMetaKey(raw, gchatMetaArchivedCursors, &gcm.ArchivedCursors)
 	decodeMetaKey(raw, gchatMetaSpaceMembers, &gcm.SpaceMembers)
 	decodeMetaKey(raw, gchatMetaUserEmailCache, &gcm.UserEmailCache)
+	decodeMetaKey(raw, gchatMetaEmailUserIDs, &gcm.EmailUserIDs)
+	decodeMetaKey(raw, gchatMetaSpaceMemberNegatives, &gcm.SpaceMemberNegatives)
 
 	var ids []string
 	decodeMetaKey(raw, gchatMetaMeIdentities, &ids)
@@ -91,7 +125,63 @@ func loadGChatMetadata(raw map[string]any) *gchatMetadata {
 			gcm.MeIdentities[id] = struct{}{}
 		}
 	}
+	gcm.pruneIDCaches(accelerated.GetCurrentTime())
 	return gcm
+}
+
+// pruneIDCaches drops expired global positives and expired negatives, plus any
+// negative whose space no longer has a cached membership entry. This keeps
+// space_member_negatives bounded by live (space × known-absent-email) pairs
+// within TTL across the estate. Negatives whose fingerprint no longer matches
+// the current member set are NOT pruned here (they are treated as UNKNOWN on
+// next read and overwritten when re-resolved — eager pruning is unnecessary for
+// correctness). A decode that produced nil maps (very old metadata) is tolerated.
+func (g *gchatMetadata) pruneIDCaches(now time.Time) {
+	if g.EmailUserIDs == nil {
+		g.EmailUserIDs = map[string]cachedUserID{}
+	}
+	if g.SpaceMemberNegatives == nil {
+		g.SpaceMemberNegatives = map[string]map[string]memberNegative{}
+	}
+	for email, entry := range g.EmailUserIDs {
+		if cachedUserIDExpired(entry, now) {
+			delete(g.EmailUserIDs, email)
+		}
+	}
+	for spaceName, byEmail := range g.SpaceMemberNegatives {
+		if _, hasMembership := g.SpaceMembers[spaceName]; !hasMembership {
+			delete(g.SpaceMemberNegatives, spaceName)
+			continue
+		}
+		for email, neg := range byEmail {
+			if memberNegativeExpired(neg, now) {
+				delete(byEmail, email)
+			}
+		}
+		if len(byEmail) == 0 {
+			delete(g.SpaceMemberNegatives, spaceName)
+		}
+	}
+}
+
+// cachedUserIDExpired reports whether a global positive is older than the TTL
+// (an unparseable resolved_at counts as expired).
+func cachedUserIDExpired(entry cachedUserID, now time.Time) bool {
+	resolvedAt, err := time.Parse(chatTimeLayout, entry.ResolvedAt)
+	if err != nil {
+		return true
+	}
+	return now.Sub(resolvedAt) > gchatMembershipCacheTTL
+}
+
+// memberNegativeExpired reports whether a per-space negative is older than the
+// TTL (an unparseable resolved_at counts as expired).
+func memberNegativeExpired(neg memberNegative, now time.Time) bool {
+	resolvedAt, err := time.Parse(chatTimeLayout, neg.ResolvedAt)
+	if err != nil {
+		return true
+	}
+	return now.Sub(resolvedAt) > gchatMembershipCacheTTL
 }
 
 // decodeMetaKey round-trips one metadata key through JSON into dst, ignoring
@@ -138,6 +228,8 @@ func (g *gchatMetadata) writeInto(raw map[string]any) map[string]any {
 	raw[gchatMetaArchivedCursors] = g.ArchivedCursors
 	raw[gchatMetaSpaceMembers] = g.SpaceMembers
 	raw[gchatMetaUserEmailCache] = g.UserEmailCache
+	raw[gchatMetaEmailUserIDs] = g.EmailUserIDs
+	raw[gchatMetaSpaceMemberNegatives] = g.SpaceMemberNegatives
 	ids := make([]string, 0, len(g.MeIdentities))
 	for id := range g.MeIdentities {
 		ids = append(ids, id)
@@ -231,26 +323,26 @@ func (p *GChatSyncProvider) resolveMembership(
 	space *chat.Space,
 	g *gchatMetadata,
 	budget *int,
-) (members []string, incomplete bool, err error) {
+) (members []string, fingerprint string, incomplete bool, err error) {
 	now := accelerated.GetCurrentTime()
 	cached, ok := g.SpaceMembers[space.Name]
 	if ok && !membershipNeedsRefresh(cached, space.LastActiveTime, now) {
-		return cached.Members, false, nil
+		return cached.Members, memberSetFingerprint(cached.Members), false, nil
 	}
 
 	fetched, _, incomplete, err := paginateMembers(ctx, fetcher, space.Name, budget)
 	if err != nil {
-		return nil, false, err
+		return nil, "", false, err
 	}
 	if incomplete {
-		return nil, true, nil
+		return nil, "", true, nil
 	}
 	g.SpaceMembers[space.Name] = spaceMembers{
 		Version:   space.LastActiveTime,
 		FetchedAt: now.Format(chatTimeLayout),
 		Members:   fetched,
 	}
-	return fetched, false, nil
+	return fetched, memberSetFingerprint(fetched), false, nil
 }
 
 // membershipNeedsRefresh reports whether a cached membership must be refetched:
@@ -307,6 +399,37 @@ func resolveKnownMembers(
 		}
 	}
 	return out, nil
+}
+
+// memberSetFingerprint returns a deterministic, order-independent hash of a
+// space's member-id set. It SORTs + DEDUPs the canonical "users/{id}" names and
+// returns the sha256 hex of the newline-joined result, so the same member set
+// always yields the same fingerprint regardless of ListMembers page ordering.
+// An empty set yields a fixed sentinel. The fingerprint is the §3.2.1 stability
+// signal: it changes ONLY when membership actually changes (a join/leave), never
+// on mere message activity (which advances lastActiveTime but not the set).
+func memberSetFingerprint(members []string) string {
+	if len(members) == 0 {
+		return "empty"
+	}
+	uniq := make([]string, 0, len(members))
+	seen := make(map[string]struct{}, len(members))
+	for _, m := range members {
+		if m == "" {
+			continue
+		}
+		if _, ok := seen[m]; ok {
+			continue
+		}
+		seen[m] = struct{}{}
+		uniq = append(uniq, m)
+	}
+	if len(uniq) == 0 {
+		return "empty"
+	}
+	sort.Strings(uniq)
+	sum := sha256.Sum256([]byte(strings.Join(uniq, "\n")))
+	return hex.EncodeToString(sum[:])
 }
 
 // --- cached email resolver -------------------------------------------
