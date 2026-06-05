@@ -647,6 +647,22 @@ func (r *memberIDResolver) lookupNegative(spaceName, email string) (memberNegati
 	return neg, ok
 }
 
+// cachedPositive returns the cached canonical id for an email if there is a
+// within-TTL global positive (no API call). Used by buildKnownIDIndex to seed
+// the index from already-resolved emails.
+func (r *memberIDResolver) cachedPositive(email string) (string, bool) {
+	entry, ok := r.posCache[email]
+	if !ok || cachedUserIDExpired(entry, accelerated.GetCurrentTime()) {
+		return "", false
+	}
+	return entry.UserName, true
+}
+
+// negativeFor exposes the per-space negative (if any) for classification.
+func (r *memberIDResolver) negativeFor(spaceName, email string) (memberNegative, bool) {
+	return r.lookupNegative(spaceName, email)
+}
+
 // writeNegative records (or overwrites) a per-space negative stamped with the
 // current member-set fingerprint.
 func (r *memberIDResolver) writeNegative(spaceName, email, fingerprint string, now time.Time) {

@@ -3,11 +3,14 @@ package google
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"time"
 
 	chat "google.golang.org/api/chat/v1"
 
 	"github.com/google/uuid"
+
+	"personal-crm/backend/internal/accelerated"
 )
 
 // --- pagination ------------------------------------------------------
@@ -140,6 +143,27 @@ func flattenKnownMembers(knownMembers map[string][]uuid.UUID, meSet map[string]s
 	return out
 }
 
+// flattenKnownMembersAndIDs is the outbound fan-out recipient set: the UNION of
+// the email-resolved known co-members (flattenKnownMembers) and the id-resolved
+// known members (knownIDs values), deduped by contact id and self-excluded. An
+// idMatch's Email is checked against meSet defensively (the index already drops
+// meSet members, so this never fires in practice but keeps the self-exclusion
+// invariant local).
+func flattenKnownMembersAndIDs(knownMembers map[string][]uuid.UUID, knownIDs map[string]idMatch, meSet map[string]struct{}) []uuid.UUID {
+	out := flattenKnownMembers(knownMembers, meSet)
+	for _, idm := range knownIDs {
+		if inSet(meSet, idm.Email) {
+			continue
+		}
+		for _, c := range idm.Contacts {
+			if !containsUUID(out, c) {
+				out = append(out, c)
+			}
+		}
+	}
+	return out
+}
+
 // firstN returns the first n characters (runes) of s.
 func firstN(s string, n int) string {
 	if n <= 0 {
@@ -200,6 +224,148 @@ func buildContentMetadata(space *chat.Space, m *chat.Message) []byte {
 		return []byte("{}")
 	}
 	return b
+}
+
+// --- known-id index (reverse email→id matching) ----------------------
+
+// idMatch is the value of the per-space known-id index: the CRM email that
+// resolved to a canonical id, plus the contact ids that email maps to. The
+// email is carried so an id-path match populates the peer columns with the CRM
+// email (an id-path People-API resolution is "", which would otherwise write an
+// empty peer).
+type idMatch struct {
+	Email    string
+	Contacts []uuid.UUID
+}
+
+// buildKnownIDIndex builds the per-space "users/{id}" → idMatch index that lets
+// a sender/member match a CRM contact by CANONICAL ID even when the People API
+// (Contacts) cannot resolve that id to an email. It has two zero-API-call
+// sources (global positive cache + the space's member-id list) plus bounded
+// fresh members.get resolutions for the rest.
+//
+// members is the space's current "users/{id}" member set; fingerprint is its
+// member-set fingerprint (§3.2.1). knownMap is the dual-source known-contact
+// map (normalizedEmail → []contactID); meSet is the connected-account self set.
+// resolver is the reverse resolver; pageBudget is the shared page allowance.
+//
+// Returns:
+//   - knownIDs: the index. A member/sender id present here is a known contact.
+//   - blockedByBudget: a fresh resolution hit the page budget (incomplete window
+//     — the caller must NOT advance the cursor; treat like a partial page).
+//   - blockedByCapOnDebt: an UNKNOWN candidate could not be resolved because the
+//     per-sweep resolve-cap was exhausted (resolution debt — the caller holds
+//     THIS space's cursor until a later sweep drains the debt, §3.2.1).
+//
+// Candidate classification under the current fingerprint: POSITIVE (global
+// positive hit whose id ∈ members), NEGATIVE-VALID (per-space negative with a
+// matching fingerprint, within TTL), or UNKNOWN (must resolve). UNKNOWN
+// fingerprint-invalidated candidates (a negative whose fingerprint no longer
+// matches — a membership change happened) get PRIORITY access to the cap over
+// never-seen candidates, so a one-time debt drains efficiently.
+func buildKnownIDIndex(
+	ctx context.Context,
+	space *chat.Space,
+	members []string,
+	fingerprint string,
+	knownMap map[string][]uuid.UUID,
+	meSet map[string]struct{},
+	resolver *memberIDResolver,
+	counters *sweepCounters,
+	pageBudget *int,
+) (knownIDs map[string]idMatch, blockedByBudget bool, blockedByCapOnDebt bool, err error) {
+	knownIDs = map[string]idMatch{}
+
+	// The member-id set of this space, for the "id ∈ members" check.
+	memberSet := make(map[string]struct{}, len(members))
+	for _, id := range members {
+		memberSet[id] = struct{}{}
+	}
+
+	// Seed from the GLOBAL positive cache: every known email whose cached id is a
+	// member of this space matches with zero API calls. Track which emails are
+	// already matched so they are not re-resolved.
+	seeded := map[string]struct{}{}
+	for email, contacts := range knownMap {
+		if inSet(meSet, email) || len(contacts) == 0 {
+			continue
+		}
+		id, ok := resolver.cachedPositive(email)
+		if !ok {
+			continue
+		}
+		if _, isMember := memberSet[id]; isMember {
+			knownIDs[id] = idMatch{Email: email, Contacts: contacts}
+			seeded[email] = struct{}{}
+		}
+	}
+
+	// Classify the remaining candidates and order them so fingerprint-invalidated
+	// (was-NEGATIVE-now-UNKNOWN) candidates get priority access to the cap.
+	priority, normal := classifyIDCandidates(space.Name, fingerprint, knownMap, meSet, seeded, resolver)
+
+	for _, email := range append(priority, normal...) {
+		id, status, rerr := resolver.resolve(ctx, space.Name, fingerprint, email, pageBudget)
+		if rerr != nil {
+			return nil, false, false, rerr
+		}
+		switch status {
+		case resolvedKnownID:
+			if _, isMember := memberSet[id]; isMember {
+				knownIDs[id] = idMatch{Email: email, Contacts: knownMap[email]}
+				counters.memberIDsResolved++
+			}
+			// A resolved id that is NOT a member of this space is a co-member of
+			// some OTHER space (the positive is global) — not a match here, but the
+			// global positive is now populated for future spaces.
+		case notMember:
+			counters.memberResolveNegativesWritten++
+		case deferredCapHit:
+			counters.memberResolveDeferredCap++
+			blockedByCapOnDebt = true
+		case deferredBudgetHit:
+			blockedByBudget = true
+			return knownIDs, blockedByBudget, blockedByCapOnDebt, nil
+		}
+	}
+	return knownIDs, blockedByBudget, blockedByCapOnDebt, nil
+}
+
+// classifyIDCandidates partitions the not-yet-matched known emails into those
+// whose per-space negative was invalidated by a fingerprint change (priority —
+// a membership change happened, so re-resolve first) and the rest (never-seen,
+// or no negative). meSet emails and already-seeded emails are skipped. Both
+// slices are sorted for deterministic ordering across runs.
+func classifyIDCandidates(
+	spaceName, fingerprint string,
+	knownMap map[string][]uuid.UUID,
+	meSet map[string]struct{},
+	seeded map[string]struct{},
+	resolver *memberIDResolver,
+) (priority, normal []string) {
+	for email, contacts := range knownMap {
+		if inSet(meSet, email) || len(contacts) == 0 {
+			continue
+		}
+		if _, ok := seeded[email]; ok {
+			continue
+		}
+		// A within-TTL, fingerprint-matching negative is NEGATIVE-VALID → not a
+		// candidate (no debt). Anything else is UNKNOWN → a candidate.
+		if neg, ok := resolver.negativeFor(spaceName, email); ok {
+			if !memberNegativeExpired(neg, accelerated.GetCurrentTime()) && neg.MemberSetFingerprint == fingerprint {
+				continue // NEGATIVE-VALID
+			}
+			// A stale negative (fingerprint changed or expired) is UNKNOWN with
+			// PRIORITY — a membership change happened, so drain it first.
+			priority = append(priority, email)
+			continue
+		}
+		normal = append(normal, email) // never seen → UNKNOWN
+	}
+	sort.Strings(priority)
+	sort.Strings(normal)
+	return priority, normal
 }
 
 // --- test seams ------------------------------------------------------
@@ -295,10 +461,14 @@ func (r *CachedEmailResolverForTest) Resolve(ctx context.Context, userName strin
 // SweepCountersForTest is the exported view of the per-sweep counters so tests
 // can assert qualification outcomes. Production code must NOT use this.
 type SweepCountersForTest struct {
-	Processed                  int
-	Matched                    int
-	SpacesSkippedNoKnownMember int
-	SendersUnresolved          int
-	EditsApplied               int
-	DeletesApplied             int
+	Processed                     int
+	Matched                       int
+	SpacesSkippedNoKnownMember    int
+	SendersUnresolved             int
+	EditsApplied                  int
+	DeletesApplied                int
+	MemberIDsResolved             int
+	MemberResolveDeferredCap      int
+	MemberResolveNegativesWritten int
+	SpacesHeldByCapOnDebt         int
 }
