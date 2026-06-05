@@ -717,15 +717,19 @@ func TestBuildKnownIDIndex_DiscoversMeIDFromCachedPositive(t *testing.T) {
 	assert.Equal(t, 0, calls, "the me-id discovery is cache-only — no fresh members.get")
 }
 
-// TestBuildKnownIDIndex_DebtHoldsCursor drives the resolution-debt model:
+// TestBuildKnownIDIndex_DeferredCapReturnsDebtFlagOnly drives the resolution-debt
+// classification. blockedByCapOnDebt is now PURELY informational (it drives the
+// spacesWarmupDeferred counter and no longer implies any cursor outcome — that is
+// a Sync-level concern, proven in the integration tests). The subtests assert the
+// resolver/index classification only:
 //
 //	(a) a NEGATIVE-VALID candidate is not debt → no resolve, blockedByCapOnDebt=false;
 //	(b) an UNKNOWN candidate (fingerprint-mismatched negative) with the cap
-//	    exhausted → deferredCapHit → blockedByCapOnDebt=true (cursor held), driven
-//	    purely by the persisted-negative-vs-current-fingerprint mismatch (no flag);
+//	    exhausted → deferredCapHit → blockedByCapOnDebt=true, driven purely by the
+//	    persisted-negative-vs-current-fingerprint mismatch (no transient flag);
 //	(c) priority — when the cap admits only N resolves, fingerprint-invalidated
 //	    candidates are resolved before never-seen ones.
-func TestBuildKnownIDIndex_DebtHoldsCursor(t *testing.T) {
+func TestBuildKnownIDIndex_DeferredCapReturnsDebtFlagOnly(t *testing.T) {
 	ctx := context.Background()
 	now := accelerated.GetCurrentTime()
 	fresh := now.Format(chatTimeLayout)
@@ -770,7 +774,7 @@ func TestBuildKnownIDIndex_DebtHoldsCursor(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, idx, "the candidate could not resolve this sweep")
 		assert.False(t, blockedBudget)
-		assert.True(t, blockedCap, "the fingerprint mismatch alone makes the candidate UNKNOWN; cap exhaustion holds the cursor (no transient flag)")
+		assert.True(t, blockedCap, "the fingerprint mismatch alone makes the candidate UNKNOWN; cap exhaustion sets the debt flag (informational, no transient flag)")
 		assert.Equal(t, 0, calls, "the cap-exhausted candidate is not fetched")
 	})
 
@@ -799,7 +803,7 @@ func TestBuildKnownIDIndex_DebtHoldsCursor(t *testing.T) {
 		idx, _, _, blockedCap, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fpNew, knownMap, map[string]struct{}{"me@example.test": {}}, nil, resolver, counters, &budget)
 		require.NoError(t, err)
 		// The invalidated (priority) candidate consumed the single cap slot and
-		// matched; the never-seen one was deferred (debt) → cursor held.
+		// matched; the never-seen one was deferred (debt flag set, informational).
 		assert.Contains(t, idx, "users/invalidated", "the fingerprint-invalidated candidate is resolved first")
 		assert.NotContains(t, idx, "users/neverseen")
 		assert.True(t, blockedCap, "the deferred never-seen candidate is debt")
@@ -857,6 +861,170 @@ func TestBuildKnownIDIndex_ActivityDoesNotReincurDebt(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, idx, "users/absent", "a real membership change re-resolves the candidate")
 	assert.Equal(t, 1, calls, "exactly one re-resolve after the membership actually changed")
+}
+
+// TestBuildKnownIDIndex_SkipsResolutionWhenAllMembersCovered proves the lossless
+// skip: when every member id is already covered by an id-keyed signal (a me-id or
+// already in the global positive cache), the candidate-resolution loop is skipped
+// entirely — ZERO members.get calls and ZERO negatives written — because no fresh
+// resolution could ever newly attach to a known email. The index is seeded only
+// from the positive cache. Keyed strictly on id signals (never People-resolution).
+func TestBuildKnownIDIndex_SkipsResolutionWhenAllMembersCovered(t *testing.T) {
+	ctx := context.Background()
+	dave := uuid.New()
+	otherContact := uuid.New()
+	members := []string{"users/dave", "users/other", "users/me"}
+	fp := memberSetFingerprint(members)
+	now := accelerated.GetCurrentTime()
+
+	calls := 0
+	// The fetcher would resolve BOTH known emails if asked — but it must NOT be
+	// asked, because every member id is already covered.
+	fetcher := fakeIDFetcher(map[string]string{
+		"spaces/A|dave@example.test":  "users/dave",
+		"spaces/A|other@example.test": "users/other",
+	}, &calls)
+	// dave + other are already in the global positive cache; users/me is a me-id.
+	pos := map[string]cachedUserID{
+		"dave@example.test":  {UserName: "users/dave", ResolvedAt: now.Format(chatTimeLayout)},
+		"other@example.test": {UserName: "users/other", ResolvedAt: now.Format(chatTimeLayout)},
+	}
+	cap := 10
+	resolver := newMemberIDResolver(fetcher, pos, nil, &cap)
+
+	knownMap := map[string][]uuid.UUID{
+		"dave@example.test":  {dave},
+		"other@example.test": {otherContact},
+	}
+	meSet := map[string]struct{}{"me@example.test": {}}
+	meIDs := map[string]struct{}{"users/me": {}}
+	counters := &sweepCounters{}
+	budget := 10
+	idx, _, blockedBudget, blockedCap, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fp, knownMap, meSet, meIDs, resolver, counters, &budget)
+	require.NoError(t, err)
+	assert.False(t, blockedBudget)
+	assert.False(t, blockedCap, "no uncovered member id remains → no debt")
+
+	// Both contacts seeded from the positive cache.
+	assert.Equal(t, idMatch{Email: "dave@example.test", Contacts: []uuid.UUID{dave}}, idx["users/dave"])
+	assert.Equal(t, idMatch{Email: "other@example.test", Contacts: []uuid.UUID{otherContact}}, idx["users/other"])
+	assert.Equal(t, 0, calls, "every member id is covered (me-id or positive-cached) → zero members.get calls")
+	assert.Equal(t, 0, counters.memberResolveNegativesWritten, "no negatives written when the loop is skipped")
+	assert.Equal(t, 10, cap, "the resolve cap is untouched")
+}
+
+// TestBuildKnownIDIndex_StopsAfterAllUncoveredMemberIDsMatched proves the
+// SET-based early-exit. U_id contains TWO distinct uncovered member ids, and a
+// DUAL-SOURCE alias maps TWO known addresses to the SAME canonical id. A scalar
+// "count of successful resolutions" would terminate after the alias double-counts
+// (count reaches 2 while only ONE distinct uncovered id is attached), dropping the
+// second distinct member id. The set-based test continues until BOTH distinct
+// uncovered ids are attached, then STOPS (no further members.get).
+func TestBuildKnownIDIndex_StopsAfterAllUncoveredMemberIDsMatched(t *testing.T) {
+	ctx := context.Background()
+	dave := uuid.New()
+	daveAlt := uuid.New()
+	frank := uuid.New()
+	bystander := uuid.New()
+	// Two distinct uncovered member ids: users/dave and users/frank.
+	members := []string{"users/dave", "users/frank", "users/me"}
+	fp := memberSetFingerprint(members)
+
+	calls := 0
+	// Dual-source alias: dave@ and dave-alt@ BOTH resolve to users/dave (same
+	// canonical id reachable from two known addresses). frank@ resolves to
+	// users/frank. zzz-bystander@ resolves to a non-member id and sorts LAST, so it
+	// is the candidate the early-exit must skip once both uncovered ids are matched.
+	// Emails are sorted in classifyIDCandidates, so the resolution order is
+	// deterministic: dave-alt@, dave@, frank@, zzz-bystander@.
+	fetcher := fakeIDFetcher(map[string]string{
+		"spaces/A|dave@example.test":          "users/dave",
+		"spaces/A|dave-alt@example.test":      "users/dave",
+		"spaces/A|frank@example.test":         "users/frank",
+		"spaces/A|zzz-bystander@example.test": "users/elsewhere",
+	}, &calls)
+	cap := 10
+	resolver := newMemberIDResolver(fetcher, nil, nil, &cap)
+
+	knownMap := map[string][]uuid.UUID{
+		"dave@example.test":          {dave},
+		"dave-alt@example.test":      {daveAlt},
+		"frank@example.test":         {frank},
+		"zzz-bystander@example.test": {bystander},
+	}
+	meSet := map[string]struct{}{"me@example.test": {}}
+	// users/me is the account's own member id (covered via meIDs, as
+	// resolveKnownMembers would populate in the real sweep) → not part of U_id.
+	meIDs := map[string]struct{}{"users/me": {}}
+	counters := &sweepCounters{}
+	budget := 10
+	idx, _, blockedBudget, blockedCap, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fp, knownMap, meSet, meIDs, resolver, counters, &budget)
+	require.NoError(t, err)
+	assert.False(t, blockedBudget)
+	assert.False(t, blockedCap)
+
+	// (b) BOTH distinct uncovered member ids are attached.
+	require.Contains(t, idx, "users/dave", "the first uncovered member id is attached")
+	require.Contains(t, idx, "users/frank", "the second distinct uncovered member id is attached (a scalar count would have stopped before reaching it)")
+	// The dual-source alias unioned both contacts onto the shared id.
+	assert.ElementsMatch(t, []uuid.UUID{dave, daveAlt}, idx["users/dave"].Contacts, "both contacts sharing the canonical id are unioned, not last-writer-wins")
+
+	// (c) Once both uncovered ids matched, the loop STOPPED before zzz-bystander@.
+	// Resolution order: dave-alt@ (→users/dave), dave@ (→users/dave, unioned),
+	// frank@ (→users/frank, second distinct id matched), then the early-exit fires
+	// and zzz-bystander@ is NOT resolved → exactly THREE members.get calls.
+	// Critically, the early-exit did NOT fire after only the dave aliases (a scalar
+	// count==2 bug) — users/frank is present AND zzz-bystander@ was skipped only
+	// AFTER frank, proving the SET semantics.
+	assert.Equal(t, 3, calls, "the loop resolves until both distinct uncovered ids match, then stops before the trailing bystander candidate")
+}
+
+// TestBuildKnownIDIndex_DualSourceIdentityNotLost is the losslessness boundary.
+// A member id (users/dave) whose People-API resolution is a NON-known email
+// (looks like a bystander) is STILL matched, because a DIFFERENT known address
+// resolves (members.get) to that SAME canonical id. The optimization keys U_id on
+// id signals (me-id + positive cache) ONLY, never on People-resolution, so the
+// dual-source identity is never skipped/early-exited out. Built on the
+// ListGChatIdentitiesForSync dual-source shape: one contact with both a gchat and
+// an email value that differ.
+func TestBuildKnownIDIndex_DualSourceIdentityNotLost(t *testing.T) {
+	ctx := context.Background()
+	dave := uuid.New()
+	// users/dave is a member; People would resolve it to dave-people@ (a NON-known
+	// address — not in knownMap). But the contact is reachable via TWO known
+	// addresses (a gchat handle and an email), and the email resolves via
+	// members.get to users/dave.
+	members := []string{"users/dave", "users/me"}
+	fp := memberSetFingerprint(members)
+
+	calls := 0
+	// Only the known email resolves to users/dave; the gchat-handle alias is a
+	// no-member alias here (it would match in a different space). The point: U_id
+	// includes users/dave (People-resolved-to-non-known), so it IS resolved.
+	fetcher := fakeIDFetcher(map[string]string{
+		"spaces/A|dave-email@example.test": "users/dave",
+	}, &calls)
+	cap := 10
+	resolver := newMemberIDResolver(fetcher, nil, nil, &cap)
+
+	// Dual-source: the SAME contact carries both a gchat value and an email value.
+	knownMap := map[string][]uuid.UUID{
+		"dave-gchat@example.test": {dave},
+		"dave-email@example.test": {dave},
+	}
+	meSet := map[string]struct{}{"me@example.test": {}}
+	counters := &sweepCounters{}
+	budget := 10
+	idx, _, blockedBudget, blockedCap, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fp, knownMap, meSet, nil, resolver, counters, &budget)
+	require.NoError(t, err)
+	assert.False(t, blockedBudget)
+	assert.False(t, blockedCap)
+
+	// users/dave IS in the index — the optimization did NOT skip it on the basis
+	// that People resolves it to a non-known email. The contact matches.
+	require.Contains(t, idx, "users/dave", "a dual-source identity is matched via the alternate known address")
+	assert.Equal(t, []uuid.UUID{dave}, idx["users/dave"].Contacts)
+	assert.GreaterOrEqual(t, calls, 1, "the alternate known address WAS resolved (U_id keys on id signals, not People-resolution)")
 }
 
 func TestMembershipNeedsRefresh(t *testing.T) {
@@ -1139,6 +1307,54 @@ func TestConsumeContentWindow_FullyPagedIsProven(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, proven, "a fully-paged window is proven")
 	assert.Equal(t, msgTime, newCursor, "cursor advances to the max createTime seen")
+}
+
+// TestConsumeContentWindow_NonQualifiableOnlyWindowStillAdvances proves a
+// fully-paged window whose messages are ALL non-qualifiable (bot/app senders,
+// tombstones) STILL advances the cursor to the latest create_time. Without this,
+// a no-known-member or bot-only space would re-page the same unmatched window
+// every sweep, holding its cursor and consuming the shared page budget —
+// reintroducing the starvation this hotfix removed.
+func TestConsumeContentWindow_NonQualifiableOnlyWindowStillAdvances(t *testing.T) {
+	ctx := context.Background()
+	earlier := "2026-06-04T10:00:00Z"
+	latest := "2026-06-04T11:00:00Z"
+	// A bot message (non-HUMAN sender) and a tombstone — both non-qualifiable.
+	botMsg := &chat.Message{
+		Name:       "spaces/B/messages/bot",
+		Sender:     &chat.User{Name: "users/bot", Type: "BOT"},
+		CreateTime: earlier,
+		Text:       "automated notice",
+	}
+	tombstone := &chat.Message{
+		Name:             "spaces/B/messages/gone",
+		Sender:           &chat.User{Name: "users/x", Type: gchatUserTypeHuman},
+		CreateTime:       latest,
+		DeletionMetadata: &chat.DeletionMetadata{},
+	}
+	fetcher := &fakeChatFetcher{funcs: FakeChatFetcherFuncs{
+		ListMessages: func(_ context.Context, _, _ string, _ bool, token string) ([]*chat.Message, string, error) {
+			if token == "" {
+				return []*chat.Message{botMsg, tombstone}, "", nil
+			}
+			return nil, "", nil
+		},
+		ResolvePersonEmail: func(context.Context, string) (string, error) { return "", nil },
+	}}
+	resolver := newCachedEmailResolver(fetcher, nil)
+	// nil commsRepo is safe: no qualifiable message means no upsert is attempted.
+	p := &GChatSyncProvider{commsRepo: nil}
+	counters := &sweepCounters{}
+	budget := 10
+	floor := "2026-01-01T00:00:00Z"
+	newCursor, proven, err := p.consumeContentWindow(ctx, fetcher,
+		&chat.Space{Name: "spaces/B", SpaceType: "SPACE"}, floor,
+		map[string][]uuid.UUID{}, map[string][]uuid.UUID{}, nil, nil, map[string]struct{}{},
+		resolver, "acct", counters, &budget)
+	require.NoError(t, err)
+	assert.True(t, proven, "a fully-paged window is proven even with no qualifiable messages")
+	assert.Equal(t, latest, newCursor, "the cursor advances over non-qualifiable messages to the latest create_time")
+	assert.Equal(t, 0, counters.processed, "no qualifiable message was processed/upserted")
 }
 
 // TestConsumeContentWindow_CursorAdvancesByInstantNotLexical proves the cursor

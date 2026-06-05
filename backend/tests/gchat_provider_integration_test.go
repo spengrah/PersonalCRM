@@ -1079,46 +1079,123 @@ func TestGChatProvider_GlobalPositiveCachePersistsAndReused(t *testing.T) {
 	require.NoError(t, err, "the same id matched in space B via the global positive")
 }
 
-// TestGChatProvider_DebtHeldCursorAcrossTwoSweeps proves the debt-hold survives
-// the sweep in which membership changed (the two-sweep hole). The
-// resolve-cap is forced to 0 so the post-change re-resolution CANNOT happen on
-// the change sweep. Sweep B holds the cursor; sweep C (cap restored) drains the
-// debt and matches the message from sweep B's window.
-func TestGChatProvider_DebtHeldCursorAcrossTwoSweeps(t *testing.T) {
+// TestGChatProvider_ColdStartProcessesAndAdvancesDespiteResolveDebt is the
+// HEADLINE REGRESSION for the incident. Multiple spaces, the resolve-cap forced to
+// 0 so id-resolution is DEFERRED for every space. Each space has a message from a
+// member the People API CAN resolve (the email-path match, which does not depend
+// on id-resolution). Asserts: every space's message is processed AND matched (no
+// freeze), every space's cursor advances, and the result counts are non-zero — the
+// exact prod failure (processed=0 with all spaces held) turned into a passing
+// assertion.
+func TestGChatProvider_ColdStartProcessesAndAdvancesDespiteResolveDebt(t *testing.T) {
 	e := setupGChatProviderTest(t)
 	suffix := randomSuffix(t)
 
+	aliceEmail := "alice-" + suffix + "@example.test"
+	alice := e.newGChatProviderContact(t, "GChat ColdStart Alice "+suffix, string(repository.ContactMethodEmail), aliceEmail)
+	// A second known contact whose id is NOT in Contacts (would need members.get) —
+	// deferred by cap=0, but must NOT hold any cursor.
 	daveEmail := "dave-" + suffix + "@example.test"
-	dave := e.newGChatProviderContact(t, "GChat Debt Dave "+suffix, string(repository.ContactMethodEmail), daveEmail)
+	e.newGChatProviderContact(t, "GChat ColdStart Dave "+suffix, string(repository.ContactMethodEmail), daveEmail)
 
-	spaceName := "spaces/DEBT-" + suffix
-	joinMsg := spaceName + "/messages/join-" + suffix
+	spaceA := "spaces/COLDA-" + suffix
+	spaceB := "spaces/COLDB-" + suffix
+	msgA := spaceA + "/messages/a-" + suffix
+	msgB := spaceB + "/messages/b-" + suffix
 	accountID := "me-" + suffix + "@example.test"
-	base := accelerated.GetCurrentTime().Add(-2 * time.Hour).Truncate(time.Second)
+	e.newGChatSyncState(t, accountID, true, nil)
+	base := accelerated.GetCurrentTime().Add(-time.Hour).Truncate(time.Second)
 
-	// Pre-seed: a space_members entry (dave absent) and a NEGATIVE-VALID negative
-	// for dave stamped with the absent-set fingerprint, plus a create_cursor so
-	// the message (sent after the cursor) is in-window on the change sweep.
-	absentFP := google.MemberSetFingerprintForTest([]string{"users/me"})
-	seededAt := accelerated.GetCurrentTime().Add(-time.Minute).UTC().Format(time.RFC3339Nano)
-	metadata := map[string]any{
-		"space_members": map[string]any{
-			spaceName: map[string]any{"version": chatRFC3339(base), "fetched_at": seededAt, "members": []string{"users/me"}},
+	funcs := google.FakeChatFetcherFuncs{
+		ListSpaces: func(context.Context, string) ([]*chat.Space, string, error) {
+			return []*chat.Space{space(spaceA, "SPACE"), space(spaceB, "SPACE")}, "", nil
 		},
-		"space_cursors": map[string]any{
-			spaceName: map[string]any{"create_cursor": chatRFC3339(base), "edit_cursor": chatRFC3339(base)},
+		ListMembers: func(_ context.Context, spaceName, _ string) ([]*chat.Membership, string, error) {
+			// Both spaces include alice (People-resolvable), dave (needs members.get),
+			// and me.
+			return []*chat.Membership{membership("users/alice"), membership("users/dave"), membership("users/me")}, "", nil
 		},
-		"space_member_negatives": map[string]any{
-			spaceName: map[string]any{daveEmail: map[string]any{"resolved_at": seededAt, "member_set_fingerprint": absentFP}},
+		ListMessages: func(_ context.Context, spaceName, _ string, showDeleted bool, _ string) ([]*chat.Message, string, error) {
+			if showDeleted {
+				return nil, "", nil
+			}
+			switch spaceName {
+			case spaceA:
+				return []*chat.Message{chatMessage(msgA, "users/alice", "hi from A", base)}, "", nil
+			case spaceB:
+				return []*chat.Message{chatMessage(msgB, "users/alice", "hi from B", base.Add(time.Minute))}, "", nil
+			}
+			return nil, "", nil
+		},
+		ResolvePersonEmail: func(_ context.Context, userName string) (string, error) {
+			switch userName {
+			case "users/me":
+				return accountID, nil
+			case "users/alice":
+				return aliceEmail, nil
+			}
+			return "", nil // users/dave is NOT in Contacts (id path would be needed)
+		},
+		// dave WOULD resolve via members.get, but cap=0 defers it every space.
+		ResolveMemberID: func(_ context.Context, _, normalizedEmail string) (string, bool, error) {
+			if normalizedEmail == daveEmail {
+				return "users/dave", false, nil
+			}
+			return "", true, nil
 		},
 	}
-	e.newGChatSyncState(t, accountID, true, metadata)
+	p := e.newProvider(t, map[string]struct{}{accountID: {}}, funcs)
+	// Cap=0: id-resolution is deferred for EVERY space (the prod stampede).
+	p.SetMemberResolveCapForTest(0)
 
-	var daveJoined bool
+	state, err := e.syncRepo.GetSyncStateBySource(e.ctx, repository.InteractionSourceGChat, &accountID)
+	require.NoError(t, err)
+	result, err := p.Sync(e.ctx, state, nil)
+	require.NoError(t, err)
+
+	// (a) EVERY space's message processed AND matched despite the resolve debt.
+	assert.Positive(t, result.ItemsProcessed, "messages are processed even with the resolve cap at 0 (no freeze)")
+	assert.Positive(t, result.ItemsMatched, "messages are matched via the People path even with the resolve cap at 0")
+	rowA, err := e.commsRepo.GetMessage(e.ctx, repository.InteractionSourceGChat, msgA, alice.ID)
+	require.NoError(t, err, "space A's message matched the People-resolvable member despite deferred id-resolution")
+	assert.Equal(t, repository.InteractionDirectionInbound, rowA.Direction)
+	_, err = e.commsRepo.GetMessage(e.ctx, repository.InteractionSourceGChat, msgB, alice.ID)
+	require.NoError(t, err, "space B's message matched too — the cap deferral on space A did NOT freeze space B")
+
+	// (b) BOTH spaces' cursors advanced (no space held by the resolve debt).
+	persisted, err := e.syncRepo.GetSyncStateBySource(e.ctx, repository.InteractionSourceGChat, &accountID)
+	require.NoError(t, err)
+	assert.NotEmpty(t, spaceCursorFromMetadata(t, persisted.Metadata, spaceA), "space A's cursor advanced")
+	assert.NotEmpty(t, spaceCursorFromMetadata(t, persisted.Metadata, spaceB), "space B's cursor advanced")
+}
+
+// TestGChatProvider_DeferredIDContactMatchesOnLaterSweep proves the go-forward
+// backfill semantics. Sweep 1 (cap=0): a not-in-Contacts contact's id is NOT
+// resolved, so their message is NOT matched — BUT the space cursor STILL advances
+// and a People-resolvable co-member's message DOES match. Sweep 2 (cap raised): a
+// NEW message from the now-resolvable contact, sent after the cursor, matches.
+func TestGChatProvider_DeferredIDContactMatchesOnLaterSweep(t *testing.T) {
+	e := setupGChatProviderTest(t)
+	suffix := randomSuffix(t)
+
+	aliceEmail := "alice-" + suffix + "@example.test"
+	alice := e.newGChatProviderContact(t, "GChat Deferred Alice "+suffix, string(repository.ContactMethodEmail), aliceEmail)
+	daveEmail := "dave-" + suffix + "@example.test"
+	dave := e.newGChatProviderContact(t, "GChat Deferred Dave "+suffix, string(repository.ContactMethodEmail), daveEmail)
+
+	spaceName := "spaces/DEFER-" + suffix
+	aliceMsg := spaceName + "/messages/alice-" + suffix
+	daveMsg1 := spaceName + "/messages/dave1-" + suffix
+	daveMsg2 := spaceName + "/messages/dave2-" + suffix
+	accountID := "me-" + suffix + "@example.test"
+	e.newGChatSyncState(t, accountID, true, nil)
+	base := accelerated.GetCurrentTime().Add(-time.Hour).Truncate(time.Second)
+
+	var sweep2 bool
 	funcs := google.FakeChatFetcherFuncs{
 		ListSpaces: func(context.Context, string) ([]*chat.Space, string, error) {
 			sp := space(spaceName, "SPACE")
-			if daveJoined {
+			if sweep2 {
 				sp.LastActiveTime = chatRFC3339(accelerated.GetCurrentTime())
 			} else {
 				sp.LastActiveTime = chatRFC3339(base)
@@ -1126,25 +1203,33 @@ func TestGChatProvider_DebtHeldCursorAcrossTwoSweeps(t *testing.T) {
 			return []*chat.Space{sp}, "", nil
 		},
 		ListMembers: func(context.Context, string, string) ([]*chat.Membership, string, error) {
-			if daveJoined {
-				return []*chat.Membership{membership("users/dave"), membership("users/me")}, "", nil
-			}
-			return []*chat.Membership{membership("users/me")}, "", nil
+			return []*chat.Membership{membership("users/alice"), membership("users/dave"), membership("users/me")}, "", nil
 		},
 		ListMessages: func(_ context.Context, _, _ string, showDeleted bool, _ string) ([]*chat.Message, string, error) {
-			if showDeleted || !daveJoined {
+			if showDeleted {
 				return nil, "", nil
 			}
-			return []*chat.Message{chatMessage(joinMsg, "users/dave", "just joined", accelerated.GetCurrentTime().Add(-30*time.Second).Truncate(time.Second))}, "", nil
+			if sweep2 {
+				// A NEW message from dave, sent after sweep-1's cursor.
+				return []*chat.Message{chatMessage(daveMsg2, "users/dave", "dave after warm-up", accelerated.GetCurrentTime().Add(-time.Minute).Truncate(time.Second))}, "", nil
+			}
+			// Sweep 1: alice (People-resolvable) and dave (id deferred by cap=0).
+			return []*chat.Message{
+				chatMessage(aliceMsg, "users/alice", "alice hi", base),
+				chatMessage(daveMsg1, "users/dave", "dave before warm-up", base.Add(time.Minute)),
+			}, "", nil
 		},
 		ResolvePersonEmail: func(_ context.Context, userName string) (string, error) {
-			if userName == "users/me" {
+			switch userName {
+			case "users/me":
 				return accountID, nil
+			case "users/alice":
+				return aliceEmail, nil
 			}
-			return "", nil
+			return "", nil // dave not in Contacts
 		},
 		ResolveMemberID: func(_ context.Context, _, normalizedEmail string) (string, bool, error) {
-			if daveJoined && normalizedEmail == daveEmail {
+			if normalizedEmail == daveEmail {
 				return "users/dave", false, nil
 			}
 			return "", true, nil
@@ -1152,40 +1237,299 @@ func TestGChatProvider_DebtHeldCursorAcrossTwoSweeps(t *testing.T) {
 	}
 	p := e.newProvider(t, map[string]struct{}{accountID: {}}, funcs)
 
-	cursorBefore := chatRFC3339(base)
-
-	// Sweep B: dave joined (fingerprint flips → negative UNKNOWN), but cap=0 so the
-	// re-resolution is DEFERRED → cursor HELD; the join message is NOT yet matched.
+	// Sweep 1: cap=0 → dave's id is deferred.
 	p.SetMemberResolveCapForTest(0)
-	daveJoined = true
-	stateB, err := e.syncRepo.GetSyncStateBySource(e.ctx, repository.InteractionSourceGChat, &accountID)
+	state1, err := e.syncRepo.GetSyncStateBySource(e.ctx, repository.InteractionSourceGChat, &accountID)
 	require.NoError(t, err)
-	_, err = p.Sync(e.ctx, stateB, nil)
+	_, err = p.Sync(e.ctx, state1, nil)
 	require.NoError(t, err)
 
-	_, err = e.commsRepo.GetMessage(e.ctx, repository.InteractionSourceGChat, joinMsg, dave.ID)
-	assert.ErrorIs(t, err, db.ErrNotFound, "cap=0 defers the re-resolution; the message is not yet matched")
-
-	persistedB, err := e.syncRepo.GetSyncStateBySource(e.ctx, repository.InteractionSourceGChat, &accountID)
+	// alice matched (People path); dave NOT matched (id deferred); cursor advanced.
+	_, err = e.commsRepo.GetMessage(e.ctx, repository.InteractionSourceGChat, aliceMsg, alice.ID)
+	require.NoError(t, err, "the People-resolvable co-member matched on sweep 1")
+	_, err = e.commsRepo.GetMessage(e.ctx, repository.InteractionSourceGChat, daveMsg1, dave.ID)
+	assert.ErrorIs(t, err, db.ErrNotFound, "dave's sweep-1 message is NOT matched (id deferred by cap=0) — go-forward gap")
+	persisted1, err := e.syncRepo.GetSyncStateBySource(e.ctx, repository.InteractionSourceGChat, &accountID)
 	require.NoError(t, err)
-	assert.Equal(t, cursorBefore, spaceCursorFromMetadata(t, persistedB.Metadata, spaceName),
-		"the cursor is HELD on the change sweep (not advanced past the unmatched message)")
+	cursor1 := spaceCursorFromMetadata(t, persisted1.Metadata, spaceName)
+	require.NotEmpty(t, cursor1, "the cursor ADVANCED on sweep 1 despite the deferred id (no freeze)")
 
-	// Sweep C: cap restored → the debt drains, the held message matches, cursor
-	// advances. On a transient-flag design sweep C would see no refresh and advance
-	// past the message unmatched — this asserts the durable fingerprint debt model.
+	// Sweep 2: cap raised → dave's id resolves; a new message from him matches.
+	sweep2 = true
 	p.SetMemberResolveCapForTest(50)
-	stateC, err := e.syncRepo.GetSyncStateBySource(e.ctx, repository.InteractionSourceGChat, &accountID)
+	state2, err := e.syncRepo.GetSyncStateBySource(e.ctx, repository.InteractionSourceGChat, &accountID)
 	require.NoError(t, err)
-	_, err = p.Sync(e.ctx, stateC, nil)
+	_, err = p.Sync(e.ctx, state2, nil)
 	require.NoError(t, err)
 
-	row, err := e.commsRepo.GetMessage(e.ctx, repository.InteractionSourceGChat, joinMsg, dave.ID)
-	require.NoError(t, err, "the held message matches once the debt drains (cap restored)")
+	row, err := e.commsRepo.GetMessage(e.ctx, repository.InteractionSourceGChat, daveMsg2, dave.ID)
+	require.NoError(t, err, "dave's NEW message matches once his id warms up (go-forward)")
 	assert.Equal(t, repository.InteractionDirectionInbound, row.Direction)
-	persistedC, err := e.syncRepo.GetSyncStateBySource(e.ctx, repository.InteractionSourceGChat, &accountID)
+}
+
+// TestGChatProvider_NoCurrentMemberSpaceStillPagesAndAdvances proves the
+// freeze + former-member correctness fix. A space whose CURRENT membership has NO
+// known CRM contact (the contact LEFT) but whose history contains an INBOUND
+// message from a known contact (sender email ∈ knownMap, matched via the People
+// email-sender path INDEPENDENT of current membership). Asserts the space pages
+// content, the former-member's message MATCHES, and the cursor ADVANCES. A second
+// space whose only known participant is a DEFERRED not-in-Contacts contact (cap=0,
+// no known inbound sender) STILL advances its cursor (window pages to zero
+// matchable rows and proven advances it).
+func TestGChatProvider_NoCurrentMemberSpaceStillPagesAndAdvances(t *testing.T) {
+	e := setupGChatProviderTest(t)
+	suffix := randomSuffix(t)
+
+	// Former member: a known contact who LEFT the space but has inbound history.
+	formerEmail := "former-" + suffix + "@example.test"
+	former := e.newGChatProviderContact(t, "GChat Former "+suffix, string(repository.ContactMethodEmail), formerEmail)
+	// Deferred contact for the second space (id never resolves under cap=0).
+	deferredEmail := "deferred-" + suffix + "@example.test"
+	deferred := e.newGChatProviderContact(t, "GChat DeferredOnly "+suffix, string(repository.ContactMethodEmail), deferredEmail)
+
+	formerSpace := "spaces/FORMER-" + suffix
+	formerMsg := formerSpace + "/messages/former-" + suffix
+	deferredSpace := "spaces/DEFERREDONLY-" + suffix
+	accountID := "me-" + suffix + "@example.test"
+	e.newGChatSyncState(t, accountID, true, nil)
+	base := accelerated.GetCurrentTime().Add(-time.Hour).Truncate(time.Second)
+
+	funcs := google.FakeChatFetcherFuncs{
+		ListSpaces: func(context.Context, string) ([]*chat.Space, string, error) {
+			return []*chat.Space{space(formerSpace, "SPACE"), space(deferredSpace, "SPACE")}, "", nil
+		},
+		ListMembers: func(_ context.Context, spaceName, _ string) ([]*chat.Membership, string, error) {
+			// Neither space currently has a known CRM contact as a member: the former
+			// space has only "me"; the deferred space has "me" + a member whose id
+			// would only resolve via members.get (deferred by cap=0).
+			if spaceName == deferredSpace {
+				return []*chat.Membership{membership("users/deferred"), membership("users/me")}, "", nil
+			}
+			return []*chat.Membership{membership("users/me")}, "", nil
+		},
+		ListMessages: func(_ context.Context, spaceName, _ string, showDeleted bool, _ string) ([]*chat.Message, string, error) {
+			if showDeleted {
+				return nil, "", nil
+			}
+			if spaceName == formerSpace {
+				// An INBOUND message from the former member (still in history).
+				return []*chat.Message{chatMessage(formerMsg, "users/former", "i left but said this", base)}, "", nil
+			}
+			return nil, "", nil // deferred space: no matchable rows this sweep
+		},
+		// The former member's SENDER id resolves to their email via People (the
+		// email-sender path, independent of current membership). deferred + me too.
+		ResolvePersonEmail: func(_ context.Context, userName string) (string, error) {
+			switch userName {
+			case "users/me":
+				return accountID, nil
+			case "users/former":
+				return formerEmail, nil
+			}
+			return "", nil // users/deferred not in Contacts
+		},
+		ResolveMemberID: func(_ context.Context, _, normalizedEmail string) (string, bool, error) {
+			if normalizedEmail == deferredEmail {
+				return "users/deferred", false, nil
+			}
+			return "", true, nil
+		},
+	}
+	p := e.newProvider(t, map[string]struct{}{accountID: {}}, funcs)
+	// cap=0 so the deferred space's only known participant is never id-resolved.
+	p.SetMemberResolveCapForTest(0)
+
+	state, err := e.syncRepo.GetSyncStateBySource(e.ctx, repository.InteractionSourceGChat, &accountID)
 	require.NoError(t, err)
-	assert.NotEqual(t, cursorBefore, spaceCursorFromMetadata(t, persistedC.Metadata, spaceName), "the cursor advances after the debt drains")
+	result, err := p.Sync(e.ctx, state, nil)
+	require.NoError(t, err)
+
+	// (a) The former member's inbound message is matched (a watermark-skip shortcut
+	// would have dropped it). (c) ItemsMatched > 0 for this space.
+	row, err := e.commsRepo.GetMessage(e.ctx, repository.InteractionSourceGChat, formerMsg, former.ID)
+	require.NoError(t, err, "the former member's inbound message matched via the email-sender path despite no current membership")
+	assert.Equal(t, repository.InteractionDirectionInbound, row.Direction)
+	assert.Positive(t, result.ItemsMatched, "the former-member match counts")
+
+	// (b) Both spaces' cursors advanced (no freeze on the no-current-member spaces).
+	persisted, err := e.syncRepo.GetSyncStateBySource(e.ctx, repository.InteractionSourceGChat, &accountID)
+	require.NoError(t, err)
+	assert.NotEmpty(t, spaceCursorFromMetadata(t, persisted.Metadata, formerSpace), "the former-member space's cursor advanced")
+	assert.NotEmpty(t, spaceCursorFromMetadata(t, persisted.Metadata, deferredSpace), "the deferred-only space's cursor advanced (window paged to zero matchable rows)")
+
+	// The deferred contact has no row this sweep (go-forward), but caused no freeze.
+	rows, err := e.commsRepo.ListByContact(e.ctx, deferred.ID)
+	require.NoError(t, err)
+	assert.Empty(t, rows, "the deferred contact is not matched this sweep (go-forward), but did not hold any cursor")
+}
+
+// TestGChatProvider_ColdStartFrontSpaceDoesNotStarveLaterSpaces proves the budget
+// amortization. Several spaces in stable ListSpaces order; the FRONT one has a
+// multi-page history that pages fully (proven, cursor advances) within budget,
+// leaving budget for later spaces. Asserts the front space advances AND a later
+// space is also processed in the same sweep (forward progress, no starvation).
+func TestGChatProvider_ColdStartFrontSpaceDoesNotStarveLaterSpaces(t *testing.T) {
+	e := setupGChatProviderTest(t)
+	suffix := randomSuffix(t)
+
+	aliceEmail := "alice-" + suffix + "@example.test"
+	alice := e.newGChatProviderContact(t, "GChat Starve Alice "+suffix, string(repository.ContactMethodEmail), aliceEmail)
+
+	frontSpace := "spaces/FRONT-" + suffix
+	laterSpace := "spaces/LATER-" + suffix
+	laterMsg := laterSpace + "/messages/later-" + suffix
+	accountID := "me-" + suffix + "@example.test"
+	e.newGChatSyncState(t, accountID, true, nil)
+	base := accelerated.GetCurrentTime().Add(-3 * time.Hour).Truncate(time.Second)
+
+	funcs := google.FakeChatFetcherFuncs{
+		ListSpaces: func(context.Context, string) ([]*chat.Space, string, error) {
+			// Stable order: the front space first, the later space second.
+			return []*chat.Space{space(frontSpace, "SPACE"), space(laterSpace, "SPACE")}, "", nil
+		},
+		ListMembers: func(context.Context, string, string) ([]*chat.Membership, string, error) {
+			return []*chat.Membership{membership("users/alice"), membership("users/me")}, "", nil
+		},
+		ListMessages: func(_ context.Context, spaceName, _ string, showDeleted bool, token string) ([]*chat.Message, string, error) {
+			if showDeleted {
+				return nil, "", nil
+			}
+			if spaceName == frontSpace {
+				// A multi-page history for the front space (three pages).
+				switch token {
+				case "":
+					return []*chat.Message{chatMessage(frontSpace+"/messages/f1-"+suffix, "users/alice", "f1", base)}, "fp2", nil
+				case "fp2":
+					return []*chat.Message{chatMessage(frontSpace+"/messages/f2-"+suffix, "users/alice", "f2", base.Add(time.Minute))}, "fp3", nil
+				case "fp3":
+					return []*chat.Message{chatMessage(frontSpace+"/messages/f3-"+suffix, "users/alice", "f3", base.Add(2*time.Minute))}, "", nil
+				}
+				return nil, "", nil
+			}
+			// The later space: a single page.
+			return []*chat.Message{chatMessage(laterMsg, "users/alice", "later", base.Add(time.Hour))}, "", nil
+		},
+		ResolvePersonEmail: func(_ context.Context, userName string) (string, error) {
+			switch userName {
+			case "users/me":
+				return accountID, nil
+			case "users/alice":
+				return aliceEmail, nil
+			}
+			return "", nil
+		},
+	}
+	p := e.newProvider(t, map[string]struct{}{accountID: {}}, funcs)
+
+	state, err := e.syncRepo.GetSyncStateBySource(e.ctx, repository.InteractionSourceGChat, &accountID)
+	require.NoError(t, err)
+	_, err = p.Sync(e.ctx, state, nil)
+	require.NoError(t, err)
+
+	// The front space paged fully and advanced; the later space was ALSO processed
+	// in the same sweep — the front space's multi-page window did not starve it.
+	persisted, err := e.syncRepo.GetSyncStateBySource(e.ctx, repository.InteractionSourceGChat, &accountID)
+	require.NoError(t, err)
+	assert.NotEmpty(t, spaceCursorFromMetadata(t, persisted.Metadata, frontSpace), "the front space advanced (fully paged)")
+	assert.NotEmpty(t, spaceCursorFromMetadata(t, persisted.Metadata, laterSpace), "the later space was reached in the same sweep — no starvation")
+	_, err = e.commsRepo.GetMessage(e.ctx, repository.InteractionSourceGChat, laterMsg, alice.ID)
+	require.NoError(t, err, "the later space's message was processed despite the front space's multi-page history")
+}
+
+// TestGChatProvider_NoDoubleProcessOnReResolve proves idempotency: a message
+// processed on sweep 1 via the People path is re-listed on sweep 2 (cursor reset)
+// and now ALSO id-resolves the sender — but the upsert dedup yields exactly ONE
+// row per contact, no duplicate. Guards the "process with partial index now,
+// fuller later" safety claim.
+func TestGChatProvider_NoDoubleProcessOnReResolve(t *testing.T) {
+	e := setupGChatProviderTest(t)
+	suffix := randomSuffix(t)
+
+	daveEmail := "dave-" + suffix + "@example.test"
+	dave := e.newGChatProviderContact(t, "GChat NoDouble Dave "+suffix, string(repository.ContactMethodEmail), daveEmail)
+
+	spaceName := "spaces/NODOUBLE-" + suffix
+	msgName := spaceName + "/messages/m-" + suffix
+	accountID := "me-" + suffix + "@example.test"
+	base := accelerated.GetCurrentTime().Add(-time.Hour).Truncate(time.Second)
+
+	var davePeopleResolvable = true
+	funcs := google.FakeChatFetcherFuncs{
+		ListSpaces: func(context.Context, string) ([]*chat.Space, string, error) {
+			return []*chat.Space{space(spaceName, "SPACE")}, "", nil
+		},
+		ListMembers: func(context.Context, string, string) ([]*chat.Membership, string, error) {
+			return []*chat.Membership{membership("users/dave"), membership("users/me")}, "", nil
+		},
+		ListMessages: func(_ context.Context, _, _ string, showDeleted bool, _ string) ([]*chat.Message, string, error) {
+			if showDeleted {
+				return nil, "", nil
+			}
+			// The SAME message is returned on both sweeps (sweep 2 re-lists it via the
+			// reset cursor below).
+			return []*chat.Message{chatMessage(msgName, "users/dave", "hello", base)}, "", nil
+		},
+		ResolvePersonEmail: func(_ context.Context, userName string) (string, error) {
+			if userName == "users/me" {
+				return accountID, nil
+			}
+			if userName == "users/dave" && davePeopleResolvable {
+				return daveEmail, nil // sweep 1: matched via the People path
+			}
+			return "", nil
+		},
+		ResolveMemberID: func(_ context.Context, _, normalizedEmail string) (string, bool, error) {
+			// On sweep 2 dave is matched via the id path instead.
+			if normalizedEmail == daveEmail {
+				return "users/dave", false, nil
+			}
+			return "", true, nil
+		},
+	}
+	// Seed an empty cursor so sweep 1 lists the message; sweep 2 resets the cursor
+	// to re-list the same message (overlap), now also id-resolving the sender.
+	e.newGChatSyncState(t, accountID, true, nil)
+	p := e.newProvider(t, map[string]struct{}{accountID: {}}, funcs)
+
+	// Sweep 1: matched via the People path.
+	state1, err := e.syncRepo.GetSyncStateBySource(e.ctx, repository.InteractionSourceGChat, &accountID)
+	require.NoError(t, err)
+	_, err = p.Sync(e.ctx, state1, nil)
+	require.NoError(t, err)
+
+	// Reset the space cursor (simulating a manual cursor reset / overlap) and flip
+	// dave to People-UNresolvable so sweep 2 matches him via the id path instead.
+	// Read-modify-write only the cursor so the other persisted keys (membership,
+	// positive cache) are preserved, then re-list the same message.
+	davePeopleResolvable = false
+	state1b, err := e.syncRepo.GetSyncStateBySource(e.ctx, repository.InteractionSourceGChat, &accountID)
+	require.NoError(t, err)
+	resetMeta := state1b.Metadata
+	if resetMeta == nil {
+		resetMeta = map[string]any{}
+	}
+	resetMeta["space_cursors"] = map[string]any{
+		spaceName: map[string]any{"create_cursor": chatRFC3339(base.Add(-time.Hour)), "edit_cursor": chatRFC3339(base.Add(-time.Hour))},
+	}
+	_, err = e.syncRepo.UpdateSyncStateMetadata(e.ctx, state1b.ID, resetMeta)
+	require.NoError(t, err)
+
+	// Sweep 2: the same message is re-listed and id-resolves the sender.
+	state2, err := e.syncRepo.GetSyncStateBySource(e.ctx, repository.InteractionSourceGChat, &accountID)
+	require.NoError(t, err)
+	_, err = p.Sync(e.ctx, state2, nil)
+	require.NoError(t, err)
+
+	// Exactly ONE row for the message+contact (upsert dedup; no duplicate).
+	rows, err := e.commsRepo.ListByContact(e.ctx, dave.ID)
+	require.NoError(t, err)
+	count := 0
+	for _, r := range rows {
+		if r.ExternalID == msgName {
+			count++
+		}
+	}
+	assert.Equal(t, 1, count, "re-processing the same message (People path then id path) upserts ONE row, not a duplicate")
 }
 
 // TestGChatProvider_HotSpaceNoStarvation proves the starvation fix: a

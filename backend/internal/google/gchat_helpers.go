@@ -254,8 +254,10 @@ type idMatch struct {
 //   - blockedByBudget: a fresh resolution hit the page budget (incomplete window
 //     — the caller must NOT advance the cursor; treat like a partial page).
 //   - blockedByCapOnDebt: an UNKNOWN candidate could not be resolved because the
-//     per-sweep resolve-cap was exhausted (resolution debt — the caller holds
-//     THIS space's cursor until a later sweep drains the debt).
+//     per-sweep resolve-cap was exhausted (resolution debt). This is purely
+//     informational now — it drives the spacesWarmupDeferred observability counter
+//     and NEVER holds the cursor (id-resolution is a best-effort background
+//     warm-up; the caller pages content and advances regardless).
 //
 // Candidate classification under the current fingerprint: POSITIVE (global
 // positive hit whose id ∈ members), NEGATIVE-VALID (per-space negative with a
@@ -272,6 +274,20 @@ type idMatch struct {
 // the account itself, even if a stray non-meSet CRM alias resolves to the
 // account's own id. classifyMessage ALSO guards its inbound id-path with meIDs as
 // a defense-in-depth check at the point of use.
+//
+// Cost bound (lossless): a fresh members.get can only ADD a NEW index entry for a
+// member id that is not ALREADY definitively covered by an id-keyed signal — i.e.
+// a member id that is neither a me-id nor already in the global positive cache.
+// Call that set U_id = members \ (meIDs ∪ positive-cached ids). When U_id is
+// empty, every fresh resolution is a guaranteed not-a-member, so the candidate
+// loop is skipped entirely. Otherwise the loop early-exits once every DISTINCT id
+// in U_id has been attached (a SET, not a count — two known addresses can resolve
+// to the SAME canonical id, so counting raw resolutions would terminate early and
+// drop a still-unmatched member id). U_id deliberately keys ONLY on me-id +
+// positive-cache, NEVER on People-resolution: a member id People resolves to a
+// non-known email can still be a valid CRM contact reachable via a DIFFERENT known
+// gchat/email address (dual-source identity, ListGChatIdentitiesForSync), so it
+// MUST remain a candidate.
 func buildKnownIDIndex(
 	ctx context.Context,
 	space *chat.Space,
@@ -305,6 +321,16 @@ func buildKnownIDIndex(
 	}
 	meIDsOut = meIDs // the (possibly extended) me-id set, for the classify guard
 
+	// coveredIDs is the set of member ids already definitively covered by an
+	// id-keyed signal: a me-id, or an id already in the global positive cache.
+	// These are the ONLY ids a fresh members.get can never newly attach, so
+	// U_id = members \ coveredIDs are the only ids worth resolving for. Seed it from
+	// meIDs and grow it with every positive-cache hit in the seed pass below.
+	coveredIDs := make(map[string]struct{}, len(meIDs))
+	for id := range meIDs {
+		coveredIDs[id] = struct{}{}
+	}
+
 	// Seed from the GLOBAL positive cache: every known email whose cached id is a
 	// member of this space matches with zero API calls. Track which emails are
 	// already matched so they are not re-resolved.
@@ -317,23 +343,61 @@ func buildKnownIDIndex(
 		if !ok {
 			continue
 		}
+		// The cached id is added to coveredIDs whether or not it is a member of THIS
+		// space; if it is a member, it is thereby excluded from U_id. A non-member
+		// cached id cannot affect U_id (U_id ranges over members), but tracking it
+		// here keeps coveredIDs the exact "id-keyed covered" set.
+		coveredIDs[id] = struct{}{}
 		if _, isMe := meIDs[id]; isMe {
 			continue // the account's own id never enters the reverse index
 		}
 		if _, isMember := memberSet[id]; isMember {
-			knownIDs[id] = idMatch{Email: email, Contacts: contacts}
+			knownIDs[id] = mergeIDMatch(knownIDs[id], email, contacts)
 			seeded[email] = struct{}{}
 		}
+	}
+
+	// U_id: the distinct member ids NOT yet covered by an id-keyed signal. These
+	// are the only ids a fresh resolution could newly attach to a known email.
+	uncovered := make(map[string]struct{}, len(members))
+	for _, id := range members {
+		if _, covered := coveredIDs[id]; !covered {
+			uncovered[id] = struct{}{}
+		}
+	}
+	// Lossless skip: no member id any known email could newly match → every fresh
+	// resolution is a guaranteed not-a-member. Skip the candidate loop entirely
+	// (the zero-API-call positive seed above still applied).
+	if len(uncovered) == 0 {
+		return knownIDs, meIDsOut, blockedByBudget, blockedByCapOnDebt, nil
 	}
 
 	// Classify the remaining candidates and order them so fingerprint-invalidated
 	// (was-NEGATIVE-now-UNKNOWN) candidates get priority access to the cap.
 	priority, normal := classifyIDCandidates(space.Name, fingerprint, knownMap, meSet, seeded, resolver)
 
+	// matchedUncovered tracks the DISTINCT ids in U_id actually attached. Once it
+	// equals U_id, no fresh resolution can add a new member-id entry, so the loop
+	// early-exits (every remaining candidate is a guaranteed not-a-member). A SET,
+	// not a count: dual-source identities can resolve two known addresses to one id.
+	matchedUncovered := make(map[string]struct{}, len(uncovered))
+
 	// Resolve priority candidates first, then never-seen ones (two ranges instead
 	// of a merged slice to avoid a per-call allocation in the hot per-space path).
 	for _, group := range [2][]string{priority, normal} {
 		for _, email := range group {
+			if len(matchedUncovered) == len(uncovered) {
+				// Every uncovered member id is attached → nothing left to resolve.
+				// Accepted limitation (matches origin/main's last-writer behavior, and
+				// strictly better than it): when the LAST uncovered id is shared by two
+				// DISTINCT contact records reachable via two known addresses, the first
+				// address to resolve completes the set and this exit returns before the
+				// second same-id alias resolves — so only the first contact is attached.
+				// Multi-contact-per-canonical-id fan-out is explicitly out of scope for
+				// this hotfix (a single contact carrying both a gchat and an email value
+				// produces ONE UUID, which mergeIDMatch dedups harmlessly).
+				return knownIDs, meIDsOut, blockedByBudget, blockedByCapOnDebt, nil
+			}
 			id, status, rerr := resolver.resolve(ctx, space.Name, fingerprint, email, pageBudget)
 			if rerr != nil {
 				return nil, nil, false, false, rerr
@@ -344,8 +408,11 @@ func buildKnownIDIndex(
 					break // the account's own id never enters the reverse index
 				}
 				if _, isMember := memberSet[id]; isMember {
-					knownIDs[id] = idMatch{Email: email, Contacts: knownMap[email]}
+					knownIDs[id] = mergeIDMatch(knownIDs[id], email, knownMap[email])
 					counters.memberIDsResolved++
+					if _, isUncovered := uncovered[id]; isUncovered {
+						matchedUncovered[id] = struct{}{}
+					}
 				}
 				// A resolved id that is NOT a member of this space is a co-member of
 				// some OTHER space (the positive is global) — not a match here, but the
@@ -362,6 +429,27 @@ func buildKnownIDIndex(
 		}
 	}
 	return knownIDs, meIDsOut, blockedByBudget, blockedByCapOnDebt, nil
+}
+
+// mergeIDMatch folds an additional (email, contacts) seed for one canonical id
+// into the existing index entry, UNIONing the contact ids so all contacts that
+// share a canonical id via the positive-cache / resolve paths are matched (rather
+// than the second writer silently overwriting the first). The Email is kept as
+// the first writer's (the peer identity is any of the equivalent known addresses;
+// they all map to the same person). The first writer is deterministic: the
+// positive-cache seed pass runs before the resolve loop, and candidates within the
+// loop are resolved in sorted order. A nil/zero prev starts a fresh entry.
+func mergeIDMatch(prev idMatch, email string, contacts []uuid.UUID) idMatch {
+	if prev.Email == "" && len(prev.Contacts) == 0 {
+		return idMatch{Email: email, Contacts: append([]uuid.UUID(nil), contacts...)}
+	}
+	out := idMatch{Email: prev.Email, Contacts: prev.Contacts}
+	for _, c := range contacts {
+		if !containsUUID(out.Contacts, c) {
+			out.Contacts = append(out.Contacts, c)
+		}
+	}
+	return out
 }
 
 // mergeMeID returns a new set that is src plus id (copy-on-write so the caller's
@@ -433,13 +521,6 @@ func (p *GChatSyncProvider) SetMeSetForTest(meSet map[string]struct{}) {
 // deterministically. Production code must NOT call this.
 func (p *GChatSyncProvider) SetMemberResolveCapForTest(cap int) {
 	p.memberResolveCapOverride = &cap
-}
-
-// MemberSetFingerprintForTest exposes the member-set fingerprint hash so a
-// cross-package integration test can pre-seed a fingerprint-stamped negative in
-// metadata. Production code must NOT call this.
-func MemberSetFingerprintForTest(members []string) string {
-	return memberSetFingerprint(members)
 }
 
 // FakeChatFetcherFuncs lets a cross-package test supply a fake chatFetcher by
@@ -521,12 +602,11 @@ func (r *CachedEmailResolverForTest) Resolve(ctx context.Context, userName strin
 type SweepCountersForTest struct {
 	Processed                     int
 	Matched                       int
-	SpacesSkippedNoKnownMember    int
 	SendersUnresolved             int
 	EditsApplied                  int
 	DeletesApplied                int
 	MemberIDsResolved             int
 	MemberResolveDeferredCap      int
 	MemberResolveNegativesWritten int
-	SpacesHeldByCapOnDebt         int
+	SpacesWarmupDeferred          int
 }
