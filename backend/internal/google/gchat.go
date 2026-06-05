@@ -26,11 +26,17 @@ const (
 	// 15 minutes), matching the Gmail/Calendar tick.
 	GChatDefaultInterval = 15 * time.Minute
 
-	// gchatMaxWindowsPerSync bounds one sweep's total list-page iterations
-	// (content + edit/delete passes) across all spaces, mirroring Gmail's
-	// catch-up bound. Once exhausted the sweep returns; un-advanced space
-	// cursors restart next tick (crash-safe).
-	gchatMaxWindowsPerSync = 24
+	// gchatMaxWindowsPerSync bounds the total list-page iterations a single
+	// sweep or scan may consume (membership + content + edit/delete passes
+	// across all spaces). It is the shared page budget for BOTH the steady-state
+	// sweep (Sync) AND the one-shot rematch scan (ScanIdentifier). Because
+	// ListMessages now requests up to 1000 messages per page, a realistically
+	// sized space pages in one or very few calls, so 100 gives generous headroom
+	// for accounts with many (or deep) spaces without one sweep/scan starving the
+	// rest. Once exhausted the sweep returns and un-advanced space cursors restart
+	// next tick (crash-safe); the rematch scan instead fails its River job and
+	// retries (idempotent via the upsert dedup).
+	gchatMaxWindowsPerSync = 100
 
 	// gchatMembershipCacheTTL bounds how long a cached space-member list (and a
 	// cached id→email resolution) stays valid before a forced refetch, even when
@@ -121,10 +127,18 @@ func (f *chatServiceFetcher) ListMembers(ctx context.Context, spaceName, pageTok
 }
 
 func (f *chatServiceFetcher) ListMessages(ctx context.Context, spaceName, filter string, showDeleted bool, pageToken string) ([]*chat.Message, string, error) {
+	// PageSize(1000) requests the documented Chat API maximum (default is 25,
+	// max is 1000, values >1000 are clamped by the API). This collapses a
+	// deep-history space's content pass from ~one page per 25 messages to one or
+	// very few pages, so its window completes within the shared sweep budget and
+	// its cursor advances. Both the content pass (showDeleted=false) and the
+	// edit/delete pass (showDeleted=true) route through this method, so both
+	// inherit the larger page size.
 	call := f.chat.Spaces.Messages.List(spaceName).
 		Filter(filter).
 		ShowDeleted(showDeleted).
-		OrderBy("create_time ASC")
+		OrderBy("create_time ASC").
+		PageSize(1000)
 	if pageToken != "" {
 		call = call.PageToken(pageToken)
 	}
