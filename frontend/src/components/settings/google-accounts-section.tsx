@@ -23,20 +23,28 @@ import {
 import { useTriggerSync } from '@/hooks/use-imports'
 import { startGoogleOAuthFlow, GoogleAccount } from '@/lib/oauth-api'
 
-// GCHAT_SPACES_READONLY_SCOPE gates the Google Chat sync badge. It mirrors the
-// backend enablement gate (service.gchatSpacesReadonlyScope /
-// chat.ChatSpacesReadonlyScope): an account only shows the Chat badge once it
-// has re-consented with this scope. Like the other Google badges, this is the
+// GCHAT_REQUIRED_SCOPES gates the Google Chat sync badge. It mirrors the backend
+// enablement gate (service.gchatRequiredScopes): the sweep needs all three Chat
+// scopes (spaces.list, messages.list, members.list), so the badge only shows
+// once the account has re-consented with ALL of them — a partial grant shows the
+// reconnect hint instead. Like the other Google badges, this is the
 // requested-scope proxy (the stored scope list), not a true-grant check.
-const GCHAT_SPACES_READONLY_SCOPE = 'https://www.googleapis.com/auth/chat.spaces.readonly'
+const GCHAT_REQUIRED_SCOPES = [
+  'https://www.googleapis.com/auth/chat.spaces.readonly',
+  'https://www.googleapis.com/auth/chat.messages.readonly',
+  'https://www.googleapis.com/auth/chat.memberships.readonly',
+]
 
 /**
- * accountHasChatScopes reports whether a connected Google account carries the
- * chat.spaces.readonly scope — the gate for the Google Chat sync badge.
- * Exported as a pure function so it can be unit-tested without rendering.
+ * accountHasChatScopes reports whether a connected Google account carries ALL
+ * THREE chat scopes — the gate for the Google Chat sync badge. A partial grant
+ * returns false (the reconnect hint is shown instead). Exported as a pure
+ * function so it can be unit-tested without rendering.
  */
 export function accountHasChatScopes(account: Pick<GoogleAccount, 'scopes'>): boolean {
-  return account.scopes?.includes(GCHAT_SPACES_READONLY_SCOPE) ?? false
+  const scopes = account.scopes
+  if (!scopes) return false
+  return GCHAT_REQUIRED_SCOPES.every(required => scopes.includes(required))
 }
 
 function formatDate(dateString: string): string {

@@ -19,15 +19,27 @@ const (
 	// dependency direction).
 	gchatSyncSource = "gchat"
 
-	// gchatSpacesReadonlyScope is the OAuth scope a connected Google account must
-	// carry before GChat sync is enabled for it. spaces.list — the provider's
-	// very first call — needs it; gating on this single scope is the minimal
-	// honest enablement check (the provider degrades cleanly per-call on any
-	// missing scope). Defined as a literal so the service layer does not import
-	// the chat API client just to name a scope string. MUST match
-	// chat.ChatSpacesReadonlyScope.
-	gchatSpacesReadonlyScope = "https://www.googleapis.com/auth/chat.spaces.readonly"
+	// The GChat sweep authenticates against three Chat scopes: spaces.list needs
+	// chat.spaces.readonly, messages.list needs chat.messages.readonly, and
+	// spaces.members.list needs chat.memberships.readonly under User auth. The
+	// enablement gate requires ALL THREE in the stored requested-scope list — a
+	// partial grant (e.g. spaces-only) would let the sweep start but fail mid-run
+	// on the first messages/members call, so we do not enable until the account
+	// has fully re-consented. Defined as literals so the service layer does not
+	// import the chat API client just to name scope strings; each MUST match the
+	// corresponding chat.Chat*ReadonlyScope constant.
+	gchatSpacesReadonlyScope      = "https://www.googleapis.com/auth/chat.spaces.readonly"
+	gchatMessagesReadonlyScope    = "https://www.googleapis.com/auth/chat.messages.readonly"
+	gchatMembershipsReadonlyScope = "https://www.googleapis.com/auth/chat.memberships.readonly"
 )
+
+// gchatRequiredScopes is the full set of Chat scopes an account must carry in
+// its stored requested-scope list before GChat sync is enabled for it.
+var gchatRequiredScopes = []string{
+	gchatSpacesReadonlyScope,
+	gchatMessagesReadonlyScope,
+	gchatMembershipsReadonlyScope,
+}
 
 // SetGChatAccountLister wires the Google account lister used by
 // ReconcileGChatSyncStates. Nil-default: when unset (tests / no-Google builds)
@@ -48,12 +60,14 @@ func (s *SyncService) SetGChatAccountLister(lister GoogleAccountLister) {
 //
 // The chat-scope gate is the one behavioral departure from
 // ReconcileEmailSyncStates (which creates a state regardless and only warns on a
-// missing scope). For GChat the scope is the ENABLEMENT gate: an account that
-// has not re-consented to the chat scopes gets NO state and NO sweep, which is
-// what keeps the feature inert until the user re-consents (spec §7). The stored
-// scope list is the requested-scope proxy for "re-consented since the chat
-// scopes were added"; the provider's clean 403-degrade on spaces.list backstops
-// a proxy-positive-but-not-truly-granted account.
+// missing scope). For GChat the full chat-scope set is the ENABLEMENT gate: an
+// account that has not re-consented to ALL THREE chat scopes gets NO state and
+// NO sweep, which is what keeps the feature inert until the user re-consents
+// (spec §7). Requiring the full set (not just spaces.list's scope) avoids
+// enabling an account whose sweep would start but fail mid-run on the first
+// messages/members call. The stored scope list is the requested-scope proxy for
+// "re-consented since the chat scopes were added"; the provider's clean
+// 403-degrade backstops a proxy-positive-but-not-truly-granted account.
 //
 // Idempotency contract (run on every boot AND on every OAuth connect):
 //   - create-if-absent ONLY. For each scoped account it probes
@@ -93,15 +107,15 @@ func (s *SyncService) ReconcileGChatSyncStates(ctx context.Context) error {
 			continue
 		}
 
-		// Scope gate FIRST: an account missing chat.spaces.readonly is not
-		// enabled (no state created). This is the enablement gate — unlike the
-		// email reconciliation, which creates regardless and only warns. The
+		// Scope gate FIRST: an account missing ANY of the three chat scopes is
+		// not enabled (no state created). This is the enablement gate — unlike
+		// the email reconciliation, which creates regardless and only warns. The
 		// account id is the user's own connected mailbox address (operational
 		// provenance, already in oauth_credential), not third-party PII.
-		if !accountHasChatScope(account) {
+		if !accountHasChatScopes(account) {
 			logger.Info().
 				Str("account", accountID).
-				Msg("gchat sync: account missing chat scopes; not enabling until reconnected")
+				Msg("gchat sync: account missing one or more chat scopes; not enabling until reconnected")
 			continue
 		}
 
@@ -143,13 +157,19 @@ func (s *SyncService) ReconcileGChatSyncStates(ctx context.Context) error {
 	return nil
 }
 
-// accountHasChatScope reports whether a connected Google account's stored scope
-// list contains chat.spaces.readonly — the enablement gate for GChat sync.
-func accountHasChatScope(account repository.OAuthCredentialStatus) bool {
+// accountHasChatScopes reports whether a connected Google account's stored scope
+// list contains ALL THREE chat scopes — the enablement gate for GChat sync. A
+// partial grant returns false: the sweep needs every scope (spaces.list,
+// messages.list, members.list), so enabling on a subset would only fail mid-run.
+func accountHasChatScopes(account repository.OAuthCredentialStatus) bool {
+	have := make(map[string]struct{}, len(account.Scopes))
 	for _, scope := range account.Scopes {
-		if scope == gchatSpacesReadonlyScope {
-			return true
+		have[scope] = struct{}{}
+	}
+	for _, required := range gchatRequiredScopes {
+		if _, ok := have[required]; !ok {
+			return false
 		}
 	}
-	return false
+	return true
 }

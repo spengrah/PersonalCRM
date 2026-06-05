@@ -6,6 +6,7 @@
 |----------|-------------|----------|------|
 | Google Contacts | `gcontacts` | `contact_driven` | `backend/internal/google/contacts.go` |
 | Google Calendar | `gcal` | `contact_driven` | `backend/internal/google/calendar.go` |
+| Google Chat | `gchat` | `contact_driven` | `backend/internal/google/gchat.go` |
 | Todoist | `todoist` | `fetch_all` | `backend/internal/todoist/provider.go` |
 | Messages | `messages` | `push` | `backend/internal/messages/provider.go` |
 | iCloud Contacts | `icloud_contacts` | `push` | `backend/internal/icloudcontacts/provider.go` |
@@ -16,6 +17,17 @@ The poll-strategy providers register themselves in
 **push** providers register through one helper,
 `push.RegisterPushProviders(providerRegistry)`
 (`backend/internal/push/push.go`), which main.go calls once.
+
+**Google Chat is registered but enablement-gated.** `gchat` registers
+unconditionally whenever Google OAuth is configured (it is store-only +
+event-free, so unlike Gmail it does NOT gate on the event bus), but it stays
+inert until `SyncService.ReconcileGChatSyncStates`
+(`backend/internal/service/gchat_reconcile.go`) creates an enabled
+`external_sync_state(source='gchat')` row. That reconciliation only enables an
+account whose stored requested-scope list contains ALL THREE chat scopes
+(`chat.spaces.readonly`, `chat.messages.readonly`, `chat.memberships.readonly`),
+so the feature does no work until the operator re-consents — see
+`.ai/spec/2026-06-04-gchat-integration-design.md` §7.
 
 **Not every push source has a provider stub.** The `anarlog_humans` and
 `anarlog_sessions` push sources are accepted by the ingest pipeline but

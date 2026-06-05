@@ -31,7 +31,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const gchatSpacesReadonlyScopeForTest = "https://www.googleapis.com/auth/chat.spaces.readonly"
+// The full chat-scope set the enablement gate requires (all three). A partial
+// grant (any subset) must NOT enable the account.
+const (
+	gchatSpacesReadonlyScopeForTest      = "https://www.googleapis.com/auth/chat.spaces.readonly"
+	gchatMessagesReadonlyScopeForTest    = "https://www.googleapis.com/auth/chat.messages.readonly"
+	gchatMembershipsReadonlyScopeForTest = "https://www.googleapis.com/auth/chat.memberships.readonly"
+)
+
+// allChatScopesForTest returns the full chat-scope set a credential needs to be
+// enabled by ReconcileGChatSyncStates, optionally prefixed with extra scopes.
+func allChatScopesForTest(extra ...string) []string {
+	return append(extra,
+		gchatSpacesReadonlyScopeForTest,
+		gchatMessagesReadonlyScopeForTest,
+		gchatMembershipsReadonlyScopeForTest,
+	)
+}
+
+// chatScopedCred builds a credential carrying the full chat-scope set (the
+// enablement-positive case).
+func chatScopedCred(accountID string) repository.OAuthCredentialStatus {
+	return credWithScope(accountID, allChatScopesForTest()...)
+}
 
 func (e *reconcileEnv) getGChatState(t *testing.T, accountID string) *repository.SyncState {
 	t.Helper()
@@ -68,8 +90,8 @@ func TestReconcileGChat_CreatesStatePerScopedCredential(t *testing.T) {
 	}
 
 	lister := &reconcileStubLister{accounts: []repository.OAuthCredentialStatus{
-		credWithScope(scoped1, gchatSpacesReadonlyScopeForTest),
-		credWithScope(scoped2, gchatSpacesReadonlyScopeForTest),
+		chatScopedCred(scoped1),
+		chatScopedCred(scoped2),
 		// Unscoped: connected but never re-consented to the chat scopes.
 		credWithScope(unscoped, "openid", "email", "profile"),
 	}}
@@ -119,6 +141,40 @@ func TestReconcileGChat_ScopeGate_NoStateForUnscopedAccount(t *testing.T) {
 	require.Equal(t, 0, e.countGChatStatesForAccount(t, acct))
 }
 
+// --- scope gate requires the FULL chat-scope set (partial grants rejected) ---
+
+func TestReconcileGChat_ScopeGate_PartialChatScopesNotEnabled(t *testing.T) {
+	e := newReconcileEnv(t)
+
+	// Each subset is missing at least one required scope, so none must enable.
+	partials := map[string][]string{
+		"spaces-only":      {gchatSpacesReadonlyScopeForTest},
+		"messages-only":    {gchatMessagesReadonlyScopeForTest},
+		"memberships-only": {gchatMembershipsReadonlyScopeForTest},
+		"spaces+messages":  {gchatSpacesReadonlyScopeForTest, gchatMessagesReadonlyScopeForTest},
+		"missing-spaces":   {gchatMessagesReadonlyScopeForTest, gchatMembershipsReadonlyScopeForTest},
+	}
+
+	for name, scopes := range partials {
+		t.Run(name, func(t *testing.T) {
+			acct := uniqueAccount("gchat-partial-" + name)
+			e.cleanupAccount(t, acct)
+
+			lister := &reconcileStubLister{accounts: []repository.OAuthCredentialStatus{
+				credWithScope(acct, append([]string{"openid", "email"}, scopes...)...),
+			}}
+			e.service.SetGChatAccountLister(lister)
+
+			require.NoError(t, e.service.ReconcileGChatSyncStates(e.ctx))
+
+			acctID := acct
+			_, err := e.syncRepo.GetSyncStateBySource(e.ctx, "gchat", &acctID)
+			require.ErrorIs(t, err, db.ErrNotFound, "partial chat-scope grant must NOT enable gchat sync")
+			require.Equal(t, 0, e.countGChatStatesForAccount(t, acct))
+		})
+	}
+}
+
 // --- idempotent re-run: no duplicates, no cursor/metadata reset -------------
 
 func TestReconcileGChat_IdempotentRerun_NoDuplicatesNoReset(t *testing.T) {
@@ -127,7 +183,7 @@ func TestReconcileGChat_IdempotentRerun_NoDuplicatesNoReset(t *testing.T) {
 	e.cleanupAccount(t, acct)
 
 	lister := &reconcileStubLister{accounts: []repository.OAuthCredentialStatus{
-		credWithScope(acct, gchatSpacesReadonlyScopeForTest),
+		chatScopedCred(acct),
 	}}
 	e.service.SetGChatAccountLister(lister)
 
@@ -169,7 +225,7 @@ func TestReconcileGChat_RespectsUserDisabled(t *testing.T) {
 	e.cleanupAccount(t, acct)
 
 	lister := &reconcileStubLister{accounts: []repository.OAuthCredentialStatus{
-		credWithScope(acct, gchatSpacesReadonlyScopeForTest),
+		chatScopedCred(acct),
 	}}
 	e.service.SetGChatAccountLister(lister)
 
@@ -203,15 +259,24 @@ func TestReconcileGChat_ReConsentTransition_GateOpens(t *testing.T) {
 	require.NoError(t, e.service.ReconcileGChatSyncStates(e.ctx))
 	require.Equal(t, 0, e.countGChatStatesForAccount(t, acct), "no state before re-consent")
 
-	// Simulate re-consent: the same account now carries the chat scope.
-	scopedLister := &reconcileStubLister{accounts: []repository.OAuthCredentialStatus{
+	// A PARTIAL grant (only spaces.readonly, missing messages/memberships) must
+	// NOT open the gate — enabling on a subset would only fail mid-sweep.
+	partialLister := &reconcileStubLister{accounts: []repository.OAuthCredentialStatus{
 		credWithScope(acct, "openid", "email", "profile", gchatSpacesReadonlyScopeForTest),
+	}}
+	e.service.SetGChatAccountLister(partialLister)
+	require.NoError(t, e.service.ReconcileGChatSyncStates(e.ctx))
+	require.Equal(t, 0, e.countGChatStatesForAccount(t, acct), "partial chat-scope grant must not enable")
+
+	// Simulate full re-consent: the same account now carries ALL THREE chat scopes.
+	scopedLister := &reconcileStubLister{accounts: []repository.OAuthCredentialStatus{
+		credWithScope(acct, allChatScopesForTest("openid", "email", "profile")...),
 	}}
 	e.service.SetGChatAccountLister(scopedLister)
 	require.NoError(t, e.service.ReconcileGChatSyncStates(e.ctx))
 
 	st := e.getGChatState(t, acct)
-	require.True(t, st.Enabled, "state created + enabled after re-consent")
+	require.True(t, st.Enabled, "state created + enabled after full re-consent")
 	require.Equal(t, 1, e.countGChatStatesForAccount(t, acct))
 }
 
@@ -223,10 +288,10 @@ func TestReconcileGChat_PerAccountShape_NoNullAccountRow(t *testing.T) {
 	e.cleanupAccount(t, acct)
 
 	lister := &reconcileStubLister{accounts: []repository.OAuthCredentialStatus{
-		credWithScope(acct, gchatSpacesReadonlyScopeForTest),
-		// An empty-account-id credential must be skipped, not turned into a
-		// (gchat, NULL) row the provider rejects.
-		credWithScope("", gchatSpacesReadonlyScopeForTest),
+		chatScopedCred(acct),
+		// An empty-account-id credential (even fully chat-scoped) must be
+		// skipped, not turned into a (gchat, NULL) row the provider rejects.
+		chatScopedCred(""),
 	}}
 	e.service.SetGChatAccountLister(lister)
 
@@ -271,7 +336,7 @@ func TestReconcileGChat_ConnectPath_IdempotentOnReconnect(t *testing.T) {
 	e.cleanupAccount(t, unscoped)
 
 	lister := &reconcileStubLister{accounts: []repository.OAuthCredentialStatus{
-		credWithScope(scoped, gchatSpacesReadonlyScopeForTest),
+		chatScopedCred(scoped),
 		credWithScope(unscoped, "openid", "email", "profile"),
 	}}
 	e.service.SetGChatAccountLister(lister)
@@ -301,7 +366,7 @@ func TestReconcileGChat_StatusSurfacesGChatState(t *testing.T) {
 	e.cleanupAccount(t, acct)
 
 	lister := &reconcileStubLister{accounts: []repository.OAuthCredentialStatus{
-		credWithScope(acct, gchatSpacesReadonlyScopeForTest),
+		chatScopedCred(acct),
 	}}
 	e.service.SetGChatAccountLister(lister)
 	require.NoError(t, e.service.ReconcileGChatSyncStates(e.ctx))

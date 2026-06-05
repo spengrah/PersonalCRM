@@ -129,7 +129,7 @@ func TestGChatGoLive_RegisteredProvider_SchedulerSweep_ProducesInteractionsAndCa
 	// reconciliation would: chat-scope-gated, enabled, contact_driven,
 	// backfill_since, NO cursor (the provider materializes space_cursors).
 	stateLister := &reconcileStubLister{accounts: []repository.OAuthCredentialStatus{
-		credWithScope(account, gchatSpacesReadonlyScopeForTest),
+		chatScopedCred(account),
 	}}
 	reconcileSvc := service.NewSyncService(syncRepo, contactRepo, registry)
 	reconcileSvc.SetGChatAccountLister(stateLister)
