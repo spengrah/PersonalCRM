@@ -30,16 +30,22 @@ func paginateSpaces(ctx context.Context, fetcher chatFetcher) ([]*chat.Space, er
 }
 
 // paginateMembers drains all pages of a space's JOINED human members, returning
-// their "users/{id}" resource names and the number of pages fetched.
-func paginateMembers(ctx context.Context, fetcher chatFetcher, spaceName string) ([]string, int, error) {
-	var names []string
+// their "users/{id}" resource names and the number of pages fetched. budget is
+// the shared remaining-page allowance, decremented per list page; if it runs out
+// before the membership is fully paged, incomplete is true and the (partial)
+// names MUST NOT be used or cached — a partial member list would produce a wrong
+// fan-out. The caller skips the space and retries it next sweep.
+func paginateMembers(ctx context.Context, fetcher chatFetcher, spaceName string, budget *int) (names []string, pages int, incomplete bool, err error) {
 	pageToken := ""
-	pages := 0
 	for {
-		page, next, err := fetcher.ListMembers(ctx, spaceName, pageToken)
-		if err != nil {
-			return nil, pages, err
+		if *budget <= 0 {
+			return names, pages, true, nil
 		}
+		page, next, listErr := fetcher.ListMembers(ctx, spaceName, pageToken)
+		if listErr != nil {
+			return nil, pages, false, listErr
+		}
+		*budget--
 		pages++
 		for _, m := range page {
 			if m == nil || m.Member == nil {
@@ -56,7 +62,7 @@ func paginateMembers(ctx context.Context, fetcher chatFetcher, spaceName string)
 			}
 		}
 		if next == "" {
-			return names, pages, nil
+			return names, pages, false, nil
 		}
 		pageToken = next
 	}

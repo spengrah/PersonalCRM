@@ -347,13 +347,17 @@ func (p *GChatSyncProvider) Sync(
 		if budget <= 0 {
 			break
 		}
-		members, fetchedPages, err := p.resolveMembership(ctx, fetcher, space, gcm)
-		budget -= fetchedPages
+		members, incomplete, err := p.resolveMembership(ctx, fetcher, space, gcm, &budget)
 		if err != nil {
 			// Transient membership error: abort THIS space (cursor unadvanced),
 			// continue with already-proven spaces. Don't fail the whole sweep.
 			logger.Warn().Err(err).Str("source", GChatSourceName).Msg("gchat: membership resolution failed; skipping space")
 			continue
+		}
+		if incomplete {
+			// Budget ran out before the membership was fully paged → skip this
+			// space (don't act on a partial member list); it retries next sweep.
+			break
 		}
 		knownMembers, err := resolveKnownMembers(ctx, members, resolver, knownMap, meSet)
 		if err != nil {
@@ -497,19 +501,26 @@ func (p *GChatSyncProvider) ScanIdentifier(
 
 	resolver := newCachedEmailResolver(fetcher, nil)
 	counters := &sweepCounters{}
-	// The rematch scan is a one-shot historical backfill, not a steady-state
-	// tick, so it gets its OWN full page budget (the steady-state sweep budget
-	// does not apply). The cursor is not persisted here — re-running is
-	// idempotent via the upsert dedup — so partial-window proven-ness is moot.
+	// The rematch scan is a one-shot historical backfill. It gets its OWN full
+	// page budget. If the budget is exhausted before every space's window is
+	// fully paged, the scan is INCOMPLETE — we fail the job (return an error) so
+	// River retries the WHOLE scan, which is idempotent via the upsert dedup.
+	// Silently returning success on a partial scan would strand the rest of the
+	// address's history forever (the rematch is a one-shot trigger, not a cursor-
+	// advancing sweep that would pick up the remainder next tick).
 	budget := gchatMaxWindowsPerSync
 	for _, space := range spaces {
 		if budget <= 0 {
-			break
+			return counters.matched, fmt.Errorf("rematch scan budget exhausted before completing: retry to finish backfill")
 		}
-		members, memberPages, mErr := paginateMembers(ctx, fetcher, space.Name)
-		budget -= memberPages
+		members, _, memberIncomplete, mErr := paginateMembers(ctx, fetcher, space.Name, &budget)
 		if mErr != nil {
 			return counters.matched, fmt.Errorf("list members: %w", mErr)
+		}
+		if memberIncomplete {
+			// Budget ran out mid-membership → the scan is incomplete; fail so
+			// River retries the whole (idempotent) backfill.
+			return counters.matched, fmt.Errorf("rematch scan budget exhausted paging membership: retry to finish backfill")
 		}
 		// Co-member resolution uses the FULL knownMap (so a space qualifies when
 		// the target address is one of its members); row-writing uses scanMap.
@@ -527,8 +538,14 @@ func (p *GChatSyncProvider) ScanIdentifier(
 			// arrive in a space the address belongs to.
 			continue
 		}
-		if _, _, cErr := p.consumeContentWindow(ctx, fetcher, space, afterCursor, scanMembers, scanMap, meSet, resolver, accountID, counters, &budget); cErr != nil {
+		_, proven, cErr := p.consumeContentWindow(ctx, fetcher, space, afterCursor, scanMembers, scanMap, meSet, resolver, accountID, counters, &budget)
+		if cErr != nil {
 			return counters.matched, fmt.Errorf("scan space: %w", cErr)
+		}
+		if !proven {
+			// Budget ran out mid-window → the scan is incomplete; fail so River
+			// retries the whole (idempotent) backfill rather than dropping history.
+			return counters.matched, fmt.Errorf("rematch scan budget exhausted mid-window: retry to finish backfill")
 		}
 	}
 	return counters.matched, nil

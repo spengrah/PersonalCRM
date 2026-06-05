@@ -471,6 +471,45 @@ func TestConsumeContentWindow_FullyPagedIsProven(t *testing.T) {
 	assert.Equal(t, msgTime, newCursor, "cursor advances to the max createTime seen")
 }
 
+// TestPaginateMembers_BudgetIncomplete proves membership pagination stops and
+// signals incomplete=true when the shared budget runs out before the member
+// list is fully paged (so the caller does not act on a partial list).
+func TestPaginateMembers_BudgetIncomplete(t *testing.T) {
+	ctx := context.Background()
+	fetcher := &fakeChatFetcher{funcs: FakeChatFetcherFuncs{
+		ListMembers: func(_ context.Context, _, _ string) ([]*chat.Membership, string, error) {
+			// Always another page → never completes on its own.
+			return []*chat.Membership{membershipForTest("users/x")}, "more", nil
+		},
+	}}
+	budget := 2
+	names, pages, incomplete, err := paginateMembers(ctx, fetcher, "spaces/M", &budget)
+	require.NoError(t, err)
+	assert.True(t, incomplete, "budget exhausted before full paging → incomplete")
+	assert.Equal(t, 2, pages, "exactly the budgeted pages were fetched")
+	assert.Equal(t, 0, budget)
+	assert.Len(t, names, 2, "collected the members from the budgeted pages")
+
+	// A membership that completes within budget is NOT incomplete.
+	fetcher2 := &fakeChatFetcher{funcs: FakeChatFetcherFuncs{
+		ListMembers: func(_ context.Context, _, token string) ([]*chat.Membership, string, error) {
+			if token == "" {
+				return []*chat.Membership{membershipForTest("users/a"), membershipForTest("users/b")}, "", nil
+			}
+			return nil, "", nil
+		},
+	}}
+	budget2 := 10
+	names2, _, incomplete2, err := paginateMembers(ctx, fetcher2, "spaces/M2", &budget2)
+	require.NoError(t, err)
+	assert.False(t, incomplete2)
+	assert.ElementsMatch(t, []string{"users/a", "users/b"}, names2)
+}
+
+func membershipForTest(userName string) *chat.Membership {
+	return &chat.Membership{State: "JOINED", Member: &chat.User{Name: userName, Type: "HUMAN"}}
+}
+
 func TestEditLookbackFloor(t *testing.T) {
 	backfill := "2026-01-01T00:00:00Z"
 

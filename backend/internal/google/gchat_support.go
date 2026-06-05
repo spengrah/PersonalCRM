@@ -219,28 +219,38 @@ func reapStaleCursors(g *gchatMetadata, spaces []*chat.Space, now time.Time) {
 // cached list unless the activity-based (lastActiveTime advanced) or age-based
 // (fetched_at older than TTL) trigger fires. Returns the number of ListMembers
 // pages fetched (0 on a cache hit) for the sweep window budget.
+// resolveMembership returns the cached members on a cache hit (incomplete=false,
+// no budget consumed). On a miss/refresh it pages membership against the shared
+// budget; if the budget runs out before the membership is fully paged it returns
+// incomplete=true and does NOT cache the partial list — the caller skips the
+// space and retries it next sweep (a partial member list would break the
+// fan-out).
 func (p *GChatSyncProvider) resolveMembership(
 	ctx context.Context,
 	fetcher chatFetcher,
 	space *chat.Space,
 	g *gchatMetadata,
-) (members []string, pages int, err error) {
+	budget *int,
+) (members []string, incomplete bool, err error) {
 	now := accelerated.GetCurrentTime()
 	cached, ok := g.SpaceMembers[space.Name]
 	if ok && !membershipNeedsRefresh(cached, space.LastActiveTime, now) {
-		return cached.Members, 0, nil
+		return cached.Members, false, nil
 	}
 
-	fetched, pages, err := paginateMembers(ctx, fetcher, space.Name)
+	fetched, _, incomplete, err := paginateMembers(ctx, fetcher, space.Name, budget)
 	if err != nil {
-		return nil, pages, err
+		return nil, false, err
+	}
+	if incomplete {
+		return nil, true, nil
 	}
 	g.SpaceMembers[space.Name] = spaceMembers{
 		Version:   space.LastActiveTime,
 		FetchedAt: now.Format(chatTimeLayout),
 		Members:   fetched,
 	}
-	return fetched, pages, nil
+	return fetched, false, nil
 }
 
 // membershipNeedsRefresh reports whether a cached membership must be refetched:
