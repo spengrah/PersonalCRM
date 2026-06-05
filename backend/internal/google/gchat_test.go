@@ -265,6 +265,178 @@ func TestCachedEmailResolver_PositiveNegativeCachingAndTTL(t *testing.T) {
 	assert.Equal(t, 1, calls2, "expired cache entry refetched")
 }
 
+// fakeIDFetcher builds a fakeChatFetcher whose ResolveMemberID returns a fixed
+// (space,email)→id mapping and counts calls. A missing mapping entry returns
+// notMember. A space named in errSpaces returns a transient error.
+func fakeIDFetcher(mapping map[string]string, callCount *int) *fakeChatFetcher {
+	return &fakeChatFetcher{funcs: FakeChatFetcherFuncs{
+		ResolveMemberID: func(_ context.Context, spaceName, email string) (string, bool, error) {
+			if callCount != nil {
+				*callCount++
+			}
+			if id, ok := mapping[spaceName+"|"+email]; ok {
+				return id, false, nil
+			}
+			return "", true, nil
+		},
+	}}
+}
+
+func TestMemberIDResolver_GlobalPositiveReusedAcrossSpaces(t *testing.T) {
+	ctx := context.Background()
+	calls := 0
+	fetcher := fakeIDFetcher(map[string]string{
+		"spaces/A|person@example.test": "users/777",
+		"spaces/B|person@example.test": "users/777",
+	}, &calls)
+	cap := 10
+	r := newMemberIDResolver(fetcher, nil, nil, &cap)
+	fpA := memberSetFingerprint([]string{"users/777"})
+	fpB := memberSetFingerprint([]string{"users/777", "users/me"})
+
+	// First resolve in space A hits the fetcher.
+	id, status, err := r.resolve(ctx, "spaces/A", fpA, "person@example.test", nil)
+	require.NoError(t, err)
+	assert.Equal(t, resolvedKnownID, status)
+	assert.Equal(t, "users/777", id)
+	assert.Equal(t, 1, calls)
+
+	// Second resolve in space B reuses the GLOBAL positive — ZERO additional calls.
+	id, status, err = r.resolve(ctx, "spaces/B", fpB, "person@example.test", nil)
+	require.NoError(t, err)
+	assert.Equal(t, resolvedKnownID, status)
+	assert.Equal(t, "users/777", id)
+	assert.Equal(t, 1, calls, "the canonical id is space-independent; space B reuses the global positive")
+	assert.Equal(t, 9, cap, "only one fresh resolve consumed the cap")
+}
+
+func TestMemberIDResolver_NegativeIsPerSpace(t *testing.T) {
+	ctx := context.Background()
+	calls := 0
+	// person is a member of B only; absent from A.
+	fetcher := fakeIDFetcher(map[string]string{
+		"spaces/B|person@example.test": "users/888",
+	}, &calls)
+	cap := 10
+	r := newMemberIDResolver(fetcher, nil, nil, &cap)
+	fpA := memberSetFingerprint([]string{"users/me"})
+	fpB := memberSetFingerprint([]string{"users/888", "users/me"})
+
+	// A: not a member → negative for A.
+	_, status, err := r.resolve(ctx, "spaces/A", fpA, "person@example.test", nil)
+	require.NoError(t, err)
+	assert.Equal(t, notMember, status)
+	assert.Equal(t, 1, calls)
+
+	// The negative for A is re-served (within fingerprint) without a fetch.
+	_, status, err = r.resolve(ctx, "spaces/A", fpA, "person@example.test", nil)
+	require.NoError(t, err)
+	assert.Equal(t, notMember, status)
+	assert.Equal(t, 1, calls, "per-space negative re-served from cache")
+
+	// B: same email is STILL attempted (per-space negative does not block B) and
+	// resolves.
+	id, status, err := r.resolve(ctx, "spaces/B", fpB, "person@example.test", nil)
+	require.NoError(t, err)
+	assert.Equal(t, resolvedKnownID, status)
+	assert.Equal(t, "users/888", id)
+	assert.Equal(t, 2, calls, "a negative in A does not suppress a fresh resolve in B")
+}
+
+func TestMemberIDResolver_NegativeInvalidatedByFingerprintChange(t *testing.T) {
+	ctx := context.Background()
+	calls := 0
+	// Initially absent from A; after the "join" the mapping yields an id.
+	mapping := map[string]string{}
+	fetcher := &fakeChatFetcher{funcs: FakeChatFetcherFuncs{
+		ResolveMemberID: func(_ context.Context, spaceName, email string) (string, bool, error) {
+			calls++
+			if id, ok := mapping[spaceName+"|"+email]; ok {
+				return id, false, nil
+			}
+			return "", true, nil
+		},
+	}}
+	cap := 10
+	r := newMemberIDResolver(fetcher, nil, nil, &cap)
+	fpBefore := memberSetFingerprint([]string{"users/me"})
+	fpAfter := memberSetFingerprint([]string{"users/me", "users/999"})
+
+	// Sweep 1: absent → negative stamped with fpBefore.
+	_, status, err := r.resolve(ctx, "spaces/A", fpBefore, "joiner@example.test", nil)
+	require.NoError(t, err)
+	assert.Equal(t, notMember, status)
+	assert.Equal(t, 1, calls)
+
+	// Sweep 2 (new resolver instance to drop the in-sweep memo): the contact has
+	// joined → mapping yields the id AND the fingerprint flipped. The stale
+	// negative (stamped fpBefore) is NOT honored under fpAfter → re-resolved.
+	mapping["spaces/A|joiner@example.test"] = "users/999"
+	r2 := newMemberIDResolver(fetcher, r.snapshotPositives(), r.snapshotNegatives(), &cap)
+	id, status, err := r2.resolve(ctx, "spaces/A", fpAfter, "joiner@example.test", nil)
+	require.NoError(t, err)
+	assert.Equal(t, resolvedKnownID, status, "fingerprint flip invalidates the stale negative")
+	assert.Equal(t, "users/999", id)
+	assert.Equal(t, 2, calls)
+}
+
+func TestMemberIDResolver_ResolveCapDefers(t *testing.T) {
+	ctx := context.Background()
+	calls := 0
+	fetcher := fakeIDFetcher(map[string]string{
+		"spaces/A|a@example.test": "users/1",
+		"spaces/A|b@example.test": "users/2",
+	}, &calls)
+	cap := 1
+	r := newMemberIDResolver(fetcher, nil, nil, &cap)
+	fp := memberSetFingerprint([]string{"users/1", "users/2"})
+
+	// First fresh resolve consumes the cap.
+	_, status, err := r.resolve(ctx, "spaces/A", fp, "a@example.test", nil)
+	require.NoError(t, err)
+	assert.Equal(t, resolvedKnownID, status)
+	assert.Equal(t, 1, calls)
+	assert.Equal(t, 0, cap)
+
+	// Second fresh resolve is deferred (cap exhausted) — NO fetcher call.
+	_, status, err = r.resolve(ctx, "spaces/A", fp, "b@example.test", nil)
+	require.NoError(t, err)
+	assert.Equal(t, deferredCapHit, status)
+	assert.Equal(t, 1, calls, "the cap-exhausted candidate is not fetched this sweep")
+}
+
+func TestMemberIDResolver_BudgetExhaustionDefers(t *testing.T) {
+	ctx := context.Background()
+	calls := 0
+	fetcher := fakeIDFetcher(map[string]string{"spaces/A|a@example.test": "users/1"}, &calls)
+	cap := 10
+	r := newMemberIDResolver(fetcher, nil, nil, &cap)
+	fp := memberSetFingerprint([]string{"users/1"})
+
+	pageBudget := 0
+	_, status, err := r.resolve(ctx, "spaces/A", fp, "a@example.test", &pageBudget)
+	require.NoError(t, err)
+	assert.Equal(t, deferredBudgetHit, status)
+	assert.Equal(t, 0, calls, "a zero page budget defers without a fetch")
+	assert.Equal(t, 10, cap, "the resolve-cap is not consumed when the budget defers")
+}
+
+func TestMemberIDResolver_PropagatesFetcherError(t *testing.T) {
+	ctx := context.Background()
+	wantErr := errors.New("members.get transient")
+	fetcher := &fakeChatFetcher{funcs: FakeChatFetcherFuncs{
+		ResolveMemberID: func(context.Context, string, string) (string, bool, error) {
+			return "", false, wantErr
+		},
+	}}
+	cap := 10
+	r := newMemberIDResolver(fetcher, nil, nil, &cap)
+	fp := memberSetFingerprint([]string{"users/1"})
+
+	_, _, err := r.resolve(ctx, "spaces/A", fp, "a@example.test", nil)
+	require.ErrorIs(t, err, wantErr, "a transient members.get error must propagate, not become a negative")
+}
+
 func TestMembershipNeedsRefresh(t *testing.T) {
 	now := accelerated.GetCurrentTime()
 	fresh := now.Add(-time.Hour).Format(chatTimeLayout)

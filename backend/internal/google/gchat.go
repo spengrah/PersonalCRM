@@ -409,6 +409,11 @@ func (p *GChatSyncProvider) Sync(
 	reapStaleCursors(gcm, spaces, accelerated.GetCurrentTime())
 
 	resolver := newCachedEmailResolver(fetcher, gcm.UserEmailCache)
+	// The reverse (email→id) resolver shares the global positive cache + per-space
+	// negatives across the whole sweep, capped at gchatMaxMemberResolvesPerSync
+	// fresh members.get calls so a cold start amortizes over many ticks.
+	resolveCap := gchatMaxMemberResolvesPerSync
+	idResolver := newMemberIDResolver(fetcher, gcm.EmailUserIDs, gcm.SpaceMemberNegatives, &resolveCap)
 	counters := &sweepCounters{}
 	backfillFloor := gchatBackfillFloor(state.Metadata)
 	// Shared list-page budget for the WHOLE sweep (membership + content + edit
@@ -482,7 +487,7 @@ func (p *GChatSyncProvider) Sync(
 		gcm.setCursor(space.Name, cur)
 	}
 
-	if err := p.persistMetadata(ctx, state, gcm, resolver); err != nil {
+	if err := p.persistMetadata(ctx, state, gcm, resolver, idResolver); err != nil {
 		return nil, fmt.Errorf("persist gchat metadata: %w", err)
 	}
 

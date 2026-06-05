@@ -498,18 +498,197 @@ func cachedEmailExpired(entry cachedEmail) bool {
 	return accelerated.GetCurrentTime().Sub(resolvedAt) > gchatMembershipCacheTTL
 }
 
+// --- reverse resolver (email → canonical id) -------------------------
+
+// resolveStatus is the outcome of one reverse (email→id) resolution attempt.
+type resolveStatus int
+
+const (
+	// resolvedKnownID — the email resolved to a canonical "users/{id}" (the
+	// returned userName is non-empty).
+	resolvedKnownID resolveStatus = iota
+	// notMember — the email is confirmed NOT a member of the space (a cached
+	// negative was honored or freshly written).
+	notMember
+	// deferredCapHit — the per-sweep resolve-cap is exhausted; this UNKNOWN
+	// candidate was NOT resolved this sweep and remains resolution debt.
+	deferredCapHit
+	// deferredBudgetHit — the shared page budget is exhausted; the resolution
+	// could not be issued (treated like an incomplete window).
+	deferredBudgetHit
+)
+
+// memberIDResolver resolves normalizedEmail → canonical "users/{id}" within a
+// space (the reverse of cachedEmailResolver), backed by the GLOBAL positive
+// cache (email→id, reused across all spaces) and the per-(space,email) negative
+// cache (stamped with the member-set fingerprint). It holds an in-sweep memo,
+// a dirty flag, and a pointer to the shared remaining-resolve-cap counter.
+type memberIDResolver struct {
+	fetcher  chatFetcher
+	posCache map[string]cachedUserID              // global: email → cachedUserID
+	negCache map[string]map[string]memberNegative // per-space: space → email → negative
+	memo     map[string]string                    // in-sweep: email → userName ("" = negative)
+	cap      *int                                 // shared remaining resolve-cap (nil = unbounded, used by the scan)
+	dirty    bool
+}
+
+// newMemberIDResolver builds a reverse resolver over the persisted caches. A nil
+// posCache/negCache is seeded empty. capRemaining is the shared per-sweep
+// resolve-cap pointer; pass nil to leave fresh resolutions uncapped (the scan,
+// which resolves a single address per space and is bounded by the page budget).
+func newMemberIDResolver(
+	fetcher chatFetcher,
+	posCache map[string]cachedUserID,
+	negCache map[string]map[string]memberNegative,
+	capRemaining *int,
+) *memberIDResolver {
+	if posCache == nil {
+		posCache = map[string]cachedUserID{}
+	}
+	if negCache == nil {
+		negCache = map[string]map[string]memberNegative{}
+	}
+	return &memberIDResolver{
+		fetcher:  fetcher,
+		posCache: posCache,
+		negCache: negCache,
+		memo:     map[string]string{},
+		cap:      capRemaining,
+	}
+}
+
+// resolve resolves one normalizedEmail to its canonical id within spaceName,
+// honoring/stamping caches per §3.2.1. fingerprint is the space's CURRENT
+// member-set fingerprint (used both to honor a negative — only when its stamped
+// fingerprint matches — and to stamp a freshly-written negative). pageBudget is
+// the shared remaining-page allowance; a fresh members.get decrements BOTH the
+// resolve-cap and pageBudget (it is a real API call).
+//
+// Precedence: positive-cache hit → negative-cache hit (fingerprint-valid) →
+// resolve-cap exhausted → page-budget exhausted → fresh fetch.
+func (r *memberIDResolver) resolve(
+	ctx context.Context,
+	spaceName, fingerprint, normalizedEmail string,
+	pageBudget *int,
+) (userName string, status resolveStatus, err error) {
+	if normalizedEmail == "" {
+		return "", notMember, nil
+	}
+
+	// In-sweep memo: a value already resolved this sweep (positive id or ""
+	// negative) is reused without re-touching the caches or the fetcher.
+	if id, ok := r.memo[normalizedEmail]; ok {
+		if id != "" {
+			return id, resolvedKnownID, nil
+		}
+		// A memoized "" is a within-sweep negative ONLY if it is still negative for
+		// THIS space under THIS fingerprint; fall through to the negative-cache
+		// check so a per-space/per-fingerprint negative is evaluated correctly.
+	}
+
+	// Global positive cache: a canonical id is space-independent, so a within-TTL
+	// hit resolves for any space with zero API calls.
+	if entry, ok := r.posCache[normalizedEmail]; ok && !cachedUserIDExpired(entry, accelerated.GetCurrentTime()) {
+		r.memo[normalizedEmail] = entry.UserName
+		return entry.UserName, resolvedKnownID, nil
+	}
+
+	// Per-space negative cache: honored ONLY when within TTL AND its stamped
+	// fingerprint equals the space's current fingerprint (membership unchanged).
+	if neg, ok := r.lookupNegative(spaceName, normalizedEmail); ok &&
+		!memberNegativeExpired(neg, accelerated.GetCurrentTime()) &&
+		neg.MemberSetFingerprint == fingerprint {
+		return "", notMember, nil
+	}
+
+	// UNKNOWN candidate — must resolve. Guard the caps in the §3.2.1 order:
+	// resolve-cap first (deferring an UNKNOWN candidate is resolution debt), then
+	// the shared page budget.
+	if r.cap != nil && *r.cap <= 0 {
+		return "", deferredCapHit, nil
+	}
+	if pageBudget != nil && *pageBudget <= 0 {
+		return "", deferredBudgetHit, nil
+	}
+
+	resolved, isNotMember, ferr := r.fetcher.ResolveMemberID(ctx, spaceName, normalizedEmail)
+	if ferr != nil {
+		return "", notMember, ferr
+	}
+	if r.cap != nil {
+		*r.cap--
+	}
+	if pageBudget != nil {
+		*pageBudget--
+	}
+	now := accelerated.GetCurrentTime()
+	if isNotMember || resolved == "" {
+		r.writeNegative(spaceName, normalizedEmail, fingerprint, now)
+		r.memo[normalizedEmail] = ""
+		r.dirty = true
+		return "", notMember, nil
+	}
+	r.posCache[normalizedEmail] = cachedUserID{
+		UserName:   resolved,
+		ResolvedAt: now.Format(chatTimeLayout),
+	}
+	r.memo[normalizedEmail] = resolved
+	r.dirty = true
+	return resolved, resolvedKnownID, nil
+}
+
+// lookupNegative returns the per-space negative for an email, if present.
+func (r *memberIDResolver) lookupNegative(spaceName, email string) (memberNegative, bool) {
+	byEmail, ok := r.negCache[spaceName]
+	if !ok {
+		return memberNegative{}, false
+	}
+	neg, ok := byEmail[email]
+	return neg, ok
+}
+
+// writeNegative records (or overwrites) a per-space negative stamped with the
+// current member-set fingerprint.
+func (r *memberIDResolver) writeNegative(spaceName, email, fingerprint string, now time.Time) {
+	byEmail, ok := r.negCache[spaceName]
+	if !ok {
+		byEmail = map[string]memberNegative{}
+		r.negCache[spaceName] = byEmail
+	}
+	byEmail[email] = memberNegative{
+		ResolvedAt:           now.Format(chatTimeLayout),
+		MemberSetFingerprint: fingerprint,
+	}
+}
+
+// snapshotPositives / snapshotNegatives return the (possibly-grown) caches for
+// persistence (folded into metadata by persistMetadata).
+func (r *memberIDResolver) snapshotPositives() map[string]cachedUserID {
+	return r.posCache
+}
+
+func (r *memberIDResolver) snapshotNegatives() map[string]map[string]memberNegative {
+	return r.negCache
+}
+
 // --- metadata persistence --------------------------------------------
 
-// persistMetadata folds the resolver's grown email cache into the typed
-// metadata and writes the merged gchat keys back via UpdateSyncStateMetadata
-// (read-modify-write of state.Metadata — only the gchat keys change).
+// persistMetadata folds the resolvers' grown caches into the typed metadata and
+// writes the merged gchat keys back via UpdateSyncStateMetadata (read-modify-
+// write of state.Metadata — only the gchat keys change). idResolver may be nil
+// (e.g. a path that never built one) — its caches are then left as-loaded.
 func (p *GChatSyncProvider) persistMetadata(
 	ctx context.Context,
 	state *repository.SyncState,
 	g *gchatMetadata,
 	resolver *cachedEmailResolver,
+	idResolver *memberIDResolver,
 ) error {
 	g.UserEmailCache = resolver.snapshot()
+	if idResolver != nil {
+		g.EmailUserIDs = idResolver.snapshotPositives()
+		g.SpaceMemberNegatives = idResolver.snapshotNegatives()
+	}
 	merged := g.writeInto(state.Metadata)
 	_, err := p.syncRepo.UpdateSyncStateMetadata(ctx, state.ID, merged)
 	return err
