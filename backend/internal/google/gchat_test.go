@@ -774,7 +774,7 @@ func TestBuildKnownIDIndex_DeferredCapReturnsDebtFlagOnly(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, idx, "the candidate could not resolve this sweep")
 		assert.False(t, blockedBudget)
-		assert.True(t, blockedCap, "the fingerprint mismatch alone makes the candidate UNKNOWN; cap exhaustion holds the cursor (no transient flag)")
+		assert.True(t, blockedCap, "the fingerprint mismatch alone makes the candidate UNKNOWN; cap exhaustion sets the debt flag (informational, no transient flag)")
 		assert.Equal(t, 0, calls, "the cap-exhausted candidate is not fetched")
 	})
 
@@ -803,7 +803,7 @@ func TestBuildKnownIDIndex_DeferredCapReturnsDebtFlagOnly(t *testing.T) {
 		idx, _, _, blockedCap, err := buildKnownIDIndex(ctx, &chat.Space{Name: "spaces/A"}, members, fpNew, knownMap, map[string]struct{}{"me@example.test": {}}, nil, resolver, counters, &budget)
 		require.NoError(t, err)
 		// The invalidated (priority) candidate consumed the single cap slot and
-		// matched; the never-seen one was deferred (debt) → cursor held.
+		// matched; the never-seen one was deferred (debt flag set, informational).
 		assert.Contains(t, idx, "users/invalidated", "the fingerprint-invalidated candidate is resolved first")
 		assert.NotContains(t, idx, "users/neverseen")
 		assert.True(t, blockedCap, "the deferred never-seen candidate is debt")

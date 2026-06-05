@@ -1082,10 +1082,11 @@ func TestGChatProvider_GlobalPositiveCachePersistsAndReused(t *testing.T) {
 // TestGChatProvider_ColdStartProcessesAndAdvancesDespiteResolveDebt is the
 // HEADLINE REGRESSION for the incident. Multiple spaces, the resolve-cap forced to
 // 0 so id-resolution is DEFERRED for every space. Each space has a message from a
-// People-RESOLVABLE known member (the pre-#411 working path). Asserts: every
-// space's message is processed AND matched (no freeze), every space's cursor
-// advances, and the result counts are non-zero — the exact prod failure
-// (processed=0 with all spaces held) turned into a passing assertion.
+// member the People API CAN resolve (the email-path match, which does not depend
+// on id-resolution). Asserts: every space's message is processed AND matched (no
+// freeze), every space's cursor advances, and the result counts are non-zero — the
+// exact prod failure (processed=0 with all spaces held) turned into a passing
+// assertion.
 func TestGChatProvider_ColdStartProcessesAndAdvancesDespiteResolveDebt(t *testing.T) {
 	e := setupGChatProviderTest(t)
 	suffix := randomSuffix(t)
