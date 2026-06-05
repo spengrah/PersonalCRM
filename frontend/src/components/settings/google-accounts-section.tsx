@@ -2,7 +2,16 @@
 
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { Mail, Plus, Trash2, CheckCircle, AlertCircle, Info, RefreshCcw } from 'lucide-react'
+import {
+  Mail,
+  MessageSquare,
+  Plus,
+  Trash2,
+  CheckCircle,
+  AlertCircle,
+  Info,
+  RefreshCcw,
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { SyncBadge } from '@/components/settings/sync-badge'
 import { useGoogleAccounts, useRevokeGoogleAccount } from '@/hooks/use-google-accounts'
@@ -13,6 +22,30 @@ import {
 } from '@/hooks/use-sync-states'
 import { useTriggerSync } from '@/hooks/use-imports'
 import { startGoogleOAuthFlow, GoogleAccount } from '@/lib/oauth-api'
+
+// GCHAT_REQUIRED_SCOPES gates the Google Chat sync badge. It mirrors the backend
+// enablement gate (service.gchatRequiredScopes): the sweep needs all three Chat
+// scopes (spaces.list, messages.list, members.list), so the badge only shows
+// once the account has re-consented with ALL of them — a partial grant shows the
+// reconnect hint instead. Like the other Google badges, this is the
+// requested-scope proxy (the stored scope list), not a true-grant check.
+const GCHAT_REQUIRED_SCOPES = [
+  'https://www.googleapis.com/auth/chat.spaces.readonly',
+  'https://www.googleapis.com/auth/chat.messages.readonly',
+  'https://www.googleapis.com/auth/chat.memberships.readonly',
+]
+
+/**
+ * accountHasChatScopes reports whether a connected Google account carries ALL
+ * THREE chat scopes — the gate for the Google Chat sync badge. A partial grant
+ * returns false (the reconnect hint is shown instead). Exported as a pure
+ * function so it can be unit-tested without rendering.
+ */
+export function accountHasChatScopes(account: Pick<GoogleAccount, 'scopes'>): boolean {
+  const scopes = account.scopes
+  if (!scopes) return false
+  return GCHAT_REQUIRED_SCOPES.every(required => scopes.includes(required))
+}
 
 function formatDate(dateString: string): string {
   return new Date(dateString).toLocaleDateString(undefined, {
@@ -95,6 +128,28 @@ export function GoogleAccountsSection() {
         message: errorMessage.includes('authentication')
           ? 'Authentication failed. Please reconnect your account.'
           : `Failed to start Gmail sync: ${errorMessage}`,
+      })
+    } finally {
+      setSyncingAccount(null)
+    }
+  }
+
+  const handleSyncGChat = async (accountId: string) => {
+    setSyncingAccount(`gchat-${accountId}`)
+    try {
+      await triggerSyncMutation.mutateAsync({ source: 'gchat', accountId })
+      setNotification({
+        type: 'success',
+        message: 'Google Chat sync started!',
+      })
+    } catch (error) {
+      console.error('Google Chat sync error:', error)
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      setNotification({
+        type: 'error',
+        message: errorMessage.includes('authentication')
+          ? 'Authentication failed. Please reconnect your account.'
+          : `Failed to start Google Chat sync: ${errorMessage}`,
       })
     } finally {
       setSyncingAccount(null)
@@ -340,6 +395,26 @@ export function GoogleAccountsSection() {
                       onSync={() => handleSyncContacts(account.account_id)}
                       loading={syncingAccount === `gcontacts-${account.account_id}`}
                     />
+                  )}
+                  {/* Google Chat - sync badge (scoped) or reconnect hint (unscoped) */}
+                  {accountHasChatScopes(account) ? (
+                    <SyncBadge
+                      label="Chat"
+                      syncState={getSyncStateForAccount(syncStates, 'gchat', account.account_id)}
+                      onSync={() => handleSyncGChat(account.account_id)}
+                      loading={syncingAccount === `gchat-${account.account_id}`}
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleConnectGoogle}
+                      disabled={isConnecting}
+                      title="Reconnect this account to grant Google Chat access"
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium bg-amber-50 border border-amber-300 text-amber-700 hover:bg-amber-100 disabled:opacity-50"
+                    >
+                      <MessageSquare className="w-3 h-3" />
+                      Chat — reconnect required
+                    </button>
                   )}
                 </div>
               </div>

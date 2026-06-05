@@ -185,6 +185,73 @@ func TestGoogleCallback(t *testing.T) {
 		assert.Contains(t, location, "/settings?auth=success")
 		assert.Contains(t, location, "provider=google")
 	})
+
+	t.Run("invokes email and gchat reconcilers on valid exchange", func(t *testing.T) {
+		mock := &MockOAuthService{
+			ExchangeCodeFunc: func(ctx context.Context, code string) (*repository.OAuthCredentialStatus, error) {
+				return &repository.OAuthCredentialStatus{
+					ID:        uuid.New(),
+					Provider:  "google",
+					AccountID: "test@example.com",
+				}, nil
+			},
+		}
+		handler := NewOAuthHandler(mock, "http://localhost:3000")
+
+		emailCalled, gchatCalled := false, false
+		handler.SetEmailStateReconciler(func(context.Context) error {
+			emailCalled = true
+			return nil
+		})
+		handler.SetGChatStateReconciler(func(context.Context) error {
+			gchatCalled = true
+			return nil
+		})
+
+		state := "valid-state-789"
+		handler.storeState(state)
+
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest("GET", "/auth/google/callback?code=authcode&state="+state, nil)
+
+		handler.GoogleCallback(c)
+
+		assert.Equal(t, http.StatusFound, w.Code)
+		assert.Contains(t, w.Header().Get("Location"), "/settings?auth=success")
+		assert.True(t, emailCalled, "email reconciler must be invoked after a successful connect")
+		assert.True(t, gchatCalled, "gchat reconciler must be invoked after a successful connect")
+	})
+
+	t.Run("gchat reconciler error is non-fatal (still redirects success)", func(t *testing.T) {
+		mock := &MockOAuthService{
+			ExchangeCodeFunc: func(ctx context.Context, code string) (*repository.OAuthCredentialStatus, error) {
+				return &repository.OAuthCredentialStatus{
+					ID:        uuid.New(),
+					Provider:  "google",
+					AccountID: "test@example.com",
+				}, nil
+			},
+		}
+		handler := NewOAuthHandler(mock, "http://localhost:3000")
+		handler.SetGChatStateReconciler(func(context.Context) error {
+			return errors.New("reconcile boom")
+		})
+
+		state := "valid-state-abc"
+		handler.storeState(state)
+
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest("GET", "/auth/google/callback?code=authcode&state="+state, nil)
+
+		handler.GoogleCallback(c)
+
+		// A reconciler error must NOT fail the connect — the account is connected
+		// regardless; boot / the next connect retries.
+		assert.Equal(t, http.StatusFound, w.Code)
+		assert.Contains(t, w.Header().Get("Location"), "/settings?auth=success")
+	})
 }
 
 func TestListGoogleAccounts(t *testing.T) {

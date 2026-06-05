@@ -46,6 +46,42 @@ test.describe('Settings Page @area:settings', () => {
     }
   })
 
+  test('should display optional Google Chat sync badge or reconnect hint', async ({ page }) => {
+    await page.goto('/settings', { waitUntil: 'networkidle' })
+    await page.reload({ waitUntil: 'networkidle' })
+
+    await expect(page.getByRole('heading', { name: 'Google Accounts', exact: true })).toBeVisible()
+
+    // Per connected Google account, the Chat surface is conditional: a "Chat"
+    // SyncBadge when the account carries chat.spaces.readonly, OR a
+    // "Chat — reconnect required" hint when it does not. Both depend on backend
+    // GOOGLE_* env vars + a real connected account, so this is a
+    // conditional-presence test (like the Gmail-badge test above).
+    const chatBadge = page.locator('div').filter({ hasText: /^Chat/ })
+    const hasChatBadge = await chatBadge
+      .first()
+      .isVisible()
+      .catch(() => false)
+
+    if (hasChatBadge) {
+      const refreshButton = chatBadge.first().getByRole('button')
+      await expect(refreshButton).toBeVisible()
+      await expect(refreshButton).toBeEnabled({ timeout: 5000 })
+    } else {
+      // No scoped account: if any Google account is connected, the reconnect
+      // hint may be present. Its visibility is account-dependent, so only assert
+      // it is clickable WHEN present (never required).
+      const reconnectHint = page.getByRole('button', { name: /Chat — reconnect required/ })
+      const hasHint = await reconnectHint
+        .first()
+        .isVisible()
+        .catch(() => false)
+      if (hasHint) {
+        await expect(reconnectHint.first()).toBeEnabled({ timeout: 5000 })
+      }
+    }
+  })
+
   test('should display settings page with export and import sections', async ({ page }) => {
     await page.goto('/settings')
 

@@ -35,6 +35,13 @@ type OAuthHandler struct {
 	// SyncService.ReconcileEmailSyncStates, keeping the handler decoupled from
 	// the service package (no import cycle).
 	emailStateReconciler func(context.Context) error
+	// gchatStateReconciler mirrors emailStateReconciler for Google Chat: when
+	// set, it is invoked after a successful Google connect so a newly re-consented
+	// account gets its gchat sync state without waiting for a reboot. Nil-default
+	// (no-Google builds). Wired in main.go as a closure over
+	// SyncService.ReconcileGChatSyncStates. The reconciliation itself gates on
+	// the chat scopes, so a connect without those scopes is a no-op.
+	gchatStateReconciler func(context.Context) error
 }
 
 // NewOAuthHandler creates a new OAuth handler
@@ -61,6 +68,13 @@ func (h *OAuthHandler) SetTodoistOAuth(todoistOAuth todoist.OAuthServiceInterfac
 // Nil-default; only populated in cutover mode (see main.go).
 func (h *OAuthHandler) SetEmailStateReconciler(reconcile func(context.Context) error) {
 	h.emailStateReconciler = reconcile
+}
+
+// SetGChatStateReconciler wires the callback invoked after a successful Google
+// connect to reconcile GChat sync states for the newly-connected account.
+// Nil-default; only populated when Google OAuth is configured (see main.go).
+func (h *OAuthHandler) SetGChatStateReconciler(reconcile func(context.Context) error) {
+	h.gchatStateReconciler = reconcile
 }
 
 // HasTodoistOAuth returns true if Todoist OAuth is configured
@@ -205,6 +219,17 @@ func (h *OAuthHandler) GoogleCallback(c *gin.Context) {
 	if h.emailStateReconciler != nil {
 		if err := h.emailStateReconciler(c.Request.Context()); err != nil {
 			logger.Warn().Err(err).Msg("email sync reconciliation after Google connect failed (non-fatal)")
+		}
+	}
+
+	// Reconcile GChat sync states so a newly re-consented account (one that now
+	// carries the chat scopes) gets its sweep enabled without waiting for a
+	// reboot. Idempotent and scope-gated, so a connect without the chat scopes
+	// is a no-op. Non-fatal: the account is connected regardless; boot / the
+	// next connect retries.
+	if h.gchatStateReconciler != nil {
+		if err := h.gchatStateReconciler(c.Request.Context()); err != nil {
+			logger.Warn().Err(err).Msg("gchat sync reconciliation after Google connect failed (non-fatal)")
 		}
 	}
 
