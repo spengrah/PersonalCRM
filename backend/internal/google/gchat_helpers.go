@@ -343,9 +343,10 @@ func buildKnownIDIndex(
 		if !ok {
 			continue
 		}
-		// The cached id is definitively covered whether or not it is a member of THIS
-		// space (it can only be excluded from U_id by being a member, but tracking it
-		// here keeps coveredIDs the exact "id-keyed covered" set).
+		// The cached id is added to coveredIDs whether or not it is a member of THIS
+		// space; if it is a member, it is thereby excluded from U_id. A non-member
+		// cached id cannot affect U_id (U_id ranges over members), but tracking it
+		// here keeps coveredIDs the exact "id-keyed covered" set.
 		coveredIDs[id] = struct{}{}
 		if _, isMe := meIDs[id]; isMe {
 			continue // the account's own id never enters the reverse index
@@ -387,6 +388,14 @@ func buildKnownIDIndex(
 		for _, email := range group {
 			if len(matchedUncovered) == len(uncovered) {
 				// Every uncovered member id is attached → nothing left to resolve.
+				// Accepted limitation (matches origin/main's last-writer behavior, and
+				// strictly better than it): when the LAST uncovered id is shared by two
+				// DISTINCT contact records reachable via two known addresses, the first
+				// address to resolve completes the set and this exit returns before the
+				// second same-id alias resolves — so only the first contact is attached.
+				// Multi-contact-per-canonical-id fan-out is explicitly out of scope for
+				// this hotfix (a single contact carrying both a gchat and an email value
+				// produces ONE UUID, which mergeIDMatch dedups harmlessly).
 				return knownIDs, meIDsOut, blockedByBudget, blockedByCapOnDebt, nil
 			}
 			id, status, rerr := resolver.resolve(ctx, space.Name, fingerprint, email, pageBudget)
@@ -427,7 +436,9 @@ func buildKnownIDIndex(
 // share a canonical id via the positive-cache / resolve paths are matched (rather
 // than the second writer silently overwriting the first). The Email is kept as
 // the first writer's (the peer identity is any of the equivalent known addresses;
-// they all map to the same person). A nil/zero prev starts a fresh entry.
+// they all map to the same person). The first writer is deterministic: the
+// positive-cache seed pass runs before the resolve loop, and candidates within the
+// loop are resolved in sorted order. A nil/zero prev starts a fresh entry.
 func mergeIDMatch(prev idMatch, email string, contacts []uuid.UUID) idMatch {
 	if prev.Email == "" && len(prev.Contacts) == 0 {
 		return idMatch{Email: email, Contacts: append([]uuid.UUID(nil), contacts...)}
