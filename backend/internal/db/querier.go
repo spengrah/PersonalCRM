@@ -1297,6 +1297,15 @@ type Querier interface {
 	SweepRiverJobsInCloneForTest(ctx context.Context) (int64, error)
 	// Cleanup assertion — count surviving contact rows for the given ids.
 	SyntheticCountContactsByIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error)
+	// Settle Gate A (Mac-contact seeded): the external_contact row for the entity
+	// id exists linked to a CRM contact (match_status='matched').
+	SyntheticCountMatchedExternalContactBySourceId(ctx context.Context, sourceID string) (int64, error)
+	// Settle Gate A (iMessage unknown-sender): the staging row for the guid landed
+	// (processed) with matched_contact_id IS NULL.
+	SyntheticCountStrandedMessagesMessageByGuid(ctx context.Context, guid string) (int64, error)
+	// Settle Gate A (telegram unknown-sender): a message row exists for the peer
+	// with matched_contact_id IS NULL (the stranded/discovery-candidate state).
+	SyntheticCountStrandedTelegramMessagesByPeer(ctx context.Context, peerUserID pgtype.Int8) (int64, error)
 	// Settle Gate B (part 2): the messaging_aggregate_for_contact job keys on
 	// (contact_id, source) in its args, NOT event_id, so it is invisible to the
 	// event-scoped Gate B query above. Counts unfinalized aggregate jobs for this
@@ -1316,6 +1325,12 @@ type Querier interface {
 	// fixed kind list. Scoped to this replay's contacts (NOT a global kind count)
 	// so concurrent unrelated jobs on the shared test DB never block the gate.
 	SyntheticCountUnfinalizedRiverJobsForEventsByContacts(ctx context.Context, contactIds []string) (int64, error)
+	// Settle Gate A (GCal unknown-attendee): the calendar_event for the gcal id
+	// exists with an empty matched_contact_ids array.
+	SyntheticCountUnmatchedCalendarEventByGcalId(ctx context.Context, gcalEventID string) (int64, error)
+	// Settle Gate A (Mac-contact unknown-sender): the external_contact row for the
+	// entity id exists with match_status='unmatched'.
+	SyntheticCountUnmatchedExternalContactBySourceId(ctx context.Context, sourceID string) (int64, error)
 	// Cleanup step 4: comms_message rows whose external_id is ns-prefixed.
 	// Caller passes a BARE prefix; '%' is appended here.
 	SyntheticDeleteCommsMessagesByExternalIdPrefix(ctx context.Context, externalIDPrefix pgtype.Text) (int64, error)

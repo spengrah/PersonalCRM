@@ -550,6 +550,55 @@ func (q *Queries) SyntheticCountContactsByIds(ctx context.Context, contactIds []
 	return count, err
 }
 
+const SyntheticCountMatchedExternalContactBySourceId = `-- name: SyntheticCountMatchedExternalContactBySourceId :one
+SELECT COUNT(*) FROM external_contact
+WHERE source_id = $1
+  AND match_status = 'matched'
+  AND crm_contact_id IS NOT NULL
+  AND deleted_at IS NULL
+`
+
+// Settle Gate A (Mac-contact seeded): the external_contact row for the entity
+// id exists linked to a CRM contact (match_status='matched').
+func (q *Queries) SyntheticCountMatchedExternalContactBySourceId(ctx context.Context, sourceID string) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountMatchedExternalContactBySourceId, sourceID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const SyntheticCountStrandedMessagesMessageByGuid = `-- name: SyntheticCountStrandedMessagesMessageByGuid :one
+SELECT COUNT(*) FROM messages_message
+WHERE guid = $1
+  AND matched_contact_id IS NULL
+  AND deleted_at IS NULL
+`
+
+// Settle Gate A (iMessage unknown-sender): the staging row for the guid landed
+// (processed) with matched_contact_id IS NULL.
+func (q *Queries) SyntheticCountStrandedMessagesMessageByGuid(ctx context.Context, guid string) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountStrandedMessagesMessageByGuid, guid)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const SyntheticCountStrandedTelegramMessagesByPeer = `-- name: SyntheticCountStrandedTelegramMessagesByPeer :one
+SELECT COUNT(*) FROM telegram_message
+WHERE peer_user_id = $1
+  AND matched_contact_id IS NULL
+  AND deleted_at IS NULL
+`
+
+// Settle Gate A (telegram unknown-sender): a message row exists for the peer
+// with matched_contact_id IS NULL (the stranded/discovery-candidate state).
+func (q *Queries) SyntheticCountStrandedTelegramMessagesByPeer(ctx context.Context, peerUserID pgtype.Int8) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountStrandedTelegramMessagesByPeer, peerUserID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const SyntheticCountUnfinalizedMessagingAggregateJobs = `-- name: SyntheticCountUnfinalizedMessagingAggregateJobs :one
 SELECT COUNT(*) FROM river_job
 WHERE finalized_at IS NULL
@@ -599,6 +648,38 @@ WHERE finalized_at IS NULL
 // so concurrent unrelated jobs on the shared test DB never block the gate.
 func (q *Queries) SyntheticCountUnfinalizedRiverJobsForEventsByContacts(ctx context.Context, contactIds []string) (int64, error) {
 	row := q.db.QueryRow(ctx, SyntheticCountUnfinalizedRiverJobsForEventsByContacts, contactIds)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const SyntheticCountUnmatchedCalendarEventByGcalId = `-- name: SyntheticCountUnmatchedCalendarEventByGcalId :one
+SELECT COUNT(*) FROM calendar_event
+WHERE gcal_event_id = $1
+  AND matched_contact_ids = '{}'
+  AND deleted_at IS NULL
+`
+
+// Settle Gate A (GCal unknown-attendee): the calendar_event for the gcal id
+// exists with an empty matched_contact_ids array.
+func (q *Queries) SyntheticCountUnmatchedCalendarEventByGcalId(ctx context.Context, gcalEventID string) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountUnmatchedCalendarEventByGcalId, gcalEventID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const SyntheticCountUnmatchedExternalContactBySourceId = `-- name: SyntheticCountUnmatchedExternalContactBySourceId :one
+SELECT COUNT(*) FROM external_contact
+WHERE source_id = $1
+  AND match_status = 'unmatched'
+  AND deleted_at IS NULL
+`
+
+// Settle Gate A (Mac-contact unknown-sender): the external_contact row for the
+// entity id exists with match_status='unmatched'.
+func (q *Queries) SyntheticCountUnmatchedExternalContactBySourceId(ctx context.Context, sourceID string) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountUnmatchedExternalContactBySourceId, sourceID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err

@@ -241,3 +241,61 @@ func (r *SyntheticSupportRepository) CountContactsByIds(ctx context.Context, con
 	}
 	return r.queries.SyntheticCountContactsByIds(ctx, pgUUIDs(contactIDs))
 }
+
+// --- Settle Gate A domain predicates (pending / match states) --------------
+
+// CountStrandedTelegramMessagesByPeer counts telegram_message rows for the peer
+// with matched_contact_id IS NULL (the stranded / discovery-candidate state).
+func (r *SyntheticSupportRepository) CountStrandedTelegramMessagesByPeer(ctx context.Context, peerUserID int64) (int64, error) {
+	return r.queries.SyntheticCountStrandedTelegramMessagesByPeer(ctx, pgtype.Int8{Int64: peerUserID, Valid: true})
+}
+
+// CountStrandedMessagesMessageByGuid counts the iMessage staging row for the guid
+// with matched_contact_id IS NULL.
+func (r *SyntheticSupportRepository) CountStrandedMessagesMessageByGuid(ctx context.Context, guid string) (int64, error) {
+	return r.queries.SyntheticCountStrandedMessagesMessageByGuid(ctx, guid)
+}
+
+// CountUnmatchedExternalContactBySourceID counts external_contact rows for the
+// entity id with match_status='unmatched'.
+func (r *SyntheticSupportRepository) CountUnmatchedExternalContactBySourceID(ctx context.Context, sourceID string) (int64, error) {
+	return r.queries.SyntheticCountUnmatchedExternalContactBySourceId(ctx, sourceID)
+}
+
+// CountMatchedExternalContactBySourceID counts external_contact rows for the
+// entity id linked to a CRM contact (match_status='matched').
+func (r *SyntheticSupportRepository) CountMatchedExternalContactBySourceID(ctx context.Context, sourceID string) (int64, error) {
+	return r.queries.SyntheticCountMatchedExternalContactBySourceId(ctx, sourceID)
+}
+
+// CountUnmatchedCalendarEventByGcalID counts calendar_event rows for the gcal id
+// with an empty matched_contact_ids array.
+func (r *SyntheticSupportRepository) CountUnmatchedCalendarEventByGcalID(ctx context.Context, gcalEventID string) (int64, error) {
+	return r.queries.SyntheticCountUnmatchedCalendarEventByGcalId(ctx, gcalEventID)
+}
+
+// --- revoked synthetic Mac host (host-only ingest kinds) -------------------
+
+// SeedRevokedMacHost inserts a REVOKED mac_host (api_key_revoked_at set) and
+// returns its id. The revoked state dodges the idx_mac_host_singleton partial
+// unique (which only applies to non-revoked rows), so the synthetic harness can
+// seed it freely on the shared test DB. Its id is used as the non-nil hostID for
+// the host-only ingest-kind allowlist (with hostLiveness=nil so the active-host
+// re-check is skipped). hostname carries the namespace so cleanup is targeted.
+func (r *SyntheticSupportRepository) SeedRevokedMacHost(ctx context.Context, hostname string) (uuid.UUID, error) {
+	row, err := r.queries.SeedRevokedMacHost(ctx, db.SeedRevokedMacHostParams{
+		Hostname:        hostname,
+		DaemonVersion:   "synthetic",
+		ProtocolVersion: 1,
+		// Revoked host never authenticates; a static non-empty hash satisfies
+		// NOT NULL without minting a real credential.
+		ApiKeyHash: "synthetic-revoked-no-auth",
+	})
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if !row.ID.Valid {
+		return uuid.Nil, db.ErrNotFound
+	}
+	return uuid.UUID(row.ID.Bytes), nil
+}

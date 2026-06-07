@@ -306,3 +306,44 @@ DELETE FROM mac_host WHERE id = @id;
 -- name: SyntheticCountContactsByIds :one
 -- Cleanup assertion — count surviving contact rows for the given ids.
 SELECT COUNT(*) FROM contact WHERE id = ANY(@contact_ids::uuid[]);
+
+-- name: SyntheticCountStrandedTelegramMessagesByPeer :one
+-- Settle Gate A (telegram unknown-sender): a message row exists for the peer
+-- with matched_contact_id IS NULL (the stranded/discovery-candidate state).
+SELECT COUNT(*) FROM telegram_message
+WHERE peer_user_id = @peer_user_id
+  AND matched_contact_id IS NULL
+  AND deleted_at IS NULL;
+
+-- name: SyntheticCountStrandedMessagesMessageByGuid :one
+-- Settle Gate A (iMessage unknown-sender): the staging row for the guid landed
+-- (processed) with matched_contact_id IS NULL.
+SELECT COUNT(*) FROM messages_message
+WHERE guid = @guid
+  AND matched_contact_id IS NULL
+  AND deleted_at IS NULL;
+
+-- name: SyntheticCountUnmatchedExternalContactBySourceId :one
+-- Settle Gate A (Mac-contact unknown-sender): the external_contact row for the
+-- entity id exists with match_status='unmatched'.
+SELECT COUNT(*) FROM external_contact
+WHERE source_id = @source_id
+  AND match_status = 'unmatched'
+  AND deleted_at IS NULL;
+
+-- name: SyntheticCountMatchedExternalContactBySourceId :one
+-- Settle Gate A (Mac-contact seeded): the external_contact row for the entity
+-- id exists linked to a CRM contact (match_status='matched').
+SELECT COUNT(*) FROM external_contact
+WHERE source_id = @source_id
+  AND match_status = 'matched'
+  AND crm_contact_id IS NOT NULL
+  AND deleted_at IS NULL;
+
+-- name: SyntheticCountUnmatchedCalendarEventByGcalId :one
+-- Settle Gate A (GCal unknown-attendee): the calendar_event for the gcal id
+-- exists with an empty matched_contact_ids array.
+SELECT COUNT(*) FROM calendar_event
+WHERE gcal_event_id = @gcal_event_id
+  AND matched_contact_ids = '{}'
+  AND deleted_at IS NULL;
