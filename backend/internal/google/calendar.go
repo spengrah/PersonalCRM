@@ -104,6 +104,73 @@ type EventContext struct {
 	HtmlLink  string    // URL to view the event in Google Calendar
 }
 
+// CalendarListOpts holds the parameters for one Events.List page. Every field
+// uses an exported type so a cross-package fake closure (FakeCalendarFetcherFuncs)
+// can name them without reaching the unexported calendarFetcher interface, the
+// same discipline the Gmail seam follows. PageToken is included so the provider's
+// pagination loop can thread the next page token back in — without it, multi-page
+// sync would silently fetch only the first page.
+type CalendarListOpts struct {
+	TimeMin      string
+	TimeMax      string
+	SingleEvents bool
+	OrderBy      string
+	MaxResults   int64
+	SyncToken    string
+	PageToken    string
+}
+
+// calendarFetcher is the narrow Calendar read surface the provider needs. The
+// real implementation (calendarServiceFetcher) wraps *calendar.Service; tests
+// inject a fake returning canned pages, so unit/integration tests never touch
+// HTTP or OAuth. The *calendar.Event type stays in the signature so tests
+// exercise the real attendee/keep-decision code against real library structs.
+//
+// Events.Watch is intentionally NOT part of this interface — it is unused in
+// production (only Events.List is). A future Watch user must extend this seam.
+type calendarFetcher interface {
+	// ListEvents wraps one Events.List(calendarID) call (one page). The
+	// provider's pagination loop stays in initialSync/incrementalSync and
+	// threads nextPageToken back in as opts.PageToken for the next call.
+	ListEvents(ctx context.Context, calendarID string, opts CalendarListOpts) (items []*calendar.Event, nextPageToken, nextSyncToken string, err error)
+}
+
+// calendarServiceFetcher is the production calendarFetcher backed by
+// *calendar.Service. It maps CalendarListOpts onto the Events.List builder.
+type calendarServiceFetcher struct {
+	svc *calendar.Service
+}
+
+func (f *calendarServiceFetcher) ListEvents(ctx context.Context, calendarID string, opts CalendarListOpts) ([]*calendar.Event, string, string, error) {
+	req := f.svc.Events.List(calendarID)
+	if opts.TimeMin != "" {
+		req = req.TimeMin(opts.TimeMin)
+	}
+	if opts.TimeMax != "" {
+		req = req.TimeMax(opts.TimeMax)
+	}
+	if opts.SingleEvents {
+		req = req.SingleEvents(true)
+	}
+	if opts.OrderBy != "" {
+		req = req.OrderBy(opts.OrderBy)
+	}
+	if opts.MaxResults != 0 {
+		req = req.MaxResults(opts.MaxResults)
+	}
+	if opts.SyncToken != "" {
+		req = req.SyncToken(opts.SyncToken)
+	}
+	if opts.PageToken != "" {
+		req = req.PageToken(opts.PageToken)
+	}
+	resp, err := req.Context(ctx).Do()
+	if err != nil {
+		return nil, "", "", err
+	}
+	return resp.Items, resp.NextPageToken, resp.NextSyncToken, nil
+}
+
 // CalendarSyncProvider implements SyncProvider for Google Calendar.
 //
 // Post-PR-6 (cutover): past-event interaction writes happen via the
@@ -132,6 +199,13 @@ type CalendarSyncProvider struct {
 	// (a publish failure must leave the calendar_event row intact). The
 	// off-mode gate keys off the concrete eventBus/pool fields, not this one.
 	declineBus busTx
+	// newFetcher builds the per-account calendarFetcher, encapsulating the
+	// OAuth call (GetClientForAccount + calendar.NewService). Defaulted to the
+	// real *calendar.Service-backed factory in the constructor; tests override
+	// via SetFetcherFactoryForTest so a fake fetcher is injected with NO OAuth /
+	// token state. Keyed by accountID so the replay/integration path never needs
+	// a stored credential.
+	newFetcher func(ctx context.Context, accountID string) (calendarFetcher, error)
 }
 
 // NewCalendarSyncProvider creates a new Google Calendar sync provider.
@@ -148,7 +222,7 @@ func NewCalendarSyncProvider(
 	eventBus *events.Bus,
 	pool *pgxpool.Pool,
 ) *CalendarSyncProvider {
-	return &CalendarSyncProvider{
+	p := &CalendarSyncProvider{
 		oauthService:        oauthService,
 		calendarRepo:        calendarRepo,
 		contactRepo:         contactRepo,
@@ -158,6 +232,18 @@ func NewCalendarSyncProvider(
 		pool:                pool,
 		declineBus:          eventBus,
 	}
+	p.newFetcher = func(ctx context.Context, accountID string) (calendarFetcher, error) {
+		client, err := oauthService.GetClientForAccount(ctx, accountID)
+		if err != nil {
+			return nil, fmt.Errorf("get OAuth client: %w", err)
+		}
+		svc, err := calendar.NewService(ctx, option.WithHTTPClient(client))
+		if err != nil {
+			return nil, fmt.Errorf("create Calendar service: %w", err)
+		}
+		return &calendarServiceFetcher{svc: svc}, nil
+	}
+	return p
 }
 
 // Config returns the provider's configuration
@@ -189,25 +275,18 @@ func (p *CalendarSyncProvider) Sync(
 		Str("account", accountID).
 		Msg("starting Google Calendar sync")
 
-	// Get authenticated client for this account
-	client, err := p.oauthService.GetClientForAccount(ctx, accountID)
+	fetcher, err := p.newFetcher(ctx, accountID)
 	if err != nil {
-		return nil, fmt.Errorf("get OAuth client: %w", err)
-	}
-
-	// Create Calendar API service
-	calSvc, err := calendar.NewService(ctx, option.WithHTTPClient(client))
-	if err != nil {
-		return nil, fmt.Errorf("create Calendar service: %w", err)
+		return nil, fmt.Errorf("build calendar fetcher: %w", err)
 	}
 
 	result := &sync.SyncResult{}
 
 	// Perform initial or incremental sync based on cursor
 	if state.SyncCursor == nil || *state.SyncCursor == "" {
-		return p.initialSync(ctx, calSvc, accountID, result)
+		return p.initialSync(ctx, fetcher, accountID, result)
 	}
-	return p.incrementalSync(ctx, calSvc, accountID, *state.SyncCursor, result)
+	return p.incrementalSync(ctx, fetcher, accountID, *state.SyncCursor, result)
 }
 
 // ValidateCredentials checks if the Google credentials are valid
@@ -235,7 +314,7 @@ func (p *CalendarSyncProvider) ValidateCredentials(ctx context.Context, accountI
 // initialSync fetches events from the past year to 30 days ahead and gets a sync token
 func (p *CalendarSyncProvider) initialSync(
 	ctx context.Context,
-	calSvc *calendar.Service,
+	fetcher calendarFetcher,
 	accountID string,
 	result *sync.SyncResult,
 ) (*sync.SyncResult, error) {
@@ -250,23 +329,19 @@ func (p *CalendarSyncProvider) initialSync(
 
 	var pageToken string
 	for {
-		req := calSvc.Events.List("primary").
-			TimeMin(timeMin).
-			TimeMax(timeMax).
-			SingleEvents(true).
-			OrderBy("startTime").
-			MaxResults(250)
-
-		if pageToken != "" {
-			req = req.PageToken(pageToken)
-		}
-
-		resp, err := req.Do()
+		items, nextPageToken, nextSyncToken, err := fetcher.ListEvents(ctx, "primary", CalendarListOpts{
+			TimeMin:      timeMin,
+			TimeMax:      timeMax,
+			SingleEvents: true,
+			OrderBy:      "startTime",
+			MaxResults:   250,
+			PageToken:    pageToken,
+		})
 		if err != nil {
 			return result, fmt.Errorf("list events: %w", err)
 		}
 
-		for _, event := range resp.Items {
+		for _, event := range items {
 			if err := p.processEvent(ctx, event, accountID); err != nil {
 				logger.Warn().
 					Err(err).
@@ -277,11 +352,11 @@ func (p *CalendarSyncProvider) initialSync(
 			result.ItemsProcessed++
 		}
 
-		pageToken = resp.NextPageToken
+		pageToken = nextPageToken
 		if pageToken == "" {
 			// Store the sync token for incremental syncs
-			if resp.NextSyncToken != "" {
-				result.NewCursor = resp.NextSyncToken
+			if nextSyncToken != "" {
+				result.NewCursor = nextSyncToken
 			}
 			break
 		}
@@ -304,7 +379,7 @@ func (p *CalendarSyncProvider) initialSync(
 // incrementalSync uses the sync token to fetch only changed events
 func (p *CalendarSyncProvider) incrementalSync(
 	ctx context.Context,
-	calSvc *calendar.Service,
+	fetcher calendarFetcher,
 	accountID string,
 	syncToken string,
 	result *sync.SyncResult,
@@ -315,25 +390,21 @@ func (p *CalendarSyncProvider) incrementalSync(
 
 	var pageToken string
 	for {
-		req := calSvc.Events.List("primary").
-			SyncToken(syncToken).
-			MaxResults(250)
-
-		if pageToken != "" {
-			req = req.PageToken(pageToken)
-		}
-
-		resp, err := req.Do()
+		items, nextPageToken, nextSyncToken, err := fetcher.ListEvents(ctx, "primary", CalendarListOpts{
+			SyncToken:  syncToken,
+			MaxResults: 250,
+			PageToken:  pageToken,
+		})
 		if err != nil {
 			// If sync token is invalid, fall back to initial sync
 			if strings.Contains(err.Error(), "410") || strings.Contains(err.Error(), "fullSyncRequired") {
 				logger.Warn().Msg("sync token expired, falling back to initial sync")
-				return p.initialSync(ctx, calSvc, accountID, result)
+				return p.initialSync(ctx, fetcher, accountID, result)
 			}
 			return result, fmt.Errorf("list events: %w", err)
 		}
 
-		for _, event := range resp.Items {
+		for _, event := range items {
 			if err := p.processEvent(ctx, event, accountID); err != nil {
 				logger.Warn().
 					Err(err).
@@ -344,11 +415,11 @@ func (p *CalendarSyncProvider) incrementalSync(
 			result.ItemsProcessed++
 		}
 
-		pageToken = resp.NextPageToken
+		pageToken = nextPageToken
 		if pageToken == "" {
 			// Store the new sync token
-			if resp.NextSyncToken != "" {
-				result.NewCursor = resp.NextSyncToken
+			if nextSyncToken != "" {
+				result.NewCursor = nextSyncToken
 			}
 			break
 		}
@@ -549,6 +620,41 @@ func (p *CalendarSyncProvider) RunProcessEventForTest(ctx context.Context, event
 // code must NOT call this.
 func (p *CalendarSyncProvider) SetDeclineBusForTest(b busTx) {
 	p.declineBus = b
+}
+
+// SetFetcherFactoryForTest overrides the per-account fetcher factory so tests
+// inject a fake calendarFetcher with no OAuth/token state (the OAuth seam).
+// Production code must NOT call this.
+func (p *CalendarSyncProvider) SetFetcherFactoryForTest(factory func(ctx context.Context, accountID string) (calendarFetcher, error)) {
+	p.newFetcher = factory
+}
+
+// FakeCalendarFetcherFuncs lets a cross-package test supply a fake
+// calendarFetcher by closures, since the calendarFetcher interface is
+// unexported. ListEvents must be set. Build the factory with
+// NewFakeCalendarFetcherFactoryForTest and inject it via
+// SetFetcherFactoryForTest. The closure uses only exported types
+// (CalendarListOpts, *calendar.Event) so it is buildable across packages.
+type FakeCalendarFetcherFuncs struct {
+	ListEvents func(ctx context.Context, calendarID string, opts CalendarListOpts) (items []*calendar.Event, nextPageToken, nextSyncToken string, err error)
+}
+
+type fakeCalendarFetcher struct {
+	funcs FakeCalendarFetcherFuncs
+}
+
+func (f *fakeCalendarFetcher) ListEvents(ctx context.Context, calendarID string, opts CalendarListOpts) ([]*calendar.Event, string, string, error) {
+	return f.funcs.ListEvents(ctx, calendarID, opts)
+}
+
+// NewFakeCalendarFetcherFactoryForTest returns a fetcher factory (accountID-keyed,
+// the SetFetcherFactoryForTest shape) that always yields the same closure-backed
+// fake fetcher, with NO OAuth/token state. Production code must NOT call this.
+func NewFakeCalendarFetcherFactoryForTest(funcs FakeCalendarFetcherFuncs) func(ctx context.Context, accountID string) (calendarFetcher, error) {
+	fetcher := &fakeCalendarFetcher{funcs: funcs}
+	return func(context.Context, string) (calendarFetcher, error) {
+		return fetcher, nil
+	}
 }
 
 // getUserResponse extracts the user's response status from an event
