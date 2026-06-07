@@ -1,0 +1,243 @@
+package repository
+
+// TEST ONLY. Thin repository wrappers around the synthetic-seed toolkit's
+// test-only sqlc bindings (queries/test.sql, Synthetic* prefix). The
+// internal/synthetic package routes ALL its DB access through these wrappers so
+// it never inlines raw SQL and never leaks generated db.* types across the
+// package boundary (the test_fixtures.go precedent). Production code does not
+// depend on these.
+//
+// Two responsibilities:
+//   - Settle Gate B reads: per-replay-scoped unfinalized-River-job counts
+//     (event-scoped + messaging-aggregate-scoped), keyed on this replay's
+//     contacts so the whole non-prefixed cascade is covered without a global
+//     kind count.
+//   - ID-tracked, FK-ordered cleanup: deletes by tracked id (or ns-prefix for
+//     the genuinely prefixed columns), never by a DB-wide source/kind value.
+
+import (
+	"context"
+
+	"personal-crm/backend/internal/db"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
+)
+
+// SyntheticSupportRepository wraps the Synthetic* test-only sqlc bindings.
+type SyntheticSupportRepository struct {
+	queries db.Querier
+}
+
+// NewSyntheticSupportRepository constructs the synthetic-support repository
+// from a *db.Database's Queries.
+func NewSyntheticSupportRepository(queries db.Querier) *SyntheticSupportRepository {
+	return &SyntheticSupportRepository{queries: queries}
+}
+
+// contactIDStrings projects contact UUIDs to their canonical string form for
+// the payload->>'contact_id' text comparison.
+func contactIDStrings(contactIDs []uuid.UUID) []string {
+	out := make([]string, len(contactIDs))
+	for i, id := range contactIDs {
+		out[i] = id.String()
+	}
+	return out
+}
+
+func pgUUIDs(ids []uuid.UUID) []pgtype.UUID {
+	out := make([]pgtype.UUID, len(ids))
+	for i, id := range ids {
+		out[i] = uuidToPgUUID(id)
+	}
+	return out
+}
+
+func pgUUIDsToUUIDs(in []pgtype.UUID) []uuid.UUID {
+	out := make([]uuid.UUID, 0, len(in))
+	for _, v := range in {
+		if v.Valid {
+			out = append(out, uuid.UUID(v.Bytes))
+		}
+	}
+	return out
+}
+
+// --- Settle Gate B ---------------------------------------------------------
+
+// CountUnfinalizedRiverJobsForEventsByContacts counts unfinalized river_job
+// rows whose target event was causally produced by one of this replay's
+// contacts. Returns 0 when contactIDs is empty (no replay → nothing to wait
+// on).
+func (r *SyntheticSupportRepository) CountUnfinalizedRiverJobsForEventsByContacts(ctx context.Context, contactIDs []uuid.UUID) (int64, error) {
+	if len(contactIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticCountUnfinalizedRiverJobsForEventsByContacts(ctx, contactIDStrings(contactIDs))
+}
+
+// CountUnfinalizedMessagingAggregateJobs counts unfinalized
+// messaging_aggregate_for_contact jobs for this replay's contacts + source.
+// Returns 0 when contactIDs is empty.
+func (r *SyntheticSupportRepository) CountUnfinalizedMessagingAggregateJobs(ctx context.Context, contactIDs []uuid.UUID, source string) (int64, error) {
+	if len(contactIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticCountUnfinalizedMessagingAggregateJobs(ctx, db.SyntheticCountUnfinalizedMessagingAggregateJobsParams{
+		Source:     source,
+		ContactIds: contactIDStrings(contactIDs),
+	})
+}
+
+// --- Cleanup event-id capture ----------------------------------------------
+
+// ListEventIdsForContacts returns every event.id whose payload references one
+// of this replay's contacts (the contact-scoped cascade events). Returns nil
+// when contactIDs is empty.
+func (r *SyntheticSupportRepository) ListEventIdsForContacts(ctx context.Context, contactIDs []uuid.UUID) ([]uuid.UUID, error) {
+	if len(contactIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := r.queries.SyntheticListEventIdsForContacts(ctx, contactIDStrings(contactIDs))
+	if err != nil {
+		return nil, err
+	}
+	return pgUUIDsToUUIDs(rows), nil
+}
+
+// ListEventIdsBySourceAndSourceIDPrefix returns adapter-direct root event ids
+// matched by the synthetic (source, source_id-prefix) — the no-contact roots
+// (raw_message.* / external_contact.upserted) that the contact-scoped read
+// misses. prefix is matched as a LIKE pattern; the caller passes 'synth-<ns>-%'.
+func (r *SyntheticSupportRepository) ListEventIdsBySourceAndSourceIDPrefix(ctx context.Context, source, prefix string) ([]uuid.UUID, error) {
+	rows, err := r.queries.SyntheticListEventIdsBySourceAndSourceIdPrefix(ctx, db.SyntheticListEventIdsBySourceAndSourceIdPrefixParams{
+		Source:         source,
+		SourceIDPrefix: pgtype.Text{String: prefix, Valid: true},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return pgUUIDsToUUIDs(rows), nil
+}
+
+// --- ID-tracked, FK-ordered cleanup ----------------------------------------
+
+// DeleteEventConsumerClaimsByEventIds removes claims for the tracked events
+// (cleanup step 1). No-op on an empty set.
+func (r *SyntheticSupportRepository) DeleteEventConsumerClaimsByEventIds(ctx context.Context, eventIDs []uuid.UUID) (int64, error) {
+	if len(eventIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticDeleteEventConsumerClaimsByEventIds(ctx, pgUUIDs(eventIDs))
+}
+
+// DeleteInteractionsByIds removes interactions by tracked id (cleanup step 2).
+func (r *SyntheticSupportRepository) DeleteInteractionsByIds(ctx context.Context, interactionIDs []uuid.UUID) (int64, error) {
+	if len(interactionIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticDeleteInteractionsByIds(ctx, pgUUIDs(interactionIDs))
+}
+
+// DeleteEventsByIds removes events by tracked id (cleanup step 3).
+func (r *SyntheticSupportRepository) DeleteEventsByIds(ctx context.Context, eventIDs []uuid.UUID) (int64, error) {
+	if len(eventIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticDeleteEventsByIds(ctx, pgUUIDs(eventIDs))
+}
+
+// DeleteCommsMessagesByExternalIDPrefix removes comms_message rows whose
+// external_id is ns-prefixed (cleanup step 4).
+func (r *SyntheticSupportRepository) DeleteCommsMessagesByExternalIDPrefix(ctx context.Context, prefix string) (int64, error) {
+	return r.queries.SyntheticDeleteCommsMessagesByExternalIdPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
+}
+
+// DeleteMessagesMessageByGuidPrefix removes messages_message rows whose guid is
+// ns-prefixed (cleanup step 5).
+func (r *SyntheticSupportRepository) DeleteMessagesMessageByGuidPrefix(ctx context.Context, prefix string) (int64, error) {
+	return r.queries.SyntheticDeleteMessagesMessageByGuidPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
+}
+
+// DeleteTelegramMessagesByPeerUserID removes telegram_message rows for one
+// synthetic peer (cleanup step 6). Reuses the existing prod-test query.
+func (r *SyntheticSupportRepository) DeleteTelegramMessagesByPeerUserID(ctx context.Context, peerUserID int64) (int64, error) {
+	return r.queries.DeleteTelegramMessagesByPeerUserID(ctx, pgtype.Int8{Int64: peerUserID, Valid: true})
+}
+
+// DeleteCalendarEventsByGcalEventIDPrefix removes calendar_event rows whose
+// gcal_event_id is ns-prefixed (cleanup step 7). Reuses the existing query.
+func (r *SyntheticSupportRepository) DeleteCalendarEventsByGcalEventIDPrefix(ctx context.Context, prefix string) (int64, error) {
+	return r.queries.DeleteCalendarEventsByGcalEventIdPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
+}
+
+// DeleteExternalIdentitiesByIds removes identities by tracked id, including
+// the source_id-NULL ones MatchOrCreate produces (cleanup step 8 primary).
+func (r *SyntheticSupportRepository) DeleteExternalIdentitiesByIds(ctx context.Context, identityIDs []uuid.UUID) (int64, error) {
+	if len(identityIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticDeleteExternalIdentitiesByIds(ctx, pgUUIDs(identityIDs))
+}
+
+// DeleteExternalIdentitiesBySourceIDPrefix is the prefix backstop for
+// ns-prefixed identity source_ids (cleanup step 8 backstop).
+func (r *SyntheticSupportRepository) DeleteExternalIdentitiesBySourceIDPrefix(ctx context.Context, prefix string) (int64, error) {
+	return r.queries.SyntheticDeleteExternalIdentitiesBySourceIdPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
+}
+
+// DeleteExternalContactsBySourceIDPrefix removes external_contact rows whose
+// source_id is ns-prefixed (cleanup step 9). Reuses the existing query.
+func (r *SyntheticSupportRepository) DeleteExternalContactsBySourceIDPrefix(ctx context.Context, prefix string) (int64, error) {
+	return r.queries.DeleteExternalContactsBySourceIDPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
+}
+
+// DeleteContactTasksByContactIds removes contact_task rows by contact (cleanup
+// step 10; contact_task has no deleted_at, so a hard delete).
+func (r *SyntheticSupportRepository) DeleteContactTasksByContactIds(ctx context.Context, contactIDs []uuid.UUID) (int64, error) {
+	if len(contactIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticDeleteContactTasksByContactIds(ctx, pgUUIDs(contactIDs))
+}
+
+// DeleteContactMethodsByContactIds removes contact_method rows by contact
+// (cleanup step 11).
+func (r *SyntheticSupportRepository) DeleteContactMethodsByContactIds(ctx context.Context, contactIDs []uuid.UUID) (int64, error) {
+	if len(contactIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticDeleteContactMethodsByContactIds(ctx, pgUUIDs(contactIDs))
+}
+
+// DeleteNotesByContactIds removes note rows by contact (cleanup step 12).
+func (r *SyntheticSupportRepository) DeleteNotesByContactIds(ctx context.Context, contactIDs []uuid.UUID) (int64, error) {
+	if len(contactIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticDeleteNotesByContactIds(ctx, pgUUIDs(contactIDs))
+}
+
+// DeleteContactsByIds removes contact rows by tracked id (cleanup step 13). A
+// true DELETE so ON DELETE CASCADE fires for contact_enrichment.
+func (r *SyntheticSupportRepository) DeleteContactsByIds(ctx context.Context, contactIDs []uuid.UUID) (int64, error) {
+	if len(contactIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticDeleteContactsByIds(ctx, pgUUIDs(contactIDs))
+}
+
+// DeleteMacHostByID removes the seeded revoked synthetic mac_host by id
+// (cleanup step 14).
+func (r *SyntheticSupportRepository) DeleteMacHostByID(ctx context.Context, id uuid.UUID) (int64, error) {
+	return r.queries.SyntheticDeleteMacHostById(ctx, uuidToPgUUID(id))
+}
+
+// CountContactsByIds counts surviving contact rows for the given ids (cleanup
+// assertion). Returns 0 on an empty set.
+func (r *SyntheticSupportRepository) CountContactsByIds(ctx context.Context, contactIDs []uuid.UUID) (int64, error) {
+	if len(contactIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticCountContactsByIds(ctx, pgUUIDs(contactIDs))
+}

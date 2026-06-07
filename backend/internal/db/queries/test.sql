@@ -191,3 +191,118 @@ SELECT pg_get_constraintdef(c.oid)::text AS constraint_def
 FROM pg_constraint c
 WHERE c.conrelid = 'interaction'::regclass
   AND c.conname = 'interaction_source_check';
+
+-- ============================================================================
+-- Synthetic seed toolkit (internal/synthetic) test-only support queries.
+-- All synthetic-package DB access routes through these sqlc bindings (via
+-- repository/synthetic_support.go) so the package never inlines raw SQL.
+-- ============================================================================
+
+-- name: SyntheticCountUnfinalizedRiverJobsForEventsByContacts :one
+-- Settle Gate B (part 1): counts unfinalized river_job rows whose target
+-- event (args->>'event_id') was causally produced by one of this replay's
+-- contacts. Every contact-bearing event payload carries a scalar
+-- payload->>'contact_id' (interaction.recorded, calendar.attended/declined,
+-- email.received/sent, message.*, task.*, contact_methods.added, ...), so a
+-- single contact_id projection covers all cascade kinds generically — not a
+-- fixed kind list. Scoped to this replay's contacts (NOT a global kind count)
+-- so concurrent unrelated jobs on the shared test DB never block the gate.
+SELECT COUNT(*) FROM river_job
+WHERE finalized_at IS NULL
+  AND (args->>'event_id') IN (
+    SELECT id::text FROM event
+    WHERE (payload->>'contact_id') = ANY(@contact_ids::text[])
+  );
+
+-- name: SyntheticCountUnfinalizedMessagingAggregateJobs :one
+-- Settle Gate B (part 2): the messaging_aggregate_for_contact job keys on
+-- (contact_id, source) in its args, NOT event_id, so it is invisible to the
+-- event-scoped Gate B query above. Counts unfinalized aggregate jobs for this
+-- replay's contacts + source (mirrors CountRematchDispatcherJobsByContact).
+SELECT COUNT(*) FROM river_job
+WHERE finalized_at IS NULL
+  AND kind = 'messaging_aggregate_for_contact'
+  AND (args->>'source') = @source::text
+  AND (args->>'contact_id') = ANY(@contact_ids::text[]);
+
+-- name: SyntheticListEventIdsForContacts :many
+-- Cleanup event-id capture (part 1): every event.id whose payload references
+-- one of this replay's contacts. Covers the full non-prefixed cascade
+-- (interaction.recorded uses interaction.ID as source_id, calendar.attended
+-- uses an internal ref, etc.) generically via payload->>'contact_id'.
+SELECT id FROM event
+WHERE (payload->>'contact_id') = ANY(@contact_ids::text[]);
+
+-- name: SyntheticListEventIdsBySourceAndSourceIdPrefix :many
+-- Cleanup event-id capture (part 2): adapter-direct root events that carry NO
+-- CRM contact id (raw_message.* / external_contact.upserted roots, and
+-- unknown/pending replays that touch no seeded contact). Keyed by the
+-- synthetic (source, source_id-prefix) the adapter wrote. The UNION of this
+-- and SyntheticListEventIdsForContacts is the cleanup event set — leaving a
+-- root event behind would make a later same-namespace replay dedup on the
+-- (source, source_id) unique and skip inline ingest (idempotency break).
+-- Caller passes a BARE prefix; the '%' is appended here (matches the existing
+-- Delete*ByPrefix conventions).
+SELECT id FROM event
+WHERE source = @source::text
+  AND source_id LIKE @source_id_prefix || '%';
+
+-- name: SyntheticDeleteEventConsumerClaimsByEventIds :execrows
+-- Cleanup step 1: claims for this replay's events (by tracked event id).
+DELETE FROM event_consumer_claim WHERE event_id = ANY(@event_ids::uuid[]);
+
+-- name: SyntheticDeleteInteractionsByIds :execrows
+-- Cleanup step 2: interactions by tracked id.
+DELETE FROM interaction WHERE id = ANY(@interaction_ids::uuid[]);
+
+-- name: SyntheticDeleteEventsByIds :execrows
+-- Cleanup step 3: events by tracked id (NOT by source — that would wipe
+-- other tests' rows sharing the source value on the shared DB).
+DELETE FROM event WHERE id = ANY(@event_ids::uuid[]);
+
+-- name: SyntheticDeleteCommsMessagesByExternalIdPrefix :execrows
+-- Cleanup step 4: comms_message rows whose external_id is ns-prefixed.
+-- Caller passes a BARE prefix; '%' is appended here.
+DELETE FROM comms_message WHERE external_id LIKE @external_id_prefix || '%';
+
+-- name: SyntheticDeleteMessagesMessageByGuidPrefix :execrows
+-- Cleanup step 5: messages_message rows whose guid is ns-prefixed.
+-- Caller passes a BARE prefix; '%' is appended here.
+DELETE FROM messages_message WHERE guid LIKE @guid_prefix || '%';
+
+-- name: SyntheticDeleteExternalIdentitiesByIds :execrows
+-- Cleanup step 8 (primary): identities by tracked id, including the
+-- source_id-NULL ones MatchOrCreate creates for GCal/external_contact
+-- matching that a source_id-prefix delete would miss.
+DELETE FROM external_identity WHERE id = ANY(@identity_ids::uuid[]);
+
+-- name: SyntheticDeleteExternalIdentitiesBySourceIdPrefix :execrows
+-- Cleanup step 8 (prefix backstop): the existing DeleteExternalIdentitiesBySourceID
+-- is exact-match; this prefix variant catches any ns-prefixed source_id rows.
+-- Caller passes a BARE prefix; '%' is appended here.
+DELETE FROM external_identity WHERE source_id LIKE @source_id_prefix || '%';
+
+-- name: SyntheticDeleteContactTasksByContactIds :execrows
+-- Cleanup step 10: contact_task has no deleted_at; hard delete by contact.
+DELETE FROM contact_task WHERE contact_id = ANY(@contact_ids::uuid[]);
+
+-- name: SyntheticDeleteContactMethodsByContactIds :execrows
+-- Cleanup step 11: contact_method by contact.
+DELETE FROM contact_method WHERE contact_id = ANY(@contact_ids::uuid[]);
+
+-- name: SyntheticDeleteNotesByContactIds :execrows
+-- Cleanup step 12: note by contact.
+DELETE FROM note WHERE contact_id = ANY(@contact_ids::uuid[]);
+
+-- name: SyntheticDeleteContactsByIds :execrows
+-- Cleanup step 13: contact by tracked id. A true DELETE (not soft) so
+-- ON DELETE CASCADE fires for contact_enrichment (and any cascade FK).
+DELETE FROM contact WHERE id = ANY(@contact_ids::uuid[]);
+
+-- name: SyntheticDeleteMacHostById :execrows
+-- Cleanup step 14: the seeded revoked synthetic mac_host by id.
+DELETE FROM mac_host WHERE id = @id;
+
+-- name: SyntheticCountContactsByIds :one
+-- Cleanup assertion — count surviving contact rows for the given ids.
+SELECT COUNT(*) FROM contact WHERE id = ANY(@contact_ids::uuid[]);
