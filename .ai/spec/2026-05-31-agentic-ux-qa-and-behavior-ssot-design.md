@@ -140,6 +140,15 @@ The SSOT is the foundation everything else consumes, so it goes first. Each piec
 3. **Anti-drift** — traceability + CI coverage checks, once enough behaviors carry coverage links to be worth enforcing.
 4. **Track B** — the QA harness, proved on the Pi under interactive Claude, then graduated to `codex exec` on the VPS.
 
+## Relationship to the seed + parallelization work (D, #413)
+
+Added 2026-06-07 — the deploy/staging design surfaced concrete couplings between this work and two of its sub-projects:
+
+- **The synthetic seed toolkit (D, `.ai/spec/2026-06-07-synthetic-seed-generator-design.md`) supersedes the seed substrate this spec builds on.** Background / Track A / Track B here reference `test-api.ts` + the `CRM_ENV`-gated `/seed/*` routes; D refactors those onto a deterministic, namespaced, library-first toolkit. → Track A's new tests and Track B's tours should build on **D's toolkit**, not the legacy routes directly. D's deterministic scenarios are the world Track B tours and Track A asserts against.
+- **D's coverage-check and Piece 3 (anti-drift) are the same kind of mechanism.** D can index its scenarios by **SSOT behavior IDs** (a fixture per `ux` / `data` behavior), making "rich enough to tour/assert" concretely measurable and feeding Piece 3's traceability.
+- **Test parallelization (#413, `.ai/spec/2026-06-07-test-parallelization-design.md`) parallelizes the post-rebalance suite.** Coordinate so E2E assertions aren't rewritten twice — Track A's Playwright relaxation lands before #413's E2E-scoping — and build Track A's new API-level tests parallelization-ready (D-backed scoping). #413 is gated on D's suite migration.
+- **The VPS host this spec sketched is now sub-project B** (`.ai/spec/2026-06-07-vps-and-tailnet-isolation-design.md`); the harness graduates onto the box B provisions, and Track B tours target the staging instance (sub-project C, `.ai/spec/2026-06-07-staging-environment-design.md`).
+
 ## Key risks
 
 - **Spec quality is unproven.** The whole edifice rests on the intent specs being good oracles. Mitigation: prove the judge loop against real specs with a human in the loop ($0 interactive Claude) *before* investing in autonomous infra.
