@@ -502,6 +502,14 @@ func resolveSeedParams(opts runOptions, defaultProfile synthetic.Profile) (synth
 	if opts.prngSeed != 0 {
 		params.Seed = opts.prngSeed
 	}
+	// Validate the namespace HERE — before any caller does destructive work.
+	// NewHarness* validates at construction, but --reset-and-seed truncates every
+	// live data table BEFORE the harness is built, so a late rejection would leave
+	// the DB wiped and unseeded. Failing fast here keeps the truncate from running
+	// on an invalid namespace.
+	if err := synthetic.ValidateNamespace(params.Namespace); err != nil {
+		return synthetic.SeedParams{}, err
+	}
 	return params, nil
 }
 

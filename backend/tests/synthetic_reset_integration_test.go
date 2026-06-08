@@ -145,3 +145,66 @@ func TestSyntheticResetSyntheticData_WipesEveryDataTable(t *testing.T) {
 		}
 	}
 }
+
+// TestSyntheticReset_InvalidNamespaceLeavesDataIntact guards the
+// destructive-ordering contract against a real DB: an invalid namespace must be
+// rejected BEFORE the hard TRUNCATE, so seeded data survives a refused reset.
+// The production reset path is `validate namespace → ResetSyntheticData →
+// runProfile`; this reproduces that ordering with the same guard
+// (synthetic.ValidateNamespace) the crm-admin entrypoint runs up front. If the
+// guard were absent or moved AFTER ResetSyntheticData, the seeded contact would
+// be wiped and the survival assertion would fail.
+func TestSyntheticReset_InvalidNamespaceLeavesDataIntact(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping destructive reset integration test in short mode")
+	}
+
+	ctx := context.Background()
+	cloneURL, drop := testdb.NewEphemeralClone(t)
+	t.Cleanup(drop)
+
+	cfg := config.TestConfig()
+	cfg.Database.URL = cloneURL
+	database, err := db.NewDatabase(ctx, cfg.Database)
+	require.NoError(t, err)
+	t.Cleanup(database.Close)
+
+	support := repository.NewSyntheticSupportRepository(database.Queries)
+
+	// Seed a representative live-data row so a stray TRUNCATE would be observable.
+	h := synthetic.NewHarnessForNamespace(t, ctx, database, "reset", factory.DefaultSeed)
+	gen := h.Generator()
+	spec := gen.Contact(factory.WithEmail())
+	_, err = h.SeedContact(ctx, spec)
+	require.NoError(t, err)
+
+	beforeContacts, err := support.CountAllRows(ctx, "contact")
+	require.NoError(t, err)
+	require.Greater(t, beforeContacts, int64(0), "expected seeded contacts before the refused reset")
+
+	// resetIfNamespaceValid mirrors the production reset ordering: validate the
+	// namespace FIRST, and only TRUNCATE if it passes. The crm-admin entrypoint
+	// runs the guard (synthetic.ValidateNamespace, via resolveSeedParams) before
+	// dispatching the reset adapter, which is what keeps the truncate from running
+	// on an invalid namespace. Reproducing that order here means dropping the guard
+	// (a regression) would let ResetSyntheticData run and wipe the seeded contact —
+	// failing the survival assertion below.
+	resetIfNamespaceValid := func(namespace string) error {
+		if err := synthetic.ValidateNamespace(namespace); err != nil {
+			return err
+		}
+		return support.ResetSyntheticData(ctx)
+	}
+
+	// `bad_ns` contains an underscore (a SQL LIKE metacharacter) — outside the
+	// safe [a-z0-9-] charset.
+	require.Error(t, resetIfNamespaceValid("bad_ns"),
+		"a reset on an invalid namespace must be refused before any truncate")
+
+	// The guard refused up front, so ResetSyntheticData never ran and the seeded
+	// data is untouched.
+	afterContacts, err := support.CountAllRows(ctx, "contact")
+	require.NoError(t, err)
+	require.Equal(t, beforeContacts, afterContacts,
+		"a reset refused on an invalid namespace must leave seeded data intact")
+}

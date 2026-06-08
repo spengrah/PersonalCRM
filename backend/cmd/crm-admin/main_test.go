@@ -885,6 +885,45 @@ func TestRunSeedUnknownProfileErrors(t *testing.T) {
 	}
 }
 
+// TestRunResetAndSeedInvalidNamespaceRefusesBeforeDispatch guards the
+// destructive-ordering contract: an invalid --namespace must be rejected BEFORE
+// the seed runner is dispatched. ResetSyntheticData (the hard TRUNCATE of every
+// live data table) lives inside seedAdapter.ResetAndSeed, so asserting
+// resetCalls == 0 proves the truncate never ran. This test FAILS if validation
+// is moved back into runProfile (after the truncate).
+func TestRunResetAndSeedInvalidNamespaceRefusesBeforeDispatch(t *testing.T) {
+	deps, _, _, _, _, _ := newTestDeps()
+	seed := &fakeSeedRunner{}
+	deps.seed = seed
+
+	// `bad_ns` contains an underscore — a SQL LIKE metacharacter outside the
+	// safe [a-z0-9-] charset.
+	err := run(context.Background(), runOptions{resetAndSeed: true, seedYes: true, seedNamespace: "bad_ns"}, deps)
+	if err == nil {
+		t.Fatal("expected invalid-namespace error")
+	}
+	if seed.resetCalls != 0 {
+		t.Fatalf("reset-and-seed must not run on an invalid namespace; got %d calls (the DB would be wiped before the late rejection)", seed.resetCalls)
+	}
+}
+
+// TestRunSeedInvalidNamespaceRefusesBeforeDispatch is the additive-path
+// counterpart: --seed must also fail fast on an invalid namespace rather than
+// defer the rejection to harness construction.
+func TestRunSeedInvalidNamespaceRefusesBeforeDispatch(t *testing.T) {
+	deps, _, _, _, _, _ := newTestDeps()
+	seed := &fakeSeedRunner{}
+	deps.seed = seed
+
+	err := run(context.Background(), runOptions{doSeed: true, seedYes: true, seedNamespace: "bad_ns"}, deps)
+	if err == nil {
+		t.Fatal("expected invalid-namespace error")
+	}
+	if seed.seedCalls != 0 {
+		t.Fatalf("seed must not run on an invalid namespace; got %d calls", seed.seedCalls)
+	}
+}
+
 func TestRunSeedNamespaceAndPRNGOverride(t *testing.T) {
 	deps, _, _, _, _, _ := newTestDeps()
 	seed := &fakeSeedRunner{}
