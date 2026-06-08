@@ -3,6 +3,7 @@ package replay
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"testing"
 	"time"
 
@@ -73,7 +74,31 @@ func defaultNamespace() string {
 	return fmt.Sprintf("h%d", accelerated.GetCurrentTime().UnixNano())
 }
 
+// namespacePattern is the safe charset for a namespace token: lowercase
+// alphanumerics and hyphens only. It deliberately excludes the SQL LIKE
+// metacharacters `_` and `%` (and everything else), so a namespace can never
+// over-match in the prefix-based cleanup deletes.
+var namespacePattern = regexp.MustCompile(`^[a-z0-9-]+$`)
+
+// ValidateNamespace rejects a namespace token that contains characters outside
+// the safe charset (notably the LIKE metacharacters `_` and `%`). Exported so the
+// charset contract is directly unit-testable; NewHarness* call it at construction.
+func ValidateNamespace(namespace string) error {
+	if !namespacePattern.MatchString(namespace) {
+		return fmt.Errorf("synthetic: invalid namespace %q — must match %s (no SQL LIKE metacharacters)", namespace, namespacePattern.String())
+	}
+	return nil
+}
+
 func newHarness(ctx context.Context, database *db.Database, namespace string, seed uint64) (*Harness, func(context.Context) error, error) {
+	// Reject namespaces with characters outside the safe charset. Cleanup deletes
+	// by `LIKE 'synth-<ns>-%'`, so a namespace containing a LIKE metacharacter
+	// (`_` or `%`) would over-match and could wipe another namespace's rows;
+	// restricting the token to [a-z0-9-] makes that impossible by construction.
+	if err := ValidateNamespace(namespace); err != nil {
+		return nil, nil, err
+	}
+
 	cfg := config.TestConfig()
 	if cfg.River.WorkerConcurrency <= 0 {
 		cfg.River.WorkerConcurrency = 4

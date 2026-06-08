@@ -31,6 +31,14 @@ import (
 // Harness is the replay harness re-exported at the package root.
 type Harness = replay.Harness
 
+// ValidateNamespace reports whether a namespace token is safe for the toolkit's
+// prefix-based cleanup (lowercase alphanumerics + hyphens; no SQL LIKE
+// metacharacters). NewHarness* enforce it at construction; re-exported so callers
+// can validate up front.
+func ValidateNamespace(namespace string) error {
+	return replay.ValidateNamespace(namespace)
+}
+
 // NewHarness builds a replay harness for a test. ctx is MANDATORY and is the
 // exact context passed to the River client's Start (NOT a timeout-derived ctx).
 func NewHarness(t *testing.T, ctx context.Context, database *db.Database) *Harness {

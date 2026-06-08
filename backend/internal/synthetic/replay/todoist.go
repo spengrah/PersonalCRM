@@ -40,25 +40,71 @@ func (fakeTodoistClient) Sync(_ context.Context, _ string, _ []string, _ []todoi
 	return &todoist.SyncResponse{SyncToken: "synthetic-sync-token", FullSync: true}, nil
 }
 
+// namespaceScopedContactRepo wraps the real contact repository for the Todoist
+// replay so the provider's reconcile is naturally scoped to THIS harness's
+// contacts. The Todoist provider's reconcileContactTasks calls
+// ListContactsWithContactBy to enumerate every cadence-bearing contact DB-wide
+// and may create/update/close contact_task rows on any of them; this wrapper
+// filters that enumeration to the harness's seeded contact ids, so a replay in
+// one namespace can never create or mutate a task on another namespace's (or a
+// real) contact. GetContact passes through unchanged. Test-only — no production
+// provider change.
+type namespaceScopedContactRepo struct {
+	real    *repository.ContactRepository
+	allowed map[uuid.UUID]struct{}
+}
+
+func (r *namespaceScopedContactRepo) GetContact(ctx context.Context, id uuid.UUID) (*repository.Contact, error) {
+	return r.real.GetContact(ctx, id)
+}
+
+func (r *namespaceScopedContactRepo) ListContactsWithContactBy(ctx context.Context, limit int32) ([]repository.Contact, error) {
+	all, err := r.real.ListContactsWithContactBy(ctx, limit)
+	if err != nil {
+		return nil, err
+	}
+	scoped := make([]repository.Contact, 0, len(r.allowed))
+	for _, c := range all {
+		if _, ok := r.allowed[c.ID]; ok {
+			scoped = append(scoped, c)
+		}
+	}
+	return scoped, nil
+}
+
 // ReplayTodoist drives the REAL CadenceSyncProvider with a fake Client (no
 // OAuth/HTTP). It exercises cadence task reconciliation; there is no inbound
 // sender or pending equivalent, so MatchIntent is ignored. "Settled" = Sync's
 // own DB writes complete + any enqueued jobs drain.
 //
-// IMPORTANT — global reconcile scope: the provider's reconcile lists ALL
-// contacts with cadence + contact_by (it has no per-contact scoping seam), so on
-// the shared test DB it can create a contact_task for a cadence-bearing contact
-// this replay did NOT seed. To keep the run non-destructive, the adapter
-// snapshots the provider's contact_task ids before and after Sync and tracks the
-// DELTA into the cleanup ledger, so teardown removes exactly the rows this run
-// created — regardless of which contact they attached to. contactIDs is the
-// caller's seeded set, returned for assertion convenience.
+// Namespace scoping: the provider's reconcile lists ALL cadence-bearing contacts
+// DB-wide (ListContactsWithContactBy) and may create/update/close contact_task
+// rows on any of them. To keep the replay non-destructive on the shared test DB
+// (where the real internal/todoist cadence tests run concurrently), the adapter
+// injects a namespace-scoped contact-lister wrapper so the reconcile only ever
+// sees THIS harness's seeded contacts — it can never touch another namespace's
+// (or a real) contact. The before/after contact_task id-delta is still tracked
+// into the cleanup ledger as belt-and-suspenders. contactIDs is the caller's
+// seeded set, returned for assertion convenience.
 func (h *Harness) ReplayTodoist(ctx context.Context, contactIDs []uuid.UUID) (TodoistResult, error) {
 	syncRepo := repository.NewSyncRepositoryWithPool(h.database.Queries, h.database.Pool)
+
+	// Build the namespace-scoped allow-set: every contact this harness seeded
+	// (the ledger) plus the caller's explicit set, so the reconcile is confined
+	// to the namespace regardless of which contacts carry cadence + contact_by.
+	allowed := make(map[uuid.UUID]struct{})
+	for _, id := range h.snapshotContactIDs() {
+		allowed[id] = struct{}{}
+	}
+	for _, id := range contactIDs {
+		allowed[id] = struct{}{}
+	}
+	scopedContacts := &namespaceScopedContactRepo{real: h.contactRepo, allowed: allowed}
+
 	provider := todoist.NewCadenceSyncProvider(
 		syntheticTodoistOAuth{},
 		repository.NewContactTaskRepository(h.database.Queries),
-		h.contactRepo,
+		scopedContacts,
 		syncRepo,
 		config.TestConfig(),
 		h.bus,

@@ -4,10 +4,12 @@ import (
 	"context"
 	"testing"
 
+	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/synthetic"
 	"personal-crm/backend/internal/synthetic/factory"
 	"personal-crm/backend/tests/testsupport"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
 
@@ -89,4 +91,41 @@ func TestSyntheticSeedAll_CleanupEmptiesNamespace(t *testing.T) {
 	require.NoError(t, err)
 	require.Greater(t, surviving, int64(0), "a different namespace's contact must survive the target's cleanup")
 	_ = sentinelContact
+}
+
+// TestSyntheticTodoistReplay_DoesNotTouchOtherNamespace proves the Todoist replay
+// is namespace-scoped: a replay in namespace A does NOT create or mutate a
+// contact_task on a cadence-bearing sentinel contact seeded in namespace B, even
+// though the provider's reconcile lists ALL cadence-bearing contacts DB-wide.
+// Mirrors the cross-namespace cleanup guard.
+func TestSyntheticTodoistReplay_DoesNotTouchOtherNamespace(t *testing.T) {
+	testsupport.RequireLongTests(t)
+	database, ctx := newSyntheticDB(t)
+	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
+
+	// Namespace B: a cadence-bearing sentinel contact (eligible for the Todoist
+	// reconcile's global ListContactsWithContactBy enumeration).
+	sentinel := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), 24680)
+	sgen := sentinel.Generator()
+	sentinelContact, err := sentinel.SeedContact(ctx, sgen.Contact(factory.WithEmail(), factory.WithCadence("weekly")))
+	require.NoError(t, err)
+
+	// No contact_task on the sentinel before the other namespace's replay.
+	pre, err := contactTaskRepo.ListContactTasksByContact(ctx, sentinelContact.ID)
+	require.NoError(t, err)
+	require.Empty(t, pre, "sentinel contact should have no contact_task before the replay")
+
+	// Namespace A: seed its own cadence contact + run a Todoist replay.
+	a := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), 13579)
+	agen := a.Generator()
+	aContact, err := a.SeedContact(ctx, agen.Contact(factory.WithEmail(), factory.WithCadence("weekly")))
+	require.NoError(t, err)
+	_, err = a.ReplayTodoist(ctx, []uuid.UUID{aContact.ID})
+	require.NoError(t, err)
+
+	// The sentinel (namespace B) contact must be untouched — no contact_task
+	// created or mutated by namespace A's replay.
+	post, err := contactTaskRepo.ListContactTasksByContact(ctx, sentinelContact.ID)
+	require.NoError(t, err)
+	require.Empty(t, post, "namespace A's Todoist replay must not create a contact_task on namespace B's contact")
 }

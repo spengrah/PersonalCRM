@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/matching"
+	"personal-crm/backend/internal/synthetic"
 	"personal-crm/backend/internal/synthetic/factory"
 
 	"github.com/stretchr/testify/assert"
@@ -114,6 +115,17 @@ func TestSyntheticFactory_PhoneSubBlocksDisjoint(t *testing.T) {
 		"A's normalized phone %q must carry A's prefix %q", normA, gA.SyntheticPhonePrefix())
 	assert.False(t, strings.HasPrefix(normB, gA.SyntheticPhonePrefix()),
 		"namespace B's phone %q must not fall in namespace A's block", normB)
+}
+
+func TestSyntheticNamespaceValidation(t *testing.T) {
+	// Safe tokens (lowercase alnum + hyphen) are accepted; cleanup deletes by
+	// LIKE 'synth-<ns>-%', so anything with a LIKE metacharacter is rejected.
+	for _, ns := range []string{"alpha", "qa-1", "h1234567890", "r0a1b2c3", "seedall"} {
+		require.NoError(t, synthetic.ValidateNamespace(ns), "namespace %q should be valid", ns)
+	}
+	for _, ns := range []string{"qa_1", "a%b", "QA1", "ns space", "ns.dot", "", "ns/slash"} {
+		require.Error(t, synthetic.ValidateNamespace(ns), "namespace %q must be rejected (LIKE-unsafe / out of charset)", ns)
+	}
 }
 
 func TestSyntheticFactory_EdgeCaseOptions(t *testing.T) {
