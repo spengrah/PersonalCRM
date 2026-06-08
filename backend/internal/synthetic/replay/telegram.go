@@ -31,11 +31,11 @@ type TelegramResult struct {
 }
 
 // ReplayTelegram feeds a synthetic PRIVATE inbound message through the REAL
-// MessageHandler.HandleNewMessage with a nil api client (safe for the private
-// path only — group chats are deferred). For MatchSeeded the seeded contact's
-// telegram handle matches the peer username → matched interaction. For
-// MatchUnknown the peer is stranded (telegram_message.matched_contact_id IS NULL)
-// + a discovery candidate.
+// MessageHandler.HandleNewMessage with a nil api client (the private path never
+// touches it). For MatchSeeded the seeded contact's telegram handle matches the
+// peer username → matched interaction. For MatchUnknown the peer is stranded
+// (telegram_message.matched_contact_id IS NULL) + a discovery candidate. Group
+// chats are handled by ReplayTelegramGroup.
 //
 // contactID is the seeded contact this message targets (for MatchSeeded). The
 // caller must seed it with a telegram method matching spec.MatchHandle.
@@ -46,7 +46,7 @@ func (h *Harness) ReplayTelegram(ctx context.Context, contactID uuid.UUID, spec 
 		repository.NewSyncRepositoryWithPool(h.database.Queries, h.database.Pool),
 		nil, // syncStateID: optional, only used to stamp last-sync timestamps
 		telegramSelfUserID,
-		200, // groupMaxMembers (irrelevant on the private path)
+		h.groupMaxMembers, // irrelevant on the private path
 		h.peerMatcher.matcher,
 		h.peerMatcher.engine,
 	)

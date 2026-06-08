@@ -56,6 +56,10 @@ type created struct {
 	interactionIDs  []uuid.UUID
 	eventIDs        []uuid.UUID
 	telegramPeerIDs []int64
+	// telegramChatIDs are group chat ids a group replay created a
+	// telegram_chat_config row for, tracked so cleanup deletes those rows by id
+	// (telegram_chat_config has no namespace column — keyed only by chat id).
+	telegramChatIDs []int64
 	// contactTaskIDs are todoist contact_task rows the Todoist replay's
 	// (globally-scoped) reconcile created — tracked by a before/after diff so
 	// cleanup removes exactly them, even on cadence-bearing contacts the replay
@@ -74,6 +78,7 @@ func newCreated() *created {
 func (c *created) addContact(id uuid.UUID)       { c.contactIDs = append(c.contactIDs, id) }
 func (c *created) addInteraction(id uuid.UUID)   { c.interactionIDs = append(c.interactionIDs, id) }
 func (c *created) addTelegramPeer(id int64)      { c.telegramPeerIDs = append(c.telegramPeerIDs, id) }
+func (c *created) addTelegramChat(id int64)      { c.telegramChatIDs = append(c.telegramChatIDs, id) }
 func (c *created) addContactTask(id uuid.UUID)   { c.contactTaskIDs = append(c.contactTaskIDs, id) }
 func (c *created) addDirectSource(source string) { c.directSources[source] = struct{}{} }
 
@@ -109,6 +114,11 @@ type Harness struct {
 	// the telegram adapter.
 	peerMatcher *telegramPeerMatcherDeps
 
+	// groupMaxMembers is the size threshold the MessageHandler is built with,
+	// sourced from the test config (TELEGRAM_GROUP_MAX_MEMBERS default) so the
+	// harness tracks the production default rather than hard-coding a copy.
+	groupMaxMembers int
+
 	created   *created
 	createdMu sync.Mutex
 
@@ -137,6 +147,12 @@ func (h *Harness) MessagesRepo() *repository.MessagesMessageRepository { return 
 
 // MacHostID is the seeded revoked synthetic host id passed as hostID to ingest.
 func (h *Harness) MacHostID() uuid.UUID { return h.macHostID }
+
+// GroupMaxMembers is the size threshold the harness's MessageHandler enforces (a
+// group over it is untracked-by-size under status "auto"). Exposed so group tests
+// size their tracked/untracked member counts relative to the real threshold
+// rather than a magic number.
+func (h *Harness) GroupMaxMembers() int { return h.groupMaxMembers }
 
 // track records ids/peers into the ledger (adapter-facing, mutex-guarded).
 func (h *Harness) track(fn func(c *created)) {

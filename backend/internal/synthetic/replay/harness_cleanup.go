@@ -128,6 +128,16 @@ func (h *Harness) cleanup(ctx context.Context) error {
 		}
 		return nil
 	})
+	// telegram_chat_config (by tracked group chat id). It has no namespace column
+	// (keyed only by telegram_chat_id), so a group replay's config rows are
+	// deleted by the exact chat ids the ledger tracked. No FK to contact, so it
+	// sits with the telegram_message step. Without it a group replay would leak
+	// config rows on the shared DB and risk future cross-namespace chat-id
+	// collisions.
+	step("telegram_chat_config", func() error {
+		_, err := h.support.DeleteTelegramChatConfigsByChatIds(ctx, c.telegramChatIDs)
+		return err
+	})
 	// 7. calendar_event (ns-prefixed gcal_event_id).
 	step("calendar_event", func() error {
 		_, err := h.support.DeleteCalendarEventsByGcalEventIDPrefix(ctx, prefix)
@@ -153,9 +163,24 @@ func (h *Harness) cleanup(ctx context.Context) error {
 		_, err := h.support.DeleteExternalIdentitiesBySourceIDPrefix(ctx, prefix)
 		return err
 	})
+	// external_identity for unmatched telegram peers. MatchPeer keys the identity
+	// by source='telegram', source_id = the BARE peer id, and the synthetic handle
+	// normalizes to 'synth_<ns>_<n>' (underscores) — neither matches the ns-prefix
+	// ('synth-<ns>-') deletes above, so clear these by the tracked peer ids before
+	// the contact delete.
+	step("external_identity_telegram_peer", func() error {
+		_, err := h.support.DeleteTelegramExternalIdentitiesByPeerIds(ctx, c.telegramPeerIDs)
+		return err
+	})
 	// 9. external_contact (ns-prefixed source_id).
 	step("external_contact", func() error {
 		_, err := h.support.DeleteExternalContactsBySourceIDPrefix(ctx, prefix)
+		return err
+	})
+	// external_contact telegram discovery candidates, keyed by the bare peer id
+	// (source='telegram'), which the ns-prefix delete above misses.
+	step("external_contact_telegram_peer", func() error {
+		_, err := h.support.DeleteTelegramExternalContactsByPeerIds(ctx, c.telegramPeerIDs)
 		return err
 	})
 	// 10. contact_task (by contact, hard delete — no deleted_at), plus the

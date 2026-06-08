@@ -1295,6 +1295,11 @@ type Querier interface {
 	// for a broad delete the guard must match the exact clone-name prefix, not a
 	// looser pattern.
 	SweepRiverJobsInCloneForTest(ctx context.Context) (int64, error)
+	// Settle Gate A (GCal decline terminal): count ALL calendar_event rows for the
+	// gcal id regardless of status/match. The cutover decline branch DELETES the
+	// row, so the decline test settles on this reaching 0. calendar_event has no
+	// deleted_at column (hard-delete table).
+	SyntheticCountCalendarEventByGcalId(ctx context.Context, gcalEventID string) (int64, error)
 	// Harness setup collision detection (D5) — PRIMARY phone-band check. A seeded
 	// synthetic contact's phone lives ONLY as a contact_method (no external_identity
 	// until a later replay), and identity matching cross-matches via
@@ -1338,6 +1343,32 @@ type Querier interface {
 	// Settle Gate A (telegram unknown-sender): a message row exists for the peer
 	// with matched_contact_id IS NULL (the stranded/discovery-candidate state).
 	SyntheticCountStrandedTelegramMessagesByPeer(ctx context.Context, peerUserID pgtype.Int8) (int64, error)
+	// Harness setup collision detection: count telegram external_contact +
+	// external_identity rows keyed by a BARE peer-id source_id that falls in this
+	// namespace's reserved peer band [band_start, band_end). A discovery/stranded
+	// replay creates these (source='telegram', source_id=<peer id>); a crashed prior
+	// run can leave them with no remaining telegram_message row, so the peer-band
+	// check on telegram_message alone would miss them. A non-zero count means the
+	// band is occupied → NewHarness re-salts.
+	//
+	// The cast is wrapped in a CASE that only evaluates source_id::bigint for
+	// all-digit values (bounded to 18 digits, safely under the int64 max): a bare
+	// WHERE `source_id ~ '...' AND source_id::bigint >= ...` is NOT safe because
+	// PostgreSQL may reorder the predicates and run the cast on a non-numeric
+	// source_id (other tests create telegram rows with text source ids like
+	// 'tg-discovery-upsert-*'), raising "invalid input syntax for type bigint". The
+	// CASE makes the cast conditional, so non-numeric rows yield NULL and fall out of
+	// the range comparison.
+	SyntheticCountTelegramBarePeerRowsInBand(ctx context.Context, arg SyntheticCountTelegramBarePeerRowsInBandParams) (int64, error)
+	// Harness setup collision detection: count telegram_chat_config rows whose
+	// telegram_chat_id falls in this namespace's reserved peer band [band_start,
+	// band_end) — group chat ids are drawn from that band. A non-zero count means a
+	// leftover config row occupies the band, so NewHarness re-salts.
+	SyntheticCountTelegramChatConfigInChatIdBand(ctx context.Context, arg SyntheticCountTelegramChatConfigInChatIdBandParams) (int64, error)
+	// Group assertion: count telegram_message rows for (telegram_chat_id,
+	// telegram_message_id). Tests assert 0 for the untracked-by-size group case (the
+	// shouldTrackChat gate returns before UpsertMessage) and 1 for tracked.
+	SyntheticCountTelegramMessagesByChatAndMessageId(ctx context.Context, arg SyntheticCountTelegramMessagesByChatAndMessageIdParams) (int64, error)
 	// Harness setup collision detection (D5): count live telegram_message rows whose
 	// peer_user_id falls in this namespace's reserved sub-block [band_start,
 	// band_end). A non-zero count means another namespace already occupies the band
@@ -1367,6 +1398,13 @@ type Querier interface {
 	// exists with an empty matched_contact_ids array. calendar_event has no
 	// deleted_at column (hard-delete table), so no soft-delete filter.
 	SyntheticCountUnmatchedCalendarEventByGcalId(ctx context.Context, gcalEventID string) (int64, error)
+	// Settle/assert (GCal unmatched-attendee import candidate): the GCal provider
+	// stores an unmatched attendee as an external_contact with source='gcal_attendee'
+	// and source_id = the NORMALIZED (lowercased/trimmed) attendee email, which for a
+	// synthetic unknown attendee carries the 'synth-<ns>-' prefix. Counts those
+	// unmatched candidates for this namespace. Caller passes a BARE prefix; '%'
+	// appended here.
+	SyntheticCountUnmatchedExternalContactByEmailPrefix(ctx context.Context, sourceIDPrefix pgtype.Text) (int64, error)
 	// Settle Gate A (Mac-contact unknown-sender): the external_contact row for the
 	// entity id exists with match_status='unmatched'.
 	SyntheticCountUnmatchedExternalContactBySourceId(ctx context.Context, sourceID string) (int64, error)
@@ -1413,6 +1451,23 @@ type Querier interface {
 	SyntheticDeleteMessagesMessageByGuidPrefix(ctx context.Context, guidPrefix pgtype.Text) (int64, error)
 	// Cleanup step 12: note by contact.
 	SyntheticDeleteNotesByContactIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error)
+	// Cleanup: delete the group telegram_chat_config rows a group replay created, by
+	// the exact tracked chat ids (telegram_chat_config has no namespace column —
+	// keyed only by telegram_chat_id).
+	SyntheticDeleteTelegramChatConfigsByChatIds(ctx context.Context, chatIds []int64) (int64, error)
+	// Cleanup: telegram discovery candidate external_contact rows are keyed by
+	// source='telegram', source_id = the BARE peer user id (not an ns-prefixed
+	// string), so the ns-prefix external_contact delete misses them. A stranded /
+	// unknown-sender replay that crosses the discovery threshold upserts one; delete
+	// them by the exact tracked peer ids (string form).
+	SyntheticDeleteTelegramExternalContactsByPeerIds(ctx context.Context, peerIds []string) (int64, error)
+	// Cleanup: MatchPeer creates an external_identity for an unmatched telegram peer
+	// keyed by source='telegram', source_id = the BARE peer user id. The synthetic
+	// handle is normalized to 'synth_<ns>_<n>' (underscores), which the ns-prefix
+	// ('synth-<ns>-') identifier delete does NOT match, so clear these by the exact
+	// tracked peer ids before the contact delete (external_identity survives contact
+	// delete via ON DELETE SET NULL and would otherwise pollute future matching).
+	SyntheticDeleteTelegramExternalIdentitiesByPeerIds(ctx context.Context, peerIds []string) (int64, error)
 	// Todoist replay: snapshot the set of contact_task ids for a provider so the
 	// replay can diff before/after its (globally-scoped) reconcile and track the
 	// rows it created — even for cadence-bearing contacts it did not seed — so

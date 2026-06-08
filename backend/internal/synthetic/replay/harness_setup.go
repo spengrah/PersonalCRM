@@ -103,6 +103,14 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 	if cfg.River.WorkerConcurrency <= 0 {
 		cfg.River.WorkerConcurrency = 4
 	}
+	// The MessageHandler size threshold tracks the test config's
+	// TELEGRAM_GROUP_MAX_MEMBERS rather than a hard-coded copy of the production
+	// default, so a config change does not silently leave the harness on a stale
+	// boundary. Defend against a zero/unset value.
+	groupMaxMembers := cfg.Telegram.GroupMaxMembers
+	if groupMaxMembers <= 0 {
+		groupMaxMembers = 10
+	}
 
 	// Repositories.
 	eventRepo := repository.NewEventRepository(database.Queries)
@@ -182,6 +190,14 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 	recorder := consumer.NewInteractionRecorder(contactService, stagingRegistry, bus, cadenceUpdater, nil, calendarEventRepo)
 	recorderShim.real = consumer.NewInteractionRecorderWorker(bus, database.Pool, recorder, nil)
 	cadenceShim.real = consumer.NewCadenceUpdaterWorker(bus, database.Pool, cadenceUpdater)
+
+	// Calendar decline handler: calendar.declined routes to a distinct River job
+	// (CalendarDeclineHandlerJobArgs) that soft-deletes the derived gcal
+	// interaction. Without a registered worker the enqueued job never finalizes,
+	// so a decline replay's Gate B (and the harness teardown) would stall. Mirrors
+	// the cmd/crm-api wiring; inert for replays that never decline an event.
+	calendarDeclineHandler := consumer.NewCalendarDeclineHandler(interactionRepo, contactRepo)
+	river.AddWorker(workers, consumer.NewCalendarDeclineHandlerWorker(bus, database.Pool, calendarDeclineHandler))
 
 	// Off-mode FollowUpManager: cutover-only Todoist deps are nil.
 	followUpManager := consumer.NewFollowUpManager(
@@ -268,6 +284,7 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 		ingestService:   ingestService,
 		macHostID:       macHostID,
 		peerMatcher:     &telegramPeerMatcherDeps{matcher: peerMatcher, engine: tgAggEngine},
+		groupMaxMembers: groupMaxMembers,
 		created:         newCreated(),
 	}
 	_ = hostRepo // reserved for future liveness wiring; intentionally nil here
@@ -299,6 +316,22 @@ func resolveNamespace(ctx context.Context, support *repository.SyntheticSupportR
 		if err != nil {
 			return nil, "", fmt.Errorf("peer-band collision check: %w", err)
 		}
+		// Group chat ids are drawn from the SAME peer band; telegram_chat_config
+		// keys on telegram_chat_id with no namespace column, so a leftover config
+		// row in this band (e.g. from a crashed prior run whose cleanup never ran)
+		// must also trigger a re-salt.
+		chatConfigOccupied, err := support.CountTelegramChatConfigInChatIdBand(ctx, gen.PeerBandStart(), gen.PeerBandEnd())
+		if err != nil {
+			return nil, "", fmt.Errorf("chat-config band collision check: %w", err)
+		}
+		// Telegram discovery/stranded replays create external_contact +
+		// external_identity rows keyed by a bare peer-id source_id in this band. A
+		// crashed prior run can leave them with no telegram_message row, so the
+		// telegram_message check above would miss them — check them too.
+		barePeerOccupied, err := support.CountTelegramBarePeerRowsInBand(ctx, gen.PeerBandStart(), gen.PeerBandEnd())
+		if err != nil {
+			return nil, "", fmt.Errorf("bare-peer band collision check: %w", err)
+		}
 		phonePrefix := gen.SyntheticPhonePrefix()
 		methodPhones, err := support.CountContactMethodsByValueNormalizedPrefix(ctx, phonePrefix)
 		if err != nil {
@@ -308,7 +341,7 @@ func resolveNamespace(ctx context.Context, support *repository.SyntheticSupportR
 		if err != nil {
 			return nil, "", fmt.Errorf("phone-band collision check (external_identity): %w", err)
 		}
-		if peerOccupied == 0 && methodPhones == 0 && identityPhones == 0 {
+		if peerOccupied == 0 && chatConfigOccupied == 0 && barePeerOccupied == 0 && methodPhones == 0 && identityPhones == 0 {
 			return gen, candidate, nil
 		}
 		// Collision in either band: re-salt and retry.

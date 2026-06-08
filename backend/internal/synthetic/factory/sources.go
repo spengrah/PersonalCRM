@@ -232,6 +232,77 @@ func (g *Generator) TelegramMessage(target ContactSpec, intent MatchIntent) Tele
 	}
 }
 
+// --- Telegram group chats --------------------------------------------------
+
+// TelegramGroupMessageSpec bundles a single inbound GROUP tg.Message plus the
+// derived peer + group identifiers. The replay adapter feeds it through
+// MessageHandler.HandleNewMessage with a nil api client (the group path, like
+// the private path, never dereferences the api client — member count + title
+// arrive via tg.Entities). ChatID is drawn from this namespace's reserved
+// telegram peer band (disjoint per namespace) because telegram_chat_config keys
+// on telegram_chat_id with NO namespace column. SenderUserID is a normal peer id
+// (the matcher keys on it). ChatID and SenderUserID occupy disjoint ends of the
+// band, and ChatID never enters the matcher, so the two id roles cannot collide.
+type TelegramGroupMessageSpec struct {
+	ChatID            int64
+	SenderUserID      int64
+	SenderUsername    string
+	TelegramMessageID int32
+	ChatTitle         string
+	ParticipantsCount int
+	Text              string
+	SentAt            time.Time
+	Intent            MatchIntent
+	// MatchHandle is the telegram handle to register as the seeded contact's
+	// method (MatchSeeded). Empty for MatchUnknown.
+	MatchHandle string
+}
+
+// TelegramGroupMessage builds an inbound group message whose sender is the
+// target contact (MatchSeeded → the sender's username matches the seeded
+// contact's telegram handle → matched interaction) or an unknown sender
+// (MatchUnknown → telegram_message.matched_contact_id IS NULL + discovery
+// candidate once the per-peer message threshold is crossed). participantsCount
+// is caller-controlled so a test can drive both the tracked (≤ groupMaxMembers)
+// and untracked-by-size (> groupMaxMembers) cases. A fresh ChatID is allocated;
+// to model a multi-message group CONVERSATION (one chat id, many messages) the
+// caller threads the returned ChatID back via TelegramGroupMessageInChat.
+func (g *Generator) TelegramGroupMessage(target ContactSpec, intent MatchIntent, participantsCount int) TelegramGroupMessageSpec {
+	return g.TelegramGroupMessageInChat(target, intent, participantsCount, g.nextGroupChatID())
+}
+
+// TelegramGroupMessageInChat is TelegramGroupMessage with a caller-supplied
+// chatID, so a sequence of messages can share ONE group chat id (the
+// semantically-correct shape for a group conversation, and the way to avoid
+// consuming a band slot per message). Reuse a chatID returned by a prior call.
+func (g *Generator) TelegramGroupMessageInChat(target ContactSpec, intent MatchIntent, participantsCount int, chatID int64) TelegramGroupMessageSpec {
+	senderUserID := g.nextPeerUserID()
+	msgID := g.nextTelegramMessageID()
+	sentAt := g.at(-time.Hour)
+
+	handle := target.TelegramHandle
+	username := handle
+	if intent == MatchUnknown {
+		handle = ""
+		username = g.telegramHandle(int(g.bumpSourceSeq()))
+	} else if username == "" {
+		username = g.telegramHandle(int(g.bumpSourceSeq()))
+	}
+
+	return TelegramGroupMessageSpec{
+		ChatID:            chatID,
+		SenderUserID:      senderUserID,
+		SenderUsername:    username,
+		TelegramMessageID: msgID,
+		ChatTitle:         g.Prefix() + "group " + fmt.Sprint(g.sourceIDSeq),
+		ParticipantsCount: participantsCount,
+		Text:              "synthetic telegram group message",
+		SentAt:            sentAt,
+		Intent:            intent,
+		MatchHandle:       handle,
+	}
+}
+
 // --- iMessage (raw_message.* ingest envelopes) -----------------------------
 
 // IMessageSpec is a raw_message.received ingest envelope (already marshalled)

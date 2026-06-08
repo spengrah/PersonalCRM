@@ -442,3 +442,101 @@ WHERE source_id = @source_id
 SELECT COUNT(*) FROM calendar_event
 WHERE gcal_event_id = @gcal_event_id
   AND matched_contact_ids = '{}';
+
+-- name: SyntheticCountCalendarEventByGcalId :one
+-- Settle Gate A (GCal decline terminal): count ALL calendar_event rows for the
+-- gcal id regardless of status/match. The cutover decline branch DELETES the
+-- row, so the decline test settles on this reaching 0. calendar_event has no
+-- deleted_at column (hard-delete table).
+SELECT COUNT(*) FROM calendar_event
+WHERE gcal_event_id = @gcal_event_id;
+
+-- name: SyntheticCountUnmatchedExternalContactByEmailPrefix :one
+-- Settle/assert (GCal unmatched-attendee import candidate): the GCal provider
+-- stores an unmatched attendee as an external_contact with source='gcal_attendee'
+-- and source_id = the NORMALIZED (lowercased/trimmed) attendee email, which for a
+-- synthetic unknown attendee carries the 'synth-<ns>-' prefix. Counts those
+-- unmatched candidates for this namespace. Caller passes a BARE prefix; '%'
+-- appended here.
+SELECT COUNT(*) FROM external_contact
+WHERE source = 'gcal_attendee'
+  AND source_id LIKE @source_id_prefix || '%'
+  AND match_status = 'unmatched'
+  AND deleted_at IS NULL;
+
+-- name: SyntheticCountTelegramMessagesByChatAndMessageId :one
+-- Group assertion: count telegram_message rows for (telegram_chat_id,
+-- telegram_message_id). Tests assert 0 for the untracked-by-size group case (the
+-- shouldTrackChat gate returns before UpsertMessage) and 1 for tracked.
+SELECT COUNT(*) FROM telegram_message
+WHERE telegram_chat_id = @telegram_chat_id
+  AND telegram_message_id = @telegram_message_id
+  AND deleted_at IS NULL;
+
+-- name: SyntheticCountTelegramChatConfigInChatIdBand :one
+-- Harness setup collision detection: count telegram_chat_config rows whose
+-- telegram_chat_id falls in this namespace's reserved peer band [band_start,
+-- band_end) — group chat ids are drawn from that band. A non-zero count means a
+-- leftover config row occupies the band, so NewHarness re-salts.
+SELECT COUNT(*) FROM telegram_chat_config
+WHERE telegram_chat_id >= @band_start
+  AND telegram_chat_id < @band_end;
+
+-- name: SyntheticDeleteTelegramChatConfigsByChatIds :execrows
+-- Cleanup: delete the group telegram_chat_config rows a group replay created, by
+-- the exact tracked chat ids (telegram_chat_config has no namespace column —
+-- keyed only by telegram_chat_id).
+DELETE FROM telegram_chat_config WHERE telegram_chat_id = ANY(@chat_ids::bigint[]);
+
+-- name: SyntheticCountTelegramBarePeerRowsInBand :one
+-- Harness setup collision detection: count telegram external_contact +
+-- external_identity rows keyed by a BARE peer-id source_id that falls in this
+-- namespace's reserved peer band [band_start, band_end). A discovery/stranded
+-- replay creates these (source='telegram', source_id=<peer id>); a crashed prior
+-- run can leave them with no remaining telegram_message row, so the peer-band
+-- check on telegram_message alone would miss them. A non-zero count means the
+-- band is occupied → NewHarness re-salts.
+--
+-- The cast is wrapped in a CASE that only evaluates source_id::bigint for
+-- all-digit values (bounded to 18 digits, safely under the int64 max): a bare
+-- WHERE `source_id ~ '...' AND source_id::bigint >= ...` is NOT safe because
+-- PostgreSQL may reorder the predicates and run the cast on a non-numeric
+-- source_id (other tests create telegram rows with text source ids like
+-- 'tg-discovery-upsert-*'), raising "invalid input syntax for type bigint". The
+-- CASE makes the cast conditional, so non-numeric rows yield NULL and fall out of
+-- the range comparison.
+SELECT (
+  (SELECT COUNT(*) FROM external_contact ec
+   WHERE ec.source = 'telegram'
+     AND (CASE WHEN ec.source_id ~ '^[0-9]{1,18}$' THEN ec.source_id::bigint END)
+           >= @band_start::bigint
+     AND (CASE WHEN ec.source_id ~ '^[0-9]{1,18}$' THEN ec.source_id::bigint END)
+           < @band_end::bigint
+     AND ec.deleted_at IS NULL)
+  +
+  (SELECT COUNT(*) FROM external_identity ei
+   WHERE ei.source = 'telegram'
+     AND (CASE WHEN ei.source_id ~ '^[0-9]{1,18}$' THEN ei.source_id::bigint END)
+           >= @band_start::bigint
+     AND (CASE WHEN ei.source_id ~ '^[0-9]{1,18}$' THEN ei.source_id::bigint END)
+           < @band_end::bigint)
+)::bigint;
+
+-- name: SyntheticDeleteTelegramExternalContactsByPeerIds :execrows
+-- Cleanup: telegram discovery candidate external_contact rows are keyed by
+-- source='telegram', source_id = the BARE peer user id (not an ns-prefixed
+-- string), so the ns-prefix external_contact delete misses them. A stranded /
+-- unknown-sender replay that crosses the discovery threshold upserts one; delete
+-- them by the exact tracked peer ids (string form).
+DELETE FROM external_contact
+WHERE source = 'telegram' AND source_id = ANY(@peer_ids::text[]);
+
+-- name: SyntheticDeleteTelegramExternalIdentitiesByPeerIds :execrows
+-- Cleanup: MatchPeer creates an external_identity for an unmatched telegram peer
+-- keyed by source='telegram', source_id = the BARE peer user id. The synthetic
+-- handle is normalized to 'synth_<ns>_<n>' (underscores), which the ns-prefix
+-- ('synth-<ns>-') identifier delete does NOT match, so clear these by the exact
+-- tracked peer ids before the contact delete (external_identity survives contact
+-- delete via ON DELETE SET NULL and would otherwise pollute future matching).
+DELETE FROM external_identity
+WHERE source = 'telegram' AND source_id = ANY(@peer_ids::text[]);

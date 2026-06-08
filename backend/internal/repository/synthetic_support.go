@@ -17,6 +17,7 @@ package repository
 
 import (
 	"context"
+	"strconv"
 
 	"personal-crm/backend/internal/db"
 
@@ -165,6 +166,45 @@ func (r *SyntheticSupportRepository) DeleteTelegramMessagesByPeerUserID(ctx cont
 	return r.queries.DeleteTelegramMessagesByPeerUserID(ctx, pgtype.Int8{Int64: peerUserID, Valid: true})
 }
 
+// DeleteTelegramChatConfigsByChatIds removes telegram_chat_config rows for the
+// tracked group chat ids. telegram_chat_config has no namespace column, so a
+// group replay's config rows are deleted by exact chat id.
+func (r *SyntheticSupportRepository) DeleteTelegramChatConfigsByChatIds(ctx context.Context, chatIDs []int64) (int64, error) {
+	if len(chatIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticDeleteTelegramChatConfigsByChatIds(ctx, chatIDs)
+}
+
+// DeleteTelegramExternalContactsByPeerIds removes telegram discovery candidate
+// external_contact rows keyed by the bare peer id (source='telegram'), which the
+// ns-prefix delete misses. peerIDs are the tracked int64 peers.
+func (r *SyntheticSupportRepository) DeleteTelegramExternalContactsByPeerIds(ctx context.Context, peerIDs []int64) (int64, error) {
+	if len(peerIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticDeleteTelegramExternalContactsByPeerIds(ctx, int64sToStrings(peerIDs))
+}
+
+// DeleteTelegramExternalIdentitiesByPeerIds removes the external_identity rows
+// MatchPeer creates for unmatched telegram peers, keyed by the bare peer id.
+func (r *SyntheticSupportRepository) DeleteTelegramExternalIdentitiesByPeerIds(ctx context.Context, peerIDs []int64) (int64, error) {
+	if len(peerIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticDeleteTelegramExternalIdentitiesByPeerIds(ctx, int64sToStrings(peerIDs))
+}
+
+// int64sToStrings projects int64 peer ids to their canonical decimal string form
+// (the shape telegram source_id is stored as).
+func int64sToStrings(ids []int64) []string {
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		out[i] = strconv.FormatInt(id, 10)
+	}
+	return out
+}
+
 // DeleteCalendarEventsByGcalEventIDPrefix removes calendar_event rows whose
 // gcal_event_id is ns-prefixed (cleanup step 7). Reuses the existing query.
 func (r *SyntheticSupportRepository) DeleteCalendarEventsByGcalEventIDPrefix(ctx context.Context, prefix string) (int64, error) {
@@ -279,6 +319,41 @@ func (r *SyntheticSupportRepository) CountExternalIdentitiesByIdentifierPrefix(c
 	return r.queries.SyntheticCountExternalIdentitiesByIdentifierPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
 }
 
+// CountTelegramChatConfigInChatIdBand counts telegram_chat_config rows whose
+// telegram_chat_id is in [bandStart, bandEnd). Used by NewHarness for setup-time
+// group chat-id collision detection (group chat ids are drawn from the same
+// peer band, and telegram_chat_config has no namespace column).
+func (r *SyntheticSupportRepository) CountTelegramChatConfigInChatIdBand(ctx context.Context, bandStart, bandEnd int64) (int64, error) {
+	return r.queries.SyntheticCountTelegramChatConfigInChatIdBand(ctx, db.SyntheticCountTelegramChatConfigInChatIdBandParams{
+		BandStart: bandStart,
+		BandEnd:   bandEnd,
+	})
+}
+
+// CountTelegramBarePeerRowsInBand counts telegram external_contact +
+// external_identity rows keyed by a bare peer-id source_id in [bandStart,
+// bandEnd). Used by NewHarness for setup-time collision detection: a
+// discovery/stranded replay creates these keyed by the bare peer id, and a
+// crashed prior run can leave them with no telegram_message row, so the
+// peer-band check on telegram_message alone would miss them.
+func (r *SyntheticSupportRepository) CountTelegramBarePeerRowsInBand(ctx context.Context, bandStart, bandEnd int64) (int64, error) {
+	return r.queries.SyntheticCountTelegramBarePeerRowsInBand(ctx, db.SyntheticCountTelegramBarePeerRowsInBandParams{
+		BandStart: bandStart,
+		BandEnd:   bandEnd,
+	})
+}
+
+// CountTelegramMessagesByChatAndMessageID counts telegram_message rows for
+// (chatID, messageID). The group adapter asserts 0 for the untracked-by-size
+// case (the shouldTrackChat gate returned before UpsertMessage) and 1 for
+// tracked.
+func (r *SyntheticSupportRepository) CountTelegramMessagesByChatAndMessageID(ctx context.Context, chatID int64, messageID int32) (int64, error) {
+	return r.queries.SyntheticCountTelegramMessagesByChatAndMessageId(ctx, db.SyntheticCountTelegramMessagesByChatAndMessageIdParams{
+		TelegramChatID:    chatID,
+		TelegramMessageID: messageID,
+	})
+}
+
 // CountContactMethodsByValueNormalizedPrefix counts live (non-deleted-contact)
 // contact_method rows whose normalized value shares the given prefix. This is the
 // PRIMARY phone-band collision check: a seeded synthetic phone lives only as a
@@ -356,6 +431,22 @@ func (r *SyntheticSupportRepository) CountMatchedExternalContactBySourceID(ctx c
 // with an empty matched_contact_ids array.
 func (r *SyntheticSupportRepository) CountUnmatchedCalendarEventByGcalID(ctx context.Context, gcalEventID string) (int64, error) {
 	return r.queries.SyntheticCountUnmatchedCalendarEventByGcalId(ctx, gcalEventID)
+}
+
+// CountCalendarEventByGcalID counts ALL calendar_event rows for the gcal id
+// (any status/match). The GCal decline test settles on this reaching 0 (the
+// cutover decline branch deletes the row).
+func (r *SyntheticSupportRepository) CountCalendarEventByGcalID(ctx context.Context, gcalEventID string) (int64, error) {
+	return r.queries.SyntheticCountCalendarEventByGcalId(ctx, gcalEventID)
+}
+
+// CountUnmatchedExternalContactByEmailPrefix counts gcal_attendee import
+// candidates whose source_id (the normalized attendee email) is ns-prefixed and
+// match_status='unmatched'. The GCal unmatched-attendee path stores the candidate
+// keyed by the normalized email, not by a synthetic source_id, so it is matched
+// by the email prefix here.
+func (r *SyntheticSupportRepository) CountUnmatchedExternalContactByEmailPrefix(ctx context.Context, prefix string) (int64, error) {
+	return r.queries.SyntheticCountUnmatchedExternalContactByEmailPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
 }
 
 // --- revoked synthetic Mac host (host-only ingest kinds) -------------------
