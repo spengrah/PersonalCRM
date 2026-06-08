@@ -542,7 +542,7 @@ DELETE FROM external_identity
 WHERE source = 'telegram' AND source_id = ANY(@peer_ids::text[]);
 
 -- ============================================================================
--- crm-admin --reset-and-seed support (E3): a HARD wipe of every live data table
+-- crm-admin --reset-and-seed support: a HARD wipe of every live data table
 -- so a staging instance can be reset to a known synthetic baseline. Preserves
 -- only schema_migrations (the migration ledger) + River's own internal tables
 -- (river_%); river_job IS wiped (stale jobs must not dereference wiped rows).

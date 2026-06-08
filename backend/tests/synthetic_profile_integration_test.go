@@ -15,6 +15,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// fixedAccelBaseUnix is a deterministic TIME_BASE (a fixed Unix second) for the
+// high-acceleration settle-budget test, so the fixture makes no wall-clock call.
+const fixedAccelBaseUnix int64 = 1735689600 // 2025-01-01T00:00:00Z
+
 // These profile-orchestration integration tests are SLOW-gated
 // (testsupport.RequireLongTests) and routed to the nightly slow suite via the
 // TestSynthetic name prefix. Each sub-test uses a UNIQUE namespace so
@@ -124,7 +128,7 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	require.GreaterOrEqual(t, res.UnmatchedCalendar, 1, "unmatched calendar attendee present")
 	require.GreaterOrEqual(t, res.OrphanMeetingNote, 1, "orphan meeting-note present")
 
-	// DEFERRED pending states (no toolkit producer in E3): the ProfileResult has
+	// DEFERRED pending states (no toolkit producer yet): the ProfileResult has
 	// no field for them precisely because RunProfile produces none. This guards
 	// the documented gap — if a future change starts producing them it must add a
 	// counter, which forces revisiting this test. Asserting the producible set is
@@ -139,8 +143,14 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	buckets, err := support.ListContactBucketsByNamePrefix(ctx, h.Generator().Prefix())
 	require.NoError(t, err)
 
+	// "Overdue" must mean a last_contacted WELL in the past (WithOverdue seeds
+	// ~90 days ago), NOT merely before now — a recent contact (WithRecent seeds
+	// <48h ago) is also before now. Using a 14-day-ago floor distinguishes the
+	// overdue bucket from the recent bucket, so a clobber-to-recent regression
+	// (the bug this guards) would FAIL here.
 	var overdue, neverContacted, noMethod int
 	now := accelerated.GetCurrentTime()
+	overdueFloor := now.Add(-14 * 24 * time.Hour)
 	for _, b := range buckets {
 		if b.MethodCount == 0 {
 			noMethod++
@@ -149,12 +159,12 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 			switch {
 			case b.LastContacted == nil:
 				neverContacted++
-			case b.LastContacted.Before(now):
+			case b.LastContacted.Before(overdueFloor):
 				overdue++
 			}
 		}
 	}
-	require.GreaterOrEqual(t, overdue, 1, "≥1 cadence-bearing contact with a past last_contacted (overdue bucket survived)")
+	require.GreaterOrEqual(t, overdue, 1, "≥1 cadence-bearing contact with a far-past last_contacted (overdue bucket survived a settling replay)")
 	require.GreaterOrEqual(t, neverContacted, 1, "≥1 cadence-bearing never-contacted contact (NULL last_contacted survived)")
 	require.GreaterOrEqual(t, noMethod, 1, "≥1 no-method contact (the no-method bucket exists)")
 
@@ -247,12 +257,12 @@ func TestSyntheticProfile_SettlesUnderHighAcceleration(t *testing.T) {
 	database, ctx := newSyntheticDB(t)
 
 	// Pin an accelerated clock for this test's process: GetCurrentTime reads
-	// TIME_ACCELERATION + TIME_BASE from the process env directly. TIME_BASE must
-	// be a real-now wall-clock second so the accelerated "now" stays near real now
-	// (elapsed-since-base ≈ 0) — exactly how the production SetTimeAcceleration
-	// handler sets it (internal/api/handlers/system.go), with the same forbidigo
-	// exemption for the sanctioned wall-clock base.
-	t.Setenv("TIME_BASE", strconv.FormatInt(time.Now().Unix(), 10)) //nolint:forbidigo // wall-clock base for acceleration, mirrors the production setter
+	// TIME_ACCELERATION + TIME_BASE from the process env directly. A FIXED
+	// Unix-second base keeps the fixture deterministic (no wall-clock call — the
+	// core rule is absolute for tests). The test only asserts that the
+	// real-wall-clock settle/teardown budget does not collapse under acceleration;
+	// the accelerated domain "now" the base produces is irrelevant to that.
+	t.Setenv("TIME_BASE", strconv.FormatInt(fixedAccelBaseUnix, 10))
 	t.Setenv("TIME_ACCELERATION", "1000")
 
 	params, err := synthetic.ProfileParams(synthetic.ProfileMinimalScoped)

@@ -231,7 +231,7 @@ type runOptions struct {
 	listHosts              bool
 	revokeHostID           string
 	rotateHostID           string
-	// Synthetic seed (E3). doSeed ← --seed (the BOOL subcommand selector);
+	// Synthetic seed. doSeed ← --seed (the BOOL subcommand selector);
 	// resetAndSeed ← --reset-and-seed; prngSeed ← --prng-seed (the uint64 PRNG
 	// seed, a DISTINCT flag from --seed — Go's flag cannot bind one name to both
 	// a Bool and a Uint64). seedYes ← --yes (mandatory confirm for BOTH commands).
@@ -920,8 +920,13 @@ func (a seedAdapter) runProfile(ctx context.Context, params synthetic.SeedParams
 	res, err := synthetic.RunProfile(ctx, h, params)
 	if err != nil {
 		// Failed seed: full teardown (stop client + clean the partial world).
-		// Use a fresh context so a cancelled ctx still tears down.
-		_ = teardown(context.Background())
+		// Use a fresh context so a cancelled ctx still tears down. Surface a
+		// teardown failure (e.g. Gate B did not clear, so cleanup was skipped and
+		// the partial world is still standing) ALONGSIDE the seed error — silently
+		// dropping it would hide that the "no leave-behind" guarantee was not met.
+		if tdErr := teardown(context.Background()); tdErr != nil {
+			return synthetic.ProfileResult{}, fmt.Errorf("seed failed: %w; AND partial-world teardown also failed (data may remain): %v", err, tdErr)
+		}
 		return synthetic.ProfileResult{}, err
 	}
 	// Success: Quiesce (stop client, LEAVE the rows).

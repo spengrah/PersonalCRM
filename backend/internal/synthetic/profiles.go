@@ -144,7 +144,7 @@ func runMinimalScoped(ctx context.Context, h *Harness, params SeedParams, res Pr
 // (needs a conflict_candidates snapshot referencing real events), title-candidate
 // review rows (anarlog_title discovery), and comms_message without interaction_id
 // (GChat MatchUnknown is match-only, writes no comms_message). Building these is a
-// factory/replay addition out of E3 scope.
+// factory/replay addition deferred to a follow-on.
 func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res ProfileResult) (ProfileResult, error) {
 	gen := h.Generator()
 	n := params.Counts.SeededContacts

@@ -161,6 +161,13 @@ dev-api-stop:
 	    break; \
 	  fi; \
 	done
+	@# Fail loudly if the port is still bound — make dev-seed relies on the
+	@# backend being genuinely gone before it seeds (a live backend would race
+	@# the seed's River client). A misleading "freed" message would hide that.
+	@if lsof -ti tcp:8080 >/dev/null 2>&1; then \
+	  echo "❌ Backend dev server still bound on port 8080 after kill — refusing to report stopped"; \
+	  exit 1; \
+	fi
 	@echo "✅ Backend dev server stopped (if it was running) and port freed"
 
 dev-api-start:

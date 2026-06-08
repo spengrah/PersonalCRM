@@ -224,7 +224,7 @@ func (h *Harness) SeedNote(ctx context.Context, contactID uuid.UUID, body string
 //
 // Only the orphan state is produced here: conflict_pending needs a well-formed
 // conflict_candidates snapshot referencing real events, which has no toolkit
-// producer (a documented E3 coverage gap).
+// producer (a documented, deferred coverage gap).
 func (h *Harness) SeedOrphanMeetingNote(ctx context.Context, title, summary string) (uuid.UUID, error) {
 	tx, err := h.database.Pool.Begin(ctx)
 	if err != nil {

@@ -76,8 +76,14 @@ start_service() {
 
 stop_service
 
+# Restart the backend on ANY exit after the stop — including a migration/profile
+# failure — so a failed reset never leaves staging stopped (set -e would
+# otherwise bail before start_service). The trap is cleared on the success path.
+trap 'echo "staging-reset: restarting service after early exit..."; start_service' EXIT
+
 echo "staging-reset: hard reset + reseed ('$PROFILE') against CRM_ENV=$CRM_ENV..."
 ( cd "$PROJECT_ROOT/backend" && go run cmd/crm-admin/main.go --reset-and-seed --profile "$PROFILE" --yes )
 
+trap - EXIT
 start_service
 echo "staging-reset: done."
