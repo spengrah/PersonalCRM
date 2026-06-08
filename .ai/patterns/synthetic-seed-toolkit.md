@@ -2,7 +2,7 @@
 
 The synthetic-seed toolkit produces **prod-shaped, PII-free, deterministic** synthetic data by replaying fake source input through the *real* ingestion pipeline. It is one library reused four ways: unit tests use the factories directly; integration tests use the replay harness; staging and `make dev-seed` use the profile entrypoints; the QA harness (#380) tours the prod-shaped world. Code lives under `backend/internal/synthetic/`.
 
-The defining capability is that it doesn't just write terminal domain rows — it injects synthetic sync-source inputs (fake Gmail/GChat/GCal/Telegram/iMessage/Mac-Contacts/Todoist payloads) and drives them through provider normalization → matching → dedup → event bus → River consumers → downstream graph, so the full sync flow is exercised without live credentials.
+The defining capability is that it doesn't just write terminal domain rows — it injects synthetic sync-source inputs (e.g. fake Gmail, GChat, GCal, Telegram, iMessage, Mac-Contacts, or Todoist payloads) and drives them through provider normalization → matching → dedup → event bus → River consumers → downstream graph, so the full sync flow is exercised without live credentials.
 
 ## Layers
 
@@ -70,7 +70,7 @@ Each source has a `Harness.Replay*` adapter in `synthetic/replay/` that composes
 
 **Hard rule — no DB-wide enumerate-then-write.** No replay path may scan a table DB-wide and then mutate (e.g. "list all unmatched external_contacts, then reconcile them"). On the shared test DB that silently reaches across namespaces and corrupts a parallel run's data — this was the isolation defect class fixed during the build. Every settle read, cleanup delete, and reconcile must be scoped to *this* run's tracked ids or this namespace's prefix/band. The cleanup ledger (`created` in `replay.go`) exists precisely so deletes go by exact id, never by a DB-wide source/kind value.
 
-### The two-gate Settle + ID-tracked Cleanup (the D8 failure-path contract)
+### The two-gate Settle + ID-tracked Cleanup (the failure-path contract)
 
 After each `Replay*`, the harness `Settle`s through two per-replay-scoped gates (`replay.go`):
 
@@ -81,7 +81,7 @@ Both budgets are **real wall-clock** (`context.WithTimeout`, monotonic clock), n
 
 Cleanup is **ID-tracked and FK-ordered** (`harness_cleanup.go`): the run accumulates created contact/interaction/event ids (+ telegram peers/chat ids + todoist task delta) into the ledger; teardown deletes them in FK order by exact id, or by namespace prefix for the genuinely prefixed columns. `river_job` rows are **never** deleted here — finalized jobs are reclaimed by River retention / a DB reset.
 
-The **D8 failure-path contract** governs the unsettled case: teardown stops *this* harness's River client, bounded-waits Gate B, and gates the **entire** cleanup on Gate B == 0. If Gate B does not clear, teardown **skips all deletes** and leaves the namespaced (inert, obviously-synthetic) dataset intact — a follow-up DB reset reclaims it. Rationale: a retained unfinalized `river_job`, picked up later by a shared default-queue River client, dereferences this replay's contact / comms_message / staging / calendar / event rows; deleting any of them while a job is still live can fault that future worker. For non-test entrypoints the success path calls `Harness.Quiesce` (seed-and-leave: stop client + bounded-wait, no deletes) and the error path calls the full teardown closure (stop + clean the partial world). Either way the River client is always stopped, never leaked.
+The **failure-path contract** governs the unsettled case: teardown stops *this* harness's River client, bounded-waits Gate B, and gates the **entire** cleanup on Gate B == 0. If Gate B does not clear, teardown **skips all deletes** and leaves the namespaced (inert, obviously-synthetic) dataset intact — a follow-up DB reset reclaims it. Rationale: a retained unfinalized `river_job`, picked up later by a shared default-queue River client, dereferences this replay's contact / comms_message / staging / calendar / event rows; deleting any of them while a job is still live can fault that future worker. For non-test entrypoints the success path calls `Harness.Quiesce` (seed-and-leave: stop client + bounded-wait, no deletes) and the error path calls the full teardown closure (stop + clean the partial world). Either way the River client is always stopped, never leaked.
 
 ## Requesting a scenario / profile
 
