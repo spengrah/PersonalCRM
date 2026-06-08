@@ -10,12 +10,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// This file is the canonical TRANSFORM-R reference for the Element 5 suite
-// migration: the FULL replay-harness pattern, as opposed to the lightweight
-// Transform-F/lite path the messages_message exemplar models. A Transform-R test
-// seeds a contact via the factory, drives a real source through a Replay* adapter
-// (which settles the graph + auto-cleans on teardown), and asserts the settled
-// domain graph at/above the harness surface.
+// This file is the canonical TRANSFORM-R reference for the suite migration onto
+// the synthetic toolkit: the FULL replay-harness pattern, as opposed to the
+// lightweight Transform-F/lite path the messages_message exemplar models. A
+// Transform-R test seeds a contact via the factory, drives a real source through
+// a Replay* adapter (which settles the graph + auto-cleans on teardown), and
+// asserts the settled domain graph at/above the harness surface.
 //
 // It is River-draining and therefore SLOW-gated: RequireLongTests skips it in the
 // fast PR gate, and the TestSynthetic name prefix routes it onto the nightly slow

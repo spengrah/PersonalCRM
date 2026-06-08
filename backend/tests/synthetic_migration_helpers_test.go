@@ -14,12 +14,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Shared migration helpers for the Element 5 suite migration onto the synthetic
-// toolkit. These provide the LIGHTWEIGHT (no-harness, no-River) isolation
-// primitives that Transform-F/lite repo tests adopt: a namespaced factory
-// generator plus a nil-bus contact seed with a scoped cleanup closure. Transform-R
-// tests use the full synthetic.NewHarnessForNamespace + h.SeedContact directly —
-// the harness already is the heavy primitive, so there is no helper for that path.
+// Shared helpers for migrating the integration suite onto the synthetic toolkit.
+// These provide the LIGHTWEIGHT (no-harness, no-River) isolation primitives that
+// Transform-F/lite repo tests adopt: a namespaced factory generator plus a
+// nil-bus contact seed with a scoped cleanup closure. Transform-R tests use the
+// full synthetic.NewHarnessForNamespace + h.SeedContact directly — the harness
+// already is the heavy primitive, so there is no helper for that path.
 
 // migrationGenerator returns a factory.Generator scoped to a unique per-test
 // namespace plus the namespace token. It is the LIGHTWEIGHT isolation primitive:
