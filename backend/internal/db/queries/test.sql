@@ -271,17 +271,17 @@ DELETE FROM comms_message WHERE external_id LIKE @external_id_prefix || '%';
 DELETE FROM messages_message WHERE guid LIKE @guid_prefix || '%';
 
 -- name: SyntheticDeleteExternalIdentitiesByIdentifierPrefix :execrows
--- Cleanup step 8 (primary): identities whose normalized identifier is
--- ns-prefixed. MatchOrCreate for GCal attendee / external_contact email
--- matching creates identities with source_id NULL keyed by the synthetic
--- IDENTIFIER (e.g. 'synth-<ns>-...@synthetic.example'), which a source_id-prefix
--- delete MISSES. Deleting by the identifier prefix catches both the
--- source_id-NULL and source_id-set synthetic email/handle identities BEFORE the
--- contact delete (external_identity survives contact delete via ON DELETE SET
--- NULL, so it would otherwise pollute future matching). Caller passes a BARE
--- prefix; '%' is appended here. (Phone identities use the shared 555-01xx
--- fictional range and are not ns-prefixed; they carry no contact link after the
--- contact delete and re-match cleanly, so they are intentionally left.)
+-- Cleanup step 8: identities whose normalized identifier shares an ns-scoped
+-- prefix. MatchOrCreate for GCal attendee / external_contact email matching
+-- creates identities with source_id NULL keyed by the synthetic IDENTIFIER (e.g.
+-- 'synth-<ns>-...@synthetic.example'), which a source_id-prefix delete MISSES.
+-- Deleting by the identifier prefix catches both the source_id-NULL and
+-- source_id-set synthetic identities BEFORE the contact delete (external_identity
+-- survives contact delete via ON DELETE SET NULL, so it would otherwise pollute
+-- future matching). Called once with the 'synth-<ns>-' string prefix (email/
+-- handle identities) and once with the namespace's normalized phone-digit prefix
+-- ('+1555<ns-bucket>...') — synthetic phones are now ns-scoped (factory.phoneFor),
+-- so phone identities no longer leak. Caller passes a BARE prefix; '%' appended.
 DELETE FROM external_identity WHERE identifier LIKE @identifier_prefix || '%';
 
 -- name: SyntheticDeleteExternalIdentitiesBySourceIdPrefix :execrows
@@ -338,6 +338,14 @@ WHERE peer_user_id >= @band_start
   AND peer_user_id < @band_end
   AND deleted_at IS NULL;
 
+-- name: SyntheticCountExternalIdentitiesByIdentifierPrefix :one
+-- Harness setup collision detection (D5): count external_identity rows whose
+-- normalized identifier shares the namespace's phone-digit prefix. Non-zero means
+-- another namespace already occupies this phone sub-block, so NewHarness re-salts.
+-- Caller passes a BARE prefix; '%' is appended here.
+SELECT COUNT(*) FROM external_identity
+WHERE identifier LIKE @identifier_prefix || '%';
+
 -- name: SyntheticCountStrandedTelegramMessagesByPeer :one
 -- Settle Gate A (telegram unknown-sender): a message row exists for the peer
 -- with matched_contact_id IS NULL (the stranded/discovery-candidate state).
@@ -368,9 +376,14 @@ WHERE guid = @guid
   AND deleted_at IS NULL;
 
 -- name: SyntheticCountLinkedTelegramMessageByMessageId :one
--- telegram: the message row for the telegram_message_id has an interaction_id.
+-- telegram: the message row for (peer_user_id, telegram_message_id) has an
+-- interaction_id. Scoped by peer_user_id too — the peer band IS collision-checked
+-- at setup (resolveNamespace), whereas the message-id bucket is narrower and not
+-- checked; scoping by both means a colliding-message-id row in another namespace
+-- (necessarily a different peer band) can never satisfy this predicate early.
 SELECT COUNT(*) FROM telegram_message
-WHERE telegram_message_id = @telegram_message_id
+WHERE peer_user_id = @peer_user_id
+  AND telegram_message_id = @telegram_message_id
   AND interaction_id IS NOT NULL
   AND deleted_at IS NULL;
 

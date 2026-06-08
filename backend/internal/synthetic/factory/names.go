@@ -47,10 +47,20 @@ func (g *Generator) telegramHandle(n int) string {
 	return fmt.Sprintf("synth_%s_%d", sanitizeHandle(g.namespace), n)
 }
 
-// phoneNumber returns a deterministic number in the +1-555-01xx reserved
-// fictional range (NANP "555-01xx" is reserved for fiction; never a real line).
-func (g *Generator) phoneNumber(n int) string {
-	return fmt.Sprintf("+1-555-01%02d", n%100)
+// phoneFor returns the next synthetic phone within this namespace's DISJOINT
+// 1000-value phone sub-block: +1-555-<bucket7>-<index3>. The 555 exchange keeps
+// it obviously fictional; the per-namespace 1e7-wide hash bucket guarantees two
+// namespaces never share a phone value (so identity matching, which keys on the
+// exact normalized value DB-wide, can never cross namespaces). Panics if the
+// 1000-id sub-block is exhausted — far beyond any realistic per-namespace count.
+func (g *Generator) phoneFor() string {
+	if g.phoneSeq >= phoneBucketWidth {
+		panic(fmt.Sprintf("synthetic: phone sub-block exhausted for namespace %q", g.namespace))
+	}
+	bucket := g.nsPhoneBucket / phoneBucketWidth
+	idx := g.phoneSeq
+	g.phoneSeq++
+	return fmt.Sprintf("+1-555-%07d-%03d", bucket, idx)
 }
 
 // sanitizeHandle strips characters not allowed in a telegram-style handle.

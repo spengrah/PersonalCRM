@@ -126,7 +126,7 @@ func (g *Generator) Contact(opts ...ContactOption) ContactSpec {
 		spec.Methods = append(spec.Methods, MethodSpec{Type: "email", Value: email, IsPrimary: len(spec.Methods) == 0})
 	}
 	if cfg.withPhone {
-		phone := g.phoneNumber(n)
+		phone := g.phoneFor()
 		spec.Phone = phone
 		spec.Methods = append(spec.Methods, MethodSpec{Type: "phone", Value: phone, IsPrimary: len(spec.Methods) == 0})
 	}

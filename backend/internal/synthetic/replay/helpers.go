@@ -15,9 +15,10 @@ import (
 // interaction (by THIS replay's exact synthetic source id), which is both
 // exact-to-this-replay (a prior same-contact interaction can't satisfy it) AND
 // idempotent (re-replaying the same payload leaves the row linked, so the
-// predicate stays true — a count-delta predicate would never re-fire). The
-// contactID arg is unused for message-linkage sources but kept in the signature
-// for the gcal predicate that needs it.
+// predicate stays true — a count-delta predicate would never re-fire). Each
+// predicate is a closure over the relevant synthetic identifier(s); gcalSettled
+// additionally closes over the contact id because the calendar_event predicate
+// must confirm the contact landed in matched_contact_ids.
 
 // gmailSettled returns a Gate A predicate: the comms_message(email, externalID)
 // row is linked to an interaction.
@@ -46,11 +47,12 @@ func (h *Harness) imessageSettled(guid string) gateA {
 	}
 }
 
-// telegramSettled returns a Gate A predicate: the telegram_message(msgID) row is
-// linked to an interaction.
-func (h *Harness) telegramSettled(telegramMessageID int32) gateA {
+// telegramSettled returns a Gate A predicate: the telegram_message(peer, msgID)
+// row is linked to an interaction. Scoped by peer (collision-checked at setup) in
+// addition to message id.
+func (h *Harness) telegramSettled(peerUserID int64, telegramMessageID int32) gateA {
 	return func(ctx context.Context) (bool, error) {
-		n, err := h.support.CountLinkedTelegramMessageByMessageID(ctx, telegramMessageID)
+		n, err := h.support.CountLinkedTelegramMessageByMessageID(ctx, peerUserID, telegramMessageID)
 		return n > 0, err
 	}
 }
@@ -83,7 +85,7 @@ func (h *Harness) trackContactInteractions(ctx context.Context, contactID uuid.U
 // gmailBackfillSince returns a backfill floor far enough in the past that the
 // synthetic message (anchored ~2h before the live anchor) is inside the scanned,
 // already-closed Gmail window.
-func gmailBackfillSince(h *Harness) string {
+func gmailBackfillSince() string {
 	return accelerated.GetCurrentTime().Add(-30 * 24 * time.Hour).UTC().Format("2006-01-02")
 }
 

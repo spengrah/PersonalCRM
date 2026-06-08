@@ -355,9 +355,12 @@ func (g *Generator) unknownEmail() string {
 	return fmt.Sprintf("%sunknown-%d@synthetic.example", g.Prefix(), g.bumpSourceSeq())
 }
 
-// unknownPhone is a fictional-range phone no seeded contact owns.
+// unknownPhone is a synthetic phone no seeded contact owns. It is drawn from
+// THIS namespace's disjoint phone sub-block (same band as phoneFor), so it can
+// never collide with another namespace's seeded phone — only with an as-yet
+// unissued index in this namespace, which is fine for the unknown/stranded path.
 func (g *Generator) unknownPhone() string {
-	return fmt.Sprintf("+1-555-019%d", g.bumpSourceSeq()%10)
+	return g.phoneFor()
 }
 
 // bumpSourceSeq advances and returns the shared monotonic source sequence so

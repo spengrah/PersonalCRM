@@ -550,6 +550,22 @@ func (q *Queries) SyntheticCountContactsByIds(ctx context.Context, contactIds []
 	return count, err
 }
 
+const SyntheticCountExternalIdentitiesByIdentifierPrefix = `-- name: SyntheticCountExternalIdentitiesByIdentifierPrefix :one
+SELECT COUNT(*) FROM external_identity
+WHERE identifier LIKE $1 || '%'
+`
+
+// Harness setup collision detection (D5): count external_identity rows whose
+// normalized identifier shares the namespace's phone-digit prefix. Non-zero means
+// another namespace already occupies this phone sub-block, so NewHarness re-salts.
+// Caller passes a BARE prefix; '%' is appended here.
+func (q *Queries) SyntheticCountExternalIdentitiesByIdentifierPrefix(ctx context.Context, identifierPrefix pgtype.Text) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountExternalIdentitiesByIdentifierPrefix, identifierPrefix)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const SyntheticCountLinkedCommsMessageByExternalId = `-- name: SyntheticCountLinkedCommsMessageByExternalId :one
 
 SELECT COUNT(*) FROM comms_message
@@ -594,14 +610,24 @@ func (q *Queries) SyntheticCountLinkedMessagesMessageByGuid(ctx context.Context,
 
 const SyntheticCountLinkedTelegramMessageByMessageId = `-- name: SyntheticCountLinkedTelegramMessageByMessageId :one
 SELECT COUNT(*) FROM telegram_message
-WHERE telegram_message_id = $1
+WHERE peer_user_id = $1
+  AND telegram_message_id = $2
   AND interaction_id IS NOT NULL
   AND deleted_at IS NULL
 `
 
-// telegram: the message row for the telegram_message_id has an interaction_id.
-func (q *Queries) SyntheticCountLinkedTelegramMessageByMessageId(ctx context.Context, telegramMessageID int32) (int64, error) {
-	row := q.db.QueryRow(ctx, SyntheticCountLinkedTelegramMessageByMessageId, telegramMessageID)
+type SyntheticCountLinkedTelegramMessageByMessageIdParams struct {
+	PeerUserID        pgtype.Int8 `json:"peer_user_id"`
+	TelegramMessageID int32       `json:"telegram_message_id"`
+}
+
+// telegram: the message row for (peer_user_id, telegram_message_id) has an
+// interaction_id. Scoped by peer_user_id too — the peer band IS collision-checked
+// at setup (resolveNamespace), whereas the message-id bucket is narrower and not
+// checked; scoping by both means a colliding-message-id row in another namespace
+// (necessarily a different peer band) can never satisfy this predicate early.
+func (q *Queries) SyntheticCountLinkedTelegramMessageByMessageId(ctx context.Context, arg SyntheticCountLinkedTelegramMessageByMessageIdParams) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountLinkedTelegramMessageByMessageId, arg.PeerUserID, arg.TelegramMessageID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -887,17 +913,17 @@ const SyntheticDeleteExternalIdentitiesByIdentifierPrefix = `-- name: SyntheticD
 DELETE FROM external_identity WHERE identifier LIKE $1 || '%'
 `
 
-// Cleanup step 8 (primary): identities whose normalized identifier is
-// ns-prefixed. MatchOrCreate for GCal attendee / external_contact email
-// matching creates identities with source_id NULL keyed by the synthetic
-// IDENTIFIER (e.g. 'synth-<ns>-...@synthetic.example'), which a source_id-prefix
-// delete MISSES. Deleting by the identifier prefix catches both the
-// source_id-NULL and source_id-set synthetic email/handle identities BEFORE the
-// contact delete (external_identity survives contact delete via ON DELETE SET
-// NULL, so it would otherwise pollute future matching). Caller passes a BARE
-// prefix; '%' is appended here. (Phone identities use the shared 555-01xx
-// fictional range and are not ns-prefixed; they carry no contact link after the
-// contact delete and re-match cleanly, so they are intentionally left.)
+// Cleanup step 8: identities whose normalized identifier shares an ns-scoped
+// prefix. MatchOrCreate for GCal attendee / external_contact email matching
+// creates identities with source_id NULL keyed by the synthetic IDENTIFIER (e.g.
+// 'synth-<ns>-...@synthetic.example'), which a source_id-prefix delete MISSES.
+// Deleting by the identifier prefix catches both the source_id-NULL and
+// source_id-set synthetic identities BEFORE the contact delete (external_identity
+// survives contact delete via ON DELETE SET NULL, so it would otherwise pollute
+// future matching). Called once with the 'synth-<ns>-' string prefix (email/
+// handle identities) and once with the namespace's normalized phone-digit prefix
+// ('+1555<ns-bucket>...') — synthetic phones are now ns-scoped (factory.phoneFor),
+// so phone identities no longer leak. Caller passes a BARE prefix; '%' appended.
 func (q *Queries) SyntheticDeleteExternalIdentitiesByIdentifierPrefix(ctx context.Context, identifierPrefix pgtype.Text) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteExternalIdentitiesByIdentifierPrefix, identifierPrefix)
 	if err != nil {

@@ -1297,6 +1297,11 @@ type Querier interface {
 	SweepRiverJobsInCloneForTest(ctx context.Context) (int64, error)
 	// Cleanup assertion — count surviving contact rows for the given ids.
 	SyntheticCountContactsByIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error)
+	// Harness setup collision detection (D5): count external_identity rows whose
+	// normalized identifier shares the namespace's phone-digit prefix. Non-zero means
+	// another namespace already occupies this phone sub-block, so NewHarness re-salts.
+	// Caller passes a BARE prefix; '%' is appended here.
+	SyntheticCountExternalIdentitiesByIdentifierPrefix(ctx context.Context, identifierPrefix pgtype.Text) (int64, error)
 	// Settle Gate A (seeded sender) — per-source-message linkage. Keyed on THIS
 	// replay's exact synthetic source id, so it is exact-to-this-replay (a prior
 	// same-contact interaction can't satisfy it early) AND idempotent (a re-replay
@@ -1306,8 +1311,12 @@ type Querier interface {
 	SyntheticCountLinkedCommsMessageByExternalId(ctx context.Context, arg SyntheticCountLinkedCommsMessageByExternalIdParams) (int64, error)
 	// iMessage: the staging row for the guid has an interaction_id.
 	SyntheticCountLinkedMessagesMessageByGuid(ctx context.Context, guid string) (int64, error)
-	// telegram: the message row for the telegram_message_id has an interaction_id.
-	SyntheticCountLinkedTelegramMessageByMessageId(ctx context.Context, telegramMessageID int32) (int64, error)
+	// telegram: the message row for (peer_user_id, telegram_message_id) has an
+	// interaction_id. Scoped by peer_user_id too — the peer band IS collision-checked
+	// at setup (resolveNamespace), whereas the message-id bucket is narrower and not
+	// checked; scoping by both means a colliding-message-id row in another namespace
+	// (necessarily a different peer band) can never satisfy this predicate early.
+	SyntheticCountLinkedTelegramMessageByMessageId(ctx context.Context, arg SyntheticCountLinkedTelegramMessageByMessageIdParams) (int64, error)
 	// Settle Gate A (Mac-contact seeded): the external_contact row for the entity
 	// id exists linked to a CRM contact (match_status='matched').
 	SyntheticCountMatchedExternalContactBySourceId(ctx context.Context, sourceID string) (int64, error)
@@ -1371,17 +1380,17 @@ type Querier interface {
 	// Cleanup step 3: events by tracked id (NOT by source — that would wipe
 	// other tests' rows sharing the source value on the shared DB).
 	SyntheticDeleteEventsByIds(ctx context.Context, eventIds []pgtype.UUID) (int64, error)
-	// Cleanup step 8 (primary): identities whose normalized identifier is
-	// ns-prefixed. MatchOrCreate for GCal attendee / external_contact email
-	// matching creates identities with source_id NULL keyed by the synthetic
-	// IDENTIFIER (e.g. 'synth-<ns>-...@synthetic.example'), which a source_id-prefix
-	// delete MISSES. Deleting by the identifier prefix catches both the
-	// source_id-NULL and source_id-set synthetic email/handle identities BEFORE the
-	// contact delete (external_identity survives contact delete via ON DELETE SET
-	// NULL, so it would otherwise pollute future matching). Caller passes a BARE
-	// prefix; '%' is appended here. (Phone identities use the shared 555-01xx
-	// fictional range and are not ns-prefixed; they carry no contact link after the
-	// contact delete and re-match cleanly, so they are intentionally left.)
+	// Cleanup step 8: identities whose normalized identifier shares an ns-scoped
+	// prefix. MatchOrCreate for GCal attendee / external_contact email matching
+	// creates identities with source_id NULL keyed by the synthetic IDENTIFIER (e.g.
+	// 'synth-<ns>-...@synthetic.example'), which a source_id-prefix delete MISSES.
+	// Deleting by the identifier prefix catches both the source_id-NULL and
+	// source_id-set synthetic identities BEFORE the contact delete (external_identity
+	// survives contact delete via ON DELETE SET NULL, so it would otherwise pollute
+	// future matching). Called once with the 'synth-<ns>-' string prefix (email/
+	// handle identities) and once with the namespace's normalized phone-digit prefix
+	// ('+1555<ns-bucket>...') — synthetic phones are now ns-scoped (factory.phoneFor),
+	// so phone identities no longer leak. Caller passes a BARE prefix; '%' appended.
 	SyntheticDeleteExternalIdentitiesByIdentifierPrefix(ctx context.Context, identifierPrefix pgtype.Text) (int64, error)
 	// Cleanup step 8 (backstop): catches any ns-prefixed source_id rows the
 	// identifier-prefix delete missed. Caller passes a BARE prefix; '%' appended.

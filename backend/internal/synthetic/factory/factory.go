@@ -16,9 +16,20 @@
 //     is injectable via NewGeneratorAt so determinism tests can pin it.
 //
 // PII hygiene: all generated data is OBVIOUSLY synthetic (curated non-real name
-// components, the RFC-2606 reserved .example TLD, +1-555-01xx fictional phone
-// range) and namespace-prefixed (the prefix doubles as the isolation token). No
-// external faker dependency — a curated corpus + a seeded math/rand/v2 PRNG.
+// components, the RFC-2606 reserved .example TLD, the 555 fictional phone
+// exchange) and namespace-scoped. STRING identifiers (contact full_name, email
+// local-part, external_contact source_id, gcal_event_id, message guid, telegram
+// handle) carry the 'synth-<ns>-' prefix — that prefix doubles as the isolation
+// token. NUMERIC identifiers cannot be string-prefixed, so each is drawn from a
+// per-namespace DISJOINT sub-block keyed by a hash bucket: telegram peer_user_id
+// (1e9-wide bucket band [1e12,2e12)), telegram_message_id (2e6-wide bucket), and
+// PHONE numbers (+1-555-<bucket7>-<index3>, a 1e7-wide bucket). Isolation matters
+// because identity matching keys on the exact normalized value DB-wide with NO
+// namespace scoping, so two namespaces sharing a phone/peer would cross-match.
+// The peer band and phone band are collision-checked at harness setup
+// (resolveNamespace re-salts on collision); guarantee is "probabilistically
+// disjoint + detected at setup," not a hard mathematical one. No external faker
+// dependency — a curated corpus + a seeded math/rand/v2 PRNG.
 //
 // This package imports only leaf/type packages (repository, events,
 // accelerated, tg, todoist types, calendar/gmail/chat API structs); it never
@@ -59,6 +70,18 @@ const (
 	// telegram_message_id (int32 is too narrow for the 1e12 peer band).
 	telegramMsgBucketCount int32 = 2_000_000
 	telegramMsgBucketWidth int32 = 1_000
+
+	// Synthetic phone band. Phones are obviously-fictional strings of the form
+	// +1555<bucket7><index3>, where bucket7 is a per-namespace 1e7-wide hash
+	// bucket and index3 is the per-namespace contact index (< 1000). This gives
+	// each namespace a DISJOINT 1000-value phone sub-block (mirroring the
+	// telegram peer-band approach) so identity matching — which keys on the exact
+	// normalized phone value DB-wide with NO namespace scoping — can never match
+	// across namespaces. The 555 exchange keeps every value obviously synthetic.
+	// Probabilistically disjoint + setup-time collision detection, not a hard
+	// guarantee (birthday-bound ~3700 namespaces for 50% on the 1e7 bucket space).
+	phoneBucketCount int64 = 10_000_000
+	phoneBucketWidth int64 = 1_000
 )
 
 // MatchIntent controls whether a source payload targets a seeded (known)
@@ -88,6 +111,8 @@ type Generator struct {
 	nsBucket int64
 	// nsMsgBucket is the telegram message-id bucket for this namespace.
 	nsMsgBucket int32
+	// nsPhoneBucket is the 1e7-wide synthetic-phone bucket for this namespace.
+	nsPhoneBucket int64
 
 	// Local monotonic counters (per generator instance). They make repeated
 	// calls within ONE run distinct; combined with (seed, namespace) the full
@@ -95,6 +120,7 @@ type Generator struct {
 	contactSeq  int
 	peerSeq     int64
 	msgSeq      int32
+	phoneSeq    int64
 	sourceIDSeq int
 }
 
@@ -109,11 +135,12 @@ func NewGenerator(seed uint64, namespace string) *Generator {
 // live anchor so cadence/overdue states track the configured time.
 func NewGeneratorAt(seed uint64, namespace string, anchor time.Time) *Generator {
 	return &Generator{
-		rng:         rand.New(rand.NewPCG(seed, seedHash(namespace))),
-		namespace:   namespace,
-		anchor:      anchor,
-		nsBucket:    int64(seedHash(namespace)%uint64(telegramPeerBucketCount)) * telegramPeerBucketWidth,
-		nsMsgBucket: int32(seedHash(namespace)%uint64(telegramMsgBucketCount)) * telegramMsgBucketWidth,
+		rng:           rand.New(rand.NewPCG(seed, seedHash(namespace))),
+		namespace:     namespace,
+		anchor:        anchor,
+		nsBucket:      int64(seedHash(namespace)%uint64(telegramPeerBucketCount)) * telegramPeerBucketWidth,
+		nsMsgBucket:   int32(seedHash(namespace)%uint64(telegramMsgBucketCount)) * telegramMsgBucketWidth,
+		nsPhoneBucket: int64(seedHash(namespace)%uint64(phoneBucketCount)) * phoneBucketWidth,
 	}
 }
 
@@ -139,6 +166,28 @@ func (g *Generator) PeerBandStart() int64 {
 // PeerBandEnd is the exclusive upper bound of this namespace's peer sub-block.
 func (g *Generator) PeerBandEnd() int64 {
 	return g.PeerBandStart() + telegramPeerBucketWidth
+}
+
+// PhoneBandStartIndex / PhoneBandEndIndex bound this namespace's synthetic-phone
+// sub-block within the 1e7-bucket * 1e3-index reserved space. They are flat
+// indices into that space (bucket*width + localIndex), exposed so the harness can
+// detect a cross-namespace phone-band collision at setup. The corresponding phone
+// STRINGS are produced by phoneFor; SyntheticPhonePrefix gives the digit prefix
+// for prefix-scoped identity cleanup.
+func (g *Generator) PhoneBandStartIndex() int64 {
+	return g.nsPhoneBucket
+}
+
+// PhoneBandEndIndex is the exclusive upper bound of this namespace's phone block.
+func (g *Generator) PhoneBandEndIndex() int64 {
+	return g.nsPhoneBucket + phoneBucketWidth
+}
+
+// SyntheticPhonePrefix is the ns-scoped digit prefix shared by every phone this
+// namespace issues (normalized form: +1555<bucket7>...). Identity cleanup deletes
+// phone external_identity rows by this normalized prefix.
+func (g *Generator) SyntheticPhonePrefix() string {
+	return fmt.Sprintf("+1555%07d", g.nsPhoneBucket/phoneBucketWidth)
 }
 
 // seedHash hashes a namespace string into a uint64 for PRNG seeding and bucket

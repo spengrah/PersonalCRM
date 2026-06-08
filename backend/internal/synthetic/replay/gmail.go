@@ -45,28 +45,29 @@ func (h *Harness) ReplayGmail(ctx context.Context, contactID uuid.UUID, spec fac
 	}))
 	provider.SetMeSetForTest(map[string]struct{}{spec.AccountID: {}})
 
-	// email.* root events are published by the provider directly; track the
-	// source so cleanup captures them.
-	h.track(func(c *created) { c.addDirectSource(repository.InteractionSourceEmail) })
-
 	state := &repository.SyncState{
 		Source:    repository.InteractionSourceEmail,
 		AccountID: &spec.AccountID,
-		Metadata:  map[string]any{"backfill_since": gmailBackfillSince(h)},
+		Metadata:  map[string]any{"backfill_since": gmailBackfillSince()},
 	}
 	if _, err := provider.Sync(ctx, state, nil); err != nil {
 		return GmailResult{}, fmt.Errorf("gmail sync: %w", err)
 	}
 
 	if spec.Intent == factory.MatchUnknown {
-		// Match-only: no interaction to wait on; Gate B has no email jobs for a
-		// seeded contact. Settle with an immediately-true predicate scoped to
-		// contactIDs (empty here, so Gate B is trivially 0).
+		// Match-only: the provider writes NO comms_message row and publishes no
+		// email.* event for an unknown correspondent, so there is nothing to
+		// track for cleanup and nothing to wait on. Gate B is trivially 0 (no
+		// seeded contact).
 		if err := h.Settle(ctx, func(context.Context) (bool, error) { return true, nil }, ""); err != nil {
 			return GmailResult{}, err
 		}
 		return GmailResult{ExternalID: spec.ExternalID, Matched: false}, nil
 	}
+
+	// Seeded path: the provider publishes an email.* root event (source_id is
+	// synth-<ns>-prefixed) — track the source so cleanup captures the root event.
+	h.track(func(c *created) { c.addDirectSource(repository.InteractionSourceEmail) })
 
 	// Gate A: THIS replay's email message row is linked to an interaction.
 	if err := h.Settle(ctx, h.gmailSettled(spec.ExternalID), ""); err != nil {

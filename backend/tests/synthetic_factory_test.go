@@ -85,6 +85,45 @@ func TestSyntheticFactory_TelegramPeerSubBlocksDisjoint(t *testing.T) {
 	assert.Less(t, spec.PeerUserID, aEnd)
 }
 
+func TestSyntheticFactory_PhoneSubBlocksDisjoint(t *testing.T) {
+	gA := factory.NewGeneratorAt(factory.DefaultSeed, "alpha", fixedAnchor)
+	gB := factory.NewGeneratorAt(factory.DefaultSeed, "beta", fixedAnchor)
+
+	// Distinct namespaces must get distinct phone-digit prefixes, so identity
+	// matching (which keys on the exact normalized value DB-wide) can never
+	// cross namespaces — the P1 isolation defect this guards against.
+	assert.NotEqual(t, gA.SyntheticPhonePrefix(), gB.SyntheticPhonePrefix(),
+		"distinct namespaces must derive distinct phone-digit prefixes")
+
+	// Every phone a namespace issues (seeded contact + unknown sender) shares
+	// that namespace's prefix and differs from the other namespace's values.
+	cA1 := gA.Contact(factory.WithPhone())
+	cA2 := gA.Contact(factory.WithPhone())
+	cB1 := gB.Contact(factory.WithPhone())
+	require.NotEmpty(t, cA1.Phone)
+	assert.NotEqual(t, cA1.Phone, cA2.Phone, "within a namespace, phones are distinct per contact")
+
+	// Normalized (digits-only, leading +) prefix comparison: A's phones start
+	// with A's prefix, never B's.
+	assert.True(t, strings.HasPrefix(normalizePhoneDigits(cA1.Phone), gA.SyntheticPhonePrefix()))
+	assert.False(t, strings.HasPrefix(normalizePhoneDigits(cB1.Phone), gA.SyntheticPhonePrefix()),
+		"namespace B's phone must not fall in namespace A's block")
+}
+
+// normalizePhoneDigits mimics the production E.164 normalization closely enough
+// for the prefix assertion: keep a leading + and all digits.
+func normalizePhoneDigits(phone string) string {
+	var b strings.Builder
+	for i, r := range phone {
+		if r == '+' && i == 0 {
+			b.WriteRune(r)
+		} else if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 func TestSyntheticFactory_EdgeCaseOptions(t *testing.T) {
 	g := factory.NewGeneratorAt(factory.DefaultSeed, "edge", fixedAnchor)
 

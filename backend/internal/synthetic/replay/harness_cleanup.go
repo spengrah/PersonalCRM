@@ -133,13 +133,19 @@ func (h *Harness) cleanup(ctx context.Context) error {
 		_, err := h.support.DeleteCalendarEventsByGcalEventIDPrefix(ctx, prefix)
 		return err
 	})
-	// 8. external_identity (by ns-prefixed identifier + source_id backstop),
-	// BEFORE contact. The identifier-prefix delete catches the source_id-NULL
-	// identities GCal/external_contact matching creates (keyed by the synthetic
-	// email/handle); external_identity survives contact delete via ON DELETE SET
-	// NULL, so it must be cleared first to avoid polluting future matching.
+	// 8. external_identity (by ns-prefixed identifier + ns-scoped phone-digit
+	// prefix + source_id backstop), BEFORE contact. The identifier-prefix delete
+	// catches the source_id-NULL identities GCal/external_contact matching creates
+	// (keyed by the synthetic email/handle); the phone-prefix delete catches phone
+	// identities (normalized form +1555<ns-bucket>...), which are now ns-scoped so
+	// they no longer leak. external_identity survives contact delete via ON DELETE
+	// SET NULL, so all must be cleared first to avoid polluting future matching.
 	step("external_identity_identifier", func() error {
 		_, err := h.support.DeleteExternalIdentitiesByIdentifierPrefix(ctx, prefix)
+		return err
+	})
+	step("external_identity_phone", func() error {
+		_, err := h.support.DeleteExternalIdentitiesByIdentifierPrefix(ctx, h.gen.SyntheticPhonePrefix())
 		return err
 	})
 	step("external_identity_source_id", func() error {

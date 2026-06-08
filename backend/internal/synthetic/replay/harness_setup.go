@@ -253,30 +253,36 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 	return h, teardown, nil
 }
 
-// peerBandResaltAttempts bounds how many times resolveNamespace re-salts a
-// colliding namespace before failing loudly.
-const peerBandResaltAttempts = 8
+// bandResaltAttempts bounds how many times resolveNamespace re-salts a colliding
+// namespace before failing loudly.
+const bandResaltAttempts = 8
 
 // resolveNamespace builds the generator and, if this namespace's telegram peer
-// sub-block is already occupied by another namespace's live rows, re-salts the
-// namespace (appending an incrementing suffix) until it finds a free band or
-// exhausts the attempt budget. The practical guarantee is "probabilistically
-// disjoint + detected at setup," not a hard mathematical guarantee.
+// sub-block OR synthetic-phone sub-block is already occupied by another
+// namespace's live rows, re-salts the namespace (appending an incrementing
+// suffix) until it finds free bands or exhausts the attempt budget. Both numeric
+// bands are checked because both are matched DB-wide with no namespace scoping.
+// The practical guarantee is "probabilistically disjoint + detected at setup,"
+// not a hard mathematical guarantee.
 func resolveNamespace(ctx context.Context, support *repository.SyntheticSupportRepository, namespace string, seed uint64) (*factory.Generator, string, error) {
 	candidate := namespace
-	for attempt := 0; attempt < peerBandResaltAttempts; attempt++ {
+	for attempt := 0; attempt < bandResaltAttempts; attempt++ {
 		gen := factory.NewGenerator(seed, candidate)
-		occupied, err := support.CountTelegramMessagesInPeerBand(ctx, gen.PeerBandStart(), gen.PeerBandEnd())
+		peerOccupied, err := support.CountTelegramMessagesInPeerBand(ctx, gen.PeerBandStart(), gen.PeerBandEnd())
 		if err != nil {
 			return nil, "", fmt.Errorf("peer-band collision check: %w", err)
 		}
-		if occupied == 0 {
+		phoneOccupied, err := support.CountExternalIdentitiesByIdentifierPrefix(ctx, gen.SyntheticPhonePrefix())
+		if err != nil {
+			return nil, "", fmt.Errorf("phone-band collision check: %w", err)
+		}
+		if peerOccupied == 0 && phoneOccupied == 0 {
 			return gen, candidate, nil
 		}
-		// Collision: re-salt and retry.
+		// Collision in either band: re-salt and retry.
 		candidate = fmt.Sprintf("%s-s%d", namespace, attempt+1)
 	}
-	return nil, "", fmt.Errorf("synthetic: could not find a free telegram peer band for namespace %q after %d re-salts", namespace, peerBandResaltAttempts)
+	return nil, "", fmt.Errorf("synthetic: could not find free numeric bands for namespace %q after %d re-salts", namespace, bandResaltAttempts)
 }
 
 // rematchNoopWorker drains the rematch_dispatcher kind (rematch is out of the

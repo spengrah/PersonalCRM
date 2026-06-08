@@ -83,7 +83,7 @@ func (h *Harness) ReplayTelegram(ctx context.Context, contactID uuid.UUID, spec 
 		return TelegramResult{PeerUserID: spec.PeerUserID, Matched: false}, nil
 	}
 
-	if err := h.Settle(ctx, h.telegramSettled(spec.TelegramMessageID), ""); err != nil {
+	if err := h.Settle(ctx, h.telegramSettled(spec.PeerUserID, spec.TelegramMessageID), ""); err != nil {
 		return TelegramResult{}, err
 	}
 	h.trackContactInteractions(ctx, contactID)

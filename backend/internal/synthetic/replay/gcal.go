@@ -50,12 +50,6 @@ func (h *Harness) ReplayGCal(ctx context.Context, contactID uuid.UUID, spec fact
 		},
 	}))
 
-	// calendar.attended root events are published by the provider per
-	// (event, contact); they carry contact_id so the contact-scoped capture
-	// covers them. The external_contact candidate (unknown path) writes no
-	// contact-bearing event, so track the gcal source for direct capture too.
-	h.track(func(c *created) { c.addDirectSource(google.CalendarSourceName) })
-
 	accountID := spec.AccountID
 	state := &repository.SyncState{Source: repository.InteractionSourceGCal, AccountID: &accountID}
 	if _, err := provider.Sync(ctx, state, nil); err != nil {
@@ -63,6 +57,9 @@ func (h *Harness) ReplayGCal(ctx context.Context, contactID uuid.UUID, spec fact
 	}
 
 	if spec.Intent == factory.MatchUnknown {
+		// Unmatched attendee: no matched contact, so the provider publishes NO
+		// calendar.attended event. The calendar_event + external_contact rows are
+		// cleaned by ns-prefix, not event capture, so nothing to track here.
 		predicate := func(ctx context.Context) (bool, error) {
 			n, err := h.support.CountUnmatchedCalendarEventByGcalID(ctx, spec.GcalEventID)
 			return n > 0, err
@@ -72,6 +69,12 @@ func (h *Harness) ReplayGCal(ctx context.Context, contactID uuid.UUID, spec fact
 		}
 		return GCalResult{GcalEventID: spec.GcalEventID, Matched: false}, nil
 	}
+
+	// Seeded path: the provider publishes calendar.attended per (event, contact);
+	// those events carry contact_id and are captured by the contact-scoped read,
+	// but track the source too as a backstop for any non-contact-bearing gcal
+	// root event a future change might publish (its source_id is synth-prefixed).
+	h.track(func(c *created) { c.addDirectSource(google.CalendarSourceName) })
 
 	// Gate A: the calendar_event is processed with this contact matched.
 	if err := h.Settle(ctx, h.gcalSettled(spec.GcalEventID, contactID), ""); err != nil {

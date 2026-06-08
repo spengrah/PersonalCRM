@@ -272,6 +272,13 @@ func (r *SyntheticSupportRepository) CountTelegramMessagesInPeerBand(ctx context
 	})
 }
 
+// CountExternalIdentitiesByIdentifierPrefix counts external_identity rows whose
+// normalized identifier shares the given prefix. Used by NewHarness for setup-
+// time phone-band collision detection (the synthetic phone-digit prefix).
+func (r *SyntheticSupportRepository) CountExternalIdentitiesByIdentifierPrefix(ctx context.Context, prefix string) (int64, error) {
+	return r.queries.SyntheticCountExternalIdentitiesByIdentifierPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
+}
+
 // --- Settle Gate A domain predicates (pending / match states) --------------
 
 // CountLinkedCommsMessageByExternalID counts comms_message rows for (source,
@@ -291,11 +298,15 @@ func (r *SyntheticSupportRepository) CountLinkedMessagesMessageByGuid(ctx contex
 	return r.queries.SyntheticCountLinkedMessagesMessageByGuid(ctx, guid)
 }
 
-// CountLinkedTelegramMessageByMessageID counts telegram_message rows for the
-// telegram_message_id with a non-null interaction_id — the seeded telegram Gate A
-// predicate.
-func (r *SyntheticSupportRepository) CountLinkedTelegramMessageByMessageID(ctx context.Context, telegramMessageID int32) (int64, error) {
-	return r.queries.SyntheticCountLinkedTelegramMessageByMessageId(ctx, telegramMessageID)
+// CountLinkedTelegramMessageByMessageID counts telegram_message rows for
+// (peerUserID, telegramMessageID) with a non-null interaction_id — the seeded
+// telegram Gate A predicate. Scoped by peer (collision-checked at setup) so a
+// colliding message-id bucket in another namespace cannot satisfy it early.
+func (r *SyntheticSupportRepository) CountLinkedTelegramMessageByMessageID(ctx context.Context, peerUserID int64, telegramMessageID int32) (int64, error) {
+	return r.queries.SyntheticCountLinkedTelegramMessageByMessageId(ctx, db.SyntheticCountLinkedTelegramMessageByMessageIdParams{
+		PeerUserID:        pgtype.Int8{Int64: peerUserID, Valid: true},
+		TelegramMessageID: telegramMessageID,
+	})
 }
 
 // CountProcessedCalendarEventByGcalID counts calendar_event rows for the gcal id
