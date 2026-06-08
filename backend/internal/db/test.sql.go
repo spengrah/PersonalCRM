@@ -657,11 +657,11 @@ const SyntheticCountUnmatchedCalendarEventByGcalId = `-- name: SyntheticCountUnm
 SELECT COUNT(*) FROM calendar_event
 WHERE gcal_event_id = $1
   AND matched_contact_ids = '{}'
-  AND deleted_at IS NULL
 `
 
 // Settle Gate A (GCal unknown-attendee): the calendar_event for the gcal id
-// exists with an empty matched_contact_ids array.
+// exists with an empty matched_contact_ids array. calendar_event has no
+// deleted_at column (hard-delete table), so no soft-delete filter.
 func (q *Queries) SyntheticCountUnmatchedCalendarEventByGcalId(ctx context.Context, gcalEventID string) (int64, error) {
 	row := q.db.QueryRow(ctx, SyntheticCountUnmatchedCalendarEventByGcalId, gcalEventID)
 	var count int64
@@ -766,15 +766,23 @@ func (q *Queries) SyntheticDeleteEventsByIds(ctx context.Context, eventIds []pgt
 	return result.RowsAffected(), nil
 }
 
-const SyntheticDeleteExternalIdentitiesByIds = `-- name: SyntheticDeleteExternalIdentitiesByIds :execrows
-DELETE FROM external_identity WHERE id = ANY($1::uuid[])
+const SyntheticDeleteExternalIdentitiesByIdentifierPrefix = `-- name: SyntheticDeleteExternalIdentitiesByIdentifierPrefix :execrows
+DELETE FROM external_identity WHERE identifier LIKE $1 || '%'
 `
 
-// Cleanup step 8 (primary): identities by tracked id, including the
-// source_id-NULL ones MatchOrCreate creates for GCal/external_contact
-// matching that a source_id-prefix delete would miss.
-func (q *Queries) SyntheticDeleteExternalIdentitiesByIds(ctx context.Context, identityIds []pgtype.UUID) (int64, error) {
-	result, err := q.db.Exec(ctx, SyntheticDeleteExternalIdentitiesByIds, identityIds)
+// Cleanup step 8 (primary): identities whose normalized identifier is
+// ns-prefixed. MatchOrCreate for GCal attendee / external_contact email
+// matching creates identities with source_id NULL keyed by the synthetic
+// IDENTIFIER (e.g. 'synth-<ns>-...@synthetic.example'), which a source_id-prefix
+// delete MISSES. Deleting by the identifier prefix catches both the
+// source_id-NULL and source_id-set synthetic email/handle identities BEFORE the
+// contact delete (external_identity survives contact delete via ON DELETE SET
+// NULL, so it would otherwise pollute future matching). Caller passes a BARE
+// prefix; '%' is appended here. (Phone identities use the shared 555-01xx
+// fictional range and are not ns-prefixed; they carry no contact link after the
+// contact delete and re-match cleanly, so they are intentionally left.)
+func (q *Queries) SyntheticDeleteExternalIdentitiesByIdentifierPrefix(ctx context.Context, identifierPrefix pgtype.Text) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteExternalIdentitiesByIdentifierPrefix, identifierPrefix)
 	if err != nil {
 		return 0, err
 	}
@@ -785,9 +793,8 @@ const SyntheticDeleteExternalIdentitiesBySourceIdPrefix = `-- name: SyntheticDel
 DELETE FROM external_identity WHERE source_id LIKE $1 || '%'
 `
 
-// Cleanup step 8 (prefix backstop): the existing DeleteExternalIdentitiesBySourceID
-// is exact-match; this prefix variant catches any ns-prefixed source_id rows.
-// Caller passes a BARE prefix; '%' is appended here.
+// Cleanup step 8 (backstop): catches any ns-prefixed source_id rows the
+// identifier-prefix delete missed. Caller passes a BARE prefix; '%' appended.
 func (q *Queries) SyntheticDeleteExternalIdentitiesBySourceIdPrefix(ctx context.Context, sourceIDPrefix pgtype.Text) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteExternalIdentitiesBySourceIdPrefix, sourceIDPrefix)
 	if err != nil {

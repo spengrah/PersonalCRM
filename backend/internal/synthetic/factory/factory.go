@@ -168,13 +168,6 @@ func (g *Generator) recentOffset(window time.Duration) time.Duration {
 
 // --- deterministic id helpers ----------------------------------------------
 
-// nextSourceID returns the next namespace-prefixed source id with the given
-// segment label (e.g. 'gmail', 'ec', 'tg'). Monotonic within the run.
-func (g *Generator) nextSourceID(segment string) string {
-	g.sourceIDSeq++
-	return fmt.Sprintf("%s%s-%d", g.Prefix(), segment, g.sourceIDSeq)
-}
-
 // nextPeerUserID returns the next telegram peer_user_id within this namespace's
 // reserved sub-block. Panics if the sub-block (1000 ids) is exhausted — far
 // beyond any realistic per-namespace test count.

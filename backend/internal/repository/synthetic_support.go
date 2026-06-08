@@ -171,13 +171,12 @@ func (r *SyntheticSupportRepository) DeleteCalendarEventsByGcalEventIDPrefix(ctx
 	return r.queries.DeleteCalendarEventsByGcalEventIdPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
 }
 
-// DeleteExternalIdentitiesByIds removes identities by tracked id, including
-// the source_id-NULL ones MatchOrCreate produces (cleanup step 8 primary).
-func (r *SyntheticSupportRepository) DeleteExternalIdentitiesByIds(ctx context.Context, identityIDs []uuid.UUID) (int64, error) {
-	if len(identityIDs) == 0 {
-		return 0, nil
-	}
-	return r.queries.SyntheticDeleteExternalIdentitiesByIds(ctx, pgUUIDs(identityIDs))
+// DeleteExternalIdentitiesByIdentifierPrefix removes identities whose normalized
+// identifier is ns-prefixed (cleanup step 8 primary). Catches the source_id-NULL
+// identities MatchOrCreate produces for GCal/external_contact matching, keyed by
+// the synthetic email/handle, which a source_id-prefix delete would miss.
+func (r *SyntheticSupportRepository) DeleteExternalIdentitiesByIdentifierPrefix(ctx context.Context, prefix string) (int64, error) {
+	return r.queries.SyntheticDeleteExternalIdentitiesByIdentifierPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
 }
 
 // DeleteExternalIdentitiesBySourceIDPrefix is the prefix backstop for

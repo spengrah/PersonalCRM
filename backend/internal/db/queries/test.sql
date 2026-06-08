@@ -270,16 +270,23 @@ DELETE FROM comms_message WHERE external_id LIKE @external_id_prefix || '%';
 -- Caller passes a BARE prefix; '%' is appended here.
 DELETE FROM messages_message WHERE guid LIKE @guid_prefix || '%';
 
--- name: SyntheticDeleteExternalIdentitiesByIds :execrows
--- Cleanup step 8 (primary): identities by tracked id, including the
--- source_id-NULL ones MatchOrCreate creates for GCal/external_contact
--- matching that a source_id-prefix delete would miss.
-DELETE FROM external_identity WHERE id = ANY(@identity_ids::uuid[]);
+-- name: SyntheticDeleteExternalIdentitiesByIdentifierPrefix :execrows
+-- Cleanup step 8 (primary): identities whose normalized identifier is
+-- ns-prefixed. MatchOrCreate for GCal attendee / external_contact email
+-- matching creates identities with source_id NULL keyed by the synthetic
+-- IDENTIFIER (e.g. 'synth-<ns>-...@synthetic.example'), which a source_id-prefix
+-- delete MISSES. Deleting by the identifier prefix catches both the
+-- source_id-NULL and source_id-set synthetic email/handle identities BEFORE the
+-- contact delete (external_identity survives contact delete via ON DELETE SET
+-- NULL, so it would otherwise pollute future matching). Caller passes a BARE
+-- prefix; '%' is appended here. (Phone identities use the shared 555-01xx
+-- fictional range and are not ns-prefixed; they carry no contact link after the
+-- contact delete and re-match cleanly, so they are intentionally left.)
+DELETE FROM external_identity WHERE identifier LIKE @identifier_prefix || '%';
 
 -- name: SyntheticDeleteExternalIdentitiesBySourceIdPrefix :execrows
--- Cleanup step 8 (prefix backstop): the existing DeleteExternalIdentitiesBySourceID
--- is exact-match; this prefix variant catches any ns-prefixed source_id rows.
--- Caller passes a BARE prefix; '%' is appended here.
+-- Cleanup step 8 (backstop): catches any ns-prefixed source_id rows the
+-- identifier-prefix delete missed. Caller passes a BARE prefix; '%' appended.
 DELETE FROM external_identity WHERE source_id LIKE @source_id_prefix || '%';
 
 -- name: SyntheticDeleteContactTasksByContactIds :execrows
@@ -342,8 +349,8 @@ WHERE source_id = @source_id
 
 -- name: SyntheticCountUnmatchedCalendarEventByGcalId :one
 -- Settle Gate A (GCal unknown-attendee): the calendar_event for the gcal id
--- exists with an empty matched_contact_ids array.
+-- exists with an empty matched_contact_ids array. calendar_event has no
+-- deleted_at column (hard-delete table), so no soft-delete filter.
 SELECT COUNT(*) FROM calendar_event
 WHERE gcal_event_id = @gcal_event_id
-  AND matched_contact_ids = '{}'
-  AND deleted_at IS NULL;
+  AND matched_contact_ids = '{}';

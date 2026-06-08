@@ -135,10 +135,14 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 	cadenceUpdater := consumer.NewCadenceUpdater(claimRepo, contactRepo, database.Queries, consumer.CadenceModeCutover, false)
 	contactService.SetCadenceUpdater(cadenceUpdater)
 
-	// Staging registry covers telegram + messages sources.
+	// Staging registry covers telegram + messages + gchat sources. The gchat
+	// session processor is REQUIRED: without it the InteractionRecorder cannot
+	// mark comms_message(source='gchat') rows processed, the zero-rows rollback
+	// fires, and the aggregation engine reprocesses forever (Gate B never clears).
 	stagingRegistry := repository.NewStagingProcessorRegistry(map[string]repository.StagingProcessor{
 		repository.InteractionSourceTelegram: repository.NewTelegramStagingProcessor(telegramRepo),
 		repository.InteractionSourceMessages: repository.NewMessagesStagingProcessor(messagesRepo),
+		repository.InteractionSourceGChat:    repository.NewCommsSessionStagingProcessor(commsRepo),
 	})
 
 	recorder := consumer.NewInteractionRecorder(contactService, stagingRegistry, bus, cadenceUpdater, nil, calendarEventRepo)

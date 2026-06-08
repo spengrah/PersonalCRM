@@ -6,6 +6,7 @@ import (
 
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/synthetic/factory"
 
 	"github.com/google/uuid"
@@ -28,6 +29,16 @@ func (h *Harness) ReplayMacContacts(ctx context.Context, contactID uuid.UUID, sp
 	// raw external_contact.upserted root events carry no CRM contact id; track
 	// the synthetic source so cleanup captures the root event.
 	h.track(func(c *created) { c.addDirectSource(spec.Envelope.Source) })
+
+	// Finalize the source_id to <entity_id>@<sha256(JCS(payload\host_id))>, the
+	// invariant IngestBatch enforces for external_contact.upserted. The factory
+	// (a leaf package) cannot import service to compute the hash, so the adapter
+	// does it here over the factory-marshalled payload.
+	hash, err := service.ComputeContentHash(spec.Envelope.Payload)
+	if err != nil {
+		return MacContactResult{}, fmt.Errorf("compute external_contact content hash: %w", err)
+	}
+	spec.Envelope.SourceID = spec.EntityID + "@" + hash
 
 	accepted, _, rejections, _, err := h.ingestService.IngestBatch(ctx, []*events.Envelope{spec.Envelope}, []int{0}, &h.macHostID)
 	if err != nil {

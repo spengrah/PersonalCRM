@@ -1326,7 +1326,8 @@ type Querier interface {
 	// so concurrent unrelated jobs on the shared test DB never block the gate.
 	SyntheticCountUnfinalizedRiverJobsForEventsByContacts(ctx context.Context, contactIds []string) (int64, error)
 	// Settle Gate A (GCal unknown-attendee): the calendar_event for the gcal id
-	// exists with an empty matched_contact_ids array.
+	// exists with an empty matched_contact_ids array. calendar_event has no
+	// deleted_at column (hard-delete table), so no soft-delete filter.
 	SyntheticCountUnmatchedCalendarEventByGcalId(ctx context.Context, gcalEventID string) (int64, error)
 	// Settle Gate A (Mac-contact unknown-sender): the external_contact row for the
 	// entity id exists with match_status='unmatched'.
@@ -1346,13 +1347,20 @@ type Querier interface {
 	// Cleanup step 3: events by tracked id (NOT by source — that would wipe
 	// other tests' rows sharing the source value on the shared DB).
 	SyntheticDeleteEventsByIds(ctx context.Context, eventIds []pgtype.UUID) (int64, error)
-	// Cleanup step 8 (primary): identities by tracked id, including the
-	// source_id-NULL ones MatchOrCreate creates for GCal/external_contact
-	// matching that a source_id-prefix delete would miss.
-	SyntheticDeleteExternalIdentitiesByIds(ctx context.Context, identityIds []pgtype.UUID) (int64, error)
-	// Cleanup step 8 (prefix backstop): the existing DeleteExternalIdentitiesBySourceID
-	// is exact-match; this prefix variant catches any ns-prefixed source_id rows.
-	// Caller passes a BARE prefix; '%' is appended here.
+	// Cleanup step 8 (primary): identities whose normalized identifier is
+	// ns-prefixed. MatchOrCreate for GCal attendee / external_contact email
+	// matching creates identities with source_id NULL keyed by the synthetic
+	// IDENTIFIER (e.g. 'synth-<ns>-...@synthetic.example'), which a source_id-prefix
+	// delete MISSES. Deleting by the identifier prefix catches both the
+	// source_id-NULL and source_id-set synthetic email/handle identities BEFORE the
+	// contact delete (external_identity survives contact delete via ON DELETE SET
+	// NULL, so it would otherwise pollute future matching). Caller passes a BARE
+	// prefix; '%' is appended here. (Phone identities use the shared 555-01xx
+	// fictional range and are not ns-prefixed; they carry no contact link after the
+	// contact delete and re-match cleanly, so they are intentionally left.)
+	SyntheticDeleteExternalIdentitiesByIdentifierPrefix(ctx context.Context, identifierPrefix pgtype.Text) (int64, error)
+	// Cleanup step 8 (backstop): catches any ns-prefixed source_id rows the
+	// identifier-prefix delete missed. Caller passes a BARE prefix; '%' appended.
 	SyntheticDeleteExternalIdentitiesBySourceIdPrefix(ctx context.Context, sourceIDPrefix pgtype.Text) (int64, error)
 	// Cleanup step 2: interactions by tracked id.
 	SyntheticDeleteInteractionsByIds(ctx context.Context, interactionIds []pgtype.UUID) (int64, error)

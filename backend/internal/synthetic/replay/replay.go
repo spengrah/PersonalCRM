@@ -46,17 +46,19 @@ const (
 // Gate B can scope to this replay's contacts. eventIDs is the UNION of
 // adapter-direct events (by synthetic source/source_id) and contact-scoped
 // cascade events (ListEventIdsForContacts), populated through Gate B.
+//
+// contactIDs + interactionIDs are deleted by exact id (no namespace column);
+// the remaining synthetic tables (external_contact, comms_message,
+// external_identity, messages_message, calendar_event) all carry a namespace-
+// prefixed column, so they are cleaned by prefix rather than tracked id.
 type created struct {
-	contactIDs         []uuid.UUID
-	externalContactIDs []uuid.UUID
-	identityIDs        []uuid.UUID
-	interactionIDs     []uuid.UUID
-	eventIDs           []uuid.UUID
-	commsMessageIDs    []uuid.UUID
-	telegramPeerIDs    []int64
-	// directSources is the set of (source, namespace-prefix) pairs the adapters
-	// published root events under, so Cleanup can capture no-contact root
-	// events that the contact-scoped read misses.
+	contactIDs      []uuid.UUID
+	interactionIDs  []uuid.UUID
+	eventIDs        []uuid.UUID
+	telegramPeerIDs []int64
+	// directSources is the set of sources the adapters published root events
+	// under, so Cleanup can capture no-contact root events that the
+	// contact-scoped read misses.
 	directSources map[string]struct{}
 }
 
@@ -64,13 +66,8 @@ func newCreated() *created {
 	return &created{directSources: map[string]struct{}{}}
 }
 
-func (c *created) addContact(id uuid.UUID) { c.contactIDs = append(c.contactIDs, id) }
-func (c *created) addExternalContact(id uuid.UUID) {
-	c.externalContactIDs = append(c.externalContactIDs, id)
-}
-func (c *created) addIdentity(id uuid.UUID)      { c.identityIDs = append(c.identityIDs, id) }
+func (c *created) addContact(id uuid.UUID)       { c.contactIDs = append(c.contactIDs, id) }
 func (c *created) addInteraction(id uuid.UUID)   { c.interactionIDs = append(c.interactionIDs, id) }
-func (c *created) addCommsMessage(id uuid.UUID)  { c.commsMessageIDs = append(c.commsMessageIDs, id) }
 func (c *created) addTelegramPeer(id int64)      { c.telegramPeerIDs = append(c.telegramPeerIDs, id) }
 func (c *created) addDirectSource(source string) { c.directSources[source] = struct{}{} }
 

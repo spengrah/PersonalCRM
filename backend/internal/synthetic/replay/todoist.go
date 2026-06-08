@@ -60,7 +60,16 @@ func (h *Harness) ReplayTodoist(ctx context.Context, contactIDs []uuid.UUID) (To
 	)
 
 	accountID := h.gen.Prefix() + "todoist"
-	state := &repository.SyncState{Source: repository.InteractionSourceTodoist, AccountID: &accountID}
+	// project_id/label_id are required settings; supply synthetic values (the
+	// fake Client never validates them against a real Todoist project).
+	state := &repository.SyncState{
+		Source:    repository.InteractionSourceTodoist,
+		AccountID: &accountID,
+		Metadata: map[string]any{
+			todoist.MetadataKeyProjectID: h.gen.Prefix() + "project",
+			todoist.MetadataKeyLabelID:   h.gen.Prefix() + "label",
+		},
+	}
 	if _, err := provider.Sync(ctx, state, nil); err != nil {
 		return TodoistResult{}, fmt.Errorf("todoist sync: %w", err)
 	}
