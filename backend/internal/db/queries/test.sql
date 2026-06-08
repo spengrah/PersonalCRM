@@ -494,22 +494,32 @@ DELETE FROM telegram_chat_config WHERE telegram_chat_id = ANY(@chat_ids::bigint[
 -- namespace's reserved peer band [band_start, band_end). A discovery/stranded
 -- replay creates these (source='telegram', source_id=<peer id>); a crashed prior
 -- run can leave them with no remaining telegram_message row, so the peer-band
--- check on telegram_message alone would miss them. The all-digits guard keeps the
--- ::bigint cast safe. A non-zero count means the band is occupied → NewHarness
--- re-salts.
+-- check on telegram_message alone would miss them. A non-zero count means the
+-- band is occupied → NewHarness re-salts.
+--
+-- The cast is wrapped in a CASE that only evaluates source_id::bigint for
+-- all-digit values (bounded to 18 digits, safely under the int64 max): a bare
+-- WHERE `source_id ~ '...' AND source_id::bigint >= ...` is NOT safe because
+-- PostgreSQL may reorder the predicates and run the cast on a non-numeric
+-- source_id (other tests create telegram rows with text source ids like
+-- 'tg-discovery-upsert-*'), raising "invalid input syntax for type bigint". The
+-- CASE makes the cast conditional, so non-numeric rows yield NULL and fall out of
+-- the range comparison.
 SELECT (
   (SELECT COUNT(*) FROM external_contact ec
    WHERE ec.source = 'telegram'
-     AND ec.source_id ~ '^[0-9]+$'
-     AND ec.source_id::bigint >= @band_start::bigint
-     AND ec.source_id::bigint < @band_end::bigint
+     AND (CASE WHEN ec.source_id ~ '^[0-9]{1,18}$' THEN ec.source_id::bigint END)
+           >= @band_start::bigint
+     AND (CASE WHEN ec.source_id ~ '^[0-9]{1,18}$' THEN ec.source_id::bigint END)
+           < @band_end::bigint
      AND ec.deleted_at IS NULL)
   +
   (SELECT COUNT(*) FROM external_identity ei
    WHERE ei.source = 'telegram'
-     AND ei.source_id ~ '^[0-9]+$'
-     AND ei.source_id::bigint >= @band_start::bigint
-     AND ei.source_id::bigint < @band_end::bigint)
+     AND (CASE WHEN ei.source_id ~ '^[0-9]{1,18}$' THEN ei.source_id::bigint END)
+           >= @band_start::bigint
+     AND (CASE WHEN ei.source_id ~ '^[0-9]{1,18}$' THEN ei.source_id::bigint END)
+           < @band_end::bigint)
 )::bigint;
 
 -- name: SyntheticDeleteTelegramExternalContactsByPeerIds :execrows
