@@ -136,6 +136,10 @@ func TestSyntheticResetSyntheticData_WipesEveryDataTable(t *testing.T) {
 		case wiped[tbl]:
 		case tbl == "schema_migrations":
 		case strings.HasPrefix(tbl, "river_"):
+		// _testdb_template_marker is a clone-machinery sentinel that exists ONLY
+		// inside test clone/template DBs (internal/testdb), never in a real
+		// schema — it is not an app table the production reset would ever see.
+		case tbl == "_testdb_template_marker":
 		default:
 			t.Errorf("public table %q is neither wiped, schema_migrations, nor a river_%% internal table — add it to the ResetSyntheticData TRUNCATE list (and wipedTables)", tbl)
 		}
