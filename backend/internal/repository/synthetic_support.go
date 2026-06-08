@@ -484,3 +484,110 @@ func (r *SyntheticSupportRepository) SeedRevokedMacHost(ctx context.Context, hos
 	}
 	return uuid.UUID(row.ID.Bytes), nil
 }
+
+// --- crm-admin reset + additive-seed preflight -----------------------------
+
+// ResetSyntheticData HARD-truncates the complete live data-table closure (every
+// app data table EXCEPT schema_migrations + River's own internal tables;
+// river_job IS wiped). Used ONLY by crm-admin --reset-and-seed, behind the
+// CRM_ENV-production gate + the mandatory --yes confirm + a stopped service. The
+// reset boundary is verified by synthetic_reset_integration_test.go (clone DB).
+func (r *SyntheticSupportRepository) ResetSyntheticData(ctx context.Context) error {
+	return r.queries.ResetSyntheticData(ctx)
+}
+
+// CountNonFinalRiverJobs counts queued/in-flight river_job rows. The additive
+// crm-admin --seed preflight REFUSES when this is non-zero (a drained queue is
+// its precondition; it must not steal pre-existing work). NOT a liveness probe —
+// River 0.34 does not populate river_client, so no sound DB liveness signal
+// exists; --reset-and-seed skips this check (it wipes river_job).
+func (r *SyntheticSupportRepository) CountNonFinalRiverJobs(ctx context.Context) (int64, error) {
+	return r.queries.CountNonFinalRiverJobs(ctx)
+}
+
+// PrefixCleanupResult reports the per-table delete counts from CleanupByPrefix so
+// the /cleanup HTTP response preserves its existing shape.
+type PrefixCleanupResult struct {
+	DeletedContacts         int64
+	DeletedExternalContacts int64
+	DeletedCalendarEvents   int64
+}
+
+// CleanupByPrefix runs the /test/cleanup prefix deletes (contacts by name,
+// external_contact by display_name + source_id, calendar_event by title +
+// gcal_event_id). It is the repository home for what the /cleanup handler used
+// to inline via db.New(tx) — fixing the handler→queries layer violation. The
+// caller (TestSeedService) constructs this repository over a tx-scoped querier
+// so the deletes commit atomically; the LIKE-escaped prefix is supplied by the
+// caller (escaping stays at the service boundary, mirroring the old handler).
+func (r *SyntheticSupportRepository) CleanupByPrefix(ctx context.Context, escapedPrefix string) (PrefixCleanupResult, error) {
+	var res PrefixCleanupResult
+	prefix := pgtype.Text{String: escapedPrefix, Valid: true}
+
+	deletedContacts, err := r.queries.DeleteContactsByNamePrefix(ctx, prefix)
+	if err != nil {
+		return res, err
+	}
+	res.DeletedContacts = deletedContacts
+
+	deletedExternal, err := r.queries.DeleteExternalContactsByDisplayNamePrefix(ctx, prefix)
+	if err != nil {
+		return res, err
+	}
+	deletedBySourceID, err := r.queries.DeleteExternalContactsBySourceIDPrefix(ctx, prefix)
+	if err != nil {
+		return res, err
+	}
+	res.DeletedExternalContacts = deletedExternal + deletedBySourceID
+
+	deletedCalEvents, err := r.queries.DeleteCalendarEventsByTitlePrefix(ctx, prefix)
+	if err != nil {
+		return res, err
+	}
+	deletedByGcalID, err := r.queries.DeleteCalendarEventsByGcalEventIdPrefix(ctx, prefix)
+	if err != nil {
+		return res, err
+	}
+	res.DeletedCalendarEvents = deletedCalEvents + deletedByGcalID
+
+	return res, nil
+}
+
+// --- reset integration test support (clone DB only) ------------------------
+
+// CountAllRows counts every row in tableName. Used ONLY by the clone-DB reset
+// test to assert each wiped table is empty after the reset (and schema_migrations
+// survives). The table name is validated against the wiped list by the test
+// before this call.
+func (r *SyntheticSupportRepository) CountAllRows(ctx context.Context, tableName string) (int64, error) {
+	return r.queries.TestCountAllRows(ctx, tableName)
+}
+
+// ListPublicTables enumerates every base table in the public schema (the catalog
+// guard's input). Reset test only.
+func (r *SyntheticSupportRepository) ListPublicTables(ctx context.Context) ([]string, error) {
+	return r.queries.TestListPublicTables(ctx)
+}
+
+// InsertNonFinalRiverJob plants one queued river_job so a test can assert the
+// additive --seed preflight refuses while --reset-and-seed proceeds. Test only.
+func (r *SyntheticSupportRepository) InsertNonFinalRiverJob(ctx context.Context) error {
+	return r.queries.TestInsertNonFinalRiverJob(ctx)
+}
+
+// InsertResetMarkers seeds a marker row into the standalone (harness-untouched)
+// wiped tables — oauth_credential, external_sync_state, telegram_session, tag —
+// so the reset test proves TRUNCATE empties tables the synthetic harness does not
+// populate. Test only.
+func (r *SyntheticSupportRepository) InsertResetMarkers(ctx context.Context) error {
+	if err := r.queries.TestInsertOAuthCredentialMarker(ctx); err != nil {
+		return err
+	}
+	if err := r.queries.TestInsertExternalSyncStateMarker(ctx); err != nil {
+		return err
+	}
+	if err := r.queries.TestInsertTelegramSessionMarker(ctx); err != nil {
+		return err
+	}
+	return r.queries.TestInsertTagMarker(ctx)
+}
