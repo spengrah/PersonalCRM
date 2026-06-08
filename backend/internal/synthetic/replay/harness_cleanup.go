@@ -163,9 +163,24 @@ func (h *Harness) cleanup(ctx context.Context) error {
 		_, err := h.support.DeleteExternalIdentitiesBySourceIDPrefix(ctx, prefix)
 		return err
 	})
+	// 8b. external_identity for unmatched telegram peers. MatchPeer keys the
+	// identity by source='telegram', source_id = the BARE peer id, and the
+	// synthetic handle normalizes to 'synth_<ns>_<n>' (underscores) — neither
+	// matches the ns-prefix ('synth-<ns>-') deletes above, so clear these by the
+	// tracked peer ids before the contact delete.
+	step("external_identity_telegram_peer", func() error {
+		_, err := h.support.DeleteTelegramExternalIdentitiesByPeerIds(ctx, c.telegramPeerIDs)
+		return err
+	})
 	// 9. external_contact (ns-prefixed source_id).
 	step("external_contact", func() error {
 		_, err := h.support.DeleteExternalContactsBySourceIDPrefix(ctx, prefix)
+		return err
+	})
+	// 9b. external_contact telegram discovery candidates, keyed by the bare peer
+	// id (source='telegram'), which the ns-prefix delete above misses.
+	step("external_contact_telegram_peer", func() error {
+		_, err := h.support.DeleteTelegramExternalContactsByPeerIds(ctx, c.telegramPeerIDs)
 		return err
 	})
 	// 10. contact_task (by contact, hard delete — no deleted_at), plus the

@@ -1117,6 +1117,43 @@ func (q *Queries) SyntheticDeleteTelegramChatConfigsByChatIds(ctx context.Contex
 	return result.RowsAffected(), nil
 }
 
+const SyntheticDeleteTelegramExternalContactsByPeerIds = `-- name: SyntheticDeleteTelegramExternalContactsByPeerIds :execrows
+DELETE FROM external_contact
+WHERE source = 'telegram' AND source_id = ANY($1::text[])
+`
+
+// Cleanup: telegram discovery candidate external_contact rows are keyed by
+// source='telegram', source_id = the BARE peer user id (not an ns-prefixed
+// string), so the ns-prefix external_contact delete misses them. A stranded /
+// unknown-sender replay that crosses the discovery threshold upserts one; delete
+// them by the exact tracked peer ids (string form).
+func (q *Queries) SyntheticDeleteTelegramExternalContactsByPeerIds(ctx context.Context, peerIds []string) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteTelegramExternalContactsByPeerIds, peerIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const SyntheticDeleteTelegramExternalIdentitiesByPeerIds = `-- name: SyntheticDeleteTelegramExternalIdentitiesByPeerIds :execrows
+DELETE FROM external_identity
+WHERE source = 'telegram' AND source_id = ANY($1::text[])
+`
+
+// Cleanup: MatchPeer creates an external_identity for an unmatched telegram peer
+// keyed by source='telegram', source_id = the BARE peer user id. The synthetic
+// handle is normalized to 'synth_<ns>_<n>' (underscores), which the ns-prefix
+// ('synth-<ns>-') identifier delete does NOT match, so clear these by the exact
+// tracked peer ids before the contact delete (external_identity survives contact
+// delete via ON DELETE SET NULL and would otherwise pollute future matching).
+func (q *Queries) SyntheticDeleteTelegramExternalIdentitiesByPeerIds(ctx context.Context, peerIds []string) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteTelegramExternalIdentitiesByPeerIds, peerIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const SyntheticListContactTaskIdsByProvider = `-- name: SyntheticListContactTaskIdsByProvider :many
 SELECT id FROM contact_task WHERE provider = $1
 `

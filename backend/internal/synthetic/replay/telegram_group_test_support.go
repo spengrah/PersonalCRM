@@ -58,8 +58,11 @@ func buildGroupUpdate(spec factory.TelegramGroupMessageSpec) (tg.Entities, *tg.U
 		Out:     false, // inbound
 		Date:    int(spec.SentAt.Unix()),
 		PeerID:  &tg.PeerChat{ChatID: spec.ChatID},
-		FromID:  &tg.PeerUser{UserID: spec.SenderUserID},
 	}
+	// SetFromID sets the flag bit GetFromID checks; a bare FromID struct-field
+	// assignment leaves the flag unset, so ParseMessage's group branch would not
+	// see the sender (PeerUserID stays nil → matcher never runs).
+	msg.SetFromID(&tg.PeerUser{UserID: spec.SenderUserID})
 	return entities, &tg.UpdateNewMessage{Message: msg}
 }
 

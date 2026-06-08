@@ -17,6 +17,7 @@ package repository
 
 import (
 	"context"
+	"strconv"
 
 	"personal-crm/backend/internal/db"
 
@@ -173,6 +174,35 @@ func (r *SyntheticSupportRepository) DeleteTelegramChatConfigsByChatIds(ctx cont
 		return 0, nil
 	}
 	return r.queries.SyntheticDeleteTelegramChatConfigsByChatIds(ctx, chatIDs)
+}
+
+// DeleteTelegramExternalContactsByPeerIds removes telegram discovery candidate
+// external_contact rows keyed by the bare peer id (source='telegram'), which the
+// ns-prefix delete misses. peerIDs are the tracked int64 peers.
+func (r *SyntheticSupportRepository) DeleteTelegramExternalContactsByPeerIds(ctx context.Context, peerIDs []int64) (int64, error) {
+	if len(peerIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticDeleteTelegramExternalContactsByPeerIds(ctx, int64sToStrings(peerIDs))
+}
+
+// DeleteTelegramExternalIdentitiesByPeerIds removes the external_identity rows
+// MatchPeer creates for unmatched telegram peers, keyed by the bare peer id.
+func (r *SyntheticSupportRepository) DeleteTelegramExternalIdentitiesByPeerIds(ctx context.Context, peerIDs []int64) (int64, error) {
+	if len(peerIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticDeleteTelegramExternalIdentitiesByPeerIds(ctx, int64sToStrings(peerIDs))
+}
+
+// int64sToStrings projects int64 peer ids to their canonical decimal string form
+// (the shape telegram source_id is stored as).
+func int64sToStrings(ids []int64) []string {
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		out[i] = strconv.FormatInt(id, 10)
+	}
+	return out
 }
 
 // DeleteCalendarEventsByGcalEventIDPrefix removes calendar_event rows whose

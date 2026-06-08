@@ -1438,6 +1438,19 @@ type Querier interface {
 	// created, by the exact tracked chat ids (telegram_chat_config has no namespace
 	// column — keyed only by telegram_chat_id).
 	SyntheticDeleteTelegramChatConfigsByChatIds(ctx context.Context, chatIds []int64) (int64, error)
+	// Cleanup: telegram discovery candidate external_contact rows are keyed by
+	// source='telegram', source_id = the BARE peer user id (not an ns-prefixed
+	// string), so the ns-prefix external_contact delete misses them. A stranded /
+	// unknown-sender replay that crosses the discovery threshold upserts one; delete
+	// them by the exact tracked peer ids (string form).
+	SyntheticDeleteTelegramExternalContactsByPeerIds(ctx context.Context, peerIds []string) (int64, error)
+	// Cleanup: MatchPeer creates an external_identity for an unmatched telegram peer
+	// keyed by source='telegram', source_id = the BARE peer user id. The synthetic
+	// handle is normalized to 'synth_<ns>_<n>' (underscores), which the ns-prefix
+	// ('synth-<ns>-') identifier delete does NOT match, so clear these by the exact
+	// tracked peer ids before the contact delete (external_identity survives contact
+	// delete via ON DELETE SET NULL and would otherwise pollute future matching).
+	SyntheticDeleteTelegramExternalIdentitiesByPeerIds(ctx context.Context, peerIds []string) (int64, error)
 	// Todoist replay: snapshot the set of contact_task ids for a provider so the
 	// replay can diff before/after its (globally-scoped) reconcile and track the
 	// rows it created — even for cadence-bearing contacts it did not seed — so
