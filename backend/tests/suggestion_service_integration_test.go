@@ -56,7 +56,7 @@ func TestSuggestions_List_SurfacesLinkedRowWithName(t *testing.T) {
 	ctx := context.Background()
 	svc := newSuggestionService(env)
 
-	email := "list-" + abSuffix() + "@example.com"
+	email := "list-" + abSuffix(t) + "@example.com"
 	contact, external := seedImportedWithPending(t, ctx, env, []string{email})
 
 	list, err := svc.ListSuggestions(ctx, service.SuggestionListParams{Page: 1, Limit: 20}, 10000)
@@ -82,7 +82,7 @@ func TestSuggestions_List_DropsSoftDeletedContact(t *testing.T) {
 	ctx := context.Background()
 	svc := newSuggestionService(env)
 
-	email := "softdel-" + abSuffix() + "@example.com"
+	email := "softdel-" + abSuffix(t) + "@example.com"
 	contact, external := seedImportedWithPending(t, ctx, env, []string{email})
 	require.NoError(t, env.contactRepo.SoftDeleteContact(ctx, contact.ID))
 
@@ -100,7 +100,7 @@ func TestSuggestions_List_SourceScopeExcludesNonAddressBook(t *testing.T) {
 
 	// Seed a telegram row with pending JSONB directly (non-address-book
 	// source); it must NOT appear in the suggestions list (source guard).
-	sfx := abSuffix()
+	sfx := abSuffix(t)
 	contact, err := env.contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: "Tg Suggestion " + sfx})
 	require.NoError(t, err)
 	display := "Tg External " + sfx
@@ -134,7 +134,7 @@ func TestSuggestions_Resolve_AddsMethodAndClearsPending(t *testing.T) {
 	ctx := context.Background()
 	svc := newSuggestionService(env)
 
-	email := "resolve-" + abSuffix() + "@example.com"
+	email := "resolve-" + abSuffix(t) + "@example.com"
 	contact, external := seedImportedWithPending(t, ctx, env, []string{email})
 
 	require.False(t, contactHasMethod(t, ctx, env, contact.ID, email), "precondition: method not yet on contact")
@@ -164,7 +164,7 @@ func TestSuggestions_Resolve_Idempotent(t *testing.T) {
 	ctx := context.Background()
 	svc := newSuggestionService(env)
 
-	email := "resolve-idem-" + abSuffix() + "@example.com"
+	email := "resolve-idem-" + abSuffix(t) + "@example.com"
 	_, external := seedImportedWithPending(t, ctx, env, []string{email})
 
 	first, err := svc.ResolveMethodSuggestions(ctx, external.ID, []repository.PendingMethodSuggestion{
@@ -186,7 +186,7 @@ func TestSuggestions_Resolve_AlreadyOnContact_NotReAdded(t *testing.T) {
 	ctx := context.Background()
 	svc := newSuggestionService(env)
 
-	email := "resolve-present-" + abSuffix() + "@example.com"
+	email := "resolve-present-" + abSuffix(t) + "@example.com"
 	contact, external := seedImportedWithPending(t, ctx, env, []string{email})
 
 	// Add the method via another path so it's already present.
@@ -213,7 +213,7 @@ func TestSuggestions_Resolve_UnknownMethodIsNoOp(t *testing.T) {
 	ctx := context.Background()
 	svc := newSuggestionService(env)
 
-	email := "resolve-unknown-" + abSuffix() + "@example.com"
+	email := "resolve-unknown-" + abSuffix(t) + "@example.com"
 	_, external := seedImportedWithPending(t, ctx, env, []string{email})
 
 	// A (type,value) never in this row's pending → silent no-op, not 400.
@@ -234,7 +234,7 @@ func TestSuggestions_Resolve_MalformedMethod400(t *testing.T) {
 	ctx := context.Background()
 	svc := newSuggestionService(env)
 
-	email := "resolve-malformed-" + abSuffix() + "@example.com"
+	email := "resolve-malformed-" + abSuffix(t) + "@example.com"
 	_, external := seedImportedWithPending(t, ctx, env, []string{email})
 
 	_, err := svc.ResolveMethodSuggestions(ctx, external.ID, []repository.PendingMethodSuggestion{
@@ -248,8 +248,8 @@ func TestSuggestions_Dismiss_RecordsStickyAndDropsPending(t *testing.T) {
 	ctx := context.Background()
 	svc := newSuggestionService(env)
 
-	emailX := "dismiss-x-" + abSuffix() + "@example.com"
-	emailY := "dismiss-y-" + abSuffix() + "@example.com"
+	emailX := "dismiss-x-" + abSuffix(t) + "@example.com"
+	emailY := "dismiss-y-" + abSuffix(t) + "@example.com"
 	contact, external := seedImportedWithPending(t, ctx, env, []string{emailX, emailY})
 
 	res, err := svc.DismissMethodSuggestions(ctx, external.ID, []repository.PendingMethodSuggestion{
@@ -284,7 +284,7 @@ func TestSuggestions_Dismiss_Idempotent(t *testing.T) {
 	ctx := context.Background()
 	svc := newSuggestionService(env)
 
-	email := "dismiss-idem-" + abSuffix() + "@example.com"
+	email := "dismiss-idem-" + abSuffix(t) + "@example.com"
 	_, external := seedImportedWithPending(t, ctx, env, []string{email})
 
 	first, err := svc.DismissMethodSuggestions(ctx, external.ID, []repository.PendingMethodSuggestion{
@@ -305,7 +305,7 @@ func TestSuggestions_Dismiss_AlreadyOnContact_NotStickyDismissed(t *testing.T) {
 	ctx := context.Background()
 	svc := newSuggestionService(env)
 
-	email := "dismiss-present-" + abSuffix() + "@example.com"
+	email := "dismiss-present-" + abSuffix(t) + "@example.com"
 	contact, external := seedImportedWithPending(t, ctx, env, []string{email})
 
 	// Add the method to the contact via another path.
@@ -333,7 +333,7 @@ func TestSuggestions_Resolve_ContactGone(t *testing.T) {
 	ctx := context.Background()
 	svc := newSuggestionService(env)
 
-	email := "gone-" + abSuffix() + "@example.com"
+	email := "gone-" + abSuffix(t) + "@example.com"
 	contact, external := seedImportedWithPending(t, ctx, env, []string{email})
 	require.NoError(t, env.contactRepo.SoftDeleteContact(ctx, contact.ID))
 
@@ -347,13 +347,13 @@ func TestSuggestions_DuplicateOfCanonical_ResolvesToCanonicalContact(t *testing.
 	svc := newSuggestionService(env)
 
 	// Canonical: a linked imported gcontacts row.
-	canonEmail := "canon-" + abSuffix() + "@example.com"
+	canonEmail := "canon-" + abSuffix(t) + "@example.com"
 	canonContact, canon := seedLinkedExternal(t, ctx, env, "gcontacts", repository.MatchStatusImported, []string{canonEmail})
 
 	// Duplicate: an icloud row with its OWN crm_contact_id nil, pointing at
 	// the canonical via duplicate_of_id, carrying its own pending method.
-	dupEmail := "dup-" + abSuffix() + "@example.com"
-	sfx := abSuffix()
+	dupEmail := "dup-" + abSuffix(t) + "@example.com"
+	sfx := abSuffix(t)
 	dupDisplay := "Dup External " + sfx
 	dup, err := env.externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
 		Source:      "icloud_contacts",

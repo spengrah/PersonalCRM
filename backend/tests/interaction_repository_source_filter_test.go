@@ -41,7 +41,7 @@ func TestInteractionRepository_FindRecentInteractionBySourceAndDirection_SourceF
 	require.NoError(t, err)
 	t.Cleanup(func() { database.Close() })
 
-	contactRepo := repository.NewContactRepository(database.Queries)
+	gen, _ := migrationGenerator(t)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 
 	// testStripe=3 carves out a per-test subspace of chat IDs and source_ref
@@ -67,11 +67,11 @@ func TestInteractionRepository_FindRecentInteractionBySourceAndDirection_SourceF
 		_ = interactionRepo.HardDeleteInteractionsBySourceRefPrefix(ctx, repository.InteractionSourceGCal, gcalCleanupPrefix)
 	})
 
-	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName: fmt.Sprintf("source-filter-test-%d", seed),
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = contactRepo.SoftDeleteContact(ctx, contact.ID) })
+	// The contact is an FK target referenced by ID only; the source_ref
+	// stripe scheme above carries this test's isolation, so the seed just
+	// needs a valid contact.
+	contact, contactCleanup := seedMigrationContact(ctx, t, database, gen)
+	t.Cleanup(contactCleanup)
 
 	t0 := accelerated.GetCurrentTime().Add(-2 * time.Hour).Truncate(time.Microsecond)
 	windowStart := t0.Add(-1 * time.Hour)

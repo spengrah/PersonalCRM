@@ -3,7 +3,6 @@ package tests
 import (
 	"context"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -50,7 +49,7 @@ func seedExtSweepFixtures(t *testing.T) *extSweepFixtures {
 	contactRepo.SetPool(database.Pool)
 
 	// Unique prefix per test run so concurrent tests don't collide.
-	prefix := "sweep-" + uuid.NewString()[:8] + "-"
+	prefix := "sweep-" + syntheticNS(t) + "-"
 
 	// Seed a CRM contact the live external_contact row links to. The
 	// ListForCRMContact assertion needs this association.
@@ -171,7 +170,7 @@ func TestExternalContactSweep_ListUnmatched_FiltersTombstone(t *testing.T) {
 	t.Cleanup(func() { database.Close() })
 
 	repo := repository.NewExternalContactRepository(database.Queries)
-	prefix := "sweep-unm-" + uuid.NewString()[:8] + "-"
+	prefix := "sweep-unm-" + syntheticNS(t) + "-"
 	syncedAt := accelerated.GetCurrentTime()
 
 	live, err := repo.Upsert(ctx, repository.UpsertExternalContactRequest{
@@ -223,7 +222,7 @@ func TestExternalContactSweep_ListAllUnmatched_FiltersTombstone(t *testing.T) {
 	t.Cleanup(func() { database.Close() })
 
 	repo := repository.NewExternalContactRepository(database.Queries)
-	prefix := "sweep-allunm-" + uuid.NewString()[:8] + "-"
+	prefix := "sweep-allunm-" + syntheticNS(t) + "-"
 	syncedAt := accelerated.GetCurrentTime()
 	live, err := repo.Upsert(ctx, repository.UpsertExternalContactRequest{
 		Source: "gcontacts", SourceID: prefix + "live", SyncedAt: &syncedAt,
@@ -270,9 +269,10 @@ func TestExternalContactSweep_CountUnmatched_ExcludesTombstone(t *testing.T) {
 	t.Cleanup(func() { database.Close() })
 
 	repo := repository.NewExternalContactRepository(database.Queries)
-	// Use a unique source per-run so counts are bounded.
-	source := "sweep-src-" + strings.ReplaceAll(uuid.NewString()[:8], "-", "")
-	prefix := "sweep-cnt-" + uuid.NewString()[:8] + "-"
+	// Use a unique source per-run so counts are bounded. The namespace token
+	// is alphanumeric, so it needs no hyphen stripping.
+	source := "sweep-src-" + syntheticNS(t)
+	prefix := "sweep-cnt-" + syntheticNS(t) + "-"
 	syncedAt := accelerated.GetCurrentTime()
 	_, err = repo.Upsert(ctx, repository.UpsertExternalContactRequest{
 		Source: source, SourceID: prefix + "live-a", SyncedAt: &syncedAt,
@@ -314,7 +314,7 @@ func TestExternalContactUnmatched_HidesUnresolvedTelegramByDefault(t *testing.T)
 	t.Cleanup(func() { database.Close() })
 
 	repo := repository.NewExternalContactRepository(database.Queries)
-	prefix := "tg-hidden-" + uuid.NewString()[:8] + "-"
+	prefix := "tg-hidden-" + syntheticNS(t) + "-"
 	syncedAt := accelerated.GetCurrentTime()
 	t.Cleanup(func() {
 		cleanCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -407,7 +407,7 @@ func TestExternalContactSweep_ListForCRMContact_FiltersTombstone(t *testing.T) {
 	repo := repository.NewExternalContactRepository(database.Queries)
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactRepo.SetPool(database.Pool)
-	prefix := "sweep-crm-" + uuid.NewString()[:8] + "-"
+	prefix := "sweep-crm-" + syntheticNS(t) + "-"
 	syncedAt := accelerated.GetCurrentTime()
 
 	crm, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: "Sweep CRM " + prefix})
@@ -465,7 +465,7 @@ func TestExternalContactSweep_RoundTrip_ReviveAfterSoftDelete(t *testing.T) {
 	repo := repository.NewExternalContactRepository(database.Queries)
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactRepo.SetPool(database.Pool)
-	prefix := "sweep-rt-" + uuid.NewString()[:8] + "-"
+	prefix := "sweep-rt-" + syntheticNS(t) + "-"
 	syncedAt := accelerated.GetCurrentTime()
 
 	crm, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: "RT " + prefix})
@@ -519,7 +519,7 @@ func TestExternalContactSweep_GetByID_AccountIDNullSemantics(t *testing.T) {
 	t.Cleanup(func() { database.Close() })
 
 	repo := repository.NewExternalContactRepository(database.Queries)
-	prefix := "sweep-acct-" + uuid.NewString()[:8] + "-"
+	prefix := "sweep-acct-" + syntheticNS(t) + "-"
 	syncedAt := accelerated.GetCurrentTime()
 
 	// account_id = NULL (icloud_contacts shape).

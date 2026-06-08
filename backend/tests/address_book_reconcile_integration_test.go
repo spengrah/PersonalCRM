@@ -93,11 +93,13 @@ func (h stubRematchHandler) Rematch(_ context.Context, _ uuid.UUID, _ string) (i
 	return 0, nil
 }
 
-// abSuffix returns a short randomized suffix so per-subtest names /
+// abSuffix returns a per-call namespace token so per-subtest names /
 // addresses don't collide across runs in the shared DB (trigram
-// cross-talk guard).
-func abSuffix() string {
-	return uuid.New().String()[:8]
+// cross-talk guard). It draws from the synthetic toolkit's syntheticNS
+// helper so isolation tokens come from one shared primitive.
+func abSuffix(t *testing.T) string {
+	t.Helper()
+	return syntheticNS(t)
 }
 
 // seedLinkedExternal creates a CRM contact + an external_contact row in
@@ -112,7 +114,7 @@ func seedLinkedExternal(
 	emails []string,
 ) (*repository.Contact, *repository.ExternalContact) {
 	t.Helper()
-	sfx := abSuffix()
+	sfx := abSuffix(t)
 	contact, err := env.contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: "AB Reconcile " + sfx})
 	require.NoError(t, err)
 
@@ -160,7 +162,7 @@ func contactHasMethod(t *testing.T, ctx context.Context, env *abReconcileEnv, co
 func TestABReconcile_Matched_AutoPropagates(t *testing.T) {
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
-	email := "matched-" + abSuffix() + "@example.com"
+	email := "matched-" + abSuffix(t) + "@example.com"
 	contact, external := seedLinkedExternal(t, ctx, env, "gcontacts", repository.MatchStatusMatched, []string{email})
 
 	require.False(t, contactHasMethod(t, ctx, env, contact.ID, email), "precondition: contact has no method yet")
@@ -184,7 +186,7 @@ func TestABReconcile_Matched_AutoPropagates(t *testing.T) {
 func TestABReconcile_Imported_RecordsSuggestion(t *testing.T) {
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
-	email := "imported-" + abSuffix() + "@example.com"
+	email := "imported-" + abSuffix(t) + "@example.com"
 	contact, external := seedLinkedExternal(t, ctx, env, "gcontacts", repository.MatchStatusImported, []string{email})
 
 	res, err := env.reconcile.ReconcileLinkedExternalContactMethods(ctx, repository.ReconcileTarget{
@@ -210,7 +212,7 @@ func TestABReconcile_Imported_RecordsSuggestion(t *testing.T) {
 func TestABReconcile_Ignored_Skips(t *testing.T) {
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
-	email := "ignored-" + abSuffix() + "@example.com"
+	email := "ignored-" + abSuffix(t) + "@example.com"
 	contact, external := seedLinkedExternal(t, ctx, env, "gcontacts", repository.MatchStatusIgnored, []string{email})
 
 	// ResolveAndReconcile must resolve to a skip (ok=false) for ignored.
@@ -231,7 +233,7 @@ func TestABReconcile_Ignored_Skips(t *testing.T) {
 func TestABReconcile_SoftDeletedContact_MatchedSkips(t *testing.T) {
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
-	email := "softdel-matched-" + abSuffix() + "@example.com"
+	email := "softdel-matched-" + abSuffix(t) + "@example.com"
 	contact, external := seedLinkedExternal(t, ctx, env, "gcontacts", repository.MatchStatusMatched, []string{email})
 
 	require.NoError(t, env.contactRepo.SoftDeleteContact(ctx, contact.ID))
@@ -243,7 +245,7 @@ func TestABReconcile_SoftDeletedContact_MatchedSkips(t *testing.T) {
 func TestABReconcile_SoftDeletedContact_ImportedSkips(t *testing.T) {
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
-	email := "softdel-imported-" + abSuffix() + "@example.com"
+	email := "softdel-imported-" + abSuffix(t) + "@example.com"
 	contact, external := seedLinkedExternal(t, ctx, env, "gcontacts", repository.MatchStatusImported, []string{email})
 
 	require.NoError(t, env.contactRepo.SoftDeleteContact(ctx, contact.ID))
@@ -266,7 +268,7 @@ func TestABReconcile_SoftDeletedContact_ImportedSkips(t *testing.T) {
 func TestABReconcile_Dedup_ExistingMethodNotResuggested(t *testing.T) {
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
-	email := "dedup-" + abSuffix() + "@example.com"
+	email := "dedup-" + abSuffix(t) + "@example.com"
 	contact, external := seedLinkedExternal(t, ctx, env, "gcontacts", repository.MatchStatusImported, []string{email})
 
 	// Contact already has the method.
@@ -295,7 +297,7 @@ func TestABReconcile_Dedup_ExistingMethodNotResuggested(t *testing.T) {
 func TestABReconcile_PhoneNormalization_Equivalence(t *testing.T) {
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
-	sfx := abSuffix()
+	sfx := abSuffix(t)
 	contact, err := env.contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: "AB Phone " + sfx})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = env.contactRepo.HardDeleteContact(ctx, contact.ID) })
@@ -337,7 +339,7 @@ func TestABReconcile_PhoneNormalization_Equivalence(t *testing.T) {
 func TestABReconcile_DismissedMethod_NotResuggested(t *testing.T) {
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
-	email := "dismissed-" + abSuffix() + "@example.com"
+	email := "dismissed-" + abSuffix(t) + "@example.com"
 	contact, external := seedLinkedExternal(t, ctx, env, "gcontacts", repository.MatchStatusImported, []string{email})
 
 	// Pre-seed the dismissed set (normalized value).
@@ -364,7 +366,7 @@ func TestABReconcile_DismissedMethod_NotResuggested(t *testing.T) {
 func TestABReconcile_EmptySet_ClearsPendingToNull(t *testing.T) {
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
-	email := "clear-" + abSuffix() + "@example.com"
+	email := "clear-" + abSuffix(t) + "@example.com"
 	contact, external := seedLinkedExternal(t, ctx, env, "gcontacts", repository.MatchStatusImported, []string{email})
 
 	// First reconcile records the suggestion.
@@ -406,7 +408,7 @@ func TestABReconcile_EmptySet_ClearsPendingToNull(t *testing.T) {
 func TestABReconcile_ProducerUpsertPreservesSuggestionColumns(t *testing.T) {
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
-	email := "survive-" + abSuffix() + "@example.com"
+	email := "survive-" + abSuffix(t) + "@example.com"
 	contact, external := seedLinkedExternal(t, ctx, env, "gcontacts", repository.MatchStatusImported, []string{email})
 
 	// Write a pending suggestion + a dismissal.
@@ -448,7 +450,7 @@ func TestABReconcile_ProducerUpsertPreservesSuggestionColumns(t *testing.T) {
 func TestABReconcile_Idempotent(t *testing.T) {
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
-	email := "idem-" + abSuffix() + "@example.com"
+	email := "idem-" + abSuffix(t) + "@example.com"
 	contact, external := seedLinkedExternal(t, ctx, env, "gcontacts", repository.MatchStatusMatched, []string{email})
 
 	require.NoError(t, env.reconcile.ResolveAndReconcile(ctx, external.ID))
@@ -475,7 +477,7 @@ func seedDupOfCanonical(
 	uniqueEmail string,
 ) (canonContact *repository.Contact, dupExternal *repository.ExternalContact) {
 	t.Helper()
-	sfx := abSuffix()
+	sfx := abSuffix(t)
 
 	canonContact, err := env.contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: "AB Canon " + sfx})
 	require.NoError(t, err)
@@ -524,7 +526,7 @@ func seedDupOfCanonical(
 func TestABReconcile_DupOfMatchedCanonical_AutoPropagates(t *testing.T) {
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
-	uniqueEmail := "dupmatched-" + abSuffix() + "@example.com"
+	uniqueEmail := "dupmatched-" + abSuffix(t) + "@example.com"
 	canon, dup := seedDupOfCanonical(t, ctx, env, repository.MatchStatusMatched, repository.MatchStatusMatched, uniqueEmail)
 
 	require.NoError(t, env.reconcile.ResolveAndReconcile(ctx, dup.ID))
@@ -538,7 +540,7 @@ func TestABReconcile_DupOfMatchedCanonical_AutoPropagates(t *testing.T) {
 func TestABReconcile_DupOfImportedCanonical_Suggests(t *testing.T) {
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
-	uniqueEmail := "dupimported-" + abSuffix() + "@example.com"
+	uniqueEmail := "dupimported-" + abSuffix(t) + "@example.com"
 	canon, dup := seedDupOfCanonical(t, ctx, env, repository.MatchStatusImported, repository.MatchStatusMatched, uniqueEmail)
 
 	require.NoError(t, env.reconcile.ResolveAndReconcile(ctx, dup.ID))
@@ -556,7 +558,7 @@ func TestABReconcile_DupOfImportedCanonical_Suggests(t *testing.T) {
 func TestABReconcile_IgnoredDupOfMatchedCanonical_Skips(t *testing.T) {
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
-	uniqueEmail := "dupignored-" + abSuffix() + "@example.com"
+	uniqueEmail := "dupignored-" + abSuffix(t) + "@example.com"
 	canon, dup := seedDupOfCanonical(t, ctx, env, repository.MatchStatusMatched, repository.MatchStatusIgnored, uniqueEmail)
 
 	require.NoError(t, env.reconcile.ResolveAndReconcile(ctx, dup.ID))
@@ -574,10 +576,10 @@ func TestABReconcile_Catchup_MixedSet(t *testing.T) {
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
 
-	matchedEmail := "catchup-matched-" + abSuffix() + "@example.com"
+	matchedEmail := "catchup-matched-" + abSuffix(t) + "@example.com"
 	matchedContact, _ := seedLinkedExternal(t, ctx, env, "gcontacts", repository.MatchStatusMatched, []string{matchedEmail})
 
-	importedEmail := "catchup-imported-" + abSuffix() + "@example.com"
+	importedEmail := "catchup-imported-" + abSuffix(t) + "@example.com"
 	_, importedExternal := seedLinkedExternal(t, ctx, env, "icloud_contacts", repository.MatchStatusImported, []string{importedEmail})
 
 	res, err := env.reconcile.ReconcileAllAddressBookMethods(ctx)

@@ -10,11 +10,11 @@ import (
 	"strings"
 	"testing"
 
-	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/contacttask"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/synthetic/factory"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -44,19 +44,11 @@ func TestContactTask_CRUD(t *testing.T) {
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
+	gen, _ := migrationGenerator(t)
 
-	// Create a test contact
-	now := accelerated.GetCurrentTime()
-	cadence := "weekly"
-	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName:      "Test Contact for Tasks",
-		Cadence:       &cadence,
-		LastContacted: &now,
-	})
-	require.NoError(t, err)
-	defer func() {
-		_ = contactRepo.HardDeleteContact(ctx, contact.ID)
-	}()
+	// Seed a test contact via the synthetic factory (FK target for the tasks).
+	contact, contactCleanup := seedMigrationContact(ctx, t, database, gen, factory.WithCadence("weekly"))
+	defer contactCleanup()
 
 	t.Run("create and retrieve contact task", func(t *testing.T) {
 		// Create task
@@ -204,7 +196,7 @@ func TestContactTask_CRUD(t *testing.T) {
 		}
 		require.NotNil(t, found, "Task should be in list")
 		assert.Equal(t, contact.FullName, found.FullName)
-		assert.Equal(t, cadence, *found.Cadence)
+		assert.Equal(t, "weekly", *found.Cadence)
 
 		// Clean up
 		err = contactTaskRepo.DeleteContactTask(ctx, task.ID)
@@ -232,11 +224,8 @@ func TestContactTask_CRUD(t *testing.T) {
 	})
 
 	t.Run("cascade delete when contact is deleted", func(t *testing.T) {
-		// Create a new contact
-		tempContact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName: "Temp Contact for Cascade Test",
-		})
-		require.NoError(t, err)
+		// Seed a fresh contact whose hard-delete must cascade to its task.
+		tempContact, _ := seedMigrationContact(ctx, t, database, gen)
 
 		// Create a task for this contact
 		task, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
@@ -305,27 +294,16 @@ func TestContactTask_CountByProvider(t *testing.T) {
 	}
 	defer database.Close()
 
-	contactRepo := repository.NewContactRepository(database.Queries)
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
+	gen, _ := migrationGenerator(t)
 
-	// Create test contacts
+	// Seed test contacts via the synthetic factory (FK targets only).
 	var contacts []uuid.UUID
 	for i := 0; i < 3; i++ {
-		now := accelerated.GetCurrentTime()
-		cadence := "weekly"
-		c, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName:      "Test Contact " + uuid.New().String()[:8],
-			Cadence:       &cadence,
-			LastContacted: &now,
-		})
-		require.NoError(t, err)
+		c, cleanup := seedMigrationContact(ctx, t, database, gen, factory.WithCadence("weekly"))
+		defer cleanup()
 		contacts = append(contacts, c.ID)
 	}
-	defer func() {
-		for _, id := range contacts {
-			_ = contactRepo.HardDeleteContact(ctx, id)
-		}
-	}()
 
 	// Create tasks for each contact
 	for i, contactID := range contacts {
@@ -380,21 +358,12 @@ func TestContactTask_SyncedDeadlineMetadata(t *testing.T) {
 	}
 	defer database.Close()
 
-	contactRepo := repository.NewContactRepository(database.Queries)
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
+	gen, _ := migrationGenerator(t)
 
-	// Create a test contact
-	now := accelerated.GetCurrentTime()
-	cadence := "weekly"
-	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName:      "Test Contact for SyncedDeadline",
-		Cadence:       &cadence,
-		LastContacted: &now,
-	})
-	require.NoError(t, err)
-	defer func() {
-		_ = contactRepo.HardDeleteContact(ctx, contact.ID)
-	}()
+	// Seed a test contact via the synthetic factory (FK target for the tasks).
+	contact, contactCleanup := seedMigrationContact(ctx, t, database, gen, factory.WithCadence("weekly"))
+	defer contactCleanup()
 
 	t.Run("create task with synced_deadline metadata", func(t *testing.T) {
 		// Create task with synced_deadline in metadata (simulating what reconciliation does)
@@ -486,19 +455,12 @@ func TestContactTask_ActionTasks(t *testing.T) {
 	}
 	defer database.Close()
 
-	contactRepo := repository.NewContactRepository(database.Queries)
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
+	gen, _ := migrationGenerator(t)
 
-	// Create a test contact
-	now := accelerated.GetCurrentTime()
-	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName:      "Test Contact for Action Tasks",
-		LastContacted: &now,
-	})
-	require.NoError(t, err)
-	defer func() {
-		_ = contactRepo.HardDeleteContact(ctx, contact.ID)
-	}()
+	// Seed a test contact via the synthetic factory (FK target for the tasks).
+	contact, contactCleanup := seedMigrationContact(ctx, t, database, gen)
+	defer contactCleanup()
 
 	t.Run("multiple action tasks per contact allowed", func(t *testing.T) {
 		// Create first action task
@@ -722,18 +684,11 @@ func TestContactTask_Migration046_CheckConstraints(t *testing.T) {
 	}
 	defer database.Close()
 
-	contactRepo := repository.NewContactRepository(database.Queries)
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
+	gen, ns := migrationGenerator(t)
 
-	now := accelerated.GetCurrentTime()
-	cadence := "weekly"
-	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName:      "Migration046 CHECK Constraints",
-		Cadence:       &cadence,
-		LastContacted: &now,
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = contactRepo.HardDeleteContact(ctx, contact.ID) })
+	contact, contactCleanup := seedMigrationContact(ctx, t, database, gen, factory.WithCadence("weekly"))
+	t.Cleanup(contactCleanup)
 
 	// Composite CHECK rejects every invalid (kind, lifecycle) pair.
 	// Only kind=reach_out participates in all three lifecycles; every
@@ -759,7 +714,7 @@ func TestContactTask_Migration046_CheckConstraints(t *testing.T) {
 				Provider:       "todoist",
 				Kind:           c.kind,
 				Lifecycle:      c.lifecycle,
-				ExternalTaskID: "check-pair-" + c.name + "-" + uuid.New().String()[:8],
+				ExternalTaskID: "check-pair-" + c.name + "-" + ns,
 				State:          "managed",
 			})
 			require.Error(t, err, "(%s, %s) MUST be rejected by composite CHECK", c.kind, c.lifecycle)
@@ -775,7 +730,7 @@ func TestContactTask_Migration046_CheckConstraints(t *testing.T) {
 			Provider:       "todoist",
 			Kind:           "bogus_kind",
 			Lifecycle:      "manual",
-			ExternalTaskID: "check-bogus-kind-" + uuid.New().String()[:8],
+			ExternalTaskID: "check-bogus-kind-" + ns,
 			State:          "managed",
 		})
 		require.Error(t, err)
@@ -795,7 +750,7 @@ func TestContactTask_Migration046_CheckConstraints(t *testing.T) {
 			Provider:       "todoist",
 			Kind:           "reach_out",
 			Lifecycle:      "bogus_lifecycle",
-			ExternalTaskID: "check-bogus-lc-" + uuid.New().String()[:8],
+			ExternalTaskID: "check-bogus-lc-" + ns,
 			State:          "managed",
 		})
 		require.Error(t, err)
@@ -815,7 +770,7 @@ func TestContactTask_Migration046_CheckConstraints(t *testing.T) {
 				Provider:       "todoist",
 				Kind:           legacyKind,
 				Lifecycle:      "manual",
-				ExternalTaskID: "check-legacy-" + legacyKind + "-" + uuid.New().String()[:8],
+				ExternalTaskID: "check-legacy-" + legacyKind + "-" + ns,
 				State:          "managed",
 			})
 			require.Error(t, err, "legacy kind=%q MUST be rejected post-046", legacyKind)
@@ -852,27 +807,19 @@ func TestContactTask_Migration046_PartialUniqueIndexes(t *testing.T) {
 	}
 	defer database.Close()
 
-	contactRepo := repository.NewContactRepository(database.Queries)
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
-
-	now := accelerated.GetCurrentTime()
-	cadence := "weekly"
+	gen, ns := migrationGenerator(t)
 
 	t.Run("cadence_due_unique_per_contact_provider", func(t *testing.T) {
-		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName:      "Migration046 Cadence Unique " + uuid.New().String()[:8],
-			Cadence:       &cadence,
-			LastContacted: &now,
-		})
-		require.NoError(t, err)
-		t.Cleanup(func() { _ = contactRepo.HardDeleteContact(ctx, contact.ID) })
+		contact, contactCleanup := seedMigrationContact(ctx, t, database, gen, factory.WithCadence("weekly"))
+		t.Cleanup(contactCleanup)
 
-		_, err = contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+		_, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 			ContactID:      contact.ID,
 			Provider:       "todoist",
 			Kind:           contacttask.KindReachOut,
 			Lifecycle:      contacttask.LifecycleCadenceDue,
-			ExternalTaskID: "cadence-1-" + uuid.New().String()[:8],
+			ExternalTaskID: "cadence-1-" + ns,
 			State:          "managed",
 		})
 		require.NoError(t, err)
@@ -883,27 +830,22 @@ func TestContactTask_Migration046_PartialUniqueIndexes(t *testing.T) {
 			Provider:       "todoist",
 			Kind:           contacttask.KindReachOut,
 			Lifecycle:      contacttask.LifecycleCadenceDue,
-			ExternalTaskID: "cadence-2-" + uuid.New().String()[:8],
+			ExternalTaskID: "cadence-2-" + ns,
 			State:          "managed",
 		})
 		require.Error(t, err, "second cadence_due row for same (contact, provider) must violate unique index")
 	})
 
 	t.Run("followup_loop_live_unique_per_contact_provider", func(t *testing.T) {
-		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName:      "Migration046 FollowUp Unique " + uuid.New().String()[:8],
-			Cadence:       &cadence,
-			LastContacted: &now,
-		})
-		require.NoError(t, err)
-		t.Cleanup(func() { _ = contactRepo.HardDeleteContact(ctx, contact.ID) })
+		contact, contactCleanup := seedMigrationContact(ctx, t, database, gen, factory.WithCadence("weekly"))
+		t.Cleanup(contactCleanup)
 
-		_, err = contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+		_, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 			ContactID:      contact.ID,
 			Provider:       "todoist",
 			Kind:           contacttask.KindReachOut,
 			Lifecycle:      contacttask.LifecycleFollowUpLoop,
-			ExternalTaskID: "followup-1-" + uuid.New().String()[:8],
+			ExternalTaskID: "followup-1-" + ns,
 			State:          "managed",
 		})
 		require.NoError(t, err)
@@ -914,7 +856,7 @@ func TestContactTask_Migration046_PartialUniqueIndexes(t *testing.T) {
 			Provider:       "todoist",
 			Kind:           contacttask.KindReachOut,
 			Lifecycle:      contacttask.LifecycleFollowUpLoop,
-			ExternalTaskID: "followup-2-" + uuid.New().String()[:8],
+			ExternalTaskID: "followup-2-" + ns,
 			State:          "managed",
 		})
 		require.Error(t, err, "second live followup_loop row for same (contact, provider) must violate unique index")
@@ -923,20 +865,15 @@ func TestContactTask_Migration046_PartialUniqueIndexes(t *testing.T) {
 	t.Run("manual_lifecycle_has_no_uniqueness", func(t *testing.T) {
 		// Two reach_out manual tasks for the same contact/provider are
 		// fine — manual lifecycle is intentionally unconstrained.
-		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName:      "Migration046 Manual NoUnique " + uuid.New().String()[:8],
-			Cadence:       &cadence,
-			LastContacted: &now,
-		})
-		require.NoError(t, err)
-		t.Cleanup(func() { _ = contactRepo.HardDeleteContact(ctx, contact.ID) })
+		contact, contactCleanup := seedMigrationContact(ctx, t, database, gen, factory.WithCadence("weekly"))
+		t.Cleanup(contactCleanup)
 
-		_, err = contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+		_, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 			ContactID:      contact.ID,
 			Provider:       "todoist",
 			Kind:           contacttask.KindReachOut,
 			Lifecycle:      contacttask.LifecycleManual,
-			ExternalTaskID: "manual-1-" + uuid.New().String()[:8],
+			ExternalTaskID: "manual-1-" + ns,
 			State:          "managed",
 		})
 		require.NoError(t, err)
@@ -946,7 +883,7 @@ func TestContactTask_Migration046_PartialUniqueIndexes(t *testing.T) {
 			Provider:       "todoist",
 			Kind:           contacttask.KindReachOut,
 			Lifecycle:      contacttask.LifecycleManual,
-			ExternalTaskID: "manual-2-" + uuid.New().String()[:8],
+			ExternalTaskID: "manual-2-" + ns,
 			State:          "managed",
 		})
 		require.NoError(t, err, "manual lifecycle has no uniqueness — both inserts must succeed")
