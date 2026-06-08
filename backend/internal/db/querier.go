@@ -1295,6 +1295,14 @@ type Querier interface {
 	// for a broad delete the guard must match the exact clone-name prefix, not a
 	// looser pattern.
 	SweepRiverJobsInCloneForTest(ctx context.Context) (int64, error)
+	// Harness setup collision detection (D5) — PRIMARY phone-band check. A seeded
+	// synthetic contact's phone lives ONLY as a contact_method (no external_identity
+	// until a later replay), and identity matching cross-matches via
+	// contact_method.value_normalized, so this is where the cross-namespace phone
+	// collision actually originates. Counts live (non-deleted-contact) contact_method
+	// rows whose normalized value shares the namespace's phone prefix. Caller passes
+	// a BARE prefix; '%' is appended here.
+	SyntheticCountContactMethodsByValueNormalizedPrefix(ctx context.Context, valueNormalizedPrefix pgtype.Text) (int64, error)
 	// Cleanup assertion — count surviving contact rows for the given ids.
 	SyntheticCountContactsByIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error)
 	// Harness setup collision detection (D5): count external_identity rows whose
@@ -1389,8 +1397,9 @@ type Querier interface {
 	// survives contact delete via ON DELETE SET NULL, so it would otherwise pollute
 	// future matching). Called once with the 'synth-<ns>-' string prefix (email/
 	// handle identities) and once with the namespace's normalized phone-digit prefix
-	// ('+1555<ns-bucket>...') — synthetic phones are now ns-scoped (factory.phoneFor),
-	// so phone identities no longer leak. Caller passes a BARE prefix; '%' appended.
+	// ('+1<area>55501...') — synthetic phones are now ns-scoped via the per-namespace
+	// area code (factory.phoneFor), so phone identities no longer leak. Caller passes
+	// a BARE prefix; '%' appended.
 	SyntheticDeleteExternalIdentitiesByIdentifierPrefix(ctx context.Context, identifierPrefix pgtype.Text) (int64, error)
 	// Cleanup step 8 (backstop): catches any ns-prefixed source_id rows the
 	// identifier-prefix delete missed. Caller passes a BARE prefix; '%' appended.

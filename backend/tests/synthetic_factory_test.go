@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/matching"
 	"personal-crm/backend/internal/synthetic/factory"
 
 	"github.com/stretchr/testify/assert"
@@ -103,25 +104,16 @@ func TestSyntheticFactory_PhoneSubBlocksDisjoint(t *testing.T) {
 	require.NotEmpty(t, cA1.Phone)
 	assert.NotEqual(t, cA1.Phone, cA2.Phone, "within a namespace, phones are distinct per contact")
 
-	// Normalized (digits-only, leading +) prefix comparison: A's phones start
-	// with A's prefix, never B's.
-	assert.True(t, strings.HasPrefix(normalizePhoneDigits(cA1.Phone), gA.SyntheticPhonePrefix()))
-	assert.False(t, strings.HasPrefix(normalizePhoneDigits(cB1.Phone), gA.SyntheticPhonePrefix()),
-		"namespace B's phone must not fall in namespace A's block")
-}
-
-// normalizePhoneDigits mimics the production E.164 normalization closely enough
-// for the prefix assertion: keep a leading + and all digits.
-func normalizePhoneDigits(phone string) string {
-	var b strings.Builder
-	for i, r := range phone {
-		if r == '+' && i == 0 {
-			b.WriteRune(r)
-		} else if r >= '0' && r <= '9' {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
+	// Synthetic phones are valid 10-digit NANP numbers in the 555-01XX reserved
+	// range (e.g. +1-204-555-0107); the production normalizer is the source of
+	// truth the cleanup prefix + matching depend on, so assert against it.
+	assert.Regexp(t, `^\+1-\d{3}-555-01\d{2}$`, cA1.Phone, "synthetic phone must be a valid NANP 555-01XX number")
+	normA := matching.NormalizePhoneE164(cA1.Phone)
+	normB := matching.NormalizePhoneE164(cB1.Phone)
+	assert.True(t, strings.HasPrefix(normA, gA.SyntheticPhonePrefix()),
+		"A's normalized phone %q must carry A's prefix %q", normA, gA.SyntheticPhonePrefix())
+	assert.False(t, strings.HasPrefix(normB, gA.SyntheticPhonePrefix()),
+		"namespace B's phone %q must not fall in namespace A's block", normB)
 }
 
 func TestSyntheticFactory_EdgeCaseOptions(t *testing.T) {

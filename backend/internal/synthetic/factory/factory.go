@@ -16,20 +16,23 @@
 //     is injectable via NewGeneratorAt so determinism tests can pin it.
 //
 // PII hygiene: all generated data is OBVIOUSLY synthetic (curated non-real name
-// components, the RFC-2606 reserved .example TLD, the 555 fictional phone
-// exchange) and namespace-scoped. STRING identifiers (contact full_name, email
+// components, the RFC-2606 reserved .example TLD, the 555-01XX reserved fictional
+// phone range) and namespace-scoped. STRING identifiers (contact full_name, email
 // local-part, external_contact source_id, gcal_event_id, message guid, telegram
 // handle) carry the 'synth-<ns>-' prefix — that prefix doubles as the isolation
 // token. NUMERIC identifiers cannot be string-prefixed, so each is drawn from a
 // per-namespace DISJOINT sub-block keyed by a hash bucket: telegram peer_user_id
 // (1e9-wide bucket band [1e12,2e12)), telegram_message_id (2e6-wide bucket), and
-// PHONE numbers (+1-555-<bucket7>-<index3>, a 1e7-wide bucket). Isolation matters
-// because identity matching keys on the exact normalized value DB-wide with NO
-// namespace scoping, so two namespaces sharing a phone/peer would cross-match.
-// The peer band and phone band are collision-checked at harness setup
-// (resolveNamespace re-salts on collision); guarantee is "probabilistically
-// disjoint + detected at setup," not a hard mathematical one. No external faker
-// dependency — a curated corpus + a seeded math/rand/v2 PRNG.
+// PHONE numbers, which are VALID 10-digit NANP numbers in the reserved 555-01XX
+// fictional range with the namespace bucket carried in the AREA CODE
+// (+1-<area>-555-01<idx2>, e.g. +1-204-555-0107) — real-shaped yet disjoint per
+// namespace. Isolation matters because identity matching keys on the exact
+// normalized value DB-wide with NO namespace scoping, so two namespaces sharing a
+// phone/peer would cross-match. The peer band and phone area code are
+// collision-checked at harness setup (resolveNamespace re-salts on collision);
+// guarantee is "probabilistically disjoint + detected at setup," not a hard
+// mathematical one. No external faker dependency — a curated corpus + a seeded
+// math/rand/v2 PRNG.
 //
 // This package imports only leaf/type packages (repository, events,
 // accelerated, tg, todoist types, calendar/gmail/chat API structs); it never
@@ -71,17 +74,23 @@ const (
 	telegramMsgBucketCount int32 = 2_000_000
 	telegramMsgBucketWidth int32 = 1_000
 
-	// Synthetic phone band. Phones are obviously-fictional strings of the form
-	// +1555<bucket7><index3>, where bucket7 is a per-namespace 1e7-wide hash
-	// bucket and index3 is the per-namespace contact index (< 1000). This gives
-	// each namespace a DISJOINT 1000-value phone sub-block (mirroring the
-	// telegram peer-band approach) so identity matching — which keys on the exact
-	// normalized phone value DB-wide with NO namespace scoping — can never match
-	// across namespaces. The 555 exchange keeps every value obviously synthetic.
-	// Probabilistically disjoint + setup-time collision detection, not a hard
-	// guarantee (birthday-bound ~3700 namespaces for 50% on the 1e7 bucket space).
-	phoneBucketCount int64 = 10_000_000
-	phoneBucketWidth int64 = 1_000
+	// Synthetic phone band. Phones are VALID 10-digit NANP numbers in the
+	// reserved 555-01XX fictional range (spec D7): +1-<area>-555-01<idx2>, e.g.
+	// +1-204-555-0107. The per-namespace disjoint sub-block is keyed by the AREA
+	// CODE (a valid NANP code derived from the namespace hash); the line number
+	// stays in the strict reserved 555-0100..555-0199 range (idx2 in 00..99 → 100
+	// numbers/namespace). Keying the namespace bucket in the area code keeps every
+	// number a real-shaped 10-digit NANP value while still giving each namespace a
+	// disjoint value set, so identity matching — which keys on the exact
+	// normalized value DB-wide with NO namespace scoping — can never cross
+	// namespaces. Probabilistically disjoint + setup-time collision detection
+	// (~792 usable area codes), not a hard guarantee. phoneLinesPerNS bounds the
+	// per-namespace count; exhaustion panics (100/ns is ample for tests).
+	phoneLinesPerNS int64 = 100
+
+	// phoneAreaMin/Max bound valid NANP geographic area codes (first digit 2-9).
+	phoneAreaMin int64 = 200
+	phoneAreaMax int64 = 999
 )
 
 // MatchIntent controls whether a source payload targets a seeded (known)
@@ -111,8 +120,8 @@ type Generator struct {
 	nsBucket int64
 	// nsMsgBucket is the telegram message-id bucket for this namespace.
 	nsMsgBucket int32
-	// nsPhoneBucket is the 1e7-wide synthetic-phone bucket for this namespace.
-	nsPhoneBucket int64
+	// nsPhoneArea is the per-namespace NANP area code for synthetic phones.
+	nsPhoneArea int64
 
 	// Local monotonic counters (per generator instance). They make repeated
 	// calls within ONE run distinct; combined with (seed, namespace) the full
@@ -135,13 +144,26 @@ func NewGenerator(seed uint64, namespace string) *Generator {
 // live anchor so cadence/overdue states track the configured time.
 func NewGeneratorAt(seed uint64, namespace string, anchor time.Time) *Generator {
 	return &Generator{
-		rng:           rand.New(rand.NewPCG(seed, seedHash(namespace))),
-		namespace:     namespace,
-		anchor:        anchor,
-		nsBucket:      int64(seedHash(namespace)%uint64(telegramPeerBucketCount)) * telegramPeerBucketWidth,
-		nsMsgBucket:   int32(seedHash(namespace)%uint64(telegramMsgBucketCount)) * telegramMsgBucketWidth,
-		nsPhoneBucket: int64(seedHash(namespace)%uint64(phoneBucketCount)) * phoneBucketWidth,
+		rng:         rand.New(rand.NewPCG(seed, seedHash(namespace))),
+		namespace:   namespace,
+		anchor:      anchor,
+		nsBucket:    int64(seedHash(namespace)%uint64(telegramPeerBucketCount)) * telegramPeerBucketWidth,
+		nsMsgBucket: int32(seedHash(namespace)%uint64(telegramMsgBucketCount)) * telegramMsgBucketWidth,
+		nsPhoneArea: phoneAreaForHash(seedHash(namespace)),
 	}
+}
+
+// phoneAreaForHash maps a namespace hash to a VALID NANP area code: first digit
+// 2-9, excluding the eight N11 service codes (211, 311, ..., 911). Deterministic
+// and IMMUTABLE — same hash → same area code forever.
+func phoneAreaForHash(h uint64) int64 {
+	span := phoneAreaMax - phoneAreaMin + 1 // 800 candidate codes [200,999]
+	area := phoneAreaMin + int64(h%uint64(span))
+	// Skip N11 service codes (e.g. 211/311/.../911): last two digits "11".
+	if area%100 == 11 {
+		area++ // 211→212, ... 911→912; all remain valid geographic codes
+	}
+	return area
 }
 
 // Namespace returns the generator's namespace token.
@@ -168,26 +190,20 @@ func (g *Generator) PeerBandEnd() int64 {
 	return g.PeerBandStart() + telegramPeerBucketWidth
 }
 
-// PhoneBandStartIndex / PhoneBandEndIndex bound this namespace's synthetic-phone
-// sub-block within the 1e7-bucket * 1e3-index reserved space. They are flat
-// indices into that space (bucket*width + localIndex), exposed so the harness can
-// detect a cross-namespace phone-band collision at setup. The corresponding phone
-// STRINGS are produced by phoneFor; SyntheticPhonePrefix gives the digit prefix
-// for prefix-scoped identity cleanup.
-func (g *Generator) PhoneBandStartIndex() int64 {
-	return g.nsPhoneBucket
+// PhoneAreaCode is this namespace's NANP area code (the per-namespace phone
+// bucket key). Exposed so the harness can detect a cross-namespace area-code
+// collision at setup.
+func (g *Generator) PhoneAreaCode() int64 {
+	return g.nsPhoneArea
 }
 
-// PhoneBandEndIndex is the exclusive upper bound of this namespace's phone block.
-func (g *Generator) PhoneBandEndIndex() int64 {
-	return g.nsPhoneBucket + phoneBucketWidth
-}
-
-// SyntheticPhonePrefix is the ns-scoped digit prefix shared by every phone this
-// namespace issues (normalized form: +1555<bucket7>...). Identity cleanup deletes
-// phone external_identity rows by this normalized prefix.
+// SyntheticPhonePrefix is the ns-scoped NORMALIZED-digit prefix shared by every
+// phone this namespace issues: +1<area>55501 (everything before the 2-digit line
+// index). NormalizePhoneE164("+1-204-555-0107") == "+12045550107", so this prefix
+// (+1<area>55501) matches all of the namespace's normalized phones and only them.
+// Identity matching / collision detection / cleanup all scope by this prefix.
 func (g *Generator) SyntheticPhonePrefix() string {
-	return fmt.Sprintf("+1555%07d", g.nsPhoneBucket/phoneBucketWidth)
+	return fmt.Sprintf("+1%d55501", g.nsPhoneArea)
 }
 
 // seedHash hashes a namespace string into a uint64 for PRNG seeding and bucket

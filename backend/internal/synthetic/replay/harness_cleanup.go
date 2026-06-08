@@ -137,9 +137,10 @@ func (h *Harness) cleanup(ctx context.Context) error {
 	// prefix + source_id backstop), BEFORE contact. The identifier-prefix delete
 	// catches the source_id-NULL identities GCal/external_contact matching creates
 	// (keyed by the synthetic email/handle); the phone-prefix delete catches phone
-	// identities (normalized form +1555<ns-bucket>...), which are now ns-scoped so
-	// they no longer leak. external_identity survives contact delete via ON DELETE
-	// SET NULL, so all must be cleared first to avoid polluting future matching.
+	// identities (normalized form +1<area>55501...), which are now ns-scoped via
+	// the per-namespace area code so they no longer leak. external_identity
+	// survives contact delete via ON DELETE SET NULL, so all must be cleared first
+	// to avoid polluting future matching.
 	step("external_identity_identifier", func() error {
 		_, err := h.support.DeleteExternalIdentitiesByIdentifierPrefix(ctx, prefix)
 		return err

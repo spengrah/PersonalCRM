@@ -538,6 +538,27 @@ func (q *Queries) SweepRiverJobsInCloneForTest(ctx context.Context) (int64, erro
 	return result.RowsAffected(), nil
 }
 
+const SyntheticCountContactMethodsByValueNormalizedPrefix = `-- name: SyntheticCountContactMethodsByValueNormalizedPrefix :one
+SELECT COUNT(*) FROM contact_method cm
+JOIN contact c ON c.id = cm.contact_id
+WHERE cm.value_normalized LIKE $1 || '%'
+  AND c.deleted_at IS NULL
+`
+
+// Harness setup collision detection (D5) — PRIMARY phone-band check. A seeded
+// synthetic contact's phone lives ONLY as a contact_method (no external_identity
+// until a later replay), and identity matching cross-matches via
+// contact_method.value_normalized, so this is where the cross-namespace phone
+// collision actually originates. Counts live (non-deleted-contact) contact_method
+// rows whose normalized value shares the namespace's phone prefix. Caller passes
+// a BARE prefix; '%' is appended here.
+func (q *Queries) SyntheticCountContactMethodsByValueNormalizedPrefix(ctx context.Context, valueNormalizedPrefix pgtype.Text) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountContactMethodsByValueNormalizedPrefix, valueNormalizedPrefix)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const SyntheticCountContactsByIds = `-- name: SyntheticCountContactsByIds :one
 SELECT COUNT(*) FROM contact WHERE id = ANY($1::uuid[])
 `
@@ -922,8 +943,9 @@ DELETE FROM external_identity WHERE identifier LIKE $1 || '%'
 // survives contact delete via ON DELETE SET NULL, so it would otherwise pollute
 // future matching). Called once with the 'synth-<ns>-' string prefix (email/
 // handle identities) and once with the namespace's normalized phone-digit prefix
-// ('+1555<ns-bucket>...') — synthetic phones are now ns-scoped (factory.phoneFor),
-// so phone identities no longer leak. Caller passes a BARE prefix; '%' appended.
+// ('+1<area>55501...') — synthetic phones are now ns-scoped via the per-namespace
+// area code (factory.phoneFor), so phone identities no longer leak. Caller passes
+// a BARE prefix; '%' appended.
 func (q *Queries) SyntheticDeleteExternalIdentitiesByIdentifierPrefix(ctx context.Context, identifierPrefix pgtype.Text) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteExternalIdentitiesByIdentifierPrefix, identifierPrefix)
 	if err != nil {

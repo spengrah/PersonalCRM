@@ -279,6 +279,15 @@ func (r *SyntheticSupportRepository) CountExternalIdentitiesByIdentifierPrefix(c
 	return r.queries.SyntheticCountExternalIdentitiesByIdentifierPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
 }
 
+// CountContactMethodsByValueNormalizedPrefix counts live (non-deleted-contact)
+// contact_method rows whose normalized value shares the given prefix. This is the
+// PRIMARY phone-band collision check: a seeded synthetic phone lives only as a
+// contact_method (no external_identity until a later replay), and identity
+// matching cross-matches via contact_method.value_normalized.
+func (r *SyntheticSupportRepository) CountContactMethodsByValueNormalizedPrefix(ctx context.Context, prefix string) (int64, error) {
+	return r.queries.SyntheticCountContactMethodsByValueNormalizedPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
+}
+
 // --- Settle Gate A domain predicates (pending / match states) --------------
 
 // CountLinkedCommsMessageByExternalID counts comms_message rows for (source,

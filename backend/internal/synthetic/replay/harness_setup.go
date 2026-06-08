@@ -258,12 +258,14 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 const bandResaltAttempts = 8
 
 // resolveNamespace builds the generator and, if this namespace's telegram peer
-// sub-block OR synthetic-phone sub-block is already occupied by another
+// sub-block OR synthetic-phone area code is already occupied by another
 // namespace's live rows, re-salts the namespace (appending an incrementing
 // suffix) until it finds free bands or exhausts the attempt budget. Both numeric
 // bands are checked because both are matched DB-wide with no namespace scoping.
-// The practical guarantee is "probabilistically disjoint + detected at setup,"
-// not a hard mathematical guarantee.
+// The phone check queries BOTH contact_method (where a seeded synthetic phone
+// lives — the primary cross-match origin) AND external_identity (where a replay
+// later mints the identity). The practical guarantee is "probabilistically
+// disjoint + detected at setup," not a hard mathematical guarantee.
 func resolveNamespace(ctx context.Context, support *repository.SyntheticSupportRepository, namespace string, seed uint64) (*factory.Generator, string, error) {
 	candidate := namespace
 	for attempt := 0; attempt < bandResaltAttempts; attempt++ {
@@ -272,11 +274,16 @@ func resolveNamespace(ctx context.Context, support *repository.SyntheticSupportR
 		if err != nil {
 			return nil, "", fmt.Errorf("peer-band collision check: %w", err)
 		}
-		phoneOccupied, err := support.CountExternalIdentitiesByIdentifierPrefix(ctx, gen.SyntheticPhonePrefix())
+		phonePrefix := gen.SyntheticPhonePrefix()
+		methodPhones, err := support.CountContactMethodsByValueNormalizedPrefix(ctx, phonePrefix)
 		if err != nil {
-			return nil, "", fmt.Errorf("phone-band collision check: %w", err)
+			return nil, "", fmt.Errorf("phone-band collision check (contact_method): %w", err)
 		}
-		if peerOccupied == 0 && phoneOccupied == 0 {
+		identityPhones, err := support.CountExternalIdentitiesByIdentifierPrefix(ctx, phonePrefix)
+		if err != nil {
+			return nil, "", fmt.Errorf("phone-band collision check (external_identity): %w", err)
+		}
+		if peerOccupied == 0 && methodPhones == 0 && identityPhones == 0 {
 			return gen, candidate, nil
 		}
 		// Collision in either band: re-salt and retry.
