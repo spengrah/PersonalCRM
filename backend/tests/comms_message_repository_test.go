@@ -145,7 +145,8 @@ func metadataFor(t *testing.T, accountID, gmailID string, extra map[string]any) 
 func TestCommsMessageRepository_UpsertAndGet(t *testing.T) {
 	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
-	suffix := randomSuffix(t)
+	gen, _ := migrationGenerator(t)
+	suffix := gen.Prefix()
 	contact := newEmailContact(t, ctx, repo, contactRepo, "Test Comms Upsert "+suffix)
 
 	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
@@ -184,7 +185,8 @@ func TestCommsMessageRepository_UpsertAndGet(t *testing.T) {
 func TestCommsMessageRepository_UpsertSynthesizesProvenanceOnInsert(t *testing.T) {
 	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
-	suffix := randomSuffix(t)
+	gen, _ := migrationGenerator(t)
+	suffix := gen.Prefix()
 	contact := newEmailContact(t, ctx, repo, contactRepo, "Test Comms Synth "+suffix)
 	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
 
@@ -227,7 +229,8 @@ func TestCommsMessageRepository_UpsertSynthesizesProvenanceOnInsert(t *testing.T
 func TestCommsMessageRepository_GetMessage_NotFound(t *testing.T) {
 	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
-	suffix := randomSuffix(t)
+	gen, _ := migrationGenerator(t)
+	suffix := gen.Prefix()
 	contact := newEmailContact(t, ctx, repo, contactRepo, "Test Comms NotFound "+suffix)
 
 	_, err := repo.GetMessage(ctx, repository.InteractionSourceEmail, "<missing-"+suffix+">", contact.ID)
@@ -238,7 +241,8 @@ func TestCommsMessageRepository_GetMessage_NotFound(t *testing.T) {
 func TestCommsMessageRepository_UpsertIdempotentSameAccount(t *testing.T) {
 	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
-	suffix := randomSuffix(t)
+	gen, _ := migrationGenerator(t)
+	suffix := gen.Prefix()
 	contact := newEmailContact(t, ctx, repo, contactRepo, "Test Comms Idem "+suffix)
 
 	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
@@ -262,7 +266,8 @@ func TestCommsMessageRepository_UpsertIdempotentSameAccount(t *testing.T) {
 func TestCommsMessageRepository_CrossAccountProvenanceMerge(t *testing.T) {
 	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
-	suffix := randomSuffix(t)
+	gen, _ := migrationGenerator(t)
+	suffix := gen.Prefix()
 	contact := newEmailContact(t, ctx, repo, contactRepo, "Test Comms XAcct "+suffix)
 
 	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
@@ -300,7 +305,8 @@ func TestCommsMessageRepository_CrossAccountProvenanceMerge(t *testing.T) {
 func TestCommsMessageRepository_SameAccountReplayAfterMerge(t *testing.T) {
 	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
-	suffix := randomSuffix(t)
+	gen, _ := migrationGenerator(t)
+	suffix := gen.Prefix()
 	contact := newEmailContact(t, ctx, repo, contactRepo, "Test Comms ReplayMerge "+suffix)
 
 	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
@@ -325,7 +331,8 @@ func TestCommsMessageRepository_SameAccountReplayAfterMerge(t *testing.T) {
 func TestCommsMessageRepository_ContentImmutableOnConflict(t *testing.T) {
 	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
-	suffix := randomSuffix(t)
+	gen, _ := migrationGenerator(t)
+	suffix := gen.Prefix()
 	contact := newEmailContact(t, ctx, repo, contactRepo, "Test Comms Immutable "+suffix)
 
 	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
@@ -354,7 +361,8 @@ func TestCommsMessageRepository_ContentImmutableOnConflict(t *testing.T) {
 func TestCommsMessageRepository_PerParticipantRowsDistinct(t *testing.T) {
 	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
-	suffix := randomSuffix(t)
+	gen, _ := migrationGenerator(t)
+	suffix := gen.Prefix()
 	contactA := newEmailContact(t, ctx, repo, contactRepo, "Test Comms PartA "+suffix)
 	contactB := newEmailContact(t, ctx, repo, contactRepo, "Test Comms PartB "+suffix)
 
@@ -391,7 +399,8 @@ func TestCommsMessageRepository_MarkProcessedTx(t *testing.T) {
 	t.Cleanup(database.Close)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 
-	suffix := randomSuffix(t)
+	gen, _ := migrationGenerator(t)
+	suffix := gen.Prefix()
 	contact := newEmailContact(t, ctx, repo, contactRepo, "Test Comms MarkProc "+suffix)
 	t.Cleanup(func() {
 		_ = interactionRepo.HardDeleteInteractionsBySourceRefPrefix(ctx, repository.InteractionSourceEmail, "email-markproc-%")
@@ -447,7 +456,8 @@ func TestCommsMessageRepository_MarkProcessedTx(t *testing.T) {
 func TestCommsMessageRepository_ListByContactNewestFirst(t *testing.T) {
 	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
-	suffix := randomSuffix(t)
+	gen, _ := migrationGenerator(t)
+	suffix := gen.Prefix()
 	contact := newEmailContact(t, ctx, repo, contactRepo, "Test Comms List "+suffix)
 
 	now := accelerated.GetCurrentTime().Truncate(time.Microsecond)
@@ -473,7 +483,8 @@ func TestCommsMessageRepository_ListByContactNewestFirst(t *testing.T) {
 func TestCommsMessageRepository_ListEmailIdentitiesForSync(t *testing.T) {
 	ctx, repo, contactRepo, methodRepo := setupCommsMessageTest(t)
 
-	suffix := randomSuffix(t)
+	gen, _ := migrationGenerator(t)
+	suffix := gen.Prefix()
 	sharedEmail := "shared-" + suffix + "@example.test"
 	uniqueEmail := "unique-" + suffix + "@example.test"
 	deletedEmail := "deleted-" + suffix + "@example.test"
@@ -549,7 +560,8 @@ func TestInteractionSourceCheck_AcceptsEmail(t *testing.T) {
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	contactRepo := repository.NewContactRepository(database.Queries)
 
-	suffix := randomSuffix(t)
+	gen, _ := migrationGenerator(t)
+	suffix := gen.Prefix()
 	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
 		FullName: "Test Email Source CHECK " + suffix,
 	})
@@ -614,7 +626,8 @@ func previousBodies(t *testing.T, raw []byte) []string {
 func TestApplyEditByExternalID_PreviousBodiesCapAndRecencyGuard(t *testing.T) {
 	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
-	suffix := randomSuffix(t)
+	gen, _ := migrationGenerator(t)
+	suffix := gen.Prefix()
 	contact := newEmailContact(t, ctx, repo, contactRepo, "Test GChat Edit "+suffix)
 
 	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
@@ -687,7 +700,8 @@ func TestApplyEditByExternalID_PreviousBodiesCapAndRecencyGuard(t *testing.T) {
 func TestApplyEditByExternalID_FractionalSecondOrdering(t *testing.T) {
 	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
-	suffix := randomSuffix(t)
+	gen, _ := migrationGenerator(t)
+	suffix := gen.Prefix()
 	contact := newEmailContact(t, ctx, repo, contactRepo, "Test GChat Frac "+suffix)
 	src := repository.InteractionSourceGChat
 	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
@@ -727,7 +741,8 @@ func TestApplyEditByExternalID_FractionalSecondOrdering(t *testing.T) {
 func TestSoftDeleteByExternalID_AllFannedRows(t *testing.T) {
 	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
-	suffix := randomSuffix(t)
+	gen, _ := migrationGenerator(t)
+	suffix := gen.Prefix()
 	contactA := newEmailContact(t, ctx, repo, contactRepo, "Test GChat DelA "+suffix)
 	contactB := newEmailContact(t, ctx, repo, contactRepo, "Test GChat DelB "+suffix)
 	src := repository.InteractionSourceGChat
@@ -761,7 +776,8 @@ func TestSoftDeleteByExternalID_AllFannedRows(t *testing.T) {
 func TestGetLatestByExternalID_NewestFirstAndNotFound(t *testing.T) {
 	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
-	suffix := randomSuffix(t)
+	gen, _ := migrationGenerator(t)
+	suffix := gen.Prefix()
 	contact := newEmailContact(t, ctx, repo, contactRepo, "Test GChat Latest "+suffix)
 	src := repository.InteractionSourceGChat
 
@@ -788,7 +804,8 @@ func TestGetLatestByExternalID_NewestFirstAndNotFound(t *testing.T) {
 func TestBackfillParticipantNames_AdditiveMergeAndIdempotent(t *testing.T) {
 	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
-	suffix := randomSuffix(t)
+	gen, _ := migrationGenerator(t)
+	suffix := gen.Prefix()
 	contact := newEmailContact(t, ctx, repo, contactRepo, "Test Backfill Names "+suffix)
 
 	// Seed a name-less row carrying full content + provenance keys.

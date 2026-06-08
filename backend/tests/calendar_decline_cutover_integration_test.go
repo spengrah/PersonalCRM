@@ -27,6 +27,7 @@ import (
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/google"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/synthetic/factory"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -43,6 +44,7 @@ import (
 type declineCutoverEnv struct {
 	ctx             context.Context
 	database        *db.Database
+	gen             *factory.Generator
 	provider        *google.CalendarSyncProvider
 	bus             *events.Bus
 	contactRepo     *repository.ContactRepository
@@ -102,12 +104,14 @@ func newDeclineCutoverEnv(t *testing.T, ctx context.Context) *declineCutoverEnv 
 
 	provider := google.NewCalendarSyncProvider(nil, calendarRepo, contactRepo, nil, nil, bus, database.Pool)
 
-	accountID := "decline-cutover-" + uuid.NewString()
+	gen, _ := migrationGenerator(t)
+	accountID := gen.Prefix() + "decline-cutover"
 	t.Cleanup(func() { _ = calendarRepo.DeleteEventsByAccount(ctx, accountID) })
 
 	return &declineCutoverEnv{
 		ctx:             ctx,
 		database:        database,
+		gen:             gen,
 		provider:        provider,
 		bus:             bus,
 		contactRepo:     contactRepo,
@@ -141,7 +145,7 @@ func (w *deferredDeclineWorker) Timeout(j *river.Job[consumerjobs.CalendarDeclin
 func (e *declineCutoverEnv) newContact(t *testing.T, cadenceStr *string) repository.Contact {
 	t.Helper()
 	contact, err := e.contactRepo.CreateContact(e.ctx, repository.CreateContactRequest{
-		FullName: "decline-cutover-" + uuid.NewString()[:8],
+		FullName: e.gen.Contact(factory.WithNoMethods()).FullName,
 		Cadence:  cadenceStr,
 	})
 	require.NoError(t, err)

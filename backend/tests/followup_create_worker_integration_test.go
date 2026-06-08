@@ -31,6 +31,7 @@ import (
 	"personal-crm/backend/internal/contacttask"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/synthetic/factory"
 	"personal-crm/backend/internal/todoist"
 
 	"github.com/google/uuid"
@@ -90,6 +91,7 @@ func (m *createWorkerMockTodoist) Sync(_ context.Context, _ string, _ []string, 
 
 type createWorkerEnv struct {
 	database    *db.Database
+	gen         *factory.Generator
 	contactRepo *repository.ContactRepository
 	taskRepo    *repository.ContactTaskRepository
 	riverClient *river.Client[pgx.Tx]
@@ -132,8 +134,10 @@ func newCreateWorkerEnv(t *testing.T) (*createWorkerEnv, func()) {
 		riverClient,
 		database.Pool,
 	)
+	gen, _ := migrationGenerator(t)
 	env := &createWorkerEnv{
 		database:    database,
+		gen:         gen,
 		contactRepo: contactRepo,
 		taskRepo:    taskRepo,
 		riverClient: riverClient,
@@ -149,8 +153,7 @@ func newCreateWorkerEnv(t *testing.T) (*createWorkerEnv, func()) {
 func (e *createWorkerEnv) seedPendingTask(t *testing.T) *repository.ContactTask {
 	t.Helper()
 	ctx := context.Background()
-	name := "CreateWorker-" + uuid.NewString()[:8]
-	contact, err := e.contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: name})
+	contact, err := e.contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: e.gen.Contact(factory.WithNoMethods()).FullName})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = e.contactRepo.HardDeleteContact(ctx, contact.ID) })
 

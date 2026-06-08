@@ -38,7 +38,8 @@ func upsertGChatRow(t *testing.T, ctx context.Context, commsRepo *repository.Com
 // only gchat rows (email rows are invisible) and vice-versa.
 func TestCommsSourceParameterizedQueries_IsolateSources(t *testing.T) {
 	ctx, commsRepo, contactRepo, _ := setupCommsMessageTest(t)
-	suffix := randomSuffix(t)
+	gen, _ := migrationGenerator(t)
+	suffix := gen.Prefix()
 
 	contact := newEmailContact(t, ctx, commsRepo, contactRepo, "Source Isolation "+suffix)
 	base := accelerated.GetCurrentTime().Add(-time.Hour).Truncate(time.Microsecond)
@@ -91,7 +92,8 @@ func TestCommsSourceParameterizedQueries_IsolateSources(t *testing.T) {
 // never the other contact's.
 func TestGetMessageByReplyTargetForSource(t *testing.T) {
 	ctx, commsRepo, contactRepo, methodRepo := setupCommsMessageTest(t)
-	suffix := randomSuffix(t)
+	gen, _ := migrationGenerator(t)
+	suffix := gen.Prefix()
 
 	contact := newEmailContact(t, ctx, commsRepo, contactRepo, "Reply Target "+suffix)
 	base := accelerated.GetCurrentTime().Add(-time.Hour).Truncate(time.Microsecond)

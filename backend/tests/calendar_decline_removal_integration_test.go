@@ -27,6 +27,7 @@ import (
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/synthetic/factory"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -39,6 +40,7 @@ import (
 type declineTestEnv struct {
 	ctx             context.Context
 	database        *db.Database
+	gen             *factory.Generator
 	contactRepo     *repository.ContactRepository
 	interactionRepo *repository.InteractionRepository
 	calendarRepo    *repository.CalendarEventRepository
@@ -73,9 +75,11 @@ func newDeclineTestEnv(t *testing.T, ctx context.Context) *declineTestEnv {
 	)
 	declineHandler := consumer.NewCalendarDeclineHandler(interactionRepo, contactRepo)
 
+	gen, _ := migrationGenerator(t)
 	return &declineTestEnv{
 		ctx:             ctx,
 		database:        database,
+		gen:             gen,
 		contactRepo:     contactRepo,
 		interactionRepo: interactionRepo,
 		calendarRepo:    calendarRepo,
@@ -87,7 +91,7 @@ func newDeclineTestEnv(t *testing.T, ctx context.Context) *declineTestEnv {
 func (e *declineTestEnv) newContact(t *testing.T, cadenceStr *string, lastContacted *time.Time) repository.Contact {
 	t.Helper()
 	contact, err := e.contactRepo.CreateContact(e.ctx, repository.CreateContactRequest{
-		FullName:      "decline-removal-" + uuid.NewString()[:8],
+		FullName:      e.gen.Contact(factory.WithNoMethods()).FullName,
 		Cadence:       cadenceStr,
 		LastContacted: lastContacted,
 	})
@@ -486,7 +490,7 @@ func TestIntegration_AttendedAfterDelete_LockSerialization(t *testing.T) {
 	e := newDeclineTestEnv(t, ctx)
 	contact := e.newContact(t, nil, nil)
 
-	accountID := "decline-lock-" + uuid.NewString()
+	accountID := e.gen.Prefix() + "decline-lock"
 	stored := e.seedCalendarEvent(t, accountID, contact.ID)
 
 	// Open attended tx A and acquire the FOR SHARE lock (do NOT commit yet).

@@ -11,27 +11,34 @@ import (
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/synthetic/factory"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// phoneCallTestEnv bundles the per-test repos and host ID. The
+// phoneCallTestEnv bundles the per-test repos, generator, and host ID. The
 // InteractionRepository is included for tests that need to create
-// interactions for FK references.
+// interactions for FK references. gen scopes every string identifier the
+// sub-tests construct to a unique per-test namespace, and seeds contacts via
+// seedMigrationContact.
 type phoneCallTestEnv struct {
 	ctx             context.Context
+	database        *db.Database
+	gen             *factory.Generator
 	repo            *repository.PhoneCallRepository
-	contactRepo     *repository.ContactRepository
 	interactionRepo *repository.InteractionRepository
 	hostID          uuid.UUID
 }
 
-// setupPhoneCallTest provisions a per-test mac_host row + repo bundle.
-// Cleanup hard-deletes scoped by mac_host_id. Matches the pattern from
-// setupMessagesMessageTest — same parallel-runner singleton-slot
-// constraint applies.
+// setupPhoneCallTest provisions a per-test mac_host row + repo bundle via the
+// lightweight synthetic path (a factory.Generator, no replay harness / River
+// client — so the file stays in the fast PR gate). The mac_host is seeded
+// pre-revoked and namespace-prefixed so the singleton index never collides with
+// a parallel tests/api package, mirroring setupMessagesMessageTest. Cleanup
+// hard-deletes scoped by mac_host_id (upsert does not clear deleted_at on
+// conflict, so a soft delete would resurrect rows across runs).
 func setupPhoneCallTest(t *testing.T) (phoneCallTestEnv, func()) {
 	t.Helper()
 	if testing.Short() {
@@ -48,14 +55,15 @@ func setupPhoneCallTest(t *testing.T) (phoneCallTestEnv, func()) {
 	database, err := db.NewDatabase(ctx, cfg.Database)
 	require.NoError(t, err)
 
+	gen, _ := migrationGenerator(t)
+
 	repo := repository.NewPhoneCallRepository(database.Queries)
-	contactRepo := repository.NewContactRepository(database.Queries)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 
 	macHostRepo := repository.NewMacHostRepository(database.Queries)
-	suffix := randomSuffix(t)
+	prefix := gen.Prefix()
 	host, err := macHostRepo.SeedRevokedHostForTest(ctx,
-		"test-pc-host-"+suffix, "test-version", 1, "test-hash-"+suffix)
+		prefix+"pc-host", "test-version", 1, prefix+"pc-hash")
 	require.NoError(t, err)
 
 	cleanup := func() {
@@ -64,8 +72,9 @@ func setupPhoneCallTest(t *testing.T) (phoneCallTestEnv, func()) {
 	}
 	return phoneCallTestEnv{
 		ctx:             ctx,
+		database:        database,
+		gen:             gen,
 		repo:            repo,
-		contactRepo:     contactRepo,
 		interactionRepo: interactionRepo,
 		hostID:          host.ID,
 	}, cleanup
@@ -75,14 +84,13 @@ func TestPhoneCallRepository_UpsertAndGet(t *testing.T) {
 	env, cleanup := setupPhoneCallTest(t)
 	defer cleanup()
 
-	suffix := randomSuffix(t)
-	contact, err := env.contactRepo.CreateContact(env.ctx, repository.CreateContactRequest{FullName: "Test PC Upsert " + suffix})
-	require.NoError(t, err)
-	defer func() { _ = env.contactRepo.SoftDeleteContact(env.ctx, contact.ID) }()
+	contact, contactCleanup := seedMigrationContact(env.ctx, t, env.database, env.gen)
+	defer contactCleanup()
 
+	prefix := env.gen.Prefix()
 	startedAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
 	answered := true
-	uniqueID := "call-" + suffix
+	uniqueID := prefix + "call"
 
 	call, err := env.repo.UpsertCall(env.ctx, repository.UpsertPhoneCallParams{
 		CallUniqueID:     uniqueID,
@@ -133,7 +141,7 @@ func TestPhoneCallRepository_GetByUniqueID_NotFound(t *testing.T) {
 	env, cleanup := setupPhoneCallTest(t)
 	defer cleanup()
 
-	_, err := env.repo.GetCallByUniqueID(env.ctx, "nonexistent-call-"+randomSuffix(t))
+	_, err := env.repo.GetCallByUniqueID(env.ctx, env.gen.Prefix()+"nonexistent-call")
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, db.ErrNotFound))
 }
@@ -142,14 +150,13 @@ func TestPhoneCallRepository_MarkProcessed_WithInteraction(t *testing.T) {
 	env, cleanup := setupPhoneCallTest(t)
 	defer cleanup()
 
-	suffix := randomSuffix(t)
-	contact, err := env.contactRepo.CreateContact(env.ctx, repository.CreateContactRequest{FullName: "Test PC Processed " + suffix})
-	require.NoError(t, err)
-	defer func() { _ = env.contactRepo.SoftDeleteContact(env.ctx, contact.ID) }()
+	contact, contactCleanup := seedMigrationContact(env.ctx, t, env.database, env.gen)
+	defer contactCleanup()
 
-	ref := "call-mp-" + suffix
+	prefix := env.gen.Prefix()
+	ref := prefix + "call-mp"
 	defer func() {
-		_ = env.interactionRepo.HardDeleteInteractionsBySourceRefPrefix(env.ctx, "phone_calls", "call-mp-%")
+		_ = env.interactionRepo.HardDeleteInteractionsBySourceRefPrefix(env.ctx, "phone_calls", ref+"%")
 	}()
 	interaction, err := env.interactionRepo.CreateInteraction(env.ctx, repository.CreateInteractionRequest{
 		ContactID:  contact.ID,
@@ -192,10 +199,9 @@ func TestPhoneCallRepository_MarkProcessed_NoInteraction(t *testing.T) {
 	env, cleanup := setupPhoneCallTest(t)
 	defer cleanup()
 
-	suffix := randomSuffix(t)
 	answered := false
 	call, err := env.repo.UpsertCall(env.ctx, repository.UpsertPhoneCallParams{
-		CallUniqueID:    "call-noix-" + suffix,
+		CallUniqueID:    env.gen.Prefix() + "call-noix",
 		PeerHandle:      "+15551234567",
 		PeerNormalized:  "+15551234567",
 		Service:         repository.PhoneCallServiceVoice,
@@ -225,10 +231,10 @@ func TestPhoneCallRepository_HardDeleteByMacHost(t *testing.T) {
 	env, cleanup := setupPhoneCallTest(t)
 	defer cleanup()
 
-	suffix := randomSuffix(t)
+	uniqueID := env.gen.Prefix() + "call-del"
 	answered := true
 	_, err := env.repo.UpsertCall(env.ctx, repository.UpsertPhoneCallParams{
-		CallUniqueID:    "call-del-" + suffix,
+		CallUniqueID:    uniqueID,
 		PeerHandle:      "+15551234567",
 		PeerNormalized:  "+15551234567",
 		Service:         repository.PhoneCallServiceVoice,
@@ -243,6 +249,6 @@ func TestPhoneCallRepository_HardDeleteByMacHost(t *testing.T) {
 	err = env.repo.HardDeleteByMacHost(env.ctx, env.hostID)
 	require.NoError(t, err)
 
-	_, err = env.repo.GetCallByUniqueID(env.ctx, "call-del-"+suffix)
+	_, err = env.repo.GetCallByUniqueID(env.ctx, uniqueID)
 	assert.True(t, errors.Is(err, db.ErrNotFound))
 }

@@ -79,9 +79,10 @@ func TestIntegration_CadenceUpdater_ApplyInteraction_Outbound_LiveDB(t *testing.
 	ctx := context.Background()
 	cad := "monthly"
 	initial := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
+	gen, _ := migrationGenerator(t)
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName: "Cadence Outbound Apply", Cadence: &cad, LastContacted: &initial,
+		FullName: gen.Prefix() + "Cadence Outbound Apply", Cadence: &cad, LastContacted: &initial,
 	})
 	require.NoError(t, err)
 	defer func() { _ = contactRepo.HardDeleteContact(ctx, contact.ID) }()
@@ -118,9 +119,10 @@ func TestIntegration_CadenceUpdater_ApplyInteraction_Mutual_ForwardOnly(t *testi
 	ctx := context.Background()
 	cad := "weekly"
 	newer := time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC)
+	gen, _ := migrationGenerator(t)
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName: "Cadence Forward Only", Cadence: &cad, LastContacted: &newer,
+		FullName: gen.Prefix() + "Cadence Forward Only", Cadence: &cad, LastContacted: &newer,
 	})
 	require.NoError(t, err)
 	defer func() { _ = contactRepo.HardDeleteContact(ctx, contact.ID) }()
@@ -153,9 +155,10 @@ func TestIntegration_CadenceUpdater_ApplyInteraction_Manual_UnconditionalBackdat
 	ctx := context.Background()
 	cad := "weekly"
 	newer := time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC)
+	gen, _ := migrationGenerator(t)
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName: "Cadence Manual Backdate", Cadence: &cad, LastContacted: &newer,
+		FullName: gen.Prefix() + "Cadence Manual Backdate", Cadence: &cad, LastContacted: &newer,
 	})
 	require.NoError(t, err)
 	defer func() { _ = contactRepo.HardDeleteContact(ctx, contact.ID) }()
@@ -194,9 +197,10 @@ func TestIntegration_CadenceUpdater_BulkApply_DoesNotBumpLastInteractionAt(t *te
 	// Seed a pre-merge last_interaction_at on the target so we can
 	// assert the merge leaves it alone. We seed via a mutual
 	// ApplyInteraction (the legitimate path for this column).
+	gen, _ := migrationGenerator(t)
 	contactRepo := repository.NewContactRepository(database.Queries)
 	target, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName: "Merge LastInteractionAt Guard", LastContacted: &targetLast,
+		FullName: gen.Prefix() + "Merge LastInteractionAt Guard", LastContacted: &targetLast,
 	})
 	require.NoError(t, err)
 	defer func() { _ = contactRepo.HardDeleteContact(ctx, target.ID) }()
@@ -243,9 +247,10 @@ func TestIntegration_CadenceUpdater_BulkApply_ForwardMaxOnMerge(t *testing.T) {
 	ctx := context.Background()
 
 	targetLast := time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC)
+	gen, _ := migrationGenerator(t)
 	contactRepo := repository.NewContactRepository(database.Queries)
 	target, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName: "Merge Target", LastContacted: &targetLast,
+		FullName: gen.Prefix() + "Merge Target", LastContacted: &targetLast,
 	})
 	require.NoError(t, err)
 	defer func() { _ = contactRepo.HardDeleteContact(ctx, target.ID) }()
@@ -282,9 +287,10 @@ func TestIntegration_CadenceUpdater_ApplyContactByOverride_ClearAndBackdate(t *t
 	defer cleanup()
 	ctx := context.Background()
 	cad := "weekly"
+	gen, _ := migrationGenerator(t)
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName: "Cadence Override", Cadence: &cad,
+		FullName: gen.Prefix() + "Cadence Override", Cadence: &cad,
 	})
 	require.NoError(t, err)
 	defer func() { _ = contactRepo.HardDeleteContact(ctx, contact.ID) }()
@@ -327,9 +333,10 @@ func TestIntegration_CadenceUpdater_HandleEvent_DuplicateClaim_NoOp(t *testing.T
 	ctx := context.Background()
 	cad := "weekly"
 	initialLast := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
+	gen, _ := migrationGenerator(t)
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName: "Duplicate Claim", Cadence: &cad, LastContacted: &initialLast,
+		FullName: gen.Prefix() + "Duplicate Claim", Cadence: &cad, LastContacted: &initialLast,
 	})
 	require.NoError(t, err)
 	defer func() { _ = contactRepo.HardDeleteContact(ctx, contact.ID) }()
@@ -408,9 +415,10 @@ func TestIntegration_CadenceUpdater_ModeOff_NoWrite(t *testing.T) {
 	ctx := context.Background()
 	cad := "weekly"
 	initialLast := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
+	gen, _ := migrationGenerator(t)
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName: "Cadence Mode Off", Cadence: &cad, LastContacted: &initialLast,
+		FullName: gen.Prefix() + "Cadence Mode Off", Cadence: &cad, LastContacted: &initialLast,
 	})
 	require.NoError(t, err)
 	defer func() { _ = contactRepo.HardDeleteContact(ctx, contact.ID) }()
@@ -442,9 +450,10 @@ func TestIntegration_CadenceUpdater_ContactBy_DerivedFromCadence(t *testing.T) {
 	ctx := context.Background()
 	cad := "monthly"
 	initialLast := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
+	gen, _ := migrationGenerator(t)
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName: "Cadence Contact By", Cadence: &cad, LastContacted: &initialLast,
+		FullName: gen.Prefix() + "Cadence Contact By", Cadence: &cad, LastContacted: &initialLast,
 	})
 	require.NoError(t, err)
 	defer func() { _ = contactRepo.HardDeleteContact(ctx, contact.ID) }()

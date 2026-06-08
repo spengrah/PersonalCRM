@@ -41,22 +41,16 @@ func TestCalendarEventUpsertResetsLastContactedUpdated(t *testing.T) {
 	require.NoError(t, err)
 	defer database.Close()
 
-	contactRepo := repository.NewContactRepository(database.Queries)
+	gen, _ := migrationGenerator(t)
 	calendarRepo := repository.NewCalendarEventRepository(database.Queries)
 
-	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName: "Calendar Event Match Reset",
-	})
-	require.NoError(t, err)
-	defer func() { _ = contactRepo.HardDeleteContact(ctx, contact.ID) }()
+	contact, contactCleanup := seedMigrationContact(ctx, t, database, gen)
+	defer contactCleanup()
 
-	contactTwo, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName: "Calendar Event Match Reset Two",
-	})
-	require.NoError(t, err)
-	defer func() { _ = contactRepo.HardDeleteContact(ctx, contactTwo.ID) }()
+	contactTwo, contactTwoCleanup := seedMigrationContact(ctx, t, database, gen)
+	defer contactTwoCleanup()
 
-	accountID := "calendar-reset@example.com"
+	accountID := gen.Prefix() + "calendar-reset@example.com"
 	defer func() { _ = calendarRepo.DeleteEventsByAccount(ctx, accountID) }()
 
 	now := accelerated.GetCurrentTime()
@@ -197,13 +191,11 @@ func TestUpdateContactLastContactedIfLater_OnlyUpdatesWhenLater(t *testing.T) {
 	require.NoError(t, err)
 	defer database.Close()
 
+	gen, _ := migrationGenerator(t)
 	contactRepo := repository.NewContactRepository(database.Queries)
 
-	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName: "Last Contacted Clamp",
-	})
-	require.NoError(t, err)
-	defer func() { _ = contactRepo.HardDeleteContact(ctx, contact.ID) }()
+	contact, contactCleanup := seedMigrationContact(ctx, t, database, gen)
+	defer contactCleanup()
 
 	initial := accelerated.GetCurrentTime().Add(-2 * time.Hour)
 	later := initial.Add(2 * time.Hour)
