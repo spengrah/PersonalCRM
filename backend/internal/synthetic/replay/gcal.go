@@ -6,7 +6,6 @@ import (
 
 	"personal-crm/backend/internal/google"
 	"personal-crm/backend/internal/repository"
-	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/synthetic/factory"
 
 	"github.com/google/uuid"
@@ -37,8 +36,7 @@ func (h *Harness) ReplayGCal(ctx context.Context, contactID uuid.UUID, spec fact
 		nil, // oauthService unused with the injected fetcher
 		repository.NewCalendarEventRepository(h.database.Queries),
 		h.contactRepo,
-		// identityService concrete is required by the constructor signature.
-		h.gcalIdentityService(),
+		h.identityService,
 		h.externalRepo,
 		h.bus,
 		h.database.Pool,
@@ -75,18 +73,10 @@ func (h *Harness) ReplayGCal(ctx context.Context, contactID uuid.UUID, spec fact
 		return GCalResult{GcalEventID: spec.GcalEventID, Matched: false}, nil
 	}
 
-	predicate := func(ctx context.Context) (bool, error) {
-		return h.contactHasInteractionSource(ctx, contactID, repository.InteractionSourceGCal)
-	}
-	if err := h.Settle(ctx, predicate, ""); err != nil {
+	// Gate A: the calendar_event is processed with this contact matched.
+	if err := h.Settle(ctx, h.gcalSettled(spec.GcalEventID, contactID), ""); err != nil {
 		return GCalResult{}, err
 	}
 	h.trackContactInteractions(ctx, contactID)
 	return GCalResult{ContactID: contactID, GcalEventID: spec.GcalEventID, Matched: true}, nil
-}
-
-// gcalIdentityService returns the concrete IdentityService the calendar provider
-// constructor requires (the harness holds it as *service.IdentityService).
-func (h *Harness) gcalIdentityService() *service.IdentityService {
-	return h.identityService
 }

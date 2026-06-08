@@ -24,6 +24,8 @@ import (
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/synthetic/factory"
 	"personal-crm/backend/internal/synthetic/replay"
+
+	"github.com/google/uuid"
 )
 
 // Harness is the replay harness re-exported at the package root.
@@ -75,9 +77,23 @@ func DefaultParams() SeedParams {
 }
 
 // SeedAllResult reports what SeedAll produced (for assertions).
+//
+// GmailIdempotencyProbe carries the first Gmail (contactID, message spec) the
+// run replayed so a smoke test can re-replay the SAME source payload and assert
+// idempotency (no duplicate comms_message row), since SeedAll's contact creation
+// is not itself upsert-idempotent (re-running SeedAll seeds a fresh dataset).
 type SeedAllResult struct {
 	GmailContactIDs    []string
 	TelegramContactIDs []string
+
+	GmailIdempotencyProbe *GmailReplayProbe
+}
+
+// GmailReplayProbe is a captured (contactID, spec) pair the caller can re-feed
+// to Harness.ReplayGmail to prove source-message idempotency.
+type GmailReplayProbe struct {
+	ContactID uuid.UUID
+	Spec      factory.GmailMessageSpec
 }
 
 // SeedAll builds a representative full dataset in one call (the mode-(b) fast
@@ -109,10 +125,14 @@ func (s *seedAllRunner) run(ctx context.Context, params SeedParams) (SeedAllResu
 		if err != nil {
 			return res, fmt.Errorf("seedall: seed email contact: %w", err)
 		}
-		if _, err := s.h.ReplayGmail(ctx, emailContact.ID, gen.GmailMessage(emailSpec, factory.MatchSeeded)); err != nil {
+		gmailMsg := gen.GmailMessage(emailSpec, factory.MatchSeeded)
+		if _, err := s.h.ReplayGmail(ctx, emailContact.ID, gmailMsg); err != nil {
 			return res, fmt.Errorf("seedall: replay gmail: %w", err)
 		}
 		res.GmailContactIDs = append(res.GmailContactIDs, emailContact.ID.String())
+		if res.GmailIdempotencyProbe == nil {
+			res.GmailIdempotencyProbe = &GmailReplayProbe{ContactID: emailContact.ID, Spec: gmailMsg}
+		}
 
 		// A Telegram-settled contact (handle match).
 		tgSpec := gen.Contact(factory.WithTelegram())

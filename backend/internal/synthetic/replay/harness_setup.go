@@ -96,6 +96,15 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 	calendarEventRepo := repository.NewCalendarEventRepository(database.Queries)
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 
+	// Setup-time peer-band collision detection (D5): derive the generator and
+	// re-salt the namespace if its telegram peer sub-block is already occupied by
+	// a different namespace's live rows. Probabilistically disjoint, with this
+	// detection it is "disjoint + detected at setup," not a hard guarantee.
+	gen, namespace, err := resolveNamespace(ctx, support, namespace, seed)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	identityService := service.NewIdentityService(identityRepo)
 	// Contact service built with nil bus first; the real bus is injected after
 	// the client/bus exist (chicken-and-egg, mirroring the canonical harness).
@@ -213,31 +222,28 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 		return nil, nil, fmt.Errorf("start river client: %w", err)
 	}
 
-	gen := factory.NewGenerator(seed, namespace)
-
 	h := &Harness{
-		ctx:               ctx,
-		database:          database,
-		bus:               bus,
-		client:            client,
-		namespace:         namespace,
-		gen:               gen,
-		contactRepo:       contactRepo,
-		methodRepo:        methodRepo,
-		interactionRepo:   interactionRepo,
-		commsRepo:         commsRepo,
-		externalRepo:      externalRepo,
-		telegramRepo:      telegramRepo,
-		messagesRepo:      messagesRepo,
-		identityService:   identityService,
-		contactService:    contactService,
-		cadenceUpdater:    cadenceUpdater,
-		support:           support,
-		ingestService:     ingestService,
-		macHostID:         macHostID,
-		peerMatcher:       &telegramPeerMatcherDeps{matcher: peerMatcher, engine: tgAggEngine},
-		telegramAggEngine: tgAggEngine,
-		created:           newCreated(),
+		ctx:             ctx,
+		database:        database,
+		bus:             bus,
+		client:          client,
+		namespace:       namespace,
+		gen:             gen,
+		contactRepo:     contactRepo,
+		methodRepo:      methodRepo,
+		interactionRepo: interactionRepo,
+		commsRepo:       commsRepo,
+		externalRepo:    externalRepo,
+		telegramRepo:    telegramRepo,
+		messagesRepo:    messagesRepo,
+		identityService: identityService,
+		contactService:  contactService,
+		cadenceUpdater:  cadenceUpdater,
+		support:         support,
+		ingestService:   ingestService,
+		macHostID:       macHostID,
+		peerMatcher:     &telegramPeerMatcherDeps{matcher: peerMatcher, engine: tgAggEngine},
+		created:         newCreated(),
 	}
 	_ = hostRepo // reserved for future liveness wiring; intentionally nil here
 
@@ -245,6 +251,32 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 		return h.teardown(stopCtx)
 	}
 	return h, teardown, nil
+}
+
+// peerBandResaltAttempts bounds how many times resolveNamespace re-salts a
+// colliding namespace before failing loudly.
+const peerBandResaltAttempts = 8
+
+// resolveNamespace builds the generator and, if this namespace's telegram peer
+// sub-block is already occupied by another namespace's live rows, re-salts the
+// namespace (appending an incrementing suffix) until it finds a free band or
+// exhausts the attempt budget. The practical guarantee is "probabilistically
+// disjoint + detected at setup," not a hard mathematical guarantee.
+func resolveNamespace(ctx context.Context, support *repository.SyntheticSupportRepository, namespace string, seed uint64) (*factory.Generator, string, error) {
+	candidate := namespace
+	for attempt := 0; attempt < peerBandResaltAttempts; attempt++ {
+		gen := factory.NewGenerator(seed, candidate)
+		occupied, err := support.CountTelegramMessagesInPeerBand(ctx, gen.PeerBandStart(), gen.PeerBandEnd())
+		if err != nil {
+			return nil, "", fmt.Errorf("peer-band collision check: %w", err)
+		}
+		if occupied == 0 {
+			return gen, candidate, nil
+		}
+		// Collision: re-salt and retry.
+		candidate = fmt.Sprintf("%s-s%d", namespace, attempt+1)
+	}
+	return nil, "", fmt.Errorf("synthetic: could not find a free telegram peer band for namespace %q after %d re-salts", namespace, peerBandResaltAttempts)
 }
 
 // rematchNoopWorker drains the rematch_dispatcher kind (rematch is out of the

@@ -2,28 +2,67 @@ package replay
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
+	"personal-crm/backend/internal/db"
 
 	"github.com/google/uuid"
 )
 
-// contactHasInteractionSource reports whether the contact has at least one
-// interaction with the given source. Because every replay seeds a FRESH
-// namespaced contact, "an interaction with this source for this contact" is
-// exact-to-this-replay (a prior run's row belongs to a different contact id).
-func (h *Harness) contactHasInteractionSource(ctx context.Context, contactID uuid.UUID, source string) (bool, error) {
-	rows, err := h.interactionRepo.ListContactInteractions(ctx, contactID, 100, 0)
-	if err != nil {
-		return false, err
+// Gate A seeded-sender predicates key on the SOURCE MESSAGE ROW's linkage to an
+// interaction (by THIS replay's exact synthetic source id), which is both
+// exact-to-this-replay (a prior same-contact interaction can't satisfy it) AND
+// idempotent (re-replaying the same payload leaves the row linked, so the
+// predicate stays true — a count-delta predicate would never re-fire). The
+// contactID arg is unused for message-linkage sources but kept in the signature
+// for the gcal predicate that needs it.
+
+// gmailSettled returns a Gate A predicate: the comms_message(email, externalID)
+// row is linked to an interaction.
+func (h *Harness) gmailSettled(externalID string) gateA {
+	return func(ctx context.Context) (bool, error) {
+		n, err := h.support.CountLinkedCommsMessageByExternalID(ctx, "email", externalID)
+		return n > 0, err
 	}
-	for _, r := range rows {
-		if r.Source == source {
-			return true, nil
-		}
+}
+
+// gchatSettled returns a Gate A predicate: the comms_message(gchat, externalID)
+// row is linked to an interaction.
+func (h *Harness) gchatSettled(externalID string) gateA {
+	return func(ctx context.Context) (bool, error) {
+		n, err := h.support.CountLinkedCommsMessageByExternalID(ctx, "gchat", externalID)
+		return n > 0, err
 	}
-	return false, nil
+}
+
+// imessageSettled returns a Gate A predicate: the messages_message(guid) row is
+// linked to an interaction.
+func (h *Harness) imessageSettled(guid string) gateA {
+	return func(ctx context.Context) (bool, error) {
+		n, err := h.support.CountLinkedMessagesMessageByGuid(ctx, guid)
+		return n > 0, err
+	}
+}
+
+// telegramSettled returns a Gate A predicate: the telegram_message(msgID) row is
+// linked to an interaction.
+func (h *Harness) telegramSettled(telegramMessageID int32) gateA {
+	return func(ctx context.Context) (bool, error) {
+		n, err := h.support.CountLinkedTelegramMessageByMessageID(ctx, telegramMessageID)
+		return n > 0, err
+	}
+}
+
+// gcalSettled returns a Gate A predicate: the calendar_event(gcalID) row has the
+// contact in matched_contact_ids and is processed (the attended interaction
+// published).
+func (h *Harness) gcalSettled(gcalEventID string, contactID uuid.UUID) gateA {
+	return func(ctx context.Context) (bool, error) {
+		n, err := h.support.CountProcessedCalendarEventByGcalID(ctx, gcalEventID, contactID)
+		return n > 0, err
+	}
 }
 
 // trackContactInteractions records the contact's interaction ids into the ledger
@@ -53,4 +92,18 @@ func gmailBackfillSince(h *Harness) string {
 func (h *Harness) telegramPeerStranded(ctx context.Context, peerUserID int64) (bool, error) {
 	n, err := h.support.CountStrandedTelegramMessagesByPeer(ctx, peerUserID)
 	return n > 0, err
+}
+
+// CommsRowExists reports whether a comms_message row exists for (source,
+// external_id). Tests use it to assert the Gmail/GChat unknown-sender match-only
+// contract (no row written for an unknown correspondent).
+func (h *Harness) CommsRowExists(ctx context.Context, source, externalID string) (bool, error) {
+	_, err := h.commsRepo.GetLatestByExternalID(ctx, source, externalID)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }

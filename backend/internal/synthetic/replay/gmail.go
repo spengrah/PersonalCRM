@@ -68,11 +68,8 @@ func (h *Harness) ReplayGmail(ctx context.Context, contactID uuid.UUID, spec fac
 		return GmailResult{ExternalID: spec.ExternalID, Matched: false}, nil
 	}
 
-	// Gate A: the interaction with this email source landed for the contact.
-	predicate := func(ctx context.Context) (bool, error) {
-		return h.contactHasInteractionSource(ctx, contactID, repository.InteractionSourceEmail)
-	}
-	if err := h.Settle(ctx, predicate, ""); err != nil {
+	// Gate A: THIS replay's email message row is linked to an interaction.
+	if err := h.Settle(ctx, h.gmailSettled(spec.ExternalID), ""); err != nil {
 		return GmailResult{}, err
 	}
 	h.trackContactInteractions(ctx, contactID)

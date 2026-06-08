@@ -550,6 +550,63 @@ func (q *Queries) SyntheticCountContactsByIds(ctx context.Context, contactIds []
 	return count, err
 }
 
+const SyntheticCountLinkedCommsMessageByExternalId = `-- name: SyntheticCountLinkedCommsMessageByExternalId :one
+
+SELECT COUNT(*) FROM comms_message
+WHERE source = $1
+  AND external_id = $2
+  AND interaction_id IS NOT NULL
+  AND deleted_at IS NULL
+`
+
+type SyntheticCountLinkedCommsMessageByExternalIdParams struct {
+	Source     string `json:"source"`
+	ExternalID string `json:"external_id"`
+}
+
+// Settle Gate A (seeded sender) — per-source-message linkage. Keyed on THIS
+// replay's exact synthetic source id, so it is exact-to-this-replay (a prior
+// same-contact interaction can't satisfy it early) AND idempotent (a re-replay
+// of the same payload leaves the row linked, so the predicate stays true).
+// gmail/gchat: the comms_message row for (source, external_id) has an
+// interaction_id (the derived interaction landed).
+func (q *Queries) SyntheticCountLinkedCommsMessageByExternalId(ctx context.Context, arg SyntheticCountLinkedCommsMessageByExternalIdParams) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountLinkedCommsMessageByExternalId, arg.Source, arg.ExternalID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const SyntheticCountLinkedMessagesMessageByGuid = `-- name: SyntheticCountLinkedMessagesMessageByGuid :one
+SELECT COUNT(*) FROM messages_message
+WHERE guid = $1
+  AND interaction_id IS NOT NULL
+  AND deleted_at IS NULL
+`
+
+// iMessage: the staging row for the guid has an interaction_id.
+func (q *Queries) SyntheticCountLinkedMessagesMessageByGuid(ctx context.Context, guid string) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountLinkedMessagesMessageByGuid, guid)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const SyntheticCountLinkedTelegramMessageByMessageId = `-- name: SyntheticCountLinkedTelegramMessageByMessageId :one
+SELECT COUNT(*) FROM telegram_message
+WHERE telegram_message_id = $1
+  AND interaction_id IS NOT NULL
+  AND deleted_at IS NULL
+`
+
+// telegram: the message row for the telegram_message_id has an interaction_id.
+func (q *Queries) SyntheticCountLinkedTelegramMessageByMessageId(ctx context.Context, telegramMessageID int32) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountLinkedTelegramMessageByMessageId, telegramMessageID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const SyntheticCountMatchedExternalContactBySourceId = `-- name: SyntheticCountMatchedExternalContactBySourceId :one
 SELECT COUNT(*) FROM external_contact
 WHERE source_id = $1
@@ -562,6 +619,28 @@ WHERE source_id = $1
 // id exists linked to a CRM contact (match_status='matched').
 func (q *Queries) SyntheticCountMatchedExternalContactBySourceId(ctx context.Context, sourceID string) (int64, error) {
 	row := q.db.QueryRow(ctx, SyntheticCountMatchedExternalContactBySourceId, sourceID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const SyntheticCountProcessedCalendarEventByGcalId = `-- name: SyntheticCountProcessedCalendarEventByGcalId :one
+SELECT COUNT(*) FROM calendar_event
+WHERE gcal_event_id = $1
+  AND $2::uuid = ANY(matched_contact_ids)
+  AND last_contacted_updated = true
+`
+
+type SyntheticCountProcessedCalendarEventByGcalIdParams struct {
+	GcalEventID string      `json:"gcal_event_id"`
+	ContactID   pgtype.UUID `json:"contact_id"`
+}
+
+// gcal seeded: the calendar_event for the gcal id has the contact in
+// matched_contact_ids AND last_contacted_updated=true (the attended interaction
+// published). Idempotent: a re-replay leaves the row processed.
+func (q *Queries) SyntheticCountProcessedCalendarEventByGcalId(ctx context.Context, arg SyntheticCountProcessedCalendarEventByGcalIdParams) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountProcessedCalendarEventByGcalId, arg.GcalEventID, arg.ContactID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -594,6 +673,30 @@ WHERE peer_user_id = $1
 // with matched_contact_id IS NULL (the stranded/discovery-candidate state).
 func (q *Queries) SyntheticCountStrandedTelegramMessagesByPeer(ctx context.Context, peerUserID pgtype.Int8) (int64, error) {
 	row := q.db.QueryRow(ctx, SyntheticCountStrandedTelegramMessagesByPeer, peerUserID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const SyntheticCountTelegramMessagesInPeerBand = `-- name: SyntheticCountTelegramMessagesInPeerBand :one
+SELECT COUNT(*) FROM telegram_message
+WHERE peer_user_id >= $1
+  AND peer_user_id < $2
+  AND deleted_at IS NULL
+`
+
+type SyntheticCountTelegramMessagesInPeerBandParams struct {
+	BandStart pgtype.Int8 `json:"band_start"`
+	BandEnd   pgtype.Int8 `json:"band_end"`
+}
+
+// Harness setup collision detection (D5): count live telegram_message rows whose
+// peer_user_id falls in this namespace's reserved sub-block [band_start,
+// band_end). A non-zero count means another namespace already occupies the band
+// (probabilistic collision), so NewHarness re-salts the namespace or fails loudly
+// rather than risking a cross-namespace cleanup wipe.
+func (q *Queries) SyntheticCountTelegramMessagesInPeerBand(ctx context.Context, arg SyntheticCountTelegramMessagesInPeerBandParams) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountTelegramMessagesInPeerBand, arg.BandStart, arg.BandEnd)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -719,6 +822,20 @@ DELETE FROM contact_task WHERE contact_id = ANY($1::uuid[])
 // Cleanup step 10: contact_task has no deleted_at; hard delete by contact.
 func (q *Queries) SyntheticDeleteContactTasksByContactIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteContactTasksByContactIds, contactIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const SyntheticDeleteContactTasksByIds = `-- name: SyntheticDeleteContactTasksByIds :execrows
+DELETE FROM contact_task WHERE id = ANY($1::uuid[])
+`
+
+// Todoist replay cleanup: delete the contact_task rows the replay's reconcile
+// created (the before/after diff from SyntheticListContactTaskIdsByProvider).
+func (q *Queries) SyntheticDeleteContactTasksByIds(ctx context.Context, taskIds []pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteContactTasksByIds, taskIds)
 	if err != nil {
 		return 0, err
 	}
@@ -854,6 +971,35 @@ func (q *Queries) SyntheticDeleteNotesByContactIds(ctx context.Context, contactI
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const SyntheticListContactTaskIdsByProvider = `-- name: SyntheticListContactTaskIdsByProvider :many
+SELECT id FROM contact_task WHERE provider = $1
+`
+
+// Todoist replay: snapshot the set of contact_task ids for a provider so the
+// replay can diff before/after its (globally-scoped) reconcile and track the
+// rows it created — even for cadence-bearing contacts it did not seed — so
+// cleanup removes exactly those rows and never strands a task on an unrelated
+// contact in the shared test DB.
+func (q *Queries) SyntheticListContactTaskIdsByProvider(ctx context.Context, provider string) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, SyntheticListContactTaskIdsByProvider, provider)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const SyntheticListEventIdsBySourceAndSourceIdPrefix = `-- name: SyntheticListEventIdsBySourceAndSourceIdPrefix :many

@@ -180,21 +180,30 @@ func TestSyntheticReplay_UnknownSenderMatchOnly(t *testing.T) {
 	testsupport.RequireLongTests(t)
 	database, ctx := newSyntheticDB(t)
 
-	// Gmail/GChat unknown sender: match-only (no contact, no interaction).
+	// Gmail/GChat unknown sender: match-only (no comms_message row written for
+	// the unknown correspondent, hence no interaction, no contact create).
 	t.Run("gmail_match_only", func(t *testing.T) {
 		h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
 		gen := h.Generator()
-		res, err := h.ReplayGmail(ctx, uuid.Nil, gen.GmailMessage(gen.Contact(factory.WithEmail()), factory.MatchUnknown))
+		spec := gen.GmailMessage(gen.Contact(factory.WithEmail()), factory.MatchUnknown)
+		res, err := h.ReplayGmail(ctx, uuid.Nil, spec)
 		require.NoError(t, err)
 		require.False(t, res.Matched)
+		exists, err := h.CommsRowExists(ctx, "email", spec.ExternalID)
+		require.NoError(t, err)
+		require.False(t, exists, "unknown Gmail correspondent must not produce a comms_message row")
 	})
 
 	t.Run("gchat_match_only", func(t *testing.T) {
 		h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
 		gen := h.Generator()
-		res, err := h.ReplayGChat(ctx, uuid.Nil, gen.GChatMessage(gen.Contact(factory.WithEmail()), factory.MatchUnknown))
+		spec := gen.GChatMessage(gen.Contact(factory.WithEmail()), factory.MatchUnknown)
+		res, err := h.ReplayGChat(ctx, uuid.Nil, spec)
 		require.NoError(t, err)
 		require.False(t, res.Matched)
+		exists, err := h.CommsRowExists(ctx, "gchat", spec.ExternalID)
+		require.NoError(t, err)
+		require.False(t, exists, "unknown GChat sender must not produce a comms_message row")
 	})
 }
 

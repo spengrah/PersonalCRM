@@ -105,10 +105,8 @@ func (h *Harness) ReplayIMessage(ctx context.Context, contactID uuid.UUID, spec 
 		return IMessageResult{Guid: spec.Guid, Matched: false}, nil
 	}
 
-	predicate := func(ctx context.Context) (bool, error) {
-		return h.contactHasInteractionSource(ctx, contactID, repository.InteractionSourceMessages)
-	}
-	if err := h.Settle(ctx, predicate, repository.InteractionSourceMessages); err != nil {
+	// Gate A: THIS replay's staging row is linked to an interaction.
+	if err := h.Settle(ctx, h.imessageSettled(spec.Guid), repository.InteractionSourceMessages); err != nil {
 		return IMessageResult{}, err
 	}
 	h.trackContactInteractions(ctx, contactID)

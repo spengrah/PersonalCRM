@@ -89,10 +89,8 @@ func (h *Harness) ReplayGChat(ctx context.Context, contactID uuid.UUID, spec fac
 		return GChatResult{}, fmt.Errorf("gchat enqueue aggregate: %w", err)
 	}
 
-	predicate := func(ctx context.Context) (bool, error) {
-		return h.contactHasInteractionSource(ctx, contactID, repository.InteractionSourceGChat)
-	}
-	if err := h.Settle(ctx, predicate, repository.InteractionSourceGChat); err != nil {
+	// Gate A: THIS replay's gchat message row is linked to an interaction.
+	if err := h.Settle(ctx, h.gchatSettled(spec.ExternalID), repository.InteractionSourceGChat); err != nil {
 		return GChatResult{}, err
 	}
 	h.trackContactInteractions(ctx, contactID)

@@ -151,9 +151,15 @@ func (h *Harness) cleanup(ctx context.Context) error {
 		_, err := h.support.DeleteExternalContactsBySourceIDPrefix(ctx, prefix)
 		return err
 	})
-	// 10. contact_task (by contact, hard delete — no deleted_at).
+	// 10. contact_task (by contact, hard delete — no deleted_at), plus the
+	// Todoist-reconcile delta rows tracked by id (which may attach to
+	// cadence-bearing contacts this run did not seed).
 	step("contact_task", func() error {
 		_, err := h.support.DeleteContactTasksByContactIds(ctx, c.contactIDs)
+		return err
+	})
+	step("contact_task_todoist_delta", func() error {
+		_, err := h.support.DeleteContactTasksByIds(ctx, c.contactTaskIDs)
 		return err
 	})
 	// 11. contact_method (by contact).

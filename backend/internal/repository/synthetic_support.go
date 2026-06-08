@@ -200,6 +200,26 @@ func (r *SyntheticSupportRepository) DeleteContactTasksByContactIds(ctx context.
 	return r.queries.SyntheticDeleteContactTasksByContactIds(ctx, pgUUIDs(contactIDs))
 }
 
+// ListContactTaskIdsByProvider returns the contact_task ids for a provider. The
+// Todoist replay diffs this before/after its globally-scoped reconcile to track
+// exactly the rows it created (even on cadence-bearing contacts it did not seed).
+func (r *SyntheticSupportRepository) ListContactTaskIdsByProvider(ctx context.Context, provider string) ([]uuid.UUID, error) {
+	rows, err := r.queries.SyntheticListContactTaskIdsByProvider(ctx, provider)
+	if err != nil {
+		return nil, err
+	}
+	return pgUUIDsToUUIDs(rows), nil
+}
+
+// DeleteContactTasksByIds removes contact_task rows by tracked id (the Todoist
+// replay's before/after diff).
+func (r *SyntheticSupportRepository) DeleteContactTasksByIds(ctx context.Context, taskIDs []uuid.UUID) (int64, error) {
+	if len(taskIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticDeleteContactTasksByIds(ctx, pgUUIDs(taskIDs))
+}
+
 // DeleteContactMethodsByContactIds removes contact_method rows by contact
 // (cleanup step 11).
 func (r *SyntheticSupportRepository) DeleteContactMethodsByContactIds(ctx context.Context, contactIDs []uuid.UUID) (int64, error) {
@@ -241,7 +261,52 @@ func (r *SyntheticSupportRepository) CountContactsByIds(ctx context.Context, con
 	return r.queries.SyntheticCountContactsByIds(ctx, pgUUIDs(contactIDs))
 }
 
+// CountTelegramMessagesInPeerBand counts live telegram_message rows whose
+// peer_user_id is in [bandStart, bandEnd). Used by NewHarness for setup-time
+// peer-band collision detection (D5): a non-zero count means another namespace
+// occupies this namespace's sub-block.
+func (r *SyntheticSupportRepository) CountTelegramMessagesInPeerBand(ctx context.Context, bandStart, bandEnd int64) (int64, error) {
+	return r.queries.SyntheticCountTelegramMessagesInPeerBand(ctx, db.SyntheticCountTelegramMessagesInPeerBandParams{
+		BandStart: pgtype.Int8{Int64: bandStart, Valid: true},
+		BandEnd:   pgtype.Int8{Int64: bandEnd, Valid: true},
+	})
+}
+
 // --- Settle Gate A domain predicates (pending / match states) --------------
+
+// CountLinkedCommsMessageByExternalID counts comms_message rows for (source,
+// external_id) with a non-null interaction_id — the seeded gmail/gchat Gate A
+// predicate (exact-to-replay via the synthetic external_id, idempotent across
+// re-replays since the row stays linked).
+func (r *SyntheticSupportRepository) CountLinkedCommsMessageByExternalID(ctx context.Context, source, externalID string) (int64, error) {
+	return r.queries.SyntheticCountLinkedCommsMessageByExternalId(ctx, db.SyntheticCountLinkedCommsMessageByExternalIdParams{
+		Source:     source,
+		ExternalID: externalID,
+	})
+}
+
+// CountLinkedMessagesMessageByGuid counts iMessage staging rows for the guid with
+// a non-null interaction_id — the seeded iMessage Gate A predicate.
+func (r *SyntheticSupportRepository) CountLinkedMessagesMessageByGuid(ctx context.Context, guid string) (int64, error) {
+	return r.queries.SyntheticCountLinkedMessagesMessageByGuid(ctx, guid)
+}
+
+// CountLinkedTelegramMessageByMessageID counts telegram_message rows for the
+// telegram_message_id with a non-null interaction_id — the seeded telegram Gate A
+// predicate.
+func (r *SyntheticSupportRepository) CountLinkedTelegramMessageByMessageID(ctx context.Context, telegramMessageID int32) (int64, error) {
+	return r.queries.SyntheticCountLinkedTelegramMessageByMessageId(ctx, telegramMessageID)
+}
+
+// CountProcessedCalendarEventByGcalID counts calendar_event rows for the gcal id
+// where the contact is in matched_contact_ids and last_contacted_updated=true
+// (the attended interaction published) — the seeded gcal Gate A predicate.
+func (r *SyntheticSupportRepository) CountProcessedCalendarEventByGcalID(ctx context.Context, gcalEventID string, contactID uuid.UUID) (int64, error) {
+	return r.queries.SyntheticCountProcessedCalendarEventByGcalId(ctx, db.SyntheticCountProcessedCalendarEventByGcalIdParams{
+		GcalEventID: gcalEventID,
+		ContactID:   uuidToPgUUID(contactID),
+	})
+}
 
 // CountStrandedTelegramMessagesByPeer counts telegram_message rows for the peer
 // with matched_contact_id IS NULL (the stranded / discovery-candidate state).

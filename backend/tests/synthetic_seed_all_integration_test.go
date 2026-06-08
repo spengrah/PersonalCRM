@@ -33,6 +33,20 @@ func TestSyntheticSeedAll(t *testing.T) {
 	remaining, err := h.ContactsRemaining(ctx)
 	require.NoError(t, err)
 	require.Greater(t, remaining, int64(0), "SeedAll should have created contacts")
+
+	// Idempotency: re-replaying SeedAll's captured Gmail source payload (stable
+	// source-ids) must NOT create a duplicate comms_message row. SeedAll's
+	// contact creation is not upsert-idempotent, so the idempotency contract is
+	// at the source-message level — this re-replays the exact same payload.
+	require.NotNil(t, res.GmailIdempotencyProbe)
+	probe := res.GmailIdempotencyProbe
+	rowsBefore, err := h.CommsRepo().ListByContact(ctx, probe.ContactID)
+	require.NoError(t, err)
+	_, err = h.ReplayGmail(ctx, probe.ContactID, probe.Spec)
+	require.NoError(t, err)
+	rowsAfter, err := h.CommsRepo().ListByContact(ctx, probe.ContactID)
+	require.NoError(t, err)
+	require.Equal(t, len(rowsBefore), len(rowsAfter), "re-replaying the same Gmail payload must not add a duplicate row")
 }
 
 // TestSyntheticSeedAll_CleanupEmptiesNamespace proves the harness's cleanup

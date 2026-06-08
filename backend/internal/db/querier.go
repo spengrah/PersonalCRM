@@ -1297,15 +1297,36 @@ type Querier interface {
 	SweepRiverJobsInCloneForTest(ctx context.Context) (int64, error)
 	// Cleanup assertion — count surviving contact rows for the given ids.
 	SyntheticCountContactsByIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error)
+	// Settle Gate A (seeded sender) — per-source-message linkage. Keyed on THIS
+	// replay's exact synthetic source id, so it is exact-to-this-replay (a prior
+	// same-contact interaction can't satisfy it early) AND idempotent (a re-replay
+	// of the same payload leaves the row linked, so the predicate stays true).
+	// gmail/gchat: the comms_message row for (source, external_id) has an
+	// interaction_id (the derived interaction landed).
+	SyntheticCountLinkedCommsMessageByExternalId(ctx context.Context, arg SyntheticCountLinkedCommsMessageByExternalIdParams) (int64, error)
+	// iMessage: the staging row for the guid has an interaction_id.
+	SyntheticCountLinkedMessagesMessageByGuid(ctx context.Context, guid string) (int64, error)
+	// telegram: the message row for the telegram_message_id has an interaction_id.
+	SyntheticCountLinkedTelegramMessageByMessageId(ctx context.Context, telegramMessageID int32) (int64, error)
 	// Settle Gate A (Mac-contact seeded): the external_contact row for the entity
 	// id exists linked to a CRM contact (match_status='matched').
 	SyntheticCountMatchedExternalContactBySourceId(ctx context.Context, sourceID string) (int64, error)
+	// gcal seeded: the calendar_event for the gcal id has the contact in
+	// matched_contact_ids AND last_contacted_updated=true (the attended interaction
+	// published). Idempotent: a re-replay leaves the row processed.
+	SyntheticCountProcessedCalendarEventByGcalId(ctx context.Context, arg SyntheticCountProcessedCalendarEventByGcalIdParams) (int64, error)
 	// Settle Gate A (iMessage unknown-sender): the staging row for the guid landed
 	// (processed) with matched_contact_id IS NULL.
 	SyntheticCountStrandedMessagesMessageByGuid(ctx context.Context, guid string) (int64, error)
 	// Settle Gate A (telegram unknown-sender): a message row exists for the peer
 	// with matched_contact_id IS NULL (the stranded/discovery-candidate state).
 	SyntheticCountStrandedTelegramMessagesByPeer(ctx context.Context, peerUserID pgtype.Int8) (int64, error)
+	// Harness setup collision detection (D5): count live telegram_message rows whose
+	// peer_user_id falls in this namespace's reserved sub-block [band_start,
+	// band_end). A non-zero count means another namespace already occupies the band
+	// (probabilistic collision), so NewHarness re-salts the namespace or fails loudly
+	// rather than risking a cross-namespace cleanup wipe.
+	SyntheticCountTelegramMessagesInPeerBand(ctx context.Context, arg SyntheticCountTelegramMessagesInPeerBandParams) (int64, error)
 	// Settle Gate B (part 2): the messaging_aggregate_for_contact job keys on
 	// (contact_id, source) in its args, NOT event_id, so it is invisible to the
 	// event-scoped Gate B query above. Counts unfinalized aggregate jobs for this
@@ -1339,6 +1360,9 @@ type Querier interface {
 	SyntheticDeleteContactMethodsByContactIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error)
 	// Cleanup step 10: contact_task has no deleted_at; hard delete by contact.
 	SyntheticDeleteContactTasksByContactIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error)
+	// Todoist replay cleanup: delete the contact_task rows the replay's reconcile
+	// created (the before/after diff from SyntheticListContactTaskIdsByProvider).
+	SyntheticDeleteContactTasksByIds(ctx context.Context, taskIds []pgtype.UUID) (int64, error)
 	// Cleanup step 13: contact by tracked id. A true DELETE (not soft) so
 	// ON DELETE CASCADE fires for contact_enrichment (and any cascade FK).
 	SyntheticDeleteContactsByIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error)
@@ -1371,6 +1395,12 @@ type Querier interface {
 	SyntheticDeleteMessagesMessageByGuidPrefix(ctx context.Context, guidPrefix pgtype.Text) (int64, error)
 	// Cleanup step 12: note by contact.
 	SyntheticDeleteNotesByContactIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error)
+	// Todoist replay: snapshot the set of contact_task ids for a provider so the
+	// replay can diff before/after its (globally-scoped) reconcile and track the
+	// rows it created — even for cadence-bearing contacts it did not seed — so
+	// cleanup removes exactly those rows and never strands a task on an unrelated
+	// contact in the shared test DB.
+	SyntheticListContactTaskIdsByProvider(ctx context.Context, provider string) ([]pgtype.UUID, error)
 	// Cleanup event-id capture (part 2): adapter-direct root events that carry NO
 	// CRM contact id (raw_message.* / external_contact.upserted roots, and
 	// unknown/pending replays that touch no seeded contact). Keyed by the

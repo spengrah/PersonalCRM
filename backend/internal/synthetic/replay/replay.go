@@ -56,6 +56,11 @@ type created struct {
 	interactionIDs  []uuid.UUID
 	eventIDs        []uuid.UUID
 	telegramPeerIDs []int64
+	// contactTaskIDs are todoist contact_task rows the Todoist replay's
+	// (globally-scoped) reconcile created — tracked by a before/after diff so
+	// cleanup removes exactly them, even on cadence-bearing contacts the replay
+	// did not seed.
+	contactTaskIDs []uuid.UUID
 	// directSources is the set of sources the adapters published root events
 	// under, so Cleanup can capture no-contact root events that the
 	// contact-scoped read misses.
@@ -69,6 +74,7 @@ func newCreated() *created {
 func (c *created) addContact(id uuid.UUID)       { c.contactIDs = append(c.contactIDs, id) }
 func (c *created) addInteraction(id uuid.UUID)   { c.interactionIDs = append(c.interactionIDs, id) }
 func (c *created) addTelegramPeer(id int64)      { c.telegramPeerIDs = append(c.telegramPeerIDs, id) }
+func (c *created) addContactTask(id uuid.UUID)   { c.contactTaskIDs = append(c.contactTaskIDs, id) }
 func (c *created) addDirectSource(source string) { c.directSources[source] = struct{}{} }
 
 // Harness holds the live bus + river client + repos + engines + anchor +
@@ -99,9 +105,9 @@ type Harness struct {
 	ingestService *service.IngestService
 	macHostID     uuid.UUID
 
-	// peerMatcher + telegram aggregation engine for the telegram adapter.
-	peerMatcher       *telegramPeerMatcherDeps
-	telegramAggEngine telegramAggEngine
+	// peerMatcher bundles the telegram peer matcher + aggregation engine for
+	// the telegram adapter.
+	peerMatcher *telegramPeerMatcherDeps
 
 	created   *created
 	createdMu sync.Mutex

@@ -41,10 +41,18 @@ func (fakeTodoistClient) Sync(_ context.Context, _ string, _ []string, _ []todoi
 }
 
 // ReplayTodoist drives the REAL CadenceSyncProvider with a fake Client (no
-// OAuth/HTTP) over the seeded contacts. It exercises cadence/follow-up task
-// reconciliation; there is no inbound sender or pending equivalent, so
-// MatchIntent is ignored. "Settled" = Sync's own DB writes complete + any
-// enqueued jobs drain (Gate B over the seeded contacts).
+// OAuth/HTTP). It exercises cadence task reconciliation; there is no inbound
+// sender or pending equivalent, so MatchIntent is ignored. "Settled" = Sync's
+// own DB writes complete + any enqueued jobs drain.
+//
+// IMPORTANT — global reconcile scope: the provider's reconcile lists ALL
+// contacts with cadence + contact_by (it has no per-contact scoping seam), so on
+// the shared test DB it can create a contact_task for a cadence-bearing contact
+// this replay did NOT seed. To keep the run non-destructive, the adapter
+// snapshots the provider's contact_task ids before and after Sync and tracks the
+// DELTA into the cleanup ledger, so teardown removes exactly the rows this run
+// created — regardless of which contact they attached to. contactIDs is the
+// caller's seeded set, returned for assertion convenience.
 func (h *Harness) ReplayTodoist(ctx context.Context, contactIDs []uuid.UUID) (TodoistResult, error) {
 	syncRepo := repository.NewSyncRepositoryWithPool(h.database.Queries, h.database.Pool)
 	provider := todoist.NewCadenceSyncProvider(
@@ -58,6 +66,16 @@ func (h *Harness) ReplayTodoist(ctx context.Context, contactIDs []uuid.UUID) (To
 		h.database.Pool,
 		func(string) todoist.Client { return fakeTodoistClient{} },
 	)
+
+	// Snapshot todoist contact_task ids before the (globally-scoped) reconcile.
+	before, err := h.support.ListContactTaskIdsByProvider(ctx, todoist.SourceName)
+	if err != nil {
+		return TodoistResult{}, fmt.Errorf("todoist contact_task snapshot (before): %w", err)
+	}
+	beforeSet := make(map[uuid.UUID]struct{}, len(before))
+	for _, id := range before {
+		beforeSet[id] = struct{}{}
+	}
 
 	accountID := h.gen.Prefix() + "todoist"
 	// project_id/label_id are required settings; supply synthetic values (the
@@ -73,6 +91,19 @@ func (h *Harness) ReplayTodoist(ctx context.Context, contactIDs []uuid.UUID) (To
 	if _, err := provider.Sync(ctx, state, nil); err != nil {
 		return TodoistResult{}, fmt.Errorf("todoist sync: %w", err)
 	}
+
+	// Track the contact_task rows the reconcile created (after - before).
+	after, err := h.support.ListContactTaskIdsByProvider(ctx, todoist.SourceName)
+	if err != nil {
+		return TodoistResult{}, fmt.Errorf("todoist contact_task snapshot (after): %w", err)
+	}
+	h.track(func(c *created) {
+		for _, id := range after {
+			if _, existed := beforeSet[id]; !existed {
+				c.addContactTask(id)
+			}
+		}
+	})
 
 	// Settle Gate B over the seeded contacts (no domain predicate — Todoist has
 	// no inbound terminal row to wait on; the reconciliation is synchronous).

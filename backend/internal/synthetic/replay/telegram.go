@@ -16,10 +16,6 @@ import (
 // namespace's peer band ([1e12, 2e12)) so a peer is never mistaken for self.
 const telegramSelfUserID int64 = 999_999_999
 
-// telegramAggEngine is the subset of *telegram.AggregationEngine the harness
-// holds (kept as the concrete type; the alias documents intent).
-type telegramAggEngine = *telegram.AggregationEngine
-
 // telegramPeerMatcherDeps bundles the telegram peer matcher + aggregation engine
 // the telegram adapter wires into a real MessageHandler.
 type telegramPeerMatcherDeps struct {
@@ -87,10 +83,7 @@ func (h *Harness) ReplayTelegram(ctx context.Context, contactID uuid.UUID, spec 
 		return TelegramResult{PeerUserID: spec.PeerUserID, Matched: false}, nil
 	}
 
-	predicate := func(ctx context.Context) (bool, error) {
-		return h.contactHasInteractionSource(ctx, contactID, repository.InteractionSourceTelegram)
-	}
-	if err := h.Settle(ctx, predicate, ""); err != nil {
+	if err := h.Settle(ctx, h.telegramSettled(spec.TelegramMessageID), ""); err != nil {
 		return TelegramResult{}, err
 	}
 	h.trackContactInteractions(ctx, contactID)
