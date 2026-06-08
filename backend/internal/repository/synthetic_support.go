@@ -286,6 +286,16 @@ func (r *SyntheticSupportRepository) DeleteContactsByIds(ctx context.Context, co
 	return r.queries.SyntheticDeleteContactsByIds(ctx, pgUUIDs(contactIDs))
 }
 
+// DeleteMeetingNotesByHostID hard-deletes meeting_note rows scoped to the
+// seeded synthetic mac_host (cleanup step, BEFORE the mac_host delete). A
+// profile may seed orphan_needs_review meeting_note rows against the harness's
+// host; without this the harness teardown would leak them (the mac_host FK is
+// ON DELETE SET NULL, so the host delete alone leaves orphaned note rows). Reuses
+// the existing meeting-note test-cleanup query.
+func (r *SyntheticSupportRepository) DeleteMeetingNotesByHostID(ctx context.Context, hostID uuid.UUID) error {
+	return r.queries.TestHardDeleteMeetingNotesByHostID(ctx, uuidToPgUUID(hostID))
+}
+
 // DeleteMacHostByID removes the seeded revoked synthetic mac_host by id
 // (cleanup step 14).
 func (r *SyntheticSupportRepository) DeleteMacHostByID(ctx context.Context, id uuid.UUID) (int64, error) {

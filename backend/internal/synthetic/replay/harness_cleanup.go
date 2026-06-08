@@ -237,6 +237,14 @@ func (h *Harness) cleanup(ctx context.Context) error {
 		_, err := h.support.DeleteContactsByIds(ctx, c.contactIDs)
 		return err
 	})
+	// meeting_note scoped to the seeded synthetic host, BEFORE the mac_host
+	// delete. A profile may seed orphan_needs_review meeting_note rows against
+	// this host; the mac_host FK is ON DELETE SET NULL, so deleting the host
+	// alone would leave them orphaned on the shared DB. No-op when no profile
+	// seeded any.
+	step("meeting_note", func() error {
+		return h.support.DeleteMeetingNotesByHostID(ctx, h.macHostID)
+	})
 	// 14. mac_host (the seeded revoked synthetic host by id).
 	step("mac_host", func() error {
 		_, err := h.support.DeleteMacHostByID(ctx, h.macHostID)

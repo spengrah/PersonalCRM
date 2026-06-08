@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/consumer"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
@@ -198,6 +199,52 @@ func (h *Harness) SeedContact(ctx context.Context, spec factory.ContactSpec) (*r
 	}
 	h.track(func(c *created) { c.addContact(contact.ID) })
 	return contact, nil
+}
+
+// SeedOrphanMeetingNote inserts a single orphan_needs_review meeting_note row
+// against the harness's seeded synthetic mac_host (the Imports Interactions
+// "orphan" surface). It uses the EXISTING MeetingNoteRepository — not a new
+// replay adapter — so it is orchestration over an existing repo, mirroring the
+// /seed/meeting-notes route. The session id is a fresh random UUID; cleanup is by
+// the harness's host id (the teardown's meeting_note step), so no namespace
+// prefix is needed. Returns the created session id.
+//
+// Only the orphan state is produced here: conflict_pending needs a well-formed
+// conflict_candidates snapshot referencing real events, which has no toolkit
+// producer (a documented E3 coverage gap).
+func (h *Harness) SeedOrphanMeetingNote(ctx context.Context, title, summary string) (uuid.UUID, error) {
+	tx, err := h.database.Pool.Begin(ctx)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("seed orphan meeting note: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	sessionID := uuid.New()
+	hostID := h.macHostID
+	params := repository.InsertMeetingNoteParams{
+		AnarlogSessionID: sessionID,
+		MacHostID:        &hostID,
+		LinkageState:     repository.LinkageStateOrphanNeedsReview,
+		MeetingAt:        accelerated.GetCurrentTime(),
+		// An orphan carries no conflict_candidates snapshot; empty hashes are
+		// accepted by the column CHECK.
+		InputHash:       "",
+		ResolvedSetHash: "",
+	}
+	if title != "" {
+		params.Title = &title
+	}
+	if summary != "" {
+		params.Summary = &summary
+	}
+	meetingNoteRepo := repository.NewMeetingNoteRepository(h.database.Queries)
+	if _, err := meetingNoteRepo.InsertMeetingNoteTx(ctx, tx, params); err != nil {
+		return uuid.Nil, fmt.Errorf("seed orphan meeting note: insert: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return uuid.Nil, fmt.Errorf("seed orphan meeting note: commit: %w", err)
+	}
+	return sessionID, nil
 }
 
 // --- Settle ----------------------------------------------------------------
