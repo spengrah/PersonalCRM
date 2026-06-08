@@ -149,7 +149,7 @@ func TestInteractionSourceCheck_AcceptsPhoneCalls(t *testing.T) {
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	contactRepo := repository.NewContactRepository(database.Queries)
 
-	suffix := randomSuffix(t)
+	suffix := syntheticNS(t)
 	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
 		FullName: "Test PhoneCalls Source CHECK " + suffix,
 	})

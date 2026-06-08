@@ -2,8 +2,6 @@ package tests
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"testing"
 
 	"personal-crm/backend/internal/db"
@@ -92,18 +90,4 @@ func seedMigrationContact(
 
 	cleanup := func() { _ = contactRepo.HardDeleteContact(ctx, contact.ID) }
 	return contact, cleanup
-}
-
-// LEGACY — staged removal.
-//
-// randomSuffix returns a 12-char hex string for per-test isolation. It is
-// superseded by the namespace token from migrationGenerator and is centralized
-// here only so the still-unmigrated callers compile; it is deleted once the last
-// caller migrates off it. Do NOT add new callers — use migrationGenerator.
-func randomSuffix(t *testing.T) string {
-	t.Helper()
-	b := make([]byte, 6)
-	_, err := rand.Read(b)
-	require.NoError(t, err)
-	return hex.EncodeToString(b)
 }
