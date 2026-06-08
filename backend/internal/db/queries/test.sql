@@ -191,3 +191,254 @@ SELECT pg_get_constraintdef(c.oid)::text AS constraint_def
 FROM pg_constraint c
 WHERE c.conrelid = 'interaction'::regclass
   AND c.conname = 'interaction_source_check';
+
+-- ============================================================================
+-- Synthetic seed toolkit (internal/synthetic) test-only support queries.
+-- All synthetic-package DB access routes through these sqlc bindings (via
+-- repository/synthetic_support.go) so the package never inlines raw SQL.
+-- ============================================================================
+
+-- name: SyntheticCountUnfinalizedRiverJobsForEventsByContacts :one
+-- Settle Gate B (part 1): counts unfinalized river_job rows whose target
+-- event (args->>'event_id') was causally produced by one of this replay's
+-- contacts. Every contact-bearing event payload carries a scalar
+-- payload->>'contact_id' (interaction.recorded, calendar.attended/declined,
+-- email.received/sent, message.*, task.*, contact_methods.added, ...), so a
+-- single contact_id projection covers all cascade kinds generically — not a
+-- fixed kind list. Scoped to this replay's contacts (NOT a global kind count)
+-- so concurrent unrelated jobs on the shared test DB never block the gate.
+SELECT COUNT(*) FROM river_job
+WHERE finalized_at IS NULL
+  AND (args->>'event_id') IN (
+    SELECT id::text FROM event
+    WHERE (payload->>'contact_id') = ANY(@contact_ids::text[])
+  );
+
+-- name: SyntheticCountUnfinalizedMessagingAggregateJobs :one
+-- Settle Gate B (part 2): the messaging_aggregate_for_contact job keys on
+-- (contact_id, source) in its args, NOT event_id, so it is invisible to the
+-- event-scoped Gate B query above. Counts unfinalized aggregate jobs for this
+-- replay's contacts + source (mirrors CountRematchDispatcherJobsByContact).
+SELECT COUNT(*) FROM river_job
+WHERE finalized_at IS NULL
+  AND kind = 'messaging_aggregate_for_contact'
+  AND (args->>'source') = @source::text
+  AND (args->>'contact_id') = ANY(@contact_ids::text[]);
+
+-- name: SyntheticListEventIdsForContacts :many
+-- Cleanup event-id capture (part 1): every event.id whose payload references
+-- one of this replay's contacts. Covers the full non-prefixed cascade
+-- (interaction.recorded uses interaction.ID as source_id, calendar.attended
+-- uses an internal ref, etc.) generically via payload->>'contact_id'.
+SELECT id FROM event
+WHERE (payload->>'contact_id') = ANY(@contact_ids::text[]);
+
+-- name: SyntheticListEventIdsBySourceAndSourceIdPrefix :many
+-- Cleanup event-id capture (part 2): adapter-direct root events that carry NO
+-- CRM contact id (raw_message.* / external_contact.upserted roots, and
+-- unknown/pending replays that touch no seeded contact). Keyed by the
+-- synthetic (source, source_id-prefix) the adapter wrote. The UNION of this
+-- and SyntheticListEventIdsForContacts is the cleanup event set — leaving a
+-- root event behind would make a later same-namespace replay dedup on the
+-- (source, source_id) unique and skip inline ingest (idempotency break).
+-- Caller passes a BARE prefix; the '%' is appended here (matches the existing
+-- Delete*ByPrefix conventions).
+SELECT id FROM event
+WHERE source = @source::text
+  AND source_id LIKE @source_id_prefix || '%';
+
+-- name: SyntheticDeleteEventConsumerClaimsByEventIds :execrows
+-- Cleanup step 1: claims for this replay's events (by tracked event id).
+DELETE FROM event_consumer_claim WHERE event_id = ANY(@event_ids::uuid[]);
+
+-- name: SyntheticDeleteInteractionsByIds :execrows
+-- Cleanup step 2: interactions by tracked id.
+DELETE FROM interaction WHERE id = ANY(@interaction_ids::uuid[]);
+
+-- name: SyntheticDeleteEventsByIds :execrows
+-- Cleanup step 3: events by tracked id (NOT by source — that would wipe
+-- other tests' rows sharing the source value on the shared DB).
+DELETE FROM event WHERE id = ANY(@event_ids::uuid[]);
+
+-- name: SyntheticDeleteCommsMessagesByExternalIdPrefix :execrows
+-- Cleanup step 4: comms_message rows whose external_id is ns-prefixed.
+-- Caller passes a BARE prefix; '%' is appended here.
+DELETE FROM comms_message WHERE external_id LIKE @external_id_prefix || '%';
+
+-- name: SyntheticDeleteMessagesMessageByGuidPrefix :execrows
+-- Cleanup step 5: messages_message rows whose guid is ns-prefixed.
+-- Caller passes a BARE prefix; '%' is appended here.
+DELETE FROM messages_message WHERE guid LIKE @guid_prefix || '%';
+
+-- name: SyntheticDeleteExternalIdentitiesByIdentifierPrefix :execrows
+-- Cleanup step 8: identities whose normalized identifier shares an ns-scoped
+-- prefix. MatchOrCreate for GCal attendee / external_contact email matching
+-- creates identities with source_id NULL keyed by the synthetic IDENTIFIER (e.g.
+-- 'synth-<ns>-...@synthetic.example'), which a source_id-prefix delete MISSES.
+-- Deleting by the identifier prefix catches both the source_id-NULL and
+-- source_id-set synthetic identities BEFORE the contact delete (external_identity
+-- survives contact delete via ON DELETE SET NULL, so it would otherwise pollute
+-- future matching). Called once with the 'synth-<ns>-' string prefix (email/
+-- handle identities) and once with the namespace's normalized phone-digit prefix
+-- ('+1<area>55501...') — synthetic phones are now ns-scoped via the per-namespace
+-- area code (factory.phoneFor), so phone identities no longer leak. Caller passes
+-- a BARE prefix; '%' appended.
+DELETE FROM external_identity WHERE identifier LIKE @identifier_prefix || '%';
+
+-- name: SyntheticDeleteExternalIdentitiesBySourceIdPrefix :execrows
+-- Cleanup step 8 (backstop): catches any ns-prefixed source_id rows the
+-- identifier-prefix delete missed. Caller passes a BARE prefix; '%' appended.
+DELETE FROM external_identity WHERE source_id LIKE @source_id_prefix || '%';
+
+-- name: SyntheticDeleteContactTasksByContactIds :execrows
+-- Cleanup step 10: contact_task has no deleted_at; hard delete by contact.
+DELETE FROM contact_task WHERE contact_id = ANY(@contact_ids::uuid[]);
+
+-- name: SyntheticListContactTaskIdsByProvider :many
+-- Todoist replay: snapshot the set of contact_task ids for a provider so the
+-- replay can diff before/after its (globally-scoped) reconcile and track the
+-- rows it created — even for cadence-bearing contacts it did not seed — so
+-- cleanup removes exactly those rows and never strands a task on an unrelated
+-- contact in the shared test DB.
+SELECT id FROM contact_task WHERE provider = @provider;
+
+-- name: SyntheticDeleteContactTasksByIds :execrows
+-- Todoist replay cleanup: delete the contact_task rows the replay's reconcile
+-- created (the before/after diff from SyntheticListContactTaskIdsByProvider).
+DELETE FROM contact_task WHERE id = ANY(@task_ids::uuid[]);
+
+-- name: SyntheticDeleteContactMethodsByContactIds :execrows
+-- Cleanup step 11: contact_method by contact.
+DELETE FROM contact_method WHERE contact_id = ANY(@contact_ids::uuid[]);
+
+-- name: SyntheticDeleteNotesByContactIds :execrows
+-- Cleanup step 12: note by contact.
+DELETE FROM note WHERE contact_id = ANY(@contact_ids::uuid[]);
+
+-- name: SyntheticDeleteContactsByIds :execrows
+-- Cleanup step 13: contact by tracked id. A true DELETE (not soft) so
+-- ON DELETE CASCADE fires for contact_enrichment (and any cascade FK).
+DELETE FROM contact WHERE id = ANY(@contact_ids::uuid[]);
+
+-- name: SyntheticDeleteMacHostById :execrows
+-- Cleanup step 14: the seeded revoked synthetic mac_host by id.
+DELETE FROM mac_host WHERE id = @id;
+
+-- name: SyntheticCountContactsByIds :one
+-- Cleanup assertion — count surviving contact rows for the given ids.
+SELECT COUNT(*) FROM contact WHERE id = ANY(@contact_ids::uuid[]);
+
+-- name: SyntheticCountTelegramMessagesInPeerBand :one
+-- Harness setup collision detection (D5): count live telegram_message rows whose
+-- peer_user_id falls in this namespace's reserved sub-block [band_start,
+-- band_end). A non-zero count means another namespace already occupies the band
+-- (probabilistic collision), so NewHarness re-salts the namespace or fails loudly
+-- rather than risking a cross-namespace cleanup wipe.
+SELECT COUNT(*) FROM telegram_message
+WHERE peer_user_id >= @band_start
+  AND peer_user_id < @band_end
+  AND deleted_at IS NULL;
+
+-- name: SyntheticCountExternalIdentitiesByIdentifierPrefix :one
+-- Harness setup collision detection (D5): count external_identity rows whose
+-- normalized identifier shares the namespace's phone-digit prefix. Non-zero means
+-- another namespace already occupies this phone sub-block, so NewHarness re-salts.
+-- Caller passes a BARE prefix; '%' is appended here.
+SELECT COUNT(*) FROM external_identity
+WHERE identifier LIKE @identifier_prefix || '%';
+
+-- name: SyntheticCountContactMethodsByValueNormalizedPrefix :one
+-- Harness setup collision detection (D5) — PRIMARY phone-band check. A seeded
+-- synthetic contact's phone lives ONLY as a contact_method (no external_identity
+-- until a later replay), and identity matching cross-matches via
+-- contact_method.value_normalized, so this is where the cross-namespace phone
+-- collision actually originates. Counts live (non-deleted-contact) contact_method
+-- rows whose normalized value shares the namespace's phone prefix. Caller passes
+-- a BARE prefix; '%' is appended here.
+SELECT COUNT(*) FROM contact_method cm
+JOIN contact c ON c.id = cm.contact_id
+WHERE cm.value_normalized LIKE @value_normalized_prefix || '%'
+  AND c.deleted_at IS NULL;
+
+-- name: SyntheticCountStrandedTelegramMessagesByPeer :one
+-- Settle Gate A (telegram unknown-sender): a message row exists for the peer
+-- with matched_contact_id IS NULL (the stranded/discovery-candidate state).
+SELECT COUNT(*) FROM telegram_message
+WHERE peer_user_id = @peer_user_id
+  AND matched_contact_id IS NULL
+  AND deleted_at IS NULL;
+
+-- Settle Gate A (seeded sender) — per-source-message linkage. Keyed on THIS
+-- replay's exact synthetic source id, so it is exact-to-this-replay (a prior
+-- same-contact interaction can't satisfy it early) AND idempotent (a re-replay
+-- of the same payload leaves the row linked, so the predicate stays true).
+
+-- name: SyntheticCountLinkedCommsMessageByExternalId :one
+-- gmail/gchat: the comms_message row for (source, external_id) has an
+-- interaction_id (the derived interaction landed).
+SELECT COUNT(*) FROM comms_message
+WHERE source = @source
+  AND external_id = @external_id
+  AND interaction_id IS NOT NULL
+  AND deleted_at IS NULL;
+
+-- name: SyntheticCountLinkedMessagesMessageByGuid :one
+-- iMessage: the staging row for the guid has an interaction_id.
+SELECT COUNT(*) FROM messages_message
+WHERE guid = @guid
+  AND interaction_id IS NOT NULL
+  AND deleted_at IS NULL;
+
+-- name: SyntheticCountLinkedTelegramMessageByMessageId :one
+-- telegram: the message row for (peer_user_id, telegram_message_id) has an
+-- interaction_id. Scoped by peer_user_id too — the peer band IS collision-checked
+-- at setup (resolveNamespace), whereas the message-id bucket is narrower and not
+-- checked; scoping by both means a colliding-message-id row in another namespace
+-- (necessarily a different peer band) can never satisfy this predicate early.
+SELECT COUNT(*) FROM telegram_message
+WHERE peer_user_id = @peer_user_id
+  AND telegram_message_id = @telegram_message_id
+  AND interaction_id IS NOT NULL
+  AND deleted_at IS NULL;
+
+-- name: SyntheticCountProcessedCalendarEventByGcalId :one
+-- gcal seeded: the calendar_event for the gcal id has the contact in
+-- matched_contact_ids AND last_contacted_updated=true (the attended interaction
+-- published). Idempotent: a re-replay leaves the row processed.
+SELECT COUNT(*) FROM calendar_event
+WHERE gcal_event_id = @gcal_event_id
+  AND @contact_id::uuid = ANY(matched_contact_ids)
+  AND last_contacted_updated = true;
+
+-- name: SyntheticCountStrandedMessagesMessageByGuid :one
+-- Settle Gate A (iMessage unknown-sender): the staging row for the guid landed
+-- (processed) with matched_contact_id IS NULL.
+SELECT COUNT(*) FROM messages_message
+WHERE guid = @guid
+  AND matched_contact_id IS NULL
+  AND deleted_at IS NULL;
+
+-- name: SyntheticCountUnmatchedExternalContactBySourceId :one
+-- Settle Gate A (Mac-contact unknown-sender): the external_contact row for the
+-- entity id exists with match_status='unmatched'.
+SELECT COUNT(*) FROM external_contact
+WHERE source_id = @source_id
+  AND match_status = 'unmatched'
+  AND deleted_at IS NULL;
+
+-- name: SyntheticCountMatchedExternalContactBySourceId :one
+-- Settle Gate A (Mac-contact seeded): the external_contact row for the entity
+-- id exists linked to a CRM contact (match_status='matched').
+SELECT COUNT(*) FROM external_contact
+WHERE source_id = @source_id
+  AND match_status = 'matched'
+  AND crm_contact_id IS NOT NULL
+  AND deleted_at IS NULL;
+
+-- name: SyntheticCountUnmatchedCalendarEventByGcalId :one
+-- Settle Gate A (GCal unknown-attendee): the calendar_event for the gcal id
+-- exists with an empty matched_contact_ids array. calendar_event has no
+-- deleted_at column (hard-delete table), so no soft-delete filter.
+SELECT COUNT(*) FROM calendar_event
+WHERE gcal_event_id = @gcal_event_id
+  AND matched_contact_ids = '{}';

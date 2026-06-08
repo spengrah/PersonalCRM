@@ -10,7 +10,7 @@ GOCACHE ?= $(REPO_ROOT)/.gocache
 export GOCACHE
 
 TEST_DATABASE_URL ?= postgres://crm_user:crm_password@localhost:5432/personal_crm_test?sslmode=disable
-BACKEND_SLOW_TESTS_REGEX := TestSyncWorker_LoadNoDuplicateConcurrentSyncs|TestPeriodicTick_FiresOnStart|TestSyncWorker_RescueOnCrash
+BACKEND_SLOW_TESTS_REGEX := TestSyncWorker_LoadNoDuplicateConcurrentSyncs|TestPeriodicTick_FiresOnStart|TestSyncWorker_RescueOnCrash|TestSynthetic
 
 # Default target
 # NOTE: When adding or removing make targets, update this help section to match
