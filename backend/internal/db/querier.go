@@ -1343,6 +1343,15 @@ type Querier interface {
 	// Settle Gate A (telegram unknown-sender): a message row exists for the peer
 	// with matched_contact_id IS NULL (the stranded/discovery-candidate state).
 	SyntheticCountStrandedTelegramMessagesByPeer(ctx context.Context, peerUserID pgtype.Int8) (int64, error)
+	// Harness setup collision detection: count telegram external_contact +
+	// external_identity rows keyed by a BARE peer-id source_id that falls in this
+	// namespace's reserved peer band [band_start, band_end). A discovery/stranded
+	// replay creates these (source='telegram', source_id=<peer id>); a crashed prior
+	// run can leave them with no remaining telegram_message row, so the peer-band
+	// check on telegram_message alone would miss them. The all-digits guard keeps the
+	// ::bigint cast safe. A non-zero count means the band is occupied → NewHarness
+	// re-salts.
+	SyntheticCountTelegramBarePeerRowsInBand(ctx context.Context, arg SyntheticCountTelegramBarePeerRowsInBandParams) (int64, error)
 	// Harness setup collision detection: count telegram_chat_config rows whose
 	// telegram_chat_id falls in this namespace's reserved peer band [band_start,
 	// band_end) — group chat ids are drawn from that band. A non-zero count means a

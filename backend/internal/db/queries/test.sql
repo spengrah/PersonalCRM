@@ -488,6 +488,30 @@ WHERE telegram_chat_id >= @band_start
 -- keyed only by telegram_chat_id).
 DELETE FROM telegram_chat_config WHERE telegram_chat_id = ANY(@chat_ids::bigint[]);
 
+-- name: SyntheticCountTelegramBarePeerRowsInBand :one
+-- Harness setup collision detection: count telegram external_contact +
+-- external_identity rows keyed by a BARE peer-id source_id that falls in this
+-- namespace's reserved peer band [band_start, band_end). A discovery/stranded
+-- replay creates these (source='telegram', source_id=<peer id>); a crashed prior
+-- run can leave them with no remaining telegram_message row, so the peer-band
+-- check on telegram_message alone would miss them. The all-digits guard keeps the
+-- ::bigint cast safe. A non-zero count means the band is occupied → NewHarness
+-- re-salts.
+SELECT (
+  (SELECT COUNT(*) FROM external_contact ec
+   WHERE ec.source = 'telegram'
+     AND ec.source_id ~ '^[0-9]+$'
+     AND ec.source_id::bigint >= @band_start::bigint
+     AND ec.source_id::bigint < @band_end::bigint
+     AND ec.deleted_at IS NULL)
+  +
+  (SELECT COUNT(*) FROM external_identity ei
+   WHERE ei.source = 'telegram'
+     AND ei.source_id ~ '^[0-9]+$'
+     AND ei.source_id::bigint >= @band_start::bigint
+     AND ei.source_id::bigint < @band_end::bigint)
+)::bigint;
+
 -- name: SyntheticDeleteTelegramExternalContactsByPeerIds :execrows
 -- Cleanup: telegram discovery candidate external_contact rows are keyed by
 -- source='telegram', source_id = the BARE peer user id (not an ns-prefixed

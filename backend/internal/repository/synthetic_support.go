@@ -330,6 +330,19 @@ func (r *SyntheticSupportRepository) CountTelegramChatConfigInChatIdBand(ctx con
 	})
 }
 
+// CountTelegramBarePeerRowsInBand counts telegram external_contact +
+// external_identity rows keyed by a bare peer-id source_id in [bandStart,
+// bandEnd). Used by NewHarness for setup-time collision detection: a
+// discovery/stranded replay creates these keyed by the bare peer id, and a
+// crashed prior run can leave them with no telegram_message row, so the
+// peer-band check on telegram_message alone would miss them.
+func (r *SyntheticSupportRepository) CountTelegramBarePeerRowsInBand(ctx context.Context, bandStart, bandEnd int64) (int64, error) {
+	return r.queries.SyntheticCountTelegramBarePeerRowsInBand(ctx, db.SyntheticCountTelegramBarePeerRowsInBandParams{
+		BandStart: bandStart,
+		BandEnd:   bandEnd,
+	})
+}
+
 // CountTelegramMessagesByChatAndMessageID counts telegram_message rows for
 // (chatID, messageID). The group adapter asserts 0 for the untracked-by-size
 // case (the shouldTrackChat gate returned before UpsertMessage) and 1 for

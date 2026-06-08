@@ -324,6 +324,14 @@ func resolveNamespace(ctx context.Context, support *repository.SyntheticSupportR
 		if err != nil {
 			return nil, "", fmt.Errorf("chat-config band collision check: %w", err)
 		}
+		// Telegram discovery/stranded replays create external_contact +
+		// external_identity rows keyed by a bare peer-id source_id in this band. A
+		// crashed prior run can leave them with no telegram_message row, so the
+		// telegram_message check above would miss them — check them too.
+		barePeerOccupied, err := support.CountTelegramBarePeerRowsInBand(ctx, gen.PeerBandStart(), gen.PeerBandEnd())
+		if err != nil {
+			return nil, "", fmt.Errorf("bare-peer band collision check: %w", err)
+		}
 		phonePrefix := gen.SyntheticPhonePrefix()
 		methodPhones, err := support.CountContactMethodsByValueNormalizedPrefix(ctx, phonePrefix)
 		if err != nil {
@@ -333,7 +341,7 @@ func resolveNamespace(ctx context.Context, support *repository.SyntheticSupportR
 		if err != nil {
 			return nil, "", fmt.Errorf("phone-band collision check (external_identity): %w", err)
 		}
-		if peerOccupied == 0 && chatConfigOccupied == 0 && methodPhones == 0 && identityPhones == 0 {
+		if peerOccupied == 0 && chatConfigOccupied == 0 && barePeerOccupied == 0 && methodPhones == 0 && identityPhones == 0 {
 			return gen, candidate, nil
 		}
 		// Collision in either band: re-salt and retry.

@@ -99,17 +99,26 @@ func TestSyntheticGCalProvider_Incremental410_FallsBackAndSettles(t *testing.T) 
 	require.NoError(t, sess.SettleMatched(ctx, ev1.GcalEventID, contact.ID))
 
 	// Sync 2: the sync-token (incremental) call returns 410/fullSyncRequired; the
-	// provider falls back to the initial window, which serves ev2.
-	require.NoError(t, sess.Sync(ctx, func() google.FakeCalendarFetcherFuncs {
-		return google.FakeCalendarFetcherFuncs{
-			ListEvents: func(_ context.Context, _ string, opts google.CalendarListOpts) ([]*calendarapi.Event, string, string, error) {
-				if opts.SyncToken != "" {
-					return nil, "", "", errors.New("googleapi: Error 410: Sync token is no longer valid, fullSyncRequired")
-				}
-				return []*calendarapi.Event{ev2.Event}, "", "synth-cursor-y", nil
-			},
-		}
-	}()))
+	// provider falls back to the initial window, which serves ev2. Track that the
+	// sync-token call actually happened AND returned the 410, and that the
+	// fallback initial-window call happened — otherwise a provider that simply
+	// ignored the cursor and did an initial sync would serve ev2 and pass without
+	// ever exercising the 410 branch.
+	var sawSyncTokenCall, returned410, sawInitialFallback bool
+	require.NoError(t, sess.Sync(ctx, google.FakeCalendarFetcherFuncs{
+		ListEvents: func(_ context.Context, _ string, opts google.CalendarListOpts) ([]*calendarapi.Event, string, string, error) {
+			if opts.SyncToken != "" {
+				sawSyncTokenCall = true
+				returned410 = true
+				return nil, "", "", errors.New("googleapi: Error 410: Sync token is no longer valid, fullSyncRequired")
+			}
+			sawInitialFallback = true
+			return []*calendarapi.Event{ev2.Event}, "", "synth-cursor-y", nil
+		},
+	}))
+	require.True(t, sawSyncTokenCall, "the incremental sync must call the fetcher with the stored sync token")
+	require.True(t, returned410, "the sync-token call must be the one that returned 410")
+	require.True(t, sawInitialFallback, "the 410 must fall back to an initial-window (no sync-token) call")
 	require.NoError(t, sess.SettleMatched(ctx, ev2.GcalEventID, contact.ID))
 
 	require.Equal(t, 2, countInteractionsBySource(t, ctx, h, contact.ID, "gcal"))

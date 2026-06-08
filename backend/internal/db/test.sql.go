@@ -741,6 +741,43 @@ func (q *Queries) SyntheticCountStrandedTelegramMessagesByPeer(ctx context.Conte
 	return count, err
 }
 
+const SyntheticCountTelegramBarePeerRowsInBand = `-- name: SyntheticCountTelegramBarePeerRowsInBand :one
+SELECT (
+  (SELECT COUNT(*) FROM external_contact ec
+   WHERE ec.source = 'telegram'
+     AND ec.source_id ~ '^[0-9]+$'
+     AND ec.source_id::bigint >= $1::bigint
+     AND ec.source_id::bigint < $2::bigint
+     AND ec.deleted_at IS NULL)
+  +
+  (SELECT COUNT(*) FROM external_identity ei
+   WHERE ei.source = 'telegram'
+     AND ei.source_id ~ '^[0-9]+$'
+     AND ei.source_id::bigint >= $1::bigint
+     AND ei.source_id::bigint < $2::bigint)
+)::bigint
+`
+
+type SyntheticCountTelegramBarePeerRowsInBandParams struct {
+	BandStart int64 `json:"band_start"`
+	BandEnd   int64 `json:"band_end"`
+}
+
+// Harness setup collision detection: count telegram external_contact +
+// external_identity rows keyed by a BARE peer-id source_id that falls in this
+// namespace's reserved peer band [band_start, band_end). A discovery/stranded
+// replay creates these (source='telegram', source_id=<peer id>); a crashed prior
+// run can leave them with no remaining telegram_message row, so the peer-band
+// check on telegram_message alone would miss them. The all-digits guard keeps the
+// ::bigint cast safe. A non-zero count means the band is occupied → NewHarness
+// re-salts.
+func (q *Queries) SyntheticCountTelegramBarePeerRowsInBand(ctx context.Context, arg SyntheticCountTelegramBarePeerRowsInBandParams) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountTelegramBarePeerRowsInBand, arg.BandStart, arg.BandEnd)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const SyntheticCountTelegramChatConfigInChatIdBand = `-- name: SyntheticCountTelegramChatConfigInChatIdBand :one
 SELECT COUNT(*) FROM telegram_chat_config
 WHERE telegram_chat_id >= $1

@@ -239,10 +239,12 @@ func (g *Generator) recentOffset(window time.Duration) time.Duration {
 // --- deterministic id helpers ----------------------------------------------
 
 // nextPeerUserID returns the next telegram peer_user_id within this namespace's
-// reserved sub-block. Panics if the sub-block (1000 ids) is exhausted — far
-// beyond any realistic per-namespace test count.
+// reserved sub-block, allocated from the BOTTOM growing upward. Sender ids
+// (this) and group chat ids (nextGroupChatID, top-down) share the band, so the
+// guard is the COMBINED count: the two ranges must not meet. Panics on
+// exhaustion — far beyond any realistic per-namespace test count.
 func (g *Generator) nextPeerUserID() int64 {
-	if g.peerSeq >= telegramPeerBucketWidth {
+	if g.peerSeq+g.groupChatSeq >= telegramPeerBucketWidth {
 		panic(fmt.Sprintf("synthetic: telegram peer sub-block exhausted for namespace %q", g.namespace))
 	}
 	id := g.PeerBandStart() + g.peerSeq
@@ -260,9 +262,11 @@ func (g *Generator) nextPeerUserID() int64 {
 // column. The chat id never enters PeerMatcher (which keys on the SENDER peer
 // id), so co-locating the two id roles in one band cannot cause a matcher
 // mis-link. A group conversation reuses ONE chat id across its messages, so this
-// is rarely called more than once per conversation. Panics on band exhaustion.
+// is rarely called more than once per conversation. The guard is the COMBINED
+// count (sender + chat) so the bottom-up and top-down ranges never meet. Panics
+// on band exhaustion.
 func (g *Generator) nextGroupChatID() int64 {
-	if g.groupChatSeq >= telegramPeerBucketWidth {
+	if g.peerSeq+g.groupChatSeq >= telegramPeerBucketWidth {
 		panic(fmt.Sprintf("synthetic: telegram group chat-id sub-block exhausted for namespace %q", g.namespace))
 	}
 	id := g.PeerBandEnd() - 1 - g.groupChatSeq
