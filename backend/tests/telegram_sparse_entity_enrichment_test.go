@@ -115,11 +115,12 @@ func cleanupExternalBySource(t *testing.T, env *sparseEnrichEnv, peerIDStr strin
 
 // cleanupSparseEnrichTestData hard-deletes any telegram_message rows for the
 // given chat_id and the chat_config row for that chat. Scoped narrowly to a
-// single test's chat_id to avoid touching unrelated data.
+// single test's chat_id to avoid touching unrelated data. Deletes go through
+// the sqlc-backed repository wrapper (no raw SQL in Go, including tests).
 func cleanupSparseEnrichTestData(t *testing.T, env *sparseEnrichEnv, chatID int64) {
 	t.Helper()
 	ctx := context.Background()
-	_, _ = env.database.Pool.Exec(ctx, "DELETE FROM telegram_message WHERE telegram_chat_id = $1", chatID)
+	_ = env.messageRepo.HardDeleteByChatIDRange(ctx, chatID, chatID)
 	_ = env.chatConfigRepo.DeleteConfig(ctx, chatID)
 }
 
@@ -136,7 +137,8 @@ func makePrivateMessage(peerUserID int64, msgID int, sentAt time.Time, text stri
 func TestSparseEntityEnrichment_HandleNewMessage_FillsFromHistory(t *testing.T) {
 	env := setupSparseEnrichTest(t)
 	ctx := context.Background()
-	peerUserID, peerIDStr := uniqueTestIDs(t)
+	_, ns := migrationGenerator(t)
+	peerUserID, peerIDStr := uniqueTestIDs(t, ns)
 	chatID := peerUserID
 	t.Cleanup(func() { cleanupSparseEnrichTestData(t, env, chatID) })
 
@@ -175,7 +177,8 @@ func TestSparseEntityEnrichment_HandleNewMessage_FillsFromHistory(t *testing.T) 
 func TestSparseEntityEnrichment_HandleNewMessage_NoHistoryStaysSparse(t *testing.T) {
 	env := setupSparseEnrichTest(t)
 	ctx := context.Background()
-	peerUserID, _ := uniqueTestIDs(t)
+	_, ns := migrationGenerator(t)
+	peerUserID, _ := uniqueTestIDs(t, ns)
 	chatID := peerUserID
 	t.Cleanup(func() { cleanupSparseEnrichTestData(t, env, chatID) })
 
@@ -195,7 +198,8 @@ func TestSparseEntityEnrichment_HandleNewMessage_NoHistoryStaysSparse(t *testing
 func TestSparseEntityEnrichment_HandleEditMessage_FillsFromHistory(t *testing.T) {
 	env := setupSparseEnrichTest(t)
 	ctx := context.Background()
-	peerUserID, peerIDStr := uniqueTestIDs(t)
+	_, ns := migrationGenerator(t)
+	peerUserID, peerIDStr := uniqueTestIDs(t, ns)
 	chatID := peerUserID
 	t.Cleanup(func() { cleanupSparseEnrichTestData(t, env, chatID) })
 
@@ -232,7 +236,8 @@ func TestSparseEntityEnrichment_HandleEditMessage_FillsFromHistory(t *testing.T)
 func TestSparseEntityEnrichment_AuthoritativeEmptyRespectsRemoval(t *testing.T) {
 	env := setupSparseEnrichTest(t)
 	ctx := context.Background()
-	peerUserID, peerIDStr := uniqueTestIDs(t)
+	_, ns := migrationGenerator(t)
+	peerUserID, peerIDStr := uniqueTestIDs(t, ns)
 	chatID := peerUserID
 	t.Cleanup(func() { cleanupSparseEnrichTestData(t, env, chatID) })
 
@@ -271,7 +276,8 @@ func TestSparseEntityEnrichment_AuthoritativeEmptyRespectsRemoval(t *testing.T) 
 func TestSparseEntityEnrichment_StraightRenameCurrentNonBlankWins(t *testing.T) {
 	env := setupSparseEnrichTest(t)
 	ctx := context.Background()
-	peerUserID, peerIDStr := uniqueTestIDs(t)
+	_, ns := migrationGenerator(t)
+	peerUserID, peerIDStr := uniqueTestIDs(t, ns)
 	chatID := peerUserID
 	t.Cleanup(func() { cleanupSparseEnrichTestData(t, env, chatID) })
 
@@ -313,7 +319,8 @@ func TestSparseEntityEnrichment_StraightRenameCurrentNonBlankWins(t *testing.T) 
 func TestSparseEntityEnrichment_UntrackedGroupSkipsBeforeEnrichment(t *testing.T) {
 	env := setupSparseEnrichTest(t)
 	ctx := context.Background()
-	peerUserID, peerIDStr := uniqueTestIDs(t)
+	_, ns := migrationGenerator(t)
+	peerUserID, peerIDStr := uniqueTestIDs(t, ns)
 	groupChatID := peerUserID + 1 // distinct from peer id
 	t.Cleanup(func() { cleanupSparseEnrichTestData(t, env, groupChatID) })
 
@@ -362,7 +369,8 @@ func TestSparseEntityEnrichment_UntrackedGroupSkipsBeforeEnrichment(t *testing.T
 func TestSparseEntityEnrichment_AuthoritativeRemovalSticksAcrossSparseUpdates(t *testing.T) {
 	env := setupSparseEnrichTest(t)
 	ctx := context.Background()
-	peerUserID, peerIDStr := uniqueTestIDs(t)
+	_, ns := migrationGenerator(t)
+	peerUserID, peerIDStr := uniqueTestIDs(t, ns)
 	chatID := peerUserID
 	t.Cleanup(func() { cleanupSparseEnrichTestData(t, env, chatID) })
 
@@ -410,7 +418,8 @@ func TestSparseEntityEnrichment_AuthoritativeRemovalSticksAcrossSparseUpdates(t 
 func TestSparseEntityEnrichment_EnrichedFieldsFlowToDiscoveryCandidate(t *testing.T) {
 	env := setupSparseEnrichTest(t)
 	ctx := context.Background()
-	peerUserID, peerIDStr := uniqueTestIDs(t)
+	_, ns := migrationGenerator(t)
+	peerUserID, peerIDStr := uniqueTestIDs(t, ns)
 	chatID := peerUserID
 	t.Cleanup(func() {
 		cleanupSparseEnrichTestData(t, env, chatID)

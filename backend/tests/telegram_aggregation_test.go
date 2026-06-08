@@ -2,6 +2,7 @@ package tests
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -19,22 +20,34 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// aggregationTestChatIDs is the fixed set of chat IDs used by the burst /
+// bridge / chat-scoped / incremental sub-tests. The cleanup scopes its
+// per-prefix interaction + event deletes to these.
+var aggregationTestChatIDs = []int64{100, 101, 102, 201, 202, 301, 302, 303}
+
+// aggregationTestMessageIDs is the fixed set of telegram_message IDs the
+// sub-tests upsert.
+var aggregationTestMessageIDs = []int32{80001, 80002, 80003, 80011, 80012, 80013, 80021, 80022, 80031, 80032, 80041, 80042, 80051, 80052, 80061, 80062}
+
 // cleanupAggregationMessages hard-deletes test messages, interactions,
-// AND the published event rows from prior runs. Post-PR-6 the aggregation
-// engine publishes events via bus.PublishTx which dedupes on (source,
-// source_id); leftover event rows from a previous run would cause the
-// next publish to no-op and the consumer to never fire. Hard-delete the
-// event rows keyed on the test's chat IDs too.
+// AND the published event rows from prior runs. The aggregation engine
+// publishes events via bus.PublishTx which dedupes on (source, source_id);
+// leftover event rows from a previous run would cause the next publish to
+// no-op and the consumer to never fire. Hard-delete the event rows keyed on
+// the test's chat IDs too. All deletes go through sqlc-backed repository
+// wrappers (no raw SQL in Go, including tests).
 func cleanupAggregationMessages(t *testing.T, database *db.Database) {
 	t.Helper()
 	ctx := context.Background()
-	// Hard delete test messages (unique message IDs for this test suite)
-	_, _ = database.Pool.Exec(ctx, "DELETE FROM telegram_message WHERE telegram_message_id IN (80001, 80002, 80003, 80011, 80012, 80013, 80021, 80022, 80031, 80032, 80041, 80042, 80051, 80052, 80061, 80062)")
-	// Hard delete interactions with source_ref matching test chat IDs
-	_, _ = database.Pool.Exec(ctx, "DELETE FROM interaction WHERE source_ref LIKE 'tg:100:%' OR source_ref LIKE 'tg:101:%' OR source_ref LIKE 'tg:102:%' OR source_ref LIKE 'tg:201:%' OR source_ref LIKE 'tg:202:%' OR source_ref LIKE 'tg:301:%' OR source_ref LIKE 'tg:302:%' OR source_ref LIKE 'tg:303:%'")
-	// Hard delete event rows keyed on the same test chat IDs so a re-run
-	// doesn't collide with the previous run's published events.
-	_, _ = database.Pool.Exec(ctx, "DELETE FROM event WHERE source = 'telegram' AND (source_id LIKE 'tg:100:%' OR source_id LIKE 'tg:101:%' OR source_id LIKE 'tg:102:%' OR source_id LIKE 'tg:201:%' OR source_id LIKE 'tg:202:%' OR source_id LIKE 'tg:301:%' OR source_id LIKE 'tg:302:%' OR source_id LIKE 'tg:303:%')")
+	interactionRepo := repository.NewInteractionRepository(database.Queries)
+	eventRepo := repository.NewEventRepository(database.Queries)
+
+	_, _ = database.Queries.DeleteTelegramMessagesByMessageIDs(ctx, aggregationTestMessageIDs)
+	for _, chatID := range aggregationTestChatIDs {
+		prefix := fmt.Sprintf("tg:%d:", chatID)
+		_ = interactionRepo.HardDeleteInteractionsBySourceRefPrefix(ctx, repository.InteractionSourceTelegram, prefix+"%")
+		_ = eventRepo.HardDeleteEventsBySourceAndSourceIDPrefix(ctx, repository.InteractionSourceTelegram, prefix+"%")
+	}
 }
 
 func setupAggregationTest(t *testing.T) (
@@ -93,15 +106,6 @@ func setupAggregationTest(t *testing.T) (
 	return messageRepo, interactionRepo, contactRepo, contactService, engine, database
 }
 
-func createTestContact(t *testing.T, contactRepo *repository.ContactRepository, name string) *repository.Contact {
-	t.Helper()
-	contact, err := contactRepo.CreateContact(context.Background(), repository.CreateContactRequest{
-		FullName: name,
-	})
-	require.NoError(t, err)
-	return contact
-}
-
 // createTestContactWithCadence creates a contact with a cadence + baseline
 // last_contacted so Extend/Promote tests can assert cadence column
 // transitions against a deterministic starting state.
@@ -140,13 +144,12 @@ func insertTestMessage(t *testing.T, repo *repository.TelegramMessageRepository,
 }
 
 func TestAggregation_BatchOutboundBurst(t *testing.T) {
-	messageRepo, interactionRepo, contactRepo, _, engine, _ := setupAggregationTest(t)
+	messageRepo, interactionRepo, _, _, engine, database := setupAggregationTest(t)
 	ctx := context.Background()
 
-	contact := createTestContact(t, contactRepo, "Aggregation Test 1")
-	t.Cleanup(func() {
-		_ = contactRepo.SoftDeleteContact(ctx, contact.ID)
-	})
+	gen, _ := migrationGenerator(t)
+	contact, contactCleanup := seedMigrationContact(ctx, t, database, gen)
+	t.Cleanup(contactCleanup)
 
 	base := accelerated.GetCurrentTime().Add(-1 * time.Hour).Truncate(time.Microsecond)
 
@@ -166,13 +169,12 @@ func TestAggregation_BatchOutboundBurst(t *testing.T) {
 }
 
 func TestAggregation_BatchMutualBridge(t *testing.T) {
-	messageRepo, interactionRepo, contactRepo, _, engine, _ := setupAggregationTest(t)
+	messageRepo, interactionRepo, _, _, engine, database := setupAggregationTest(t)
 	ctx := context.Background()
 
-	contact := createTestContact(t, contactRepo, "Aggregation Test 2")
-	t.Cleanup(func() {
-		_ = contactRepo.SoftDeleteContact(ctx, contact.ID)
-	})
+	gen, _ := migrationGenerator(t)
+	contact, contactCleanup := seedMigrationContact(ctx, t, database, gen)
+	t.Cleanup(contactCleanup)
 
 	base := accelerated.GetCurrentTime().Add(-2 * time.Hour).Truncate(time.Microsecond)
 
@@ -192,13 +194,12 @@ func TestAggregation_BatchNoChurnFollowUp(t *testing.T) {
 	// Batch mode should NOT create an outbound interaction first and then promote —
 	// it should directly create mutual. This test verifies by checking that exactly
 	// one interaction is created (not an outbound followed by a mutual update).
-	messageRepo, interactionRepo, contactRepo, _, engine, _ := setupAggregationTest(t)
+	messageRepo, interactionRepo, _, _, engine, database := setupAggregationTest(t)
 	ctx := context.Background()
 
-	contact := createTestContact(t, contactRepo, "Aggregation Test No Churn")
-	t.Cleanup(func() {
-		_ = contactRepo.SoftDeleteContact(ctx, contact.ID)
-	})
+	gen, _ := migrationGenerator(t)
+	contact, contactCleanup := seedMigrationContact(ctx, t, database, gen)
+	t.Cleanup(contactCleanup)
 
 	base := accelerated.GetCurrentTime().Add(-3 * time.Hour).Truncate(time.Microsecond)
 	insertTestMessage(t, messageRepo, 80021, 102, true, base, &contact.ID, 70003)
@@ -212,13 +213,12 @@ func TestAggregation_BatchNoChurnFollowUp(t *testing.T) {
 }
 
 func TestAggregation_ChatScoped(t *testing.T) {
-	messageRepo, interactionRepo, contactRepo, _, engine, database := setupAggregationTest(t)
+	messageRepo, interactionRepo, _, _, engine, database := setupAggregationTest(t)
 	ctx := context.Background()
 
-	contact := createTestContact(t, contactRepo, "Aggregation Chat Scoped")
-	t.Cleanup(func() {
-		_ = contactRepo.SoftDeleteContact(ctx, contact.ID)
-	})
+	gen, _ := migrationGenerator(t)
+	contact, contactCleanup := seedMigrationContact(ctx, t, database, gen)
+	t.Cleanup(contactCleanup)
 
 	base := accelerated.GetCurrentTime().Add(-1 * time.Hour).Truncate(time.Microsecond)
 
@@ -360,13 +360,12 @@ func TestAggregation_IncrementalReplyBridge(t *testing.T) {
 }
 
 func TestAggregation_IncrementalExplicitReplyBridge(t *testing.T) {
-	messageRepo, interactionRepo, contactRepo, _, engine, database := setupAggregationTest(t)
+	messageRepo, interactionRepo, _, _, engine, database := setupAggregationTest(t)
 	ctx := context.Background()
 
-	contact := createTestContact(t, contactRepo, "Aggregation Explicit Reply Bridge")
-	t.Cleanup(func() {
-		_ = contactRepo.SoftDeleteContact(ctx, contact.ID)
-	})
+	gen, _ := migrationGenerator(t)
+	contact, contactCleanup := seedMigrationContact(ctx, t, database, gen)
+	t.Cleanup(contactCleanup)
 
 	// Use timestamps >48h apart to prove explicit reply bridges regardless of time
 	outboundTime := accelerated.GetCurrentTime().Add(-72 * time.Hour).Truncate(time.Microsecond)
@@ -419,9 +418,9 @@ func TestAggregation_IncrementalExplicitReplyBridge(t *testing.T) {
 	require.Len(t, interactions, 1)
 	assert.Equal(t, "mutual", interactions[0].Direction)
 
-	// Clean up test-specific data
-	_, _ = database.Pool.Exec(ctx, "DELETE FROM telegram_message WHERE telegram_message_id IN (80061, 80062)")
-	_, _ = database.Pool.Exec(ctx, "DELETE FROM interaction WHERE source_ref LIKE 'tg:303:%'")
+	// Clean up test-specific data via sqlc-backed wrappers (no raw SQL in Go).
+	_, _ = database.Queries.DeleteTelegramMessagesByMessageIDs(ctx, []int32{80061, 80062})
+	_ = interactionRepo.HardDeleteInteractionsBySourceRefPrefix(ctx, repository.InteractionSourceTelegram, "tg:303:%")
 }
 
 // TestListDistinctUnmatchedPeers_PrefersPopulatedNameRow locks in the

@@ -256,20 +256,11 @@ func TestUpsertTelegramDiscoveryCandidate_DoesNotTouchMatchStatus(t *testing.T) 
 	now := accelerated.GetCurrentTime()
 
 	// Create a real CRM contact so the FK (external_contact.crm_contact_id ->
-	// contact.id) is satisfiable. Use a unique name so it doesn't collide with
-	// other tests and cleans up cleanly.
-	contactRepo := repository.NewContactRepository(database.Queries)
-	crmContact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName:      "tg-discovery-upsert-match-contact",
-		LastContacted: &now,
-	})
-	require.NoError(t, err)
-	defer func() {
-		_, _ = database.Queries.DeleteContactsByNamePrefix(
-			ctx,
-			pgtype.Text{String: "tg-discovery-upsert-match-contact", Valid: true},
-		)
-	}()
+	// contact.id) is satisfiable. The namespaced factory contact never
+	// collides with other tests and cleans up via its scoped closure.
+	gen, _ := migrationGenerator(t)
+	crmContact, contactCleanup := seedMigrationContact(ctx, t, database, gen)
+	defer contactCleanup()
 
 	row, err := repo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
 		SourceID: "tg-discovery-upsert-match",

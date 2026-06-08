@@ -50,15 +50,12 @@ func TestTelegramMessage_AllFieldsPopulatedOnRead(t *testing.T) {
 	require.NoError(t, err)
 	defer database.Close()
 
-	contactRepo := repository.NewContactRepository(database.Queries)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 
 	// A real contact + interaction so matched_contact_id / interaction_id FKs
 	// resolve. The interaction is hung off the contact.
-	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName: "All Fields Probe Contact",
-	})
-	require.NoError(t, err)
+	gen, _ := migrationGenerator(t)
+	contact, contactCleanup := seedMigrationContact(ctx, t, database, gen)
 
 	occurredAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
 	direction := "inbound"
@@ -95,7 +92,7 @@ func TestTelegramMessage_AllFieldsPopulatedOnRead(t *testing.T) {
 		// independent of FK rules).
 		purgeRow()
 		_ = interactionRepo.SoftDeleteInteraction(ctx, interaction.ID)
-		_ = contactRepo.SoftDeleteContact(ctx, contact.ID)
+		contactCleanup()
 	})
 
 	// A non-zero time distinct from createdAt's default, used for every

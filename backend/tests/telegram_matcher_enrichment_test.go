@@ -3,6 +3,7 @@ package tests
 import (
 	"context"
 	"errors"
+	"hash/fnv"
 	"os"
 	"strconv"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"personal-crm/backend/internal/identity"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
+	"personal-crm/backend/internal/synthetic/factory"
 	tgpkg "personal-crm/backend/internal/telegram"
 
 	"github.com/google/uuid"
@@ -80,59 +82,52 @@ func setupMatcherEnrichmentTest(t *testing.T) *matcherEnrichTestEnv {
 	}
 }
 
-// uniqueTestIDs returns a peer user ID and matching string ID derived from a
-// fresh UUID. Each test invocation gets unique values so cross-test or
-// cross-run pollution in the shared test DB cannot affect results.
+// uniqueTestIDs returns a peer user ID and matching string ID derived from
+// the per-test synthetic namespace token. Each test invocation has a unique
+// namespace, so cross-test or cross-run pollution in the shared test DB
+// cannot affect results.
 //
 // The integer is offset by 9_000_000_000 to keep it well above any
-// hand-picked low test IDs elsewhere in the suite. The string form is the
-// decimal representation of that int — digit-only, safe for phone-shaped values.
-func uniqueTestIDs(t *testing.T) (int64, string) {
+// hand-picked low test IDs elsewhere in the suite (and below the factory's
+// trillion-range telegram band, so the digit layout — and the phone built
+// from peerIDStr[:7] — stays the same as before). The string form is the
+// decimal representation of that int — digit-only, safe for phone-shaped
+// values.
+func uniqueTestIDs(t *testing.T, ns string) (int64, string) {
 	t.Helper()
-	suffix := uuid.New().String()[:8]
-	var n int64
-	for _, c := range suffix {
-		n <<= 4
-		switch {
-		case c >= '0' && c <= '9':
-			n |= int64(c - '0')
-		case c >= 'a' && c <= 'f':
-			n |= int64(c-'a') + 10
-		}
-	}
+	// Hash the namespace token into the low 32 bits, mirroring the prior
+	// hex-of-uuid layout so the derived phone keeps its digit shape.
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(ns))
+	n := int64(h.Sum64() & 0xFFFFFFFF)
 	id := int64(9_000_000_000) + n
 	return id, strconv.FormatInt(id, 10)
-}
-
-func newTestContact(t *testing.T, ctx context.Context, contactRepo *repository.ContactRepository, name string) *repository.Contact {
-	t.Helper()
-	c, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: name})
-	require.NoError(t, err)
-	return c
 }
 
 // registerCleanupBySource removes any external_contact, external_identity, and
 // contact rows tied to the given peer ID string after the test runs. Hard
 // deletes — keeps the shared DB free of orphans. Order matters: identity and
 // external_contact rows clear first so the contact's FK references drop before
-// the contact itself is deleted.
-func registerCleanupBySource(t *testing.T, env *matcherEnrichTestEnv, ctx context.Context, contactID uuid.UUID, peerIDStr string) {
+// the contact itself is deleted, so the seeded-contact cleanup closure runs
+// last inside this single t.Cleanup.
+func registerCleanupBySource(t *testing.T, env *matcherEnrichTestEnv, ctx context.Context, contactCleanup func(), peerIDStr string) {
 	t.Helper()
 	t.Cleanup(func() {
 		_, _ = env.database.Queries.DeleteExternalContactsBySourceIDPrefix(ctx, pgtype.Text{String: peerIDStr, Valid: true})
 		_, _ = env.database.Queries.DeleteExternalIdentitiesBySourceID(ctx, pgtype.Text{String: peerIDStr, Valid: true})
-		_ = env.contactRepo.HardDeleteContact(ctx, contactID)
+		contactCleanup()
 	})
 }
 
 func TestMatcherEnrichment_AboveThreshold_UsernameMatch(t *testing.T) {
 	env := setupMatcherEnrichmentTest(t)
 	ctx := context.Background()
-	peerUserID, peerIDStr := uniqueTestIDs(t)
+	gen, ns := migrationGenerator(t)
+	peerUserID, peerIDStr := uniqueTestIDs(t, ns)
 	username := "AboveUser" + peerIDStr
 
-	contact := newTestContact(t, ctx, env.contactRepo, "Above Thresh "+peerIDStr)
-	registerCleanupBySource(t, env, ctx, contact.ID, peerIDStr)
+	contact, contactCleanup := seedMigrationContact(ctx, t, env.database, gen, factory.WithNoMethods())
+	registerCleanupBySource(t, env, ctx, contactCleanup, peerIDStr)
 
 	// Pre-link the username via cached identity (mimics #272 name match path).
 	_, err := env.identitySvc.MatchOrCreate(ctx, service.MatchRequest{
@@ -193,11 +188,12 @@ func TestMatcherEnrichment_AboveThreshold_UsernameMatch(t *testing.T) {
 func TestMatcherEnrichment_BelowThreshold_NoExternalContact(t *testing.T) {
 	env := setupMatcherEnrichmentTest(t)
 	ctx := context.Background()
-	peerUserID, peerIDStr := uniqueTestIDs(t)
+	gen, ns := migrationGenerator(t)
+	peerUserID, peerIDStr := uniqueTestIDs(t, ns)
 	username := "BelowUser" + peerIDStr
 
-	contact := newTestContact(t, ctx, env.contactRepo, "Below Thresh "+peerIDStr)
-	registerCleanupBySource(t, env, ctx, contact.ID, peerIDStr)
+	contact, contactCleanup := seedMigrationContact(ctx, t, env.database, gen, factory.WithNoMethods())
+	registerCleanupBySource(t, env, ctx, contactCleanup, peerIDStr)
 
 	// Pre-link the username; do NOT seed an external_contact row.
 	_, err := env.identitySvc.MatchOrCreate(ctx, service.MatchRequest{
@@ -237,19 +233,20 @@ func TestMatcherEnrichment_BelowThreshold_NoExternalContact(t *testing.T) {
 func TestMatcherEnrichment_PhoneMatchWithUsername(t *testing.T) {
 	env := setupMatcherEnrichmentTest(t)
 	ctx := context.Background()
-	peerUserID, peerIDStr := uniqueTestIDs(t)
+	gen, ns := migrationGenerator(t)
+	peerUserID, peerIDStr := uniqueTestIDs(t, ns)
 	username := "PhoneMatched" + peerIDStr
 	// Build a unique 11-digit phone number from peerUserID's last 8 digits.
 	phone := "+1555" + peerIDStr[:7]
 
-	contact := newTestContact(t, ctx, env.contactRepo, "Phone Match "+peerIDStr)
+	contact, contactCleanup := seedMigrationContact(ctx, t, env.database, gen, factory.WithNoMethods())
 	_, err := env.methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
 		ContactID: contact.ID,
 		Type:      "phone",
 		Value:     phone,
 	})
 	require.NoError(t, err)
-	registerCleanupBySource(t, env, ctx, contact.ID, peerIDStr)
+	registerCleanupBySource(t, env, ctx, contactCleanup, peerIDStr)
 
 	result, err := env.matcher.MatchPeer(ctx, peerUserID, &username, nil, nil, &phone)
 	require.NoError(t, err)
@@ -270,17 +267,18 @@ func TestMatcherEnrichment_PhoneMatchWithUsername(t *testing.T) {
 func TestMatcherEnrichment_PhoneMatchWithoutUsername(t *testing.T) {
 	env := setupMatcherEnrichmentTest(t)
 	ctx := context.Background()
-	peerUserID, peerIDStr := uniqueTestIDs(t)
+	gen, ns := migrationGenerator(t)
+	peerUserID, peerIDStr := uniqueTestIDs(t, ns)
 	phone := "+1555" + peerIDStr[:7]
 
-	contact := newTestContact(t, ctx, env.contactRepo, "Phone Only "+peerIDStr)
+	contact, contactCleanup := seedMigrationContact(ctx, t, env.database, gen, factory.WithNoMethods())
 	_, err := env.methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
 		ContactID: contact.ID,
 		Type:      "phone",
 		Value:     phone,
 	})
 	require.NoError(t, err)
-	registerCleanupBySource(t, env, ctx, contact.ID, peerIDStr)
+	registerCleanupBySource(t, env, ctx, contactCleanup, peerIDStr)
 
 	result, err := env.matcher.MatchPeer(ctx, peerUserID, nil, nil, nil, &phone)
 	require.NoError(t, err)
@@ -296,11 +294,12 @@ func TestMatcherEnrichment_PhoneMatchWithoutUsername(t *testing.T) {
 func TestMatcherEnrichment_Idempotency(t *testing.T) {
 	env := setupMatcherEnrichmentTest(t)
 	ctx := context.Background()
-	peerUserID, peerIDStr := uniqueTestIDs(t)
+	gen, ns := migrationGenerator(t)
+	peerUserID, peerIDStr := uniqueTestIDs(t, ns)
 	username := "IdemUser" + peerIDStr
 
-	contact := newTestContact(t, ctx, env.contactRepo, "Idem "+peerIDStr)
-	registerCleanupBySource(t, env, ctx, contact.ID, peerIDStr)
+	contact, contactCleanup := seedMigrationContact(ctx, t, env.database, gen, factory.WithNoMethods())
+	registerCleanupBySource(t, env, ctx, contactCleanup, peerIDStr)
 
 	_, err := env.identitySvc.MatchOrCreate(ctx, service.MatchRequest{
 		RawIdentifier:  username,
@@ -336,11 +335,12 @@ func TestMatcherEnrichment_Idempotency(t *testing.T) {
 func TestMatcherEnrichment_ConcurrentMatch_TreatsUniqueViolationAsSuccess(t *testing.T) {
 	env := setupMatcherEnrichmentTest(t)
 	ctx := context.Background()
-	peerUserID, peerIDStr := uniqueTestIDs(t)
+	gen, ns := migrationGenerator(t)
+	peerUserID, peerIDStr := uniqueTestIDs(t, ns)
 	username := "RaceUser" + peerIDStr
 
-	contact := newTestContact(t, ctx, env.contactRepo, "Race "+peerIDStr)
-	registerCleanupBySource(t, env, ctx, contact.ID, peerIDStr)
+	contact, contactCleanup := seedMigrationContact(ctx, t, env.database, gen, factory.WithNoMethods())
+	registerCleanupBySource(t, env, ctx, contactCleanup, peerIDStr)
 
 	_, err := env.identitySvc.MatchOrCreate(ctx, service.MatchRequest{
 		RawIdentifier:  username,
@@ -393,11 +393,12 @@ func TestMatcherEnrichment_ConcurrentMatch_TreatsUniqueViolationAsSuccess(t *tes
 func TestMatcherEnrichment_AlreadyMatchedExternalContact_RepairsMissingMethod(t *testing.T) {
 	env := setupMatcherEnrichmentTest(t)
 	ctx := context.Background()
-	peerUserID, peerIDStr := uniqueTestIDs(t)
+	gen, ns := migrationGenerator(t)
+	peerUserID, peerIDStr := uniqueTestIDs(t, ns)
 	username := "RepairUser" + peerIDStr
 
-	contact := newTestContact(t, ctx, env.contactRepo, "Repair "+peerIDStr)
-	registerCleanupBySource(t, env, ctx, contact.ID, peerIDStr)
+	contact, contactCleanup := seedMigrationContact(ctx, t, env.database, gen, factory.WithNoMethods())
+	registerCleanupBySource(t, env, ctx, contactCleanup, peerIDStr)
 
 	// Pre-link the username so the matcher resolves to this contact via cache.
 	_, err := env.identitySvc.MatchOrCreate(ctx, service.MatchRequest{
@@ -410,7 +411,7 @@ func TestMatcherEnrichment_AlreadyMatchedExternalContact_RepairsMissingMethod(t 
 	require.NoError(t, err)
 
 	// Pre-seed external_contact already in 'matched' status pointing at the contact —
-	// this is the exact prod state of Jack Laing's row. No telegram contact_method.
+	// the exact prod state the original bug repaired. No telegram contact_method.
 	displayName := "Repair External " + peerIDStr
 	external, err := env.externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
 		Source:      "telegram",
@@ -459,10 +460,10 @@ func TestMatcherEnrichment_EnricherErrorDoesNotBreakMatch(t *testing.T) {
 	t.Cleanup(database.Close)
 
 	ctx := context.Background()
-	peerUserID, peerIDStr := uniqueTestIDs(t)
+	gen, ns := migrationGenerator(t)
+	peerUserID, peerIDStr := uniqueTestIDs(t, ns)
 	username := "FaultyUser" + peerIDStr
 
-	contactRepo := repository.NewContactRepository(database.Queries)
 	methodRepo := repository.NewContactMethodRepository(database.Queries)
 	externalRepo := repository.NewExternalContactRepository(database.Queries)
 	identityRepo := repository.NewIdentityRepository(database.Queries)
@@ -471,10 +472,10 @@ func TestMatcherEnrichment_EnricherErrorDoesNotBreakMatch(t *testing.T) {
 
 	matcher := tgpkg.NewPeerMatcher(identitySvc, messageRepo, externalRepo, failingEnricher{}, 100)
 
-	contact := newTestContact(t, ctx, contactRepo, "Faulty Enricher "+peerIDStr)
+	contact, contactCleanup := seedMigrationContact(ctx, t, database, gen, factory.WithNoMethods())
 	t.Cleanup(func() {
 		_, _ = database.Queries.DeleteExternalIdentitiesBySourceID(ctx, pgtype.Text{String: peerIDStr, Valid: true})
-		_ = contactRepo.HardDeleteContact(ctx, contact.ID)
+		contactCleanup()
 	})
 
 	_, err = identitySvc.MatchOrCreate(ctx, service.MatchRequest{

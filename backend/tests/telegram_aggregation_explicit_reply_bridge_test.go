@@ -38,7 +38,7 @@ import (
 // Stripe-based IDs (testStripe=2) keep this disjoint from the
 // inbound-coalesce (=1) and source-filter (=3) tests.
 func TestAggregation_IncrementalExplicitReplyBridge_CrossBatch(t *testing.T) {
-	messageRepo, interactionRepo, contactRepo, _, engine, database := setupAggregationTest(t)
+	messageRepo, interactionRepo, _, _, engine, database := setupAggregationTest(t)
 	ctx := context.Background()
 	eventRepo := repository.NewEventRepository(database.Queries)
 
@@ -62,8 +62,9 @@ func TestAggregation_IncrementalExplicitReplyBridge_CrossBatch(t *testing.T) {
 		_ = eventRepo.HardDeleteEventsBySourceAndSourceIDPrefix(ctx, repository.InteractionSourceTelegram, sourceRefPrefix)
 	})
 
-	contact := createTestContact(t, contactRepo, fmt.Sprintf("Explicit Reply Bridge %d", seed))
-	t.Cleanup(func() { _ = contactRepo.SoftDeleteContact(ctx, contact.ID) })
+	gen, _ := migrationGenerator(t)
+	contact, contactCleanup := seedMigrationContact(ctx, t, database, gen)
+	t.Cleanup(contactCleanup)
 
 	// 90h gap > 48h reply-bridge window — time-based bridging will NOT
 	// fire. Only the cross-batch explicit reply-bridge can promote.
