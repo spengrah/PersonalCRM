@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
+	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/synthetic"
 	"personal-crm/backend/internal/synthetic/factory"
 	"personal-crm/backend/tests/testsupport"
@@ -64,8 +66,11 @@ func TestSyntheticProfile_DevCoversCatalog(t *testing.T) {
 	res, err := synthetic.RunProfile(ctx, h, params)
 	require.NoError(t, err)
 
-	// Catalog contacts + per-source settled + pending-state producers all ran.
-	require.GreaterOrEqual(t, res.GmailSettled, params.Counts.SeededContacts)
+	// Catalog contacts are seeded WITHOUT a settling replay, so the per-source
+	// settled counts reflect the DEDICATED settled contacts (≥1 each), NOT the
+	// catalog size. Total contacts = catalog (SeededContacts) + the settled set.
+	require.Greater(t, res.Contacts, params.Counts.SeededContacts, "catalog + dedicated settled contacts")
+	require.GreaterOrEqual(t, res.GmailSettled, 1)
 	require.GreaterOrEqual(t, res.TelegramSettled, 1)
 	require.GreaterOrEqual(t, res.GCalSettled, 1)
 	require.GreaterOrEqual(t, res.GChatSettled, 1)
@@ -127,6 +132,32 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	// no conflict-meeting-note / title-candidate / gchat-pending counter to assert
 	// because none is produced.
 
+	// DB-LEVEL cadence/no-method bucket check: the catalog contacts must NOT be
+	// clobbered by a settling replay (a MatchSeeded inbound would let the cadence
+	// updater overwrite last_contacted). Scoped to the namespace prefix.
+	support := repository.NewSyntheticSupportRepository(database.Queries)
+	buckets, err := support.ListContactBucketsByNamePrefix(ctx, h.Generator().Prefix())
+	require.NoError(t, err)
+
+	var overdue, neverContacted, noMethod int
+	now := accelerated.GetCurrentTime()
+	for _, b := range buckets {
+		if b.MethodCount == 0 {
+			noMethod++
+		}
+		if b.Cadence != nil && *b.Cadence != "" {
+			switch {
+			case b.LastContacted == nil:
+				neverContacted++
+			case b.LastContacted.Before(now):
+				overdue++
+			}
+		}
+	}
+	require.GreaterOrEqual(t, overdue, 1, "≥1 cadence-bearing contact with a past last_contacted (overdue bucket survived)")
+	require.GreaterOrEqual(t, neverContacted, 1, "≥1 cadence-bearing never-contacted contact (NULL last_contacted survived)")
+	require.GreaterOrEqual(t, noMethod, 1, "≥1 no-method contact (the no-method bucket exists)")
+
 	remaining, err := h.ContactsRemaining(ctx)
 	require.NoError(t, err)
 	require.Greater(t, remaining, int64(0), "prod-shaped profile seeds contacts")
@@ -166,11 +197,11 @@ func TestSyntheticProfile_QuiesceLeavesRows(t *testing.T) {
 	require.Equal(t, int64(0), gone, "the namespace's own teardown removes its rows")
 }
 
-// TestSyntheticProfile_ErrorPathTearsDown proves the error-path lifecycle
-// (E3-D3b-fix): when a profile run fails partway, the entrypoint contract is to
-// run the FULL teardown (stop client + clean the partial world) — a failed seed
-// is never a leave-behind, and the River client is always stopped. This mirrors
-// crm-admin's runSeed error branch.
+// TestSyntheticProfile_ErrorPathTearsDown proves the error-path lifecycle: when
+// a profile run fails partway, the entrypoint contract is to run the FULL
+// teardown (stop client + clean the partial world) — a failed seed is never a
+// leave-behind, and the River client is always stopped. This mirrors crm-admin's
+// runSeed error branch.
 func TestSyntheticProfile_ErrorPathTearsDown(t *testing.T) {
 	testsupport.RequireLongTests(t)
 	database, ctx := newSyntheticDB(t)
@@ -196,8 +227,8 @@ func TestSyntheticProfile_ErrorPathTearsDown(t *testing.T) {
 	require.NoError(t, err)
 	require.Greater(t, before, int64(0))
 
-	// The runSeed error branch (E3-D3b-fix): on a forced failure the entrypoint
-	// runs the full teardown closure rather than Quiesce.
+	// The runSeed error branch: on a forced failure the entrypoint runs the full
+	// teardown closure rather than Quiesce.
 	require.NoError(t, teardown(context.Background()), "teardown after a forced failure must succeed")
 
 	after, err := h.ContactsRemaining(ctx)
@@ -205,19 +236,23 @@ func TestSyntheticProfile_ErrorPathTearsDown(t *testing.T) {
 	require.Equal(t, int64(0), after, "a failed seed must clean its partial world (no leave-behind)")
 }
 
-// TestSyntheticProfile_SettlesUnderHighAcceleration guards the E3-D-TIME change:
-// the harness Settle/teardown budget is REAL wall-clock (a harness-local
-// monotonic timer), so a high TIME_ACCELERATION — under which "30
-// accelerated-seconds" would otherwise collapse to a sub-second real budget —
-// does NOT cause a spurious settle timeout. A minimal-scoped seed still settles
-// and its teardown still clears under acceleration 1000.
+// TestSyntheticProfile_SettlesUnderHighAcceleration guards the real-wall-clock
+// settle/teardown budget: the harness uses a harness-local monotonic timer, so a
+// high TIME_ACCELERATION — under which "30 accelerated-seconds" would otherwise
+// collapse to a sub-second real budget — does NOT cause a spurious settle
+// timeout. A minimal-scoped seed still settles and its teardown still clears
+// under acceleration 1000.
 func TestSyntheticProfile_SettlesUnderHighAcceleration(t *testing.T) {
 	testsupport.RequireLongTests(t)
 	database, ctx := newSyntheticDB(t)
 
 	// Pin an accelerated clock for this test's process: GetCurrentTime reads
-	// TIME_ACCELERATION + TIME_BASE from the process env directly.
-	t.Setenv("TIME_BASE", strconv.FormatInt(time.Now().Unix(), 10)) //nolint:forbidigo // test fixture pins the accel base
+	// TIME_ACCELERATION + TIME_BASE from the process env directly. TIME_BASE must
+	// be a real-now wall-clock second so the accelerated "now" stays near real now
+	// (elapsed-since-base ≈ 0) — exactly how the production SetTimeAcceleration
+	// handler sets it (internal/api/handlers/system.go), with the same forbidigo
+	// exemption for the sanctioned wall-clock base.
+	t.Setenv("TIME_BASE", strconv.FormatInt(time.Now().Unix(), 10)) //nolint:forbidigo // wall-clock base for acceleration, mirrors the production setter
 	t.Setenv("TIME_ACCELERATION", "1000")
 
 	params, err := synthetic.ProfileParams(synthetic.ProfileMinimalScoped)

@@ -41,6 +41,7 @@ type contactConfig struct {
 	withEmail    bool
 	withPhone    bool
 	withTelegram bool
+	noMethods    bool
 	cadence      *string
 	overdue      bool
 	recent       bool
@@ -58,6 +59,12 @@ func WithPhone() ContactOption { return func(c *contactConfig) { c.withPhone = t
 
 // WithTelegram adds a telegram contact_method (handle).
 func WithTelegram() ContactOption { return func(c *contactConfig) { c.withTelegram = true } }
+
+// WithNoMethods builds a contact carrying NO contact_method (the "no methods"
+// catalog bucket — the Imports/rematch surfaces + the empty-methods UI state).
+// It overrides the email default; a contact with WithNoMethods cannot be the
+// target of a MatchSeeded replay (there is no identifier to match on).
+func WithNoMethods() ContactOption { return func(c *contactConfig) { c.noMethods = true } }
 
 // WithCadence sets the contact's cadence (e.g. "weekly", "monthly").
 func WithCadence(cadence string) ContactOption {
@@ -94,8 +101,9 @@ func (g *Generator) Contact(opts ...ContactOption) ContactSpec {
 	for _, o := range opts {
 		o(cfg)
 	}
-	// Default to an email method when no method option was supplied.
-	if !cfg.withEmail && !cfg.withPhone && !cfg.withTelegram {
+	// Default to an email method when no method option was supplied — unless the
+	// caller explicitly asked for a no-methods contact.
+	if !cfg.noMethods && !cfg.withEmail && !cfg.withPhone && !cfg.withTelegram {
 		cfg.withEmail = true
 	}
 

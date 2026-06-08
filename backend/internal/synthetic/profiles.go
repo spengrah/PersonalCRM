@@ -153,9 +153,14 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	}
 
 	// --- Contact edge-case catalog (deterministic spread across n) ---------
-	// Every catalog contact gets an email + a settled Gmail interaction so it
-	// has at least one interaction surface. A deterministic subset carries the
-	// additional edge-case shapes the UI + QA tour exercise.
+	// These contacts carry the cadence / recency / birthday / name / no-method
+	// edge-case shapes the UI + QA tour exercise. They are seeded WITHOUT a
+	// settling MatchSeeded replay ON PURPOSE: a settled inbound interaction would
+	// make the cadence updater overwrite last_contacted (destroying the overdue /
+	// never-contacted intent), and every contact would carry a method (no
+	// no-method bucket). The settled per-source interactions live on the
+	// dedicated contacts below instead.
+	var firstCatalogContactID uuid.UUID
 	for i := 0; i < n; i++ {
 		opts := catalogOptionsFor(i, n)
 		spec := gen.Contact(opts...)
@@ -164,18 +169,38 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 			return res, fmt.Errorf("profile %s: seed catalog contact %d: %w", params.Profile, i, err)
 		}
 		res.Contacts++
-
-		if _, err := h.ReplayGmail(ctx, contact.ID, gen.GmailMessage(spec, factory.MatchSeeded)); err != nil {
-			return res, fmt.Errorf("profile %s: replay gmail %d: %w", params.Profile, i, err)
+		if i == 0 {
+			firstCatalogContactID = contact.ID
 		}
-		res.GmailSettled++
 	}
 
-	// A few settled interactions on dedicated contacts per remaining source so
-	// every source surface has matched content (kept bounded for speed).
+	// Give the catalog its "≥1 contact with notes" bucket (a notepad note on the
+	// first catalog contact, via the existing note repo).
+	if firstCatalogContactID != uuid.Nil {
+		if err := h.SeedNote(ctx, firstCatalogContactID, "catalog notepad note"); err != nil {
+			return res, fmt.Errorf("profile %s: seed catalog note: %w", params.Profile, err)
+		}
+	}
+
+	// A few settled interactions on DEDICATED contacts per source so every source
+	// surface has matched content WITHOUT clobbering the catalog's cadence states.
+	// Each settled contact carries a recent last_contacted (the inbound message),
+	// which is the correct "recently contacted via X" representation.
 	perSource := perSourceSettledCount(params.Profile)
 
 	for i := 0; i < perSource; i++ {
+		// Gmail-settled (email match).
+		gmSpec := gen.Contact(factory.WithEmail())
+		gmContact, err := h.SeedContact(ctx, gmSpec)
+		if err != nil {
+			return res, fmt.Errorf("profile %s: seed gmail contact %d: %w", params.Profile, i, err)
+		}
+		res.Contacts++
+		if _, err := h.ReplayGmail(ctx, gmContact.ID, gen.GmailMessage(gmSpec, factory.MatchSeeded)); err != nil {
+			return res, fmt.Errorf("profile %s: replay gmail %d: %w", params.Profile, i, err)
+		}
+		res.GmailSettled++
+
 		// Telegram-settled (handle match).
 		tgSpec := gen.Contact(factory.WithTelegram())
 		tgContact, err := h.SeedContact(ctx, tgSpec)
@@ -284,9 +309,23 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 // catalogOptionsFor returns the contact-builder options for catalog contact i of
 // n, deterministically spreading the edge-case shapes across the population:
 // cadence states (overdue / recent / never-contacted), the 1900 birthday
-// sentinel, a unicode name, a descender name, and with/without methods.
+// sentinel, a unicode name, a descender name, and a no-method contact. Catalog
+// contacts get NO settling replay, so these last_contacted states survive (a
+// MatchSeeded inbound would otherwise let the cadence updater overwrite them).
+//
+// The no-method slot (i == 3) carries WithNoMethods, which overrides the email
+// default — so it must NOT also request a method. The slots are mutually
+// exclusive by i, so no contact gets both.
 func catalogOptionsFor(i, n int) []factory.ContactOption {
-	opts := []factory.ContactOption{factory.WithEmail()}
+	var opts []factory.ContactOption
+
+	// The no-method bucket: a cadence-bearing contact with NO contact_method.
+	if i == 3 && n > 3 {
+		opts = append(opts, factory.WithNoMethods(), factory.WithCadence("monthly"), factory.WithOverdue())
+		return opts
+	}
+
+	opts = append(opts, factory.WithEmail())
 
 	// Cadence + recency spread: every third contact overdue, every third recent,
 	// the rest never-contacted (no LastContacted).

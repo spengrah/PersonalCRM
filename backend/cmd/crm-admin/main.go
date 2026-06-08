@@ -105,7 +105,8 @@
 // pairing service. This binary is a thin CLI shim so the entire
 // admin surface stays unit-testable independently of the binary.
 //
-// Build:  make crm-admin   (operator-only target; NOT wired into CI).
+// Build:  make crm-admin   (operator-only target). CI cross-compiles the binary
+// (a compile guard) but does not deploy it; deployment is via scripts/deploy.sh.
 //
 // Single-file pkg-main per .ai/rules/core.md "Adding types to
 // cmd/crm-api/ in a companion file": all types referenced from this
@@ -270,16 +271,24 @@ func runMain(args []string) error {
 	ctx := context.Background()
 
 	// The seed/reset entrypoints invoke shippable fake-fetcher scaffolding and
-	// (for reset) destroy data, so the CRM_ENV-production gate runs PRE-DB — a
-	// production env must be refused BEFORE the DB is opened (and before a reset
-	// could begin). The other subcommands assume an already-migrated live DB.
+	// (for reset) destroy data, so BOTH gates run PRE-DB AND PRE-MIGRATION — a
+	// production env or a missing confirmation must be refused BEFORE the DB is
+	// opened, before migrations run, and before a reset could begin. The other
+	// subcommands assume an already-migrated live DB.
 	if opts.doSeed || opts.resetAndSeed {
 		if err := synthetic.SeedAllowed(cfg); err != nil {
 			return err
 		}
+		// The mandatory --yes / CRM_SEED_RESET_CONFIRM gate runs here, BEFORE
+		// migrations, so a mistaken reset never even applies migrations before
+		// being rejected (the run-dispatch confirm check below is a defensive
+		// backstop for tests that drive run() directly).
+		if err := requireSeedConfirm(opts); err != nil {
+			return err
+		}
 		// db.NewDatabase only connects + pings; it does NOT migrate. The seed
 		// path may hit a fresh dev DB, and the reset TRUNCATE needs the schema to
-		// exist — so migrate here (the same call crm-api makes), after the gate
+		// exist — so migrate here (the same call crm-api makes), after the gates
 		// and before opening the pool.
 		if err := db.RunMigrations(ctx, cfg.Database.URL, cfg.Database.MigrationsPath); err != nil {
 			return fmt.Errorf("run migrations: %w", err)
@@ -460,6 +469,20 @@ func seedConfirmed(opts runOptions) bool {
 	return opts.seedYes || os.Getenv(seedConfirmEnv) == "1"
 }
 
+// requireSeedConfirm returns a command-specific error when the mandatory
+// confirmation is absent. Called PRE-migration in runMain (so a mistaken reset
+// never applies migrations) and again as a backstop in the run-dispatch path
+// (which tests drive directly).
+func requireSeedConfirm(opts runOptions) error {
+	if seedConfirmed(opts) {
+		return nil
+	}
+	if opts.resetAndSeed {
+		return fmt.Errorf("--reset-and-seed requires confirmation: pass --yes (or set %s=1) AND ensure the crm-api service is stopped — this HARD-wipes all data", seedConfirmEnv)
+	}
+	return fmt.Errorf("--seed requires confirmation: pass --yes (or set %s=1) AND ensure the crm-api service is stopped", seedConfirmEnv)
+}
+
 // resolveSeedParams builds the SeedParams for a seed/reset run: the profile
 // (defaulting per command), the stable namespace (overridable), and the PRNG
 // seed (overridable). defaultProfile is `dev` for --seed, `prod-shaped` for
@@ -486,8 +509,8 @@ func resolveSeedParams(opts runOptions, defaultProfile synthetic.Profile) (synth
 // PRE-this in runMain; the additive queue-drain preflight + harness lifecycle are
 // inside deps.seed.Seed (the production seedAdapter).
 func runSeed(ctx context.Context, opts runOptions, deps adminDeps) error {
-	if !seedConfirmed(opts) {
-		return fmt.Errorf("--seed requires confirmation: pass --yes (or set %s=1) AND ensure the crm-api service is stopped", seedConfirmEnv)
+	if err := requireSeedConfirm(opts); err != nil {
+		return err
 	}
 	params, err := resolveSeedParams(opts, synthetic.ProfileDev)
 	if err != nil {
@@ -504,8 +527,8 @@ func runSeed(ctx context.Context, opts runOptions, deps adminDeps) error {
 // + migrations run PRE-this in runMain; the wipe + harness lifecycle are inside
 // deps.seed.ResetAndSeed.
 func runResetAndSeed(ctx context.Context, opts runOptions, deps adminDeps) error {
-	if !seedConfirmed(opts) {
-		return fmt.Errorf("--reset-and-seed requires confirmation: pass --yes (or set %s=1) AND ensure the crm-api service is stopped — this HARD-wipes all data", seedConfirmEnv)
+	if err := requireSeedConfirm(opts); err != nil {
+		return err
 	}
 	params, err := resolveSeedParams(opts, synthetic.ProfileProdShaped)
 	if err != nil {

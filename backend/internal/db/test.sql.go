@@ -1425,7 +1425,7 @@ VALUES ('synthetic_test', 'reset-marker', '\x00'::bytea, '\x00'::bytea)
 `
 
 // Reset test only: a marker row in oauth_credential (the table whose preservation
-// would re-introduce real PII on re-sync — see E3-D6). Proves the reset wipes it.
+// would re-introduce real PII on re-sync). Proves the reset wipes it.
 // The token columns are bytea (encrypted-at-rest); dummy bytes are fine for a
 // marker that is never decrypted.
 func (q *Queries) TestInsertOAuthCredentialMarker(ctx context.Context) error {
@@ -1454,6 +1454,55 @@ VALUES ('\x00'::bytea, '\x00'::bytea, 'reset-marker')
 func (q *Queries) TestInsertTelegramSessionMarker(ctx context.Context) error {
 	_, err := q.db.Exec(ctx, TestInsertTelegramSessionMarker)
 	return err
+}
+
+const TestListContactBucketsByNamePrefix = `-- name: TestListContactBucketsByNamePrefix :many
+SELECT
+    c.id,
+    c.cadence,
+    c.last_contacted,
+    (SELECT COUNT(*) FROM contact_method cm WHERE cm.contact_id = c.id) AS method_count
+FROM contact c
+WHERE c.full_name LIKE $1 || '%'
+  AND c.deleted_at IS NULL
+`
+
+type TestListContactBucketsByNamePrefixRow struct {
+	ID            pgtype.UUID        `json:"id"`
+	Cadence       pgtype.Text        `json:"cadence"`
+	LastContacted pgtype.Timestamptz `json:"last_contacted"`
+	MethodCount   int64              `json:"method_count"`
+}
+
+// Profile coverage test only: list the namespace's contacts (by full_name
+// prefix) with the bucket-defining columns + a method count, so the test can
+// assert the catalog produced ≥1 overdue (cadence + last_contacted in the past),
+// ≥1 never-contacted (cadence + NULL last_contacted), and ≥1 no-method contact —
+// proving the cadence/no-method states SURVIVE (a settling replay would
+// overwrite last_contacted). Caller passes a BARE prefix; '%' appended.
+func (q *Queries) TestListContactBucketsByNamePrefix(ctx context.Context, namePrefix pgtype.Text) ([]*TestListContactBucketsByNamePrefixRow, error) {
+	rows, err := q.db.Query(ctx, TestListContactBucketsByNamePrefix, namePrefix)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*TestListContactBucketsByNamePrefixRow{}
+	for rows.Next() {
+		var i TestListContactBucketsByNamePrefixRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Cadence,
+			&i.LastContacted,
+			&i.MethodCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const TestListPublicTables = `-- name: TestListPublicTables :many

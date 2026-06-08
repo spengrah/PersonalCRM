@@ -1573,7 +1573,7 @@ type Querier interface {
 	// state, args, metadata; finalized_at stays NULL (the unfinalized signal).
 	TestInsertNonFinalRiverJob(ctx context.Context) error
 	// Reset test only: a marker row in oauth_credential (the table whose preservation
-	// would re-introduce real PII on re-sync — see E3-D6). Proves the reset wipes it.
+	// would re-introduce real PII on re-sync). Proves the reset wipes it.
 	// The token columns are bytea (encrypted-at-rest); dummy bytes are fine for a
 	// marker that is never decrypted.
 	TestInsertOAuthCredentialMarker(ctx context.Context) error
@@ -1583,6 +1583,13 @@ type Querier interface {
 	// Reset test only: a marker row in telegram_session (the Telegram auth session
 	// the reset wipes). session_data_encrypted + encryption_nonce are NOT NULL bytea.
 	TestInsertTelegramSessionMarker(ctx context.Context) error
+	// Profile coverage test only: list the namespace's contacts (by full_name
+	// prefix) with the bucket-defining columns + a method count, so the test can
+	// assert the catalog produced ≥1 overdue (cadence + last_contacted in the past),
+	// ≥1 never-contacted (cadence + NULL last_contacted), and ≥1 no-method contact —
+	// proving the cadence/no-method states SURVIVE (a settling replay would
+	// overwrite last_contacted). Caller passes a BARE prefix; '%' appended.
+	TestListContactBucketsByNamePrefix(ctx context.Context, namePrefix pgtype.Text) ([]*TestListContactBucketsByNamePrefixRow, error)
 	// Reset integration test only: enumerate every base table in the public schema
 	// so the catalog guard can assert each is in the wiped list, is schema_migrations,
 	// or matches the river_% allowlist. Read-only catalog access.

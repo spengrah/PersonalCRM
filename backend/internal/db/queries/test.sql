@@ -630,7 +630,7 @@ VALUES ('synthetic_test_marker', 'default', 'available', '{}'::jsonb, '{}'::json
 
 -- name: TestInsertOAuthCredentialMarker :exec
 -- Reset test only: a marker row in oauth_credential (the table whose preservation
--- would re-introduce real PII on re-sync — see E3-D6). Proves the reset wipes it.
+-- would re-introduce real PII on re-sync). Proves the reset wipes it.
 -- The token columns are bytea (encrypted-at-rest); dummy bytes are fine for a
 -- marker that is never decrypted.
 INSERT INTO oauth_credential
@@ -653,3 +653,19 @@ VALUES ('\x00'::bytea, '\x00'::bytea, 'reset-marker');
 -- Reset test only: a marker row in tag (a standalone table the harness does not
 -- touch).
 INSERT INTO tag (name) VALUES ('synthetic-reset-marker');
+
+-- name: TestListContactBucketsByNamePrefix :many
+-- Profile coverage test only: list the namespace's contacts (by full_name
+-- prefix) with the bucket-defining columns + a method count, so the test can
+-- assert the catalog produced ≥1 overdue (cadence + last_contacted in the past),
+-- ≥1 never-contacted (cadence + NULL last_contacted), and ≥1 no-method contact —
+-- proving the cadence/no-method states SURVIVE (a settling replay would
+-- overwrite last_contacted). Caller passes a BARE prefix; '%' appended.
+SELECT
+    c.id,
+    c.cadence,
+    c.last_contacted,
+    (SELECT COUNT(*) FROM contact_method cm WHERE cm.contact_id = c.id) AS method_count
+FROM contact c
+WHERE c.full_name LIKE @name_prefix || '%'
+  AND c.deleted_at IS NULL;

@@ -149,7 +149,11 @@ dev-restart:
 dev-api-stop:
 	@echo "Stopping backend dev server..."
 	@pkill -f crm-api || true
-	@# Wait briefly for port 8080 to be released
+	@# `go run cmd/crm-api/main.go` execs a child binary named `main` (NOT
+	@# `crm-api`), so the pkill above can miss it. Kill by listening port 8080
+	@# too, then wait for the port to be released — `make dev-seed` + the seed
+	@# CLI rely on the backend's River workers being genuinely gone.
+	@lsof -ti tcp:8080 | xargs kill -9 2>/dev/null || true
 	@for i in 1 2 3 4 5; do \
 	  if lsof -ti tcp:8080 >/dev/null 2>&1; then \
 	    sleep 0.4; \

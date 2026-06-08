@@ -18,6 +18,7 @@ package repository
 import (
 	"context"
 	"strconv"
+	"time"
 
 	"personal-crm/backend/internal/db"
 
@@ -590,4 +591,42 @@ func (r *SyntheticSupportRepository) InsertResetMarkers(ctx context.Context) err
 		return err
 	}
 	return r.queries.TestInsertTagMarker(ctx)
+}
+
+// ContactBucket is the bucket-defining projection of a seeded contact (profile
+// coverage test only): cadence, last_contacted, and method count.
+type ContactBucket struct {
+	ID            uuid.UUID
+	Cadence       *string
+	LastContacted *time.Time
+	MethodCount   int64
+}
+
+// ListContactBucketsByNamePrefix returns the namespace's contacts (by full_name
+// prefix) with their bucket-defining columns so the profile coverage test can
+// assert the catalog produced ≥1 overdue / ≥1 never-contacted / ≥1 no-method
+// contact — i.e. that the cadence + no-method states SURVIVE (were not clobbered
+// by a settling replay). Test only.
+func (r *SyntheticSupportRepository) ListContactBucketsByNamePrefix(ctx context.Context, namePrefix string) ([]ContactBucket, error) {
+	rows, err := r.queries.TestListContactBucketsByNamePrefix(ctx, pgtype.Text{String: namePrefix, Valid: true})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ContactBucket, 0, len(rows))
+	for _, row := range rows {
+		b := ContactBucket{
+			ID:          uuid.UUID(row.ID.Bytes),
+			MethodCount: row.MethodCount,
+		}
+		if row.Cadence.Valid {
+			c := row.Cadence.String
+			b.Cadence = &c
+		}
+		if row.LastContacted.Valid {
+			t := row.LastContacted.Time
+			b.LastContacted = &t
+		}
+		out = append(out, b)
+	}
+	return out, nil
 }

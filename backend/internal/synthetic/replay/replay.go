@@ -201,6 +201,19 @@ func (h *Harness) SeedContact(ctx context.Context, spec factory.ContactSpec) (*r
 	return contact, nil
 }
 
+// SeedNote attaches a notepad note to a seeded contact via the EXISTING
+// NoteRepository (orchestration over an existing repo, not new machinery). The
+// contact must be one the harness seeded (so the teardown's note step — delete
+// by tracked contact id — cleans it). Gives the catalog its "≥1 contact with
+// notes" bucket. The body is namespace-tagged so it is identifiable.
+func (h *Harness) SeedNote(ctx context.Context, contactID uuid.UUID, body string) error {
+	noteRepo := repository.NewNoteRepository(h.database.Queries)
+	if _, err := noteRepo.CreateNotepad(ctx, contactID, h.gen.Prefix()+body); err != nil {
+		return fmt.Errorf("seed note: %w", err)
+	}
+	return nil
+}
+
 // SeedOrphanMeetingNote inserts a single orphan_needs_review meeting_note row
 // against the harness's seeded synthetic mac_host (the Imports Interactions
 // "orphan" surface). It uses the EXISTING MeetingNoteRepository — not a new
