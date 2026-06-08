@@ -59,6 +59,15 @@ func NewHarnessWithDB(ctx context.Context, database *db.Database) (*Harness, fun
 	return replay.NewHarnessWithDB(ctx, database)
 }
 
+// NewHarnessWithDBForNamespace builds a non-test harness for an EXPLICIT
+// namespace + seed (the crm-admin profile entrypoints). Re-exported so the
+// entrypoints can pin a stable per-profile namespace for a reproducible seed
+// world. The success path calls Harness.Quiesce (seed-and-leave); the error path
+// calls the returned teardown closure (stop client + clean the partial world).
+func NewHarnessWithDBForNamespace(ctx context.Context, database *db.Database, namespace string, seed uint64) (*Harness, func(context.Context) error, error) {
+	return replay.NewHarnessWithDBForNamespace(ctx, database, namespace, seed)
+}
+
 // Counts tunes the per-entity volume SeedAll produces. The forward-compatible
 // volume seam; DefaultParams supplies a small "minimal-scoped" shape.
 type Counts struct {

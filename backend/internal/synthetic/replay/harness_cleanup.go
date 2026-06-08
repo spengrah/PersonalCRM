@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/consumer"
 	"personal-crm/backend/internal/consumer/consumerjobs"
 	"personal-crm/backend/internal/repository"
@@ -38,12 +37,7 @@ const (
 // Best-effort + logs (never fatal) so a teardown error never masks the real
 // test failure. river_job rows are NEVER deleted here (D5a row 15).
 func (h *Harness) teardown(stopCtx context.Context) error {
-	if !h.stopped {
-		stopC, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		_ = h.client.Stop(stopC)
-		cancel()
-		h.stopped = true
-	}
+	h.stopClient()
 
 	// Bounded-wait Gate B to reach zero for both aggregate sources.
 	if !h.waitTeardownGateB(stopCtx) {
@@ -55,11 +49,45 @@ func (h *Harness) teardown(stopCtx context.Context) error {
 	return h.cleanup(stopCtx)
 }
 
+// stopClient stops THIS harness's River client exactly once (idempotent). It is
+// teardown's step 1, shared with Quiesce.
+func (h *Harness) stopClient() {
+	if h.stopped {
+		return
+	}
+	stopC, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	_ = h.client.Stop(stopC)
+	cancel()
+	h.stopped = true
+}
+
+// Quiesce is the "seed-and-leave" exit for non-test entrypoints (crm-admin
+// --seed / --reset-and-seed). It runs teardown's step 1+2 — stop THIS harness's
+// River client and bounded-wait Gate B so this run's jobs finalize — but SKIPS
+// step 3 (the cleanup deletes), so the seeded namespace PERSISTS after the
+// entrypoint exits.
+//
+// Use Quiesce on the SUCCESSFUL seed path only. On the error path the entrypoint
+// must call the full teardown closure instead, which stops the client AND cleans
+// up the partial namespace (so a failed seed is never a leave-behind). Either
+// way the River client is always stopped, never leaked.
+//
+// It is NOT an error for Gate B to remain unsettled here: unlike teardown, there
+// is nothing to gate (no deletes follow), and the client is already stopped, so
+// the seeded rows are inert. The wait is best-effort settling for a tidier world.
+func (h *Harness) Quiesce(ctx context.Context) error {
+	h.stopClient()
+	_ = h.waitTeardownGateB(ctx)
+	return nil
+}
+
 // waitTeardownGateB bounded-waits until Gate B clears for BOTH aggregate sources
-// (messages + gchat). Returns false on timeout.
+// (messages + gchat). Returns false on timeout. The budget is REAL wall-clock
+// (see defaultSettleTimeout) so it does not collapse under TIME_ACCELERATION.
 func (h *Harness) waitTeardownGateB(ctx context.Context) bool {
-	deadline := accelerated.GetCurrentTime().Add(teardownGateBBoundedWait)
-	for accelerated.GetCurrentTime().Before(deadline) {
+	open, cancel := realTimeBudget(teardownGateBBoundedWait)
+	defer cancel()
+	for open() {
 		if h.gateBClear(ctx, repository.InteractionSourceMessages) &&
 			h.gateBClear(ctx, repository.InteractionSourceGChat) {
 			return true

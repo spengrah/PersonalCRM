@@ -20,7 +20,6 @@ import (
 	"sync"
 	"time"
 
-	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/consumer"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
@@ -37,9 +36,26 @@ const (
 	// defaultSettleTimeout bounds each gate's polling loop. Generous to avoid
 	// flakes under CI load; a timeout here names the unmet gate and indicates a
 	// real wiring regression, not normal latency.
+	//
+	// The budget is REAL wall-clock (a context.WithTimeout / time.Timer, which
+	// use the runtime monotonic clock), NOT accelerated-time. The settle budget
+	// is INFRASTRUCTURE timing — how long to wait for River jobs to finalize —
+	// not domain time. Under a high TIME_ACCELERATION an accelerated-time budget
+	// of 30s would collapse to a fraction of a real second and spuriously time
+	// out the replay-heavy graph, so the wait loops bound real elapsed time.
 	defaultSettleTimeout = 30 * time.Second
 	settlePollInterval   = 50 * time.Millisecond
 )
+
+// realTimeBudget returns a func reporting whether the real-wall-clock budget is
+// still open, plus a cancel to release the underlying timer context. It uses
+// context.WithTimeout (runtime monotonic clock) so the budget is independent of
+// TIME_ACCELERATION — see defaultSettleTimeout. No time.Now() / accelerated call
+// in our code; the timer is the time source.
+func realTimeBudget(d time.Duration) (open func() bool, cancel func()) {
+	tctx, c := context.WithTimeout(context.Background(), d)
+	return func() bool { return tctx.Err() == nil }, c
+}
 
 // created is the ID ledger the harness/adapters accumulate during a run so
 // Cleanup can delete by exact id (never by a DB-wide source/kind value) and
@@ -214,9 +230,10 @@ func (h *Harness) waitGateA(ctx context.Context, predicate gateA) error {
 	if predicate == nil {
 		return nil
 	}
-	deadline := accelerated.GetCurrentTime().Add(defaultSettleTimeout)
+	open, cancel := realTimeBudget(defaultSettleTimeout)
+	defer cancel()
 	var lastErr error
-	for accelerated.GetCurrentTime().Before(deadline) {
+	for open() {
 		ok, err := predicate(ctx)
 		if err == nil && ok {
 			return nil
@@ -229,10 +246,11 @@ func (h *Harness) waitGateA(ctx context.Context, predicate gateA) error {
 
 func (h *Harness) waitGateB(ctx context.Context, source string) error {
 	contactIDs := h.snapshotContactIDs()
-	deadline := accelerated.GetCurrentTime().Add(defaultSettleTimeout)
+	open, cancel := realTimeBudget(defaultSettleTimeout)
+	defer cancel()
 	var lastEventJobs, lastAggJobs int64
 	var lastErr error
-	for accelerated.GetCurrentTime().Before(deadline) {
+	for open() {
 		eventJobs, err := h.support.CountUnfinalizedRiverJobsForEventsByContacts(ctx, contactIDs)
 		if err != nil {
 			lastErr = err
