@@ -1,54 +1,37 @@
 package handlers
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/api"
-	"personal-crm/backend/internal/cadence"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // TestHandler handles test data management endpoints
 // These endpoints are only available when CRM_ENV=testing or CRM_ENV=test
+//
+// The handlers are thin: they parse + validate the HTTP request, map it to a
+// service.TestSeedService input, and encode the result. All synthetic-row
+// construction + persistence lives in the service (handler → service →
+// repository → DB; no queries are called from the handler).
 type TestHandler struct {
-	database        *db.Database
-	externalRepo    *repository.ExternalContactRepository
-	contactSvc      *service.ContactService
-	calendarRepo    *repository.CalendarEventRepository
-	macHostRepo     *repository.MacHostRepository
-	meetingNoteRepo *repository.MeetingNoteRepository
-	validator       *validator.Validate
+	seedSvc   *service.TestSeedService
+	validator *validator.Validate
 }
 
-// NewTestHandler creates a new test handler
-func NewTestHandler(
-	database *db.Database,
-	externalRepo *repository.ExternalContactRepository,
-	contactSvc *service.ContactService,
-	calendarRepo *repository.CalendarEventRepository,
-	macHostRepo *repository.MacHostRepository,
-	meetingNoteRepo *repository.MeetingNoteRepository,
-) *TestHandler {
+// NewTestHandler creates a new test handler over the test-seed service.
+func NewTestHandler(seedSvc *service.TestSeedService) *TestHandler {
 	return &TestHandler{
-		database:        database,
-		externalRepo:    externalRepo,
-		contactSvc:      contactSvc,
-		calendarRepo:    calendarRepo,
-		macHostRepo:     macHostRepo,
-		meetingNoteRepo: meetingNoteRepo,
-		validator:       validator.New(),
+		seedSvc:   seedSvc,
+		validator: validator.New(),
 	}
 }
 
@@ -110,9 +93,6 @@ func (h *TestHandler) SeedExternalContacts(c *gin.Context) {
 		return
 	}
 
-	now := accelerated.GetCurrentTime()
-	ids := make([]string, 0, len(req.Contacts))
-
 	var hostUUID *uuid.UUID
 	if req.HostID != nil && *req.HostID != "" {
 		parsed, parseErr := uuid.Parse(*req.HostID)
@@ -123,6 +103,7 @@ func (h *TestHandler) SeedExternalContacts(c *gin.Context) {
 		hostUUID = &parsed
 	}
 
+	inputs := make([]service.SeedExternalContactInput, 0, len(req.Contacts))
 	for i, input := range req.Contacts {
 		// Build email entries
 		emails := make([]repository.EmailEntry, 0, len(input.Emails))
@@ -156,44 +137,40 @@ func (h *TestHandler) SeedExternalContacts(c *gin.Context) {
 			sourceIDSuffix = "tg"
 		}
 
-		// Create upsert request with prefix in source_id for cleanup.
-		// display_name keeps the prefix when provided so cleanup-by-display_name works too.
-		upsertReq := repository.UpsertExternalContactRequest{
+		svcInput := service.SeedExternalContactInput{
 			Source:   source,
 			SourceID: fmt.Sprintf("%s-%s-%d", req.Prefix, sourceIDSuffix, i),
 			HostID:   hostUUID,
 			Emails:   emails,
 			Phones:   phones,
 			Metadata: input.Metadata,
-			SyncedAt: &now,
 		}
-
+		// display_name keeps the prefix when provided so cleanup-by-display_name works too.
 		if input.DisplayName != "" {
 			displayName := req.Prefix + "-" + input.DisplayName
-			upsertReq.DisplayName = &displayName
+			svcInput.DisplayName = &displayName
 		}
 		if input.FirstName != "" {
 			firstName := input.FirstName
-			upsertReq.FirstName = &firstName
+			svcInput.FirstName = &firstName
 		}
 		if input.LastName != "" {
 			lastName := input.LastName
-			upsertReq.LastName = &lastName
+			svcInput.LastName = &lastName
 		}
 		if input.Organization != "" {
-			upsertReq.Organization = &input.Organization
+			svcInput.Organization = &input.Organization
 		}
 		if input.JobTitle != "" {
-			upsertReq.JobTitle = &input.JobTitle
+			svcInput.JobTitle = &input.JobTitle
 		}
+		inputs = append(inputs, svcInput)
+	}
 
-		contact, err := h.externalRepo.Upsert(ctx, upsertReq)
-		if err != nil {
-			api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to create external contact", err.Error())
-			return
-		}
-
-		ids = append(ids, contact.ID.String())
+	ids, err := h.seedSvc.SeedExternalContacts(ctx, inputs)
+	if err != nil {
+		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to create external contact", err.Error())
+		return
 	}
 
 	api.SendSuccess(c, http.StatusCreated, SeedExternalContactsResponse{
@@ -264,23 +241,7 @@ func (h *TestHandler) SeedMethodSuggestions(c *gin.Context) {
 		source = "gcontacts"
 	}
 
-	now := accelerated.GetCurrentTime()
-
-	// 1. Create the CRM contact (prefixed name for cleanup; no methods so
-	//    the pending suggestions are not pre-applied).
-	fullName := req.Prefix + "-" + req.ContactName
-	contact, _, err := h.contactSvc.CreateContact(ctx, repository.CreateContactRequest{
-		FullName:      fullName,
-		LastContacted: &now,
-	}, nil)
-	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to create contact", err.Error())
-		return
-	}
-
-	// 2. Upsert an address-book external_contact row carrying the pending
-	//    method values as its emails/phones (so they are appliable), then
-	//    link it as `imported`.
+	// Build the pending method values as emails/phones (so they are appliable).
 	emails := make([]repository.EmailEntry, 0, len(req.Pending))
 	phones := make([]repository.PhoneEntry, 0, len(req.Pending))
 	for _, m := range req.Pending {
@@ -292,45 +253,26 @@ func (h *TestHandler) SeedMethodSuggestions(c *gin.Context) {
 		}
 	}
 
-	displayName := req.Prefix + "-" + req.ContactName
-	external, err := h.externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+	input := service.SeedMethodSuggestionsInput{
 		Source:      source,
+		ContactName: req.Prefix + "-" + req.ContactName,
+		DisplayName: req.Prefix + "-" + req.ContactName,
 		SourceID:    fmt.Sprintf("%s-method-suggestion", req.Prefix),
-		DisplayName: &displayName,
 		Emails:      emails,
 		Phones:      phones,
-		SyncedAt:    &now,
-	})
+		Pending:     normalizeSeedSuggestions(req.Pending),
+		Dismissed:   normalizeSeedSuggestions(req.Dismissed),
+	}
+
+	res, err := h.seedSvc.SeedMethodSuggestions(ctx, input)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to create external contact", err.Error())
+		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to seed method suggestions", err.Error())
 		return
-	}
-
-	if _, err := h.externalRepo.UpdateMatch(ctx, external.ID, &contact.ID, repository.MatchStatusImported); err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to link external contact", err.Error())
-		return
-	}
-
-	// 3. Set pending_method_suggestions (normalized values, mirroring the
-	//    reconcile path's storage).
-	pending := normalizeSeedSuggestions(req.Pending)
-	if _, err := h.externalRepo.SetMethodSuggestions(ctx, external.ID, pending); err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to set pending suggestions", err.Error())
-		return
-	}
-
-	// 4. Optionally pre-seed dismissed_method_suggestions.
-	if len(req.Dismissed) > 0 {
-		dismissed := normalizeSeedSuggestions(req.Dismissed)
-		if _, err := h.externalRepo.SetDismissedMethodSuggestionsForTest(ctx, external.ID, dismissed); err != nil {
-			api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to set dismissed suggestions", err.Error())
-			return
-		}
 	}
 
 	api.SendSuccess(c, http.StatusCreated, SeedMethodSuggestionsResponse{
-		ExternalContactID: external.ID.String(),
-		ContactID:         contact.ID.String(),
+		ExternalContactID: res.ExternalContactID,
+		ContactID:         res.ContactID,
 	}, nil)
 }
 
@@ -402,11 +344,10 @@ func (h *TestHandler) SeedContacts(c *gin.Context) {
 		return
 	}
 
-	now := accelerated.GetCurrentTime()
-	ids := make([]string, 0, len(req.Contacts))
-
+	inputs := make([]service.SeedContactInput, 0, len(req.Contacts))
 	for i, input := range req.Contacts {
-		// Normalize and validate contact methods (reuse contact handler logic)
+		// Normalize and validate contact methods (reuse contact handler logic).
+		// This is HTTP-boundary validation, so it stays in the handler.
 		methodRequests := make([]ContactMethodRequest, len(input.Methods))
 		for j, m := range input.Methods {
 			methodRequests[j] = ContactMethodRequest(m)
@@ -425,44 +366,20 @@ func (h *TestHandler) SeedContacts(c *gin.Context) {
 			return
 		}
 
-		// Build contact methods for service
-		methods := buildContactMethodInputs(normalizedMethods)
+		inputs = append(inputs, service.SeedContactInput{
+			// Prepend prefix to full_name for cleanup.
+			FullName:             req.Prefix + "-" + input.FullName,
+			Location:             input.Location,
+			Cadence:              input.Cadence,
+			Methods:              buildContactMethodInputs(normalizedMethods),
+			LastContactedDaysAgo: input.LastContactedDaysAgo,
+		})
+	}
 
-		// Calculate last_contacted time if specified
-		// Uses environment-scaled days (GetCadenceDuration returns different values per CRM_ENV)
-		lastContacted := now
-		if input.LastContactedDaysAgo > 0 {
-			weeklyDuration := cadence.GetCadenceDuration(cadence.CadenceWeekly)
-			scaledDayDuration := weeklyDuration / 7
-			lastContacted = now.Add(-time.Duration(input.LastContactedDaysAgo) * scaledDayDuration)
-		}
-
-		// Prepend prefix to full_name for cleanup
-		fullName := req.Prefix + "-" + input.FullName
-
-		// Build create request
-		createReq := repository.CreateContactRequest{
-			FullName:      fullName,
-			LastContacted: &lastContacted,
-		}
-
-		if input.Location != "" {
-			createReq.Location = &input.Location
-		}
-		// Note: Notes are no longer stored on the contact table.
-		// If tests need notes, they should call PUT /contacts/:id/notes
-		if input.Cadence != "" {
-			createReq.Cadence = &input.Cadence
-		}
-
-		contact, _, err := h.contactSvc.CreateContact(ctx, createReq, methods)
-		if err != nil {
-			api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal,
-				fmt.Sprintf("Contact %d (%s): creation failed", i+1, input.FullName), err.Error())
-			return
-		}
-
-		ids = append(ids, contact.ID.String())
+	ids, err := h.seedSvc.SeedContacts(ctx, inputs)
+	if err != nil {
+		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to create contact", err.Error())
+		return
 	}
 
 	api.SendSuccess(c, http.StatusCreated, SeedContactsResponse{
@@ -516,52 +433,21 @@ func (h *TestHandler) SeedOverdueContacts(c *gin.Context) {
 		return
 	}
 
-	now := accelerated.GetCurrentTime()
-	ids := make([]string, 0, len(req.Contacts))
-
+	inputs := make([]service.SeedOverdueContactInput, 0, len(req.Contacts))
 	for _, input := range req.Contacts {
-		// Parse cadence type
-		cadenceType, err := cadence.ParseCadence(input.Cadence)
-		if err != nil {
-			api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Invalid cadence", err.Error())
-			return
-		}
+		inputs = append(inputs, service.SeedOverdueContactInput{
+			// Prepend prefix to full_name for cleanup.
+			FullName:    req.Prefix + "-" + input.FullName,
+			Cadence:     input.Cadence,
+			DaysOverdue: input.DaysOverdue,
+			Email:       input.Email,
+		})
+	}
 
-		// Calculate backdated last_contacted time
-		// It should be: now - cadence_duration - days_overdue
-		// Use scaled days based on environment (in testing mode, 1 "day" = weekly_cadence / 7)
-		cadenceDuration := cadence.GetCadenceDuration(cadenceType)
-		weeklyDuration := cadence.GetCadenceDuration(cadence.CadenceWeekly)
-		scaledDayDuration := weeklyDuration / 7 // 1 "day" in current environment
-		daysOverdueDuration := time.Duration(input.DaysOverdue) * scaledDayDuration
-		lastContacted := now.Add(-cadenceDuration).Add(-daysOverdueDuration)
-
-		// Build contact methods
-		var methods []service.ContactMethodInput
-		if input.Email != "" {
-			methods = append(methods, service.ContactMethodInput{
-				Type:      "email",
-				Value:     input.Email,
-				IsPrimary: true,
-			})
-		}
-
-		// Create contact with prefix in name for cleanup
-		fullName := req.Prefix + "-" + input.FullName
-		cadence := input.Cadence
-		createReq := repository.CreateContactRequest{
-			FullName:      fullName,
-			Cadence:       &cadence,
-			LastContacted: &lastContacted,
-		}
-
-		contact, _, err := h.contactSvc.CreateContact(ctx, createReq, methods)
-		if err != nil {
-			api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to create contact", err.Error())
-			return
-		}
-
-		ids = append(ids, contact.ID.String())
+	ids, err := h.seedSvc.SeedOverdueContacts(ctx, inputs)
+	if err != nil {
+		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to create contact", err.Error())
+		return
 	}
 
 	api.SendSuccess(c, http.StatusCreated, SeedOverdueContactsResponse{
@@ -630,10 +516,11 @@ func (h *TestHandler) SeedCalendarEvents(c *gin.Context) {
 	}
 
 	now := accelerated.GetCurrentTime()
-	ids := make([]string, 0, len(req.Events))
+	inputs := make([]service.SeedCalendarEventInput, 0, len(req.Events))
 
 	for i, input := range req.Events {
-		// Calculate event times based on is_past flag
+		// Calculate event times based on is_past flag (HTTP-input semantics —
+		// mapped to concrete times here, then persisted by the service).
 		var startTime, endTime time.Time
 		if input.IsPast {
 			daysAgo := input.DaysAgo
@@ -651,9 +538,6 @@ func (h *TestHandler) SeedCalendarEvents(c *gin.Context) {
 			endTime = startTime.Add(1 * time.Hour)                       // 1 hour duration
 		}
 
-		// Build title with prefix
-		title := req.Prefix + "-" + input.Title
-
 		// Build attendee list from optional attendee_emails.
 		attendees := make([]repository.Attendee, 0, len(input.AttendeeEmails))
 		for _, email := range input.AttendeeEmails {
@@ -668,36 +552,23 @@ func (h *TestHandler) SeedCalendarEvents(c *gin.Context) {
 			matchedIDs = []uuid.UUID{}
 		}
 
-		// Build upsert request
-		upsertReq := repository.UpsertCalendarEventRequest{
-			GcalEventID:          fmt.Sprintf("%s-event-%d", req.Prefix, i),
-			GcalCalendarID:       "primary",
-			GoogleAccountID:      fmt.Sprintf("%s-test-account", req.Prefix),
-			Title:                &title,
-			StartTime:            startTime,
-			EndTime:              endTime,
-			Status:               "confirmed",
-			Attendees:            attendees,
-			MatchedContactIDs:    matchedIDs,
-			SyncedAt:             now,
-			LastContactedUpdated: false,
-		}
+		inputs = append(inputs, service.SeedCalendarEventInput{
+			GcalEventID:     fmt.Sprintf("%s-event-%d", req.Prefix, i),
+			GoogleAccountID: fmt.Sprintf("%s-test-account", req.Prefix),
+			Title:           req.Prefix + "-" + input.Title,
+			Location:        input.Location,
+			HtmlLink:        input.HtmlLink,
+			StartTime:       startTime,
+			EndTime:         endTime,
+			Attendees:       attendees,
+			MatchedIDs:      matchedIDs,
+		})
+	}
 
-		if input.Location != "" {
-			upsertReq.Location = &input.Location
-		}
-
-		if input.HtmlLink != "" {
-			upsertReq.HtmlLink = &input.HtmlLink
-		}
-
-		event, err := h.calendarRepo.Upsert(ctx, upsertReq)
-		if err != nil {
-			api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to create calendar event", err.Error())
-			return
-		}
-
-		ids = append(ids, event.ID.String())
+	ids, err := h.seedSvc.SeedCalendarEvents(ctx, inputs)
+	if err != nil {
+		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to create calendar event", err.Error())
+		return
 	}
 
 	api.SendSuccess(c, http.StatusCreated, SeedCalendarEventsResponse{
@@ -752,80 +623,28 @@ func (h *TestHandler) Cleanup(c *gin.Context) {
 		return
 	}
 
-	// Use a transaction for atomic cleanup
-	tx, err := h.database.Pool.Begin(ctx)
-	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to start transaction", err.Error())
-		return
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck
-
-	queries := db.New(tx)
-	// Escape SQL LIKE wildcards to prevent injection
-	// This ensures % and _ in prefixes are treated literally
-	escapedPrefix := escapeSQLLikeWildcards(req.Prefix)
-	prefix := pgtype.Text{String: escapedPrefix, Valid: true}
-
-	// Delete contacts by name prefix (will cascade to contact_method via FK)
-	deletedContacts, err := queries.DeleteContactsByNamePrefix(ctx, prefix)
-	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to delete contacts", err.Error())
-		return
-	}
-
-	// Delete external contacts by display_name prefix
-	deletedExternal, err := queries.DeleteExternalContactsByDisplayNamePrefix(ctx, prefix)
-	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to delete external contacts", err.Error())
-		return
-	}
-
-	// Also delete by source_id prefix (in case display_name was different)
-	deletedBySourceID, err := queries.DeleteExternalContactsBySourceIDPrefix(ctx, prefix)
-	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to delete external contacts by source_id", err.Error())
-		return
-	}
-	deletedExternal += deletedBySourceID
-
-	// Delete calendar events by title prefix
-	deletedCalEvents, err := queries.DeleteCalendarEventsByTitlePrefix(ctx, prefix)
-	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to delete calendar events by title", err.Error())
-		return
-	}
-
-	// Also delete by gcal_event_id prefix (in case title was different)
-	deletedByGcalID, err := queries.DeleteCalendarEventsByGcalEventIdPrefix(ctx, prefix)
-	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to delete calendar events by gcal_event_id", err.Error())
-		return
-	}
-	deletedCalEvents += deletedByGcalID
-
-	if err := tx.Commit(ctx); err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to commit transaction", err.Error())
-		return
-	}
-
-	// Meeting notes are seeded with random session UUIDs scoped to a host,
-	// so cleanup is by host id rather than by prefix.
+	// Meeting notes are seeded with random session UUIDs scoped to a host, so
+	// cleanup is by host id rather than by prefix. Parse it at the boundary.
+	var hostID *uuid.UUID
 	if req.HostID != "" {
-		hostID, parseErr := uuid.Parse(req.HostID)
+		parsed, parseErr := uuid.Parse(req.HostID)
 		if parseErr != nil {
 			api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "invalid host_id", parseErr.Error())
 			return
 		}
-		if err := h.meetingNoteRepo.TestHardDeleteByHostID(ctx, hostID); err != nil {
-			api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to delete meeting notes", err.Error())
-			return
-		}
+		hostID = &parsed
+	}
+
+	res, err := h.seedSvc.Cleanup(ctx, req.Prefix, hostID)
+	if err != nil {
+		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to clean up test data", err.Error())
+		return
 	}
 
 	api.SendSuccess(c, http.StatusOK, CleanupResponse{
-		DeletedContacts:         deletedContacts,
-		DeletedExternalContacts: deletedExternal,
-		DeletedCalendarEvents:   deletedCalEvents,
+		DeletedContacts:         res.DeletedContacts,
+		DeletedExternalContacts: res.DeletedExternalContacts,
+		DeletedCalendarEvents:   res.DeletedCalendarEvents,
 	}, nil)
 }
 
@@ -853,11 +672,6 @@ type SeedMacHostResponse struct {
 func (h *TestHandler) SeedMacHost(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	if h.macHostRepo == nil {
-		api.SendError(c, http.StatusServiceUnavailable, api.ErrCodeInternal, "mac host repo not wired", "")
-		return
-	}
-
 	var req SeedMacHostRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Invalid request body", err.Error())
@@ -873,37 +687,20 @@ func (h *TestHandler) SeedMacHost(c *gin.Context) {
 	if req.ProtocolVersion == 0 {
 		req.ProtocolVersion = 1
 	}
-	permissions, err := json.Marshal(req.Permissions)
-	if err != nil {
-		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "permissions marshal failed", err.Error())
-		return
-	}
-	sourceHealth, err := json.Marshal(req.SourceHealth)
-	if err != nil {
-		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "source_health marshal failed", err.Error())
-		return
-	}
 
-	// A real bcrypt hash is generated even for the seed path. The
-	// hash is never used for authentication (no daemon has the
-	// plaintext), but constructing a real hash keeps the row
-	// consistent with the production schema invariants.
-	hashed := "$2a$04$placeholdersaltplaceholdersaltO9bF.pIyKsl5j8YpqEUYE2N4FfTQpiy"
-	host, err := h.macHostRepo.SeedHostForTest(
-		ctx,
-		req.Hostname,
-		req.DaemonVersion,
-		req.ProtocolVersion,
-		hashed,
-		permissions,
-		sourceHealth,
-	)
+	hostID, err := h.seedSvc.SeedMacHost(ctx, service.SeedMacHostInput{
+		Hostname:        req.Hostname,
+		DaemonVersion:   req.DaemonVersion,
+		ProtocolVersion: req.ProtocolVersion,
+		Permissions:     req.Permissions,
+		SourceHealth:    req.SourceHealth,
+	})
 	if err != nil {
 		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "seed host failed", err.Error())
 		return
 	}
 
-	api.SendSuccess(c, http.StatusOK, SeedMacHostResponse{HostID: host.ID.String()}, nil)
+	api.SendSuccess(c, http.StatusOK, SeedMacHostResponse{HostID: hostID}, nil)
 }
 
 // TriggerErrorRequest represents the request to trigger an error
@@ -999,51 +796,23 @@ func (h *TestHandler) SeedMeetingNotes(c *gin.Context) {
 		return
 	}
 
-	tx, err := h.database.Pool.Begin(ctx)
-	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to start transaction", err.Error())
-		return
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck
-
-	now := accelerated.GetCurrentTime()
-	ids := make([]string, 0, len(req.Notes))
+	notes := make([]service.SeedMeetingNoteInput, 0, len(req.Notes))
 	for _, note := range req.Notes {
 		sessionID, parseErr := uuid.Parse(note.AnarlogSessionID)
 		if parseErr != nil {
 			api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "invalid anarlog_session_id", parseErr.Error())
 			return
 		}
-
-		params := repository.InsertMeetingNoteParams{
+		notes = append(notes, service.SeedMeetingNoteInput{
 			AnarlogSessionID: sessionID,
-			MacHostID:        &hostID,
-			LinkageState:     repository.LinkageStateOrphanNeedsReview,
-			MeetingAt:        now,
-			// Empty hashes are accepted by the column CHECK; an orphan has
-			// no conflict_candidates snapshot.
-			InputHash:       "",
-			ResolvedSetHash: "",
-		}
-		if note.Title != "" {
-			title := note.Title
-			params.Title = &title
-		}
-		if note.Summary != "" {
-			summary := note.Summary
-			params.Summary = &summary
-		}
-
-		row, insErr := h.meetingNoteRepo.InsertMeetingNoteTx(ctx, tx, params)
-		if insErr != nil {
-			api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to create meeting note", insErr.Error())
-			return
-		}
-		ids = append(ids, row.ID.String())
+			Title:            note.Title,
+			Summary:          note.Summary,
+		})
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to commit transaction", err.Error())
+	ids, err := h.seedSvc.SeedMeetingNotes(ctx, hostID, notes)
+	if err != nil {
+		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to create meeting note", err.Error())
 		return
 	}
 
@@ -1051,17 +820,4 @@ func (h *TestHandler) SeedMeetingNotes(c *gin.Context) {
 		Created: len(ids),
 		IDs:     ids,
 	}, nil)
-}
-
-// escapeSQLLikeWildcards escapes SQL LIKE pattern wildcards (% and _)
-// to prevent them from being interpreted as wildcards in LIKE queries.
-// This prevents SQL wildcard injection attacks.
-func escapeSQLLikeWildcards(s string) string {
-	// Escape backslash first (since it's the escape character)
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	// Escape percentage sign
-	s = strings.ReplaceAll(s, `%`, `\%`)
-	// Escape underscore
-	s = strings.ReplaceAll(s, `_`, `\_`)
-	return s
 }
