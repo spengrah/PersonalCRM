@@ -232,6 +232,7 @@ Cross-cutting concerns that require checking multiple locations:
 | New API endpoint | API routes table in `.ai/guides/feature-development.md` |
 | Query invalidation rules | `frontend/src/lib/query-invalidation.ts` domain events |
 | New database table | Database tables in `.ai/guides/architecture.md` |
+| New entity, sync source, or downstream record | Add the matching factory (`synthetic/factory`) + replay/seed coverage (`synthetic/replay` adapter, profile in `synthetic/profiles.go`) to the synthetic toolkit — new features write their own seeding (see `.ai/patterns/synthetic-seed-toolkit.md`) |
 | OAuth flow changes | Both callback route AND auth URL endpoint |
 | Contact method types | `contact_method` CHECK constraint + `identity.IdentifierType` enum |
 | Cadence options | `contact` CHECK constraint + frontend dropdown options |
