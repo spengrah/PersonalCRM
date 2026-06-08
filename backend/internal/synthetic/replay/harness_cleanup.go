@@ -128,6 +128,16 @@ func (h *Harness) cleanup(ctx context.Context) error {
 		}
 		return nil
 	})
+	// 6b. telegram_chat_config (by tracked group chat id). telegram_chat_config
+	// has no namespace column (keyed only by telegram_chat_id), so a group
+	// replay's config rows are deleted by the exact chat ids the ledger tracked.
+	// Ordered with the telegram_message step (no FK to contact, so ordering is
+	// flexible). Without this a group replay would leak config rows on the shared
+	// DB and risk future cross-namespace chat-id collisions.
+	step("telegram_chat_config", func() error {
+		_, err := h.support.DeleteTelegramChatConfigsByChatIds(ctx, c.telegramChatIDs)
+		return err
+	})
 	// 7. calendar_event (ns-prefixed gcal_event_id).
 	step("calendar_event", func() error {
 		_, err := h.support.DeleteCalendarEventsByGcalEventIDPrefix(ctx, prefix)

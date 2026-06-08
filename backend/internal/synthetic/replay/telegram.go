@@ -16,6 +16,12 @@ import (
 // namespace's peer band ([1e12, 2e12)) so a peer is never mistaken for self.
 const telegramSelfUserID int64 = 999_999_999
 
+// harnessGroupMaxMembers is the groupMaxMembers the harness's MessageHandler is
+// built with. A group whose member count exceeds it is untracked-by-size under
+// status "auto" (EffectiveTracked). Shared by the private + group adapters and
+// the group factory's tracked/untracked sizing.
+const harnessGroupMaxMembers = 200
+
 // telegramPeerMatcherDeps bundles the telegram peer matcher + aggregation engine
 // the telegram adapter wires into a real MessageHandler.
 type telegramPeerMatcherDeps struct {
@@ -46,7 +52,7 @@ func (h *Harness) ReplayTelegram(ctx context.Context, contactID uuid.UUID, spec 
 		repository.NewSyncRepositoryWithPool(h.database.Queries, h.database.Pool),
 		nil, // syncStateID: optional, only used to stamp last-sync timestamps
 		telegramSelfUserID,
-		200, // groupMaxMembers (irrelevant on the private path)
+		harnessGroupMaxMembers, // irrelevant on the private path
 		h.peerMatcher.matcher,
 		h.peerMatcher.engine,
 	)

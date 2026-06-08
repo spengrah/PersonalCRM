@@ -131,6 +131,11 @@ type Generator struct {
 	msgSeq      int32
 	phoneSeq    int64
 	sourceIDSeq int
+	// groupChatSeq counts group chat ids issued from the TOP of this namespace's
+	// telegram peer band (growing downward) so they stay disjoint from sender
+	// peer ids (issued from the bottom by peerSeq) yet remain in the same
+	// collision-checked band.
+	groupChatSeq int64
 }
 
 // NewGenerator builds a Generator with the live accelerated anchor. Use
@@ -242,6 +247,26 @@ func (g *Generator) nextPeerUserID() int64 {
 	}
 	id := g.PeerBandStart() + g.peerSeq
 	g.peerSeq++
+	return id
+}
+
+// nextGroupChatID returns the next telegram group chat id for this namespace,
+// allocated from the TOP of the reserved peer sub-block growing DOWNWARD. Sender
+// peer ids grow UPWARD from PeerBandStart (nextPeerUserID), so a chat id and a
+// sender id can never collide within the band until the two counters meet — far
+// beyond any realistic per-namespace test count. Drawing the chat id from the
+// SAME collision-checked band keeps it namespace-disjoint, which matters because
+// telegram_chat_config.telegram_chat_id is unique DB-wide with no namespace
+// column. The chat id never enters PeerMatcher (which keys on the SENDER peer
+// id), so co-locating the two id roles in one band cannot cause a matcher
+// mis-link. A group conversation reuses ONE chat id across its messages, so this
+// is rarely called more than once per conversation. Panics on band exhaustion.
+func (g *Generator) nextGroupChatID() int64 {
+	if g.groupChatSeq >= telegramPeerBucketWidth {
+		panic(fmt.Sprintf("synthetic: telegram group chat-id sub-block exhausted for namespace %q", g.namespace))
+	}
+	id := g.PeerBandEnd() - 1 - g.groupChatSeq
+	g.groupChatSeq++
 	return id
 }
 

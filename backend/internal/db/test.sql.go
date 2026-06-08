@@ -538,6 +538,22 @@ func (q *Queries) SweepRiverJobsInCloneForTest(ctx context.Context) (int64, erro
 	return result.RowsAffected(), nil
 }
 
+const SyntheticCountCalendarEventByGcalId = `-- name: SyntheticCountCalendarEventByGcalId :one
+SELECT COUNT(*) FROM calendar_event
+WHERE gcal_event_id = $1
+`
+
+// Settle Gate A (GCal decline terminal): count ALL calendar_event rows for the
+// gcal id regardless of status/match. The cutover decline branch DELETES the
+// row, so the decline test settles on this reaching 0. calendar_event has no
+// deleted_at column (hard-delete table).
+func (q *Queries) SyntheticCountCalendarEventByGcalId(ctx context.Context, gcalEventID string) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountCalendarEventByGcalId, gcalEventID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const SyntheticCountContactMethodsByValueNormalizedPrefix = `-- name: SyntheticCountContactMethodsByValueNormalizedPrefix :one
 SELECT COUNT(*) FROM contact_method cm
 JOIN contact c ON c.id = cm.contact_id
@@ -725,6 +741,50 @@ func (q *Queries) SyntheticCountStrandedTelegramMessagesByPeer(ctx context.Conte
 	return count, err
 }
 
+const SyntheticCountTelegramChatConfigInChatIdBand = `-- name: SyntheticCountTelegramChatConfigInChatIdBand :one
+SELECT COUNT(*) FROM telegram_chat_config
+WHERE telegram_chat_id >= $1
+  AND telegram_chat_id < $2
+`
+
+type SyntheticCountTelegramChatConfigInChatIdBandParams struct {
+	BandStart int64 `json:"band_start"`
+	BandEnd   int64 `json:"band_end"`
+}
+
+// Harness setup collision detection (E2-D8d): count telegram_chat_config rows
+// whose telegram_chat_id falls in this namespace's reserved peer band
+// [band_start, band_end) — group chat ids are drawn from that band. A non-zero
+// count means a leftover config row occupies the band, so NewHarness re-salts.
+func (q *Queries) SyntheticCountTelegramChatConfigInChatIdBand(ctx context.Context, arg SyntheticCountTelegramChatConfigInChatIdBandParams) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountTelegramChatConfigInChatIdBand, arg.BandStart, arg.BandEnd)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const SyntheticCountTelegramMessagesByChatAndMessageId = `-- name: SyntheticCountTelegramMessagesByChatAndMessageId :one
+SELECT COUNT(*) FROM telegram_message
+WHERE telegram_chat_id = $1
+  AND telegram_message_id = $2
+  AND deleted_at IS NULL
+`
+
+type SyntheticCountTelegramMessagesByChatAndMessageIdParams struct {
+	TelegramChatID    int64 `json:"telegram_chat_id"`
+	TelegramMessageID int32 `json:"telegram_message_id"`
+}
+
+// Group assertion: count telegram_message rows for (telegram_chat_id,
+// telegram_message_id). Tests assert 0 for the untracked-by-size group case (the
+// shouldTrackChat gate returns before UpsertMessage) and 1 for tracked.
+func (q *Queries) SyntheticCountTelegramMessagesByChatAndMessageId(ctx context.Context, arg SyntheticCountTelegramMessagesByChatAndMessageIdParams) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountTelegramMessagesByChatAndMessageId, arg.TelegramChatID, arg.TelegramMessageID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const SyntheticCountTelegramMessagesInPeerBand = `-- name: SyntheticCountTelegramMessagesInPeerBand :one
 SELECT COUNT(*) FROM telegram_message
 WHERE peer_user_id >= $1
@@ -814,6 +874,27 @@ WHERE gcal_event_id = $1
 // deleted_at column (hard-delete table), so no soft-delete filter.
 func (q *Queries) SyntheticCountUnmatchedCalendarEventByGcalId(ctx context.Context, gcalEventID string) (int64, error) {
 	row := q.db.QueryRow(ctx, SyntheticCountUnmatchedCalendarEventByGcalId, gcalEventID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const SyntheticCountUnmatchedExternalContactByEmailPrefix = `-- name: SyntheticCountUnmatchedExternalContactByEmailPrefix :one
+SELECT COUNT(*) FROM external_contact
+WHERE source = 'gcal_attendee'
+  AND source_id LIKE $1 || '%'
+  AND match_status = 'unmatched'
+  AND deleted_at IS NULL
+`
+
+// Settle/assert (GCal unmatched-attendee import candidate): the GCal provider
+// stores an unmatched attendee as an external_contact with source='gcal_attendee'
+// and source_id = the NORMALIZED (lowercased/trimmed) attendee email, which for a
+// synthetic unknown attendee carries the 'synth-<ns>-' prefix. Counts those
+// unmatched candidates for this namespace. Caller passes a BARE prefix; '%'
+// appended here.
+func (q *Queries) SyntheticCountUnmatchedExternalContactByEmailPrefix(ctx context.Context, sourceIDPrefix pgtype.Text) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountUnmatchedExternalContactByEmailPrefix, sourceIDPrefix)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -1015,6 +1096,21 @@ DELETE FROM note WHERE contact_id = ANY($1::uuid[])
 // Cleanup step 12: note by contact.
 func (q *Queries) SyntheticDeleteNotesByContactIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteNotesByContactIds, contactIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const SyntheticDeleteTelegramChatConfigsByChatIds = `-- name: SyntheticDeleteTelegramChatConfigsByChatIds :execrows
+DELETE FROM telegram_chat_config WHERE telegram_chat_id = ANY($1::bigint[])
+`
+
+// Cleanup step 6b: delete the group telegram_chat_config rows a group replay
+// created, by the exact tracked chat ids (telegram_chat_config has no namespace
+// column — keyed only by telegram_chat_id).
+func (q *Queries) SyntheticDeleteTelegramChatConfigsByChatIds(ctx context.Context, chatIds []int64) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteTelegramChatConfigsByChatIds, chatIds)
 	if err != nil {
 		return 0, err
 	}

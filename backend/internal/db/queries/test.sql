@@ -442,3 +442,48 @@ WHERE source_id = @source_id
 SELECT COUNT(*) FROM calendar_event
 WHERE gcal_event_id = @gcal_event_id
   AND matched_contact_ids = '{}';
+
+-- name: SyntheticCountCalendarEventByGcalId :one
+-- Settle Gate A (GCal decline terminal): count ALL calendar_event rows for the
+-- gcal id regardless of status/match. The cutover decline branch DELETES the
+-- row, so the decline test settles on this reaching 0. calendar_event has no
+-- deleted_at column (hard-delete table).
+SELECT COUNT(*) FROM calendar_event
+WHERE gcal_event_id = @gcal_event_id;
+
+-- name: SyntheticCountUnmatchedExternalContactByEmailPrefix :one
+-- Settle/assert (GCal unmatched-attendee import candidate): the GCal provider
+-- stores an unmatched attendee as an external_contact with source='gcal_attendee'
+-- and source_id = the NORMALIZED (lowercased/trimmed) attendee email, which for a
+-- synthetic unknown attendee carries the 'synth-<ns>-' prefix. Counts those
+-- unmatched candidates for this namespace. Caller passes a BARE prefix; '%'
+-- appended here.
+SELECT COUNT(*) FROM external_contact
+WHERE source = 'gcal_attendee'
+  AND source_id LIKE @source_id_prefix || '%'
+  AND match_status = 'unmatched'
+  AND deleted_at IS NULL;
+
+-- name: SyntheticCountTelegramMessagesByChatAndMessageId :one
+-- Group assertion: count telegram_message rows for (telegram_chat_id,
+-- telegram_message_id). Tests assert 0 for the untracked-by-size group case (the
+-- shouldTrackChat gate returns before UpsertMessage) and 1 for tracked.
+SELECT COUNT(*) FROM telegram_message
+WHERE telegram_chat_id = @telegram_chat_id
+  AND telegram_message_id = @telegram_message_id
+  AND deleted_at IS NULL;
+
+-- name: SyntheticCountTelegramChatConfigInChatIdBand :one
+-- Harness setup collision detection (E2-D8d): count telegram_chat_config rows
+-- whose telegram_chat_id falls in this namespace's reserved peer band
+-- [band_start, band_end) — group chat ids are drawn from that band. A non-zero
+-- count means a leftover config row occupies the band, so NewHarness re-salts.
+SELECT COUNT(*) FROM telegram_chat_config
+WHERE telegram_chat_id >= @band_start
+  AND telegram_chat_id < @band_end;
+
+-- name: SyntheticDeleteTelegramChatConfigsByChatIds :execrows
+-- Cleanup step 6b: delete the group telegram_chat_config rows a group replay
+-- created, by the exact tracked chat ids (telegram_chat_config has no namespace
+-- column — keyed only by telegram_chat_id).
+DELETE FROM telegram_chat_config WHERE telegram_chat_id = ANY(@chat_ids::bigint[]);

@@ -165,6 +165,16 @@ func (r *SyntheticSupportRepository) DeleteTelegramMessagesByPeerUserID(ctx cont
 	return r.queries.DeleteTelegramMessagesByPeerUserID(ctx, pgtype.Int8{Int64: peerUserID, Valid: true})
 }
 
+// DeleteTelegramChatConfigsByChatIds removes telegram_chat_config rows for the
+// tracked group chat ids (cleanup step 6b). telegram_chat_config has no
+// namespace column, so a group replay's config rows are deleted by exact chat id.
+func (r *SyntheticSupportRepository) DeleteTelegramChatConfigsByChatIds(ctx context.Context, chatIDs []int64) (int64, error) {
+	if len(chatIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticDeleteTelegramChatConfigsByChatIds(ctx, chatIDs)
+}
+
 // DeleteCalendarEventsByGcalEventIDPrefix removes calendar_event rows whose
 // gcal_event_id is ns-prefixed (cleanup step 7). Reuses the existing query.
 func (r *SyntheticSupportRepository) DeleteCalendarEventsByGcalEventIDPrefix(ctx context.Context, prefix string) (int64, error) {
@@ -279,6 +289,28 @@ func (r *SyntheticSupportRepository) CountExternalIdentitiesByIdentifierPrefix(c
 	return r.queries.SyntheticCountExternalIdentitiesByIdentifierPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
 }
 
+// CountTelegramChatConfigInChatIdBand counts telegram_chat_config rows whose
+// telegram_chat_id is in [bandStart, bandEnd). Used by NewHarness for setup-time
+// group chat-id collision detection (group chat ids are drawn from the same
+// peer band, and telegram_chat_config has no namespace column).
+func (r *SyntheticSupportRepository) CountTelegramChatConfigInChatIdBand(ctx context.Context, bandStart, bandEnd int64) (int64, error) {
+	return r.queries.SyntheticCountTelegramChatConfigInChatIdBand(ctx, db.SyntheticCountTelegramChatConfigInChatIdBandParams{
+		BandStart: bandStart,
+		BandEnd:   bandEnd,
+	})
+}
+
+// CountTelegramMessagesByChatAndMessageID counts telegram_message rows for
+// (chatID, messageID). The group adapter asserts 0 for the untracked-by-size
+// case (the shouldTrackChat gate returned before UpsertMessage) and 1 for
+// tracked.
+func (r *SyntheticSupportRepository) CountTelegramMessagesByChatAndMessageID(ctx context.Context, chatID int64, messageID int32) (int64, error) {
+	return r.queries.SyntheticCountTelegramMessagesByChatAndMessageId(ctx, db.SyntheticCountTelegramMessagesByChatAndMessageIdParams{
+		TelegramChatID:    chatID,
+		TelegramMessageID: messageID,
+	})
+}
+
 // CountContactMethodsByValueNormalizedPrefix counts live (non-deleted-contact)
 // contact_method rows whose normalized value shares the given prefix. This is the
 // PRIMARY phone-band collision check: a seeded synthetic phone lives only as a
@@ -356,6 +388,22 @@ func (r *SyntheticSupportRepository) CountMatchedExternalContactBySourceID(ctx c
 // with an empty matched_contact_ids array.
 func (r *SyntheticSupportRepository) CountUnmatchedCalendarEventByGcalID(ctx context.Context, gcalEventID string) (int64, error) {
 	return r.queries.SyntheticCountUnmatchedCalendarEventByGcalId(ctx, gcalEventID)
+}
+
+// CountCalendarEventByGcalID counts ALL calendar_event rows for the gcal id
+// (any status/match). The GCal decline test settles on this reaching 0 (the
+// cutover decline branch deletes the row).
+func (r *SyntheticSupportRepository) CountCalendarEventByGcalID(ctx context.Context, gcalEventID string) (int64, error) {
+	return r.queries.SyntheticCountCalendarEventByGcalId(ctx, gcalEventID)
+}
+
+// CountUnmatchedExternalContactByEmailPrefix counts gcal_attendee import
+// candidates whose source_id (the normalized attendee email) is ns-prefixed and
+// match_status='unmatched'. The GCal unmatched-attendee path stores the candidate
+// keyed by the normalized email, not by a synthetic source_id, so it is matched
+// by the email prefix here.
+func (r *SyntheticSupportRepository) CountUnmatchedExternalContactByEmailPrefix(ctx context.Context, prefix string) (int64, error) {
+	return r.queries.SyntheticCountUnmatchedExternalContactByEmailPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
 }
 
 // --- revoked synthetic Mac host (host-only ingest kinds) -------------------
