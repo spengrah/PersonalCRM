@@ -56,6 +56,16 @@ See [Layered Architecture](../guides/architecture.md#why-layered) for how these 
 
 **Integration tests suffice for unit tests** when unit tests would require heavy mock infrastructure. If the codebase doesn't have mock interfaces for repositories, write integration tests that exercise the real code path rather than creating mock infrastructure for a single test file.
 
+## Build State With the Synthetic Toolkit
+
+**New tests build state via the synthetic factories/replay/scenarios — not hand-rolled fixtures or raw inserts.** Unit tests use `synthetic/factory` directly; integration tests use the `synthetic.NewHarness` replay harness (which seeds through the real service/repository layer, replays source input through the real pipeline, and tears down by tracked id). This gives every new test deterministic, namespace-isolated data on the shared test DB for free — instead of re-deriving the determinism/isolation workarounds by hand.
+
+- **Don't** open-code a `CreateContact` fixture, a raw `pool.Exec(ctx, "INSERT ...")`, or a hand-built source payload — call `gen.Contact(...)` / `gen.GmailMessage(...)` / `h.SeedContact(...)` / `h.ReplayGmail(...)` etc.
+- **Namespace isolation** is automatic: give each sub-test a unique namespace via `synthetic.NewHarnessForNamespace` so shared-test-DB reuse can't collide (supersedes the manual randomized-suffix pattern).
+- **Heavy replay tests are slow** (River-draining): call `testsupport.RequireLongTests(t)` and name them with the `TestSynthetic` prefix so they route onto the slow suite (see Slow-test routing in `.ai/patterns/synthetic-seed-toolkit.md`).
+
+See [`.ai/patterns/synthetic-seed-toolkit.md`](../patterns/synthetic-seed-toolkit.md) for the factory/replay/profile how-to.
+
 ## Test File Locations
 
 ```

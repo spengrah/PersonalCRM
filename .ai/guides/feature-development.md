@@ -368,6 +368,14 @@ make test-integration  # Backend DB tests
 make test-e2e-diff     # Diff-selected Playwright E2E tests (core + impacted)
 ```
 
+**New features write their own seeding.** When your feature adds an entity, a sync source, or a downstream record, add the matching coverage to the synthetic-seed toolkit so staging, `make dev-seed`, and the QA harness all carry the new data — and so new tests can build it through the factories rather than hand-rolled fixtures:
+
+- A new **entity** → a factory spec + `(*Generator)` builder in `synthetic/factory/domain.go`.
+- A new **sync source** → a source-payload factory in `synthetic/factory/sources.go` + a `Harness.Replay<Source>` adapter in `synthetic/replay/` that drives the real provider seam (extract a fake-fetcher seam if one doesn't exist), plus any `SyntheticSupportRepository` reads/deletes it needs (sqlc only, no raw SQL).
+- A new **downstream/pending record** → wire it into the relevant profile in `synthetic/profiles.go`, or document it as a deferred coverage gap if no producer exists yet.
+
+See [`.ai/patterns/synthetic-seed-toolkit.md`](../patterns/synthetic-seed-toolkit.md) for the full how-to (factories, replay adapters, profiles, the namespace isolation primitive, and the two-gate Settle + ID-tracked Cleanup).
+
 ---
 
 ## 8. Add Frontend Components
