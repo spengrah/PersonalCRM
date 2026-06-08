@@ -3,7 +3,9 @@ package tests
 import (
 	"context"
 	"testing"
+	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/synthetic"
 	"personal-crm/backend/internal/synthetic/factory"
@@ -128,4 +130,63 @@ func TestSyntheticTodoistReplay_DoesNotTouchOtherNamespace(t *testing.T) {
 	post, err := contactTaskRepo.ListContactTasksByContact(ctx, sentinelContact.ID)
 	require.NoError(t, err)
 	require.Empty(t, post, "namespace A's Todoist replay must not create a contact_task on namespace B's contact")
+}
+
+// TestSyntheticGCalReplay_DoesNotTouchOtherNamespace proves the GCal replay is
+// namespace-scoped: a replay in namespace A does NOT read, mark, or publish for a
+// past calendar_event seeded in namespace B, even though the provider's
+// updateLastContactedForPastEvents lists ALL past confirmed events DB-wide via
+// ListPastEventsNeedingUpdate. Mirrors the Todoist cross-namespace guard.
+func TestSyntheticGCalReplay_DoesNotTouchOtherNamespace(t *testing.T) {
+	testsupport.RequireLongTests(t)
+	database, ctx := newSyntheticDB(t)
+	calendarRepo := repository.NewCalendarEventRepository(database.Queries)
+	support := repository.NewSyntheticSupportRepository(database.Queries)
+
+	// Namespace B: a contact + a past, confirmed calendar_event with the contact
+	// matched and last_contacted_updated=FALSE — i.e. eligible for the global
+	// ListPastEventsNeedingUpdate enumeration but NOT yet processed. Seeded
+	// directly (not via ReplayGCal, which would settle/process it). The
+	// ns-prefixed gcal_event_id keeps the row inside namespace B's cleanup scope.
+	sentinel := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), 35791)
+	sgen := sentinel.Generator()
+	sentinelContact, err := sentinel.SeedContact(ctx, sgen.Contact(factory.WithEmail()))
+	require.NoError(t, err)
+
+	now := accelerated.GetCurrentTime()
+	sentinelGcalID := sgen.Prefix() + "gcal-sentinel"
+	_, err = calendarRepo.Upsert(ctx, repository.UpsertCalendarEventRequest{
+		GcalEventID:          sentinelGcalID,
+		GcalCalendarID:       "primary",
+		GoogleAccountID:      sgen.Prefix() + "account",
+		StartTime:            now.Add(-2 * time.Hour),
+		EndTime:              now.Add(-1 * time.Hour),
+		Status:               "confirmed",
+		Attendees:            []repository.Attendee{},
+		MatchedContactIDs:    []uuid.UUID{sentinelContact.ID},
+		SyncedAt:             now,
+		LastContactedUpdated: false,
+	})
+	require.NoError(t, err)
+
+	// The sentinel is unprocessed before namespace A's replay.
+	pre, err := support.CountProcessedCalendarEventByGcalID(ctx, sentinelGcalID, sentinelContact.ID)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), pre, "sentinel event should be unprocessed before the replay")
+
+	// Namespace A: seed its own email contact + run a GCal replay.
+	a := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), 97531)
+	agen := a.Generator()
+	aSpec := agen.Contact(factory.WithEmail())
+	aContact, err := a.SeedContact(ctx, aSpec)
+	require.NoError(t, err)
+	res, err := a.ReplayGCal(ctx, aContact.ID, agen.GCalEvent(aSpec, factory.MatchSeeded))
+	require.NoError(t, err)
+	require.True(t, res.Matched)
+
+	// The sentinel (namespace B) event must be untouched — namespace A's replay
+	// must NOT mark it processed (no calendar.attended published for it).
+	post, err := support.CountProcessedCalendarEventByGcalID(ctx, sentinelGcalID, sentinelContact.ID)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), post, "namespace A's GCal replay must not process namespace B's past event")
 }

@@ -3,12 +3,15 @@ package replay
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
 
 	"personal-crm/backend/internal/google"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/synthetic/factory"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	calendarapi "google.golang.org/api/calendar/v3"
 )
 
@@ -17,6 +20,55 @@ type GCalResult struct {
 	ContactID   uuid.UUID
 	GcalEventID string
 	Matched     bool // false for MatchUnknown (unmatched attendee)
+}
+
+// namespaceScopedCalendarRepo wraps the real calendar repository for the GCal
+// replay so the provider's past-event publish loop is naturally scoped to THIS
+// harness's events. The provider's updateLastContactedForPastEvents calls
+// ListPastEventsNeedingUpdate to enumerate every past confirmed calendar_event
+// DB-wide and publishes calendar.attended for each; on the shared test DB this
+// races with other tests' calendar_events. This wrapper filters that enumeration
+// to events whose gcal_event_id carries the harness's synthetic prefix, so a
+// replay in one namespace can never read, mark, or publish for another
+// namespace's (or a real) event. All other methods pass through unchanged.
+// Test-only — no production provider change.
+type namespaceScopedCalendarRepo struct {
+	real   *repository.CalendarEventRepository
+	prefix string
+}
+
+func (r *namespaceScopedCalendarRepo) Upsert(ctx context.Context, req repository.UpsertCalendarEventRequest) (*repository.CalendarEvent, error) {
+	return r.real.Upsert(ctx, req)
+}
+
+func (r *namespaceScopedCalendarRepo) ListPastEventsNeedingUpdate(ctx context.Context, before time.Time, limit int32) ([]repository.CalendarEvent, error) {
+	all, err := r.real.ListPastEventsNeedingUpdate(ctx, before, limit)
+	if err != nil {
+		return nil, err
+	}
+	scoped := make([]repository.CalendarEvent, 0, len(all))
+	for _, e := range all {
+		if strings.HasPrefix(e.GcalEventID, r.prefix) {
+			scoped = append(scoped, e)
+		}
+	}
+	return scoped, nil
+}
+
+func (r *namespaceScopedCalendarRepo) MarkLastContactedUpdated(ctx context.Context, id uuid.UUID) error {
+	return r.real.MarkLastContactedUpdated(ctx, id)
+}
+
+func (r *namespaceScopedCalendarRepo) GetByGcalID(ctx context.Context, gcalEventID, gcalCalendarID, googleAccountID string) (*repository.CalendarEvent, error) {
+	return r.real.GetByGcalID(ctx, gcalEventID, gcalCalendarID, googleAccountID)
+}
+
+func (r *namespaceScopedCalendarRepo) DeleteByGcalIDTx(ctx context.Context, tx pgx.Tx, gcalEventID, gcalCalendarID, googleAccountID string) error {
+	return r.real.DeleteByGcalIDTx(ctx, tx, gcalEventID, gcalCalendarID, googleAccountID)
+}
+
+func (r *namespaceScopedCalendarRepo) MarkCancelledByGcalID(ctx context.Context, gcalEventID, gcalCalendarID, googleAccountID string) error {
+	return r.real.MarkCancelledByGcalID(ctx, gcalEventID, gcalCalendarID, googleAccountID)
 }
 
 // ReplayGCal feeds a synthetic past calendar event through the REAL
@@ -49,6 +101,15 @@ func (h *Harness) ReplayGCal(ctx context.Context, contactID uuid.UUID, spec fact
 			return []*calendarapi.Event{spec.Event}, "", "synth-sync-token", nil
 		},
 	}))
+	// Confine the provider's DB-wide past-event enumeration
+	// (ListPastEventsNeedingUpdate) to THIS harness's events so a concurrent
+	// test's calendar_events on the shared DB are never read, marked, or
+	// published for. The before/after behavior on the harness's own events is
+	// unchanged.
+	provider.SetCalendarRepoForTest(&namespaceScopedCalendarRepo{
+		real:   repository.NewCalendarEventRepository(h.database.Queries),
+		prefix: h.gen.Prefix(),
+	})
 
 	accountID := spec.AccountID
 	state := &repository.SyncState{Source: repository.InteractionSourceGCal, AccountID: &accountID}

@@ -629,6 +629,27 @@ func (p *CalendarSyncProvider) SetFetcherFactoryForTest(factory func(ctx context
 	p.newFetcher = factory
 }
 
+// CalendarRepoForTest is the exported mirror of the unexported
+// calendarRepoInterface, so a cross-package test can supply a namespace-scoped
+// wrapper around the real calendar repository. The synthetic replay harness uses
+// it to confine updateLastContactedForPastEvents's DB-wide
+// ListPastEventsNeedingUpdate enumeration to its own events on the shared test
+// DB. Production code must NOT use this.
+type CalendarRepoForTest interface {
+	Upsert(ctx context.Context, req repository.UpsertCalendarEventRequest) (*repository.CalendarEvent, error)
+	ListPastEventsNeedingUpdate(ctx context.Context, before time.Time, limit int32) ([]repository.CalendarEvent, error)
+	MarkLastContactedUpdated(ctx context.Context, id uuid.UUID) error
+	GetByGcalID(ctx context.Context, gcalEventID, gcalCalendarID, googleAccountID string) (*repository.CalendarEvent, error)
+	DeleteByGcalIDTx(ctx context.Context, tx pgx.Tx, gcalEventID, gcalCalendarID, googleAccountID string) error
+	MarkCancelledByGcalID(ctx context.Context, gcalEventID, gcalCalendarID, googleAccountID string) error
+}
+
+// SetCalendarRepoForTest substitutes the calendar repository so a test can inject
+// a namespace-scoped wrapper. Production code must NOT call this.
+func (p *CalendarSyncProvider) SetCalendarRepoForTest(repo CalendarRepoForTest) {
+	p.calendarRepo = repo
+}
+
 // FakeCalendarFetcherFuncs lets a cross-package test supply a fake
 // calendarFetcher by closures, since the calendarFetcher interface is
 // unexported. ListEvents must be set. Build the factory with
