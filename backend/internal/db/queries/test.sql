@@ -540,3 +540,132 @@ WHERE source = 'telegram' AND source_id = ANY(@peer_ids::text[]);
 -- delete via ON DELETE SET NULL and would otherwise pollute future matching).
 DELETE FROM external_identity
 WHERE source = 'telegram' AND source_id = ANY(@peer_ids::text[]);
+
+-- ============================================================================
+-- crm-admin --reset-and-seed support: a HARD wipe of every live data table
+-- so a staging instance can be reset to a known synthetic baseline. Preserves
+-- only schema_migrations (the migration ledger) + River's own internal tables
+-- (river_%); river_job IS wiped (stale jobs must not dereference wiped rows).
+-- The list is the NET-LIVE data-table set; a non-existent relation here aborts
+-- the TRUNCATE (so it must track the schema), and an omitted live data table is
+-- caught by the catalog guard in the reset integration test.
+-- ============================================================================
+
+-- name: ResetSyntheticData :exec
+-- HARD reset: truncate the complete live data-table closure in one statement.
+-- RESTART IDENTITY resets sequences; CASCADE is a no-op safety net because the
+-- list already names the full closure (it does NOT silently widen the wipe). Run
+-- ONLY by crm-admin --reset-and-seed (CRM_ENV != production, service stopped,
+-- --yes confirmed). The catalog guard in synthetic_reset_integration_test.go
+-- fails if a public table is added that is not in this list / schema_migrations /
+-- river_%.
+TRUNCATE TABLE
+    calendar_event,
+    comms_message,
+    connection,
+    contact,
+    contact_enrichment,
+    contact_method,
+    contact_summary,
+    contact_tag,
+    contact_task,
+    event,
+    event_consumer_claim,
+    external_contact,
+    external_identity,
+    external_sync_log,
+    external_sync_state,
+    interaction,
+    mac_host,
+    mac_host_pairing_token,
+    meeting_note,
+    messages_message,
+    note,
+    note_embedding,
+    oauth_credential,
+    phone_call,
+    prompt_query,
+    river_job,
+    tag,
+    telegram_channel_state,
+    telegram_chat_config,
+    telegram_message,
+    telegram_session,
+    telegram_update_state
+RESTART IDENTITY CASCADE;
+
+-- name: CountNonFinalRiverJobs :one
+-- Additive-seed (crm-admin --seed) preflight: count queued/in-flight river_job
+-- rows (finalized_at IS NULL). An additive seed REFUSES if this is non-zero — it
+-- must not steal pre-existing queued work, and a drained queue is its
+-- precondition. (--reset-and-seed skips this — it WIPES river_job.) This is a
+-- queue-drain precondition, NOT a live-worker liveness claim (River 0.34 does not
+-- populate river_client, so no sound DB liveness signal exists).
+SELECT COUNT(*) FROM river_job WHERE finalized_at IS NULL;
+
+-- name: TestCountAllRows :one
+-- Reset integration test only: count ALL rows in a single table by name. Used by
+-- the clone-DB reset test to assert each wiped table is empty after the reset and
+-- that schema_migrations survives. The table name is validated against the wiped
+-- list by the test before it reaches here; format() with %I quotes the
+-- identifier so it can never be an injection vector.
+SELECT (xpath('/row/c/text()',
+    query_to_xml(format('SELECT COUNT(*) AS c FROM %I', @table_name::text), false, true, '')))[1]::text::bigint;
+
+-- name: TestListPublicTables :many
+-- Reset integration test only: enumerate every base table in the public schema
+-- so the catalog guard can assert each is in the wiped list, is schema_migrations,
+-- or matches the river_% allowlist. Read-only catalog access.
+SELECT table_name::text FROM information_schema.tables
+WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+ORDER BY table_name;
+
+-- name: TestInsertNonFinalRiverJob :exec
+-- Reset/additive-seed test only: plant ONE queued (non-finalized) river_job so a
+-- test can assert the additive --seed preflight REFUSES while --reset-and-seed
+-- PROCEEDS (it wipes river_job). Minimal valid row: River requires kind, queue,
+-- state, args, metadata; finalized_at stays NULL (the unfinalized signal).
+INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts)
+VALUES ('synthetic_test_marker', 'default', 'available', '{}'::jsonb, '{}'::jsonb, 1, 1);
+
+-- name: TestInsertOAuthCredentialMarker :exec
+-- Reset test only: a marker row in oauth_credential (the table whose preservation
+-- would re-introduce real PII on re-sync). Proves the reset wipes it.
+-- The token columns are bytea (encrypted-at-rest); dummy bytes are fine for a
+-- marker that is never decrypted.
+INSERT INTO oauth_credential
+    (provider, account_id, access_token_encrypted, encryption_nonce)
+VALUES ('synthetic_test', 'reset-marker', '\x00'::bytea, '\x00'::bytea);
+
+-- name: TestInsertExternalSyncStateMarker :exec
+-- Reset test only: a marker row in external_sync_state (a sync-cursor table the
+-- reset wipes so staging cannot re-sync real data).
+INSERT INTO external_sync_state (source, account_id)
+VALUES ('synthetic_test', 'reset-marker');
+
+-- name: TestInsertTelegramSessionMarker :exec
+-- Reset test only: a marker row in telegram_session (the Telegram auth session
+-- the reset wipes). session_data_encrypted + encryption_nonce are NOT NULL bytea.
+INSERT INTO telegram_session (session_data_encrypted, encryption_nonce, phone_number)
+VALUES ('\x00'::bytea, '\x00'::bytea, 'reset-marker');
+
+-- name: TestInsertTagMarker :exec
+-- Reset test only: a marker row in tag (a standalone table the harness does not
+-- touch).
+INSERT INTO tag (name) VALUES ('synthetic-reset-marker');
+
+-- name: TestListContactBucketsByNamePrefix :many
+-- Profile coverage test only: list the namespace's contacts (by full_name
+-- prefix) with the bucket-defining columns + a method count, so the test can
+-- assert the catalog produced ≥1 overdue (cadence + last_contacted in the past),
+-- ≥1 never-contacted (cadence + NULL last_contacted), and ≥1 no-method contact —
+-- proving the cadence/no-method states SURVIVE (a settling replay would
+-- overwrite last_contacted). Caller passes a BARE prefix; '%' appended.
+SELECT
+    c.id,
+    c.cadence,
+    c.last_contacted,
+    (SELECT COUNT(*) FROM contact_method cm WHERE cm.contact_id = c.id) AS method_count
+FROM contact c
+WHERE c.full_name LIKE @name_prefix || '%'
+  AND c.deleted_at IS NULL;

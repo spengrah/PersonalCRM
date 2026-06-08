@@ -37,9 +37,26 @@ const (
 	// defaultSettleTimeout bounds each gate's polling loop. Generous to avoid
 	// flakes under CI load; a timeout here names the unmet gate and indicates a
 	// real wiring regression, not normal latency.
+	//
+	// The budget is REAL wall-clock (a context.WithTimeout / time.Timer, which
+	// use the runtime monotonic clock), NOT accelerated-time. The settle budget
+	// is INFRASTRUCTURE timing — how long to wait for River jobs to finalize —
+	// not domain time. Under a high TIME_ACCELERATION an accelerated-time budget
+	// of 30s would collapse to a fraction of a real second and spuriously time
+	// out the replay-heavy graph, so the wait loops bound real elapsed time.
 	defaultSettleTimeout = 30 * time.Second
 	settlePollInterval   = 50 * time.Millisecond
 )
+
+// realTimeBudget returns a func reporting whether the real-wall-clock budget is
+// still open, plus a cancel to release the underlying timer context. It uses
+// context.WithTimeout (runtime monotonic clock) so the budget is independent of
+// TIME_ACCELERATION — see defaultSettleTimeout. No time.Now() / accelerated call
+// in our code; the timer is the time source.
+func realTimeBudget(d time.Duration) (open func() bool, cancel func()) {
+	tctx, c := context.WithTimeout(context.Background(), d)
+	return func() bool { return tctx.Err() == nil }, c
+}
 
 // created is the ID ledger the harness/adapters accumulate during a run so
 // Cleanup can delete by exact id (never by a DB-wide source/kind value) and
@@ -184,6 +201,65 @@ func (h *Harness) SeedContact(ctx context.Context, spec factory.ContactSpec) (*r
 	return contact, nil
 }
 
+// SeedNote attaches a notepad note to a seeded contact via the EXISTING
+// NoteRepository (orchestration over an existing repo, not new machinery). The
+// contact must be one the harness seeded (so the teardown's note step — delete
+// by tracked contact id — cleans it). Gives the catalog its "≥1 contact with
+// notes" bucket. The body is namespace-tagged so it is identifiable.
+func (h *Harness) SeedNote(ctx context.Context, contactID uuid.UUID, body string) error {
+	noteRepo := repository.NewNoteRepository(h.database.Queries)
+	if _, err := noteRepo.CreateNotepad(ctx, contactID, h.gen.Prefix()+body); err != nil {
+		return fmt.Errorf("seed note: %w", err)
+	}
+	return nil
+}
+
+// SeedOrphanMeetingNote inserts a single orphan_needs_review meeting_note row
+// against the harness's seeded synthetic mac_host (the Imports Interactions
+// "orphan" surface). It uses the EXISTING MeetingNoteRepository — not a new
+// replay adapter — so it is orchestration over an existing repo, mirroring the
+// /seed/meeting-notes route. The session id is a fresh random UUID; cleanup is by
+// the harness's host id (the teardown's meeting_note step), so no namespace
+// prefix is needed. Returns the created session id.
+//
+// Only the orphan state is produced here: conflict_pending needs a well-formed
+// conflict_candidates snapshot referencing real events, which has no toolkit
+// producer (a documented, deferred coverage gap).
+func (h *Harness) SeedOrphanMeetingNote(ctx context.Context, title, summary string) (uuid.UUID, error) {
+	tx, err := h.database.Pool.Begin(ctx)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("seed orphan meeting note: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	sessionID := uuid.New()
+	hostID := h.macHostID
+	params := repository.InsertMeetingNoteParams{
+		AnarlogSessionID: sessionID,
+		MacHostID:        &hostID,
+		LinkageState:     repository.LinkageStateOrphanNeedsReview,
+		MeetingAt:        accelerated.GetCurrentTime(),
+		// An orphan carries no conflict_candidates snapshot; empty hashes are
+		// accepted by the column CHECK.
+		InputHash:       "",
+		ResolvedSetHash: "",
+	}
+	if title != "" {
+		params.Title = &title
+	}
+	if summary != "" {
+		params.Summary = &summary
+	}
+	meetingNoteRepo := repository.NewMeetingNoteRepository(h.database.Queries)
+	if _, err := meetingNoteRepo.InsertMeetingNoteTx(ctx, tx, params); err != nil {
+		return uuid.Nil, fmt.Errorf("seed orphan meeting note: insert: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return uuid.Nil, fmt.Errorf("seed orphan meeting note: commit: %w", err)
+	}
+	return sessionID, nil
+}
+
 // --- Settle ----------------------------------------------------------------
 
 // gateA is a per-replay domain terminal predicate: a sqlc-backed read scoped to
@@ -214,9 +290,10 @@ func (h *Harness) waitGateA(ctx context.Context, predicate gateA) error {
 	if predicate == nil {
 		return nil
 	}
-	deadline := accelerated.GetCurrentTime().Add(defaultSettleTimeout)
+	open, cancel := realTimeBudget(defaultSettleTimeout)
+	defer cancel()
 	var lastErr error
-	for accelerated.GetCurrentTime().Before(deadline) {
+	for open() {
 		ok, err := predicate(ctx)
 		if err == nil && ok {
 			return nil
@@ -229,10 +306,11 @@ func (h *Harness) waitGateA(ctx context.Context, predicate gateA) error {
 
 func (h *Harness) waitGateB(ctx context.Context, source string) error {
 	contactIDs := h.snapshotContactIDs()
-	deadline := accelerated.GetCurrentTime().Add(defaultSettleTimeout)
+	open, cancel := realTimeBudget(defaultSettleTimeout)
+	defer cancel()
 	var lastEventJobs, lastAggJobs int64
 	var lastErr error
-	for accelerated.GetCurrentTime().Before(deadline) {
+	for open() {
 		eventJobs, err := h.support.CountUnfinalizedRiverJobsForEventsByContacts(ctx, contactIDs)
 		if err != nil {
 			lastErr = err

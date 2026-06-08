@@ -59,27 +59,46 @@ func NewHarnessWithDB(ctx context.Context, database *db.Database) (*Harness, fun
 	return replay.NewHarnessWithDB(ctx, database)
 }
 
-// Counts tunes the per-entity volume SeedAll produces. The forward-compatible
-// volume seam; DefaultParams supplies a small "minimal-scoped" shape.
-type Counts struct {
-	SeededContacts int // contacts seeded with a matching identifier per source
+// NewHarnessWithDBForNamespace builds a non-test harness for an EXPLICIT
+// namespace + seed (the crm-admin profile entrypoints). Re-exported so the
+// entrypoints can pin a stable per-profile namespace for a reproducible seed
+// world. The success path calls Harness.Quiesce (seed-and-leave); the error path
+// calls the returned teardown closure (stop client + clean the partial world).
+func NewHarnessWithDBForNamespace(ctx context.Context, database *db.Database, namespace string, seed uint64) (*Harness, func(context.Context) error, error) {
+	return replay.NewHarnessWithDBForNamespace(ctx, database, namespace, seed)
 }
 
-// SeedParams is the profile/volume seam consumed by SeedAll. Namespace + Seed
-// make the run deterministic and isolation-scoped. Distributions/profile tuning
-// land with later elements; this carries the minimal viable surface.
+// Counts tunes the per-entity volume a profile produces. The per-profile
+// distribution knobs the profiles read; only the knobs a profile actually
+// consumes are present (no distribution DSL). DefaultParams supplies the small
+// "minimal-scoped" shape.
+type Counts struct {
+	SeededContacts    int // contacts seeded with a matching identifier per source
+	UnmatchedExternal int // import-candidate (unmatched external_contact) rows
+	StrandedTelegram  int // stranded telegram_message rows (matched_contact_id IS NULL)
+	StrandedMessages  int // stranded messages_message (iMessage) rows
+	UnmatchedCalendar int // calendar_event rows with an unmatched attendee
+	OrphanMeetingNote int // orphan_needs_review meeting_note rows
+}
+
+// SeedParams is the profile/volume seam consumed by the seed orchestration.
+// Namespace + Seed make the run deterministic and isolation-scoped; Profile
+// selects which world to build.
 type SeedParams struct {
 	Namespace string
 	Seed      uint64
+	Profile   Profile
 	Counts    Counts
 }
 
 // DefaultParams is the small, namespaced "minimal-scoped" shape so the core is
-// usable and testable out of the box.
+// usable and testable out of the box. Profile is set EXPLICITLY (the zero value
+// of a Profile is "", which is an unknown/error profile, NOT minimal-scoped).
 func DefaultParams() SeedParams {
 	return SeedParams{
 		Namespace: "seedall",
 		Seed:      factory.DefaultSeed,
+		Profile:   ProfileMinimalScoped,
 		Counts:    Counts{SeededContacts: 1},
 	}
 }

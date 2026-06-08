@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy deploy-pi deploy-mac deploy-all setup-pi dev-native postgres-native sqlc smoke-test test-integration-fast test-integration-slow test-clean-clones check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry
+.PHONY: help setup dev dev-seed staging-reset build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy deploy-pi deploy-mac deploy-all setup-pi dev-native postgres-native sqlc smoke-test test-integration-fast test-integration-slow test-clean-clones check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -34,8 +34,10 @@ help:
 	@echo "  prod        - Switch to production environment (real cadences)"
 	@echo ""
 	@echo "Development:"
-	@echo "  dev         - Start development servers (uses Docker for PostgreSQL)"
-	@echo "  dev-native  - Start dev servers with native PostgreSQL (no Docker)"
+	@echo "  dev          - Start development servers (uses Docker for PostgreSQL)"
+	@echo "  dev-seed     - Seed the dev synthetic world, then start dev servers (opt-in; dev is unchanged)"
+	@echo "  dev-native   - Start dev servers with native PostgreSQL (no Docker)"
+	@echo "  staging-reset - HARD reset + reseed STAGING with the prod-shaped synthetic world (refuses production)"
 	@echo "  build       - Build both frontend and backend"
 	@echo "  crm-admin   - Build the operator-only admin CLI (backend/crm-admin)"
 	@echo "  mac-daemon  - Build the macOS daemon app bundle (optionally set CRM_MAC_CODESIGN_IDENTITY)"
@@ -108,6 +110,25 @@ dev:
 	@echo "Press Ctrl+C to exit (servers will keep running)"
 	@tail -f logs/frontend-dev.log logs/backend-dev.log 2>/dev/null || sleep infinity
 
+dev-seed: ## Seed the `dev` synthetic world into local Postgres, then start dev servers (opt-in; `make dev` is unchanged)
+	@echo "Seeding dev synthetic world, then starting development environment..."
+	@make dev-api-stop                        # stop any detached backend so the seed harness owns the River queue
+	@make docker-up
+	@bash scripts/sync-postgres-auth.sh
+	@bash scripts/dev-seed.sh                 # exports DATABASE_URL, migrates + crm-admin --seed --profile dev --yes (backend NOT running)
+	@echo "Starting backend server..."
+	@bash scripts/start-backend.sh
+	@echo "✅ Backend server started (logs: logs/backend-dev.log)"
+	@echo "Starting frontend development server..."
+	@bash scripts/start-frontend-dev.sh
+	@echo "✅ Frontend dev server started (logs: logs/frontend-dev.log)"
+	@echo ""
+	@echo "🌐 Frontend: http://localhost:3000"
+	@echo "🔧 Backend:  http://localhost:8080"
+	@echo ""
+	@echo "Press Ctrl+C to exit (servers will keep running)"
+	@tail -f logs/frontend-dev.log logs/backend-dev.log 2>/dev/null || sleep infinity
+
 # Development helpers
 dev-stop:
 	@echo "Stopping development servers (backend and frontend dev)..."
@@ -128,7 +149,11 @@ dev-restart:
 dev-api-stop:
 	@echo "Stopping backend dev server..."
 	@pkill -f crm-api || true
-	@# Wait briefly for port 8080 to be released
+	@# `go run cmd/crm-api/main.go` execs a child binary named `main` (NOT
+	@# `crm-api`), so the pkill above can miss it. Kill by listening port 8080
+	@# too, then wait for the port to be released — `make dev-seed` + the seed
+	@# CLI rely on the backend's River workers being genuinely gone.
+	@lsof -ti tcp:8080 | xargs kill -9 2>/dev/null || true
 	@for i in 1 2 3 4 5; do \
 	  if lsof -ti tcp:8080 >/dev/null 2>&1; then \
 	    sleep 0.4; \
@@ -136,6 +161,13 @@ dev-api-stop:
 	    break; \
 	  fi; \
 	done
+	@# Fail loudly if the port is still bound — make dev-seed relies on the
+	@# backend being genuinely gone before it seeds (a live backend would race
+	@# the seed's River client). A misleading "freed" message would hide that.
+	@if lsof -ti tcp:8080 >/dev/null 2>&1; then \
+	  echo "❌ Backend dev server still bound on port 8080 after kill — refusing to report stopped"; \
+	  exit 1; \
+	fi
 	@echo "✅ Backend dev server stopped (if it was running) and port freed"
 
 dev-api-start:
@@ -150,6 +182,9 @@ dev-api-restart:
 	@make dev-api-stop
 	@sleep 1
 	@make dev-api-start
+
+staging-reset: ## HARD reset + reseed STAGING with the prod-shaped synthetic world (refuses CRM_ENV=production; STAGING-only)
+	@bash scripts/staging-reset.sh   # stops service -> sources staging env -> crm-admin --reset-and-seed --profile prod-shaped --yes -> starts service
 
 # Native PostgreSQL (for containerized development without Docker-in-Docker)
 postgres-native:

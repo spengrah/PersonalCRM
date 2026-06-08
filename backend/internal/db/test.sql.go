@@ -70,6 +70,23 @@ func (q *Queries) CountMessagesMessageByGuid(ctx context.Context, guid string) (
 	return count, err
 }
 
+const CountNonFinalRiverJobs = `-- name: CountNonFinalRiverJobs :one
+SELECT COUNT(*) FROM river_job WHERE finalized_at IS NULL
+`
+
+// Additive-seed (crm-admin --seed) preflight: count queued/in-flight river_job
+// rows (finalized_at IS NULL). An additive seed REFUSES if this is non-zero — it
+// must not steal pre-existing queued work, and a drained queue is its
+// precondition. (--reset-and-seed skips this — it WIPES river_job.) This is a
+// queue-drain precondition, NOT a live-worker liveness claim (River 0.34 does not
+// populate river_client, so no sound DB liveness signal exists).
+func (q *Queries) CountNonFinalRiverJobs(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, CountNonFinalRiverJobs)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const CountRiverJobsByKind = `-- name: CountRiverJobsByKind :one
 SELECT COUNT(*) FROM river_job WHERE kind = $1
 `
@@ -354,6 +371,65 @@ func (q *Queries) GetRiverJobStateByID(ctx context.Context, id int64) (RiverJobS
 	var state RiverJobState
 	err := row.Scan(&state)
 	return state, err
+}
+
+const ResetSyntheticData = `-- name: ResetSyntheticData :exec
+
+TRUNCATE TABLE
+    calendar_event,
+    comms_message,
+    connection,
+    contact,
+    contact_enrichment,
+    contact_method,
+    contact_summary,
+    contact_tag,
+    contact_task,
+    event,
+    event_consumer_claim,
+    external_contact,
+    external_identity,
+    external_sync_log,
+    external_sync_state,
+    interaction,
+    mac_host,
+    mac_host_pairing_token,
+    meeting_note,
+    messages_message,
+    note,
+    note_embedding,
+    oauth_credential,
+    phone_call,
+    prompt_query,
+    river_job,
+    tag,
+    telegram_channel_state,
+    telegram_chat_config,
+    telegram_message,
+    telegram_session,
+    telegram_update_state
+RESTART IDENTITY CASCADE
+`
+
+// ============================================================================
+// crm-admin --reset-and-seed support: a HARD wipe of every live data table
+// so a staging instance can be reset to a known synthetic baseline. Preserves
+// only schema_migrations (the migration ledger) + River's own internal tables
+// (river_%); river_job IS wiped (stale jobs must not dereference wiped rows).
+// The list is the NET-LIVE data-table set; a non-existent relation here aborts
+// the TRUNCATE (so it must track the schema), and an omitted live data table is
+// caught by the catalog guard in the reset integration test.
+// ============================================================================
+// HARD reset: truncate the complete live data-table closure in one statement.
+// RESTART IDENTITY resets sequences; CASCADE is a no-op safety net because the
+// list already names the full closure (it does NOT silently widen the wipe). Run
+// ONLY by crm-admin --reset-and-seed (CRM_ENV != production, service stopped,
+// --yes confirmed). The catalog guard in synthetic_reset_integration_test.go
+// fails if a public table is added that is not in this list / schema_migrations /
+// river_%.
+func (q *Queries) ResetSyntheticData(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, ResetSyntheticData)
+	return err
 }
 
 const SeedExternalSyncState = `-- name: SeedExternalSyncState :one
@@ -1292,6 +1368,165 @@ func (q *Queries) SyntheticListEventIdsForContacts(ctx context.Context, contactI
 			return nil, err
 		}
 		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const TestCountAllRows = `-- name: TestCountAllRows :one
+SELECT (xpath('/row/c/text()',
+    query_to_xml(format('SELECT COUNT(*) AS c FROM %I', $1::text), false, true, '')))[1]::text::bigint
+`
+
+// Reset integration test only: count ALL rows in a single table by name. Used by
+// the clone-DB reset test to assert each wiped table is empty after the reset and
+// that schema_migrations survives. The table name is validated against the wiped
+// list by the test before it reaches here; format() with %I quotes the
+// identifier so it can never be an injection vector.
+func (q *Queries) TestCountAllRows(ctx context.Context, tableName string) (int64, error) {
+	row := q.db.QueryRow(ctx, TestCountAllRows, tableName)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const TestInsertExternalSyncStateMarker = `-- name: TestInsertExternalSyncStateMarker :exec
+INSERT INTO external_sync_state (source, account_id)
+VALUES ('synthetic_test', 'reset-marker')
+`
+
+// Reset test only: a marker row in external_sync_state (a sync-cursor table the
+// reset wipes so staging cannot re-sync real data).
+func (q *Queries) TestInsertExternalSyncStateMarker(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, TestInsertExternalSyncStateMarker)
+	return err
+}
+
+const TestInsertNonFinalRiverJob = `-- name: TestInsertNonFinalRiverJob :exec
+INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts)
+VALUES ('synthetic_test_marker', 'default', 'available', '{}'::jsonb, '{}'::jsonb, 1, 1)
+`
+
+// Reset/additive-seed test only: plant ONE queued (non-finalized) river_job so a
+// test can assert the additive --seed preflight REFUSES while --reset-and-seed
+// PROCEEDS (it wipes river_job). Minimal valid row: River requires kind, queue,
+// state, args, metadata; finalized_at stays NULL (the unfinalized signal).
+func (q *Queries) TestInsertNonFinalRiverJob(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, TestInsertNonFinalRiverJob)
+	return err
+}
+
+const TestInsertOAuthCredentialMarker = `-- name: TestInsertOAuthCredentialMarker :exec
+INSERT INTO oauth_credential
+    (provider, account_id, access_token_encrypted, encryption_nonce)
+VALUES ('synthetic_test', 'reset-marker', '\x00'::bytea, '\x00'::bytea)
+`
+
+// Reset test only: a marker row in oauth_credential (the table whose preservation
+// would re-introduce real PII on re-sync). Proves the reset wipes it.
+// The token columns are bytea (encrypted-at-rest); dummy bytes are fine for a
+// marker that is never decrypted.
+func (q *Queries) TestInsertOAuthCredentialMarker(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, TestInsertOAuthCredentialMarker)
+	return err
+}
+
+const TestInsertTagMarker = `-- name: TestInsertTagMarker :exec
+INSERT INTO tag (name) VALUES ('synthetic-reset-marker')
+`
+
+// Reset test only: a marker row in tag (a standalone table the harness does not
+// touch).
+func (q *Queries) TestInsertTagMarker(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, TestInsertTagMarker)
+	return err
+}
+
+const TestInsertTelegramSessionMarker = `-- name: TestInsertTelegramSessionMarker :exec
+INSERT INTO telegram_session (session_data_encrypted, encryption_nonce, phone_number)
+VALUES ('\x00'::bytea, '\x00'::bytea, 'reset-marker')
+`
+
+// Reset test only: a marker row in telegram_session (the Telegram auth session
+// the reset wipes). session_data_encrypted + encryption_nonce are NOT NULL bytea.
+func (q *Queries) TestInsertTelegramSessionMarker(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, TestInsertTelegramSessionMarker)
+	return err
+}
+
+const TestListContactBucketsByNamePrefix = `-- name: TestListContactBucketsByNamePrefix :many
+SELECT
+    c.id,
+    c.cadence,
+    c.last_contacted,
+    (SELECT COUNT(*) FROM contact_method cm WHERE cm.contact_id = c.id) AS method_count
+FROM contact c
+WHERE c.full_name LIKE $1 || '%'
+  AND c.deleted_at IS NULL
+`
+
+type TestListContactBucketsByNamePrefixRow struct {
+	ID            pgtype.UUID        `json:"id"`
+	Cadence       pgtype.Text        `json:"cadence"`
+	LastContacted pgtype.Timestamptz `json:"last_contacted"`
+	MethodCount   int64              `json:"method_count"`
+}
+
+// Profile coverage test only: list the namespace's contacts (by full_name
+// prefix) with the bucket-defining columns + a method count, so the test can
+// assert the catalog produced ≥1 overdue (cadence + last_contacted in the past),
+// ≥1 never-contacted (cadence + NULL last_contacted), and ≥1 no-method contact —
+// proving the cadence/no-method states SURVIVE (a settling replay would
+// overwrite last_contacted). Caller passes a BARE prefix; '%' appended.
+func (q *Queries) TestListContactBucketsByNamePrefix(ctx context.Context, namePrefix pgtype.Text) ([]*TestListContactBucketsByNamePrefixRow, error) {
+	rows, err := q.db.Query(ctx, TestListContactBucketsByNamePrefix, namePrefix)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*TestListContactBucketsByNamePrefixRow{}
+	for rows.Next() {
+		var i TestListContactBucketsByNamePrefixRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Cadence,
+			&i.LastContacted,
+			&i.MethodCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const TestListPublicTables = `-- name: TestListPublicTables :many
+SELECT table_name::text FROM information_schema.tables
+WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+ORDER BY table_name
+`
+
+// Reset integration test only: enumerate every base table in the public schema
+// so the catalog guard can assert each is in the wiped list, is schema_migrations,
+// or matches the river_% allowlist. Read-only catalog access.
+func (q *Queries) TestListPublicTables(ctx context.Context) ([]string, error) {
+	rows, err := q.db.Query(ctx, TestListPublicTables)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var table_name string
+		if err := rows.Scan(&table_name); err != nil {
+			return nil, err
+		}
+		items = append(items, table_name)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

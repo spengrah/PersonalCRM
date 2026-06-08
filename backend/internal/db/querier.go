@@ -195,6 +195,13 @@ type Querier interface {
 	// Test assertion — count rows with the given guid (typically 0 or 1
 	// under the partial unique index). Used by duplicate-detection tests.
 	CountMessagesMessageByGuid(ctx context.Context, guid string) (int64, error)
+	// Additive-seed (crm-admin --seed) preflight: count queued/in-flight river_job
+	// rows (finalized_at IS NULL). An additive seed REFUSES if this is non-zero — it
+	// must not steal pre-existing queued work, and a drained queue is its
+	// precondition. (--reset-and-seed skips this — it WIPES river_job.) This is a
+	// queue-drain precondition, NOT a live-worker liveness claim (River 0.34 does not
+	// populate river_client, so no sound DB liveness signal exists).
+	CountNonFinalRiverJobs(ctx context.Context) (int64, error)
 	// Count OAuth credentials for a provider
 	CountOAuthCredentials(ctx context.Context, provider string) (int64, error)
 	// Test-only count of river_job rows for the rematch_dispatcher kind
@@ -1171,6 +1178,23 @@ type Querier interface {
 	// Uses array_replace for efficient in-place replacement
 	ReplaceContactInCalendarEvents(ctx context.Context, arg ReplaceContactInCalendarEventsParams) error
 	ResetSyncStateBackfillCursor(ctx context.Context, arg ResetSyncStateBackfillCursorParams) (*ExternalSyncState, error)
+	// ============================================================================
+	// crm-admin --reset-and-seed support: a HARD wipe of every live data table
+	// so a staging instance can be reset to a known synthetic baseline. Preserves
+	// only schema_migrations (the migration ledger) + River's own internal tables
+	// (river_%); river_job IS wiped (stale jobs must not dereference wiped rows).
+	// The list is the NET-LIVE data-table set; a non-existent relation here aborts
+	// the TRUNCATE (so it must track the schema), and an omitted live data table is
+	// caught by the catalog guard in the reset integration test.
+	// ============================================================================
+	// HARD reset: truncate the complete live data-table closure in one statement.
+	// RESTART IDENTITY resets sequences; CASCADE is a no-op safety net because the
+	// list already names the full closure (it does NOT silently widen the wipe). Run
+	// ONLY by crm-admin --reset-and-seed (CRM_ENV != production, service stopped,
+	// --yes confirmed). The catalog guard in synthetic_reset_integration_test.go
+	// fails if a public table is added that is not in this list / schema_migrations /
+	// river_%.
+	ResetSyntheticData(ctx context.Context) error
 	ResetTelegramChatConfigBackfill(ctx context.Context, telegramChatID int64) error
 	// Sets linked_kind, linked_id, linkage_state='linked',
 	// conflict_candidates=NULL on a row currently in linkage_state =
@@ -1489,6 +1513,12 @@ type Querier interface {
 	// (interaction.recorded uses interaction.ID as source_id, calendar.attended
 	// uses an internal ref, etc.) generically via payload->>'contact_id'.
 	SyntheticListEventIdsForContacts(ctx context.Context, contactIds []string) ([]pgtype.UUID, error)
+	// Reset integration test only: count ALL rows in a single table by name. Used by
+	// the clone-DB reset test to assert each wiped table is empty after the reset and
+	// that schema_migrations survives. The table name is validated against the wiped
+	// list by the test before it reaches here; format() with %I quotes the
+	// identifier so it can never be an injection vector.
+	TestCountAllRows(ctx context.Context, tableName string) (int64, error)
 	// TEST ONLY. Hard-deletes calendar_event rows whose gcal_event_id starts
 	// with the given prefix. Used by t.Cleanup to remove fixtures.
 	TestDeleteCalendarEventsByGcalEventIDPrefix(ctx context.Context, prefix string) error
@@ -1534,6 +1564,36 @@ type Querier interface {
 	// enforces. sqlc.narg('emails') makes the parameter nullable so callers can
 	// exercise the NULL JSONB column case.
 	TestInsertExternalContactRawEmails(ctx context.Context, arg TestInsertExternalContactRawEmailsParams) (*ExternalContact, error)
+	// Reset test only: a marker row in external_sync_state (a sync-cursor table the
+	// reset wipes so staging cannot re-sync real data).
+	TestInsertExternalSyncStateMarker(ctx context.Context) error
+	// Reset/additive-seed test only: plant ONE queued (non-finalized) river_job so a
+	// test can assert the additive --seed preflight REFUSES while --reset-and-seed
+	// PROCEEDS (it wipes river_job). Minimal valid row: River requires kind, queue,
+	// state, args, metadata; finalized_at stays NULL (the unfinalized signal).
+	TestInsertNonFinalRiverJob(ctx context.Context) error
+	// Reset test only: a marker row in oauth_credential (the table whose preservation
+	// would re-introduce real PII on re-sync). Proves the reset wipes it.
+	// The token columns are bytea (encrypted-at-rest); dummy bytes are fine for a
+	// marker that is never decrypted.
+	TestInsertOAuthCredentialMarker(ctx context.Context) error
+	// Reset test only: a marker row in tag (a standalone table the harness does not
+	// touch).
+	TestInsertTagMarker(ctx context.Context) error
+	// Reset test only: a marker row in telegram_session (the Telegram auth session
+	// the reset wipes). session_data_encrypted + encryption_nonce are NOT NULL bytea.
+	TestInsertTelegramSessionMarker(ctx context.Context) error
+	// Profile coverage test only: list the namespace's contacts (by full_name
+	// prefix) with the bucket-defining columns + a method count, so the test can
+	// assert the catalog produced ≥1 overdue (cadence + last_contacted in the past),
+	// ≥1 never-contacted (cadence + NULL last_contacted), and ≥1 no-method contact —
+	// proving the cadence/no-method states SURVIVE (a settling replay would
+	// overwrite last_contacted). Caller passes a BARE prefix; '%' appended.
+	TestListContactBucketsByNamePrefix(ctx context.Context, namePrefix pgtype.Text) ([]*TestListContactBucketsByNamePrefixRow, error)
+	// Reset integration test only: enumerate every base table in the public schema
+	// so the catalog guard can assert each is in the wiped list, is schema_migrations,
+	// or matches the river_% allowlist. Read-only catalog access.
+	TestListPublicTables(ctx context.Context) ([]string, error)
 	// TEST ONLY. Probe a contact row with FOR UPDATE NOWAIT: fails immediately
 	// (lock_not_available) when another tx holds a conflicting lock on the row.
 	// Used by the recompute lock-ordering regression test to prove (without a
