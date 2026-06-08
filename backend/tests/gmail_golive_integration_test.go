@@ -30,6 +30,7 @@ import (
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 	syncpkg "personal-crm/backend/internal/sync"
+	"personal-crm/backend/internal/synthetic/factory"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -67,8 +68,9 @@ func TestGmailGoLive_RegisteredProvider_SchedulerSweep_ProducesInteractionsAndCa
 	// are observable.
 	bus, _ := setupTestEventBusForEmail(t, ctx, database, contactService)
 
-	suffix := uuid.NewString()[:8]
-	account := "me-" + suffix + "@example.com"
+	gen, _ := migrationGenerator(t)
+	prefix := gen.Prefix()
+	account := prefix + "me@synthetic.example"
 
 	// Build + register the Gmail provider in a real registry, exactly as
 	// main.go does (cutover). Inject a fake fetcher + me-set so no OAuth is
@@ -77,38 +79,32 @@ func TestGmailGoLive_RegisteredProvider_SchedulerSweep_ProducesInteractionsAndCa
 	provider := google.NewGmailSyncProvider(nil, commsRepo, bus, database.Pool)
 
 	// Known contact + email method. The provider loads its own known-contact
-	// map from contact_method rows via ListEmailIdentitiesForSync.
-	cadence := "weekly"
-	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName: "GoLive Contact " + suffix,
-		Cadence:  &cadence,
-	})
+	// map from contact_method rows via ListEmailIdentitiesForSync. Seeded via the
+	// nil-bus ContactService (single-tx contact+method write, no River client).
+	spec := gen.Contact(factory.WithEmail(), factory.WithCadence("weekly"))
+	contact, _, err := contactService.CreateContact(ctx, repository.CreateContactRequest{
+		FullName: spec.FullName,
+		Cadence:  spec.Cadence,
+	}, []service.ContactMethodInput{{Type: "email", Value: spec.Email, IsPrimary: true}})
 	require.NoError(t, err)
-	addr := "peer-" + suffix + "@example.com"
-	_, err = methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
-		ContactID: contact.ID,
-		Type:      "email",
-		Value:     addr,
-		IsPrimary: true,
-	})
-	require.NoError(t, err)
+	addr := spec.Email
 
 	// Unknown participant the sweep must NOT turn into a contact.
-	unknown := "stranger-" + suffix + "@example.com"
+	unknown := prefix + "stranger@synthetic.example"
 
 	// External IDs are stored UNBRACKETED (the provider strips the RFC822
 	// Message-ID's surrounding <>), so query/assert with the unbracketed form
 	// and pass the bracketed form into the message header.
-	inExt := "golive-in-" + suffix + "@example.com"
-	outExt := "golive-out-" + suffix + "@example.com"
-	unkExt := "golive-unk-" + suffix + "@example.com"
+	inExt := prefix + "golive-in@synthetic.example"
+	outExt := prefix + "golive-out@synthetic.example"
+	unkExt := prefix + "golive-unk@synthetic.example"
 
 	t.Cleanup(func() {
 		_ = commsRepo.HardDeleteByContact(ctx, contact.ID)
 		_ = interactionRepo.HardDeleteInteractionsBySourceRefPrefix(ctx, repository.InteractionSourceEmail, contact.ID.String()+":%")
-		_ = contactRepo.SoftDeleteContact(ctx, contact.ID)
-		_ = eventRepo.HardDeleteEventsBySourceAndSourceIDPrefix(ctx, "email", "golive-")
+		_ = eventRepo.HardDeleteEventsBySourceAndSourceIDPrefix(ctx, "email", prefix+"golive-")
 		_ = syncRepo.DeleteSyncStatesByAccountID(ctx, account)
+		_ = contactRepo.HardDeleteContact(ctx, contact.ID)
 	})
 
 	sentAt := gmailPastNoonAnchor()

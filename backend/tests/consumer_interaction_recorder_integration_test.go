@@ -12,6 +12,7 @@ import (
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
+	"personal-crm/backend/internal/synthetic/factory"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -29,6 +30,7 @@ import (
 type consumerTestEnv struct {
 	ctx             context.Context
 	database        *db.Database
+	gen             *factory.Generator
 	cfg             *config.Config
 	bus             *events.Bus
 	contactRepo     *repository.ContactRepository
@@ -185,9 +187,11 @@ func newConsumerTestEnv(t *testing.T, ctx context.Context) *consumerTestEnv {
 
 	manualHandler := service.NewManualInteractionHandler(database.Pool, bus, recorder)
 
+	gen, _ := migrationGenerator(t)
 	return &consumerTestEnv{
 		ctx:             ctx,
 		database:        database,
+		gen:             gen,
 		cfg:             cfg,
 		bus:             bus,
 		contactRepo:     contactRepo,
@@ -228,7 +232,7 @@ func (e *consumerTestEnv) seedCalendarEvent(t *testing.T, contactID uuid.UUID) u
 func (e *consumerTestEnv) newContact(t *testing.T, name string) uuid.UUID {
 	t.Helper()
 	contact, err := e.contactRepo.CreateContact(e.ctx, repository.CreateContactRequest{
-		FullName: name + "-" + uuid.NewString()[:8],
+		FullName: name + "-" + e.gen.Prefix(),
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = e.contactRepo.HardDeleteContact(e.ctx, contact.ID) })

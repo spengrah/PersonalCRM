@@ -2,7 +2,6 @@ package tests
 
 import (
 	"context"
-	"encoding/hex"
 	"os"
 	"testing"
 	"time"
@@ -11,27 +10,18 @@ import (
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/synthetic/factory"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// chatIDFromSuffix maps a random hex suffix to a deterministic int64
-// chat ID. Uses the first 4 bytes (8 hex chars) of the suffix to
-// produce a 0-4G range so HardDeleteByChatIDRange cleans up only this
-// test's rows even across parallel runs.
-func chatIDFromSuffix(suffix string) int64 {
-	raw, err := hex.DecodeString(suffix)
-	if err != nil || len(raw) < 4 {
-		return 1_000_000_000 // fallback; unlikely to collide for one test
-	}
-	return int64(uint32(raw[0])<<24 | uint32(raw[1])<<16 | uint32(raw[2])<<8 | uint32(raw[3]))
-}
-
-// telegramClaimSetup gives us a fresh test contact and a chat-ID range
-// scoped to the test so HardDeleteByChatIDRange cleans up only our rows.
-func telegramClaimSetup(t *testing.T) (context.Context, *repository.TelegramMessageRepository, *repository.ContactRepository, *repository.Contact, int64, func()) {
+// telegramClaimSetup gives us a fresh namespaced test contact and a
+// namespace-disjoint chat-ID range so HardDeleteByChatIDRange cleans up
+// only our rows. The chat ID is drawn from the generator's collision-free
+// telegram peer band, which is deterministically distinct per namespace.
+func telegramClaimSetup(t *testing.T) (context.Context, *factory.Generator, *repository.TelegramMessageRepository, *repository.ContactRepository, *repository.Contact, int64, func()) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -49,28 +39,24 @@ func telegramClaimSetup(t *testing.T) (context.Context, *repository.TelegramMess
 	repo := repository.NewTelegramMessageRepository(database.Queries)
 	contactRepo := repository.NewContactRepository(database.Queries)
 
-	suffix := randomSuffix(t)
-	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName: "Test Claim " + suffix,
-	})
-	require.NoError(t, err)
+	gen, _ := migrationGenerator(t)
+	contact, contactCleanup := seedMigrationContact(ctx, t, database, gen)
 
-	// Per-test chat_id (large randomized value so we don't collide
-	// with other tests in the shared DB). The hex suffix is converted
-	// to int64 via the low 4 bytes — enough entropy for parallel test
-	// isolation. The chatID is used as the cleanup range [chatID, chatID].
-	chatID := chatIDFromSuffix(suffix)
+	// Per-test chat_id drawn from this namespace's telegram peer band —
+	// deterministically disjoint from any other namespace's rows. The
+	// chatID is used as the cleanup range [chatID, chatID].
+	chatID := gen.PeerBandStart()
 
 	cleanup := func() {
 		_ = repo.HardDeleteByChatIDRange(ctx, chatID, chatID)
-		_ = contactRepo.SoftDeleteContact(ctx, contact.ID)
+		contactCleanup()
 		database.Close()
 	}
-	return ctx, repo, contactRepo, contact, chatID, cleanup
+	return ctx, gen, repo, contactRepo, contact, chatID, cleanup
 }
 
 func TestTelegramMessageRepository_ClaimMessages_SetsClaimColumns(t *testing.T) {
-	ctx, repo, _, contact, chatID, cleanup := telegramClaimSetup(t)
+	ctx, _, repo, _, contact, chatID, cleanup := telegramClaimSetup(t)
 	defer cleanup()
 
 	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
@@ -102,7 +88,7 @@ func TestTelegramMessageRepository_ClaimMessages_SetsClaimColumns(t *testing.T) 
 }
 
 func TestTelegramMessageRepository_ListUnprocessedByContact_ExcludesActiveClaim(t *testing.T) {
-	ctx, repo, _, contact, chatID, cleanup := telegramClaimSetup(t)
+	ctx, _, repo, _, contact, chatID, cleanup := telegramClaimSetup(t)
 	defer cleanup()
 
 	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
@@ -132,7 +118,7 @@ func TestTelegramMessageRepository_ListUnprocessedByContact_ExcludesActiveClaim(
 }
 
 func TestTelegramMessageRepository_ListUnprocessedByContact_IncludesStaleClaim(t *testing.T) {
-	ctx, repo, _, contact, chatID, cleanup := telegramClaimSetup(t)
+	ctx, _, repo, _, contact, chatID, cleanup := telegramClaimSetup(t)
 	defer cleanup()
 
 	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
@@ -161,7 +147,7 @@ func TestTelegramMessageRepository_ListUnprocessedByContact_IncludesStaleClaim(t
 }
 
 func TestTelegramMessageRepository_ClaimMessages_PartialClaim(t *testing.T) {
-	ctx, repo, _, contact, chatID, cleanup := telegramClaimSetup(t)
+	ctx, _, repo, _, contact, chatID, cleanup := telegramClaimSetup(t)
 	defer cleanup()
 
 	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
@@ -192,7 +178,7 @@ func TestTelegramMessageRepository_ClaimMessages_PartialClaim(t *testing.T) {
 // MarkProcessedTx returns 0 rows affected when the predicate filters
 // out everything.
 func TestTelegramMessageRepository_MarkProcessedTx_RejectsOtherSession(t *testing.T) {
-	ctx, repo, _, contact, chatID, cleanup := telegramClaimSetup(t)
+	ctx, _, repo, _, contact, chatID, cleanup := telegramClaimSetup(t)
 	defer cleanup()
 
 	databaseURL := os.Getenv("DATABASE_URL")
@@ -237,7 +223,7 @@ func TestTelegramMessageRepository_MarkProcessedTx_RejectsOtherSession(t *testin
 // confirms the consumer can process rows it claimed for its own
 // session.
 func TestTelegramMessageRepository_MarkProcessedTx_AcceptsOwnSession(t *testing.T) {
-	ctx, repo, _, contact, chatID, cleanup := telegramClaimSetup(t)
+	ctx, gen, repo, _, contact, chatID, cleanup := telegramClaimSetup(t)
 	defer cleanup()
 
 	databaseURL := os.Getenv("DATABASE_URL")
@@ -249,8 +235,7 @@ func TestTelegramMessageRepository_MarkProcessedTx_AcceptsOwnSession(t *testing.
 
 	// Create a real interaction so the FK constraint is satisfied.
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
-	suffix := randomSuffix(t)
-	ref := "tg:own:" + suffix
+	ref := "tg:own:" + gen.Prefix()
 	interaction, err := interactionRepo.CreateInteraction(ctx, repository.CreateInteractionRequest{
 		ContactID: contact.ID, Source: repository.InteractionSourceTelegram,
 		SourceRef: &ref, OccurredAt: accelerated.GetCurrentTime().Truncate(time.Microsecond),
@@ -266,7 +251,7 @@ func TestTelegramMessageRepository_MarkProcessedTx_AcceptsOwnSession(t *testing.
 	require.NoError(t, err)
 	require.NoError(t, repo.UpdateMessageContact(ctx, *msg.PeerUserID, contact.ID))
 
-	sessionRef := "tg:own-session:" + suffix
+	sessionRef := "tg:own-session:" + gen.Prefix()
 	_, err = repo.ClaimMessages(ctx, []uuid.UUID{msg.ID}, sessionRef)
 	require.NoError(t, err)
 
@@ -291,7 +276,7 @@ func TestTelegramMessageRepository_MarkProcessedTx_AcceptsOwnSession(t *testing.
 // claimed (engine took the non-tx publish path / test mode) is still
 // markable by the consumer.
 func TestTelegramMessageRepository_MarkProcessedTx_AcceptsNullClaim(t *testing.T) {
-	ctx, repo, _, contact, chatID, cleanup := telegramClaimSetup(t)
+	ctx, gen, repo, _, contact, chatID, cleanup := telegramClaimSetup(t)
 	defer cleanup()
 
 	databaseURL := os.Getenv("DATABASE_URL")
@@ -302,8 +287,7 @@ func TestTelegramMessageRepository_MarkProcessedTx_AcceptsNullClaim(t *testing.T
 	defer database.Close()
 
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
-	suffix := randomSuffix(t)
-	ref := "tg:null-claim:" + suffix
+	ref := "tg:null-claim:" + gen.Prefix()
 	interaction, err := interactionRepo.CreateInteraction(ctx, repository.CreateInteractionRequest{
 		ContactID: contact.ID, Source: repository.InteractionSourceTelegram,
 		SourceRef: &ref, OccurredAt: accelerated.GetCurrentTime().Truncate(time.Microsecond),

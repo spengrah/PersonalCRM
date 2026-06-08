@@ -15,6 +15,7 @@ import (
 	"personal-crm/backend/internal/google"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
+	"personal-crm/backend/internal/synthetic/factory"
 	tgpkg "personal-crm/backend/internal/telegram"
 
 	"github.com/google/uuid"
@@ -33,6 +34,7 @@ import (
 type rematchTestEnv struct {
 	ctx               context.Context
 	database          *db.Database
+	gen               *factory.Generator
 	contactRepo       *repository.ContactRepository
 	contactMethodRepo *repository.ContactMethodRepository
 	calendarRepo      *repository.CalendarEventRepository
@@ -97,9 +99,12 @@ func setupRematchEnv(t *testing.T) *rematchTestEnv {
 
 	rematchSvc.Register(google.NewCalendarRematchHandler(calendarRepo, externalRepo, bus))
 
+	gen, _ := migrationGenerator(t)
+
 	return &rematchTestEnv{
 		ctx:               ctx,
 		database:          database,
+		gen:               gen,
 		contactRepo:       contactRepo,
 		contactMethodRepo: contactMethodRepo,
 		calendarRepo:      calendarRepo,
@@ -110,6 +115,17 @@ func setupRematchEnv(t *testing.T) *rematchTestEnv {
 		rematchSvc:        rematchSvc,
 		bus:               bus,
 	}
+}
+
+// newContact seeds a namespaced, method-less contact through the lightweight
+// migration helper (nil-bus single-tx write) and registers its scoped cleanup.
+// Rematch is driven by an explicit attendee email/handle, so the contact needs
+// no method of its own — only a namespace-isolated identity.
+func (env *rematchTestEnv) newContact(t *testing.T) *repository.Contact {
+	t.Helper()
+	contact, cleanup := seedMigrationContact(env.ctx, t, env.database, env.gen, factory.WithNoMethods())
+	t.Cleanup(cleanup)
+	return contact
 }
 
 // waitForJob polls the rematch service until the job is in a terminal state.
@@ -156,11 +172,7 @@ func seedCalendarEventWithAttendee(t *testing.T, env *rematchTestEnv, accountID,
 func TestRematch_CalendarPastEvent_RecordsInteraction(t *testing.T) {
 	env := setupRematchEnv(t)
 
-	contact, err := env.contactRepo.CreateContact(env.ctx, repository.CreateContactRequest{
-		FullName: "Rematch Past Event " + uuid.NewString()[:8],
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = env.contactRepo.HardDeleteContact(env.ctx, contact.ID) })
+	contact := env.newContact(t)
 
 	accountID := "rematch-past-" + uuid.NewString()
 	email := "alice@example.com"
@@ -200,11 +212,7 @@ func TestRematch_CalendarPastEvent_RecordsInteraction(t *testing.T) {
 func TestRematch_CalendarFutureEvent_NoInteraction(t *testing.T) {
 	env := setupRematchEnv(t)
 
-	contact, err := env.contactRepo.CreateContact(env.ctx, repository.CreateContactRequest{
-		FullName: "Rematch Future Event " + uuid.NewString()[:8],
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = env.contactRepo.HardDeleteContact(env.ctx, contact.ID) })
+	contact := env.newContact(t)
 
 	accountID := "rematch-future-" + uuid.NewString()
 	email := "bob@example.com"
@@ -236,11 +244,7 @@ func TestRematch_CalendarFutureEvent_NoInteraction(t *testing.T) {
 func TestRematch_CalendarCaseInsensitiveEmailMatch(t *testing.T) {
 	env := setupRematchEnv(t)
 
-	contact, err := env.contactRepo.CreateContact(env.ctx, repository.CreateContactRequest{
-		FullName: "Rematch Case " + uuid.NewString()[:8],
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = env.contactRepo.HardDeleteContact(env.ctx, contact.ID) })
+	contact := env.newContact(t)
 
 	accountID := "rematch-case-" + uuid.NewString()
 	t.Cleanup(func() { _ = env.calendarRepo.DeleteEventsByAccount(env.ctx, accountID) })
@@ -265,11 +269,7 @@ func TestRematch_CalendarCaseInsensitiveEmailMatch(t *testing.T) {
 func TestRematch_CalendarIdempotent(t *testing.T) {
 	env := setupRematchEnv(t)
 
-	contact, err := env.contactRepo.CreateContact(env.ctx, repository.CreateContactRequest{
-		FullName: "Rematch Idempotent " + uuid.NewString()[:8],
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = env.contactRepo.HardDeleteContact(env.ctx, contact.ID) })
+	contact := env.newContact(t)
 
 	accountID := "rematch-idem-" + uuid.NewString()
 	email := "carol@example.com"
@@ -323,13 +323,9 @@ func TestRematch_CalendarIdempotent(t *testing.T) {
 func TestRematch_CalendarMarksGcalAttendeeExternalContactMatched(t *testing.T) {
 	env := setupRematchEnv(t)
 
-	contact, err := env.contactRepo.CreateContact(env.ctx, repository.CreateContactRequest{
-		FullName: "Rematch External " + uuid.NewString()[:8],
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = env.contactRepo.HardDeleteContact(env.ctx, contact.ID) })
+	contact := env.newContact(t)
 
-	email := "dan-" + uuid.NewString()[:8] + "@example.com"
+	email := env.gen.Prefix() + "dan@synthetic.example"
 	displayName := "Dan Test"
 
 	// Seed a gcal_attendee external_contact with this email as its source_id.
@@ -389,11 +385,7 @@ func TestRematch_TelegramUsernameMatch(t *testing.T) {
 	)
 	env.rematchSvc.Register(tgpkg.NewUsernameRematchHandler(messageRepo, peerMatcher, aggregationEngine))
 
-	contact, err := env.contactRepo.CreateContact(env.ctx, repository.CreateContactRequest{
-		FullName: "Rematch TG Username " + uuid.NewString()[:8],
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = env.contactRepo.HardDeleteContact(env.ctx, contact.ID) })
+	contact := env.newContact(t)
 
 	suffix := uuid.NewString()[:8]
 	chatID := int64(900100)
@@ -410,7 +402,7 @@ func TestRematch_TelegramUsernameMatch(t *testing.T) {
 	now := accelerated.GetCurrentTime()
 	text := "Hello"
 	for i := range 3 {
-		_, err = messageRepo.UpsertMessage(env.ctx, repository.UpsertTelegramMessageParams{
+		_, err := messageRepo.UpsertMessage(env.ctx, repository.UpsertTelegramMessageParams{
 			TelegramMessageID: int32(90100 + i),
 			TelegramChatID:    chatID,
 			ChatType:          "private",
@@ -473,7 +465,7 @@ func TestRematch_Publisher_NoHandler_ReturnsNilJobID(t *testing.T) {
 	// for "phone" in the base env.
 	phone := "+15551212"
 	_, jobID, err := env.contactSvc.CreateContact(env.ctx, repository.CreateContactRequest{
-		FullName: "No Handler " + uuid.NewString()[:8],
+		FullName: env.gen.Prefix() + "No Handler",
 	}, []service.ContactMethodInput{
 		{Type: "phone", Value: phone, IsPrimary: true},
 	})
@@ -483,7 +475,7 @@ func TestRematch_Publisher_NoHandler_ReturnsNilJobID(t *testing.T) {
 	// RescanRematch on a contact whose only methods are unhandled
 	// should also return uuid.Nil.
 	contact, err := env.contactRepo.CreateContact(env.ctx, repository.CreateContactRequest{
-		FullName: "Rescan No Handler " + uuid.NewString()[:8],
+		FullName: env.gen.Prefix() + "Rescan No Handler",
 	})
 	require.NoError(t, err)
 	_, err = env.contactMethodRepo.CreateContactMethod(env.ctx, repository.CreateContactMethodRequest{
@@ -526,11 +518,7 @@ func TestRematch_TelegramPhoneMatch(t *testing.T) {
 	env := setupRematchEnv(t)
 	messageRepo := registerTelegramHandlers(t, env)
 
-	contact, err := env.contactRepo.CreateContact(env.ctx, repository.CreateContactRequest{
-		FullName: "Rematch TG Phone " + uuid.NewString()[:8],
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = env.contactRepo.HardDeleteContact(env.ctx, contact.ID) })
+	contact := env.newContact(t)
 
 	chatID := int64(900200)
 	peerUserID := int64(800200)
@@ -548,7 +536,7 @@ func TestRematch_TelegramPhoneMatch(t *testing.T) {
 
 	now := accelerated.GetCurrentTime()
 	text := "Hi"
-	_, err = messageRepo.UpsertMessage(env.ctx, repository.UpsertTelegramMessageParams{
+	_, err := messageRepo.UpsertMessage(env.ctx, repository.UpsertTelegramMessageParams{
 		TelegramMessageID: 90200,
 		TelegramChatID:    chatID,
 		ChatType:          "private",
@@ -580,11 +568,7 @@ func TestRematch_TelegramPhoneMatch(t *testing.T) {
 func TestRematch_ConcurrentJobs_PerContactMutex(t *testing.T) {
 	env := setupRematchEnv(t)
 
-	contact, err := env.contactRepo.CreateContact(env.ctx, repository.CreateContactRequest{
-		FullName: "Rematch Concurrent " + uuid.NewString()[:8],
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = env.contactRepo.HardDeleteContact(env.ctx, contact.ID) })
+	contact := env.newContact(t)
 
 	accountID := "rematch-concurrent-" + uuid.NewString()
 	email1 := "conc1@example.com"
@@ -622,16 +606,12 @@ func TestRematch_ConcurrentJobs_PerContactMutex(t *testing.T) {
 func TestRematch_RescanContact_RunsForAllMethods(t *testing.T) {
 	env := setupRematchEnv(t)
 
-	contact, err := env.contactRepo.CreateContact(env.ctx, repository.CreateContactRequest{
-		FullName: "Rematch Rescan " + uuid.NewString()[:8],
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = env.contactRepo.HardDeleteContact(env.ctx, contact.ID) })
+	contact := env.newContact(t)
 
 	// Create the method directly on the repo so the create path doesn't
 	// trigger a rematch job we don't care about.
 	email := "rescan@example.com"
-	_, err = env.contactMethodRepo.CreateContactMethod(env.ctx, repository.CreateContactMethodRequest{
+	_, err := env.contactMethodRepo.CreateContactMethod(env.ctx, repository.CreateContactMethodRequest{
 		ContactID: contact.ID,
 		Type:      "email",
 		Value:     email,
@@ -695,11 +675,7 @@ func TestRematch_TelegramRematchPlusPostImportHook_NoDuplicateInteraction(t *tes
 	)
 	env.rematchSvc.Register(tgpkg.NewUsernameRematchHandler(messageRepo, peerMatcher, aggregationEngine))
 
-	contact, err := env.contactRepo.CreateContact(env.ctx, repository.CreateContactRequest{
-		FullName: "Rematch TG Combined " + uuid.NewString()[:8],
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = env.contactRepo.HardDeleteContact(env.ctx, contact.ID) })
+	contact := env.newContact(t)
 
 	suffix := uuid.NewString()[:8]
 	chatID := int64(900300)
@@ -723,7 +699,7 @@ func TestRematch_TelegramRematchPlusPostImportHook_NoDuplicateInteraction(t *tes
 	now := accelerated.GetCurrentTime().Truncate(time.Microsecond)
 	text := "ping"
 	for i := range 3 {
-		_, err = messageRepo.UpsertMessage(env.ctx, repository.UpsertTelegramMessageParams{
+		_, err := messageRepo.UpsertMessage(env.ctx, repository.UpsertTelegramMessageParams{
 			TelegramMessageID: int32(90300 + i),
 			TelegramChatID:    chatID,
 			ChatType:          "private",
@@ -775,14 +751,10 @@ func TestRematch_ContactServiceUpdateContact_FiresForNewMethodOnly(t *testing.T)
 	env := setupRematchEnv(t)
 
 	existingEmail := "existing@example.com"
-	contact, err := env.contactRepo.CreateContact(env.ctx, repository.CreateContactRequest{
-		FullName: "Rematch Diff " + uuid.NewString()[:8],
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = env.contactRepo.HardDeleteContact(env.ctx, contact.ID) })
+	contact := env.newContact(t)
 
 	// Seed an existing email method outside the service so no rematch fires.
-	_, err = env.contactMethodRepo.CreateContactMethod(env.ctx, repository.CreateContactMethodRequest{
+	_, err := env.contactMethodRepo.CreateContactMethod(env.ctx, repository.CreateContactMethodRequest{
 		ContactID: contact.ID, Type: "email", Value: existingEmail, IsPrimary: true,
 	})
 	require.NoError(t, err)

@@ -203,7 +203,8 @@ func softDeleteCommsRow(e *gchatTestEnv, id uuid.UUID) error {
 // entry is missing (recorder's zero-rows rollback fires).
 func TestGChatEngine_BurstCreatePath(t *testing.T) {
 	e := setupGChatEngineTest(t)
-	suffix := randomSuffix(t)
+	gen, _ := migrationGenerator(t)
+	suffix := gen.Prefix()
 
 	contact := e.newGChatContact(t, "GChat Burst "+suffix)
 	space := "spaces/BURST-" + suffix
@@ -232,7 +233,8 @@ func TestGChatEngine_BurstCreatePath(t *testing.T) {
 // bridge). A second case: inbound after 48h stays a separate interaction.
 func TestGChatEngine_ReplyBridgeToMutual(t *testing.T) {
 	e := setupGChatEngineTest(t)
-	suffix := randomSuffix(t)
+	gen, _ := migrationGenerator(t)
+	suffix := gen.Prefix()
 
 	t.Run("inbound within 48h promotes to mutual", func(t *testing.T) {
 		contact := e.newGChatContact(t, "GChat Bridge "+suffix)
@@ -285,7 +287,8 @@ func TestGChatEngine_ReplyBridgeToMutual(t *testing.T) {
 // interaction on re-aggregate.
 func TestGChatEngine_EditNoOp(t *testing.T) {
 	e := setupGChatEngineTest(t)
-	suffix := randomSuffix(t)
+	gen, _ := migrationGenerator(t)
+	suffix := gen.Prefix()
 
 	contact := e.newGChatContact(t, "GChat Edit "+suffix)
 	space := "spaces/EDIT-" + suffix
@@ -312,7 +315,8 @@ func TestGChatEngine_EditNoOp(t *testing.T) {
 // produces no interaction.
 func TestGChatEngine_DeleteNoOp(t *testing.T) {
 	e := setupGChatEngineTest(t)
-	suffix := randomSuffix(t)
+	gen, _ := migrationGenerator(t)
+	suffix := gen.Prefix()
 
 	contact := e.newGChatContact(t, "GChat Delete "+suffix)
 	space := "spaces/DELETE-" + suffix
@@ -335,7 +339,8 @@ func TestGChatEngine_DeleteNoOp(t *testing.T) {
 // different-ref claim untouched.
 func TestGChatEngine_ClaimRaceRecovery(t *testing.T) {
 	e := setupGChatEngineTest(t)
-	suffix := randomSuffix(t)
+	gen, _ := migrationGenerator(t)
+	suffix := gen.Prefix()
 
 	contact := e.newGChatContact(t, "GChat Claim "+suffix)
 	space := "spaces/CLAIM-" + suffix
@@ -364,7 +369,8 @@ func TestGChatEngine_ClaimRaceRecovery(t *testing.T) {
 // different-ref claim is left untouched.
 func TestGChatEngine_ClearStaleClaimTx(t *testing.T) {
 	e := setupGChatEngineTest(t)
-	suffix := randomSuffix(t)
+	gen, _ := migrationGenerator(t)
+	suffix := gen.Prefix()
 
 	contact := e.newGChatContact(t, "GChat ClearClaim "+suffix)
 	space := "spaces/CLEAR-" + suffix
@@ -405,7 +411,8 @@ func TestGChatEngine_ClearStaleClaimTx(t *testing.T) {
 // rows affected — the recorder's rollback trigger).
 func TestGChatEngine_MarkProcessedForSessionBoundaryShift(t *testing.T) {
 	e := setupGChatEngineTest(t)
-	suffix := randomSuffix(t)
+	gen, _ := migrationGenerator(t)
+	suffix := gen.Prefix()
 
 	contact := e.newGChatContact(t, "GChat Session "+suffix)
 	space := "spaces/SESSION-" + suffix

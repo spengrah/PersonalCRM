@@ -29,7 +29,7 @@ import (
 // Cleanup uses the new sqlc-backed HardDelete helpers per core.md rule
 // 2 (no raw SQL in Go).
 func TestAggregation_IncrementalInboundCoalesce(t *testing.T) {
-	messageRepo, interactionRepo, contactRepo, _, engine, database := setupAggregationTest(t)
+	messageRepo, interactionRepo, _, _, engine, database := setupAggregationTest(t)
 	ctx := context.Background()
 	eventRepo := repository.NewEventRepository(database.Queries)
 
@@ -55,8 +55,9 @@ func TestAggregation_IncrementalInboundCoalesce(t *testing.T) {
 		_ = eventRepo.HardDeleteEventsBySourceAndSourceIDPrefix(ctx, repository.InteractionSourceTelegram, sourceRefPrefix)
 	})
 
-	contact := createTestContact(t, contactRepo, fmt.Sprintf("Inbound Coalesce %d", seed))
-	t.Cleanup(func() { _ = contactRepo.SoftDeleteContact(ctx, contact.ID) })
+	gen, _ := migrationGenerator(t)
+	contact, contactCleanup := seedMigrationContact(ctx, t, database, gen)
+	t.Cleanup(contactCleanup)
 
 	t0 := accelerated.GetCurrentTime().Add(-2 * time.Hour).Truncate(time.Microsecond)
 

@@ -41,6 +41,7 @@ import (
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/synthetic/factory"
 	"personal-crm/backend/internal/todoist"
 
 	"github.com/google/uuid"
@@ -82,6 +83,7 @@ func newFollowUpIntegrationDB(t *testing.T) (*db.Database, func()) {
 // up and HTTP out to a nonexistent Todoist.
 type followUpIntegrationEnv struct {
 	database    *db.Database
+	gen         *factory.Generator
 	contactRepo *repository.ContactRepository
 	taskRepo    *repository.ContactTaskRepository
 	interRepo   *repository.InteractionRepository
@@ -175,8 +177,10 @@ func newFollowUpIntegrationEnv(t *testing.T) (*followUpIntegrationEnv, func()) {
 		decisions = append(decisions, d)
 	})
 
+	gen, _ := migrationGenerator(t)
 	env := &followUpIntegrationEnv{
 		database:    database,
+		gen:         gen,
 		contactRepo: contactRepo,
 		taskRepo:    taskRepo,
 		interRepo:   interRepo,
@@ -266,8 +270,7 @@ func (*followUpIntegrationNoopClient) Sync(context.Context, string, []string, []
 func (e *followUpIntegrationEnv) seedContact(t *testing.T, cadenceStr string) *repository.Contact {
 	t.Helper()
 	ctx := context.Background()
-	name := "FollowUpCutover-" + uuid.NewString()[:8]
-	req := repository.CreateContactRequest{FullName: name}
+	req := repository.CreateContactRequest{FullName: e.gen.Contact(factory.WithNoMethods()).FullName}
 	if cadenceStr != "" {
 		req.Cadence = &cadenceStr
 	}

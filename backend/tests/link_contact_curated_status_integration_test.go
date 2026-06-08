@@ -112,7 +112,7 @@ func (env *linkCuratedEnv) callImport(t *testing.T, externalID string, body *han
 // arbitrary source (used to exercise the link-only import guard).
 func (env *linkCuratedEnv) seedUnmatchedExternalSource(t *testing.T, ctx context.Context, source string) *repository.ExternalContact {
 	t.Helper()
-	sfx := abSuffix()
+	sfx := abSuffix(t)
 	display := "Link Only Ext " + sfx
 	external, err := env.externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
 		Source:      source,
@@ -127,7 +127,7 @@ func (env *linkCuratedEnv) seedUnmatchedExternalSource(t *testing.T, ctx context
 
 func (env *linkCuratedEnv) seedUnmatchedExternal(t *testing.T, ctx context.Context) (*repository.Contact, *repository.ExternalContact) {
 	t.Helper()
-	sfx := abSuffix()
+	sfx := abSuffix(t)
 	contact, err := env.contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: "Link Curated " + sfx})
 	require.NoError(t, err)
 	display := "Link Curated Ext " + sfx

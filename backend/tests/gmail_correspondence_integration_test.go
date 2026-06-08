@@ -33,6 +33,7 @@ import (
 	"personal-crm/backend/internal/matching"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
+	"personal-crm/backend/internal/synthetic/factory"
 
 	"github.com/google/uuid"
 	"github.com/riverqueue/river"
@@ -43,15 +44,17 @@ import (
 
 // discoveryEnv bundles a real provider + bus + repos for the discovery tests.
 type discoveryEnv struct {
-	ctx          context.Context
-	database     *db.Database
-	provider     *google.GmailSyncProvider
-	commsRepo    *repository.CommsMessageRepository
-	contactRepo  *repository.ContactRepository
-	methodRepo   *repository.ContactMethodRepository
-	externalRepo *repository.ExternalContactRepository
-	eventRepo    *repository.EventRepository
-	matchService *service.ImportMatchService
+	ctx            context.Context
+	database       *db.Database
+	gen            *factory.Generator
+	provider       *google.GmailSyncProvider
+	commsRepo      *repository.CommsMessageRepository
+	contactRepo    *repository.ContactRepository
+	methodRepo     *repository.ContactMethodRepository
+	contactService *service.ContactService
+	externalRepo   *repository.ExternalContactRepository
+	eventRepo      *repository.EventRepository
+	matchService   *service.ImportMatchService
 }
 
 func newDiscoveryEnv(t *testing.T) *discoveryEnv {
@@ -88,49 +91,57 @@ func newDiscoveryEnv(t *testing.T) *discoveryEnv {
 
 	provider := google.NewGmailSyncProvider(nil, commsRepo, bus, database.Pool)
 
+	gen, _ := migrationGenerator(t)
+
 	return &discoveryEnv{
-		ctx:          ctx,
-		database:     database,
-		provider:     provider,
-		commsRepo:    commsRepo,
-		contactRepo:  contactRepo,
-		methodRepo:   methodRepo,
-		externalRepo: externalRepo,
-		eventRepo:    eventRepo,
-		matchService: service.NewImportMatchService(contactRepo),
+		ctx:            ctx,
+		database:       database,
+		gen:            gen,
+		provider:       provider,
+		commsRepo:      commsRepo,
+		contactRepo:    contactRepo,
+		methodRepo:     methodRepo,
+		contactService: contactService,
+		externalRepo:   externalRepo,
+		eventRepo:      eventRepo,
+		matchService:   service.NewImportMatchService(contactRepo),
 	}
 }
 
-// seedContactWithMethod creates a CRM contact with one email method (so it is a
-// KNOWN contact in the sync's knownMap) and registers cleanup.
-func (e *discoveryEnv) seedContactWithMethod(t *testing.T, name, email string) *repository.Contact {
+// newKnownContact seeds a namespaced contact carrying one email method (so it is
+// a KNOWN contact in the sync's knownMap) and returns it plus that email.
+func (e *discoveryEnv) newKnownContact(t *testing.T) (*repository.Contact, string) {
 	t.Helper()
-	contact, err := e.contactRepo.CreateContact(e.ctx, repository.CreateContactRequest{FullName: name})
-	require.NoError(t, err)
-	_, err = e.methodRepo.CreateContactMethod(e.ctx, repository.CreateContactMethodRequest{
-		ContactID: contact.ID,
-		Type:      "email",
-		Value:     email,
-		IsPrimary: true,
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		_ = e.commsRepo.HardDeleteByContact(e.ctx, contact.ID)
-		_ = e.contactRepo.SoftDeleteContact(e.ctx, contact.ID)
-	})
-	return contact
+	spec := e.gen.Contact(factory.WithEmail())
+	return e.seedSpec(t, spec), spec.Email
 }
 
-// seedContactNoMethod creates a CRM contact with NO email method (so it is only
-// trigram-matchable by name, never in the known-address set) and registers
-// cleanup.
+// seedContactNoMethod seeds a CRM contact with NO email method (so it is only
+// trigram-matchable by the given name, never in the known-address set). The name
+// is caller-supplied because the discovery tests cross-reference it against a
+// message's Cc display name.
 func (e *discoveryEnv) seedContactNoMethod(t *testing.T, name string) *repository.Contact {
 	t.Helper()
-	contact, err := e.contactRepo.CreateContact(e.ctx, repository.CreateContactRequest{FullName: name})
+	return e.seedSpec(t, factory.ContactSpec{FullName: name})
+}
+
+// seedSpec writes a factory ContactSpec through the env's nil-bus
+// ContactService.CreateContact (single-tx multi-method write, no River client)
+// and registers content-then-contact cleanup.
+func (e *discoveryEnv) seedSpec(t *testing.T, spec factory.ContactSpec) *repository.Contact {
+	t.Helper()
+	methods := make([]service.ContactMethodInput, 0, len(spec.Methods))
+	for _, m := range spec.Methods {
+		methods = append(methods, service.ContactMethodInput{Type: m.Type, Value: m.Value, IsPrimary: m.IsPrimary})
+	}
+	contact, _, err := e.contactService.CreateContact(e.ctx, repository.CreateContactRequest{
+		FullName: spec.FullName,
+		Cadence:  spec.Cadence,
+	}, methods)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_ = e.commsRepo.HardDeleteByContact(e.ctx, contact.ID)
-		_ = e.contactRepo.SoftDeleteContact(e.ctx, contact.ID)
+		_ = e.contactRepo.HardDeleteContact(e.ctx, contact.ID)
 	})
 	return contact
 }
@@ -175,27 +186,26 @@ func discoverySyncState(accountID string) *repository.SyncState {
 func TestDiscovery_RunsBetweenFetchAndStorage(t *testing.T) {
 	e := newDiscoveryEnv(t)
 	e.wireDiscoverer()
-	suffix := uuid.NewString()[:8]
+	prefix := e.gen.Prefix()
 
-	me := "me-" + suffix + "@example.com"
-	addrA := "a-" + suffix + "@example.com"          // KNOWN contact A (has method)
-	other := "peer-other-" + suffix + "@example.com" // non-own, non-contact recipient
-	patAddr := "peer-pat-" + suffix + "@example.com" // unknown Cc → candidate
+	me := prefix + "me@synthetic.example"
+	other := prefix + "peer-other@synthetic.example" // non-own, non-contact recipient
+	patAddr := prefix + "peer-pat@synthetic.example" // unknown Cc → candidate
 	patNorm := matching.NormalizeEmail(patAddr)
-	patName := "Pat Carter " + suffix
+	patName := prefix + "Pat Carter"
 
-	contactA := e.seedContactWithMethod(t, "Known Alpha "+suffix, addrA)
+	contactA, addrA := e.newKnownContact(t)       // KNOWN contact A (has method)
 	contactB := e.seedContactNoMethod(t, patName) // trigram-matched by name only
 	e.cleanupExternal(t, patNorm)
-	e.cleanupEvents(t, "disc-"+suffix)
+	e.cleanupEvents(t, prefix+"disc")
 
 	// From=A (known), To=other (non-own non-contact), Cc=Pat (unknown, ≥2-token
 	// name matching contact B). The storage gate drops this: for A, inbound needs
 	// own-account ∈ recipients (false — only `other`+Pat are recipients);
 	// outbound needs sender==own (false — sender is A). So zero qualifiedRows.
-	msg := gmailMsg("g-disc-"+suffix, "thr-"+suffix, "Known Alpha <"+addrA+">",
+	msg := gmailMsg("g-disc-"+prefix, "thr-"+prefix, "Known Alpha <"+addrA+">",
 		[]string{other}, []string{patName + " <" + patAddr + ">"}, nil,
-		"Subj", "body", "<disc-"+suffix+"@example.com>", 1700000100000)
+		"Subj", "body", "<"+prefix+"disc@synthetic.example>", 1700000100000)
 	e.provider.SetFetcherFactoryForTest(google.NewFakeGmailFetcherFactoryForTest(newFakeMessageStore([]*gmailapi.Message{msg}).fetcherFuncs()))
 	e.provider.SetMeSetForTest(map[string]struct{}{me: {}})
 
@@ -233,23 +243,22 @@ func TestDiscovery_RunsBetweenFetchAndStorage(t *testing.T) {
 func TestDiscovery_LinkAddsMethodAndDispatchesRematch(t *testing.T) {
 	e := newDiscoveryEnv(t)
 	e.wireDiscoverer()
-	suffix := uuid.NewString()[:8]
+	prefix := e.gen.Prefix()
 
-	me := "me-" + suffix + "@example.com"
-	addrA := "a-" + suffix + "@example.com"
-	other := "peer-other-" + suffix + "@example.com"
-	patAddr := "peer-pat-" + suffix + "@example.com"
+	me := prefix + "me@synthetic.example"
+	other := prefix + "peer-other@synthetic.example"
+	patAddr := prefix + "peer-pat@synthetic.example"
 	patNorm := matching.NormalizeEmail(patAddr)
-	patName := "Pat Linker " + suffix
+	patName := prefix + "Pat Linker"
 
-	_ = e.seedContactWithMethod(t, "Known Beta "+suffix, addrA)
+	_, addrA := e.newKnownContact(t)
 	contactB := e.seedContactNoMethod(t, patName)
 	e.cleanupExternal(t, patNorm)
-	e.cleanupEvents(t, "disclink-"+suffix)
+	e.cleanupEvents(t, prefix+"disclink")
 
-	msg := gmailMsg("g-disclink-"+suffix, "thr-"+suffix, "Known Beta <"+addrA+">",
+	msg := gmailMsg("g-disclink-"+prefix, "thr-"+prefix, "Known Beta <"+addrA+">",
 		[]string{other}, []string{patName + " <" + patAddr + ">"}, nil,
-		"Subj", "body", "<disclink-"+suffix+"@example.com>", 1700000100000)
+		"Subj", "body", "<"+prefix+"disclink@synthetic.example>", 1700000100000)
 	e.provider.SetFetcherFactoryForTest(google.NewFakeGmailFetcherFactoryForTest(newFakeMessageStore([]*gmailapi.Message{msg}).fetcherFuncs()))
 	e.provider.SetMeSetForTest(map[string]struct{}{me: {}})
 
@@ -314,20 +323,19 @@ func TestDiscovery_LinkAddsMethodAndDispatchesRematch(t *testing.T) {
 // qualifying address.
 func TestDiscovery_ErrorNonFatalToSync(t *testing.T) {
 	e := newDiscoveryEnv(t)
-	suffix := uuid.NewString()[:8]
+	prefix := e.gen.Prefix()
 
-	me := "me-" + suffix + "@example.com"
-	addrA := "a-" + suffix + "@example.com"
-	other := "peer-other-" + suffix + "@example.com"
-	patAddr := "peer-pat-" + suffix + "@example.com"
+	me := prefix + "me@synthetic.example"
+	other := prefix + "peer-other@synthetic.example"
+	patAddr := prefix + "peer-pat@synthetic.example"
 	patNorm := matching.NormalizeEmail(patAddr)
-	patName := "Pat Failer " + suffix
+	patName := prefix + "Pat Failer"
 
-	contactA := e.seedContactWithMethod(t, "Known Gamma "+suffix, addrA)
+	contactA, addrA := e.newKnownContact(t)
 	_ = e.seedContactNoMethod(t, patName)
 	e.cleanupExternal(t, patNorm)
-	e.cleanupEvents(t, "discfail-"+suffix)
-	e.cleanupEvents(t, "discstore-"+suffix)
+	e.cleanupEvents(t, prefix+"discfail")
+	e.cleanupEvents(t, prefix+"discstore")
 
 	// Discoverer whose external Upsert errors for the qualifying Cc address.
 	failExt := &failingUpsertExternal{
@@ -337,15 +345,15 @@ func TestDiscovery_ErrorNonFatalToSync(t *testing.T) {
 	e.provider.SetCorrespondenceDiscoverer(google.NewCorrespondenceDiscoverer(e.contactRepo, failExt))
 
 	// Message 1: the discovery-triggering multi-party message (storage gate misses).
-	discMsg := gmailMsg("g-discfail-"+suffix, "thr-f-"+suffix, "Known Gamma <"+addrA+">",
+	discMsg := gmailMsg("g-discfail-"+prefix, "thr-f-"+prefix, "Known Gamma <"+addrA+">",
 		[]string{other}, []string{patName + " <" + patAddr + ">"}, nil,
-		"Subj", "body", "<discfail-"+suffix+"@example.com>", 1700000100000)
+		"Subj", "body", "<"+prefix+"discfail@synthetic.example>", 1700000100000)
 	// Message 2: a clean you↔contact message that DOES pass the storage gate
 	// (inbound: A → me), so we can assert ingest is not stranded by the
 	// discovery failure.
-	storeMsg := gmailMsg("g-discstore-"+suffix, "thr-s-"+suffix, "Known Gamma <"+addrA+">",
+	storeMsg := gmailMsg("g-discstore-"+prefix, "thr-s-"+prefix, "Known Gamma <"+addrA+">",
 		[]string{me}, nil, nil,
-		"Stored", "stored body", "<discstore-"+suffix+"@example.com>", 1700000200000)
+		"Stored", "stored body", "<"+prefix+"discstore@synthetic.example>", 1700000200000)
 
 	e.provider.SetFetcherFactoryForTest(google.NewFakeGmailFetcherFactoryForTest(
 		newFakeMessageStore([]*gmailapi.Message{discMsg, storeMsg}).fetcherFuncs()))

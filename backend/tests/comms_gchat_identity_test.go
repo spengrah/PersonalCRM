@@ -40,7 +40,8 @@ func seedContactWithMethod(t *testing.T, ctx context.Context, commsRepo *reposit
 // empty-normalized values are excluded; values are already lowercased.
 func TestListGChatIdentitiesForSync_DualSource(t *testing.T) {
 	ctx, commsRepo, contactRepo, methodRepo := setupCommsMessageTest(t)
-	suffix := randomSuffix(t)
+	gen, _ := migrationGenerator(t)
+	suffix := gen.Prefix()
 
 	// Unique per-suffix addresses so this sub-test's pool is isolated on the
 	// shared DB. value_normalized lowercases, so seed with mixed case to also

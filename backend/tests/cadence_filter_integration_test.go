@@ -8,6 +8,7 @@ import (
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/synthetic/factory"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -36,21 +37,15 @@ func TestCadenceFilter_Integration(t *testing.T) {
 	defer database.Close()
 
 	repo := repository.NewContactRepository(database.Queries)
+	gen, _ := migrationGenerator(t)
 
-	// Create test contacts: one with cadence, one without
-	weekly := "weekly"
-	withCadence, err := repo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName: "CadenceFilter With",
-		Cadence:  &weekly,
-	})
-	require.NoError(t, err)
-	defer func() { _ = repo.HardDeleteContact(ctx, withCadence.ID) }()
+	// Seed test contacts via the synthetic factory: one with cadence, one
+	// without. Both are referenced by ID only, so namespaced names are fine.
+	withCadence, withCleanup := seedMigrationContact(ctx, t, database, gen, factory.WithCadence("weekly"))
+	defer withCleanup()
 
-	withoutCadence, err := repo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName: "CadenceFilter Without",
-	})
-	require.NoError(t, err)
-	defer func() { _ = repo.HardDeleteContact(ctx, withoutCadence.ID) }()
+	withoutCadence, withoutCleanup := seedMigrationContact(ctx, t, database, gen)
+	defer withoutCleanup()
 
 	t.Run("ListContacts_NoCadenceFilter", func(t *testing.T) {
 		results, err := repo.ListContacts(ctx, repository.ListContactsParams{

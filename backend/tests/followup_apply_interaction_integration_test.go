@@ -21,9 +21,9 @@ import (
 	"personal-crm/backend/internal/consumer"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/synthetic/factory"
 	"personal-crm/backend/internal/todoist"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
@@ -36,6 +36,7 @@ import (
 // ErrTodoistUnconfigured.
 type applyInteractionEnv struct {
 	database    *db.Database
+	gen         *factory.Generator
 	contactRepo *repository.ContactRepository
 	taskRepo    *repository.ContactTaskRepository
 	riverClient *river.Client[pgx.Tx]
@@ -90,8 +91,10 @@ func newApplyInteractionEnv(t *testing.T, settingsErr error) (*applyInteractionE
 		watchdog,
 	)
 
+	gen, _ := migrationGenerator(t)
 	env := &applyInteractionEnv{
 		database:    database,
+		gen:         gen,
 		contactRepo: contactRepo,
 		taskRepo:    taskRepo,
 		riverClient: riverClient,
@@ -106,8 +109,7 @@ func newApplyInteractionEnv(t *testing.T, settingsErr error) (*applyInteractionE
 func (e *applyInteractionEnv) seedContact(t *testing.T, cadence string) *repository.Contact {
 	t.Helper()
 	ctx := context.Background()
-	name := "ApplyInt-" + uuid.NewString()[:8]
-	req := repository.CreateContactRequest{FullName: name}
+	req := repository.CreateContactRequest{FullName: e.gen.Contact(factory.WithNoMethods()).FullName}
 	if cadence != "" {
 		req.Cadence = &cadence
 	}

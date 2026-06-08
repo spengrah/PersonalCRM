@@ -22,6 +22,7 @@ import (
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
+	"personal-crm/backend/internal/synthetic/factory"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -33,6 +34,7 @@ import (
 type emailEnv struct {
 	ctx             context.Context
 	database        *db.Database
+	gen             *factory.Generator
 	bus             *events.Bus
 	emailConsumer   *consumer.EmailInteractionConsumer
 	contactRepo     *repository.ContactRepository
@@ -61,9 +63,12 @@ func newEmailEnv(t *testing.T, ctx context.Context) *emailEnv {
 
 	bus, emailConsumer := setupTestEventBusForEmail(t, ctx, database, contactService)
 
+	gen, _ := migrationGenerator(t)
+
 	return &emailEnv{
 		ctx:             ctx,
 		database:        database,
+		gen:             gen,
 		bus:             bus,
 		emailConsumer:   emailConsumer,
 		contactRepo:     contactRepo,
@@ -73,21 +78,19 @@ func newEmailEnv(t *testing.T, ctx context.Context) *emailEnv {
 	}
 }
 
-// newEmailTestContact creates a contact (with a weekly cadence so contact_by
-// rolls) and registers cleanup that hard-deletes its comms_message + email
-// interaction rows then soft-deletes the contact.
-func (e *emailEnv) newEmailTestContact(t *testing.T, name string) *repository.Contact {
+// newEmailTestContact seeds a namespaced contact (no methods — the consumer
+// matches on the contact id carried in the payload, never on an identifier) with
+// a weekly cadence so contact_by rolls, and registers cleanup that hard-deletes
+// its comms_message + email interaction rows before the contact (FK-child rows
+// must go first).
+func (e *emailEnv) newEmailTestContact(t *testing.T) *repository.Contact {
 	t.Helper()
-	cadence := "weekly"
-	contact, err := e.contactRepo.CreateContact(e.ctx, repository.CreateContactRequest{
-		FullName: name,
-		Cadence:  &cadence,
-	})
-	require.NoError(t, err)
+	contact, contactCleanup := seedMigrationContact(e.ctx, t, e.database, e.gen,
+		factory.WithNoMethods(), factory.WithCadence("weekly"))
 	t.Cleanup(func() {
 		_ = e.commsRepo.HardDeleteByContact(e.ctx, contact.ID)
 		_ = e.interactionRepo.HardDeleteInteractionsBySourceRefPrefix(e.ctx, repository.InteractionSourceEmail, contact.ID.String()+":%")
-		_ = e.contactRepo.SoftDeleteContact(e.ctx, contact.ID)
+		contactCleanup()
 	})
 	return contact
 }
@@ -188,7 +191,7 @@ func (e *emailEnv) waitForCommsProcessed(t *testing.T, externalID string, contac
 func TestEmailIntegration_CreateInbound_AppliesCadence(t *testing.T) {
 	ctx := context.Background()
 	e := newEmailEnv(t, ctx)
-	contact := e.newEmailTestContact(t, "Email Inbound A")
+	contact := e.newEmailTestContact(t)
 
 	sentAt := localNoonAnchor()
 	e.seedCommsMessage(t, contact.ID, "<a-1@example.test>", "thr-A", repository.InteractionDirectionInbound, sentAt)
@@ -213,7 +216,7 @@ func TestEmailIntegration_CreateInbound_AppliesCadence(t *testing.T) {
 func TestEmailIntegration_CreateOutbound_AppliesOutreachCadence(t *testing.T) {
 	ctx := context.Background()
 	e := newEmailEnv(t, ctx)
-	contact := e.newEmailTestContact(t, "Email Outbound B")
+	contact := e.newEmailTestContact(t)
 
 	sentAt := localNoonAnchor()
 	e.seedCommsMessage(t, contact.ID, "<b-1@example.test>", "thr-B", repository.InteractionDirectionOutbound, sentAt)
@@ -235,7 +238,7 @@ func TestEmailIntegration_CreateOutbound_AppliesOutreachCadence(t *testing.T) {
 func TestEmailIntegration_SameThreadDay_Extends(t *testing.T) {
 	ctx := context.Background()
 	e := newEmailEnv(t, ctx)
-	contact := e.newEmailTestContact(t, "Email Extend C")
+	contact := e.newEmailTestContact(t)
 
 	t1 := localNoonAnchor()
 	t2 := t1.Add(2 * time.Hour)
@@ -274,7 +277,7 @@ func TestEmailIntegration_SameThreadDay_Extends(t *testing.T) {
 func TestEmailIntegration_NextDay_NewInteraction(t *testing.T) {
 	ctx := context.Background()
 	e := newEmailEnv(t, ctx)
-	contact := e.newEmailTestContact(t, "Email NextDay D")
+	contact := e.newEmailTestContact(t)
 
 	dayD := localNoonAnchor()
 	dayD1 := dayD.Add(24 * time.Hour)
@@ -298,7 +301,7 @@ func TestEmailIntegration_NextDay_NewInteraction(t *testing.T) {
 func TestEmailIntegration_MixedDirection_PromotesToMutual(t *testing.T) {
 	ctx := context.Background()
 	e := newEmailEnv(t, ctx)
-	contact := e.newEmailTestContact(t, "Email Mutual E")
+	contact := e.newEmailTestContact(t)
 
 	t1 := localNoonAnchor()
 	t2 := t1.Add(time.Hour)
@@ -328,7 +331,7 @@ func TestEmailIntegration_MixedDirection_PromotesToMutual(t *testing.T) {
 func TestEmailIntegration_OutOfOrderBackfill_NoBackwardMove(t *testing.T) {
 	ctx := context.Background()
 	e := newEmailEnv(t, ctx)
-	contact := e.newEmailTestContact(t, "Email Backfill F")
+	contact := e.newEmailTestContact(t)
 
 	t1 := localNoonAnchor()
 	t2 := t1.Add(3 * time.Hour)
@@ -363,7 +366,7 @@ func TestEmailIntegration_OutOfOrderBackfill_NoBackwardMove(t *testing.T) {
 func TestEmailIntegration_ReDelivery_Idempotent(t *testing.T) {
 	ctx := context.Background()
 	e := newEmailEnv(t, ctx)
-	contact := e.newEmailTestContact(t, "Email Idempotent G")
+	contact := e.newEmailTestContact(t)
 
 	sentAt := localNoonAnchor()
 	e.seedCommsMessage(t, contact.ID, "<g-1@example.test>", "thr-G", repository.InteractionDirectionInbound, sentAt)
@@ -390,7 +393,7 @@ func TestEmailIntegration_ReDelivery_Idempotent(t *testing.T) {
 func TestEmailIntegration_CrossAccountSameMessageID_OneInteraction(t *testing.T) {
 	ctx := context.Background()
 	e := newEmailEnv(t, ctx)
-	contact := e.newEmailTestContact(t, "Email CrossAcct H")
+	contact := e.newEmailTestContact(t)
 
 	sentAt := localNoonAnchor()
 	e.seedCommsMessage(t, contact.ID, "<h-shared@example.test>", "thr-H", repository.InteractionDirectionInbound, sentAt)
@@ -411,7 +414,7 @@ func TestEmailIntegration_CrossAccountSameMessageID_OneInteraction(t *testing.T)
 func TestEmailIntegration_MatchOnly_NoContactCreation(t *testing.T) {
 	ctx := context.Background()
 	e := newEmailEnv(t, ctx)
-	contact := e.newEmailTestContact(t, "Email MatchOnly I")
+	contact := e.newEmailTestContact(t)
 
 	before := e.countContacts(t)
 
@@ -429,7 +432,7 @@ func TestEmailIntegration_MatchOnly_NoContactCreation(t *testing.T) {
 func TestEmailIntegration_Concurrent_NoBackwardMove(t *testing.T) {
 	ctx := context.Background()
 	e := newEmailEnv(t, ctx)
-	contact := e.newEmailTestContact(t, "Email Concurrent J")
+	contact := e.newEmailTestContact(t)
 
 	t1 := localNoonAnchor()
 	t2 := t1.Add(2 * time.Hour)
