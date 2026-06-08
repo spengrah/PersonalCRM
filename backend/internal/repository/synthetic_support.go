@@ -167,8 +167,8 @@ func (r *SyntheticSupportRepository) DeleteTelegramMessagesByPeerUserID(ctx cont
 }
 
 // DeleteTelegramChatConfigsByChatIds removes telegram_chat_config rows for the
-// tracked group chat ids (cleanup step 6b). telegram_chat_config has no
-// namespace column, so a group replay's config rows are deleted by exact chat id.
+// tracked group chat ids. telegram_chat_config has no namespace column, so a
+// group replay's config rows are deleted by exact chat id.
 func (r *SyntheticSupportRepository) DeleteTelegramChatConfigsByChatIds(ctx context.Context, chatIDs []int64) (int64, error) {
 	if len(chatIDs) == 0 {
 		return 0, nil

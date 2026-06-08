@@ -114,6 +114,11 @@ type Harness struct {
 	// the telegram adapter.
 	peerMatcher *telegramPeerMatcherDeps
 
+	// groupMaxMembers is the size threshold the MessageHandler is built with,
+	// sourced from the test config (TELEGRAM_GROUP_MAX_MEMBERS default) so the
+	// harness tracks the production default rather than hard-coding a copy.
+	groupMaxMembers int
+
 	created   *created
 	createdMu sync.Mutex
 
@@ -142,6 +147,12 @@ func (h *Harness) MessagesRepo() *repository.MessagesMessageRepository { return 
 
 // MacHostID is the seeded revoked synthetic host id passed as hostID to ingest.
 func (h *Harness) MacHostID() uuid.UUID { return h.macHostID }
+
+// GroupMaxMembers is the size threshold the harness's MessageHandler enforces (a
+// group over it is untracked-by-size under status "auto"). Exposed so group tests
+// size their tracked/untracked member counts relative to the real threshold
+// rather than a magic number.
+func (h *Harness) GroupMaxMembers() int { return h.groupMaxMembers }
 
 // track records ids/peers into the ledger (adapter-facing, mutex-guarded).
 func (h *Harness) track(fn func(c *created)) {

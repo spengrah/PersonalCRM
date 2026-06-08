@@ -474,18 +474,18 @@ WHERE telegram_chat_id = @telegram_chat_id
   AND deleted_at IS NULL;
 
 -- name: SyntheticCountTelegramChatConfigInChatIdBand :one
--- Harness setup collision detection (E2-D8d): count telegram_chat_config rows
--- whose telegram_chat_id falls in this namespace's reserved peer band
--- [band_start, band_end) — group chat ids are drawn from that band. A non-zero
--- count means a leftover config row occupies the band, so NewHarness re-salts.
+-- Harness setup collision detection: count telegram_chat_config rows whose
+-- telegram_chat_id falls in this namespace's reserved peer band [band_start,
+-- band_end) — group chat ids are drawn from that band. A non-zero count means a
+-- leftover config row occupies the band, so NewHarness re-salts.
 SELECT COUNT(*) FROM telegram_chat_config
 WHERE telegram_chat_id >= @band_start
   AND telegram_chat_id < @band_end;
 
 -- name: SyntheticDeleteTelegramChatConfigsByChatIds :execrows
--- Cleanup step 6b: delete the group telegram_chat_config rows a group replay
--- created, by the exact tracked chat ids (telegram_chat_config has no namespace
--- column — keyed only by telegram_chat_id).
+-- Cleanup: delete the group telegram_chat_config rows a group replay created, by
+-- the exact tracked chat ids (telegram_chat_config has no namespace column —
+-- keyed only by telegram_chat_id).
 DELETE FROM telegram_chat_config WHERE telegram_chat_id = ANY(@chat_ids::bigint[]);
 
 -- name: SyntheticDeleteTelegramExternalContactsByPeerIds :execrows

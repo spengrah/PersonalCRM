@@ -1343,10 +1343,10 @@ type Querier interface {
 	// Settle Gate A (telegram unknown-sender): a message row exists for the peer
 	// with matched_contact_id IS NULL (the stranded/discovery-candidate state).
 	SyntheticCountStrandedTelegramMessagesByPeer(ctx context.Context, peerUserID pgtype.Int8) (int64, error)
-	// Harness setup collision detection (E2-D8d): count telegram_chat_config rows
-	// whose telegram_chat_id falls in this namespace's reserved peer band
-	// [band_start, band_end) — group chat ids are drawn from that band. A non-zero
-	// count means a leftover config row occupies the band, so NewHarness re-salts.
+	// Harness setup collision detection: count telegram_chat_config rows whose
+	// telegram_chat_id falls in this namespace's reserved peer band [band_start,
+	// band_end) — group chat ids are drawn from that band. A non-zero count means a
+	// leftover config row occupies the band, so NewHarness re-salts.
 	SyntheticCountTelegramChatConfigInChatIdBand(ctx context.Context, arg SyntheticCountTelegramChatConfigInChatIdBandParams) (int64, error)
 	// Group assertion: count telegram_message rows for (telegram_chat_id,
 	// telegram_message_id). Tests assert 0 for the untracked-by-size group case (the
@@ -1434,9 +1434,9 @@ type Querier interface {
 	SyntheticDeleteMessagesMessageByGuidPrefix(ctx context.Context, guidPrefix pgtype.Text) (int64, error)
 	// Cleanup step 12: note by contact.
 	SyntheticDeleteNotesByContactIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error)
-	// Cleanup step 6b: delete the group telegram_chat_config rows a group replay
-	// created, by the exact tracked chat ids (telegram_chat_config has no namespace
-	// column — keyed only by telegram_chat_id).
+	// Cleanup: delete the group telegram_chat_config rows a group replay created, by
+	// the exact tracked chat ids (telegram_chat_config has no namespace column —
+	// keyed only by telegram_chat_id).
 	SyntheticDeleteTelegramChatConfigsByChatIds(ctx context.Context, chatIds []int64) (int64, error)
 	// Cleanup: telegram discovery candidate external_contact rows are keyed by
 	// source='telegram', source_id = the BARE peer user id (not an ns-prefixed

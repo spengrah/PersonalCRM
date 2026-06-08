@@ -752,10 +752,10 @@ type SyntheticCountTelegramChatConfigInChatIdBandParams struct {
 	BandEnd   int64 `json:"band_end"`
 }
 
-// Harness setup collision detection (E2-D8d): count telegram_chat_config rows
-// whose telegram_chat_id falls in this namespace's reserved peer band
-// [band_start, band_end) — group chat ids are drawn from that band. A non-zero
-// count means a leftover config row occupies the band, so NewHarness re-salts.
+// Harness setup collision detection: count telegram_chat_config rows whose
+// telegram_chat_id falls in this namespace's reserved peer band [band_start,
+// band_end) — group chat ids are drawn from that band. A non-zero count means a
+// leftover config row occupies the band, so NewHarness re-salts.
 func (q *Queries) SyntheticCountTelegramChatConfigInChatIdBand(ctx context.Context, arg SyntheticCountTelegramChatConfigInChatIdBandParams) (int64, error) {
 	row := q.db.QueryRow(ctx, SyntheticCountTelegramChatConfigInChatIdBand, arg.BandStart, arg.BandEnd)
 	var count int64
@@ -1106,9 +1106,9 @@ const SyntheticDeleteTelegramChatConfigsByChatIds = `-- name: SyntheticDeleteTel
 DELETE FROM telegram_chat_config WHERE telegram_chat_id = ANY($1::bigint[])
 `
 
-// Cleanup step 6b: delete the group telegram_chat_config rows a group replay
-// created, by the exact tracked chat ids (telegram_chat_config has no namespace
-// column — keyed only by telegram_chat_id).
+// Cleanup: delete the group telegram_chat_config rows a group replay created, by
+// the exact tracked chat ids (telegram_chat_config has no namespace column —
+// keyed only by telegram_chat_id).
 func (q *Queries) SyntheticDeleteTelegramChatConfigsByChatIds(ctx context.Context, chatIds []int64) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteTelegramChatConfigsByChatIds, chatIds)
 	if err != nil {

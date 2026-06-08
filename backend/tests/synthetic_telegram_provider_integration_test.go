@@ -115,8 +115,10 @@ func TestSyntheticTelegramGroup_TrackedMatchedInteraction(t *testing.T) {
 	contact, err := h.SeedContact(ctx, spec)
 	require.NoError(t, err)
 
-	// A small (tracked) group; the sender is the seeded contact's telegram handle.
-	g := gen.TelegramGroupMessage(spec, factory.MatchSeeded, 5)
+	// A tracked group (at-or-under the harness size threshold); the sender is the
+	// seeded contact's telegram handle.
+	members := h.GroupMaxMembers()
+	g := gen.TelegramGroupMessage(spec, factory.MatchSeeded, members)
 	res, err := h.ReplayTelegramGroup(ctx, contact.ID, g)
 	require.NoError(t, err)
 	require.True(t, res.Matched)
@@ -131,7 +133,7 @@ func TestSyntheticTelegramGroup_TrackedMatchedInteraction(t *testing.T) {
 	mc, err := h.GroupConfigMemberCount(ctx, g.ChatID)
 	require.NoError(t, err)
 	require.NotNil(t, mc)
-	require.Equal(t, int32(5), *mc)
+	require.Equal(t, int32(members), *mc)
 }
 
 func TestSyntheticTelegramGroup_UntrackedOverSizeNotStored(t *testing.T) {
@@ -144,9 +146,10 @@ func TestSyntheticTelegramGroup_UntrackedOverSizeNotStored(t *testing.T) {
 	contact, err := h.SeedContact(ctx, spec)
 	require.NoError(t, err)
 
-	// Over the harness groupMaxMembers (200) → shouldTrackChat returns false →
-	// the message is NOT stored, but the config row was upserted (the gate ran).
-	g := gen.TelegramGroupMessage(spec, factory.MatchSeeded, 500)
+	// Over the harness size threshold → shouldTrackChat returns false → the
+	// message is NOT stored, but the config row was upserted (the gate ran).
+	overSize := h.GroupMaxMembers()*2 + 1
+	g := gen.TelegramGroupMessage(spec, factory.MatchSeeded, overSize)
 	res, err := h.ReplayTelegramGroup(ctx, contact.ID, g)
 	require.NoError(t, err)
 	require.False(t, res.Tracked)
@@ -157,7 +160,7 @@ func TestSyntheticTelegramGroup_UntrackedOverSizeNotStored(t *testing.T) {
 	mc, err := h.GroupConfigMemberCount(ctx, g.ChatID)
 	require.NoError(t, err)
 	require.NotNil(t, mc)
-	require.Equal(t, int32(500), *mc, "the size gate must upsert the config with the observed member count")
+	require.Equal(t, int32(overSize), *mc, "the size gate must upsert the config with the observed member count")
 	require.Equal(t, 0, countInteractionsBySource(t, ctx, h, contact.ID, "telegram"))
 }
 
@@ -172,18 +175,21 @@ func TestSyntheticTelegramGroup_ParticipantCountRefresh(t *testing.T) {
 	require.NoError(t, err)
 
 	// First land a tracked group message so the config row exists.
-	g := gen.TelegramGroupMessage(spec, factory.MatchSeeded, 5)
+	members := h.GroupMaxMembers()
+	g := gen.TelegramGroupMessage(spec, factory.MatchSeeded, members)
 	_, err = h.ReplayTelegramGroup(ctx, contact.ID, g)
 	require.NoError(t, err)
 
 	// Drive HandleChatParticipant via the stub-invoker client (the one api-using
-	// path) → the config's member_count is refreshed to the participant list size.
-	require.NoError(t, h.RefreshGroupMemberCount(ctx, g.ChatID, 7))
+	// path) → the config's member_count is refreshed to a DIFFERENT participant
+	// list size, proving the refresh ran (not the original ingest count).
+	refreshed := members + 2
+	require.NoError(t, h.RefreshGroupMemberCount(ctx, g.ChatID, refreshed))
 
 	mc, err := h.GroupConfigMemberCount(ctx, g.ChatID)
 	require.NoError(t, err)
 	require.NotNil(t, mc)
-	require.Equal(t, int32(7), *mc, "HandleChatParticipant must refresh member_count from the stub full-chat participant list")
+	require.Equal(t, int32(refreshed), *mc, "HandleChatParticipant must refresh member_count from the stub full-chat participant list")
 }
 
 func TestSyntheticTelegramGroup_UnknownSenderStrandedDiscovery(t *testing.T) {
@@ -196,7 +202,7 @@ func TestSyntheticTelegramGroup_UnknownSenderStrandedDiscovery(t *testing.T) {
 	// Tracked group, unknown sender, enough messages to cross the discovery
 	// threshold (min=3). All messages share ONE chat id + sender (a group
 	// conversation), built via TelegramGroupMessageInChat.
-	first := gen.TelegramGroupMessage(gen.Contact(factory.WithTelegram()), factory.MatchUnknown, 5)
+	first := gen.TelegramGroupMessage(gen.Contact(factory.WithTelegram()), factory.MatchUnknown, h.GroupMaxMembers())
 	specs := []factory.TelegramGroupMessageSpec{first}
 	for i := 1; i < 3; i++ {
 		next := first

@@ -1,7 +1,11 @@
 package tests
 
 import (
+	"flag"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +16,21 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
+
+// updateGolden regenerates the committed golden snapshot from the CURRENT
+// factory output (run with `-update`). Off by default so a normal run asserts
+// against the committed file and FAILS loudly on any seed/factory drift.
+var updateGolden = flag.Bool("update", false, "regenerate the golden generator-stream snapshot")
+
+// goldenStreamPath is the committed snapshot the drift test pins against.
+const goldenStreamPath = "testdata/golden_stream.txt"
+
+// goldenStreamSeed/Namespace/Anchor are the FIXED inputs the snapshot is pinned
+// to. The anchor is fixed so the (anchor-relative) timestamps the factory
+// derives are reproducible; the stream itself records only NON-timestamp fields.
+const goldenStreamNamespace = "golden"
+
+var goldenStreamAnchor = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 
 // mustUUIDFromString parses a UUID string SeedAll returned, failing the test on
 // a malformed value.
@@ -25,11 +44,12 @@ func mustUUIDFromString(t *testing.T, s string) uuid.UUID {
 // The golden-scenario regression test catches silent seed drift. It has two
 // halves with a clear priority:
 //
-//   - PRIMARY (DB-independent): a fixed (seed, namespace, pinned anchor) must
-//     produce a byte-identical NON-timestamp generator stream for a fixed call
-//     sequence mirroring SeedAll. This is the load-bearing anti-drift signal — it
-//     fails loudly and deterministically if a factory change perturbs the seed
-//     stream, with no dependence on co-resident DB state.
+//   - PRIMARY (DB-independent): the generator stream for a FIXED (seed,
+//     namespace, anchor) must equal a COMMITTED snapshot. This is the
+//     load-bearing anti-drift signal — any factory change that perturbs a name,
+//     email, handle, source-id, peer id, or the call ordering changes the live
+//     stream and the test FAILS against the pinned file. Regenerate intentionally
+//     with `-update` after a deliberate factory change.
 //   - SECONDARY (scoped DB graph): SeedAll with a fixed namespace + seed settles
 //     to the expected per-(tracked-contact) graph. All reads are contact-id /
 //     namespace-prefix scoped, never global table counts, so they are robust to
@@ -39,28 +59,23 @@ func mustUUIDFromString(t *testing.T, s string) uuid.UUID {
 // half drives the real pipeline + River); E1's synthetic_factory_test.go remains
 // the fast pure-determinism unit test.
 
-// goldenStreamSig is the stable (non-timestamp) signature of one generator
-// stream. Comparing two of these byte-for-byte is the drift signal.
-type goldenStreamSig struct {
-	lines []string
-}
-
-// buildGoldenStream issues the SAME fixed call sequence a small SeedAll-shaped
-// scenario uses and records every non-timestamp identifier. Timestamps are
-// deliberately excluded (they are anchor-relative; the anchor is pinned here so
-// even they would match, but excluding them keeps the signature about the
-// wall-clock-independent determinism claim).
-func buildGoldenStream(seed uint64, namespace string, anchor time.Time) goldenStreamSig {
+// buildGoldenStream issues a FIXED representative factory-call sequence (chosen
+// to exercise every source factory + both id roles, NOT a literal mirror of
+// SeedAll's call order/counts) and records every non-timestamp identifier.
+// Timestamps are excluded so the snapshot is about the wall-clock-independent
+// determinism claim; the anchor is fixed regardless so anchor-derived ids stay
+// reproducible.
+func buildGoldenStream(seed uint64, namespace string, anchor time.Time) []string {
 	gen := factory.NewGeneratorAt(seed, namespace, anchor)
-	var sig goldenStreamSig
-	add := func(label, value string) { sig.lines = append(sig.lines, label+"="+value) }
+	var lines []string
+	add := func(label, value string) { lines = append(lines, label+"="+value) }
 
 	add("prefix", gen.Prefix())
 	add("peerBandStart", fmt.Sprint(gen.PeerBandStart()))
 	add("phoneArea", fmt.Sprint(gen.PhoneAreaCode()))
 
 	// Two email contacts + their Gmail/GChat/GCal payloads, two telegram contacts
-	// + their private + group messages — the representative mix SeedAll seeds.
+	// + their private + group messages.
 	for i := 0; i < 2; i++ {
 		emailSpec := gen.Contact(factory.WithEmail())
 		add("contact.email.name", emailSpec.FullName)
@@ -92,30 +107,43 @@ func buildGoldenStream(seed uint64, namespace string, anchor time.Time) goldenSt
 		add("group.messageID", fmt.Sprint(group.TelegramMessageID))
 		add("group.title", group.ChatTitle)
 	}
-	return sig
+	return lines
 }
 
 func TestSyntheticGolden_GeneratorStreamIsStable(t *testing.T) {
 	testsupport.RequireLongTests(t)
 
-	// PRIMARY drift signal: identical (seed, namespace, anchor) → byte-identical
-	// non-timestamp stream. Pure; no DB.
-	anchor := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	a := buildGoldenStream(factory.DefaultSeed, "golden", anchor)
-	b := buildGoldenStream(factory.DefaultSeed, "golden", anchor)
-	require.Equal(t, a.lines, b.lines, "the generator stream must be byte-identical for the same (seed, namespace, anchor)")
+	live := buildGoldenStream(factory.DefaultSeed, goldenStreamNamespace, goldenStreamAnchor)
 
-	// A different namespace must produce a DIFFERENT stream (the namespace is a
-	// real isolation dimension, not a no-op).
-	c := buildGoldenStream(factory.DefaultSeed, "golden2", anchor)
-	require.NotEqual(t, a.lines, c.lines, "a different namespace must perturb the stream")
+	if *updateGolden {
+		require.NoError(t, os.MkdirAll(filepath.Dir(goldenStreamPath), 0o755))
+		require.NoError(t, os.WriteFile(goldenStreamPath, []byte(strings.Join(live, "\n")+"\n"), 0o644))
+		t.Logf("wrote golden snapshot %s (%d lines)", goldenStreamPath, len(live))
+		return
+	}
+
+	// PRIMARY drift signal: the live stream must equal the COMMITTED snapshot. A
+	// factory change that perturbs any identifier or the call ordering fails here.
+	wantBytes, err := os.ReadFile(goldenStreamPath)
+	require.NoError(t, err, "missing golden snapshot — regenerate with `go test -run TestSyntheticGolden_GeneratorStreamIsStable -update`")
+	want := strings.Split(strings.TrimRight(string(wantBytes), "\n"), "\n")
+	require.Equal(t, want, live,
+		"generator stream drifted from the committed snapshot; if intentional, regenerate with `-update`")
+
+	// SUPPLEMENTARY: intra-run determinism (same inputs → byte-identical) ...
+	again := buildGoldenStream(factory.DefaultSeed, goldenStreamNamespace, goldenStreamAnchor)
+	require.Equal(t, live, again, "the generator stream must be byte-identical for the same (seed, namespace, anchor)")
+
+	// ... and namespace disjointness (a different namespace perturbs the stream).
+	other := buildGoldenStream(factory.DefaultSeed, "golden2", goldenStreamAnchor)
+	require.NotEqual(t, live, other, "a different namespace must perturb the stream")
 }
 
 func TestSyntheticGolden_SeedAllScopedGraph(t *testing.T) {
 	testsupport.RequireLongTests(t)
 	database, ctx := newSyntheticDB(t)
 
-	params := synthetic.DefaultParams() // fixed namespace "golden" + DefaultSeed, 1 contact/source
+	params := synthetic.DefaultParams() // DefaultParams: namespace "seedall" + DefaultSeed, 1 contact/source
 	// The harness's resolveNamespace may re-salt a colliding fixed namespace, so
 	// read the EFFECTIVE namespace from the harness rather than hard-coding it.
 	h := synthetic.NewHarnessForNamespace(t, ctx, database, params.Namespace, params.Seed)

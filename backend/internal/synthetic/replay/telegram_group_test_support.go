@@ -34,7 +34,7 @@ func (h *Harness) newGroupHandler() *telegram.MessageHandler {
 		repository.NewSyncRepositoryWithPool(h.database.Queries, h.database.Pool),
 		nil,
 		telegramSelfUserID,
-		harnessGroupMaxMembers,
+		h.groupMaxMembers,
 		h.peerMatcher.matcher,
 		h.peerMatcher.engine,
 	)
@@ -99,7 +99,7 @@ func (h *Harness) ReplayTelegramGroup(ctx context.Context, contactID uuid.UUID, 
 		return TelegramGroupResult{}, fmt.Errorf("telegram group handle message: %w", err)
 	}
 
-	tracked := spec.ParticipantsCount <= harnessGroupMaxMembers
+	tracked := spec.ParticipantsCount <= h.groupMaxMembers
 
 	if !tracked {
 		// Untracked-by-size: the message must NOT be stored. Settle once Gate B is

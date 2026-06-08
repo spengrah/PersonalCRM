@@ -103,6 +103,14 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 	if cfg.River.WorkerConcurrency <= 0 {
 		cfg.River.WorkerConcurrency = 4
 	}
+	// The MessageHandler size threshold tracks the test config's
+	// TELEGRAM_GROUP_MAX_MEMBERS rather than a hard-coded copy of the production
+	// default, so a config change does not silently leave the harness on a stale
+	// boundary. Defend against a zero/unset value.
+	groupMaxMembers := cfg.Telegram.GroupMaxMembers
+	if groupMaxMembers <= 0 {
+		groupMaxMembers = 10
+	}
 
 	// Repositories.
 	eventRepo := repository.NewEventRepository(database.Queries)
@@ -276,6 +284,7 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 		ingestService:   ingestService,
 		macHostID:       macHostID,
 		peerMatcher:     &telegramPeerMatcherDeps{matcher: peerMatcher, engine: tgAggEngine},
+		groupMaxMembers: groupMaxMembers,
 		created:         newCreated(),
 	}
 	_ = hostRepo // reserved for future liveness wiring; intentionally nil here
