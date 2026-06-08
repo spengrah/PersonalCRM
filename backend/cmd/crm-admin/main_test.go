@@ -17,6 +17,7 @@ import (
 	"personal-crm/backend/internal/messages"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
+	"personal-crm/backend/internal/synthetic"
 
 	"github.com/google/uuid"
 )
@@ -93,6 +94,42 @@ func (f *fakeGmailBackfillResetter) ResetGmailBackfillCursors(_ context.Context)
 	return f.result, nil
 }
 
+// fakeSeedRunner records which seed path ran (additive vs reset) and the params
+// it received, so dispatch + flag-mapping can be asserted without a DB/harness.
+type fakeSeedRunner struct {
+	result     synthetic.ProfileResult
+	err        error
+	seedCalls  int
+	resetCalls int
+	lastParams synthetic.SeedParams
+}
+
+func (f *fakeSeedRunner) Seed(_ context.Context, params synthetic.SeedParams) (synthetic.ProfileResult, error) {
+	f.seedCalls++
+	f.lastParams = params
+	if f.err != nil {
+		return synthetic.ProfileResult{}, f.err
+	}
+	res := f.result
+	res.Profile = params.Profile
+	res.Namespace = params.Namespace
+	res.Seed = params.Seed
+	return res, nil
+}
+
+func (f *fakeSeedRunner) ResetAndSeed(_ context.Context, params synthetic.SeedParams) (synthetic.ProfileResult, error) {
+	f.resetCalls++
+	f.lastParams = params
+	if f.err != nil {
+		return synthetic.ProfileResult{}, f.err
+	}
+	res := f.result
+	res.Profile = params.Profile
+	res.Namespace = params.Namespace
+	res.Seed = params.Seed
+	return res, nil
+}
+
 func newTestDeps() (adminDeps, *bytes.Buffer, *fakeTokenMinter, *fakeHostLister, *fakeHostRevoker, *fakeRematchRunner) {
 	stdout := &bytes.Buffer{}
 	tokens := &fakeTokenMinter{
@@ -109,6 +146,7 @@ func newTestDeps() (adminDeps, *bytes.Buffer, *fakeTokenMinter, *fakeHostLister,
 		revoker:    revoker,
 		rematch:    rematch,
 		gmailReset: gmailReset,
+		seed:       &fakeSeedRunner{},
 		stdout:     stdout,
 		stderr:     &bytes.Buffer{},
 	}, stdout, tokens, hosts, revoker, rematch
@@ -590,6 +628,41 @@ func TestParseArgsAllFlags(t *testing.T) {
 				}
 			},
 		},
+		{
+			// --seed (bool subcommand) and --prng-seed (uint64) are DISTINCT
+			// flags — Go's flag cannot bind one name to both.
+			"seed with distinct prng-seed + profile + yes",
+			[]string{"--seed", "--profile", "dev", "--prng-seed", "42", "--namespace", "ns1", "--yes"},
+			func(t *testing.T, o runOptions) {
+				if !o.doSeed {
+					t.Fatal("--seed bool not set")
+				}
+				if o.prngSeed != 42 {
+					t.Fatalf("expected prng-seed 42, got %d", o.prngSeed)
+				}
+				if o.seedProfile != "dev" {
+					t.Fatalf("expected profile dev, got %q", o.seedProfile)
+				}
+				if o.seedNamespace != "ns1" {
+					t.Fatalf("expected namespace ns1, got %q", o.seedNamespace)
+				}
+				if !o.seedYes {
+					t.Fatal("--yes not set")
+				}
+			},
+		},
+		{
+			"reset-and-seed",
+			[]string{"--reset-and-seed", "--yes"},
+			func(t *testing.T, o runOptions) {
+				if !o.resetAndSeed {
+					t.Fatal("--reset-and-seed not set")
+				}
+				if !o.seedYes {
+					t.Fatal("--yes not set")
+				}
+			},
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -690,5 +763,164 @@ func TestRunRederiveCorrespondenceNamesRederiveErrorFails(t *testing.T) {
 	}
 	if len(*log) != 1 || (*log)[0] != "rederive" {
 		t.Fatalf("expected only the re-derive phase to run, log=%v", *log)
+	}
+}
+
+// --- --seed / --reset-and-seed dispatch tests ---
+
+func TestRunSeedDispatchesAdditiveWithDefaults(t *testing.T) {
+	deps, stdout, _, _, _, _ := newTestDeps()
+	seed := &fakeSeedRunner{}
+	deps.seed = seed
+
+	// --yes confirms; default profile for --seed is `dev`.
+	err := run(context.Background(), runOptions{doSeed: true, seedYes: true}, deps)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if seed.seedCalls != 1 || seed.resetCalls != 0 {
+		t.Fatalf("expected exactly one additive Seed call, got seed=%d reset=%d", seed.seedCalls, seed.resetCalls)
+	}
+	if seed.lastParams.Profile != synthetic.ProfileDev {
+		t.Fatalf("expected default --seed profile dev, got %q", seed.lastParams.Profile)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "seed summary (profile=dev") {
+		t.Fatalf("expected counts-only summary, got %q", out)
+	}
+}
+
+func TestRunResetAndSeedDispatchesWithDefaults(t *testing.T) {
+	deps, stdout, _, _, _, _ := newTestDeps()
+	seed := &fakeSeedRunner{}
+	deps.seed = seed
+
+	err := run(context.Background(), runOptions{resetAndSeed: true, seedYes: true}, deps)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if seed.resetCalls != 1 || seed.seedCalls != 0 {
+		t.Fatalf("expected exactly one ResetAndSeed call, got seed=%d reset=%d", seed.seedCalls, seed.resetCalls)
+	}
+	if seed.lastParams.Profile != synthetic.ProfileProdShaped {
+		t.Fatalf("expected default --reset-and-seed profile prod-shaped, got %q", seed.lastParams.Profile)
+	}
+	if !strings.Contains(stdout.String(), "seed summary (profile=prod-shaped") {
+		t.Fatalf("expected counts-only summary, got %q", stdout.String())
+	}
+}
+
+func TestRunSeedRequiresConfirm(t *testing.T) {
+	deps, _, _, _, _, _ := newTestDeps()
+	seed := &fakeSeedRunner{}
+	deps.seed = seed
+
+	// No --yes and no CRM_SEED_RESET_CONFIRM → refuse, do NOT run the seed.
+	t.Setenv(seedConfirmEnv, "")
+	err := run(context.Background(), runOptions{doSeed: true}, deps)
+	if err == nil {
+		t.Fatal("expected --seed to refuse without confirmation")
+	}
+	if seed.seedCalls != 0 {
+		t.Fatalf("seed must not run without confirmation; got %d calls", seed.seedCalls)
+	}
+}
+
+func TestRunResetAndSeedRequiresConfirm(t *testing.T) {
+	deps, _, _, _, _, _ := newTestDeps()
+	seed := &fakeSeedRunner{}
+	deps.seed = seed
+
+	t.Setenv(seedConfirmEnv, "")
+	err := run(context.Background(), runOptions{resetAndSeed: true}, deps)
+	if err == nil {
+		t.Fatal("expected --reset-and-seed to refuse without confirmation")
+	}
+	if seed.resetCalls != 0 {
+		t.Fatalf("reset-and-seed must not run without confirmation; got %d calls", seed.resetCalls)
+	}
+}
+
+func TestRunSeedConfirmViaEnv(t *testing.T) {
+	deps, _, _, _, _, _ := newTestDeps()
+	seed := &fakeSeedRunner{}
+	deps.seed = seed
+
+	// The env-var alternative to --yes.
+	t.Setenv(seedConfirmEnv, "1")
+	err := run(context.Background(), runOptions{doSeed: true}, deps)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if seed.seedCalls != 1 {
+		t.Fatalf("expected seed to run with CRM_SEED_RESET_CONFIRM=1; got %d calls", seed.seedCalls)
+	}
+}
+
+func TestRunSeedProfileOverride(t *testing.T) {
+	deps, _, _, _, _, _ := newTestDeps()
+	seed := &fakeSeedRunner{}
+	deps.seed = seed
+
+	err := run(context.Background(), runOptions{doSeed: true, seedYes: true, seedProfile: "minimal-scoped"}, deps)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if seed.lastParams.Profile != synthetic.ProfileMinimalScoped {
+		t.Fatalf("expected overridden profile minimal-scoped, got %q", seed.lastParams.Profile)
+	}
+}
+
+func TestRunSeedUnknownProfileErrors(t *testing.T) {
+	deps, _, _, _, _, _ := newTestDeps()
+	seed := &fakeSeedRunner{}
+	deps.seed = seed
+
+	err := run(context.Background(), runOptions{doSeed: true, seedYes: true, seedProfile: "nope"}, deps)
+	if err == nil {
+		t.Fatal("expected unknown-profile error")
+	}
+	if seed.seedCalls != 0 {
+		t.Fatalf("seed must not run on an unknown profile; got %d calls", seed.seedCalls)
+	}
+}
+
+func TestRunSeedNamespaceAndPRNGOverride(t *testing.T) {
+	deps, _, _, _, _, _ := newTestDeps()
+	seed := &fakeSeedRunner{}
+	deps.seed = seed
+
+	err := run(context.Background(), runOptions{
+		doSeed: true, seedYes: true, seedNamespace: "myworld", prngSeed: 99,
+	}, deps)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if seed.lastParams.Namespace != "myworld" {
+		t.Fatalf("expected namespace override myworld, got %q", seed.lastParams.Namespace)
+	}
+	if seed.lastParams.Seed != 99 {
+		t.Fatalf("expected prng-seed override 99, got %d", seed.lastParams.Seed)
+	}
+}
+
+func TestRunSeedPropagatesError(t *testing.T) {
+	deps, _, _, _, _, _ := newTestDeps()
+	deps.seed = &fakeSeedRunner{err: errors.New("queue not drained")}
+
+	err := run(context.Background(), runOptions{doSeed: true, seedYes: true}, deps)
+	if err == nil {
+		t.Fatal("expected the seed error to propagate")
+	}
+	if !strings.Contains(err.Error(), "seed") {
+		t.Fatalf("expected wrapped seed error, got %v", err)
+	}
+}
+
+func TestRunSeedMutualExclusion(t *testing.T) {
+	deps, _, _, _, _, _ := newTestDeps()
+	err := run(context.Background(), runOptions{doSeed: true, resetAndSeed: true, seedYes: true}, deps)
+	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("expected mutual-exclusion error, got %v", err)
 	}
 }

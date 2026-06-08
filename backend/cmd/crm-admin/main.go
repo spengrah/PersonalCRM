@@ -71,6 +71,35 @@
 //	                              Mac — this binary does not hold the
 //	                              per-host pair-key.
 //
+//	--seed [--profile P]          Seed the selected synthetic world (P =
+//	      [--namespace N]         minimal-scoped|dev|prod-shaped; default dev)
+//	      [--prng-seed S] --yes   into the DB (ADDITIVE). REFUSED in production
+//	                              (CRM_ENV gate) and when the river_job queue is
+//	                              not drained. The crm-api service MUST be
+//	                              STOPPED first (use `make dev-seed`). Requires
+//	                              --yes (or CRM_SEED_RESET_CONFIRM=1). Prints a
+//	                              counts-only summary. Re-running WITHOUT a reset
+//	                              accumulates contacts — use --reset-and-seed for
+//	                              a reproducible baseline.
+//
+//	--reset-and-seed [--profile P]  HARD-wipe every live data table (incl.
+//	      [--namespace N]           oauth_credential + sync-state + telegram
+//	      [--prng-seed S] --yes     session, preserving only schema_migrations +
+//	                                River internals), then reseed (default
+//	                                profile prod-shaped). REFUSED in production.
+//	                                The crm-api service MUST be STOPPED (use
+//	                                `make staging-reset`). Requires --yes. The
+//	                                stable namespace makes the reseed reproducible.
+//
+// The seed/reset subcommands inherit the process env (CRM_ENV / TIME_BASE /
+// TIME_ACCELERATION / DATABASE_URL / MIGRATIONS_PATH) — on the Pi via
+// `set -a; . /srv/personalcrm/.env; set +a` — so the seeded world's cadence /
+// overdue / time semantics track the running app's clock. They run migrations
+// before seeding (db.NewDatabase does NOT migrate). The service-stopped
+// requirement is asserted operationally by --yes + the wrapper scripts; River
+// 0.34 exposes no sound in-Go live-client signal (river_client is unpopulated),
+// so there is no in-Go liveness probe.
+//
 // See backend/internal/messages/admin_rematch.go for the rematch
 // business logic and backend/internal/service/mac_host.go for the
 // pairing service. This binary is a thin CLI shim so the entire
@@ -102,6 +131,7 @@ import (
 	"personal-crm/backend/internal/messages"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
+	"personal-crm/backend/internal/synthetic"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -154,6 +184,20 @@ type gmailBackfillCursorResetter interface {
 	ResetGmailBackfillCursors(ctx context.Context) (service.EmailBackfillCursorResetResult, error)
 }
 
+// seedRunner is the narrow interface --seed / --reset-and-seed need. Production
+// wires this to a seedAdapter over the synthetic toolkit. Seed is additive (it
+// runs the non-final-river_job drain preflight); ResetAndSeed hard-wipes the live
+// data tables first (no drain check — it wipes river_job). Both build a harness
+// for the stable per-profile namespace, run the profile, and on SUCCESS Quiesce
+// (seed-and-leave) — on ERROR they run the full teardown so a failed seed cleans
+// its partial world and never leaks the harness's River client. The service must
+// be STOPPED (asserted operationally by --yes + the wrapper scripts; River 0.34
+// exposes no sound in-Go live-client signal).
+type seedRunner interface {
+	Seed(ctx context.Context, params synthetic.SeedParams) (synthetic.ProfileResult, error)
+	ResetAndSeed(ctx context.Context, params synthetic.SeedParams) (synthetic.ProfileResult, error)
+}
+
 // adminDeps groups the per-subcommand dependencies. Tests inject
 // fakes for each interface; the production wiring builds a single
 // MacHostService and a small adapter for rematch.
@@ -169,6 +213,7 @@ type adminDeps struct {
 	// Nil for all other subcommands.
 	rederive   rederiveRunner
 	gmailReset gmailBackfillCursorResetter
+	seed       seedRunner
 	stdout     io.Writer
 	stderr     io.Writer
 }
@@ -185,6 +230,16 @@ type runOptions struct {
 	listHosts              bool
 	revokeHostID           string
 	rotateHostID           string
+	// Synthetic seed (E3). doSeed ← --seed (the BOOL subcommand selector);
+	// resetAndSeed ← --reset-and-seed; prngSeed ← --prng-seed (the uint64 PRNG
+	// seed, a DISTINCT flag from --seed — Go's flag cannot bind one name to both
+	// a Bool and a Uint64). seedYes ← --yes (mandatory confirm for BOTH commands).
+	doSeed        bool
+	resetAndSeed  bool
+	seedProfile   string
+	seedNamespace string
+	prngSeed      uint64
+	seedYes       bool
 }
 
 func main() {
@@ -213,6 +268,24 @@ func runMain(args []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 	ctx := context.Background()
+
+	// The seed/reset entrypoints invoke shippable fake-fetcher scaffolding and
+	// (for reset) destroy data, so the CRM_ENV-production gate runs PRE-DB — a
+	// production env must be refused BEFORE the DB is opened (and before a reset
+	// could begin). The other subcommands assume an already-migrated live DB.
+	if opts.doSeed || opts.resetAndSeed {
+		if err := synthetic.SeedAllowed(cfg); err != nil {
+			return err
+		}
+		// db.NewDatabase only connects + pings; it does NOT migrate. The seed
+		// path may hit a fresh dev DB, and the reset TRUNCATE needs the schema to
+		// exist — so migrate here (the same call crm-api makes), after the gate
+		// and before opening the pool.
+		if err := db.RunMigrations(ctx, cfg.Database.URL, cfg.Database.MigrationsPath); err != nil {
+			return fmt.Errorf("run migrations: %w", err)
+		}
+	}
+
 	database, err := db.NewDatabase(ctx, cfg.Database)
 	if err != nil {
 		return fmt.Errorf("connect db: %w", err)
@@ -259,16 +332,28 @@ func validateSubcommand(opts runOptions) error {
 	if opts.rotateHostID != "" {
 		active++
 	}
+	if opts.doSeed {
+		active++
+	}
+	if opts.resetAndSeed {
+		active++
+	}
 	if active == 0 {
 		return errors.New("no subcommand specified; pass exactly one of " +
-			"--messages-rematch-stranded, --reconcile-address-book-methods, --rederive-correspondence-names, --reset-gmail-backfill-cursors, --mint-pairing-token, --list-hosts, --revoke-host <uuid>, --rotate-host-key <uuid>")
+			subcommandList)
 	}
 	if active > 1 {
 		return errors.New("subcommand flags are mutually exclusive; pass exactly one of " +
-			"--messages-rematch-stranded, --reconcile-address-book-methods, --rederive-correspondence-names, --reset-gmail-backfill-cursors, --mint-pairing-token, --list-hosts, --revoke-host <uuid>, --rotate-host-key <uuid>")
+			subcommandList)
 	}
 	return nil
 }
+
+// subcommandList is the canonical subcommand enumeration shared by the
+// no-subcommand and mutual-exclusion usage errors.
+const subcommandList = "--messages-rematch-stranded, --reconcile-address-book-methods, " +
+	"--rederive-correspondence-names, --reset-gmail-backfill-cursors, --mint-pairing-token, " +
+	"--list-hosts, --revoke-host <uuid>, --rotate-host-key <uuid>, --seed, --reset-and-seed"
 
 // parseArgs uses a private FlagSet so tests can drive the parser
 // without polluting flag's global state.
@@ -302,6 +387,27 @@ func parseArgs(args []string) (runOptions, error) {
 		"Validate the given host_id is active, mint a fresh pairing token, "+
 			"and print the `crm-mac install --re-pair` command for rotating "+
 			"that host's api-key. The rotation itself runs on the Mac.")
+	fs.BoolVar(&opts.doSeed, "seed", false,
+		"Seed the selected synthetic --profile world into the DB (additive). REFUSED in "+
+			"production (CRM_ENV gate) and when the river_job queue is not drained. The crm-api "+
+			"service MUST be stopped first (use `make dev-seed` / `make staging-reset`). Requires --yes.")
+	fs.BoolVar(&opts.resetAndSeed, "reset-and-seed", false,
+		"HARD-wipe every live data table (incl. oauth_credential + sync-state, preserving only "+
+			"schema_migrations + River internals), then reseed the selected --profile world. "+
+			"REFUSED in production. The crm-api service MUST be stopped (use `make staging-reset`). "+
+			"Requires --yes.")
+	fs.StringVar(&opts.seedProfile, "profile", "",
+		"Synthetic profile to seed: minimal-scoped | dev | prod-shaped. Defaults to `dev` for "+
+			"--seed and `prod-shaped` for --reset-and-seed.")
+	fs.StringVar(&opts.seedNamespace, "namespace", "",
+		"Override the stable per-profile namespace (default: the profile's stable token, so a "+
+			"reseed reproduces the same world). Rarely needed.")
+	fs.Uint64Var(&opts.prngSeed, "prng-seed", 0,
+		"Override the deterministic PRNG seed (default: the toolkit's DefaultSeed). DISTINCT "+
+			"from the --seed subcommand bool.")
+	fs.BoolVar(&opts.seedYes, "yes", false,
+		"Confirm a seed/reset against this DB. MANDATORY for --seed and --reset-and-seed (or set "+
+			"CRM_SEED_RESET_CONFIRM=1). Asserts the operator stopped the crm-api service first.")
 	if err := fs.Parse(args); err != nil {
 		return runOptions{}, err
 	}
@@ -333,8 +439,107 @@ func run(ctx context.Context, opts runOptions, deps adminDeps) error {
 		return runRederiveCorrespondenceNames(ctx, deps)
 	case opts.resetGmailBackfill:
 		return runResetGmailBackfillCursors(ctx, deps)
+	case opts.doSeed:
+		return runSeed(ctx, opts, deps)
+	case opts.resetAndSeed:
+		return runResetAndSeed(ctx, opts, deps)
 	}
 	return errors.New("unreachable")
+}
+
+// seedConfirmEnv is the env-var alternative to --yes for the mandatory
+// seed/reset confirmation gate.
+const seedConfirmEnv = "CRM_SEED_RESET_CONFIRM"
+
+// seedConfirmed reports whether the mandatory seed/reset confirmation is present
+// (the --yes flag OR CRM_SEED_RESET_CONFIRM=1). Both --seed and --reset-and-seed
+// require it — the seed Starts a competing River worker pool, so neither is a
+// no-confirm operation. The operator/script asserts the crm-api service is
+// stopped by passing it.
+func seedConfirmed(opts runOptions) bool {
+	return opts.seedYes || os.Getenv(seedConfirmEnv) == "1"
+}
+
+// resolveSeedParams builds the SeedParams for a seed/reset run: the profile
+// (defaulting per command), the stable namespace (overridable), and the PRNG
+// seed (overridable). defaultProfile is `dev` for --seed, `prod-shaped` for
+// --reset-and-seed.
+func resolveSeedParams(opts runOptions, defaultProfile synthetic.Profile) (synthetic.SeedParams, error) {
+	profile := defaultProfile
+	if opts.seedProfile != "" {
+		profile = synthetic.Profile(opts.seedProfile)
+	}
+	params, err := synthetic.ProfileParams(profile)
+	if err != nil {
+		return synthetic.SeedParams{}, err
+	}
+	if opts.seedNamespace != "" {
+		params.Namespace = opts.seedNamespace
+	}
+	if opts.prngSeed != 0 {
+		params.Seed = opts.prngSeed
+	}
+	return params, nil
+}
+
+// runSeed runs the additive synthetic seed. The CRM_ENV gate + migrations run
+// PRE-this in runMain; the additive queue-drain preflight + harness lifecycle are
+// inside deps.seed.Seed (the production seedAdapter).
+func runSeed(ctx context.Context, opts runOptions, deps adminDeps) error {
+	if !seedConfirmed(opts) {
+		return fmt.Errorf("--seed requires confirmation: pass --yes (or set %s=1) AND ensure the crm-api service is stopped", seedConfirmEnv)
+	}
+	params, err := resolveSeedParams(opts, synthetic.ProfileDev)
+	if err != nil {
+		return fmt.Errorf("--seed: %w", err)
+	}
+	res, err := deps.seed.Seed(ctx, params)
+	if err != nil {
+		return fmt.Errorf("seed: %w", err)
+	}
+	return writeSeedSummary(deps.stdout, res)
+}
+
+// runResetAndSeed hard-wipes the live data tables then reseeds. The CRM_ENV gate
+// + migrations run PRE-this in runMain; the wipe + harness lifecycle are inside
+// deps.seed.ResetAndSeed.
+func runResetAndSeed(ctx context.Context, opts runOptions, deps adminDeps) error {
+	if !seedConfirmed(opts) {
+		return fmt.Errorf("--reset-and-seed requires confirmation: pass --yes (or set %s=1) AND ensure the crm-api service is stopped — this HARD-wipes all data", seedConfirmEnv)
+	}
+	params, err := resolveSeedParams(opts, synthetic.ProfileProdShaped)
+	if err != nil {
+		return fmt.Errorf("--reset-and-seed: %w", err)
+	}
+	res, err := deps.seed.ResetAndSeed(ctx, params)
+	if err != nil {
+		return fmt.Errorf("reset-and-seed: %w", err)
+	}
+	return writeSeedSummary(deps.stdout, res)
+}
+
+// writeSeedSummary prints the counts-only seed summary (no PII). The bare
+// namespace is printed (NOT the synth-<ns>- prefix — an internal detail).
+func writeSeedSummary(w io.Writer, res synthetic.ProfileResult) error {
+	if _, err := fmt.Fprintf(w, "seed summary (profile=%s namespace=%s prng_seed=%d):\n"+
+		"  contacts:             %d\n"+
+		"  gmail_settled:        %d\n"+
+		"  telegram_settled:     %d\n"+
+		"  gcal_settled:         %d\n"+
+		"  gchat_settled:        %d\n"+
+		"  imessage_settled:     %d\n"+
+		"  unmatched_external:   %d\n"+
+		"  stranded_telegram:    %d\n"+
+		"  stranded_messages:    %d\n"+
+		"  unmatched_calendar:   %d\n"+
+		"  orphan_meeting_notes: %d\n",
+		res.Profile, res.Namespace, res.Seed,
+		res.Contacts, res.GmailSettled, res.TelegramSettled, res.GCalSettled, res.GChatSettled,
+		res.IMessageSettled, res.UnmatchedExternal, res.StrandedTelegram, res.StrandedMessages,
+		res.UnmatchedCalendar, res.OrphanMeetingNote); err != nil {
+		return fmt.Errorf("write seed summary: %w", err)
+	}
+	return nil
 }
 
 func runMintPairingToken(ctx context.Context, opts runOptions, deps adminDeps) error {
@@ -616,6 +821,10 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 		rematch:    rematch,
 		reconcile:  addressBookReconcile,
 		gmailReset: service.NewEmailBackfillCursorResetService(syncRepo),
+		seed: seedAdapter{
+			database: database,
+			support:  repository.NewSyntheticSupportRepository(database.Queries),
+		},
 	}
 
 	// LAZY: build the correspondence re-derivation stack ONLY for
@@ -639,6 +848,64 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 
 	cleanup := func() {}
 	return deps, cleanup, nil
+}
+
+// seedAdapter implements seedRunner over the synthetic toolkit. It owns the
+// harness lifecycle the entrypoints require: build for the stable namespace, run
+// the profile, and on SUCCESS Quiesce (stop the River client, LEAVE the rows);
+// on ERROR run the full teardown (stop the client + clean the partial world), so
+// a failed seed is never a leave-behind and the client is never leaked. The
+// service is assumed STOPPED (asserted by --yes + the wrapper scripts), so the
+// harness's River client is the sole client on the default queue.
+type seedAdapter struct {
+	database *db.Database
+	support  *repository.SyntheticSupportRepository
+}
+
+// Seed is the additive path: it REFUSES if the river_job queue is not drained
+// (an additive seed must not steal pre-existing work), then runs the profile.
+func (a seedAdapter) Seed(ctx context.Context, params synthetic.SeedParams) (synthetic.ProfileResult, error) {
+	nonFinal, err := a.support.CountNonFinalRiverJobs(ctx)
+	if err != nil {
+		return synthetic.ProfileResult{}, fmt.Errorf("count non-final river jobs: %w", err)
+	}
+	if nonFinal > 0 {
+		return synthetic.ProfileResult{}, fmt.Errorf(
+			"refusing additive --seed: %d queued/in-flight river_job row(s) — the queue must be drained "+
+				"(is the crm-api service stopped?). Use --reset-and-seed for a clean baseline (it wipes river_job)",
+			nonFinal)
+	}
+	return a.runProfile(ctx, params)
+}
+
+// ResetAndSeed hard-wipes the live data tables (incl. river_job — so it does NOT
+// run the drain preflight) then reseeds the profile.
+func (a seedAdapter) ResetAndSeed(ctx context.Context, params synthetic.SeedParams) (synthetic.ProfileResult, error) {
+	if err := a.support.ResetSyntheticData(ctx); err != nil {
+		return synthetic.ProfileResult{}, fmt.Errorf("reset synthetic data: %w", err)
+	}
+	return a.runProfile(ctx, params)
+}
+
+// runProfile builds the namespaced harness, runs the profile, and enforces the
+// seed-and-leave (success) / full-teardown (error) lifecycle.
+func (a seedAdapter) runProfile(ctx context.Context, params synthetic.SeedParams) (synthetic.ProfileResult, error) {
+	h, teardown, err := synthetic.NewHarnessWithDBForNamespace(ctx, a.database, params.Namespace, params.Seed)
+	if err != nil {
+		return synthetic.ProfileResult{}, fmt.Errorf("build harness: %w", err)
+	}
+	res, err := synthetic.RunProfile(ctx, h, params)
+	if err != nil {
+		// Failed seed: full teardown (stop client + clean the partial world).
+		// Use a fresh context so a cancelled ctx still tears down.
+		_ = teardown(context.Background())
+		return synthetic.ProfileResult{}, err
+	}
+	// Success: Quiesce (stop client, LEAVE the rows).
+	if qErr := h.Quiesce(ctx); qErr != nil {
+		return res, fmt.Errorf("quiesce after seed: %w", qErr)
+	}
+	return res, nil
 }
 
 // rematchAdapter wraps messages.RematchStranded so it conforms to

@@ -98,6 +98,16 @@ jobs:
           GOARCH: arm64
         run: go build -o bin/crm-api-arm64 cmd/crm-api/main.go
 
+      - name: Cross-compile crm-admin for ARM64
+        working-directory: backend
+        env:
+          GOOS: linux
+          GOARCH: arm64
+        # crm-admin is built only at deploy time (scripts/deploy.sh), so a
+        # compile error in its single-file main.go (e.g. a new --seed subcommand
+        # type not defined there) would otherwise ship uncaught. This guards it.
+        run: go build -o bin/crm-admin-arm64 cmd/crm-admin/main.go
+
       - name: Wait for PostgreSQL
         run: |
           timeout 30 bash -c 'until pg_isready -h localhost -p 5432; do sleep 1; done'
