@@ -12,6 +12,8 @@ import (
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/google"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/service"
+	"personal-crm/backend/internal/synthetic/factory"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -21,12 +23,13 @@ import (
 
 // gchatProviderEnv bundles the repos a GChat provider integration test needs.
 type gchatProviderEnv struct {
-	ctx         context.Context
-	database    *db.Database
-	commsRepo   *repository.CommsMessageRepository
-	contactRepo *repository.ContactRepository
-	methodRepo  *repository.ContactMethodRepository
-	syncRepo    *repository.SyncRepository
+	ctx            context.Context
+	database       *db.Database
+	gen            *factory.Generator
+	commsRepo      *repository.CommsMessageRepository
+	contactRepo    *repository.ContactRepository
+	contactService *service.ContactService
+	syncRepo       *repository.SyncRepository
 }
 
 func setupGChatProviderTest(t *testing.T) *gchatProviderEnv {
@@ -45,34 +48,44 @@ func setupGChatProviderTest(t *testing.T) *gchatProviderEnv {
 	require.NoError(t, err)
 	t.Cleanup(database.Close)
 
+	contactRepo := repository.NewContactRepository(database.Queries)
+	methodRepo := repository.NewContactMethodRepository(database.Queries)
+	interactionRepo := repository.NewInteractionRepository(database.Queries)
+	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
+	// nil bus + nil rematch: a single-tx multi-method seed write, no River client.
+	contactService := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, contactTaskRepo, nil, nil)
+
+	gen, _ := migrationGenerator(t)
+
 	return &gchatProviderEnv{
-		ctx:         ctx,
-		database:    database,
-		commsRepo:   repository.NewCommsMessageRepository(database.Queries),
-		contactRepo: repository.NewContactRepository(database.Queries),
-		methodRepo:  repository.NewContactMethodRepository(database.Queries),
-		syncRepo:    repository.NewSyncRepositoryWithPool(database.Queries, database.Pool),
+		ctx:            ctx,
+		database:       database,
+		gen:            gen,
+		commsRepo:      repository.NewCommsMessageRepository(database.Queries),
+		contactRepo:    contactRepo,
+		contactService: contactService,
+		syncRepo:       repository.NewSyncRepositoryWithPool(database.Queries, database.Pool),
 	}
 }
 
-// newGChatProviderContact creates a contact with a contact_method of the given
-// type+value (so it appears in the dual-source known map), registering cleanup
-// that hard-deletes its comms rows and soft-deletes the contact.
-func (e *gchatProviderEnv) newGChatProviderContact(t *testing.T, name, methodType, methodValue string) *repository.Contact {
+// newGChatProviderContact seeds a namespaced contact with one contact_method of
+// the given type whose value is a factory-namespaced email (so it appears in the
+// dual-source known map), and returns it plus that value (the match key). The
+// method type varies per test (email vs gchat); the value is always an
+// email-shaped address the provider resolves a chat user to.
+func (e *gchatProviderEnv) newGChatProviderContact(t *testing.T, methodType string) (*repository.Contact, string) {
 	t.Helper()
-	contact, err := e.contactRepo.CreateContact(e.ctx, repository.CreateContactRequest{FullName: name})
-	require.NoError(t, err)
-	_, err = e.methodRepo.CreateContactMethod(e.ctx, repository.CreateContactMethodRequest{
-		ContactID: contact.ID,
-		Type:      methodType,
-		Value:     methodValue,
-	})
+	spec := e.gen.Contact(factory.WithEmail())
+	value := spec.Email
+	contact, _, err := e.contactService.CreateContact(e.ctx, repository.CreateContactRequest{
+		FullName: spec.FullName,
+	}, []service.ContactMethodInput{{Type: methodType, Value: value}})
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_ = e.commsRepo.HardDeleteByContact(e.ctx, contact.ID)
-		_ = e.contactRepo.SoftDeleteContact(e.ctx, contact.ID)
+		_ = e.contactRepo.HardDeleteContact(e.ctx, contact.ID)
 	})
-	return contact
+	return contact, value
 }
 
 // newGChatSyncState creates an external_sync_state(source='gchat') row for an
@@ -127,14 +140,13 @@ func chatMessage(name, senderUser, text string, createTime time.Time) *chat.Mess
 // per-space metadata. The row is content-only until the engine aggregates.
 func TestGChatProvider_FullSweep_InboundWritesRowNoEvents(t *testing.T) {
 	e := setupGChatProviderTest(t)
-	suffix := randomSuffix(t)
+	prefix := e.gen.Prefix()
 
-	aliceEmail := "alice-" + suffix + "@example.test"
-	alice := e.newGChatProviderContact(t, "GChat Sweep Alice "+suffix, string(repository.ContactMethodEmail), aliceEmail)
+	alice, aliceEmail := e.newGChatProviderContact(t, string(repository.ContactMethodEmail))
 
-	spaceName := "spaces/SWEEP-" + suffix
-	msgName := spaceName + "/messages/m1-" + suffix
-	accountID := "me-" + suffix + "@example.test"
+	spaceName := "spaces/SWEEP-" + prefix
+	msgName := spaceName + "/messages/m1-" + prefix
+	accountID := prefix + "me@synthetic.example"
 	st := e.newGChatSyncState(t, accountID, true, nil)
 	sentAt := accelerated.GetCurrentTime().Add(-time.Hour).Truncate(time.Second)
 
@@ -199,17 +211,15 @@ func TestGChatProvider_FullSweep_InboundWritesRowNoEvents(t *testing.T) {
 // external_id), while a bystander sender produces no row.
 func TestGChatProvider_OutboundFanOutAndBystander(t *testing.T) {
 	e := setupGChatProviderTest(t)
-	suffix := randomSuffix(t)
+	prefix := e.gen.Prefix()
 
-	aliceEmail := "alice-" + suffix + "@example.test"
-	bobEmail := "bob-" + suffix + "@example.test"
-	alice := e.newGChatProviderContact(t, "GChat Fan Alice "+suffix, string(repository.ContactMethodGChat), aliceEmail)
-	bob := e.newGChatProviderContact(t, "GChat Fan Bob "+suffix, string(repository.ContactMethodEmail), bobEmail)
+	alice, aliceEmail := e.newGChatProviderContact(t, string(repository.ContactMethodGChat))
+	bob, bobEmail := e.newGChatProviderContact(t, string(repository.ContactMethodEmail))
 
-	spaceName := "spaces/FAN-" + suffix
-	outboundMsg := spaceName + "/messages/out-" + suffix
-	bystanderMsg := spaceName + "/messages/by-" + suffix
-	accountID := "me-" + suffix + "@example.test"
+	spaceName := "spaces/FAN-" + prefix
+	outboundMsg := spaceName + "/messages/out-" + prefix
+	bystanderMsg := spaceName + "/messages/by-" + prefix
+	accountID := prefix + "me@synthetic.example"
 	e.newGChatSyncState(t, accountID, true, nil)
 	base := accelerated.GetCurrentTime().Add(-time.Hour).Truncate(time.Second)
 
@@ -238,7 +248,7 @@ func TestGChatProvider_OutboundFanOutAndBystander(t *testing.T) {
 			case "users/bob":
 				return bobEmail, nil
 			case "users/stranger":
-				return "stranger-" + suffix + "@example.test", nil
+				return "stranger-" + prefix + "@synthetic.example", nil
 			}
 			return "", nil
 		},
@@ -268,15 +278,14 @@ func TestGChatProvider_OutboundFanOutAndBystander(t *testing.T) {
 // accounts produces ONE row per matched contact with observed_accounts merged.
 func TestGChatProvider_CrossAccountDedup(t *testing.T) {
 	e := setupGChatProviderTest(t)
-	suffix := randomSuffix(t)
+	prefix := e.gen.Prefix()
 
-	aliceEmail := "alice-" + suffix + "@example.test"
-	alice := e.newGChatProviderContact(t, "GChat XAcct Alice "+suffix, string(repository.ContactMethodEmail), aliceEmail)
+	alice, aliceEmail := e.newGChatProviderContact(t, string(repository.ContactMethodEmail))
 
-	spaceName := "spaces/XACCT-" + suffix
-	msgName := spaceName + "/messages/m-" + suffix
-	acctA := "acctA-" + suffix + "@example.test"
-	acctB := "acctB-" + suffix + "@example.test"
+	spaceName := "spaces/XACCT-" + prefix
+	msgName := spaceName + "/messages/m-" + prefix
+	acctA := "acctA-" + prefix + "@synthetic.example"
+	acctB := "acctB-" + prefix + "@synthetic.example"
 	sentAt := accelerated.GetCurrentTime().Add(-time.Hour).Truncate(time.Second)
 
 	mkFuncs := func(myAccount string) google.FakeChatFetcherFuncs {
@@ -333,14 +342,13 @@ func TestGChatProvider_CrossAccountDedup(t *testing.T) {
 // processed_at untouched (so the engine does not reprocess).
 func TestGChatProvider_EditReconciliation(t *testing.T) {
 	e := setupGChatProviderTest(t)
-	suffix := randomSuffix(t)
+	prefix := e.gen.Prefix()
 
-	aliceEmail := "alice-" + suffix + "@example.test"
-	alice := e.newGChatProviderContact(t, "GChat EditRecon Alice "+suffix, string(repository.ContactMethodEmail), aliceEmail)
+	alice, aliceEmail := e.newGChatProviderContact(t, string(repository.ContactMethodEmail))
 
-	spaceName := "spaces/EDITRECON-" + suffix
-	msgName := spaceName + "/messages/m-" + suffix
-	accountID := "me-" + suffix + "@example.test"
+	spaceName := "spaces/EDITRECON-" + prefix
+	msgName := spaceName + "/messages/m-" + prefix
+	accountID := prefix + "me@synthetic.example"
 	e.newGChatSyncState(t, accountID, true, nil)
 	sentAt := accelerated.GetCurrentTime().Add(-time.Hour).Truncate(time.Second)
 	editTime := accelerated.GetCurrentTime().Add(-30 * time.Minute)
@@ -391,7 +399,7 @@ func TestGChatProvider_EditReconciliation(t *testing.T) {
 
 	// Simulate the engine having processed the row (mark it processed via a
 	// real interaction) so we can prove the edit does NOT clear processed_at.
-	ref := "gchat:" + spaceName + ":proc-" + suffix
+	ref := "gchat:" + spaceName + ":proc-" + prefix
 	interactionRepo := repository.NewInteractionRepository(e.database.Queries)
 	interaction, err := interactionRepo.CreateInteraction(e.ctx, repository.CreateInteractionRequest{
 		ContactID: alice.ID, Source: repository.InteractionSourceGChat, SourceRef: &ref,
@@ -427,14 +435,13 @@ func TestGChatProvider_EditReconciliation(t *testing.T) {
 // provider's body-only pre-filter does not invert fractional ordering.
 func TestGChatProvider_EditFractionalOrdering(t *testing.T) {
 	e := setupGChatProviderTest(t)
-	suffix := randomSuffix(t)
+	prefix := e.gen.Prefix()
 
-	aliceEmail := "alice-" + suffix + "@example.test"
-	alice := e.newGChatProviderContact(t, "GChat Frac Alice "+suffix, string(repository.ContactMethodEmail), aliceEmail)
+	alice, aliceEmail := e.newGChatProviderContact(t, string(repository.ContactMethodEmail))
 
-	spaceName := "spaces/FRAC-" + suffix
-	msgName := spaceName + "/messages/m-" + suffix
-	accountID := "me-" + suffix + "@example.test"
+	spaceName := "spaces/FRAC-" + prefix
+	msgName := spaceName + "/messages/m-" + prefix
+	accountID := prefix + "me@synthetic.example"
 	e.newGChatSyncState(t, accountID, true, nil)
 	sentAt := accelerated.GetCurrentTime().Add(-time.Hour).Truncate(time.Second)
 
@@ -496,14 +503,13 @@ func TestGChatProvider_EditFractionalOrdering(t *testing.T) {
 // re-list soft-deletes all fanned-out rows for the message.
 func TestGChatProvider_DeleteReconciliation(t *testing.T) {
 	e := setupGChatProviderTest(t)
-	suffix := randomSuffix(t)
+	prefix := e.gen.Prefix()
 
-	aliceEmail := "alice-" + suffix + "@example.test"
-	alice := e.newGChatProviderContact(t, "GChat DelRecon Alice "+suffix, string(repository.ContactMethodEmail), aliceEmail)
+	alice, aliceEmail := e.newGChatProviderContact(t, string(repository.ContactMethodEmail))
 
-	spaceName := "spaces/DELRECON-" + suffix
-	msgName := spaceName + "/messages/m-" + suffix
-	accountID := "me-" + suffix + "@example.test"
+	spaceName := "spaces/DELRECON-" + prefix
+	msgName := spaceName + "/messages/m-" + prefix
+	accountID := prefix + "me@synthetic.example"
 	e.newGChatSyncState(t, accountID, true, nil)
 	sentAt := accelerated.GetCurrentTime().Add(-time.Hour).Truncate(time.Second)
 
@@ -562,13 +568,12 @@ func TestGChatProvider_DeleteReconciliation(t *testing.T) {
 // advances the create cursor so already-ingested messages are not re-listed.
 func TestGChatProvider_MetadataReusedAcrossSweeps(t *testing.T) {
 	e := setupGChatProviderTest(t)
-	suffix := randomSuffix(t)
+	prefix := e.gen.Prefix()
 
-	aliceEmail := "alice-" + suffix + "@example.test"
-	e.newGChatProviderContact(t, "GChat MetaReuse Alice "+suffix, string(repository.ContactMethodEmail), aliceEmail)
+	_, aliceEmail := e.newGChatProviderContact(t, string(repository.ContactMethodEmail))
 
-	spaceName := "spaces/METAREUSE-" + suffix
-	accountID := "me-" + suffix + "@example.test"
+	spaceName := "spaces/METAREUSE-" + prefix
+	accountID := prefix + "me@synthetic.example"
 	e.newGChatSyncState(t, accountID, true, nil)
 	sentAt := accelerated.GetCurrentTime().Add(-time.Hour).Truncate(time.Second)
 
@@ -591,7 +596,7 @@ func TestGChatProvider_MetadataReusedAcrossSweeps(t *testing.T) {
 			if showDeleted {
 				return nil, "", nil
 			}
-			return []*chat.Message{chatMessage(spaceName+"/messages/m-"+suffix, "users/alice", "hi", sentAt)}, "", nil
+			return []*chat.Message{chatMessage(spaceName+"/messages/m-"+prefix, "users/alice", "hi", sentAt)}, "", nil
 		},
 		ResolvePersonEmail: func(_ context.Context, userName string) (string, error) {
 			resolveCalls++
@@ -629,14 +634,13 @@ func TestGChatProvider_MetadataReusedAcrossSweeps(t *testing.T) {
 // scans the address across the enabled account and upserts a row.
 func TestGChatRematch_ScansWhenEnabled(t *testing.T) {
 	e := setupGChatProviderTest(t)
-	suffix := randomSuffix(t)
+	prefix := e.gen.Prefix()
 
-	aliceEmail := "alice-" + suffix + "@example.test"
-	alice := e.newGChatProviderContact(t, "GChat Rematch Alice "+suffix, string(repository.ContactMethodGChat), aliceEmail)
+	alice, aliceEmail := e.newGChatProviderContact(t, string(repository.ContactMethodGChat))
 
-	spaceName := "spaces/REMATCH-" + suffix
-	msgName := spaceName + "/messages/m-" + suffix
-	accountID := "me-" + suffix + "@example.test"
+	spaceName := "spaces/REMATCH-" + prefix
+	msgName := spaceName + "/messages/m-" + prefix
+	accountID := prefix + "me@synthetic.example"
 	e.newGChatSyncState(t, accountID, true, nil)
 	sentAt := accelerated.GetCurrentTime().Add(-time.Hour).Truncate(time.Second)
 
@@ -680,21 +684,23 @@ func TestGChatRematch_ScansWhenEnabled(t *testing.T) {
 // the engine derives an interaction in the same rematch pass.
 func TestGChatRematchHandler_ScansAndAggregates(t *testing.T) {
 	env := setupGChatEngineTest(t) // wired engine + recorder
-	suffix := randomSuffix(t)
+	gen, _ := migrationGenerator(t)
+	prefix := gen.Prefix()
 
 	methodRepo := repository.NewContactMethodRepository(env.database.Queries)
 	syncRepo := repository.NewSyncRepositoryWithPool(env.database.Queries, env.database.Pool)
 
-	aliceEmail := "alice-" + suffix + "@example.test"
-	alice := env.newGChatContact(t, "GChat RematchHandler Alice "+suffix)
+	spec := gen.Contact(factory.WithEmail())
+	aliceEmail := spec.Email
+	alice := env.newGChatContact(t, spec.FullName)
 	_, err := methodRepo.CreateContactMethod(env.ctx, repository.CreateContactMethodRequest{
 		ContactID: alice.ID, Type: string(repository.ContactMethodGChat), Value: aliceEmail,
 	})
 	require.NoError(t, err)
 
-	spaceName := "spaces/REMATCHH-" + suffix
-	msgName := spaceName + "/messages/m-" + suffix
-	accountID := "me-" + suffix + "@example.test"
+	spaceName := "spaces/REMATCHH-" + prefix
+	msgName := spaceName + "/messages/m-" + prefix
+	accountID := prefix + "me@synthetic.example"
 	st, err := syncRepo.CreateSyncState(env.ctx, repository.CreateSyncStateRequest{
 		Source: repository.InteractionSourceGChat, AccountID: &accountID, Enabled: true,
 	})
@@ -750,13 +756,12 @@ func TestGChatRematchHandler_ScansAndAggregates(t *testing.T) {
 // → DB), not the budget boundary.
 func TestGChatProvider_MultiPageWindowPersistsCursor(t *testing.T) {
 	e := setupGChatProviderTest(t)
-	suffix := randomSuffix(t)
+	prefix := e.gen.Prefix()
 
-	aliceEmail := "alice-" + suffix + "@example.test"
-	alice := e.newGChatProviderContact(t, "GChat Paged Alice "+suffix, string(repository.ContactMethodEmail), aliceEmail)
+	alice, aliceEmail := e.newGChatProviderContact(t, string(repository.ContactMethodEmail))
 
-	spaceName := "spaces/PAGED-" + suffix
-	accountID := "me-" + suffix + "@example.test"
+	spaceName := "spaces/PAGED-" + prefix
+	accountID := prefix + "me@synthetic.example"
 	e.newGChatSyncState(t, accountID, true, nil)
 
 	// Three content pages, oldest-first; the newest message (on the final page)
@@ -783,11 +788,11 @@ func TestGChatProvider_MultiPageWindowPersistsCursor(t *testing.T) {
 			// page 3 → "" (fully paged). The newest message is on the final page.
 			switch token {
 			case "":
-				return []*chat.Message{chatMessage(spaceName+"/messages/m1-"+suffix, "users/alice", "first", msg1At)}, "p2", nil
+				return []*chat.Message{chatMessage(spaceName+"/messages/m1-"+prefix, "users/alice", "first", msg1At)}, "p2", nil
 			case "p2":
-				return []*chat.Message{chatMessage(spaceName+"/messages/m2-"+suffix, "users/alice", "second", msg2At)}, "p3", nil
+				return []*chat.Message{chatMessage(spaceName+"/messages/m2-"+prefix, "users/alice", "second", msg2At)}, "p3", nil
 			case "p3":
-				return []*chat.Message{chatMessage(spaceName+"/messages/m3-"+suffix, "users/alice", "third", latestAt)}, "", nil
+				return []*chat.Message{chatMessage(spaceName+"/messages/m3-"+prefix, "users/alice", "third", latestAt)}, "", nil
 			}
 			return nil, "", nil
 		},
@@ -810,7 +815,7 @@ func TestGChatProvider_MultiPageWindowPersistsCursor(t *testing.T) {
 	assert.Equal(t, 3, result.ItemsProcessed, "all three pages' messages processed")
 
 	// A row exists for the newest message (proving the window paged to the end).
-	_, err = e.commsRepo.GetMessage(e.ctx, repository.InteractionSourceGChat, spaceName+"/messages/m3-"+suffix, alice.ID)
+	_, err = e.commsRepo.GetMessage(e.ctx, repository.InteractionSourceGChat, spaceName+"/messages/m3-"+prefix, alice.ID)
 	require.NoError(t, err)
 
 	// The persisted create_cursor equals the latest message's create_time. The
@@ -855,15 +860,14 @@ func spaceCursorFromMetadata(t *testing.T, metadata map[string]any, spaceName st
 // the group space; (d) the cursor advances (window proven).
 func TestGChatProvider_MatchesContactNotInGoogleContacts(t *testing.T) {
 	e := setupGChatProviderTest(t)
-	suffix := randomSuffix(t)
+	prefix := e.gen.Prefix()
 
-	daveEmail := "dave-" + suffix + "@example.test"
-	dave := e.newGChatProviderContact(t, "GChat NotInContacts Dave "+suffix, string(repository.ContactMethodEmail), daveEmail)
+	dave, daveEmail := e.newGChatProviderContact(t, string(repository.ContactMethodEmail))
 
-	spaceName := "spaces/NOTINCONTACTS-" + suffix
-	inboundMsg := spaceName + "/messages/in-" + suffix
-	outboundMsg := spaceName + "/messages/out-" + suffix
-	accountID := "me-" + suffix + "@example.test"
+	spaceName := "spaces/NOTINCONTACTS-" + prefix
+	inboundMsg := spaceName + "/messages/in-" + prefix
+	outboundMsg := spaceName + "/messages/out-" + prefix
+	accountID := prefix + "me@synthetic.example"
 	e.newGChatSyncState(t, accountID, true, nil)
 	base := accelerated.GetCurrentTime().Add(-time.Hour).Truncate(time.Second)
 
@@ -934,14 +938,13 @@ func TestGChatProvider_MatchesContactNotInGoogleContacts(t *testing.T) {
 // advanced past the message).
 func TestGChatProvider_StaleNegativeClearedOnMembershipChange(t *testing.T) {
 	e := setupGChatProviderTest(t)
-	suffix := randomSuffix(t)
+	prefix := e.gen.Prefix()
 
-	daveEmail := "dave-" + suffix + "@example.test"
-	dave := e.newGChatProviderContact(t, "GChat StaleNeg Dave "+suffix, string(repository.ContactMethodEmail), daveEmail)
+	dave, daveEmail := e.newGChatProviderContact(t, string(repository.ContactMethodEmail))
 
-	spaceName := "spaces/STALENEG-" + suffix
-	joinMsg := spaceName + "/messages/join-" + suffix
-	accountID := "me-" + suffix + "@example.test"
+	spaceName := "spaces/STALENEG-" + prefix
+	joinMsg := spaceName + "/messages/join-" + prefix
+	accountID := prefix + "me@synthetic.example"
 	e.newGChatSyncState(t, accountID, true, nil)
 	base := accelerated.GetCurrentTime().Add(-time.Hour).Truncate(time.Second)
 
@@ -1009,16 +1012,15 @@ func TestGChatProvider_StaleNegativeClearedOnMembershipChange(t *testing.T) {
 // ResolveMemberID calls (the global positive is reused from persisted metadata).
 func TestGChatProvider_GlobalPositiveCachePersistsAndReused(t *testing.T) {
 	e := setupGChatProviderTest(t)
-	suffix := randomSuffix(t)
+	prefix := e.gen.Prefix()
 
-	daveEmail := "dave-" + suffix + "@example.test"
-	dave := e.newGChatProviderContact(t, "GChat GlobalPos Dave "+suffix, string(repository.ContactMethodEmail), daveEmail)
+	dave, daveEmail := e.newGChatProviderContact(t, string(repository.ContactMethodEmail))
 
-	spaceA := "spaces/GPA-" + suffix
-	spaceB := "spaces/GPB-" + suffix
-	msgA := spaceA + "/messages/a-" + suffix
-	msgB := spaceB + "/messages/b-" + suffix
-	accountID := "me-" + suffix + "@example.test"
+	spaceA := "spaces/GPA-" + prefix
+	spaceB := "spaces/GPB-" + prefix
+	msgA := spaceA + "/messages/a-" + prefix
+	msgB := spaceB + "/messages/b-" + prefix
+	accountID := prefix + "me@synthetic.example"
 	e.newGChatSyncState(t, accountID, true, nil)
 	base := accelerated.GetCurrentTime().Add(-time.Hour).Truncate(time.Second)
 
@@ -1089,20 +1091,18 @@ func TestGChatProvider_GlobalPositiveCachePersistsAndReused(t *testing.T) {
 // assertion.
 func TestGChatProvider_ColdStartProcessesAndAdvancesDespiteResolveDebt(t *testing.T) {
 	e := setupGChatProviderTest(t)
-	suffix := randomSuffix(t)
+	prefix := e.gen.Prefix()
 
-	aliceEmail := "alice-" + suffix + "@example.test"
-	alice := e.newGChatProviderContact(t, "GChat ColdStart Alice "+suffix, string(repository.ContactMethodEmail), aliceEmail)
+	alice, aliceEmail := e.newGChatProviderContact(t, string(repository.ContactMethodEmail))
 	// A second known contact whose id is NOT in Contacts (would need members.get) —
 	// deferred by cap=0, but must NOT hold any cursor.
-	daveEmail := "dave-" + suffix + "@example.test"
-	e.newGChatProviderContact(t, "GChat ColdStart Dave "+suffix, string(repository.ContactMethodEmail), daveEmail)
+	_, daveEmail := e.newGChatProviderContact(t, string(repository.ContactMethodEmail))
 
-	spaceA := "spaces/COLDA-" + suffix
-	spaceB := "spaces/COLDB-" + suffix
-	msgA := spaceA + "/messages/a-" + suffix
-	msgB := spaceB + "/messages/b-" + suffix
-	accountID := "me-" + suffix + "@example.test"
+	spaceA := "spaces/COLDA-" + prefix
+	spaceB := "spaces/COLDB-" + prefix
+	msgA := spaceA + "/messages/a-" + prefix
+	msgB := spaceB + "/messages/b-" + prefix
+	accountID := prefix + "me@synthetic.example"
 	e.newGChatSyncState(t, accountID, true, nil)
 	base := accelerated.GetCurrentTime().Add(-time.Hour).Truncate(time.Second)
 
@@ -1176,18 +1176,16 @@ func TestGChatProvider_ColdStartProcessesAndAdvancesDespiteResolveDebt(t *testin
 // NEW message from the now-resolvable contact, sent after the cursor, matches.
 func TestGChatProvider_DeferredIDContactMatchesOnLaterSweep(t *testing.T) {
 	e := setupGChatProviderTest(t)
-	suffix := randomSuffix(t)
+	prefix := e.gen.Prefix()
 
-	aliceEmail := "alice-" + suffix + "@example.test"
-	alice := e.newGChatProviderContact(t, "GChat Deferred Alice "+suffix, string(repository.ContactMethodEmail), aliceEmail)
-	daveEmail := "dave-" + suffix + "@example.test"
-	dave := e.newGChatProviderContact(t, "GChat Deferred Dave "+suffix, string(repository.ContactMethodEmail), daveEmail)
+	alice, aliceEmail := e.newGChatProviderContact(t, string(repository.ContactMethodEmail))
+	dave, daveEmail := e.newGChatProviderContact(t, string(repository.ContactMethodEmail))
 
-	spaceName := "spaces/DEFER-" + suffix
-	aliceMsg := spaceName + "/messages/alice-" + suffix
-	daveMsg1 := spaceName + "/messages/dave1-" + suffix
-	daveMsg2 := spaceName + "/messages/dave2-" + suffix
-	accountID := "me-" + suffix + "@example.test"
+	spaceName := "spaces/DEFER-" + prefix
+	aliceMsg := spaceName + "/messages/alice-" + prefix
+	daveMsg1 := spaceName + "/messages/dave1-" + prefix
+	daveMsg2 := spaceName + "/messages/dave2-" + prefix
+	accountID := prefix + "me@synthetic.example"
 	e.newGChatSyncState(t, accountID, true, nil)
 	base := accelerated.GetCurrentTime().Add(-time.Hour).Truncate(time.Second)
 
@@ -1278,19 +1276,17 @@ func TestGChatProvider_DeferredIDContactMatchesOnLaterSweep(t *testing.T) {
 // matchable rows and proven advances it).
 func TestGChatProvider_NoCurrentMemberSpaceStillPagesAndAdvances(t *testing.T) {
 	e := setupGChatProviderTest(t)
-	suffix := randomSuffix(t)
+	prefix := e.gen.Prefix()
 
 	// Former member: a known contact who LEFT the space but has inbound history.
-	formerEmail := "former-" + suffix + "@example.test"
-	former := e.newGChatProviderContact(t, "GChat Former "+suffix, string(repository.ContactMethodEmail), formerEmail)
+	former, formerEmail := e.newGChatProviderContact(t, string(repository.ContactMethodEmail))
 	// Deferred contact for the second space (id never resolves under cap=0).
-	deferredEmail := "deferred-" + suffix + "@example.test"
-	deferred := e.newGChatProviderContact(t, "GChat DeferredOnly "+suffix, string(repository.ContactMethodEmail), deferredEmail)
+	deferred, deferredEmail := e.newGChatProviderContact(t, string(repository.ContactMethodEmail))
 
-	formerSpace := "spaces/FORMER-" + suffix
-	formerMsg := formerSpace + "/messages/former-" + suffix
-	deferredSpace := "spaces/DEFERREDONLY-" + suffix
-	accountID := "me-" + suffix + "@example.test"
+	formerSpace := "spaces/FORMER-" + prefix
+	formerMsg := formerSpace + "/messages/former-" + prefix
+	deferredSpace := "spaces/DEFERREDONLY-" + prefix
+	accountID := prefix + "me@synthetic.example"
 	e.newGChatSyncState(t, accountID, true, nil)
 	base := accelerated.GetCurrentTime().Add(-time.Hour).Truncate(time.Second)
 
@@ -1370,15 +1366,14 @@ func TestGChatProvider_NoCurrentMemberSpaceStillPagesAndAdvances(t *testing.T) {
 // space is also processed in the same sweep (forward progress, no starvation).
 func TestGChatProvider_ColdStartFrontSpaceDoesNotStarveLaterSpaces(t *testing.T) {
 	e := setupGChatProviderTest(t)
-	suffix := randomSuffix(t)
+	prefix := e.gen.Prefix()
 
-	aliceEmail := "alice-" + suffix + "@example.test"
-	alice := e.newGChatProviderContact(t, "GChat Starve Alice "+suffix, string(repository.ContactMethodEmail), aliceEmail)
+	alice, aliceEmail := e.newGChatProviderContact(t, string(repository.ContactMethodEmail))
 
-	frontSpace := "spaces/FRONT-" + suffix
-	laterSpace := "spaces/LATER-" + suffix
-	laterMsg := laterSpace + "/messages/later-" + suffix
-	accountID := "me-" + suffix + "@example.test"
+	frontSpace := "spaces/FRONT-" + prefix
+	laterSpace := "spaces/LATER-" + prefix
+	laterMsg := laterSpace + "/messages/later-" + prefix
+	accountID := prefix + "me@synthetic.example"
 	e.newGChatSyncState(t, accountID, true, nil)
 	base := accelerated.GetCurrentTime().Add(-3 * time.Hour).Truncate(time.Second)
 
@@ -1398,11 +1393,11 @@ func TestGChatProvider_ColdStartFrontSpaceDoesNotStarveLaterSpaces(t *testing.T)
 				// A multi-page history for the front space (three pages).
 				switch token {
 				case "":
-					return []*chat.Message{chatMessage(frontSpace+"/messages/f1-"+suffix, "users/alice", "f1", base)}, "fp2", nil
+					return []*chat.Message{chatMessage(frontSpace+"/messages/f1-"+prefix, "users/alice", "f1", base)}, "fp2", nil
 				case "fp2":
-					return []*chat.Message{chatMessage(frontSpace+"/messages/f2-"+suffix, "users/alice", "f2", base.Add(time.Minute))}, "fp3", nil
+					return []*chat.Message{chatMessage(frontSpace+"/messages/f2-"+prefix, "users/alice", "f2", base.Add(time.Minute))}, "fp3", nil
 				case "fp3":
-					return []*chat.Message{chatMessage(frontSpace+"/messages/f3-"+suffix, "users/alice", "f3", base.Add(2*time.Minute))}, "", nil
+					return []*chat.Message{chatMessage(frontSpace+"/messages/f3-"+prefix, "users/alice", "f3", base.Add(2*time.Minute))}, "", nil
 				}
 				return nil, "", nil
 			}
@@ -1443,14 +1438,13 @@ func TestGChatProvider_ColdStartFrontSpaceDoesNotStarveLaterSpaces(t *testing.T)
 // fuller later" safety claim.
 func TestGChatProvider_NoDoubleProcessOnReResolve(t *testing.T) {
 	e := setupGChatProviderTest(t)
-	suffix := randomSuffix(t)
+	prefix := e.gen.Prefix()
 
-	daveEmail := "dave-" + suffix + "@example.test"
-	dave := e.newGChatProviderContact(t, "GChat NoDouble Dave "+suffix, string(repository.ContactMethodEmail), daveEmail)
+	dave, daveEmail := e.newGChatProviderContact(t, string(repository.ContactMethodEmail))
 
-	spaceName := "spaces/NODOUBLE-" + suffix
-	msgName := spaceName + "/messages/m-" + suffix
-	accountID := "me-" + suffix + "@example.test"
+	spaceName := "spaces/NODOUBLE-" + prefix
+	msgName := spaceName + "/messages/m-" + prefix
+	accountID := prefix + "me@synthetic.example"
 	base := accelerated.GetCurrentTime().Add(-time.Hour).Truncate(time.Second)
 
 	var davePeopleResolvable = true
@@ -1540,15 +1534,13 @@ func TestGChatProvider_NoDoubleProcessOnReResolve(t *testing.T) {
 // ResolveMemberID calls fire for the absent contact after the first.
 func TestGChatProvider_HotSpaceNoStarvation(t *testing.T) {
 	e := setupGChatProviderTest(t)
-	suffix := randomSuffix(t)
+	prefix := e.gen.Prefix()
 
-	absentEmail := "absent-" + suffix + "@example.test"
-	e.newGChatProviderContact(t, "GChat Hot Absent "+suffix, string(repository.ContactMethodEmail), absentEmail)
-	activeEmail := "active-" + suffix + "@example.test"
-	active := e.newGChatProviderContact(t, "GChat Hot Active "+suffix, string(repository.ContactMethodEmail), activeEmail)
+	_, absentEmail := e.newGChatProviderContact(t, string(repository.ContactMethodEmail))
+	active, activeEmail := e.newGChatProviderContact(t, string(repository.ContactMethodEmail))
 
-	spaceName := "spaces/HOT-" + suffix
-	accountID := "me-" + suffix + "@example.test"
+	spaceName := "spaces/HOT-" + prefix
+	accountID := prefix + "me@synthetic.example"
 	e.newGChatSyncState(t, accountID, true, nil)
 
 	resolveAbsentCalls := 0
@@ -1571,7 +1563,7 @@ func TestGChatProvider_HotSpaceNoStarvation(t *testing.T) {
 			}
 			// A new message from the active member each sweep, strictly after the cursor.
 			at := accelerated.GetCurrentTime().Add(time.Duration(sweepIdx)*time.Minute - time.Hour).Truncate(time.Second)
-			return []*chat.Message{chatMessage(spaceName+"/messages/hot-"+suffix+"-"+strconv.Itoa(sweepIdx), "users/active", "ping", at)}, "", nil
+			return []*chat.Message{chatMessage(spaceName+"/messages/hot-"+prefix+"-"+strconv.Itoa(sweepIdx), "users/active", "ping", at)}, "", nil
 		},
 		ResolvePersonEmail: func(_ context.Context, userName string) (string, error) {
 			switch userName {
@@ -1625,14 +1617,13 @@ func TestGChatProvider_HotSpaceNoStarvation(t *testing.T) {
 // id resolution.
 func TestGChatRematch_IDResolutionMatchesHistory(t *testing.T) {
 	e := setupGChatProviderTest(t)
-	suffix := randomSuffix(t)
+	prefix := e.gen.Prefix()
 
-	daveEmail := "dave-" + suffix + "@example.test"
-	dave := e.newGChatProviderContact(t, "GChat RematchID Dave "+suffix, string(repository.ContactMethodGChat), daveEmail)
+	dave, daveEmail := e.newGChatProviderContact(t, string(repository.ContactMethodGChat))
 
-	spaceName := "spaces/REMATCHID-" + suffix
-	msgName := spaceName + "/messages/m-" + suffix
-	accountID := "me-" + suffix + "@example.test"
+	spaceName := "spaces/REMATCHID-" + prefix
+	msgName := spaceName + "/messages/m-" + prefix
+	accountID := prefix + "me@synthetic.example"
 	e.newGChatSyncState(t, accountID, true, nil)
 	sentAt := accelerated.GetCurrentTime().Add(-time.Hour).Truncate(time.Second)
 

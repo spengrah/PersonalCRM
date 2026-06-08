@@ -48,6 +48,7 @@ import (
 	"personal-crm/backend/internal/google"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
+	"personal-crm/backend/internal/synthetic/factory"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -62,13 +63,14 @@ var _ service.RematchHandler = (*google.GmailRematchHandler)(nil)
 type gmailRematchEnv struct {
 	ctx             context.Context
 	database        *db.Database
+	gen             *factory.Generator
 	provider        *google.GmailSyncProvider
 	handler         *google.GmailRematchHandler
 	accountIDs      []string
 	bus             *events.Bus
 	commsRepo       *repository.CommsMessageRepository
 	contactRepo     *repository.ContactRepository
-	methodRepo      *repository.ContactMethodRepository
+	contactService  *service.ContactService
 	interactionRepo *repository.InteractionRepository
 	identityRepo    *repository.IdentityRepository
 	eventRepo       *repository.EventRepository
@@ -114,16 +116,19 @@ func newGmailRematchEnv(t *testing.T, accountIDs []string) *gmailRematchEnv {
 	provider := google.NewGmailSyncProvider(nil, commsRepo, bus, database.Pool)
 	handler := google.NewGmailRematchHandler(provider, syncRepo, commsRepo)
 
+	gen, _ := migrationGenerator(t)
+
 	env := &gmailRematchEnv{
 		ctx:             ctx,
 		database:        database,
+		gen:             gen,
 		provider:        provider,
 		handler:         handler,
 		accountIDs:      accountIDs,
 		bus:             bus,
 		commsRepo:       commsRepo,
 		contactRepo:     contactRepo,
-		methodRepo:      methodRepo,
+		contactService:  contactService,
 		interactionRepo: interactionRepo,
 		identityRepo:    identityRepo,
 		eventRepo:       eventRepo,
@@ -158,25 +163,30 @@ func (e *gmailRematchEnv) seedEnabledEmailState(t *testing.T, accountID, backfil
 	})
 }
 
-func (e *gmailRematchEnv) newContactWithEmail(t *testing.T, name, email string) *repository.Contact {
+// newContact seeds a namespaced contact (weekly cadence) carrying one factory
+// email method and returns it plus that email (the rematch match key).
+func (e *gmailRematchEnv) newContact(t *testing.T) (*repository.Contact, string) {
+	t.Helper()
+	spec := e.gen.Contact(factory.WithEmail(), factory.WithCadence("weekly"))
+	return e.seedContactWithEmail(t, spec.FullName, spec.Email), spec.Email
+}
+
+// seedContactWithEmail seeds a contact with the given full name + a single email
+// method through the nil-bus ContactService (single-tx write, no River client),
+// registering content/interaction-then-contact cleanup. The email is explicit so
+// the fan-out test can seed two contacts that share one address.
+func (e *gmailRematchEnv) seedContactWithEmail(t *testing.T, name, email string) *repository.Contact {
 	t.Helper()
 	cadence := "weekly"
-	contact, err := e.contactRepo.CreateContact(e.ctx, repository.CreateContactRequest{
+	contact, _, err := e.contactService.CreateContact(e.ctx, repository.CreateContactRequest{
 		FullName: name,
 		Cadence:  &cadence,
-	})
-	require.NoError(t, err)
-	_, err = e.methodRepo.CreateContactMethod(e.ctx, repository.CreateContactMethodRequest{
-		ContactID: contact.ID,
-		Type:      "email",
-		Value:     email,
-		IsPrimary: true,
-	})
+	}, []service.ContactMethodInput{{Type: "email", Value: email, IsPrimary: true}})
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_ = e.commsRepo.HardDeleteByContact(e.ctx, contact.ID)
 		_ = e.interactionRepo.HardDeleteInteractionsBySourceRefPrefix(e.ctx, repository.InteractionSourceEmail, contact.ID.String()+":%")
-		_ = e.contactRepo.SoftDeleteContact(e.ctx, contact.ID)
+		_ = e.contactRepo.HardDeleteContact(e.ctx, contact.ID)
 	})
 	return contact
 }
@@ -282,13 +292,12 @@ func (e *gmailRematchEnv) waitForLastContacted(t *testing.T, contactID uuid.UUID
 
 func TestGmailRematch_NewAddressScan_DerivesInteractions(t *testing.T) {
 	e := newGmailRematchEnv(t, []string{"acct-" + uuid.NewString()[:8] + "@example.com"})
-	suffix := uuid.NewString()[:8]
+	prefix := e.gen.Prefix()
 	me := e.accountIDs[0]
-	addrA := "a-" + suffix + "@example.com"
-	contactA := e.newContactWithEmail(t, "Contact A "+suffix, addrA)
+	contactA, addrA := e.newContact(t)
 
-	inExt := "in-" + suffix + "@example.com"
-	outExt := "out-" + suffix + "@example.com"
+	inExt := prefix + "in@synthetic.example"
+	outExt := prefix + "out@synthetic.example"
 	e.cleanupEvents(t, inExt)
 	e.cleanupEvents(t, outExt)
 
@@ -330,15 +339,14 @@ func TestGmailRematch_NewAddressScan_DerivesInteractions(t *testing.T) {
 
 func TestGmailRematch_MatchOnly_NoContactCreated(t *testing.T) {
 	e := newGmailRematchEnv(t, []string{"acct-" + uuid.NewString()[:8] + "@example.com"})
-	suffix := uuid.NewString()[:8]
+	prefix := e.gen.Prefix()
 	me := e.accountIDs[0]
-	addrA := "a-" + suffix + "@example.com"
-	unknown := "unknown-" + suffix + "@example.com"
-	contactA := e.newContactWithEmail(t, "Contact A "+suffix, addrA)
+	unknown := prefix + "unknown@synthetic.example"
+	contactA, addrA := e.newContact(t)
 
-	e.cleanupEvents(t, "mo-"+suffix+"@example.com")
+	e.cleanupEvents(t, prefix+"mo@synthetic.example")
 	// Message between "me" and an UNKNOWN address only (A is not a participant).
-	msg := gmailMsg("g-mo", "thr", unknown, []string{me}, nil, nil, "S", "body", "<mo-"+suffix+"@example.com>", gmailPastNoonAnchor().UnixMilli())
+	msg := gmailMsg("g-mo", "thr", unknown, []string{me}, nil, nil, "S", "body", "<"+prefix+"mo@synthetic.example>", gmailPastNoonAnchor().UnixMilli())
 	e.inject(newRecordingMessageStore([]*gmailapi.Message{msg}), map[string]struct{}{me: {}})
 
 	// Rematch for A's address, but the message has no A participant → no rows.
@@ -360,13 +368,13 @@ func TestGmailRematch_MatchOnly_NoContactCreated(t *testing.T) {
 
 func TestGmailRematch_FanOut_SharedAddress(t *testing.T) {
 	e := newGmailRematchEnv(t, []string{"acct-" + uuid.NewString()[:8] + "@example.com"})
-	suffix := uuid.NewString()[:8]
+	prefix := e.gen.Prefix()
 	me := e.accountIDs[0]
-	shared := "shared-" + suffix + "@example.com"
-	c1 := e.newContactWithEmail(t, "Contact One "+suffix, shared)
-	c2 := e.newContactWithEmail(t, "Contact Two "+suffix, shared)
+	shared := prefix + "shared@synthetic.example"
+	c1 := e.seedContactWithEmail(t, prefix+"Contact One", shared)
+	c2 := e.seedContactWithEmail(t, prefix+"Contact Two", shared)
 
-	ext := "fan-" + suffix + "@example.com"
+	ext := prefix + "fan@synthetic.example"
 	e.cleanupEvents(t, ext)
 	msg := gmailMsg("g-fan", "thr", shared, []string{me}, nil, nil, "S", "body", "<"+ext+">", gmailPastNoonAnchor().UnixMilli())
 	e.inject(newRecordingMessageStore([]*gmailapi.Message{msg}), map[string]struct{}{me: {}})
@@ -398,14 +406,13 @@ func TestGmailRematch_FanOut_SharedAddress(t *testing.T) {
 // --- Scenario 4: across multiple accounts (per-account `seen` not hoisted) --
 
 func TestGmailRematch_MultipleAccounts_PerAccountSeen(t *testing.T) {
-	suffix := uuid.NewString()[:8]
-	accountX := "x-" + suffix + "@example.com"
-	accountY := "y-" + suffix + "@example.com"
+	accountX := "x-" + uuid.NewString()[:8] + "@example.com"
+	accountY := "y-" + uuid.NewString()[:8] + "@example.com"
 	e := newGmailRematchEnv(t, []string{accountX, accountY})
-	addrA := "a-" + suffix + "@example.com"
-	contactA := e.newContactWithEmail(t, "Contact A "+suffix, addrA)
+	prefix := e.gen.Prefix()
+	contactA, addrA := e.newContact(t)
 
-	ext := "xacct-" + suffix + "@example.com"
+	ext := prefix + "xacct@synthetic.example"
 	e.cleanupEvents(t, ext)
 	// The SAME Message-ID observed in both mailboxes: same gmail message id so
 	// the fetcher's per-id counter measures cross-account scanning. Both
@@ -449,11 +456,10 @@ func TestGmailRematch_MultipleAccounts_PerAccountSeen(t *testing.T) {
 func TestGmailRematch_NoCursorSideEffects(t *testing.T) {
 	account := "acct-" + uuid.NewString()[:8] + "@example.com"
 	e := newGmailRematchEnv(t, []string{account})
-	suffix := uuid.NewString()[:8]
-	addrA := "a-" + suffix + "@example.com"
-	contactA := e.newContactWithEmail(t, "Contact A "+suffix, addrA)
+	prefix := e.gen.Prefix()
+	contactA, addrA := e.newContact(t)
 
-	ext := "nocur-" + suffix + "@example.com"
+	ext := prefix + "nocur@synthetic.example"
 	e.cleanupEvents(t, ext)
 	msg := gmailMsg("g-nocur", "thr", addrA, []string{account}, nil, nil, "S", "body", "<"+ext+">", gmailPastNoonAnchor().UnixMilli())
 	e.inject(newRecordingMessageStore([]*gmailapi.Message{msg}), map[string]struct{}{account: {}})
@@ -476,11 +482,10 @@ func TestGmailRematch_NoCursorSideEffects(t *testing.T) {
 func TestGmailRematch_BackfillFloorAndQueryShape(t *testing.T) {
 	account := "acct-" + uuid.NewString()[:8] + "@example.com"
 	e := newGmailRematchEnv(t, []string{account})
-	suffix := uuid.NewString()[:8]
-	addrA := "a-" + suffix + "@example.com"
-	contactA := e.newContactWithEmail(t, "Contact A "+suffix, addrA)
+	prefix := e.gen.Prefix()
+	contactA, addrA := e.newContact(t)
 
-	ext := "shape-" + suffix + "@example.com"
+	ext := prefix + "shape@synthetic.example"
 	e.cleanupEvents(t, ext)
 	msg := gmailMsg("g-shape", "thr", addrA, []string{account}, nil, nil, "S", "body", "<"+ext+">", gmailPastNoonAnchor().UnixMilli())
 	store := newRecordingMessageStore([]*gmailapi.Message{msg})
@@ -516,14 +521,13 @@ func TestGmailRematch_NoEnabledState_NoOp(t *testing.T) {
 	t.Run("no_state_at_all", func(t *testing.T) {
 		// Seed NO email state for this env (nil account list).
 		e := newGmailRematchEnv(t, nil)
-		suffix := uuid.NewString()[:8]
-		me := "acct-" + suffix + "@example.com"
-		addrA := "a-" + suffix + "@example.com"
-		contactA := e.newContactWithEmail(t, "Contact A "+suffix, addrA)
+		prefix := e.gen.Prefix()
+		me := prefix + "me@synthetic.example"
+		contactA, addrA := e.newContact(t)
 
 		// A fetcher that WOULD return a qualifying message if it were ever
 		// consulted — the gate must prevent that.
-		msg := gmailMsg("g-gate-a", "thr", addrA, []string{me}, nil, nil, "S", "body", "<gate-a-"+suffix+"@example.com>", gmailPastNoonAnchor().UnixMilli())
+		msg := gmailMsg("g-gate-a", "thr", addrA, []string{me}, nil, nil, "S", "body", "<"+prefix+"gate-a@synthetic.example>", gmailPastNoonAnchor().UnixMilli())
 		store := newRecordingMessageStore([]*gmailapi.Message{msg})
 		e.inject(store, map[string]struct{}{me: {}})
 
@@ -542,10 +546,9 @@ func TestGmailRematch_NoEnabledState_NoOp(t *testing.T) {
 		// Seed an email state for this account, then DISABLE it via the
 		// enable/disable path. ListEnabledSyncStates filters status='disabled'.
 		e := newGmailRematchEnv(t, nil)
-		suffix := uuid.NewString()[:8]
-		me := "acct-" + suffix + "@example.com"
-		addrA := "a-" + suffix + "@example.com"
-		contactA := e.newContactWithEmail(t, "Contact A "+suffix, addrA)
+		prefix := e.gen.Prefix()
+		me := "acct-" + uuid.NewString()[:8] + "@example.com"
+		contactA, addrA := e.newContact(t)
 
 		acct := me
 		created, err := e.syncRepo.CreateSyncState(e.ctx, repository.CreateSyncStateRequest{
@@ -565,7 +568,7 @@ func TestGmailRematch_NoEnabledState_NoOp(t *testing.T) {
 		_, err = e.syncRepo.UpdateSyncStateEnabled(e.ctx, created.ID, false)
 		require.NoError(t, err)
 
-		msg := gmailMsg("g-gate-d", "thr", addrA, []string{me}, nil, nil, "S", "body", "<gate-d-"+suffix+"@example.com>", gmailPastNoonAnchor().UnixMilli())
+		msg := gmailMsg("g-gate-d", "thr", addrA, []string{me}, nil, nil, "S", "body", "<"+prefix+"gate-d@synthetic.example>", gmailPastNoonAnchor().UnixMilli())
 		store := newRecordingMessageStore([]*gmailapi.Message{msg})
 		e.inject(store, map[string]struct{}{me: {}})
 
@@ -589,14 +592,13 @@ func TestGmailRematch_NoEnabledState_NoOp(t *testing.T) {
 // failing OWN-mailbox account id RAW (operator triage) and must NOT contain the
 // third-party contact address being rematched.
 func TestGmailRematch_PartialFailure_ReturnsError(t *testing.T) {
-	suffix := uuid.NewString()[:8]
-	accountX := "x-" + suffix + "@example.com"
-	accountY := "y-" + suffix + "@example.com"
+	accountX := "x-" + uuid.NewString()[:8] + "@example.com"
+	accountY := "y-" + uuid.NewString()[:8] + "@example.com"
 	e := newGmailRematchEnv(t, []string{accountX, accountY})
-	addrA := "a-" + suffix + "@example.com"
-	contactA := e.newContactWithEmail(t, "Contact A "+suffix, addrA)
+	prefix := e.gen.Prefix()
+	contactA, addrA := e.newContact(t)
 
-	ext := "pf-" + suffix + "@example.com"
+	ext := prefix + "pf@synthetic.example"
 	e.cleanupEvents(t, ext)
 	msg := gmailMsg("g-pf", "thr", addrA, []string{accountY}, nil, nil, "S", "body", "<"+ext+">", gmailPastNoonAnchor().UnixMilli())
 
@@ -640,13 +642,12 @@ func TestGmailRematch_PerAccountBackfillSince(t *testing.T) {
 	t.Run("explicit_backfill_since", func(t *testing.T) {
 		// Seed NO default state; create one with an explicit non-default floor.
 		e := newGmailRematchEnv(t, nil)
-		suffix := uuid.NewString()[:8]
-		account := "acct-" + suffix + "@example.com"
+		prefix := e.gen.Prefix()
+		account := "acct-" + uuid.NewString()[:8] + "@example.com"
 		e.seedEnabledEmailState(t, account, "2026-03-15")
 
-		addrA := "a-" + suffix + "@example.com"
-		contactA := e.newContactWithEmail(t, "Contact A "+suffix, addrA)
-		ext := "bf-" + suffix + "@example.com"
+		contactA, addrA := e.newContact(t)
+		ext := prefix + "bf@synthetic.example"
 		e.cleanupEvents(t, ext)
 		msg := gmailMsg("g-bf", "thr", addrA, []string{account}, nil, nil, "S", "body", "<"+ext+">", gmailPastNoonAnchor().UnixMilli())
 		store := newRecordingMessageStore([]*gmailapi.Message{msg})
@@ -668,8 +669,8 @@ func TestGmailRematch_PerAccountBackfillSince(t *testing.T) {
 		// An enabled state with empty metadata falls back to 2026-01-01 through
 		// the new per-state wiring (proves backfillSinceEpoch's default path).
 		e := newGmailRematchEnv(t, nil)
-		suffix := uuid.NewString()[:8]
-		account := "acct-" + suffix + "@example.com"
+		prefix := e.gen.Prefix()
+		account := "acct-" + uuid.NewString()[:8] + "@example.com"
 		acct := account
 		_, err := e.syncRepo.CreateSyncState(e.ctx, repository.CreateSyncStateRequest{
 			Source:    "email",
@@ -681,9 +682,8 @@ func TestGmailRematch_PerAccountBackfillSince(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = e.syncRepo.DeleteSyncStatesByAccountID(e.ctx, acct) })
 
-		addrA := "a-" + suffix + "@example.com"
-		contactA := e.newContactWithEmail(t, "Contact A "+suffix, addrA)
-		ext := "bfd-" + suffix + "@example.com"
+		contactA, addrA := e.newContact(t)
+		ext := prefix + "bfd@synthetic.example"
 		e.cleanupEvents(t, ext)
 		msg := gmailMsg("g-bfd", "thr", addrA, []string{account}, nil, nil, "S", "body", "<"+ext+">", gmailPastNoonAnchor().UnixMilli())
 		store := newRecordingMessageStore([]*gmailapi.Message{msg})

@@ -33,6 +33,7 @@ import (
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 	syncpkg "personal-crm/backend/internal/sync"
+	"personal-crm/backend/internal/synthetic/factory"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -44,7 +45,8 @@ import (
 // is the PR-3 go-live acceptance test.
 func TestGChatGoLive_RegisteredProvider_SchedulerSweep_ProducesInteractionsAndCadence(t *testing.T) {
 	e := setupGChatEngineTest(t) // engine + live bus + recorder + cadence + repos
-	suffix := randomSuffix(t)
+	gen, _ := migrationGenerator(t)
+	prefix := gen.Prefix()
 
 	contactRepo := e.contactRepo
 	contactRepo.SetPool(e.database.Pool)
@@ -52,39 +54,35 @@ func TestGChatGoLive_RegisteredProvider_SchedulerSweep_ProducesInteractionsAndCa
 	syncRepo := repository.NewSyncRepositoryWithPool(e.database.Queries, e.database.Pool)
 	identityRepo := repository.NewIdentityRepository(e.database.Queries)
 
-	account := "me-" + suffix + "@example.test"
+	account := prefix + "me@synthetic.example"
 
 	// Known contact + email method (appears in the provider's dual-source known
-	// map). A cadence makes the contact_by recompute observable.
-	cadence := "weekly"
-	contact, err := contactRepo.CreateContact(e.ctx, repository.CreateContactRequest{
-		FullName: "GChat GoLive " + suffix,
-		Cadence:  &cadence,
-	})
-	require.NoError(t, err)
-	peerEmail := "peer-" + suffix + "@example.test"
-	_, err = methodRepo.CreateContactMethod(e.ctx, repository.CreateContactMethodRequest{
-		ContactID: contact.ID,
-		Type:      string(repository.ContactMethodEmail),
-		Value:     peerEmail,
-		IsPrimary: true,
-	})
+	// map). A cadence makes the contact_by recompute observable. Seeded via the
+	// nil-bus ContactService (single-tx contact+method write, no River client).
+	contactSvc := service.NewContactService(e.database, contactRepo, methodRepo,
+		e.interactionRepo, repository.NewContactTaskRepository(e.database.Queries), nil, nil)
+	spec := gen.Contact(factory.WithEmail(), factory.WithCadence("weekly"))
+	peerEmail := spec.Email
+	contact, _, err := contactSvc.CreateContact(e.ctx, repository.CreateContactRequest{
+		FullName: spec.FullName,
+		Cadence:  spec.Cadence,
+	}, []service.ContactMethodInput{{Type: string(repository.ContactMethodEmail), Value: peerEmail, IsPrimary: true}})
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
 		_ = e.commsRepo.HardDeleteByContact(e.ctx, contact.ID)
 		_ = e.interactionRepo.HardDeleteInteractionsBySourceRefPrefix(e.ctx, repository.InteractionSourceGChat, "gchat:%")
-		_ = contactRepo.SoftDeleteContact(e.ctx, contact.ID)
 		_ = syncRepo.DeleteSyncStatesByAccountID(e.ctx, account)
+		_ = contactRepo.HardDeleteContact(e.ctx, contact.ID)
 	})
 
-	spaceName := "spaces/GOLIVE-" + suffix
-	inMsg := spaceName + "/messages/in-" + suffix
-	outMsg := spaceName + "/messages/out-" + suffix
-	bystanderMsg := spaceName + "/messages/by-" + suffix
+	spaceName := "spaces/GOLIVE-" + prefix
+	inMsg := spaceName + "/messages/in-" + prefix
+	outMsg := spaceName + "/messages/out-" + prefix
+	bystanderMsg := spaceName + "/messages/by-" + prefix
 	base := accelerated.GetCurrentTime().Add(-time.Hour).Truncate(time.Second)
 	// Unknown participant the sweep must NOT turn into a contact.
-	stranger := "stranger-" + suffix + "@example.test"
+	stranger := prefix + "stranger@synthetic.example"
 
 	funcs := google.FakeChatFetcherFuncs{
 		ListSpaces: func(context.Context, string) ([]*chat.Space, string, error) {

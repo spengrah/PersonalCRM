@@ -40,8 +40,8 @@ import (
 	"personal-crm/backend/internal/google"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
+	"personal-crm/backend/internal/synthetic/factory"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 	gmailapi "google.golang.org/api/gmail/v1"
@@ -49,15 +49,16 @@ import (
 
 // gmailProviderEnv bundles a real provider + bus + repos for the sweep tests.
 type gmailProviderEnv struct {
-	ctx          context.Context
-	database     *db.Database
-	provider     *google.GmailSyncProvider
-	bus          *events.Bus
-	commsRepo    *repository.CommsMessageRepository
-	contactRepo  *repository.ContactRepository
-	methodRepo   *repository.ContactMethodRepository
-	identityRepo *repository.IdentityRepository
-	eventRepo    *repository.EventRepository
+	ctx            context.Context
+	database       *db.Database
+	gen            *factory.Generator
+	provider       *google.GmailSyncProvider
+	bus            *events.Bus
+	commsRepo      *repository.CommsMessageRepository
+	contactRepo    *repository.ContactRepository
+	contactService *service.ContactService
+	identityRepo   *repository.IdentityRepository
+	eventRepo      *repository.EventRepository
 }
 
 func newGmailProviderEnv(t *testing.T) *gmailProviderEnv {
@@ -86,6 +87,7 @@ func newGmailProviderEnv(t *testing.T) *gmailProviderEnv {
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
 	eventRepo := repository.NewEventRepository(database.Queries)
+	// nil bus + nil rematch: a single-tx multi-method seed write, no River client.
 	contactService := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, contactTaskRepo, nil, nil)
 
 	// Live bus via the shared harness. email.* kinds enqueue an
@@ -96,35 +98,50 @@ func newGmailProviderEnv(t *testing.T) *gmailProviderEnv {
 
 	provider := google.NewGmailSyncProvider(nil, commsRepo, bus, database.Pool)
 
+	gen, _ := migrationGenerator(t)
+
 	return &gmailProviderEnv{
-		ctx:          ctx,
-		database:     database,
-		provider:     provider,
-		bus:          bus,
-		commsRepo:    commsRepo,
-		contactRepo:  contactRepo,
-		methodRepo:   methodRepo,
-		identityRepo: identityRepo,
-		eventRepo:    eventRepo,
+		ctx:            ctx,
+		database:       database,
+		gen:            gen,
+		provider:       provider,
+		bus:            bus,
+		commsRepo:      commsRepo,
+		contactRepo:    contactRepo,
+		contactService: contactService,
+		identityRepo:   identityRepo,
+		eventRepo:      eventRepo,
 	}
 }
 
-// newEmailContactWithMethod creates a contact with one email method and
-// registers cleanup (hard-delete content + soft-delete contact).
-func (e *gmailProviderEnv) newEmailContactWithMethod(t *testing.T, name, email string) *repository.Contact {
+// newEmailContact seeds a namespaced contact carrying one email method and
+// returns it plus that email (the value the sweep matches a fetched message's
+// participants against). Cleanup hard-deletes the contact's content rows before
+// the contact itself (FK-child rows must go first).
+func (e *gmailProviderEnv) newEmailContact(t *testing.T) (*repository.Contact, string) {
 	t.Helper()
-	contact, err := e.contactRepo.CreateContact(e.ctx, repository.CreateContactRequest{FullName: name})
-	require.NoError(t, err)
-	_, err = e.methodRepo.CreateContactMethod(e.ctx, repository.CreateContactMethodRequest{
-		ContactID: contact.ID,
-		Type:      "email",
-		Value:     email,
-		IsPrimary: true,
-	})
+	spec := e.gen.Contact(factory.WithEmail())
+	contact := e.seedSpec(t, spec)
+	return contact, spec.Email
+}
+
+// seedSpec writes a factory ContactSpec through the env's nil-bus
+// ContactService.CreateContact (the sanctioned single-tx multi-method write
+// path) and registers content-then-contact cleanup.
+func (e *gmailProviderEnv) seedSpec(t *testing.T, spec factory.ContactSpec) *repository.Contact {
+	t.Helper()
+	methods := make([]service.ContactMethodInput, 0, len(spec.Methods))
+	for _, m := range spec.Methods {
+		methods = append(methods, service.ContactMethodInput{Type: m.Type, Value: m.Value, IsPrimary: m.IsPrimary})
+	}
+	contact, _, err := e.contactService.CreateContact(e.ctx, repository.CreateContactRequest{
+		FullName: spec.FullName,
+		Cadence:  spec.Cadence,
+	}, methods)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_ = e.commsRepo.HardDeleteByContact(e.ctx, contact.ID)
-		_ = e.contactRepo.SoftDeleteContact(e.ctx, contact.ID)
+		_ = e.contactRepo.HardDeleteContact(e.ctx, contact.ID)
 	})
 	return contact
 }
@@ -294,17 +311,17 @@ func expectCursorAtLeast(t *testing.T, cursor string, minEpoch int64) gmailCurso
 
 func TestGmailProvider_FullSweep_ContentAndEvents(t *testing.T) {
 	e := newGmailProviderEnv(t)
-	suffix := uuid.NewString()[:8]
-	me := "me-" + suffix + "@example.com"
-	addrA := "a-" + suffix + "@example.com"
-	addrB := "b-" + suffix + "@example.com"
-	contactA := e.newEmailContactWithMethod(t, "Contact A "+suffix, addrA)
-	contactB := e.newEmailContactWithMethod(t, "Contact B "+suffix, addrB)
+	prefix := e.gen.Prefix()
+	me := prefix + "me@synthetic.example"
+	contactA, addrA := e.newEmailContact(t)
+	contactB, addrB := e.newEmailContact(t)
 
-	inMsgID := "<in-" + suffix + "@example.com>"
-	outMsgID := "<out-" + suffix + "@example.com>"
-	e.cleanupEvents(t, "in-"+suffix+"@example.com")
-	e.cleanupEvents(t, "out-"+suffix+"@example.com")
+	inExt := prefix + "in@synthetic.example"
+	outExt := prefix + "out@synthetic.example"
+	inMsgID := "<" + inExt + ">"
+	outMsgID := "<" + outExt + ">"
+	e.cleanupEvents(t, inExt)
+	e.cleanupEvents(t, outExt)
 
 	inbound := gmailMsg("g-in", "thr-in", addrA, []string{me}, nil, nil, "Inbound subj", "hello from A", inMsgID, 1700000100000)
 	outbound := gmailMsg("g-out", "thr-out", me, []string{addrB}, nil, nil, "Outbound subj", "hi to B", outMsgID, 1700000200000)
@@ -320,7 +337,7 @@ func TestGmailProvider_FullSweep_ContentAndEvents(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, aRows, 1)
 	require.Equal(t, "inbound", aRows[0].Direction)
-	require.Equal(t, "in-"+suffix+"@example.com", aRows[0].ExternalID)
+	require.Equal(t, inExt, aRows[0].ExternalID)
 	require.Equal(t, "thr-in", *aRows[0].ThreadID)
 	require.Equal(t, "Inbound subj", *aRows[0].Subject)
 	require.Equal(t, "hello from A", *aRows[0].Body)
@@ -333,7 +350,7 @@ func TestGmailProvider_FullSweep_ContentAndEvents(t *testing.T) {
 	require.Equal(t, "outbound", bRows[0].Direction)
 	require.Equal(t, addrB, *bRows[0].PeerNormalized)
 
-	inEnv, err := e.eventRepo.FindEventBySource(e.ctx, "email", "in-"+suffix+"@example.com:"+contactA.ID.String())
+	inEnv, err := e.eventRepo.FindEventBySource(e.ctx, "email", inExt+":"+contactA.ID.String())
 	require.NoError(t, err)
 	require.Equal(t, events.KindEmailReceived, inEnv.Kind)
 	var inPayload events.EmailEventPayload
@@ -342,7 +359,7 @@ func TestGmailProvider_FullSweep_ContentAndEvents(t *testing.T) {
 	require.Equal(t, "inbound", inPayload.Direction)
 	require.Equal(t, "thr-in", inPayload.ThreadID)
 
-	outEnv, err := e.eventRepo.FindEventBySource(e.ctx, "email", "out-"+suffix+"@example.com:"+contactB.ID.String())
+	outEnv, err := e.eventRepo.FindEventBySource(e.ctx, "email", outExt+":"+contactB.ID.String())
 	require.NoError(t, err)
 	require.Equal(t, events.KindEmailSent, outEnv.Kind)
 }
@@ -351,8 +368,8 @@ func TestGmailProvider_FullSweep_ContentAndEvents(t *testing.T) {
 
 func TestGmailProvider_CrossChunkSeenDedup(t *testing.T) {
 	e := newGmailProviderEnv(t)
-	suffix := uuid.NewString()[:8]
-	me := "me-" + suffix + "@example.com"
+	prefix := e.gen.Prefix()
+	me := prefix + "me@synthetic.example"
 
 	// Many known contacts force the provider to build MORE THAN ONE OR-chunk;
 	// the query-agnostic fake returns the single spanning message for every
@@ -360,13 +377,13 @@ func TestGmailProvider_CrossChunkSeenDedup(t *testing.T) {
 	const n = 250
 	var addrs []string
 	for i := 0; i < n; i++ {
-		addr := fmt.Sprintf("c%03d-%s@example.com", i, suffix)
+		_, addr := e.newEmailContact(t)
 		addrs = append(addrs, addr)
-		e.newEmailContactWithMethod(t, fmt.Sprintf("Contact %03d %s", i, suffix), addr)
 	}
 
-	msgID := "<span-" + suffix + "@example.com>"
-	e.cleanupEvents(t, "span-"+suffix+"@example.com")
+	spanExt := prefix + "span@synthetic.example"
+	msgID := "<" + spanExt + ">"
+	e.cleanupEvents(t, spanExt)
 	// Inbound from the first known contact to me.
 	msg := gmailMsg("g-span", "thr", addrs[0], []string{me}, nil, nil, "S", "body", msgID, 1700000300000)
 
@@ -386,14 +403,13 @@ func TestGmailProvider_CrossChunkSeenDedup(t *testing.T) {
 
 func TestGmailProvider_MatchOnly_NoContactCreated(t *testing.T) {
 	e := newGmailProviderEnv(t)
-	suffix := uuid.NewString()[:8]
-	me := "me-" + suffix + "@example.com"
-	addrA := "a-" + suffix + "@example.com"
-	unknown := "unknown-" + suffix + "@example.com"
-	contactA := e.newEmailContactWithMethod(t, "Contact A "+suffix, addrA)
+	prefix := e.gen.Prefix()
+	me := prefix + "me@synthetic.example"
+	unknown := prefix + "unknown@synthetic.example"
+	contactA, addrA := e.newEmailContact(t)
 
-	e.cleanupEvents(t, "mo-"+suffix+"@example.com")
-	msg := gmailMsg("g-mo", "thr", addrA, []string{me, unknown}, nil, nil, "S", "body", "<mo-"+suffix+"@example.com>", 1700000400000)
+	e.cleanupEvents(t, prefix+"mo@synthetic.example")
+	msg := gmailMsg("g-mo", "thr", addrA, []string{me, unknown}, nil, nil, "S", "body", "<"+prefix+"mo@synthetic.example>", 1700000400000)
 	e.inject(newFakeMessageStore([]*gmailapi.Message{msg}), map[string]struct{}{me: {}})
 
 	_, err := e.provider.Sync(e.ctx, syncState(me, ""), nil)
@@ -414,13 +430,13 @@ func TestGmailProvider_MatchOnly_NoContactCreated(t *testing.T) {
 
 func TestGmailProvider_CursorOverlapIdempotent(t *testing.T) {
 	e := newGmailProviderEnv(t)
-	suffix := uuid.NewString()[:8]
-	me := "me-" + suffix + "@example.com"
-	addrA := "a-" + suffix + "@example.com"
-	contactA := e.newEmailContactWithMethod(t, "Contact A "+suffix, addrA)
+	prefix := e.gen.Prefix()
+	me := prefix + "me@synthetic.example"
+	contactA, addrA := e.newEmailContact(t)
 
-	e.cleanupEvents(t, "idem-"+suffix+"@example.com")
-	msg := gmailMsg("g-idem", "thr", addrA, []string{me}, nil, nil, "S", "body", "<idem-"+suffix+"@example.com>", 1700000500000)
+	idemExt := prefix + "idem@synthetic.example"
+	e.cleanupEvents(t, idemExt)
+	msg := gmailMsg("g-idem", "thr", addrA, []string{me}, nil, nil, "S", "body", "<"+idemExt+">", 1700000500000)
 	e.inject(newFakeMessageStore([]*gmailapi.Message{msg}), map[string]struct{}{me: {}})
 
 	_, err := e.provider.Sync(e.ctx, syncState(me, ""), nil)
@@ -432,7 +448,7 @@ func TestGmailProvider_CursorOverlapIdempotent(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, aRows, 1, "second sweep must not add a duplicate content row")
 
-	got, err := e.commsRepo.GetMessage(e.ctx, "email", "idem-"+suffix+"@example.com", contactA.ID)
+	got, err := e.commsRepo.GetMessage(e.ctx, "email", idemExt, contactA.ID)
 	require.NoError(t, err)
 	require.Equal(t, []string{me}, observedAccounts(t, got.SourceMetadata))
 }
@@ -441,13 +457,12 @@ func TestGmailProvider_CursorOverlapIdempotent(t *testing.T) {
 
 func TestGmailProvider_PublishBeforeMutate_RollsBack(t *testing.T) {
 	e := newGmailProviderEnv(t)
-	suffix := uuid.NewString()[:8]
-	me := "me-" + suffix + "@example.com"
-	addrA := "a-" + suffix + "@example.com"
-	contactA := e.newEmailContactWithMethod(t, "Contact A "+suffix, addrA)
+	prefix := e.gen.Prefix()
+	me := prefix + "me@synthetic.example"
+	contactA, addrA := e.newEmailContact(t)
 
-	e.cleanupEvents(t, "pbm-"+suffix+"@example.com")
-	msg := gmailMsg("g-pbm", "thr", addrA, []string{me}, nil, nil, "S", "body", "<pbm-"+suffix+"@example.com>", 1700000600000)
+	e.cleanupEvents(t, prefix+"pbm@synthetic.example")
+	msg := gmailMsg("g-pbm", "thr", addrA, []string{me}, nil, nil, "S", "body", "<"+prefix+"pbm@synthetic.example>", 1700000600000)
 	e.inject(newFakeMessageStore([]*gmailapi.Message{msg}), map[string]struct{}{me: {}})
 
 	e.provider.SetBusForTest(failingBus{})
@@ -463,12 +478,11 @@ func TestGmailProvider_PublishBeforeMutate_RollsBack(t *testing.T) {
 
 func TestGmailProvider_NomsgidFallback(t *testing.T) {
 	e := newGmailProviderEnv(t)
-	suffix := uuid.NewString()[:8]
-	me := "me-" + suffix + "@example.com"
-	addrA := "a-" + suffix + "@example.com"
-	contactA := e.newEmailContactWithMethod(t, "Contact A "+suffix, addrA)
+	prefix := e.gen.Prefix()
+	me := prefix + "me@synthetic.example"
+	contactA, addrA := e.newEmailContact(t)
 
-	gmailID := "g-nomsgid-" + suffix
+	gmailID := "g-nomsgid-" + prefix
 	expectedExternal := "nomsgid:" + me + ":" + gmailID
 	e.cleanupEvents(t, expectedExternal)
 	msg := gmailMsg(gmailID, "thr", addrA, []string{me}, nil, nil, "S", "body", "", 1700000700000)
@@ -491,15 +505,14 @@ func TestGmailProvider_NomsgidFallback(t *testing.T) {
 
 func TestGmailProvider_AllBystanderSweepAdvancesCursor(t *testing.T) {
 	e := newGmailProviderEnv(t)
-	suffix := uuid.NewString()[:8]
-	me := "me-" + suffix + "@example.com"
-	addrA := "a-" + suffix + "@example.com"
-	contactA := e.newEmailContactWithMethod(t, "Contact A "+suffix, addrA)
+	prefix := e.gen.Prefix()
+	me := prefix + "me@synthetic.example"
+	contactA, addrA := e.newEmailContact(t)
 
-	e.cleanupEvents(t, "by-"+suffix+"@example.com")
+	e.cleanupEvents(t, prefix+"by@synthetic.example")
 	// A is only co-Cc'd by a third party; thread not to/from me → bystander.
-	msg := gmailMsg("g-by", "thr", "third-"+suffix+"@example.com",
-		[]string{"other-" + suffix + "@example.com"}, []string{addrA}, nil, "S", "body", "<by-"+suffix+"@example.com>", 1700000800000)
+	msg := gmailMsg("g-by", "thr", prefix+"third@synthetic.example",
+		[]string{prefix + "other@synthetic.example"}, []string{addrA}, nil, "S", "body", "<"+prefix+"by@synthetic.example>", 1700000800000)
 	e.inject(newFakeMessageStore([]*gmailapi.Message{msg}), map[string]struct{}{me: {}})
 
 	result, err := e.provider.Sync(e.ctx, syncState(me, ""), nil)
@@ -515,10 +528,9 @@ func TestGmailProvider_AllBystanderSweepAdvancesCursor(t *testing.T) {
 
 func TestGmailProvider_ZeroFetchedAdvancesCompletedWindows(t *testing.T) {
 	e := newGmailProviderEnv(t)
-	suffix := uuid.NewString()[:8]
-	me := "me-" + suffix + "@example.com"
-	addrA := "a-" + suffix + "@example.com"
-	_ = e.newEmailContactWithMethod(t, "Contact A "+suffix, addrA)
+	prefix := e.gen.Prefix()
+	me := prefix + "me@synthetic.example"
+	_, _ = e.newEmailContact(t)
 
 	e.inject(newFakeMessageStore(nil), map[string]struct{}{me: {}})
 
@@ -540,10 +552,9 @@ func TestGmailProvider_ZeroFetchedAdvancesCompletedWindows(t *testing.T) {
 
 func TestGmailProvider_CatchUpScansSuccessiveWindowsInOneRun(t *testing.T) {
 	e := newGmailProviderEnv(t)
-	suffix := uuid.NewString()[:8]
-	me := "me-" + suffix + "@example.com"
-	addrA := "a-" + suffix + "@example.com"
-	contactA := e.newEmailContactWithMethod(t, "Contact A "+suffix, addrA)
+	prefix := e.gen.Prefix()
+	me := prefix + "me@synthetic.example"
+	contactA, addrA := e.newEmailContact(t)
 
 	start := accelerated.GetCurrentTime().UTC().Add(-28 * 24 * time.Hour).Truncate(time.Second).Unix()
 	msgEpochs := []int64{
@@ -553,7 +564,7 @@ func TestGmailProvider_CatchUpScansSuccessiveWindowsInOneRun(t *testing.T) {
 	}
 	var messages []*gmailapi.Message
 	for i, epoch := range msgEpochs {
-		ext := fmt.Sprintf("catchup-%d-%s@example.com", i, suffix)
+		ext := fmt.Sprintf("%scatchup-%d@synthetic.example", prefix, i)
 		e.cleanupEvents(t, ext)
 		messages = append(messages, gmailMsg(
 			fmt.Sprintf("g-catchup-%d", i),
@@ -569,7 +580,7 @@ func TestGmailProvider_CatchUpScansSuccessiveWindowsInOneRun(t *testing.T) {
 		))
 	}
 
-	tooNewExt := "catchup-new-" + suffix + "@example.com"
+	tooNewExt := prefix + "catchup-new@synthetic.example"
 	e.cleanupEvents(t, tooNewExt)
 	tooNewEpoch := accelerated.GetCurrentTime().UTC().Add(-1 * time.Minute).Unix()
 	messages = append(messages, gmailMsg("g-catchup-new", "thr", addrA, []string{me}, nil, nil, "S", "body", "<"+tooNewExt+">", tooNewEpoch*1000))
@@ -596,16 +607,15 @@ func TestGmailProvider_CatchUpScansSuccessiveWindowsInOneRun(t *testing.T) {
 
 func TestGmailProvider_BoundaryOverlapSkipsOnlySeenMessageIDs(t *testing.T) {
 	e := newGmailProviderEnv(t)
-	suffix := uuid.NewString()[:8]
-	me := "me-" + suffix + "@example.com"
-	addrA := "a-" + suffix + "@example.com"
-	contactA := e.newEmailContactWithMethod(t, "Contact A "+suffix, addrA)
+	prefix := e.gen.Prefix()
+	me := prefix + "me@synthetic.example"
+	contactA, addrA := e.newEmailContact(t)
 
 	start := accelerated.GetCurrentTime().UTC().Add(-21 * 24 * time.Hour).Truncate(time.Second).Unix()
 	boundaryEpoch := start + int64((7 * 24 * time.Hour).Seconds())
-	ext := "boundary-" + suffix + "@example.com"
+	ext := prefix + "boundary@synthetic.example"
 	e.cleanupEvents(t, ext)
-	msg := gmailMsg("g-boundary-"+suffix, "thr", addrA, []string{me}, nil, nil, "S", "body", "<"+ext+">", boundaryEpoch*1000)
+	msg := gmailMsg("g-boundary-"+prefix, "thr", addrA, []string{me}, nil, nil, "S", "body", "<"+ext+">", boundaryEpoch*1000)
 	store := newFakeMessageStore([]*gmailapi.Message{msg})
 	e.inject(store, map[string]struct{}{me: {}})
 
@@ -623,13 +633,12 @@ func TestGmailProvider_BoundaryOverlapSkipsOnlySeenMessageIDs(t *testing.T) {
 
 func TestGmailProvider_HardFailureLeavesCursorUnchanged(t *testing.T) {
 	e := newGmailProviderEnv(t)
-	suffix := uuid.NewString()[:8]
-	me := "me-" + suffix + "@example.com"
-	addrA := "a-" + suffix + "@example.com"
-	contactA := e.newEmailContactWithMethod(t, "Contact A "+suffix, addrA)
+	prefix := e.gen.Prefix()
+	me := prefix + "me@synthetic.example"
+	contactA, addrA := e.newEmailContact(t)
 
-	e.cleanupEvents(t, "hf-"+suffix+"@example.com")
-	msg := gmailMsg("g-hf", "thr", addrA, []string{me}, nil, nil, "S", "body", "<hf-"+suffix+"@example.com>", 1700000900000)
+	e.cleanupEvents(t, prefix+"hf@synthetic.example")
+	msg := gmailMsg("g-hf", "thr", addrA, []string{me}, nil, nil, "S", "body", "<"+prefix+"hf@synthetic.example>", 1700000900000)
 	store := newFakeMessageStore([]*gmailapi.Message{msg})
 	store.forcedGetErr["g-hf"] = struct{}{}
 	e.inject(store, map[string]struct{}{me: {}})
@@ -664,20 +673,20 @@ func TestGmailProvider_NilAccount_Errors(t *testing.T) {
 
 func TestGmailProvider_CrossAccountProvenanceMerge(t *testing.T) {
 	e := newGmailProviderEnv(t)
-	suffix := uuid.NewString()[:8]
-	accountX := "x-" + suffix + "@example.com"
-	accountY := "y-" + suffix + "@example.com"
-	addrA := "a-" + suffix + "@example.com"
-	contactA := e.newEmailContactWithMethod(t, "Contact A "+suffix, addrA)
+	prefix := e.gen.Prefix()
+	accountX := prefix + "x@synthetic.example"
+	accountY := prefix + "y@synthetic.example"
+	contactA, addrA := e.newEmailContact(t)
 
-	e.cleanupEvents(t, "xacct-"+suffix+"@example.com")
-	msgID := "<xacct-" + suffix + "@example.com>"
+	xacctExt := prefix + "xacct@synthetic.example"
+	e.cleanupEvents(t, xacctExt)
+	msgID := "<" + xacctExt + ">"
 
 	// Same RFC822 Message-ID observed in both mailboxes, with a different
 	// per-mailbox gmail id each sweep. Both accounts share the same "me" set so
 	// cross-account detection works.
-	gmailX := "gmail-x-" + suffix
-	gmailY := "gmail-y-" + suffix
+	gmailX := "gmail-x-" + prefix
+	gmailY := "gmail-y-" + prefix
 	msgX := gmailMsg(gmailX, "thr", addrA, []string{accountX}, nil, nil, "S", "body", msgID, 1700001000000)
 	msgY := gmailMsg(gmailY, "thr", addrA, []string{accountY}, nil, nil, "S", "body", msgID, 1700001000000)
 	meSet := map[string]struct{}{accountX: {}, accountY: {}}
@@ -697,7 +706,7 @@ func TestGmailProvider_CrossAccountProvenanceMerge(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 
-	got, err := e.commsRepo.GetMessage(e.ctx, "email", "xacct-"+suffix+"@example.com", contactA.ID)
+	got, err := e.commsRepo.GetMessage(e.ctx, "email", xacctExt, contactA.ID)
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{accountX, accountY}, observedAccounts(t, got.SourceMetadata))
 	gmailIDs := accountGmailIDs(t, got.SourceMetadata)
@@ -715,12 +724,11 @@ func TestGmailProvider_CrossAccountProvenanceMerge(t *testing.T) {
 // cursor.
 func TestGmailProvider_Onboarding_EmptyCursor_BackfillSince(t *testing.T) {
 	e := newGmailProviderEnv(t)
-	suffix := uuid.NewString()[:8]
-	me := "me-" + suffix + "@example.com"
-	addrA := "a-" + suffix + "@example.com"
-	contactA := e.newEmailContactWithMethod(t, "Contact A "+suffix, addrA)
+	prefix := e.gen.Prefix()
+	me := prefix + "me@synthetic.example"
+	contactA, addrA := e.newEmailContact(t)
 
-	ext := "onb-" + suffix + "@example.com"
+	ext := prefix + "onb@synthetic.example"
 	e.cleanupEvents(t, ext)
 
 	// backfill_since override floors the scan at 2026-03-01.
