@@ -147,6 +147,7 @@ func (env *linkCuratedEnv) seedUnmatchedExternal(t *testing.T, ctx context.Conte
 
 // Curated link with selected methods → match_status='imported'.
 func TestLinkContact_CuratedWithSelections_LandsImported(t *testing.T) {
+	t.Parallel()
 	env := setupLinkCuratedEnv(t)
 	ctx := context.Background()
 	contact, external := env.seedUnmatchedExternal(t, ctx)
@@ -165,6 +166,7 @@ func TestLinkContact_CuratedWithSelections_LandsImported(t *testing.T) {
 
 // Curated link via cadence (no method selections) → imported.
 func TestLinkContact_CuratedWithCadence_LandsImported(t *testing.T) {
+	t.Parallel()
 	env := setupLinkCuratedEnv(t)
 	ctx := context.Background()
 	contact, external := env.seedUnmatchedExternal(t, ctx)
@@ -183,6 +185,7 @@ func TestLinkContact_CuratedWithCadence_LandsImported(t *testing.T) {
 
 // Bare link (no curation signal) → match_status='matched'.
 func TestLinkContact_Bare_LandsMatched(t *testing.T) {
+	t.Parallel()
 	env := setupLinkCuratedEnv(t)
 	ctx := context.Background()
 	contact, external := env.seedUnmatchedExternal(t, ctx)
@@ -202,6 +205,7 @@ func TestLinkContact_Bare_LandsMatched(t *testing.T) {
 // methods_curated discriminator, this was indistinguishable from a bare
 // link and wrongly classified as 'matched'.
 func TestLinkContact_MethodsCuratedDeselectAll_LandsImported(t *testing.T) {
+	t.Parallel()
 	env := setupLinkCuratedEnv(t)
 	ctx := context.Background()
 	contact, external := env.seedUnmatchedExternal(t, ctx)
@@ -221,6 +225,7 @@ func TestLinkContact_MethodsCuratedDeselectAll_LandsImported(t *testing.T) {
 // Link-only import guard: a gmail_correspondence external row cannot be
 // imported as a new contact → 403, and the row stays unmatched.
 func TestImportContact_LinkOnlySource_Forbidden(t *testing.T) {
+	t.Parallel()
 	env := setupLinkCuratedEnv(t)
 	ctx := context.Background()
 	external := env.seedUnmatchedExternalSource(t, ctx, "gmail_correspondence")
@@ -236,6 +241,7 @@ func TestImportContact_LinkOnlySource_Forbidden(t *testing.T) {
 // Control: a non-link-only source (gcontacts) still imports successfully,
 // proving the guard is scoped to link-only sources only.
 func TestImportContact_OrdinarySource_Imports(t *testing.T) {
+	t.Parallel()
 	env := setupLinkCuratedEnv(t)
 	ctx := context.Background()
 	external := env.seedUnmatchedExternalSource(t, ctx, "gcontacts")

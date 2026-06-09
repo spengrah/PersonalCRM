@@ -32,6 +32,7 @@ func TestContactTask_CRUD(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
@@ -289,6 +290,7 @@ func TestContactTask_CountByProvider(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
@@ -310,13 +312,16 @@ func TestContactTask_CountByProvider(t *testing.T) {
 		contacts = append(contacts, c.ID)
 	}
 
-	// Create tasks for each contact
+	// Create tasks for each contact. Track the IDs so cleanup deletes only this
+	// test's own rows — a DB-wide DeleteContactTasksByProvider("todoist") would
+	// nuke parallel tests' tasks.
+	var taskIDs []uuid.UUID
 	for i, contactID := range contacts {
 		state := "managed"
 		if i == 2 {
 			state = "unmanaged"
 		}
-		_, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+		task, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 			ContactID:      contactID,
 			Provider:       "todoist",
 			Kind:           contacttask.KindReachOut,
@@ -325,12 +330,16 @@ func TestContactTask_CountByProvider(t *testing.T) {
 			State:          state,
 		})
 		require.NoError(t, err)
+		taskIDs = append(taskIDs, task.ID)
 	}
 	defer func() {
-		_ = contactTaskRepo.DeleteContactTasksByProvider(ctx, "todoist")
+		for _, id := range taskIDs {
+			_ = contactTaskRepo.DeleteContactTask(ctx, id)
+		}
 	}()
 
-	// Count managed tasks
+	// Count managed tasks (GreaterOrEqual is shared-DB-safe: this test's own
+	// rows guarantee the minimum, parallel tests can only add more).
 	managedCount, err := contactTaskRepo.CountContactTasksByProvider(ctx, "todoist", "managed")
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, managedCount, int64(2))
@@ -353,6 +362,7 @@ func TestContactTask_SyncedDeadlineMetadata(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
@@ -451,6 +461,7 @@ func TestContactTask_ActionTasks(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
@@ -682,6 +693,7 @@ func TestContactTask_Migration046_CheckConstraints(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
@@ -805,6 +817,7 @@ func TestContactTask_Migration046_PartialUniqueIndexes(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL

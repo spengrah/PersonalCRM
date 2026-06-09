@@ -119,6 +119,7 @@ func credWithScope(accountID string, scopes ...string) repository.OAuthCredentia
 // --- creates-one-state-per-credential ---------------------------------------
 
 func TestReconcileEmail_CreatesStatePerCredential(t *testing.T) {
+	t.Parallel()
 	e := newReconcileEnv(t)
 	a1 := uniqueAccount("acct1")
 	a2 := uniqueAccount("acct2")
@@ -153,6 +154,7 @@ func TestReconcileEmail_CreatesStatePerCredential(t *testing.T) {
 // --- idempotent re-run: no duplicates, no cursor/metadata reset -------------
 
 func TestReconcileEmail_IdempotentRerun_NoDuplicatesNoReset(t *testing.T) {
+	t.Parallel()
 	e := newReconcileEnv(t)
 	acct := uniqueAccount("idem")
 	e.cleanupAccount(t, acct)
@@ -192,6 +194,11 @@ func TestReconcileEmail_IdempotentRerun_NoDuplicatesNoReset(t *testing.T) {
 
 // --- operator reset: enabled email cursors only -----------------------------
 
+// NOTE: this test stays SERIAL. ResetGmailBackfillCursors scans and mutates
+// ALL enabled email sync states DB-wide and the test asserts an exact
+// Scanned/Reset count, so a concurrent test's enabled email state would be
+// swept into the count (and could be deleted mid-reset). Inherently global —
+// not parallelizable without a per-account scoping parameter on the service.
 func TestResetGmailBackfillCursors_ResetsOnlyEnabledEmailStates(t *testing.T) {
 	e := newReconcileEnv(t)
 	enabledAcct := uniqueAccount("reset-enabled")
@@ -288,6 +295,7 @@ func TestResetGmailBackfillCursors_ResetsOnlyEnabledEmailStates(t *testing.T) {
 // --- respects a user-disabled state (never re-enabled) ----------------------
 
 func TestReconcileEmail_RespectsUserDisabled(t *testing.T) {
+	t.Parallel()
 	e := newReconcileEnv(t)
 	acct := uniqueAccount("disabled")
 	e.cleanupAccount(t, acct)
@@ -315,6 +323,7 @@ func TestReconcileEmail_RespectsUserDisabled(t *testing.T) {
 // --- scope warning on the CREATE branch (no existing state) -----------------
 
 func TestReconcileEmail_ScopeWarn_OnCreateBranch(t *testing.T) {
+	t.Parallel()
 	e := newReconcileEnv(t)
 	acct := uniqueAccount("noscope-create")
 	e.cleanupAccount(t, acct)
@@ -337,6 +346,7 @@ func TestReconcileEmail_ScopeWarn_OnCreateBranch(t *testing.T) {
 // --- scope warning on the FOUND branch (state pre-exists) -------------------
 
 func TestReconcileEmail_ScopeWarn_OnFoundBranch(t *testing.T) {
+	t.Parallel()
 	e := newReconcileEnv(t)
 	acct := uniqueAccount("noscope-found")
 	e.cleanupAccount(t, acct)
@@ -369,6 +379,7 @@ func TestReconcileEmail_ScopeWarn_OnFoundBranch(t *testing.T) {
 // --- per-account shape invariant: no (email, NULL) row ever produced --------
 
 func TestReconcileEmail_PerAccountShape_NoNullAccountRow(t *testing.T) {
+	t.Parallel()
 	e := newReconcileEnv(t)
 	acct := uniqueAccount("shape")
 	e.cleanupAccount(t, acct)
@@ -394,6 +405,7 @@ func TestReconcileEmail_PerAccountShape_NoNullAccountRow(t *testing.T) {
 // --- empty account list is a no-op ------------------------------------------
 
 func TestReconcileEmail_EmptyAccountList_NoOp(t *testing.T) {
+	t.Parallel()
 	e := newReconcileEnv(t)
 	lister := &reconcileStubLister{accounts: nil}
 	e.service.SetEmailAccountLister(lister)
@@ -405,6 +417,7 @@ func TestReconcileEmail_EmptyAccountList_NoOp(t *testing.T) {
 // --- nil lister is a no-op (does not even consult a lister) ------------------
 
 func TestReconcileEmail_NilLister_NoOp(t *testing.T) {
+	t.Parallel()
 	e := newReconcileEnv(t)
 	// No SetEmailAccountLister call → nil lister.
 	require.NoError(t, e.service.ReconcileEmailSyncStates(e.ctx))
@@ -413,6 +426,7 @@ func TestReconcileEmail_NilLister_NoOp(t *testing.T) {
 // --- OAuth-connect reconciler closure is idempotent on re-connect -----------
 
 func TestReconcileEmail_ConnectPath_IdempotentOnReconnect(t *testing.T) {
+	t.Parallel()
 	e := newReconcileEnv(t)
 	acct := uniqueAccount("connect")
 	e.cleanupAccount(t, acct)

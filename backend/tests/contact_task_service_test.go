@@ -141,6 +141,7 @@ func TestContactTaskService_CreateManualTask_Integration(t *testing.T) {
 		t.Skip("skipping integration test")
 	}
 
+	t.Parallel()
 	svc, contact, cleanup := setupServiceTest(t)
 	defer cleanup()
 
@@ -428,6 +429,7 @@ func TestContactTaskService_CRMMarkerFormat(t *testing.T) {
 		t.Skip("skipping integration test")
 	}
 
+	t.Parallel()
 	svc, contact, cleanup := setupServiceTest(t)
 	defer cleanup()
 

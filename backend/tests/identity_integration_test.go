@@ -28,6 +28,7 @@ func TestIdentityRepository_Integration(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	ctx := context.Background()
 
 	// Migrations are applied once by TestMain.
@@ -306,6 +307,7 @@ func TestIdentityService_Integration(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	ctx := context.Background()
 
 	// Migrations are applied once by TestMain.
@@ -560,6 +562,7 @@ func TestIdentityService_NormalizationPolicy_Integration(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	ctx := context.Background()
 
 	// Migrations are applied once by TestMain.

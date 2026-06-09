@@ -25,6 +25,7 @@ func TestCadenceFilter_Integration(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	// Migrations are applied once by TestMain.
 	ctx := context.Background()
 	cfg := config.TestConfig()
@@ -49,7 +50,7 @@ func TestCadenceFilter_Integration(t *testing.T) {
 
 	t.Run("ListContacts_NoCadenceFilter", func(t *testing.T) {
 		results, err := repo.ListContacts(ctx, repository.ListContactsParams{
-			Limit:         100,
+			Limit:         100000,
 			Offset:        0,
 			CadenceFilter: "",
 		})
@@ -71,7 +72,7 @@ func TestCadenceFilter_Integration(t *testing.T) {
 
 	t.Run("ListContacts_HasCadence", func(t *testing.T) {
 		results, err := repo.ListContacts(ctx, repository.ListContactsParams{
-			Limit:         100,
+			Limit:         100000,
 			Offset:        0,
 			CadenceFilter: "has_cadence",
 		})
@@ -92,7 +93,7 @@ func TestCadenceFilter_Integration(t *testing.T) {
 
 	t.Run("ListContacts_NoCadence", func(t *testing.T) {
 		results, err := repo.ListContacts(ctx, repository.ListContactsParams{
-			Limit:         100,
+			Limit:         100000,
 			Offset:        0,
 			CadenceFilter: "no_cadence",
 		})
@@ -113,7 +114,7 @@ func TestCadenceFilter_Integration(t *testing.T) {
 
 	t.Run("ListContactsSorted_HasCadence", func(t *testing.T) {
 		results, err := repo.ListContacts(ctx, repository.ListContactsParams{
-			Limit:         100,
+			Limit:         100000,
 			Offset:        0,
 			Sort:          "name",
 			Order:         "asc",

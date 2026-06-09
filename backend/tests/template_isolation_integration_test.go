@@ -28,6 +28,7 @@ func TestTemplateIsolation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	if os.Getenv("DATABASE_URL") == "" {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}

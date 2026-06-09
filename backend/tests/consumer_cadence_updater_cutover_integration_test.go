@@ -74,6 +74,7 @@ func TestIntegration_CadenceUpdater_ApplyInteraction_Outbound_LiveDB(t *testing.
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	database, cleanup := newCadenceUpdaterTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -114,6 +115,7 @@ func TestIntegration_CadenceUpdater_ApplyInteraction_Mutual_ForwardOnly(t *testi
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	database, cleanup := newCadenceUpdaterTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -150,6 +152,7 @@ func TestIntegration_CadenceUpdater_ApplyInteraction_Manual_UnconditionalBackdat
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	database, cleanup := newCadenceUpdaterTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -189,6 +192,7 @@ func TestIntegration_CadenceUpdater_BulkApply_DoesNotBumpLastInteractionAt(t *te
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	database, cleanup := newCadenceUpdaterTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -242,6 +246,7 @@ func TestIntegration_CadenceUpdater_BulkApply_ForwardMaxOnMerge(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	database, cleanup := newCadenceUpdaterTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -283,6 +288,7 @@ func TestIntegration_CadenceUpdater_ApplyContactByOverride_ClearAndBackdate(t *t
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	database, cleanup := newCadenceUpdaterTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -328,6 +334,7 @@ func TestIntegration_CadenceUpdater_HandleEvent_DuplicateClaim_NoOp(t *testing.T
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	database, cleanup := newCadenceUpdaterTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -410,6 +417,7 @@ func TestIntegration_CadenceUpdater_ModeOff_NoWrite(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	database, cleanup := newCadenceUpdaterTestDB(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -445,6 +453,7 @@ func TestIntegration_CadenceUpdater_ContactBy_DerivedFromCadence(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	database, cleanup := newCadenceUpdaterTestDB(t)
 	defer cleanup()
 	ctx := context.Background()

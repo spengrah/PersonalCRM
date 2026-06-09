@@ -43,6 +43,7 @@ func TestChatConfig_UpsertAndList(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
+	t.Parallel()
 	// Migrations are applied once by TestMain.
 
 	ctx := context.Background()
@@ -84,6 +85,7 @@ func TestChatConfig_UpdateStatus(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
+	t.Parallel()
 	// Migrations are applied once by TestMain.
 
 	ctx := context.Background()
@@ -122,6 +124,7 @@ func TestChatConfig_BackfillCursorAndComplete(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
+	t.Parallel()
 	// Migrations are applied once by TestMain.
 
 	ctx := context.Background()
@@ -173,6 +176,7 @@ func TestChatConfig_ResetBackfill(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
+	t.Parallel()
 	// Migrations are applied once by TestMain.
 
 	ctx := context.Background()
@@ -218,6 +222,7 @@ func TestChatConfig_ListForBackfill(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
+	t.Parallel()
 	// Migrations are applied once by TestMain.
 
 	ctx := context.Background()
@@ -277,6 +282,7 @@ func TestChatConfig_UpdateMemberCount(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
+	t.Parallel()
 	// Migrations are applied once by TestMain.
 
 	ctx := context.Background()
@@ -319,6 +325,7 @@ func TestChatConfig_BackfillResume(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
+	t.Parallel()
 	// Migrations are applied once by TestMain.
 
 	ctx := context.Background()

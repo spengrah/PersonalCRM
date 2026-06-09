@@ -26,6 +26,7 @@ func TestCalendarEventUpsertResetsLastContactedUpdated(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	ctx := context.Background()
 
 	// Migrations are applied once by TestMain.
@@ -176,6 +177,7 @@ func TestUpdateContactLastContactedIfLater_OnlyUpdatesWhenLater(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	ctx := context.Background()
 
 	// Migrations are applied once by TestMain.

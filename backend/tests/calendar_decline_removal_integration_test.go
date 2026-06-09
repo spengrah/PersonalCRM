@@ -158,6 +158,7 @@ func TestIntegration_CalendarDecline_SoftDeletesAndRecomputes(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	e := newDeclineTestEnv(t, ctx)
 
@@ -192,6 +193,7 @@ func TestIntegration_CalendarDecline_NullOutWithCadenceFallback(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	e := newDeclineTestEnv(t, ctx)
 
@@ -223,6 +225,7 @@ func TestIntegration_CalendarDecline_NoCadence_ContactByStaysNil(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	e := newDeclineTestEnv(t, ctx)
 
@@ -246,6 +249,7 @@ func TestIntegration_CalendarDecline_PerDirectionRollback(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	e := newDeclineTestEnv(t, ctx)
 
@@ -301,6 +305,7 @@ func TestIntegration_CalendarDecline_PreservesCreationValue(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	e := newDeclineTestEnv(t, ctx)
 
@@ -339,6 +344,7 @@ func TestIntegration_CalendarDecline_PreservesContactByOverride(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	e := newDeclineTestEnv(t, ctx)
 
@@ -372,6 +378,7 @@ func TestIntegration_CalendarDecline_RollsBackContactByWhenNoOverride(t *testing
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	e := newDeclineTestEnv(t, ctx)
 
@@ -406,6 +413,7 @@ func TestIntegration_CalendarDecline_ContactByForwardWriterParity(t *testing.T) 
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	e := newDeclineTestEnv(t, ctx)
 
@@ -434,6 +442,7 @@ func TestIntegration_CalendarDecline_ReplayIsNoOp(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	e := newDeclineTestEnv(t, ctx)
 
@@ -458,6 +467,7 @@ func TestIntegration_AttendedAfterDelete_SkipsInsert(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	e := newDeclineTestEnv(t, ctx)
 	contact := e.newContact(t, nil, nil)
@@ -486,6 +496,7 @@ func TestIntegration_AttendedAfterDelete_LockSerialization(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	e := newDeclineTestEnv(t, ctx)
 	contact := e.newContact(t, nil, nil)
@@ -543,6 +554,7 @@ func TestIntegration_CalendarDecline_RecomputeSeesConcurrentInteraction(t *testi
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	e := newDeclineTestEnv(t, ctx)
 
@@ -626,6 +638,7 @@ func TestIntegration_DeclineSourceID_CoexistsWithAttended(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	e := newDeclineTestEnv(t, ctx)
 

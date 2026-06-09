@@ -52,6 +52,7 @@ func setupDirectionTestDeps(t *testing.T) (*service.ContactService, *repository.
 }
 
 func TestRecordInteraction_DirectionOutbound(t *testing.T) {
+	t.Parallel()
 	contactService, contactRepo, _, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -96,6 +97,7 @@ func TestRecordInteraction_DirectionOutbound(t *testing.T) {
 }
 
 func TestRecordInteraction_DirectionMutual(t *testing.T) {
+	t.Parallel()
 	contactService, contactRepo, _, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -138,6 +140,7 @@ func TestRecordInteraction_DirectionMutual(t *testing.T) {
 }
 
 func TestRecordInteraction_DirectionInbound(t *testing.T) {
+	t.Parallel()
 	contactService, contactRepo, _, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -177,6 +180,7 @@ func TestRecordInteraction_DirectionInbound(t *testing.T) {
 }
 
 func TestRecordInteraction_EmptyDirectionDefaultsMutual(t *testing.T) {
+	t.Parallel()
 	contactService, contactRepo, _, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -200,6 +204,7 @@ func TestRecordInteraction_EmptyDirectionDefaultsMutual(t *testing.T) {
 }
 
 func TestRecordInteraction_ForwardOnlyGuard_ContactByNotRegressed(t *testing.T) {
+	t.Parallel()
 	contactService, contactRepo, _, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -253,6 +258,7 @@ func TestRecordInteraction_ForwardOnlyGuard_ContactByNotRegressed(t *testing.T) 
 }
 
 func TestHasPendingFollowUp(t *testing.T) {
+	t.Parallel()
 	contactService, contactRepo, contactTaskRepo, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -294,6 +300,7 @@ func TestHasPendingFollowUp(t *testing.T) {
 }
 
 func TestFollowupFilter(t *testing.T) {
+	t.Parallel()
 	_, contactRepo, contactTaskRepo, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -326,7 +333,7 @@ func TestFollowupFilter(t *testing.T) {
 
 	// Filter: has_followup
 	contactsWithFollowup, err := contactRepo.ListContacts(ctx, repository.ListContactsParams{
-		Limit:          100,
+		Limit:          100000,
 		FollowupFilter: "has_followup",
 	})
 	require.NoError(t, err)
@@ -345,7 +352,7 @@ func TestFollowupFilter(t *testing.T) {
 
 	// Filter: no_followup
 	contactsWithout, err := contactRepo.ListContacts(ctx, repository.ListContactsParams{
-		Limit:          100,
+		Limit:          100000,
 		FollowupFilter: "no_followup",
 	})
 	require.NoError(t, err)
@@ -364,6 +371,7 @@ func TestFollowupFilter(t *testing.T) {
 }
 
 func TestCompletedCadenceTask_CanBeReplacedByNewOne(t *testing.T) {
+	t.Parallel()
 	_, contactRepo, contactTaskRepo, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
 	ctx := context.Background()

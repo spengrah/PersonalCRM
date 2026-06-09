@@ -114,6 +114,7 @@ func seedExtSweepFixtures(t *testing.T) *extSweepFixtures {
 }
 
 func TestExternalContactSweep_GetByID_LiveRowReturned(t *testing.T) {
+	t.Parallel()
 	fx := seedExtSweepFixtures(t)
 	row, err := fx.repo.GetByID(context.Background(), fx.live.ID)
 	require.NoError(t, err)
@@ -122,6 +123,7 @@ func TestExternalContactSweep_GetByID_LiveRowReturned(t *testing.T) {
 }
 
 func TestExternalContactSweep_GetByID_TombstonedRowAbsent(t *testing.T) {
+	t.Parallel()
 	fx := seedExtSweepFixtures(t)
 	row, err := fx.repo.GetByID(context.Background(), fx.tombstoned.ID)
 	require.NoError(t, err)
@@ -129,6 +131,7 @@ func TestExternalContactSweep_GetByID_TombstonedRowAbsent(t *testing.T) {
 }
 
 func TestExternalContactSweep_GetBySource_TombstoneAware(t *testing.T) {
+	t.Parallel()
 	fx := seedExtSweepFixtures(t)
 	// Live row reachable.
 	live, err := fx.repo.GetBySource(context.Background(), fx.live.Source, fx.live.SourceID, nil)
@@ -145,6 +148,7 @@ func TestExternalContactSweep_GetBySource_TombstoneAware(t *testing.T) {
 }
 
 func TestExternalContactSweep_FindBySourceAndSourceID_FiltersTombstone(t *testing.T) {
+	t.Parallel()
 	fx := seedExtSweepFixtures(t)
 	// Use the tombstoned row's source_id; FindBySourceAndSourceID is
 	// the rematch query and must NEVER return a tombstoned candidate.
@@ -157,6 +161,7 @@ func TestExternalContactSweep_FindBySourceAndSourceID_FiltersTombstone(t *testin
 }
 
 func TestExternalContactSweep_ListUnmatched_FiltersTombstone(t *testing.T) {
+	t.Parallel()
 	// Re-seed but with both rows unmatched so the predicate fires.
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
@@ -214,6 +219,7 @@ func TestExternalContactSweep_ListAllUnmatched_FiltersTombstone(t *testing.T) {
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
@@ -261,6 +267,7 @@ func TestExternalContactSweep_CountUnmatched_ExcludesTombstone(t *testing.T) {
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
@@ -306,6 +313,7 @@ func TestExternalContactUnmatched_HidesUnresolvedTelegramByDefault(t *testing.T)
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
@@ -391,6 +399,7 @@ func TestExternalContactUnmatched_HidesUnresolvedTelegramByDefault(t *testing.T)
 }
 
 func TestExternalContactSweep_FindByNormalizedEmail_FiltersTombstone(t *testing.T) {
+	t.Parallel()
 	fx := seedExtSweepFixtures(t)
 	// The seed planted the same email on both rows. The matched (live)
 	// row's email is at index 0.
@@ -408,6 +417,7 @@ func TestExternalContactSweep_ListForCRMContact_FiltersTombstone(t *testing.T) {
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
@@ -466,6 +476,7 @@ func TestExternalContactSweep_RoundTrip_ReviveAfterSoftDelete(t *testing.T) {
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
@@ -522,6 +533,7 @@ func TestExternalContactSweep_GetByID_AccountIDNullSemantics(t *testing.T) {
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL

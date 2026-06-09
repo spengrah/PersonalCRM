@@ -41,6 +41,7 @@ func TestTelegramMessage_UpsertAndGet(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
+	t.Parallel()
 	// Migrations are applied once by TestMain.
 
 	ctx := context.Background()
@@ -100,6 +101,7 @@ func TestTelegramMessage_UpsertIdempotent(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
+	t.Parallel()
 	// Migrations are applied once by TestMain.
 
 	ctx := context.Background()
@@ -154,6 +156,7 @@ func TestTelegramMessage_UpsertEdit(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
+	t.Parallel()
 	// Migrations are applied once by TestMain.
 
 	ctx := context.Background()
@@ -210,6 +213,7 @@ func TestTelegramMessage_SoftDelete(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
+	t.Parallel()
 	// Migrations are applied once by TestMain.
 
 	ctx := context.Background()
@@ -257,6 +261,7 @@ func TestTelegramMessage_SoftDeleteChannel(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
+	t.Parallel()
 	// Migrations are applied once by TestMain.
 
 	ctx := context.Background()
@@ -308,6 +313,7 @@ func TestTelegramMessage_ListUnprocessed(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
+	t.Parallel()
 	// Migrations are applied once by TestMain.
 
 	ctx := context.Background()

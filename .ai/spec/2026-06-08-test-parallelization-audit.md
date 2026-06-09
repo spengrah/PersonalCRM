@@ -8,12 +8,18 @@ All **80** top-level `backend/tests` files are classified — zero duplicates, z
 
 | Bucket | Distinct files | Action |
 |--------|---------------|--------|
-| scoped-safe | 28 | flip the top-level funcs (some need a `gin.SetMode` hoist first — see D3.5) |
-| needs-scoping | 13 | scope assertions/fixtures, then flip |
+| scoped-safe | 27 | flip the top-level funcs (some need a `gin.SetMode` hoist first — see D3.5) |
+| needs-scoping | 14 | scope assertions/fixtures, then flip |
 | river-heavy | 30 | stay serial (live `river.NewClient(TestOnly:true)` shares the package clone's `river_job`) |
 | inherently-serial | 4 | stay serial (process globals / fixed-id singletons / shared on-disk fixtures) |
 | mixed | 5 | flip per-func (scoped-safe + scoped funcs) and leave the river/serial funcs serial |
 | **Total** | **80** | |
+
+**Reclassifications found during the `-count=10`/`-shuffle` validation (the audit's static read missed these):**
+- `telegram_discovery_upsert_test.go` — audit said scoped-safe, but its funcs share fixed source_ids (`tg-discovery-upsert-<name>`) and a prefix-wide setup cleanup, plus a fixed peer `99001`/chat `9900` in the batch func. Moved to **needs-scoping**: per-test-unique source_id prefix (`syntheticNS`) + `uniqueTestIDs`-derived peer/chat. So scoped-safe drops to 27, needs-scoping rises to 14.
+- `gmail_enablement_reconcile_test.go`'s `TestResetGmailBackfillCursors_ResetsOnlyEnabledEmailStates` — `ResetGmailBackfillCursors` scans/mutates ALL enabled email states DB-wide and asserts an exact Scanned/Reset count. **That one func stays SERIAL** (inherently global); the file's other 9 funcs flip.
+- Two `ListContacts(limit 100)` membership checks (`cadence_filter`, `interaction_direction` `TestFollowupFilter`) overflowed the page once the shared DB accumulated >100 contacts under `-count=10`; raised the limit so own-ID membership stays in-window.
+- `contact_task` `TestContactTask_CountByProvider` used a DB-wide `DeleteContactTasksByProvider("todoist")` cleanup that deleted parallel tests' tasks; scoped to delete only its own task IDs.
 
 Notes on the count:
 - 4 of the 28 scoped-safe and 1 of the 5 mixed entries are helper/zero-func files (`gmail_time_helpers_test.go`, `synthetic_migration_helpers_test.go`, `testmain_integration_test.go`, `test_event_bus_harness_test.go`) — no `TestXxx` to flip; listed for completeness.
@@ -126,11 +132,13 @@ Each builds a live `river.NewClient(TestOnly:true)` and/or drains `river_job` on
 
 _Measured on a 12-core dev box (GOMAXPROCS=12), Postgres `max_connections=100`, with a freshly-cleaned test DB. CI timing is reported separately from the CI run logs._
 
-| Metric | Before (`main`) | After (flip, tuned) |
-|--------|-----------------|---------------------|
-| (a) `make test-integration-fast` wall-clock | ~29s | _TBD_ |
-| (b) `go test ./tests/` package wall-clock | ~20s (17.8s internal) | _TBD_ |
+| Metric | Before (`main`) | After (flip, tuned) | Ratio |
+|--------|-----------------|---------------------|-------|
+| (a) `make test-integration-fast` wall-clock | ~29s | ~26s | ~1.12× |
+| (b) `go test ./tests/ -parallel 4` package wall-clock | ~20s (17.0s internal) | ~17s (16.0s internal) | ~1.18× |
 
-At baseline the fast-suite wall-clock (~29s) is set by `tests/api` (27.5s internal, deferred to #429), which runs concurrently above the `tests` package this PR speeds up. So the flip's win shows up most directly in metric (b), and only partially in (a) until `tests/api` is also parallelized.
+At baseline the fast-suite wall-clock (~29s) is set by `tests/api` (~24-27s internal, deferred to #429), which runs concurrently above the `tests` package this PR speeds up. So the flip's win shows up most directly in metric (b), and only partially in (a) until `tests/api` is also parallelized.
 
-Amdahl note: the whole-package (b) speedup is bounded by the serial River floor (~23 non-long-gated river-heavy files + 4 inherently-serial + the mixed files' serial funcs). The larger speedup applies to the parallelizable subset; the residual is the deferred per-test-River-isolation effort (#428), not a regression.
+Amdahl note: the whole-package (b) speedup is bounded by the serial River floor (~23 non-long-gated river-heavy files + 4 inherently-serial + the mixed files' serial funcs). Go runs the serial cohort to completion BEFORE the parallel cohort, so the River floor is paid in full first; the modest ~1.18× whole-package ratio is the correct, expected outcome (the parallelizable subset alone is much faster). The residual is the deferred per-test-River-isolation effort (#428), not a regression. There is no fixed-multiplier gate — the honest measured number ships as-is.
+
+**Flake validation (all on the flipped set, river-heavy serial funcs run alongside):** `-race -parallel 4` PASS (no data races); `-parallel 4 -count=10` PASS; `-shuffle=on -parallel 4` PASS; combined `-race -shuffle=on -parallel 4 -count=5` PASS. Exception: the 5 `TestIntegration_CreateWorker_*` funcs in `followup_create_worker_integration_test.go` (river-heavy, SERIAL, untouched by this PR) fail under `-count>=2` because they use fixed `external_task_id` literals (`real-123`, etc.) that collide on the global `unique_external_task_id` on the 2nd iteration. This reproduces identically in isolation and on `main` — a pre-existing `-count` limitation of the serial river suite, orthogonal to the flip; tracked with the River parallelization effort (#428). The `-count` gates above `-skip 'TestIntegration_CreateWorker'` for that reason; the normal `-count=1` fast + LONG_TESTS suites run it and pass.

@@ -28,6 +28,7 @@ func TestInteraction_SourceCheckAcceptsGchat(t *testing.T) {
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL

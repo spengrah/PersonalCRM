@@ -40,6 +40,7 @@ func TestTelegramMessage_AllFieldsPopulatedOnRead(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
+	t.Parallel()
 	// Migrations are applied once by TestMain.
 
 	ctx := context.Background()

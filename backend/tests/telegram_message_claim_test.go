@@ -56,6 +56,7 @@ func telegramClaimSetup(t *testing.T) (context.Context, *factory.Generator, *rep
 }
 
 func TestTelegramMessageRepository_ClaimMessages_SetsClaimColumns(t *testing.T) {
+	t.Parallel()
 	ctx, _, repo, _, contact, chatID, cleanup := telegramClaimSetup(t)
 	defer cleanup()
 
@@ -88,6 +89,7 @@ func TestTelegramMessageRepository_ClaimMessages_SetsClaimColumns(t *testing.T) 
 }
 
 func TestTelegramMessageRepository_ListUnprocessedByContact_ExcludesActiveClaim(t *testing.T) {
+	t.Parallel()
 	ctx, _, repo, _, contact, chatID, cleanup := telegramClaimSetup(t)
 	defer cleanup()
 
@@ -118,6 +120,7 @@ func TestTelegramMessageRepository_ListUnprocessedByContact_ExcludesActiveClaim(
 }
 
 func TestTelegramMessageRepository_ListUnprocessedByContact_IncludesStaleClaim(t *testing.T) {
+	t.Parallel()
 	ctx, _, repo, _, contact, chatID, cleanup := telegramClaimSetup(t)
 	defer cleanup()
 
@@ -147,6 +150,7 @@ func TestTelegramMessageRepository_ListUnprocessedByContact_IncludesStaleClaim(t
 }
 
 func TestTelegramMessageRepository_ClaimMessages_PartialClaim(t *testing.T) {
+	t.Parallel()
 	ctx, _, repo, _, contact, chatID, cleanup := telegramClaimSetup(t)
 	defer cleanup()
 
@@ -178,6 +182,7 @@ func TestTelegramMessageRepository_ClaimMessages_PartialClaim(t *testing.T) {
 // MarkProcessedTx returns 0 rows affected when the predicate filters
 // out everything.
 func TestTelegramMessageRepository_MarkProcessedTx_RejectsOtherSession(t *testing.T) {
+	t.Parallel()
 	ctx, _, repo, _, contact, chatID, cleanup := telegramClaimSetup(t)
 	defer cleanup()
 
@@ -223,6 +228,7 @@ func TestTelegramMessageRepository_MarkProcessedTx_RejectsOtherSession(t *testin
 // confirms the consumer can process rows it claimed for its own
 // session.
 func TestTelegramMessageRepository_MarkProcessedTx_AcceptsOwnSession(t *testing.T) {
+	t.Parallel()
 	ctx, gen, repo, _, contact, chatID, cleanup := telegramClaimSetup(t)
 	defer cleanup()
 
@@ -276,6 +282,7 @@ func TestTelegramMessageRepository_MarkProcessedTx_AcceptsOwnSession(t *testing.
 // claimed (engine took the non-tx publish path / test mode) is still
 // markable by the consumer.
 func TestTelegramMessageRepository_MarkProcessedTx_AcceptsNullClaim(t *testing.T) {
+	t.Parallel()
 	ctx, gen, repo, _, contact, chatID, cleanup := telegramClaimSetup(t)
 	defer cleanup()
 

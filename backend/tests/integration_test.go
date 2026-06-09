@@ -184,6 +184,7 @@ func TestContactRepository_Integration(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
+	t.Parallel()
 	// Check if DATABASE_URL is set for integration testing
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
@@ -300,6 +301,7 @@ func TestContactMethodRepository_Integration(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	if databaseURL != "" {
@@ -387,6 +389,7 @@ func TestSyncRepository_Integration(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	ctx := context.Background()
 
 	// Migrations are applied once by TestMain.
@@ -747,6 +750,7 @@ func TestOAuthRepository_Integration(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	ctx := context.Background()
 
 	// Migrations are applied once by TestMain.
@@ -1101,6 +1105,7 @@ func TestFindSimilarContactsBatch_Integration(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	ctx := context.Background()
 
 	// Migrations are applied once by TestMain.

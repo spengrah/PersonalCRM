@@ -81,6 +81,7 @@ func (e *reconcileEnv) countGChatStatesForAccount(t *testing.T, accountID string
 // --- creates one state per SCOPED credential; unscoped gets none ------------
 
 func TestReconcileGChat_CreatesStatePerScopedCredential(t *testing.T) {
+	t.Parallel()
 	e := newReconcileEnv(t)
 	scoped1 := uniqueAccount("gchat-scoped1")
 	scoped2 := uniqueAccount("gchat-scoped2")
@@ -122,6 +123,7 @@ func TestReconcileGChat_CreatesStatePerScopedCredential(t *testing.T) {
 // --- scope gate is the CREATE gate, not warn-and-create ---------------------
 
 func TestReconcileGChat_ScopeGate_NoStateForUnscopedAccount(t *testing.T) {
+	t.Parallel()
 	e := newReconcileEnv(t)
 	acct := uniqueAccount("gchat-gate")
 	e.cleanupAccount(t, acct)
@@ -144,6 +146,7 @@ func TestReconcileGChat_ScopeGate_NoStateForUnscopedAccount(t *testing.T) {
 // --- scope gate requires the FULL chat-scope set (partial grants rejected) ---
 
 func TestReconcileGChat_ScopeGate_PartialChatScopesNotEnabled(t *testing.T) {
+	t.Parallel()
 	e := newReconcileEnv(t)
 
 	// Each subset is missing at least one required scope, so none must enable.
@@ -178,6 +181,7 @@ func TestReconcileGChat_ScopeGate_PartialChatScopesNotEnabled(t *testing.T) {
 // --- idempotent re-run: no duplicates, no cursor/metadata reset -------------
 
 func TestReconcileGChat_IdempotentRerun_NoDuplicatesNoReset(t *testing.T) {
+	t.Parallel()
 	e := newReconcileEnv(t)
 	acct := uniqueAccount("gchat-idem")
 	e.cleanupAccount(t, acct)
@@ -220,6 +224,7 @@ func TestReconcileGChat_IdempotentRerun_NoDuplicatesNoReset(t *testing.T) {
 // --- respects a user-disabled state (never re-enabled) ----------------------
 
 func TestReconcileGChat_RespectsUserDisabled(t *testing.T) {
+	t.Parallel()
 	e := newReconcileEnv(t)
 	acct := uniqueAccount("gchat-disabled")
 	e.cleanupAccount(t, acct)
@@ -247,6 +252,7 @@ func TestReconcileGChat_RespectsUserDisabled(t *testing.T) {
 // --- re-consent transition: the gate opens when the scope appears -----------
 
 func TestReconcileGChat_ReConsentTransition_GateOpens(t *testing.T) {
+	t.Parallel()
 	e := newReconcileEnv(t)
 	acct := uniqueAccount("gchat-reconsent")
 	e.cleanupAccount(t, acct)
@@ -310,6 +316,7 @@ func TestReconcileGChat_PerAccountShape_NoNullAccountRow(t *testing.T) {
 // --- empty account list is a no-op ------------------------------------------
 
 func TestReconcileGChat_EmptyAccountList_NoOp(t *testing.T) {
+	t.Parallel()
 	e := newReconcileEnv(t)
 	lister := &reconcileStubLister{accounts: nil}
 	e.service.SetGChatAccountLister(lister)
@@ -321,6 +328,7 @@ func TestReconcileGChat_EmptyAccountList_NoOp(t *testing.T) {
 // --- nil lister is a no-op (does not even consult a lister) ------------------
 
 func TestReconcileGChat_NilLister_NoOp(t *testing.T) {
+	t.Parallel()
 	e := newReconcileEnv(t)
 	// No SetGChatAccountLister call → nil lister.
 	require.NoError(t, e.service.ReconcileGChatSyncStates(e.ctx))
@@ -329,6 +337,7 @@ func TestReconcileGChat_NilLister_NoOp(t *testing.T) {
 // --- OAuth-connect reconciler closure is idempotent on re-connect -----------
 
 func TestReconcileGChat_ConnectPath_IdempotentOnReconnect(t *testing.T) {
+	t.Parallel()
 	e := newReconcileEnv(t)
 	scoped := uniqueAccount("gchat-connect")
 	unscoped := uniqueAccount("gchat-connect-unscoped")
@@ -361,6 +370,7 @@ func TestReconcileGChat_ConnectPath_IdempotentOnReconnect(t *testing.T) {
 // --- status data path surfaces the gchat state (DD-5 verification) ----------
 
 func TestReconcileGChat_StatusSurfacesGChatState(t *testing.T) {
+	t.Parallel()
 	e := newReconcileEnv(t)
 	acct := uniqueAccount("gchat-status")
 	e.cleanupAccount(t, acct)

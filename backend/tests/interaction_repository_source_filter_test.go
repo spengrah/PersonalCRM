@@ -33,6 +33,7 @@ func TestInteractionRepository_FindRecentInteractionBySourceAndDirection_SourceF
 		t.Skip("DATABASE_URL not set")
 	}
 
+	t.Parallel()
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL

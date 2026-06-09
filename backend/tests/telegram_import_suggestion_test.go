@@ -168,6 +168,7 @@ func seedContactWithCleanup(t *testing.T, repo *repository.ContactRepository, fu
 // Each sub-test uses unique full_names to avoid pg_trgm returning multiple
 // equal-score matches (which would trip the collision-gap rule).
 func TestTelegramImportSuggestion_Integration(t *testing.T) {
+	t.Parallel()
 	router, externalRepo, contactRepo, cleanup := setupTelegramImportSuggestionTest(t)
 	defer cleanup()
 

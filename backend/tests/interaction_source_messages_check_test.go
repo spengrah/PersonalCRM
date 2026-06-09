@@ -28,6 +28,7 @@ func TestInteraction_SourceCheckAcceptsMessages(t *testing.T) {
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
@@ -79,6 +80,7 @@ func TestInteraction_SourceCheckRejectsWhatsapp(t *testing.T) {
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
