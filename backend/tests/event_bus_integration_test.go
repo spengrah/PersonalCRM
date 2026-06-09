@@ -34,17 +34,17 @@ func (*eventBusNoopWorker) Work(_ context.Context, _ *river.Job[eventBusNoopArgs
 	return nil
 }
 
-// newEventBusTestDB opens an isolated per-test DB because this file also starts
-// live River clients. Repository-only tests pay the same setup cost so the
-// shared helper can stay simple and the whole file can run under t.Parallel().
+// newEventBusTestDB opens the package-clone DB. These tests publish only
+// interaction.manual events, which do not route to async consumer jobs, so they
+// do not need a live River fetch loop or a per-test database clone.
 func newEventBusTestDB(t *testing.T, ctx context.Context) (*db.Database, *config.Config) {
 	t.Helper()
-	return newIsolatedRiverTestDB(t, ctx)
+	return newSharedTestDB(t, ctx)
 }
 
-// newEventBusTestBus builds a full Bus with a real river client registered
-// against the shared test DB. TestOnly skips leader election / periodic
-// loops. Client is stopped in t.Cleanup.
+// newEventBusTestBus builds a Bus with a River client that is never started.
+// InsertTx does not need a fetch loop, and these tests use event kinds whose
+// routing table returns no jobs.
 func newEventBusTestBus(t *testing.T, ctx context.Context, database *db.Database, cfg *config.Config) *events.Bus {
 	t.Helper()
 	eventRepo := repository.NewEventRepository(database.Queries)
@@ -60,16 +60,6 @@ func newEventBusTestBus(t *testing.T, ctx context.Context, database *db.Database
 		TestOnly: true,
 	})
 	require.NoError(t, err)
-
-	startCtx, startCancel := context.WithTimeout(ctx, 10*time.Second)
-	defer startCancel()
-	require.NoError(t, client.Start(startCtx))
-
-	t.Cleanup(func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer stopCancel()
-		_ = client.Stop(stopCtx)
-	})
 
 	return events.NewBus(database.Pool, client, eventRepo)
 }

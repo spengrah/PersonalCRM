@@ -7,6 +7,7 @@ import (
 
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/consumer"
+	"personal-crm/backend/internal/consumer/consumerjobs"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/repository"
@@ -40,10 +41,9 @@ type consumerTestEnv struct {
 	manualHandler   *service.ManualInteractionHandler
 }
 
-// newConsumerTestBus builds a river client with both the noop worker and
-// the real InteractionRecorderWorker registered. TestOnly=true means the
-// dispatcher never picks jobs up; tests manually invoke HandleEvent via
-// env.runHandleEvent.
+// newConsumerTestBus builds a non-started river client with the consumer job
+// kinds registered. The tests manually invoke HandleEvent via env.runHandleEvent;
+// the client only needs to validate/enqueue downstream jobs in PublishTx.
 func newConsumerTestBus(
 	t *testing.T,
 	ctx context.Context,
@@ -77,74 +77,49 @@ func newConsumerTestBus(
 		recorderRef: recorderRef,
 	})
 	// consumerJobsForKind enqueues cadence_updater and followup_manager
-	// jobs for interaction.recorded events. Register placeholder workers
-	// so river accepts those kinds at Start; TestOnly=true means they
-	// never run.
+	// jobs for interaction.recorded events. Register no-op workers with
+	// the real arg types so river accepts those kinds; the client is not
+	// started, so they never run.
 	river.AddWorker(workers, &lateCadenceUpdaterWorker{})
 	river.AddWorker(workers, &lateFollowUpManagerWorker{})
-
-	startCtx, startCancel := context.WithTimeout(ctx, 10*time.Second)
-	defer startCancel()
-	require.NoError(t, client.Start(startCtx))
-
-	t.Cleanup(func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer stopCancel()
-		_ = client.Stop(stopCtx)
-	})
 
 	return bus
 }
 
-// lateRecorderWorker is a thin shim that lets us register a worker before
-// the concrete recorder is available. Since TestOnly=true, this worker
-// never actually runs — it exists only so river's AddWorker validates the
-// job kind at Start time.
+// lateRecorderWorker is a thin shim that lets us register the job kind before
+// the concrete recorder is available. The client is not started in these tests,
+// so this worker exists only for InsertTx kind validation.
 type lateRecorderWorker struct {
-	river.WorkerDefaults[interactionRecorderJobArgsPlaceholder]
+	river.WorkerDefaults[consumerjobs.InteractionRecorderJobArgs]
 	bus         *events.Bus
 	pool        any
 	recorderRef **consumer.InteractionRecorder
 }
 
-// interactionRecorderJobArgsPlaceholder mirrors the real job args kind so
-// river can route to lateRecorderWorker.
-type interactionRecorderJobArgsPlaceholder struct{}
-
-func (interactionRecorderJobArgsPlaceholder) Kind() string { return "interaction_recorder" }
-
-func (w *lateRecorderWorker) Work(_ context.Context, _ *river.Job[interactionRecorderJobArgsPlaceholder]) error {
-	// TestOnly=true means this never runs. Kept as a no-op.
+func (w *lateRecorderWorker) Work(_ context.Context, _ *river.Job[consumerjobs.InteractionRecorderJobArgs]) error {
+	// The client is not started, so this never runs. Kept as a no-op.
 	return nil
 }
 
-// lateCadenceUpdaterWorker is the cadence_updater placeholder. TestOnly
-// means it never runs; registering it just lets river accept the kind
-// when the test bus enqueues jobs via PublishTx.
+// lateCadenceUpdaterWorker is the cadence_updater no-op. The client is
+// not started; registering it just lets river accept the kind when the test bus
+// enqueues jobs via PublishTx.
 type lateCadenceUpdaterWorker struct {
-	river.WorkerDefaults[cadenceUpdaterJobArgsPlaceholder]
+	river.WorkerDefaults[consumerjobs.CadenceUpdaterJobArgs]
 }
 
-type cadenceUpdaterJobArgsPlaceholder struct{}
-
-func (cadenceUpdaterJobArgsPlaceholder) Kind() string { return "cadence_updater" }
-
-func (*lateCadenceUpdaterWorker) Work(_ context.Context, _ *river.Job[cadenceUpdaterJobArgsPlaceholder]) error {
+func (*lateCadenceUpdaterWorker) Work(_ context.Context, _ *river.Job[consumerjobs.CadenceUpdaterJobArgs]) error {
 	return nil
 }
 
-// lateFollowUpManagerWorker is the followup_manager placeholder.
-// TestOnly means it never runs; registering it just lets river accept
-// the kind when the test bus enqueues jobs via PublishTx.
+// lateFollowUpManagerWorker is the followup_manager no-op. The client is
+// not started; registering it just lets river accept the kind when the test bus
+// enqueues jobs via PublishTx.
 type lateFollowUpManagerWorker struct {
-	river.WorkerDefaults[followUpManagerJobArgsPlaceholder]
+	river.WorkerDefaults[consumerjobs.FollowUpManagerJobArgs]
 }
 
-type followUpManagerJobArgsPlaceholder struct{}
-
-func (followUpManagerJobArgsPlaceholder) Kind() string { return "followup_manager" }
-
-func (*lateFollowUpManagerWorker) Work(_ context.Context, _ *river.Job[followUpManagerJobArgsPlaceholder]) error {
+func (*lateFollowUpManagerWorker) Work(_ context.Context, _ *river.Job[consumerjobs.FollowUpManagerJobArgs]) error {
 	return nil
 }
 

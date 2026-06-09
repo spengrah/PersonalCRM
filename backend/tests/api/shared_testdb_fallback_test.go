@@ -10,10 +10,9 @@ import (
 	"personal-crm/backend/internal/db"
 )
 
-func newAPIIsolatedTestDB(t *testing.T, ctx context.Context) (*db.Database, *config.Config) {
+func newAPISharedTestDB(t *testing.T, ctx context.Context) (*db.Database, *config.Config) {
 	t.Helper()
-
 	_ = ctx
-	t.Skip("integration_testdb build tag required for isolated API database tests")
+	t.Skip("integration_testdb build tag required for shared API database tests")
 	return nil, nil
 }

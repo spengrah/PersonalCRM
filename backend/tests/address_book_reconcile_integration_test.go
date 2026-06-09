@@ -6,10 +6,13 @@ import (
 	"testing"
 
 	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
 	"github.com/google/uuid"
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -27,11 +30,10 @@ type abReconcileEnv struct {
 	matchSvc     *service.ImportMatchService
 }
 
-// setupABReconcileEnv wires a real reconcile service with a live event
-// bus + rematch service (a stub email/phone handler makes those method
-// types eligible so the matched-branch auto-propagate publishes
-// contact_methods.added). Each test gets its own ephemeral clone so the live
-// River client can use TestOnly without sharing river_job across tests.
+// setupABReconcileEnv wires a real reconcile service with an enqueue-capable
+// event bus + rematch service. The River client is not started: these tests
+// assert that contact_methods.added enqueues rematch_dispatcher jobs, not that
+// the worker drains them.
 func setupABReconcileEnv(t *testing.T) *abReconcileEnv {
 	t.Helper()
 	if testing.Short() {
@@ -39,21 +41,17 @@ func setupABReconcileEnv(t *testing.T) *abReconcileEnv {
 	}
 
 	ctx := context.Background()
-	database, _ := newIsolatedRiverTestDB(t, ctx)
+	database, _ := newSharedTestDB(t, ctx)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	methodRepo := repository.NewContactMethodRepository(database.Queries)
 	externalRepo := repository.NewExternalContactRepository(database.Queries)
 	enrichmentRepo := repository.NewEnrichmentRepository(database.Queries)
 	eventRepo := repository.NewEventRepository(database.Queries)
-	interactionRepo := repository.NewInteractionRepository(database.Queries)
-	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
-
-	contactService := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, contactTaskRepo, nil, nil)
 	rematchSvc := service.NewRematchService()
 	rematchSvc.Register(stubRematchHandler{idType: "email"})
 	rematchSvc.Register(stubRematchHandler{idType: "phone"})
-	bus := setupTestEventBusWithRematch(t, ctx, database, contactService, rematchSvc)
+	bus := setupRematchEnqueueOnlyBus(t, database)
 
 	enrichmentSvc := service.NewEnrichmentService(database, contactRepo, methodRepo, enrichmentRepo, bus, rematchSvc)
 	reconcile := service.NewAddressBookReconcileService(enrichmentSvc, contactRepo, methodRepo, externalRepo)
@@ -69,6 +67,24 @@ func setupABReconcileEnv(t *testing.T) *abReconcileEnv {
 		enrich:       enrichmentSvc,
 		matchSvc:     matchSvc,
 	}
+}
+
+func setupRematchEnqueueOnlyBus(t *testing.T, database *db.Database) *events.Bus {
+	t.Helper()
+
+	workers := river.NewWorkers()
+	river.AddWorker(workers, &deferredRematchWorker{})
+
+	client, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
+		Queues: map[string]river.QueueConfig{
+			river.QueueDefault: {MaxWorkers: 1},
+		},
+		Workers:  workers,
+		TestOnly: true,
+	})
+	require.NoError(t, err)
+
+	return events.NewBus(database.Pool, client, repository.NewEventRepository(database.Queries))
 }
 
 // stubRematchHandler is a type-only rematch handler so EligibleMethods
@@ -578,7 +594,6 @@ func TestABReconcile_IgnoredDupOfMatchedCanonical_Skips(t *testing.T) {
 // --- catchup: mixed set, summary counts + idempotent re-run -------------
 
 func TestABReconcile_Catchup_MixedSet(t *testing.T) {
-	t.Parallel()
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
 

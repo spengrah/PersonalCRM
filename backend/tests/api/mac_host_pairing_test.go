@@ -31,9 +31,9 @@ import (
 const macHostTestKey = "test-mac-host-admin-key"
 
 // macHostTestEnv bundles the wired stack for mac_host integration tests.
-// Each TestXxx builds its own env so the singleton mac_host index isn't
-// shared across subtests (the test DB is shared, so we still hard-delete
-// rows in cleanup).
+// Each TestXxx builds its own env. Mac host tests run serially because the
+// mac_host table intentionally has singleton semantics and cleanup hard-deletes
+// those shared rows from the package clone.
 type macHostTestEnv struct {
 	router     *gin.Engine
 	apiKey     string
@@ -50,7 +50,7 @@ func setupMacHostEnv(t *testing.T) *macHostTestEnv {
 
 	ctx := context.Background()
 
-	database, cfg := newAPIIsolatedTestDB(t, ctx)
+	database, cfg := newAPISharedTestDB(t, ctx)
 	cfg.External.APIKey = macHostTestKey
 
 	hostRepo := repository.NewMacHostRepository(database.Queries)
@@ -179,7 +179,6 @@ func parseConflict(t *testing.T, w *httptest.ResponseRecorder) cursorConflictBod
 }
 
 func TestMacHost_FullPairingFlow(t *testing.T) {
-	t.Parallel()
 
 	env := setupMacHostEnv(t)
 
@@ -330,7 +329,6 @@ func TestMacHost_FullPairingFlow(t *testing.T) {
 }
 
 func TestMacHost_PairingToken_Unknown(t *testing.T) {
-	t.Parallel()
 
 	env := setupMacHostEnv(t)
 
@@ -344,7 +342,6 @@ func TestMacHost_PairingToken_Unknown(t *testing.T) {
 }
 
 func TestMacHost_Pair_MissingHostname_400(t *testing.T) {
-	t.Parallel()
 
 	env := setupMacHostEnv(t)
 
@@ -363,7 +360,6 @@ func TestMacHost_Pair_MissingHostname_400(t *testing.T) {
 }
 
 func TestMacHost_Pair_MissingToken_400(t *testing.T) {
-	t.Parallel()
 
 	env := setupMacHostEnv(t)
 
@@ -377,7 +373,6 @@ func TestMacHost_Pair_MissingToken_400(t *testing.T) {
 }
 
 func TestMacHost_Singleton_SecondPairBlocked(t *testing.T) {
-	t.Parallel()
 
 	env := setupMacHostEnv(t)
 
@@ -405,7 +400,6 @@ func TestMacHost_Singleton_SecondPairBlocked(t *testing.T) {
 }
 
 func TestMacHost_CursorFirstWriteRace(t *testing.T) {
-	t.Parallel()
 
 	env := setupMacHostEnv(t)
 

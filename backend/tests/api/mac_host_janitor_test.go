@@ -22,10 +22,9 @@ func TestPairingTokenJanitor_DeletesExpired(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
-	t.Parallel()
 
 	ctx := context.Background()
-	database, _ := newAPIIsolatedTestDB(t, ctx)
+	database, _ := newAPISharedTestDB(t, ctx)
 
 	tokenRepo := repository.NewMacHostPairingTokenRepository(database.Queries)
 
