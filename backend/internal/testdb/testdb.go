@@ -23,12 +23,15 @@
 // pool). NOTHING ELSE in the harness may use raw SQL. The complete allow-list:
 //
 //	CREATE DATABASE <name> [TEMPLATE ...]    DDL in maintenance DB; identifier via pgx.Identifier{name}.Sanitize() after assertCreatableTestDBName
-//	DROP DATABASE IF EXISTS <name> WITH (FORCE)  DDL in maintenance DB; identifier via Sanitize() after assertDroppableTestDBName
+//	DROP DATABASE IF EXISTS <name> WITH (FORCE)  DDL in maintenance DB; identifier via Sanitize() after assertDroppableTestDBName (clone sweep)
+//	DROP DATABASE IF EXISTS <name>  NON-FORCE DDL in maintenance DB; identifier via Sanitize() after assertDroppableTestDBName (template reaper)
 //	SELECT pg_advisory_lock($1) / pg_advisory_unlock($1)  session function; parameterized; constant lock id
 //	CREATE EXTENSION IF NOT EXISTS "uuid-ossp" / ... vector  DDL inside the template; static literal
 //	CREATE TABLE _testdb_template_marker(...) / INSERT ... / SELECT hash ...  marker table exists only inside test DBs; static DDL; value parameterized via $1
 //	SELECT 1 FROM pg_database WHERE datname = $1  system catalog read; parameterized
-//	SELECT datname FROM pg_database WHERE datname LIKE $1 ESCAPE '\'  system catalog read (clone sweep); parameterized; escaped `_`
+//	SELECT oid FROM pg_database WHERE datname = $1  system catalog read (test-only drop+recreate detection); parameterized
+//	SELECT datname FROM pg_database WHERE datname LIKE $1 ESCAPE '\'  system catalog read (clone + template sweep); parameterized; escaped `_`
+//	SELECT numbackends FROM pg_stat_database WHERE datname = $1  system catalog read (template reaper active-session count); parameterized
 //
 // Production query paths gain ZERO raw SQL.
 package testdb
@@ -62,9 +65,19 @@ const (
 	// The env URL MUST point at this database before any DDL runs.
 	baseDBName = "personal_crm_test"
 
-	// templateDBName is the template the per-package and per-test clones are
-	// copied from. Never swept; reused across runs.
-	templateDBName = "personal_crm_test_template"
+	// templatePrefix prefixes every per-migration-set template database. The
+	// full name is templatePrefix + the first templateHashPrefixLen hex chars
+	// of the migration content hash (27 + 32 = 59 ≤ Postgres's 63-char
+	// identifier limit). Each migration set keeps its own template so divergent
+	// branches/worktrees never contend over one name.
+	templatePrefix = "personal_crm_test_template_"
+
+	// templateHashPrefixLen is how many hex chars of the sha256 digest name the
+	// template. 32 hex = 128 bits, collision-free across coexisting migration
+	// sets. MUST stay in sync with the `{32}` quantifier in dbNamePattern: the
+	// regex is the validation counterpart of this constant; change them
+	// together (see the unit assertion in TestTemplateNameArithmetic).
+	templateHashPrefixLen = 32
 
 	// clonePrefix prefixes every per-package / per-test clone database.
 	clonePrefix = "personal_crm_test_clone_"
@@ -84,9 +97,30 @@ const (
 )
 
 // dbNamePattern matches the only database names the harness may CREATE or DROP:
-// the template, and clones whose token is lowercase hex. The bare base
-// personal_crm_test is intentionally NOT matched (we never CREATE or DROP it).
-var dbNamePattern = regexp.MustCompile(`^personal_crm_test_(template|clone_[0-9a-f]+)$`)
+// hash-named templates (template_<32 lowercase hex>), and clones whose token is
+// lowercase hex. The bare base personal_crm_test is intentionally NOT matched
+// (we never CREATE or DROP it), and neither is the legacy bare
+// personal_crm_test_template (the new harness never produces it; reclaim it
+// manually on a dev box with `DROP DATABASE personal_crm_test_template`).
+//
+// The template suffix is pinned to exactly {32} hex — the validation
+// counterpart of templateHashPrefixLen = 32. The two must change together.
+var dbNamePattern = regexp.MustCompile(`^personal_crm_test_(template_[0-9a-f]{32}|clone_[0-9a-f]+)$`)
+
+// templateNameFromHash returns the content-hash-named template DB name for a
+// migration set. hash is the full 64-hex sha256 from templateHashFromInputs;
+// only its first templateHashPrefixLen chars name the template, so two migration
+// sets whose hashes differ within those chars get distinct templates and never
+// contend. Panics if hash is shorter than the prefix length — an internal
+// invariant that holds by construction (templateHashFromInputs always returns a
+// 64-hex digest); the panic makes a future hash-shortening change fail loudly
+// instead of slicing out of range. Never reachable from valid inputs.
+func templateNameFromHash(hash string) string {
+	if len(hash) < templateHashPrefixLen {
+		panic(fmt.Sprintf("testdb: template hash %q shorter than prefix length %d", hash, templateHashPrefixLen))
+	}
+	return templatePrefix + hash[:templateHashPrefixLen]
+}
 
 // originalBaseURL captures the env database URL as it was at SetupPackage entry,
 // BEFORE the package clone rewrite of DATABASE_URL. NewEphemeralClone derives
@@ -211,51 +245,105 @@ func NewEphemeralClone(t testing.TB) (cloneConnURL string, drop func()) {
 	return cloneConnURL, drop
 }
 
-// CleanClones drops every leaked personal_crm_test_clone_* database. It is the
-// explicit-sweep entrypoint invoked ONLY by `make test-clean-clones` via the
-// standalone go-run cmd; it never runs during `go test`. The template and base
-// are never touched. Every drop is routed through assertDroppableTestDBName.
-// Returns a non-nil error if any guarded drop fails, so the make target exits
-// non-zero when leaked clones remain.
+// CleanClones is a thin backward-compatible shim over CleanStaleDatabases. With
+// no migrations path it cannot exclude the current run's template from the
+// reaper, but the advisory lock plus the per-template numbackends skip still
+// protect any in-use template; at worst the current template is reaped and
+// rebuilt next run (a cost, never a correctness problem).
 func CleanClones() error {
+	return CleanStaleDatabases("")
+}
+
+// CleanStaleDatabases sweeps leaked clones AND stale per-migration-set templates
+// in a single pass. It is the explicit-sweep entrypoint invoked ONLY by
+// `make test-clean-clones` via the standalone go-run cmd; it never runs during
+// `go test`. The base personal_crm_test is never touched. Every drop is routed
+// through assertDroppableTestDBName.
+//
+// Operating model: run ONLY when no integration tests are in flight. The
+// advisory lock (held during the template drop pass) makes the reaper safe
+// against an in-flight CREATE ... TEMPLATE copy, but NOT against a different
+// worktree's still-running test process that may clone from a template LATER —
+// the lock is released between that process's operations. That stronger
+// cross-worktree-concurrent guarantee is out of scope (tracking #424).
+//
+// migrationsPath, when it resolves, names the current run's template so the
+// reaper keeps it warm (never drops it). Pass "" to skip that exclusion.
+//
+// Returns a non-nil error only when a guarded drop the reaper ATTEMPTED
+// actually failed; templates skipped because they are the current run's hash or
+// have open backends are expected, logged skips — not errors. So the make
+// target exits 0 when everything droppable was dropped and the rest legitimately
+// skipped, non-zero only on a real drop failure.
+func CleanStaleDatabases(migrationsPath string) error {
 	baseURL := envBaseURL()
 	if baseURL == "" {
-		return errors.New("testdb.CleanClones: DATABASE_URL/TEST_DATABASE_URL not set")
+		return errors.New("testdb.CleanStaleDatabases: DATABASE_URL/TEST_DATABASE_URL not set")
 	}
 	baseName, err := dbNameFromURL(baseURL)
 	if err != nil {
-		return fmt.Errorf("testdb.CleanClones: parse base URL: %w", err)
+		return fmt.Errorf("testdb.CleanStaleDatabases: parse base URL: %w", err)
 	}
 	if err := assertBaseDBName(baseName); err != nil {
-		return fmt.Errorf("testdb.CleanClones: %w", err)
+		return fmt.Errorf("testdb.CleanStaleDatabases: %w", err)
 	}
 
 	ctx := context.Background()
 	admin, err := connectAdmin(ctx, baseURL)
 	if err != nil {
-		return fmt.Errorf("testdb.CleanClones: connect admin: %w", err)
+		return fmt.Errorf("testdb.CleanStaleDatabases: connect admin: %w", err)
 	}
 	defer func() { _ = admin.Close(ctx) }()
 
+	// Sweep clones first, WITHOUT the advisory lock: clones are never a
+	// CREATE ... TEMPLATE copy source, so no build/clone op can be racing them.
+	cloneErr := sweepClones(ctx, admin)
+
+	// Resolve the current run's template name so the reaper keeps it warm. If
+	// the path can't be resolved, the exclusion is skipped (still safe).
+	var currentTemplateName string
+	if migrationsPath != "" {
+		if currentHash, err := templateHashFromInputs(migrationsPath); err == nil {
+			currentTemplateName = templateNameFromHash(currentHash)
+		} else {
+			fmt.Fprintf(os.Stderr, "testdb.CleanStaleDatabases: compute current template hash (skipping current-template exclusion): %v\n", err)
+		}
+	}
+
+	candidates, listErr := listStaleTemplateCandidates(ctx, admin, currentTemplateName)
+	if listErr != nil {
+		return errors.Join(cloneErr, listErr)
+	}
+	dropped, reapErr := reapTemplates(ctx, admin, candidates, currentTemplateName)
+	fmt.Fprintf(os.Stderr, "testdb.CleanStaleDatabases: dropped %d stale template(s) of %d candidate(s)\n", dropped, len(candidates))
+
+	return errors.Join(cloneErr, reapErr)
+}
+
+// sweepClones lists and drops every leaked personal_crm_test_clone_* database on
+// the admin connection. Not run under the advisory lock — clones are never a
+// CREATE ... TEMPLATE copy source. Returns a non-nil error if any guarded clone
+// drop failed.
+func sweepClones(ctx context.Context, admin *pgx.Conn) error {
 	// Pattern: clones are clonePrefix + hex. The literal `_` after `clone` is
 	// escaped so it is not a LIKE single-char wildcard.
 	pattern := `personal_crm_test_clone\_%`
 	rows, err := admin.Query(ctx, `SELECT datname FROM pg_database WHERE datname LIKE $1 ESCAPE '\'`, pattern)
 	if err != nil {
-		return fmt.Errorf("testdb.CleanClones: list clones: %w", err)
+		return fmt.Errorf("testdb.sweepClones: list clones: %w", err)
 	}
 	var names []string
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
 			rows.Close()
-			return fmt.Errorf("testdb.CleanClones: scan: %w", err)
+			return fmt.Errorf("testdb.sweepClones: scan: %w", err)
 		}
 		names = append(names, name)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("testdb.CleanClones: rows: %w", err)
+		return fmt.Errorf("testdb.sweepClones: rows: %w", err)
 	}
 
 	var dropped int
@@ -274,9 +362,132 @@ func CleanClones() error {
 		}
 		dropped++
 	}
-	fmt.Fprintf(os.Stderr, "testdb.CleanClones: dropped %d leaked clone(s)\n", dropped)
+	fmt.Fprintf(os.Stderr, "testdb.sweepClones: dropped %d leaked clone(s)\n", dropped)
 	if len(dropErrs) > 0 {
-		return fmt.Errorf("testdb.CleanClones: %d clone(s) could not be dropped: %w", len(dropErrs), errors.Join(dropErrs...))
+		return fmt.Errorf("testdb.sweepClones: %d clone(s) could not be dropped: %w", len(dropErrs), errors.Join(dropErrs...))
+	}
+	return nil
+}
+
+// listStaleTemplateCandidates returns every hash-named template_<hex> database
+// EXCEPT currentTemplateName. Pure listing — no drops, no lock — so it is safe
+// to run under the parallel suite. The `_` chars in the LIKE pattern are escaped
+// so they are not single-char wildcards.
+func listStaleTemplateCandidates(ctx context.Context, admin *pgx.Conn, currentTemplateName string) ([]string, error) {
+	pattern := `personal_crm_test_template\_%`
+	rows, err := admin.Query(ctx, `SELECT datname FROM pg_database WHERE datname LIKE $1 ESCAPE '\'`, pattern)
+	if err != nil {
+		return nil, fmt.Errorf("testdb.listStaleTemplateCandidates: list templates: %w", err)
+	}
+	defer rows.Close()
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("testdb.listStaleTemplateCandidates: scan: %w", err)
+		}
+		if name == currentTemplateName {
+			continue // keep the current run's template warm
+		}
+		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("testdb.listStaleTemplateCandidates: rows: %w", err)
+	}
+	return names, nil
+}
+
+// reapTemplates drops the stale templates in candidates, the entire pass running
+// under templateBuildAdvisoryLockID — the SAME lock every build/clone holds, so
+// no CREATE ... TEMPLATE copy can be in flight while it runs (the load-bearing
+// safety mechanism; the numbackends skip below is only belt-and-suspenders).
+//
+// Per candidate, under the lock: skip if it is currentTemplateName
+// (defense-in-depth even though the listing already excluded it); skip if it has
+// open backends (a stray manual psql session — never force-terminated); else
+// non-FORCE drop after assertDroppableTestDBName.
+//
+// Return-value contract: a skipped candidate (current-run hash or open backends)
+// is NOT an error — it is an expected, logged skip. The returned error is
+// non-nil ONLY when a guarded drop reapTemplates ATTEMPTED actually failed (an
+// unexpected DROP pgerror, or a listed name failing assertDroppableTestDBName).
+//
+// Tests drive this directly with their own test-unique candidate slice so an
+// automated reaper test never lists, considers, or drops a template it did not
+// itself create — concurrent worktrees and sibling packages stay untouchable.
+func reapTemplates(ctx context.Context, admin *pgx.Conn, candidates []string, currentTemplateName string) (dropped int, err error) {
+	var dropErrs []error
+	lockErr := withAdvisoryLock(ctx, admin, func() error {
+		for _, name := range candidates {
+			if name == currentTemplateName {
+				continue // keep the current run's template warm
+			}
+			backends, err := templateActiveBackends(ctx, admin, name)
+			if err != nil {
+				dropErrs = append(dropErrs, err)
+				continue
+			}
+			if backends > 0 {
+				// A stray manual session is open against this template. Skip
+				// (not an error) rather than force-terminate it: a template is a
+				// potential copy source and a possibly-intentional session.
+				fmt.Fprintf(os.Stderr, "testdb.reapTemplates: skipping %s (%d open backend(s))\n", name, backends)
+				continue
+			}
+			if err := assertDroppableTestDBName(name); err != nil {
+				// A LIKE-matched name failing the guard is unexpected; surface
+				// it rather than dropping it.
+				dropErrs = append(dropErrs, fmt.Errorf("skip non-droppable %q: %w", name, err))
+				continue
+			}
+			if err := dropDatabaseNoForceConn(ctx, admin, name); err != nil {
+				dropErrs = append(dropErrs, err)
+				continue
+			}
+			dropped++
+		}
+		return nil
+	})
+	if lockErr != nil {
+		dropErrs = append(dropErrs, lockErr)
+	}
+	if len(dropErrs) > 0 {
+		return dropped, fmt.Errorf("testdb.reapTemplates: %d template(s) could not be dropped: %w", len(dropErrs), errors.Join(dropErrs...))
+	}
+	return dropped, nil
+}
+
+// templateActiveBackends returns the number of sessions connected to the named
+// database, via the pg_stat_database catalog. A template mid-CREATE ... TEMPLATE
+// copy has ZERO user backends (Postgres copies it without a separate user
+// session), so this count is the secondary skip, NOT the gate that protects
+// against the copy race — the advisory lock is.
+func templateActiveBackends(ctx context.Context, conn *pgx.Conn, name string) (int, error) {
+	var n int
+	err := conn.QueryRow(ctx, `SELECT numbackends FROM pg_stat_database WHERE datname = $1`, name).Scan(&n)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// No catalog row ⇒ the DB does not exist ⇒ zero backends.
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("read active backends for %q: %w", name, err)
+	}
+	return n, nil
+}
+
+// dropDatabaseNoForceConn runs a NON-FORCE DROP DATABASE IF EXISTS after the
+// droppable-name guard. Used ONLY by the template reaper: non-FORCE so that if a
+// backend appears between the numbackends read and the drop, Postgres refuses
+// rather than terminating a live session (a template is a potential copy source
+// and a possibly-intentional manual session). The clone sweep keeps the FORCE
+// variant (dropDatabaseConn); the two branches never cross-feed names.
+func dropDatabaseNoForceConn(ctx context.Context, conn *pgx.Conn, name string) error {
+	if err := assertDroppableTestDBName(name); err != nil {
+		return err
+	}
+	stmt := "DROP DATABASE IF EXISTS " + pgx.Identifier{name}.Sanitize()
+	if _, err := conn.Exec(ctx, stmt); err != nil {
+		return fmt.Errorf("drop database %q: %w", name, err)
 	}
 	return nil
 }
@@ -285,13 +496,15 @@ func CleanClones() error {
 // Template build
 // ---------------------------------------------------------------------------
 
-// ensureTemplate builds or refreshes the template DB under the advisory lock.
-// On exit the template exists and its marker equals the current wantHash.
+// ensureTemplate builds or refreshes the hash-named template DB under the
+// advisory lock. On exit the template for this migration set exists and its
+// marker equals the current wantHash.
 func ensureTemplate(ctx context.Context, baseURL, migPath string) error {
 	wantHash, err := templateHashFromInputs(migPath)
 	if err != nil {
 		return fmt.Errorf("compute template hash: %w", err)
 	}
+	templateName := templateNameFromHash(wantHash)
 
 	admin, err := connectAdmin(ctx, baseURL)
 	if err != nil {
@@ -300,37 +513,53 @@ func ensureTemplate(ctx context.Context, baseURL, migPath string) error {
 	defer func() { _ = admin.Close(ctx) }()
 
 	return withAdvisoryLock(ctx, admin, func() error {
-		exists, err := databaseExists(ctx, admin, templateDBName)
+		exists, err := databaseExists(ctx, admin, templateName)
 		if err != nil {
 			return err
 		}
-		if exists {
-			gotHash, ok, err := readTemplateMarker(ctx, baseURL)
-			if err != nil {
-				return err
-			}
-			if ok && gotHash == wantHash {
-				return nil // reuse as-is
-			}
-			// Stale or marker-less template: rebuild.
-			if err := dropDatabaseConn(ctx, admin, templateDBName); err != nil {
-				return fmt.Errorf("drop stale template: %w", err)
-			}
+		if !exists {
+			return buildTemplate(ctx, admin, baseURL, templateName, migPath, wantHash)
 		}
-		return buildTemplate(ctx, admin, baseURL, migPath, wantHash)
+
+		gotHash, ok, err := readTemplateMarker(ctx, baseURL, templateName)
+		if err != nil {
+			return err
+		}
+		switch {
+		case ok && gotHash == wantHash:
+			// Reuse as-is: the template for this migration set is already built.
+			return nil
+		case !ok:
+			// Missing marker = a crashed/partial build of THIS name (CREATE
+			// DATABASE ran but writeTemplateMarker did not). It is the only
+			// surviving rebuild path: drop the incomplete DB and rebuild so no
+			// clone is ever copied from a template with an incomplete schema.
+			if err := dropDatabaseConn(ctx, admin, templateName); err != nil {
+				return fmt.Errorf("drop partial template: %w", err)
+			}
+			return buildTemplate(ctx, admin, baseURL, templateName, migPath, wantHash)
+		default:
+			// ok && gotHash != wantHash: a complete build recorded a hash other
+			// than the one the name is derived from. Under hash-naming a distinct
+			// hash yields a distinct name, so this is a logically-impossible /
+			// corrupted state, never a routine cross-branch event. Fail loud
+			// rather than silently drop+rebuild (which would mask real
+			// corruption); a developer drops it manually.
+			return fmt.Errorf("template %s has marker hash %s but its name implies %s: corrupted/incompatible template; drop it manually", templateName, gotHash, wantHash)
+		}
 	})
 }
 
-// buildTemplate creates the template DB, runs migrations into it, and writes
-// the marker. Must be called while holding the advisory lock. Disconnects from
-// the template fully before returning so a subsequent CREATE ... TEMPLATE
+// buildTemplate creates the named template DB, runs migrations into it, and
+// writes the marker. Must be called while holding the advisory lock. Disconnects
+// from the template fully before returning so a subsequent CREATE ... TEMPLATE
 // against it (under the same lock by a cloner) cannot fail on a live session.
-func buildTemplate(ctx context.Context, admin *pgx.Conn, baseURL, migPath, wantHash string) error {
-	if err := createDatabaseConn(ctx, admin, templateDBName); err != nil {
+func buildTemplate(ctx context.Context, admin *pgx.Conn, baseURL, templateName, migPath, wantHash string) error {
+	if err := createDatabaseConn(ctx, admin, templateName); err != nil {
 		return fmt.Errorf("create template: %w", err)
 	}
 
-	templateURL, err := withDatabase(baseURL, templateDBName)
+	templateURL, err := withDatabase(baseURL, templateName)
 	if err != nil {
 		return err
 	}
@@ -386,11 +615,11 @@ func writeTemplateMarker(ctx context.Context, templateURL, hash string) error {
 	return nil
 }
 
-// readTemplateMarker reads the marker hash from the template on a short-lived
-// connection. ok is false if the marker table does not exist (a template built
-// by a prior incompatible harness, or a partial build).
-func readTemplateMarker(ctx context.Context, baseURL string) (hash string, ok bool, err error) {
-	templateURL, err := withDatabase(baseURL, templateDBName)
+// readTemplateMarker reads the marker hash from the named template on a
+// short-lived connection. ok is false if the marker table does not exist (a
+// partial/crashed build that created the DB but not the marker).
+func readTemplateMarker(ctx context.Context, baseURL, templateName string) (hash string, ok bool, err error) {
+	templateURL, err := withDatabase(baseURL, templateName)
 	if err != nil {
 		return "", false, err
 	}
@@ -431,6 +660,7 @@ func createCloneFromTemplate(ctx context.Context, baseURL, migPath string) (clon
 	if err != nil {
 		return "", "", fmt.Errorf("compute template hash: %w", err)
 	}
+	templateName := templateNameFromHash(wantHash)
 
 	token, err := randomToken()
 	if err != nil {
@@ -445,17 +675,19 @@ func createCloneFromTemplate(ctx context.Context, baseURL, migPath string) (clon
 	defer func() { _ = admin.Close(ctx) }()
 
 	lockErr := withAdvisoryLock(ctx, admin, func() error {
-		// Re-verify the template still exists and matches wantHash before
-		// cloning, guarding against a concurrent rebuild between ensureTemplate
-		// and here.
-		gotHash, ok, err := readTemplateMarker(ctx, baseURL)
+		// Re-read the marker under the lock right before CREATE ... TEMPLATE.
+		// With hash-naming this is a pure assertion that should never fail after
+		// ensureTemplate just succeeded (a distinct hash would be a distinct
+		// name, so no cross-branch race can trip it); surface it loudly if it
+		// somehow does.
+		gotHash, ok, err := readTemplateMarker(ctx, baseURL, templateName)
 		if err != nil {
 			return fmt.Errorf("re-read template marker: %w", err)
 		}
 		if !ok || gotHash != wantHash {
 			return fmt.Errorf("template marker mismatch before clone (want %s, got %s, present=%t)", wantHash, gotHash, ok)
 		}
-		return createDatabaseFromTemplateConn(ctx, admin, cloneName, templateDBName)
+		return createDatabaseFromTemplateConn(ctx, admin, cloneName, templateName)
 	})
 	if lockErr != nil {
 		return "", "", lockErr
@@ -472,8 +704,9 @@ func createCloneFromTemplate(ctx context.Context, baseURL, migPath string) (clon
 // Name guards (the safety core)
 // ---------------------------------------------------------------------------
 
-// assertCreatableTestDBName accepts only the template and clone_<hex> names.
-// The bare base personal_crm_test is rejected (we never CREATE it).
+// assertCreatableTestDBName accepts only hash-named template_<32-hex> and
+// clone_<hex> names. The bare base personal_crm_test is rejected (we never
+// CREATE it).
 func assertCreatableTestDBName(name string) error {
 	if !dbNamePattern.MatchString(name) {
 		return fmt.Errorf("refusing to CREATE database %q: not a creatable test-family name", name)
@@ -481,8 +714,9 @@ func assertCreatableTestDBName(name string) error {
 	return nil
 }
 
-// assertDroppableTestDBName accepts only the template and clone_<hex> names.
-// The base personal_crm_test, dev personal_crm, postgres, template0/1 are all
+// assertDroppableTestDBName accepts only hash-named template_<32-hex> and
+// clone_<hex> names. The base personal_crm_test, the legacy bare
+// personal_crm_test_template, dev personal_crm, postgres, template0/1 are all
 // rejected by construction.
 func assertDroppableTestDBName(name string) error {
 	if !dbNamePattern.MatchString(name) {
@@ -570,6 +804,22 @@ func databaseExists(ctx context.Context, conn *pgx.Conn, name string) (bool, err
 		return false, fmt.Errorf("check database exists %q: %w", name, err)
 	}
 	return true, nil
+}
+
+// databaseOID returns the pg_database OID of the named database, and ok=false if
+// it does not exist. Used ONLY by the harness's own integration tests to detect
+// a drop+recreate (a recreated DB gets a new OID) WITHOUT writing a sentinel —
+// it is the same maintenance-connection, parameterized, read-only catalog
+// pattern as databaseExists, strictly weaker than the numbackends read.
+func databaseOID(ctx context.Context, conn *pgx.Conn, name string) (oid uint32, ok bool, err error) {
+	err = conn.QueryRow(ctx, `SELECT oid FROM pg_database WHERE datname = $1`, name).Scan(&oid)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("read database oid %q: %w", name, err)
+	}
+	return oid, true, nil
 }
 
 // ---------------------------------------------------------------------------
