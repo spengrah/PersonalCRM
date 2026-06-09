@@ -62,9 +62,19 @@ const (
 	// The env URL MUST point at this database before any DDL runs.
 	baseDBName = "personal_crm_test"
 
-	// templateDBName is the template the per-package and per-test clones are
-	// copied from. Never swept; reused across runs.
-	templateDBName = "personal_crm_test_template"
+	// templatePrefix prefixes every per-migration-set template database. The
+	// full name is templatePrefix + the first templateHashPrefixLen hex chars
+	// of the migration content hash (27 + 32 = 59 ≤ Postgres's 63-char
+	// identifier limit). Each migration set keeps its own template so divergent
+	// branches/worktrees never contend over one name.
+	templatePrefix = "personal_crm_test_template_"
+
+	// templateHashPrefixLen is how many hex chars of the sha256 digest name the
+	// template. 32 hex = 128 bits, collision-free across coexisting migration
+	// sets. MUST stay in sync with the `{32}` quantifier in dbNamePattern: the
+	// regex is the validation counterpart of this constant; change them
+	// together (see the unit assertion in TestTemplateNameArithmetic).
+	templateHashPrefixLen = 32
 
 	// clonePrefix prefixes every per-package / per-test clone database.
 	clonePrefix = "personal_crm_test_clone_"
@@ -84,9 +94,30 @@ const (
 )
 
 // dbNamePattern matches the only database names the harness may CREATE or DROP:
-// the template, and clones whose token is lowercase hex. The bare base
-// personal_crm_test is intentionally NOT matched (we never CREATE or DROP it).
-var dbNamePattern = regexp.MustCompile(`^personal_crm_test_(template|clone_[0-9a-f]+)$`)
+// hash-named templates (template_<32 lowercase hex>), and clones whose token is
+// lowercase hex. The bare base personal_crm_test is intentionally NOT matched
+// (we never CREATE or DROP it), and neither is the legacy bare
+// personal_crm_test_template (the new harness never produces it; reclaim it
+// manually on a dev box with `DROP DATABASE personal_crm_test_template`).
+//
+// The template suffix is pinned to exactly {32} hex — the validation
+// counterpart of templateHashPrefixLen = 32. The two must change together.
+var dbNamePattern = regexp.MustCompile(`^personal_crm_test_(template_[0-9a-f]{32}|clone_[0-9a-f]+)$`)
+
+// templateNameFromHash returns the content-hash-named template DB name for a
+// migration set. hash is the full 64-hex sha256 from templateHashFromInputs;
+// only its first templateHashPrefixLen chars name the template, so two migration
+// sets whose hashes differ within those chars get distinct templates and never
+// contend. Panics if hash is shorter than the prefix length — an internal
+// invariant that holds by construction (templateHashFromInputs always returns a
+// 64-hex digest); the panic makes a future hash-shortening change fail loudly
+// instead of slicing out of range. Never reachable from valid inputs.
+func templateNameFromHash(hash string) string {
+	if len(hash) < templateHashPrefixLen {
+		panic(fmt.Sprintf("testdb: template hash %q shorter than prefix length %d", hash, templateHashPrefixLen))
+	}
+	return templatePrefix + hash[:templateHashPrefixLen]
+}
 
 // originalBaseURL captures the env database URL as it was at SetupPackage entry,
 // BEFORE the package clone rewrite of DATABASE_URL. NewEphemeralClone derives
@@ -285,13 +316,15 @@ func CleanClones() error {
 // Template build
 // ---------------------------------------------------------------------------
 
-// ensureTemplate builds or refreshes the template DB under the advisory lock.
-// On exit the template exists and its marker equals the current wantHash.
+// ensureTemplate builds or refreshes the hash-named template DB under the
+// advisory lock. On exit the template for this migration set exists and its
+// marker equals the current wantHash.
 func ensureTemplate(ctx context.Context, baseURL, migPath string) error {
 	wantHash, err := templateHashFromInputs(migPath)
 	if err != nil {
 		return fmt.Errorf("compute template hash: %w", err)
 	}
+	templateName := templateNameFromHash(wantHash)
 
 	admin, err := connectAdmin(ctx, baseURL)
 	if err != nil {
@@ -300,37 +333,53 @@ func ensureTemplate(ctx context.Context, baseURL, migPath string) error {
 	defer func() { _ = admin.Close(ctx) }()
 
 	return withAdvisoryLock(ctx, admin, func() error {
-		exists, err := databaseExists(ctx, admin, templateDBName)
+		exists, err := databaseExists(ctx, admin, templateName)
 		if err != nil {
 			return err
 		}
-		if exists {
-			gotHash, ok, err := readTemplateMarker(ctx, baseURL)
-			if err != nil {
-				return err
-			}
-			if ok && gotHash == wantHash {
-				return nil // reuse as-is
-			}
-			// Stale or marker-less template: rebuild.
-			if err := dropDatabaseConn(ctx, admin, templateDBName); err != nil {
-				return fmt.Errorf("drop stale template: %w", err)
-			}
+		if !exists {
+			return buildTemplate(ctx, admin, baseURL, templateName, migPath, wantHash)
 		}
-		return buildTemplate(ctx, admin, baseURL, migPath, wantHash)
+
+		gotHash, ok, err := readTemplateMarker(ctx, baseURL, templateName)
+		if err != nil {
+			return err
+		}
+		switch {
+		case ok && gotHash == wantHash:
+			// Reuse as-is: the template for this migration set is already built.
+			return nil
+		case !ok:
+			// Missing marker = a crashed/partial build of THIS name (CREATE
+			// DATABASE ran but writeTemplateMarker did not). It is the only
+			// surviving rebuild path: drop the incomplete DB and rebuild so no
+			// clone is ever copied from a template with an incomplete schema.
+			if err := dropDatabaseConn(ctx, admin, templateName); err != nil {
+				return fmt.Errorf("drop partial template: %w", err)
+			}
+			return buildTemplate(ctx, admin, baseURL, templateName, migPath, wantHash)
+		default:
+			// ok && gotHash != wantHash: a complete build recorded a hash other
+			// than the one the name is derived from. Under hash-naming a distinct
+			// hash yields a distinct name, so this is a logically-impossible /
+			// corrupted state, never a routine cross-branch event. Fail loud
+			// rather than silently drop+rebuild (which would mask real
+			// corruption); a developer drops it manually.
+			return fmt.Errorf("template %s has marker hash %s but its name implies %s: corrupted/incompatible template; drop it manually", templateName, gotHash, wantHash)
+		}
 	})
 }
 
-// buildTemplate creates the template DB, runs migrations into it, and writes
-// the marker. Must be called while holding the advisory lock. Disconnects from
-// the template fully before returning so a subsequent CREATE ... TEMPLATE
+// buildTemplate creates the named template DB, runs migrations into it, and
+// writes the marker. Must be called while holding the advisory lock. Disconnects
+// from the template fully before returning so a subsequent CREATE ... TEMPLATE
 // against it (under the same lock by a cloner) cannot fail on a live session.
-func buildTemplate(ctx context.Context, admin *pgx.Conn, baseURL, migPath, wantHash string) error {
-	if err := createDatabaseConn(ctx, admin, templateDBName); err != nil {
+func buildTemplate(ctx context.Context, admin *pgx.Conn, baseURL, templateName, migPath, wantHash string) error {
+	if err := createDatabaseConn(ctx, admin, templateName); err != nil {
 		return fmt.Errorf("create template: %w", err)
 	}
 
-	templateURL, err := withDatabase(baseURL, templateDBName)
+	templateURL, err := withDatabase(baseURL, templateName)
 	if err != nil {
 		return err
 	}
@@ -386,11 +435,11 @@ func writeTemplateMarker(ctx context.Context, templateURL, hash string) error {
 	return nil
 }
 
-// readTemplateMarker reads the marker hash from the template on a short-lived
-// connection. ok is false if the marker table does not exist (a template built
-// by a prior incompatible harness, or a partial build).
-func readTemplateMarker(ctx context.Context, baseURL string) (hash string, ok bool, err error) {
-	templateURL, err := withDatabase(baseURL, templateDBName)
+// readTemplateMarker reads the marker hash from the named template on a
+// short-lived connection. ok is false if the marker table does not exist (a
+// partial/crashed build that created the DB but not the marker).
+func readTemplateMarker(ctx context.Context, baseURL, templateName string) (hash string, ok bool, err error) {
+	templateURL, err := withDatabase(baseURL, templateName)
 	if err != nil {
 		return "", false, err
 	}
@@ -431,6 +480,7 @@ func createCloneFromTemplate(ctx context.Context, baseURL, migPath string) (clon
 	if err != nil {
 		return "", "", fmt.Errorf("compute template hash: %w", err)
 	}
+	templateName := templateNameFromHash(wantHash)
 
 	token, err := randomToken()
 	if err != nil {
@@ -445,17 +495,19 @@ func createCloneFromTemplate(ctx context.Context, baseURL, migPath string) (clon
 	defer func() { _ = admin.Close(ctx) }()
 
 	lockErr := withAdvisoryLock(ctx, admin, func() error {
-		// Re-verify the template still exists and matches wantHash before
-		// cloning, guarding against a concurrent rebuild between ensureTemplate
-		// and here.
-		gotHash, ok, err := readTemplateMarker(ctx, baseURL)
+		// Re-read the marker under the lock right before CREATE ... TEMPLATE.
+		// With hash-naming this is a pure assertion that should never fail after
+		// ensureTemplate just succeeded (a distinct hash would be a distinct
+		// name, so no cross-branch race can trip it); surface it loudly if it
+		// somehow does.
+		gotHash, ok, err := readTemplateMarker(ctx, baseURL, templateName)
 		if err != nil {
 			return fmt.Errorf("re-read template marker: %w", err)
 		}
 		if !ok || gotHash != wantHash {
 			return fmt.Errorf("template marker mismatch before clone (want %s, got %s, present=%t)", wantHash, gotHash, ok)
 		}
-		return createDatabaseFromTemplateConn(ctx, admin, cloneName, templateDBName)
+		return createDatabaseFromTemplateConn(ctx, admin, cloneName, templateName)
 	})
 	if lockErr != nil {
 		return "", "", lockErr
@@ -472,8 +524,9 @@ func createCloneFromTemplate(ctx context.Context, baseURL, migPath string) (clon
 // Name guards (the safety core)
 // ---------------------------------------------------------------------------
 
-// assertCreatableTestDBName accepts only the template and clone_<hex> names.
-// The bare base personal_crm_test is rejected (we never CREATE it).
+// assertCreatableTestDBName accepts only hash-named template_<32-hex> and
+// clone_<hex> names. The bare base personal_crm_test is rejected (we never
+// CREATE it).
 func assertCreatableTestDBName(name string) error {
 	if !dbNamePattern.MatchString(name) {
 		return fmt.Errorf("refusing to CREATE database %q: not a creatable test-family name", name)
@@ -481,8 +534,9 @@ func assertCreatableTestDBName(name string) error {
 	return nil
 }
 
-// assertDroppableTestDBName accepts only the template and clone_<hex> names.
-// The base personal_crm_test, dev personal_crm, postgres, template0/1 are all
+// assertDroppableTestDBName accepts only hash-named template_<32-hex> and
+// clone_<hex> names. The base personal_crm_test, the legacy bare
+// personal_crm_test_template, dev personal_crm, postgres, template0/1 are all
 // rejected by construction.
 func assertDroppableTestDBName(name string) error {
 	if !dbNamePattern.MatchString(name) {
