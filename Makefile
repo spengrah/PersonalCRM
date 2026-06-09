@@ -16,6 +16,10 @@ E2E_FRONTEND_PORT ?= 3000
 E2E_BACKEND_PORT ?= 8080
 BACKEND_SLOW_TESTS_REGEX := TestSyncWorker_LoadNoDuplicateConcurrentSyncs|TestPeriodicTick_FiresOnStart|TestSyncWorker_RescueOnCrash|TestSynthetic|TestTestdb
 
+# Verbosity for `go test`. Defaults to -v for local readability; CI overrides
+# to empty (GOTEST_VERBOSE=) to cut ~23k log lines. Failures still print.
+GOTEST_VERBOSE ?= -v
+
 # Default target
 # NOTE: When adding or removing make targets, update this help section to match
 help:
@@ -328,19 +332,19 @@ test: test-unit test-integration test-frontend
 
 test-unit:
 	@echo "Running backend unit tests..."
-	@cd backend && go test ./tests/... ./internal/matching/... ./internal/events/... ./internal/service/... ./internal/contacttask/... -v -short
+	@cd backend && go test ./tests/... ./internal/matching/... ./internal/events/... ./internal/service/... ./internal/contacttask/... $(GOTEST_VERBOSE) -short
 
 test-integration-fast:
 	@echo "Running backend integration tests (default set)..."
-	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" go test -tags integration_testdb -count=1 -parallel 4 -p 4 ./tests/... ./internal/todoist/... ./internal/google/... ./internal/testdb/... -v
+	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" go test -tags integration_testdb -count=1 -parallel 4 -p 4 ./tests/... ./internal/todoist/... ./internal/google/... ./internal/testdb/... $(GOTEST_VERBOSE)
 
 test-integration:
 	@echo "Running backend integration tests..."
-	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test -tags integration_testdb -count=1 -parallel 4 -p 4 ./tests/... ./internal/todoist/... ./internal/google/... ./internal/testdb/... -v
+	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test -tags integration_testdb -count=1 -parallel 4 -p 4 ./tests/... ./internal/todoist/... ./internal/google/... ./internal/testdb/... $(GOTEST_VERBOSE)
 
 test-integration-slow:
 	@echo "Running backend slow integration tests..."
-	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test -tags integration_testdb -count=1 -parallel 4 -p 4 ./tests/... ./internal/todoist/... ./internal/google/... ./internal/testdb/... -v -run '$(BACKEND_SLOW_TESTS_REGEX)'
+	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test -tags integration_testdb -count=1 -parallel 4 -p 4 ./tests/... ./internal/todoist/... ./internal/google/... ./internal/testdb/... $(GOTEST_VERBOSE) -run '$(BACKEND_SLOW_TESTS_REGEX)'
 
 # Sweep leaked clone databases (personal_crm_test_clone_*) AND stale
 # per-migration-set template databases (personal_crm_test_template_<hash>).
