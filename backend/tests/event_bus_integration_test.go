@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
 	"testing"
 	"time"
 
@@ -35,32 +34,17 @@ func (*eventBusNoopWorker) Work(_ context.Context, _ *river.Job[eventBusNoopArgs
 	return nil
 }
 
-// newEventBusTestDB runs migrations (including 036) and opens a DB. Mirrors
-// the PR 1 river integration test pattern.
+// newEventBusTestDB opens the package-clone DB. These tests publish only
+// interaction.manual events, which do not route to async consumer jobs, so they
+// do not need a live River fetch loop or a per-test database clone.
 func newEventBusTestDB(t *testing.T, ctx context.Context) (*db.Database, *config.Config) {
 	t.Helper()
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-
-	cfg := config.TestConfig()
-	cfg.Database.URL = databaseURL
-	cfg.Database.MigrationsPath = getMigrationsPath()
-
-	// Migrations are applied once by TestMain.
-
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
-
-	return database, cfg
+	return newSharedTestDB(t, ctx)
 }
 
-// newEventBusTestBus builds a full Bus with a real river client registered
-// against the shared test DB. TestOnly skips leader election / periodic
-// loops. Client is stopped in t.Cleanup.
+// newEventBusTestBus builds a Bus with a River client that is never started.
+// InsertTx does not need a fetch loop, and these tests use event kinds whose
+// routing table returns no jobs.
 func newEventBusTestBus(t *testing.T, ctx context.Context, database *db.Database, cfg *config.Config) *events.Bus {
 	t.Helper()
 	eventRepo := repository.NewEventRepository(database.Queries)
@@ -76,16 +60,6 @@ func newEventBusTestBus(t *testing.T, ctx context.Context, database *db.Database
 		TestOnly: true,
 	})
 	require.NoError(t, err)
-
-	startCtx, startCancel := context.WithTimeout(ctx, 10*time.Second)
-	defer startCancel()
-	require.NoError(t, client.Start(startCtx))
-
-	t.Cleanup(func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer stopCancel()
-		_ = client.Stop(stopCtx)
-	})
 
 	return events.NewBus(database.Pool, client, eventRepo)
 }
@@ -269,6 +243,7 @@ func TestBus_PublishTx_Succeeds_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	database, cfg := newEventBusTestDB(t, ctx)
 	bus := newEventBusTestBus(t, ctx, database, cfg)
@@ -300,6 +275,7 @@ func TestBus_PublishTx_DuplicateSourceID_IsNoOp_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	database, cfg := newEventBusTestDB(t, ctx)
 	bus := newEventBusTestBus(t, ctx, database, cfg)
@@ -345,6 +321,7 @@ func TestBus_Publish_OpensOwnTransaction_AndCommits_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	database, cfg := newEventBusTestDB(t, ctx)
 	bus := newEventBusTestBus(t, ctx, database, cfg)
@@ -372,6 +349,7 @@ func TestBus_PublishTx_ValidationError_NoRowPersisted_Integration(t *testing.T) 
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	database, cfg := newEventBusTestDB(t, ctx)
 	bus := newEventBusTestBus(t, ctx, database, cfg)
@@ -401,6 +379,7 @@ func TestBus_PublishTx_PreGeneratedID_IsRespected_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	database, cfg := newEventBusTestDB(t, ctx)
 	bus := newEventBusTestBus(t, ctx, database, cfg)

@@ -12,6 +12,8 @@ import (
 )
 
 func TestBackoffCalculation(t *testing.T) {
+	t.Parallel()
+
 	backoffIntervals := []time.Duration{
 		1 * time.Minute,
 		5 * time.Minute,
@@ -44,6 +46,8 @@ func TestBackoffCalculation(t *testing.T) {
 }
 
 func TestProviderRegistry(t *testing.T) {
+	t.Parallel()
+
 	t.Run("register and get provider", func(t *testing.T) {
 		registry := psync.NewProviderRegistry()
 
@@ -139,6 +143,8 @@ func TestProviderRegistry(t *testing.T) {
 }
 
 func TestSyncStatus(t *testing.T) {
+	t.Parallel()
+
 	t.Run("sync status constants", func(t *testing.T) {
 		assert.Equal(t, repository.SyncStatus("idle"), repository.SyncStatusIdle)
 		assert.Equal(t, repository.SyncStatus("error"), repository.SyncStatusError)
@@ -147,6 +153,8 @@ func TestSyncStatus(t *testing.T) {
 }
 
 func TestSyncStrategy(t *testing.T) {
+	t.Parallel()
+
 	t.Run("sync strategy constants", func(t *testing.T) {
 		assert.Equal(t, repository.SyncStrategy("contact_driven"), repository.SyncStrategyContactDriven)
 		assert.Equal(t, repository.SyncStrategy("fetch_all"), repository.SyncStrategyFetchAll)
@@ -155,6 +163,8 @@ func TestSyncStrategy(t *testing.T) {
 }
 
 func TestSourceConfig(t *testing.T) {
+	t.Parallel()
+
 	t.Run("source config fields", func(t *testing.T) {
 		config := psync.SourceConfig{
 			Name:                 "gmail",
@@ -175,6 +185,8 @@ func TestSourceConfig(t *testing.T) {
 }
 
 func TestSyncResult(t *testing.T) {
+	t.Parallel()
+
 	t.Run("sync result fields", func(t *testing.T) {
 		result := psync.SyncResult{
 			ItemsProcessed: 100,

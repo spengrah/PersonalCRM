@@ -5,12 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
-	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/scheduler"
@@ -24,23 +22,14 @@ func TestPairingTokenJanitor_DeletesExpired(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
 
 	ctx := context.Background()
-	cfg := config.TestConfig()
-	cfg.Database.URL = databaseURL
-
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	database, _ := newAPISharedTestDB(t, ctx)
 
 	tokenRepo := repository.NewMacHostPairingTokenRepository(database.Queries)
 
 	// Clean any pre-existing rows so the test asserts on a known state.
-	_, err = database.Queries.DeleteAllPairingTokens(ctx)
+	_, err := database.Queries.DeleteAllPairingTokens(ctx)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		// best-effort cleanup

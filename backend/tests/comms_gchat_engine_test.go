@@ -2,12 +2,10 @@ package tests
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
-	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/consumer"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
@@ -46,17 +44,9 @@ func setupGChatEngineTest(t *testing.T) *gchatTestEnv {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
 
 	ctx := context.Background()
-	cfg := config.TestConfig()
-	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	commsRepo := repository.NewCommsMessageRepository(database.Queries)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
@@ -99,10 +89,7 @@ func setupGChatEventBus(
 	t.Helper()
 
 	eventRepo := repository.NewEventRepository(database.Queries)
-	cfg := config.TestConfig()
-	if cfg.River.WorkerConcurrency <= 0 {
-		cfg.River.WorkerConcurrency = 4
-	}
+	workerConcurrency := 2
 
 	workers := river.NewWorkers()
 	shim := &deferredRecorderWorker{}
@@ -113,7 +100,7 @@ func setupGChatEventBus(
 
 	client, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
 		Queues: map[string]river.QueueConfig{
-			river.QueueDefault: {MaxWorkers: cfg.River.WorkerConcurrency},
+			river.QueueDefault: {MaxWorkers: workerConcurrency},
 		},
 		Workers:  workers,
 		TestOnly: true,
@@ -202,6 +189,7 @@ func softDeleteCommsRow(e *gchatTestEnv, id uuid.UUID) error {
 // interaction_id set. This test FAILS OUTRIGHT if the gchat StagingProcessor
 // entry is missing (recorder's zero-rows rollback fires).
 func TestGChatEngine_BurstCreatePath(t *testing.T) {
+	t.Parallel()
 	e := setupGChatEngineTest(t)
 	gen, _ := migrationGenerator(t)
 	suffix := gen.Prefix()
@@ -232,6 +220,7 @@ func TestGChatEngine_BurstCreatePath(t *testing.T) {
 // row within 48h; the outbound interaction is promoted to mutual (time-window
 // bridge). A second case: inbound after 48h stays a separate interaction.
 func TestGChatEngine_ReplyBridgeToMutual(t *testing.T) {
+	t.Parallel()
 	e := setupGChatEngineTest(t)
 	gen, _ := migrationGenerator(t)
 	suffix := gen.Prefix()
@@ -286,6 +275,7 @@ func TestGChatEngine_ReplyBridgeToMutual(t *testing.T) {
 // (simulating an edit) WITHOUT clearing processed_at does not create a new
 // interaction on re-aggregate.
 func TestGChatEngine_EditNoOp(t *testing.T) {
+	t.Parallel()
 	e := setupGChatEngineTest(t)
 	gen, _ := migrationGenerator(t)
 	suffix := gen.Prefix()
@@ -314,6 +304,7 @@ func TestGChatEngine_EditNoOp(t *testing.T) {
 // soft-deleted row: an unprocessed row that is soft-deleted before aggregation
 // produces no interaction.
 func TestGChatEngine_DeleteNoOp(t *testing.T) {
+	t.Parallel()
 	e := setupGChatEngineTest(t)
 	gen, _ := migrationGenerator(t)
 	suffix := gen.Prefix()
@@ -338,6 +329,7 @@ func TestGChatEngine_DeleteNoOp(t *testing.T) {
 // it. Also verifies ClearStaleClaimTx clears a matching-ref claim and leaves a
 // different-ref claim untouched.
 func TestGChatEngine_ClaimRaceRecovery(t *testing.T) {
+	t.Parallel()
 	e := setupGChatEngineTest(t)
 	gen, _ := migrationGenerator(t)
 	suffix := gen.Prefix()
@@ -368,6 +360,7 @@ func TestGChatEngine_ClaimRaceRecovery(t *testing.T) {
 // stale-claim clearing predicate: a matching expected-ref claim is cleared; a
 // different-ref claim is left untouched.
 func TestGChatEngine_ClearStaleClaimTx(t *testing.T) {
+	t.Parallel()
 	e := setupGChatEngineTest(t)
 	gen, _ := migrationGenerator(t)
 	suffix := gen.Prefix()
@@ -410,6 +403,7 @@ func TestGChatEngine_ClearStaleClaimTx(t *testing.T) {
 // MATCHING session ref is marked processed; a DIFFERENT session ref is rejected (zero
 // rows affected — the recorder's rollback trigger).
 func TestGChatEngine_MarkProcessedForSessionBoundaryShift(t *testing.T) {
+	t.Parallel()
 	e := setupGChatEngineTest(t)
 	gen, _ := migrationGenerator(t)
 	suffix := gen.Prefix()

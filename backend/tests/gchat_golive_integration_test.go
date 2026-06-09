@@ -44,6 +44,7 @@ import (
 // TestGChatGoLive_RegisteredProvider_SchedulerSweep_ProducesInteractionsAndCadence
 // is the PR-3 go-live acceptance test.
 func TestGChatGoLive_RegisteredProvider_SchedulerSweep_ProducesInteractionsAndCadence(t *testing.T) {
+	t.Parallel()
 	e := setupGChatEngineTest(t) // engine + live bus + recorder + cadence + repos
 	gen, _ := migrationGenerator(t)
 	prefix := gen.Prefix()

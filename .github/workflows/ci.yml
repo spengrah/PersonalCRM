@@ -26,6 +26,76 @@ jobs:
       - name: Check path-filters parity
         run: bash scripts/ci/path-filters-parity-guard.sh
 
+  backend-quality:
+    name: Backend Quality
+    runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ needs.changes.outputs.backend == 'true' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache-dependency-path: backend/go.sum
+
+      # The Makefile defaults GOCACHE to a workspace-local dir via `?=`, which
+      # would bypass setup-go's restored ~/.cache/go-build for every make-driven
+      # Go build. Pin GOCACHE to setup-go's default so make-invoked builds reuse
+      # the warm cache. `go env GOCACHE` returns the default here because GOCACHE
+      # is not set in the shell env (the Makefile only exports it inside make).
+      - name: Pin GOCACHE to setup-go cache
+        run: echo "GOCACHE=$(go env GOCACHE)" >> "$GITHUB_ENV"
+
+      - name: Download Go modules
+        working-directory: backend
+        run: go mod download
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+          working-directory: backend
+          args: --timeout=5m
+
+      - name: Check cadence sole-writer invariant
+        run: ./scripts/check-cadence-sole-writer.sh
+
+      - name: Check follow-up sole-writer invariant
+        run: ./scripts/ci/followup-sole-writer-guard.sh
+
+      - name: Check rematch sole-dispatcher invariant
+        run: ./scripts/ci/rematch-sole-dispatcher-guard.sh
+
+      - name: Check CRM-marker construction invariant
+        run: ./scripts/ci/crm-marker-construction-guard.sh
+
+      - name: Check sqlc SELECT-list duplication invariant
+        run: ./scripts/ci/sqlc-select-list-guard.sh
+
+      - name: Check ingest-registry descriptor invariant
+        run: ./scripts/check-ingest-registry.sh
+
+      - name: Cross-compile for ARM64
+        working-directory: backend
+        env:
+          GOOS: linux
+          GOARCH: arm64
+        run: go build -o bin/crm-api-arm64 cmd/crm-api/main.go
+
+      - name: Cross-compile crm-admin for ARM64
+        working-directory: backend
+        env:
+          GOOS: linux
+          GOARCH: arm64
+        # crm-admin is built only at deploy time (scripts/deploy.sh), so a
+        # compile error in its single-file main.go (e.g. a new --seed subcommand
+        # type not defined there) would otherwise ship uncaught. This guards it.
+        run: go build -o bin/crm-admin-arm64 cmd/crm-admin/main.go
+
   backend-tests:
     name: Backend Tests
     runs-on: ubuntu-latest
@@ -58,55 +128,19 @@ jobs:
           go-version: '1.23'
           cache-dependency-path: backend/go.sum
 
+      # See backend-quality: pin GOCACHE so make-invoked builds (the
+      # integration step calls `make test-integration-fast`) reuse setup-go's
+      # warm cache instead of the Makefile's workspace-local default.
+      - name: Pin GOCACHE to setup-go cache
+        run: echo "GOCACHE=$(go env GOCACHE)" >> "$GITHUB_ENV"
+
       - name: Download Go modules
         working-directory: backend
         run: go mod download
 
-      - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v9
-        with:
-          version: latest
-          working-directory: backend
-          args: --timeout=5m
-
-      - name: Check cadence sole-writer invariant
-        run: ./scripts/check-cadence-sole-writer.sh
-
-      - name: Check follow-up sole-writer invariant
-        run: ./scripts/ci/followup-sole-writer-guard.sh
-
-      - name: Check rematch sole-dispatcher invariant
-        run: ./scripts/ci/rematch-sole-dispatcher-guard.sh
-
-      - name: Check CRM-marker construction invariant
-        run: ./scripts/ci/crm-marker-construction-guard.sh
-
-      - name: Check sqlc SELECT-list duplication invariant
-        run: ./scripts/ci/sqlc-select-list-guard.sh
-
-      - name: Check ingest-registry descriptor invariant
-        run: ./scripts/check-ingest-registry.sh
-
       - name: Run unit tests
         working-directory: backend
-        run: go test -short -v ./...
-
-      - name: Cross-compile for ARM64
-        working-directory: backend
-        env:
-          GOOS: linux
-          GOARCH: arm64
-        run: go build -o bin/crm-api-arm64 cmd/crm-api/main.go
-
-      - name: Cross-compile crm-admin for ARM64
-        working-directory: backend
-        env:
-          GOOS: linux
-          GOARCH: arm64
-        # crm-admin is built only at deploy time (scripts/deploy.sh), so a
-        # compile error in its single-file main.go (e.g. a new --seed subcommand
-        # type not defined there) would otherwise ship uncaught. This guards it.
-        run: go build -o bin/crm-admin-arm64 cmd/crm-admin/main.go
+        run: go test -short ./...
 
       - name: Wait for PostgreSQL
         run: |
@@ -118,6 +152,7 @@ jobs:
           NODE_ENV: test
           SESSION_SECRET: test-session-secret-for-ci
           API_KEY: test-api-key-for-ci
+          GOTEST_VERBOSE: ""
         run: make test-integration-fast
 
   frontend-tests:
@@ -329,6 +364,12 @@ jobs:
         with:
           go-version: '1.23'
           cache-dependency-path: backend/go.sum
+
+      # The Playwright webServer launches the backend via `go run`; pin GOCACHE
+      # to setup-go's warm cache for consistency with the backend jobs (and to
+      # cover any future make-driven build added here).
+      - name: Pin GOCACHE to setup-go cache
+        run: echo "GOCACHE=$(go env GOCACHE)" >> "$GITHUB_ENV"
 
       - name: Download Go modules
         working-directory: backend

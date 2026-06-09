@@ -19,6 +19,8 @@ func init() {
 
 // TestContactValidation_FullName tests FullName validation
 func TestContactValidation_FullName(t *testing.T) {
+	t.Parallel()
+
 	type Contact struct {
 		FullName string `validate:"required,min=1,max=255"`
 	}
@@ -52,6 +54,8 @@ func TestContactValidation_FullName(t *testing.T) {
 
 // TestContactMethodValidation_Type tests method type validation
 func TestContactMethodValidation_Type(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name      string
 		method    handlers.ContactMethodRequest
@@ -78,6 +82,8 @@ func TestContactMethodValidation_Type(t *testing.T) {
 
 // TestContactMethodValidation_Value tests method value validation
 func TestContactMethodValidation_Value(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name      string
 		method    handlers.ContactMethodRequest
@@ -104,6 +110,8 @@ func TestContactMethodValidation_Value(t *testing.T) {
 
 // TestContactValidation_Location tests Location validation
 func TestContactValidation_Location(t *testing.T) {
+	t.Parallel()
+
 	type Contact struct {
 		Location *string `validate:"omitempty,max=255"`
 	}
@@ -135,6 +143,8 @@ func TestContactValidation_Location(t *testing.T) {
 
 // TestContactValidation_HowMet tests HowMet validation
 func TestContactValidation_HowMet(t *testing.T) {
+	t.Parallel()
+
 	type Contact struct {
 		HowMet *string `validate:"omitempty,max=500"`
 	}
@@ -166,6 +176,8 @@ func TestContactValidation_HowMet(t *testing.T) {
 
 // TestContactValidation_Cadence tests Cadence validation
 func TestContactValidation_Cadence(t *testing.T) {
+	t.Parallel()
+
 	type Contact struct {
 		Cadence *string `validate:"omitempty,oneof=weekly biweekly monthly quarterly biannual annual"`
 	}
@@ -203,6 +215,8 @@ func TestContactValidation_Cadence(t *testing.T) {
 
 // TestContactValidation_Notes tests Notes validation
 func TestContactValidation_Notes(t *testing.T) {
+	t.Parallel()
+
 	type Contact struct {
 		Notes *string `validate:"omitempty,max=2000"`
 	}
@@ -237,6 +251,8 @@ func TestContactValidation_Notes(t *testing.T) {
 
 // TestContactValidation_ProfilePhoto tests ProfilePhoto URL validation
 func TestContactValidation_ProfilePhoto(t *testing.T) {
+	t.Parallel()
+
 	type Contact struct {
 		ProfilePhoto *string `validate:"omitempty,url,max=500"`
 	}
@@ -271,6 +287,8 @@ func TestContactValidation_ProfilePhoto(t *testing.T) {
 
 // TestQueryValidation_Page tests Page validation
 func TestQueryValidation_Page(t *testing.T) {
+	t.Parallel()
+
 	type Query struct {
 		Page int `validate:"omitempty,min=1"`
 	}
@@ -302,6 +320,8 @@ func TestQueryValidation_Page(t *testing.T) {
 
 // TestQueryValidation_Limit tests Limit validation
 func TestQueryValidation_Limit(t *testing.T) {
+	t.Parallel()
+
 	type Query struct {
 		Limit int `validate:"omitempty,min=1,max=1000"`
 	}
@@ -335,6 +355,8 @@ func TestQueryValidation_Limit(t *testing.T) {
 
 // TestQueryValidation_Search tests Search validation
 func TestQueryValidation_Search(t *testing.T) {
+	t.Parallel()
+
 	type Query struct {
 		Search string `validate:"omitempty,max=255"`
 	}
@@ -366,6 +388,8 @@ func TestQueryValidation_Search(t *testing.T) {
 
 // TestQueryValidation_Sort tests Sort field validation
 func TestQueryValidation_Sort(t *testing.T) {
+	t.Parallel()
+
 	type Query struct {
 		Sort string `validate:"omitempty,oneof=name location birthday last_contacted last_response_at contact_by cadence"`
 	}
@@ -403,6 +427,8 @@ func TestQueryValidation_Sort(t *testing.T) {
 
 // TestQueryValidation_Order tests Order validation
 func TestQueryValidation_Order(t *testing.T) {
+	t.Parallel()
+
 	type Query struct {
 		Order string `validate:"omitempty,oneof=asc desc"`
 	}
@@ -435,6 +461,8 @@ func TestQueryValidation_Order(t *testing.T) {
 
 // TestComplexValidation_MultipleFields tests validation with multiple fields
 func TestComplexValidation_MultipleFields(t *testing.T) {
+	t.Parallel()
+
 	type Contact struct {
 		FullName     string  `validate:"required,min=1,max=255"`
 		Cadence      *string `validate:"omitempty,oneof=weekly biweekly monthly quarterly biannual annual"`

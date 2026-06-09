@@ -92,6 +92,7 @@ backend/bin/
 backend/crm-api
 backend/crm-admin
 backend/main
+backend/*.test
 backend/*.exe
 backend/*.exe~
 backend/*.dll

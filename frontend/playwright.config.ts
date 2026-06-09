@@ -1,6 +1,11 @@
 import { defineConfig, devices } from '@playwright/test'
 import os from 'os'
 
+const frontendPort = process.env.E2E_FRONTEND_PORT || '3000'
+const backendPort = process.env.E2E_BACKEND_PORT || '8080'
+const frontendURL = `http://localhost:${frontendPort}`
+const backendURL = `http://localhost:${backendPort}`
+
 export default defineConfig({
   testDir: './tests/e2e',
   fullyParallel: true,
@@ -26,7 +31,7 @@ export default defineConfig({
   })(),
   reporter: [['html', { open: 'never' }], ['list']],
   use: {
-    baseURL: 'http://localhost:3000',
+    baseURL: frontendURL,
     trace: process.env.CI ? 'on-first-retry' : 'off',
     screenshot: 'only-on-failure',
     video: 'off',
@@ -53,19 +58,24 @@ export default defineConfig({
   webServer: [
     {
       command: 'bun run dev -- --hostname 127.0.0.1',
-      url: 'http://localhost:3000',
+      url: frontendURL,
       reuseExistingServer: !process.env.CI,
       timeout: 120000,
       stdout: 'pipe',
       env: {
         ...process.env,
         NODE_ENV: 'development',
-        PORT: '3000',
+        PORT: frontendPort,
+        NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || backendURL,
+        NEXT_PUBLIC_API_KEY:
+          process.env.NEXT_PUBLIC_API_KEY ||
+          process.env.API_KEY ||
+          'dev-api-key-change-in-production',
       },
     },
     {
       command: 'cd ../backend && go run cmd/crm-api/main.go',
-      url: 'http://localhost:8080/health',
+      url: `${backendURL}/health`,
       reuseExistingServer: !process.env.CI,
       timeout: 120000,
       stdout: 'pipe',
@@ -76,6 +86,8 @@ export default defineConfig({
           process.env.DATABASE_URL ||
           'postgres://crm_user:crm_password@localhost:5432/personal_crm_test?sslmode=disable',
         API_KEY: process.env.API_KEY || 'dev-api-key-change-in-production',
+        PORT: backendPort,
+        FRONTEND_URL: frontendURL,
         MIGRATIONS_PATH: 'migrations',
         CRM_ENV: 'testing',
         ENABLE_EXTERNAL_SYNC: 'true',

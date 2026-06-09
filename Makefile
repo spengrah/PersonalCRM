@@ -10,7 +10,15 @@ GOCACHE ?= $(REPO_ROOT)/.gocache
 export GOCACHE
 
 TEST_DATABASE_URL ?= postgres://crm_user:crm_password@localhost:5432/personal_crm_test?sslmode=disable
+E2E_DATABASE_NAME ?= personal_crm_test
+E2E_DATABASE_URL ?= postgres://crm_user:crm_password@localhost:5432/$(E2E_DATABASE_NAME)?sslmode=disable
+E2E_FRONTEND_PORT ?= 3000
+E2E_BACKEND_PORT ?= 8080
 BACKEND_SLOW_TESTS_REGEX := TestSyncWorker_LoadNoDuplicateConcurrentSyncs|TestPeriodicTick_FiresOnStart|TestSyncWorker_RescueOnCrash|TestSynthetic|TestTestdb
+
+# Verbosity for `go test`. Defaults to -v for local readability; CI overrides
+# to empty (GOTEST_VERBOSE=) to cut ~23k log lines. Failures still print.
+GOTEST_VERBOSE ?= -v
 
 # Default target
 # NOTE: When adding or removing make targets, update this help section to match
@@ -217,20 +225,18 @@ dev-native: postgres-native
 
 test-e2e: e2e-db
 	@echo "Cleaning up any conflicting processes..."
-	@-pkill -f "playwright" 2>/dev/null || true
-	@-pkill -f "next.*dev" 2>/dev/null || true
-	@-lsof -ti:3000 | xargs -r kill -9 2>/dev/null || true
-	@-lsof -ti:8080 | xargs -r kill -9 2>/dev/null || true
+	@-lsof -ti:$(E2E_FRONTEND_PORT) | xargs -r kill -9 2>/dev/null || true
+	@-lsof -ti:$(E2E_BACKEND_PORT) | xargs -r kill -9 2>/dev/null || true
 	@sleep 1
 	@echo "Running Playwright E2E tests..."
 	@ENV_FILE=$${ENV_FILE:-$(REPO_ROOT)/.env.example.testing}; \
 	if [ ! -f "$$ENV_FILE" ]; then echo "❌ ENV file not found: $$ENV_FILE"; exit 1; fi; \
 	set -a; . "$$ENV_FILE"; set +a; \
-	export DATABASE_URL="postgres://crm_user:crm_password@localhost:5432/personal_crm_test?sslmode=disable"; \
+	export DATABASE_URL="$(E2E_DATABASE_URL)"; \
 	if [ -f "$(REPO_ROOT)/frontend/.env.local" ]; then mv "$(REPO_ROOT)/frontend/.env.local" "$(REPO_ROOT)/frontend/.env.local.bak"; fi; \
 	echo "NEXT_PUBLIC_API_KEY=$$API_KEY" > "$(REPO_ROOT)/frontend/.env.local"; \
-	echo "NEXT_PUBLIC_API_URL=http://localhost:8080" >> "$(REPO_ROOT)/frontend/.env.local"; \
-	cd "$(REPO_ROOT)/frontend" && DATABASE_URL="$$DATABASE_URL" API_KEY=$$API_KEY NEXT_PUBLIC_API_KEY=$$API_KEY NEXT_PUBLIC_API_URL=http://localhost:8080 ./node_modules/.bin/playwright test --project=chromium; \
+	echo "NEXT_PUBLIC_API_URL=http://localhost:$(E2E_BACKEND_PORT)" >> "$(REPO_ROOT)/frontend/.env.local"; \
+	cd "$(REPO_ROOT)/frontend" && DATABASE_URL="$$DATABASE_URL" API_KEY=$$API_KEY NEXT_PUBLIC_API_KEY=$$API_KEY NEXT_PUBLIC_API_URL=http://localhost:$(E2E_BACKEND_PORT) E2E_FRONTEND_PORT="$(E2E_FRONTEND_PORT)" E2E_BACKEND_PORT="$(E2E_BACKEND_PORT)" ./node_modules/.bin/playwright test --project=chromium; \
 	EXIT_CODE=$$?; \
 	rm -f "$(REPO_ROOT)/frontend/.env.local"; \
 	if [ -f "$(REPO_ROOT)/frontend/.env.local.bak" ]; then mv "$(REPO_ROOT)/frontend/.env.local.bak" "$(REPO_ROOT)/frontend/.env.local"; fi; \
@@ -238,22 +244,20 @@ test-e2e: e2e-db
 
 test-e2e-local: e2e-db
 	@echo "Cleaning up any conflicting processes..."
-	@-pkill -f "playwright" 2>/dev/null || true
-	@-pkill -f "next.*dev" 2>/dev/null || true
-	@-lsof -ti:3000 | xargs -r kill -9 2>/dev/null || true
-	@-lsof -ti:8080 | xargs -r kill -9 2>/dev/null || true
+	@-lsof -ti:$(E2E_FRONTEND_PORT) | xargs -r kill -9 2>/dev/null || true
+	@-lsof -ti:$(E2E_BACKEND_PORT) | xargs -r kill -9 2>/dev/null || true
 	@sleep 1
 	@echo "Running Playwright E2E tests (local selection)..."
 	@ENV_FILE=$${ENV_FILE:-$(REPO_ROOT)/.env.example.testing}; \
 	if [ ! -f "$$ENV_FILE" ]; then echo "❌ ENV file not found: $$ENV_FILE"; exit 1; fi; \
 	set -a; . "$$ENV_FILE"; set +a; \
-	export DATABASE_URL="postgres://crm_user:crm_password@localhost:5432/personal_crm_test?sslmode=disable"; \
+	export DATABASE_URL="$(E2E_DATABASE_URL)"; \
 	if [ -f "$(REPO_ROOT)/frontend/.env.local" ]; then mv "$(REPO_ROOT)/frontend/.env.local" "$(REPO_ROOT)/frontend/.env.local.bak"; fi; \
 	echo "NEXT_PUBLIC_API_KEY=$$API_KEY" > "$(REPO_ROOT)/frontend/.env.local"; \
-	echo "NEXT_PUBLIC_API_URL=http://localhost:8080" >> "$(REPO_ROOT)/frontend/.env.local"; \
+	echo "NEXT_PUBLIC_API_URL=http://localhost:$(E2E_BACKEND_PORT)" >> "$(REPO_ROOT)/frontend/.env.local"; \
 	GREP_ARGS=""; \
 	if [ -n "$$PLAYWRIGHT_GREP" ]; then GREP_ARGS="--grep $$PLAYWRIGHT_GREP"; fi; \
-	cd "$(REPO_ROOT)/frontend" && DATABASE_URL="$$DATABASE_URL" API_KEY=$$API_KEY NEXT_PUBLIC_API_KEY=$$API_KEY NEXT_PUBLIC_API_URL=http://localhost:8080 ./node_modules/.bin/playwright test --project=chromium $$GREP_ARGS; \
+	cd "$(REPO_ROOT)/frontend" && DATABASE_URL="$$DATABASE_URL" API_KEY=$$API_KEY NEXT_PUBLIC_API_KEY=$$API_KEY NEXT_PUBLIC_API_URL=http://localhost:$(E2E_BACKEND_PORT) E2E_FRONTEND_PORT="$(E2E_FRONTEND_PORT)" E2E_BACKEND_PORT="$(E2E_BACKEND_PORT)" ./node_modules/.bin/playwright test --project=chromium $$GREP_ARGS; \
 	EXIT_CODE=$$?; \
 	rm -f "$(REPO_ROOT)/frontend/.env.local"; \
 	if [ -f "$(REPO_ROOT)/frontend/.env.local.bak" ]; then mv "$(REPO_ROOT)/frontend/.env.local.bak" "$(REPO_ROOT)/frontend/.env.local"; fi; \
@@ -264,20 +268,22 @@ test-e2e-diff: e2e-db
 
 e2e-db:
 	@bash "$(REPO_ROOT)/scripts/ensure-postgres-for-tests.sh"
-	@echo "Setting up isolated E2E test database..."
+	@echo "Setting up isolated E2E test database ($(E2E_DATABASE_NAME))..."
+	@case "$(E2E_DATABASE_NAME)" in (*[!A-Za-z0-9_]*|'') echo "Invalid E2E_DATABASE_NAME: $(E2E_DATABASE_NAME)" >&2; exit 1;; esac
+	@case "$(E2E_DATABASE_NAME)" in (personal_crm_test|personal_crm_test_[A-Za-z0-9_]*) ;; (*) echo "Invalid E2E_DATABASE_NAME: $(E2E_DATABASE_NAME) (must be personal_crm_test or personal_crm_test_<suffix>)" >&2; exit 1;; esac
 	@if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then \
-		docker exec crm-postgres psql -U crm_user -d postgres -c "DROP DATABASE IF EXISTS personal_crm_test;" 2>/dev/null || true; \
-		docker exec crm-postgres psql -U crm_user -d postgres -c "CREATE DATABASE personal_crm_test;" 2>/dev/null; \
-		docker exec crm-postgres psql -U crm_user -d personal_crm_test -c "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"; CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null; \
+		docker exec crm-postgres psql -U crm_user -d postgres -c "DROP DATABASE IF EXISTS \"$(E2E_DATABASE_NAME)\";" 2>/dev/null || true; \
+		docker exec crm-postgres psql -U crm_user -d postgres -c "CREATE DATABASE \"$(E2E_DATABASE_NAME)\";" 2>/dev/null; \
+		docker exec crm-postgres psql -U crm_user -d "$(E2E_DATABASE_NAME)" -c "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"; CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null; \
 	else \
 		if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='crm_user';" | grep -q 1; then \
 			echo "crm_user role missing; run scripts/start-postgres-native.sh first" >&2; \
 			exit 1; \
 		fi; \
-		sudo -u postgres psql -c "DROP DATABASE IF EXISTS personal_crm_test;" 2>/dev/null || true; \
-		sudo -u postgres psql -c "CREATE DATABASE personal_crm_test OWNER crm_user;" 2>/dev/null; \
-		sudo -u postgres psql -d personal_crm_test -c "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"; CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null; \
-		sudo -u postgres psql -d personal_crm_test -c "GRANT ALL ON SCHEMA public TO crm_user;" 2>/dev/null; \
+		sudo -u postgres psql -c "DROP DATABASE IF EXISTS \"$(E2E_DATABASE_NAME)\";" 2>/dev/null || true; \
+		sudo -u postgres psql -c "CREATE DATABASE \"$(E2E_DATABASE_NAME)\" OWNER crm_user;" 2>/dev/null; \
+		sudo -u postgres psql -d "$(E2E_DATABASE_NAME)" -c "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"; CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null; \
+		sudo -u postgres psql -d "$(E2E_DATABASE_NAME)" -c "GRANT ALL ON SCHEMA public TO crm_user;" 2>/dev/null; \
 	fi
 	@echo "✓ E2E test database ready"
 
@@ -326,19 +332,19 @@ test: test-unit test-integration test-frontend
 
 test-unit:
 	@echo "Running backend unit tests..."
-	@cd backend && go test ./tests/... ./internal/matching/... ./internal/events/... ./internal/service/... ./internal/contacttask/... -v -short
+	@cd backend && go test ./tests/... ./internal/matching/... ./internal/events/... ./internal/service/... ./internal/contacttask/... $(GOTEST_VERBOSE) -short
 
 test-integration-fast:
 	@echo "Running backend integration tests (default set)..."
-	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" go test -tags integration_testdb -count=1 -parallel 4 -p 4 ./tests/... ./internal/todoist/... ./internal/google/... ./internal/testdb/... -v
+	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" go test -tags integration_testdb -count=1 -parallel 4 -p 4 ./tests/... ./internal/todoist/... ./internal/google/... ./internal/testdb/... $(GOTEST_VERBOSE)
 
 test-integration:
 	@echo "Running backend integration tests..."
-	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test -tags integration_testdb -count=1 -parallel 4 -p 4 ./tests/... ./internal/todoist/... ./internal/google/... ./internal/testdb/... -v
+	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test -tags integration_testdb -count=1 -parallel 4 -p 4 ./tests/... ./internal/todoist/... ./internal/google/... ./internal/testdb/... $(GOTEST_VERBOSE)
 
 test-integration-slow:
 	@echo "Running backend slow integration tests..."
-	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test -tags integration_testdb -count=1 -parallel 4 -p 4 ./tests/... ./internal/todoist/... ./internal/google/... ./internal/testdb/... -v -run '$(BACKEND_SLOW_TESTS_REGEX)'
+	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test -tags integration_testdb -count=1 -parallel 4 -p 4 ./tests/... ./internal/todoist/... ./internal/google/... ./internal/testdb/... $(GOTEST_VERBOSE) -run '$(BACKEND_SLOW_TESTS_REGEX)'
 
 # Sweep leaked clone databases (personal_crm_test_clone_*) AND stale
 # per-migration-set template databases (personal_crm_test_template_<hash>).

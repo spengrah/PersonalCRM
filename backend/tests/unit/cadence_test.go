@@ -12,6 +12,8 @@ import (
 
 // TestParseCadence tests parsing of cadence strings
 func TestParseCadence(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		input    string
 		expected cadence.CadenceType
@@ -44,6 +46,8 @@ func TestParseCadence(t *testing.T) {
 
 // TestCalculateNextDueDate tests calculation of next due dates
 func TestCalculateNextDueDate(t *testing.T) {
+	t.Parallel()
+
 	baseDate := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 
 	tests := []struct {
@@ -138,6 +142,8 @@ func TestCalculateNextDueDate(t *testing.T) {
 
 // TestIsOverdue tests overdue detection
 func TestIsOverdue(t *testing.T) {
+	t.Parallel()
+
 	now := time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC) // Jan 15, 2024
 
 	tests := []struct {
@@ -208,6 +214,8 @@ func TestIsOverdue(t *testing.T) {
 
 // TestGetOverdueDays tests overdue days calculation
 func TestGetOverdueDays(t *testing.T) {
+	t.Parallel()
+
 	now := time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC) // Jan 15, 2024
 
 	tests := []struct {
@@ -257,6 +265,8 @@ func TestGetOverdueDays(t *testing.T) {
 
 // TestGetDaysUntilDue tests days until due calculation
 func TestGetDaysUntilDue(t *testing.T) {
+	t.Parallel()
+
 	now := time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC) // Jan 15, 2024
 
 	tests := []struct {
@@ -500,6 +510,8 @@ func TestGetOverdueDaysWithConfig(t *testing.T) {
 
 // TestBiweeklyCadenceComprehensive tests biweekly cadence across all functions
 func TestBiweeklyCadenceComprehensive(t *testing.T) {
+	t.Parallel()
+
 	now := time.Date(2024, 1, 22, 12, 0, 0, 0, time.UTC)
 	lastContact := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC) // 21 days ago
 	created := time.Date(2023, 12, 1, 12, 0, 0, 0, time.UTC)
