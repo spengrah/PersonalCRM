@@ -2,11 +2,9 @@ package tests
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
 
-	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
@@ -32,23 +30,16 @@ type abReconcileEnv struct {
 // setupABReconcileEnv wires a real reconcile service with a live event
 // bus + rematch service (a stub email/phone handler makes those method
 // types eligible so the matched-branch auto-propagate publishes
-// contact_methods.added). Migrations are applied by TestMain via the
-// template clone.
+// contact_methods.added). Each test gets its own ephemeral clone so the live
+// River client can use TestOnly without sharing river_job across tests.
 func setupABReconcileEnv(t *testing.T) *abReconcileEnv {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
 
-	cfg := config.TestConfig()
-	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(context.Background(), cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	ctx := context.Background()
+	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	methodRepo := repository.NewContactMethodRepository(database.Queries)
@@ -62,7 +53,7 @@ func setupABReconcileEnv(t *testing.T) *abReconcileEnv {
 	rematchSvc := service.NewRematchService()
 	rematchSvc.Register(stubRematchHandler{idType: "email"})
 	rematchSvc.Register(stubRematchHandler{idType: "phone"})
-	bus := setupTestEventBusWithRematch(t, context.Background(), database, contactService, rematchSvc)
+	bus := setupTestEventBusWithRematch(t, ctx, database, contactService, rematchSvc)
 
 	enrichmentSvc := service.NewEnrichmentService(database, contactRepo, methodRepo, enrichmentRepo, bus, rematchSvc)
 	reconcile := service.NewAddressBookReconcileService(enrichmentSvc, contactRepo, methodRepo, externalRepo)
@@ -160,6 +151,7 @@ func contactHasMethod(t *testing.T, ctx context.Context, env *abReconcileEnv, co
 // --- matched -> auto-propagate (+ rematch event) ------------------------
 
 func TestABReconcile_Matched_AutoPropagates(t *testing.T) {
+	t.Parallel()
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
 	email := "matched-" + abSuffix(t) + "@example.com"
@@ -184,6 +176,7 @@ func TestABReconcile_Matched_AutoPropagates(t *testing.T) {
 // --- imported -> suggestion recorded, no method added -------------------
 
 func TestABReconcile_Imported_RecordsSuggestion(t *testing.T) {
+	t.Parallel()
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
 	email := "imported-" + abSuffix(t) + "@example.com"
@@ -210,6 +203,7 @@ func TestABReconcile_Imported_RecordsSuggestion(t *testing.T) {
 // --- ignored -> skip entirely ------------------------------------------
 
 func TestABReconcile_Ignored_Skips(t *testing.T) {
+	t.Parallel()
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
 	email := "ignored-" + abSuffix(t) + "@example.com"
@@ -231,6 +225,7 @@ func TestABReconcile_Ignored_Skips(t *testing.T) {
 // (matched) or record suggestions for a dead contact (imported).
 
 func TestABReconcile_SoftDeletedContact_MatchedSkips(t *testing.T) {
+	t.Parallel()
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
 	email := "softdel-matched-" + abSuffix(t) + "@example.com"
@@ -243,6 +238,7 @@ func TestABReconcile_SoftDeletedContact_MatchedSkips(t *testing.T) {
 }
 
 func TestABReconcile_SoftDeletedContact_ImportedSkips(t *testing.T) {
+	t.Parallel()
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
 	email := "softdel-imported-" + abSuffix(t) + "@example.com"
@@ -266,6 +262,7 @@ func TestABReconcile_SoftDeletedContact_ImportedSkips(t *testing.T) {
 // --- dedup: method already on contact is neither re-added nor suggested -
 
 func TestABReconcile_Dedup_ExistingMethodNotResuggested(t *testing.T) {
+	t.Parallel()
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
 	email := "dedup-" + abSuffix(t) + "@example.com"
@@ -295,6 +292,7 @@ func TestABReconcile_Dedup_ExistingMethodNotResuggested(t *testing.T) {
 // --- phone normalization equivalence ------------------------------------
 
 func TestABReconcile_PhoneNormalization_Equivalence(t *testing.T) {
+	t.Parallel()
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
 	sfx := abSuffix(t)
@@ -337,6 +335,7 @@ func TestABReconcile_PhoneNormalization_Equivalence(t *testing.T) {
 // --- dismissed-method skip ---------------------------------------------
 
 func TestABReconcile_DismissedMethod_NotResuggested(t *testing.T) {
+	t.Parallel()
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
 	email := "dismissed-" + abSuffix(t) + "@example.com"
@@ -364,6 +363,7 @@ func TestABReconcile_DismissedMethod_NotResuggested(t *testing.T) {
 // --- empty-set clears pending_method_suggestions to NULL ----------------
 
 func TestABReconcile_EmptySet_ClearsPendingToNull(t *testing.T) {
+	t.Parallel()
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
 	email := "clear-" + abSuffix(t) + "@example.com"
@@ -406,6 +406,7 @@ func TestABReconcile_EmptySet_ClearsPendingToNull(t *testing.T) {
 // wholesale UpsertExternalContact (which replaces metadata). ------------
 
 func TestABReconcile_ProducerUpsertPreservesSuggestionColumns(t *testing.T) {
+	t.Parallel()
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
 	email := "survive-" + abSuffix(t) + "@example.com"
@@ -448,6 +449,7 @@ func TestABReconcile_ProducerUpsertPreservesSuggestionColumns(t *testing.T) {
 // --- idempotency: second run adds nothing, suggestion stable ------------
 
 func TestABReconcile_Idempotent(t *testing.T) {
+	t.Parallel()
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
 	email := "idem-" + abSuffix(t) + "@example.com"
@@ -524,6 +526,7 @@ func seedDupOfCanonical(
 // --- dup of matched canonical -> auto-propagates to canonical contact ---
 
 func TestABReconcile_DupOfMatchedCanonical_AutoPropagates(t *testing.T) {
+	t.Parallel()
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
 	uniqueEmail := "dupmatched-" + abSuffix(t) + "@example.com"
@@ -538,6 +541,7 @@ func TestABReconcile_DupOfMatchedCanonical_AutoPropagates(t *testing.T) {
 // --- dup (stale matched) of IMPORTED canonical -> suggestion, not auto --
 
 func TestABReconcile_DupOfImportedCanonical_Suggests(t *testing.T) {
+	t.Parallel()
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
 	uniqueEmail := "dupimported-" + abSuffix(t) + "@example.com"
@@ -556,6 +560,7 @@ func TestABReconcile_DupOfImportedCanonical_Suggests(t *testing.T) {
 // --- ignored dup of matched canonical -> skipped entirely ---------------
 
 func TestABReconcile_IgnoredDupOfMatchedCanonical_Skips(t *testing.T) {
+	t.Parallel()
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
 	uniqueEmail := "dupignored-" + abSuffix(t) + "@example.com"
@@ -573,6 +578,7 @@ func TestABReconcile_IgnoredDupOfMatchedCanonical_Skips(t *testing.T) {
 // --- catchup: mixed set, summary counts + idempotent re-run -------------
 
 func TestABReconcile_Catchup_MixedSet(t *testing.T) {
+	t.Parallel()
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
 

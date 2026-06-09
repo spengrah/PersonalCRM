@@ -78,6 +78,8 @@ func hostAuthHeaders(hostID uuid.UUID, apiKey string) map[string]string {
 }
 
 func TestMacHostRotateKey_HappyPath(t *testing.T) {
+	t.Parallel()
+
 	env := setupMacHostEnv(t)
 	hostID, oldKey := pairFreshHost(t, env, "rotate-happy")
 	token := mintRotateToken(t, env)
@@ -128,6 +130,8 @@ func TestMacHostRotateKey_HappyPath(t *testing.T) {
 }
 
 func TestMacHostRotateKey_TokenAlreadyUsed(t *testing.T) {
+	t.Parallel()
+
 	env := setupMacHostEnv(t)
 	hostID, oldKey := pairFreshHost(t, env, "rotate-reuse")
 	token := mintRotateToken(t, env)
@@ -160,6 +164,8 @@ func TestMacHostRotateKey_TokenAlreadyUsed(t *testing.T) {
 }
 
 func TestMacHostRotateKey_InvalidPairingToken(t *testing.T) {
+	t.Parallel()
+
 	env := setupMacHostEnv(t)
 	hostID, oldKey := pairFreshHost(t, env, "rotate-invalid")
 
@@ -177,6 +183,8 @@ func TestMacHostRotateKey_InvalidPairingToken(t *testing.T) {
 }
 
 func TestMacHostRotateKey_TokenExpired(t *testing.T) {
+	t.Parallel()
+
 	env := setupMacHostEnv(t)
 	hostID, oldKey := pairFreshHost(t, env, "rotate-expired")
 
@@ -204,6 +212,8 @@ func TestMacHostRotateKey_TokenExpired(t *testing.T) {
 }
 
 func TestMacHostRotateKey_HostNotFound_MiddlewareCatches(t *testing.T) {
+	t.Parallel()
+
 	env := setupMacHostEnv(t)
 	hostID, oldKey := pairFreshHost(t, env, "rotate-not-found")
 	token := mintRotateToken(t, env)
@@ -229,6 +239,8 @@ func TestMacHostRotateKey_HostNotFound_MiddlewareCatches(t *testing.T) {
 }
 
 func TestMacHostRotateKey_RevokedHostRotation(t *testing.T) {
+	t.Parallel()
+
 	env := setupMacHostEnv(t)
 	hostID, oldKey := pairFreshHost(t, env, "rotate-revoked")
 
@@ -245,6 +257,8 @@ func TestMacHostRotateKey_RevokedHostRotation(t *testing.T) {
 }
 
 func TestMacHostRotateKey_WrongCurrentKey(t *testing.T) {
+	t.Parallel()
+
 	env := setupMacHostEnv(t)
 	hostID, _ := pairFreshHost(t, env, "rotate-wrong-key")
 	token := mintRotateToken(t, env)
@@ -285,6 +299,8 @@ func callRotateAPIKeyDirect(
 }
 
 func TestMacHostRotateKey_ConcurrentRotation_DifferentTokens(t *testing.T) {
+	t.Parallel()
+
 	env := setupMacHostEnv(t)
 	hostID, _ := pairFreshHost(t, env, "rotate-concurrent-diff")
 	tokenA := mintRotateToken(t, env)
@@ -351,6 +367,8 @@ func TestMacHostRotateKey_ConcurrentRotation_DifferentTokens(t *testing.T) {
 }
 
 func TestMacHostRotateKey_ConcurrentRotation_SameToken(t *testing.T) {
+	t.Parallel()
+
 	env := setupMacHostEnv(t)
 	hostID, _ := pairFreshHost(t, env, "rotate-concurrent-same")
 	token := mintRotateToken(t, env)
@@ -407,6 +425,8 @@ func TestMacHostRotateKey_ConcurrentRotation_SameToken(t *testing.T) {
 }
 
 func TestMacHostRotateKey_OldKeyImmediatelyInvalid(t *testing.T) {
+	t.Parallel()
+
 	env := setupMacHostEnv(t)
 	hostID, oldKey := pairFreshHost(t, env, "rotate-old-invalid")
 	token := mintRotateToken(t, env)

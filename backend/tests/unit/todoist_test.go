@@ -13,6 +13,8 @@ import (
 // used when checking if Todoist deadline differs from CRM contact_by.
 // This ensures timezone differences don't cause incorrect comparisons.
 func TestTodoistDeadlineDateComparison(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name            string
 		todoistDate     string // Todoist deadline date string (YYYY-MM-DD)
@@ -79,6 +81,8 @@ func TestTodoistDeadlineDateComparison(t *testing.T) {
 // TestTodoistDeadlineDateComparisonOldVsNew compares the old (buggy) comparison
 // with the new (fixed) comparison to demonstrate the difference.
 func TestTodoistDeadlineDateComparisonOldVsNew(t *testing.T) {
+	t.Parallel()
+
 	// Simulate a scenario where old code would give wrong result
 	// due to timezone conversion
 
@@ -104,6 +108,8 @@ func TestTodoistDeadlineDateComparisonOldVsNew(t *testing.T) {
 // TestSyncedDeadlineComparison tests the synced_deadline comparison logic
 // used to detect when contact_by has changed and the Todoist task needs updating.
 func TestSyncedDeadlineComparison(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name           string
 		syncedDeadline string // stored in metadata (YYYY-MM-DD)
@@ -154,6 +160,8 @@ func TestSyncedDeadlineComparison(t *testing.T) {
 // TestIsPendingTempIDLogic tests the logic for detecting if a task's
 // external ID is still a pending temp ID (not yet resolved to real Todoist ID).
 func TestIsPendingTempIDLogic(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name           string
 		externalTaskID string
@@ -230,6 +238,8 @@ func TestIsPendingTempIDLogic(t *testing.T) {
 // TestReconciliationCommandGeneration tests the logic for determining which commands
 // should be generated during reconciliation based on task state and deadline drift.
 func TestReconciliationCommandGeneration(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name             string
 		externalTaskID   string
@@ -341,6 +351,8 @@ func TestReconciliationCommandGeneration(t *testing.T) {
 // This ensures the reconciliation correctly identifies stale tasks even when
 // contact_by hasn't changed (same cadence period).
 func TestWasContactedSinceSyncLogic(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name                string
 		lastContacted       *time.Time
@@ -419,6 +431,8 @@ func TestWasContactedSinceSyncLogic(t *testing.T) {
 // including the new non-Todoist contact detection. This covers the bug fix for
 // GH #235 where calendar-synced contacts didn't auto-complete Todoist tasks.
 func TestReconciliationWithNonTodoistContact(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name             string
 		externalTaskID   string
@@ -563,6 +577,8 @@ func TestReconciliationWithNonTodoistContact(t *testing.T) {
 // TestBackfillSyncedLastContacted verifies that legacy tasks without synced_last_contacted
 // get it backfilled, enabling detection of non-Todoist contacts on subsequent sync cycles.
 func TestBackfillSyncedLastContacted(t *testing.T) {
+	t.Parallel()
+
 	// Simulate two sync cycles:
 	// Cycle 1: Legacy task has synced_deadline but no synced_last_contacted
 	//   → Backfill happens: synced_last_contacted = current last_contacted
@@ -607,6 +623,8 @@ func TestBackfillSyncedLastContacted(t *testing.T) {
 // and contact_task.lifecycle and in CRM marker JSON; changing them would
 // orphan existing rows and pre-migration markers.
 func TestKindLifecycleConstants(t *testing.T) {
+	t.Parallel()
+
 	assert.Equal(t, "reach_out", contacttask.KindReachOut)
 	assert.Equal(t, "send", contacttask.KindSend)
 	assert.Equal(t, "reminder", contacttask.KindReminder)
@@ -619,6 +637,8 @@ func TestKindLifecycleConstants(t *testing.T) {
 
 // TestActionTaskStateTransitions tests the expected state transitions for action tasks
 func TestActionTaskStateTransitions(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name           string
 		initialState   string
@@ -699,6 +719,8 @@ func TestActionTaskStateTransitions(t *testing.T) {
 
 // TestActionTaskMetadataSchema tests the expected metadata structure for action tasks
 func TestActionTaskMetadataSchema(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name         string
 		metadata     map[string]any
@@ -762,6 +784,8 @@ func TestActionTaskMetadataSchema(t *testing.T) {
 
 // TestActionTaskVsCadenceTaskBehavior documents the key behavioral differences
 func TestActionTaskVsCadenceTaskBehavior(t *testing.T) {
+	t.Parallel()
+
 	t.Run("cadence tasks create new task on completion", func(t *testing.T) {
 		// Cadence tasks: completion -> update last_contacted -> calculate new contact_by -> create next task
 		// This is the existing behavior verified by other tests

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
 	"testing"
 	"time"
 
@@ -35,27 +34,12 @@ func (*eventBusNoopWorker) Work(_ context.Context, _ *river.Job[eventBusNoopArgs
 	return nil
 }
 
-// newEventBusTestDB runs migrations (including 036) and opens a DB. Mirrors
-// the PR 1 river integration test pattern.
+// newEventBusTestDB opens an isolated per-test DB because this file also starts
+// live River clients. Repository-only tests pay the same setup cost so the
+// shared helper can stay simple and the whole file can run under t.Parallel().
 func newEventBusTestDB(t *testing.T, ctx context.Context) (*db.Database, *config.Config) {
 	t.Helper()
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-
-	cfg := config.TestConfig()
-	cfg.Database.URL = databaseURL
-	cfg.Database.MigrationsPath = getMigrationsPath()
-
-	// Migrations are applied once by TestMain.
-
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
-
-	return database, cfg
+	return newIsolatedRiverTestDB(t, ctx)
 }
 
 // newEventBusTestBus builds a full Bus with a real river client registered
@@ -269,6 +253,7 @@ func TestBus_PublishTx_Succeeds_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	database, cfg := newEventBusTestDB(t, ctx)
 	bus := newEventBusTestBus(t, ctx, database, cfg)
@@ -300,6 +285,7 @@ func TestBus_PublishTx_DuplicateSourceID_IsNoOp_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	database, cfg := newEventBusTestDB(t, ctx)
 	bus := newEventBusTestBus(t, ctx, database, cfg)
@@ -345,6 +331,7 @@ func TestBus_Publish_OpensOwnTransaction_AndCommits_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	database, cfg := newEventBusTestDB(t, ctx)
 	bus := newEventBusTestBus(t, ctx, database, cfg)
@@ -372,6 +359,7 @@ func TestBus_PublishTx_ValidationError_NoRowPersisted_Integration(t *testing.T) 
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	database, cfg := newEventBusTestDB(t, ctx)
 	bus := newEventBusTestBus(t, ctx, database, cfg)
@@ -401,6 +389,7 @@ func TestBus_PublishTx_PreGeneratedID_IsRespected_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	database, cfg := newEventBusTestDB(t, ctx)
 	bus := newEventBusTestBus(t, ctx, database, cfg)

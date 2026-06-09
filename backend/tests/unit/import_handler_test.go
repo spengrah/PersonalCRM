@@ -14,6 +14,8 @@ import (
 // using integration tests with real database connections.
 
 func TestSelectedMethodInput_TypeValues(t *testing.T) {
+	t.Parallel()
+
 	// Verify all valid type values that the handler accepts
 	// These match the validation tag: oneof=email phone telegram signal discord twitter gchat whatsapp
 	validTypes := []string{
@@ -40,6 +42,8 @@ func TestSelectedMethodInput_TypeValues(t *testing.T) {
 }
 
 func TestLinkRequest_Structure(t *testing.T) {
+	t.Parallel()
+
 	t.Run("RequiredCRMContactID", func(t *testing.T) {
 		// LinkRequest requires crm_contact_id
 		req := handlers.LinkRequest{
@@ -73,6 +77,8 @@ func TestLinkRequest_Structure(t *testing.T) {
 }
 
 func TestImportRequest_Structure(t *testing.T) {
+	t.Parallel()
+
 	t.Run("EmptyRequestIsValid", func(t *testing.T) {
 		// Empty ImportRequest is valid for backward compatibility
 		req := handlers.ImportRequest{}
@@ -91,6 +97,8 @@ func TestImportRequest_Structure(t *testing.T) {
 }
 
 func TestConflictResolutionValues(t *testing.T) {
+	t.Parallel()
+
 	// Verify valid conflict resolution values
 	validResolutions := []string{"use_crm", "use_external"}
 
@@ -108,6 +116,8 @@ func TestConflictResolutionValues(t *testing.T) {
 }
 
 func TestMethodSelectionConversion(t *testing.T) {
+	t.Parallel()
+
 	// Verify that handler SelectedMethodInput can be converted to service MethodSelection
 	handlerInput := handlers.SelectedMethodInput{
 		OriginalValue: "test@example.com",

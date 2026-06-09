@@ -2,7 +2,6 @@ package tests
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
@@ -152,11 +151,6 @@ func (*lateFollowUpManagerWorker) Work(_ context.Context, _ *river.Job[followUpM
 func newConsumerTestEnv(t *testing.T, ctx context.Context) *consumerTestEnv {
 	t.Helper()
 
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-
 	database, cfg := newEventBusTestDB(t, ctx)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -281,6 +275,7 @@ func TestIntegration_CalendarAttended_CutoverWritesInteraction(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	env := newConsumerTestEnv(t, ctx)
 
@@ -334,6 +329,7 @@ func TestIntegration_CalendarAttended_TitlePreservedInInteraction(t *testing.T) 
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	env := newConsumerTestEnv(t, ctx)
 
@@ -372,6 +368,7 @@ func TestIntegration_CalendarAttended_Replay(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	env := newConsumerTestEnv(t, ctx)
 
@@ -424,6 +421,7 @@ func TestIntegration_ManualHandler_SingleTxFlow(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	env := newConsumerTestEnv(t, ctx)
 
@@ -465,6 +463,7 @@ func TestIntegration_ManualHandler_DedupWithinWindow(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	env := newConsumerTestEnv(t, ctx)
 
@@ -494,6 +493,7 @@ func TestIntegration_ManualHandler_DifferentDirectionsDoNotDedup(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	env := newConsumerTestEnv(t, ctx)
 
@@ -518,6 +518,7 @@ func TestIntegration_MissingContact_ConsumerReturnsNotFound(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	env := newConsumerTestEnv(t, ctx)
 

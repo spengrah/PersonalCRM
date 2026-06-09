@@ -691,6 +691,7 @@ func TestGChatRematch_ScansWhenEnabled(t *testing.T) {
 // enabled gchat state + a fake fetcher → adding the address upserts a row AND
 // the engine derives an interaction in the same rematch pass.
 func TestGChatRematchHandler_ScansAndAggregates(t *testing.T) {
+	t.Parallel()
 	env := setupGChatEngineTest(t) // wired engine + recorder
 	gen, _ := migrationGenerator(t)
 	prefix := gen.Prefix()

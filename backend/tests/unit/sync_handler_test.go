@@ -95,8 +95,6 @@ func (m *mockSyncService) GetAvailableProviders() []psync.SourceConfig {
 }
 
 func setupSyncHandlerTestRouter(mockService *mockSyncService) *gin.Engine {
-	gin.SetMode(gin.TestMode)
-
 	// Create handler with mock service
 	handler := handlers.NewSyncHandler(mockService)
 
@@ -115,6 +113,7 @@ func setupSyncHandlerTestRouter(mockService *mockSyncService) *gin.Engine {
 // TestTriggerSync_Returns202Immediately verifies that the TriggerSync handler
 // returns 202 Accepted immediately without waiting for the sync to complete.
 func TestTriggerSync_Returns202Immediately(t *testing.T) {
+	t.Parallel()
 	mockService := newMockSyncService()
 	// Simulate a slow sync operation
 	mockService.triggerSyncDelay = 5 * time.Second
@@ -158,6 +157,7 @@ func TestTriggerSync_Returns202Immediately(t *testing.T) {
 // TestTriggerSync_BackgroundSyncRuns verifies that the sync actually runs
 // in the background after the handler returns.
 func TestTriggerSync_BackgroundSyncRuns(t *testing.T) {
+	t.Parallel()
 	mockService := newMockSyncService()
 	mockService.triggerSyncDelay = 100 * time.Millisecond
 
@@ -183,6 +183,7 @@ func TestTriggerSync_BackgroundSyncRuns(t *testing.T) {
 
 // TestTriggerSync_RequiresSource verifies validation of source parameter.
 func TestTriggerSync_RequiresSource(t *testing.T) {
+	t.Parallel()
 	mockService := newMockSyncService()
 	router := setupSyncHandlerTestRouter(mockService)
 

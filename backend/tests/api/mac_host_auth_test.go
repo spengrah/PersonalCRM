@@ -11,6 +11,8 @@ import (
 )
 
 func TestMacHost_Auth_WrongAuthOnDaemonRoute(t *testing.T) {
+	t.Parallel()
+
 	env := setupMacHostEnv(t)
 
 	// Daemon route with global API key (no X-Mac-Host-ID) → 401.
@@ -24,6 +26,8 @@ func TestMacHost_Auth_WrongAuthOnDaemonRoute(t *testing.T) {
 }
 
 func TestMacHost_Auth_AmbiguousAuth_400(t *testing.T) {
+	t.Parallel()
+
 	env := setupMacHostEnv(t)
 
 	// Pair a host so we have a valid id/key for the daemon side.
@@ -45,6 +49,8 @@ func TestMacHost_Auth_AmbiguousAuth_400(t *testing.T) {
 }
 
 func TestMacHost_Auth_AdminRouteHostAuth_401(t *testing.T) {
+	t.Parallel()
+
 	env := setupMacHostEnv(t)
 
 	// Pair a host.
@@ -63,6 +69,8 @@ func TestMacHost_Auth_AdminRouteHostAuth_401(t *testing.T) {
 }
 
 func TestMacHost_Auth_IDParamMismatch_403(t *testing.T) {
+	t.Parallel()
+
 	env := setupMacHostEnv(t)
 
 	plain, _, err := env.macService.CreatePairingToken(context.Background())
@@ -83,6 +91,8 @@ func TestMacHost_Auth_IDParamMismatch_403(t *testing.T) {
 }
 
 func TestMacHost_Auth_MinProtocolVersion_412(t *testing.T) {
+	t.Parallel()
+
 	env := setupMacHostEnv(t)
 
 	plain, _, err := env.macService.CreatePairingToken(context.Background())

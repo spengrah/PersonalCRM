@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"sync"
 	"testing"
 	"time"
@@ -17,7 +16,6 @@ import (
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/auth"
-	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
@@ -50,19 +48,10 @@ type macHostTestEnv struct {
 func setupMacHostEnv(t *testing.T) *macHostTestEnv {
 	t.Helper()
 
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-
 	ctx := context.Background()
 
-	cfg := config.TestConfig()
-	cfg.Database.URL = databaseURL
+	database, cfg := newAPIIsolatedTestDB(t, ctx)
 	cfg.External.APIKey = macHostTestKey
-
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
 
 	hostRepo := repository.NewMacHostRepository(database.Queries)
 	tokenRepo := repository.NewMacHostPairingTokenRepository(database.Queries)
@@ -76,7 +65,6 @@ func setupMacHostEnv(t *testing.T) *macHostTestEnv {
 	limiter := auth.NewPairingIPRateLimiter()
 	macHandler := handlers.NewMacHostHandler(macService, limiter)
 
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.Use(api.RequestIDMiddleware())
 	router.Use(api.LoggingMiddleware())
@@ -127,7 +115,6 @@ func setupMacHostEnv(t *testing.T) *macHostTestEnv {
 		}
 		_, _ = database.Queries.DeleteAllMacHosts(cleanCtx)
 		_, _ = database.Queries.DeleteAllPairingTokens(cleanCtx)
-		database.Close()
 	})
 
 	return env
@@ -192,6 +179,8 @@ func parseConflict(t *testing.T, w *httptest.ResponseRecorder) cursorConflictBod
 }
 
 func TestMacHost_FullPairingFlow(t *testing.T) {
+	t.Parallel()
+
 	env := setupMacHostEnv(t)
 
 	// 1. Admin requests a pairing token.
@@ -341,6 +330,8 @@ func TestMacHost_FullPairingFlow(t *testing.T) {
 }
 
 func TestMacHost_PairingToken_Unknown(t *testing.T) {
+	t.Parallel()
+
 	env := setupMacHostEnv(t)
 
 	w := macHTTP(t, env, http.MethodPost, "/api/v1/host", nil, map[string]any{
@@ -353,6 +344,8 @@ func TestMacHost_PairingToken_Unknown(t *testing.T) {
 }
 
 func TestMacHost_Pair_MissingHostname_400(t *testing.T) {
+	t.Parallel()
+
 	env := setupMacHostEnv(t)
 
 	// Mint a real token via the service so we know the only validation
@@ -370,6 +363,8 @@ func TestMacHost_Pair_MissingHostname_400(t *testing.T) {
 }
 
 func TestMacHost_Pair_MissingToken_400(t *testing.T) {
+	t.Parallel()
+
 	env := setupMacHostEnv(t)
 
 	w := macHTTP(t, env, http.MethodPost, "/api/v1/host", nil, map[string]any{
@@ -382,6 +377,8 @@ func TestMacHost_Pair_MissingToken_400(t *testing.T) {
 }
 
 func TestMacHost_Singleton_SecondPairBlocked(t *testing.T) {
+	t.Parallel()
+
 	env := setupMacHostEnv(t)
 
 	// First pair.
@@ -408,6 +405,8 @@ func TestMacHost_Singleton_SecondPairBlocked(t *testing.T) {
 }
 
 func TestMacHost_CursorFirstWriteRace(t *testing.T) {
+	t.Parallel()
+
 	env := setupMacHostEnv(t)
 
 	// Pair a host directly via the service to bypass HTTP.

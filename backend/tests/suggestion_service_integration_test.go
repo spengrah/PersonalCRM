@@ -52,6 +52,7 @@ func seedImportedWithPending(
 }
 
 func TestSuggestions_List_SurfacesLinkedRowWithName(t *testing.T) {
+	t.Parallel()
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
 	svc := newSuggestionService(env)
@@ -78,6 +79,7 @@ func TestSuggestions_List_SurfacesLinkedRowWithName(t *testing.T) {
 }
 
 func TestSuggestions_List_DropsSoftDeletedContact(t *testing.T) {
+	t.Parallel()
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
 	svc := newSuggestionService(env)
@@ -94,6 +96,7 @@ func TestSuggestions_List_DropsSoftDeletedContact(t *testing.T) {
 }
 
 func TestSuggestions_List_SourceScopeExcludesNonAddressBook(t *testing.T) {
+	t.Parallel()
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
 	svc := newSuggestionService(env)
@@ -130,6 +133,7 @@ func TestSuggestions_List_SourceScopeExcludesNonAddressBook(t *testing.T) {
 }
 
 func TestSuggestions_Resolve_AddsMethodAndClearsPending(t *testing.T) {
+	t.Parallel()
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
 	svc := newSuggestionService(env)
@@ -160,6 +164,7 @@ func TestSuggestions_Resolve_AddsMethodAndClearsPending(t *testing.T) {
 }
 
 func TestSuggestions_Resolve_Idempotent(t *testing.T) {
+	t.Parallel()
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
 	svc := newSuggestionService(env)
@@ -182,6 +187,7 @@ func TestSuggestions_Resolve_Idempotent(t *testing.T) {
 }
 
 func TestSuggestions_Resolve_AlreadyOnContact_NotReAdded(t *testing.T) {
+	t.Parallel()
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
 	svc := newSuggestionService(env)
@@ -209,6 +215,7 @@ func TestSuggestions_Resolve_AlreadyOnContact_NotReAdded(t *testing.T) {
 }
 
 func TestSuggestions_Resolve_UnknownMethodIsNoOp(t *testing.T) {
+	t.Parallel()
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
 	svc := newSuggestionService(env)
@@ -230,6 +237,7 @@ func TestSuggestions_Resolve_UnknownMethodIsNoOp(t *testing.T) {
 }
 
 func TestSuggestions_Resolve_MalformedMethod400(t *testing.T) {
+	t.Parallel()
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
 	svc := newSuggestionService(env)
@@ -244,6 +252,7 @@ func TestSuggestions_Resolve_MalformedMethod400(t *testing.T) {
 }
 
 func TestSuggestions_Dismiss_RecordsStickyAndDropsPending(t *testing.T) {
+	t.Parallel()
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
 	svc := newSuggestionService(env)
@@ -280,6 +289,7 @@ func TestSuggestions_Dismiss_RecordsStickyAndDropsPending(t *testing.T) {
 }
 
 func TestSuggestions_Dismiss_Idempotent(t *testing.T) {
+	t.Parallel()
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
 	svc := newSuggestionService(env)
@@ -301,6 +311,7 @@ func TestSuggestions_Dismiss_Idempotent(t *testing.T) {
 }
 
 func TestSuggestions_Dismiss_AlreadyOnContact_NotStickyDismissed(t *testing.T) {
+	t.Parallel()
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
 	svc := newSuggestionService(env)
@@ -329,6 +340,7 @@ func TestSuggestions_Dismiss_AlreadyOnContact_NotStickyDismissed(t *testing.T) {
 }
 
 func TestSuggestions_Resolve_ContactGone(t *testing.T) {
+	t.Parallel()
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
 	svc := newSuggestionService(env)
@@ -342,6 +354,7 @@ func TestSuggestions_Resolve_ContactGone(t *testing.T) {
 }
 
 func TestSuggestions_DuplicateOfCanonical_ResolvesToCanonicalContact(t *testing.T) {
+	t.Parallel()
 	env := setupABReconcileEnv(t)
 	ctx := context.Background()
 	svc := newSuggestionService(env)

@@ -10,6 +10,8 @@ import (
 )
 
 func TestDateOnly(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name  string
 		input time.Time
@@ -46,6 +48,8 @@ func TestDateOnly(t *testing.T) {
 }
 
 func TestToday(t *testing.T) {
+	t.Parallel()
+
 	now := time.Date(2024, 6, 15, 16, 45, 30, 0, time.UTC)
 	today := cadence.Today(now)
 
@@ -57,6 +61,8 @@ func TestToday(t *testing.T) {
 }
 
 func TestCadenceDays(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		cadence      cadence.CadenceType
 		expectedDays int
@@ -80,6 +86,8 @@ func TestCadenceDays(t *testing.T) {
 }
 
 func TestCalculateContactBy(t *testing.T) {
+	t.Parallel()
+
 	base := time.Date(2024, 1, 15, 10, 30, 0, 0, time.Local)
 
 	tests := []struct {
@@ -118,6 +126,8 @@ func TestCalculateContactBy(t *testing.T) {
 }
 
 func TestIsContactByOverdue(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name      string
 		contactBy time.Time
@@ -153,6 +163,8 @@ func TestIsContactByOverdue(t *testing.T) {
 }
 
 func TestGetContactByOverdueDays(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name         string
 		contactBy    time.Time

@@ -17,6 +17,8 @@ import (
 // Tombstoned + merge-dupe rows are excluded; rows belonging to a
 // different host are excluded.
 func TestMacHost_GetSourceCounts_HappyPath(t *testing.T) {
+	t.Parallel()
+
 	env := setupMacHostEnv(t)
 	ctx := context.Background()
 
@@ -98,6 +100,8 @@ func TestMacHost_GetSourceCounts_HappyPath(t *testing.T) {
 // pre-check: an unknown host id returns 404 (not 200 with empty
 // counts).
 func TestMacHost_GetSourceCounts_UnknownHost_404(t *testing.T) {
+	t.Parallel()
+
 	env := setupMacHostEnv(t)
 	missing := uuid.New().String()
 	headers := map[string]string{"X-API-Key": env.apiKey}
@@ -109,6 +113,8 @@ func TestMacHost_GetSourceCounts_UnknownHost_404(t *testing.T) {
 // with no external_contact rows returns 200 with counts={} rather than
 // 404 or 500.
 func TestMacHost_GetSourceCounts_NoRowsReturnsEmpty(t *testing.T) {
+	t.Parallel()
+
 	env := setupMacHostEnv(t)
 	ctx := context.Background()
 	host, err := env.hostRepo.SeedRevokedHostForTest(ctx,
@@ -130,6 +136,8 @@ func TestMacHost_GetSourceCounts_NoRowsReturnsEmpty(t *testing.T) {
 // TestMacHost_GetSourceCounts_Unauthenticated_401 covers the admin-auth
 // path: without the global API key, the request is rejected.
 func TestMacHost_GetSourceCounts_Unauthenticated_401(t *testing.T) {
+	t.Parallel()
+
 	env := setupMacHostEnv(t)
 	ctx := context.Background()
 	host, err := env.hostRepo.SeedRevokedHostForTest(ctx,
@@ -143,6 +151,8 @@ func TestMacHost_GetSourceCounts_Unauthenticated_401(t *testing.T) {
 // TestMacHost_GetSourceCounts_BadID_400 confirms the handler rejects a
 // non-UUID path param at validation before touching the service.
 func TestMacHost_GetSourceCounts_BadID_400(t *testing.T) {
+	t.Parallel()
+
 	env := setupMacHostEnv(t)
 	headers := map[string]string{"X-API-Key": env.apiKey}
 	w := macHTTP(t, env, http.MethodGet, "/api/v1/host/not-a-uuid/source-counts", headers, nil)
