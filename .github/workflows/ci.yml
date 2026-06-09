@@ -118,11 +118,12 @@ jobs:
       - name: Pin GOCACHE to setup-go cache
         run: echo "GOCACHE=$(go env GOCACHE)" >> "$GITHUB_ENV"
 
-      # Disposable CI Postgres: max_connections raised to 200 (#424 connection
-      # ceiling — see PR body for the budget) and durability disabled (fsync /
-      # synchronous_commit / full_page_writes off) for wall-clock; data is
-      # thrown away at job end. services: can't pass server args, so we run it
-      # explicitly. See the connection-budget note in the PR description.
+      # Disposable CI Postgres: max_connections raised from the stock 100 to
+      # 200 (#424) to clear the measured ~92-conn peak with headroom for the
+      # #428/#429 per-test-clone scaling; durability disabled (fsync /
+      # synchronous_commit / full_page_writes off) for wall-clock since the
+      # data is thrown away at job end. services: can't pass server args
+      # (the -c flags below sit after the image name), so we run it explicitly.
       - name: Start PostgreSQL
         run: |
           docker run -d --name postgres \
@@ -155,8 +156,8 @@ jobs:
 
       - name: Verify Postgres config applied
         env:
-          # PGPASSWORD covers the e2e password-auth path; harmless for the
-          # backend-tests trust path. Values are the existing non-secret CI
+          # PGPASSWORD set for parity with the e2e job; harmless under the
+          # trust auth this job uses. Values are the existing non-secret CI
           # test credentials already present in this workflow.
           PGHOST: localhost
           PGPORT: "5432"
@@ -384,11 +385,12 @@ jobs:
       - name: Pin GOCACHE to setup-go cache
         run: echo "GOCACHE=$(go env GOCACHE)" >> "$GITHUB_ENV"
 
-      # Disposable CI Postgres: max_connections raised to 200 (#424 connection
-      # ceiling — see PR body for the budget) and durability disabled (fsync /
-      # synchronous_commit / full_page_writes off) for wall-clock; data is
-      # thrown away at job end. services: can't pass server args, so we run it
-      # explicitly. See the connection-budget note in the PR description.
+      # Disposable CI Postgres: max_connections raised from the stock 100 to
+      # 200 (#424) to clear the measured ~92-conn peak with headroom for the
+      # #428/#429 per-test-clone scaling; durability disabled (fsync /
+      # synchronous_commit / full_page_writes off) for wall-clock since the
+      # data is thrown away at job end. services: can't pass server args
+      # (the -c flags below sit after the image name), so we run it explicitly.
       - name: Start PostgreSQL
         run: |
           docker run -d --name postgres \
