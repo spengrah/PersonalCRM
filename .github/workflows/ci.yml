@@ -521,6 +521,25 @@ jobs:
         working-directory: frontend
         run: bun install
 
+      # Rolling Next.js webpack build cache (`frontend/.next/cache`, tens of MB).
+      # SHA-keyed so every run misses its exact key and saves a fresh entry;
+      # restore-keys brings the most recent prior cache forward so an
+      # incremental `next build` compounds warmth across pushes. bun.lock-pinned
+      # prefix rolls on a deps change; the looser runner.os fallback still
+      # restores something warm-ish on a deps bump. The trailing
+      # ${{ matrix.shard }} makes the two concurrent shards save collision-free;
+      # the shared restore-keys prefix omits the shard suffix so a shard
+      # restores the most-recent entry from EITHER shard (both build the
+      # identical app, so the webpack cache is content-addressed-safe to share).
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: frontend/.next/cache
+          key: next-build-${{ runner.os }}-${{ hashFiles('frontend/bun.lock') }}-${{ github.sha }}-${{ matrix.shard }}
+          restore-keys: |
+            next-build-${{ runner.os }}-${{ hashFiles('frontend/bun.lock') }}-
+            next-build-${{ runner.os }}-
+
       - name: Cache Playwright browsers
         uses: actions/cache@v4
         id: playwright-cache
@@ -556,6 +575,28 @@ jobs:
             echo "$name=$val"
             test "$val" = "$want" || { echo "FAIL: $name is $val, expected $want"; exit 1; }
           done
+
+      # Build the frontend as a production standalone artifact ahead of the
+      # timed test run, so Playwright's webServer just boots `server.js` instead
+      # of paying next dev's on-demand route compilation during the suite. Kept
+      # as its own visible step (not folded into the webServer command) so the
+      # build duration is measurable in the step timings. The standalone server
+      # bundles neither `.next/static` nor `public`, so we copy both alongside
+      # `server.js`, mirroring scripts/deploy.sh. NEXT_PUBLIC_* are inlined at
+      # build time, so the values the suite needs are set HERE. We deliberately
+      # OMIT NEXT_PUBLIC_BUILD_VERSION/COMMIT_HASH/GITHUB_REPO: the settings spec
+      # asserts the Version field reads "Personal CRM (dev)", which only holds
+      # when NEXT_PUBLIC_BUILD_VERSION is unset.
+      - name: Build frontend (prod)
+        working-directory: frontend
+        env:
+          CI: true
+          NEXT_PUBLIC_API_KEY: test-api-key-for-ci
+          NEXT_PUBLIC_API_URL: http://localhost:8080
+        run: |
+          bun run build
+          cp -r .next/static .next/standalone/.next/static
+          cp -r public .next/standalone/public
 
       - name: Run E2E tests
         working-directory: frontend
