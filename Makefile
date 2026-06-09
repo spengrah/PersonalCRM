@@ -10,7 +10,7 @@ GOCACHE ?= $(REPO_ROOT)/.gocache
 export GOCACHE
 
 TEST_DATABASE_URL ?= postgres://crm_user:crm_password@localhost:5432/personal_crm_test?sslmode=disable
-BACKEND_SLOW_TESTS_REGEX := TestSyncWorker_LoadNoDuplicateConcurrentSyncs|TestPeriodicTick_FiresOnStart|TestSyncWorker_RescueOnCrash|TestSynthetic
+BACKEND_SLOW_TESTS_REGEX := TestSyncWorker_LoadNoDuplicateConcurrentSyncs|TestPeriodicTick_FiresOnStart|TestSyncWorker_RescueOnCrash|TestSynthetic|TestTestdb
 
 # Default target
 # NOTE: When adding or removing make targets, update this help section to match
@@ -51,7 +51,7 @@ help:
 	@echo "  test-integration      - Run all backend integration tests"
 	@echo "  test-integration-fast - Run backend integration tests without LONG_TESTS"
 	@echo "  test-integration-slow - Run only LONG_TESTS-gated backend integration tests"
-	@echo "  test-clean-clones     - Drop leaked per-package/per-test clone databases"
+	@echo "  test-clean-clones     - Drop leaked clone and stale template databases"
 	@echo "  test-frontend         - Run frontend unit tests"
 	@echo "  test-e2e              - Run Playwright E2E tests"
 	@echo "  test-e2e-local        - Run Playwright E2E tests (honors PLAYWRIGHT_GREP)"
@@ -340,15 +340,20 @@ test-integration-slow:
 	@echo "Running backend slow integration tests..."
 	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test -tags integration_testdb -count=1 ./tests/... ./internal/todoist/... ./internal/google/... ./internal/testdb/... -v -run '$(BACKEND_SLOW_TESTS_REGEX)'
 
-# Sweep leaked per-package / per-test clone databases
-# (personal_crm_test_clone_*). Crashed processes (SIGKILL between clone
-# CREATE and DROP) can leak clones; they are harmless until reaped here.
-# Run when no integration tests are in flight. Implemented in the Go
-# harness (not raw psql) so it shares the same name guards — every drop
-# passes assertDroppableTestDBName, and the template/base are never
-# touched. Uses `go run` on a package main (NOT `go test`) so the sweep
-# can never execute during the normal `go test ./internal/testdb/...`
-# integration run.
+# Sweep leaked clone databases (personal_crm_test_clone_*) AND stale
+# per-migration-set template databases (personal_crm_test_template_<hash>).
+# Crashed processes can leak clones; templates accumulate as migration sets
+# change over time (branch switches, divergent worktrees). Run ONLY when no
+# integration tests are in flight: the template drop pass holds the build
+# advisory lock so it never drops a template mid-CREATE...TEMPLATE, but the
+# lock is released between a running test process's operations, so a different
+# worktree's still-running process could still clone from a template later
+# (stronger cross-worktree-concurrent safety is out of scope — see #424).
+# Implemented in the Go harness (not raw psql) so it shares the same name
+# guards — every drop passes assertDroppableTestDBName, the current run's
+# template is kept warm, and the base is never touched. Uses `go run` on a
+# package main (NOT `go test`) so the sweep can never execute during the normal
+# `go test ./internal/testdb/...` integration run.
 test-clean-clones:
 	@echo "Sweeping leaked test clone databases..."
 	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" go run -tags integration_testdb ./internal/testdb/cmd/cleanclones
