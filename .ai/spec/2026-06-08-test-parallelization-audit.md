@@ -22,7 +22,7 @@ All **80** top-level `backend/tests` files are classified — zero duplicates, z
 - `contact_task` `TestContactTask_CountByProvider` used a DB-wide `DeleteContactTasksByProvider("todoist")` cleanup that deleted parallel tests' tasks; scoped to delete only its own task IDs.
 
 Notes on the count:
-- 4 of the 28 scoped-safe and 1 of the 5 mixed entries are helper/zero-func files (`gmail_time_helpers_test.go`, `synthetic_migration_helpers_test.go`, `testmain_integration_test.go`, `test_event_bus_harness_test.go`) — no `TestXxx` to flip; listed for completeness.
+- 3 of the 27 scoped-safe entries are helper/zero-func files (`gmail_time_helpers_test.go`, `synthetic_migration_helpers_test.go`, `testmain_integration_test.go`) — no `TestXxx` to flip; listed for completeness. (`test_event_bus_harness_test.go` is also a zero-func helper but is classified under river-heavy, since it builds the live River clients every river-heavy file depends on.)
 - **River-heavy = 30 distinct files.** An earlier working pass double-listed `gmail_golive_integration_test.go` (identical river-heavy/serial classification both times); it is one file.
 - **7 files are `RequireLongTests`-gated** (the `synthetic_*` provider/replay/profile/seed/golden set) and skip the fast suite entirely. Leaving them serial has zero effect on fast-suite / pre-push wall-clock.
 - **Scoping work before flip = 15 actions:** the 13 pure needs-scoping files + the needs-scoping sub-work in the 2 mixed files `identity_integration_test.go` and `integration_test.go`.

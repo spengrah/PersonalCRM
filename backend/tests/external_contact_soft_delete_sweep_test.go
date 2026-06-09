@@ -200,7 +200,7 @@ func TestExternalContactSweep_ListUnmatched_FiltersTombstone(t *testing.T) {
 		_ = database.Queries.TestDeleteExternalContactsBySourceIDPrefix(cleanCtx, prefix)
 	})
 
-	listed, err := repo.ListUnmatched(ctx, "gcontacts", 1000, 0, false)
+	listed, err := repo.ListUnmatched(ctx, "gcontacts", 100000, 0, false)
 	require.NoError(t, err)
 	foundLive := false
 	for _, r := range listed {
@@ -248,7 +248,7 @@ func TestExternalContactSweep_ListAllUnmatched_FiltersTombstone(t *testing.T) {
 		_ = database.Queries.TestDeleteExternalContactsBySourceIDPrefix(cleanCtx, prefix)
 	})
 
-	listed, err := repo.ListAllUnmatched(ctx, 1000, 0, false)
+	listed, err := repo.ListAllUnmatched(ctx, 100000, 0, false)
 	require.NoError(t, err)
 	foundLive := false
 	for _, r := range listed {
