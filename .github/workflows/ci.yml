@@ -40,14 +40,44 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.23'
-          cache-dependency-path: backend/go.sum
+          cache: false
+
+      # Rolling Go module download cache. Per-job primary key (trailing token)
+      # so the three parallel Go jobs never race to save the same key, with a
+      # shared restore-keys prefix so they still restore each other's identical
+      # module set (on subsequent runs; saves land post-job, so this warms a
+      # sibling job on a LATER run, not the others running concurrently here).
+      # go.sum-keyed: rolls only when dependencies change.
+      - name: Cache Go module download cache
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: go-mod-${{ runner.os }}-go1.23-${{ hashFiles('backend/go.sum') }}-quality
+          restore-keys: |
+            go-mod-${{ runner.os }}-go1.23-${{ hashFiles('backend/go.sum') }}-
+            go-mod-${{ runner.os }}-go1.23-
+
+      # Rolling Go build cache. SHA-keyed so every run misses its exact key and
+      # saves a fresh entry; restore-keys brings the most recent prior build
+      # cache forward so warmth compounds across CI runs. Namespaced per job
+      # because each job has a distinct build config (arm64 cross-compile plus
+      # amd64 lint/analysis here).
+      - name: Cache Go build cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/go-build
+          key: go-build-quality-${{ runner.os }}-go1.23-${{ github.sha }}
+          restore-keys: |
+            go-build-quality-${{ runner.os }}-go1.23-
 
       # The Makefile defaults GOCACHE to a workspace-local dir via `?=`, which
-      # would bypass setup-go's restored ~/.cache/go-build for every make-driven
-      # Go build. Pin GOCACHE to setup-go's default so make-invoked builds reuse
-      # the warm cache. `go env GOCACHE` returns the default here because GOCACHE
-      # is not set in the shell env (the Makefile only exports it inside make).
-      - name: Pin GOCACHE to setup-go cache
+      # would bypass the restored ~/.cache/go-build for every make-driven Go
+      # build. Pin GOCACHE to that warm dir so make-invoked builds reuse the
+      # cache restored by the explicit actions/cache step above (setup-go's
+      # built-in cache is disabled via `cache: false`). `go env GOCACHE`
+      # returns the default ~/.cache/go-build here because GOCACHE is not set
+      # in the shell env (the Makefile only exports it inside make).
+      - name: Pin GOCACHE to the restored go-build cache
         run: echo "GOCACHE=$(go env GOCACHE)" >> "$GITHUB_ENV"
 
       - name: Download Go modules
@@ -110,12 +140,41 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.23'
-          cache-dependency-path: backend/go.sum
+          cache: false
+
+      # Rolling Go module download cache. Per-job primary key (trailing token)
+      # so the three parallel Go jobs never race to save the same key, with a
+      # shared restore-keys prefix so they still restore each other's identical
+      # module set (on subsequent runs; saves land post-job, so this warms a
+      # sibling job on a LATER run, not the others running concurrently here).
+      # go.sum-keyed: rolls only when dependencies change.
+      - name: Cache Go module download cache
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: go-mod-${{ runner.os }}-go1.23-${{ hashFiles('backend/go.sum') }}-tests
+          restore-keys: |
+            go-mod-${{ runner.os }}-go1.23-${{ hashFiles('backend/go.sum') }}-
+            go-mod-${{ runner.os }}-go1.23-
+
+      # Rolling Go build cache. SHA-keyed so every run misses its exact key and
+      # saves a fresh entry; restore-keys brings the most recent prior build
+      # cache forward so warmth compounds across pushes. Namespaced per job
+      # because each job has a distinct build config (amd64 with the
+      # integration_testdb build tag here).
+      - name: Cache Go build cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/go-build
+          key: go-build-tests-${{ runner.os }}-go1.23-${{ github.sha }}
+          restore-keys: |
+            go-build-tests-${{ runner.os }}-go1.23-
 
       # See backend-quality: pin GOCACHE so make-invoked builds (the
-      # integration step calls `make test-integration-fast`) reuse setup-go's
-      # warm cache instead of the Makefile's workspace-local default.
-      - name: Pin GOCACHE to setup-go cache
+      # integration step calls `make test-integration-fast`) reuse the
+      # ~/.cache/go-build restored by the explicit actions/cache step above
+      # instead of the Makefile's workspace-local default.
+      - name: Pin GOCACHE to the restored go-build cache
         run: echo "GOCACHE=$(go env GOCACHE)" >> "$GITHUB_ENV"
 
       # Disposable CI Postgres: max_connections raised from the stock 100 to
@@ -377,12 +436,41 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.23'
-          cache-dependency-path: backend/go.sum
+          cache: false
+
+      # Rolling Go module download cache. Per-job primary key (trailing token)
+      # so the three parallel Go jobs never race to save the same key, with a
+      # shared restore-keys prefix so they still restore each other's identical
+      # module set (on subsequent runs; saves land post-job, so this warms a
+      # sibling job on a LATER run, not the others running concurrently here).
+      # go.sum-keyed: rolls only when dependencies change.
+      - name: Cache Go module download cache
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: go-mod-${{ runner.os }}-go1.23-${{ hashFiles('backend/go.sum') }}-e2e
+          restore-keys: |
+            go-mod-${{ runner.os }}-go1.23-${{ hashFiles('backend/go.sum') }}-
+            go-mod-${{ runner.os }}-go1.23-
+
+      # Rolling Go build cache. SHA-keyed so every run misses its exact key and
+      # saves a fresh entry; restore-keys brings the most recent prior build
+      # cache forward so warmth compounds across pushes. Namespaced per job
+      # because each job has a distinct build config (plain amd64 `go run` here).
+      - name: Cache Go build cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/go-build
+          key: go-build-e2e-${{ runner.os }}-go1.23-${{ github.sha }}
+          restore-keys: |
+            go-build-e2e-${{ runner.os }}-go1.23-
 
       # The Playwright webServer launches the backend via `go run`; pin GOCACHE
-      # to setup-go's warm cache for consistency with the backend jobs (and to
-      # cover any future make-driven build added here).
-      - name: Pin GOCACHE to setup-go cache
+      # to the ~/.cache/go-build restored by the explicit actions/cache step
+      # above for consistency with the backend jobs (and to cover any future
+      # make-driven build added here). setup-go's built-in cache is disabled
+      # via `cache: false`.
+      - name: Pin GOCACHE to the restored go-build cache
         run: echo "GOCACHE=$(go env GOCACHE)" >> "$GITHUB_ENV"
 
       # Disposable CI Postgres: max_connections raised from the stock 100 to
