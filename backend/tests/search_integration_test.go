@@ -46,6 +46,7 @@ func TestContactSearch_Integration(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
@@ -59,18 +60,23 @@ func TestContactSearch_Integration(t *testing.T) {
 	repo := repository.NewContactRepository(database.Queries)
 	methodRepo := repository.NewContactMethodRepository(database.Queries)
 
+	// Per-test namespace token so FTS query terms are unique to this test and
+	// only match its own rows (the shared DB holds other tests' contacts/notes).
+	ns := syntheticNS(t)
+
 	t.Run("ExactNameMatch", func(t *testing.T) {
 		// Create test contact
+		name := "Alice Johnson " + ns
 		contact, err := repo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName: "Alice Johnson",
+			FullName: name,
 		})
 		require.NoError(t, err)
 		defer func() { _ = repo.HardDeleteContact(ctx, contact.ID) }()
-		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmail), "alice.johnson@example.com", true)
+		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmail), "alice.johnson."+ns+"@example.com", true)
 
 		// Search for exact name
 		results, err := repo.SearchContacts(ctx, repository.SearchContactsParams{
-			Query:  "Alice Johnson",
+			Query:  name,
 			Limit:  10,
 			Offset: 0,
 		})
@@ -79,30 +85,33 @@ func TestContactSearch_Integration(t *testing.T) {
 		// Should find the contact
 		assert.GreaterOrEqual(t, len(results), 1)
 
-		// Verify Alice Johnson is in the results
+		// Verify the contact is in the results
 		found := false
 		for _, c := range results {
 			if c.ID == contact.ID {
 				found = true
-				assert.Equal(t, "Alice Johnson", c.FullName)
+				assert.Equal(t, name, c.FullName)
 				break
 			}
 		}
-		assert.True(t, found, "Alice Johnson should be found in search results")
+		assert.True(t, found, "the seeded contact should be found in search results")
 	})
 
 	t.Run("PartialNameMatch", func(t *testing.T) {
-		// Create test contact
+		// Create test contact. The surname embeds the namespace token so the
+		// single-word search matches only this test's contact.
+		surname := "Smith" + ns
+		name := "Bob " + surname
 		contact, err := repo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName: "Bob Smith",
+			FullName: name,
 		})
 		require.NoError(t, err)
 		defer func() { _ = repo.HardDeleteContact(ctx, contact.ID) }()
-		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmail), "bob.smith@example.com", true)
+		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmail), "bob.smith."+ns+"@example.com", true)
 
 		// Search for partial name (single word)
 		results, err := repo.SearchContacts(ctx, repository.SearchContactsParams{
-			Query:  "Smith",
+			Query:  surname,
 			Limit:  10,
 			Offset: 0,
 		})
@@ -113,25 +122,26 @@ func TestContactSearch_Integration(t *testing.T) {
 		for _, c := range results {
 			if c.ID == contact.ID {
 				found = true
-				assert.Equal(t, "Bob Smith", c.FullName)
+				assert.Equal(t, name, c.FullName)
 				break
 			}
 		}
-		assert.True(t, found, "Bob Smith should be found when searching for 'Smith'")
+		assert.True(t, found, "the seeded contact should be found when searching the unique surname")
 	})
 
 	t.Run("EmailSearch", func(t *testing.T) {
 		// Create test contact
+		firstName := "Carol" + ns
 		contact, err := repo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName: "Carol Davis",
+			FullName: firstName + " Davis",
 		})
 		require.NoError(t, err)
 		defer func() { _ = repo.HardDeleteContact(ctx, contact.ID) }()
-		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmail), "carol.davis@example.com", true)
+		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmail), "carol.davis."+ns+"@example.com", true)
 
 		// Search by name (FTS tokenizes email addresses specially, so search by name)
 		results, err := repo.SearchContacts(ctx, repository.SearchContactsParams{
-			Query:  "Carol",
+			Query:  firstName,
 			Limit:  10,
 			Offset: 0,
 		})
@@ -150,14 +160,15 @@ func TestContactSearch_Integration(t *testing.T) {
 
 	t.Run("MethodValueSearch", func(t *testing.T) {
 		contact, err := repo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName: "Method Search Contact",
+			FullName: "Method Search Contact " + ns,
 		})
 		require.NoError(t, err)
 		defer func() { _ = repo.HardDeleteContact(ctx, contact.ID) }()
-		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodTelegram), "handle123", true)
+		handle := "handle" + ns
+		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodTelegram), handle, true)
 
 		results, err := repo.SearchContacts(ctx, repository.SearchContactsParams{
-			Query:  "handle123",
+			Query:  handle,
 			Limit:  10,
 			Offset: 0,
 		})
@@ -200,19 +211,21 @@ func TestContactSearch_Integration(t *testing.T) {
 	})
 
 	t.Run("Pagination", func(t *testing.T) {
-		// Create multiple test contacts with same pattern
+		// Create multiple test contacts with same pattern. The unique token in
+		// the name makes the search term match only this test's contacts.
+		pageTerm := "Pagination" + ns
 		for i := 0; i < 5; i++ {
 			contact, err := repo.CreateContact(ctx, repository.CreateContactRequest{
-				FullName: "Pagination Test User",
+				FullName: pageTerm + " Test User",
 			})
 			require.NoError(t, err)
 			defer func(id uuid.UUID) { _ = repo.HardDeleteContact(ctx, id) }(contact.ID)
-			addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmail), "pagination.test."+string(rune('a'+i))+"@example.com", true)
+			addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmail), "pagination.test."+ns+"."+string(rune('a'+i))+"@example.com", true)
 		}
 
 		// Test limit
 		page1, err := repo.SearchContacts(ctx, repository.SearchContactsParams{
-			Query:  "Pagination",
+			Query:  pageTerm,
 			Limit:  2,
 			Offset: 0,
 		})
@@ -221,7 +234,7 @@ func TestContactSearch_Integration(t *testing.T) {
 
 		// Test offset
 		page2, err := repo.SearchContacts(ctx, repository.SearchContactsParams{
-			Query:  "Pagination",
+			Query:  pageTerm,
 			Limit:  2,
 			Offset: 2,
 		})
@@ -234,31 +247,33 @@ func TestContactSearch_Integration(t *testing.T) {
 	})
 
 	t.Run("RelevanceRanking", func(t *testing.T) {
-		// Create contacts with different relevance (both have "Michael" in name)
+		// Both names share a unique token so the search matches only this test's
+		// two contacts — the >= 2 shape assertion is then over our own rows.
+		token := "Michael" + ns
 		contact1, err := repo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName: "Michael Johnson",
+			FullName: token + " Johnson",
 		})
 		require.NoError(t, err)
 		defer func() { _ = repo.HardDeleteContact(ctx, contact1.ID) }()
-		addContactMethod(t, ctx, methodRepo, contact1.ID, string(repository.ContactMethodEmail), "michael.j@example.com", true)
+		addContactMethod(t, ctx, methodRepo, contact1.ID, string(repository.ContactMethodEmail), "michael.j."+ns+"@example.com", true)
 
 		contact2, err := repo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName: "Sarah Michael",
+			FullName: "Sarah " + token,
 		})
 		require.NoError(t, err)
 		defer func() { _ = repo.HardDeleteContact(ctx, contact2.ID) }()
-		addContactMethod(t, ctx, methodRepo, contact2.ID, string(repository.ContactMethodEmail), "sarah.m@example.com", true)
+		addContactMethod(t, ctx, methodRepo, contact2.ID, string(repository.ContactMethodEmail), "sarah.m."+ns+"@example.com", true)
 
-		// Search for "Michael"
+		// Search for the unique token
 		results, err := repo.SearchContacts(ctx, repository.SearchContactsParams{
-			Query:  "Michael",
+			Query:  token,
 			Limit:  10,
 			Offset: 0,
 		})
 		require.NoError(t, err)
 
-		// Should find both contacts (both have "Michael" in full_name)
-		assert.GreaterOrEqual(t, len(results), 2, "Should find at least 2 contacts with 'Michael' in name")
+		// Should find both contacts (both share the token in full_name)
+		assert.GreaterOrEqual(t, len(results), 2, "Should find at least 2 contacts with the token in name")
 
 		// Verify both are in results (order may vary based on other data)
 		foundContact1 := false
@@ -271,21 +286,23 @@ func TestContactSearch_Integration(t *testing.T) {
 				foundContact2 = true
 			}
 		}
-		assert.True(t, foundContact1, "Contact 1 (Michael Johnson) should be in results")
-		assert.True(t, foundContact2, "Contact 2 (Sarah Michael) should be in results")
+		assert.True(t, foundContact1, "Contact 1 should be in results")
+		assert.True(t, foundContact2, "Contact 2 should be in results")
 	})
 
 	t.Run("CaseInsensitive", func(t *testing.T) {
-		// Create test contact
+		// Create test contact. The unique ns suffix scopes the search to this
+		// test's contact; the "david" word is varied in case to prove FTS is
+		// case-insensitive (the ns token is appended unchanged each time).
 		contact, err := repo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName: "David Miller",
+			FullName: "david" + ns + " Miller",
 		})
 		require.NoError(t, err)
 		defer func() { _ = repo.HardDeleteContact(ctx, contact.ID) }()
-		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmail), "david.miller@example.com", true)
+		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmail), "david.miller."+ns+"@example.com", true)
 
-		// Search with different cases
-		testCases := []string{"david", "DAVID", "David", "dAvId"}
+		// Search with different cases of the word, all carrying the ns suffix.
+		testCases := []string{"david" + ns, "DAVID" + ns, "David" + ns, "dAvId" + ns}
 		for _, query := range testCases {
 			results, err := repo.SearchContacts(ctx, repository.SearchContactsParams{
 				Query:  query,
@@ -318,6 +335,7 @@ func TestNoteSearch_Integration(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
@@ -332,27 +350,31 @@ func TestNoteSearch_Integration(t *testing.T) {
 	repo := repository.NewContactRepository(queries)
 	methodRepo := repository.NewContactMethodRepository(queries)
 
+	// Per-test namespace token so FTS query terms match only this test's notes.
+	ns := syntheticNS(t)
+
 	t.Run("BasicNoteSearch", func(t *testing.T) {
 		// Create a test contact
 		contact, err := repo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName: "Note Test Contact",
+			FullName: "Note Test Contact " + ns,
 		})
 		require.NoError(t, err)
 		defer func() { _ = repo.HardDeleteContact(ctx, contact.ID) }()
-		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmail), "note.test@example.com", true)
+		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmail), "note.test."+ns+"@example.com", true)
 
-		// Create a test note
+		// Create a test note. The ns token makes the two-word phrase unique.
+		term := "machine" + ns
 		note, err := queries.CreateNote(ctx, db.CreateNoteParams{
 			ContactID: pgtype.UUID{Bytes: contact.ID, Valid: true},
-			Body:      "This is a test note about machine learning and artificial intelligence",
+			Body:      "This is a test note about " + term + " learning and artificial intelligence",
 			Category:  pgtype.Text{String: "technical", Valid: true},
 		})
 		require.NoError(t, err)
 		defer func() { _ = queries.DeleteNote(ctx, note.ID) }()
 
-		// Search for "machine learning"
+		// Search for the unique two-word phrase
 		results, err := queries.SearchNotes(ctx, db.SearchNotesParams{
-			PlaintoTsquery: "machine learning",
+			PlaintoTsquery: term + " learning",
 			Limit:          10,
 			Offset:         0,
 		})
@@ -363,26 +385,29 @@ func TestNoteSearch_Integration(t *testing.T) {
 		for _, n := range results {
 			if n.ID.Bytes == note.ID.Bytes {
 				found = true
-				assert.Contains(t, n.Body, "machine learning")
+				assert.Contains(t, n.Body, term)
 				break
 			}
 		}
-		assert.True(t, found, "Note should be found when searching for 'machine learning'")
+		assert.True(t, found, "Note should be found when searching for the unique phrase")
 	})
 
 	t.Run("NoteRelevanceRanking", func(t *testing.T) {
 		// Create contact for test notes
 		contact, err := repo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName: "Ranking Test Contact",
+			FullName: "Ranking Test Contact " + ns,
 		})
 		require.NoError(t, err)
 		defer func() { _ = repo.HardDeleteContact(ctx, contact.ID) }()
-		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmail), "ranking.test@example.com", true)
+		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmail), "ranking.test."+ns+"@example.com", true)
 
-		// Create notes with different relevance
+		// Unique term so only this test's two notes match; note1 carries 3
+		// occurrences (higher rank) vs note2's 1. Searching the term means the
+		// "ranks first" assertion is over our own result set only.
+		term := "golang" + ns
 		note1, err := queries.CreateNote(ctx, db.CreateNoteParams{
 			ContactID: pgtype.UUID{Bytes: contact.ID, Valid: true},
-			Body:      "golang golang golang programming language", // High relevance
+			Body:      term + " " + term + " " + term + " programming language", // High relevance
 			Category:  pgtype.Text{String: "technical", Valid: true},
 		})
 		require.NoError(t, err)
@@ -390,15 +415,15 @@ func TestNoteSearch_Integration(t *testing.T) {
 
 		note2, err := queries.CreateNote(ctx, db.CreateNoteParams{
 			ContactID: pgtype.UUID{Bytes: contact.ID, Valid: true},
-			Body:      "python programming with some golang mention", // Medium relevance
+			Body:      "python programming with some " + term + " mention", // Medium relevance
 			Category:  pgtype.Text{String: "technical", Valid: true},
 		})
 		require.NoError(t, err)
 		defer func() { _ = queries.DeleteNote(ctx, note2.ID) }()
 
-		// Search for "golang"
+		// Search for the unique term
 		results, err := queries.SearchNotes(ctx, db.SearchNotesParams{
-			PlaintoTsquery: "golang",
+			PlaintoTsquery: term,
 			Limit:          10,
 			Offset:         0,
 		})
@@ -436,17 +461,18 @@ func TestNoteSearch_Integration(t *testing.T) {
 	t.Run("NoteSearchPagination", func(t *testing.T) {
 		// Create contact for test notes
 		contact, err := repo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName: "Note Pagination Test",
+			FullName: "Note Pagination Test " + ns,
 		})
 		require.NoError(t, err)
 		defer func() { _ = repo.HardDeleteContact(ctx, contact.ID) }()
-		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmail), "note.pagination@example.com", true)
+		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmail), "note.pagination."+ns+"@example.com", true)
 
-		// Create multiple notes with same keyword
+		// Create multiple notes with the same unique keyword
+		term := "pagination" + ns
 		for i := 0; i < 5; i++ {
 			note, err := queries.CreateNote(ctx, db.CreateNoteParams{
 				ContactID: pgtype.UUID{Bytes: contact.ID, Valid: true},
-				Body:      "Testing pagination functionality with unique content number " + string(rune('0'+i)),
+				Body:      "Testing " + term + " functionality with unique content number " + string(rune('0'+i)),
 				Category:  pgtype.Text{String: "test", Valid: true},
 			})
 			require.NoError(t, err)
@@ -455,7 +481,7 @@ func TestNoteSearch_Integration(t *testing.T) {
 
 		// Test limit
 		page1, err := queries.SearchNotes(ctx, db.SearchNotesParams{
-			PlaintoTsquery: "pagination",
+			PlaintoTsquery: term,
 			Limit:          2,
 			Offset:         0,
 		})
@@ -464,7 +490,7 @@ func TestNoteSearch_Integration(t *testing.T) {
 
 		// Test offset
 		page2, err := queries.SearchNotes(ctx, db.SearchNotesParams{
-			PlaintoTsquery: "pagination",
+			PlaintoTsquery: term,
 			Limit:          2,
 			Offset:         2,
 		})
@@ -479,16 +505,18 @@ func TestNoteSearch_Integration(t *testing.T) {
 	t.Run("NoteSearchCreatedAtSecondarySort", func(t *testing.T) {
 		// Create contact for test notes
 		contact, err := repo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName: "Sort Test Contact",
+			FullName: "Sort Test Contact " + ns,
 		})
 		require.NoError(t, err)
 		defer func() { _ = repo.HardDeleteContact(ctx, contact.ID) }()
-		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmail), "sort.test@example.com", true)
+		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmail), "sort.test."+ns+"@example.com", true)
 
-		// Create notes with same relevance (same keyword count)
+		// Create notes with same relevance (same keyword count); the unique
+		// term keeps the result set to this test's two notes.
+		term := "sorting" + ns
 		note1, err := queries.CreateNote(ctx, db.CreateNoteParams{
 			ContactID: pgtype.UUID{Bytes: contact.ID, Valid: true},
-			Body:      "sorting test first",
+			Body:      term + " test first",
 			Category:  pgtype.Text{String: "test", Valid: true},
 		})
 		require.NoError(t, err)
@@ -496,15 +524,15 @@ func TestNoteSearch_Integration(t *testing.T) {
 
 		note2, err := queries.CreateNote(ctx, db.CreateNoteParams{
 			ContactID: pgtype.UUID{Bytes: contact.ID, Valid: true},
-			Body:      "sorting test second",
+			Body:      term + " test second",
 			Category:  pgtype.Text{String: "test", Valid: true},
 		})
 		require.NoError(t, err)
 		defer func() { _ = queries.DeleteNote(ctx, note2.ID) }()
 
-		// Search for "sorting"
+		// Search for the unique term
 		results, err := queries.SearchNotes(ctx, db.SearchNotesParams{
-			PlaintoTsquery: "sorting",
+			PlaintoTsquery: term,
 			Limit:          10,
 			Offset:         0,
 		})

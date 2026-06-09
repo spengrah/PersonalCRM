@@ -28,6 +28,7 @@ func TestInteraction_SourceCheckAcceptsMessages(t *testing.T) {
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
@@ -51,7 +52,7 @@ func TestInteraction_SourceCheckAcceptsMessages(t *testing.T) {
 	// the shared CI DB. Soft-delete is not enough — the guard counts
 	// rows regardless of deleted_at.
 	defer func() {
-		_ = interactionRepo.HardDeleteInteractionsBySourceRefPrefix(ctx, repository.InteractionSourceMessages, "messages-test-%")
+		_ = interactionRepo.HardDeleteInteractionsBySourceRefPrefix(ctx, repository.InteractionSourceMessages, "messages-test-"+suffix+"%")
 		_ = contactRepo.SoftDeleteContact(ctx, contact.ID)
 	}()
 
@@ -79,6 +80,7 @@ func TestInteraction_SourceCheckRejectsWhatsapp(t *testing.T) {
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL

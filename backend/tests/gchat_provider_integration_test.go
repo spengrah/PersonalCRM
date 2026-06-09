@@ -139,6 +139,7 @@ func chatMessage(name, senderUser, text string, createTime time.Time) *chat.Mess
 // gchat row for a known inbound sender, writes NO events itself, and persists
 // per-space metadata. The row is content-only until the engine aggregates.
 func TestGChatProvider_FullSweep_InboundWritesRowNoEvents(t *testing.T) {
+	t.Parallel()
 	e := setupGChatProviderTest(t)
 	prefix := e.gen.Prefix()
 
@@ -210,6 +211,7 @@ func TestGChatProvider_FullSweep_InboundWritesRowNoEvents(t *testing.T) {
 // (sender ∈ meSet) fans out to every known co-member (one row each, same
 // external_id), while a bystander sender produces no row.
 func TestGChatProvider_OutboundFanOutAndBystander(t *testing.T) {
+	t.Parallel()
 	e := setupGChatProviderTest(t)
 	prefix := e.gen.Prefix()
 
@@ -277,6 +279,7 @@ func TestGChatProvider_OutboundFanOutAndBystander(t *testing.T) {
 // TestGChatProvider_CrossAccountDedup proves the same message observed under two
 // accounts produces ONE row per matched contact with observed_accounts merged.
 func TestGChatProvider_CrossAccountDedup(t *testing.T) {
+	t.Parallel()
 	e := setupGChatProviderTest(t)
 	prefix := e.gen.Prefix()
 
@@ -341,6 +344,7 @@ func TestGChatProvider_CrossAccountDedup(t *testing.T) {
 // ShowDeleted re-list updates the stored body + last_update_time while leaving
 // processed_at untouched (so the engine does not reprocess).
 func TestGChatProvider_EditReconciliation(t *testing.T) {
+	t.Parallel()
 	e := setupGChatProviderTest(t)
 	prefix := e.gen.Prefix()
 
@@ -434,6 +438,7 @@ func TestGChatProvider_EditReconciliation(t *testing.T) {
 // LATER) must NOT apply; the reverse (genuinely newer) must apply. Proves the
 // provider's body-only pre-filter does not invert fractional ordering.
 func TestGChatProvider_EditFractionalOrdering(t *testing.T) {
+	t.Parallel()
 	e := setupGChatProviderTest(t)
 	prefix := e.gen.Prefix()
 
@@ -502,6 +507,7 @@ func TestGChatProvider_EditFractionalOrdering(t *testing.T) {
 // TestGChatProvider_DeleteReconciliation proves a tombstone in the ShowDeleted
 // re-list soft-deletes all fanned-out rows for the message.
 func TestGChatProvider_DeleteReconciliation(t *testing.T) {
+	t.Parallel()
 	e := setupGChatProviderTest(t)
 	prefix := e.gen.Prefix()
 
@@ -567,6 +573,7 @@ func TestGChatProvider_DeleteReconciliation(t *testing.T) {
 // the persisted membership + email cache (no fetcher refetch within TTL) and
 // advances the create cursor so already-ingested messages are not re-listed.
 func TestGChatProvider_MetadataReusedAcrossSweeps(t *testing.T) {
+	t.Parallel()
 	e := setupGChatProviderTest(t)
 	prefix := e.gen.Prefix()
 
@@ -633,6 +640,7 @@ func TestGChatProvider_MetadataReusedAcrossSweeps(t *testing.T) {
 // TestGChatRematch_ScansWhenEnabled proves the enabled gchat rematch handler
 // scans the address across the enabled account and upserts a row.
 func TestGChatRematch_ScansWhenEnabled(t *testing.T) {
+	t.Parallel()
 	e := setupGChatProviderTest(t)
 	prefix := e.gen.Prefix()
 
@@ -755,6 +763,7 @@ func TestGChatRematchHandler_ScansAndAggregates(t *testing.T) {
 // package — its job is the persistence path (window → setCursor → persistMetadata
 // → DB), not the budget boundary.
 func TestGChatProvider_MultiPageWindowPersistsCursor(t *testing.T) {
+	t.Parallel()
 	e := setupGChatProviderTest(t)
 	prefix := e.gen.Prefix()
 
@@ -859,6 +868,7 @@ func spaceCursorFromMetadata(t *testing.T, metadata map[string]any, spaceName st
 // out to the id-resolved contact; (c) the id-resolved contact is a co-member of
 // the group space; (d) the cursor advances (window proven).
 func TestGChatProvider_MatchesContactNotInGoogleContacts(t *testing.T) {
+	t.Parallel()
 	e := setupGChatProviderTest(t)
 	prefix := e.gen.Prefix()
 
@@ -937,6 +947,7 @@ func TestGChatProvider_MatchesContactNotInGoogleContacts(t *testing.T) {
 // MATCHES (the fingerprint flip invalidated the stale negative before the cursor
 // advanced past the message).
 func TestGChatProvider_StaleNegativeClearedOnMembershipChange(t *testing.T) {
+	t.Parallel()
 	e := setupGChatProviderTest(t)
 	prefix := e.gen.Prefix()
 
@@ -1011,6 +1022,7 @@ func TestGChatProvider_StaleNegativeClearedOnMembershipChange(t *testing.T) {
 // the email→id once and sweep 2 (a second space, same email) issues ZERO
 // ResolveMemberID calls (the global positive is reused from persisted metadata).
 func TestGChatProvider_GlobalPositiveCachePersistsAndReused(t *testing.T) {
+	t.Parallel()
 	e := setupGChatProviderTest(t)
 	prefix := e.gen.Prefix()
 
@@ -1090,6 +1102,7 @@ func TestGChatProvider_GlobalPositiveCachePersistsAndReused(t *testing.T) {
 // exact prod failure (processed=0 with all spaces held) turned into a passing
 // assertion.
 func TestGChatProvider_ColdStartProcessesAndAdvancesDespiteResolveDebt(t *testing.T) {
+	t.Parallel()
 	e := setupGChatProviderTest(t)
 	prefix := e.gen.Prefix()
 
@@ -1175,6 +1188,7 @@ func TestGChatProvider_ColdStartProcessesAndAdvancesDespiteResolveDebt(t *testin
 // and a People-resolvable co-member's message DOES match. Sweep 2 (cap raised): a
 // NEW message from the now-resolvable contact, sent after the cursor, matches.
 func TestGChatProvider_DeferredIDContactMatchesOnLaterSweep(t *testing.T) {
+	t.Parallel()
 	e := setupGChatProviderTest(t)
 	prefix := e.gen.Prefix()
 
@@ -1275,6 +1289,7 @@ func TestGChatProvider_DeferredIDContactMatchesOnLaterSweep(t *testing.T) {
 // no known inbound sender) STILL advances its cursor (window pages to zero
 // matchable rows and proven advances it).
 func TestGChatProvider_NoCurrentMemberSpaceStillPagesAndAdvances(t *testing.T) {
+	t.Parallel()
 	e := setupGChatProviderTest(t)
 	prefix := e.gen.Prefix()
 
@@ -1365,6 +1380,7 @@ func TestGChatProvider_NoCurrentMemberSpaceStillPagesAndAdvances(t *testing.T) {
 // leaving budget for later spaces. Asserts the front space advances AND a later
 // space is also processed in the same sweep (forward progress, no starvation).
 func TestGChatProvider_ColdStartFrontSpaceDoesNotStarveLaterSpaces(t *testing.T) {
+	t.Parallel()
 	e := setupGChatProviderTest(t)
 	prefix := e.gen.Prefix()
 
@@ -1437,6 +1453,7 @@ func TestGChatProvider_ColdStartFrontSpaceDoesNotStarveLaterSpaces(t *testing.T)
 // row per contact, no duplicate. Guards the "process with partial index now,
 // fuller later" safety claim.
 func TestGChatProvider_NoDoubleProcessOnReResolve(t *testing.T) {
+	t.Parallel()
 	e := setupGChatProviderTest(t)
 	prefix := e.gen.Prefix()
 
@@ -1533,6 +1550,7 @@ func TestGChatProvider_NoDoubleProcessOnReResolve(t *testing.T) {
 // identical (fingerprint stable). The cursor advances every sweep and ZERO
 // ResolveMemberID calls fire for the absent contact after the first.
 func TestGChatProvider_HotSpaceNoStarvation(t *testing.T) {
+	t.Parallel()
 	e := setupGChatProviderTest(t)
 	prefix := e.gen.Prefix()
 
@@ -1616,6 +1634,7 @@ func TestGChatProvider_HotSpaceNoStarvation(t *testing.T) {
 // so the historical message still upserts. Proves the rematch path uses the new
 // id resolution.
 func TestGChatRematch_IDResolutionMatchesHistory(t *testing.T) {
+	t.Parallel()
 	e := setupGChatProviderTest(t)
 	prefix := e.gen.Prefix()
 

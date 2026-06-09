@@ -120,6 +120,7 @@ func registerCleanupBySource(t *testing.T, env *matcherEnrichTestEnv, ctx contex
 }
 
 func TestMatcherEnrichment_AboveThreshold_UsernameMatch(t *testing.T) {
+	t.Parallel()
 	env := setupMatcherEnrichmentTest(t)
 	ctx := context.Background()
 	gen, ns := migrationGenerator(t)
@@ -186,6 +187,7 @@ func TestMatcherEnrichment_AboveThreshold_UsernameMatch(t *testing.T) {
 }
 
 func TestMatcherEnrichment_BelowThreshold_NoExternalContact(t *testing.T) {
+	t.Parallel()
 	env := setupMatcherEnrichmentTest(t)
 	ctx := context.Background()
 	gen, ns := migrationGenerator(t)
@@ -231,6 +233,7 @@ func TestMatcherEnrichment_BelowThreshold_NoExternalContact(t *testing.T) {
 }
 
 func TestMatcherEnrichment_PhoneMatchWithUsername(t *testing.T) {
+	t.Parallel()
 	env := setupMatcherEnrichmentTest(t)
 	ctx := context.Background()
 	gen, ns := migrationGenerator(t)
@@ -265,6 +268,7 @@ func TestMatcherEnrichment_PhoneMatchWithUsername(t *testing.T) {
 }
 
 func TestMatcherEnrichment_PhoneMatchWithoutUsername(t *testing.T) {
+	t.Parallel()
 	env := setupMatcherEnrichmentTest(t)
 	ctx := context.Background()
 	gen, ns := migrationGenerator(t)
@@ -292,6 +296,7 @@ func TestMatcherEnrichment_PhoneMatchWithoutUsername(t *testing.T) {
 }
 
 func TestMatcherEnrichment_Idempotency(t *testing.T) {
+	t.Parallel()
 	env := setupMatcherEnrichmentTest(t)
 	ctx := context.Background()
 	gen, ns := migrationGenerator(t)
@@ -333,6 +338,7 @@ func TestMatcherEnrichment_Idempotency(t *testing.T) {
 // no duplicate row. Higher concurrency is used to make 23505 path coverage
 // deterministic in practice; a single sequential run cannot trigger it.
 func TestMatcherEnrichment_ConcurrentMatch_TreatsUniqueViolationAsSuccess(t *testing.T) {
+	t.Parallel()
 	env := setupMatcherEnrichmentTest(t)
 	ctx := context.Background()
 	gen, ns := migrationGenerator(t)
@@ -391,6 +397,7 @@ func TestMatcherEnrichment_ConcurrentMatch_TreatsUniqueViolationAsSuccess(t *tes
 // markExternalContactMatched early-returns in this case, so enrichment must
 // run from MatchPeer regardless of stored match status.
 func TestMatcherEnrichment_AlreadyMatchedExternalContact_RepairsMissingMethod(t *testing.T) {
+	t.Parallel()
 	env := setupMatcherEnrichmentTest(t)
 	ctx := context.Background()
 	gen, ns := migrationGenerator(t)
@@ -451,6 +458,7 @@ func TestMatcherEnrichment_EnricherErrorDoesNotBreakMatch(t *testing.T) {
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set")
 	}
+	t.Parallel()
 	// Migrations are applied once by TestMain.
 
 	cfg := config.TestConfig()

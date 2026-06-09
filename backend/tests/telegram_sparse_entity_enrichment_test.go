@@ -135,6 +135,7 @@ func makePrivateMessage(peerUserID int64, msgID int, sentAt time.Time, text stri
 }
 
 func TestSparseEntityEnrichment_HandleNewMessage_FillsFromHistory(t *testing.T) {
+	t.Parallel()
 	env := setupSparseEnrichTest(t)
 	ctx := context.Background()
 	_, ns := migrationGenerator(t)
@@ -175,6 +176,7 @@ func TestSparseEntityEnrichment_HandleNewMessage_FillsFromHistory(t *testing.T) 
 }
 
 func TestSparseEntityEnrichment_HandleNewMessage_NoHistoryStaysSparse(t *testing.T) {
+	t.Parallel()
 	env := setupSparseEnrichTest(t)
 	ctx := context.Background()
 	_, ns := migrationGenerator(t)
@@ -196,6 +198,7 @@ func TestSparseEntityEnrichment_HandleNewMessage_NoHistoryStaysSparse(t *testing
 }
 
 func TestSparseEntityEnrichment_HandleEditMessage_FillsFromHistory(t *testing.T) {
+	t.Parallel()
 	env := setupSparseEnrichTest(t)
 	ctx := context.Background()
 	_, ns := migrationGenerator(t)
@@ -234,6 +237,7 @@ func TestSparseEntityEnrichment_HandleEditMessage_FillsFromHistory(t *testing.T)
 }
 
 func TestSparseEntityEnrichment_AuthoritativeEmptyRespectsRemoval(t *testing.T) {
+	t.Parallel()
 	env := setupSparseEnrichTest(t)
 	ctx := context.Background()
 	_, ns := migrationGenerator(t)
@@ -274,6 +278,7 @@ func TestSparseEntityEnrichment_AuthoritativeEmptyRespectsRemoval(t *testing.T) 
 }
 
 func TestSparseEntityEnrichment_StraightRenameCurrentNonBlankWins(t *testing.T) {
+	t.Parallel()
 	env := setupSparseEnrichTest(t)
 	ctx := context.Background()
 	_, ns := migrationGenerator(t)
@@ -317,6 +322,7 @@ func TestSparseEntityEnrichment_StraightRenameCurrentNonBlankWins(t *testing.T) 
 }
 
 func TestSparseEntityEnrichment_UntrackedGroupSkipsBeforeEnrichment(t *testing.T) {
+	t.Parallel()
 	env := setupSparseEnrichTest(t)
 	ctx := context.Background()
 	_, ns := migrationGenerator(t)
@@ -367,6 +373,7 @@ func TestSparseEntityEnrichment_UntrackedGroupSkipsBeforeEnrichment(t *testing.T
 // GetPeerEntityByUserID prefers the most recent authoritative row over any
 // older non-blank value.
 func TestSparseEntityEnrichment_AuthoritativeRemovalSticksAcrossSparseUpdates(t *testing.T) {
+	t.Parallel()
 	env := setupSparseEnrichTest(t)
 	ctx := context.Background()
 	_, ns := migrationGenerator(t)
@@ -416,6 +423,7 @@ func TestSparseEntityEnrichment_AuthoritativeRemovalSticksAcrossSparseUpdates(t 
 // data, the enriched username/first_name flows through MatchPeer →
 // UpdateDiscoveryCandidatesForPeer and lands on the external_contact row.
 func TestSparseEntityEnrichment_EnrichedFieldsFlowToDiscoveryCandidate(t *testing.T) {
+	t.Parallel()
 	env := setupSparseEnrichTest(t)
 	ctx := context.Background()
 	_, ns := migrationGenerator(t)

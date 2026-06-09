@@ -39,6 +39,7 @@ func seedContactWithMethod(t *testing.T, ctx context.Context, commsRepo *reposit
 // address fans out to multiple contacts; soft-deleted contacts and
 // empty-normalized values are excluded; values are already lowercased.
 func TestListGChatIdentitiesForSync_DualSource(t *testing.T) {
+	t.Parallel()
 	ctx, commsRepo, contactRepo, methodRepo := setupCommsMessageTest(t)
 	gen, _ := migrationGenerator(t)
 	suffix := gen.Prefix()

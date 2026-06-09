@@ -143,6 +143,7 @@ func metadataFor(t *testing.T, accountID, gmailID string, extra map[string]any) 
 }
 
 func TestCommsMessageRepository_UpsertAndGet(t *testing.T) {
+	t.Parallel()
 	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
 	gen, _ := migrationGenerator(t)
@@ -183,6 +184,7 @@ func TestCommsMessageRepository_UpsertAndGet(t *testing.T) {
 // keys). The repository must not depend on the caller pre-seeding
 // observed_accounts[] / account_gmail_ids.
 func TestCommsMessageRepository_UpsertSynthesizesProvenanceOnInsert(t *testing.T) {
+	t.Parallel()
 	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
 	gen, _ := migrationGenerator(t)
@@ -227,6 +229,7 @@ func TestCommsMessageRepository_UpsertSynthesizesProvenanceOnInsert(t *testing.T
 }
 
 func TestCommsMessageRepository_GetMessage_NotFound(t *testing.T) {
+	t.Parallel()
 	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
 	gen, _ := migrationGenerator(t)
@@ -239,6 +242,7 @@ func TestCommsMessageRepository_GetMessage_NotFound(t *testing.T) {
 }
 
 func TestCommsMessageRepository_UpsertIdempotentSameAccount(t *testing.T) {
+	t.Parallel()
 	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
 	gen, _ := migrationGenerator(t)
@@ -264,6 +268,7 @@ func TestCommsMessageRepository_UpsertIdempotentSameAccount(t *testing.T) {
 }
 
 func TestCommsMessageRepository_CrossAccountProvenanceMerge(t *testing.T) {
+	t.Parallel()
 	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
 	gen, _ := migrationGenerator(t)
@@ -303,6 +308,7 @@ func TestCommsMessageRepository_CrossAccountProvenanceMerge(t *testing.T) {
 }
 
 func TestCommsMessageRepository_SameAccountReplayAfterMerge(t *testing.T) {
+	t.Parallel()
 	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
 	gen, _ := migrationGenerator(t)
@@ -329,6 +335,7 @@ func TestCommsMessageRepository_SameAccountReplayAfterMerge(t *testing.T) {
 }
 
 func TestCommsMessageRepository_ContentImmutableOnConflict(t *testing.T) {
+	t.Parallel()
 	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
 	gen, _ := migrationGenerator(t)
@@ -359,6 +366,7 @@ func TestCommsMessageRepository_ContentImmutableOnConflict(t *testing.T) {
 }
 
 func TestCommsMessageRepository_PerParticipantRowsDistinct(t *testing.T) {
+	t.Parallel()
 	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
 	gen, _ := migrationGenerator(t)
@@ -387,6 +395,7 @@ func TestCommsMessageRepository_PerParticipantRowsDistinct(t *testing.T) {
 }
 
 func TestCommsMessageRepository_MarkProcessedTx(t *testing.T) {
+	t.Parallel()
 	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
 	databaseURL := os.Getenv("DATABASE_URL")
@@ -454,6 +463,7 @@ func TestCommsMessageRepository_MarkProcessedTx(t *testing.T) {
 }
 
 func TestCommsMessageRepository_ListByContactNewestFirst(t *testing.T) {
+	t.Parallel()
 	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
 	gen, _ := migrationGenerator(t)
@@ -481,6 +491,7 @@ func TestCommsMessageRepository_ListByContactNewestFirst(t *testing.T) {
 }
 
 func TestCommsMessageRepository_ListEmailIdentitiesForSync(t *testing.T) {
+	t.Parallel()
 	ctx, repo, contactRepo, methodRepo := setupCommsMessageTest(t)
 
 	gen, _ := migrationGenerator(t)
@@ -550,6 +561,7 @@ func TestInteractionSourceCheck_AcceptsEmail(t *testing.T) {
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
@@ -624,6 +636,7 @@ func previousBodies(t *testing.T, raw []byte) []string {
 // observation pushes previous_bodies[] exactly once. body/snippet/edited_at/
 // last_update_time are updated; processed_at/interaction_id/deleted_at untouched.
 func TestApplyEditByExternalID_PreviousBodiesCapAndRecencyGuard(t *testing.T) {
+	t.Parallel()
 	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
 	gen, _ := migrationGenerator(t)
@@ -698,6 +711,7 @@ func TestApplyEditByExternalID_PreviousBodiesCapAndRecencyGuard(t *testing.T) {
 // LATER is rejected. The "...10:00:00Z" vs "...10:00:00.001Z" pair is the exact
 // case a string compare would invert (the 'Z' byte sorts after '.').
 func TestApplyEditByExternalID_FractionalSecondOrdering(t *testing.T) {
+	t.Parallel()
 	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
 	gen, _ := migrationGenerator(t)
@@ -739,6 +753,7 @@ func TestApplyEditByExternalID_FractionalSecondOrdering(t *testing.T) {
 // TestSoftDeleteByExternalID_AllFannedRows proves the production delete path
 // soft-deletes EVERY fanned-out row for (source, external_id) and is idempotent.
 func TestSoftDeleteByExternalID_AllFannedRows(t *testing.T) {
+	t.Parallel()
 	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
 	gen, _ := migrationGenerator(t)
@@ -774,6 +789,7 @@ func TestSoftDeleteByExternalID_AllFannedRows(t *testing.T) {
 // TestGetLatestByExternalID_NewestFirstAndNotFound pins the body-pre-check read:
 // it returns the newest row by (sent_at DESC, id) and ErrNotFound on miss.
 func TestGetLatestByExternalID_NewestFirstAndNotFound(t *testing.T) {
+	t.Parallel()
 	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
 	gen, _ := migrationGenerator(t)
@@ -802,6 +818,7 @@ func TestGetLatestByExternalID_NewestFirstAndNotFound(t *testing.T) {
 // content + provenance keys, and a second call is a no-op (the NOT (?
 // 'from_name') guard → 0 rows).
 func TestBackfillParticipantNames_AdditiveMergeAndIdempotent(t *testing.T) {
+	t.Parallel()
 	ctx, repo, contactRepo, _ := setupCommsMessageTest(t)
 
 	gen, _ := migrationGenerator(t)

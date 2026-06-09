@@ -28,8 +28,8 @@ func setupDirectionTestDeps(t *testing.T) (*service.ContactService, *repository.
 	ctx := context.Background()
 	dbConfig := config.DatabaseConfig{
 		URL:               databaseURL,
-		MaxConns:          config.DefaultDBMaxConns,
-		MinConns:          config.DefaultDBMinConns,
+		MaxConns:          8, // mirrors the lowered TestConfig() ceiling for parallel tests
+		MinConns:          1,
 		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
 		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
 		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
@@ -52,6 +52,7 @@ func setupDirectionTestDeps(t *testing.T) (*service.ContactService, *repository.
 }
 
 func TestRecordInteraction_DirectionOutbound(t *testing.T) {
+	t.Parallel()
 	contactService, contactRepo, _, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -96,6 +97,7 @@ func TestRecordInteraction_DirectionOutbound(t *testing.T) {
 }
 
 func TestRecordInteraction_DirectionMutual(t *testing.T) {
+	t.Parallel()
 	contactService, contactRepo, _, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -138,6 +140,7 @@ func TestRecordInteraction_DirectionMutual(t *testing.T) {
 }
 
 func TestRecordInteraction_DirectionInbound(t *testing.T) {
+	t.Parallel()
 	contactService, contactRepo, _, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -177,6 +180,7 @@ func TestRecordInteraction_DirectionInbound(t *testing.T) {
 }
 
 func TestRecordInteraction_EmptyDirectionDefaultsMutual(t *testing.T) {
+	t.Parallel()
 	contactService, contactRepo, _, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -200,6 +204,7 @@ func TestRecordInteraction_EmptyDirectionDefaultsMutual(t *testing.T) {
 }
 
 func TestRecordInteraction_ForwardOnlyGuard_ContactByNotRegressed(t *testing.T) {
+	t.Parallel()
 	contactService, contactRepo, _, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -253,6 +258,7 @@ func TestRecordInteraction_ForwardOnlyGuard_ContactByNotRegressed(t *testing.T) 
 }
 
 func TestHasPendingFollowUp(t *testing.T) {
+	t.Parallel()
 	contactService, contactRepo, contactTaskRepo, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -294,18 +300,23 @@ func TestHasPendingFollowUp(t *testing.T) {
 }
 
 func TestFollowupFilter(t *testing.T) {
+	t.Parallel()
 	_, contactRepo, contactTaskRepo, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
 	ctx := context.Background()
 
-	// Create two contacts
+	// Namespaced names: this test scans the whole table via the has_followup /
+	// no_followup filters, so fixed names risk fuzzy-trigram collision with a
+	// parallel copy. Assertions key on contact.ID, so the name only needs to be
+	// unique.
+	ns := syntheticNS(t)
 	contactWithFollowup, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName: "Has Followup Filter Test",
+		FullName: "Has Followup Filter Test " + ns,
 	})
 	require.NoError(t, err)
 
 	contactWithoutFollowup, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName: "No Followup Filter Test",
+		FullName: "No Followup Filter Test " + ns,
 	})
 	require.NoError(t, err)
 
@@ -322,7 +333,7 @@ func TestFollowupFilter(t *testing.T) {
 
 	// Filter: has_followup
 	contactsWithFollowup, err := contactRepo.ListContacts(ctx, repository.ListContactsParams{
-		Limit:          100,
+		Limit:          100000,
 		FollowupFilter: "has_followup",
 	})
 	require.NoError(t, err)
@@ -341,7 +352,7 @@ func TestFollowupFilter(t *testing.T) {
 
 	// Filter: no_followup
 	contactsWithout, err := contactRepo.ListContacts(ctx, repository.ListContactsParams{
-		Limit:          100,
+		Limit:          100000,
 		FollowupFilter: "no_followup",
 	})
 	require.NoError(t, err)
@@ -360,13 +371,17 @@ func TestFollowupFilter(t *testing.T) {
 }
 
 func TestCompletedCadenceTask_CanBeReplacedByNewOne(t *testing.T) {
+	t.Parallel()
 	_, contactRepo, contactTaskRepo, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
 	ctx := context.Background()
 
+	// Per-test namespace so the fixed external_task_id literals below don't
+	// collide on the (provider, external_task_id) key across parallel clones.
+	ns := syntheticNS(t)
 	cadence := "monthly"
 	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName: "Cadence Replacement Test",
+		FullName: "Cadence Replacement Test " + ns,
 		Cadence:  &cadence,
 	})
 	require.NoError(t, err)
@@ -377,7 +392,7 @@ func TestCompletedCadenceTask_CanBeReplacedByNewOne(t *testing.T) {
 		Provider:       "todoist",
 		Kind:           contacttask.KindReachOut,
 		Lifecycle:      contacttask.LifecycleCadenceDue,
-		ExternalTaskID: "original-cadence-task",
+		ExternalTaskID: "original-cadence-task-" + ns,
 		State:          "managed",
 	})
 	require.NoError(t, err)
@@ -400,12 +415,12 @@ func TestCompletedCadenceTask_CanBeReplacedByNewOne(t *testing.T) {
 		Provider:       "todoist",
 		Kind:           contacttask.KindReachOut,
 		Lifecycle:      contacttask.LifecycleCadenceDue,
-		ExternalTaskID: "replacement-cadence-task",
+		ExternalTaskID: "replacement-cadence-task-" + ns,
 		State:          "managed",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, repository.ContactTaskStateManaged, newTask.State)
-	assert.Equal(t, "replacement-cadence-task", newTask.ExternalTaskID)
+	assert.Equal(t, "replacement-cadence-task-"+ns, newTask.ExternalTaskID)
 
 	// Verify: GetContactTaskByContact now returns the new managed task
 	current, err := contactTaskRepo.GetContactTaskByContactCadenceDue(ctx, contact.ID, "todoist")

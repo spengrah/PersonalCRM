@@ -54,6 +54,7 @@ func TestInteractionSourceCheck_AgreesWithDescriptorAndConstants(t *testing.T) {
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set")
 	}
+	t.Parallel()
 	ctx := context.Background()
 
 	// CI runs against a bare PostgreSQL — run migrations before opening
@@ -139,6 +140,7 @@ func TestInteractionSourceCheck_AcceptsPhoneCalls(t *testing.T) {
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
@@ -155,7 +157,7 @@ func TestInteractionSourceCheck_AcceptsPhoneCalls(t *testing.T) {
 	})
 	require.NoError(t, err)
 	defer func() {
-		_ = interactionRepo.HardDeleteInteractionsBySourceRefPrefix(ctx, repository.InteractionSourcePhoneCalls, "phone-calls-test-%")
+		_ = interactionRepo.HardDeleteInteractionsBySourceRefPrefix(ctx, repository.InteractionSourcePhoneCalls, "phone-calls-test-"+suffix+"%")
 		_ = contactRepo.SoftDeleteContact(ctx, contact.ID)
 	}()
 

@@ -37,6 +37,7 @@ func upsertGChatRow(t *testing.T, ctx context.Context, commsRepo *repository.Com
 // isolates rows on the shared comms_message table: gchat-source readers see
 // only gchat rows (email rows are invisible) and vice-versa.
 func TestCommsSourceParameterizedQueries_IsolateSources(t *testing.T) {
+	t.Parallel()
 	ctx, commsRepo, contactRepo, _ := setupCommsMessageTest(t)
 	gen, _ := migrationGenerator(t)
 	suffix := gen.Prefix()
@@ -91,6 +92,7 @@ func TestCommsSourceParameterizedQueries_IsolateSources(t *testing.T) {
 // fanned out to two contacts must resolve to the querying contact's own row,
 // never the other contact's.
 func TestGetMessageByReplyTargetForSource(t *testing.T) {
+	t.Parallel()
 	ctx, commsRepo, contactRepo, methodRepo := setupCommsMessageTest(t)
 	gen, _ := migrationGenerator(t)
 	suffix := gen.Prefix()

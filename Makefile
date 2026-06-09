@@ -330,15 +330,15 @@ test-unit:
 
 test-integration-fast:
 	@echo "Running backend integration tests (default set)..."
-	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" go test -tags integration_testdb -count=1 ./tests/... ./internal/todoist/... ./internal/google/... ./internal/testdb/... -v
+	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" go test -tags integration_testdb -count=1 -parallel 4 -p 4 ./tests/... ./internal/todoist/... ./internal/google/... ./internal/testdb/... -v
 
 test-integration:
 	@echo "Running backend integration tests..."
-	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test -tags integration_testdb -count=1 ./tests/... ./internal/todoist/... ./internal/google/... ./internal/testdb/... -v
+	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test -tags integration_testdb -count=1 -parallel 4 -p 4 ./tests/... ./internal/todoist/... ./internal/google/... ./internal/testdb/... -v
 
 test-integration-slow:
 	@echo "Running backend slow integration tests..."
-	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test -tags integration_testdb -count=1 ./tests/... ./internal/todoist/... ./internal/google/... ./internal/testdb/... -v -run '$(BACKEND_SLOW_TESTS_REGEX)'
+	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test -tags integration_testdb -count=1 -parallel 4 -p 4 ./tests/... ./internal/todoist/... ./internal/google/... ./internal/testdb/... -v -run '$(BACKEND_SLOW_TESTS_REGEX)'
 
 # Sweep leaked clone databases (personal_crm_test_clone_*) AND stale
 # per-migration-set template databases (personal_crm_test_template_<hash>).

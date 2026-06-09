@@ -81,6 +81,7 @@ func setupPhoneCallTest(t *testing.T) (phoneCallTestEnv, func()) {
 }
 
 func TestPhoneCallRepository_UpsertAndGet(t *testing.T) {
+	t.Parallel()
 	env, cleanup := setupPhoneCallTest(t)
 	defer cleanup()
 
@@ -138,6 +139,7 @@ func TestPhoneCallRepository_UpsertAndGet(t *testing.T) {
 }
 
 func TestPhoneCallRepository_GetByUniqueID_NotFound(t *testing.T) {
+	t.Parallel()
 	env, cleanup := setupPhoneCallTest(t)
 	defer cleanup()
 
@@ -147,6 +149,7 @@ func TestPhoneCallRepository_GetByUniqueID_NotFound(t *testing.T) {
 }
 
 func TestPhoneCallRepository_MarkProcessed_WithInteraction(t *testing.T) {
+	t.Parallel()
 	env, cleanup := setupPhoneCallTest(t)
 	defer cleanup()
 
@@ -196,6 +199,7 @@ func TestPhoneCallRepository_MarkProcessed_WithInteraction(t *testing.T) {
 }
 
 func TestPhoneCallRepository_MarkProcessed_NoInteraction(t *testing.T) {
+	t.Parallel()
 	env, cleanup := setupPhoneCallTest(t)
 	defer cleanup()
 
@@ -228,6 +232,7 @@ func TestPhoneCallRepository_MarkProcessed_NoInteraction(t *testing.T) {
 }
 
 func TestPhoneCallRepository_HardDeleteByMacHost(t *testing.T) {
+	t.Parallel()
 	env, cleanup := setupPhoneCallTest(t)
 	defer cleanup()
 

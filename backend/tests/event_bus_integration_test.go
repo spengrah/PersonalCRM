@@ -116,6 +116,7 @@ func TestEventRepository_InsertAndFetch_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	database, _ := newEventBusTestDB(t, ctx)
 	repo := repository.NewEventRepository(database.Queries)
@@ -155,6 +156,7 @@ func TestEventRepository_DuplicateSourceID_ReturnsErrDuplicate_Integration(t *te
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	database, _ := newEventBusTestDB(t, ctx)
 	repo := repository.NewEventRepository(database.Queries)
@@ -204,6 +206,7 @@ func TestEventRepository_NullSourceID_AllowsMultipleInserts_Integration(t *testi
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	database, _ := newEventBusTestDB(t, ctx)
 	repo := repository.NewEventRepository(database.Queries)
@@ -240,6 +243,7 @@ func TestEventRepository_GetEvent_NotFound_ReturnsErrNotFound_Integration(t *tes
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	database, _ := newEventBusTestDB(t, ctx)
 	repo := repository.NewEventRepository(database.Queries)
@@ -252,6 +256,7 @@ func TestEventRepository_FindEventBySource_NotFound_ReturnsErrNotFound_Integrati
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	database, _ := newEventBusTestDB(t, ctx)
 	repo := repository.NewEventRepository(database.Queries)

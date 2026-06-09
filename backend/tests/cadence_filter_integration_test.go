@@ -25,6 +25,7 @@ func TestCadenceFilter_Integration(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	// Migrations are applied once by TestMain.
 	ctx := context.Background()
 	cfg := config.TestConfig()
@@ -49,7 +50,7 @@ func TestCadenceFilter_Integration(t *testing.T) {
 
 	t.Run("ListContacts_NoCadenceFilter", func(t *testing.T) {
 		results, err := repo.ListContacts(ctx, repository.ListContactsParams{
-			Limit:         100,
+			Limit:         100000,
 			Offset:        0,
 			CadenceFilter: "",
 		})
@@ -71,7 +72,7 @@ func TestCadenceFilter_Integration(t *testing.T) {
 
 	t.Run("ListContacts_HasCadence", func(t *testing.T) {
 		results, err := repo.ListContacts(ctx, repository.ListContactsParams{
-			Limit:         100,
+			Limit:         100000,
 			Offset:        0,
 			CadenceFilter: "has_cadence",
 		})
@@ -92,7 +93,7 @@ func TestCadenceFilter_Integration(t *testing.T) {
 
 	t.Run("ListContacts_NoCadence", func(t *testing.T) {
 		results, err := repo.ListContacts(ctx, repository.ListContactsParams{
-			Limit:         100,
+			Limit:         100000,
 			Offset:        0,
 			CadenceFilter: "no_cadence",
 		})
@@ -113,7 +114,7 @@ func TestCadenceFilter_Integration(t *testing.T) {
 
 	t.Run("ListContactsSorted_HasCadence", func(t *testing.T) {
 		results, err := repo.ListContacts(ctx, repository.ListContactsParams{
-			Limit:         100,
+			Limit:         100000,
 			Offset:        0,
 			Sort:          "name",
 			Order:         "asc",
@@ -135,14 +136,20 @@ func TestCadenceFilter_Integration(t *testing.T) {
 	})
 
 	t.Run("CountContacts_HasCadence", func(t *testing.T) {
+		// CountContacts is a DB-wide COUNT(*), so it sees other parallel tests'
+		// rows. We only assert it is >= 1 for each partition: this test's own
+		// withCadence/withoutCadence rows guarantee at least one in each, and
+		// concurrent tests can only ADD rows, never drop the count below our
+		// contribution. (A stricter "== N" over the whole table would be
+		// shared-DB-unsafe under t.Parallel().)
 		totalHas, err := repo.CountContacts(ctx, "has_cadence", "")
 		require.NoError(t, err)
 
 		totalNo, err := repo.CountContacts(ctx, "no_cadence", "")
 		require.NoError(t, err)
 
-		assert.Greater(t, totalHas, int64(0), "should have at least one contact with cadence")
-		assert.Greater(t, totalNo, int64(0), "should have at least one contact without cadence")
+		assert.GreaterOrEqual(t, totalHas, int64(1), "this test's own cadence contact guarantees >= 1")
+		assert.GreaterOrEqual(t, totalNo, int64(1), "this test's own no-cadence contact guarantees >= 1")
 	})
 
 	t.Run("ListContactIDs_HasCadence", func(t *testing.T) {

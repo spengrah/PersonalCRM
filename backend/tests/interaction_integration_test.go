@@ -29,8 +29,8 @@ func setupInteractionTestDeps(t *testing.T) (*service.ContactService, *repositor
 	ctx := context.Background()
 	dbConfig := config.DatabaseConfig{
 		URL:               databaseURL,
-		MaxConns:          config.DefaultDBMaxConns,
-		MinConns:          config.DefaultDBMinConns,
+		MaxConns:          8, // mirrors the lowered TestConfig() ceiling for parallel tests
+		MinConns:          1,
 		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
 		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
 		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
@@ -65,6 +65,7 @@ func TestRecordInteraction_SourceRefDedup(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
+	t.Parallel()
 	contactService, interactionRepo, contactRepo, cleanup := setupInteractionTestDeps(t)
 	defer cleanup()
 
@@ -124,6 +125,7 @@ func TestRecordInteraction_ForwardOnlyLastContacted(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
+	t.Parallel()
 	contactService, _, contactRepo, cleanup := setupInteractionTestDeps(t)
 	defer cleanup()
 
@@ -172,6 +174,7 @@ func TestRecordInteraction_ManualAlwaysUpdates(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
+	t.Parallel()
 	contactService, _, contactRepo, cleanup := setupInteractionTestDeps(t)
 	defer cleanup()
 
@@ -201,6 +204,7 @@ func TestRecordInteraction_NonExistentContact(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
+	t.Parallel()
 	contactService, _, _, cleanup := setupInteractionTestDeps(t)
 	defer cleanup()
 

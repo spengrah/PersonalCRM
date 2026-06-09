@@ -40,6 +40,7 @@ func ingestRegistryGuardPath(t *testing.T) string {
 // TestIngestRegistryGuard_PassesOnRealTree confirms the guard exits zero on
 // the actual ingest.go — a false positive here would block every push.
 func TestIngestRegistryGuard_PassesOnRealTree(t *testing.T) {
+	t.Parallel()
 	guard := ingestRegistryGuardPath(t)
 	if out, runErr := exec.Command(guard).CombinedOutput(); runErr != nil {
 		t.Fatalf("guard unexpectedly failed on the real tree: %v\n%s", runErr, out)
@@ -53,6 +54,7 @@ func TestIngestRegistryGuard_PassesOnRealTree(t *testing.T) {
 // kind reference lives OUTSIDE the IngestBatch body must pass — that proves
 // the guard is scoped to the body, not the whole file.
 func TestIngestRegistryGuard_CatchesViolations(t *testing.T) {
+	t.Parallel()
 	guard := ingestRegistryGuardPath(t)
 
 	cases := []struct {

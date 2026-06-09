@@ -96,6 +96,7 @@ func (e *jsonbGINEnv) gcalIDFor(label string) string {
 // to seq scan) — this test catches a future migration that accidentally
 // drops or renames the index.
 func TestJSONBGINIndexes_Exist(t *testing.T) {
+	t.Parallel()
 	env := setupJSONBGINEnv(t)
 
 	for _, name := range []string{
@@ -113,6 +114,7 @@ func TestJSONBGINIndexes_Exist(t *testing.T) {
 // every JSONB shape that exists in prod plus the defensive shapes that
 // don't (NULL JSONB column, non-array JSONB).
 func TestFindExternalContactsByNormalizedEmail_Behavior(t *testing.T) {
+	t.Parallel()
 	env := setupJSONBGINEnv(t)
 
 	t.Run("Case01_MixedCaseStored_LowercaseQuery_Matches", func(t *testing.T) {
@@ -270,6 +272,7 @@ func TestFindExternalContactsByNormalizedEmail_Behavior(t *testing.T) {
 // TestFindEventsByAttendeeEmailUnmatchedForContact_Behavior covers cases
 // 11–16 plus a case-insensitivity guard (Case11B) for the calendar query.
 func TestFindEventsByAttendeeEmailUnmatchedForContact_Behavior(t *testing.T) {
+	t.Parallel()
 	env := setupJSONBGINEnv(t)
 	now := accelerated.GetCurrentTime().UTC()
 
@@ -407,6 +410,7 @@ func TestFindEventsByAttendeeEmailUnmatchedForContact_Behavior(t *testing.T) {
 // lookup parameter. Excludes shapes (NULL, non-array) on which the legacy
 // form raises or where parity is trivially satisfied.
 func TestParity_NewVsLegacyForms_ExternalContact(t *testing.T) {
+	t.Parallel()
 	env := setupJSONBGINEnv(t)
 
 	target := fmt.Sprintf("parity_target_%s@x.invalid", env.suffix)
@@ -443,6 +447,7 @@ func TestParity_NewVsLegacyForms_ExternalContact(t *testing.T) {
 // TestParity_NewVsLegacyForms_CalendarEvent (case 18) — same shape parity
 // check for the calendar_event query.
 func TestParity_NewVsLegacyForms_CalendarEvent(t *testing.T) {
+	t.Parallel()
 	env := setupJSONBGINEnv(t)
 	now := accelerated.GetCurrentTime().UTC()
 	target := fmt.Sprintf("parity_evt_%s@x.invalid", env.suffix)

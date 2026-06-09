@@ -73,7 +73,7 @@ func setupTelegramImportSuggestionTest(t *testing.T) (
 	suggestionService := service.NewSuggestionService(externalRepo, contactRepo, contactMethodRepo, enrichmentService, matchService, database)
 	importHandler := handlers.NewImportHandler(externalRepo, nil, contactService, matchService, enrichmentService, suggestionService)
 
-	gin.SetMode(gin.TestMode)
+	// gin.SetMode is hoisted to TestMain so parallel tests don't race on it.
 	router := gin.New()
 	router.Use(api.RequestIDMiddleware())
 	router.Use(api.CORSMiddleware(config.CORSConfig{AllowAll: true}))
@@ -168,6 +168,7 @@ func seedContactWithCleanup(t *testing.T, repo *repository.ContactRepository, fu
 // Each sub-test uses unique full_names to avoid pg_trgm returning multiple
 // equal-score matches (which would trip the collision-gap rule).
 func TestTelegramImportSuggestion_Integration(t *testing.T) {
+	t.Parallel()
 	router, externalRepo, contactRepo, cleanup := setupTelegramImportSuggestionTest(t)
 	defer cleanup()
 

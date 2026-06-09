@@ -134,6 +134,7 @@ var allowedCallSites = map[string]string{
 // cadence-writing symbol lives in the allowedCallSites map. Generated
 // sqlc files and test files are skipped.
 func TestCadenceSoleWriter_OnlyAllowedFilesCallCadenceSQL(t *testing.T) {
+	t.Parallel()
 	moduleRoot, err := backendModuleRoot()
 	if err != nil {
 		t.Fatalf("locate backend module root: %v", err)
@@ -302,6 +303,7 @@ func sqlcQuerierIdent(name string) bool {
 // cadence column. A regression that adds e.g. `last_contacted = $X` to
 // UpdateContact would trip here, independent of the call-site guard.
 func TestUpdateContactSQL_DoesNotTouchCadenceColumns(t *testing.T) {
+	t.Parallel()
 	moduleRoot, err := backendModuleRoot()
 	if err != nil {
 		t.Fatalf("locate backend module root: %v", err)
@@ -356,6 +358,7 @@ func TestUpdateContactSQL_DoesNotTouchCadenceColumns(t *testing.T) {
 // asserts a violation is reported. Without this, a future loosening
 // of the check (e.g., all-files-allowed) could silently pass.
 func TestCadenceSoleWriter_NegativeGuardCatchesNewWrite(t *testing.T) {
+	t.Parallel()
 	src := `package poc
 
 type querier struct{}

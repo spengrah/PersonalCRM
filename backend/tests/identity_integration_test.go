@@ -2,6 +2,7 @@ package tests
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 
@@ -27,6 +28,7 @@ func TestIdentityRepository_Integration(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	ctx := context.Background()
 
 	// Migrations are applied once by TestMain.
@@ -41,16 +43,23 @@ func TestIdentityRepository_Integration(t *testing.T) {
 
 	repo := repository.NewIdentityRepository(database.Queries)
 
+	// Per-test-run unique suffix so the (identifier, type, source)-keyed
+	// accumulating upserts don't collide with a parallel copy and corrupt the
+	// exact message_count / ordering assertions below.
+	ns := uuid.NewString()[:8]
+	src := "test_source_" + ns
+
 	t.Run("UpsertAndGetIdentity", func(t *testing.T) {
-		rawIdentifier := "TEST.USER@EXAMPLE.COM"
+		identifier := "test.user." + ns + "@example.com"
+		rawIdentifier := "TEST.USER." + ns + "@EXAMPLE.COM"
 		displayName := "Test User"
 
 		// Create an identity
 		ident, err := repo.Upsert(ctx, repository.UpsertIdentityRequest{
-			Identifier:     "test.user@example.com",
+			Identifier:     identifier,
 			IdentifierType: identity.IdentifierTypeEmail,
 			RawIdentifier:  &rawIdentifier,
-			Source:         "test_source",
+			Source:         src,
 			MatchType:      repository.MatchTypeUnmatched,
 			DisplayName:    &displayName,
 			MessageCount:   1,
@@ -59,9 +68,9 @@ func TestIdentityRepository_Integration(t *testing.T) {
 		require.NotNil(t, ident)
 
 		// Verify fields
-		assert.Equal(t, "test.user@example.com", ident.Identifier)
+		assert.Equal(t, identifier, ident.Identifier)
 		assert.Equal(t, identity.IdentifierTypeEmail, ident.IdentifierType)
-		assert.Equal(t, "test_source", ident.Source)
+		assert.Equal(t, src, ident.Source)
 		assert.Equal(t, repository.MatchTypeUnmatched, ident.MatchType)
 		assert.Equal(t, "Test User", *ident.DisplayName)
 		assert.Equal(t, int32(1), ident.MessageCount)
@@ -74,7 +83,7 @@ func TestIdentityRepository_Integration(t *testing.T) {
 		assert.Equal(t, ident.Identifier, found.Identifier)
 
 		// Get by identifier
-		found, err = repo.GetByIdentifier(ctx, identity.IdentifierTypeEmail, "test.user@example.com", "test_source")
+		found, err = repo.GetByIdentifier(ctx, identity.IdentifierTypeEmail, identifier, src)
 		require.NoError(t, err)
 		assert.Equal(t, ident.ID, found.ID)
 
@@ -84,11 +93,12 @@ func TestIdentityRepository_Integration(t *testing.T) {
 	})
 
 	t.Run("UpsertIncrementsMessageCount", func(t *testing.T) {
+		identifier := "increment.test." + ns + "@example.com"
 		// Create identity
 		ident, err := repo.Upsert(ctx, repository.UpsertIdentityRequest{
-			Identifier:     "increment.test@example.com",
+			Identifier:     identifier,
 			IdentifierType: identity.IdentifierTypeEmail,
-			Source:         "test_source",
+			Source:         src,
 			MatchType:      repository.MatchTypeUnmatched,
 			MessageCount:   1,
 		})
@@ -97,9 +107,9 @@ func TestIdentityRepository_Integration(t *testing.T) {
 
 		// Upsert again - should increment
 		ident, err = repo.Upsert(ctx, repository.UpsertIdentityRequest{
-			Identifier:     "increment.test@example.com",
+			Identifier:     identifier,
 			IdentifierType: identity.IdentifierTypeEmail,
-			Source:         "test_source",
+			Source:         src,
 			MatchType:      repository.MatchTypeUnmatched,
 			MessageCount:   5,
 		})
@@ -122,9 +132,9 @@ func TestIdentityRepository_Integration(t *testing.T) {
 
 		// Create an unmatched identity
 		ident, err := repo.Upsert(ctx, repository.UpsertIdentityRequest{
-			Identifier:     "link.test@example.com",
+			Identifier:     "link.test." + ns + "@example.com",
 			IdentifierType: identity.IdentifierTypeEmail,
-			Source:         "test_source",
+			Source:         src,
 			MatchType:      repository.MatchTypeUnmatched,
 			MessageCount:   1,
 		})
@@ -156,9 +166,9 @@ func TestIdentityRepository_Integration(t *testing.T) {
 	t.Run("ListUnmatched", func(t *testing.T) {
 		// Create some unmatched identities
 		ident1, err := repo.Upsert(ctx, repository.UpsertIdentityRequest{
-			Identifier:     "unmatched1@example.com",
+			Identifier:     "unmatched1." + ns + "@example.com",
 			IdentifierType: identity.IdentifierTypeEmail,
-			Source:         "test_source",
+			Source:         src,
 			MatchType:      repository.MatchTypeUnmatched,
 			MessageCount:   10,
 		})
@@ -166,20 +176,23 @@ func TestIdentityRepository_Integration(t *testing.T) {
 		defer func() { _ = repo.Delete(ctx, ident1.ID) }()
 
 		ident2, err := repo.Upsert(ctx, repository.UpsertIdentityRequest{
-			Identifier:     "unmatched2@example.com",
+			Identifier:     "unmatched2." + ns + "@example.com",
 			IdentifierType: identity.IdentifierTypeEmail,
-			Source:         "test_source",
+			Source:         src,
 			MatchType:      repository.MatchTypeUnmatched,
 			MessageCount:   5,
 		})
 		require.NoError(t, err)
 		defer func() { _ = repo.Delete(ctx, ident2.ID) }()
 
-		// List unmatched
-		unmatched, err := repo.ListUnmatched(ctx, 100, 0)
+		// List unmatched. A high limit keeps both rows in the window even as the
+		// shared DB accumulates unmatched identities across runs.
+		unmatched, err := repo.ListUnmatched(ctx, 100000, 0)
 		require.NoError(t, err)
 
-		// Should contain our test identities, sorted by message_count desc
+		// Should contain our test identities, sorted by message_count desc.
+		// The relative ordering (idx1 < idx2) holds even with other parallel
+		// tests' rows interspersed, since ident1 (10 msgs) outranks ident2 (5).
 		found1, found2 := false, false
 		var idx1, idx2 int
 		for i, u := range unmatched {
@@ -211,11 +224,13 @@ func TestIdentityRepository_Integration(t *testing.T) {
 		require.NoError(t, err)
 		defer func() { _ = contactRepo.HardDeleteContact(ctx, contact.ID) }()
 
-		// Create identities linked to contact
+		// Create identities linked to contact. The email is namespaced and the
+		// phone's source is namespaced so the (identifier, type, source) upsert
+		// keys are unique to this test run.
 		ident1, err := repo.Upsert(ctx, repository.UpsertIdentityRequest{
-			Identifier:     "contact.ident1@example.com",
+			Identifier:     "contact.ident1." + ns + "@example.com",
 			IdentifierType: identity.IdentifierTypeEmail,
-			Source:         "gmail",
+			Source:         "gmail_" + ns,
 			ContactID:      &contact.ID,
 			MatchType:      repository.MatchTypeExact,
 			MessageCount:   1,
@@ -226,7 +241,7 @@ func TestIdentityRepository_Integration(t *testing.T) {
 		ident2, err := repo.Upsert(ctx, repository.UpsertIdentityRequest{
 			Identifier:     "+15551234567",
 			IdentifierType: identity.IdentifierTypePhone,
-			Source:         "imessage",
+			Source:         "imessage_" + ns,
 			ContactID:      &contact.ID,
 			MatchType:      repository.MatchTypeExact,
 			MessageCount:   1,
@@ -234,7 +249,7 @@ func TestIdentityRepository_Integration(t *testing.T) {
 		require.NoError(t, err)
 		defer func() { _ = repo.Delete(ctx, ident2.ID) }()
 
-		// List for contact
+		// List for contact (scoped to this run's unique contact)
 		identities, err := repo.ListForContact(ctx, contact.ID)
 		require.NoError(t, err)
 		assert.Len(t, identities, 2)
@@ -251,9 +266,9 @@ func TestIdentityRepository_Integration(t *testing.T) {
 
 		// Create unmatched identities
 		ident1, err := repo.Upsert(ctx, repository.UpsertIdentityRequest{
-			Identifier:     "bulk1@example.com",
+			Identifier:     "bulk1." + ns + "@example.com",
 			IdentifierType: identity.IdentifierTypeEmail,
-			Source:         "test_source",
+			Source:         src,
 			MatchType:      repository.MatchTypeUnmatched,
 			MessageCount:   1,
 		})
@@ -261,9 +276,9 @@ func TestIdentityRepository_Integration(t *testing.T) {
 		defer func() { _ = repo.Delete(ctx, ident1.ID) }()
 
 		ident2, err := repo.Upsert(ctx, repository.UpsertIdentityRequest{
-			Identifier:     "bulk2@example.com",
+			Identifier:     "bulk2." + ns + "@example.com",
 			IdentifierType: identity.IdentifierTypeEmail,
-			Source:         "test_source",
+			Source:         src,
 			MatchType:      repository.MatchTypeUnmatched,
 			MessageCount:   1,
 		})
@@ -293,6 +308,7 @@ func TestIdentityService_Integration(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	ctx := context.Background()
 
 	// Migrations are applied once by TestMain.
@@ -310,11 +326,16 @@ func TestIdentityService_Integration(t *testing.T) {
 	methodRepo := repository.NewContactMethodRepository(database.Queries)
 	identityService := service.NewIdentityService(identityRepo)
 
+	// Per-test-run unique suffix so the matched emails/phones and the discovery/
+	// cache sources don't collide with a parallel copy (the cached-match path is
+	// order/state-sensitive).
+	ns := uuid.NewString()[:8]
+
 	t.Run("MatchOrCreate_DiscoveryMode_NoMatch", func(t *testing.T) {
 		result, err := identityService.MatchOrCreate(ctx, service.MatchRequest{
-			RawIdentifier: "UNKNOWN@Example.COM",
+			RawIdentifier: "UNKNOWN." + ns + "@Example.COM",
 			Type:          identity.IdentifierTypeEmail,
-			Source:        "test_discovery",
+			Source:        "test_discovery_" + ns,
 		})
 		require.NoError(t, err)
 		require.NotNil(t, result)
@@ -325,7 +346,7 @@ func TestIdentityService_Integration(t *testing.T) {
 		assert.False(t, result.Cached)
 
 		// Verify normalized
-		assert.Equal(t, "unknown@example.com", result.Identity.Identifier)
+		assert.Equal(t, "unknown."+ns+"@example.com", result.Identity.Identifier)
 
 		// Clean up
 		err = identityRepo.Delete(ctx, result.Identity.ID)
@@ -344,7 +365,7 @@ func TestIdentityService_Integration(t *testing.T) {
 		_, err = methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
 			ContactID: contact.ID,
 			Type:      string(repository.ContactMethodEmail),
-			Value:     "discovery.match@example.com",
+			Value:     "discovery.match." + ns + "@example.com",
 			IsPrimary: true,
 		})
 		require.NoError(t, err)
@@ -352,9 +373,9 @@ func TestIdentityService_Integration(t *testing.T) {
 
 		// Try to match via identity service
 		result, err := identityService.MatchOrCreate(ctx, service.MatchRequest{
-			RawIdentifier: "DISCOVERY.MATCH@EXAMPLE.COM",
+			RawIdentifier: "DISCOVERY.MATCH." + ns + "@EXAMPLE.COM",
 			Type:          identity.IdentifierTypeEmail,
-			Source:        "test_discovery",
+			Source:        "test_discovery_" + ns,
 		})
 		require.NoError(t, err)
 		require.NotNil(t, result)
@@ -382,7 +403,7 @@ func TestIdentityService_Integration(t *testing.T) {
 		_, err = methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
 			ContactID: contact.ID,
 			Type:      string(repository.ContactMethodEmail),
-			Value:     "cache.test@example.com",
+			Value:     "cache.test." + ns + "@example.com",
 			IsPrimary: true,
 		})
 		require.NoError(t, err)
@@ -390,9 +411,9 @@ func TestIdentityService_Integration(t *testing.T) {
 
 		// First match - should search and cache
 		result1, err := identityService.MatchOrCreate(ctx, service.MatchRequest{
-			RawIdentifier: "cache.test@example.com",
+			RawIdentifier: "cache.test." + ns + "@example.com",
 			Type:          identity.IdentifierTypeEmail,
-			Source:        "test_cache",
+			Source:        "test_cache_" + ns,
 		})
 		require.NoError(t, err)
 		assert.False(t, result1.Cached)
@@ -401,9 +422,9 @@ func TestIdentityService_Integration(t *testing.T) {
 
 		// Second match - should use cache
 		result2, err := identityService.MatchOrCreate(ctx, service.MatchRequest{
-			RawIdentifier: "cache.test@example.com",
+			RawIdentifier: "cache.test." + ns + "@example.com",
 			Type:          identity.IdentifierTypeEmail,
-			Source:        "test_cache",
+			Source:        "test_cache_" + ns,
 		})
 		require.NoError(t, err)
 		assert.True(t, result2.Cached)
@@ -420,9 +441,9 @@ func TestIdentityService_Integration(t *testing.T) {
 
 		// Use contact-driven mode with KnownContactID
 		result, err := identityService.MatchOrCreate(ctx, service.MatchRequest{
-			RawIdentifier:  "CONTACT.DRIVEN@EXAMPLE.COM",
+			RawIdentifier:  "CONTACT.DRIVEN." + ns + "@EXAMPLE.COM",
 			Type:           identity.IdentifierTypeEmail,
-			Source:         "gmail",
+			Source:         "gmail_" + ns,
 			KnownContactID: &contact.ID,
 		})
 		require.NoError(t, err)
@@ -435,7 +456,7 @@ func TestIdentityService_Integration(t *testing.T) {
 		assert.False(t, result.Cached)
 
 		// Verify normalized
-		assert.Equal(t, "contact.driven@example.com", result.Identity.Identifier)
+		assert.Equal(t, "contact.driven."+ns+"@example.com", result.Identity.Identifier)
 
 		// Clean up
 		err = identityRepo.Delete(ctx, result.Identity.ID)
@@ -443,36 +464,46 @@ func TestIdentityService_Integration(t *testing.T) {
 	})
 
 	t.Run("MatchOrCreate_PhoneNormalization", func(t *testing.T) {
-		// Create a contact with phone
+		// Per-test-unique 10-digit phone so a parallel copy's contact (with the
+		// same normalized phone) can't be matched by mistake. Derive a 7-digit
+		// subscriber+exchange from the namespace hash; the 4 format variants all
+		// normalize to the same +1<area><number>.
+		phoneBase, _ := uniqueTestIDs(t, ns) // >= 9_000_000_000
+		sub := phoneBase % 10_000_000        // 7 digits: NXX-XXXX
+		area := 200 + int(phoneBase%700)     // valid-ish NANP area code [200, 899]
+		exch := sub / 10_000                 // 3 digits
+		line := sub % 10_000                 // 4 digits
+
+		// Add contact method with the canonical normalized phone.
+		canonical := fmt.Sprintf("+1%03d%03d%04d", area, exch, line)
 		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName: "Phone Match Test",
+			FullName: "Phone Match Test " + ns,
 		})
 		require.NoError(t, err)
 		defer func() { _ = contactRepo.HardDeleteContact(ctx, contact.ID) }()
 
-		// Add contact method with normalized phone
 		_, err = methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
 			ContactID: contact.ID,
 			Type:      "phone",
-			Value:     "+15551234567",
+			Value:     canonical,
 			IsPrimary: true,
 		})
 		require.NoError(t, err)
 		defer func() { _ = methodRepo.DeleteContactMethodsByContact(ctx, contact.ID) }()
 
-		// Try to match with different phone formats
+		// Try to match with different phone formats — all equivalent to canonical.
 		testCases := []string{
-			"(555) 123-4567",
-			"+1 555 123 4567",
-			"555.123.4567",
-			"1-555-123-4567",
+			fmt.Sprintf("(%03d) %03d-%04d", area, exch, line),
+			fmt.Sprintf("+1 %03d %03d %04d", area, exch, line),
+			fmt.Sprintf("%03d.%03d.%04d", area, exch, line),
+			fmt.Sprintf("1-%03d-%03d-%04d", area, exch, line),
 		}
 
-		for _, phoneFormat := range testCases {
+		for i, phoneFormat := range testCases {
 			result, err := identityService.MatchOrCreate(ctx, service.MatchRequest{
 				RawIdentifier: phoneFormat,
 				Type:          identity.IdentifierTypePhone,
-				Source:        "test_phone_" + phoneFormat[:3],
+				Source:        fmt.Sprintf("test_phone_%s_%d", ns, i),
 			})
 			require.NoError(t, err, "failed for format: %s", phoneFormat)
 
@@ -495,9 +526,9 @@ func TestIdentityService_Integration(t *testing.T) {
 
 		// Create unmatched identity
 		result, err := identityService.MatchOrCreate(ctx, service.MatchRequest{
-			RawIdentifier: "manual.link@example.com",
+			RawIdentifier: "manual.link." + ns + "@example.com",
 			Type:          identity.IdentifierTypeEmail,
-			Source:        "test_manual",
+			Source:        "test_manual_" + ns,
 		})
 		require.NoError(t, err)
 		assert.Nil(t, result.ContactID)
@@ -532,6 +563,7 @@ func TestIdentityService_NormalizationPolicy_Integration(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	ctx := context.Background()
 
 	// Migrations are applied once by TestMain.

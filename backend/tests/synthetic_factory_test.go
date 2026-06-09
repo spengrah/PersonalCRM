@@ -22,6 +22,7 @@ import (
 var fixedAnchor = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 
 func TestSyntheticFactory_StrongDeterminism_NonTimestampOutput(t *testing.T) {
+	t.Parallel()
 	g1 := factory.NewGeneratorAt(factory.DefaultSeed, "ns", fixedAnchor)
 	g2 := factory.NewGeneratorAt(factory.DefaultSeed, "ns", fixedAnchor)
 
@@ -34,6 +35,7 @@ func TestSyntheticFactory_StrongDeterminism_NonTimestampOutput(t *testing.T) {
 }
 
 func TestSyntheticFactory_AnchorRelativeTimestamps(t *testing.T) {
+	t.Parallel()
 	anchorA := fixedAnchor
 	anchorB := fixedAnchor.Add(100 * time.Hour)
 
@@ -55,6 +57,7 @@ func TestSyntheticFactory_AnchorRelativeTimestamps(t *testing.T) {
 }
 
 func TestSyntheticFactory_NamespaceStringPrefixesDisjoint(t *testing.T) {
+	t.Parallel()
 	gA := factory.NewGeneratorAt(factory.DefaultSeed, "alpha", fixedAnchor)
 	gB := factory.NewGeneratorAt(factory.DefaultSeed, "beta", fixedAnchor)
 
@@ -69,6 +72,7 @@ func TestSyntheticFactory_NamespaceStringPrefixesDisjoint(t *testing.T) {
 }
 
 func TestSyntheticFactory_TelegramPeerSubBlocksDisjoint(t *testing.T) {
+	t.Parallel()
 	gA := factory.NewGeneratorAt(factory.DefaultSeed, "alpha", fixedAnchor)
 	gB := factory.NewGeneratorAt(factory.DefaultSeed, "beta", fixedAnchor)
 
@@ -88,6 +92,7 @@ func TestSyntheticFactory_TelegramPeerSubBlocksDisjoint(t *testing.T) {
 }
 
 func TestSyntheticFactory_PhoneSubBlocksDisjoint(t *testing.T) {
+	t.Parallel()
 	gA := factory.NewGeneratorAt(factory.DefaultSeed, "alpha", fixedAnchor)
 	gB := factory.NewGeneratorAt(factory.DefaultSeed, "beta", fixedAnchor)
 
@@ -118,6 +123,7 @@ func TestSyntheticFactory_PhoneSubBlocksDisjoint(t *testing.T) {
 }
 
 func TestSyntheticNamespaceValidation(t *testing.T) {
+	t.Parallel()
 	// Safe tokens (lowercase alnum + hyphen) are accepted; cleanup deletes by
 	// LIKE 'synth-<ns>-%', so anything with a LIKE metacharacter is rejected.
 	for _, ns := range []string{"alpha", "qa-1", "h1234567890", "r0a1b2c3", "seedall"} {
@@ -129,6 +135,7 @@ func TestSyntheticNamespaceValidation(t *testing.T) {
 }
 
 func TestSyntheticFactory_EdgeCaseOptions(t *testing.T) {
+	t.Parallel()
 	g := factory.NewGeneratorAt(factory.DefaultSeed, "edge", fixedAnchor)
 
 	// 1900 birthday sentinel.
@@ -148,6 +155,7 @@ func TestSyntheticFactory_EdgeCaseOptions(t *testing.T) {
 }
 
 func TestSyntheticFactory_MatchIntentAddressesDistinctIdentifiers(t *testing.T) {
+	t.Parallel()
 	g := factory.NewGeneratorAt(factory.DefaultSeed, "intent", fixedAnchor)
 	target := g.Contact(factory.WithEmail())
 

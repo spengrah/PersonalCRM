@@ -19,10 +19,15 @@ import (
 )
 
 // setupDiscoveryUpsertTest spins up a real DB-backed ExternalContactRepository
-// and returns a cleanup function that hard-deletes the rows seeded by the test.
+// and returns a per-test-unique source_id prefix plus a cleanup function that
+// hard-deletes only this test's rows (scoped to that prefix). The per-test
+// prefix is what makes these funcs safe under t.Parallel() — two parallel
+// copies would otherwise share fixed "tg-discovery-upsert-<name>" source_ids
+// and the prefix-wide cleanup would delete each other's rows mid-test.
 func setupDiscoveryUpsertTest(t *testing.T) (
 	*repository.ExternalContactRepository,
 	*db.Database,
+	string,
 	func(),
 ) {
 	t.Helper()
@@ -44,28 +49,29 @@ func setupDiscoveryUpsertTest(t *testing.T) (
 
 	repo := repository.NewExternalContactRepository(database.Queries)
 
+	prefix := "tg-discovery-upsert-" + syntheticNS(t) + "-"
 	cleanup := func() {
-		// Narrow cleanup: only touch rows this test file creates. All test
-		// source_ids are prefixed with "tg-discovery-upsert-". Use the sqlc
-		// query (also used by the /test/cleanup handler) rather than raw SQL.
+		// Narrow cleanup: only this test's per-run prefix. Use the sqlc query
+		// (also used by the /test/cleanup handler) rather than raw SQL.
 		_, _ = database.Queries.DeleteExternalContactsBySourceIDPrefix(
 			context.Background(),
-			pgtype.Text{String: "tg-discovery-upsert-", Valid: true},
+			pgtype.Text{String: prefix, Valid: true},
 		)
 		database.Close()
 	}
-	return repo, database, cleanup
+	return repo, database, prefix, cleanup
 }
 
 func TestUpsertTelegramDiscoveryCandidate_InsertsNewRow(t *testing.T) {
-	repo, _, cleanup := setupDiscoveryUpsertTest(t)
+	t.Parallel()
+	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
 
 	ctx := context.Background()
 	now := accelerated.GetCurrentTime()
 
 	got, err := repo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
-		SourceID:    "tg-discovery-upsert-insert",
+		SourceID:    prefix + "insert",
 		DisplayName: strPtr("Dale Dobeck"),
 		FirstName:   strPtr("Dale"),
 		LastName:    strPtr("Dobeck"),
@@ -76,7 +82,7 @@ func TestUpsertTelegramDiscoveryCandidate_InsertsNewRow(t *testing.T) {
 	require.NotNil(t, got)
 
 	assert.Equal(t, "telegram", got.Source)
-	assert.Equal(t, "tg-discovery-upsert-insert", got.SourceID)
+	assert.Equal(t, prefix+"insert", got.SourceID)
 	require.NotNil(t, got.DisplayName)
 	assert.Equal(t, "Dale Dobeck", *got.DisplayName)
 	require.NotNil(t, got.FirstName)
@@ -90,7 +96,8 @@ func TestUpsertTelegramDiscoveryCandidate_InsertsNewRow(t *testing.T) {
 }
 
 func TestUpsertTelegramDiscoveryCandidate_PreservesFirstNameWhenNil(t *testing.T) {
-	repo, _, cleanup := setupDiscoveryUpsertTest(t)
+	t.Parallel()
+	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -98,7 +105,7 @@ func TestUpsertTelegramDiscoveryCandidate_PreservesFirstNameWhenNil(t *testing.T
 
 	// Seed with names populated.
 	_, err := repo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
-		SourceID:  "tg-discovery-upsert-preserve",
+		SourceID:  prefix + "preserve",
 		FirstName: strPtr("Dale"),
 		LastName:  strPtr("Dobeck"),
 		SyncedAt:  &now,
@@ -107,7 +114,7 @@ func TestUpsertTelegramDiscoveryCandidate_PreservesFirstNameWhenNil(t *testing.T
 
 	// Re-upsert with nil names — should preserve existing.
 	got, err := repo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
-		SourceID: "tg-discovery-upsert-preserve",
+		SourceID: prefix + "preserve",
 		SyncedAt: &now,
 	})
 	require.NoError(t, err)
@@ -118,21 +125,22 @@ func TestUpsertTelegramDiscoveryCandidate_PreservesFirstNameWhenNil(t *testing.T
 }
 
 func TestUpsertTelegramDiscoveryCandidate_OverwritesFirstNameWhenNewValueProvided(t *testing.T) {
-	repo, _, cleanup := setupDiscoveryUpsertTest(t)
+	t.Parallel()
+	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
 
 	ctx := context.Background()
 	now := accelerated.GetCurrentTime()
 
 	_, err := repo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
-		SourceID:  "tg-discovery-upsert-overwrite",
+		SourceID:  prefix + "overwrite",
 		FirstName: strPtr("Dale"),
 		SyncedAt:  &now,
 	})
 	require.NoError(t, err)
 
 	got, err := repo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
-		SourceID:  "tg-discovery-upsert-overwrite",
+		SourceID:  prefix + "overwrite",
 		FirstName: strPtr("Daniel"),
 		SyncedAt:  &now,
 	})
@@ -142,7 +150,8 @@ func TestUpsertTelegramDiscoveryCandidate_OverwritesFirstNameWhenNewValueProvide
 }
 
 func TestUpsertTelegramDiscoveryCandidate_MergesMetadata_PreservesExistingKey(t *testing.T) {
-	repo, _, cleanup := setupDiscoveryUpsertTest(t)
+	t.Parallel()
+	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -150,7 +159,7 @@ func TestUpsertTelegramDiscoveryCandidate_MergesMetadata_PreservesExistingKey(t 
 
 	// Seed with a username key.
 	_, err := repo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
-		SourceID: "tg-discovery-upsert-merge-keep",
+		SourceID: prefix + "merge-keep",
 		Metadata: map[string]any{"username": "@dale", "message_count": 5},
 		SyncedAt: &now,
 	})
@@ -158,7 +167,7 @@ func TestUpsertTelegramDiscoveryCandidate_MergesMetadata_PreservesExistingKey(t 
 
 	// Re-upsert with only message_count — username must be retained.
 	got, err := repo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
-		SourceID: "tg-discovery-upsert-merge-keep",
+		SourceID: prefix + "merge-keep",
 		Metadata: map[string]any{"message_count": 10},
 		SyncedAt: &now,
 	})
@@ -168,21 +177,22 @@ func TestUpsertTelegramDiscoveryCandidate_MergesMetadata_PreservesExistingKey(t 
 }
 
 func TestUpsertTelegramDiscoveryCandidate_MergesMetadata_IncomingWinsForDuplicate(t *testing.T) {
-	repo, _, cleanup := setupDiscoveryUpsertTest(t)
+	t.Parallel()
+	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
 
 	ctx := context.Background()
 	now := accelerated.GetCurrentTime()
 
 	_, err := repo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
-		SourceID: "tg-discovery-upsert-merge-new",
+		SourceID: prefix + "merge-new",
 		Metadata: map[string]any{"username": "@old"},
 		SyncedAt: &now,
 	})
 	require.NoError(t, err)
 
 	got, err := repo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
-		SourceID: "tg-discovery-upsert-merge-new",
+		SourceID: prefix + "merge-new",
 		Metadata: map[string]any{"username": "@new"},
 		SyncedAt: &now,
 	})
@@ -191,21 +201,22 @@ func TestUpsertTelegramDiscoveryCandidate_MergesMetadata_IncomingWinsForDuplicat
 }
 
 func TestUpsertTelegramDiscoveryCandidate_SyncedAtAlwaysUpdates(t *testing.T) {
-	repo, _, cleanup := setupDiscoveryUpsertTest(t)
+	t.Parallel()
+	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
 
 	ctx := context.Background()
 
 	start := accelerated.GetCurrentTime()
 	_, err := repo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
-		SourceID: "tg-discovery-upsert-syncedat",
+		SourceID: prefix + "syncedat",
 		SyncedAt: &start,
 	})
 	require.NoError(t, err)
 
 	later := start.Add(1 * time.Hour)
 	got, err := repo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
-		SourceID: "tg-discovery-upsert-syncedat",
+		SourceID: prefix + "syncedat",
 		SyncedAt: &later,
 	})
 	require.NoError(t, err)
@@ -217,7 +228,8 @@ func TestUpsertTelegramDiscoveryCandidate_SyncedAtAlwaysUpdates(t *testing.T) {
 // proves the dedicated DO UPDATE SET only touches the 6 columns it manages —
 // anything seeded via the shared Upsert (emails, phones, etc.) is untouched.
 func TestUpsertTelegramDiscoveryCandidate_DoesNotClearEmailsSetBySharedUpsert(t *testing.T) {
-	repo, _, cleanup := setupDiscoveryUpsertTest(t)
+	t.Parallel()
+	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -226,7 +238,7 @@ func TestUpsertTelegramDiscoveryCandidate_DoesNotClearEmailsSetBySharedUpsert(t 
 	// Seed via the shared Upsert so emails are populated.
 	_, err := repo.Upsert(ctx, repository.UpsertExternalContactRequest{
 		Source:   "telegram",
-		SourceID: "tg-discovery-upsert-emails",
+		SourceID: prefix + "emails",
 		Emails:   []repository.EmailEntry{{Value: "a@x", Type: "personal", Primary: true}},
 		SyncedAt: &now,
 	})
@@ -234,14 +246,14 @@ func TestUpsertTelegramDiscoveryCandidate_DoesNotClearEmailsSetBySharedUpsert(t 
 
 	// Call the dedicated upsert with only names.
 	_, err = repo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
-		SourceID:  "tg-discovery-upsert-emails",
+		SourceID:  prefix + "emails",
 		FirstName: strPtr("Dale"),
 		Metadata:  map[string]any{"username": "@dale"},
 		SyncedAt:  &now,
 	})
 	require.NoError(t, err)
 
-	got, err := repo.GetBySource(ctx, "telegram", "tg-discovery-upsert-emails", nil)
+	got, err := repo.GetBySource(ctx, "telegram", prefix+"emails", nil)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	require.Len(t, got.Emails, 1)
@@ -249,7 +261,8 @@ func TestUpsertTelegramDiscoveryCandidate_DoesNotClearEmailsSetBySharedUpsert(t 
 }
 
 func TestUpsertTelegramDiscoveryCandidate_DoesNotTouchMatchStatus(t *testing.T) {
-	repo, database, cleanup := setupDiscoveryUpsertTest(t)
+	t.Parallel()
+	repo, database, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -263,7 +276,7 @@ func TestUpsertTelegramDiscoveryCandidate_DoesNotTouchMatchStatus(t *testing.T) 
 	defer contactCleanup()
 
 	row, err := repo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
-		SourceID: "tg-discovery-upsert-match",
+		SourceID: prefix + "match",
 		SyncedAt: &now,
 	})
 	require.NoError(t, err)
@@ -272,13 +285,13 @@ func TestUpsertTelegramDiscoveryCandidate_DoesNotTouchMatchStatus(t *testing.T) 
 	require.NoError(t, err)
 
 	_, err = repo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
-		SourceID:  "tg-discovery-upsert-match",
+		SourceID:  prefix + "match",
 		FirstName: strPtr("Dale"),
 		SyncedAt:  &now,
 	})
 	require.NoError(t, err)
 
-	got, err := repo.GetBySource(ctx, "telegram", "tg-discovery-upsert-match", nil)
+	got, err := repo.GetBySource(ctx, "telegram", prefix+"match", nil)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, repository.MatchStatusMatched, got.MatchStatus, "dedicated upsert must not reset match_status")
@@ -290,7 +303,8 @@ func TestUpsertTelegramDiscoveryCandidate_DoesNotTouchMatchStatus(t *testing.T) 
 // upsert retains its "authoritative overwrite" semantics for Google flows —
 // this plan only adds a parallel path, it does not change the shared one.
 func TestUpsertExternalContact_SharedUpsertStillOverwrites(t *testing.T) {
-	repo, _, cleanup := setupDiscoveryUpsertTest(t)
+	t.Parallel()
+	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -298,7 +312,7 @@ func TestUpsertExternalContact_SharedUpsertStillOverwrites(t *testing.T) {
 
 	_, err := repo.Upsert(ctx, repository.UpsertExternalContactRequest{
 		Source:    "gcontacts",
-		SourceID:  "tg-discovery-upsert-shared-overwrite",
+		SourceID:  prefix + "shared-overwrite",
 		FirstName: strPtr("Alice"),
 		SyncedAt:  &now,
 	})
@@ -306,7 +320,7 @@ func TestUpsertExternalContact_SharedUpsertStillOverwrites(t *testing.T) {
 
 	got, err := repo.Upsert(ctx, repository.UpsertExternalContactRequest{
 		Source:   "gcontacts",
-		SourceID: "tg-discovery-upsert-shared-overwrite",
+		SourceID: prefix + "shared-overwrite",
 		// FirstName intentionally nil — shared upsert should clear it.
 		SyncedAt: &now,
 	})
@@ -329,6 +343,7 @@ func TestUpdateDiscoveryCandidates_BatchPath_BlankStringsDoNotClobberStoredData(
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set")
 	}
+	t.Parallel()
 	// Migrations are applied once by TestMain.
 
 	ctx := context.Background()
@@ -337,10 +352,16 @@ func TestUpdateDiscoveryCandidates_BatchPath_BlankStringsDoNotClobberStoredData(
 
 	database, err := db.NewDatabase(ctx, cfg.Database)
 	require.NoError(t, err)
-	defer database.Close()
+	// Close via t.Cleanup (LIFO) so it runs AFTER the row-delete t.Cleanup below
+	// — a defer would close the pool first and the deletes would no-op.
+	t.Cleanup(func() { database.Close() })
 
-	const testPeerID int64 = 99001
-	const testChatID int64 = 9900
+	// Per-test-unique peer/chat IDs. The external_contact / external_identity
+	// source_id is derived from the peer_user_id, so two parallel copies sharing
+	// a fixed 99001 would collide on the row and on the peer-scoped cleanup.
+	_, ns := migrationGenerator(t)
+	testPeerID, peerStr := uniqueTestIDs(t, ns)
+	testChatID := testPeerID + 1
 	username := "daledobeck"
 	empty := ""
 	firstName := "Dale"
@@ -360,12 +381,12 @@ func TestUpdateDiscoveryCandidates_BatchPath_BlankStringsDoNotClobberStoredData(
 		)
 		_, _ = database.Queries.DeleteExternalContactsBySourceIDPrefix(
 			ctx,
-			pgtype.Text{String: "99001", Valid: true},
+			pgtype.Text{String: peerStr, Valid: true},
 		)
 		// External_identity row created by MatchOrCreate — also keyed by source_id.
 		_, _ = database.Queries.DeleteExternalIdentitiesBySourceID(
 			ctx,
-			pgtype.Text{String: "99001", Valid: true},
+			pgtype.Text{String: peerStr, Valid: true},
 		)
 	})
 
@@ -409,7 +430,7 @@ func TestUpdateDiscoveryCandidates_BatchPath_BlankStringsDoNotClobberStoredData(
 	require.NoError(t, matcher.MatchAllUnmatched(ctx))
 	require.NoError(t, matcher.UpdateDiscoveryCandidates(ctx))
 
-	got, err := externalRepo.GetBySource(ctx, "telegram", "99001", nil)
+	got, err := externalRepo.GetBySource(ctx, "telegram", peerStr, nil)
 	require.NoError(t, err)
 	require.NotNil(t, got, "discovery should have inserted an external_contact row")
 	require.NotNil(t, got.FirstName)
@@ -422,7 +443,7 @@ func TestUpdateDiscoveryCandidates_BatchPath_BlankStringsDoNotClobberStoredData(
 	// even when future aggregation picks the blank-string row.
 	require.NoError(t, matcher.UpdateDiscoveryCandidates(ctx))
 
-	got, err = externalRepo.GetBySource(ctx, "telegram", "99001", nil)
+	got, err = externalRepo.GetBySource(ctx, "telegram", peerStr, nil)
 	require.NoError(t, err)
 	require.NotNil(t, got.FirstName)
 	assert.Equal(t, "Dale", *got.FirstName, "re-running discovery must not clobber stored names")

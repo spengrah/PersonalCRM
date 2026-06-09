@@ -84,6 +84,7 @@ var (
 // queries unless allowlisted. Runs DB-free (pure file parsing) so it executes
 // under make test-unit and -short.
 func TestNoDuplicatedFullRowSelectLists(t *testing.T) {
+	t.Parallel()
 	moduleRoot, err := backendModuleRoot()
 	if err != nil {
 		t.Fatalf("locate backend module root: %v", err)
@@ -411,6 +412,7 @@ func itoa(n int) string {
 // the detector is live (not a no-op). A second case proves SELECT * is NOT
 // flagged.
 func TestSelectListDetector_FlagsSyntheticDuplicate(t *testing.T) {
+	t.Parallel()
 	const dupSrc = `-- name: GetWidgetA :one
 SELECT alpha, beta, gamma FROM widget WHERE id = $1;
 
@@ -447,6 +449,7 @@ SELECT * FROM widget WHERE name = $1;
 // bare-column projection must fingerprint identically — a false-negative hole
 // that existed when the analyzer matched the first SELECT in the block.
 func TestSelectListDetector_ReachesOuterSelectOfCTE(t *testing.T) {
+	t.Parallel()
 	const cteDupSrc = `-- name: WithQueryA :many
 WITH names AS (
   SELECT unnest($1::text[]) as nm
@@ -482,6 +485,7 @@ SELECT alpha, beta, gamma FROM widget WHERE name = $2;
 // and single-occurrence narrow projections (a lone explicit projection is
 // fine; only 2+ identical ones are the smell).
 func TestSelectListDetector_SkipsNonFullRowShapes(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		src  string

@@ -66,6 +66,7 @@ func setupMessagesMessageTest(t *testing.T) (context.Context, *factory.Generator
 }
 
 func TestMessagesMessageRepository_UpsertAndGet(t *testing.T) {
+	t.Parallel()
 	ctx, gen, database, repo, hostID, cleanup := setupMessagesMessageTest(t)
 	defer cleanup()
 
@@ -101,6 +102,7 @@ func TestMessagesMessageRepository_UpsertAndGet(t *testing.T) {
 }
 
 func TestMessagesMessageRepository_UpsertConflictIsNoOp(t *testing.T) {
+	t.Parallel()
 	ctx, gen, database, repo, hostID, cleanup := setupMessagesMessageTest(t)
 	defer cleanup()
 
@@ -134,6 +136,7 @@ func TestMessagesMessageRepository_UpsertConflictIsNoOp(t *testing.T) {
 }
 
 func TestMessagesMessageRepository_ListUnprocessedByContact_ExcludesProcessed(t *testing.T) {
+	t.Parallel()
 	ctx, gen, database, repo, hostID, cleanup := setupMessagesMessageTest(t)
 	defer cleanup()
 
@@ -192,6 +195,7 @@ func TestMessagesMessageRepository_ListUnprocessedByContact_ExcludesProcessed(t 
 }
 
 func TestMessagesMessageRepository_ListUnprocessedByContact_ExcludesActiveClaim(t *testing.T) {
+	t.Parallel()
 	ctx, gen, database, repo, hostID, cleanup := setupMessagesMessageTest(t)
 	defer cleanup()
 
@@ -219,6 +223,7 @@ func TestMessagesMessageRepository_ListUnprocessedByContact_ExcludesActiveClaim(
 }
 
 func TestMessagesMessageRepository_ListUnprocessedByContact_IncludesStaleClaim(t *testing.T) {
+	t.Parallel()
 	ctx, gen, database, repo, hostID, cleanup := setupMessagesMessageTest(t)
 	defer cleanup()
 
@@ -249,6 +254,7 @@ func TestMessagesMessageRepository_ListUnprocessedByContact_IncludesStaleClaim(t
 }
 
 func TestMessagesMessageRepository_ClaimMessages_PartialClaim(t *testing.T) {
+	t.Parallel()
 	ctx, gen, database, repo, hostID, cleanup := setupMessagesMessageTest(t)
 	defer cleanup()
 
@@ -279,6 +285,7 @@ func TestMessagesMessageRepository_ClaimMessages_PartialClaim(t *testing.T) {
 }
 
 func TestMessagesMessageRepository_ClearStaleClaimTx(t *testing.T) {
+	t.Parallel()
 	ctx, gen, database, repo, hostID, cleanup := setupMessagesMessageTest(t)
 	defer cleanup()
 
@@ -324,6 +331,7 @@ func TestMessagesMessageRepository_ClearStaleClaimTx(t *testing.T) {
 }
 
 func TestMessagesMessageRepository_GetMessage_NotFound(t *testing.T) {
+	t.Parallel()
 	ctx, gen, _, repo, _, cleanup := setupMessagesMessageTest(t)
 	defer cleanup()
 

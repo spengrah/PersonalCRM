@@ -10,6 +10,7 @@ import (
 )
 
 func TestParseCadence(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		input    string
 		expected cadence.CadenceType
@@ -40,6 +41,7 @@ func TestParseCadence(t *testing.T) {
 }
 
 func TestCalculateNextDueDate(t *testing.T) {
+	t.Parallel()
 	baseDate := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 
 	tests := []struct {
@@ -112,6 +114,7 @@ func TestCalculateNextDueDate(t *testing.T) {
 }
 
 func TestIsOverdue(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC) // Jan 15, 2024
 
 	tests := []struct {
@@ -160,6 +163,7 @@ func TestIsOverdue(t *testing.T) {
 }
 
 func TestGetOverdueDays(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC) // Jan 15, 2024
 
 	tests := []struct {
@@ -201,6 +205,7 @@ func TestGetOverdueDays(t *testing.T) {
 }
 
 func TestGetDaysUntilDue(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC) // Jan 15, 2024
 
 	tests := []struct {
