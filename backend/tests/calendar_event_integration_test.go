@@ -31,8 +31,8 @@ func TestCalendarEventUpsertResetsLastContactedUpdated(t *testing.T) {
 	// Migrations are applied once by TestMain.
 	dbConfig := config.DatabaseConfig{
 		URL:               databaseURL,
-		MaxConns:          config.DefaultDBMaxConns,
-		MinConns:          config.DefaultDBMinConns,
+		MaxConns:          8, // mirrors the lowered TestConfig() ceiling for parallel tests
+		MinConns:          1,
 		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
 		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
 		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
@@ -181,8 +181,8 @@ func TestUpdateContactLastContactedIfLater_OnlyUpdatesWhenLater(t *testing.T) {
 	// Migrations are applied once by TestMain.
 	dbConfig := config.DatabaseConfig{
 		URL:               databaseURL,
-		MaxConns:          config.DefaultDBMaxConns,
-		MinConns:          config.DefaultDBMinConns,
+		MaxConns:          8, // mirrors the lowered TestConfig() ceiling for parallel tests
+		MinConns:          1,
 		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
 		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
 		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,

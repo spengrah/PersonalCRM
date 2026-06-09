@@ -654,11 +654,16 @@ func contains(slice []string, item string) bool {
 func TestConfig() *Config {
 	return &Config{
 		Database: DatabaseConfig{
-			URL:               "postgres://test:test@localhost:5432/test?sslmode=disable",
-			MigrationsPath:    "../../migrations",
-			HealthTimeout:     DefaultHealthCheckTimeout,
-			MaxConns:          DefaultDBMaxConns,
-			MinConns:          DefaultDBMinConns,
+			URL:            "postgres://test:test@localhost:5432/test?sslmode=disable",
+			MigrationsPath: "../../migrations",
+			HealthTimeout:  DefaultHealthCheckTimeout,
+			// Lowered for parallel integration tests: concurrent per-test pools
+			// must not exhaust Postgres max_connections. MaxConns=8 is the floor
+			// that still satisfies Validate()'s MaxConns >= WorkerConcurrency+3
+			// after WorkerConcurrency drops to 4 below. Production Load() keeps
+			// the DefaultDB* values.
+			MaxConns:          8,
+			MinConns:          1,
 			MaxConnIdleTime:   DefaultDBMaxConnIdleTime,
 			MaxConnLifetime:   DefaultDBMaxConnLifetime,
 			HealthCheckPeriod: DefaultDBHealthCheckPeriod,
@@ -718,7 +723,10 @@ func TestConfig() *Config {
 			GroupMaxMembers:      10,
 		},
 		River: RiverConfig{
-			WorkerConcurrency: DefaultRiverWorkerConcurrency,
+			// Lowered alongside Database.MaxConns above so Validate()'s
+			// MaxConns >= WorkerConcurrency+3 holds (4+3 <= 8). The River test
+			// harnesses cap MaxWorkers at this value; 4 is plenty for tests.
+			WorkerConcurrency: 4,
 			JobTimeout:        DefaultRiverJobTimeout,
 		},
 		EventBus: EventBusConfig{

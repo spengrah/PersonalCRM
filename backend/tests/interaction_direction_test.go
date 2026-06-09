@@ -28,8 +28,8 @@ func setupDirectionTestDeps(t *testing.T) (*service.ContactService, *repository.
 	ctx := context.Background()
 	dbConfig := config.DatabaseConfig{
 		URL:               databaseURL,
-		MaxConns:          config.DefaultDBMaxConns,
-		MinConns:          config.DefaultDBMinConns,
+		MaxConns:          8, // mirrors the lowered TestConfig() ceiling for parallel tests
+		MinConns:          1,
 		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
 		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
 		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
