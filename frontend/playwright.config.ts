@@ -6,6 +6,19 @@ const backendPort = process.env.E2E_BACKEND_PORT || '8080'
 const frontendURL = `http://localhost:${frontendPort}`
 const backendURL = `http://localhost:${backendPort}`
 
+// CI serves a production standalone build (built ahead of time in the e2e job,
+// with `.next/static` + `public` copied alongside `server.js` the way deploy
+// does) to remove next dev's on-demand route compilation from the timed run.
+// Locally (CI unset) we keep `next dev` for fast iteration and no build cost.
+// Value-based check (the string 'true') so a local `CI=0`/`CI=false` does not
+// select the prod path. `next start` is deliberately NOT used: it is disclaimed
+// under `output: 'standalone'`, so we run the standalone server directly.
+const isCI = process.env.CI === 'true'
+const frontendCommand = isCI
+  ? 'node .next/standalone/server.js'
+  : 'bun run dev -- --hostname 127.0.0.1'
+const frontendNodeEnv = isCI ? 'production' : 'development'
+
 export default defineConfig({
   testDir: './tests/e2e',
   fullyParallel: true,
@@ -57,15 +70,16 @@ export default defineConfig({
   /* Run your local dev server before starting the tests */
   webServer: [
     {
-      command: 'bun run dev -- --hostname 127.0.0.1',
+      command: frontendCommand,
       url: frontendURL,
       reuseExistingServer: !process.env.CI,
       timeout: 120000,
       stdout: 'pipe',
       env: {
         ...process.env,
-        NODE_ENV: 'development',
+        NODE_ENV: frontendNodeEnv,
         PORT: frontendPort,
+        HOSTNAME: '127.0.0.1',
         NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || backendURL,
         NEXT_PUBLIC_API_KEY:
           process.env.NEXT_PUBLIC_API_KEY ||
