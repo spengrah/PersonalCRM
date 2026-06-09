@@ -3,7 +3,7 @@
 **Date:** 2026-06-08
 **Status:** Placeholder skeleton — direction captured during the test-parallelization (i) brainstorm; not yet a full design.
 **Author:** spengrah (brainstormed with Claude)
-**Tracking:** gh issue #424
+**Tracking:** gh issue #433 (re-scoped from #424, which is now the within-run connection-ceiling fix)
 **Related:** `2026-06-07-test-parallelization-design.md` (sub-project i — the within-run sibling; ships the Go template-by-hash enabler this spec assumes), `2026-06-07-deploy-and-staging-overview-design.md`, `2026-05-31-agentic-ux-qa-and-behavior-ssot-design.md` (#380), gh issue #425 (sub-project ii — E2E parallelization).
 
 ## Problem
