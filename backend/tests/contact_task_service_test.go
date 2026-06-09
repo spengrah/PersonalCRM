@@ -85,18 +85,24 @@ func setupServiceTest(t *testing.T) (*service.ContactTaskService, *repository.Co
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
 	syncRepo := repository.NewSyncRepository(database.Queries)
 
+	// Per-test unique identifiers so parallel copies don't share the contact
+	// name (surfaced in the task link) or the sync-state AccountID (its pre-clean
+	// + create would otherwise clobber another run's sync state).
+	suffix := uuid.New().String()[:8]
+	accountID := "test-account-" + suffix
+
 	// Create a test contact
 	now := accelerated.GetCurrentTime()
 	cadence := "weekly"
 	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName:      "Test Contact for Service",
+		FullName:      "Test Contact for Service " + suffix,
 		Cadence:       &cadence,
 		LastContacted: &now,
 	})
 	require.NoError(t, err)
 
-	// Clean up any existing test sync state
-	_ = syncRepo.DeleteSyncStatesByAccountID(ctx, "test-account-123")
+	// Clean up any existing test sync state for this unique account
+	_ = syncRepo.DeleteSyncStatesByAccountID(ctx, accountID)
 
 	// Create sync state with Todoist settings (simulates configured Todoist)
 	metadata := map[string]any{
@@ -108,7 +114,7 @@ func setupServiceTest(t *testing.T) (*service.ContactTaskService, *repository.Co
 	}
 	syncState, err := syncRepo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
 		Source:    todoist.SourceName,
-		AccountID: strPtr("test-account-123"),
+		AccountID: strPtr(accountID),
 		Metadata:  metadata,
 	})
 	require.NoError(t, err)
@@ -157,7 +163,7 @@ func TestContactTaskService_CreateManualTask_Integration(t *testing.T) {
 		// Verify QuickAdd was called with contact link prefix
 		require.Len(t, mock.quickAddCalls, 1)
 		quickAddText := mock.quickAddCalls[0].Text
-		assert.Contains(t, quickAddText, "[Test Contact for Service]")
+		assert.Contains(t, quickAddText, "["+contact.FullName+"]")
 		assert.Contains(t, quickAddText, "https://example.com/contacts/"+contact.ID.String())
 		assert.Contains(t, quickAddText, "Follow up on proposal")
 	})

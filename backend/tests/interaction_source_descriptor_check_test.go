@@ -155,7 +155,7 @@ func TestInteractionSourceCheck_AcceptsPhoneCalls(t *testing.T) {
 	})
 	require.NoError(t, err)
 	defer func() {
-		_ = interactionRepo.HardDeleteInteractionsBySourceRefPrefix(ctx, repository.InteractionSourcePhoneCalls, "phone-calls-test-%")
+		_ = interactionRepo.HardDeleteInteractionsBySourceRefPrefix(ctx, repository.InteractionSourcePhoneCalls, "phone-calls-test-"+suffix+"%")
 		_ = contactRepo.SoftDeleteContact(ctx, contact.ID)
 	}()
 

@@ -240,37 +240,42 @@ func TestContactRepository_Integration(t *testing.T) {
 	})
 
 	t.Run("ListContacts", func(t *testing.T) {
-		// Create test contacts with unique emails to avoid conflicts
+		// Namespaced names so the FullName assertions don't collide with a
+		// parallel copy. Membership keys on contact.ID, which is always scoped.
+		ns := uuid.New().String()[:8]
+		name1 := "Integration List Test User 1 " + ns
+		name2 := "Integration List Test User 2 " + ns
 		contact1, err := repo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName: "Integration List Test User 1",
+			FullName: name1,
 		})
 		require.NoError(t, err)
 		require.NotNil(t, contact1)
 
 		contact2, err := repo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName: "Integration List Test User 2",
+			FullName: name2,
 		})
 		require.NoError(t, err)
 		require.NotNil(t, contact2)
 
-		// List contacts
+		// List contacts. A high limit keeps both rows in the window even as the
+		// shared test DB accumulates state across runs.
 		contacts, err := repo.ListContacts(ctx, repository.ListContactsParams{
-			Limit:  100,
+			Limit:  100000,
 			Offset: 0,
 		})
 		require.NoError(t, err)
 
-		// Verify our test contacts are in the list
+		// Verify our test contacts are in the list (membership by ID)
 		foundContact1 := false
 		foundContact2 := false
 		for _, c := range contacts {
 			if c.ID == contact1.ID {
 				foundContact1 = true
-				assert.Equal(t, "Integration List Test User 1", c.FullName)
+				assert.Equal(t, name1, c.FullName)
 			}
 			if c.ID == contact2.ID {
 				foundContact2 = true
-				assert.Equal(t, "Integration List Test User 2", c.FullName)
+				assert.Equal(t, name2, c.FullName)
 			}
 		}
 		assert.True(t, foundContact1, "Contact 1 should be in the list")
@@ -396,11 +401,17 @@ func TestSyncRepository_Integration(t *testing.T) {
 
 	repo := repository.NewSyncRepository(database.Queries)
 
+	// Per-test-run unique suffix so the (source, account_id) unique constraint
+	// and the account-scoped delete don't collide with a parallel copy.
+	ns := uuid.New().String()[:8]
+
 	t.Run("CreateAndGetSyncState", func(t *testing.T) {
 		// Create a sync state
+		source := "test_provider_" + ns
+		account := "test." + ns + "@example.com"
 		req := repository.CreateSyncStateRequest{
-			Source:    "test_provider",
-			AccountID: stringPtr("test@example.com"),
+			Source:    source,
+			AccountID: stringPtr(account),
 			Strategy:  repository.SyncStrategyContactDriven,
 			Enabled:   true,
 		}
@@ -410,8 +421,8 @@ func TestSyncRepository_Integration(t *testing.T) {
 		require.NotNil(t, createdState)
 
 		// Verify the created state
-		assert.Equal(t, "test_provider", createdState.Source)
-		assert.Equal(t, "test@example.com", *createdState.AccountID)
+		assert.Equal(t, source, createdState.Source)
+		assert.Equal(t, account, *createdState.AccountID)
 		assert.Equal(t, repository.SyncStatusIdle, createdState.Status)
 		assert.Equal(t, repository.SyncStrategyContactDriven, createdState.Strategy)
 		assert.True(t, createdState.Enabled)
@@ -432,9 +443,11 @@ func TestSyncRepository_Integration(t *testing.T) {
 
 	t.Run("GetSyncStateBySource", func(t *testing.T) {
 		// Create a sync state
+		gmailSource := "gmail_" + ns
+		account := "user." + ns + "@gmail.com"
 		req := repository.CreateSyncStateRequest{
-			Source:    "gmail",
-			AccountID: stringPtr("user@gmail.com"),
+			Source:    gmailSource,
+			AccountID: stringPtr(account),
 			Strategy:  repository.SyncStrategyFetchAll,
 		}
 
@@ -443,29 +456,28 @@ func TestSyncRepository_Integration(t *testing.T) {
 		defer func() { _ = repo.DeleteSyncState(ctx, createdState.ID) }()
 
 		// Get by source and account
-		accountID := "user@gmail.com"
-		foundState, err := repo.GetSyncStateBySource(ctx, "gmail", &accountID)
+		foundState, err := repo.GetSyncStateBySource(ctx, gmailSource, &account)
 		require.NoError(t, err)
 		require.NotNil(t, foundState)
 		assert.Equal(t, createdState.ID, foundState.ID)
 
 		// Try with wrong account - should not find
-		wrongAccount := "other@gmail.com"
-		_, err = repo.GetSyncStateBySource(ctx, "gmail", &wrongAccount)
+		wrongAccount := "other." + ns + "@gmail.com"
+		_, err = repo.GetSyncStateBySource(ctx, gmailSource, &wrongAccount)
 		assert.Error(t, err)
 	})
 
 	t.Run("ListSyncStates", func(t *testing.T) {
 		// Create multiple sync states
 		state1, err := repo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
-			Source:   "provider1",
+			Source:   "provider1_" + ns,
 			Strategy: repository.SyncStrategyContactDriven,
 		})
 		require.NoError(t, err)
 		defer func() { _ = repo.DeleteSyncState(ctx, state1.ID) }()
 
 		state2, err := repo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
-			Source:   "provider2",
+			Source:   "provider2_" + ns,
 			Strategy: repository.SyncStrategyFetchAll,
 		})
 		require.NoError(t, err)
@@ -491,7 +503,7 @@ func TestSyncRepository_Integration(t *testing.T) {
 
 	t.Run("UpdateSyncStateStatus", func(t *testing.T) {
 		state, err := repo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
-			Source:   "status_test",
+			Source:   "status_test_" + ns,
 			Strategy: repository.SyncStrategyContactDriven,
 		})
 		require.NoError(t, err)
@@ -514,7 +526,7 @@ func TestSyncRepository_Integration(t *testing.T) {
 
 	t.Run("UpdateSyncStateEnabled", func(t *testing.T) {
 		state, err := repo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
-			Source:   "enable_test",
+			Source:   "enable_test_" + ns,
 			Strategy: repository.SyncStrategyContactDriven,
 			Enabled:  true,
 		})
@@ -538,7 +550,7 @@ func TestSyncRepository_Integration(t *testing.T) {
 	t.Run("SyncLogLifecycle", func(t *testing.T) {
 		// Create a sync state first
 		state, err := repo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
-			Source:   "log_test",
+			Source:   "log_test_" + ns,
 			Strategy: repository.SyncStrategyContactDriven,
 		})
 		require.NoError(t, err)
@@ -573,7 +585,7 @@ func TestSyncRepository_Integration(t *testing.T) {
 
 	t.Run("SyncLogWithError", func(t *testing.T) {
 		state, err := repo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
-			Source:   "log_error_test",
+			Source:   "log_error_test_" + ns,
 			Strategy: repository.SyncStrategyContactDriven,
 		})
 		require.NoError(t, err)
@@ -601,7 +613,7 @@ func TestSyncRepository_Integration(t *testing.T) {
 
 	t.Run("CountSyncLogs", func(t *testing.T) {
 		state, err := repo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
-			Source:   "count_test",
+			Source:   "count_test_" + ns,
 			Strategy: repository.SyncStrategyContactDriven,
 		})
 		require.NoError(t, err)
@@ -627,7 +639,7 @@ func TestSyncRepository_Integration(t *testing.T) {
 
 	t.Run("ListRecentSyncLogs", func(t *testing.T) {
 		state, err := repo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
-			Source:   "recent_test",
+			Source:   "recent_test_" + ns,
 			Strategy: repository.SyncStrategyContactDriven,
 		})
 		require.NoError(t, err)
@@ -653,13 +665,14 @@ func TestSyncRepository_Integration(t *testing.T) {
 	})
 
 	t.Run("DeleteSyncStatesByAccountID", func(t *testing.T) {
-		// Create sync states for different accounts
-		account1 := "account1@example.com"
-		account2 := "account2@example.com"
+		// Per-test-unique accounts so the account-scoped delete only touches this
+		// test's rows, not a parallel copy's.
+		account1 := "account1." + ns + "@example.com"
+		account2 := "account2." + ns + "@example.com"
 
 		// Create multiple sync states for account1
 		state1a, err := repo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
-			Source:    "gcontacts",
+			Source:    "gcontacts_" + ns,
 			AccountID: &account1,
 			Strategy:  repository.SyncStrategyFetchAll,
 			Enabled:   true,
@@ -667,7 +680,7 @@ func TestSyncRepository_Integration(t *testing.T) {
 		require.NoError(t, err)
 
 		state1b, err := repo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
-			Source:    "gcal",
+			Source:    "gcal_" + ns,
 			AccountID: &account1,
 			Strategy:  repository.SyncStrategyFetchAll,
 			Enabled:   true,
@@ -676,7 +689,7 @@ func TestSyncRepository_Integration(t *testing.T) {
 
 		// Create a sync state for account2 (should NOT be deleted)
 		state2, err := repo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
-			Source:    "gcontacts",
+			Source:    "gcontacts2_" + ns,
 			AccountID: &account2,
 			Strategy:  repository.SyncStrategyFetchAll,
 			Enabled:   true,
@@ -686,7 +699,7 @@ func TestSyncRepository_Integration(t *testing.T) {
 
 		// Create a sync state with NULL account_id (e.g., iMessage - should NOT be deleted)
 		stateNull, err := repo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
-			Source:    "imessage",
+			Source:    "imessage_" + ns,
 			AccountID: nil, // NULL account_id
 			Strategy:  repository.SyncStrategyContactDriven,
 			Enabled:   true,
@@ -748,13 +761,19 @@ func TestOAuthRepository_Integration(t *testing.T) {
 
 	repo := repository.NewOAuthRepository(database.Queries)
 
+	// Per-test-run unique suffix so the (provider, account_id) upsert key, the
+	// provider-scoped Count, and DeleteByProvider don't collide with a parallel
+	// copy.
+	ns := uuid.New().String()[:8]
+
 	t.Run("UpsertAndGetCredential", func(t *testing.T) {
 		// Create a credential
+		account := "test-upsert." + ns + "@example.com"
 		accountName := "Test User"
 		expiresAt := timeNow().Add(1 * time.Hour)
 		req := repository.UpsertOAuthCredentialRequest{
 			Provider:              "google",
-			AccountID:             "test-upsert@example.com",
+			AccountID:             account,
 			AccountName:           &accountName,
 			AccessTokenEncrypted:  []byte("encrypted-access-token"),
 			RefreshTokenEncrypted: []byte("encrypted-refresh-token"),
@@ -771,13 +790,13 @@ func TestOAuthRepository_Integration(t *testing.T) {
 
 		// Verify the created credential
 		assert.Equal(t, "google", cred.Provider)
-		assert.Equal(t, "test-upsert@example.com", cred.AccountID)
+		assert.Equal(t, account, cred.AccountID)
 		assert.Equal(t, "Test User", *cred.AccountName)
 		assert.Equal(t, []byte("encrypted-access-token"), cred.AccessTokenEncrypted)
 		assert.NotEqual(t, uuid.Nil, cred.ID)
 
 		// Get by provider and account
-		found, err := repo.GetByProviderAndAccount(ctx, "google", "test-upsert@example.com")
+		found, err := repo.GetByProviderAndAccount(ctx, "google", account)
 		require.NoError(t, err)
 		require.NotNil(t, found)
 		assert.Equal(t, cred.ID, found.ID)
@@ -794,7 +813,7 @@ func TestOAuthRepository_Integration(t *testing.T) {
 		// Create initial credential
 		req := repository.UpsertOAuthCredentialRequest{
 			Provider:             "google",
-			AccountID:            "test-update@example.com",
+			AccountID:            "test-update." + ns + "@example.com",
 			AccessTokenEncrypted: []byte("initial-token"),
 			EncryptionNonce:      []byte("12-byte-nonce"),
 			TokenType:            "Bearer",
@@ -819,7 +838,7 @@ func TestOAuthRepository_Integration(t *testing.T) {
 		// Create multiple credentials
 		cred1, err := repo.Upsert(ctx, repository.UpsertOAuthCredentialRequest{
 			Provider:             "google",
-			AccountID:            "list-test1@example.com",
+			AccountID:            "list-test1." + ns + "@example.com",
 			AccessTokenEncrypted: []byte("token1"),
 			EncryptionNonce:      []byte("12-byte-nonce"),
 			TokenType:            "Bearer",
@@ -830,7 +849,7 @@ func TestOAuthRepository_Integration(t *testing.T) {
 
 		cred2, err := repo.Upsert(ctx, repository.UpsertOAuthCredentialRequest{
 			Provider:             "google",
-			AccountID:            "list-test2@example.com",
+			AccountID:            "list-test2." + ns + "@example.com",
 			AccessTokenEncrypted: []byte("token2"),
 			EncryptionNonce:      []byte("12-byte-nonce"),
 			TokenType:            "Bearer",
@@ -842,7 +861,7 @@ func TestOAuthRepository_Integration(t *testing.T) {
 		// Create one for a different provider
 		cred3, err := repo.Upsert(ctx, repository.UpsertOAuthCredentialRequest{
 			Provider:             "microsoft",
-			AccountID:            "list-test@outlook.com",
+			AccountID:            "list-test." + ns + "@outlook.com",
 			AccessTokenEncrypted: []byte("token3"),
 			EncryptionNonce:      []byte("12-byte-nonce"),
 			TokenType:            "Bearer",
@@ -871,10 +890,11 @@ func TestOAuthRepository_Integration(t *testing.T) {
 	})
 
 	t.Run("ListStatusesByProvider", func(t *testing.T) {
+		statusAccount := "status-test." + ns + "@example.com"
 		accountName := "Status Test User"
 		cred, err := repo.Upsert(ctx, repository.UpsertOAuthCredentialRequest{
 			Provider:             "google",
-			AccountID:            "status-test@example.com",
+			AccountID:            statusAccount,
 			AccountName:          &accountName,
 			AccessTokenEncrypted: []byte("encrypted-token"),
 			EncryptionNonce:      []byte("12-byte-nonce"),
@@ -895,16 +915,17 @@ func TestOAuthRepository_Integration(t *testing.T) {
 			}
 		}
 		require.NotNil(t, foundStatus, "Should find status for created credential")
-		assert.Equal(t, "status-test@example.com", foundStatus.AccountID)
+		assert.Equal(t, statusAccount, foundStatus.AccountID)
 		assert.Equal(t, "Status Test User", *foundStatus.AccountName)
 		assert.Len(t, foundStatus.Scopes, 2)
 	})
 
 	t.Run("GetStatus", func(t *testing.T) {
+		getStatusAccount := "get-status." + ns + "@example.com"
 		accountName := "Get Status User"
 		cred, err := repo.Upsert(ctx, repository.UpsertOAuthCredentialRequest{
 			Provider:             "google",
-			AccountID:            "get-status@example.com",
+			AccountID:            getStatusAccount,
 			AccountName:          &accountName,
 			AccessTokenEncrypted: []byte("token"),
 			EncryptionNonce:      []byte("12-byte-nonce"),
@@ -919,14 +940,14 @@ func TestOAuthRepository_Integration(t *testing.T) {
 		require.NotNil(t, status)
 
 		assert.Equal(t, cred.ID, status.ID)
-		assert.Equal(t, "get-status@example.com", status.AccountID)
+		assert.Equal(t, getStatusAccount, status.AccountID)
 		assert.Equal(t, "Get Status User", *status.AccountName)
 	})
 
 	t.Run("UpdateTokens", func(t *testing.T) {
 		cred, err := repo.Upsert(ctx, repository.UpsertOAuthCredentialRequest{
 			Provider:             "google",
-			AccountID:            "token-update@example.com",
+			AccountID:            "token-update." + ns + "@example.com",
 			AccessTokenEncrypted: []byte("old-token"),
 			EncryptionNonce:      []byte("old-nonce-123"),
 			TokenType:            "Bearer",
@@ -954,7 +975,7 @@ func TestOAuthRepository_Integration(t *testing.T) {
 	t.Run("Delete", func(t *testing.T) {
 		cred, err := repo.Upsert(ctx, repository.UpsertOAuthCredentialRequest{
 			Provider:             "google",
-			AccountID:            "delete-test@example.com",
+			AccountID:            "delete-test." + ns + "@example.com",
 			AccessTokenEncrypted: []byte("token"),
 			EncryptionNonce:      []byte("12-byte-nonce"),
 			TokenType:            "Bearer",
@@ -971,10 +992,12 @@ func TestOAuthRepository_Integration(t *testing.T) {
 	})
 
 	t.Run("DeleteByProvider", func(t *testing.T) {
-		// Create credentials for a test provider
+		// Use a per-test-unique provider so DeleteByProvider only removes this
+		// test's rows, not a parallel copy's.
+		deleteProvider := "test_provider_" + ns
 		cred1, err := repo.Upsert(ctx, repository.UpsertOAuthCredentialRequest{
-			Provider:             "test_provider",
-			AccountID:            "delete-by-provider1@example.com",
+			Provider:             deleteProvider,
+			AccountID:            "delete-by-provider1." + ns + "@example.com",
 			AccessTokenEncrypted: []byte("token1"),
 			EncryptionNonce:      []byte("12-byte-nonce"),
 			TokenType:            "Bearer",
@@ -983,8 +1006,8 @@ func TestOAuthRepository_Integration(t *testing.T) {
 		require.NoError(t, err)
 
 		cred2, err := repo.Upsert(ctx, repository.UpsertOAuthCredentialRequest{
-			Provider:             "test_provider",
-			AccountID:            "delete-by-provider2@example.com",
+			Provider:             deleteProvider,
+			AccountID:            "delete-by-provider2." + ns + "@example.com",
 			AccessTokenEncrypted: []byte("token2"),
 			EncryptionNonce:      []byte("12-byte-nonce"),
 			TokenType:            "Bearer",
@@ -993,7 +1016,7 @@ func TestOAuthRepository_Integration(t *testing.T) {
 		require.NoError(t, err)
 
 		// Delete all credentials for the provider
-		err = repo.DeleteByProvider(ctx, "test_provider")
+		err = repo.DeleteByProvider(ctx, deleteProvider)
 		require.NoError(t, err)
 
 		// Both should be gone
@@ -1005,10 +1028,12 @@ func TestOAuthRepository_Integration(t *testing.T) {
 	})
 
 	t.Run("Count", func(t *testing.T) {
-		// Create credentials for counting
+		// Per-test-unique provider so the exact Count == 2 is over this test's
+		// own rows only.
+		countProvider := "count_test_provider_" + ns
 		cred1, err := repo.Upsert(ctx, repository.UpsertOAuthCredentialRequest{
-			Provider:             "count_test_provider",
-			AccountID:            "count1@example.com",
+			Provider:             countProvider,
+			AccountID:            "count1." + ns + "@example.com",
 			AccessTokenEncrypted: []byte("token1"),
 			EncryptionNonce:      []byte("12-byte-nonce"),
 			TokenType:            "Bearer",
@@ -1018,8 +1043,8 @@ func TestOAuthRepository_Integration(t *testing.T) {
 		defer func() { _ = repo.Delete(ctx, cred1.ID) }()
 
 		cred2, err := repo.Upsert(ctx, repository.UpsertOAuthCredentialRequest{
-			Provider:             "count_test_provider",
-			AccountID:            "count2@example.com",
+			Provider:             countProvider,
+			AccountID:            "count2." + ns + "@example.com",
 			AccessTokenEncrypted: []byte("token2"),
 			EncryptionNonce:      []byte("12-byte-nonce"),
 			TokenType:            "Bearer",
@@ -1028,7 +1053,7 @@ func TestOAuthRepository_Integration(t *testing.T) {
 		require.NoError(t, err)
 		defer func() { _ = repo.Delete(ctx, cred2.ID) }()
 
-		count, err := repo.Count(ctx, "count_test_provider")
+		count, err := repo.Count(ctx, countProvider)
 		require.NoError(t, err)
 		assert.Equal(t, int64(2), count)
 	})

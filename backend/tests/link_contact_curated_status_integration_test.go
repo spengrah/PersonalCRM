@@ -37,7 +37,7 @@ func setupLinkCuratedEnv(t *testing.T) *linkCuratedEnv {
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set")
 	}
-	gin.SetMode(gin.TestMode)
+	// gin.SetMode is hoisted to TestMain so parallel tests don't race on it.
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL

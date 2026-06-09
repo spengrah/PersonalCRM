@@ -15,10 +15,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func cleanupTelegramMessages(t *testing.T, queries db.Querier) {
+// telegramTestChat returns a per-test-unique telegram chat ID and registers a
+// chat-range cleanup that deletes only this test's own rows. Per-test chat IDs
+// (vs the old fixed 12345/-100555/77777 shared across funcs) let the funcs run
+// under t.Parallel() without their shared message-ID cleanup deleting each
+// other's rows. The message IDs themselves stay as small literals — they are
+// unique per (chat_id, message_id), and the chat_id is now unique per test.
+func telegramTestChat(t *testing.T, repo *repository.TelegramMessageRepository) int64 {
 	t.Helper()
-	ctx := context.Background()
-	_, _ = queries.DeleteTelegramMessagesByMessageIDs(ctx, []int32{90001, 90002, 90003, 90004, 90005})
+	_, ns := migrationGenerator(t)
+	base, _ := uniqueTestIDs(t, ns)
+	clean := func() { _ = repo.HardDeleteByChatIDRange(context.Background(), base, base) }
+	clean()
+	t.Cleanup(clean)
+	return base
 }
 
 func TestTelegramMessage_UpsertAndGet(t *testing.T) {
@@ -43,8 +53,7 @@ func TestTelegramMessage_UpsertAndGet(t *testing.T) {
 
 	repo := repository.NewTelegramMessageRepository(database.Queries)
 
-	cleanupTelegramMessages(t, database.Queries)
-	t.Cleanup(func() { cleanupTelegramMessages(t, database.Queries) })
+	chatID := telegramTestChat(t, repo)
 
 	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
 	text := "Hello, world!"
@@ -53,7 +62,7 @@ func TestTelegramMessage_UpsertAndGet(t *testing.T) {
 
 	msg, err := repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
 		TelegramMessageID: 90001,
-		TelegramChatID:    12345,
+		TelegramChatID:    chatID,
 		ChatType:          "private",
 		MessageText:       &text,
 		MessageType:       "text",
@@ -65,7 +74,7 @@ func TestTelegramMessage_UpsertAndGet(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, int32(90001), msg.TelegramMessageID)
-	assert.Equal(t, int64(12345), msg.TelegramChatID)
+	assert.Equal(t, chatID, msg.TelegramChatID)
 	assert.Equal(t, "private", msg.ChatType)
 	assert.Equal(t, &text, msg.MessageText)
 	assert.Equal(t, "text", msg.MessageType)
@@ -75,7 +84,7 @@ func TestTelegramMessage_UpsertAndGet(t *testing.T) {
 	assert.Equal(t, &firstName, msg.PeerFirstName)
 
 	// Get it back
-	got, err := repo.GetMessage(ctx, 12345, 90001)
+	got, err := repo.GetMessage(ctx, chatID, 90001)
 	require.NoError(t, err)
 	assert.Equal(t, msg.ID, got.ID)
 	assert.Equal(t, &text, got.MessageText)
@@ -103,15 +112,14 @@ func TestTelegramMessage_UpsertIdempotent(t *testing.T) {
 
 	repo := repository.NewTelegramMessageRepository(database.Queries)
 
-	cleanupTelegramMessages(t, database.Queries)
-	t.Cleanup(func() { cleanupTelegramMessages(t, database.Queries) })
+	chatID := telegramTestChat(t, repo)
 
 	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
 	text1 := "First version"
 
 	msg1, err := repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
 		TelegramMessageID: 90002,
-		TelegramChatID:    12345,
+		TelegramChatID:    chatID,
 		ChatType:          "private",
 		MessageText:       &text1,
 		MessageType:       "text",
@@ -124,7 +132,7 @@ func TestTelegramMessage_UpsertIdempotent(t *testing.T) {
 	text2 := "Updated version"
 	msg2, err := repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
 		TelegramMessageID: 90002,
-		TelegramChatID:    12345,
+		TelegramChatID:    chatID,
 		ChatType:          "private",
 		MessageText:       &text2,
 		MessageType:       "text",
@@ -158,15 +166,14 @@ func TestTelegramMessage_UpsertEdit(t *testing.T) {
 
 	repo := repository.NewTelegramMessageRepository(database.Queries)
 
-	cleanupTelegramMessages(t, database.Queries)
-	t.Cleanup(func() { cleanupTelegramMessages(t, database.Queries) })
+	chatID := telegramTestChat(t, repo)
 
 	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
 	text := "Original"
 
 	_, err = repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
 		TelegramMessageID: 90003,
-		TelegramChatID:    12345,
+		TelegramChatID:    chatID,
 		ChatType:          "private",
 		MessageText:       &text,
 		MessageType:       "text",
@@ -180,7 +187,7 @@ func TestTelegramMessage_UpsertEdit(t *testing.T) {
 	editedAt := accelerated.GetCurrentTime().Add(time.Minute).Truncate(time.Microsecond)
 	msg, err := repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
 		TelegramMessageID: 90003,
-		TelegramChatID:    12345,
+		TelegramChatID:    chatID,
 		ChatType:          "private",
 		MessageText:       &editedText,
 		MessageType:       "text",
@@ -215,15 +222,14 @@ func TestTelegramMessage_SoftDelete(t *testing.T) {
 
 	repo := repository.NewTelegramMessageRepository(database.Queries)
 
-	cleanupTelegramMessages(t, database.Queries)
-	t.Cleanup(func() { cleanupTelegramMessages(t, database.Queries) })
+	chatID := telegramTestChat(t, repo)
 
 	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
 	text := "To be deleted"
 
 	_, err = repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
 		TelegramMessageID: 90004,
-		TelegramChatID:    12345,
+		TelegramChatID:    chatID,
 		ChatType:          "private",
 		MessageText:       &text,
 		MessageType:       "text",
@@ -237,7 +243,7 @@ func TestTelegramMessage_SoftDelete(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify deleted — GetMessage filters deleted_at IS NULL, so should return not found
-	_, err = repo.GetMessage(ctx, 12345, 90004)
+	_, err = repo.GetMessage(ctx, chatID, 90004)
 	assert.Error(t, err)
 }
 
@@ -263,15 +269,19 @@ func TestTelegramMessage_SoftDeleteChannel(t *testing.T) {
 
 	repo := repository.NewTelegramMessageRepository(database.Queries)
 
-	cleanupTelegramMessages(t, database.Queries)
-	t.Cleanup(func() { cleanupTelegramMessages(t, database.Queries) })
+	// Channels use a negative chat ID. telegramTestChat registers cleanup on the
+	// positive base range; this test stores under the negated id, so register a
+	// matching negative-range cleanup too.
+	base := telegramTestChat(t, repo)
+	chatID := -base
+	t.Cleanup(func() { _ = repo.HardDeleteByChatIDRange(context.Background(), chatID, chatID) })
 
 	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
 	text := "Channel message"
 
 	_, err = repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
 		TelegramMessageID: 90005,
-		TelegramChatID:    -100555,
+		TelegramChatID:    chatID,
 		ChatType:          "group",
 		MessageText:       &text,
 		MessageType:       "text",
@@ -281,10 +291,10 @@ func TestTelegramMessage_SoftDeleteChannel(t *testing.T) {
 	require.NoError(t, err)
 
 	// Soft delete with chat_id filter
-	err = repo.SoftDeleteChannelMessages(ctx, -100555, []int32{90005})
+	err = repo.SoftDeleteChannelMessages(ctx, chatID, []int32{90005})
 	require.NoError(t, err)
 
-	_, err = repo.GetMessage(ctx, -100555, 90005)
+	_, err = repo.GetMessage(ctx, chatID, 90005)
 	assert.Error(t, err)
 }
 
@@ -310,15 +320,14 @@ func TestTelegramMessage_ListUnprocessed(t *testing.T) {
 
 	repo := repository.NewTelegramMessageRepository(database.Queries)
 
-	cleanupTelegramMessages(t, database.Queries)
-	t.Cleanup(func() { cleanupTelegramMessages(t, database.Queries) })
+	chatID := telegramTestChat(t, repo)
 
 	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
 	text := "Unprocessed msg"
 
 	_, err = repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
 		TelegramMessageID: 90001,
-		TelegramChatID:    77777,
+		TelegramChatID:    chatID,
 		ChatType:          "private",
 		MessageText:       &text,
 		MessageType:       "text",
@@ -327,7 +336,8 @@ func TestTelegramMessage_ListUnprocessed(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	msgs, err := repo.ListUnprocessedByChat(ctx, 77777)
+	// Scoped to this test's own unique chat, so >= 1 holds deterministically.
+	msgs, err := repo.ListUnprocessedByChat(ctx, chatID)
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, len(msgs), 1)
 }

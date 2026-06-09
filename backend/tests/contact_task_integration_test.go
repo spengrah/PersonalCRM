@@ -44,7 +44,12 @@ func TestContactTask_CRUD(t *testing.T) {
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
-	gen, _ := migrationGenerator(t)
+	gen, ns := migrationGenerator(t)
+
+	// tid suffixes a fixed external-task-id literal with the per-test namespace
+	// so the (provider, external_task_id) unique/upsert keys don't collide
+	// across parallel clones.
+	tid := func(s string) string { return s + "-" + ns }
 
 	// Seed a test contact via the synthetic factory (FK target for the tasks).
 	contact, contactCleanup := seedMigrationContact(ctx, t, database, gen, factory.WithCadence("weekly"))
@@ -57,7 +62,7 @@ func TestContactTask_CRUD(t *testing.T) {
 			Provider:       "todoist",
 			Kind:           contacttask.KindReachOut,
 			Lifecycle:      contacttask.LifecycleCadenceDue,
-			ExternalTaskID: "12345",
+			ExternalTaskID: tid("12345"),
 			State:          "managed",
 			Metadata:       map[string]any{"test_key": "test_value"},
 		})
@@ -65,7 +70,7 @@ func TestContactTask_CRUD(t *testing.T) {
 		assert.Equal(t, contact.ID, task.ContactID)
 		assert.Equal(t, "todoist", task.Provider)
 		assert.Equal(t, contacttask.KindReachOut, task.Kind)
-		assert.Equal(t, "12345", task.ExternalTaskID)
+		assert.Equal(t, tid("12345"), task.ExternalTaskID)
 		assert.Equal(t, repository.ContactTaskStateManaged, task.State)
 
 		// Retrieve by ID
@@ -80,7 +85,7 @@ func TestContactTask_CRUD(t *testing.T) {
 		assert.Equal(t, task.ID, retrieved2.ID)
 
 		// Retrieve by external ID
-		retrieved3, err := contactTaskRepo.GetContactTaskByExternalID(ctx, "todoist", "12345")
+		retrieved3, err := contactTaskRepo.GetContactTaskByExternalID(ctx, "todoist", tid("12345"))
 		require.NoError(t, err)
 		assert.Equal(t, task.ID, retrieved3.ID)
 
@@ -96,11 +101,11 @@ func TestContactTask_CRUD(t *testing.T) {
 			Provider:       "todoist",
 			Kind:           contacttask.KindReachOut,
 			Lifecycle:      contacttask.LifecycleCadenceDue,
-			ExternalTaskID: "11111",
+			ExternalTaskID: tid("11111"),
 			State:          string(repository.ContactTaskStateManaged),
 		})
 		require.NoError(t, err)
-		assert.Equal(t, "11111", task1.ExternalTaskID)
+		assert.Equal(t, tid("11111"), task1.ExternalTaskID)
 		assert.Equal(t, repository.ContactTaskStateManaged, task1.State)
 
 		// Upsert again with same external_task_id (should update state)
@@ -109,12 +114,12 @@ func TestContactTask_CRUD(t *testing.T) {
 			Provider:       "todoist",
 			Kind:           contacttask.KindReachOut,
 			Lifecycle:      contacttask.LifecycleCadenceDue,
-			ExternalTaskID: "11111", // Same external ID
+			ExternalTaskID: tid("11111"), // Same external ID
 			State:          string(repository.ContactTaskStateUnmanaged),
 		})
 		require.NoError(t, err)
 		assert.Equal(t, task1.ID, task2.ID)                                // Same ID (upsert matched)
-		assert.Equal(t, "11111", task2.ExternalTaskID)                     // Same external ID (it's the key)
+		assert.Equal(t, tid("11111"), task2.ExternalTaskID)                // Same external ID (it's the key)
 		assert.Equal(t, repository.ContactTaskStateUnmanaged, task2.State) // State was updated
 
 		// Clean up
@@ -129,7 +134,7 @@ func TestContactTask_CRUD(t *testing.T) {
 			Provider:       "todoist",
 			Kind:           contacttask.KindReachOut,
 			Lifecycle:      contacttask.LifecycleCadenceDue,
-			ExternalTaskID: "33333",
+			ExternalTaskID: tid("33333"),
 		})
 		require.NoError(t, err)
 		assert.Equal(t, repository.ContactTaskStateManaged, task.State)
@@ -151,7 +156,7 @@ func TestContactTask_CRUD(t *testing.T) {
 			Provider:       "todoist",
 			Kind:           contacttask.KindReachOut,
 			Lifecycle:      contacttask.LifecycleCadenceDue,
-			ExternalTaskID: "44444",
+			ExternalTaskID: tid("44444"),
 		})
 		require.NoError(t, err)
 
@@ -178,7 +183,7 @@ func TestContactTask_CRUD(t *testing.T) {
 			Provider:       "todoist",
 			Kind:           contacttask.KindReachOut,
 			Lifecycle:      contacttask.LifecycleCadenceDue,
-			ExternalTaskID: "55555",
+			ExternalTaskID: tid("55555"),
 		})
 		require.NoError(t, err)
 
@@ -210,7 +215,7 @@ func TestContactTask_CRUD(t *testing.T) {
 			Provider:       "todoist",
 			Kind:           contacttask.KindReachOut,
 			Lifecycle:      contacttask.LifecycleCadenceDue,
-			ExternalTaskID: "66666",
+			ExternalTaskID: tid("66666"),
 		})
 		require.NoError(t, err)
 
@@ -233,7 +238,7 @@ func TestContactTask_CRUD(t *testing.T) {
 			Provider:       "todoist",
 			Kind:           contacttask.KindReachOut,
 			Lifecycle:      contacttask.LifecycleCadenceDue,
-			ExternalTaskID: "77777",
+			ExternalTaskID: tid("77777"),
 		})
 		require.NoError(t, err)
 
@@ -253,7 +258,7 @@ func TestContactTask_CRUD(t *testing.T) {
 			Provider:       "todoist",
 			Kind:           contacttask.KindReachOut,
 			Lifecycle:      contacttask.LifecycleCadenceDue,
-			ExternalTaskID: "88888",
+			ExternalTaskID: tid("88888"),
 		})
 		require.NoError(t, err)
 
@@ -263,7 +268,7 @@ func TestContactTask_CRUD(t *testing.T) {
 			Provider:       "todoist",
 			Kind:           contacttask.KindReachOut,
 			Lifecycle:      contacttask.LifecycleCadenceDue,
-			ExternalTaskID: "99999",
+			ExternalTaskID: tid("99999"),
 		})
 		assert.Error(t, err) // Should fail due to unique constraint
 
@@ -359,7 +364,8 @@ func TestContactTask_SyncedDeadlineMetadata(t *testing.T) {
 	defer database.Close()
 
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
-	gen, _ := migrationGenerator(t)
+	gen, ns := migrationGenerator(t)
+	tid := func(s string) string { return s + "-" + ns }
 
 	// Seed a test contact via the synthetic factory (FK target for the tasks).
 	contact, contactCleanup := seedMigrationContact(ctx, t, database, gen, factory.WithCadence("weekly"))
@@ -372,7 +378,7 @@ func TestContactTask_SyncedDeadlineMetadata(t *testing.T) {
 			Provider:       "todoist",
 			Kind:           contacttask.KindReachOut,
 			Lifecycle:      contacttask.LifecycleCadenceDue,
-			ExternalTaskID: "temp-uuid-123",
+			ExternalTaskID: tid("temp-uuid-123"),
 			State:          "managed",
 			Metadata: map[string]any{
 				"pending_temp_id": "temp-uuid-123",
@@ -411,7 +417,7 @@ func TestContactTask_SyncedDeadlineMetadata(t *testing.T) {
 			Provider:       "todoist",
 			Kind:           contacttask.KindReachOut,
 			Lifecycle:      contacttask.LifecycleCadenceDue,
-			ExternalTaskID: "12345678",
+			ExternalTaskID: tid("12345678"),
 			State:          "managed",
 			Metadata:       map[string]any{}, // No synced_deadline
 		})
@@ -456,7 +462,8 @@ func TestContactTask_ActionTasks(t *testing.T) {
 	defer database.Close()
 
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
-	gen, _ := migrationGenerator(t)
+	gen, ns := migrationGenerator(t)
+	tid := func(s string) string { return s + "-" + ns }
 
 	// Seed a test contact via the synthetic factory (FK target for the tasks).
 	contact, contactCleanup := seedMigrationContact(ctx, t, database, gen)
@@ -469,7 +476,7 @@ func TestContactTask_ActionTasks(t *testing.T) {
 			Provider:       "todoist",
 			Kind:           contacttask.KindAction,
 			Lifecycle:      contacttask.LifecycleManual,
-			ExternalTaskID: "action-task-1",
+			ExternalTaskID: tid("action-task-1"),
 			State:          "managed",
 			Metadata: map[string]any{
 				"content":  "Follow up about surgery",
@@ -485,7 +492,7 @@ func TestContactTask_ActionTasks(t *testing.T) {
 			Provider:       "todoist",
 			Kind:           contacttask.KindAction,
 			Lifecycle:      contacttask.LifecycleManual,
-			ExternalTaskID: "action-task-2",
+			ExternalTaskID: tid("action-task-2"),
 			State:          "managed",
 			Metadata: map[string]any{
 				"content":  "Send contract",
@@ -502,7 +509,7 @@ func TestContactTask_ActionTasks(t *testing.T) {
 			Provider:       "todoist",
 			Kind:           contacttask.KindAction,
 			Lifecycle:      contacttask.LifecycleManual,
-			ExternalTaskID: "action-task-3",
+			ExternalTaskID: tid("action-task-3"),
 			State:          "managed",
 			Metadata: map[string]any{
 				"content": "No due date task",
@@ -526,7 +533,7 @@ func TestContactTask_ActionTasks(t *testing.T) {
 			Provider:       "todoist",
 			Kind:           contacttask.KindAction,
 			Lifecycle:      contacttask.LifecycleManual,
-			ExternalTaskID: "action-managed",
+			ExternalTaskID: tid("action-managed"),
 			State:          "managed",
 		})
 		require.NoError(t, err)
@@ -536,7 +543,7 @@ func TestContactTask_ActionTasks(t *testing.T) {
 			Provider:       "todoist",
 			Kind:           contacttask.KindAction,
 			Lifecycle:      contacttask.LifecycleManual,
-			ExternalTaskID: "action-completed",
+			ExternalTaskID: tid("action-completed"),
 			State:          "completed",
 		})
 		require.NoError(t, err)
@@ -546,7 +553,7 @@ func TestContactTask_ActionTasks(t *testing.T) {
 			Provider:       "todoist",
 			Kind:           contacttask.KindReachOut,
 			Lifecycle:      contacttask.LifecycleCadenceDue,
-			ExternalTaskID: "cadence-managed",
+			ExternalTaskID: tid("cadence-managed"),
 			State:          "managed",
 		})
 		require.NoError(t, err)
@@ -567,7 +574,7 @@ func TestContactTask_ActionTasks(t *testing.T) {
 		completedTasks, err := contactTaskRepo.ListContactTasksFiltered(ctx, contact.ID, &completed, nil, nil)
 		require.NoError(t, err)
 		assert.Len(t, completedTasks, 1)
-		assert.Equal(t, "action-completed", completedTasks[0].ExternalTaskID)
+		assert.Equal(t, tid("action-completed"), completedTasks[0].ExternalTaskID)
 
 		// Filter by kind=action
 		action := "action"
@@ -579,7 +586,7 @@ func TestContactTask_ActionTasks(t *testing.T) {
 		actionManagedTasks, err := contactTaskRepo.ListContactTasksFiltered(ctx, contact.ID, &managed, &action, nil)
 		require.NoError(t, err)
 		assert.Len(t, actionManagedTasks, 1)
-		assert.Equal(t, "action-managed", actionManagedTasks[0].ExternalTaskID)
+		assert.Equal(t, tid("action-managed"), actionManagedTasks[0].ExternalTaskID)
 
 		// Clean up
 		err = contactTaskRepo.DeleteContactTask(ctx, actionManaged.ID)
@@ -597,7 +604,7 @@ func TestContactTask_ActionTasks(t *testing.T) {
 			Provider:       "todoist",
 			Kind:           contacttask.KindAction,
 			Lifecycle:      contacttask.LifecycleManual,
-			ExternalTaskID: "task-to-complete",
+			ExternalTaskID: tid("task-to-complete"),
 			State:          "managed",
 		})
 		require.NoError(t, err)
@@ -625,7 +632,7 @@ func TestContactTask_ActionTasks(t *testing.T) {
 			Provider:       "todoist",
 			Kind:           contacttask.KindAction,
 			Lifecycle:      contacttask.LifecycleManual,
-			ExternalTaskID: "action-with-metadata",
+			ExternalTaskID: tid("action-with-metadata"),
 			State:          "managed",
 			Metadata: map[string]any{
 				"content":    "Follow up about surgery",

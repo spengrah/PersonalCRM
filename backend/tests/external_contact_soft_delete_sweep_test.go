@@ -322,6 +322,17 @@ func TestExternalContactUnmatched_HidesUnresolvedTelegramByDefault(t *testing.T)
 		_ = database.Queries.TestDeleteExternalContactsBySourceIDPrefix(cleanCtx, prefix)
 	})
 
+	// CountHiddenUnresolvedTelegram is a DB-wide COUNT with no prefix filter, so
+	// under t.Parallel() it sees other tests' rows. Capture baselines before
+	// seeding and assert the DELTA this test contributes (exactly one hidden
+	// unresolved telegram row), not an absolute count.
+	baseTelegram, err := repo.CountHiddenUnresolvedTelegram(ctx, "telegram")
+	require.NoError(t, err)
+	baseAll, err := repo.CountHiddenUnresolvedTelegram(ctx, "")
+	require.NoError(t, err)
+	baseGcontacts, err := repo.CountHiddenUnresolvedTelegram(ctx, "gcontacts")
+	require.NoError(t, err)
+
 	hidden, err := repo.Upsert(ctx, repository.UpsertExternalContactRequest{
 		Source:   "telegram",
 		SourceID: prefix + "hidden",
@@ -365,13 +376,13 @@ func TestExternalContactUnmatched_HidesUnresolvedTelegramByDefault(t *testing.T)
 
 	hiddenCount, err := repo.CountHiddenUnresolvedTelegram(ctx, "telegram")
 	require.NoError(t, err)
-	require.Equal(t, int64(1), hiddenCount)
+	require.Equal(t, int64(1), hiddenCount-baseTelegram, "this test adds exactly one hidden unresolved telegram row")
 	hiddenCountAll, err := repo.CountHiddenUnresolvedTelegram(ctx, "")
 	require.NoError(t, err)
-	require.Equal(t, int64(1), hiddenCountAll)
+	require.Equal(t, int64(1), hiddenCountAll-baseAll, "same row counts under the unfiltered source")
 	hiddenCountOther, err := repo.CountHiddenUnresolvedTelegram(ctx, "gcontacts")
 	require.NoError(t, err)
-	require.Equal(t, int64(0), hiddenCountOther)
+	require.Equal(t, int64(0), hiddenCountOther-baseGcontacts, "this test adds no gcontacts hidden rows")
 
 	hiddenAfterList, err := repo.GetByID(ctx, hidden.ID)
 	require.NoError(t, err)

@@ -48,7 +48,7 @@ func TestInteraction_SourceCheckAcceptsGchat(t *testing.T) {
 	// any row uses source='gchat' (data-loss guard), and the guard counts
 	// rows regardless of deleted_at — so a soft-delete is insufficient.
 	defer func() {
-		_ = interactionRepo.HardDeleteInteractionsBySourceRefPrefix(ctx, repository.InteractionSourceGChat, "gchat-test-%")
+		_ = interactionRepo.HardDeleteInteractionsBySourceRefPrefix(ctx, repository.InteractionSourceGChat, "gchat-test-"+suffix+"%")
 		_ = contactRepo.SoftDeleteContact(ctx, contact.ID)
 	}()
 

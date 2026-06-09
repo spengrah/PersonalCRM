@@ -73,7 +73,7 @@ func setupTelegramImportSuggestionTest(t *testing.T) (
 	suggestionService := service.NewSuggestionService(externalRepo, contactRepo, contactMethodRepo, enrichmentService, matchService, database)
 	importHandler := handlers.NewImportHandler(externalRepo, nil, contactService, matchService, enrichmentService, suggestionService)
 
-	gin.SetMode(gin.TestMode)
+	// gin.SetMode is hoisted to TestMain so parallel tests don't race on it.
 	router := gin.New()
 	router.Use(api.RequestIDMiddleware())
 	router.Use(api.CORSMiddleware(config.CORSConfig{AllowAll: true}))

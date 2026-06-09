@@ -51,7 +51,7 @@ func TestInteraction_SourceCheckAcceptsMessages(t *testing.T) {
 	// the shared CI DB. Soft-delete is not enough — the guard counts
 	// rows regardless of deleted_at.
 	defer func() {
-		_ = interactionRepo.HardDeleteInteractionsBySourceRefPrefix(ctx, repository.InteractionSourceMessages, "messages-test-%")
+		_ = interactionRepo.HardDeleteInteractionsBySourceRefPrefix(ctx, repository.InteractionSourceMessages, "messages-test-"+suffix+"%")
 		_ = contactRepo.SoftDeleteContact(ctx, contact.ID)
 	}()
 

@@ -20,9 +20,19 @@ import (
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// contactByName suffixes a fixed full_name with a per-test-run unique token so
+// parallel copies don't collide under the shared DB's trigram matching. This
+// file does not import the synthetic toolkit, so the local uuid suffix is the
+// lightweight isolation primitive. Assertions key on contact.ID, so the exact
+// name is irrelevant — only its uniqueness matters.
+func contactByName(base string) string {
+	return base + " " + uuid.NewString()[:8]
+}
 
 // TestContactBy_CreateWithCadence verifies that contact_by is correctly set when creating a contact with cadence.
 func TestContactBy_CreateWithCadence(t *testing.T) {
@@ -51,7 +61,7 @@ func TestContactBy_CreateWithCadence(t *testing.T) {
 	t.Run("weekly cadence sets contact_by to created_at + 7 days", func(t *testing.T) {
 		weeklyStr := "weekly"
 		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName: "Test Weekly Contact",
+			FullName: contactByName("Test Weekly Contact"),
 			Cadence:  &weeklyStr,
 		})
 		require.NoError(t, err)
@@ -69,7 +79,7 @@ func TestContactBy_CreateWithCadence(t *testing.T) {
 	t.Run("monthly cadence sets contact_by to created_at + 30 days", func(t *testing.T) {
 		monthlyStr := "monthly"
 		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName: "Test Monthly Contact",
+			FullName: contactByName("Test Monthly Contact"),
 			Cadence:  &monthlyStr,
 		})
 		require.NoError(t, err)
@@ -85,7 +95,7 @@ func TestContactBy_CreateWithCadence(t *testing.T) {
 
 	t.Run("no cadence leaves contact_by nil", func(t *testing.T) {
 		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName: "Test No Cadence Contact",
+			FullName: contactByName("Test No Cadence Contact"),
 			Cadence:  nil,
 		})
 		require.NoError(t, err)
@@ -98,7 +108,7 @@ func TestContactBy_CreateWithCadence(t *testing.T) {
 		weeklyStr := "weekly"
 		lastContacted := time.Date(2024, 1, 15, 10, 30, 0, 0, time.Local)
 		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName:      "Test With LastContacted",
+			FullName:      contactByName("Test With LastContacted"),
 			Cadence:       &weeklyStr,
 			LastContacted: &lastContacted,
 		})
@@ -141,7 +151,7 @@ func TestContactBy_UpdateLastContacted(t *testing.T) {
 	t.Run("updating last_contacted recalculates contact_by", func(t *testing.T) {
 		weeklyStr := "weekly"
 		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName: "Test Update LastContacted",
+			FullName: contactByName("Test Update LastContacted"),
 			Cadence:  &weeklyStr,
 		})
 		require.NoError(t, err)
@@ -169,7 +179,7 @@ func TestContactBy_UpdateLastContacted(t *testing.T) {
 
 	t.Run("updating last_contacted without cadence keeps contact_by nil", func(t *testing.T) {
 		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName: "Test Update LastContacted No Cadence",
+			FullName: contactByName("Test Update LastContacted No Cadence"),
 			Cadence:  nil,
 		})
 		require.NoError(t, err)
@@ -218,7 +228,7 @@ func TestContactBy_UpdateContactLastContactedIfLater(t *testing.T) {
 		initialContactBy := cadence.CalculateContactBy(initialDate, cadence.CadenceWeekly)
 
 		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName:      "Test IfLater Update",
+			FullName:      contactByName("Test IfLater Update"),
 			Cadence:       &weeklyStr,
 			LastContacted: &initialDate,
 		})
@@ -248,7 +258,7 @@ func TestContactBy_UpdateContactLastContactedIfLater(t *testing.T) {
 		initialDate := time.Date(2024, 1, 15, 12, 0, 0, 0, time.Local)
 
 		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName:      "Test IfLater No Update",
+			FullName:      contactByName("Test IfLater No Update"),
 			Cadence:       &weeklyStr,
 			LastContacted: &initialDate,
 		})
@@ -274,7 +284,7 @@ func TestContactBy_UpdateContactLastContactedIfLater(t *testing.T) {
 
 	t.Run("handles contact without cadence (sets contact_by to NULL)", func(t *testing.T) {
 		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName: "Test IfLater No Cadence",
+			FullName: contactByName("Test IfLater No Cadence"),
 			Cadence:  nil,
 		})
 		require.NoError(t, err)
@@ -340,7 +350,7 @@ func TestContactBy_CadenceStateTransitions(t *testing.T) {
 
 		// Step 1: Create contact WITH cadence
 		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName: "Test Cadence State Transitions",
+			FullName: contactByName("Test Cadence State Transitions"),
 			Cadence:  &weeklyStr,
 		})
 		require.NoError(t, err)
@@ -391,7 +401,7 @@ func TestContactBy_CadenceStateTransitions(t *testing.T) {
 
 		// Create contact WITHOUT cadence
 		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName: "Test No Cadence To Set",
+			FullName: contactByName("Test No Cadence To Set"),
 			Cadence:  nil,
 		})
 		require.NoError(t, err)
@@ -416,7 +426,7 @@ func TestContactBy_CadenceStateTransitions(t *testing.T) {
 		// Create with weekly cadence + a fixed last_contacted so the
 		// service-layer contact_by recompute has a stable base.
 		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName:      "Test Change Cadence Type",
+			FullName:      contactByName("Test Change Cadence Type"),
 			Cadence:       &weeklyStr,
 			LastContacted: &lastContacted,
 		})
@@ -470,7 +480,7 @@ func TestContactBy_ListOverdueContacts(t *testing.T) {
 	// Contact that is overdue (contact_by in the past)
 	pastDate := time.Date(2024, 1, 1, 12, 0, 0, 0, time.Local)
 	overdueContact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName:      "Overdue Contact",
+		FullName:      contactByName("Overdue Contact"),
 		Cadence:       &weeklyStr,
 		LastContacted: &pastDate, // contact_by will be 2024-01-08
 	})
@@ -480,7 +490,7 @@ func TestContactBy_ListOverdueContacts(t *testing.T) {
 	// Contact that is not overdue (contact_by in the future)
 	futureDate := accelerated.GetCurrentTime().AddDate(0, 0, 7)
 	notOverdueContact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName:      "Not Overdue Contact",
+		FullName:      contactByName("Not Overdue Contact"),
 		Cadence:       &weeklyStr,
 		LastContacted: &futureDate, // contact_by will be in the future
 	})
@@ -489,7 +499,7 @@ func TestContactBy_ListOverdueContacts(t *testing.T) {
 
 	// Contact without cadence (no contact_by)
 	noCadenceContact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName: "No Cadence Contact",
+		FullName: contactByName("No Cadence Contact"),
 		Cadence:  nil,
 	})
 	require.NoError(t, err)
@@ -524,7 +534,7 @@ func TestContactBy_ListOverdueContacts(t *testing.T) {
 		// Create another overdue contact with an even older contact_by
 		veryOldDate := time.Date(2023, 6, 1, 12, 0, 0, 0, time.Local)
 		veryOverdueContact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName:      "Very Overdue Contact",
+			FullName:      contactByName("Very Overdue Contact"),
 			Cadence:       &weeklyStr,
 			LastContacted: &veryOldDate, // contact_by will be 2023-06-08
 		})
