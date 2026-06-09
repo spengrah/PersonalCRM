@@ -423,10 +423,14 @@ jobs:
         run: swift test --filter 'BundleAssemblyParityTests|BundleSwapAtomicityTests'
 
   e2e-tests:
-    name: E2E Tests
+    name: E2E Tests (shard ${{ matrix.shard }})
     runs-on: ubuntu-latest
     needs: changes
     if: ${{ needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
 
     steps:
       - name: Checkout code
@@ -443,12 +447,15 @@ jobs:
       # shared restore-keys prefix so they still restore each other's identical
       # module set (on subsequent runs; saves land post-job, so this warms a
       # sibling job on a LATER run, not the others running concurrently here).
-      # go.sum-keyed: rolls only when dependencies change.
+      # go.sum-keyed: rolls only when dependencies change. The trailing
+      # ${{ matrix.shard }} makes the two concurrent E2E shards save
+      # collision-free; the shared restore-keys prefix still lets a shard
+      # restore the other shard's most-recent entry (identical module set).
       - name: Cache Go module download cache
         uses: actions/cache@v4
         with:
           path: ~/go/pkg/mod
-          key: go-mod-${{ runner.os }}-go1.23-${{ hashFiles('backend/go.sum') }}-e2e
+          key: go-mod-${{ runner.os }}-go1.23-${{ hashFiles('backend/go.sum') }}-e2e-${{ matrix.shard }}
           restore-keys: |
             go-mod-${{ runner.os }}-go1.23-${{ hashFiles('backend/go.sum') }}-
             go-mod-${{ runner.os }}-go1.23-
@@ -457,11 +464,16 @@ jobs:
       # saves a fresh entry; restore-keys brings the most recent prior build
       # cache forward so warmth compounds across pushes. Namespaced per job
       # because each job has a distinct build config (plain amd64 `go run` here).
+      # The trailing ${{ matrix.shard }} makes the two concurrent E2E shards
+      # save collision-free (same SHA otherwise collides); the shared
+      # restore-keys prefix lets a shard restore the other shard's most-recent
+      # entry (the backend binary is identical across shards, so the cross-shard
+      # restore is content-addressed-safe and genuinely warm).
       - name: Cache Go build cache
         uses: actions/cache@v4
         with:
           path: ~/.cache/go-build
-          key: go-build-e2e-${{ runner.os }}-go1.23-${{ github.sha }}
+          key: go-build-e2e-${{ runner.os }}-go1.23-${{ github.sha }}-${{ matrix.shard }}
           restore-keys: |
             go-build-e2e-${{ runner.os }}-go1.23-
 
@@ -562,13 +574,13 @@ jobs:
           FRONTEND_URL: http://localhost:3000
           CRM_ENV: testing
           ENABLE_EXTERNAL_SYNC: true
-        run: bunx playwright test --project=chromium
+        run: bunx playwright test --project=chromium --shard=${{ matrix.shard }}/2
 
       - name: Upload Playwright report
         uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
-          name: playwright-report
+          name: playwright-report-shard-${{ matrix.shard }}
           path: frontend/playwright-report/
           retention-days: 7
 
@@ -576,6 +588,27 @@ jobs:
         uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: playwright-traces
+          name: playwright-traces-shard-${{ matrix.shard }}
           path: frontend/test-results/
           retention-days: 7
+
+  # Stable required-check surface over the E2E shard matrix. The matrix legs
+  # report as "E2E Tests (shard 1)" / "E2E Tests (shard 2)"; this aggregator
+  # owns the bare "E2E Tests" name so any branch-protection rule pinning it
+  # stays satisfied with no admin change. needs:[e2e-tests] collapses the
+  # matrix into one result that is success only if every leg passed; always()
+  # lets it run and fail loudly when a shard failed (instead of being skipped).
+  # The changes guard mirrors the matrix trigger so the aggregator is SKIPPED
+  # (treated as satisfied by branch protection) on a docs-only PR.
+  e2e:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    needs: [changes, e2e-tests]
+    if: ${{ always() && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true') }}
+    steps:
+      - name: Assert all E2E shards passed
+        env:
+          E2E_RESULT: ${{ needs.e2e-tests.result }}
+        run: |
+          echo "e2e-tests matrix result: $E2E_RESULT"
+          test "$E2E_RESULT" = "success" || { echo "FAIL: one or more E2E shards did not pass"; exit 1; }
