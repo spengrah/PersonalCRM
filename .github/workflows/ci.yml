@@ -102,22 +102,6 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.backend == 'true' }}
 
-    services:
-      postgres:
-        image: pgvector/pgvector:pg16
-        env:
-          POSTGRES_DB: personal_crm_test
-          POSTGRES_USER: crm_user_test
-          POSTGRES_PASSWORD: test_password
-          POSTGRES_HOST_AUTH_METHOD: trust
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -134,6 +118,29 @@ jobs:
       - name: Pin GOCACHE to setup-go cache
         run: echo "GOCACHE=$(go env GOCACHE)" >> "$GITHUB_ENV"
 
+      # Disposable CI Postgres: max_connections raised to 200 (#424 connection
+      # ceiling — see PR body for the budget) and durability disabled (fsync /
+      # synchronous_commit / full_page_writes off) for wall-clock; data is
+      # thrown away at job end. services: can't pass server args, so we run it
+      # explicitly. See the connection-budget note in the PR description.
+      - name: Start PostgreSQL
+        run: |
+          docker run -d --name postgres \
+            -e POSTGRES_DB=personal_crm_test \
+            -e POSTGRES_USER=crm_user_test \
+            -e POSTGRES_PASSWORD=test_password \
+            -e POSTGRES_HOST_AUTH_METHOD=trust \
+            -p 5432:5432 \
+            --health-cmd pg_isready \
+            --health-interval 10s \
+            --health-timeout 5s \
+            --health-retries 5 \
+            pgvector/pgvector:pg16 \
+            -c max_connections=200 \
+            -c fsync=off \
+            -c synchronous_commit=off \
+            -c full_page_writes=off
+
       - name: Download Go modules
         working-directory: backend
         run: go mod download
@@ -145,6 +152,27 @@ jobs:
       - name: Wait for PostgreSQL
         run: |
           timeout 30 bash -c 'until pg_isready -h localhost -p 5432; do sleep 1; done'
+
+      - name: Verify Postgres config applied
+        env:
+          # PGPASSWORD covers the e2e password-auth path; harmless for the
+          # backend-tests trust path. Values are the existing non-secret CI
+          # test credentials already present in this workflow.
+          PGHOST: localhost
+          PGPORT: "5432"
+          PGUSER: crm_user_test
+          PGDATABASE: personal_crm_test
+          PGPASSWORD: test_password
+        run: |
+          got=$(psql -tAc 'SHOW max_connections;')
+          echo "max_connections=$got"
+          test "$got" = "200" || { echo "FAIL: max_connections is $got, expected 200"; exit 1; }
+          for kv in "fsync:off" "synchronous_commit:off" "full_page_writes:off"; do
+            name=${kv%%:*}; want=${kv##*:}
+            val=$(psql -tAc "SHOW $name;")
+            echo "$name=$val"
+            test "$val" = "$want" || { echo "FAIL: $name is $val, expected $want"; exit 1; }
+          done
 
       - name: Run integration tests
         env:
@@ -340,21 +368,6 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' }}
 
-    services:
-      postgres:
-        image: pgvector/pgvector:pg16
-        env:
-          POSTGRES_DB: personal_crm
-          POSTGRES_USER: crm_user
-          POSTGRES_PASSWORD: crm_password
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -370,6 +383,28 @@ jobs:
       # cover any future make-driven build added here).
       - name: Pin GOCACHE to setup-go cache
         run: echo "GOCACHE=$(go env GOCACHE)" >> "$GITHUB_ENV"
+
+      # Disposable CI Postgres: max_connections raised to 200 (#424 connection
+      # ceiling — see PR body for the budget) and durability disabled (fsync /
+      # synchronous_commit / full_page_writes off) for wall-clock; data is
+      # thrown away at job end. services: can't pass server args, so we run it
+      # explicitly. See the connection-budget note in the PR description.
+      - name: Start PostgreSQL
+        run: |
+          docker run -d --name postgres \
+            -e POSTGRES_DB=personal_crm \
+            -e POSTGRES_USER=crm_user \
+            -e POSTGRES_PASSWORD=crm_password \
+            -p 5432:5432 \
+            --health-cmd pg_isready \
+            --health-interval 10s \
+            --health-timeout 5s \
+            --health-retries 5 \
+            pgvector/pgvector:pg16 \
+            -c max_connections=200 \
+            -c fsync=off \
+            -c synchronous_commit=off \
+            -c full_page_writes=off
 
       - name: Download Go modules
         working-directory: backend
@@ -398,6 +433,27 @@ jobs:
       - name: Wait for PostgreSQL
         run: |
           timeout 30 bash -c 'until pg_isready -h localhost -p 5432; do sleep 1; done'
+
+      - name: Verify Postgres config applied
+        env:
+          # PGPASSWORD covers the e2e password-auth path; harmless for the
+          # backend-tests trust path. Values are the existing non-secret CI
+          # test credentials already present in this workflow.
+          PGHOST: localhost
+          PGPORT: "5432"
+          PGUSER: crm_user
+          PGDATABASE: personal_crm
+          PGPASSWORD: crm_password
+        run: |
+          got=$(psql -tAc 'SHOW max_connections;')
+          echo "max_connections=$got"
+          test "$got" = "200" || { echo "FAIL: max_connections is $got, expected 200"; exit 1; }
+          for kv in "fsync:off" "synchronous_commit:off" "full_page_writes:off"; do
+            name=${kv%%:*}; want=${kv##*:}
+            val=$(psql -tAc "SHOW $name;")
+            echo "$name=$val"
+            test "$val" = "$want" || { echo "FAIL: $name is $val, expected $want"; exit 1; }
+          done
 
       - name: Run E2E tests
         working-directory: frontend
