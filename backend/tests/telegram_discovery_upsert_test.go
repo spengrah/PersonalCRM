@@ -352,7 +352,9 @@ func TestUpdateDiscoveryCandidates_BatchPath_BlankStringsDoNotClobberStoredData(
 
 	database, err := db.NewDatabase(ctx, cfg.Database)
 	require.NoError(t, err)
-	defer database.Close()
+	// Close via t.Cleanup (LIFO) so it runs AFTER the row-delete t.Cleanup below
+	// — a defer would close the pool first and the deletes would no-op.
+	t.Cleanup(func() { database.Close() })
 
 	// Per-test-unique peer/chat IDs. The external_contact / external_identity
 	// source_id is derived from the peer_user_id, so two parallel copies sharing

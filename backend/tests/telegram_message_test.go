@@ -50,7 +50,9 @@ func TestTelegramMessage_UpsertAndGet(t *testing.T) {
 
 	database, err := db.NewDatabase(ctx, cfg.Database)
 	require.NoError(t, err)
-	defer database.Close()
+	// Close via t.Cleanup (LIFO) so it runs AFTER telegramTestChat's row-delete
+	// cleanup — a defer would close the pool first and the deletes would no-op.
+	t.Cleanup(func() { database.Close() })
 
 	repo := repository.NewTelegramMessageRepository(database.Queries)
 
@@ -110,7 +112,9 @@ func TestTelegramMessage_UpsertIdempotent(t *testing.T) {
 
 	database, err := db.NewDatabase(ctx, cfg.Database)
 	require.NoError(t, err)
-	defer database.Close()
+	// Close via t.Cleanup (LIFO) so it runs AFTER telegramTestChat's row-delete
+	// cleanup — a defer would close the pool first and the deletes would no-op.
+	t.Cleanup(func() { database.Close() })
 
 	repo := repository.NewTelegramMessageRepository(database.Queries)
 
@@ -165,7 +169,9 @@ func TestTelegramMessage_UpsertEdit(t *testing.T) {
 
 	database, err := db.NewDatabase(ctx, cfg.Database)
 	require.NoError(t, err)
-	defer database.Close()
+	// Close via t.Cleanup (LIFO) so it runs AFTER telegramTestChat's row-delete
+	// cleanup — a defer would close the pool first and the deletes would no-op.
+	t.Cleanup(func() { database.Close() })
 
 	repo := repository.NewTelegramMessageRepository(database.Queries)
 
@@ -222,7 +228,9 @@ func TestTelegramMessage_SoftDelete(t *testing.T) {
 
 	database, err := db.NewDatabase(ctx, cfg.Database)
 	require.NoError(t, err)
-	defer database.Close()
+	// Close via t.Cleanup (LIFO) so it runs AFTER telegramTestChat's row-delete
+	// cleanup — a defer would close the pool first and the deletes would no-op.
+	t.Cleanup(func() { database.Close() })
 
 	repo := repository.NewTelegramMessageRepository(database.Queries)
 
@@ -274,7 +282,9 @@ func TestTelegramMessage_SoftDeleteChannel(t *testing.T) {
 
 	database, err := db.NewDatabase(ctx, cfg.Database)
 	require.NoError(t, err)
-	defer database.Close()
+	// Close via t.Cleanup (LIFO) so it runs AFTER telegramTestChat's row-delete
+	// cleanup — a defer would close the pool first and the deletes would no-op.
+	t.Cleanup(func() { database.Close() })
 
 	repo := repository.NewTelegramMessageRepository(database.Queries)
 
@@ -326,7 +336,9 @@ func TestTelegramMessage_ListUnprocessed(t *testing.T) {
 
 	database, err := db.NewDatabase(ctx, cfg.Database)
 	require.NoError(t, err)
-	defer database.Close()
+	// Close via t.Cleanup (LIFO) so it runs AFTER telegramTestChat's row-delete
+	// cleanup — a defer would close the pool first and the deletes would no-op.
+	t.Cleanup(func() { database.Close() })
 
 	repo := repository.NewTelegramMessageRepository(database.Queries)
 

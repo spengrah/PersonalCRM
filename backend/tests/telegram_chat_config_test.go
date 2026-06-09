@@ -52,7 +52,9 @@ func TestChatConfig_UpsertAndList(t *testing.T) {
 
 	database, err := db.NewDatabase(ctx, cfg.Database)
 	require.NoError(t, err)
-	defer database.Close()
+	// Close via t.Cleanup (LIFO) so it runs AFTER chatConfigIDs' row-delete
+	// cleanup — a defer would close the pool first and the deletes would no-op.
+	t.Cleanup(func() { database.Close() })
 
 	repo := repository.NewTelegramChatConfigRepository(database.Queries)
 
@@ -102,7 +104,9 @@ func TestChatConfig_UpdateStatus(t *testing.T) {
 
 	database, err := db.NewDatabase(ctx, cfg.Database)
 	require.NoError(t, err)
-	defer database.Close()
+	// Close via t.Cleanup (LIFO) so it runs AFTER chatConfigIDs' row-delete
+	// cleanup — a defer would close the pool first and the deletes would no-op.
+	t.Cleanup(func() { database.Close() })
 
 	repo := repository.NewTelegramChatConfigRepository(database.Queries)
 
@@ -141,7 +145,9 @@ func TestChatConfig_BackfillCursorAndComplete(t *testing.T) {
 
 	database, err := db.NewDatabase(ctx, cfg.Database)
 	require.NoError(t, err)
-	defer database.Close()
+	// Close via t.Cleanup (LIFO) so it runs AFTER chatConfigIDs' row-delete
+	// cleanup — a defer would close the pool first and the deletes would no-op.
+	t.Cleanup(func() { database.Close() })
 
 	repo := repository.NewTelegramChatConfigRepository(database.Queries)
 
@@ -193,7 +199,9 @@ func TestChatConfig_ResetBackfill(t *testing.T) {
 
 	database, err := db.NewDatabase(ctx, cfg.Database)
 	require.NoError(t, err)
-	defer database.Close()
+	// Close via t.Cleanup (LIFO) so it runs AFTER chatConfigIDs' row-delete
+	// cleanup — a defer would close the pool first and the deletes would no-op.
+	t.Cleanup(func() { database.Close() })
 
 	repo := repository.NewTelegramChatConfigRepository(database.Queries)
 
@@ -239,7 +247,9 @@ func TestChatConfig_ListForBackfill(t *testing.T) {
 
 	database, err := db.NewDatabase(ctx, cfg.Database)
 	require.NoError(t, err)
-	defer database.Close()
+	// Close via t.Cleanup (LIFO) so it runs AFTER chatConfigIDs' row-delete
+	// cleanup — a defer would close the pool first and the deletes would no-op.
+	t.Cleanup(func() { database.Close() })
 
 	repo := repository.NewTelegramChatConfigRepository(database.Queries)
 
@@ -299,7 +309,9 @@ func TestChatConfig_UpdateMemberCount(t *testing.T) {
 
 	database, err := db.NewDatabase(ctx, cfg.Database)
 	require.NoError(t, err)
-	defer database.Close()
+	// Close via t.Cleanup (LIFO) so it runs AFTER chatConfigIDs' row-delete
+	// cleanup — a defer would close the pool first and the deletes would no-op.
+	t.Cleanup(func() { database.Close() })
 
 	repo := repository.NewTelegramChatConfigRepository(database.Queries)
 
@@ -342,7 +354,9 @@ func TestChatConfig_BackfillResume(t *testing.T) {
 
 	database, err := db.NewDatabase(ctx, cfg.Database)
 	require.NoError(t, err)
-	defer database.Close()
+	// Close via t.Cleanup (LIFO) so it runs AFTER chatConfigIDs' row-delete
+	// cleanup — a defer would close the pool first and the deletes would no-op.
+	t.Cleanup(func() { database.Close() })
 
 	repo := repository.NewTelegramChatConfigRepository(database.Queries)
 
