@@ -449,10 +449,12 @@ func TestTestdbReaperSkipsOpenSession(t *testing.T) {
 
 	// Close the session and re-run: now it drops, still returning nil.
 	closeSess()
-	// pg_stat_database can lag a beat after a close; retry briefly.
+	// pg_stat_database can lag a beat after a close; retry a bounded number of
+	// attempts. A fixed attempt count (not wall-clock arithmetic) keeps this
+	// free of time.Now() per core rule #1 / plan D9.
+	const maxAttempts = 30 // ~3s total at 100ms between attempts
 	var dropped2 int
-	deadline := time.Now().Add(3 * time.Second)
-	for {
+	for attempt := 0; attempt < maxAttempts; attempt++ {
 		dropped2, err = reapTemplates(ctx, admin, []string{templateName}, "")
 		if err != nil {
 			t.Fatalf("reapTemplates after close: %v", err)
@@ -460,10 +462,10 @@ func TestTestdbReaperSkipsOpenSession(t *testing.T) {
 		if dropped2 == 1 {
 			break
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("template not dropped after session close within deadline (dropped=%d)", dropped2)
-		}
 		time.Sleep(100 * time.Millisecond)
+	}
+	if dropped2 != 1 {
+		t.Fatalf("template not dropped after session close within %d attempts (dropped=%d)", maxAttempts, dropped2)
 	}
 	exists, err = databaseExists(ctx, admin, templateName)
 	if err != nil {

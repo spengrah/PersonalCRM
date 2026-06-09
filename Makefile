@@ -355,7 +355,7 @@ test-integration-slow:
 # package main (NOT `go test`) so the sweep can never execute during the normal
 # `go test ./internal/testdb/...` integration run.
 test-clean-clones:
-	@echo "Sweeping leaked test clone databases..."
+	@echo "Sweeping leaked clone and stale template databases..."
 	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" go run -tags integration_testdb ./internal/testdb/cmd/cleanclones
 
 test-frontend:
