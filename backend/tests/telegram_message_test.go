@@ -227,12 +227,16 @@ func TestTelegramMessage_SoftDelete(t *testing.T) {
 	repo := repository.NewTelegramMessageRepository(database.Queries)
 
 	chatID := telegramTestChat(t, repo)
+	// SoftDeleteMessages is DB-wide by message_id (no chat filter), so use a
+	// per-test-unique message ID derived from the unique chat base — otherwise a
+	// parallel copy's row with the same fixed message ID would be soft-deleted.
+	msgID := int32(chatID % 2_000_000_000)
 
 	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
 	text := "To be deleted"
 
 	_, err = repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
-		TelegramMessageID: 90004,
+		TelegramMessageID: msgID,
 		TelegramChatID:    chatID,
 		ChatType:          "private",
 		MessageText:       &text,
@@ -243,11 +247,11 @@ func TestTelegramMessage_SoftDelete(t *testing.T) {
 	require.NoError(t, err)
 
 	// Soft delete
-	err = repo.SoftDeleteMessages(ctx, []int32{90004})
+	err = repo.SoftDeleteMessages(ctx, []int32{msgID})
 	require.NoError(t, err)
 
 	// Verify deleted — GetMessage filters deleted_at IS NULL, so should return not found
-	_, err = repo.GetMessage(ctx, chatID, 90004)
+	_, err = repo.GetMessage(ctx, chatID, msgID)
 	assert.Error(t, err)
 }
 

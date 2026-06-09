@@ -648,7 +648,8 @@ func TestSyncRepository_Integration(t *testing.T) {
 		require.NoError(t, err)
 		defer func() { _ = repo.DeleteSyncState(ctx, state.ID) }()
 
-		// Create a few logs
+		// Create a few logs, tracking their IDs.
+		myLogIDs := map[uuid.UUID]bool{}
 		for i := 0; i < 2; i++ {
 			log, err := repo.CreateSyncLog(ctx, state)
 			require.NoError(t, err)
@@ -659,12 +660,21 @@ func TestSyncRepository_Integration(t *testing.T) {
 				ItemsCreated:   1,
 			})
 			require.NoError(t, err)
+			myLogIDs[log.ID] = true
 		}
 
-		// Get recent logs across all sources
-		logs, err := repo.ListRecentSyncLogs(ctx, 10)
+		// Get recent logs across all sources. Scope the assertion to this test's
+		// own logs (a high limit keeps them in the window despite shared-DB
+		// accumulation) — the global len is shared with parallel tests.
+		logs, err := repo.ListRecentSyncLogs(ctx, 100000)
 		require.NoError(t, err)
-		assert.GreaterOrEqual(t, len(logs), 2)
+		found := 0
+		for _, l := range logs {
+			if myLogIDs[l.ID] {
+				found++
+			}
+		}
+		assert.Equal(t, 2, found, "both of this test's recent logs should be returned")
 	})
 
 	t.Run("DeleteSyncStatesByAccountID", func(t *testing.T) {

@@ -185,8 +185,9 @@ func TestIdentityRepository_Integration(t *testing.T) {
 		require.NoError(t, err)
 		defer func() { _ = repo.Delete(ctx, ident2.ID) }()
 
-		// List unmatched
-		unmatched, err := repo.ListUnmatched(ctx, 100, 0)
+		// List unmatched. A high limit keeps both rows in the window even as the
+		// shared DB accumulates unmatched identities across runs.
+		unmatched, err := repo.ListUnmatched(ctx, 100000, 0)
 		require.NoError(t, err)
 
 		// Should contain our test identities, sorted by message_count desc.

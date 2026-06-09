@@ -513,7 +513,7 @@ func TestContactBy_ListOverdueContacts(t *testing.T) {
 	t.Run("returns only overdue contacts", func(t *testing.T) {
 		today := cadence.Today(accelerated.GetCurrentTime())
 
-		overdueContacts, err := contactRepo.ListOverdueContacts(ctx, today, 100)
+		overdueContacts, err := contactRepo.ListOverdueContacts(ctx, today, 100000)
 		require.NoError(t, err)
 
 		// Find our test contacts in the results
@@ -547,7 +547,7 @@ func TestContactBy_ListOverdueContacts(t *testing.T) {
 		defer func() { _ = contactRepo.HardDeleteContact(ctx, veryOverdueContact.ID) }()
 
 		today := cadence.Today(accelerated.GetCurrentTime())
-		overdueContacts, err := contactRepo.ListOverdueContacts(ctx, today, 100)
+		overdueContacts, err := contactRepo.ListOverdueContacts(ctx, today, 100000)
 		require.NoError(t, err)
 
 		// Find positions of our test contacts

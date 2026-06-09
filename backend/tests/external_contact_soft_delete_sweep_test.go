@@ -308,12 +308,17 @@ func TestExternalContactSweep_CountUnmatched_ExcludesTombstone(t *testing.T) {
 	require.Equal(t, int64(2), count, "tombstoned row must not be counted")
 }
 
+// NOTE: this func stays SERIAL. CountHiddenUnresolvedTelegram is a DB-wide
+// COUNT(*) over source='telegram' with no prefix parameter, so it cannot be
+// scoped to this test's rows. The before/after delta is racy under t.Parallel()
+// because a concurrent telegram test can create/remove a matching hidden
+// unresolved row between the baseline and final reads. The other 11 funcs in
+// this file are prefix-scoped and flip.
 func TestExternalContactUnmatched_HidesUnresolvedTelegramByDefault(t *testing.T) {
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
-	t.Parallel()
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL

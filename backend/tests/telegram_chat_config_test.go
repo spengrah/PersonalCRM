@@ -69,10 +69,18 @@ func TestChatConfig_UpsertAndList(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// This test's own row guarantees ListConfigs returns >= 1.
+	// Scope the ListConfigs assertion to this test's own chat ID (a DB-wide len
+	// check is shared with parallel tests).
 	cfgs, err := repo.ListConfigs(ctx)
 	require.NoError(t, err)
-	assert.GreaterOrEqual(t, len(cfgs), 1)
+	found := false
+	for _, c := range cfgs {
+		if c.TelegramChatID == chatID1 {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "this test's chat config should be in ListConfigs")
 }
 
 func TestChatConfig_UpdateStatus(t *testing.T) {

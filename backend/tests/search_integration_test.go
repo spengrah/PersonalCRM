@@ -234,7 +234,7 @@ func TestContactSearch_Integration(t *testing.T) {
 
 		// Test offset
 		page2, err := repo.SearchContacts(ctx, repository.SearchContactsParams{
-			Query:  "Pagination",
+			Query:  pageTerm,
 			Limit:  2,
 			Offset: 2,
 		})

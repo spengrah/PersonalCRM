@@ -70,7 +70,9 @@ Mixed-file scoping (the needs-scoping sub-work in 2 mixed files):
 
 Format: `file` — **bucket** (func count; river; long-gated) — action.
 
-### scoped-safe (28 files)
+### scoped-safe (27 files)
+
+(One file originally listed here as scoped-safe — `telegram_discovery_upsert_test.go` — was reclassified to **needs-scoping** during validation; see the reclassification note near the top. Its entry below is retained for the audit trail with the corrected action.)
 
 - `cadence_test.go` — scoped-safe (5; no; no) — flip all. Pure in-process cadence-package unit tests; no DB/River/globals.
 - `calendar_decline_removal_integration_test.go` — scoped-safe (11; no; no) — flip all. `newDeclineTestEnv` runs declines synchronously in-tx (no River); per-test contact keyed by `uuid` + `gen.Prefix()` accountID; concurrent-recompute func locks only its own contact.
@@ -79,7 +81,7 @@ Format: `file` — **bucket** (func count; river; long-gated) — action.
 - `comms_gchat_query_test.go` — scoped-safe (2; no; no) — flip both. `migrationGenerator(t).Prefix()` on every contact/space/external_id; scoped `Len`/`Contains` membership.
 - `comms_message_repository_test.go` — scoped-safe (12; no; no) — flip all. `gen.Prefix()` namespace; own-row assertions; the one DB-wide `ListEmailIdentitiesForSync` is filtered to own emails before `ElementsMatch`.
 - `consumer_cadence_updater_cutover_integration_test.go` — scoped-safe (9; no; no) — flip all. `consumer.NewCadenceUpdater` directly (no River client); own-contact assertions; fresh `uuid` event ids.
-- `gmail_enablement_reconcile_test.go` — scoped-safe (9; no; no) — flip all. `newEventBusTestDB` (plain DB ctor, NO River); `uniqueAccount()` per account; per-account state reads.
+- `gmail_enablement_reconcile_test.go` — scoped-safe (10; no; no) — flip 9; `newEventBusTestDB` (plain DB ctor, NO River); `uniqueAccount()` per account; per-account state reads. **Exception: `TestResetGmailBackfillCursors_ResetsOnlyEnabledEmailStates` stays SERIAL** (DB-wide scan + exact Scanned/Reset count — see the reclassification note above).
 - `gmail_time_helpers_test.go` — scoped-safe (0; no; no) — no-op. Helper only.
 - `ingest_registry_guard_static_test.go` — scoped-safe (2; no; no) — flip both. Static guard test; `t.TempDir()` fixtures, no DB/River.
 - `interaction_integration_test.go` — scoped-safe (4; no; no) — flip all. Nil-bus ContactService (no River); contact-scoped `CountContactInteractions`. (Carries an inline `DatabaseConfig` literal → conn fields lowered in the tune commit.)
@@ -92,7 +94,7 @@ Format: `file` — **bucket** (func count; river; long-gated) — action.
 - `sqlc_select_list_static_test.go` — scoped-safe (4; no; no) — flip all. Pure source-SQL lint; read-only + inline string fixtures.
 - `synthetic_factory_test.go` — scoped-safe (8; no; no) — flip all. Pure factory unit tests; read-only `fixedAnchor`.
 - `synthetic_migration_helpers_test.go` — scoped-safe (0; no; no) — no-op. Helpers only.
-- `telegram_discovery_upsert_test.go` — scoped-safe (9; no; no) — flip all. Per-test unique source_id; own-row `GetBySource` assertions; namespaced FK contacts.
+- `telegram_discovery_upsert_test.go` — **needs-scoping** (10; no; no) — RECLASSIFIED. Was assumed scoped-safe, but funcs share fixed source_ids + a prefix-wide setup cleanup, plus a fixed peer/chat in the batch func. Scoped via a per-test source_id prefix (`syntheticNS`) + `uniqueTestIDs` peer/chat, then flip all.
 - `telegram_import_suggestion_test.go` — scoped-safe (1; no; no) — **hoist `gin.SetMode` to TestMain (D3.5), then flip.** `wireCadenceUpdaterForTest` (no River); `uniqueSuffix()` names; own-ext.ID assertions.
 - `telegram_matcher_enrichment_test.go` — scoped-safe (7; no; no) — flip all. PeerMatcher/Identity/Enrichment only (no River); `uniqueTestIDs` namespace; even the concurrent-23505 func races within one test on its own contact.
 - `telegram_message_all_fields_test.go` — scoped-safe (1; no; no) — flip. Namespaced FK contact; pre-purge + own-row read; no other test uses chat 920001.
@@ -101,7 +103,9 @@ Format: `file` — **bucket** (func count; river; long-gated) — action.
 - `template_isolation_integration_test.go` — scoped-safe (1; no; no) — flip. `testdb.NewEphemeralClone(t)` isolated clone; sentinel asserted only by unique ID.
 - `testmain_integration_test.go` — scoped-safe (0; no; no) — no test funcs (TestMain only). **Receives the `gin.SetMode` hoist (D3.5).**
 
-### needs-scoping (13 files)
+### needs-scoping (14 files)
+
+(Plus `telegram_discovery_upsert_test.go`, reclassified from scoped-safe — listed in the scoped-safe section above with its corrected action.)
 
 (See "Needs-scoping actions" above for the per-file action. All are river=False, long-gated=False.)
 
