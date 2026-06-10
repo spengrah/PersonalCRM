@@ -1,0 +1,41 @@
+# PersonalCRM backend API (rootless Podman Quadlet) -- replaces
+# personalcrm-backend.service. Generates personalcrm-backend.service.
+#
+# crm-api runs golang-migrate on boot (MIGRATIONS_PATH baked into the image at
+# /migrations). Secrets (DATABASE_URL, API_KEY, provider creds) come from
+# /srv/personalcrm/.env via EnvironmentFile -- never baked into the image.
+#
+# NOTE: the .env DATABASE_URL host must be `crm-postgres` (the container name on
+# the crm network), not localhost, after cutover.
+[Unit]
+Description=PersonalCRM Backend API Server (Podman, rootless)
+After=personalcrm-database.service
+Requires=personalcrm-database.service
+
+[Container]
+ContainerName=crm-backend
+Image=ghcr.io/spengrah/personalcrm-backend:latest
+Network=crm.network
+# NOTE: container logs use the default k8s-file driver -> `podman logs crm-backend`.
+# LogDriver=journald does NOT work with the podman-static bundle (its conmon is
+# built without journald support). To restore `journalctl` ergonomics, install the
+# distro `conmon` (apt) and point podman at it; tracked as a follow-up decision.
+EnvironmentFile=/srv/personalcrm/.env
+Environment=PORT=8080
+Environment=HOST=0.0.0.0
+Environment=NODE_ENV=production
+Environment=LOG_LEVEL=info
+# Published to loopback for the native Caddy edge (/api/* -> 127.0.0.1:8080).
+PublishPort=127.0.0.1:8080:8080
+
+[Service]
+Restart=always
+RestartSec=5s
+TimeoutStopSec=30s
+# Resource ceilings carried over from the systemd unit (need cgroup-v2
+# controller delegation for the crm user slice -- verified in rehearsal).
+MemoryMax=512M
+CPUQuota=150%
+
+[Install]
+WantedBy=default.target

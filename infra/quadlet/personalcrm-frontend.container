@@ -1,0 +1,31 @@
+# PersonalCRM frontend (rootless Podman Quadlet) -- replaces
+# personalcrm-frontend.service. Generates personalcrm-frontend.service.
+#
+# The image is built key-less + same-origin (no NEXT_PUBLIC secrets), so this
+# container needs NO .env / EnvironmentFile and joins NO container network:
+# all API traffic is browser-side /api/* through Caddy, which injects X-API-Key.
+# It only serves the Next standalone on the loopback port for the Caddy edge.
+[Unit]
+Description=PersonalCRM Frontend (Podman, rootless)
+After=personalcrm-backend.service
+Requires=personalcrm-backend.service
+
+[Container]
+ContainerName=crm-frontend
+Image=ghcr.io/spengrah/personalcrm-frontend:latest
+Environment=PORT=3001
+Environment=HOSTNAME=0.0.0.0
+Environment=NODE_ENV=production
+Environment=NEXT_TELEMETRY_DISABLED=1
+# Published to loopback for the native Caddy edge (/ -> 127.0.0.1:3001).
+PublishPort=127.0.0.1:3001:3001
+
+[Service]
+Restart=always
+RestartSec=5s
+TimeoutStopSec=15s
+MemoryMax=512M
+CPUQuota=150%
+
+[Install]
+WantedBy=default.target

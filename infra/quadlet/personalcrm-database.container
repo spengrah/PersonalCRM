@@ -1,0 +1,38 @@
+# PersonalCRM PostgreSQL (rootless Podman Quadlet) -- replaces the Docker
+# Compose postgres + personalcrm-database.service. Generates
+# personalcrm-database.service via the podman user-generator.
+#
+# pgvector/pgvector:pg16 (same image as today). max_connections=200 matches the
+# dev/CI ceiling. init-db.sql bootstraps extensions on a FRESH volume (belt-and-
+# suspenders; the dump also carries CREATE EXTENSION).
+[Unit]
+Description=PersonalCRM PostgreSQL Database (Podman, rootless)
+After=crm-network.service
+Requires=crm-network.service
+
+[Container]
+ContainerName=crm-postgres
+Image=docker.io/pgvector/pgvector:pg16
+Network=crm.network
+Volume=personalcrm-db.volume:/var/lib/postgresql/data
+Volume=/srv/personalcrm/infra/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+EnvironmentFile=/srv/personalcrm/.env
+Environment=POSTGRES_DB=personal_crm
+Environment=POSTGRES_USER=crm_user
+Exec=postgres -c max_connections=200
+# Published to loopback only for host-side tooling (psql, backups). The backend
+# connects over the crm network via the `crm-postgres` DNS name, not this port.
+PublishPort=127.0.0.1:5432:5432
+HealthCmd=pg_isready -U crm_user -d personal_crm
+HealthInterval=5s
+HealthTimeout=5s
+HealthRetries=5
+HealthStartPeriod=10s
+
+[Service]
+Restart=always
+RestartSec=10s
+TimeoutStopSec=30s
+
+[Install]
+WantedBy=default.target

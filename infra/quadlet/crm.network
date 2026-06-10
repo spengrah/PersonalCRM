@@ -1,0 +1,7 @@
+# Shared rootless Podman network for the backend <-> Postgres link.
+# Only the backend and database join it; the frontend needs no container link
+# (recon: the Next server makes no server-side calls to the backend -- all API
+# traffic is browser-side /api/* through Caddy). aardvark-dns resolves the
+# `crm-postgres` container name on this network.
+[Network]
+NetworkName=crm

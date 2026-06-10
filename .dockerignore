@@ -1,0 +1,16 @@
+# Build-context excludes for the A0 container images (infra/images/*.Dockerfile).
+# Context is the repo root; the Dockerfiles COPY only:
+#   backend/bin/crm-{api,admin}-arm64, backend/migrations,
+#   frontend/.next/standalone (incl. its bundled node_modules), .next/static, public
+# Keep those; drop everything heavy/irrelevant. Note: top-level node_modules is
+# excluded, but frontend/.next/standalone/node_modules is NOT (no leading-path
+# match), so the standalone runtime deps are preserved.
+.git
+/node_modules
+/frontend/node_modules
+/frontend/.next/cache
+/backend/tmp
+/mac-daemon
+/.deploy-state
+**/*.log
+**/.DS_Store
