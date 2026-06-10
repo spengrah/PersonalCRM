@@ -115,6 +115,7 @@ func TestInteraction_CreateAndList(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, cleanup := setupInteractionTestRouter(t)
 	defer cleanup()
 
@@ -195,6 +196,7 @@ func TestInteraction_ManualDeduplication(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, cleanup := setupInteractionTestRouter(t)
 	defer cleanup()
 
@@ -246,6 +248,7 @@ func TestInteraction_SoftDelete(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, cleanup := setupInteractionTestRouter(t)
 	defer cleanup()
 
@@ -313,6 +316,7 @@ func TestInteraction_UpdatesLastContacted(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, cleanup := setupInteractionTestRouter(t)
 	defer cleanup()
 
@@ -355,6 +359,7 @@ func TestInteraction_NonExistentContact(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, cleanup := setupInteractionTestRouter(t)
 	defer cleanup()
 
@@ -402,6 +407,7 @@ func TestInteraction_FutureDateRejected(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, cleanup := setupInteractionTestRouter(t)
 	defer cleanup()
 

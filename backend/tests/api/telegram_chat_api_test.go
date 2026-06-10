@@ -140,6 +140,7 @@ func TestChatAPI_ListChats(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 
 	router, chatConfigRepo, chatID1, chatID2, cleanup := setupTelegramChatRouter(t)
 	defer cleanup()
@@ -207,6 +208,7 @@ func TestChatAPI_ListChats_ExcludesPrivate(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 
 	router, chatConfigRepo, chatID1, _, cleanup := setupTelegramChatRouter(t)
 	defer cleanup()
@@ -243,6 +245,7 @@ func TestChatAPI_UpdateStatus_Ignored(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 
 	router, chatConfigRepo, chatID1, _, cleanup := setupTelegramChatRouter(t)
 	defer cleanup()
@@ -282,6 +285,7 @@ func TestChatAPI_UpdateStatus_TrackedOverridesLarge(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 
 	router, chatConfigRepo, chatID1, _, cleanup := setupTelegramChatRouter(t)
 	defer cleanup()
@@ -321,6 +325,7 @@ func TestChatAPI_UpdateStatus_InvalidStatus(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 
 	router, _, chatID1, _, cleanup := setupTelegramChatRouter(t)
 	defer cleanup()
@@ -338,6 +343,7 @@ func TestChatAPI_UpdateStatus_NotFound(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 
 	// chatID1 is reserved for this test but never upserted, so it is
 	// guaranteed not-found and collision-free under parallel execution.

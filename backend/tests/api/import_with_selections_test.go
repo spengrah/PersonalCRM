@@ -93,6 +93,7 @@ func TestImportAPI_ImportWithMethodSelection(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
 	defer cleanup()
 
@@ -353,6 +354,7 @@ func TestImportAPI_LinkWithMethodSelection(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
 	defer cleanup()
 
@@ -649,6 +651,7 @@ func TestImportAPI_ImportWithCadence(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter()
 	defer cleanup()
 
@@ -778,6 +781,7 @@ func TestImportAPI_LinkWithCadence(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter()
 	defer cleanup()
 
@@ -1028,6 +1032,7 @@ func TestImportAPI_ImportWithName(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter()
 	defer cleanup()
 
@@ -1154,6 +1159,7 @@ func TestImportAPI_ImportWithPrimaryMethod(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
 	defer cleanup()
 
@@ -1297,6 +1303,7 @@ func TestImportAPI_LinkWithName(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter()
 	defer cleanup()
 
@@ -1414,6 +1421,7 @@ func TestImportAPI_LinkWithPrimaryMethod(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
 	defer cleanup()
 
@@ -1628,6 +1636,7 @@ func TestImportAPI_EdgeCases(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
 	defer cleanup()
 
@@ -2116,6 +2125,7 @@ func TestImportAPI_ImportValidation(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, externalRepo, _, _, cleanup := setupImportTestRouter()
 	defer cleanup()
 
@@ -2245,6 +2255,7 @@ func TestImportAPI_TelegramLinkWithMethodSelection(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
 	defer cleanup()
 
@@ -2472,6 +2483,7 @@ func TestImportAPI_TelegramImportNewRegression(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
 	defer cleanup()
 

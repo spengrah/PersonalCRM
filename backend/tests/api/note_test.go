@@ -125,6 +125,7 @@ func TestNoteAPI_GetContactNotepad(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, cleanup := setupNoteTestRouter()
 	defer cleanup()
 
@@ -217,6 +218,7 @@ func TestNoteAPI_SaveContactNotepad(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, cleanup := setupNoteTestRouter()
 	defer cleanup()
 
@@ -487,6 +489,7 @@ func TestNoteAPI_LazyCreationPattern(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, cleanup := setupNoteTestRouter()
 	defer cleanup()
 

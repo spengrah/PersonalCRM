@@ -207,6 +207,7 @@ func TestContactSort_LastContactedNullsLast(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, cleanup := setupContactSortTestRouter(t)
 	defer cleanup()
 
@@ -262,6 +263,7 @@ func TestContactSort_ContactBy(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, cleanup := setupContactSortTestRouter(t)
 	defer cleanup()
 
@@ -366,6 +368,7 @@ func TestContactSort_LastResponseAtNullsLast(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, cleanup := setupContactSortTestRouter(t)
 	defer cleanup()
 

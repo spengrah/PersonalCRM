@@ -119,6 +119,7 @@ func TestSyncService_TriggerSync_FallsBackWhenEnqueuerNil(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping db-backed service test in short mode")
 	}
+	t.Parallel()
 	database, ctx := newServiceSuiteDB(t)
 
 	source := "service_test_enqueue_nil"
@@ -214,6 +215,7 @@ func TestSyncService_TriggerSync_DedupedIsNoError(t *testing.T) {
 // infrastructure error from the enqueue path is returned wrapped with a
 // "enqueue sync job" prefix rather than silently swallowed.
 func TestSyncService_TriggerSync_EnqueueErrorWrapped(t *testing.T) {
+	t.Parallel()
 	// Pure unit test — no DB needed. Use a fake JobEnqueuer that returns
 	// an error from InsertTx. The repo method still opens a tx against
 	// a nil pool, so we need a real pool-backed repo, but we can build
@@ -334,6 +336,7 @@ func TestSyncService_TriggerSync_NoLongerReadsSyncingStatus(t *testing.T) {
 // EnqueueAccountSyncIfNotInFlight without setting an enqueuer returns
 // a clear error rather than panicking.
 func TestSyncService_EnqueueRequiresEnqueuer(t *testing.T) {
+	t.Parallel()
 	syncRepo := repository.NewSyncRepository(nil)
 	svc := service.NewSyncService(syncRepo, nil, syncpkg.NewProviderRegistry())
 	_, err := svc.EnqueueAccountSyncIfNotInFlight(context.Background(), "gmail", nil)
@@ -349,6 +352,7 @@ func TestSyncService_ListDueAccounts_FiltersUnregisteredProviders(t *testing.T) 
 	if testing.Short() {
 		t.Skip("skipping db-backed service test in short mode")
 	}
+	t.Parallel()
 	database, ctx := newServiceSuiteDB(t)
 
 	liveSource := "service_test_live_source"

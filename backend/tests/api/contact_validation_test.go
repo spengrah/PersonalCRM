@@ -102,6 +102,7 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, cleanup := setupContactValidationTestRouter()
 	defer cleanup()
 
@@ -313,6 +314,7 @@ func TestContactAPI_UpdateValidation(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, cleanup := setupContactValidationTestRouter()
 	defer cleanup()
 
@@ -412,6 +414,7 @@ func TestContactAPI_QueryValidation(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, cleanup := setupContactValidationTestRouter()
 	defer cleanup()
 
@@ -505,6 +508,7 @@ func TestContactAPI_GetContactValidation(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, cleanup := setupContactValidationTestRouter()
 	defer cleanup()
 
@@ -552,6 +556,7 @@ func TestContactAPI_DuplicateMethodValues(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, cleanup := setupContactValidationTestRouter()
 	defer cleanup()
 

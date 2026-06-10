@@ -120,6 +120,7 @@ func TestPostInteraction_DirectionMutual_BumpsLastContacted(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 
+	t.Parallel()
 	router, cleanup := setupLastContactedTestRouter(t)
 	// Register the pool-close via t.Cleanup (NOT defer) so it runs AFTER the
 	// contact-DELETE that createContactForTest registers — LIFO keeps the pool
@@ -176,6 +177,7 @@ func TestPostInteraction_DirectionOutbound_DoesNotBumpLastContacted(t *testing.T
 		t.Skip("DATABASE_URL not set")
 	}
 
+	t.Parallel()
 	router, cleanup := setupLastContactedTestRouter(t)
 	// Register the pool-close via t.Cleanup (NOT defer) so it runs AFTER the
 	// contact-DELETE that createContactForTest registers — LIFO keeps the pool
@@ -234,6 +236,7 @@ func TestRemovedEndpoint_PatchLastContacted_Returns404(t *testing.T) {
 	if os.Getenv("DATABASE_URL") == "" {
 		t.Skip("DATABASE_URL not set")
 	}
+	t.Parallel()
 
 	router, cleanup := setupLastContactedTestRouter(t)
 	defer cleanup()

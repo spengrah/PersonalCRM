@@ -104,6 +104,7 @@ func TestInteractionAPI_DirectionInResponse(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 
 	router, _, cleanup := setupDirectionAPIRouter(t)
 	defer cleanup()
@@ -177,6 +178,7 @@ func TestContactAPI_HasPendingFollowup(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 
 	router, contactTaskRepo, cleanup := setupDirectionAPIRouter(t)
 	defer cleanup()
@@ -226,6 +228,7 @@ func TestContactAPI_DirectionTimestamps(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 
 	router, _, cleanup := setupDirectionAPIRouter(t)
 	defer cleanup()
@@ -264,6 +267,7 @@ func TestContactAPI_FollowupFilter(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 
 	router, contactTaskRepo, cleanup := setupDirectionAPIRouter(t)
 	defer cleanup()
@@ -332,6 +336,7 @@ func TestContactTaskAPI_FollowUpKindValidation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 
 	router, contactTaskRepo, cleanup := setupDirectionAPIRouter(t)
 	defer cleanup()

@@ -87,6 +87,7 @@ func TestContactAPI_ListContactIDs(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, _, cleanup := setupContactIDsTestRouter()
 	defer cleanup()
 
@@ -144,7 +145,9 @@ func TestContactAPI_ListContactIDs(t *testing.T) {
 		defer deleteContact(id1)
 		defer deleteContact(id2)
 
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/contacts?ids_only=true", nil)
+		// Scope the read to this run's own contacts so the count/membership
+		// assertions stay correct under concurrent siblings on the shared DB.
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/contacts?ids_only=true&search=IDs+Test+Contact+"+ns, nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
@@ -184,7 +187,7 @@ func TestContactAPI_ListContactIDs(t *testing.T) {
 		respAsc := parseIDsResponse(w.Body.Bytes())
 
 		// Get IDs sorted by name descending (limit to our test contacts)
-		req = httptest.NewRequest(http.MethodGet, "/api/v1/contacts?ids_only=true&search=IDs+Sort&sort=name&order=desc", nil)
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/contacts?ids_only=true&search=IDs+Sort+"+ns+"&sort=name&order=desc", nil)
 		w = httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
