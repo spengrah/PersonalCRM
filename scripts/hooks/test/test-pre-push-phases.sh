@@ -23,7 +23,7 @@ assert_eq "test-integration -> GO"                      "GO"         "$(classify
 assert_eq "unrecognized command -> GO (safe default)"   "GO"         "$(classify_command 'make some-future-db-command')"
 
 # --- run_phase: writes rc-file + buffers log; does NOT self-background ---
-tmpd=$(mktemp -d)
+tmpd=$(mktemp -d) || { echo "FAIL: mktemp -d failed"; exit 1; }
 
 run_phase "$tmpd/ok.log" "$tmpd/ok.rc" "true"
 assert_eq "run_phase success rc == 0"                   "0"          "$(cat "$tmpd/ok.rc")"
@@ -74,18 +74,23 @@ assert_eq "a failing background phase -> aggregate 1"   "1" "$(aggregate_rcs "$t
 # A MISSING rc-file -> treated as failure (1).
 assert_eq "missing rc-file -> aggregate 1"              "1" "$(aggregate_rcs "$tmpd/nonexistent.rc")"
 
-# --- optional GO command failing does NOT fail its phase ---
-# run_go_lane takes alternating cmd/optional args. An optional failure is
-# tolerated (rc 0); a required failure fast-fails (non-zero rc).
-run_phase "$tmpd/goopt.log" "$tmpd/goopt.rc" "run_go_lane $(printf '%q ' 'false' 'true' 'true' 'false')"
-assert_eq "optional GO command failing -> GO rc stays 0" "0" "$(cat "$tmpd/goopt.rc")"
+# --- run_lane: optional command failing does NOT fail its phase ---
+# run_lane (used by ALL lanes) takes alternating cmd/optional args. An optional
+# failure is tolerated (rc 0); a required failure fast-fails (non-zero rc).
+run_phase "$tmpd/goopt.log" "$tmpd/goopt.rc" "run_lane $(printf '%q ' 'false' 'true' 'true' 'false')"
+assert_eq "optional command failing -> lane rc stays 0" "0" "$(cat "$tmpd/goopt.rc")"
 
-run_phase "$tmpd/goreq.log" "$tmpd/goreq.rc" "run_go_lane $(printf '%q ' 'false' 'false')"
-assert_eq "required GO command failing -> GO rc != 0"   "1" "$([[ "$(cat "$tmpd/goreq.rc")" -ne 0 ]] && echo 1 || echo 0)"
+run_phase "$tmpd/goreq.log" "$tmpd/goreq.rc" "run_lane $(printf '%q ' 'false' 'false')"
+assert_eq "required command failing -> lane rc != 0"    "1" "$([[ "$(cat "$tmpd/goreq.rc")" -ne 0 ]] && echo 1 || echo 0)"
 
-# Two required GO commands, both pass -> rc 0 (today's shape).
-run_phase "$tmpd/gook.log" "$tmpd/gook.rc" "run_go_lane $(printf '%q ' 'true' 'false' 'true' 'false')"
-assert_eq "two required GO commands passing -> GO rc 0" "0" "$(cat "$tmpd/gook.rc")"
+# Two required commands, both pass -> rc 0 (today's GO shape).
+run_phase "$tmpd/gook.log" "$tmpd/gook.rc" "run_lane $(printf '%q ' 'true' 'false' 'true' 'false')"
+assert_eq "two required commands passing -> lane rc 0"  "0" "$(cat "$tmpd/gook.rc")"
+
+# A lane with multiple required commands runs ALL of them (not just the first):
+# the second command's failure must fail the lane even though the first passed.
+run_phase "$tmpd/multi.log" "$tmpd/multi.rc" "run_lane $(printf '%q ' 'true' 'false' 'false' 'false')"
+assert_eq "lane runs every command (2nd failure fails lane)" "1" "$([[ "$(cat "$tmpd/multi.rc")" -ne 0 ]] && echo 1 || echo 0)"
 
 rm -rf "$tmpd"
 

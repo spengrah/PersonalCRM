@@ -61,7 +61,7 @@ hi_p=$(echo "$hi_render" | grep -oE '\-p [0-9]+' | grep -oE '[0-9]+')
   || bad "-parallel ($hi_par) != -p ($hi_p)"
 
 # --- 4. laziness/once (instrumented fake psql + counter file) ---
-tmpd=$(mktemp -d)
+tmpd=$(mktemp -d) || { echo "FAIL: mktemp -d failed"; exit 1; }
 ctr="$tmpd/count"
 : > "$ctr"
 cat > "$tmpd/psql" <<EOF

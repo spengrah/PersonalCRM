@@ -268,20 +268,23 @@ classify_command() {
   esac
 }
 
-# Build the GO lane's command list from the GO-classified .test.commands[],
+# run_lane <cmd optional cmd optional ...>: run a lane's commands sequentially,
 # preserving each entry's `optional` flag and fast-fail-on-required semantics.
-# A compound `a && b` cannot express per-command optionality, so GO runs each
-# command sequentially: optional ones tolerate failure (`|| true`, logged WARN);
-# required ones fast-fail the lane (`|| return $?`). For today's two required GO
-# commands this reduces to `make test-unit && make test-integration`.
-run_go_lane() {
+# A compound `a && b` cannot express per-command optionality, so the lane runs
+# each command in order: optional ones tolerate failure (logged WARN, rc stays
+# 0); required ones fast-fail the lane (`|| return $?`). Used by ALL lanes (GO,
+# FRONTEND, FILTER, E2E) so every .test.commands[] entry in a lane runs and its
+# `optional` flag is honored — matching the prior hook, which ran every command.
+# For today's two required GO commands this reduces to
+# `make test-unit && make test-integration`.
+run_lane() {
   # $@ alternates: cmd optional cmd optional ...
   local cmd optional
   while [[ $# -ge 2 ]]; do
     cmd="$1"; optional="$2"; shift 2
-    echo "  [test] -> GO: $cmd"
+    echo "  -> $cmd"
     if [[ "$optional" == "true" ]]; then
-      ( eval "$cmd" ) || echo "  [test] WARN GO command failed (optional): $cmd"
+      ( eval "$cmd" ) || echo "  WARN command failed (optional): $cmd"
     else
       ( eval "$cmd" ) || return $?
     fi
@@ -337,8 +340,11 @@ run_phases_parallel() {
   LINT_RC=$(mktemp); GO_RC=$(mktemp); FE_RC=$(mktemp); FILTER_RC=$(mktemp); E2E_RC=$(mktemp)
   PHASE_TMPFILES="$LINT_LOG $GO_LOG $FE_LOG $FILTER_LOG $E2E_LOG $LINT_RC $GO_RC $FE_RC $FILTER_RC $E2E_RC"
 
-  # ---- Classify the test commands into lanes ----
-  local go_args=() fe_cmds=() filter_cmds=() e2e_cmds=()
+  # ---- Classify the test commands into lanes (each lane is an alternating
+  #      cmd/optional list so EVERY command runs and its optional flag is
+  #      honored — matching the prior hook). The FRONTEND/FILTER split is by
+  #      command substring; both are concurrent. ----
+  local go_args=() fe_args=() filter_args=() e2e_args=()
   if [[ "$tests_active" == "true" ]]; then
     local i name cmd optional lane
     for i in $(seq 0 $((test_count - 1))); do
@@ -347,9 +353,9 @@ run_phases_parallel() {
       optional=$(jq -r ".test.commands[$i].optional // false" "$CONFIG_FILE")
       lane=$(classify_command "$cmd")
       case "$lane" in
-        E2E)        e2e_cmds+=("$cmd") ;;
+        E2E)        e2e_args+=("$cmd" "$optional") ;;
         CONCURRENT)
-          if [[ "$cmd" == *test-frontend* ]]; then fe_cmds+=("$cmd"); else filter_cmds+=("$cmd"); fi ;;
+          if [[ "$cmd" == *test-frontend* ]]; then fe_args+=("$cmd" "$optional"); else filter_args+=("$cmd" "$optional"); fi ;;
         GO)         go_args+=("$cmd" "$optional") ;;
       esac
     done
@@ -369,18 +375,18 @@ run_phases_parallel() {
   if [[ "$tests_active" == "true" ]]; then
     if [[ ${#go_args[@]} -gt 0 ]]; then
       echo "  [test] -> GO (unit+integration, running, logs buffered)" >&2
-      # Pass the alternating cmd/optional list to run_go_lane via a quoted call.
-      run_phase "$GO_LOG" "$GO_RC" "run_go_lane $(printf '%q ' "${go_args[@]}")" &
+      # Pass the alternating cmd/optional list to run_lane via a quoted call.
+      run_phase "$GO_LOG" "$GO_RC" "run_lane $(printf '%q ' "${go_args[@]}")" &
       launched_rcs+=("$GO_RC"); launched_names+=("GO"); launched_logs+=("$GO_LOG")
     fi
-    if [[ ${#fe_cmds[@]} -gt 0 ]]; then
+    if [[ ${#fe_args[@]} -gt 0 ]]; then
       echo "  [test] -> FRONTEND (running, logs buffered)" >&2
-      run_phase "$FE_LOG" "$FE_RC" "${fe_cmds[0]}" &
+      run_phase "$FE_LOG" "$FE_RC" "run_lane $(printf '%q ' "${fe_args[@]}")" &
       launched_rcs+=("$FE_RC"); launched_names+=("FRONTEND"); launched_logs+=("$FE_LOG")
     fi
-    if [[ ${#filter_cmds[@]} -gt 0 ]]; then
+    if [[ ${#filter_args[@]} -gt 0 ]]; then
       echo "  [test] -> FILTER (running, logs buffered)" >&2
-      run_phase "$FILTER_LOG" "$FILTER_RC" "${filter_cmds[0]}" &
+      run_phase "$FILTER_LOG" "$FILTER_RC" "run_lane $(printf '%q ' "${filter_args[@]}")" &
       launched_rcs+=("$FILTER_RC"); launched_names+=("FILTER"); launched_logs+=("$FILTER_LOG")
     fi
   fi
@@ -406,11 +412,11 @@ run_phases_parallel() {
   done
 
   # ---- E2E: exclusive, last, only if all prior passed AND tests are active ----
-  if [[ "$tests_active" == "true" ]] && [[ ${#e2e_cmds[@]} -gt 0 ]]; then
+  if [[ "$tests_active" == "true" ]] && [[ ${#e2e_args[@]} -gt 0 ]]; then
     if [[ "$failed" -eq 0 ]]; then
       echo "  [test] -> E2E (exclusive, running, logs buffered)" >&2
       set +e
-      run_phase "$E2E_LOG" "$E2E_RC" "${e2e_cmds[0]}"
+      run_phase "$E2E_LOG" "$E2E_RC" "run_lane $(printf '%q ' "${e2e_args[@]}")"
       set -e
       local e2e_rc
       e2e_rc=$(cat "$E2E_RC" 2>/dev/null || echo 1)
