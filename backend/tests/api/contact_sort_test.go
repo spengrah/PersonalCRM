@@ -24,16 +24,17 @@ import (
 
 func setupContactSortTestRouter(t *testing.T) (*gin.Engine, func()) {
 	t.Helper()
-	gin.SetMode(gin.TestMode)
 
 	ctx := context.Background()
 	databaseURL := os.Getenv("DATABASE_URL")
 
 	// Migrations are applied once by TestMain.
+	// MaxConns/MinConns mirror config.TestConfig() (8/1) to cap the per-pool
+	// connection ceiling under parallel execution.
 	dbConfig := config.DatabaseConfig{
 		URL:               databaseURL,
-		MaxConns:          config.DefaultDBMaxConns,
-		MinConns:          config.DefaultDBMinConns,
+		MaxConns:          8,
+		MinConns:          1,
 		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
 		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
 		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
@@ -206,6 +207,7 @@ func TestContactSort_LastContactedNullsLast(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, cleanup := setupContactSortTestRouter(t)
 	defer cleanup()
 
@@ -261,6 +263,7 @@ func TestContactSort_ContactBy(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, cleanup := setupContactSortTestRouter(t)
 	defer cleanup()
 
@@ -365,6 +368,7 @@ func TestContactSort_LastResponseAtNullsLast(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, cleanup := setupContactSortTestRouter(t)
 	defer cleanup()
 

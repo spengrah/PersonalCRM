@@ -669,3 +669,42 @@ SELECT
 FROM contact c
 WHERE c.full_name LIKE @name_prefix || '%'
   AND c.deleted_at IS NULL;
+
+-- name: DeleteSyncStatesBySourceForTest :execrows
+-- Test teardown only — hard-deletes external_sync_state rows for a given
+-- source. Used by sync-service tests to scope per-source cleanup without
+-- inlining raw SQL into Go test code (core.md rule 2).
+DELETE FROM external_sync_state WHERE source = @source;
+
+-- name: DeleteSyncLogsBySourceForTest :execrows
+-- Test teardown only — hard-deletes external_sync_log rows for a given
+-- source. external_sync_log carries its own source column (migration 011).
+DELETE FROM external_sync_log WHERE source = @source;
+
+-- name: DeleteRiverJobsBySourceArgForTest :execrows
+-- Test teardown only — hard-deletes sync_provider_account river_job rows
+-- whose args JSON source = @source. Mirrors the (source) JSONB path used
+-- by CountInFlightSyncJobs.
+DELETE FROM river_job
+WHERE kind = 'sync_provider_account'
+  AND (args->>'source') = sqlc.arg('source')::text;
+
+-- name: CountRiverJobsBySourceArgForTest :one
+-- Test-only count of sync_provider_account river_job rows whose args JSON
+-- source = @source. Used by sync-service tests to assert enqueue/dedup
+-- behavior without inlining raw SQL (core.md rule 2).
+SELECT COUNT(*) FROM river_job
+WHERE kind = 'sync_provider_account'
+  AND (args->>'source') = sqlc.arg('source')::text;
+
+-- name: InsertRiverJobForTest :exec
+-- Test-only seed of an in-flight sync_provider_account river_job row so
+-- the atomic-claim dedup path observes count>0. Mirrors the row a real
+-- enqueue would insert; the worker never runs in these tests.
+INSERT INTO river_job (
+    args, kind, max_attempts, priority, queue, state,
+    attempt, created_at, scheduled_at
+) VALUES (
+    @args, 'sync_provider_account', 3, 1, 'default', 'running',
+    1, NOW(), NOW()
+);

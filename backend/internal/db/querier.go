@@ -232,6 +232,10 @@ type Querier interface {
 	// jobs. River's own admin SQL is OK to query at the test boundary;
 	// production code never reads river_job directly.
 	CountRiverJobsByKindUnfinalized(ctx context.Context, kind string) (int64, error)
+	// Test-only count of sync_provider_account river_job rows whose args JSON
+	// source = @source. Used by sync-service tests to assert enqueue/dedup
+	// behavior without inlining raw SQL (core.md rule 2).
+	CountRiverJobsBySourceArgForTest(ctx context.Context, source string) (int64, error)
 	CountSearchContacts(ctx context.Context, arg CountSearchContactsParams) (int64, error)
 	CountSyncLogsByState(ctx context.Context, syncStateID pgtype.UUID) (int64, error)
 	CountTelegramMessagesByChat(ctx context.Context) ([]*CountTelegramMessagesByChatRow, error)
@@ -362,8 +366,19 @@ type Querier interface {
 	// shape rows on a shared DB. River doesn't expose a sqlc layer; this
 	// is the operator-test seam.
 	DeleteRiverJobsByKindAny(ctx context.Context, kinds []string) (int64, error)
+	// Test teardown only — hard-deletes sync_provider_account river_job rows
+	// whose args JSON source = @source. Mirrors the (source) JSONB path used
+	// by CountInFlightSyncJobs.
+	DeleteRiverJobsBySourceArgForTest(ctx context.Context, source string) (int64, error)
+	// Test teardown only — hard-deletes external_sync_log rows for a given
+	// source. external_sync_log carries its own source column (migration 011).
+	DeleteSyncLogsBySourceForTest(ctx context.Context, source string) (int64, error)
 	DeleteSyncState(ctx context.Context, id pgtype.UUID) error
 	DeleteSyncStatesByAccountID(ctx context.Context, accountID pgtype.Text) error
+	// Test teardown only — hard-deletes external_sync_state rows for a given
+	// source. Used by sync-service tests to scope per-source cleanup without
+	// inlining raw SQL into Go test code (core.md rule 2).
+	DeleteSyncStatesBySourceForTest(ctx context.Context, source string) (int64, error)
 	DeleteTag(ctx context.Context, id pgtype.UUID) error
 	DeleteTelegramChannelState(ctx context.Context, channelID int64) error
 	DeleteTelegramChatConfig(ctx context.Context, telegramChatID int64) error
@@ -802,6 +817,10 @@ type Querier interface {
 	// returns ErrNoRows in that case, which the repository translates to
 	// db.ErrNotFound.
 	InsertMeetingNote(ctx context.Context, arg InsertMeetingNoteParams) (*MeetingNote, error)
+	// Test-only seed of an in-flight sync_provider_account river_job row so
+	// the atomic-claim dedup path observes count>0. Mirrors the row a real
+	// enqueue would insert; the worker never runs in these tests.
+	InsertRiverJobForTest(ctx context.Context, args []byte) error
 	LinkIdentityToContact(ctx context.Context, arg LinkIdentityToContactParams) (*ExternalIdentity, error)
 	ListActiveMacHosts(ctx context.Context) ([]*MacHost, error)
 	// List all OAuth credentials

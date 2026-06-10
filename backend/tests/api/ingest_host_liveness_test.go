@@ -50,6 +50,7 @@ func TestIngest_HostRevokedMidTx_AbortsBatch(t *testing.T) {
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
@@ -141,6 +142,7 @@ func TestIngest_HostLivenessNil_SkipsCheck(t *testing.T) {
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
+	t.Parallel()
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL

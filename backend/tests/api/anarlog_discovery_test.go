@@ -148,6 +148,7 @@ func (e *discoveryTestEnv) findGroup(t *testing.T, token string) *service.Discov
 }
 
 func TestAnarlogDiscovery_ListGroups(t *testing.T) {
+	t.Parallel()
 	env := setupDiscoveryEnv(t)
 	ctx := context.Background()
 
@@ -183,6 +184,7 @@ func TestAnarlogDiscovery_ListGroups(t *testing.T) {
 }
 
 func TestAnarlogDiscovery_ResolveImport(t *testing.T) {
+	t.Parallel()
 	env := setupDiscoveryEnv(t)
 	ctx := context.Background()
 	token := "gamma" + env.tokenSuffix
@@ -218,6 +220,7 @@ func TestAnarlogDiscovery_ResolveImport(t *testing.T) {
 }
 
 func TestAnarlogDiscovery_ResolveIgnore(t *testing.T) {
+	t.Parallel()
 	env := setupDiscoveryEnv(t)
 	ctx := context.Background()
 	token := "delta" + env.tokenSuffix
@@ -243,6 +246,7 @@ func TestAnarlogDiscovery_ResolveIgnore(t *testing.T) {
 }
 
 func TestAnarlogDiscovery_ResolveLinkMissingContact(t *testing.T) {
+	t.Parallel()
 	env := setupDiscoveryEnv(t)
 	ctx := context.Background()
 	token := "epsilon" + env.tokenSuffix
@@ -259,6 +263,7 @@ func TestAnarlogDiscovery_ResolveLinkMissingContact(t *testing.T) {
 }
 
 func TestAnarlogDiscovery_ResolveLinkPreservesProfileAndCadence(t *testing.T) {
+	t.Parallel()
 	env := setupDiscoveryEnv(t)
 	ctx := context.Background()
 
@@ -322,6 +327,7 @@ func TestAnarlogDiscovery_ResolveLinkPreservesProfileAndCadence(t *testing.T) {
 }
 
 func TestAnarlogDiscovery_LinkNameOnlyPreservesContactBy(t *testing.T) {
+	t.Parallel()
 	env := setupDiscoveryEnv(t)
 	ctx := context.Background()
 
@@ -358,6 +364,7 @@ func TestAnarlogDiscovery_LinkNameOnlyPreservesContactBy(t *testing.T) {
 }
 
 func TestAnarlogDiscovery_DuplicateRowExcludedFromMark(t *testing.T) {
+	t.Parallel()
 	env := setupDiscoveryEnv(t)
 	ctx := context.Background()
 	token := "theta" + env.tokenSuffix

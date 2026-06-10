@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"personal-crm/backend/internal/api"
@@ -18,21 +19,22 @@ import (
 	"personal-crm/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func setupContactIDsTestRouter() (*gin.Engine, *repository.ContactRepository, func()) {
-	gin.SetMode(gin.TestMode)
-
 	ctx := context.Background()
 	databaseURL := os.Getenv("DATABASE_URL")
 
 	// Migrations are applied once by TestMain.
+	// MaxConns/MinConns mirror config.TestConfig() (8/1) to cap the per-pool
+	// connection ceiling under parallel execution.
 	dbConfig := config.DatabaseConfig{
 		URL:               databaseURL,
-		MaxConns:          config.DefaultDBMaxConns,
-		MinConns:          config.DefaultDBMinConns,
+		MaxConns:          8,
+		MinConns:          1,
 		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
 		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
 		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
@@ -85,8 +87,13 @@ func TestContactAPI_ListContactIDs(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
+	t.Parallel()
 	router, _, cleanup := setupContactIDsTestRouter()
 	defer cleanup()
+
+	// Per-test namespace so fixtures and search reads stay scoped to this run
+	// under concurrent execution.
+	ns := strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
 
 	// Helper to create a contact
 	createContact := func(name string) string {
@@ -133,12 +140,14 @@ func TestContactAPI_ListContactIDs(t *testing.T) {
 
 	t.Run("returns IDs only when ids_only=true", func(t *testing.T) {
 		// Create test contacts
-		id1 := createContact("IDs Test Contact Alpha")
-		id2 := createContact("IDs Test Contact Beta")
+		id1 := createContact("IDs Test Contact Alpha " + ns)
+		id2 := createContact("IDs Test Contact Beta " + ns)
 		defer deleteContact(id1)
 		defer deleteContact(id2)
 
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/contacts?ids_only=true", nil)
+		// Scope the read to this run's own contacts so the count/membership
+		// assertions stay correct under concurrent siblings on the shared DB.
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/contacts?ids_only=true&search=IDs+Test+Contact+"+ns, nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
@@ -164,13 +173,13 @@ func TestContactAPI_ListContactIDs(t *testing.T) {
 
 	t.Run("returns sorted IDs when sort parameter provided", func(t *testing.T) {
 		// Create contacts with different names for sorting
-		id1 := createContact("IDs Sort Zebra")
-		id2 := createContact("IDs Sort Alpha")
+		id1 := createContact("IDs Sort Zebra " + ns)
+		id2 := createContact("IDs Sort Alpha " + ns)
 		defer deleteContact(id1)
 		defer deleteContact(id2)
 
 		// Get IDs sorted by name ascending (limit to our test contacts)
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/contacts?ids_only=true&search=IDs+Sort&sort=name&order=asc", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/contacts?ids_only=true&search=IDs+Sort+"+ns+"&sort=name&order=asc", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
@@ -178,7 +187,7 @@ func TestContactAPI_ListContactIDs(t *testing.T) {
 		respAsc := parseIDsResponse(w.Body.Bytes())
 
 		// Get IDs sorted by name descending (limit to our test contacts)
-		req = httptest.NewRequest(http.MethodGet, "/api/v1/contacts?ids_only=true&search=IDs+Sort&sort=name&order=desc", nil)
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/contacts?ids_only=true&search=IDs+Sort+"+ns+"&sort=name&order=desc", nil)
 		w = httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
@@ -215,14 +224,13 @@ func TestContactAPI_ListContactIDs(t *testing.T) {
 
 	t.Run("returns filtered IDs when search parameter provided", func(t *testing.T) {
 		// Create contacts with unique names for searching
-		uniqueSuffix := fmt.Sprintf("%d", os.Getpid())
-		id1 := createContact("Searchable Unique " + uniqueSuffix)
-		id2 := createContact("Other Contact " + uniqueSuffix)
+		id1 := createContact("Searchable Unique " + ns)
+		id2 := createContact("Other Contact " + ns)
 		defer deleteContact(id1)
 		defer deleteContact(id2)
 
 		// Search for the unique contact
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/contacts?ids_only=true&search=Searchable+Unique", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/contacts?ids_only=true&search=Searchable+Unique+"+ns, nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
@@ -234,7 +242,7 @@ func TestContactAPI_ListContactIDs(t *testing.T) {
 	})
 
 	t.Run("returns empty array when no contacts match search", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/contacts?ids_only=true&search=NonexistentContactXYZ123456", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/contacts?ids_only=true&search=NonexistentContactXYZ123456"+ns, nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
@@ -247,7 +255,7 @@ func TestContactAPI_ListContactIDs(t *testing.T) {
 
 	t.Run("excludes soft-deleted contacts from IDs", func(t *testing.T) {
 		// Create and delete a contact
-		id := createContact("Soft Delete IDs Test")
+		id := createContact("Soft Delete IDs Test " + ns)
 		deleteContact(id)
 
 		// Get IDs
@@ -281,15 +289,15 @@ func TestContactAPI_ListContactIDs(t *testing.T) {
 		}
 
 		// Create contacts with specific cadences (using unique prefix for isolation)
-		idWeekly := createContactWithCadence("CadSort Weekly Test", "weekly")
-		idMonthly := createContactWithCadence("CadSort Monthly Test", "monthly")
-		idAnnual := createContactWithCadence("CadSort Annual Test", "annual")
+		idWeekly := createContactWithCadence("CadSort Weekly Test "+ns, "weekly")
+		idMonthly := createContactWithCadence("CadSort Monthly Test "+ns, "monthly")
+		idAnnual := createContactWithCadence("CadSort Annual Test "+ns, "annual")
 		defer deleteContact(idWeekly)
 		defer deleteContact(idMonthly)
 		defer deleteContact(idAnnual)
 
 		// Get IDs sorted by cadence descending (most frequent first)
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/contacts?ids_only=true&search=CadSort&sort=cadence&order=desc", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/contacts?ids_only=true&search=CadSort+"+ns+"&sort=cadence&order=desc", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
@@ -334,13 +342,13 @@ func TestContactAPI_ListContactIDs(t *testing.T) {
 			return contactData["id"].(string)
 		}
 
-		idWeekly := createContactWithCadence("CadAsc Weekly Test", "weekly")
-		idAnnual := createContactWithCadence("CadAsc Annual Test", "annual")
+		idWeekly := createContactWithCadence("CadAsc Weekly Test "+ns, "weekly")
+		idAnnual := createContactWithCadence("CadAsc Annual Test "+ns, "annual")
 		defer deleteContact(idWeekly)
 		defer deleteContact(idAnnual)
 
 		// Get IDs sorted by cadence ascending (least frequent first)
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/contacts?ids_only=true&search=CadAsc&sort=cadence&order=asc", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/contacts?ids_only=true&search=CadAsc+"+ns+"&sort=cadence&order=asc", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
@@ -384,13 +392,13 @@ func TestContactAPI_ListContactIDs(t *testing.T) {
 			return contactData["id"].(string)
 		}
 
-		idWeekly := createContactWithCadence("CadNull Weekly Test", "weekly")
-		idNoCadence := createContactWithCadence("CadNull NoCadence Test", "")
+		idWeekly := createContactWithCadence("CadNull Weekly Test "+ns, "weekly")
+		idNoCadence := createContactWithCadence("CadNull NoCadence Test "+ns, "")
 		defer deleteContact(idWeekly)
 		defer deleteContact(idNoCadence)
 
 		// Get IDs sorted by cadence descending
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/contacts?ids_only=true&search=CadNull&sort=cadence&order=desc", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/contacts?ids_only=true&search=CadNull+"+ns+"&sort=cadence&order=desc", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 

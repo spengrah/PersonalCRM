@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync/atomic"
 	"testing"
 
 	"personal-crm/backend/internal/api"
@@ -23,10 +25,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const apiTestChatID1 int64 = 60001
-const apiTestChatID2 int64 = 60002
+// telegramChatIDSeq hands out disjoint per-test chat ID pairs so concurrent
+// funcs (and -count repeats) never collide on the shared chat-config table.
+// The 1_000_000 base keeps every allocated ID well clear of any plausible
+// real chat ID.
+var telegramChatIDSeq atomic.Int64
 
-func setupTelegramChatRouter(t *testing.T) (*gin.Engine, *repository.TelegramChatConfigRepository, func()) {
+func setupTelegramChatRouter(t *testing.T) (*gin.Engine, *repository.TelegramChatConfigRepository, int64, int64, func()) {
 	t.Helper()
 
 	databaseURL := os.Getenv("DATABASE_URL")
@@ -34,15 +39,20 @@ func setupTelegramChatRouter(t *testing.T) (*gin.Engine, *repository.TelegramCha
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
-	gin.SetMode(gin.TestMode)
+	// Reserve a disjoint ID pair for this test.
+	n := telegramChatIDSeq.Add(2)
+	chatID1 := 1_000_000 + n
+	chatID2 := chatID1 + 1
 
 	// Migrations are applied once by TestMain.
 
 	ctx := context.Background()
+	// MaxConns/MinConns mirror config.TestConfig() (8/1) to cap the per-pool
+	// connection ceiling under parallel execution.
 	dbConfig := config.DatabaseConfig{
 		URL:               databaseURL,
-		MaxConns:          config.DefaultDBMaxConns,
-		MinConns:          config.DefaultDBMinConns,
+		MaxConns:          8,
+		MinConns:          1,
 		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
 		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
 		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
@@ -114,24 +124,25 @@ func setupTelegramChatRouter(t *testing.T) (*gin.Engine, *repository.TelegramCha
 	}
 
 	cleanup := func() {
-		_ = database.Queries.DeleteTelegramChatConfig(ctx, apiTestChatID1)
-		_ = database.Queries.DeleteTelegramChatConfig(ctx, apiTestChatID2)
+		_ = database.Queries.DeleteTelegramChatConfig(ctx, chatID1)
+		_ = database.Queries.DeleteTelegramChatConfig(ctx, chatID2)
 		database.Close()
 	}
 
 	// Clean before test
-	_ = database.Queries.DeleteTelegramChatConfig(ctx, apiTestChatID1)
-	_ = database.Queries.DeleteTelegramChatConfig(ctx, apiTestChatID2)
+	_ = database.Queries.DeleteTelegramChatConfig(ctx, chatID1)
+	_ = database.Queries.DeleteTelegramChatConfig(ctx, chatID2)
 
-	return router, chatConfigRepo, cleanup
+	return router, chatConfigRepo, chatID1, chatID2, cleanup
 }
 
 func TestChatAPI_ListChats(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 
-	router, chatConfigRepo, cleanup := setupTelegramChatRouter(t)
+	router, chatConfigRepo, chatID1, chatID2, cleanup := setupTelegramChatRouter(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -140,7 +151,7 @@ func TestChatAPI_ListChats(t *testing.T) {
 	mc5 := int32(5)
 	title1 := "Small Group"
 	_, err := chatConfigRepo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
-		TelegramChatID: apiTestChatID1,
+		TelegramChatID: chatID1,
 		ChatTitle:      &title1,
 		ChatType:       "group",
 		MemberCount:    &mc5,
@@ -151,7 +162,7 @@ func TestChatAPI_ListChats(t *testing.T) {
 	mc50 := int32(50)
 	title2 := "Large Group"
 	_, err = chatConfigRepo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
-		TelegramChatID: apiTestChatID2,
+		TelegramChatID: chatID2,
 		ChatTitle:      &title2,
 		ChatType:       "group",
 		MemberCount:    &mc50,
@@ -180,11 +191,11 @@ func TestChatAPI_ListChats(t *testing.T) {
 	// Find our test chats
 	var small, large bool
 	for _, chat := range resp.Data {
-		if chat.TelegramChatID == apiTestChatID1 {
+		if chat.TelegramChatID == chatID1 {
 			small = true
 			assert.True(t, chat.EffectiveTracked, "small group should be tracked")
 		}
-		if chat.TelegramChatID == apiTestChatID2 {
+		if chat.TelegramChatID == chatID2 {
 			large = true
 			assert.False(t, chat.EffectiveTracked, "large group should not be tracked")
 		}
@@ -197,14 +208,15 @@ func TestChatAPI_ListChats_ExcludesPrivate(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 
-	router, chatConfigRepo, cleanup := setupTelegramChatRouter(t)
+	router, chatConfigRepo, chatID1, _, cleanup := setupTelegramChatRouter(t)
 	defer cleanup()
 
 	ctx := context.Background()
 
 	_, err := chatConfigRepo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
-		TelegramChatID: apiTestChatID1,
+		TelegramChatID: chatID1,
 		ChatType:       "private",
 		Status:         "auto",
 	})
@@ -225,7 +237,7 @@ func TestChatAPI_ListChats_ExcludesPrivate(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, chat := range resp.Data {
-		assert.NotEqual(t, apiTestChatID1, chat.TelegramChatID, "private chat should not appear")
+		assert.NotEqual(t, chatID1, chat.TelegramChatID, "private chat should not appear")
 	}
 }
 
@@ -233,15 +245,16 @@ func TestChatAPI_UpdateStatus_Ignored(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 
-	router, chatConfigRepo, cleanup := setupTelegramChatRouter(t)
+	router, chatConfigRepo, chatID1, _, cleanup := setupTelegramChatRouter(t)
 	defer cleanup()
 
 	ctx := context.Background()
 
 	mc5 := int32(5)
 	_, err := chatConfigRepo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
-		TelegramChatID: apiTestChatID1,
+		TelegramChatID: chatID1,
 		ChatType:       "group",
 		MemberCount:    &mc5,
 		Status:         "auto",
@@ -249,7 +262,7 @@ func TestChatAPI_UpdateStatus_Ignored(t *testing.T) {
 	require.NoError(t, err)
 
 	body, _ := json.Marshal(map[string]string{"status": "ignored"})
-	req, _ := http.NewRequest("PATCH", "/api/v1/telegram/chats/60001", bytes.NewReader(body))
+	req, _ := http.NewRequest("PATCH", fmt.Sprintf("/api/v1/telegram/chats/%d", chatID1), bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -272,15 +285,16 @@ func TestChatAPI_UpdateStatus_TrackedOverridesLarge(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 
-	router, chatConfigRepo, cleanup := setupTelegramChatRouter(t)
+	router, chatConfigRepo, chatID1, _, cleanup := setupTelegramChatRouter(t)
 	defer cleanup()
 
 	ctx := context.Background()
 
 	mc50 := int32(50)
 	_, err := chatConfigRepo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
-		TelegramChatID: apiTestChatID1,
+		TelegramChatID: chatID1,
 		ChatType:       "group",
 		MemberCount:    &mc50,
 		Status:         "auto",
@@ -288,7 +302,7 @@ func TestChatAPI_UpdateStatus_TrackedOverridesLarge(t *testing.T) {
 	require.NoError(t, err)
 
 	body, _ := json.Marshal(map[string]string{"status": "tracked"})
-	req, _ := http.NewRequest("PATCH", "/api/v1/telegram/chats/60001", bytes.NewReader(body))
+	req, _ := http.NewRequest("PATCH", fmt.Sprintf("/api/v1/telegram/chats/%d", chatID1), bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -311,12 +325,13 @@ func TestChatAPI_UpdateStatus_InvalidStatus(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 
-	router, _, cleanup := setupTelegramChatRouter(t)
+	router, _, chatID1, _, cleanup := setupTelegramChatRouter(t)
 	defer cleanup()
 
 	body, _ := json.Marshal(map[string]string{"status": "invalid"})
-	req, _ := http.NewRequest("PATCH", "/api/v1/telegram/chats/60001", bytes.NewReader(body))
+	req, _ := http.NewRequest("PATCH", fmt.Sprintf("/api/v1/telegram/chats/%d", chatID1), bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -328,12 +343,15 @@ func TestChatAPI_UpdateStatus_NotFound(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 
-	router, _, cleanup := setupTelegramChatRouter(t)
+	// chatID1 is reserved for this test but never upserted, so it is
+	// guaranteed not-found and collision-free under parallel execution.
+	router, _, chatID1, _, cleanup := setupTelegramChatRouter(t)
 	defer cleanup()
 
 	body, _ := json.Marshal(map[string]string{"status": "ignored"})
-	req, _ := http.NewRequest("PATCH", "/api/v1/telegram/chats/99999999", bytes.NewReader(body))
+	req, _ := http.NewRequest("PATCH", fmt.Sprintf("/api/v1/telegram/chats/%d", chatID1), bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
