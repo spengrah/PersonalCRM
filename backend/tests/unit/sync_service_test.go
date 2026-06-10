@@ -65,17 +65,17 @@ func TestSyncService_TriggerSync_UsesEnqueuerWhenSet(t *testing.T) {
 	}
 	database, ctx := newServiceSuiteDB(t)
 
+	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
+
 	// Clean any prior state for this test's source.
 	source := "service_test_enqueue_set"
-	_, _ = database.Pool.Exec(ctx, `DELETE FROM river_job WHERE kind = 'sync_provider_account' AND (args->>'source') = $1`, source)
-	_, _ = database.Pool.Exec(ctx, `DELETE FROM external_sync_state WHERE source = $1`, source)
+	_ = syncRepo.DeleteRiverJobsBySourceArgForTest(ctx, source)
+	_ = syncRepo.DeleteSyncStatesBySourceForTest(ctx, source)
 	t.Cleanup(func() {
-		_, _ = database.Pool.Exec(context.Background(),
-			`DELETE FROM river_job WHERE kind = 'sync_provider_account' AND (args->>'source') = $1`, source)
-		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM external_sync_state WHERE source = $1`, source)
+		_ = syncRepo.DeleteRiverJobsBySourceArgForTest(context.Background(), source)
+		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.Background(), source)
 	})
 
-	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
 	contactRepo := repository.NewContactRepository(database.Queries)
 	registry := syncpkg.NewProviderRegistry()
 	provider := &countingProvider{cfg: syncpkg.SourceConfig{
@@ -105,11 +105,9 @@ func TestSyncService_TriggerSync_UsesEnqueuerWhenSet(t *testing.T) {
 	assert.Equal(t, 0, provider.count, "provider.Sync should NOT be called when enqueuer is set")
 
 	// A river_job row should have been inserted for this source.
-	var cnt int
-	require.NoError(t, database.Pool.QueryRow(ctx,
-		`SELECT COUNT(*) FROM river_job WHERE kind = 'sync_provider_account' AND (args->>'source') = $1`, source,
-	).Scan(&cnt))
-	assert.Equal(t, 1, cnt, "exactly one sync_provider_account row expected")
+	cnt, err := syncRepo.CountRiverJobsBySourceArgForTest(ctx, source)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), cnt, "exactly one sync_provider_account row expected")
 }
 
 // TestSyncService_TriggerSync_FallsBackWhenEnqueuerNil verifies that
@@ -122,15 +120,16 @@ func TestSyncService_TriggerSync_FallsBackWhenEnqueuerNil(t *testing.T) {
 	t.Parallel()
 	database, ctx := newServiceSuiteDB(t)
 
+	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
+
 	source := "service_test_enqueue_nil"
-	_, _ = database.Pool.Exec(ctx, `DELETE FROM external_sync_state WHERE source = $1`, source)
-	_, _ = database.Pool.Exec(ctx, `DELETE FROM external_sync_log WHERE source = $1`, source)
+	_ = syncRepo.DeleteSyncStatesBySourceForTest(ctx, source)
+	_ = syncRepo.DeleteSyncLogsBySourceForTest(ctx, source)
 	t.Cleanup(func() {
-		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM external_sync_state WHERE source = $1`, source)
-		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM external_sync_log WHERE source = $1`, source)
+		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.Background(), source)
+		_ = syncRepo.DeleteSyncLogsBySourceForTest(context.Background(), source)
 	})
 
-	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
 	contactRepo := repository.NewContactRepository(database.Queries)
 	registry := syncpkg.NewProviderRegistry()
 	provider := &countingProvider{cfg: syncpkg.SourceConfig{
@@ -162,16 +161,16 @@ func TestSyncService_TriggerSync_DedupedIsNoError(t *testing.T) {
 	}
 	database, ctx := newServiceSuiteDB(t)
 
+	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
+
 	source := "service_test_deduped_isnoerr"
-	_, _ = database.Pool.Exec(ctx, `DELETE FROM river_job WHERE kind = 'sync_provider_account' AND (args->>'source') = $1`, source)
-	_, _ = database.Pool.Exec(ctx, `DELETE FROM external_sync_state WHERE source = $1`, source)
+	_ = syncRepo.DeleteRiverJobsBySourceArgForTest(ctx, source)
+	_ = syncRepo.DeleteSyncStatesBySourceForTest(ctx, source)
 	t.Cleanup(func() {
-		_, _ = database.Pool.Exec(context.Background(),
-			`DELETE FROM river_job WHERE kind = 'sync_provider_account' AND (args->>'source') = $1`, source)
-		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM external_sync_state WHERE source = $1`, source)
+		_ = syncRepo.DeleteRiverJobsBySourceArgForTest(context.Background(), source)
+		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.Background(), source)
 	})
 
-	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
 	contactRepo := repository.NewContactRepository(database.Queries)
 	registry := syncpkg.NewProviderRegistry()
 	provider := &countingProvider{cfg: syncpkg.SourceConfig{
@@ -190,13 +189,7 @@ func TestSyncService_TriggerSync_DedupedIsNoError(t *testing.T) {
 
 	// Seed an in-flight row directly so the atomic-claim helper sees
 	// count>0 and returns (enqueued=false, nil).
-	_, err := database.Pool.Exec(ctx,
-		`INSERT INTO river_job
-		  (args, kind, max_attempts, priority, queue, state,
-		   attempt, created_at, scheduled_at)
-		 VALUES ($1, 'sync_provider_account', 3, 1, 'default', 'running',
-		         1, now(), now())`, []byte(`{"source":"`+source+`"}`))
-	require.NoError(t, err)
+	require.NoError(t, syncRepo.InsertRiverJobForTest(ctx, []byte(`{"source":"`+source+`"}`)))
 
 	// TriggerSync should observe the dedup and return nil — NOT an error.
 	require.NoError(t, svc.TriggerSync(ctx, source, nil))
@@ -204,11 +197,9 @@ func TestSyncService_TriggerSync_DedupedIsNoError(t *testing.T) {
 	// Provider was not called inline (enqueue path), and we didn't add
 	// a second row.
 	assert.Equal(t, 0, provider.count, "provider.Sync should not run on dedup")
-	var cnt int
-	require.NoError(t, database.Pool.QueryRow(ctx,
-		`SELECT COUNT(*) FROM river_job WHERE kind = 'sync_provider_account' AND (args->>'source') = $1`, source,
-	).Scan(&cnt))
-	assert.Equal(t, 1, cnt, "dedup must not create a second row")
+	cnt, err := syncRepo.CountRiverJobsBySourceArgForTest(ctx, source)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), cnt, "dedup must not create a second row")
 }
 
 // TestSyncService_TriggerSync_EnqueueErrorWrapped verifies that an
@@ -228,13 +219,14 @@ func TestSyncService_TriggerSync_EnqueueErrorWrapped(t *testing.T) {
 	}
 	database, ctx := newServiceSuiteDB(t)
 
+	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
+
 	source := "service_test_enqueue_errwrapped"
-	_, _ = database.Pool.Exec(ctx, `DELETE FROM external_sync_state WHERE source = $1`, source)
+	_ = syncRepo.DeleteSyncStatesBySourceForTest(ctx, source)
 	t.Cleanup(func() {
-		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM external_sync_state WHERE source = $1`, source)
+		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.Background(), source)
 	})
 
-	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
 	contactRepo := repository.NewContactRepository(database.Queries)
 	registry := syncpkg.NewProviderRegistry()
 	registry.Register(&countingProvider{cfg: syncpkg.SourceConfig{
@@ -278,16 +270,16 @@ func TestSyncService_TriggerSync_NoLongerReadsSyncingStatus(t *testing.T) {
 	}
 	database, ctx := newServiceSuiteDB(t)
 
+	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
+
 	source := "service_test_syncing_status_nonblocking"
-	_, _ = database.Pool.Exec(ctx, `DELETE FROM river_job WHERE kind = 'sync_provider_account' AND (args->>'source') = $1`, source)
-	_, _ = database.Pool.Exec(ctx, `DELETE FROM external_sync_state WHERE source = $1`, source)
+	_ = syncRepo.DeleteRiverJobsBySourceArgForTest(ctx, source)
+	_ = syncRepo.DeleteSyncStatesBySourceForTest(ctx, source)
 	t.Cleanup(func() {
-		_, _ = database.Pool.Exec(context.Background(),
-			`DELETE FROM river_job WHERE kind = 'sync_provider_account' AND (args->>'source') = $1`, source)
-		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM external_sync_state WHERE source = $1`, source)
+		_ = syncRepo.DeleteRiverJobsBySourceArgForTest(context.Background(), source)
+		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.Background(), source)
 	})
 
-	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
 	contactRepo := repository.NewContactRepository(database.Queries)
 	registry := syncpkg.NewProviderRegistry()
 	provider := &countingProvider{cfg: syncpkg.SourceConfig{
@@ -325,11 +317,9 @@ func TestSyncService_TriggerSync_NoLongerReadsSyncingStatus(t *testing.T) {
 	require.NoError(t, svc.TriggerSync(ctx, source, nil))
 
 	// A new river_job row should be enqueued despite status='syncing'.
-	var cnt int
-	require.NoError(t, database.Pool.QueryRow(ctx,
-		`SELECT COUNT(*) FROM river_job WHERE kind = 'sync_provider_account' AND (args->>'source') = $1`, source,
-	).Scan(&cnt))
-	assert.Equal(t, 1, cnt, "TriggerSync should enqueue despite status='syncing' (mutex retired)")
+	cnt, err := syncRepo.CountRiverJobsBySourceArgForTest(ctx, source)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), cnt, "TriggerSync should enqueue despite status='syncing' (mutex retired)")
 }
 
 // TestSyncService_EnqueueRequiresEnqueuer verifies that directly calling
@@ -355,15 +345,17 @@ func TestSyncService_ListDueAccounts_FiltersUnregisteredProviders(t *testing.T) 
 	t.Parallel()
 	database, ctx := newServiceSuiteDB(t)
 
+	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
+
 	liveSource := "service_test_live_source"
 	deadSource := "service_test_dead_source"
-	_, _ = database.Pool.Exec(ctx, `DELETE FROM external_sync_state WHERE source IN ($1, $2)`, liveSource, deadSource)
-	t.Cleanup(func() {
-		_, _ = database.Pool.Exec(context.Background(),
-			`DELETE FROM external_sync_state WHERE source IN ($1, $2)`, liveSource, deadSource)
-	})
+	cleanupSources := func(c context.Context) {
+		_ = syncRepo.DeleteSyncStatesBySourceForTest(c, liveSource)
+		_ = syncRepo.DeleteSyncStatesBySourceForTest(c, deadSource)
+	}
+	cleanupSources(ctx)
+	t.Cleanup(func() { cleanupSources(context.Background()) })
 
-	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
 	contactRepo := repository.NewContactRepository(database.Queries)
 	registry := syncpkg.NewProviderRegistry()
 	// Only register the "live" source — the "dead" source simulates a

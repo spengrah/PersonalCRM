@@ -1000,3 +1000,40 @@ func (r *SyncRepository) DeleteMacHostSyncStatesTx(ctx context.Context, tx pgx.T
 	}
 	return n, nil
 }
+
+// DeleteSyncStatesBySourceForTest hard-deletes external_sync_state rows for
+// the given source. TEST ONLY: sync-service tests use it for per-source
+// teardown; the SQL lives in sqlc so tests don't inline raw queries
+// (core.md rule 2).
+func (r *SyncRepository) DeleteSyncStatesBySourceForTest(ctx context.Context, source string) error {
+	_, err := r.queries.DeleteSyncStatesBySourceForTest(ctx, source)
+	return err
+}
+
+// DeleteSyncLogsBySourceForTest hard-deletes external_sync_log rows with
+// the given source. TEST ONLY.
+func (r *SyncRepository) DeleteSyncLogsBySourceForTest(ctx context.Context, source string) error {
+	_, err := r.queries.DeleteSyncLogsBySourceForTest(ctx, source)
+	return err
+}
+
+// DeleteRiverJobsBySourceArgForTest hard-deletes sync_provider_account
+// river_job rows whose args JSON source matches. TEST ONLY.
+func (r *SyncRepository) DeleteRiverJobsBySourceArgForTest(ctx context.Context, source string) error {
+	_, err := r.queries.DeleteRiverJobsBySourceArgForTest(ctx, source)
+	return err
+}
+
+// CountRiverJobsBySourceArgForTest returns the number of
+// sync_provider_account river_job rows whose args JSON source matches.
+// TEST ONLY — backs enqueue/dedup assertions without inlining raw SQL.
+func (r *SyncRepository) CountRiverJobsBySourceArgForTest(ctx context.Context, source string) (int64, error) {
+	return r.queries.CountRiverJobsBySourceArgForTest(ctx, source)
+}
+
+// InsertRiverJobForTest seeds an in-flight sync_provider_account river_job
+// row with the given args JSON so the atomic-claim dedup path observes
+// count>0. TEST ONLY.
+func (r *SyncRepository) InsertRiverJobForTest(ctx context.Context, args []byte) error {
+	return r.queries.InsertRiverJobForTest(ctx, args)
+}

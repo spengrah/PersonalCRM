@@ -118,6 +118,22 @@ func (q *Queries) CountRiverJobsByKindUnfinalized(ctx context.Context, kind stri
 	return count, err
 }
 
+const CountRiverJobsBySourceArgForTest = `-- name: CountRiverJobsBySourceArgForTest :one
+SELECT COUNT(*) FROM river_job
+WHERE kind = 'sync_provider_account'
+  AND (args->>'source') = $1::text
+`
+
+// Test-only count of sync_provider_account river_job rows whose args JSON
+// source = @source. Used by sync-service tests to assert enqueue/dedup
+// behavior without inlining raw SQL (core.md rule 2).
+func (q *Queries) CountRiverJobsBySourceArgForTest(ctx context.Context, source string) (int64, error) {
+	row := q.db.QueryRow(ctx, CountRiverJobsBySourceArgForTest, source)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const DeleteAllMacHosts = `-- name: DeleteAllMacHosts :execrows
 DELETE FROM mac_host WHERE hostname NOT LIKE 'test-host-%'
 `
@@ -311,6 +327,52 @@ func (q *Queries) DeleteRiverJobsByKindAny(ctx context.Context, kinds []string) 
 	return result.RowsAffected(), nil
 }
 
+const DeleteRiverJobsBySourceArgForTest = `-- name: DeleteRiverJobsBySourceArgForTest :execrows
+DELETE FROM river_job
+WHERE kind = 'sync_provider_account'
+  AND (args->>'source') = $1::text
+`
+
+// Test teardown only — hard-deletes sync_provider_account river_job rows
+// whose args JSON source = @source. Mirrors the (source) JSONB path used
+// by CountInFlightSyncJobs.
+func (q *Queries) DeleteRiverJobsBySourceArgForTest(ctx context.Context, source string) (int64, error) {
+	result, err := q.db.Exec(ctx, DeleteRiverJobsBySourceArgForTest, source)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const DeleteSyncLogsBySourceForTest = `-- name: DeleteSyncLogsBySourceForTest :execrows
+DELETE FROM external_sync_log WHERE source = $1
+`
+
+// Test teardown only — hard-deletes external_sync_log rows for a given
+// source. external_sync_log carries its own source column (migration 011).
+func (q *Queries) DeleteSyncLogsBySourceForTest(ctx context.Context, source string) (int64, error) {
+	result, err := q.db.Exec(ctx, DeleteSyncLogsBySourceForTest, source)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const DeleteSyncStatesBySourceForTest = `-- name: DeleteSyncStatesBySourceForTest :execrows
+DELETE FROM external_sync_state WHERE source = $1
+`
+
+// Test teardown only — hard-deletes external_sync_state rows for a given
+// source. Used by sync-service tests to scope per-source cleanup without
+// inlining raw SQL into Go test code (core.md rule 2).
+func (q *Queries) DeleteSyncStatesBySourceForTest(ctx context.Context, source string) (int64, error) {
+	result, err := q.db.Exec(ctx, DeleteSyncStatesBySourceForTest, source)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const DeleteTelegramMessagesByMessageIDs = `-- name: DeleteTelegramMessagesByMessageIDs :execrows
 DELETE FROM telegram_message WHERE telegram_message_id = ANY($1::int[])
 `
@@ -371,6 +433,24 @@ func (q *Queries) GetRiverJobStateByID(ctx context.Context, id int64) (RiverJobS
 	var state RiverJobState
 	err := row.Scan(&state)
 	return state, err
+}
+
+const InsertRiverJobForTest = `-- name: InsertRiverJobForTest :exec
+INSERT INTO river_job (
+    args, kind, max_attempts, priority, queue, state,
+    attempt, created_at, scheduled_at
+) VALUES (
+    $1, 'sync_provider_account', 3, 1, 'default', 'running',
+    1, NOW(), NOW()
+)
+`
+
+// Test-only seed of an in-flight sync_provider_account river_job row so
+// the atomic-claim dedup path observes count>0. Mirrors the row a real
+// enqueue would insert; the worker never runs in these tests.
+func (q *Queries) InsertRiverJobForTest(ctx context.Context, args []byte) error {
+	_, err := q.db.Exec(ctx, InsertRiverJobForTest, args)
+	return err
 }
 
 const ResetSyntheticData = `-- name: ResetSyntheticData :exec
