@@ -1623,7 +1623,7 @@ func run() int {
 		logger.Info().
 			Str("url", fmt.Sprintf("http://%s:%d/swagger/index.html", cfg.Server.Host, selectedPort)).
 			Msg("API documentation available")
-		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Fatal().Err(err).Msg("failed to start server")
 		}
 	}()

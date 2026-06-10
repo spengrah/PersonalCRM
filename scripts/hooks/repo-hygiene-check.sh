@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# repo-hygiene-check.sh — lightweight repo-hygiene gate for the pre-push
-# CONCURRENT lane (DB-free, port-free). A home for cheap "don't commit X" checks
-# that catch mistakes deterministically but don't warrant a CI job.
+# repo-hygiene-check.sh — lightweight repo-hygiene gate run in the pre-push LINT
+# phase (which runs unconditionally, NOT gated by should_skip_tests — so the gate
+# fires even on a docs/HTML-only push, which is exactly when its checks matter).
+# A home for cheap "don't commit X" checks that catch mistakes deterministically
+# but don't warrant a CI job.
 #
 # Checks:
 #   - No prototype *.html committed at the repo root. Prototypes belong in temp/

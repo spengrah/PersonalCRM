@@ -261,10 +261,10 @@ run_phase() {
 classify_command() {
   local cmd="$1"
   case "$cmd" in
-    *test-e2e*)                                            echo "E2E" ;;
-    *test-frontend*|*test-pre-push-filters*|*repo-hygiene*) echo "CONCURRENT" ;;
-    *test-unit*|*test-integration*)                        echo "GO" ;;
-    *)                                                     echo "GO" ;;
+    *test-e2e*)                              echo "E2E" ;;
+    *test-frontend*|*test-pre-push-filters*) echo "CONCURRENT" ;;
+    *test-unit*|*test-integration*)          echo "GO" ;;
+    *)                                       echo "GO" ;;
   esac
 }
 

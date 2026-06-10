@@ -128,11 +128,10 @@ func TestDBNameFromURL(t *testing.T) {
 	}
 }
 
-// TestBaseURLGuardRejectsProdDB locks the SetupPackage chokepoint end-to-end:
-// a DATABASE_URL/TEST_DATABASE_URL pointing at the dev DB (personal_crm) must be
-// rejected by the dbNameFromURL → assertBaseDBName path before any DDL runs, so
-// `go test` with a mis-set env can never CREATE/DROP against production. Only the
-// bare personal_crm_test base is accepted.
+// TestBaseURLGuardRejectsProdDB locks the SetupPackage chokepoint: it exercises
+// assertSafeBaseURL — the exact guard SetupPackage calls before any DDL — so a
+// DATABASE_URL/TEST_DATABASE_URL pointing at the dev DB (personal_crm) can never
+// CREATE/DROP against production. Only the bare personal_crm_test base is accepted.
 func TestBaseURLGuardRejectsProdDB(t *testing.T) {
 	rejected := []string{
 		"postgres://crm_user:crm_password@localhost:5432/personal_crm?sslmode=disable",
@@ -140,21 +139,13 @@ func TestBaseURLGuardRejectsProdDB(t *testing.T) {
 		"postgres://u:p@h:5432/personal_crm_test_clone_deadbeef",       // a clone is not a valid base
 	}
 	for _, raw := range rejected {
-		name, err := dbNameFromURL(raw)
-		if err != nil {
-			t.Fatalf("dbNameFromURL(%q): %v", raw, err)
-		}
-		if assertBaseDBName(name) == nil {
-			t.Errorf("base URL %q resolved to %q and was ACCEPTED; expected rejection", raw, name)
+		if err := assertSafeBaseURL(raw); err == nil {
+			t.Errorf("base URL %q was ACCEPTED by assertSafeBaseURL; expected rejection", raw)
 		}
 	}
 
 	const okBase = "postgres://crm_user:crm_password@localhost:5432/personal_crm_test?sslmode=disable"
-	name, err := dbNameFromURL(okBase)
-	if err != nil {
-		t.Fatalf("dbNameFromURL(%q): %v", okBase, err)
-	}
-	if err := assertBaseDBName(name); err != nil {
+	if err := assertSafeBaseURL(okBase); err != nil {
 		t.Errorf("the test base URL must be accepted, got: %v", err)
 	}
 }

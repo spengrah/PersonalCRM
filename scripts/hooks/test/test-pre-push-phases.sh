@@ -17,7 +17,6 @@ assert_eq "test-e2e-diff -> E2E (exclusive)"             "E2E"        "$(classif
 assert_eq "test-e2e -> E2E"                              "E2E"        "$(classify_command 'make test-e2e')"
 assert_eq "test-frontend -> CONCURRENT"                 "CONCURRENT" "$(classify_command 'make test-frontend')"
 assert_eq "test-pre-push-filters -> CONCURRENT"         "CONCURRENT" "$(classify_command 'bash scripts/hooks/test/test-pre-push-filters.sh')"
-assert_eq "repo-hygiene -> CONCURRENT"                  "CONCURRENT" "$(classify_command 'bash scripts/hooks/repo-hygiene-check.sh')"
 assert_eq "test-unit -> GO"                             "GO"         "$(classify_command 'make test-unit')"
 assert_eq "test-integration -> GO"                      "GO"         "$(classify_command 'make test-integration')"
 # Unrecognized command defaults to the GO (serial, DB-owning) lane — never concurrent.

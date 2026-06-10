@@ -6,7 +6,8 @@
     "enabled": true,
     "commands": [
       { "name": "Backend lint", "command": "make lint" },
-      { "name": "Frontend lint", "command": "cd frontend && bun run lint" }
+      { "name": "Frontend lint", "command": "cd frontend && bun run lint" },
+      { "name": "Repo hygiene", "command": "bash scripts/hooks/repo-hygiene-check.sh" }
     ]
   },
   "swift": {
@@ -16,7 +17,6 @@
     "enabled": true,
     "commands": [
       { "name": "Pre-push filter unit tests", "command": "bash scripts/hooks/test/test-pre-push-filters.sh" },
-      { "name": "Repo hygiene", "command": "bash scripts/hooks/repo-hygiene-check.sh" },
       { "name": "Unit tests", "command": "make test-unit" },
       { "name": "Integration tests", "command": "make test-integration" },
       { "name": "Frontend tests", "command": "make test-frontend" },
