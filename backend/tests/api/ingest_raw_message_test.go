@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 	"time"
 
@@ -14,7 +13,6 @@ import (
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/auth"
-	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/consumer/consumerjobs"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
@@ -54,19 +52,13 @@ type ingestRawTestEnv struct {
 func setupRawIngestEnv(t *testing.T) *ingestRawTestEnv {
 	t.Helper()
 
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-
 	ctx := context.Background()
-	cfg := config.TestConfig()
-	cfg.Database.URL = databaseURL
+	// This file asserts DB-wide over river_job (CountRiverJobsByKind) AND
+	// pairs the singleton mac_host with a DB-wide DeleteAllMacHosts teardown
+	// — both collide on the shared package DB, so it runs on a per-test clone.
+	database, cfg := newIsolatedRiverTestDB(t, ctx)
 	cfg.External.APIKey = macHostTestKey
 	cfg.Features.EnableEventBusIngest = true
-
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
 
 	hostRepo := repository.NewMacHostRepository(database.Queries)
 	pairingRepo := repository.NewMacHostPairingTokenRepository(database.Queries)
@@ -104,12 +96,11 @@ func setupRawIngestEnv(t *testing.T) *ingestRawTestEnv {
 		TestOnly: true,
 	})
 	require.NoError(t, err)
-	require.NoError(t, riverClient.Start(ctx))
-	t.Cleanup(func() {
-		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = riverClient.Stop(stopCtx)
-	})
+	// The client is wired into the Bus/IngestService for InsertTx only;
+	// these tests enqueue and count river_job rows synchronously and never
+	// WORK jobs (workers are no-ops). InsertTx needs only PoolIsSet(), not a
+	// running client, so the client is deliberately never Started — avoiding
+	// the leadership-Elector teardown cost a per-test clone would multiply.
 
 	eventRepo := repository.NewEventRepository(database.Queries)
 	eventBus := events.NewBus(database.Pool, riverClient, eventRepo)
@@ -219,7 +210,7 @@ func setupRawIngestEnv(t *testing.T) *ingestRawTestEnv {
 			"messaging_aggregate_sweeper",
 		})
 		_, _ = database.Queries.DeleteEventsBySource(cleanCtx, "messages")
-		database.Close()
+		// database.Close() is owned by the clone helper's t.Cleanup.
 	})
 
 	return env
@@ -336,6 +327,7 @@ func (a adminRiverInserter) Insert(ctx context.Context, args river.JobArgs, opts
 // produces a staging row with matched_contact_id and one River job.
 func TestIngestRawMessage_HappyPath_StagesRowAndEnqueuesJob(t *testing.T) {
 	env := setupRawIngestEnv(t)
+	t.Parallel()
 	guid := "test-guid-" + uuid.NewString()
 	ev := buildRawMessageEvent(t, events.KindRawMessageReceived, env.pairedHostID,
 		guid, "chat-1", "+15551234567")
@@ -363,6 +355,7 @@ func TestIngestRawMessage_HappyPath_StagesRowAndEnqueuesJob(t *testing.T) {
 // the same guid returns duplicate=1 and produces no new staging row.
 func TestIngestRawMessage_Duplicate_DetectedAndSkipped(t *testing.T) {
 	env := setupRawIngestEnv(t)
+	t.Parallel()
 	guid := "test-guid-" + uuid.NewString()
 	ev := buildRawMessageEvent(t, events.KindRawMessageReceived, env.pairedHostID,
 		guid, "chat-1", "+15551234567")
@@ -392,6 +385,7 @@ func TestIngestRawMessage_Duplicate_DetectedAndSkipped(t *testing.T) {
 // produces NO aggregator River job for this row.
 func TestIngestRawMessage_UnmatchedPeer_StagedWithoutContactNoJob(t *testing.T) {
 	env := setupRawIngestEnv(t)
+	t.Parallel()
 	guid := "test-guid-" + uuid.NewString()
 	ev := buildRawMessageEvent(t, events.KindRawMessageReceived, env.pairedHostID,
 		guid, "chat-x", "+15559999999") // not in contact_method
@@ -413,6 +407,7 @@ func TestIngestRawMessage_UnmatchedPeer_StagedWithoutContactNoJob(t *testing.T) 
 // X-Mac-Host-ID) are REJECTED per-event with HOST_ONLY_REQUIRES_HOST_AUTH.
 func TestIngestRawMessage_GlobalKeyPath_RejectedWithCode(t *testing.T) {
 	env := setupRawIngestEnv(t)
+	t.Parallel()
 	guid := "test-guid-" + uuid.NewString()
 	ev := buildRawMessageEvent(t, events.KindRawMessageReceived, uuid.New(),
 		guid, "chat-1", "+15551234567")
@@ -432,6 +427,7 @@ func TestIngestRawMessage_GlobalKeyPath_RejectedWithCode(t *testing.T) {
 // UNSUPPORTED_HOST_AUTH_KIND.
 func TestIngestRawMessage_HostAuthForeignKind_Rejected(t *testing.T) {
 	env := setupRawIngestEnv(t)
+	t.Parallel()
 	now := accelerated.GetCurrentTime()
 	payload, err := events.Marshal(events.KindCalendarAttended, events.CalendarAttendedPayload{
 		Version:    1,
@@ -463,6 +459,7 @@ func TestIngestRawMessage_HostAuthForeignKind_Rejected(t *testing.T) {
 // is REJECTED with PAYLOAD_INVARIANT.
 func TestIngestRawMessage_PayloadHostMismatch_Rejected(t *testing.T) {
 	env := setupRawIngestEnv(t)
+	t.Parallel()
 	guid := "test-guid-" + uuid.NewString()
 	otherHost := uuid.New()
 	ev := buildRawMessageEvent(t, events.KindRawMessageReceived, otherHost,
@@ -484,6 +481,7 @@ func TestIngestRawMessage_PayloadHostMismatch_Rejected(t *testing.T) {
 // MISSING_FIELD.
 func TestIngestRawMessage_MissingSourceID_Rejected(t *testing.T) {
 	env := setupRawIngestEnv(t)
+	t.Parallel()
 	ev := buildRawMessageEvent(t, events.KindRawMessageReceived, env.pairedHostID,
 		"guid-some", "chat-1", "+15551234567")
 	ev["source_id"] = ""
@@ -502,6 +500,7 @@ func TestIngestRawMessage_MissingSourceID_Rejected(t *testing.T) {
 // with an out-of-set message_type is REJECTED at the handler.
 func TestIngestRawMessage_InvalidMessageType_Rejected(t *testing.T) {
 	env := setupRawIngestEnv(t)
+	t.Parallel()
 	guid := "test-guid-" + uuid.NewString()
 	now := accelerated.GetCurrentTime()
 	p := events.RawMessageReceivedPayload{
@@ -538,6 +537,7 @@ func TestIngestRawMessage_InvalidMessageType_Rejected(t *testing.T) {
 // exactly ONE aggregator River job (per-batch dedup).
 func TestIngestRawMessage_BatchDedupesAggregatorJobs(t *testing.T) {
 	env := setupRawIngestEnv(t)
+	t.Parallel()
 	mkEv := func() map[string]any {
 		return buildRawMessageEvent(t, events.KindRawMessageReceived, env.pairedHostID,
 			"test-guid-"+uuid.NewString(), "chat-1", "+15551234567")
@@ -557,6 +557,7 @@ func TestIngestRawMessage_BatchDedupesAggregatorJobs(t *testing.T) {
 // added that matches it.
 func TestIngestRawMessage_AdminRematch_MatchesAfterContactAdded(t *testing.T) {
 	env := setupRawIngestEnv(t)
+	t.Parallel()
 	guid := "test-guid-" + uuid.NewString()
 	// Step 1 — POST a raw_message with an unknown peer.
 	ev := buildRawMessageEvent(t, events.KindRawMessageReceived, env.pairedHostID,

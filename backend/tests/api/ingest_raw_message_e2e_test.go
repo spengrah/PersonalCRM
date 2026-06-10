@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 	"time"
 
@@ -14,7 +13,6 @@ import (
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/auth"
-	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/consumer"
 	"personal-crm/backend/internal/consumer/consumerjobs"
 	"personal-crm/backend/internal/db"
@@ -49,22 +47,17 @@ import (
 // without it we could ship a path that stages rows but never turns
 // them into interactions.
 func TestIngestRawMessage_E2E_StagesAggregatesAndCreatesInteraction(t *testing.T) {
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	t.Parallel()
 
 	ctx := context.Background()
-	cfg := config.TestConfig()
-	cfg.Database.URL = databaseURL
+	// Bucket B: this is the one func that genuinely WORKS jobs (real
+	// aggregator + recorder, polls for the worked result) AND asserts
+	// DB-wide (CountInteractionsByIDContactAndSource) + pairs the singleton
+	// mac_host — so it runs on a per-test clone. The clone helper sets
+	// WorkerConcurrency=2 (>=1), so the old `<= 0` guard is moot.
+	database, cfg := newIsolatedRiverTestDB(t, ctx)
 	cfg.External.APIKey = macHostTestKey
 	cfg.Features.EnableEventBusIngest = true
-	if cfg.River.WorkerConcurrency <= 0 {
-		cfg.River.WorkerConcurrency = 4
-	}
-
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
 
 	// Repos
 	hostRepo := repository.NewMacHostRepository(database.Queries)
@@ -224,7 +217,9 @@ func TestIngestRawMessage_E2E_StagesAggregatesAndCreatesInteraction(t *testing.T
 			"followup_manager",
 		})
 		_, _ = database.Queries.DeleteEventsBySource(cleanCtx, "messages")
-		database.Close()
+		// database.Close() is owned by the clone helper's t.Cleanup. The
+		// riverClient.Stop above runs first (registered later, LIFO) so the
+		// Elector resigns against a still-live pool.
 	})
 
 	// POST the raw_message event.
