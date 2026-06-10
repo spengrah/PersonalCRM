@@ -22,11 +22,9 @@ package tests
 import (
 	"context"
 	"errors"
-	"os"
 	"testing"
 	"time"
 
-	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/google"
@@ -62,18 +60,9 @@ func newDiscoveryEnv(t *testing.T) *discoveryEnv {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	// Per-test isolated clone: the live consumer drains a private river_job.
 	ctx := context.Background()
-	require.NoError(t, db.RunMigrations(ctx, databaseURL, getMigrationsPath()))
-
-	cfg := config.TestConfig()
-	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	commsRepo := repository.NewCommsMessageRepository(database.Queries)
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -184,6 +173,7 @@ func discoverySyncState(accountID string) *repository.SyncState {
 
 // 1. KEY REGRESSION: discovery runs between fetch and storage.
 func TestDiscovery_RunsBetweenFetchAndStorage(t *testing.T) {
+	t.Parallel()
 	e := newDiscoveryEnv(t)
 	e.wireDiscoverer()
 	prefix := e.gen.Prefix()
@@ -241,6 +231,7 @@ func TestDiscovery_RunsBetweenFetchAndStorage(t *testing.T) {
 
 // 2. Link a produced candidate → method added → rematch dispatched.
 func TestDiscovery_LinkAddsMethodAndDispatchesRematch(t *testing.T) {
+	t.Parallel()
 	e := newDiscoveryEnv(t)
 	e.wireDiscoverer()
 	prefix := e.gen.Prefix()
@@ -322,6 +313,7 @@ func TestDiscovery_LinkAddsMethodAndDispatchesRematch(t *testing.T) {
 // row. Drive the failure via a fake external repo whose Upsert errors for the
 // qualifying address.
 func TestDiscovery_ErrorNonFatalToSync(t *testing.T) {
+	t.Parallel()
 	e := newDiscoveryEnv(t)
 	prefix := e.gen.Prefix()
 

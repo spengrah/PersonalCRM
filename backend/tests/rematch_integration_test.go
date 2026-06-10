@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
@@ -51,20 +50,10 @@ func setupRematchEnv(t *testing.T) *rematchTestEnv {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
-
-	// Migrations are applied once by TestMain.
-
-	cfg := config.TestConfig()
-	cfg.Database.URL = databaseURL
-
+	// Per-test isolated clone: the live rematch dispatcher worker drains a
+	// private river_job.
 	ctx := context.Background()
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
@@ -170,6 +159,7 @@ func seedCalendarEventWithAttendee(t *testing.T, env *rematchTestEnv, accountID,
 }
 
 func TestRematch_CalendarPastEvent_RecordsInteraction(t *testing.T) {
+	t.Parallel()
 	env := setupRematchEnv(t)
 
 	contact := env.newContact(t)
@@ -210,6 +200,7 @@ func TestRematch_CalendarPastEvent_RecordsInteraction(t *testing.T) {
 }
 
 func TestRematch_CalendarFutureEvent_NoInteraction(t *testing.T) {
+	t.Parallel()
 	env := setupRematchEnv(t)
 
 	contact := env.newContact(t)
@@ -242,6 +233,7 @@ func TestRematch_CalendarFutureEvent_NoInteraction(t *testing.T) {
 }
 
 func TestRematch_CalendarCaseInsensitiveEmailMatch(t *testing.T) {
+	t.Parallel()
 	env := setupRematchEnv(t)
 
 	contact := env.newContact(t)
@@ -267,6 +259,7 @@ func TestRematch_CalendarCaseInsensitiveEmailMatch(t *testing.T) {
 }
 
 func TestRematch_CalendarIdempotent(t *testing.T) {
+	t.Parallel()
 	env := setupRematchEnv(t)
 
 	contact := env.newContact(t)
@@ -321,6 +314,7 @@ func TestRematch_CalendarIdempotent(t *testing.T) {
 }
 
 func TestRematch_CalendarMarksGcalAttendeeExternalContactMatched(t *testing.T) {
+	t.Parallel()
 	env := setupRematchEnv(t)
 
 	contact := env.newContact(t)
@@ -366,6 +360,7 @@ func TestRematch_CalendarMarksGcalAttendeeExternalContactMatched(t *testing.T) {
 // verify messages were linked. Aggregation correctness is owned by the
 // existing aggregation tests.
 func TestRematch_TelegramUsernameMatch(t *testing.T) {
+	t.Parallel()
 	env := setupRematchEnv(t)
 
 	// Stand up the telegram handler stack — we register the username handler
@@ -442,6 +437,7 @@ func TestRematch_TelegramUsernameMatch(t *testing.T) {
 }
 
 func TestRematch_NoHandlerForType_ReturnsNilJobID(t *testing.T) {
+	t.Parallel()
 	env := setupRematchEnv(t)
 
 	// Only the calendar (email) handler is registered in the base env;
@@ -459,6 +455,7 @@ func TestRematch_NoHandlerForType_ReturnsNilJobID(t *testing.T) {
 // job. Only the email handler is registered; adding a phone method
 // must produce uuid.Nil.
 func TestRematch_Publisher_NoHandler_ReturnsNilJobID(t *testing.T) {
+	t.Parallel()
 	env := setupRematchEnv(t)
 
 	// CreateContact with a phone-only method — no handler registered
@@ -515,6 +512,7 @@ func registerTelegramHandlers(t *testing.T, env *rematchTestEnv) *repository.Tel
 }
 
 func TestRematch_TelegramPhoneMatch(t *testing.T) {
+	t.Parallel()
 	env := setupRematchEnv(t)
 	messageRepo := registerTelegramHandlers(t, env)
 
@@ -566,6 +564,7 @@ func TestRematch_TelegramPhoneMatch(t *testing.T) {
 }
 
 func TestRematch_ConcurrentJobs_PerContactMutex(t *testing.T) {
+	t.Parallel()
 	env := setupRematchEnv(t)
 
 	contact := env.newContact(t)
@@ -604,6 +603,7 @@ func TestRematch_ConcurrentJobs_PerContactMutex(t *testing.T) {
 }
 
 func TestRematch_RescanContact_RunsForAllMethods(t *testing.T) {
+	t.Parallel()
 	env := setupRematchEnv(t)
 
 	contact := env.newContact(t)
@@ -643,6 +643,7 @@ func TestRematch_RescanContact_RunsForAllMethods(t *testing.T) {
 }
 
 func TestRematch_RescanContact_UnknownContactReturnsNotFound(t *testing.T) {
+	t.Parallel()
 	env := setupRematchEnv(t)
 
 	_, err := env.contactSvc.RescanRematch(env.ctx, uuid.New())
@@ -657,6 +658,7 @@ func TestRematch_RescanContact_UnknownContactReturnsNotFound(t *testing.T) {
 // prevent duplicate interactions even though the two paths overlap.
 // Regression test for plan Test Case 5.
 func TestRematch_TelegramRematchPlusPostImportHook_NoDuplicateInteraction(t *testing.T) {
+	t.Parallel()
 	env := setupRematchEnv(t)
 
 	// Build the shared matcher + aggregator — the manager normally owns these.
@@ -748,6 +750,7 @@ func TestRematch_TelegramRematchPlusPostImportHook_NoDuplicateInteraction(t *tes
 }
 
 func TestRematch_ContactServiceUpdateContact_FiresForNewMethodOnly(t *testing.T) {
+	t.Parallel()
 	env := setupRematchEnv(t)
 
 	existingEmail := "existing@example.com"

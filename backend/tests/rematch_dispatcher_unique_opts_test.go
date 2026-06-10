@@ -2,12 +2,9 @@ package tests
 
 import (
 	"context"
-	"os"
 	"testing"
 
 	"personal-crm/backend/internal/accelerated"
-	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/repository"
 
@@ -31,24 +28,16 @@ import (
 // Companion test rematch_event_dedup_test.go covers the first layer
 // (same source_id → event.source_id unique).
 func TestRematch_RiverUniqueOpts_DedupsByContactAndJobID(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
 
-	cfg := config.TestConfig()
-	cfg.Database.URL = databaseURL
-	cfg.Database.MigrationsPath = getMigrationsPath()
-
+	// Per-test isolated clone: this client exercises River UniqueOpts dedup
+	// (the count is already (contactID, jobID)-scoped, so it doesn't collide
+	// on the shared DB; the clone keeps the cluster uniform).
 	ctx := context.Background()
-	require.NoError(t, db.RunMigrations(ctx, cfg.Database.URL, cfg.Database.MigrationsPath))
-
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	// Noop worker for rematch_dispatcher so river accepts the kind.
 	// We assert row counts, not handler execution.

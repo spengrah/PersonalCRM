@@ -27,14 +27,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
-	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/google"
@@ -66,18 +64,9 @@ func newGmailProviderEnv(t *testing.T) *gmailProviderEnv {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	// Per-test isolated clone: the live consumer drains a private river_job.
 	ctx := context.Background()
-	require.NoError(t, db.RunMigrations(ctx, databaseURL, getMigrationsPath()))
-
-	cfg := config.TestConfig()
-	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	commsRepo := repository.NewCommsMessageRepository(database.Queries)
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -310,6 +299,7 @@ func expectCursorAtLeast(t *testing.T, cursor string, minEpoch int64) gmailCurso
 // --- full sweep → content rows + events ---
 
 func TestGmailProvider_FullSweep_ContentAndEvents(t *testing.T) {
+	t.Parallel()
 	e := newGmailProviderEnv(t)
 	prefix := e.gen.Prefix()
 	me := prefix + "me@synthetic.example"
@@ -367,6 +357,7 @@ func TestGmailProvider_FullSweep_ContentAndEvents(t *testing.T) {
 // --- cross-chunk seen dedup at sweep level ---
 
 func TestGmailProvider_CrossChunkSeenDedup(t *testing.T) {
+	t.Parallel()
 	e := newGmailProviderEnv(t)
 	prefix := e.gen.Prefix()
 	me := prefix + "me@synthetic.example"
@@ -402,6 +393,7 @@ func TestGmailProvider_CrossChunkSeenDedup(t *testing.T) {
 // --- match-only (unknown participant never creates a contact) ---
 
 func TestGmailProvider_MatchOnly_NoContactCreated(t *testing.T) {
+	t.Parallel()
 	e := newGmailProviderEnv(t)
 	prefix := e.gen.Prefix()
 	me := prefix + "me@synthetic.example"
@@ -429,6 +421,7 @@ func TestGmailProvider_MatchOnly_NoContactCreated(t *testing.T) {
 // --- cursor-overlap idempotency ---
 
 func TestGmailProvider_CursorOverlapIdempotent(t *testing.T) {
+	t.Parallel()
 	e := newGmailProviderEnv(t)
 	prefix := e.gen.Prefix()
 	me := prefix + "me@synthetic.example"
@@ -456,6 +449,7 @@ func TestGmailProvider_CursorOverlapIdempotent(t *testing.T) {
 // --- publish-before-mutate ---
 
 func TestGmailProvider_PublishBeforeMutate_RollsBack(t *testing.T) {
+	t.Parallel()
 	e := newGmailProviderEnv(t)
 	prefix := e.gen.Prefix()
 	me := prefix + "me@synthetic.example"
@@ -477,6 +471,7 @@ func TestGmailProvider_PublishBeforeMutate_RollsBack(t *testing.T) {
 // --- nomsgid fallback persistence ---
 
 func TestGmailProvider_NomsgidFallback(t *testing.T) {
+	t.Parallel()
 	e := newGmailProviderEnv(t)
 	prefix := e.gen.Prefix()
 	me := prefix + "me@synthetic.example"
@@ -504,6 +499,7 @@ func TestGmailProvider_NomsgidFallback(t *testing.T) {
 // --- cursor edge cases ---
 
 func TestGmailProvider_AllBystanderSweepAdvancesCursor(t *testing.T) {
+	t.Parallel()
 	e := newGmailProviderEnv(t)
 	prefix := e.gen.Prefix()
 	me := prefix + "me@synthetic.example"
@@ -527,6 +523,7 @@ func TestGmailProvider_AllBystanderSweepAdvancesCursor(t *testing.T) {
 }
 
 func TestGmailProvider_ZeroFetchedAdvancesCompletedWindows(t *testing.T) {
+	t.Parallel()
 	e := newGmailProviderEnv(t)
 	prefix := e.gen.Prefix()
 	me := prefix + "me@synthetic.example"
@@ -551,6 +548,7 @@ func TestGmailProvider_ZeroFetchedAdvancesCompletedWindows(t *testing.T) {
 }
 
 func TestGmailProvider_CatchUpScansSuccessiveWindowsInOneRun(t *testing.T) {
+	t.Parallel()
 	e := newGmailProviderEnv(t)
 	prefix := e.gen.Prefix()
 	me := prefix + "me@synthetic.example"
@@ -606,6 +604,7 @@ func TestGmailProvider_CatchUpScansSuccessiveWindowsInOneRun(t *testing.T) {
 }
 
 func TestGmailProvider_BoundaryOverlapSkipsOnlySeenMessageIDs(t *testing.T) {
+	t.Parallel()
 	e := newGmailProviderEnv(t)
 	prefix := e.gen.Prefix()
 	me := prefix + "me@synthetic.example"
@@ -632,6 +631,7 @@ func TestGmailProvider_BoundaryOverlapSkipsOnlySeenMessageIDs(t *testing.T) {
 }
 
 func TestGmailProvider_HardFailureLeavesCursorUnchanged(t *testing.T) {
+	t.Parallel()
 	e := newGmailProviderEnv(t)
 	prefix := e.gen.Prefix()
 	me := prefix + "me@synthetic.example"
@@ -662,6 +662,7 @@ func TestGmailProvider_HardFailureLeavesCursorUnchanged(t *testing.T) {
 // --- nil-account guard ---
 
 func TestGmailProvider_NilAccount_Errors(t *testing.T) {
+	t.Parallel()
 	e := newGmailProviderEnv(t)
 	state := &repository.SyncState{Source: "email"}
 	result, err := e.provider.Sync(e.ctx, state, nil)
@@ -672,6 +673,7 @@ func TestGmailProvider_NilAccount_Errors(t *testing.T) {
 // --- cross-account provenance set-union MERGE ---
 
 func TestGmailProvider_CrossAccountProvenanceMerge(t *testing.T) {
+	t.Parallel()
 	e := newGmailProviderEnv(t)
 	prefix := e.gen.Prefix()
 	accountX := prefix + "x@synthetic.example"
@@ -723,6 +725,7 @@ func TestGmailProvider_CrossAccountProvenanceMerge(t *testing.T) {
 // a completed window, and (d) be idempotent on a second sweep with the returned
 // cursor.
 func TestGmailProvider_Onboarding_EmptyCursor_BackfillSince(t *testing.T) {
+	t.Parallel()
 	e := newGmailProviderEnv(t)
 	prefix := e.gen.Prefix()
 	me := prefix + "me@synthetic.example"

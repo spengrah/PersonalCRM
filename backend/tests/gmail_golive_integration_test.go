@@ -21,7 +21,6 @@ package tests
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
@@ -40,14 +39,14 @@ import (
 // TestGmailGoLive_RegisteredProvider_SchedulerSweep_ProducesInteractionsAndCadence
 // is the phase-5 go-live acceptance test.
 func TestGmailGoLive_RegisteredProvider_SchedulerSweep_ProducesInteractionsAndCadence(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	// Per-test isolated clone: the live email consumer + scheduler sweep
+	// drain a private river_job.
 	ctx := context.Background()
-	database, _ := newEventBusTestDB(t, ctx)
+	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	commsRepo := repository.NewCommsMessageRepository(database.Queries)
 	contactRepo := repository.NewContactRepository(database.Queries)
