@@ -7,7 +7,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 	"time"
 
@@ -15,7 +14,6 @@ import (
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/auth"
-	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/consumer"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
@@ -113,19 +111,13 @@ func (f *failingPhoneCallWriter) MarkProcessedTx(ctx context.Context, tx pgx.Tx,
 func setupPhoneCallIngestEnv(t *testing.T) *phoneCallIngestEnv {
 	t.Helper()
 
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-
 	ctx := context.Background()
-	cfg := config.TestConfig()
-	cfg.Database.URL = databaseURL
+	// Records interactions INLINE (no async worker), but pairs the singleton
+	// mac_host with a DB-wide DeleteAllMacHosts teardown that collides on the
+	// shared package DB, so it runs on a per-test clone.
+	database, cfg := newIsolatedRiverTestDB(t, ctx)
 	cfg.External.APIKey = macHostTestKey
 	cfg.Features.EnableEventBusIngest = true
-
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
 
 	hostRepo := repository.NewMacHostRepository(database.Queries)
 	pairingRepo := repository.NewMacHostPairingTokenRepository(database.Queries)
@@ -162,12 +154,11 @@ func setupPhoneCallIngestEnv(t *testing.T) *phoneCallIngestEnv {
 		TestOnly: true,
 	})
 	require.NoError(t, err)
-	require.NoError(t, riverClient.Start(ctx))
-	t.Cleanup(func() {
-		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = riverClient.Stop(stopCtx)
-	})
+	// The client is wired for InsertTx / FollowUpManager only; handleCall
+	// records interactions INLINE (publish → inline CadenceUpdater /
+	// FollowUpManager HandleEvent), so no job is ever worked. InsertTx needs
+	// only PoolIsSet(), not a running client, so it is deliberately never
+	// Started — avoiding the leadership-Elector teardown cost.
 
 	eventBus := events.NewBus(database.Pool, riverClient, eventRepo)
 	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, eventBus, nil)
@@ -309,7 +300,7 @@ func setupPhoneCallIngestEnv(t *testing.T) *phoneCallIngestEnv {
 		_ = contactRepo.HardDeleteContact(cleanCtx, env.seededContact)
 		_, _ = database.Queries.DeleteAllMacHosts(cleanCtx)
 		_, _ = database.Queries.DeleteAllPairingTokens(cleanCtx)
-		database.Close()
+		// database.Close() is owned by the clone helper's t.Cleanup.
 	})
 
 	return env
@@ -401,6 +392,7 @@ func TestIngestCall_Inbound_RecordsInteractionAndBumpsLastContacted(t *testing.T
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	env := setupPhoneCallIngestEnv(t)
 	ctx := context.Background()
 
@@ -469,6 +461,7 @@ func TestIngestCall_Outbound_BumpsLastOutreachAt(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	env := setupPhoneCallIngestEnv(t)
 	ctx := context.Background()
 
@@ -523,6 +516,7 @@ func TestIngestCall_MissedInboundNoVoicemail_NoInteractionWritten(t *testing.T) 
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	env := setupPhoneCallIngestEnv(t)
 	ctx := context.Background()
 
@@ -560,6 +554,7 @@ func TestIngestCall_UpsertFailure_RollsBackBatch(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	env := setupPhoneCallIngestEnv(t)
 	ctx := context.Background()
 	env.failWriter.failOnUpsert = errors.New("injected upsert failure")
@@ -589,6 +584,7 @@ func TestIngestCall_MarkProcessedFailure_RollsBackBatch(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	env := setupPhoneCallIngestEnv(t)
 	ctx := context.Background()
 	env.failWriter.failOnMarkProcess = errors.New("injected mark-processed failure")
@@ -621,6 +617,7 @@ func TestIngestCall_VersionTooHigh_Rejected(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	env := setupPhoneCallIngestEnv(t)
 
 	callID := env.sourcePrefix + "vhigh"
