@@ -110,5 +110,7 @@ echo "--- pre-push phase classifier / failure-propagation guard ---"
 bash scripts/hooks/test/test-pre-push-phases.sh || fail=1
 echo "--- Makefile adaptive -p / CI-pin render guard ---"
 bash scripts/ci/test-parallelism-render-guard.sh || fail=1
+echo "--- repo-hygiene check guard ---"
+bash scripts/hooks/test/test-repo-hygiene-check.sh || fail=1
 
 [[ "$fail" -eq 0 ]] && { echo "ALL PASS"; exit 0; } || { echo "FAILURES"; exit 1; }
