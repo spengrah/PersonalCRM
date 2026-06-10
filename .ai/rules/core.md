@@ -60,8 +60,6 @@ See `.ai/rules/code-review.md` for details
 Handler → Service → Repository → sqlc → PostgreSQL
 ```
 
-**Key Rule:** Never skip layers. Handlers should not call DB directly.
-
 See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full sequence.
 
 ## Common Gotchas
@@ -74,14 +72,13 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 | `sqlc generate` | Use `make sqlc` (sqlc is in ~/go/bin) |
 | Hand-rolling integration-test fixtures (raw SQL, ad-hoc inserts) | Prefer the synthetic toolkit factories/harness (`synthetic.NewHarnessForNamespace`, `migrationGenerator`/`seedMigrationContact`) — see `.ai/patterns/synthetic-seed-toolkit.md` and `.ai/rules/testing.md`. Raw SQL stays banned in ALL Go code (production + tests + fixtures); if the toolkit can't express a fixture, add a test-only sqlc query (e.g., `InsertFooAtTime`) + repository wrapper rather than inlining `pool.Exec(ctx, "INSERT ...")`. (Raw SQL is fine when it's the *subject* under test, e.g. the migration-runner tests in `integration_test.go`.) |
 | Calling `queries.X()` from handler | Call `repo.X()` instead |
-| Using `time.Now()` | Use `accelerated.GetCurrentTime()` |
 | Missing `deleted_at IS NULL` in queries | All queries must filter soft deletes |
 | Comparing errors with `==` | Use `errors.Is(err, db.ErrNotFound)` |
 | Querying DB directly | `docker exec crm-postgres psql -U crm_user -d personal_crm -c "..."` |
 | Assuming repository method names | Read the repository file first |
 | Not building after `make sqlc` | Always run `go build ./cmd/crm-api` to verify compilation |
 | sqlc changed types after regeneration | Update repository to use `pgtype.X{Value: v, Valid: true}` wrappers |
-| Assuming all tables have `updated_at` | Only contact, contact_method, note, time_entry, calendar_event have it |
+| Assuming all tables have `updated_at` | It's per-table opt-in (explicit column + `update_updated_at_column()` trigger); many tables lack it (e.g. `tag`, `interaction`, `reminder`, `connection`). Check the table's migration before selecting or setting `updated_at` |
 | `git add -A` includes binaries | Review `git status` before commit, exclude `backend/crm-api` |
 | Merging PRs with UI changes | Never merge UI PRs autonomously - wait for human review |
 | `git add path/[id]/file` fails | Use quotes: `git add "path/[id]/file"` (bash interprets brackets as globs) |
@@ -100,8 +97,6 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 | Adding settings hooks without test-map entry | Add new hooks (e.g., use-todoist-accounts.ts) to `frontend/tests/e2e/test-map.json` with `@area:settings` |
 | Accessing `cfg.Frontend.URL` | Use `cfg.CORS.FrontendURL` - there is no `Frontend` config section |
 | Redefining helper functions in new repository files | Use existing helpers from `repository/conversions.go` (uuidToPgUUID, stringToPgText, timeToPgTimestamptz) |
-| Using embedded field selectors like `result.EmbeddedType.Field` | Use `result.Field` - Go promotes embedded fields and staticcheck QF1008 prefers the shorter form |
-| Capitalizing Go error messages | Use lowercase: `fmt.Errorf("todoist settings not configured")` per ST1005 |
 | List display and navigation use different sort defaults | Extract DEFAULT_SORT_FIELD/ORDER constants; use in useState, buildContactUrl, and detail page listContext |
 | SQL queries without ORDER BY for "unsorted" case | Always provide deterministic ordering; arbitrary DB order breaks navigation consistency |
 | E2E `getByText` in strict mode with non-unique values | Use `.first()` or scope to specific row when DB may contain multiple matches from previous runs. (Not yet retired: E5 migrated the backend Go suite, not Playwright; a future per-worker-namespaced scenario catalog will reduce this.) |
@@ -113,6 +108,7 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 | Empty if blocks with only comments | Staticcheck SA9003 flags empty branches - remove block entirely or add actual code |
 | New API module with custom URL construction | Use shared `apiClient` from `lib/api-client.ts` - include `/api/v1` in endpoint paths |
 | Form inputs without explicit text color | Add `text-gray-900 placeholder-gray-400` - browser defaults appear washed out |
+| `leading-7` + `truncate` on a heading clips descenders (y, g, j, p, q) | Use `leading-normal` for adequate line height on truncated text |
 | Service verifying entity exists before query | Skip if FK constraints guarantee validity - adds unnecessary latency |
 | React Query hooks in child components | Move to parent level to enable parallel loading - child mounting creates waterfall |
 | Todoist QuickAdd `note` parameter for descriptions | `note` creates comments, not descriptions - use two-step: QuickAdd then Sync API `item_update` |
@@ -168,40 +164,6 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 | Editing the Makefile integration recipes (`test-integration*` `-p`/`-parallel`) | The values come from `scripts/test-parallelism.sh` (single source of truth — don't inline a second formula); CI is pinned to `-parallel 4 -p 4` via `ifeq ($(GITHUB_ACTIONS),true)` and the render guard `scripts/ci/test-parallelism-render-guard.sh` asserts the CI render is byte-identical. Preserve both |
 | Adding a DB- or port-owning command to `.ai/pre-push.json` | The pre-push hook's `run_phases_parallel` runs LINT+GO+FRONTEND+FILTER concurrently and `test-e2e`-class commands EXCLUSIVELY last (e2e DROPs `personal_crm_test` + binds 3000/8080). Add the command's exclusivity marker to the hook classifier, or it defaults to the GO serial lane (safe-but-slow); never let a DB/port command run in the concurrent lane |
 | Local Postgres connection errors during `make test-integration` | Local `crm-postgres` is `max_connections=200` (matches CI); the first `docker compose up -d` after pulling recreates the container to apply it (named volume persists, dev data safe). Until recreated, `scripts/test-parallelism.sh` cleanly falls back to `-p 4` — no regression, just no speedup |
-
-### Never Do These
-
-```go
-// ❌ WRONG - time.Now() breaks time acceleration
-now := time.Now()
-
-// ✅ CORRECT
-now := accelerated.GetCurrentTime()
-```
-
-```go
-// ❌ WRONG - raw SQL in Go
-rows, err := db.Query("SELECT * FROM contact WHERE id = ?", id)
-
-// ✅ CORRECT - use sqlc
-contact, err := queries.GetContact(ctx, id)
-```
-
-```go
-// ❌ WRONG - handler calling queries directly
-contact, err := queries.GetContact(ctx, id)
-
-// ✅ CORRECT - go through repository
-contact, err := h.contactRepo.GetContact(ctx, id)
-```
-
-```tsx
-// ❌ WRONG - leading-7 with truncate clips descenders (y, g, j, p, q)
-<h2 className="leading-7 sm:text-3xl sm:truncate">Gregory</h2>
-
-// ✅ CORRECT - leading-normal provides adequate line height
-<h2 className="leading-normal sm:text-3xl sm:truncate">Gregory</h2>
-```
 
 ## Error Handling
 
