@@ -3,12 +3,10 @@ package tests
 import (
 	"context"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
-	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
@@ -62,20 +60,12 @@ func setupAggregationTest(t *testing.T) (
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
 
-	// Migrations are applied once by TestMain.
-
+	// Per-test isolated clone: the live InteractionRecorder worker drains a
+	// private river_job, and the fixed chat/message IDs these tests use no
+	// longer collide across parallel siblings.
 	ctx := context.Background()
-	cfg := config.TestConfig()
-	cfg.Database.URL = databaseURL
-
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	messageRepo := repository.NewTelegramMessageRepository(database.Queries)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
@@ -144,6 +134,7 @@ func insertTestMessage(t *testing.T, repo *repository.TelegramMessageRepository,
 }
 
 func TestAggregation_BatchOutboundBurst(t *testing.T) {
+	t.Parallel()
 	messageRepo, interactionRepo, _, _, engine, database := setupAggregationTest(t)
 	ctx := context.Background()
 
@@ -169,6 +160,7 @@ func TestAggregation_BatchOutboundBurst(t *testing.T) {
 }
 
 func TestAggregation_BatchMutualBridge(t *testing.T) {
+	t.Parallel()
 	messageRepo, interactionRepo, _, _, engine, database := setupAggregationTest(t)
 	ctx := context.Background()
 
@@ -191,6 +183,7 @@ func TestAggregation_BatchMutualBridge(t *testing.T) {
 }
 
 func TestAggregation_BatchNoChurnFollowUp(t *testing.T) {
+	t.Parallel()
 	// Batch mode should NOT create an outbound interaction first and then promote —
 	// it should directly create mutual. This test verifies by checking that exactly
 	// one interaction is created (not an outbound followed by a mutual update).
@@ -213,6 +206,7 @@ func TestAggregation_BatchNoChurnFollowUp(t *testing.T) {
 }
 
 func TestAggregation_ChatScoped(t *testing.T) {
+	t.Parallel()
 	messageRepo, interactionRepo, _, _, engine, database := setupAggregationTest(t)
 	ctx := context.Background()
 
@@ -237,6 +231,7 @@ func TestAggregation_ChatScoped(t *testing.T) {
 }
 
 func TestAggregation_IncrementalCoalescing(t *testing.T) {
+	t.Parallel()
 	messageRepo, interactionRepo, contactRepo, _, engine, _ := setupAggregationTest(t)
 	ctx := context.Background()
 
@@ -299,6 +294,7 @@ func TestAggregation_IncrementalCoalescing(t *testing.T) {
 }
 
 func TestAggregation_IncrementalReplyBridge(t *testing.T) {
+	t.Parallel()
 	messageRepo, interactionRepo, contactRepo, _, engine, _ := setupAggregationTest(t)
 	ctx := context.Background()
 
@@ -360,6 +356,7 @@ func TestAggregation_IncrementalReplyBridge(t *testing.T) {
 }
 
 func TestAggregation_IncrementalExplicitReplyBridge(t *testing.T) {
+	t.Parallel()
 	messageRepo, interactionRepo, _, _, engine, database := setupAggregationTest(t)
 	ctx := context.Background()
 
@@ -428,6 +425,7 @@ func TestAggregation_IncrementalExplicitReplyBridge(t *testing.T) {
 // non-null first/last names wins the DISTINCT ON, even if it's older. Ensures
 // a single aggregation pass picks the most-populated row.
 func TestListDistinctUnmatchedPeers_PrefersPopulatedNameRow(t *testing.T) {
+	t.Parallel()
 	messageRepo, _, _, _, _, database := setupAggregationTest(t)
 	ctx := context.Background()
 
@@ -503,6 +501,7 @@ func TestListDistinctUnmatchedPeers_PrefersPopulatedNameRow(t *testing.T) {
 // shape (blank strings instead of NULL) would keep winning the tiebreak and
 // the batch path would re-seed external_contact with blanks.
 func TestListDistinctUnmatchedPeers_TreatsBlankStringsAsAbsent(t *testing.T) {
+	t.Parallel()
 	messageRepo, _, _, _, _, database := setupAggregationTest(t)
 	ctx := context.Background()
 

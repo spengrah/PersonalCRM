@@ -38,6 +38,7 @@ import (
 // Stripe-based IDs (testStripe=2) keep this disjoint from the
 // inbound-coalesce (=1) and source-filter (=3) tests.
 func TestAggregation_IncrementalExplicitReplyBridge_CrossBatch(t *testing.T) {
+	t.Parallel()
 	messageRepo, interactionRepo, _, _, engine, database := setupAggregationTest(t)
 	ctx := context.Background()
 	eventRepo := repository.NewEventRepository(database.Queries)
