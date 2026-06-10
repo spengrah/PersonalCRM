@@ -18,8 +18,7 @@ import (
 // (or build a DB-wide-counting) River client. Sharing the package clone lets
 // TestOnly clients steal each other's jobs from river_job and makes DB-wide
 // river_job counts collide, so River-draining tests must isolate the whole DB.
-// Mirrors backend/tests/river_isolated_testdb_test.go (package tests); the two
-// are intentionally identical except for package + this comment.
+// The package tests equivalent lives in backend/tests/river_isolated_testdb_test.go.
 func newIsolatedRiverTestDB(t *testing.T, ctx context.Context) (*db.Database, *config.Config) {
 	t.Helper()
 

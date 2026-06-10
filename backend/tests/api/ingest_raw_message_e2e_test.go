@@ -50,10 +50,10 @@ func TestIngestRawMessage_E2E_StagesAggregatesAndCreatesInteraction(t *testing.T
 	t.Parallel()
 
 	ctx := context.Background()
-	// Bucket B: this is the one func that genuinely WORKS jobs (real
-	// aggregator + recorder, polls for the worked result) AND asserts
-	// DB-wide (CountInteractionsByIDContactAndSource) + pairs the singleton
-	// mac_host — so it runs on a per-test clone. The clone helper sets
+	// This func genuinely works jobs (real aggregator + recorder, polls for
+	// the worked result) AND asserts DB-wide
+	// (CountInteractionsByIDContactAndSource) + pairs the singleton mac_host,
+	// so it runs on an isolated per-test clone. The clone helper sets
 	// WorkerConcurrency=2 (>=1), so the old `<= 0` guard is moot.
 	database, cfg := newIsolatedRiverTestDB(t, ctx)
 	cfg.External.APIKey = macHostTestKey
@@ -140,7 +140,8 @@ func TestIngestRawMessage_E2E_StagesAggregatesAndCreatesInteraction(t *testing.T
 	ingestService := service.NewIngestService(database, bus, identityService, messagesRepo, riverClient, nil, hostRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 
-	gin.SetMode(gin.TestMode)
+	// gin mode is set once for the package in gin_test.go's init(); calling
+	// gin.SetMode here would race the global with parallel route registration.
 	router := gin.New()
 	router.Use(api.RequestIDMiddleware())
 	router.Use(api.LoggingMiddleware())

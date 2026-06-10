@@ -223,7 +223,8 @@ func setupPhoneCallIngestEnv(t *testing.T) *phoneCallIngestEnv {
 	)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 
-	gin.SetMode(gin.TestMode)
+	// gin mode is set once for the package in gin_test.go's init(); calling
+	// gin.SetMode here would race the global with parallel route registration.
 	router := gin.New()
 	router.Use(api.RequestIDMiddleware())
 	router.Use(api.LoggingMiddleware())
