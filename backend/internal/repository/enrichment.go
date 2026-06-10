@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"personal-crm/backend/internal/db"
@@ -118,7 +119,7 @@ func (r *EnrichmentRepository) GetByField(ctx context.Context, contactID uuid.UU
 		Field:     field,
 	})
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, err

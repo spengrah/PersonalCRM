@@ -9,7 +9,15 @@ linters:
     - forbidigo  # Forbid specific function calls
     - govet      # Go vet
     - errcheck   # Check error handling
+    - errorlint  # Forbid err == SentinelErr; require errors.Is/As
   settings:
+    errorlint:
+      # Comparison-only: enforce errors.Is over `err == ErrFoo`. We intentionally
+      # do NOT enable errorf (%w) or asserts here — those would force an unrelated
+      # codebase-wide sweep. Scope is exactly the "compare errors with ==" gotcha.
+      errorf: false
+      asserts: false
+      comparison: true
     forbidigo:
       forbid:
         - pattern: 'time\.Now'

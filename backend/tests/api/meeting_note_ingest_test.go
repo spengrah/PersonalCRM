@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -589,7 +590,7 @@ func findMeetingNoteRow(t *testing.T, env *meetingNoteIngestEnv, sessionUUID str
 	require.NoError(t, err)
 	defer func() { _ = tx.Rollback(ctx) }()
 	row, err := env.meetingRepo.GetMeetingNoteBySessionIDForUpdateTx(ctx, tx, sid)
-	if err == db.ErrNotFound {
+	if errors.Is(err, db.ErrNotFound) {
 		return nil
 	}
 	require.NoError(t, err)

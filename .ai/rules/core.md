@@ -73,7 +73,6 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 | Hand-rolling integration-test fixtures (raw SQL, ad-hoc inserts) | Prefer the synthetic toolkit factories/harness (`synthetic.NewHarnessForNamespace`, `migrationGenerator`/`seedMigrationContact`) — see `.ai/patterns/synthetic-seed-toolkit.md` and `.ai/rules/testing.md`. Raw SQL stays banned in ALL Go code (production + tests + fixtures); if the toolkit can't express a fixture, add a test-only sqlc query (e.g., `InsertFooAtTime`) + repository wrapper rather than inlining `pool.Exec(ctx, "INSERT ...")`. (Raw SQL is fine when it's the *subject* under test, e.g. the migration-runner tests in `integration_test.go`.) |
 | Calling `queries.X()` from handler | Call `repo.X()` instead |
 | Missing `deleted_at IS NULL` in queries | All queries must filter soft deletes |
-| Comparing errors with `==` | Use `errors.Is(err, db.ErrNotFound)` |
 | Querying DB directly | `docker exec crm-postgres psql -U crm_user -d personal_crm -c "..."` |
 | Assuming repository method names | Read the repository file first |
 | Not building after `make sqlc` | Always run `go build ./cmd/crm-api` to verify compilation |
