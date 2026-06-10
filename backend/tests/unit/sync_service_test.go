@@ -63,6 +63,7 @@ func TestSyncService_TriggerSync_UsesEnqueuerWhenSet(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping db-backed service test in short mode")
 	}
+	t.Parallel()
 	database, ctx := newServiceSuiteDB(t)
 
 	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
@@ -159,6 +160,7 @@ func TestSyncService_TriggerSync_DedupedIsNoError(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping db-backed service test in short mode")
 	}
+	t.Parallel()
 	database, ctx := newServiceSuiteDB(t)
 
 	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
@@ -268,6 +270,7 @@ func TestSyncService_TriggerSync_NoLongerReadsSyncingStatus(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping db-backed service test in short mode")
 	}
+	t.Parallel()
 	database, ctx := newServiceSuiteDB(t)
 
 	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)

@@ -79,6 +79,14 @@ func setupIngestTestRouter(t *testing.T, enableIngest bool) *ingestTestSetup {
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	cfg.Database.MigrationsPath = getMigrationsPath()
+	// This setup opens a fresh pool per test call against the shared package
+	// DB; with all 18 funcs now parallel, lower MaxConns so the concurrent
+	// pool count stays bounded. WorkerConcurrency drops to 1 (the client is
+	// never started, so concurrency is irrelevant) to keep Validate()'s
+	// MaxConns >= WorkerConcurrency+3 holding (1+3 <= 4).
+	cfg.Database.MaxConns = 4
+	cfg.Database.MinConns = 1
+	cfg.River.WorkerConcurrency = 1
 	cfg.External.APIKey = ingestTestAPIKey
 	cfg.Features.EnableEventBusIngest = enableIngest
 
@@ -103,14 +111,12 @@ func setupIngestTestRouter(t *testing.T, enableIngest bool) *ingestTestSetup {
 		TestOnly: true,
 	})
 	require.NoError(t, err)
-	startCtx, startCancel := context.WithTimeout(ctx, 10*time.Second)
-	defer startCancel()
-	require.NoError(t, client.Start(startCtx))
-	t.Cleanup(func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer stopCancel()
-		_ = client.Stop(stopCtx)
-	})
+	// The client is wired into the Bus/IngestService for InsertTx (which
+	// needs only PoolIsSet(), not a running client). These tests enqueue
+	// and count rows synchronously — they never WORK jobs (the registered
+	// workers are no-ops). Starting the client would spin up the leadership
+	// Elector whose teardown burns ~5s resigning against a closing pool, so
+	// we deliberately never Start it.
 
 	eventRepo := repository.NewEventRepository(database.Queries)
 	busFactory := func(repo events.EventRepository) *events.Bus {
@@ -126,7 +132,8 @@ func setupIngestTestRouter(t *testing.T, enableIngest bool) *ingestTestSetup {
 	ingestService := service.NewIngestService(database, eventBus, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 
-	gin.SetMode(gin.TestMode)
+	// gin mode is set once for the package in gin_test.go's init(); calling
+	// gin.SetMode here would race the global with parallel route registration.
 	router := gin.New()
 	router.Use(api.RequestIDMiddleware())
 	router.Use(api.LoggingMiddleware())
@@ -207,6 +214,7 @@ func TestIngest_ValidBatch(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 
 	source := uniqueIngestSource("valid-batch")
@@ -238,6 +246,7 @@ func TestIngest_AuthFailure_MissingKey(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 	batch := handlers.IngestBatchRequest{
 		Events: []handlers.IngestEventRequest{
@@ -253,6 +262,7 @@ func TestIngest_AuthFailure_InvalidKey(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 	batch := handlers.IngestBatchRequest{
 		Events: []handlers.IngestEventRequest{
@@ -268,6 +278,7 @@ func TestIngest_MalformedJSON(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 	w := postIngest(t, setup.router, setup.apiKey, []byte("{not json"))
 	require.Equal(t, http.StatusBadRequest, w.Code)
@@ -281,6 +292,7 @@ func TestIngest_MissingFields(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 
 	source := uniqueIngestSource("missing-fields")
@@ -352,6 +364,7 @@ func TestIngest_NullPayload(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 	source := uniqueIngestSource("null-payload")
 	nullEv := fmt.Sprintf(`{"source":%q,"source_id":%q,"kind":%q,"payload":null,"observed_at":"2026-04-10T12:00:00Z"}`,
@@ -381,6 +394,7 @@ func TestIngest_UnknownKind(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 	source := uniqueIngestSource("unknown-kind")
 
@@ -407,6 +421,7 @@ func TestIngest_PayloadStructurallyInvalid(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 	source := uniqueIngestSource("payload-invalid")
 
@@ -438,6 +453,7 @@ func TestIngest_BatchTooLarge(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 
 	// 501 events, each tiny. The batch-size check runs pre-validation so
@@ -457,6 +473,7 @@ func TestIngest_EmptyBatch(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 
 	// binding:"required" on Events []IngestEventRequest flags nil/missing.
@@ -471,6 +488,7 @@ func TestIngest_DuplicateInBatch(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 
 	source := uniqueIngestSource("dup-in-batch")
@@ -498,6 +516,7 @@ func TestIngest_DuplicateAcrossBatches(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 
 	source := uniqueIngestSource("dup-across")
@@ -537,6 +556,7 @@ func TestIngest_NullSourceID_NotDeduped(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 
 	source := uniqueIngestSource("null-sid")
@@ -569,6 +589,7 @@ func TestIngest_GateDisabled_Returns404(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	setup := setupIngestTestRouter(t, false)
 	batch := handlers.IngestBatchRequest{
 		Events: []handlers.IngestEventRequest{
@@ -586,6 +607,7 @@ func TestIngest_GateDisabled_NoKey_StillReturns404(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	setup := setupIngestTestRouter(t, false)
 	body := []byte(`{"events":[]}`)
 	w := postIngest(t, setup.router, "", body)
@@ -599,6 +621,7 @@ func TestIngest_MixedBatch(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 
 	source := uniqueIngestSource("mixed")
@@ -644,6 +667,7 @@ func TestIngest_BodyTooLarge_Returns413(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 
 	// Build a body > 8 MiB: an events array containing a single event with
@@ -693,6 +717,7 @@ func TestIngest_MidTxRollback_RollsBack_And_Returns500(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 
 	// Wire a new handler over a failing repo, mounted on a fresh router
@@ -704,7 +729,8 @@ func TestIngest_MidTxRollback_RollsBack_And_Returns500(t *testing.T) {
 
 	cfg := config.TestConfig()
 	cfg.External.APIKey = setup.apiKey
-	gin.SetMode(gin.TestMode)
+	// gin mode is set once for the package in gin_test.go's init(); calling
+	// gin.SetMode here would race the global with parallel route registration.
 	router := gin.New()
 	router.Use(api.RequestIDMiddleware())
 	router.Use(api.LoggingMiddleware())
