@@ -1,8 +1,21 @@
 #!/bin/bash
-# Unified pre-push hook: lint, swift (mac-daemon), test (parallel execution)
+# Unified pre-push hook: review-log + swift gate (precede), then a PARALLEL block.
 #
-# Reads configuration from .ai/pre-push.json
-# Runs enabled checks; blocks push if any required check fails
+# Reads configuration from .ai/pre-push.json. Runs enabled checks; blocks push
+# if any required check fails.
+#
+# Execution model (L3): review-log and the Swift gate run first (cheap / path-
+# gated fast-fail). Then four independent phases run CONCURRENTLY — LINT,
+# GO (test-unit && test-integration, the DB-owning long pole), FRONTEND, and
+# FILTER (pre-push filter unit tests) — each buffered to its own log. Once all
+# four pass, E2E runs EXCLUSIVELY and last, because make test-e2e-diff DROPs the
+# personal_crm_test database (the Go base/clone source) and binds ports
+# 3000/8080 — it must never overlap the Go integration lane.
+#
+# LINT is no longer a hard fast-fail gate BEFORE tests: it runs concurrent with
+# the Go pole and feeds the unified aggregate. Unlike the test phases, LINT is
+# NOT gated by should_skip_tests — it runs whenever lint is enabled (matching the
+# prior always-run-lint behavior).
 #
 # To bypass (not recommended): git push --no-verify
 
@@ -52,44 +65,35 @@ check_review_log() {
   echo "  [review] OK Claude review of ${head_sha:0:12}" >&2
 }
 
-# Run lint commands
-run_lint() {
-  local enabled=$(jq -r '.lint.enabled // false' "$CONFIG_FILE")
-  if [[ "$enabled" != "true" ]]; then
-    echo "SKIP" > "$LINT_RESULT"
-    return
-  fi
-
-  local count=$(jq '.lint.commands | length' "$CONFIG_FILE")
-  if [[ "$count" -eq 0 ]]; then
-    echo "SKIP" > "$LINT_RESULT"
-    return
-  fi
-
+# Run the lint commands and RETURN a real exit code (non-zero on a required
+# failure). Unlike the old run_lint, this does NOT write a result file and does
+# NOT swallow output: stdout/stderr flow through so the LINT phase log captures
+# diagnostics, and the non-zero return becomes the phase rc. Invoked as the LINT
+# phase command string (eval'd in run_phase's subshell, which inherits this
+# function). Caller checks .lint.enabled / command count before launching.
+run_lint_inner() {
+  local count
+  count=$(jq '.lint.commands | length' "$CONFIG_FILE")
   local failed=0
   for i in $(seq 0 $((count - 1))); do
-    local name=$(jq -r ".lint.commands[$i].name" "$CONFIG_FILE")
-    local cmd=$(jq -r ".lint.commands[$i].command" "$CONFIG_FILE")
-    local optional=$(jq -r ".lint.commands[$i].optional // false" "$CONFIG_FILE")
+    local name cmd optional
+    name=$(jq -r ".lint.commands[$i].name" "$CONFIG_FILE")
+    cmd=$(jq -r ".lint.commands[$i].command" "$CONFIG_FILE")
+    optional=$(jq -r ".lint.commands[$i].optional // false" "$CONFIG_FILE")
 
-    echo "  [lint] -> $name" >&2
-    if eval "$cmd" >/dev/null 2>&1; then
-      echo "  [lint] OK $name" >&2
+    echo "  [lint] -> $name"
+    if ( eval "$cmd" ); then
+      echo "  [lint] OK $name"
     else
       if [[ "$optional" == "true" ]]; then
-        echo "  [lint] WARN $name (optional)" >&2
+        echo "  [lint] WARN $name (optional)"
       else
-        echo "  [lint] FAIL $name" >&2
+        echo "  [lint] FAIL $name"
         failed=1
       fi
     fi
   done
-
-  if [[ "$failed" -eq 1 ]]; then
-    echo "FAIL" > "$LINT_RESULT"
-  else
-    echo "PASS" > "$LINT_RESULT"
-  fi
+  return $failed
 }
 
 # file_in_group <file> <group>: true (0) if <file> matches any glob under the
@@ -229,53 +233,240 @@ check_swift() {
   fi
 }
 
-# Run test commands
-run_tests() {
-  cd "$PROJECT_ROOT"  # Ensure correct directory in background
-  local enabled=$(jq -r '.test.enabled // false' "$CONFIG_FILE")
-  if [[ "$enabled" != "true" ]]; then
-    echo "SKIP" > "$TEST_RESULT"
-    return
-  fi
+# run_phase <log> <rcfile> <shell-command-string>
+# Runs the command string FOREGROUND in an isolating subshell, buffering all
+# output to <log> and writing the exit code to <rcfile>. The subshell isolates
+# any `cd` (e.g. "cd frontend && bun run lint") so it can never leak into a
+# sibling phase or the parent. The caller backgrounds it with a single `&`; the
+# helper does NOT self-background (double-backgrounding would orphan the rc-file
+# from `wait`). The rc-file is the single source of truth for pass/fail — the
+# aggregate never trusts `wait`'s multiplexed status.
+run_phase() {
+  local log="$1" rc="$2" cmd="$3"
+  # `set +e` inside the subshell so a failing command does NOT abort before the
+  # rc-file is written (the parent hook runs under `set -e`, which the subshell
+  # would otherwise inherit). The rc-file is the single source of truth.
+  ( set +e; eval "$cmd" >"$log" 2>&1; echo $? >"$rc" )
+}
 
-  # Check if we can skip tests
-  if should_skip_tests; then
+# classify_command <command-string>: echo the lane for a .test.commands[] entry.
+#   E2E        — matches "test-e2e"           (DROPs the DB + binds ports: EXCLUSIVE, last)
+#   CONCURRENT — matches "test-frontend" OR "test-pre-push-filters"
+#                (the only commands KNOWN to be DB-free AND port-free)
+#   GO         — matches "test-unit" OR "test-integration" (DB-owning serial lane)
+#   GO (default) — anything UNRECOGNIZED falls to the GO serial lane.
+# Contract: a new known-safe (DB-free, port-free) command MUST be added to the
+# CONCURRENT allowlist explicitly. Anything not on the allowlist is treated as
+# DB-owning and serialized — NEVER silently run concurrently (no DB collision).
+classify_command() {
+  local cmd="$1"
+  case "$cmd" in
+    *test-e2e*)                              echo "E2E" ;;
+    *test-frontend*|*test-pre-push-filters*) echo "CONCURRENT" ;;
+    *test-unit*|*test-integration*)          echo "GO" ;;
+    *)                                       echo "GO" ;;
+  esac
+}
+
+# Build the GO lane's command list from the GO-classified .test.commands[],
+# preserving each entry's `optional` flag and fast-fail-on-required semantics.
+# A compound `a && b` cannot express per-command optionality, so GO runs each
+# command sequentially: optional ones tolerate failure (`|| true`, logged WARN);
+# required ones fast-fail the lane (`|| return $?`). For today's two required GO
+# commands this reduces to `make test-unit && make test-integration`.
+run_go_lane() {
+  # $@ alternates: cmd optional cmd optional ...
+  local cmd optional
+  while [[ $# -ge 2 ]]; do
+    cmd="$1"; optional="$2"; shift 2
+    echo "  [test] -> GO: $cmd"
+    if [[ "$optional" == "true" ]]; then
+      ( eval "$cmd" ) || echo "  [test] WARN GO command failed (optional): $cmd"
+    else
+      ( eval "$cmd" ) || return $?
+    fi
+  done
+  return 0
+}
+
+# Print a phase's buffered log under a labeled banner.
+print_phase_log() {
+  local name="$1" log="$2"
+  echo "" >&2
+  echo "=== [phase] $name ===" >&2
+  [[ -f "$log" ]] && cat "$log" >&2
+}
+
+# run_phases_parallel: the L3 orchestrator. Replaces the old sequential
+# run_lint; <lint-gate>; run_tests flow. Launches LINT (if enabled) + GO +
+# FRONTEND + FILTER concurrently (the test phases only when tests are active),
+# waits, aggregates rc-files, then runs E2E EXCLUSIVELY last (only if all prior
+# phases passed and tests are active). Writes PASS/FAIL/SKIP to TEST_RESULT and
+# PASS/FAIL/SKIP to LINT_RESULT (for the Results summary). save_test_marker on a
+# full test pass.
+run_phases_parallel() {
+  cd "$PROJECT_ROOT"
+
+  # ---- Compute gating ONCE up front ----
+  local lint_enabled
+  lint_enabled=$(jq -r '.lint.enabled // false' "$CONFIG_FILE")
+  [[ "$lint_enabled" == "true" ]] && [[ "$(jq '.lint.commands | length' "$CONFIG_FILE")" -gt 0 ]] || lint_enabled="false"
+
+  local test_enabled
+  test_enabled=$(jq -r '.test.enabled // false' "$CONFIG_FILE")
+  local test_count
+  test_count=$(jq '.test.commands | length' "$CONFIG_FILE")
+
+  # tests_active = test.enabled AND commands present AND NOT should_skip_tests.
+  # (Mirrors the old run_tests: SKIP when disabled/empty; PASS-without-running
+  # when should_skip_tests.)
+  local tests_active="true"
+  if [[ "$test_enabled" != "true" ]] || [[ "$test_count" -eq 0 ]]; then
+    tests_active="false"
+    echo "SKIP" > "$TEST_RESULT"
+  elif should_skip_tests; then
+    tests_active="false"
     echo "  [test] OK Skipped (no trigger files changed since last pass)" >&2
     echo "PASS" > "$TEST_RESULT"
-    return
   fi
 
-  local count=$(jq '.test.commands | length' "$CONFIG_FILE")
-  if [[ "$count" -eq 0 ]]; then
-    echo "SKIP" > "$TEST_RESULT"
-    return
+  # ---- Buffered phase logs / rc-files ----
+  local LINT_LOG GO_LOG FE_LOG FILTER_LOG E2E_LOG
+  local LINT_RC GO_RC FE_RC FILTER_RC E2E_RC
+  LINT_LOG=$(mktemp); GO_LOG=$(mktemp); FE_LOG=$(mktemp); FILTER_LOG=$(mktemp); E2E_LOG=$(mktemp)
+  LINT_RC=$(mktemp); GO_RC=$(mktemp); FE_RC=$(mktemp); FILTER_RC=$(mktemp); E2E_RC=$(mktemp)
+  PHASE_TMPFILES="$LINT_LOG $GO_LOG $FE_LOG $FILTER_LOG $E2E_LOG $LINT_RC $GO_RC $FE_RC $FILTER_RC $E2E_RC"
+
+  # ---- Classify the test commands into lanes ----
+  local go_args=() fe_cmds=() filter_cmds=() e2e_cmds=()
+  if [[ "$tests_active" == "true" ]]; then
+    local i name cmd optional lane
+    for i in $(seq 0 $((test_count - 1))); do
+      name=$(jq -r ".test.commands[$i].name" "$CONFIG_FILE")
+      cmd=$(jq -r ".test.commands[$i].command" "$CONFIG_FILE")
+      optional=$(jq -r ".test.commands[$i].optional // false" "$CONFIG_FILE")
+      lane=$(classify_command "$cmd")
+      case "$lane" in
+        E2E)        e2e_cmds+=("$cmd") ;;
+        CONCURRENT)
+          if [[ "$cmd" == *test-frontend* ]]; then fe_cmds+=("$cmd"); else filter_cmds+=("$cmd"); fi ;;
+        GO)         go_args+=("$cmd" "$optional") ;;
+      esac
+    done
   fi
 
-  local failed=0
-  for i in $(seq 0 $((count - 1))); do
-    local name=$(jq -r ".test.commands[$i].name" "$CONFIG_FILE")
-    local cmd=$(jq -r ".test.commands[$i].command" "$CONFIG_FILE")
-    local optional=$(jq -r ".test.commands[$i].optional // false" "$CONFIG_FILE")
+  # ---- Launch concurrent phases (set +e fence: a non-zero background child
+  #      must never abort the parent before rc-files are read) ----
+  local launched_rcs=() launched_names=() launched_logs=()
+  set +e
 
-    echo "  [test] -> $name" >&2
-    if eval "$cmd" >/dev/null 2>&1; then
-      echo "  [test] OK $name" >&2
+  if [[ "$lint_enabled" == "true" ]]; then
+    echo "  [test] -> LINT (running, logs buffered)" >&2
+    run_phase "$LINT_LOG" "$LINT_RC" "run_lint_inner" &
+    launched_rcs+=("$LINT_RC"); launched_names+=("LINT"); launched_logs+=("$LINT_LOG")
+  fi
+
+  if [[ "$tests_active" == "true" ]]; then
+    if [[ ${#go_args[@]} -gt 0 ]]; then
+      echo "  [test] -> GO (unit+integration, running, logs buffered)" >&2
+      # Pass the alternating cmd/optional list to run_go_lane via a quoted call.
+      run_phase "$GO_LOG" "$GO_RC" "run_go_lane $(printf '%q ' "${go_args[@]}")" &
+      launched_rcs+=("$GO_RC"); launched_names+=("GO"); launched_logs+=("$GO_LOG")
+    fi
+    if [[ ${#fe_cmds[@]} -gt 0 ]]; then
+      echo "  [test] -> FRONTEND (running, logs buffered)" >&2
+      run_phase "$FE_LOG" "$FE_RC" "${fe_cmds[0]}" &
+      launched_rcs+=("$FE_RC"); launched_names+=("FRONTEND"); launched_logs+=("$FE_LOG")
+    fi
+    if [[ ${#filter_cmds[@]} -gt 0 ]]; then
+      echo "  [test] -> FILTER (running, logs buffered)" >&2
+      run_phase "$FILTER_LOG" "$FILTER_RC" "${filter_cmds[0]}" &
+      launched_rcs+=("$FILTER_RC"); launched_names+=("FILTER"); launched_logs+=("$FILTER_LOG")
+    fi
+  fi
+
+  wait
+  set -e
+
+  # ---- Aggregate the launched phases' rc-files ----
+  local failed=0 lint_failed=0 idx
+  for idx in "${!launched_rcs[@]}"; do
+    local rcfile="${launched_rcs[$idx]}" pname="${launched_names[$idx]}" plog="${launched_logs[$idx]}"
+    local rcval
+    rcval=$(cat "$rcfile" 2>/dev/null || echo 1)   # missing rc => failure
+    [[ "$rcval" =~ ^[0-9]+$ ]] || rcval=1
+    if [[ "$rcval" -ne 0 ]]; then
+      failed=1
+      [[ "$pname" == "LINT" ]] && lint_failed=1
+      echo "  [test] FAIL $pname" >&2
+      print_phase_log "$pname" "$plog"
     else
-      if [[ "$optional" == "true" ]]; then
-        echo "  [test] WARN $name (optional)" >&2
-      else
-        echo "  [test] FAIL $name" >&2
-        failed=1
-      fi
+      echo "  [test] OK $pname" >&2
     fi
   done
 
-  if [[ "$failed" -eq 1 ]]; then
-    echo "FAIL" > "$TEST_RESULT"
-  else
-    save_test_marker
-    echo "PASS" > "$TEST_RESULT"
+  # ---- E2E: exclusive, last, only if all prior passed AND tests are active ----
+  if [[ "$tests_active" == "true" ]] && [[ ${#e2e_cmds[@]} -gt 0 ]]; then
+    if [[ "$failed" -eq 0 ]]; then
+      echo "  [test] -> E2E (exclusive, running, logs buffered)" >&2
+      set +e
+      run_phase "$E2E_LOG" "$E2E_RC" "${e2e_cmds[0]}"
+      set -e
+      local e2e_rc
+      e2e_rc=$(cat "$E2E_RC" 2>/dev/null || echo 1)
+      [[ "$e2e_rc" =~ ^[0-9]+$ ]] || e2e_rc=1
+      if [[ "$e2e_rc" -ne 0 ]]; then
+        failed=1
+        echo "  [test] FAIL E2E" >&2
+        print_phase_log "E2E" "$E2E_LOG"
+      else
+        echo "  [test] OK E2E" >&2
+      fi
+    else
+      echo "  [test] SKIP E2E (a prior phase failed)" >&2
+    fi
   fi
+
+  # ---- Lint result line (for the Results summary) ----
+  if [[ "$lint_enabled" != "true" ]]; then
+    echo "SKIP" > "$LINT_RESULT"
+  elif [[ "$lint_failed" -eq 1 ]]; then
+    echo "FAIL" > "$LINT_RESULT"
+  else
+    echo "PASS" > "$LINT_RESULT"
+  fi
+
+  # ---- Test result + marker ----
+  if [[ "$tests_active" == "true" ]]; then
+    if [[ "$failed" -eq 1 ]]; then
+      # Distinguish a lint-only failure from a real test failure for TEST_RESULT.
+      local test_only_failed=0 jdx
+      for jdx in "${!launched_rcs[@]}"; do
+        [[ "${launched_names[$jdx]}" == "LINT" ]] && continue
+        local rv; rv=$(cat "${launched_rcs[$jdx]}" 2>/dev/null || echo 1)
+        [[ "$rv" =~ ^[0-9]+$ ]] || rv=1
+        [[ "$rv" -ne 0 ]] && test_only_failed=1
+      done
+      local e2erv; e2erv=$(cat "$E2E_RC" 2>/dev/null || echo 0)
+      [[ "$e2erv" =~ ^[0-9]+$ ]] || e2erv=1
+      [[ "$e2erv" -ne 0 ]] && test_only_failed=1
+      if [[ "$test_only_failed" -eq 1 ]]; then
+        echo "FAIL" > "$TEST_RESULT"
+      else
+        # Only lint failed; tests all passed. Tests pass, lint gates separately.
+        save_test_marker
+        echo "PASS" > "$TEST_RESULT"
+      fi
+    else
+      save_test_marker
+      echo "PASS" > "$TEST_RESULT"
+    fi
+  fi
+  # (When tests_active=false, TEST_RESULT was already written above: SKIP if
+  #  disabled/empty, PASS if should_skip_tests.)
+
+  # shellcheck disable=SC2086  # PHASE_TMPFILES is a space-separated path list.
+  rm -f $PHASE_TMPFILES
 }
 
 # Allow tests to source this file for unit-testing the pure functions
@@ -303,23 +494,13 @@ echo "==============================================================" >&2
 
 check_review_log
 
-# Run lint first (fast, fail early)
-run_lint
-LINT_STATUS=$(cat "$LINT_RESULT")
-
-if [[ "$LINT_STATUS" == "FAIL" ]]; then
-  echo ""
-  echo "=============================================================="
-  echo "FAILED: Linting failed. Fix issues before pushing."
-  echo "=============================================================="
-  exit 1
-fi
-
-# Swift gate (path-filtered, fast-fail before the heavy Go/frontend suite)
+# Swift gate (path-filtered, fast-fail before the heavy parallel block)
 check_swift
 
-# Run tests
-run_tests
+# L3: LINT + GO + FRONTEND + FILTER run concurrently; E2E runs exclusively last.
+# Lint is one of the aggregated phases (no longer a separate fast-fail gate).
+run_phases_parallel
+LINT_STATUS=$(cat "$LINT_RESULT")
 TEST_STATUS=$(cat "$TEST_RESULT")
 
 echo "" >&2
@@ -329,7 +510,13 @@ echo "  Lint:   $LINT_STATUS" >&2
 echo "  Tests:  $TEST_STATUS" >&2
 echo "==============================================================" >&2
 
-# Determine exit (lint already checked above)
+if [[ "$LINT_STATUS" == "FAIL" ]]; then
+  echo "" >&2
+  echo "FAILED: Linting failed. Fix issues before pushing." >&2
+  echo "" >&2
+  exit 1
+fi
+
 if [[ "$TEST_STATUS" == "FAIL" ]]; then
   echo "" >&2
   echo "FAILED: Tests failed. Fix issues before pushing." >&2
