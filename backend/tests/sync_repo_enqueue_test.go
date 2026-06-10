@@ -3,12 +3,10 @@ package tests
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
 
-	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/scheduler"
@@ -43,28 +41,17 @@ func enqueueArgs(source string, accountID *string) scheduler.SyncProviderAccount
 // tests stay isolated.
 func newEnqueueTestEnv(t *testing.T) (*repository.SyncRepository, *db.Database) {
 	t.Helper()
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-
+	// Per-test isolated clone: these tests issue DB-wide river_job
+	// count/delete assertions, so a private river_job table keeps sibling
+	// jobs from colliding.
 	ctx := context.Background()
-	cfg := config.TestConfig()
-	cfg.Database.URL = databaseURL
-	cfg.Database.MigrationsPath = getMigrationsPath()
-
-	// Migrations are applied once by TestMain.
-
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	repo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
 
-	// Clear river_job rows of our kind at the start of each test so prior
-	// test runs don't pollute the in-flight check. Shared-DB integration
-	// runs are the norm on CI.
-	_, err = database.Pool.Exec(ctx, `DELETE FROM river_job WHERE kind = 'sync_provider_account'`)
+	// Clear river_job rows of our kind. Harmless on a private clone (the
+	// table starts empty); preserved for parity with the original helper.
+	_, err := database.Pool.Exec(ctx, `DELETE FROM river_job WHERE kind = 'sync_provider_account'`)
 	require.NoError(t, err)
 
 	return repo, database
@@ -119,6 +106,7 @@ func newJobEnqueuer(t *testing.T, database *db.Database) (repository.JobEnqueuer
 }
 
 func TestEnqueueAccountSyncIfNotInFlight_SkipsWhenInFlight(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -148,6 +136,7 @@ func TestEnqueueAccountSyncIfNotInFlight_SkipsWhenInFlight(t *testing.T) {
 }
 
 func TestEnqueueAccountSyncIfNotInFlight_InsertsWhenClear(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -173,6 +162,7 @@ func TestEnqueueAccountSyncIfNotInFlight_InsertsWhenClear(t *testing.T) {
 }
 
 func TestEnqueueAccountSyncIfNotInFlight_CompletedDoesNotBlock(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -194,6 +184,7 @@ func TestEnqueueAccountSyncIfNotInFlight_CompletedDoesNotBlock(t *testing.T) {
 }
 
 func TestEnqueueAccountSyncIfNotInFlight_CrossWindowOverlapPrevented(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -221,6 +212,7 @@ func TestEnqueueAccountSyncIfNotInFlight_CrossWindowOverlapPrevented(t *testing.
 }
 
 func TestEnqueueAccountSyncIfNotInFlight_AtomicUnderConcurrency(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -296,6 +288,7 @@ func firstErr(errs []error) error {
 // path (single-account providers like iMessage). The COALESCE in the SQL
 // must treat nil and empty as the same bucket.
 func TestEnqueueAccountSyncIfNotInFlight_NilAccountID(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}

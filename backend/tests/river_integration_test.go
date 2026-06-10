@@ -78,24 +78,14 @@ func TestRunMigrations_River_Integration(t *testing.T) {
 // against the shared test DB with a locally-defined no-op worker starts and
 // stops cleanly.
 func TestRiverClient_StartStop_Integration(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
 
-	cfg := config.TestConfig()
-	cfg.Database.URL = databaseURL
-	cfg.Database.MigrationsPath = getMigrationsPath()
-
+	// Per-test isolated clone so the live client owns a private river_job.
 	ctx := context.Background()
-	// Migrations are applied once by TestMain.
-
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	defer database.Close()
+	database, cfg := newIsolatedRiverTestDB(t, ctx)
 
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &localNoopWorker{})
@@ -123,27 +113,18 @@ func TestRiverClient_StartStop_Integration(t *testing.T) {
 // a job — this test does. It's kept separate from the Start/Stop smoke
 // test so a registration regression fails this test specifically.
 func TestRiverClient_InsertAndWork_Integration(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
 
-	cfg := config.TestConfig()
-	cfg.Database.URL = databaseURL
-	cfg.Database.MigrationsPath = getMigrationsPath()
-
+	// Per-test isolated clone so the inserted job lands in a private
+	// river_job and no concurrent sibling steals it. newIsolatedRiverTestDB
+	// registers database.Close() on t.Cleanup; the client.Stop cleanup
+	// registered below runs first (t.Cleanup is LIFO), so the pool stays
+	// alive while the client finalizes its last job batch.
 	ctx := context.Background()
-	// Migrations are applied once by TestMain.
-
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	// Register db.Close first so it runs AFTER client.Stop below — t.Cleanup
-	// runs functions in LIFO order, so the pool stays alive while the
-	// client finalizes its last job batch.
-	t.Cleanup(func() { database.Close() })
+	database, cfg := newIsolatedRiverTestDB(t, ctx)
 
 	var invoked atomic.Int32
 	workers := river.NewWorkers()
@@ -205,24 +186,14 @@ func TestRiverClient_InsertAndWork_Integration(t *testing.T) {
 // ("at least one Worker must be added to the Workers bundle") in the
 // default configuration. #281 restored the noop.
 func TestRiverClient_BootsWithNoopWorkerOnly(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
 
-	cfg := config.TestConfig()
-	cfg.Database.URL = databaseURL
-	cfg.Database.MigrationsPath = getMigrationsPath()
-
+	// Per-test isolated clone so the live client owns a private river_job.
 	ctx := context.Background()
-	// Migrations are applied once by TestMain.
-
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database, cfg := newIsolatedRiverTestDB(t, ctx)
 
 	// Simulate the main.go boot path with EnableExternalSync=false: only
 	// the noop worker is registered, no periodic jobs.
