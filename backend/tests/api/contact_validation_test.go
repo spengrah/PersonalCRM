@@ -44,16 +44,16 @@ func getMigrationsPath() string {
 // this package, so it stays untagged here.
 
 func setupContactValidationTestRouter() (*gin.Engine, func()) {
-	gin.SetMode(gin.TestMode)
-
 	ctx := context.Background()
 	databaseURL := os.Getenv("DATABASE_URL")
 
 	// Migrations are applied once by TestMain.
+	// MaxConns/MinConns mirror config.TestConfig() (8/1) to cap the per-pool
+	// connection ceiling under parallel execution.
 	dbConfig := config.DatabaseConfig{
 		URL:               databaseURL,
-		MaxConns:          config.DefaultDBMaxConns,
-		MinConns:          config.DefaultDBMinConns,
+		MaxConns:          8,
+		MinConns:          1,
 		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
 		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
 		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
@@ -316,13 +316,17 @@ func TestContactAPI_UpdateValidation(t *testing.T) {
 	router, cleanup := setupContactValidationTestRouter()
 	defer cleanup()
 
+	// Per-test namespace so the CREATE + self-clean DELETE never collide with a
+	// leftover/concurrent row on the contact_method email unique.
+	ns := uuid.New().String()[:8]
+
 	// Create a test contact first
 	createReq := handlers.CreateContactRequest{
-		FullName: "Update Test User",
+		FullName: "Update Test User " + ns,
 		Methods: []handlers.ContactMethodRequest{
 			{
 				Type:  "email",
-				Value: "updatetest@example.com",
+				Value: "updatetest+" + ns + "@example.com",
 			},
 		},
 	}

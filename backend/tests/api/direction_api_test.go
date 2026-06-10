@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"testing"
 
@@ -32,15 +33,15 @@ func setupDirectionAPIRouter(t *testing.T) (*gin.Engine, *repository.ContactTask
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
 
-	gin.SetMode(gin.TestMode)
-
 	// Migrations are applied once by TestMain.
 
 	ctx := context.Background()
+	// MaxConns/MinConns mirror config.TestConfig() (8/1) to cap the per-pool
+	// connection ceiling under parallel execution.
 	dbConfig := config.DatabaseConfig{
 		URL:               databaseURL,
-		MaxConns:          config.DefaultDBMaxConns,
-		MinConns:          config.DefaultDBMinConns,
+		MaxConns:          8,
+		MinConns:          1,
 		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
 		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
 		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
@@ -107,7 +108,7 @@ func TestInteractionAPI_DirectionInResponse(t *testing.T) {
 	router, _, cleanup := setupDirectionAPIRouter(t)
 	defer cleanup()
 
-	contactID := createDirectionTestContact(t, router, "Direction API Test")
+	contactID := createDirectionTestContact(t, router, "Direction API Test "+uuid.NewString()[:8])
 
 	t.Run("CreateWithDirection", func(t *testing.T) {
 		pastDate := accelerated.GetCurrentTime().Add(-3600_000_000_000).Format("2006-01-02T15:04:05Z07:00")
@@ -181,7 +182,7 @@ func TestContactAPI_HasPendingFollowup(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	contactID := createDirectionTestContact(t, router, "Pending Followup API Test")
+	contactID := createDirectionTestContact(t, router, "Pending Followup API Test "+uuid.NewString()[:8])
 
 	t.Run("NoPendingFollowup", func(t *testing.T) {
 		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID, nil)
@@ -229,7 +230,7 @@ func TestContactAPI_DirectionTimestamps(t *testing.T) {
 	router, _, cleanup := setupDirectionAPIRouter(t)
 	defer cleanup()
 
-	contactID := createDirectionTestContact(t, router, "Direction Timestamps API Test")
+	contactID := createDirectionTestContact(t, router, "Direction Timestamps API Test "+uuid.NewString()[:8])
 
 	// Record a mutual interaction to populate timestamps
 	pastDate := accelerated.GetCurrentTime().Add(-3600_000_000_000).Format("2006-01-02T15:04:05Z07:00")
@@ -268,8 +269,12 @@ func TestContactAPI_FollowupFilter(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	contactID := createDirectionTestContact(t, router, "Followup Filter API Test")
+	contactName := "Followup Filter API Test " + uuid.NewString()[:8]
+	contactID := createDirectionTestContact(t, router, contactName)
 	id, _ := uuid.Parse(contactID)
+	// Scope the DB-wide ListContacts page to this contact's unique name so a
+	// concurrent sibling's followup contacts can't push it off the limited page.
+	searchQuery := url.QueryEscape(contactName)
 
 	// Create a follow-up for this contact
 	_, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
@@ -283,7 +288,7 @@ func TestContactAPI_FollowupFilter(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("has_followup_includes_contact", func(t *testing.T) {
-		req, _ := http.NewRequest("GET", "/api/v1/contacts?followup_filter=has_followup", nil)
+		req, _ := http.NewRequest("GET", "/api/v1/contacts?followup_filter=has_followup&search="+searchQuery, nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 		require.Equal(t, http.StatusOK, w.Code)
@@ -303,7 +308,7 @@ func TestContactAPI_FollowupFilter(t *testing.T) {
 	})
 
 	t.Run("no_followup_excludes_contact", func(t *testing.T) {
-		req, _ := http.NewRequest("GET", "/api/v1/contacts?followup_filter=no_followup", nil)
+		req, _ := http.NewRequest("GET", "/api/v1/contacts?followup_filter=no_followup&search="+searchQuery, nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 		require.Equal(t, http.StatusOK, w.Code)
@@ -332,7 +337,7 @@ func TestContactTaskAPI_FollowUpKindValidation(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	contactID := createDirectionTestContact(t, router, "Task Kind API Test")
+	contactID := createDirectionTestContact(t, router, "Task Kind API Test "+uuid.NewString()[:8])
 	id, _ := uuid.Parse(contactID)
 
 	// Create tasks of different kinds

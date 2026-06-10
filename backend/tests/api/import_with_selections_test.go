@@ -24,16 +24,16 @@ import (
 )
 
 func setupImportTestRouter() (*gin.Engine, *repository.ExternalContactRepository, *repository.ContactRepository, *repository.ContactMethodRepository, func()) {
-	gin.SetMode(gin.TestMode)
-
 	ctx := context.Background()
 	databaseURL := os.Getenv("DATABASE_URL")
 
 	// Migrations are applied once by TestMain.
+	// MaxConns/MinConns mirror config.TestConfig() (8/1) to cap the per-pool
+	// connection ceiling under parallel execution.
 	dbConfig := config.DatabaseConfig{
 		URL:               databaseURL,
-		MaxConns:          config.DefaultDBMaxConns,
-		MinConns:          config.DefaultDBMinConns,
+		MaxConns:          8,
+		MinConns:          1,
 		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
 		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
 		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
@@ -2254,8 +2254,8 @@ func TestImportAPI_TelegramLinkWithMethodSelection(t *testing.T) {
 	databaseURL2 := os.Getenv("DATABASE_URL")
 	dbCfg := config.DatabaseConfig{
 		URL:               databaseURL2,
-		MaxConns:          config.DefaultDBMaxConns,
-		MinConns:          config.DefaultDBMinConns,
+		MaxConns:          8,
+		MinConns:          1,
 		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
 		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
 		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,

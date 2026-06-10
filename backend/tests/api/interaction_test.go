@@ -18,22 +18,24 @@ import (
 	"personal-crm/backend/internal/repository"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func setupInteractionTestRouter(t *testing.T) (*gin.Engine, func()) {
 	t.Helper()
-	gin.SetMode(gin.TestMode)
 
 	ctx := context.Background()
 	databaseURL := os.Getenv("DATABASE_URL")
 
 	// Migrations are applied once by TestMain.
+	// MaxConns/MinConns mirror config.TestConfig() (8/1) to cap the per-pool
+	// connection ceiling under parallel execution.
 	dbConfig := config.DatabaseConfig{
 		URL:               databaseURL,
-		MaxConns:          config.DefaultDBMaxConns,
-		MinConns:          config.DefaultDBMinConns,
+		MaxConns:          8,
+		MinConns:          1,
 		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
 		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
 		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
@@ -116,7 +118,7 @@ func TestInteraction_CreateAndList(t *testing.T) {
 	router, cleanup := setupInteractionTestRouter(t)
 	defer cleanup()
 
-	contactID := createInteractionTestContact(t, router, "Interaction Test User")
+	contactID := createInteractionTestContact(t, router, "Interaction Test User "+t.Name()+"-"+uuid.NewString()[:8])
 	defer deleteInteractionTestContact(t, router, contactID)
 
 	t.Run("CreateManualInteraction", func(t *testing.T) {
@@ -196,7 +198,7 @@ func TestInteraction_ManualDeduplication(t *testing.T) {
 	router, cleanup := setupInteractionTestRouter(t)
 	defer cleanup()
 
-	contactID := createInteractionTestContact(t, router, "Dedup Test User")
+	contactID := createInteractionTestContact(t, router, "Dedup Test User "+t.Name()+"-"+uuid.NewString()[:8])
 	defer deleteInteractionTestContact(t, router, contactID)
 
 	t.Run("DuplicateWithin30MinWindowReturnsExisting", func(t *testing.T) {
@@ -247,7 +249,7 @@ func TestInteraction_SoftDelete(t *testing.T) {
 	router, cleanup := setupInteractionTestRouter(t)
 	defer cleanup()
 
-	contactID := createInteractionTestContact(t, router, "Delete Interaction Test User")
+	contactID := createInteractionTestContact(t, router, "Delete Interaction Test User "+t.Name()+"-"+uuid.NewString()[:8])
 	defer deleteInteractionTestContact(t, router, contactID)
 
 	// Create an interaction
@@ -314,7 +316,7 @@ func TestInteraction_UpdatesLastContacted(t *testing.T) {
 	router, cleanup := setupInteractionTestRouter(t)
 	defer cleanup()
 
-	contactID := createInteractionTestContact(t, router, "Last Contacted Update Test")
+	contactID := createInteractionTestContact(t, router, "Last Contacted Update Test "+t.Name()+"-"+uuid.NewString()[:8])
 	defer deleteInteractionTestContact(t, router, contactID)
 
 	t.Run("ManualInteractionUpdatesLastContacted", func(t *testing.T) {
@@ -403,7 +405,7 @@ func TestInteraction_FutureDateRejected(t *testing.T) {
 	router, cleanup := setupInteractionTestRouter(t)
 	defer cleanup()
 
-	contactID := createInteractionTestContact(t, router, "Future Date Test User")
+	contactID := createInteractionTestContact(t, router, "Future Date Test User "+t.Name()+"-"+uuid.NewString()[:8])
 	defer deleteInteractionTestContact(t, router, contactID)
 
 	t.Run("FutureDateRejected", func(t *testing.T) {

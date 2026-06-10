@@ -32,15 +32,16 @@ import (
 
 func setupLastContactedTestRouter(t *testing.T) (*gin.Engine, func()) {
 	t.Helper()
-	gin.SetMode(gin.TestMode)
 
 	ctx := context.Background()
 	databaseURL := os.Getenv("DATABASE_URL")
 
+	// MaxConns/MinConns mirror config.TestConfig() (8/1) to cap the per-pool
+	// connection ceiling under parallel execution.
 	dbConfig := config.DatabaseConfig{
 		URL:               databaseURL,
-		MaxConns:          config.DefaultDBMaxConns,
-		MinConns:          config.DefaultDBMinConns,
+		MaxConns:          8,
+		MinConns:          1,
 		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
 		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
 		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
@@ -120,9 +121,12 @@ func TestPostInteraction_DirectionMutual_BumpsLastContacted(t *testing.T) {
 	}
 
 	router, cleanup := setupLastContactedTestRouter(t)
-	defer cleanup()
+	// Register the pool-close via t.Cleanup (NOT defer) so it runs AFTER the
+	// contact-DELETE that createContactForTest registers — LIFO keeps the pool
+	// open for the row cleanup.
+	t.Cleanup(cleanup)
 
-	contactID := createContactForTest(t, router, "PostInteraction Mutual")
+	contactID := createContactForTest(t, router, "PostInteraction Mutual "+uuid.New().String()[:8])
 
 	// Empty body -> direction defaults to mutual; backend uses
 	// accelerated.GetCurrentTime() for occurred_at.
@@ -173,9 +177,12 @@ func TestPostInteraction_DirectionOutbound_DoesNotBumpLastContacted(t *testing.T
 	}
 
 	router, cleanup := setupLastContactedTestRouter(t)
-	defer cleanup()
+	// Register the pool-close via t.Cleanup (NOT defer) so it runs AFTER the
+	// contact-DELETE that createContactForTest registers — LIFO keeps the pool
+	// open for the row cleanup.
+	t.Cleanup(cleanup)
 
-	contactID := createContactForTest(t, router, "PostInteraction Outbound")
+	contactID := createContactForTest(t, router, "PostInteraction Outbound "+uuid.New().String()[:8])
 
 	// Capture last_contacted at creation time.
 	getReq0, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID, nil)
