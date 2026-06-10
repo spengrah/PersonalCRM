@@ -174,15 +174,10 @@ func SetupPackage(m *testing.M, opts ...Option) int {
 
 	ctx := context.Background()
 
-	// Refuse to run any DDL unless the env base DB is exactly
-	// personal_crm_test. A mis-set TEST_DATABASE_URL pointing at the dev DB
+	// Refuse to run any DDL unless the env base DB is exactly personal_crm_test.
+	// A mis-set DATABASE_URL/TEST_DATABASE_URL pointing at the dev DB
 	// (personal_crm) must fail loudly before any CREATE/DROP can execute.
-	baseName, err := dbNameFromURL(baseURL)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "testdb: parse base URL: %v\n", err)
-		return 1
-	}
-	if err := assertBaseDBName(baseName); err != nil {
+	if err := assertSafeBaseURL(baseURL); err != nil {
 		fmt.Fprintf(os.Stderr, "testdb: %v\n", err)
 		return 1
 	}
@@ -723,6 +718,19 @@ func assertDroppableTestDBName(name string) error {
 		return fmt.Errorf("refusing to DROP database %q: not a droppable test-family name", name)
 	}
 	return nil
+}
+
+// assertSafeBaseURL is the SetupPackage guard chokepoint: it parses the env base
+// URL and refuses any database other than personal_crm_test, so a mis-set
+// DATABASE_URL/TEST_DATABASE_URL pointing at the dev DB fails loudly before any
+// CREATE/DROP runs. This is the exact path SetupPackage invokes; unit-tested in
+// testdb_internal_test.go (TestBaseURLGuardRejectsProdDB).
+func assertSafeBaseURL(baseURL string) error {
+	name, err := dbNameFromURL(baseURL)
+	if err != nil {
+		return fmt.Errorf("parse base URL: %w", err)
+	}
+	return assertBaseDBName(name)
 }
 
 // assertBaseDBName requires the env base DB to be exactly personal_crm_test.

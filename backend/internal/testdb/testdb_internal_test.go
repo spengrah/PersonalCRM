@@ -128,6 +128,28 @@ func TestDBNameFromURL(t *testing.T) {
 	}
 }
 
+// TestBaseURLGuardRejectsProdDB locks the SetupPackage chokepoint: it exercises
+// assertSafeBaseURL — the exact guard SetupPackage calls before any DDL — so a
+// DATABASE_URL/TEST_DATABASE_URL pointing at the dev DB (personal_crm) can never
+// CREATE/DROP against production. Only the bare personal_crm_test base is accepted.
+func TestBaseURLGuardRejectsProdDB(t *testing.T) {
+	rejected := []string{
+		"postgres://crm_user:crm_password@localhost:5432/personal_crm?sslmode=disable",
+		"postgres://crm_user:crm_password@localhost:5432/personal_crm", // no query string
+		"postgres://u:p@h:5432/personal_crm_test_clone_deadbeef",       // a clone is not a valid base
+	}
+	for _, raw := range rejected {
+		if err := assertSafeBaseURL(raw); err == nil {
+			t.Errorf("base URL %q was ACCEPTED by assertSafeBaseURL; expected rejection", raw)
+		}
+	}
+
+	const okBase = "postgres://crm_user:crm_password@localhost:5432/personal_crm_test?sslmode=disable"
+	if err := assertSafeBaseURL(okBase); err != nil {
+		t.Errorf("the test base URL must be accepted, got: %v", err)
+	}
+}
+
 func TestTemplateHashDeterministicAndSensitive(t *testing.T) {
 	filesA := [][]byte{[]byte("001_initial.up.sql\x00CREATE TABLE a (id int);"), []byte("001_initial.down.sql\x00DROP TABLE a;")}
 	riverA := []riverMigrationFingerprint{{version: 1, sqlUp: "CREATE TABLE river_job ();", sqlDown: "DROP TABLE river_job;"}}

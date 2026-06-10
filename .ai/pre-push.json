@@ -6,7 +6,8 @@
     "enabled": true,
     "commands": [
       { "name": "Backend lint", "command": "make lint" },
-      { "name": "Frontend lint", "command": "cd frontend && bun run lint" }
+      { "name": "Frontend lint", "command": "cd frontend && bun run lint" },
+      { "name": "Repo hygiene", "command": "bash scripts/hooks/repo-hygiene-check.sh" }
     ]
   },
   "swift": {

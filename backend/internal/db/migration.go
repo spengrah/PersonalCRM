@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"personal-crm/backend/internal/logger"
@@ -36,11 +37,11 @@ func RunMigrations(ctx context.Context, databaseURL string, migrationsPath strin
 	}()
 
 	err = m.Up()
-	if err != nil && err != migrate.ErrNoChange {
+	if err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		return fmt.Errorf("failed to run migrations: %w", err)
 	}
 
-	if err == migrate.ErrNoChange {
+	if errors.Is(err, migrate.ErrNoChange) {
 		logger.Info().Msg("no new migrations to run")
 	} else {
 		logger.Info().Msg("migrations completed successfully")

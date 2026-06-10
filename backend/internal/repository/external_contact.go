@@ -428,7 +428,7 @@ func convertDbExternalContact(dbContact *db.ExternalContact) (*ExternalContact, 
 func (r *ExternalContactRepository) GetByID(ctx context.Context, id uuid.UUID) (*ExternalContact, error) {
 	dbContact, err := r.queries.GetExternalContact(ctx, pgtype.UUID{Bytes: id, Valid: true})
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, err
@@ -449,7 +449,7 @@ func (r *ExternalContactRepository) GetBySource(ctx context.Context, source, sou
 		AccountID: accountIDText,
 	})
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, err
