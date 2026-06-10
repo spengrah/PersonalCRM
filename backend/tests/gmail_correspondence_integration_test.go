@@ -1,7 +1,8 @@
 // Integration coverage for the in-sync gmail_correspondence DISCOVERY hook.
 // Drives the REAL GmailSyncProvider.Sync with a real *events.Bus + database.Pool
 // + a FAKE gmailFetcher (no OAuth/HTTP) and a real CorrespondenceDiscoverer
-// wired via SetCorrespondenceDiscoverer, against the shared test DB. Proves:
+// wired via SetCorrespondenceDiscoverer, against a per-test isolated DB clone.
+// Proves:
 //   - DISCOVERY RUNS BETWEEN FETCH AND STORAGE (the key regression): a fetched
 //     multi-party message that does NOT pass the storage gate (so it is never
 //     stored in comms_message) STILL yields a gmail_correspondence candidate,
@@ -140,8 +141,8 @@ func (e *discoveryEnv) wireDiscoverer() {
 	e.provider.SetCorrespondenceDiscoverer(google.NewCorrespondenceDiscoverer(e.contactRepo, e.externalRepo))
 }
 
-// cleanupExternal hard-deletes a produced candidate so the shared DB does not
-// accumulate gmail_correspondence rows across runs.
+// cleanupExternal hard-deletes a produced candidate. Belt-and-braces on the
+// per-test clone (the DB is dropped on t.Cleanup either way).
 func (e *discoveryEnv) cleanupExternal(t *testing.T, sourceID string) {
 	t.Helper()
 	t.Cleanup(func() {

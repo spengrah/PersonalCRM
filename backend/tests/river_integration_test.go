@@ -75,8 +75,8 @@ func TestRunMigrations_River_Integration(t *testing.T) {
 }
 
 // TestRiverClient_StartStop_Integration asserts that a River client built
-// against the shared test DB with a locally-defined no-op worker starts and
-// stops cleanly.
+// against a per-test isolated DB clone with a locally-defined no-op worker
+// starts and stops cleanly.
 func TestRiverClient_StartStop_Integration(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {

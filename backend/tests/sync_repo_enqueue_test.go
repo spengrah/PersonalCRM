@@ -36,9 +36,8 @@ func enqueueArgs(source string, accountID *string) scheduler.SyncProviderAccount
 	return scheduler.SyncProviderAccountArgs{Source: source, AccountID: accountID}
 }
 
-// newEnqueueTestEnv stands up the shared DB and a pool-aware sync repo.
-// Each test also builds its own river client via newJobEnqueuer so the
-// tests stay isolated.
+// newEnqueueTestEnv stands up a per-test isolated DB clone and a pool-aware
+// sync repo. Each test also builds its own river client via newJobEnqueuer.
 func newEnqueueTestEnv(t *testing.T) (*repository.SyncRepository, *db.Database) {
 	t.Helper()
 	// Per-test isolated clone: these tests issue DB-wide river_job

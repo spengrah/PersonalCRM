@@ -135,8 +135,8 @@ func newGmailRematchEnv(t *testing.T, accountIDs []string) *gmailRematchEnv {
 
 // seedEnabledEmailState creates an ENABLED (email, accountID) sync state with
 // metadata["backfill_since"]=backfillSince via the repository (sqlc-backed, no
-// raw SQL) and registers a hard-delete cleanup so the shared test DB does not
-// accumulate enabled email states that pollute other tests.
+// raw SQL) and registers a hard-delete cleanup. The cleanup is belt-and-braces
+// on the per-test clone (the DB is dropped on t.Cleanup either way).
 func (e *gmailRematchEnv) seedEnabledEmailState(t *testing.T, accountID, backfillSince string) {
 	t.Helper()
 	acct := accountID
