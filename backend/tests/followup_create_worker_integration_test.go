@@ -192,6 +192,7 @@ func (e *createWorkerEnv) seedPendingTask(t *testing.T) *repository.ContactTask 
 // TestIntegration_CreateWorker_NormalFinalize asserts the happy path:
 // pending_remote_create → managed after item_add succeeds.
 func TestIntegration_CreateWorker_NormalFinalize(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -220,6 +221,7 @@ func TestIntegration_CreateWorker_NormalFinalize(t *testing.T) {
 // no-op path: the worker exits at phase 1 when the row is already
 // managed (another worker finalized).
 func TestIntegration_CreateWorker_AlreadyManaged(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -251,6 +253,7 @@ func TestIntegration_CreateWorker_AlreadyManaged(t *testing.T) {
 // without flipping state back to managed, and does NOT enqueue a
 // fallback close (inline close succeeded).
 func TestIntegration_CreateWorker_CompletedAtStart(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -296,6 +299,7 @@ func TestIntegration_CreateWorker_CompletedAtStart(t *testing.T) {
 // enqueues a fallback TodoistFollowUpCloseJob because no inline close
 // was attempted.
 func TestIntegration_CreateWorker_StateFlipsBetweenPhases(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -346,6 +350,7 @@ func TestIntegration_CreateWorker_StateFlipsBetweenPhases(t *testing.T) {
 // finalizes normally AND enqueues a TodoistFollowUpRefreshJob so river
 // brings Todoist in sync after finalize.
 func TestIntegration_CreateWorker_MetadataDriftEnqueuesRefresh(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}

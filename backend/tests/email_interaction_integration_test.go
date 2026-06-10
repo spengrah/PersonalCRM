@@ -12,7 +12,6 @@ package tests
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
@@ -45,10 +44,9 @@ type emailEnv struct {
 
 func newEmailEnv(t *testing.T, ctx context.Context) *emailEnv {
 	t.Helper()
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-	database, _ := newEventBusTestDB(t, ctx)
+	// Per-test isolated clone: the live email consumer drains a private
+	// river_job, so concurrent siblings can't steal each other's jobs.
+	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactRepo.SetPool(database.Pool)
@@ -189,6 +187,7 @@ func (e *emailEnv) waitForCommsProcessed(t *testing.T, externalID string, contac
 // --- A. Create → cadence (inbound) ------------------------------------------
 
 func TestEmailIntegration_CreateInbound_AppliesCadence(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := newEmailEnv(t, ctx)
 	contact := e.newEmailTestContact(t)
@@ -214,6 +213,7 @@ func TestEmailIntegration_CreateInbound_AppliesCadence(t *testing.T) {
 // --- B. Create → cadence (outbound) -----------------------------------------
 
 func TestEmailIntegration_CreateOutbound_AppliesOutreachCadence(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := newEmailEnv(t, ctx)
 	contact := e.newEmailTestContact(t)
@@ -236,6 +236,7 @@ func TestEmailIntegration_CreateOutbound_AppliesOutreachCadence(t *testing.T) {
 // --- C. Same thread+day extend ----------------------------------------------
 
 func TestEmailIntegration_SameThreadDay_Extends(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := newEmailEnv(t, ctx)
 	contact := e.newEmailTestContact(t)
@@ -275,6 +276,7 @@ func TestEmailIntegration_SameThreadDay_Extends(t *testing.T) {
 // --- D. Next calendar day → new interaction ---------------------------------
 
 func TestEmailIntegration_NextDay_NewInteraction(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := newEmailEnv(t, ctx)
 	contact := e.newEmailTestContact(t)
@@ -299,6 +301,7 @@ func TestEmailIntegration_NextDay_NewInteraction(t *testing.T) {
 // --- E. Mixed-direction same thread+day → promote to mutual -----------------
 
 func TestEmailIntegration_MixedDirection_PromotesToMutual(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := newEmailEnv(t, ctx)
 	contact := e.newEmailTestContact(t)
@@ -329,6 +332,7 @@ func TestEmailIntegration_MixedDirection_PromotesToMutual(t *testing.T) {
 // --- F. Out-of-order backfill does NOT move occurred_at backward ------------
 
 func TestEmailIntegration_OutOfOrderBackfill_NoBackwardMove(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := newEmailEnv(t, ctx)
 	contact := e.newEmailTestContact(t)
@@ -364,6 +368,7 @@ func TestEmailIntegration_OutOfOrderBackfill_NoBackwardMove(t *testing.T) {
 // --- G. Re-delivery idempotency ---------------------------------------------
 
 func TestEmailIntegration_ReDelivery_Idempotent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := newEmailEnv(t, ctx)
 	contact := e.newEmailTestContact(t)
@@ -391,6 +396,7 @@ func TestEmailIntegration_ReDelivery_Idempotent(t *testing.T) {
 // --- H. Cross-account same Message-ID → exactly one interaction -------------
 
 func TestEmailIntegration_CrossAccountSameMessageID_OneInteraction(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := newEmailEnv(t, ctx)
 	contact := e.newEmailTestContact(t)
@@ -412,6 +418,7 @@ func TestEmailIntegration_CrossAccountSameMessageID_OneInteraction(t *testing.T)
 // --- I. Match-only: consumer never creates a contact ------------------------
 
 func TestEmailIntegration_MatchOnly_NoContactCreation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := newEmailEnv(t, ctx)
 	contact := e.newEmailTestContact(t)
@@ -430,6 +437,7 @@ func TestEmailIntegration_MatchOnly_NoContactCreation(t *testing.T) {
 // --- J. Concurrent same-thread+day jobs do NOT move occurred_at backward ----
 
 func TestEmailIntegration_Concurrent_NoBackwardMove(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	e := newEmailEnv(t, ctx)
 	contact := e.newEmailTestContact(t)

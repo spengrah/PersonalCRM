@@ -15,12 +15,10 @@ package tests
 import (
 	"context"
 	"errors"
-	"os"
 	"testing"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
-	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/consumer"
 	"personal-crm/backend/internal/consumer/consumerjobs"
 	"personal-crm/backend/internal/db"
@@ -57,20 +55,12 @@ type declineCutoverEnv struct {
 
 func newDeclineCutoverEnv(t *testing.T, ctx context.Context) *declineCutoverEnv {
 	t.Helper()
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-	require.NoError(t, db.RunMigrations(ctx, databaseURL, getMigrationsPath()))
-	cfg := config.TestConfig()
-	cfg.Database.URL = databaseURL
-	cfg.Database.MigrationsPath = getMigrationsPath()
+	// Per-test isolated clone: the live decline worker drains a private
+	// river_job.
+	database, cfg := newIsolatedRiverTestDB(t, ctx)
 	if cfg.River.WorkerConcurrency <= 0 {
 		cfg.River.WorkerConcurrency = 4
 	}
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactRepo.SetPool(database.Pool)
@@ -211,6 +201,7 @@ func (e *declineCutoverEnv) waitForInteractionGone(t *testing.T, contactID uuid.
 // drives the real cutover remove branch through processEvent with a real bus +
 // pool and the live decline consumer, asserting the full chain.
 func TestIntegration_DeclineCutover_RemovesEventAndInteractionThroughProcessEvent(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -283,6 +274,7 @@ func TestIntegration_DeclineCutover_RemovesEventAndInteractionThroughProcessEven
 // publish-before-delete: when PublishTx fails, the whole tx rolls back and the
 // calendar_event row survives (the delete never commits).
 func TestIntegration_DeclineCutover_PublishFailureLeavesRowIntact(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}

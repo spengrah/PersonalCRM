@@ -1,7 +1,8 @@
 // Integration coverage for the in-sync gmail_correspondence DISCOVERY hook.
 // Drives the REAL GmailSyncProvider.Sync with a real *events.Bus + database.Pool
 // + a FAKE gmailFetcher (no OAuth/HTTP) and a real CorrespondenceDiscoverer
-// wired via SetCorrespondenceDiscoverer, against the shared test DB. Proves:
+// wired via SetCorrespondenceDiscoverer, against a per-test isolated DB clone.
+// Proves:
 //   - DISCOVERY RUNS BETWEEN FETCH AND STORAGE (the key regression): a fetched
 //     multi-party message that does NOT pass the storage gate (so it is never
 //     stored in comms_message) STILL yields a gmail_correspondence candidate,
@@ -22,11 +23,9 @@ package tests
 import (
 	"context"
 	"errors"
-	"os"
 	"testing"
 	"time"
 
-	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/google"
@@ -62,18 +61,9 @@ func newDiscoveryEnv(t *testing.T) *discoveryEnv {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	// Per-test isolated clone: the live consumer drains a private river_job.
 	ctx := context.Background()
-	require.NoError(t, db.RunMigrations(ctx, databaseURL, getMigrationsPath()))
-
-	cfg := config.TestConfig()
-	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	commsRepo := repository.NewCommsMessageRepository(database.Queries)
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -151,8 +141,8 @@ func (e *discoveryEnv) wireDiscoverer() {
 	e.provider.SetCorrespondenceDiscoverer(google.NewCorrespondenceDiscoverer(e.contactRepo, e.externalRepo))
 }
 
-// cleanupExternal hard-deletes a produced candidate so the shared DB does not
-// accumulate gmail_correspondence rows across runs.
+// cleanupExternal hard-deletes a produced candidate. Belt-and-braces on the
+// per-test clone (the DB is dropped on t.Cleanup either way).
 func (e *discoveryEnv) cleanupExternal(t *testing.T, sourceID string) {
 	t.Helper()
 	t.Cleanup(func() {
@@ -184,6 +174,7 @@ func discoverySyncState(accountID string) *repository.SyncState {
 
 // 1. KEY REGRESSION: discovery runs between fetch and storage.
 func TestDiscovery_RunsBetweenFetchAndStorage(t *testing.T) {
+	t.Parallel()
 	e := newDiscoveryEnv(t)
 	e.wireDiscoverer()
 	prefix := e.gen.Prefix()
@@ -241,6 +232,7 @@ func TestDiscovery_RunsBetweenFetchAndStorage(t *testing.T) {
 
 // 2. Link a produced candidate → method added → rematch dispatched.
 func TestDiscovery_LinkAddsMethodAndDispatchesRematch(t *testing.T) {
+	t.Parallel()
 	e := newDiscoveryEnv(t)
 	e.wireDiscoverer()
 	prefix := e.gen.Prefix()
@@ -322,6 +314,7 @@ func TestDiscovery_LinkAddsMethodAndDispatchesRematch(t *testing.T) {
 // row. Drive the failure via a fake external repo whose Upsert errors for the
 // qualifying address.
 func TestDiscovery_ErrorNonFatalToSync(t *testing.T) {
+	t.Parallel()
 	e := newDiscoveryEnv(t)
 	prefix := e.gen.Prefix()
 

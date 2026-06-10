@@ -29,7 +29,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
 	"testing"
 	"time"
 
@@ -53,27 +52,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// getMigrationsPathFollowUp returns the migrations path for CI test bootstrap.
-// Integration tests in backend/tests/ must call db.RunMigrations before
-// db.NewDatabase because CI runs bare PostgreSQL.
-func getMigrationsPathFollowUp() string {
-	return "../migrations"
-}
-
-// newFollowUpIntegrationDB returns a live DB connection for integration tests.
+// newFollowUpIntegrationDB returns a per-test isolated DB clone for the
+// followup integration tests. Each clone owns a private river_job table, so
+// the fixed external_task_id fixtures these tests use no longer collide under
+// t.Parallel(). newIsolatedRiverTestDB registers the clone-drop + pool-close
+// cleanups, so the returned closeFn is a no-op kept for call-site stability.
 func newFollowUpIntegrationDB(t *testing.T) (*db.Database, func()) {
 	t.Helper()
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
 	ctx := context.Background()
-	require.NoError(t, db.RunMigrations(ctx, databaseURL, getMigrationsPathFollowUp()))
-	cfg := config.TestConfig()
-	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	return database, func() { database.Close() }
+	database, _ := newIsolatedRiverTestDB(t, ctx)
+	return database, func() {}
 }
 
 // followUpIntegrationEnv bundles the repos + consumer the cutover tests
@@ -359,6 +347,7 @@ func (e *followUpIntegrationEnv) applyInEventTx(t *testing.T, env *events.Envelo
 // 90-day-old telegram outbound with weekly cadence (3-day watchdog)
 // produces a skip observation and NO contact_task row. Closes #267.
 func TestIntegration_FollowUpManager_BackdatedOutbound(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -385,6 +374,7 @@ func TestIntegration_FollowUpManager_BackdatedOutbound(t *testing.T) {
 // asserts that a 90-day-old MANUAL outbound is NOT skipped by guard 1;
 // it proceeds to create the pending_remote_create row.
 func TestIntegration_FollowUpManager_ManualSourceBypassesBackdatedGuard(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -405,6 +395,7 @@ func TestIntegration_FollowUpManager_ManualSourceBypassesBackdatedGuard(t *testi
 // an inbound response is already on record after the outbound's
 // occurred_at, the outbound is skipped.
 func TestIntegration_FollowUpManager_OutOfOrderSkips(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -441,6 +432,7 @@ func TestIntegration_FollowUpManager_OutOfOrderSkips(t *testing.T) {
 // response yields a pending_remote_create row with a non-empty
 // idempotency key, and enqueues a TodoistFollowUpCreateJob.
 func TestIntegration_FollowUpManager_OutboundFreshCreatesPendingRow(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -493,6 +485,7 @@ func TestIntegration_FollowUpManager_OutboundFreshCreatesPendingRow(t *testing.T
 // rule — NO TodoistFollowUpCloseJob is enqueued (create worker will
 // handle the race when it runs).
 func TestIntegration_FollowUpManager_InboundCompletesPending(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -537,6 +530,7 @@ func TestIntegration_FollowUpManager_InboundCompletesPending(t *testing.T) {
 // Guards the durable-dedupe invariant: two deliveries of the same
 // event never both land follow-up work.
 func TestIntegration_FollowUpManager_DuplicateEventClaimBlocks(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -577,6 +571,7 @@ func TestIntegration_FollowUpManager_DuplicateEventClaimBlocks(t *testing.T) {
 // can just open two sequential txs that each keep their snapshot open
 // past their own guard-3 read.
 func TestIntegration_FollowUpManager_UniqueLiveCollisionRecovers(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -658,6 +653,7 @@ func runHandleEventInFreshTx(ctx context.Context, env *followUpIntegrationEnv, e
 // finalized; post-update state carries the external_task_id which is
 // the authoritative signal.
 func TestIntegration_FollowUpManager_InboundClosesFinalizedRow(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}

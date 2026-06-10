@@ -125,6 +125,7 @@ func (e *applyInteractionEnv) seedContact(t *testing.T, cadence string) *reposit
 // the "idempotency key already present; skipping insert" and
 // "todoist not configured; skipping create" WARN log lines.
 func TestIntegration_ApplyInteraction_NilEnvelope_DoesNotPanic(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -161,6 +162,7 @@ func TestIntegration_ApplyInteraction_NilEnvelope_DoesNotPanic(t *testing.T) {
 // NOT rolled back (the interaction layer caller can commit its other
 // work — cadence advance, etc.).
 func TestIntegration_ApplyInteraction_TodoistUnconfigured_NoRowNoRollback(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -194,6 +196,7 @@ func TestIntegration_ApplyInteraction_TodoistUnconfigured_NoRowNoRollback(t *tes
 // closure DOES propagate, so a transient Todoist outage during cutover
 // doesn't silently swallow the state.
 func TestIntegration_ApplyInteraction_SettingsError_PropagatesRollback(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}

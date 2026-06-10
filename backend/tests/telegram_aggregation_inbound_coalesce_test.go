@@ -29,6 +29,7 @@ import (
 // Cleanup uses the new sqlc-backed HardDelete helpers per core.md rule
 // 2 (no raw SQL in Go).
 func TestAggregation_IncrementalInboundCoalesce(t *testing.T) {
+	t.Parallel()
 	messageRepo, interactionRepo, _, _, engine, database := setupAggregationTest(t)
 	ctx := context.Background()
 	eventRepo := repository.NewEventRepository(database.Queries)

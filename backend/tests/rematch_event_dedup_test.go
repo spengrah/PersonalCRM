@@ -2,13 +2,10 @@ package tests
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
-	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/repository"
 
@@ -33,24 +30,15 @@ import (
 // (which exercises River's UniqueOpts{ByArgs} as the second dedup
 // layer, bypassing the event-layer dedup via distinct source_ids).
 func TestRematch_EventSourceIDDedup(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
 
-	cfg := config.TestConfig()
-	cfg.Database.URL = databaseURL
-	cfg.Database.MigrationsPath = getMigrationsPath()
-
+	// Per-test isolated clone: the live river client + DB-wide river_job
+	// count assertion need a private river_job table.
 	ctx := context.Background()
-	require.NoError(t, db.RunMigrations(ctx, cfg.Database.URL, cfg.Database.MigrationsPath))
-
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	// Live river client so InsertTx behaves like production. TestOnly
 	// skips maintenance startup delays. Noop worker registered for

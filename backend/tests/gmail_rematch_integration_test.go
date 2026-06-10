@@ -35,14 +35,12 @@ package tests
 import (
 	"context"
 	"errors"
-	"os"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
-	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/google"
@@ -85,18 +83,10 @@ func newGmailRematchEnv(t *testing.T, accountIDs []string) *gmailRematchEnv {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	// Per-test isolated clone: the live email consumer + rematch jobs drain
+	// a private river_job.
 	ctx := context.Background()
-	require.NoError(t, db.RunMigrations(ctx, databaseURL, getMigrationsPath()))
-
-	cfg := config.TestConfig()
-	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	commsRepo := repository.NewCommsMessageRepository(database.Queries)
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -145,8 +135,8 @@ func newGmailRematchEnv(t *testing.T, accountIDs []string) *gmailRematchEnv {
 
 // seedEnabledEmailState creates an ENABLED (email, accountID) sync state with
 // metadata["backfill_since"]=backfillSince via the repository (sqlc-backed, no
-// raw SQL) and registers a hard-delete cleanup so the shared test DB does not
-// accumulate enabled email states that pollute other tests.
+// raw SQL) and registers a hard-delete cleanup. The cleanup is belt-and-braces
+// on the per-test clone (the DB is dropped on t.Cleanup either way).
 func (e *gmailRematchEnv) seedEnabledEmailState(t *testing.T, accountID, backfillSince string) {
 	t.Helper()
 	acct := accountID
@@ -291,6 +281,7 @@ func (e *gmailRematchEnv) waitForLastContacted(t *testing.T, contactID uuid.UUID
 // --- Scenario 1: new-address scan derives interactions ----------------------
 
 func TestGmailRematch_NewAddressScan_DerivesInteractions(t *testing.T) {
+	t.Parallel()
 	e := newGmailRematchEnv(t, []string{"acct-" + uuid.NewString()[:8] + "@example.com"})
 	prefix := e.gen.Prefix()
 	me := e.accountIDs[0]
@@ -338,6 +329,7 @@ func TestGmailRematch_NewAddressScan_DerivesInteractions(t *testing.T) {
 // --- Scenario 2: match-only (no contact creation) ---------------------------
 
 func TestGmailRematch_MatchOnly_NoContactCreated(t *testing.T) {
+	t.Parallel()
 	e := newGmailRematchEnv(t, []string{"acct-" + uuid.NewString()[:8] + "@example.com"})
 	prefix := e.gen.Prefix()
 	me := e.accountIDs[0]
@@ -367,6 +359,7 @@ func TestGmailRematch_MatchOnly_NoContactCreated(t *testing.T) {
 // --- Scenario 3: fan-out to multiple contacts sharing the address -----------
 
 func TestGmailRematch_FanOut_SharedAddress(t *testing.T) {
+	t.Parallel()
 	e := newGmailRematchEnv(t, []string{"acct-" + uuid.NewString()[:8] + "@example.com"})
 	prefix := e.gen.Prefix()
 	me := e.accountIDs[0]
@@ -406,6 +399,7 @@ func TestGmailRematch_FanOut_SharedAddress(t *testing.T) {
 // --- Scenario 4: across multiple accounts (per-account `seen` not hoisted) --
 
 func TestGmailRematch_MultipleAccounts_PerAccountSeen(t *testing.T) {
+	t.Parallel()
 	accountX := "x-" + uuid.NewString()[:8] + "@example.com"
 	accountY := "y-" + uuid.NewString()[:8] + "@example.com"
 	e := newGmailRematchEnv(t, []string{accountX, accountY})
@@ -454,6 +448,7 @@ func TestGmailRematch_MultipleAccounts_PerAccountSeen(t *testing.T) {
 // the harness (the gate requires it); we assert its cursor/sync fields stay
 // untouched after a rematch that DID scan + persist rows.
 func TestGmailRematch_NoCursorSideEffects(t *testing.T) {
+	t.Parallel()
 	account := "acct-" + uuid.NewString()[:8] + "@example.com"
 	e := newGmailRematchEnv(t, []string{account})
 	prefix := e.gen.Prefix()
@@ -480,6 +475,7 @@ func TestGmailRematch_NoCursorSideEffects(t *testing.T) {
 // --- Scenario 6: backfill floor honored + single-address OR-group -----------
 
 func TestGmailRematch_BackfillFloorAndQueryShape(t *testing.T) {
+	t.Parallel()
 	account := "acct-" + uuid.NewString()[:8] + "@example.com"
 	e := newGmailRematchEnv(t, []string{account})
 	prefix := e.gen.Prefix()
@@ -518,6 +514,7 @@ func TestGmailRematch_BackfillFloorAndQueryShape(t *testing.T) {
 // — it never builds a fetcher (so the scan never runs) and writes nothing. Two
 // sub-cases: (a) no state at all, (b) a status='disabled' state.
 func TestGmailRematch_NoEnabledState_NoOp(t *testing.T) {
+	t.Parallel()
 	t.Run("no_state_at_all", func(t *testing.T) {
 		// Seed NO email state for this env (nil account list).
 		e := newGmailRematchEnv(t, nil)
@@ -592,6 +589,7 @@ func TestGmailRematch_NoEnabledState_NoOp(t *testing.T) {
 // failing OWN-mailbox account id RAW (operator triage) and must NOT contain the
 // third-party contact address being rematched.
 func TestGmailRematch_PartialFailure_ReturnsError(t *testing.T) {
+	t.Parallel()
 	accountX := "x-" + uuid.NewString()[:8] + "@example.com"
 	accountY := "y-" + uuid.NewString()[:8] + "@example.com"
 	e := newGmailRematchEnv(t, []string{accountX, accountY})
@@ -639,6 +637,7 @@ func TestGmailRematch_PartialFailure_ReturnsError(t *testing.T) {
 // account is scanned with its OWN metadata["backfill_since"], not a hardcoded
 // default. The inverse of TestGmailRematch_BackfillFloorAndQueryShape.
 func TestGmailRematch_PerAccountBackfillSince(t *testing.T) {
+	t.Parallel()
 	t.Run("explicit_backfill_since", func(t *testing.T) {
 		// Seed NO default state; create one with an explicit non-default floor.
 		e := newGmailRematchEnv(t, nil)

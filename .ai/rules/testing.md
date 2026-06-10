@@ -66,6 +66,26 @@ See [Layered Architecture](../guides/architecture.md#why-layered) for how these 
 
 See [`.ai/patterns/synthetic-seed-toolkit.md`](../patterns/synthetic-seed-toolkit.md) for the factory/replay/profile how-to.
 
+## Backend Integration-Test Parallelism
+
+New backend integration tests run with `t.Parallel()` by default. The suite was converted to within-run parallelism across #430 (`backend/tests`), #438 (`backend/tests/api`), and #428 (the river-heavy core); a new serial test silently widens the suite's serial prefix (Go runs the entire non-`t.Parallel()` cohort to completion before the parallel cohort starts), so default to parallel and only opt out for the documented serial cases below.
+
+**Know which DB model your test uses — it decides how you make it parallel-safe:**
+
+- **Shared package DB** (`backend/tests` and `backend/tests/api`, via `newSharedTestDB` / `newAPISharedTestDB`): one `MaxConns=8` pool per package, shared across that package's parallel tests. The parallel-safety lever here is **namespace scoping** — scope every read/assertion to your own namespace (`syntheticNS(t)` / `synthetic.NewHarnessForNamespace`; see Build State With the Synthetic Toolkit). Never assert over a global/DB-wide count, or compare counts across two queries — a sibling test can change rows between them.
+- **Per-test ephemeral clone** (`testdb.NewEphemeralClone`, surfaced through the `newIsolatedRiverTestDB` helper): each test mints its own clone DB (copied from the content-hashed, pre-migrated template) plus its own pool + River client, dropped on `t.Cleanup`. Use this when a test needs true isolation (see the River rule). A clone is pre-migrated — do NOT call `db.RunMigrations` against it.
+
+**River-touching tests → per-test clone.** A live River client (`client.Start(ctx)`) draining `river_job` on a shared DB steals sibling tests' jobs, and DB-wide `river_job` count/delete assertions collide. Any test that starts a worker, asserts DB-wide over `river_job`, or relies on fixed-ID fixtures (fixed `external_task_id`, fixed chat/message IDs) must isolate via `newIsolatedRiverTestDB` before flipping to `t.Parallel()` — the private clone makes those collisions impossible by construction (no ID renaming needed). Enqueue-only tests (build a `TestOnly` client but never `Start` it) can stay on the shared DB.
+
+**Stays serial — the documented exceptions:**
+
+- Singleton-table tests (`mac_host_*` auth in `tests/api`): the auth tables are global singletons; per-test cloning was tried and correctly reverted. Keep serial.
+- Migration-subject tests (e.g. `TestRunMigrations_River_Integration`): the migration runner is the subject under test, so a pre-migrated clone is meaningless. Keep serial.
+
+**Connection budget.** Concurrent clones/pools share one Postgres (`max_connections=200` on CI and recreated-local; 100 on a stock/un-recreated local container). Each shared-DB pool ≈ 8 conns; each isolated-river clone ≈ 7 (pool 6 + River's LISTEN conn). `-p`/`-parallel` are computed by `scripts/test-parallelism.sh` against the live ceiling — don't raise a test pool's `MaxConns` without reason, and if a new file mints many concurrent clones, sample `pg_stat_activity` during a run to confirm headroom.
+
+**Prove parallel-safety before claiming done:** run the changed package under `-race -count=10 -shuffle=on` at the local `-p`/`-parallel` with a confirmed non-empty `TEST_DATABASE_URL` (an empty DSN makes the package self-skip into a false green). Fixed-ID collisions surface only under `-count>=2`. See [`.ai/patterns/test-parallelism.md`](../patterns/test-parallelism.md) for the clone recipe, gotchas, and the full validation matrix.
+
 ## Test File Locations
 
 ```
