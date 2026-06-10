@@ -103,4 +103,12 @@ assert_true  "any_file_under_macdaemon mixed -> fires" \
 assert_grep_count 1 'any_file_in_groups "$pushed_files" backend frontend' scripts/hooks/pre-push
 assert_grep_count 1 'any_file_in_groups "$files_since_test" backend frontend' scripts/hooks/pre-push
 
+# --- Chain the sibling guard suites so the FILTER phase covers them all in one
+# command (the pre-push classifier routes this single test-pre-push-filters
+# command to the CONCURRENT lane). ---
+echo "--- pre-push phase classifier / failure-propagation guard ---"
+bash scripts/hooks/test/test-pre-push-phases.sh || fail=1
+echo "--- Makefile adaptive -p / CI-pin render guard ---"
+bash scripts/ci/test-parallelism-render-guard.sh || fail=1
+
 [[ "$fail" -eq 0 ]] && { echo "ALL PASS"; exit 0; } || { echo "FAILURES"; exit 1; }

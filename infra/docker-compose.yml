@@ -2,6 +2,12 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     container_name: crm-postgres
+    # Local test/dev Postgres ceiling raised to match CI (#434). max_connections
+    # is a server-config bump only — the postgres_data volume (real dev data) is
+    # untouched and durability stays ON locally (unlike CI's disposable PG).
+    # First `docker compose up -d` after this change recreates the container; the
+    # named volume persists, so no data loss.
+    command: ["postgres", "-c", "max_connections=200"]
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-personal_crm}
       POSTGRES_USER: ${POSTGRES_USER:-crm_user}

@@ -10,6 +10,27 @@ GOCACHE ?= $(REPO_ROOT)/.gocache
 export GOCACHE
 
 TEST_DATABASE_URL ?= postgres://crm_user:crm_password@localhost:5432/personal_crm_test?sslmode=disable
+
+# Adaptive LOCAL -p/-parallel for the integration recipes. The formula lives
+# ONLY in scripts/test-parallelism.sh; the Makefile just calls it. Lazy `=` +
+# `$(eval ...)` memo so the script runs at most ONCE per `make`, and ONLY when
+# an integration recipe expands $(TEST_P) — never on `make help`/`make build`.
+# TEST_DATABASE_URL/PER_BINARY_CONN_EST are passed explicitly because $(shell)
+# does NOT inherit Make variables as env vars automatically.
+ADAPTIVE_P = $(eval ADAPTIVE_P := $(shell TEST_DATABASE_URL='$(TEST_DATABASE_URL)' PER_BINARY_CONN_EST='$(PER_BINARY_CONN_EST)' bash scripts/test-parallelism.sh))$(ADAPTIVE_P)
+
+# CI pins the historical 4/4 (the CI Postgres + go-build concurrency are tuned
+# for it; raising it there is out of scope). Gate on GITHUB_ACTIONS (GHA sets it
+# "true" in every job), NOT bare CI (a local tool could export CI). The CI
+# branch is a `:=` constant — no probe runs in CI.
+ifeq ($(GITHUB_ACTIONS),true)
+  TEST_P := 4
+  TEST_PARALLEL := 4
+else
+  TEST_P = $(ADAPTIVE_P)
+  TEST_PARALLEL = $(ADAPTIVE_P)
+endif
+
 E2E_DATABASE_NAME ?= personal_crm_test
 E2E_DATABASE_URL ?= postgres://crm_user:crm_password@localhost:5432/$(E2E_DATABASE_NAME)?sslmode=disable
 E2E_FRONTEND_PORT ?= 3000
@@ -336,15 +357,15 @@ test-unit:
 
 test-integration-fast:
 	@echo "Running backend integration tests (default set)..."
-	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" go test -tags integration_testdb -count=1 -parallel 4 -p 4 ./tests/... ./internal/todoist/... ./internal/google/... ./internal/testdb/... $(GOTEST_VERBOSE)
+	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" go test -tags integration_testdb -count=1 -parallel $(TEST_PARALLEL) -p $(TEST_P) ./tests/... ./internal/todoist/... ./internal/google/... ./internal/testdb/... $(GOTEST_VERBOSE)
 
 test-integration:
 	@echo "Running backend integration tests..."
-	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test -tags integration_testdb -count=1 -parallel 4 -p 4 ./tests/... ./internal/todoist/... ./internal/google/... ./internal/testdb/... $(GOTEST_VERBOSE)
+	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test -tags integration_testdb -count=1 -parallel $(TEST_PARALLEL) -p $(TEST_P) ./tests/... ./internal/todoist/... ./internal/google/... ./internal/testdb/... $(GOTEST_VERBOSE)
 
 test-integration-slow:
 	@echo "Running backend slow integration tests..."
-	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test -tags integration_testdb -count=1 -parallel 4 -p 4 ./tests/... ./internal/todoist/... ./internal/google/... ./internal/testdb/... $(GOTEST_VERBOSE) -run '$(BACKEND_SLOW_TESTS_REGEX)'
+	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test -tags integration_testdb -count=1 -parallel $(TEST_PARALLEL) -p $(TEST_P) ./tests/... ./internal/todoist/... ./internal/google/... ./internal/testdb/... $(GOTEST_VERBOSE) -run '$(BACKEND_SLOW_TESTS_REGEX)'
 
 # Sweep leaked clone databases (personal_crm_test_clone_*) AND stale
 # per-migration-set template databases (personal_crm_test_template_<hash>).
