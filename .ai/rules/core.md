@@ -22,7 +22,6 @@ These rules apply to all AI agents working on this project.
 
 ## Testing Requirements
 
-- **Always add comprehensive tests** for new/changed code
 - Run `make test && make test-e2e-diff` to verify changes work locally (CI runs full E2E)
 - Run `make test-e2e` only for the full suite (CI or when explicitly requested)
 - Use make test-e2e-local only when a specific grep is requested.
@@ -68,11 +67,9 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 |---------|-----|
 | `make test` from subdirectory | Run `make` commands from project root |
 | `go test ./backend/...` | Use `make test-unit` or `cd backend && go test` |
-| `npm install` | Use `bun install` |
 | `sqlc generate` | Use `make sqlc` (sqlc is in ~/go/bin) |
 | Hand-rolling integration-test fixtures (raw SQL, ad-hoc inserts) | Prefer the synthetic toolkit factories/harness (`synthetic.NewHarnessForNamespace`, `migrationGenerator`/`seedMigrationContact`) — see `.ai/patterns/synthetic-seed-toolkit.md` and `.ai/rules/testing.md`. Raw SQL stays banned in ALL Go code (production + tests + fixtures); if the toolkit can't express a fixture, add a test-only sqlc query (e.g., `InsertFooAtTime`) + repository wrapper rather than inlining `pool.Exec(ctx, "INSERT ...")`. (Raw SQL is fine when it's the *subject* under test, e.g. the migration-runner tests in `integration_test.go`.) |
 | Calling `queries.X()` from handler | Call `repo.X()` instead |
-| Missing `deleted_at IS NULL` in queries | All queries must filter soft deletes |
 | Querying DB directly | `docker exec crm-postgres psql -U crm_user -d personal_crm -c "..."` |
 | Assuming repository method names | Read the repository file first |
 | Not building after `make sqlc` | Always run `go build ./cmd/crm-api` to verify compilation |
@@ -82,7 +79,6 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 | Merging PRs with UI changes | Never merge UI PRs autonomously - wait for human review |
 | `git add path/[id]/file` fails | Use quotes: `git add "path/[id]/file"` (bash interprets brackets as globs) |
 | Fixing only one instance of a pattern | Search entire codebase and fix ALL instances to maintain consistency |
-| Expecting soft-delete to cascade to related records | Soft-delete (UPDATE deleted_at) does NOT trigger ON DELETE CASCADE - explicitly delete related records first |
 | Building multi-step wizard modals | Use single-view scrollable modals (like ImportLinkModal) - all steps visible in one view |
 | Using `\n` in `gh` CLI body/comment strings (renders as literal `\n`) | Use a heredoc or multi-line string for `gh pr create/edit/comment` |
 | `git diff --quiet` to detect new files | Only sees tracked files; add `git ls-files --others --exclude-standard` for untracked |
