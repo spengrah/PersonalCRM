@@ -71,6 +71,41 @@ final class MessagesSourcePluginTests: XCTestCase {
         StateStore(fileURL: tempDir.appendingPathComponent("state.json"))
     }
 
+    /// Sync builder for the re-backfill chat.db (outbound row at ROWID 1,
+    /// inbound at ROWID 5). Sync so the GRDB write closure is not
+    /// inferred `@Sendable` (which would block `self.unix2026` capture
+    /// from an async test).
+    private func seedRebackfillChatDB() throws -> URL {
+        let dbURL = tempDir.appendingPathComponent("chat.db")
+        let script = try loadSchemaScript()
+        let queue = try DatabaseQueue(path: dbURL.path)
+        let appleNanos = Int64((unix2026 - 978_307_200) * 1e9)
+        try queue.write { db in
+            try db.execute(sql: script)
+            try db.execute(sql:
+                "INSERT INTO handle (ROWID, id, service) VALUES (1, '+15551234567', 'iMessage')")
+            try db.execute(sql:
+                "INSERT INTO chat (ROWID, guid, style, chat_identifier) VALUES (10, 'reb-chat', 45, '+15551234567')")
+            try db.execute(sql:
+                "INSERT INTO chat_handle_join (chat_id, handle_id) VALUES (10, 1)")
+            try db.execute(sql:
+                "INSERT INTO message (ROWID, guid, text, handle_id, date, " +
+                "is_from_me, item_type, cache_has_attachments, associated_message_guid) " +
+                "VALUES (1, 'reb-out1', 'old sent', NULL, ?, 1, 0, 0, NULL)",
+                arguments: [appleNanos])
+            try db.execute(sql:
+                "INSERT INTO chat_message_join (chat_id, message_id) VALUES (10, 1)")
+            try db.execute(sql:
+                "INSERT INTO message (ROWID, guid, text, handle_id, date, " +
+                "is_from_me, item_type, cache_has_attachments, associated_message_guid) " +
+                "VALUES (5, 'reb-in5', 'recent in', 1, ?, 0, 0, 0, NULL)",
+                arguments: [appleNanos])
+            try db.execute(sql:
+                "INSERT INTO chat_message_join (chat_id, message_id) VALUES (10, 5)")
+        }
+        return dbURL
+    }
+
     /// Sync helper that adds a second seeded message at ROWID=2 to a
     /// chat.db produced by `makeChatDB()`. Lives in a sync method so
     /// the GRDB write closure isn't inferred as `@Sendable` (which
@@ -611,6 +646,94 @@ final class MessagesSourcePluginTests: XCTestCase {
                       "all-skipped page consumed budget and the backfill walked to completion")
     }
 
+    // MARK: - one-time outbound re-backfill
+
+    func testLegacyCursorTriggersOutboundRebackfillOnce() async throws {
+        // chat.db: an outbound row at ROWID 1 and an inbound row at
+        // ROWID 5, both above the floor. The legacy cursor has already
+        // "completed" backfill and lacks the outbound flag, so the live
+        // cursor sits at 5 and the outbound row at 1 was never emitted.
+        let dbURL = try seedRebackfillChatDB()
+
+        // Legacy cursor: backfill complete, no outbound flag.
+        let legacyJSON = """
+            {"backfill_complete":true,"backfill_cursor":0,"backfill_floor_sent_at":"2026-01-01T00:00:00Z",\
+            "install_max_rowid":5,"live_cursor":5}
+            """
+        let store = makeStateStore()
+        try store.save(DaemonState(schemaVersion: 1))
+        let sink = OutboundPublisherSink()
+        let publisher = MessagesPublisher(
+            sender: { _, body in
+                await sink.record(body.events)
+                return IngestEventsData(accepted: body.events.count, duplicate: 0, rejected: 0, errors: [])
+            },
+            auth: auth, logger: NoopLogger())
+        let transport = StatefulCursorTransport(initialCursor: legacyJSON)
+        let piClient = PiClient(
+            baseURL: URL(string: "https://pi.example.test")!,
+            transport: transport.asTransport(),
+            sleep: { _ in })
+        let plugin = MessagesSourcePlugin(
+            tickInterval: 60,
+            config: MessagesSourceConfig(chatDBPath: dbURL, backfillFloor: backfillFloor),
+            piClient: piClient,
+            auth: auth,
+            mutator: StateMutator(store: store),
+            publisher: publisher,
+            cache: KnownIdentifiersCache(initial: ["+15551234567"]),
+            healthRegistry: SourceHealthRegistry(),
+            logger: NoopLogger())
+
+        try await plugin.tick()
+
+        let outbound = await sink.peerHandle(forSourceID: "reb-out1")
+        XCTAssertEqual(outbound, "+15551234567",
+                       "the historical outbound row is re-walked and emitted")
+        let committed = transport.currentDecodedCursor()
+        XCTAssertEqual(committed?.outboundBackfillDone, true,
+                       "the committed cursor records the re-backfill as done")
+
+        // A second tick must NOT re-arm the reset: backfill_complete must
+        // stay true (no new reset) and no further outbound rows emit.
+        await sink.reset()
+        let plugin2 = MessagesSourcePlugin(
+            tickInterval: 60,
+            config: MessagesSourceConfig(chatDBPath: dbURL, backfillFloor: backfillFloor),
+            piClient: piClient,
+            auth: auth,
+            mutator: StateMutator(store: store),
+            publisher: publisher,
+            cache: KnownIdentifiersCache(initial: ["+15551234567"]),
+            healthRegistry: SourceHealthRegistry(),
+            logger: NoopLogger())
+        try await plugin2.tick()
+        let again = await sink.peerHandle(forSourceID: "reb-out1")
+        XCTAssertNil(again, "no second re-backfill once the flag is committed")
+        let after = transport.currentDecodedCursor()
+        XCTAssertEqual(after?.outboundBackfillDone, true)
+        XCTAssertEqual(after?.backfillComplete, true,
+                       "backfill stays complete on the second tick (no re-arm)")
+    }
+
+    func testFreshInstallSetsFlagWithoutReset() async throws {
+        // A fresh install (empty cursor) sets the flag true without
+        // arming a spurious extra backfill — the normal fresh-install
+        // walk already emits both directions, including the outbound row.
+        let dbURL = try makeChatDBWithOutbound1to1(peer: "+15551234567")
+        let (plugin, sink, store) = try makeOutboundPlugin(dbURL: dbURL, known: ["+15551234567"])
+        try await plugin.tick()
+
+        let state = try store.load()
+        let cursor = try XCTUnwrap(MessagesCursorCodec.decode(state.sources["messages"]?.cursor ?? ""))
+        XCTAssertTrue(cursor.outboundBackfillDone,
+                      "fresh install sets the flag so the reset never fires later")
+        // The normal fresh-install backfill emitted the outbound row.
+        let peer = await sink.peerHandle(forSourceID: "out1")
+        XCTAssertEqual(peer, "+15551234567",
+                       "fresh-install backfill emits the outbound row normally")
+    }
+
     // MARK: - helpers
 
     /// Pi client whose only configured response is a fresh-install
@@ -634,6 +757,7 @@ actor OutboundPublisherSink {
     private var events: [IngestEvent] = []
     func record(_ batch: [IngestEvent]) { events.append(contentsOf: batch) }
     func allEvents() -> [IngestEvent] { events }
+    func reset() { events.removeAll() }
 
     /// The `peer_handle` field of the event with the given source_id,
     /// parsed from its raw payload JSON. Returns a Sendable String so it

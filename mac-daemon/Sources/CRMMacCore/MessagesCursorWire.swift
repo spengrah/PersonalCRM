@@ -47,6 +47,16 @@ public struct MessagesCursorWire: Codable, Equatable, Sendable {
     /// 64 hex chars when set. Nil before the first heartbeat.
     public var knownIdentifiersHash: String?
 
+    /// One-time gate for the outbound re-backfill. Installs that
+    /// advanced their cursors while inbound-only emission was in effect
+    /// never emitted outbound rows; the first tick after the outbound
+    /// branch ships resets the backfill walk once to re-cover the span
+    /// down to the floor (re-emitted inbound rows dedup at the Pi; the
+    /// outbound rows emit for the first time). Additive Codable: legacy
+    /// cursors without the key decode as false. Set true after the reset
+    /// so it happens exactly once.
+    public var outboundBackfillDone: Bool
+
     /// Cap on pending scans persisted in the cursor JSON.
     public static let pendingScansCap: Int = 256
 
@@ -63,7 +73,8 @@ public struct MessagesCursorWire: Codable, Equatable, Sendable {
         backfillFloorSentAt: Date,
         backfillComplete: Bool = false,
         pendingScans: [MessagesCursorPendingScan] = [],
-        knownIdentifiersHash: String? = nil
+        knownIdentifiersHash: String? = nil,
+        outboundBackfillDone: Bool = false
     ) {
         self.backfillCursor = backfillCursor
         self.liveCursor = liveCursor
@@ -72,16 +83,31 @@ public struct MessagesCursorWire: Codable, Equatable, Sendable {
         self.backfillComplete = backfillComplete
         self.pendingScans = pendingScans
         self.knownIdentifiersHash = knownIdentifiersHash
+        self.outboundBackfillDone = outboundBackfillDone
     }
 
     enum CodingKeys: String, CodingKey {
-        case backfillCursor       = "backfill_cursor"
-        case liveCursor           = "live_cursor"
-        case installMaxRowID      = "install_max_rowid"
-        case backfillFloorSentAt  = "backfill_floor_sent_at"
-        case backfillComplete     = "backfill_complete"
-        case pendingScans         = "pending_scans"
-        case knownIdentifiersHash = "known_identifiers_hash"
+        case backfillCursor        = "backfill_cursor"
+        case liveCursor            = "live_cursor"
+        case installMaxRowID       = "install_max_rowid"
+        case backfillFloorSentAt   = "backfill_floor_sent_at"
+        case backfillComplete      = "backfill_complete"
+        case pendingScans          = "pending_scans"
+        case knownIdentifiersHash  = "known_identifiers_hash"
+        case outboundBackfillDone  = "outbound_backfill_done"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.backfillCursor = try c.decodeIfPresent(Int64.self, forKey: .backfillCursor)
+        self.liveCursor = try c.decodeIfPresent(Int64.self, forKey: .liveCursor)
+        self.installMaxRowID = try c.decodeIfPresent(Int64.self, forKey: .installMaxRowID)
+        self.backfillFloorSentAt = try c.decode(Date.self, forKey: .backfillFloorSentAt)
+        self.backfillComplete = try c.decode(Bool.self, forKey: .backfillComplete)
+        self.pendingScans = try c.decodeIfPresent([MessagesCursorPendingScan].self, forKey: .pendingScans) ?? []
+        self.knownIdentifiersHash = try c.decodeIfPresent(String.self, forKey: .knownIdentifiersHash)
+        // Additive: legacy cursors lack the key and decode as false.
+        self.outboundBackfillDone = try c.decodeIfPresent(Bool.self, forKey: .outboundBackfillDone) ?? false
     }
 }
 

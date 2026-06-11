@@ -174,6 +174,28 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
 
         var working = cursor
 
+        // One-time outbound re-backfill. Installs whose cursors advanced
+        // while inbound-only emission was in effect never emitted
+        // outbound rows; reset the backfill walk once to re-cover the
+        // span down to the floor. Re-emitted inbound rows dedup at the
+        // Pi; outbound rows emit for the first time. The mutation rides
+        // `working` and persists through whichever commit fires first; if
+        // the tick aborts pre-commit, the next tick recomputes it
+        // (idempotent — the flag is only set once committed).
+        if !working.outboundBackfillDone {
+            if working.installMaxRowID != nil {
+                // Established install: re-walk from the live cursor down.
+                working.backfillCursor = working.liveCursor ?? working.installMaxRowID
+                working.backfillComplete = false
+                logger.info("messages tick: one-time outbound re-backfill armed", metadata: [
+                    "from_rowid": .public(String(working.backfillCursor ?? 0)),
+                ])
+            }
+            // Fresh install (installMaxRowID == nil) just sets the flag —
+            // its normal backfill already emits both directions.
+            working.outboundBackfillDone = true
+        }
+
         // Phase A — durable scan enqueue (commit-first).
         // Drain the cache's newly-added bucket NON-DESTRUCTIVELY and
         // merge it into working.pendingScans (coverage-dedup + cap),

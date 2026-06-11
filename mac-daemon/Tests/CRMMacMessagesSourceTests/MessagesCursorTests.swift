@@ -89,6 +89,36 @@ final class MessagesCursorTests: XCTestCase {
         XCTAssertEqual(decoded?.pendingScans.first?.progressBelowRowID, 4242)
     }
 
+    func testOutboundBackfillDoneRoundTrip() throws {
+        let original = MessagesCursor(
+            backfillFloorSentAt: floor,
+            backfillComplete: true,
+            outboundBackfillDone: true)
+        let encoded = try MessagesCursorCodec.encode(original)
+        XCTAssertTrue(encoded.contains("\"outbound_backfill_done\""))
+        let decoded = try MessagesCursorCodec.decode(encoded)
+        XCTAssertEqual(decoded, original)
+        XCTAssertEqual(decoded?.outboundBackfillDone, true)
+    }
+
+    func testLegacyCursorWithoutOutboundFlagDecodesFalse() throws {
+        // A cursor JSON from before the field existed: the key is absent
+        // and must decode as false (additive Codable).
+        let json = """
+            {
+                "backfill_floor_sent_at": "2026-01-01T00:00:00Z",
+                "backfill_complete": true,
+                "live_cursor": 1234,
+                "install_max_rowid": 1234
+            }
+            """
+        let decoded = try MessagesCursorCodec.decode(json)
+        let cursor = try XCTUnwrap(decoded)
+        XCTAssertFalse(cursor.outboundBackfillDone,
+                       "legacy cursor missing the key decodes as false")
+        XCTAssertEqual(cursor.liveCursor, 1234)
+    }
+
     func testPendingScanWithoutProgressDecodesNil() throws {
         // An operator-CLI-queued or pre-existing entry omits the
         // progress field → nil ("not started").
