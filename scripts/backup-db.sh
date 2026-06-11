@@ -37,10 +37,14 @@ if ! ssh -q -o ConnectTimeout=5 "$PI_HOST" exit; then
 fi
 
 # Resolve the crm user context for rootless systemctl --user / podman.
+# `cd /tmp` + explicit HOME: interactive `sudo -u crm` inherits the SSH user's
+# CWD/HOME, which crm can't access (rootless podman then fails to chdir). The
+# Quadlet services themselves run under systemd and are unaffected.
 CRM_UID=$(ssh "$PI_HOST" "id -u crm")
-USERENV="XDG_RUNTIME_DIR=/run/user/$CRM_UID DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$CRM_UID/bus"
-crm_ctl()    { ssh "$PI_HOST" "sudo -n -u crm $USERENV systemctl --user $*"; }
-crm_podman() { ssh "$PI_HOST" "sudo -n -u crm XDG_RUNTIME_DIR=/run/user/$CRM_UID podman $*"; }
+CRM_HOME=/var/lib/personalcrm
+USERENV="HOME=$CRM_HOME XDG_RUNTIME_DIR=/run/user/$CRM_UID DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$CRM_UID/bus"
+crm_ctl()    { ssh "$PI_HOST" "cd /tmp && sudo -n -u crm $USERENV systemctl --user $*"; }
+crm_podman() { ssh "$PI_HOST" "cd /tmp && sudo -n -u crm HOME=$CRM_HOME XDG_RUNTIME_DIR=/run/user/$CRM_UID podman $*"; }
 
 # Locate the Podman named volume mountpoint (.../volumes/personalcrm-db/_data).
 VOLUME_PATH=$(crm_podman volume inspect personalcrm-db --format '{{.Mountpoint}}')

@@ -107,15 +107,18 @@ Ran on a fresh lima Debian-12 aarch64 VM with a deliberately-created `crm` **sys
       PASS → disable old systemd app units + old Docker Postgres compose unit; commit the new infra/
 ```
 
-## Host-setup checklist (rootless prerequisites — confirmed NEEDED by recon; verified in Stage-2 on-Pi check)
+## Host-setup checklist (Stage-2 on-Pi — DONE 2026-06-10 except the in-window item)
 
-- [ ] **Install a pinned static podman ≥5.x** (Decision 6) — stock apt is 4.3.1, too old for Quadlets.
-- [ ] **`apt install uidmap`** — `newuidmap`/`newgidmap` are missing; rootless cannot map UIDs without them.
-- [ ] **Add `/etc/subuid` + `/etc/subgid` ranges for `crm`** — currently absent (system account, not auto-provisioned). e.g. `usermod --add-subuids 100000-165535 --add-subgids 100000-165535 crm`.
-- [ ] `loginctl enable-linger crm` — currently off; needed so the user's containers start at boot / survive logout (and so `systemctl --user` works for this *system* account).
-- [ ] cgroup-v2 **delegation** for `crm` (per-container `MemoryLimit`/`CPUQuota` — current units set 512M / 150%). cgroup is v2 ✅; confirm delegation for the user slice.
-- [ ] Quadlets land in `~crm/.config/containers/systemd/`; orchestrated via `systemctl --user` (run via `machinectl shell crm@` or `sudo -u crm XDG_RUNTIME_DIR=/run/user/995 systemctl --user …` since `crm` is a system account).
-- [ ] **Log-access ergonomics change:** logs move to the user journal → `journalctl --user -u personalcrm-backend` (as `crm`) or `journalctl _UID=995` from root. Update the ops runbook + the operator memory note (which currently documents the system-journal command).
+- [x] **Pinned static podman v5.8.2** (Decision 6) — stock apt is 4.3.1, too old for Quadlets. Installed via `cp -r usr etc /` from the podman-static tarball.
+- [x] **`apt install uidmap`** — `newuidmap`/`newgidmap` were missing.
+- [x] **`/etc/subuid` + `/etc/subgid` for `crm`** = `crm:200000:65536` (no overlap with the pre-existing `spencer:100000:65536`).
+- [x] `loginctl enable-linger crm` → `/run/user/995` present.
+- [x] **`crm` home = `/var/lib/personalcrm`** (created, crm-owned 0700) — FHS-correct for mutable container runtime state (image layers + the DB volume), continuous with today's `/var/lib/docker`. `/srv/personalcrm` stays the app/config dir. Rootless verified: `podman run` works, **overlay** driver, storage at `/var/lib/personalcrm/.local/share/containers/storage`, `Rootless: true`.
+- [ ] **IN-WINDOW:** `usermod -d /var/lib/personalcrm crm` — refuses while crm's services are live, so the permanent passwd-home change + `loginctl` linger-bounce (so `user@995` restarts with the new HOME) happen during the cutover after stopping the old units. cgroup-v2 **delegation** proven in the VM rehearsal (512M/150% applied); confirm on the Pi in-window.
+
+**Interactive-access gotcha (folded into `backup-db.sh` + runbook):** `sudo -u crm podman …` over SSH inherits the SSH user's CWD/HOME (e.g. `/home/spencer`, mode 700) which crm can't enter → rootless podman fails to chdir. Fix: `cd /tmp` + explicit `HOME=/var/lib/personalcrm` in the helper. The Quadlet **services** run under systemd (own CWD/HOME) and are unaffected.
+
+**Log-access (firm, see rehearsal findings):** with podman-static's journald-less conmon, container logs are `podman logs crm-backend` (k8s-file driver), **not** `journalctl`. Update the operator memory note.
 
 ## Implementation mechanics (plan-ready)
 

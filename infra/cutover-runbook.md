@@ -2,13 +2,14 @@
 
 One-time, manual cutover of prod from the systemd + Docker-Postgres hybrid to rootless Podman Quadlets. Design + rationale: `.ai/spec/2026-06-07-containerization-cutover-design.md`. Every command below was validated in a lima Debian-12 arm64 VM against a `crm` system account mirroring the Pi.
 
-Throughout: `$PI_HOST` is the Pi's SSH host; `crm` is the existing service user. Helper for rootless user-systemd / podman as `crm`:
+Throughout: `$PI_HOST` is the Pi's SSH host; `crm` is the existing service user (uid 995, system account, home `/var/lib/personalcrm`). Helper for rootless user-systemd / podman as `crm` — note the `cd /tmp` + explicit `HOME`: interactive `sudo -u crm` inherits the SSH user's CWD/HOME which crm can't access, so rootless podman fails to chdir without this (the Quadlet *services* run under systemd and are unaffected):
 
 ```bash
 CRM_UID=$(ssh "$PI_HOST" id -u crm)
-USERENV="XDG_RUNTIME_DIR=/run/user/$CRM_UID DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$CRM_UID/bus"
-crm_ctl()    { ssh "$PI_HOST" "sudo -n -u crm $USERENV systemctl --user $*"; }
-crm_podman() { ssh "$PI_HOST" "sudo -n -u crm XDG_RUNTIME_DIR=/run/user/$CRM_UID podman $*"; }
+CRM_HOME=/var/lib/personalcrm
+USERENV="HOME=$CRM_HOME XDG_RUNTIME_DIR=/run/user/$CRM_UID DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$CRM_UID/bus"
+crm_ctl()    { ssh "$PI_HOST" "cd /tmp && sudo -n -u crm $USERENV systemctl --user $*"; }
+crm_podman() { ssh "$PI_HOST" "cd /tmp && sudo -n -u crm HOME=$CRM_HOME XDG_RUNTIME_DIR=/run/user/$CRM_UID podman $*"; }
 ```
 
 ## Phase 0 — Build & publish images (no prod impact)
@@ -19,23 +20,16 @@ crm_podman() { ssh "$PI_HOST" "sudo -n -u crm XDG_RUNTIME_DIR=/run/user/$CRM_UID
 
 ## Phase 1 — Stage-2 on-Pi host-check (low-risk; does NOT touch the running stack)
 
-Recon already confirmed these are all absent on the Pi. Apply + verify:
+**DONE 2026-06-10** (zero-downtime portion). Applied + verified on the Pi:
 
-```bash
-# pinned static podman >=5.x (stock apt is 4.3.1, too old for Quadlets)
-ssh "$PI_HOST" 'cd /tmp && curl -fsSL -o podman.tgz \
-  https://github.com/mgoltzsche/podman-static/releases/download/v5.8.2/podman-linux-arm64.tar.gz \
-  && tar -xzf podman.tgz && sudo cp -r podman-linux-arm64/usr podman-linux-arm64/etc /'
-ssh "$PI_HOST" 'sudo apt-get update && sudo apt-get install -y uidmap'   # newuidmap/newgidmap (setuid)
-ssh "$PI_HOST" 'getent group crm >/dev/null; grep -q "^crm:" /etc/subuid || \
-  sudo usermod --add-subuids 200000-265535 --add-subgids 200000-265535 crm'
-ssh "$PI_HOST" 'sudo loginctl enable-linger crm'
-# verify
-ssh "$PI_HOST" 'podman --version; grep crm /etc/subuid /etc/subgid; ls -ld /run/user/'"$CRM_UID"
-crm_podman run --rm docker.io/library/alpine:3.20 echo rootless-ok   # must print rootless-ok
-```
+- ✅ podman-static **v5.8.2** installed (stock apt is 4.3.1, too old for Quadlets): downloaded the release, `sudo cp -r usr etc /`.
+- ✅ `apt install uidmap` (newuidmap/newgidmap).
+- ✅ `crm` subuid/subgid added: `crm:200000:65536` in `/etc/subuid`+`/etc/subgid` (no overlap with `spencer:100000:65536`).
+- ✅ `loginctl enable-linger crm` → `/run/user/995` present.
+- ✅ `/var/lib/personalcrm` created (crm-owned, 0700) — crm's HOME / rootless storage root.
+- ✅ rootless podman verified: `podman run` works, **overlay** driver, storage at `/var/lib/personalcrm/.local/share/containers/storage`, `Rootless: true`.
 
-Confirm cgroup-v2 delegation by starting a throwaway Quadlet and checking `MemoryMax` applies (see spec rehearsal); the system slice delegated memory+cpu in rehearsal.
+**Deferred to the window (Phase 4):** `usermod -d /var/lib/personalcrm crm` refuses while crm's services are live, so the permanent passwd-home change + user-manager bounce happen after stopping the old units. cgroup-v2 delegation was proven in the VM rehearsal (Pi is cgroup v2); confirm in-window with a throwaway Quadlet `MemoryMax`.
 
 > **Log access changes:** podman-static's conmon lacks journald, so container logs are `crm_podman logs crm-backend`, NOT `journalctl -u personalcrm-backend`. Update the operator memory note. (Service start/stop/health still journal.)
 
@@ -79,18 +73,27 @@ ssh "$PI_HOST" 'sudo systemctl edit caddy'   # add [Service]\nEnvironmentFile=/e
 ## Phase 4 — The flip (brief downtime)
 
 ```bash
+# 1. stop the OLD crm services (writers) so the user + DB are quiesced
+ssh "$PI_HOST" 'sudo systemctl stop personalcrm-backend personalcrm-frontend'
+ssh "$PI_HOST" 'cd /srv/personalcrm/infra && docker compose stop postgres'   # old DB stays on its pristine volume = rollback anchor
+
+# 2. permanent crm home change (deferred from Phase 1; crm now has no live procs).
+#    Bounce linger so the user manager (user@995) restarts with HOME=/var/lib/personalcrm.
+ssh "$PI_HOST" 'sudo loginctl disable-linger crm'
+ssh "$PI_HOST" 'sudo usermod -d /var/lib/personalcrm crm && getent passwd crm'
+ssh "$PI_HOST" 'sudo loginctl enable-linger crm'; sleep 2
+
+# 3. bring up the rootless stack + restore the dump
 crm_ctl daemon-reload
 crm_ctl start personalcrm-database.service
-# wait healthy
-ssh "$PI_HOST" "until sudo -n -u crm XDG_RUNTIME_DIR=/run/user/$CRM_UID podman exec crm-postgres pg_isready -U crm_user; do sleep 1; done"
-# restore the dump into the fresh Podman volume
+ssh "$PI_HOST" "cd /tmp && until sudo -n -u crm HOME=/var/lib/personalcrm XDG_RUNTIME_DIR=/run/user/$CRM_UID podman exec crm-postgres pg_isready -U crm_user; do sleep 1; done"
 cat /tmp/crm-cutover.dump | crm_podman exec -i crm-postgres pg_restore -U crm_user -d personal_crm --no-owner --clean --if-exists
-
-# stop the OLD systemd app units (writers) so only the new stack serves
-ssh "$PI_HOST" 'sudo systemctl stop personalcrm-backend personalcrm-frontend'
 
 crm_ctl start personalcrm-backend.service personalcrm-frontend.service
 ssh "$PI_HOST" 'sudo systemctl reload caddy'   # pick up the X-API-Key injection
+
+# 4. confirm cgroup-v2 delegation actually bit (proven in VM; confirm on Pi)
+crm_ctl show personalcrm-backend.service -p MemoryMax --value   # expect 536870912
 ```
 
 ## Phase 5 — Health gate
