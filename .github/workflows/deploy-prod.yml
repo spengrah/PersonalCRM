@@ -1,0 +1,65 @@
+name: Deploy to Prod
+
+# Promotion-triggered prod deploy. Fires ONLY on push to main (the coordinator
+# fast-forwards main to a reviewed develop SHA). It sits INERT on develop and on
+# every PR — no develop or pull_request trigger — so fork code never reaches the
+# self-hosted Pi runner. The job gates on the recorded CI + image-build success
+# for this exact SHA (read via the REST API with curl + jq, no `gh` dependency),
+# then runs the installed root-owned deploy-artifact.sh. It needs no checkout and
+# no marketplace actions, so there is nothing to SHA-pin.
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy-pi              # two promotions can't overlap
+  cancel-in-progress: false     # never cancel a deploy mid-migrate/rollback
+
+permissions:
+  actions: read                 # to query ci.yml / build-images.yml conclusions via the REST API
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, pi]
+    environment: production       # the production Environment enforces the main-only rule
+    steps:
+      - name: Gate on green CI for this SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Query ci.yml's most-recent COMPLETED run for $GITHUB_SHA via the REST API
+          # with curl (no dependency on `gh` being installed on the runner). CI does not
+          # re-run on the fast-forward (same SHA), so we read its recorded conclusion.
+          api="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&status=completed&per_page=1"
+          conclusion=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$api" | jq -r '.workflow_runs[0].conclusion // "missing"')
+          if [ "$conclusion" != "success" ]; then
+            echo "CI conclusion for ${GITHUB_SHA} is '${conclusion}', not success — aborting deploy."
+            exit 1
+          fi
+          echo "CI conclusion for ${GITHUB_SHA} is success."
+      - name: Gate on built images for this SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The :<sha> images must EXIST before we deploy. build-images.yml runs async on
+          # the develop push; a promote can advance main before it finishes (or it may have
+          # failed). Gate on build-images.yml's recorded SUCCESS for $GITHUB_SHA — the same
+          # REST pattern. (deploy-artifact.sh ALSO fails-fast on `podman pull` before touching
+          # the DB, so a missing image can never damage prod; this gate just turns a late
+          # pull-failure into an early, clear abort and avoids disrupting services for a
+          # doomed deploy.)
+          api="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/workflows/build-images.yml/runs?head_sha=${GITHUB_SHA}&status=completed&per_page=1"
+          build=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$api" | jq -r '.workflow_runs[0].conclusion // "missing"')
+          if [ "$build" != "success" ]; then
+            echo "build-images conclusion for ${GITHUB_SHA} is '${build}', not success — image may not exist yet; aborting."
+            exit 1
+          fi
+          echo "build-images conclusion for ${GITHUB_SHA} is success."
+      - name: Deploy
+        run: sudo /usr/local/sbin/deploy-artifact.sh "${GITHUB_SHA}"
