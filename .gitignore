@@ -273,9 +273,6 @@ temp/
 tmp/
 *.temp
 
-# Local last-deployed SHAs (per-target change detection for deploy-all)
-.deploy-state/
-
 # Archive files (if they contain sensitive data)
 *.zip
 *.tar.gz

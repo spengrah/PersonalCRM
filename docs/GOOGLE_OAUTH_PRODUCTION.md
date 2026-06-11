@@ -182,13 +182,11 @@ sudo journalctl -u personalcrm-backend -n 50 | grep -i oauth
 If this is a fresh deployment with the OAuth feature:
 
 ```bash
-# From your Mac, deploy the latest code
-make deploy
-
-# Or manually run migrations on Pi
-ssh <pi-hostname>
-cd /srv/personalcrm/backend
-./bin/crm-api migrate  # if supported, or migrations run on startup
+# Deploy the latest code via the promotion flow: merge to develop, then
+# `make promote` fast-forwards main and triggers the prod deploy on the
+# self-hosted runner, which runs migrations (crm-admin --migrate) before
+# restarting the containers.
+make promote
 ```
 
 The migration creates the `oauth_credential` table automatically on backend startup.

@@ -11,7 +11,9 @@
 #
 # After running this, you need to:
 # 1. Create the .env file with production secrets
-# 2. Run 'make deploy' to deploy the application
+# 2. Deploy via the promotion flow: merge to develop, then 'make promote'
+#    fast-forwards main, which triggers the prod deploy on the self-hosted
+#    runner (.github/workflows/deploy-prod.yml).
 
 set -e
 
@@ -101,6 +103,7 @@ echo ""
 echo "2. Set permissions on secrets file:"
 echo "   ssh $PI_HOST 'sudo chown crm:crm $PI_DIR/.env && sudo chmod 600 $PI_DIR/.env'"
 echo ""
-echo "3. Run first deploy:"
-echo "   make deploy"
+echo "3. Deploy via the promotion flow (triggers the prod deploy on the"
+echo "   self-hosted runner — see .github/workflows/deploy-prod.yml):"
+echo "   make promote"
 echo ""

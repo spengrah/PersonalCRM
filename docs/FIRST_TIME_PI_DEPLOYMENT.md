@@ -4,11 +4,23 @@
 **Target**: Raspberry Pi 4/5 running Raspberry Pi OS (Bullseye or newer)
 **Estimated Time**: 30-45 minutes
 
-This guide walks you through deploying PersonalCRM to your Raspberry Pi for the first time. The workflow builds on your Mac and deploys to the Pi via rsync, keeping production secrets isolated on the Pi.
+This guide walks you through the original first-time Pi setup. The build/deploy
+steps below describe the **legacy** build-on-Mac + rsync flow, which has been
+retired.
+
+> ⚠️ **Outdated deploy steps — native rsync path retired.** Prod now runs
+> rootless Podman Quadlets and deploys via promotion: merge to `develop`, then
+> `make promote` fast-forwards `main`, triggering the prod deploy on the
+> self-hosted runner (`.github/workflows/deploy-prod.yml` →
+> `scripts/deploy-artifact.sh`). The `make deploy` / `deploy-pi` / `deploy-all`
+> targets and `scripts/deploy.sh` / `scripts/deploy-all.sh` no longer exist.
+> The host-prep steps (`make setup-pi`, secrets, Tailscale) still apply; treat
+> every `make deploy` below as `make promote`.
 
 > **Note:** This guide uses `<pi-hostname>` as a placeholder for your Pi's hostname.
 > Replace it with your actual hostname (e.g., `mypi`, `raspberrypi`).
-> The deploy scripts use the `PI_HOST` environment variable (default: `raspberry-pi`).
+> The remaining Pi helper scripts (`setup-pi.sh`, `backup-db.sh`,
+> `restore-db.sh`) use the `PI_HOST` environment variable (default: `raspberry-pi`).
 
 ---
 
@@ -234,13 +246,14 @@ sudo chmod 600 /srv/personalcrm/.env
 
 ### 4.1 First Deploy
 
-From your Mac:
+Deploy via the promotion flow (see the banner above): merge to `develop`, then
+from your Mac:
 
 ```bash
-make deploy
+make promote
 ```
 
-This will:
+The legacy `make deploy` would:
 1. Fetch `API_KEY` from Pi (for frontend build)
 2. Build backend for ARM64
 3. Build frontend (standalone mode, with production env vars injected)
@@ -450,18 +463,15 @@ Replace `<tailnet>` with your actual Tailnet name (e.g., `tail3df4a6`).
 After initial setup, deploying updates is simple:
 
 ```bash
-# Pull latest code
-git pull origin main
-
-# Deploy
-make deploy
+# Promote develop to main (triggers the prod deploy on the self-hosted runner)
+make promote
 ```
 
-The deploy script is idempotent and handles:
-- Building new binaries
-- Syncing only changed files
-- Restarting services
-- Health verification
+The runner deploy (`scripts/deploy-artifact.sh`) is idempotent and handles:
+- Pulling the prebuilt `:<sha>` images from GHCR
+- Running migrations against the live DB
+- Rewriting the Quadlet `Image=` pins and restarting containers
+- Health verification (rolling back on failure)
 
 ### Check Status Remotely
 
@@ -493,9 +503,9 @@ Ensure the standalone build was deployed correctly:
 ssh <pi-hostname> 'ls -la /srv/personalcrm/frontend/server.js'
 ```
 
-If missing, rebuild and redeploy:
+If missing, re-promote (rebuilds the image and redeploys via the runner):
 ```bash
-make deploy
+make promote
 ```
 
 ### Database Connection Failed
@@ -527,8 +537,8 @@ ssh <pi-hostname> 'echo OK'
 # Check Tailscale status
 tailscale status
 
-# Use IP address if DNS not working
-PI_HOST=100.x.x.x make deploy
+# Use IP address if DNS not working (with a Pi helper script, e.g. backup-db.sh)
+PI_HOST=100.x.x.x ./scripts/backup-db.sh
 ```
 
 ---
@@ -550,7 +560,7 @@ PI_HOST=100.x.x.x make deploy
 - [ ] `make setup-pi` completed
 - [ ] Production secrets in `/srv/personalcrm/.env`
 - [ ] Secrets file permissions set (600, owned by crm)
-- [ ] `make deploy` completed successfully
+- [ ] `make promote` completed successfully (prod deploy ran on the runner)
 - [ ] Health check returns "healthy"
 - [ ] Frontend accessible at http://<pi-hostname>:3001
 - [ ] API authentication working
