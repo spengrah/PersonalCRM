@@ -43,9 +43,11 @@ HEALTH_RETRIES="${HEALTH_RETRIES:-40}"
 
 # ---------------------------------------------------------------------------
 # crm-user helpers: ALL podman/systemctl run rootless as the crm user.
+# CRM_UID/XDG are resolved in main() AFTER SHA validation (so a bad arg is
+# rejected with the documented exit 2 even on a host without the crm user).
 # ---------------------------------------------------------------------------
-CRM_UID="$(id -u "$CRM_USER")"
-XDG="/run/user/$CRM_UID"
+CRM_UID=""
+XDG=""
 
 # crm_podman / crm_ctl: rootless ops against the crm-user store. cd /tmp because
 # an interactive `sudo -u crm` inherits root's CWD, which crm can't chdir into.
@@ -301,13 +303,18 @@ trap on_exit EXIT
 # ---------------------------------------------------------------------------
 SHA="${1:-}"
 
-# Validate the SHA arg.
+# Validate the SHA arg FIRST (before resolving the crm uid, so a bad arg is
+# rejected with exit 2 even on a host that lacks the crm user).
 if ! valid_sha "$SHA"; then
     ntfy "Deploy aborted" "high" "warning" "bad SHA argument; no changes applied"
     echo "error: expected a 40-hex SHA, got '${SHA}'" >&2
     DONE=1
     exit 2
 fi
+
+# Resolve the crm uid now that the arg is valid.
+CRM_UID="$(id -u "$CRM_USER")"
+XDG="/run/user/$CRM_UID"
 
 # ROLLBACK ANCHOR: read BEFORE any rewrite, so a rollback can re-pin the exact
 # image prod was running (a :<sha> tag verbatim, or a resolved digest for :latest).
@@ -354,6 +361,9 @@ case "$CHECK_RC" in
         pin_image "$FRONTEND_UNIT" "$FRONTEND_ROLLBACK_REF"
         crm_ctl daemon-reload
         crm_ctl restart personalcrm-backend.service personalcrm-frontend.service
+        # Health-gate the rolled-back stack (best-effort) so we don't report a
+        # clean rollback while prod is still unhealthy on the OLD image too.
+        health_gate || log "rolled-back stack health-gate did not pass (best-effort)"
         ntfy "Rolled back" "high" "warning" \
             "$SHA health-gate failed; rolled back to $(short_ref "$BACKEND_ROLLBACK_REF")"
         DONE=1
@@ -365,12 +375,18 @@ case "$CHECK_RC" in
         crm_ctl stop personalcrm-backend.service personalcrm-frontend.service
         APP_STOPPED=1
 
-        # b. Snapshot (stops DB, cp -a volume, leaves DB stopped). Capture the path.
+        # b. Snapshot (stops DB, cp -a volume, leaves DB stopped). Capture the
+        #    path. Run with set -e OFF so a non-zero backup exit routes to the
+        #    explicit abort branch (with ntfy) instead of the bare EXIT trap.
         log "taking pre-migrate snapshot via backup-db.sh"
-        SNAPSHOT="$("$BACKUP_SCRIPT" --local --no-restart | sed -n 's/^BACKUP_PATH=//p')"
-        if [ -z "$SNAPSHOT" ]; then
+        set +e
+        SNAPSHOT_OUT="$("$BACKUP_SCRIPT" --local --no-restart)"
+        BACKUP_RC=$?
+        set -e
+        SNAPSHOT="$(printf '%s\n' "$SNAPSHOT_OUT" | sed -n 's/^BACKUP_PATH=//p')"
+        if [ "$BACKUP_RC" -ne 0 ] || [ -z "$SNAPSHOT" ]; then
             ntfy "Deploy aborted" "high" "warning" "$SHA snapshot failed; no migration applied"
-            log "snapshot failed; aborting (DB not migrated)"
+            log "snapshot failed (rc=$BACKUP_RC); aborting (DB not migrated)"
             DONE=1
             exit 1
         fi

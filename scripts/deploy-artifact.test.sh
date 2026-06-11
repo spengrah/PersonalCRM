@@ -290,10 +290,8 @@ test_rootless_env_on_every_call() {
     echo "test: rootless sudo -u crm env on every podman/systemctl call"
     make_sandbox
     STUB_MIGRATE_CHECK_RC=0 run_deploy "$VALID_SHA"
-    # Every recorded podman/systemctl call must have come through a `sudo -u crm`
-    # line carrying HOME + XDG_RUNTIME_DIR. We assert there is at least one such
-    # sudo line and NO bare `podman`/`systemctl` invocation outside the stub log
-    # was made without it. Check the sudo lines carry the env.
+    # Every recorded sudo-wrapped podman/systemctl line must carry the rootless
+    # env (-u crm, HOME, XDG).
     local bad=0 line
     while IFS= read -r line; do
         case "$line" in
@@ -304,10 +302,24 @@ test_rootless_env_on_every_call() {
                 ;;
         esac
     done < "$CALL_LOG"
-    if [ "$bad" -eq 0 ]; then ok; else fail "some podman/systemctl calls lacked the rootless env"; fi
+    if [ "$bad" -eq 0 ]; then ok; else fail "some sudo podman/systemctl calls lacked the rootless env"; fi
     # systemctl must also carry DBUS for the --user bus.
     if grep -E '^sudo .*systemctl' "$CALL_LOG" | grep -q 'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/4242/bus'; then ok
     else fail "systemctl calls missing DBUS_SESSION_BUS_ADDRESS"; fi
+
+    # Stronger: NO bare podman/systemctl may run outside a sudo wrapper. The sudo
+    # stub records `sudo ...X...` then execs the X stub which records `X ...`, so
+    # each genuine call yields exactly one of each. If any X ran without sudo, the
+    # bare count would exceed the sudo-wrapped count.
+    local n_podman n_sudo_podman n_systemctl n_sudo_systemctl
+    n_podman=$(grep -cE '^podman ' "$CALL_LOG" || true)
+    n_sudo_podman=$(grep -cE '^sudo .* podman ' "$CALL_LOG" || true)
+    n_systemctl=$(grep -cE '^systemctl ' "$CALL_LOG" || true)
+    n_sudo_systemctl=$(grep -cE '^sudo .* systemctl ' "$CALL_LOG" || true)
+    if [ "$n_podman" -ge 1 ] && [ "$n_podman" -eq "$n_sudo_podman" ]; then ok
+    else fail "bare podman calls ($n_podman) != sudo-wrapped ($n_sudo_podman)"; fi
+    if [ "$n_systemctl" -ge 1 ] && [ "$n_systemctl" -eq "$n_sudo_systemctl" ]; then ok
+    else fail "bare systemctl calls ($n_systemctl) != sudo-wrapped ($n_sudo_systemctl)"; fi
     cleanup_sandbox
 }
 
@@ -362,6 +374,31 @@ test_pending_happy_path() {
     if [ -n "$i_backup" ] && [ -n "$i_startdb" ] && [ "$i_backup" -lt "$i_startdb" ]; then ok; else fail "backup must precede DB start"; fi
     if [ -n "$i_startdb" ] && [ -n "$i_migrate" ] && [ "$i_startdb" -lt "$i_migrate" ]; then ok; else fail "DB start must precede migrate"; fi
     if grep -q "Image=ghcr.io/spengrah/personalcrm-backend:$NEW_SHA" "$BACKEND_UNIT"; then ok; else fail "image not swapped after migrate"; fi
+    cleanup_sandbox
+}
+
+test_backup_failure_aborts_with_ntfy() {
+    echo "test: snapshot/backup non-zero exit -> abort + ntfy (no migrate)"
+    make_sandbox
+    printf 'NTFY_URL=https://ntfy.example\nNTFY_TOPIC=tok\n' > "$SANDBOX/ntfy.env"
+    NTFY_ENV_FILE_OVERRIDE="$SANDBOX/ntfy.env" STUB_MIGRATE_CHECK_RC=2 STUB_BACKUP_RC=1 run_deploy "$VALID_SHA"
+    if [ "$RC" -eq 1 ]; then ok; else fail "backup failure should exit 1, got $RC"; fi
+    # Must NOT have migrated (backup failed first).
+    if grep -F 'podman run' "$CALL_LOG" | grep -q -- '--migrate$'; then fail "must NOT migrate after backup failure"; else ok; fi
+    # Must have sent a 'Deploy aborted' ntfy (not silently restart via the trap).
+    if grep -F 'curl' "$CALL_LOG" | grep -q 'Title: Deploy aborted'; then ok; else fail "backup failure must ntfy 'Deploy aborted'"; fi
+    cleanup_sandbox
+}
+
+test_restore_pg_not_ready_is_rollback_failed() {
+    echo "test: restore pg_isready never ready -> restore FAILS -> ROLLBACK FAILED"
+    make_sandbox
+    # restore-db.sh returns non-zero (simulating pg never ready) during rollback.
+    printf 'NTFY_URL=https://ntfy.example\nNTFY_TOPIC=tok\n' > "$SANDBOX/ntfy.env"
+    NTFY_ENV_FILE_OVERRIDE="$SANDBOX/ntfy.env" \
+      STUB_MIGRATE_CHECK_RC=2 STUB_MIGRATE_RC=0 STUB_HEALTH_OK=0 STUB_RESTORE_RC=1 run_deploy "$VALID_SHA"
+    if [ "$RC" -eq 1 ]; then ok; else fail "restore failure should exit 1, got $RC"; fi
+    if grep -F 'curl' "$CALL_LOG" | grep -q 'Title: ROLLBACK FAILED'; then ok; else fail "restore failure must ntfy ROLLBACK FAILED"; fi
     cleanup_sandbox
 }
 
@@ -504,6 +541,8 @@ main() {
     test_exit1_abort_no_touch
     test_exit_other_abort
     test_pending_happy_path
+    test_backup_failure_aborts_with_ntfy
+    test_restore_pg_not_ready_is_rollback_failed
     test_migrate_failure_restores
     test_post_migrate_swap_failure_restores
     test_rollback_restore_ordering

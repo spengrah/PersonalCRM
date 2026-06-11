@@ -165,15 +165,22 @@ log "Starting postgres..."
 crm_ctl start personalcrm-database.service
 
 log "Waiting for postgres to accept connections..."
-for i in $(seq 1 15); do
+PG_READY=false
+for _ in $(seq 1 15); do
     if crm_podman exec crm-postgres pg_isready -U crm_user >/dev/null 2>&1; then
+        PG_READY=true
         break
-    fi
-    if [ "$i" -eq 15 ]; then
-        log "Warning: postgres not ready after 15s"
     fi
     sleep 1
 done
+# A restore that cannot bring Postgres ready is a FAILED restore -- the caller
+# (deploy-artifact.sh) must treat this as ROLLBACK FAILED, not a clean recovery.
+# The displaced live dir is intentionally retained (not cleaned up) for forensics.
+if [ "$PG_READY" != true ]; then
+    echo "Error: postgres did not accept connections after 15s; restore failed" >&2
+    echo "   Displaced live data retained at: $DISPLACED" >&2
+    exit 1
+fi
 
 # The copy succeeded and postgres is back -- clean up the displaced live dir.
 # (The SNAPSHOT is never touched; it remains the recovery point.)
