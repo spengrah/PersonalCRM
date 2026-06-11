@@ -45,7 +45,7 @@ func (q *Queries) DeleteOAuthCredentialByProvider(ctx context.Context, provider 
 
 const GetOAuthCredential = `-- name: GetOAuthCredential :one
 
-SELECT id, provider, account_id, account_name, access_token_encrypted, refresh_token_encrypted, encryption_nonce, token_type, expires_at, scopes, created_at, updated_at FROM oauth_credential
+SELECT id, provider, account_id, account_name, access_token_encrypted, refresh_token_encrypted, encryption_nonce, token_type, expires_at, scopes, created_at, updated_at, refresh_token_nonce FROM oauth_credential
 WHERE provider = $1 AND account_id = $2
 `
 
@@ -72,12 +72,13 @@ func (q *Queries) GetOAuthCredential(ctx context.Context, arg GetOAuthCredential
 		&i.Scopes,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RefreshTokenNonce,
 	)
 	return &i, err
 }
 
 const GetOAuthCredentialByID = `-- name: GetOAuthCredentialByID :one
-SELECT id, provider, account_id, account_name, access_token_encrypted, refresh_token_encrypted, encryption_nonce, token_type, expires_at, scopes, created_at, updated_at FROM oauth_credential
+SELECT id, provider, account_id, account_name, access_token_encrypted, refresh_token_encrypted, encryption_nonce, token_type, expires_at, scopes, created_at, updated_at, refresh_token_nonce FROM oauth_credential
 WHERE id = $1
 `
 
@@ -98,6 +99,7 @@ func (q *Queries) GetOAuthCredentialByID(ctx context.Context, id pgtype.UUID) (*
 		&i.Scopes,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RefreshTokenNonce,
 	)
 	return &i, err
 }
@@ -145,7 +147,7 @@ func (q *Queries) GetOAuthCredentialStatus(ctx context.Context, id pgtype.UUID) 
 }
 
 const ListAllOAuthCredentials = `-- name: ListAllOAuthCredentials :many
-SELECT id, provider, account_id, account_name, access_token_encrypted, refresh_token_encrypted, encryption_nonce, token_type, expires_at, scopes, created_at, updated_at FROM oauth_credential
+SELECT id, provider, account_id, account_name, access_token_encrypted, refresh_token_encrypted, encryption_nonce, token_type, expires_at, scopes, created_at, updated_at, refresh_token_nonce FROM oauth_credential
 ORDER BY provider, created_at DESC
 `
 
@@ -172,6 +174,7 @@ func (q *Queries) ListAllOAuthCredentials(ctx context.Context) ([]*OauthCredenti
 			&i.Scopes,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.RefreshTokenNonce,
 		); err != nil {
 			return nil, err
 		}
@@ -240,7 +243,7 @@ func (q *Queries) ListOAuthCredentialStatuses(ctx context.Context, provider stri
 }
 
 const ListOAuthCredentials = `-- name: ListOAuthCredentials :many
-SELECT id, provider, account_id, account_name, access_token_encrypted, refresh_token_encrypted, encryption_nonce, token_type, expires_at, scopes, created_at, updated_at FROM oauth_credential
+SELECT id, provider, account_id, account_name, access_token_encrypted, refresh_token_encrypted, encryption_nonce, token_type, expires_at, scopes, created_at, updated_at, refresh_token_nonce FROM oauth_credential
 WHERE provider = $1
 ORDER BY created_at DESC
 `
@@ -268,6 +271,7 @@ func (q *Queries) ListOAuthCredentials(ctx context.Context, provider string) ([]
 			&i.Scopes,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.RefreshTokenNonce,
 		); err != nil {
 			return nil, err
 		}
@@ -281,31 +285,45 @@ func (q *Queries) ListOAuthCredentials(ctx context.Context, provider string) ([]
 
 const UpdateOAuthCredentialTokens = `-- name: UpdateOAuthCredentialTokens :one
 UPDATE oauth_credential SET
-    access_token_encrypted = $2,
-    refresh_token_encrypted = COALESCE($3, refresh_token_encrypted),
+    access_token_encrypted = $1,
+    refresh_token_encrypted = COALESCE($2, refresh_token_encrypted),
+    refresh_token_nonce = CASE
+        WHEN $2 IS NOT NULL THEN $3
+        WHEN refresh_token_encrypted IS NOT NULL THEN COALESCE(refresh_token_nonce, encryption_nonce)
+        ELSE NULL
+    END,
     encryption_nonce = $4,
     expires_at = $5,
     updated_at = NOW()
-WHERE id = $1
-RETURNING id, provider, account_id, account_name, access_token_encrypted, refresh_token_encrypted, encryption_nonce, token_type, expires_at, scopes, created_at, updated_at
+WHERE id = $6
+RETURNING id, provider, account_id, account_name, access_token_encrypted, refresh_token_encrypted, encryption_nonce, token_type, expires_at, scopes, created_at, updated_at, refresh_token_nonce
 `
 
 type UpdateOAuthCredentialTokensParams struct {
-	ID                    pgtype.UUID        `json:"id"`
 	AccessTokenEncrypted  []byte             `json:"access_token_encrypted"`
 	RefreshTokenEncrypted []byte             `json:"refresh_token_encrypted"`
+	RefreshTokenNonce     []byte             `json:"refresh_token_nonce"`
 	EncryptionNonce       []byte             `json:"encryption_nonce"`
 	ExpiresAt             pgtype.Timestamptz `json:"expires_at"`
+	ID                    pgtype.UUID        `json:"id"`
 }
 
-// Update only the token data (for token refresh)
+// Update only the token data (for token refresh).
+// refresh_token_nonce tracks refresh_token_encrypted: it is only overwritten when
+// a new refresh token is supplied. When the stored ciphertext is preserved, a
+// NULL nonce (legacy row whose refresh token was sealed with the shared
+// encryption_nonce) is captured into the dedicated column before encryption_nonce
+// rotates to the new access-token nonce — otherwise the preserved refresh token
+// would become undecryptable. SET right-hand sides read the pre-update row, so
+// the captured values are the old ones regardless of assignment order.
 func (q *Queries) UpdateOAuthCredentialTokens(ctx context.Context, arg UpdateOAuthCredentialTokensParams) (*OauthCredential, error) {
 	row := q.db.QueryRow(ctx, UpdateOAuthCredentialTokens,
-		arg.ID,
 		arg.AccessTokenEncrypted,
 		arg.RefreshTokenEncrypted,
+		arg.RefreshTokenNonce,
 		arg.EncryptionNonce,
 		arg.ExpiresAt,
+		arg.ID,
 	)
 	var i OauthCredential
 	err := row.Scan(
@@ -321,6 +339,7 @@ func (q *Queries) UpdateOAuthCredentialTokens(ctx context.Context, arg UpdateOAu
 		&i.Scopes,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RefreshTokenNonce,
 	)
 	return &i, err
 }
@@ -332,21 +351,38 @@ INSERT INTO oauth_credential (
     account_name,
     access_token_encrypted,
     refresh_token_encrypted,
+    refresh_token_nonce,
     encryption_nonce,
     token_type,
     expires_at,
     scopes
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+) VALUES (
+    $1,
+    $2,
+    $3,
+    $4,
+    $5,
+    $6,
+    $7,
+    $8,
+    $9,
+    $10
+)
 ON CONFLICT (provider, account_id) DO UPDATE SET
     account_name = EXCLUDED.account_name,
     access_token_encrypted = EXCLUDED.access_token_encrypted,
     refresh_token_encrypted = COALESCE(EXCLUDED.refresh_token_encrypted, oauth_credential.refresh_token_encrypted),
+    refresh_token_nonce = CASE
+        WHEN EXCLUDED.refresh_token_encrypted IS NOT NULL THEN EXCLUDED.refresh_token_nonce
+        WHEN oauth_credential.refresh_token_encrypted IS NOT NULL THEN COALESCE(oauth_credential.refresh_token_nonce, oauth_credential.encryption_nonce)
+        ELSE NULL
+    END,
     encryption_nonce = EXCLUDED.encryption_nonce,
     token_type = EXCLUDED.token_type,
     expires_at = EXCLUDED.expires_at,
     scopes = EXCLUDED.scopes,
     updated_at = NOW()
-RETURNING id, provider, account_id, account_name, access_token_encrypted, refresh_token_encrypted, encryption_nonce, token_type, expires_at, scopes, created_at, updated_at
+RETURNING id, provider, account_id, account_name, access_token_encrypted, refresh_token_encrypted, encryption_nonce, token_type, expires_at, scopes, created_at, updated_at, refresh_token_nonce
 `
 
 type UpsertOAuthCredentialParams struct {
@@ -355,13 +391,21 @@ type UpsertOAuthCredentialParams struct {
 	AccountName           pgtype.Text        `json:"account_name"`
 	AccessTokenEncrypted  []byte             `json:"access_token_encrypted"`
 	RefreshTokenEncrypted []byte             `json:"refresh_token_encrypted"`
+	RefreshTokenNonce     []byte             `json:"refresh_token_nonce"`
 	EncryptionNonce       []byte             `json:"encryption_nonce"`
 	TokenType             pgtype.Text        `json:"token_type"`
 	ExpiresAt             pgtype.Timestamptz `json:"expires_at"`
 	Scopes                []string           `json:"scopes"`
 }
 
-// Insert or update an OAuth credential
+// Insert or update an OAuth credential.
+// refresh_token_nonce is kept in sync with refresh_token_encrypted: when a new
+// refresh token is provided both columns update together. When the existing
+// ciphertext is preserved, a NULL nonce (legacy row whose refresh token was
+// sealed with the shared encryption_nonce) is captured into the dedicated column
+// before encryption_nonce rotates to the new access-token nonce — otherwise the
+// preserved refresh token would become undecryptable. With no ciphertext at all
+// the nonce is NULL.
 func (q *Queries) UpsertOAuthCredential(ctx context.Context, arg UpsertOAuthCredentialParams) (*OauthCredential, error) {
 	row := q.db.QueryRow(ctx, UpsertOAuthCredential,
 		arg.Provider,
@@ -369,6 +413,7 @@ func (q *Queries) UpsertOAuthCredential(ctx context.Context, arg UpsertOAuthCred
 		arg.AccountName,
 		arg.AccessTokenEncrypted,
 		arg.RefreshTokenEncrypted,
+		arg.RefreshTokenNonce,
 		arg.EncryptionNonce,
 		arg.TokenType,
 		arg.ExpiresAt,
@@ -388,6 +433,7 @@ func (q *Queries) UpsertOAuthCredential(ctx context.Context, arg UpsertOAuthCred
 		&i.Scopes,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RefreshTokenNonce,
 	)
 	return &i, err
 }

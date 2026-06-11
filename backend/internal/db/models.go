@@ -394,6 +394,7 @@ type OauthCredential struct {
 	Scopes                []string           `json:"scopes"`
 	CreatedAt             pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+	RefreshTokenNonce     []byte             `json:"refresh_token_nonce"`
 }
 
 type PgConstraint struct {

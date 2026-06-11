@@ -1738,7 +1738,14 @@ type Querier interface {
 	// runs its own UPDATE path that also clears deleted_at).
 	UpdateMeetingNoteOnResync(ctx context.Context, arg UpdateMeetingNoteOnResyncParams) (*MeetingNote, error)
 	UpdateNote(ctx context.Context, arg UpdateNoteParams) (*Note, error)
-	// Update only the token data (for token refresh)
+	// Update only the token data (for token refresh).
+	// refresh_token_nonce tracks refresh_token_encrypted: it is only overwritten when
+	// a new refresh token is supplied. When the stored ciphertext is preserved, a
+	// NULL nonce (legacy row whose refresh token was sealed with the shared
+	// encryption_nonce) is captured into the dedicated column before encryption_nonce
+	// rotates to the new access-token nonce — otherwise the preserved refresh token
+	// would become undecryptable. SET right-hand sides read the pre-update row, so
+	// the captured values are the old ones regardless of assignment order.
 	UpdateOAuthCredentialTokens(ctx context.Context, arg UpdateOAuthCredentialTokensParams) (*OauthCredential, error)
 	UpdateSyncStateCursor(ctx context.Context, arg UpdateSyncStateCursorParams) error
 	UpdateSyncStateEnabled(ctx context.Context, arg UpdateSyncStateEnabledParams) (*ExternalSyncState, error)
@@ -1800,7 +1807,14 @@ type Querier interface {
 	// come from the Pi ingest service identity-match path. mac_host_id is
 	// provenance — multi-host dedup is by guid, not by host.
 	UpsertMessagesMessage(ctx context.Context, arg UpsertMessagesMessageParams) (*MessagesMessage, error)
-	// Insert or update an OAuth credential
+	// Insert or update an OAuth credential.
+	// refresh_token_nonce is kept in sync with refresh_token_encrypted: when a new
+	// refresh token is provided both columns update together. When the existing
+	// ciphertext is preserved, a NULL nonce (legacy row whose refresh token was
+	// sealed with the shared encryption_nonce) is captured into the dedicated column
+	// before encryption_nonce rotates to the new access-token nonce — otherwise the
+	// preserved refresh token would become undecryptable. With no ciphertext at all
+	// the nonce is NULL.
 	UpsertOAuthCredential(ctx context.Context, arg UpsertOAuthCredentialParams) (*OauthCredential, error)
 	// Insert with no-op on call_unique_id conflict. peer_normalized comes from
 	// the daemon (canonicalized via HandleNormalization). matched_contact_id

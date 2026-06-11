@@ -22,22 +22,46 @@ SELECT * FROM oauth_credential
 ORDER BY provider, created_at DESC;
 
 -- name: UpsertOAuthCredential :one
--- Insert or update an OAuth credential
+-- Insert or update an OAuth credential.
+-- refresh_token_nonce is kept in sync with refresh_token_encrypted: when a new
+-- refresh token is provided both columns update together. When the existing
+-- ciphertext is preserved, a NULL nonce (legacy row whose refresh token was
+-- sealed with the shared encryption_nonce) is captured into the dedicated column
+-- before encryption_nonce rotates to the new access-token nonce — otherwise the
+-- preserved refresh token would become undecryptable. With no ciphertext at all
+-- the nonce is NULL.
 INSERT INTO oauth_credential (
     provider,
     account_id,
     account_name,
     access_token_encrypted,
     refresh_token_encrypted,
+    refresh_token_nonce,
     encryption_nonce,
     token_type,
     expires_at,
     scopes
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+) VALUES (
+    sqlc.arg(provider),
+    sqlc.arg(account_id),
+    sqlc.arg(account_name),
+    sqlc.arg(access_token_encrypted),
+    sqlc.arg(refresh_token_encrypted),
+    sqlc.arg(refresh_token_nonce),
+    sqlc.arg(encryption_nonce),
+    sqlc.arg(token_type),
+    sqlc.arg(expires_at),
+    sqlc.arg(scopes)
+)
 ON CONFLICT (provider, account_id) DO UPDATE SET
     account_name = EXCLUDED.account_name,
     access_token_encrypted = EXCLUDED.access_token_encrypted,
     refresh_token_encrypted = COALESCE(EXCLUDED.refresh_token_encrypted, oauth_credential.refresh_token_encrypted),
+    refresh_token_nonce = CASE
+        WHEN EXCLUDED.refresh_token_encrypted IS NOT NULL THEN EXCLUDED.refresh_token_nonce
+        WHEN oauth_credential.refresh_token_encrypted IS NOT NULL THEN COALESCE(oauth_credential.refresh_token_nonce, oauth_credential.encryption_nonce)
+        ELSE NULL
+    END,
     encryption_nonce = EXCLUDED.encryption_nonce,
     token_type = EXCLUDED.token_type,
     expires_at = EXCLUDED.expires_at,
@@ -46,14 +70,26 @@ ON CONFLICT (provider, account_id) DO UPDATE SET
 RETURNING *;
 
 -- name: UpdateOAuthCredentialTokens :one
--- Update only the token data (for token refresh)
+-- Update only the token data (for token refresh).
+-- refresh_token_nonce tracks refresh_token_encrypted: it is only overwritten when
+-- a new refresh token is supplied. When the stored ciphertext is preserved, a
+-- NULL nonce (legacy row whose refresh token was sealed with the shared
+-- encryption_nonce) is captured into the dedicated column before encryption_nonce
+-- rotates to the new access-token nonce — otherwise the preserved refresh token
+-- would become undecryptable. SET right-hand sides read the pre-update row, so
+-- the captured values are the old ones regardless of assignment order.
 UPDATE oauth_credential SET
-    access_token_encrypted = $2,
-    refresh_token_encrypted = COALESCE($3, refresh_token_encrypted),
-    encryption_nonce = $4,
-    expires_at = $5,
+    access_token_encrypted = sqlc.arg(access_token_encrypted),
+    refresh_token_encrypted = COALESCE(sqlc.arg(refresh_token_encrypted), refresh_token_encrypted),
+    refresh_token_nonce = CASE
+        WHEN sqlc.arg(refresh_token_encrypted) IS NOT NULL THEN sqlc.arg(refresh_token_nonce)
+        WHEN refresh_token_encrypted IS NOT NULL THEN COALESCE(refresh_token_nonce, encryption_nonce)
+        ELSE NULL
+    END,
+    encryption_nonce = sqlc.arg(encryption_nonce),
+    expires_at = sqlc.arg(expires_at),
     updated_at = NOW()
-WHERE id = $1
+WHERE id = sqlc.arg(id)
 RETURNING *;
 
 -- name: DeleteOAuthCredential :exec
