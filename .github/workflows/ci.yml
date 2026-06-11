@@ -121,9 +121,10 @@ jobs:
         env:
           GOOS: linux
           GOARCH: arm64
-        # crm-admin is built only at deploy time (scripts/deploy.sh), so a
-        # compile error in its single-file main.go (e.g. a new --seed subcommand
-        # type not defined there) would otherwise ship uncaught. This guards it.
+        # crm-admin is built into the backend image at release time, not in
+        # this CI job, so a compile error in its single-file main.go (e.g. a new
+        # --seed subcommand type not defined there) would otherwise ship
+        # uncaught. This cross-compile guards it.
         run: go build -o bin/crm-admin-arm64 cmd/crm-admin/main.go
 
   backend-tests:
@@ -582,7 +583,7 @@ jobs:
       # as its own visible step (not folded into the webServer command) so the
       # build duration is measurable in the step timings. The standalone server
       # bundles neither `.next/static` nor `public`, so we copy both alongside
-      # `server.js`, mirroring scripts/deploy.sh. NEXT_PUBLIC_* are inlined at
+      # `server.js`, mirroring infra/images/frontend.Dockerfile. NEXT_PUBLIC_* are inlined at
       # build time, so the values the suite needs are set HERE. We deliberately
       # OMIT NEXT_PUBLIC_BUILD_VERSION/COMMIT_HASH/GITHUB_REPO: the settings spec
       # asserts the Version field reads "Personal CRM (dev)", which only holds

@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev dev-seed staging-reset build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy deploy-pi deploy-mac deploy-all setup-pi dev-native postgres-native sqlc smoke-test test-integration-fast test-integration-slow test-clean-clones check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry
+.PHONY: help setup dev dev-seed staging-reset build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy-mac promote setup-pi dev-native postgres-native sqlc smoke-test test-integration-fast test-integration-slow test-clean-clones check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -99,10 +99,8 @@ help:
 	@echo ""
 	@echo "Deployment:"
 	@echo "  setup-pi   - One-time Pi setup (create user, directories)"
-	@echo "  deploy-pi  - Build and deploy to Pi (requires setup-pi first)"
+	@echo "  promote    - Fast-forward main to develop (triggers prod deploy)"
 	@echo "  deploy-mac - Build and install the Mac daemon (requires CRM_MAC_CODESIGN_IDENTITY)"
-	@echo "  deploy-all - Deploy Pi and Mac daemon — but only those whose source paths changed since last deploy"
-	@echo "  deploy     - Alias for deploy-pi"
 
 # Setup development environment (installs all dev dependencies)
 # Run this first when setting up a new development environment
@@ -704,17 +702,16 @@ status:
 	fi
 
 # Deployment
-deploy-pi:
-	@./scripts/deploy.sh
-
 deploy-mac:
 	@./scripts/deploy-mac-daemon.sh
 
-deploy-all:
-	@./scripts/deploy-all.sh
-
-# Backwards-compat alias for `make deploy-pi`.
-deploy: deploy-pi
+# Promote: fast-forward main to develop's HEAD. The deploy runs on the Pi via
+# the self-hosted runner (deploy-prod.yml) when main moves. Same SHA = the
+# :<sha> image is already built + CI-green; prod just pulls it. A non-fast-forward
+# push is rejected by the remote (no --force) — that rejection IS the ff-only
+# guarantee; if it fires, main has diverged and must be investigated, not forced.
+promote:
+	@git push origin develop:main
 
 setup-pi:
 	@./scripts/setup-pi.sh

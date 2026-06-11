@@ -11,6 +11,5 @@
 /frontend/.next/cache
 /backend/tmp
 /mac-daemon
-/.deploy-state
 **/*.log
 **/.DS_Store

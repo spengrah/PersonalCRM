@@ -1,9 +1,21 @@
 # PersonalCRM Deployment
 
-This document describes the deployment architecture and workflow for PersonalCRM.
+> ⚠️ **Outdated — native rsync path retired.** This document describes the
+> legacy build-on-Mac + rsync-to-Pi flow (systemd **system** units, local
+> binaries), which has been replaced. Prod now runs rootless Podman Quadlets
+> and deploys via promotion: merge to `develop`, then `make promote`
+> fast-forwards `main`, which triggers the prod deploy on the self-hosted
+> runner (`.github/workflows/deploy-prod.yml` → `scripts/deploy-artifact.sh`).
+> The `scripts/deploy.sh` / `scripts/deploy-all.sh` scripts and the
+> `make deploy` / `deploy-pi` / `deploy-all` targets no longer exist. The
+> sections below are retained for historical context only.
+
+This document describes the (legacy) deployment architecture and workflow for PersonalCRM.
 
 > **Note:** This guide uses `<pi-hostname>` as a placeholder for your Pi's hostname.
-> Replace it with your actual hostname. The deploy scripts use `PI_HOST` env var (default: `raspberry-pi`).
+> Replace it with your actual hostname. The remaining Pi helper scripts
+> (`setup-pi.sh`, `backup-db.sh`, `restore-db.sh`) use the `PI_HOST` env var
+> (default: `raspberry-pi`).
 
 ## Overview
 
@@ -54,37 +66,20 @@ make setup-pi
 # 2. SSH to Pi and create secrets
 ssh <pi-hostname> 'sudo nano /srv/personalcrm/.env'
 
-# 3. Deploy
-make deploy
+# 3. Deploy via the promotion flow (see banner above): merge to develop,
+#    then `make promote`.
 ```
 
 ### Regular Deploys
 
-```bash
-make deploy
-```
+Deploys now run through the promotion flow: merge to `develop`, then
+`make promote` fast-forwards `main`, which triggers the prod deploy on the
+self-hosted runner. The runner (via `scripts/deploy-artifact.sh`):
 
-This single command:
-1. Builds backend for ARM64
-2. Builds frontend in standalone mode
-3. Rsyncs files to Pi
-4. Installs/updates systemd services
-5. Restarts services
-6. Verifies health checks
-
-### Skip Build (Quick Deploy)
-
-If you've already built and just want to redeploy:
-
-```bash
-./scripts/deploy.sh --skip-build
-```
-
-### Custom Pi Hostname
-
-```bash
-PI_HOST=mypi.local make deploy
-```
+1. Pulls the prebuilt `:<sha>` backend/frontend images from GHCR
+2. Runs migrations (`crm-admin --migrate`) against the live DB
+3. Rewrites the Quadlet `Image=` pins and restarts the containers
+4. Verifies health checks (rolling back on failure)
 
 ## What Gets Deployed
 
@@ -230,8 +225,8 @@ ssh <pi-hostname> 'echo OK'
 # Check Tailscale
 tailscale status
 
-# Use IP directly
-PI_HOST=100.x.x.x make deploy
+# Use IP directly with a Pi helper script (e.g. backup-db.sh)
+PI_HOST=100.x.x.x ./scripts/backup-db.sh
 ```
 
 ### Services Won't Start
@@ -256,8 +251,8 @@ The standalone build must include server.js:
 # Verify deployment
 ssh <pi-hostname> 'ls -la /srv/personalcrm/frontend/server.js'
 
-# Rebuild and redeploy if missing
-make deploy
+# Re-promote if missing (rebuilds the image and redeploys via the runner)
+make promote
 ```
 
 ### Database Issues

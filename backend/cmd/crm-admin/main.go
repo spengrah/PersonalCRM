@@ -122,7 +122,8 @@
 // admin surface stays unit-testable independently of the binary.
 //
 // Build:  make crm-admin   (operator-only target). CI cross-compiles the binary
-// (a compile guard) but does not deploy it; deployment is via scripts/deploy.sh.
+// (a compile guard) but does not ship it; in prod the binary is baked into the
+// backend image and invoked by the runner deploy (scripts/deploy-artifact.sh).
 //
 // Single-file pkg-main per .ai/rules/core.md "Adding types to
 // cmd/crm-api/ in a companion file": all types referenced from this
