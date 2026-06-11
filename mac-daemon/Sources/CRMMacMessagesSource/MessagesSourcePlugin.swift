@@ -80,6 +80,13 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
     public nonisolated let logger: LoggerProtocol
     public nonisolated let clock: @Sendable () -> Date
     private let healthRegistry: SourceHealthRegistry
+    /// Resolves outbound rows' peers from chat_handle_join. Injected so
+    /// the failure path (a transient DB error during resolution must
+    /// hold the cursor) is testable: an actor can't have an internal
+    /// property mutated from outside, so the collaborator is supplied at
+    /// init. Captured into `pool.read` closures, hence `@Sendable`; the
+    /// non-Sendable `Database` is a parameter, not a capture.
+    private let outboundPeerResolver: @Sendable (Database, [ChatDBMessage]) throws -> [String: String]
 
     /// Cached pool, opened lazily on first successful tick.
     private var pool: DatabasePool?
@@ -108,7 +115,9 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
         cache: KnownIdentifiersCache,
         healthRegistry: SourceHealthRegistry,
         logger: LoggerProtocol,
-        clock: @escaping @Sendable () -> Date = { Date() }
+        clock: @escaping @Sendable () -> Date = { Date() },
+        outboundPeerResolver: @escaping @Sendable (Database, [ChatDBMessage]) throws -> [String: String]
+            = ChatDBReader.resolveOutboundPeers
     ) {
         self.tickInterval = tickInterval
         self.config = config
@@ -120,6 +129,7 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
         self.healthRegistry = healthRegistry
         self.logger = logger
         self.clock = clock
+        self.outboundPeerResolver = outboundPeerResolver
     }
 
     public func performTick() async throws {
@@ -459,15 +469,18 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
             // `since` predates the floor (e.g. queued by an older build).
             // Rows below the floor are never emitted.
             let scanSince = max(entry.since, config.backfillFloor)
-            let page: MessagesScanPage
+            let resolver = outboundPeerResolver
+            let resolved: (page: MessagesScanPage, peers: [String: String])
             do {
-                page = try await pool.read { db in
-                    try MessagesScanReader.scanPage(
+                resolved = try await pool.read { db in
+                    let page = try MessagesScanReader.scanPage(
                         db: db,
                         canonicalHandle: handle,
                         since: scanSince,
                         progressBelowRowID: entry.progressBelowRowID,
                         limit: limit)
+                    let peers = try resolver(db, page.rows)
+                    return (page, peers)
                 }
             } catch let dbError as DatabaseError where isFDAError(dbError) {
                 await markUnhealthy(reason: "fda_required")
@@ -478,10 +491,12 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
                 ])
                 continue
             }
+            let page = resolved.page
 
-            scanBudget -= page.rows.count
+            scanBudget -= page.inspected
 
-            let publishItems = await filterAndShape(rows: page.rows, isBackfill: true)
+            let publishItems = await filterAndShape(
+                rows: page.rows, outboundPeers: resolved.peers, isBackfill: true)
             let outcome = await publisher.publish(items: publishItems)
 
             let confirmed: Bool
@@ -576,13 +591,16 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
                                   rejected: [], hadUnconfirmedItems: false)
         }
 
-        let page: ChatDBReadPage
+        let resolver = outboundPeerResolver
+        let resolved: (page: ChatDBReadPage, peers: [String: String])
         do {
-            page = try await pool.read { db in
-                try ChatDBReader.fetchPage(
+            resolved = try await pool.read { db in
+                let page = try ChatDBReader.fetchPage(
                     db: db,
                     direction: .backwardFromExclusive(upperBoundExclusive),
                     limit: limit)
+                let peers = try resolver(db, page.rows)
+                return (page, peers)
             }
         } catch let dbError as DatabaseError where isFDAError(dbError) {
             await markUnhealthy(reason: "fda_required")
@@ -595,6 +613,7 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
             return BatchSummary(accepted: 0, duplicate: 0,
                                   rejected: [], hadUnconfirmedItems: false)
         }
+        let page = resolved.page
 
         // No SQL rows at all -> we've walked the whole iterator.
         if page.scannedROWIDBounds == nil {
@@ -607,10 +626,11 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
         // Floor check: drop rows whose sentAt is below backfillFloor.
         let inRangeRows = page.rows.filter { $0.sentAt >= config.backfillFloor }
         let belowFloor = page.rows.count - inRangeRows.count
-        let publishItems = await filterAndShape(rows: inRangeRows, isBackfill: true)
+        let publishItems = await filterAndShape(
+            rows: inRangeRows, outboundPeers: resolved.peers, isBackfill: true)
         let outcome = await publisher.publish(items: publishItems)
 
-        budget.consume(rows: page.rows.count)
+        budget.consume(rows: page.inspected)
 
         // Cursor advance rules:
         //   - publishItems empty (everything filtered out): advance
@@ -665,13 +685,16 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
                                   rejected: [], hadUnconfirmedItems: false)
         }
 
-        let page: ChatDBReadPage
+        let resolver = outboundPeerResolver
+        let resolved: (page: ChatDBReadPage, peers: [String: String])
         do {
-            page = try await pool.read { db in
-                try ChatDBReader.fetchPage(
+            resolved = try await pool.read { db in
+                let page = try ChatDBReader.fetchPage(
                     db: db,
                     direction: .forwardFromExclusive(lower),
                     limit: limit)
+                let peers = try resolver(db, page.rows)
+                return (page, peers)
             }
         } catch let dbError as DatabaseError where isFDAError(dbError) {
             await markUnhealthy(reason: "fda_required")
@@ -684,6 +707,7 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
             return BatchSummary(accepted: 0, duplicate: 0,
                                   rejected: [], hadUnconfirmedItems: false)
         }
+        let page = resolved.page
 
         if page.scannedROWIDBounds == nil {
             // No new rows since liveCursor.
@@ -691,10 +715,11 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
                                   rejected: [], hadUnconfirmedItems: false)
         }
 
-        let publishItems = await filterAndShape(rows: page.rows, isBackfill: false)
+        let publishItems = await filterAndShape(
+            rows: page.rows, outboundPeers: resolved.peers, isBackfill: false)
         let outcome = await publisher.publish(items: publishItems)
 
-        budget.consume(rows: page.rows.count)
+        budget.consume(rows: page.inspected)
 
         let confirmedAllItems: Bool
         if publishItems.isEmpty {
@@ -715,27 +740,74 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
             hadUnconfirmedItems: !confirmedAllItems)
     }
 
-    /// Apply sender filter + shape to publishable form.
-    /// Outbound rows have NULL handle_id in chat.db (reader skips them
-    /// during fetch); for cursor advancement we DO advance past them,
-    /// but the publisher only sees emitted rows. Outbound peer
-    /// resolution would happen here via outboundGroupPeer, but
-    /// fetch() already excludes outbound rows; v1 ships inbound-only
-    /// emission until the outbound branch is wired through the reader.
-    private func filterAndShape(rows: [ChatDBMessage], isBackfill: Bool) async -> [PublishItem] {
+    /// Apply sender filter + shape to publishable form, for inbound AND
+    /// outbound rows.
+    ///
+    /// Per row:
+    ///   1. Effective peer: inbound -> row.peerHandleRaw; outbound ->
+    ///      row.peerHandleRaw if non-empty, else outboundPeers[chatGUID].
+    ///   2. Skip if effective peer is empty (unresolvable outbound).
+    ///   3. Skip if chat.guid is nil/empty (the Pi requires a non-empty
+    ///      chat_id; a persistently-rejected event would wedge the
+    ///      cursor).
+    ///   4. Canonicalize + skip if not in the known-identifiers set. For
+    ///      outbound this filters on the RECIPIENT — only emit messages
+    ///      to known contacts.
+    ///   5. Shape (PayloadShaping branches isFromMe -> .sent / .received).
+    ///
+    /// Pure over its inputs + the cache. Counts skips by reason and logs
+    /// one debug line per non-empty batch (counts only — no handles or
+    /// guids logged here).
+    private func filterAndShape(
+        rows: [ChatDBMessage],
+        outboundPeers: [String: String],
+        isBackfill: Bool
+    ) async -> [PublishItem] {
         var out: [PublishItem] = []
         out.reserveCapacity(rows.count)
+        var unresolvableOutbound = 0
+        var emptyChatID = 0
+        var unknownPeer = 0
         for row in rows {
-            let canonical = HandleNormalization.canonicalize(row.peerHandleRaw)
-            if canonical.isEmpty { continue }
+            let effectivePeerRaw: String
+            if row.isFromMe {
+                effectivePeerRaw = row.peerHandleRaw.isEmpty
+                    ? (outboundPeers[row.chatGUID ?? ""] ?? "")
+                    : row.peerHandleRaw
+            } else {
+                effectivePeerRaw = row.peerHandleRaw
+            }
+            if effectivePeerRaw.isEmpty {
+                unresolvableOutbound += 1
+                continue
+            }
+            if row.chatGUID?.isEmpty ?? true {
+                emptyChatID += 1
+                continue
+            }
+            let canonical = HandleNormalization.canonicalize(effectivePeerRaw)
+            if canonical.isEmpty {
+                unresolvableOutbound += 1
+                continue
+            }
             let inSet = await cache.contains(canonical)
-            if !inSet { continue }
+            if !inSet {
+                unknownPeer += 1
+                continue
+            }
             let (kind, payload) = PayloadShaping.shape(
                 row: row,
-                peerHandle: row.peerHandleRaw,
+                peerHandle: effectivePeerRaw,
                 hostID: auth.hostID)
             out.append(PublishItem(rowID: row.rowID, direction: kind, payload: payload))
-            _ = isBackfill // unused in v1; reserved for backfill-specific telemetry
+        }
+        if unresolvableOutbound + emptyChatID + unknownPeer > 0 {
+            logger.debug("messages tick: rows dropped by sender filter", metadata: [
+                "phase": .public(isBackfill ? "backfill" : "live"),
+                "unresolvable_outbound": .public(String(unresolvableOutbound)),
+                "empty_chat_id": .public(String(emptyChatID)),
+                "unknown_peer": .public(String(unknownPeer)),
+            ])
         }
         return out
     }

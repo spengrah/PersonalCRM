@@ -42,11 +42,16 @@ public struct MessagesScanPage: Equatable, Sendable {
     /// it. Tracking EVERY inspected ROWID (not just kept) means a page
     /// of all-skipped rows still advances and doesn't stall.
     public let lowestRowID: Int64?
+    /// Count of SQL rows returned for this page, before skip filters.
+    /// The plugin consumes its scan budget on this so a page of
+    /// all-skipped rows still costs budget for the SQL work it did.
+    public let inspected: Int
 
-    public init(rows: [ChatDBMessage], exhausted: Bool, lowestRowID: Int64?) {
+    public init(rows: [ChatDBMessage], exhausted: Bool, lowestRowID: Int64?, inspected: Int) {
         self.rows = rows
         self.exhausted = exhausted
         self.lowestRowID = lowestRowID
+        self.inspected = inspected
     }
 }
 
@@ -89,7 +94,7 @@ public enum MessagesScanReader {
 
         let handleROWIDs = try resolveHandleROWIDs(db: db, canonicalHandle: canonicalHandle)
         if handleROWIDs.isEmpty {
-            return MessagesScanPage(rows: [], exhausted: true, lowestRowID: nil)
+            return MessagesScanPage(rows: [], exhausted: true, lowestRowID: nil, inspected: 0)
         }
 
         // Convert the Date lower bound to chat.db's Apple-epoch
@@ -134,6 +139,7 @@ public enum MessagesScanReader {
         return MessagesScanPage(
             rows: kept,
             exhausted: rows.count < limit,
-            lowestRowID: lowest)
+            lowestRowID: lowest,
+            inspected: rows.count)
     }
 }

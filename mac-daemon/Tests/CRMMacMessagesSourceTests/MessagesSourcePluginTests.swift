@@ -250,6 +250,367 @@ final class MessagesSourcePluginTests: XCTestCase {
                        "cursor JSON committed locally")
     }
 
+    // MARK: - outbound emission
+
+    /// Build a chat.db with one OUTBOUND (is_from_me=1, NULL handle) row
+    /// in a 1:1 chat with `peer`, at ROWID 1, plus a second inbound row
+    /// at ROWID 2 so install-max capture sets installMaxRowID=2 and the
+    /// backfill scans `< 2` to pick up the outbound row.
+    private func makeChatDBWithOutbound1to1(peer: String = "+15551234567") throws -> URL {
+        let dbURL = tempDir.appendingPathComponent("chat.db")
+        let script = try loadSchemaScript()
+        let queue = try DatabaseQueue(path: dbURL.path)
+        let appleNanos = Int64((unix2026 - 978_307_200) * 1e9)
+        try queue.write { db in
+            try db.execute(sql: script)
+            try db.execute(sql:
+                "INSERT INTO handle (ROWID, id, service) VALUES (1, ?, 'iMessage')",
+                arguments: [peer])
+            try db.execute(sql:
+                "INSERT INTO chat (ROWID, guid, style, chat_identifier) VALUES (10, 'chat-1to1', 45, ?)",
+                arguments: [peer])
+            try db.execute(sql:
+                "INSERT INTO chat_handle_join (chat_id, handle_id) VALUES (10, 1)")
+            // ROWID 1: outbound, NULL handle.
+            try db.execute(sql:
+                "INSERT INTO message (ROWID, guid, text, handle_id, date, " +
+                "is_from_me, item_type, cache_has_attachments, associated_message_guid) " +
+                "VALUES (1, 'out1', 'sent you a note', NULL, ?, 1, 0, 0, NULL)",
+                arguments: [appleNanos])
+            try db.execute(sql:
+                "INSERT INTO chat_message_join (chat_id, message_id) VALUES (10, 1)")
+            // ROWID 2: inbound, so install-max is 2 and backfill walks below it.
+            try db.execute(sql:
+                "INSERT INTO message (ROWID, guid, text, handle_id, date, " +
+                "is_from_me, item_type, cache_has_attachments, associated_message_guid) " +
+                "VALUES (2, 'in2', 'hi back', 1, ?, 0, 0, 0, NULL)",
+                arguments: [appleNanos])
+            try db.execute(sql:
+                "INSERT INTO chat_message_join (chat_id, message_id) VALUES (10, 2)")
+        }
+        return dbURL
+    }
+
+    /// Build a chat.db with one OUTBOUND row in a GROUP chat whose first
+    /// chat_handle_join member is `firstMember`, plus a second inbound
+    /// row at ROWID 2 (from firstMember) so install-max is 2.
+    private func makeChatDBWithOutboundGroup(
+        firstMember: String = "+15551110000",
+        secondMember: String = "+15552220000"
+    ) throws -> URL {
+        let dbURL = tempDir.appendingPathComponent("chat.db")
+        let script = try loadSchemaScript()
+        let queue = try DatabaseQueue(path: dbURL.path)
+        let appleNanos = Int64((unix2026 - 978_307_200) * 1e9)
+        try queue.write { db in
+            try db.execute(sql: script)
+            try db.execute(sql:
+                "INSERT INTO handle (ROWID, id, service) VALUES (1, ?, 'iMessage')",
+                arguments: [firstMember])
+            try db.execute(sql:
+                "INSERT INTO handle (ROWID, id, service) VALUES (2, ?, 'iMessage')",
+                arguments: [secondMember])
+            try db.execute(sql:
+                "INSERT INTO chat (ROWID, guid, style, chat_identifier) VALUES (20, 'group-1', 43, 'group-1')")
+            // firstMember joined first (lower chat_handle_join ROWID).
+            try db.execute(sql:
+                "INSERT INTO chat_handle_join (chat_id, handle_id) VALUES (20, 1)")
+            try db.execute(sql:
+                "INSERT INTO chat_handle_join (chat_id, handle_id) VALUES (20, 2)")
+            // ROWID 1: outbound group row, NULL handle.
+            try db.execute(sql:
+                "INSERT INTO message (ROWID, guid, text, handle_id, date, " +
+                "is_from_me, item_type, cache_has_attachments, associated_message_guid) " +
+                "VALUES (1, 'gout1', 'group hello', NULL, ?, 1, 0, 0, NULL)",
+                arguments: [appleNanos])
+            try db.execute(sql:
+                "INSERT INTO chat_message_join (chat_id, message_id) VALUES (20, 1)")
+            // ROWID 2: inbound from member 2, so install-max is 2.
+            try db.execute(sql:
+                "INSERT INTO message (ROWID, guid, text, handle_id, date, " +
+                "is_from_me, item_type, cache_has_attachments, associated_message_guid) " +
+                "VALUES (2, 'gin2', 'reply', 2, ?, 0, 0, 0, NULL)",
+                arguments: [appleNanos])
+            try db.execute(sql:
+                "INSERT INTO chat_message_join (chat_id, message_id) VALUES (20, 2)")
+        }
+        return dbURL
+    }
+
+    /// Build a chat.db with one OUTBOUND row in a 1:1 chat that has NO
+    /// chat_handle_join rows (unresolvable peer), plus an inbound row at
+    /// ROWID 2 so install-max is 2.
+    private func makeChatDBWithUnresolvableOutbound() throws -> URL {
+        let dbURL = tempDir.appendingPathComponent("chat.db")
+        let script = try loadSchemaScript()
+        let queue = try DatabaseQueue(path: dbURL.path)
+        let appleNanos = Int64((unix2026 - 978_307_200) * 1e9)
+        try queue.write { db in
+            try db.execute(sql: script)
+            try db.execute(sql:
+                "INSERT INTO handle (ROWID, id, service) VALUES (1, '+15551234567', 'iMessage')")
+            // Chat exists (so chat.guid is non-NULL) but has no membership.
+            try db.execute(sql:
+                "INSERT INTO chat (ROWID, guid, style, chat_identifier) VALUES (10, 'orphan-chat', 45, 'orphan')")
+            try db.execute(sql:
+                "INSERT INTO message (ROWID, guid, text, handle_id, date, " +
+                "is_from_me, item_type, cache_has_attachments, associated_message_guid) " +
+                "VALUES (1, 'orph1', 'into the void', NULL, ?, 1, 0, 0, NULL)",
+                arguments: [appleNanos])
+            try db.execute(sql:
+                "INSERT INTO chat_message_join (chat_id, message_id) VALUES (10, 1)")
+            // ROWID 2 inbound so install-max is 2.
+            try db.execute(sql:
+                "INSERT INTO message (ROWID, guid, text, handle_id, date, " +
+                "is_from_me, item_type, cache_has_attachments, associated_message_guid) " +
+                "VALUES (2, 'orph-in2', 'hi', 1, ?, 0, 0, 0, NULL)",
+                arguments: [appleNanos])
+            try db.execute(sql:
+                "INSERT INTO chat_message_join (chat_id, message_id) VALUES (10, 2)")
+        }
+        return dbURL
+    }
+
+    /// Build a chat.db with only contentless system rows (item_type=2,
+    /// no text, no attachment) so a tick inspects them, skips them all,
+    /// yet still consumes budget.
+    private func makeChatDBWithSystemRowsOnly(count: Int) throws -> URL {
+        let dbURL = tempDir.appendingPathComponent("chat.db")
+        let script = try loadSchemaScript()
+        let queue = try DatabaseQueue(path: dbURL.path)
+        let appleNanos = Int64((unix2026 - 978_307_200) * 1e9)
+        try queue.write { db in
+            try db.execute(sql: script)
+            try db.execute(sql:
+                "INSERT INTO handle (ROWID, id, service) VALUES (1, '+15551234567', 'iMessage')")
+            try db.execute(sql:
+                "INSERT INTO chat (ROWID, guid, style, chat_identifier) VALUES (10, 'sys-chat', 45, 'x')")
+            try db.execute(sql:
+                "INSERT INTO chat_handle_join (chat_id, handle_id) VALUES (10, 1)")
+            for i in 1...count {
+                try db.execute(sql:
+                    "INSERT INTO message (ROWID, guid, text, handle_id, date, " +
+                    "is_from_me, item_type, cache_has_attachments, associated_message_guid) " +
+                    "VALUES (?, ?, NULL, 1, ?, 0, 2, 0, NULL)",
+                    arguments: [i, "sys\(i)", appleNanos])
+                try db.execute(sql:
+                    "INSERT INTO chat_message_join (chat_id, message_id) VALUES (10, ?)",
+                    arguments: [i])
+            }
+        }
+        return dbURL
+    }
+
+    private func loadSchemaScript() throws -> String {
+        let bundle = Bundle.module
+        guard let scriptURL = bundle.url(forResource: "chat_db_schema",
+                                          withExtension: "sql",
+                                          subdirectory: "Fixtures") else {
+            throw XCTSkip("chat_db_schema.sql not in test bundle")
+        }
+        return try String(contentsOf: scriptURL, encoding: .utf8)
+    }
+
+    /// Build a plugin + capturing publisher over a scripted Pi that
+    /// answers GET cursor (fresh install) then OK for every commit.
+    /// Returns the plugin, a sink capturing published events, and the
+    /// state store for post-tick assertions.
+    private func makeOutboundPlugin(
+        dbURL: URL,
+        known: Set<String>,
+        resolver: (@Sendable (GRDB.Database, [ChatDBMessage]) throws -> [String: String])? = nil
+    ) throws -> (plugin: MessagesSourcePlugin, sink: OutboundPublisherSink, store: StateStore) {
+        let store = makeStateStore()
+        try store.save(DaemonState(schemaVersion: 1))
+        let sink = OutboundPublisherSink()
+        let publisher = MessagesPublisher(
+            sender: { _, body in
+                await sink.record(body.events)
+                return IngestEventsData(
+                    accepted: body.events.count, duplicate: 0, rejected: 0, errors: [])
+            },
+            auth: auth, logger: NoopLogger())
+        // GET cursor + many OK commits (one per scan/backfill/live commit).
+        var steps: [MessagesSourcePluginTestScript.Step] = [
+            .respond(status: 200, data: Data(
+                #"{"success":true,"data":{"cursor":"","cursor_epoch":0,"backfill_complete":false}}"#.utf8)),
+        ]
+        for _ in 0..<10 {
+            steps.append(.respond(status: 200, data: Data(
+                #"{"success":true,"data":{"ok":true}}"#.utf8)))
+        }
+        let piClient = PiClient(
+            baseURL: URL(string: "https://pi.example.test")!,
+            transport: MessagesSourcePluginTestScript(steps).asTransport(),
+            sleep: { _ in })
+        let cache = KnownIdentifiersCache(initial: known)
+        let plugin = MessagesSourcePlugin(
+            tickInterval: 60,
+            config: MessagesSourceConfig(chatDBPath: dbURL, backfillFloor: backfillFloor),
+            piClient: piClient,
+            auth: auth,
+            mutator: StateMutator(store: store),
+            publisher: publisher,
+            cache: cache,
+            healthRegistry: SourceHealthRegistry(),
+            logger: NoopLogger(),
+            outboundPeerResolver: resolver ?? ChatDBReader.resolveOutboundPeers)
+        return (plugin, sink, store)
+    }
+
+    func testTickEmitsOutboundAsSent() async throws {
+        let dbURL = try makeChatDBWithOutbound1to1(peer: "+15551234567")
+        let (plugin, sink, _) = try makeOutboundPlugin(dbURL: dbURL, known: ["+15551234567"])
+        try await plugin.tick()
+        let events = await sink.allEvents()
+        let sent = events.first { $0.sourceID == "out1" }
+        let outEvent = try XCTUnwrap(sent, "outbound row published")
+        XCTAssertEqual(outEvent.kind, "raw_message.sent")
+        let peer = await sink.peerHandle(forSourceID: "out1")
+        XCTAssertEqual(peer, "+15551234567",
+                       "outbound peer resolved from chat_handle_join")
+    }
+
+    func testTickEmitsOutboundGroupAttributedToFirstMember() async throws {
+        let dbURL = try makeChatDBWithOutboundGroup(
+            firstMember: "+15551110000", secondMember: "+15552220000")
+        // Only the first member is known.
+        let (plugin, sink, _) = try makeOutboundPlugin(dbURL: dbURL, known: ["+15551110000"])
+        try await plugin.tick()
+        let peer = await sink.peerHandle(forSourceID: "gout1")
+        XCTAssertEqual(peer, "+15551110000",
+                       "group outbound attributed to first chat_handle_join member")
+    }
+
+    func testTickDropsOutboundToUnknownRecipient() async throws {
+        let dbURL = try makeChatDBWithOutbound1to1(peer: "+15551234567")
+        // The recipient is NOT in the known set; an unrelated handle is.
+        let (plugin, sink, store) = try makeOutboundPlugin(dbURL: dbURL, known: ["+15559998888"])
+        try await plugin.tick()
+        let events = await sink.allEvents()
+        XCTAssertFalse(events.contains { $0.sourceID == "out1" },
+                       "outbound to unknown recipient is not published")
+        // Cursor still commits past the row.
+        let state = try store.load()
+        XCTAssertFalse(state.sources["messages"]?.cursor.isEmpty ?? true,
+                       "cursor committed even though the row was dropped")
+    }
+
+    func testTickDropsUnresolvableOutboundAndAdvances() async throws {
+        let dbURL = try makeChatDBWithUnresolvableOutbound()
+        let (plugin, sink, store) = try makeOutboundPlugin(dbURL: dbURL, known: ["+15551234567"])
+        try await plugin.tick()
+        let events = await sink.allEvents()
+        XCTAssertFalse(events.contains { $0.sourceID == "orph1" },
+                       "unresolvable outbound row not published")
+        let state = try store.load()
+        let cursor = try XCTUnwrap(MessagesCursorCodec.decode(state.sources["messages"]?.cursor ?? ""))
+        XCTAssertTrue(cursor.backfillComplete || (cursor.backfillCursor ?? 1) == 0,
+                      "backfill walked past the unresolvable row (cursor advanced)")
+    }
+
+    func testResolverFailureHoldsCursor() async throws {
+        let dbURL = try makeChatDBWithOutbound1to1(peer: "+15551234567")
+        // Seed an established (non-fresh) cursor: install-max already
+        // captured, backfill mid-walk just above the outbound row at
+        // ROWID 1. The ONLY thing that could advance is the backfill
+        // row-walk over ROWID 1 — which the throwing resolver blocks.
+        let seeded = MessagesCursor(
+            backfillCursor: 2,
+            liveCursor: 2,
+            installMaxRowID: 2,
+            backfillFloorSentAt: backfillFloor,
+            backfillComplete: false)
+        let seededJSON = try MessagesCursorCodec.encode(seeded)
+
+        struct ResolverBoom: Error {}
+        let throwing: @Sendable (GRDB.Database, [ChatDBMessage]) throws -> [String: String] = { _, _ in
+            throw ResolverBoom()
+        }
+        let store = makeStateStore()
+        try store.save(DaemonState(schemaVersion: 1))
+        let sink = OutboundPublisherSink()
+        let publisher = MessagesPublisher(
+            sender: { _, body in
+                await sink.record(body.events)
+                return IngestEventsData(accepted: body.events.count, duplicate: 0, rejected: 0, errors: [])
+            },
+            auth: auth, logger: NoopLogger())
+        let transport = StatefulCursorTransport(initialCursor: seededJSON)
+        let piClient = PiClient(
+            baseURL: URL(string: "https://pi.example.test")!,
+            transport: transport.asTransport(),
+            sleep: { _ in })
+        let plugin = MessagesSourcePlugin(
+            tickInterval: 60,
+            config: MessagesSourceConfig(chatDBPath: dbURL, backfillFloor: backfillFloor),
+            piClient: piClient,
+            auth: auth,
+            mutator: StateMutator(store: store),
+            publisher: publisher,
+            cache: KnownIdentifiersCache(initial: ["+15551234567"]),
+            healthRegistry: SourceHealthRegistry(),
+            logger: NoopLogger(),
+            outboundPeerResolver: throwing)
+
+        try await plugin.tick()
+
+        let events = await sink.allEvents()
+        XCTAssertTrue(events.isEmpty, "no publishes when resolution throws")
+        // The backfill cursor was NOT advanced past the outbound row:
+        // the throwing read returns without advancing, so the held row
+        // is retried next tick.
+        let held = transport.currentDecodedCursor()
+        XCTAssertEqual(held?.backfillCursor, 2,
+                       "backfill cursor held at the pre-read coordinate")
+        XCTAssertEqual(held?.backfillComplete, false)
+
+        // Recovery: a SECOND plugin over the same state store + a fresh
+        // Pi script with the default resolver (≈ the next tick once the
+        // transient condition clears) emits the held row and commits.
+        let sink2 = OutboundPublisherSink()
+        let publisher2 = MessagesPublisher(
+            sender: { _, body in
+                await sink2.record(body.events)
+                return IngestEventsData(accepted: body.events.count, duplicate: 0, rejected: 0, errors: [])
+            },
+            auth: auth, logger: NoopLogger())
+        let transport2 = StatefulCursorTransport(initialCursor: seededJSON)
+        let piClient2 = PiClient(
+            baseURL: URL(string: "https://pi.example.test")!,
+            transport: transport2.asTransport(),
+            sleep: { _ in })
+        let plugin2 = MessagesSourcePlugin(
+            tickInterval: 60,
+            config: MessagesSourceConfig(chatDBPath: dbURL, backfillFloor: backfillFloor),
+            piClient: piClient2,
+            auth: auth,
+            mutator: StateMutator(store: store),
+            publisher: publisher2,
+            cache: KnownIdentifiersCache(initial: ["+15551234567"]),
+            healthRegistry: SourceHealthRegistry(),
+            logger: NoopLogger())
+        try await plugin2.tick()
+        let recovered = await sink2.allEvents()
+        XCTAssertTrue(recovered.contains { $0.sourceID == "out1" },
+                      "the held outbound row is emitted once the transient condition clears")
+    }
+
+    func testAllSkippedPageConsumesBudget() async throws {
+        // A page of contentless system rows: zero publishes, but the
+        // budget is consumed on inspected rows so the backfill walks
+        // past them and completes rather than re-reading forever.
+        let dbURL = try makeChatDBWithSystemRowsOnly(count: 3)
+        let (plugin, sink, store) = try makeOutboundPlugin(dbURL: dbURL, known: ["+15551234567"])
+        try await plugin.tick()
+        let events = await sink.allEvents()
+        XCTAssertTrue(events.isEmpty, "system rows produce no events")
+        let state = try store.load()
+        let cursor = try XCTUnwrap(MessagesCursorCodec.decode(state.sources["messages"]?.cursor ?? ""))
+        XCTAssertTrue(cursor.backfillComplete,
+                      "all-skipped page consumed budget and the backfill walked to completion")
+    }
+
     // MARK: - helpers
 
     /// Pi client whose only configured response is a fresh-install
@@ -264,6 +625,25 @@ final class MessagesSourcePluginTests: XCTestCase {
             baseURL: URL(string: "https://pi.example.test")!,
             transport: script.asTransport(),
             sleep: { _ in })
+    }
+}
+
+/// Records the IngestEvents the publisher sent, in order, and decodes
+/// individual payloads by source_id for outbound assertions.
+actor OutboundPublisherSink {
+    private var events: [IngestEvent] = []
+    func record(_ batch: [IngestEvent]) { events.append(contentsOf: batch) }
+    func allEvents() -> [IngestEvent] { events }
+
+    /// The `peer_handle` field of the event with the given source_id,
+    /// parsed from its raw payload JSON. Returns a Sendable String so it
+    /// can cross the actor boundary.
+    func peerHandle(forSourceID id: String) -> String? {
+        guard let event = events.first(where: { $0.sourceID == id }),
+              let obj = (try? JSONSerialization.jsonObject(with: event.payload.bytes)) as? [String: Any] else {
+            return nil
+        }
+        return obj["peer_handle"] as? String
     }
 }
 
