@@ -39,7 +39,7 @@ TimeoutStopSec=30s
 # Boot/restart health gate (distroless image has no curl, so gate host-side against
 # the published port). Restores parity with the old native ExecStartPost curl gate:
 # the unit isn't "active" until /health (incl. DB) returns 200; else Restart=always.
-ExecStartPost=/bin/bash -c 'for n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do curl -sf http://127.0.0.1:8080/health >/dev/null && exit 0; sleep 1; done; exit 1'
+ExecStartPost=/bin/bash -c 'for n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40; do curl -sf http://127.0.0.1:8080/health >/dev/null && exit 0; sleep 1; done; exit 1'
 # Resource ceilings carried over from the systemd unit (need cgroup-v2
 # controller delegation for the crm user slice -- verified in rehearsal).
 MemoryMax=512M

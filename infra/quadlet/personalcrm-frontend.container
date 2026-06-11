@@ -30,7 +30,7 @@ MemoryMax=512M
 CPUQuota=150%
 # Boot/restart health gate, host-side against the published port (parity with the
 # old native unit). Not "active" until the Next server answers; else Restart=always.
-ExecStartPost=/bin/bash -c 'for n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do curl -sf http://127.0.0.1:3001 >/dev/null && exit 0; sleep 1; done; exit 1'
+ExecStartPost=/bin/bash -c 'for n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25; do curl -sf http://127.0.0.1:3001 >/dev/null && exit 0; sleep 1; done; exit 1'
 
 [Install]
 WantedBy=default.target

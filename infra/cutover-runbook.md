@@ -80,8 +80,11 @@ ssh "$PI_HOST" 'sudo systemctl stop personalcrm-backend personalcrm-frontend'
 ssh "$PI_HOST" 'cd /srv/personalcrm/infra && docker compose stop postgres'   # old DB stays on its pristine volume = rollback anchor
 
 # 2. permanent crm home change (deferred from Phase 1; crm now has no live procs).
-#    Bounce linger so the user manager (user@995) restarts with HOME=/var/lib/personalcrm.
-ssh "$PI_HOST" 'sudo loginctl disable-linger crm'
+#    Bounce linger so the user manager restarts with HOME=/var/lib/personalcrm.
+#    IMPORTANT: disable-linger stops user@<uid> ASYNCHRONOUSLY; usermod refuses
+#    while ANY crm process (incl. a still-dying user manager) exists. Stop it
+#    explicitly and WAIT for it dead before usermod, or usermod aborts mid-flip.
+ssh "$PI_HOST" 'sudo loginctl disable-linger crm; sudo systemctl stop "user@$(id -u crm).service"; for i in $(seq 1 30); do systemctl is-active --quiet "user@$(id -u crm).service" || break; sleep 1; done'
 ssh "$PI_HOST" 'sudo usermod -d /var/lib/personalcrm crm && getent passwd crm'
 ssh "$PI_HOST" 'sudo loginctl enable-linger crm'; sleep 2
 
@@ -92,7 +95,7 @@ ssh "$PI_HOST" "cd /tmp && until sudo -n -u crm HOME=/var/lib/personalcrm XDG_RU
 cat /tmp/crm-cutover.dump | crm_podman exec -i crm-postgres pg_restore -U crm_user -d personal_crm --no-owner --clean --if-exists
 
 crm_ctl start personalcrm-backend.service personalcrm-frontend.service
-ssh "$PI_HOST" 'sudo systemctl reload caddy'   # pick up the X-API-Key injection
+ssh "$PI_HOST" 'sudo systemctl restart caddy'   # RESTART (not reload): reload runs in the existing process and won't pick up the newly-wired CRM_API_KEY EnvironmentFile; only restart re-reads it. Sub-second.
 
 # 4. confirm cgroup-v2 delegation actually bit (proven in VM; confirm on Pi)
 crm_ctl show personalcrm-backend.service -p MemoryMax --value   # expect 536870912
@@ -115,8 +118,11 @@ The old Docker Postgres volume is untouched, so rollback is lossless:
 
 ```bash
 crm_ctl stop personalcrm-frontend.service personalcrm-backend.service personalcrm-database.service
-ssh "$PI_HOST" 'cd /srv/personalcrm/infra && docker compose start postgres'
-ssh "$PI_HOST" 'sudo cp '"$(pwd)"'/infra/caddy/Caddyfile.orig /etc/caddy/Caddyfile && sudo systemctl reload caddy'  # restore pre-injection Caddyfile
+# up -d, NOT start: the old Docker container is removed if the Pi rebooted (the
+# disabled-but-active database oneshot runs `compose down` on shutdown); the named
+# volume survives, so `up -d` recreates the container on the pristine pre-cutover data.
+ssh "$PI_HOST" 'cd /srv/personalcrm/infra && docker compose up -d postgres'
+ssh "$PI_HOST" 'sudo cp /etc/caddy/Caddyfile.orig /etc/caddy/Caddyfile && sudo systemctl restart caddy'  # restore pre-injection Caddyfile
 ssh "$PI_HOST" 'sudo systemctl start personalcrm-backend personalcrm-frontend'
 ```
 
