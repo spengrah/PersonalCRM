@@ -114,10 +114,17 @@ func appMigrationsPending(ctx context.Context, databaseURL string, migrationsPat
 
 // migrationsTableExists reports whether golang-migrate's schema_migrations
 // tracking table is present, via a read-only to_regclass catalog lookup on a
-// short-lived connection. This is the established migration-infrastructure SQL
-// exception (mirroring the advisory-lock reads in migration.go): a parameterized,
-// non-mutating system-catalog read with no sqlc representation. It exists so the
-// fresh-DB path stays strictly non-mutating (see appMigrationsPending).
+// short-lived connection.
+//
+// Raw-SQL exception: this is the same migration-infrastructure carve-out
+// core.md blesses for the advisory-lock SELECTs already in migration.go
+// (runRiverMigrations) — a single static, non-mutating, system-catalog read. It
+// has no sqlc representation by construction: schema_migrations is
+// golang-migrate's OWN internal bookkeeping table, not part of the application
+// schema sqlc generates from, and golang-migrate exposes no API to test the
+// table's existence (its version reads go through Open, which CREATEs the table).
+// The read exists precisely so the fresh-DB path can short-circuit BEFORE
+// migrate.New and stay strictly non-mutating (see appMigrationsPending).
 func migrationsTableExists(ctx context.Context, databaseURL string) (bool, error) {
 	poolCfg, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {

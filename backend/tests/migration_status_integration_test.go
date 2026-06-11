@@ -178,9 +178,13 @@ func dropAllTables(t *testing.T, databaseURL, migrationsPath string) {
 }
 
 // schemaMigrationsTableExists reports whether golang-migrate's schema_migrations
-// table is present, via a read-only to_regclass catalog lookup (no raw DDL). Used
-// to assert the fresh-DB non-mutating contract in
-// TestMigrationStatus_FreshDBNonMutating.
+// table is present, via a read-only to_regclass catalog lookup. Used to assert
+// the fresh-DB non-mutating contract in TestMigrationStatus_FreshDBNonMutating.
+//
+// Raw-SQL exception (test-only): the same migration-infrastructure carve-out
+// migrationsTableExists uses in production — a static, non-mutating system-catalog
+// read of golang-migrate's own bookkeeping table, which has no sqlc representation
+// and no library existence-check API.
 func schemaMigrationsTableExists(t *testing.T, ctx context.Context, databaseURL string) bool {
 	t.Helper()
 	pool, err := pgxpool.New(ctx, databaseURL)
