@@ -663,6 +663,30 @@ func TestParseArgsAllFlags(t *testing.T) {
 				}
 			},
 		},
+		{
+			"migrate",
+			[]string{"--migrate"},
+			func(t *testing.T, o runOptions) {
+				if !o.migrate {
+					t.Fatal("--migrate not set")
+				}
+				if o.migrateCheck {
+					t.Fatal("--migrate-check should not be set")
+				}
+			},
+		},
+		{
+			"migrate-check",
+			[]string{"--migrate-check"},
+			func(t *testing.T, o runOptions) {
+				if !o.migrateCheck {
+					t.Fatal("--migrate-check not set")
+				}
+				if o.migrate {
+					t.Fatal("--migrate should not be set")
+				}
+			},
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -961,5 +985,135 @@ func TestRunSeedMutualExclusion(t *testing.T) {
 	err := run(context.Background(), runOptions{doSeed: true, resetAndSeed: true, seedYes: true}, deps)
 	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Fatalf("expected mutual-exclusion error, got %v", err)
+	}
+}
+
+// --- --migrate / --migrate-check tests ---
+
+// TestValidateSubcommandMigrateSole confirms each migration flag is a valid sole
+// subcommand.
+func TestValidateSubcommandMigrateSole(t *testing.T) {
+	if err := validateSubcommand(runOptions{migrate: true}); err != nil {
+		t.Fatalf("--migrate alone should validate, got %v", err)
+	}
+	if err := validateSubcommand(runOptions{migrateCheck: true}); err != nil {
+		t.Fatalf("--migrate-check alone should validate, got %v", err)
+	}
+}
+
+// TestValidateSubcommandMigrateMutualExclusion confirms the migration flags are
+// mutually exclusive with each other and with other subcommands.
+func TestValidateSubcommandMigrateMutualExclusion(t *testing.T) {
+	cases := []struct {
+		name string
+		opts runOptions
+	}{
+		{"migrate+migrate-check", runOptions{migrate: true, migrateCheck: true}},
+		{"migrate+list-hosts", runOptions{migrate: true, listHosts: true}},
+		{"migrate-check+seed", runOptions{migrateCheck: true, doSeed: true}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := validateSubcommand(c.opts)
+			if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+				t.Fatalf("expected mutual-exclusion error, got %v", err)
+			}
+		})
+	}
+}
+
+// TestRunMigrateThroughDispatcherGuards confirms run() refuses the migration
+// subcommands (they are dispatched pre-DB in runMain, never through run()).
+func TestRunMigrateThroughDispatcherGuards(t *testing.T) {
+	deps, _, _, _, _, _ := newTestDeps()
+	for _, opts := range []runOptions{{migrate: true}, {migrateCheck: true}} {
+		err := run(context.Background(), opts, deps)
+		if err == nil || !strings.Contains(err.Error(), "dispatched pre-DB") {
+			t.Fatalf("expected pre-DB dispatch guard error, got %v", err)
+		}
+	}
+}
+
+// TestRunMigrateCheckUpToDate: no migrations pending → nil (exit 0) + summary.
+func TestRunMigrateCheckUpToDate(t *testing.T) {
+	stdout := &bytes.Buffer{}
+	status := func(_ context.Context, _, _ string) (bool, bool, error) {
+		return false, false, nil
+	}
+	err := runMigrateCheckWith(context.Background(), "url", "path", stdout, status)
+	if err != nil {
+		t.Fatalf("expected nil (up-to-date), got %v", err)
+	}
+	if got := stdout.String(); !strings.Contains(got, "app_pending=0 river_pending=0") {
+		t.Fatalf("unexpected summary: %q", got)
+	}
+}
+
+// TestRunMigrateCheckPendingExit2: app and/or River pending → exitErr{code:2}.
+func TestRunMigrateCheckPendingExit2(t *testing.T) {
+	cases := []struct {
+		name           string
+		app, river     bool
+		wantAppSummary string
+	}{
+		{"app only", true, false, "app_pending=1 river_pending=0"},
+		{"river only", false, true, "app_pending=0 river_pending=1"},
+		{"both", true, true, "app_pending=1 river_pending=1"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			stdout := &bytes.Buffer{}
+			status := func(_ context.Context, _, _ string) (bool, bool, error) {
+				return c.app, c.river, nil
+			}
+			err := runMigrateCheckWith(context.Background(), "url", "path", stdout, status)
+			var ee exitErr
+			if !errors.As(err, &ee) {
+				t.Fatalf("expected exitErr, got %v", err)
+			}
+			if ee.code != migrateExitPending {
+				t.Fatalf("expected exit code %d, got %d", migrateExitPending, ee.code)
+			}
+			if got := stdout.String(); !strings.Contains(got, c.wantAppSummary) {
+				t.Fatalf("unexpected summary: %q", got)
+			}
+		})
+	}
+}
+
+// TestRunMigrateCheckErrorExit1: an operational error from the status reporter
+// surfaces as a plain error (→ exit 1), NOT an exitErr{code:2}.
+func TestRunMigrateCheckErrorExit1(t *testing.T) {
+	stdout := &bytes.Buffer{}
+	status := func(_ context.Context, _, _ string) (bool, bool, error) {
+		return false, false, errors.New("dirty migration state")
+	}
+	err := runMigrateCheckWith(context.Background(), "url", "path", stdout, status)
+	if err == nil {
+		t.Fatal("expected an operational error")
+	}
+	var ee exitErr
+	if errors.As(err, &ee) {
+		t.Fatalf("operational error must NOT be an exitErr (would map to exit 2), got code %d", ee.code)
+	}
+	if !strings.Contains(err.Error(), "dirty migration state") {
+		t.Fatalf("expected wrapped status error, got %v", err)
+	}
+}
+
+// TestExitErrMapping confirms main()'s errors.As mapping contract: an
+// exitErr propagates its code, while a plain error does not match. (main() itself
+// calls os.Exit, so we assert the classification run() relies on rather than
+// spawning a subprocess.)
+func TestExitErrMapping(t *testing.T) {
+	var ee exitErr
+	if !errors.As(exitErr{code: migrateExitPending, msg: "migrations pending"}, &ee) {
+		t.Fatal("exitErr should match errors.As(exitErr)")
+	}
+	if ee.code != migrateExitPending {
+		t.Fatalf("expected propagated code %d, got %d", migrateExitPending, ee.code)
+	}
+	if errors.As(errors.New("plain"), &ee) {
+		t.Fatal("a plain error must NOT match errors.As(exitErr) — it keeps exit-1 behavior")
 	}
 }

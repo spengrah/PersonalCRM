@@ -91,6 +91,22 @@
 //	                                `make staging-reset`). Requires --yes. The
 //	                                stable namespace makes the reseed reproducible.
 //
+//	--migrate                     Apply pending application + River migrations
+//	                              idempotently (the exact call crm-api boot
+//	                              makes). Exit 0 on success, 1 on error. The
+//	                              deploy script runs this from the NEW image,
+//	                              after a snapshot, before swapping the running
+//	                              container.
+//
+//	--migrate-check               Report whether migrations are pending WITHOUT
+//	                              mutating the DB. THREE distinct exit codes:
+//	                              0 = up-to-date, 2 = pending (app and/or River),
+//	                              1 = operational error (cannot connect, dirty DB,
+//	                              version read failed). The deploy script branches
+//	                              on exit 2 to snapshot-then-migrate; exit 1 aborts
+//	                              before touching anything. Prints a counts-only
+//	                              summary (no PII).
+//
 // The seed/reset subcommands inherit the process env (CRM_ENV / TIME_BASE /
 // TIME_ACCELERATION / DATABASE_URL / MIGRATIONS_PATH) — on the Pi via
 // `set -a; . /srv/personalcrm/.env; set +a` — so the seeded world's cadence /
@@ -241,10 +257,33 @@ type runOptions struct {
 	seedNamespace string
 	prngSeed      uint64
 	seedYes       bool
+	// Migration subcommands. migrate ← --migrate (idempotent apply);
+	// migrateCheck ← --migrate-check (report pending, non-mutating, distinct
+	// exit codes). Both run PRE-DB (they need only cfg.Database URL +
+	// MigrationsPath, not buildProductionDeps).
+	migrate      bool
+	migrateCheck bool
 }
+
+// exitErr carries an explicit process exit code so a subcommand can drive a
+// distinct exit status (e.g. --migrate-check's exit 2 = pending). main() maps it
+// via errors.As; every other error keeps the existing exit-1 (log.Fatalf)
+// behavior. run()/runMain keep returning error so the dispatch + exit-code
+// contract stay unit-testable without spawning a subprocess.
+type exitErr struct {
+	code int
+	msg  string
+}
+
+func (e exitErr) Error() string { return e.msg }
 
 func main() {
 	if err := runMain(os.Args[1:]); err != nil {
+		var ee exitErr
+		if errors.As(err, &ee) {
+			fmt.Fprintln(os.Stderr, "crm-admin:", ee.msg)
+			os.Exit(ee.code)
+		}
 		log.Fatalf("crm-admin: %v", err)
 	}
 }
@@ -269,6 +308,18 @@ func runMain(args []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 	ctx := context.Background()
+
+	// Migration subcommands run PRE-DB: they need only the database URL +
+	// migrations path, NOT the full buildProductionDeps service stack (no River
+	// client, no Google, no MacHostService). Dispatching here keeps them runnable
+	// on a host that lacks Google creds etc., and avoids opening the application
+	// pool just to check/apply migrations. Mirrors the seed gate short-circuit.
+	if opts.migrate {
+		return runMigrate(ctx, cfg.Database.URL, cfg.Database.MigrationsPath, os.Stdout)
+	}
+	if opts.migrateCheck {
+		return runMigrateCheck(ctx, cfg.Database.URL, cfg.Database.MigrationsPath, os.Stdout)
+	}
 
 	// The seed/reset entrypoints invoke shippable fake-fetcher scaffolding and
 	// (for reset) destroy data, so BOTH gates run PRE-DB AND PRE-MIGRATION — a
@@ -347,6 +398,12 @@ func validateSubcommand(opts runOptions) error {
 	if opts.resetAndSeed {
 		active++
 	}
+	if opts.migrate {
+		active++
+	}
+	if opts.migrateCheck {
+		active++
+	}
 	if active == 0 {
 		return errors.New("no subcommand specified; pass exactly one of " +
 			subcommandList)
@@ -362,7 +419,8 @@ func validateSubcommand(opts runOptions) error {
 // no-subcommand and mutual-exclusion usage errors.
 const subcommandList = "--messages-rematch-stranded, --reconcile-address-book-methods, " +
 	"--rederive-correspondence-names, --reset-gmail-backfill-cursors, --mint-pairing-token, " +
-	"--list-hosts, --revoke-host <uuid>, --rotate-host-key <uuid>, --seed, --reset-and-seed"
+	"--list-hosts, --revoke-host <uuid>, --rotate-host-key <uuid>, --seed, --reset-and-seed, " +
+	"--migrate, --migrate-check"
 
 // parseArgs uses a private FlagSet so tests can drive the parser
 // without polluting flag's global state.
@@ -417,10 +475,81 @@ func parseArgs(args []string) (runOptions, error) {
 	fs.BoolVar(&opts.seedYes, "yes", false,
 		"Confirm a seed/reset against this DB. MANDATORY for --seed and --reset-and-seed (or set "+
 			"CRM_SEED_RESET_CONFIRM=1). Asserts the operator stopped the crm-api service first.")
+	fs.BoolVar(&opts.migrate, "migrate", false,
+		"Apply pending application + River migrations (idempotent; the same call crm-api boot makes). "+
+			"Exit 0 on success, 1 on error. Used by the deploy script before swapping the running image.")
+	fs.BoolVar(&opts.migrateCheck, "migrate-check", false,
+		"Report whether migrations are pending WITHOUT mutating the DB. Exit 0 = up-to-date, "+
+			"2 = pending (app and/or River), 1 = operational error (cannot connect / dirty DB / read failed). "+
+			"The deploy script branches on exit 2 to snapshot-then-migrate.")
 	if err := fs.Parse(args); err != nil {
 		return runOptions{}, err
 	}
 	return opts, nil
+}
+
+// migrateExitPending is the exit code --migrate-check returns when app and/or
+// River migrations are pending. It is the contract deploy-artifact.sh branches
+// on (exit 2 ⇒ snapshot-then-migrate); distinct from operational errors (exit 1)
+// so the deploy script never confuses "pending" with "abort".
+const migrateExitPending = 2
+
+// migrationStatusFn is the read-only migration-status reporter --migrate-check
+// depends on. Production passes db.MigrationStatus; tests pass a stub so the
+// exit-code mapping is unit-testable without a real database.
+type migrationStatusFn func(ctx context.Context, databaseURL, migrationsPath string) (appPending, riverPending bool, err error)
+
+// runMigrate applies pending application + River migrations idempotently (the
+// same call crm-api boot makes). Returns nil on success (exit 0) or a plain
+// error (exit 1). db.RunMigrations swallows ErrNoChange, so re-running on an
+// up-to-date DB is a clean no-op.
+func runMigrate(ctx context.Context, databaseURL, migrationsPath string, stdout io.Writer) error {
+	if err := db.RunMigrations(ctx, databaseURL, migrationsPath); err != nil {
+		return fmt.Errorf("run migrations: %w", err)
+	}
+	if _, err := fmt.Fprintln(stdout, "migrations applied (or already up-to-date)"); err != nil {
+		return fmt.Errorf("write migrate summary: %w", err)
+	}
+	return nil
+}
+
+// runMigrateCheck reports whether migrations are pending WITHOUT mutating the
+// DB. It returns:
+//   - nil (exit 0) when up-to-date,
+//   - exitErr{code:2} (exit 2) when app and/or River migrations are pending,
+//   - a plain error (exit 1) on any operational failure (cannot connect, dirty
+//     DB, version read failed).
+//
+// The status reporter is injected so the exit-code mapping is unit-testable;
+// production passes db.MigrationStatus.
+func runMigrateCheck(ctx context.Context, databaseURL, migrationsPath string, stdout io.Writer) error {
+	return runMigrateCheckWith(ctx, databaseURL, migrationsPath, stdout, db.MigrationStatus)
+}
+
+// runMigrateCheckWith is the injectable core of runMigrateCheck. It prints a
+// counts-only summary (no PII) and maps the boolean status to the exit-code
+// contract.
+func runMigrateCheckWith(ctx context.Context, databaseURL, migrationsPath string, stdout io.Writer, status migrationStatusFn) error {
+	appPending, riverPending, err := status(ctx, databaseURL, migrationsPath)
+	if err != nil {
+		return fmt.Errorf("migration check: %w", err)
+	}
+
+	appCount, riverCount := 0, 0
+	if appPending {
+		appCount = 1
+	}
+	if riverPending {
+		riverCount = 1
+	}
+	if _, werr := fmt.Fprintf(stdout, "migrate-check: app_pending=%d river_pending=%d\n", appCount, riverCount); werr != nil {
+		return fmt.Errorf("write migrate-check summary: %w", werr)
+	}
+
+	if appPending || riverPending {
+		return exitErr{code: migrateExitPending, msg: "migrations pending"}
+	}
+	return nil
 }
 
 // run dispatches to exactly one subcommand. Validates flag selection
@@ -452,6 +581,13 @@ func run(ctx context.Context, opts runOptions, deps adminDeps) error {
 		return runSeed(ctx, opts, deps)
 	case opts.resetAndSeed:
 		return runResetAndSeed(ctx, opts, deps)
+	case opts.migrate, opts.migrateCheck:
+		// Migration subcommands are dispatched PRE-DB in runMain (they need
+		// only the database URL + migrations path, not deps), so they never
+		// reach this DB-backed dispatcher. Guard against a future caller that
+		// drives run() directly with these set rather than falling through to
+		// the misleading "unreachable".
+		return errors.New("migration subcommands are dispatched pre-DB in runMain, not run()")
 	}
 	return errors.New("unreachable")
 }
