@@ -20,6 +20,7 @@ type OAuthCredential struct {
 	AccountName           *string    `json:"account_name,omitempty"`
 	AccessTokenEncrypted  []byte     `json:"-"` // Never expose in JSON
 	RefreshTokenEncrypted []byte     `json:"-"` // Never expose in JSON
+	RefreshTokenNonce     []byte     `json:"-"` // Never expose in JSON; NULL means legacy shared-nonce format
 	EncryptionNonce       []byte     `json:"-"` // Never expose in JSON
 	TokenType             string     `json:"token_type"`
 	ExpiresAt             *time.Time `json:"expires_at,omitempty"`
@@ -47,6 +48,7 @@ type UpsertOAuthCredentialRequest struct {
 	AccountName           *string
 	AccessTokenEncrypted  []byte
 	RefreshTokenEncrypted []byte
+	RefreshTokenNonce     []byte
 	EncryptionNonce       []byte
 	TokenType             string
 	ExpiresAt             *time.Time
@@ -57,6 +59,7 @@ type UpsertOAuthCredentialRequest struct {
 type UpdateOAuthTokensRequest struct {
 	AccessTokenEncrypted  []byte
 	RefreshTokenEncrypted []byte
+	RefreshTokenNonce     []byte
 	EncryptionNonce       []byte
 	ExpiresAt             *time.Time
 }
@@ -78,6 +81,7 @@ func convertDbOAuthCredential(dbCred *db.OauthCredential) OAuthCredential {
 		AccountID:             dbCred.AccountID,
 		AccessTokenEncrypted:  dbCred.AccessTokenEncrypted,
 		RefreshTokenEncrypted: dbCred.RefreshTokenEncrypted,
+		RefreshTokenNonce:     dbCred.RefreshTokenNonce,
 		EncryptionNonce:       dbCred.EncryptionNonce,
 		TokenType:             "Bearer",
 		Scopes:                dbCred.Scopes,
@@ -257,6 +261,7 @@ func (r *OAuthRepository) Upsert(ctx context.Context, req UpsertOAuthCredentialR
 		AccountName:           stringToPgText(req.AccountName),
 		AccessTokenEncrypted:  req.AccessTokenEncrypted,
 		RefreshTokenEncrypted: req.RefreshTokenEncrypted,
+		RefreshTokenNonce:     req.RefreshTokenNonce,
 		EncryptionNonce:       req.EncryptionNonce,
 		TokenType:             pgtype.Text{String: req.TokenType, Valid: req.TokenType != ""},
 		ExpiresAt:             timeToPgTimestamptz(req.ExpiresAt),
@@ -276,6 +281,7 @@ func (r *OAuthRepository) UpdateTokens(ctx context.Context, id uuid.UUID, req Up
 		ID:                    uuidToPgUUID(id),
 		AccessTokenEncrypted:  req.AccessTokenEncrypted,
 		RefreshTokenEncrypted: req.RefreshTokenEncrypted,
+		RefreshTokenNonce:     req.RefreshTokenNonce,
 		EncryptionNonce:       req.EncryptionNonce,
 		ExpiresAt:             timeToPgTimestamptz(req.ExpiresAt),
 	})

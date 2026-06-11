@@ -59,12 +59,24 @@ type OAuthServiceInterface interface {
 // Ensure OAuthService implements OAuthServiceInterface
 var _ OAuthServiceInterface = (*OAuthService)(nil)
 
+// defaultUserInfoEndpoint is Google's OpenID userinfo URL.
+const defaultUserInfoEndpoint = "https://www.googleapis.com/oauth2/v2/userinfo"
+
 // OAuthService handles Google OAuth2 authentication
 type OAuthService struct {
 	config    *oauth2.Config
 	repo      *repository.OAuthRepository
 	syncRepo  *repository.SyncRepository
 	encryptor *crypto.TokenEncryptor
+
+	// userInfoEndpoint is the URL queried for the account's email and name. It
+	// defaults to Google's endpoint and is overridable only for tests.
+	userInfoEndpoint string
+
+	// httpClient, when set, replaces the default HTTP client for token exchange,
+	// refresh, and userinfo requests. It exists only to let tests substitute an
+	// httptest server; production leaves it nil and uses oauth2's default client.
+	httpClient *http.Client
 }
 
 // UserInfo contains user information from Google
@@ -93,11 +105,40 @@ func NewOAuthService(cfg *config.Config, repo *repository.OAuthRepository, syncR
 	}
 
 	return &OAuthService{
-		config:    oauthConfig,
-		repo:      repo,
-		syncRepo:  syncRepo,
-		encryptor: encryptor,
+		config:           oauthConfig,
+		repo:             repo,
+		syncRepo:         syncRepo,
+		encryptor:        encryptor,
+		userInfoEndpoint: defaultUserInfoEndpoint,
 	}, nil
+}
+
+// SetHTTPClient sets a custom HTTP client used for token exchange, refresh, and
+// userinfo requests. It is intended for tests that substitute an httptest server.
+func (s *OAuthService) SetHTTPClient(client *http.Client) {
+	s.httpClient = client
+}
+
+// SetTokenEndpoint overrides the OAuth token endpoint. It is intended for tests
+// that point token exchange and refresh at an httptest server.
+func (s *OAuthService) SetTokenEndpoint(tokenURL string) {
+	s.config.Endpoint.TokenURL = tokenURL
+}
+
+// SetUserInfoEndpoint overrides the userinfo endpoint. It is intended for tests
+// that point the account lookup at an httptest server.
+func (s *OAuthService) SetUserInfoEndpoint(userInfoURL string) {
+	s.userInfoEndpoint = userInfoURL
+}
+
+// clientContext returns a context carrying the configured HTTP client so the
+// oauth2 library routes token exchange and refresh through it. When no custom
+// client is set it returns the original context, preserving production behavior.
+func (s *OAuthService) clientContext(ctx context.Context) context.Context {
+	if s.httpClient == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, oauth2.HTTPClient, s.httpClient)
 }
 
 // GenerateState generates a secure random state for CSRF protection
@@ -121,7 +162,7 @@ func (s *OAuthService) GetAuthURL(state string) string {
 // ExchangeCode exchanges an authorization code for tokens and stores them
 func (s *OAuthService) ExchangeCode(ctx context.Context, code string) (*repository.OAuthCredentialStatus, error) {
 	// Exchange code for token
-	token, err := s.config.Exchange(ctx, code)
+	token, err := s.config.Exchange(s.clientContext(ctx), code)
 	if err != nil {
 		return nil, fmt.Errorf("exchange code: %w", err)
 	}
@@ -159,24 +200,58 @@ func (s *OAuthService) GetClientForAccount(ctx context.Context, accountID string
 		return nil, err
 	}
 
-	// Create a token source that handles refresh
-	tokenSource := s.config.TokenSource(ctx, token)
+	// Wrap the refreshing token source so that any refresh — whether it happens
+	// now or later inside a long-running sync — is written back to the database.
+	// Without this only a construction-time refresh would be persisted, so every
+	// later refresh would be redundant and a rotated refresh token would be lost.
+	source := s.persistingTokenSource(ctx, cred.ID, token)
 
-	// Get a potentially refreshed token
-	newToken, err := tokenSource.Token()
+	return oauth2.NewClient(ctx, source), nil
+}
+
+// persistingTokenSource wraps the OAuth refreshing token source so that a token
+// changed by a refresh is persisted exactly once. oauth2.ReuseTokenSource caches
+// the token and only calls the wrapped source when the cached token is invalid,
+// so the persist callback runs only on an actual refresh.
+func (s *OAuthService) persistingTokenSource(ctx context.Context, id uuid.UUID, token *oauth2.Token) oauth2.TokenSource {
+	base := s.config.TokenSource(s.clientContext(ctx), token)
+	persisting := &persistOnRefreshSource{
+		ctx:      ctx,
+		service:  s,
+		id:       id,
+		previous: token,
+		source:   base,
+	}
+	return oauth2.ReuseTokenSource(token, persisting)
+}
+
+// persistOnRefreshSource persists a refreshed token before returning it. It is
+// only consulted by oauth2.ReuseTokenSource when the cached token is no longer
+// valid, so Token() returning a value different from the last seen token means a
+// real refresh occurred.
+type persistOnRefreshSource struct {
+	ctx      context.Context
+	service  *OAuthService
+	id       uuid.UUID
+	previous *oauth2.Token
+	source   oauth2.TokenSource
+}
+
+func (p *persistOnRefreshSource) Token() (*oauth2.Token, error) {
+	newToken, err := p.source.Token()
 	if err != nil {
 		return nil, fmt.Errorf("refresh token: %w", err)
 	}
 
-	// If token was refreshed, save the new one
-	if newToken.AccessToken != token.AccessToken {
-		if err := s.updateToken(ctx, cred.ID, newToken); err != nil {
-			// Log but don't fail - we still have a valid token
+	if newToken.AccessToken != p.previous.AccessToken {
+		if err := p.service.updateToken(p.ctx, p.id, newToken); err != nil {
+			// Log but don't fail - we still have a valid token to return.
 			logger.Warn().Err(err).Msg("failed to save refreshed token")
 		}
+		p.previous = newToken
 	}
 
-	return oauth2.NewClient(ctx, tokenSource), nil
+	return newToken, nil
 }
 
 // ListAccounts returns all connected Google accounts
@@ -245,9 +320,9 @@ func (s *OAuthService) RevokeAccount(ctx context.Context, id uuid.UUID) error {
 
 // getUserInfo fetches the user's email and name from Google
 func (s *OAuthService) getUserInfo(ctx context.Context, token *oauth2.Token) (*UserInfo, error) {
-	client := s.config.Client(ctx, token)
+	client := s.config.Client(s.clientContext(ctx), token)
 
-	resp, err := client.Get("https://www.googleapis.com/oauth2/v2/userinfo")
+	resp, err := client.Get(s.userInfoEndpoint)
 	if err != nil {
 		return nil, fmt.Errorf("fetch user info: %w", err)
 	}
@@ -277,10 +352,11 @@ func (s *OAuthService) storeToken(ctx context.Context, token *oauth2.Token, user
 		return nil, fmt.Errorf("encrypt access token: %w", err)
 	}
 
-	// Encrypt refresh token if present (reuse nonce from access token)
-	var refreshCiphertext []byte
+	// Encrypt refresh token if present, using its own nonce. Reusing the access
+	// token's nonce with the same key would leak keystream under AES-GCM.
+	var refreshCiphertext, refreshNonce []byte
 	if token.RefreshToken != "" {
-		refreshCiphertext, err = s.encryptor.EncryptWithNonce(token.RefreshToken, nonce)
+		refreshCiphertext, refreshNonce, err = s.encryptor.Encrypt(token.RefreshToken)
 		if err != nil {
 			return nil, fmt.Errorf("encrypt refresh token: %w", err)
 		}
@@ -302,6 +378,7 @@ func (s *OAuthService) storeToken(ctx context.Context, token *oauth2.Token, user
 		AccountName:           accountName,
 		AccessTokenEncrypted:  accessCiphertext,
 		RefreshTokenEncrypted: refreshCiphertext,
+		RefreshTokenNonce:     refreshNonce,
 		EncryptionNonce:       nonce,
 		TokenType:             token.TokenType,
 		ExpiresAt:             expiresAt,
@@ -317,10 +394,12 @@ func (s *OAuthService) updateToken(ctx context.Context, id uuid.UUID, token *oau
 		return fmt.Errorf("encrypt access token: %w", err)
 	}
 
-	// Encrypt refresh token if present (refresh tokens are sometimes rotated, reuse nonce from access token)
-	var refreshCiphertext []byte
+	// Encrypt refresh token if present (refresh tokens are sometimes rotated),
+	// using its own nonce. Reusing the access token's nonce with the same key
+	// would leak keystream under AES-GCM.
+	var refreshCiphertext, refreshNonce []byte
 	if token.RefreshToken != "" {
-		refreshCiphertext, err = s.encryptor.EncryptWithNonce(token.RefreshToken, nonce)
+		refreshCiphertext, refreshNonce, err = s.encryptor.Encrypt(token.RefreshToken)
 		if err != nil {
 			return fmt.Errorf("encrypt refresh token: %w", err)
 		}
@@ -334,6 +413,7 @@ func (s *OAuthService) updateToken(ctx context.Context, id uuid.UUID, token *oau
 	_, err = s.repo.UpdateTokens(ctx, id, repository.UpdateOAuthTokensRequest{
 		AccessTokenEncrypted:  accessCiphertext,
 		RefreshTokenEncrypted: refreshCiphertext,
+		RefreshTokenNonce:     refreshNonce,
 		EncryptionNonce:       nonce,
 		ExpiresAt:             expiresAt,
 	})
@@ -354,10 +434,16 @@ func (s *OAuthService) getToken(ctx context.Context, accountID string) (*oauth2.
 		return nil, nil, fmt.Errorf("decrypt access token: %w", err)
 	}
 
-	// Decrypt refresh token if present
+	// Decrypt refresh token if present. Rows written by the current code carry a
+	// dedicated refresh_token_nonce; legacy rows (NULL nonce) shared the access
+	// token's nonce, so fall back to it for backward compatibility.
 	var refreshToken string
 	if len(cred.RefreshTokenEncrypted) > 0 {
-		refreshToken, err = s.encryptor.Decrypt(cred.RefreshTokenEncrypted, cred.EncryptionNonce)
+		refreshNonce := cred.RefreshTokenNonce
+		if len(refreshNonce) == 0 {
+			refreshNonce = cred.EncryptionNonce
+		}
+		refreshToken, err = s.encryptor.Decrypt(cred.RefreshTokenEncrypted, refreshNonce)
 		if err != nil {
 			return nil, nil, fmt.Errorf("decrypt refresh token: %w", err)
 		}

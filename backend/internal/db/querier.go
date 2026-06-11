@@ -1738,7 +1738,9 @@ type Querier interface {
 	// runs its own UPDATE path that also clears deleted_at).
 	UpdateMeetingNoteOnResync(ctx context.Context, arg UpdateMeetingNoteOnResyncParams) (*MeetingNote, error)
 	UpdateNote(ctx context.Context, arg UpdateNoteParams) (*Note, error)
-	// Update only the token data (for token refresh)
+	// Update only the token data (for token refresh).
+	// refresh_token_nonce tracks refresh_token_encrypted: it is only overwritten when
+	// a new refresh token is supplied, otherwise the stored ciphertext and nonce stay.
 	UpdateOAuthCredentialTokens(ctx context.Context, arg UpdateOAuthCredentialTokensParams) (*OauthCredential, error)
 	UpdateSyncStateCursor(ctx context.Context, arg UpdateSyncStateCursorParams) error
 	UpdateSyncStateEnabled(ctx context.Context, arg UpdateSyncStateEnabledParams) (*ExternalSyncState, error)
@@ -1800,7 +1802,10 @@ type Querier interface {
 	// come from the Pi ingest service identity-match path. mac_host_id is
 	// provenance — multi-host dedup is by guid, not by host.
 	UpsertMessagesMessage(ctx context.Context, arg UpsertMessagesMessageParams) (*MessagesMessage, error)
-	// Insert or update an OAuth credential
+	// Insert or update an OAuth credential.
+	// refresh_token_nonce is kept in sync with refresh_token_encrypted: when a new
+	// refresh token is provided both columns update together, otherwise the existing
+	// ciphertext and its nonce are preserved.
 	UpsertOAuthCredential(ctx context.Context, arg UpsertOAuthCredentialParams) (*OauthCredential, error)
 	// Insert with no-op on call_unique_id conflict. peer_normalized comes from
 	// the daemon (canonicalized via HandleNormalization). matched_contact_id
