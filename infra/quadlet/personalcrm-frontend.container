@@ -7,8 +7,10 @@
 # It only serves the Next standalone on the loopback port for the Caddy edge.
 [Unit]
 Description=PersonalCRM Frontend (Podman, rootless)
+# Ordering only (After=, no Requires=): the frontend makes NO server-side calls to
+# the backend (all /api/* is browser-side via Caddy), so a crash-looping backend
+# must not drag the frontend down -- it can still serve static assets.
 After=personalcrm-backend.service
-Requires=personalcrm-backend.service
 
 [Container]
 ContainerName=crm-frontend
@@ -26,6 +28,9 @@ RestartSec=5s
 TimeoutStopSec=15s
 MemoryMax=512M
 CPUQuota=150%
+# Boot/restart health gate, host-side against the published port (parity with the
+# old native unit). Not "active" until the Next server answers; else Restart=always.
+ExecStartPost=/bin/bash -c 'for n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do curl -sf http://127.0.0.1:3001 >/dev/null && exit 0; sleep 1; done; exit 1'
 
 [Install]
 WantedBy=default.target

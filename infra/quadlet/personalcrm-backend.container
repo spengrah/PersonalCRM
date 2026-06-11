@@ -25,6 +25,10 @@ Environment=PORT=8080
 Environment=HOST=0.0.0.0
 Environment=NODE_ENV=production
 Environment=LOG_LEVEL=info
+# Re-pin MIGRATIONS_PATH AFTER EnvironmentFile so a stale host path in .env (the
+# native deploy used /srv/personalcrm/backend/migrations) can't override the image's
+# baked /migrations and crash-loop boot migrations. Later directive wins in systemd.
+Environment=MIGRATIONS_PATH=/migrations
 # Published to loopback for the native Caddy edge (/api/* -> 127.0.0.1:8080).
 PublishPort=127.0.0.1:8080:8080
 
@@ -32,6 +36,10 @@ PublishPort=127.0.0.1:8080:8080
 Restart=always
 RestartSec=5s
 TimeoutStopSec=30s
+# Boot/restart health gate (distroless image has no curl, so gate host-side against
+# the published port). Restores parity with the old native ExecStartPost curl gate:
+# the unit isn't "active" until /health (incl. DB) returns 200; else Restart=always.
+ExecStartPost=/bin/bash -c 'for n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do curl -sf http://127.0.0.1:8080/health >/dev/null && exit 0; sleep 1; done; exit 1'
 # Resource ceilings carried over from the systemd unit (need cgroup-v2
 # controller delegation for the crm user slice -- verified in rehearsal).
 MemoryMax=512M

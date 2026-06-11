@@ -52,14 +52,16 @@ ls -la /tmp/crm-cutover.dump   # sanity: non-trivial size
 
 ## Phase 3 — Install units + .env changes
 
+Units MUST land in `crm`'s HOME (`/var/lib/personalcrm`) — the podman user-generator scans `$HOME/.config/containers/systemd/`; anything in `/home/crm` would be silently ignored after the Phase-4 `usermod`.
+
 ```bash
-ssh "$PI_HOST" 'sudo install -d -o crm -g crm /home/crm/.config/containers/systemd'
-scp infra/quadlet/* "$PI_HOST":/tmp/quadlet/    # then move into place owned by crm
-ssh "$PI_HOST" 'sudo cp /tmp/quadlet/* /home/crm/.config/containers/systemd/ && sudo chown -R crm:crm /home/crm/.config'
+ssh "$PI_HOST" 'sudo install -d -o crm -g crm /var/lib/personalcrm/.config/containers/systemd /tmp/quadlet'
+scp infra/quadlet/* "$PI_HOST":/tmp/quadlet/
+ssh "$PI_HOST" 'sudo cp /tmp/quadlet/* /var/lib/personalcrm/.config/containers/systemd/ && sudo chown -R crm:crm /var/lib/personalcrm/.config'
 ssh "$PI_HOST" 'sudo cp '"$(pwd)"'/infra/init-db.sql /srv/personalcrm/infra/init-db.sql'  # or scp it
 ```
 
-Edit `/srv/personalcrm/.env`: set **`DATABASE_URL` host to `crm-postgres`** (was localhost) — the backend reaches Postgres over the `crm` Quadlet network. Confirm `POSTGRES_PASSWORD`, `POSTGRES_USER=crm_user`, `API_KEY` present.
+Edit `/srv/personalcrm/.env`: set **`DATABASE_URL` host to `crm-postgres`** (was localhost) — the backend reaches Postgres over the `crm` Quadlet network. Confirm `POSTGRES_PASSWORD`, `POSTGRES_USER=crm_user`, `API_KEY` present. Remove any `MIGRATIONS_PATH` line (the image bakes `/migrations`, and the backend unit re-pins it, but keep `.env` clean).
 
 Wire the Caddy edge key injection (revised Decision 3):
 
@@ -130,3 +132,5 @@ crm_ctl enable personalcrm-database.service personalcrm-backend.service personal
 - Verify boot-survival: reboot the Pi, confirm the Quadlet stack comes up (linger).
 - Update the operator memory note: logs via `podman logs`, services are `systemctl --user` as `crm`.
 - Retain the Docker volume + the `_data.bak-*` copy for a cooling-off period, then reclaim.
+
+> ⚠️ **Do NOT run `scripts/deploy.sh` / `make deploy` after cutover.** The old native deploy rsyncs binaries and reinstalls + restarts the `personalcrm-*` **system** units, which bind the same loopback ports (8080/3001) as the Podman containers → split-brain / port collision. The native deploy path is retired by A (deploy automation); until A lands, deploy via this runbook only. (`deploy.sh` is intentionally left functional for *pre-cutover* deploys, so it is not hard-disabled.)

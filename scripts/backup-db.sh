@@ -21,7 +21,7 @@ TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 NO_RESTART=false
 for arg in "$@"; do
     case $arg in
-        --no-restart) NO_RESTART=true; shift ;;
+        --no-restart) NO_RESTART=true ;;
     esac
 done
 
@@ -46,6 +46,22 @@ USERENV="HOME=$CRM_HOME XDG_RUNTIME_DIR=/run/user/$CRM_UID DBUS_SESSION_BUS_ADDR
 crm_ctl()    { ssh "$PI_HOST" "cd /tmp && sudo -n -u crm $USERENV systemctl --user $*"; }
 crm_podman() { ssh "$PI_HOST" "cd /tmp && sudo -n -u crm HOME=$CRM_HOME XDG_RUNTIME_DIR=/run/user/$CRM_UID podman $*"; }
 
+# Safety net: if we error out (set -e) after stopping services, don't leave prod
+# down silently -- try to restart, and print an explicit manual-recovery command.
+SERVICES_STOPPED=false
+on_exit() {
+    local rc=$?
+    if [ "$rc" -ne 0 ] && [ "$SERVICES_STOPPED" = true ]; then
+        echo "" >&2
+        echo "⚠️  ERROR (exit $rc) with services stopped — attempting restart..." >&2
+        if ! crm_ctl start personalcrm-database.service personalcrm-backend.service personalcrm-frontend.service; then
+            echo "   AUTO-RESTART FAILED. Restart manually:" >&2
+            echo "   ssh $PI_HOST \"cd /tmp && sudo -n -u crm $USERENV systemctl --user start personalcrm-database.service personalcrm-backend.service personalcrm-frontend.service\"" >&2
+        fi
+    fi
+}
+trap on_exit EXIT
+
 # Locate the Podman named volume mountpoint (.../volumes/personalcrm-db/_data).
 VOLUME_PATH=$(crm_podman volume inspect personalcrm-db --format '{{.Mountpoint}}')
 BACKUP_PATH="${VOLUME_PATH}.bak-${TIMESTAMP}"
@@ -56,6 +72,7 @@ echo ""
 # Stop the writers, then postgres, to guarantee a consistent on-disk copy.
 echo "Stopping app services (backend, frontend)..."
 crm_ctl stop personalcrm-backend.service personalcrm-frontend.service
+SERVICES_STOPPED=true
 
 echo "Stopping postgres..."
 crm_ctl stop personalcrm-database.service
@@ -89,6 +106,7 @@ else
 
     echo "Restarting backend and frontend..."
     crm_ctl start personalcrm-backend.service personalcrm-frontend.service
+    SERVICES_STOPPED=false
     echo ""
     echo "✅ Backup complete. Services restarted."
 fi
