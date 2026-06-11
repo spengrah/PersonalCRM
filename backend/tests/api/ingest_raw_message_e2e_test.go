@@ -46,9 +46,25 @@ import (
 // processed. This is the load-bearing assertion for the feature —
 // without it we could ship a path that stages rows but never turns
 // them into interactions.
-func TestIngestRawMessage_E2E_StagesAggregatesAndCreatesInteraction(t *testing.T) {
-	t.Parallel()
+// rawMessageE2EEnv bundles the fully-wired e2e stack (live bus, real
+// aggregator + InteractionRecorder, started River client) plus a paired
+// host and a seeded known contact.
+type rawMessageE2EEnv struct {
+	ctx             context.Context
+	database        *db.Database
+	router          *gin.Engine
+	messagesRepo    *repository.MessagesMessageRepository
+	interactionRepo *repository.InteractionRepository
+	contactRepo     *repository.ContactRepository
+	pair            *service.PairResult
+	contactID       uuid.UUID
+}
 
+// setupRawMessageE2E wires the full ingest→aggregate→record pipeline on
+// an isolated per-test River DB clone and returns the env. Cleanup
+// (River stop + FK-ordered hard deletes) is registered via t.Cleanup.
+func setupRawMessageE2E(t *testing.T) *rawMessageE2EEnv {
+	t.Helper()
 	ctx := context.Background()
 	// This func genuinely works jobs (real aggregator + recorder, polls for
 	// the worked result) AND asserts DB-wide
@@ -223,12 +239,27 @@ func TestIngestRawMessage_E2E_StagesAggregatesAndCreatesInteraction(t *testing.T
 		// Elector resigns against a still-live pool.
 	})
 
-	// POST the raw_message event.
-	guid := "test-e2e-guid-" + uuid.NewString()
+	return &rawMessageE2EEnv{
+		ctx:             ctx,
+		database:        database,
+		router:          router,
+		messagesRepo:    messagesRepo,
+		interactionRepo: interactionRepo,
+		contactRepo:     contactRepo,
+		pair:            pair,
+		contactID:       contactID,
+	}
+}
+
+// postRawMessageE2E POSTs one raw_message event of `kind` to the wired
+// router via the host-auth path. The sent kind is marshaled via the
+// exact RawMessageSentPayload type events.Marshal requires.
+func postRawMessageE2E(t *testing.T, env *rawMessageE2EEnv, kind events.Kind, guid string) {
+	t.Helper()
 	now := accelerated.GetCurrentTime()
 	p := events.RawMessageReceivedPayload{
 		Version:     1,
-		HostID:      pair.HostID,
+		HostID:      env.pair.HostID,
 		Source:      "messages",
 		Guid:        guid,
 		ChatID:      "e2e-chat-1",
@@ -236,12 +267,18 @@ func TestIngestRawMessage_E2E_StagesAggregatesAndCreatesInteraction(t *testing.T
 		MessageType: "text",
 		SentAt:      now,
 	}
-	pBytes, err := events.Marshal(events.KindRawMessageReceived, p)
+	var pBytes json.RawMessage
+	var err error
+	if kind == events.KindRawMessageSent {
+		pBytes, err = events.Marshal(kind, events.RawMessageSentPayload(p))
+	} else {
+		pBytes, err = events.Marshal(kind, p)
+	}
 	require.NoError(t, err)
 	ev := map[string]any{
 		"source":      "messages",
 		"source_id":   guid,
-		"kind":        string(events.KindRawMessageReceived),
+		"kind":        string(kind),
 		"payload":     json.RawMessage(pBytes),
 		"observed_at": now,
 	}
@@ -249,19 +286,20 @@ func TestIngestRawMessage_E2E_StagesAggregatesAndCreatesInteraction(t *testing.T
 	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/events", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Mac-Host-ID", pair.HostID.String())
-	req.Header.Set("Authorization", "Bearer "+pair.APIKey)
+	req.Header.Set("X-Mac-Host-ID", env.pair.HostID.String())
+	req.Header.Set("Authorization", "Bearer "+env.pair.APIKey)
 	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	env.router.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+}
 
-	// Poll until the staging row is marked processed (Stage 3 has run).
-	// Bounded retry: 200 attempts × 50ms = 10s budget. Uses a count
-	// rather than wall-clock deadline so the lint rule banning
-	// time.Now() doesn't fire.
+// pollProcessedRawMessage waits (bounded, count-based) for the staging
+// row to be marked processed by Stage 3.
+func pollProcessedRawMessage(t *testing.T, env *rawMessageE2EEnv, guid string) *repository.MessagesMessage {
+	t.Helper()
 	var msg *repository.MessagesMessage
 	for range 200 {
-		m, err := messagesRepo.GetMessage(context.Background(), guid)
+		m, err := env.messagesRepo.GetMessage(context.Background(), guid)
 		require.NoError(t, err)
 		if m.ProcessedAt != nil && m.InteractionID != nil {
 			msg = m
@@ -272,19 +310,67 @@ func TestIngestRawMessage_E2E_StagesAggregatesAndCreatesInteraction(t *testing.T
 	require.NotNil(t, msg, "staging row was never marked processed within 10s")
 	require.NotNil(t, msg.ProcessedAt, "staging.processed_at must be set after Stage 3")
 	require.NotNil(t, msg.InteractionID, "staging.interaction_id must be set after Stage 3")
-	require.Equal(t, contactID, *msg.MatchedContactID)
+	return msg
+}
+
+func TestIngestRawMessage_E2E_StagesAggregatesAndCreatesInteraction(t *testing.T) {
+	t.Parallel()
+	env := setupRawMessageE2E(t)
+
+	guid := "test-e2e-guid-" + uuid.NewString()
+	postRawMessageE2E(t, env, events.KindRawMessageReceived, guid)
+
+	msg := pollProcessedRawMessage(t, env, guid)
+	require.Equal(t, env.contactID, *msg.MatchedContactID)
 
 	// And the interaction row exists with source=messages.
-	interactionCount, err := database.Queries.CountInteractionsByIDContactAndSource(
+	interactionCount, err := env.database.Queries.CountInteractionsByIDContactAndSource(
 		context.Background(),
 		db.CountInteractionsByIDContactAndSourceParams{
 			ID:        pgUUID(*msg.InteractionID),
-			ContactID: pgUUID(contactID),
+			ContactID: pgUUID(env.contactID),
 			Source:    "messages",
 		},
 	)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), interactionCount, "exactly one messages-source interaction expected")
+}
+
+// TestIngestRawMessage_E2E_Sent_OutboundInteractionBumpsOutreach is the
+// outbound mirror: POST raw_message.sent for a known contact → staging
+// row aggregates → interaction created with direction=outbound,
+// source=messages → contact.last_outreach_at bumped AND
+// last_contacted unchanged (outbound-only outreach semantics).
+func TestIngestRawMessage_E2E_Sent_OutboundInteractionBumpsOutreach(t *testing.T) {
+	t.Parallel()
+	env := setupRawMessageE2E(t)
+
+	// Baseline: a fresh contact has no last_contacted / last_outreach_at.
+	before, err := env.contactRepo.GetContact(env.ctx, env.contactID)
+	require.NoError(t, err)
+	require.Nil(t, before.LastContacted, "fresh contact has no last_contacted")
+	require.Nil(t, before.LastOutreachAt, "fresh contact has no last_outreach_at")
+
+	guid := "test-e2e-sent-" + uuid.NewString()
+	postRawMessageE2E(t, env, events.KindRawMessageSent, guid)
+
+	msg := pollProcessedRawMessage(t, env, guid)
+	require.True(t, msg.IsOutgoing, "sent kind stages is_outgoing=true")
+	require.Equal(t, env.contactID, *msg.MatchedContactID)
+
+	// The interaction is outbound, source=messages.
+	interaction, err := env.interactionRepo.GetInteraction(env.ctx, *msg.InteractionID)
+	require.NoError(t, err)
+	require.Equal(t, "outbound", interaction.Direction,
+		"outbound message produces an outbound interaction")
+	require.Equal(t, "messages", interaction.Source)
+
+	// Outbound bumps last_outreach_at only; last_contacted stays nil.
+	after, err := env.contactRepo.GetContact(env.ctx, env.contactID)
+	require.NoError(t, err)
+	require.NotNil(t, after.LastOutreachAt, "outbound message bumps last_outreach_at")
+	require.Nil(t, after.LastContacted,
+		"outbound-only message must NOT bump last_contacted")
 }
 
 // deferredAggregateForContactWorker is filled after the engine and

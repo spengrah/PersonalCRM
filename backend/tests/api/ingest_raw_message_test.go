@@ -237,7 +237,10 @@ func postIngestRaw(t *testing.T, env *ingestRawTestEnv, hostID *uuid.UUID, hostK
 	return w
 }
 
-// buildRawMessageEvent constructs an ingest-event request map for a raw_message kind.
+// buildRawMessageEvent constructs an ingest-event request map for a
+// raw_message kind. events.Marshal requires the EXACT registered
+// payload type per kind, so the sent kind is marshaled via the defined
+// RawMessageSentPayload type (same struct shape as received).
 func buildRawMessageEvent(t *testing.T, kind events.Kind, hostID uuid.UUID, guid, chatID, peerHandle string) map[string]any {
 	t.Helper()
 	now := accelerated.GetCurrentTime()
@@ -252,7 +255,13 @@ func buildRawMessageEvent(t *testing.T, kind events.Kind, hostID uuid.UUID, guid
 		IsGroup:     false,
 		SentAt:      now,
 	}
-	pBytes, err := events.Marshal(kind, p)
+	var pBytes json.RawMessage
+	var err error
+	if kind == events.KindRawMessageSent {
+		pBytes, err = events.Marshal(kind, events.RawMessageSentPayload(p))
+	} else {
+		pBytes, err = events.Marshal(kind, p)
+	}
 	require.NoError(t, err)
 	return map[string]any{
 		"source":      "messages",
@@ -348,6 +357,34 @@ func TestIngestRawMessage_HappyPath_StagesRowAndEnqueuesJob(t *testing.T) {
 	require.Equal(t, env.pairedContactA, *msg.MatchedContactID)
 	require.NotNil(t, msg.MacHostID)
 	require.Equal(t, env.pairedHostID, *msg.MacHostID)
+
+	require.Equal(t, 1, countRiverJobs(t, env, "messaging_aggregate_for_contact"))
+}
+
+// TestIngestRawMessage_Sent_StagesOutgoingRowAndEnqueuesJob mirrors the
+// happy-path test for the outbound kind: a raw_message.sent for a known
+// contact stages a row with is_outgoing=true and a matched contact, and
+// enqueues one aggregator River job.
+func TestIngestRawMessage_Sent_StagesOutgoingRowAndEnqueuesJob(t *testing.T) {
+	env := setupRawIngestEnv(t)
+	t.Parallel()
+	guid := "test-guid-" + uuid.NewString()
+	ev := buildRawMessageEvent(t, events.KindRawMessageSent, env.pairedHostID,
+		guid, "chat-out-1", "+15551234567")
+	w := postIngestRaw(t, env, &env.pairedHostID, env.pairedHostKey, map[string]any{
+		"events": []any{ev},
+	})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp := parseIngestResp(t, w)
+	require.Equal(t, 1, resp.Accepted)
+	require.Equal(t, 0, resp.Rejected, "errors: %+v", resp.Errors)
+
+	msg, err := env.messagesRepo.GetMessage(context.Background(), guid)
+	require.NoError(t, err)
+	require.NotNil(t, msg)
+	require.True(t, msg.IsOutgoing, "raw_message.sent must stage is_outgoing=true")
+	require.NotNil(t, msg.MatchedContactID, "expected matched_contact_id to be set")
+	require.Equal(t, env.pairedContactA, *msg.MatchedContactID)
 
 	require.Equal(t, 1, countRiverJobs(t, env, "messaging_aggregate_for_contact"))
 }
