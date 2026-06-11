@@ -6,7 +6,7 @@
 // spellings of the same canonical handle (one canonical phone number can
 // map to several `handle.ROWID`s: "+15550000001", "(555) 000-0001", …).
 //
-// The scan therefore runs in two passes:
+// The scan therefore runs in three passes:
 //
 //   1. Resolve handle ROWIDs. `SELECT ROWID, id FROM handle` is small
 //      (one row per distinct raw handle the mailbox has ever seen),
@@ -15,12 +15,23 @@
 //      happen in SQL — it is the same `HandleNormalization` the sender
 //      filter uses.
 //
-//   2. Scan messages. `message.handle_id IN (resolvedROWIDs) AND
-//      message.date >= sinceNanos [AND message.ROWID < progressBelowRowID]`
-//      ordered `ROWID DESC`, budget-limited. The `message` table has a
-//      PRIMARY KEY on ROWID; the `handle_id IN (...)` predicate over a
-//      tiny ROWID set plus the bounded 30-day `date` range, paged by
-//      budget, keeps each tick's work bounded.
+//   2. Resolve the handle's chat memberships. `SELECT DISTINCT chat_id
+//      FROM chat_handle_join WHERE handle_id IN (resolvedROWIDs)` — a
+//      tiny table (one row per chat membership). The resulting chat-ROWID
+//      set is what lets the scan reach OUTBOUND rows: an outbound row has
+//      a NULL handle_id, so it can only be tied to the scanned handle via
+//      the chats that handle belongs to.
+//
+//   3. Scan messages. Inbound rows match `message.handle_id IN
+//      (resolvedROWIDs)`; outbound rows match `message.is_from_me = 1 AND
+//      message.ROWID IN (chat_message_join rows of the resolved chats)`.
+//      Bounded by `message.date >= sinceNanos [AND message.ROWID <
+//      progressBelowRowID]`, ordered `ROWID DESC`, budget-limited. The
+//      outbound branch is omitted entirely when the chat set is empty
+//      (query identical to the inbound-only form). The outbound IN
+//      subquery materializes the message-ID set of the handle's chats
+//      once per page — same complexity class as the page's existing
+//      ROWID-DESC walk, and budget-bounded per tick.
 //
 // The scan is RESUMABLE: passing `progressBelowRowID` walks the next
 // page strictly below the lowest ROWID already confirmed-published, so a
@@ -77,9 +88,30 @@ public enum MessagesScanReader {
         return matches
     }
 
+    /// Resolve the distinct `chat.ROWID`s that any of `handleROWIDs`
+    /// belongs to, via `chat_handle_join`. Used to reach OUTBOUND rows
+    /// (NULL handle_id) sent in the scanned handle's conversations.
+    /// Returns an empty array if the handle has no chat memberships.
+    public static func resolveChatROWIDs(
+        db: Database,
+        handleROWIDs: [Int64]
+    ) throws -> [Int64] {
+        if handleROWIDs.isEmpty { return [] }
+        let placeholders = Array(repeating: "?", count: handleROWIDs.count).joined(separator: ", ")
+        let sql = """
+            SELECT DISTINCT chat_id AS cid
+            FROM chat_handle_join
+            WHERE handle_id IN (\(placeholders))
+            """
+        let rows = try Row.fetchAll(db, sql: sql,
+                                    arguments: StatementArguments(handleROWIDs as [DatabaseValueConvertible]))
+        return rows.compactMap { $0["cid"] as Int64? }
+    }
+
     /// Fetch one budget-limited page of messages for `canonicalHandle`
     /// at-or-after `since`, descending by ROWID, resuming strictly below
-    /// `progressBelowRowID` when set.
+    /// `progressBelowRowID` when set. Returns BOTH inbound rows (matched
+    /// by handle) and outbound rows (matched by chat membership).
     ///
     /// Returns an EMPTY exhausted page (no rows, lowestRowID nil) when
     /// the handle resolves to zero ROWIDs (no chat.db history for it).
@@ -96,19 +128,33 @@ public enum MessagesScanReader {
         if handleROWIDs.isEmpty {
             return MessagesScanPage(rows: [], exhausted: true, lowestRowID: nil, inspected: 0)
         }
+        let chatROWIDs = try resolveChatROWIDs(db: db, handleROWIDs: handleROWIDs)
 
         // Convert the Date lower bound to chat.db's Apple-epoch
         // NANOSECONDS unit.
         let sinceNanos = Int64(
             (since.timeIntervalSince1970 - ChatDBReader.appleEpochOffset) * 1e9)
 
-        // Build the `handle_id IN (?, ?, …)` placeholder list.
-        let placeholders = Array(repeating: "?", count: handleROWIDs.count).joined(separator: ", ")
-        var conditions = [
-            "message.handle_id IN (\(placeholders))",
-            "message.date >= ?",
-        ]
+        // Inbound: handle_id IN (...). Outbound (NULL handle_id): the row
+        // is_from_me=1 and belongs to one of the handle's chats. The
+        // outbound branch is omitted when the chat set is empty, leaving
+        // the query identical to the inbound-only form.
+        let handlePlaceholders = Array(repeating: "?", count: handleROWIDs.count).joined(separator: ", ")
         var arguments: [DatabaseValueConvertible] = handleROWIDs
+        let matchClause: String
+        if chatROWIDs.isEmpty {
+            matchClause = "message.handle_id IN (\(handlePlaceholders))"
+        } else {
+            let chatPlaceholders = Array(repeating: "?", count: chatROWIDs.count).joined(separator: ", ")
+            matchClause = """
+                ( message.handle_id IN (\(handlePlaceholders))
+                  OR (message.is_from_me = 1 AND message.ROWID IN (
+                        SELECT cmj.message_id FROM chat_message_join AS cmj
+                        WHERE cmj.chat_id IN (\(chatPlaceholders)))) )
+                """
+            arguments.append(contentsOf: chatROWIDs)
+        }
+        var conditions = [matchClause, "message.date >= ?"]
         arguments.append(sinceNanos)
         if let progress = progressBelowRowID {
             conditions.append("message.ROWID < ?")
