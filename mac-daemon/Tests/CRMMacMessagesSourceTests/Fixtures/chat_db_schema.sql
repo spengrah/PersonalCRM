@@ -37,6 +37,7 @@ CREATE TABLE message (
     date_read INTEGER,
     date_delivered INTEGER,
     is_from_me INTEGER NOT NULL DEFAULT 0,
+    item_type INTEGER NOT NULL DEFAULT 0,
     is_read INTEGER NOT NULL DEFAULT 0,
     cache_has_attachments INTEGER NOT NULL DEFAULT 0,
     associated_message_guid TEXT

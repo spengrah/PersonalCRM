@@ -20,12 +20,12 @@ public enum ChatDBSchema {
     /// Schema version label included in heartbeat source_health.
     /// On drift: replaced with "chat_db_drift:<table>.<column>" so the
     /// operator can see which column went missing.
-    public static let okVersion = "chat_db_v1"
+    public static let okVersion = "chat_db_v2"
 
     public static let requiredColumns: [String: Set<String>] = [
         "message": [
             "ROWID", "guid", "text", "handle_id",
-            "date", "is_from_me", "cache_has_attachments",
+            "date", "is_from_me", "item_type", "cache_has_attachments",
             "associated_message_guid",
         ],
         "handle": ["ROWID", "id", "service"],
