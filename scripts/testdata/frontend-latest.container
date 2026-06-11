@@ -1,0 +1,11 @@
+[Unit]
+Description=PersonalCRM Frontend (Podman, rootless)
+After=personalcrm-backend.service
+
+[Container]
+ContainerName=crm-frontend
+Image=ghcr.io/spengrah/personalcrm-frontend:latest
+PublishPort=127.0.0.1:3001:3001
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,15 @@
+[Unit]
+Description=PersonalCRM Backend API Server (Podman, rootless)
+After=personalcrm-database.service
+Requires=personalcrm-database.service
+
+[Container]
+ContainerName=crm-backend
+Image=ghcr.io/spengrah/personalcrm-backend:latest
+Network=crm.network
+EnvironmentFile=/srv/personalcrm/.env
+Environment=MIGRATIONS_PATH=/migrations
+PublishPort=127.0.0.1:8080:8080
+
+[Install]
+WantedBy=default.target
