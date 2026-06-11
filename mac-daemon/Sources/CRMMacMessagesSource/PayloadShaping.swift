@@ -6,11 +6,12 @@
 // `keyEncodingStrategy = .convertToSnakeCase` shortcut so the wire
 // shape is documented at the type level.
 //
-// Outbound group-chat peer (is_from_me=1 + chat.style=43): the caller
-// resolves via ChatDBReader.outboundGroupPeer before invoking
-// shapePayload. This is a v1 simplification — every outbound group
-// message attributes to the same peer (first non-self by
-// chat_handle_join.ROWID).
+// Outbound peer (is_from_me=1, usually NULL handle_id): the caller
+// resolves via ChatDBReader.outboundPeer (the first chat_handle_join
+// entry by join ROWID) before invoking shape. For group chats this is
+// a v1 simplification — every outbound group message attributes to the
+// same peer. There is no self-handle exclusion; it relies on macOS
+// excluding the account owner's handle from chat_handle_join.
 import Foundation
 
 /// One attachment's metadata, per the Pi-side AttachmentMeta. Currently
@@ -148,9 +149,9 @@ public enum MessageDirection: String, Sendable {
 public enum PayloadShaping {
     /// Convert a ChatDBMessage row into a (kind, payload) pair, given
     /// the peer handle and host UUID. The peer is supplied by the
-    /// caller because outbound group rows need an explicit
-    /// outboundGroupPeer lookup that fetch() doesn't do (fetch returns
-    /// only message.handle_id, which is NULL on outbound rows).
+    /// caller because outbound rows usually carry a NULL message.handle_id
+    /// and need an explicit outboundPeer lookup (the chat's
+    /// chat_handle_join entry) that the page fetch doesn't do.
     public static func shape(
         row: ChatDBMessage,
         peerHandle: String,
