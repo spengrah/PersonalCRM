@@ -1,0 +1,21 @@
+# PersonalCRM native Caddy edge (A0 scope: only the X-API-Key injection is new).
+#
+# Tailscale Serve terminates TLS on :443 and proxies to this Caddy on :80.
+# Routing is unchanged from the live Pi config (/api/* -> backend, else frontend);
+# both upstreams are the loopback ports the rootless containers publish.
+#
+# NEW in A0: inject X-API-Key on /api/* from the edge env (CRM_API_KEY), since
+# the frontend image is built key-less. This replaces whatever (empty) X-API-Key
+# the browser sends. Set CRM_API_KEY in Caddy's systemd environment, e.g.:
+#   systemctl edit caddy  ->  [Service]\nEnvironmentFile=/etc/caddy/crm.env
+# where /etc/caddy/crm.env holds CRM_API_KEY=<the prod API key> (root-owned, 0600).
+:80 {
+	handle /api/* {
+		reverse_proxy localhost:8080 {
+			header_up X-API-Key {env.CRM_API_KEY}
+		}
+	}
+	handle {
+		reverse_proxy localhost:3001
+	}
+}

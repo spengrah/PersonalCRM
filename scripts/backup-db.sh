@@ -1,40 +1,32 @@
 #!/bin/bash
-# PersonalCRM Database Backup Script
-# Creates a point-in-time copy of the PostgreSQL data volume on the Pi.
+# PersonalCRM Database Backup Script (rootless Podman edition).
+# Creates a point-in-time physical copy of the PostgreSQL data volume on the Pi.
+#
+# Post-A0-cutover: the stack runs as rootless Podman Quadlets under the `crm`
+# system user, so this stops the *user* systemd services and copies the Podman
+# named volume (`personalcrm-db`) rather than the old Docker volume.
 #
 # Usage: ./scripts/backup-db.sh [--no-restart]
-#
-# Options:
 #   --no-restart  Stop services for backup but don't restart (e.g., before a deploy)
 #
-# The script stops postgres to ensure a clean copy, then restarts it.
-# Backup is stored alongside the volume as _data.bak-YYYYMMDD-HHMMSS.
+# Stops the writers + postgres for a clean copy, then restarts them. Backup is
+# stored alongside the volume data as _data.bak-YYYYMMDD-HHMMSS.
 
 set -e
 
 PI_HOST="${PI_HOST:-raspberry-pi}"
-PI_DEPLOY_DIR="${PI_DEPLOY_DIR:?PI_DEPLOY_DIR must be set (e.g. /srv/personalcrm)}"
-VOLUME_PATH="/var/lib/docker/volumes/infra_postgres_data/_data"
-COMPOSE_DIR="$PI_DEPLOY_DIR/infra"
-BACKEND_SERVICE="personalcrm-backend"
-FRONTEND_SERVICE="personalcrm-frontend"
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-BACKUP_PATH="${VOLUME_PATH}.bak-${TIMESTAMP}"
 
 # Parse arguments
 NO_RESTART=false
 for arg in "$@"; do
     case $arg in
-        --no-restart)
-            NO_RESTART=true
-            shift
-            ;;
+        --no-restart) NO_RESTART=true ;;
     esac
 done
 
-echo "=== PersonalCRM Database Backup ==="
+echo "=== PersonalCRM Database Backup (Podman) ==="
 echo "Target: $PI_HOST"
-echo "Backup: $BACKUP_PATH"
 echo ""
 
 # Verify Pi is reachable
@@ -44,46 +36,77 @@ if ! ssh -q -o ConnectTimeout=5 "$PI_HOST" exit; then
     exit 1
 fi
 
-# Stop services to prevent writes
-echo "Stopping services..."
-ssh "$PI_HOST" "sudo systemctl stop $BACKEND_SERVICE $FRONTEND_SERVICE"
+# Resolve the crm user context for rootless systemctl --user / podman.
+# `cd /tmp` + explicit HOME: interactive `sudo -u crm` inherits the SSH user's
+# CWD/HOME, which crm can't access (rootless podman then fails to chdir). The
+# Quadlet services themselves run under systemd and are unaffected.
+CRM_UID=$(ssh "$PI_HOST" "id -u crm")
+CRM_HOME=/var/lib/personalcrm
+USERENV="HOME=$CRM_HOME XDG_RUNTIME_DIR=/run/user/$CRM_UID DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$CRM_UID/bus"
+crm_ctl()    { ssh "$PI_HOST" "cd /tmp && sudo -n -u crm $USERENV systemctl --user $*"; }
+crm_podman() { ssh "$PI_HOST" "cd /tmp && sudo -n -u crm HOME=$CRM_HOME XDG_RUNTIME_DIR=/run/user/$CRM_UID podman $*"; }
 
-# Stop postgres for clean copy
-echo "Stopping postgres container..."
-ssh "$PI_HOST" "cd $COMPOSE_DIR && docker compose stop postgres"
+# Safety net: if we error out (set -e) after stopping services, don't leave prod
+# down silently -- try to restart, and print an explicit manual-recovery command.
+SERVICES_STOPPED=false
+on_exit() {
+    local rc=$?
+    if [ "$rc" -ne 0 ] && [ "$SERVICES_STOPPED" = true ]; then
+        echo "" >&2
+        echo "⚠️  ERROR (exit $rc) with services stopped — attempting restart..." >&2
+        if ! crm_ctl start personalcrm-database.service personalcrm-backend.service personalcrm-frontend.service; then
+            echo "   AUTO-RESTART FAILED. Restart manually:" >&2
+            echo "   ssh $PI_HOST \"cd /tmp && sudo -n -u crm $USERENV systemctl --user start personalcrm-database.service personalcrm-backend.service personalcrm-frontend.service\"" >&2
+        fi
+    fi
+}
+trap on_exit EXIT
 
-# Copy the volume
+# Locate the Podman named volume mountpoint (.../volumes/personalcrm-db/_data).
+VOLUME_PATH=$(crm_podman volume inspect personalcrm-db --format '{{.Mountpoint}}')
+BACKUP_PATH="${VOLUME_PATH}.bak-${TIMESTAMP}"
+echo "Volume: $VOLUME_PATH"
+echo "Backup: $BACKUP_PATH"
+echo ""
+
+# Stop the writers, then postgres, to guarantee a consistent on-disk copy.
+echo "Stopping app services (backend, frontend)..."
+crm_ctl stop personalcrm-backend.service personalcrm-frontend.service
+SERVICES_STOPPED=true
+
+echo "Stopping postgres..."
+crm_ctl stop personalcrm-database.service
+
+# Copy the volume (owned by a mapped subuid; root can read it).
 echo "Copying data volume (this may take a moment)..."
-ssh "$PI_HOST" "sudo cp -a $VOLUME_PATH $BACKUP_PATH"
+ssh "$PI_HOST" "sudo cp -a '$VOLUME_PATH' '$BACKUP_PATH'"
 
-# Verify
-BACKUP_SIZE=$(ssh "$PI_HOST" "sudo du -sh $BACKUP_PATH | cut -f1")
+BACKUP_SIZE=$(ssh "$PI_HOST" "sudo du -sh '$BACKUP_PATH' | cut -f1")
 echo "Backup created: $BACKUP_PATH ($BACKUP_SIZE)"
 
 if [ "$NO_RESTART" = true ]; then
     echo ""
     echo "⚠️  --no-restart specified. Services are stopped."
     echo "   Restart manually with:"
-    echo "   ssh $PI_HOST \"cd $COMPOSE_DIR && docker compose start postgres && sudo systemctl start $BACKEND_SERVICE $FRONTEND_SERVICE\""
+    echo "   ssh $PI_HOST \"sudo -n -u crm $USERENV systemctl --user start personalcrm-database.service personalcrm-backend.service personalcrm-frontend.service\""
 else
-    # Restart services
     echo "Restarting postgres..."
-    ssh "$PI_HOST" "cd $COMPOSE_DIR && docker compose start postgres"
+    crm_ctl start personalcrm-database.service
 
-    # Wait for postgres to be ready
     echo "Waiting for postgres to accept connections..."
     for i in $(seq 1 15); do
-        if ssh "$PI_HOST" "docker exec crm-postgres pg_isready -U crm_user" >/dev/null 2>&1; then
+        if crm_podman exec crm-postgres pg_isready -U crm_user >/dev/null 2>&1; then
             break
         fi
         if [ "$i" -eq 15 ]; then
-            echo "Warning: postgres not ready after 15s, starting backend anyway"
+            echo "Warning: postgres not ready after 15s, starting app anyway"
         fi
         sleep 1
     done
 
     echo "Restarting backend and frontend..."
-    ssh "$PI_HOST" "sudo systemctl start $BACKEND_SERVICE $FRONTEND_SERVICE"
+    crm_ctl start personalcrm-backend.service personalcrm-frontend.service
+    SERVICES_STOPPED=false
     echo ""
     echo "✅ Backup complete. Services restarted."
 fi

@@ -1,0 +1,6 @@
+# Named rootless Podman volume for the Postgres data dir. Created fresh at
+# cutover and populated by `pg_restore` from a dump of the live Docker volume
+# (Decision 1: dump/restore, NOT adopt-in-place -- the old Docker volume stays
+# pristine as the rollback anchor). scripts/backup-db.sh repoints here.
+[Volume]
+VolumeName=personalcrm-db

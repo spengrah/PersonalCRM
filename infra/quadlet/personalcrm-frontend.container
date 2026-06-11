@@ -1,0 +1,36 @@
+# PersonalCRM frontend (rootless Podman Quadlet) -- replaces
+# personalcrm-frontend.service. Generates personalcrm-frontend.service.
+#
+# The image is built key-less + same-origin (no NEXT_PUBLIC secrets), so this
+# container needs NO .env / EnvironmentFile and joins NO container network:
+# all API traffic is browser-side /api/* through Caddy, which injects X-API-Key.
+# It only serves the Next standalone on the loopback port for the Caddy edge.
+[Unit]
+Description=PersonalCRM Frontend (Podman, rootless)
+# Ordering only (After=, no Requires=): the frontend makes NO server-side calls to
+# the backend (all /api/* is browser-side via Caddy), so a crash-looping backend
+# must not drag the frontend down -- it can still serve static assets.
+After=personalcrm-backend.service
+
+[Container]
+ContainerName=crm-frontend
+Image=ghcr.io/spengrah/personalcrm-frontend:latest
+Environment=PORT=3001
+Environment=HOSTNAME=0.0.0.0
+Environment=NODE_ENV=production
+Environment=NEXT_TELEMETRY_DISABLED=1
+# Published to loopback for the native Caddy edge (/ -> 127.0.0.1:3001).
+PublishPort=127.0.0.1:3001:3001
+
+[Service]
+Restart=always
+RestartSec=5s
+TimeoutStopSec=15s
+MemoryMax=512M
+CPUQuota=150%
+# Boot/restart health gate, host-side against the published port (parity with the
+# old native unit). Not "active" until the Next server answers; else Restart=always.
+ExecStartPost=/bin/bash -c 'for n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do curl -sf http://127.0.0.1:3001 >/dev/null && exit 0; sleep 1; done; exit 1'
+
+[Install]
+WantedBy=default.target

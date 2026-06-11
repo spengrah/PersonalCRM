@@ -1,0 +1,103 @@
+name: Build & Push Images
+
+# Builds the A0 arm64 container images and pushes them to GHCR. A's deploy job
+# consumes these (podman pull + Quadlet tag swap). The Dockerfiles are COPY-only
+# (no in-image build), so cross-compiling the binaries here means buildx assembles
+# the arm64 image without QEMU emulation.
+#
+# First run creates the packages PRIVATE; flip both to PUBLIC once in the repo's
+# package settings (Decision 4: public, no host pull credential).
+#
+# This job builds on any push to main touching the paths below, independent of CI
+# results, and publishes both :<sha> (immutable, the promote/rollback handle) and
+# :latest (convenience). The green-CI deploy gate + SHA-pinned promotion is A's
+# deploy job (umbrella security model); A0's cutover pulls a chosen tag manually.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'infra/images/**'
+      - '.dockerignore'
+      - '.github/workflows/build-images.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NS: ghcr.io/${{ github.repository_owner }}
+
+jobs:
+  build-images:
+    name: Build & Push arm64 images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.2
+
+      - name: Cross-compile backend binaries (static arm64)
+        working-directory: backend
+        env:
+          GOOS: linux
+          GOARCH: arm64
+          CGO_ENABLED: '0'
+        run: |
+          go build -trimpath -ldflags="-s -w" -o bin/crm-api-arm64 cmd/crm-api/main.go
+          go build -trimpath -ldflags="-s -w" -o bin/crm-admin-arm64 cmd/crm-admin/main.go
+
+      - name: Build frontend standalone (key-less, same-origin)
+        working-directory: frontend
+        env:
+          # Public image bakes NO secret; X-API-Key is injected at the Caddy edge.
+          NEXT_PUBLIC_API_KEY: ''
+          NEXT_PUBLIC_API_URL: ''
+          NEXT_TELEMETRY_DISABLED: '1'
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/images/backend.Dockerfile
+          platforms: linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE_NS }}/personalcrm-backend:${{ github.sha }}
+            ${{ env.IMAGE_NS }}/personalcrm-backend:latest
+
+      - name: Build & push frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/images/frontend.Dockerfile
+          platforms: linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE_NS }}/personalcrm-frontend:${{ github.sha }}
+            ${{ env.IMAGE_NS }}/personalcrm-frontend:latest
