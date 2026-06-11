@@ -185,7 +185,13 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
         if !working.outboundBackfillDone {
             if working.installMaxRowID != nil {
                 // Established install: re-walk from the live cursor down.
-                working.backfillCursor = working.liveCursor ?? working.installMaxRowID
+                // +1 because the backfill bound is EXCLUSIVE (ROWID < ?)
+                // while the live cursor is INCLUSIVE (the last scanned
+                // row) — the old inbound-only live cursor can sit exactly
+                // ON an outbound row that was scanned but never emitted,
+                // and that row must be inside the re-walk.
+                working.backfillCursor = (working.liveCursor ?? working.installMaxRowID)
+                    .map { $0 + 1 }
                 working.backfillComplete = false
                 logger.info("messages tick: one-time outbound re-backfill armed", metadata: [
                     "from_rowid": .public(String(working.backfillCursor ?? 0)),
@@ -252,6 +258,7 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
             now: tickStart)
         var hadRejection = false
         var hadUnconfirmed = false
+        var hadReadFailure = false
 
         // Backfill batch (descending).
         if !working.backfillComplete, budget.rowsRemaining > 0 {
@@ -261,6 +268,7 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
                 budget: &budget)
             if !outcome.rejected.isEmpty { hadRejection = true }
             if outcome.hadUnconfirmedItems { hadUnconfirmed = true }
+            if outcome.readFailed { hadReadFailure = true }
         }
 
         // Live batch (ascending).
@@ -271,14 +279,19 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
                 budget: &budget)
             if !outcome.rejected.isEmpty { hadRejection = true }
             if outcome.hadUnconfirmedItems { hadUnconfirmed = true }
+            if outcome.readFailed { hadReadFailure = true }
         }
 
-        // Commit cursor only if changed, no rejections, AND every
-        // item we tried to publish was confirmed. A transport
-        // failure mid-tick must NOT commit a cursor that skips the
-        // failed rows.
+        // Commit cursor only if changed, no rejections, every item we
+        // tried to publish was confirmed, AND no page read failed. A
+        // transport failure mid-tick must NOT commit a cursor that
+        // skips the failed rows; a read/resolution failure must not
+        // commit non-batch mutations either (e.g. the one-time
+        // re-backfill arm) — the next tick recomputes them, and
+        // holding the whole commit keeps the failure semantics simple:
+        // a failed tick commits nothing.
         let cursorChanged = working != cursor
-        if cursorChanged && !hadRejection && !hadUnconfirmed {
+        if cursorChanged && !hadRejection && !hadUnconfirmed && !hadReadFailure {
             switch await commitWorking(working) {
             case .committed:
                 logger.debug("messages tick: cursor committed", metadata: [
@@ -296,6 +309,8 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
             logger.warning("messages tick: per-event rejections; holding cursor", metadata: [:])
         } else if hadUnconfirmed {
             logger.warning("messages tick: publish unconfirmed; holding cursor", metadata: [:])
+        } else if hadReadFailure {
+            logger.warning("messages tick: page read failed; holding cursor", metadata: [:])
         }
 
         // Refresh health snapshot. `last_pushed_at` is sticky across
@@ -583,6 +598,12 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
         /// derived state (e.g. backfillComplete flag) when this is
         /// true.
         let hadUnconfirmedItems: Bool
+        /// True if the page read (or in-read peer resolution) threw.
+        /// The batch made no progress and the caller must NOT commit
+        /// ANY cursor mutation this tick — including non-batch ones
+        /// like the one-time re-backfill arm — so a failed tick
+        /// commits nothing and the next tick retries from clean state.
+        var readFailed: Bool = false
     }
 
     /// Backfill: walk message.ROWID downward from
@@ -627,13 +648,15 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
         } catch let dbError as DatabaseError where isFDAError(dbError) {
             await markUnhealthy(reason: "fda_required")
             return BatchSummary(accepted: 0, duplicate: 0,
-                                  rejected: [], hadUnconfirmedItems: false)
+                                  rejected: [], hadUnconfirmedItems: false,
+                                  readFailed: true)
         } catch {
             logger.warning("messages tick: backfill read failed", metadata: [
                 "error": .private(String(describing: error)),
             ])
             return BatchSummary(accepted: 0, duplicate: 0,
-                                  rejected: [], hadUnconfirmedItems: false)
+                                  rejected: [], hadUnconfirmedItems: false,
+                                  readFailed: true)
         }
         let page = resolved.page
 
@@ -721,13 +744,15 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
         } catch let dbError as DatabaseError where isFDAError(dbError) {
             await markUnhealthy(reason: "fda_required")
             return BatchSummary(accepted: 0, duplicate: 0,
-                                  rejected: [], hadUnconfirmedItems: false)
+                                  rejected: [], hadUnconfirmedItems: false,
+                                  readFailed: true)
         } catch {
             logger.warning("messages tick: live read failed", metadata: [
                 "error": .private(String(describing: error)),
             ])
             return BatchSummary(accepted: 0, duplicate: 0,
-                                  rejected: [], hadUnconfirmedItems: false)
+                                  rejected: [], hadUnconfirmedItems: false,
+                                  readFailed: true)
         }
         let page = resolved.page
 

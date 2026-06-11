@@ -71,10 +71,11 @@ final class MessagesSourcePluginTests: XCTestCase {
         StateStore(fileURL: tempDir.appendingPathComponent("state.json"))
     }
 
-    /// Sync builder for the re-backfill chat.db (outbound row at ROWID 1,
-    /// inbound at ROWID 5). Sync so the GRDB write closure is not
-    /// inferred `@Sendable` (which would block `self.unix2026` capture
-    /// from an async test).
+    /// Sync builder for the re-backfill chat.db (outbound rows at
+    /// ROWID 1 and ROWID 5, inbound at ROWID 3 — ROWID 5 sits exactly
+    /// at the legacy live cursor for the boundary regression). Sync so
+    /// the GRDB write closure is not inferred `@Sendable` (which would
+    /// block `self.unix2026` capture from an async test).
     private func seedRebackfillChatDB() throws -> URL {
         let dbURL = tempDir.appendingPathComponent("chat.db")
         let script = try loadSchemaScript()
@@ -98,7 +99,18 @@ final class MessagesSourcePluginTests: XCTestCase {
             try db.execute(sql:
                 "INSERT INTO message (ROWID, guid, text, handle_id, date, " +
                 "is_from_me, item_type, cache_has_attachments, associated_message_guid) " +
-                "VALUES (5, 'reb-in5', 'recent in', 1, ?, 0, 0, 0, NULL)",
+                "VALUES (3, 'reb-in3', 'recent in', 1, ?, 0, 0, 0, NULL)",
+                arguments: [appleNanos])
+            try db.execute(sql:
+                "INSERT INTO chat_message_join (chat_id, message_id) VALUES (10, 3)")
+            // Outbound row exactly AT the legacy live cursor (ROWID 5):
+            // the old inbound-only live cursor advanced ONTO this row
+            // (scanned-but-skipped), so the re-walk's exclusive bound
+            // must be live_cursor+1 to include it.
+            try db.execute(sql:
+                "INSERT INTO message (ROWID, guid, text, handle_id, date, " +
+                "is_from_me, item_type, cache_has_attachments, associated_message_guid) " +
+                "VALUES (5, 'reb-out5', 'sent at boundary', NULL, ?, 1, 0, 0, NULL)",
                 arguments: [appleNanos])
             try db.execute(sql:
                 "INSERT INTO chat_message_join (chat_id, message_id) VALUES (10, 5)")
@@ -592,13 +604,17 @@ final class MessagesSourcePluginTests: XCTestCase {
 
         let events = await sink.allEvents()
         XCTAssertTrue(events.isEmpty, "no publishes when resolution throws")
-        // The backfill cursor was NOT advanced past the outbound row:
-        // the throwing read returns without advancing, so the held row
-        // is retried next tick.
+        // NO commit POST happened: a failed tick commits nothing — not
+        // even non-batch mutations like the one-time re-backfill arm /
+        // its outbound_backfill_done flag. The next tick recomputes them.
+        XCTAssertEqual(transport.committedCount(), 0,
+                       "resolver failure holds the entire cursor commit")
         let held = transport.currentDecodedCursor()
         XCTAssertEqual(held?.backfillCursor, 2,
                        "backfill cursor held at the pre-read coordinate")
         XCTAssertEqual(held?.backfillComplete, false)
+        XCTAssertEqual(held?.outboundBackfillDone, false,
+                       "re-backfill flag not committed by the failed tick")
 
         // Recovery: a SECOND plugin over the same state store + a fresh
         // Pi script with the default resolver (≈ the next tick once the
@@ -649,10 +665,11 @@ final class MessagesSourcePluginTests: XCTestCase {
     // MARK: - one-time outbound re-backfill
 
     func testLegacyCursorTriggersOutboundRebackfillOnce() async throws {
-        // chat.db: an outbound row at ROWID 1 and an inbound row at
-        // ROWID 5, both above the floor. The legacy cursor has already
+        // chat.db: outbound rows at ROWID 1 and ROWID 5 (the latter
+        // exactly AT the legacy live cursor) and an inbound row at
+        // ROWID 3, all above the floor. The legacy cursor has already
         // "completed" backfill and lacks the outbound flag, so the live
-        // cursor sits at 5 and the outbound row at 1 was never emitted.
+        // cursor sits at 5 and neither outbound row was ever emitted.
         let dbURL = try seedRebackfillChatDB()
 
         // Legacy cursor: backfill complete, no outbound flag.
@@ -690,6 +707,12 @@ final class MessagesSourcePluginTests: XCTestCase {
         let outbound = await sink.peerHandle(forSourceID: "reb-out1")
         XCTAssertEqual(outbound, "+15551234567",
                        "the historical outbound row is re-walked and emitted")
+        // Boundary regression: the outbound row exactly AT live_cursor
+        // must also emit — the re-walk bound is live_cursor+1 because
+        // the backfill read is exclusive (ROWID < bound).
+        let boundary = await sink.peerHandle(forSourceID: "reb-out5")
+        XCTAssertEqual(boundary, "+15551234567",
+                       "the outbound row AT the live cursor is inside the re-walk")
         let committed = transport.currentDecodedCursor()
         XCTAssertEqual(committed?.outboundBackfillDone, true,
                        "the committed cursor records the re-backfill as done")
@@ -710,6 +733,8 @@ final class MessagesSourcePluginTests: XCTestCase {
         try await plugin2.tick()
         let again = await sink.peerHandle(forSourceID: "reb-out1")
         XCTAssertNil(again, "no second re-backfill once the flag is committed")
+        let againBoundary = await sink.peerHandle(forSourceID: "reb-out5")
+        XCTAssertNil(againBoundary, "boundary row not re-walked either")
         let after = transport.currentDecodedCursor()
         XCTAssertEqual(after?.outboundBackfillDone, true)
         XCTAssertEqual(after?.backfillComplete, true,

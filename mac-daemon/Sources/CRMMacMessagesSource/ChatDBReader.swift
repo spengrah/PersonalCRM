@@ -297,12 +297,13 @@ public final class ChatDBReader {
         for row in rows {
             // Track every ROWID we saw, including skipped ones — the
             // caller needs this so cursor advance doesn't stall on a
-            // page where every row got filtered out. A row missing the
-            // ROWID or date is not a real message row and is not counted
-            // toward the scanned bounds (matches the pre-extraction
-            // behavior so backfillComplete still flips correctly).
-            guard let rowID: Int64 = row["msg_rowid"],
-                  row["msg_date"] as Int64? != nil else {
+            // page where every row got filtered out. Any row WITH a
+            // ROWID counts toward the bounds even if other columns
+            // (e.g. date) are NULL/corrupt: the backfill runner treats
+            // nil bounds as "iterator exhausted" and flips
+            // backfillComplete, so excluding such rows from the bounds
+            // could end the walk while older rows remain unread.
+            guard let rowID: Int64 = row["msg_rowid"] else {
                 continue
             }
             scannedMin = min(scannedMin ?? rowID, rowID)

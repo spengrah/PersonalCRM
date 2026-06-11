@@ -30,22 +30,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestIngestRawMessage_E2E_StagesAggregatesAndCreatesInteraction is
-// the end-to-end test that locks the PR's contract:
-//
-//	POST /api/v1/ingest/events (raw_message.received, known contact)
-//	  → staging row inserted with matched_contact_id
-//	  → MessagingAggregateForContactArgs job enqueued
-//	  → worker runs engine.AggregateForContact per chat
-//	  → engine claims rows + publishes message.received envelope
-//	  → InteractionRecorder consumer creates the interaction row +
-//	    marks staging.processed_at + staging.interaction_id
-//
-// Wires the FULL stack (live bus, real worker, real
-// InteractionRecorder) and waits for the staging row to be marked
-// processed. This is the load-bearing assertion for the feature —
-// without it we could ship a path that stages rows but never turns
-// them into interactions.
 // rawMessageE2EEnv bundles the fully-wired e2e stack (live bus, real
 // aggregator + InteractionRecorder, started River client) plus a paired
 // host and a seeded known contact.
@@ -313,6 +297,22 @@ func pollProcessedRawMessage(t *testing.T, env *rawMessageE2EEnv, guid string) *
 	return msg
 }
 
+// TestIngestRawMessage_E2E_StagesAggregatesAndCreatesInteraction is
+// the end-to-end test that locks the inbound contract:
+//
+//	POST /api/v1/ingest/events (raw_message.received, known contact)
+//	  → staging row inserted with matched_contact_id
+//	  → MessagingAggregateForContactArgs job enqueued
+//	  → worker runs engine.AggregateForContact per chat
+//	  → engine claims rows + publishes message.received envelope
+//	  → InteractionRecorder consumer creates the interaction row +
+//	    marks staging.processed_at + staging.interaction_id
+//
+// Wires the FULL stack (live bus, real worker, real
+// InteractionRecorder) and waits for the staging row to be marked
+// processed. This is the load-bearing assertion for the feature —
+// without it we could ship a path that stages rows but never turns
+// them into interactions.
 func TestIngestRawMessage_E2E_StagesAggregatesAndCreatesInteraction(t *testing.T) {
 	t.Parallel()
 	env := setupRawMessageE2E(t)

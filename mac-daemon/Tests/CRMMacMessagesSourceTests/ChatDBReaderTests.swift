@@ -509,6 +509,53 @@ final class ChatDBReaderTests: XCTestCase {
                      "metadata columns are still NULL")
     }
 
+    // MARK: - bounds advance over malformed rows
+
+    func testNullDateRowStillAdvancesScannedBounds() throws {
+        // Real chat.db declares message.date NOT NULL, but the
+        // skip-but-advance contract must hold even for a malformed row:
+        // a row WITH a ROWID but a NULL date is skipped (no mapped
+        // message) yet still counts toward the scanned bounds — nil
+        // bounds would make the backfill runner flip backfillComplete
+        // and orphan every older row. Build a one-off schema with a
+        // nullable date to simulate the corruption.
+        let queue = try DatabaseQueue()
+        try queue.write { db in
+            try db.execute(sql: """
+                CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT, service TEXT);
+                CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, guid TEXT, style INTEGER, chat_identifier TEXT);
+                CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER);
+                CREATE TABLE message (
+                    ROWID INTEGER PRIMARY KEY, guid TEXT, text TEXT,
+                    handle_id INTEGER, date INTEGER, is_from_me INTEGER,
+                    item_type INTEGER NOT NULL DEFAULT 0,
+                    cache_has_attachments INTEGER, associated_message_guid TEXT
+                );
+                CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
+                CREATE TABLE attachment (
+                    ROWID INTEGER PRIMARY KEY, guid TEXT, uti TEXT,
+                    mime_type TEXT, transfer_name TEXT, total_bytes INTEGER
+                );
+                CREATE TABLE message_attachment_join (
+                    ROWID INTEGER PRIMARY KEY, message_id INTEGER, attachment_id INTEGER
+                );
+                INSERT INTO handle (ROWID, id, service) VALUES (1, '+15551234567', 'iMessage');
+                INSERT INTO message (ROWID, guid, text, handle_id, date, is_from_me)
+                    VALUES (900, 'g-nulldate', 'x', 1, NULL, 0);
+                """)
+        }
+        let page = try queue.read { db in
+            try ChatDBReader.fetchPage(db: db,
+                                       direction: .backwardFromExclusive(1000),
+                                       limit: 10)
+        }
+        XCTAssertEqual(page.rows.count, 0, "NULL-date row is skipped")
+        XCTAssertEqual(page.inspected, 1)
+        XCTAssertEqual(page.scannedROWIDBounds?.min, 900,
+                       "bounds cover the malformed row so the cursor advances past it")
+        XCTAssertEqual(page.scannedROWIDBounds?.max, 900)
+    }
+
     // MARK: - inspected count
 
     func testInspectedCountsAllSQLRows() throws {

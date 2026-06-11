@@ -535,6 +535,12 @@ final class StatefulCursorTransport: @unchecked Sendable {
         return try? MessagesCursorWireCodec.decode(cur)
     }
 
+    /// Number of successful commit POSTs recorded.
+    func committedCount() -> Int {
+        lock.lock(); defer { lock.unlock() }
+        return committedCursors.count
+    }
+
     /// Index of the first committed cursor whose pendingScans carries
     /// `handle`, or nil.
     func firstCommitIndexContaining(_ handle: String) -> Int? {
