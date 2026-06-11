@@ -1,99 +1,134 @@
-# A — Deploy Automation (self-hosted runners) — Design
+# A — Deploy Automation (self-hosted runner) — Design
 
-**Date:** 2026-06-07
-**Status:** Skeleton — decisions locked, details to be filled out in its own brainstorm.
+**Date:** 2026-06-07 (firmed up 2026-06-11, post-A0)
+**Status:** Design firmed up — ready for implementation planning.
 **Author:** spengrah (brainstormed with Claude)
 **Parent:** `2026-06-07-deploy-and-staging-overview-design.md`
+**Precursor:** `2026-06-07-containerization-cutover-design.md` (A0 — landed; prod now runs rootless Podman Quadlets)
 
 ## Scope
 
-Merging to main auto-deploys the new build to the Pi (priority) and the Mac daemon (nice-to-have), via **self-hosted GitHub Actions runners**, gated on green CI, with the repo kept **public** and the runner unreachable from PRs. Replaces manual `make deploy-all`. Independent of the VPS/staging work.
+Promoting `develop` to `main` auto-deploys the new build to the Pi (prod), via a **self-hosted GitHub Actions runner**, gated on green CI, with the repo kept **public** and the runner unreachable from PRs. Replaces the manual native `deploy.sh` rsync path (now retired post-A0). The Mac-daemon runner and the `develop`→staging deploy *target* are explicitly deferred (see "Out of scope"); A lands the `develop` branch + image build so those drop in later with no rework.
 
-## Decisions locked (from brainstorm)
+## What A0 already delivered (so A does not rebuild it)
 
-- **Self-hosted runners on the Pi (label `pi`) and the Mac (label `mac`).** Rationale and trade-off analysis vs cloud+Tailscale and pull-loop are in the overview ("Deploy mechanism"). Outbound-only; no Pi-reaching credential off-box.
-- **Build in the cloud; the Pi runner only deploys.** Keep heavy compile off the Pi (operator preference — reserve Pi compute for prod). A cloud `build` job builds the `arm64` **container images** (`crm-api` + `crm-admin` baked in, and the Next standalone frontend) and pushes them to **GHCR** (free for public repos), tagged by commit SHA. The self-hosted `deploy` job (Pi for main, staging-VPS for develop) does `podman pull <tag>` (outbound, over the runner's existing connection — no rsync, no SSH, no Pi-reaching credential), then update-tag + migrate + restart-Quadlet + `/health`. `deploy.sh` collapses to these post-build steps; rename to `deploy-artifact.sh` (or similar). The Go binaries still cross-compile on x64 with no emulation (`GOARCH=arm64`, COPY into a distroless arm64 base); the Next standalone is portable JS wrapped in an arm64 base — so cloud image build stays as cheap as the tarball build would have been.
-- **Reusable workflows for test logic.** Factor the existing CI suites into a `workflow_call` workflow; both `ci.yml` (PR + push) and the deploy workflow `uses:` it. Reuse the *build logic* (`make ci-build-backend` / `ci-build-frontend`), not CI's current job outputs — those bake a dummy `NEXT_PUBLIC_API_KEY`, don't upload, are path-gated, and omit `crm-admin`. A dedicated artifact-producing `build` job calls the same targets with real (non-secret) config.
-- **`develop` is introduced in A** (not deferred to C): A establishes both `develop`→staging and `main`→prod deploys. (C then layers the staging *stack/data* onto the `develop` deploy A creates.)
-- **Frontend API key: inject server-side at the Caddy edge (option 2a, Caddy flavor).** The key must never reach the browser, never be baked into the build, never enter GitHub. Prod topology (confirmed): browser → Tailscale Serve (`/`→`:80`) → **Caddy** path-splits `/api`→`:8080`, `/`→`:3001`; backend also listens on `*:8080` for direct service clients. So: add `header_up X-API-Key {env.API_KEY}` to Caddy's `/api` `reverse_proxy`, supply `API_KEY` to `caddy.service` from the host env, and **delete** the `X-API-Key` header from `frontend/src/lib/api-client.ts` (and `settings/page.tsx`, `test-api/page.tsx`). Browser sends no key; Caddy injects it; Tailscale guards the browser→Caddy leg. Zero added latency (Caddy already proxies `/api`), zero Tailscale Serve change. Service clients (Mac daemon, future MCP) keep hitting `:8080` directly with their own key. `NEXT_PUBLIC_API_URL` stays empty (same-origin) for both environments — not environment-specific.
-- **Mac runner** runs `make mac-daemon` + `crm-mac install --upgrade` locally; fires only when the Mac is awake (job queues otherwise). The runner's ~50s long-poll will keep the Mac from deep sleep (like `caffeinate`) — acceptable, or leave Mac manual.
-- **Public-repo lockdown** (full list in overview "Security model"): push-to-main-only trigger; fork-PR approval for all outside collaborators; cloud CI vs self-hosted split; green-CI gate; `production` GitHub Environment with `main`-only branch rule; hardened unprivileged runner user + narrow sudoers; SHA-pinned actions.
+A0 landed before this design was firmed up and pre-built a large chunk of what the original skeleton listed as open:
 
-## Resolved this session
+- **Cloud image build is done.** `.github/workflows/build-images.yml` cross-compiles arm64 (no QEMU), bakes `crm-admin` into the backend image, builds the key-less Next standalone frontend, and pushes both to GHCR tagged `:<sha>` + `:latest`. Currently triggers on push to `main`.
+- **Caddy edge key-injection is live.** `infra/caddy/Caddyfile` injects `X-API-Key` on `/api/*` (with a `@daemon` matcher that skips injection for Mac-daemon requests). Version-controlled, deployed to prod.
+- **Podman Quadlet runtime is live.** `infra/quadlet/*` (network + volume + 3 `.container` units); `scripts/backup-db.sh` already targets the rootless Podman `personalcrm-db` volume.
 
-- Build location → **cloud build of `arm64` container images pushed to GHCR, pulled by the deploy runner** (above).
-- Runtime & artifact → **full containerization; the container image is the deploy artifact; Podman Quadlets supervise; Caddy stays native** — split into standalone precursor **A0** (`2026-06-07-containerization-cutover-design.md`); A depends on it. One-time prod cutover from today's systemd + Docker-Postgres hybrid (Postgres already containerized → near-zero data risk).
-- Test reuse → **reusable `workflow_call` workflow** shared by `ci.yml` and the deploy workflow (above).
-- Branching → **A introduces `develop`** (`develop`→staging, `main`→prod).
-- Frontend key → **Caddy-edge injection (2a)** — key never in browser/build/GitHub (above).
-- `NEXT_PUBLIC_API_URL` → **stays empty (same-origin)**, not environment-specific.
-- Caddyfile → **moved into `infra/`**, version-controlled and deployed like the Quadlet units; Caddy itself stays **native** (not containerized) — binds `:80` cleanly and sidesteps the rootless privileged-port wrinkle (implementation detail in open threads).
-- Migrations & rollback → **explicit pre-cutover migration (1b-offline) + fully automated snapshot-restore, no expand/contract mandate, no human gate** — see dedicated section below.
+Net effect on A: the "build job" is essentially shipped; A is mostly the **deploy half** plus the branch/promotion model, migration tooling, rollback, and runner lockdown.
 
-## Containerization & artifact (see A0)
+## Decisions locked
 
-The deploy artifact is a **container image** and prod/staging run **fully containerized under Podman Quadlets** (Caddy native). The one-time cutover from today's systemd + Docker-Postgres hybrid — building the images, authoring the Quadlet units, migrating the Postgres volume Docker→Podman — is its own standalone precursor sub-project, **A0** (`2026-06-07-containerization-cutover-design.md`). A0 produces the images + Quadlet units that A automates and C reuses for staging; **A depends on A0 landing first.** Load-bearing consequence for A: the build job produces + pushes an `arm64` image to GHCR, and the deploy job is `podman pull` + tag-swap + Quadlet restart (reflected throughout A).
+### Branching & promotion model
 
-## Migrations & rollback (decided)
+Branch-per-environment, with the one principle worth taking from big-SaaS practice — **promote the immutable artifact, never rebuild**:
 
-Fully automatic deploy with automatic rollback — no authoring-discipline mandate, no human approval gate. Rests on three composing choices: explicit pre-cutover migration (1b-offline), automated snapshot-restore, and staging-as-canary.
+- **`develop`** is the PR target and integration branch. CI + image build run here. **No deploy.**
+- **`main`** is the release/deploy branch. It is **fast-forward-only from `develop`**. Nothing lands on `main` via PR.
+- **Promote** by fast-forwarding `main` to `develop`'s HEAD (`git push origin develop:main`), done by an agent when ship conditions are met. Because the SHA is identical, the `:<sha>` image is already built and already CI-green — the prod deploy just pulls it. No rebuild, no build/deploy race.
 
-**Why no expand/contract requirement.** Expand/contract is only needed when rollback is code-only (the old binary must survive the new schema). 1b-offline has no version-skew window (old code is stopped before migrating), and auto-restore rolls back code *and* schema together to a consistent prior state — so backward-compatible migrations are a free nicety when convenient, never a requirement. This is the deliberate trade for dropping the discipline burden: recoverability comes from the snapshot, not from authoring care.
+Rationale: trunk + artifact-promotion pipelines (environment approval matrices, Argo/Spinnaker) are built for many-engineer multi-tenant SaaS and are overkill for a single-user self-hosted app. Branch-per-environment is the pragmatic sweet spot and sets up `develop`→staging cleanly for when B lands. The fast-forward-same-SHA trick keeps the build-once/promote-artifact property without the pipeline machinery. A release PR was rejected: as sole reviewer you already saw each PR land on `develop`, so its only benefit (accumulated-diff visibility) is redundant.
 
-**Deploy/rollback flow** — one self-contained script (`deploy-artifact.sh`), runs identically on staging via `develop` and prod via `main`:
+**Branch protection rules:**
+- `develop`: require PR + green CI to merge; linear history (squash); direct pushes blocked.
+- `main`: fast-forward-from-`develop`-only; `production` GitHub Environment with a `main`-only branch rule gating the deploy job.
+
+### CI / build / deploy topology
+
+Three single-job workflows. No reusable `workflow_call` refactor (see below).
+
+| Workflow | Triggers on | Runs on | Does |
+|---|---|---|---|
+| `ci.yml` *(exists)* | PR → `develop`; push → `develop` | GitHub cloud | The test gate. Unchanged except adding `develop` to triggers. |
+| `build-images.yml` *(exists)* | push → `develop` | GitHub cloud | Builds + pushes `:<sha>` arm64 images to GHCR. Retarget `main`→`develop`. |
+| `deploy-prod.yml` *(new)* | push → `main` | self-hosted `pi` runner | Pulls `:<sha>`, migrates, restarts Quadlets, health-gates, rolls back on failure. |
+
+**Green-CI gate** (CI does not re-run on the `main` fast-forward, since it's the same SHA): `deploy-prod.yml`'s first step queries the `ci.yml` workflow conclusion for `$GITHUB_SHA` via `gh api` and **aborts unless it is `success`**. Combined with the `production` Environment's `main`-only branch rule, there are two independent guards — the artifact can't deploy unless that exact commit passed CI, and the job can't run from any branch but `main`.
+
+**Why no reusable `workflow_call` refactor** (the original skeleton wanted one): that was premised on the deploy workflow *re-running* tests. Gating on CI's *result* for the SHA means we never re-run tests — nothing to share. One less moving part.
+
+### Notifications
+
+**ntfy.** `deploy-artifact.sh` posts distinct titled pushes per outcome branch: `deploy ok`, `migrate failed — restored`, `rolled back`, and a max-priority `ROLLBACK FAILED — prod degraded`. Topic/URL read from a Pi-local env file, never committed. Required, not optional — prod deploys are unattended, and the channel must distinguish "rolled back cleanly, prod fine" from "rollback failed, prod degraded." (GitHub's built-in workflow-failure email is too coarse for that distinction.)
+
+### Runner security posture
+
+- **Dedicated `gha-runner` system user** (not `crm`, not root, no login shell). The Actions runner agent runs as a system systemd service under `gha-runner`, registered with label `pi`.
+- **Sudoers = exactly one allowlisted entry:** `gha-runner` may run *only* `/usr/local/sbin/deploy-artifact.sh <sha>` as root, nothing else. The script is root-owned (runner can't edit it), repo-reviewed, and does the `sudo -u crm` hops to crm's rootless podman/systemctl plus the genuine root ops (volume copy, `systemctl restart caddy`) internally. The runner's entire privileged capability is "invoke one immutable, reviewed script." Chosen over granular per-command allowlisting because that is brittle (every script change risks a sudoers update) and its arg-matching is its own foot-gun; the single-script entry is both narrower in practice and easier to audit. Runner identity stays separate from workload (`crm`) identity.
+
+### Public-repo lockdown
+
+- `deploy-prod.yml` triggers on `push: main` only — never `pull_request`, so fork code never reaches the runner.
+- `production` GitHub Environment, branch rule restricted to `main`.
+- Repo setting: require approval to run workflows for *all* outside collaborators.
+- SHA-pin every `uses:` action in the new workflow.
+- `concurrency: deploy-pi` so two promotions can't overlap.
+
+### Frontend API key
+
+A0 already injects `X-API-Key` at the Caddy edge and builds the frontend key-less. The remaining work is **source cleanup**: the browser still *sends* an empty `X-API-Key` header (dead code). Delete the send from `frontend/src/lib/api-client.ts` (2 call sites), `frontend/src/app/settings/page.tsx` (2), `frontend/src/app/test-api/page.tsx` (1). `NEXT_PUBLIC_API_URL` stays empty (same-origin) for both environments. Service clients (Mac daemon, future MCP) keep hitting `:8080` directly with their own key.
+
+## Deploy / rollback mechanics
+
+**Quadlet tag pinning (a needed change):** A0's units pin `Image=...:latest`. For deterministic rollback, `deploy-artifact.sh` rewrites the `Image=` line to the specific `:<sha>`, `daemon-reload`s, and restarts. The rollback target is whatever `:<sha>` the unit currently holds — read it *before* rewriting. The unit file always shows exactly what's running.
+
+**`deploy-artifact.sh`** (runs on the Pi as root via the one sudoers entry; replaces the retired rsync `deploy.sh`):
 
 ```
-0. record current image tag as the rollback target
-1. podman pull new image tag
-2. pending migrations?
-   NO  → update Quadlet to new tag → restart → health-gate
-            FAIL → restore previous tag → restart → NOTIFY → exit 1
-            (no DB touched → no restore needed; fast, zero DB downtime)
-   YES → backup DB (physical snapshot, services stopped)
-         crm-admin --migrate
-            FAIL → restore snapshot → restart previous tag → NOTIFY → exit 1
-                   (prod returns to exact pre-deploy state; dirty-state wiped)
-         update Quadlet to new tag → start services
-         health-gate (/health + frontend + smoke-test.sh)
-            FAIL → stop new → restore snapshot → restore previous tag → restart → NOTIFY → exit 1
-            PASS → mark last-good, retain snapshot until next success → NOTIFY → exit 0
+0. rollback_sha = current Image= tag in the backend Quadlet unit
+1. podman pull :<new-sha>            (fail fast if the image is missing)
+2. crm-admin --migrate-check
+   ├─ up-to-date → rewrite Image=→new, daemon-reload, restart, health-gate
+   │                FAIL → rewrite Image=→rollback_sha, restart, ntfy "rolled back", exit 1
+   │                       (no DB touched → no restore; fast, zero DB downtime)
+   └─ pending    → backup-db.sh (snapshot, services stopped)
+                   crm-admin --migrate
+                     FAIL → restore-db.sh, restart rollback_sha, ntfy "migrate failed — restored", exit 1
+                   rewrite Image=→new, daemon-reload, start, health-gate
+                     FAIL → restore-db.sh + rollback_sha + restart, ntfy "rolled back", exit 1
+                     PASS → retain snapshot as the recovery point, ntfy "deploy ok", exit 0
 ```
 
-**Components to build:**
-- `crm-admin --migrate` subcommand reusing `db.RunMigrations` (app + River migrations), runnable as an explicit pre-cutover step. Today migrations run on backend startup (`cmd/crm-api/main.go:258`) and `Fatal` on error — keep that as an idempotent backstop (it will be no-change after the explicit step), but the explicit step is what gates the deploy.
-- A **restore counterpart to `scripts/backup-db.sh`** (today backup-only): copy the `.bak` volume back. Retain the snapshot until the next successful deploy; never delete it on a failed restore (manual recovery must always be possible).
-- **Notifications** on success and (loudly) on failure/rollback — a requirement, since no human watches.
+**Health-gate contents:** `/health` reports `database: healthy` (already the Quadlet boot gate) **+** frontend returns 200 **+** one authenticated read through Caddy (`GET localhost:80/api/v1/contacts` → 200), exercising the whole edge→key-injection→backend→DB read path. Reads only — never mutates prod.
 
-**Optimizations / safety:**
-- Back up **only when migrations are pending** (golang-migrate reports no-change cheaply) — code-only deploys skip the Postgres stop entirely: fast, zero DB downtime, artifact-only rollback.
-- Staging rehearses both the migration and the rollback on every deploy; deliberately push a known-bad migration to staging once to verify the rollback path actually works.
+**Why no expand/contract migration requirement** (carried from the original): 1b-offline migration (old code stopped before migrating) has no version-skew window, and auto-restore rolls back code *and* schema together to a consistent prior state. Backward-compatible migrations are a free nicety when convenient, never a requirement. Recoverability comes from the snapshot, not from authoring care.
 
 **Residual risks (accepted):**
 - Auto-rollback covers **deploy-time failures only** (migration errors + immediate health-check). A latent bug found hours later → **fix-forward** (snapshot already rotated; can't restore without losing accumulated data).
 - Physical snapshot/restore downtime **scales with DB size** (Gmail-correspondence growth) — revisit logical dump or WAL-based PITR if it becomes painful.
 - Down-migrations (~60 `.down.sql` exist) are a **manual last resort only** — never auto-run (data-loss risk).
 
-## Open threads / TODO (fill out here)
+## Components to build
 
-- [ ] **Caddyfile into the repo.** The Caddyfile is currently hand-managed on the Pi (`/etc/caddy/Caddyfile`), not version-controlled. Bring it into `infra/`, parameterize the upstreams + the `header_up X-API-Key` injection, and deploy it like the systemd units. Required for both automated key-injection config and staging parity (staging has no Caddyfile yet). Provision `API_KEY` into `caddy.service`'s environment (scoped env file vs `EnvironmentFile=/srv/personalcrm/.env`).
-- [ ] **SSR backend calls.** Confirm whether Next does any server-side data fetching against the backend (api-client returns relative URLs server-side). If so, route those server-side calls direct to `127.0.0.1:8080` with the key from Next's runtime env (or through Caddy) — don't let the key-removal break SSR. Likely minimal (app is React-Query/client-heavy), but verify.
-- [ ] **Workflow shape / branch→env mapping.** With reusable workflows: `deploy.yml` job `test` (`uses:` the reusable suite) → `build` (cloud, real config) → `deploy` (self-hosted, label by branch: `pi` for main, `staging` for develop). Decide `workflow_run` vs in-workflow `needs:` for the green-gate; confirm `services:` (Postgres) + `secrets: inherit` semantics in the reusable workflow. Decide whether deploy build is path-gated or always-build.
-- [ ] **Image portability / cross-arch build.** Build `arm64` images in the x64 cloud: the Go binary cross-compiles with `GOARCH=arm64` (no emulation; COPY into a distroless arm64 base — already proven in CI). The Next standalone is portable JS, but **verify `node_modules` has no x64-native addons** before wrapping it in an arm64 base (if any exist, build the frontend image on a free public **arm64** GitHub runner, or via buildx/QEMU). The same arm64 image then serves both prod (Pi) and staging (VPS) — single-arch artifact (resolved by ARM parity).
-- [ ] **Concurrency.** `concurrency: deploy-pi` / `deploy-staging` / `deploy-mac` so two deploys never overlap per target.
-- [ ] **Runner installation runbook.** One-time `config.sh --labels pi` (and `mac`, `staging`) + systemd service for the runner agent; dedicated unprivileged runner user; exact narrow sudoers entry (only `systemctl restart personalcrm.target` + service/Caddyfile install + the backup/restore stop-start).
-- [ ] **`deploy-all.sh` / `.deploy-state` fate.** Keep `make deploy-all` as a manual escape hatch, or retire it? Per-target change detection may still be useful for the manual path.
-- [ ] **Notifications (required, not optional).** Notify on deploy success and — loudly — on failure/rollback, since prod deploys are unattended (no reviewer gate). Pick a channel. Deploy logs also live in the Actions UI.
-- [ ] **Migration/rollback specifics.** Exact `crm-admin --migrate` interface + pending-migration check; restore script; snapshot retention/rotation; health-gate contents (which `/health` + smoke checks); how staging deliberately tests the rollback path.
+- [ ] **`develop` branch + protection rules** (GitHub config): create `develop` from `main`; PR + green-CI rule on `develop`; fast-forward-only + `production`-Environment `main`-only rule on `main`; outside-collaborator workflow-approval setting.
+- [ ] **Retarget `ci.yml` + `build-images.yml`** triggers from `main` to `develop` (CI also keeps PR triggers).
+- [ ] **`deploy-prod.yml`** (new): `push: main` → self-hosted `pi` runner → CI-conclusion gate → invoke `deploy-artifact.sh $GITHUB_SHA` via the one sudoers entry. `concurrency: deploy-pi`, `production` environment, SHA-pinned actions.
+- [ ] **`crm-admin --migrate` + `--migrate-check`**: `--migrate` applies app + River migrations (reuses `db.RunMigrations`, idempotent); `--migrate-check` reports pending without mutating (exit 0 = up-to-date, distinct exit code = pending) so the script snapshots *before* touching the DB. Backend startup keeps running migrations as a no-op backstop.
+- [ ] **`scripts/deploy-artifact.sh`**: the orchestration above. Installed root-owned to `/usr/local/sbin/` by the runner runbook. Validates its SHA arg (40-hex). Rewrites Quadlet `Image=`, drives migrate/snapshot/restore/health-gate/ntfy.
+- [ ] **`scripts/restore-db.sh`**: counterpart to `backup-db.sh` — stop crm services → copy the `.bak` volume back over the live volume → restart. Snapshot retained until the next successful deploy; never deleted on a failed restore.
+- [ ] **ntfy integration** in `deploy-artifact.sh`: distinct titled/prioritized pushes per outcome; topic/URL from a Pi-local env file.
+- [ ] **Frontend source cleanup**: delete the `X-API-Key` send from the 5 call sites above.
+- [ ] **Retire the native deploy path**: remove `scripts/deploy.sh`, `scripts/deploy-all.sh`, `.deploy-state/`, and their `make deploy`/`deploy-pi`/`deploy-all` targets. Add `make promote` (the fast-forward push). `deploy-mac-daemon.sh` + `make deploy-mac` stay untouched.
+- [ ] **Runner installation runbook** (`infra/` doc): one-time `gha-runner` user creation, runner agent + systemd service, label `pi`, the single sudoers entry, installing `deploy-artifact.sh` root-owned, and the Pi-local ntfy env file.
+
+## Out of scope for A (deferred)
+
+- **Mac-daemon runner** — fast-follow after the Pi path is proven. `deploy-mac-daemon.sh` stays as the manual path until then.
+- **`develop`→staging deploy target** — needs B's VPS. A lands only the `develop` branch + image build; the staging deploy job is added when B/C exist (C layers the staging stack/data onto it). The `deploy-artifact.sh` is written environment-agnostic so staging reuses it.
+- **GHCR image retention/pruning** — `develop` accumulates a per-SHA image each push. Note as a minor follow-up (prune untagged/old images); not blocking.
 
 ## Existing code to build on
 
-- `scripts/deploy.sh`, `scripts/deploy-mac-daemon.sh`, `scripts/deploy-all.sh`, `.deploy-state/`.
-- `Makefile` targets: `deploy`, `deploy-pi`, `deploy-mac`, `deploy-all`, `ci-build` (`ci-build-backend` / `ci-build-frontend`), `setup-pi`.
-- Systemd: `personalcrm.target`, `personalcrm-{backend,frontend,database}.service` in `infra/`. Frontend runs the Next standalone server (`node server.js`) on `:3001` with `EnvironmentFile=/srv/personalcrm/.env`. (These become Quadlet `.container` units after the containerization cutover; the `.target` orchestration model is preserved.)
-- Caddy reverse proxy on `:80` (`/etc/caddy/Caddyfile`, currently hand-managed on the Pi) — the `/api`↔`/` path-splitter and the new key-injection point.
-- Frontend key-header call sites to change: `frontend/src/lib/api-client.ts`, `frontend/src/app/settings/page.tsx`, `frontend/src/app/test-api/page.tsx`.
-- CI: `.github/workflows/ci.yml` (to be refactored into a reusable suite + a deploy workflow).
+- `.github/workflows/build-images.yml` (cloud build → GHCR, retarget to `develop`), `.github/workflows/ci.yml` (add `develop` triggers).
+- `infra/quadlet/*` (Quadlet units — `Image=` line rewritten per deploy), `infra/caddy/Caddyfile` (edge key injection, already live).
+- `scripts/backup-db.sh` (A0-current; targets the Podman `personalcrm-db` volume — `restore-db.sh` is its mirror).
+- `backend/cmd/crm-admin/main.go` (subcommand harness — add `--migrate`/`--migrate-check`); `db.RunMigrations` (`backend/cmd/crm-api/main.go:258`, the startup backstop).
+- Frontend key-send call sites: `frontend/src/lib/api-client.ts`, `frontend/src/app/settings/page.tsx`, `frontend/src/app/test-api/page.tsx`.
+- To retire: `scripts/deploy.sh`, `scripts/deploy-all.sh`, `.deploy-state/`.
 
 ## Dependencies
 
-None hard for the **main→prod** path — standalone and first in sequence. The **develop→staging** deploy A creates is only *useful* once B (VPS) and C (staging stack + Caddyfile) exist; A can land the `develop` branch + workflow wiring first and C fills in the target.
+A0 (landed). No hard dependency on B/C for the **main→prod** path — standalone and first in sequence. The `develop` branch + build that A creates are only *useful* for staging once B (VPS) and C (staging stack) exist, but they land now with no rework cost.
