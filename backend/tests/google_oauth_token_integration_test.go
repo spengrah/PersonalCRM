@@ -14,6 +14,7 @@ import (
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
+	"personal-crm/backend/internal/crypto"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/google"
 	"personal-crm/backend/internal/repository"
@@ -275,4 +276,107 @@ func TestGoogleOAuth_LegacyRowDecryptsAndUpgrades(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "upgraded-access-token", stored.AccessToken)
 	assert.Equal(t, "upgraded-refresh-token", stored.RefreshToken)
+}
+
+// TestGoogleOAuth_LegacyRow_RefreshlessWriteKeepsDecryptable verifies that a
+// write which preserves an existing legacy refresh ciphertext (because no new
+// refresh token is supplied) captures the legacy shared nonce into the dedicated
+// column. Without that capture such a write rotates encryption_nonce while
+// leaving refresh_token_nonce NULL, so the legacy decrypt fallback would read
+// the new access-token nonce and the preserved refresh token would become
+// permanently undecryptable.
+func TestGoogleOAuth_LegacyRow_RefreshlessWriteKeepsDecryptable(t *testing.T) {
+	t.Parallel()
+
+	svc, repo, cfg, ctx := newGoogleOAuthTestService(t)
+
+	const refreshPlain = "legacy-refresh-token-preserved"
+
+	// seedLegacyRow stores a row in the old format: refresh token sealed with the
+	// access token's nonce and refresh_token_nonce left NULL.
+	seedLegacyRow := func(t *testing.T, email string) {
+		t.Helper()
+		sharedNonce := make([]byte, 12)
+		for i := range sharedNonce {
+			sharedNonce[i] = byte(i + 7)
+		}
+		accessCipher := sealWithKey(t, cfg.External.TokenEncryptionKey, "legacy-access-token", sharedNonce)
+		refreshCipher := sealWithKey(t, cfg.External.TokenEncryptionKey, refreshPlain, sharedNonce)
+
+		_, err := repo.Upsert(ctx, repository.UpsertOAuthCredentialRequest{
+			Provider:              google.ProviderName,
+			AccountID:             email,
+			AccessTokenEncrypted:  accessCipher,
+			RefreshTokenEncrypted: refreshCipher,
+			RefreshTokenNonce:     nil, // legacy format
+			EncryptionNonce:       sharedNonce,
+			TokenType:             "Bearer",
+			Scopes:                google.Scopes,
+		})
+		require.NoError(t, err)
+
+		t.Cleanup(func() {
+			if cred, err := repo.GetByProviderAndAccount(context.Background(), google.ProviderName, email); err == nil {
+				_ = repo.Delete(context.Background(), cred.ID)
+			}
+		})
+	}
+
+	// Re-exchange where Google omits refresh_token: hits the upsert conflict
+	// branch with a NULL refresh ciphertext.
+	t.Run("UpsertConflictBranch", func(t *testing.T) {
+		email := syntheticNS(t) + "@example.test"
+		seedLegacyRow(t, email)
+
+		fake := newFakeGoogleEndpoints(t, email, "Legacy Refreshless Upsert")
+		fake.accessToken = "reexchanged-access-token"
+		fake.refreshTok = "" // omitted from the token response
+		svc.SetHTTPClient(fake.server.Client())
+		svc.SetTokenEndpoint(fake.server.URL + "/token")
+		svc.SetUserInfoEndpoint(fake.server.URL + "/userinfo")
+
+		_, err := svc.ExchangeCode(ctx, "reexchange-code")
+		require.NoError(t, err)
+
+		token, err := svc.GetTokenForAccount(ctx, email)
+		require.NoError(t, err, "preserved legacy refresh token must stay decryptable after a refreshless upsert")
+		assert.Equal(t, "reexchanged-access-token", token.AccessToken)
+		assert.Equal(t, refreshPlain, token.RefreshToken)
+
+		cred, err := repo.GetByProviderAndAccount(ctx, google.ProviderName, email)
+		require.NoError(t, err)
+		assert.NotEmpty(t, cred.RefreshTokenNonce, "legacy shared nonce must be captured into the dedicated column")
+	})
+
+	// Token refresh where the provider does not rotate the refresh token: hits
+	// UpdateOAuthCredentialTokens with a NULL refresh ciphertext.
+	t.Run("TokensUpdate", func(t *testing.T) {
+		email := syntheticNS(t) + "@example.test"
+		seedLegacyRow(t, email)
+
+		cred, err := repo.GetByProviderAndAccount(ctx, google.ProviderName, email)
+		require.NoError(t, err)
+
+		encryptor, err := crypto.NewTokenEncryptor(cfg.External.TokenEncryptionKey)
+		require.NoError(t, err)
+		newAccessCipher, newNonce, err := encryptor.Encrypt("refreshed-access-token")
+		require.NoError(t, err)
+
+		_, err = repo.UpdateTokens(ctx, cred.ID, repository.UpdateOAuthTokensRequest{
+			AccessTokenEncrypted:  newAccessCipher,
+			RefreshTokenEncrypted: nil, // refresh token not rotated
+			RefreshTokenNonce:     nil,
+			EncryptionNonce:       newNonce,
+		})
+		require.NoError(t, err)
+
+		token, err := svc.GetTokenForAccount(ctx, email)
+		require.NoError(t, err, "preserved legacy refresh token must stay decryptable after a refreshless tokens update")
+		assert.Equal(t, "refreshed-access-token", token.AccessToken)
+		assert.Equal(t, refreshPlain, token.RefreshToken)
+
+		credAfter, err := repo.GetByProviderAndAccount(ctx, google.ProviderName, email)
+		require.NoError(t, err)
+		assert.NotEmpty(t, credAfter.RefreshTokenNonce, "legacy shared nonce must be captured into the dedicated column")
+	})
 }

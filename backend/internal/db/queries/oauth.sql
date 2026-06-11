@@ -24,8 +24,12 @@ ORDER BY provider, created_at DESC;
 -- name: UpsertOAuthCredential :one
 -- Insert or update an OAuth credential.
 -- refresh_token_nonce is kept in sync with refresh_token_encrypted: when a new
--- refresh token is provided both columns update together, otherwise the existing
--- ciphertext and its nonce are preserved.
+-- refresh token is provided both columns update together. When the existing
+-- ciphertext is preserved, a NULL nonce (legacy row whose refresh token was
+-- sealed with the shared encryption_nonce) is captured into the dedicated column
+-- before encryption_nonce rotates to the new access-token nonce — otherwise the
+-- preserved refresh token would become undecryptable. With no ciphertext at all
+-- the nonce is NULL.
 INSERT INTO oauth_credential (
     provider,
     account_id,
@@ -55,7 +59,8 @@ ON CONFLICT (provider, account_id) DO UPDATE SET
     refresh_token_encrypted = COALESCE(EXCLUDED.refresh_token_encrypted, oauth_credential.refresh_token_encrypted),
     refresh_token_nonce = CASE
         WHEN EXCLUDED.refresh_token_encrypted IS NOT NULL THEN EXCLUDED.refresh_token_nonce
-        ELSE oauth_credential.refresh_token_nonce
+        WHEN oauth_credential.refresh_token_encrypted IS NOT NULL THEN COALESCE(oauth_credential.refresh_token_nonce, oauth_credential.encryption_nonce)
+        ELSE NULL
     END,
     encryption_nonce = EXCLUDED.encryption_nonce,
     token_type = EXCLUDED.token_type,
@@ -67,13 +72,19 @@ RETURNING *;
 -- name: UpdateOAuthCredentialTokens :one
 -- Update only the token data (for token refresh).
 -- refresh_token_nonce tracks refresh_token_encrypted: it is only overwritten when
--- a new refresh token is supplied, otherwise the stored ciphertext and nonce stay.
+-- a new refresh token is supplied. When the stored ciphertext is preserved, a
+-- NULL nonce (legacy row whose refresh token was sealed with the shared
+-- encryption_nonce) is captured into the dedicated column before encryption_nonce
+-- rotates to the new access-token nonce — otherwise the preserved refresh token
+-- would become undecryptable. SET right-hand sides read the pre-update row, so
+-- the captured values are the old ones regardless of assignment order.
 UPDATE oauth_credential SET
     access_token_encrypted = sqlc.arg(access_token_encrypted),
     refresh_token_encrypted = COALESCE(sqlc.arg(refresh_token_encrypted), refresh_token_encrypted),
     refresh_token_nonce = CASE
         WHEN sqlc.arg(refresh_token_encrypted) IS NOT NULL THEN sqlc.arg(refresh_token_nonce)
-        ELSE refresh_token_nonce
+        WHEN refresh_token_encrypted IS NOT NULL THEN COALESCE(refresh_token_nonce, encryption_nonce)
+        ELSE NULL
     END,
     encryption_nonce = sqlc.arg(encryption_nonce),
     expires_at = sqlc.arg(expires_at),

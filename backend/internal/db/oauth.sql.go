@@ -289,7 +289,8 @@ UPDATE oauth_credential SET
     refresh_token_encrypted = COALESCE($2, refresh_token_encrypted),
     refresh_token_nonce = CASE
         WHEN $2 IS NOT NULL THEN $3
-        ELSE refresh_token_nonce
+        WHEN refresh_token_encrypted IS NOT NULL THEN COALESCE(refresh_token_nonce, encryption_nonce)
+        ELSE NULL
     END,
     encryption_nonce = $4,
     expires_at = $5,
@@ -309,7 +310,12 @@ type UpdateOAuthCredentialTokensParams struct {
 
 // Update only the token data (for token refresh).
 // refresh_token_nonce tracks refresh_token_encrypted: it is only overwritten when
-// a new refresh token is supplied, otherwise the stored ciphertext and nonce stay.
+// a new refresh token is supplied. When the stored ciphertext is preserved, a
+// NULL nonce (legacy row whose refresh token was sealed with the shared
+// encryption_nonce) is captured into the dedicated column before encryption_nonce
+// rotates to the new access-token nonce — otherwise the preserved refresh token
+// would become undecryptable. SET right-hand sides read the pre-update row, so
+// the captured values are the old ones regardless of assignment order.
 func (q *Queries) UpdateOAuthCredentialTokens(ctx context.Context, arg UpdateOAuthCredentialTokensParams) (*OauthCredential, error) {
 	row := q.db.QueryRow(ctx, UpdateOAuthCredentialTokens,
 		arg.AccessTokenEncrypted,
@@ -368,7 +374,8 @@ ON CONFLICT (provider, account_id) DO UPDATE SET
     refresh_token_encrypted = COALESCE(EXCLUDED.refresh_token_encrypted, oauth_credential.refresh_token_encrypted),
     refresh_token_nonce = CASE
         WHEN EXCLUDED.refresh_token_encrypted IS NOT NULL THEN EXCLUDED.refresh_token_nonce
-        ELSE oauth_credential.refresh_token_nonce
+        WHEN oauth_credential.refresh_token_encrypted IS NOT NULL THEN COALESCE(oauth_credential.refresh_token_nonce, oauth_credential.encryption_nonce)
+        ELSE NULL
     END,
     encryption_nonce = EXCLUDED.encryption_nonce,
     token_type = EXCLUDED.token_type,
@@ -393,8 +400,12 @@ type UpsertOAuthCredentialParams struct {
 
 // Insert or update an OAuth credential.
 // refresh_token_nonce is kept in sync with refresh_token_encrypted: when a new
-// refresh token is provided both columns update together, otherwise the existing
-// ciphertext and its nonce are preserved.
+// refresh token is provided both columns update together. When the existing
+// ciphertext is preserved, a NULL nonce (legacy row whose refresh token was
+// sealed with the shared encryption_nonce) is captured into the dedicated column
+// before encryption_nonce rotates to the new access-token nonce — otherwise the
+// preserved refresh token would become undecryptable. With no ciphertext at all
+// the nonce is NULL.
 func (q *Queries) UpsertOAuthCredential(ctx context.Context, arg UpsertOAuthCredentialParams) (*OauthCredential, error) {
 	row := q.db.QueryRow(ctx, UpsertOAuthCredential,
 		arg.Provider,
