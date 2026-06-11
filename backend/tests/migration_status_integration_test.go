@@ -138,6 +138,59 @@ func TestMigrate_Idempotent(t *testing.T) {
 	require.False(t, riverPending)
 }
 
+// TestMigrationStatus_FreshDBNonMutating proves MigrationStatus is strictly
+// non-mutating on a fresh (never-migrated) DB: it reports pending WITHOUT
+// creating golang-migrate's schema_migrations tracking table. golang-migrate's
+// Postgres driver creates that table at migrate.New time, so a naive read would
+// mutate a fresh DB — the read-only to_regclass short-circuit must prevent it.
+func TestMigrationStatus_FreshDBNonMutating(t *testing.T) {
+	ctx := context.Background()
+	cloneURL, migrationsPath := newMigrationStatusClone(t)
+	require.NoError(t, db.RunMigrations(ctx, cloneURL, migrationsPath))
+
+	// Drop ALL tables (app + River + schema_migrations) via the migrate library
+	// to manufacture a genuinely fresh DB — no raw SQL.
+	dropAllTables(t, cloneURL, migrationsPath)
+	require.False(t, schemaMigrationsTableExists(t, ctx, cloneURL),
+		"precondition: schema_migrations must be absent on the fresh DB")
+
+	appPending, riverPending, err := db.MigrationStatus(ctx, cloneURL, migrationsPath)
+	require.NoError(t, err)
+	require.True(t, appPending, "a fresh DB with source migrations must report app pending")
+	require.True(t, riverPending, "a fresh DB must report River pending")
+
+	// The load-bearing assertion: the status read must NOT have re-created the
+	// tracking table.
+	require.False(t, schemaMigrationsTableExists(t, ctx, cloneURL),
+		"MigrationStatus must not create schema_migrations on a fresh DB (non-mutating contract)")
+}
+
+// dropAllTables drops every table (app + River + schema_migrations) via the
+// migrate library's Drop, manufacturing a genuinely fresh DB without raw SQL.
+func dropAllTables(t *testing.T, databaseURL, migrationsPath string) {
+	t.Helper()
+	m, err := migrate.New(fmt.Sprintf("file://%s", migrationsPath), databaseURL)
+	require.NoError(t, err)
+	require.NoError(t, m.Drop(), "drop all tables to manufacture a fresh DB")
+	srcErr, dbErr := m.Close()
+	require.NoError(t, srcErr)
+	require.NoError(t, dbErr)
+}
+
+// schemaMigrationsTableExists reports whether golang-migrate's schema_migrations
+// table is present, via a read-only to_regclass catalog lookup (no raw DDL). Used
+// to assert the fresh-DB non-mutating contract in
+// TestMigrationStatus_FreshDBNonMutating.
+func schemaMigrationsTableExists(t *testing.T, ctx context.Context, databaseURL string) bool {
+	t.Helper()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	require.NoError(t, err)
+	defer pool.Close()
+	var regclass *string
+	require.NoError(t, pool.QueryRow(ctx, "SELECT to_regclass('public.schema_migrations')::text").Scan(&regclass))
+	return regclass != nil
+}
+
 // rollRiverDownOne rolls River's migration schema down by exactly one version
 // using River's own migrator (no raw SQL).
 func rollRiverDownOne(t *testing.T, ctx context.Context, databaseURL string) {

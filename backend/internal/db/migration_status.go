@@ -36,7 +36,7 @@ var ErrDirtyMigration = errors.New("dirty migration state, manual intervention r
 // ErrDirtyMigration (NOT "pending"), so the caller can abort and require manual
 // intervention rather than snapshot-and-migrate over a half-applied schema.
 func MigrationStatus(ctx context.Context, databaseURL string, migrationsPath string) (appPending bool, riverPending bool, err error) {
-	appPending, err = appMigrationsPending(databaseURL, migrationsPath)
+	appPending, err = appMigrationsPending(ctx, databaseURL, migrationsPath)
 	if err != nil {
 		return false, false, err
 	}
@@ -53,14 +53,31 @@ func MigrationStatus(ctx context.Context, databaseURL string, migrationsPath str
 // is unapplied. It reads the current applied version and compares it against the
 // highest version present in the migrations source; it never calls Up/Steps.
 //
-// Fresh DB (ErrNilVersion) counts as pending iff the source has any migration.
-// A dirty state returns an error wrapping ErrDirtyMigration.
-func appMigrationsPending(databaseURL string, migrationsPath string) (bool, error) {
+// Fresh DB (no schema_migrations table yet) counts as pending iff the source has
+// any migration. A dirty state returns an error wrapping ErrDirtyMigration.
+//
+// Strictly non-mutating: golang-migrate's Postgres driver CREATEs the
+// schema_migrations table on migrate.New (its ensureVersionTable runs at Open),
+// which would mutate a fresh DB just by reading. So we first detect a fresh DB
+// via a read-only catalog check and short-circuit BEFORE opening migrate.New —
+// preserving the "report pending WITHOUT mutating" contract on the fresh path.
+func appMigrationsPending(ctx context.Context, databaseURL string, migrationsPath string) (bool, error) {
 	sourceURL := fmt.Sprintf("file://%s", migrationsPath)
 
 	highest, hasAny, err := highestSourceVersion(sourceURL)
 	if err != nil {
 		return false, fmt.Errorf("read highest source migration version: %w", err)
+	}
+
+	// Fresh-DB short-circuit: if the version-tracking table does not exist yet,
+	// the DB has never been migrated. Detect this read-only (no migrate.New, which
+	// would create the table) and report pending iff the source has any migration.
+	tracked, err := migrationsTableExists(ctx, databaseURL)
+	if err != nil {
+		return false, fmt.Errorf("check migrations table exists: %w", err)
+	}
+	if !tracked {
+		return hasAny, nil
 	}
 
 	m, err := migrate.New(sourceURL, databaseURL)
@@ -77,7 +94,8 @@ func appMigrationsPending(databaseURL string, migrationsPath string) (bool, erro
 	current, dirty, err := m.Version()
 	if err != nil {
 		if errors.Is(err, migrate.ErrNilVersion) {
-			// Fresh DB: pending iff the source defines any migration at all.
+			// schema_migrations exists but holds no row (e.g. a prior failed
+			// bootstrap): pending iff the source defines any migration.
 			return hasAny, nil
 		}
 		return false, fmt.Errorf("read current migration version: %w", err)
@@ -92,6 +110,31 @@ func appMigrationsPending(databaseURL string, migrationsPath string) (bool, erro
 		return false, nil
 	}
 	return current < highest, nil
+}
+
+// migrationsTableExists reports whether golang-migrate's schema_migrations
+// tracking table is present, via a read-only to_regclass catalog lookup on a
+// short-lived connection. This is the established migration-infrastructure SQL
+// exception (mirroring the advisory-lock reads in migration.go): a parameterized,
+// non-mutating system-catalog read with no sqlc representation. It exists so the
+// fresh-DB path stays strictly non-mutating (see appMigrationsPending).
+func migrationsTableExists(ctx context.Context, databaseURL string) (bool, error) {
+	poolCfg, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		return false, fmt.Errorf("parse DATABASE_URL for migrations-table check: %w", err)
+	}
+	poolCfg.MaxConns = 1
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
+	if err != nil {
+		return false, fmt.Errorf("open pool for migrations-table check: %w", err)
+	}
+	defer pool.Close()
+
+	var regclass *string
+	if err := pool.QueryRow(ctx, "SELECT to_regclass('public.schema_migrations')::text").Scan(&regclass); err != nil {
+		return false, fmt.Errorf("read schema_migrations regclass: %w", err)
+	}
+	return regclass != nil, nil
 }
 
 // highestSourceVersion opens the migrations source read-only and walks it to
