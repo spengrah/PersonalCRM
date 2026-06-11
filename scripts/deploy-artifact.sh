@@ -148,17 +148,20 @@ run_migrate_admin() {
 # Health gate: reads-only. All three must pass within the retry budget.
 # ---------------------------------------------------------------------------
 health_gate() {
-    local i ok=false
-    # 1. backend /health reports the DB healthy (bounded retry ~HEALTH_RETRIES s).
+    local i ok=false body
+    # 1. backend /health reports overall healthy (bounded retry ~HEALTH_RETRIES s).
+    #    The handler returns HTTP 503 (so `curl -sf` non-zeroes) AND top-level
+    #    "status":"degraded" when the DB is unhealthy; 200 + "status":"healthy"
+    #    only when the DB component is healthy. Gate on the top-level status (the
+    #    DB status is nested under components.database, not a flat key).
     for ((i = 1; i <= HEALTH_RETRIES; i++)); do
-        if curl -sf http://127.0.0.1:8080/health 2>/dev/null | grep -q '"database":"healthy"'; then
-            ok=true
-            break
-        fi
+        body="$(curl -sf http://127.0.0.1:8080/health 2>/dev/null)" \
+            && printf '%s' "$body" | grep -qE '"status":[[:space:]]*"healthy"' \
+            && { ok=true; break; }
         sleep 1
     done
     if [ "$ok" != true ]; then
-        log "health-gate: backend /health did not report database healthy"
+        log "health-gate: backend /health did not report overall status healthy"
         return 1
     fi
     # 2. frontend answers.
@@ -238,15 +241,19 @@ rollback_with_restore() {
 # prune_prior_snapshot <keep>: after a successful deploy, delete every other
 # *.bak-* alongside the volume EXCEPT <keep> (the new recovery point). Never runs
 # on a failure path -- the snapshot is only pruned once a newer one is retained.
+# Compares BASENAMES, not full paths: <keep> comes from backup-db.sh while the
+# glob is re-derived from a separate `volume inspect`, so any path-formatting
+# difference (trailing slash, symlink resolution) must not delete the keep dir.
 prune_prior_snapshot() {
-    local keep="$1" volume_path d
+    local keep="$1" keep_base volume_path d
+    keep_base="$(basename "$keep")"
     volume_path="$(crm_podman volume inspect personalcrm-db --format '{{.Mountpoint}}' 2>/dev/null || true)"
     if [ -z "$volume_path" ]; then
         return 0
     fi
     while IFS= read -r d; do
         [ -n "$d" ] || continue
-        if [ "$d" != "$keep" ]; then
+        if [ "$(basename "$d")" != "$keep_base" ]; then
             sudo rm -rf "$d" || log "warning: could not prune old snapshot $d"
         fi
     done < <(sudo bash -c "ls -d ${volume_path}.bak-* 2>/dev/null" || true)
@@ -372,8 +379,10 @@ case "$CHECK_RC" in
     2)
         # PENDING: stop -> snapshot -> start DB -> migrate -> swap -> start -> gate.
         log "pending migrations: stop app, snapshot, migrate"
-        crm_ctl stop personalcrm-backend.service personalcrm-frontend.service
+        # Set APP_STOPPED BEFORE the stop: if the stop itself errors under set -e,
+        # the EXIT trap must still know the app may be down and attempt a restart.
         APP_STOPPED=1
+        crm_ctl stop personalcrm-backend.service personalcrm-frontend.service
 
         # b. Snapshot (stops DB, cp -a volume, leaves DB stopped). Capture the
         #    path. Run with set -e OFF so a non-zero backup exit routes to the
@@ -387,7 +396,8 @@ case "$CHECK_RC" in
         if [ "$BACKUP_RC" -ne 0 ] || [ -z "$SNAPSHOT" ]; then
             ntfy "Deploy aborted" "high" "warning" "$SHA snapshot failed; no migration applied"
             log "snapshot failed (rc=$BACKUP_RC); aborting (DB not migrated)"
-            DONE=1
+            # Do NOT set DONE: the app is stopped and not migrated, so let the EXIT
+            # trap's APP_STOPPED branch restart the stack on the OLD image.
             exit 1
         fi
         log "snapshot: $SNAPSHOT"
@@ -395,12 +405,24 @@ case "$CHECK_RC" in
         # c. Start postgres only; the migrate container connects over the network.
         log "starting postgres for the migration"
         crm_ctl start personalcrm-database.service
+        PG_READY=false
         for ((i = 1; i <= 30; i++)); do
             if crm_podman exec crm-postgres pg_isready -U crm_user >/dev/null 2>&1; then
+                PG_READY=true
                 break
             fi
             sleep 1
         done
+        # If postgres never came up, this is a "DB didn't start" abort, NOT a
+        # destructive restore: the DB has not been migrated and the snapshot
+        # exists, so just abort before --migrate. The EXIT trap restarts the app.
+        if [ "$PG_READY" != true ]; then
+            ntfy "Deploy aborted" "high" "warning" "$SHA postgres did not start; no migration applied"
+            log "postgres did not become ready; aborting before migrate (snapshot: $SNAPSHOT)"
+            # Do NOT set DONE: the app+DB are stopped and not migrated, so let the
+            # EXIT trap's APP_STOPPED branch restart the stack on the OLD image.
+            exit 1
+        fi
 
         # d. MIGRATE via the NEW image.
         log "applying migrations via the new image"

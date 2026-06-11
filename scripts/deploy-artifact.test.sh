@@ -93,8 +93,8 @@ case "\$1" in
     echo "$SANDBOX/volume/_data"
     exit 0 ;;
   exec)
-    # pg_isready
-    exit 0 ;;
+    # pg_isready -- STUB_PG_NOT_READY=1 simulates postgres never becoming ready.
+    exit "\${STUB_PG_NOT_READY:-0}" ;;
   run)
     # crm-admin via --entrypoint. Last arg is the subcommand.
     sub="\${@: -1}"
@@ -130,13 +130,23 @@ exit 0
 EOF
 
     # --- stub: curl (health gate + ntfy) ---
+    # The health stub emits the REAL /health payload shape (top-level "status"
+    # plus nested components.database.status) so the matcher is tested against
+    # what the server actually returns. Unhealthy => exit non-zero, modelling the
+    # handler's HTTP 503 + `curl -sf`'s -f flag (which non-zeroes on >=400).
     cat > "$SANDBOX/bin/curl" <<EOF
 #!/usr/bin/env bash
 echo "curl \$*" >> "$CALL_LOG"
 url="\${@: -1}"
 case "\$url" in
   *contacts*) echo -n "\${STUB_CADDY_CODE:-200}"; exit 0 ;;
-  *8080/health*) [ "\${STUB_HEALTH_OK:-1}" = "1" ] && { echo '{"database":"healthy"}'; exit 0; }; exit 1 ;;
+  *8080/health*)
+    if [ "\${STUB_HEALTH_OK:-1}" = "1" ]; then
+      echo '{"status":"healthy","timestamp":"t","version":{"version":"dev"},"components":{"database":{"status":"healthy","response_time":"1ms"}}}'
+      exit 0
+    fi
+    # Unhealthy: handler returns 503; with -sf curl writes nothing and non-zeroes.
+    exit 22 ;;
   *3001*) exit "\${STUB_FRONTEND_RC:-0}" ;;
   *) exit 0 ;;  # ntfy posts
 esac
@@ -181,6 +191,12 @@ EOF
 #!/usr/bin/env bash
 echo "restore-db.sh \$*" >> "$CALL_LOG"
 exit "\${STUB_RESTORE_RC:-0}"
+EOF
+
+    # --- stub: sleep (no-op so readiness/health retry loops run instantly) ---
+    cat > "$SANDBOX/bin/sleep" <<'EOF'
+#!/usr/bin/env bash
+exit 0
 EOF
 
     chmod +x "$SANDBOX"/bin/*
@@ -323,6 +339,24 @@ test_rootless_env_on_every_call() {
     cleanup_sandbox
 }
 
+test_health_gate_matches_real_payload() {
+    echo "test: health-gate matches the REAL /health payload shape"
+    # Healthy real payload (top-level status + nested components.database.status)
+    # must PASS -> up-to-date deploy exits 0. If the matcher were wrong (e.g. the
+    # old flat "database":"healthy" grep), this would fail because the stub now
+    # emits the shape the server actually returns.
+    make_sandbox
+    STUB_MIGRATE_CHECK_RC=0 STUB_HEALTH_OK=1 run_deploy "$VALID_SHA"
+    if [ "$RC" -eq 0 ]; then ok; else fail "healthy real payload should pass deploy (exit 0), got $RC ($OUT)"; fi
+    cleanup_sandbox
+
+    # Unhealthy (HTTP 503 -> curl -sf non-zero) must FAIL the gate -> rollback.
+    make_sandbox
+    STUB_MIGRATE_CHECK_RC=0 STUB_HEALTH_OK=0 run_deploy "$VALID_SHA"
+    if [ "$RC" -eq 1 ]; then ok; else fail "unhealthy /health should fail the gate -> rollback (exit 1), got $RC"; fi
+    cleanup_sandbox
+}
+
 test_exit0_uptodate_no_db() {
     echo "test: exit 0 (up-to-date) touches no DB, swaps image, restarts app"
     make_sandbox
@@ -374,6 +408,19 @@ test_pending_happy_path() {
     if [ -n "$i_backup" ] && [ -n "$i_startdb" ] && [ "$i_backup" -lt "$i_startdb" ]; then ok; else fail "backup must precede DB start"; fi
     if [ -n "$i_startdb" ] && [ -n "$i_migrate" ] && [ "$i_startdb" -lt "$i_migrate" ]; then ok; else fail "DB start must precede migrate"; fi
     if grep -q "Image=ghcr.io/spengrah/personalcrm-backend:$NEW_SHA" "$BACKEND_UNIT"; then ok; else fail "image not swapped after migrate"; fi
+    cleanup_sandbox
+}
+
+test_pg_not_ready_aborts_before_migrate() {
+    echo "test: postgres never ready -> abort BEFORE migrate (no restore path)"
+    make_sandbox
+    printf 'NTFY_URL=https://ntfy.example\nNTFY_TOPIC=tok\n' > "$SANDBOX/ntfy.env"
+    NTFY_ENV_FILE_OVERRIDE="$SANDBOX/ntfy.env" STUB_MIGRATE_CHECK_RC=2 STUB_PG_NOT_READY=1 run_deploy "$VALID_SHA"
+    if [ "$RC" -eq 1 ]; then ok; else fail "pg-not-ready should exit 1, got $RC"; fi
+    # Must NOT migrate (postgres never came up) and must NOT take the restore path.
+    if grep -F 'podman run' "$CALL_LOG" | grep -q -- '--migrate$'; then fail "must NOT migrate when pg not ready"; else ok; fi
+    if log_lacks "restore-db.sh"; then ok; else fail "pg-not-ready is NOT a restore path"; fi
+    if grep -F 'curl' "$CALL_LOG" | grep -q 'Title: Deploy aborted'; then ok; else fail "pg-not-ready must ntfy 'Deploy aborted'"; fi
     cleanup_sandbox
 }
 
@@ -509,7 +556,7 @@ echo "curl \$*" >> "$CALL_LOG"
 url="\${@: -1}"
 case "\$url" in
   *contacts*) echo -n 200; exit 0 ;;
-  *8080/health*) echo '{"database":"healthy"}'; exit 0 ;;
+  *8080/health*) echo '{"status":"healthy","components":{"database":{"status":"healthy"}}}'; exit 0 ;;
   *3001*) exit 0 ;;
   *ntfy.invalid*) exit 7 ;;
   *) exit 0 ;;
@@ -537,10 +584,12 @@ main() {
     test_rollback_ref_latest_digest
     test_migrate_command_line
     test_rootless_env_on_every_call
+    test_health_gate_matches_real_payload
     test_exit0_uptodate_no_db
     test_exit1_abort_no_touch
     test_exit_other_abort
     test_pending_happy_path
+    test_pg_not_ready_aborts_before_migrate
     test_backup_failure_aborts_with_ntfy
     test_restore_pg_not_ready_is_rollback_failed
     test_migrate_failure_restores
