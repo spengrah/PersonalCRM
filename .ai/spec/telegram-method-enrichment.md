@@ -18,7 +18,7 @@ Today this only happens on the "import as new contact" path. The two bind-to-exi
 
 ### Why
 
-Discovered during session investigation of contact `ea365ac2-d337-470f-b3c9-77bb03b75301` ("Jack Laing"). His `external_contact` (`source_id=479625218`, `display_name="Jackal"`, `metadata.username="@JackALaing"`) was `match_status='matched'` with `crm_contact_id` set, and an `external_identity` row existed linking `jackalaing` to him — but no `contact_method` row of type `telegram`. The Telegram handle was invisible on his contact page.
+Discovered during session investigation of contact `00000000-0000-4000-8000-000000000001` ("Contact A"). Their `external_contact` (`source_id=100000001`, `display_name="Contact A"`, `metadata.username="@examplehandle"`) was `match_status='matched'` with `crm_contact_id` set, and an `external_identity` row existed linking `examplehandle` to them — but no `contact_method` row of type `telegram`. The Telegram handle was invisible on their contact page.
 
 Root cause (three gaps):
 
@@ -32,7 +32,7 @@ Root cause (three gaps):
 |---|---|---|
 | Shared helper | Package-level function `BuildMethodsFromExternal(*repository.ExternalContact) []service.ContactMethodInput` in a new file `backend/internal/service/external_methods.go` | Single source of truth; `buildMethodsAuto` becomes a one-line wrapper; both enrichment paths call it; future sources (discord/whatsapp/etc.) plug in here |
 | Telegram in auto mode (`enrichContactMethods`) | Auto-add telegram if helper surfaces one and no existing telegram method with matching normalized value | Consistent with emails/phones auto behavior: fill-in-the-blanks, never overwrite |
-| Telegram in selections mode (`enrichContactMethodsWithSelections`) | Build both `existingNormalized` AND the external-value-admission lookup as type-scoped normalized keys. Selection's `OriginalValue` is compared via the same `methodDedupKey`, so `"@JackALaing"` and `"JackALaing"` both match. Stored `contact_method.value` is canonicalized (strips leading `@` for telegram handles) before insert, matching import-new behavior | User can send `@handle` or bare handle from frontend; both admit. Storage stays in canonical bare form. Dedup key matches the DB unique index shape |
+| Telegram in selections mode (`enrichContactMethodsWithSelections`) | Build both `existingNormalized` AND the external-value-admission lookup as type-scoped normalized keys. Selection's `OriginalValue` is compared via the same `methodDedupKey`, so `"@examplehandle"` and `"examplehandle"` both match. Stored `contact_method.value` is canonicalized (strips leading `@` for telegram handles) before insert, matching import-new behavior | User can send `@handle` or bare handle from frontend; both admit. Storage stays in canonical bare form. Dedup key matches the DB unique index shape |
 | Matcher → enrichment (placement) | New matcher helper `ensureMethodsOnMatch(ctx, contactID, peerUserID, peerUsername)` called **from `MatchPeer` after each successful username-match and phone-match path** (not inside `markExternalContactMatched`) | `markExternalContactMatched` early-returns when no `external_contact` row exists (below-threshold peers) and when status is already `matched`/`imported` (no repair path). Codex-round-1 finding. `MatchPeer` is the orchestration point that reaches every matched peer |
 | Matcher data source | `ensureMethodsOnMatch` reads the persisted `external_contact` if present, then **merges** the current-message `peerUsername` over any `metadata.username` from storage (current wins, because it's freshest). If no persisted row exists, synthesizes a minimal `*repository.ExternalContact` from peer fields | Stored `external_contact` may pre-date username capture or lag behind a Telegram handle rename. The current message is authoritative for the peer's live username — merging ensures we add the right telegram method in all three drift cases. Audit `external_contact_id` still references the persisted row when one exists |
 | Narrow enrichment API | `EnrichmentService.SyncMethodsFromExternal(ctx, crmContactID, *ExternalContact)` — delegates to the refactored `enrichContactMethods`; does NOT overwrite `profile_photo`, `birthday`, `location`, `full_name`, `cadence` | Auto-match fires silently on every peer; narrow scope prevents rewriting profile fields behind the user's back |
@@ -61,7 +61,7 @@ Root cause (three gaps):
 
 ### 2.1 User-Visible Behavior
 
-1. **User-initiated link with telegram selected:** Import UI → "Link to Existing" → pick contact → leave telegram checked → confirm. Target contact's detail page shows new telegram `contact_method` row rendered as `@JackALaing`.
+1. **User-initiated link with telegram selected:** Import UI → "Link to Existing" → pick contact → leave telegram checked → confirm. Target contact's detail page shows new telegram `contact_method` row rendered as `@examplehandle`.
 2. **User deselects telegram in picker:** Same flow, telegram unchecked. No telegram `contact_method` is added. External_contact is still bound, external_identity still linked.
 3. **Link without any selections (auto fallback path):** `POST /imports/:id/link` with empty `selected_methods` and no cadence/name overrides → calls `EnrichContactFromExternal` (auto mode). Telegram method IS auto-added from `metadata.username`.
 4. **Auto-match via identity, above-threshold peer:** Telegram message arrives from peer whose `@username` matches an existing CRM contact (via #272 name match, existing `external_identity`, or another path). Matcher binds. Target contact gets telegram `contact_method` auto-added. Profile fields unchanged.
@@ -70,8 +70,8 @@ Root cause (three gaps):
 
 ### 2.2 Acceptance Criteria
 
-- [ ] `POST /imports/:id/link` with `selected_methods=[{type:"telegram", original_value:"JackALaing"}]` produces exactly one `contact_method` row: `type='telegram'`, `value='JackALaing'`, `value_normalized='jackalaing'`, `is_primary=false`. A matching `contact_enrichment` audit row is written.
-- [ ] `POST /imports/:id/link` with `selected_methods=[{type:"telegram", original_value:"@JackALaing"}]` (leading `@` preserved from frontend) results in the same row — `value='JackALaing'` (bare), matching `buildMethodsAuto` behavior today.
+- [ ] `POST /imports/:id/link` with `selected_methods=[{type:"telegram", original_value:"examplehandle"}]` produces exactly one `contact_method` row: `type='telegram'`, `value='examplehandle'`, `value_normalized='examplehandle'`, `is_primary=false`. A matching `contact_enrichment` audit row is written.
+- [ ] `POST /imports/:id/link` with `selected_methods=[{type:"telegram", original_value:"@examplehandle"}]` (leading `@` preserved from frontend) results in the same row — `value='examplehandle'` (bare), matching `buildMethodsAuto` behavior today.
 - [ ] `POST /imports/:id/link` with no telegram entry in `selected_methods` does NOT create a telegram `contact_method`.
 - [ ] `POST /imports/:id/link` when the target already has a matching-normalized telegram method is a no-op (no duplicate, no error, no warn).
 - [ ] `POST /imports/:id/link` with empty `selected_methods`, no cadence, no name overrides → fallback `EnrichContactFromExternal` auto-adds telegram from `metadata.username` if present.
@@ -650,7 +650,7 @@ No new test. Existing Google sync integration tests (if any) must pass unchanged
 
 ### 6.2 Verification
 
-- Manual spot-check after deploy: pick a recently-matched Telegram peer, confirm telegram method appears. Jack Laing (`ea365ac2-d337-470f-b3c9-77bb03b75301`) is a good post-fix check target after the user's separate backfill.
+- Manual spot-check after deploy: pick a recently-matched Telegram peer, confirm telegram method appears. Contact A (`00000000-0000-4000-8000-000000000001`) is a good post-fix check target after the user's separate backfill.
 - The user's one-shot backfill SQL (external to this PR) handles historical matched-but-unenriched peers.
 
 ### 6.3 Observability
@@ -695,7 +695,7 @@ Plus: race-condition PG `23505` handling was added via `isUniqueViolation` helpe
 (Round 2 also noted: file path was not on disk at review time — plan had been written to the main repo tree, not the worktree. Moved before round 3.)
 
 **Round 3 (Codex):** FAIL — 2 findings.
-7. Leading-`@` in link-flow selections was still broken because the helper emits bare handles and the validator compared raw `OriginalValue` strings. **Fixed:** §3.3 Change B uses `methodDedupKey` on both sides of the admission check so `"@JackALaing"` and `"JackALaing"` produce the same key. §3.3 Change C adds `canonicalizeMethodValue` to strip `@` from stored values, matching import-new behavior. §3.3 Change D defines the helper. §3.1 now calls the same helper internally, single source of truth.
+7. Leading-`@` in link-flow selections was still broken because the helper emits bare handles and the validator compared raw `OriginalValue` strings. **Fixed:** §3.3 Change B uses `methodDedupKey` on both sides of the admission check so `"@examplehandle"` and `"examplehandle"` produce the same key. §3.3 Change C adds `canonicalizeMethodValue` to strip `@` from stored values, matching import-new behavior. §3.3 Change D defines the helper. §3.1 now calls the same helper internally, single source of truth.
 8. Synthesized-matcher audit row would have emitted a zero-UUID (not SQL NULL) because `recordEnrichment` unconditionally passes `&external.ID`. **Fixed:** §3.3.5 updates `recordEnrichment` to pass `nil` when `external.ID == uuid.Nil`. Existing callers (Google sync, link handler) always pass persisted IDs so their behavior is unchanged.
 
 **Round 4 (Codex):** FAIL — 1 trivial finding.
