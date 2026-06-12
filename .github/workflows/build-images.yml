@@ -65,7 +65,14 @@ jobs:
           NEXT_PUBLIC_API_KEY: ''
           NEXT_PUBLIC_API_URL: ''
           NEXT_TELEMETRY_DISABLED: '1'
+          # Version stamp, mirroring the backend ldflags stamp above so Settings →
+          # System Information shows the build date + commit instead of "(dev)".
+          # NEXT_PUBLIC_* are inlined at build time, so they must be set HERE.
+          # Full 40-char SHA: the UI validates /^[0-9a-f]{40}$/ before linking it.
+          NEXT_PUBLIC_COMMIT_HASH: ${{ github.sha }}
+          NEXT_PUBLIC_GITHUB_REPO: ${{ github.repository }}
         run: |
+          export NEXT_PUBLIC_BUILD_VERSION=$(date -u +"%Y.%-m.%-d")
           bun install --frozen-lockfile
           bun run build
 
