@@ -52,8 +52,11 @@ jobs:
           GOARCH: arm64
           CGO_ENABLED: '0'
         run: |
-          go build -trimpath -ldflags="-s -w" -o bin/crm-api-arm64 cmd/crm-api/main.go
-          go build -trimpath -ldflags="-s -w" -o bin/crm-admin-arm64 cmd/crm-admin/main.go
+          BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          STAMP="-X personal-crm/backend/internal/health.Version=${GITHUB_SHA::7} -X personal-crm/backend/internal/health.GitCommit=${GITHUB_SHA} -X personal-crm/backend/internal/health.BuildTime=${BUILD_TIME}"
+          go build -trimpath -ldflags="-s -w ${STAMP}" -o bin/crm-api-arm64 cmd/crm-api/main.go
+          go build -trimpath -ldflags="-s -w ${STAMP}" -o bin/crm-admin-arm64 cmd/crm-admin/main.go
+          grep -a -q "${GITHUB_SHA}" bin/crm-api-arm64 || { echo "build stamp missing from crm-api binary" >&2; exit 1; }
 
       - name: Build frontend standalone (key-less, same-origin)
         working-directory: frontend

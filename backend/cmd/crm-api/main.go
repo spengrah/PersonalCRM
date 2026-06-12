@@ -246,6 +246,14 @@ func run() int {
 	// Initialize structured logger with configuration
 	logger.Init(cfg.Logger)
 
+	// Record the serving build (stamped via -ldflags at build time). In prod this
+	// lands in `podman logs crm-backend`, a log-side record of which commit is live.
+	logger.Info().
+		Str("version", health.Version).
+		Str("git_commit", health.GitCommit).
+		Str("build_time", health.BuildTime).
+		Msg("build info")
+
 	logger.Info().
 		Str("environment", cfg.Logger.Environment).
 		Str("log_level", cfg.Logger.Level).

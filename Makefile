@@ -9,6 +9,14 @@ REPO_ROOT := $(shell git rev-parse --show-toplevel)
 GOCACHE ?= $(REPO_ROOT)/.gocache
 export GOCACHE
 
+# Build stamping — mirrors build-images.yml; vars live in backend/internal/health/health.go.
+# The $(shell ...) probes evaluate at Makefile parse on every `make` (three fast
+# subshells); the `|| echo` fallbacks keep them safe outside a git checkout.
+STAMP_VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+STAMP_GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
+STAMP_BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+STAMP_LDFLAGS := -X personal-crm/backend/internal/health.Version=$(STAMP_VERSION) -X personal-crm/backend/internal/health.GitCommit=$(STAMP_GIT_COMMIT) -X personal-crm/backend/internal/health.BuildTime=$(STAMP_BUILD_TIME)
+
 TEST_DATABASE_URL ?= postgres://crm_user:crm_password@localhost:5432/personal_crm_test?sslmode=disable
 
 # Adaptive LOCAL -p/-parallel for the integration recipes. The formula lives
@@ -309,7 +317,7 @@ e2e-db:
 # Build
 build:
 	@echo "Building backend..."
-	@cd backend && go build -o bin/crm-api cmd/crm-api/main.go
+	@cd backend && go build -ldflags "$(STAMP_LDFLAGS)" -o bin/crm-api cmd/crm-api/main.go
 	@echo "Building frontend..."
 	@cd frontend && bun run build
 
@@ -318,7 +326,7 @@ build:
 # `./crm-admin --messages-rematch-stranded`).
 crm-admin:
 	@echo "Building crm-admin..."
-	@cd backend && go build -o crm-admin cmd/crm-admin/main.go
+	@cd backend && go build -ldflags "$(STAMP_LDFLAGS)" -o crm-admin cmd/crm-admin/main.go
 	@echo "✓ crm-admin built at backend/crm-admin"
 
 # Mac daemon. Built locally on a Mac; not wired into `make build`
@@ -398,8 +406,8 @@ smoke-test:
 # CI/CD targets
 ci-build-backend:
 	@echo "Building backend for ARM64..."
-	@cd backend && GOOS=linux GOARCH=arm64 go build -o bin/crm-api cmd/crm-api/main.go
-	@cd backend && GOOS=linux GOARCH=arm64 go build -o bin/crm-admin cmd/crm-admin/main.go
+	@cd backend && GOOS=linux GOARCH=arm64 go build -ldflags "$(STAMP_LDFLAGS)" -o bin/crm-api cmd/crm-api/main.go
+	@cd backend && GOOS=linux GOARCH=arm64 go build -ldflags "$(STAMP_LDFLAGS)" -o bin/crm-admin cmd/crm-admin/main.go
 
 ci-build-frontend:
 	@echo "Building frontend..."
@@ -478,7 +486,7 @@ api-docs:
 
 api-build:
 	@echo "Building API server..."
-	@cd backend && go build -o bin/crm-api cmd/crm-api/main.go
+	@cd backend && go build -ldflags "$(STAMP_LDFLAGS)" -o bin/crm-api cmd/crm-api/main.go
 
 api-run: api-build
 	@echo "Starting API server..."

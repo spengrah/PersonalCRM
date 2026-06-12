@@ -223,3 +223,51 @@ func TestHealthResponse_JSONFormat(t *testing.T) {
 	require.True(t, ok)
 	assert.Contains(t, dbComponent, "status")
 }
+
+// TestHealthEndpoint_StampedBuildInfo verifies that the build-time -ldflags
+// stamp (Version/BuildTime/GitCommit) round-trips through /health verbatim.
+// This is the load-bearing contract for the deploy health gate, which compares
+// the reported git_commit against the pinned image SHA.
+//
+// NOTE: this test is deliberately SERIAL (no t.Parallel()) because it mutates
+// the package-level health.Version/BuildTime/GitCommit vars that the other
+// (read-only) health tests consume; running it serial with save/restore avoids
+// a -race data race (testing-rules exception: global-mutation test).
+func TestHealthEndpoint_StampedBuildInfo(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	// Save and restore the package-level stamp vars around the mutation.
+	prevVersion, prevBuildTime, prevGitCommit := health.Version, health.BuildTime, health.GitCommit
+	defer func() {
+		health.Version, health.BuildTime, health.GitCommit = prevVersion, prevBuildTime, prevGitCommit
+	}()
+
+	const (
+		wantVersion   = "abc1234"
+		wantBuildTime = "2026-06-12T00:00:00Z"
+		wantGitCommit = "abc1234def5678abc1234def5678abc1234def56"
+	)
+	health.Version, health.BuildTime, health.GitCommit = wantVersion, wantBuildTime, wantGitCommit
+
+	mockDB := &mockDatabaseChecker{shouldError: false}
+	healthChecker := health.NewHealthChecker(mockDB, 5*time.Second)
+
+	router := gin.New()
+	router.GET("/health", healthChecker.Handler)
+
+	req, err := http.NewRequest("GET", "/health", nil)
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var response health.HealthResponse
+	err = json.Unmarshal(w.Body.Bytes(), &response)
+	require.NoError(t, err)
+
+	assert.Equal(t, wantVersion, response.Version.Version)
+	assert.Equal(t, wantBuildTime, response.Version.BuildTime)
+	assert.Equal(t, wantGitCommit, response.Version.GitCommit)
+}
