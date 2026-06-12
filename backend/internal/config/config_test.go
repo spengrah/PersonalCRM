@@ -1264,3 +1264,140 @@ func TestConfig_Staleness_ZeroDisablesValidatesCleanly(t *testing.T) {
 		t.Errorf("expected zero-disables config to validate cleanly, got: %v", err)
 	}
 }
+
+func TestConfig_Health_Defaults(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	if cfg.Health.RiverDiscardedMax != DefaultHealthRiverDiscardedMax {
+		t.Errorf("RiverDiscardedMax = %d, want %d", cfg.Health.RiverDiscardedMax, DefaultHealthRiverDiscardedMax)
+	}
+	if cfg.Health.RiverOldestDueMax != DefaultHealthRiverOldestDueMax {
+		t.Errorf("RiverOldestDueMax = %s, want %s", cfg.Health.RiverOldestDueMax, DefaultHealthRiverOldestDueMax)
+	}
+	if cfg.Health.SyncWatchdogMaxAge != DefaultHealthSyncWatchdogMaxAge {
+		t.Errorf("SyncWatchdogMaxAge = %s, want %s", cfg.Health.SyncWatchdogMaxAge, DefaultHealthSyncWatchdogMaxAge)
+	}
+	if cfg.Health.DiskPath != DefaultHealthDiskPath {
+		t.Errorf("DiskPath = %q, want %q", cfg.Health.DiskPath, DefaultHealthDiskPath)
+	}
+	if cfg.Health.DiskMinFreePercent != DefaultHealthDiskMinFreePercent {
+		t.Errorf("DiskMinFreePercent = %d, want %d", cfg.Health.DiskMinFreePercent, DefaultHealthDiskMinFreePercent)
+	}
+}
+
+func TestConfig_Health_FromEnv(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+	WithEnv(t, "HEALTH_RIVER_DISCARDED_MAX", "5")
+	WithEnv(t, "HEALTH_RIVER_OLDEST_DUE_MAX", "15m")
+	WithEnv(t, "HEALTH_SYNC_WATCHDOG_MAX_AGE", "20m")
+	WithEnv(t, "HEALTH_DISK_PATH", "/data")
+	WithEnv(t, "HEALTH_DISK_MIN_FREE_PERCENT", "25")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	if cfg.Health.RiverDiscardedMax != 5 {
+		t.Errorf("RiverDiscardedMax = %d, want 5", cfg.Health.RiverDiscardedMax)
+	}
+	if cfg.Health.RiverOldestDueMax != 15*time.Minute {
+		t.Errorf("RiverOldestDueMax = %s, want 15m", cfg.Health.RiverOldestDueMax)
+	}
+	if cfg.Health.SyncWatchdogMaxAge != 20*time.Minute {
+		t.Errorf("SyncWatchdogMaxAge = %s, want 20m", cfg.Health.SyncWatchdogMaxAge)
+	}
+	if cfg.Health.DiskPath != "/data" {
+		t.Errorf("DiskPath = %q, want %q", cfg.Health.DiskPath, "/data")
+	}
+	if cfg.Health.DiskMinFreePercent != 25 {
+		t.Errorf("DiskMinFreePercent = %d, want 25", cfg.Health.DiskMinFreePercent)
+	}
+}
+
+func TestConfig_Health_ValidateRejectsInvalid(t *testing.T) {
+	tests := []struct {
+		name  string
+		mutfn func(*Config)
+		field string
+	}{
+		{
+			name:  "negative_river_discarded_max",
+			mutfn: func(c *Config) { c.Health.RiverDiscardedMax = -1 },
+			field: "HEALTH_RIVER_DISCARDED_MAX",
+		},
+		{
+			name:  "negative_river_oldest_due",
+			mutfn: func(c *Config) { c.Health.RiverOldestDueMax = -1 * time.Minute },
+			field: "HEALTH_RIVER_OLDEST_DUE_MAX",
+		},
+		{
+			name:  "negative_watchdog_max_age",
+			mutfn: func(c *Config) { c.Health.SyncWatchdogMaxAge = -1 * time.Minute },
+			field: "HEALTH_SYNC_WATCHDOG_MAX_AGE",
+		},
+		{
+			name:  "negative_disk_min_free_percent",
+			mutfn: func(c *Config) { c.Health.DiskMinFreePercent = -1 },
+			field: "HEALTH_DISK_MIN_FREE_PERCENT",
+		},
+		{
+			name:  "disk_min_free_percent_over_100",
+			mutfn: func(c *Config) { c.Health.DiskMinFreePercent = 101 },
+			field: "HEALTH_DISK_MIN_FREE_PERCENT",
+		},
+		{
+			name:  "empty_disk_path",
+			mutfn: func(c *Config) { c.Health.DiskPath = "" },
+			field: "HEALTH_DISK_PATH",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := TestConfig()
+			tt.mutfn(cfg)
+
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatalf("expected validation error for %s", tt.name)
+			}
+			verr, ok := err.(ValidationErrors)
+			if !ok {
+				t.Fatalf("expected ValidationErrors, got %T", err)
+			}
+			found := false
+			for _, e := range verr {
+				if e.Field == tt.field {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("expected %s validation error, got: %v", tt.field, err)
+			}
+		})
+	}
+}
+
+func TestConfig_Health_ZeroDisablesValidatesCleanly(t *testing.T) {
+	// Zero thresholds are the documented "disable this check" sentinel and
+	// must validate without error (DiskPath stays non-empty — it is a path,
+	// not a threshold).
+	cfg := TestConfig()
+	cfg.Health.RiverDiscardedMax = 0
+	cfg.Health.RiverOldestDueMax = 0
+	cfg.Health.SyncWatchdogMaxAge = 0
+	cfg.Health.DiskMinFreePercent = 0
+
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("expected zero-disables health config to validate cleanly, got: %v", err)
+	}
+}
