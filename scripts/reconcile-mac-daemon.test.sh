@@ -84,7 +84,12 @@ case "\$1" in
     ref="\$2"
     case "\$ref" in
       *scripts/*) echo "#!/bin/bash"; echo "# refreshed \$ref"; exit 0 ;;
-      *)          printf '%s' "\${STUB_TEMPLATE_CONTENT:-}"; exit "\${STUB_TEMPLATE_SHOW_RC:-0}" ;;
+      *)
+        # Template ref. STUB_TEMPLATE_ABSENT=1 models a ref that does not exist
+        # at origin/main yet (the real case until PR3 lands the template): git
+        # show emits NOTHING and exits non-zero.
+        if [ "\${STUB_TEMPLATE_ABSENT:-0}" = "1" ]; then exit 128; fi
+        printf '%s' "\${STUB_TEMPLATE_CONTENT:-}"; exit "\${STUB_TEMPLATE_SHOW_RC:-0}" ;;
     esac ;;
   worktree)  exit 0 ;;
   *)         exit 0 ;;
@@ -458,6 +463,22 @@ test_timer_drift_ambiguous_silent() {
     unset DEPLOY_ENV_FILE_OVERRIDE
 }
 
+test_timer_drift_template_absent_no_notice() {
+    echo "test: timer template absent at origin/main (pre-PR3) -> no spurious notice"
+    make_sandbox
+    write_deploy_env "CRM_MAC_CODESIGN_IDENTITY=My Cert" "NTFY_URL=https://ntfy.example" "NTFY_TOPIC=tok"
+    # A stored hash EXISTS but the committed template does NOT (git show fails).
+    # Guards against hashing empty stdin to a non-empty digest and firing a false
+    # drift notice every run before PR3 lands the template.
+    echo "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef" > "$TEMPLATE_HASH_FILE"
+    STUB_CI_CONCLUSION=success STUB_INSTALLED_SHA="$INSTALLED_SHA" STUB_DIFF_RC=0 \
+        STUB_TEMPLATE_ABSENT=1 run_reconcile
+    if [ "$RC" -eq 0 ]; then ok; else fail "absent template must not crash, got $RC ($OUT)"; fi
+    if log_lacks "Title: Mac deploy: timer template changed"; then ok; else fail "absent template must NOT fire a drift notice"; fi
+    cleanup_sandbox
+    unset DEPLOY_ENV_FILE_OVERRIDE
+}
+
 test_health_fail_max_ntfy() {
     echo "test: max-priority ntfy on health failure"
     make_sandbox
@@ -654,6 +675,7 @@ main() {
     test_timer_drift_notifies
     test_timer_drift_unchanged_no_notice
     test_timer_drift_ambiguous_silent
+    test_timer_drift_template_absent_no_notice
     test_health_fail_max_ntfy
     test_health_gate_parses_by_content
     test_contacts_pending_ntfy_on_success

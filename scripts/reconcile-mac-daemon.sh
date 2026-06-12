@@ -220,14 +220,19 @@ refresh_tooling() {
 # template to the hash recorded at setup time. Differ -> informational ntfy + do
 # NOT auto-reload launchd (out of scope). Ambiguous (no recorded hash) -> silent.
 check_timer_template_drift() {
-    local committed stored
-    committed="$(git -C "$CLONE_DIR" show "origin/main:$TIMER_TEMPLATE_PATH" 2>/dev/null | hash_stdin || true)"
-    if [ -z "$committed" ]; then
+    local template_content committed stored
+    # Capture the committed template SEPARATELY from hashing: piping a failed
+    # `git show` straight into shasum would hash the EMPTY string (a non-empty
+    # digest), defeating the "template absent" guard. The template does not exist
+    # at origin/main until PR3 lands it, so this guard must hold.
+    template_content="$(git -C "$CLONE_DIR" show "origin/main:$TIMER_TEMPLATE_PATH" 2>/dev/null || true)"
+    if [ -z "$template_content" ]; then
         return 0  # template not present at origin/main -> nothing to compare
     fi
     if [ ! -f "$INSTALLED_TEMPLATE_HASH_FILE" ]; then
         return 0  # ambiguous (no recorded hash) -> skip silently, do not spam
     fi
+    committed="$(printf '%s' "$template_content" | hash_stdin)"
     stored="$(cat "$INSTALLED_TEMPLATE_HASH_FILE" 2>/dev/null || true)"
     if [ -n "$stored" ] && [ "$committed" != "$stored" ]; then
         ntfy "Mac deploy: timer template changed" "default" "information_source" \
@@ -392,9 +397,16 @@ fi
 # exit code equals the FAIL count, so an informational pi_reachability blip would
 # false-fail). Capture output FIRST (|| true) so pipefail does not abort us.
 doctor_out="$("$CRM_MAC_BIN" doctor 2>/dev/null || true)"
-if printf '%s\n' "$doctor_out" \
-     | grep -E '^(PASS|FAIL)[[:space:]]+agent_service:' \
-     | grep -q 'registered (enabled)'; then
+# Extract the agent_service line into a variable, THEN match -- do NOT chain
+# `grep -E ... | grep -q ...`: under pipefail, grep -q matching and exiting early
+# can SIGPIPE the upstream grep, surfacing a non-zero pipeline status that would
+# FALSE-FAIL a genuinely-healthy deploy (the exact fail-closed-when-healthy bug
+# this content-parse gate exists to avoid).
+agent_line="$(printf '%s\n' "$doctor_out" \
+    | grep -E '^(PASS|FAIL)[[:space:]]+agent_service:' || true)"
+# Pipeline-free content match (a bash glob, not a piped grep -q) so there is no
+# second pipeline whose status pipefail could surface.
+if [[ "$agent_line" == *"registered (enabled)"* ]]; then
     health_ok=true
 else
     health_ok=false
