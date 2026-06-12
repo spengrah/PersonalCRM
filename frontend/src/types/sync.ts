@@ -19,3 +19,22 @@ export interface SyncState {
   created_at: string
   updated_at: string
 }
+
+// Breach type emitted by the sync-staleness watchdog.
+export type StalenessBreachType = 'heartbeat' | 'sync_stale' | 'push_stale' | 'sync_error'
+
+// StalenessBreach mirrors the backend repository.StalenessBreach DTO returned
+// by GET /api/v1/sync/staleness. The read path returns active (unresolved)
+// breaches only, so resolved_at is always absent there.
+export interface StalenessBreach {
+  id: string
+  source: string
+  account_id: string
+  breach_type: StalenessBreachType
+  // ISO timestamp of the stale reference (last heartbeat / success / push).
+  stale_since: string
+  threshold_seconds: number
+  details: string
+  detected_at: string
+  last_observed_at: string
+}

@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { Download, Upload, Settings, Database, Shield, Clock, Cpu } from 'lucide-react'
 import { Navigation } from '@/components/layout/navigation'
 import { Button } from '@/components/ui/button'
+import { SyncStalenessBanner } from '@/components/sync-staleness-banner'
 import { GoogleAccountsSection } from '@/components/settings/google-accounts-section'
 import { TodoistAccountsSection } from '@/components/settings/todoist-accounts-section'
 import { TelegramSection } from '@/components/settings/telegram-section'
@@ -107,6 +108,8 @@ export default function SettingsPage() {
       <Navigation />
 
       <div className="max-w-4xl mx-auto py-6 sm:px-6 lg:px-8">
+        <SyncStalenessBanner />
+
         {/* Header */}
         <div className="mb-8">
           <div className="flex items-center space-x-3 mb-2">
