@@ -29,6 +29,14 @@
 			header_up X-API-Key {env.CRM_API_KEY}
 		}
 	}
+	# Health check: proxy to the backend (NOT the frontend) so a tailnet monitor
+	# can reach GET /health?ready=1 over Tailscale. No X-API-Key injection — the
+	# endpoint is unauthenticated by design and its payload is PII-free by
+	# construction (counts + ages only). Must precede the catch-all frontend
+	# handle, which would otherwise 404 /health on Next.js.
+	handle /health {
+		reverse_proxy localhost:8080
+	}
 	handle {
 		reverse_proxy localhost:3001
 	}
