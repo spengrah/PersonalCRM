@@ -1,8 +1,13 @@
 import { readFileSync } from 'node:fs'
-import { execSync, spawnSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import path from 'node:path'
 
-const repoRoot = execSync('git rev-parse --show-toplevel', {
+// Run git with an argv array via execFileSync (no shell), so a ref name —
+// e.g. an operator-set E2E_BASE_REF — is never shell-interpreted.
+const git = (args, opts = {}) =>
+  execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8', ...opts })
+
+const repoRoot = execFileSync('git', ['rev-parse', '--show-toplevel'], {
   encoding: 'utf8',
   stdio: ['ignore', 'pipe', 'inherit'],
 }).trim()
@@ -10,10 +15,7 @@ const mappingPath = path.join(repoRoot, 'frontend/tests/e2e/test-map.json')
 
 const refExists = ref => {
   try {
-    execSync(`git rev-parse --verify --quiet ${ref}`, {
-      cwd: repoRoot,
-      stdio: ['ignore', 'ignore', 'ignore'],
-    })
+    git(['rev-parse', '--verify', '--quiet', ref], { stdio: ['ignore', 'ignore', 'ignore'] })
     return true
   } catch {
     return false
@@ -28,9 +30,7 @@ const refExists = ref => {
 const resolveBaseRef = () => {
   if (process.env.E2E_BASE_REF) return process.env.E2E_BASE_REF
   try {
-    const upstream = execSync('git rev-parse --abbrev-ref --symbolic-full-name @{u}', {
-      encoding: 'utf8',
-      cwd: repoRoot,
+    const upstream = git(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'], {
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim()
     if (upstream) return upstream
@@ -41,20 +41,16 @@ const resolveBaseRef = () => {
 }
 const baseRef = resolveBaseRef()
 
-const readChangedFiles = command => {
+const readChangedFiles = args => {
   let output
   try {
-    output = execSync(command, {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      cwd: repoRoot,
-    }).trim()
+    output = git(args, { stdio: ['ignore', 'pipe', 'ignore'] }).trim()
   } catch {
     // A `git diff` against a base ref that doesn't exist (e.g. a bare clone with
     // neither origin/develop nor origin/main, or an invalid E2E_BASE_REF) throws.
     // Degrade to an empty changed set rather than crashing the whole run — but warn,
     // since silently dropping to @smoke would under-cover real committed changes.
-    console.error(`WARNING: test-e2e-diff — "${command}" failed; diff-selection is treating it as no changes. Selection may under-cover this push (set E2E_BASE_REF to a valid ref).`)
+    console.error(`WARNING: test-e2e-diff — "git ${args.join(' ')}" failed; diff-selection is treating it as no changes. Selection may under-cover this push (set E2E_BASE_REF to a valid ref).`)
     return []
   }
 
@@ -62,9 +58,9 @@ const readChangedFiles = command => {
 }
 
 const changedFiles = new Set([
-  ...readChangedFiles(`git diff --name-only ${baseRef}...HEAD`),
-  ...readChangedFiles('git diff --name-only'),
-  ...readChangedFiles('git diff --name-only --cached'),
+  ...readChangedFiles(['diff', '--name-only', `${baseRef}...HEAD`]),
+  ...readChangedFiles(['diff', '--name-only']),
+  ...readChangedFiles(['diff', '--name-only', '--cached']),
 ])
 
 const mapping = JSON.parse(readFileSync(mappingPath, 'utf8'))

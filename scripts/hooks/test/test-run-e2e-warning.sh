@@ -76,14 +76,20 @@ stderr2="$(cat "$stderr2_file")"
 assert_contains "resolver falls back to origin/develop -> warns on unmapped file" "$stderr2" "backend/internal/foo.go"
 assert_contains "resolver fallback still selects mapped tag"                       "$stdout2" "@area:contacts"
 
-# --- no base ref at all (bare clone): must NOT crash, degrades to empty diff ---
+# --- no base ref at all (bare clone): must NOT crash, degrades to empty diff,
+#     AND must WARN that the base diff failed ---
 # Remove origin/develop; with no upstream and no origin/develop/origin/main, the
 # resolver returns origin/main (nonexistent) and the git diff against it must be
-# swallowed to an empty changed set rather than crashing the script.
+# swallowed to an empty changed set rather than crashing the script — but the
+# catch-block must announce the degradation on stderr (this pins that warning
+# against a silent-deletion regression).
 git -C "$tmp" update-ref -d refs/remotes/origin/develop
-stdout3="$(cd "$tmp" && E2E_PRINT_ONLY=1 node "$SCRIPT" 2>/dev/null)"; rc3=$?
+stderr3_file="$tmp/stderr3.txt"
+stdout3="$(cd "$tmp" && E2E_PRINT_ONLY=1 node "$SCRIPT" 2>"$stderr3_file")"; rc3=$?
+stderr3="$(cat "$stderr3_file")"
 assert_eq() { if [[ "$2" == "$3" ]]; then echo "ok: $1"; else echo "FAIL: $1 (expected '$2', got '$3')"; fail=1; fi; }
 assert_eq       "no base ref -> script exits 0 (no crash)" "0" "$rc3"
 assert_contains "no base ref -> still emits a grep pattern (at least @smoke)" "$stdout3" "@smoke"
+assert_contains "no base ref -> WARNS that the base diff failed" "$stderr3" "diff-selection is treating it as no changes"
 
 [[ "$fail" -eq 0 ]] && { echo "ALL PASS"; exit 0; } || { echo "FAILURES"; exit 1; }
