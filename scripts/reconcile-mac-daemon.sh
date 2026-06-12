@@ -17,8 +17,12 @@
 #
 # Exit codes:
 #   0  success, no-op, or soft-skip (transient: try again next tick).
-#   1  genuine CI-fail / build-fail / health-fail (runner job shows red;
-#      failure ntfy fires).
+#   1  genuine CI-fail / build-fail / health-fail (the failure ntfy fires).
+# Reconcile runs in the timer's login session (fire-and-forget from the runner's
+# perspective: the runner's kickstart returns before reconcile finishes), so this
+# exit code surfaces via ntfy + the timer's reconcile-stderr.log, NOT the Actions
+# job status. On a login/scheduled fire the non-zero is just the launchd job's
+# exit; the ntfy is the real failure signal either way.
 #
 # Notifications: sourced from $DEPLOY_ENV_FILE if present (degrade-open --
 # absent file => no ntfy, never PII or secrets in bodies).
@@ -339,8 +343,16 @@ ci_gate() {
         fi
         # gh api returned non-zero. Classify structural (4xx) vs transient (5xx)
         # by probing the HTTP status line via -i. 401/403/404 = structural.
+        # The `|| true` is load-bearing: under `set -euo pipefail` a real
+        # `gh api -i` exiting non-zero (the EXACT case we're here to classify)
+        # makes the pipeline non-zero, which would ABORT the script at this
+        # assignment before the case below runs — skipping the ghfailure/softskip
+        # classification entirely. (Real gh exits non-zero on 401/403/404; the
+        # test stub returns 0, so only a real gh exposes this.) Swallow the
+        # status so the classification proceeds; an empty status_code falls
+        # through to the transient softskip after the retry loop.
         local status_code
-        status_code="$(gh api -i "$query" 2>/dev/null | awk 'NR==1{print $2; exit}')"
+        status_code="$(gh api -i "$query" 2>/dev/null | awk 'NR==1{print $2; exit}' || true)"
         case "$status_code" in
             401|403|404)
                 echo "ghfailure"  # token lacks scope / repo|workflow not found

@@ -159,11 +159,14 @@ if [ "\$1" = "print" ]; then exit "\${STUB_LAUNCHCTL_PRINT_RC:-0}"; fi
 exit 0
 EOF
 
-    # --- stub: gh (auth status) -------------------------------------------
+    # --- stub: gh (the end-of-run `gh repo view` access probe) ------------
+    # setup's report runs `gh repo view <url> --json nameWithOwner` (NOT
+    # `gh auth status`) to check the active account resolves the repo; the stub
+    # just records argv + exits STUB_GH_RC (default 0 = access OK).
     cat > "$SANDBOX/bin/gh" <<EOF
 #!/usr/bin/env bash
 echo "gh \$*" >> "$CALL_LOG"
-exit "\${STUB_GH_AUTH_RC:-0}"
+exit "\${STUB_GH_RC:-0}"
 EOF
 
     # --- stub: id (stable uid without depending on the host) --------------

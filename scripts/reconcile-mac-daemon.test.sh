@@ -102,7 +102,13 @@ EOF
     # repo view   -> echo ${STUB_REPO:-spengrah/PersonalCRM} (empty models a
     #                structural resolution failure)
     # api ... --jq -> echo ${STUB_CI_CONCLUSION:-success}; exit ${STUB_GH_API_RC:-0}
-    # api -i ...   -> emit a fake HTTP status line ${STUB_GH_HTTP_STATUS:-200}
+    # api -i ...   -> emit a fake HTTP status line ${STUB_GH_HTTP_STATUS:-200},
+    #                then exit NON-ZERO when the main api call failed (faithful:
+    #                real `gh api -i` prints the status line on stdout AND exits
+    #                non-zero on 4xx/5xx). Defaults to STUB_GH_API_RC so the
+    #                structural/transient cases drive a non-zero -i exit, which
+    #                exercises the script's `|| true` guard against set -e
+    #                aborting the status-code probe.
     cat > "$SANDBOX/bin/gh" <<EOF
 #!/usr/bin/env bash
 echo "gh \$*" >> "$CALL_LOG"
@@ -112,7 +118,7 @@ case "\$1" in
   api)
     if [ "\$2" = "-i" ]; then
       echo "HTTP/2 \${STUB_GH_HTTP_STATUS:-200}"
-      exit 0
+      exit "\${STUB_GH_API_I_RC:-\${STUB_GH_API_RC:-0}}"
     fi
     echo "\${STUB_CI_CONCLUSION:-success}"
     exit "\${STUB_GH_API_RC:-0}" ;;

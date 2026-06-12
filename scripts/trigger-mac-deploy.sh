@@ -12,9 +12,11 @@
 # self-hosted-runner job runs inside an isolated security session
 # (SessionCreate=true on the runner's LaunchAgent) that cannot reach the user's
 # login Keychain, so `codesign` against the local self-signed identity fails with
-# errSecInternalComponent. The login-session timer CAN reach it. Kickstarting the
-# timer makes launchd run the reconcile in the TIMER's context (login session),
-# not as a child of the runner's isolated session.
+# errSecInternalComponent. The login-session timer CAN reach it. The design's
+# central bet is that kickstarting the timer makes launchd run the reconcile in
+# the TIMER's context (login session) — NOT as a child of the runner's isolated
+# session — so codesign is EXPECTED to work. That runner-session->login-session
+# crossing is validated by the Bucket-B supervised dry-run, not proven here.
 #
 # Fire-and-forget: `launchctl kickstart` returns as soon as launchd ACCEPTS the
 # start request — it does NOT wait for reconcile to finish. So a green exit from
