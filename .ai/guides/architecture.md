@@ -176,6 +176,8 @@ sequenceDiagram
 | `contact_task` | Todoist tasks linked to contacts | → contact |
 | **Event Bus** | | |
 | `event` | Append-only raw event log feeding the worker queue (spec §3.1) | (append-only; no FKs) |
+| **Observability** | | |
+| `sync_staleness_breach` | Open/resolved sync-staleness breaches recorded by the watchdog (partial unique index on open rows; no `updated_at`/`deleted_at`) | (system-derived; no FKs) |
 | **Future/Unused** | | |
 | `interaction` | Interaction logging (not yet used) | → contact |
 | `connection` | Contact-to-contact relationships | → contact × 2 |
@@ -243,6 +245,7 @@ scheduler runs on top of `github.com/riverqueue/river` periodic jobs.
 |-----|----------|-------------|
 | `scheduler_tick` | Every 5 min (`RunOnStart: true`) | SchedulerTickWorker enumerates due `external_sync_state` rows and enqueues one `sync_provider_account` river job per account. |
 | `sync_provider_account` | Dispatched on-demand | SyncProviderAccountWorker calls `syncService.RunAccountSync(source, accountID)` for a single account. River's lease + rescuer provides durable crash-recovery. |
+| `sync_staleness_watchdog` | Every 5 min (`RunOnStart: true`) | StalenessWatchdogWorker compares per-source freshness timestamps (`external_sync_state` last-success/error + `mac_host.source_health` last-pushed + `mac_host.last_heartbeat_at`) against config-backed `SYNC_STALENESS_*` thresholds and reconciles breaches into `sync_staleness_breach`. Registered unconditionally (independent of `ENABLE_EXTERNAL_SYNC`). Read via `GET /api/v1/sync/staleness`. |
 
 Dedup is done in a repository helper
 (`EnqueueAccountSyncIfNotInFlight`) that wraps

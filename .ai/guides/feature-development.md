@@ -323,6 +323,7 @@ v1 := router.Group("/api/v1")
 | | `/sync/providers` | GET | SyncHandler | Available providers |
 | | `/sync/:source/trigger` | POST | SyncHandler | Trigger sync |
 | | `/sync/states/:id/enable` | PATCH | SyncHandler | Enable/disable sync |
+| | `/sync/staleness` | GET | StalenessHandler | Active sync-staleness breaches (registered unconditionally, independent of `ENABLE_EXTERNAL_SYNC`) |
 | **Identities** | `/identities/unmatched` | GET | IdentityHandler | Unmatched identities |
 | | `/identities/:id/link` | POST | IdentityHandler | Link to contact |
 | **Imports** | `/imports/candidates` | GET | ImportHandler | Import candidates |

@@ -606,7 +606,7 @@ Same message landing on two Macs is deduplicated at the staging-table unique con
 
 **Pi-side:** new Mac settings page surfacing heartbeat fields. Existing integrations UI shows per-source last-pushed and errors. New cursor-lag visualization: `observed_cursor - pushed_cursor` per source highlights stuck pushes.
 
-**Alerting:** none in v1. UI cues are sufficient (single user). Future hook: Pi emits toast via #196 infrastructure when any source's last-pushed lag exceeds threshold.
+**Alerting:** none in v1. UI cues are sufficient (single user). Future hook: Pi emits toast via #196 infrastructure when any source's last-pushed lag exceeds threshold. **Update (#480):** a server-side sync-staleness watchdog now ships — a 5-min periodic job compares `source_health` last-pushed (and `last_heartbeat_at`) against config-backed thresholds and records breaches in `sync_staleness_breach`, surfaced at `GET /api/v1/sync/staleness` and logged (the v1 alert channel). Toast delivery via #196 is still deferred.
 
 ---
 
