@@ -107,6 +107,22 @@
 //	                              before touching anything. Prints a counts-only
 //	                              summary (no PII).
 //
+//	--list-jobs                   List River jobs (one key=value row per job) for
+//	      [--job-state S]         dead-letter inspection. --job-state is a
+//	      [--job-limit N]         comma-separated state filter (default
+//	                              "discarded,retryable"; each token validated
+//	                              against River's job states). --job-limit caps the
+//	                              row count (default 100; 1..10000). Newest job
+//	                              first. SAFE with crm-api running (read-only).
+//
+//	--retry-job <id>              Make a single River job available to run again
+//	                              (by numeric id from --list-jobs). On an exhausted
+//	                              job River bumps max_attempts so it can run once
+//	                              more. SAFE with crm-api running: the live worker
+//	                              pool picks the job up — that is the intended flow.
+//	                              Consumers are idempotent, so retrying an
+//	                              already-side-effected job re-runs into a no-op.
+//
 // The seed/reset subcommands inherit the process env (CRM_ENV / TIME_BASE /
 // TIME_ACCELERATION / DATABASE_URL / MIGRATIONS_PATH) — on the Pi via
 // `set -a; . /srv/personalcrm/.env; set +a` — so the seeded world's cadence /
@@ -216,6 +232,15 @@ type seedRunner interface {
 	ResetAndSeed(ctx context.Context, params synthetic.SeedParams) (synthetic.ProfileResult, error)
 }
 
+// riverJobAdmin is the narrow interface --list-jobs / --retry-job need.
+// *river.Client[pgx.Tx] satisfies it structurally, so the existing insert-only
+// admin client serves both calls (JobList / JobRetry go straight through the
+// driver — neither needs Start() nor registered workers).
+type riverJobAdmin interface {
+	JobList(ctx context.Context, params *river.JobListParams) (*river.JobListResult, error)
+	JobRetry(ctx context.Context, id int64) (*rivertype.JobRow, error)
+}
+
 // adminDeps groups the per-subcommand dependencies. Tests inject
 // fakes for each interface; the production wiring builds a single
 // MacHostService and a small adapter for rematch.
@@ -232,8 +257,12 @@ type adminDeps struct {
 	rederive   rederiveRunner
 	gmailReset gmailBackfillCursorResetter
 	seed       seedRunner
-	stdout     io.Writer
-	stderr     io.Writer
+	// jobs serves --list-jobs / --retry-job. Wired to the insert-only river
+	// client in buildProductionDeps (JobList/JobRetry go through the driver,
+	// no worker pool needed).
+	jobs   riverJobAdmin
+	stdout io.Writer
+	stderr io.Writer
 }
 
 // runOptions captures parsed flags. Exposed as a struct so tests can
@@ -264,6 +293,14 @@ type runOptions struct {
 	// MigrationsPath, not buildProductionDeps).
 	migrate      bool
 	migrateCheck bool
+	// River dead-letter subcommands. listJobs ← --list-jobs (the bool
+	// subcommand selector); jobState / jobLimit are auxiliary filters used only
+	// by --list-jobs. retryJobID ← --retry-job (0 = unset; non-zero selects the
+	// retry subcommand).
+	listJobs   bool
+	jobState   string
+	jobLimit   int
+	retryJobID int64
 }
 
 // exitErr carries an explicit process exit code so a subcommand can drive a
@@ -405,6 +442,12 @@ func validateSubcommand(opts runOptions) error {
 	if opts.migrateCheck {
 		active++
 	}
+	if opts.listJobs {
+		active++
+	}
+	if opts.retryJobID != 0 {
+		active++
+	}
 	if active == 0 {
 		return errors.New("no subcommand specified; pass exactly one of " +
 			subcommandList)
@@ -421,7 +464,7 @@ func validateSubcommand(opts runOptions) error {
 const subcommandList = "--messages-rematch-stranded, --reconcile-address-book-methods, " +
 	"--rederive-correspondence-names, --reset-gmail-backfill-cursors, --mint-pairing-token, " +
 	"--list-hosts, --revoke-host <uuid>, --rotate-host-key <uuid>, --seed, --reset-and-seed, " +
-	"--migrate, --migrate-check"
+	"--migrate, --migrate-check, --list-jobs, --retry-job <id>"
 
 // parseArgs uses a private FlagSet so tests can drive the parser
 // without polluting flag's global state.
@@ -483,6 +526,17 @@ func parseArgs(args []string) (runOptions, error) {
 		"Report whether migrations are pending WITHOUT mutating the DB. Exit 0 = up-to-date, "+
 			"2 = pending (app and/or River), 1 = operational error (cannot connect / dirty DB / read failed). "+
 			"The deploy script branches on exit 2 to snapshot-then-migrate.")
+	fs.BoolVar(&opts.listJobs, "list-jobs", false,
+		"List River jobs (one key=value row per job) for dead-letter inspection. Use with "+
+			"--job-state / --job-limit. Read-only; safe with crm-api running.")
+	fs.StringVar(&opts.jobState, "job-state", "discarded,retryable",
+		"Comma-separated River job states to filter --list-jobs (default discarded,retryable). "+
+			"Each token is validated against River's job states.")
+	fs.IntVar(&opts.jobLimit, "job-limit", 100,
+		"Max rows for --list-jobs (default 100; 1..10000). Newest job first.")
+	fs.Int64Var(&opts.retryJobID, "retry-job", 0,
+		"Make a single River job (by numeric id from --list-jobs) available to run again. "+
+			"On an exhausted job River bumps max_attempts. Safe with crm-api running.")
 	if err := fs.Parse(args); err != nil {
 		return runOptions{}, err
 	}
@@ -582,6 +636,10 @@ func run(ctx context.Context, opts runOptions, deps adminDeps) error {
 		return runSeed(ctx, opts, deps)
 	case opts.resetAndSeed:
 		return runResetAndSeed(ctx, opts, deps)
+	case opts.listJobs:
+		return runListJobs(ctx, opts, deps)
+	case opts.retryJobID != 0:
+		return runRetryJob(ctx, opts, deps)
 	case opts.migrate, opts.migrateCheck:
 		// Migration subcommands are dispatched PRE-DB in runMain (they need
 		// only the database URL + migrations path, not deps), so they never
@@ -861,6 +919,138 @@ func runResetGmailBackfillCursors(ctx context.Context, deps adminDeps) error {
 	return nil
 }
 
+// jobListMaxLimit is the upper bound River's JobListParams.First enforces (it
+// panics outside 1..10000). We validate --job-limit against it BEFORE calling
+// First so the operator gets a friendly usage error instead of a panic.
+const jobListMaxLimit = 10_000
+
+// parseJobStates splits a comma-separated state filter into rivertype.JobState
+// values, validating each token against River's known states. Whitespace around
+// tokens is trimmed; an empty filter is rejected. An unknown token returns a
+// usage error listing the valid states.
+func parseJobStates(filter string) ([]rivertype.JobState, error) {
+	valid := rivertype.JobStates()
+	validSet := make(map[string]rivertype.JobState, len(valid))
+	for _, s := range valid {
+		validSet[string(s)] = s
+	}
+	var states []rivertype.JobState
+	for _, tok := range strings.Split(filter, ",") {
+		tok = strings.TrimSpace(tok)
+		if tok == "" {
+			continue
+		}
+		st, ok := validSet[tok]
+		if !ok {
+			validNames := make([]string, len(valid))
+			for i, s := range valid {
+				validNames[i] = string(s)
+			}
+			return nil, fmt.Errorf("--job-state: unknown state %q (valid: %s)", tok, strings.Join(validNames, ", "))
+		}
+		states = append(states, st)
+	}
+	if len(states) == 0 {
+		return nil, errors.New("--job-state: at least one state required")
+	}
+	return states, nil
+}
+
+// runListJobs lists River jobs (one key=value row per job) for dead-letter
+// inspection. Read-only; safe with crm-api running. Newest job first on the
+// never-null, deterministic id key (finalized_at is NULL for retryable rows, so
+// it can't sort the mixed default view).
+func runListJobs(ctx context.Context, opts runOptions, deps adminDeps) error {
+	states, err := parseJobStates(opts.jobState)
+	if err != nil {
+		return err
+	}
+	if opts.jobLimit < 1 || opts.jobLimit > jobListMaxLimit {
+		return fmt.Errorf("--job-limit must be between 1 and %d (got %d)", jobListMaxLimit, opts.jobLimit)
+	}
+
+	params := river.NewJobListParams().
+		States(states...).
+		First(opts.jobLimit).
+		OrderBy(river.JobListOrderByID, river.SortOrderDesc)
+
+	res, err := deps.jobs.JobList(ctx, params)
+	if err != nil {
+		return fmt.Errorf("list jobs: %w", err)
+	}
+
+	if len(res.Jobs) == 0 {
+		if _, err := fmt.Fprintf(deps.stdout, "no jobs found (states=%s)\n", opts.jobState); err != nil {
+			return fmt.Errorf("write empty list: %w", err)
+		}
+		return nil
+	}
+
+	for _, job := range res.Jobs {
+		if err := writeJobRow(deps.stdout, job); err != nil {
+			return err
+		}
+	}
+
+	// A full page may mean older rows exist beyond the limit.
+	if len(res.Jobs) == opts.jobLimit {
+		if _, err := fmt.Fprintf(deps.stdout,
+			"note: limit reached (%d rows shown); older rows may exist — raise --job-limit\n",
+			opts.jobLimit); err != nil {
+			return fmt.Errorf("write limit note: %w", err)
+		}
+	}
+	return nil
+}
+
+// writeJobRow prints a single River job as a key=value row (runListHosts style).
+// last_error is the Error of the most recent attempt (empty if none), printed
+// with %q so a multi-line worker error stays on one line. args is the raw
+// EncodedArgs (compact JSON). finalized_at is "none" when nil.
+func writeJobRow(w io.Writer, job *rivertype.JobRow) error {
+	lastError := ""
+	if n := len(job.Errors); n > 0 {
+		lastError = job.Errors[n-1].Error
+	}
+	finalizedAt := "none"
+	if job.FinalizedAt != nil {
+		finalizedAt = job.FinalizedAt.UTC().Format(time.RFC3339)
+	}
+	args := string(job.EncodedArgs)
+	if args == "" {
+		args = "{}"
+	}
+	if _, err := fmt.Fprintf(w,
+		"id=%d kind=%s state=%s attempt=%d/%d queue=%s created_at=%s finalized_at=%s last_error=%q args=%s\n",
+		job.ID, job.Kind, job.State, job.Attempt, job.MaxAttempts, job.Queue,
+		job.CreatedAt.UTC().Format(time.RFC3339), finalizedAt, lastError, args); err != nil {
+		return fmt.Errorf("write job row: %w", err)
+	}
+	return nil
+}
+
+// runRetryJob makes a single River job available to run again (by numeric id).
+// On an exhausted job River bumps max_attempts so it can run once more. Safe
+// with crm-api running — the live worker pool picks it up.
+func runRetryJob(ctx context.Context, opts runOptions, deps adminDeps) error {
+	if opts.retryJobID < 1 {
+		return fmt.Errorf("--retry-job must be a positive job id (got %d)", opts.retryJobID)
+	}
+	job, err := deps.jobs.JobRetry(ctx, opts.retryJobID)
+	if err != nil {
+		if errors.Is(err, rivertype.ErrNotFound) {
+			return fmt.Errorf("no job with id %d (already cleaned by retention?)", opts.retryJobID)
+		}
+		return fmt.Errorf("retry job %d: %w", opts.retryJobID, err)
+	}
+	if _, err := fmt.Fprintf(deps.stdout,
+		"retried job id=%d kind=%s state=%s scheduled_at=%s\n",
+		job.ID, job.Kind, job.State, job.ScheduledAt.UTC().Format(time.RFC3339)); err != nil {
+		return fmt.Errorf("write retry summary: %w", err)
+	}
+	return nil
+}
+
 // correspondenceBackfillFloor is the lower bound for the one-time display-name
 // re-derivation. It matches the Gmail onboarding backfill floor (the earliest
 // mail the integration ever ingested), so the catchup covers the entire stored
@@ -993,6 +1183,9 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 			database: database,
 			support:  repository.NewSyntheticSupportRepository(database.Queries),
 		},
+		// --list-jobs / --retry-job: the insert-only river client also satisfies
+		// JobList / JobRetry (both go through the driver, no worker pool needed).
+		jobs: riverClient,
 	}
 
 	// LAZY: build the correspondence re-derivation stack ONLY for

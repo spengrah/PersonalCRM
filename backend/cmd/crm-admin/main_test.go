@@ -20,6 +20,8 @@ import (
 	"personal-crm/backend/internal/synthetic"
 
 	"github.com/google/uuid"
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
 )
 
 type fakeTokenMinter struct {
@@ -1115,5 +1117,319 @@ func TestExitErrMapping(t *testing.T) {
 	}
 	if errors.As(errors.New("plain"), &ee) {
 		t.Fatal("a plain error must NOT match errors.As(exitErr) — it keeps exit-1 behavior")
+	}
+}
+
+// --- --list-jobs / --retry-job dispatch tests ---
+
+// fakeRiverJobAdmin records the JobList params it received and returns canned
+// jobs/errors, so list/retry dispatch + output formatting can be asserted
+// without a real River client. The opaque JobListParams can't be introspected,
+// so --job-state / --job-limit propagation is exercised by the integration
+// test; here we assert behavior and output.
+type fakeRiverJobAdmin struct {
+	listResult *river.JobListResult
+	listErr    error
+	listCalls  int
+
+	retryResult *rivertype.JobRow
+	retryErr    error
+	retryID     int64
+	retryCalls  int
+}
+
+func (f *fakeRiverJobAdmin) JobList(_ context.Context, _ *river.JobListParams) (*river.JobListResult, error) {
+	f.listCalls++
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return f.listResult, nil
+}
+
+func (f *fakeRiverJobAdmin) JobRetry(_ context.Context, id int64) (*rivertype.JobRow, error) {
+	f.retryCalls++
+	f.retryID = id
+	if f.retryErr != nil {
+		return nil, f.retryErr
+	}
+	return f.retryResult, nil
+}
+
+func depsWithJobs(jobs riverJobAdmin) (adminDeps, *bytes.Buffer) {
+	stdout := &bytes.Buffer{}
+	return adminDeps{jobs: jobs, stdout: stdout, stderr: &bytes.Buffer{}}, stdout
+}
+
+func TestParseArgsListAndRetryFlags(t *testing.T) {
+	t.Run("list-jobs with state + limit", func(t *testing.T) {
+		opts, err := parseArgs([]string{"--list-jobs", "--job-state", "discarded", "--job-limit", "5"})
+		if err != nil {
+			t.Fatalf("parse error: %v", err)
+		}
+		if !opts.listJobs {
+			t.Fatal("--list-jobs not set")
+		}
+		if opts.jobState != "discarded" {
+			t.Fatalf("expected job-state discarded, got %q", opts.jobState)
+		}
+		if opts.jobLimit != 5 {
+			t.Fatalf("expected job-limit 5, got %d", opts.jobLimit)
+		}
+	})
+
+	t.Run("list-jobs defaults", func(t *testing.T) {
+		opts, err := parseArgs([]string{"--list-jobs"})
+		if err != nil {
+			t.Fatalf("parse error: %v", err)
+		}
+		if opts.jobState != "discarded,retryable" {
+			t.Fatalf("expected default state filter, got %q", opts.jobState)
+		}
+		if opts.jobLimit != 100 {
+			t.Fatalf("expected default limit 100, got %d", opts.jobLimit)
+		}
+	})
+
+	t.Run("retry-job id", func(t *testing.T) {
+		opts, err := parseArgs([]string{"--retry-job", "412"})
+		if err != nil {
+			t.Fatalf("parse error: %v", err)
+		}
+		if opts.retryJobID != 412 {
+			t.Fatalf("expected retry id 412, got %d", opts.retryJobID)
+		}
+	})
+}
+
+func TestListAndRetryMutualExclusion(t *testing.T) {
+	// Both selected → mutual-exclusion error.
+	if err := validateSubcommand(runOptions{listJobs: true, retryJobID: 7}); err == nil {
+		t.Fatal("expected mutual-exclusion error for --list-jobs + --retry-job")
+	}
+	// --retry-job 0 = unset, so only --list-jobs is active.
+	if err := validateSubcommand(runOptions{listJobs: true, retryJobID: 0}); err != nil {
+		t.Fatalf("--list-jobs alone should be valid, got %v", err)
+	}
+	// --retry-job alone is valid.
+	if err := validateSubcommand(runOptions{retryJobID: 7}); err != nil {
+		t.Fatalf("--retry-job alone should be valid, got %v", err)
+	}
+	// Neither → no-subcommand error.
+	if err := validateSubcommand(runOptions{}); err == nil {
+		t.Fatal("expected no-subcommand error")
+	}
+}
+
+func TestRunListJobsHappy(t *testing.T) {
+	finalized := time.Date(2026, 6, 12, 3, 4, 5, 0, time.UTC)
+	created := time.Date(2026, 6, 12, 1, 2, 3, 0, time.UTC)
+	jobs := &fakeRiverJobAdmin{
+		listResult: &river.JobListResult{
+			Jobs: []*rivertype.JobRow{
+				{
+					ID:          412,
+					Kind:        "todoist_followup_create",
+					State:       rivertype.JobStateDiscarded,
+					Attempt:     10,
+					MaxAttempts: 10,
+					Queue:       "default",
+					CreatedAt:   created,
+					FinalizedAt: &finalized,
+					EncodedArgs: []byte(`{"contact_task_id":"00000000-0000-0000-0000-000000000001"}`),
+					Errors: []rivertype.AttemptError{
+						{Attempt: 9, Error: "first failure"},
+						{Attempt: 10, Error: "POST /tasks: 503\nsecond line"},
+					},
+				},
+				{
+					ID:          413,
+					Kind:        "interaction_recorder",
+					State:       rivertype.JobStateRetryable,
+					Attempt:     1,
+					MaxAttempts: 5,
+					Queue:       "default",
+					CreatedAt:   created,
+					FinalizedAt: nil,
+					EncodedArgs: []byte(`{"event_id":"00000000-0000-0000-0000-000000000002"}`),
+				},
+			},
+		},
+	}
+	deps, stdout := depsWithJobs(jobs)
+	err := run(context.Background(), runOptions{listJobs: true, jobState: "discarded,retryable", jobLimit: 100}, deps)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if jobs.listCalls != 1 {
+		t.Fatalf("expected 1 JobList call, got %d", jobs.listCalls)
+	}
+	out := stdout.String()
+	// Row 1: discarded, exhausted, finalized, multi-line last error quoted.
+	if !strings.Contains(out, "id=412 kind=todoist_followup_create state=discarded attempt=10/10") {
+		t.Fatalf("missing discarded row prefix: %q", out)
+	}
+	if !strings.Contains(out, "finalized_at=2026-06-12T03:04:05Z") {
+		t.Fatalf("missing finalized_at: %q", out)
+	}
+	// %q keeps the multi-line error on one line as an escaped string.
+	if !strings.Contains(out, `last_error="POST /tasks: 503\nsecond line"`) {
+		t.Fatalf("expected quoted multi-line last_error, got %q", out)
+	}
+	if !strings.Contains(out, `args={"contact_task_id":"00000000-0000-0000-0000-000000000001"}`) {
+		t.Fatalf("missing args JSON: %q", out)
+	}
+	// Row 2: retryable, no finalized_at.
+	if !strings.Contains(out, "id=413 kind=interaction_recorder state=retryable attempt=1/5") {
+		t.Fatalf("missing retryable row prefix: %q", out)
+	}
+	if !strings.Contains(out, "finalized_at=none") {
+		t.Fatalf("expected finalized_at=none for retryable row: %q", out)
+	}
+	// last_error empty for the row with no Errors.
+	if !strings.Contains(out, `last_error=""`) {
+		t.Fatalf("expected empty last_error for no-error row: %q", out)
+	}
+}
+
+func TestRunListJobsEmpty(t *testing.T) {
+	jobs := &fakeRiverJobAdmin{listResult: &river.JobListResult{Jobs: nil}}
+	deps, stdout := depsWithJobs(jobs)
+	err := run(context.Background(), runOptions{listJobs: true, jobState: "discarded,retryable", jobLimit: 100}, deps)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "no jobs found (states=discarded,retryable)") {
+		t.Fatalf("expected empty-result message, got %q", stdout.String())
+	}
+}
+
+func TestRunListJobsLimitReachedNote(t *testing.T) {
+	// Fake returns exactly limit rows → limit-reached note fires.
+	rows := make([]*rivertype.JobRow, 2)
+	for i := range rows {
+		rows[i] = &rivertype.JobRow{
+			ID: int64(500 + i), Kind: "interaction_recorder", State: rivertype.JobStateDiscarded,
+			Attempt: 3, MaxAttempts: 3, Queue: "default",
+			CreatedAt: time.Date(2026, 6, 12, 0, 0, 0, 0, time.UTC),
+		}
+	}
+	jobs := &fakeRiverJobAdmin{listResult: &river.JobListResult{Jobs: rows}}
+	deps, stdout := depsWithJobs(jobs)
+	err := run(context.Background(), runOptions{listJobs: true, jobState: "discarded", jobLimit: 2}, deps)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "note: limit reached (2 rows shown)") {
+		t.Fatalf("expected limit-reached note, got %q", stdout.String())
+	}
+}
+
+func TestRunListJobsInvalidState(t *testing.T) {
+	jobs := &fakeRiverJobAdmin{}
+	deps, _ := depsWithJobs(jobs)
+	err := run(context.Background(), runOptions{listJobs: true, jobState: "bogus", jobLimit: 100}, deps)
+	if err == nil {
+		t.Fatal("expected unknown-state error")
+	}
+	if !strings.Contains(err.Error(), "unknown state") || !strings.Contains(err.Error(), "discarded") {
+		t.Fatalf("expected error naming valid states, got %v", err)
+	}
+	if jobs.listCalls != 0 {
+		t.Fatalf("JobList must not be called on invalid state; got %d", jobs.listCalls)
+	}
+}
+
+func TestRunListJobsInvalidLimit(t *testing.T) {
+	for _, lim := range []int{0, 10001} {
+		jobs := &fakeRiverJobAdmin{}
+		deps, _ := depsWithJobs(jobs)
+		err := run(context.Background(), runOptions{listJobs: true, jobState: "discarded", jobLimit: lim}, deps)
+		if err == nil {
+			t.Fatalf("expected limit error for --job-limit %d", lim)
+		}
+		if !strings.Contains(err.Error(), "--job-limit must be between 1 and 10000") {
+			t.Fatalf("expected limit-range error, got %v", err)
+		}
+		if jobs.listCalls != 0 {
+			t.Fatalf("JobList must not be called on invalid limit; got %d", jobs.listCalls)
+		}
+	}
+}
+
+func TestRunListJobsError(t *testing.T) {
+	jobs := &fakeRiverJobAdmin{listErr: errors.New("db unreachable")}
+	deps, _ := depsWithJobs(jobs)
+	err := run(context.Background(), runOptions{listJobs: true, jobState: "discarded", jobLimit: 100}, deps)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "list jobs") {
+		t.Fatalf("expected wrapped error, got %v", err)
+	}
+}
+
+func TestRunRetryJobHappy(t *testing.T) {
+	scheduled := time.Date(2026, 6, 12, 5, 0, 0, 0, time.UTC)
+	jobs := &fakeRiverJobAdmin{
+		retryResult: &rivertype.JobRow{
+			ID: 412, Kind: "todoist_followup_create", State: rivertype.JobStateAvailable,
+			ScheduledAt: scheduled,
+		},
+	}
+	deps, stdout := depsWithJobs(jobs)
+	err := run(context.Background(), runOptions{retryJobID: 412}, deps)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if jobs.retryCalls != 1 || jobs.retryID != 412 {
+		t.Fatalf("expected 1 JobRetry(412) call, got calls=%d id=%d", jobs.retryCalls, jobs.retryID)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "retried job id=412 kind=todoist_followup_create state=available") {
+		t.Fatalf("missing retry confirmation: %q", out)
+	}
+	if !strings.Contains(out, "scheduled_at=2026-06-12T05:00:00Z") {
+		t.Fatalf("missing scheduled_at: %q", out)
+	}
+}
+
+func TestRunRetryJobNotFound(t *testing.T) {
+	jobs := &fakeRiverJobAdmin{retryErr: rivertype.ErrNotFound}
+	deps, _ := depsWithJobs(jobs)
+	err := run(context.Background(), runOptions{retryJobID: 999999999}, deps)
+	if err == nil {
+		t.Fatal("expected not-found error")
+	}
+	if !strings.Contains(err.Error(), "no job with id 999999999") {
+		t.Fatalf("expected friendly not-found error naming the id, got %v", err)
+	}
+}
+
+func TestRunRetryJobInvalidID(t *testing.T) {
+	jobs := &fakeRiverJobAdmin{}
+	deps, _ := depsWithJobs(jobs)
+	// A negative id counts as active in validateSubcommand but is rejected by
+	// the runner before calling JobRetry.
+	err := run(context.Background(), runOptions{retryJobID: -1}, deps)
+	if err == nil {
+		t.Fatal("expected invalid-id error")
+	}
+	if !strings.Contains(err.Error(), "--retry-job must be a positive job id") {
+		t.Fatalf("expected positive-id error, got %v", err)
+	}
+	if jobs.retryCalls != 0 {
+		t.Fatalf("JobRetry must not be called on invalid id; got %d", jobs.retryCalls)
+	}
+}
+
+func TestRunRetryJobError(t *testing.T) {
+	jobs := &fakeRiverJobAdmin{retryErr: errors.New("connection reset")}
+	deps, _ := depsWithJobs(jobs)
+	err := run(context.Background(), runOptions{retryJobID: 412}, deps)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "retry job 412") {
+		t.Fatalf("expected wrapped error, got %v", err)
 	}
 }
