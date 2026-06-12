@@ -5,7 +5,6 @@ import Link from 'next/link'
 import { CheckCircle, Clock, AlertCircle, User, Plus } from 'lucide-react'
 import { Navigation } from '@/components/layout/navigation'
 import { Button } from '@/components/ui/button'
-import { SyncStalenessBanner } from '@/components/sync-staleness-banner'
 import { ContactMethodIcon } from '@/components/contacts/contact-method-icon'
 import { useOverdueContacts } from '@/hooks/use-contacts'
 import { useCreateInteraction } from '@/hooks/use-interactions'
@@ -207,8 +206,6 @@ export default function DashboardPage() {
       <Navigation />
 
       <div className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
-        <SyncStalenessBanner />
-
         {/* Header */}
         <div className="md:flex md:items-center md:justify-between mb-8">
           <div className="flex-1 min-w-0">
