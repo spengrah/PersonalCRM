@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/health"
 	"personal-crm/backend/internal/repository"
 
@@ -82,7 +83,7 @@ func defaultTestThresholds() health.Thresholds {
 // trail is recent (so the sync freshness guard passes), with the given breach
 // reader semantics handled separately.
 func freshWatchdogReader() *mockRiverStatsReader {
-	now := time.Now()
+	now := accelerated.GetCurrentTime()
 	return &mockRiverStatsReader{latestComplete: &now}
 }
 
@@ -195,7 +196,7 @@ func TestHealthComponents_RiverOldestDueBoundary(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			now := time.Now()
+			now := accelerated.GetCurrentTime()
 			due := now.Add(-tc.ageMinutes)
 			river := freshWatchdogReader()
 			river.oldestDue = &due
@@ -235,7 +236,7 @@ func TestHealthComponents_RiverNoDueJobs(t *testing.T) {
 func TestHealthComponents_RiverDueExactlyNowAgeZeroPresent(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	mockDB := &mockDatabaseChecker{shouldError: false}
-	now := time.Now()
+	now := accelerated.GetCurrentTime()
 	river := freshWatchdogReader()
 	river.oldestDue = &now // age ~0
 	hc := health.NewHealthChecker(mockDB, 5*time.Second, health.Deps{
@@ -255,7 +256,7 @@ func TestHealthComponents_RiverDueExactlyNowAgeZeroPresent(t *testing.T) {
 func TestHealthComponents_RiverOldestDueDisabled(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	mockDB := &mockDatabaseChecker{shouldError: false}
-	now := time.Now()
+	now := accelerated.GetCurrentTime()
 	old := now.Add(-10 * time.Hour)
 	river := freshWatchdogReader()
 	river.oldestDue = &old
@@ -310,7 +311,7 @@ func TestHealthComponents_RiverNilReaderUnknown(t *testing.T) {
 func TestHealthComponents_SyncBreachDegrades(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	mockDB := &mockDatabaseChecker{shouldError: false}
-	now := time.Now()
+	now := accelerated.GetCurrentTime()
 	river := freshWatchdogReader()
 	staleness := &mockStalenessReader{breaches: []repository.StalenessBreach{
 		{Source: "gcontacts", StaleSince: now.Add(-2 * time.Hour)},
@@ -333,7 +334,7 @@ func TestHealthComponents_SyncBreachDegrades(t *testing.T) {
 func TestHealthComponents_SyncWatchdogStaleUnknown(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	mockDB := &mockDatabaseChecker{shouldError: false}
-	staleTrail := time.Now().Add(-2 * time.Hour) // older than 30m
+	staleTrail := accelerated.GetCurrentTime().Add(-2 * time.Hour) // older than 30m
 	// Zero breaches, but the watchdog completion trail is stale: must report
 	// unknown (covers total-River-death + persistently-failing-worker).
 	river := &mockRiverStatsReader{latestComplete: &staleTrail}
@@ -374,7 +375,7 @@ func TestHealthComponents_SyncWatchdogGuardDisabled(t *testing.T) {
 	mockDB := &mockDatabaseChecker{shouldError: false}
 	// Stale trail, but guard disabled via empty kind → sync evaluates breaches
 	// only (0 breaches → healthy).
-	staleTrail := time.Now().Add(-10 * time.Hour)
+	staleTrail := accelerated.GetCurrentTime().Add(-10 * time.Hour)
 	river := &mockRiverStatsReader{latestComplete: &staleTrail}
 	hc := health.NewHealthChecker(mockDB, 5*time.Second, health.Deps{
 		River:            river,
@@ -408,7 +409,7 @@ func TestHealthComponents_SyncWatchdogGuardDisabled(t *testing.T) {
 func TestHealthComponents_SyncPIIGuard(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	mockDB := &mockDatabaseChecker{shouldError: false}
-	now := time.Now()
+	now := accelerated.GetCurrentTime()
 	const secretEmail = "private.person@example.com"
 	const secretDetails = "oauth token refresh failed for private.person@example.com"
 	river := freshWatchdogReader()
