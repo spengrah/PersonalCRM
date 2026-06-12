@@ -67,6 +67,13 @@ import (
 	_ "personal-crm/backend/docs" // Import generated docs
 )
 
+// riverDiscardedJobRetention is how long River keeps discarded job rows before
+// JobCleaner prunes them. River's 7-day default would destroy the forensic
+// trail that `crm-admin --list-jobs` (and any health-check counts over
+// river_job) rely on. Single-user row counts are trivial, so we keep discarded
+// jobs for 90 days. Not exposed via config — no caller needs to vary it.
+const riverDiscardedJobRetention = 90 * 24 * time.Hour
+
 // noopJobArgs is the args type for the placeholder worker below. It is
 // never enqueued in production; its sole purpose is to satisfy river's
 // "must have at least one registered worker" invariant when external
@@ -304,6 +311,14 @@ func run() int {
 			river.QueueDefault: {MaxWorkers: cfg.River.WorkerConcurrency},
 		},
 		Workers: riverWorkers,
+		// Dead-letter visibility: the ErrorHandler logs every errored
+		// attempt + panic (ERROR on final-attempt discard, WARN otherwise);
+		// Logger routes River's own internal logs into the zerolog stream
+		// instead of a default slog TextHandler on stdout; the retention raise
+		// keeps discarded rows queryable for forensics.
+		ErrorHandler:                events.NewRiverErrorHandler(logger.Get()),
+		Logger:                      logger.NewSlogLogger(logger.Get()),
+		DiscardedJobRetentionPeriod: riverDiscardedJobRetention,
 	})
 	if err != nil {
 		logger.Fatal().Err(err).Msg("failed to build river client")

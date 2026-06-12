@@ -437,7 +437,7 @@ Redesigned with **three guarantees**:
 
 3. **Atomic finalize.** On step 2 success, the worker updates `state='active'`, `external_task_id=<from response>` in a single `UPDATE` — no race window. Uniqueness on `(contact_id, kind, idempotency_key)` survives the state transition because the index is partial on `deleted_at IS NULL`, not on `state`.
 
-On repeated failure after `MaxAttempts=10` exponential backoff, state stays `pending_remote_create`; an admin alert log fires; the task is still visible in the CRM (just not in Todoist).
+On repeated failure after `MaxAttempts=10` exponential backoff, state stays `pending_remote_create`; an admin alert log fires; the task is still visible in the CRM (just not in Todoist). (The "admin alert log fires" promise is implemented generically by the client-level River `ErrorHandler` added in #459 — it logs every worker-returned error/panic that exhausts attempts at ERROR with `discarded=true`, covering this kind without a per-worker log call. Note: a job discarded by River's JobRescuer after a hard crash bypasses the ErrorHandler, so this covers worker-error/panic discards, not every path to `discarded`.)
 
 **Interaction with response/completion flow:** `FindPendingFollowUp` (`contact_task.sql:137`) is updated to match `state IN ('pending_remote_create', 'active')` so that a response arriving while step 2 is in flight correctly cancels the pending row. `CompleteFollowUp` is extended to:
 - If matched row has `state='active'` with `external_task_id` → close remote + set `state='completed'` (existing path).
@@ -1090,7 +1090,7 @@ PR 9a / PR 9b can run in parallel with PR 10 (independent consumers).
 ### Open for reviewer input
 
 1. **Event retention.** No retention policy in this spec. How long do we keep `event` rows? A year? Indefinite? (Single-user Pi — storage is not urgent.) Suggest: indefinite for now; add retention job when volume justifies.
-2. **Observability.** River ships a Pro dashboard and there's a community OSS view. Do we want to set up a `/admin/river` view now, or defer? (Defer to a follow-up PR; logs + `SELECT FROM river_job` suffices for MVP.)
+2. **Observability.** River ships a Pro dashboard and there's a community OSS view. Do we want to set up a `/admin/river` view now, or defer? (Defer to a follow-up PR; logs + `SELECT FROM river_job` suffices for MVP.) (#459 shipped the logs+CLI level: the River `ErrorHandler` + slog→zerolog bridge route all River internals and job discards/panics into the structured zerolog stream, `crm-admin --list-jobs` / `--retry-job` give a CLI over `river_job`, and a 90d discarded-job retention preserves the forensic trail. A dashboard remains deferred.)
 3. **Multiple consumer workers for the same kind.** Current design: one worker per kind per consumer. If throughput ever matters, scale via `river.Workers.ConcurrencyLimit`. Not an issue at single-user scale.
 4. **Event schema governance.** When we add an event kind or bump payload version, what's the review process? Suggest: treat events like API contracts — new kinds require a spec entry; version bumps require a migration note.
 
