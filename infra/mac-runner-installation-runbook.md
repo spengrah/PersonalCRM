@@ -17,22 +17,27 @@ The committed artifacts (Bucket A, already on `develop`) are inert until the ope
 | `scripts/deploy-mac-daemon.sh` | The build+install primitive (`make mac-daemon` → `crm-mac install --upgrade` → SMAppService re-register → registered-path verify) | Installed alongside reconcile; reconcile delegates the single build to it. |
 | `scripts/setup-mac-deploy.sh` + `make setup-mac-deploy` | One-time idempotent setup: clone, install the bin scripts, scaffold `deploy.env`, render the timer, deferred-load the timer once `deploy.env` is filled | The runbook RUNS this (Phase 2 + Phase 5). |
 | `infra/mac-deploy/xyz.spengrah.crm-mac-deploy.plist.template` | The committed LaunchAgent **timer** template (`__INSTALL_PREFIX__` placeholder; `StartCalendarInterval` + `RunAtLoad`, no `KeepAlive`) | Rendered to `$HOME/Library/LaunchAgents/xyz.spengrah.crm-mac-deploy.plist` by `setup-mac-deploy.sh`; never committed rendered. |
-| `.github/workflows/deploy-mac.yml` | The `push: [main]`-triggered workflow that invokes the installed reconcile script on the `[self-hosted, mac]` runner | The runbook REGISTERS the runner this targets (Phase 1). |
+| `scripts/trigger-mac-deploy.sh` | The runner-side thin trigger: probes the login-session timer is loaded, then `launchctl kickstart`s it (the timer's reconcile does the real build/codesign/install in the login session) | Installed alongside reconcile by `make setup-mac-deploy`; invoked by the workflow. |
+| `.github/workflows/deploy-mac.yml` | The `push: [main]`-triggered workflow that runs the installed `trigger-mac-deploy.sh` on the `[self-hosted, mac]` runner to kickstart the login-session timer (it does NOT invoke reconcile directly — the runner's isolated session cannot codesign) | The runbook REGISTERS the runner this targets (Phase 1). |
 
 Bucket B (this runbook) is: register the Mac as a `[self-hosted, mac]` runner; run `make setup-mac-deploy`; fill `deploy.env`; pre-authorize the codesign key; load the timer; supervised dry-run.
 
 ## 0. Overview & security model
 
-The promotion model is identical to the Pi's, pointed at a second self-hosted runner: `make promote` fast-forwards `main` to a reviewed `develop` SHA → `deploy-mac.yml` fires on the `main` push → the self-hosted **Mac** runner invokes `$HOME/Library/Application Support/crm-mac-deploy/bin/reconcile-mac-daemon.sh`, which does its own fetch + CI-conclusion gate + relevance gate, and rebuilds + reinstalls the `crm-mac` daemon ONLY when `mac-daemon/` actually changed since the installed bundle's `CRMBuildSHA`.
+The promotion model is the Pi's, pointed at a second self-hosted runner — but with a TRIGGER indirection the Pi does not need: `make promote` fast-forwards `main` to a reviewed `develop` SHA → `deploy-mac.yml` fires on the `main` push → the self-hosted **Mac** runner runs `$HOME/Library/Application Support/crm-mac-deploy/bin/trigger-mac-deploy.sh`, which `launchctl kickstart`s the login-session **timer**. The timer's `reconcile-mac-daemon.sh` (in the user's login session) does its own fetch + CI-conclusion gate + relevance gate, and rebuilds + reinstalls the `crm-mac` daemon ONLY when `mac-daemon/` actually changed since the installed bundle's `CRMBuildSHA`.
+
+**Why the trigger indirection (the codesign wall).** A GitHub Actions self-hosted-runner job runs inside an isolated security session — the runner's LaunchAgent carries `SessionCreate=true` — which cannot reach the user's **login Keychain**. So `codesign` against the local self-signed signing identity (whose private key lives only in the login Keychain) fails with `errSecInternalComponent` from a runner-session job. This is an architecture wall: a runner-session job can never codesign. The login-session **timer** (`xyz.spengrah.crm-mac-deploy`, `ProcessType=Background`, no `SessionCreate`) runs in the user's real login session and CAN codesign. So the runner does NOT build — it kickstarts the timer, and launchd runs the timer's reconcile in the TIMER's login-session context (not as a child of the runner's isolated session), where codesign works. Two contexts, one job each: **runner = isolated session = trigger only; timer = login session = does the real work.**
+
+**Fire-and-forget.** `launchctl kickstart` returns as soon as launchd accepts the start — it does NOT wait for reconcile. So the runner's green check means "the trigger was SENT", NOT "the deploy succeeded". The real deploy result is on **ntfy** + the timer's `reconcile-stdout.log` / `reconcile-stderr.log`. The timer LaunchAgent MUST be loaded (`make setup-mac-deploy`) for kickstart to have a target — it is now **load-bearing for on-promote deploys**, not just the offline catch-up. A not-loaded timer (or no gui session) makes the runner job go red; the deploy is not lost (the timer's `RunAtLoad` converges on next login).
 
 **Security posture — INVERTED relative to the Pi.** The Pi runbook goes to great lengths to keep the runner identity (`gha-runner`) distinct from the workload identity (`crm`) and root, gated by a single sudoers line. The Mac does the OPPOSITE, by necessity:
 
 - **The Mac runner runs AS THE LOGGED-IN USER, in the login (gui) session.** This is not a convenience — it is REQUIRED:
   - `codesign` must sign against the user's **login Keychain** (the local self-signed Code Signing certificate lives there). A daemon/system context cannot reach the login Keychain.
   - `SMAppService` registration is a **gui-domain** operation (`launchctl … gui/$(id -u)`). The daemon is a per-user LaunchAgent; registering/booting it out requires the user's gui domain, which only exists inside a login session.
-- **NO dedicated system user, NO sudoers, NO root.** There is no `gha-runner`-equivalent account, no `/etc/sudoers.d/` drop-in, no privileged script. The entire Mac deploy capability is "run `make mac-daemon` + `crm-mac install --upgrade` as you." `deploy-mac.yml` has no `sudo` and no checkout; the workflow's whole body is the one `run:` line that invokes the installed reconcile script.
+- **NO dedicated system user, NO sudoers, NO root.** There is no `gha-runner`-equivalent account, no `/etc/sudoers.d/` drop-in, no privileged script. The entire Mac deploy capability is "run `make mac-daemon` + `crm-mac install --upgrade` as you." `deploy-mac.yml` has no `sudo` and no checkout; the workflow's whole body is the one `run:` step that runs the installed `trigger-mac-deploy.sh` to kickstart the login-session timer. The real build+sign+install runs in the timer's login session — the runner job (isolated session) only fires the trigger.
 - **Trust boundary.** The CI surface (the runner) IS the user. A compromise of the runner is a compromise of the logged-in account. This is a conscious, documented trade (spec § Runner security posture): acceptable for a **private, single-author, PR-gated** repository where every promoted SHA is already reviewed + CI-green on `develop`. The runner only ever runs reviewed code (`deploy-mac.yml` is `push: [main]`-only — never `develop`, never `pull_request` — so fork/PR code never reaches the Mac runner), and the `production` GitHub Environment enforces the `main`-only rule.
-- **The CI gate's `gh` auth differs by trigger.** The **runner path** (`deploy-mac.yml`) runs `gh` inside a GitHub Actions job, where it does NOT use the runner user's keyring login — so the workflow grants `actions: read` and passes `GH_TOKEN: ${{ github.token }}` to the reconcile step (mirroring `deploy-prod.yml`). The **timer path** (launchd, outside Actions) uses the logged-in user's `gh` keyring auth, so `gh auth status` is a go-live precondition for the timer path only (Phase 4).
+- **The CI gate has ONE `gh`-auth context now: the timer (user keyring).** Reconcile runs only in the user's login session — the runner just kickstarts the timer, it makes NO `gh` calls — so the CI gate always uses the logged-in user's `gh` keyring auth. The runner's old `GITHUB_TOKEN` / `actions: read` plumbing is removed. The go-live precondition is that the active `gh` account resolves the repo + reads Actions, verified with the same `gh repo view` / `gh api` probe the script uses (Phase 4), NOT `gh auth status` (which false-fails on a multi-account keyring).
 
 ## Phase 1 — Register the Mac as a `[self-hosted, mac]` runner (user LaunchAgent, NOT the default LaunchDaemon)
 
@@ -96,19 +101,21 @@ launchctl print "gui/$(id -u)/actions.runner.crm-mac" | grep -E 'state|program'
 # Confirm in repo Settings → Actions → Runners that "mac-runner" shows Idle with the `mac` label.
 ```
 
-**Validate gui-domain + a real SMAppService op from a test job** — the whole point of running as a user LaunchAgent is that the runner job inherits the gui domain. Prove it BEFORE relying on it for a deploy. Run a throwaway workflow (or a `workflow_dispatch` job) on the `[self-hosted, mac]` runner whose only steps are:
+**Validate gui-domain from a test job (runner-health check, NOT the deploy path).** After the trigger redesign the runner job only `launchctl kickstart`s the login-session timer — it does NOT codesign or run SMAppService ops itself (those run in the timer's reconcile, in the login session). So these checks confirm the runner is **online + login-session-scoped**, not that "the runner can deploy" (the deploy path is the kickstart→timer→reconcile crossing, validated in Phase 5). Run a throwaway workflow (or a `workflow_dispatch` job) on the `[self-hosted, mac]` runner whose only steps are:
 
 ```bash
 # (a) the gui domain exists for this job (NOT just for an interactive shell):
 launchctl print "gui/$(id -u)" >/dev/null && echo "GUI_DOMAIN_OK"
 
-# (b) a real, read-only SMAppService op resolves the installed daemon's state
-#     (this exercises the gui-domain + login-Keychain path WITHOUT a deploy):
+# (b) (optional, runner-health only) a read-only SMAppService op resolves the
+#     installed daemon's state from the job. NOTE: the runner job no longer needs
+#     this for the deploy (the deploy's SMAppService ops run in the timer's
+#     reconcile), but it's a useful confirmation the job sees the gui domain:
 "$HOME/Library/Application Support/crm-mac/crm-mac.app/Contents/MacOS/crm-mac" status
 # expect: installed=true / registered=true / registration_status=enabled
 ```
 
-If `launchctl print gui/$(id -u)` fails inside the job, the runner is NOT in the gui session (it was installed as a LaunchDaemon, or bootstrapped into the wrong domain) — fix the LaunchAgent wiring before proceeding. A `crm-mac status` that errors with no gui domain is the same signal.
+If `launchctl print gui/$(id -u)` fails inside the job, the runner is NOT in the gui session (it was installed as a LaunchDaemon, or bootstrapped into the wrong domain) — fix the LaunchAgent wiring before proceeding. This is the same `gui/$(id -u)` domain the kickstart targets: if the runner job can't see it, `trigger-mac-deploy.sh`'s `launchctl print` probe will go red (D4/R2).
 
 Rationale:
 
@@ -128,7 +135,7 @@ On a clean first run it:
 
 - creates the deploy-root skeleton `$HOME/Library/Application Support/crm-mac-deploy/` + `bin/`;
 - clones the repo into `$HOME/Library/Application Support/crm-mac-deploy/repo` (the dedicated clone reconcile fetches/builds from — kept separate from your dev tree);
-- installs `reconcile-mac-daemon.sh` + `deploy-mac-daemon.sh` (mode `0755`) to the **stable bin path** `$HOME/Library/Application Support/crm-mac-deploy/bin/` — **this is the exact path `deploy-mac.yml` invokes** (`$HOME/Library/Application Support/crm-mac-deploy/bin/reconcile-mac-daemon.sh`), so it must not drift;
+- installs `reconcile-mac-daemon.sh` + `deploy-mac-daemon.sh` + `trigger-mac-deploy.sh` (mode `0755`) to the **stable bin path** `$HOME/Library/Application Support/crm-mac-deploy/bin/` — **`trigger-mac-deploy.sh` here is the exact path `deploy-mac.yml` invokes** (`$HOME/Library/Application Support/crm-mac-deploy/bin/trigger-mac-deploy.sh`), so it must not drift;
 - scaffolds `deploy.env` (`chmod 600`) at `$HOME/Library/Application Support/crm-mac-deploy/deploy.env` if absent — **never overwriting an existing one** (it carries the codesign identity + ntfy topic);
 - renders the timer LaunchAgent from `infra/mac-deploy/xyz.spengrah.crm-mac-deploy.plist.template` to `$HOME/Library/LaunchAgents/xyz.spengrah.crm-mac-deploy.plist` (substituting `__INSTALL_PREFIX__` → the absolute deploy root) and records the committed template's content hash to `$HOME/Library/Application Support/crm-mac-deploy/.installed-template-hash` for reconcile's drift detection;
 - **DEFERS loading the timer** because `deploy.env` is a fresh, empty scaffold.
@@ -140,7 +147,7 @@ The deferred-load guard is the critical safety property: the timer is `RunAtLoad
 [setup-mac-deploy] then re-run `make setup-mac-deploy`.
 ```
 
-It also reports the `gh auth` status (the CI gate depends on it — see Phase 4). Re-running this step is safe: it does not re-clone, does not overwrite `deploy.env`, re-renders the plist, and only loads the timer once `deploy.env` is fully filled.
+It also reports `gh repo access` (whether the active `gh` account resolves the repo — what the CI gate actually probes, see Phase 4). Re-running this step is safe: it does not re-clone, does not overwrite `deploy.env`, advances the clone's working tree to `origin/main` (the source-of-truth fix — so a re-run installs the SAME content reconcile would), re-renders the plist, and only loads the timer once `deploy.env` is fully filled.
 
 ## Phase 3 — Fill in `deploy.env` (chmod 600, never committed) + mandatory validation gate
 
@@ -191,40 +198,66 @@ security set-key-partition-list \
 
 If signing fails post-lock, the login Keychain is auto-locking; resolve it in Keychain Access (the login Keychain's "Lock after / on sleep" settings) rather than weakening the partition-list grant.
 
-**`gh auth status` precondition (timer path).** The **timer-fired** reconcile runs `gh` outside Actions and queries `ci.yml`'s conclusion via the logged-in user's `gh` CLI. If `gh` is not authed (or lacks Actions read access), the timer's CI gate cannot run — reconcile surfaces this as a low-priority informational ntfy (`Mac deploy: CI gate could not be queried`) and skips, rather than deploying blind. (The **runner-fired** path does not depend on this — it uses the workflow `GITHUB_TOKEN` with `actions: read`.) Confirm `gh` is authed before go-live:
+**`gh` go-live precondition — the targeted probe, NOT `gh auth status`.** Reconcile always runs in the login session now and queries `ci.yml`'s conclusion via the logged-in user's `gh` CLI. If the active `gh` account cannot resolve the repo or read Actions, the CI gate cannot run — reconcile surfaces this as a low-priority informational ntfy (`Mac deploy: CI gate could not be queried`) and skips, rather than deploying blind. Do NOT gate on `gh auth status`: it false-fails on a multi-account keyring where one configured account is unreadable even when the active account works (this is exactly why the script's `gh auth status` precheck was removed). Instead verify the SAME thing `ci_gate()` does:
 
 ```bash
-gh auth status   # must show "Logged in to github.com" with repo + Actions read access
+# (a) the active account resolves the repo:
+gh repo view spengrah/PersonalCRM --json nameWithOwner
+# (b) the active account can read Actions runs (the CI-conclusion query):
+gh api "repos/spengrah/PersonalCRM/actions/workflows/ci.yml/runs?per_page=1" >/dev/null && echo "ACTIONS_READ_OK"
 ```
 
-`make setup-mac-deploy` (Phase 2) also reports this; treat a `NOT authed` line as a go-live blocker and run `gh auth login`.
+A non-zero on EITHER is the real go-live blocker — run `gh auth login` (and select the account that has repo + Actions read). `make setup-mac-deploy` (Phase 2) reports the `gh repo access` line for the same reason; treat a `FAILED` line as a go-live blocker.
 
-## Phase 5 — Re-run `make setup-mac-deploy` to LOAD the timer, then supervised dry-run
+## Phase 5 — Required rollout SEQUENCE (promote-first), then LOAD the timer + supervised dry-run
 
-Now that `deploy.env` carries a real identity + ntfy config (validated in Phase 3), re-run setup to LOAD the timer:
+### The required rollout SEQUENCE for the trigger redesign: PROMOTE FIRST, then setup against new `main`
 
-```bash
-make setup-mac-deploy
-```
+The kickstart redesign changes the safe rollout order. Reconcile is hardwired to converge to `origin/main`, the timer is `RunAtLoad`, and setup's timer reload fires reconcile immediately — so running setup while `main` is still OLD would fire an old-`main` reconcile that reverts the just-installed scripts. **Inverting the order — promote first, then setup against the now-new `main` — eliminates every old-`main`-reconcile hazard at the root.** Do this once, when landing this redesign:
 
-This second run satisfies the deferred-load guard (all three `deploy.env` vars set), so `setup-mac-deploy.sh` now `launchctl bootout`s any stale timer then `launchctl bootstrap`s `xyz.spengrah.crm-mac-deploy` into `gui/$(id -u)`. It prints `timer: LOADED`. Confirm:
+1. **Merge to `develop`, then `make promote`.** The `main` push fires `deploy-mac.yml`; the runner's `[ -x "$TRIGGER" ]` guard **FAILS RED** because `trigger-mac-deploy.sh` isn't installed in the bin dir yet. **This red is EXPECTED and benign** — a one-time bootstrap artifact: no deploy was attempted, nothing is half-installed, and the log shows the actionable message `trigger script not installed — run make setup-mac-deploy on the Mac` (NOT a deploy failure). No reconcile ran (the guard fails before any kickstart).
+   - **The red `deploy-mac` check persists as a failed-run signal but blocks nothing** — the Pi prod deploy is a separate workflow (`deploy-prod.yml`) with its own gating, `main` is not branch-protected on `deploy-mac`, and `make promote` is a plain push. A dashboard glance will show a failed `Deploy Mac Daemon` run; recognize it as this documented bootstrap artifact. After step 2, you may OPTIONALLY re-run the `deploy-mac` workflow from the Actions UI — the trigger script is now installed, so the re-run goes green (it kickstarts the already-deployed timer = a clean no-op) and clears the lingering red. The re-run is cosmetic (the deploy already landed in step 2).
+2. **On the Mac, FIRST confirm no reconcile is running, THEN `make setup-mac-deploy`.** Between step 1's promote and now, the already-loaded (old) timer can fire on its `StartCalendarInterval` schedule, and setup's timer reload does `launchctl bootout` then `bootstrap` — booting out a reconcile mid-build/codesign is exactly the "kill mid-codesign" hazard the redesign avoids. So before running setup, verify the reconcile lock dir is absent:
 
-```bash
-launchctl print "gui/$(id -u)/xyz.spengrah.crm-mac-deploy" | grep -E 'state|program'
-# program → $HOME/Library/Application Support/crm-mac-deploy/bin/reconcile-mac-daemon.sh
-```
+   ```bash
+   LOCK="$HOME/Library/Application Support/crm-mac-deploy/reconcile.lock"
+   [ ! -d "$LOCK" ] && echo "QUIESCENT — safe to run setup" || echo "RECONCILE RUNNING — wait for it to clear"
+   ```
 
-Because the timer is `RunAtLoad`, bootstrapping it fires reconcile once immediately — this is the first real reconcile run. Subscribe to the ntfy topic first so the notifications are observable.
+   If the lock is present, confirm via `reconcile-stdout.log` that it's stale, or wait for it to clear (or for the lock's stale-recovery TTL). To minimize the residual TOCTOU (a scheduled fire starting AFTER the lock check but BEFORE setup reaches `bootout`), run setup IMMEDIATELY after the check and avoid the four `StartCalendarInterval` minutes (03/09/15/21:00). Given the ~6h cadence and the supervised one-time nature, this residual is acceptable. Then:
+
+   ```bash
+   make setup-mac-deploy
+   ```
+
+   With `deploy.env` already filled (Phase 3) and the default `CRM_MAC_SETUP_REF=origin/main` now carrying the new content, setup checks out `origin/main`, **installs `trigger-mac-deploy.sh` + the new `reconcile-mac-daemon.sh`**, re-renders the timer plist (picking up `EnvironmentVariables.PATH`) + records its hash (both from `main`), and reloads the timer. The reload's `RunAtLoad` fires reconcile against **NEW `main`** — it finds `gh` (the reloaded timer carries PATH), passes the CI gate, `refresh_tooling` reads the same new `origin/main` content (a no-op), the relevance gate fires if `mac-daemon/` changed, and **the deploy COMPLETES here**. Verify the trigger is installed + the timer carries PATH, and watch ntfy + `reconcile-stderr.log` for the deploy result:
+
+   ```bash
+   [ -x "$HOME/Library/Application Support/crm-mac-deploy/bin/trigger-mac-deploy.sh" ] && echo "TRIGGER INSTALLED"
+   launchctl print "gui/$(id -u)/xyz.spengrah.crm-mac-deploy" | grep -E 'state|program'
+   # program → $HOME/Library/Application Support/crm-mac-deploy/bin/reconcile-mac-daemon.sh
+   plutil -extract EnvironmentVariables.PATH raw "$HOME/Library/LaunchAgents/xyz.spengrah.crm-mac-deploy.plist"
+   # → /opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+   ```
+3. **No re-promote needed** — the deploy landed in step 2's `RunAtLoad` fire against new `main`. Future mac-touching promotes use the normal runner-kickstart path (trigger installed, timer carries PATH).
+
+This inverted order is what makes the rollout SAFE: setup never runs while `main` is stale, so no reconcile ever converges to old content, there is no transient revert / self-heal / race, and no dependency on the removed `gh auth status` precheck. The one-time red on the step-1 bootstrap promote is the documented, expected cost.
+
+> **First-ever install (no prior redesign rollout).** On a brand-new Mac (no runner, no prior timer, no installed bundle) follow Phases 1–4 then run `make setup-mac-deploy` here as the FIRST load — there is no "old timer" to revert, so the promote-first ordering above is the concern only when an OLD installed timer already exists. The deferred-load guard still applies: the timer loads only once `deploy.env` is fully filled.
+
+### Loading the timer (what the setup re-run does)
+
+The setup re-run above satisfies the deferred-load guard (all three `deploy.env` vars set), so `setup-mac-deploy.sh` `launchctl bootout`s any stale timer then `launchctl bootstrap`s `xyz.spengrah.crm-mac-deploy` into `gui/$(id -u)`. It prints `timer: LOADED`. Because the timer is `RunAtLoad`, bootstrapping fires reconcile once immediately. Subscribe to the ntfy topic first so the notifications are observable.
 
 **Supervised dry-run (the real-tool acceptance test).** Mocked unit tests cannot exercise the real `codesign` / `SMAppService` / `plutil` / `gh` path — and the Phase A Pi go-live lesson is that mocked-green tests let two real bugs through. So the dry-run IS the acceptance test for Bucket B. Exercise these cases:
 
 1. **Reboot-before-login (no run while logged out).** Reboot the Mac and leave it at the login window without logging in. Confirm NO reconcile run fires (a user LaunchAgent only loads inside a login session — there is no gui domain at the login window). No ntfy, no build.
 2. **Login (`RunAtLoad` fire).** Log in. The runner LaunchAgent (Phase 1) and the reconcile timer both load; the timer's `RunAtLoad` fires reconcile once. Tail `$HOME/Library/Application Support/crm-mac-deploy/reconcile-stdout.log` and `reconcile-stderr.log` (the rendered timer's `StandardOutPath`/`StandardErrorPath`). On an already-current install it should log a no-op (`no mac-daemon changes since <sha>; no-op`) and exit 0 with no ntfy.
 3. **Screen-locked build.** Lock the screen, then trigger a reconcile that actually rebuilds (e.g. promote a SHA that touches `mac-daemon/`, or invoke the installed reconcile script directly). Confirm the login Keychain stays unlocked → `codesign` succeeds → the build + install completes. This validates the Phase 4 partition-list grant under a locked screen.
-4. **A real promote-triggered runner job.** Run `make promote` for a SHA that touches `mac-daemon/`. Confirm:
-   - the `Deploy Mac Daemon` workflow runs on the `[self-hosted, mac]` runner, with no checkout / no `sudo`, invoking the installed `reconcile-mac-daemon.sh`;
-   - reconcile passes the CI-conclusion gate (CI green for the SHA), the relevance gate fires (`mac-daemon/` changed), and `deploy-mac-daemon.sh` rebuilds + reinstalls;
-   - the health gate parses `crm-mac doctor`'s `agent_service` line by content (`registered (enabled)`), not the exit code.
+4. **A real promote-triggered runner job (the kickstart crossing — R1, the redesign's central bet).** This is the acceptance test for the runner-session→login-session boundary the local unit tests CANNOT cover. Run `make promote` for a SHA that touches `mac-daemon/`. Confirm:
+   - the `Deploy Mac Daemon` workflow runs on the `[self-hosted, mac]` runner, with **no checkout / no `gh` / no `sudo`** — it runs only `trigger-mac-deploy.sh`, which `launchctl print`s + `launchctl kickstart`s the timer. The runner job goes GREEN the instant the trigger is sent (fire-and-forget) — this does NOT mean the deploy succeeded;
+   - **the TIMER-fired reconcile** (NOT the runner job) does the real work — observe via **ntfy + `$HOME/Library/Application Support/crm-mac-deploy/reconcile-stderr.log`**: it passes the CI-conclusion gate (CI green for the SHA), the relevance gate fires (`mac-daemon/` changed), `deploy-mac-daemon.sh` rebuilds + reinstalls (codesign SUCCEEDS — proving the kickstart ran the job in the login session, not the runner's isolated session), and the health gate parses `crm-mac doctor`'s `agent_service` line by content (`registered (enabled)`), not the exit code;
+   - **if codesign still fails** (the reconcile-stderr.log shows `errSecInternalComponent`), the kickstart ran the job in the runner's session after all — R1 is invalidated and an alternative trigger is needed (e.g. the runner writes a sentinel the timer polls). This is the failure mode to watch for.
 
 **Post-deploy stamp confirmation (the build-stamp real-tool acceptance check).** After a successful real upgrade, prove the `CRMBuildSHA` stamp reached the INSTALLED bundle (the one link no unit test covers — `Bundle.main.infoDictionary` resolving from the build-dir bundle through `install --upgrade`):
 
