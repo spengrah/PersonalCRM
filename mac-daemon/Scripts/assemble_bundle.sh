@@ -22,6 +22,15 @@
 #       development rebuilds (Contacts grants still re-prompt — TCC
 #       Contacts subsystem binds to CDHash regardless of DR).
 #
+#   CRM_BUILD_SHA=<git-sha>
+#       If non-empty, stamp the assembled bundle's Contents/Info.plist
+#       with a CRMBuildSHA key carrying this value, BEFORE the codesign
+#       pass (so the key is sealed). `make mac-daemon` sets this to
+#       `git rev-parse HEAD`; the mac-deploy reconcile flow reads the
+#       key back from the installed bundle to decide whether a rebuild
+#       is needed. When unset, no key is written (the byte-identity
+#       parity test relies on this to stay deterministic).
+#
 # Output: a fully-assembled, codesigned crm-mac.app bundle at
 # <bundle_path> with:
 #
@@ -113,6 +122,17 @@ chmod +x "${BUNDLE_PATH}/Contents/MacOS/crm-mac"
 # Copy Info.plist verbatim from the source tree. This is byte-identical
 # to the source file by construction (cp(1) preserves bytes).
 cp "${INFO_PLIST_SOURCE}" "${BUNDLE_PATH}/Contents/Info.plist"
+
+# Optionally stamp the build's git SHA into Contents/Info.plist. Inserted
+# here, BEFORE the codesign pass below, so the key is under the seal. Uses
+# `plutil -replace` (inserts if absent, replaces if present — idempotent;
+# unlike `-insert`, which errors on an existing key). When CRM_BUILD_SHA is
+# unset/empty the plist is left byte-identical to the source so the
+# byte-identity parity test stays deterministic.
+if [ -n "${CRM_BUILD_SHA:-}" ]; then
+    plutil -replace CRMBuildSHA -string "${CRM_BUILD_SHA}" \
+        "${BUNDLE_PATH}/Contents/Info.plist"
+fi
 
 # Write the LaunchAgents plist. The binary path contains the
 # __INSTALL_PREFIX__ placeholder; the Swift installer substitutes the

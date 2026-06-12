@@ -333,7 +333,7 @@ crm-admin:
 mac-daemon:
 	@echo "Building crm-mac (release)..."
 	@cd mac-daemon && swift build -c release
-	@bash mac-daemon/Scripts/assemble_bundle.sh \
+	@CRM_BUILD_SHA="$$(git rev-parse HEAD)" bash mac-daemon/Scripts/assemble_bundle.sh \
 		mac-daemon/.build/release/crm-mac \
 		mac-daemon/.build/release/crm-mac.app \
 		mac-daemon/Sources/crm-mac/Info.plist
