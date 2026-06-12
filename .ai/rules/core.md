@@ -95,7 +95,7 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 | E2E test waiting for page load | Use `domcontentloaded` + `getByRole` with explicit timeout, not `networkidle` |
 | OAuth callback routes inside auth middleware | Register callback routes BEFORE `v1.Use(auth.APIKeyMiddleware)` - external providers can't include API keys |
 | String concat for OAuth redirect params | Use `url.Values{}.Encode()` for ALL redirect query params - prevents injection vulnerabilities |
-| Adding settings hooks without test-map entry | Add new hooks (e.g., use-todoist-accounts.ts) to `frontend/tests/e2e/test-map.json` with `@area:settings` |
+| Adding settings hooks (or any source) without test-map entry | Spec self-entries are now mechanically guarded — `scripts/hooks/test-map-coverage-check.sh` (pre-push LINT) fails the push if any `frontend/tests/e2e/*.spec.ts` is unmapped. An unmapped `frontend/src/`/`backend/internal/` SOURCE file is not push-blocking but produces a loud warning from `make test-e2e-diff`; add a `frontend/tests/e2e/test-map.json` entry mapping it to an `@area` to silence the warning + keep diff-selection accurate (e.g. new hooks like use-todoist-accounts.ts → `@area:settings`) |
 | Redefining helper functions in new repository files | Use existing helpers from `repository/conversions.go` (uuidToPgUUID, stringToPgText, timeToPgTimestamptz) |
 | List display and navigation use different sort defaults | Extract DEFAULT_SORT_FIELD/ORDER constants; use in useState, buildContactUrl, and detail page listContext |
 | SQL queries without ORDER BY for "unsorted" case | Always provide deterministic ordering; arbitrary DB order breaks navigation consistency |
