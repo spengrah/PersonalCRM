@@ -67,6 +67,26 @@ echo '{ "pattern": "x" }' > "$tmp/not-array.json"
 node "$MODULE" "$tmp/not-array.json" "frontend/tests/e2e/contacts.spec.ts" >/dev/null 2>&1; rc=$?
 assert_eq "non-array map -> exit 2 (fail-closed)" "2" "$rc"
 
+# (d) fail-closed: a rule with NO "pattern" key would otherwise become
+# new RegExp(undefined) — a match-ALL regex that marks every spec covered and
+# fails OPEN. It must exit 2 instead.
+cat > "$tmp/missing-pattern.json" <<'JSON'
+[
+  { "tags": ["@area:contacts"] }
+]
+JSON
+node "$MODULE" "$tmp/missing-pattern.json" "frontend/tests/e2e/contacts.spec.ts" >/dev/null 2>&1; rc=$?
+assert_eq "rule missing pattern -> exit 2 (fail-closed, no match-all)" "2" "$rc"
+
+# (d) fail-closed: a rule whose "pattern" is a non-string -> exit 2.
+cat > "$tmp/nonstring-pattern.json" <<'JSON'
+[
+  { "pattern": 123, "tags": ["@area:contacts"] }
+]
+JSON
+node "$MODULE" "$tmp/nonstring-pattern.json" "frontend/tests/e2e/contacts.spec.ts" >/dev/null 2>&1; rc=$?
+assert_eq "rule non-string pattern -> exit 2 (fail-closed)" "2" "$rc"
+
 # (e) empty spec list (no spec argv) -> module exit 2.
 node "$MODULE" "$tmp/map.json" >/dev/null 2>&1; rc=$?
 assert_eq "empty spec list -> exit 2 (fail-closed)" "2" "$rc"
@@ -75,25 +95,16 @@ assert_eq "empty spec list -> exit 2 (fail-closed)" "2" "$rc"
 node "$MODULE" "$tmp/does-not-exist.json" "frontend/tests/e2e/contacts.spec.ts" >/dev/null 2>&1; rc=$?
 assert_eq "missing map file -> exit 2 (fail-closed)" "2" "$rc"
 
-# Wrapper fail-closed: the bash guard must map a non-{0,1} module rc to a non-zero
-# return (never treat an internal error as a pass). We invoke the guard's exact
-# module-call shape against the malformed map and assert the rc-branch verdict.
-# This mirrors run_test_map_coverage's `node ... ; rc=$?; case rc` logic.
-guard_verdict_for_map() {
-  # guard_verdict_for_map <map> <spec...> -> returns the verdict rc the wrapper would return
-  local map="$1"; shift
-  local rc
-  node "$MODULE" "$map" "$@" >/dev/null 2>&1; rc=$?
-  case "$rc" in
-    0) return 0 ;;
-    1) return 1 ;;
-    *) return 1 ;;  # fail-closed: any other rc blocks the push
-  esac
-}
-guard_verdict_for_map "$tmp/bad-json.json" "frontend/tests/e2e/contacts.spec.ts" >/dev/null 2>&1; rc=$?
-assert_eq "wrapper: malformed map -> non-zero verdict (blocks push)" "1" "$rc"
-guard_verdict_for_map "$tmp/map.json" "frontend/tests/e2e/contacts.spec.ts" >/dev/null 2>&1; rc=$?
-assert_eq "wrapper: clean map+matched spec -> zero verdict (passes)" "0" "$rc"
+# Wrapper fail-closed: drive the REAL run_test_map_coverage (sourced above) against
+# an injected map via TEST_MAP_PATH. This exercises the actual command-substitution
+# rc-capture (`offenders="$(node ...)"; rc=$?; case "$rc"`) in the guard — not a
+# reimplementation — so a future regression in that path is caught here. The guard
+# still reads the live tracked spec list via git ls-files, which all map cleanly,
+# so the verdict is driven entirely by the injected map's validity.
+TEST_MAP_PATH="$tmp/bad-json.json" run_test_map_coverage >/dev/null 2>&1; rc=$?
+assert_eq "wrapper: malformed-JSON map -> non-zero verdict (blocks push)" "1" "$rc"
+TEST_MAP_PATH="$tmp/missing-pattern.json" run_test_map_coverage >/dev/null 2>&1; rc=$?
+assert_eq "wrapper: map with patternless rule -> non-zero verdict (blocks push)" "1" "$rc"
 
 # Live-repo regression guard: after the Step-1 backfill the real guard exits 0.
 if run_test_map_coverage >/dev/null 2>&1; then

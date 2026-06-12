@@ -64,4 +64,26 @@ assert_not_contains "does NOT warn on mapped frontend/src file"      "$stderr" "
 assert_contains     "stdout grep pattern carries the mapped tag"     "$stdout" "@area:contacts"
 assert_not_contains "stdout is pure (no warning text leaked to it)"  "$stdout" "WARNING"
 
+# --- base-ref resolver fallback (NO E2E_BASE_REF) ---
+# With E2E_BASE_REF unset and no tracked upstream, the resolver falls back to the
+# first existing ref in origin/develop -> origin/main. Create an origin/develop ref
+# pointing at BASE so the resolver picks it up; the diff over BASE...HEAD then sees
+# the same controlled changes, so the warning still fires on the unmapped file.
+git -C "$tmp" update-ref refs/remotes/origin/develop "$BASE"
+stderr2_file="$tmp/stderr2.txt"
+stdout2="$(cd "$tmp" && E2E_PRINT_ONLY=1 node "$SCRIPT" 2>"$stderr2_file")"
+stderr2="$(cat "$stderr2_file")"
+assert_contains "resolver falls back to origin/develop -> warns on unmapped file" "$stderr2" "backend/internal/foo.go"
+assert_contains "resolver fallback still selects mapped tag"                       "$stdout2" "@area:contacts"
+
+# --- no base ref at all (bare clone): must NOT crash, degrades to empty diff ---
+# Remove origin/develop; with no upstream and no origin/develop/origin/main, the
+# resolver returns origin/main (nonexistent) and the git diff against it must be
+# swallowed to an empty changed set rather than crashing the script.
+git -C "$tmp" update-ref -d refs/remotes/origin/develop
+stdout3="$(cd "$tmp" && E2E_PRINT_ONLY=1 node "$SCRIPT" 2>/dev/null)"; rc3=$?
+assert_eq() { if [[ "$2" == "$3" ]]; then echo "ok: $1"; else echo "FAIL: $1 (expected '$2', got '$3')"; fail=1; fi; }
+assert_eq       "no base ref -> script exits 0 (no crash)" "0" "$rc3"
+assert_contains "no base ref -> still emits a grep pattern (at least @smoke)" "$stdout3" "@smoke"
+
 [[ "$fail" -eq 0 ]] && { echo "ALL PASS"; exit 0; } || { echo "FAILURES"; exit 1; }

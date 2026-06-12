@@ -28,7 +28,10 @@ set -uo pipefail
 run_test_map_coverage() {
   local repo_root map specs offenders rc
   repo_root="$(git rev-parse --show-toplevel)"
-  map="$repo_root/frontend/tests/e2e/test-map.json"
+  # TEST_MAP_PATH lets the self-test drive this real wrapper (incl. its
+  # command-substitution rc-capture below) against an injected malformed map,
+  # so the fail-closed branch is exercised end-to-end and not just reimplemented.
+  map="${TEST_MAP_PATH:-$repo_root/frontend/tests/e2e/test-map.json}"
 
   # Tracked top-level specs only. An untracked new spec is in-progress work and
   # shouldn't block; once committed it's caught. The glob is non-recursive so

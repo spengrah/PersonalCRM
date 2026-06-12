@@ -42,11 +42,20 @@ const resolveBaseRef = () => {
 const baseRef = resolveBaseRef()
 
 const readChangedFiles = command => {
-  const output = execSync(command, {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'inherit'],
-    cwd: repoRoot,
-  }).trim()
+  let output
+  try {
+    output = execSync(command, {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      cwd: repoRoot,
+    }).trim()
+  } catch {
+    // A `git diff` against a base ref that doesn't exist (e.g. a bare clone with
+    // neither origin/develop nor origin/main) throws. Degrade to an empty changed
+    // set — selection falls back to @smoke and the warning fires on nothing —
+    // rather than crashing the whole diff-selection run.
+    return []
+  }
 
   return output.length ? output.split('\n').map(line => line.trim()).filter(Boolean) : []
 }

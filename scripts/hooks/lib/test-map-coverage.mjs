@@ -31,7 +31,16 @@ function main(argv) {
 
   // Compile every pattern up front so a bad regex fails the run (exit 2) rather
   // than silently never matching (which would look like a drift offender, exit 1).
-  const regexes = mapping.map(rule => new RegExp(rule.pattern))
+  // Validate the rule shape FIRST: a rule with no `pattern` (or a non-string one)
+  // would otherwise become `new RegExp(undefined)` — a valid match-ALL regex that
+  // marks every spec covered and fails OPEN (exit 0). Reject it so a malformed map
+  // entry fails closed (exit 2).
+  const regexes = mapping.map((rule, i) => {
+    if (typeof rule?.pattern !== 'string') {
+      throw new Error(`${mapPath}: rule[${i}] has a missing or non-string "pattern"`)
+    }
+    return new RegExp(rule.pattern)
+  })
 
   const offenders = specPaths.filter(spec => !regexes.some(re => re.test(spec)))
 
