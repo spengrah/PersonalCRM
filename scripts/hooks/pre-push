@@ -17,6 +17,11 @@
 # NOT gated by should_skip_tests — it runs whenever lint is enabled (matching the
 # prior always-run-lint behavior).
 #
+# A promotion push to main (git push origin develop:main / make promote) skips all
+# of these checks: every pushed ref targets refs/heads/main, whose content was
+# already reviewed + CI-green on develop, and deploy-prod.yml re-verifies CI for the
+# SHA before deploying.
+#
 # To bypass (not recommended): git push --no-verify
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -160,7 +165,7 @@ any_file_under_macdaemon() {
 should_skip_tests() {
   # Case 1: No pushed files trigger tests
   local remote_branch
-  remote_branch=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null) || remote_branch="origin/main"
+  remote_branch=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null) || remote_branch="origin/develop"
   local pushed_files
   pushed_files=$(git diff --name-only "$remote_branch"...HEAD 2>/dev/null)
 
@@ -207,7 +212,7 @@ check_swift() {
   fi
 
   local remote_branch changed
-  remote_branch=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null) || remote_branch="origin/main"
+  remote_branch=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null) || remote_branch="origin/develop"
   changed=$(git diff --name-only "$remote_branch"...HEAD 2>/dev/null) || changed=""
 
   if ! any_file_under_macdaemon "$changed"; then
@@ -475,8 +480,22 @@ run_phases_parallel() {
   rm -f $PHASE_TMPFILES
 }
 
+# refs_all_target_main <git-stdin-block>: 0 (true) if the block is non-empty AND
+# EVERY pushed ref's remote_ref (3rd field of `<local_ref> <local_sha>
+# <remote_ref> <remote_sha>`) is refs/heads/main. Empty input -> 1 (false): an
+# empty stdin must NOT skip. A mixed push that includes any non-main remote_ref
+# -> 1 (false): only a pure promotion to main qualifies. Pure (no git/FS calls)
+# so the phase-guard test can source the hook and assert it directly.
+refs_all_target_main() {
+  local refs="$1"
+  [[ -n "$refs" ]] || return 1
+  awk 'NF{print $3}' <<<"$refs" | grep -qv '^refs/heads/main$' && return 1
+  return 0
+}
+
 # Allow tests to source this file for unit-testing the pure functions
-# (file_in_group / any_file_in_groups) without running the hook body.
+# (file_in_group / any_file_in_groups / refs_all_target_main) without running the
+# hook body.
 if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
   return 0 2>/dev/null || true
 fi
@@ -487,6 +506,19 @@ cd "$PROJECT_ROOT"
 if [[ ! -f "$CONFIG_FILE" ]]; then
   echo "Warning: No $CONFIG_FILE found, skipping pre-push checks" >&2
   exit 0
+fi
+
+# A promotion to main (git push origin develop:main / make promote) only carries
+# content already reviewed + CI-green on develop, and deploy-prod.yml re-verifies
+# CI for the SHA before deploying — so the local pre-push checks are redundant for
+# it. If EVERY pushed ref targets refs/heads/main, skip. Guard on [ -t 0 ] so a
+# manual/terminal invocation (no git stdin) never blocks on the read.
+if [ ! -t 0 ]; then
+  _pp_refs="$(cat)"
+  if refs_all_target_main "$_pp_refs"; then
+    echo "Pre-push: promotion to main -> skipping local checks (content gated on develop CI; deploy-prod.yml re-verifies CI for the SHA)." >&2
+    exit 0
+  fi
 fi
 
 # Temp files for parallel execution results

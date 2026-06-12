@@ -53,6 +53,13 @@ See `.ai/rules/code-review.md` for details
 - Commit logical units of work, not partial changes
 - Use conventional branches (feat/, fix/, refactor/, docs/, test/, chore/)
 
+### Branch model: `develop` (default) + `main` (prod)
+
+- The default branch is `develop`. ALL PRs target `develop` (protected: requires a PR + green CI).
+- `main` is prod and is fast-forward-only from `develop` — never commit or open PRs directly against it.
+- Promote with `make promote` (`git push origin develop:main`), which triggers the self-hosted-runner prod deploy via `deploy-prod.yml`.
+- Pushes to `main` skip the local pre-push checks: the content was already reviewed + CI-gated on `develop`, and `deploy-prod.yml` re-verifies CI for the SHA before deploying.
+
 ## Layered Architecture
 
 ```
@@ -136,8 +143,8 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 | Holding `pgx.Tx` open across external HTTP calls in consumers | Commit DB writes first, then call external APIs (Todoist, etc.) in a post-commit closure. Blocking the tx on network I/O stalls the connection pool and risks deadlocks |
 | `river.Client.Start(ctx)` with a timeout-derived context | River silently stops fetching jobs when its fetch-loop ctx cancels. Pass the outer root context (never `context.WithTimeout(...)`). Applies to test harnesses too — use the test's base ctx, not a per-test timeout ctx |
 | Echoing API keys or other secrets in bash commands or tool descriptions | Session transcripts persist across conversations. Read secrets inline from `.env` on the target host without emitting them: `ssh host "API_KEY=\$(grep -oP '^API_KEY=\\K.*' /path/.env) curl ..."`. Never include the literal value in a command visible to the transcript. If a secret already leaked into a transcript, rotate it |
-| Integration tests fail with "Contact X should be in list" or limit-based assertions | Test DB (`personal_crm_test`) accumulates state across runs (e.g. 255 contacts). Reduced by toolkit seeding: scope assertions to your namespace (`syntheticNS(t)`) instead of asserting over the whole list/limit window — see `.ai/patterns/synthetic-seed-toolkit.md`. For any unscoped list-bounded test: `make e2e-db` is wired into `test-e2e` but NOT into `test-integration`, so run `make e2e-db` manually before `make test-integration` if it fails. Symptom: tests pass on a fresh DB and on `main`, but fail mid-session after many runs |
-| Test failures during PR rebase work | Verify against `main` first (`git checkout main && make test-integration`) — pre-existing failures (e.g. flaky LONG_TESTS-gated scheduler rescuer tests) are not regressions from your rebase. Distinguish before debugging |
+| Integration tests fail with "Contact X should be in list" or limit-based assertions | Test DB (`personal_crm_test`) accumulates state across runs (e.g. 255 contacts). Reduced by toolkit seeding: scope assertions to your namespace (`syntheticNS(t)`) instead of asserting over the whole list/limit window — see `.ai/patterns/synthetic-seed-toolkit.md`. For any unscoped list-bounded test: `make e2e-db` is wired into `test-e2e` but NOT into `test-integration`, so run `make e2e-db` manually before `make test-integration` if it fails. Symptom: tests pass on a fresh DB and on `develop`, but fail mid-session after many runs |
+| Test failures during PR rebase work | Verify against `develop` first (`git checkout develop && make test-integration`) — pre-existing failures (e.g. flaky LONG_TESTS-gated scheduler rescuer tests) are not regressions from your rebase. Distinguish before debugging |
 | Deleting tests in one commit with "Step N adds replacements" promissory note | Delete tests in the SAME commit as their replacements, or keep old tests until the new ones land and delete in a follow-up commit. A promissory deletion stranded between commits (e.g. long agent work hits auth failure mid-task) leaves the branch in a broken-tests state |
 | Two-phase updates (`UpdateContact` → `ApplyContactByOverride`) returning a stale struct | The second write bumps `updated_at` and any columns it touches, but the struct returned from the first write is NOT refreshed. Refetch via `repo.GetContact(ctx, id)` inside the same tx after the second update, before returning. Applies to any two-phase write pattern where columns in the returned struct may change |
 | Inline comments referencing `PR #N`, `Step N`, `Decision N`, `Round-N`, plan names, or "this fix" | These metadata references rot the moment the PR merges. Strip them — keep the underlying rationale (why the code behaves this way) but drop the scaffolding (which PR / step / decision it came from). The PR description is the right home for that context. Applies to `.go`, `.sql`, and any source file comments; documentation (`.md`, `README`, `CHANGELOG`) is allowed to cite PRs |
