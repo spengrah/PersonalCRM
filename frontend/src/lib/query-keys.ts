@@ -54,6 +54,7 @@ export const syncKeys = {
   states: () => [...syncKeys.all, 'states'] as const,
   state: (source: string, accountId?: string) =>
     [...syncKeys.all, 'state', source, accountId] as const,
+  staleness: () => [...syncKeys.all, 'staleness'] as const,
 }
 
 // Contact task query keys
