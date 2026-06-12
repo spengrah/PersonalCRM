@@ -439,6 +439,10 @@
     "tags": ["@area:contacts"]
   },
   {
+    "pattern": "^frontend/tests/e2e/gchat-contact-signal\\.spec\\.ts$",
+    "tags": ["@area:contacts"]
+  },
+  {
     "pattern": "^frontend/tests/e2e/rematch-on-add-email\\.spec\\.ts$",
     "tags": ["@area:contacts", "@area:meetings"]
   },
@@ -509,5 +513,49 @@
   {
     "pattern": "^backend/migrations/032_",
     "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^backend/internal/google/gchat.*\\.go$",
+    "tags": ["@area:contacts", "@area:settings"]
+  },
+  {
+    "pattern": "^backend/internal/google/gmail.*\\.go$",
+    "tags": ["@area:imports", "@area:contacts"]
+  },
+  {
+    "pattern": "^backend/internal/google/correspondence_rederive\\.go$",
+    "tags": ["@area:imports"]
+  },
+  {
+    "pattern": "^backend/internal/db/queries/comms_message\\.sql$",
+    "tags": ["@area:imports", "@area:contacts"]
+  },
+  {
+    "pattern": "^backend/internal/repository/comms_message\\.go$",
+    "tags": ["@area:imports", "@area:contacts"]
+  },
+  {
+    "pattern": "^backend/internal/service/(email|gchat)_reconcile\\.go$",
+    "tags": ["@area:settings", "@area:contacts"]
+  },
+  {
+    "pattern": "^backend/internal/consumer/email_interaction\\.go$",
+    "tags": ["@area:contacts", "@area:overdue"]
+  },
+  {
+    "pattern": "^backend/internal/consumer/interaction_recorder\\.go$",
+    "tags": ["@area:contacts", "@area:overdue"]
+  },
+  {
+    "pattern": "^backend/internal/consumer/(aggregator_reenqueuer|comms_aggregator_reenqueuer|messages_aggregator_reenqueuer)\\.go$",
+    "tags": ["@area:imports", "@area:contacts"]
+  },
+  {
+    "pattern": "^backend/internal/messaging/aggregation/",
+    "tags": ["@area:imports", "@area:contacts"]
+  },
+  {
+    "pattern": "^backend/internal/scheduler/messaging_aggregate.*\\.go$",
+    "tags": ["@area:imports", "@area:contacts"]
   }
 ]
