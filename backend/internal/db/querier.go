@@ -237,6 +237,11 @@ type Querier interface {
 	// behavior without inlining raw SQL (core.md rule 2).
 	CountRiverJobsBySourceArgForTest(ctx context.Context, source string) (int64, error)
 	CountSearchContacts(ctx context.Context, arg CountSearchContactsParams) (int64, error)
+	// Test-only: counts ALL breach rows (open or resolved) for an account_id. The
+	// production read path exposes open breaches only, so the retention test uses
+	// this to confirm resolved history was (or was not) pruned. Production code
+	// never calls this.
+	CountStalenessBreachesByAccountForTest(ctx context.Context, accountID string) (int64, error)
 	CountSyncLogsByState(ctx context.Context, syncStateID pgtype.UUID) (int64, error)
 	CountTelegramMessagesByChat(ctx context.Context) ([]*CountTelegramMessagesByChatRow, error)
 	CountTelegramMessagesByPeer(ctx context.Context) ([]*CountTelegramMessagesByPeerRow, error)

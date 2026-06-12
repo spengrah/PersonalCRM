@@ -11,6 +11,21 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const CountStalenessBreachesByAccountForTest = `-- name: CountStalenessBreachesByAccountForTest :one
+SELECT COUNT(*) FROM sync_staleness_breach WHERE account_id = $1
+`
+
+// Test-only: counts ALL breach rows (open or resolved) for an account_id. The
+// production read path exposes open breaches only, so the retention test uses
+// this to confirm resolved history was (or was not) pruned. Production code
+// never calls this.
+func (q *Queries) CountStalenessBreachesByAccountForTest(ctx context.Context, accountID string) (int64, error) {
+	row := q.db.QueryRow(ctx, CountStalenessBreachesByAccountForTest, accountID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const DeleteResolvedStalenessBreachesBefore = `-- name: DeleteResolvedStalenessBreachesBefore :exec
 DELETE FROM sync_staleness_breach
 WHERE resolved_at IS NOT NULL AND resolved_at < $1

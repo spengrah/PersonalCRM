@@ -64,3 +64,10 @@ WHERE id = @id AND resolved_at IS NULL;
 -- cutoff. Open breaches (resolved_at IS NULL) are never touched.
 DELETE FROM sync_staleness_breach
 WHERE resolved_at IS NOT NULL AND resolved_at < @cutoff;
+
+-- name: CountStalenessBreachesByAccountForTest :one
+-- Test-only: counts ALL breach rows (open or resolved) for an account_id. The
+-- production read path exposes open breaches only, so the retention test uses
+-- this to confirm resolved history was (or was not) pruned. Production code
+-- never calls this.
+SELECT COUNT(*) FROM sync_staleness_breach WHERE account_id = @account_id;

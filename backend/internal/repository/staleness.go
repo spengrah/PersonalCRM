@@ -140,3 +140,10 @@ func (r *StalenessRepository) DeleteResolvedBefore(ctx context.Context, cutoff t
 	}
 	return nil
 }
+
+// CountBreachesByAccountForTest counts ALL breach rows (open or resolved) for
+// an account_id. TEST ONLY — the production read path exposes open breaches
+// only; the retention test uses this to confirm resolved history was pruned.
+func (r *StalenessRepository) CountBreachesByAccountForTest(ctx context.Context, accountID string) (int64, error) {
+	return r.queries.CountStalenessBreachesByAccountForTest(ctx, accountID)
+}
