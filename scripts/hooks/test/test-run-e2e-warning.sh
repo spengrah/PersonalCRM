@@ -13,6 +13,14 @@
 #   - stdout contains NO warning text (stdout-purity guard for the unconditional
 #     warning-under-print-only decision: the warning must live on stderr only)
 set -u
+# Sanitize hook-inherited git env BEFORE any git command. git exports GIT_DIR to
+# hooks (absolute in linked worktrees), which silently redirects every
+# `git -C "$tmp" ...` below at the REAL repo with work-tree=$tmp: `add -A` wipes
+# the real index down to the temp fixture files, `commit` strands fixture commits
+# on the pushed branch, and `update-ref -d` deletes the real origin/develop
+# tracking ref. Unsetting here restores cwd-based discovery, so the throwaway
+# repo is genuinely isolated (and the node child below inherits the clean env).
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.." || exit 1   # repo root of THIS repo
 SCRIPT="$(pwd)/scripts/run-e2e-local.mjs"
 
