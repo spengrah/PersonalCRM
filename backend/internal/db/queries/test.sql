@@ -709,3 +709,16 @@ INSERT INTO river_job (
     @args, 'sync_provider_account', 3, 1, 'default', 'running',
     1, NOW(), NOW()
 );
+
+-- name: TestInsertRiverJobWithStateForTest :exec
+-- /health river-component integration test only: plant one river_job with an
+-- explicit kind, state, scheduled_at, and (nullable) finalized_at so the
+-- discarded-count / oldest-due / latest-completed-by-kind queries can be
+-- asserted against known values. All timestamps are caller-supplied (no NOW())
+-- so the freshness/age discrimination assertions are deterministic — explicit
+-- finalized_at values hours apart are what make the latest-completed-by-kind
+-- "newest wins" assertion real. Minimal valid row modeled on
+-- TestInsertNonFinalRiverJob: River requires kind, queue, state, args,
+-- metadata, max_attempts.
+INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts, scheduled_at, finalized_at)
+VALUES (@kind, 'default', @state::river_job_state, '{}'::jsonb, '{}'::jsonb, 1, 1, @scheduled_at, @finalized_at);
