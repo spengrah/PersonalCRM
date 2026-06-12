@@ -134,10 +134,16 @@ exit 0
 EOF
 
     # --- stub: curl (health gate + ntfy) ---
-    # The health stub emits the REAL /health payload shape (top-level "status"
-    # plus nested components.database.status) so the matcher is tested against
-    # what the server actually returns. Unhealthy => exit non-zero, modelling the
-    # handler's HTTP 503 + `curl -sf`'s -f flag (which non-zeroes on >=400).
+    # The health stub emits the REAL /health payload shape (top-level "status",
+    # nested components.database.status, AND the version.git_commit the gate's
+    # commit check reads) so the matcher is tested against what the server
+    # actually returns. The git_commit defaults to $VALID_SHA (expanded at
+    # stub-generation time) — the SHA every run_deploy call passes — so every
+    # existing green-path test exercises the commit-MATCH path. A test can
+    # override it per-run via STUB_HEALTH_GIT_COMMIT (kept escaped here so it
+    # resolves at stub-execution time, e.g. a mismatched SHA or "unknown").
+    # Unhealthy => exit non-zero, modelling the handler's HTTP 503 + `curl -sf`'s
+    # -f flag (which non-zeroes on >=400).
     cat > "$SANDBOX/bin/curl" <<EOF
 #!/usr/bin/env bash
 echo "curl \$*" >> "$CALL_LOG"
@@ -146,7 +152,7 @@ case "\$url" in
   *contacts*) echo -n "\${STUB_CADDY_CODE:-200}"; exit 0 ;;
   *8080/health*)
     if [ "\${STUB_HEALTH_OK:-1}" = "1" ]; then
-      echo '{"status":"healthy","timestamp":"t","version":{"version":"dev"},"components":{"database":{"status":"healthy","response_time":"1ms"}}}'
+      echo "{\"status\":\"healthy\",\"timestamp\":\"t\",\"version\":{\"version\":\"dev\",\"build_time\":\"t\",\"git_commit\":\"\${STUB_HEALTH_GIT_COMMIT:-$VALID_SHA}\"},\"components\":{\"database\":{\"status\":\"healthy\",\"response_time\":\"1ms\"}}}"
       exit 0
     fi
     # Unhealthy: handler returns 503; with -sf curl writes nothing and non-zeroes.
@@ -350,6 +356,10 @@ test_health_gate_matches_real_payload() {
     # must PASS -> up-to-date deploy exits 0. If the matcher were wrong (e.g. the
     # old flat "database":"healthy" grep), this would fail because the stub now
     # emits the shape the server actually returns.
+    #
+    # The commit-MATCH path is also exercised here (and by every other green-path
+    # test): the stub defaults version.git_commit to $VALID_SHA, which is the SHA
+    # run_deploy passes, so the forward gate's commit check passes on a match.
     make_sandbox
     STUB_MIGRATE_CHECK_RC=0 STUB_HEALTH_OK=1 run_deploy "$VALID_SHA"
     if [ "$RC" -eq 0 ]; then ok; else fail "healthy real payload should pass deploy (exit 0), got $RC ($OUT)"; fi
@@ -359,6 +369,61 @@ test_health_gate_matches_real_payload() {
     make_sandbox
     STUB_MIGRATE_CHECK_RC=0 STUB_HEALTH_OK=0 run_deploy "$VALID_SHA"
     if [ "$RC" -eq 1 ]; then ok; else fail "unhealthy /health should fail the gate -> rollback (exit 1), got $RC"; fi
+    cleanup_sandbox
+}
+
+# A different (stamped-but-wrong) 40-hex commit: the wrong image is actually
+# serving. Used by the mismatch + rollback-non-enforcement tests below.
+WRONG_SHA="badc0ffee0123456789abcdef0123456789abcde"
+
+test_health_gate_commit_mismatch_fails() {
+    echo "test: forward gate FAILS when /health reports a different commit"
+    # Up-to-date path: /health is overall-healthy but reports a commit != the
+    # deployed SHA. The forward gate (passed "$SHA") must FAIL on the commit
+    # check -> rollback the image (no DB touched). Use :latest fixtures so the
+    # rollback re-pins the resolved @sha256 digest anchor.
+    make_sandbox latest latest
+    STUB_MIGRATE_CHECK_RC=0 STUB_HEALTH_OK=1 STUB_HEALTH_GIT_COMMIT="$WRONG_SHA" run_deploy "$VALID_SHA"
+    if [ "$RC" -eq 1 ]; then ok; else fail "commit mismatch should fail the gate -> rollback (exit 1), got $RC ($OUT)"; fi
+    # The forward gate must have logged the mismatch (not the unknown-skip).
+    if echo "$OUT" | grep -q 'git_commit does not match'; then ok; else fail "expected a commit-mismatch log line"; fi
+    # Rollback re-pins the OLD digest anchor on both units.
+    if grep -q 'Image=ghcr.io/spengrah/personalcrm-backend@sha256:c91da029' "$BACKEND_UNIT"; then ok
+    else fail "mismatch must re-pin the rollback digest anchor"; fi
+    cleanup_sandbox
+}
+
+test_health_gate_unknown_warns_and_passes() {
+    echo "test: forward gate WARNS and PASSES when /health reports git_commit=unknown"
+    # Re-deploying a pre-stamp image (binary predates the build stamp) reports
+    # git_commit=unknown. The gate must degrade-open: log a skip warning, NOT
+    # fail -> the up-to-date deploy still exits 0.
+    make_sandbox
+    STUB_MIGRATE_CHECK_RC=0 STUB_HEALTH_OK=1 STUB_HEALTH_GIT_COMMIT="unknown" run_deploy "$VALID_SHA"
+    if [ "$RC" -eq 0 ]; then ok; else fail "unknown commit should warn + pass (exit 0), got $RC ($OUT)"; fi
+    if echo "$OUT" | grep -q 'build not stamped (git_commit=unknown); skipping commit verification'; then ok
+    else fail "expected the unknown-skip warning in the deploy output"; fi
+    cleanup_sandbox
+}
+
+test_rollback_gate_does_not_enforce_commit() {
+    echo "test: rollback's best-effort gate does NOT enforce the commit (no ROLLBACK FAILED)"
+    # Pending path: migrate OK, but the forward gate fails on a commit mismatch
+    # (status healthy, wrong commit) -> ROLLBACK-WITH-RESTORE. The rolled-back
+    # stack still serves the SAME mismatched commit, but the rollback gate is
+    # bare (no expected_sha) so it must NOT enforce the commit and must NOT
+    # convert a clean rollback into ROLLBACK FAILED. Expect the normal
+    # "Rolled back" notification and a clean (restore + re-pin succeeded) exit 1.
+    make_sandbox
+    printf 'NTFY_URL=https://ntfy.example\nNTFY_TOPIC=tok\n' > "$SANDBOX/ntfy.env"
+    NTFY_ENV_FILE_OVERRIDE="$SANDBOX/ntfy.env" \
+      STUB_MIGRATE_CHECK_RC=2 STUB_MIGRATE_RC=0 STUB_HEALTH_OK=1 STUB_HEALTH_GIT_COMMIT="$WRONG_SHA" run_deploy "$VALID_SHA"
+    if [ "$RC" -eq 1 ]; then ok; else fail "commit mismatch after migrate should roll back (exit 1), got $RC ($OUT)"; fi
+    # Restore ran (forward-migrated DB undone).
+    if log_has "restore-db.sh --local --no-app-start"; then ok; else fail "rollback must restore the DB"; fi
+    # The rollback completed normally — "Rolled back", NOT "ROLLBACK FAILED".
+    if grep -F 'curl' "$CALL_LOG" | grep -q 'Title: Rolled back'; then ok; else fail "expected a normal 'Rolled back' notification"; fi
+    if grep -F 'curl' "$CALL_LOG" | grep -q 'Title: ROLLBACK FAILED'; then fail "rollback gate must NOT cause ROLLBACK FAILED"; else ok; fi
     cleanup_sandbox
 }
 
@@ -561,7 +626,7 @@ echo "curl \$*" >> "$CALL_LOG"
 url="\${@: -1}"
 case "\$url" in
   *contacts*) echo -n 200; exit 0 ;;
-  *8080/health*) echo '{"status":"healthy","components":{"database":{"status":"healthy"}}}'; exit 0 ;;
+  *8080/health*) echo "{\"status\":\"healthy\",\"version\":{\"git_commit\":\"$VALID_SHA\"},\"components\":{\"database\":{\"status\":\"healthy\"}}}"; exit 0 ;;
   *3001*) exit 0 ;;
   *ntfy.invalid*) exit 7 ;;
   *) exit 0 ;;
@@ -590,6 +655,9 @@ main() {
     test_migrate_command_line
     test_rootless_env_on_every_call
     test_health_gate_matches_real_payload
+    test_health_gate_commit_mismatch_fails
+    test_health_gate_unknown_warns_and_passes
+    test_rollback_gate_does_not_enforce_commit
     test_exit0_uptodate_no_db
     test_exit1_abort_no_touch
     test_exit_other_abort
