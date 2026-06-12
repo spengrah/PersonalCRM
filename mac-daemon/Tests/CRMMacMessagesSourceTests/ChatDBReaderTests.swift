@@ -37,7 +37,8 @@ final class ChatDBReaderTests: XCTestCase {
         return queue
     }
 
-    /// Insert a message row + its chat_message_join link.
+    /// Insert a message row + its chat_message_join link. `chatRowID`
+    /// nil skips the join (for the unresolvable-outbound case).
     private func insertMessage(
         db: Database,
         rowID: Int64,
@@ -46,25 +47,43 @@ final class ChatDBReaderTests: XCTestCase {
         handleID: Int64?,
         isFromMe: Bool,
         unixDate: TimeInterval,
-        chatRowID: Int64,
-        replyToGUID: String? = nil
+        chatRowID: Int64?,
+        replyToGUID: String? = nil,
+        itemType: Int64 = 0
     ) throws {
         let appleDate = InMemoryChatDB.appleEpochNanos(unix: unixDate)
         let sql = """
             INSERT INTO message (ROWID, guid, text, handle_id, date,
-                                 is_from_me, cache_has_attachments,
+                                 is_from_me, item_type, cache_has_attachments,
                                  associated_message_guid)
-            VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
             """
         try db.execute(sql: sql, arguments: [
             rowID, guid, text,
             handleID as DatabaseValueConvertible? ?? DatabaseValue.null,
-            appleDate, isFromMe ? 1 : 0,
+            appleDate, isFromMe ? 1 : 0, itemType,
             replyToGUID as DatabaseValueConvertible? ?? DatabaseValue.null,
         ])
-        try db.execute(
-            sql: "INSERT INTO chat_message_join (chat_id, message_id) VALUES (?, ?)",
-            arguments: [chatRowID, rowID])
+        if let chatRowID {
+            try db.execute(
+                sql: "INSERT INTO chat_message_join (chat_id, message_id) VALUES (?, ?)",
+                arguments: [chatRowID, rowID])
+        }
+    }
+
+    /// Insert an attachment join with NO attachment-metadata row, so the
+    /// join exists (att_join_id non-NULL) but every metadata column is
+    /// NULL. Exercises the "attachment presence via join, not metadata"
+    /// path.
+    private func insertBareAttachmentJoin(
+        db: Database,
+        joinRowID: Int64,
+        attachmentID: Int64,
+        messageRowID: Int64
+    ) throws {
+        try db.execute(sql:
+            "INSERT INTO message_attachment_join (ROWID, message_id, attachment_id) VALUES (?, ?, ?)",
+            arguments: [joinRowID, messageRowID, attachmentID])
     }
 
     private func insertAttachment(
@@ -163,20 +182,63 @@ final class ChatDBReaderTests: XCTestCase {
                                    direction: .forwardFromExclusive(0),
                                    limit: 10)
         }
-        // Outbound rows have handle_id=NULL in chat.db -> no JOIN
-        // result -> the reader skips them (we filter empty
-        // peerHandleRaw). Outbound peer selection happens via the
-        // outboundGroupPeer/outbound 1:1 lookup, done by the caller
-        // (PayloadShaping) when isFromMe=true.
-        XCTAssertEqual(rows.count, 0,
-                       "outbound rows are not surfaced by fetch() " +
-                       "(no peer); caller resolves outbound peers explicitly")
+        // Outbound rows have handle_id=NULL in chat.db. They ARE now
+        // surfaced with an empty peerHandleRaw; the plugin resolves the
+        // peer via the chat's chat_handle_join entry before shaping.
+        XCTAssertEqual(rows.count, 1)
+        let row = rows[0]
+        XCTAssertEqual(row.guid, "g3")
+        XCTAssertTrue(row.isFromMe)
+        XCTAssertEqual(row.peerHandleRaw, "",
+                       "outbound NULL-handle row surfaces with empty peer for plugin resolution")
+        XCTAssertEqual(row.chatGUID, "iMessage;-;+15551234567")
+    }
+
+    func testOutboundRowWithJoinedHandleKeepsIt() throws {
+        let queue = try makeFixture()
+        try queue.write { db in
+            // Some macOS/SMS variants populate message.handle_id on
+            // outbound rows; the reader uses it directly.
+            try insertMessage(db: db, rowID: 301, guid: "g3b", text: "out",
+                               handleID: 1, isFromMe: true,
+                               unixDate: unix2026, chatRowID: 10)
+        }
+        let rows = try queue.read { db in
+            try ChatDBReader.fetch(db: db,
+                                   direction: .forwardFromExclusive(0),
+                                   limit: 10)
+        }
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertTrue(rows[0].isFromMe)
+        XCTAssertEqual(rows[0].peerHandleRaw, "+15551234567",
+                       "outbound row with a joined handle keeps it")
+    }
+
+    func testOutboundRowNoChatNoHandleSkippedButBoundsAdvance() throws {
+        let queue = try makeFixture()
+        try queue.write { db in
+            // Outbound row with NO handle AND no chat_message_join link:
+            // unresolvable, skipped — but the scanned bounds + inspected
+            // count still cover it so the cursor advances past it.
+            try insertMessage(db: db, rowID: 302, guid: "g3c", text: "out",
+                               handleID: nil, isFromMe: true,
+                               unixDate: unix2026, chatRowID: nil)
+        }
+        let page = try queue.read { db in
+            try ChatDBReader.fetchPage(db: db,
+                                       direction: .forwardFromExclusive(0),
+                                       limit: 10)
+        }
+        XCTAssertEqual(page.rows.count, 0, "unresolvable outbound row skipped")
+        XCTAssertEqual(page.inspected, 1, "the skipped row still counts as inspected")
+        XCTAssertEqual(page.scannedROWIDBounds?.min, 302)
+        XCTAssertEqual(page.scannedROWIDBounds?.max, 302)
     }
 
     func testOutbound1to1PeerLookup() throws {
         let queue = try makeFixture()
         let peer = try queue.read { db in
-            try ChatDBReader.outboundGroupPeer(db: db, chatGUID: "iMessage;-;+15551234567")
+            try ChatDBReader.outboundPeer(db: db, chatGUID: "iMessage;-;+15551234567")
         }
         XCTAssertEqual(peer, "+15551234567")
     }
@@ -184,10 +246,43 @@ final class ChatDBReaderTests: XCTestCase {
     func testOutboundGroupPeerLookupFirstByJoinROWID() throws {
         let queue = try makeFixture()
         let peer = try queue.read { db in
-            try ChatDBReader.outboundGroupPeer(db: db, chatGUID: "iMessage;+;groupX")
+            try ChatDBReader.outboundPeer(db: db, chatGUID: "iMessage;+;groupX")
         }
         XCTAssertEqual(peer, "foo@example.com",
-                       "first non-self handle by chat_handle_join.ROWID order")
+                       "first chat_handle_join entry by join ROWID")
+    }
+
+    func testResolveOutboundPeersMemoizesPerChat() throws {
+        let queue = try makeFixture()
+        try queue.write { db in
+            // Two outbound rows in the 1:1 chat, one in the group chat,
+            // and one in a chat with no chat_handle_join membership.
+            try insertMessage(db: db, rowID: 310, guid: "o1", text: "a",
+                               handleID: nil, isFromMe: true,
+                               unixDate: unix2026, chatRowID: 10)
+            try insertMessage(db: db, rowID: 311, guid: "o2", text: "b",
+                               handleID: nil, isFromMe: true,
+                               unixDate: unix2026, chatRowID: 10)
+            try insertMessage(db: db, rowID: 312, guid: "o3", text: "c",
+                               handleID: nil, isFromMe: true,
+                               unixDate: unix2026, chatRowID: 20)
+            // A chat with a guid but zero chat_handle_join rows.
+            try db.execute(sql:
+                "INSERT INTO chat (ROWID, guid, style, chat_identifier) " +
+                "VALUES (30, 'iMessage;-;orphan', 45, 'orphan')")
+            try insertMessage(db: db, rowID: 313, guid: "o4", text: "d",
+                               handleID: nil, isFromMe: true,
+                               unixDate: unix2026, chatRowID: 30)
+        }
+        let result = try queue.read { db -> [String: String] in
+            let page = try ChatDBReader.fetchPage(
+                db: db, direction: .forwardFromExclusive(0), limit: 10)
+            return try ChatDBReader.resolveOutboundPeers(db: db, rows: page.rows)
+        }
+        XCTAssertEqual(result["iMessage;-;+15551234567"], "+15551234567")
+        XCTAssertEqual(result["iMessage;+;groupX"], "foo@example.com")
+        XCTAssertNil(result["iMessage;-;orphan"],
+                     "chat without chat_handle_join rows is absent from the map")
     }
 
     // MARK: - attachment
@@ -359,6 +454,128 @@ final class ChatDBReaderTests: XCTestCase {
                                    limit: 10)
         }
         XCTAssertEqual(rows.count, 0, "empty handle.id must be skipped")
+    }
+
+    // MARK: - system / group-action rows (item_type guard)
+
+    func testSystemRowsSkippedBothDirections() throws {
+        let queue = try makeFixture()
+        try queue.write { db in
+            // Inbound contentless system row (e.g. group rename, item_type=2)
+            // WITH a handle — currently passes the handle check; the guard
+            // must still drop it.
+            try insertMessage(db: db, rowID: 320, guid: "sys-in", text: nil,
+                               handleID: 3, isFromMe: false,
+                               unixDate: unix2026, chatRowID: 20, itemType: 2)
+            // Outbound contentless system row.
+            try insertMessage(db: db, rowID: 321, guid: "sys-out", text: nil,
+                               handleID: nil, isFromMe: true,
+                               unixDate: unix2026, chatRowID: 20, itemType: 2)
+            // item_type != 0 but WITH text → kept (conjunctive guard).
+            try insertMessage(db: db, rowID: 322, guid: "sys-text", text: "still a message",
+                               handleID: 3, isFromMe: false,
+                               unixDate: unix2026, chatRowID: 20, itemType: 2)
+        }
+        let rows = try queue.read { db in
+            try ChatDBReader.fetch(db: db,
+                                   direction: .forwardFromExclusive(0),
+                                   limit: 10)
+        }
+        XCTAssertEqual(Set(rows.map(\.guid)), ["sys-text"],
+                       "contentless system rows skipped both directions; content-bearing kept")
+    }
+
+    func testSystemRowWithSparseAttachmentKept() throws {
+        let queue = try makeFixture()
+        try queue.write { db in
+            // item_type != 0, no text, but an attachment join exists with
+            // NO metadata row → att_join_id non-NULL while every metadata
+            // column is NULL. Attachment presence comes from the join, so
+            // the row is KEPT.
+            try insertMessage(db: db, rowID: 330, guid: "att-sparse", text: nil,
+                               handleID: 1, isFromMe: false,
+                               unixDate: unix2026, chatRowID: 10, itemType: 2)
+            try insertBareAttachmentJoin(db: db, joinRowID: 70,
+                                         attachmentID: 999, messageRowID: 330)
+        }
+        let rows = try queue.read { db in
+            try ChatDBReader.fetch(db: db,
+                                   direction: .forwardFromExclusive(0),
+                                   limit: 10)
+        }
+        XCTAssertEqual(rows.map(\.guid), ["att-sparse"],
+                       "attachment present via join (not metadata) keeps the row")
+        XCTAssertNil(rows[0].primaryAttachmentUTI,
+                     "metadata columns are still NULL")
+    }
+
+    // MARK: - bounds advance over malformed rows
+
+    func testNullDateRowStillAdvancesScannedBounds() throws {
+        // Real chat.db declares message.date NOT NULL, but the
+        // skip-but-advance contract must hold even for a malformed row:
+        // a row WITH a ROWID but a NULL date is skipped (no mapped
+        // message) yet still counts toward the scanned bounds — nil
+        // bounds would make the backfill runner flip backfillComplete
+        // and orphan every older row. Build a one-off schema with a
+        // nullable date to simulate the corruption.
+        let queue = try DatabaseQueue()
+        try queue.write { db in
+            try db.execute(sql: """
+                CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT, service TEXT);
+                CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, guid TEXT, style INTEGER, chat_identifier TEXT);
+                CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER);
+                CREATE TABLE message (
+                    ROWID INTEGER PRIMARY KEY, guid TEXT, text TEXT,
+                    handle_id INTEGER, date INTEGER, is_from_me INTEGER,
+                    item_type INTEGER NOT NULL DEFAULT 0,
+                    cache_has_attachments INTEGER, associated_message_guid TEXT
+                );
+                CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
+                CREATE TABLE attachment (
+                    ROWID INTEGER PRIMARY KEY, guid TEXT, uti TEXT,
+                    mime_type TEXT, transfer_name TEXT, total_bytes INTEGER
+                );
+                CREATE TABLE message_attachment_join (
+                    ROWID INTEGER PRIMARY KEY, message_id INTEGER, attachment_id INTEGER
+                );
+                INSERT INTO handle (ROWID, id, service) VALUES (1, '+15551234567', 'iMessage');
+                INSERT INTO message (ROWID, guid, text, handle_id, date, is_from_me)
+                    VALUES (900, 'g-nulldate', 'x', 1, NULL, 0);
+                """)
+        }
+        let page = try queue.read { db in
+            try ChatDBReader.fetchPage(db: db,
+                                       direction: .backwardFromExclusive(1000),
+                                       limit: 10)
+        }
+        XCTAssertEqual(page.rows.count, 0, "NULL-date row is skipped")
+        XCTAssertEqual(page.inspected, 1)
+        XCTAssertEqual(page.scannedROWIDBounds?.min, 900,
+                       "bounds cover the malformed row so the cursor advances past it")
+        XCTAssertEqual(page.scannedROWIDBounds?.max, 900)
+    }
+
+    // MARK: - inspected count
+
+    func testInspectedCountsAllSQLRows() throws {
+        let queue = try makeFixture()
+        try queue.write { db in
+            // One kept inbound row, one skipped contentless system row.
+            try insertMessage(db: db, rowID: 340, guid: "keep", text: "hi",
+                               handleID: 1, isFromMe: false,
+                               unixDate: unix2026, chatRowID: 10)
+            try insertMessage(db: db, rowID: 341, guid: "drop", text: nil,
+                               handleID: 1, isFromMe: false,
+                               unixDate: unix2026, chatRowID: 10, itemType: 2)
+        }
+        let page = try queue.read { db in
+            try ChatDBReader.fetchPage(db: db,
+                                       direction: .forwardFromExclusive(0),
+                                       limit: 10)
+        }
+        XCTAssertEqual(page.rows.count, 1, "one row kept")
+        XCTAssertEqual(page.inspected, 2, "inspected counts every SQL row, kept or skipped")
     }
 
     // MARK: - max ROWID

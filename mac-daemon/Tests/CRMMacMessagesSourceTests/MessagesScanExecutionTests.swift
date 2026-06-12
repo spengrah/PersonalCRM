@@ -87,6 +87,42 @@ final class MessagesScanExecutionTests: XCTestCase {
         return dbURL
     }
 
+    /// Build an on-disk chat.db where the scanned handle is a member of
+    /// chat 10 (chat_handle_join), with one OUTBOUND row (is_from_me=1,
+    /// NULL handle) in that chat at ROWID 100. Exercises the scan's
+    /// outbound branch end-to-end.
+    private func makeChatDBWithOutbound(handle: String = "+15550000001") throws -> URL {
+        let dbURL = tempDir.appendingPathComponent("chat.db")
+        let bundle = Bundle.module
+        guard let scriptURL = bundle.url(forResource: "chat_db_schema",
+                                          withExtension: "sql",
+                                          subdirectory: "Fixtures") else {
+            throw XCTSkip("chat_db_schema.sql not in test bundle")
+        }
+        let script = try String(contentsOf: scriptURL, encoding: .utf8)
+        let queue = try DatabaseQueue(path: dbURL.path)
+        let appleNanos = Int64((scannedUnix - 978_307_200) * 1e9)
+        try queue.write { db in
+            try db.execute(sql: script)
+            try db.execute(sql:
+                "INSERT INTO handle (ROWID, id, service) VALUES (1, ?, 'iMessage')",
+                arguments: [handle])
+            try db.execute(sql:
+                "INSERT INTO chat (ROWID, guid, style, chat_identifier) VALUES (10, 'c-out', 45, ?)",
+                arguments: [handle])
+            try db.execute(sql:
+                "INSERT INTO chat_handle_join (chat_id, handle_id) VALUES (10, 1)")
+            try db.execute(sql:
+                "INSERT INTO message (ROWID, guid, text, handle_id, date, " +
+                "is_from_me, item_type, cache_has_attachments, associated_message_guid) " +
+                "VALUES (100, 'out100', 'i texted them', NULL, ?, 1, 0, 0, NULL)",
+                arguments: [appleNanos])
+            try db.execute(sql:
+                "INSERT INTO chat_message_join (chat_id, message_id) VALUES (10, 100)")
+        }
+        return dbURL
+    }
+
     private func makePlugin(
         dbURL: URL,
         store: StateStore,
@@ -165,6 +201,36 @@ final class MessagesScanExecutionTests: XCTestCase {
         let finalCursor = transport.currentDecodedCursor()
         XCTAssertEqual(finalCursor?.pendingScans.count, 0,
                        "exhausted scan dequeued")
+    }
+
+    // MARK: - newly-known scan publishes outbound rows
+
+    func testNewlyKnownScanPublishesOutboundAsSent() async throws {
+        let dbURL = try makeChatDBWithOutbound()
+        let store = makeStateStore()
+        let seeded = inactiveBatchCursor()
+        try store.save(DaemonState(schemaVersion: 1))
+        let cache = KnownIdentifiersCache(
+            baselines: [.messages: []], consumers: [.messages])
+        // The recipient becomes newly-known via a heartbeat fetch.
+        await cache.replace(with: ["+15550000001"])
+
+        let transport = StatefulCursorTransport(
+            initialCursor: try MessagesCursorCodec.encode(seeded))
+        let sink = PublisherSink()
+        let plugin = makePlugin(dbURL: dbURL, store: store, cache: cache,
+                                transport: transport, publisherSink: sink)
+
+        try await plugin.tick()
+
+        let events = await sink.allEvents()
+        let outbound = events.first { $0.sourceID == "out100" }
+        let event = try XCTUnwrap(outbound, "the pending scan published the outbound row")
+        XCTAssertEqual(event.kind, "raw_message.sent",
+                       "newly-known contact's outbound history backfilled as raw_message.sent")
+        // Scan dequeued after exhaustion.
+        let finalCursor = transport.currentDecodedCursor()
+        XCTAssertEqual(finalCursor?.pendingScans.count, 0)
     }
 
     // MARK: - Phase A failure rolls back
@@ -467,6 +533,12 @@ final class StatefulCursorTransport: @unchecked Sendable {
     func currentDecodedCursor() -> MessagesCursorWire? {
         lock.lock(); let cur = currentCursor; lock.unlock()
         return try? MessagesCursorWireCodec.decode(cur)
+    }
+
+    /// Number of successful commit POSTs recorded.
+    func committedCount() -> Int {
+        lock.lock(); defer { lock.unlock() }
+        return committedCursors.count
     }
 
     /// Index of the first committed cursor whose pendingScans carries

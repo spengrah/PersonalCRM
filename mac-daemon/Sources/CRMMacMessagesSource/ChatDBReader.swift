@@ -7,14 +7,15 @@
 // empty for this tick (next tick re-reads).
 //
 // Per-row JOINs:
-//   - message.handle_id -> handle.ROWID  (inbound sender + outbound 1:1 peer)
+//   - message.handle_id -> handle.ROWID  (inbound sender + outbound 1:1
+//     peer on macOS/SMS variants that populate it)
 //   - chat_message_join.message_id -> chat.guid
-//   - message_attachment_join (first by ROWID) -> attachment.uti
+//   - message_attachment_join (first by ROWID) -> attachment.uti +
+//     attachment_id (join-existence ground truth for the content guard)
 //
-// Outbound group-chat peer (is_from_me=1, multi-handle chat): selected
-// from chat_handle_join.ROWID order (first non-self).  This is a v1
-// simplification — every outbound group message attributes to the same
-// peer.
+// Both inbound and outbound (is_from_me=1) rows are surfaced. Outbound
+// rows usually have a NULL handle_id, so their peer is resolved in the
+// plugin layer via outboundPeer (the row's chat_handle_join entry).
 import Foundation
 import GRDB
 
@@ -78,7 +79,10 @@ public enum ChatDBReaderError: Error, Equatable, Sendable {
 ///   - rows: only the rows we kept (after skip filters).
 ///   - scannedROWIDBounds: (min, max) of EVERY row inspected, including
 ///     skipped ones. The caller advances cursors past skipped rows so
-///     a page of all-empty-handle rows doesn't stall the iterator.
+///     a page of all-skipped rows doesn't stall the iterator.
+///   - inspected: count of SQL rows returned (pre-filter). The plugin
+///     consumes its row budget on this so a page of all-skipped rows
+///     still costs budget for the SQL work it did.
 ///   - exhausted: true if SQL returned fewer than `limit` rows (so
 ///     there are no more rows in the requested direction).
 public struct ChatDBReadPage: Equatable, Sendable {
@@ -86,20 +90,26 @@ public struct ChatDBReadPage: Equatable, Sendable {
     /// Min and max of EVERY row's ROWID inspected (including skipped).
     /// Nil if SQL returned zero rows.
     public let scannedROWIDBounds: (min: Int64, max: Int64)?
+    /// Count of SQL rows returned for this page, before skip filters.
+    public let inspected: Int
     public let exhausted: Bool
 
     public init(
         rows: [ChatDBMessage],
         scannedROWIDBounds: (min: Int64, max: Int64)?,
+        inspected: Int,
         exhausted: Bool
     ) {
         self.rows = rows
         self.scannedROWIDBounds = scannedROWIDBounds
+        self.inspected = inspected
         self.exhausted = exhausted
     }
 
     public static func == (lhs: ChatDBReadPage, rhs: ChatDBReadPage) -> Bool {
-        guard lhs.rows == rhs.rows && lhs.exhausted == rhs.exhausted else { return false }
+        guard lhs.rows == rhs.rows
+            && lhs.exhausted == rhs.exhausted
+            && lhs.inspected == rhs.inspected else { return false }
         switch (lhs.scannedROWIDBounds, rhs.scannedROWIDBounds) {
         case (nil, nil): return true
         case let (.some(l), .some(r)): return l == r
@@ -128,12 +138,14 @@ public final class ChatDBReader {
             message.guid                          AS msg_guid,
             message.text                          AS msg_text,
             message.is_from_me                    AS msg_is_from_me,
+            message.item_type                     AS msg_item_type,
             message.date                          AS msg_date,
             message.associated_message_guid       AS msg_reply_to_guid,
             message.handle_id                     AS msg_handle_id,
             handle.id                             AS hnd_id,
             chat.guid                             AS chat_guid,
             chat.style                            AS chat_style,
+            maj_primary.attachment_id             AS att_join_id,
             att.uti                               AS att_uti,
             att.mime_type                         AS att_mime,
             att.transfer_name                     AS att_name,
@@ -152,34 +164,68 @@ public final class ChatDBReader {
 
     /// Map one fetched GRDB row (aliased per `selectColumnsAndJoins`) to
     /// a `ChatDBMessage`. Returns nil for rows that should be SKIPPED:
-    /// missing rowid/guid/date, NULL/empty handle (system messages,
-    /// outbound), or a corrupt/sentinel date. The caller still tracks
+    /// missing rowid/guid/date, a corrupt/sentinel date, a contentless
+    /// system row (item_type != 0 with no text and no attachment), an
+    /// inbound row with no joined handle (system messages with no peer),
+    /// or an outbound row with neither a joined handle nor a chat.guid
+    /// (nothing downstream could attribute it). The caller still tracks
     /// every inspected ROWID (including skipped) for cursor advance.
+    ///
+    /// Outbound rows that survive carry `peerHandleRaw` = the joined
+    /// handle if present, else "" — the plugin resolves the empty case
+    /// via the row's chat_handle_join entry before shaping.
     static func mapMessageRow(_ row: Row) -> ChatDBMessage? {
         guard let rowID: Int64 = row["msg_rowid"],
               let rawDate: Int64 = row["msg_date"],
               let guid: String = row["msg_guid"] else {
             return nil
         }
-        // Skip rows with no handle (system messages, outbound) — no peer
-        // to attribute to and the Pi would no-match anyway.
-        let handleRaw: String = (row["hnd_id"] as String?) ?? ""
-        if handleRaw.isEmpty { return nil }
         // Skip corrupt/sentinel date rows (date == 0 or < ~2017).
         if rawDate < Self.dateSentinelFloor { return nil }
-        let sentAt = Date(timeIntervalSince1970:
-            Self.appleEpochOffset + Double(rawDate) / 1e9)
 
         let isFromMeRaw: Int64 = (row["msg_is_from_me"] as Int64?) ?? 0
+        let isFromMe = isFromMeRaw != 0
+        let handleRaw: String = (row["hnd_id"] as String?) ?? ""
+        let chatGUID: String? = row["chat_guid"]
+
+        // Contentless system row guard (CONJUNCTIVE): drop a row only
+        // when item_type marks it as a non-message AND it carries no
+        // text AND no attachment. Any content-bearing row is kept
+        // regardless of item_type, so this can never drop a real
+        // message even if Apple's private item_type semantics drift.
+        // Attachment presence is the join-existence ground truth
+        // (att_join_id non-NULL), NOT the optional metadata columns,
+        // which can legitimately be NULL on a real attachment row.
+        let itemType: Int64 = (row["msg_item_type"] as Int64?) ?? 0
+        let text: String? = row["msg_text"]
+        let hasText = (text?.isEmpty == false)
+        let hasAttachment = (row["att_join_id"] as Int64?) != nil
+        if itemType != 0 && !hasText && !hasAttachment { return nil }
+
+        if isFromMe {
+            // Outbound: keep with the joined handle if present (some
+            // macOS/SMS variants populate it), else "" for the plugin to
+            // resolve. Skip only when there is also no chat.guid — then
+            // nothing downstream could attribute it and the Pi requires
+            // a non-empty chat_id.
+            if handleRaw.isEmpty && (chatGUID?.isEmpty ?? true) { return nil }
+        } else {
+            // Inbound: a missing joined handle means a system message
+            // with no peer to attribute to.
+            if handleRaw.isEmpty { return nil }
+        }
+
+        let sentAt = Date(timeIntervalSince1970:
+            Self.appleEpochOffset + Double(rawDate) / 1e9)
         let chatStyle: Int64 = (row["chat_style"] as Int64?) ?? 0
 
         return ChatDBMessage(
             rowID: rowID,
             guid: guid,
-            chatGUID: row["chat_guid"],
+            chatGUID: chatGUID,
             peerHandleRaw: handleRaw,
-            text: row["msg_text"],
-            isFromMe: isFromMeRaw != 0,
+            text: text,
+            isFromMe: isFromMe,
             // style 43 is a group chat per Apple's internal convention.
             isGroup: chatStyle == 43,
             sentAt: sentAt,
@@ -251,12 +297,13 @@ public final class ChatDBReader {
         for row in rows {
             // Track every ROWID we saw, including skipped ones — the
             // caller needs this so cursor advance doesn't stall on a
-            // page where every row got filtered out. A row missing the
-            // ROWID or date is not a real message row and is not counted
-            // toward the scanned bounds (matches the pre-extraction
-            // behavior so backfillComplete still flips correctly).
-            guard let rowID: Int64 = row["msg_rowid"],
-                  row["msg_date"] as Int64? != nil else {
+            // page where every row got filtered out. Any row WITH a
+            // ROWID counts toward the bounds even if other columns
+            // (e.g. date) are NULL/corrupt: the backfill runner treats
+            // nil bounds as "iterator exhausted" and flips
+            // backfillComplete, so excluding such rows from the bounds
+            // could end the walk while older rows remain unread.
+            guard let rowID: Int64 = row["msg_rowid"] else {
                 continue
             }
             scannedMin = min(scannedMin ?? rowID, rowID)
@@ -275,20 +322,26 @@ public final class ChatDBReader {
         return ChatDBReadPage(
             rows: results,
             scannedROWIDBounds: bounds,
+            inspected: rows.count,
             exhausted: rows.count < limit)
     }
 
-    /// Outbound group-chat peer selection: smallest `chat_handle_join.ROWID`
-    /// in the chat that is NOT the self-handle.  Returns the raw
-    /// handle.id string, or nil if the chat has no non-self handle.
-    public static func outboundGroupPeer(
+    /// Resolve an outbound row's peer: the `handle.id` of the FIRST
+    /// `chat_handle_join` entry (by join ROWID) for `chatGUID`. Returns
+    /// the raw handle.id string, or nil if the chat has no
+    /// `chat_handle_join` rows.
+    ///
+    /// This covers both 1:1 (the chat's single peer handle) and group
+    /// chats (the first member by join ROWID — the v1 simplification, so
+    /// every outbound group message attributes to the same peer). There
+    /// is NO self-handle exclusion: the query returns the first joined
+    /// handle, full stop. It behaves as "the peer" only because macOS
+    /// does not insert the account owner's own handle into
+    /// chat_handle_join.
+    public static func outboundPeer(
         db: Database,
         chatGUID: String
     ) throws -> String? {
-        // SELECT handle.id FROM chat_handle_join chj
-        //  JOIN chat ON chat.ROWID = chj.chat_id AND chat.guid = ?
-        //  JOIN handle ON handle.ROWID = chj.handle_id
-        //  ORDER BY chj.ROWID ASC LIMIT 1
         let sql = """
             SELECT handle.id AS hid
             FROM chat_handle_join AS chj
@@ -300,5 +353,32 @@ public final class ChatDBReader {
             """
         let row = try Row.fetchOne(db, sql: sql, arguments: [chatGUID])
         return row?["hid"] as String?
+    }
+
+    /// Resolve outbound peers for a page of rows in ONE DB pass-set.
+    /// Collects the distinct `chat.guid`s of outbound rows whose
+    /// `peerHandleRaw` is empty (no joined handle), runs `outboundPeer`
+    /// once per distinct chat (memoized — most rows in a page share a
+    /// few chats), and returns a `chatGUID → raw handle` map. Chats that
+    /// resolve to nothing are simply absent from the map.
+    ///
+    /// Runs inside the same `pool.read` snapshot as the page fetch so a
+    /// transient resolution error lands in the caller's catch path
+    /// (cursor not advanced) rather than silently dropping rows.
+    public static func resolveOutboundPeers(
+        db: Database,
+        rows: [ChatDBMessage]
+    ) throws -> [String: String] {
+        var resolved: [String: String] = [:]
+        var attempted: Set<String> = []
+        for row in rows where row.isFromMe && row.peerHandleRaw.isEmpty {
+            guard let chatGUID = row.chatGUID, !chatGUID.isEmpty else { continue }
+            if attempted.contains(chatGUID) { continue }
+            attempted.insert(chatGUID)
+            if let peer = try outboundPeer(db: db, chatGUID: chatGUID) {
+                resolved[chatGUID] = peer
+            }
+        }
+        return resolved
     }
 }

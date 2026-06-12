@@ -80,6 +80,13 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
     public nonisolated let logger: LoggerProtocol
     public nonisolated let clock: @Sendable () -> Date
     private let healthRegistry: SourceHealthRegistry
+    /// Resolves outbound rows' peers from chat_handle_join. Injected so
+    /// the failure path (a transient DB error during resolution must
+    /// hold the cursor) is testable: an actor can't have an internal
+    /// property mutated from outside, so the collaborator is supplied at
+    /// init. Captured into `pool.read` closures, hence `@Sendable`; the
+    /// non-Sendable `Database` is a parameter, not a capture.
+    private let outboundPeerResolver: @Sendable (Database, [ChatDBMessage]) throws -> [String: String]
 
     /// Cached pool, opened lazily on first successful tick.
     private var pool: DatabasePool?
@@ -108,7 +115,9 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
         cache: KnownIdentifiersCache,
         healthRegistry: SourceHealthRegistry,
         logger: LoggerProtocol,
-        clock: @escaping @Sendable () -> Date = { Date() }
+        clock: @escaping @Sendable () -> Date = { Date() },
+        outboundPeerResolver: @escaping @Sendable (Database, [ChatDBMessage]) throws -> [String: String]
+            = ChatDBReader.resolveOutboundPeers
     ) {
         self.tickInterval = tickInterval
         self.config = config
@@ -120,6 +129,7 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
         self.healthRegistry = healthRegistry
         self.logger = logger
         self.clock = clock
+        self.outboundPeerResolver = outboundPeerResolver
     }
 
     public func performTick() async throws {
@@ -163,6 +173,34 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
         }
 
         var working = cursor
+
+        // One-time outbound re-backfill. Installs whose cursors advanced
+        // while inbound-only emission was in effect never emitted
+        // outbound rows; reset the backfill walk once to re-cover the
+        // span down to the floor. Re-emitted inbound rows dedup at the
+        // Pi; outbound rows emit for the first time. The mutation rides
+        // `working` and persists through whichever commit fires first; if
+        // the tick aborts pre-commit, the next tick recomputes it
+        // (idempotent — the flag is only set once committed).
+        if !working.outboundBackfillDone {
+            if working.installMaxRowID != nil {
+                // Established install: re-walk from the live cursor down.
+                // +1 because the backfill bound is EXCLUSIVE (ROWID < ?)
+                // while the live cursor is INCLUSIVE (the last scanned
+                // row) — the old inbound-only live cursor can sit exactly
+                // ON an outbound row that was scanned but never emitted,
+                // and that row must be inside the re-walk.
+                working.backfillCursor = (working.liveCursor ?? working.installMaxRowID)
+                    .map { $0 + 1 }
+                working.backfillComplete = false
+                logger.info("messages tick: one-time outbound re-backfill armed", metadata: [
+                    "from_rowid": .public(String(working.backfillCursor ?? 0)),
+                ])
+            }
+            // Fresh install (installMaxRowID == nil) just sets the flag —
+            // its normal backfill already emits both directions.
+            working.outboundBackfillDone = true
+        }
 
         // Phase A — durable scan enqueue (commit-first).
         // Drain the cache's newly-added bucket NON-DESTRUCTIVELY and
@@ -220,6 +258,7 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
             now: tickStart)
         var hadRejection = false
         var hadUnconfirmed = false
+        var hadReadFailure = false
 
         // Backfill batch (descending).
         if !working.backfillComplete, budget.rowsRemaining > 0 {
@@ -229,6 +268,7 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
                 budget: &budget)
             if !outcome.rejected.isEmpty { hadRejection = true }
             if outcome.hadUnconfirmedItems { hadUnconfirmed = true }
+            if outcome.readFailed { hadReadFailure = true }
         }
 
         // Live batch (ascending).
@@ -239,14 +279,22 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
                 budget: &budget)
             if !outcome.rejected.isEmpty { hadRejection = true }
             if outcome.hadUnconfirmedItems { hadUnconfirmed = true }
+            if outcome.readFailed { hadReadFailure = true }
         }
 
-        // Commit cursor only if changed, no rejections, AND every
-        // item we tried to publish was confirmed. A transport
-        // failure mid-tick must NOT commit a cursor that skips the
-        // failed rows.
+        // Commit cursor only if changed, no rejections, every item we
+        // tried to publish was confirmed, AND no page read failed. A
+        // transport failure mid-tick must NOT commit a cursor that
+        // skips the failed rows. A read/resolution failure holds this
+        // FINAL commit — batch-cursor advancement past unread rows
+        // never persists, and non-batch mutations made this tick (e.g.
+        // the one-time re-backfill arm) are recomputed next tick. Note
+        // the Phase A/B scan commits earlier in the tick may already
+        // have persisted those non-batch mutations; that is coherent —
+        // the armed walk carries backfillComplete=false and simply
+        // resumes next tick.
         let cursorChanged = working != cursor
-        if cursorChanged && !hadRejection && !hadUnconfirmed {
+        if cursorChanged && !hadRejection && !hadUnconfirmed && !hadReadFailure {
             switch await commitWorking(working) {
             case .committed:
                 logger.debug("messages tick: cursor committed", metadata: [
@@ -264,21 +312,25 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
             logger.warning("messages tick: per-event rejections; holding cursor", metadata: [:])
         } else if hadUnconfirmed {
             logger.warning("messages tick: publish unconfirmed; holding cursor", metadata: [:])
+        } else if hadReadFailure {
+            logger.warning("messages tick: page read failed; holding cursor", metadata: [:])
         }
 
-        // Refresh health snapshot. `last_pushed_at` is sticky across
-        // ticks so the UI reflects the most recent successful push,
-        // not just ticks that emit events.
-        if cursorChanged {
-            stickyLastPushedAt = clock()
-        }
+        // Refresh the health snapshot from the last COMMITTED cursor
+        // (cachedCursor — maintained by commitWorking), never from the
+        // possibly-held `working` copy: a held tick must not advertise
+        // pushed/backfill progress for rows that will be retried.
+        // `stickyLastPushedAt` is likewise maintained by commitWorking,
+        // so it reflects the most recent successful push (including
+        // scan-phase commits), not merely "the cursor changed".
+        let reported = cachedCursor ?? cursor
         await healthRegistry.update(id, await currentHealthSnapshot(
             enabled: true,
             lastScheduled: tickStart,
             lastPushed: stickyLastPushedAt,
-            observed: working.liveCursor,
-            pushed: working.liveCursor,
-            backfillComplete: working.backfillComplete))
+            observed: reported.liveCursor,
+            pushed: reported.liveCursor,
+            backfillComplete: reported.backfillComplete))
     }
 
     // MARK: - cursor commit helper
@@ -321,6 +373,10 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
                 lastPushedAt: clock())
             cachedCursor = working
             lastCommittedCursorJSON = newJSON
+            // Sticky push timestamp tracks every SUCCESSFUL commit (the
+            // end-of-tick health snapshot reads it), so a held tick —
+            // which never reaches this point — advertises no progress.
+            stickyLastPushedAt = clock()
             return .committed
         } catch let PiClientError.cursorConflict(_, current) {
             logger.info("messages tick: cursor conflict, refreshing", metadata: [
@@ -459,15 +515,18 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
             // `since` predates the floor (e.g. queued by an older build).
             // Rows below the floor are never emitted.
             let scanSince = max(entry.since, config.backfillFloor)
-            let page: MessagesScanPage
+            let resolver = outboundPeerResolver
+            let resolved: (page: MessagesScanPage, peers: [String: String])
             do {
-                page = try await pool.read { db in
-                    try MessagesScanReader.scanPage(
+                resolved = try await pool.read { db in
+                    let page = try MessagesScanReader.scanPage(
                         db: db,
                         canonicalHandle: handle,
                         since: scanSince,
                         progressBelowRowID: entry.progressBelowRowID,
                         limit: limit)
+                    let peers = try resolver(db, page.rows)
+                    return (page, peers)
                 }
             } catch let dbError as DatabaseError where isFDAError(dbError) {
                 await markUnhealthy(reason: "fda_required")
@@ -478,10 +537,12 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
                 ])
                 continue
             }
+            let page = resolved.page
 
-            scanBudget -= page.rows.count
+            scanBudget -= page.inspected
 
-            let publishItems = await filterAndShape(rows: page.rows, isBackfill: true)
+            let publishItems = await filterAndShape(
+                rows: page.rows, outboundPeers: resolved.peers, isBackfill: true)
             let outcome = await publisher.publish(items: publishItems)
 
             let confirmed: Bool
@@ -546,6 +607,15 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
         /// derived state (e.g. backfillComplete flag) when this is
         /// true.
         let hadUnconfirmedItems: Bool
+        /// True if the page read (or in-read peer resolution) threw.
+        /// The batch made no progress and the caller must hold the
+        /// FINAL cursor commit: batch-cursor advancement past unread
+        /// rows never persists, and non-batch mutations (e.g. the
+        /// one-time re-backfill arm) are recomputed next tick. Earlier
+        /// Phase A/B scan commits this tick may already have persisted
+        /// those non-batch mutations — coherently (the armed walk
+        /// resumes), never batch-cursor advancement.
+        let readFailed: Bool
     }
 
     /// Backfill: walk message.ROWID downward from
@@ -567,50 +637,60 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
         if upperBoundExclusive <= 0 {
             cursor.backfillComplete = true
             return BatchSummary(accepted: 0, duplicate: 0,
-                                  rejected: [], hadUnconfirmedItems: false)
+                                  rejected: [], hadUnconfirmedItems: false,
+                                  readFailed: false)
         }
 
         let limit = min(budget.rowsRemaining, MessagesPublisher.maxEventsPerBatch)
         if limit <= 0 {
             return BatchSummary(accepted: 0, duplicate: 0,
-                                  rejected: [], hadUnconfirmedItems: false)
+                                  rejected: [], hadUnconfirmedItems: false,
+                                  readFailed: false)
         }
 
-        let page: ChatDBReadPage
+        let resolver = outboundPeerResolver
+        let resolved: (page: ChatDBReadPage, peers: [String: String])
         do {
-            page = try await pool.read { db in
-                try ChatDBReader.fetchPage(
+            resolved = try await pool.read { db in
+                let page = try ChatDBReader.fetchPage(
                     db: db,
                     direction: .backwardFromExclusive(upperBoundExclusive),
                     limit: limit)
+                let peers = try resolver(db, page.rows)
+                return (page, peers)
             }
         } catch let dbError as DatabaseError where isFDAError(dbError) {
             await markUnhealthy(reason: "fda_required")
             return BatchSummary(accepted: 0, duplicate: 0,
-                                  rejected: [], hadUnconfirmedItems: false)
+                                  rejected: [], hadUnconfirmedItems: false,
+                                  readFailed: true)
         } catch {
             logger.warning("messages tick: backfill read failed", metadata: [
                 "error": .private(String(describing: error)),
             ])
             return BatchSummary(accepted: 0, duplicate: 0,
-                                  rejected: [], hadUnconfirmedItems: false)
+                                  rejected: [], hadUnconfirmedItems: false,
+                                  readFailed: true)
         }
+        let page = resolved.page
 
         // No SQL rows at all -> we've walked the whole iterator.
         if page.scannedROWIDBounds == nil {
             cursor.backfillComplete = true
             cursor.backfillCursor = 0
             return BatchSummary(accepted: 0, duplicate: 0,
-                                  rejected: [], hadUnconfirmedItems: false)
+                                  rejected: [], hadUnconfirmedItems: false,
+                                  readFailed: false)
         }
 
         // Floor check: drop rows whose sentAt is below backfillFloor.
         let inRangeRows = page.rows.filter { $0.sentAt >= config.backfillFloor }
         let belowFloor = page.rows.count - inRangeRows.count
-        let publishItems = await filterAndShape(rows: inRangeRows, isBackfill: true)
+        let publishItems = await filterAndShape(
+            rows: inRangeRows, outboundPeers: resolved.peers, isBackfill: true)
         let outcome = await publisher.publish(items: publishItems)
 
-        budget.consume(rows: page.rows.count)
+        budget.consume(rows: page.inspected)
 
         // Cursor advance rules:
         //   - publishItems empty (everything filtered out): advance
@@ -642,7 +722,8 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
             accepted: outcome.accepted,
             duplicate: outcome.duplicate,
             rejected: outcome.rejected,
-            hadUnconfirmedItems: !confirmedAllItems)
+            hadUnconfirmedItems: !confirmedAllItems,
+            readFailed: false)
     }
 
     /// Live: walk message.ROWID upward from liveCursor.  Stops when
@@ -662,39 +743,48 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
         let limit = min(budget.rowsRemaining, MessagesPublisher.maxEventsPerBatch)
         if limit <= 0 {
             return BatchSummary(accepted: 0, duplicate: 0,
-                                  rejected: [], hadUnconfirmedItems: false)
+                                  rejected: [], hadUnconfirmedItems: false,
+                                  readFailed: false)
         }
 
-        let page: ChatDBReadPage
+        let resolver = outboundPeerResolver
+        let resolved: (page: ChatDBReadPage, peers: [String: String])
         do {
-            page = try await pool.read { db in
-                try ChatDBReader.fetchPage(
+            resolved = try await pool.read { db in
+                let page = try ChatDBReader.fetchPage(
                     db: db,
                     direction: .forwardFromExclusive(lower),
                     limit: limit)
+                let peers = try resolver(db, page.rows)
+                return (page, peers)
             }
         } catch let dbError as DatabaseError where isFDAError(dbError) {
             await markUnhealthy(reason: "fda_required")
             return BatchSummary(accepted: 0, duplicate: 0,
-                                  rejected: [], hadUnconfirmedItems: false)
+                                  rejected: [], hadUnconfirmedItems: false,
+                                  readFailed: true)
         } catch {
             logger.warning("messages tick: live read failed", metadata: [
                 "error": .private(String(describing: error)),
             ])
             return BatchSummary(accepted: 0, duplicate: 0,
-                                  rejected: [], hadUnconfirmedItems: false)
+                                  rejected: [], hadUnconfirmedItems: false,
+                                  readFailed: true)
         }
+        let page = resolved.page
 
         if page.scannedROWIDBounds == nil {
             // No new rows since liveCursor.
             return BatchSummary(accepted: 0, duplicate: 0,
-                                  rejected: [], hadUnconfirmedItems: false)
+                                  rejected: [], hadUnconfirmedItems: false,
+                                  readFailed: false)
         }
 
-        let publishItems = await filterAndShape(rows: page.rows, isBackfill: false)
+        let publishItems = await filterAndShape(
+            rows: page.rows, outboundPeers: resolved.peers, isBackfill: false)
         let outcome = await publisher.publish(items: publishItems)
 
-        budget.consume(rows: page.rows.count)
+        budget.consume(rows: page.inspected)
 
         let confirmedAllItems: Bool
         if publishItems.isEmpty {
@@ -712,30 +802,78 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
             accepted: outcome.accepted,
             duplicate: outcome.duplicate,
             rejected: outcome.rejected,
-            hadUnconfirmedItems: !confirmedAllItems)
+            hadUnconfirmedItems: !confirmedAllItems,
+            readFailed: false)
     }
 
-    /// Apply sender filter + shape to publishable form.
-    /// Outbound rows have NULL handle_id in chat.db (reader skips them
-    /// during fetch); for cursor advancement we DO advance past them,
-    /// but the publisher only sees emitted rows. Outbound peer
-    /// resolution would happen here via outboundGroupPeer, but
-    /// fetch() already excludes outbound rows; v1 ships inbound-only
-    /// emission until the outbound branch is wired through the reader.
-    private func filterAndShape(rows: [ChatDBMessage], isBackfill: Bool) async -> [PublishItem] {
+    /// Apply sender filter + shape to publishable form, for inbound AND
+    /// outbound rows.
+    ///
+    /// Per row:
+    ///   1. Effective peer: inbound -> row.peerHandleRaw; outbound ->
+    ///      row.peerHandleRaw if non-empty, else outboundPeers[chatGUID].
+    ///   2. Skip if effective peer is empty (unresolvable outbound).
+    ///   3. Skip if chat.guid is nil/empty (the Pi requires a non-empty
+    ///      chat_id; a persistently-rejected event would wedge the
+    ///      cursor).
+    ///   4. Canonicalize + skip if not in the known-identifiers set. For
+    ///      outbound this filters on the RECIPIENT — only emit messages
+    ///      to known contacts.
+    ///   5. Shape (PayloadShaping branches isFromMe -> .sent / .received).
+    ///
+    /// Pure over its inputs + the cache. Counts skips by reason and logs
+    /// one debug line per non-empty batch (counts only — no handles or
+    /// guids logged here).
+    private func filterAndShape(
+        rows: [ChatDBMessage],
+        outboundPeers: [String: String],
+        isBackfill: Bool
+    ) async -> [PublishItem] {
         var out: [PublishItem] = []
         out.reserveCapacity(rows.count)
+        var unresolvableOutbound = 0
+        var emptyChatID = 0
+        var unknownPeer = 0
         for row in rows {
-            let canonical = HandleNormalization.canonicalize(row.peerHandleRaw)
-            if canonical.isEmpty { continue }
+            let effectivePeerRaw: String
+            if row.isFromMe {
+                effectivePeerRaw = row.peerHandleRaw.isEmpty
+                    ? (outboundPeers[row.chatGUID ?? ""] ?? "")
+                    : row.peerHandleRaw
+            } else {
+                effectivePeerRaw = row.peerHandleRaw
+            }
+            if effectivePeerRaw.isEmpty {
+                unresolvableOutbound += 1
+                continue
+            }
+            if row.chatGUID?.isEmpty ?? true {
+                emptyChatID += 1
+                continue
+            }
+            let canonical = HandleNormalization.canonicalize(effectivePeerRaw)
+            if canonical.isEmpty {
+                unresolvableOutbound += 1
+                continue
+            }
             let inSet = await cache.contains(canonical)
-            if !inSet { continue }
+            if !inSet {
+                unknownPeer += 1
+                continue
+            }
             let (kind, payload) = PayloadShaping.shape(
                 row: row,
-                peerHandle: row.peerHandleRaw,
+                peerHandle: effectivePeerRaw,
                 hostID: auth.hostID)
             out.append(PublishItem(rowID: row.rowID, direction: kind, payload: payload))
-            _ = isBackfill // unused in v1; reserved for backfill-specific telemetry
+        }
+        if unresolvableOutbound + emptyChatID + unknownPeer > 0 {
+            logger.debug("messages tick: rows dropped by sender filter", metadata: [
+                "phase": .public(isBackfill ? "backfill" : "live"),
+                "unresolvable_outbound": .public(String(unresolvableOutbound)),
+                "empty_chat_id": .public(String(emptyChatID)),
+                "unknown_peer": .public(String(unknownPeer)),
+            ])
         }
         return out
     }

@@ -46,6 +46,41 @@ final class MessagesScanReaderTests: XCTestCase {
             arguments: [chatRowID, rowID])
     }
 
+    /// Insert an OUTBOUND row (is_from_me=1, NULL handle_id) in a chat,
+    /// plus a chat_handle_join membership so the chat resolves for the
+    /// scanned handle.
+    private func insertOutboundMessage(
+        db: Database,
+        rowID: Int64,
+        guid: String,
+        unixDate: TimeInterval,
+        chatRowID: Int64,
+        chatGUID: String,
+        chatStyle: Int64 = 45
+    ) throws {
+        try db.execute(
+            sql: "INSERT OR IGNORE INTO chat (ROWID, guid, style, chat_identifier) VALUES (?, ?, ?, ?)",
+            arguments: [chatRowID, chatGUID, chatStyle, chatGUID])
+        let appleNanos = InMemoryChatDB.appleEpochNanos(unix: unixDate)
+        try db.execute(
+            sql: """
+                INSERT INTO message (ROWID, guid, text, handle_id, date,
+                                     is_from_me, cache_has_attachments,
+                                     associated_message_guid)
+                VALUES (?, ?, 'out', NULL, ?, 1, 0, NULL)
+                """,
+            arguments: [rowID, guid, appleNanos])
+        try db.execute(
+            sql: "INSERT INTO chat_message_join (chat_id, message_id) VALUES (?, ?)",
+            arguments: [chatRowID, rowID])
+    }
+
+    private func joinHandleToChat(db: Database, chatRowID: Int64, handleID: Int64) throws {
+        try db.execute(
+            sql: "INSERT INTO chat_handle_join (chat_id, handle_id) VALUES (?, ?)",
+            arguments: [chatRowID, handleID])
+    }
+
     // MARK: - handle ROWID resolution (alternate spellings)
 
     func testResolvesMultipleROWIDsForOneCanonicalHandle() throws {
@@ -212,5 +247,118 @@ final class MessagesScanReaderTests: XCTestCase {
                 progressBelowRowID: nil, limit: 100)
         }
         XCTAssertEqual(page.rows.map(\.guid), ["e1"])
+    }
+
+    // MARK: - outbound rows (three-pass matching)
+
+    func testScanFindsOutbound1to1Row() throws {
+        let queue = try InMemoryChatDB.makeQueue()
+        try queue.write { db in
+            try insertHandle(db: db, rowID: 1, id: "+15550000001")
+            try joinHandleToChat(db: db, chatRowID: 10, handleID: 1)
+            // Inbound + outbound row in the scanned handle's 1:1 chat.
+            try insertMessage(db: db, rowID: 100, guid: "in", handleID: 1,
+                              unixDate: unixApr2026, chatRowID: 10, chatGUID: "c1to1")
+            try insertOutboundMessage(db: db, rowID: 101, guid: "out",
+                                      unixDate: unixApr2026, chatRowID: 10, chatGUID: "c1to1")
+        }
+        let page = try queue.read { db in
+            try MessagesScanReader.scanPage(
+                db: db, canonicalHandle: "+15550000001",
+                since: Date(timeIntervalSince1970: 1_767_225_600),
+                progressBelowRowID: nil, limit: 100)
+        }
+        XCTAssertEqual(Set(page.rows.map(\.guid)), ["in", "out"],
+                       "both inbound and outbound rows of the handle's chat returned")
+        let out = try XCTUnwrap(page.rows.first { $0.guid == "out" })
+        XCTAssertTrue(out.isFromMe)
+    }
+
+    func testScanFindsOutboundGroupRow() throws {
+        let queue = try InMemoryChatDB.makeQueue()
+        try queue.write { db in
+            try insertHandle(db: db, rowID: 1, id: "+15550000001")
+            try insertHandle(db: db, rowID: 2, id: "+15550000002")
+            // Group chat (style 43) containing the scanned handle.
+            try joinHandleToChat(db: db, chatRowID: 20, handleID: 1)
+            try joinHandleToChat(db: db, chatRowID: 20, handleID: 2)
+            try insertOutboundMessage(db: db, rowID: 200, guid: "gout",
+                                      unixDate: unixApr2026, chatRowID: 20,
+                                      chatGUID: "groupX", chatStyle: 43)
+        }
+        let page = try queue.read { db in
+            try MessagesScanReader.scanPage(
+                db: db, canonicalHandle: "+15550000001",
+                since: Date(timeIntervalSince1970: 1_767_225_600),
+                progressBelowRowID: nil, limit: 100)
+        }
+        let row = try XCTUnwrap(page.rows.first { $0.guid == "gout" })
+        XCTAssertTrue(row.isGroup)
+        XCTAssertTrue(row.isFromMe)
+    }
+
+    func testScanIgnoresOutboundInUnrelatedChat() throws {
+        let queue = try InMemoryChatDB.makeQueue()
+        try queue.write { db in
+            try insertHandle(db: db, rowID: 1, id: "+15550000001")
+            try insertHandle(db: db, rowID: 2, id: "+15559999999")
+            // Scanned handle (1) belongs to chat 10.
+            try joinHandleToChat(db: db, chatRowID: 10, handleID: 1)
+            // Unrelated handle (2) belongs to chat 11.
+            try joinHandleToChat(db: db, chatRowID: 11, handleID: 2)
+            // Outbound row in the UNRELATED chat 11.
+            try insertOutboundMessage(db: db, rowID: 300, guid: "elsewhere",
+                                      unixDate: unixApr2026, chatRowID: 11, chatGUID: "other")
+            // An outbound row in the scanned handle's chat 10 (should match).
+            try insertOutboundMessage(db: db, rowID: 301, guid: "mine",
+                                      unixDate: unixApr2026, chatRowID: 10, chatGUID: "c1to1")
+        }
+        let page = try queue.read { db in
+            try MessagesScanReader.scanPage(
+                db: db, canonicalHandle: "+15550000001",
+                since: Date(timeIntervalSince1970: 1_767_225_600),
+                progressBelowRowID: nil, limit: 100)
+        }
+        XCTAssertEqual(Set(page.rows.map(\.guid)), ["mine"],
+                       "outbound rows in chats the scanned handle is NOT in are excluded")
+    }
+
+    func testScanOutboundRespectsDateWindowAndResume() throws {
+        let queue = try InMemoryChatDB.makeQueue()
+        let sinceUnix = unixMay2026
+        try queue.write { db in
+            try insertHandle(db: db, rowID: 1, id: "+15550000001")
+            try joinHandleToChat(db: db, chatRowID: 10, handleID: 1)
+            // Outbound below `since` → excluded.
+            try insertOutboundMessage(db: db, rowID: 400, guid: "old-out",
+                                      unixDate: sinceUnix - 86_400, chatRowID: 10, chatGUID: "c")
+            // Outbound + inbound at/above `since` → included.
+            try insertOutboundMessage(db: db, rowID: 401, guid: "new-out",
+                                      unixDate: sinceUnix, chatRowID: 10, chatGUID: "c")
+            try insertMessage(db: db, rowID: 402, guid: "new-in", handleID: 1,
+                              unixDate: sinceUnix + 86_400, chatRowID: 10, chatGUID: "c")
+        }
+        // First page: budget 1 → highest ROWID only, not exhausted.
+        let first = try queue.read { db in
+            try MessagesScanReader.scanPage(
+                db: db, canonicalHandle: "+15550000001",
+                since: Date(timeIntervalSince1970: sinceUnix),
+                progressBelowRowID: nil, limit: 1)
+        }
+        XCTAssertEqual(first.rows.map(\.guid), ["new-in"])
+        XCTAssertFalse(first.exhausted)
+        XCTAssertEqual(first.inspected, 1)
+        XCTAssertEqual(first.lowestRowID, 402)
+
+        // Resume below the first page: picks up new-out, excludes old-out.
+        let second = try queue.read { db in
+            try MessagesScanReader.scanPage(
+                db: db, canonicalHandle: "+15550000001",
+                since: Date(timeIntervalSince1970: sinceUnix),
+                progressBelowRowID: first.lowestRowID, limit: 5)
+        }
+        XCTAssertEqual(second.rows.map(\.guid), ["new-out"],
+                       "below-window outbound row excluded; resume honored")
+        XCTAssertTrue(second.exhausted)
     }
 }
