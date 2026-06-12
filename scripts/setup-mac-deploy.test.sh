@@ -55,14 +55,28 @@ make_sandbox() {
     LAUNCH_AGENT_DIR="$SANDBOX/LaunchAgents"
     RENDERED_PLIST="$LAUNCH_AGENT_DIR/xyz.spengrah.crm-mac-deploy.plist"
 
-    # The "clone payload" the git-clone stub materializes: a scripts/ dir with
-    # the two deploy scripts + the committed timer template. We model `git clone`
-    # by copying this payload into $CLONE_DIR/.git + the tracked files.
+    # Two payloads model the working-tree-vs-ref distinction the source-of-truth
+    # fix turns on:
+    #   CLONE_PAYLOAD  — the WORKING TREE the clone is currently checked out at
+    #                    (what a bare `fetch` does NOT advance). `git clone`
+    #                    materializes this; an existing clone is seeded from it.
+    #   REF_PAYLOAD    — the content of CRM_MAC_SETUP_REF (default origin/main):
+    #                    what `git checkout --detach <ref>` advances the working
+    #                    tree to, and what `git show <ref>:<path>` reads. Defaults
+    #                    to the SAME bytes as CLONE_PAYLOAD (no divergence) unless
+    #                    a test calls set_ref_payload_diverges to make the ref
+    #                    NEWER than the working tree.
+    # All three deploy scripts (reconcile + delegate + trigger) live in each
+    # payload so the install loop finds them.
     CLONE_PAYLOAD="$SANDBOX/clone-payload"
+    REF_PAYLOAD="$SANDBOX/ref-payload"
     mkdir -p "$CLONE_PAYLOAD/scripts" "$CLONE_PAYLOAD/$(dirname "$TIMER_TEMPLATE_PATH")"
     printf '#!/bin/bash\n# stub reconcile\n' > "$CLONE_PAYLOAD/scripts/reconcile-mac-daemon.sh"
     printf '#!/bin/bash\n# stub delegate\n'  > "$CLONE_PAYLOAD/scripts/deploy-mac-daemon.sh"
+    printf '#!/bin/bash\n# stub trigger\n'   > "$CLONE_PAYLOAD/scripts/trigger-mac-deploy.sh"
     cp "$REAL_TEMPLATE" "$CLONE_PAYLOAD/$TIMER_TEMPLATE_PATH"
+    # By default the ref payload == the working-tree payload (no divergence).
+    cp -R "$CLONE_PAYLOAD" "$REF_PAYLOAD"
 
     if [ "${1:-pre}" != "fresh" ]; then
         mkdir -p "$DEPLOY_ROOT" "$INSTALL_BIN_DIR"
@@ -70,33 +84,52 @@ make_sandbox() {
     mkdir -p "$LAUNCH_AGENT_DIR"
 
     # --- stub: git ---------------------------------------------------------
-    #   clone <url> <dir>     -> materialize the payload into <dir> (+ .git).
-    #   -C <dir> fetch ...    -> record + exit 0 (no re-clone).
-    #   -C <dir> show ref     -> emit the committed template bytes (for the hash).
-    #   -C <dir> remote ...   -> echo a fixed origin URL.
+    #   clone <url> <dir>          -> materialize the WORKING-TREE payload (+ .git).
+    #   -C <dir> fetch ...         -> record + exit ${STUB_FETCH_RC:-0} (no re-clone).
+    #   -C <dir> checkout --detach <ref>
+    #                              -> advance the working tree to the REF payload
+    #                                 (model: bare fetch does NOT do this; only the
+    #                                 explicit checkout the source-of-truth fix adds
+    #                                 makes install/render see the ref's content).
+    #                                 Records the ref in REF_CHECKED_OUT so a test
+    #                                 can assert WHICH ref was checked out.
+    #   -C <dir> show <ref>:<path> -> emit the REF payload's bytes for that ref.
+    #   -C <dir> remote ...        -> echo a fixed origin URL.
+    # STUB_CHECKOUT_REF_FILE records the ref the script asked to check out (the
+    # test asserts it is origin/main by default, or the override).
+    STUB_CHECKOUT_REF_FILE="$SANDBOX/checked-out-ref"
     cat > "$SANDBOX/bin/git" <<EOF
 #!/usr/bin/env bash
 echo "git \$*" >> "$CALL_LOG"
-payload="$CLONE_PAYLOAD"
+clone_payload="$CLONE_PAYLOAD"
+ref_payload="$REF_PAYLOAD"
 if [ "\$1" = "clone" ]; then
   # last arg is the dest dir.
   dest="\${@: -1}"
   mkdir -p "\$dest/.git"
-  cp -R "\$payload/." "\$dest/"
+  cp -R "\$clone_payload/." "\$dest/"
   exit 0
 fi
 if [ "\$1" = "-C" ]; then
   dir="\$2"; shift 2
   case "\$1" in
     fetch)  exit "\${STUB_FETCH_RC:-0}" ;;
+    checkout)
+      # \`checkout -q --detach <ref>\`: the ref is the LAST arg. Advance the
+      # working tree by overwriting the tracked files with the REF payload, and
+      # record the ref so the test can assert it.
+      ref="\${@: -1}"
+      echo "\$ref" > "$STUB_CHECKOUT_REF_FILE"
+      cp -R "\$ref_payload/." "\$dir/"
+      exit 0 ;;
     show)
-      # Ref-aware: the production hash path MUST read the remote-tracking ref
-      # \`origin/main:<template>\` (the same ref reconcile's drift check reads).
-      # Honor ONLY that ref so a wrong-ref regression (e.g. HEAD:/bare main:)
-      # makes \`git show\` fail -> empty hash -> the hash test reds the suite.
+      # \`show <ref>:<path>\`. The production hash path reads the SAME ref the
+      # render used (CRM_MAC_SETUP_REF). Emit the REF payload's template bytes for
+      # any ref EXCEPT a bare/HEAD ref, so a wrong-ref regression makes \`git show\`
+      # fail -> empty hash -> the hash test reds the suite.
       case "\$2" in
-        origin/main:*) cat "\$payload/$TIMER_TEMPLATE_PATH" ;;
-        *)             exit 1 ;;
+        *:*) cat "\$ref_payload/$TIMER_TEMPLATE_PATH" ;;
+        *)   exit 1 ;;
       esac ;;
     remote) echo "https://github.com/spengrah/PersonalCRM.git" ;;
     *)      exit 0 ;;
@@ -147,10 +180,36 @@ cleanup_sandbox() { [ -n "${SANDBOX:-}" ] && rm -rf "$SANDBOX"; }
 
 # seed_existing_clone : materialize an EXISTING clone (the fetch path). Mirrors
 # what `git clone` would have left behind: a .git dir + the tracked scripts/
-# template, so `install` + the template render find their inputs.
+# template, so `install` + the template render find their inputs. Seeds from the
+# WORKING-TREE (stale) payload — the checkout the source-of-truth fix performs is
+# what advances it to the ref payload.
 seed_existing_clone() {
     mkdir -p "$CLONE_DIR/.git"
     cp -R "$CLONE_PAYLOAD/." "$CLONE_DIR/"
+}
+
+# set_ref_payload_diverges : make CRM_MAC_SETUP_REF's content NEWER than the
+# working tree. The working-tree (stale) payload keeps its plain stub bodies; the
+# REF payload gets a distinctive "NEW REF" marker in each installed script AND a
+# template carrying a marker comment. A test asserts the INSTALLED scripts +
+# RENDERED plist + RECORDED hash reflect the REF (new) content — which only holds
+# if setup checked the ref out. Against the OLD no-advance script the install +
+# render would read the stale working tree and the assertions would FAIL.
+set_ref_payload_diverges() {
+    printf '#!/bin/bash\n# NEW REF reconcile\n' > "$REF_PAYLOAD/scripts/reconcile-mac-daemon.sh"
+    printf '#!/bin/bash\n# NEW REF delegate\n'  > "$REF_PAYLOAD/scripts/deploy-mac-daemon.sh"
+    printf '#!/bin/bash\n# NEW REF trigger\n'   > "$REF_PAYLOAD/scripts/trigger-mac-deploy.sh"
+    # A template that still substitutes __INSTALL_PREFIX__ but carries a marker.
+    {
+        echo '<?xml version="1.0" encoding="UTF-8"?>'
+        echo '<!-- NEW REF TEMPLATE MARKER -->'
+        echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
+        echo '<plist version="1.0"><dict>'
+        echo '<key>Label</key><string>xyz.spengrah.crm-mac-deploy</string>'
+        echo '<key>ProgramArguments</key><array>'
+        echo '<string>__INSTALL_PREFIX__/bin/reconcile-mac-daemon.sh</string>'
+        echo '</array></dict></plist>'
+    } > "$REF_PAYLOAD/$TIMER_TEMPLATE_PATH"
 }
 
 # Write a deploy.env into the sandbox. Each arg is a KEY=value pair.
@@ -218,6 +277,7 @@ test_fresh_first_run_creates_skeleton() {
     if log_has "git clone"; then ok; else fail "fresh run must clone (no existing .git)"; fi
     if [ -x "$INSTALL_BIN_DIR/reconcile-mac-daemon.sh" ]; then ok; else fail "reconcile script must be installed executable"; fi
     if [ -x "$INSTALL_BIN_DIR/deploy-mac-daemon.sh" ]; then ok; else fail "delegate must be installed executable"; fi
+    if [ -x "$INSTALL_BIN_DIR/trigger-mac-deploy.sh" ]; then ok; else fail "trigger script must be installed executable"; fi
     if [ -f "$RENDERED_PLIST" ]; then ok; else fail "timer plist must be rendered"; fi
     cleanup_sandbox
 }
@@ -325,6 +385,73 @@ test_records_template_hash() {
     cleanup_sandbox
 }
 
+test_rerun_advances_working_tree_to_ref() {
+    echo "test: re-run advances the working tree to origin/main (install + render + hash reflect the NEW ref)"
+    make_sandbox
+    # An existing clone seeded from the STALE working-tree payload, with the ref
+    # (origin/main) holding NEWER content. The source-of-truth fix must check the
+    # ref out so install/render/hash see the new content. Against the OLD
+    # no-advance script the stale working tree would be installed/rendered and
+    # these assertions would FAIL — this is the regression-pinning case.
+    seed_existing_clone
+    set_ref_payload_diverges
+    run_setup
+    if [ "$RC" -eq 0 ]; then ok; else fail "ref-divergence re-run should exit 0, got $RC ($OUT)"; fi
+    # The script must perform the explicit checkout (a bare fetch does not advance).
+    if log_has "checkout -q --detach origin/main"; then ok; else fail "setup must checkout origin/main to advance the working tree"; fi
+    # The INSTALLED scripts must be the NEW ref bodies, not the stale working tree.
+    if grep -qF 'NEW REF reconcile' "$INSTALL_BIN_DIR/reconcile-mac-daemon.sh"; then ok; else fail "installed reconcile must be the NEW ref content"; fi
+    if grep -qF 'NEW REF trigger' "$INSTALL_BIN_DIR/trigger-mac-deploy.sh"; then ok; else fail "installed trigger must be the NEW ref content"; fi
+    # The RENDERED plist must come from the NEW ref template (carries the marker).
+    if grep -qF 'NEW REF TEMPLATE MARKER' "$RENDERED_PLIST"; then ok; else fail "rendered plist must come from the NEW ref template"; fi
+    # The RECORDED hash must be over the NEW ref template bytes.
+    local expected actual ref_bytes
+    ref_bytes="$(cat "$REF_PAYLOAD/$TIMER_TEMPLATE_PATH")"
+    expected="$(printf '%s' "$ref_bytes" | shasum -a 256 | awk '{print $1}')"
+    actual="$(cat "$TEMPLATE_HASH_FILE")"
+    if [ "$actual" = "$expected" ]; then ok; else fail "recorded hash must be over the NEW ref template bytes"; fi
+    cleanup_sandbox
+}
+
+test_default_ref_is_origin_main_not_remote_default() {
+    echo "test: with CRM_MAC_SETUP_REF absent, setup checks out origin/main (NOT develop / origin/HEAD)"
+    make_sandbox
+    seed_existing_clone
+    set_ref_payload_diverges
+    # CRM_MAC_SETUP_REF deliberately UNSET (run_setup does not export it).
+    run_setup
+    if [ "$RC" -eq 0 ]; then ok; else fail "default-ref run should exit 0, got $RC ($OUT)"; fi
+    # The recorded ref must be exactly origin/main — pins the round-4 regression
+    # where using the remote default (develop) would deploy UNPROMOTED tooling.
+    local checked_out
+    checked_out="$(cat "$STUB_CHECKOUT_REF_FILE" 2>/dev/null || true)"
+    if [ "$checked_out" = "origin/main" ]; then ok; else fail "default ref must be origin/main, got '$checked_out'"; fi
+    if log_lacks "checkout -q --detach develop"; then ok; else fail "default ref must NOT be the remote default branch develop"; fi
+    if log_lacks "checkout -q --detach origin/HEAD"; then ok; else fail "default ref must NOT be the stale local origin/HEAD"; fi
+    cleanup_sandbox
+}
+
+test_setup_ref_override_honored() {
+    echo "test: CRM_MAC_SETUP_REF override is the ref checked out + hashed"
+    make_sandbox
+    seed_existing_clone
+    set_ref_payload_diverges
+    CRM_MAC_SETUP_REF="origin/release-candidate" run_setup
+    if [ "$RC" -eq 0 ]; then ok; else fail "override run should exit 0, got $RC ($OUT)"; fi
+    local checked_out
+    checked_out="$(cat "$STUB_CHECKOUT_REF_FILE" 2>/dev/null || true)"
+    if [ "$checked_out" = "origin/release-candidate" ]; then ok; else fail "override ref must be checked out, got '$checked_out'"; fi
+    if log_has "checkout -q --detach origin/release-candidate"; then ok; else fail "override ref must be the checkout target"; fi
+    # The hash must be recorded from the SAME (override) ref — render-source and
+    # hash-source must never diverge.
+    local expected actual ref_bytes
+    ref_bytes="$(cat "$REF_PAYLOAD/$TIMER_TEMPLATE_PATH")"
+    expected="$(printf '%s' "$ref_bytes" | shasum -a 256 | awk '{print $1}')"
+    actual="$(cat "$TEMPLATE_HASH_FILE")"
+    if [ "$actual" = "$expected" ]; then ok; else fail "hash must be recorded from the override ref's template bytes"; fi
+    cleanup_sandbox
+}
+
 test_timer_not_loaded_when_scaffold_empty() {
     echo "test: timer NOT bootstrapped when deploy.env is an empty scaffold"
     make_sandbox
@@ -413,6 +540,9 @@ main() {
     test_get_mode_portable_against_gnu_stat
     test_renders_placeholder_substituted
     test_records_template_hash
+    test_rerun_advances_working_tree_to_ref
+    test_default_ref_is_origin_main_not_remote_default
+    test_setup_ref_override_honored
     test_timer_not_loaded_when_scaffold_empty
     test_timer_not_loaded_when_partial
     test_timer_not_loaded_when_identity_empty

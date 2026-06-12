@@ -15,8 +15,9 @@
 #   - creates the deploy-root skeleton ($DEPLOY_ROOT + bin/);
 #   - clones (or fetches) a DEDICATED repo clone the reconcile orchestrator
 #     fetches/builds from (kept separate from your dev tree);
-#   - installs reconcile-mac-daemon.sh + deploy-mac-daemon.sh to the stable bin
-#     path the workflow + timer invoke (reconcile self-refreshes them in place);
+#   - installs reconcile-mac-daemon.sh + deploy-mac-daemon.sh +
+#     trigger-mac-deploy.sh to the stable bin path the workflow + timer invoke
+#     (reconcile self-refreshes them in place);
 #   - scaffolds deploy.env (chmod 600, uncommitted) if absent;
 #   - renders the timer LaunchAgent from the committed template (substituting
 #     __INSTALL_PREFIX__) and records the template's content hash for reconcile's
@@ -56,6 +57,14 @@ RENDERED_PLIST="${CRM_MAC_RENDERED_PLIST:-$LAUNCH_AGENT_DIR/$LAUNCH_AGENT_LABEL.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 ORIGIN_URL="${CRM_MAC_ORIGIN_URL:-$(git -C "$PROJECT_DIR" remote get-url origin 2>/dev/null || true)}"
+# The ref whose content this setup installs + renders. Defaults to origin/main —
+# the branch reconcile actually deploys (NOT the remote default branch, which is
+# develop; NOT the stale local origin/HEAD). After a successful fetch the script
+# checks this ref OUT so steps 2/4 install + render + hash THAT ref's content,
+# matching reconcile's `git show origin/main:...` self-refresh. A bare fetch only
+# advances remote-tracking refs, so without this an existing clone at an old SHA
+# would re-install OLD scripts + render the OLD template.
+CRM_MAC_SETUP_REF="${CRM_MAC_SETUP_REF:-origin/main}"
 
 log() { echo "[setup-mac-deploy] $*"; }
 
@@ -69,14 +78,18 @@ mkdir -p "$DEPLOY_ROOT" "$INSTALL_BIN_DIR"
 # ---------------------------------------------------------------------------
 # Step 1: create (or fetch) the dedicated clone.
 # ---------------------------------------------------------------------------
+fetch_ok=false
 if [ -d "$CLONE_DIR/.git" ]; then
     log "clone exists at $CLONE_DIR; fetching origin"
     # Soft-skip a failed fetch: the remaining steps (install, render, hash, load)
     # all operate on the already-present local clone, so an offline re-run (e.g.
     # "re-run to load the timer after filling deploy.env") must still complete
     # them rather than aborting under `set -e` on a transient network blip.
-    git -C "$CLONE_DIR" fetch --quiet origin \
-        || log "warning: fetch failed (offline?); continuing with the existing clone"
+    if git -C "$CLONE_DIR" fetch --quiet origin; then
+        fetch_ok=true
+    else
+        log "warning: fetch failed (offline?); continuing with the existing clone"
+    fi
 else
     if [ -z "$ORIGIN_URL" ]; then
         log "ERROR: could not determine the origin URL to clone from."
@@ -85,6 +98,20 @@ else
     fi
     log "cloning $ORIGIN_URL -> $CLONE_DIR"
     git clone --quiet "$ORIGIN_URL" "$CLONE_DIR"
+    fetch_ok=true
+fi
+
+# Advance the clone's WORKING TREE to CRM_MAC_SETUP_REF (default origin/main) so
+# steps 2/4 install + render that ref's content — a bare `fetch` only moves
+# remote-tracking refs, leaving an existing clone's checkout at an old SHA. A
+# fresh clone checks out the remote DEFAULT branch (develop), so it too must be
+# advanced to origin/main. Only do this when the remote-tracking refs were just
+# refreshed (fetch_ok); on an offline re-run, keep the existing working tree.
+if [ "$fetch_ok" = true ]; then
+    git -C "$CLONE_DIR" checkout -q --detach "$CRM_MAC_SETUP_REF"
+    log "checked out $CRM_MAC_SETUP_REF (install + render use this ref's content)"
+else
+    log "skipping checkout (offline); using the existing working tree"
 fi
 
 # ---------------------------------------------------------------------------
@@ -93,7 +120,7 @@ fi
 # tooling-refresh updates them in place on subsequent runs. install(1) sets the
 # mode + does the copy in one step.
 # ---------------------------------------------------------------------------
-for script in reconcile-mac-daemon.sh deploy-mac-daemon.sh; do
+for script in reconcile-mac-daemon.sh deploy-mac-daemon.sh trigger-mac-deploy.sh; do
     install -m 0755 "$CLONE_DIR/scripts/$script" "$INSTALL_BIN_DIR/$script"
     log "installed $script -> $INSTALL_BIN_DIR/$script"
 done
@@ -154,16 +181,20 @@ if command -v plutil >/dev/null 2>&1; then
 fi
 
 # Record the committed template's content hash, hashed over EXACTLY the bytes
-# reconcile reads (`git show origin/main:<template>`), so the two hashes match.
-template_bytes="$(git -C "$CLONE_DIR" show "origin/main:$TIMER_TEMPLATE_PATH" 2>/dev/null || true)"
+# the render read. We render from the checked-out working tree (now at
+# CRM_MAC_SETUP_REF), so hash the SAME ref's template bytes — NOT a hardcoded
+# origin/main — so the render-source and the hash-source can never diverge when
+# a caller overrides CRM_MAC_SETUP_REF. (With the default origin/main this is
+# exactly the bytes reconcile reads via `git show origin/main:<template>`.)
+template_bytes="$(git -C "$CLONE_DIR" show "$CRM_MAC_SETUP_REF:$TIMER_TEMPLATE_PATH" 2>/dev/null || true)"
 if [ -n "$template_bytes" ]; then
     printf '%s' "$template_bytes" | shasum -a 256 | awk '{print $1}' > "$INSTALLED_TEMPLATE_HASH_FILE"
     log "recorded template hash -> $INSTALLED_TEMPLATE_HASH_FILE"
 else
-    # The template is not at origin/main yet (e.g. first setup before PR3 merges,
-    # or a clone not yet fetched to the SHA that has it). Skip the hash record;
-    # reconcile's drift check treats a missing hash as "ambiguous -> silent".
-    log "WARNING: timer template not found at origin/main; skipping hash record"
+    # The template is not at the ref yet (e.g. a clone not yet fetched to the SHA
+    # that has it). Skip the hash record; reconcile's drift check treats a missing
+    # hash as "ambiguous -> silent".
+    log "WARNING: timer template not found at $CRM_MAC_SETUP_REF; skipping hash record"
 fi
 
 # ---------------------------------------------------------------------------
@@ -227,15 +258,18 @@ else
     log "timer:          rendered, NOT loaded (deploy.env incomplete or non-login context)"
 fi
 
-# The CI gate depends on the user's `gh` auth; warn if it is not authed.
+# The CI gate resolves the repo + reads Actions runs via the user's active `gh`
+# account. Probe THAT — the same `gh repo view` reconcile's ci_gate uses — rather
+# than `gh auth status`, which false-fails on a multi-account keyring where one
+# configured account is unreadable even though the active account works.
 if command -v gh >/dev/null 2>&1; then
-    if gh auth status >/dev/null 2>&1; then
-        log "gh auth:        OK"
+    if gh repo view "$ORIGIN_URL" --json nameWithOwner >/dev/null 2>&1; then
+        log "gh repo access: OK (active account resolves the repo)"
     else
-        log "gh auth:        NOT authed — run \`gh auth login\` (the CI gate needs it)."
+        log "gh repo access: FAILED — run \`gh auth login\` (the CI gate needs repo + Actions read)."
     fi
 else
-    log "gh auth:        gh not installed — install it (the CI gate needs it)."
+    log "gh repo access: gh not installed — install it (the CI gate needs it)."
 fi
 
 echo ""
