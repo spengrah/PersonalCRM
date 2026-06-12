@@ -112,5 +112,9 @@ echo "--- Makefile adaptive -p / CI-pin render guard ---"
 bash scripts/ci/test-parallelism-render-guard.sh || fail=1
 echo "--- repo-hygiene check guard ---"
 bash scripts/hooks/test/test-repo-hygiene-check.sh || fail=1
+echo "--- e2e test-map coverage guard ---"
+bash scripts/hooks/test/test-test-map-coverage-check.sh || fail=1
+echo "--- run-e2e-local warning behavior ---"
+bash scripts/hooks/test/test-run-e2e-warning.sh || fail=1
 
 [[ "$fail" -eq 0 ]] && { echo "ALL PASS"; exit 0; } || { echo "FAILURES"; exit 1; }
