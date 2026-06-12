@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/gin-gonic/gin"
@@ -35,16 +36,17 @@ func newStalenessTestRouter(reader StalenessReader) *gin.Engine {
 }
 
 func TestStalenessHandler_GetActiveBreaches_ReturnsBreaches(t *testing.T) {
+	now := accelerated.GetCurrentTime()
 	reader := &fakeStalenessReader{breaches: []repository.StalenessBreach{{
 		ID:               uuid.New(),
 		Source:           "messages",
 		AccountID:        "host-uuid",
 		BreachType:       repository.BreachTypePushStale,
-		StaleSince:       time.Now().Add(-50 * time.Hour),
+		StaleSince:       now.Add(-50 * time.Hour),
 		ThresholdSeconds: 172800,
 		Details:          "no push for 2d2h (threshold 48h)",
-		DetectedAt:       time.Now().Add(-1 * time.Hour),
-		LastObservedAt:   time.Now(),
+		DetectedAt:       now.Add(-1 * time.Hour),
+		LastObservedAt:   now,
 	}}}
 	r := newStalenessTestRouter(reader)
 
