@@ -557,5 +557,13 @@
   {
     "pattern": "^backend/internal/scheduler/messaging_aggregate.*\\.go$",
     "tags": ["@area:imports", "@area:contacts"]
+  },
+  {
+    "pattern": "^backend/internal/events/river_error_handler\\.go$",
+    "tags": ["@smoke"]
+  },
+  {
+    "pattern": "^backend/internal/logger/slog_bridge\\.go$",
+    "tags": ["@smoke"]
   }
 ]
