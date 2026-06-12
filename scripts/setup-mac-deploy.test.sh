@@ -88,8 +88,16 @@ fi
 if [ "\$1" = "-C" ]; then
   dir="\$2"; shift 2
   case "\$1" in
-    fetch)  exit 0 ;;
-    show)   cat "\$payload/$TIMER_TEMPLATE_PATH" ;;
+    fetch)  exit "\${STUB_FETCH_RC:-0}" ;;
+    show)
+      # Ref-aware: the production hash path MUST read the remote-tracking ref
+      # \`origin/main:<template>\` (the same ref reconcile's drift check reads).
+      # Honor ONLY that ref so a wrong-ref regression (e.g. HEAD:/bare main:)
+      # makes \`git show\` fail -> empty hash -> the hash test reds the suite.
+      case "\$2" in
+        origin/main:*) cat "\$payload/$TIMER_TEMPLATE_PATH" ;;
+        *)             exit 1 ;;
+      esac ;;
     remote) echo "https://github.com/spengrah/PersonalCRM.git" ;;
     *)      exit 0 ;;
   esac
@@ -290,6 +298,22 @@ test_timer_not_loaded_when_partial() {
     cleanup_sandbox
 }
 
+test_timer_not_loaded_when_identity_empty() {
+    echo "test: timer NOT bootstrapped when identity is empty but ntfy IS set"
+    make_sandbox
+    seed_existing_clone
+    # The inverse of the partial case: ntfy fully set, identity EMPTY. This is
+    # the safety-critical sub-rule of the all-three guard -- an empty
+    # CRM_MAC_CODESIGN_IDENTITY must never let the RunAtLoad timer bootstrap (it
+    # would immediately fire a deploy that ad-hoc-signs and resets FDA). Without
+    # this case, dropping the identity check from the guard slips through green.
+    write_deploy_env "CRM_MAC_CODESIGN_IDENTITY=" "NTFY_URL=https://ntfy.example" "NTFY_TOPIC=tok"
+    run_setup
+    if [ "$RC" -eq 0 ]; then ok; else fail "identity-empty run should exit 0, got $RC ($OUT)"; fi
+    if log_lacks "launchctl bootstrap"; then ok; else fail "empty identity must NOT bootstrap (even with ntfy set)"; fi
+    cleanup_sandbox
+}
+
 test_timer_loaded_when_fully_configured() {
     echo "test: timer IS bootstrapped once all three vars are set"
     make_sandbox
@@ -315,6 +339,21 @@ test_timer_not_loaded_in_non_gui_context() {
     cleanup_sandbox
 }
 
+test_offline_rerun_still_completes_local_steps() {
+    echo "test: offline re-run (fetch fails) still installs + renders + loads from the existing clone"
+    make_sandbox
+    seed_existing_clone
+    write_deploy_env "CRM_MAC_CODESIGN_IDENTITY=My Cert" "NTFY_URL=https://ntfy.example" "NTFY_TOPIC=tok"
+    # Fetch fails (offline), but the script must soft-skip and complete the
+    # local-only steps rather than aborting under set -e.
+    STUB_FETCH_RC=1 run_setup
+    if [ "$RC" -eq 0 ]; then ok; else fail "offline re-run should still exit 0, got $RC ($OUT)"; fi
+    if [ -x "$INSTALL_BIN_DIR/reconcile-mac-daemon.sh" ]; then ok; else fail "offline re-run must still install the reconcile script"; fi
+    if [ -f "$RENDERED_PLIST" ]; then ok; else fail "offline re-run must still render the timer plist"; fi
+    if log_has "launchctl bootstrap"; then ok; else fail "offline re-run with a full deploy.env must still load the timer"; fi
+    cleanup_sandbox
+}
+
 # ---------------------------------------------------------------------------
 main() {
     test_fresh_first_run_creates_skeleton
@@ -325,8 +364,10 @@ main() {
     test_records_template_hash
     test_timer_not_loaded_when_scaffold_empty
     test_timer_not_loaded_when_partial
+    test_timer_not_loaded_when_identity_empty
     test_timer_loaded_when_fully_configured
     test_timer_not_loaded_in_non_gui_context
+    test_offline_rerun_still_completes_local_steps
 
     echo ""
     echo "===================="

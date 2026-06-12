@@ -71,7 +71,12 @@ mkdir -p "$DEPLOY_ROOT" "$INSTALL_BIN_DIR"
 # ---------------------------------------------------------------------------
 if [ -d "$CLONE_DIR/.git" ]; then
     log "clone exists at $CLONE_DIR; fetching origin"
-    git -C "$CLONE_DIR" fetch --quiet origin
+    # Soft-skip a failed fetch: the remaining steps (install, render, hash, load)
+    # all operate on the already-present local clone, so an offline re-run (e.g.
+    # "re-run to load the timer after filling deploy.env") must still complete
+    # them rather than aborting under `set -e` on a transient network blip.
+    git -C "$CLONE_DIR" fetch --quiet origin \
+        || log "warning: fetch failed (offline?); continuing with the existing clone"
 else
     if [ -z "$ORIGIN_URL" ]; then
         log "ERROR: could not determine the origin URL to clone from."
