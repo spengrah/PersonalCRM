@@ -22,6 +22,32 @@ assert_eq "test-integration -> GO"                      "GO"         "$(classify
 # Unrecognized command defaults to the GO (serial, DB-owning) lane — never concurrent.
 assert_eq "unrecognized command -> GO (safe default)"   "GO"         "$(classify_command 'make some-future-db-command')"
 
+# --- refs_all_target_main: the promotion-to-main skip predicate ---
+# Git feeds pushed refs on stdin as `<local_ref> <local_sha> <remote_ref>
+# <remote_sha>`. 0 (true) only when EVERY remote_ref is refs/heads/main.
+rc_of() { "$@"; echo $?; }   # capture a predicate's exit code as a value
+assert_eq "develop:main promotion -> skip (0)"          "0" "$(rc_of refs_all_target_main 'refs/heads/develop a refs/heads/main b')"
+assert_eq "all-main multi-ref -> skip (0)"              "0" "$(rc_of refs_all_target_main $'refs/heads/a x refs/heads/main y\nrefs/heads/b x refs/heads/main y')"
+assert_eq "feature-branch push -> run checks (1)"       "1" "$(rc_of refs_all_target_main 'refs/heads/feat/x a refs/heads/feat/x b')"
+# A mixed push that includes any non-main ref must NOT skip.
+assert_eq "mixed (main + feat) -> run checks (1)"       "1" "$(rc_of refs_all_target_main $'refs/heads/develop a refs/heads/main b\nrefs/heads/feat a refs/heads/feat b')"
+# Empty stdin must NOT skip.
+assert_eq "empty stdin -> run checks (1)"               "1" "$(rc_of refs_all_target_main '')"
+
+# --- full-hook integration: piping git's stdin exercises the real skip branch ---
+# Positive: a develop:main promotion line makes the hook exit 0 WITHOUT printing
+# the "Running checks" banner (i.e. it skips before any phase runs).
+hook_out_promotion=$(printf 'refs/heads/develop %s refs/heads/main %s\n' "$(git rev-parse HEAD)" "$(git rev-parse HEAD)" | bash scripts/hooks/pre-push 2>&1)
+hook_rc_promotion=$?
+assert_eq "promotion push -> hook exits 0"              "0" "$hook_rc_promotion"
+assert_eq "promotion push -> NO 'Running checks' banner" "0" "$(grep -c 'Running checks' <<<"$hook_out_promotion")"
+assert_eq "promotion push -> emits skip message"        "1" "$(grep -c 'promotion to main' <<<"$hook_out_promotion")"
+# Negative full-hook coverage is provided by the refs_all_target_main predicate
+# assertions above (feat / mixed / empty all -> 1 = run checks): the hook calls
+# that exact predicate, so a non-promotion push enters the normal flow. We do NOT
+# pipe a feature-branch line through the full hook here — that would proceed past
+# the skip into the real (slow) phases whenever a HEAD review log happens to exist.
+
 # --- run_phase: writes rc-file + buffers log; does NOT self-background ---
 tmpd=$(mktemp -d) || { echo "FAIL: mktemp -d failed"; exit 1; }
 
