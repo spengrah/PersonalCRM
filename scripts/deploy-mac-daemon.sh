@@ -3,6 +3,16 @@
 #
 # Usage: ./scripts/deploy-mac-daemon.sh
 #
+# Reuse contract: the mac-deploy reconcile orchestrator
+# (scripts/reconcile-mac-daemon.sh) invokes this script in place from a
+# throwaway worktree checked out at the target SHA, i.e.
+# "$WORKTREE/scripts/deploy-mac-daemon.sh". PROJECT_DIR is derived from
+# ${BASH_SOURCE[0]} below, so it resolves to that worktree root — exactly
+# the target-SHA tree `make mac-daemon` must build from. Keep that
+# BASH_SOURCE-relative resolution and the `make mac-daemon` delegation
+# intact so the single build/install primitive stays shared between the
+# local-dev and reconcile paths.
+#
 # Required env:
 #   CRM_MAC_CODESIGN_IDENTITY=<identity>
 #       Local self-signed Code Signing certificate to sign with.
