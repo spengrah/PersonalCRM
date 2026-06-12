@@ -305,7 +305,7 @@ func evalSyncStale(now time.Time, cfg config.StalenessConfig, st repository.Sync
 // that satisfies the two-term predicate: error_count >= ErrorMinCount AND
 // (ErrorThreshold == 0 OR the stale anchor is older than ErrorThreshold). The
 // duration term supplies the persistence floor that error_count alone cannot
-// (count increments on every retry, seconds apart). See the #480 plan D1.
+// (count increments on every retry, seconds apart).
 func evalSyncError(now time.Time, cfg config.StalenessConfig, st repository.SyncState) (breachCandidate, bool) {
 	if st.Status != repository.SyncStatusError {
 		return breachCandidate{}, false

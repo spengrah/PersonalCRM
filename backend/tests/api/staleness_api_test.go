@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
@@ -72,7 +73,7 @@ func TestStalenessAPI_GetActiveBreaches(t *testing.T) {
 	defer cleanup()
 
 	ns := stalenessNS(t)
-	now := time.Now()
+	now := accelerated.GetCurrentTime()
 
 	// One OPEN breach for this namespace.
 	openAcct := ns + "-open"

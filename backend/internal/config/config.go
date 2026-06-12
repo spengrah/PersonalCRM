@@ -308,11 +308,11 @@ const (
 	// budget + 1m headroom. River cancels the worker's context when the
 	// budget is exceeded.
 	DefaultRiverJobTimeout = 6 * time.Minute
-	// Sync-staleness watchdog defaults. Rationale in the #480 plan /
-	// StalenessConfig doc comment: 15m heartbeat (~15 missed ~60s beats),
-	// 24h pull (5m–15m intervals for everything but gcontacts), 48h push
-	// (daily-traffic messages for a single user), and a two-term sync_error
-	// predicate (≥3 consecutive errors AND no success for ≥6h).
+	// Sync-staleness watchdog defaults. See the StalenessConfig doc
+	// comment for the full rationale: 15m heartbeat (~15 missed ~60s
+	// beats), 24h pull (5m–15m intervals for everything but gcontacts),
+	// 48h push (daily-traffic messages for a single user), and a two-term
+	// sync_error predicate (≥3 consecutive errors AND no success for ≥6h).
 	DefaultStalenessHeartbeatThreshold = 15 * time.Minute
 	DefaultStalenessPullThreshold      = 24 * time.Hour
 	DefaultStalenessPushThreshold      = 48 * time.Hour
@@ -330,7 +330,7 @@ const (
 func builtinStalenessSourceOverrides() map[string]time.Duration {
 	return map[string]time.Duration{
 		"gcontacts":        72 * time.Hour,  // 24h sync interval — threshold must exceed it
-		"phone_calls":      168 * time.Hour, // 7d — calls are legitimately rare; still beats the 8d #336 discovery
+		"phone_calls":      168 * time.Hour, // 7d — calls are legitimately rare; still beats the worst observed discovery lag
 		"icloud_contacts":  336 * time.Hour, // 14d — contact edits are the rarest push trigger
 		"anarlog_sessions": 168 * time.Hour, // 7d — meeting notes appear only when meetings happen
 		"anarlog_humans":   336 * time.Hour, // 14d — human-file edits are contact-edit-rare
