@@ -7,7 +7,39 @@ const repoRoot = execSync('git rev-parse --show-toplevel', {
   stdio: ['ignore', 'pipe', 'inherit'],
 }).trim()
 const mappingPath = path.join(repoRoot, 'frontend/tests/e2e/test-map.json')
-const baseRef = process.env.E2E_BASE_REF || 'origin/main'
+
+const refExists = ref => {
+  try {
+    execSync(`git rev-parse --verify --quiet ${ref}`, {
+      cwd: repoRoot,
+      stdio: ['ignore', 'ignore', 'ignore'],
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+// Resolve the diff base the SAME way scripts/hooks/pre-push does (upstream branch,
+// falling back to origin/develop) so the tag selection AND the unmatched-file
+// warning below both operate over the real push range — not origin/main, which on
+// the develop-default branch model can include already-merged-to-develop work.
+// E2E_BASE_REF still overrides for CI/explicit use. The final origin/main last-resort
+// keeps baseRef a string even on a bare clone lacking origin/develop.
+const resolveBaseRef = () => {
+  if (process.env.E2E_BASE_REF) return process.env.E2E_BASE_REF
+  try {
+    const upstream = execSync('git rev-parse --abbrev-ref --symbolic-full-name @{u}', {
+      encoding: 'utf8',
+      cwd: repoRoot,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+    if (upstream) return upstream
+  } catch {
+    // no tracked upstream — fall through to the develop/main chain
+  }
+  return ['origin/develop', 'origin/main'].find(refExists) || 'origin/main'
+}
+const baseRef = resolveBaseRef()
 
 const readChangedFiles = command => {
   const output = execSync(command, {
@@ -28,16 +60,34 @@ const changedFiles = new Set([
 const mapping = JSON.parse(readFileSync(mappingPath, 'utf8'))
 
 const tags = new Set(['@smoke'])
+const matchedFiles = new Set()
 
 for (const file of changedFiles) {
   for (const rule of mapping) {
     const regex = new RegExp(rule.pattern)
     if (regex.test(file)) {
+      matchedFiles.add(file)
       for (const tag of rule.tags || []) {
         tags.add(tag)
       }
     }
   }
+}
+
+// Warn-first (non-fatal): a changed frontend/src or backend/internal file that
+// matched NO pattern contributed no E2E tags, so test-e2e-diff may under-cover it.
+// Goes to stderr so it never pollutes the stdout grep-pattern contract (the
+// E2E_PRINT_ONLY consumer reads stdout) — emitted unconditionally, including under
+// E2E_PRINT_ONLY, so an author gets the signal without spawning Playwright.
+const unmatched = [...changedFiles].filter(
+  f => !matchedFiles.has(f) && (f.startsWith('frontend/src/') || f.startsWith('backend/internal/')),
+)
+if (unmatched.length) {
+  console.error('WARNING: test-e2e-diff — changed file(s) matched no test-map.json pattern, contributing no E2E tags:')
+  for (const file of unmatched) {
+    console.error(`  - ${file}`)
+  }
+  console.error('These files may be under-covered by the diff-selected run. Add a test-map.json entry to map them to an @area, or accept this (CI runs the full suite regardless).')
 }
 
 const escapeRegex = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
