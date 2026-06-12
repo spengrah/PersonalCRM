@@ -148,9 +148,23 @@ run_migrate_admin() {
 }
 
 # ---------------------------------------------------------------------------
-# Health gate: reads-only. All three must pass within the retry budget.
+# Health gate: reads-only. All checks must pass within the retry budget.
+#
+# Optional arg <expected_sha>: when non-empty, additionally verify /health
+# reports git_commit == <expected_sha> (forward-deploy gates pass "$SHA";
+# rollback gates pass nothing — a rollback ref may be a pre-stamp image or a
+# digest, so a commit assertion there is wrong by construction). Degrade
+# semantics on the commit check:
+#   - reported git_commit == expected_sha -> pass.
+#   - reported git_commit == "unknown"    -> loud warning, PASS (transition/
+#     rollback case: re-deploying a pre-stamp image whose binary predates the
+#     build stamp must not brick the deploy path).
+#   - reported git_commit == anything else (stamped but wrong) -> FAIL (wrong
+#     image is actually serving; the status loop already waited for a healthy
+#     responder, so this is deterministic, not a race).
 # ---------------------------------------------------------------------------
 health_gate() {
+    local expected_sha="${1:-}"
     local i ok=false body
     # 1. backend /health reports overall healthy (bounded retry ~HEALTH_RETRIES s).
     #    The handler returns HTTP 503 (so `curl -sf` non-zeroes) AND top-level
@@ -166,6 +180,19 @@ health_gate() {
     if [ "$ok" != true ]; then
         log "health-gate: backend /health did not report overall status healthy"
         return 1
+    fi
+    # 1b. (optional) verify the serving build's commit matches the deployed SHA.
+    #     Same $body the loop captured when it reached healthy — no second fetch.
+    #     Key-based grep (tolerant of field order and of later-added fields).
+    if [ -n "$expected_sha" ]; then
+        if printf '%s' "$body" | grep -qE "\"git_commit\":[[:space:]]*\"${expected_sha}\""; then
+            : # match -> pass
+        elif printf '%s' "$body" | grep -qE '"git_commit":[[:space:]]*"unknown"'; then
+            log "health-gate: build not stamped (git_commit=unknown); skipping commit verification"
+        else
+            log "health-gate: serving build git_commit does not match deployed $expected_sha"
+            return 1
+        fi
     fi
     # 2. frontend answers.
     if ! curl -sf http://127.0.0.1:3001 >/dev/null 2>&1; then
@@ -193,7 +220,7 @@ post_migrate_swap() {
         && pin_image "$FRONTEND_UNIT" "$FRONTEND_REPO:$SHA" \
         && crm_ctl daemon-reload \
         && crm_ctl start personalcrm-backend.service personalcrm-frontend.service \
-        && health_gate
+        && health_gate "$SHA"
 }
 
 # ---------------------------------------------------------------------------
@@ -359,7 +386,7 @@ case "$CHECK_RC" in
         pin_image "$FRONTEND_UNIT" "$FRONTEND_REPO:$SHA"
         crm_ctl daemon-reload
         crm_ctl restart personalcrm-backend.service personalcrm-frontend.service
-        if health_gate; then
+        if health_gate "$SHA"; then
             ntfy "Deploy OK" "default" "white_check_mark" "Deployed $SHA (migrated=no)"
             log "deploy OK (migrated=no)"
             DONE=1
