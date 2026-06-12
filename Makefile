@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev dev-seed staging-reset build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy-mac promote setup-pi dev-native postgres-native sqlc smoke-test test-integration-fast test-integration-slow test-clean-clones check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry
+.PHONY: help setup dev dev-seed staging-reset build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy-mac promote setup-pi dev-native postgres-native sqlc smoke-test test-deploy-scripts test-integration-fast test-integration-slow test-clean-clones check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -86,6 +86,7 @@ help:
 	@echo "  test-e2e-local        - Run Playwright E2E tests (honors PLAYWRIGHT_GREP)"
 	@echo "  test-e2e-diff         - Run diff-selected E2E tests (core + impacted)"
 	@echo "  test-api              - Run API endpoint tests"
+	@echo "  test-deploy-scripts   - Run the mocked deploy-script shell suites"
 	@echo "  smoke-test            - Full system verification (restart + test)"
 	@echo ""
 	@echo "Docker:"
@@ -390,6 +391,13 @@ test-frontend:
 test-api:
 	@echo "Running API tests..."
 	@cd backend && go test ./tests/... -v
+
+# Mocked shell suites for the deploy orchestrators (Pi + Mac). Pure bash with
+# PATH-shadow stubs (no podman/Mac/network), so they run on any CI runner.
+test-deploy-scripts:
+	@echo "Running deploy-script shell tests..."
+	@bash scripts/deploy-artifact.test.sh
+	@bash scripts/reconcile-mac-daemon.test.sh
 
 smoke-test:
 	@echo "Running full system smoke test..."

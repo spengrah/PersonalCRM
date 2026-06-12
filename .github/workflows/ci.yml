@@ -210,6 +210,13 @@ jobs:
         working-directory: backend
         run: go test -short ./...
 
+      - name: Run deploy-script shell tests
+        # Pure-bash mocked suites (PATH-shadow stubs for git/gh/podman/plutil/
+        # crm-mac/curl/launchctl) — no DB, no podman, no network, no macOS-only
+        # binary reached outside a stub — so they run on the standard Ubuntu
+        # runner. Gated by the same backend path-filter (scripts/**, Makefile).
+        run: make test-deploy-scripts
+
       - name: Wait for PostgreSQL
         run: |
           timeout 30 bash -c 'until pg_isready -h localhost -p 5432; do sleep 1; done'

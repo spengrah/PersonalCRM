@@ -17,6 +17,7 @@
     "enabled": true,
     "commands": [
       { "name": "Pre-push filter unit tests", "command": "bash scripts/hooks/test/test-pre-push-filters.sh" },
+      { "name": "Deploy script tests", "command": "make test-deploy-scripts" },
       { "name": "Unit tests", "command": "make test-unit" },
       { "name": "Integration tests", "command": "make test-integration" },
       { "name": "Frontend tests", "command": "make test-frontend" },

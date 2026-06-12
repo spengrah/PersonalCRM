@@ -256,8 +256,9 @@ run_phase() {
 
 # classify_command <command-string>: echo the lane for a .test.commands[] entry.
 #   E2E        — matches "test-e2e"           (DROPs the DB + binds ports: EXCLUSIVE, last)
-#   CONCURRENT — matches "test-frontend" OR "test-pre-push-filters"
-#                (the only commands KNOWN to be DB-free AND port-free)
+#   CONCURRENT — matches "test-frontend" OR "test-pre-push-filters" OR
+#                "test-deploy-scripts" (commands KNOWN to be DB-free AND port-free:
+#                the deploy-script suites are pure bash with PATH-shadow stubs)
 #   GO         — matches "test-unit" OR "test-integration" (DB-owning serial lane)
 #   GO (default) — anything UNRECOGNIZED falls to the GO serial lane.
 # Contract: a new known-safe (DB-free, port-free) command MUST be added to the
@@ -266,10 +267,10 @@ run_phase() {
 classify_command() {
   local cmd="$1"
   case "$cmd" in
-    *test-e2e*)                              echo "E2E" ;;
-    *test-frontend*|*test-pre-push-filters*) echo "CONCURRENT" ;;
-    *test-unit*|*test-integration*)          echo "GO" ;;
-    *)                                       echo "GO" ;;
+    *test-e2e*)                                                    echo "E2E" ;;
+    *test-frontend*|*test-pre-push-filters*|*test-deploy-scripts*) echo "CONCURRENT" ;;
+    *test-unit*|*test-integration*)                                echo "GO" ;;
+    *)                                                             echo "GO" ;;
   esac
 }
 
