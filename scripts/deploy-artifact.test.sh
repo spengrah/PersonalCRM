@@ -84,7 +84,11 @@ EOF
 echo "podman \$*" >> "$CALL_LOG"
 case "\$1" in
   inspect)
-    # podman inspect <container> --format '{{index .RepoDigests 0}}'
+    # container inspect: \`podman inspect <container> --format '{{.Image}}'\` -> image id
+    echo "\${STUB_IMAGE_ID:-c91da029deadbeefc91da029deadbeefc91da029deadbeefc91da029deadbeef}"
+    exit 0 ;;
+  image)
+    # image inspect: \`podman image inspect <id> --format '{{index .RepoDigests 0}}'\` -> repo digest
     echo "\${STUB_INSPECT_DIGEST:-ghcr.io/spengrah/personalcrm-backend@sha256:c91da029deadbeefc91da029deadbeefc91da029deadbeefc91da029deadbeef}"
     exit 0 ;;
   pull)
@@ -270,9 +274,10 @@ test_rollback_ref_latest_digest() {
     STUB_MIGRATE_CHECK_RC=0 STUB_HEALTH_OK=0 \
       STUB_INSPECT_DIGEST="ghcr.io/spengrah/personalcrm-backend@sha256:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef" \
       run_deploy "$VALID_SHA"
-    # :latest must drive `podman inspect ... RepoDigests`.
-    if log_has "podman inspect crm-backend"; then ok; else fail ":latest must resolve via podman inspect crm-backend"; fi
-    if log_has "podman inspect crm-frontend"; then ok; else fail ":latest must resolve via podman inspect crm-frontend"; fi
+    # :latest must resolve each container's image id, then read RepoDigests from the IMAGE.
+    if log_has "podman inspect crm-backend"; then ok; else fail ":latest must inspect crm-backend for its image id"; fi
+    if log_has "podman inspect crm-frontend"; then ok; else fail ":latest must inspect crm-frontend for its image id"; fi
+    if log_has "podman image inspect"; then ok; else fail ":latest must resolve the digest via podman image inspect"; fi
     # Rollback re-pin should write the @sha256 digest ref.
     if grep -q 'Image=ghcr.io/spengrah/personalcrm-backend@sha256:deadbeef' "$BACKEND_UNIT"; then ok
     else fail "backend unit should be re-pinned to the resolved @sha256 digest"; fi
