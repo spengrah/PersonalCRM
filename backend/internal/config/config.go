@@ -330,9 +330,10 @@ const (
 	DefaultStalenessPushThreshold      = 48 * time.Hour
 	DefaultStalenessErrorMinCount      = 3
 	DefaultStalenessErrorThreshold     = 6 * time.Hour
-	// /health component thresholds. See the HealthConfig doc comment and #483:
-	// any discarded job is immediately actionable (#459 supplies the
-	// remediation tooling), 30m oldest-due / watchdog-max-age = six missed 5m
+	// /health component thresholds. See the HealthConfig doc comment:
+	// any discarded job is immediately actionable (crm-admin --list-jobs /
+	// --retry-job is the remediation tooling), 30m oldest-due /
+	// watchdog-max-age = six missed 5m
 	// periodic ticks (comfortably under River's 24h completed-job retention),
 	// and 10% free is standard SD-card headroom.
 	DefaultHealthRiverDiscardedMax  = 0

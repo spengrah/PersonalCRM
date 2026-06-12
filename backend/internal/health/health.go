@@ -332,7 +332,7 @@ func (h *HealthChecker) checkRiver(ctx context.Context, now time.Time) Component
 	return ComponentStatus{Status: status, Details: details}
 }
 
-// checkSync reports on per-provider sync staleness by consuming the #480
+// checkSync reports on per-provider sync staleness by consuming the staleness
 // watchdog's breach table (one indexed read, ≤5m detection lag). Before
 // trusting that table it verifies the watchdog's own completion trail: the
 // breach data is only fresh while the watchdog (itself a River periodic job)

@@ -1,7 +1,7 @@
 -- /health component queries over river_job.
 --
 -- These are the production-grade reads behind the river + sync /health
--- components (#483). All timestamps are supplied by the handler from
+-- components. All timestamps are supplied by the handler from
 -- accelerated time — these queries never call NOW() (mirroring the
 -- sync_staleness.sql convention).
 
