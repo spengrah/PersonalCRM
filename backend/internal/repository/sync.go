@@ -1037,3 +1037,31 @@ func (r *SyncRepository) CountRiverJobsBySourceArgForTest(ctx context.Context, s
 func (r *SyncRepository) InsertRiverJobForTest(ctx context.Context, args []byte) error {
 	return r.queries.InsertRiverJobForTest(ctx, args)
 }
+
+// SetSyncStateFreshnessForTestParams carries the freshness/error columns the
+// staleness-watchdog tests plant directly on an external_sync_state row.
+// Nil time pointers map to SQL NULL.
+type SetSyncStateFreshnessForTestParams struct {
+	ID                   uuid.UUID
+	Status               SyncStatus
+	LastSyncAt           *time.Time
+	LastSuccessfulSyncAt *time.Time
+	ErrorCount           int32
+	ErrorMessage         *string
+}
+
+// SetSyncStateFreshnessForTest stamps an external_sync_state row's
+// freshness/error columns to caller-supplied (typically past) values. TEST
+// ONLY — the scheduler + provider sync are the only production writers, and
+// they always use NOW(); this helper lets staleness tests plant the past
+// timestamps the watchdog evaluates against.
+func (r *SyncRepository) SetSyncStateFreshnessForTest(ctx context.Context, params SetSyncStateFreshnessForTestParams) error {
+	return r.queries.SetSyncStateFreshnessForTest(ctx, db.SetSyncStateFreshnessForTestParams{
+		ID:                   uuidToPgUUID(params.ID),
+		Status:               string(params.Status),
+		LastSyncAt:           timeToPgTimestamptz(params.LastSyncAt),
+		LastSuccessfulSyncAt: timeToPgTimestamptz(params.LastSuccessfulSyncAt),
+		ErrorCount:           params.ErrorCount,
+		ErrorMessage:         stringToPgText(params.ErrorMessage),
+	})
+}

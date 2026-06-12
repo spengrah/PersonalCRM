@@ -1050,3 +1050,217 @@ func TestConfig_Validate_EventBusFollowUpMode(t *testing.T) {
 		})
 	}
 }
+
+func TestConfig_Staleness_Defaults(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	if cfg.Staleness.HeartbeatThreshold != DefaultStalenessHeartbeatThreshold {
+		t.Errorf("HeartbeatThreshold = %s, want %s", cfg.Staleness.HeartbeatThreshold, DefaultStalenessHeartbeatThreshold)
+	}
+	if cfg.Staleness.PullThreshold != DefaultStalenessPullThreshold {
+		t.Errorf("PullThreshold = %s, want %s", cfg.Staleness.PullThreshold, DefaultStalenessPullThreshold)
+	}
+	if cfg.Staleness.PushThreshold != DefaultStalenessPushThreshold {
+		t.Errorf("PushThreshold = %s, want %s", cfg.Staleness.PushThreshold, DefaultStalenessPushThreshold)
+	}
+	if cfg.Staleness.ErrorMinCount != DefaultStalenessErrorMinCount {
+		t.Errorf("ErrorMinCount = %d, want %d", cfg.Staleness.ErrorMinCount, DefaultStalenessErrorMinCount)
+	}
+	if cfg.Staleness.ErrorThreshold != DefaultStalenessErrorThreshold {
+		t.Errorf("ErrorThreshold = %s, want %s", cfg.Staleness.ErrorThreshold, DefaultStalenessErrorThreshold)
+	}
+
+	// Built-in per-source overrides are baked in with zero env.
+	wantOverrides := map[string]time.Duration{
+		"gcontacts":        72 * time.Hour,
+		"phone_calls":      168 * time.Hour,
+		"icloud_contacts":  336 * time.Hour,
+		"anarlog_sessions": 168 * time.Hour,
+		"anarlog_humans":   336 * time.Hour,
+	}
+	for src, want := range wantOverrides {
+		if got := cfg.Staleness.SourceOverrides[src]; got != want {
+			t.Errorf("SourceOverrides[%q] = %s, want %s", src, got, want)
+		}
+	}
+}
+
+func TestConfig_Staleness_FromEnv(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+	WithEnv(t, "SYNC_STALENESS_HEARTBEAT_THRESHOLD", "30m")
+	WithEnv(t, "SYNC_STALENESS_PULL_THRESHOLD", "12h")
+	WithEnv(t, "SYNC_STALENESS_PUSH_THRESHOLD", "72h")
+	WithEnv(t, "SYNC_STALENESS_ERROR_MIN_COUNT", "5")
+	WithEnv(t, "SYNC_STALENESS_ERROR_THRESHOLD", "2h")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	if cfg.Staleness.HeartbeatThreshold != 30*time.Minute {
+		t.Errorf("HeartbeatThreshold = %s, want 30m", cfg.Staleness.HeartbeatThreshold)
+	}
+	if cfg.Staleness.PullThreshold != 12*time.Hour {
+		t.Errorf("PullThreshold = %s, want 12h", cfg.Staleness.PullThreshold)
+	}
+	if cfg.Staleness.PushThreshold != 72*time.Hour {
+		t.Errorf("PushThreshold = %s, want 72h", cfg.Staleness.PushThreshold)
+	}
+	if cfg.Staleness.ErrorMinCount != 5 {
+		t.Errorf("ErrorMinCount = %d, want 5", cfg.Staleness.ErrorMinCount)
+	}
+	if cfg.Staleness.ErrorThreshold != 2*time.Hour {
+		t.Errorf("ErrorThreshold = %s, want 2h", cfg.Staleness.ErrorThreshold)
+	}
+}
+
+func TestConfig_Staleness_SourceOverridesMergeAndDisable(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+	// Override one built-in (gcontacts), add a new source (todoist), and
+	// disable one (phone_calls=0s).
+	WithEnv(t, "SYNC_STALENESS_SOURCE_OVERRIDES", "gcontacts=96h, todoist=10m ,phone_calls=0s")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	if got := cfg.Staleness.SourceOverrides["gcontacts"]; got != 96*time.Hour {
+		t.Errorf("env override gcontacts = %s, want 96h", got)
+	}
+	if got := cfg.Staleness.SourceOverrides["todoist"]; got != 10*time.Minute {
+		t.Errorf("env override todoist = %s, want 10m", got)
+	}
+	if got, ok := cfg.Staleness.SourceOverrides["phone_calls"]; !ok || got != 0 {
+		t.Errorf("env override phone_calls = (%s, present=%v), want (0s, true)", got, ok)
+	}
+	// A built-in left untouched by env survives.
+	if got := cfg.Staleness.SourceOverrides["icloud_contacts"]; got != 336*time.Hour {
+		t.Errorf("untouched built-in icloud_contacts = %s, want 336h", got)
+	}
+}
+
+func TestConfig_Staleness_SourceOverridesMalformed(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+
+	cases := []string{
+		"gcontacts",          // missing =duration
+		"gcontacts=",         // empty duration
+		"=24h",               // empty key
+		"gcontacts=notaspan", // unparseable duration
+	}
+	for _, raw := range cases {
+		t.Run(raw, func(t *testing.T) {
+			WithEnv(t, "SYNC_STALENESS_SOURCE_OVERRIDES", raw)
+			if _, err := Load(); err == nil {
+				t.Fatalf("expected Load() to fail for overrides %q", raw)
+			}
+		})
+	}
+}
+
+func TestParseStalenessSourceOverrides_Empty(t *testing.T) {
+	got, err := parseStalenessSourceOverrides("   ")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != nil {
+		t.Errorf("expected nil map for blank input, got %v", got)
+	}
+}
+
+func TestConfig_Staleness_ValidateRejectsNegatives(t *testing.T) {
+	tests := []struct {
+		name  string
+		mutfn func(*Config)
+		field string
+	}{
+		{
+			name:  "negative_heartbeat",
+			mutfn: func(c *Config) { c.Staleness.HeartbeatThreshold = -1 * time.Minute },
+			field: "SYNC_STALENESS_HEARTBEAT_THRESHOLD",
+		},
+		{
+			name:  "negative_pull",
+			mutfn: func(c *Config) { c.Staleness.PullThreshold = -1 * time.Hour },
+			field: "SYNC_STALENESS_PULL_THRESHOLD",
+		},
+		{
+			name:  "negative_push",
+			mutfn: func(c *Config) { c.Staleness.PushThreshold = -1 * time.Hour },
+			field: "SYNC_STALENESS_PUSH_THRESHOLD",
+		},
+		{
+			name:  "negative_error_threshold",
+			mutfn: func(c *Config) { c.Staleness.ErrorThreshold = -1 * time.Hour },
+			field: "SYNC_STALENESS_ERROR_THRESHOLD",
+		},
+		{
+			name:  "negative_error_min_count",
+			mutfn: func(c *Config) { c.Staleness.ErrorMinCount = -1 },
+			field: "SYNC_STALENESS_ERROR_MIN_COUNT",
+		},
+		{
+			name:  "negative_override",
+			mutfn: func(c *Config) { c.Staleness.SourceOverrides = map[string]time.Duration{"gcontacts": -1 * time.Hour} },
+			field: "SYNC_STALENESS_SOURCE_OVERRIDES",
+		},
+		{
+			name:  "empty_override_key",
+			mutfn: func(c *Config) { c.Staleness.SourceOverrides = map[string]time.Duration{"": 24 * time.Hour} },
+			field: "SYNC_STALENESS_SOURCE_OVERRIDES",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := TestConfig()
+			tt.mutfn(cfg)
+
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatalf("expected validation error for %s", tt.name)
+			}
+			verr, ok := err.(ValidationErrors)
+			if !ok {
+				t.Fatalf("expected ValidationErrors, got %T", err)
+			}
+			found := false
+			for _, e := range verr {
+				if e.Field == tt.field {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("expected %s validation error, got: %v", tt.field, err)
+			}
+		})
+	}
+}
+
+func TestConfig_Staleness_ZeroDisablesValidatesCleanly(t *testing.T) {
+	// Zero thresholds are the documented "disable this check" sentinel and
+	// must validate without error.
+	cfg := TestConfig()
+	cfg.Staleness.HeartbeatThreshold = 0
+	cfg.Staleness.PullThreshold = 0
+	cfg.Staleness.PushThreshold = 0
+	cfg.Staleness.ErrorMinCount = 0
+	cfg.Staleness.ErrorThreshold = 0
+	cfg.Staleness.SourceOverrides = map[string]time.Duration{"gcontacts": 0}
+
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("expected zero-disables config to validate cleanly, got: %v", err)
+	}
+}
