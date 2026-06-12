@@ -1352,8 +1352,25 @@ func run() int {
 	router.Use(api.CORSMiddleware(cfg.CORS))
 	router.Use(api.ErrorHandlerMiddleware())
 
-	// Health check endpoint
-	healthChecker := health.NewHealthChecker(database, cfg.Database.HealthTimeout)
+	// Health check endpoint. Bare /health is the liveness probe (DB-only
+	// top-level status, today's contract); ?ready=1 aggregates the
+	// river/sync/disk components for an external pinger. The stalenessService
+	// (constructed above) and a HealthRepository over river_job back the new
+	// components; the watchdog kind ties the sync component's freshness guard to
+	// the periodic watchdog job registered on the same River client.
+	healthRepo := repository.NewHealthRepository(database.Queries)
+	healthChecker := health.NewHealthChecker(database, cfg.Database.HealthTimeout, health.Deps{
+		River:            healthRepo,
+		Staleness:        stalenessService,
+		SyncWatchdogKind: scheduler.StalenessWatchdogArgs{}.Kind(),
+		Thresholds: health.Thresholds{
+			RiverDiscardedMax:  cfg.Health.RiverDiscardedMax,
+			RiverOldestDueMax:  cfg.Health.RiverOldestDueMax,
+			SyncWatchdogMaxAge: cfg.Health.SyncWatchdogMaxAge,
+			DiskPath:           cfg.Health.DiskPath,
+			DiskMinFreePercent: cfg.Health.DiskMinFreePercent,
+		},
+	})
 	router.GET("/health", healthChecker.Handler)
 
 	// OAuth callback routes (no auth - called by provider redirects)
