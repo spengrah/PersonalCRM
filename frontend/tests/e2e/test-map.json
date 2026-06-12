@@ -581,5 +581,21 @@
   {
     "pattern": "^backend/internal/api/handlers/staleness\\.go$",
     "tags": ["@smoke"]
+  },
+  {
+    "pattern": "^backend/internal/health/health\\.go$",
+    "tags": ["@smoke"]
+  },
+  {
+    "pattern": "^backend/internal/health/disk\\.go$",
+    "tags": ["@smoke"]
+  },
+  {
+    "pattern": "^backend/internal/repository/health\\.go$",
+    "tags": ["@smoke"]
+  },
+  {
+    "pattern": "^backend/internal/config/config\\.go$",
+    "tags": ["@smoke"]
   }
 ]

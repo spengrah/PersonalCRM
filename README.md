@@ -22,7 +22,7 @@ A single-user, local-first customer relationship management system with AI-power
 3. **Access the application**:
    - Frontend: http://localhost:3000
    - Backend API: http://localhost:8080
-   - Health check: http://localhost:8080/health
+   - Health check: http://localhost:8080/health (bare = liveness, DB-only; add `?ready=1` for a readiness probe that also covers River, sync staleness, and disk — 503 if any component is unhealthy)
 
 ## Prerequisites
 
@@ -144,7 +144,7 @@ To rotate the API key:
 ### Security Features
 
 - **API Key Authentication**: All `/api/v1/*` endpoints require API key via `X-API-Key` header
-- **Public Endpoints**: `/health` and `/swagger/*` remain public for monitoring and documentation
+- **Public Endpoints**: `/health` and `/swagger/*` remain public for monitoring and documentation. `/health?ready=1` is the readiness variant for an external (tailnet) monitor — it exposes counts and ages only (no PII)
 - **Defense in Depth**: When deployed via Tailscale, combines network-layer (VPN) + application-layer (API key) security
 
 ### Google OAuth Setup
