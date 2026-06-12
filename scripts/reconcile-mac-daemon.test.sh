@@ -12,8 +12,9 @@
 #
 # Asserts the load-bearing correctness points from plan §3.2:
 #   - relevance gate: no-op when mac-daemon/ unchanged; deploy when changed.
-#   - CI gate: fail-closed on failure; soft-skip on missing; gh auth/structural
-#     failure -> informational notice (not silent); transient -> soft-skip.
+#   - CI gate: fail-closed on failure; soft-skip on missing; structural failure
+#     (empty repo / 401|403|404) -> informational notice (not silent); transient
+#     -> soft-skip; never invokes `gh auth status` (precheck removed).
 #   - fetch advances origin/main (not just FETCH_HEAD).
 #   - empty codesign identity: loud abort (ntfy when configured, else red exit).
 #   - tooling refresh runs even on a no-op + preserves the executable bit.
@@ -323,22 +324,23 @@ test_transient_gh_failure_soft_skips() {
     unset DEPLOY_ENV_FILE_OVERRIDE
 }
 
-test_unauthed_gh_informational_notice() {
-    echo "test: unauthed gh -> informational notice (not silent)"
+test_never_invokes_gh_auth_status() {
+    echo "test: the CI gate NEVER invokes \`gh auth status\` (precheck removed)"
     make_sandbox
     write_deploy_env "CRM_MAC_CODESIGN_IDENTITY=My Cert" "NTFY_URL=https://ntfy.example" "NTFY_TOPIC=tok"
-    STUB_GH_AUTH_RC=1 run_reconcile
-    if [ "$RC" -eq 0 ]; then ok; else fail "unauthed gh should exit 0, got $RC"; fi
-    if log_has "Title: Mac deploy: CI gate could not be queried"; then ok; else fail "unauthed gh must fire the informational CI-gate notice"; fi
-    if log_has "Priority: low"; then ok; else fail "CI-gate notice must be low priority"; fi
-    if log_lacks "Title: Mac deploy FAILED"; then ok; else fail "unauthed gh must NOT fire a FAILED ntfy"; fi
-    if log_lacks "deploy-mac-daemon.sh identity="; then ok; else fail "unauthed gh must NOT build"; fi
+    # A happy-path run: the precheck having been removed, the script must reach the
+    # gh repo view / gh api query WITHOUT ever calling `gh auth status`. This guards
+    # against a future re-introduction of the false-failing multi-account precheck.
+    STUB_CI_CONCLUSION=success STUB_INSTALLED_SHA="$INSTALLED_SHA" STUB_DIFF_RC=1 run_reconcile
+    if [ "$RC" -eq 0 ]; then ok; else fail "happy path should exit 0, got $RC ($OUT)"; fi
+    if log_lacks "gh auth"; then ok; else fail "the CI gate must NOT invoke gh auth status"; fi
+    if log_has "gh repo view"; then ok; else fail "the CI gate must resolve the repo via gh repo view"; fi
     cleanup_sandbox
     unset DEPLOY_ENV_FILE_OVERRIDE
 }
 
 test_structural_gh_failure_informational() {
-    echo "test: structural gh failures (empty REPO / 404 / 403) -> informational notice"
+    echo "test: structural gh failures (empty REPO / 401 / 404 / 403) -> informational notice"
     # Sub-case 1: empty REPO (gh repo view yields nothing).
     make_sandbox
     write_deploy_env "CRM_MAC_CODESIGN_IDENTITY=My Cert" "NTFY_URL=https://ntfy.example" "NTFY_TOPIC=tok"
@@ -363,6 +365,18 @@ test_structural_gh_failure_informational() {
     STUB_GH_AUTH_RC=0 STUB_GH_API_RC=1 STUB_GH_HTTP_STATUS=403 run_reconcile
     if [ "$RC" -eq 0 ] && log_has "Title: Mac deploy: CI gate could not be queried" && log_lacks "deploy-mac-daemon.sh identity="; then ok
     else fail "403 must give the informational notice + no build (rc=$RC)"; fi
+    cleanup_sandbox
+    unset DEPLOY_ENV_FILE_OVERRIDE
+
+    # Sub-case 4: 401 (unauthenticated / expired token). Load-bearing after the
+    # precheck removal — the downstream HTTP-status classification is now the SOLE
+    # auth-failure surface, and 401 is the most likely real auth failure, so it
+    # MUST route to ghfailure (informational notice, no build), not a silent skip.
+    make_sandbox
+    write_deploy_env "CRM_MAC_CODESIGN_IDENTITY=My Cert" "NTFY_URL=https://ntfy.example" "NTFY_TOPIC=tok"
+    STUB_GH_AUTH_RC=0 STUB_GH_API_RC=1 STUB_GH_HTTP_STATUS=401 run_reconcile
+    if [ "$RC" -eq 0 ] && log_has "Title: Mac deploy: CI gate could not be queried" && log_lacks "deploy-mac-daemon.sh identity="; then ok
+    else fail "401 must give the informational notice + no build (rc=$RC)"; fi
     cleanup_sandbox
     unset DEPLOY_ENV_FILE_OVERRIDE
 }
@@ -428,11 +442,13 @@ test_tooling_refresh_on_noop() {
     write_deploy_env "CRM_MAC_CODESIGN_IDENTITY=My Cert" "NTFY_URL=https://ntfy.example" "NTFY_TOPIC=tok"
     STUB_CI_CONCLUSION=success STUB_INSTALLED_SHA="$INSTALLED_SHA" STUB_DIFF_RC=0 run_reconcile
     if [ "$RC" -eq 0 ]; then ok; else fail "no-op should exit 0, got $RC"; fi
-    # The refresh reads both scripts from origin/main BEFORE the relevance gate.
+    # The refresh reads all three scripts from origin/main BEFORE the relevance gate.
     if log_has "show origin/main:scripts/reconcile-mac-daemon.sh"; then ok; else fail "refresh must read reconcile-mac-daemon.sh from origin/main"; fi
     if log_has "show origin/main:scripts/deploy-mac-daemon.sh"; then ok; else fail "refresh must read deploy-mac-daemon.sh from origin/main"; fi
+    if log_has "show origin/main:scripts/trigger-mac-deploy.sh"; then ok; else fail "refresh must read trigger-mac-deploy.sh from origin/main"; fi
     # The refreshed files land at the stable bin dir.
     if [ -f "$INSTALL_BIN_DIR/reconcile-mac-daemon.sh" ]; then ok; else fail "refreshed reconcile script must be installed to the stable bin dir"; fi
+    if [ -f "$INSTALL_BIN_DIR/trigger-mac-deploy.sh" ]; then ok; else fail "refreshed trigger script must be installed to the stable bin dir"; fi
     cleanup_sandbox
     unset DEPLOY_ENV_FILE_OVERRIDE
 }
@@ -442,7 +458,7 @@ test_tooling_refresh_preserves_exec_bit() {
     make_sandbox
     write_deploy_env "CRM_MAC_CODESIGN_IDENTITY=My Cert" "NTFY_URL=https://ntfy.example" "NTFY_TOPIC=tok"
     STUB_CI_CONCLUSION=success STUB_INSTALLED_SHA="$INSTALLED_SHA" STUB_DIFF_RC=0 run_reconcile
-    for f in reconcile-mac-daemon.sh deploy-mac-daemon.sh; do
+    for f in reconcile-mac-daemon.sh deploy-mac-daemon.sh trigger-mac-deploy.sh; do
         if [ -x "$INSTALL_BIN_DIR/$f" ]; then ok; else fail "$f must be executable after refresh"; fi
     done
     cleanup_sandbox
@@ -711,7 +727,7 @@ main() {
     test_fail_closed_on_ci_failure
     test_soft_skip_on_ci_missing
     test_transient_gh_failure_soft_skips
-    test_unauthed_gh_informational_notice
+    test_never_invokes_gh_auth_status
     test_structural_gh_failure_informational
     test_soft_skip_on_fetch_failure
     test_fetch_advances_tracking_ref
