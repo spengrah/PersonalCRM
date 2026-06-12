@@ -51,9 +51,10 @@ const readChangedFiles = command => {
     }).trim()
   } catch {
     // A `git diff` against a base ref that doesn't exist (e.g. a bare clone with
-    // neither origin/develop nor origin/main) throws. Degrade to an empty changed
-    // set — selection falls back to @smoke and the warning fires on nothing —
-    // rather than crashing the whole diff-selection run.
+    // neither origin/develop nor origin/main, or an invalid E2E_BASE_REF) throws.
+    // Degrade to an empty changed set rather than crashing the whole run — but warn,
+    // since silently dropping to @smoke would under-cover real committed changes.
+    console.error(`WARNING: test-e2e-diff — "${command}" failed; diff-selection is treating it as no changes. Selection may under-cover this push (set E2E_BASE_REF to a valid ref).`)
     return []
   }
 

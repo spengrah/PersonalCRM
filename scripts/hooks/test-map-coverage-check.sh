@@ -26,12 +26,14 @@
 set -uo pipefail
 
 run_test_map_coverage() {
+  # Optional $1 overrides the map path. Production callers pass nothing (the guard
+  # body and the pre-push command both invoke it with no args); only the self-test
+  # passes an injected map so it can drive this real wrapper (incl. its
+  # command-substitution rc-capture below) against a malformed map. Using a function
+  # parameter rather than an env var avoids an exported-in-a-dev-shell footgun.
   local repo_root map specs offenders rc
   repo_root="$(git rev-parse --show-toplevel)"
-  # TEST_MAP_PATH lets the self-test drive this real wrapper (incl. its
-  # command-substitution rc-capture below) against an injected malformed map,
-  # so the fail-closed branch is exercised end-to-end and not just reimplemented.
-  map="${TEST_MAP_PATH:-$repo_root/frontend/tests/e2e/test-map.json}"
+  map="${1:-$repo_root/frontend/tests/e2e/test-map.json}"
 
   # Tracked top-level specs only. An untracked new spec is in-progress work and
   # shouldn't block; once committed it's caught. The glob is non-recursive so

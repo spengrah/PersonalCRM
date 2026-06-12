@@ -96,14 +96,14 @@ node "$MODULE" "$tmp/does-not-exist.json" "frontend/tests/e2e/contacts.spec.ts" 
 assert_eq "missing map file -> exit 2 (fail-closed)" "2" "$rc"
 
 # Wrapper fail-closed: drive the REAL run_test_map_coverage (sourced above) against
-# an injected map via TEST_MAP_PATH. This exercises the actual command-substitution
-# rc-capture (`offenders="$(node ...)"; rc=$?; case "$rc"`) in the guard — not a
-# reimplementation — so a future regression in that path is caught here. The guard
-# still reads the live tracked spec list via git ls-files, which all map cleanly,
-# so the verdict is driven entirely by the injected map's validity.
-TEST_MAP_PATH="$tmp/bad-json.json" run_test_map_coverage >/dev/null 2>&1; rc=$?
+# an injected map passed as its optional $1. This exercises the actual command-
+# substitution rc-capture (`offenders="$(node ...)"; rc=$?; case "$rc"`) in the guard
+# — not a reimplementation — so a future regression in that path is caught here. The
+# guard still reads the live tracked spec list via git ls-files, which all map
+# cleanly, so the verdict is driven entirely by the injected map's validity.
+run_test_map_coverage "$tmp/bad-json.json" >/dev/null 2>&1; rc=$?
 assert_eq "wrapper: malformed-JSON map -> non-zero verdict (blocks push)" "1" "$rc"
-TEST_MAP_PATH="$tmp/missing-pattern.json" run_test_map_coverage >/dev/null 2>&1; rc=$?
+run_test_map_coverage "$tmp/missing-pattern.json" >/dev/null 2>&1; rc=$?
 assert_eq "wrapper: map with patternless rule -> non-zero verdict (blocks push)" "1" "$rc"
 
 # Live-repo regression guard: after the Step-1 backfill the real guard exits 0.
