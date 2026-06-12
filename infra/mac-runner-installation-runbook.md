@@ -32,7 +32,7 @@ The promotion model is identical to the Pi's, pointed at a second self-hosted ru
   - `SMAppService` registration is a **gui-domain** operation (`launchctl … gui/$(id -u)`). The daemon is a per-user LaunchAgent; registering/booting it out requires the user's gui domain, which only exists inside a login session.
 - **NO dedicated system user, NO sudoers, NO root.** There is no `gha-runner`-equivalent account, no `/etc/sudoers.d/` drop-in, no privileged script. The entire Mac deploy capability is "run `make mac-daemon` + `crm-mac install --upgrade` as you." `deploy-mac.yml` has no `sudo` and no checkout; the workflow's whole body is the one `run:` line that invokes the installed reconcile script.
 - **Trust boundary.** The CI surface (the runner) IS the user. A compromise of the runner is a compromise of the logged-in account. This is a conscious, documented trade (spec § Runner security posture): acceptable for a **private, single-author, PR-gated** repository where every promoted SHA is already reviewed + CI-green on `develop`. The runner only ever runs reviewed code (`deploy-mac.yml` is `push: [main]`-only — never `develop`, never `pull_request` — so fork/PR code never reaches the Mac runner), and the `production` GitHub Environment enforces the `main`-only rule.
-- **The CI gate uses the USER's `gh` auth, not the workflow `GITHUB_TOKEN`.** `reconcile-mac-daemon.sh` queries `ci.yml`'s conclusion for the target SHA via the logged-in user's `gh` CLI. So `deploy-mac.yml` needs no `actions: read` permission, and `gh auth status` is a go-live precondition (Phase 4).
+- **The CI gate's `gh` auth differs by trigger.** The **runner path** (`deploy-mac.yml`) runs `gh` inside a GitHub Actions job, where it does NOT use the runner user's keyring login — so the workflow grants `actions: read` and passes `GH_TOKEN: ${{ github.token }}` to the reconcile step (mirroring `deploy-prod.yml`). The **timer path** (launchd, outside Actions) uses the logged-in user's `gh` keyring auth, so `gh auth status` is a go-live precondition for the timer path only (Phase 4).
 
 ## Phase 1 — Register the Mac as a `[self-hosted, mac]` runner (user LaunchAgent, NOT the default LaunchDaemon)
 
@@ -191,7 +191,7 @@ security set-key-partition-list \
 
 If signing fails post-lock, the login Keychain is auto-locking; resolve it in Keychain Access (the login Keychain's "Lock after / on sleep" settings) rather than weakening the partition-list grant.
 
-**`gh auth status` precondition.** Reconcile's CI gate queries `ci.yml`'s conclusion via the logged-in user's `gh` CLI. If `gh` is not authed (or lacks Actions read access), the CI gate cannot run — reconcile surfaces this as a low-priority informational ntfy (`Mac deploy: CI gate could not be queried`) and skips, rather than deploying blind. Confirm `gh` is authed before go-live:
+**`gh auth status` precondition (timer path).** The **timer-fired** reconcile runs `gh` outside Actions and queries `ci.yml`'s conclusion via the logged-in user's `gh` CLI. If `gh` is not authed (or lacks Actions read access), the timer's CI gate cannot run — reconcile surfaces this as a low-priority informational ntfy (`Mac deploy: CI gate could not be queried`) and skips, rather than deploying blind. (The **runner-fired** path does not depend on this — it uses the workflow `GITHUB_TOKEN` with `actions: read`.) Confirm `gh` is authed before go-live:
 
 ```bash
 gh auth status   # must show "Logged in to github.com" with repo + Actions read access

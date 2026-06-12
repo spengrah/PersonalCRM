@@ -13,8 +13,11 @@ name: Deploy Mac Daemon
 # A thin trigger: it invokes the locally-installed reconcile orchestrator, which
 # does its own fetch + CI gate + relevance gate. No checkout, no marketplace
 # actions (nothing to SHA-pin), no sudo — the entire Mac deploy is userland, run
-# as the logged-in user. The reconcile script queries CI via the USER's `gh`
-# auth, not the workflow GITHUB_TOKEN, so this workflow needs no `actions: read`.
+# as the logged-in user. The reconcile script queries ci.yml's conclusion via the
+# `gh` CLI. Inside an Actions job gh does NOT use the runner user's keyring login,
+# so the job passes it the workflow token (GH_TOKEN on the step) and grants
+# `actions: read` to read workflow-run conclusions. The timer-fired reconcile,
+# outside Actions, falls back to the user's gh auth.
 
 on:
   push:
@@ -27,6 +30,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read                 # CI gate reads ci.yml run conclusions via GH_TOKEN (see header)
 
 jobs:
   deploy:
@@ -34,6 +38,13 @@ jobs:
     environment: production       # the production Environment enforces the main-only rule
     steps:
       - name: Reconcile mac-daemon to origin/main
+        env:
+          # gh inside an Actions job does NOT use the runner user's keyring login;
+          # it needs an explicit token. The workflow token (scoped by `actions:
+          # read` above) authenticates ALL of reconcile's gh calls in this job
+          # (auth status, repo view, and the ci.yml runs query). The timer-fired
+          # reconcile, outside Actions, uses the user's gh keyring auth instead.
+          GH_TOKEN: ${{ github.token }}
         # The installed reconcile path contains a space ("Application Support").
         # In a YAML `run:` the outer quotes are YAML string syntax and are
         # STRIPPED before the shell sees the command — a single-line
