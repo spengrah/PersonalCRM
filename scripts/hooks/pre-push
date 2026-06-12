@@ -165,7 +165,7 @@ any_file_under_macdaemon() {
 should_skip_tests() {
   # Case 1: No pushed files trigger tests
   local remote_branch
-  remote_branch=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null) || remote_branch="origin/main"
+  remote_branch=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null) || remote_branch="origin/develop"
   local pushed_files
   pushed_files=$(git diff --name-only "$remote_branch"...HEAD 2>/dev/null)
 
@@ -212,7 +212,7 @@ check_swift() {
   fi
 
   local remote_branch changed
-  remote_branch=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null) || remote_branch="origin/main"
+  remote_branch=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null) || remote_branch="origin/develop"
   changed=$(git diff --name-only "$remote_branch"...HEAD 2>/dev/null) || changed=""
 
   if ! any_file_under_macdaemon "$changed"; then
