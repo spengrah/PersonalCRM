@@ -42,10 +42,11 @@ Rationale: `--system` (no aging, low uid), `--shell /usr/sbin/nologin` (no inter
 
 The runner agent registers against the repo with the `pi` label (matching `runs-on: [self-hosted, pi]` in `deploy-prod.yml`) and runs as a **system** systemd service under `gha-runner`.
 
-**Prerequisites** — the deploy workflow's CI/image gates use `curl` + `jq` (NOT `gh`), so both must be present on the runner host. Verify (install via the distro package manager if missing):
+**Prerequisites** — the deploy workflow's CI/image gates pipe `curl | jq` (NOT `gh`), so both must be present on the runner host. The very first go-live failed on a missing `jq`, so install them explicitly rather than only verifying:
 
 ```bash
-ssh "$PI_HOST" 'command -v curl jq'   # both must resolve; install with: sudo apt-get install -y curl jq
+ssh "$PI_HOST" 'sudo apt-get update && sudo apt-get install -y jq curl'
+ssh "$PI_HOST" 'command -v jq curl'   # confirm both resolve after install
 ```
 
 **Install + register** — download the arm64 runner, install its OS dependencies, register, then install + start the service:
