@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  crm-mac-deploy reconcile timer (LaunchAgent template).
+
+  __INSTALL_PREFIX__ is substituted by scripts/setup-mac-deploy.sh to the
+  absolute deploy root ($CRM_MAC_DEPLOY_ROOT, default
+  "$HOME/Library/Application Support/crm-mac-deploy"). The RENDERED plist is
+  written to ~/Library/LaunchAgents and is NEVER committed (it carries the
+  absolute, username-bearing path). Only this placeholder template is committed.
+
+  This is a one-shot TIMER (not a persistent daemon): no KeepAlive. It uses
+  StartCalendarInterval + RunAtLoad — NOT StartInterval — because
+  StartCalendarInterval coalesces a sleep-missed fire (launchd catches it up
+  after wake) whereas StartInterval silently drops missed fires; RunAtLoad fires
+  once on login. Four daily entries give a ~6h "longer than hourly" cadence plus
+  the login fire. The invoked script does its own fetch + CI gate + relevance
+  gate, so an extra fire is a cheap no-op.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>xyz.spengrah.crm-mac-deploy</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__INSTALL_PREFIX__/bin/reconcile-mac-daemon.sh</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Hour</key><integer>3</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>15</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>21</integer><key>Minute</key><integer>0</integer></dict>
+    </array>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>StandardOutPath</key>
+    <string>__INSTALL_PREFIX__/reconcile-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>__INSTALL_PREFIX__/reconcile-stderr.log</string>
+</dict>
+</plist>

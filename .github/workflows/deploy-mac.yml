@@ -1,0 +1,46 @@
+name: Deploy Mac Daemon
+
+# Promotion-triggered Mac daemon deploy. Fires ONLY on push to main (the
+# coordinator fast-forwards main to a reviewed develop SHA). It sits INERT on
+# develop and on every PR — no develop or pull_request trigger — so fork code
+# never reaches the self-hosted Mac runner.
+#
+# A separate workflow from deploy-prod.yml (NOT a job there) on purpose: a Mac
+# job in deploy-prod.yml would inherit its `concurrency: deploy-pi` group, so a
+# queued/slow Mac run could stall or supersede a Pi deploy. This workflow gets
+# its OWN concurrency group instead.
+#
+# A thin trigger: it invokes the locally-installed reconcile orchestrator, which
+# does its own fetch + CI gate + relevance gate. No checkout, no marketplace
+# actions (nothing to SHA-pin), no sudo — the entire Mac deploy is userland, run
+# as the logged-in user. The reconcile script queries CI via the USER's `gh`
+# auth, not the workflow GITHUB_TOKEN, so this workflow needs no `actions: read`.
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy-mac             # its OWN group — never shares deploy-pi
+  cancel-in-progress: false     # a new promote queues behind a running deploy;
+                                # reconcile-to-main makes the queued run converge to latest
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, mac]
+    environment: production       # the production Environment enforces the main-only rule
+    steps:
+      - name: Reconcile mac-daemon to origin/main
+        # The installed reconcile path contains a space ("Application Support").
+        # In a YAML `run:` the outer quotes are YAML string syntax and are
+        # STRIPPED before the shell sees the command — a single-line
+        # `run: "$HOME/.../reconcile-mac-daemon.sh"` would leave the shell an
+        # unquoted, space-bearing path that it word-splits ("no such file"). The
+        # `run: |` block scalar below preserves the literal shell quotes so the
+        # shell receives a properly-quoted path. The path is the stable install
+        # location written by `make setup-mac-deploy` (scripts/setup-mac-deploy.sh).
+        run: |
+          "$HOME/Library/Application Support/crm-mac-deploy/bin/reconcile-mac-daemon.sh"
