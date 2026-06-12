@@ -348,9 +348,10 @@ ci_gate() {
         # makes the pipeline non-zero, which would ABORT the script at this
         # assignment before the case below runs — skipping the ghfailure/softskip
         # classification entirely. (Real gh exits non-zero on 401/403/404; the
-        # test stub returns 0, so only a real gh exposes this.) Swallow the
-        # status so the classification proceeds; an empty status_code falls
-        # through to the transient softskip after the retry loop.
+        # test stub models this faithfully — its `gh api -i` exits non-zero in the
+        # failure cases.) Swallow the status so the classification proceeds; an
+        # empty status_code falls through to the transient softskip after the
+        # retry loop.
         local status_code
         status_code="$(gh api -i "$query" 2>/dev/null | awk 'NR==1{print $2; exit}' || true)"
         case "$status_code" in
