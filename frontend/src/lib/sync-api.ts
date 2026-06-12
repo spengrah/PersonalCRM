@@ -13,7 +13,7 @@ export const syncApi = {
     return apiClient.get<SyncState>(`/api/v1/sync/${source}/status${params}`)
   },
 
-  // Get active sync-staleness breaches reported by the watchdog (#480).
+  // Get active sync-staleness breaches reported by the watchdog.
   getStalenessBreaches: async (): Promise<StalenessBreach[]> => {
     return apiClient.get<StalenessBreach[]>('/api/v1/sync/staleness')
   },

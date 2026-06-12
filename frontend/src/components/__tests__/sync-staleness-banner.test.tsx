@@ -93,4 +93,14 @@ describe('SyncStalenessBanner', () => {
     render(<SyncStalenessBanner />)
     expect(screen.getByText(/some_new_source/)).toBeInTheDocument()
   })
+
+  it('renders a sub-minute age as <1m', () => {
+    mockedUseSyncStaleness.mockReturnValue({
+      data: [createBreach({ stale_since: new Date().toISOString(), details: '' })],
+      isLoading: false,
+      isError: false,
+    })
+    render(<SyncStalenessBanner />)
+    expect(screen.getByText(/stale <1m/)).toBeInTheDocument()
+  })
 })

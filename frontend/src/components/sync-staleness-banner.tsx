@@ -34,13 +34,15 @@ function formatAge(staleSince: string, now: Date): string {
   if (Number.isNaN(since.getTime())) return ''
 
   const diffMs = now.getTime() - since.getTime()
-  if (diffMs < 0) return 'just now'
+  // Sub-minute ages (and small negative clock skew) render as "<1m" so the
+  // line reads "stale <1m" rather than an awkward "stale just now".
+  if (diffMs < 0) return '<1m'
 
   const diffMins = Math.floor(diffMs / (1000 * 60))
   const diffHours = Math.floor(diffMs / (1000 * 60 * 60))
   const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
 
-  if (diffMins < 1) return 'just now'
+  if (diffMins < 1) return '<1m'
   if (diffMins < 60) return `${diffMins}m`
   if (diffHours < 24) return `${diffHours}h`
   return `${diffDays}d`
@@ -56,7 +58,7 @@ function breachLine(breach: StalenessBreach, now: Date): string {
 
 /**
  * SyncStalenessBanner surfaces the sync-staleness watchdog's active breaches
- * (#480) as a persistent amber banner. It is deliberately fail-quiet: it
+ * as a persistent amber banner. It is deliberately fail-quiet: it
  * renders nothing while loading, on a fetch error, or when there are no
  * breaches, so a flaky poll can never break or alarm the page. The watchdog's
  * own logs are the backend signal path; this banner is just the surface cue.

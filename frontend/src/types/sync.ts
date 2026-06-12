@@ -20,7 +20,7 @@ export interface SyncState {
   updated_at: string
 }
 
-// Breach type emitted by the sync-staleness watchdog (#480).
+// Breach type emitted by the sync-staleness watchdog.
 export type StalenessBreachType = 'heartbeat' | 'sync_stale' | 'push_stale' | 'sync_error'
 
 // StalenessBreach mirrors the backend repository.StalenessBreach DTO returned

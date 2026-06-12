@@ -115,7 +115,7 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
       daemon_version: '0.1.2',
       protocol_version: 1,
       permissions: { fda: true, contacts: false },
-      // Watchdog coupling (#480): this last_pushed_at is month-stale, so adding
+      // Sync-staleness watchdog coupling: this last_pushed_at is month-stale, so adding
       // `enabled: true` here would open a push_stale breach and surface the
       // staleness banner mid-run. Keep `enabled` absent (or last_pushed_at fresh).
       source_health: {
@@ -170,7 +170,7 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
       hostname: 'e2e-icloud-host',
       daemon_version: '0.1.2',
       protocol_version: 2,
-      // Watchdog coupling (#480): this last_pushed_at is month-stale, so adding
+      // Sync-staleness watchdog coupling: this last_pushed_at is month-stale, so adding
       // `enabled: true` here would open a push_stale breach and surface the
       // staleness banner mid-run. Keep `enabled` absent (or last_pushed_at fresh).
       source_health: {
@@ -233,7 +233,7 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
       hostname: 'e2e-icloud-host-incomplete',
       daemon_version: '0.1.2',
       protocol_version: 2,
-      // Watchdog coupling (#480): this last_pushed_at is month-stale, so adding
+      // Sync-staleness watchdog coupling: this last_pushed_at is month-stale, so adding
       // `enabled: true` here would open a push_stale breach and surface the
       // staleness banner mid-run. Keep `enabled` absent (or last_pushed_at fresh).
       source_health: {
