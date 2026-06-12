@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev dev-seed staging-reset build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy-mac promote setup-pi dev-native postgres-native sqlc smoke-test test-deploy-scripts test-integration-fast test-integration-slow test-clean-clones check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry
+.PHONY: help setup dev dev-seed staging-reset build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts test-integration-fast test-integration-slow test-clean-clones check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -107,9 +107,10 @@ help:
 	@echo "  test-cadence-fast  - Test all cadences in hours (staging env)"
 	@echo ""
 	@echo "Deployment:"
-	@echo "  setup-pi   - One-time Pi setup (create user, directories)"
-	@echo "  promote    - Fast-forward main to develop (triggers prod deploy)"
-	@echo "  deploy-mac - Build and install the Mac daemon (requires CRM_MAC_CODESIGN_IDENTITY)"
+	@echo "  setup-pi         - One-time Pi setup (create user, directories)"
+	@echo "  setup-mac-deploy - One-time Mac deploy setup (clone + reconcile + timer)"
+	@echo "  promote          - Fast-forward main to develop (triggers prod deploy)"
+	@echo "  deploy-mac       - Build and install the Mac daemon (requires CRM_MAC_CODESIGN_IDENTITY)"
 
 # Setup development environment (installs all dev dependencies)
 # Run this first when setting up a new development environment
@@ -401,11 +402,18 @@ test-api:
 	@cd backend && go test ./tests/... -v
 
 # Mocked shell suites for the deploy orchestrators (Pi + Mac). Pure bash with
-# PATH-shadow stubs (no podman/Mac/network), so they run on any CI runner.
+# PATH-shadow stubs (no podman/Mac/network), so they run on any CI runner. The
+# committed timer template is validated for XML/plist well-formedness with a
+# cross-platform python3 plistlib parse (the __INSTALL_PREFIX__ placeholder lives
+# inside <string> values, so it parses fine); plutil is macOS-only and not used here.
 test-deploy-scripts:
 	@echo "Running deploy-script shell tests..."
 	@bash scripts/deploy-artifact.test.sh
 	@bash scripts/reconcile-mac-daemon.test.sh
+	@bash scripts/setup-mac-deploy.test.sh
+	@echo "Validating the committed timer template (plistlib parse)..."
+	@python3 -c "import plistlib,sys; plistlib.loads(open(sys.argv[1],'rb').read()); print('  timer template OK')" \
+		infra/mac-deploy/xyz.spengrah.crm-mac-deploy.plist.template
 
 smoke-test:
 	@echo "Running full system smoke test..."
@@ -731,3 +739,9 @@ promote:
 
 setup-pi:
 	@./scripts/setup-pi.sh
+
+# One-time Mac deploy setup (dedicated clone, reconcile install, timer LaunchAgent).
+# Operational wiring (runner registration, deploy.env values, codesign key
+# pre-auth) is the runbook's job — see infra/mac-runner-installation-runbook.md.
+setup-mac-deploy:
+	@./scripts/setup-mac-deploy.sh
