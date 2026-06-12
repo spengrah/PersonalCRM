@@ -450,6 +450,20 @@ type RiverJob struct {
 	UniqueStates pgtype.Bits        `json:"unique_states"`
 }
 
+type SyncStalenessBreach struct {
+	ID               pgtype.UUID        `json:"id"`
+	Source           string             `json:"source"`
+	AccountID        string             `json:"account_id"`
+	BreachType       string             `json:"breach_type"`
+	StaleSince       pgtype.Timestamptz `json:"stale_since"`
+	ThresholdSeconds int64              `json:"threshold_seconds"`
+	Details          string             `json:"details"`
+	DetectedAt       pgtype.Timestamptz `json:"detected_at"`
+	LastObservedAt   pgtype.Timestamptz `json:"last_observed_at"`
+	ResolvedAt       pgtype.Timestamptz `json:"resolved_at"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+}
+
 type Tag struct {
 	ID        pgtype.UUID        `json:"id"`
 	Name      string             `json:"name"`

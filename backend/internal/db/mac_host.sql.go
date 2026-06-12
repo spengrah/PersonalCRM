@@ -420,6 +420,28 @@ func (q *Queries) RotateMacHostAPIKey(ctx context.Context, arg RotateMacHostAPIK
 	return &i, err
 }
 
+const SetMacHostHeartbeatAtForTest = `-- name: SetMacHostHeartbeatAtForTest :exec
+UPDATE mac_host
+SET last_heartbeat_at = $1
+WHERE id = $2
+`
+
+type SetMacHostHeartbeatAtForTestParams struct {
+	LastHeartbeatAt pgtype.Timestamptz `json:"last_heartbeat_at"`
+	ID              pgtype.UUID        `json:"id"`
+}
+
+// Test-only: stamps last_heartbeat_at to a caller-supplied (typically past)
+// value so staleness-watchdog tests can simulate a host that has not
+// heartbeated recently. SeedHostForTest bumps last_heartbeat_at to NOW() via
+// the heartbeat patch, so a separate setter is needed for past timestamps.
+// Production code never calls this — the daemon's heartbeat POST is the only
+// real writer of last_heartbeat_at.
+func (q *Queries) SetMacHostHeartbeatAtForTest(ctx context.Context, arg SetMacHostHeartbeatAtForTestParams) error {
+	_, err := q.db.Exec(ctx, SetMacHostHeartbeatAtForTest, arg.LastHeartbeatAt, arg.ID)
+	return err
+}
+
 const UpdateMacHostHeartbeat = `-- name: UpdateMacHostHeartbeat :one
 UPDATE mac_host
 SET last_heartbeat_at  = NOW(),
