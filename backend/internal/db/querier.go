@@ -156,6 +156,16 @@ type Querier interface {
 	CountContactTasksByProvider(ctx context.Context, arg CountContactTasksByProviderParams) (int64, error)
 	CountContacts(ctx context.Context, arg CountContactsParams) (int64, error)
 	CountContactsByNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
+	// /health component queries over river_job.
+	//
+	// These are the production-grade reads behind the river + sync /health
+	// components. All timestamps are supplied by the handler from
+	// accelerated time — these queries never call NOW() (mirroring the
+	// sync_staleness.sql convention).
+	// Count jobs that exhausted their retries and landed in 'discarded'. Discarded
+	// rows are finalized and retained 90d; any non-zero count is an operator
+	// signal (remediation: crm-admin --retry-job).
+	CountDiscardedRiverJobs(ctx context.Context) (int64, error)
 	// Used by integration tests (and potentially ops dashboards) to assert
 	// ingest outcomes per source. The event log is append-only, so no
 	// deleted_at filter is needed.
@@ -829,6 +839,15 @@ type Querier interface {
 	// the atomic-claim dedup path observes count>0. Mirrors the row a real
 	// enqueue would insert; the worker never runs in these tests.
 	InsertRiverJobForTest(ctx context.Context, args []byte) error
+	// The newest finalized_at among COMPLETED jobs of a given kind — the
+	// watchdog-liveness signal that breaks the circular dependency where the sync
+	// component trusts a breach table that only the watchdog (itself a River job)
+	// keeps fresh. Filtering to 'completed' (not any-state) is load-bearing: an
+	// enqueue-trail check would stay fresh while a persistently-FAILING watchdog
+	// worker froze the breach table; the completion trail proves the watchdog
+	// actually RAN successfully. MAX(...) over zero rows returns NULL → nil
+	// *time.Time ("watchdog not running"); the ::timestamptz cast pins the type.
+	LatestCompletedRiverJobByKind(ctx context.Context, kind string) (pgtype.Timestamptz, error)
 	LinkIdentityToContact(ctx context.Context, arg LinkIdentityToContactParams) (*ExternalIdentity, error)
 	ListActiveMacHosts(ctx context.Context) ([]*MacHost, error)
 	// List all OAuth credentials
@@ -1204,6 +1223,25 @@ type Querier interface {
 	//     rows were already linked to res.Interaction.ID on the original
 	//     attempt; processed_at IS NOT NULL now filters them out.
 	MarkTelegramMessagesProcessedForSession(ctx context.Context, arg MarkTelegramMessagesProcessedForSessionParams) (int64, error)
+	// The earliest scheduled_at among jobs that are due now but not yet picked up
+	// by a worker — the stall signal for a starved/dead worker pool. scheduled_at
+	// is the next-eligibility time: for 'available' it equals creation time, for
+	// 'retryable' River sets it to now+backoff, so it is the correct "oldest due"
+	// column (created_at would be the original creation time for a retryable job;
+	// attempted_at is NULL until the first attempt). The scheduled_at <= @now guard
+	// excludes retryable jobs whose backoff lies in the future — those are not
+	// waiting, they are not yet due.
+	//
+	// Deliberate state-set asymmetry vs CountInFlightSyncJobs (which also counts
+	// 'pending' and 'scheduled' as in-flight): 'pending' jobs are gated on River
+	// workflow conditions, and past-due 'scheduled' rows transition to 'available'
+	// on the scheduler's next pass — neither is "a due job the workers are failing
+	// to pick up", which is what this query measures.
+	//
+	// MIN(...) over zero rows returns NULL; the ::timestamptz cast pins the
+	// aggregate's generated type. The repository maps NULL to a nil *time.Time
+	// ("no due jobs").
+	OldestDueRiverJobScheduledAt(ctx context.Context, now pgtype.Timestamptz) (pgtype.Timestamptz, error)
 	RemoveContactTag(ctx context.Context, arg RemoveContactTagParams) error
 	// Replace source contact ID with target contact ID in calendar event matched_contact_ids array
 	// Uses array_replace for efficient in-place replacement
@@ -1625,6 +1663,16 @@ type Querier interface {
 	// The token columns are bytea (encrypted-at-rest); dummy bytes are fine for a
 	// marker that is never decrypted.
 	TestInsertOAuthCredentialMarker(ctx context.Context) error
+	// /health river-component integration test only: plant one river_job with an
+	// explicit kind, state, scheduled_at, and (nullable) finalized_at so the
+	// discarded-count / oldest-due / latest-completed-by-kind queries can be
+	// asserted against known values. All timestamps are caller-supplied (no NOW())
+	// so the freshness/age discrimination assertions are deterministic — explicit
+	// finalized_at values hours apart are what make the latest-completed-by-kind
+	// "newest wins" assertion real. Minimal valid row modeled on
+	// TestInsertNonFinalRiverJob: River requires kind, queue, state, args,
+	// metadata, max_attempts.
+	TestInsertRiverJobWithStateForTest(ctx context.Context, arg TestInsertRiverJobWithStateForTestParams) error
 	// Reset test only: a marker row in tag (a standalone table the harness does not
 	// touch).
 	TestInsertTagMarker(ctx context.Context) error

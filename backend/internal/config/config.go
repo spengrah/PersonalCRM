@@ -27,6 +27,7 @@ type Config struct {
 	Telegram  TelegramConfig
 	River     RiverConfig
 	EventBus  EventBusConfig
+	Health    HealthConfig
 }
 
 // DatabaseConfig holds database connection settings
@@ -137,6 +138,17 @@ type StalenessConfig struct {
 	ErrorMinCount      int                      // default 3; 0 disables sync_error checks
 	ErrorThreshold     time.Duration            // default 6h; duration floor for sync_error (0 = count-only)
 	SourceOverrides    map[string]time.Duration // per-source freshness threshold; 0 disables that source
+}
+
+// HealthConfig holds /health component thresholds. Same parse-strictness
+// caveat as StalenessConfig: getEnvAsInt/getEnvAsDuration silently fall back to
+// defaults on malformed values.
+type HealthConfig struct {
+	RiverDiscardedMax  int           // HEALTH_RIVER_DISCARDED_MAX, default 0: degraded when discarded count exceeds this
+	RiverOldestDueMax  time.Duration // HEALTH_RIVER_OLDEST_DUE_MAX, default 30m; 0 disables the oldest-due age check
+	SyncWatchdogMaxAge time.Duration // HEALTH_SYNC_WATCHDOG_MAX_AGE, default 30m; 0 disables the watchdog-freshness guard
+	DiskPath           string        // HEALTH_DISK_PATH, default "/"
+	DiskMinFreePercent int           // HEALTH_DISK_MIN_FREE_PERCENT, default 10; 0 disables the floor
 }
 
 // TelegramConfig holds Telegram integration tuning parameters
@@ -318,6 +330,17 @@ const (
 	DefaultStalenessPushThreshold      = 48 * time.Hour
 	DefaultStalenessErrorMinCount      = 3
 	DefaultStalenessErrorThreshold     = 6 * time.Hour
+	// /health component thresholds. See the HealthConfig doc comment:
+	// any discarded job is immediately actionable (crm-admin --list-jobs /
+	// --retry-job is the remediation tooling), 30m oldest-due /
+	// watchdog-max-age = six missed 5m
+	// periodic ticks (comfortably under River's 24h completed-job retention),
+	// and 10% free is standard SD-card headroom.
+	DefaultHealthRiverDiscardedMax  = 0
+	DefaultHealthRiverOldestDueMax  = 30 * time.Minute
+	DefaultHealthSyncWatchdogMaxAge = 30 * time.Minute
+	DefaultHealthDiskPath           = "/"
+	DefaultHealthDiskMinFreePercent = 10
 )
 
 // builtinStalenessSourceOverrides returns a fresh copy of the per-source
@@ -456,6 +479,13 @@ func Load() (*Config, error) {
 			ErrorMinCount:      getEnvAsInt("SYNC_STALENESS_ERROR_MIN_COUNT", DefaultStalenessErrorMinCount),
 			ErrorThreshold:     getEnvAsDuration("SYNC_STALENESS_ERROR_THRESHOLD", DefaultStalenessErrorThreshold),
 			SourceOverrides:    stalenessOverrides,
+		},
+		Health: HealthConfig{
+			RiverDiscardedMax:  getEnvAsInt("HEALTH_RIVER_DISCARDED_MAX", DefaultHealthRiverDiscardedMax),
+			RiverOldestDueMax:  getEnvAsDuration("HEALTH_RIVER_OLDEST_DUE_MAX", DefaultHealthRiverOldestDueMax),
+			SyncWatchdogMaxAge: getEnvAsDuration("HEALTH_SYNC_WATCHDOG_MAX_AGE", DefaultHealthSyncWatchdogMaxAge),
+			DiskPath:           getEnv("HEALTH_DISK_PATH", DefaultHealthDiskPath),
+			DiskMinFreePercent: getEnvAsInt("HEALTH_DISK_MIN_FREE_PERCENT", DefaultHealthDiskMinFreePercent),
 		},
 		Telegram: TelegramConfig{
 			BurstWindowHours:     getEnvAsInt("TELEGRAM_BURST_WINDOW_HOURS", 2),
@@ -645,6 +675,39 @@ func (c *Config) Validate() error {
 				Message: fmt.Sprintf("override for source %q must not be negative, got %s", key, dur),
 			})
 		}
+	}
+
+	// /health component threshold validation. Zero values are the documented
+	// "disable this check" sentinels and are allowed; negatives are nonsense.
+	if c.Health.RiverDiscardedMax < 0 {
+		errors = append(errors, ValidationError{
+			Field:   "HEALTH_RIVER_DISCARDED_MAX",
+			Message: fmt.Sprintf("must not be negative, got %d", c.Health.RiverDiscardedMax),
+		})
+	}
+	if c.Health.RiverOldestDueMax < 0 {
+		errors = append(errors, ValidationError{
+			Field:   "HEALTH_RIVER_OLDEST_DUE_MAX",
+			Message: fmt.Sprintf("must not be negative, got %s", c.Health.RiverOldestDueMax),
+		})
+	}
+	if c.Health.SyncWatchdogMaxAge < 0 {
+		errors = append(errors, ValidationError{
+			Field:   "HEALTH_SYNC_WATCHDOG_MAX_AGE",
+			Message: fmt.Sprintf("must not be negative, got %s", c.Health.SyncWatchdogMaxAge),
+		})
+	}
+	if c.Health.DiskMinFreePercent < 0 || c.Health.DiskMinFreePercent > 100 {
+		errors = append(errors, ValidationError{
+			Field:   "HEALTH_DISK_MIN_FREE_PERCENT",
+			Message: fmt.Sprintf("must be in [0,100], got %d", c.Health.DiskMinFreePercent),
+		})
+	}
+	if c.Health.DiskPath == "" {
+		errors = append(errors, ValidationError{
+			Field:   "HEALTH_DISK_PATH",
+			Message: "must not be empty",
+		})
 	}
 
 	// EventBus interaction-mode validation. Default "cutover" is applied
@@ -877,6 +940,13 @@ func TestConfig() *Config {
 			ErrorMinCount:      DefaultStalenessErrorMinCount,
 			ErrorThreshold:     DefaultStalenessErrorThreshold,
 			SourceOverrides:    builtinStalenessSourceOverrides(),
+		},
+		Health: HealthConfig{
+			RiverDiscardedMax:  DefaultHealthRiverDiscardedMax,
+			RiverOldestDueMax:  DefaultHealthRiverOldestDueMax,
+			SyncWatchdogMaxAge: DefaultHealthSyncWatchdogMaxAge,
+			DiskPath:           DefaultHealthDiskPath,
+			DiskMinFreePercent: DefaultHealthDiskMinFreePercent,
 		},
 		Telegram: TelegramConfig{
 			BurstWindowHours:     2,

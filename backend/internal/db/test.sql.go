@@ -1514,6 +1514,37 @@ func (q *Queries) TestInsertOAuthCredentialMarker(ctx context.Context) error {
 	return err
 }
 
+const TestInsertRiverJobWithStateForTest = `-- name: TestInsertRiverJobWithStateForTest :exec
+INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts, scheduled_at, finalized_at)
+VALUES ($1, 'default', $2::river_job_state, '{}'::jsonb, '{}'::jsonb, 1, 1, $3, $4)
+`
+
+type TestInsertRiverJobWithStateForTestParams struct {
+	Kind        string             `json:"kind"`
+	State       RiverJobState      `json:"state"`
+	ScheduledAt pgtype.Timestamptz `json:"scheduled_at"`
+	FinalizedAt pgtype.Timestamptz `json:"finalized_at"`
+}
+
+// /health river-component integration test only: plant one river_job with an
+// explicit kind, state, scheduled_at, and (nullable) finalized_at so the
+// discarded-count / oldest-due / latest-completed-by-kind queries can be
+// asserted against known values. All timestamps are caller-supplied (no NOW())
+// so the freshness/age discrimination assertions are deterministic — explicit
+// finalized_at values hours apart are what make the latest-completed-by-kind
+// "newest wins" assertion real. Minimal valid row modeled on
+// TestInsertNonFinalRiverJob: River requires kind, queue, state, args,
+// metadata, max_attempts.
+func (q *Queries) TestInsertRiverJobWithStateForTest(ctx context.Context, arg TestInsertRiverJobWithStateForTestParams) error {
+	_, err := q.db.Exec(ctx, TestInsertRiverJobWithStateForTest,
+		arg.Kind,
+		arg.State,
+		arg.ScheduledAt,
+		arg.FinalizedAt,
+	)
+	return err
+}
+
 const TestInsertTagMarker = `-- name: TestInsertTagMarker :exec
 INSERT INTO tag (name) VALUES ('synthetic-reset-marker')
 `

@@ -134,16 +134,18 @@ exit 0
 EOF
 
     # --- stub: curl (health gate + ntfy) ---
-    # The health stub emits the REAL /health payload shape (top-level "status",
-    # nested components.database.status, AND the version.git_commit the gate's
-    # commit check reads) so the matcher is tested against what the server
-    # actually returns. The git_commit defaults to $VALID_SHA (expanded at
-    # stub-generation time) — the SHA every run_deploy call passes — so every
-    # existing green-path test exercises the commit-MATCH path. A test can
-    # override it per-run via STUB_HEALTH_GIT_COMMIT (kept escaped here so it
-    # resolves at stub-execution time, e.g. a mismatched SHA or "unknown").
-    # Unhealthy => exit non-zero, modelling the handler's HTTP 503 + `curl -sf`'s
-    # -f flag (which non-zeroes on >=400).
+    # The health stub emits the REAL bare-/health (liveness) payload shape: the
+    # top-level "status" + "probe", the byte-identical components.database object
+    # the gate's body-wide grep matches, the version.git_commit the gate's commit
+    # check reads, AND the additive river/sync/disk components the server now
+    # serves. The gate hits the LIVENESS route (bare /health), so top-level stays
+    # "healthy" whenever the DB is healthy regardless of the new components. The
+    # git_commit defaults to $VALID_SHA (expanded at stub-generation time) — the
+    # SHA every run_deploy call passes — so every existing green-path test
+    # exercises the commit-MATCH path. A test can override it per-run via
+    # STUB_HEALTH_GIT_COMMIT (kept escaped here so it resolves at stub-execution
+    # time, e.g. a mismatched SHA or "unknown"). Unhealthy => exit non-zero,
+    # modelling the handler's HTTP 503 + `curl -sf`'s -f flag (non-zeroes on >=400).
     cat > "$SANDBOX/bin/curl" <<EOF
 #!/usr/bin/env bash
 echo "curl \$*" >> "$CALL_LOG"
@@ -152,7 +154,7 @@ case "\$url" in
   *contacts*) echo -n "\${STUB_CADDY_CODE:-200}"; exit 0 ;;
   *8080/health*)
     if [ "\${STUB_HEALTH_OK:-1}" = "1" ]; then
-      echo "{\"status\":\"healthy\",\"timestamp\":\"t\",\"version\":{\"version\":\"dev\",\"build_time\":\"t\",\"git_commit\":\"\${STUB_HEALTH_GIT_COMMIT:-$VALID_SHA}\"},\"components\":{\"database\":{\"status\":\"healthy\",\"response_time\":\"1ms\"}}}"
+      echo "{\"status\":\"healthy\",\"probe\":\"liveness\",\"timestamp\":\"t\",\"version\":{\"version\":\"dev\",\"build_time\":\"t\",\"git_commit\":\"\${STUB_HEALTH_GIT_COMMIT:-$VALID_SHA}\"},\"components\":{\"database\":{\"status\":\"healthy\",\"response_time\":\"1ms\"},\"river\":{\"status\":\"healthy\",\"details\":{\"discarded_count\":0}},\"sync\":{\"status\":\"healthy\",\"details\":{\"active_breach_count\":0}},\"disk\":{\"status\":\"healthy\",\"details\":{\"path\":\"/\",\"free_percent\":42.0,\"free_bytes\":1,\"total_bytes\":2}}}}"
       exit 0
     fi
     # Unhealthy: handler returns 503; with -sf curl writes nothing and non-zeroes.

@@ -36,7 +36,7 @@ func TestHealthEndpoint_Healthy(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	mockDB := &mockDatabaseChecker{shouldError: false}
-	healthChecker := health.NewHealthChecker(mockDB, 5*time.Second)
+	healthChecker := health.NewHealthChecker(mockDB, 5*time.Second, health.Deps{})
 
 	router := gin.New()
 	router.GET("/health", healthChecker.Handler)
@@ -88,7 +88,7 @@ func TestHealthEndpoint_Degraded(t *testing.T) {
 		shouldError: true,
 		err:         errors.New("connection refused"),
 	}
-	healthChecker := health.NewHealthChecker(mockDB, 5*time.Second)
+	healthChecker := health.NewHealthChecker(mockDB, 5*time.Second, health.Deps{})
 
 	router := gin.New()
 	router.GET("/health", healthChecker.Handler)
@@ -121,7 +121,7 @@ func TestHealthEndpoint_NoDatabaseConfigured(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	// Pass nil database
-	healthChecker := health.NewHealthChecker(nil, 5*time.Second)
+	healthChecker := health.NewHealthChecker(nil, 5*time.Second, health.Deps{})
 
 	router := gin.New()
 	router.GET("/health", healthChecker.Handler)
@@ -183,7 +183,7 @@ func TestHealthResponse_JSONFormat(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	mockDB := &mockDatabaseChecker{shouldError: false}
-	healthChecker := health.NewHealthChecker(mockDB, 5*time.Second)
+	healthChecker := health.NewHealthChecker(mockDB, 5*time.Second, health.Deps{})
 
 	router := gin.New()
 	router.GET("/health", healthChecker.Handler)
@@ -201,10 +201,14 @@ func TestHealthResponse_JSONFormat(t *testing.T) {
 
 	// Verify top-level fields exist
 	assert.Contains(t, rawResponse, "status")
+	assert.Contains(t, rawResponse, "probe")
 	assert.Contains(t, rawResponse, "timestamp")
 	assert.Contains(t, rawResponse, "version")
 	assert.Contains(t, rawResponse, "components")
 	assert.Contains(t, rawResponse, "system")
+
+	// Bare /health is the liveness probe.
+	assert.Equal(t, "liveness", rawResponse["probe"])
 
 	// Verify version structure
 	version, ok := rawResponse["version"].(map[string]interface{})
@@ -213,15 +217,22 @@ func TestHealthResponse_JSONFormat(t *testing.T) {
 	assert.Contains(t, version, "build_time")
 	assert.Contains(t, version, "git_commit")
 
-	// Verify components structure
+	// Verify components structure: database is always present; river/sync/disk
+	// are added by this train.
 	components, ok := rawResponse["components"].(map[string]interface{})
 	require.True(t, ok)
 	assert.Contains(t, components, "database")
+	assert.Contains(t, components, "river")
+	assert.Contains(t, components, "sync")
+	assert.Contains(t, components, "disk")
 
-	// Verify database component structure
+	// Verify database component structure AND that its serialization stays
+	// byte-shape-compatible: it must NOT carry a details key (the cutover
+	// runbook's "database":{"status":"healthy" prefix grep depends on this).
 	dbComponent, ok := components["database"].(map[string]interface{})
 	require.True(t, ok)
 	assert.Contains(t, dbComponent, "status")
+	assert.NotContains(t, dbComponent, "details")
 }
 
 // TestHealthEndpoint_StampedBuildInfo verifies that the build-time -ldflags
@@ -250,7 +261,7 @@ func TestHealthEndpoint_StampedBuildInfo(t *testing.T) {
 	health.Version, health.BuildTime, health.GitCommit = wantVersion, wantBuildTime, wantGitCommit
 
 	mockDB := &mockDatabaseChecker{shouldError: false}
-	healthChecker := health.NewHealthChecker(mockDB, 5*time.Second)
+	healthChecker := health.NewHealthChecker(mockDB, 5*time.Second, health.Deps{})
 
 	router := gin.New()
 	router.GET("/health", healthChecker.Handler)
