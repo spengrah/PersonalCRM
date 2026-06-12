@@ -290,8 +290,9 @@ if [ -z "$TARGET_SHA" ]; then
     exit 0
 fi
 
-# Step 3: CI gate. Query ci.yml's conclusion for TARGET_SHA via the user's gh
-# auth. Derive REPO with gh (BSD-sed-safe; no hand-rolled regex), anchored to the
+# Step 3: CI gate. Query ci.yml's conclusion for TARGET_SHA via the workflow
+# GITHUB_TOKEN (runner path) or the user's gh keyring auth (timer path); gh reads
+# whichever is in the environment. Derive REPO with gh (BSD-sed-safe; no hand-rolled regex), anchored to the
 # clone's remote URL (reconcile's CWD has no checkout). The status=completed
 # filter is load-bearing: an in-progress re-run on the main push must never read
 # as success; for a SHA promoted from CI-green develop, the already-completed
