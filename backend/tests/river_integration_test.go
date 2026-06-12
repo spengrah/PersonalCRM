@@ -1,17 +1,25 @@
 package tests
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/events"
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivertype"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 )
 
@@ -217,4 +225,126 @@ func TestRiverClient_BootsWithNoopWorkerOnly(t *testing.T) {
 	stopCtx, stopCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer stopCancel()
 	require.NoError(t, client.Stop(stopCtx))
+}
+
+// alwaysFailJobArgs is a test-only worker type whose worker always returns an
+// error, so it exhausts its attempts and lands in `discarded`.
+type alwaysFailJobArgs struct{}
+
+func (alwaysFailJobArgs) Kind() string { return "test_always_fail" }
+
+type alwaysFailWorker struct {
+	river.WorkerDefaults[alwaysFailJobArgs]
+}
+
+func (*alwaysFailWorker) Work(_ context.Context, _ *river.Job[alwaysFailJobArgs]) error {
+	return errors.New("deliberate test failure")
+}
+
+// errorHandlerFastRetry puts every retry 200ms out so a two-attempt job reaches
+// `discarded` in a few seconds. The accelerated clock is used per the repo's
+// no-time.Now rule.
+type errorHandlerFastRetry struct{}
+
+func (errorHandlerFastRetry) NextRetry(_ *rivertype.JobRow) time.Time {
+	return accelerated.GetCurrentTime().Add(200 * time.Millisecond)
+}
+
+// TestRiverErrorHandler_DiscardLogging_Integration pins the ErrorHandler's
+// discard predicate against the REAL River executor: an always-failing job with
+// MaxAttempts=2 must produce exactly one WARN (attempt 1, discarded=false) and
+// one ERROR (attempt 2, discarded=true). This is the upgrade-time safety net for
+// the handler's duplication of River's `Attempt >= MaxAttempts` comparison — a
+// future River bump that changes the discard semantics fails here instead of
+// silently mislabeling.
+func TestRiverErrorHandler_DiscardLogging_Integration(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	ctx := context.Background()
+	database, cfg := newIsolatedRiverTestDB(t, ctx)
+
+	// Thread-safe buffer: River invokes the ErrorHandler on its own goroutines.
+	buf := &bytes.Buffer{}
+	zl := zerolog.New(zerolog.SyncWriter(buf)).Level(zerolog.DebugLevel).With().Timestamp().Logger()
+
+	workers := river.NewWorkers()
+	river.AddWorker(workers, &alwaysFailWorker{})
+
+	client, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
+		Queues: map[string]river.QueueConfig{
+			river.QueueDefault: {MaxWorkers: cfg.River.WorkerConcurrency},
+		},
+		Workers:      workers,
+		ErrorHandler: events.NewRiverErrorHandler(&zl),
+		RetryPolicy:  errorHandlerFastRetry{},
+		// NOT TestOnly: we need the scheduler loop so the retryable attempt 1
+		// becomes available and gets worked a second time to reach `discarded`.
+	})
+	require.NoError(t, err)
+
+	// Start with the test's BASE ctx (never a timeout-derived ctx — River
+	// silently stops fetching when its fetch-loop ctx cancels).
+	require.NoError(t, client.Start(ctx))
+	t.Cleanup(func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer stopCancel()
+		_ = client.Stop(stopCtx)
+	})
+
+	insertRes, err := client.Insert(ctx, alwaysFailJobArgs{}, &river.InsertOpts{MaxAttempts: 2})
+	require.NoError(t, err)
+	jobID := insertRes.Job.ID
+
+	// Poll until the job lands in `discarded` (both attempts exhausted). Generous
+	// deadline: ~200ms retry backoff + scheduler interval.
+	waitCtx, waitCancel := context.WithTimeout(ctx, 15*time.Second)
+	defer waitCancel()
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		state, qerr := database.Queries.GetRiverJobStateByID(ctx, jobID)
+		if qerr == nil && state == db.RiverJobStateDiscarded {
+			break
+		}
+		select {
+		case <-waitCtx.Done():
+			t.Fatalf("timed out waiting for job %d to reach discarded", jobID)
+		case <-tick.C:
+		}
+	}
+
+	// Parse the buffered JSON log lines, filtering to records carrying our
+	// job_id (Logger is unset here, so only the ErrorHandler writes).
+	var warnRec, errorRec map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var m map[string]any
+		require.NoError(t, json.Unmarshal([]byte(line), &m))
+		if id, ok := m["job_id"].(float64); !ok || int64(id) != jobID {
+			continue
+		}
+		switch m["level"] {
+		case "warn":
+			warnRec = m
+		case "error":
+			errorRec = m
+		}
+	}
+
+	require.NotNil(t, warnRec, "expected a WARN record for the non-final attempt")
+	require.Equal(t, false, warnRec["discarded"])
+	require.Equal(t, float64(1), warnRec["attempt"])
+	require.Equal(t, "test_always_fail", warnRec["kind"])
+	require.Contains(t, warnRec["error"], "deliberate test failure")
+	require.NotNil(t, warnRec["args"], "args field must be present")
+
+	require.NotNil(t, errorRec, "expected an ERROR record for the final (discard) attempt")
+	require.Equal(t, true, errorRec["discarded"])
+	require.Equal(t, float64(2), errorRec["attempt"])
+	require.Equal(t, float64(2), errorRec["max_attempts"])
 }
