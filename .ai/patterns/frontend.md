@@ -13,6 +13,7 @@ Reusable React/TypeScript patterns for consistency across the frontend codebase.
 | `useInteractionsQueue`, `useResolveLink`, `useAnarlogTitleCandidates`, `useResolveNameCandidate` | Imports — Interactions tab + Anarlog name candidates | `use-interactions-queue.ts` |
 | `useMergeContacts` | Contact merge | `use-merge.ts` |
 | `useSyncStates`, `useTriggerSync` | Sync status | `use-sync-states.ts` |
+| `useSyncStaleness` | Sync-staleness watchdog breaches (read-only poll) | `use-sync-staleness.ts` |
 | `useGoogleAccounts`, `useConnectGoogle` | Google OAuth | `use-google-accounts.ts` |
 | `useTodoistAccounts`, `useConnectTodoist` | Todoist OAuth | `use-todoist-accounts.ts` |
 | `useTodoistSettings`, `useUpdateTodoistSettings` | Todoist config | `use-todoist-settings.ts` |
