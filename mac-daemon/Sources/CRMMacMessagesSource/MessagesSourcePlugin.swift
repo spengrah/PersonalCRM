@@ -285,11 +285,14 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
         // Commit cursor only if changed, no rejections, every item we
         // tried to publish was confirmed, AND no page read failed. A
         // transport failure mid-tick must NOT commit a cursor that
-        // skips the failed rows; a read/resolution failure must not
-        // commit non-batch mutations either (e.g. the one-time
-        // re-backfill arm) — the next tick recomputes them, and
-        // holding the whole commit keeps the failure semantics simple:
-        // a failed tick commits nothing.
+        // skips the failed rows. A read/resolution failure holds this
+        // FINAL commit — batch-cursor advancement past unread rows
+        // never persists, and non-batch mutations made this tick (e.g.
+        // the one-time re-backfill arm) are recomputed next tick. Note
+        // the Phase A/B scan commits earlier in the tick may already
+        // have persisted those non-batch mutations; that is coherent —
+        // the armed walk carries backfillComplete=false and simply
+        // resumes next tick.
         let cursorChanged = working != cursor
         if cursorChanged && !hadRejection && !hadUnconfirmed && !hadReadFailure {
             switch await commitWorking(working) {
@@ -313,19 +316,21 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
             logger.warning("messages tick: page read failed; holding cursor", metadata: [:])
         }
 
-        // Refresh health snapshot. `last_pushed_at` is sticky across
-        // ticks so the UI reflects the most recent successful push,
-        // not just ticks that emit events.
-        if cursorChanged {
-            stickyLastPushedAt = clock()
-        }
+        // Refresh the health snapshot from the last COMMITTED cursor
+        // (cachedCursor — maintained by commitWorking), never from the
+        // possibly-held `working` copy: a held tick must not advertise
+        // pushed/backfill progress for rows that will be retried.
+        // `stickyLastPushedAt` is likewise maintained by commitWorking,
+        // so it reflects the most recent successful push (including
+        // scan-phase commits), not merely "the cursor changed".
+        let reported = cachedCursor ?? cursor
         await healthRegistry.update(id, await currentHealthSnapshot(
             enabled: true,
             lastScheduled: tickStart,
             lastPushed: stickyLastPushedAt,
-            observed: working.liveCursor,
-            pushed: working.liveCursor,
-            backfillComplete: working.backfillComplete))
+            observed: reported.liveCursor,
+            pushed: reported.liveCursor,
+            backfillComplete: reported.backfillComplete))
     }
 
     // MARK: - cursor commit helper
@@ -368,6 +373,10 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
                 lastPushedAt: clock())
             cachedCursor = working
             lastCommittedCursorJSON = newJSON
+            // Sticky push timestamp tracks every SUCCESSFUL commit (the
+            // end-of-tick health snapshot reads it), so a held tick —
+            // which never reaches this point — advertises no progress.
+            stickyLastPushedAt = clock()
             return .committed
         } catch let PiClientError.cursorConflict(_, current) {
             logger.info("messages tick: cursor conflict, refreshing", metadata: [
@@ -599,11 +608,14 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
         /// true.
         let hadUnconfirmedItems: Bool
         /// True if the page read (or in-read peer resolution) threw.
-        /// The batch made no progress and the caller must NOT commit
-        /// ANY cursor mutation this tick — including non-batch ones
-        /// like the one-time re-backfill arm — so a failed tick
-        /// commits nothing and the next tick retries from clean state.
-        var readFailed: Bool = false
+        /// The batch made no progress and the caller must hold the
+        /// FINAL cursor commit: batch-cursor advancement past unread
+        /// rows never persists, and non-batch mutations (e.g. the
+        /// one-time re-backfill arm) are recomputed next tick. Earlier
+        /// Phase A/B scan commits this tick may already have persisted
+        /// those non-batch mutations — coherently (the armed walk
+        /// resumes), never batch-cursor advancement.
+        let readFailed: Bool
     }
 
     /// Backfill: walk message.ROWID downward from
@@ -625,13 +637,15 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
         if upperBoundExclusive <= 0 {
             cursor.backfillComplete = true
             return BatchSummary(accepted: 0, duplicate: 0,
-                                  rejected: [], hadUnconfirmedItems: false)
+                                  rejected: [], hadUnconfirmedItems: false,
+                                  readFailed: false)
         }
 
         let limit = min(budget.rowsRemaining, MessagesPublisher.maxEventsPerBatch)
         if limit <= 0 {
             return BatchSummary(accepted: 0, duplicate: 0,
-                                  rejected: [], hadUnconfirmedItems: false)
+                                  rejected: [], hadUnconfirmedItems: false,
+                                  readFailed: false)
         }
 
         let resolver = outboundPeerResolver
@@ -665,7 +679,8 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
             cursor.backfillComplete = true
             cursor.backfillCursor = 0
             return BatchSummary(accepted: 0, duplicate: 0,
-                                  rejected: [], hadUnconfirmedItems: false)
+                                  rejected: [], hadUnconfirmedItems: false,
+                                  readFailed: false)
         }
 
         // Floor check: drop rows whose sentAt is below backfillFloor.
@@ -707,7 +722,8 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
             accepted: outcome.accepted,
             duplicate: outcome.duplicate,
             rejected: outcome.rejected,
-            hadUnconfirmedItems: !confirmedAllItems)
+            hadUnconfirmedItems: !confirmedAllItems,
+            readFailed: false)
     }
 
     /// Live: walk message.ROWID upward from liveCursor.  Stops when
@@ -727,7 +743,8 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
         let limit = min(budget.rowsRemaining, MessagesPublisher.maxEventsPerBatch)
         if limit <= 0 {
             return BatchSummary(accepted: 0, duplicate: 0,
-                                  rejected: [], hadUnconfirmedItems: false)
+                                  rejected: [], hadUnconfirmedItems: false,
+                                  readFailed: false)
         }
 
         let resolver = outboundPeerResolver
@@ -759,7 +776,8 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
         if page.scannedROWIDBounds == nil {
             // No new rows since liveCursor.
             return BatchSummary(accepted: 0, duplicate: 0,
-                                  rejected: [], hadUnconfirmedItems: false)
+                                  rejected: [], hadUnconfirmedItems: false,
+                                  readFailed: false)
         }
 
         let publishItems = await filterAndShape(
@@ -784,7 +802,8 @@ public actor MessagesSourcePlugin: DataSourcePlugin {
             accepted: outcome.accepted,
             duplicate: outcome.duplicate,
             rejected: outcome.rejected,
-            hadUnconfirmedItems: !confirmedAllItems)
+            hadUnconfirmedItems: !confirmedAllItems,
+            readFailed: false)
     }
 
     /// Apply sender filter + shape to publishable form, for inbound AND

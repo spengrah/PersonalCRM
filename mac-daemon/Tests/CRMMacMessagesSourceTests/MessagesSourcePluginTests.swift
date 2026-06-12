@@ -588,6 +588,7 @@ final class MessagesSourcePluginTests: XCTestCase {
             baseURL: URL(string: "https://pi.example.test")!,
             transport: transport.asTransport(),
             sleep: { _ in })
+        let registry = SourceHealthRegistry()
         let plugin = MessagesSourcePlugin(
             tickInterval: 60,
             config: MessagesSourceConfig(chatDBPath: dbURL, backfillFloor: backfillFloor),
@@ -596,7 +597,7 @@ final class MessagesSourcePluginTests: XCTestCase {
             mutator: StateMutator(store: store),
             publisher: publisher,
             cache: KnownIdentifiersCache(initial: ["+15551234567"]),
-            healthRegistry: SourceHealthRegistry(),
+            healthRegistry: registry,
             logger: NoopLogger(),
             outboundPeerResolver: throwing)
 
@@ -604,9 +605,11 @@ final class MessagesSourcePluginTests: XCTestCase {
 
         let events = await sink.allEvents()
         XCTAssertTrue(events.isEmpty, "no publishes when resolution throws")
-        // NO commit POST happened: a failed tick commits nothing — not
-        // even non-batch mutations like the one-time re-backfill arm /
-        // its outbound_backfill_done flag. The next tick recomputes them.
+        // NO commit POST happened: this scenario has no Phase A/B scan
+        // commits, so holding the final commit means the tick commits
+        // nothing at all — neither batch-cursor advancement nor the
+        // re-backfill arm / outbound_backfill_done flag. The next tick
+        // recomputes them.
         XCTAssertEqual(transport.committedCount(), 0,
                        "resolver failure holds the entire cursor commit")
         let held = transport.currentDecodedCursor()
@@ -615,6 +618,17 @@ final class MessagesSourcePluginTests: XCTestCase {
         XCTAssertEqual(held?.backfillComplete, false)
         XCTAssertEqual(held?.outboundBackfillDone, false,
                        "re-backfill flag not committed by the failed tick")
+
+        // Health/status reflects the COMMITTED cursor, not the held
+        // working copy: no push advertised, pushed cursor still at the
+        // seeded coordinate, backfill not reported complete.
+        let snapshot = await registry.read(.messages)
+        XCTAssertNotNil(snapshot, "tick still publishes a health snapshot")
+        XCTAssertNil(snapshot?.lastPushedAt,
+                     "held tick must not advertise a successful push")
+        XCTAssertEqual(snapshot?.pushedCursor, .int(2),
+                       "pushed cursor reports the last COMMITTED state")
+        XCTAssertEqual(snapshot?.backfillComplete, false)
 
         // Recovery: a SECOND plugin over the same state store + a fresh
         // Pi script with the default resolver (≈ the next tick once the
