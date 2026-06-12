@@ -101,15 +101,18 @@ read_image_tag() {
 # If it pins :latest (or anything else mutable) -> resolve the RUNNING image
 # digest of <container> -> repo@sha256:<digest> (immutable).
 rollback_ref_for() {
-    local repo="$1" container="$2" unit="$3" image tag digest
+    local repo="$1" container="$2" unit="$3" image tag digest image_id
     image="$(read_image_tag "$unit")"
     tag="${image##*:}"
     if [[ "$tag" =~ ^[0-9a-f]{40}$ ]]; then
         echo "$repo:$tag"
         return 0
     fi
-    # Mutable tag (:latest etc.) -> pin the currently-running digest.
-    digest="$(crm_podman inspect "$container" --format '{{index .RepoDigests 0}}')"
+    # Mutable tag (:latest etc.) -> pin the currently-running digest. RepoDigests is
+    # an IMAGE field, not a container field: resolve the container's image id, then
+    # read RepoDigests from the image.
+    image_id="$(crm_podman inspect "$container" --format '{{.Image}}')"
+    digest="$(crm_podman image inspect "$image_id" --format '{{index .RepoDigests 0}}')"
     if [ -z "$digest" ]; then
         echo "error: could not resolve running digest for $container" >&2
         return 1
