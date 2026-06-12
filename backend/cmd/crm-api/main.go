@@ -1279,6 +1279,28 @@ func run() int {
 		&river.PeriodicJobOpts{RunOnStart: true},
 	))
 
+	// Sync-staleness watchdog. Registered unconditionally (like the janitor):
+	// heartbeat/push breaches must be detected even with external sync off,
+	// and the watchdog reads existing freshness state rather than driving any
+	// provider sync. The endpoint reader uses the same service instance.
+	stalenessBreachRepo := repository.NewStalenessRepository(database.Queries)
+	stalenessService := service.NewStalenessService(
+		cfg.Staleness,
+		cfg.Features.EnableExternalSync,
+		macSyncRepo,
+		macHostRepo,
+		stalenessBreachRepo,
+	)
+	stalenessHandler := handlers.NewStalenessHandler(stalenessService)
+	river.AddWorker(riverWorkers, scheduler.NewStalenessWatchdogWorker(stalenessService))
+	riverClient.PeriodicJobs().Add(river.NewPeriodicJob(
+		river.PeriodicInterval(5*time.Minute),
+		func() (river.JobArgs, *river.InsertOpts) {
+			return scheduler.StalenessWatchdogArgs{}, nil
+		},
+		&river.PeriodicJobOpts{RunOnStart: true},
+	))
+
 	// Build the River worker set, periodic-job list, and client. The
 	// scheduler-tick + sync-provider-account workers are only registered
 	// when external sync is enabled and we have a real syncService —
@@ -1425,6 +1447,12 @@ func run() int {
 			rematchRoutes.GET("/jobs/:jobID", rematchHandler.GetJob)
 			rematchRoutes.POST("/contacts/:id/rescan", rematchHandler.Rescan)
 		}
+
+		// Sync-staleness breaches — registered unconditionally (OUTSIDE the
+		// EnableExternalSync-gated /sync group below): heartbeat/push breaches
+		// must be visible even with external sync off. The static 2-segment
+		// path coexists with that group's 3-segment param routes.
+		v1.GET("/sync/staleness", stalenessHandler.GetActiveBreaches)
 
 		// System routes
 		system := v1.Group("/system")

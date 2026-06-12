@@ -408,6 +408,19 @@ func (r *MacHostRepository) SeedRevokedHostForTest(
 	return convertDbMacHost(row), nil
 }
 
+// SetHeartbeatAtForTest stamps last_heartbeat_at to a caller-supplied
+// (typically past) value so staleness-watchdog tests can simulate a host
+// that has not heartbeated recently. TEST ONLY — SeedHostForTest bumps
+// last_heartbeat_at to NOW() via the heartbeat patch, so this setter is
+// needed for past timestamps. Production code never calls this; the daemon's
+// heartbeat POST is the only real writer.
+func (r *MacHostRepository) SetHeartbeatAtForTest(ctx context.Context, id uuid.UUID, heartbeatAt time.Time) error {
+	return r.queries.SetMacHostHeartbeatAtForTest(ctx, db.SetMacHostHeartbeatAtForTestParams{
+		ID:              uuidToPgUUID(id),
+		LastHeartbeatAt: pgtype.Timestamptz{Time: heartbeatAt, Valid: true},
+	})
+}
+
 // MacHostPairingTokenRepository handles pairing-token persistence.
 type MacHostPairingTokenRepository struct {
 	queries db.Querier

@@ -565,5 +565,21 @@
   {
     "pattern": "^backend/internal/logger/slog_bridge\\.go$",
     "tags": ["@smoke"]
+  },
+  {
+    "pattern": "^backend/internal/repository/staleness\\.go$",
+    "tags": ["@smoke"]
+  },
+  {
+    "pattern": "^backend/internal/service/staleness\\.go$",
+    "tags": ["@smoke"]
+  },
+  {
+    "pattern": "^backend/internal/scheduler/staleness_watchdog_worker\\.go$",
+    "tags": ["@smoke"]
+  },
+  {
+    "pattern": "^backend/internal/api/handlers/staleness\\.go$",
+    "tags": ["@smoke"]
   }
 ]

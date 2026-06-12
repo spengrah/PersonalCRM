@@ -586,6 +586,7 @@ TRUNCATE TABLE
     phone_call,
     prompt_query,
     river_job,
+    sync_staleness_breach,
     tag,
     telegram_channel_state,
     telegram_chat_config,

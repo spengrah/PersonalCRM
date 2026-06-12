@@ -754,6 +754,42 @@ func (q *Queries) ResetSyncStateBackfillCursor(ctx context.Context, arg ResetSyn
 	return &i, err
 }
 
+const SetSyncStateFreshnessForTest = `-- name: SetSyncStateFreshnessForTest :exec
+UPDATE external_sync_state
+SET status = $1,
+    last_sync_at = $2,
+    last_successful_sync_at = $3,
+    error_count = $4,
+    error_message = $5
+WHERE id = $6
+`
+
+type SetSyncStateFreshnessForTestParams struct {
+	Status               string             `json:"status"`
+	LastSyncAt           pgtype.Timestamptz `json:"last_sync_at"`
+	LastSuccessfulSyncAt pgtype.Timestamptz `json:"last_successful_sync_at"`
+	ErrorCount           int32              `json:"error_count"`
+	ErrorMessage         pgtype.Text        `json:"error_message"`
+	ID                   pgtype.UUID        `json:"id"`
+}
+
+// Test-only: stamps the freshness/error columns of an external_sync_state
+// row directly so staleness-watchdog tests can plant past
+// last_successful_sync_at / error_count values without driving the real
+// sync write path (which always uses NOW()). Production code must never call
+// this — the scheduler + provider sync are the only legitimate writers.
+func (q *Queries) SetSyncStateFreshnessForTest(ctx context.Context, arg SetSyncStateFreshnessForTestParams) error {
+	_, err := q.db.Exec(ctx, SetSyncStateFreshnessForTest,
+		arg.Status,
+		arg.LastSyncAt,
+		arg.LastSuccessfulSyncAt,
+		arg.ErrorCount,
+		arg.ErrorMessage,
+		arg.ID,
+	)
+	return err
+}
+
 const UpdateMacHostSyncCursor = `-- name: UpdateMacHostSyncCursor :one
 UPDATE external_sync_state
 SET sync_cursor = $1,

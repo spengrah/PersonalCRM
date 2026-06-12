@@ -111,3 +111,14 @@ RETURNING *;
 -- name: DeleteExpiredPairingTokens :execrows
 DELETE FROM mac_host_pairing_token
 WHERE consumed_at IS NULL AND expires_at < NOW();
+
+-- name: SetMacHostHeartbeatAtForTest :exec
+-- Test-only: stamps last_heartbeat_at to a caller-supplied (typically past)
+-- value so staleness-watchdog tests can simulate a host that has not
+-- heartbeated recently. SeedHostForTest bumps last_heartbeat_at to NOW() via
+-- the heartbeat patch, so a separate setter is needed for past timestamps.
+-- Production code never calls this — the daemon's heartbeat POST is the only
+-- real writer of last_heartbeat_at.
+UPDATE mac_host
+SET last_heartbeat_at = @last_heartbeat_at
+WHERE id = @id;

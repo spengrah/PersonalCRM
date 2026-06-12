@@ -237,6 +237,11 @@ type Querier interface {
 	// behavior without inlining raw SQL (core.md rule 2).
 	CountRiverJobsBySourceArgForTest(ctx context.Context, source string) (int64, error)
 	CountSearchContacts(ctx context.Context, arg CountSearchContactsParams) (int64, error)
+	// Test-only: counts ALL breach rows (open or resolved) for an account_id. The
+	// production read path exposes open breaches only, so the retention test uses
+	// this to confirm resolved history was (or was not) pruned. Production code
+	// never calls this.
+	CountStalenessBreachesByAccountForTest(ctx context.Context, accountID string) (int64, error)
 	CountSyncLogsByState(ctx context.Context, syncStateID pgtype.UUID) (int64, error)
 	CountTelegramMessagesByChat(ctx context.Context) ([]*CountTelegramMessagesByChatRow, error)
 	CountTelegramMessagesByPeer(ctx context.Context) ([]*CountTelegramMessagesByPeerRow, error)
@@ -361,6 +366,9 @@ type Querier interface {
 	// Delete all OAuth credentials for a provider
 	DeleteOAuthCredentialByProvider(ctx context.Context, provider string) error
 	DeleteOldSyncLogs(ctx context.Context, createdAt pgtype.Timestamptz) error
+	// Retention prune: drops resolved breaches whose resolved_at predates the
+	// cutoff. Open breaches (resolved_at IS NULL) are never touched.
+	DeleteResolvedStalenessBreachesBefore(ctx context.Context, cutoff pgtype.Timestamptz) error
 	// Test teardown — drop river_job rows whose kind is in the given
 	// array. Scoped to test-emitted kinds so we don't wipe production-
 	// shape rows on a shared DB. River doesn't expose a sqlc layer; this
@@ -982,6 +990,10 @@ type Querier interface {
 	ListOAuthCredentialStatuses(ctx context.Context, provider string) ([]*ListOAuthCredentialStatusesRow, error)
 	// List all OAuth credentials for a provider
 	ListOAuthCredentials(ctx context.Context, provider string) ([]*OauthCredential, error)
+	// All currently-open breaches, deterministically ordered for stable log
+	// output and the reconcile diff. Used both by the watchdog (to compute the
+	// resolve set) and by the read endpoint (active breaches only).
+	ListOpenStalenessBreaches(ctx context.Context) ([]*SyncStalenessBreach, error)
 	// Lists contacts whose contact_by date is before today (overdue).
 	// Returns contacts ordered by how overdue they are (most overdue first).
 	ListOverdueContacts(ctx context.Context, arg ListOverdueContactsParams) ([]*Contact, error)
@@ -1220,6 +1232,10 @@ type Querier interface {
 	// 'conflict_pending'. Returns pgx.ErrNoRows (caller maps to 409) when
 	// the state-guard fires.
 	ResolveMeetingNoteToLinked(ctx context.Context, arg ResolveMeetingNoteToLinkedParams) (*MeetingNote, error)
+	// Marks one open breach resolved. The resolved_at IS NULL guard makes this
+	// idempotent under overlapping ticks: a concurrent run that already resolved
+	// the row affects zero rows here.
+	ResolveStalenessBreach(ctx context.Context, arg ResolveStalenessBreachParams) (int64, error)
 	// Clears deleted_at on a tombstoned row. Defensive WHERE deleted_at IS NOT
 	// NULL keeps the statement idempotent across concurrent revive races.
 	// Preserves crm_contact_id, match_status, and all content columns.
@@ -1291,6 +1307,19 @@ type Querier interface {
 	// re-read (never trusting a stale client row); an empty slice marshals to
 	// nil bytes → SQL NULL.
 	SetExternalContactPendingAndDismissed(ctx context.Context, arg SetExternalContactPendingAndDismissedParams) (*ExternalContact, error)
+	// Test-only: stamps last_heartbeat_at to a caller-supplied (typically past)
+	// value so staleness-watchdog tests can simulate a host that has not
+	// heartbeated recently. SeedHostForTest bumps last_heartbeat_at to NOW() via
+	// the heartbeat patch, so a separate setter is needed for past timestamps.
+	// Production code never calls this — the daemon's heartbeat POST is the only
+	// real writer of last_heartbeat_at.
+	SetMacHostHeartbeatAtForTest(ctx context.Context, arg SetMacHostHeartbeatAtForTestParams) error
+	// Test-only: stamps the freshness/error columns of an external_sync_state
+	// row directly so staleness-watchdog tests can plant past
+	// last_successful_sync_at / error_count values without driving the real
+	// sync write path (which always uses NOW()). Production code must never call
+	// this — the scheduler + provider sync are the only legitimate writers.
+	SetSyncStateFreshnessForTest(ctx context.Context, arg SetSyncStateFreshnessForTestParams) error
 	SetTelegramChannelPts(ctx context.Context, arg SetTelegramChannelPtsParams) error
 	SetTelegramDate(ctx context.Context, arg SetTelegramDateParams) error
 	SetTelegramPts(ctx context.Context, arg SetTelegramPtsParams) error
@@ -1816,6 +1845,23 @@ type Querier interface {
 	// preserved refresh token would become undecryptable. With no ciphertext at all
 	// the nonce is NULL.
 	UpsertOAuthCredential(ctx context.Context, arg UpsertOAuthCredentialParams) (*OauthCredential, error)
+	// Sync-staleness watchdog breach queries.
+	//
+	// The watchdog reconciles sync_staleness_breach every tick: upsert-open for
+	// each current breach candidate, resolve any open row no longer observed,
+	// then prune resolved history past a fixed cutoff. All timestamps are
+	// supplied by the service from accelerated time — these queries never call
+	// NOW() (except the table's ops-only created_at default).
+	// Opens a breach for (source, account_id, breach_type) or refreshes the
+	// existing open row. The ON CONFLICT target infers the partial unique index
+	// idx_sync_staleness_breach_open, so two overlapping watchdog runs converge
+	// on the same open row instead of raising 23505. detected_at is set on
+	// insert and intentionally NOT in the update list (first-detection time is
+	// immutable); last_observed_at advances each tick the breach persists. The
+	// @observed_at arg seeds both detected_at and last_observed_at on insert so a
+	// freshly-opened row has detected_at == last_observed_at (the "new breach"
+	// signal the service logs on).
+	UpsertOpenStalenessBreach(ctx context.Context, arg UpsertOpenStalenessBreachParams) (*SyncStalenessBreach, error)
 	// Insert with no-op on call_unique_id conflict. peer_normalized comes from
 	// the daemon (canonicalized via HandleNormalization). matched_contact_id
 	// comes from the Pi ingest service identity-match path. mac_host_id is

@@ -256,3 +256,17 @@ WHERE sync_state_id = $1;
 -- name: DeleteOldSyncLogs :exec
 DELETE FROM external_sync_log
 WHERE created_at < $1;
+
+-- name: SetSyncStateFreshnessForTest :exec
+-- Test-only: stamps the freshness/error columns of an external_sync_state
+-- row directly so staleness-watchdog tests can plant past
+-- last_successful_sync_at / error_count values without driving the real
+-- sync write path (which always uses NOW()). Production code must never call
+-- this — the scheduler + provider sync are the only legitimate writers.
+UPDATE external_sync_state
+SET status = @status,
+    last_sync_at = @last_sync_at,
+    last_successful_sync_at = @last_successful_sync_at,
+    error_count = @error_count,
+    error_message = @error_message
+WHERE id = @id;

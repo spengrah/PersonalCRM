@@ -13,19 +13,20 @@ import (
 
 // Config holds all application configuration
 type Config struct {
-	Database DatabaseConfig
-	Server   ServerConfig
-	Logger   LoggerConfig
-	CORS     CORSConfig
-	Features FeatureFlags
-	Runtime  RuntimeConfig
-	External ExternalConfig
-	Google   GoogleConfig
-	Todoist  TodoistConfig
-	Watchdog WatchdogConfig
-	Telegram TelegramConfig
-	River    RiverConfig
-	EventBus EventBusConfig
+	Database  DatabaseConfig
+	Server    ServerConfig
+	Logger    LoggerConfig
+	CORS      CORSConfig
+	Features  FeatureFlags
+	Runtime   RuntimeConfig
+	External  ExternalConfig
+	Google    GoogleConfig
+	Todoist   TodoistConfig
+	Watchdog  WatchdogConfig
+	Staleness StalenessConfig
+	Telegram  TelegramConfig
+	River     RiverConfig
+	EventBus  EventBusConfig
 }
 
 // DatabaseConfig holds database connection settings
@@ -111,6 +112,31 @@ type WatchdogConfig struct {
 	QuarterlyDays int // Default: 14
 	BiannualDays  int // Default: 21
 	AnnualDays    int // Default: 21
+}
+
+// StalenessConfig holds sync-staleness watchdog thresholds. Distinct from
+// WatchdogConfig (the follow-up-task watchdog); env prefix SYNC_STALENESS_*.
+//
+// Threshold knobs use Go duration strings. SourceOverrides carries per-source
+// freshness thresholds keyed by source name; a hit overrides PullThreshold /
+// PushThreshold for that source. A zero duration disables the corresponding
+// check (or that source). Built-in override defaults are baked in by Load()
+// and TestConfig() before env merges on top, so prod gets sane per-source
+// values with zero env.
+//
+// Note on parse strictness: the duration/int knobs go through getEnvAsDuration
+// / getEnvAsInt, which SILENTLY fall back to the default on a malformed value
+// (existing repo behavior). Only SYNC_STALENESS_SOURCE_OVERRIDES — which has
+// no existing helper — is strictly parsed and fails Load()/Validate() loud on
+// a typo, since an operator tuning a single override should know it didn't
+// take rather than silently revert.
+type StalenessConfig struct {
+	HeartbeatThreshold time.Duration            // default 15m; 0 disables heartbeat checks
+	PullThreshold      time.Duration            // default 24h; 0 disables sync_stale checks
+	PushThreshold      time.Duration            // default 48h; 0 disables push_stale checks
+	ErrorMinCount      int                      // default 3; 0 disables sync_error checks
+	ErrorThreshold     time.Duration            // default 6h; duration floor for sync_error (0 = count-only)
+	SourceOverrides    map[string]time.Duration // per-source freshness threshold; 0 disables that source
 }
 
 // TelegramConfig holds Telegram integration tuning parameters
@@ -282,10 +308,82 @@ const (
 	// budget + 1m headroom. River cancels the worker's context when the
 	// budget is exceeded.
 	DefaultRiverJobTimeout = 6 * time.Minute
+	// Sync-staleness watchdog defaults. See the StalenessConfig doc
+	// comment for the full rationale: 15m heartbeat (~15 missed ~60s
+	// beats), 24h pull (5m–15m intervals for everything but gcontacts),
+	// 48h push (daily-traffic messages for a single user), and a two-term
+	// sync_error predicate (≥3 consecutive errors AND no success for ≥6h).
+	DefaultStalenessHeartbeatThreshold = 15 * time.Minute
+	DefaultStalenessPullThreshold      = 24 * time.Hour
+	DefaultStalenessPushThreshold      = 48 * time.Hour
+	DefaultStalenessErrorMinCount      = 3
+	DefaultStalenessErrorThreshold     = 6 * time.Hour
 )
+
+// builtinStalenessSourceOverrides returns a fresh copy of the per-source
+// freshness thresholds baked in before env overrides merge on top. These
+// cover the full named push/pull surface so prod gets sane values with zero
+// env. gcontacts is pulled (24h interval) — its threshold must comfortably
+// exceed the interval; the rest are quiet-by-design push sources for a
+// single user. A fresh map each call keeps callers from mutating a shared
+// package-level value.
+func builtinStalenessSourceOverrides() map[string]time.Duration {
+	return map[string]time.Duration{
+		"gcontacts":        72 * time.Hour,  // 24h sync interval — threshold must exceed it
+		"phone_calls":      168 * time.Hour, // 7d — calls are legitimately rare; still beats the worst observed discovery lag
+		"icloud_contacts":  336 * time.Hour, // 14d — contact edits are the rarest push trigger
+		"anarlog_sessions": 168 * time.Hour, // 7d — meeting notes appear only when meetings happen
+		"anarlog_humans":   336 * time.Hour, // 14d — human-file edits are contact-edit-rare
+	}
+}
+
+// parseStalenessSourceOverrides parses a comma-separated source=duration
+// string (e.g. "gcontacts=96h,phone_calls=240h") into a map, returning a
+// descriptive error on the first malformed entry. Unlike getEnvAsDuration,
+// this is strict: a typo fails Load() loud rather than silently reverting to
+// the built-in default. An empty string yields a nil map (no overrides).
+// Negative/zero durations are accepted here (0 disables a source); Validate()
+// rejects negatives.
+func parseStalenessSourceOverrides(raw string) (map[string]time.Duration, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	out := make(map[string]time.Duration)
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		key, valStr, found := strings.Cut(entry, "=")
+		key = strings.TrimSpace(key)
+		valStr = strings.TrimSpace(valStr)
+		if !found || key == "" || valStr == "" {
+			return nil, fmt.Errorf("invalid SYNC_STALENESS_SOURCE_OVERRIDES entry %q; expected source=duration", entry)
+		}
+		d, err := time.ParseDuration(valStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid duration %q for source %q in SYNC_STALENESS_SOURCE_OVERRIDES: %w", valStr, key, err)
+		}
+		out[key] = d
+	}
+	return out, nil
+}
 
 // Load reads configuration from environment variables
 func Load() (*Config, error) {
+	// Parse the strict source-overrides string first so a typo fails loud
+	// before the rest of config is assembled. Built-in defaults seed the
+	// map; env entries merge on top (an env key with the same name wins).
+	stalenessOverrides := builtinStalenessSourceOverrides()
+	envOverrides, err := parseStalenessSourceOverrides(getEnv("SYNC_STALENESS_SOURCE_OVERRIDES", ""))
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range envOverrides {
+		stalenessOverrides[k] = v
+	}
+
 	cfg := &Config{
 		Database: DatabaseConfig{
 			URL:               getEnv("DATABASE_URL", ""),
@@ -350,6 +448,14 @@ func Load() (*Config, error) {
 			QuarterlyDays: getEnvAsInt("WATCHDOG_QUARTERLY_DAYS", 14),
 			BiannualDays:  getEnvAsInt("WATCHDOG_BIANNUAL_DAYS", 21),
 			AnnualDays:    getEnvAsInt("WATCHDOG_ANNUAL_DAYS", 21),
+		},
+		Staleness: StalenessConfig{
+			HeartbeatThreshold: getEnvAsDuration("SYNC_STALENESS_HEARTBEAT_THRESHOLD", DefaultStalenessHeartbeatThreshold),
+			PullThreshold:      getEnvAsDuration("SYNC_STALENESS_PULL_THRESHOLD", DefaultStalenessPullThreshold),
+			PushThreshold:      getEnvAsDuration("SYNC_STALENESS_PUSH_THRESHOLD", DefaultStalenessPushThreshold),
+			ErrorMinCount:      getEnvAsInt("SYNC_STALENESS_ERROR_MIN_COUNT", DefaultStalenessErrorMinCount),
+			ErrorThreshold:     getEnvAsDuration("SYNC_STALENESS_ERROR_THRESHOLD", DefaultStalenessErrorThreshold),
+			SourceOverrides:    stalenessOverrides,
 		},
 		Telegram: TelegramConfig{
 			BurstWindowHours:     getEnvAsInt("TELEGRAM_BURST_WINDOW_HOURS", 2),
@@ -490,6 +596,55 @@ func (c *Config) Validate() error {
 			Field:   "RIVER_JOB_TIMEOUT",
 			Message: fmt.Sprintf("must be between 1s and 1h, got %s", c.River.JobTimeout),
 		})
+	}
+
+	// Sync-staleness watchdog validation. Negative durations are nonsense
+	// (a zero value is the documented "disable this check" sentinel and is
+	// allowed). ErrorMinCount must be >= 0. Override keys must be non-empty
+	// and their durations non-negative.
+	if c.Staleness.HeartbeatThreshold < 0 {
+		errors = append(errors, ValidationError{
+			Field:   "SYNC_STALENESS_HEARTBEAT_THRESHOLD",
+			Message: fmt.Sprintf("must not be negative, got %s", c.Staleness.HeartbeatThreshold),
+		})
+	}
+	if c.Staleness.PullThreshold < 0 {
+		errors = append(errors, ValidationError{
+			Field:   "SYNC_STALENESS_PULL_THRESHOLD",
+			Message: fmt.Sprintf("must not be negative, got %s", c.Staleness.PullThreshold),
+		})
+	}
+	if c.Staleness.PushThreshold < 0 {
+		errors = append(errors, ValidationError{
+			Field:   "SYNC_STALENESS_PUSH_THRESHOLD",
+			Message: fmt.Sprintf("must not be negative, got %s", c.Staleness.PushThreshold),
+		})
+	}
+	if c.Staleness.ErrorThreshold < 0 {
+		errors = append(errors, ValidationError{
+			Field:   "SYNC_STALENESS_ERROR_THRESHOLD",
+			Message: fmt.Sprintf("must not be negative, got %s", c.Staleness.ErrorThreshold),
+		})
+	}
+	if c.Staleness.ErrorMinCount < 0 {
+		errors = append(errors, ValidationError{
+			Field:   "SYNC_STALENESS_ERROR_MIN_COUNT",
+			Message: fmt.Sprintf("must not be negative, got %d", c.Staleness.ErrorMinCount),
+		})
+	}
+	for key, dur := range c.Staleness.SourceOverrides {
+		if key == "" {
+			errors = append(errors, ValidationError{
+				Field:   "SYNC_STALENESS_SOURCE_OVERRIDES",
+				Message: "override source keys must be non-empty",
+			})
+		}
+		if dur < 0 {
+			errors = append(errors, ValidationError{
+				Field:   "SYNC_STALENESS_SOURCE_OVERRIDES",
+				Message: fmt.Sprintf("override for source %q must not be negative, got %s", key, dur),
+			})
+		}
 	}
 
 	// EventBus interaction-mode validation. Default "cutover" is applied
@@ -714,6 +869,14 @@ func TestConfig() *Config {
 			QuarterlyDays: 14,
 			BiannualDays:  21,
 			AnnualDays:    21,
+		},
+		Staleness: StalenessConfig{
+			HeartbeatThreshold: DefaultStalenessHeartbeatThreshold,
+			PullThreshold:      DefaultStalenessPullThreshold,
+			PushThreshold:      DefaultStalenessPushThreshold,
+			ErrorMinCount:      DefaultStalenessErrorMinCount,
+			ErrorThreshold:     DefaultStalenessErrorThreshold,
+			SourceOverrides:    builtinStalenessSourceOverrides(),
 		},
 		Telegram: TelegramConfig{
 			BurstWindowHours:     2,
