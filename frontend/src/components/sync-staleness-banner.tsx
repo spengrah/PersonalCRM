@@ -26,52 +26,37 @@ function sourceLabel(source: string): string {
   return SOURCE_LABELS[source] ?? source
 }
 
-// Relative age of a stale reference timestamp, computed client-side so the
-// banner ages without the server rewriting rows. Mirrors the coarse buckets
-// used elsewhere (formatSyncTime).
-function formatAge(staleSince: string, now: Date): string {
-  const since = new Date(staleSince)
-  if (Number.isNaN(since.getTime())) return ''
-
-  const diffMs = now.getTime() - since.getTime()
-  // Sub-minute ages (and small negative clock skew) render as "<1m" so the
-  // line reads "stale <1m" rather than an awkward "stale just now".
-  if (diffMs < 0) return '<1m'
-
-  const diffMins = Math.floor(diffMs / (1000 * 60))
-  const diffHours = Math.floor(diffMs / (1000 * 60 * 60))
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
-
-  if (diffMins < 1) return '<1m'
-  if (diffMins < 60) return `${diffMins}m`
-  if (diffHours < 24) return `${diffHours}h`
-  return `${diffDays}d`
-}
-
-function breachLine(breach: StalenessBreach, now: Date): string {
+// One banner line per breach. The watchdog refreshes details every tick
+// (server-side, accelerated-time-aware), so the line needs no client-side
+// age computation.
+function breachLine(breach: StalenessBreach): string {
   const label = sourceLabel(breach.source)
-  const age = formatAge(breach.stale_since, now)
-  const ageText = age ? ` — stale ${age}` : ''
-  const detailText = breach.details ? ` (${breach.details})` : ''
-  return `${label}${ageText}${detailText}`
+  return breach.details ? `${label} — ${breach.details}` : label
 }
 
 /**
  * SyncStalenessBanner surfaces the sync-staleness watchdog's active breaches
- * as a persistent amber banner. It is deliberately fail-quiet: it
- * renders nothing while loading, on a fetch error, or when there are no
- * breaches, so a flaky poll can never break or alarm the page. The watchdog's
- * own logs are the backend signal path; this banner is just the surface cue.
+ * on the settings page. sync_error breaches are excluded: the settings page
+ * already shows per-source provider/OAuth errors, so the banner only carries
+ * the classes nothing else surfaces (dead daemon heartbeat, silent pull
+ * staleness, push staleness). It is deliberately fail-quiet: it renders
+ * nothing while loading, on a fetch error, or when there is nothing to show,
+ * so a flaky poll can never break or alarm the page. The watchdog's own logs
+ * are the backend signal path; this banner is just the surface cue.
  */
 export function SyncStalenessBanner() {
   const { data: breaches, isError, isLoading } = useSyncStaleness()
 
-  if (isLoading || isError || !breaches || breaches.length === 0) {
+  if (isLoading || isError || !breaches) {
     return null
   }
 
-  const now = new Date()
-  const count = breaches.length
+  const visible = breaches.filter(breach => breach.breach_type !== 'sync_error')
+  if (visible.length === 0) {
+    return null
+  }
+
+  const count = visible.length
 
   return (
     <div
@@ -88,8 +73,8 @@ export function SyncStalenessBanner() {
             {count} sync {count === 1 ? 'source' : 'sources'} may be stalled
           </h3>
           <ul className="mt-2 space-y-1 text-sm text-amber-700">
-            {breaches.map(breach => (
-              <li key={breach.id}>{breachLine(breach, now)}</li>
+            {visible.map(breach => (
+              <li key={breach.id}>{breachLine(breach)}</li>
             ))}
           </ul>
         </div>

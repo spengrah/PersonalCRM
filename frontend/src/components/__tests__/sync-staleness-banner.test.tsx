@@ -17,7 +17,7 @@ function createBreach(overrides: Partial<StalenessBreach> = {}): StalenessBreach
     source: 'messages',
     account_id: 'host-1',
     breach_type: 'push_stale',
-    stale_since: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
+    stale_since: '2026-06-01T00:00:00Z',
     threshold_seconds: 172800,
     details: 'no push for 3d (threshold 48h)',
     detected_at: '2026-06-04T00:00:00Z',
@@ -49,6 +49,36 @@ describe('SyncStalenessBanner', () => {
     expect(container).toBeEmptyDOMElement()
   })
 
+  it('renders nothing when all breaches are sync_error (settings already shows them)', () => {
+    mockedUseSyncStaleness.mockReturnValue({
+      data: [
+        createBreach({ id: 'b1', source: 'gcal', breach_type: 'sync_error' }),
+        createBreach({ id: 'b2', source: 'email', breach_type: 'sync_error' }),
+      ],
+      isLoading: false,
+      isError: false,
+    })
+    const { container } = render(<SyncStalenessBanner />)
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it('excludes sync_error breaches from the list and the count', () => {
+    mockedUseSyncStaleness.mockReturnValue({
+      data: [
+        createBreach({ id: 'b1', source: 'messages' }),
+        createBreach({ id: 'b2', source: 'gcal', breach_type: 'sync_error' }),
+      ],
+      isLoading: false,
+      isError: false,
+    })
+    render(<SyncStalenessBanner />)
+
+    expect(screen.getByText('1 sync source may be stalled')).toBeInTheDocument()
+    expect(screen.getByText(/Messages/)).toBeInTheDocument()
+    expect(screen.queryByText(/Google Calendar/)).not.toBeInTheDocument()
+    expect(screen.getAllByRole('listitem')).toHaveLength(1)
+  })
+
   it('renders a singular heading and one line for a single breach', () => {
     mockedUseSyncStaleness.mockReturnValue({
       data: [createBreach()],
@@ -59,17 +89,21 @@ describe('SyncStalenessBanner', () => {
 
     expect(screen.getByRole('status')).toBeInTheDocument()
     expect(screen.getByText('1 sync source may be stalled')).toBeInTheDocument()
-    // Human source label + details string appear on the line.
+    // Human source label + the watchdog's details string appear on the line.
     expect(screen.getByText(/Messages/)).toBeInTheDocument()
     expect(screen.getByText(/no push for 3d/)).toBeInTheDocument()
-    expect(screen.getByText(/stale 3d/)).toBeInTheDocument()
   })
 
   it('renders a plural heading and one line per breach', () => {
     mockedUseSyncStaleness.mockReturnValue({
       data: [
         createBreach({ id: 'b1', source: 'messages' }),
-        createBreach({ id: 'b2', source: 'gcal', details: 'no sync for 26h (threshold 24h)' }),
+        createBreach({
+          id: 'b2',
+          source: 'gcal',
+          breach_type: 'sync_stale',
+          details: 'no successful sync for 26h (threshold 24h)',
+        }),
         createBreach({ id: 'b3', source: 'mac_host', breach_type: 'heartbeat', details: '' }),
       ],
       isLoading: false,
@@ -92,15 +126,5 @@ describe('SyncStalenessBanner', () => {
     })
     render(<SyncStalenessBanner />)
     expect(screen.getByText(/some_new_source/)).toBeInTheDocument()
-  })
-
-  it('renders a sub-minute age as <1m', () => {
-    mockedUseSyncStaleness.mockReturnValue({
-      data: [createBreach({ stale_since: new Date().toISOString(), details: '' })],
-      isLoading: false,
-      isError: false,
-    })
-    render(<SyncStalenessBanner />)
-    expect(screen.getByText(/stale <1m/)).toBeInTheDocument()
   })
 })
