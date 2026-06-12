@@ -186,6 +186,24 @@ run_setup() {
 log_has()   { grep -qF -- "$1" "$CALL_LOG"; }
 log_lacks() { ! grep -qF -- "$1" "$CALL_LOG"; }
 
+# get_mode <path>: octal file mode, portable across BSD (macOS) and GNU (Linux)
+# stat. Echoes the bare octal mode (e.g. 600) on success, or NOTHING (empty) if
+# neither form yields octal. Mirrors reconcile's get_mtime portability fix: BSD
+# `stat -f %Lp FILE` and GNU `stat -c %a FILE` are mutually exclusive in SYNTAX
+# but NOT in exit code — GNU treats `stat -f %Lp FILE` as `--file-system %Lp`
+# over FILE, printing a MULTI-LINE filesystem block ("  File: ...") and exiting
+# 0, so a bare `stat -f ... || stat -c ...` never reaches the GNU fallback and
+# the garbage block flows into the comparison. Guard by VALIDATING each form's
+# output is octal before accepting it; never trust the exit code.
+get_mode() {
+    local out
+    out="$(stat -f '%Lp' "$1" 2>/dev/null)"
+    if [[ "$out" =~ ^[0-7]{3,4}$ ]]; then echo "$out"; return 0; fi
+    out="$(stat -c '%a' "$1" 2>/dev/null)"
+    if [[ "$out" =~ ^[0-7]{3,4}$ ]]; then echo "$out"; return 0; fi
+    return 0  # nothing octal -> empty output, caller handles
+}
+
 # ===========================================================================
 # Tests
 # ===========================================================================
@@ -237,11 +255,43 @@ test_scaffolds_deploy_env_when_absent() {
     if grep -q '^CRM_MAC_CODESIGN_IDENTITY=' "$DEPLOY_ENV_FILE"; then ok; else fail "scaffold must include CRM_MAC_CODESIGN_IDENTITY"; fi
     if grep -q '^NTFY_URL=' "$DEPLOY_ENV_FILE"; then ok; else fail "scaffold must include NTFY_URL"; fi
     if grep -q '^NTFY_TOPIC=' "$DEPLOY_ENV_FILE"; then ok; else fail "scaffold must include NTFY_TOPIC"; fi
-    # chmod 600 = only-owner perms. Check the mode digits portably.
+    # chmod 600 = only-owner perms. Read the mode via the portable get_mode
+    # helper (a bare `stat -f || stat -c` mis-reads on Linux — see get_mode).
     local mode
-    mode="$(stat -f '%Lp' "$DEPLOY_ENV_FILE" 2>/dev/null || stat -c '%a' "$DEPLOY_ENV_FILE" 2>/dev/null)"
-    if [ "$mode" = "600" ]; then ok; else fail "scaffolded deploy.env must be chmod 600, got $mode"; fi
+    mode="$(get_mode "$DEPLOY_ENV_FILE")"
+    if [ "$mode" = "600" ]; then ok; else fail "scaffolded deploy.env must be chmod 600, got '$mode'"; fi
     cleanup_sandbox
+}
+
+test_get_mode_portable_against_gnu_stat() {
+    echo "test: get_mode rejects GNU \`stat -f\`=--file-system garbage, yields octal (portable-by-construction)"
+    # Prove the fallback + garbage-rejection WITHOUT needing a Linux host: shadow
+    # `stat` with a stub modeling GNU behavior — `stat -f %Lp FILE` prints a
+    # multi-line "--file-system" block and exits 0 (the exact trap that failed
+    # CI), while `stat -c %a FILE` prints the octal mode. get_mode must reject the
+    # block (not octal) and accept the GNU fallback.
+    local tmp stub_bin
+    tmp="$(mktemp -d)"
+    stub_bin="$tmp/bin"
+    mkdir -p "$stub_bin"
+    cat > "$stub_bin/stat" <<'EOF'
+#!/usr/bin/env bash
+# GNU stat: `-f` is --file-system (block + exit 0); `-c %a` is the octal mode.
+if [ "$1" = "-f" ]; then
+  printf '  File: "%s"\n    ID: 0 Namelen: 255 Type: ext2/ext3\n' "${@: -1}"
+  exit 0
+fi
+if [ "$1" = "-c" ]; then
+  echo "600"   # the GNU octal-mode form
+  exit 0
+fi
+exit 1
+EOF
+    chmod +x "$stub_bin/stat"
+    local got
+    got="$(PATH="$stub_bin:$PATH" bash -c "$(declare -f get_mode); get_mode /any/file")"
+    if [ "$got" = "600" ]; then ok; else fail "get_mode must yield octal under GNU stat, got '$got'"; fi
+    rm -rf "$tmp"
 }
 
 test_renders_placeholder_substituted() {
@@ -360,6 +410,7 @@ main() {
     test_rerun_does_not_reclone
     test_does_not_overwrite_deploy_env
     test_scaffolds_deploy_env_when_absent
+    test_get_mode_portable_against_gnu_stat
     test_renders_placeholder_substituted
     test_records_template_hash
     test_timer_not_loaded_when_scaffold_empty
