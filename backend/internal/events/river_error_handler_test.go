@@ -151,7 +151,7 @@ func TestHandlePanic_FinalAttemptStaysDistinguishable(t *testing.T) {
 	assert.Equal(t, true, m["discarded"])
 }
 
-// TestHandleError_EmptyArgsStaysValidJSON pins the D1 guard: an empty
+// TestHandleError_EmptyArgsStaysValidJSON pins the empty-args guard: an empty
 // EncodedArgs slice produces args="" rather than corrupting the record.
 func TestHandleError_EmptyArgsStaysValidJSON(t *testing.T) {
 	t.Parallel()
