@@ -143,13 +143,21 @@ acquire_lock() {
     else
         # Owner file missing/unparseable: fall back to the dir mtime TTL.
         local mtime
-        mtime="$(get_mtime "$LOCK_DIR" 2>/dev/null || echo 0)"
-        age=$(( now - mtime ))
-        if [ "$age" -lt "$LOCK_STALE_SECS" ]; then
-            log "lock held (no owner file, age ${age}s); exiting"
-            return 1
+        mtime="$(get_mtime "$LOCK_DIR")"
+        if [[ "$mtime" =~ ^[0-9]+$ ]]; then
+            age=$(( now - mtime ))
+            if [ "$age" -lt "$LOCK_STALE_SECS" ]; then
+                log "lock held (no owner file, age ${age}s); exiting"
+                return 1
+            fi
+            log "lock owner file missing and dir age ${age}s >= ${LOCK_STALE_SECS}s; reclaiming stale lock"
+        else
+            # mtime unparseable (no usable stat output) -> cannot compute age.
+            # Safe direction is to RECLAIM (never wedge forever on a lock whose
+            # age we can't read); the re-mkdir race still guards against stealing
+            # a live winner's lock.
+            log "lock owner file missing and dir mtime unreadable; reclaiming stale lock"
         fi
-        log "lock owner file missing and dir age ${age}s >= ${LOCK_STALE_SECS}s; reclaiming stale lock"
     fi
 
     # Reclaim ONCE. A real run racing in between -> the re-mkdir fails -> exit 0.
@@ -164,8 +172,22 @@ acquire_lock() {
 }
 
 # get_mtime <path>: epoch mtime, portable across BSD (macOS) and GNU stat.
+# Echoes a bare integer epoch on success, or NOTHING (empty) if neither form
+# yields a numeric value. BSD `stat -f %m` and GNU `stat -c %Y` are mutually
+# exclusive in SYNTAX but NOT in exit code: GNU stat treats `-f %m DIR` as
+# `--file-system` over files `%m`+DIR and, for an existing DIR, prints a
+# MULTI-LINE filesystem block (first line `  File: ...`) and exits 0 — so the
+# `||` fallback never fires and the garbage would flow into arithmetic and crash
+# under `set -u` (`File: unbound variable`). Guard by validating each form's
+# output is a single integer before accepting it; emit nothing otherwise so the
+# caller can treat it as "unparseable -> safe path".
 get_mtime() {
-    stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null
+    local out
+    out="$(stat -f %m "$1" 2>/dev/null)"
+    if [[ "$out" =~ ^[0-9]+$ ]]; then echo "$out"; return 0; fi
+    out="$(stat -c %Y "$1" 2>/dev/null)"
+    if [[ "$out" =~ ^[0-9]+$ ]]; then echo "$out"; return 0; fi
+    return 0  # nothing parseable -> empty output, caller handles
 }
 
 # ---------------------------------------------------------------------------

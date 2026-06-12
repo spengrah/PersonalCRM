@@ -172,6 +172,33 @@ echo "launchctl \$*" >> "$CALL_LOG"
 exit 0
 EOF
 
+    # --- stub: stat (lock-dir mtime) --------------------------------------
+    # The lock-mtime path calls `stat -f %m DIR` (BSD) then `stat -c %Y DIR`
+    # (GNU). Stub it so the missing-owner TTL branch is HERMETIC -- never
+    # dependent on the host's real stat (which differs BSD vs GNU and leaked the
+    # GNU `-f`=--file-system "  File: ..." block into arithmetic on Linux CI).
+    #   default                 -> emit ${STUB_STAT_MTIME:-1000} for -f %m / -c %Y
+    #   STUB_STAT_GARBAGE=1      -> model GNU `stat -f %m DIR` (=--file-system):
+    #                              a multi-line block whose first line is "  File:"
+    #                              and exit 0, so the script must validate + not crash
+    cat > "$SANDBOX/bin/stat" <<EOF
+#!/usr/bin/env bash
+echo "stat \$*" >> "$CALL_LOG"
+if [ "\${STUB_STAT_GARBAGE:-0}" = "1" ]; then
+  # GNU \`stat -f %m DIR\` prints a filesystem block (NOT a number) and exits 0.
+  if [ "\$1" = "-f" ]; then
+    printf '  File: "%s"\n    ID: 0 Namelen: 255 Type: apfs\n' "\${@: -1}"
+    exit 0
+  fi
+  # GNU \`-c %Y\` would still work, but model the worst case: also non-numeric.
+  echo "garbage"
+  exit 0
+fi
+# Hermetic numeric mtime for both BSD (-f %m) and GNU (-c %Y) forms.
+echo "\${STUB_STAT_MTIME:-1000}"
+exit 0
+EOF
+
     # --- stub: sleep (no-op so retry loops run instantly) -----------------
     cat > "$SANDBOX/bin/sleep" <<'EOF'
 #!/usr/bin/env bash
@@ -583,11 +610,31 @@ test_stale_lock_ttl_no_owner_file() {
     echo "test: stale-lock TTL fallback (missing owner file)"
     make_sandbox
     write_deploy_env "CRM_MAC_CODESIGN_IDENTITY=My Cert" "NTFY_URL=https://ntfy.example" "NTFY_TOPIC=tok"
-    # Lock dir exists but NO owner file. LOCK_STALE_SECS=0 forces the age>=TTL path.
+    # Lock dir exists but NO owner file. The `stat` stub returns a fixed numeric
+    # mtime (1000); LOCK_STALE_SECS=0 forces the age>=TTL reclaim path. Hermetic:
+    # never touches the host's real stat (BSD vs GNU output differs).
     mkdir -p "$LOCK_DIR"
     LOCK_STALE_SECS_OVERRIDE=0 STUB_CI_CONCLUSION=success STUB_INSTALLED_SHA="$INSTALLED_SHA" STUB_DIFF_RC=1 run_reconcile
     if [ "$RC" -eq 0 ]; then ok; else fail "missing-owner TTL-stale lock should be reclaimed -> exit 0, got $RC ($OUT)"; fi
     if log_has "fetch --quiet origin"; then ok; else fail "after TTL reclaim, reconcile must proceed"; fi
+    cleanup_sandbox
+    unset DEPLOY_ENV_FILE_OVERRIDE
+}
+
+test_stale_lock_garbage_stat_does_not_crash() {
+    echo "test: missing owner + non-numeric stat output -> safe reclaim, NO crash"
+    make_sandbox
+    write_deploy_env "CRM_MAC_CODESIGN_IDENTITY=My Cert" "NTFY_URL=https://ntfy.example" "NTFY_TOPIC=tok"
+    # Lock dir exists, NO owner file, and `stat -f %m` emits a non-numeric
+    # filesystem block (the GNU `stat -f`=--file-system "  File: ..." output that
+    # crashed Linux CI: `File: unbound variable` under set -u). The mtime must be
+    # rejected as unparseable and the lock RECLAIMED, never an arithmetic crash.
+    mkdir -p "$LOCK_DIR"
+    STUB_STAT_GARBAGE=1 STUB_CI_CONCLUSION=success STUB_INSTALLED_SHA="$INSTALLED_SHA" STUB_DIFF_RC=1 run_reconcile
+    if [ "$RC" -eq 0 ]; then ok; else fail "garbage stat output must reclaim safely -> exit 0, got $RC ($OUT)"; fi
+    if out_has "unbound variable"; then fail "garbage stat output must NOT crash with an unbound variable"; else ok; fi
+    if out_has "arithmetic"; then fail "garbage stat output must NOT hit an arithmetic error"; else ok; fi
+    if log_has "fetch --quiet origin"; then ok; else fail "after safe reclaim, reconcile must proceed"; fi
     cleanup_sandbox
     unset DEPLOY_ENV_FILE_OVERRIDE
 }
@@ -684,6 +731,7 @@ main() {
     test_lock_loser_does_not_touch_worktree
     test_stale_lock_dead_pid_reclaims
     test_stale_lock_ttl_no_owner_file
+    test_stale_lock_garbage_stat_does_not_crash
     test_lock_released_on_signal
     test_path_with_spaces
     test_worktree_cleanup_on_success
