@@ -143,10 +143,18 @@ func TestNewClientFactory_EnvWiring(t *testing.T) {
 
 	t.Run("staging refuses", func(t *testing.T) {
 		t.Parallel()
+		rt := &recordingRoundTripper{}
 		client := NewClientFactory("staging")("test-token")
-		task, err := client.QuickAdd(context.Background(), "x", "")
+		// Inject a recording transport so a factory regression to the
+		// prod-default client surfaces as a non-zero call count instead of a
+		// real outbound Todoist request.
+		sc, ok := client.(*SyncClient)
+		require.True(t, ok, "factory should return *SyncClient")
+		sc.SetHTTPClient(&http.Client{Transport: rt})
+		task, err := sc.QuickAdd(context.Background(), "x", "")
 		require.ErrorIs(t, err, ErrNonProdWriteRefused)
 		assert.Nil(t, task)
+		assert.Equal(t, int32(0), rt.calls.Load(), "no HTTP request should be issued")
 	})
 
 	t.Run("production writes", func(t *testing.T) {
