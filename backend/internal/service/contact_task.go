@@ -57,7 +57,7 @@ func NewContactTaskService(
 		syncRepo:          syncRepo,
 		oauthService:      oauthService,
 		frontendURL:       cfg.CORS.FrontendURL,
-		todoistClientFunc: todoist.DefaultClientFactory,
+		todoistClientFunc: todoist.NewClientFactory(cfg.Runtime.CRMEnvironment),
 	}
 }
 
