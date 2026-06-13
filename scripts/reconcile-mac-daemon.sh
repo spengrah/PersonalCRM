@@ -2,8 +2,12 @@
 # PersonalCRM Mac daemon reconcile-to-origin/main orchestrator.
 #
 # The Mac analog of deploy-artifact.sh (the Pi deploy primitive). Runs as the
-# LOGGED-IN USER (userland; NO sudo). Invoked by BOTH the runner workflow
-# (deploy-mac.yml) and the launchd timer, so the two paths can never diverge.
+# LOGGED-IN USER (userland; NO sudo). Invoked by the launchd TIMER — on login
+# (RunAtLoad), on the ~6h StartCalendarInterval schedule, AND when the
+# deploy-mac.yml runner `launchctl kickstart`s the timer on promote. The runner
+# no longer invokes reconcile directly (its isolated session cannot codesign);
+# it only kickstarts the timer, so reconcile always runs in the user's login
+# session and the two trigger paths converge on the identical execution context.
 #
 # Flow (every step idempotent + fail-closed):
 #   lock (mkdir + stale recovery) -> fetch origin/main -> CI gate (gh) ->
@@ -13,8 +17,12 @@
 #
 # Exit codes:
 #   0  success, no-op, or soft-skip (transient: try again next tick).
-#   1  genuine CI-fail / build-fail / health-fail (runner job shows red;
-#      failure ntfy fires).
+#   1  genuine CI-fail / build-fail / health-fail (the failure ntfy fires).
+# Reconcile runs in the timer's login session (fire-and-forget from the runner's
+# perspective: the runner's kickstart returns before reconcile finishes), so this
+# exit code surfaces via ntfy + the timer's reconcile-stderr.log, NOT the Actions
+# job status. On a login/scheduled fire the non-zero is just the launchd job's
+# exit; the ntfy is the real failure signal either way.
 #
 # Notifications: sourced from $DEPLOY_ENV_FILE if present (degrade-open --
 # absent file => no ntfy, never PII or secrets in bodies).
@@ -221,7 +229,7 @@ abort_empty_identity() {
 refresh_tooling() {
     local script dest tmp
     mkdir -p "$INSTALL_BIN_DIR"
-    for script in reconcile-mac-daemon.sh deploy-mac-daemon.sh; do
+    for script in reconcile-mac-daemon.sh deploy-mac-daemon.sh trigger-mac-deploy.sh; do
         dest="$INSTALL_BIN_DIR/$script"
         tmp="$dest.tmp.$$"
         if git -C "$CLONE_DIR" show "origin/main:scripts/$script" > "$tmp" 2>/dev/null; then
@@ -290,9 +298,11 @@ if [ -z "$TARGET_SHA" ]; then
     exit 0
 fi
 
-# Step 3: CI gate. Query ci.yml's conclusion for TARGET_SHA via the workflow
-# GITHUB_TOKEN (runner path) or the user's gh keyring auth (timer path); gh reads
-# whichever is in the environment. Derive REPO with gh (BSD-sed-safe; no hand-rolled regex), anchored to the
+# Step 3: CI gate. Query ci.yml's conclusion for TARGET_SHA via the user's gh
+# keyring auth. Reconcile always runs in the user's login session now (the runner
+# just kickstarts the timer — it no longer invokes reconcile), so there is no
+# runner GITHUB_TOKEN path; the active gh account's auth is always what's used.
+# Derive REPO with gh (BSD-sed-safe; no hand-rolled regex), anchored to the
 # clone's remote URL (reconcile's CWD has no checkout). The status=completed
 # filter is load-bearing: an in-progress re-run on the main push must never read
 # as success; for a SHA promoted from CI-green develop, the already-completed
@@ -304,11 +314,14 @@ ci_gate() {
     #   ghfailure                   persistent/structural (unauthed, empty REPO,
     #                               401/403/404) -> surfaced, not silent
     #   softskip                    auth OK but transport error -> try next tick
-    if ! gh auth status >/dev/null 2>&1; then
-        echo "ghfailure"
-        return 0
-    fi
-
+    #
+    # No `gh auth status` precheck: it exits non-zero if ANY configured gh account
+    # is invalid (e.g. a keyring account the login session cannot read), even when
+    # the active account is valid and the gh repo view / gh api query below
+    # succeeds. (Reconcile now runs only in the user's login session — the runner
+    # just kickstarts the timer — so this uses the user's gh keyring auth.) The
+    # gh repo view / gh api calls classify real auth failures themselves (empty
+    # repo / 401|403|404 -> ghfailure).
     local origin_url repo
     origin_url="$(git -C "$CLONE_DIR" remote get-url origin 2>/dev/null || true)"
     repo="$(gh repo view "$origin_url" --json nameWithOwner --jq .nameWithOwner 2>/dev/null || true)"
@@ -330,8 +343,17 @@ ci_gate() {
         fi
         # gh api returned non-zero. Classify structural (4xx) vs transient (5xx)
         # by probing the HTTP status line via -i. 401/403/404 = structural.
+        # The `|| true` is load-bearing: under `set -euo pipefail` a real
+        # `gh api -i` exiting non-zero (the EXACT case we're here to classify)
+        # makes the pipeline non-zero, which would ABORT the script at this
+        # assignment before the case below runs — skipping the ghfailure/softskip
+        # classification entirely. (Real gh exits non-zero on 401/403/404; the
+        # test stub models this faithfully — its `gh api -i` exits non-zero in the
+        # failure cases.) Swallow the status so the classification proceeds; an
+        # empty status_code falls through to the transient softskip after the
+        # retry loop.
         local status_code
-        status_code="$(gh api -i "$query" 2>/dev/null | awk 'NR==1{print $2; exit}')"
+        status_code="$(gh api -i "$query" 2>/dev/null | awk 'NR==1{print $2; exit}' || true)"
         case "$status_code" in
             401|403|404)
                 echo "ghfailure"  # token lacks scope / repo|workflow not found
@@ -372,7 +394,7 @@ case "$ci_result" in
         # misconfigured). SURFACED via a low-priority informational ntfy, NOT a
         # silent forever-skip. Not a deploy failure -- nothing to roll back.
         ntfy "Mac deploy: CI gate could not be queried" "low" "warning" \
-            "check \`gh auth status\` and Actions read access"
+            "check that gh resolves the repo (gh repo view) and has Actions read access"
         log "CI gate could not be queried (gh auth/structural failure); informational notice + exit 0"
         exit 0
         ;;

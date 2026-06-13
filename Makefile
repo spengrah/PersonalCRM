@@ -411,6 +411,7 @@ test-deploy-scripts:
 	@bash scripts/deploy-artifact.test.sh
 	@bash scripts/reconcile-mac-daemon.test.sh
 	@bash scripts/setup-mac-deploy.test.sh
+	@bash scripts/trigger-mac-deploy.test.sh
 	@echo "Validating the committed timer template (plistlib parse)..."
 	@python3 -c "import plistlib,sys; plistlib.loads(open(sys.argv[1],'rb').read()); print('  timer template OK')" \
 		infra/mac-deploy/xyz.spengrah.crm-mac-deploy.plist.template

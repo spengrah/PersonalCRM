@@ -16,6 +16,13 @@
   once on login. Four daily entries give a ~6h "longer than hourly" cadence plus
   the login fire. The invoked script does its own fetch + CI gate + relevance
   gate, so an extra fire is a cheap no-op.
+
+  EnvironmentVariables.PATH is BAKED IN (a literal string, untouched by setup's
+  __INSTALL_PREFIX__ sed) because a LaunchAgent otherwise inherits only
+  /usr/bin:/bin:/usr/sbin:/sbin — which EXCLUDES /opt/homebrew/bin, where `gh`
+  lives. Without it the reconcile's CI gate (`gh repo view` / `gh api`) cannot
+  find `gh`. /opt/homebrew/bin is Apple-Silicon Homebrew (the deploy Mac is
+  arm64); /usr/local/bin is included belt-and-suspenders for Intel Homebrew.
 -->
 <plist version="1.0">
 <dict>
@@ -25,6 +32,11 @@
     <array>
         <string>__INSTALL_PREFIX__/bin/reconcile-mac-daemon.sh</string>
     </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>StartCalendarInterval</key>
