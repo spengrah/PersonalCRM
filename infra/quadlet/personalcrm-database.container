@@ -23,11 +23,12 @@ Exec=postgres -c max_connections=200
 # Published to loopback only for host-side tooling (psql, backups). The backend
 # connects over the crm network via the `crm-postgres` DNS name, not this port.
 PublishPort=127.0.0.1:5432:5432
-HealthCmd=pg_isready -U crm_user -d personal_crm
-HealthInterval=5s
-HealthTimeout=5s
-HealthRetries=5
-HealthStartPeriod=10s
+# No HealthCmd on purpose: this rootless podman-static runtime runs with
+# cgroupManager=cgroupfs + eventLogger=file, so podman never creates the
+# transient systemd timer that executes a container healthcheck. A declared
+# HealthCmd would therefore never run -- the container would report "(starting)"
+# forever despite a perfectly healthy DB. Liveness is covered by Restart=always
+# (below) and the deploy health-gate, which probes the backend API over the DB.
 
 [Service]
 Restart=always
