@@ -453,6 +453,29 @@ func run() int {
 	// the sole writer.
 	contactService.SetCadenceUpdater(cadenceUpdater)
 
+	// Todoist client factory, built once with the running CRM_ENV so the
+	// outbound-write guard (Spec C) applies at every production write site.
+	// Non-prod instances holding real OAuth tokens (a restored prod DB, a
+	// partial env copy) refuse Todoist writes; see todoist.ErrNonProdWriteRefused.
+	todoistClientFactory := todoist.NewClientFactory(cfg.Runtime.CRMEnvironment)
+	if config.IsProductionCRMEnv(cfg.Runtime.CRMEnvironment) {
+		// Logged at Warn so it survives prod's LOG_LEVEL=warn threshold — this
+		// is the operator-facing signal that writes are live. Expected on every
+		// prod boot; the stable "event" field lets alerting route it as
+		// informational.
+		logger.Warn().
+			Str("event", "todoist_writes_enabled").
+			Str("crm_env", cfg.Runtime.CRMEnvironment).
+			Bool("todoist_writes_enabled", true).
+			Msg("Todoist outbound writes ENABLED (production CRM_ENV)")
+	} else {
+		logger.Info().
+			Str("event", "todoist_writes_enabled").
+			Str("crm_env", cfg.Runtime.CRMEnvironment).
+			Bool("todoist_writes_enabled", false).
+			Msg("Todoist outbound writes refused (non-production CRM_ENV)")
+	}
+
 	// FollowUpManager consumer — the sole writer of
 	// contact_task.kind='follow_up' lifecycle post-cutover. Constructed
 	// BEFORE the InteractionRecorder because the recorder takes it as a
@@ -474,7 +497,7 @@ func run() int {
 		riverClient,
 		database.Pool,
 		followUpSettings,
-		todoist.DefaultClientFactory,
+		todoistClientFactory,
 		cfg.CORS.FrontendURL,
 		cfg.Watchdog,
 	)
@@ -661,13 +684,13 @@ func run() int {
 	// retryable failure for river to back off.
 	river.AddWorker(riverWorkers, consumer.NewFollowUpManagerWorker(eventBus, database.Pool, followUpManager))
 	river.AddWorker(riverWorkers, consumer.NewTodoistFollowUpCreateJobWorker(
-		followUpMode, contactTaskRepo, followUpSettings, todoist.DefaultClientFactory, riverClient, database.Pool,
+		followUpMode, contactTaskRepo, followUpSettings, todoistClientFactory, riverClient, database.Pool,
 	))
 	river.AddWorker(riverWorkers, consumer.NewTodoistFollowUpCloseJobWorker(
-		followUpMode, contactTaskRepo, followUpSettings, todoist.DefaultClientFactory,
+		followUpMode, contactTaskRepo, followUpSettings, todoistClientFactory,
 	))
 	river.AddWorker(riverWorkers, consumer.NewTodoistFollowUpRefreshJobWorker(
-		followUpMode, contactTaskRepo, followUpSettings, todoist.DefaultClientFactory,
+		followUpMode, contactTaskRepo, followUpSettings, todoistClientFactory,
 	))
 
 	switch cfg.EventBus.FollowUpMode {
@@ -918,7 +941,7 @@ func run() int {
 				eventBus,
 				cadenceUpdater,
 				database.Pool,
-				todoist.DefaultClientFactory,
+				todoistClientFactory,
 			)
 			providerRegistry.Register(todoistProvider)
 			logger.Info().Msg("Todoist Cadence sync provider registered")
