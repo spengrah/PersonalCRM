@@ -203,7 +203,7 @@ func TestTriggerSync_RequiresSource(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-// TestTriggerSync_RejectsAccountScopedSourceWithoutAccount verifies the #530
+// TestTriggerSync_RejectsAccountScopedSourceWithoutAccount verifies the
 // synchronous pre-flight: when the source is account-scoped (RequiresAccount)
 // and the request carries no usable account ID, the handler returns 400
 // (VALIDATION_ERROR) BEFORE spawning the background goroutine — so the client

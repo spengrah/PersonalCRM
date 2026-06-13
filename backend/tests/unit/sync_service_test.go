@@ -405,7 +405,7 @@ func TestSyncService_ListDueAccounts_FiltersUnregisteredProviders(t *testing.T) 
 }
 
 // TestSyncService_TriggerSync_RejectsNilAccountForAccountScopedProvider is the
-// primary #530 regression: an account-scoped provider (Config().RequiresAccount)
+// primary regression: an account-scoped provider (Config().RequiresAccount)
 // triggered with a nil account must be rejected with ErrAccountRequired and must
 // NOT bootstrap an external_sync_state row (which would error on every dispatch
 // forever). The enqueuer is wired so we can also assert no river_job was queued.
