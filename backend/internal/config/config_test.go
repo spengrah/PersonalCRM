@@ -1401,3 +1401,26 @@ func TestConfig_Health_ZeroDisablesValidatesCleanly(t *testing.T) {
 		t.Errorf("expected zero-disables health config to validate cleanly, got: %v", err)
 	}
 }
+
+func TestIsProductionCRMEnv(t *testing.T) {
+	tests := []struct {
+		env  string
+		want bool
+	}{
+		{"production", true},
+		{"prod", true},
+		{"", true}, // unset CRM_ENV defaults to production at load
+		{"staging", false},
+		{"test", false},
+		{"testing", false},
+		{"accelerated", false},
+		{"development", false}, // not a valid CRM_ENV, treated non-prod
+	}
+	for _, tt := range tests {
+		t.Run(tt.env, func(t *testing.T) {
+			if got := IsProductionCRMEnv(tt.env); got != tt.want {
+				t.Errorf("IsProductionCRMEnv(%q) = %v, want %v", tt.env, got, tt.want)
+			}
+		})
+	}
+}
