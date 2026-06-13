@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
@@ -15,6 +16,21 @@ import (
 
 	"github.com/google/uuid"
 )
+
+// ErrAccountRequired is returned by TriggerSync when an account-scoped
+// provider (Config().RequiresAccount) is triggered with a nil/empty account
+// ID. Bootstrapping a sync_state row here would create a permanently-erroring
+// row, so we reject instead. Handlers can map it to a 4xx via errors.Is.
+var ErrAccountRequired = errors.New("account ID required for this source")
+
+// AccountIDMissing reports whether an account ID is absent for the purpose of
+// account-scoped provider validation: nil, empty, or whitespace-only. A
+// padded-but-nonempty ID (e.g. " acct ") is intentionally NOT treated as
+// missing — normalizing caller input is out of scope here. Exported so the
+// sync HTTP handler shares this single definition.
+func AccountIDMissing(accountID *string) bool {
+	return accountID == nil || strings.TrimSpace(*accountID) == ""
+}
 
 // Backoff intervals for error retries (exponential backoff)
 var backoffIntervals = []time.Duration{
@@ -138,6 +154,12 @@ func (s *SyncService) TriggerSync(ctx context.Context, source string, accountID 
 	provider, ok := s.registry.Get(source)
 	if !ok {
 		return fmt.Errorf("unknown sync source: %s", source)
+	}
+
+	// Reject account-scoped providers triggered without an account, before we
+	// would otherwise bootstrap a permanently-erroring sync_state row.
+	if provider.Config().RequiresAccount && AccountIDMissing(accountID) {
+		return fmt.Errorf("%w: source %q requires an account ID", ErrAccountRequired, source)
 	}
 
 	// Get or create sync state. The state itself is not needed on the

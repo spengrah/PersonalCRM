@@ -68,6 +68,7 @@ func (p *ContactsProvider) Config() sync.SourceConfig {
 		SupportsMultiAccount: true,
 		SupportsDiscovery:    true,
 		DefaultInterval:      ContactsDefaultInterval,
+		RequiresAccount:      true, // OAuth token is keyed by account; Sync nil-checks AccountID
 	}
 }
 

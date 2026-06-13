@@ -10,6 +10,7 @@ import (
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/sync"
 
 	"github.com/gin-gonic/gin"
@@ -144,12 +145,27 @@ func (h *SyncHandler) TriggerSync(c *gin.Context) {
 		return
 	}
 
+	accountID := req.AccountID
+
+	// Pre-flight: reject account-scoped sources triggered without an account,
+	// synchronously, so the client gets a 400 instead of a 202 that hides a
+	// background failure. Mirrors the service-layer guard.
+	for _, cfg := range h.syncService.GetAvailableProviders() {
+		if cfg.Name == source {
+			if cfg.RequiresAccount && service.AccountIDMissing(accountID) {
+				api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation,
+					"Account ID is required for this source", "")
+				return
+			}
+			break
+		}
+	}
+
 	// Enqueue the sync in a background goroutine with a detached context.
 	// After #180 PR 3 this is just a river Insert (fast), but we keep the
 	// goroutine so the HTTP client gets a 202 immediately even if the DB
 	// briefly stalls. 30s timeout is plenty for an Insert under realistic
 	// load; the old 5m was sized for full sync work, which is now off-handler.
-	accountID := req.AccountID
 	srcName := source // explicit capture for goroutine
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

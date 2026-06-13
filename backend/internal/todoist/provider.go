@@ -163,6 +163,7 @@ func (p *CadenceSyncProvider) Config() sync.SourceConfig {
 		SupportsMultiAccount: false, // v1 supports single account only
 		SupportsDiscovery:    false, // No task discovery from Todoist in v1
 		DefaultInterval:      DefaultSyncInterval,
+		RequiresAccount:      true, // OAuth token is keyed by account; Sync nil-checks AccountID
 	}
 }
 

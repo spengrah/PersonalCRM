@@ -17,6 +17,12 @@ type SourceConfig struct {
 	SupportsMultiAccount bool                    `json:"supports_multi_account"` // true for Google/Telegram, false for iMessage
 	SupportsDiscovery    bool                    `json:"supports_discovery"`     // true if can discover new contacts
 	DefaultInterval      time.Duration           `json:"default_interval"`       // e.g., 15 * time.Minute
+	// RequiresAccount declares that this provider's Sync requires a non-nil,
+	// non-empty account ID (e.g. its OAuth token is keyed by account). When
+	// true, TriggerSync rejects a nil/empty account instead of bootstrapping a
+	// sync_state row that would error on every dispatch. Defaults to false
+	// (the correct value for push providers whose Sync is account-agnostic).
+	RequiresAccount bool `json:"requires_account"`
 }
 
 // SyncResult represents the outcome of a sync operation

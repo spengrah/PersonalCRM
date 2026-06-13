@@ -297,6 +297,7 @@ func (p *GmailSyncProvider) Config() sync.SourceConfig {
 		SupportsMultiAccount: true,
 		SupportsDiscovery:    false,
 		DefaultInterval:      GmailDefaultInterval,
+		RequiresAccount:      true, // OAuth token is keyed by account; Sync nil-checks AccountID
 	}
 }
 

@@ -21,6 +21,19 @@ import (
 	people "google.golang.org/api/people/v1"
 )
 
+func TestGChatSyncProvider_Config(t *testing.T) {
+	p := NewGChatSyncProvider(nil, nil, nil)
+	cfg := p.Config()
+
+	assert.Equal(t, GChatSourceName, cfg.Name)
+	assert.Equal(t, "Google Chat", cfg.DisplayName)
+	assert.True(t, cfg.SupportsMultiAccount)
+	assert.Equal(t, GChatDefaultInterval, cfg.DefaultInterval)
+	// Account-scoped: OAuth token is keyed by account, so TriggerSync must
+	// reject a nil/empty account instead of bootstrapping an erroring row.
+	assert.True(t, cfg.RequiresAccount)
+}
+
 // staticResolver builds a resolver whose fake ResolvePersonEmail returns a
 // fixed mapping (and counts calls), with no caching from a prior cache.
 func staticResolver(t *testing.T, mapping map[string]string, callCount *int) *cachedEmailResolver {
