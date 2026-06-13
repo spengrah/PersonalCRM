@@ -814,6 +814,25 @@ func (c *Config) IsDevelopment() bool {
 	return c.Logger.Environment == "development"
 }
 
+// IsProductionCRMEnv reports whether a CRM_ENV value is a production alias,
+// matching the convention used by cadence.GetCadenceConfig and
+// synthetic.SeedAllowed. Empty maps to production because config defaults an
+// unset CRM_ENV to "production" at load; treating "" as prod keeps this
+// consistent with cadence's switch and avoids a non-prod refusal on a
+// misconfigured-empty value that the rest of the system already treats as prod.
+//
+// This is distinct from Config.IsProduction(), which keys off NODE_ENV
+// (Logger.Environment), not CRM_ENV. Use this predicate for CRM_ENV-gated
+// behavior such as the Todoist outbound-write guard.
+func IsProductionCRMEnv(env string) bool {
+	switch env {
+	case "production", "prod", "":
+		return true
+	default:
+		return false
+	}
+}
+
 // GetBindAddress returns the server bind address in format "host:port"
 func (c *Config) GetBindAddress() string {
 	return fmt.Sprintf("%s:%d", c.Server.Host, c.Server.Port)

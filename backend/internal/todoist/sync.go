@@ -3,6 +3,7 @@ package todoist
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/logger"
 
 	"github.com/google/uuid"
@@ -18,6 +20,16 @@ import (
 // Todoist API v1 endpoints (v9 deprecated Feb 2026)
 var SyncEndpoint = "https://api.todoist.com/api/v1/sync"
 var QuickAddEndpoint = "https://api.todoist.com/api/v1/tasks/quick"
+
+// ErrNonProdWriteRefused is returned by SyncClient.Sync (when commands are
+// present) and SyncClient.QuickAdd when CRM_ENV is not a production alias.
+// Outbound Todoist writes are structurally refused outside production as
+// defense-in-depth (Spec C): a non-prod instance holding real OAuth tokens
+// (a restored prod DB, or a partial env copy that left CRM_ENV at a non-prod
+// value) must never mutate the operator's real Todoist account. NB: a verbatim
+// full prod-.env clone carrying CRM_ENV=production is intentionally NOT
+// defended by this guard — only the partial-copy / restored-DB cases are.
+var ErrNonProdWriteRefused = errors.New("todoist: outbound write refused — CRM_ENV is not production")
 
 // Client interface for Todoist operations (enables testing with mocks)
 type Client interface {
@@ -28,22 +40,48 @@ type Client interface {
 // ClientFactory creates Todoist clients
 type ClientFactory func(accessToken string) Client
 
-// DefaultClientFactory creates real SyncClient instances
+// DefaultClientFactory creates real SyncClient instances with production write
+// behavior. Reserved for read-only handler fetches and tests; production write
+// paths must build their client via NewClientFactory(cfg.Runtime.CRMEnvironment)
+// so the CRM_ENV guard applies.
 func DefaultClientFactory(accessToken string) Client {
 	return NewSyncClient(accessToken)
+}
+
+// NewClientFactory returns a ClientFactory that builds clients carrying the
+// given CRM_ENV value, so the outbound-write guard fires on non-prod instances.
+// This is the construction path production write sites must use.
+func NewClientFactory(env string) ClientFactory {
+	return func(accessToken string) Client {
+		return NewSyncClientForEnv(accessToken, env)
+	}
 }
 
 // SyncClient handles Todoist Sync API operations
 type SyncClient struct {
 	httpClient  *http.Client
 	accessToken string
+	// env is the CRM_ENV value this client was built with. Outbound writes
+	// (Sync with commands, QuickAdd) are refused unless env is a production
+	// alias — see ErrNonProdWriteRefused.
+	env string
 }
 
-// NewSyncClient creates a new Todoist Sync API client
+// NewSyncClient creates a new Todoist Sync API client with production write
+// behavior (env="production"). Back-compat constructor for read-only handler
+// fetches and direct test callers; production write paths should use
+// NewClientFactory instead.
 func NewSyncClient(accessToken string) *SyncClient {
+	return NewSyncClientForEnv(accessToken, "production")
+}
+
+// NewSyncClientForEnv creates a Todoist Sync API client that refuses outbound
+// writes unless env is a production alias (see config.IsProductionCRMEnv).
+func NewSyncClientForEnv(accessToken, env string) *SyncClient {
 	return &SyncClient{
 		httpClient:  &http.Client{Timeout: 30 * time.Second},
 		accessToken: accessToken,
+		env:         env,
 	}
 }
 
@@ -164,6 +202,20 @@ type CommandError struct {
 
 // Sync performs a sync operation with the Todoist Sync API
 func (c *SyncClient) Sync(ctx context.Context, syncToken string, resourceTypes []string, commands []SyncCommand) (*SyncResponse, error) {
+	// CRM_ENV write guard: a sync carrying commands mutates the operator's
+	// real Todoist account. Refuse outside production before any HTTP is
+	// issued. Read-only syncs (no commands) are always allowed so non-prod
+	// instances can still fetch state for reconciliation comparison.
+	if len(commands) > 0 && !config.IsProductionCRMEnv(c.env) {
+		logger.Warn().
+			Str("provider", "todoist").
+			Str("operation", "sync").
+			Str("crm_env", c.env).
+			Int("command_count", len(commands)).
+			Msg("Todoist outbound write refused: CRM_ENV is not production")
+		return nil, ErrNonProdWriteRefused
+	}
+
 	// Build request body as form data (Todoist uses x-www-form-urlencoded)
 	data := url.Values{}
 	data.Set("sync_token", syncToken)
@@ -419,6 +471,17 @@ type QuickAddTask struct {
 // QuickAdd creates a task using Todoist's Quick Add API with natural language parsing.
 // The text parameter supports dates ("tomorrow", "next tuesday"), #project, @label, and p1-p4 priority.
 func (c *SyncClient) QuickAdd(ctx context.Context, text string, note string) (*QuickAddTask, error) {
+	// CRM_ENV write guard: QuickAdd always creates a task in the operator's
+	// real Todoist account. Refuse outside production before any HTTP.
+	if !config.IsProductionCRMEnv(c.env) {
+		logger.Warn().
+			Str("provider", "todoist").
+			Str("operation", "quick_add").
+			Str("crm_env", c.env).
+			Msg("Todoist outbound write refused: CRM_ENV is not production")
+		return nil, ErrNonProdWriteRefused
+	}
+
 	// Build request body as JSON (v1 API)
 	requestBody := map[string]string{
 		"text": text,
