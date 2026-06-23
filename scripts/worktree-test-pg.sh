@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Per-worktree Postgres for cross-run integration-test isolation (gh #433, Thing 2).
+# Per-worktree Postgres for cross-run integration-test isolation (gh #433).
 #
 # Each linked git worktree gets its own private Postgres CLUSTER — a plain
 # `initdb`/`pg_ctl` process on a derived 127.0.0.1 port, with its own data dir,
@@ -66,7 +66,7 @@ pg_mode() {
   esac
 }
 
-# --- Worktree detection (Fact 3) --------------------------------------------
+# --- Worktree detection ------------------------------------------------------
 # A linked worktree has git-dir != git-common-dir. The main checkout has them
 # equal. Path-prefix-independent (survives an Orca workspace relocation).
 is_linked_worktree() {
@@ -142,7 +142,7 @@ meta_get() {
   printf '%s' "${line#*=}"
 }
 
-# --- Binary discovery + validation (D5) -------------------------------------
+# --- Binary discovery + validation ------------------------------------------
 # Resolve a Postgres 16 bindir holding initdb/pg_ctl/postgres/psql. Echoes the
 # bindir on stdout; returns non-zero (and the caller warns) if none qualifies.
 PG_BINDIR=""
@@ -179,7 +179,7 @@ resolve_bindir() {
   return 1
 }
 
-# --- Password resolution (Fact 5b / D5) -------------------------------------
+# --- Password resolution ----------------------------------------------------
 # Read POSTGRES_PASSWORD from .env if present, else crm_password. Returns the
 # value on stdout. The value is NEVER echoed elsewhere (psql var only).
 resolve_password() {
@@ -241,7 +241,7 @@ instance_running() {
   pid_alive "$pid" && port_answers "$port"
 }
 
-# --- Locking (D1) -----------------------------------------------------------
+# --- Locking ----------------------------------------------------------------
 # flock when available (Linux util-linux, macOS if /usr/bin/flock exists); else
 # a portable mkdir-based lock with a stale breaker. The lock body runs as a
 # callback so both backends share one call shape.
@@ -427,7 +427,7 @@ _ensure_locked() {
     return 0
   fi
 
-  # Preconditions (D5): binaries (major 16), locale, then provision.
+  # Preconditions: binaries (major 16), locale, then provision.
   local bindir
   if ! bindir=$(resolve_bindir 2>/dev/null); then
     _ensure_fail "$mode" \
@@ -540,7 +540,7 @@ SQL
     "${psql[@]}" -c "CREATE DATABASE personal_crm_test OWNER crm_user" >/dev/null 2>&1 || return 1
   fi
 
-  # The three extensions the schema needs (Fact 12): uuid-ossp, vector, pg_trgm.
+  # The three extensions the schema needs: uuid-ossp, vector, pg_trgm.
   local dbpsql=("$bindir/psql" -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$port" -U "$(id -un)" -d personal_crm_test -X -q)
   "${dbpsql[@]}" -c 'CREATE EXTENSION IF NOT EXISTS "uuid-ossp";' >/dev/null 2>&1 || return 1
   "${dbpsql[@]}" -c 'CREATE EXTENSION IF NOT EXISTS vector;'      >/dev/null 2>&1 || return 1

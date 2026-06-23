@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shim-only unit tests for scripts/worktree-test-pg.sh (gh #433, Thing 2).
+# Shim-only unit tests for scripts/worktree-test-pg.sh (gh #433).
 #
 # DB-FREE + PORT-FREE: every external dependency (git, initdb, pg_ctl, postgres,
 # psql, pg_isready, pg_config, locale) is a PATH-shimmed fake. No real initdb,

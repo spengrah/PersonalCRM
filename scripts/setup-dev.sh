@@ -154,8 +154,8 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     # cluster we start — NOT just that a `pgvector` brew package exists. This
     # catches the "pgvector installed but built for a different major (e.g. 17)
     # so `CREATE EXTENSION vector` fails on pg16" mode, which a `brew list`
-    # check misses entirely (gh #433 plan §6). Spins up a throwaway cluster in
-    # a temp dir bound to 127.0.0.1, tries each extension, then tears it down.
+    # check misses entirely. Spins up a throwaway cluster in a temp dir bound to
+    # 127.0.0.1, tries each extension, then tears it down.
     if [ -n "$PG16_BIN" ]; then
         ext_tmp=$(mktemp -d 2>/dev/null || true)
         ext_sock="/tmp/crm-setup-extcheck-$$"

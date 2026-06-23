@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Real-cluster smoke for scripts/worktree-test-pg.sh (gh #433, Thing 2).
+# Real-cluster smoke for scripts/worktree-test-pg.sh (gh #433).
 #
 # This is the LOAD-BEARING path: it does an actual initdb + pg_ctl start +
 # role/db/extension provisioning against a private cluster, then drives the
@@ -9,10 +9,10 @@
 # end-to-end. NOT in pre-push (it owns a DB + binds a port). Run via
 # `make test-pg-smoke`.
 #
-# Required-gate policy (P1-8): when CRM_PG_SMOKE_REQUIRED=1 and no pg16 toolchain
-# is present, the script EXITS NON-ZERO ("required smoke could not run") so a
-# skip can never masquerade as a pass. Without that flag, a missing toolchain is
-# a clean skip (exit 0 with a notice).
+# Required-gate policy: when CRM_PG_SMOKE_REQUIRED=1 and no pg16 toolchain is
+# present, the script EXITS NON-ZERO ("required smoke could not run") so a skip
+# can never masquerade as a pass. Without that flag, a missing toolchain is a
+# clean skip (exit 0 with a notice).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -70,7 +70,7 @@ cleanup() {
 trap cleanup EXIT
 
 # ---------------------------------------------------------------------------
-# Phase A: a throwaway temp LINKED worktree, so detection (Fact 3) fires for real.
+# Phase A: a throwaway temp LINKED worktree, so worktree detection fires for real.
 # ---------------------------------------------------------------------------
 note "creating throwaway linked worktree"
 SMOKE_WT="$TMP/wt"
@@ -137,8 +137,8 @@ echo "$OUT" | tail -40
 echo "$OUT" | grep -qE 'testdb: .*(clone|template)' && ok "harness ran (testdb clone/template log present)" \
   || bad "no testdb harness log in make output (harness may not have used the per-worktree instance)"
 
-# (b) HARD ASSERTION (plan §6) that the suite ran against the per-worktree
-# instance, NOT shared :5432. The DSN is not logged, so we prove it positively:
+# (b) HARD ASSERTION that the suite ran against the per-worktree instance, NOT
+# shared :5432. The DSN is not logged, so we prove it positively:
 # the testdb harness mints personal_crm_test_clone_*/_template_* databases
 # inside whichever instance it used. This cold worktree's instance was created
 # fresh for this run, so any such DB on its port is unambiguous proof the suite

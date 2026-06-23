@@ -17,7 +17,7 @@ STAMP_GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
 STAMP_BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 STAMP_LDFLAGS := -X personal-crm/backend/internal/health.Version=$(STAMP_VERSION) -X personal-crm/backend/internal/health.GitCommit=$(STAMP_GIT_COMMIT) -X personal-crm/backend/internal/health.BuildTime=$(STAMP_BUILD_TIME)
 
-# Per-worktree test Postgres (gh #433, Thing 2). In a linked git worktree,
+# Per-worktree test Postgres (gh #433). In a linked git worktree,
 # scripts/worktree-test-pg.sh url emits a per-worktree TEST_DATABASE_URL (an
 # isolated cluster on a derived port); in the main checkout / CI / opt-out it
 # emits nothing. The `url` subcommand is side-effect-FREE + render-safe (it
@@ -415,7 +415,7 @@ test-unit:
 	@cd backend && go test ./tests/... ./internal/matching/... ./internal/events/... ./internal/service/... ./internal/contacttask/... $(GOTEST_VERBOSE) -short
 
 # Provisions the per-worktree Postgres instance BEFORE the integration recipes
-# expand $(TEST_DATABASE_URL) (gh #433, Thing 2). As a prerequisite it runs to
+# expand $(TEST_DATABASE_URL) (gh #433). As a prerequisite it runs to
 # completion — including before the dependent recipe's variable expansion — so
 # on a cold first run the server is up and `url` resolves to the per-worktree
 # URL (cold-run ordering). The recipe is the lazily-computed
@@ -440,7 +440,7 @@ test-integration-slow: worktree-test-pg-ensure
 	@echo "Running backend slow integration tests..."
 	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test -tags integration_testdb -count=1 -parallel $(TEST_PARALLEL) -p $(TEST_P) $(INTEGRATION_PKGS) $(GOTEST_VERBOSE) -run '$(BACKEND_SLOW_TESTS_REGEX)'
 
-# Per-worktree test-Postgres lifecycle (gh #433, Thing 2). All operate ONLY on
+# Per-worktree test-Postgres lifecycle (gh #433). All operate ONLY on
 # this worktree's own instance under $CRM_WORKTREE_PG_HOME — never the shared
 # Docker crm-postgres:5432, never Docker.
 test-pg-stop:
