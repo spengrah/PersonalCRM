@@ -99,8 +99,11 @@ mc=$( "${PSQL[@]}" -c 'SHOW max_connections;' | tr -dc '0-9' )
 enc=$( "${PSQL[@]}" -c 'SHOW server_encoding;' | tr -d '[:space:]' )
 [ "$enc" = "UTF8" ] && ok "server_encoding=UTF8" || bad "server_encoding=$enc"
 
-# Normalize the collation so en_US.UTF-8 (macOS) == en_US.utf8 (Linux/Docker).
-norm() { printf '%s' "$1" | tr 'A-Z' 'a-z' | tr -d '-.'; }
+# Normalize the collation so en_US.UTF-8 (macOS) == en_US.utf8 (Linux/Docker):
+# lowercase, then strip - . and _ (en_US.UTF-8 -> enusutf8, en_US.utf8 -> enusutf8).
+# NOTE: the `--` guard is required — BSD/macOS `tr` parses a leading '-' in the
+# delete set as an option flag and errors "illegal option".
+norm() { printf '%s' "$1" | tr 'A-Z' 'a-z' | tr -d -- '-._'; }
 coll=$( "${PSQL[@]}" -c "SELECT datcollate FROM pg_database WHERE datname='personal_crm_test';" | tr -d '[:space:]' )
 [ "$(norm "$coll")" = "enusutf8" ] && ok "datcollate parity ($coll ~ en_US.utf8)" || bad "datcollate=$coll (expected en_US.UTF-8 / en_US.utf8)"
 
@@ -110,8 +113,13 @@ for ext in uuid-ossp vector pg_trgm; do
 done
 
 # Direct trigram parity probe (self-contained companion to the Go test below).
-sim=$( "${PSQL[@]}" -c "SELECT (similarity('Jon','John') > 0.3);" | tr -d '[:space:]' )
-[ "$sim" = "t" ] && ok "pg_trgm similarity('Jon','John')>0.3" || bad "trigram probe returned '$sim'"
+# Use a robustly-similar pair: similarity('Jonathan','Jonathon') is ~0.5, well
+# clear of any threshold, so this proves pg_trgm produces sensible
+# collation-correct scores without hinging on a borderline value (e.g.
+# 'Jon'/'John' is genuinely only ~0.29). The authoritative parity proof is the
+# real TestFindSimilarContactsBatch_Integration run in Phase C below.
+sim=$( "${PSQL[@]}" -c "SELECT (similarity('Jonathan','Jonathon') > 0.4);" | tr -d '[:space:]' )
+[ "$sim" = "t" ] && ok "pg_trgm similarity('Jonathan','Jonathon')>0.4 (collation-correct scoring)" || bad "trigram probe returned '$sim'"
 
 # ---------------------------------------------------------------------------
 # Phase C: end-to-end through the REAL Make recipe (cold-first-run ordering).
