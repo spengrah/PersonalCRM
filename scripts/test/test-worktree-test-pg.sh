@@ -219,6 +219,18 @@ chosen=$(run "$d" port)
 [ "$chosen" != "$seed" ] && ok "collision: probe advanced off seed ($seed -> $chosen)" || bad "collision: stuck on seed $seed"
 [ "$chosen" != "5432" ] && ok "collision: never chose 5432" || bad "chose 5432"
 
+# 10b. Race-safety: a sibling with STATE=claimed and NO live pid (the gap
+# between meta-write and pg_ctl start) STILL reserves its port — the
+# conservative allocator must not opportunistically steal it.
+d=$(make_env | tail -1); set_linked "$d" delta
+seed=$(run "$d" port)
+sib="$d/pghome/aaaaaaaaaaaaaaaa"; mkdir -p "$sib"
+printf 'PORT=%s\nDATADIR=%s\nSTATE=claimed\n' "$seed" "$sib/data" > "$sib/meta"  # no PID, port does NOT answer
+run "$d" ensure >/dev/null 2>&1
+chosen=$(run "$d" port)
+[ "$chosen" != "$seed" ] && ok "race: claimed-but-not-yet-started sibling reserves its port ($seed -> $chosen)" \
+  || bad "race: stole a claimed sibling's port $seed"
+
 # 11. ensure failure: wrong major (15) -> non-strict warn + exit 0
 d=$(make_env | tail -1); set_linked "$d"; echo 15 > "$d/pg_major"
 run "$d" ensure 2>"$d/err"; rc=$?

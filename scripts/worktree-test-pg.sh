@@ -305,25 +305,27 @@ _allocate_port_locked() {
   return 1
 }
 
-# True if some OTHER worktree's meta records port <p> as a LIVE claim. A
-# claimed-but-dead meta (dead pid AND port no longer answers) is treated stale
-# and reclaimable (failed-start cleanup belt-and-suspenders).
+# True if some OTHER worktree's meta records port <p>. CONSERVATIVE BY DESIGN:
+# any sibling meta with PORT=p reserves the port, whether it is running,
+# claimed-and-starting, or stopped-but-persisted-for-restart. We do NOT
+# opportunistically reclaim a "looks dead" sibling claim here — that was a race:
+# a freshly-claimed sibling (STATE=claimed, no PID yet, server not yet
+# listening) looks dead in the gap between its meta-write and its pg_ctl start,
+# so a second worktree could steal the same port. A sibling's own failed start
+# clears ITS OWN meta (clear_meta_claim), and a sibling whose WORKTREE is gone is
+# pruned by `reap` — so a conservative reservation never permanently leaks a
+# port, and never double-allocates one.
 port_claimed_by_sibling() {
-  local self_id="$1" p="$2" mf other_id other_port other_pid other_state
+  local self_id="$1" p="$2" mf other_id other_port
   shopt -s nullglob
   for mf in "$(pg_home)"/*/meta; do
     other_id=$(basename "$(dirname "$mf")")
     [ "$other_id" = "$self_id" ] && continue
     other_port=$(grep -E '^PORT=' "$mf" 2>/dev/null | tail -1); other_port="${other_port#*=}"
-    [ "$other_port" = "$p" ] || continue
-    other_pid=$(grep -E '^PID=' "$mf" 2>/dev/null | tail -1); other_pid="${other_pid#*=}"
-    other_state=$(grep -E '^STATE=' "$mf" 2>/dev/null | tail -1); other_state="${other_state#*=}"
-    # Live (running pid) OR claimed-and-still-answering => taken.
-    if pid_alive "$other_pid" || port_answers "$p"; then
+    if [ "$other_port" = "$p" ]; then
       shopt -u nullglob
       return 0
     fi
-    # else: stale claim, reclaimable; keep scanning for other siblings on <p>.
   done
   shopt -u nullglob
   return 1
@@ -474,17 +476,29 @@ locale_present() {
 
 # Create role crm_user (SUPERUSER) + base DB personal_crm_test + extensions.
 # Connects to the maintenance DB as the bootstrap superuser (the OS user from
-# initdb). Password is passed via a psql var (server-side quoted via :'pw') so
-# it can never break the statement or inject SQL, and is not on a command line.
+# initdb). The password is passed via a psql variable and interpolated with
+# :'pw' (which server-side-quotes/escapes it, so quotes/backslashes/$ cannot
+# break the statement or inject SQL). CRITICAL: psql performs :'pw' substitution
+# ONLY on SQL read from stdin/-f, NOT on -c command strings — and never inside a
+# $do$...$do$ dollar-quoted body. So the role SQL is fed via STDIN (a here-doc),
+# as a plain CREATE/ALTER chosen by a prior existence check (no DO block).
 provision_instance() {
   local bindir="$1" port="$2" pw
   pw=$(resolve_password)
   local psql=("$bindir/psql" -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$port" -U "$(id -un)" -d postgres -X -q)
 
   # Role: create-or-alter as SUPERUSER LOGIN with the resolved password.
-  "${psql[@]}" -v pw="$pw" -c \
-    "DO \$do\$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='crm_user') THEN ALTER ROLE crm_user WITH SUPERUSER LOGIN PASSWORD :'pw'; ELSE CREATE ROLE crm_user WITH SUPERUSER LOGIN PASSWORD :'pw'; END IF; END \$do\$;" \
-    >/dev/null 2>&1 || return 1
+  local role_exists
+  role_exists=$("${psql[@]}" -tAc "SELECT 1 FROM pg_roles WHERE rolname='crm_user'" 2>/dev/null | tr -dc '01') || true
+  if [ "$role_exists" = "1" ]; then
+    "${psql[@]}" -v pw="$pw" <<'SQL' >/dev/null 2>&1 || return 1
+ALTER ROLE crm_user WITH SUPERUSER LOGIN PASSWORD :'pw';
+SQL
+  else
+    "${psql[@]}" -v pw="$pw" <<'SQL' >/dev/null 2>&1 || return 1
+CREATE ROLE crm_user WITH SUPERUSER LOGIN PASSWORD :'pw';
+SQL
+  fi
 
   # Base DB personal_crm_test (owned by crm_user) if absent.
   local exists

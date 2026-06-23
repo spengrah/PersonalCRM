@@ -137,11 +137,23 @@ echo "$OUT" | tail -40
 echo "$OUT" | grep -qE 'testdb: .*(clone|template)' && ok "harness ran (testdb clone/template log present)" \
   || bad "no testdb harness log in make output (harness may not have used the per-worktree instance)"
 
-# (b) the DB the suite used was the per-worktree port, not :5432.
+# (b) HARD ASSERTION (plan §6) that the suite ran against the per-worktree
+# instance, NOT shared :5432. The DSN is not logged, so we prove it positively:
+# the testdb harness mints personal_crm_test_clone_*/_template_* databases
+# inside whichever instance it used. This cold worktree's instance was created
+# fresh for this run, so any such DB on its port is unambiguous proof the suite
+# used it. (A regression to :5432 would leave the cold instance with ZERO
+# clone/template DBs — failing this assertion even if the Go test went green.)
 COLD_PORT=$( cd "$COLD_WT" && CRM_WORKTREE_PG_HOME="$COLD_PG_HOME" bash "$RESOLVER" port )
-echo "$OUT" | grep -qE "127\.0\.0\.1:${COLD_PORT}|:${COLD_PORT}/personal_crm_test" \
-  && ok "suite used per-worktree port ($COLD_PORT)" \
-  || note "note: per-worktree port ($COLD_PORT) not echoed in test output (expected — DSN is not logged); the testdb log + green run is the proof"
+COLD_URL=$( cd "$COLD_WT" && CRM_WORKTREE_PG_HOME="$COLD_PG_HOME" bash "$RESOLVER" url )
+harness_dbs=""
+if [ -n "$COLD_URL" ]; then
+  harness_dbs=$( "$BINDIR/psql" "$COLD_URL" -tAc \
+    "SELECT count(*) FROM pg_database WHERE datname LIKE 'personal_crm_test_clone_%' OR datname LIKE 'personal_crm_test_template_%';" 2>/dev/null | tr -dc '0-9' )
+fi
+{ [ -n "$harness_dbs" ] && [ "$harness_dbs" -ge 1 ]; } \
+  && ok "suite used the per-worktree instance (port $COLD_PORT has $harness_dbs harness clone/template DB(s))" \
+  || bad "no harness clone/template DBs on the per-worktree instance (port $COLD_PORT) — the suite did NOT use it (ran against shared :5432?)"
 
 # (c) the selected test passed.
 [ "$rc" -eq 0 ] && ok "make test-integration-fast (trigram test) passed through the per-worktree instance" \
