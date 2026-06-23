@@ -118,21 +118,44 @@ fi
 echo_step "Checking PostgreSQL..."
 
 if [[ "$OSTYPE" == "darwin"* ]]; then
-    # macOS - check via Homebrew
-    if command -v psql &> /dev/null; then
-        PG_VERSION=$(psql --version | awk '{print $3}' | cut -d. -f1)
-        echo_ok "PostgreSQL $PG_VERSION installed"
-
-        # Check for pgvector via Homebrew
-        if brew list pgvector &> /dev/null 2>&1; then
-            echo_ok "pgvector extension installed"
-        else
-            echo_warn "pgvector extension not found"
-            MANUAL_STEPS+=("Install pgvector: brew install pgvector")
+    # macOS - check via Homebrew. The per-worktree test Postgres (gh #433)
+    # needs the major-16 initdb/pg_ctl/postgres binaries discoverable, pgvector
+    # built against them, and an en_US.UTF-8 locale — so verify all of those,
+    # not just `psql --version`.
+    PG16_BIN=""
+    if command -v pg_config &> /dev/null; then
+        PG16_BIN=$(pg_config --bindir 2>/dev/null || true)
+    fi
+    for d in "$PG16_BIN" /opt/homebrew/opt/postgresql@16/bin /usr/local/opt/postgresql@16/bin; do
+        if [ -n "$d" ] && [ -x "$d/initdb" ] && [ -x "$d/pg_ctl" ] && [ -x "$d/postgres" ] \
+            && [ "$("$d/postgres" --version 2>/dev/null | grep -oE '[0-9]+' | head -1)" = "16" ]; then
+            PG16_BIN="$d"; break
         fi
+        PG16_BIN=""
+    done
+
+    if [ -n "$PG16_BIN" ]; then
+        echo_ok "PostgreSQL 16 binaries found ($PG16_BIN)"
     else
-        echo_warn "PostgreSQL not found"
-        MANUAL_STEPS+=("Install PostgreSQL: brew install postgresql@16 pgvector")
+        echo_warn "PostgreSQL 16 binaries (initdb/pg_ctl/postgres) not found"
+        MANUAL_STEPS+=("Install PostgreSQL 16: brew install postgresql@16 (and ensure its bin is on PATH, e.g. via 'brew link postgresql@16' or pg_config)")
+    fi
+
+    # pgvector — required for the `vector` extension in the test template.
+    if brew list pgvector &> /dev/null 2>&1; then
+        echo_ok "pgvector extension installed"
+    else
+        echo_warn "pgvector extension not found"
+        MANUAL_STEPS+=("Install pgvector: brew install pgvector")
+    fi
+
+    # en_US.UTF-8 locale — the per-worktree initdb pins it to match the Docker
+    # image's collation (matters for pg_trgm/fuzzy matching). macOS ships it.
+    if locale -a 2>/dev/null | tr 'A-Z' 'a-z' | tr -d '-' | grep -q 'en_us.utf8'; then
+        echo_ok "en_US.UTF-8 locale available"
+    else
+        echo_warn "en_US.UTF-8 locale not found (per-worktree test Postgres needs it)"
+        MANUAL_STEPS+=("Ensure an en_US.UTF-8 locale is available (macOS normally ships it)")
     fi
 else
     # Linux - use Debian/Ubuntu detection
