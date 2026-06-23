@@ -429,8 +429,18 @@ cmd_ensure() {
 _ensure_locked() {
   local id="$1" mode="$2"
 
-  # Already up? no-op (reuse, D7).
+  # Already up? Reuse — but RECONCILE the crm_user password to the current
+  # fixed credential first. A warm instance may have been provisioned by an
+  # older version that sourced .env, so its role password could differ from the
+  # crm_password the URL now emits; without this re-assert, the recipe's DSN
+  # would fail to authenticate against the still-running cluster. The ALTER is
+  # idempotent and cheap (local loopback).
   if instance_running "$id"; then
+    local port; port=$(meta_get "$id" PORT 2>/dev/null || true)
+    local bindir; bindir=$(resolve_bindir 2>/dev/null || true)
+    if [ -n "$port" ] && [ -n "$bindir" ]; then
+      reconcile_role_password "$bindir" "$port" || true
+    fi
     return 0
   fi
 
@@ -514,39 +524,46 @@ locale_present() {
   locale -a 2>/dev/null | tr 'A-Z' 'a-z' | tr -d '-' | grep -q 'en_us.utf8'
 }
 
-# Create role crm_user (SUPERUSER) + base DB personal_crm_test + extensions.
-# Connects to the maintenance DB as the bootstrap superuser (the OS user from
-# initdb). The password is handled so it is BOTH SQL-injection-safe AND never on
-# a command line (not in this script's argv, not in the spawned psql's argv —
-# so it can't leak via `ps auxww`): it is exported as an environment variable
-# that psql pulls into a variable with `\getenv`, then interpolated with :'pw'
-# (which server-side-quotes/escapes it, so quotes/backslashes/$ cannot break the
-# statement or inject SQL). psql performs :'pw' substitution ONLY on SQL read
-# from stdin/-f (NOT on -c, NOT inside a $do$ body), so the role SQL is fed via
-# a here-doc, as a plain CREATE/ALTER chosen by a prior existence check.
-provision_instance() {
+# Create-or-alter role crm_user (SUPERUSER LOGIN) with the resolved password,
+# against the maintenance DB as the bootstrap superuser (the OS user from
+# initdb). Idempotent — safe to call on a cold OR a warm instance (the latter to
+# reconcile a stale password). The password is handled so it is BOTH
+# SQL-injection-safe AND never on a command line (not in this script's argv, not
+# in the spawned psql's argv — so it can't leak via `ps auxww`): it is exported
+# as an environment variable that psql pulls into a variable with `\getenv`,
+# then interpolated with :'pw' (which server-side-quotes/escapes it). psql
+# performs :'pw' substitution ONLY on SQL read from stdin/-f (NOT on -c, NOT
+# inside a $do$ body), so the role SQL is fed via a here-doc, as a plain
+# CREATE/ALTER chosen by a prior existence check.
+reconcile_role_password() {
   local bindir="$1" port="$2"
   local psql=("$bindir/psql" -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$port" -U "$(id -un)" -d postgres -X -q)
-  # Export the secret for psql's \getenv; keep it scoped to this function's
-  # psql calls and out of every argv.
   local CRM_WORKTREE_PG_PW; CRM_WORKTREE_PG_PW=$(resolve_password)
   export CRM_WORKTREE_PG_PW
-
-  # Role: create-or-alter as SUPERUSER LOGIN with the resolved password.
-  local role_exists
+  local role_exists rc=0
   role_exists=$("${psql[@]}" -tAc "SELECT 1 FROM pg_roles WHERE rolname='crm_user'" 2>/dev/null | tr -dc '01') || true
   if [ "$role_exists" = "1" ]; then
-    "${psql[@]}" <<'SQL' >/dev/null 2>&1 || { unset CRM_WORKTREE_PG_PW; return 1; }
+    "${psql[@]}" <<'SQL' >/dev/null 2>&1 || rc=1
 \getenv pw CRM_WORKTREE_PG_PW
 ALTER ROLE crm_user WITH SUPERUSER LOGIN PASSWORD :'pw';
 SQL
   else
-    "${psql[@]}" <<'SQL' >/dev/null 2>&1 || { unset CRM_WORKTREE_PG_PW; return 1; }
+    "${psql[@]}" <<'SQL' >/dev/null 2>&1 || rc=1
 \getenv pw CRM_WORKTREE_PG_PW
 CREATE ROLE crm_user WITH SUPERUSER LOGIN PASSWORD :'pw';
 SQL
   fi
   unset CRM_WORKTREE_PG_PW
+  return $rc
+}
+
+# Create role crm_user (SUPERUSER) + base DB personal_crm_test + extensions.
+provision_instance() {
+  local bindir="$1" port="$2"
+  local psql=("$bindir/psql" -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$port" -U "$(id -un)" -d postgres -X -q)
+
+  # Role: create-or-alter as SUPERUSER LOGIN with the resolved password.
+  reconcile_role_password "$bindir" "$port" || return 1
 
   # Base DB personal_crm_test (owned by crm_user) if absent.
   local exists

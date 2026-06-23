@@ -196,10 +196,14 @@ case "$url" in
   *) bad "url after ensure unexpected: '$url'" ;;
 esac
 
-# 8. ensure idempotent: second ensure is a no-op (no second initdb)
+# 8. ensure on a warm instance REUSES the cluster (no second initdb / no second
+# pg_ctl start), but DOES reconcile the role password (one idempotent psql) so a
+# stale password from an older provisioning can't break auth against the URL.
 :> "$d/calls"
 run "$d" ensure >/dev/null 2>&1
-[ ! -s "$d/calls" ] && ok "second ensure is a no-op (reuse)" || bad "second ensure re-ran: $(cat "$d/calls")"
+! grep -q '^initdb ' "$d/calls" && ok "warm ensure: no second initdb (reuse)" || bad "warm ensure re-ran initdb: $(cat "$d/calls")"
+! grep -q '^pg_ctl .*start' "$d/calls" && ok "warm ensure: no second pg_ctl start (reuse)" || bad "warm ensure re-started server: $(cat "$d/calls")"
+grep -q '^psql ' "$d/calls" && ok "warm ensure: reconciles role password (idempotent psql)" || bad "warm ensure did not reconcile the role"
 
 # 9. Port reuse: persisted port survives a stop (claimed, server down)
 port_before=$(run "$d" port)
