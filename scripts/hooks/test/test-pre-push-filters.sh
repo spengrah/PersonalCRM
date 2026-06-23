@@ -110,6 +110,8 @@ echo "--- pre-push phase classifier / failure-propagation guard ---"
 bash scripts/hooks/test/test-pre-push-phases.sh || fail=1
 echo "--- Makefile adaptive -p / CI-pin render guard ---"
 bash scripts/ci/test-parallelism-render-guard.sh || fail=1
+echo "--- per-worktree test-pg resolver unit (shim-only, DB/port-free) ---"
+bash scripts/test/test-worktree-test-pg.sh || fail=1
 echo "--- repo-hygiene check guard ---"
 bash scripts/hooks/test/test-repo-hygiene-check.sh || fail=1
 echo "--- e2e test-map coverage guard ---"

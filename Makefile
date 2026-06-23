@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev dev-seed staging-reset build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts test-integration-fast test-integration-slow test-clean-clones check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry
+.PHONY: help setup dev dev-seed staging-reset build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -17,7 +17,42 @@ STAMP_GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
 STAMP_BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 STAMP_LDFLAGS := -X personal-crm/backend/internal/health.Version=$(STAMP_VERSION) -X personal-crm/backend/internal/health.GitCommit=$(STAMP_GIT_COMMIT) -X personal-crm/backend/internal/health.BuildTime=$(STAMP_BUILD_TIME)
 
-TEST_DATABASE_URL ?= postgres://crm_user:crm_password@localhost:5432/personal_crm_test?sslmode=disable
+# Per-worktree test Postgres (gh #433). In a linked git worktree,
+# scripts/worktree-test-pg.sh url emits a per-worktree TEST_DATABASE_URL (an
+# isolated cluster on a derived port); in the main checkout / CI / opt-out it
+# emits nothing. The `url` subcommand is side-effect-FREE + render-safe (it
+# NEVER starts a server and NEVER warns) so it is safe to expand here and during
+# `make -n`. Lazy `=` + `$(eval ...)` memo so the script runs at most ONCE per
+# `make`, and ONLY when a default that references it is expanded — never on
+# `make help`/`make build`. Provisioning (the side-effecting part) is the
+# worktree-test-pg-ensure prerequisite below, not this variable.
+WORKTREE_TEST_DB_URL = $(eval WORKTREE_TEST_DB_URL := $(shell bash scripts/worktree-test-pg.sh url))$(WORKTREE_TEST_DB_URL)
+
+# The provisioning command for the worktree-test-pg-ensure prereq, computed
+# lazily + memoized. It is EMPTY (so `make -n` prints NO ensure line and the
+# main-checkout / forced-shared / CI render stays byte-identical) unless ALL of:
+# this is an active linked worktree (resolver `active` echoes 1; render-safe,
+# silent), AND TEST_DATABASE_URL is NOT an explicit env/CLI override (an explicit
+# override wins and provisions nothing — Make's $(origin) distinguishes a `?=`
+# default from an override). When inactive the recipe is a bare `@` (no-op, no
+# printed command). `active` short-circuits to empty under CRM_WORKTREE_PG=0 and
+# GITHUB_ACTIONS=true, so this is also empty in CI.
+# $(origin TEST_DATABASE_URL) is "file" or "default" for the unoverridden `?=`
+# default, and "environment"/"command line" for an explicit override. We want
+# the ensure command ONLY in the non-override case, so match origin against the
+# single-word tokens "file"/"default" via $(filter ...).
+WORKTREE_PG_ENSURE_CMD = $(eval WORKTREE_PG_ENSURE_CMD := $(if $(filter file default,$(origin TEST_DATABASE_URL)),$(if $(shell bash scripts/worktree-test-pg.sh active),bash scripts/worktree-test-pg.sh ensure,),))$(WORKTREE_PG_ENSURE_CMD)
+
+# CI sets GITHUB_ACTIONS=true AND an explicit TEST_DATABASE_URL, so the resolver
+# must be a no-op there. The CI branch is a pure constant that never references
+# the resolver (byte-for-byte unchanged). The local branch prefers the
+# per-worktree URL when present, else the shared :5432 literal. TEST_DATABASE_URL
+# stays `?=` so an explicit env/CLI override still wins everywhere.
+ifeq ($(GITHUB_ACTIONS),true)
+  TEST_DATABASE_URL ?= postgres://crm_user:crm_password@localhost:5432/personal_crm_test?sslmode=disable
+else
+  TEST_DATABASE_URL ?= $(or $(WORKTREE_TEST_DB_URL),postgres://crm_user:crm_password@localhost:5432/personal_crm_test?sslmode=disable)
+endif
 
 # Adaptive LOCAL -p/-parallel for the integration recipes. The formula lives
 # ONLY in scripts/test-parallelism.sh; the Makefile just calls it. Lazy `=` +
@@ -48,6 +83,18 @@ BACKEND_SLOW_TESTS_REGEX := TestSyncWorker_LoadNoDuplicateConcurrentSyncs|TestPe
 # Verbosity for `go test`. Defaults to -v for local readability; CI overrides
 # to empty (GOTEST_VERBOSE=) to cut ~23k log lines. Failures still print.
 GOTEST_VERBOSE ?= -v
+
+# Optional integration-suite selectors, used by the per-worktree-pg smoke
+# (scripts/test/smoke-worktree-test-pg.sh) to drive ONE collation-sensitive
+# test through the REAL recipe. Both default to today's exact behavior so the
+# render guard's byte-identical assertions are unaffected when unset:
+#   INTEGRATION_RUN  -> appends -run '<regex>' when non-empty (else no -run).
+#   INTEGRATION_PKGS -> the package list (default = today's full list).
+INTEGRATION_RUN ?=
+INTEGRATION_PKGS ?= ./tests/... ./internal/todoist/... ./internal/google/... ./internal/testdb/... ./cmd/crm-admin/...
+# The leading space is embedded ONLY when non-empty so the recipe is
+# byte-identical to today when the knob is unset (no trailing/double space).
+INTEGRATION_RUN_FLAG := $(if $(INTEGRATION_RUN), -run '$(INTEGRATION_RUN)')
 
 # Default target
 # NOTE: When adding or removing make targets, update this help section to match
@@ -89,6 +136,10 @@ help:
 	@echo "  test-integration-fast - Run backend integration tests without LONG_TESTS"
 	@echo "  test-integration-slow - Run only LONG_TESTS-gated backend integration tests"
 	@echo "  test-clean-clones     - Drop leaked clone and stale template databases"
+	@echo "  test-pg-stop          - Stop this worktree's per-worktree test Postgres (keep data dir)"
+	@echo "  test-pg-teardown      - Stop + delete this worktree's per-worktree test Postgres data dir"
+	@echo "  test-pg-reap          - Prune per-worktree test Postgres instances whose worktree is gone"
+	@echo "  test-pg-smoke         - Real-cluster smoke for the per-worktree Postgres mechanism"
 	@echo "  test-frontend         - Run frontend unit tests"
 	@echo "  test-e2e              - Run Playwright E2E tests"
 	@echo "  test-e2e-local        - Run Playwright E2E tests (honors PLAYWRIGHT_GREP)"
@@ -363,17 +414,51 @@ test-unit:
 	@echo "Running backend unit tests..."
 	@cd backend && go test ./tests/... ./internal/matching/... ./internal/events/... ./internal/service/... ./internal/contacttask/... $(GOTEST_VERBOSE) -short
 
-test-integration-fast:
+# Provisions the per-worktree Postgres instance BEFORE the integration recipes
+# expand $(TEST_DATABASE_URL) (gh #433). As a prerequisite it runs to
+# completion — including before the dependent recipe's variable expansion — so
+# on a cold first run the server is up and `url` resolves to the per-worktree
+# URL (cold-run ordering). The recipe is the lazily-computed
+# $(WORKTREE_PG_ENSURE_CMD), which is EMPTY for the main checkout / CRM_WORKTREE_PG=0
+# / CI / an explicit TEST_DATABASE_URL override — so `make -n` prints NO line in
+# those cases and the render stays byte-for-byte identical to today. When active
+# it is `bash scripts/worktree-test-pg.sh ensure`; on failure that warns on
+# stderr and (non-strict) exits 0, degrading to the shared instance, while
+# CRM_WORKTREE_PG=strict makes it fail the target.
+worktree-test-pg-ensure:
+	@$(WORKTREE_PG_ENSURE_CMD)
+
+test-integration-fast: worktree-test-pg-ensure
 	@echo "Running backend integration tests (default set)..."
-	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" go test -tags integration_testdb -count=1 -parallel $(TEST_PARALLEL) -p $(TEST_P) ./tests/... ./internal/todoist/... ./internal/google/... ./internal/testdb/... ./cmd/crm-admin/... $(GOTEST_VERBOSE)
+	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" go test -tags integration_testdb -count=1 -parallel $(TEST_PARALLEL) -p $(TEST_P) $(INTEGRATION_PKGS) $(GOTEST_VERBOSE)$(INTEGRATION_RUN_FLAG)
 
-test-integration:
+test-integration: worktree-test-pg-ensure
 	@echo "Running backend integration tests..."
-	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test -tags integration_testdb -count=1 -parallel $(TEST_PARALLEL) -p $(TEST_P) ./tests/... ./internal/todoist/... ./internal/google/... ./internal/testdb/... ./cmd/crm-admin/... $(GOTEST_VERBOSE)
+	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test -tags integration_testdb -count=1 -parallel $(TEST_PARALLEL) -p $(TEST_P) $(INTEGRATION_PKGS) $(GOTEST_VERBOSE)$(INTEGRATION_RUN_FLAG)
 
-test-integration-slow:
+test-integration-slow: worktree-test-pg-ensure
 	@echo "Running backend slow integration tests..."
-	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test -tags integration_testdb -count=1 -parallel $(TEST_PARALLEL) -p $(TEST_P) ./tests/... ./internal/todoist/... ./internal/google/... ./internal/testdb/... ./cmd/crm-admin/... $(GOTEST_VERBOSE) -run '$(BACKEND_SLOW_TESTS_REGEX)'
+	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test -tags integration_testdb -count=1 -parallel $(TEST_PARALLEL) -p $(TEST_P) $(INTEGRATION_PKGS) $(GOTEST_VERBOSE) -run '$(BACKEND_SLOW_TESTS_REGEX)'
+
+# Per-worktree test-Postgres lifecycle (gh #433). All operate ONLY on
+# this worktree's own instance under $CRM_WORKTREE_PG_HOME — never the shared
+# Docker crm-postgres:5432, never Docker.
+test-pg-stop:
+	@bash scripts/worktree-test-pg.sh stop
+
+test-pg-teardown:
+	@bash scripts/worktree-test-pg.sh teardown
+
+# reap prunes per-worktree instances whose worktree no longer exists (run
+# between sessions). Cross-references `git worktree list`; safe to run anytime.
+test-pg-reap:
+	@bash scripts/worktree-test-pg.sh reap
+
+# Real-cluster smoke for the per-worktree mechanism (NOT pre-push: it owns a DB
+# and binds a port). Set CRM_PG_SMOKE_REQUIRED=1 to make a missing pg16
+# toolchain a hard failure instead of a clean skip.
+test-pg-smoke:
+	@bash scripts/test/smoke-worktree-test-pg.sh
 
 # Sweep leaked clone databases (personal_crm_test_clone_*) AND stale
 # per-migration-set template databases (personal_crm_test_template_<hash>).
