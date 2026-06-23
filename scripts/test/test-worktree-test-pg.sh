@@ -133,10 +133,13 @@ set_main() {
 # Run the script with the fake PATH + isolated pg home. FAKE_PG_PID is the test
 # runner's own pid (alive for the whole suite) so the fake pg_ctl writes a
 # postmaster.pid that pid_alive() sees as a live server across invocations.
+# CRM_WORKTREE_PG_BINDIR confines binary discovery to the fake bindir so a real
+# pg16 install on the host can't defeat the wrong-major / missing-binary fakes.
 run() {
   local d="$1"; shift
   PATH="$d/bin:$PATH" \
   CRM_WORKTREE_PG_HOME="$d/pghome" \
+  CRM_WORKTREE_PG_BINDIR="$d/bin" \
   FAKE_PG_PID="$$" \
     bash "$SCRIPT" "$@"
 }

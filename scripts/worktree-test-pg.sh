@@ -35,6 +35,9 @@
 #   CRM_WORKTREE_PG_HOME  base dir for instances (default: $XDG_CACHE_HOME/crm-test-pg
 #                         else $HOME/.cache/crm-test-pg). Outside every worktree.
 #   CRM_WORKTREE_PG_COUNT_FILE  test hook: append a line on every real invocation.
+#   CRM_WORKTREE_PG_BINDIR      test hook: confine binary discovery to this single
+#                               bindir (so a fake toolchain isn't defeated by a
+#                               real pg16 install on the host).
 #   CRM_WORKTREE_PG_BASE_PORT   port seed base (default 5440).
 #   CRM_WORKTREE_PG_PORT_SPAN   port seed span (default 200).
 set -euo pipefail
@@ -121,6 +124,14 @@ data_dir()     { printf '%s/%s/data' "$(pg_home)" "$1"; }  # <home>/<id>/data
 meta_file()    { printf '%s/%s/meta' "$(pg_home)" "$1"; }   # <home>/<id>/meta
 log_file()     { printf '%s/%s/server.log' "$(pg_home)" "$1"; }
 
+# Unix-domain socket dir. The full socket path is <dir>/.s.PGSQL.<port> and
+# Postgres caps it at ~103 bytes — a deep data dir (e.g. a nested
+# CRM_WORKTREE_PG_HOME under macOS /var/folders) blows that. The harness
+# connects over TCP (127.0.0.1:<port>), so the socket location is functionally
+# irrelevant; we just need it SHORT (and per-instance) for pg_ctl -w + local
+# psql. Use a short /tmp path keyed by id.
+socket_dir() { printf '/tmp/crm-test-pg-%s' "$1"; }
+
 # --- Meta read helpers (meta is KEY=VALUE lines: PORT, PID, DATADIR, STATE) --
 meta_get() {
   # meta_get <id> <KEY>
@@ -138,16 +149,22 @@ PG_BINDIR=""
 resolve_bindir() {
   [ -n "$PG_BINDIR" ] && { printf '%s' "$PG_BINDIR"; return 0; }
   local candidates=() d
-  if command -v pg_config >/dev/null 2>&1; then
-    candidates+=("$(pg_config --bindir 2>/dev/null || true)")
+  # Test hook: when set, this is the ONLY candidate considered (so unit tests
+  # with a fake bindir aren't defeated by a real pg16 install on the host).
+  if [ -n "${CRM_WORKTREE_PG_BINDIR:-}" ]; then
+    candidates=("$CRM_WORKTREE_PG_BINDIR")
+  else
+    if command -v pg_config >/dev/null 2>&1; then
+      candidates+=("$(pg_config --bindir 2>/dev/null || true)")
+    fi
+    candidates+=(
+      "${PGBIN:-}"
+      "/opt/homebrew/opt/postgresql@16/bin"
+      "/usr/local/opt/postgresql@16/bin"
+      "/usr/lib/postgresql/16/bin"
+      "/usr/pgsql-16/bin"
+    )
   fi
-  candidates+=(
-    "${PGBIN:-}"
-    "/opt/homebrew/opt/postgresql@16/bin"
-    "/usr/local/opt/postgresql@16/bin"
-    "/usr/lib/postgresql/16/bin"
-    "/usr/pgsql-16/bin"
-  )
   for d in "${candidates[@]}"; do
     [ -n "$d" ] || continue
     [ -x "$d/initdb" ] && [ -x "$d/pg_ctl" ] && [ -x "$d/postgres" ] || continue
@@ -390,12 +407,17 @@ _ensure_locked() {
 
   local datadir; datadir=$(data_dir "$id")
 
-  # initdb if the cluster isn't initialized yet.
+  # initdb if the cluster isn't initialized yet. The log goes to a SIBLING of
+  # the data dir — initdb refuses a non-empty -D target, so we must not write
+  # anything (not even the log) inside $datadir before it runs. initdb creates
+  # $datadir itself.
   if [ ! -s "$datadir/PG_VERSION" ]; then
-    mkdir -p "$datadir"
+    local initlog; initlog="$(instance_dir "$id")/initdb.log"
+    mkdir -p "$(instance_dir "$id")"
+    rm -rf "$datadir" 2>/dev/null || true   # clear a partial/failed prior init
     if ! "$bindir/initdb" --encoding="$ENCODING" --locale="$LOCALE_NAME" \
-        -U "$(id -un)" -D "$datadir" >/dev/null 2>"$datadir/initdb.log"; then
-      warn "initdb failed (see $datadir/initdb.log)"
+        -U "$(id -un)" -D "$datadir" >/dev/null 2>"$initlog"; then
+      warn "initdb failed (see $initlog)"
       _ensure_fail "$mode" "initdb failed for $datadir. Falling back to the shared instance."
       return $?
     fi
@@ -408,9 +430,10 @@ _ensure_locked() {
     return $?
   fi
 
-  local logf; logf=$(log_file "$id")
+  local logf sockdir; logf=$(log_file "$id"); sockdir=$(socket_dir "$id")
+  mkdir -p "$sockdir"
   if ! "$bindir/pg_ctl" -D "$datadir" -w -t 30 \
-      -o "-p $port -c max_connections=$MAX_CONNECTIONS -c listen_addresses=127.0.0.1 -c unix_socket_directories=$datadir" \
+      -o "-p $port -c max_connections=$MAX_CONNECTIONS -c listen_addresses=127.0.0.1 -c unix_socket_directories=$sockdir" \
       -l "$logf" start >/dev/null 2>&1; then
     warn "pg_ctl start failed on port $port (see $logf)"
     clear_meta_claim "$id"   # failed-start cleanup: release the port claim
@@ -513,7 +536,7 @@ cmd_teardown() {
 _teardown_locked() {
   local id="$1"
   _stop_locked "$id"
-  rm -rf "$(instance_dir "$id")" 2>/dev/null || true
+  rm -rf "$(instance_dir "$id")" "$(socket_dir "$id")" 2>/dev/null || true
 }
 
 # ===========================================================================
@@ -551,7 +574,7 @@ cmd_reap() {
     if [ -n "$bindir" ] && [ -s "$datadir/PG_VERSION" ]; then
       "$bindir/pg_ctl" -D "$datadir" -m fast stop >/dev/null 2>&1 || true
     fi
-    rm -rf "$(instance_dir "$id")" 2>/dev/null || true
+    rm -rf "$(instance_dir "$id")" "$(socket_dir "$id")" 2>/dev/null || true
     echo "reaped per-worktree pg instance $id (worktree gone)"
   done
   shopt -u nullglob
