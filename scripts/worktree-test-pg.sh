@@ -180,16 +180,16 @@ resolve_bindir() {
 }
 
 # --- Password resolution ----------------------------------------------------
-# Read POSTGRES_PASSWORD from .env if present, else crm_password. Returns the
-# value on stdout. The value is NEVER echoed elsewhere (psql var only).
+# The per-worktree test cluster's crm_user password. Deliberately a FIXED test
+# credential (the same literal the Makefile's shared-instance TEST_DATABASE_URL
+# default already embeds) — NOT sourced from .env. Rationale: the cluster is a
+# throwaway, loopback-only instance we provision ourselves, so we set this
+# role's password to whatever we like; using a fixed safe-to-print value means a
+# real/prod POSTGRES_PASSWORD in .env can NEVER leak into the per-worktree
+# DATABASE_URL that a routine `make -n` dry run prints. It also keeps the
+# per-worktree URL byte-identical (modulo host:port) to the shared default.
 resolve_password() {
-  local root pw=""
-  root=$(git rev-parse --show-toplevel 2>/dev/null || true)
-  if [ -n "$root" ] && [ -f "$root/.env" ]; then
-    pw=$(grep -E '^POSTGRES_PASSWORD=' "$root/.env" 2>/dev/null | tail -1 | sed -E 's/^POSTGRES_PASSWORD=//' | sed -E 's/^"(.*)"$/\1/' | sed -E "s/^'(.*)'\$/\1/") || true
-  fi
-  [ -n "$pw" ] || pw="crm_password"
-  printf '%s' "$pw"
+  printf '%s' "crm_password"
 }
 
 # Percent-encode a string for the userinfo component of a URI, so a password
