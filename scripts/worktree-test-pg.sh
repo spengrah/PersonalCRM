@@ -167,7 +167,9 @@ resolve_bindir() {
   fi
   for d in "${candidates[@]}"; do
     [ -n "$d" ] || continue
-    [ -x "$d/initdb" ] && [ -x "$d/pg_ctl" ] && [ -x "$d/postgres" ] || continue
+    # psql is required too — role/db/extension provisioning AND the warm-instance
+    # password reconcile all run through it.
+    [ -x "$d/initdb" ] && [ -x "$d/pg_ctl" ] && [ -x "$d/postgres" ] && [ -x "$d/psql" ] || continue
     # Must be major 16.
     local ver
     ver=$("$d/postgres" --version 2>/dev/null | grep -oE '[0-9]+' | head -1) || true
@@ -434,12 +436,20 @@ _ensure_locked() {
   # older version that sourced .env, so its role password could differ from the
   # crm_password the URL now emits; without this re-assert, the recipe's DSN
   # would fail to authenticate against the still-running cluster. The ALTER is
-  # idempotent and cheap (local loopback).
+  # idempotent and cheap (local loopback). Reconcile is REQUIRED, not
+  # best-effort: if it fails (psql missing, SQL error) the running instance is
+  # left with a password the URL won't match, so we must NOT emit it. Stop the
+  # instance + clear its meta so `url` returns nothing (→ recipe falls back to
+  # the shared instance), then take the D4 warn/exit path (hard-fail in strict).
   if instance_running "$id"; then
-    local port; port=$(meta_get "$id" PORT 2>/dev/null || true)
-    local bindir; bindir=$(resolve_bindir 2>/dev/null || true)
-    if [ -n "$port" ] && [ -n "$bindir" ]; then
-      reconcile_role_password "$bindir" "$port" || true
+    local port bindir; port=$(meta_get "$id" PORT 2>/dev/null || true)
+    bindir=$(resolve_bindir 2>/dev/null || true)
+    if [ -z "$bindir" ] || [ -z "$port" ] || ! reconcile_role_password "$bindir" "$port"; then
+      [ -n "$bindir" ] && [ -s "$(data_dir "$id")/PG_VERSION" ] && \
+        "$bindir/pg_ctl" -D "$(data_dir "$id")" -m fast stop >/dev/null 2>&1 || true
+      clear_meta_claim "$id"
+      _ensure_fail "$mode" "could not reconcile the per-worktree crm_user password on the warm instance; stopped it and falling back to the shared instance."
+      return $?
     fi
     return 0
   fi

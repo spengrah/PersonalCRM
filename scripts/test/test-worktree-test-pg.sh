@@ -90,10 +90,17 @@ exit 0
 EOF
   chmod +x "$bin/pg_ctl"
 
-  # --- fake psql: provisioning always succeeds; SELECT returns nothing ---
+  # --- fake psql: records args; SELECT returns nothing. If \$d/psql_role_fail
+  # exists, a role CREATE/ALTER (fed via stdin heredoc) FAILS (rc=1) while the
+  # argv existence-check SELECT still succeeds — lets a test exercise the
+  # warm-instance reconcile-failure path. ---
   cat > "$bin/psql" <<EOF
 #!/usr/bin/env bash
 echo "psql \$*" >> "$d/calls"
+if [ -f "$d/psql_role_fail" ]; then
+  in=\$(cat 2>/dev/null)
+  case "\$in" in *ROLE\ crm_user*) exit 1 ;; esac
+fi
 exit 0
 EOF
   chmod +x "$bin/psql"
@@ -204,6 +211,25 @@ run "$d" ensure >/dev/null 2>&1
 ! grep -q '^initdb ' "$d/calls" && ok "warm ensure: no second initdb (reuse)" || bad "warm ensure re-ran initdb: $(cat "$d/calls")"
 ! grep -q '^pg_ctl .*start' "$d/calls" && ok "warm ensure: no second pg_ctl start (reuse)" || bad "warm ensure re-started server: $(cat "$d/calls")"
 grep -q '^psql ' "$d/calls" && ok "warm ensure: reconciles role password (idempotent psql)" || bad "warm ensure did not reconcile the role"
+
+# 8b. Warm-instance reconcile FAILURE must NOT leave the stale endpoint usable:
+# the instance is stopped + meta cleared (so url emits nothing -> fallback), and
+# non-strict exits 0 while strict exits non-zero. (A warm instance whose role
+# password can't be reconciled to the fixed credential would otherwise fail auth
+# against the emitted DSN.) Fresh worktree, cold ensure to warm it, then fail.
+d=$(make_env | tail -1); set_linked "$d"
+run "$d" ensure >/dev/null 2>&1            # cold -> warm
+[ -n "$(run "$d" url)" ] && ok "8b setup: warm url present" || bad "8b setup: no warm url"
+touch "$d/psql_role_fail"                  # next reconcile fails
+run "$d" ensure 2>"$d/err"; rc=$?
+[ "$rc" -eq 0 ] && ok "warm-reconcile-fail non-strict: exit 0" || bad "warm-reconcile-fail non-strict exit=$rc"
+[ -z "$(run "$d" url)" ] && ok "warm-reconcile-fail: url now empty (stale endpoint not emitted)" || bad "warm-reconcile-fail: url still emits stale endpoint"
+grep -qi 'reconcile' "$d/err" && ok "warm-reconcile-fail: loud warning" || bad "warm-reconcile-fail: no warning"
+# strict: rebuild a warm instance, then fail -> non-zero exit
+rm -f "$d/psql_role_fail"; run "$d" ensure >/dev/null 2>&1; touch "$d/psql_role_fail"
+CRM_WORKTREE_PG=strict run "$d" ensure 2>/dev/null; rc=$?
+[ "$rc" -ne 0 ] && ok "warm-reconcile-fail strict: exit non-zero ($rc)" || bad "warm-reconcile-fail strict: exit 0"
+rm -f "$d/psql_role_fail"
 
 # 9. Port reuse: persisted port survives a stop (claimed, server down)
 port_before=$(run "$d" port)
