@@ -268,9 +268,17 @@ d=$(make_env | tail -1); set_linked "$d" reaplive
 livegd=$(cat "$d/git-dir")
 liveid=$(printf '%s' "$livegd" | { command -v sha256sum >/dev/null && sha256sum || shasum -a 256; } | awk '{print $1}' | head -c 16)
 printf 'worktree %s\n' "$d/repo" > "$d/worktrees"
-# Patch fake git so `git -C <wt> rev-parse --absolute-git-dir` returns the live git-dir.
+# Patch fake git so `git -C <wt> rev-parse --absolute-git-dir` returns the live
+# git-dir. CRITICAL: mimic real git's FATAL handling of an empty GIT_DIR='' env
+# (rc=128, "not a git repository: ''") so the old buggy `GIT_DIR= git -C ...`
+# line CANNOT pass this test vacuously — only the `env -u GIT_DIR` form (no
+# GIT_DIR in env) resolves the live id and keeps the instance.
 cat > "$d/bin/git" <<EOF
 #!/usr/bin/env bash
+# Real git: a set-but-empty GIT_DIR is fatal.
+if [ "\${GIT_DIR+set}" = set ] && [ -z "\$GIT_DIR" ]; then
+  echo "fatal: not a git repository: ''" >&2; exit 128
+fi
 case "\$*" in
   "rev-parse --git-dir")          cat "$d/git-dir" ;;
   "rev-parse --git-common-dir")   cat "$d/common-dir" ;;

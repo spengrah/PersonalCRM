@@ -195,14 +195,20 @@ resolve_password() {
 # Percent-encode a string for the userinfo component of a URI, so a password
 # containing URI-reserved chars (/ @ : ? # % & + space, etc. — e.g. a base64
 # password, which can include /) does not corrupt the postgres:// URL. Encodes
-# every byte that is not an RFC 3986 unreserved char (A-Z a-z 0-9 - _ . ~).
+# every BYTE that is not an RFC 3986 unreserved char (A-Z a-z 0-9 - _ . ~). The
+# loop runs under LC_ALL=C so ${#s}/${s:i:1} operate on single bytes — a
+# multibyte (UTF-8) password is then percent-encoded byte-by-byte correctly,
+# not mangled by per-character iteration.
 urlencode() {
-  local s="$1" i c out=""
+  local s="$1" i c out="" n
+  local LC_ALL=C
   for ((i = 0; i < ${#s}; i++)); do
     c="${s:i:1}"
     case "$c" in
       [A-Za-z0-9._~-]) out+="$c" ;;
-      *) out+=$(printf '%%%02X' "'$c") ;;
+      # printf "'$c" yields the byte's numeric value, but high bytes (>=0x80)
+      # come back sign-extended (negative) — mask to the low 8 bits before %02X.
+      *) printf -v n '%d' "'$c"; out+=$(printf '%%%02X' "$(( n & 0xFF ))") ;;
     esac
   done
   printf '%s' "$out"
@@ -325,14 +331,15 @@ _allocate_port_locked() {
 
 # True if some OTHER worktree's meta records port <p>. CONSERVATIVE BY DESIGN:
 # any sibling meta with PORT=p reserves the port, whether it is running,
-# claimed-and-starting, or stopped-but-persisted-for-restart. We do NOT
-# opportunistically reclaim a "looks dead" sibling claim here — that was a race:
-# a freshly-claimed sibling (STATE=claimed, no PID yet, server not yet
-# listening) looks dead in the gap between its meta-write and its pg_ctl start,
-# so a second worktree could steal the same port. A sibling's own failed start
-# clears ITS OWN meta (clear_meta_claim), and a sibling whose WORKTREE is gone is
-# pruned by `reap` — so a conservative reservation never permanently leaks a
-# port, and never double-allocates one.
+# claimed-and-starting, or stopped-but-persisted-for-restart. It deliberately
+# does NOT try to reclaim a "looks dead" sibling claim: a freshly-claimed
+# sibling (STATE=claimed, no PID yet, server not yet listening) is
+# indistinguishable from a dead one in the window between its meta-write and its
+# pg_ctl start, so reclaiming on "looks dead" would let two worktrees pick the
+# same port. Reclamation is handled by the owners instead: a worktree's own
+# failed start clears ITS OWN meta (clear_meta_claim), and a worktree that no
+# longer exists is pruned by `reap` — so a conservative reservation neither
+# permanently leaks a port nor double-allocates one.
 port_claimed_by_sibling() {
   local self_id="$1" p="$2" mf other_id other_port
   shopt -s nullglob
@@ -509,29 +516,37 @@ locale_present() {
 
 # Create role crm_user (SUPERUSER) + base DB personal_crm_test + extensions.
 # Connects to the maintenance DB as the bootstrap superuser (the OS user from
-# initdb). The password is passed via a psql variable and interpolated with
-# :'pw' (which server-side-quotes/escapes it, so quotes/backslashes/$ cannot
-# break the statement or inject SQL). CRITICAL: psql performs :'pw' substitution
-# ONLY on SQL read from stdin/-f, NOT on -c command strings — and never inside a
-# $do$...$do$ dollar-quoted body. So the role SQL is fed via STDIN (a here-doc),
-# as a plain CREATE/ALTER chosen by a prior existence check (no DO block).
+# initdb). The password is handled so it is BOTH SQL-injection-safe AND never on
+# a command line (not in this script's argv, not in the spawned psql's argv —
+# so it can't leak via `ps auxww`): it is exported as an environment variable
+# that psql pulls into a variable with `\getenv`, then interpolated with :'pw'
+# (which server-side-quotes/escapes it, so quotes/backslashes/$ cannot break the
+# statement or inject SQL). psql performs :'pw' substitution ONLY on SQL read
+# from stdin/-f (NOT on -c, NOT inside a $do$ body), so the role SQL is fed via
+# a here-doc, as a plain CREATE/ALTER chosen by a prior existence check.
 provision_instance() {
-  local bindir="$1" port="$2" pw
-  pw=$(resolve_password)
+  local bindir="$1" port="$2"
   local psql=("$bindir/psql" -v ON_ERROR_STOP=1 -h 127.0.0.1 -p "$port" -U "$(id -un)" -d postgres -X -q)
+  # Export the secret for psql's \getenv; keep it scoped to this function's
+  # psql calls and out of every argv.
+  local CRM_WORKTREE_PG_PW; CRM_WORKTREE_PG_PW=$(resolve_password)
+  export CRM_WORKTREE_PG_PW
 
   # Role: create-or-alter as SUPERUSER LOGIN with the resolved password.
   local role_exists
   role_exists=$("${psql[@]}" -tAc "SELECT 1 FROM pg_roles WHERE rolname='crm_user'" 2>/dev/null | tr -dc '01') || true
   if [ "$role_exists" = "1" ]; then
-    "${psql[@]}" -v pw="$pw" <<'SQL' >/dev/null 2>&1 || return 1
+    "${psql[@]}" <<'SQL' >/dev/null 2>&1 || { unset CRM_WORKTREE_PG_PW; return 1; }
+\getenv pw CRM_WORKTREE_PG_PW
 ALTER ROLE crm_user WITH SUPERUSER LOGIN PASSWORD :'pw';
 SQL
   else
-    "${psql[@]}" -v pw="$pw" <<'SQL' >/dev/null 2>&1 || return 1
+    "${psql[@]}" <<'SQL' >/dev/null 2>&1 || { unset CRM_WORKTREE_PG_PW; return 1; }
+\getenv pw CRM_WORKTREE_PG_PW
 CREATE ROLE crm_user WITH SUPERUSER LOGIN PASSWORD :'pw';
 SQL
   fi
+  unset CRM_WORKTREE_PG_PW
 
   # Base DB personal_crm_test (owned by crm_user) if absent.
   local exists
@@ -592,20 +607,42 @@ _teardown_locked() {
 cmd_reap() {
   local home; home=$(pg_home)
   [ -d "$home" ] || return 0
-  # Compute the id of every LIVE worktree.
-  local live_ids="" gd
+
+  # Enumerate live worktrees. `git worktree list` must be run from inside a git
+  # repo; if it fails (non-worktree cwd) we MUST abort rather than treat the
+  # empty result as "all worktrees gone" — that would reap every instance.
+  local porcelain
+  if ! porcelain=$(git worktree list --porcelain 2>/dev/null); then
+    warn "reap aborted: not inside a git repository (run from a checkout/worktree)"
+    return 1
+  fi
+
+  # Compute the id of every live worktree. Use `git -C <wt>` with NO inherited
+  # GIT_DIR — a normal reap has none, and an empty GIT_DIR='' is a FATAL error
+  # to git ("not a git repository: ''"), so `env -u GIT_DIR` guarantees the
+  # query resolves the target worktree's git-dir instead of silently yielding
+  # nothing for every worktree.
+  local live_ids="" wt gd
   while IFS= read -r line; do
     case "$line" in
       worktree\ *)
-        local wt="${line#worktree }"
-        # GIT_DIR= clears an inherited GIT_DIR so `git -C <wt>` resolves the
-        # target worktree's own git-dir, not this process's.
-        # shellcheck disable=SC1007
-        gd=$(GIT_DIR= git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null || true)
+        wt="${line#worktree }"
+        gd=$(env -u GIT_DIR git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null || true)
         [ -n "$gd" ] && live_ids="$live_ids $(sha256_hex "$gd" | head -c 16)"
         ;;
     esac
-  done < <(git worktree list --porcelain 2>/dev/null || true)
+  done <<EOF
+$porcelain
+EOF
+
+  # Defensive guard: the current process is ALWAYS inside at least one worktree,
+  # so a non-empty `git worktree list` that yields ZERO live ids means the
+  # git-dir resolution itself failed (e.g. a future regression). Abort rather
+  # than interpret "no live ids" as "everything is dead" — never delete all.
+  if [ -z "${live_ids// /}" ]; then
+    warn "reap aborted: computed an empty live-worktree set (refusing to treat all instances as dead)"
+    return 1
+  fi
 
   local bindir; bindir=$(resolve_bindir 2>/dev/null || true)
   local mf id
@@ -615,16 +652,21 @@ cmd_reap() {
     case " $live_ids " in
       *" $id "*) continue ;;   # still live; keep
     esac
-    # Dead worktree: stop (if running) + remove the data dir. Operates ONLY
-    # under $home — never :5432, never Docker.
-    local datadir; datadir=$(data_dir "$id")
-    if [ -n "$bindir" ] && [ -s "$datadir/PG_VERSION" ]; then
-      "$bindir/pg_ctl" -D "$datadir" -m fast stop >/dev/null 2>&1 || true
-    fi
-    rm -rf "$(instance_dir "$id")" "$(socket_dir "$id")" 2>/dev/null || true
-    echo "reaped per-worktree pg instance $id (worktree gone)"
+    # Dead worktree: stop (if running) + remove the data dir, serialized under
+    # the per-worktree lock (same as ensure/stop/teardown). Operates ONLY under
+    # $home — never :5432, never Docker.
+    with_lock "$(instance_dir "$id")/lock" _reap_one "$id" "$bindir"
   done
   shopt -u nullglob
+}
+
+_reap_one() {
+  local id="$1" bindir="$2" datadir; datadir=$(data_dir "$id")
+  if [ -n "$bindir" ] && [ -s "$datadir/PG_VERSION" ]; then
+    "$bindir/pg_ctl" -D "$datadir" -m fast stop >/dev/null 2>&1 || true
+  fi
+  rm -rf "$(instance_dir "$id")" "$(socket_dir "$id")" 2>/dev/null || true
+  echo "reaped per-worktree pg instance $id (worktree gone)"
 }
 
 # ===========================================================================

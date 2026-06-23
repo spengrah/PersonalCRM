@@ -133,17 +133,21 @@ wi=$(wc -l < "$wctr" | tr -d ' ')
   && ok "make -n test-integration invokes the worktree-pg resolver <=2 times ($wi: url + active memos, no recipe run)" \
   || bad "make -n test-integration invoked the worktree-pg resolver $wi times (should be <=2)"
 
-# 5d. FULL render byte-identity: under CRM_WORKTREE_PG=0 the ENTIRE `make -n
-# test-integration` output (normalized for the adaptive -p number) must equal
-# develop's, and must contain NO `worktree-test-pg.sh ensure` line. This guards
-# the whole-recipe byte-identity invariant (a prerequisite recipe line is part
-# of `make -n` output even though the dependent recipe's command is unchanged).
-fs_full=$( unset GITHUB_ACTIONS; export CRM_WORKTREE_PG=0 PG_MAXCONNS=200; \
-  make -n test-integration 2>/dev/null | sed -E 's/-parallel [0-9]+ -p [0-9]+/-parallel X -p X/' )
-ens_lines=$( printf '%s\n' "$fs_full" | grep -c 'worktree-test-pg.sh ensure' || true )
-[[ "$ens_lines" -eq 0 ]] \
-  && ok "forced-shared render emits NO ensure line (byte-identity preserved)" \
-  || bad "forced-shared render emitted $ens_lines ensure line(s) (breaks byte-identity)"
+# 5d. FULL render byte-identity for ALL THREE integration targets: under
+# CRM_WORKTREE_PG=0 the ENTIRE `make -n <target>` output (normalized for the
+# adaptive -p number) must contain NO `worktree-test-pg.sh ensure` line. This
+# guards the whole-recipe byte-identity invariant (a prerequisite recipe line is
+# part of `make -n` output even though the dependent recipe's command is
+# unchanged). The prereq is attached to test-integration{,-fast,-slow}, so all
+# three must be checked — not just the long target.
+for tgt in test-integration test-integration-fast test-integration-slow; do
+  fs_full=$( unset GITHUB_ACTIONS; export CRM_WORKTREE_PG=0 PG_MAXCONNS=200; \
+    make -n "$tgt" 2>/dev/null | sed -E 's/-parallel [0-9]+ -p [0-9]+/-parallel X -p X/' )
+  ens_lines=$( printf '%s\n' "$fs_full" | grep -c 'worktree-test-pg.sh ensure' || true )
+  [[ "$ens_lines" -eq 0 ]] \
+    && ok "forced-shared $tgt emits NO ensure line (byte-identity preserved)" \
+    || bad "forced-shared $tgt emitted $ens_lines ensure line(s) (breaks byte-identity)"
+done
 
 rm -f "$wctr"
 
