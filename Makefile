@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev dev-seed staging-reset build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry
+.PHONY: help setup dev dev-seed staging-reset build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -121,6 +121,10 @@ help:
 	@echo "  test-integration-fast - Run backend integration tests without LONG_TESTS"
 	@echo "  test-integration-slow - Run only LONG_TESTS-gated backend integration tests"
 	@echo "  test-clean-clones     - Drop leaked clone and stale template databases"
+	@echo "  test-pg-stop          - Stop this worktree's per-worktree test Postgres (keep data dir)"
+	@echo "  test-pg-teardown      - Stop + delete this worktree's per-worktree test Postgres data dir"
+	@echo "  test-pg-reap          - Prune per-worktree test Postgres instances whose worktree is gone"
+	@echo "  test-pg-smoke         - Real-cluster smoke for the per-worktree Postgres mechanism"
 	@echo "  test-frontend         - Run frontend unit tests"
 	@echo "  test-e2e              - Run Playwright E2E tests"
 	@echo "  test-e2e-local        - Run Playwright E2E tests (honors PLAYWRIGHT_GREP)"
@@ -421,6 +425,26 @@ test-integration: worktree-test-pg-ensure
 test-integration-slow: worktree-test-pg-ensure
 	@echo "Running backend slow integration tests..."
 	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test -tags integration_testdb -count=1 -parallel $(TEST_PARALLEL) -p $(TEST_P) $(INTEGRATION_PKGS) $(GOTEST_VERBOSE) -run '$(BACKEND_SLOW_TESTS_REGEX)'
+
+# Per-worktree test-Postgres lifecycle (gh #433, Thing 2). All operate ONLY on
+# this worktree's own instance under $CRM_WORKTREE_PG_HOME — never the shared
+# Docker crm-postgres:5432, never Docker.
+test-pg-stop:
+	@bash scripts/worktree-test-pg.sh stop
+
+test-pg-teardown:
+	@bash scripts/worktree-test-pg.sh teardown
+
+# reap prunes per-worktree instances whose worktree no longer exists (run
+# between sessions). Cross-references `git worktree list`; safe to run anytime.
+test-pg-reap:
+	@bash scripts/worktree-test-pg.sh reap
+
+# Real-cluster smoke for the per-worktree mechanism (NOT pre-push: it owns a DB
+# and binds a port). Set CRM_PG_SMOKE_REQUIRED=1 to make a missing pg16
+# toolchain a hard failure instead of a clean skip.
+test-pg-smoke:
+	@bash scripts/test/smoke-worktree-test-pg.sh
 
 # Sweep leaked clone databases (personal_crm_test_clone_*) AND stale
 # per-migration-set template databases (personal_crm_test_template_<hash>).

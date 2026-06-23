@@ -495,7 +495,10 @@ _stop_locked() {
   fi
   # Demote meta to claimed (port persisted for fast restart, server not running).
   local port; port=$(meta_get "$id" PORT 2>/dev/null || true)
-  [ -n "$port" ] && write_meta_claim "$id" "$port"
+  if [ -n "$port" ]; then
+    write_meta_claim "$id" "$port"
+  fi
+  return 0
 }
 
 # ===========================================================================
