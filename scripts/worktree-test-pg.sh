@@ -234,13 +234,13 @@ with_lock() {
   local lockpath="$1"; shift
   mkdir -p "$(dirname "$lockpath")"
   if command -v flock >/dev/null 2>&1; then
-    local fd
-    exec {fd}>"$lockpath"
-    flock "$fd"
+    # Fixed fd 200 (not the `{fd}>` auto-alloc form, which is unsupported in
+    # bash 3.2 — macOS's default bash — where it errors `exec: {fd}: not found`).
     local rc=0
-    "$@" || rc=$?
-    flock -u "$fd"
-    eval "exec $fd>&-"
+    {
+      flock 200
+      "$@" || rc=$?
+    } 200>"$lockpath"
     return $rc
   fi
   # mkdir-based fallback (macOS default has no flock).
