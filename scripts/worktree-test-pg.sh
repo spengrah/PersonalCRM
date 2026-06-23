@@ -192,10 +192,28 @@ resolve_password() {
   printf '%s' "$pw"
 }
 
-# URL for this worktree's instance (no I/O; pure string from id+port).
+# Percent-encode a string for the userinfo component of a URI, so a password
+# containing URI-reserved chars (/ @ : ? # % & + space, etc. — e.g. a base64
+# password, which can include /) does not corrupt the postgres:// URL. Encodes
+# every byte that is not an RFC 3986 unreserved char (A-Z a-z 0-9 - _ . ~).
+urlencode() {
+  local s="$1" i c out=""
+  for ((i = 0; i < ${#s}; i++)); do
+    c="${s:i:1}"
+    case "$c" in
+      [A-Za-z0-9._~-]) out+="$c" ;;
+      *) out+=$(printf '%%%02X' "'$c") ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+
+# URL for this worktree's instance (no I/O; pure string from id+port). The
+# password is the same loopback dev credential the shared-instance Makefile
+# default embeds; it is percent-encoded so reserved chars can't corrupt the URL.
 instance_url() {
   local port="$1" pw
-  pw=$(resolve_password)
+  pw=$(urlencode "$(resolve_password)")
   printf 'postgres://crm_user:%s@127.0.0.1:%s/personal_crm_test?sslmode=disable' "$pw" "$port"
 }
 
@@ -369,6 +387,21 @@ cmd_url() {
   instance_running "$id" || return 0   # not yet ensured -> emit nothing
   local port; port=$(meta_get "$id" PORT) || return 0
   instance_url "$port"
+}
+
+# ===========================================================================
+# Subcommand: active  (pure boolean, side-effect-free, render-safe)
+# Echoes "1" iff `ensure` would provision a per-worktree instance (active
+# linked worktree, not CI, not opt-out); else nothing. Lets the Makefile decide
+# at expansion time whether to EMIT the ensure recipe command at all, so the
+# main-checkout / forced-shared / CI render stays byte-identical (the ensure
+# line is not even printed by `make -n` when inactive).
+# ===========================================================================
+cmd_active() {
+  [ "$(pg_mode)" = off ] && return 0
+  [ "${GITHUB_ACTIONS:-}" = "true" ] && return 0
+  is_linked_worktree || return 0
+  printf '1'
 }
 
 # ===========================================================================
@@ -622,6 +655,7 @@ main() {
   local sub="${1:-}"
   case "$sub" in
     url)      cmd_url ;;
+    active)   cmd_active ;;
     ensure)   cmd_ensure ;;
     stop)     cmd_stop ;;
     teardown) cmd_teardown ;;
@@ -629,7 +663,7 @@ main() {
     status)   cmd_status ;;
     port)     cmd_port ;;
     *)
-      echo "usage: worktree-test-pg.sh {url|ensure|stop|teardown|reap|status|port}" >&2
+      echo "usage: worktree-test-pg.sh {url|active|ensure|stop|teardown|reap|status|port}" >&2
       return 2
       ;;
   esac

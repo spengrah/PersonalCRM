@@ -28,6 +28,21 @@ STAMP_LDFLAGS := -X personal-crm/backend/internal/health.Version=$(STAMP_VERSION
 # worktree-test-pg-ensure prerequisite below, not this variable.
 WORKTREE_TEST_DB_URL = $(eval WORKTREE_TEST_DB_URL := $(shell bash scripts/worktree-test-pg.sh url))$(WORKTREE_TEST_DB_URL)
 
+# The provisioning command for the worktree-test-pg-ensure prereq, computed
+# lazily + memoized. It is EMPTY (so `make -n` prints NO ensure line and the
+# main-checkout / forced-shared / CI render stays byte-identical) unless ALL of:
+# this is an active linked worktree (resolver `active` echoes 1; render-safe,
+# silent), AND TEST_DATABASE_URL is NOT an explicit env/CLI override (an explicit
+# override wins and provisions nothing — Make's $(origin) distinguishes a `?=`
+# default from an override). When inactive the recipe is a bare `@` (no-op, no
+# printed command). `active` short-circuits to empty under CRM_WORKTREE_PG=0 and
+# GITHUB_ACTIONS=true, so this is also empty in CI.
+# $(origin TEST_DATABASE_URL) is "file" or "default" for the unoverridden `?=`
+# default, and "environment"/"command line" for an explicit override. We want
+# the ensure command ONLY in the non-override case, so match origin against the
+# single-word tokens "file"/"default" via $(filter ...).
+WORKTREE_PG_ENSURE_CMD = $(eval WORKTREE_PG_ENSURE_CMD := $(if $(filter file default,$(origin TEST_DATABASE_URL)),$(if $(shell bash scripts/worktree-test-pg.sh active),bash scripts/worktree-test-pg.sh ensure,),))$(WORKTREE_PG_ENSURE_CMD)
+
 # CI sets GITHUB_ACTIONS=true AND an explicit TEST_DATABASE_URL, so the resolver
 # must be a no-op there. The CI branch is a pure constant that never references
 # the resolver (byte-for-byte unchanged). The local branch prefers the
@@ -403,16 +418,15 @@ test-unit:
 # expand $(TEST_DATABASE_URL) (gh #433, Thing 2). As a prerequisite it runs to
 # completion — including before the dependent recipe's variable expansion — so
 # on a cold first run the server is up and `url` resolves to the per-worktree
-# URL (cold-run ordering). In CI the recipe is EMPTY (the ifneq strips it), so
-# no script runs and CI stays byte-for-byte unchanged. Under an explicit
-# TEST_DATABASE_URL override the $(origin) guard skips provisioning (the
-# override wins and provisions nothing). On failure `ensure` warns on stderr and
-# (non-strict) exits 0, degrading to the shared instance; CRM_WORKTREE_PG=strict
-# makes it fail the target instead.
+# URL (cold-run ordering). The recipe is the lazily-computed
+# $(WORKTREE_PG_ENSURE_CMD), which is EMPTY for the main checkout / CRM_WORKTREE_PG=0
+# / CI / an explicit TEST_DATABASE_URL override — so `make -n` prints NO line in
+# those cases and the render stays byte-for-byte identical to today. When active
+# it is `bash scripts/worktree-test-pg.sh ensure`; on failure that warns on
+# stderr and (non-strict) exits 0, degrading to the shared instance, while
+# CRM_WORKTREE_PG=strict makes it fail the target.
 worktree-test-pg-ensure:
-ifneq ($(GITHUB_ACTIONS),true)
-	@if [ "$(origin TEST_DATABASE_URL)" != "command line" ] && [ "$(origin TEST_DATABASE_URL)" != "environment" ]; then bash scripts/worktree-test-pg.sh ensure; fi
-endif
+	@$(WORKTREE_PG_ENSURE_CMD)
 
 test-integration-fast: worktree-test-pg-ensure
 	@echo "Running backend integration tests (default set)..."

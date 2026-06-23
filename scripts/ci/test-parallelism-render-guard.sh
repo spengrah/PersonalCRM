@@ -113,24 +113,37 @@ expected_db='DATABASE_URL="postgres://crm_user:crm_password@localhost:5432/perso
   && ok "forced-shared (CRM_WORKTREE_PG=0) renders the literal DATABASE_URL" \
   || bad "forced-shared DATABASE_URL was '$db_render', expected '$expected_db'"
 
-# 5b. `make -n help` invokes the resolver 0 times.
+# 5b. `make -n help` invokes the resolver 0 times (forced shared, machine-indep).
 : > "$wctr"
-CRM_WORKTREE_PG_COUNT_FILE="$wctr" make -n help >/dev/null 2>&1
+CRM_WORKTREE_PG=0 CRM_WORKTREE_PG_COUNT_FILE="$wctr" make -n help >/dev/null 2>&1
 wh=$(wc -l < "$wctr" | tr -d ' ')
 [[ "$wh" -eq 0 ]] \
   && ok "make -n help invokes the worktree-pg resolver 0 times" \
   || bad "make -n help invoked the worktree-pg resolver $wh times (should be 0)"
 
-# 5c. `make -n test-integration` invokes the resolver at most once (the `url`
-# memo). The worktree-test-pg-ensure prereq recipe is PRINTED but NOT executed
-# by a dry run, so it contributes 0 — proving "expanded a variable" is separated
-# from "ran a recipe command".
+# 5c. `make -n test-integration` invokes the resolver at most twice (the two
+# lazy memos: `url` for WORKTREE_TEST_DB_URL and `active` for the ensure-command
+# gate). Both are render-safe value lookups; NEITHER executes a recipe command
+# on a dry run. Forced-shared so the count is machine-independent (the resolver
+# is still INVOKED under CRM_WORKTREE_PG=0 — it just returns empty).
 : > "$wctr"
-CRM_WORKTREE_PG_COUNT_FILE="$wctr" make -n test-integration >/dev/null 2>&1
+CRM_WORKTREE_PG=0 CRM_WORKTREE_PG_COUNT_FILE="$wctr" make -n test-integration >/dev/null 2>&1
 wi=$(wc -l < "$wctr" | tr -d ' ')
-[[ "$wi" -le 1 ]] \
-  && ok "make -n test-integration invokes the worktree-pg resolver <=1 time ($wi; ensure not executed on dry-run)" \
-  || bad "make -n test-integration invoked the worktree-pg resolver $wi times (should be <=1)"
+[[ "$wi" -le 2 ]] \
+  && ok "make -n test-integration invokes the worktree-pg resolver <=2 times ($wi: url + active memos, no recipe run)" \
+  || bad "make -n test-integration invoked the worktree-pg resolver $wi times (should be <=2)"
+
+# 5d. FULL render byte-identity: under CRM_WORKTREE_PG=0 the ENTIRE `make -n
+# test-integration` output (normalized for the adaptive -p number) must equal
+# develop's, and must contain NO `worktree-test-pg.sh ensure` line. This guards
+# the whole-recipe byte-identity invariant (a prerequisite recipe line is part
+# of `make -n` output even though the dependent recipe's command is unchanged).
+fs_full=$( unset GITHUB_ACTIONS; export CRM_WORKTREE_PG=0 PG_MAXCONNS=200; \
+  make -n test-integration 2>/dev/null | sed -E 's/-parallel [0-9]+ -p [0-9]+/-parallel X -p X/' )
+ens_lines=$( printf '%s\n' "$fs_full" | grep -c 'worktree-test-pg.sh ensure' || true )
+[[ "$ens_lines" -eq 0 ]] \
+  && ok "forced-shared render emits NO ensure line (byte-identity preserved)" \
+  || bad "forced-shared render emitted $ens_lines ensure line(s) (breaks byte-identity)"
 
 rm -f "$wctr"
 

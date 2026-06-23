@@ -141,14 +141,6 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
         MANUAL_STEPS+=("Install PostgreSQL 16: brew install postgresql@16 (and ensure its bin is on PATH, e.g. via 'brew link postgresql@16' or pg_config)")
     fi
 
-    # pgvector — required for the `vector` extension in the test template.
-    if brew list pgvector &> /dev/null 2>&1; then
-        echo_ok "pgvector extension installed"
-    else
-        echo_warn "pgvector extension not found"
-        MANUAL_STEPS+=("Install pgvector: brew install pgvector")
-    fi
-
     # en_US.UTF-8 locale — the per-worktree initdb pins it to match the Docker
     # image's collation (matters for pg_trgm/fuzzy matching). macOS ships it.
     if locale -a 2>/dev/null | tr 'A-Z' 'a-z' | tr -d '-' | grep -q 'en_us.utf8'; then
@@ -156,6 +148,43 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     else
         echo_warn "en_US.UTF-8 locale not found (per-worktree test Postgres needs it)"
         MANUAL_STEPS+=("Ensure an en_US.UTF-8 locale is available (macOS normally ships it)")
+    fi
+
+    # Verify all THREE required extensions actually INSTALL against a pg16
+    # cluster we start — NOT just that a `pgvector` brew package exists. This
+    # catches the "pgvector installed but built for a different major (e.g. 17)
+    # so `CREATE EXTENSION vector` fails on pg16" mode, which a `brew list`
+    # check misses entirely (gh #433 plan §6). Spins up a throwaway cluster in
+    # a temp dir bound to 127.0.0.1, tries each extension, then tears it down.
+    if [ -n "$PG16_BIN" ]; then
+        ext_tmp=$(mktemp -d 2>/dev/null || true)
+        ext_sock="/tmp/crm-setup-extcheck-$$"
+        ext_port=5499
+        ext_ok=true
+        if [ -n "$ext_tmp" ] \
+            && "$PG16_BIN/initdb" --encoding=UTF8 --locale=en_US.UTF-8 -U "$(id -un)" -D "$ext_tmp/data" >/dev/null 2>&1 \
+            && mkdir -p "$ext_sock" \
+            && "$PG16_BIN/pg_ctl" -D "$ext_tmp/data" -w -t 30 \
+                -o "-p $ext_port -c listen_addresses=127.0.0.1 -c unix_socket_directories=$ext_sock" \
+                -l "$ext_tmp/log" start >/dev/null 2>&1; then
+            for ext in '"uuid-ossp"' 'pg_trgm' 'vector'; do
+                if ! "$PG16_BIN/psql" -h 127.0.0.1 -p "$ext_port" -U "$(id -un)" -d postgres -X -q -tAc \
+                    "CREATE EXTENSION IF NOT EXISTS $ext;" >/dev/null 2>&1; then
+                    ext_ok=false
+                    echo_warn "extension not installable against pg16: $ext"
+                    if [ "$ext" = "vector" ]; then
+                        MANUAL_STEPS+=("Install pgvector built for pg16: 'brew install --build-from-source pgvector' (the prebuilt bottle may target a newer Postgres major; '\"vector\" is not available' means it is not built for pg16)")
+                    else
+                        MANUAL_STEPS+=("Install the $ext extension for pg16 (contrib should ship with postgresql@16)")
+                    fi
+                fi
+            done
+            "$PG16_BIN/pg_ctl" -D "$ext_tmp/data" -m immediate stop >/dev/null 2>&1 || true
+            $ext_ok && echo_ok "all three extensions install against pg16 (uuid-ossp, pg_trgm, vector)"
+        else
+            echo_warn "could not start a throwaway pg16 cluster to verify extensions"
+        fi
+        rm -rf "$ext_tmp" "$ext_sock" 2>/dev/null || true
     fi
 else
     # Linux - use Debian/Ubuntu detection
