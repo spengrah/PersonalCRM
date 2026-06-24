@@ -43,17 +43,21 @@ WHERE assertion_id = $1 AND locator_hash = $2;
 -- name: ExistsCommsMessage :one
 -- Write-time existence validation: confirm a content source row exists before
 -- accepting a provenance locator that references it. One tiny query per content
--- table; source_id is parsed to UUID by the caller.
-SELECT EXISTS(SELECT 1 FROM comms_message WHERE id = $1);
+-- table; source_id is parsed to UUID by the caller. The four soft-deletable
+-- content tables filter deleted_at so an already-tombstoned source row does not
+-- pass write-time validation (a NEW assertion may not be grounded in a dead
+-- source; a source deleted AFTER the assertion degrades gracefully via the
+-- preserved quote/input_hash). calendar_event/phone_call have no deleted_at.
+SELECT EXISTS(SELECT 1 FROM comms_message WHERE id = $1 AND deleted_at IS NULL);
 
 -- name: ExistsTelegramMessage :one
-SELECT EXISTS(SELECT 1 FROM telegram_message WHERE id = $1);
+SELECT EXISTS(SELECT 1 FROM telegram_message WHERE id = $1 AND deleted_at IS NULL);
 
 -- name: ExistsMessagesMessage :one
-SELECT EXISTS(SELECT 1 FROM messages_message WHERE id = $1);
+SELECT EXISTS(SELECT 1 FROM messages_message WHERE id = $1 AND deleted_at IS NULL);
 
 -- name: ExistsMeetingNote :one
-SELECT EXISTS(SELECT 1 FROM meeting_note WHERE id = $1);
+SELECT EXISTS(SELECT 1 FROM meeting_note WHERE id = $1 AND deleted_at IS NULL);
 
 -- name: ExistsCalendarEvent :one
 SELECT EXISTS(SELECT 1 FROM calendar_event WHERE id = $1);

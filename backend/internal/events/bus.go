@@ -129,6 +129,14 @@ func consumerJobsForKind(env *Envelope) ([]consumerJob, error) {
 				},
 			},
 		}}, nil
+	case KindAssertionProposed, KindAssertionAccepted, KindAssertionSuperseded,
+		KindAssertionRejected, KindAssertionProvenanceAdded:
+		// SP1 ships the assertion store + write contract only — no consumer.
+		// The events land durably in the event log for audit + (source,
+		// source_id) idempotency; a later layer routes accepted/superseded to
+		// the projection-cache worker. An explicit no-consumer case (over the
+		// fallthrough) documents the deliberate decision.
+		return nil, nil
 	}
 	return nil, nil
 }

@@ -80,6 +80,26 @@ const (
 	// exists for audit + (source, source_id) dedup on retries.
 	KindCallReceived Kind = "call.received"
 	KindCallSent     Kind = "call.sent"
+
+	// Assertion lifecycle events — published by AssertService inside the
+	// write transaction (source="assertion"). They carry a lightweight
+	// payload (AssertionEventPayload: ids + predicate key); the full
+	// assertion row lives in the assertion table. NONE has a registered
+	// consumer in consumerJobsForKind in SP1 — publishing them is durable
+	// but unconsumed (the event-log row lands, no job is enqueued). A later
+	// layer routes accepted/superseded to a projection-cache worker.
+	//
+	// The source_id keys are one-shot per transition
+	// ('<assertion_id>:<transition>') except provenance_added, which is
+	// many-per-assertion ('<assertion_id>:provenance:<locator_hash>'). A
+	// Retract emits KindAssertionSuperseded (the closure of an accepted row
+	// with no successor is operationally a supersession); there is no
+	// separate retracted kind.
+	KindAssertionProposed        Kind = "assertion.proposed"
+	KindAssertionAccepted        Kind = "assertion.accepted"
+	KindAssertionSuperseded      Kind = "assertion.superseded"
+	KindAssertionRejected        Kind = "assertion.rejected"
+	KindAssertionProvenanceAdded Kind = "assertion.provenance_added"
 )
 
 // AllKinds enumerates every defined Kind. Used by tests to guard that
@@ -106,6 +126,11 @@ var AllKinds = []Kind{
 	KindMeetingNoteDeleted,
 	KindCallReceived,
 	KindCallSent,
+	KindAssertionProposed,
+	KindAssertionAccepted,
+	KindAssertionSuperseded,
+	KindAssertionRejected,
+	KindAssertionProvenanceAdded,
 }
 
 // Envelope is the wire/DB shape passed through Bus.Publish. Payload is
@@ -530,6 +555,20 @@ type CallPayload struct {
 	StartedAt       time.Time `json:"started_at"`         // ZDATE converted to UTC
 }
 
+// AssertionEventPayload is the shared payload for all five assertion lifecycle
+// kinds (proposed/accepted/superseded/rejected/provenance_added). It is
+// deliberately lightweight: the full bi-temporal row lives in the assertion
+// table, so consumers (none in SP1) decode this to learn WHICH assertion changed
+// and re-read the row for detail. PredicateKey lets a kind-routed projection
+// consumer filter by predicate without a DB round-trip. One struct serves all
+// five kinds — the kind is the discriminator (mirroring email.received/sent).
+type AssertionEventPayload struct {
+	Version       int       `json:"version"` // start at 1
+	AssertionID   uuid.UUID `json:"assertion_id"`
+	SubjectNodeID uuid.UUID `json:"subject_node_id"`
+	PredicateKey  string    `json:"predicate_key"`
+}
+
 // kindPayloadTypes is the canonical Kind → payload-type registry used by
 // Marshal and Unmarshal to assert type-vs-kind consistency at runtime. Add
 // a row each time a new Kind + payload struct are introduced. Keep in sync
@@ -556,6 +595,13 @@ var kindPayloadTypes = map[Kind]reflect.Type{
 	KindMeetingNoteDeleted:      reflect.TypeOf(MeetingNoteDeletedPayload{}),
 	KindCallReceived:            reflect.TypeOf(CallPayload{}),
 	KindCallSent:                reflect.TypeOf(CallPayload{}),
+	// All five assertion kinds share AssertionEventPayload (the kind is the
+	// discriminator). Multiple kinds → one payload type is supported.
+	KindAssertionProposed:        reflect.TypeOf(AssertionEventPayload{}),
+	KindAssertionAccepted:        reflect.TypeOf(AssertionEventPayload{}),
+	KindAssertionSuperseded:      reflect.TypeOf(AssertionEventPayload{}),
+	KindAssertionRejected:        reflect.TypeOf(AssertionEventPayload{}),
+	KindAssertionProvenanceAdded: reflect.TypeOf(AssertionEventPayload{}),
 }
 
 // IsKnownKind reports whether kind has a registered payload type. Used by

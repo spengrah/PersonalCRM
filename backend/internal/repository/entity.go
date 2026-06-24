@@ -117,7 +117,18 @@ func createEntity(ctx context.Context, q db.Querier, req CreateEntityRequest) (*
 
 // GetEntity retrieves an entity by its node id.
 func (r *EntityRepository) GetEntity(ctx context.Context, nodeID uuid.UUID) (*Entity, error) {
-	dbEntity, err := r.queries.GetEntity(ctx, uuidToPgUUID(nodeID))
+	return getEntity(ctx, r.queries, nodeID)
+}
+
+// GetEntityTx is the tx-bound variant of GetEntity. The write API resolves an
+// entity-subtype subject's subtype inside its tx so subject-type validation (e.g.
+// `within` place→place) sees in-tx state.
+func (r *EntityRepository) GetEntityTx(ctx context.Context, tx pgx.Tx, nodeID uuid.UUID) (*Entity, error) {
+	return getEntity(ctx, db.New(tx), nodeID)
+}
+
+func getEntity(ctx context.Context, q db.Querier, nodeID uuid.UUID) (*Entity, error) {
+	dbEntity, err := q.GetEntity(ctx, uuidToPgUUID(nodeID))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound

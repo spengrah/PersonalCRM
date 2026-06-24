@@ -86,7 +86,18 @@ func createNode(ctx context.Context, q db.Querier, id uuid.UUID, nodeType, canon
 
 // GetNode retrieves a live (non-soft-deleted) node by id.
 func (r *NodeRepository) GetNode(ctx context.Context, id uuid.UUID) (*Node, error) {
-	dbNode, err := r.queries.GetNode(ctx, uuidToPgUUID(id))
+	return getNode(ctx, r.queries, id)
+}
+
+// GetNodeTx is the tx-bound variant of GetNode. The write API reads the subject/
+// object node inside its tx so the existence + soft-delete check sees in-tx state
+// (e.g. a latent person node created earlier in the same tx).
+func (r *NodeRepository) GetNodeTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*Node, error) {
+	return getNode(ctx, db.New(tx), id)
+}
+
+func getNode(ctx context.Context, q db.Querier, id uuid.UUID) (*Node, error) {
+	dbNode, err := q.GetNode(ctx, uuidToPgUUID(id))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound

@@ -597,9 +597,10 @@ func TestKindPayloadTypes_CoversAllKinds(t *testing.T) {
 // external_contact.* kinds (iCloud Contacts source), plus the two
 // meeting_note.* kinds (anarlog_sessions source), plus the two call.*
 // kinds (phone_calls source, v1.5), plus the two email.* kinds (Gmail
-// source, published by GmailSyncProvider).
+// source, published by GmailSyncProvider), plus the five assertion.*
+// lifecycle kinds (graph foundation, published by AssertService).
 func TestAllKinds_ExpectedCount(t *testing.T) {
-	require.Len(t, AllKinds, 20)
+	require.Len(t, AllKinds, 25)
 }
 
 // TestIsKnownKind_CoversAllKinds is the positive side: every Kind declared
@@ -733,6 +734,14 @@ func buildCanonicalPayload(t *testing.T, kind Kind) json.RawMessage {
 			PeerNormalized: "+15551234567", Service: "facetime_audio", Direction: "outbound",
 			Answered: nil, HasVoicemail: false, DurationSeconds: 120,
 			StartedAt: at,
+		})
+		require.NoError(t, err)
+		return raw
+	case KindAssertionProposed, KindAssertionAccepted, KindAssertionSuperseded,
+		KindAssertionRejected, KindAssertionProvenanceAdded:
+		raw, err := Marshal(kind, AssertionEventPayload{
+			Version: 1, AssertionID: uuid.New(), SubjectNodeID: uuid.New(),
+			PredicateKey: "lives_in",
 		})
 		require.NoError(t, err)
 		return raw

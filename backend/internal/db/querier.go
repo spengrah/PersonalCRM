@@ -455,7 +455,11 @@ type Querier interface {
 	ExistsCalendarEvent(ctx context.Context, id pgtype.UUID) (bool, error)
 	// Write-time existence validation: confirm a content source row exists before
 	// accepting a provenance locator that references it. One tiny query per content
-	// table; source_id is parsed to UUID by the caller.
+	// table; source_id is parsed to UUID by the caller. The four soft-deletable
+	// content tables filter deleted_at so an already-tombstoned source row does not
+	// pass write-time validation (a NEW assertion may not be grounded in a dead
+	// source; a source deleted AFTER the assertion degrades gracefully via the
+	// preserved quote/input_hash). calendar_event/phone_call have no deleted_at.
 	ExistsCommsMessage(ctx context.Context, id pgtype.UUID) (bool, error)
 	// Non-mutating lookup. Returns true when a claim row exists for the
 	// given (event_id, consumer). Useful for assertions in tests and for

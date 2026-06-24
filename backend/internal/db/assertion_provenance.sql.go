@@ -40,12 +40,16 @@ func (q *Queries) ExistsCalendarEvent(ctx context.Context, id pgtype.UUID) (bool
 }
 
 const ExistsCommsMessage = `-- name: ExistsCommsMessage :one
-SELECT EXISTS(SELECT 1 FROM comms_message WHERE id = $1)
+SELECT EXISTS(SELECT 1 FROM comms_message WHERE id = $1 AND deleted_at IS NULL)
 `
 
 // Write-time existence validation: confirm a content source row exists before
 // accepting a provenance locator that references it. One tiny query per content
-// table; source_id is parsed to UUID by the caller.
+// table; source_id is parsed to UUID by the caller. The four soft-deletable
+// content tables filter deleted_at so an already-tombstoned source row does not
+// pass write-time validation (a NEW assertion may not be grounded in a dead
+// source; a source deleted AFTER the assertion degrades gracefully via the
+// preserved quote/input_hash). calendar_event/phone_call have no deleted_at.
 func (q *Queries) ExistsCommsMessage(ctx context.Context, id pgtype.UUID) (bool, error) {
 	row := q.db.QueryRow(ctx, ExistsCommsMessage, id)
 	var exists bool
@@ -54,7 +58,7 @@ func (q *Queries) ExistsCommsMessage(ctx context.Context, id pgtype.UUID) (bool,
 }
 
 const ExistsMeetingNote = `-- name: ExistsMeetingNote :one
-SELECT EXISTS(SELECT 1 FROM meeting_note WHERE id = $1)
+SELECT EXISTS(SELECT 1 FROM meeting_note WHERE id = $1 AND deleted_at IS NULL)
 `
 
 func (q *Queries) ExistsMeetingNote(ctx context.Context, id pgtype.UUID) (bool, error) {
@@ -65,7 +69,7 @@ func (q *Queries) ExistsMeetingNote(ctx context.Context, id pgtype.UUID) (bool, 
 }
 
 const ExistsMessagesMessage = `-- name: ExistsMessagesMessage :one
-SELECT EXISTS(SELECT 1 FROM messages_message WHERE id = $1)
+SELECT EXISTS(SELECT 1 FROM messages_message WHERE id = $1 AND deleted_at IS NULL)
 `
 
 func (q *Queries) ExistsMessagesMessage(ctx context.Context, id pgtype.UUID) (bool, error) {
@@ -87,7 +91,7 @@ func (q *Queries) ExistsPhoneCall(ctx context.Context, id pgtype.UUID) (bool, er
 }
 
 const ExistsTelegramMessage = `-- name: ExistsTelegramMessage :one
-SELECT EXISTS(SELECT 1 FROM telegram_message WHERE id = $1)
+SELECT EXISTS(SELECT 1 FROM telegram_message WHERE id = $1 AND deleted_at IS NULL)
 `
 
 func (q *Queries) ExistsTelegramMessage(ctx context.Context, id pgtype.UUID) (bool, error) {
