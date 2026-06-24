@@ -14,7 +14,10 @@ import (
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
+	"personal-crm/backend/internal/synthetic"
+	"personal-crm/backend/internal/synthetic/factory"
 	"personal-crm/backend/internal/testdb"
+	"personal-crm/backend/tests/testsupport"
 
 	migrate "github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
@@ -169,6 +172,52 @@ func TestContactNodeDualWrite_Integration(t *testing.T) {
 		node, err := support.GetNodeForContact(ctx, contact.ID)
 		require.NoError(t, err)
 		assert.Equal(t, renamed, node.CanonicalLabel, "enrichment rename syncs the node label")
+	})
+
+	t.Run("enrichment rename with cadence syncs the node label in-tx", func(t *testing.T) {
+		t.Parallel()
+		gen, _ := migrationGenerator(t)
+		t.Cleanup(func() { _, _ = support.DeleteNodesByLabelPrefix(ctx, gen.Prefix()) })
+
+		contactRepo := repository.NewContactRepository(database.Queries)
+		methodRepo := repository.NewContactMethodRepository(database.Queries)
+		interactionRepo := repository.NewInteractionRepository(database.Queries)
+		taskRepo := repository.NewContactTaskRepository(database.Queries)
+		enrichmentRepo := repository.NewEnrichmentRepository(database.Queries)
+		externalRepo := repository.NewExternalContactRepository(database.Queries)
+		svc := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, taskRepo, nil, nil)
+		enrichSvc := service.NewEnrichmentService(database, contactRepo, methodRepo, enrichmentRepo, nil, nil)
+		// The cadence-present branch routes through CadenceUpdater and writes
+		// the node label inside the same tx — wire cadence on both services.
+		cadenceUpdater := wireCadenceUpdaterForTest(t, database, svc)
+		enrichSvc.SetCadenceUpdater(cadenceUpdater)
+
+		spec := gen.Contact()
+		contact, _, err := svc.CreateContact(ctx, repository.CreateContactRequest{
+			FullName: spec.FullName,
+		}, nil)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = contactRepo.HardDeleteContact(ctx, contact.ID) })
+
+		display := gen.Prefix() + "ext-display-cad"
+		external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+			Source:      "google",
+			SourceID:    gen.Prefix() + "ext-src-cad",
+			DisplayName: &display,
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = externalRepo.Delete(ctx, external.ID) })
+
+		// name + cadence → the cadence-tx branch; the node label sync rides the
+		// same tx as the contact update.
+		renamed := gen.Prefix() + "enriched-cad-renamed"
+		monthly := "monthly"
+		_, err = enrichSvc.EnrichContactFromExternalWithSelections(ctx, contact.ID, external, nil, nil, &monthly, &renamed)
+		require.NoError(t, err)
+
+		node, err := support.GetNodeForContact(ctx, contact.ID)
+		require.NoError(t, err)
+		assert.Equal(t, renamed, node.CanonicalLabel, "cadence-path enrichment rename syncs the node label")
 	})
 
 	t.Run("merge with a new name syncs the target node label", func(t *testing.T) {
@@ -378,4 +427,27 @@ func TestContactNodeDualWrite_MigrationDownUp(t *testing.T) {
 	require.NoError(t, err, "the up backfill restores the person node for the surviving contact")
 	assert.Equal(t, repository.NodeTypePerson, restored.Type)
 	assert.Equal(t, unreferenced.FullName, restored.CanonicalLabel)
+}
+
+// TestContactNodeDualWrite_HarnessSeedCreatesNode confirms the synthetic
+// harness's SeedContact — which drives the real ContactService.CreateContact —
+// implicitly dual-writes a person node, and that the harness teardown removes
+// it (the cleanup step added alongside the dual-write). SLOW-gated because the
+// harness spins up a River client.
+func TestContactNodeDualWrite_HarnessSeedCreatesNode(t *testing.T) {
+	testsupport.RequireLongTests(t)
+	database, ctx := newSyntheticDB(t)
+
+	h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+	support := repository.NewSyntheticSupportRepository(h.Database().Queries)
+
+	spec := h.Generator().Contact()
+	contact, err := h.SeedContact(ctx, spec)
+	require.NoError(t, err)
+
+	node, err := support.GetNodeForContact(ctx, contact.ID)
+	require.NoError(t, err, "SeedContact must dual-write a person node")
+	assert.Equal(t, contact.ID, node.ID)
+	assert.Equal(t, repository.NodeTypePerson, node.Type)
+	assert.Equal(t, contact.FullName, node.CanonicalLabel)
 }

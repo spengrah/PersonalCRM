@@ -1745,6 +1745,10 @@ type Querier interface {
 	// Cleanup step 5: messages_message rows whose guid is ns-prefixed.
 	// Caller passes a BARE prefix; '%' is appended here.
 	SyntheticDeleteMessagesMessageByGuidPrefix(ctx context.Context, guidPrefix pgtype.Text) (int64, error)
+	// Cleanup: the person node a seeded contact owns (node.id == contact.id), so
+	// the harness teardown removes the nodes its dual-writing SeedContact created
+	// alongside the contacts. Hard delete, keyed by the tracked contact ids.
+	SyntheticDeleteNodesByIds(ctx context.Context, nodeIds []pgtype.UUID) (int64, error)
 	// Graph identity cleanup: hard-delete nodes whose canonical_label is ns-prefixed.
 	// entity and venue cascade via their ON DELETE CASCADE FK to node, so this one
 	// delete removes a namespace's node+entity+venue rows. Caller passes a BARE

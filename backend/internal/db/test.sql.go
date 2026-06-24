@@ -1407,6 +1407,21 @@ func (q *Queries) SyntheticDeleteMessagesMessageByGuidPrefix(ctx context.Context
 	return result.RowsAffected(), nil
 }
 
+const SyntheticDeleteNodesByIds = `-- name: SyntheticDeleteNodesByIds :execrows
+DELETE FROM node WHERE id = ANY($1::uuid[])
+`
+
+// Cleanup: the person node a seeded contact owns (node.id == contact.id), so
+// the harness teardown removes the nodes its dual-writing SeedContact created
+// alongside the contacts. Hard delete, keyed by the tracked contact ids.
+func (q *Queries) SyntheticDeleteNodesByIds(ctx context.Context, nodeIds []pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteNodesByIds, nodeIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const SyntheticDeleteNodesByLabelPrefix = `-- name: SyntheticDeleteNodesByLabelPrefix :execrows
 DELETE FROM node WHERE canonical_label LIKE $1 || '%'
 `

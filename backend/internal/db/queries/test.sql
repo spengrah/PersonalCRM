@@ -572,6 +572,12 @@ SELECT * FROM node WHERE id = $1 AND deleted_at IS NULL;
 -- failed-tx contact did not survive without paging the whole contact list.
 SELECT COUNT(*) FROM contact WHERE full_name = $1 AND deleted_at IS NULL;
 
+-- name: SyntheticDeleteNodesByIds :execrows
+-- Cleanup: the person node a seeded contact owns (node.id == contact.id), so
+-- the harness teardown removes the nodes its dual-writing SeedContact created
+-- alongside the contacts. Hard delete, keyed by the tracked contact ids.
+DELETE FROM node WHERE id = ANY(@node_ids::uuid[]);
+
 -- name: SyntheticDeleteAssertionsForNode :execrows
 -- Assertion-store cleanup: hard-delete the assertions touching a node in EITHER
 -- position (provenance cascades). The assertion → node FK is restrict (NO

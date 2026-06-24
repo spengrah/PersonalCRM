@@ -710,6 +710,16 @@ func (r *SyntheticSupportRepository) CountContactsByFullName(ctx context.Context
 	return r.queries.SyntheticCountContactsByFullName(ctx, fullName)
 }
 
+// DeleteNodesByIds hard-deletes the person nodes a seeded contact owns
+// (node.id == contact.id), so the harness teardown removes the nodes its
+// dual-writing SeedContact created alongside the contacts it tracks.
+func (r *SyntheticSupportRepository) DeleteNodesByIds(ctx context.Context, nodeIDs []uuid.UUID) (int64, error) {
+	if len(nodeIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticDeleteNodesByIds(ctx, pgUUIDs(nodeIDs))
+}
+
 // DeleteAssertionsForNode hard-deletes the assertions touching a node in either
 // position (provenance cascades). The assertion → node FK is restrict, so a test
 // MUST clear its assertions before deleting its nodes — register this cleanup to

@@ -294,8 +294,13 @@ func (s *EnrichmentService) EnrichContactFromExternalWithSelections(
 	}
 
 	// Apply updates to contact if any enrichment occurred. Keep the person
-	// node's canonical_label loosely synced whenever enrichment renames the
-	// contact (node.id == contact.id), mirroring ContactService.UpdateContact.
+	// node's canonical_label synced whenever enrichment renames the contact
+	// (node.id == contact.id). Here nameChanged is derived from the explicit
+	// `name` argument (updateReq.FullName starts == contact.FullName and is only
+	// overwritten above when a name is supplied), NOT a race-prone pre-read — so
+	// when it is false the node already equals the contact name and no sync is
+	// needed. When true, the sync rides in the same write path (tx) as the
+	// contact update so the two can't diverge.
 	nameChanged := updateReq.FullName != contact.FullName
 	if needsUpdate {
 		if cadencePresent {
