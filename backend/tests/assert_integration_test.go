@@ -257,7 +257,7 @@ func TestAssert_Integration(t *testing.T) {
 		assert.True(t, h.eventExists(t, ctx, supersededSourceID(prior.ID)))
 		assert.True(t, h.eventExists(t, ctx, acceptedSourceID(successor.ID)))
 
-		now := accelerated.GetCurrentTime().UTC()
+		now := accelerated.GetCurrentTime().UTC().Truncate(time.Microsecond)
 		cur, err := h.assertionRepo.GetCurrentAccepted(ctx, subject, "home_address", now)
 		require.NoError(t, err)
 		assert.Equal(t, successor.ID, cur.ID, "current is the successor")
@@ -282,7 +282,7 @@ func TestAssert_Integration(t *testing.T) {
 		assert.Equal(t, repository.ClosureReasonEnded, *closed.ClosureReason)
 		assert.Nil(t, closed.SupersededBy, "closure-only has no successor")
 
-		now := accelerated.GetCurrentTime().UTC()
+		now := accelerated.GetCurrentTime().UTC().Truncate(time.Microsecond)
 		_, err = h.assertionRepo.GetCurrentAccepted(ctx, subject, "home_address", now)
 		require.ErrorIs(t, err, db.ErrNotFound, "current is now a gap")
 	})
@@ -485,7 +485,7 @@ func TestAssert_Integration(t *testing.T) {
 		require.NotNil(t, a.ValueDate)
 		assert.Equal(t, "1990-04-21", a.ValueDate.UTC().Format("2006-01-02"))
 
-		cur, err := h.assertionRepo.GetCurrentAccepted(ctx, subject, "birthday", accelerated.GetCurrentTime().UTC())
+		cur, err := h.assertionRepo.GetCurrentAccepted(ctx, subject, "birthday", accelerated.GetCurrentTime().UTC().Truncate(time.Microsecond))
 		require.NoError(t, err)
 		require.NotNil(t, cur.ValueDate)
 		assert.Equal(t, "1990-04-21", cur.ValueDate.UTC().Format("2006-01-02"))
@@ -553,7 +553,7 @@ func TestAssert_Concurrency(t *testing.T) {
 		}
 
 		// Exactly one is current-accepted; the rest are superseded.
-		now := accelerated.GetCurrentTime().UTC()
+		now := accelerated.GetCurrentTime().UTC().Truncate(time.Microsecond)
 		cur, err := h.assertionRepo.GetCurrentAccepted(ctx, subject, "home_address", now)
 		require.NoError(t, err, "exactly one current-accepted row survives the race")
 		assert.NotNil(t, cur)
@@ -625,7 +625,7 @@ func TestAssert_ValidTime(t *testing.T) {
 		t.Parallel()
 		gen, _ := migrationGenerator(t)
 		subject := h.seedPerson(t, ctx, gen.Prefix(), "subj")
-		now := accelerated.GetCurrentTime().UTC()
+		now := accelerated.GetCurrentTime().UTC().Truncate(time.Microsecond)
 
 		// NYC current (open).
 		nyc, err := h.svc.Assert(ctx, textFactReq(subject, "home_address", "NYC", gen.Prefix(), "nyc"))
@@ -665,7 +665,7 @@ func TestAssert_ValidTime(t *testing.T) {
 		// Run the rollover.
 		n, err := h.svc.RunRollover(ctx)
 		require.NoError(t, err)
-		assert.GreaterOrEqual(t, n, 1)
+		_ = n // RunRollover is a GLOBAL sweep; under t.Parallel() a concurrent test can roll this row first, so n is unreliable — the per-row state asserted below is the real check
 
 		rolled, err := h.assertionRepo.GetAssertion(ctx, nyc.ID)
 		require.NoError(t, err)
@@ -689,7 +689,7 @@ func TestAssert_ValidTime(t *testing.T) {
 		t.Parallel()
 		gen, _ := migrationGenerator(t)
 		subject := h.seedPerson(t, ctx, gen.Prefix(), "subj")
-		now := accelerated.GetCurrentTime().UTC()
+		now := accelerated.GetCurrentTime().UTC().Truncate(time.Microsecond)
 
 		// A bounded-past fact (valid window entirely in the past), no successor.
 		from := now.Add(-200 * 24 * time.Hour)
@@ -716,7 +716,7 @@ func TestAssert_ValidTime(t *testing.T) {
 		t.Parallel()
 		gen, _ := migrationGenerator(t)
 		subject := h.seedPerson(t, ctx, gen.Prefix(), "subj")
-		now := accelerated.GetCurrentTime().UTC()
+		now := accelerated.GetCurrentTime().UTC().Truncate(time.Microsecond)
 
 		// Current NYC, open start (a user edit → valid_from NULL).
 		nyc, err := h.svc.Assert(ctx, textFactReq(subject, "home_address", "NYC current", gen.Prefix(), "nyc"))
@@ -752,7 +752,7 @@ func TestAssert_ValidTime(t *testing.T) {
 		t.Parallel()
 		gen, _ := migrationGenerator(t)
 		subject := h.seedPerson(t, ctx, gen.Prefix(), "subj")
-		now := accelerated.GetCurrentTime().UTC()
+		now := accelerated.GetCurrentTime().UTC().Truncate(time.Microsecond)
 
 		// valid_from NULL (→ effective_from = now) but an explicit PAST valid_to.
 		past := now.Add(-time.Hour)
@@ -768,7 +768,7 @@ func TestAssert_ValidTime(t *testing.T) {
 		t.Parallel()
 		gen, _ := migrationGenerator(t)
 		subject := h.seedPerson(t, ctx, gen.Prefix(), "subj")
-		now := accelerated.GetCurrentTime().UTC()
+		now := accelerated.GetCurrentTime().UTC().Truncate(time.Microsecond)
 
 		// NYC current, then a FUTURE LA → NYC bounded by LA.
 		nyc, err := h.svc.Assert(ctx, textFactReq(subject, "home_address", "NYC", gen.Prefix(), "nyc"))
@@ -843,7 +843,7 @@ func TestAssert_ValidTime(t *testing.T) {
 		t.Parallel()
 		gen, _ := migrationGenerator(t)
 		subject := h.seedPerson(t, ctx, gen.Prefix(), "subj")
-		now := accelerated.GetCurrentTime().UTC()
+		now := accelerated.GetCurrentTime().UTC().Truncate(time.Microsecond)
 
 		nyc, err := h.svc.Assert(ctx, textFactReq(subject, "home_address", "NYC", gen.Prefix(), "nyc"))
 		require.NoError(t, err)
@@ -887,7 +887,7 @@ func TestAssert_ValidTime(t *testing.T) {
 		t.Parallel()
 		gen, _ := migrationGenerator(t)
 		subject := h.seedPerson(t, ctx, gen.Prefix(), "subj")
-		now := accelerated.GetCurrentTime().UTC()
+		now := accelerated.GetCurrentTime().UTC().Truncate(time.Microsecond)
 
 		// home_address is year-bucketed. NYC at year Y (valid_from this year).
 		thisYear := time.Date(now.Year(), 1, 15, 0, 0, 0, 0, time.UTC)
@@ -987,7 +987,7 @@ func TestAssert_ValidTime(t *testing.T) {
 		t.Parallel()
 		gen, _ := migrationGenerator(t)
 		subject := h.seedPerson(t, ctx, gen.Prefix(), "subj")
-		now := accelerated.GetCurrentTime().UTC()
+		now := accelerated.GetCurrentTime().UTC().Truncate(time.Microsecond)
 
 		// NYC current with a FUTURE knowledge_from override.
 		tomorrow := now.Add(24 * time.Hour)
@@ -1016,7 +1016,7 @@ func TestAssert_ValidTime(t *testing.T) {
 		// Rollover must succeed (not abort on the CHECK) and clamp knowledge_to.
 		n, err := h.svc.RunRollover(ctx)
 		require.NoError(t, err, "rollover must not abort on a future-knowledge_from row")
-		assert.GreaterOrEqual(t, n, 1)
+		_ = n // RunRollover is a GLOBAL sweep; under t.Parallel() a concurrent test can roll this row first, so n is unreliable — the per-row state asserted below is the real check
 		rolled, err := h.assertionRepo.GetAssertion(ctx, nyc.ID)
 		require.NoError(t, err)
 		assert.Equal(t, repository.AssertionStatusSuperseded, rolled.Status)
@@ -1078,7 +1078,7 @@ func TestAssert_Lifecycle(t *testing.T) {
 		t.Parallel()
 		gen, _ := migrationGenerator(t)
 		subject := h.seedPerson(t, ctx, gen.Prefix(), "subj")
-		now := accelerated.GetCurrentTime().UTC()
+		now := accelerated.GetCurrentTime().UTC().Truncate(time.Microsecond)
 
 		// Accepted NYC this year (open-ended, auto-apply), confidence 50.
 		thisYear := time.Date(now.Year(), 2, 1, 0, 0, 0, 0, time.UTC)
@@ -1130,7 +1130,7 @@ func TestAssert_Lifecycle(t *testing.T) {
 		t.Parallel()
 		gen, _ := migrationGenerator(t)
 		subject := h.seedPerson(t, ctx, gen.Prefix(), "subj")
-		now := accelerated.GetCurrentTime().UTC()
+		now := accelerated.GetCurrentTime().UTC().Truncate(time.Microsecond)
 
 		tomorrow := now.Add(24 * time.Hour)
 		req := textFactReq(subject, "health_condition", "future-knowledge", gen.Prefix(), "fk")
@@ -1157,7 +1157,7 @@ func TestAssert_Lifecycle(t *testing.T) {
 		t.Parallel()
 		gen, _ := migrationGenerator(t)
 		subject := h.seedPerson(t, ctx, gen.Prefix(), "subj")
-		now := accelerated.GetCurrentTime().UTC()
+		now := accelerated.GetCurrentTime().UTC().Truncate(time.Microsecond)
 
 		thisYear := time.Date(now.Year(), 2, 1, 0, 0, 0, 0, time.UTC)
 		nycReq := textFactReq(subject, "home_address", "NYC", gen.Prefix(), "nyc")
@@ -1212,7 +1212,7 @@ func TestAssert_Lifecycle(t *testing.T) {
 		t.Parallel()
 		gen, _ := migrationGenerator(t)
 		subject := h.seedPerson(t, ctx, gen.Prefix(), "subj")
-		now := accelerated.GetCurrentTime().UTC()
+		now := accelerated.GetCurrentTime().UTC().Truncate(time.Microsecond)
 
 		tomorrow := now.Add(24 * time.Hour)
 		req := textFactReq(subject, "home_address", "future-k", gen.Prefix(), "fk")
@@ -1253,7 +1253,7 @@ func TestAssert_Validation(t *testing.T) {
 		t.Parallel()
 		gen, _ := migrationGenerator(t)
 		subject := h.seedPerson(t, ctx, gen.Prefix(), "subj")
-		now := accelerated.GetCurrentTime().UTC()
+		now := accelerated.GetCurrentTime().UTC().Truncate(time.Microsecond)
 
 		// An open-start accepted row that the degenerate write would dedup-match.
 		first, err := h.svc.Assert(ctx, textFactReq(subject, "home_address", "same", gen.Prefix(), "d1"))
