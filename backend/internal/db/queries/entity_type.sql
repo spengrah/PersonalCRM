@@ -1,7 +1,8 @@
--- Entity-type catalog queries (SP1 graph foundation).
+-- Entity-type catalog queries (graph foundation).
 
 -- name: UpsertEntityType :exec
--- Idempotent entity-type seed support (PR2 seeds the curated subtypes).
+-- Idempotent entity-type seed support (the curated subtypes are seeded by the
+-- predicate-catalog migration).
 INSERT INTO entity_type (key, description, resolution_config, status)
 VALUES ($1, $2, $3, $4)
 ON CONFLICT (key)

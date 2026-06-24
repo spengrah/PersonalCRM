@@ -121,8 +121,8 @@ func (r *VenueRepository) FindVenueByContainer(ctx context.Context, source, kind
 }
 
 // UpsertVenue idempotently creates a venue for a container (refreshing the title
-// on conflict). Used by the PR6 interaction backfill / live recorders so a
-// re-run for the same container returns the existing row.
+// on conflict). Used by the interaction backfill / live recorders so a re-run
+// for the same container returns the existing row.
 func (r *VenueRepository) UpsertVenue(ctx context.Context, req CreateVenueRequest) (*Venue, error) {
 	return upsertVenue(ctx, r.queries, req)
 }

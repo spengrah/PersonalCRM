@@ -24,7 +24,7 @@ type CreateNodeParams struct {
 	CanonicalLabel string      `json:"canonical_label"`
 }
 
-// Node registry queries (SP1 graph foundation).
+// Node registry queries (graph foundation).
 // Caller supplies the id (for persons, id == contact.id); node has no default.
 func (q *Queries) CreateNode(ctx context.Context, arg CreateNodeParams) (*Node, error) {
 	row := q.db.QueryRow(ctx, CreateNode, arg.ID, arg.Type, arg.CanonicalLabel)

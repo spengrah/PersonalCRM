@@ -26,7 +26,11 @@ type CreateVenueParams struct {
 	Title             pgtype.Text `json:"title"`
 }
 
-// Venue subtype queries (SP1 graph foundation).
+// Venue subtype queries (graph foundation).
+//
+// Venue rows have no deleted_at of their own: liveness flows from the parent
+// node's tombstone. So the live reads join node and filter node.deleted_at IS
+// NULL; a venue whose node has been merged/soft-deleted drops from these reads.
 func (q *Queries) CreateVenue(ctx context.Context, arg CreateVenueParams) (*Venue, error) {
 	row := q.db.QueryRow(ctx, CreateVenue,
 		arg.NodeID,
@@ -47,8 +51,10 @@ func (q *Queries) CreateVenue(ctx context.Context, arg CreateVenueParams) (*Venu
 }
 
 const FindVenueByContainer = `-- name: FindVenueByContainer :one
-SELECT node_id, kind, source, source_container_id, title FROM venue
-WHERE source = $1 AND kind = $2 AND source_container_id = $3
+SELECT venue.node_id, venue.kind, venue.source, venue.source_container_id, venue.title FROM venue
+JOIN node ON node.id = venue.node_id
+WHERE venue.source = $1 AND venue.kind = $2 AND venue.source_container_id = $3
+  AND node.deleted_at IS NULL
 `
 
 type FindVenueByContainerParams struct {
@@ -57,7 +63,7 @@ type FindVenueByContainerParams struct {
 	SourceContainerID string `json:"source_container_id"`
 }
 
-// Looks up the single venue for a real container via the
+// Looks up the single live venue for a real container via the
 // (source, kind, source_container_id) unique.
 func (q *Queries) FindVenueByContainer(ctx context.Context, arg FindVenueByContainerParams) (*Venue, error) {
 	row := q.db.QueryRow(ctx, FindVenueByContainer, arg.Source, arg.Kind, arg.SourceContainerID)
@@ -73,7 +79,9 @@ func (q *Queries) FindVenueByContainer(ctx context.Context, arg FindVenueByConta
 }
 
 const GetVenue = `-- name: GetVenue :one
-SELECT node_id, kind, source, source_container_id, title FROM venue WHERE node_id = $1
+SELECT venue.node_id, venue.kind, venue.source, venue.source_container_id, venue.title FROM venue
+JOIN node ON node.id = venue.node_id
+WHERE venue.node_id = $1 AND node.deleted_at IS NULL
 `
 
 func (q *Queries) GetVenue(ctx context.Context, nodeID pgtype.UUID) (*Venue, error) {
@@ -105,8 +113,9 @@ type UpsertVenueParams struct {
 	Title             pgtype.Text `json:"title"`
 }
 
-// Idempotent venue creation for the PR6 interaction backfill: a re-run for the
-// same container is a no-op that refreshes the title and returns the existing row.
+// Idempotent venue creation for the interaction backfill / live recorders: a
+// re-run for the same container is a no-op that refreshes the title and returns
+// the existing row.
 func (q *Queries) UpsertVenue(ctx context.Context, arg UpsertVenueParams) (*Venue, error) {
 	row := q.db.QueryRow(ctx, UpsertVenue,
 		arg.NodeID,

@@ -252,14 +252,18 @@ func TestGraphIdentity_Integration(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, id, found.NodeID)
 
-		// UpsertVenue for the SAME container is idempotent: it refreshes the title
-		// and returns the EXISTING node id (no second venue node).
+		// UpsertVenue for the SAME container is idempotent: the INSERT loses the
+		// ON CONFLICT race against the existing row, refreshes the title, and
+		// returns the EXISTING node id. The spare node passed as the would-be
+		// node_id is NOT consumed (no venue row is created for it) — which is
+		// exactly why the live recorder helper (a later PR) must read-first before
+		// minting a node, rather than create a node then UpsertVenue.
 		newTitle := title + "-updated"
-		newNodeID := uuid.New()
-		_, err = nodeRepo.CreateNode(ctx, newNodeID, "venue", gen.Prefix()+"venue-upsert-spare")
+		spareNodeID := uuid.New()
+		_, err = nodeRepo.CreateNode(ctx, spareNodeID, "venue", gen.Prefix()+"venue-upsert-spare")
 		require.NoError(t, err)
 		up, err := venueRepo.UpsertVenue(ctx, repository.CreateVenueRequest{
-			NodeID:            newNodeID,
+			NodeID:            spareNodeID,
 			Kind:              spec.Kind,
 			Source:            spec.Source,
 			SourceContainerID: spec.SourceContainerID,
@@ -269,6 +273,73 @@ func TestGraphIdentity_Integration(t *testing.T) {
 		assert.Equal(t, id, up.NodeID, "upsert must return the existing venue node, not the spare")
 		require.NotNil(t, up.Title)
 		assert.Equal(t, newTitle, *up.Title)
+
+		// The spare node has no venue row of its own (the upsert did not create a
+		// second venue) — it is a bare node until namespace cleanup removes it.
+		_, err = venueRepo.GetVenue(ctx, spareNodeID)
+		require.ErrorIs(t, err, db.ErrNotFound, "spare node must not have gained a venue row")
+	})
+
+	t.Run("entity/venue live reads exclude a soft-deleted parent node", func(t *testing.T) {
+		t.Parallel()
+		gen, _ := migrationGenerator(t)
+		t.Cleanup(func() { _, _ = support.DeleteNodesByLabelPrefix(ctx, gen.Prefix()) })
+		t.Cleanup(func() { _, _ = support.DeleteEntityTypesByKeyPrefix(ctx, gen.Prefix()) })
+
+		// Entity/venue rows have no deleted_at of their own; liveness flows from
+		// the parent node's tombstone, so the live reads must drop them once the
+		// node is soft-deleted.
+		subtype := gen.Prefix() + "org"
+		require.NoError(t, entityRepo.UpsertEntityType(ctx, repository.UpsertEntityTypeRequest{
+			Key:    subtype,
+			Status: repository.EntityTypeStatusProvisional,
+		}))
+
+		entSpec := gen.Entity(subtype)
+		entID := uuid.New()
+		_, err := nodeRepo.CreateNode(ctx, entID, entSpec.Node.Type, entSpec.Node.CanonicalLabel)
+		require.NoError(t, err)
+		_, err = entityRepo.CreateEntity(ctx, repository.CreateEntityRequest{
+			NodeID:         entID,
+			Subtype:        entSpec.Subtype,
+			NormalizedName: entSpec.NormalizedName,
+		})
+		require.NoError(t, err)
+
+		venSpec := gen.Venue("gcal", repository.VenueKindMeeting)
+		venID := uuid.New()
+		_, err = nodeRepo.CreateNode(ctx, venID, venSpec.Node.Type, venSpec.Node.CanonicalLabel)
+		require.NoError(t, err)
+		_, err = venueRepo.CreateVenue(ctx, repository.CreateVenueRequest{
+			NodeID:            venID,
+			Kind:              venSpec.Kind,
+			Source:            venSpec.Source,
+			SourceContainerID: venSpec.SourceContainerID,
+		})
+		require.NoError(t, err)
+
+		// Both resolve while their nodes are live.
+		_, err = entityRepo.GetEntity(ctx, entID)
+		require.NoError(t, err)
+		_, err = entityRepo.FindEntityBySubtypeName(ctx, entSpec.Subtype, entSpec.NormalizedName)
+		require.NoError(t, err)
+		_, err = venueRepo.GetVenue(ctx, venID)
+		require.NoError(t, err)
+		_, err = venueRepo.FindVenueByContainer(ctx, venSpec.Source, venSpec.Kind, venSpec.SourceContainerID)
+		require.NoError(t, err)
+
+		// Soft-delete the parent nodes; the live reads must now miss them.
+		require.NoError(t, nodeRepo.SoftDeleteNode(ctx, entID))
+		require.NoError(t, nodeRepo.SoftDeleteNode(ctx, venID))
+
+		_, err = entityRepo.GetEntity(ctx, entID)
+		require.ErrorIs(t, err, db.ErrNotFound)
+		_, err = entityRepo.FindEntityBySubtypeName(ctx, entSpec.Subtype, entSpec.NormalizedName)
+		require.ErrorIs(t, err, db.ErrNotFound)
+		_, err = venueRepo.GetVenue(ctx, venID)
+		require.ErrorIs(t, err, db.ErrNotFound)
+		_, err = venueRepo.FindVenueByContainer(ctx, venSpec.Source, venSpec.Kind, venSpec.SourceContainerID)
+		require.ErrorIs(t, err, db.ErrNotFound)
 	})
 
 	t.Run("venue (source, kind, source_container_id) unique rejects a duplicate", func(t *testing.T) {

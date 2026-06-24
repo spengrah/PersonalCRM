@@ -169,7 +169,7 @@ func (g *Generator) Note() NoteSpec {
 	return NoteSpec{Body: g.Prefix() + "note body " + g.givenName()}
 }
 
-// NodeSpec is a synthetic graph node description (SP1). The caller supplies the
+// NodeSpec is a synthetic graph node description. The caller supplies the
 // id when persisting (for persons, id == contact.id); the spec carries only the
 // descriptive fields. CanonicalLabel is namespace-prefixed so the prefix-keyed
 // cleanup backstop (DeleteNodesByLabelPrefix) finds it.
@@ -190,7 +190,7 @@ func (g *Generator) Node(nodeType string) NodeSpec {
 	}
 }
 
-// EntitySpec is a synthetic entity subtype description (SP1). Subtype is an
+// EntitySpec is a synthetic entity subtype description. Subtype is an
 // entity_type key (e.g. "place", "tag"); NormalizedName is namespace-prefixed so
 // it is unique per namespace under the (subtype, normalized_name) unique. The
 // paired NodeSpec (always type='entity') carries the display label.
@@ -214,7 +214,7 @@ func (g *Generator) Entity(subtype string) EntitySpec {
 	}
 }
 
-// VenueSpec is a synthetic venue subtype description (SP1). SourceContainerID is
+// VenueSpec is a synthetic venue subtype description. SourceContainerID is
 // namespace-prefixed so the (source, kind, source_container_id) unique is unique
 // per namespace. The paired NodeSpec (always type='venue') carries the title as
 // its canonical_label.

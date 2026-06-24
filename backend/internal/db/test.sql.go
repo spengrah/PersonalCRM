@@ -852,9 +852,9 @@ const SyntheticCountNodesByLabelPrefix = `-- name: SyntheticCountNodesByLabelPre
 SELECT COUNT(*) FROM node WHERE canonical_label LIKE $1 || '%'
 `
 
-// Graph (SP1) test support: count nodes whose canonical_label is ns-prefixed, so
-// a test can scope assertions to its own namespace's nodes on the shared test DB.
-// Caller passes a BARE prefix; '%' is appended here.
+// Graph identity test support: count nodes whose canonical_label is ns-prefixed,
+// so a test can scope assertions to its own namespace's nodes on the shared test
+// DB. Caller passes a BARE prefix; '%' is appended here.
 func (q *Queries) SyntheticCountNodesByLabelPrefix(ctx context.Context, labelPrefix pgtype.Text) (int64, error) {
 	row := q.db.QueryRow(ctx, SyntheticCountNodesByLabelPrefix, labelPrefix)
 	var count int64
@@ -1210,10 +1210,10 @@ const SyntheticDeleteEntityTypesByKeyPrefix = `-- name: SyntheticDeleteEntityTyp
 DELETE FROM entity_type WHERE key LIKE $1 || '%'
 `
 
-// Graph (SP1) cleanup: entity_type is a catalog table with no canonical_label, so
-// a test that seeds its own ns-prefixed entity_type rows clears them by key
-// prefix (the curated PR2 seed rows use bare keys and are never prefix-matched).
-// Caller passes a BARE prefix; '%' is appended here.
+// Graph identity cleanup: entity_type is a catalog table with no canonical_label,
+// so a test that seeds its own ns-prefixed entity_type rows clears them by key
+// prefix (the curated catalog seed rows use bare keys and are never
+// prefix-matched). Caller passes a BARE prefix; '%' is appended here.
 func (q *Queries) SyntheticDeleteEntityTypesByKeyPrefix(ctx context.Context, keyPrefix pgtype.Text) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteEntityTypesByKeyPrefix, keyPrefix)
 	if err != nil {
@@ -1331,7 +1331,7 @@ const SyntheticDeleteNodesByLabelPrefix = `-- name: SyntheticDeleteNodesByLabelP
 DELETE FROM node WHERE canonical_label LIKE $1 || '%'
 `
 
-// Graph (SP1) cleanup: hard-delete nodes whose canonical_label is ns-prefixed.
+// Graph identity cleanup: hard-delete nodes whose canonical_label is ns-prefixed.
 // entity and venue cascade via their ON DELETE CASCADE FK to node, so this one
 // delete removes a namespace's node+entity+venue rows. Caller passes a BARE
 // prefix; '%' is appended here.

@@ -20,8 +20,9 @@ func jsonbOrEmpty(b []byte) []byte {
 	return b
 }
 
-// Entity subtype constants (the curated-core entity_type keys; PR2 seeds the
-// rows). Provisional subtypes are minted at runtime by SP3.
+// Entity subtype constants (the curated-core entity_type keys; the catalog rows
+// are seeded by the predicate-catalog migration). Provisional subtypes are
+// minted at runtime.
 const (
 	EntitySubtypeOrganization = "organization"
 	EntitySubtypePlace        = "place"
@@ -174,8 +175,8 @@ func convertDbEntityType(dbEntityType *db.EntityType) EntityType {
 	}
 }
 
-// UpsertEntityType idempotently seeds an entity-type catalog row (PR2 seeds the
-// curated subtypes).
+// UpsertEntityType idempotently seeds an entity-type catalog row (the curated
+// subtypes are seeded by the predicate-catalog migration).
 func (r *EntityRepository) UpsertEntityType(ctx context.Context, req UpsertEntityTypeRequest) error {
 	return r.queries.UpsertEntityType(ctx, db.UpsertEntityTypeParams{
 		Key:              req.Key,

@@ -631,7 +631,7 @@ func (r *SyntheticSupportRepository) ListContactBucketsByNamePrefix(ctx context.
 	return out, nil
 }
 
-// --- Graph (SP1) identity support ------------------------------------------
+// --- Graph identity support -------------------------------------------------
 
 // CountNodesByLabelPrefix counts nodes whose canonical_label is ns-prefixed, so
 // a graph-identity test can scope its assertions to its own namespace on the
@@ -649,7 +649,7 @@ func (r *SyntheticSupportRepository) DeleteNodesByLabelPrefix(ctx context.Contex
 
 // DeleteEntityTypesByKeyPrefix hard-deletes entity_type catalog rows whose key
 // is ns-prefixed (a test that seeds its own provisional subtypes; the curated
-// PR2 seed rows use bare keys and are never prefix-matched).
+// catalog seed rows use bare keys and are never prefix-matched).
 func (r *SyntheticSupportRepository) DeleteEntityTypesByKeyPrefix(ctx context.Context, prefix string) (int64, error) {
 	return r.queries.SyntheticDeleteEntityTypesByKeyPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
 }

@@ -42,8 +42,9 @@ type UpsertEntityTypeParams struct {
 	Status           string `json:"status"`
 }
 
-// Entity-type catalog queries (SP1 graph foundation).
-// Idempotent entity-type seed support (PR2 seeds the curated subtypes).
+// Entity-type catalog queries (graph foundation).
+// Idempotent entity-type seed support (the curated subtypes are seeded by the
+// predicate-catalog migration).
 func (q *Queries) UpsertEntityType(ctx context.Context, arg UpsertEntityTypeParams) error {
 	_, err := q.db.Exec(ctx, UpsertEntityType,
 		arg.Key,

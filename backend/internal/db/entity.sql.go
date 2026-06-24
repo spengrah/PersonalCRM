@@ -26,7 +26,12 @@ type CreateEntityParams struct {
 	Detail         []byte      `json:"detail"`
 }
 
-// Entity subtype queries (SP1 graph foundation).
+// Entity subtype queries (graph foundation).
+//
+// Entity rows have no deleted_at of their own: liveness flows from the parent
+// node's tombstone (a merge or soft-delete sets node.deleted_at). So the live
+// reads join node and filter node.deleted_at IS NULL; an entity whose node has
+// been merged/soft-deleted drops from these reads.
 func (q *Queries) CreateEntity(ctx context.Context, arg CreateEntityParams) (*Entity, error) {
 	row := q.db.QueryRow(ctx, CreateEntity,
 		arg.NodeID,
@@ -47,7 +52,9 @@ func (q *Queries) CreateEntity(ctx context.Context, arg CreateEntityParams) (*En
 }
 
 const FindEntityBySubtypeName = `-- name: FindEntityBySubtypeName :one
-SELECT node_id, subtype, normalized_name, external_ref, detail FROM entity WHERE subtype = $1 AND normalized_name = $2
+SELECT entity.node_id, entity.subtype, entity.normalized_name, entity.external_ref, entity.detail FROM entity
+JOIN node ON node.id = entity.node_id
+WHERE entity.subtype = $1 AND entity.normalized_name = $2 AND node.deleted_at IS NULL
 `
 
 type FindEntityBySubtypeNameParams struct {
@@ -55,7 +62,8 @@ type FindEntityBySubtypeNameParams struct {
 	NormalizedName string `json:"normalized_name"`
 }
 
-// Entity-resolution dedup lookup against the (subtype, normalized_name) unique.
+// Entity-resolution dedup lookup against the (subtype, normalized_name) unique;
+// excludes entities whose node has been merged/soft-deleted.
 func (q *Queries) FindEntityBySubtypeName(ctx context.Context, arg FindEntityBySubtypeNameParams) (*Entity, error) {
 	row := q.db.QueryRow(ctx, FindEntityBySubtypeName, arg.Subtype, arg.NormalizedName)
 	var i Entity
@@ -70,7 +78,9 @@ func (q *Queries) FindEntityBySubtypeName(ctx context.Context, arg FindEntityByS
 }
 
 const GetEntity = `-- name: GetEntity :one
-SELECT node_id, subtype, normalized_name, external_ref, detail FROM entity WHERE node_id = $1
+SELECT entity.node_id, entity.subtype, entity.normalized_name, entity.external_ref, entity.detail FROM entity
+JOIN node ON node.id = entity.node_id
+WHERE entity.node_id = $1 AND node.deleted_at IS NULL
 `
 
 func (q *Queries) GetEntity(ctx context.Context, nodeID pgtype.UUID) (*Entity, error) {

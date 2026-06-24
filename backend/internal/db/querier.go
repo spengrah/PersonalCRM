@@ -275,12 +275,17 @@ type Querier interface {
 	// idx_contact_task_followup_idempotency on repeats.
 	CreateContactTaskWithIdempotencyKey(ctx context.Context, arg CreateContactTaskWithIdempotencyKeyParams) (*ContactTask, error)
 	CreateEnrichment(ctx context.Context, arg CreateEnrichmentParams) (*ContactEnrichment, error)
-	// Entity subtype queries (SP1 graph foundation).
+	// Entity subtype queries (graph foundation).
+	//
+	// Entity rows have no deleted_at of their own: liveness flows from the parent
+	// node's tombstone (a merge or soft-delete sets node.deleted_at). So the live
+	// reads join node and filter node.deleted_at IS NULL; an entity whose node has
+	// been merged/soft-deleted drops from these reads.
 	CreateEntity(ctx context.Context, arg CreateEntityParams) (*Entity, error)
 	CreateInteraction(ctx context.Context, arg CreateInteractionParams) (*Interaction, error)
 	// mac_host queries.
 	CreateMacHost(ctx context.Context, arg CreateMacHostParams) (*MacHost, error)
-	// Node registry queries (SP1 graph foundation).
+	// Node registry queries (graph foundation).
 	// Caller supplies the id (for persons, id == contact.id); node has no default.
 	CreateNode(ctx context.Context, arg CreateNodeParams) (*Node, error)
 	CreateNote(ctx context.Context, arg CreateNoteParams) (*Note, error)
@@ -292,7 +297,11 @@ type Querier interface {
 	CreateSyncLog(ctx context.Context, arg CreateSyncLogParams) (*ExternalSyncLog, error)
 	CreateSyncState(ctx context.Context, arg CreateSyncStateParams) (*ExternalSyncState, error)
 	CreateTag(ctx context.Context, arg CreateTagParams) (*Tag, error)
-	// Venue subtype queries (SP1 graph foundation).
+	// Venue subtype queries (graph foundation).
+	//
+	// Venue rows have no deleted_at of their own: liveness flows from the parent
+	// node's tombstone. So the live reads join node and filter node.deleted_at IS
+	// NULL; a venue whose node has been merged/soft-deleted drops from these reads.
 	CreateVenue(ctx context.Context, arg CreateVenueParams) (*Venue, error)
 	// Remove duplicate contact IDs that may result from merge
 	// Uses subquery with DISTINCT to rebuild the array without duplicates
@@ -447,7 +456,8 @@ type Querier interface {
 	// Find contact methods that exist in both source and target
 	// Used to identify duplicates that will be skipped during merge
 	FindDuplicateContactMethods(ctx context.Context, arg FindDuplicateContactMethodsParams) ([]*FindDuplicateContactMethodsRow, error)
-	// Entity-resolution dedup lookup against the (subtype, normalized_name) unique.
+	// Entity-resolution dedup lookup against the (subtype, normalized_name) unique;
+	// excludes entities whose node has been merged/soft-deleted.
 	FindEntityBySubtypeName(ctx context.Context, arg FindEntityBySubtypeNameParams) (*Entity, error)
 	// Primary use: publisher-side dedup lookup BEFORE attempting insert (e.g.,
 	// batch ingestion can pre-filter duplicates). Also used by tests.
@@ -551,7 +561,7 @@ type Querier interface {
 	// Uses UNNEST to expand input arrays and LATERAL join to find matches per candidate.
 	// Returns results grouped by candidate_id with matches ordered by similarity.
 	FindSimilarContactsBatch(ctx context.Context, arg FindSimilarContactsBatchParams) ([]*FindSimilarContactsBatchRow, error)
-	// Looks up the single venue for a real container via the
+	// Looks up the single live venue for a real container via the
 	// (source, kind, source_container_id) unique.
 	FindVenueByContainer(ctx context.Context, arg FindVenueByContainerParams) (*Venue, error)
 	// Used by MacHostAuthMiddleware. Filters revoked hosts so a revoked
@@ -1463,9 +1473,9 @@ type Querier interface {
 	// Settle Gate A (Mac-contact seeded): the external_contact row for the entity
 	// id exists linked to a CRM contact (match_status='matched').
 	SyntheticCountMatchedExternalContactBySourceId(ctx context.Context, sourceID string) (int64, error)
-	// Graph (SP1) test support: count nodes whose canonical_label is ns-prefixed, so
-	// a test can scope assertions to its own namespace's nodes on the shared test DB.
-	// Caller passes a BARE prefix; '%' is appended here.
+	// Graph identity test support: count nodes whose canonical_label is ns-prefixed,
+	// so a test can scope assertions to its own namespace's nodes on the shared test
+	// DB. Caller passes a BARE prefix; '%' is appended here.
 	SyntheticCountNodesByLabelPrefix(ctx context.Context, labelPrefix pgtype.Text) (int64, error)
 	// gcal seeded: the calendar_event for the gcal id has the contact in
 	// matched_contact_ids AND last_contacted_updated=true (the attended interaction
@@ -1555,10 +1565,10 @@ type Querier interface {
 	// Cleanup step 13: contact by tracked id. A true DELETE (not soft) so
 	// ON DELETE CASCADE fires for contact_enrichment (and any cascade FK).
 	SyntheticDeleteContactsByIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error)
-	// Graph (SP1) cleanup: entity_type is a catalog table with no canonical_label, so
-	// a test that seeds its own ns-prefixed entity_type rows clears them by key
-	// prefix (the curated PR2 seed rows use bare keys and are never prefix-matched).
-	// Caller passes a BARE prefix; '%' is appended here.
+	// Graph identity cleanup: entity_type is a catalog table with no canonical_label,
+	// so a test that seeds its own ns-prefixed entity_type rows clears them by key
+	// prefix (the curated catalog seed rows use bare keys and are never
+	// prefix-matched). Caller passes a BARE prefix; '%' is appended here.
 	SyntheticDeleteEntityTypesByKeyPrefix(ctx context.Context, keyPrefix pgtype.Text) (int64, error)
 	// Cleanup step 1: claims for this replay's events (by tracked event id).
 	SyntheticDeleteEventConsumerClaimsByEventIds(ctx context.Context, eventIds []pgtype.UUID) (int64, error)
@@ -1588,7 +1598,7 @@ type Querier interface {
 	// Cleanup step 5: messages_message rows whose guid is ns-prefixed.
 	// Caller passes a BARE prefix; '%' is appended here.
 	SyntheticDeleteMessagesMessageByGuidPrefix(ctx context.Context, guidPrefix pgtype.Text) (int64, error)
-	// Graph (SP1) cleanup: hard-delete nodes whose canonical_label is ns-prefixed.
+	// Graph identity cleanup: hard-delete nodes whose canonical_label is ns-prefixed.
 	// entity and venue cascade via their ON DELETE CASCADE FK to node, so this one
 	// delete removes a namespace's node+entity+venue rows. Caller passes a BARE
 	// prefix; '%' is appended here.
@@ -1903,8 +1913,9 @@ type Querier interface {
 	UpsertContactNoteByCategory(ctx context.Context, arg UpsertContactNoteByCategoryParams) (*Note, error)
 	// Upsert a contact task by external_task_id (Todoist task IDs are globally unique)
 	UpsertContactTask(ctx context.Context, arg UpsertContactTaskParams) (*ContactTask, error)
-	// Entity-type catalog queries (SP1 graph foundation).
-	// Idempotent entity-type seed support (PR2 seeds the curated subtypes).
+	// Entity-type catalog queries (graph foundation).
+	// Idempotent entity-type seed support (the curated subtypes are seeded by the
+	// predicate-catalog migration).
 	UpsertEntityType(ctx context.Context, arg UpsertEntityTypeParams) error
 	// Named-param variant. host_id follows claim-on-first-non-NULL-emit:
 	// legacy rows whose host_id IS NULL (pre-migration data) get claimed
@@ -1987,8 +1998,9 @@ type Querier interface {
 	// does NOT touch auth_state (which is managed by AuthSessionManager).
 	UpsertTelegramSessionData(ctx context.Context, arg UpsertTelegramSessionDataParams) (*TelegramSession, error)
 	UpsertTelegramUpdateState(ctx context.Context, arg UpsertTelegramUpdateStateParams) (*TelegramUpdateState, error)
-	// Idempotent venue creation for the PR6 interaction backfill: a re-run for the
-	// same container is a no-op that refreshes the title and returns the existing row.
+	// Idempotent venue creation for the interaction backfill / live recorders: a
+	// re-run for the same container is a no-op that refreshes the title and returns
+	// the existing row.
 	UpsertVenue(ctx context.Context, arg UpsertVenueParams) (*Venue, error)
 	// Writes the recomputed date columns. contact_by is passed pre-computed by
 	// the Go caller (cadence.CalculateContactBy, environment-aware) so the value

@@ -1,4 +1,4 @@
--- Node registry queries (SP1 graph foundation).
+-- Node registry queries (graph foundation).
 
 -- name: CreateNode :one
 -- Caller supplies the id (for persons, id == contact.id); node has no default.
