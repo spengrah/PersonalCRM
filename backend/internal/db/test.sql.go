@@ -785,6 +785,20 @@ func (q *Queries) SyntheticCountContactMethodsByValueNormalizedPrefix(ctx contex
 	return count, err
 }
 
+const SyntheticCountContactsByFullName = `-- name: SyntheticCountContactsByFullName :one
+SELECT COUNT(*) FROM contact WHERE full_name = $1 AND deleted_at IS NULL
+`
+
+// Contact→node dual-write test support: count contacts with an exact full_name
+// (namespace-prefixed names are unique per test), so a rollback test asserts a
+// failed-tx contact did not survive without paging the whole contact list.
+func (q *Queries) SyntheticCountContactsByFullName(ctx context.Context, fullName string) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountContactsByFullName, fullName)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const SyntheticCountContactsByIds = `-- name: SyntheticCountContactsByIds :one
 SELECT COUNT(*) FROM contact WHERE id = ANY($1::uuid[])
 `
@@ -1393,6 +1407,21 @@ func (q *Queries) SyntheticDeleteMessagesMessageByGuidPrefix(ctx context.Context
 	return result.RowsAffected(), nil
 }
 
+const SyntheticDeleteNodesByIds = `-- name: SyntheticDeleteNodesByIds :execrows
+DELETE FROM node WHERE id = ANY($1::uuid[])
+`
+
+// Cleanup: the person node a seeded contact owns (node.id == contact.id), so
+// the harness teardown removes the nodes its dual-writing SeedContact created
+// alongside the contacts. Hard delete, keyed by the tracked contact ids.
+func (q *Queries) SyntheticDeleteNodesByIds(ctx context.Context, nodeIds []pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteNodesByIds, nodeIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const SyntheticDeleteNodesByLabelPrefix = `-- name: SyntheticDeleteNodesByLabelPrefix :execrows
 DELETE FROM node WHERE canonical_label LIKE $1 || '%'
 `
@@ -1487,6 +1516,27 @@ func (q *Queries) SyntheticDeleteTelegramExternalIdentitiesByPeerIds(ctx context
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const SyntheticGetNodeForContact = `-- name: SyntheticGetNodeForContact :one
+SELECT id, type, canonical_label, created_at, deleted_at, merged_into FROM node WHERE id = $1 AND deleted_at IS NULL
+`
+
+// Contact→node dual-write test support: fetch the person node a contact owns
+// (node.id == contact.id). Returns the live (non-soft-deleted) node row so a
+// test can assert the dual-write created it with the expected type/label.
+func (q *Queries) SyntheticGetNodeForContact(ctx context.Context, id pgtype.UUID) (*Node, error) {
+	row := q.db.QueryRow(ctx, SyntheticGetNodeForContact, id)
+	var i Node
+	err := row.Scan(
+		&i.ID,
+		&i.Type,
+		&i.CanonicalLabel,
+		&i.CreatedAt,
+		&i.DeletedAt,
+		&i.MergedInto,
+	)
+	return &i, err
 }
 
 const SyntheticListContactTaskIdsByProvider = `-- name: SyntheticListContactTaskIdsByProvider :many

@@ -237,6 +237,18 @@ func (h *Harness) cleanup(ctx context.Context) error {
 		_, err := h.support.DeleteContactsByIds(ctx, c.contactIDs)
 		return err
 	})
+	// 13a. person node (node.id == contact.id): SeedContact dual-writes a node
+	// via the real service path, so teardown must remove it too or the shared
+	// DB leaks an orphan node per seeded contact. There is no FK from
+	// node→contact, so order relative to the contact delete is free. The
+	// assertion→node FK is RESTRICT, so once a harness seeds assertions on these
+	// person nodes, those assertions must be deleted in an EARLIER cleanup step
+	// (added before this one in the sequence); no harness path seeds them today,
+	// so this delete stands alone.
+	step("person_node", func() error {
+		_, err := h.support.DeleteNodesByIds(ctx, c.contactIDs)
+		return err
+	})
 	// meeting_note scoped to the seeded synthetic host, BEFORE the mac_host
 	// delete. A profile may seed orphan_needs_review meeting_note rows against
 	// this host; the mac_host FK is ON DELETE SET NULL, so deleting the host

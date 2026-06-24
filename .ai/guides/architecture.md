@@ -158,7 +158,7 @@ sequenceDiagram
 | Table | Purpose | Key Relations |
 |-------|---------|---------------|
 | **Core** | | |
-| `contact` | People in CRM | Parent of most entities |
+| `contact` | People in CRM. ContactService dual-writes a `node(type='person')` at the contact's own id in the same tx on create — the `contact.id == node.id` invariant — and syncs `node.canonical_label` on rename | Parent of most entities; 1:1 person `node` (shared id) |
 | `contact_method` | Email, phone, social handles | → contact |
 | `note` | Freeform notes | → contact |
 | `tag` | Contact categorization | ↔ contact (via contact_tag) |
@@ -177,7 +177,7 @@ sequenceDiagram
 | **Event Bus** | | |
 | `event` | Append-only raw event log feeding the worker queue (spec §3.1) | (append-only; no FKs) |
 | **Graph (SP1)** | | |
-| `node` | Uniform registry every graph entity attaches to (person/entity/venue); caller-supplied id (person id == contact id); CHECK-enum `type`; `merged_into` self-FK merge alias; single `deleted_at` tombstone | self-FK (`merged_into`) |
+| `node` | Uniform registry every graph entity attaches to (person/entity/venue); caller-supplied id (person id == contact id, maintained by the ContactService dual-write + the `068_backfill_person_nodes` backfill); CHECK-enum `type`; `merged_into` self-FK merge alias; single `deleted_at` tombstone | self-FK (`merged_into`); person node shares the contact's id |
 | `entity_type` | Per-TYPE entity-subtype catalog (`resolution_config` JSONB; curated/provisional status) | (catalog; no FKs) |
 | `entity` | Structural subtype rows for organizations/places/topics/tags; per-instance `detail` JSONB; unique `(subtype, normalized_name)` | → node (PK/FK, ON DELETE CASCADE), → entity_type |
 | `venue` | Structural subtype rows for shared interaction containers (email threads, group chats, DMs, meetings, calls, sessions); unique `(source, kind, source_container_id)` | → node (PK/FK, ON DELETE CASCADE) |

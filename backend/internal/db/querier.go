@@ -1585,6 +1585,10 @@ type Querier interface {
 	// rows whose normalized value shares the namespace's phone prefix. Caller passes
 	// a BARE prefix; '%' is appended here.
 	SyntheticCountContactMethodsByValueNormalizedPrefix(ctx context.Context, valueNormalizedPrefix pgtype.Text) (int64, error)
+	// Contact→node dual-write test support: count contacts with an exact full_name
+	// (namespace-prefixed names are unique per test), so a rollback test asserts a
+	// failed-tx contact did not survive without paging the whole contact list.
+	SyntheticCountContactsByFullName(ctx context.Context, fullName string) (int64, error)
 	// Cleanup assertion — count surviving contact rows for the given ids.
 	SyntheticCountContactsByIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error)
 	// Harness setup collision detection (D5): count external_identity rows whose
@@ -1741,6 +1745,10 @@ type Querier interface {
 	// Cleanup step 5: messages_message rows whose guid is ns-prefixed.
 	// Caller passes a BARE prefix; '%' is appended here.
 	SyntheticDeleteMessagesMessageByGuidPrefix(ctx context.Context, guidPrefix pgtype.Text) (int64, error)
+	// Cleanup: the person node a seeded contact owns (node.id == contact.id), so
+	// the harness teardown removes the nodes its dual-writing SeedContact created
+	// alongside the contacts. Hard delete, keyed by the tracked contact ids.
+	SyntheticDeleteNodesByIds(ctx context.Context, nodeIds []pgtype.UUID) (int64, error)
 	// Graph identity cleanup: hard-delete nodes whose canonical_label is ns-prefixed.
 	// entity and venue cascade via their ON DELETE CASCADE FK to node, so this one
 	// delete removes a namespace's node+entity+venue rows. Caller passes a BARE
@@ -1769,6 +1777,10 @@ type Querier interface {
 	// tracked peer ids before the contact delete (external_identity survives contact
 	// delete via ON DELETE SET NULL and would otherwise pollute future matching).
 	SyntheticDeleteTelegramExternalIdentitiesByPeerIds(ctx context.Context, peerIds []string) (int64, error)
+	// Contact→node dual-write test support: fetch the person node a contact owns
+	// (node.id == contact.id). Returns the live (non-soft-deleted) node row so a
+	// test can assert the dual-write created it with the expected type/label.
+	SyntheticGetNodeForContact(ctx context.Context, id pgtype.UUID) (*Node, error)
 	// Todoist replay: snapshot the set of contact_task ids for a provider so the
 	// replay can diff before/after its (globally-scoped) reconcile and track the
 	// rows it created — even for cadence-bearing contacts it did not seed — so

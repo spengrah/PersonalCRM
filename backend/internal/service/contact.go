@@ -269,10 +269,19 @@ func (s *ContactService) CreateContact(ctx context.Context, req repository.Creat
 	txQueries := db.New(tx)
 	contactRepo := repository.NewContactRepository(txQueries)
 	contactMethodRepo := repository.NewContactMethodRepository(txQueries)
+	nodeRepo := repository.NewNodeRepository(txQueries)
 
 	contact, err = contactRepo.CreateContact(ctx, req)
 	if err != nil {
 		return nil, uuid.Nil, err
+	}
+
+	// Dual-write the person node at the contact's own id (node.id ==
+	// contact.id) inside the same tx so the node registry stays in lockstep
+	// with contact creation — both commit or both roll back. Node creation is
+	// silent graph infra (no event); assertion events are the graph's signal.
+	if _, err = nodeRepo.CreateNodeTx(ctx, tx, contact.ID, repository.NodeTypePerson, contact.FullName); err != nil {
+		return nil, uuid.Nil, fmt.Errorf("create person node: %w", err)
 	}
 
 	createdMethods, err := createContactMethods(ctx, contactMethodRepo, contact.ID, methods)
@@ -341,6 +350,7 @@ func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req re
 	txQueries := db.New(tx)
 	contactRepo := repository.NewContactRepository(txQueries)
 	contactMethodRepo := repository.NewContactMethodRepository(txQueries)
+	nodeRepo := repository.NewNodeRepository(txQueries)
 
 	existingContact, err := contactRepo.GetContact(ctx, id)
 	if err != nil {
@@ -376,6 +386,15 @@ func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req re
 
 	if _, err = contactRepo.UpdateContact(ctx, id, req); err != nil {
 		return nil, uuid.Nil, err
+	}
+
+	// Keep the person node's display label synced with the contact's name.
+	// UpdateContact always writes full_name in this same tx, so we sync the
+	// node to req.FullName UNCONDITIONALLY — gating on a pre-read name compare
+	// would let a stale-read non-rename update leave node and contact divergent
+	// under concurrency. A redundant no-op UPDATE on a non-rename edit is cheap.
+	if err = nodeRepo.UpdateNodeCanonicalLabelTx(ctx, tx, id, req.FullName); err != nil {
+		return nil, uuid.Nil, fmt.Errorf("sync person node label: %w", err)
 	}
 
 	if err := s.cadence.ApplyContactByOverride(ctx, tx, id, newContactBy); err != nil {
@@ -1316,6 +1335,16 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 	mergedContact, err = txContactRepo.UpdateContact(ctx, req.TargetContactID, updateReq)
 	if err != nil {
 		return nil, fmt.Errorf("update target contact: %w", err)
+	}
+
+	// Keep the target's person node label synced with the merged name
+	// (node.id == contact.id). The UpdateContact above always writes full_name
+	// in this same tx, so sync the node UNCONDITIONALLY to avoid divergence.
+	// The source contact's node tombstoning is a later soft-delete-propagation
+	// concern.
+	nodeRepo := repository.NewNodeRepository(txQueries)
+	if err := nodeRepo.UpdateNodeCanonicalLabelTx(ctx, tx, req.TargetContactID, updateReq.FullName); err != nil {
+		return nil, fmt.Errorf("sync target person node label: %w", err)
 	}
 
 	// 9a. Forward-max merged cadence columns through
