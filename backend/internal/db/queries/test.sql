@@ -561,6 +561,12 @@ DELETE FROM node WHERE canonical_label LIKE @label_prefix || '%';
 -- prefix-matched). Caller passes a BARE prefix; '%' is appended here.
 DELETE FROM entity_type WHERE key LIKE @key_prefix || '%';
 
+-- name: SyntheticDeletePredicatesByKeyPrefix :execrows
+-- Predicate-catalog cleanup: a test that mints its own ns-prefixed provisional
+-- predicates clears them by key prefix (the curated seed rows use bare keys and
+-- are never prefix-matched). Caller passes a BARE prefix; '%' is appended here.
+DELETE FROM predicate WHERE key LIKE @key_prefix || '%';
+
 -- ============================================================================
 -- crm-admin --reset-and-seed support: a HARD wipe of every live data table
 -- so a staging instance can be reset to a known synthetic baseline. Preserves

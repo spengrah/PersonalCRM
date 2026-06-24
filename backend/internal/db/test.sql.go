@@ -483,6 +483,7 @@ TRUNCATE TABLE
     note_embedding,
     oauth_credential,
     phone_call,
+    predicate,
     prompt_query,
     river_job,
     sync_staleness_breach,
@@ -1350,6 +1351,21 @@ DELETE FROM note WHERE contact_id = ANY($1::uuid[])
 // Cleanup step 12: note by contact.
 func (q *Queries) SyntheticDeleteNotesByContactIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteNotesByContactIds, contactIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const SyntheticDeletePredicatesByKeyPrefix = `-- name: SyntheticDeletePredicatesByKeyPrefix :execrows
+DELETE FROM predicate WHERE key LIKE $1 || '%'
+`
+
+// Predicate-catalog cleanup: a test that mints its own ns-prefixed provisional
+// predicates clears them by key prefix (the curated seed rows use bare keys and
+// are never prefix-matched). Caller passes a BARE prefix; '%' is appended here.
+func (q *Queries) SyntheticDeletePredicatesByKeyPrefix(ctx context.Context, keyPrefix pgtype.Text) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeletePredicatesByKeyPrefix, keyPrefix)
 	if err != nil {
 		return 0, err
 	}

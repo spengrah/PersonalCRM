@@ -653,3 +653,10 @@ func (r *SyntheticSupportRepository) DeleteNodesByLabelPrefix(ctx context.Contex
 func (r *SyntheticSupportRepository) DeleteEntityTypesByKeyPrefix(ctx context.Context, prefix string) (int64, error) {
 	return r.queries.SyntheticDeleteEntityTypesByKeyPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
 }
+
+// DeletePredicatesByKeyPrefix hard-deletes predicate-catalog rows whose key is
+// ns-prefixed (a test that mints its own provisional predicates; the curated
+// seed rows use bare keys and are never prefix-matched).
+func (r *SyntheticSupportRepository) DeletePredicatesByKeyPrefix(ctx context.Context, prefix string) (int64, error) {
+	return r.queries.SyntheticDeletePredicatesByKeyPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
+}
