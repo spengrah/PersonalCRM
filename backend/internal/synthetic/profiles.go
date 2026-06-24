@@ -50,6 +50,7 @@ type ProfileResult struct {
 	StrandedMessages  int
 	UnmatchedCalendar int
 	OrphanMeetingNote int
+	SeededAssertions  int
 }
 
 // ProfileParams returns the default SeedParams for a named profile (error on an
@@ -73,6 +74,7 @@ func ProfileParams(name Profile) (SeedParams, error) {
 				StrandedMessages:  1,
 				UnmatchedCalendar: 1,
 				OrphanMeetingNote: 1,
+				SeededAssertions:  2,
 			},
 		}, nil
 	case ProfileProdShaped:
@@ -87,6 +89,7 @@ func ProfileParams(name Profile) (SeedParams, error) {
 				StrandedMessages:  5,
 				UnmatchedCalendar: 7,
 				OrphanMeetingNote: 4,
+				SeededAssertions:  4,
 			},
 		}, nil
 	default:
@@ -301,6 +304,23 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 			return res, fmt.Errorf("profile %s: seed orphan meeting note %d: %w", params.Profile, i, err)
 		}
 		res.OrphanMeetingNote++
+	}
+
+	// Graph (SP1) assertions on the first catalog contact's person node
+	// (node.id == contact.id). Seeded LAST so the generator-PRNG advancement these
+	// FactAssertion calls cause does not shift the deterministic peer-id / handle
+	// sequence the earlier source replays depend on (a mid-sequence insert would
+	// collide a "stranded" peer with a seeded contact's identity). Each
+	// FactAssertion produces a distinct value + proposition_key; preference is a
+	// multi-cardinality fact so they coexist (all accepted), giving the graph
+	// surfaces content without supersession.
+	if firstCatalogContactID != uuid.Nil {
+		for i := 0; i < params.Counts.SeededAssertions; i++ {
+			if _, err := h.ReplayAssertion(ctx, firstCatalogContactID, gen.FactAssertion("preference")); err != nil {
+				return res, fmt.Errorf("profile %s: replay assertion %d: %w", params.Profile, i, err)
+			}
+			res.SeededAssertions++
+		}
 	}
 
 	return res, nil

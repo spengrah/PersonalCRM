@@ -163,10 +163,9 @@ func (h *assertHarness) eventExists(t *testing.T, ctx context.Context, sourceID 
 	return false
 }
 
-// acceptedSourceID / supersededSourceID / provenanceSourceID build the event
+// acceptedSourceID / supersededSourceID / rejectedSourceID build the event
 // source_id keys an assertion's transitions produce.
 func acceptedSourceID(id uuid.UUID) string   { return id.String() + ":accepted" }
-func proposedSourceID(id uuid.UUID) string   { return id.String() + ":proposed" }
 func supersededSourceID(id uuid.UUID) string { return id.String() + ":superseded" }
 func rejectedSourceID(id uuid.UUID) string   { return id.String() + ":rejected" }
 
