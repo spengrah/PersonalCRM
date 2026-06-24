@@ -1463,6 +1463,10 @@ type Querier interface {
 	// Settle Gate A (Mac-contact seeded): the external_contact row for the entity
 	// id exists linked to a CRM contact (match_status='matched').
 	SyntheticCountMatchedExternalContactBySourceId(ctx context.Context, sourceID string) (int64, error)
+	// Graph (SP1) test support: count nodes whose canonical_label is ns-prefixed, so
+	// a test can scope assertions to its own namespace's nodes on the shared test DB.
+	// Caller passes a BARE prefix; '%' is appended here.
+	SyntheticCountNodesByLabelPrefix(ctx context.Context, labelPrefix pgtype.Text) (int64, error)
 	// gcal seeded: the calendar_event for the gcal id has the contact in
 	// matched_contact_ids AND last_contacted_updated=true (the attended interaction
 	// published). Idempotent: a re-replay leaves the row processed.
@@ -1551,6 +1555,11 @@ type Querier interface {
 	// Cleanup step 13: contact by tracked id. A true DELETE (not soft) so
 	// ON DELETE CASCADE fires for contact_enrichment (and any cascade FK).
 	SyntheticDeleteContactsByIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error)
+	// Graph (SP1) cleanup: entity_type is a catalog table with no canonical_label, so
+	// a test that seeds its own ns-prefixed entity_type rows clears them by key
+	// prefix (the curated PR2 seed rows use bare keys and are never prefix-matched).
+	// Caller passes a BARE prefix; '%' is appended here.
+	SyntheticDeleteEntityTypesByKeyPrefix(ctx context.Context, keyPrefix pgtype.Text) (int64, error)
 	// Cleanup step 1: claims for this replay's events (by tracked event id).
 	SyntheticDeleteEventConsumerClaimsByEventIds(ctx context.Context, eventIds []pgtype.UUID) (int64, error)
 	// Cleanup step 3: events by tracked id (NOT by source — that would wipe
@@ -1579,6 +1588,11 @@ type Querier interface {
 	// Cleanup step 5: messages_message rows whose guid is ns-prefixed.
 	// Caller passes a BARE prefix; '%' is appended here.
 	SyntheticDeleteMessagesMessageByGuidPrefix(ctx context.Context, guidPrefix pgtype.Text) (int64, error)
+	// Graph (SP1) cleanup: hard-delete nodes whose canonical_label is ns-prefixed.
+	// entity and venue cascade via their ON DELETE CASCADE FK to node, so this one
+	// delete removes a namespace's node+entity+venue rows. Caller passes a BARE
+	// prefix; '%' is appended here.
+	SyntheticDeleteNodesByLabelPrefix(ctx context.Context, labelPrefix pgtype.Text) (int64, error)
 	// Cleanup step 12: note by contact.
 	SyntheticDeleteNotesByContactIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error)
 	// Cleanup: delete the group telegram_chat_config rows a group replay created, by

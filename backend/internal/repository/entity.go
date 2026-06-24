@@ -10,6 +10,16 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// emptyJSONObject is the JSONB default for a nil patch/detail/config. A nil
+// []byte sent to a NOT NULL JSONB column inserts SQL NULL (NOT the column
+// DEFAULT), so the repository substitutes '{}' to preserve the table contract.
+func jsonbOrEmpty(b []byte) []byte {
+	if len(b) == 0 {
+		return []byte("{}")
+	}
+	return b
+}
+
 // Entity subtype constants (the curated-core entity_type keys; PR2 seeds the
 // rows). Provisional subtypes are minted at runtime by SP3.
 const (
@@ -105,7 +115,7 @@ func createEntity(ctx context.Context, q db.Querier, req CreateEntityRequest) (*
 		Subtype:        req.Subtype,
 		NormalizedName: req.NormalizedName,
 		ExternalRef:    stringToPgText(req.ExternalRef),
-		Detail:         req.Detail,
+		Detail:         jsonbOrEmpty(req.Detail),
 	})
 	if err != nil {
 		return nil, err
@@ -149,7 +159,9 @@ func (r *EntityRepository) FindEntityBySubtypeName(ctx context.Context, subtype,
 func (r *EntityRepository) UpdateEntityDetail(ctx context.Context, nodeID uuid.UUID, patch []byte) error {
 	return r.queries.UpdateEntityDetail(ctx, db.UpdateEntityDetailParams{
 		NodeID: uuidToPgUUID(nodeID),
-		Detail: patch,
+		// A nil patch would make `detail || NULL` evaluate to NULL (violating the
+		// NOT NULL); '{}' makes it a no-op merge that preserves existing keys.
+		Detail: jsonbOrEmpty(patch),
 	})
 }
 
@@ -168,7 +180,7 @@ func (r *EntityRepository) UpsertEntityType(ctx context.Context, req UpsertEntit
 	return r.queries.UpsertEntityType(ctx, db.UpsertEntityTypeParams{
 		Key:              req.Key,
 		Description:      req.Description,
-		ResolutionConfig: req.ResolutionConfig,
+		ResolutionConfig: jsonbOrEmpty(req.ResolutionConfig),
 		Status:           req.Status,
 	})
 }
