@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"testing"
 
 	"personal-crm/backend/internal/config"
@@ -27,20 +28,58 @@ import (
 // against an ISOLATED per-test clone (NewEphemeralClone), never the shared DB,
 // because it rolls the schema down.
 
-// expectedCuratedPredicates is the exact set of curated-core predicate keys the
-// seed migration installs (plan §3). The seed assertions check presence/values
-// of these specific keys rather than a global count.
-var expectedCuratedPredicates = []string{
-	"lives_in", "home_address", "works_at", "job_title", "birthday",
-	"partner_of", "parent_of", "child_of", "sibling_of",
-	"grandparent_of", "grandchild_of", "aunt_uncle_of", "niece_nephew_of", "cousin_of",
-	"health_condition", "interested_in", "preference", "how_met", "tagged_as",
-	"knows", "introduced_by",
-	"job_seeking", "on_sabbatical", "traveling", "occurrence", "within",
+// expectedCuratedPredicate captures the curated-seed contract for one predicate:
+// the discriminating fields the table-driven test verifies against the live
+// seed. proposition_bucket, cardinality, and the review policy are the most
+// behaviorally-significant, so they are checked for EVERY seeded predicate, not
+// spot-checked.
+type expectedCuratedPredicate struct {
+	kind         string
+	subjectType  string
+	objectType   string // edges only; "" for facts
+	valueType    string // facts only; "" for edges
+	cardinality  string
+	symmetric    bool
+	inverse      string // "" when none
+	temporal     string
+	bucket       string
+	reviewPolicy string
+}
+
+// expectedCuratedCatalog is the exact curated seed the migration installs. The
+// test asserts the live curated set equals these keys EXACTLY and that every
+// row's discriminating fields match.
+var expectedCuratedCatalog = map[string]expectedCuratedPredicate{
+	"lives_in":         {"edge", "person", "place", "", "single", false, "", "mutable", "year", "auto-if-confident"},
+	"home_address":     {"fact", "person", "", "text", "single", false, "", "mutable", "year", "auto-if-confident"},
+	"works_at":         {"edge", "person", "organization", "", "single", false, "", "mutable", "year", "auto-if-confident"},
+	"job_title":        {"fact", "person", "", "text", "single", false, "", "mutable", "year", "auto-if-confident"},
+	"birthday":         {"fact", "person", "", "date", "single", false, "", "permanent", "none", "auto-if-confident"},
+	"partner_of":       {"edge", "person", "person", "", "single", true, "", "mutable", "none", "always-confirm"},
+	"parent_of":        {"edge", "person", "person", "", "multi", false, "child_of", "permanent", "none", "always-confirm"},
+	"child_of":         {"edge", "person", "person", "", "multi", false, "parent_of", "permanent", "none", "always-confirm"},
+	"sibling_of":       {"edge", "person", "person", "", "multi", true, "", "permanent", "none", "always-confirm"},
+	"grandparent_of":   {"edge", "person", "person", "", "multi", false, "grandchild_of", "permanent", "none", "auto-if-confident"},
+	"grandchild_of":    {"edge", "person", "person", "", "multi", false, "grandparent_of", "permanent", "none", "auto-if-confident"},
+	"aunt_uncle_of":    {"edge", "person", "person", "", "multi", false, "niece_nephew_of", "permanent", "none", "auto-if-confident"},
+	"niece_nephew_of":  {"edge", "person", "person", "", "multi", false, "aunt_uncle_of", "permanent", "none", "auto-if-confident"},
+	"cousin_of":        {"edge", "person", "person", "", "multi", true, "", "permanent", "none", "auto-if-confident"},
+	"health_condition": {"fact", "person", "", "text", "multi", false, "", "mutable", "none", "always-confirm"},
+	"interested_in":    {"edge", "person", "topic", "", "multi", false, "", "mutable", "none", "auto-if-confident"},
+	"preference":       {"fact", "person", "", "text", "multi", false, "", "mutable", "none", "auto-if-confident"},
+	"how_met":          {"fact", "person", "", "text", "single", false, "", "permanent", "none", "auto-if-confident"},
+	"tagged_as":        {"edge", "person", "tag", "", "multi", false, "", "permanent", "none", "auto-if-confident"},
+	"knows":            {"edge", "person", "person", "", "multi", true, "", "mutable", "none", "auto-if-confident"},
+	"introduced_by":    {"edge", "person", "person", "", "single", false, "", "permanent", "none", "auto-if-confident"},
+	"job_seeking":      {"fact", "person", "", "bool", "single", false, "", "bounded", "day", "auto-if-confident"},
+	"on_sabbatical":    {"fact", "person", "", "bool", "single", false, "", "bounded", "day", "auto-if-confident"},
+	"traveling":        {"fact", "person", "", "bool", "single", false, "", "bounded", "day", "auto-if-confident"},
+	"occurrence":       {"fact", "person", "", "text", "multi", false, "", "bounded", "day", "always-confirm"},
+	"within":           {"edge", "place", "place", "", "single", false, "", "permanent", "none", "auto-if-confident"},
 }
 
 // expectedCuratedSubtypes is the exact set of entity_type subtype keys the seed
-// migration installs (plan §3).
+// migration installs.
 var expectedCuratedSubtypes = []string{"organization", "place", "topic", "tag"}
 
 func TestPredicateCatalog_Seed_Integration(t *testing.T) {
@@ -53,22 +92,68 @@ func TestPredicateCatalog_Seed_Integration(t *testing.T) {
 	predicateRepo := repository.NewPredicateRepository(database.Queries)
 	entityRepo := repository.NewEntityRepository(database.Queries)
 
-	t.Run("seed installs exactly the expected curated predicate keys", func(t *testing.T) {
+	t.Run("curated catalog is EXACTLY the expected seeded set", func(t *testing.T) {
 		t.Parallel()
 		curated, err := predicateRepo.ListCurated(ctx)
 		require.NoError(t, err)
 
-		got := make(map[string]repository.Predicate, len(curated))
+		// The curated catalog is global, seed-only data (provisional rows minted at
+		// runtime are excluded from ListCurated), so the live curated set must equal
+		// the expected key set EXACTLY — an extra row is as much a seed bug as a
+		// missing one.
+		gotKeys := make([]string, 0, len(curated))
 		for _, p := range curated {
-			got[p.Key] = p
+			gotKeys = append(gotKeys, p.Key)
 		}
-		for _, key := range expectedCuratedPredicates {
-			_, ok := got[key]
-			assert.Truef(t, ok, "curated catalog must contain %q", key)
+		wantKeys := make([]string, 0, len(expectedCuratedCatalog))
+		for k := range expectedCuratedCatalog {
+			wantKeys = append(wantKeys, k)
 		}
-		// Every curated row really is status='curated' (ListCurated filters on it).
-		for _, p := range curated {
-			assert.Equal(t, repository.PredicateStatusCurated, p.Status, p.Key)
+		sort.Strings(gotKeys)
+		sort.Strings(wantKeys)
+		assert.Equal(t, wantKeys, gotKeys, "curated catalog must be EXACTLY the seeded set")
+	})
+
+	t.Run("every seeded predicate's discriminating fields match the contract", func(t *testing.T) {
+		t.Parallel()
+		// Table-driven over ALL 25 curated predicates: the inverse-pair linkage,
+		// the symmetric flag, kind/payload typing, cardinality, temporal profile,
+		// proposition bucket, and review policy are verified for every row (not a
+		// subset spot-check), so a seed metadata typo on any predicate fails here.
+		for key, want := range expectedCuratedCatalog {
+			p, err := predicateRepo.GetPredicate(ctx, key)
+			require.NoErrorf(t, err, "predicate %q must exist", key)
+
+			assert.Equalf(t, repository.PredicateStatusCurated, p.Status, "%s status", key)
+			assert.Equalf(t, want.kind, p.Kind, "%s kind", key)
+			assert.Equalf(t, want.subjectType, p.SubjectType, "%s subject_type", key)
+			assert.Equalf(t, want.cardinality, p.Cardinality, "%s cardinality", key)
+			assert.Equalf(t, want.symmetric, p.Symmetric, "%s symmetric", key)
+			assert.Equalf(t, want.temporal, p.TemporalProfile, "%s temporal_profile", key)
+			assert.Equalf(t, want.bucket, p.PropositionBucket, "%s proposition_bucket", key)
+			assert.Equalf(t, want.reviewPolicy, p.DefaultReviewPolicy, "%s default_review_policy", key)
+			assert.Nilf(t, p.Embedding, "%s ships with no embedding", key)
+
+			// Payload typing: edges carry an object_type and no value_type; facts
+			// carry a value_type and no object_type (the kind/payload CHECK).
+			if want.kind == repository.PredicateKindEdge {
+				require.NotNilf(t, p.ObjectType, "%s edge must have object_type", key)
+				assert.Equalf(t, want.objectType, *p.ObjectType, "%s object_type", key)
+				assert.Nilf(t, p.ValueType, "%s edge must have no value_type", key)
+			} else {
+				require.NotNilf(t, p.ValueType, "%s fact must have value_type", key)
+				assert.Equalf(t, want.valueType, *p.ValueType, "%s value_type", key)
+				assert.Nilf(t, p.ObjectType, "%s fact must have no object_type", key)
+			}
+
+			// Inverse linkage (both directions are checked because every paired key
+			// is itself a row in the table).
+			if want.inverse == "" {
+				assert.Nilf(t, p.InversePredicate, "%s must have no inverse", key)
+			} else {
+				require.NotNilf(t, p.InversePredicate, "%s must have an inverse", key)
+				assert.Equalf(t, want.inverse, *p.InversePredicate, "%s inverse", key)
+			}
 		}
 	})
 
@@ -89,94 +174,22 @@ func TestPredicateCatalog_Seed_Integration(t *testing.T) {
 		assert.JSONEq(t, `{}`, string(org.ResolutionConfig))
 	})
 
-	t.Run("spot-check sensitive predicate fields", func(t *testing.T) {
+	t.Run("soft priors carry through on the predicates that set them", func(t *testing.T) {
 		t.Parallel()
-
-		// lives_in: edge → person→place, single, mutable, year bucket, auto-apply.
+		// base_rate_days / typical_duration_days are not in the discriminating-
+		// fields table; verify a representative mutable prior and a bounded
+		// duration prior round-trip as the seeded integers.
 		livesIn, err := predicateRepo.GetPredicate(ctx, "lives_in")
 		require.NoError(t, err)
-		assert.Equal(t, repository.PredicateKindEdge, livesIn.Kind)
-		assert.Equal(t, "person", livesIn.SubjectType)
-		require.NotNil(t, livesIn.ObjectType)
-		assert.Equal(t, "place", *livesIn.ObjectType)
-		assert.Nil(t, livesIn.ValueType)
-		assert.Equal(t, repository.PredicateCardinalitySingle, livesIn.Cardinality)
-		assert.Equal(t, repository.PredicateTemporalMutable, livesIn.TemporalProfile)
-		assert.Equal(t, repository.PredicateBucketYear, livesIn.PropositionBucket)
-		assert.Equal(t, repository.PredicateReviewAutoIfConfident, livesIn.DefaultReviewPolicy)
 		require.NotNil(t, livesIn.BaseRateDays)
 		assert.Equal(t, int32(2190), *livesIn.BaseRateDays)
-		assert.Nil(t, livesIn.Embedding, "seeded predicates ship with no embedding")
+		assert.Nil(t, livesIn.TypicalDurationDays)
 
-		// birthday: permanent fact, none bucket, date value.
-		birthday, err := predicateRepo.GetPredicate(ctx, "birthday")
-		require.NoError(t, err)
-		assert.Equal(t, repository.PredicateKindFact, birthday.Kind)
-		require.NotNil(t, birthday.ValueType)
-		assert.Equal(t, repository.PredicateValueTypeDate, *birthday.ValueType)
-		assert.Nil(t, birthday.ObjectType)
-		assert.Equal(t, repository.PredicateTemporalPermanent, birthday.TemporalProfile)
-		assert.Equal(t, repository.PredicateBucketNone, birthday.PropositionBucket)
-
-		// health_condition: always-confirm, multi, text fact.
-		health, err := predicateRepo.GetPredicate(ctx, "health_condition")
-		require.NoError(t, err)
-		assert.Equal(t, repository.PredicateReviewAlwaysConfirm, health.DefaultReviewPolicy)
-		assert.Equal(t, repository.PredicateCardinalityMulti, health.Cardinality)
-		require.NotNil(t, health.ValueType)
-		assert.Equal(t, repository.PredicateValueTypeText, *health.ValueType)
-
-		// partner_of: symmetric, single, always-confirm.
-		partner, err := predicateRepo.GetPredicate(ctx, "partner_of")
-		require.NoError(t, err)
-		assert.True(t, partner.Symmetric, "partner_of is symmetric")
-		assert.Equal(t, repository.PredicateCardinalitySingle, partner.Cardinality)
-		assert.Equal(t, repository.PredicateReviewAlwaysConfirm, partner.DefaultReviewPolicy)
-
-		// within: the place→place hierarchy edge — subject is an entity subtype,
-		// NOT person (the first such seeded predicate).
-		within, err := predicateRepo.GetPredicate(ctx, "within")
-		require.NoError(t, err)
-		assert.Equal(t, repository.PredicateKindEdge, within.Kind)
-		assert.Equal(t, "place", within.SubjectType)
-		require.NotNil(t, within.ObjectType)
-		assert.Equal(t, "place", *within.ObjectType)
-		assert.Equal(t, repository.PredicateCardinalitySingle, within.Cardinality)
-
-		// occurrence: bounded text fact with a typical duration prior.
 		occ, err := predicateRepo.GetPredicate(ctx, "occurrence")
 		require.NoError(t, err)
-		assert.Equal(t, repository.PredicateTemporalBounded, occ.TemporalProfile)
 		require.NotNil(t, occ.TypicalDurationDays)
 		assert.Equal(t, int32(7), *occ.TypicalDurationDays)
-	})
-
-	t.Run("inverse pairs resolve in both directions", func(t *testing.T) {
-		t.Parallel()
-		pairs := [][2]string{
-			{"parent_of", "child_of"},
-			{"grandparent_of", "grandchild_of"},
-			{"aunt_uncle_of", "niece_nephew_of"},
-		}
-		for _, pair := range pairs {
-			a, err := predicateRepo.GetPredicate(ctx, pair[0])
-			require.NoError(t, err)
-			require.NotNilf(t, a.InversePredicate, "%s must have an inverse", pair[0])
-			assert.Equalf(t, pair[1], *a.InversePredicate, "%s inverse", pair[0])
-
-			b, err := predicateRepo.GetPredicate(ctx, pair[1])
-			require.NoError(t, err)
-			require.NotNilf(t, b.InversePredicate, "%s must have an inverse", pair[1])
-			assert.Equalf(t, pair[0], *b.InversePredicate, "%s inverse", pair[1])
-		}
-
-		// Symmetric and non-paired predicates carry no inverse.
-		sibling, err := predicateRepo.GetPredicate(ctx, "sibling_of")
-		require.NoError(t, err)
-		assert.Nil(t, sibling.InversePredicate, "symmetric sibling_of has no inverse_predicate")
-		livesIn, err := predicateRepo.GetPredicate(ctx, "lives_in")
-		require.NoError(t, err)
-		assert.Nil(t, livesIn.InversePredicate)
+		assert.Nil(t, occ.BaseRateDays)
 	})
 
 	t.Run("kind/payload CHECK rejects an edge predicate carrying a value_type", func(t *testing.T) {
@@ -198,7 +211,6 @@ func TestPredicateCatalog_Seed_Integration(t *testing.T) {
 			TemporalProfile:     repository.PredicateTemporalMutable,
 			DefaultReviewPolicy: repository.PredicateReviewAutoIfConfident,
 			PropositionBucket:   repository.PredicateBucketDay,
-			Status:              repository.PredicateStatusProvisional,
 		})
 		require.Error(t, err, "edge + value_type must violate the kind/payload CHECK")
 	})
@@ -221,7 +233,6 @@ func TestPredicateCatalog_Seed_Integration(t *testing.T) {
 			DefaultSalience:     40,
 			DefaultReviewPolicy: repository.PredicateReviewAutoIfConfident,
 			PropositionBucket:   repository.PredicateBucketDay,
-			Status:              repository.PredicateStatusProvisional,
 			Description:         "synthetic provisional predicate",
 		})
 		require.NoError(t, err)
@@ -280,7 +291,25 @@ func TestPredicateCatalog_MigrationDownUp(t *testing.T) {
 		TemporalProfile:     repository.PredicateTemporalMutable,
 		DefaultReviewPolicy: repository.PredicateReviewAutoIfConfident,
 		PropositionBucket:   repository.PredicateBucketDay,
-		Status:              repository.PredicateStatusProvisional,
+	})
+	require.NoError(t, err)
+
+	// Insert a provisional EDGE whose inverse_predicate points at a SEEDED key.
+	// The seed-down must clear THIS link (not just the seeded inverse-pair links)
+	// before deleting the seeded rows, or the restrict self-FK blocks rollback.
+	const linkedProvisionalKey = "test-provisional-linked"
+	parentKey := "parent_of"
+	objectPerson := "person"
+	_, err = predicateRepo.CreateProvisional(ctx, repository.CreatePredicateRequest{
+		Key:                 linkedProvisionalKey,
+		Kind:                repository.PredicateKindEdge,
+		SubjectType:         "person",
+		ObjectType:          &objectPerson,
+		Cardinality:         repository.PredicateCardinalityMulti,
+		InversePredicate:    &parentKey,
+		TemporalProfile:     repository.PredicateTemporalPermanent,
+		DefaultReviewPolicy: repository.PredicateReviewAutoIfConfident,
+		PropositionBucket:   repository.PredicateBucketNone,
 	})
 	require.NoError(t, err)
 
@@ -292,7 +321,7 @@ func TestPredicateCatalog_MigrationDownUp(t *testing.T) {
 	require.NoError(t, m.Steps(-1), "roll the seed migration down one step")
 
 	// Every seeded curated key is gone...
-	for _, key := range expectedCuratedPredicates {
+	for key := range expectedCuratedCatalog {
 		_, err := predicateRepo.GetPredicate(ctx, key)
 		require.ErrorIsf(t, err, db.ErrNotFound, "seed-down must remove curated key %q", key)
 	}
@@ -301,10 +330,17 @@ func TestPredicateCatalog_MigrationDownUp(t *testing.T) {
 		_, err := entityRepo.GetEntityType(ctx, key)
 		require.ErrorIsf(t, err, db.ErrNotFound, "seed-down must remove curated subtype %q", key)
 	}
-	// ...but the provisional row survives (seed-down deletes only seeded keys).
+	// ...but the provisional rows survive (seed-down deletes only seeded keys).
 	survivor, err := predicateRepo.GetPredicate(ctx, provisionalKey)
 	require.NoError(t, err, "seed-down must NOT touch a provisional predicate")
 	assert.Equal(t, provisionalKey, survivor.Key)
+
+	// The provisional edge that pointed its inverse at a seeded key survives too:
+	// the seed-down cleared its inverse link (so the seeded-row delete didn't trip
+	// the restrict self-FK) but kept the row itself.
+	linked, err := predicateRepo.GetPredicate(ctx, linkedProvisionalKey)
+	require.NoError(t, err, "seed-down must NOT delete a provisional row linked to a seeded key")
+	assert.Nil(t, linked.InversePredicate, "seed-down clears the inverse link that pointed at a seeded key")
 
 	// Roll down a second step: 065 (the table) down — the predicate table is now
 	// dropped. A query against it errors (not ErrNotFound — the relation is gone).

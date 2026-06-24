@@ -86,9 +86,10 @@ type Predicate struct {
 	Embedding           *pgvector.Vector `json:"embedding,omitempty"`
 }
 
-// CreatePredicateRequest is the input for minting a (typically provisional)
-// predicate. Nullable fields are pointers; an embedding is never set here (it
-// defaults to NULL).
+// CreatePredicateRequest is the input for minting a provisional predicate.
+// Nullable fields are pointers; an embedding is never set here (it defaults to
+// NULL). Status is NOT a field — CreateProvisional always lands 'provisional';
+// curated rows are installed only by the seed migration, never at runtime.
 type CreatePredicateRequest struct {
 	Key                 string
 	Kind                string
@@ -104,7 +105,6 @@ type CreatePredicateRequest struct {
 	DefaultSalience     int16
 	DefaultReviewPolicy string
 	PropositionBucket   string
-	Status              string
 	Description         string
 	Synonyms            []string
 }
@@ -236,8 +236,9 @@ func (r *PredicateRepository) ListByStatus(ctx context.Context, status string) (
 	return predicates, nil
 }
 
-// CreateProvisional mints a predicate (the embedding stays NULL). The caller
-// supplies the full typing; the kind/payload CHECK rejects an inconsistent row.
+// CreateProvisional mints a provisional predicate (status is always
+// 'provisional'; the embedding stays NULL). The caller supplies the full typing;
+// the kind/payload CHECK rejects an inconsistent row.
 func (r *PredicateRepository) CreateProvisional(ctx context.Context, req CreatePredicateRequest) (*Predicate, error) {
 	// A nil []string sent to the NOT NULL synonyms column inserts SQL NULL (not
 	// the column DEFAULT), so substitute an empty array to preserve the contract.
@@ -260,9 +261,10 @@ func (r *PredicateRepository) CreateProvisional(ctx context.Context, req CreateP
 		DefaultSalience:     req.DefaultSalience,
 		DefaultReviewPolicy: req.DefaultReviewPolicy,
 		PropositionBucket:   req.PropositionBucket,
-		Status:              req.Status,
-		Description:         req.Description,
-		Synonyms:            synonyms,
+		// Runtime minting always lands provisional; curated is seed-migration-only.
+		Status:      PredicateStatusProvisional,
+		Description: req.Description,
+		Synonyms:    synonyms,
 	})
 	if err != nil {
 		return nil, err
