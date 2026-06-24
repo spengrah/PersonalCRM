@@ -397,6 +397,13 @@ type Querier interface {
 	// Delete all OAuth credentials for a provider
 	DeleteOAuthCredentialByProvider(ctx context.Context, provider string) error
 	DeleteOldSyncLogs(ctx context.Context, createdAt pgtype.Timestamptz) error
+	// Companion to DeleteProvisionalPredicates: clears runtime-minted provisional
+	// entity subtypes; the curated subtypes (status='curated') survive.
+	DeleteProvisionalEntityTypes(ctx context.Context) error
+	// Part of the reset (called right after ResetSyntheticData by the repository):
+	// clears runtime-minted provisional predicates so a reset restores a known
+	// baseline. The curated catalog (status='curated', migration 066) is untouched.
+	DeleteProvisionalPredicates(ctx context.Context) error
 	// Retention prune: drops resolved breaches whose resolved_at predates the
 	// cutoff. Open breaches (resolved_at IS NULL) are never touched.
 	DeleteResolvedStalenessBreachesBefore(ctx context.Context, cutoff pgtype.Timestamptz) error
@@ -1303,7 +1310,18 @@ type Querier interface {
 	// ONLY by crm-admin --reset-and-seed (CRM_ENV != production, service stopped,
 	// --yes confirmed). The catalog guard in synthetic_reset_integration_test.go
 	// fails if a public table is added that is not in this list / schema_migrations /
-	// river_%.
+	// river_% / the catalog tables (predicate, entity_type).
+	//
+	// Catalog tables (predicate, entity_type) are NOT truncated: they hold curated
+	// REFERENCE data installed by migration 066, and migrations run BEFORE a reset
+	// and 066 does NOT re-run on an already-migrated DB — truncating would leave an
+	// empty catalog that silently breaks the assert() write path (predicate-by-key
+	// → ErrNotFound) and the integration tests that call this between runs. A reset
+	// MUST still restore a known baseline, so the repository's ResetSyntheticData
+	// ALSO runs DeleteProvisionalPredicates + DeleteProvisionalEntityTypes (right
+	// after this TRUNCATE) to clear runtime-minted PROVISIONAL rows while leaving the
+	// curated catalog intact. (Namespaced test cleanup still uses
+	// SyntheticDelete*ByKeyPrefix for its own provisional rows.)
 	ResetSyntheticData(ctx context.Context) error
 	ResetTelegramChatConfigBackfill(ctx context.Context, telegramChatID int64) error
 	// Sets linked_kind, linked_id, linkage_state='linked',

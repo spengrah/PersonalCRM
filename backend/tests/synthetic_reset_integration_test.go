@@ -20,8 +20,9 @@ import (
 // wipedTables is the EXACT set ResetSyntheticData truncates (kept in sync with
 // the TRUNCATE list in queries/test.sql). The reset test asserts (1) every one
 // of these is empty after the reset, and (2) the catalog guard: every public
-// base table is in this set, is schema_migrations, or matches the river_%
-// allowlist — so a future app table omitted from the TRUNCATE FAILS the test.
+// base table is in this set, is schema_migrations, matches the river_%
+// allowlist, or is a migration-seeded catalog exclusion — so a future app table
+// omitted from the TRUNCATE FAILS the test.
 var wipedTables = []string{
 	"calendar_event",
 	"comms_message",
@@ -33,7 +34,6 @@ var wipedTables = []string{
 	"contact_tag",
 	"contact_task",
 	"entity",
-	"entity_type",
 	"event",
 	"event_consumer_claim",
 	"external_contact",
@@ -50,7 +50,6 @@ var wipedTables = []string{
 	"note_embedding",
 	"oauth_credential",
 	"phone_call",
-	"predicate",
 	"prompt_query",
 	"river_job",
 	"sync_staleness_breach",
@@ -62,6 +61,17 @@ var wipedTables = []string{
 	"telegram_update_state",
 	"venue",
 }
+
+// catalogExclusions are the migration-seeded REFERENCE/CATALOG tables that are
+// NOT truncated by the synthetic-data wipe (see the ResetSyntheticData comment
+// in queries/test.sql). Their CURATED rows (installed by migration 066) must
+// SURVIVE a reset — migrations run before a reset and 066 does not re-run on an
+// already-migrated DB, so truncating them would leave an empty catalog that
+// breaks the assert() write path. ResetSyntheticData DOES still clear the
+// runtime-minted PROVISIONAL rows from these tables (so a reset restores a known
+// baseline); the per-namespace SyntheticDelete*ByKeyPrefix helpers remain for
+// test-local provisional cleanup.
+var catalogExclusions = []string{"predicate", "entity_type"}
 
 // TestSyntheticResetSyntheticData_WipesEveryDataTable is the DESTRUCTIVE,
 // DB-wide reset test. It runs against a per-test CLONE DB (never the shared
@@ -102,6 +112,36 @@ func TestSyntheticResetSyntheticData_WipesEveryDataTable(t *testing.T) {
 	require.NoError(t, support.InsertResetMarkers(ctx))
 	require.NoError(t, support.InsertNonFinalRiverJob(ctx))
 
+	// Mint a runtime PROVISIONAL predicate + entity_type. These represent catalog
+	// pollution accumulated on a running staging instance; a reset MUST clear them
+	// (restoring a known baseline) while leaving the curated catalog intact.
+	predicateRepo := repository.NewPredicateRepository(database.Queries)
+	entityRepo := repository.NewEntityRepository(database.Queries)
+	provValueType := repository.PredicateValueTypeText
+	_, err = predicateRepo.CreateProvisional(ctx, repository.CreatePredicateRequest{
+		Key:                 "reset-provisional-pred",
+		Kind:                repository.PredicateKindFact,
+		SubjectType:         "person",
+		ValueType:           &provValueType,
+		Cardinality:         repository.PredicateCardinalityMulti,
+		TemporalProfile:     repository.PredicateTemporalMutable,
+		DefaultReviewPolicy: repository.PredicateReviewAutoIfConfident,
+		PropositionBucket:   repository.PredicateBucketDay,
+	})
+	require.NoError(t, err)
+	require.NoError(t, entityRepo.UpsertEntityType(ctx, repository.UpsertEntityTypeRequest{
+		Key:    "reset-provisional-subtype",
+		Status: repository.EntityTypeStatusProvisional,
+	}))
+
+	// Snapshot the curated catalog counts so we can assert they are UNCHANGED by
+	// the reset (the provisional rows above are the only catalog rows that go).
+	curatedPredicatesBefore, err := predicateRepo.ListCurated(ctx)
+	require.NoError(t, err)
+	require.NotEmpty(t, curatedPredicatesBefore, "curated predicate catalog seeded by migration 066")
+	entityTypesBefore, err := support.CountAllRows(ctx, "entity_type")
+	require.NoError(t, err)
+
 	// Sanity: a representative wiped table has rows BEFORE the reset, so the
 	// "empty after" assertion is meaningful.
 	beforeContacts, err := support.CountAllRows(ctx, "contact")
@@ -128,18 +168,43 @@ func TestSyntheticResetSyntheticData_WipesEveryDataTable(t *testing.T) {
 	require.NoError(t, err)
 	require.Greater(t, migCount, int64(0), "schema_migrations must survive the reset")
 
+	// The migration-seeded CURATED catalog SURVIVES the reset unchanged (pins the
+	// original fix: an empty catalog would silently break the assert() write path
+	// on staging), while the runtime PROVISIONAL rows are CLEARED (a reset restores
+	// a known baseline, not stale runtime pollution).
+	curatedPredicatesAfter, err := predicateRepo.ListCurated(ctx)
+	require.NoError(t, err)
+	require.Len(t, curatedPredicatesAfter, len(curatedPredicatesBefore),
+		"the curated predicate catalog must survive ResetSyntheticData unchanged")
+	_, err = predicateRepo.GetPredicate(ctx, "reset-provisional-pred")
+	require.ErrorIs(t, err, db.ErrNotFound, "a provisional predicate must be cleared by ResetSyntheticData")
+
+	entityTypeCount, err := support.CountAllRows(ctx, "entity_type")
+	require.NoError(t, err)
+	require.Equal(t, entityTypesBefore-1, entityTypeCount,
+		"reset clears exactly the one provisional entity_type, leaving the curated subtypes")
+	_, err = entityRepo.GetEntityType(ctx, "reset-provisional-subtype")
+	require.ErrorIs(t, err, db.ErrNotFound, "a provisional entity_type must be cleared by ResetSyntheticData")
+
 	// Catalog guard: every public base table is in wipedTables, is
-	// schema_migrations, or matches the river_% allowlist. A future app data
-	// table not added to the TRUNCATE FAILS here.
+	// schema_migrations, matches the river_% allowlist, or is a migration-seeded
+	// catalog exclusion. A future app data table not added to the TRUNCATE FAILS
+	// here.
 	tables, err := support.ListPublicTables(ctx)
 	require.NoError(t, err)
 	wiped := make(map[string]bool, len(wipedTables))
 	for _, tbl := range wipedTables {
 		wiped[tbl] = true
 	}
+	excluded := make(map[string]bool, len(catalogExclusions))
+	for _, tbl := range catalogExclusions {
+		excluded[tbl] = true
+	}
 	for _, tbl := range tables {
 		switch {
 		case wiped[tbl]:
+		// Migration-seeded catalog tables deliberately survive the reset.
+		case excluded[tbl]:
 		case tbl == "schema_migrations":
 		case strings.HasPrefix(tbl, "river_"):
 		// _testdb_template_marker is a clone-machinery sentinel that exists ONLY
@@ -147,7 +212,7 @@ func TestSyntheticResetSyntheticData_WipesEveryDataTable(t *testing.T) {
 		// schema — it is not an app table the production reset would ever see.
 		case tbl == "_testdb_template_marker":
 		default:
-			t.Errorf("public table %q is neither wiped, schema_migrations, nor a river_%% internal table — add it to the ResetSyntheticData TRUNCATE list (and wipedTables)", tbl)
+			t.Errorf("public table %q is neither wiped, a catalog exclusion, schema_migrations, nor a river_%% internal table — add it to the ResetSyntheticData TRUNCATE list (and wipedTables)", tbl)
 		}
 	}
 }

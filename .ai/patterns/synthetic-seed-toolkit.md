@@ -112,7 +112,7 @@ Some pending states have **no toolkit producer yet** (documented, asserted-absen
 | Entrypoint | What it does |
 |---|---|
 | `crm-admin --seed [--profile P] [--prng-seed S] --yes` | Additive seed of the selected profile world. Refused in production (`synthetic.SeedAllowed` rejects `CRM_ENV` ∈ {production, prod}). Requires `--yes`. |
-| `crm-admin --reset-and-seed [--profile P] --yes` | Hard-wipe every live data table (preserving only `schema_migrations` + River internals), then reseed (default `prod-shaped`). Refused in production. Requires `--yes`. |
+| `crm-admin --reset-and-seed [--profile P] --yes` | Hard-wipe every live data table (preserving `schema_migrations` + River internals + the migration-seeded curated catalog `predicate`/`entity_type` — only their provisional rows are cleared), then reseed (default `prod-shaped`). Refused in production. Requires `--yes`. |
 | `make dev-seed` | Stops the detached backend so the seed harness owns the River queue, migrates, then `crm-admin --seed --profile dev --yes`. Opt-in; plain `make dev` is unchanged. |
 | `make staging-reset` | Stops the service, sources the staging env, `crm-admin --reset-and-seed --profile prod-shaped --yes`, restarts. Refuses `CRM_ENV=production`. |
 | `/test/seed/*` + `/cleanup` routes | The E2E HTTP surface, behind `service.TestSeedService`. The handler validates HTTP input then calls the service (no handler→queries layer violation). It does NOT import the synthetic package — the profile/replay world is CLI-only — to avoid a `service → synthetic → replay → service` cycle. |

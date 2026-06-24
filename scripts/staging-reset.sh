@@ -7,7 +7,9 @@
 # CRM_ENV is a production alias (defense-in-depth before crm-admin's own PRE-DB
 # gate), runs crm-admin --reset-and-seed, and restarts the service. The
 # reset-and-seed itself hard-wipes every live data table (incl. oauth_credential
-# + sync-state) — STAGING ONLY; never point this at production.
+# + sync-state); the migration-seeded curated catalog (predicate/entity_type)
+# survives, only its provisional rows are cleared — STAGING ONLY; never point
+# this at production.
 #
 # The QA harness (#380) either calls this script or replicates the
 # stop -> reset -> start sequence over SSH (the documented crm-admin operator
