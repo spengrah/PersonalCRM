@@ -32,6 +32,8 @@ var wipedTables = []string{
 	"contact_summary",
 	"contact_tag",
 	"contact_task",
+	"entity",
+	"entity_type",
 	"event",
 	"event_consumer_claim",
 	"external_contact",
@@ -43,6 +45,7 @@ var wipedTables = []string{
 	"mac_host_pairing_token",
 	"meeting_note",
 	"messages_message",
+	"node",
 	"note",
 	"note_embedding",
 	"oauth_credential",
@@ -56,6 +59,7 @@ var wipedTables = []string{
 	"telegram_message",
 	"telegram_session",
 	"telegram_update_state",
+	"venue",
 }
 
 // TestSyntheticResetSyntheticData_WipesEveryDataTable is the DESTRUCTIVE,

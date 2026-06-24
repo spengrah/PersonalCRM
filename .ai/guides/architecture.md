@@ -176,6 +176,11 @@ sequenceDiagram
 | `contact_task` | Todoist tasks linked to contacts | → contact |
 | **Event Bus** | | |
 | `event` | Append-only raw event log feeding the worker queue (spec §3.1) | (append-only; no FKs) |
+| **Graph (SP1)** | | |
+| `node` | Uniform registry every graph entity attaches to (person/entity/venue); caller-supplied id (person id == contact id); CHECK-enum `type`; `merged_into` self-FK merge alias; single `deleted_at` tombstone | self-FK (`merged_into`) |
+| `entity_type` | Per-TYPE entity-subtype catalog (`resolution_config` JSONB; curated/provisional status) | (catalog; no FKs) |
+| `entity` | Structural subtype rows for organizations/places/topics/tags; per-instance `detail` JSONB; unique `(subtype, normalized_name)` | → node (PK/FK, ON DELETE CASCADE), → entity_type |
+| `venue` | Structural subtype rows for shared interaction containers (email threads, group chats, DMs, meetings, calls, sessions); unique `(source, kind, source_container_id)` | → node (PK/FK, ON DELETE CASCADE) |
 | **Observability** | | |
 | `sync_staleness_breach` | Open/resolved sync-staleness breaches recorded by the watchdog (partial unique index on open rows; no `updated_at`/`deleted_at`) | (system-derived; no FKs) |
 | **Future/Unused** | | |

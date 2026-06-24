@@ -569,6 +569,8 @@ TRUNCATE TABLE
     contact_summary,
     contact_tag,
     contact_task,
+    entity,
+    entity_type,
     event,
     event_consumer_claim,
     external_contact,
@@ -580,6 +582,7 @@ TRUNCATE TABLE
     mac_host_pairing_token,
     meeting_note,
     messages_message,
+    node,
     note,
     note_embedding,
     oauth_credential,
@@ -592,7 +595,8 @@ TRUNCATE TABLE
     telegram_chat_config,
     telegram_message,
     telegram_session,
-    telegram_update_state
+    telegram_update_state,
+    venue
 RESTART IDENTITY CASCADE;
 
 -- name: CountNonFinalRiverJobs :one
