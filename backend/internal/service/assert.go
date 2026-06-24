@@ -384,6 +384,20 @@ func (s *AssertService) AssertTx(ctx context.Context, tx pgx.Tx, req AssertReque
 	// Determine the landing status (auto-apply vs always-confirm / force-confirm).
 	landingAccepted := predicate.DefaultReviewPolicy == repository.PredicateReviewAutoIfConfident && !req.ForceConfirm
 
+	// GLOBAL lock order — for a single-cardinality write that may land accepted,
+	// acquire the slot advisory lock(s) BEFORE any row read/lock (the dedup lookup
+	// below, the corroborate-upgrade row update, or writeNew's conflict probe). This
+	// keeps advisory-before-row across BOTH the match (corroborate→accept) and
+	// no-match (writeNew) paths, so a concurrent AcceptTx (which also locks advisory
+	// first) cannot deadlock against this tx. Re-acquisition deeper down is
+	// re-entrant (harmless). Multi-cardinality + proposed-landing writes take no slot
+	// lock.
+	if landingAccepted && predicate.Cardinality == repository.PredicateCardinalitySingle {
+		if err := s.acquireSlotLocks(ctx, tx, predicate, canonKey, canonSubject, canonObject); err != nil {
+			return nil, err
+		}
+	}
+
 	// Step 3: resolve proposition identity (dedup).
 	existing, err := s.assertionRepo.FindLivePropositionTx(ctx, tx, propKey)
 	if err != nil && !errors.Is(err, db.ErrNotFound) {
@@ -767,13 +781,15 @@ func (s *AssertService) writeNew(ctx context.Context, tx pgx.Tx, predicate *repo
 		effectiveFrom = req.ValidFrom.UTC()
 	}
 
-	// Single-cardinality + accepted-landing writes run the supersession check under
-	// the advisory lock. Multi or proposed-landing skip it. A past-bounded backfill
-	// (valid_to <= now) is a statement about the PAST → coexists, never supersedes.
+	// Single-cardinality + accepted-landing writes consult the slot. Multi or
+	// proposed-landing skip the slot entirely. A past-bounded backfill (valid_to <=
+	// now) is a statement about the PAST → it COEXISTS with a different-value current
+	// (never supersedes); but a SAME-value past stint still merges into the slot's
+	// same-value row (it is the same fact, just a non-contiguous interval).
 	needsConflictCheck := landingAccepted && predicate.Cardinality == repository.PredicateCardinalitySingle
 	pastBounded := req.ValidTo != nil && !req.ValidTo.UTC().After(now)
 
-	if needsConflictCheck && !pastBounded {
+	if needsConflictCheck {
 		// Acquire the advisory lock(s) BEFORE the conflict check (serializes the
 		// empty-slot race a FOR UPDATE cannot). For a symmetric-single predicate the
 		// invariant is per-participant → one lock per participant, taken in lock-key
@@ -788,32 +804,39 @@ func (s *AssertService) writeNew(ctx context.Context, tx pgx.Tx, predicate *repo
 			return nil, err
 		}
 
-		// Same-value reaffirmation: an overlapping accepted row with the SAME
-		// bucket-independent proposition signature is the SAME fact in a different
-		// bucket → widen it (no new row, no supersession).
+		// Same-value reaffirmation (runs even for a past-bounded write): overlapping
+		// accepted row(s) with the SAME bucket-independent proposition signature are
+		// the SAME fact in different buckets → widen ONE survivor over the union of all
+		// of them (no new row, no supersession). A new window can bridge several
+		// same-value stints; all merge.
 		newSignature := propositionSignature(canonKey, canonSubject, normalizedPayload(canonObject, req))
-		if widen := findSameValue(conflicts, newSignature); widen != nil {
-			return s.widenReaffirmation(ctx, tx, predicate, widen, canonKey, canonSubject, canonObject, req, effectiveFrom)
+		if same := sameValueConflicts(conflicts, newSignature); len(same) > 0 {
+			return s.widenReaffirmation(ctx, tx, predicate, same, canonKey, canonSubject, canonObject, req)
 		}
 
-		// Different-value conflict(s). Insert the new row first (insert-new-then-
-		// close-prior order under the DEFERRABLE self-FK), then close each prior.
-		inserted, recovered, err := s.insertNewAndEmit(ctx, tx, predicate, canonKey, canonSubject, canonObject, propKey, req, status, salience, knowledgeFrom, now, landingAccepted)
-		if err != nil {
-			return nil, err
-		}
-		if recovered {
-			// A concurrent writer won this slot; the loser corroborated its row.
-			// Conflict resolution against OTHER slots is the winner's job — skip it.
+		// No same-value match. A past-bounded backfill of a DIFFERENT value coexists
+		// (it is historical) — fall through to a plain insert. Otherwise this is a
+		// present/future successor: insert the new row first (insert-new-then-close-
+		// prior under the DEFERRABLE self-FK), then close each different-value prior.
+		if !pastBounded {
+			inserted, recovered, err := s.insertNewAndEmit(ctx, tx, predicate, canonKey, canonSubject, canonObject, propKey, req, status, salience, knowledgeFrom, now, landingAccepted)
+			if err != nil {
+				return nil, err
+			}
+			if recovered {
+				// A concurrent writer won this slot; the loser corroborated its row.
+				// Conflict resolution against OTHER slots is the winner's job — skip it.
+				return inserted, nil
+			}
+			if err := s.closeConflicts(ctx, tx, conflicts, inserted, effectiveFrom, now); err != nil {
+				return nil, err
+			}
 			return inserted, nil
 		}
-		if err := s.closeConflicts(ctx, tx, conflicts, inserted, effectiveFrom, now); err != nil {
-			return nil, err
-		}
-		return inserted, nil
 	}
 
-	// No conflict check (multi / proposed / past-bounded backfill) → just insert.
+	// Plain insert: multi / proposed-landing, OR a single-card past-bounded backfill
+	// of a different value (coexists, no supersession).
 	inserted, _, err := s.insertNewAndEmit(ctx, tx, predicate, canonKey, canonSubject, canonObject, propKey, req, status, salience, knowledgeFrom, now, landingAccepted)
 	return inserted, err
 }
@@ -889,15 +912,19 @@ func assertionSignature(a *repository.Assertion) string {
 	return propositionSignature(a.PredicateKey, a.SubjectNodeID, assertionNormalizedValue(a))
 }
 
-// findSameValue returns the first conflict row with the SAME bucket-independent
-// proposition signature as newSignature (a same-value reaffirmation), or nil.
-func findSameValue(conflicts []repository.Assertion, newSignature string) *repository.Assertion {
+// sameValueConflicts returns ALL conflict rows with the SAME bucket-independent
+// signature as newSignature. A new window can bridge several non-contiguous
+// same-value stints (e.g. X[2010,2015) + X[2020,∞) both overlap a new X[2012,2022));
+// every one must collapse into a single survivor, else the single-cardinality slot
+// would keep two live rows.
+func sameValueConflicts(conflicts []repository.Assertion, newSignature string) []*repository.Assertion {
+	var out []*repository.Assertion
 	for i := range conflicts {
 		if assertionSignature(&conflicts[i]) == newSignature {
-			return &conflicts[i]
+			out = append(out, &conflicts[i])
 		}
 	}
-	return nil
+	return out
 }
 
 // assertionNormalizedValue returns the normalized payload form of a stored
@@ -946,29 +973,36 @@ func (s *AssertService) acquireSlotLocks(ctx context.Context, tx pgx.Tx, predica
 	return nil
 }
 
-// widenReaffirmation extends a same-value accepted row's window to cover the new
-// evidence (lower valid_from / raise valid_to), recomputes its proposition_key
-// from the widened valid_from bucket, appends the new provenance, and emits
-// provenance_added. No new row, no supersession event. On a recomputed-key
-// collision with ANOTHER live same-value row (non-contiguous stints in different
-// buckets), it MERGES the two: provenance onto the survivor, close the other
-// superseded. The widened row is the survivor.
-func (s *AssertService) widenReaffirmation(ctx context.Context, tx pgx.Tx, predicate *repository.Predicate, existing *repository.Assertion, canonKey string, canonSubject uuid.UUID, canonObject *uuid.UUID, req *AssertRequest, effectiveFrom time.Time) (*repository.Assertion, error) {
-	// Union the windows. nil start = -inf (open), nil end = +inf (open). The new
-	// side uses the request's content bounds (effectiveFrom is the probe boundary,
-	// but the STORED widened window unions real evidence: a NULL new valid_from
-	// keeps the existing/open start).
-	widenedFrom := minStart(existing.ValidFrom, req.ValidFrom)
-	widenedTo := maxEnd(existing.ValidTo, req.ValidTo)
+// widenReaffirmation collapses one-or-more same-value accepted rows (same[0] is
+// the survivor; same[1:] are bridged stints) into a single survivor whose window
+// is the union of all of them + the new evidence, recomputes its proposition_key,
+// appends the new provenance, and emits provenance_added. No new row, no
+// supersession event for the survivor. The bridged rows + any recomputed-key
+// collider are MERGED (provenance moved, closed superseded). The widened row is
+// the survivor. A new window can bridge several non-contiguous same-value stints
+// (e.g. X[2010,2015)+X[2020,∞) under a new X[2012,2022)); all merge into one.
+func (s *AssertService) widenReaffirmation(ctx context.Context, tx pgx.Tx, predicate *repository.Predicate, same []*repository.Assertion, canonKey string, canonSubject uuid.UUID, canonObject *uuid.UUID, req *AssertRequest) (*repository.Assertion, error) {
+	survivor := same[0]
 
-	// If the existing row is bounded by a PENDING future successor (superseded_by
-	// set while still accepted, valid_to in the future), widening valid_to past that
-	// bound would un-bound it and leave TWO current rows once the successor's date
-	// passes. Re-affirming the same value must NOT clear that bound — keep the
-	// existing valid_to as the upper cap (only the backward lower-bound extension is
-	// safe). The pending successor remains the future value.
-	if existing.SupersededBy != nil {
-		widenedTo = utcPtr(existing.ValidTo)
+	// Union the survivor window with the new evidence + every bridged stint. nil
+	// start = -inf, nil end = +inf (open). Merge the bridged stints into the survivor
+	// first so the union covers them and the slot keeps exactly one live row.
+	widenedFrom := minStart(survivor.ValidFrom, req.ValidFrom)
+	widenedTo := maxEnd(survivor.ValidTo, req.ValidTo)
+	for _, other := range same[1:] {
+		widenedFrom = minStart(widenedFrom, other.ValidFrom)
+		widenedTo = maxEnd(widenedTo, other.ValidTo)
+		if err := s.mergeSameValue(ctx, tx, other, survivor); err != nil {
+			return nil, err
+		}
+	}
+
+	// If the survivor is bounded by a PENDING future successor (superseded_by set
+	// while still accepted), widening valid_to past that bound would un-bound it and
+	// leave two current rows once the successor's date passes. Keep the existing
+	// valid_to as the upper cap (only the backward lower-bound extension is safe).
+	if survivor.SupersededBy != nil {
+		widenedTo = utcPtr(survivor.ValidTo)
 	}
 
 	// Recompute the proposition_key from the widened valid_from bucket.
@@ -976,26 +1010,26 @@ func (s *AssertService) widenReaffirmation(ctx context.Context, tx pgx.Tx, predi
 	widenedReq.ValidFrom = widenedFrom
 	newKey := computePropositionKey(predicate, canonKey, canonSubject, canonObject, &widenedReq)
 
-	// Collision: another LIVE row already holds the recomputed key (a non-contiguous
-	// same-value stint in that bucket). Merge it into this survivor instead of
+	// Collision: another LIVE row (NOT in the overlap probe — e.g. a disjoint stint)
+	// already holds the recomputed key. Merge it into the survivor instead of
 	// UPDATE-ing into the unique index (which would 23505).
-	if newKey != existing.PropositionKey {
+	if newKey != survivor.PropositionKey {
 		collider, err := s.assertionRepo.FindLivePropositionTx(ctx, tx, newKey)
 		if err != nil && !errors.Is(err, db.ErrNotFound) {
 			return nil, fmt.Errorf("widen collision check: %w", err)
 		}
-		if err == nil && collider.ID != existing.ID {
-			// Union the survivor window with the collider's too, then merge.
+		if err == nil && collider.ID != survivor.ID {
 			widenedFrom = minStart(widenedFrom, collider.ValidFrom)
 			widenedTo = maxEnd(widenedTo, collider.ValidTo)
 			widenedReq.ValidFrom = widenedFrom
 			newKey = computePropositionKey(predicate, canonKey, canonSubject, canonObject, &widenedReq)
-			if err := s.mergeSameValue(ctx, tx, collider, existing); err != nil {
+			if err := s.mergeSameValue(ctx, tx, collider, survivor); err != nil {
 				return nil, err
 			}
 		}
 	}
 
+	existing := survivor
 	if err := s.assertionRepo.WidenAssertionValidityTx(ctx, tx, existing.ID, widenedFrom, widenedTo, newKey); err != nil {
 		return nil, fmt.Errorf("widen assertion validity: %w", err)
 	}
@@ -1196,35 +1230,47 @@ func (s *AssertService) resolveAcceptConflicts(ctx context.Context, tx pgx.Tx, p
 	if err != nil {
 		return nil, false, err
 	}
-	// Same-value reaffirmation at accept time: an overlapping accepted row with the
-	// SAME value is the same fact in a different bucket → WIDEN it to cover the
-	// accepting row's window and MERGE the accepting (proposed) row into it. Mirrors
-	// the writeNew widen rule (P1: Accept must widen, not supersede, a same value).
+	// Same-value reaffirmation at accept time: overlapping accepted row(s) with the
+	// SAME value are the same fact in different buckets → WIDEN one survivor over the
+	// union of all of them + the accepting row's window, MERGE the accepting
+	// (proposed) row and every bridged stint into the survivor. Mirrors the writeNew
+	// widen rule (P1: Accept must widen, not supersede, a same value; and a new
+	// window may bridge several same-value stints).
 	acceptingSignature := assertionSignature(accepting)
-	if existing := findSameValue(conflicts, acceptingSignature); existing != nil {
-		widenedFrom := minStart(existing.ValidFrom, accepting.ValidFrom)
-		widenedTo := maxEnd(existing.ValidTo, accepting.ValidTo)
-		// Do NOT clear a pending-successor bound (superseded_by set): widening the
-		// upper bound past it would leave two current rows once the successor date
-		// passes (mirrors widenReaffirmation). Only the backward lower-bound extends.
-		if existing.SupersededBy != nil {
-			widenedTo = utcPtr(existing.ValidTo)
+	if same := sameValueConflicts(conflicts, acceptingSignature); len(same) > 0 {
+		survivor := same[0]
+		widenedFrom := minStart(survivor.ValidFrom, accepting.ValidFrom)
+		widenedTo := maxEnd(survivor.ValidTo, accepting.ValidTo)
+		// Merge every bridged stint into the survivor (union windows + provenance,
+		// close them) so the single-cardinality slot keeps exactly one live row.
+		for _, other := range same[1:] {
+			widenedFrom = minStart(widenedFrom, other.ValidFrom)
+			widenedTo = maxEnd(widenedTo, other.ValidTo)
+			if err := s.mergeSameValue(ctx, tx, other, survivor); err != nil {
+				return nil, false, err
+			}
 		}
-		existing.ValidFrom = widenedFrom
-		existing.ValidTo = widenedTo
-		widenReq := &AssertRequest{ValidFrom: existing.ValidFrom}
+		// Do NOT clear a pending-successor bound (superseded_by set): widening past it
+		// would leave two current rows once the successor date passes (only the
+		// backward lower-bound extends). Mirrors widenReaffirmation.
+		if survivor.SupersededBy != nil {
+			widenedTo = utcPtr(survivor.ValidTo)
+		}
+		survivor.ValidFrom = widenedFrom
+		survivor.ValidTo = widenedTo
+		widenReq := &AssertRequest{ValidFrom: survivor.ValidFrom}
 		newKey := computePropositionKey(predicate, canonKey, canonSubject, canonObject, widenReq)
 		// MERGE/close the accepting (loser) row FIRST so it is no longer live —
 		// otherwise WidenAssertionValidity could assign the survivor a key the still-
 		// live accepting row holds and 23505 on idx_assertion_live_proposition.
-		if err := s.mergeSameValue(ctx, tx, accepting, existing); err != nil {
+		if err := s.mergeSameValue(ctx, tx, accepting, survivor); err != nil {
 			return nil, false, err
 		}
-		if err := s.assertionRepo.WidenAssertionValidityTx(ctx, tx, existing.ID, existing.ValidFrom, existing.ValidTo, newKey); err != nil {
+		if err := s.assertionRepo.WidenAssertionValidityTx(ctx, tx, survivor.ID, survivor.ValidFrom, survivor.ValidTo, newKey); err != nil {
 			return nil, false, fmt.Errorf("widen survivor at accept: %w", err)
 		}
-		existing.PropositionKey = newKey
-		return existing, true, nil
+		survivor.PropositionKey = newKey
+		return survivor, true, nil
 	}
 
 	return nil, false, s.closeConflicts(ctx, tx, conflicts, accepting, effectiveFrom, now)
@@ -1321,6 +1367,12 @@ func (s *AssertService) AssertClosureTx(ctx context.Context, tx pgx.Tx, req Clos
 		}
 		return fmt.Errorf("load current for closure: %w", err)
 	}
+	// knowledge_to >= the closed row's knowledge_from (a future KnowledgeFromOverride
+	// could otherwise push knowledge_from past now → assertion_knowledge_range CHECK).
+	knowledgeTo := now
+	if current.KnowledgeFrom.After(knowledgeTo) {
+		knowledgeTo = current.KnowledgeFrom.UTC()
+	}
 	closure := repository.ClosureReasonEnded
 	if err := s.assertionRepo.CloseAssertionTx(ctx, tx, repository.CloseAssertionParams{
 		ID:            current.ID,
@@ -1328,7 +1380,7 @@ func (s *AssertService) AssertClosureTx(ctx context.Context, tx pgx.Tx, req Clos
 		Status:        repository.AssertionStatusSuperseded,
 		ClosureReason: &closure,
 		SupersededBy:  nil,
-		KnowledgeTo:   &now,
+		KnowledgeTo:   &knowledgeTo,
 	}); err != nil {
 		return fmt.Errorf("close current on closure: %w", err)
 	}

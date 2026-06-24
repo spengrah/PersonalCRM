@@ -627,7 +627,7 @@ const RolloverDueBoundedSuccessors = `-- name: RolloverDueBoundedSuccessors :man
 UPDATE assertion
 SET status = 'superseded',
     closure_reason = 'superseded',
-    knowledge_to = $1
+    knowledge_to = GREATEST($1::timestamptz, knowledge_from)
 WHERE status = 'accepted'
   AND knowledge_to IS NULL
   AND superseded_by IS NOT NULL
@@ -639,10 +639,13 @@ RETURNING id, subject_node_id, predicate_key, object_node_id, value_text, value_
 // The rollover job: terminalize the bounded-with-pending-successor rows whose
 // bound has been reached. Scoped TIGHT — superseded_by IS NOT NULL excludes
 // successor-less historical accepted facts (which simply aren't current). Sets
-// status='superseded', closure_reason='superseded', knowledge_to=$1; returns the
-// updated rows so the caller can emit one assertion.superseded event per row.
-func (q *Queries) RolloverDueBoundedSuccessors(ctx context.Context, knowledgeTo pgtype.Timestamptz) ([]*Assertion, error) {
-	rows, err := q.db.Query(ctx, RolloverDueBoundedSuccessors, knowledgeTo)
+// status='superseded', closure_reason='superseded'. knowledge_to is
+// GREATEST(now, knowledge_from) so a row whose knowledge_from was set in the
+// future via a KnowledgeFromOverride does not violate the assertion_knowledge_range
+// CHECK and abort the whole sweep. Returns the updated rows so the caller can emit
+// one assertion.superseded event per row.
+func (q *Queries) RolloverDueBoundedSuccessors(ctx context.Context, now pgtype.Timestamptz) ([]*Assertion, error) {
+	rows, err := q.db.Query(ctx, RolloverDueBoundedSuccessors, now)
 	if err != nil {
 		return nil, err
 	}

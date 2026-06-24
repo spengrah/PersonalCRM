@@ -931,6 +931,98 @@ func TestAssert_ValidTime(t *testing.T) {
 		assert.Equal(t, nyc.ID, curNow.ID, "exactly NYC is current now")
 		_ = la
 	})
+
+	// Case 24: a reaffirmation that BRIDGES two non-contiguous same-value stints
+	// merges ALL of them into one survivor (not just the first), so the
+	// single-cardinality slot keeps exactly one live row. home_address year-bucketed.
+	t.Run("24 bridging reaffirmation merges all same-value stints", func(t *testing.T) {
+		t.Parallel()
+		gen, _ := migrationGenerator(t)
+		subject := h.seedPerson(t, ctx, gen.Prefix(), "subj")
+
+		// Two non-contiguous past NYC stints (both bounded-past → coexist).
+		yA0 := time.Date(2010, 1, 1, 0, 0, 0, 0, time.UTC)
+		yA1 := time.Date(2015, 1, 1, 0, 0, 0, 0, time.UTC)
+		a := textFactReq(subject, "home_address", "NYC", gen.Prefix(), "a")
+		a.ValidFrom, a.ValidTo = &yA0, &yA1
+		rowA, err := h.svc.Assert(ctx, a)
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, rowA.ID)
+
+		yB0 := time.Date(2018, 1, 1, 0, 0, 0, 0, time.UTC)
+		yB1 := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+		b := textFactReq(subject, "home_address", "NYC", gen.Prefix(), "b")
+		b.ValidFrom, b.ValidTo = &yB0, &yB1
+		rowB, err := h.svc.Assert(ctx, b)
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, rowB.ID)
+		require.NotEqual(t, rowA.ID, rowB.ID, "distinct year buckets → two coexisting stints")
+
+		// A bridging NYC [2012,2019) overlaps BOTH stints → all collapse to one row.
+		yBridge0 := time.Date(2012, 1, 1, 0, 0, 0, 0, time.UTC)
+		yBridge1 := time.Date(2019, 1, 1, 0, 0, 0, 0, time.UTC)
+		bridge := textFactReq(subject, "home_address", "NYC", gen.Prefix(), "br")
+		bridge.ValidFrom, bridge.ValidTo = &yBridge0, &yBridge1
+		survivor, err := h.svc.Assert(ctx, bridge)
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, survivor.ID)
+
+		// Exactly ONE live NYC row remains; the other stint is superseded into it.
+		live, err := h.assertionRepo.ListLiveEdgesForNode(ctx, subject, "home_address")
+		require.NoError(t, err)
+		liveCount := 0
+		for _, e := range live {
+			if e.Status == repository.AssertionStatusAccepted {
+				liveCount++
+			}
+		}
+		assert.Equal(t, 1, liveCount, "bridged same-value stints collapse to one live row")
+		assert.Equal(t, rowA.ID, survivor.ID, "survivor is the first matched stint, widened")
+	})
+
+	// Case 25: the rollover sweep does NOT abort on a bounded row whose
+	// knowledge_from was set in the future (KnowledgeFromOverride); knowledge_to is
+	// clamped via GREATEST so the assertion_knowledge_range CHECK holds.
+	t.Run("25 rollover clamps knowledge_to for future-knowledge row", func(t *testing.T) {
+		t.Parallel()
+		gen, _ := migrationGenerator(t)
+		subject := h.seedPerson(t, ctx, gen.Prefix(), "subj")
+		now := accelerated.GetCurrentTime().UTC()
+
+		// NYC current with a FUTURE knowledge_from override.
+		tomorrow := now.Add(24 * time.Hour)
+		nycReq := textFactReq(subject, "home_address", "NYC", gen.Prefix(), "nyc")
+		nycReq.KnowledgeFromOverride = &tomorrow
+		nyc, err := h.svc.Assert(ctx, nycReq)
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, nyc.ID)
+		require.True(t, nyc.KnowledgeFrom.After(now), "knowledge_from is in the future")
+
+		// Future LA bounds NYC (pending successor).
+		future := now.Add(72 * time.Hour)
+		laReq := textFactReq(subject, "home_address", "LA", gen.Prefix(), "la")
+		laReq.ValidFrom = &future
+		la, err := h.svc.Assert(ctx, laReq)
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, la.ID)
+
+		// Re-bind NYC's valid_to into the past (simulate the bound passing).
+		past := now.Add(-time.Hour)
+		rebind, err := h.database.Pool.Begin(ctx)
+		require.NoError(t, err)
+		require.NoError(t, h.assertionRepo.BoundPendingSuccessorTx(ctx, rebind, nyc.ID, past, la.ID))
+		require.NoError(t, rebind.Commit(ctx))
+
+		// Rollover must succeed (not abort on the CHECK) and clamp knowledge_to.
+		n, err := h.svc.RunRollover(ctx)
+		require.NoError(t, err, "rollover must not abort on a future-knowledge_from row")
+		assert.GreaterOrEqual(t, n, 1)
+		rolled, err := h.assertionRepo.GetAssertion(ctx, nyc.ID)
+		require.NoError(t, err)
+		assert.Equal(t, repository.AssertionStatusSuperseded, rolled.Status)
+		require.NotNil(t, rolled.KnowledgeTo)
+		assert.False(t, rolled.KnowledgeTo.Before(rolled.KnowledgeFrom), "knowledge_to >= knowledge_from (clamped)")
+	})
 }
 
 // TestAssert_Lifecycle covers the lifecycle-transition concurrency + same-value
@@ -1111,6 +1203,32 @@ func TestAssert_Lifecycle(t *testing.T) {
 		curFuture, err := h.assertionRepo.GetCurrentAccepted(ctx, subject, "home_address", future.Add(time.Hour))
 		require.NoError(t, err)
 		assert.Equal(t, la.ID, curFuture.ID, "LA becomes current after its date (bound intact)")
+	})
+
+	// Case 26: AssertClosure on a current row whose knowledge_from is in the future
+	// (KnowledgeFromOverride) clamps knowledge_to so the closure does not violate
+	// assertion_knowledge_range.
+	t.Run("26 closure clamps knowledge_to for future-knowledge row", func(t *testing.T) {
+		t.Parallel()
+		gen, _ := migrationGenerator(t)
+		subject := h.seedPerson(t, ctx, gen.Prefix(), "subj")
+		now := accelerated.GetCurrentTime().UTC()
+
+		tomorrow := now.Add(24 * time.Hour)
+		req := textFactReq(subject, "home_address", "future-k", gen.Prefix(), "fk")
+		req.KnowledgeFromOverride = &tomorrow
+		current, err := h.svc.Assert(ctx, req)
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, current.ID)
+		require.True(t, current.KnowledgeFrom.After(now))
+
+		// Closure today must succeed (clamped knowledge_to), not violate the CHECK.
+		require.NoError(t, h.svc.AssertClosure(ctx, service.ClosureRequest{SubjectNodeID: subject, PredicateKey: "home_address"}))
+		closed, err := h.assertionRepo.GetAssertion(ctx, current.ID)
+		require.NoError(t, err)
+		assert.Equal(t, repository.AssertionStatusSuperseded, closed.Status)
+		require.NotNil(t, closed.KnowledgeTo)
+		assert.False(t, closed.KnowledgeTo.Before(closed.KnowledgeFrom), "knowledge_to >= knowledge_from (clamped)")
 	})
 }
 

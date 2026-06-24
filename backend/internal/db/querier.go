@@ -1450,9 +1450,12 @@ type Querier interface {
 	// The rollover job: terminalize the bounded-with-pending-successor rows whose
 	// bound has been reached. Scoped TIGHT — superseded_by IS NOT NULL excludes
 	// successor-less historical accepted facts (which simply aren't current). Sets
-	// status='superseded', closure_reason='superseded', knowledge_to=$1; returns the
-	// updated rows so the caller can emit one assertion.superseded event per row.
-	RolloverDueBoundedSuccessors(ctx context.Context, knowledgeTo pgtype.Timestamptz) ([]*Assertion, error)
+	// status='superseded', closure_reason='superseded'. knowledge_to is
+	// GREATEST(now, knowledge_from) so a row whose knowledge_from was set in the
+	// future via a KnowledgeFromOverride does not violate the assertion_knowledge_range
+	// CHECK and abort the whole sweep. Returns the updated rows so the caller can emit
+	// one assertion.superseded event per row.
+	RolloverDueBoundedSuccessors(ctx context.Context, now pgtype.Timestamptz) ([]*Assertion, error)
 	// Atomically replaces api_key_hash and bumps api_key_rotated_at. Used
 	// by the rotate-key endpoint. Filters revoked hosts so a revoked host
 	// cannot be silently re-activated by a rotation.
