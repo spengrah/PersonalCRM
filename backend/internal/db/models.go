@@ -184,6 +184,21 @@ type ContactTask struct {
 	Lifecycle      string             `json:"lifecycle"`
 }
 
+type Entity struct {
+	NodeID         pgtype.UUID `json:"node_id"`
+	Subtype        string      `json:"subtype"`
+	NormalizedName string      `json:"normalized_name"`
+	ExternalRef    pgtype.Text `json:"external_ref"`
+	Detail         []byte      `json:"detail"`
+}
+
+type EntityType struct {
+	Key              string `json:"key"`
+	Description      string `json:"description"`
+	ResolutionConfig []byte `json:"resolution_config"`
+	Status           string `json:"status"`
+}
+
 type Event struct {
 	ID         pgtype.UUID        `json:"id"`
 	Source     string             `json:"source"`
@@ -366,6 +381,15 @@ type MessagesMessage struct {
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 }
 
+type Node struct {
+	ID             pgtype.UUID        `json:"id"`
+	Type           string             `json:"type"`
+	CanonicalLabel string             `json:"canonical_label"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	DeletedAt      pgtype.Timestamptz `json:"deleted_at"`
+	MergedInto     pgtype.UUID        `json:"merged_into"`
+}
+
 type Note struct {
 	ID        pgtype.UUID        `json:"id"`
 	ContactID pgtype.UUID        `json:"contact_id"`
@@ -539,4 +563,12 @@ type TelegramUpdateState struct {
 	Seq       int32              `json:"seq"`
 	Date      int32              `json:"date"`
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+type Venue struct {
+	NodeID            pgtype.UUID `json:"node_id"`
+	Kind              string      `json:"kind"`
+	Source            string      `json:"source"`
+	SourceContainerID string      `json:"source_container_id"`
+	Title             pgtype.Text `json:"title"`
 }

@@ -275,9 +275,14 @@ type Querier interface {
 	// idx_contact_task_followup_idempotency on repeats.
 	CreateContactTaskWithIdempotencyKey(ctx context.Context, arg CreateContactTaskWithIdempotencyKeyParams) (*ContactTask, error)
 	CreateEnrichment(ctx context.Context, arg CreateEnrichmentParams) (*ContactEnrichment, error)
+	// Entity subtype queries (SP1 graph foundation).
+	CreateEntity(ctx context.Context, arg CreateEntityParams) (*Entity, error)
 	CreateInteraction(ctx context.Context, arg CreateInteractionParams) (*Interaction, error)
 	// mac_host queries.
 	CreateMacHost(ctx context.Context, arg CreateMacHostParams) (*MacHost, error)
+	// Node registry queries (SP1 graph foundation).
+	// Caller supplies the id (for persons, id == contact.id); node has no default.
+	CreateNode(ctx context.Context, arg CreateNodeParams) (*Node, error)
 	CreateNote(ctx context.Context, arg CreateNoteParams) (*Note, error)
 	// Create a note with a specific created_at timestamp (for migrations)
 	CreateNoteWithTimestamp(ctx context.Context, arg CreateNoteWithTimestampParams) (*Note, error)
@@ -287,6 +292,8 @@ type Querier interface {
 	CreateSyncLog(ctx context.Context, arg CreateSyncLogParams) (*ExternalSyncLog, error)
 	CreateSyncState(ctx context.Context, arg CreateSyncStateParams) (*ExternalSyncState, error)
 	CreateTag(ctx context.Context, arg CreateTagParams) (*Tag, error)
+	// Venue subtype queries (SP1 graph foundation).
+	CreateVenue(ctx context.Context, arg CreateVenueParams) (*Venue, error)
 	// Remove duplicate contact IDs that may result from merge
 	// Uses subquery with DISTINCT to rebuild the array without duplicates
 	DeduplicateCalendarEventContacts(ctx context.Context, targetContactID pgtype.UUID) error
@@ -440,6 +447,8 @@ type Querier interface {
 	// Find contact methods that exist in both source and target
 	// Used to identify duplicates that will be skipped during merge
 	FindDuplicateContactMethods(ctx context.Context, arg FindDuplicateContactMethodsParams) ([]*FindDuplicateContactMethodsRow, error)
+	// Entity-resolution dedup lookup against the (subtype, normalized_name) unique.
+	FindEntityBySubtypeName(ctx context.Context, arg FindEntityBySubtypeNameParams) (*Entity, error)
 	// Primary use: publisher-side dedup lookup BEFORE attempting insert (e.g.,
 	// batch ingestion can pre-filter duplicates). Also used by tests.
 	//
@@ -542,6 +551,9 @@ type Querier interface {
 	// Uses UNNEST to expand input arrays and LATERAL join to find matches per candidate.
 	// Returns results grouped by candidate_id with matches ordered by similarity.
 	FindSimilarContactsBatch(ctx context.Context, arg FindSimilarContactsBatchParams) ([]*FindSimilarContactsBatchRow, error)
+	// Looks up the single venue for a real container via the
+	// (source, kind, source_container_id) unique.
+	FindVenueByContainer(ctx context.Context, arg FindVenueByContainerParams) (*Venue, error)
 	// Used by MacHostAuthMiddleware. Filters revoked hosts so a revoked
 	// daemon's bearer key cannot authenticate.
 	GetActiveMacHostByID(ctx context.Context, id pgtype.UUID) (*MacHost, error)
@@ -610,6 +622,8 @@ type Querier interface {
 	GetEnrichmentByField(ctx context.Context, arg GetEnrichmentByFieldParams) (*ContactEnrichment, error)
 	// Contact Enrichment queries
 	GetEnrichmentsForContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactEnrichment, error)
+	GetEntity(ctx context.Context, nodeID pgtype.UUID) (*Entity, error)
+	GetEntityType(ctx context.Context, key string) (*EntityType, error)
 	GetEvent(ctx context.Context, id pgtype.UUID) (*Event, error)
 	// External Contact queries
 	// Tombstoned rows are not retrievable by ID through normal flows.
@@ -681,6 +695,8 @@ type Querier interface {
 	// explicit-reply-bridge path. chat_guid is included for scoping
 	// selectivity.
 	GetMessagesMessageByReplyTarget(ctx context.Context, arg GetMessagesMessageByReplyTargetParams) (*MessagesMessage, error)
+	GetNode(ctx context.Context, id pgtype.UUID) (*Node, error)
+	GetNodeIncludingDeleted(ctx context.Context, id pgtype.UUID) (*Node, error)
 	// Note queries
 	GetNote(ctx context.Context, id pgtype.UUID) (*Note, error)
 	// OAuth Credential Queries
@@ -742,6 +758,7 @@ type Querier interface {
 	// explicitly to tombstoned rows because the live partial-unique index
 	// already covers the live-row case.
 	GetTombstonedMeetingNoteBySessionID(ctx context.Context, anarlogSessionID pgtype.UUID) (*MeetingNote, error)
+	GetVenue(ctx context.Context, nodeID pgtype.UUID) (*Venue, error)
 	// Test-only cleanup helper (scoped by matched_contact_id). Hard delete because
 	// the upsert does not clear deleted_at on conflict, so soft-deleted rows would
 	// resurrect across shared-DB test runs (gotcha table). Production code MUST NOT
@@ -1352,6 +1369,8 @@ type Querier interface {
 	// Production code never calls this — the daemon's heartbeat POST is the only
 	// real writer of last_heartbeat_at.
 	SetMacHostHeartbeatAtForTest(ctx context.Context, arg SetMacHostHeartbeatAtForTestParams) error
+	// Records the merge alias (loser → winner) and tombstones the loser node.
+	SetNodeMergedInto(ctx context.Context, arg SetNodeMergedIntoParams) error
 	// Test-only: stamps the freshness/error columns of an external_sync_state
 	// row directly so staleness-watchdog tests can plant past
 	// last_successful_sync_at / error_count values without driving the real
@@ -1389,6 +1408,7 @@ type Querier interface {
 	// has the prior content snapshot available. Idempotent (no-op when no
 	// live row exists).
 	SoftDeleteMeetingNoteBySessionID(ctx context.Context, anarlogSessionID pgtype.UUID) error
+	SoftDeleteNode(ctx context.Context, id pgtype.UUID) error
 	SoftDeleteTelegramChannelMessages(ctx context.Context, arg SoftDeleteTelegramChannelMessagesParams) error
 	SoftDeleteTelegramMessages(ctx context.Context, messageIds []int32) error
 	// Test setup — drop ALL river_job rows, but ONLY when connected to a
@@ -1783,6 +1803,9 @@ type Querier interface {
 	UpdateContactTaskExternalID(ctx context.Context, arg UpdateContactTaskExternalIDParams) (*ContactTask, error)
 	UpdateContactTaskMetadata(ctx context.Context, arg UpdateContactTaskMetadataParams) (*ContactTask, error)
 	UpdateContactTaskState(ctx context.Context, arg UpdateContactTaskStateParams) (*ContactTask, error)
+	// Merge-patches the per-instance detail JSONB (e.g. a tag color edit) using the
+	// || concatenation operator so other keys are preserved, not overwritten.
+	UpdateEntityDetail(ctx context.Context, arg UpdateEntityDetailParams) error
 	UpdateExternalContactDuplicate(ctx context.Context, arg UpdateExternalContactDuplicateParams) error
 	// Filter `deleted_at IS NULL` so a tombstoned row cannot have its
 	// match state mutated. A tombstoned row is invisible to every read
@@ -1814,6 +1837,7 @@ type Querier interface {
 	// The deleted_at filter prevents stomping on a tombstoned row (revive
 	// runs its own UPDATE path that also clears deleted_at).
 	UpdateMeetingNoteOnResync(ctx context.Context, arg UpdateMeetingNoteOnResyncParams) (*MeetingNote, error)
+	UpdateNodeCanonicalLabel(ctx context.Context, arg UpdateNodeCanonicalLabelParams) error
 	UpdateNote(ctx context.Context, arg UpdateNoteParams) (*Note, error)
 	// Update only the token data (for token refresh).
 	// refresh_token_nonce tracks refresh_token_encrypted: it is only overwritten when
@@ -1865,6 +1889,9 @@ type Querier interface {
 	UpsertContactNoteByCategory(ctx context.Context, arg UpsertContactNoteByCategoryParams) (*Note, error)
 	// Upsert a contact task by external_task_id (Todoist task IDs are globally unique)
 	UpsertContactTask(ctx context.Context, arg UpsertContactTaskParams) (*ContactTask, error)
+	// Entity-type catalog queries (SP1 graph foundation).
+	// Idempotent entity-type seed support (PR2 seeds the curated subtypes).
+	UpsertEntityType(ctx context.Context, arg UpsertEntityTypeParams) error
 	// Named-param variant. host_id follows claim-on-first-non-NULL-emit:
 	// legacy rows whose host_id IS NULL (pre-migration data) get claimed
 	// by the first host that emits an upsert for them, but non-NULL
@@ -1946,6 +1973,9 @@ type Querier interface {
 	// does NOT touch auth_state (which is managed by AuthSessionManager).
 	UpsertTelegramSessionData(ctx context.Context, arg UpsertTelegramSessionDataParams) (*TelegramSession, error)
 	UpsertTelegramUpdateState(ctx context.Context, arg UpsertTelegramUpdateStateParams) (*TelegramUpdateState, error)
+	// Idempotent venue creation for the PR6 interaction backfill: a re-run for the
+	// same container is a no-op that refreshes the title and returns the existing row.
+	UpsertVenue(ctx context.Context, arg UpsertVenueParams) (*Venue, error)
 	// Writes the recomputed date columns. contact_by is passed pre-computed by
 	// the Go caller (cadence.CalculateContactBy, environment-aware) so the value
 	// matches the forward writer exactly; this query does no cadence arithmetic.
