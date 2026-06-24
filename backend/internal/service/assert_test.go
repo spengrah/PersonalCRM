@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/repository"
 
@@ -32,7 +33,7 @@ func TestValidateFactValue(t *testing.T) {
 		{"text wrong type for num pred", &AssertRequest{ValueText: strPtr("x")}, numPred, true},
 		{"num ok", &AssertRequest{ValueNum: numPtr(42)}, numPred, false},
 		{"num missing", &AssertRequest{ValueText: strPtr("x")}, numPred, true},
-		{"date ok", &AssertRequest{ValueDate: datePtr(time.Now())}, datePred, false},
+		{"date ok", &AssertRequest{ValueDate: datePtr(accelerated.GetCurrentTime())}, datePred, false},
 		{"bool ok", &AssertRequest{ValueBool: boolPtr(true)}, boolPred, false},
 		{"two scalars set", &AssertRequest{ValueText: strPtr("x"), ValueNum: numPtr(1)}, textPred, true},
 		{"no scalar set", &AssertRequest{}, textPred, true},
@@ -55,7 +56,7 @@ func TestScalarCount(t *testing.T) {
 	assert.Equal(t, 0, scalarCount(&AssertRequest{}))
 	assert.Equal(t, 1, scalarCount(&AssertRequest{ValueText: strPtr("x")}))
 	assert.Equal(t, 1, scalarCount(&AssertRequest{ValueBool: boolPtr(false)}))
-	assert.Equal(t, 2, scalarCount(&AssertRequest{ValueText: strPtr("x"), ValueDate: datePtr(time.Now())}))
+	assert.Equal(t, 2, scalarCount(&AssertRequest{ValueText: strPtr("x"), ValueDate: datePtr(accelerated.GetCurrentTime())}))
 }
 
 // TestIsValidSourceKind covers the closed enum membership.
