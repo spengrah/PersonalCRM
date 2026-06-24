@@ -15,6 +15,15 @@ set -u
 cd "$(dirname "${BASH_SOURCE[0]}")/../.." || exit 1   # repo root
 REPO="$PWD"
 
+# Sanitize hook-inherited git env BEFORE any git command. git exports GIT_DIR to
+# hooks (absolute in linked worktrees), which silently redirects every
+# `git -C "$tmp" ...` below at the REAL repo with work-tree=$tmp: `add -A` wipes
+# the real index down to the temp fixture files, `commit -m init` strands fixture
+# commits on the pushed branch, and `worktree add` mutates the real repo — which
+# corrupts a worktree push (test-map coverage then sees zero specs). Unsetting
+# here restores cwd/-C-based discovery so the throwaway repos are isolated.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+
 source scripts/link-worktree-env.sh   # source-guard prevents the gate body
 source scripts/hooks/post-checkout     # source-guard prevents the hook body
 
