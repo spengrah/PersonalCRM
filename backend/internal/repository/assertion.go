@@ -97,6 +97,7 @@ type Provenance struct {
 	ChunkID         *string   `json:"chunk_id,omitempty"`
 	InputHash       string    `json:"input_hash"`
 	Quote           *string   `json:"quote,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 // InsertAssertionParams is the input for InsertAssertion. The caller (the write
@@ -238,6 +239,17 @@ func convertDbProvenance(p *db.AssertionProvenance) Provenance {
 	if p.Quote.Valid {
 		out.Quote = &p.Quote.String
 	}
+	if p.CreatedAt.Valid {
+		out.CreatedAt = p.CreatedAt.Time.UTC()
+	}
+	return out
+}
+
+func dbProvenanceToDomain(rows []*db.AssertionProvenance) []Provenance {
+	out := make([]Provenance, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, convertDbProvenance(row))
+	}
 	return out
 }
 
@@ -336,11 +348,11 @@ func findLiveProposition(ctx context.Context, q db.Querier, propositionKey strin
 	return &a, nil
 }
 
-// FindAcceptedForSlot returns the accepted, knowledge-open assertions for an
+// FindAcceptedForSlotTx returns the accepted, knowledge-open assertions for an
 // ASYMMETRIC (subject, predicate) slot whose valid-time overlaps the new row's
 // effective window. effectiveFrom is the caller-computed COALESCE(valid_from,
 // now); newValidTo is the new row's valid_to (nil = open-ended). Rows are locked
-// FOR UPDATE.
+// FOR UPDATE, so it is tx-only (the lock is held for the rest of the tx).
 func (r *AssertionRepository) FindAcceptedForSlotTx(ctx context.Context, tx pgx.Tx, subjectNodeID uuid.UUID, predicateKey string, effectiveFrom time.Time, newValidTo *time.Time) ([]Assertion, error) {
 	rows, err := db.New(tx).FindAcceptedForSlot(ctx, db.FindAcceptedForSlotParams{
 		SubjectNodeID: uuidToPgUUID(subjectNodeID),
@@ -418,7 +430,18 @@ func (r *AssertionRepository) WidenAssertionValidityTx(ctx context.Context, tx p
 // rows whose bound has passed (knowledgeTo = now), returning the updated rows so
 // the caller can emit one assertion.superseded event per row.
 func (r *AssertionRepository) RolloverDueBoundedSuccessors(ctx context.Context, knowledgeTo time.Time) ([]Assertion, error) {
-	rows, err := r.queries.RolloverDueBoundedSuccessors(ctx, pgtype.Timestamptz{Time: knowledgeTo, Valid: true})
+	return rolloverDueBoundedSuccessors(ctx, r.queries, knowledgeTo)
+}
+
+// RolloverDueBoundedSuccessorsTx is the tx-bound variant of
+// RolloverDueBoundedSuccessors (the rollover worker runs the terminal flip + its
+// per-row event publish in one tx).
+func (r *AssertionRepository) RolloverDueBoundedSuccessorsTx(ctx context.Context, tx pgx.Tx, knowledgeTo time.Time) ([]Assertion, error) {
+	return rolloverDueBoundedSuccessors(ctx, db.New(tx), knowledgeTo)
+}
+
+func rolloverDueBoundedSuccessors(ctx context.Context, q db.Querier, knowledgeTo time.Time) ([]Assertion, error) {
+	rows, err := q.RolloverDueBoundedSuccessors(ctx, pgtype.Timestamptz{Time: knowledgeTo, Valid: true})
 	if err != nil {
 		return nil, err
 	}
@@ -563,11 +586,21 @@ func (r *AssertionRepository) ListProvenance(ctx context.Context, assertionID uu
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Provenance, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, convertDbProvenance(row))
+	return dbProvenanceToDomain(rows), nil
+}
+
+// ListProvenanceBySource is the reverse lookup: every locator a given source
+// produced (via the (source_kind, source_id) index). Backs the source-row-
+// deletion sweep.
+func (r *AssertionRepository) ListProvenanceBySource(ctx context.Context, sourceKind, sourceID string) ([]Provenance, error) {
+	rows, err := r.queries.ListProvenanceBySource(ctx, db.ListProvenanceBySourceParams{
+		SourceKind: sourceKind,
+		SourceID:   sourceID,
+	})
+	if err != nil {
+		return nil, err
 	}
-	return out, nil
+	return dbProvenanceToDomain(rows), nil
 }
 
 // DeleteProvenanceLocatorTx drops a single locator (re-extraction retirement).

@@ -195,3 +195,52 @@ func (q *Queries) ListProvenance(ctx context.Context, assertionID pgtype.UUID) (
 	}
 	return items, nil
 }
+
+const ListProvenanceBySource = `-- name: ListProvenanceBySource :many
+SELECT assertion_id, locator_hash, source_kind, source_id, producer_kind, producer_version, field, start_offset, end_offset, chunk_id, input_hash, quote, created_at FROM assertion_provenance
+WHERE source_kind = $1 AND source_id = $2
+ORDER BY created_at
+`
+
+type ListProvenanceBySourceParams struct {
+	SourceKind string `json:"source_kind"`
+	SourceID   string `json:"source_id"`
+}
+
+// Reverse lookup: every provenance locator a given source produced ("what did
+// this source say"), via the (source_kind, source_id) index. Backs the
+// source-row-deletion sweep (when a content row is hard-deleted, find the
+// locators that referenced it).
+func (q *Queries) ListProvenanceBySource(ctx context.Context, arg ListProvenanceBySourceParams) ([]*AssertionProvenance, error) {
+	rows, err := q.db.Query(ctx, ListProvenanceBySource, arg.SourceKind, arg.SourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*AssertionProvenance{}
+	for rows.Next() {
+		var i AssertionProvenance
+		if err := rows.Scan(
+			&i.AssertionID,
+			&i.LocatorHash,
+			&i.SourceKind,
+			&i.SourceID,
+			&i.ProducerKind,
+			&i.ProducerVersion,
+			&i.Field,
+			&i.StartOffset,
+			&i.EndOffset,
+			&i.ChunkID,
+			&i.InputHash,
+			&i.Quote,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

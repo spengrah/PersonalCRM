@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 
@@ -63,7 +64,7 @@ func TestAssertionStore_Integration(t *testing.T) {
 			SubjectNodeID:  subjectID,
 			PredicateKey:   "home_address",
 			ValueText:      &text,
-			KnowledgeFrom:  time.Now().UTC(),
+			KnowledgeFrom:  accelerated.GetCurrentTime().UTC(),
 			Confidence:     80,
 			Salience:       45,
 			Status:         repository.AssertionStatusAccepted,
@@ -95,11 +96,12 @@ func TestAssertionStore_Integration(t *testing.T) {
 		// Append a provenance locator.
 		field := "body"
 		quote := gen.Prefix() + "they said so"
+		sourceID := gen.Prefix() + "msg-1"
 		ins, err := assertionRepo.InsertProvenance(ctx, repository.InsertProvenanceParams{
 			AssertionID:  inserted.ID,
 			LocatorHash:  gen.Prefix() + "loc-1",
 			SourceKind:   repository.SourceKindCommsMessage,
-			SourceID:     gen.Prefix() + "msg-1",
+			SourceID:     sourceID,
 			ProducerKind: repository.ProducerKindExtractor,
 			Field:        &field,
 			Quote:        &quote,
@@ -107,12 +109,22 @@ func TestAssertionStore_Integration(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, ins, "first locator insert reports a row inserted")
 
+		// Forward lookup (by assertion_id).
 		provs, err := assertionRepo.ListProvenance(ctx, inserted.ID)
 		require.NoError(t, err)
 		require.Len(t, provs, 1)
 		assert.Equal(t, repository.SourceKindCommsMessage, provs[0].SourceKind)
 		require.NotNil(t, provs[0].Quote)
 		assert.Equal(t, quote, *provs[0].Quote)
+		assert.False(t, provs[0].CreatedAt.IsZero(), "created_at is preserved at the repository boundary")
+
+		// Reverse lookup (by source_kind, source_id) — the (source_kind, source_id)
+		// index answers "what did this source produce".
+		bySource, err := assertionRepo.ListProvenanceBySource(ctx, repository.SourceKindCommsMessage, sourceID)
+		require.NoError(t, err)
+		require.Len(t, bySource, 1)
+		assert.Equal(t, inserted.ID, bySource[0].AssertionID, "reverse lookup resolves back to the assertion")
+		assert.Equal(t, sourceID, bySource[0].SourceID)
 
 		// Namespace-scoped count read.
 		n, err := support.CountAssertionsForSubject(ctx, subjectID)
@@ -171,7 +183,7 @@ func TestAssertionStore_Integration(t *testing.T) {
 		// the live one — the live-proposition index is partial on the live predicate.
 		spec := gen.FactAssertion("home_address")
 		terminal := baseFact(subjectID, spec.PropositionKey, spec.ValueText)
-		now := time.Now().UTC()
+		now := accelerated.GetCurrentTime().UTC()
 		terminal.Status = repository.AssertionStatusSuperseded
 		closure := repository.ClosureReasonSuperseded
 		terminal.ClosureReason = &closure
@@ -217,7 +229,7 @@ func TestAssertionStore_Integration(t *testing.T) {
 		t.Cleanup(func() { _, _ = support.DeleteNodesByLabelPrefix(ctx, gen.Prefix()) })
 		t.Cleanup(func() { _, _ = support.DeleteAssertionsForNode(ctx, subjectID) })
 
-		now := time.Now().UTC()
+		now := accelerated.GetCurrentTime().UTC()
 
 		// Open-ended accepted row → current.
 		open := gen.FactAssertion("home_address")
@@ -285,7 +297,7 @@ func TestAssertionStore_Integration(t *testing.T) {
 		t.Cleanup(func() { _, _ = support.DeleteNodesByLabelPrefix(ctx, gen.Prefix()) })
 		t.Cleanup(func() { _, _ = support.DeleteAssertionsForNode(ctx, subjectID) })
 
-		now := time.Now().UTC()
+		now := accelerated.GetCurrentTime().UTC()
 
 		// Accepted WITH knowledge_to → violation (a live status must not be closed).
 		acceptedClosed := baseFact(subjectID, gen.Prefix()+"acc-closed", gen.Prefix()+"v1")
@@ -312,7 +324,7 @@ func TestAssertionStore_Integration(t *testing.T) {
 		t.Cleanup(func() { _, _ = support.DeleteNodesByLabelPrefix(ctx, gen.Prefix()) })
 		t.Cleanup(func() { _, _ = support.DeleteAssertionsForNode(ctx, subjectID) })
 
-		now := time.Now().UTC()
+		now := accelerated.GetCurrentTime().UTC()
 
 		// valid_to <= valid_from → assertion_valid_range violation.
 		from := now
@@ -354,7 +366,7 @@ func TestAssertionStore_Integration(t *testing.T) {
 				SubjectNodeID:  subjectID,
 				PredicateKey:   "home_address",
 				ValueNum:       &v,
-				KnowledgeFrom:  time.Now().UTC(),
+				KnowledgeFrom:  accelerated.GetCurrentTime().UTC(),
 				Confidence:     80,
 				Salience:       45,
 				Status:         repository.AssertionStatusAccepted,
@@ -371,7 +383,7 @@ func TestAssertionStore_Integration(t *testing.T) {
 			SubjectNodeID:  subjectID,
 			PredicateKey:   "home_address",
 			ValueNum:       &fin,
-			KnowledgeFrom:  time.Now().UTC(),
+			KnowledgeFrom:  accelerated.GetCurrentTime().UTC(),
 			Confidence:     80,
 			Salience:       45,
 			Status:         repository.AssertionStatusAccepted,
@@ -395,7 +407,7 @@ func TestAssertionStore_Integration(t *testing.T) {
 		// In ONE tx: insert the NEW row (its proposition_key differs so it does not
 		// collide on the live index), then close the prior pointing superseded_by at
 		// the new row. With the DEFERRABLE self-FK the order is valid regardless.
-		now := time.Now().UTC()
+		now := accelerated.GetCurrentTime().UTC()
 		tx, err := database.Pool.Begin(ctx)
 		require.NoError(t, err)
 		defer func() { _ = tx.Rollback(ctx) }()
@@ -432,7 +444,8 @@ func TestAssertionStore_Integration(t *testing.T) {
 
 		// Two goroutines race to insert the SAME proposition_key; the DB constraint
 		// (idx_assertion_live_proposition) admits exactly one. (The write-path
-		// savepoint-recover is exercised in PR4; here we prove the DB invariant.)
+		// savepoint-recover lives in the assert() service layer; here we prove the
+		// DB invariant the recover relies on.)
 		const n = 2
 		var wg sync.WaitGroup
 		results := make([]error, n)

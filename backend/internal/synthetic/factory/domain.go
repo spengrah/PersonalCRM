@@ -248,8 +248,8 @@ func (g *Generator) Venue(source, kind string) VenueSpec {
 // PropositionKey are namespace-prefixed so a test scopes its reads to its own
 // namespace on the shared DB; Confidence/Salience are sensible defaults the test
 // may override. The write LOGIC (the real proposition_key derivation) is a later
-// layer — this spec is for the PR3 repository round-trip tests that insert via
-// the repository directly.
+// layer — this spec is for the repository round-trip tests that insert via the
+// repository directly.
 type AssertionSpec struct {
 	PredicateKey   string
 	ValueText      string

@@ -1147,6 +1147,11 @@ type Querier interface {
 	ListPredicatesByStatus(ctx context.Context, status string) ([]*ListPredicatesByStatusRow, error)
 	// All locators for an assertion, oldest first.
 	ListProvenance(ctx context.Context, assertionID pgtype.UUID) ([]*AssertionProvenance, error)
+	// Reverse lookup: every provenance locator a given source produced ("what did
+	// this source say"), via the (source_kind, source_id) index. Backs the
+	// source-row-deletion sweep (when a content row is hard-deleted, find the
+	// locators that referenced it).
+	ListProvenanceBySource(ctx context.Context, arg ListProvenanceBySourceParams) ([]*AssertionProvenance, error)
 	ListRecentSyncLogs(ctx context.Context, limit int32) ([]*ExternalSyncLog, error)
 	// Returns all live interactions attributed to a specific anarlog session
 	// (both impromptu / orphan-with-tags entries and walk-in supplementals).

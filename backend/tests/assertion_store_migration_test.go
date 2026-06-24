@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"os"
 	"testing"
-	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
@@ -60,7 +60,7 @@ func TestAssertionStore_MigrationDownUp(t *testing.T) {
 		SubjectNodeID:  subjectID,
 		PredicateKey:   "home_address",
 		ValueText:      &value,
-		KnowledgeFrom:  time.Now().UTC(),
+		KnowledgeFrom:  accelerated.GetCurrentTime().UTC(),
 		Confidence:     80,
 		Salience:       45,
 		Status:         repository.AssertionStatusAccepted,
@@ -100,7 +100,7 @@ func TestAssertionStore_MigrationDownUp(t *testing.T) {
 		SubjectNodeID:  subjectID,
 		PredicateKey:   "home_address",
 		ValueText:      &value,
-		KnowledgeFrom:  time.Now().UTC(),
+		KnowledgeFrom:  accelerated.GetCurrentTime().UTC(),
 		Confidence:     80,
 		Salience:       45,
 		Status:         repository.AssertionStatusAccepted,
@@ -113,7 +113,7 @@ func TestAssertionStore_MigrationDownUp(t *testing.T) {
 	_, err = assertionRepo.InsertAssertion(ctx, repository.InsertAssertionParams{
 		SubjectNodeID:  subjectID,
 		PredicateKey:   "home_address",
-		KnowledgeFrom:  time.Now().UTC(),
+		KnowledgeFrom:  accelerated.GetCurrentTime().UTC(),
 		Confidence:     80,
 		Salience:       45,
 		Status:         repository.AssertionStatusAccepted,

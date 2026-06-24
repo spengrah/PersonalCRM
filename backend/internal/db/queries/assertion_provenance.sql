@@ -25,6 +25,15 @@ SELECT * FROM assertion_provenance
 WHERE assertion_id = $1
 ORDER BY created_at;
 
+-- name: ListProvenanceBySource :many
+-- Reverse lookup: every provenance locator a given source produced ("what did
+-- this source say"), via the (source_kind, source_id) index. Backs the
+-- source-row-deletion sweep (when a content row is hard-deleted, find the
+-- locators that referenced it).
+SELECT * FROM assertion_provenance
+WHERE source_kind = $1 AND source_id = $2
+ORDER BY created_at;
+
 -- name: DeleteProvenanceLocator :exec
 -- Re-extraction retirement (a later layer): drop a single locator. When the last
 -- locator is removed the write API retracts the assertion.
