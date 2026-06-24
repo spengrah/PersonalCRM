@@ -38,6 +38,11 @@ ALLOWLIST=(
   # shared projection must stay identical, not be split to SELECT *. Mirrors
   # allowedDuplicateProjections in backend/tests/sqlc_select_list_static_test.go.
   "external_contact|canon.crm_contact_id as canon_crm_contact_id, canon.match_status as canon_match_status, ec.*"
+  # GetPredicate / ListCuratedPredicates / ListPredicatesByStatus deliberately
+  # omit the nullable embedding vector(1536): pgvector-go's value type panics
+  # scanning a SQL NULL, so SELECT * would crash every read of a predicate with
+  # no embedding yet. Mirrors allowedDuplicateProjections in the Go test.
+  "predicate|\"symmetric\", base_rate_days, cardinality, created_at, default_review_policy, default_salience, description, inverse_predicate, key, kind, object_type, proposition_bucket, status, subject_type, synonyms, temporal_profile, typical_duration_days, value_type"
 )
 
 is_allowlisted() {
