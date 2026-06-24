@@ -220,6 +220,48 @@ func TestContactNodeDualWrite_Integration(t *testing.T) {
 		assert.Equal(t, renamed, node.CanonicalLabel, "cadence-path enrichment rename syncs the node label")
 	})
 
+	t.Run("no-name enrichment keeps the node label matching the contact", func(t *testing.T) {
+		t.Parallel()
+		gen, _ := migrationGenerator(t)
+		t.Cleanup(func() { _, _ = support.DeleteNodesByLabelPrefix(ctx, gen.Prefix()) })
+
+		contactRepo := repository.NewContactRepository(database.Queries)
+		methodRepo := repository.NewContactMethodRepository(database.Queries)
+		interactionRepo := repository.NewInteractionRepository(database.Queries)
+		taskRepo := repository.NewContactTaskRepository(database.Queries)
+		enrichmentRepo := repository.NewEnrichmentRepository(database.Queries)
+		externalRepo := repository.NewExternalContactRepository(database.Queries)
+		svc := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, taskRepo, nil, nil)
+		enrichSvc := service.NewEnrichmentService(database, contactRepo, methodRepo, enrichmentRepo, nil, nil)
+
+		spec := gen.Contact()
+		contact, _, err := svc.CreateContact(ctx, repository.CreateContactRequest{
+			FullName: spec.FullName,
+		}, nil)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = contactRepo.HardDeleteContact(ctx, contact.ID) })
+
+		// External carries a birthday the contact lacks → the legacy
+		// EnrichContactFromExternal path performs a (non-rename) UpdateContact,
+		// which now also unconditionally syncs the node label in-tx. The label
+		// must still equal the (unchanged) contact name afterward.
+		bday := accelerated.GetCurrentTime().UTC()
+		external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+			Source:   "google",
+			SourceID: gen.Prefix() + "ext-src-noname",
+			Birthday: &bday,
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = externalRepo.Delete(ctx, external.ID) })
+
+		_, err = enrichSvc.EnrichContactFromExternal(ctx, contact.ID, external)
+		require.NoError(t, err)
+
+		node, err := support.GetNodeForContact(ctx, contact.ID)
+		require.NoError(t, err)
+		assert.Equal(t, contact.FullName, node.CanonicalLabel, "no-name enrichment leaves the node label in sync")
+	})
+
 	t.Run("merge with a new name syncs the target node label", func(t *testing.T) {
 		t.Parallel()
 		gen, _ := migrationGenerator(t)
@@ -416,6 +458,15 @@ func TestContactNodeDualWrite_MigrationDownUp(t *testing.T) {
 	winnerStillThere, err := nodeRepo.GetNode(ctx, winnerID)
 	require.NoError(t, err, "guarded down preserves a merge winner referenced by a loser")
 	assert.Equal(t, winnerID, winnerStillThere.ID)
+
+	// The merge loser (soft-deleted, merged_into set, no assertions) also
+	// survives — the `merged_into IS NULL` guard arm skips it (deleting it would
+	// be a silent loss of merge history). Resolvable via the includes-deleted
+	// read since SetNodeMergedInto tombstones it.
+	loserStillThere, err := nodeRepo.GetNodeIncludingDeleted(ctx, loserID)
+	require.NoError(t, err, "guarded down preserves a merged-away loser node")
+	require.NotNil(t, loserStillThere.MergedInto)
+	assert.Equal(t, winnerID, *loserStillThere.MergedInto)
 
 	// Roll back up: the backfill re-seeds a person node for every NON-deleted
 	// contact at its own id. The unreferenced contact still exists (its row was
