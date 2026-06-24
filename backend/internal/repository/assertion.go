@@ -597,7 +597,18 @@ func insertProvenance(ctx context.Context, q db.Querier, p InsertProvenanceParam
 
 // ListProvenance returns all locators for an assertion, oldest first.
 func (r *AssertionRepository) ListProvenance(ctx context.Context, assertionID uuid.UUID) ([]Provenance, error) {
-	rows, err := r.queries.ListProvenance(ctx, uuidToPgUUID(assertionID))
+	return listProvenance(ctx, r.queries, assertionID)
+}
+
+// ListProvenanceTx is the tx-bound variant of ListProvenance. The merge path uses
+// it so it sees a loser assertion's provenance written earlier in the SAME tx
+// (e.g. AssertTx then AcceptTx in one tx).
+func (r *AssertionRepository) ListProvenanceTx(ctx context.Context, tx pgx.Tx, assertionID uuid.UUID) ([]Provenance, error) {
+	return listProvenance(ctx, db.New(tx), assertionID)
+}
+
+func listProvenance(ctx context.Context, q db.Querier, assertionID uuid.UUID) ([]Provenance, error) {
+	rows, err := q.ListProvenance(ctx, uuidToPgUUID(assertionID))
 	if err != nil {
 		return nil, err
 	}

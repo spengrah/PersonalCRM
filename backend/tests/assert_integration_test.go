@@ -909,12 +909,13 @@ func TestAssert_ValidTime(t *testing.T) {
 		require.NotNil(t, boundedNYC.ValidTo, "NYC bounded by LA")
 		require.NotNil(t, boundedNYC.SupersededBy)
 
-		// Re-affirm NYC from a DIFFERENT (next) year bucket — a same-value
-		// reaffirmation. It must widen the lower bound but NOT clear NYC's pending
-		// upper bound (LA).
-		nextYear := time.Date(now.Year()+1, 6, 1, 0, 0, 0, 0, time.UTC)
+		// Re-affirm NYC from an EARLIER (last) year bucket — a same-value
+		// reaffirmation whose window OVERLAPS the bounded NYC (so it actually hits
+		// widenReaffirmation). It must widen NYC's lower bound backward but NOT clear
+		// NYC's pending upper bound (LA).
+		lastYear := time.Date(now.Year()-1, 6, 1, 0, 0, 0, 0, time.UTC)
 		reaffirm := textFactReq(subject, "home_address", "NYC", gen.Prefix(), "nyc2")
-		reaffirm.ValidFrom = &nextYear
+		reaffirm.ValidFrom = &lastYear
 		_, err = h.svc.Assert(ctx, reaffirm)
 		require.NoError(t, err)
 
@@ -922,6 +923,8 @@ func TestAssert_ValidTime(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, afterReaffirm.ValidTo, "NYC's pending-successor bound is preserved")
 		assert.True(t, afterReaffirm.ValidTo.Equal(*boundedNYC.ValidTo), "valid_to bound unchanged by the reaffirmation")
+		require.NotNil(t, afterReaffirm.ValidFrom)
+		assert.True(t, afterReaffirm.ValidFrom.Equal(lastYear), "lower bound widened backward to the new evidence")
 		// LA stays the pending future successor; exactly one current now (NYC).
 		curNow, err := h.assertionRepo.GetCurrentAccepted(ctx, subject, "home_address", now)
 		require.NoError(t, err)
@@ -1052,6 +1055,63 @@ func TestAssert_Lifecycle(t *testing.T) {
 		require.NotNil(t, rejected.KnowledgeTo)
 		assert.False(t, rejected.KnowledgeTo.Before(rejected.KnowledgeFrom), "knowledge_to >= knowledge_from")
 	})
+
+	// Case 23: accept-time same-value widen must NOT clear a pending-successor bound
+	// (the accept-path analogue of the P0). NYC accepted (bounded by a future LA),
+	// then a same-value force-confirm NYC proposal whose window overlaps NYC is
+	// accepted → it widens NYC backward but keeps NYC's bound to LA; exactly one
+	// current now, and LA still becomes current after its date.
+	t.Run("23 accept-time widen preserves pending-successor bound", func(t *testing.T) {
+		t.Parallel()
+		gen, _ := migrationGenerator(t)
+		subject := h.seedPerson(t, ctx, gen.Prefix(), "subj")
+		now := accelerated.GetCurrentTime().UTC()
+
+		thisYear := time.Date(now.Year(), 2, 1, 0, 0, 0, 0, time.UTC)
+		nycReq := textFactReq(subject, "home_address", "NYC", gen.Prefix(), "nyc")
+		nycReq.ValidFrom = &thisYear
+		nyc, err := h.svc.Assert(ctx, nycReq)
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, nyc.ID)
+
+		future := now.Add(30 * 24 * time.Hour)
+		laReq := textFactReq(subject, "home_address", "LA", gen.Prefix(), "la")
+		laReq.ValidFrom = &future
+		la, err := h.svc.Assert(ctx, laReq)
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, la.ID)
+		boundedNYC, err := h.assertionRepo.GetAssertion(ctx, nyc.ID)
+		require.NoError(t, err)
+		require.NotNil(t, boundedNYC.ValidTo)
+		require.NotNil(t, boundedNYC.SupersededBy)
+
+		// A force-confirm same-value NYC proposal in last year's bucket (overlaps NYC).
+		lastYear := time.Date(now.Year()-1, 6, 1, 0, 0, 0, 0, time.UTC)
+		propReq := textFactReq(subject, "home_address", "NYC", gen.Prefix(), "nyc2")
+		propReq.ValidFrom = &lastYear
+		propReq.ForceConfirm = true
+		proposed, err := h.svc.Assert(ctx, propReq)
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, proposed.ID)
+		require.Equal(t, repository.AssertionStatusProposed, proposed.Status)
+
+		survivor, err := h.svc.Accept(ctx, proposed.ID, service.AcceptRequest{})
+		require.NoError(t, err)
+		assert.Equal(t, nyc.ID, survivor.ID, "Accept widens into NYC")
+
+		afterAccept, err := h.assertionRepo.GetAssertion(ctx, nyc.ID)
+		require.NoError(t, err)
+		require.NotNil(t, afterAccept.ValidTo, "NYC's pending-successor bound is preserved by accept-time widen")
+		assert.True(t, afterAccept.ValidTo.Equal(*boundedNYC.ValidTo), "valid_to bound unchanged")
+
+		// Exactly one current now (NYC); LA still becomes current after its date.
+		curNow, err := h.assertionRepo.GetCurrentAccepted(ctx, subject, "home_address", now)
+		require.NoError(t, err)
+		assert.Equal(t, nyc.ID, curNow.ID)
+		curFuture, err := h.assertionRepo.GetCurrentAccepted(ctx, subject, "home_address", future.Add(time.Hour))
+		require.NoError(t, err)
+		assert.Equal(t, la.ID, curFuture.ID, "LA becomes current after its date (bound intact)")
+	})
 }
 
 // TestAssert_Validation covers the DB-dependent validation rejections (the pure
@@ -1069,6 +1129,27 @@ func TestAssert_Validation(t *testing.T) {
 		subject := h.seedPerson(t, ctx, gen.Prefix(), "subj")
 		_, err := h.svc.Assert(ctx, textFactReq(subject, "no_such_predicate", "x", gen.Prefix(), "u"))
 		require.ErrorIs(t, err, service.ErrAssertValidation)
+	})
+
+	t.Run("degenerate range rejected even when a live row would corroborate", func(t *testing.T) {
+		t.Parallel()
+		gen, _ := migrationGenerator(t)
+		subject := h.seedPerson(t, ctx, gen.Prefix(), "subj")
+		now := accelerated.GetCurrentTime().UTC()
+
+		// An open-start accepted row that the degenerate write would dedup-match.
+		first, err := h.svc.Assert(ctx, textFactReq(subject, "home_address", "same", gen.Prefix(), "d1"))
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, first.ID)
+
+		// SAME value, but valid_to=yesterday with NULL valid_from → effective_from=now,
+		// valid_to <= effective_from → degenerate. It must be REJECTED in validation
+		// (before the dedup lookup), NOT silently corroborated.
+		past := now.Add(-24 * time.Hour)
+		bad := textFactReq(subject, "home_address", "same", gen.Prefix(), "d2")
+		bad.ValidTo = &past
+		_, err = h.svc.Assert(ctx, bad)
+		require.ErrorIs(t, err, service.ErrAssertValidation, "degenerate range rejected pre-dedup")
 	})
 
 	t.Run("missing subject node rejected", func(t *testing.T) {

@@ -460,6 +460,20 @@ func (s *AssertService) validate(ctx context.Context, tx pgx.Tx, req *AssertRequ
 		return nil, "", uuid.Nil, nil, err
 	}
 
+	// Degenerate-range guard (in validation, BEFORE the dedup lookup, so it fires
+	// even when an existing live row would otherwise corroborate): a now/unknown
+	// start (valid_from NULL → effective_from = now) combined with an explicit past
+	// valid_to is an incoherent "true until a past date but start unknown"
+	// assertion → REJECT (routed to manual review). A fully-bounded historical fact
+	// has an explicit valid_from < valid_to and passes.
+	effectiveFrom := accelerated.GetCurrentTime().UTC()
+	if req.ValidFrom != nil {
+		effectiveFrom = req.ValidFrom.UTC()
+	}
+	if req.ValidTo != nil && !req.ValidTo.UTC().After(effectiveFrom) {
+		return nil, "", uuid.Nil, nil, validationError("valid_to %s is not after effective_from %s (degenerate/empty range)", req.ValidTo.UTC(), effectiveFrom)
+	}
+
 	canonKey, canonSubject, canonObject = canonicalEdge(predicate, req.SubjectNodeID, req.ObjectNodeID)
 	return predicate, canonKey, canonSubject, canonObject, nil
 }
@@ -745,16 +759,12 @@ func (s *AssertService) writeNew(ctx context.Context, tx pgx.Tx, predicate *repo
 
 	// effective_from = COALESCE(valid_from, now) — the overlap-probe + supersession
 	// boundary. A NULL valid_from (the common "as of now" edit) probes as
-	// [now, valid_to) and the STORED valid_from stays NULL/open.
+	// [now, valid_to) and the STORED valid_from stays NULL/open. (The degenerate
+	// valid_to <= effective_from range is already rejected in validate(), before the
+	// dedup lookup, so it cannot slip through a corroboration match.)
 	effectiveFrom := now
 	if req.ValidFrom != nil {
 		effectiveFrom = req.ValidFrom.UTC()
-	}
-
-	// Degenerate-range guard: an explicit past valid_to with a now/unknown start is
-	// an incoherent "true until a past date but start unknown" assertion → REJECT.
-	if req.ValidTo != nil && !req.ValidTo.UTC().After(effectiveFrom) {
-		return nil, validationError("valid_to %s is not after effective_from %s (degenerate/empty range)", req.ValidTo.UTC(), effectiveFrom)
 	}
 
 	// Single-cardinality + accepted-landing writes run the supersession check under
@@ -1018,7 +1028,7 @@ func (s *AssertService) widenReaffirmation(ctx context.Context, tx pgx.Tx, predi
 // and close the loser superseded with superseded_by = survivor. Emits
 // provenance_added per moved locator + superseded for the loser.
 func (s *AssertService) mergeSameValue(ctx context.Context, tx pgx.Tx, loser, survivor *repository.Assertion) error {
-	provs, err := s.assertionRepo.ListProvenance(ctx, loser.ID)
+	provs, err := s.assertionRepo.ListProvenanceTx(ctx, tx, loser.ID)
 	if err != nil {
 		return fmt.Errorf("list loser provenance: %w", err)
 	}
@@ -1192,17 +1202,28 @@ func (s *AssertService) resolveAcceptConflicts(ctx context.Context, tx pgx.Tx, p
 	// the writeNew widen rule (P1: Accept must widen, not supersede, a same value).
 	acceptingSignature := assertionSignature(accepting)
 	if existing := findSameValue(conflicts, acceptingSignature); existing != nil {
-		existing.ValidFrom = minStart(existing.ValidFrom, accepting.ValidFrom)
-		existing.ValidTo = maxEnd(existing.ValidTo, accepting.ValidTo)
+		widenedFrom := minStart(existing.ValidFrom, accepting.ValidFrom)
+		widenedTo := maxEnd(existing.ValidTo, accepting.ValidTo)
+		// Do NOT clear a pending-successor bound (superseded_by set): widening the
+		// upper bound past it would leave two current rows once the successor date
+		// passes (mirrors widenReaffirmation). Only the backward lower-bound extends.
+		if existing.SupersededBy != nil {
+			widenedTo = utcPtr(existing.ValidTo)
+		}
+		existing.ValidFrom = widenedFrom
+		existing.ValidTo = widenedTo
 		widenReq := &AssertRequest{ValidFrom: existing.ValidFrom}
 		newKey := computePropositionKey(predicate, canonKey, canonSubject, canonObject, widenReq)
+		// MERGE/close the accepting (loser) row FIRST so it is no longer live —
+		// otherwise WidenAssertionValidity could assign the survivor a key the still-
+		// live accepting row holds and 23505 on idx_assertion_live_proposition.
+		if err := s.mergeSameValue(ctx, tx, accepting, existing); err != nil {
+			return nil, false, err
+		}
 		if err := s.assertionRepo.WidenAssertionValidityTx(ctx, tx, existing.ID, existing.ValidFrom, existing.ValidTo, newKey); err != nil {
 			return nil, false, fmt.Errorf("widen survivor at accept: %w", err)
 		}
 		existing.PropositionKey = newKey
-		if err := s.mergeSameValue(ctx, tx, accepting, existing); err != nil {
-			return nil, false, err
-		}
 		return existing, true, nil
 	}
 
@@ -1340,8 +1361,28 @@ func (s *AssertService) Accept(ctx context.Context, assertionID uuid.UUID, _ Acc
 // AcceptTx is the tx-bound variant of Accept.
 func (s *AssertService) AcceptTx(ctx context.Context, tx pgx.Tx, assertionID uuid.UUID) (*repository.Assertion, error) {
 	now := accelerated.GetCurrentTime().UTC()
-	// Row-lock so the proposed-status check + the accept are atomic vs a concurrent
-	// Accept/Reject of the same row.
+	// GLOBAL lock order — advisory slot lock(s) BEFORE any row lock (matches the
+	// writeNew order), so Accept cannot deadlock against a concurrent assert that
+	// holds the advisory lock and then row-locks via FindAcceptedForSlot FOR UPDATE.
+	// A plain (unlocked) read gets the predicate + canonical slot first; the
+	// authoritative status check happens after the row lock below.
+	pre, err := s.assertionRepo.GetAssertionTx(ctx, tx, assertionID)
+	if err != nil {
+		return nil, err
+	}
+	predicate, err := s.predicateRepo.GetPredicate(ctx, pre.PredicateKey)
+	if err != nil {
+		return nil, fmt.Errorf("load predicate: %w", err)
+	}
+	if predicate.Cardinality == repository.PredicateCardinalitySingle {
+		canonKey, canonSubject, canonObject := canonicalEdge(predicate, pre.SubjectNodeID, pre.ObjectNodeID)
+		if err := s.acquireSlotLocks(ctx, tx, predicate, canonKey, canonSubject, canonObject); err != nil {
+			return nil, err
+		}
+	}
+	// Now row-lock so the proposed-status check + the accept are atomic vs a
+	// concurrent Accept/Reject of the same row (re-read under the lock; a concurrent
+	// transition between the plain read and here is caught by the status check).
 	assertion, err := s.assertionRepo.GetAssertionForUpdateTx(ctx, tx, assertionID)
 	if err != nil {
 		return nil, err
@@ -1349,12 +1390,8 @@ func (s *AssertService) AcceptTx(ctx context.Context, tx pgx.Tx, assertionID uui
 	if assertion.Status != repository.AssertionStatusProposed {
 		return nil, validationError("assertion %s is %q, only a proposed assertion may be accepted", assertionID, assertion.Status)
 	}
-	predicate, err := s.predicateRepo.GetPredicate(ctx, assertion.PredicateKey)
-	if err != nil {
-		return nil, fmt.Errorf("load predicate: %w", err)
-	}
-	// Single-cardinality conflict resolution at accept time (locks the slot, then
-	// widens a same-value prior or supersedes different-value priors).
+	// Single-cardinality conflict resolution at accept time (the slot advisory lock
+	// is already held above; resolveAcceptConflicts re-acquires it re-entrantly).
 	survivor, merged, err := s.resolveAcceptConflicts(ctx, tx, predicate, assertion, now)
 	if err != nil {
 		return nil, err
