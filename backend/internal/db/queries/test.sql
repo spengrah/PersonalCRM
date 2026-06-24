@@ -541,6 +541,26 @@ WHERE source = 'telegram' AND source_id = ANY(@peer_ids::text[]);
 DELETE FROM external_identity
 WHERE source = 'telegram' AND source_id = ANY(@peer_ids::text[]);
 
+-- name: SyntheticCountNodesByLabelPrefix :one
+-- Graph (SP1) test support: count nodes whose canonical_label is ns-prefixed, so
+-- a test can scope assertions to its own namespace's nodes on the shared test DB.
+-- Caller passes a BARE prefix; '%' is appended here.
+SELECT COUNT(*) FROM node WHERE canonical_label LIKE @label_prefix || '%';
+
+-- name: SyntheticDeleteNodesByLabelPrefix :execrows
+-- Graph (SP1) cleanup: hard-delete nodes whose canonical_label is ns-prefixed.
+-- entity and venue cascade via their ON DELETE CASCADE FK to node, so this one
+-- delete removes a namespace's node+entity+venue rows. Caller passes a BARE
+-- prefix; '%' is appended here.
+DELETE FROM node WHERE canonical_label LIKE @label_prefix || '%';
+
+-- name: SyntheticDeleteEntityTypesByKeyPrefix :execrows
+-- Graph (SP1) cleanup: entity_type is a catalog table with no canonical_label, so
+-- a test that seeds its own ns-prefixed entity_type rows clears them by key
+-- prefix (the curated PR2 seed rows use bare keys and are never prefix-matched).
+-- Caller passes a BARE prefix; '%' is appended here.
+DELETE FROM entity_type WHERE key LIKE @key_prefix || '%';
+
 -- ============================================================================
 -- crm-admin --reset-and-seed support: a HARD wipe of every live data table
 -- so a staging instance can be reset to a known synthetic baseline. Preserves
