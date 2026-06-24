@@ -51,3 +51,13 @@ func pgDateToTimePtr(d pgtype.Date) *time.Time {
 	u := d.Time.UTC()
 	return &u
 }
+
+// jsonbOrEmpty is the JSONB default for a nil patch/detail/config. A nil []byte
+// sent to a NOT NULL JSONB column inserts SQL NULL (NOT the column DEFAULT), so
+// the repository substitutes '{}' to preserve the table contract.
+func jsonbOrEmpty(b []byte) []byte {
+	if len(b) == 0 {
+		return []byte("{}")
+	}
+	return b
+}

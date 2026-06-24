@@ -10,16 +10,6 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// emptyJSONObject is the JSONB default for a nil patch/detail/config. A nil
-// []byte sent to a NOT NULL JSONB column inserts SQL NULL (NOT the column
-// DEFAULT), so the repository substitutes '{}' to preserve the table contract.
-func jsonbOrEmpty(b []byte) []byte {
-	if len(b) == 0 {
-		return []byte("{}")
-	}
-	return b
-}
-
 // Entity subtype constants (the curated-core entity_type keys; the catalog rows
 // are seeded by the predicate-catalog migration). Provisional subtypes are
 // minted at runtime.
