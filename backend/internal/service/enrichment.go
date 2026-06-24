@@ -322,16 +322,28 @@ func (s *EnrichmentService) EnrichContactFromExternalWithSelections(
 			if txErr != nil {
 				logger.Warn().Err(txErr).Msg("failed to update contact with cadence override")
 			}
+		} else if nameChanged {
+			// A rename must keep contact.full_name and node.canonical_label in
+			// lockstep, so the two writes share one tx (atomic — never a
+			// half-applied rename).
+			txErr := pgx.BeginTxFunc(ctx, s.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+				txQueries := db.New(tx)
+				if _, txErr := repository.NewContactRepository(txQueries).UpdateContact(ctx, crmContactID, updateReq); txErr != nil {
+					return fmt.Errorf("update contact profile: %w", txErr)
+				}
+				if txErr := repository.NewNodeRepository(txQueries).UpdateNodeCanonicalLabelTx(ctx, tx, crmContactID, updateReq.FullName); txErr != nil {
+					return fmt.Errorf("sync person node label: %w", txErr)
+				}
+				return nil
+			})
+			if txErr != nil {
+				logger.Warn().Err(txErr).Msg("failed to update contact with enrichments")
+			}
 		} else {
-			// No cadence change — profile-only path is safe to run on the
-			// repository's default pool connection.
+			// No cadence change and no rename — profile-only path is safe to run
+			// on the repository's default pool connection.
 			if _, err := s.contactRepo.UpdateContact(ctx, crmContactID, updateReq); err != nil {
 				logger.Warn().Err(err).Msg("failed to update contact with enrichments")
-			} else if nameChanged {
-				nodeRepo := repository.NewNodeRepository(s.database.Queries)
-				if err := nodeRepo.UpdateNodeCanonicalLabel(ctx, crmContactID, updateReq.FullName); err != nil {
-					logger.Warn().Err(err).Msg("failed to sync person node label after enrichment rename")
-				}
 			}
 		}
 	}

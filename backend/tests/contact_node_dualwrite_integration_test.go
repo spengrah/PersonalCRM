@@ -323,6 +323,19 @@ func TestContactNodeDualWrite_MigrationDownUp(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	// Seed a merge winner/loser pair with NO assertions: the winner has
+	// merged_into NULL (so an assertion-only guard would select it for
+	// deletion) but is still referenced by the preserved loser via the
+	// merged_into self-FK (restrict). Deleting the winner would FK-violate, so
+	// the guarded down must skip it. (The loser carries merged_into, so it is
+	// never selected.)
+	winnerID, loserID := uuid.New(), uuid.New()
+	_, err = nodeRepo.CreateNode(ctx, winnerID, repository.NodeTypePerson, "migration-merge-winner")
+	require.NoError(t, err)
+	_, err = nodeRepo.CreateNode(ctx, loserID, repository.NodeTypePerson, "migration-merge-loser")
+	require.NoError(t, err)
+	require.NoError(t, nodeRepo.SetNodeMergedInto(ctx, loserID, winnerID))
+
 	m, err := migrate.New(fmt.Sprintf("file://%s", migrationsPath), cloneURL)
 	require.NoError(t, err)
 	t.Cleanup(func() { _, _ = m.Close() })
@@ -347,6 +360,13 @@ func TestContactNodeDualWrite_MigrationDownUp(t *testing.T) {
 	objStillThere, err := nodeRepo.GetNode(ctx, objectReferencedID)
 	require.NoError(t, err, "guarded down preserves the assertion-object person node")
 	assert.Equal(t, objectReferencedID, objStillThere.ID)
+
+	// The merge winner (live, no assertions) survives because the preserved
+	// loser still references it via merged_into, so the guarded down must not
+	// delete it (an assertion-only guard would have FK-violated here).
+	winnerStillThere, err := nodeRepo.GetNode(ctx, winnerID)
+	require.NoError(t, err, "guarded down preserves a merge winner referenced by a loser")
+	assert.Equal(t, winnerID, winnerStillThere.ID)
 
 	// Roll back up: the backfill re-seeds a person node for every NON-deleted
 	// contact at its own id. The unreferenced contact still exists (its row was
