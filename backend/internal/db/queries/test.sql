@@ -554,6 +554,20 @@ SELECT COUNT(*) FROM node WHERE canonical_label LIKE @label_prefix || '%';
 -- prefix; '%' is appended here.
 DELETE FROM node WHERE canonical_label LIKE @label_prefix || '%';
 
+-- name: SyntheticCountAssertionsForSubject :one
+-- Assertion-store test support: count the assertions whose subject is a given
+-- node, so a test scopes its assertions to its own namespace's subject node on
+-- the shared test DB.
+SELECT COUNT(*) FROM assertion WHERE subject_node_id = $1;
+
+-- name: SyntheticDeleteAssertionsForNode :execrows
+-- Assertion-store cleanup: hard-delete the assertions touching a node in EITHER
+-- position (provenance cascades). The assertion → node FK is restrict (NO
+-- ACTION), so a test MUST clear its assertions before deleting its nodes; this
+-- targeted delete is the cleanup primitive for that. superseded_by is a nullable
+-- self-FK, so a single multi-row DELETE clears a closed-pair set in one shot.
+DELETE FROM assertion WHERE subject_node_id = $1 OR object_node_id = $1;
+
 -- name: SyntheticDeleteEntityTypesByKeyPrefix :execrows
 -- Graph identity cleanup: entity_type is a catalog table with no canonical_label,
 -- so a test that seeds its own ns-prefixed entity_type rows clears them by key
@@ -597,6 +611,8 @@ DELETE FROM predicate WHERE key LIKE @key_prefix || '%';
 -- curated catalog intact. (Namespaced test cleanup still uses
 -- SyntheticDelete*ByKeyPrefix for its own provisional rows.)
 TRUNCATE TABLE
+    assertion,
+    assertion_provenance,
     calendar_event,
     comms_message,
     connection,

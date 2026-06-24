@@ -24,6 +24,8 @@ import (
 // allowlist, or is a migration-seeded catalog exclusion — so a future app table
 // omitted from the TRUNCATE FAILS the test.
 var wipedTables = []string{
+	"assertion",
+	"assertion_provenance",
 	"calendar_event",
 	"comms_message",
 	"connection",

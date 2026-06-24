@@ -60,6 +60,45 @@ func (ns NullRiverJobState) Value() (driver.Value, error) {
 	return string(ns.RiverJobState), nil
 }
 
+type Assertion struct {
+	ID             pgtype.UUID        `json:"id"`
+	SubjectNodeID  pgtype.UUID        `json:"subject_node_id"`
+	PredicateKey   string             `json:"predicate_key"`
+	ObjectNodeID   pgtype.UUID        `json:"object_node_id"`
+	ValueText      pgtype.Text        `json:"value_text"`
+	ValueNum       pgtype.Float8      `json:"value_num"`
+	ValueDate      pgtype.Date        `json:"value_date"`
+	ValueBool      pgtype.Bool        `json:"value_bool"`
+	ValidFrom      pgtype.Timestamptz `json:"valid_from"`
+	ValidTo        pgtype.Timestamptz `json:"valid_to"`
+	KnowledgeFrom  pgtype.Timestamptz `json:"knowledge_from"`
+	KnowledgeTo    pgtype.Timestamptz `json:"knowledge_to"`
+	Confidence     int16              `json:"confidence"`
+	Salience       int16              `json:"salience"`
+	Status         string             `json:"status"`
+	ClosureReason  pgtype.Text        `json:"closure_reason"`
+	SupersededBy   pgtype.UUID        `json:"superseded_by"`
+	TrustTier      pgtype.Text        `json:"trust_tier"`
+	PropositionKey string             `json:"proposition_key"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+type AssertionProvenance struct {
+	AssertionID     pgtype.UUID        `json:"assertion_id"`
+	LocatorHash     string             `json:"locator_hash"`
+	SourceKind      string             `json:"source_kind"`
+	SourceID        string             `json:"source_id"`
+	ProducerKind    string             `json:"producer_kind"`
+	ProducerVersion string             `json:"producer_version"`
+	Field           pgtype.Text        `json:"field"`
+	StartOffset     pgtype.Int4        `json:"start_offset"`
+	EndOffset       pgtype.Int4        `json:"end_offset"`
+	ChunkID         pgtype.Text        `json:"chunk_id"`
+	InputHash       string             `json:"input_hash"`
+	Quote           pgtype.Text        `json:"quote"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+}
+
 type CalendarEvent struct {
 	ID                   pgtype.UUID        `json:"id"`
 	GcalEventID          string             `json:"gcal_event_id"`

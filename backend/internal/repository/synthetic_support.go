@@ -674,3 +674,21 @@ func (r *SyntheticSupportRepository) DeleteEntityTypesByKeyPrefix(ctx context.Co
 func (r *SyntheticSupportRepository) DeletePredicatesByKeyPrefix(ctx context.Context, prefix string) (int64, error) {
 	return r.queries.SyntheticDeletePredicatesByKeyPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
 }
+
+// CountAssertionsForSubject counts the assertions whose subject is a given node,
+// so an assertion-store test can scope its assertions to its own namespace's
+// subject node on the shared test DB (assertion rows have no canonical_label to
+// prefix-match, so the scope is the subject node id). Provenance rows cascade
+// from assertion, so a node-prefix delete clears both.
+func (r *SyntheticSupportRepository) CountAssertionsForSubject(ctx context.Context, subjectNodeID uuid.UUID) (int64, error) {
+	return r.queries.SyntheticCountAssertionsForSubject(ctx, pgtype.UUID{Bytes: subjectNodeID, Valid: true})
+}
+
+// DeleteAssertionsForNode hard-deletes the assertions touching a node in either
+// position (provenance cascades). The assertion → node FK is restrict, so a test
+// MUST clear its assertions before deleting its nodes — register this cleanup to
+// run BEFORE DeleteNodesByLabelPrefix (i.e. register it LAST, since t.Cleanup is
+// LIFO).
+func (r *SyntheticSupportRepository) DeleteAssertionsForNode(ctx context.Context, nodeID uuid.UUID) (int64, error) {
+	return r.queries.SyntheticDeleteAssertionsForNode(ctx, pgtype.UUID{Bytes: nodeID, Valid: true})
+}

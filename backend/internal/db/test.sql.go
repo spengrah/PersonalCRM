@@ -479,6 +479,8 @@ func (q *Queries) InsertRiverJobForTest(ctx context.Context, args []byte) error 
 const ResetSyntheticData = `-- name: ResetSyntheticData :exec
 
 TRUNCATE TABLE
+    assertion,
+    assertion_provenance,
     calendar_event,
     comms_message,
     connection,
@@ -730,6 +732,20 @@ func (q *Queries) SweepRiverJobsInCloneForTest(ctx context.Context) (int64, erro
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const SyntheticCountAssertionsForSubject = `-- name: SyntheticCountAssertionsForSubject :one
+SELECT COUNT(*) FROM assertion WHERE subject_node_id = $1
+`
+
+// Assertion-store test support: count the assertions whose subject is a given
+// node, so a test scopes its assertions to its own namespace's subject node on
+// the shared test DB.
+func (q *Queries) SyntheticCountAssertionsForSubject(ctx context.Context, subjectNodeID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountAssertionsForSubject, subjectNodeID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const SyntheticCountCalendarEventByGcalId = `-- name: SyntheticCountCalendarEventByGcalId :one
@@ -1169,6 +1185,23 @@ func (q *Queries) SyntheticCountUnmatchedExternalContactBySourceId(ctx context.C
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const SyntheticDeleteAssertionsForNode = `-- name: SyntheticDeleteAssertionsForNode :execrows
+DELETE FROM assertion WHERE subject_node_id = $1 OR object_node_id = $1
+`
+
+// Assertion-store cleanup: hard-delete the assertions touching a node in EITHER
+// position (provenance cascades). The assertion → node FK is restrict (NO
+// ACTION), so a test MUST clear its assertions before deleting its nodes; this
+// targeted delete is the cleanup primitive for that. superseded_by is a nullable
+// self-FK, so a single multi-row DELETE clears a closed-pair set in one shot.
+func (q *Queries) SyntheticDeleteAssertionsForNode(ctx context.Context, subjectNodeID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteAssertionsForNode, subjectNodeID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const SyntheticDeleteCommsMessagesByExternalIdPrefix = `-- name: SyntheticDeleteCommsMessagesByExternalIdPrefix :execrows
