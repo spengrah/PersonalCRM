@@ -1012,6 +1012,10 @@ func (s *AssertService) mergeSameValue(ctx context.Context, tx pgx.Tx, loser, su
 		}
 	}
 	now := accelerated.GetCurrentTime().UTC()
+	knowledgeTo := now
+	if loser.KnowledgeFrom.After(knowledgeTo) {
+		knowledgeTo = loser.KnowledgeFrom.UTC()
+	}
 	closure := repository.ClosureReasonSuperseded
 	if err := s.assertionRepo.CloseAssertionTx(ctx, tx, repository.CloseAssertionParams{
 		ID:            loser.ID,
@@ -1019,7 +1023,7 @@ func (s *AssertService) mergeSameValue(ctx context.Context, tx pgx.Tx, loser, su
 		Status:        repository.AssertionStatusSuperseded,
 		ClosureReason: &closure,
 		SupersededBy:  &survivor.ID,
-		KnowledgeTo:   &now,
+		KnowledgeTo:   &knowledgeTo,
 	}); err != nil {
 		return fmt.Errorf("close merged loser: %w", err)
 	}
@@ -1043,33 +1047,52 @@ func (s *AssertService) closeConflicts(ctx context.Context, tx pgx.Tx, conflicts
 		if prior.ID == newRow.ID {
 			continue
 		}
-		// valid_range CHECK: effectiveFrom must be > prior.valid_from. A backfilled
-		// successor whose boundary precedes the prior's start is incoherent → REJECT.
-		if prior.ValidFrom != nil && !effectiveFrom.After(*prior.ValidFrom) {
-			return validationError("successor boundary %s is not after prior valid_from %s", effectiveFrom, prior.ValidFrom.UTC())
-		}
-		// A pending future successor (already bounded, valid_from in the future) that
-		// this present edit overrides is fully superseded regardless of the branch.
-		priorIsPendingFuture := prior.SupersededBy != nil && prior.ValidFrom != nil && prior.ValidFrom.After(now)
+		// A pending future successor (its valid_from is in the future → not yet
+		// current) that this present edit overrides is fully superseded regardless of
+		// the branch — it never becomes current. It is exempt from the bound-ordering
+		// guard below (it is closed at its own valid_from, not at effectiveFrom). A
+		// future-dated successor is identified by valid_from > now, NOT by carrying a
+		// superseded_by (it may be the tail of the chain with none).
+		priorIsPendingFuture := prior.ValidFrom != nil && prior.ValidFrom.After(now)
 
 		if future && !priorIsPendingFuture {
+			// Future-successor bound: the prior must START before the boundary, else
+			// bounding it to effectiveFrom would invert its range → REJECT.
+			if prior.ValidFrom != nil && !effectiveFrom.After(*prior.ValidFrom) {
+				return validationError("successor boundary %s is not after prior valid_from %s", effectiveFrom, prior.ValidFrom.UTC())
+			}
 			// Bound the still-current prior; keep it accepted (current until the date).
 			if err := s.assertionRepo.BoundPendingSuccessorTx(ctx, tx, prior.ID, effectiveFrom, newRow.ID); err != nil {
 				return fmt.Errorf("bound pending successor: %w", err)
 			}
 			continue
 		}
+
 		// Terminalize the prior (present edit, or a pending future successor a present
-		// edit cancels).
-		closure := repository.ClosureReasonSuperseded
+		// edit cancels). boundTo is effectiveFrom for a normally-overlapping prior, or
+		// the prior's own valid_from for a never-current pending-future row.
 		boundTo := closeBoundary(prior, effectiveFrom, now)
+		// Guard the valid_range CHECK for the terminalized prior too: if we stamp
+		// valid_to = effectiveFrom but the prior STARTS at/after that, the range would
+		// invert (an incoherent backfilled successor) → REJECT.
+		if !priorIsPendingFuture && prior.ValidFrom != nil && boundTo != nil && !boundTo.After(*prior.ValidFrom) {
+			return validationError("successor boundary %s is not after prior valid_from %s", boundTo.UTC(), prior.ValidFrom.UTC())
+		}
+		// knowledge_to must satisfy knowledge_to >= prior.knowledge_from. Concurrent
+		// txs capture `now` microseconds apart, so clamp to the prior's knowledge_from
+		// to keep the assertion_knowledge_range CHECK satisfied.
+		knowledgeTo := now
+		if prior.KnowledgeFrom.After(knowledgeTo) {
+			knowledgeTo = prior.KnowledgeFrom.UTC()
+		}
+		closure := repository.ClosureReasonSuperseded
 		if err := s.assertionRepo.CloseAssertionTx(ctx, tx, repository.CloseAssertionParams{
 			ID:            prior.ID,
 			ValidTo:       boundTo,
 			Status:        repository.AssertionStatusSuperseded,
 			ClosureReason: &closure,
 			SupersededBy:  &newRow.ID,
-			KnowledgeTo:   &now,
+			KnowledgeTo:   &knowledgeTo,
 		}); err != nil {
 			return fmt.Errorf("close prior on supersession: %w", err)
 		}
@@ -1082,15 +1105,14 @@ func (s *AssertService) closeConflicts(ctx context.Context, tx pgx.Tx, conflicts
 
 // closeBoundary picks the valid_to to stamp on a terminalized prior. For a present
 // successor the boundary is effectiveFrom (the new row starts where the old ends).
-// For a pending future successor being cancelled by a present edit, its valid_from
-// is already in the future — clamping valid_to to effectiveFrom (<= now) would
-// violate the valid_range CHECK (valid_to > valid_from). Such a never-current
-// pending row is closed with valid_to = its own valid_from (a zero-length future
-// window) so the CHECK holds and it never becomes current.
+// For a never-current pending future successor being cancelled by a present edit
+// (valid_from in the future), clamping valid_to to effectiveFrom (<= now < its
+// valid_from) would invert the range, and clamping to its valid_from would make a
+// zero-length window — both violate the valid_range CHECK. Such a row never became
+// current, so its EXISTING valid_to is kept unchanged (it's terminal regardless).
 func closeBoundary(prior *repository.Assertion, effectiveFrom, now time.Time) *time.Time {
-	if prior.ValidFrom != nil && prior.ValidFrom.After(now) && !effectiveFrom.After(*prior.ValidFrom) {
-		vf := prior.ValidFrom.UTC()
-		return &vf
+	if prior.ValidFrom != nil && prior.ValidFrom.After(now) {
+		return utcPtr(prior.ValidTo)
 	}
 	ef := effectiveFrom
 	return &ef
