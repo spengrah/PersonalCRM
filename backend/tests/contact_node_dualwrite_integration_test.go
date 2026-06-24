@@ -384,9 +384,9 @@ func TestContactNodeDualWrite_MigrationDownUp(t *testing.T) {
 	// Seed a SOFT-DELETED contact whose person node is absent (simulating a
 	// contact deleted before 068 ran). This pins the up backfill's
 	// `WHERE deleted_at IS NULL` rule: the up must NOT mint a person node for a
-	// soft-deleted contact (plan D7 — a deleted contact's node is a later
+	// soft-deleted contact — a deleted contact's node is a later
 	// soft-delete-propagation concern, and the write API rejects a deleted
-	// subject node). Drop the node the dual-write created so the contact enters
+	// subject node. Drop the node the dual-write created so the contact enters
 	// the up step node-less, exactly like a pre-068 deletion.
 	deleted, _, err := contactSvc.CreateContact(ctx, repository.CreateContactRequest{
 		FullName: "migration-deleted-person",
