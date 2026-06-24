@@ -125,8 +125,11 @@ func TestGraphIdentity_Integration(t *testing.T) {
 	t.Run("entity create + resolve + detail merge-patch", func(t *testing.T) {
 		t.Parallel()
 		gen, _ := migrationGenerator(t)
-		t.Cleanup(func() { _, _ = support.DeleteNodesByLabelPrefix(ctx, gen.Prefix()) })
+		// t.Cleanup runs LIFO: register the entity_type cleanup FIRST so it runs
+		// LAST — entity rows FK-reference entity_type, so the node delete (which
+		// cascades the entity rows) must run before the entity_type delete.
 		t.Cleanup(func() { _, _ = support.DeleteEntityTypesByKeyPrefix(ctx, gen.Prefix()) })
+		t.Cleanup(func() { _, _ = support.DeleteNodesByLabelPrefix(ctx, gen.Prefix()) })
 
 		// entity.subtype FKs entity_type.key, so seed a namespaced subtype first
 		// (the curated catalog is seeded by a later migration; these tests
@@ -167,8 +170,11 @@ func TestGraphIdentity_Integration(t *testing.T) {
 	t.Run("entity create defaults nil detail to empty object", func(t *testing.T) {
 		t.Parallel()
 		gen, _ := migrationGenerator(t)
-		t.Cleanup(func() { _, _ = support.DeleteNodesByLabelPrefix(ctx, gen.Prefix()) })
+		// t.Cleanup runs LIFO: register the entity_type cleanup FIRST so it runs
+		// LAST — entity rows FK-reference entity_type, so the node delete (which
+		// cascades the entity rows) must run before the entity_type delete.
 		t.Cleanup(func() { _, _ = support.DeleteEntityTypesByKeyPrefix(ctx, gen.Prefix()) })
+		t.Cleanup(func() { _, _ = support.DeleteNodesByLabelPrefix(ctx, gen.Prefix()) })
 
 		subtype := gen.Prefix() + "topic"
 		require.NoError(t, entityRepo.UpsertEntityType(ctx, repository.UpsertEntityTypeRequest{
@@ -195,8 +201,11 @@ func TestGraphIdentity_Integration(t *testing.T) {
 	t.Run("entity (subtype, normalized_name) unique rejects a duplicate", func(t *testing.T) {
 		t.Parallel()
 		gen, _ := migrationGenerator(t)
-		t.Cleanup(func() { _, _ = support.DeleteNodesByLabelPrefix(ctx, gen.Prefix()) })
+		// t.Cleanup runs LIFO: register the entity_type cleanup FIRST so it runs
+		// LAST — entity rows FK-reference entity_type, so the node delete (which
+		// cascades the entity rows) must run before the entity_type delete.
 		t.Cleanup(func() { _, _ = support.DeleteEntityTypesByKeyPrefix(ctx, gen.Prefix()) })
+		t.Cleanup(func() { _, _ = support.DeleteNodesByLabelPrefix(ctx, gen.Prefix()) })
 
 		subtype := gen.Prefix() + "place"
 		require.NoError(t, entityRepo.UpsertEntityType(ctx, repository.UpsertEntityTypeRequest{
@@ -257,8 +266,8 @@ func TestGraphIdentity_Integration(t *testing.T) {
 		// ON CONFLICT race against the existing row, refreshes the title, and
 		// returns the EXISTING node id. The spare node passed as the would-be
 		// node_id is NOT consumed (no venue row is created for it) — which is
-		// exactly why the live recorder helper (a later PR) must read-first before
-		// minting a node, rather than create a node then UpsertVenue.
+		// exactly why a live recorder must read-first before minting a node,
+		// rather than create a node then UpsertVenue.
 		newTitle := title + "-updated"
 		spareNodeID := uuid.New()
 		_, err = nodeRepo.CreateNode(ctx, spareNodeID, "venue", gen.Prefix()+"venue-upsert-spare")
@@ -284,8 +293,11 @@ func TestGraphIdentity_Integration(t *testing.T) {
 	t.Run("entity/venue live reads exclude a soft-deleted parent node", func(t *testing.T) {
 		t.Parallel()
 		gen, _ := migrationGenerator(t)
-		t.Cleanup(func() { _, _ = support.DeleteNodesByLabelPrefix(ctx, gen.Prefix()) })
+		// t.Cleanup runs LIFO: register the entity_type cleanup FIRST so it runs
+		// LAST — entity rows FK-reference entity_type, so the node delete (which
+		// cascades the entity rows) must run before the entity_type delete.
 		t.Cleanup(func() { _, _ = support.DeleteEntityTypesByKeyPrefix(ctx, gen.Prefix()) })
+		t.Cleanup(func() { _, _ = support.DeleteNodesByLabelPrefix(ctx, gen.Prefix()) })
 
 		// Entity/venue rows have no deleted_at of their own; liveness flows from
 		// the parent node's tombstone, so the live reads must drop them once the
