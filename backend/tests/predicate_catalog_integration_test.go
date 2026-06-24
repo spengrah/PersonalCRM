@@ -28,6 +28,12 @@ import (
 // against an ISOLATED per-test clone (NewEphemeralClone), never the shared DB,
 // because it rolls the schema down.
 
+// seedPredicateCatalogVersion is the golang-migrate version of the predicate
+// catalog SEED migration (066_seed_predicate_catalog). The down/up round-trip
+// test positions the clone at this version before its relative roll-down so it is
+// robust to later migrations (067+) being added above it.
+const seedPredicateCatalogVersion = 66
+
 // i32p returns a pointer to an int32 literal, for the nullable prior fields.
 func i32p(v int32) *int32 { return &v }
 
@@ -309,6 +315,12 @@ func TestPredicateCatalog_MigrationDownUp(t *testing.T) {
 	m, err := migrate.New(fmt.Sprintf("file://%s", migrationsPath), cloneURL)
 	require.NoError(t, err)
 	t.Cleanup(func() { _, _ = m.Close() })
+
+	// Position at the seed migration (066) as the tip BEFORE the relative roll-down,
+	// so this test is independent of however many later migrations exist above it
+	// (e.g. 067+). Without this, m.Steps(-1) would roll down the highest migration,
+	// not the seed. Migrating down to 066 leaves the predicate table + seed intact.
+	require.NoError(t, m.Migrate(seedPredicateCatalogVersion), "position the clone at the seed migration tip")
 
 	// Roll down ONE step: 066 (the seed) down. The predicate table still exists.
 	require.NoError(t, m.Steps(-1), "roll the seed migration down one step")

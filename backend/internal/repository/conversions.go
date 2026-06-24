@@ -54,6 +54,13 @@ func boolToPgBool(v *bool) pgtype.Bool {
 	return pgtype.Bool{Bool: *v, Valid: true}
 }
 
+func int32ToPgInt4(v *int32) pgtype.Int4 {
+	if v == nil {
+		return pgtype.Int4{Valid: false}
+	}
+	return pgtype.Int4{Int32: *v, Valid: true}
+}
+
 // pgTimestamptzToTimePtr converts a pgtype.Timestamptz to *time.Time;
 // invalid/NULL → nil. Returned time is normalized to UTC.
 func pgTimestamptzToTimePtr(t pgtype.Timestamptz) *time.Time {

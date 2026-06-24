@@ -129,12 +129,14 @@ WHERE id = $1;
 
 -- name: GetCurrentAccepted :one
 -- The current-accepted value for a slot: accepted, knowledge-open, and its
--- valid-time window contains $now. For a single-cardinality slot this returns the
--- one live row; for multi it returns the first by created_at (callers needing all
--- live rows use ListLiveEdgesForNode / ListAssertionsBySubject).
+-- valid-time window contains the now arg. For a single-cardinality slot this
+-- returns the one live row; for multi it returns the first by created_at (callers
+-- needing all live rows use ListLiveEdgesForNode / ListAssertionsBySubject). All
+-- params are named (the now arg appears twice; mixing positional + named is
+-- disallowed by sqlc, so the whole query uses sqlc.arg()).
 SELECT * FROM assertion
-WHERE subject_node_id = $1
-  AND predicate_key = $2
+WHERE subject_node_id = sqlc.arg(subject_node_id)
+  AND predicate_key = sqlc.arg(predicate_key)
   AND status = 'accepted'
   AND knowledge_to IS NULL
   AND (valid_from IS NULL OR valid_from <= sqlc.arg(now))

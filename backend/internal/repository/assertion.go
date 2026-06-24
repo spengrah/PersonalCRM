@@ -611,10 +611,28 @@ func (r *AssertionRepository) DeleteProvenanceLocatorTx(ctx context.Context, tx 
 	})
 }
 
+// SourceKindRequiresExistenceCheck reports whether a provenance source_kind has a
+// backing content table whose row must be confirmed to exist at write time. The
+// content kinds do; user / agent_session / anarlog_transcript do NOT (their
+// locators are non-UUID refs or a table that does not exist yet). The write API
+// gates on this BEFORE calling ExistsContentRow, so a "no-check" kind is never
+// confused with a "row missing" result.
+func SourceKindRequiresExistenceCheck(sourceKind string) bool {
+	switch sourceKind {
+	case SourceKindCommsMessage, SourceKindTelegramMessage, SourceKindMessagesMessage,
+		SourceKindMeetingNote, SourceKindCalendarEvent, SourceKindPhoneCall:
+		return true
+	default:
+		return false
+	}
+}
+
 // ExistsContentRow checks whether the content row referenced by a provenance
-// locator exists, dispatching on sourceKind. Returns (false, nil) for kinds with
-// no backing-row check (user / agent_session / anarlog_transcript). An unknown
-// content kind returns an error.
+// locator exists, dispatching on sourceKind. It is defined ONLY for the content
+// kinds (those SourceKindRequiresExistenceCheck returns true for); a no-check
+// kind (user / agent_session / anarlog_transcript) or an unknown kind returns an
+// error rather than a silent false, so the caller cannot misread "no check
+// performed" as "row missing" — gate on SourceKindRequiresExistenceCheck first.
 func (r *AssertionRepository) ExistsContentRow(ctx context.Context, sourceKind string, id uuid.UUID) (bool, error) {
 	pgID := uuidToPgUUID(id)
 	switch sourceKind {
@@ -630,10 +648,7 @@ func (r *AssertionRepository) ExistsContentRow(ctx context.Context, sourceKind s
 		return r.queries.ExistsCalendarEvent(ctx, pgID)
 	case SourceKindPhoneCall:
 		return r.queries.ExistsPhoneCall(ctx, pgID)
-	case SourceKindUser, SourceKindAgentSession, SourceKindAnarlogTranscript:
-		// No backing-row existence check for these locators.
-		return false, nil
 	default:
-		return false, errors.New("unknown content source kind: " + sourceKind)
+		return false, errors.New("ExistsContentRow called for a source kind with no backing-row check: " + sourceKind)
 	}
 }

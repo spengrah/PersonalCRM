@@ -687,9 +687,11 @@ type Querier interface {
 	// Find a task by its pending temp ID in metadata (for mapping temp IDs to real Todoist IDs)
 	GetContactTaskByPendingTempID(ctx context.Context, arg GetContactTaskByPendingTempIDParams) (*ContactTask, error)
 	// The current-accepted value for a slot: accepted, knowledge-open, and its
-	// valid-time window contains $now. For a single-cardinality slot this returns the
-	// one live row; for multi it returns the first by created_at (callers needing all
-	// live rows use ListLiveEdgesForNode / ListAssertionsBySubject).
+	// valid-time window contains the now arg. For a single-cardinality slot this
+	// returns the one live row; for multi it returns the first by created_at (callers
+	// needing all live rows use ListLiveEdgesForNode / ListAssertionsBySubject). All
+	// params are named (the now arg appears twice; mixing positional + named is
+	// disallowed by sqlc, so the whole query uses sqlc.arg()).
 	GetCurrentAccepted(ctx context.Context, arg GetCurrentAcceptedParams) (*Assertion, error)
 	GetEnrichmentByField(ctx context.Context, arg GetEnrichmentByFieldParams) (*ContactEnrichment, error)
 	// Contact Enrichment queries
