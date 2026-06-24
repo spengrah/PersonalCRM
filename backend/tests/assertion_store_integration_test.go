@@ -290,6 +290,30 @@ func TestAssertionStore_Integration(t *testing.T) {
 		assert.True(t, isCheckViolation(err), "expected a CHECK violation, got %v", err)
 	})
 
+	t.Run("confidence / salience BETWEEN 0 AND 100 CHECKs reject out-of-range values", func(t *testing.T) {
+		t.Parallel()
+		gen, _ := migrationGenerator(t)
+		subjectID := uuid.New()
+		_, err := nodeRepo.CreateNode(ctx, subjectID, repository.NodeTypePerson, gen.Prefix()+"subject")
+		require.NoError(t, err)
+		t.Cleanup(func() { _, _ = support.DeleteNodesByLabelPrefix(ctx, gen.Prefix()) })
+		t.Cleanup(func() { _, _ = support.DeleteAssertionsForNode(ctx, subjectID) })
+
+		// confidence above the [0,100] range.
+		hiConf := baseFact(subjectID, gen.Prefix()+"hi-conf", gen.Prefix()+"v")
+		hiConf.Confidence = 101
+		_, err = assertionRepo.InsertAssertion(ctx, hiConf)
+		require.Error(t, err, "confidence=101 must violate the confidence range CHECK")
+		assert.True(t, isCheckViolation(err), "expected a CHECK violation, got %v", err)
+
+		// salience below the [0,100] range.
+		loSal := baseFact(subjectID, gen.Prefix()+"lo-sal", gen.Prefix()+"v")
+		loSal.Salience = -1
+		_, err = assertionRepo.InsertAssertion(ctx, loSal)
+		require.Error(t, err, "salience=-1 must violate the salience range CHECK")
+		assert.True(t, isCheckViolation(err), "expected a CHECK violation, got %v", err)
+	})
+
 	t.Run("terminal-knowledge_to CHECK rejects both inconsistent shapes", func(t *testing.T) {
 		t.Parallel()
 		gen, _ := migrationGenerator(t)

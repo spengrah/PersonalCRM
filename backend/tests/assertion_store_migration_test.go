@@ -4,6 +4,7 @@ package tests
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -20,6 +21,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// assertionStoreVersion is the golang-migrate version of the assertion-store
+// migration (067). The down/up round-trip positions the clone here before
+// Steps(-1), so it is robust to later migrations (068+) being added above it —
+// without this, Steps(-1) would roll down the highest migration, not 067.
+const assertionStoreVersion = 67
 
 // TestAssertionStore_MigrationDownUp exercises the 067 down + up round-trip
 // against an isolated clone (it rolls the schema down, so it cannot share the
@@ -80,6 +87,15 @@ func TestAssertionStore_MigrationDownUp(t *testing.T) {
 	m, err := migrate.New(fmt.Sprintf("file://%s", migrationsPath), cloneURL)
 	require.NoError(t, err)
 	t.Cleanup(func() { _, _ = m.Close() })
+
+	// Position the clone at the assertion-store tip (067) FIRST, so Steps(-1) rolls
+	// down 067 specifically — robust to later migrations (068+) being added above it
+	// (mirrors the predicate-catalog migration test's positioning). Migrate(67) is a
+	// no-op today because the template clone is already at 67 (ErrNoChange); once
+	// 068+ lands it rolls the clone back down to 67 before the down step below.
+	if err := m.Migrate(assertionStoreVersion); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err, "position the clone at the assertion-store tip")
+	}
 
 	// Roll down ONE step: 067 (the assertion store) down — both tables are dropped
 	// (provenance first per the down migration's FK order). A query against the
