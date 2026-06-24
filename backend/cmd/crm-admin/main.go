@@ -84,9 +84,11 @@
 //
 //	--reset-and-seed [--profile P]  HARD-wipe every live data table (incl.
 //	      [--namespace N]           oauth_credential + sync-state + telegram
-//	      [--prng-seed S] --yes     session, preserving only schema_migrations +
-//	                                River internals), then reseed (default
-//	                                profile prod-shaped). REFUSED in production.
+//	      [--prng-seed S] --yes     session, preserving schema_migrations + River
+//	                                internals + the migration-seeded curated
+//	                                catalog [predicate/entity_type, provisional
+//	                                rows cleared]), then reseed (default profile
+//	                                prod-shaped). REFUSED in production.
 //	                                The crm-api service MUST be STOPPED (use
 //	                                `make staging-reset`). Requires --yes. The
 //	                                stable namespace makes the reseed reproducible.

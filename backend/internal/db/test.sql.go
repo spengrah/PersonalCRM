@@ -311,6 +311,29 @@ func (q *Queries) DeleteInteractionsByContactAndSource(ctx context.Context, arg 
 	return result.RowsAffected(), nil
 }
 
+const DeleteProvisionalEntityTypes = `-- name: DeleteProvisionalEntityTypes :exec
+DELETE FROM entity_type WHERE status = 'provisional'
+`
+
+// Companion to DeleteProvisionalPredicates: clears runtime-minted provisional
+// entity subtypes; the curated subtypes (status='curated') survive.
+func (q *Queries) DeleteProvisionalEntityTypes(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, DeleteProvisionalEntityTypes)
+	return err
+}
+
+const DeleteProvisionalPredicates = `-- name: DeleteProvisionalPredicates :exec
+DELETE FROM predicate WHERE status = 'provisional'
+`
+
+// Part of the reset (called right after ResetSyntheticData by the repository):
+// clears runtime-minted provisional predicates so a reset restores a known
+// baseline. The curated catalog (status='curated', migration 066) is untouched.
+func (q *Queries) DeleteProvisionalPredicates(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, DeleteProvisionalPredicates)
+	return err
+}
+
 const DeleteRiverJobsByKindAny = `-- name: DeleteRiverJobsByKindAny :execrows
 DELETE FROM river_job WHERE kind = ANY($1::text[])
 `
@@ -466,7 +489,6 @@ TRUNCATE TABLE
     contact_tag,
     contact_task,
     entity,
-    entity_type,
     event,
     event_consumer_claim,
     external_contact,
@@ -511,7 +533,18 @@ RESTART IDENTITY CASCADE
 // ONLY by crm-admin --reset-and-seed (CRM_ENV != production, service stopped,
 // --yes confirmed). The catalog guard in synthetic_reset_integration_test.go
 // fails if a public table is added that is not in this list / schema_migrations /
-// river_%.
+// river_% / the catalog tables (predicate, entity_type).
+//
+// Catalog tables (predicate, entity_type) are NOT truncated: they hold curated
+// REFERENCE data installed by migration 066, and migrations run BEFORE a reset
+// and 066 does NOT re-run on an already-migrated DB — truncating would leave an
+// empty catalog that silently breaks the assert() write path (predicate-by-key
+// → ErrNotFound) and the integration tests that call this between runs. A reset
+// MUST still restore a known baseline, so the repository's ResetSyntheticData
+// ALSO runs DeleteProvisionalPredicates + DeleteProvisionalEntityTypes (right
+// after this TRUNCATE) to clear runtime-minted PROVISIONAL rows while leaving the
+// curated catalog intact. (Namespaced test cleanup still uses
+// SyntheticDelete*ByKeyPrefix for its own provisional rows.)
 func (q *Queries) ResetSyntheticData(ctx context.Context) error {
 	_, err := q.db.Exec(ctx, ResetSyntheticData)
 	return err
@@ -1350,6 +1383,21 @@ DELETE FROM note WHERE contact_id = ANY($1::uuid[])
 // Cleanup step 12: note by contact.
 func (q *Queries) SyntheticDeleteNotesByContactIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteNotesByContactIds, contactIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const SyntheticDeletePredicatesByKeyPrefix = `-- name: SyntheticDeletePredicatesByKeyPrefix :execrows
+DELETE FROM predicate WHERE key LIKE $1 || '%'
+`
+
+// Predicate-catalog cleanup: a test that mints its own ns-prefixed provisional
+// predicates clears them by key prefix (the curated seed rows use bare keys and
+// are never prefix-matched). Caller passes a BARE prefix; '%' is appended here.
+func (q *Queries) SyntheticDeletePredicatesByKeyPrefix(ctx context.Context, keyPrefix pgtype.Text) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeletePredicatesByKeyPrefix, keyPrefix)
 	if err != nil {
 		return 0, err
 	}

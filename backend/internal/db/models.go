@@ -445,6 +445,28 @@ type PhoneCall struct {
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 }
 
+type Predicate struct {
+	Key                 string             `json:"key"`
+	Kind                string             `json:"kind"`
+	SubjectType         string             `json:"subject_type"`
+	ObjectType          pgtype.Text        `json:"object_type"`
+	ValueType           pgtype.Text        `json:"value_type"`
+	Cardinality         string             `json:"cardinality"`
+	Symmetric           bool               `json:"symmetric"`
+	InversePredicate    pgtype.Text        `json:"inverse_predicate"`
+	TemporalProfile     string             `json:"temporal_profile"`
+	BaseRateDays        pgtype.Int4        `json:"base_rate_days"`
+	TypicalDurationDays pgtype.Int4        `json:"typical_duration_days"`
+	DefaultSalience     int16              `json:"default_salience"`
+	DefaultReviewPolicy string             `json:"default_review_policy"`
+	PropositionBucket   string             `json:"proposition_bucket"`
+	Status              string             `json:"status"`
+	Description         string             `json:"description"`
+	Synonyms            []string           `json:"synonyms"`
+	Embedding           pgvector.Vector    `json:"embedding"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+}
+
 type PromptQuery struct {
 	ID          pgtype.UUID        `json:"id"`
 	Query       string             `json:"query"`

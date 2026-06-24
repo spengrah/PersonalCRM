@@ -57,6 +57,14 @@ var allowedDuplicateProjections = map[string]string{
 	// The shared canonical projection is the point — it must stay identical so
 	// both paths resolve the effective contact the same way.
 	"external_contact|canon.crm_contact_id as canon_crm_contact_id, canon.match_status as canon_match_status, ec.*": "shared canonical join projection so the reconcile driver and the suggestions list both resolve the effective contact via resolveEffectiveReconcileState",
+	// GetPredicate + ListCuratedPredicates + ListPredicatesByStatus deliberately
+	// omit the embedding column. embedding is a nullable vector(1536) populated
+	// and consumed in a later layer; pgvector-go's value type panics scanning a
+	// SQL NULL (it decodes an empty buffer), so SELECT * would crash every read
+	// of a predicate with no embedding yet — i.e. all of them in this layer. The
+	// narrow projection must stay until a NULL-safe vector read exists. Mirrors
+	// the ALLOWLIST entry in scripts/ci/sqlc-select-list-guard.sh.
+	"predicate|\"symmetric\", base_rate_days, cardinality, created_at, default_review_policy, default_salience, description, inverse_predicate, key, kind, object_type, proposition_bucket, status, subject_type, synonyms, temporal_profile, typical_duration_days, value_type": "narrow projection excluding the nullable embedding vector; SELECT * panics scanning a NULL vector(1536) with pgvector-go's value type",
 }
 
 // selectProjection holds one query's extracted SELECT projection.

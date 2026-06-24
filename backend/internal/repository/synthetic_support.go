@@ -17,6 +17,7 @@ package repository
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -490,11 +491,24 @@ func (r *SyntheticSupportRepository) SeedRevokedMacHost(ctx context.Context, hos
 
 // ResetSyntheticData HARD-truncates the complete live data-table closure (every
 // app data table EXCEPT schema_migrations + River's own internal tables;
-// river_job IS wiped). Used ONLY by crm-admin --reset-and-seed, behind the
+// river_job IS wiped), then clears the runtime-minted PROVISIONAL rows from the
+// migration-seeded catalog tables (predicate, entity_type). Those catalog tables
+// are NOT truncated — their curated rows (migration 066) must survive a reset —
+// but a reset must still restore a known baseline, so provisional pollution is
+// removed here. Used ONLY by crm-admin --reset-and-seed, behind the
 // CRM_ENV-production gate + the mandatory --yes confirm + a stopped service. The
 // reset boundary is verified by synthetic_reset_integration_test.go (clone DB).
 func (r *SyntheticSupportRepository) ResetSyntheticData(ctx context.Context) error {
-	return r.queries.ResetSyntheticData(ctx)
+	if err := r.queries.ResetSyntheticData(ctx); err != nil {
+		return err
+	}
+	if err := r.queries.DeleteProvisionalPredicates(ctx); err != nil {
+		return fmt.Errorf("clear provisional predicates: %w", err)
+	}
+	if err := r.queries.DeleteProvisionalEntityTypes(ctx); err != nil {
+		return fmt.Errorf("clear provisional entity types: %w", err)
+	}
+	return nil
 }
 
 // CountNonFinalRiverJobs counts queued/in-flight river_job rows. The additive
@@ -652,4 +666,11 @@ func (r *SyntheticSupportRepository) DeleteNodesByLabelPrefix(ctx context.Contex
 // catalog seed rows use bare keys and are never prefix-matched).
 func (r *SyntheticSupportRepository) DeleteEntityTypesByKeyPrefix(ctx context.Context, prefix string) (int64, error) {
 	return r.queries.SyntheticDeleteEntityTypesByKeyPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
+}
+
+// DeletePredicatesByKeyPrefix hard-deletes predicate-catalog rows whose key is
+// ns-prefixed (a test that mints its own provisional predicates; the curated
+// seed rows use bare keys and are never prefix-matched).
+func (r *SyntheticSupportRepository) DeletePredicatesByKeyPrefix(ctx context.Context, prefix string) (int64, error) {
+	return r.queries.SyntheticDeletePredicatesByKeyPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
 }
