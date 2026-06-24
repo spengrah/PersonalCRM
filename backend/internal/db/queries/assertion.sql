@@ -24,6 +24,13 @@ RETURNING *;
 -- name: GetAssertion :one
 SELECT * FROM assertion WHERE id = $1;
 
+-- name: GetAssertionForUpdate :one
+-- Row-locking read for the lifecycle transitions (Accept/Reject/Retract): the
+-- caller locks the row FOR UPDATE so the status precondition check + the status
+-- update are atomic within the tx (a concurrent Accept/Reject on the same row
+-- blocks until commit, so the from-status guard cannot be raced).
+SELECT * FROM assertion WHERE id = $1 FOR UPDATE;
+
 -- name: FindLiveProposition :one
 -- The dedup lookup: the single LIVE assertion (proposed or accepted, not yet
 -- knowledge-closed) for a proposition_key. Backed by idx_assertion_live_proposition.

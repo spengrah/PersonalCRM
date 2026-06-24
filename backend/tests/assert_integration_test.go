@@ -466,6 +466,30 @@ func TestAssert_Integration(t *testing.T) {
 		assert.EqualValues(t, 1, n)
 		assert.True(t, h.eventExists(t, ctx, acceptedSourceID(a1.ID)))
 	})
+
+	// Case 11b: a date-typed fact (birthday) round-trips through the DATE column
+	// and GetCurrentAccepted returns the stored date.
+	t.Run("11b date fact round-trips", func(t *testing.T) {
+		t.Parallel()
+		gen, _ := migrationGenerator(t)
+		subject := h.seedPerson(t, ctx, gen.Prefix(), "subj")
+
+		bday := time.Date(1990, 4, 21, 0, 0, 0, 0, time.UTC)
+		a, err := h.svc.Assert(ctx, service.AssertRequest{
+			SubjectNodeID: subject, PredicateKey: "birthday", ValueDate: &bday, Confidence: 90,
+			Locators: []service.ProvenanceLocator{userLocator(gen.Prefix(), "bday")},
+		})
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, a.ID)
+		assert.Equal(t, repository.AssertionStatusAccepted, a.Status)
+		require.NotNil(t, a.ValueDate)
+		assert.Equal(t, "1990-04-21", a.ValueDate.UTC().Format("2006-01-02"))
+
+		cur, err := h.assertionRepo.GetCurrentAccepted(ctx, subject, "birthday", accelerated.GetCurrentTime().UTC())
+		require.NoError(t, err)
+		require.NotNil(t, cur.ValueDate)
+		assert.Equal(t, "1990-04-21", cur.ValueDate.UTC().Format("2006-01-02"))
+	})
 }
 
 // ctx0 returns a fresh background context (small indirection so the harness
@@ -810,6 +834,223 @@ func TestAssert_ValidTime(t *testing.T) {
 		closedAB, err := h.assertionRepo.GetAssertion(ctx, propAB.ID)
 		require.NoError(t, err)
 		assert.Equal(t, repository.AssertionStatusSuperseded, closedAB.Status, "A-B superseded (B has one partner)")
+	})
+
+	// Case 18: a chained future successor bounds the prior pending successor (no
+	// gap). NYC current → future LA (July) bounds NYC → future SF (Aug) must BOUND
+	// LA to Aug (LA current Jul-Aug), not terminalize it leaving a July gap.
+	t.Run("18 chained future successors leave no gap", func(t *testing.T) {
+		t.Parallel()
+		gen, _ := migrationGenerator(t)
+		subject := h.seedPerson(t, ctx, gen.Prefix(), "subj")
+		now := accelerated.GetCurrentTime().UTC()
+
+		nyc, err := h.svc.Assert(ctx, textFactReq(subject, "home_address", "NYC", gen.Prefix(), "nyc"))
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, nyc.ID)
+
+		julFrom := now.Add(30 * 24 * time.Hour)
+		laReq := textFactReq(subject, "home_address", "LA", gen.Prefix(), "la")
+		laReq.ValidFrom = &julFrom
+		la, err := h.svc.Assert(ctx, laReq)
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, la.ID)
+
+		augFrom := now.Add(60 * 24 * time.Hour)
+		sfReq := textFactReq(subject, "home_address", "SF", gen.Prefix(), "sf")
+		sfReq.ValidFrom = &augFrom
+		sf, err := h.svc.Assert(ctx, sfReq)
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, sf.ID)
+
+		// LA must be BOUNDED to Aug (still accepted, current Jul-Aug), not superseded.
+		gotLA, err := h.assertionRepo.GetAssertion(ctx, la.ID)
+		require.NoError(t, err)
+		assert.Equal(t, repository.AssertionStatusAccepted, gotLA.Status, "LA stays accepted (current Jul-Aug)")
+		require.NotNil(t, gotLA.ValidTo)
+		assert.True(t, gotLA.ValidTo.Equal(augFrom), "LA bounded to Aug")
+		require.NotNil(t, gotLA.SupersededBy)
+		assert.Equal(t, sf.ID, *gotLA.SupersededBy)
+
+		// Mid-July there IS a current value (LA), no gap.
+		midJul := now.Add(45 * 24 * time.Hour)
+		cur, err := h.assertionRepo.GetCurrentAccepted(ctx, subject, "home_address", midJul)
+		require.NoError(t, err, "no gap in July")
+		assert.Equal(t, la.ID, cur.ID)
+	})
+
+	// Case 19: re-affirming a value bounded by a pending future successor must NOT
+	// clear the bound (the P0 — widen must not resurrect the prior past the
+	// successor). NYC current → future LA bounds NYC at +30d → re-affirm NYC from a
+	// later year bucket → NYC's valid_to bound to LA is preserved.
+	t.Run("19 widen does not resurrect prior across pending successor", func(t *testing.T) {
+		t.Parallel()
+		gen, _ := migrationGenerator(t)
+		subject := h.seedPerson(t, ctx, gen.Prefix(), "subj")
+		now := accelerated.GetCurrentTime().UTC()
+
+		// home_address is year-bucketed. NYC at year Y (valid_from this year).
+		thisYear := time.Date(now.Year(), 1, 15, 0, 0, 0, 0, time.UTC)
+		nycReq := textFactReq(subject, "home_address", "NYC", gen.Prefix(), "nyc")
+		nycReq.ValidFrom = &thisYear
+		nyc, err := h.svc.Assert(ctx, nycReq)
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, nyc.ID)
+
+		future := now.Add(30 * 24 * time.Hour)
+		laReq := textFactReq(subject, "home_address", "LA", gen.Prefix(), "la")
+		laReq.ValidFrom = &future
+		la, err := h.svc.Assert(ctx, laReq)
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, la.ID)
+
+		boundedNYC, err := h.assertionRepo.GetAssertion(ctx, nyc.ID)
+		require.NoError(t, err)
+		require.NotNil(t, boundedNYC.ValidTo, "NYC bounded by LA")
+		require.NotNil(t, boundedNYC.SupersededBy)
+
+		// Re-affirm NYC from a DIFFERENT (next) year bucket — a same-value
+		// reaffirmation. It must widen the lower bound but NOT clear NYC's pending
+		// upper bound (LA).
+		nextYear := time.Date(now.Year()+1, 6, 1, 0, 0, 0, 0, time.UTC)
+		reaffirm := textFactReq(subject, "home_address", "NYC", gen.Prefix(), "nyc2")
+		reaffirm.ValidFrom = &nextYear
+		_, err = h.svc.Assert(ctx, reaffirm)
+		require.NoError(t, err)
+
+		afterReaffirm, err := h.assertionRepo.GetAssertion(ctx, nyc.ID)
+		require.NoError(t, err)
+		require.NotNil(t, afterReaffirm.ValidTo, "NYC's pending-successor bound is preserved")
+		assert.True(t, afterReaffirm.ValidTo.Equal(*boundedNYC.ValidTo), "valid_to bound unchanged by the reaffirmation")
+		// LA stays the pending future successor; exactly one current now (NYC).
+		curNow, err := h.assertionRepo.GetCurrentAccepted(ctx, subject, "home_address", now)
+		require.NoError(t, err)
+		assert.Equal(t, nyc.ID, curNow.ID, "exactly NYC is current now")
+		_ = la
+	})
+}
+
+// TestAssert_Lifecycle covers the lifecycle-transition concurrency + same-value
+// accept-time behaviors the review surfaced.
+func TestAssert_Lifecycle(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	t.Parallel()
+	h, ctx := newAssertHarness(t, ctx0())
+
+	// Case 20: concurrent Accept + Reject of the SAME proposed row — exactly one
+	// transition wins (the row-lock makes the from-status check atomic).
+	t.Run("20 concurrent Accept and Reject race", func(t *testing.T) {
+		t.Parallel()
+		gen, _ := migrationGenerator(t)
+		subject := h.seedPerson(t, ctx, gen.Prefix(), "subj")
+
+		prop, err := h.svc.Assert(ctx, textFactReq(subject, "health_condition", "race", gen.Prefix(), "r"))
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, prop.ID)
+		require.Equal(t, repository.AssertionStatusProposed, prop.Status)
+
+		errs := make([]error, 2)
+		runConcurrent(2, func(i int) {
+			if i == 0 {
+				_, errs[i] = h.svc.Accept(ctx, prop.ID, service.AcceptRequest{})
+			} else {
+				_, errs[i] = h.svc.Reject(ctx, prop.ID, service.RejectRequest{})
+			}
+		})
+		// Exactly one succeeds; the other fails the from-status precondition.
+		successes := 0
+		for _, e := range errs {
+			if e == nil {
+				successes++
+			} else {
+				require.ErrorIs(t, e, service.ErrAssertValidation, "the loser fails the status precondition")
+			}
+		}
+		assert.Equal(t, 1, successes, "exactly one transition wins")
+
+		// The row ends in a terminal state consistent with the winner (not both).
+		final, err := h.assertionRepo.GetAssertion(ctx, prop.ID)
+		require.NoError(t, err)
+		assert.Contains(t, []string{repository.AssertionStatusAccepted, repository.AssertionStatusRejected}, final.Status)
+	})
+
+	// Case 21: Accept of a same-value proposal in a different bucket WIDENS the
+	// existing accepted row (does not supersede it). home_address is year-bucketed +
+	// auto-apply, so use a force-confirm proposal to land it 'proposed' first.
+	t.Run("21 Accept same-value different-bucket widens", func(t *testing.T) {
+		t.Parallel()
+		gen, _ := migrationGenerator(t)
+		subject := h.seedPerson(t, ctx, gen.Prefix(), "subj")
+		now := accelerated.GetCurrentTime().UTC()
+
+		// Accepted NYC this year (open-ended, auto-apply), confidence 50.
+		thisYear := time.Date(now.Year(), 2, 1, 0, 0, 0, 0, time.UTC)
+		nycReq := textFactReq(subject, "home_address", "NYC", gen.Prefix(), "nyc")
+		nycReq.ValidFrom = &thisYear
+		nycReq.Confidence = 50
+		accepted, err := h.svc.Assert(ctx, nycReq)
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, accepted.ID)
+		require.Equal(t, repository.AssertionStatusAccepted, accepted.Status)
+		require.EqualValues(t, 50, accepted.Confidence)
+
+		// A force-confirm same-value NYC proposal in NEXT year's bucket → proposed,
+		// confidence 95 (higher, so the merge must raise the survivor's confidence).
+		nextYear := time.Date(now.Year()+1, 3, 1, 0, 0, 0, 0, time.UTC)
+		propReq := textFactReq(subject, "home_address", "NYC", gen.Prefix(), "nyc2")
+		propReq.ValidFrom = &nextYear
+		propReq.ForceConfirm = true
+		propReq.Confidence = 95
+		proposed, err := h.svc.Assert(ctx, propReq)
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, proposed.ID)
+		require.Equal(t, repository.AssertionStatusProposed, proposed.Status)
+		require.NotEqual(t, accepted.ID, proposed.ID, "different bucket → distinct proposed row")
+
+		// Accept the proposal → it must WIDEN the existing accepted row (absorb the
+		// proposal), NOT supersede it. The accepted NYC stays accepted-live.
+		survivor, err := h.svc.Accept(ctx, proposed.ID, service.AcceptRequest{})
+		require.NoError(t, err)
+		assert.Equal(t, accepted.ID, survivor.ID, "Accept returns the widened survivor, not a superseded row")
+
+		gotAccepted, err := h.assertionRepo.GetAssertion(ctx, accepted.ID)
+		require.NoError(t, err)
+		assert.Equal(t, repository.AssertionStatusAccepted, gotAccepted.Status, "existing NYC stays accepted (widened)")
+		assert.EqualValues(t, 95, gotAccepted.Confidence, "merge folds the higher loser confidence into the survivor")
+		gotProposed, err := h.assertionRepo.GetAssertion(ctx, proposed.ID)
+		require.NoError(t, err)
+		assert.Equal(t, repository.AssertionStatusSuperseded, gotProposed.Status, "the proposal is absorbed (superseded)")
+		// Exactly one live home_address proposition for the subject.
+		live, err := h.assertionRepo.ListLiveEdgesForNode(ctx, subject, "home_address")
+		require.NoError(t, err)
+		require.Len(t, live, 1)
+		assert.Equal(t, accepted.ID, live[0].ID)
+	})
+
+	// Case 22: KnowledgeFromOverride in the future + a terminal transition clamps
+	// knowledge_to >= knowledge_from (no assertion_knowledge_range violation).
+	t.Run("22 terminal transition clamps knowledge_to for future override", func(t *testing.T) {
+		t.Parallel()
+		gen, _ := migrationGenerator(t)
+		subject := h.seedPerson(t, ctx, gen.Prefix(), "subj")
+		now := accelerated.GetCurrentTime().UTC()
+
+		tomorrow := now.Add(24 * time.Hour)
+		req := textFactReq(subject, "health_condition", "future-knowledge", gen.Prefix(), "fk")
+		req.KnowledgeFromOverride = &tomorrow
+		prop, err := h.svc.Assert(ctx, req)
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, prop.ID)
+		require.True(t, prop.KnowledgeFrom.After(now), "knowledge_from is in the future")
+
+		// Reject today → knowledge_to must be clamped to >= knowledge_from (no CHECK
+		// violation).
+		rejected, err := h.svc.Reject(ctx, prop.ID, service.RejectRequest{})
+		require.NoError(t, err)
+		require.NotNil(t, rejected.KnowledgeTo)
+		assert.False(t, rejected.KnowledgeTo.Before(rejected.KnowledgeFrom), "knowledge_to >= knowledge_from")
 	})
 }
 

@@ -456,7 +456,7 @@ func (s *AssertService) validate(ctx context.Context, tx pgx.Tx, req *AssertRequ
 	if len(req.Locators) == 0 {
 		return nil, "", uuid.Nil, nil, validationError("at least one provenance locator is required")
 	}
-	if err := s.validateLocators(ctx, predicate, req.Locators); err != nil {
+	if err := s.validateLocators(ctx, tx, predicate, req.Locators); err != nil {
 		return nil, "", uuid.Nil, nil, err
 	}
 
@@ -560,7 +560,7 @@ func validateFactValue(req *AssertRequest, predicate *repository.Predicate) erro
 // validateLocators checks each provenance locator: producer_kind set, source_kind
 // in the closed enum, content-kind rows exist, and phone_call/calendar_event do
 // not back a fact (metadata-only sources).
-func (s *AssertService) validateLocators(ctx context.Context, predicate *repository.Predicate, locators []ProvenanceLocator) error {
+func (s *AssertService) validateLocators(ctx context.Context, tx pgx.Tx, predicate *repository.Predicate, locators []ProvenanceLocator) error {
 	for i, loc := range locators {
 		if !isValidProducerKind(loc.ProducerKind) {
 			return validationError("locator[%d] producer_kind %q is not in {extractor,agent,user}", i, loc.ProducerKind)
@@ -579,7 +579,7 @@ func (s *AssertService) validateLocators(ctx context.Context, predicate *reposit
 			if parseErr != nil {
 				return validationError("locator[%d] source_id %q is not a UUID for source_kind %q", i, loc.SourceID, loc.SourceKind)
 			}
-			exists, err := s.assertionRepo.ExistsContentRow(ctx, loc.SourceKind, id)
+			exists, err := s.assertionRepo.ExistsContentRowTx(ctx, tx, loc.SourceKind, id)
 			if err != nil {
 				return fmt.Errorf("check locator[%d] source row: %w", i, err)
 			}
@@ -671,10 +671,15 @@ func (s *AssertService) corroborate(ctx context.Context, tx pgx.Tx, predicate *r
 	// a stale proposed row must not shadow the live-proposition index against an
 	// accepting writer.
 	if existing.Status == repository.AssertionStatusProposed && landingAccepted {
-		// Run the single-cardinality conflict check AT ACCEPT TIME (the prior
-		// accepted slot, if any, is superseded by this now-accepting row).
-		if err := s.supersedeConflicts(ctx, tx, predicate, existing, now); err != nil {
+		// Run the single-cardinality conflict check AT ACCEPT TIME (a same-value
+		// prior in another bucket is widened+merged; different-value priors are
+		// superseded by this now-accepting row).
+		survivor, merged, err := s.resolveAcceptConflicts(ctx, tx, predicate, existing, now)
+		if err != nil {
 			return nil, err
+		}
+		if merged {
+			return survivor, nil
 		}
 		if err := s.assertionRepo.TransitionStatusTx(ctx, tx, existing.ID, repository.AssertionStatusAccepted, nil, nil); err != nil {
 			return nil, fmt.Errorf("transition proposed→accepted: %w", err)
@@ -773,11 +778,11 @@ func (s *AssertService) writeNew(ctx context.Context, tx pgx.Tx, predicate *repo
 			return nil, err
 		}
 
-		// Same-value reaffirmation: an overlapping accepted row with the SAME value
-		// is the SAME fact in a different bucket → widen it (no new row, no
-		// supersession).
-		newNormalized := normalizedPayload(canonObject, req)
-		if widen := findSameValue(conflicts, newNormalized); widen != nil {
+		// Same-value reaffirmation: an overlapping accepted row with the SAME
+		// bucket-independent proposition signature is the SAME fact in a different
+		// bucket → widen it (no new row, no supersession).
+		newSignature := propositionSignature(canonKey, canonSubject, normalizedPayload(canonObject, req))
+		if widen := findSameValue(conflicts, newSignature); widen != nil {
 			return s.widenReaffirmation(ctx, tx, predicate, widen, canonKey, canonSubject, canonObject, req, effectiveFrom)
 		}
 
@@ -855,11 +860,30 @@ func normalizedPayload(canonObject *uuid.UUID, req *AssertRequest) string {
 	return normalizeValue(req)
 }
 
-// findSameValue returns the first conflict row whose payload equals the new
-// normalized value (a same-value reaffirmation), or nil.
-func findSameValue(conflicts []repository.Assertion, newNormalized string) *repository.Assertion {
+// propositionSignature is the bucket-INDEPENDENT proposition identity (length-
+// prefixed canonical subject + predicate + normalized value). Two assertions have
+// the SAME signature iff they represent the same fact/edge regardless of when it
+// was stated — so a same-value reaffirmation (same fact, different valid-time
+// bucket) matches while a DIFFERENT edge does not. For a symmetric edge the
+// canonical pair (subject<=object) is encoded, so partner_of(A,B) and
+// partner_of(A,C) get DISTINCT signatures even when A is the larger UUID (both
+// would store object=A, but their subjects B and C differ).
+func propositionSignature(canonKey string, canonSubject uuid.UUID, normalizedValue string) string {
+	return encodeLengthPrefixed(canonSubject.String(), canonKey, normalizedValue)
+}
+
+// assertionSignature computes the bucket-independent proposition signature of a
+// stored assertion row (canonicalized — but stored rows are ALREADY in canonical
+// form, so subject/object are taken as-is).
+func assertionSignature(a *repository.Assertion) string {
+	return propositionSignature(a.PredicateKey, a.SubjectNodeID, assertionNormalizedValue(a))
+}
+
+// findSameValue returns the first conflict row with the SAME bucket-independent
+// proposition signature as newSignature (a same-value reaffirmation), or nil.
+func findSameValue(conflicts []repository.Assertion, newSignature string) *repository.Assertion {
 	for i := range conflicts {
-		if assertionNormalizedValue(&conflicts[i]) == newNormalized {
+		if assertionSignature(&conflicts[i]) == newSignature {
 			return &conflicts[i]
 		}
 	}
@@ -927,6 +951,16 @@ func (s *AssertService) widenReaffirmation(ctx context.Context, tx pgx.Tx, predi
 	widenedFrom := minStart(existing.ValidFrom, req.ValidFrom)
 	widenedTo := maxEnd(existing.ValidTo, req.ValidTo)
 
+	// If the existing row is bounded by a PENDING future successor (superseded_by
+	// set while still accepted, valid_to in the future), widening valid_to past that
+	// bound would un-bound it and leave TWO current rows once the successor's date
+	// passes. Re-affirming the same value must NOT clear that bound — keep the
+	// existing valid_to as the upper cap (only the backward lower-bound extension is
+	// safe). The pending successor remains the future value.
+	if existing.SupersededBy != nil {
+		widenedTo = utcPtr(existing.ValidTo)
+	}
+
 	// Recompute the proposition_key from the widened valid_from bucket.
 	widenedReq := *req
 	widenedReq.ValidFrom = widenedFrom
@@ -979,9 +1013,10 @@ func (s *AssertService) widenReaffirmation(ctx context.Context, tx pgx.Tx, predi
 }
 
 // mergeSameValue collapses a colliding same-value live row (loser) into the
-// survivor: move the loser's provenance onto the survivor (ON CONFLICT no-op) and
-// close the loser superseded with superseded_by = survivor. Emits provenance_added
-// per moved locator + superseded for the loser.
+// survivor: move the loser's provenance onto the survivor (ON CONFLICT no-op),
+// fold the loser's confidence (max) + trust_tier (strongest) into the survivor,
+// and close the loser superseded with superseded_by = survivor. Emits
+// provenance_added per moved locator + superseded for the loser.
 func (s *AssertService) mergeSameValue(ctx context.Context, tx pgx.Tx, loser, survivor *repository.Assertion) error {
 	provs, err := s.assertionRepo.ListProvenance(ctx, loser.ID)
 	if err != nil {
@@ -1011,6 +1046,20 @@ func (s *AssertService) mergeSameValue(ctx context.Context, tx pgx.Tx, loser, su
 			}
 		}
 	}
+	// Fold the loser's confidence (max) + trust_tier (strongest) into the survivor —
+	// the survivor now owns the loser's provenance, so its aggregate must reflect it.
+	newConfidence := survivor.Confidence
+	if loser.Confidence > newConfidence {
+		newConfidence = loser.Confidence
+	}
+	newTrust := strongerTrustTier(survivor.TrustTier, loser.TrustTier)
+	if newConfidence != survivor.Confidence || !trustEqual(survivor.TrustTier, newTrust) {
+		if err := s.assertionRepo.UpdateAssertionConfidenceTrustTx(ctx, tx, survivor.ID, newConfidence, newTrust); err != nil {
+			return fmt.Errorf("fold loser confidence/trust into survivor: %w", err)
+		}
+		survivor.Confidence = newConfidence
+		survivor.TrustTier = newTrust
+	}
 	now := accelerated.GetCurrentTime().UTC()
 	knowledgeTo := now
 	if loser.KnowledgeFrom.After(knowledgeTo) {
@@ -1030,16 +1079,22 @@ func (s *AssertService) mergeSameValue(ctx context.Context, tx pgx.Tx, loser, su
 	return s.emitAssertionEvent(ctx, tx, events.KindAssertionSuperseded, loser, now)
 }
 
-// closeConflicts closes each different-value overlapping prior for a present/
+// closeConflicts closes each different-value overlapping prior for a present /
 // future successor (D6 step 4). The newRow is the just-inserted successor.
 //
-//   - Future successor (effectiveFrom > now): bound the CURRENT prior (valid_to =
-//     effectiveFrom, superseded_by = newRow.id) but KEEP it accepted/knowledge-open
-//     (still current until the future date). The rollover job terminalizes it
-//     later. A pending future successor among the priors is fully superseded now.
-//   - Present successor (effectiveFrom <= now): terminalize each overlapping prior
-//     (status=superseded, valid_to=effectiveFrom, superseded_by=newRow.id,
-//     knowledge_to=now), cancelling any stale pending future successor too.
+// A prior is BOUNDED (kept accepted/knowledge-open, valid_to=effectiveFrom,
+// superseded_by=newRow — the rollover job terminalizes it when the bound passes)
+// when it is genuinely CURRENT at some point strictly before the successor's
+// boundary: the successor is future (effectiveFrom > now) AND the prior starts
+// before the boundary (open start, or valid_from < effectiveFrom). This covers a
+// chained future successor: A→B(July1)→C(Aug1) bounds B to Aug1 (B is current
+// July–Aug), it does NOT terminalize B and leave a July gap.
+//
+// Otherwise the prior is TERMINALIZED (status=superseded, knowledge_to=now): a
+// present successor (effectiveFrom <= now), or a future successor that starts
+// at/before the prior's own valid_from (the prior never becomes current — a
+// present edit cancelling a pending future successor, or a future successor that
+// fully precedes another pending one).
 func (s *AssertService) closeConflicts(ctx context.Context, tx pgx.Tx, conflicts []repository.Assertion, newRow *repository.Assertion, effectiveFrom, now time.Time) error {
 	future := effectiveFrom.After(now)
 	for i := range conflicts {
@@ -1047,20 +1102,10 @@ func (s *AssertService) closeConflicts(ctx context.Context, tx pgx.Tx, conflicts
 		if prior.ID == newRow.ID {
 			continue
 		}
-		// A pending future successor (its valid_from is in the future → not yet
-		// current) that this present edit overrides is fully superseded regardless of
-		// the branch — it never becomes current. It is exempt from the bound-ordering
-		// guard below (it is closed at its own valid_from, not at effectiveFrom). A
-		// future-dated successor is identified by valid_from > now, NOT by carrying a
-		// superseded_by (it may be the tail of the chain with none).
-		priorIsPendingFuture := prior.ValidFrom != nil && prior.ValidFrom.After(now)
+		// The prior is current before the boundary iff its start precedes it.
+		startsBeforeBoundary := prior.ValidFrom == nil || effectiveFrom.After(*prior.ValidFrom)
 
-		if future && !priorIsPendingFuture {
-			// Future-successor bound: the prior must START before the boundary, else
-			// bounding it to effectiveFrom would invert its range → REJECT.
-			if prior.ValidFrom != nil && !effectiveFrom.After(*prior.ValidFrom) {
-				return validationError("successor boundary %s is not after prior valid_from %s", effectiveFrom, prior.ValidFrom.UTC())
-			}
+		if future && startsBeforeBoundary {
 			// Bound the still-current prior; keep it accepted (current until the date).
 			if err := s.assertionRepo.BoundPendingSuccessorTx(ctx, tx, prior.ID, effectiveFrom, newRow.ID); err != nil {
 				return fmt.Errorf("bound pending successor: %w", err)
@@ -1068,19 +1113,11 @@ func (s *AssertService) closeConflicts(ctx context.Context, tx pgx.Tx, conflicts
 			continue
 		}
 
-		// Terminalize the prior (present edit, or a pending future successor a present
-		// edit cancels). boundTo is effectiveFrom for a normally-overlapping prior, or
-		// the prior's own valid_from for a never-current pending-future row.
-		boundTo := closeBoundary(prior, effectiveFrom, now)
-		// Guard the valid_range CHECK for the terminalized prior too: if we stamp
-		// valid_to = effectiveFrom but the prior STARTS at/after that, the range would
-		// invert (an incoherent backfilled successor) → REJECT.
-		if !priorIsPendingFuture && prior.ValidFrom != nil && boundTo != nil && !boundTo.After(*prior.ValidFrom) {
-			return validationError("successor boundary %s is not after prior valid_from %s", boundTo.UTC(), prior.ValidFrom.UTC())
-		}
-		// knowledge_to must satisfy knowledge_to >= prior.knowledge_from. Concurrent
-		// txs capture `now` microseconds apart, so clamp to the prior's knowledge_from
-		// to keep the assertion_knowledge_range CHECK satisfied.
+		// Terminalize the prior. boundTo is effectiveFrom for a prior that is current
+		// up to the present boundary; for a never-current pending-future row (its
+		// valid_from is at/after the boundary) keep its EXISTING valid_to so the
+		// valid_range CHECK is never inverted to a zero-length/backward window.
+		boundTo := closeBoundary(prior, effectiveFrom)
 		knowledgeTo := now
 		if prior.KnowledgeFrom.After(knowledgeTo) {
 			knowledgeTo = prior.KnowledgeFrom.UTC()
@@ -1103,15 +1140,14 @@ func (s *AssertService) closeConflicts(ctx context.Context, tx pgx.Tx, conflicts
 	return nil
 }
 
-// closeBoundary picks the valid_to to stamp on a terminalized prior. For a present
-// successor the boundary is effectiveFrom (the new row starts where the old ends).
-// For a never-current pending future successor being cancelled by a present edit
-// (valid_from in the future), clamping valid_to to effectiveFrom (<= now < its
-// valid_from) would invert the range, and clamping to its valid_from would make a
-// zero-length window — both violate the valid_range CHECK. Such a row never became
-// current, so its EXISTING valid_to is kept unchanged (it's terminal regardless).
-func closeBoundary(prior *repository.Assertion, effectiveFrom, now time.Time) *time.Time {
-	if prior.ValidFrom != nil && prior.ValidFrom.After(now) {
+// closeBoundary picks the valid_to to stamp on a TERMINALIZED prior. A prior that
+// is current up to the boundary (open start, or valid_from < effectiveFrom) is
+// closed at effectiveFrom. A never-current pending-future prior (valid_from at/after
+// effectiveFrom) keeps its EXISTING valid_to: stamping effectiveFrom (which is <= its
+// valid_from) would invert the range and stamping its own valid_from would make a
+// zero-length window — both violate the valid_range CHECK. It is terminal regardless.
+func closeBoundary(prior *repository.Assertion, effectiveFrom time.Time) *time.Time {
+	if prior.ValidFrom != nil && !effectiveFrom.After(*prior.ValidFrom) {
 		return utcPtr(prior.ValidTo)
 	}
 	ef := effectiveFrom
@@ -1125,13 +1161,18 @@ func closeBoundary(prior *repository.Assertion, effectiveFrom, now time.Time) *t
 // priors (present/future branch). It does NOT re-check same-value (an accept of a
 // proposed row is a distinct proposition from any same-value accepted row, so
 // they coexist until the user reconciles; SP1 keeps accept-time minimal).
-func (s *AssertService) supersedeConflicts(ctx context.Context, tx pgx.Tx, predicate *repository.Predicate, accepting *repository.Assertion, now time.Time) error {
+// resolveAcceptConflicts returns (survivor, merged). When merged is true, the
+// accepting (proposed) row was a same-value reaffirmation of an existing accepted
+// row: it was absorbed (provenance + confidence folded onto the survivor, the
+// accepting row closed superseded), and survivor is the live row the caller should
+// return — the caller must NOT then transition the accepting row to accepted.
+func (s *AssertService) resolveAcceptConflicts(ctx context.Context, tx pgx.Tx, predicate *repository.Predicate, accepting *repository.Assertion, now time.Time) (survivor *repository.Assertion, merged bool, err error) {
 	if predicate.Cardinality != repository.PredicateCardinalitySingle {
-		return nil
+		return nil, false, nil
 	}
 	canonKey, canonSubject, canonObject := canonicalEdge(predicate, accepting.SubjectNodeID, accepting.ObjectNodeID)
 	if err := s.acquireSlotLocks(ctx, tx, predicate, canonKey, canonSubject, canonObject); err != nil {
-		return err
+		return nil, false, err
 	}
 	effectiveFrom := now
 	if accepting.ValidFrom != nil {
@@ -1139,13 +1180,33 @@ func (s *AssertService) supersedeConflicts(ctx context.Context, tx pgx.Tx, predi
 	}
 	// A past-bounded accepting row coexists (it is historical) → no supersession.
 	if accepting.ValidTo != nil && !accepting.ValidTo.UTC().After(now) {
-		return nil
+		return nil, false, nil
 	}
 	conflicts, err := s.findOverlappingAccepted(ctx, tx, predicate, canonKey, canonSubject, canonObject, effectiveFrom, accepting.ValidTo)
 	if err != nil {
-		return err
+		return nil, false, err
 	}
-	return s.closeConflicts(ctx, tx, conflicts, accepting, effectiveFrom, now)
+	// Same-value reaffirmation at accept time: an overlapping accepted row with the
+	// SAME value is the same fact in a different bucket → WIDEN it to cover the
+	// accepting row's window and MERGE the accepting (proposed) row into it. Mirrors
+	// the writeNew widen rule (P1: Accept must widen, not supersede, a same value).
+	acceptingSignature := assertionSignature(accepting)
+	if existing := findSameValue(conflicts, acceptingSignature); existing != nil {
+		existing.ValidFrom = minStart(existing.ValidFrom, accepting.ValidFrom)
+		existing.ValidTo = maxEnd(existing.ValidTo, accepting.ValidTo)
+		widenReq := &AssertRequest{ValidFrom: existing.ValidFrom}
+		newKey := computePropositionKey(predicate, canonKey, canonSubject, canonObject, widenReq)
+		if err := s.assertionRepo.WidenAssertionValidityTx(ctx, tx, existing.ID, existing.ValidFrom, existing.ValidTo, newKey); err != nil {
+			return nil, false, fmt.Errorf("widen survivor at accept: %w", err)
+		}
+		existing.PropositionKey = newKey
+		if err := s.mergeSameValue(ctx, tx, accepting, existing); err != nil {
+			return nil, false, err
+		}
+		return existing, true, nil
+	}
+
+	return nil, false, s.closeConflicts(ctx, tx, conflicts, accepting, effectiveFrom, now)
 }
 
 // insertAssertionWithRecover inserts the new assertion, recovering from the
@@ -1279,7 +1340,9 @@ func (s *AssertService) Accept(ctx context.Context, assertionID uuid.UUID, _ Acc
 // AcceptTx is the tx-bound variant of Accept.
 func (s *AssertService) AcceptTx(ctx context.Context, tx pgx.Tx, assertionID uuid.UUID) (*repository.Assertion, error) {
 	now := accelerated.GetCurrentTime().UTC()
-	assertion, err := s.assertionRepo.GetAssertionTx(ctx, tx, assertionID)
+	// Row-lock so the proposed-status check + the accept are atomic vs a concurrent
+	// Accept/Reject of the same row.
+	assertion, err := s.assertionRepo.GetAssertionForUpdateTx(ctx, tx, assertionID)
 	if err != nil {
 		return nil, err
 	}
@@ -1290,9 +1353,16 @@ func (s *AssertService) AcceptTx(ctx context.Context, tx pgx.Tx, assertionID uui
 	if err != nil {
 		return nil, fmt.Errorf("load predicate: %w", err)
 	}
-	// Single-cardinality supersession at accept time (locks + closes the prior).
-	if err := s.supersedeConflicts(ctx, tx, predicate, assertion, now); err != nil {
+	// Single-cardinality conflict resolution at accept time (locks the slot, then
+	// widens a same-value prior or supersedes different-value priors).
+	survivor, merged, err := s.resolveAcceptConflicts(ctx, tx, predicate, assertion, now)
+	if err != nil {
 		return nil, err
+	}
+	if merged {
+		// The accepting row was a same-value reaffirmation absorbed into survivor;
+		// it is already closed. Return the live survivor instead of accepting it.
+		return survivor, nil
 	}
 	if err := s.assertionRepo.TransitionStatusTx(ctx, tx, assertionID, repository.AssertionStatusAccepted, nil, nil); err != nil {
 		return nil, fmt.Errorf("transition proposed→accepted: %w", err)
@@ -1334,19 +1404,28 @@ func (s *AssertService) terminalTransition(ctx context.Context, assertionID uuid
 		}
 	}()
 	now := accelerated.GetCurrentTime().UTC()
-	assertion, err := s.assertionRepo.GetAssertionTx(ctx, tx, assertionID)
+	// Row-lock so the from-status check + the update are atomic (a concurrent
+	// Accept/Reject on the same row blocks here, so they cannot both succeed).
+	assertion, err := s.assertionRepo.GetAssertionForUpdateTx(ctx, tx, assertionID)
 	if err != nil {
 		return nil, err
 	}
 	if assertion.Status != fromStatus {
 		return nil, validationError("assertion %s is %q, expected %q for this transition", assertionID, assertion.Status, fromStatus)
 	}
+	// knowledge_to >= knowledge_from (the row's KnowledgeFromOverride may put
+	// knowledge_from in the future; clamp so the assertion_knowledge_range CHECK
+	// holds).
+	knowledgeTo := now
+	if assertion.KnowledgeFrom.After(knowledgeTo) {
+		knowledgeTo = assertion.KnowledgeFrom.UTC()
+	}
 	closure := closureReason
-	if err := s.assertionRepo.TransitionStatusTx(ctx, tx, assertionID, toStatus, &now, &closure); err != nil {
+	if err := s.assertionRepo.TransitionStatusTx(ctx, tx, assertionID, toStatus, &knowledgeTo, &closure); err != nil {
 		return nil, fmt.Errorf("terminal transition to %s: %w", toStatus, err)
 	}
 	assertion.Status = toStatus
-	assertion.KnowledgeTo = &now
+	assertion.KnowledgeTo = &knowledgeTo
 	assertion.ClosureReason = &closure
 	if err := s.emitAssertionEvent(ctx, tx, kind, assertion, now); err != nil {
 		return nil, err
@@ -1556,6 +1635,22 @@ func strongerTrust(existing *string, locators []ProvenanceLocator) *string {
 		return nil
 	}
 	return &bestTier
+}
+
+// strongerTrustTier returns the stronger of two nullable trust tiers (the higher
+// rank). Used when merging a same-value loser's trust into a survivor.
+func strongerTrustTier(a, b *string) *string {
+	rankA, rankB := 0, 0
+	if a != nil {
+		rankA = trustTierRank(*a)
+	}
+	if b != nil {
+		rankB = trustTierRank(*b)
+	}
+	if rankB > rankA {
+		return b
+	}
+	return a
 }
 
 // trustTierRank ranks a stored trust_tier token (mirrors producerRank but over the

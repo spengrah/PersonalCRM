@@ -295,6 +295,42 @@ func (q *Queries) GetAssertion(ctx context.Context, id pgtype.UUID) (*Assertion,
 	return &i, err
 }
 
+const GetAssertionForUpdate = `-- name: GetAssertionForUpdate :one
+SELECT id, subject_node_id, predicate_key, object_node_id, value_text, value_num, value_date, value_bool, valid_from, valid_to, knowledge_from, knowledge_to, confidence, salience, status, closure_reason, superseded_by, trust_tier, proposition_key, created_at FROM assertion WHERE id = $1 FOR UPDATE
+`
+
+// Row-locking read for the lifecycle transitions (Accept/Reject/Retract): the
+// caller locks the row FOR UPDATE so the status precondition check + the status
+// update are atomic within the tx (a concurrent Accept/Reject on the same row
+// blocks until commit, so the from-status guard cannot be raced).
+func (q *Queries) GetAssertionForUpdate(ctx context.Context, id pgtype.UUID) (*Assertion, error) {
+	row := q.db.QueryRow(ctx, GetAssertionForUpdate, id)
+	var i Assertion
+	err := row.Scan(
+		&i.ID,
+		&i.SubjectNodeID,
+		&i.PredicateKey,
+		&i.ObjectNodeID,
+		&i.ValueText,
+		&i.ValueNum,
+		&i.ValueDate,
+		&i.ValueBool,
+		&i.ValidFrom,
+		&i.ValidTo,
+		&i.KnowledgeFrom,
+		&i.KnowledgeTo,
+		&i.Confidence,
+		&i.Salience,
+		&i.Status,
+		&i.ClosureReason,
+		&i.SupersededBy,
+		&i.TrustTier,
+		&i.PropositionKey,
+		&i.CreatedAt,
+	)
+	return &i, err
+}
+
 const GetCurrentAccepted = `-- name: GetCurrentAccepted :one
 SELECT id, subject_node_id, predicate_key, object_node_id, value_text, value_num, value_date, value_bool, valid_from, valid_to, knowledge_from, knowledge_to, confidence, salience, status, closure_reason, superseded_by, trust_tier, proposition_key, created_at FROM assertion
 WHERE subject_node_id = $1

@@ -635,6 +635,11 @@ type Querier interface {
 	// in GetMacHostCursorEpoch below.
 	GetActiveMacHostByIDForUpdate(ctx context.Context, id pgtype.UUID) (*MacHost, error)
 	GetAssertion(ctx context.Context, id pgtype.UUID) (*Assertion, error)
+	// Row-locking read for the lifecycle transitions (Accept/Reject/Retract): the
+	// caller locks the row FOR UPDATE so the status precondition check + the status
+	// update are atomic within the tx (a concurrent Accept/Reject on the same row
+	// blocks until commit, so the from-status guard cannot be raced).
+	GetAssertionForUpdate(ctx context.Context, id pgtype.UUID) (*Assertion, error)
 	// Look up an event by its Google Calendar ID
 	GetCalendarEventByGcalID(ctx context.Context, arg GetCalendarEventByGcalIDParams) (*CalendarEvent, error)
 	// Look up an event by its UUID
