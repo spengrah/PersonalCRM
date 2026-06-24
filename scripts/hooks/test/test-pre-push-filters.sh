@@ -112,6 +112,8 @@ echo "--- Makefile adaptive -p / CI-pin render guard ---"
 bash scripts/ci/test-parallelism-render-guard.sh || fail=1
 echo "--- per-worktree test-pg resolver unit (shim-only, DB/port-free) ---"
 bash scripts/test/test-worktree-test-pg.sh || fail=1
+echo "--- worktree env-link resolver + post-checkout gate (fs/git-only) ---"
+bash scripts/test/test-link-worktree-env.sh || fail=1
 echo "--- repo-hygiene check guard ---"
 bash scripts/hooks/test/test-repo-hygiene-check.sh || fail=1
 echo "--- e2e test-map coverage guard ---"
