@@ -313,6 +313,21 @@ func (r *AssertionRepository) GetAssertionTx(ctx context.Context, tx pgx.Tx, id 
 	return getAssertion(ctx, db.New(tx), id)
 }
 
+// GetAssertionForUpdateTx reads + row-locks an assertion (SELECT … FOR UPDATE) so
+// a lifecycle transition's status-precondition check and the status update are
+// atomic within the tx. Tx-only (the lock is held until commit).
+func (r *AssertionRepository) GetAssertionForUpdateTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*Assertion, error) {
+	row, err := db.New(tx).GetAssertionForUpdate(ctx, uuidToPgUUID(id))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	a := convertDbAssertion(row)
+	return &a, nil
+}
+
 func getAssertion(ctx context.Context, q db.Querier, id uuid.UUID) (*Assertion, error) {
 	row, err := q.GetAssertion(ctx, uuidToPgUUID(id))
 	if err != nil {
@@ -582,7 +597,18 @@ func insertProvenance(ctx context.Context, q db.Querier, p InsertProvenanceParam
 
 // ListProvenance returns all locators for an assertion, oldest first.
 func (r *AssertionRepository) ListProvenance(ctx context.Context, assertionID uuid.UUID) ([]Provenance, error) {
-	rows, err := r.queries.ListProvenance(ctx, uuidToPgUUID(assertionID))
+	return listProvenance(ctx, r.queries, assertionID)
+}
+
+// ListProvenanceTx is the tx-bound variant of ListProvenance. The merge path uses
+// it so it sees a loser assertion's provenance written earlier in the SAME tx
+// (e.g. AssertTx then AcceptTx in one tx).
+func (r *AssertionRepository) ListProvenanceTx(ctx context.Context, tx pgx.Tx, assertionID uuid.UUID) ([]Provenance, error) {
+	return listProvenance(ctx, db.New(tx), assertionID)
+}
+
+func listProvenance(ctx context.Context, q db.Querier, assertionID uuid.UUID) ([]Provenance, error) {
+	rows, err := q.ListProvenance(ctx, uuidToPgUUID(assertionID))
 	if err != nil {
 		return nil, err
 	}
@@ -634,20 +660,32 @@ func SourceKindRequiresExistenceCheck(sourceKind string) bool {
 // error rather than a silent false, so the caller cannot misread "no check
 // performed" as "row missing" — gate on SourceKindRequiresExistenceCheck first.
 func (r *AssertionRepository) ExistsContentRow(ctx context.Context, sourceKind string, id uuid.UUID) (bool, error) {
+	return existsContentRow(ctx, r.queries, sourceKind, id)
+}
+
+// ExistsContentRowTx is the tx-bound variant of ExistsContentRow. The write API
+// uses it so the existence check runs inside the assert tx — it sees a content row
+// created earlier in the same tx and is transactionally consistent with a
+// concurrent soft delete.
+func (r *AssertionRepository) ExistsContentRowTx(ctx context.Context, tx pgx.Tx, sourceKind string, id uuid.UUID) (bool, error) {
+	return existsContentRow(ctx, db.New(tx), sourceKind, id)
+}
+
+func existsContentRow(ctx context.Context, q db.Querier, sourceKind string, id uuid.UUID) (bool, error) {
 	pgID := uuidToPgUUID(id)
 	switch sourceKind {
 	case SourceKindCommsMessage:
-		return r.queries.ExistsCommsMessage(ctx, pgID)
+		return q.ExistsCommsMessage(ctx, pgID)
 	case SourceKindTelegramMessage:
-		return r.queries.ExistsTelegramMessage(ctx, pgID)
+		return q.ExistsTelegramMessage(ctx, pgID)
 	case SourceKindMessagesMessage:
-		return r.queries.ExistsMessagesMessage(ctx, pgID)
+		return q.ExistsMessagesMessage(ctx, pgID)
 	case SourceKindMeetingNote:
-		return r.queries.ExistsMeetingNote(ctx, pgID)
+		return q.ExistsMeetingNote(ctx, pgID)
 	case SourceKindCalendarEvent:
-		return r.queries.ExistsCalendarEvent(ctx, pgID)
+		return q.ExistsCalendarEvent(ctx, pgID)
 	case SourceKindPhoneCall:
-		return r.queries.ExistsPhoneCall(ctx, pgID)
+		return q.ExistsPhoneCall(ctx, pgID)
 	default:
 		return false, errors.New("ExistsContentRow called for a source kind with no backing-row check: " + sourceKind)
 	}

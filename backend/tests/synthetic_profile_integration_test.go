@@ -84,6 +84,8 @@ func TestSyntheticProfile_DevCoversCatalog(t *testing.T) {
 	require.Equal(t, params.Counts.StrandedMessages, res.StrandedMessages)
 	require.Equal(t, params.Counts.UnmatchedCalendar, res.UnmatchedCalendar)
 	require.Equal(t, params.Counts.OrphanMeetingNote, res.OrphanMeetingNote)
+	require.Equal(t, params.Counts.SeededAssertions, res.SeededAssertions)
+	require.Equal(t, 2, res.SeededAssertions, "dev profile seeds graph assertions")
 
 	remaining, err := h.ContactsRemaining(ctx)
 	require.NoError(t, err)

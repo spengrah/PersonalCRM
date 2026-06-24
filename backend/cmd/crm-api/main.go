@@ -392,6 +392,17 @@ func run() int {
 	// Initialize services
 	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, eventBus, rematchService)
 
+	// Graph (SP1) write API — the single validated assert() write path over the
+	// node/entity/predicate/assertion store. SP1 ships the service + the daily
+	// rollover worker (registered below); no HTTP handler yet (SP3/SP4 consume it).
+	graphNodeRepo := repository.NewNodeRepository(database.Queries)
+	graphEntityRepo := repository.NewEntityRepository(database.Queries)
+	graphPredicateRepo := repository.NewPredicateRepository(database.Queries)
+	graphAssertionRepo := repository.NewAssertionRepository(database.Queries)
+	assertService := service.NewAssertService(
+		database.Pool, graphNodeRepo, graphEntityRepo, graphPredicateRepo, graphAssertionRepo, eventBus,
+	)
+
 	// Telegram message repo construction (hoisted above the
 	// InteractionRecorder wiring so the consumer can mark messages
 	// processed in the same tx as the interaction insert).
@@ -1320,6 +1331,19 @@ func run() int {
 		river.PeriodicInterval(5*time.Minute),
 		func() (river.JobArgs, *river.InsertOpts) {
 			return scheduler.StalenessWatchdogArgs{}, nil
+		},
+		&river.PeriodicJobOpts{RunOnStart: true},
+	))
+
+	// Assertion valid-time rollover — a daily catch-up sweep that terminalizes the
+	// bounded-with-pending-successor assertions whose valid_to has passed (no event
+	// fires at that future date otherwise). Stateless; RunOnStart catches up any
+	// overdue rollovers on boot.
+	river.AddWorker(riverWorkers, scheduler.NewAssertionRolloverWorker(assertService))
+	riverClient.PeriodicJobs().Add(river.NewPeriodicJob(
+		river.PeriodicInterval(24*time.Hour),
+		func() (river.JobArgs, *river.InsertOpts) {
+			return scheduler.AssertionRolloverArgs{}, nil
 		},
 		&river.PeriodicJobOpts{RunOnStart: true},
 	))

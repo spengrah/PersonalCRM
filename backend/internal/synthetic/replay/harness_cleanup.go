@@ -237,14 +237,24 @@ func (h *Harness) cleanup(ctx context.Context) error {
 		_, err := h.support.DeleteContactsByIds(ctx, c.contactIDs)
 		return err
 	})
+	// 13a-pre. assertions on the seeded contact nodes: the assertion→node FK is
+	// RESTRICT, so any assertion ReplayAssertion seeded on a person node MUST be
+	// deleted BEFORE the person-node delete below. Provenance cascades from the
+	// assertion. No-op when no profile/test seeded any (DeleteAssertionsForNode is
+	// per-node; the loop is bounded by the seeded-contact count).
+	step("assertions", func() error {
+		for _, contactID := range c.contactIDs {
+			if _, err := h.support.DeleteAssertionsForNode(ctx, contactID); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 	// 13a. person node (node.id == contact.id): SeedContact dual-writes a node
 	// via the real service path, so teardown must remove it too or the shared
 	// DB leaks an orphan node per seeded contact. There is no FK from
 	// node→contact, so order relative to the contact delete is free. The
-	// assertion→node FK is RESTRICT, so once a harness seeds assertions on these
-	// person nodes, those assertions must be deleted in an EARLIER cleanup step
-	// (added before this one in the sequence); no harness path seeds them today,
-	// so this delete stands alone.
+	// assertion→node FK is RESTRICT, so the assertion step above runs first.
 	step("person_node", func() error {
 		_, err := h.support.DeleteNodesByIds(ctx, c.contactIDs)
 		return err

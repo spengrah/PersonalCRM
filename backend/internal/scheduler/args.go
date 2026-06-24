@@ -46,3 +46,12 @@ type StalenessWatchdogArgs struct{}
 
 // Kind implements river.JobArgs.
 func (StalenessWatchdogArgs) Kind() string { return "sync_staleness_watchdog" }
+
+// AssertionRolloverArgs are the args for the daily periodic
+// AssertionRolloverWorker. Stateless — the worker terminalizes the whole
+// due-bounded-successor set from current DB state each tick (a catch-up sweep),
+// so no per-tick parameters are resolved.
+type AssertionRolloverArgs struct{}
+
+// Kind implements river.JobArgs.
+func (AssertionRolloverArgs) Kind() string { return "assertion_rollover" }
