@@ -1526,7 +1526,7 @@ func (s *AssertService) terminalTransition(ctx context.Context, assertionID uuid
 }
 
 // RunRollover terminalizes the bounded-with-pending-successor rows whose bound
-// has been reached (the daily rollover sweep, D6 step 4 / PR4). In one tx it flips
+// has been reached (the daily rollover sweep). In one tx it flips
 // each matching row (status='accepted' AND knowledge_to IS NULL AND superseded_by
 // IS NOT NULL AND valid_to <= now) to status='superseded', closure_reason=
 // 'superseded', knowledge_to=now, and emits assertion.superseded per row. It is a

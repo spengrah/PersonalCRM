@@ -254,6 +254,7 @@ scheduler runs on top of `github.com/riverqueue/river` periodic jobs.
 | `scheduler_tick` | Every 5 min (`RunOnStart: true`) | SchedulerTickWorker enumerates due `external_sync_state` rows and enqueues one `sync_provider_account` river job per account. |
 | `sync_provider_account` | Dispatched on-demand | SyncProviderAccountWorker calls `syncService.RunAccountSync(source, accountID)` for a single account. River's lease + rescuer provides durable crash-recovery. |
 | `sync_staleness_watchdog` | Every 5 min (`RunOnStart: true`) | StalenessWatchdogWorker compares per-source freshness timestamps (`external_sync_state` last-success/error + `mac_host.source_health` last-pushed + `mac_host.last_heartbeat_at`) against config-backed `SYNC_STALENESS_*` thresholds and reconciles breaches into `sync_staleness_breach`. Registered unconditionally (independent of `ENABLE_EXTERNAL_SYNC`). Read via `GET /api/v1/sync/staleness`. |
+| `assertion_rollover` | Daily | AssertionRolloverWorker (SP1 graph) terminalizes bounded-with-pending-successor assertions whose `valid_to` has passed: rows matching `status='accepted' AND knowledge_to IS NULL AND superseded_by IS NOT NULL AND valid_to <= now` flip to `status='superseded'`, `closure_reason='superseded'`, `knowledge_to=now`, emitting `assertion.superseded` per row. Stateless catch-up sweep; never touches successor-less bounded-past facts. |
 
 Dedup is done in a repository helper
 (`EnqueueAccountSyncIfNotInFlight`) that wraps
@@ -705,6 +706,8 @@ Concrete writer → kind mapping:
 | `RematchDispatcher` | `contact_methods.added` | Serializes per-contact rematch via `contactLocks` and runs `RematchService.Run` |
 
 The InteractionRecorder invokes CadenceUpdater + FollowUpManager **inline** after `bus.PublishTx` so cadence + follow-up state apply synchronously in the caller's tx. The queued river workers for the same event become durable no-ops via `event_consumer_claim` when they eventually run. This pattern closes the queued-worker replay hole while keeping per-consumer retries available.
+
+**SP1 graph assertion events.** `AssertService` emits five `assertion.*` kinds — `assertion.proposed`, `assertion.accepted`, `assertion.superseded`, `assertion.rejected`, `assertion.provenance_added` — onto the same bus via `PublishTx`, idempotency-keyed on `<assertion_id>:<transition>` (and `<assertion_id>:provenance:<locator_hash>` for the many-per-assertion provenance kind). They have **no consumer in SP1** (`consumerJobsForKind` returns nil for them); the change-feed, embedding, `relationship_signal`-recompute, projection-cache, and review-surface consumers are SP3/SP4. A `Retract` emits `assertion.superseded` (closure_reason distinguishes it; there is no separate `assertion.retracted` kind).
 
 ### Sole-Writer Map
 
