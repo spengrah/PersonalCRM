@@ -702,6 +702,14 @@ func (r *SyntheticSupportRepository) GetNodeForContact(ctx context.Context, cont
 	return &node, nil
 }
 
+// CountContactsByFullName counts live contacts with an exact full_name, so a
+// contact→node dual-write rollback test can assert a failed-tx contact did not
+// survive without paging the whole contact list (namespace-prefixed names are
+// unique per test).
+func (r *SyntheticSupportRepository) CountContactsByFullName(ctx context.Context, fullName string) (int64, error) {
+	return r.queries.SyntheticCountContactsByFullName(ctx, fullName)
+}
+
 // DeleteAssertionsForNode hard-deletes the assertions touching a node in either
 // position (provenance cascades). The assertion → node FK is restrict, so a test
 // MUST clear its assertions before deleting its nodes — register this cleanup to

@@ -1585,6 +1585,10 @@ type Querier interface {
 	// rows whose normalized value shares the namespace's phone prefix. Caller passes
 	// a BARE prefix; '%' is appended here.
 	SyntheticCountContactMethodsByValueNormalizedPrefix(ctx context.Context, valueNormalizedPrefix pgtype.Text) (int64, error)
+	// Contact→node dual-write test support: count contacts with an exact full_name
+	// (namespace-prefixed names are unique per test), so a rollback test asserts a
+	// failed-tx contact did not survive without paging the whole contact list.
+	SyntheticCountContactsByFullName(ctx context.Context, fullName string) (int64, error)
 	// Cleanup assertion — count surviving contact rows for the given ids.
 	SyntheticCountContactsByIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error)
 	// Harness setup collision detection (D5): count external_identity rows whose

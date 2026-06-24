@@ -785,6 +785,20 @@ func (q *Queries) SyntheticCountContactMethodsByValueNormalizedPrefix(ctx contex
 	return count, err
 }
 
+const SyntheticCountContactsByFullName = `-- name: SyntheticCountContactsByFullName :one
+SELECT COUNT(*) FROM contact WHERE full_name = $1 AND deleted_at IS NULL
+`
+
+// Contact→node dual-write test support: count contacts with an exact full_name
+// (namespace-prefixed names are unique per test), so a rollback test asserts a
+// failed-tx contact did not survive without paging the whole contact list.
+func (q *Queries) SyntheticCountContactsByFullName(ctx context.Context, fullName string) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountContactsByFullName, fullName)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const SyntheticCountContactsByIds = `-- name: SyntheticCountContactsByIds :one
 SELECT COUNT(*) FROM contact WHERE id = ANY($1::uuid[])
 `

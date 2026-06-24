@@ -566,6 +566,12 @@ SELECT COUNT(*) FROM assertion WHERE subject_node_id = $1;
 -- test can assert the dual-write created it with the expected type/label.
 SELECT * FROM node WHERE id = $1 AND deleted_at IS NULL;
 
+-- name: SyntheticCountContactsByFullName :one
+-- Contact→node dual-write test support: count contacts with an exact full_name
+-- (namespace-prefixed names are unique per test), so a rollback test asserts a
+-- failed-tx contact did not survive without paging the whole contact list.
+SELECT COUNT(*) FROM contact WHERE full_name = $1 AND deleted_at IS NULL;
+
 -- name: SyntheticDeleteAssertionsForNode :execrows
 -- Assertion-store cleanup: hard-delete the assertions touching a node in EITHER
 -- position (provenance cascades). The assertion → node FK is restrict (NO

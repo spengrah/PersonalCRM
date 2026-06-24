@@ -293,7 +293,10 @@ func (s *EnrichmentService) EnrichContactFromExternalWithSelections(
 		needsUpdate = true
 	}
 
-	// Apply updates to contact if any enrichment occurred.
+	// Apply updates to contact if any enrichment occurred. Keep the person
+	// node's canonical_label loosely synced whenever enrichment renames the
+	// contact (node.id == contact.id), mirroring ContactService.UpdateContact.
+	nameChanged := updateReq.FullName != contact.FullName
 	if needsUpdate {
 		if cadencePresent {
 			if s.cadence == nil {
@@ -308,6 +311,12 @@ func (s *EnrichmentService) EnrichContactFromExternalWithSelections(
 				if _, txErr := txContactRepo.UpdateContact(ctx, crmContactID, updateReq); txErr != nil {
 					return fmt.Errorf("update contact profile: %w", txErr)
 				}
+				if nameChanged {
+					nodeRepo := repository.NewNodeRepository(txQueries)
+					if txErr := nodeRepo.UpdateNodeCanonicalLabelTx(ctx, tx, crmContactID, updateReq.FullName); txErr != nil {
+						return fmt.Errorf("sync person node label: %w", txErr)
+					}
+				}
 				return s.cadence.ApplyContactByOverride(ctx, tx, crmContactID, newContactBy)
 			})
 			if txErr != nil {
@@ -318,6 +327,11 @@ func (s *EnrichmentService) EnrichContactFromExternalWithSelections(
 			// repository's default pool connection.
 			if _, err := s.contactRepo.UpdateContact(ctx, crmContactID, updateReq); err != nil {
 				logger.Warn().Err(err).Msg("failed to update contact with enrichments")
+			} else if nameChanged {
+				nodeRepo := repository.NewNodeRepository(s.database.Queries)
+				if err := nodeRepo.UpdateNodeCanonicalLabel(ctx, crmContactID, updateReq.FullName); err != nil {
+					logger.Warn().Err(err).Msg("failed to sync person node label after enrichment rename")
+				}
 			}
 		}
 	}

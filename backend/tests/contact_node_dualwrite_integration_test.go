@@ -129,6 +129,85 @@ func TestContactNodeDualWrite_Integration(t *testing.T) {
 		assert.Equal(t, contact.FullName, node.CanonicalLabel)
 	})
 
+	t.Run("enrichment rename syncs the node label", func(t *testing.T) {
+		t.Parallel()
+		gen, _ := migrationGenerator(t)
+		t.Cleanup(func() { _, _ = support.DeleteNodesByLabelPrefix(ctx, gen.Prefix()) })
+
+		contactRepo := repository.NewContactRepository(database.Queries)
+		methodRepo := repository.NewContactMethodRepository(database.Queries)
+		interactionRepo := repository.NewInteractionRepository(database.Queries)
+		taskRepo := repository.NewContactTaskRepository(database.Queries)
+		enrichmentRepo := repository.NewEnrichmentRepository(database.Queries)
+		externalRepo := repository.NewExternalContactRepository(database.Queries)
+		svc := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, taskRepo, nil, nil)
+		// nil bus/registry → enrichment skips publish.
+		enrichSvc := service.NewEnrichmentService(database, contactRepo, methodRepo, enrichmentRepo, nil, nil)
+
+		spec := gen.Contact()
+		contact, _, err := svc.CreateContact(ctx, repository.CreateContactRequest{
+			FullName: spec.FullName,
+		}, nil)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = contactRepo.HardDeleteContact(ctx, contact.ID) })
+
+		display := gen.Prefix() + "ext-display"
+		external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+			Source:      "google",
+			SourceID:    gen.Prefix() + "ext-src",
+			DisplayName: &display,
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = externalRepo.Delete(ctx, external.ID) })
+
+		// Enrichment-driven rename via the no-cadence pool path: the node label
+		// must follow (mirrors ContactService.UpdateContact's sync).
+		renamed := gen.Prefix() + "enriched-renamed"
+		_, err = enrichSvc.EnrichContactFromExternalWithSelections(ctx, contact.ID, external, nil, nil, nil, &renamed)
+		require.NoError(t, err)
+
+		node, err := support.GetNodeForContact(ctx, contact.ID)
+		require.NoError(t, err)
+		assert.Equal(t, renamed, node.CanonicalLabel, "enrichment rename syncs the node label")
+	})
+
+	t.Run("merge with a new name syncs the target node label", func(t *testing.T) {
+		t.Parallel()
+		gen, _ := migrationGenerator(t)
+		t.Cleanup(func() { _, _ = support.DeleteNodesByLabelPrefix(ctx, gen.Prefix()) })
+
+		contactRepo := repository.NewContactRepository(database.Queries)
+		methodRepo := repository.NewContactMethodRepository(database.Queries)
+		interactionRepo := repository.NewInteractionRepository(database.Queries)
+		taskRepo := repository.NewContactTaskRepository(database.Queries)
+		svc := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, taskRepo, nil, nil)
+		wireCadenceUpdaterForTest(t, database, svc)
+
+		monthly := "monthly"
+		target, _, err := svc.CreateContact(ctx, repository.CreateContactRequest{
+			FullName: gen.Prefix() + "merge-target", Cadence: &monthly,
+		}, nil)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = contactRepo.HardDeleteContact(ctx, target.ID) })
+		source, _, err := svc.CreateContact(ctx, repository.CreateContactRequest{
+			FullName: gen.Prefix() + "merge-source", Cadence: &monthly,
+		}, nil)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = contactRepo.HardDeleteContact(ctx, source.ID) })
+
+		newName := gen.Prefix() + "merged-renamed"
+		_, err = svc.MergeContacts(ctx, service.MergeContactsRequest{
+			SourceContactID: source.ID,
+			TargetContactID: target.ID,
+			NewName:         &newName,
+		})
+		require.NoError(t, err)
+
+		node, err := support.GetNodeForContact(ctx, target.ID)
+		require.NoError(t, err)
+		assert.Equal(t, newName, node.CanonicalLabel, "merge new_name syncs the target node label")
+	})
+
 	t.Run("tx rollback leaves no node and no contact", func(t *testing.T) {
 		t.Parallel()
 		gen, _ := migrationGenerator(t)
@@ -157,15 +236,9 @@ func TestContactNodeDualWrite_Integration(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, int64(0), count, "rolled-back tx leaves no person node")
 
-		var contactCount int
-		contacts, err := contactRepo.ListContacts(ctx, repository.ListContactsParams{Limit: 1000})
+		contactCount, err := support.CountContactsByFullName(ctx, spec.FullName)
 		require.NoError(t, err)
-		for _, c := range contacts {
-			if c.FullName == spec.FullName {
-				contactCount++
-			}
-		}
-		assert.Equal(t, 0, contactCount, "rolled-back tx leaves no contact")
+		assert.Equal(t, int64(0), contactCount, "rolled-back tx leaves no contact")
 	})
 }
 
@@ -213,8 +286,9 @@ func TestContactNodeDualWrite_MigrationDownUp(t *testing.T) {
 	_, err = nodeRepo.GetNode(ctx, unreferenced.ID)
 	require.NoError(t, err, "dual-write created the person node")
 
-	// Seed a SECOND person node that an assertion references — the guarded down
-	// must leave this one intact (deleting it would orphan the assertion).
+	// Seed a SECOND person node that an assertion references as its SUBJECT —
+	// the guarded down must leave it intact (deleting it would orphan the
+	// assertion).
 	referencedID := uuid.New()
 	_, err = nodeRepo.CreateNode(ctx, referencedID, repository.NodeTypePerson, "migration-referenced-person")
 	require.NoError(t, err)
@@ -228,6 +302,24 @@ func TestContactNodeDualWrite_MigrationDownUp(t *testing.T) {
 		Salience:       45,
 		Status:         repository.AssertionStatusAccepted,
 		PropositionKey: "migration-dualwrite-prop-1",
+	})
+	require.NoError(t, err)
+
+	// Seed a THIRD person node referenced ONLY as an assertion's OBJECT (a
+	// person→person edge). The guarded down checks both positions, so this one
+	// must also survive (covering the object_node_id arm of the down's guard).
+	objectReferencedID := uuid.New()
+	_, err = nodeRepo.CreateNode(ctx, objectReferencedID, repository.NodeTypePerson, "migration-object-referenced-person")
+	require.NoError(t, err)
+	_, err = assertionRepo.InsertAssertion(ctx, repository.InsertAssertionParams{
+		SubjectNodeID:  referencedID,
+		PredicateKey:   "parent_of",
+		ObjectNodeID:   &objectReferencedID,
+		KnowledgeFrom:  accelerated.GetCurrentTime().UTC(),
+		Confidence:     80,
+		Salience:       45,
+		Status:         repository.AssertionStatusAccepted,
+		PropositionKey: "migration-dualwrite-prop-2",
 	})
 	require.NoError(t, err)
 
@@ -249,8 +341,12 @@ func TestContactNodeDualWrite_MigrationDownUp(t *testing.T) {
 	require.ErrorIs(t, err, db.ErrNotFound, "guarded down removes the unreferenced person node")
 
 	stillThere, err := nodeRepo.GetNode(ctx, referencedID)
-	require.NoError(t, err, "guarded down preserves the assertion-referenced person node")
+	require.NoError(t, err, "guarded down preserves the assertion-subject person node")
 	assert.Equal(t, referencedID, stillThere.ID)
+
+	objStillThere, err := nodeRepo.GetNode(ctx, objectReferencedID)
+	require.NoError(t, err, "guarded down preserves the assertion-object person node")
+	assert.Equal(t, objectReferencedID, objStillThere.ID)
 
 	// Roll back up: the backfill re-seeds a person node for every NON-deleted
 	// contact at its own id. The unreferenced contact still exists (its row was

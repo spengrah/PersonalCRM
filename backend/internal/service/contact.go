@@ -1337,6 +1337,17 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		return nil, fmt.Errorf("update target contact: %w", err)
 	}
 
+	// Keep the target's person node label loosely synced when the merge
+	// renames the target (node.id == contact.id), mirroring
+	// ContactService.UpdateContact. The source contact's node tombstoning is a
+	// later soft-delete-propagation concern.
+	if updateReq.FullName != targetContact.FullName {
+		nodeRepo := repository.NewNodeRepository(txQueries)
+		if err := nodeRepo.UpdateNodeCanonicalLabelTx(ctx, tx, req.TargetContactID, updateReq.FullName); err != nil {
+			return nil, fmt.Errorf("sync target person node label: %w", err)
+		}
+	}
+
 	// 9a. Forward-max merged cadence columns through
 	// CadenceUpdater.BulkApply. The merged cadence string may come from
 	// the source (when FieldSelections.Cadence == "source"), so
