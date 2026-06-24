@@ -28,54 +28,59 @@ import (
 // against an ISOLATED per-test clone (NewEphemeralClone), never the shared DB,
 // because it rolls the schema down.
 
-// expectedCuratedPredicate captures the curated-seed contract for one predicate:
-// the discriminating fields the table-driven test verifies against the live
-// seed. proposition_bucket, cardinality, and the review policy are the most
-// behaviorally-significant, so they are checked for EVERY seeded predicate, not
-// spot-checked.
+// i32p returns a pointer to an int32 literal, for the nullable prior fields.
+func i32p(v int32) *int32 { return &v }
+
+// expectedCuratedPredicate captures the FULL curated-seed contract for one
+// predicate: every per-predicate field the table-driven test verifies against
+// the live seed (so a metadata typo on any predicate fails the test). The two
+// nullable priors are pointers (nil = the seed leaves them NULL).
 type expectedCuratedPredicate struct {
-	kind         string
-	subjectType  string
-	objectType   string // edges only; "" for facts
-	valueType    string // facts only; "" for edges
-	cardinality  string
-	symmetric    bool
-	inverse      string // "" when none
-	temporal     string
-	bucket       string
-	reviewPolicy string
+	kind           string
+	subjectType    string
+	objectType     string // edges only; "" for facts
+	valueType      string // facts only; "" for edges
+	cardinality    string
+	symmetric      bool
+	inverse        string // "" when none
+	temporal       string
+	baseRateDays   *int32 // nil = NULL
+	typicalDurDays *int32 // nil = NULL
+	salience       int16
+	reviewPolicy   string
+	bucket         string
 }
 
 // expectedCuratedCatalog is the exact curated seed the migration installs. The
 // test asserts the live curated set equals these keys EXACTLY and that every
-// row's discriminating fields match.
+// row's full field set matches.
 var expectedCuratedCatalog = map[string]expectedCuratedPredicate{
-	"lives_in":         {"edge", "person", "place", "", "single", false, "", "mutable", "year", "auto-if-confident"},
-	"home_address":     {"fact", "person", "", "text", "single", false, "", "mutable", "year", "auto-if-confident"},
-	"works_at":         {"edge", "person", "organization", "", "single", false, "", "mutable", "year", "auto-if-confident"},
-	"job_title":        {"fact", "person", "", "text", "single", false, "", "mutable", "year", "auto-if-confident"},
-	"birthday":         {"fact", "person", "", "date", "single", false, "", "permanent", "none", "auto-if-confident"},
-	"partner_of":       {"edge", "person", "person", "", "single", true, "", "mutable", "none", "always-confirm"},
-	"parent_of":        {"edge", "person", "person", "", "multi", false, "child_of", "permanent", "none", "always-confirm"},
-	"child_of":         {"edge", "person", "person", "", "multi", false, "parent_of", "permanent", "none", "always-confirm"},
-	"sibling_of":       {"edge", "person", "person", "", "multi", true, "", "permanent", "none", "always-confirm"},
-	"grandparent_of":   {"edge", "person", "person", "", "multi", false, "grandchild_of", "permanent", "none", "auto-if-confident"},
-	"grandchild_of":    {"edge", "person", "person", "", "multi", false, "grandparent_of", "permanent", "none", "auto-if-confident"},
-	"aunt_uncle_of":    {"edge", "person", "person", "", "multi", false, "niece_nephew_of", "permanent", "none", "auto-if-confident"},
-	"niece_nephew_of":  {"edge", "person", "person", "", "multi", false, "aunt_uncle_of", "permanent", "none", "auto-if-confident"},
-	"cousin_of":        {"edge", "person", "person", "", "multi", true, "", "permanent", "none", "auto-if-confident"},
-	"health_condition": {"fact", "person", "", "text", "multi", false, "", "mutable", "none", "always-confirm"},
-	"interested_in":    {"edge", "person", "topic", "", "multi", false, "", "mutable", "none", "auto-if-confident"},
-	"preference":       {"fact", "person", "", "text", "multi", false, "", "mutable", "none", "auto-if-confident"},
-	"how_met":          {"fact", "person", "", "text", "single", false, "", "permanent", "none", "auto-if-confident"},
-	"tagged_as":        {"edge", "person", "tag", "", "multi", false, "", "permanent", "none", "auto-if-confident"},
-	"knows":            {"edge", "person", "person", "", "multi", true, "", "mutable", "none", "auto-if-confident"},
-	"introduced_by":    {"edge", "person", "person", "", "single", false, "", "permanent", "none", "auto-if-confident"},
-	"job_seeking":      {"fact", "person", "", "bool", "single", false, "", "bounded", "day", "auto-if-confident"},
-	"on_sabbatical":    {"fact", "person", "", "bool", "single", false, "", "bounded", "day", "auto-if-confident"},
-	"traveling":        {"fact", "person", "", "bool", "single", false, "", "bounded", "day", "auto-if-confident"},
-	"occurrence":       {"fact", "person", "", "text", "multi", false, "", "bounded", "day", "always-confirm"},
-	"within":           {"edge", "place", "place", "", "single", false, "", "permanent", "none", "auto-if-confident"},
+	"lives_in":         {"edge", "person", "place", "", "single", false, "", "mutable", i32p(2190), nil, 60, "auto-if-confident", "year"},
+	"home_address":     {"fact", "person", "", "text", "single", false, "", "mutable", i32p(2190), nil, 45, "auto-if-confident", "year"},
+	"works_at":         {"edge", "person", "organization", "", "single", false, "", "mutable", i32p(1460), nil, 60, "auto-if-confident", "year"},
+	"job_title":        {"fact", "person", "", "text", "single", false, "", "mutable", i32p(1095), nil, 45, "auto-if-confident", "year"},
+	"birthday":         {"fact", "person", "", "date", "single", false, "", "permanent", nil, nil, 85, "auto-if-confident", "none"},
+	"partner_of":       {"edge", "person", "person", "", "single", true, "", "mutable", nil, nil, 85, "always-confirm", "none"},
+	"parent_of":        {"edge", "person", "person", "", "multi", false, "child_of", "permanent", nil, nil, 80, "always-confirm", "none"},
+	"child_of":         {"edge", "person", "person", "", "multi", false, "parent_of", "permanent", nil, nil, 80, "always-confirm", "none"},
+	"sibling_of":       {"edge", "person", "person", "", "multi", true, "", "permanent", nil, nil, 80, "always-confirm", "none"},
+	"grandparent_of":   {"edge", "person", "person", "", "multi", false, "grandchild_of", "permanent", nil, nil, 55, "auto-if-confident", "none"},
+	"grandchild_of":    {"edge", "person", "person", "", "multi", false, "grandparent_of", "permanent", nil, nil, 55, "auto-if-confident", "none"},
+	"aunt_uncle_of":    {"edge", "person", "person", "", "multi", false, "niece_nephew_of", "permanent", nil, nil, 55, "auto-if-confident", "none"},
+	"niece_nephew_of":  {"edge", "person", "person", "", "multi", false, "aunt_uncle_of", "permanent", nil, nil, 55, "auto-if-confident", "none"},
+	"cousin_of":        {"edge", "person", "person", "", "multi", true, "", "permanent", nil, nil, 55, "auto-if-confident", "none"},
+	"health_condition": {"fact", "person", "", "text", "multi", false, "", "mutable", nil, nil, 80, "always-confirm", "none"},
+	"interested_in":    {"edge", "person", "topic", "", "multi", false, "", "mutable", i32p(3650), nil, 45, "auto-if-confident", "none"},
+	"preference":       {"fact", "person", "", "text", "multi", false, "", "mutable", nil, nil, 35, "auto-if-confident", "none"},
+	"how_met":          {"fact", "person", "", "text", "single", false, "", "permanent", nil, nil, 60, "auto-if-confident", "none"},
+	"tagged_as":        {"edge", "person", "tag", "", "multi", false, "", "permanent", nil, nil, 50, "auto-if-confident", "none"},
+	"knows":            {"edge", "person", "person", "", "multi", true, "", "mutable", i32p(3650), nil, 55, "auto-if-confident", "none"},
+	"introduced_by":    {"edge", "person", "person", "", "single", false, "", "permanent", nil, nil, 55, "auto-if-confident", "none"},
+	"job_seeking":      {"fact", "person", "", "bool", "single", false, "", "bounded", nil, i32p(180), 60, "auto-if-confident", "day"},
+	"on_sabbatical":    {"fact", "person", "", "bool", "single", false, "", "bounded", nil, i32p(180), 55, "auto-if-confident", "day"},
+	"traveling":        {"fact", "person", "", "bool", "single", false, "", "bounded", nil, i32p(30), 50, "auto-if-confident", "day"},
+	"occurrence":       {"fact", "person", "", "text", "multi", false, "", "bounded", nil, i32p(7), 80, "always-confirm", "day"},
+	"within":           {"edge", "place", "place", "", "single", false, "", "permanent", nil, nil, 30, "auto-if-confident", "none"},
 }
 
 // expectedCuratedSubtypes is the exact set of entity_type subtype keys the seed
@@ -114,12 +119,13 @@ func TestPredicateCatalog_Seed_Integration(t *testing.T) {
 		assert.Equal(t, wantKeys, gotKeys, "curated catalog must be EXACTLY the seeded set")
 	})
 
-	t.Run("every seeded predicate's discriminating fields match the contract", func(t *testing.T) {
+	t.Run("every seeded predicate's full field set matches the contract", func(t *testing.T) {
 		t.Parallel()
-		// Table-driven over ALL 25 curated predicates: the inverse-pair linkage,
-		// the symmetric flag, kind/payload typing, cardinality, temporal profile,
-		// proposition bucket, and review policy are verified for every row (not a
-		// subset spot-check), so a seed metadata typo on any predicate fails here.
+		// Table-driven over EVERY curated predicate: kind/payload typing,
+		// cardinality, the symmetric flag, inverse-pair linkage, temporal profile,
+		// the two soft priors, salience, review policy, and proposition bucket are
+		// all verified per row (not a subset spot-check), so a seed metadata typo
+		// on any predicate fails here.
 		for key, want := range expectedCuratedCatalog {
 			p, err := predicateRepo.GetPredicate(ctx, key)
 			require.NoErrorf(t, err, "predicate %q must exist", key)
@@ -130,9 +136,14 @@ func TestPredicateCatalog_Seed_Integration(t *testing.T) {
 			assert.Equalf(t, want.cardinality, p.Cardinality, "%s cardinality", key)
 			assert.Equalf(t, want.symmetric, p.Symmetric, "%s symmetric", key)
 			assert.Equalf(t, want.temporal, p.TemporalProfile, "%s temporal_profile", key)
+			assert.Equalf(t, want.salience, p.DefaultSalience, "%s default_salience", key)
 			assert.Equalf(t, want.bucket, p.PropositionBucket, "%s proposition_bucket", key)
 			assert.Equalf(t, want.reviewPolicy, p.DefaultReviewPolicy, "%s default_review_policy", key)
 			assert.Nilf(t, p.Embedding, "%s ships with no embedding", key)
+
+			// Soft priors (nil = the seed leaves the column NULL).
+			assert.Equalf(t, want.baseRateDays, p.BaseRateDays, "%s base_rate_days", key)
+			assert.Equalf(t, want.typicalDurDays, p.TypicalDurationDays, "%s typical_duration_days", key)
 
 			// Payload typing: edges carry an object_type and no value_type; facts
 			// carry a value_type and no object_type (the kind/payload CHECK).
@@ -172,24 +183,6 @@ func TestPredicateCatalog_Seed_Integration(t *testing.T) {
 		org, err := entityRepo.GetEntityType(ctx, "organization")
 		require.NoError(t, err)
 		assert.JSONEq(t, `{}`, string(org.ResolutionConfig))
-	})
-
-	t.Run("soft priors carry through on the predicates that set them", func(t *testing.T) {
-		t.Parallel()
-		// base_rate_days / typical_duration_days are not in the discriminating-
-		// fields table; verify a representative mutable prior and a bounded
-		// duration prior round-trip as the seeded integers.
-		livesIn, err := predicateRepo.GetPredicate(ctx, "lives_in")
-		require.NoError(t, err)
-		require.NotNil(t, livesIn.BaseRateDays)
-		assert.Equal(t, int32(2190), *livesIn.BaseRateDays)
-		assert.Nil(t, livesIn.TypicalDurationDays)
-
-		occ, err := predicateRepo.GetPredicate(ctx, "occurrence")
-		require.NoError(t, err)
-		require.NotNil(t, occ.TypicalDurationDays)
-		assert.Equal(t, int32(7), *occ.TypicalDurationDays)
-		assert.Nil(t, occ.BaseRateDays)
 	})
 
 	t.Run("kind/payload CHECK rejects an edge predicate carrying a value_type", func(t *testing.T) {
