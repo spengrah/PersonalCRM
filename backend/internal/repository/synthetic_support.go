@@ -17,6 +17,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"personal-crm/backend/internal/db"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -682,6 +684,22 @@ func (r *SyntheticSupportRepository) DeletePredicatesByKeyPrefix(ctx context.Con
 // from assertion, so a node-prefix delete clears both.
 func (r *SyntheticSupportRepository) CountAssertionsForSubject(ctx context.Context, subjectNodeID uuid.UUID) (int64, error) {
 	return r.queries.SyntheticCountAssertionsForSubject(ctx, pgtype.UUID{Bytes: subjectNodeID, Valid: true})
+}
+
+// GetNodeForContact fetches the person node a contact owns (node.id ==
+// contact.id), so a contact→node dual-write test can assert the node exists
+// with the expected type and canonical_label. Returns db.ErrNotFound when no
+// live node is at the contact's id.
+func (r *SyntheticSupportRepository) GetNodeForContact(ctx context.Context, contactID uuid.UUID) (*Node, error) {
+	dbNode, err := r.queries.SyntheticGetNodeForContact(ctx, pgtype.UUID{Bytes: contactID, Valid: true})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	node := convertDbNode(dbNode)
+	return &node, nil
 }
 
 // DeleteAssertionsForNode hard-deletes the assertions touching a node in either

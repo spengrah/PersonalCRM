@@ -1489,6 +1489,27 @@ func (q *Queries) SyntheticDeleteTelegramExternalIdentitiesByPeerIds(ctx context
 	return result.RowsAffected(), nil
 }
 
+const SyntheticGetNodeForContact = `-- name: SyntheticGetNodeForContact :one
+SELECT id, type, canonical_label, created_at, deleted_at, merged_into FROM node WHERE id = $1 AND deleted_at IS NULL
+`
+
+// Contact→node dual-write test support: fetch the person node a contact owns
+// (node.id == contact.id). Returns the live (non-soft-deleted) node row so a
+// test can assert the dual-write created it with the expected type/label.
+func (q *Queries) SyntheticGetNodeForContact(ctx context.Context, id pgtype.UUID) (*Node, error) {
+	row := q.db.QueryRow(ctx, SyntheticGetNodeForContact, id)
+	var i Node
+	err := row.Scan(
+		&i.ID,
+		&i.Type,
+		&i.CanonicalLabel,
+		&i.CreatedAt,
+		&i.DeletedAt,
+		&i.MergedInto,
+	)
+	return &i, err
+}
+
 const SyntheticListContactTaskIdsByProvider = `-- name: SyntheticListContactTaskIdsByProvider :many
 SELECT id FROM contact_task WHERE provider = $1
 `

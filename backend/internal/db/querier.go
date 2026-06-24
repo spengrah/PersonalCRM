@@ -1769,6 +1769,10 @@ type Querier interface {
 	// tracked peer ids before the contact delete (external_identity survives contact
 	// delete via ON DELETE SET NULL and would otherwise pollute future matching).
 	SyntheticDeleteTelegramExternalIdentitiesByPeerIds(ctx context.Context, peerIds []string) (int64, error)
+	// Contact→node dual-write test support: fetch the person node a contact owns
+	// (node.id == contact.id). Returns the live (non-soft-deleted) node row so a
+	// test can assert the dual-write created it with the expected type/label.
+	SyntheticGetNodeForContact(ctx context.Context, id pgtype.UUID) (*Node, error)
 	// Todoist replay: snapshot the set of contact_task ids for a provider so the
 	// replay can diff before/after its (globally-scoped) reconcile and track the
 	// rows it created — even for cadence-bearing contacts it did not seed — so

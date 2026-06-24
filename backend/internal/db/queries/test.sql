@@ -560,6 +560,12 @@ DELETE FROM node WHERE canonical_label LIKE @label_prefix || '%';
 -- the shared test DB.
 SELECT COUNT(*) FROM assertion WHERE subject_node_id = $1;
 
+-- name: SyntheticGetNodeForContact :one
+-- Contact→node dual-write test support: fetch the person node a contact owns
+-- (node.id == contact.id). Returns the live (non-soft-deleted) node row so a
+-- test can assert the dual-write created it with the expected type/label.
+SELECT * FROM node WHERE id = $1 AND deleted_at IS NULL;
+
 -- name: SyntheticDeleteAssertionsForNode :execrows
 -- Assertion-store cleanup: hard-delete the assertions touching a node in EITHER
 -- position (provenance cascades). The assertion → node FK is restrict (NO
