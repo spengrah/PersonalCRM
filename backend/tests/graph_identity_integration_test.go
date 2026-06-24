@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Graph (SP1) identity-table round-trips against a real DB. Each sub-test is
+// Graph identity-table round-trips against a real DB. Each sub-test is
 // namespace-scoped via the lightweight factory generator (migrationGenerator)
 // and cleans up its own node closure (entity/venue cascade from node) so the
 // shared test DB stays isolated under t.Parallel().
@@ -129,7 +129,8 @@ func TestGraphIdentity_Integration(t *testing.T) {
 		t.Cleanup(func() { _, _ = support.DeleteEntityTypesByKeyPrefix(ctx, gen.Prefix()) })
 
 		// entity.subtype FKs entity_type.key, so seed a namespaced subtype first
-		// (PR2 seeds the curated catalog; PR1 tests provide their own).
+		// (the curated catalog is seeded by a later migration; these tests
+		// provide their own).
 		subtype := gen.Prefix() + "tag"
 		require.NoError(t, entityRepo.UpsertEntityType(ctx, repository.UpsertEntityTypeRequest{
 			Key:    subtype,

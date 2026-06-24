@@ -48,7 +48,7 @@ type Entity struct {
 }
 
 // EntityType is a row in the per-TYPE entity-subtype catalog. ResolutionConfig
-// is raw JSONB consumed by SP3 resolution.
+// is raw JSONB consumed by later entity resolution.
 type EntityType struct {
 	Key              string `json:"key"`
 	Description      string `json:"description"`

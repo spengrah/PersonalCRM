@@ -1,10 +1,10 @@
--- Graph identity tables (SP1 relationship data model — graph foundation).
+-- Graph identity tables (relationship data model — graph foundation).
 --
 -- Introduces the uniform node registry plus the two structural subtypes that
 -- attach to it (entity, venue) and the entity_type catalog. Person nodes are NOT
--- a subtype table: a person node's id is the owning contact's id (the dual-write
--- lands in a later PR), so a person needs no extra row. The edge/assertion FK
--- target is uniformly node.id across all three node types.
+-- a subtype table: a person node's id is the owning contact's id (the
+-- contact→node dual-write lands separately), so a person needs no extra row. The
+-- edge/assertion FK target is uniformly node.id across all three node types.
 --
 -- Wrapped in an explicit transaction: the postgres migration driver does NOT
 -- auto-wrap a migration file, so multi-statement DDL must self-wrap to stay
@@ -33,8 +33,8 @@ CREATE INDEX idx_node_deleted_at ON node (deleted_at) WHERE deleted_at IS NULL;
 CREATE INDEX idx_node_merged_into ON node (merged_into) WHERE merged_into IS NOT NULL;
 
 -- entity_type: the per-TYPE catalog of entity subtypes. resolution_config is the
--- per-type resolution knob (consumed by SP3); status distinguishes curated-core
--- subtypes from provisional ones minted at runtime.
+-- per-type resolution knob (consumed by later entity resolution); status
+-- distinguishes curated-core subtypes from provisional ones minted at runtime.
 CREATE TABLE entity_type (
     key TEXT PRIMARY KEY,
     description TEXT NOT NULL DEFAULT '',
