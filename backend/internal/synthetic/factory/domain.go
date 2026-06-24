@@ -241,3 +241,35 @@ func (g *Generator) Venue(source, kind string) VenueSpec {
 		Title:             title,
 	}
 }
+
+// AssertionSpec is a synthetic fact-assertion description. The caller supplies
+// the SubjectNodeID and PredicateKey when persisting (the factory does not know
+// the subject's id or which catalog predicate to use). ValueText and
+// PropositionKey are namespace-prefixed so a test scopes its reads to its own
+// namespace on the shared DB; Confidence/Salience are sensible defaults the test
+// may override. The write LOGIC (the real proposition_key derivation) is a later
+// layer — this spec is for the repository round-trip tests that insert via the
+// repository directly.
+type AssertionSpec struct {
+	PredicateKey   string
+	ValueText      string
+	Confidence     int16
+	Salience       int16
+	PropositionKey string
+}
+
+// FactAssertion builds a deterministic fact AssertionSpec for the given
+// predicate, with a namespace-prefixed value_text + proposition_key. The per-run
+// sourceIDSeq is embedded so repeated calls within one run produce DISTINCT
+// proposition keys (so each lands its own live-proposition slot).
+func (g *Generator) FactAssertion(predicateKey string) AssertionSpec {
+	g.sourceIDSeq++
+	value := fmt.Sprintf("%s%s-%s-%d", g.Prefix(), predicateKey, g.givenName(), g.sourceIDSeq)
+	return AssertionSpec{
+		PredicateKey:   predicateKey,
+		ValueText:      value,
+		Confidence:     80,
+		Salience:       50,
+		PropositionKey: fmt.Sprintf("%sprop-%s-%d", g.Prefix(), predicateKey, g.sourceIDSeq),
+	}
+}

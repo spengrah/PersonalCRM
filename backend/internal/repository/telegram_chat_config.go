@@ -73,13 +73,6 @@ func convertDbTelegramChatConfig(c *db.TelegramChatConfig) TelegramChatConfig {
 	return cfg
 }
 
-func int32ToPgInt4(v *int32) pgtype.Int4 {
-	if v == nil {
-		return pgtype.Int4{Valid: false}
-	}
-	return pgtype.Int4{Int32: *v, Valid: true}
-}
-
 // GetConfig retrieves a chat config by Telegram chat ID
 func (r *TelegramChatConfigRepository) GetConfig(ctx context.Context, telegramChatID int64) (*TelegramChatConfig, error) {
 	dbCfg, err := r.queries.GetTelegramChatConfig(ctx, telegramChatID)

@@ -16,6 +16,11 @@ type Querier interface {
 	// can insert a fresh log row without leaving orphan 'running' rows behind.
 	// Requires migration 037 (widens the status CHECK).
 	AbandonRunningLogsForState(ctx context.Context, syncStateID pgtype.UUID) error
+	// The transaction-scoped advisory lock guarding the single-cardinality conflict
+	// check. The caller passes the Go-computed int64 slot key (e.g.
+	// hashtextextended of the slot identity); the lock auto-releases at tx end. This
+	// is the sqlc surface for the lock so no raw pg_advisory_* SQL appears in Go.
+	AcquirePropositionSlotLock(ctx context.Context, pgAdvisoryXactLock int64) error
 	// Takes a transaction-scoped advisory lock keyed on an interaction
 	// aggregation source_ref. Used by the email-interaction consumer to
 	// serialize all jobs for the same (contact, thread, local-day)
@@ -85,6 +90,10 @@ type Querier interface {
 	// re-derived (or concurrently re-ingested with names) is a no-op (0 rows) —
 	// idempotent across runs.
 	BackfillCommsMessageParticipantNames(ctx context.Context, arg BackfillCommsMessageParticipantNamesParams) (int64, error)
+	// The future-successor branch: bound the prior's valid_to and point it at the
+	// pending successor, but KEEP status='accepted' / knowledge_to=NULL (the prior
+	// stays current until the future date). The rollover job terminalizes it later.
+	BoundPendingSuccessor(ctx context.Context, arg BoundPendingSuccessorParams) error
 	BulkLinkIdentitiesToContact(ctx context.Context, arg BulkLinkIdentitiesToContactParams) error
 	// Admin operation. Bumps cursor_epoch so the daemon discards its
 	// local cursor cache on next heartbeat. Currently used only by the
@@ -130,6 +139,11 @@ type Querier interface {
 	// could be found. Scoped to that exact stale ref to avoid clobbering a
 	// freshly-claimed row by a parallel worker.
 	ClearTelegramMessageStaleClaim(ctx context.Context, arg ClearTelegramMessageStaleClaimParams) error
+	// Terminalizes an assertion: the present-successor, closure-only, retract, and
+	// rollover paths all use this (set valid_to/status/closure_reason/superseded_by/
+	// knowledge_to). The caller supplies the new values; superseded_by is nullable
+	// (a closure-only / retract has no successor).
+	CloseAssertion(ctx context.Context, arg CloseAssertionParams) error
 	// Mark all pending follow-up tasks as completed for a contact (when a
 	// response arrives). Matches the same live-state set as FindPendingFollowUp
 	// so an inbound arriving while the create worker is mid-flight still
@@ -397,6 +411,9 @@ type Querier interface {
 	// Delete all OAuth credentials for a provider
 	DeleteOAuthCredentialByProvider(ctx context.Context, provider string) error
 	DeleteOldSyncLogs(ctx context.Context, createdAt pgtype.Timestamptz) error
+	// Re-extraction retirement (a later layer): drop a single locator. When the last
+	// locator is removed the write API retracts the assertion.
+	DeleteProvenanceLocator(ctx context.Context, arg DeleteProvenanceLocatorParams) error
 	// Companion to DeleteProvisionalPredicates: clears runtime-minted provisional
 	// entity subtypes; the curated subtypes (status='curated') survive.
 	DeleteProvisionalEntityTypes(ctx context.Context) error
@@ -435,11 +452,35 @@ type Querier interface {
 	// Demote source's primary contact methods when target already has a primary for that type
 	// This prevents violation of the unique partial index on (contact_id, type) WHERE is_primary = true
 	DemoteSourcePrimaryMethods(ctx context.Context, arg DemoteSourcePrimaryMethodsParams) error
+	ExistsCalendarEvent(ctx context.Context, id pgtype.UUID) (bool, error)
+	// Write-time existence validation: confirm a content source row exists before
+	// accepting a provenance locator that references it. One tiny query per content
+	// table; source_id is parsed to UUID by the caller.
+	ExistsCommsMessage(ctx context.Context, id pgtype.UUID) (bool, error)
 	// Non-mutating lookup. Returns true when a claim row exists for the
 	// given (event_id, consumer). Useful for assertions in tests and for
 	// read-only operator diagnostics; the production dedupe path uses
 	// InsertEventConsumerClaim's rows-inserted signal instead of polling.
 	ExistsEventConsumerClaim(ctx context.Context, arg ExistsEventConsumerClaimParams) (bool, error)
+	ExistsMeetingNote(ctx context.Context, id pgtype.UUID) (bool, error)
+	ExistsMessagesMessage(ctx context.Context, id pgtype.UUID) (bool, error)
+	ExistsPhoneCall(ctx context.Context, id pgtype.UUID) (bool, error)
+	ExistsTelegramMessage(ctx context.Context, id pgtype.UUID) (bool, error)
+	// Single-cardinality conflict check for an ASYMMETRIC predicate: the accepted,
+	// knowledge-open assertion(s) for (subject, predicate) whose valid-time window
+	// OVERLAPS the new one's effective window. The new-side lower bound is
+	// effective_from (= COALESCE(new.valid_from, now), computed by the caller), so a
+	// NULL new.valid_from probes as [now, new.valid_to) and conflicts only with the
+	// currently-open accepted row. FOR UPDATE locks any found row as the second belt
+	// behind the advisory lock. The ::timestamptz casts pin the probe-range param
+	// types (sqlc cannot infer the type of a bare arg inside tstzrange()).
+	FindAcceptedForSlot(ctx context.Context, arg FindAcceptedForSlotParams) ([]*Assertion, error)
+	// Single-cardinality conflict check for a SYMMETRIC predicate: the single-current
+	// invariant is PER-PARTICIPANT, so the slot is any accepted edge where EITHER new
+	// participant (participant_a / participant_b) appears in EITHER position. So
+	// partner_of(B,C) finds the existing partner_of(A,B) via B. Same valid-time
+	// overlap + FOR UPDATE as the asymmetric variant.
+	FindAcceptedForSlotSymmetric(ctx context.Context, arg FindAcceptedForSlotSymmetricParams) ([]*Assertion, error)
 	// Returns every live unmatched anarlog_title sibling row for a normalized
 	// token. ORDER BY id ASC so the lowest-id row is a stable representative
 	// for the reuse-existing-import-service resolve path. The predicate
@@ -522,6 +563,9 @@ type Querier interface {
 	// key so a user logging outbound then inbound for the same contact
 	// within the window correctly produces two separate rows.
 	FindInteractionInWindow(ctx context.Context, arg FindInteractionInWindowParams) (*Interaction, error)
+	// The dedup lookup: the single LIVE assertion (proposed or accepted, not yet
+	// knowledge-closed) for a proposition_key. Backed by idx_assertion_live_proposition.
+	FindLiveProposition(ctx context.Context, propositionKey string) (*Assertion, error)
 	FindMethodsByNormalizedValue(ctx context.Context, arg FindMethodsByNormalizedValueParams) ([]*FindMethodsByNormalizedValueRow, error)
 	// Find a pending follow-up task for a contact. Matches both 'managed'
 	// and 'pending_remote_create' live states so the two-step create flow
@@ -586,6 +630,7 @@ type Querier interface {
 	// batch commits or rolls back. Matches the cursor-commit precedent
 	// in GetMacHostCursorEpoch below.
 	GetActiveMacHostByIDForUpdate(ctx context.Context, id pgtype.UUID) (*MacHost, error)
+	GetAssertion(ctx context.Context, id pgtype.UUID) (*Assertion, error)
 	// Look up an event by its Google Calendar ID
 	GetCalendarEventByGcalID(ctx context.Context, arg GetCalendarEventByGcalIDParams) (*CalendarEvent, error)
 	// Look up an event by its UUID
@@ -641,6 +686,13 @@ type Querier interface {
 	GetContactTaskByIdempotencyKey(ctx context.Context, arg GetContactTaskByIdempotencyKeyParams) (*ContactTask, error)
 	// Find a task by its pending temp ID in metadata (for mapping temp IDs to real Todoist IDs)
 	GetContactTaskByPendingTempID(ctx context.Context, arg GetContactTaskByPendingTempIDParams) (*ContactTask, error)
+	// The current-accepted value for a slot: accepted, knowledge-open, and its
+	// valid-time window contains the now arg. For a single-cardinality slot this
+	// returns the one live row; for multi it returns the first by created_at (callers
+	// needing all live rows use ListLiveEdgesForNode / ListAssertionsBySubject). All
+	// params are named (the now arg appears twice; mixing positional + named is
+	// disallowed by sqlc, so the whole query uses sqlc.arg()).
+	GetCurrentAccepted(ctx context.Context, arg GetCurrentAcceptedParams) (*Assertion, error)
 	GetEnrichmentByField(ctx context.Context, arg GetEnrichmentByFieldParams) (*ContactEnrichment, error)
 	// Contact Enrichment queries
 	GetEnrichmentsForContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactEnrichment, error)
@@ -837,6 +889,17 @@ type Querier interface {
 	// already landed must not produce a stale follow-up.
 	HasResponseAfter(ctx context.Context, arg HasResponseAfterParams) (bool, error)
 	IgnoreExternalContact(ctx context.Context, id pgtype.UUID) error
+	// Assertion store queries (graph foundation).
+	//
+	// The assertion has no nullable vector column, so the full-row reads use
+	// SELECT * (sqlc expands it at codegen, so adding a column needs no query edit).
+	// The write API (a later layer) drives these; this file is the sqlc surface it
+	// calls, including the advisory-lock query (so no raw pg_advisory_* SQL ever
+	// appears inline in Go).
+	// Inserts a new assertion with the write-API-computed proposition_key and the
+	// full bi-temporal envelope. knowledge_from is the learned-at clock; valid_from
+	// is set only from content evidence (NULL = open-ended), never defaulted to now.
+	InsertAssertion(ctx context.Context, arg InsertAssertionParams) (*Assertion, error)
 	// Event queries (spec §3.1, §3.3). Raw append-only event log.
 	// Insert an event; conflicts on (source, source_id) (when source_id is not
 	// NULL) return zero rows so the caller can treat as idempotent no-op. When
@@ -881,6 +944,17 @@ type Querier interface {
 	// returns ErrNoRows in that case, which the repository translates to
 	// db.ErrNotFound.
 	InsertMeetingNote(ctx context.Context, arg InsertMeetingNoteParams) (*MeetingNote, error)
+	// Assertion provenance queries (graph foundation).
+	//
+	// Provenance carries the corroborating source locators for an assertion. The
+	// write API computes locator_hash from the full locator identity; the
+	// (assertion_id, locator_hash) PK makes a same-locator re-emit a no-op while a
+	// genuinely different span/version inserts a new corroborating row.
+	// Appends a corroborating locator. ON CONFLICT (assertion_id, locator_hash) DO
+	// NOTHING makes a same-locator re-emit a no-op; :execrows returns the rows
+	// affected (1 = inserted, 0 = duplicate) so the write API knows whether to emit
+	// a provenance_added event.
+	InsertProvenance(ctx context.Context, arg InsertProvenanceParams) (int64, error)
 	// Test-only seed of an in-flight sync_provider_account river_job row so
 	// the atomic-claim dedup path observes count>0. Mirrors the row a real
 	// enqueue would insert; the worker never runs in these tests.
@@ -910,6 +984,9 @@ type Querier interface {
 	// deterministic across runs (flake-free tests + stable UI). Casts to
 	// text[]/uuid[] keep the generated Go types concrete.
 	ListAnarlogTitleGroups(ctx context.Context) ([]*ListAnarlogTitleGroupsRow, error)
+	// All assertions for a subject node (any status), newest first — the review /
+	// history surface.
+	ListAssertionsBySubject(ctx context.Context, subjectNodeID pgtype.UUID) ([]*Assertion, error)
 	// Returns the deduplicated canonicalized value set for the given
 	// contact_method types, scoped to non-deleted contacts. Ordered
 	// alphabetically by value_normalized for deterministic daemon-side diff.
@@ -1041,6 +1118,10 @@ type Querier interface {
 	// telegram / gcal_attendee / anarlog_* are out of scope (their own
 	// match/enrich flows). ORDER BY ec.id keeps the catchup deterministic.
 	ListLinkedAddressBookExternalContactsForReconcile(ctx context.Context, sources []string) ([]*ListLinkedAddressBookExternalContactsForReconcileRow, error)
+	// Live edges of a predicate touching a node in EITHER orientation (the symmetric
+	// two-direction read): a node may be subject or object of a stored edge. Returns
+	// proposed + accepted, knowledge-open rows.
+	ListLiveEdgesForNode(ctx context.Context, arg ListLiveEdgesForNodeParams) ([]*Assertion, error)
 	ListMacHosts(ctx context.Context) ([]*MacHost, error)
 	// List all managed tasks for a provider (for reconciliation)
 	ListManagedContactTasks(ctx context.Context, provider string) ([]*ListManagedContactTasksRow, error)
@@ -1066,6 +1147,13 @@ type Querier interface {
 	// List past events that haven't updated last_contacted yet
 	ListPastEventsNeedingUpdate(ctx context.Context, arg ListPastEventsNeedingUpdateParams) ([]*CalendarEvent, error)
 	ListPredicatesByStatus(ctx context.Context, status string) ([]*ListPredicatesByStatusRow, error)
+	// All locators for an assertion, oldest first.
+	ListProvenance(ctx context.Context, assertionID pgtype.UUID) ([]*AssertionProvenance, error)
+	// Reverse lookup: every provenance locator a given source produced ("what did
+	// this source say"), via the (source_kind, source_id) index. Backs the
+	// source-row-deletion sweep (when a content row is hard-deleted, find the
+	// locators that referenced it).
+	ListProvenanceBySource(ctx context.Context, arg ListProvenanceBySourceParams) ([]*AssertionProvenance, error)
 	ListRecentSyncLogs(ctx context.Context, limit int32) ([]*ExternalSyncLog, error)
 	// Returns all live interactions attributed to a specific anarlog session
 	// (both impromptu / orphan-with-tags entries and walk-in supplementals).
@@ -1294,6 +1382,13 @@ type Querier interface {
 	// Replace source contact ID with target contact ID in calendar event matched_contact_ids array
 	// Uses array_replace for efficient in-place replacement
 	ReplaceContactInCalendarEvents(ctx context.Context, arg ReplaceContactInCalendarEventsParams) error
+	// Merge primitive (a later layer): repoint a loser assertion's object to the
+	// winner and set the recomputed proposition_key.
+	RepointAssertionObject(ctx context.Context, arg RepointAssertionObjectParams) error
+	// Merge primitive (a later layer): repoint a loser assertion's subject to the
+	// winner and set the recomputed proposition_key. Called only by the merge
+	// procedure, never the normal write path.
+	RepointAssertionSubject(ctx context.Context, arg RepointAssertionSubjectParams) error
 	ResetSyncStateBackfillCursor(ctx context.Context, arg ResetSyncStateBackfillCursorParams) (*ExternalSyncState, error)
 	// ============================================================================
 	// crm-admin --reset-and-seed support: a HARD wipe of every live data table
@@ -1343,6 +1438,12 @@ type Querier interface {
 	// NOT NULL keeps it idempotent across concurrent revive races.
 	ReviveMeetingNote(ctx context.Context, arg ReviveMeetingNoteParams) (*MeetingNote, error)
 	RevokeMacHost(ctx context.Context, id pgtype.UUID) (*MacHost, error)
+	// The rollover job: terminalize the bounded-with-pending-successor rows whose
+	// bound has been reached. Scoped TIGHT — superseded_by IS NOT NULL excludes
+	// successor-less historical accepted facts (which simply aren't current). Sets
+	// status='superseded', closure_reason='superseded', knowledge_to=$1; returns the
+	// updated rows so the caller can emit one assertion.superseded event per row.
+	RolloverDueBoundedSuccessors(ctx context.Context, knowledgeTo pgtype.Timestamptz) ([]*Assertion, error)
 	// Atomically replaces api_key_hash and bumps api_key_rotated_at. Used
 	// by the rotate-key endpoint. Filters revoked hosts so a revoked host
 	// cannot be silently re-activated by a rotation.
@@ -1467,6 +1568,10 @@ type Querier interface {
 	// for a broad delete the guard must match the exact clone-name prefix, not a
 	// looser pattern.
 	SweepRiverJobsInCloneForTest(ctx context.Context) (int64, error)
+	// Assertion-store test support: count the assertions whose subject is a given
+	// node, so a test scopes its assertions to its own namespace's subject node on
+	// the shared test DB.
+	SyntheticCountAssertionsForSubject(ctx context.Context, subjectNodeID pgtype.UUID) (int64, error)
 	// Settle Gate A (GCal decline terminal): count ALL calendar_event rows for the
 	// gcal id regardless of status/match. The cutover decline branch DELETES the
 	// row, so the decline test settles on this reaching 0. calendar_event has no
@@ -1584,6 +1689,12 @@ type Querier interface {
 	// Settle Gate A (Mac-contact unknown-sender): the external_contact row for the
 	// entity id exists with match_status='unmatched'.
 	SyntheticCountUnmatchedExternalContactBySourceId(ctx context.Context, sourceID string) (int64, error)
+	// Assertion-store cleanup: hard-delete the assertions touching a node in EITHER
+	// position (provenance cascades). The assertion → node FK is restrict (NO
+	// ACTION), so a test MUST clear its assertions before deleting its nodes; this
+	// targeted delete is the cleanup primitive for that. superseded_by is a nullable
+	// self-FK, so a single multi-row DELETE clears a closed-pair set in one shot.
+	SyntheticDeleteAssertionsForNode(ctx context.Context, subjectNodeID pgtype.UUID) (int64, error)
 	// Cleanup step 4: comms_message rows whose external_id is ns-prefixed.
 	// Caller passes a BARE prefix; '%' is appended here.
 	SyntheticDeleteCommsMessagesByExternalIdPrefix(ctx context.Context, externalIDPrefix pgtype.Text) (int64, error)
@@ -1801,7 +1912,14 @@ type Querier interface {
 	TransferInteractions(ctx context.Context, arg TransferInteractionsParams) error
 	// Transfer notes from source to target contact
 	TransferNotes(ctx context.Context, arg TransferNotesParams) error
+	// The accept/reject/retract status transition: set status and (for terminal
+	// transitions) knowledge_to + closure_reason. The terminal-knowledge_to CHECK
+	// enforces the iff at the schema level.
+	TransitionStatus(ctx context.Context, arg TransitionStatusParams) error
 	UnlinkIdentityFromContact(ctx context.Context, id pgtype.UUID) (*ExternalIdentity, error)
+	// Dedup re-aggregate: on a corroborating write, raise confidence (SP1 rule:
+	// max(existing, incoming)) and recompute trust_tier. trust_tier is nullable.
+	UpdateAssertionConfidenceTrust(ctx context.Context, arg UpdateAssertionConfidenceTrustParams) error
 	// Profile-only update path. Writes name, location, birthday, how_met,
 	// cadence, profile_photo — NEVER writes last_contacted,
 	// last_outreach_at, last_response_at, or contact_by.
@@ -2038,6 +2156,10 @@ type Querier interface {
 	// re-run for the same container is a no-op that refreshes the title and returns
 	// the existing row.
 	UpsertVenue(ctx context.Context, arg UpsertVenueParams) (*Venue, error)
+	// The same-value re-affirmation branch: extend valid_to / lower valid_from to
+	// cover new corroborating evidence, and recompute proposition_key from the new
+	// (widened) valid_from bucket so the key keeps representing the row's interval.
+	WidenAssertionValidity(ctx context.Context, arg WidenAssertionValidityParams) error
 	// Writes the recomputed date columns. contact_by is passed pre-computed by
 	// the Go caller (cadence.CalculateContactBy, environment-aware) so the value
 	// matches the forward writer exactly; this query does no cadence arithmetic.

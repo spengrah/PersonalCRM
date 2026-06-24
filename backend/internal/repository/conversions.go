@@ -11,6 +11,14 @@ func uuidToPgUUID(id uuid.UUID) pgtype.UUID {
 	return pgtype.UUID{Bytes: id, Valid: true}
 }
 
+// uuidPtrToPgUUID converts a nullable *uuid.UUID to pgtype.UUID; nil → SQL NULL.
+func uuidPtrToPgUUID(id *uuid.UUID) pgtype.UUID {
+	if id == nil {
+		return pgtype.UUID{Valid: false}
+	}
+	return pgtype.UUID{Bytes: *id, Valid: true}
+}
+
 func stringToPgText(s *string) pgtype.Text {
 	if s == nil {
 		return pgtype.Text{Valid: false}
@@ -30,6 +38,27 @@ func timeToPgTimestamptz(t *time.Time) pgtype.Timestamptz {
 		return pgtype.Timestamptz{Valid: false}
 	}
 	return pgtype.Timestamptz{Time: *t, Valid: true}
+}
+
+func float64ToPgFloat8(v *float64) pgtype.Float8 {
+	if v == nil {
+		return pgtype.Float8{Valid: false}
+	}
+	return pgtype.Float8{Float64: *v, Valid: true}
+}
+
+func boolToPgBool(v *bool) pgtype.Bool {
+	if v == nil {
+		return pgtype.Bool{Valid: false}
+	}
+	return pgtype.Bool{Bool: *v, Valid: true}
+}
+
+func int32ToPgInt4(v *int32) pgtype.Int4 {
+	if v == nil {
+		return pgtype.Int4{Valid: false}
+	}
+	return pgtype.Int4{Int32: *v, Valid: true}
 }
 
 // pgTimestamptzToTimePtr converts a pgtype.Timestamptz to *time.Time;
