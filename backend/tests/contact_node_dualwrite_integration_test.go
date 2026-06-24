@@ -99,7 +99,7 @@ func TestContactNodeDualWrite_Integration(t *testing.T) {
 		assert.Equal(t, renamed, node.CanonicalLabel, "rename syncs node canonical_label")
 	})
 
-	t.Run("update without a rename leaves the node label untouched", func(t *testing.T) {
+	t.Run("rename alongside a cadence edit syncs the node label", func(t *testing.T) {
 		t.Parallel()
 		gen, _ := migrationGenerator(t)
 		t.Cleanup(func() { _, _ = support.DeleteNodesByLabelPrefix(ctx, gen.Prefix()) })
@@ -119,17 +119,20 @@ func TestContactNodeDualWrite_Integration(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = contactRepo.HardDeleteContact(ctx, contact.ID) })
 
-		// Same name, a cadence-only edit: the label must not change.
+		// A rename combined with a cadence change (the cadence-recompute branch
+		// of UpdateContact): the node label must follow the new name — this
+		// fails if the in-tx sync regresses, unlike a same-name no-op.
+		renamed := gen.Prefix() + "renamed-with-cadence"
 		monthly := "monthly"
 		_, _, err = svc.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
-			FullName: contact.FullName,
+			FullName: renamed,
 			Cadence:  &monthly,
 		}, nil, false)
 		require.NoError(t, err)
 
 		node, err := support.GetNodeForContact(ctx, contact.ID)
 		require.NoError(t, err)
-		assert.Equal(t, contact.FullName, node.CanonicalLabel)
+		assert.Equal(t, renamed, node.CanonicalLabel, "rename+cadence edit syncs the node label")
 	})
 
 	t.Run("enrichment rename syncs the node label", func(t *testing.T) {
@@ -362,6 +365,7 @@ func TestContactNodeDualWrite_MigrationDownUp(t *testing.T) {
 	contactRepo := repository.NewContactRepository(database.Queries)
 	nodeRepo := repository.NewNodeRepository(database.Queries)
 	assertionRepo := repository.NewAssertionRepository(database.Queries)
+	support := repository.NewSyntheticSupportRepository(database.Queries)
 
 	// Seed a contact via the dual-write service path so a live person node
 	// exists at the contact's id (this is what 068's down must consider). It
@@ -376,6 +380,23 @@ func TestContactNodeDualWrite_MigrationDownUp(t *testing.T) {
 	require.NoError(t, err)
 	_, err = nodeRepo.GetNode(ctx, unreferenced.ID)
 	require.NoError(t, err, "dual-write created the person node")
+
+	// Seed a SOFT-DELETED contact whose person node is absent (simulating a
+	// contact deleted before 068 ran). This pins the up backfill's
+	// `WHERE deleted_at IS NULL` rule: the up must NOT mint a person node for a
+	// soft-deleted contact (plan D7 — a deleted contact's node is a later
+	// soft-delete-propagation concern, and the write API rejects a deleted
+	// subject node). Drop the node the dual-write created so the contact enters
+	// the up step node-less, exactly like a pre-068 deletion.
+	deleted, _, err := contactSvc.CreateContact(ctx, repository.CreateContactRequest{
+		FullName: "migration-deleted-person",
+	}, nil)
+	require.NoError(t, err)
+	require.NoError(t, contactRepo.SoftDeleteContact(ctx, deleted.ID))
+	_, err = support.DeleteNodesByIds(ctx, []uuid.UUID{deleted.ID})
+	require.NoError(t, err)
+	_, err = nodeRepo.GetNodeIncludingDeleted(ctx, deleted.ID)
+	require.ErrorIs(t, err, db.ErrNotFound, "soft-deleted contact starts the up step with no person node")
 
 	// Seed a SECOND person node that an assertion references as its SUBJECT —
 	// the guarded down must leave it intact (deleting it would orphan the
@@ -478,6 +499,12 @@ func TestContactNodeDualWrite_MigrationDownUp(t *testing.T) {
 	require.NoError(t, err, "the up backfill restores the person node for the surviving contact")
 	assert.Equal(t, repository.NodeTypePerson, restored.Type)
 	assert.Equal(t, unreferenced.FullName, restored.CanonicalLabel)
+
+	// The soft-deleted contact gets NO person node from the up backfill — this
+	// is the `WHERE deleted_at IS NULL` invariant. Dropping that clause from the
+	// up migration would mint a node here and fail this assertion.
+	_, err = nodeRepo.GetNodeIncludingDeleted(ctx, deleted.ID)
+	require.ErrorIs(t, err, db.ErrNotFound, "up backfill must skip soft-deleted contacts (WHERE deleted_at IS NULL)")
 }
 
 // TestContactNodeDualWrite_HarnessSeedCreatesNode confirms the synthetic

@@ -239,8 +239,12 @@ func (h *Harness) cleanup(ctx context.Context) error {
 	})
 	// 13a. person node (node.id == contact.id): SeedContact dual-writes a node
 	// via the real service path, so teardown must remove it too or the shared
-	// DB leaks an orphan node per seeded contact. No FK from node→contact, so
-	// order relative to the contact delete is immaterial.
+	// DB leaks an orphan node per seeded contact. There is no FK from
+	// node→contact, so order relative to the contact delete is free. But the
+	// assertion→node FK is RESTRICT, so once a harness seeds assertions on these
+	// person nodes (PR4+), those assertions MUST be deleted before this step
+	// (register that cleanup LATER so t.Cleanup's LIFO runs it FIRST); today no
+	// harness path seeds them, so this delete stands alone.
 	step("person_node", func() error {
 		_, err := h.support.DeleteNodesByIds(ctx, c.contactIDs)
 		return err

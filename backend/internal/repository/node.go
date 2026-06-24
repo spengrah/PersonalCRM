@@ -139,7 +139,13 @@ func (r *NodeRepository) SetNodeMergedIntoTx(ctx context.Context, tx pgx.Tx, los
 }
 
 // UpdateNodeCanonicalLabel keeps the node's display label loosely synced with
-// its owning entity (e.g. a contact rename).
+// its owning entity (e.g. a contact rename). The underlying query is :exec, so a
+// missing node is a silent no-op (no rows-affected check). This is deliberate:
+// the contact→node dual-write callers (CreateContact, UpdateContact,
+// MergeContacts, enrichment) always pass a contact id whose person node exists
+// — created in the same lifecycle by the dual-write and the 068 backfill — so 0
+// rows cannot occur on those paths; and for any other caller a label sync
+// against a non-existent node is harmlessly idempotent rather than an error.
 func (r *NodeRepository) UpdateNodeCanonicalLabel(ctx context.Context, id uuid.UUID, canonicalLabel string) error {
 	return r.queries.UpdateNodeCanonicalLabel(ctx, db.UpdateNodeCanonicalLabelParams{
 		ID:             uuidToPgUUID(id),
