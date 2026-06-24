@@ -1258,7 +1258,17 @@ func (s *AssertService) resolveAcceptConflicts(ctx context.Context, tx pgx.Tx, p
 		}
 		survivor.ValidFrom = widenedFrom
 		survivor.ValidTo = widenedTo
-		widenReq := &AssertRequest{ValidFrom: survivor.ValidFrom}
+		// Carry the survivor's VALUE into the key recompute: for a fact (canonObject
+		// nil) computePropositionKey reads the request's value, so a value-less request
+		// would write an empty value component and break dedup of later same-value
+		// writes. Edges ignore the value (keyed on canonObject), so this is safe there.
+		widenReq := &AssertRequest{
+			ValidFrom: survivor.ValidFrom,
+			ValueText: survivor.ValueText,
+			ValueNum:  survivor.ValueNum,
+			ValueDate: survivor.ValueDate,
+			ValueBool: survivor.ValueBool,
+		}
 		newKey := computePropositionKey(predicate, canonKey, canonSubject, canonObject, widenReq)
 		// MERGE/close the accepting (loser) row FIRST so it is no longer live —
 		// otherwise WidenAssertionValidity could assign the survivor a key the still-

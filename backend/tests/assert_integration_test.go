@@ -1203,6 +1203,17 @@ func TestAssert_Lifecycle(t *testing.T) {
 		curFuture, err := h.assertionRepo.GetCurrentAccepted(ctx, subject, "home_address", future.Add(time.Hour))
 		require.NoError(t, err)
 		assert.Equal(t, la.ID, curFuture.ID, "LA becomes current after its date (bound intact)")
+
+		// The accept-time widen must recompute the survivor's proposition_key WITH the
+		// fact value (a value-less recompute writes an empty value component, so a
+		// later same-value write would not dedup against the survivor and could create
+		// a duplicate live proposition under concurrency). A subsequent same-value NYC
+		// write in the survivor's (widened) bucket must DEDUP cleanly to the survivor.
+		redoReq := textFactReq(subject, "home_address", "NYC", gen.Prefix(), "nyc3")
+		redoReq.ValidFrom = &lastYear
+		redupe, err := h.svc.Assert(ctx, redoReq)
+		require.NoError(t, err)
+		assert.Equal(t, nyc.ID, redupe.ID, "later same-value write dedups to the widened survivor")
 	})
 
 	// Case 26: AssertClosure on a current row whose knowledge_from is in the future
