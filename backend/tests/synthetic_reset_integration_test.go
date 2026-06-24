@@ -50,6 +50,7 @@ var wipedTables = []string{
 	"note_embedding",
 	"oauth_credential",
 	"phone_call",
+	"predicate",
 	"prompt_query",
 	"river_job",
 	"sync_staleness_breach",

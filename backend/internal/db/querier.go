@@ -293,6 +293,11 @@ type Querier interface {
 	CreateNoteWithTimestamp(ctx context.Context, arg CreateNoteWithTimestampParams) (*Note, error)
 	// mac_host_pairing_token queries.
 	CreatePairingToken(ctx context.Context, arg CreatePairingTokenParams) (*MacHostPairingToken, error)
+	// Mints a (typically provisional) predicate at runtime. The embedding column is
+	// omitted from the insert so it falls to its NULL default — provisional minting
+	// never carries an embedding (those are populated separately) — and from the
+	// RETURNING projection so the NULL vector is never scanned back.
+	CreatePredicate(ctx context.Context, arg CreatePredicateParams) (*CreatePredicateRow, error)
 	// External Sync Log Queries
 	CreateSyncLog(ctx context.Context, arg CreateSyncLogParams) (*ExternalSyncLog, error)
 	CreateSyncState(ctx context.Context, arg CreateSyncStateParams) (*ExternalSyncState, error)
@@ -739,6 +744,13 @@ type Querier interface {
 	GetPhoneCallByID(ctx context.Context, id pgtype.UUID) (*PhoneCall, error)
 	// Lookup by call_unique_id. Returns ErrNoRows on miss.
 	GetPhoneCallByUniqueID(ctx context.Context, callUniqueID string) (*PhoneCall, error)
+	// Predicate catalog queries (graph foundation).
+	//
+	// The reads deliberately project every column EXCEPT embedding. The embedding is
+	// a nullable vector(1536) populated/consumed in a later layer; the pgvector-go
+	// value type cannot scan a SQL NULL (it panics decoding an empty buffer), so
+	// this layer — which never needs the embedding — simply does not select it.
+	GetPredicate(ctx context.Context, key string) (*GetPredicateRow, error)
 	// Test assertion — returns the river_job.state for a single job id. Used by
 	// rescue-on-crash polling to wait out River's async completer
 	// (running->completed lands after the worker returns). River exposes no
@@ -935,6 +947,7 @@ type Querier interface {
 	// Lists contacts that have a contact_by date set (used for testing mode filtering).
 	// Returns contacts ordered by contact_by (soonest first).
 	ListContactsWithContactBy(ctx context.Context, limit int32) ([]*Contact, error)
+	ListCuratedPredicates(ctx context.Context) ([]*ListCuratedPredicatesRow, error)
 	// Prefer rows with username/phone for identity matching, then rows with
 	// populated names so a single aggregation pass picks the most-populated row
 	// per peer (avoids depending on multi-pass COALESCE accumulation in Go).
@@ -1045,6 +1058,7 @@ type Querier interface {
 	ListOverdueContacts(ctx context.Context, arg ListOverdueContactsParams) ([]*Contact, error)
 	// List past events that haven't updated last_contacted yet
 	ListPastEventsNeedingUpdate(ctx context.Context, arg ListPastEventsNeedingUpdateParams) ([]*CalendarEvent, error)
+	ListPredicatesByStatus(ctx context.Context, status string) ([]*ListPredicatesByStatusRow, error)
 	ListRecentSyncLogs(ctx context.Context, limit int32) ([]*ExternalSyncLog, error)
 	// Returns all live interactions attributed to a specific anarlog session
 	// (both impromptu / orphan-with-tags entries and walk-in supplementals).
@@ -1605,6 +1619,10 @@ type Querier interface {
 	SyntheticDeleteNodesByLabelPrefix(ctx context.Context, labelPrefix pgtype.Text) (int64, error)
 	// Cleanup step 12: note by contact.
 	SyntheticDeleteNotesByContactIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error)
+	// Predicate-catalog cleanup: a test that mints its own ns-prefixed provisional
+	// predicates clears them by key prefix (the curated seed rows use bare keys and
+	// are never prefix-matched). Caller passes a BARE prefix; '%' is appended here.
+	SyntheticDeletePredicatesByKeyPrefix(ctx context.Context, keyPrefix pgtype.Text) (int64, error)
 	// Cleanup: delete the group telegram_chat_config rows a group replay created, by
 	// the exact tracked chat ids (telegram_chat_config has no namespace column —
 	// keyed only by telegram_chat_id).
