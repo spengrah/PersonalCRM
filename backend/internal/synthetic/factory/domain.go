@@ -1,6 +1,7 @@
 package factory
 
 import (
+	"fmt"
 	"time"
 )
 
@@ -166,4 +167,77 @@ type NoteSpec struct {
 func (g *Generator) Note() NoteSpec {
 	g.sourceIDSeq++
 	return NoteSpec{Body: g.Prefix() + "note body " + g.givenName()}
+}
+
+// NodeSpec is a synthetic graph node description. The caller supplies the
+// id when persisting (for persons, id == contact.id); the spec carries only the
+// descriptive fields. CanonicalLabel is namespace-prefixed so the prefix-keyed
+// cleanup backstop (DeleteNodesByLabelPrefix) finds it.
+type NodeSpec struct {
+	Type           string // person | venue | entity
+	CanonicalLabel string
+}
+
+// Node builds a deterministic NodeSpec of the given type with a
+// namespace-prefixed canonical_label. The per-run sourceIDSeq is embedded so
+// repeated calls within one run produce DISTINCT labels (even if the name PRNG
+// happens to repeat a component).
+func (g *Generator) Node(nodeType string) NodeSpec {
+	g.sourceIDSeq++
+	return NodeSpec{
+		Type:           nodeType,
+		CanonicalLabel: fmt.Sprintf("%s%s-%s-%d", g.Prefix(), nodeType, g.surname(), g.sourceIDSeq),
+	}
+}
+
+// EntitySpec is a synthetic entity subtype description. Subtype is an
+// entity_type key (e.g. "place", "tag"); NormalizedName is namespace-prefixed so
+// it is unique per namespace under the (subtype, normalized_name) unique. The
+// paired NodeSpec (always type='entity') carries the display label.
+type EntitySpec struct {
+	Node           NodeSpec
+	Subtype        string
+	NormalizedName string
+}
+
+// Entity builds a deterministic EntitySpec for the given subtype, with a
+// namespace-prefixed normalized_name and a paired entity-type node. The per-run
+// sourceIDSeq is embedded so the (subtype, normalized_name) value is unique
+// within one run.
+func (g *Generator) Entity(subtype string) EntitySpec {
+	g.sourceIDSeq++
+	name := fmt.Sprintf("%s%s-%s-%d", g.Prefix(), subtype, g.givenName(), g.sourceIDSeq)
+	return EntitySpec{
+		Node:           NodeSpec{Type: "entity", CanonicalLabel: name},
+		Subtype:        subtype,
+		NormalizedName: name,
+	}
+}
+
+// VenueSpec is a synthetic venue subtype description. SourceContainerID is
+// namespace-prefixed so the (source, kind, source_container_id) unique is unique
+// per namespace. The paired NodeSpec (always type='venue') carries the title as
+// its canonical_label.
+type VenueSpec struct {
+	Node              NodeSpec
+	Kind              string
+	Source            string
+	SourceContainerID string
+	Title             string
+}
+
+// Venue builds a deterministic VenueSpec for the given source/kind, with a
+// namespace-prefixed source_container_id and a paired venue node. The per-run
+// sourceIDSeq is embedded so the (source, kind, source_container_id) value is
+// unique within one run.
+func (g *Generator) Venue(source, kind string) VenueSpec {
+	g.sourceIDSeq++
+	title := fmt.Sprintf("%s%s-%s-%d", g.Prefix(), kind, g.surname(), g.sourceIDSeq)
+	return VenueSpec{
+		Node:              NodeSpec{Type: "venue", CanonicalLabel: title},
+		Kind:              kind,
+		Source:            source,
+		SourceContainerID: fmt.Sprintf("%scontainer-%d", g.Prefix(), g.sourceIDSeq),
+		Title:             title,
+	}
 }

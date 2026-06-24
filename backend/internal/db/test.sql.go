@@ -465,6 +465,8 @@ TRUNCATE TABLE
     contact_summary,
     contact_tag,
     contact_task,
+    entity,
+    entity_type,
     event,
     event_consumer_claim,
     external_contact,
@@ -476,6 +478,7 @@ TRUNCATE TABLE
     mac_host_pairing_token,
     meeting_note,
     messages_message,
+    node,
     note,
     note_embedding,
     oauth_credential,
@@ -488,7 +491,8 @@ TRUNCATE TABLE
     telegram_chat_config,
     telegram_message,
     telegram_session,
-    telegram_update_state
+    telegram_update_state,
+    venue
 RESTART IDENTITY CASCADE
 `
 
@@ -844,6 +848,20 @@ func (q *Queries) SyntheticCountMatchedExternalContactBySourceId(ctx context.Con
 	return count, err
 }
 
+const SyntheticCountNodesByLabelPrefix = `-- name: SyntheticCountNodesByLabelPrefix :one
+SELECT COUNT(*) FROM node WHERE canonical_label LIKE $1 || '%'
+`
+
+// Graph identity test support: count nodes whose canonical_label is ns-prefixed,
+// so a test can scope assertions to its own namespace's nodes on the shared test
+// DB. Caller passes a BARE prefix; '%' is appended here.
+func (q *Queries) SyntheticCountNodesByLabelPrefix(ctx context.Context, labelPrefix pgtype.Text) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountNodesByLabelPrefix, labelPrefix)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const SyntheticCountProcessedCalendarEventByGcalId = `-- name: SyntheticCountProcessedCalendarEventByGcalId :one
 SELECT COUNT(*) FROM calendar_event
 WHERE gcal_event_id = $1
@@ -1188,6 +1206,22 @@ func (q *Queries) SyntheticDeleteContactsByIds(ctx context.Context, contactIds [
 	return result.RowsAffected(), nil
 }
 
+const SyntheticDeleteEntityTypesByKeyPrefix = `-- name: SyntheticDeleteEntityTypesByKeyPrefix :execrows
+DELETE FROM entity_type WHERE key LIKE $1 || '%'
+`
+
+// Graph identity cleanup: entity_type is a catalog table with no canonical_label,
+// so a test that seeds its own ns-prefixed entity_type rows clears them by key
+// prefix (the curated catalog seed rows use bare keys and are never
+// prefix-matched). Caller passes a BARE prefix; '%' is appended here.
+func (q *Queries) SyntheticDeleteEntityTypesByKeyPrefix(ctx context.Context, keyPrefix pgtype.Text) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteEntityTypesByKeyPrefix, keyPrefix)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const SyntheticDeleteEventConsumerClaimsByEventIds = `-- name: SyntheticDeleteEventConsumerClaimsByEventIds :execrows
 DELETE FROM event_consumer_claim WHERE event_id = ANY($1::uuid[])
 `
@@ -1287,6 +1321,22 @@ DELETE FROM messages_message WHERE guid LIKE $1 || '%'
 // Caller passes a BARE prefix; '%' is appended here.
 func (q *Queries) SyntheticDeleteMessagesMessageByGuidPrefix(ctx context.Context, guidPrefix pgtype.Text) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteMessagesMessageByGuidPrefix, guidPrefix)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const SyntheticDeleteNodesByLabelPrefix = `-- name: SyntheticDeleteNodesByLabelPrefix :execrows
+DELETE FROM node WHERE canonical_label LIKE $1 || '%'
+`
+
+// Graph identity cleanup: hard-delete nodes whose canonical_label is ns-prefixed.
+// entity and venue cascade via their ON DELETE CASCADE FK to node, so this one
+// delete removes a namespace's node+entity+venue rows. Caller passes a BARE
+// prefix; '%' is appended here.
+func (q *Queries) SyntheticDeleteNodesByLabelPrefix(ctx context.Context, labelPrefix pgtype.Text) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteNodesByLabelPrefix, labelPrefix)
 	if err != nil {
 		return 0, err
 	}

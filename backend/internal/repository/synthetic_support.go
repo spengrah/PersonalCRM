@@ -630,3 +630,26 @@ func (r *SyntheticSupportRepository) ListContactBucketsByNamePrefix(ctx context.
 	}
 	return out, nil
 }
+
+// --- Graph identity support -------------------------------------------------
+
+// CountNodesByLabelPrefix counts nodes whose canonical_label is ns-prefixed, so
+// a graph-identity test can scope its assertions to its own namespace on the
+// shared test DB.
+func (r *SyntheticSupportRepository) CountNodesByLabelPrefix(ctx context.Context, prefix string) (int64, error) {
+	return r.queries.SyntheticCountNodesByLabelPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
+}
+
+// DeleteNodesByLabelPrefix hard-deletes nodes whose canonical_label is
+// ns-prefixed; entity and venue rows cascade via their ON DELETE CASCADE FK to
+// node, so this one delete clears a namespace's node+entity+venue rows.
+func (r *SyntheticSupportRepository) DeleteNodesByLabelPrefix(ctx context.Context, prefix string) (int64, error) {
+	return r.queries.SyntheticDeleteNodesByLabelPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
+}
+
+// DeleteEntityTypesByKeyPrefix hard-deletes entity_type catalog rows whose key
+// is ns-prefixed (a test that seeds its own provisional subtypes; the curated
+// catalog seed rows use bare keys and are never prefix-matched).
+func (r *SyntheticSupportRepository) DeleteEntityTypesByKeyPrefix(ctx context.Context, prefix string) (int64, error) {
+	return r.queries.SyntheticDeleteEntityTypesByKeyPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
+}

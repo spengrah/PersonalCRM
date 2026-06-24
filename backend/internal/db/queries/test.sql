@@ -541,6 +541,26 @@ WHERE source = 'telegram' AND source_id = ANY(@peer_ids::text[]);
 DELETE FROM external_identity
 WHERE source = 'telegram' AND source_id = ANY(@peer_ids::text[]);
 
+-- name: SyntheticCountNodesByLabelPrefix :one
+-- Graph identity test support: count nodes whose canonical_label is ns-prefixed,
+-- so a test can scope assertions to its own namespace's nodes on the shared test
+-- DB. Caller passes a BARE prefix; '%' is appended here.
+SELECT COUNT(*) FROM node WHERE canonical_label LIKE @label_prefix || '%';
+
+-- name: SyntheticDeleteNodesByLabelPrefix :execrows
+-- Graph identity cleanup: hard-delete nodes whose canonical_label is ns-prefixed.
+-- entity and venue cascade via their ON DELETE CASCADE FK to node, so this one
+-- delete removes a namespace's node+entity+venue rows. Caller passes a BARE
+-- prefix; '%' is appended here.
+DELETE FROM node WHERE canonical_label LIKE @label_prefix || '%';
+
+-- name: SyntheticDeleteEntityTypesByKeyPrefix :execrows
+-- Graph identity cleanup: entity_type is a catalog table with no canonical_label,
+-- so a test that seeds its own ns-prefixed entity_type rows clears them by key
+-- prefix (the curated catalog seed rows use bare keys and are never
+-- prefix-matched). Caller passes a BARE prefix; '%' is appended here.
+DELETE FROM entity_type WHERE key LIKE @key_prefix || '%';
+
 -- ============================================================================
 -- crm-admin --reset-and-seed support: a HARD wipe of every live data table
 -- so a staging instance can be reset to a known synthetic baseline. Preserves
@@ -569,6 +589,8 @@ TRUNCATE TABLE
     contact_summary,
     contact_tag,
     contact_task,
+    entity,
+    entity_type,
     event,
     event_consumer_claim,
     external_contact,
@@ -580,6 +602,7 @@ TRUNCATE TABLE
     mac_host_pairing_token,
     meeting_note,
     messages_message,
+    node,
     note,
     note_embedding,
     oauth_credential,
@@ -592,7 +615,8 @@ TRUNCATE TABLE
     telegram_chat_config,
     telegram_message,
     telegram_session,
-    telegram_update_state
+    telegram_update_state,
+    venue
 RESTART IDENTITY CASCADE;
 
 -- name: CountNonFinalRiverJobs :one
