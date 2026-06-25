@@ -161,7 +161,7 @@ sequenceDiagram
 | `contact` | People in CRM. ContactService dual-writes a `node(type='person')` at the contact's own id in the same tx on create — the `contact.id == node.id` invariant — and syncs `node.canonical_label` on rename | Parent of most entities; 1:1 person `node` (shared id) |
 | `contact_method` | Email, phone, social handles | → contact |
 | `note` | Freeform notes | → contact |
-| `tag` | Contact categorization | ↔ contact (via contact_tag) |
+| `tag` | Contact categorization. Mirrored into the graph by `crm-admin --migrate-tags` (each tag → a `tag` entity node carrying its color in `entity.detail`; each `contact_tag` of a non-deleted contact → an accepted `tagged_as` assertion with user provenance). The legacy `tag`/`contact_tag` tables are retained as a rollback anchor (dropped in a later migration) | ↔ contact (via contact_tag) |
 | **Sync & Identity** | | |
 | `external_sync_state` | Sync status per provider/account | |
 | `external_sync_log` | Audit log of sync runs | → external_sync_state |
