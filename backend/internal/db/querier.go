@@ -1047,6 +1047,11 @@ type Querier interface {
 	// All assertions for a subject node (any status), newest first — the review /
 	// history surface.
 	ListAssertionsBySubject(ctx context.Context, subjectNodeID pgtype.UUID) ([]*Assertion, error)
+	// All assertions touching a node in EITHER position (subject OR object), any
+	// status, oldest first — the node-merge re-point scan. The merge procedure
+	// rewrites loser→winner on each row; oldest-first is a stable, deterministic
+	// order so the live-row collision/supersession steps run reproducibly.
+	ListAssertionsTouchingNode(ctx context.Context, subjectNodeID pgtype.UUID) ([]*Assertion, error)
 	// Returns the deduplicated canonicalized value set for the given
 	// contact_method types, scoped to non-deleted contacts. Ordered
 	// alphabetically by value_normalized for deterministic daemon-side diff.
@@ -1951,6 +1956,12 @@ type Querier interface {
 	// the venue backfill test to seed an email/gchat thread container row.
 	// Production code MUST NOT call this.
 	TestInsertCommsMessageLinked(ctx context.Context, arg TestInsertCommsMessageLinkedParams) (*CommsMessage, error)
+	// Latent-person promotion test support: insert a contact row AT a caller-supplied
+	// id (node.id == contact.id), so a test can promote a latent person node (created
+	// by EnsureLatentPerson) into a real contact at the node's id. Production
+	// CreateContact generates its own id; the import/promotion pipeline that supplies
+	// one is deferred per spec, so this is the test-only mechanic.
+	TestInsertContactAtID(ctx context.Context, arg TestInsertContactAtIDParams) error
 	// Tag-migration test only: seed a contact_tag row with an explicit created_at so
 	// a test can assert the migration preserves it as the assertion's KnowledgeFrom
 	// (KnowledgeFromOverride). The (contact_id, tag_id) PK makes re-seeding a no-op

@@ -161,6 +161,15 @@ SELECT * FROM assertion
 WHERE subject_node_id = $1
 ORDER BY created_at DESC;
 
+-- name: ListAssertionsTouchingNode :many
+-- All assertions touching a node in EITHER position (subject OR object), any
+-- status, oldest first — the node-merge re-point scan. The merge procedure
+-- rewrites loser→winner on each row; oldest-first is a stable, deterministic
+-- order so the live-row collision/supersession steps run reproducibly.
+SELECT * FROM assertion
+WHERE subject_node_id = $1 OR object_node_id = $1
+ORDER BY created_at, id;
+
 -- name: ListLiveEdgesForNode :many
 -- Live edges of a predicate touching a node in EITHER orientation (the symmetric
 -- two-direction read): a node may be subject or object of a stored edge. Returns

@@ -524,6 +524,57 @@ func (q *Queries) ListAssertionsBySubject(ctx context.Context, subjectNodeID pgt
 	return items, nil
 }
 
+const ListAssertionsTouchingNode = `-- name: ListAssertionsTouchingNode :many
+SELECT id, subject_node_id, predicate_key, object_node_id, value_text, value_num, value_date, value_bool, valid_from, valid_to, knowledge_from, knowledge_to, confidence, salience, status, closure_reason, superseded_by, trust_tier, proposition_key, created_at FROM assertion
+WHERE subject_node_id = $1 OR object_node_id = $1
+ORDER BY created_at, id
+`
+
+// All assertions touching a node in EITHER position (subject OR object), any
+// status, oldest first — the node-merge re-point scan. The merge procedure
+// rewrites loser→winner on each row; oldest-first is a stable, deterministic
+// order so the live-row collision/supersession steps run reproducibly.
+func (q *Queries) ListAssertionsTouchingNode(ctx context.Context, subjectNodeID pgtype.UUID) ([]*Assertion, error) {
+	rows, err := q.db.Query(ctx, ListAssertionsTouchingNode, subjectNodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*Assertion{}
+	for rows.Next() {
+		var i Assertion
+		if err := rows.Scan(
+			&i.ID,
+			&i.SubjectNodeID,
+			&i.PredicateKey,
+			&i.ObjectNodeID,
+			&i.ValueText,
+			&i.ValueNum,
+			&i.ValueDate,
+			&i.ValueBool,
+			&i.ValidFrom,
+			&i.ValidTo,
+			&i.KnowledgeFrom,
+			&i.KnowledgeTo,
+			&i.Confidence,
+			&i.Salience,
+			&i.Status,
+			&i.ClosureReason,
+			&i.SupersededBy,
+			&i.TrustTier,
+			&i.PropositionKey,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListLiveEdgesForNode = `-- name: ListLiveEdgesForNode :many
 SELECT id, subject_node_id, predicate_key, object_node_id, value_text, value_num, value_date, value_bool, valid_from, valid_to, knowledge_from, knowledge_to, confidence, salience, status, closure_reason, superseded_by, trust_tier, proposition_key, created_at FROM assertion
 WHERE predicate_key = $2
