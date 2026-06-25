@@ -593,9 +593,11 @@ func (r *SyntheticSupportRepository) InsertNonFinalRiverJob(ctx context.Context)
 }
 
 // InsertResetMarkers seeds a marker row into the standalone (harness-untouched)
-// wiped tables — oauth_credential, external_sync_state, telegram_session, tag —
-// so the reset test proves TRUNCATE empties tables the synthetic harness does not
-// populate. Test only.
+// wiped tables — oauth_credential, external_sync_state, telegram_session, tag,
+// and the derived-storage projections (embedding, relationship_signal) — so the
+// reset test proves TRUNCATE empties tables the synthetic harness does not
+// populate. The two projections start empty otherwise, so without a marker the
+// catalog guard could not catch their omission from the TRUNCATE list. Test only.
 func (r *SyntheticSupportRepository) InsertResetMarkers(ctx context.Context) error {
 	if err := r.queries.TestInsertOAuthCredentialMarker(ctx); err != nil {
 		return err
@@ -606,7 +608,17 @@ func (r *SyntheticSupportRepository) InsertResetMarkers(ctx context.Context) err
 	if err := r.queries.TestInsertTelegramSessionMarker(ctx); err != nil {
 		return err
 	}
-	return r.queries.TestInsertTagMarker(ctx)
+	if err := r.queries.TestInsertTagMarker(ctx); err != nil {
+		return err
+	}
+	// The relationship_signal marker FKs to a node, so the marker node goes first.
+	if err := r.queries.TestInsertDerivedStorageMarkerNode(ctx); err != nil {
+		return err
+	}
+	if err := r.queries.TestInsertEmbeddingMarker(ctx); err != nil {
+		return err
+	}
+	return r.queries.TestInsertRelationshipSignalMarker(ctx)
 }
 
 // ContactBucket is the bucket-defining projection of a seeded contact (profile

@@ -1917,6 +1917,15 @@ type Querier interface {
 	// the venue backfill test to seed an email/gchat thread container row.
 	// Production code MUST NOT call this.
 	TestInsertCommsMessageLinked(ctx context.Context, arg TestInsertCommsMessageLinkedParams) (*CommsMessage, error)
+	// Reset test only: a person node with a fixed sentinel id that the embedding and
+	// relationship_signal markers anchor to (relationship_signal.subject_node_id is a
+	// real FK→node, so the node must exist first). Idempotent so the marker seeding
+	// can re-run on a reused clone.
+	TestInsertDerivedStorageMarkerNode(ctx context.Context) error
+	// Reset test only: a marker row in embedding (a derived-storage projection the
+	// harness does not touch), so the reset test proves TRUNCATE empties it. The
+	// vector(1536) is a zero-filled sentinel; target_id is no-FK polymorphic.
+	TestInsertEmbeddingMarker(ctx context.Context) error
 	// TEST ONLY. Fixture queries used by jsonb_gin_index_test.go to construct
 	// edge-case JSONB shapes (non-array, NULL, missing keys) that production
 	// code paths cannot create, plus permanent regression-guard queries that
@@ -1953,6 +1962,10 @@ type Querier interface {
 	// venue backfill test to seed a phone container row. Production code MUST NOT
 	// call this (the live path sets interaction_id via MarkPhoneCallProcessed).
 	TestInsertPhoneCallLinked(ctx context.Context, arg TestInsertPhoneCallLinkedParams) (*PhoneCall, error)
+	// Reset test only: a marker row in relationship_signal (a derived-storage
+	// projection the harness does not touch), so the reset test proves TRUNCATE
+	// empties it. subject_node_id references the marker node inserted above.
+	TestInsertRelationshipSignalMarker(ctx context.Context) error
 	// /health river-component integration test only: plant one river_job with an
 	// explicit kind, state, scheduled_at, and (nullable) finalized_at so the
 	// discarded-count / oldest-due / latest-completed-by-kind queries can be

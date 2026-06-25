@@ -761,6 +761,31 @@ VALUES ('\x00'::bytea, '\x00'::bytea, 'reset-marker');
 -- touch).
 INSERT INTO tag (name) VALUES ('synthetic-reset-marker');
 
+-- name: TestInsertDerivedStorageMarkerNode :exec
+-- Reset test only: a person node with a fixed sentinel id that the embedding and
+-- relationship_signal markers anchor to (relationship_signal.subject_node_id is a
+-- real FK→node, so the node must exist first). Idempotent so the marker seeding
+-- can re-run on a reused clone.
+INSERT INTO node (id, type, canonical_label)
+VALUES ('00000000-0000-0000-0000-0000000000d5'::uuid, 'person', 'synthetic-reset-marker')
+ON CONFLICT (id) DO NOTHING;
+
+-- name: TestInsertEmbeddingMarker :exec
+-- Reset test only: a marker row in embedding (a derived-storage projection the
+-- harness does not touch), so the reset test proves TRUNCATE empties it. The
+-- vector(1536) is a zero-filled sentinel; target_id is no-FK polymorphic.
+INSERT INTO embedding (target_kind, target_id, model_version, vector)
+VALUES ('node', '00000000-0000-0000-0000-0000000000d5'::uuid, 'synthetic-reset-marker',
+        array_fill(0::real, ARRAY[1536])::vector(1536));
+
+-- name: TestInsertRelationshipSignalMarker :exec
+-- Reset test only: a marker row in relationship_signal (a derived-storage
+-- projection the harness does not touch), so the reset test proves TRUNCATE
+-- empties it. subject_node_id references the marker node inserted above.
+INSERT INTO relationship_signal (subject_node_id, signal_key, value, as_of, method_version)
+VALUES ('00000000-0000-0000-0000-0000000000d5'::uuid, 'synthetic-reset-marker', 0, NOW(),
+        'synthetic-reset-marker');
+
 -- name: TestListContactBucketsByNamePrefix :many
 -- Profile coverage test only: list the namespace's contacts (by full_name
 -- prefix) with the bucket-defining columns + a method count, so the test can

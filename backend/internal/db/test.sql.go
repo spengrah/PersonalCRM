@@ -1692,6 +1692,35 @@ func (q *Queries) TestCountAllRows(ctx context.Context, tableName string) (int64
 	return column_1, err
 }
 
+const TestInsertDerivedStorageMarkerNode = `-- name: TestInsertDerivedStorageMarkerNode :exec
+INSERT INTO node (id, type, canonical_label)
+VALUES ('00000000-0000-0000-0000-0000000000d5'::uuid, 'person', 'synthetic-reset-marker')
+ON CONFLICT (id) DO NOTHING
+`
+
+// Reset test only: a person node with a fixed sentinel id that the embedding and
+// relationship_signal markers anchor to (relationship_signal.subject_node_id is a
+// real FK→node, so the node must exist first). Idempotent so the marker seeding
+// can re-run on a reused clone.
+func (q *Queries) TestInsertDerivedStorageMarkerNode(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, TestInsertDerivedStorageMarkerNode)
+	return err
+}
+
+const TestInsertEmbeddingMarker = `-- name: TestInsertEmbeddingMarker :exec
+INSERT INTO embedding (target_kind, target_id, model_version, vector)
+VALUES ('node', '00000000-0000-0000-0000-0000000000d5'::uuid, 'synthetic-reset-marker',
+        array_fill(0::real, ARRAY[1536])::vector(1536))
+`
+
+// Reset test only: a marker row in embedding (a derived-storage projection the
+// harness does not touch), so the reset test proves TRUNCATE empties it. The
+// vector(1536) is a zero-filled sentinel; target_id is no-FK polymorphic.
+func (q *Queries) TestInsertEmbeddingMarker(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, TestInsertEmbeddingMarker)
+	return err
+}
+
 const TestInsertExternalSyncStateMarker = `-- name: TestInsertExternalSyncStateMarker :exec
 INSERT INTO external_sync_state (source, account_id)
 VALUES ('synthetic_test', 'reset-marker')
@@ -1730,6 +1759,20 @@ VALUES ('synthetic_test', 'reset-marker', '\x00'::bytea, '\x00'::bytea)
 // marker that is never decrypted.
 func (q *Queries) TestInsertOAuthCredentialMarker(ctx context.Context) error {
 	_, err := q.db.Exec(ctx, TestInsertOAuthCredentialMarker)
+	return err
+}
+
+const TestInsertRelationshipSignalMarker = `-- name: TestInsertRelationshipSignalMarker :exec
+INSERT INTO relationship_signal (subject_node_id, signal_key, value, as_of, method_version)
+VALUES ('00000000-0000-0000-0000-0000000000d5'::uuid, 'synthetic-reset-marker', 0, NOW(),
+        'synthetic-reset-marker')
+`
+
+// Reset test only: a marker row in relationship_signal (a derived-storage
+// projection the harness does not touch), so the reset test proves TRUNCATE
+// empties it. subject_node_id references the marker node inserted above.
+func (q *Queries) TestInsertRelationshipSignalMarker(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, TestInsertRelationshipSignalMarker)
 	return err
 }
 
