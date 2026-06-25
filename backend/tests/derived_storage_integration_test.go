@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
@@ -155,7 +156,9 @@ func TestDerivedStorage_RelationshipSignalRoundTrip(t *testing.T) {
 	_, err := nodeRepo.CreateNode(ctx, subjectID, repository.NodeTypePerson, "signal-subject")
 	require.NoError(t, err)
 
-	asOf := accelerated.GetCurrentTime().UTC()
+	// Truncate to microseconds: as_of is a TIMESTAMPTZ (µs precision), so a Go
+	// time carrying sub-µs nanoseconds would not round-trip exactly.
+	asOf := accelerated.GetCurrentTime().UTC().Truncate(time.Microsecond)
 	require.NoError(t, signalRepo.UpsertRelationshipSignal(ctx, repository.UpsertRelationshipSignalRequest{
 		SubjectNodeID: subjectID,
 		SignalKey:     "closeness",
@@ -259,7 +262,7 @@ func TestDerivedStorage_MigrationDownUp(t *testing.T) {
 		SubjectNodeID: subjectID,
 		SignalKey:     "closeness",
 		Value:         0.5,
-		AsOf:          accelerated.GetCurrentTime().UTC(),
+		AsOf:          accelerated.GetCurrentTime().UTC().Truncate(time.Microsecond),
 		MethodVersion: "before-rollback",
 	}))
 
@@ -314,7 +317,7 @@ func TestDerivedStorage_MigrationDownUp(t *testing.T) {
 		SubjectNodeID: subjectID,
 		SignalKey:     "closeness",
 		Value:         0.9,
-		AsOf:          accelerated.GetCurrentTime().UTC(),
+		AsOf:          accelerated.GetCurrentTime().UTC().Truncate(time.Microsecond),
 		MethodVersion: "after-rollback",
 	}), "the recreated relationship_signal table accepts a valid insert")
 	gotSignal, err := signalRepo.GetRelationshipSignal(ctx, subjectID, "closeness")
