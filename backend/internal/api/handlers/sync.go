@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/api"
+	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/sync"
@@ -14,7 +15,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
 	"github.com/google/uuid"
-	"github.com/rs/zerolog/log"
 )
 
 // SyncService defines the interface for sync operations used by the handler.
@@ -167,7 +167,7 @@ func (h *SyncHandler) TriggerSync(c *gin.Context) {
 
 		if err := h.syncService.TriggerSync(ctx, srcName, accountID); err != nil {
 			// Log error - can't return to client since request already responded
-			log.Error().Err(err).Str("source", srcName).Msg("background enqueue failed")
+			logger.Error().Err(err).Str("source", srcName).Msg("background enqueue failed")
 		}
 	}()
 

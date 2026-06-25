@@ -9,10 +9,10 @@ import (
 
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/logger"
 	tg "personal-crm/backend/internal/telegram"
 
 	"github.com/gin-gonic/gin"
-	"github.com/rs/zerolog/log"
 )
 
 var phoneRegex = regexp.MustCompile(`^\+[0-9]{7,15}$`)
@@ -281,7 +281,7 @@ func (h *TelegramHandler) UpdateChatStatus(c *gin.Context) {
 	// Trigger retroactive backfill only when status changes TO "tracked"
 	if status == "tracked" && previousStatus != "tracked" {
 		if err := h.manager.TriggerChatBackfill(c.Request.Context(), chatID); err != nil {
-			log.Warn().Err(err).Int64("chat_id", chatID).Msg("telegram: failed to trigger backfill")
+			logger.Warn().Err(err).Int64("chat_id", chatID).Msg("telegram: failed to trigger backfill")
 		}
 	}
 
