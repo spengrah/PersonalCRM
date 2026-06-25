@@ -200,3 +200,19 @@ type RematchDispatcherJobArgs struct {
 
 // Kind returns the river job-kind identifier for RematchDispatcher jobs.
 func (RematchDispatcherJobArgs) Kind() string { return "rematch_dispatcher" }
+
+// KnowledgeCacheUpdaterJobArgs carries the event id that the
+// KnowledgeCacheUpdater worker should fetch and process. Enqueued for every
+// assertion.accepted / assertion.superseded event by
+// events.consumerJobsForKind. The worker decodes the payload's predicate_key
+// and no-ops unless it is one of the cutover cache predicates
+// (lives_in/birthday/how_met); otherwise it recomputes the contact's cache
+// column from the current-accepted assertion. No river:"unique" tag — the
+// recompute-from-scratch refresh is idempotent, so a duplicate enqueue
+// re-derives the same cache value.
+type KnowledgeCacheUpdaterJobArgs struct {
+	EventID uuid.UUID `json:"event_id"`
+}
+
+// Kind returns the river job-kind identifier for KnowledgeCacheUpdater jobs.
+func (KnowledgeCacheUpdaterJobArgs) Kind() string { return "knowledge_cache_updater" }
