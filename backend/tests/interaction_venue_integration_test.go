@@ -469,20 +469,56 @@ func TestInteractionVenue_MalformedAnarlogRefIsSkipped(t *testing.T) {
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
+	calendarRepo := repository.NewCalendarEventRepository(database.Queries)
+	meetingNoteRepo := repository.NewMeetingNoteRepository(database.Queries)
 	venueRepo := repository.NewVenueRepository(database.Queries)
 	now := accelerated.GetCurrentTime().UTC()
 
 	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: "Malformed Anarlog Subject"})
 	require.NoError(t, err)
 
-	// A malformed anarlog ref: segment 2 is not a UUID. The Step-1 ::uuid cast
-	// must NOT fire on this row.
+	// A gcal event + a LINKED meeting_note + a well-formed anarlog interaction for
+	// that session. This FORCES the Step-1 anarlog→gcal join to evaluate (its
+	// meeting_note ⋈ calendar_event ⋈ venue chain produces a row), so the
+	// untrusted-source_ref comparison in Step-1 actually runs — without this setup
+	// the cast-safety guard would never be exercised by the test.
+	event, err := calendarRepo.Upsert(ctx, repository.UpsertCalendarEventRequest{
+		GcalEventID: "evt-malformed-1", GcalCalendarID: "primary", GoogleAccountID: "acct-malformed-1",
+		StartTime: now, EndTime: now.Add(time.Hour), Status: "confirmed", SyncedAt: now,
+	})
+	require.NoError(t, err)
+	// A gcal INTERACTION for the event so the gcal backfill block (which runs
+	// before anarlog) mints the meeting venue the anarlog reuse then finds.
+	gcalIxID := uuid.New()
+	gcalRef := event.ID.String()
+	_, err = interactionRepo.TestInsertInteraction(ctx, gcalIxID, contact.ID, repository.InteractionSourceGCal, &gcalRef, now, repository.InteractionDirectionMutual)
+	require.NoError(t, err)
+	linkedKind := repository.LinkedKindEvent
+	linkedSession := uuid.New()
+	mnTx, err := database.Pool.Begin(ctx)
+	require.NoError(t, err)
+	_, err = meetingNoteRepo.InsertMeetingNoteTx(ctx, mnTx, repository.InsertMeetingNoteParams{
+		AnarlogSessionID: linkedSession, LinkedKind: &linkedKind, LinkedID: &event.ID,
+		LinkageState: repository.LinkageStateLinked, MeetingAt: now,
+	})
+	require.NoError(t, err)
+	require.NoError(t, mnTx.Commit(ctx))
+	linkedID := uuid.New()
+	linkedRef := fmt.Sprintf("anarlog:%s:%s", linkedSession, contact.ID)
+	_, err = interactionRepo.TestInsertInteraction(ctx, linkedID, contact.ID, repository.InteractionSourceAnarlogSessions, &linkedRef, now, repository.InteractionDirectionMutual)
+	require.NoError(t, err)
+
+	// A MALFORMED anarlog ref (segment 2 is not a UUID) present in the SAME run.
+	// Step-1 compares anarlog_session_id::text against this raw segment; the
+	// migration must NOT raise invalid-uuid on it (it can't — there is no cast of
+	// the untrusted text). If a future edit reverts to split_part(...)::uuid this
+	// row makes the whole BEGIN..COMMIT migration abort and the test fails.
 	badID := uuid.New()
 	badRef := fmt.Sprintf("anarlog:not-a-uuid:%s", contact.ID)
 	_, err = interactionRepo.TestInsertInteraction(ctx, badID, contact.ID, repository.InteractionSourceAnarlogSessions, &badRef, now, repository.InteractionDirectionMutual)
 	require.NoError(t, err)
 
-	// A well-formed anarlog (unlinked) ref in the same run → a session venue.
+	// A well-formed UNLINKED anarlog ref → its own session venue.
 	goodSession := uuid.New()
 	goodID := uuid.New()
 	goodRef := fmt.Sprintf("anarlog:%s:%s", goodSession, contact.ID)
@@ -497,15 +533,21 @@ func TestInteractionVenue_MalformedAnarlogRefIsSkipped(t *testing.T) {
 		require.NoError(t, err)
 	}
 	require.NoError(t, m.Steps(-1), "roll the venue model down")
-	require.NoError(t, m.Steps(1), "the REAL backfill must SUCCEED despite the malformed anarlog ref (guard skips it)")
+	require.NoError(t, m.Steps(1), "the REAL backfill must SUCCEED despite the malformed anarlog ref present")
 
-	// The well-formed row resolves to its session venue.
+	// Step-1 DID fire: the linked anarlog interaction reuses the gcal MEETING
+	// venue (not a session venue) — proving the cast-safe comparison still matches
+	// a well-formed session.
+	gcalContainer := repository.GCalVenueContainerID(event.GcalEventID, event.GcalCalendarID, event.GoogleAccountID)
+	requireInteractionVenue(t, ctx, interactionRepo, venueRepo, linkedID,
+		repository.InteractionSourceGCal, repository.VenueKindMeeting, gcalContainer)
+
+	// The well-formed UNLINKED row resolves to its session venue (Step 2).
 	requireInteractionVenue(t, ctx, interactionRepo, venueRepo, goodID,
 		repository.InteractionSourceAnarlogSessions, repository.VenueKindSession, goodSession.String())
 
-	// The malformed row did NOT trip the Step-1 ::uuid cast: Step-2 (text-based)
-	// gives it a session venue keyed on the raw segment-2 text, so the migration
-	// completes. The key invariant is that the migration succeeded at all.
+	// The malformed row did NOT abort the migration: Step-2 (text-based) gives it
+	// a session venue keyed on the raw segment-2 text.
 	badInteraction, err := interactionRepo.GetInteraction(ctx, badID)
 	require.NoError(t, err)
 	require.NotNil(t, badInteraction.VenueID, "malformed row gets a session venue from the text-based Step 2")

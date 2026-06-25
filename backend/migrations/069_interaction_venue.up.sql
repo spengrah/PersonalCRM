@@ -294,10 +294,13 @@ JOIN venue ce_venue
 WHERE i.source = 'anarlog_sessions'
   AND i.venue_id IS NULL AND i.deleted_at IS NULL
   AND i.source_ref IS NOT NULL
-  -- Guard the ::uuid cast: skip a malformed source_ref (segment 2 not a UUID)
-  -- rather than aborting the whole BEGIN..COMMIT migration on one bad row.
-  AND split_part(i.source_ref, ':', 2) ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
-  AND mn.anarlog_session_id = split_part(i.source_ref, ':', 2)::uuid
+  -- Compare the KNOWN-VALID uuid column cast to text against the raw source_ref
+  -- segment — NOT split_part(...)::uuid. Casting the untrusted text to uuid would
+  -- raise "invalid input syntax for type uuid" on a malformed ref, and because
+  -- AND-predicate evaluation order is NOT guaranteed, a sibling regex guard can't
+  -- structurally protect that cast. Casting the canonical uuid column to text and
+  -- comparing as text never errors: a malformed segment simply doesn't match.
+  AND mn.anarlog_session_id::text = split_part(i.source_ref, ':', 2)
   AND mn.deleted_at IS NULL
   AND mn.linked_kind = 'event';
 
