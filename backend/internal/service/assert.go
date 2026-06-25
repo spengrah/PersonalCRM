@@ -2022,6 +2022,12 @@ func (s *AssertService) repointWithRecover(ctx context.Context, tx pgx.Tx, plan 
 // leaving the row's node references at the loser (dead history). knowledge_to is
 // clamped >= knowledge_from for the assertion_knowledge_range CHECK.
 func (s *AssertService) closeSelfLoop(ctx context.Context, tx pgx.Tx, row *repository.Assertion, now time.Time) error {
+	// Postgres timestamptz stores MICROSECOND precision; pgx truncates on write. The
+	// stored bounds (row.ValidFrom/ValidTo, read back from the DB) are already µs, so
+	// the closing now must be truncated to µs too — else a Go-ns valid_from.Before(now)
+	// can be true while both encode to the SAME µs timestamp, making valid_to ==
+	// valid_from and tripping the strict assertion_valid_range CHECK.
+	now = now.Truncate(time.Microsecond)
 	knowledgeTo := now
 	if row.KnowledgeFrom.After(knowledgeTo) {
 		knowledgeTo = row.KnowledgeFrom.UTC()
@@ -2033,8 +2039,8 @@ func (s *AssertService) closeSelfLoop(ctx context.Context, tx pgx.Tx, row *repos
 	// edge (valid_to already <= now) would have its closed historical interval
 	// stretched forward (history corruption). In all those cases the row is terminal
 	// regardless, so keep its EXISTING valid_to; only a row that genuinely STARTED in
-	// the past (valid_from nil or strictly < now) and is still open-at-now (valid_to
-	// nil or > now) is closed AT now.
+	// the past (valid_from nil or strictly < now, at µs resolution) and is still
+	// open-at-now (valid_to nil or > now) is closed AT now.
 	openAtNow := (row.ValidFrom == nil || row.ValidFrom.Before(now)) &&
 		(row.ValidTo == nil || row.ValidTo.After(now))
 	validTo := utcPtr(row.ValidTo)
