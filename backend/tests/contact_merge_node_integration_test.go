@@ -142,7 +142,7 @@ func nowMicro() time.Time {
 
 // TestContactMergeNode_Integration exercises the contact-merge node integration:
 // the loser node is tombstoned, its assertions re-point onto the winner, and the
-// single-cardinality slot ends with exactly one live assertion (D9 / PR10).
+// single-cardinality slot ends with exactly one live assertion (D9).
 func TestContactMergeNode_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
