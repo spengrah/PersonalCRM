@@ -10,8 +10,16 @@ ORDER BY occurred_at DESC
 LIMIT $2 OFFSET $3;
 
 -- name: CreateInteraction :one
-INSERT INTO interaction (contact_id, source, source_ref, occurred_at, description, direction)
-VALUES ($1, $2, $3, $4, $5, COALESCE(sqlc.narg('direction'), 'mutual'))
+INSERT INTO interaction (contact_id, source, source_ref, occurred_at, description, direction, venue_id)
+VALUES (
+    sqlc.arg('contact_id'),
+    sqlc.arg('source'),
+    sqlc.narg('source_ref'),
+    sqlc.arg('occurred_at'),
+    sqlc.narg('description'),
+    COALESCE(sqlc.narg('direction'), 'mutual'),
+    sqlc.narg('venue_id')
+)
 RETURNING *;
 
 -- name: UpdateInteractionDirection :one

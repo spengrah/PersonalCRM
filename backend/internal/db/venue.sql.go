@@ -11,6 +11,23 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const AcquireVenueContainerLock = `-- name: AcquireVenueContainerLock :exec
+SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
+`
+
+// Takes a transaction-scoped advisory lock keyed on a venue container so two
+// live recorders resolving the SAME (source, kind, container) serialize on
+// creation — exactly one node+venue pair is created and no orphan node leaks.
+// hashtextextended folds the container string into the bigint advisory-lock key
+// space; a rare hash collision only over-serializes two unrelated containers (a
+// perf cost), never under-serializes (a correctness cost). Mirrors the
+// per-source_ref aggregation lock in interaction.sql. The lock auto-releases on
+// commit/rollback.
+func (q *Queries) AcquireVenueContainerLock(ctx context.Context, lockKey string) error {
+	_, err := q.db.Exec(ctx, AcquireVenueContainerLock, lockKey)
+	return err
+}
+
 const CreateVenue = `-- name: CreateVenue :one
 
 INSERT INTO venue (node_id, kind, source, source_container_id, title)
@@ -48,6 +65,49 @@ func (q *Queries) CreateVenue(ctx context.Context, arg CreateVenueParams) (*Venu
 		&i.Title,
 	)
 	return &i, err
+}
+
+const CreateVenueNode = `-- name: CreateVenueNode :one
+WITH ins_node AS (
+    INSERT INTO node (id, type, canonical_label)
+    VALUES ($1, 'venue', $6)
+    ON CONFLICT (id) DO NOTHING
+    RETURNING id
+)
+INSERT INTO venue (node_id, kind, source, source_container_id, title)
+SELECT $1, $2, $3,
+       $4, $5
+ON CONFLICT (source, kind, source_container_id) DO NOTHING
+RETURNING node_id
+`
+
+type CreateVenueNodeParams struct {
+	NodeID            pgtype.UUID `json:"node_id"`
+	Kind              string      `json:"kind"`
+	Source            string      `json:"source"`
+	SourceContainerID string      `json:"source_container_id"`
+	Title             pgtype.Text `json:"title"`
+	CanonicalLabel    string      `json:"canonical_label"`
+}
+
+// Creates the node + venue pair for a container in one statement with a
+// caller-supplied deterministic node id (uuid_generate_v5 of the container,
+// matching the migration backfill). Both inserts are ON CONFLICT DO NOTHING so a
+// concurrent winner or a re-run is a no-op without orphaning a node. Returns the
+// venue node id on a fresh create; returns no row when the venue already existed
+// (caller falls back to FindVenueByContainer under the advisory lock).
+func (q *Queries) CreateVenueNode(ctx context.Context, arg CreateVenueNodeParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, CreateVenueNode,
+		arg.NodeID,
+		arg.Kind,
+		arg.Source,
+		arg.SourceContainerID,
+		arg.Title,
+		arg.CanonicalLabel,
+	)
+	var node_id pgtype.UUID
+	err := row.Scan(&node_id)
+	return node_id, err
 }
 
 const FindVenueByContainer = `-- name: FindVenueByContainer :one

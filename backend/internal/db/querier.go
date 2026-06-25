@@ -32,6 +32,15 @@ type Querier interface {
 	// under-serializes (a correctness cost). Mirrors the per-account
 	// sync-enqueue lock in external_sync.sql.
 	AcquireSourceRefAggregateLock(ctx context.Context, lockKey string) error
+	// Takes a transaction-scoped advisory lock keyed on a venue container so two
+	// live recorders resolving the SAME (source, kind, container) serialize on
+	// creation — exactly one node+venue pair is created and no orphan node leaks.
+	// hashtextextended folds the container string into the bigint advisory-lock key
+	// space; a rare hash collision only over-serializes two unrelated containers (a
+	// perf cost), never under-serializes (a correctness cost). Mirrors the
+	// per-source_ref aggregation lock in interaction.sql. The lock auto-releases on
+	// commit/rollback.
+	AcquireVenueContainerLock(ctx context.Context, lockKey string) error
 	AddContactTag(ctx context.Context, arg AddContactTagParams) error
 	// Atomically appends a contact to an event's matched_contact_ids iff it isn't
 	// already present. Does NOT reset last_contacted_updated — the rematch handler
@@ -322,6 +331,13 @@ type Querier interface {
 	// node's tombstone. So the live reads join node and filter node.deleted_at IS
 	// NULL; a venue whose node has been merged/soft-deleted drops from these reads.
 	CreateVenue(ctx context.Context, arg CreateVenueParams) (*Venue, error)
+	// Creates the node + venue pair for a container in one statement with a
+	// caller-supplied deterministic node id (uuid_generate_v5 of the container,
+	// matching the migration backfill). Both inserts are ON CONFLICT DO NOTHING so a
+	// concurrent winner or a re-run is a no-op without orphaning a node. Returns the
+	// venue node id on a fresh create; returns no row when the venue already existed
+	// (caller falls back to FindVenueByContainer under the advisory lock).
+	CreateVenueNode(ctx context.Context, arg CreateVenueNodeParams) (pgtype.UUID, error)
 	// Remove duplicate contact IDs that may result from merge
 	// Uses subquery with DISTINCT to rebuild the array without duplicates
 	DeduplicateCalendarEventContacts(ctx context.Context, targetContactID pgtype.UUID) error
