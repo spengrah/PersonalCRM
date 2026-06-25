@@ -125,6 +125,9 @@ func (h *Harness) ReplayTelegramGroup(ctx context.Context, contactID uuid.UUID, 
 		return TelegramGroupResult{}, err
 	}
 	h.trackContactInteractions(ctx, contactID)
+	if err := h.assertContactVenue(ctx, contactID, repository.InteractionSourceTelegram); err != nil {
+		return TelegramGroupResult{}, err
+	}
 	return TelegramGroupResult{ContactID: contactID, ChatID: spec.ChatID, SenderUserID: spec.SenderUserID, Matched: true, Tracked: true}, nil
 }
 
@@ -163,6 +166,9 @@ func (h *Harness) ReplayTelegramGroupMessages(ctx context.Context, contactID uui
 		return TelegramGroupResult{}, err
 	}
 	h.trackContactInteractions(ctx, contactID)
+	if err := h.assertContactVenue(ctx, contactID, repository.InteractionSourceTelegram); err != nil {
+		return TelegramGroupResult{}, err
+	}
 	return TelegramGroupResult{ContactID: contactID, ChatID: last.ChatID, SenderUserID: last.SenderUserID, Matched: true, Tracked: true}, nil
 }
 

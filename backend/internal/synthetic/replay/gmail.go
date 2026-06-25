@@ -74,5 +74,8 @@ func (h *Harness) ReplayGmail(ctx context.Context, contactID uuid.UUID, spec fac
 		return GmailResult{}, err
 	}
 	h.trackContactInteractions(ctx, contactID)
+	if err := h.assertContactVenue(ctx, contactID, repository.InteractionSourceEmail); err != nil {
+		return GmailResult{}, err
+	}
 	return GmailResult{ContactID: contactID, ExternalID: spec.ExternalID, Matched: true}, nil
 }

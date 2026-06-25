@@ -94,5 +94,8 @@ func (h *Harness) ReplayGChat(ctx context.Context, contactID uuid.UUID, spec fac
 		return GChatResult{}, err
 	}
 	h.trackContactInteractions(ctx, contactID)
+	if err := h.assertContactVenue(ctx, contactID, repository.InteractionSourceGChat); err != nil {
+		return GChatResult{}, err
+	}
 	return GChatResult{ContactID: contactID, ExternalID: spec.ExternalID, Matched: true}, nil
 }

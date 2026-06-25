@@ -199,7 +199,22 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 		repository.InteractionSourceGChat:    repository.NewCommsSessionStagingProcessor(commsRepo),
 	})
 
+	// Venue resolver: populates interaction.venue_id so replay adapters can
+	// assert a venue node was created for each venue-bearing source. Mirrors the
+	// main.go wiring.
+	venueRepo := repository.NewVenueRepository(database.Queries)
+	venueResolver := repository.NewVenueResolverRegistry(
+		venueRepo,
+		map[string]repository.VenueContainerReader{
+			repository.InteractionSourceTelegram: repository.NewTelegramVenueContainerReader(),
+			repository.InteractionSourceMessages: repository.NewMessagesVenueContainerReader(),
+			repository.InteractionSourceGChat:    repository.NewGChatVenueContainerReader(),
+		},
+		calendarEventRepo,
+	)
+
 	recorder := consumer.NewInteractionRecorder(contactService, stagingRegistry, bus, cadenceUpdater, nil, calendarEventRepo)
+	recorder.SetVenueResolver(venueResolver)
 	recorderShim.real = consumer.NewInteractionRecorderWorker(bus, database.Pool, recorder, nil)
 	cadenceShim.real = consumer.NewCadenceUpdaterWorker(bus, database.Pool, cadenceUpdater)
 
@@ -224,6 +239,7 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 		contactService, commsRepo, interactionRepo, contactService,
 		bus, cadenceUpdater, followUpManager,
 	)
+	emailConsumer.SetVenueResolver(venueRepo)
 	emailShim.real = consumer.NewEmailInteractionConsumerWorker(bus, database.Pool, emailConsumer)
 
 	// Messaging aggregate worker: engines for source=messages (iMessage) +
@@ -289,6 +305,7 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 		externalRepo:    externalRepo,
 		telegramRepo:    telegramRepo,
 		messagesRepo:    messagesRepo,
+		venueRepo:       venueRepo,
 		identityService: identityService,
 		contactService:  contactService,
 		cadenceUpdater:  cadenceUpdater,

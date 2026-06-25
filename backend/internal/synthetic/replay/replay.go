@@ -118,6 +118,7 @@ type Harness struct {
 	externalRepo    *repository.ExternalContactRepository
 	telegramRepo    *repository.TelegramMessageRepository
 	messagesRepo    *repository.MessagesMessageRepository
+	venueRepo       *repository.VenueRepository
 	identityService *service.IdentityService
 	contactService  *service.ContactService
 	cadenceUpdater  *consumer.CadenceUpdater
@@ -161,6 +162,26 @@ func (h *Harness) ExternalContactRepo() *repository.ExternalContactRepository {
 }
 func (h *Harness) TelegramRepo() *repository.TelegramMessageRepository { return h.telegramRepo }
 func (h *Harness) MessagesRepo() *repository.MessagesMessageRepository { return h.messagesRepo }
+func (h *Harness) VenueRepo() *repository.VenueRepository              { return h.venueRepo }
+
+// AssertInteractionHasVenue fetches the interaction by id and verifies it has a
+// venue_id pointing at a live venue node. Used by the replay adapters to assert
+// the venue-populating recorder paths created a venue. Returns the resolved
+// Venue on success.
+func (h *Harness) AssertInteractionHasVenue(ctx context.Context, interactionID uuid.UUID) (*repository.Venue, error) {
+	interaction, err := h.interactionRepo.GetInteraction(ctx, interactionID)
+	if err != nil {
+		return nil, fmt.Errorf("get interaction %s: %w", interactionID, err)
+	}
+	if interaction.VenueID == nil {
+		return nil, fmt.Errorf("interaction %s has no venue_id", interactionID)
+	}
+	venue, err := h.venueRepo.GetVenue(ctx, *interaction.VenueID)
+	if err != nil {
+		return nil, fmt.Errorf("get venue %s for interaction %s: %w", *interaction.VenueID, interactionID, err)
+	}
+	return venue, nil
+}
 
 // MacHostID is the seeded revoked synthetic host id passed as hostID to ingest.
 func (h *Harness) MacHostID() uuid.UUID { return h.macHostID }

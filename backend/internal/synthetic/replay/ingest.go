@@ -110,5 +110,8 @@ func (h *Harness) ReplayIMessage(ctx context.Context, contactID uuid.UUID, spec 
 		return IMessageResult{}, err
 	}
 	h.trackContactInteractions(ctx, contactID)
+	if err := h.assertContactVenue(ctx, contactID, repository.InteractionSourceMessages); err != nil {
+		return IMessageResult{}, err
+	}
 	return IMessageResult{ContactID: contactID, Guid: spec.Guid, Matched: true}, nil
 }

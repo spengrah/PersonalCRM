@@ -3,6 +3,7 @@ package replay
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
@@ -65,6 +66,31 @@ func (h *Harness) gcalSettled(gcalEventID string, contactID uuid.UUID) gateA {
 		n, err := h.support.CountProcessedCalendarEventByGcalID(ctx, gcalEventID, contactID)
 		return n > 0, err
 	}
+}
+
+// assertContactVenue verifies that the contact has at least one interaction of
+// the given source whose venue_id resolves to a live venue node. Called by the
+// venue-bearing replay adapters (telegram/messages/gchat/email/gcal/anarlog)
+// after settle so a replay fails loudly if the venue-populating recorder path
+// silently stopped setting venue_id. Returns an error (not a panic) so the
+// adapter surfaces it like any other replay failure. expectedSource scopes the
+// check to this replay's source so an unrelated prior interaction can't satisfy
+// it.
+func (h *Harness) assertContactVenue(ctx context.Context, contactID uuid.UUID, expectedSource string) error {
+	rows, err := h.interactionRepo.ListContactInteractions(ctx, contactID, 100, 0)
+	if err != nil {
+		return fmt.Errorf("list interactions for venue assert: %w", err)
+	}
+	for _, r := range rows {
+		if r.Source != expectedSource || r.VenueID == nil {
+			continue
+		}
+		if _, err := h.venueRepo.GetVenue(ctx, *r.VenueID); err != nil {
+			return fmt.Errorf("interaction %s venue %s not found: %w", r.ID, *r.VenueID, err)
+		}
+		return nil // found a source-matched interaction with a live venue
+	}
+	return fmt.Errorf("no %s interaction with a venue for contact %s", expectedSource, contactID)
 }
 
 // trackContactInteractions records the contact's interaction ids into the ledger
