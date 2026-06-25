@@ -2391,6 +2391,15 @@ func (s *IngestService) handleMeetingNoteRecorded(
 // unwired or the linked gcal venue can't be resolved (e.g. the event row is
 // gone). A real DB error propagates so the caller rolls back. Shared by the
 // ingest inline handler and MeetingNoteService's resolve-link path.
+//
+// Backfill↔live asymmetry (intentional, documented): the live path CREATES the
+// gcal meeting venue if it doesn't exist yet (via ResolveGCalVenueTx), while the
+// 069 backfill Step-1 only REUSES an already-existing gcal meeting venue (which
+// requires a backfilled gcal interaction for that event). So a linked anarlog
+// session whose calendar_event has no gcal interaction gets a meeting venue live
+// but a session venue from the backfill. Node ids stay deterministic so the
+// common case (gcal interaction present) converges; the edge case just mints a
+// different venue node — every session still gets a venue, no data corruption.
 func resolveAnarlogSessionVenue(
 	ctx context.Context, tx pgx.Tx, venue IngestVenueResolver, sessionID uuid.UUID, linkedKind *string, linkedID *uuid.UUID,
 ) (*uuid.UUID, error) {

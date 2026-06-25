@@ -82,6 +82,13 @@ type created struct {
 	// cleanup removes exactly them, even on cadence-bearing contacts the replay
 	// did not seed.
 	contactTaskIDs []uuid.UUID
+	// venueNodeIDs are venue node ids the real recorders minted on the replay
+	// path (interaction.venue_id → node). They are NOT contacts, so the
+	// person-node delete misses them, and their canonical_label is empty so the
+	// ns-prefix node delete misses them too — cleanup MUST delete them by id
+	// (after the interaction delete, which clears the restrict FK) or the shared
+	// DB leaks a venue node per distinct container.
+	venueNodeIDs []uuid.UUID
 	// directSources is the set of sources the adapters published root events
 	// under, so Cleanup can capture no-contact root events that the
 	// contact-scoped read misses.
@@ -94,6 +101,7 @@ func newCreated() *created {
 
 func (c *created) addContact(id uuid.UUID)       { c.contactIDs = append(c.contactIDs, id) }
 func (c *created) addInteraction(id uuid.UUID)   { c.interactionIDs = append(c.interactionIDs, id) }
+func (c *created) addVenueNode(id uuid.UUID)     { c.venueNodeIDs = append(c.venueNodeIDs, id) }
 func (c *created) addTelegramPeer(id int64)      { c.telegramPeerIDs = append(c.telegramPeerIDs, id) }
 func (c *created) addTelegramChat(id int64)      { c.telegramChatIDs = append(c.telegramChatIDs, id) }
 func (c *created) addContactTask(id uuid.UUID)   { c.contactTaskIDs = append(c.contactTaskIDs, id) }
@@ -408,6 +416,12 @@ func (h *Harness) snapshotContactIDs() []uuid.UUID {
 	h.createdMu.Lock()
 	defer h.createdMu.Unlock()
 	return append([]uuid.UUID(nil), h.created.contactIDs...)
+}
+
+func (h *Harness) snapshotVenueNodeIDs() []uuid.UUID {
+	h.createdMu.Lock()
+	defer h.createdMu.Unlock()
+	return append([]uuid.UUID(nil), h.created.venueNodeIDs...)
 }
 
 // gateBClear reports whether Gate B has reached zero for this replay's contacts.

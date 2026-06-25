@@ -289,9 +289,10 @@ func TestInteractionVenue_Backfill(t *testing.T) {
 	assert.Equal(t, beforeBackfill.LastResponseAt, afterBackfill.LastResponseAt, "backfill must not touch last_response_at")
 	assert.Equal(t, beforeBackfill.ContactBy, afterBackfill.ContactBy, "backfill must not touch contact_by")
 
-	// Recompute leg (plan §459): run a CadenceUpdater apply against the now-
-	// venue-bearing interactions and assert the cadence columns are STILL
-	// byte-identical. The cadence machinery partitions purely by contact_id and
+	// Recompute leg: run a CadenceUpdater apply against the now-venue-bearing
+	// interactions and assert the cadence columns are STILL byte-identical (proves
+	// the cadence recompute path tolerates venue-bearing rows). The cadence
+	// machinery partitions purely by contact_id and
 	// never reads venue_id, so applying a stale (older-than-last_contacted)
 	// telegram interaction is a forward-only no-op that must leave cadence
 	// untouched — proving the recompute path is unperturbed by the new column.
@@ -634,8 +635,12 @@ func TestInteractionVenue_DownGuardPreservesReferencedVenue(t *testing.T) {
 // if the file has no COMMIT; to anchor against.
 func injectErrorBeforeFinalCommit(t *testing.T, sql string) string {
 	t.Helper()
+	// Require EXACTLY one COMMIT; so the anchor is unambiguous. A future edit that
+	// adds a second COMMIT; (in a string literal or a trailing comment) would
+	// otherwise shift LastIndex and could land the injected error OUTSIDE the
+	// transaction, silently weakening the atomicity proof — fail loudly instead.
+	require.Equal(t, 1, strings.Count(sql, "COMMIT;"), "the real migration must contain exactly one COMMIT; to anchor the injected error unambiguously")
 	idx := strings.LastIndex(sql, "COMMIT;")
-	require.GreaterOrEqual(t, idx, 0, "the real migration must contain a COMMIT; to anchor the injected error")
 	return sql[:idx] + "SELECT 1/0;\n" + sql[idx:]
 }
 

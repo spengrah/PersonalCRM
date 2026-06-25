@@ -259,6 +259,19 @@ func (h *Harness) cleanup(ctx context.Context) error {
 		_, err := h.support.DeleteNodesByIds(ctx, c.contactIDs)
 		return err
 	})
+	// 13b. venue node (interaction.venue_id → node): the real recorders mint a
+	// venue node per distinct container on the replay path. They are not contacts
+	// (so person_node misses them) and have an empty canonical_label (so the
+	// ns-prefix node delete misses them), so cleanup deletes them by the tracked
+	// id set. Ordered AFTER the interaction delete (step 2) so the
+	// interaction→venue restrict FK is already clear; the delete is additionally
+	// guarded NOT EXISTS any remaining interaction, so a venue shared with an
+	// un-cleaned interaction is left intact rather than FK-violating. The venue
+	// subtype row cascades on the node delete.
+	step("venue_node", func() error {
+		_, err := h.support.DeleteVenueNodesByIds(ctx, c.venueNodeIDs)
+		return err
+	})
 	// meeting_note scoped to the seeded synthetic host, BEFORE the mac_host
 	// delete. A profile may seed orphan_needs_review meeting_note rows against
 	// this host; the mac_host FK is ON DELETE SET NULL, so deleting the host
@@ -282,6 +295,14 @@ func (h *Harness) cleanup(ctx context.Context) error {
 // cleanup emptied the namespace).
 func (h *Harness) ContactsRemaining(ctx context.Context) (int64, error) {
 	return h.support.CountContactsByIds(ctx, h.snapshotContactIDs())
+}
+
+// VenueNodesRemaining counts how many of THIS run's tracked venue nodes still
+// exist (test assertion that cleanup removed the venue nodes the real recorders
+// minted on the replay path). Scoped to the tracked ids, so it is immune to
+// parallel tests creating their own venue nodes on the shared DB.
+func (h *Harness) VenueNodesRemaining(ctx context.Context) (int64, error) {
+	return h.support.CountVenueNodesByIds(ctx, h.snapshotVenueNodeIDs())
 }
 
 // --- deferred shim workers (bus needs client; real workers need bus) -------

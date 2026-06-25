@@ -99,8 +99,13 @@ func (h *Harness) assertContactVenue(ctx context.Context, contactID uuid.UUID, e
 }
 
 // trackContactInteractions records the contact's interaction ids into the ledger
-// so Cleanup deletes them by id (step 2) before the contact delete. Best-effort:
-// a read error leaves the by-contact path to cover them.
+// so Cleanup deletes them by id (step 2) before the contact delete. It ALSO
+// records each interaction's venue_id (the venue node the real recorder minted)
+// so Cleanup can delete those venue nodes by id — they are not contacts and have
+// an empty canonical_label, so neither the person-node nor the ns-prefix node
+// delete catches them. Best-effort: a read error leaves the by-contact path to
+// cover interactions; venue nodes whose interaction wasn't tracked are caught by
+// no other path, which is why we track them here on the same scan.
 func (h *Harness) trackContactInteractions(ctx context.Context, contactID uuid.UUID) {
 	rows, err := h.interactionRepo.ListContactInteractions(ctx, contactID, 100, 0)
 	if err != nil {
@@ -109,6 +114,9 @@ func (h *Harness) trackContactInteractions(ctx context.Context, contactID uuid.U
 	h.track(func(c *created) {
 		for _, r := range rows {
 			c.addInteraction(r.ID)
+			if r.VenueID != nil {
+				c.addVenueNode(*r.VenueID)
+			}
 		}
 	})
 }

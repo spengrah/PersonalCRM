@@ -280,6 +280,12 @@ WHERE i.source = 'gcal'
 -- mints a session venue for everything else.
 
 -- Step 1: REUSE the linked gcal meeting venue (the only cross-source merge).
+-- This only REUSES an already-existing gcal meeting venue (the JOIN to venue);
+-- a linked session whose calendar_event had no backfilled gcal interaction has
+-- no meeting venue yet, so it falls through to Step-2's session venue. The LIVE
+-- resolver (resolveAnarlogSessionVenue) instead CREATES the gcal meeting venue
+-- when missing — a documented, deterministic-id backfill↔live asymmetry for that
+-- edge case (every session still gets a venue; no corruption).
 UPDATE interaction i
 SET venue_id = ce_venue.node_id
 FROM meeting_note mn

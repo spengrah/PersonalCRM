@@ -1737,6 +1737,10 @@ type Querier interface {
 	// Settle Gate A (Mac-contact unknown-sender): the external_contact row for the
 	// entity id exists with match_status='unmatched'.
 	SyntheticCountUnmatchedExternalContactBySourceId(ctx context.Context, sourceID string) (int64, error)
+	// Cleanup assertion — count surviving venue nodes among the given ids (scoped to
+	// THIS run's tracked venue node ids, so it is immune to parallel tests creating
+	// their own venue nodes on the shared DB, unlike a global venue-node count).
+	SyntheticCountVenueNodesByIds(ctx context.Context, nodeIds []pgtype.UUID) (int64, error)
 	// Assertion-store cleanup: hard-delete the assertions touching a node in EITHER
 	// position (provenance cascades). The assertion → node FK is restrict (NO
 	// ACTION), so a test MUST clear its assertions before deleting its nodes; this
@@ -1821,6 +1825,14 @@ type Querier interface {
 	// tracked peer ids before the contact delete (external_identity survives contact
 	// delete via ON DELETE SET NULL and would otherwise pollute future matching).
 	SyntheticDeleteTelegramExternalIdentitiesByPeerIds(ctx context.Context, peerIds []string) (int64, error)
+	// Cleanup: hard-delete the venue nodes the real recorders minted on the replay
+	// path (interaction.venue_id → node), keyed by the tracked venue node ids. The
+	// venue subtype row cascades via its ON DELETE CASCADE FK to node. Guarded by
+	// type='venue' (defense-in-depth: never touch a person/entity node) AND by
+	// NOT EXISTS any interaction still referencing it — so a venue shared with an
+	// interaction this run did not clean up (e.g. a group container another
+	// namespace also used) is left intact rather than raising the restrict FK.
+	SyntheticDeleteVenueNodesByIds(ctx context.Context, nodeIds []pgtype.UUID) (int64, error)
 	// Contact→node dual-write test support: fetch the person node a contact owns
 	// (node.id == contact.id). Returns the live (non-soft-deleted) node row so a
 	// test can assert the dual-write created it with the expected type/label.
