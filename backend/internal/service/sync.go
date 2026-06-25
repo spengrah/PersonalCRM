@@ -20,7 +20,9 @@ import (
 // ErrAccountRequired is returned by TriggerSync when an account-scoped
 // provider (Config().RequiresAccount) is triggered with a nil/empty account
 // ID. Bootstrapping a sync_state row here would create a permanently-erroring
-// row, so we reject instead. Handlers can map it to a 4xx via errors.Is.
+// row, so we reject instead. This is a backstop for non-HTTP/internal callers;
+// the HTTP 400 is produced separately by the handler's synchronous pre-flight
+// (which shares AccountIDMissing), not by mapping this sentinel.
 var ErrAccountRequired = errors.New("account ID required for this source")
 
 // AccountIDMissing reports whether an account ID is absent for the purpose of

@@ -282,3 +282,36 @@ func TestTriggerSync_AllowsAccountScopedSourceWithAccount(t *testing.T) {
 		t.Fatal("TriggerSync should have run in the background")
 	}
 }
+
+// TestTriggerSync_AllowsAccountOptionalSourceWithoutAccount verifies the
+// pre-flight does NOT reject account-optional sources (RequiresAccount false,
+// e.g. push-only providers like messages): a missing account ID still returns
+// 202 and TriggerSync runs. This guards the cfg.RequiresAccount term in the
+// pre-flight condition — dropping that term would wrongly 400 account-optional
+// sources, and only this test (a RequiresAccount:false provider in the registry
+// with no account) would catch it.
+func TestTriggerSync_AllowsAccountOptionalSourceWithoutAccount(t *testing.T) {
+	t.Parallel()
+	mockService := newMockSyncService()
+	mockService.availableProviders = []psync.SourceConfig{
+		{Name: "messages", RequiresAccount: false},
+	}
+	router := setupSyncHandlerTestRouter(mockService)
+
+	req, _ := http.NewRequest("POST", "/api/v1/sync/messages/trigger", strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusAccepted, w.Code)
+
+	// Wait for the background goroutine to invoke TriggerSync.
+	select {
+	case <-mockService.triggerSyncStarted:
+		require.True(t, mockService.triggerSyncCalled.Load(),
+			"account-optional source must pass the pre-flight and trigger sync")
+	case <-time.After(2 * time.Second):
+		t.Fatal("TriggerSync should have run in the background")
+	}
+}
