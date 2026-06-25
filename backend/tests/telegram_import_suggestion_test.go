@@ -66,9 +66,12 @@ func setupTelegramImportSuggestionTest(t *testing.T) (
 
 	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, repository.NewContactTaskRepository(database.Queries), nil, nil)
 	cadenceUpdater := wireCadenceUpdaterForTest(t, database, contactService)
+	assertSvc, knowledgeCache := buildKnowledgeDeps(t, database, nil)
+	contactService.SetKnowledgeWriter(assertSvc, knowledgeCache)
 	matchService := service.NewImportMatchService(contactRepo)
 	enrichmentService := service.NewEnrichmentService(database, contactRepo, contactMethodRepo, enrichmentRepo, nil, nil)
 	enrichmentService.SetCadenceUpdater(cadenceUpdater)
+	enrichmentService.SetKnowledgeWriter(assertSvc, knowledgeCache)
 
 	suggestionService := service.NewSuggestionService(externalRepo, contactRepo, contactMethodRepo, enrichmentService, matchService, database)
 	importHandler := handlers.NewImportHandler(externalRepo, nil, contactService, matchService, enrichmentService, suggestionService)

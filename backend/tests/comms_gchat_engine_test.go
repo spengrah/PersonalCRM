@@ -117,6 +117,7 @@ func setupGChatEventBus(
 		false,
 	)
 	contactService.SetCadenceUpdater(cadenceUpdater)
+	wireKnowledgeWriterForTest(t, database, bus, contactService)
 	// The gchat session-scoped processor is the load-bearing decision-8b entry.
 	stagingRegistry := repository.NewStagingProcessorRegistry(map[string]repository.StagingProcessor{
 		repository.InteractionSourceGChat: repository.NewCommsSessionStagingProcessor(commsRepo),

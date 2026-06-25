@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -51,6 +52,7 @@ func buildManualHandlerForTest(ctx context.Context, database *db.Database, cfg *
 	// accepts those kinds; API tests don't exercise the real workers.
 	river.AddWorker(workers, &apiTestCadenceShim{})
 	river.AddWorker(workers, &apiTestFollowUpShim{})
+	river.AddWorker(workers, &apiKnowledgeCacheNoopWorker{})
 
 	client, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
 		Queues: map[string]river.QueueConfig{
@@ -80,6 +82,7 @@ func buildManualHandlerForTest(ctx context.Context, database *db.Database, cfg *
 	// wrapper / UpdateContact cadence-edit) reach the sole writer in
 	// these tests.
 	contactService.SetCadenceUpdater(cadenceUpdater)
+	wireKnowledgeWriterForAPITest(nil, database, bus, contactService)
 	stagingRegistry := repository.NewStagingProcessorRegistry(map[string]repository.StagingProcessor{
 		repository.InteractionSourceTelegram: repository.NewTelegramStagingProcessor(telegramMessageRepo),
 	})
@@ -140,6 +143,64 @@ func wireCadenceUpdaterForAPITest(t *testing.T, database *db.Database, contactSe
 	)
 	contactService.SetCadenceUpdater(cadenceUpdater)
 	return cadenceUpdater
+}
+
+// wireKnowledgeWriterForAPITest wires the location/birthday/how_met authority-flip
+// writer into the contact service. A non-nil bus is reused; a nil bus builds a
+// self-contained insert-only bus so contact-only API tests can still create
+// contacts. Returns the assert service + cache so a caller can also wire an
+// enrichment service against the same instances.
+func wireKnowledgeWriterForAPITest(t *testing.T, database *db.Database, bus *events.Bus, contactService *service.ContactService) (*service.AssertService, *consumer.KnowledgeCacheUpdater) {
+	if t != nil {
+		t.Helper()
+	}
+	assertSvc, cache := buildKnowledgeDepsForAPITest(t, database, bus)
+	contactService.SetKnowledgeWriter(assertSvc, cache)
+	return assertSvc, cache
+}
+
+// buildKnowledgeDepsForAPITest constructs the AssertService + KnowledgeCacheUpdater
+// the authority flip needs (concrete types so a test can wire both the contact +
+// enrichment services). A nil bus builds an insert-only bus with a no-op
+// knowledge_cache_updater worker so river accepts the assertion.* enqueues.
+func buildKnowledgeDepsForAPITest(t *testing.T, database *db.Database, bus *events.Bus) (*service.AssertService, *consumer.KnowledgeCacheUpdater) {
+	if t != nil {
+		t.Helper()
+	}
+	if bus == nil {
+		workers := river.NewWorkers()
+		river.AddWorker(workers, &apiKnowledgeCacheNoopWorker{})
+		client, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
+			Queues:   map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: 1}},
+			Workers:  workers,
+			TestOnly: true,
+		})
+		if err != nil {
+			if t != nil {
+				t.Fatalf("build insert-only assert bus: %v", err)
+			}
+			panic(fmt.Sprintf("build insert-only assert bus: %v", err))
+		}
+		bus = events.NewBus(database.Pool, client, repository.NewEventRepository(database.Queries))
+	}
+	contactRepo := repository.NewContactRepository(database.Queries)
+	nodeRepo := repository.NewNodeRepository(database.Queries)
+	entityRepo := repository.NewEntityRepository(database.Queries)
+	predicateRepo := repository.NewPredicateRepository(database.Queries)
+	assertionRepo := repository.NewAssertionRepository(database.Queries)
+	assertSvc := service.NewAssertService(database.Pool, nodeRepo, entityRepo, predicateRepo, assertionRepo, bus)
+	cache := consumer.NewKnowledgeCacheUpdater(assertionRepo, nodeRepo, contactRepo)
+	return assertSvc, cache
+}
+
+// apiKnowledgeCacheNoopWorker satisfies the knowledge_cache_updater kind for the
+// insert-only assert bus so river accepts the enqueue. It never runs.
+type apiKnowledgeCacheNoopWorker struct {
+	river.WorkerDefaults[consumerjobs.KnowledgeCacheUpdaterJobArgs]
+}
+
+func (*apiKnowledgeCacheNoopWorker) Work(context.Context, *river.Job[consumerjobs.KnowledgeCacheUpdaterJobArgs]) error {
+	return nil
 }
 
 // apiTestRecorderShim defers InteractionRecorderWorker assignment until

@@ -87,6 +87,7 @@ func setupRawIngestEnv(t *testing.T) *ingestRawTestEnv {
 	// on Stage 3 execution.
 	river.AddWorker(workers, &noopAggregateForContactWorker{})
 	river.AddWorker(workers, &noopInteractionRecorderWorker{})
+	river.AddWorker(workers, &apiKnowledgeCacheNoopWorker{})
 	riverClient, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
 		JobTimeout: cfg.River.JobTimeout,
 		Queues: map[string]river.QueueConfig{

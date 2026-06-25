@@ -103,6 +103,7 @@ func setupIngestTestRouter(t *testing.T, enableIngest bool) *ingestTestSetup {
 	// means they never run.
 	river.AddWorker(workers, &apiTestCadenceShim{})
 	river.AddWorker(workers, &apiTestFollowUpShim{})
+	river.AddWorker(workers, &apiKnowledgeCacheNoopWorker{})
 	client, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
 		Queues: map[string]river.QueueConfig{
 			river.QueueDefault: {MaxWorkers: cfg.River.WorkerConcurrency},

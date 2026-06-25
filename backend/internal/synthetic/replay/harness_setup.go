@@ -170,6 +170,11 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 	river.AddWorker(workers, emailShim)
 	river.AddWorker(workers, followUpShim)
 	river.AddWorker(workers, &rematchNoopWorker{})
+	// assertion.accepted/superseded route a knowledge_cache_updater job (the
+	// location/birthday/how_met authority flip); register the kind so a seeded
+	// contact-with-knowledge publish enqueues legally. The cache is filled inline
+	// via ContactService's RefreshTx, so a no-op async worker is sufficient here.
+	river.AddWorker(workers, &knowledgeCacheNoopWorker{})
 
 	client, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
 		Queues: map[string]river.QueueConfig{
@@ -188,6 +193,17 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 	// Cadence updater (cutover) wired into the contact service.
 	cadenceUpdater := consumer.NewCadenceUpdater(claimRepo, contactRepo, database.Queries, consumer.CadenceModeCutover, false)
 	contactService.SetCadenceUpdater(cadenceUpdater)
+
+	// Knowledge writer (location/birthday/how_met authority flip): the contact
+	// service emits lives_in/birthday/how_met assertions through AssertService and
+	// refreshes the derived cache columns inline via KnowledgeCacheUpdater.
+	graphNodeRepo := repository.NewNodeRepository(database.Queries)
+	graphEntityRepo := repository.NewEntityRepository(database.Queries)
+	graphPredicateRepo := repository.NewPredicateRepository(database.Queries)
+	graphAssertionRepo := repository.NewAssertionRepository(database.Queries)
+	assertService := service.NewAssertService(database.Pool, graphNodeRepo, graphEntityRepo, graphPredicateRepo, graphAssertionRepo, bus)
+	knowledgeCache := consumer.NewKnowledgeCacheUpdater(graphAssertionRepo, graphNodeRepo, contactRepo)
+	contactService.SetKnowledgeWriter(assertService, knowledgeCache)
 
 	// Staging registry covers telegram + messages + gchat sources. The gchat
 	// session processor is REQUIRED: without it the InteractionRecorder cannot
@@ -391,5 +407,21 @@ func (*rematchNoopWorker) Work(_ context.Context, _ *river.Job[consumerjobs.Rema
 }
 
 func (*rematchNoopWorker) Timeout(_ *river.Job[consumerjobs.RematchDispatcherJobArgs]) time.Duration {
+	return 30 * time.Second
+}
+
+// knowledgeCacheNoopWorker registers the knowledge_cache_updater kind so the
+// harness's River client accepts the assertion.accepted/superseded enqueues that
+// a seeded contact's location/birthday/how_met assertions produce. The cache is
+// filled inline by ContactService, so the async worker is a no-op here.
+type knowledgeCacheNoopWorker struct {
+	river.WorkerDefaults[consumerjobs.KnowledgeCacheUpdaterJobArgs]
+}
+
+func (*knowledgeCacheNoopWorker) Work(_ context.Context, _ *river.Job[consumerjobs.KnowledgeCacheUpdaterJobArgs]) error {
+	return nil
+}
+
+func (*knowledgeCacheNoopWorker) Timeout(_ *river.Job[consumerjobs.KnowledgeCacheUpdaterJobArgs]) time.Duration {
 	return 30 * time.Second
 }

@@ -55,6 +55,7 @@ func setupDiscoveryEnv(t *testing.T) *discoveryTestEnv {
 
 	contactSvc := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, nil, service.NewRematchService())
 	contactSvc.SetCadenceUpdater(wireCadenceUpdaterForAPITest(t, database, contactSvc))
+	wireKnowledgeWriterForAPITest(t, database, nil, contactSvc)
 
 	svc := service.NewAnarlogDiscoveryService(externalRepo, contactSvc)
 

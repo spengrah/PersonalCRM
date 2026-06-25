@@ -77,6 +77,7 @@ func setupRawMessageE2E(t *testing.T) *rawMessageE2EEnv {
 	contactSvc := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, nil, rematchSvc)
 	cadenceUpdater := consumer.NewCadenceUpdater(claimRepo, contactRepo, database.Queries, consumer.CadenceModeCutover, false)
 	contactSvc.SetCadenceUpdater(cadenceUpdater)
+	wireKnowledgeWriterForAPITest(t, database, nil, contactSvc)
 	macService := service.NewMacHostService(hostRepo, pairingRepo, syncRepo, nil, nil, nil, database.Pool, 4)
 
 	// River client — wires the real MessagingAggregateForContactWorker
@@ -96,6 +97,7 @@ func setupRawMessageE2E(t *testing.T) *rawMessageE2EEnv {
 	// Stage-3 downstream kinds the recorder enqueues. Noop drains.
 	river.AddWorker(workers, &noopCadenceUpdaterWorker{})
 	river.AddWorker(workers, &noopFollowUpManagerWorker{})
+	river.AddWorker(workers, &apiKnowledgeCacheNoopWorker{})
 
 	riverClient, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
 		JobTimeout: cfg.River.JobTimeout,
