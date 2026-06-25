@@ -2,13 +2,11 @@ package handlers
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"strconv"
 	"time"
 
 	"personal-crm/backend/internal/api"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/sync"
@@ -63,7 +61,7 @@ type TriggerSyncRequest struct {
 func (h *SyncHandler) GetSyncStatus(c *gin.Context) {
 	states, err := h.syncService.GetSyncStatus(c.Request.Context())
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to get sync status", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -108,11 +106,7 @@ func (h *SyncHandler) GetSyncState(c *gin.Context) {
 
 	state, err := h.syncService.GetSyncStateBySource(c.Request.Context(), source, accountIDPtr)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendError(c, http.StatusNotFound, api.ErrCodeNotFound, "Sync state not found", "")
-			return
-		}
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to get sync state", err.Error())
+		api.RespondError(c, err, "Sync state")
 		return
 	}
 
@@ -217,11 +211,7 @@ func (h *SyncHandler) EnableSync(c *gin.Context) {
 
 	state, err := h.syncService.EnableSync(c.Request.Context(), id, enabled)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendError(c, http.StatusNotFound, api.ErrCodeNotFound, "Sync state not found", "")
-			return
-		}
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to update sync state", err.Error())
+		api.RespondError(c, err, "Sync state")
 		return
 	}
 
@@ -262,14 +252,14 @@ func (h *SyncHandler) GetSyncLogs(c *gin.Context) {
 
 	logs, err := h.syncService.GetSyncLogs(c.Request.Context(), id, int32(limit), offset)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to get sync logs", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
 	// Get total count for pagination
 	total, err := h.syncService.CountSyncLogs(c.Request.Context(), id)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to count sync logs", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -306,7 +296,7 @@ func (h *SyncHandler) GetRecentSyncLogs(c *gin.Context) {
 
 	logs, err := h.syncService.GetRecentSyncLogs(c.Request.Context(), int32(limit))
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to get sync logs", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
