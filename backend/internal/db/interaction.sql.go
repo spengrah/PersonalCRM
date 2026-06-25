@@ -547,6 +547,57 @@ func (q *Queries) SoftDeleteInteraction(ctx context.Context, id pgtype.UUID) err
 	return err
 }
 
+const TestInsertInteraction = `-- name: TestInsertInteraction :one
+INSERT INTO interaction (id, contact_id, source, source_ref, occurred_at, direction)
+VALUES (
+    $1,
+    $2,
+    $3,
+    $4,
+    $5,
+    $6
+)
+RETURNING id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id
+`
+
+type TestInsertInteractionParams struct {
+	ID         pgtype.UUID        `json:"id"`
+	ContactID  pgtype.UUID        `json:"contact_id"`
+	Source     string             `json:"source"`
+	SourceRef  pgtype.Text        `json:"source_ref"`
+	OccurredAt pgtype.Timestamptz `json:"occurred_at"`
+	Direction  string             `json:"direction"`
+}
+
+// Test-only: inserts an interaction with a caller-supplied id, source, and
+// source_ref and a NULL venue_id, bypassing the recorder. Used by the venue
+// backfill migration test to stand up pre-existing (venue-less) interactions
+// that the 069 backfill then populates. Production code MUST NOT call this.
+func (q *Queries) TestInsertInteraction(ctx context.Context, arg TestInsertInteractionParams) (*Interaction, error) {
+	row := q.db.QueryRow(ctx, TestInsertInteraction,
+		arg.ID,
+		arg.ContactID,
+		arg.Source,
+		arg.SourceRef,
+		arg.OccurredAt,
+		arg.Direction,
+	)
+	var i Interaction
+	err := row.Scan(
+		&i.ID,
+		&i.ContactID,
+		&i.Source,
+		&i.SourceRef,
+		&i.OccurredAt,
+		&i.Description,
+		&i.CreatedAt,
+		&i.DeletedAt,
+		&i.Direction,
+		&i.VenueID,
+	)
+	return &i, err
+}
+
 const UpdateInteractionDirection = `-- name: UpdateInteractionDirection :one
 UPDATE interaction
 SET direction = $1,

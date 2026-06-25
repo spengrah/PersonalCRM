@@ -1900,6 +1900,11 @@ type Querier interface {
 	// Reset test only: a marker row in external_sync_state (a sync-cursor table the
 	// reset wipes so staging cannot re-sync real data).
 	TestInsertExternalSyncStateMarker(ctx context.Context) error
+	// Test-only: inserts an interaction with a caller-supplied id, source, and
+	// source_ref and a NULL venue_id, bypassing the recorder. Used by the venue
+	// backfill migration test to stand up pre-existing (venue-less) interactions
+	// that the 069 backfill then populates. Production code MUST NOT call this.
+	TestInsertInteraction(ctx context.Context, arg TestInsertInteractionParams) (*Interaction, error)
 	// Reset/additive-seed test only: plant ONE queued (non-finalized) river_job so a
 	// test can assert the additive --seed preflight REFUSES while --reset-and-seed
 	// PROCEEDS (it wipes river_job). Minimal valid row: River requires kind, queue,

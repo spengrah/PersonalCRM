@@ -179,6 +179,22 @@ WHERE source = 'anarlog_sessions'
   AND deleted_at IS NULL
 ORDER BY source_ref;
 
+-- name: TestInsertInteraction :one
+-- Test-only: inserts an interaction with a caller-supplied id, source, and
+-- source_ref and a NULL venue_id, bypassing the recorder. Used by the venue
+-- backfill migration test to stand up pre-existing (venue-less) interactions
+-- that the 069 backfill then populates. Production code MUST NOT call this.
+INSERT INTO interaction (id, contact_id, source, source_ref, occurred_at, direction)
+VALUES (
+    sqlc.arg('id'),
+    sqlc.arg('contact_id'),
+    sqlc.arg('source'),
+    sqlc.narg('source_ref'),
+    sqlc.arg('occurred_at'),
+    sqlc.arg('direction')
+)
+RETURNING *;
+
 -- name: AcquireSourceRefAggregateLock :exec
 -- Takes a transaction-scoped advisory lock keyed on an interaction
 -- aggregation source_ref. Used by the email-interaction consumer to

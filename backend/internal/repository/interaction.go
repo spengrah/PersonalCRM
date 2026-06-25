@@ -426,6 +426,26 @@ func (r *InteractionRepository) UpdateInteractionTimestamp(ctx context.Context, 
 	return &interaction, nil
 }
 
+// TestInsertInteraction inserts an interaction with a caller-supplied id and a
+// NULL venue_id, bypassing the recorder. Test-only — used by the venue backfill
+// migration test to stand up pre-existing venue-less interactions. Production
+// code MUST NOT call this.
+func (r *InteractionRepository) TestInsertInteraction(ctx context.Context, id, contactID uuid.UUID, source string, sourceRef *string, occurredAt time.Time, direction string) (*Interaction, error) {
+	dbInteraction, err := r.queries.TestInsertInteraction(ctx, db.TestInsertInteractionParams{
+		ID:         uuidToPgUUID(id),
+		ContactID:  uuidToPgUUID(contactID),
+		Source:     source,
+		SourceRef:  stringToPgText(sourceRef),
+		OccurredAt: pgtype.Timestamptz{Time: occurredAt, Valid: true},
+		Direction:  direction,
+	})
+	if err != nil {
+		return nil, err
+	}
+	interaction := convertDbInteraction(dbInteraction)
+	return &interaction, nil
+}
+
 // CreateInteractionTx creates a new interaction inside the caller's tx.
 // Used by the InteractionRecorder consumer so the insert commits atomically
 // with the interaction.recorded event row (spec §3.4.1).
