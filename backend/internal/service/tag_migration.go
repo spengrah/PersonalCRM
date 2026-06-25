@@ -28,11 +28,12 @@ var ErrTagCaseCollision = errors.New("tag-migration: case-insensitive name colli
 
 // TagMigrationResult is the counts-only summary of a --migrate-tags run.
 type TagMigrationResult struct {
-	Tags               int // legacy tag rows scanned
-	TagNodesCreated    int // tag entity nodes newly created (re-runs reuse existing)
-	TagNodesExisting   int // tag entity nodes already present (idempotent re-run)
-	ContactTags        int // contact_tag rows of non-deleted contacts processed
-	AssertionsAsserted int // tagged_as asserts issued (deduped downstream by AssertService)
+	Tags                   int // legacy tag rows scanned
+	TagNodesCreated        int // tag entity nodes newly created (re-runs reuse existing)
+	TagNodesExisting       int // tag entity nodes already present (idempotent re-run)
+	ContactTags            int // contact_tag rows of non-deleted contacts processed (migrated)
+	SkippedDeletedContacts int // contact_tag rows skipped because their contact is soft-deleted
+	AssertionsAsserted     int // tagged_as asserts issued (deduped downstream by AssertService)
 }
 
 // TagMigrationService mirrors the legacy tag / contact_tag tables into the graph:
@@ -103,6 +104,15 @@ func (s *TagMigrationService) MigrateTags(ctx context.Context) (TagMigrationResu
 		}
 	}
 
+	// Count the contact_tags skipped because their contact is soft-deleted, so the
+	// summary reports the skip explicitly (the migrated count below covers only
+	// non-deleted contacts, which won't match the raw contact_tag table otherwise).
+	skipped, err := s.tagRepo.CountContactTagsWithDeletedContact(ctx)
+	if err != nil {
+		return result, fmt.Errorf("count skipped contact_tags: %w", err)
+	}
+	result.SkippedDeletedContacts = int(skipped)
+
 	// Mirror each contact_tag of a non-deleted contact into a tagged_as assertion.
 	links, err := s.tagRepo.ListContactTagsWithLiveContact(ctx)
 	if err != nil {
@@ -158,6 +168,15 @@ func detectTagCaseCollisions(tags []repository.Tag) error {
 func (s *TagMigrationService) findOrCreateTagNode(ctx context.Context, tag repository.Tag) (uuid.UUID, bool, error) {
 	normalizedName := strings.ToLower(strings.TrimSpace(tag.Name))
 
+	// Find-first idempotency rests on a constraint mismatch worth flagging:
+	// FindEntityBySubtypeName excludes a tag whose node is soft-deleted (it joins
+	// node and filters node.deleted_at), but the entity `(subtype, normalized_name)`
+	// unique index does NOT. There is no tag-node soft-delete path in the graph
+	// today, so this is unreachable; if a future tag-delete feature ever tombstones
+	// a tag node, re-running this migration would find nothing here and then hit a
+	// 23505 on the re-create. That fails LOUDLY (no silent corruption), but a future
+	// tag-delete path must resurrect the existing node (clear deleted_at) instead of
+	// creating a second one.
 	existing, err := s.entityRepo.FindEntityBySubtypeName(ctx, repository.EntitySubtypeTag, normalizedName)
 	if err == nil {
 		return existing.NodeID, false, nil
@@ -213,10 +232,13 @@ func tagDetailJSON(color *string) ([]byte, error) {
 }
 
 // assertTaggedAs issues the accepted tagged_as edge for one contact_tag link. The
-// subject is the contact's person node (node.id == contact.id, guaranteed by the
-// person-node backfill for every non-deleted contact); the object is the tag
-// entity node. User provenance + the contact_tag's created_at as the knowledge
-// time make this a faithful, idempotent mirror of the legacy link.
+// subject is the contact's person node (node.id == contact.id); the
+// person-node backfill creates one for every non-deleted contact, so in normal
+// operation it exists — but if it is missing, AssertService rejects the write
+// loudly (subject-node validation) and the migration aborts rather than skipping
+// silently. The object is the tag entity node. User provenance + the
+// contact_tag's created_at as the knowledge time make this a faithful, idempotent
+// mirror of the legacy link.
 func (s *TagMigrationService) assertTaggedAs(ctx context.Context, link repository.ContactTagLink, tagNodeID uuid.UUID) error {
 	// A deterministic source_id keys the provenance idempotently: a re-run hashes
 	// to the same locator and ON CONFLICT no-ops rather than appending a duplicate.

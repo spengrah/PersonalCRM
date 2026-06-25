@@ -250,8 +250,10 @@ func TestTagMigration_Integration(t *testing.T) {
 
 		h.softDeleteContact(t, ctx, deletedID)
 
-		_, err := h.svc.MigrateTags(ctx)
+		res, err := h.svc.MigrateTags(ctx)
 		require.NoError(t, err)
+		// The skip is surfaced in the summary (global count, so >= our one row).
+		assert.GreaterOrEqual(t, res.SkippedDeletedContacts, 1, "skipped-deleted count must include the deleted contact's tag")
 
 		// The live contact got its tagged_as; the deleted contact got none.
 		liveCount, err := h.support.CountTaggedAsAssertionsForSubject(ctx, liveID)

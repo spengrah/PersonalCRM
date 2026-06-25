@@ -555,7 +555,7 @@ func (f *fakeTagMigrator) MigrateTags(_ context.Context) (service.TagMigrationRe
 func TestRunMigrateTagsHappy(t *testing.T) {
 	deps, stdout, _, _, _, _ := newTestDeps()
 	migrator := &fakeTagMigrator{result: service.TagMigrationResult{
-		Tags: 4, TagNodesCreated: 3, TagNodesExisting: 1, ContactTags: 9, AssertionsAsserted: 9,
+		Tags: 4, TagNodesCreated: 3, TagNodesExisting: 1, ContactTags: 9, SkippedDeletedContacts: 2, AssertionsAsserted: 9,
 	}}
 	deps.migrateTags = migrator
 
@@ -567,10 +567,17 @@ func TestRunMigrateTagsHappy(t *testing.T) {
 		t.Fatalf("expected 1 migrate call, got %d", migrator.calls)
 	}
 	out := stdout.String()
-	for _, want := range []string{"tags:                 4", "tag_nodes_created:    3", "tag_nodes_existing:   1", "contact_tags:         9", "assertions_asserted:  9"} {
+	for _, want := range []string{
+		"tags:", "tag_nodes_created:", "tag_nodes_existing:",
+		"contact_tags_migrated:", "contact_tags_skipped_deleted:", "assertions_asserted:",
+	} {
 		if !strings.Contains(out, want) {
-			t.Fatalf("output missing %q: %s", want, out)
+			t.Fatalf("output missing label %q: %s", want, out)
 		}
+	}
+	// The skipped-soft-deleted count is surfaced explicitly (not silently dropped).
+	if !strings.Contains(out, "contact_tags_skipped_deleted:  2") {
+		t.Fatalf("output missing skipped-deleted count: %s", out)
 	}
 }
 

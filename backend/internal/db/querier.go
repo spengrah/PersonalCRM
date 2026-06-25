@@ -176,6 +176,11 @@ type Querier interface {
 	CountAllUnmatchedExternalContacts(ctx context.Context, includeUnresolvedTelegram bool) (int64, error)
 	CountContactInteractions(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountContactNotes(ctx context.Context, contactID pgtype.UUID) (int64, error)
+	// CountContactTagsWithDeletedContact counts the contact_tag rows the migration
+	// SKIPS because their contact is soft-deleted, so the `--migrate-tags` summary can
+	// report the skip explicitly and the operator isn't misled when the migrated
+	// count doesn't match the raw contact_tag table.
+	CountContactTagsWithDeletedContact(ctx context.Context) (int64, error)
 	CountContactTasksByProvider(ctx context.Context, arg CountContactTasksByProviderParams) (int64, error)
 	CountContacts(ctx context.Context, arg CountContactsParams) (int64, error)
 	CountContactsByNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)

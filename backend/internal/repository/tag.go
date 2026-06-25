@@ -61,6 +61,13 @@ func (r *TagRepository) ListTags(ctx context.Context) ([]Tag, error) {
 	return tags, nil
 }
 
+// CountContactTagsWithDeletedContact counts the contact_tag rows the migration
+// skips because their contact is soft-deleted, so the run summary can report the
+// skip explicitly.
+func (r *TagRepository) CountContactTagsWithDeletedContact(ctx context.Context) (int64, error) {
+	return r.queries.CountContactTagsWithDeletedContact(ctx)
+}
+
 // ListContactTagsWithLiveContact returns every contact_tag whose contact is NOT
 // soft-deleted — the migration source set. Deleted contacts are skipped
 // permanently (the assertion write path rejects a tombstoned subject node).

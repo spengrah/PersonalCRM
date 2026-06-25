@@ -930,12 +930,13 @@ func runMigrateTags(ctx context.Context, deps adminDeps) error {
 		return fmt.Errorf("migrate tags: %w", err)
 	}
 	if _, err := fmt.Fprintf(deps.stdout, "migrate-tags summary:\n"+
-		"  tags:                 %d\n"+
-		"  tag_nodes_created:    %d\n"+
-		"  tag_nodes_existing:   %d\n"+
-		"  contact_tags:         %d\n"+
-		"  assertions_asserted:  %d\n",
-		res.Tags, res.TagNodesCreated, res.TagNodesExisting, res.ContactTags, res.AssertionsAsserted); err != nil {
+		"  tags:                          %d\n"+
+		"  tag_nodes_created:             %d\n"+
+		"  tag_nodes_existing:            %d\n"+
+		"  contact_tags_migrated:         %d\n"+
+		"  contact_tags_skipped_deleted:  %d\n"+
+		"  assertions_asserted:           %d\n",
+		res.Tags, res.TagNodesCreated, res.TagNodesExisting, res.ContactTags, res.SkippedDeletedContacts, res.AssertionsAsserted); err != nil {
 		return fmt.Errorf("write summary: %w", err)
 	}
 	return nil
