@@ -1,0 +1,16 @@
+-- Tag migration into the graph — DATA-ONLY, performed by `crm-admin --migrate-tags`.
+--
+-- This migration is intentionally a NO-OP marker. The real work (mirror each
+-- legacy `tag` row into a `tag` entity node, and each `contact_tag` row of a
+-- NON-deleted contact into an accepted `tagged_as` assertion) must route through
+-- the validated assertion write path (proposition identity, dedup, event
+-- emission), which lives in Go — not a raw INSERT. So the data step is the
+-- operator-run `crm-admin --migrate-tags` subcommand, not this file.
+--
+-- The file exists for version-sequence continuity and to document, at the schema
+-- layer, where the tag→graph cutover happens. The legacy `tag` / `contact_tag`
+-- tables are NOT dropped here: they are retained as a rollback anchor and dropped
+-- in a later migration once the graph mirror is proven in production.
+--
+-- `crm-admin --migrate-tags` is idempotent (it routes through AssertService
+-- proposition identity and find-or-create entity nodes), so it is safe to re-run.

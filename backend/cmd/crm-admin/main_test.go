@@ -538,6 +538,74 @@ func TestRunReconcileMutualExclusion(t *testing.T) {
 	}
 }
 
+type fakeTagMigrator struct {
+	result service.TagMigrationResult
+	err    error
+	calls  int
+}
+
+func (f *fakeTagMigrator) MigrateTags(_ context.Context) (service.TagMigrationResult, error) {
+	f.calls++
+	if f.err != nil {
+		return service.TagMigrationResult{}, f.err
+	}
+	return f.result, nil
+}
+
+func TestRunMigrateTagsHappy(t *testing.T) {
+	deps, stdout, _, _, _, _ := newTestDeps()
+	migrator := &fakeTagMigrator{result: service.TagMigrationResult{
+		Tags: 4, TagNodesCreated: 3, TagNodesExisting: 1, ContactTags: 9, SkippedDeletedContacts: 2, AssertionsAsserted: 9,
+	}}
+	deps.migrateTags = migrator
+
+	err := run(context.Background(), runOptions{migrateTags: true}, deps)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if migrator.calls != 1 {
+		t.Fatalf("expected 1 migrate call, got %d", migrator.calls)
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"tags:", "tag_nodes_created:", "tag_nodes_existing:",
+		"contact_tags_migrated:", "contact_tags_skipped_deleted:", "assertions_asserted:",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing label %q: %s", want, out)
+		}
+	}
+	// The skipped-soft-deleted count is surfaced explicitly (not silently dropped).
+	if !strings.Contains(out, "contact_tags_skipped_deleted:  2") {
+		t.Fatalf("output missing skipped-deleted count: %s", out)
+	}
+}
+
+func TestRunMigrateTagsError(t *testing.T) {
+	deps, _, _, _, _, _ := newTestDeps()
+	deps.migrateTags = &fakeTagMigrator{err: service.ErrTagCaseCollision}
+
+	err := run(context.Background(), runOptions{migrateTags: true}, deps)
+	if err == nil {
+		t.Fatal("expected error when the tag migrator errors (e.g. case collision)")
+	}
+	if !errors.Is(err, service.ErrTagCaseCollision) {
+		t.Fatalf("expected wrapped ErrTagCaseCollision, got %v", err)
+	}
+}
+
+func TestRunMigrateTagsMutualExclusion(t *testing.T) {
+	deps, _, _, _, _, _ := newTestDeps()
+	deps.migrateTags = &fakeTagMigrator{}
+	err := run(context.Background(), runOptions{
+		migrateTags: true,
+		listHosts:   true,
+	}, deps)
+	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("expected mutual-exclusion error, got %v", err)
+	}
+}
+
 func TestRunResetGmailBackfillMutualExclusion(t *testing.T) {
 	deps, _, _, _, _, _ := newTestDeps()
 	err := run(context.Background(), runOptions{
@@ -686,6 +754,15 @@ func TestParseArgsAllFlags(t *testing.T) {
 				}
 				if o.migrate {
 					t.Fatal("--migrate should not be set")
+				}
+			},
+		},
+		{
+			"migrate-tags",
+			[]string{"--migrate-tags"},
+			func(t *testing.T, o runOptions) {
+				if !o.migrateTags {
+					t.Fatal("--migrate-tags not set")
 				}
 			},
 		},

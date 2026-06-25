@@ -1692,6 +1692,90 @@ func (q *Queries) TestCountAllRows(ctx context.Context, tableName string) (int64
 	return column_1, err
 }
 
+const TestCountTaggedAsAssertionsForSubject = `-- name: TestCountTaggedAsAssertionsForSubject :one
+SELECT COUNT(*) FROM assertion
+WHERE subject_node_id = $1
+  AND predicate_key = 'tagged_as'
+  AND status = 'accepted'
+  AND knowledge_to IS NULL
+`
+
+// Tag-migration test only: count the LIVE accepted `tagged_as` assertions whose
+// subject is a given node, so a test asserts exactly one per migrated contact_tag
+// and that an idempotent re-run creates no duplicates.
+func (q *Queries) TestCountTaggedAsAssertionsForSubject(ctx context.Context, subjectNodeID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, TestCountTaggedAsAssertionsForSubject, subjectNodeID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const TestDeleteContactTagsByContactIds = `-- name: TestDeleteContactTagsByContactIds :execrows
+DELETE FROM contact_tag WHERE contact_id = ANY($1::uuid[])
+`
+
+// Tag-migration cleanup: hard-delete the contact_tag rows a test seeded, keyed by
+// the tracked contact ids (scoped to the test's own contacts on the shared DB).
+func (q *Queries) TestDeleteContactTagsByContactIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, TestDeleteContactTagsByContactIds, contactIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const TestDeleteTagsByIds = `-- name: TestDeleteTagsByIds :execrows
+DELETE FROM tag WHERE id = ANY($1::uuid[])
+`
+
+// Tag-migration cleanup: hard-delete the legacy tag rows a test seeded, keyed by
+// the tracked tag ids (scoped to the test's own tags on the shared DB).
+func (q *Queries) TestDeleteTagsByIds(ctx context.Context, tagIds []pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, TestDeleteTagsByIds, tagIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const TestInsertContactTagAtTime = `-- name: TestInsertContactTagAtTime :exec
+INSERT INTO contact_tag (contact_id, tag_id, created_at)
+VALUES ($1, $2, $3)
+`
+
+type TestInsertContactTagAtTimeParams struct {
+	ContactID pgtype.UUID        `json:"contact_id"`
+	TagID     pgtype.UUID        `json:"tag_id"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+// Tag-migration test only: seed a contact_tag row with an explicit created_at so
+// a test can assert the migration preserves it as the assertion's KnowledgeFrom
+// (KnowledgeFromOverride). The (contact_id, tag_id) PK makes re-seeding a no-op
+// under ON CONFLICT (not needed here — tests use fresh ids).
+func (q *Queries) TestInsertContactTagAtTime(ctx context.Context, arg TestInsertContactTagAtTimeParams) error {
+	_, err := q.db.Exec(ctx, TestInsertContactTagAtTime, arg.ContactID, arg.TagID, arg.CreatedAt)
+	return err
+}
+
+const TestInsertContactTagNullCreatedAt = `-- name: TestInsertContactTagNullCreatedAt :exec
+INSERT INTO contact_tag (contact_id, tag_id, created_at)
+VALUES ($1, $2, NULL)
+`
+
+type TestInsertContactTagNullCreatedAtParams struct {
+	ContactID pgtype.UUID `json:"contact_id"`
+	TagID     pgtype.UUID `json:"tag_id"`
+}
+
+// Tag-migration test only: seed a contact_tag row with a NULL created_at (the
+// column is nullable), so a test can assert the migration falls back to "now" for
+// the assertion knowledge time rather than stamping a bogus zero time.
+func (q *Queries) TestInsertContactTagNullCreatedAt(ctx context.Context, arg TestInsertContactTagNullCreatedAtParams) error {
+	_, err := q.db.Exec(ctx, TestInsertContactTagNullCreatedAt, arg.ContactID, arg.TagID)
+	return err
+}
+
 const TestInsertDerivedStorageMarkerNode = `-- name: TestInsertDerivedStorageMarkerNode :exec
 INSERT INTO node (id, type, canonical_label)
 VALUES ('00000000-0000-0000-0000-0000000000d5'::uuid, 'person', 'synthetic-reset-marker')
@@ -1805,6 +1889,25 @@ func (q *Queries) TestInsertRiverJobWithStateForTest(ctx context.Context, arg Te
 		arg.FinalizedAt,
 	)
 	return err
+}
+
+const TestInsertTagForMigration = `-- name: TestInsertTagForMigration :one
+INSERT INTO tag (name, color) VALUES ($1, $2) RETURNING id
+`
+
+type TestInsertTagForMigrationParams struct {
+	Name  string      `json:"name"`
+	Color pgtype.Text `json:"color"`
+}
+
+// Tag-migration test only: seed a legacy tag row with an explicit name + color
+// so a test can run `--migrate-tags` over it and assert the color survives into
+// the tag entity node's detail JSONB. Returns the generated id.
+func (q *Queries) TestInsertTagForMigration(ctx context.Context, arg TestInsertTagForMigrationParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, TestInsertTagForMigration, arg.Name, arg.Color)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const TestInsertTagMarker = `-- name: TestInsertTagMarker :exec

@@ -26,6 +26,24 @@ func (q *Queries) AddContactTag(ctx context.Context, arg AddContactTagParams) er
 	return err
 }
 
+const CountContactTagsWithDeletedContact = `-- name: CountContactTagsWithDeletedContact :one
+SELECT COUNT(*)
+FROM contact_tag ct
+JOIN contact c ON c.id = ct.contact_id
+WHERE c.deleted_at IS NOT NULL
+`
+
+// CountContactTagsWithDeletedContact counts the contact_tag rows the migration
+// SKIPS because their contact is soft-deleted, so the `--migrate-tags` summary can
+// report the skip explicitly and the operator isn't misled when the migrated
+// count doesn't match the raw contact_tag table.
+func (q *Queries) CountContactTagsWithDeletedContact(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, CountContactTagsWithDeletedContact)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const CreateTag = `-- name: CreateTag :one
 INSERT INTO tag (name, color) VALUES ($1, $2) RETURNING id, name, color, created_at
 `
@@ -120,6 +138,39 @@ func (q *Queries) GetTagByName(ctx context.Context, name string) (*Tag, error) {
 		&i.CreatedAt,
 	)
 	return &i, err
+}
+
+const ListContactTagsWithLiveContact = `-- name: ListContactTagsWithLiveContact :many
+SELECT ct.contact_id, ct.tag_id, ct.created_at
+FROM contact_tag ct
+JOIN contact c ON c.id = ct.contact_id
+WHERE c.deleted_at IS NULL
+ORDER BY ct.contact_id ASC, ct.tag_id ASC
+`
+
+// ListContactTagsWithLiveContact returns every contact_tag whose contact is NOT
+// soft-deleted (the `crm-admin --migrate-tags` source set). Deleted contacts are
+// skipped permanently — the assertion write path rejects a tombstoned subject
+// node anyway. Ordered deterministically so the migration processes rows in a
+// stable sequence.
+func (q *Queries) ListContactTagsWithLiveContact(ctx context.Context) ([]*ContactTag, error) {
+	rows, err := q.db.Query(ctx, ListContactTagsWithLiveContact)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ContactTag{}
+	for rows.Next() {
+		var i ContactTag
+		if err := rows.Scan(&i.ContactID, &i.TagID, &i.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const ListTags = `-- name: ListTags :many

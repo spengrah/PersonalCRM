@@ -125,6 +125,21 @@
 //	                              Consumers are idempotent, so retrying an
 //	                              already-side-effected job re-runs into a no-op.
 //
+//	--migrate-tags                Mirror the legacy tag / contact_tag tables into
+//	                              the graph: each tag becomes a `tag` entity node
+//	                              (color carried in the entity's detail JSONB) and
+//	                              each contact_tag of a NON-deleted contact becomes
+//	                              an accepted `tagged_as` assertion authored by the
+//	                              user (knowledge time = contact_tag.created_at).
+//	                              FAILS LOUDLY on a case-insensitive tag-name
+//	                              collision (e.g. "Friend" vs "friend") so the
+//	                              operator dedups the legacy tags first. Idempotent
+//	                              (routes through AssertService proposition
+//	                              identity + find-or-create entity nodes) — safe to
+//	                              re-run. Prints a counts-only summary. The legacy
+//	                              tag / contact_tag tables are NOT dropped (rollback
+//	                              anchor, removed in a later migration).
+//
 // The seed/reset subcommands inherit the process env (CRM_ENV / TIME_BASE /
 // TIME_ACCELERATION / DATABASE_URL / MIGRATIONS_PATH) — on the Pi via
 // `set -a; . /srv/personalcrm/.env; set +a` — so the seeded world's cadence /
@@ -220,6 +235,12 @@ type gmailBackfillCursorResetter interface {
 	ResetGmailBackfillCursors(ctx context.Context) (service.EmailBackfillCursorResetResult, error)
 }
 
+// tagMigrator is the narrow interface --migrate-tags needs. Production wires this
+// to *service.TagMigrationService.MigrateTags.
+type tagMigrator interface {
+	MigrateTags(ctx context.Context) (service.TagMigrationResult, error)
+}
+
 // seedRunner is the narrow interface --seed / --reset-and-seed need. Production
 // wires this to a seedAdapter over the synthetic toolkit. Seed is additive (it
 // runs the non-final-river_job drain preflight); ResetAndSeed hard-wipes the live
@@ -262,9 +283,12 @@ type adminDeps struct {
 	// jobs serves --list-jobs / --retry-job. Wired to the insert-only river
 	// client in buildProductionDeps (JobList/JobRetry go through the driver,
 	// no worker pool needed).
-	jobs   riverJobAdmin
-	stdout io.Writer
-	stderr io.Writer
+	jobs riverJobAdmin
+	// migrateTags serves --migrate-tags (mirror legacy tag/contact_tag into the
+	// graph via AssertService). Wired to a TagMigrationService.
+	migrateTags tagMigrator
+	stdout      io.Writer
+	stderr      io.Writer
 }
 
 // runOptions captures parsed flags. Exposed as a struct so tests can
@@ -303,6 +327,9 @@ type runOptions struct {
 	jobState   string
 	jobLimit   int
 	retryJobID int64
+	// migrateTags ← --migrate-tags (mirror legacy tag/contact_tag into the graph
+	// via the validated assertion write path). Idempotent; counts-only output.
+	migrateTags bool
 }
 
 // exitErr carries an explicit process exit code so a subcommand can drive a
@@ -450,6 +477,9 @@ func validateSubcommand(opts runOptions) error {
 	if opts.retryJobID != 0 {
 		active++
 	}
+	if opts.migrateTags {
+		active++
+	}
 	if active == 0 {
 		return errors.New("no subcommand specified; pass exactly one of " +
 			subcommandList)
@@ -466,7 +496,7 @@ func validateSubcommand(opts runOptions) error {
 const subcommandList = "--messages-rematch-stranded, --reconcile-address-book-methods, " +
 	"--rederive-correspondence-names, --reset-gmail-backfill-cursors, --mint-pairing-token, " +
 	"--list-hosts, --revoke-host <uuid>, --rotate-host-key <uuid>, --seed, --reset-and-seed, " +
-	"--migrate, --migrate-check, --list-jobs, --retry-job <id>"
+	"--migrate, --migrate-check, --list-jobs, --retry-job <id>, --migrate-tags"
 
 // parseArgs uses a private FlagSet so tests can drive the parser
 // without polluting flag's global state.
@@ -539,6 +569,10 @@ func parseArgs(args []string) (runOptions, error) {
 	fs.Int64Var(&opts.retryJobID, "retry-job", 0,
 		"Make a single River job (by numeric id from --list-jobs) available to run again. "+
 			"On an exhausted job River bumps max_attempts. Safe with crm-api running.")
+	fs.BoolVar(&opts.migrateTags, "migrate-tags", false,
+		"Mirror the legacy tag/contact_tag tables into the graph (tag entity nodes + accepted "+
+			"tagged_as assertions for non-deleted contacts). FAILS LOUDLY on a case-insensitive "+
+			"tag-name collision. Idempotent; counts-only output. Legacy tables retained.")
 	if err := fs.Parse(args); err != nil {
 		return runOptions{}, err
 	}
@@ -642,6 +676,8 @@ func run(ctx context.Context, opts runOptions, deps adminDeps) error {
 		return runListJobs(ctx, opts, deps)
 	case opts.retryJobID != 0:
 		return runRetryJob(ctx, opts, deps)
+	case opts.migrateTags:
+		return runMigrateTags(ctx, deps)
 	case opts.migrate, opts.migrateCheck:
 		// Migration subcommands are dispatched PRE-DB in runMain (they need
 		// only the database URL + migrations path, not deps), so they never
@@ -879,6 +915,28 @@ func runRematchStranded(ctx context.Context, deps adminDeps) error {
 		"  enqueued:       %d\n"+
 		"  errors:         %d\n",
 		res.Scanned, res.Matched, res.StillStranded, res.Enqueued, res.Errors); err != nil {
+		return fmt.Errorf("write summary: %w", err)
+	}
+	return nil
+}
+
+// runMigrateTags mirrors the legacy tag / contact_tag tables into the graph and
+// prints a counts-only summary. Returns a non-nil error on a case-insensitive
+// tag-name collision (nothing is written) so the operator dedups the legacy tags
+// and re-runs; otherwise the run is idempotent.
+func runMigrateTags(ctx context.Context, deps adminDeps) error {
+	res, err := deps.migrateTags.MigrateTags(ctx)
+	if err != nil {
+		return fmt.Errorf("migrate tags: %w", err)
+	}
+	if _, err := fmt.Fprintf(deps.stdout, "migrate-tags summary:\n"+
+		"  tags:                          %d\n"+
+		"  tag_nodes_created:             %d\n"+
+		"  tag_nodes_existing:            %d\n"+
+		"  contact_tags_migrated:         %d\n"+
+		"  contact_tags_skipped_deleted:  %d\n"+
+		"  assertions_asserted:           %d\n",
+		res.Tags, res.TagNodesCreated, res.TagNodesExisting, res.ContactTags, res.SkippedDeletedContacts, res.AssertionsAsserted); err != nil {
 		return fmt.Errorf("write summary: %w", err)
 	}
 	return nil
@@ -1174,6 +1232,21 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 		enrichmentService, contactRepo, contactMethodRepo, externalContactRepo,
 	)
 
+	// Tag→graph migration. Reuses the same event bus (so the tagged_as asserts
+	// emit assertion.* events) + the graph repos. AssertService owns proposition
+	// identity / dedup, which makes --migrate-tags idempotent.
+	graphNodeRepo := repository.NewNodeRepository(database.Queries)
+	graphEntityRepo := repository.NewEntityRepository(database.Queries)
+	graphPredicateRepo := repository.NewPredicateRepository(database.Queries)
+	graphAssertionRepo := repository.NewAssertionRepository(database.Queries)
+	assertService := service.NewAssertService(
+		database.Pool, graphNodeRepo, graphEntityRepo, graphPredicateRepo, graphAssertionRepo, eventBus,
+	)
+	tagMigration := service.NewTagMigrationService(
+		database.Pool, repository.NewTagRepository(database.Queries),
+		graphNodeRepo, graphEntityRepo, assertService,
+	)
+
 	deps := adminDeps{
 		tokens:     hostService,
 		hosts:      hostService,
@@ -1187,7 +1260,8 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 		},
 		// --list-jobs / --retry-job: the insert-only river client also satisfies
 		// JobList / JobRetry (both go through the driver, no worker pool needed).
-		jobs: riverClient,
+		jobs:        riverClient,
+		migrateTags: tagMigration,
 	}
 
 	// LAZY: build the correspondence re-derivation stack ONLY for
