@@ -1738,6 +1738,25 @@ func (q *Queries) TestDeleteTagsByIds(ctx context.Context, tagIds []pgtype.UUID)
 	return result.RowsAffected(), nil
 }
 
+const TestInsertContactAtID = `-- name: TestInsertContactAtID :exec
+INSERT INTO contact (id, full_name) VALUES ($1, $2)
+`
+
+type TestInsertContactAtIDParams struct {
+	ID       pgtype.UUID `json:"id"`
+	FullName string      `json:"full_name"`
+}
+
+// Latent-person promotion test support: insert a contact row AT a caller-supplied
+// id (node.id == contact.id), so a test can promote a latent person node (created
+// by EnsureLatentPerson) into a real contact at the node's id. Production
+// CreateContact generates its own id; the import/promotion pipeline that supplies
+// one is deferred per spec, so this is the test-only mechanic.
+func (q *Queries) TestInsertContactAtID(ctx context.Context, arg TestInsertContactAtIDParams) error {
+	_, err := q.db.Exec(ctx, TestInsertContactAtID, arg.ID, arg.FullName)
+	return err
+}
+
 const TestInsertContactTagAtTime = `-- name: TestInsertContactTagAtTime :exec
 INSERT INTO contact_tag (contact_id, tag_id, created_at)
 VALUES ($1, $2, $3)

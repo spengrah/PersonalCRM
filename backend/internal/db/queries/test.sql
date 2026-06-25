@@ -605,6 +605,14 @@ SELECT COUNT(*) FROM node WHERE id = ANY(@node_ids::uuid[]) AND type = 'venue';
 -- self-FK, so a single multi-row DELETE clears a closed-pair set in one shot.
 DELETE FROM assertion WHERE subject_node_id = $1 OR object_node_id = $1;
 
+-- name: TestInsertContactAtID :exec
+-- Latent-person promotion test support: insert a contact row AT a caller-supplied
+-- id (node.id == contact.id), so a test can promote a latent person node (created
+-- by EnsureLatentPerson) into a real contact at the node's id. Production
+-- CreateContact generates its own id; the import/promotion pipeline that supplies
+-- one is deferred per spec, so this is the test-only mechanic.
+INSERT INTO contact (id, full_name) VALUES ($1, $2);
+
 -- name: SyntheticDeleteEntityTypesByKeyPrefix :execrows
 -- Graph identity cleanup: entity_type is a catalog table with no canonical_label,
 -- so a test that seeds its own ns-prefixed entity_type rows clears them by key

@@ -762,6 +762,17 @@ func (r *SyntheticSupportRepository) DeleteAssertionsForNode(ctx context.Context
 	return r.queries.SyntheticDeleteAssertionsForNode(ctx, pgtype.UUID{Bytes: nodeID, Valid: true})
 }
 
+// InsertContactAtID inserts a contact row AT a caller-supplied id (node.id ==
+// contact.id), so a latent-person promotion test can turn a latent person node
+// into a real contact at the node's id. The production import/promotion pipeline
+// that supplies the id is deferred per spec; this is the test-only mechanic.
+func (r *SyntheticSupportRepository) InsertContactAtID(ctx context.Context, id uuid.UUID, fullName string) error {
+	return r.queries.TestInsertContactAtID(ctx, db.TestInsertContactAtIDParams{
+		ID:       pgtype.UUID{Bytes: id, Valid: true},
+		FullName: fullName,
+	})
+}
+
 // InsertTagForMigration seeds a legacy tag row with an explicit name + color (a
 // nil color round-trips as SQL NULL), returning the generated id, so a
 // --migrate-tags test can assert the color survives into the tag entity node's

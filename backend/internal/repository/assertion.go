@@ -523,6 +523,18 @@ func (r *AssertionRepository) ListAssertionsBySubject(ctx context.Context, subje
 	return dbAssertionsToDomain(rows), nil
 }
 
+// ListAssertionsTouchingNodeTx returns all assertions touching a node in either
+// position (subject OR object), any status, oldest first. The node-merge
+// procedure uses it to find every loser-referencing row to re-point onto the
+// winner. Tx-bound so it sees rows the same merge tx wrote earlier.
+func (r *AssertionRepository) ListAssertionsTouchingNodeTx(ctx context.Context, tx pgx.Tx, nodeID uuid.UUID) ([]Assertion, error) {
+	rows, err := db.New(tx).ListAssertionsTouchingNode(ctx, uuidToPgUUID(nodeID))
+	if err != nil {
+		return nil, err
+	}
+	return dbAssertionsToDomain(rows), nil
+}
+
 // ListLiveEdgesForNode returns live edges of a predicate touching a node in
 // either orientation (the symmetric two-direction read).
 func (r *AssertionRepository) ListLiveEdgesForNode(ctx context.Context, nodeID uuid.UUID, predicateKey string) ([]Assertion, error) {

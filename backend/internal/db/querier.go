@@ -740,6 +740,8 @@ type Querier interface {
 	// needing all live rows use ListLiveEdgesForNode / ListAssertionsBySubject). All
 	// params are named (the now arg appears twice; mixing positional + named is
 	// disallowed by sqlc, so the whole query uses sqlc.arg()).
+	// A soft-deleted subject node (or, for an edge, a soft-deleted object node) drops
+	// from this live read — a merged-away or deleted contact has no current value.
 	GetCurrentAccepted(ctx context.Context, arg GetCurrentAcceptedParams) (*Assertion, error)
 	GetEmbedding(ctx context.Context, arg GetEmbeddingParams) (*Embedding, error)
 	GetEnrichmentByField(ctx context.Context, arg GetEnrichmentByFieldParams) (*ContactEnrichment, error)
@@ -1047,6 +1049,11 @@ type Querier interface {
 	// All assertions for a subject node (any status), newest first — the review /
 	// history surface.
 	ListAssertionsBySubject(ctx context.Context, subjectNodeID pgtype.UUID) ([]*Assertion, error)
+	// All assertions touching a node in EITHER position (subject OR object), any
+	// status, oldest first — the node-merge re-point scan. The merge procedure
+	// rewrites loser→winner on each row; oldest-first is a stable, deterministic
+	// order so the live-row collision/supersession steps run reproducibly.
+	ListAssertionsTouchingNode(ctx context.Context, subjectNodeID pgtype.UUID) ([]*Assertion, error)
 	// Returns the deduplicated canonicalized value set for the given
 	// contact_method types, scoped to non-deleted contacts. Ordered
 	// alphabetically by value_normalized for deterministic daemon-side diff.
@@ -1191,9 +1198,12 @@ type Querier interface {
 	// telegram / gcal_attendee / anarlog_* are out of scope (their own
 	// match/enrich flows). ORDER BY ec.id keeps the catchup deterministic.
 	ListLinkedAddressBookExternalContactsForReconcile(ctx context.Context, sources []string) ([]*ListLinkedAddressBookExternalContactsForReconcileRow, error)
-	// Live edges of a predicate touching a node in EITHER orientation (the symmetric
-	// two-direction read): a node may be subject or object of a stored edge. Returns
-	// proposed + accepted, knowledge-open rows.
+	// Live edges (or facts) of a predicate touching a node in EITHER orientation (the
+	// symmetric two-direction read): a node may be subject or object of a stored edge.
+	// Returns proposed + accepted, knowledge-open rows. A live row requires its
+	// subject node live AND — for an edge (object_node_id set) — its object node live,
+	// so a soft-deleted (merged-away or deleted) endpoint drops the row. A fact
+	// (object_node_id NULL) is gated on the subject only.
 	ListLiveEdgesForNode(ctx context.Context, arg ListLiveEdgesForNodeParams) ([]*Assertion, error)
 	ListMacHosts(ctx context.Context) ([]*MacHost, error)
 	// List all managed tasks for a provider (for reconciliation)
@@ -1951,6 +1961,12 @@ type Querier interface {
 	// the venue backfill test to seed an email/gchat thread container row.
 	// Production code MUST NOT call this.
 	TestInsertCommsMessageLinked(ctx context.Context, arg TestInsertCommsMessageLinkedParams) (*CommsMessage, error)
+	// Latent-person promotion test support: insert a contact row AT a caller-supplied
+	// id (node.id == contact.id), so a test can promote a latent person node (created
+	// by EnsureLatentPerson) into a real contact at the node's id. Production
+	// CreateContact generates its own id; the import/promotion pipeline that supplies
+	// one is deferred per spec, so this is the test-only mechanic.
+	TestInsertContactAtID(ctx context.Context, arg TestInsertContactAtIDParams) error
 	// Tag-migration test only: seed a contact_tag row with an explicit created_at so
 	// a test can assert the migration preserves it as the assertion's KnowledgeFrom
 	// (KnowledgeFromOverride). The (contact_id, tag_id) PK makes re-seeding a no-op

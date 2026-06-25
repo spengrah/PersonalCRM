@@ -543,13 +543,37 @@ func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req re
 	return contact, jobID, nil
 }
 
-func (s *ContactService) DeleteContact(ctx context.Context, id uuid.UUID) error {
-	_, err := s.contactRepo.GetContact(ctx, id)
-	if err != nil {
+// DeleteContact soft-deletes a contact and propagates the tombstone to its
+// person node (node.id == contact.id), so graph reads — which filter
+// node.deleted_at IS NULL — drop the contact's assertions from live results
+// while retaining them in the table. The two soft-deletes commit atomically.
+func (s *ContactService) DeleteContact(ctx context.Context, id uuid.UUID) (err error) {
+	if _, err := s.contactRepo.GetContact(ctx, id); err != nil {
 		return err
 	}
 
-	return s.contactRepo.SoftDeleteContact(ctx, id)
+	tx, err := s.database.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if rb := tx.Rollback(ctx); rb != nil && !errors.Is(rb, pgx.ErrTxClosed) && err == nil {
+			err = rb
+		}
+	}()
+
+	if err = s.contactRepo.SoftDeleteContactTx(ctx, tx, id); err != nil {
+		return fmt.Errorf("soft delete contact: %w", err)
+	}
+	// node.id == contact.id; soft-delete the person node so its assertions drop
+	// from live graph reads. SoftDeleteNodeTx re-derives its querier from tx, so
+	// the base-queries repo is fine here. Idempotent if the node is already
+	// tombstoned (a merged-away source, say).
+	nodeRepo := repository.NewNodeRepository(s.database.Queries)
+	if err = nodeRepo.SoftDeleteNodeTx(ctx, tx, id); err != nil {
+		return fmt.Errorf("soft delete person node: %w", err)
+	}
+	return tx.Commit(ctx)
 }
 
 // RecordInteraction creates an interaction record and updates contact fields based on direction.
@@ -1413,11 +1437,26 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 	// Keep the target's person node label synced with the merged name
 	// (node.id == contact.id). The UpdateContact above always writes full_name
 	// in this same tx, so sync the node UNCONDITIONALLY to avoid divergence.
-	// The source contact's node tombstoning is a later soft-delete-propagation
-	// concern.
 	nodeRepo := repository.NewNodeRepository(txQueries)
 	if err := nodeRepo.UpdateNodeCanonicalLabelTx(ctx, tx, req.TargetContactID, updateReq.FullName); err != nil {
 		return nil, fmt.Errorf("sync target person node label: %w", err)
+	}
+
+	if s.knowledge == nil {
+		return nil, errors.New("merge contacts: knowledge writer not wired (call SetKnowledgeWriter)")
+	}
+
+	// 9-graph. Graph merge FIRST: tombstone the source person node
+	// (merged_into=target, deleted_at=now) and re-point every assertion touching
+	// the source onto the target node (D9). This migrates the source contact's OWN
+	// knowledge edges/facts onto the survivor. It runs BEFORE the field-selection
+	// apply below so the user's per-field merge choice is the LAST writer and wins:
+	// a re-pointed source value can supersede the target's prior, but the chosen
+	// value (asserted next) then supersedes it in turn, and the inline cache
+	// refresh reflects the final state. Where the user kept the target's value the
+	// re-pointed same-value source row collapses via proposition identity.
+	if err := s.knowledge.mergeNodes(ctx, tx, req.SourceContactID, req.TargetContactID); err != nil {
+		return nil, fmt.Errorf("merge source node into target: %w", err)
 	}
 
 	// Authority flip: the merged profile's location/birthday/how_met (target-or-
@@ -1425,12 +1464,6 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 	// then the cache columns refresh inline. updateReq carries the chosen values;
 	// targetContact carries the pre-merge values, so the diff drives
 	// supersession (a source-preferred field) vs corroboration (target kept).
-	// Re-pointing the SOURCE contact's own assertions onto the target node is a
-	// separate graph-merge concern (the node-merge procedure), not this column
-	// cutover — so the source's knowledge edges are not touched here.
-	if s.knowledge == nil {
-		return nil, errors.New("merge contacts: knowledge writer not wired (call SetKnowledgeWriter)")
-	}
 	if err := s.knowledge.applyUpdate(ctx, tx, req.TargetContactID,
 		knowledgeFieldValues{Location: updateReq.Location, Birthday: updateReq.Birthday, HowMet: updateReq.HowMet},
 		knowledgeFieldValues{Location: targetContact.Location, Birthday: targetContact.Birthday, HowMet: targetContact.HowMet},

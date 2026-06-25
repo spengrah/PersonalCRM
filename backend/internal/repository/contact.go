@@ -595,6 +595,13 @@ func (r *ContactRepository) SoftDeleteContact(ctx context.Context, id uuid.UUID)
 	return r.queries.SoftDeleteContact(ctx, uuidToPgUUID(id))
 }
 
+// SoftDeleteContactTx is the tx-bound variant of SoftDeleteContact. The service
+// soft-delete path uses it so the contact soft-delete and the person-node
+// deleted_at propagation (node.id == contact.id) commit atomically.
+func (r *ContactRepository) SoftDeleteContactTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
+	return db.New(tx).SoftDeleteContact(ctx, uuidToPgUUID(id))
+}
+
 // HardDeleteContact permanently deletes a contact
 func (r *ContactRepository) HardDeleteContact(ctx context.Context, id uuid.UUID) error {
 	return r.queries.HardDeleteContact(ctx, uuidToPgUUID(id))

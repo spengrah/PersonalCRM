@@ -144,14 +144,19 @@ WHERE id = $1;
 -- needing all live rows use ListLiveEdgesForNode / ListAssertionsBySubject). All
 -- params are named (the now arg appears twice; mixing positional + named is
 -- disallowed by sqlc, so the whole query uses sqlc.arg()).
-SELECT * FROM assertion
-WHERE subject_node_id = sqlc.arg(subject_node_id)
-  AND predicate_key = sqlc.arg(predicate_key)
-  AND status = 'accepted'
-  AND knowledge_to IS NULL
-  AND (valid_from IS NULL OR valid_from <= sqlc.arg(now))
-  AND (valid_to IS NULL OR valid_to > sqlc.arg(now))
-ORDER BY created_at
+-- A soft-deleted subject node (or, for an edge, a soft-deleted object node) drops
+-- from this live read — a merged-away or deleted contact has no current value.
+SELECT a.* FROM assertion a
+JOIN node sn ON sn.id = a.subject_node_id AND sn.deleted_at IS NULL
+LEFT JOIN node ob ON ob.id = a.object_node_id
+WHERE a.subject_node_id = sqlc.arg(subject_node_id)
+  AND a.predicate_key = sqlc.arg(predicate_key)
+  AND a.status = 'accepted'
+  AND a.knowledge_to IS NULL
+  AND (a.object_node_id IS NULL OR ob.deleted_at IS NULL)
+  AND (a.valid_from IS NULL OR a.valid_from <= sqlc.arg(now))
+  AND (a.valid_to IS NULL OR a.valid_to > sqlc.arg(now))
+ORDER BY a.created_at
 LIMIT 1;
 
 -- name: ListAssertionsBySubject :many
@@ -161,16 +166,31 @@ SELECT * FROM assertion
 WHERE subject_node_id = $1
 ORDER BY created_at DESC;
 
--- name: ListLiveEdgesForNode :many
--- Live edges of a predicate touching a node in EITHER orientation (the symmetric
--- two-direction read): a node may be subject or object of a stored edge. Returns
--- proposed + accepted, knowledge-open rows.
+-- name: ListAssertionsTouchingNode :many
+-- All assertions touching a node in EITHER position (subject OR object), any
+-- status, oldest first — the node-merge re-point scan. The merge procedure
+-- rewrites loser→winner on each row; oldest-first is a stable, deterministic
+-- order so the live-row collision/supersession steps run reproducibly.
 SELECT * FROM assertion
-WHERE predicate_key = $2
-  AND (subject_node_id = $1 OR object_node_id = $1)
-  AND status IN ('proposed', 'accepted')
-  AND knowledge_to IS NULL
-ORDER BY created_at;
+WHERE subject_node_id = $1 OR object_node_id = $1
+ORDER BY created_at, id;
+
+-- name: ListLiveEdgesForNode :many
+-- Live edges (or facts) of a predicate touching a node in EITHER orientation (the
+-- symmetric two-direction read): a node may be subject or object of a stored edge.
+-- Returns proposed + accepted, knowledge-open rows. A live row requires its
+-- subject node live AND — for an edge (object_node_id set) — its object node live,
+-- so a soft-deleted (merged-away or deleted) endpoint drops the row. A fact
+-- (object_node_id NULL) is gated on the subject only.
+SELECT a.* FROM assertion a
+JOIN node sn ON sn.id = a.subject_node_id AND sn.deleted_at IS NULL
+LEFT JOIN node ob ON ob.id = a.object_node_id
+WHERE a.predicate_key = $2
+  AND (a.subject_node_id = $1 OR a.object_node_id = $1)
+  AND (a.object_node_id IS NULL OR ob.deleted_at IS NULL)
+  AND a.status IN ('proposed', 'accepted')
+  AND a.knowledge_to IS NULL
+ORDER BY a.created_at;
 
 -- name: RepointAssertionSubject :exec
 -- Merge primitive (a later layer): repoint a loser assertion's subject to the
