@@ -186,6 +186,7 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/config"
+	"personal-crm/backend/internal/consumer"
 	"personal-crm/backend/internal/consumer/consumerjobs"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
@@ -1228,6 +1229,11 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 	// owns dispatcher execution (it re-fetches the event and runs the
 	// real handlers).
 	river.AddWorker(workers, &noopRematchDispatcherWorker{})
+	// AssertService.Assert (used by --migrate-tags + --migrate-contact-knowledge-
+	// columns) publishes assertion.accepted/superseded, which now enqueue a
+	// knowledge_cache_updater job — register the kind so the insert-only client
+	// accepts it (the cache refresh runs in the crm-api worker, not here).
+	river.AddWorker(workers, &noopKnowledgeCacheWorker{})
 	riverClient, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
 		JobTimeout: cfg.River.JobTimeout,
 		Queues: map[string]river.QueueConfig{
@@ -1298,6 +1304,12 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 	assertService := service.NewAssertService(
 		database.Pool, graphNodeRepo, graphEntityRepo, graphPredicateRepo, graphAssertionRepo, eventBus,
 	)
+	// Wire the knowledge writer into EnrichmentService so the address-book
+	// reconcile path (--reconcile-address-book-methods → EnrichContactFromExternal)
+	// persists an inferred location/birthday through the assertion store + refreshes
+	// the cache inline, instead of erroring on the now-required knowledge writer.
+	knowledgeCacheUpdater := consumer.NewKnowledgeCacheUpdater(graphAssertionRepo, graphNodeRepo, contactRepo)
+	enrichmentService.SetKnowledgeWriter(assertService, knowledgeCacheUpdater)
 	tagMigration := service.NewTagMigrationService(
 		database.Pool, repository.NewTagRepository(database.Queries),
 		graphNodeRepo, graphEntityRepo, assertService,
@@ -1463,6 +1475,19 @@ type noopRematchDispatcherWorker struct {
 }
 
 func (w *noopRematchDispatcherWorker) Work(_ context.Context, _ *river.Job[consumerjobs.RematchDispatcherJobArgs]) error {
+	return nil
+}
+
+// noopKnowledgeCacheWorker registers the knowledge_cache_updater kind so the
+// insert-only admin River client accepts the enqueue that AssertService.Assert
+// produces (assertion.accepted/superseded route a KnowledgeCacheUpdater job).
+// --migrate-contact-knowledge-columns + --migrate-tags publish those events;
+// the cache refresh itself runs in the always-on crm-api worker. Body is a no-op.
+type noopKnowledgeCacheWorker struct {
+	river.WorkerDefaults[consumerjobs.KnowledgeCacheUpdaterJobArgs]
+}
+
+func (w *noopKnowledgeCacheWorker) Work(_ context.Context, _ *river.Job[consumerjobs.KnowledgeCacheUpdaterJobArgs]) error {
 	return nil
 }
 
