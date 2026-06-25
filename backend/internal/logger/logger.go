@@ -65,6 +65,18 @@ func Get() *zerolog.Logger {
 	return &log
 }
 
+// SetOutput swaps the global logger's writer (preserving level) and returns a restore
+// func that puts the previous logger back. TEST-ONLY: the global logger is process-global
+// mutable state, so any test using SetOutput MUST run serially (no t.Parallel) and MUST
+// `defer restore()` to avoid cross-test interleaving.
+func SetOutput(w io.Writer) (restore func()) {
+	prev := log
+	log = log.Output(w)
+	return func() {
+		log = prev
+	}
+}
+
 // Debug returns a debug level event
 func Debug() *zerolog.Event {
 	return log.Debug()
