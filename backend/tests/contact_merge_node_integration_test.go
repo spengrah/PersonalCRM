@@ -193,6 +193,38 @@ func TestContactMergeNode_Integration(t *testing.T) {
 		assert.Equal(t, gen.Prefix()+"NYC", *merged.Location, "kept target location is current after merge")
 	})
 
+	// Case 1b: target has NO location, source HAS one → the merged contact INHERITS
+	// the source's location (D9 migrates the loser's knowledge onto the survivor;
+	// field-selection governs CONFLICTING values, not gap-filling an empty target).
+	// The cache column reflects the inherited value (store/cache consistency).
+	t.Run("1b empty target inherits source knowledge (gap-fill)", func(t *testing.T) {
+		t.Parallel()
+		h := newMergeNodeHarness(t, ctx)
+		gen, _ := migrationGenerator(t)
+
+		winner, _, err := h.contactSvc.CreateContact(ctx, repository.CreateContactRequest{
+			FullName: gen.Prefix() + "winner-noloc",
+		}, nil)
+		require.NoError(t, err)
+		h.track(winner.ID)
+		loser := h.createContactWithLocation(t, ctx, gen.Prefix()+"loser", gen.Prefix()+"Denver")
+
+		_, err = h.contactSvc.MergeContacts(ctx, service.MergeContactsRequest{
+			SourceContactID: loser.ID,
+			TargetContactID: winner.ID,
+		})
+		require.NoError(t, err)
+
+		// The winner now has the source's lives_in (one live edge) + cache column.
+		edges, err := h.assertionRepo.ListLiveEdgesForNode(ctx, winner.ID, repository.PredicateLivesIn)
+		require.NoError(t, err)
+		assert.Len(t, edges, 1, "merged contact inherits the source lives_in edge")
+		merged, err := h.contactRepo.GetContact(ctx, winner.ID)
+		require.NoError(t, err)
+		require.NotNil(t, merged.Location, "empty target inherits source location")
+		assert.Equal(t, gen.Prefix()+"Denver", *merged.Location)
+	})
+
 	// Case 2: merge two contacts with the SAME lives_in value (collision) →
 	// provenance merged onto the winner's assertion, loser row closed superseded,
 	// exactly one live row, no 23505.
@@ -296,6 +328,22 @@ func mergeAssertionsInTx(t *testing.T, ctx context.Context, h *assertHarness, lo
 		return h.svc.MergeAssertionsTx(ctx, tx, loser, winner)
 	})
 	require.NoError(t, err)
+}
+
+// liveEdgesToObject returns the live edges of a predicate from subject pointing at
+// a specific object node (a node may have several live edges of one predicate; this
+// scopes to one object so a same-value widen assertion targets the right row).
+func liveEdgesToObject(t *testing.T, ctx context.Context, h *assertHarness, subject uuid.UUID, predicate string, object uuid.UUID) []repository.Assertion {
+	t.Helper()
+	all, err := h.assertionRepo.ListLiveEdgesForNode(ctx, subject, predicate)
+	require.NoError(t, err)
+	var out []repository.Assertion
+	for _, e := range all {
+		if e.SubjectNodeID == subject && e.ObjectNodeID != nil && *e.ObjectNodeID == object {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // TestMergeAssertions_Integration exercises MergeAssertionsTx directly (the graph
@@ -536,6 +584,73 @@ func TestMergeAssertions_Integration(t *testing.T) {
 		closed, err := h.assertionRepo.GetAssertion(ctx, edge.ID)
 		require.NoError(t, err)
 		assert.Equal(t, repository.AssertionStatusSuperseded, closed.Status, "future-dated self-loop closed")
+	})
+
+	// Case 11: a same-value widen during merge must NOT extend past the survivor's
+	// (or an absorbed row's) pending-future-successor bound, or the survivor and that
+	// successor would BOTH be current once the successor's date passes.
+	t.Run("11 widen caps at a pending-successor bound", func(t *testing.T) {
+		t.Parallel()
+		h, _ := newAssertHarness(t, ctx0())
+		gen, _ := migrationGenerator(t)
+
+		loser := h.seedPerson(t, ctx, gen.Prefix(), "loser")
+		winner := h.seedPerson(t, ctx, gen.Prefix(), "winner")
+		nyc := h.seedPlace(t, ctx, gen.Prefix(), "nyc")
+		la := h.seedPlace(t, ctx, gen.Prefix(), "la")
+
+		// Winner: lives_in(NYC) from 2022, then a FUTURE lives_in(LA) → NYC is bounded
+		// (valid_to=+3w, superseded_by=LA) but stays accepted; LA is future-accepted.
+		// (An explicit 2022 start, not open, keeps the post-merge union start defined.)
+		winnerNYCReq := edgeReq(winner, nyc, "lives_in", gen.Prefix(), "w-nyc")
+		from2022 := time.Date(2022, 1, 1, 0, 0, 0, 0, time.UTC)
+		winnerNYCReq.ValidFrom = &from2022
+		winnerNYC, err := h.svc.Assert(ctx, winnerNYCReq)
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, winnerNYC.ID)
+		future := accelerated.GetCurrentTime().UTC().Add(3 * 7 * 24 * time.Hour)
+		laReq := edgeReq(winner, la, "lives_in", gen.Prefix(), "w-la")
+		laReq.ValidFrom = &future
+		winnerLA, err := h.svc.Assert(ctx, laReq)
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, winnerLA.ID)
+
+		boundedNYC, err := h.assertionRepo.GetAssertion(ctx, winnerNYC.ID)
+		require.NoError(t, err)
+		require.NotNil(t, boundedNYC.SupersededBy, "winner NYC bounded by pending LA")
+		require.NotNil(t, boundedNYC.ValidTo)
+
+		// Loser: lives_in(NYC) in an EARLIER year bucket (so no proposition_key
+		// collision with the winner's NYC; it is the same fact in another bucket).
+		past := time.Date(2018, 1, 1, 0, 0, 0, 0, time.UTC)
+		loserReq := edgeReq(loser, nyc, "lives_in", gen.Prefix(), "l-nyc")
+		loserReq.ValidFrom = &past
+		loserNYC, err := h.svc.Assert(ctx, loserReq)
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, loserNYC.ID)
+
+		mergeAssertionsInTx(t, ctx, h, loser, winner)
+
+		// Exactly ONE live NYC edge survives on the winner (the absorbed winner-NYC is
+		// closed). The survivor is widened backward to cover 2018 but its valid_to is
+		// NOT extended past the pending-LA bound, and it INHERITS the superseded_by
+		// linkage so the rollover terminalizes it when LA's date arrives — NYC and LA
+		// never both become current.
+		liveNYC := liveEdgesToObject(t, ctx, h, winner, "lives_in", nyc)
+		require.Len(t, liveNYC, 1, "exactly one live NYC after the same-value widen")
+		survivor, err := h.assertionRepo.GetAssertion(ctx, liveNYC[0].ID)
+		require.NoError(t, err)
+		require.NotNil(t, survivor.ValidFrom)
+		assert.False(t, survivor.ValidFrom.After(past), "survivor widened back to cover the 2018 stint")
+		require.NotNil(t, survivor.ValidTo, "survivor stays bounded by the pending LA")
+		assert.True(t, survivor.ValidTo.Equal(*boundedNYC.ValidTo), "valid_to NOT extended past the pending-successor bound")
+		require.NotNil(t, survivor.SupersededBy, "survivor inherits the pending-successor linkage")
+		assert.Equal(t, winnerLA.ID, *survivor.SupersededBy, "pending-successor linkage preserved")
+
+		// LA is still a live future row (its date hasn't passed).
+		la2, err := h.assertionRepo.GetAssertion(ctx, winnerLA.ID)
+		require.NoError(t, err)
+		assert.Equal(t, repository.AssertionStatusAccepted, la2.Status, "pending LA stays accepted")
 	})
 
 	// Case 10: a CHAINED merge (A→B then B→C) moves the same assertion row twice.

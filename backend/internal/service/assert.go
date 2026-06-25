@@ -1629,6 +1629,18 @@ type repointedAssertion struct {
 //     the idx_assertion_live_proposition 23505), or is re-pointed into the winner
 //     slot and then runs the D6-step-4 valid-time supersession against any
 //     different-value overlapping prior so exactly one stays current.
+//
+// Concurrency: the caller's merge tx tombstones the loser node (deleted_at) BEFORE
+// this runs, and the single-cardinality re-points hold the per-slot advisory lock,
+// so a concurrent single-card assert on an affected slot serializes. The repoint
+// UPDATE is additionally savepoint-protected against a raced identical proposition
+// (multi-card has no slot lock). What this does NOT guard is a writer that asserts
+// a BRAND-NEW fact/edge on the loser node AFTER this one-time scan but before the
+// merge commits (write-skew on the loser node) — that row would strand on the
+// tombstoned loser. SP1 has NO concurrent assertion producers (extractors/agents
+// are SP3/SP4; the only writers are the synchronous, user-serialized contact
+// create/update/merge paths), so this cannot occur today; SP3 must add loser-node
+// serialization (e.g. a node advisory lock) when concurrent producers arrive.
 func (s *AssertService) MergeAssertionsTx(ctx context.Context, tx pgx.Tx, loser, winner uuid.UUID) error {
 	rows, err := s.assertionRepo.ListAssertionsTouchingNodeTx(ctx, tx, loser)
 	if err != nil {
@@ -1746,11 +1758,20 @@ func (s *AssertService) applyRepoint(ctx context.Context, tx pgx.Tx, plan *repoi
 		return s.mergeSameValue(ctx, tx, plan.row, collider)
 	}
 
-	// No collision: re-point the loser row into the winner slot, then emit the
-	// move so SP3/SP4 derived signals recompute (the row is now live on the winner
-	// node — a fresh accepted/proposed state for the winner's graph).
-	if err := s.repointRow(ctx, tx, plan); err != nil {
+	// No collision (as of the check above): re-point the loser row into the winner
+	// slot. The check→UPDATE window is covered by a nested savepoint — if a writer
+	// raced an identical live proposition onto the winner between the check and the
+	// UPDATE, the repoint 23505s on idx_assertion_live_proposition; we recover by
+	// re-finding the now-present collider and merging the loser into it (rather than
+	// letting the unique violation abort the whole merge tx). A single-cardinality
+	// repoint additionally holds the slot advisory lock, so only the multi-card path
+	// can actually reach the race; the savepoint covers both uniformly.
+	recovered, err := s.repointWithRecover(ctx, tx, plan)
+	if err != nil {
 		return err
+	}
+	if recovered {
+		return nil
 	}
 	moveKind := events.KindAssertionProposed
 	if plan.row.Status == repository.AssertionStatusAccepted {
@@ -1790,12 +1811,20 @@ func (s *AssertService) applyRepoint(ctx context.Context, tx pgx.Tx, plan *repoi
 	// are superseded by the re-pointed successor.
 	signature := assertionSignature(plan.row)
 	same := sameValueConflicts(conflicts, signature)
+	var inheritedSuccessor *uuid.UUID
 	if len(same) > 0 {
-		if err := s.widenMergedSurvivor(ctx, tx, plan, same); err != nil {
+		inheritedSuccessor, err = s.widenMergedSurvivor(ctx, tx, plan, same)
+		if err != nil {
 			return err
 		}
 	}
 	different := differentValueConflicts(conflicts, signature)
+	// The survivor's inherited pending-future-successor is a DIFFERENT-value row
+	// (the future move it is bounded by); it is the survivor's successor, NOT a
+	// competitor to supersede, so exclude it from the supersession set.
+	if inheritedSuccessor != nil {
+		different = excludeAssertion(different, *inheritedSuccessor)
+	}
 	return s.closeConflicts(ctx, tx, different, plan.row, effectiveFrom, now)
 }
 
@@ -1804,32 +1833,60 @@ func (s *AssertService) applyRepoint(ctx context.Context, tx pgx.Tx, plan *repoi
 // the survivor + close it superseded, and recompute the survivor's
 // proposition_key over the widened window. Mirrors widenReaffirmation but the
 // survivor is the re-pointed merge row (already live at the winner slot).
-func (s *AssertService) widenMergedSurvivor(ctx context.Context, tx pgx.Tx, plan *repointedAssertion, same []*repository.Assertion) error {
+// It returns the pending-future-successor id the survivor inherited (nil if none),
+// so the caller can exclude it from the different-value supersession set — that
+// successor is the survivor's own future move, not a competitor.
+func (s *AssertService) widenMergedSurvivor(ctx context.Context, tx pgx.Tx, plan *repointedAssertion, same []*repository.Assertion) (*uuid.UUID, error) {
 	survivor := plan.row
 	widenedFrom := survivor.ValidFrom
 	widenedTo := survivor.ValidTo
+	// Track the tightest pending-future-successor (id + bound) across the survivor
+	// AND any absorbed row: widening valid_to past that bound — or dropping its
+	// superseded_by linkage — would leave the survivor AND that successor both
+	// current once the successor's date passes (and the rollover worker, which keys
+	// on superseded_by IS NOT NULL, would never terminalize the survivor). A
+	// bounded-with-pending-successor row always carries a non-nil valid_to. We keep
+	// the EARLIEST bound + its successor across all the same-value rows being folded.
+	pendingBound := survivor.ValidTo
+	pendingSuccessor := survivor.SupersededBy
+	if survivor.SupersededBy == nil {
+		pendingBound = nil
+	}
 	for _, other := range same {
 		widenedFrom = minStart(widenedFrom, other.ValidFrom)
 		widenedTo = maxEnd(widenedTo, other.ValidTo)
+		if other.SupersededBy != nil && other.ValidTo != nil {
+			if pendingBound == nil || other.ValidTo.Before(*pendingBound) {
+				pendingBound = utcPtr(other.ValidTo)
+				pendingSuccessor = other.SupersededBy
+			}
+		}
 		if err := s.mergeSameValue(ctx, tx, other, survivor); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	// A pending-future-successor bound on the survivor caps the upper extension
-	// (widening past it would leave two current rows once the date passes).
-	if survivor.SupersededBy != nil {
-		widenedTo = utcPtr(survivor.ValidTo)
+	// Cap the upper extension at the tightest pending-successor bound, if any.
+	if pendingBound != nil {
+		widenedTo = minEnd(widenedTo, pendingBound)
 	}
 	widenReq := assertionAsRequest(survivor)
 	widenReq.ValidFrom = widenedFrom
 	newKey := computePropositionKey(plan.predicate, plan.canonKey, plan.canonSubject, plan.canonObject, widenReq)
 	if err := s.assertionRepo.WidenAssertionValidityTx(ctx, tx, survivor.ID, widenedFrom, widenedTo, newKey); err != nil {
-		return fmt.Errorf("widen merged survivor: %w", err)
+		return nil, fmt.Errorf("widen merged survivor: %w", err)
+	}
+	// Inherit the pending-successor linkage (superseded_by + the capped bound) so the
+	// rollover worker terminalizes the survivor when the successor's date arrives.
+	if pendingSuccessor != nil && survivor.SupersededBy == nil {
+		if err := s.assertionRepo.BoundPendingSuccessorTx(ctx, tx, survivor.ID, *pendingBound, *pendingSuccessor); err != nil {
+			return nil, fmt.Errorf("inherit pending successor on merged survivor: %w", err)
+		}
+		survivor.SupersededBy = pendingSuccessor
 	}
 	survivor.ValidFrom = widenedFrom
 	survivor.ValidTo = widenedTo
 	survivor.PropositionKey = newKey
-	return nil
+	return pendingSuccessor, nil
 }
 
 // excludeAssertion returns conflicts with the row matching id removed (the
@@ -1901,6 +1958,39 @@ func (s *AssertService) repointRow(ctx context.Context, tx pgx.Tx, plan *repoint
 		row.PropositionKey = plan.newKey
 	}
 	return nil
+}
+
+// repointWithRecover re-points a live loser row inside a nested savepoint. On a
+// 23505 against idx_assertion_live_proposition (a concurrent writer raced an
+// identical live proposition onto the winner after applyRepoint's collision check
+// but before this UPDATE), it rolls back JUST the savepoint (the outer merge tx
+// stays usable), re-reads the now-present collider, and merges the loser into it —
+// returning recovered=true. Any other error propagates. recovered=false means the
+// re-point committed normally and the caller continues with the move event +
+// supersession.
+func (s *AssertService) repointWithRecover(ctx context.Context, tx pgx.Tx, plan *repointedAssertion) (recovered bool, err error) {
+	sp, err := tx.Begin(ctx)
+	if err != nil {
+		return false, fmt.Errorf("begin repoint savepoint: %w", err)
+	}
+	if err := s.repointRow(ctx, sp, plan); err != nil {
+		_ = sp.Rollback(ctx)
+		if isLivePropositionViolation(err) {
+			collider, ferr := s.assertionRepo.FindLivePropositionTx(ctx, tx, plan.newKey)
+			if ferr != nil {
+				return false, fmt.Errorf("re-find collider after merge repoint conflict: %w", ferr)
+			}
+			if err := s.mergeSameValue(ctx, tx, plan.row, collider); err != nil {
+				return false, err
+			}
+			return true, nil
+		}
+		return false, err
+	}
+	if err := sp.Commit(ctx); err != nil {
+		return false, fmt.Errorf("commit repoint savepoint: %w", err)
+	}
+	return false, nil
 }
 
 // closeSelfLoop terminalizes a live edge that collapsed to a self-edge after the
@@ -2138,6 +2228,21 @@ func utcPtr(t *time.Time) *time.Time {
 func minStart(a, b *time.Time) *time.Time {
 	if a == nil || b == nil {
 		return nil
+	}
+	if a.Before(*b) {
+		return utcPtr(a)
+	}
+	return utcPtr(b)
+}
+
+// minEnd returns the EARLIER of two valid_to bounds; nil = open (+inf), which is
+// the maximum, so a nil side loses (the other, finite side wins). Two nils → nil.
+func minEnd(a, b *time.Time) *time.Time {
+	if a == nil {
+		return utcPtr(b)
+	}
+	if b == nil {
+		return utcPtr(a)
 	}
 	if a.Before(*b) {
 		return utcPtr(a)
