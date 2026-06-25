@@ -113,7 +113,7 @@ func (h *CalendarHandler) ListEventsForContact(c *gin.Context) {
 	// Fetch events
 	events, err := h.calendarRepo.ListEventsForContact(c.Request.Context(), contactID, limit, offset)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to fetch events", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -153,7 +153,7 @@ func (h *CalendarHandler) ListUpcomingEventsForContact(c *gin.Context) {
 	now := accelerated.GetCurrentTime()
 	events, err := h.calendarRepo.ListUpcomingEventsForContact(c.Request.Context(), contactID, now, limit)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to fetch events", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -184,7 +184,7 @@ func (h *CalendarHandler) ListUpcomingEvents(c *gin.Context) {
 	now := accelerated.GetCurrentTime()
 	events, err := h.calendarRepo.ListUpcomingEventsWithContacts(c.Request.Context(), now, limit, offset)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to fetch events", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 

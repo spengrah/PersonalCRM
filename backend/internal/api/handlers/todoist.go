@@ -4,7 +4,6 @@ import (
 	"net/http"
 
 	"personal-crm/backend/internal/api"
-	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/todoist"
 
@@ -71,7 +70,7 @@ func (h *TodoistHandler) GetSettings(c *gin.Context) {
 	// Get the first (and only for v1) Todoist account
 	accounts, err := h.oauthService.ListAccounts(ctx)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to list accounts", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -154,7 +153,7 @@ func (h *TodoistHandler) UpdateSettings(c *gin.Context) {
 	// Get the first (and only for v1) Todoist account
 	accounts, err := h.oauthService.ListAccounts(ctx)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to list accounts", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -176,7 +175,7 @@ func (h *TodoistHandler) UpdateSettings(c *gin.Context) {
 			Strategy:  repository.SyncStrategyFetchAll,
 		})
 		if err != nil {
-			api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to create sync state", err.Error())
+			api.RespondInternal(c, err)
 			return
 		}
 	}
@@ -210,7 +209,7 @@ func (h *TodoistHandler) UpdateSettings(c *gin.Context) {
 	// Update metadata
 	_, err = h.syncRepo.UpdateSyncStateMetadata(ctx, state.ID, metadata)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to update settings", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -250,7 +249,7 @@ func (h *TodoistHandler) ListProjects(c *gin.Context) {
 	// Get the first (and only for v1) Todoist account
 	accounts, err := h.oauthService.ListAccounts(ctx)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to list accounts", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -264,7 +263,7 @@ func (h *TodoistHandler) ListProjects(c *gin.Context) {
 	// Get access token
 	accessToken, err := h.oauthService.GetAccessToken(ctx, accountID)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to get access token", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -272,8 +271,7 @@ func (h *TodoistHandler) ListProjects(c *gin.Context) {
 	client := todoist.NewSyncClient(accessToken)
 	syncResp, err := client.Sync(ctx, "*", []string{"projects"}, nil)
 	if err != nil {
-		logger.Error().Err(err).Msg("failed to fetch Todoist projects")
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to fetch projects", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -306,7 +304,7 @@ func (h *TodoistHandler) ListLabels(c *gin.Context) {
 	// Get the first (and only for v1) Todoist account
 	accounts, err := h.oauthService.ListAccounts(ctx)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to list accounts", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -320,7 +318,7 @@ func (h *TodoistHandler) ListLabels(c *gin.Context) {
 	// Get access token
 	accessToken, err := h.oauthService.GetAccessToken(ctx, accountID)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to get access token", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -328,8 +326,7 @@ func (h *TodoistHandler) ListLabels(c *gin.Context) {
 	client := todoist.NewSyncClient(accessToken)
 	syncResp, err := client.Sync(ctx, "*", []string{"labels"}, nil)
 	if err != nil {
-		logger.Error().Err(err).Msg("failed to fetch Todoist labels")
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to fetch labels", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 

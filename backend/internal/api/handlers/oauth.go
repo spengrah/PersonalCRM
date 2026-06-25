@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/url"
 	"sync"
@@ -10,7 +9,6 @@ import (
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/api"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/google"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/todoist"
@@ -150,7 +148,7 @@ type GoogleAccountResponse struct {
 func (h *OAuthHandler) GetGoogleAuthURL(c *gin.Context) {
 	state, err := google.GenerateState()
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to generate state", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -250,7 +248,7 @@ func (h *OAuthHandler) GoogleCallback(c *gin.Context) {
 func (h *OAuthHandler) ListGoogleAccounts(c *gin.Context) {
 	accounts, err := h.googleOAuth.ListAccounts(c.Request.Context())
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to list accounts", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -294,11 +292,7 @@ func (h *OAuthHandler) GetGoogleAccountStatus(c *gin.Context) {
 
 	status, err := h.googleOAuth.GetAccountStatus(c.Request.Context(), id)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendError(c, http.StatusNotFound, api.ErrCodeNotFound, "Account not found", "")
-			return
-		}
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to get account status", err.Error())
+		api.RespondError(c, err, "Account")
 		return
 	}
 
@@ -339,11 +333,7 @@ func (h *OAuthHandler) RevokeGoogleAccount(c *gin.Context) {
 
 	err = h.googleOAuth.RevokeAccount(c.Request.Context(), id)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendError(c, http.StatusNotFound, api.ErrCodeNotFound, "Account not found", "")
-			return
-		}
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to revoke account", err.Error())
+		api.RespondError(c, err, "Account")
 		return
 	}
 
@@ -380,7 +370,7 @@ type TodoistAccountResponse struct {
 func (h *OAuthHandler) GetTodoistAuthURL(c *gin.Context) {
 	state, err := google.GenerateState() // Reuse state generation from google package
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to generate state", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -459,7 +449,7 @@ func (h *OAuthHandler) TodoistCallback(c *gin.Context) {
 func (h *OAuthHandler) ListTodoistAccounts(c *gin.Context) {
 	accounts, err := h.todoistOAuth.ListAccounts(c.Request.Context())
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to list accounts", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -503,11 +493,7 @@ func (h *OAuthHandler) GetTodoistAccountStatus(c *gin.Context) {
 
 	status, err := h.todoistOAuth.GetAccountStatus(c.Request.Context(), id)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendError(c, http.StatusNotFound, api.ErrCodeNotFound, "Account not found", "")
-			return
-		}
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to get account status", err.Error())
+		api.RespondError(c, err, "Account")
 		return
 	}
 
@@ -548,11 +534,7 @@ func (h *OAuthHandler) RevokeTodoistAccount(c *gin.Context) {
 
 	err = h.todoistOAuth.RevokeAccount(c.Request.Context(), id)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendError(c, http.StatusNotFound, api.ErrCodeNotFound, "Account not found", "")
-			return
-		}
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to revoke account", err.Error())
+		api.RespondError(c, err, "Account")
 		return
 	}
 

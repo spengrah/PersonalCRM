@@ -114,7 +114,7 @@ func (h *SuggestionHandler) ListSuggestions(c *gin.Context) {
 		IncludeUnresolvedTelegram: includeUnresolvedTelegramParam(c),
 	}, MaxCandidatesForSorting)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to list suggestions", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -272,7 +272,7 @@ func (h *SuggestionHandler) sendActionError(c *gin.Context, err error) {
 	case errors.Is(err, service.ErrSuggestionInvalidMethod):
 		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Malformed method (empty type or value)", "")
 	default:
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to process suggestion", err.Error())
+		api.RespondInternal(c, err)
 	}
 }
 

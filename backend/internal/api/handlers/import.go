@@ -185,12 +185,12 @@ func (h *ImportHandler) ListImportCandidates(c *gin.Context) {
 	// at the DB level.
 	sorted, err := h.suggestionSvc.BuildSortedCandidates(ctx, source, MaxCandidatesForSorting, includeUnresolvedTelegram)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to list candidates", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 	hiddenCount, err := h.externalRepo.CountHiddenUnresolvedTelegram(ctx, source)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to count hidden candidates", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -251,7 +251,7 @@ func (h *ImportHandler) GetImportCandidate(c *gin.Context) {
 
 	contact, err := h.externalRepo.GetByID(ctx, id)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to get candidate", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 	if contact == nil {
@@ -298,7 +298,7 @@ func (h *ImportHandler) ImportContact(c *gin.Context) {
 	// Get external contact
 	external, err := h.externalRepo.GetByID(ctx, id)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to get candidate", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 	if external == nil {
@@ -361,7 +361,7 @@ func (h *ImportHandler) ImportContact(c *gin.Context) {
 	// Create the CRM contact
 	contact, rematchJobID, err := h.contactSvc.CreateContact(ctx, createReq, methods)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to create contact", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -387,7 +387,7 @@ func (h *ImportHandler) ImportContact(c *gin.Context) {
 	// an imported contact whose anarlog sessions don't link to it.
 	if err := h.backfillAnarlogIdentity(ctx, external, contact.ID); err != nil {
 		logger.Error().Err(err).Str("external_id", id.String()).Msg("anarlog import backfill failed")
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to link anarlog identity to imported contact", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -502,7 +502,7 @@ func (h *ImportHandler) LinkContact(c *gin.Context) {
 	// Get external contact
 	external, err := h.externalRepo.GetByID(ctx, id)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to get candidate", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 	if external == nil {
@@ -533,7 +533,7 @@ func (h *ImportHandler) LinkContact(c *gin.Context) {
 	// Update match status
 	updated, err := h.externalRepo.UpdateMatch(ctx, id, &crmContactID, linkStatus)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to link contact", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -574,7 +574,7 @@ func (h *ImportHandler) LinkContact(c *gin.Context) {
 	// errors as 500 — see ImportContact above for the rationale.
 	if err := h.backfillAnarlogIdentity(ctx, external, crmContactID); err != nil {
 		logger.Error().Err(err).Str("external_id", id.String()).Msg("anarlog import backfill failed")
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to link anarlog identity to linked contact", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -647,7 +647,7 @@ func (h *ImportHandler) IgnoreContact(c *gin.Context) {
 	}
 
 	if err := h.externalRepo.Ignore(ctx, id); err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to ignore contact", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 

@@ -169,7 +169,7 @@ func (h *TestHandler) SeedExternalContacts(c *gin.Context) {
 
 	ids, err := h.seedSvc.SeedExternalContacts(ctx, inputs)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to create external contact", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -266,7 +266,7 @@ func (h *TestHandler) SeedMethodSuggestions(c *gin.Context) {
 
 	res, err := h.seedSvc.SeedMethodSuggestions(ctx, input)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to seed method suggestions", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -378,7 +378,7 @@ func (h *TestHandler) SeedContacts(c *gin.Context) {
 
 	ids, err := h.seedSvc.SeedContacts(ctx, inputs)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to create contact", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -446,7 +446,7 @@ func (h *TestHandler) SeedOverdueContacts(c *gin.Context) {
 
 	ids, err := h.seedSvc.SeedOverdueContacts(ctx, inputs)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to create contact", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -567,7 +567,7 @@ func (h *TestHandler) SeedCalendarEvents(c *gin.Context) {
 
 	ids, err := h.seedSvc.SeedCalendarEvents(ctx, inputs)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to create calendar event", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -637,7 +637,7 @@ func (h *TestHandler) Cleanup(c *gin.Context) {
 
 	res, err := h.seedSvc.Cleanup(ctx, req.Prefix, hostID)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to clean up test data", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -696,7 +696,7 @@ func (h *TestHandler) SeedMacHost(c *gin.Context) {
 		SourceHealth:    req.SourceHealth,
 	})
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "seed host failed", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -812,7 +812,7 @@ func (h *TestHandler) SeedMeetingNotes(c *gin.Context) {
 
 	ids, err := h.seedSvc.SeedMeetingNotes(ctx, hostID, notes)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to create meeting note", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
