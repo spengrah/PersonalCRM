@@ -10,7 +10,6 @@ import (
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/api"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
@@ -296,7 +295,7 @@ func (h *ContactHandler) CreateContact(c *gin.Context) {
 		buildContactMethodInputs(req.Methods),
 	)
 	if err != nil {
-		api.SendInternalError(c, "Failed to create contact")
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -326,11 +325,7 @@ func (h *ContactHandler) GetContact(c *gin.Context) {
 
 	contact, err := h.contactService.GetContact(c.Request.Context(), id)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Contact")
-			return
-		}
-		api.SendInternalError(c, "Failed to retrieve contact")
+		api.RespondError(c, err, "Contact")
 		return
 	}
 
@@ -399,7 +394,7 @@ func (h *ContactHandler) ListContacts(c *gin.Context) {
 			FollowupFilter: query.FollowupFilter,
 		})
 		if err != nil {
-			api.SendInternalError(c, "Failed to retrieve contact IDs")
+			api.RespondInternal(c, err)
 			return
 		}
 
@@ -448,7 +443,7 @@ func (h *ContactHandler) ListContacts(c *gin.Context) {
 	}
 
 	if err != nil {
-		api.SendInternalError(c, "Failed to retrieve contacts")
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -528,11 +523,7 @@ func (h *ContactHandler) UpdateContact(c *gin.Context) {
 		methodsProvided,
 	)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Contact")
-			return
-		}
-		api.SendInternalError(c, "Failed to update contact")
+		api.RespondError(c, err, "Contact")
 		return
 	}
 
@@ -562,11 +553,7 @@ func (h *ContactHandler) DeleteContact(c *gin.Context) {
 
 	err = h.contactService.DeleteContact(c.Request.Context(), id)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Contact")
-			return
-		}
-		api.SendInternalError(c, "Failed to delete contact")
+		api.RespondError(c, err, "Contact")
 		return
 	}
 
@@ -584,7 +571,7 @@ func (h *ContactHandler) DeleteContact(c *gin.Context) {
 func (h *ContactHandler) ListOverdueContacts(c *gin.Context) {
 	overdueContacts, err := h.contactService.ListOverdueContacts(c.Request.Context())
 	if err != nil {
-		api.SendInternalError(c, "Failed to retrieve contacts")
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -756,11 +743,7 @@ func (h *ContactHandler) GetMergePreview(c *gin.Context) {
 
 	preview, err := h.contactService.GetMergePreview(c.Request.Context(), sourceID, targetID)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Contact")
-			return
-		}
-		api.SendInternalError(c, "Failed to get merge preview")
+		api.RespondError(c, err, "Contact")
 		return
 	}
 
@@ -830,11 +813,7 @@ func (h *ContactHandler) MergeContacts(c *gin.Context) {
 
 	mergedContact, err := h.contactService.MergeContacts(c.Request.Context(), serviceReq)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Contact")
-			return
-		}
-		api.SendInternalError(c, "Failed to merge contacts")
+		api.RespondError(c, err, "Contact")
 		return
 	}
 

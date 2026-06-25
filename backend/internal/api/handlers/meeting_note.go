@@ -155,7 +155,7 @@ func (h *MeetingNoteHandler) mapResolveError(c *gin.Context, err error) {
 		api.SendError(c, http.StatusUnprocessableEntity, api.ErrCodeValidation,
 			"conflict_candidates snapshot missing on conflict_pending row; please re-trigger sync", "")
 	default:
-		api.SendInternalError(c, err.Error())
+		api.RespondInternal(c, err)
 	}
 }
 
@@ -181,7 +181,7 @@ func (h *MeetingNoteHandler) ListNeedsAttention(c *gin.Context) {
 
 	items, err := h.svc.ListNeedsAttention(c.Request.Context(), hostID)
 	if err != nil {
-		api.SendInternalError(c, err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 	api.SendSuccess(c, http.StatusOK, items, nil)
