@@ -180,14 +180,14 @@ sequenceDiagram
 | `node` | Uniform registry every graph entity attaches to (person/entity/venue); caller-supplied id (person id == contact id, maintained by the ContactService dual-write + the `068_backfill_person_nodes` backfill); CHECK-enum `type`; `merged_into` self-FK merge alias; single `deleted_at` tombstone | self-FK (`merged_into`); person node shares the contact's id |
 | `entity_type` | Per-TYPE entity-subtype catalog (`resolution_config` JSONB; curated/provisional status) | (catalog; no FKs) |
 | `entity` | Structural subtype rows for organizations/places/topics/tags; per-instance `detail` JSONB; unique `(subtype, normalized_name)` | → node (PK/FK, ON DELETE CASCADE), → entity_type |
-| `venue` | Structural subtype rows for shared interaction containers (email threads, group chats, DMs, meetings, calls, sessions); unique `(source, kind, source_container_id)` | → node (PK/FK, ON DELETE CASCADE) |
+| `venue` | Structural subtype rows for shared interaction containers (email threads, group chats, DMs, meetings, calls, sessions); unique `(source, kind, source_container_id)`; the venue node id is a deterministic `uuid_generate_v5` of `(source, kind, container)` so the live `ResolveVenueForInteraction` helper and the `069_interaction_venue` backfill converge on one node per container; referenced by `interaction.venue_id` | → node (PK/FK, ON DELETE CASCADE) |
 | `predicate` | Catalog of edge/fact types (subject/object/value typing, cardinality, symmetry, inverse pairing, temporal profile, review policy, valid-time dedup bucket); curated-core rows seeded, provisional minted at runtime; nullable `embedding vector(1536)` | self-FK (`inverse_predicate`) |
 | `assertion` | Bi-temporal fact/edge row (valid-time + knowledge-time clocks); exactly-one-payload CHECK; write-API-computed `proposition_key` with a plain partial-unique live index; DEFERRABLE `superseded_by` self-FK; status state machine (proposed→accepted\|rejected, accepted→superseded\|retracted) | → node (subject + object, restrict), → predicate (restrict), self-FK (`superseded_by`, DEFERRABLE) |
 | `assertion_provenance` | Corroborating source locators for an assertion; PK `(assertion_id, locator_hash)`; closed `source_kind` enum; polymorphic no-FK `source_id`; `(source_kind, source_id)` reverse-lookup index | → assertion (ON DELETE CASCADE); `source_id` polymorphic (no FK) |
 | **Observability** | | |
 | `sync_staleness_breach` | Open/resolved sync-staleness breaches recorded by the watchdog (partial unique index on open rows; no `updated_at`/`deleted_at`) | (system-derived; no FKs) |
 | **Future/Unused** | | |
-| `interaction` | Interaction logging (not yet used) | → contact |
+| `interaction` | Interaction logging (not yet used); nullable `venue_id` links each interaction to the shared-container venue node it happened in (set by the live recorders + the `069` backfill; never a dedup/cadence-partition dimension) | → contact; → node (`venue_id`, restrict) |
 | `connection` | Contact-to-contact relationships | → contact × 2 |
 | `note_embedding` | Vector embeddings (future AI) | → note |
 | `contact_summary` | AI summaries (future) | → contact |
