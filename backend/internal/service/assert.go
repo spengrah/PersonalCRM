@@ -1588,6 +1588,80 @@ func (s *AssertService) EnsureLatentPerson(ctx context.Context, tx pgx.Tx, label
 	return id, nil
 }
 
+// EnsurePlaceTx find-or-creates the place entity node for a location label and
+// returns its node id. The entity is resolved by (subtype='place',
+// normalized_name=lower(trim(label))) so repeated asserts of the same place
+// (across contacts or edits) collapse to one place node. A fresh place mints a
+// node + entity pair in the caller's tx. The node's canonical_label preserves
+// the original casing/spacing (it is what the location cache column displays);
+// normalized_name is the lowercased dedup key.
+//
+// Concurrency note: two concurrent first-asserts of the same brand-new place can
+// race the find→create window and hit the entity (subtype, normalized_name)
+// unique on the second insert (23505). That is acceptable here — the loser's
+// outer tx fails loudly and retries (the contact create/update path is not a
+// high-contention same-place hot loop), and a savepoint-recovery would add
+// complexity disproportionate to single-user scale. The backfill command is
+// single-threaded, so it never races itself.
+func (s *AssertService) EnsurePlaceTx(ctx context.Context, tx pgx.Tx, label string) (uuid.UUID, error) {
+	normalized := strings.ToLower(strings.TrimSpace(label))
+	if normalized == "" {
+		return uuid.Nil, validationError("place label is empty")
+	}
+	existing, err := s.entityRepo.FindEntityBySubtypeNameTx(ctx, tx, repository.EntitySubtypePlace, normalized)
+	if err == nil {
+		return existing.NodeID, nil
+	}
+	if !errors.Is(err, db.ErrNotFound) {
+		return uuid.Nil, fmt.Errorf("find place entity: %w", err)
+	}
+
+	// Create node + entity inside a nested savepoint so a concurrent writer that
+	// raced us to the same (subtype, normalized_name) — two contacts asserting the
+	// same brand-new place in flight — surfaces as a 23505 we can recover from by
+	// re-finding the winner's node, WITHOUT aborting the outer tx.
+	id := uuid.New()
+	sp, err := tx.Begin(ctx)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("begin place savepoint: %w", err)
+	}
+	if _, err := s.nodeRepo.CreateNodeTx(ctx, sp, id, repository.NodeTypeEntity, strings.TrimSpace(label)); err != nil {
+		_ = sp.Rollback(ctx)
+		return uuid.Nil, fmt.Errorf("create place node: %w", err)
+	}
+	if _, err := s.entityRepo.CreateEntityTx(ctx, sp, repository.CreateEntityRequest{
+		NodeID:         id,
+		Subtype:        repository.EntitySubtypePlace,
+		NormalizedName: normalized,
+	}); err != nil {
+		_ = sp.Rollback(ctx)
+		if isPlaceNameViolation(err) {
+			// The winner created the place between our find and our insert; re-find
+			// on the outer tx and return its node id.
+			winner, findErr := s.entityRepo.FindEntityBySubtypeNameTx(ctx, tx, repository.EntitySubtypePlace, normalized)
+			if findErr != nil {
+				return uuid.Nil, fmt.Errorf("re-find place after conflict: %w", findErr)
+			}
+			return winner.NodeID, nil
+		}
+		return uuid.Nil, fmt.Errorf("create place entity: %w", err)
+	}
+	if err := sp.Commit(ctx); err != nil {
+		return uuid.Nil, fmt.Errorf("commit place savepoint: %w", err)
+	}
+	return id, nil
+}
+
+// isPlaceNameViolation reports whether err is a 23505 on the entity
+// (subtype, normalized_name) unique index — the concurrent same-place race.
+func isPlaceNameViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != pgerrcode.UniqueViolation {
+		return false
+	}
+	return pgErr.ConstraintName == "idx_entity_subtype_name"
+}
+
 // --------------------------------------------------------------------------
 // Event emission.
 // --------------------------------------------------------------------------
