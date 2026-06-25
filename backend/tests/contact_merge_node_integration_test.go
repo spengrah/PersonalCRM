@@ -1,0 +1,441 @@
+//go:build integration_testdb
+
+package tests
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	"personal-crm/backend/internal/accelerated"
+	"personal-crm/backend/internal/consumer"
+	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/events"
+	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/service"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// mergeNodeHarness bundles a fully-wired ContactService (knowledge writer +
+// cadence) and the graph repos a merge/soft-delete test reads back. Created
+// contacts + place nodes are tracked for FK-ordered cleanup (assertion → node FK
+// is restrict, so assertions clear before nodes).
+type mergeNodeHarness struct {
+	database      *db.Database
+	contactSvc    *service.ContactService
+	assertSvc     *service.AssertService
+	contactRepo   *repository.ContactRepository
+	assertionRepo *repository.AssertionRepository
+	nodeRepo      *repository.NodeRepository
+	entityRepo    *repository.EntityRepository
+	eventRepo     *repository.EventRepository
+	support       *repository.SyntheticSupportRepository
+
+	contactIDs []uuid.UUID
+	placeNorms []string
+}
+
+func newMergeNodeHarness(t *testing.T, ctx context.Context) *mergeNodeHarness {
+	t.Helper()
+	database, cfg := newSharedTestDB(t, ctx)
+
+	contactRepo := repository.NewContactRepository(database.Queries)
+	contactRepo.SetPool(database.Pool)
+	methodRepo := repository.NewContactMethodRepository(database.Queries)
+	interactionRepo := repository.NewInteractionRepository(database.Queries)
+	taskRepo := repository.NewContactTaskRepository(database.Queries)
+	nodeRepo := repository.NewNodeRepository(database.Queries)
+	entityRepo := repository.NewEntityRepository(database.Queries)
+	predicateRepo := repository.NewPredicateRepository(database.Queries)
+	assertionRepo := repository.NewAssertionRepository(database.Queries)
+	eventRepo := repository.NewEventRepository(database.Queries)
+	support := repository.NewSyntheticSupportRepository(database.Queries)
+
+	// Insert-only river client (no fetch loop): AssertService.PublishTx enqueues
+	// assertion.* jobs the no-op worker registers; the cache is filled inline.
+	workers := river.NewWorkers()
+	river.AddWorker(workers, &knowledgeCacheNoopWorker{})
+	client, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
+		Queues:   map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: cfg.River.WorkerConcurrency}},
+		Workers:  workers,
+		TestOnly: true,
+	})
+	require.NoError(t, err)
+	bus := events.NewBus(database.Pool, client, eventRepo)
+
+	assertSvc := service.NewAssertService(database.Pool, nodeRepo, entityRepo, predicateRepo, assertionRepo, bus)
+	cacheUpdater := consumer.NewKnowledgeCacheUpdater(assertionRepo, nodeRepo, contactRepo)
+
+	contactSvc := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, taskRepo, nil, nil)
+	contactSvc.SetKnowledgeWriter(assertSvc, cacheUpdater)
+	wireCadenceUpdaterForTest(t, database, contactSvc)
+
+	h := &mergeNodeHarness{
+		database:      database,
+		contactSvc:    contactSvc,
+		assertSvc:     assertSvc,
+		contactRepo:   contactRepo,
+		assertionRepo: assertionRepo,
+		nodeRepo:      nodeRepo,
+		entityRepo:    entityRepo,
+		eventRepo:     eventRepo,
+		support:       support,
+	}
+	h.registerCleanup(t, ctx)
+	return h
+}
+
+func (h *mergeNodeHarness) track(id uuid.UUID)     { h.contactIDs = append(h.contactIDs, id) }
+func (h *mergeNodeHarness) trackPlace(norm string) { h.placeNorms = append(h.placeNorms, norm) }
+
+func (h *mergeNodeHarness) registerCleanup(t *testing.T, ctx context.Context) {
+	t.Cleanup(func() {
+		for _, cid := range h.contactIDs {
+			assertions, _ := h.assertionRepo.ListAssertionsBySubject(ctx, cid)
+			for _, a := range assertions {
+				_ = h.eventRepo.HardDeleteEventsBySourceAndSourceIDPrefix(ctx, "assertion", a.ID.String())
+			}
+			_, _ = h.support.DeleteAssertionsForNode(ctx, cid)
+		}
+		var placeNodeIDs []uuid.UUID
+		for _, norm := range h.placeNorms {
+			entity, err := h.entityRepo.FindEntityBySubtypeName(ctx, repository.EntitySubtypePlace, norm)
+			if err == nil {
+				placeNodeIDs = append(placeNodeIDs, entity.NodeID)
+			}
+		}
+		_, _ = h.support.DeleteNodesByIds(ctx, placeNodeIDs)
+		_, _ = h.support.DeleteNodesByIds(ctx, h.contactIDs)
+		for _, cid := range h.contactIDs {
+			_ = h.contactRepo.HardDeleteContact(ctx, cid)
+		}
+	})
+}
+
+// createContactWithLocation creates a contact with a location, which the cutover
+// emits as a lives_in assertion + place node. Returns the created contact.
+func (h *mergeNodeHarness) createContactWithLocation(t *testing.T, ctx context.Context, name, location string) *repository.Contact {
+	t.Helper()
+	loc := location
+	contact, _, err := h.contactSvc.CreateContact(ctx, repository.CreateContactRequest{
+		FullName: name,
+		Location: &loc,
+	}, nil)
+	require.NoError(t, err)
+	h.track(contact.ID)
+	// trackPlace records the place's normalized dedup key (lower+trim, mirroring
+	// EnsurePlaceTx) so cleanup resolves the entity node.
+	h.trackPlace(strings.ToLower(strings.TrimSpace(location)))
+	return contact
+}
+
+func nowMicro() time.Time {
+	return accelerated.GetCurrentTime().UTC().Truncate(time.Microsecond)
+}
+
+// TestContactMergeNode_Integration exercises the contact-merge node integration:
+// the loser node is tombstoned, its assertions re-point onto the winner, and the
+// single-cardinality slot ends with exactly one live assertion (D9 / PR10).
+func TestContactMergeNode_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	t.Parallel()
+	ctx := ctx0()
+
+	// Case 1: merge two contacts each with a DIFFERENT lives_in → loser node
+	// merged_into/deleted_at set; exactly one live lives_in remains on the winner
+	// (the re-pointed loser overlaps the winner slot → valid-time supersession).
+	t.Run("1 merge different lives_in collapses to one live edge", func(t *testing.T) {
+		t.Parallel()
+		h := newMergeNodeHarness(t, ctx)
+		gen, _ := migrationGenerator(t)
+
+		winner := h.createContactWithLocation(t, ctx, gen.Prefix()+"winner", gen.Prefix()+"NYC")
+		loser := h.createContactWithLocation(t, ctx, gen.Prefix()+"loser", gen.Prefix()+"LA")
+
+		_, err := h.contactSvc.MergeContacts(ctx, service.MergeContactsRequest{
+			SourceContactID: loser.ID,
+			TargetContactID: winner.ID,
+		})
+		require.NoError(t, err)
+
+		// Loser node is tombstoned (merged_into=winner, deleted_at set).
+		loserNode, err := h.nodeRepo.GetNodeIncludingDeleted(ctx, loser.ID)
+		require.NoError(t, err)
+		require.NotNil(t, loserNode.MergedInto, "loser node merged_into set")
+		assert.Equal(t, winner.ID, *loserNode.MergedInto)
+		require.NotNil(t, loserNode.DeletedAt, "loser node deleted_at set")
+
+		// Exactly one live lives_in for the winner.
+		edges, err := h.assertionRepo.ListLiveEdgesForNode(ctx, winner.ID, repository.PredicateLivesIn)
+		require.NoError(t, err)
+		assert.Len(t, edges, 1, "winner has exactly one live lives_in after merge")
+
+		// And it is the CURRENT accepted slot value on the winner.
+		cur, err := h.assertionRepo.GetCurrentAccepted(ctx, winner.ID, repository.PredicateLivesIn, nowMicro())
+		require.NoError(t, err)
+		assert.Equal(t, winner.ID, cur.SubjectNodeID)
+
+		// No field selection → the target's kept value (NYC) is authoritative: the
+		// field-selection apply runs AFTER the source re-point, so the chosen value
+		// wins and the cache column reflects it (cache/store consistency).
+		merged, err := h.contactRepo.GetContact(ctx, winner.ID)
+		require.NoError(t, err)
+		require.NotNil(t, merged.Location)
+		assert.Equal(t, gen.Prefix()+"NYC", *merged.Location, "kept target location is current after merge")
+	})
+
+	// Case 2: merge two contacts with the SAME lives_in value (collision) →
+	// provenance merged onto the winner's assertion, loser row closed superseded,
+	// exactly one live row, no 23505.
+	t.Run("2 merge same lives_in collision merges provenance", func(t *testing.T) {
+		t.Parallel()
+		h := newMergeNodeHarness(t, ctx)
+		gen, _ := migrationGenerator(t)
+
+		place := gen.Prefix() + "Boston"
+		winner := h.createContactWithLocation(t, ctx, gen.Prefix()+"winner", place)
+		loser := h.createContactWithLocation(t, ctx, gen.Prefix()+"loser", place)
+
+		// Capture the loser's pre-merge lives_in id so we can assert it closed.
+		loserEdges, err := h.assertionRepo.ListLiveEdgesForNode(ctx, loser.ID, repository.PredicateLivesIn)
+		require.NoError(t, err)
+		require.Len(t, loserEdges, 1)
+		loserEdgeID := loserEdges[0].ID
+
+		winnerEdges, err := h.assertionRepo.ListLiveEdgesForNode(ctx, winner.ID, repository.PredicateLivesIn)
+		require.NoError(t, err)
+		require.Len(t, winnerEdges, 1)
+		winnerEdgeID := winnerEdges[0].ID
+
+		_, err = h.contactSvc.MergeContacts(ctx, service.MergeContactsRequest{
+			SourceContactID: loser.ID,
+			TargetContactID: winner.ID,
+		})
+		require.NoError(t, err, "same-value merge must not 23505")
+
+		// Exactly one live lives_in for the winner (the survivor).
+		edges, err := h.assertionRepo.ListLiveEdgesForNode(ctx, winner.ID, repository.PredicateLivesIn)
+		require.NoError(t, err)
+		require.Len(t, edges, 1)
+		assert.Equal(t, winnerEdgeID, edges[0].ID, "winner's own assertion survives")
+
+		// The loser's lives_in row is closed superseded with superseded_by=winner.
+		closed, err := h.assertionRepo.GetAssertion(ctx, loserEdgeID)
+		require.NoError(t, err)
+		assert.Equal(t, repository.AssertionStatusSuperseded, closed.Status)
+		require.NotNil(t, closed.SupersededBy)
+		assert.Equal(t, winnerEdgeID, *closed.SupersededBy)
+
+		// The survivor carries BOTH provenance locators (loser's moved onto it).
+		provs, err := h.assertionRepo.ListProvenance(ctx, winnerEdgeID)
+		require.NoError(t, err)
+		assert.GreaterOrEqual(t, len(provs), 2, "loser provenance merged onto the winner assertion")
+	})
+
+	// Case 3: soft-delete a contact → its node.deleted_at is set; its assertions
+	// remain in the table but drop from live (deleted_at IS NULL) reads.
+	t.Run("3 soft-delete propagates node tombstone and drops live reads", func(t *testing.T) {
+		t.Parallel()
+		h := newMergeNodeHarness(t, ctx)
+		gen, _ := migrationGenerator(t)
+
+		contact := h.createContactWithLocation(t, ctx, gen.Prefix()+"deleted", gen.Prefix()+"Austin")
+
+		// Live read before delete: one lives_in edge.
+		before, err := h.assertionRepo.ListLiveEdgesForNode(ctx, contact.ID, repository.PredicateLivesIn)
+		require.NoError(t, err)
+		require.Len(t, before, 1)
+		edgeID := before[0].ID
+
+		require.NoError(t, h.contactSvc.DeleteContact(ctx, contact.ID))
+
+		// Node tombstoned.
+		node, err := h.nodeRepo.GetNodeIncludingDeleted(ctx, contact.ID)
+		require.NoError(t, err)
+		require.NotNil(t, node.DeletedAt, "node deleted_at set on contact soft-delete")
+		_, err = h.nodeRepo.GetNode(ctx, contact.ID)
+		assert.ErrorIs(t, err, db.ErrNotFound, "live node read excludes the tombstoned node")
+
+		// The assertion row is RETAINED in the table (the tombstone is on the NODE,
+		// not the assertion — graph projection reads filter node.deleted_at IS NULL,
+		// which the GetNode live-read above proves drops the node).
+		retained, err := h.assertionRepo.GetAssertion(ctx, edgeID)
+		require.NoError(t, err)
+		assert.Equal(t, edgeID, retained.ID, "assertion retained after soft-delete")
+		n, err := h.support.CountAssertionsForSubject(ctx, contact.ID)
+		require.NoError(t, err)
+		assert.EqualValues(t, 1, n, "assertion remains in the table after soft-delete")
+	})
+}
+
+// mergeAssertionsInTx runs the graph node-merge (tombstone loser + re-point its
+// assertions onto the winner) in one tx, mirroring what ContactService.MergeContacts
+// does, so the AssertService-level cases can exercise MergeAssertionsTx directly.
+func mergeAssertionsInTx(t *testing.T, ctx context.Context, h *assertHarness, loser, winner uuid.UUID) {
+	t.Helper()
+	err := pgx.BeginTxFunc(ctx, h.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		if err := h.nodeRepo.SetNodeMergedIntoTx(ctx, tx, loser, winner); err != nil {
+			return err
+		}
+		return h.svc.MergeAssertionsTx(ctx, tx, loser, winner)
+	})
+	require.NoError(t, err)
+}
+
+// TestMergeAssertions_Integration exercises MergeAssertionsTx directly (the graph
+// re-point primitive) for the cases the contact-profile predicates can't reach:
+// the object-side slot-lock case and the latent-person promotion mechanic (D9).
+func TestMergeAssertions_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	t.Parallel()
+	ctx := ctx0()
+
+	// Case 4: the loser is the OBJECT of introduced_by(A, loser) (single, asymmetric).
+	// After loser→winner the slot belongs to A — NOT the winner — so the merge must
+	// lock A's slot and re-point the object correctly to introduced_by(A, winner).
+	t.Run("4 object-side introduced_by re-points to A's slot", func(t *testing.T) {
+		t.Parallel()
+		h, _ := newAssertHarness(t, ctx0())
+		gen, _ := migrationGenerator(t)
+
+		a := h.seedPerson(t, ctx, gen.Prefix(), "introducer-A")
+		loser := h.seedPerson(t, ctx, gen.Prefix(), "loser-B")
+		winner := h.seedPerson(t, ctx, gen.Prefix(), "winner-C")
+
+		// introduced_by(A, loser): A is subject, loser is object.
+		edge, err := h.svc.Assert(ctx, edgeReq(a, loser, "introduced_by", gen.Prefix(), "intro"))
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, edge.ID)
+		require.Equal(t, a, edge.SubjectNodeID)
+		require.NotNil(t, edge.ObjectNodeID)
+		require.Equal(t, loser, *edge.ObjectNodeID)
+
+		mergeAssertionsInTx(t, ctx, h, loser, winner)
+
+		// The edge now reads introduced_by(A, winner): same row, object re-pointed.
+		repointed, err := h.assertionRepo.GetAssertion(ctx, edge.ID)
+		require.NoError(t, err)
+		assert.Equal(t, a, repointed.SubjectNodeID, "subject A unchanged")
+		require.NotNil(t, repointed.ObjectNodeID)
+		assert.Equal(t, winner, *repointed.ObjectNodeID, "object re-pointed loser→winner")
+		assert.Equal(t, repository.AssertionStatusAccepted, repointed.Status, "still live/accepted")
+
+		// Exactly one live introduced_by edge touches A, pointing at the winner.
+		edges, err := h.assertionRepo.ListLiveEdgesForNode(ctx, a, "introduced_by")
+		require.NoError(t, err)
+		require.Len(t, edges, 1)
+		require.NotNil(t, edges[0].ObjectNodeID)
+		assert.Equal(t, winner, *edges[0].ObjectNodeID)
+		// No live edge dangles on the merged-away loser.
+		loserEdges, err := h.assertionRepo.ListLiveEdgesForNode(ctx, loser, "introduced_by")
+		require.NoError(t, err)
+		assert.Empty(t, loserEdges, "no live edge references the merged-away loser")
+	})
+
+	// Case 5: a latent person edge (knows → a non-CRM person via EnsureLatentPerson),
+	// then promote the latent node by adding a contact row at its id. The contact
+	// exists at that id and the edge is intact.
+	t.Run("5 latent person edge then promote at node id", func(t *testing.T) {
+		t.Parallel()
+		h, _ := newAssertHarness(t, ctx0())
+		gen, _ := migrationGenerator(t)
+
+		subject := h.seedPerson(t, ctx, gen.Prefix(), "knower")
+
+		// Mint a latent person node + a knows edge to it, in one tx.
+		var latentID uuid.UUID
+		var edgeID uuid.UUID
+		err := pgx.BeginTxFunc(ctx, h.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+			id, err := h.svc.EnsureLatentPerson(ctx, tx, gen.Prefix()+"latent-friend")
+			if err != nil {
+				return err
+			}
+			latentID = id
+			obj := latentID
+			edge, err := h.svc.AssertTx(ctx, tx, service.AssertRequest{
+				SubjectNodeID: subject,
+				PredicateKey:  "knows",
+				ObjectNodeID:  &obj,
+				Confidence:    80,
+				Locators:      []service.ProvenanceLocator{userLocator(gen.Prefix(), "knows")},
+			})
+			if err != nil {
+				return err
+			}
+			edgeID = edge.ID
+			return nil
+		})
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, edgeID)
+		// Clean the latent node's assertions + the node itself (it has no contact row
+		// unless promoted; the promote below adds one we hard-delete in cleanup).
+		t.Cleanup(func() { _, _ = h.support.DeleteAssertionsForNode(ctx, latentID) })
+
+		// The latent node exists as a person node with NO contact row.
+		latentNode, err := h.nodeRepo.GetNode(ctx, latentID)
+		require.NoError(t, err)
+		assert.Equal(t, repository.NodeTypePerson, latentNode.Type)
+		_, err = h.support.GetNodeForContact(ctx, latentID) // live node read, fine
+		require.NoError(t, err)
+
+		// Promote: add a contact row AT the latent node's id.
+		require.NoError(t, h.support.InsertContactAtID(ctx, latentID, gen.Prefix()+"promoted-friend"))
+		contactRepo := repository.NewContactRepository(h.database.Queries)
+		t.Cleanup(func() { _ = contactRepo.HardDeleteContact(ctx, latentID) })
+
+		promoted, err := contactRepo.GetContact(ctx, latentID)
+		require.NoError(t, err)
+		assert.Equal(t, latentID, promoted.ID, "contact exists at the latent node id")
+
+		// The knows edge is intact and still points at the (now promoted) node.
+		edge, err := h.assertionRepo.GetAssertion(ctx, edgeID)
+		require.NoError(t, err)
+		assert.Equal(t, repository.AssertionStatusAccepted, edge.Status)
+		// knows is symmetric → the pair is stored UUID-ordered; the latent id is one
+		// of the two participants regardless of orientation.
+		touchesLatent := edge.SubjectNodeID == latentID ||
+			(edge.ObjectNodeID != nil && *edge.ObjectNodeID == latentID)
+		assert.True(t, touchesLatent, "knows edge still references the promoted node")
+	})
+
+	// Case 6: merging two people who knows() EACH OTHER collapses the between-edge
+	// into a self-edge → it must be CLOSED, not re-pointed into knows(winner, winner).
+	t.Run("6 edge between loser and winner closes (no self-loop)", func(t *testing.T) {
+		t.Parallel()
+		h, _ := newAssertHarness(t, ctx0())
+		gen, _ := migrationGenerator(t)
+
+		loser := h.seedPerson(t, ctx, gen.Prefix(), "loser")
+		winner := h.seedPerson(t, ctx, gen.Prefix(), "winner")
+
+		edge, err := h.svc.Assert(ctx, edgeReq(loser, winner, "knows", gen.Prefix(), "knows"))
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, edge.ID)
+
+		mergeAssertionsInTx(t, ctx, h, loser, winner)
+
+		// The between-edge is closed (superseded), NOT re-pointed to a self-loop.
+		closed, err := h.assertionRepo.GetAssertion(ctx, edge.ID)
+		require.NoError(t, err)
+		assert.Equal(t, repository.AssertionStatusSuperseded, closed.Status, "between-edge closed on merge")
+		require.NotNil(t, closed.KnowledgeTo)
+		// No live knows edge on the winner referencing itself.
+		edges, err := h.assertionRepo.ListLiveEdgesForNode(ctx, winner, "knows")
+		require.NoError(t, err)
+		for _, e := range edges {
+			selfLoop := e.SubjectNodeID == winner && e.ObjectNodeID != nil && *e.ObjectNodeID == winner
+			assert.False(t, selfLoop, "no live self-loop knows(winner, winner)")
+		}
+	})
+}
