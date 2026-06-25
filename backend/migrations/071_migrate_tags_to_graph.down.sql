@@ -1,0 +1,8 @@
+-- Down marker for the tag→graph data migration (071 up is a no-op marker).
+--
+-- Nothing to revert at the schema layer: the up migration creates no objects.
+-- The graph rows the `crm-admin --migrate-tags` command writes (tag entity nodes
+-- + `tagged_as` assertions) live in the node / entity / assertion tables created
+-- by earlier migrations; they are not owned by this migration and are left in
+-- place. The legacy `tag` / `contact_tag` tables were never dropped, so the
+-- legacy representation remains intact as the rollback source of truth.
