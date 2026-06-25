@@ -445,10 +445,13 @@ func TestInteractionVenue_MigrationAtomicity(t *testing.T) {
 
 // TestInteractionVenue_MalformedAnarlogRefIsSkipped runs the REAL 069 migration
 // over a malformed anarlog interaction (source_ref segment-2 is NOT a UUID) and
-// asserts the migration SUCCEEDS — the Step-1 ::uuid-cast guard skips the bad row
-// rather than aborting the whole BEGIN..COMMIT. A well-formed anarlog row in the
-// same run still resolves to its session venue. This test FAILS if the guard is
-// removed from the real file (the cast then raises invalid-uuid and aborts).
+// asserts the migration SUCCEEDS. Step-1's anarlog→gcal reuse compares the
+// trusted anarlog_session_id::text against the raw source_ref segment (it never
+// casts the untrusted segment to uuid), so a malformed ref cannot abort the
+// whole BEGIN..COMMIT. A linked well-formed anarlog row in the same run reuses
+// the gcal meeting venue (forcing Step-1 to actually evaluate). This test FAILS
+// if the comparison reverts to split_part(...)::uuid (the cast then raises
+// invalid-uuid and aborts the migration) — mutation-verified.
 func TestInteractionVenue_MalformedAnarlogRefIsSkipped(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
