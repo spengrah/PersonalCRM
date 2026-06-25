@@ -104,6 +104,16 @@ SELECT * FROM comms_message
 WHERE id = @id
   AND deleted_at IS NULL;
 
+-- name: GetCommsMessageContainer :one
+-- Returns the venue-container key (source + thread_id) for a staging row by its
+-- UUID. Used by the live interaction recorder to resolve the gchat venue (email
+-- resolves its venue from the EmailInteractionConsumer's comms row directly).
+-- The thread is consistent across all messages in one aggregated session, so
+-- reading the first id is sufficient.
+SELECT source, thread_id
+FROM comms_message
+WHERE id = $1;
+
 -- name: ListCommsMessagesByContact :many
 -- Per-contact content, newest first (backs idx_comms_message_contact_sent).
 SELECT * FROM comms_message

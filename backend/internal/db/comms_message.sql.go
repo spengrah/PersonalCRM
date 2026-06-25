@@ -383,6 +383,29 @@ func (q *Queries) GetCommsMessageByReplyTarget(ctx context.Context, arg GetComms
 	return &i, err
 }
 
+const GetCommsMessageContainer = `-- name: GetCommsMessageContainer :one
+SELECT source, thread_id
+FROM comms_message
+WHERE id = $1
+`
+
+type GetCommsMessageContainerRow struct {
+	Source   string      `json:"source"`
+	ThreadID pgtype.Text `json:"thread_id"`
+}
+
+// Returns the venue-container key (source + thread_id) for a staging row by its
+// UUID. Used by the live interaction recorder to resolve the gchat venue (email
+// resolves its venue from the EmailInteractionConsumer's comms row directly).
+// The thread is consistent across all messages in one aggregated session, so
+// reading the first id is sufficient.
+func (q *Queries) GetCommsMessageContainer(ctx context.Context, id pgtype.UUID) (*GetCommsMessageContainerRow, error) {
+	row := q.db.QueryRow(ctx, GetCommsMessageContainer, id)
+	var i GetCommsMessageContainerRow
+	err := row.Scan(&i.Source, &i.ThreadID)
+	return &i, err
+}
+
 const GetCommsMessageLatestByExternalID = `-- name: GetCommsMessageLatestByExternalID :one
 SELECT id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at FROM comms_message
 WHERE source = $1

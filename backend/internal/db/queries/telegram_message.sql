@@ -41,6 +41,15 @@ WHERE telegram_chat_id = @telegram_chat_id
   AND telegram_message_id = @telegram_message_id
   AND deleted_at IS NULL;
 
+-- name: GetTelegramMessageContainer :one
+-- Returns the venue-container key (chat id + type + title) for a staging row by
+-- its UUID. Used by the live interaction recorder to resolve the telegram
+-- venue. The container is consistent across all messages in one aggregated
+-- session, so reading the first id is sufficient.
+SELECT telegram_chat_id, chat_type, chat_title
+FROM telegram_message
+WHERE id = $1;
+
 -- name: ListTelegramMessagesByChatUnprocessed :many
 SELECT * FROM telegram_message
 WHERE telegram_chat_id = @telegram_chat_id

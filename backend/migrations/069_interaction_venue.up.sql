@@ -56,9 +56,9 @@ STRICT
 AS $$
     SELECT uuid_generate_v5(
         'a4f7c0e2-1b3d-4c6a-9e8f-2d5b7a1c0e94'::uuid,
-        length(p_source)::text || ':' || p_source || '|' ||
-        length(p_kind)::text || ':' || p_kind || '|' ||
-        length(p_container)::text || ':' || p_container
+        octet_length(p_source)::text || ':' || p_source || '|' ||
+        octet_length(p_kind)::text || ':' || p_kind || '|' ||
+        octet_length(p_container)::text || ':' || p_container
     );
 $$;
 
@@ -207,17 +207,17 @@ WHERE pc.interaction_id = i.id
 -- Ordered BEFORE anarlog so the meeting venue exists for the reuse step.
 WITH containers AS (
     SELECT DISTINCT
-        length(ce.gcal_event_id)::text || ':' || ce.gcal_event_id || '|' ||
-        length(ce.gcal_calendar_id)::text || ':' || ce.gcal_calendar_id || '|' ||
-        length(ce.google_account_id)::text || ':' || ce.google_account_id AS container_id,
+        octet_length(ce.gcal_event_id)::text || ':' || ce.gcal_event_id || '|' ||
+        octet_length(ce.gcal_calendar_id)::text || ':' || ce.gcal_calendar_id || '|' ||
+        octet_length(ce.google_account_id)::text || ':' || ce.google_account_id AS container_id,
         NULLIF(MAX(ce.title), '') AS title
     FROM calendar_event ce
     JOIN interaction i ON i.source = 'gcal' AND i.source_ref = ce.id::text
     WHERE i.venue_id IS NULL AND i.deleted_at IS NULL
     GROUP BY
-        length(ce.gcal_event_id)::text || ':' || ce.gcal_event_id || '|' ||
-        length(ce.gcal_calendar_id)::text || ':' || ce.gcal_calendar_id || '|' ||
-        length(ce.google_account_id)::text || ':' || ce.google_account_id
+        octet_length(ce.gcal_event_id)::text || ':' || ce.gcal_event_id || '|' ||
+        octet_length(ce.gcal_calendar_id)::text || ':' || ce.gcal_calendar_id || '|' ||
+        octet_length(ce.google_account_id)::text || ':' || ce.google_account_id
 ), ins_node AS (
     INSERT INTO node (id, type, canonical_label)
     SELECT venue_node_id('gcal', 'meeting', container_id), 'venue', ''
@@ -232,9 +232,9 @@ ON CONFLICT (source, kind, source_container_id) DO NOTHING;
 
 UPDATE interaction i
 SET venue_id = venue_node_id('gcal', 'meeting',
-        length(ce.gcal_event_id)::text || ':' || ce.gcal_event_id || '|' ||
-        length(ce.gcal_calendar_id)::text || ':' || ce.gcal_calendar_id || '|' ||
-        length(ce.google_account_id)::text || ':' || ce.google_account_id)
+        octet_length(ce.gcal_event_id)::text || ':' || ce.gcal_event_id || '|' ||
+        octet_length(ce.gcal_calendar_id)::text || ':' || ce.gcal_calendar_id || '|' ||
+        octet_length(ce.google_account_id)::text || ':' || ce.google_account_id)
 FROM calendar_event ce
 WHERE i.source = 'gcal'
   AND i.source_ref = ce.id::text
@@ -252,18 +252,18 @@ WHERE i.source = 'gcal'
 -- Step 1: REUSE the linked gcal meeting venue (the only cross-source merge).
 UPDATE interaction i
 SET venue_id = venue_node_id('gcal', 'meeting',
-        length(ce.gcal_event_id)::text || ':' || ce.gcal_event_id || '|' ||
-        length(ce.gcal_calendar_id)::text || ':' || ce.gcal_calendar_id || '|' ||
-        length(ce.google_account_id)::text || ':' || ce.google_account_id)
+        octet_length(ce.gcal_event_id)::text || ':' || ce.gcal_event_id || '|' ||
+        octet_length(ce.gcal_calendar_id)::text || ':' || ce.gcal_calendar_id || '|' ||
+        octet_length(ce.google_account_id)::text || ':' || ce.google_account_id)
 FROM meeting_note mn
 JOIN calendar_event ce ON ce.id = mn.linked_id
 JOIN venue ce_venue
   ON ce_venue.source = 'gcal'
  AND ce_venue.kind = 'meeting'
  AND ce_venue.source_container_id =
-        length(ce.gcal_event_id)::text || ':' || ce.gcal_event_id || '|' ||
-        length(ce.gcal_calendar_id)::text || ':' || ce.gcal_calendar_id || '|' ||
-        length(ce.google_account_id)::text || ':' || ce.google_account_id
+        octet_length(ce.gcal_event_id)::text || ':' || ce.gcal_event_id || '|' ||
+        octet_length(ce.gcal_calendar_id)::text || ':' || ce.gcal_calendar_id || '|' ||
+        octet_length(ce.google_account_id)::text || ':' || ce.google_account_id
 WHERE i.source = 'anarlog_sessions'
   AND i.venue_id IS NULL AND i.deleted_at IS NULL
   AND i.source_ref IS NOT NULL

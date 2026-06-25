@@ -111,6 +111,23 @@ type calendarEventLocker interface {
 	LockExistsByIDTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (bool, error)
 }
 
+// venueResolver is the narrow dependency the recorder uses to resolve the
+// shared-container venue node an interaction happened in, so it can set
+// interaction.venue_id atomically with the insert. Both methods are
+// best-effort: a nil return (no resolvable container) records the interaction
+// with a NULL venue_id rather than failing. Satisfied by
+// *repository.VenueResolverRegistry (message.*) + the calendar-event 3-tuple
+// read (gcal). Nil in tests that don't assert on venues — the recorder skips
+// resolution when it's nil.
+type venueResolver interface {
+	// ResolveMessageVenueTx resolves the venue for a telegram/messages/gchat
+	// interaction from its staging-row ids.
+	ResolveMessageVenueTx(ctx context.Context, tx pgx.Tx, source string, messageIDs []uuid.UUID) (*uuid.UUID, error)
+	// ResolveGCalVenueTx resolves the meeting venue for a gcal interaction from
+	// the internal calendar_event id carried in the interaction's source_ref.
+	ResolveGCalVenueTx(ctx context.Context, tx pgx.Tx, calendarEventID uuid.UUID) (*uuid.UUID, error)
+}
+
 // followUpDispatcher is the subset of *FollowUpManager the recorder
 // needs for the inline-apply path. Returns a post-commit closure (non-
 // nil on the refresh branch) that the recorder folds into its own
@@ -138,6 +155,7 @@ type InteractionRecorder struct {
 	cadence      cadenceDispatcher
 	followUp     followUpDispatcher
 	calendarLock calendarEventLocker
+	venue        venueResolver
 }
 
 // NewInteractionRecorder builds the consumer. staging may be nil for
@@ -168,6 +186,15 @@ func NewInteractionRecorder(
 		followUp:     followUp,
 		calendarLock: calendarLock,
 	}
+}
+
+// SetVenueResolver wires the venue resolver used to populate interaction.venue_id
+// for message.* and gcal interactions. Optional: when unset the recorder records
+// interactions with a NULL venue_id (tests that don't assert on venues leave it
+// nil). Production wiring sets it after construction, mirroring the other
+// optional-dependency setters on this package's consumers.
+func (r *InteractionRecorder) SetVenueResolver(v venueResolver) {
+	r.venue = v
 }
 
 // HandleEvent is the per-event entry point. The caller must own tx; this
@@ -228,6 +255,20 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 			// Skip the insert; no interaction, nil postCommit.
 			return nil, nil, nil
 		}
+	}
+
+	// Resolve the shared-container venue so it's set atomically with the insert.
+	// Best-effort: a resolution failure that isn't a real DB error leaves
+	// venue_id NULL (manual/todoist and unresolvable containers) — never fail
+	// the interaction over a missing venue. Runs before the dedup-or-insert so a
+	// fresh insert carries venue_id; a dedup hit ignores it (the row already has
+	// its venue).
+	if r.venue != nil {
+		venueID, venueErr := r.resolveVenue(ctx, tx, env, &req)
+		if venueErr != nil {
+			return nil, nil, fmt.Errorf("resolve venue: %w", venueErr)
+		}
+		req.VenueID = venueID
 	}
 
 	// Delegate to ContactService.RecordInteractionTx — single source of
@@ -359,6 +400,37 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 	}
 
 	return res.Interaction, postCommit, nil
+}
+
+// resolveVenue resolves the shared-container venue node id for the interaction
+// being recorded. message.received/sent (telegram/messages/gchat) resolve from
+// the staging-row ids in the payload; calendar.attended (gcal) resolves from the
+// internal calendar_event id carried in source_ref. Other kinds (task.*,
+// interaction.manual) have no shared container → nil. Returns nil (not an error)
+// whenever the container can't be resolved so the recorder records with a NULL
+// venue_id.
+func (r *InteractionRecorder) resolveVenue(ctx context.Context, tx pgx.Tx, env *events.Envelope, req *repository.RecordInteractionRequest) (*uuid.UUID, error) {
+	switch env.Kind {
+	case events.KindMessageReceived, events.KindMessageSent:
+		msgIDs, err := extractMessageIDs(env)
+		if err != nil {
+			return nil, err
+		}
+		return r.venue.ResolveMessageVenueTx(ctx, tx, env.Source, msgIDs)
+	case events.KindCalendarAttended:
+		if req.SourceRef == nil {
+			return nil, nil
+		}
+		eventID, parseErr := uuid.Parse(*req.SourceRef)
+		if parseErr != nil {
+			// source_ref isn't a calendar_event UUID — already errored above
+			// for the lock path when calendarLock is set; here just skip venue.
+			return nil, nil
+		}
+		return r.venue.ResolveGCalVenueTx(ctx, tx, eventID)
+	default:
+		return nil, nil
+	}
 }
 
 // extractRequest dispatches on env.Kind to build a RecordInteractionRequest

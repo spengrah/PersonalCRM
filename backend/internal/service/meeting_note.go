@@ -95,6 +95,18 @@ type MeetingNoteService struct {
 	titleDiscovery  IngestTitleDiscoveryWriter
 	contactRecorder ContactInteractionRecorder
 	contactNames    ContactNameReader
+	// venue resolves the session venue (reusing a linked gcal meeting venue, or
+	// minting a session venue) so resolve-link-path interactions get venue_id
+	// set atomically. Optional (nil-safe); wired post-construction via
+	// SetVenueResolver. Same surface IngestService uses.
+	venue IngestVenueResolver
+}
+
+// SetVenueResolver injects the venue resolver used to populate venue_id on the
+// resolve-link interaction path. Optional — when unset, those interactions get
+// a NULL venue_id.
+func (s *MeetingNoteService) SetVenueResolver(v IngestVenueResolver) {
+	s.venue = v
 }
 
 // NewMeetingNoteService constructs a MeetingNoteService bound to its
@@ -531,6 +543,12 @@ func (s *MeetingNoteService) writeDesiredInteractions(ctx context.Context, tx pg
 	}
 	created := make([]CreatedInteraction, 0, len(desired))
 	var followUps []func(context.Context)
+	// Resolve the session venue once (all desired interactions share the
+	// session): reuse a linked gcal meeting venue, else mint a session venue.
+	sessionVenueID, venueErr := resolveAnarlogSessionVenue(ctx, tx, s.venue, prior.AnarlogSessionID, prior.LinkedKind, prior.LinkedID)
+	if venueErr != nil {
+		return nil, nil, fmt.Errorf("resolve session venue: %w", venueErr)
+	}
 	for _, d := range desired {
 		sourceRef := d.SourceRef
 		req := repository.RecordInteractionRequest{
@@ -540,6 +558,7 @@ func (s *MeetingNoteService) writeDesiredInteractions(ctx context.Context, tx pg
 			OccurredAt:  prior.MeetingAt,
 			Description: prior.Title,
 			Direction:   repository.InteractionDirectionMutual,
+			VenueID:     sessionVenueID,
 		}
 		res, err := s.contactRecorder.RecordInteractionTx(ctx, tx, false, req)
 		if err != nil {

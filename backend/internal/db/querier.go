@@ -681,6 +681,12 @@ type Querier interface {
 	// Intentionally does NOT filter processed_at — a reply can target an
 	// already-processed message (the whole point of bridging).
 	GetCommsMessageByReplyTarget(ctx context.Context, arg GetCommsMessageByReplyTargetParams) (*CommsMessage, error)
+	// Returns the venue-container key (source + thread_id) for a staging row by its
+	// UUID. Used by the live interaction recorder to resolve the gchat venue (email
+	// resolves its venue from the EmailInteractionConsumer's comms row directly).
+	// The thread is consistent across all messages in one aggregated session, so
+	// reading the first id is sufficient.
+	GetCommsMessageContainer(ctx context.Context, id pgtype.UUID) (*GetCommsMessageContainerRow, error)
 	// Read one stored row for (source, external_id), newest first, to supply the
 	// current body for the provider's bodyDiffers no-op-avoidance pre-check. Fanned-
 	// out rows share content, so any one row suffices. Used ONLY for body
@@ -794,6 +800,11 @@ type Querier interface {
 	// explicit-reply-bridge path. chat_guid is included for scoping
 	// selectivity.
 	GetMessagesMessageByReplyTarget(ctx context.Context, arg GetMessagesMessageByReplyTargetParams) (*MessagesMessage, error)
+	// Returns the venue-container key (chat_guid + group flag) for a staging row by
+	// its UUID. Used by the live interaction recorder to resolve the messages
+	// venue. The container is consistent across all messages in one aggregated
+	// session, so reading the first id is sufficient.
+	GetMessagesMessageContainer(ctx context.Context, id pgtype.UUID) (*GetMessagesMessageContainerRow, error)
 	GetNode(ctx context.Context, id pgtype.UUID) (*Node, error)
 	GetNodeIncludingDeleted(ctx context.Context, id pgtype.UUID) (*Node, error)
 	// Note queries
@@ -855,6 +866,11 @@ type Querier interface {
 	// all-fields-populated test can read back a row whose deleted_at is set.
 	// Production code MUST NOT call this (it would return soft-deleted rows).
 	GetTelegramMessageByIDForTest(ctx context.Context, id pgtype.UUID) (*TelegramMessage, error)
+	// Returns the venue-container key (chat id + type + title) for a staging row by
+	// its UUID. Used by the live interaction recorder to resolve the telegram
+	// venue. The container is consistent across all messages in one aggregated
+	// session, so reading the first id is sufficient.
+	GetTelegramMessageContainer(ctx context.Context, id pgtype.UUID) (*GetTelegramMessageContainerRow, error)
 	GetTelegramSession(ctx context.Context) (*TelegramSession, error)
 	GetTelegramUpdateState(ctx context.Context, userID int64) (*TelegramUpdateState, error)
 	// Probe used by the dispatch loop's revive-bypass: when a duplicate

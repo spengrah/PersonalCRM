@@ -163,6 +163,28 @@ func (q *Queries) GetMessagesMessageByReplyTarget(ctx context.Context, arg GetMe
 	return &i, err
 }
 
+const GetMessagesMessageContainer = `-- name: GetMessagesMessageContainer :one
+SELECT chat_guid, is_group_chat
+FROM messages_message
+WHERE id = $1
+`
+
+type GetMessagesMessageContainerRow struct {
+	ChatGuid    string `json:"chat_guid"`
+	IsGroupChat bool   `json:"is_group_chat"`
+}
+
+// Returns the venue-container key (chat_guid + group flag) for a staging row by
+// its UUID. Used by the live interaction recorder to resolve the messages
+// venue. The container is consistent across all messages in one aggregated
+// session, so reading the first id is sufficient.
+func (q *Queries) GetMessagesMessageContainer(ctx context.Context, id pgtype.UUID) (*GetMessagesMessageContainerRow, error) {
+	row := q.db.QueryRow(ctx, GetMessagesMessageContainer, id)
+	var i GetMessagesMessageContainerRow
+	err := row.Scan(&i.ChatGuid, &i.IsGroupChat)
+	return &i, err
+}
+
 const HardDeleteMessagesMessagesByMacHost = `-- name: HardDeleteMessagesMessagesByMacHost :exec
 DELETE FROM messages_message
 WHERE mac_host_id = $1

@@ -334,6 +334,28 @@ type IngestService struct {
 	// wired post-construction via SetAddressBookReconciler so the big
 	// NewIngestService signature is unchanged.
 	addressBookReconciler AddressBookReconciler
+	// venue resolves the shared-container venue node for phone-call and
+	// anarlog-session interactions, so venue_id is set atomically with the
+	// insert. Optional (nil-safe); wired post-construction via SetVenueResolver
+	// to keep the NewIngestService signature unchanged.
+	venue IngestVenueResolver
+}
+
+// IngestVenueResolver is the venue-resolution surface the phone-call and
+// anarlog-session recorders need: resolve a container the recorder already has
+// in hand (phone call_unique_id, anarlog session id), and resolve the meeting
+// venue of a linked calendar_event (anarlog→gcal reuse). Satisfied by
+// *repository.VenueResolverRegistry.
+type IngestVenueResolver interface {
+	ResolveVenueForInteractionTx(ctx context.Context, tx pgx.Tx, source, kind, containerKey, title string) (uuid.UUID, error)
+	ResolveGCalVenueTx(ctx context.Context, tx pgx.Tx, calendarEventID uuid.UUID) (*uuid.UUID, error)
+}
+
+// SetVenueResolver injects the venue resolver. Optional — when unset, the
+// phone-call and anarlog recorders record interactions with a NULL venue_id.
+// Mirrors SetAddressBookReconciler's post-construction injection.
+func (s *IngestService) SetVenueResolver(v IngestVenueResolver) {
+	s.venue = v
 }
 
 // SetAddressBookReconciler injects the post-commit address-book method
@@ -2238,6 +2260,17 @@ func (s *IngestService) handleMeetingNoteRecorded(
 		// cadence + follow-up evaluation fire correctly). Capture the
 		// FollowUpFn closures so the dispatch loop can run them after
 		// the outer tx commits.
+		// Resolve the session venue once for the whole batch (all desired
+		// interactions belong to the same session): reuse the linked gcal
+		// meeting venue when this note links to an event, else mint a session
+		// venue. Best-effort — a resolution error leaves venue_id NULL.
+		sessionVenueID, venueErr := resolveAnarlogSessionVenue(ctx, tx, s.venue, sessionID, finalLinkedKind, finalLinkedID)
+		if venueErr != nil {
+			return nil, nil, &IngestPerEventRejection{
+				Code:    ingestRejectInteractionWriteFailed,
+				Message: fmt.Sprintf("resolve session venue: %s", venueErr.Error()),
+			}
+		}
 		for ref, d := range desiredByRef {
 			if _, have := existingByRef[ref]; have {
 				continue
@@ -2250,6 +2283,7 @@ func (s *IngestService) handleMeetingNoteRecorded(
 				OccurredAt:  p.MeetingAt,
 				Description: p.Title,
 				Direction:   repository.InteractionDirectionMutual,
+				VenueID:     sessionVenueID,
 			}
 			res, err := s.contactSvc.RecordInteractionTx(ctx, tx, false, req)
 			if err != nil {
@@ -2332,6 +2366,40 @@ func (s *IngestService) handleMeetingNoteRecorded(
 		Msg("meeting_note linkage decision")
 
 	return needs, followUps, nil
+}
+
+// resolveAnarlogSessionVenue resolves the venue node id for an anarlog session's
+// interactions. When the note links to a calendar event (linked_kind='event')
+// the session REUSES that event's meeting venue (the only cross-source venue
+// merge); otherwise it mints/finds a session venue keyed on the session id.
+// Best-effort: returns (nil, nil) when the venue resolver is unwired or the
+// linked gcal venue can't be resolved, so the interaction records with a NULL
+// venue_id rather than failing. Only a real DB error propagates. Shared by the
+// ingest inline handler and MeetingNoteService's resolve-link path.
+func resolveAnarlogSessionVenue(
+	ctx context.Context, tx pgx.Tx, venue IngestVenueResolver, sessionID uuid.UUID, linkedKind *string, linkedID *uuid.UUID,
+) (*uuid.UUID, error) {
+	if venue == nil {
+		return nil, nil
+	}
+	// Linked to a calendar event → reuse the gcal meeting venue.
+	if linkedKind != nil && *linkedKind == repository.LinkedKindEvent && linkedID != nil {
+		venueID, err := venue.ResolveGCalVenueTx(ctx, tx, *linkedID)
+		if err != nil {
+			return nil, err
+		}
+		if venueID != nil {
+			return venueID, nil
+		}
+		// Linked event venue couldn't be resolved (event row gone) → fall
+		// through to a session venue so the session still gets a container.
+	}
+	venueID, err := venue.ResolveVenueForInteractionTx(
+		ctx, tx, repository.InteractionSourceAnarlogSessions, repository.VenueKindSession, sessionID.String(), "")
+	if err != nil {
+		return nil, err
+	}
+	return &venueID, nil
 }
 
 // coalesceCandidates collapses semantically-identical linkage candidates

@@ -27,6 +27,15 @@ SELECT * FROM messages_message
 WHERE guid = @guid
   AND deleted_at IS NULL;
 
+-- name: GetMessagesMessageContainer :one
+-- Returns the venue-container key (chat_guid + group flag) for a staging row by
+-- its UUID. Used by the live interaction recorder to resolve the messages
+-- venue. The container is consistent across all messages in one aggregated
+-- session, so reading the first id is sufficient.
+SELECT chat_guid, is_group_chat
+FROM messages_message
+WHERE id = $1;
+
 -- name: GetMessagesMessageByReplyTarget :one
 -- Source-neutral analog of GetTelegramMessage for the aggregator's
 -- explicit-reply-bridge path. chat_guid is included for scoping
