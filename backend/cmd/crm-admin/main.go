@@ -139,6 +139,17 @@
 //	                              re-run. Prints a counts-only summary. The legacy
 //	                              tag / contact_tag tables are NOT dropped (rollback
 //	                              anchor, removed in a later migration).
+//	--migrate-contact-knowledge-columns
+//	                              Mirror the legacy contact.location / birthday /
+//	                              how_met cache columns into the graph: location
+//	                              becomes a `lives_in` edge to a place entity node,
+//	                              birthday/how_met become facts — for each NON-deleted
+//	                              contact, authored by the user (knowledge time =
+//	                              contact.created_at). Idempotent (routes through
+//	                              AssertService proposition identity + find-or-create
+//	                              place nodes) — safe to re-run. Counts-only summary.
+//	                              The cache columns are retained (the consumer keeps
+//	                              them in sync from the assertions).
 //
 // The seed/reset subcommands inherit the process env (CRM_ENV / TIME_BASE /
 // TIME_ACCELERATION / DATABASE_URL / MIGRATIONS_PATH) — on the Pi via
@@ -241,6 +252,13 @@ type tagMigrator interface {
 	MigrateTags(ctx context.Context) (service.TagMigrationResult, error)
 }
 
+// contactKnowledgeMigrator is the narrow interface
+// --migrate-contact-knowledge-columns needs. Production wires this to
+// *service.ContactKnowledgeMigrationService.MigrateContactKnowledgeColumns.
+type contactKnowledgeMigrator interface {
+	MigrateContactKnowledgeColumns(ctx context.Context) (service.ContactKnowledgeMigrationResult, error)
+}
+
 // seedRunner is the narrow interface --seed / --reset-and-seed need. Production
 // wires this to a seedAdapter over the synthetic toolkit. Seed is additive (it
 // runs the non-final-river_job drain preflight); ResetAndSeed hard-wipes the live
@@ -287,8 +305,12 @@ type adminDeps struct {
 	// migrateTags serves --migrate-tags (mirror legacy tag/contact_tag into the
 	// graph via AssertService). Wired to a TagMigrationService.
 	migrateTags tagMigrator
-	stdout      io.Writer
-	stderr      io.Writer
+	// migrateContactKnowledge serves --migrate-contact-knowledge-columns (mirror
+	// legacy contact.location/birthday/how_met into the graph via AssertService).
+	// Wired to a ContactKnowledgeMigrationService.
+	migrateContactKnowledge contactKnowledgeMigrator
+	stdout                  io.Writer
+	stderr                  io.Writer
 }
 
 // runOptions captures parsed flags. Exposed as a struct so tests can
@@ -330,6 +352,10 @@ type runOptions struct {
 	// migrateTags ← --migrate-tags (mirror legacy tag/contact_tag into the graph
 	// via the validated assertion write path). Idempotent; counts-only output.
 	migrateTags bool
+	// migrateContactKnowledge ← --migrate-contact-knowledge-columns (mirror legacy
+	// contact.location/birthday/how_met into the graph via the validated assertion
+	// write path). Idempotent; counts-only output.
+	migrateContactKnowledge bool
 }
 
 // exitErr carries an explicit process exit code so a subcommand can drive a
@@ -480,6 +506,9 @@ func validateSubcommand(opts runOptions) error {
 	if opts.migrateTags {
 		active++
 	}
+	if opts.migrateContactKnowledge {
+		active++
+	}
 	if active == 0 {
 		return errors.New("no subcommand specified; pass exactly one of " +
 			subcommandList)
@@ -496,7 +525,8 @@ func validateSubcommand(opts runOptions) error {
 const subcommandList = "--messages-rematch-stranded, --reconcile-address-book-methods, " +
 	"--rederive-correspondence-names, --reset-gmail-backfill-cursors, --mint-pairing-token, " +
 	"--list-hosts, --revoke-host <uuid>, --rotate-host-key <uuid>, --seed, --reset-and-seed, " +
-	"--migrate, --migrate-check, --list-jobs, --retry-job <id>, --migrate-tags"
+	"--migrate, --migrate-check, --list-jobs, --retry-job <id>, --migrate-tags, " +
+	"--migrate-contact-knowledge-columns"
 
 // parseArgs uses a private FlagSet so tests can drive the parser
 // without polluting flag's global state.
@@ -573,6 +603,11 @@ func parseArgs(args []string) (runOptions, error) {
 		"Mirror the legacy tag/contact_tag tables into the graph (tag entity nodes + accepted "+
 			"tagged_as assertions for non-deleted contacts). FAILS LOUDLY on a case-insensitive "+
 			"tag-name collision. Idempotent; counts-only output. Legacy tables retained.")
+	fs.BoolVar(&opts.migrateContactKnowledge, "migrate-contact-knowledge-columns", false,
+		"Mirror the legacy contact.location/birthday/how_met cache columns into the graph "+
+			"(lives_in edges to place nodes + birthday/how_met facts, for non-deleted contacts) "+
+			"via the validated assertion write path with each contact's created_at as the "+
+			"knowledge time. Idempotent; counts-only output. Cache columns are retained.")
 	if err := fs.Parse(args); err != nil {
 		return runOptions{}, err
 	}
@@ -678,6 +713,8 @@ func run(ctx context.Context, opts runOptions, deps adminDeps) error {
 		return runRetryJob(ctx, opts, deps)
 	case opts.migrateTags:
 		return runMigrateTags(ctx, deps)
+	case opts.migrateContactKnowledge:
+		return runMigrateContactKnowledge(ctx, deps)
 	case opts.migrate, opts.migrateCheck:
 		// Migration subcommands are dispatched PRE-DB in runMain (they need
 		// only the database URL + migrations path, not deps), so they never
@@ -937,6 +974,25 @@ func runMigrateTags(ctx context.Context, deps adminDeps) error {
 		"  contact_tags_skipped_deleted:  %d\n"+
 		"  assertions_asserted:           %d\n",
 		res.Tags, res.TagNodesCreated, res.TagNodesExisting, res.ContactTags, res.SkippedDeletedContacts, res.AssertionsAsserted); err != nil {
+		return fmt.Errorf("write summary: %w", err)
+	}
+	return nil
+}
+
+// runMigrateContactKnowledge mirrors the legacy contact.location/birthday/how_met
+// cache columns into the graph (via AssertService) and prints a counts-only
+// summary. Idempotent: a re-run corroborates rather than duplicates.
+func runMigrateContactKnowledge(ctx context.Context, deps adminDeps) error {
+	res, err := deps.migrateContactKnowledge.MigrateContactKnowledgeColumns(ctx)
+	if err != nil {
+		return fmt.Errorf("migrate contact knowledge columns: %w", err)
+	}
+	if _, err := fmt.Fprintf(deps.stdout, "migrate-contact-knowledge-columns summary:\n"+
+		"  contacts_scanned:    %d\n"+
+		"  locations_migrated:  %d\n"+
+		"  birthdays_migrated:  %d\n"+
+		"  how_met_migrated:    %d\n",
+		res.Contacts, res.LocationsMigrated, res.BirthdaysMigrated, res.HowMetMigrated); err != nil {
 		return fmt.Errorf("write summary: %w", err)
 	}
 	return nil
@@ -1246,6 +1302,9 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 		database.Pool, repository.NewTagRepository(database.Queries),
 		graphNodeRepo, graphEntityRepo, assertService,
 	)
+	contactKnowledgeMigration := service.NewContactKnowledgeMigrationService(
+		database.Pool, contactRepo, assertService,
+	)
 
 	deps := adminDeps{
 		tokens:     hostService,
@@ -1260,8 +1319,9 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 		},
 		// --list-jobs / --retry-job: the insert-only river client also satisfies
 		// JobList / JobRetry (both go through the driver, no worker pool needed).
-		jobs:        riverClient,
-		migrateTags: tagMigration,
+		jobs:                    riverClient,
+		migrateTags:             tagMigration,
+		migrateContactKnowledge: contactKnowledgeMigration,
 	}
 
 	// LAZY: build the correspondence re-derivation stack ONLY for
