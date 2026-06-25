@@ -140,6 +140,19 @@ func (s *SyncService) ListDueAccounts(ctx context.Context) ([]repository.DueAcco
 				Msg("scheduler tick: push-strategy provider; skipping due account")
 			continue
 		}
+		// Account-scoped providers (Config().RequiresAccount) whose row has a
+		// missing account_id can never sync: the provider's Sync rejects the
+		// nil/empty account, so enqueuing only burns retry budget forever —
+		// the same poisoned-row failure mode as the unregistered-source filter
+		// above. The trigger path refuses to bootstrap such rows; this skips
+		// any that already exist. Operators disable/delete them explicitly;
+		// the stalled next_sync_at surfaces them via the staleness banner.
+		if provider.Config().RequiresAccount && AccountIDMissing(acct.AccountID) {
+			logger.Debug().
+				Str("source", acct.Source).
+				Msg("scheduler tick: account-scoped provider with missing account_id; skipping due account")
+			continue
+		}
 		accounts = append(accounts, acct)
 	}
 	return accounts, nil

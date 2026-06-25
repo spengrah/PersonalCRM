@@ -404,6 +404,75 @@ func TestSyncService_ListDueAccounts_FiltersUnregisteredProviders(t *testing.T) 
 	assert.False(t, foundDead, "unregistered provider's source should be filtered out")
 }
 
+// TestSyncService_ListDueAccounts_SkipsAccountScopedRowsMissingAccount verifies
+// the scheduler tick does not enqueue an account-scoped provider's sync_state
+// row whose account_id is missing: the provider's Sync rejects the nil/empty
+// account, so the job would only burn retry budget forever. The trigger guard
+// prevents creating such rows; this covers any that already exist. A row WITH
+// an account for the same provider is still listed (positive control).
+func TestSyncService_ListDueAccounts_SkipsAccountScopedRowsMissingAccount(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping db-backed service test in short mode")
+	}
+	t.Parallel()
+	database, ctx := newServiceSuiteDB(t)
+
+	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
+
+	source := "service_test_acct_scoped_source"
+	cleanup := func(c context.Context) { _ = syncRepo.DeleteSyncStatesBySourceForTest(c, source) }
+	cleanup(ctx)
+	t.Cleanup(func() { cleanup(context.Background()) })
+
+	contactRepo := repository.NewContactRepository(database.Queries)
+	registry := syncpkg.NewProviderRegistry()
+	registry.Register(&countingProvider{cfg: syncpkg.SourceConfig{
+		Name:            source,
+		DisplayName:     source,
+		Strategy:        repository.SyncStrategyFetchAll,
+		DefaultInterval: 15 * time.Minute,
+		RequiresAccount: true,
+	}})
+
+	past := accelerated.GetCurrentTime().Add(-1 * time.Minute)
+	validAccount := "service_test_valid_account"
+	// Poisoned row: account-scoped provider with no account_id.
+	_, err := syncRepo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
+		Source:     source,
+		Enabled:    true,
+		Strategy:   repository.SyncStrategyFetchAll,
+		NextSyncAt: &past,
+	})
+	require.NoError(t, err)
+	// Healthy row: same provider, valid account_id.
+	_, err = syncRepo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
+		Source:     source,
+		AccountID:  &validAccount,
+		Enabled:    true,
+		Strategy:   repository.SyncStrategyFetchAll,
+		NextSyncAt: &past,
+	})
+	require.NoError(t, err)
+
+	svc := service.NewSyncService(syncRepo, contactRepo, registry)
+	accounts, err := svc.ListDueAccounts(ctx)
+	require.NoError(t, err)
+
+	foundMissing, foundValid := false, false
+	for _, a := range accounts {
+		if a.Source != source {
+			continue
+		}
+		if a.AccountID == nil || *a.AccountID == "" {
+			foundMissing = true
+		} else if *a.AccountID == validAccount {
+			foundValid = true
+		}
+	}
+	assert.False(t, foundMissing, "account-scoped row with missing account_id must be skipped")
+	assert.True(t, foundValid, "account-scoped row with a valid account must still be listed")
+}
+
 // TestSyncService_TriggerSync_RejectsNilAccountForAccountScopedProvider is the
 // primary regression: an account-scoped provider (Config().RequiresAccount)
 // triggered with a nil account must be rejected with ErrAccountRequired and must
