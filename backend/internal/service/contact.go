@@ -1370,46 +1370,7 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		return nil, fmt.Errorf("transfer interactions: %w", err)
 	}
 
-	// 5. Delete connections between source and target (would be self-referential after merge)
-	if err := txQueries.DeleteDuplicateConnections(ctx, db.DeleteDuplicateConnectionsParams{
-		SourceContactID: sourceUUID,
-		TargetContactID: targetUUID,
-	}); err != nil {
-		return nil, fmt.Errorf("delete duplicate connections: %w", err)
-	}
-
-	// 5b. Delete source's connections to third parties that target already connects to
-	// This prevents duplicate rows after transfer when both connect to the same person
-	if err := txQueries.DeleteDuplicateThirdPartyConnectionsA(ctx, db.DeleteDuplicateThirdPartyConnectionsAParams{
-		SourceContactID: sourceUUID,
-		TargetContactID: targetUUID,
-	}); err != nil {
-		return nil, fmt.Errorf("delete duplicate third party connections (contact_a): %w", err)
-	}
-
-	if err := txQueries.DeleteDuplicateThirdPartyConnectionsB(ctx, db.DeleteDuplicateThirdPartyConnectionsBParams{
-		SourceContactID: sourceUUID,
-		TargetContactID: targetUUID,
-	}); err != nil {
-		return nil, fmt.Errorf("delete duplicate third party connections (contact_b): %w", err)
-	}
-
-	// 6. Transfer connections (both directions)
-	if err := txQueries.TransferConnectionsAsContactA(ctx, db.TransferConnectionsAsContactAParams{
-		SourceContactID: sourceUUID,
-		TargetContactID: targetUUID,
-	}); err != nil {
-		return nil, fmt.Errorf("transfer connections as contact_a: %w", err)
-	}
-
-	if err := txQueries.TransferConnectionsAsContactB(ctx, db.TransferConnectionsAsContactBParams{
-		SourceContactID: sourceUUID,
-		TargetContactID: targetUUID,
-	}); err != nil {
-		return nil, fmt.Errorf("transfer connections as contact_b: %w", err)
-	}
-
-	// 7. Update calendar events
+	// 5. Update calendar events
 	if err := txQueries.ReplaceContactInCalendarEvents(ctx, db.ReplaceContactInCalendarEventsParams{
 		SourceContactID: sourceUUID,
 		TargetContactID: targetUUID,
@@ -1417,12 +1378,12 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		return nil, fmt.Errorf("replace contact in calendar events: %w", err)
 	}
 
-	// 8. Deduplicate calendar event contact arrays
+	// 6. Deduplicate calendar event contact arrays
 	if err := txQueries.DeduplicateCalendarEventContacts(ctx, targetUUID); err != nil {
 		return nil, fmt.Errorf("deduplicate calendar event contacts: %w", err)
 	}
 
-	// 9. Update target contact with field selections and optional new
+	// 7. Update target contact with field selections and optional new
 	// name. This write is profile-only (name/location/birthday/cadence/
 	// photo/how_met) and NEVER touches the four cadence columns.
 	// Cadence columns are applied in the next step via
@@ -1446,7 +1407,7 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		return nil, errors.New("merge contacts: knowledge writer not wired (call SetKnowledgeWriter)")
 	}
 
-	// 9-graph. Graph merge FIRST: tombstone the source person node
+	// 7-graph. Graph merge FIRST: tombstone the source person node
 	// (merged_into=target, deleted_at=now) and re-point every assertion touching
 	// the source onto the target node (D9). This migrates the source contact's OWN
 	// knowledge edges/facts onto the survivor. It runs BEFORE the field-selection
@@ -1475,7 +1436,7 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		return nil, fmt.Errorf("apply merged contact knowledge: %w", err)
 	}
 
-	// 9a. Forward-max merged cadence columns through
+	// 7a. Forward-max merged cadence columns through
 	// CadenceUpdater.BulkApply. The merged cadence string may come from
 	// the source (when FieldSelections.Cadence == "source"), so
 	// contact_by is derived from the CHOSEN cadence value — not from
@@ -1498,7 +1459,7 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		return nil, fmt.Errorf("refetch merged contact after bulk apply: %w", err)
 	}
 
-	// 10. Soft delete source contact
+	// 8. Soft delete source contact
 	if err := txQueries.SoftDeleteContact(ctx, sourceUUID); err != nil {
 		return nil, fmt.Errorf("soft delete source contact: %w", err)
 	}

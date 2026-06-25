@@ -83,24 +83,6 @@ func (q *Queries) DeduplicateCalendarEventContacts(ctx context.Context, targetCo
 	return err
 }
 
-const DeleteDuplicateConnections = `-- name: DeleteDuplicateConnections :exec
-DELETE FROM connection
-WHERE (contact_a_id = $1 AND contact_b_id = $2)
-   OR (contact_a_id = $2 AND contact_b_id = $1)
-`
-
-type DeleteDuplicateConnectionsParams struct {
-	SourceContactID pgtype.UUID `json:"source_contact_id"`
-	TargetContactID pgtype.UUID `json:"target_contact_id"`
-}
-
-// Delete connections that would become duplicates after merge
-// (connections between source and target, or connections that now point same way)
-func (q *Queries) DeleteDuplicateConnections(ctx context.Context, arg DeleteDuplicateConnectionsParams) error {
-	_, err := q.db.Exec(ctx, DeleteDuplicateConnections, arg.SourceContactID, arg.TargetContactID)
-	return err
-}
-
 const DeleteDuplicateContactMethods = `-- name: DeleteDuplicateContactMethods :exec
 DELETE FROM contact_method cm_source
 WHERE cm_source.contact_id = $1
@@ -120,48 +102,6 @@ type DeleteDuplicateContactMethodsParams struct {
 // Delete contact methods from source that already exist in target (by normalized value and type)
 func (q *Queries) DeleteDuplicateContactMethods(ctx context.Context, arg DeleteDuplicateContactMethodsParams) error {
 	_, err := q.db.Exec(ctx, DeleteDuplicateContactMethods, arg.SourceContactID, arg.TargetContactID)
-	return err
-}
-
-const DeleteDuplicateThirdPartyConnectionsA = `-- name: DeleteDuplicateThirdPartyConnectionsA :exec
-DELETE FROM connection conn_source
-WHERE conn_source.contact_a_id = $1
-  AND conn_source.contact_b_id IN (
-    SELECT conn_target.contact_b_id FROM connection conn_target
-    WHERE conn_target.contact_a_id = $2
-  )
-`
-
-type DeleteDuplicateThirdPartyConnectionsAParams struct {
-	SourceContactID pgtype.UUID `json:"source_contact_id"`
-	TargetContactID pgtype.UUID `json:"target_contact_id"`
-}
-
-// Delete source's connections (as contact_a) where target already connects to the same contact_b
-// Prevents duplicate (target, X) rows after transfer
-func (q *Queries) DeleteDuplicateThirdPartyConnectionsA(ctx context.Context, arg DeleteDuplicateThirdPartyConnectionsAParams) error {
-	_, err := q.db.Exec(ctx, DeleteDuplicateThirdPartyConnectionsA, arg.SourceContactID, arg.TargetContactID)
-	return err
-}
-
-const DeleteDuplicateThirdPartyConnectionsB = `-- name: DeleteDuplicateThirdPartyConnectionsB :exec
-DELETE FROM connection conn_source
-WHERE conn_source.contact_b_id = $1
-  AND conn_source.contact_a_id IN (
-    SELECT conn_target.contact_a_id FROM connection conn_target
-    WHERE conn_target.contact_b_id = $2
-  )
-`
-
-type DeleteDuplicateThirdPartyConnectionsBParams struct {
-	SourceContactID pgtype.UUID `json:"source_contact_id"`
-	TargetContactID pgtype.UUID `json:"target_contact_id"`
-}
-
-// Delete source's connections (as contact_b) where target already connects to the same contact_a
-// Prevents duplicate (X, target) rows after transfer
-func (q *Queries) DeleteDuplicateThirdPartyConnectionsB(ctx context.Context, arg DeleteDuplicateThirdPartyConnectionsBParams) error {
-	_, err := q.db.Exec(ctx, DeleteDuplicateThirdPartyConnectionsB, arg.SourceContactID, arg.TargetContactID)
 	return err
 }
 
@@ -248,43 +188,6 @@ type ReplaceContactInCalendarEventsParams struct {
 // Uses array_replace for efficient in-place replacement
 func (q *Queries) ReplaceContactInCalendarEvents(ctx context.Context, arg ReplaceContactInCalendarEventsParams) error {
 	_, err := q.db.Exec(ctx, ReplaceContactInCalendarEvents, arg.SourceContactID, arg.TargetContactID)
-	return err
-}
-
-const TransferConnectionsAsContactA = `-- name: TransferConnectionsAsContactA :exec
-UPDATE connection
-SET contact_a_id = $1
-WHERE contact_a_id = $2
-  AND contact_b_id != $1
-`
-
-type TransferConnectionsAsContactAParams struct {
-	TargetContactID pgtype.UUID `json:"target_contact_id"`
-	SourceContactID pgtype.UUID `json:"source_contact_id"`
-}
-
-// Transfer connections where source is contact_a to use target instead
-// This handles the bidirectional relationship table
-func (q *Queries) TransferConnectionsAsContactA(ctx context.Context, arg TransferConnectionsAsContactAParams) error {
-	_, err := q.db.Exec(ctx, TransferConnectionsAsContactA, arg.TargetContactID, arg.SourceContactID)
-	return err
-}
-
-const TransferConnectionsAsContactB = `-- name: TransferConnectionsAsContactB :exec
-UPDATE connection
-SET contact_b_id = $1
-WHERE contact_b_id = $2
-  AND contact_a_id != $1
-`
-
-type TransferConnectionsAsContactBParams struct {
-	TargetContactID pgtype.UUID `json:"target_contact_id"`
-	SourceContactID pgtype.UUID `json:"source_contact_id"`
-}
-
-// Transfer connections where source is contact_b to use target instead
-func (q *Queries) TransferConnectionsAsContactB(ctx context.Context, arg TransferConnectionsAsContactBParams) error {
-	_, err := q.db.Exec(ctx, TransferConnectionsAsContactB, arg.TargetContactID, arg.SourceContactID)
 	return err
 }
 

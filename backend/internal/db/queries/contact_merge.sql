@@ -21,28 +21,6 @@ SET contact_id = sqlc.arg(target_contact_id),
     updated_at = NOW()
 WHERE contact_id = sqlc.arg(source_contact_id);
 
--- name: TransferConnectionsAsContactA :exec
--- Transfer connections where source is contact_a to use target instead
--- This handles the bidirectional relationship table
-UPDATE connection
-SET contact_a_id = sqlc.arg(target_contact_id)
-WHERE contact_a_id = sqlc.arg(source_contact_id)
-  AND contact_b_id != sqlc.arg(target_contact_id);
-
--- name: TransferConnectionsAsContactB :exec
--- Transfer connections where source is contact_b to use target instead
-UPDATE connection
-SET contact_b_id = sqlc.arg(target_contact_id)
-WHERE contact_b_id = sqlc.arg(source_contact_id)
-  AND contact_a_id != sqlc.arg(target_contact_id);
-
--- name: DeleteDuplicateConnections :exec
--- Delete connections that would become duplicates after merge
--- (connections between source and target, or connections that now point same way)
-DELETE FROM connection
-WHERE (contact_a_id = sqlc.arg(source_contact_id) AND contact_b_id = sqlc.arg(target_contact_id))
-   OR (contact_a_id = sqlc.arg(target_contact_id) AND contact_b_id = sqlc.arg(source_contact_id));
-
 -- name: ReplaceContactInCalendarEvents :exec
 -- Replace source contact ID with target contact ID in calendar event matched_contact_ids array
 -- Uses array_replace for efficient in-place replacement
@@ -119,24 +97,4 @@ WHERE cm_source.contact_id = sqlc.arg(source_contact_id)
     SELECT cm_target.type FROM contact_method cm_target
     WHERE cm_target.contact_id = sqlc.arg(target_contact_id)
       AND cm_target.is_primary = true
-  );
-
--- name: DeleteDuplicateThirdPartyConnectionsA :exec
--- Delete source's connections (as contact_a) where target already connects to the same contact_b
--- Prevents duplicate (target, X) rows after transfer
-DELETE FROM connection conn_source
-WHERE conn_source.contact_a_id = sqlc.arg(source_contact_id)
-  AND conn_source.contact_b_id IN (
-    SELECT conn_target.contact_b_id FROM connection conn_target
-    WHERE conn_target.contact_a_id = sqlc.arg(target_contact_id)
-  );
-
--- name: DeleteDuplicateThirdPartyConnectionsB :exec
--- Delete source's connections (as contact_b) where target already connects to the same contact_a
--- Prevents duplicate (X, target) rows after transfer
-DELETE FROM connection conn_source
-WHERE conn_source.contact_b_id = sqlc.arg(source_contact_id)
-  AND conn_source.contact_a_id IN (
-    SELECT conn_target.contact_a_id FROM connection conn_target
-    WHERE conn_target.contact_b_id = sqlc.arg(target_contact_id)
   );

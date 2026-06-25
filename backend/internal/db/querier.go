@@ -383,17 +383,8 @@ type Querier interface {
 	// Test data management queries
 	// These queries are used by the test API endpoints to seed and cleanup test data
 	DeleteContactsByNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
-	// Delete connections that would become duplicates after merge
-	// (connections between source and target, or connections that now point same way)
-	DeleteDuplicateConnections(ctx context.Context, arg DeleteDuplicateConnectionsParams) error
 	// Delete contact methods from source that already exist in target (by normalized value and type)
 	DeleteDuplicateContactMethods(ctx context.Context, arg DeleteDuplicateContactMethodsParams) error
-	// Delete source's connections (as contact_a) where target already connects to the same contact_b
-	// Prevents duplicate (target, X) rows after transfer
-	DeleteDuplicateThirdPartyConnectionsA(ctx context.Context, arg DeleteDuplicateThirdPartyConnectionsAParams) error
-	// Delete source's connections (as contact_b) where target already connects to the same contact_a
-	// Prevents duplicate (X, target) rows after transfer
-	DeleteDuplicateThirdPartyConnectionsB(ctx context.Context, arg DeleteDuplicateThirdPartyConnectionsBParams) error
 	// Wipe every model's embedding for one target (e.g. when the target's content
 	// changes and all embeddings must be rebuilt).
 	DeleteEmbeddingsForTarget(ctx context.Context, arg DeleteEmbeddingsForTargetParams) error
@@ -2074,11 +2065,6 @@ type Querier interface {
 	// to well-formed JSONB arrays (jsonb_array_elements raises on scalar/object
 	// input). Do NOT call from production code.
 	TestParityFindExternalContactsByNormalizedEmailLegacy(ctx context.Context, lower string) ([]*ExternalContact, error)
-	// Transfer connections where source is contact_a to use target instead
-	// This handles the bidirectional relationship table
-	TransferConnectionsAsContactA(ctx context.Context, arg TransferConnectionsAsContactAParams) error
-	// Transfer connections where source is contact_b to use target instead
-	TransferConnectionsAsContactB(ctx context.Context, arg TransferConnectionsAsContactBParams) error
 	// Contact merge queries
 	// These queries support merging one contact (source) into another (target)
 	// Transfer contact methods from source to target contact

@@ -81,7 +81,7 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 | Assuming repository method names | Read the repository file first |
 | Not building after `make sqlc` | Always run `go build ./cmd/crm-api` to verify compilation |
 | sqlc changed types after regeneration | Update repository to use `pgtype.X{Value: v, Valid: true}` wrappers |
-| Assuming all tables have `updated_at` | It's per-table opt-in (explicit column + `update_updated_at_column()` trigger); many tables lack it (e.g. `tag`, `interaction`, `reminder`, `connection`). Check the table's migration before selecting or setting `updated_at` |
+| Assuming all tables have `updated_at` | It's per-table opt-in (explicit column + `update_updated_at_column()` trigger); many tables lack it (e.g. `tag`, `interaction`, `reminder`). Check the table's migration before selecting or setting `updated_at` |
 | `git add -A` includes binaries | Review `git status` before commit, exclude `backend/crm-api` |
 | Merging PRs with UI changes | Never merge UI PRs autonomously - wait for human review |
 | `git add path/[id]/file` fails | Use quotes: `git add "path/[id]/file"` (bash interprets brackets as globs) |
@@ -188,7 +188,7 @@ Cross-cutting concerns that require checking multiple locations:
 | When You Change | Also Check/Update |
 |-----------------|-------------------|
 | Contact soft-delete logic | Identity cleanup, note cascade, contact_method cascade, AND the person node: `ContactService.DeleteContact` propagates `node.deleted_at` (node.id == contact.id) in the same tx so the contact's assertions drop from graph reads (node-level live filter); assertions are retained in the table |
-| Contact merge | `ContactService.MergeContacts` runs the GRAPH merge alongside the existing `connection`/method/note/interaction transfers: tombstone the loser node (`SetNodeMergedIntoTx` → `merged_into`+`deleted_at`) and re-point its assertions onto the winner (`AssertService.MergeAssertionsTx`). The graph merge runs BEFORE the field-selection knowledge apply so the user's per-field choice is the last writer. The `RepointAssertionSubject/Object` sqlc primitives are called ONLY by `MergeAssertionsTx`, never the normal write path. Follow-on (NOT yet done): dormant `connection` table removal (D10) |
+| Contact merge | `ContactService.MergeContacts` runs the GRAPH merge alongside the existing method/note/interaction transfers: tombstone the loser node (`SetNodeMergedIntoTx` → `merged_into`+`deleted_at`) and re-point its assertions onto the winner (`AssertService.MergeAssertionsTx`). The graph merge runs BEFORE the field-selection knowledge apply so the user's per-field choice is the last writer. The `RepointAssertionSubject/Object` sqlc primitives are called ONLY by `MergeAssertionsTx`, never the normal write path. The dormant `connection` table was dropped in migration 072 (D10), so merge no longer transfers/dedups `connection` rows |
 | Sync provider implementation | Provider registry table in `.ai/patterns/sync.md` |
 | New React Query hook | Hooks inventory in `.ai/patterns/frontend.md` |
 | New API endpoint | API routes table in `.ai/guides/feature-development.md` |

@@ -146,15 +146,6 @@ type CommsMessage struct {
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 }
 
-type Connection struct {
-	ID           pgtype.UUID        `json:"id"`
-	ContactAID   pgtype.UUID        `json:"contact_a_id"`
-	ContactBID   pgtype.UUID        `json:"contact_b_id"`
-	Relationship pgtype.Text        `json:"relationship"`
-	Strength     pgtype.Int4        `json:"strength"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-}
-
 type Contact struct {
 	ID                pgtype.UUID        `json:"id"`
 	FullName          string             `json:"full_name"`
@@ -193,14 +184,6 @@ type ContactMethod struct {
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
 	ValueNormalized string             `json:"value_normalized"`
-}
-
-type ContactSummary struct {
-	ID          pgtype.UUID        `json:"id"`
-	ContactID   pgtype.UUID        `json:"contact_id"`
-	Summary     string             `json:"summary"`
-	GeneratedAt pgtype.Timestamptz `json:"generated_at"`
-	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
 }
 
 type ContactTag struct {
@@ -447,12 +430,6 @@ type Note struct {
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
-type NoteEmbedding struct {
-	NoteID    pgtype.UUID        `json:"note_id"`
-	Embedding pgvector.Vector    `json:"embedding"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
-}
-
 type OauthCredential struct {
 	ID                    pgtype.UUID        `json:"id"`
 	Provider              string             `json:"provider"`
@@ -513,14 +490,6 @@ type Predicate struct {
 	Synonyms            []string           `json:"synonyms"`
 	Embedding           pgvector.Vector    `json:"embedding"`
 	CreatedAt           pgtype.Timestamptz `json:"created_at"`
-}
-
-type PromptQuery struct {
-	ID          pgtype.UUID        `json:"id"`
-	Query       string             `json:"query"`
-	Response    string             `json:"response"`
-	ContextUsed []byte             `json:"context_used"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
 type RelationshipSignal struct {
