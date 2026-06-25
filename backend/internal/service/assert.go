@@ -1663,7 +1663,7 @@ func (s *AssertService) MergeAssertionsTx(ctx context.Context, tx pgx.Tx, loser,
 	// row a later row would collide with is already live at its new key.
 	now := accelerated.GetCurrentTime().UTC()
 	for i := range plans {
-		if err := s.applyRepoint(ctx, tx, &plans[i], now); err != nil {
+		if err := s.applyRepoint(ctx, tx, &plans[i], winner, now); err != nil {
 			return err
 		}
 	}
@@ -1716,7 +1716,7 @@ func (s *AssertService) planRepoint(ctx context.Context, row *repository.Asserti
 // (its proposition_key is recomputed for consistency but never collides — the
 // live-proposition index excludes terminal rows). A live row merges into a
 // colliding winner proposition or re-points + supersedes (D9 step 3).
-func (s *AssertService) applyRepoint(ctx context.Context, tx pgx.Tx, plan *repointedAssertion, now time.Time) error {
+func (s *AssertService) applyRepoint(ctx context.Context, tx pgx.Tx, plan *repointedAssertion, winner uuid.UUID, now time.Time) error {
 	// An edge between loser and winner collapses to a self-edge. A live one is
 	// closed superseded (a person does not "know"/"partner" themselves); a terminal
 	// one is left untouched as dead history (it still references the tombstoned
@@ -1756,7 +1756,7 @@ func (s *AssertService) applyRepoint(ctx context.Context, tx pgx.Tx, plan *repoi
 	if plan.row.Status == repository.AssertionStatusAccepted {
 		moveKind = events.KindAssertionAccepted
 	}
-	if err := s.emitMergeMoveEvent(ctx, tx, plan.row, moveKind, now); err != nil {
+	if err := s.emitMergeMoveEvent(ctx, tx, plan.row, moveKind, winner, now); err != nil {
 		return err
 	}
 
@@ -1859,13 +1859,15 @@ func differentValueConflicts(conflicts []repository.Assertion, signature string)
 
 // emitMergeMoveEvent emits the transition event for a row re-pointed onto the
 // winner during a merge, so SP3/SP4 derived signals recompute against the new
-// subject. It carries the row's live kind (accepted/proposed) but is keyed by a
-// DEDICATED '<assertion_id>:merged' source_id — NOT the one-shot ':accepted'/
-// ':proposed' token the row already emitted on its original insert — so the move
-// is a genuinely new event (not deduped against the insert) yet still idempotent
-// across a merge retry (one move per assertion).
-func (s *AssertService) emitMergeMoveEvent(ctx context.Context, tx pgx.Tx, row *repository.Assertion, kind events.Kind, now time.Time) error {
-	return s.publishAssertionEnvelope(ctx, tx, kind, row, row.ID.String()+":merged", now)
+// subject. It carries the row's live kind (accepted/proposed) and is keyed by a
+// DEDICATED '<assertion_id>:merged:<winner_id>' source_id — NOT the one-shot
+// ':accepted'/':proposed' token the row already emitted on its original insert —
+// so the move is a genuinely new event (not deduped against the insert). Keying
+// by the WINNER (not a bare ':merged') keeps a retry of the SAME merge idempotent
+// while still emitting a fresh event for a CHAINED merge (A→B then B→C moves the
+// row a second time, to a different winner).
+func (s *AssertService) emitMergeMoveEvent(ctx context.Context, tx pgx.Tx, row *repository.Assertion, kind events.Kind, winner uuid.UUID, now time.Time) error {
+	return s.publishAssertionEnvelope(ctx, tx, kind, row, row.ID.String()+":merged:"+winner.String(), now)
 }
 
 // repointRow applies the node-reference UPDATE (subject and/or object) for a

@@ -537,4 +537,35 @@ func TestMergeAssertions_Integration(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, repository.AssertionStatusSuperseded, closed.Status, "future-dated self-loop closed")
 	})
+
+	// Case 10: a CHAINED merge (A→B then B→C) moves the same assertion row twice.
+	// The merge-move event is keyed by the WINNER, so each move emits a distinct
+	// event (not deduped away) → derived consumers recompute after each re-point.
+	t.Run("10 chained merge emits a move event per winner", func(t *testing.T) {
+		t.Parallel()
+		h, _ := newAssertHarness(t, ctx0())
+		gen, _ := migrationGenerator(t)
+
+		a := h.seedPerson(t, ctx, gen.Prefix(), "A")
+		b := h.seedPerson(t, ctx, gen.Prefix(), "B")
+		c := h.seedPerson(t, ctx, gen.Prefix(), "C")
+
+		// A fact on A, so the subject moves A→B→C (a fact has no object to canonicalize).
+		fact, err := h.svc.Assert(ctx, textFactReq(a, "home_address", gen.Prefix()+"addr", gen.Prefix(), "addr"))
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, fact.ID)
+
+		mergeAssertionsInTx(t, ctx, h, a, b) // A→B
+		mergeAssertionsInTx(t, ctx, h, b, c) // B→C
+
+		// Both winner-keyed move events exist (distinct source_id per destination).
+		assert.True(t, h.eventExists(t, ctx, fact.ID.String()+":merged:"+b.String()), "move event for A→B")
+		assert.True(t, h.eventExists(t, ctx, fact.ID.String()+":merged:"+c.String()), "move event for B→C")
+
+		// The fact is now live on C.
+		moved, err := h.assertionRepo.GetAssertion(ctx, fact.ID)
+		require.NoError(t, err)
+		assert.Equal(t, c, moved.SubjectNodeID, "fact subject moved through to the final winner")
+		assert.Equal(t, repository.AssertionStatusAccepted, moved.Status)
+	})
 }
