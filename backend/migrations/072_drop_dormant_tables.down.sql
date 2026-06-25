@@ -1,7 +1,9 @@
 -- 072_drop_dormant_tables.down.sql
 -- Re-creates the four dormant tables empty. Rollback-safety only; historical
 -- data is not restored. Table bodies mirror 001_initial_schema.
-BEGIN;
+-- No explicit BEGIN/COMMIT: golang-migrate runs the whole file as one implicit
+-- transaction, so the four CREATEs are atomic, and keeping the failure path
+-- recoverable (Force/SetVersion) matches the .up.sql — see its header note.
 
 CREATE TABLE connection (
     id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -39,5 +41,3 @@ CREATE TABLE prompt_query (
     context_used    JSONB,
     created_at      TIMESTAMPTZ DEFAULT NOW()
 );
-
-COMMIT;

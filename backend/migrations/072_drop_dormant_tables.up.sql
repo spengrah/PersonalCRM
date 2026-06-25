@@ -9,13 +9,20 @@
 --   prompt_query     - never-wired prompt/query-log scaffolding.
 -- Forward-only: the .down.sql re-creates the tables empty for rollback safety
 -- only; no historical rows are restored (the tables are empty/derived).
--- Explicit transaction: the golang-migrate postgres driver does not auto-wrap a
--- migration file.
 --
--- Safety guard: each table is asserted empty inside the transaction before any
--- DROP. If any has rows (none should — no live writer exists), the migration
--- aborts and rolls back, dropping nothing. Mirrors 055_phone_call.down.sql.
-BEGIN;
+-- Atomicity: golang-migrate sends this whole file as ONE simple-query exec, so
+-- PostgreSQL runs it inside a single implicit transaction — the guard + the four
+-- DROPs are all-or-nothing without an explicit BEGIN/COMMIT. (Self-wrapping in
+-- BEGIN/COMMIT is deliberately AVOIDED: on the guard's RAISE it would leave
+-- migrate's pinned connection inside an open, aborted transaction block, so the
+-- post-failure Force/SetVersion recovery — used by the guard test and any
+-- operator re-run — fails with "database locked". The implicit transaction gives
+-- the same atomicity while keeping the failure path recoverable, matching the
+-- repo's other guarded migrations, e.g. 055_phone_call.down.sql.)
+--
+-- Safety guard: each table is asserted empty before any DROP. If any has rows
+-- (none should — no live writer exists), the migration RAISEs and the implicit
+-- transaction rolls back, dropping nothing. Mirrors 055_phone_call.down.sql.
 
 -- Guard: refuse to drop a non-empty table. LOCK first so a concurrent writer
 -- (there is none, but be correct) cannot insert between the check and the DROP.
@@ -44,5 +51,3 @@ DROP TABLE connection;
 DROP TABLE contact_summary;
 DROP TABLE note_embedding;
 DROP TABLE prompt_query;
-
-COMMIT;

@@ -226,6 +226,19 @@ func TestDormantCleanup_GuardAbortsOnNonEmptyTable(t *testing.T) {
 	assert.Contains(t, err.Error(), "cannot drop contact_summary",
 		"the failure must be the empty-table guard's RAISE EXCEPTION")
 
+	// Close the migrate handle NOW, before the survival queries. The failed 072 up
+	// raised inside its own transaction while holding ACCESS EXCLUSIVE locks on the
+	// dormant tables; closing releases migrate's pinned connection (and any lock it
+	// still holds) so the COUNT(*) below cannot block behind it. golang-migrate also
+	// marks the version dirty on a failed step, so Force it clean first — the same
+	// recovery the existing guarded-migration tests use (e.g. mac_host_migration_test.go,
+	// phone_call_migration_test.go). The schema is genuinely back at 071 after the
+	// transaction rolled back, so Force to 071.
+	require.NoError(t, m.Force(dormantCleanupVersion-1), "clear the dirty flag the failed 072 up set")
+	srcErr, dbErr := m.Close()
+	require.NoError(t, srcErr, "close migrate source")
+	require.NoError(t, dbErr, "close migrate database handle (release its connection + lock) before survival queries")
+
 	// The transaction rolled back, so contact_summary still exists with its row —
 	// nothing was dropped.
 	present := tablesPresent(ctx, t, support, dormantTables)
