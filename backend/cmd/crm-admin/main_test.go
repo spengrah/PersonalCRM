@@ -538,6 +538,67 @@ func TestRunReconcileMutualExclusion(t *testing.T) {
 	}
 }
 
+type fakeTagMigrator struct {
+	result service.TagMigrationResult
+	err    error
+	calls  int
+}
+
+func (f *fakeTagMigrator) MigrateTags(_ context.Context) (service.TagMigrationResult, error) {
+	f.calls++
+	if f.err != nil {
+		return service.TagMigrationResult{}, f.err
+	}
+	return f.result, nil
+}
+
+func TestRunMigrateTagsHappy(t *testing.T) {
+	deps, stdout, _, _, _, _ := newTestDeps()
+	migrator := &fakeTagMigrator{result: service.TagMigrationResult{
+		Tags: 4, TagNodesCreated: 3, TagNodesExisting: 1, ContactTags: 9, AssertionsAsserted: 9,
+	}}
+	deps.migrateTags = migrator
+
+	err := run(context.Background(), runOptions{migrateTags: true}, deps)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if migrator.calls != 1 {
+		t.Fatalf("expected 1 migrate call, got %d", migrator.calls)
+	}
+	out := stdout.String()
+	for _, want := range []string{"tags:                 4", "tag_nodes_created:    3", "tag_nodes_existing:   1", "contact_tags:         9", "assertions_asserted:  9"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q: %s", want, out)
+		}
+	}
+}
+
+func TestRunMigrateTagsError(t *testing.T) {
+	deps, _, _, _, _, _ := newTestDeps()
+	deps.migrateTags = &fakeTagMigrator{err: service.ErrTagCaseCollision}
+
+	err := run(context.Background(), runOptions{migrateTags: true}, deps)
+	if err == nil {
+		t.Fatal("expected error when the tag migrator errors (e.g. case collision)")
+	}
+	if !errors.Is(err, service.ErrTagCaseCollision) {
+		t.Fatalf("expected wrapped ErrTagCaseCollision, got %v", err)
+	}
+}
+
+func TestRunMigrateTagsMutualExclusion(t *testing.T) {
+	deps, _, _, _, _, _ := newTestDeps()
+	deps.migrateTags = &fakeTagMigrator{}
+	err := run(context.Background(), runOptions{
+		migrateTags: true,
+		listHosts:   true,
+	}, deps)
+	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("expected mutual-exclusion error, got %v", err)
+	}
+}
+
 func TestRunResetGmailBackfillMutualExclusion(t *testing.T) {
 	deps, _, _, _, _, _ := newTestDeps()
 	err := run(context.Background(), runOptions{
