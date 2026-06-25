@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"personal-crm/backend/internal/repository"
@@ -141,9 +142,13 @@ func (w *knowledgeWriter) reconcileHowMet(ctx context.Context, tx pgx.Tx, contac
 }
 
 // assertLocation ensures the place entity node for the label, then asserts the
-// lives_in edge. An empty/whitespace label is skipped (no place node minted for
-// a blank string — the column simply stays empty).
+// lives_in edge. A whitespace-only label is skipped (no place node minted for a
+// blank string — the cache column simply stays empty, matching the pre-cutover
+// leniency where a blank location was stored verbatim rather than rejected).
 func (w *knowledgeWriter) assertLocation(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, label string, prov knowledgeFieldProvenance) error {
+	if strings.TrimSpace(label) == "" {
+		return nil
+	}
 	placeID, err := w.assertSvc.EnsurePlaceTx(ctx, tx, label)
 	if err != nil {
 		return fmt.Errorf("ensure place node: %w", err)
