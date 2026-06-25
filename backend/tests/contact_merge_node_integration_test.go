@@ -653,6 +653,75 @@ func TestMergeAssertions_Integration(t *testing.T) {
 		assert.Equal(t, repository.AssertionStatusAccepted, la2.Status, "pending LA stays accepted")
 	})
 
+	// Case 12: an ACCEPTED loser collides with a PROPOSED winner proposition → the
+	// merge must keep the ACCEPTED row (not demote the merged node's current value to
+	// proposed by picking the proposed collider as survivor).
+	t.Run("12 accepted loser wins over proposed collider", func(t *testing.T) {
+		t.Parallel()
+		h, _ := newAssertHarness(t, ctx0())
+		gen, _ := migrationGenerator(t)
+
+		loser := h.seedPerson(t, ctx, gen.Prefix(), "loser")
+		winner := h.seedPerson(t, ctx, gen.Prefix(), "winner")
+
+		// Winner: a PROPOSED home_address("X") (ForceConfirm routes it to proposed).
+		winReq := textFactReq(winner, "home_address", gen.Prefix()+"X", gen.Prefix(), "w")
+		winReq.ForceConfirm = true
+		winProposed, err := h.svc.Assert(ctx, winReq)
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, winProposed.ID)
+		require.Equal(t, repository.AssertionStatusProposed, winProposed.Status)
+
+		// Loser: an ACCEPTED home_address("X") (same value + year bucket → same key).
+		loserAccepted, err := h.svc.Assert(ctx, textFactReq(loser, "home_address", gen.Prefix()+"X", gen.Prefix(), "l"))
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, loserAccepted.ID)
+		require.Equal(t, repository.AssertionStatusAccepted, loserAccepted.Status)
+
+		mergeAssertionsInTx(t, ctx, h, loser, winner)
+
+		// The accepted loser survives (re-pointed onto the winner); the proposed
+		// collider is closed. The winner's current home_address is accepted, not lost.
+		survivor, err := h.assertionRepo.GetAssertion(ctx, loserAccepted.ID)
+		require.NoError(t, err)
+		assert.Equal(t, repository.AssertionStatusAccepted, survivor.Status, "accepted loser stays accepted")
+		assert.Equal(t, winner, survivor.SubjectNodeID, "accepted survivor re-pointed onto the winner")
+		closed, err := h.assertionRepo.GetAssertion(ctx, winProposed.ID)
+		require.NoError(t, err)
+		assert.Equal(t, repository.AssertionStatusSuperseded, closed.Status, "proposed collider closed")
+		cur, err := h.assertionRepo.GetCurrentAccepted(ctx, winner, "home_address", nowMicro())
+		require.NoError(t, err)
+		assert.Equal(t, loserAccepted.ID, cur.ID, "winner's current home_address is the accepted survivor")
+	})
+
+	// Case 13: a PAST-bounded self-loop (knows(loser,winner) [2018,2019)) collapses
+	// on merge → it is closed but its historical valid_to is NOT stretched to now.
+	t.Run("13 past-bounded self-loop keeps its historical valid_to", func(t *testing.T) {
+		t.Parallel()
+		h, _ := newAssertHarness(t, ctx0())
+		gen, _ := migrationGenerator(t)
+
+		loser := h.seedPerson(t, ctx, gen.Prefix(), "loser")
+		winner := h.seedPerson(t, ctx, gen.Prefix(), "winner")
+
+		from := time.Date(2018, 1, 1, 0, 0, 0, 0, time.UTC)
+		to := time.Date(2019, 1, 1, 0, 0, 0, 0, time.UTC)
+		req := edgeReq(loser, winner, "knows", gen.Prefix(), "hist-knows")
+		req.ValidFrom = &from
+		req.ValidTo = &to
+		edge, err := h.svc.Assert(ctx, req)
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, edge.ID)
+
+		mergeAssertionsInTx(t, ctx, h, loser, winner)
+
+		closed, err := h.assertionRepo.GetAssertion(ctx, edge.ID)
+		require.NoError(t, err)
+		assert.Equal(t, repository.AssertionStatusSuperseded, closed.Status, "self-loop closed")
+		require.NotNil(t, closed.ValidTo)
+		assert.True(t, closed.ValidTo.Equal(to), "historical valid_to preserved (NOT stretched to now)")
+	})
+
 	// Case 10: a CHAINED merge (A→B then B→C) moves the same assertion row twice.
 	// The merge-move event is keyed by the WINNER, so each move emits a distinct
 	// event (not deduped away) → derived consumers recompute after each re-point.

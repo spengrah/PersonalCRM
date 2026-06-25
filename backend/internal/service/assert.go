@@ -1752,9 +1752,24 @@ func (s *AssertService) applyRepoint(ctx context.Context, tx pgx.Tx, plan *repoi
 		return fmt.Errorf("merge collision check: %w", err)
 	}
 	if err == nil && collider.ID != plan.row.ID {
-		// Collision: same proposition already live on the winner. Move the loser's
-		// provenance onto it and close the loser superseded (no UPDATE into the
-		// unique index → no 23505).
+		// Collision: the same proposition is already live on the winner. Merge the two
+		// into one survivor (move provenance, close the other superseded — no UPDATE
+		// into the unique index → no 23505). Pick the ACCEPTED row as survivor so the
+		// merge never demotes a current accepted fact to a proposed one: if only the
+		// loser is accepted, close the proposed collider into the loser and re-point
+		// the loser (now safe — the collider is no longer live at that key); otherwise
+		// the collider survives and the loser is folded in.
+		if plan.row.Status == repository.AssertionStatusAccepted && collider.Status == repository.AssertionStatusProposed {
+			if err := s.mergeSameValue(ctx, tx, collider, plan.row); err != nil {
+				return err
+			}
+			// The loser (survivor) still points at the loser node; re-point it onto the
+			// winner. The colliding key is now free (collider closed), so no 23505.
+			if err := s.repointRow(ctx, tx, plan); err != nil {
+				return err
+			}
+			return s.emitMergeMoveEvent(ctx, tx, plan.row, events.KindAssertionAccepted, winner, now)
+		}
 		return s.mergeSameValue(ctx, tx, plan.row, collider)
 	}
 
@@ -1877,7 +1892,11 @@ func (s *AssertService) widenMergedSurvivor(ctx context.Context, tx pgx.Tx, plan
 	}
 	// Inherit the pending-successor linkage (superseded_by + the capped bound) so the
 	// rollover worker terminalizes the survivor when the successor's date arrives.
-	if pendingSuccessor != nil && survivor.SupersededBy == nil {
+	// Re-apply whenever the tracked successor differs from the survivor's current one
+	// — an absorbed row may carry the TIGHTER bound even when the survivor already had
+	// a (looser) successor of its own, so "only when nil" would record stale lineage.
+	if pendingSuccessor != nil &&
+		(survivor.SupersededBy == nil || *survivor.SupersededBy != *pendingSuccessor) {
 		if err := s.assertionRepo.BoundPendingSuccessorTx(ctx, tx, survivor.ID, *pendingBound, *pendingSuccessor); err != nil {
 			return nil, fmt.Errorf("inherit pending successor on merged survivor: %w", err)
 		}
@@ -2003,13 +2022,19 @@ func (s *AssertService) closeSelfLoop(ctx context.Context, tx pgx.Tx, row *repos
 	if row.KnowledgeFrom.After(knowledgeTo) {
 		knowledgeTo = row.KnowledgeFrom.UTC()
 	}
-	// valid_to = now closes a currently-true edge. But a FUTURE-dated edge
-	// (valid_from > now) would get valid_to < valid_from → the assertion_valid_range
-	// CHECK fails. For such a never-yet-current row keep its EXISTING valid_to (it is
-	// terminal regardless), mirroring closeBoundary on the supersession path.
-	validTo := &now
-	if row.ValidFrom != nil && !now.After(*row.ValidFrom) {
-		validTo = utcPtr(row.ValidTo)
+	// valid_to = now closes a currently-true edge. But stamping now is WRONG for a
+	// row whose interval is not open-at-now: a FUTURE-dated edge (valid_from > now)
+	// would get valid_to < valid_from (assertion_valid_range CHECK fails), and a
+	// PAST-bounded edge (valid_to already <= now) would have its closed historical
+	// interval stretched forward to now (history corruption). In both cases the row
+	// is terminal regardless, so keep its EXISTING valid_to; only an open-or-
+	// future-reaching row (valid_from <= now AND (valid_to nil OR valid_to > now)) is
+	// genuinely closed AT now.
+	openAtNow := (row.ValidFrom == nil || !row.ValidFrom.After(now)) &&
+		(row.ValidTo == nil || row.ValidTo.After(now))
+	validTo := utcPtr(row.ValidTo)
+	if openAtNow {
+		validTo = &now
 	}
 	closure := repository.ClosureReasonEnded
 	if err := s.assertionRepo.CloseAssertionTx(ctx, tx, repository.CloseAssertionParams{
