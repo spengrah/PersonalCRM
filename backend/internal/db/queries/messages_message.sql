@@ -27,6 +27,26 @@ SELECT * FROM messages_message
 WHERE guid = @guid
   AND deleted_at IS NULL;
 
+-- name: TestInsertMessagesMessageLinked :one
+-- Test-only: inserts a messages_message already linked to an interaction. Used
+-- by the venue backfill test to seed an iMessage chat container row. Production
+-- code MUST NOT call this.
+INSERT INTO messages_message (
+    guid, chat_guid, peer_handle, sent_at, is_outgoing, is_group_chat, interaction_id
+) VALUES (
+    @guid, @chat_guid, @peer_handle, @sent_at, @is_outgoing, @is_group_chat, @interaction_id
+)
+RETURNING *;
+
+-- name: GetMessagesMessageContainer :one
+-- Returns the venue-container key (chat_guid + group flag) for a staging row by
+-- its UUID. Used by the live interaction recorder to resolve the messages
+-- venue. The container is consistent across all messages in one aggregated
+-- session, so reading the first id is sufficient.
+SELECT chat_guid, is_group_chat
+FROM messages_message
+WHERE id = $1 AND deleted_at IS NULL;
+
 -- name: GetMessagesMessageByReplyTarget :one
 -- Source-neutral analog of GetTelegramMessage for the aggregator's
 -- explicit-reply-bridge path. chat_guid is included for scoping

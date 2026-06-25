@@ -430,6 +430,22 @@ func run() int {
 		},
 	)
 
+	// Venue resolution — populates interaction.venue_id (the shared-container
+	// node an interaction happened in). The registry routes message.* sources
+	// to per-source container readers and resolves gcal via the calendar 3-tuple;
+	// the venue repo also serves the email + phone + anarlog recorders directly.
+	// Wired into each recorder via its SetVenueResolver setter below.
+	venueRepo := repository.NewVenueRepository(database.Queries)
+	venueResolver := repository.NewVenueResolverRegistry(
+		venueRepo,
+		map[string]repository.VenueContainerReader{
+			repository.InteractionSourceTelegram: repository.NewTelegramVenueContainerReader(),
+			repository.InteractionSourceMessages: repository.NewMessagesVenueContainerReader(),
+			repository.InteractionSourceGChat:    repository.NewGChatVenueContainerReader(),
+		},
+		calendarRepoForIngest,
+	)
+
 	// Aggregator reenqueuer holder. The Telegram entry needs the
 	// Telegram aggregation engine, which is constructed later (inside
 	// the cfg.Features.EnableTelegramSync branch). The worker is
@@ -538,6 +554,9 @@ func run() int {
 		// false interaction.
 		calendarRepoForIngest,
 	)
+	// Populate interaction.venue_id for message.* (telegram/messages/gchat) and
+	// gcal interactions this recorder writes.
+	interactionRecorder.SetVenueResolver(venueResolver)
 
 	// IngestService — hoisted here so the call.* inline handler can
 	// reuse contactService.RecordInteractionTx, cadenceUpdater,
@@ -578,6 +597,9 @@ func run() int {
 		titleDiscoveryWriter,
 		phoneCallRepoForIngest, // phone_call linkage candidates for meeting_note Step 1
 	)
+	// Populate interaction.venue_id for phone_calls + anarlog_sessions
+	// interactions the ingest inline handlers write.
+	ingestService.SetVenueResolver(venueResolver)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 
 	// User-driven conflict-resolution surface for meeting_note rows.
@@ -599,6 +621,8 @@ func run() int {
 		contactService,
 		contactRepo,
 	)
+	// Populate venue_id on the resolve-link interaction path.
+	meetingNoteService.SetVenueResolver(venueResolver)
 	meetingNoteHandler := handlers.NewMeetingNoteHandler(meetingNoteService)
 
 	// Register the consumer worker. The worker is registered UNCONDITIONALLY —
@@ -637,6 +661,9 @@ func run() int {
 		contactService, commsMessageRepo, interactionRepo, contactService,
 		eventBus, cadenceUpdater, followUpManager,
 	)
+	// Populate interaction.venue_id with the email-thread venue on the create
+	// branch. The venue repo resolves directly (email carries thread_id).
+	emailInteractionConsumer.SetVenueResolver(venueRepo)
 	river.AddWorker(riverWorkers, consumer.NewEmailInteractionConsumerWorker(eventBus, database.Pool, emailInteractionConsumer))
 
 	// Interaction-mode wiring gate. Cutover is the normal operating

@@ -32,6 +32,15 @@ type Querier interface {
 	// under-serializes (a correctness cost). Mirrors the per-account
 	// sync-enqueue lock in external_sync.sql.
 	AcquireSourceRefAggregateLock(ctx context.Context, lockKey string) error
+	// Takes a transaction-scoped advisory lock keyed on a venue container so two
+	// live recorders resolving the SAME (source, kind, container) serialize on
+	// creation — exactly one node+venue pair is created and no orphan node leaks.
+	// hashtextextended folds the container string into the bigint advisory-lock key
+	// space; a rare hash collision only over-serializes two unrelated containers (a
+	// perf cost), never under-serializes (a correctness cost). Mirrors the
+	// per-source_ref aggregation lock in interaction.sql. The lock auto-releases on
+	// commit/rollback.
+	AcquireVenueContainerLock(ctx context.Context, lockKey string) error
 	AddContactTag(ctx context.Context, arg AddContactTagParams) error
 	// Atomically appends a contact to an event's matched_contact_ids iff it isn't
 	// already present. Does NOT reset last_contacted_updated — the rematch handler
@@ -322,6 +331,13 @@ type Querier interface {
 	// node's tombstone. So the live reads join node and filter node.deleted_at IS
 	// NULL; a venue whose node has been merged/soft-deleted drops from these reads.
 	CreateVenue(ctx context.Context, arg CreateVenueParams) (*Venue, error)
+	// Creates the node + venue pair for a container in one statement with a
+	// caller-supplied deterministic node id (uuid_generate_v5 of the container,
+	// matching the migration backfill). Both inserts are ON CONFLICT DO NOTHING so a
+	// concurrent winner or a re-run is a no-op without orphaning a node. Returns the
+	// venue node id on a fresh create; returns no row when the venue already existed
+	// (caller falls back to FindVenueByContainer under the advisory lock).
+	CreateVenueNode(ctx context.Context, arg CreateVenueNodeParams) (pgtype.UUID, error)
 	// Remove duplicate contact IDs that may result from merge
 	// Uses subquery with DISTINCT to rebuild the array without duplicates
 	DeduplicateCalendarEventContacts(ctx context.Context, targetContactID pgtype.UUID) error
@@ -665,6 +681,12 @@ type Querier interface {
 	// Intentionally does NOT filter processed_at — a reply can target an
 	// already-processed message (the whole point of bridging).
 	GetCommsMessageByReplyTarget(ctx context.Context, arg GetCommsMessageByReplyTargetParams) (*CommsMessage, error)
+	// Returns the venue-container key (source + thread_id) for a staging row by its
+	// UUID. Used by the live interaction recorder to resolve the gchat venue (email
+	// resolves its venue from the EmailInteractionConsumer's comms row directly).
+	// The thread is consistent across all messages in one aggregated session, so
+	// reading the first id is sufficient.
+	GetCommsMessageContainer(ctx context.Context, id pgtype.UUID) (*GetCommsMessageContainerRow, error)
 	// Read one stored row for (source, external_id), newest first, to supply the
 	// current body for the provider's bodyDiffers no-op-avoidance pre-check. Fanned-
 	// out rows share content, so any one row suffices. Used ONLY for body
@@ -778,6 +800,11 @@ type Querier interface {
 	// explicit-reply-bridge path. chat_guid is included for scoping
 	// selectivity.
 	GetMessagesMessageByReplyTarget(ctx context.Context, arg GetMessagesMessageByReplyTargetParams) (*MessagesMessage, error)
+	// Returns the venue-container key (chat_guid + group flag) for a staging row by
+	// its UUID. Used by the live interaction recorder to resolve the messages
+	// venue. The container is consistent across all messages in one aggregated
+	// session, so reading the first id is sufficient.
+	GetMessagesMessageContainer(ctx context.Context, id pgtype.UUID) (*GetMessagesMessageContainerRow, error)
 	GetNode(ctx context.Context, id pgtype.UUID) (*Node, error)
 	GetNodeIncludingDeleted(ctx context.Context, id pgtype.UUID) (*Node, error)
 	// Note queries
@@ -839,6 +866,11 @@ type Querier interface {
 	// all-fields-populated test can read back a row whose deleted_at is set.
 	// Production code MUST NOT call this (it would return soft-deleted rows).
 	GetTelegramMessageByIDForTest(ctx context.Context, id pgtype.UUID) (*TelegramMessage, error)
+	// Returns the venue-container key (chat id + type + title) for a staging row by
+	// its UUID. Used by the live interaction recorder to resolve the telegram
+	// venue. The container is consistent across all messages in one aggregated
+	// session, so reading the first id is sufficient.
+	GetTelegramMessageContainer(ctx context.Context, id pgtype.UUID) (*GetTelegramMessageContainerRow, error)
 	GetTelegramSession(ctx context.Context) (*TelegramSession, error)
 	GetTelegramUpdateState(ctx context.Context, userID int64) (*TelegramUpdateState, error)
 	// Probe used by the dispatch loop's revive-bypass: when a duplicate
@@ -1705,6 +1737,10 @@ type Querier interface {
 	// Settle Gate A (Mac-contact unknown-sender): the external_contact row for the
 	// entity id exists with match_status='unmatched'.
 	SyntheticCountUnmatchedExternalContactBySourceId(ctx context.Context, sourceID string) (int64, error)
+	// Cleanup assertion — count surviving venue nodes among the given ids (scoped to
+	// THIS run's tracked venue node ids, so it is immune to parallel tests creating
+	// their own venue nodes on the shared DB, unlike a global venue-node count).
+	SyntheticCountVenueNodesByIds(ctx context.Context, nodeIds []pgtype.UUID) (int64, error)
 	// Assertion-store cleanup: hard-delete the assertions touching a node in EITHER
 	// position (provenance cascades). The assertion → node FK is restrict (NO
 	// ACTION), so a test MUST clear its assertions before deleting its nodes; this
@@ -1789,6 +1825,14 @@ type Querier interface {
 	// tracked peer ids before the contact delete (external_identity survives contact
 	// delete via ON DELETE SET NULL and would otherwise pollute future matching).
 	SyntheticDeleteTelegramExternalIdentitiesByPeerIds(ctx context.Context, peerIds []string) (int64, error)
+	// Cleanup: hard-delete the venue nodes the real recorders minted on the replay
+	// path (interaction.venue_id → node), keyed by the tracked venue node ids. The
+	// venue subtype row cascades via its ON DELETE CASCADE FK to node. Guarded by
+	// type='venue' (defense-in-depth: never touch a person/entity node) AND by
+	// NOT EXISTS any interaction still referencing it — so a venue shared with an
+	// interaction this run did not clean up (e.g. a group container another
+	// namespace also used) is left intact rather than raising the restrict FK.
+	SyntheticDeleteVenueNodesByIds(ctx context.Context, nodeIds []pgtype.UUID) (int64, error)
 	// Contact→node dual-write test support: fetch the person node a contact owns
 	// (node.id == contact.id). Returns the live (non-soft-deleted) node row so a
 	// test can assert the dual-write created it with the expected type/label.
@@ -1820,6 +1864,11 @@ type Querier interface {
 	// list by the test before it reaches here; format() with %I quotes the
 	// identifier so it can never be an injection vector.
 	TestCountAllRows(ctx context.Context, tableName string) (int64, error)
+	// Test-only: counts venue-type nodes that no live interaction references via
+	// venue_id. Used by the venue backfill test to assert the no-orphan-node guard.
+	TestCountOrphanVenueNodes(ctx context.Context) (int64, error)
+	// Test-only: counts venue-type nodes. Used by the venue backfill test.
+	TestCountVenueNodes(ctx context.Context) (int64, error)
 	// TEST ONLY. Hard-deletes calendar_event rows whose gcal_event_id starts
 	// with the given prefix. Used by t.Cleanup to remove fixtures.
 	TestDeleteCalendarEventsByGcalEventIDPrefix(ctx context.Context, prefix string) error
@@ -1855,6 +1904,10 @@ type Querier interface {
 	// TEST ONLY. See TestInsertExternalContactRawEmails. Same rationale for
 	// calendar_event.attendees.
 	TestInsertCalendarEventRawAttendees(ctx context.Context, arg TestInsertCalendarEventRawAttendeesParams) (*CalendarEvent, error)
+	// Test-only: inserts a comms_message already linked to an interaction. Used by
+	// the venue backfill test to seed an email/gchat thread container row.
+	// Production code MUST NOT call this.
+	TestInsertCommsMessageLinked(ctx context.Context, arg TestInsertCommsMessageLinkedParams) (*CommsMessage, error)
 	// TEST ONLY. Fixture queries used by jsonb_gin_index_test.go to construct
 	// edge-case JSONB shapes (non-array, NULL, missing keys) that production
 	// code paths cannot create, plus permanent regression-guard queries that
@@ -1868,6 +1921,15 @@ type Querier interface {
 	// Reset test only: a marker row in external_sync_state (a sync-cursor table the
 	// reset wipes so staging cannot re-sync real data).
 	TestInsertExternalSyncStateMarker(ctx context.Context) error
+	// Test-only: inserts an interaction with a caller-supplied id, source, and
+	// source_ref and a NULL venue_id, bypassing the recorder. Used by the venue
+	// backfill migration test to stand up pre-existing (venue-less) interactions
+	// that the 069 backfill then populates. Production code MUST NOT call this.
+	TestInsertInteraction(ctx context.Context, arg TestInsertInteractionParams) (*Interaction, error)
+	// Test-only: inserts a messages_message already linked to an interaction. Used
+	// by the venue backfill test to seed an iMessage chat container row. Production
+	// code MUST NOT call this.
+	TestInsertMessagesMessageLinked(ctx context.Context, arg TestInsertMessagesMessageLinkedParams) (*MessagesMessage, error)
 	// Reset/additive-seed test only: plant ONE queued (non-finalized) river_job so a
 	// test can assert the additive --seed preflight REFUSES while --reset-and-seed
 	// PROCEEDS (it wipes river_job). Minimal valid row: River requires kind, queue,
@@ -1878,6 +1940,10 @@ type Querier interface {
 	// The token columns are bytea (encrypted-at-rest); dummy bytes are fine for a
 	// marker that is never decrypted.
 	TestInsertOAuthCredentialMarker(ctx context.Context) error
+	// Test-only: inserts a phone_call already linked to an interaction. Used by the
+	// venue backfill test to seed a phone container row. Production code MUST NOT
+	// call this (the live path sets interaction_id via MarkPhoneCallProcessed).
+	TestInsertPhoneCallLinked(ctx context.Context, arg TestInsertPhoneCallLinkedParams) (*PhoneCall, error)
 	// /health river-component integration test only: plant one river_job with an
 	// explicit kind, state, scheduled_at, and (nullable) finalized_at so the
 	// discarded-count / oldest-due / latest-completed-by-kind queries can be
@@ -2018,6 +2084,10 @@ type Querier interface {
 	UpdateInteractionDirection(ctx context.Context, arg UpdateInteractionDirectionParams) (*Interaction, error)
 	// Extend an existing interaction's occurred_at and description (incremental coalescing)
 	UpdateInteractionTimestamp(ctx context.Context, arg UpdateInteractionTimestampParams) (*Interaction, error)
+	// Sets venue_id on an existing interaction. Used by the anarlog re-sync path so
+	// a retained interaction whose session was re-linked (e.g. session -> gcal event)
+	// moves to the correct venue node. Does not touch cadence columns.
+	UpdateInteractionVenue(ctx context.Context, arg UpdateInteractionVenueParams) error
 	UpdateMacHostHeartbeat(ctx context.Context, arg UpdateMacHostHeartbeatParams) (*MacHost, error)
 	// CAS-style update: only updates when sync_cursor matches base_cursor.
 	// Zero rows returned means another writer slipped in between the

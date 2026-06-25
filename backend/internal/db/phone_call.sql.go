@@ -171,6 +171,65 @@ func (q *Queries) MarkPhoneCallProcessed(ctx context.Context, arg MarkPhoneCallP
 	return err
 }
 
+const TestInsertPhoneCallLinked = `-- name: TestInsertPhoneCallLinked :one
+INSERT INTO phone_call (
+    call_unique_id, peer_handle, peer_normalized, service, direction,
+    duration_seconds, started_at, matched_contact_id, interaction_id
+) VALUES (
+    $1, $2, $3, $4, $5,
+    $6, $7, $8, $9
+)
+RETURNING id, call_unique_id, peer_handle, peer_normalized, service, direction, answered, has_voicemail, duration_seconds, started_at, matched_contact_id, interaction_id, mac_host_id, processed_at, created_at
+`
+
+type TestInsertPhoneCallLinkedParams struct {
+	CallUniqueID     string             `json:"call_unique_id"`
+	PeerHandle       string             `json:"peer_handle"`
+	PeerNormalized   string             `json:"peer_normalized"`
+	Service          string             `json:"service"`
+	Direction        string             `json:"direction"`
+	DurationSeconds  int32              `json:"duration_seconds"`
+	StartedAt        pgtype.Timestamptz `json:"started_at"`
+	MatchedContactID pgtype.UUID        `json:"matched_contact_id"`
+	InteractionID    pgtype.UUID        `json:"interaction_id"`
+}
+
+// Test-only: inserts a phone_call already linked to an interaction. Used by the
+// venue backfill test to seed a phone container row. Production code MUST NOT
+// call this (the live path sets interaction_id via MarkPhoneCallProcessed).
+func (q *Queries) TestInsertPhoneCallLinked(ctx context.Context, arg TestInsertPhoneCallLinkedParams) (*PhoneCall, error) {
+	row := q.db.QueryRow(ctx, TestInsertPhoneCallLinked,
+		arg.CallUniqueID,
+		arg.PeerHandle,
+		arg.PeerNormalized,
+		arg.Service,
+		arg.Direction,
+		arg.DurationSeconds,
+		arg.StartedAt,
+		arg.MatchedContactID,
+		arg.InteractionID,
+	)
+	var i PhoneCall
+	err := row.Scan(
+		&i.ID,
+		&i.CallUniqueID,
+		&i.PeerHandle,
+		&i.PeerNormalized,
+		&i.Service,
+		&i.Direction,
+		&i.Answered,
+		&i.HasVoicemail,
+		&i.DurationSeconds,
+		&i.StartedAt,
+		&i.MatchedContactID,
+		&i.InteractionID,
+		&i.MacHostID,
+		&i.ProcessedAt,
+		&i.CreatedAt,
+	)
+	return &i, err
+}
+
 const UpsertPhoneCall = `-- name: UpsertPhoneCall :one
 INSERT INTO phone_call (
     call_unique_id, peer_handle, peer_normalized,

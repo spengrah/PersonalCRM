@@ -433,6 +433,29 @@ func (q *Queries) GetTelegramMessageByIDForTest(ctx context.Context, id pgtype.U
 	return &i, err
 }
 
+const GetTelegramMessageContainer = `-- name: GetTelegramMessageContainer :one
+SELECT telegram_chat_id, chat_type, chat_title
+FROM telegram_message
+WHERE id = $1 AND deleted_at IS NULL
+`
+
+type GetTelegramMessageContainerRow struct {
+	TelegramChatID int64       `json:"telegram_chat_id"`
+	ChatType       string      `json:"chat_type"`
+	ChatTitle      pgtype.Text `json:"chat_title"`
+}
+
+// Returns the venue-container key (chat id + type + title) for a staging row by
+// its UUID. Used by the live interaction recorder to resolve the telegram
+// venue. The container is consistent across all messages in one aggregated
+// session, so reading the first id is sufficient.
+func (q *Queries) GetTelegramMessageContainer(ctx context.Context, id pgtype.UUID) (*GetTelegramMessageContainerRow, error) {
+	row := q.db.QueryRow(ctx, GetTelegramMessageContainer, id)
+	var i GetTelegramMessageContainerRow
+	err := row.Scan(&i.TelegramChatID, &i.ChatType, &i.ChatTitle)
+	return &i, err
+}
+
 const HardDeleteTelegramMessagesByChatIDRange = `-- name: HardDeleteTelegramMessagesByChatIDRange :exec
 
 DELETE FROM telegram_message

@@ -35,6 +35,19 @@ ON CONFLICT (call_unique_id) DO UPDATE SET
     call_unique_id = EXCLUDED.call_unique_id
 RETURNING *;
 
+-- name: TestInsertPhoneCallLinked :one
+-- Test-only: inserts a phone_call already linked to an interaction. Used by the
+-- venue backfill test to seed a phone container row. Production code MUST NOT
+-- call this (the live path sets interaction_id via MarkPhoneCallProcessed).
+INSERT INTO phone_call (
+    call_unique_id, peer_handle, peer_normalized, service, direction,
+    duration_seconds, started_at, matched_contact_id, interaction_id
+) VALUES (
+    @call_unique_id, @peer_handle, @peer_normalized, @service, @direction,
+    @duration_seconds, @started_at, @matched_contact_id, @interaction_id
+)
+RETURNING *;
+
 -- name: GetPhoneCallByUniqueID :one
 -- Lookup by call_unique_id. Returns ErrNoRows on miss.
 SELECT * FROM phone_call

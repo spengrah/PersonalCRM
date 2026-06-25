@@ -87,5 +87,8 @@ func (h *Harness) ReplayTelegram(ctx context.Context, contactID uuid.UUID, spec 
 		return TelegramResult{}, err
 	}
 	h.trackContactInteractions(ctx, contactID)
+	if err := h.assertContactVenue(ctx, contactID, repository.InteractionSourceTelegram); err != nil {
+		return TelegramResult{}, err
+	}
 	return TelegramResult{ContactID: contactID, PeerUserID: spec.PeerUserID, Matched: true}, nil
 }

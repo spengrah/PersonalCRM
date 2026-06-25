@@ -3,6 +3,7 @@ package replay
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
@@ -67,9 +68,44 @@ func (h *Harness) gcalSettled(gcalEventID string, contactID uuid.UUID) gateA {
 	}
 }
 
+// assertContactVenue verifies that the contact has at least one interaction of
+// the given source whose venue_id resolves to a live venue node. Called by the
+// replay adapters that drive a venue-bearing recorder through the bus
+// (telegram/messages/gchat/email/gcal) after settle, so a replay fails loudly if
+// the venue-populating recorder path silently stopped setting venue_id. Returns
+// an error (not a panic) so the adapter surfaces it like any other replay
+// failure. expectedSource scopes the check to this replay's source so an
+// unrelated prior interaction can't satisfy it.
+//
+// phone_calls + anarlog_sessions have NO replay adapter (they are ingest-driven
+// via IngestService.handleCall / handleMeetingNoteRecorded, not a Replay* path),
+// so their live venue population is instead covered by the ingest integration
+// tests and the venue backfill integration test's per-source seeds.
+func (h *Harness) assertContactVenue(ctx context.Context, contactID uuid.UUID, expectedSource string) error {
+	rows, err := h.interactionRepo.ListContactInteractions(ctx, contactID, 100, 0)
+	if err != nil {
+		return fmt.Errorf("list interactions for venue assert: %w", err)
+	}
+	for _, r := range rows {
+		if r.Source != expectedSource || r.VenueID == nil {
+			continue
+		}
+		if _, err := h.venueRepo.GetVenue(ctx, *r.VenueID); err != nil {
+			return fmt.Errorf("interaction %s venue %s not found: %w", r.ID, *r.VenueID, err)
+		}
+		return nil // found a source-matched interaction with a live venue
+	}
+	return fmt.Errorf("no %s interaction with a venue for contact %s", expectedSource, contactID)
+}
+
 // trackContactInteractions records the contact's interaction ids into the ledger
-// so Cleanup deletes them by id (step 2) before the contact delete. Best-effort:
-// a read error leaves the by-contact path to cover them.
+// so Cleanup deletes them by id (step 2) before the contact delete. It ALSO
+// records each interaction's venue_id (the venue node the real recorder minted)
+// so Cleanup can delete those venue nodes by id — they are not contacts and have
+// an empty canonical_label, so neither the person-node nor the ns-prefix node
+// delete catches them. Best-effort: a read error leaves the by-contact path to
+// cover interactions; venue nodes whose interaction wasn't tracked are caught by
+// no other path, which is why we track them here on the same scan.
 func (h *Harness) trackContactInteractions(ctx context.Context, contactID uuid.UUID) {
 	rows, err := h.interactionRepo.ListContactInteractions(ctx, contactID, 100, 0)
 	if err != nil {
@@ -78,6 +114,9 @@ func (h *Harness) trackContactInteractions(ctx context.Context, contactID uuid.U
 	h.track(func(c *created) {
 		for _, r := range rows {
 			c.addInteraction(r.ID)
+			if r.VenueID != nil {
+				c.addVenueNode(*r.VenueID)
+			}
 		}
 	})
 }

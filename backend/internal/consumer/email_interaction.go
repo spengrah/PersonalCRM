@@ -43,6 +43,15 @@ type emailAggregator interface {
 	ExtendInteractionTx(ctx context.Context, tx pgx.Tx, interactionID, contactID uuid.UUID, direction string, occurredAt time.Time, description *string) (func(context.Context), error)
 }
 
+// emailVenueResolver resolves the email-thread venue for a freshly-created email
+// interaction from the thread container key. Best-effort: an empty thread or a
+// resolution error leaves venue_id NULL. Satisfied by
+// *repository.VenueRepository.ResolveVenueForInteraction. Optional (nil in tests
+// that don't assert on venues).
+type emailVenueResolver interface {
+	ResolveVenueForInteraction(ctx context.Context, tx pgx.Tx, source, kind, containerKey, title string) (uuid.UUID, error)
+}
+
 // EmailInteractionConsumer is the event-bus consumer for email.received /
 // email.sent. It derives a per-(contact, thread, local-calendar-day)
 // aggregated interaction from the lightweight email event + its
@@ -71,6 +80,7 @@ type EmailInteractionConsumer struct {
 	bus          eventBusTx
 	cadence      cadenceDispatcher
 	followUp     followUpDispatcher
+	venue        emailVenueResolver
 }
 
 // NewEmailInteractionConsumer builds the consumer with narrow interfaces so
@@ -95,6 +105,13 @@ func NewEmailInteractionConsumer(
 		cadence:      cadence,
 		followUp:     followUp,
 	}
+}
+
+// SetVenueResolver wires the resolver that populates interaction.venue_id with
+// the email-thread venue on the create branch. Optional: when unset the consumer
+// records email interactions with a NULL venue_id.
+func (c *EmailInteractionConsumer) SetVenueResolver(v emailVenueResolver) {
+	c.venue = v
 }
 
 // HandleEvent processes an email.received / email.sent envelope inside the
@@ -192,6 +209,18 @@ func (c *EmailInteractionConsumer) HandleEvent(ctx context.Context, tx pgx.Tx, e
 			OccurredAt:  p.SentAt,
 			Description: p.Subject,
 			Direction:   p.Direction,
+		}
+		// Resolve the email-thread venue from the content row's thread_id, set
+		// atomically with the insert. An empty/absent thread leaves venue_id NULL
+		// (no shared container); a real DB error during resolution propagates and
+		// rolls back the interaction (the recorder retries).
+		if c.venue != nil && commsMsg.ThreadID != nil && *commsMsg.ThreadID != "" {
+			venueID, venueErr := c.venue.ResolveVenueForInteraction(
+				ctx, tx, repository.InteractionSourceEmail, repository.VenueKindEmailThread, *commsMsg.ThreadID, "")
+			if venueErr != nil {
+				return nil, fmt.Errorf("resolve email venue: %w", venueErr)
+			}
+			req.VenueID = &venueID
 		}
 		res, recordErr := c.writer.RecordInteractionTx(ctx, tx, true, req)
 		if recordErr != nil {

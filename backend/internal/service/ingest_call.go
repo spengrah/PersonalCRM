@@ -249,6 +249,20 @@ func (s *IngestService) handleCall(
 		Description: &descCopy,
 		Direction:   interactionDirection,
 	}
+	// Resolve the call venue from the call's unique id, set atomically with the
+	// insert. A real DB error rejects the event (the batch retries); an unwired
+	// resolver leaves venue_id NULL.
+	if s.venue != nil {
+		venueID, venueErr := s.venue.ResolveVenueForInteractionTx(
+			ctx, tx, repository.InteractionSourcePhoneCalls, repository.VenueKindCall, p.CallUniqueID, "")
+		if venueErr != nil {
+			return nil, &IngestPerEventRejection{
+				Code:    ingestRejectStagingUpsertFailed,
+				Message: fmt.Sprintf("resolve call venue: %s", venueErr.Error()),
+			}
+		}
+		recReq.VenueID = &venueID
+	}
 
 	res, err := s.contactRecorder.RecordInteractionTx(ctx, tx, true, recReq)
 	if err != nil {

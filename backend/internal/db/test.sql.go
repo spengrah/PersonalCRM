@@ -1201,6 +1201,20 @@ func (q *Queries) SyntheticCountUnmatchedExternalContactBySourceId(ctx context.C
 	return count, err
 }
 
+const SyntheticCountVenueNodesByIds = `-- name: SyntheticCountVenueNodesByIds :one
+SELECT COUNT(*) FROM node WHERE id = ANY($1::uuid[]) AND type = 'venue'
+`
+
+// Cleanup assertion — count surviving venue nodes among the given ids (scoped to
+// THIS run's tracked venue node ids, so it is immune to parallel tests creating
+// their own venue nodes on the shared DB, unlike a global venue-node count).
+func (q *Queries) SyntheticCountVenueNodesByIds(ctx context.Context, nodeIds []pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountVenueNodesByIds, nodeIds)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const SyntheticDeleteAssertionsForNode = `-- name: SyntheticDeleteAssertionsForNode :execrows
 DELETE FROM assertion WHERE subject_node_id = $1 OR object_node_id = $1
 `
@@ -1512,6 +1526,28 @@ WHERE source = 'telegram' AND source_id = ANY($1::text[])
 // delete via ON DELETE SET NULL and would otherwise pollute future matching).
 func (q *Queries) SyntheticDeleteTelegramExternalIdentitiesByPeerIds(ctx context.Context, peerIds []string) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteTelegramExternalIdentitiesByPeerIds, peerIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const SyntheticDeleteVenueNodesByIds = `-- name: SyntheticDeleteVenueNodesByIds :execrows
+DELETE FROM node
+WHERE id = ANY($1::uuid[])
+  AND type = 'venue'
+  AND NOT EXISTS (SELECT 1 FROM interaction i WHERE i.venue_id = node.id)
+`
+
+// Cleanup: hard-delete the venue nodes the real recorders minted on the replay
+// path (interaction.venue_id → node), keyed by the tracked venue node ids. The
+// venue subtype row cascades via its ON DELETE CASCADE FK to node. Guarded by
+// type='venue' (defense-in-depth: never touch a person/entity node) AND by
+// NOT EXISTS any interaction still referencing it — so a venue shared with an
+// interaction this run did not clean up (e.g. a group container another
+// namespace also used) is left intact rather than raising the restrict FK.
+func (q *Queries) SyntheticDeleteVenueNodesByIds(ctx context.Context, nodeIds []pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteVenueNodesByIds, nodeIds)
 	if err != nil {
 		return 0, err
 	}

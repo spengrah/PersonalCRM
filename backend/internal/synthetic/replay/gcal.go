@@ -142,5 +142,8 @@ func (h *Harness) ReplayGCal(ctx context.Context, contactID uuid.UUID, spec fact
 		return GCalResult{}, err
 	}
 	h.trackContactInteractions(ctx, contactID)
+	if err := h.assertContactVenue(ctx, contactID, repository.InteractionSourceGCal); err != nil {
+		return GCalResult{}, err
+	}
 	return GCalResult{ContactID: contactID, GcalEventID: spec.GcalEventID, Matched: true}, nil
 }

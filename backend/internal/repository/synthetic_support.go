@@ -720,6 +720,27 @@ func (r *SyntheticSupportRepository) DeleteNodesByIds(ctx context.Context, nodeI
 	return r.queries.SyntheticDeleteNodesByIds(ctx, pgUUIDs(nodeIDs))
 }
 
+// DeleteVenueNodesByIds hard-deletes the venue nodes the real recorders minted
+// on the replay path (interaction.venue_id), keyed by the tracked venue node
+// ids. Guarded by type='venue' + no remaining interaction reference, so it never
+// touches a person/entity node and never trips the interaction→venue restrict FK
+// for a venue still referenced by an un-cleaned interaction.
+func (r *SyntheticSupportRepository) DeleteVenueNodesByIds(ctx context.Context, nodeIDs []uuid.UUID) (int64, error) {
+	if len(nodeIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticDeleteVenueNodesByIds(ctx, pgUUIDs(nodeIDs))
+}
+
+// CountVenueNodesByIds counts surviving venue nodes among the given ids (cleanup
+// assertion, scoped to the run's tracked ids so it is parallel-test-safe).
+func (r *SyntheticSupportRepository) CountVenueNodesByIds(ctx context.Context, nodeIDs []uuid.UUID) (int64, error) {
+	if len(nodeIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticCountVenueNodesByIds(ctx, pgUUIDs(nodeIDs))
+}
+
 // DeleteAssertionsForNode hard-deletes the assertions touching a node in either
 // position (provenance cascades). The assertion → node FK is restrict, so a test
 // MUST clear its assertions before deleting its nodes — register this cleanup to

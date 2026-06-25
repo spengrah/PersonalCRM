@@ -578,6 +578,25 @@ SELECT COUNT(*) FROM contact WHERE full_name = $1 AND deleted_at IS NULL;
 -- alongside the contacts. Hard delete, keyed by the tracked contact ids.
 DELETE FROM node WHERE id = ANY(@node_ids::uuid[]);
 
+-- name: SyntheticDeleteVenueNodesByIds :execrows
+-- Cleanup: hard-delete the venue nodes the real recorders minted on the replay
+-- path (interaction.venue_id → node), keyed by the tracked venue node ids. The
+-- venue subtype row cascades via its ON DELETE CASCADE FK to node. Guarded by
+-- type='venue' (defense-in-depth: never touch a person/entity node) AND by
+-- NOT EXISTS any interaction still referencing it — so a venue shared with an
+-- interaction this run did not clean up (e.g. a group container another
+-- namespace also used) is left intact rather than raising the restrict FK.
+DELETE FROM node
+WHERE id = ANY(@node_ids::uuid[])
+  AND type = 'venue'
+  AND NOT EXISTS (SELECT 1 FROM interaction i WHERE i.venue_id = node.id);
+
+-- name: SyntheticCountVenueNodesByIds :one
+-- Cleanup assertion — count surviving venue nodes among the given ids (scoped to
+-- THIS run's tracked venue node ids, so it is immune to parallel tests creating
+-- their own venue nodes on the shared DB, unlike a global venue-node count).
+SELECT COUNT(*) FROM node WHERE id = ANY(@node_ids::uuid[]) AND type = 'venue';
+
 -- name: SyntheticDeleteAssertionsForNode :execrows
 -- Assertion-store cleanup: hard-delete the assertions touching a node in EITHER
 -- position (provenance cascades). The assertion → node FK is restrict (NO

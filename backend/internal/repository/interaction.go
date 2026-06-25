@@ -40,6 +40,11 @@ type RecordInteractionRequest struct {
 	OccurredAt  time.Time
 	Description *string
 	Direction   string // "outbound", "inbound", "mutual" — defaults to "mutual" if empty
+	// VenueID is the shared-container venue node this interaction happened in
+	// (resolved by the recorder from the source's container key). Nil for
+	// manual/todoist and any source whose container can't be resolved — never
+	// fail the recorder over a missing venue.
+	VenueID *uuid.UUID
 }
 
 // ApplyInteractionRequest is the direct-invoke input for
@@ -100,17 +105,21 @@ func NewInteractionRepository(queries db.Querier) *InteractionRepository {
 
 // Interaction represents an interaction with a contact
 type Interaction struct {
-	ID          uuid.UUID `json:"id"`
-	ContactID   uuid.UUID `json:"contact_id"`
-	Source      string    `json:"source"`
-	SourceRef   *string   `json:"source_ref,omitempty"`
-	OccurredAt  time.Time `json:"occurred_at"`
-	Description *string   `json:"description,omitempty"`
-	Direction   string    `json:"direction"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID          uuid.UUID  `json:"id"`
+	ContactID   uuid.UUID  `json:"contact_id"`
+	Source      string     `json:"source"`
+	SourceRef   *string    `json:"source_ref,omitempty"`
+	OccurredAt  time.Time  `json:"occurred_at"`
+	Description *string    `json:"description,omitempty"`
+	Direction   string     `json:"direction"`
+	CreatedAt   time.Time  `json:"created_at"`
+	VenueID     *uuid.UUID `json:"venue_id,omitempty"`
 }
 
-// CreateInteractionRequest represents the request to create an interaction
+// CreateInteractionRequest represents the request to create an interaction.
+//
+// Field layout MUST stay identical to RecordInteractionRequest — the service
+// constructs it via the direct type conversion CreateInteractionRequest(req).
 type CreateInteractionRequest struct {
 	ContactID   uuid.UUID
 	Source      string
@@ -118,6 +127,7 @@ type CreateInteractionRequest struct {
 	OccurredAt  time.Time
 	Description *string
 	Direction   string
+	VenueID     *uuid.UUID
 }
 
 func convertDbInteraction(dbInteraction *db.Interaction) Interaction {
@@ -143,6 +153,10 @@ func convertDbInteraction(dbInteraction *db.Interaction) Interaction {
 	}
 	if dbInteraction.Description.Valid {
 		interaction.Description = &dbInteraction.Description.String
+	}
+	if dbInteraction.VenueID.Valid {
+		v := uuid.UUID(dbInteraction.VenueID.Bytes)
+		interaction.VenueID = &v
 	}
 
 	return interaction
@@ -195,6 +209,7 @@ func (r *InteractionRepository) CreateInteraction(ctx context.Context, req Creat
 		OccurredAt:  pgtype.Timestamptz{Time: req.OccurredAt, Valid: true},
 		Description: stringToPgText(req.Description),
 		Direction:   stringToPgText(&req.Direction),
+		VenueID:     uuidPtrToPgUUID(req.VenueID),
 	})
 	if err != nil {
 		return nil, err
@@ -411,6 +426,36 @@ func (r *InteractionRepository) UpdateInteractionTimestamp(ctx context.Context, 
 	return &interaction, nil
 }
 
+// TestInsertInteraction inserts an interaction with a caller-supplied id and a
+// NULL venue_id, bypassing the recorder. Test-only — used by the venue backfill
+// migration test to stand up pre-existing venue-less interactions. Production
+// code MUST NOT call this.
+func (r *InteractionRepository) TestInsertInteraction(ctx context.Context, id, contactID uuid.UUID, source string, sourceRef *string, occurredAt time.Time, direction string) (*Interaction, error) {
+	dbInteraction, err := r.queries.TestInsertInteraction(ctx, db.TestInsertInteractionParams{
+		ID:         uuidToPgUUID(id),
+		ContactID:  uuidToPgUUID(contactID),
+		Source:     source,
+		SourceRef:  stringToPgText(sourceRef),
+		OccurredAt: pgtype.Timestamptz{Time: occurredAt, Valid: true},
+		Direction:  direction,
+	})
+	if err != nil {
+		return nil, err
+	}
+	interaction := convertDbInteraction(dbInteraction)
+	return &interaction, nil
+}
+
+// UpdateInteractionVenueTx sets venue_id on an existing interaction inside the
+// caller's tx. Used by the anarlog re-sync path so a retained interaction whose
+// session was re-linked moves to the correct venue node. nil venueID clears it.
+func (r *InteractionRepository) UpdateInteractionVenueTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, venueID *uuid.UUID) error {
+	return db.New(tx).UpdateInteractionVenue(ctx, db.UpdateInteractionVenueParams{
+		ID:      uuidToPgUUID(id),
+		VenueID: uuidPtrToPgUUID(venueID),
+	})
+}
+
 // CreateInteractionTx creates a new interaction inside the caller's tx.
 // Used by the InteractionRecorder consumer so the insert commits atomically
 // with the interaction.recorded event row (spec §3.4.1).
@@ -422,6 +467,7 @@ func (r *InteractionRepository) CreateInteractionTx(ctx context.Context, tx pgx.
 		OccurredAt:  pgtype.Timestamptz{Time: req.OccurredAt, Valid: true},
 		Description: stringToPgText(req.Description),
 		Direction:   stringToPgText(&req.Direction),
+		VenueID:     uuidPtrToPgUUID(req.VenueID),
 	})
 	if err != nil {
 		return nil, err

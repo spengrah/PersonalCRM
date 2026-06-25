@@ -10,8 +10,16 @@ ORDER BY occurred_at DESC
 LIMIT $2 OFFSET $3;
 
 -- name: CreateInteraction :one
-INSERT INTO interaction (contact_id, source, source_ref, occurred_at, description, direction)
-VALUES ($1, $2, $3, $4, $5, COALESCE(sqlc.narg('direction'), 'mutual'))
+INSERT INTO interaction (contact_id, source, source_ref, occurred_at, description, direction, venue_id)
+VALUES (
+    sqlc.arg('contact_id'),
+    sqlc.arg('source'),
+    sqlc.narg('source_ref'),
+    sqlc.arg('occurred_at'),
+    sqlc.narg('description'),
+    COALESCE(sqlc.narg('direction'), 'mutual'),
+    sqlc.narg('venue_id')
+)
 RETURNING *;
 
 -- name: UpdateInteractionDirection :one
@@ -136,6 +144,15 @@ DELETE FROM interaction
 WHERE source = sqlc.arg(source)
   AND source_ref LIKE sqlc.arg(source_ref_prefix);
 
+-- name: UpdateInteractionVenue :exec
+-- Sets venue_id on an existing interaction. Used by the anarlog re-sync path so
+-- a retained interaction whose session was re-linked (e.g. session -> gcal event)
+-- moves to the correct venue node. Does not touch cadence columns.
+UPDATE interaction
+SET venue_id = sqlc.narg('venue_id')
+WHERE id = sqlc.arg('id')
+  AND deleted_at IS NULL;
+
 -- name: UpdateInteractionTimestamp :one
 -- Extend an existing interaction's occurred_at and description (incremental coalescing)
 UPDATE interaction
@@ -170,6 +187,22 @@ WHERE source = 'anarlog_sessions'
   AND source_ref LIKE sqlc.arg('source_ref_prefix')
   AND deleted_at IS NULL
 ORDER BY source_ref;
+
+-- name: TestInsertInteraction :one
+-- Test-only: inserts an interaction with a caller-supplied id, source, and
+-- source_ref and a NULL venue_id, bypassing the recorder. Used by the venue
+-- backfill migration test to stand up pre-existing (venue-less) interactions
+-- that the 069 backfill then populates. Production code MUST NOT call this.
+INSERT INTO interaction (id, contact_id, source, source_ref, occurred_at, direction)
+VALUES (
+    sqlc.arg('id'),
+    sqlc.arg('contact_id'),
+    sqlc.arg('source'),
+    sqlc.narg('source_ref'),
+    sqlc.arg('occurred_at'),
+    sqlc.arg('direction')
+)
+RETURNING *;
 
 -- name: AcquireSourceRefAggregateLock :exec
 -- Takes a transaction-scoped advisory lock keyed on an interaction

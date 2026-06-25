@@ -95,6 +95,18 @@ type MeetingNoteService struct {
 	titleDiscovery  IngestTitleDiscoveryWriter
 	contactRecorder ContactInteractionRecorder
 	contactNames    ContactNameReader
+	// venue resolves the session venue (reusing a linked gcal meeting venue, or
+	// minting a session venue) so resolve-link-path interactions get venue_id
+	// set atomically. Optional (nil-safe); wired post-construction via
+	// SetVenueResolver. Same surface IngestService uses.
+	venue IngestVenueResolver
+}
+
+// SetVenueResolver injects the venue resolver used to populate venue_id on the
+// resolve-link interaction path. Optional — when unset, those interactions get
+// a NULL venue_id.
+func (s *MeetingNoteService) SetVenueResolver(v IngestVenueResolver) {
+	s.venue = v
 }
 
 // NewMeetingNoteService constructs a MeetingNoteService bound to its
@@ -267,7 +279,10 @@ func (s *MeetingNoteService) resolveToLinked(ctx context.Context, tx pgx.Tx, pri
 	}
 
 	walkins := stepFiveWalkins(*candidate, resolvedTagged, prior.AnarlogSessionID)
-	created, followUps, err := s.writeDesiredInteractions(ctx, tx, prior, walkins)
+	// Use the candidate being linked (input.Kind/input.ID) for venue resolution,
+	// NOT prior's stale linkage — the link is written below (ResolveMeetingNoteToLinkedTx)
+	// in this same tx, so an event-linked session reuses the gcal meeting venue.
+	created, followUps, err := s.writeDesiredInteractions(ctx, tx, prior, &input.Kind, &input.ID, walkins)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -353,7 +368,8 @@ func (s *MeetingNoteService) resolveNoneOfThese(ctx context.Context, tx pgx.Tx, 
 		titleMatched,
 	)
 
-	created, followUps, err := s.writeDesiredInteractions(ctx, tx, prior, desired)
+	// none_of_these → no calendar link → a session venue (nil linkage).
+	created, followUps, err := s.writeDesiredInteractions(ctx, tx, prior, nil, nil, desired)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -468,7 +484,8 @@ func (s *MeetingNoteService) resolveOrphanToImpromptu(ctx context.Context, tx pg
 		return nil, nil, nil, fmt.Errorf("compute resolved set hash: %w", err)
 	}
 
-	created, followUps, err := s.writeDesiredInteractions(ctx, tx, prior, desired)
+	// orphan → impromptu → no calendar link → a session venue (nil linkage).
+	created, followUps, err := s.writeDesiredInteractions(ctx, tx, prior, nil, nil, desired)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -525,12 +542,25 @@ func (s *MeetingNoteService) reResolveTagged(ctx context.Context, tx pgx.Tx, par
 // ContactInteractionRecorder.RecordInteractionTx so cadence + follow-up
 // state apply correctly. Returns the materialized list for the response
 // PLUS the post-commit follow-up closures.
-func (s *MeetingNoteService) writeDesiredInteractions(ctx context.Context, tx pgx.Tx, prior *repository.MeetingNote, desired []desiredInteraction) ([]CreatedInteraction, []func(context.Context), error) {
+//
+// linkedKind/linkedID are the EFFECTIVE post-resolution linkage for venue
+// resolution — NOT necessarily prior.LinkedKind/LinkedID, which may be stale in
+// the resolve-link path (the link is written later in the same tx). The
+// resolve-to-candidate caller passes the candidate it is linking to so an
+// event-linked session reuses the gcal meeting venue; the none/impromptu callers
+// pass nil so the session gets its own venue.
+func (s *MeetingNoteService) writeDesiredInteractions(ctx context.Context, tx pgx.Tx, prior *repository.MeetingNote, linkedKind *string, linkedID *uuid.UUID, desired []desiredInteraction) ([]CreatedInteraction, []func(context.Context), error) {
 	if s.contactRecorder == nil || len(desired) == 0 {
 		return nil, nil, nil
 	}
 	created := make([]CreatedInteraction, 0, len(desired))
 	var followUps []func(context.Context)
+	// Resolve the session venue once (all desired interactions share the
+	// session): reuse a linked gcal meeting venue, else mint a session venue.
+	sessionVenueID, venueErr := resolveAnarlogSessionVenue(ctx, tx, s.venue, prior.AnarlogSessionID, linkedKind, linkedID)
+	if venueErr != nil {
+		return nil, nil, fmt.Errorf("resolve session venue: %w", venueErr)
+	}
 	for _, d := range desired {
 		sourceRef := d.SourceRef
 		req := repository.RecordInteractionRequest{
@@ -540,6 +570,7 @@ func (s *MeetingNoteService) writeDesiredInteractions(ctx context.Context, tx pg
 			OccurredAt:  prior.MeetingAt,
 			Description: prior.Title,
 			Direction:   repository.InteractionDirectionMutual,
+			VenueID:     sessionVenueID,
 		}
 		res, err := s.contactRecorder.RecordInteractionTx(ctx, tx, false, req)
 		if err != nil {

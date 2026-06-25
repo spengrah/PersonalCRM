@@ -150,15 +150,14 @@ func TestPhoneCallMigration055(t *testing.T) {
 		t.Cleanup(func() { _ = contactRepo.SoftDeleteContact(ctx, contact.ID) })
 
 		ref := "mig-pc-ix-" + suffix
-		interaction, err := interactionRepo.CreateInteraction(ctx, repository.CreateInteractionRequest{
-			ContactID:  contact.ID,
-			Source:     "phone_calls",
-			SourceRef:  &ref,
-			OccurredAt: accelerated.GetCurrentTime().Truncate(time.Microsecond),
-			Direction:  repository.InteractionDirectionInbound,
-		})
+		// Raw insert (the clone is positioned at v55, which predates the
+		// interaction.venue_id column the production CreateInteraction now writes;
+		// the migration is the subject, so a v55-shaped raw insert is the right
+		// scaffolding here).
+		_, err = database.Pool.Exec(ctx,
+			`INSERT INTO interaction (contact_id, source, source_ref, occurred_at, direction) VALUES ($1, $2, $3, $4, $5)`,
+			contact.ID, "phone_calls", ref, accelerated.GetCurrentTime().Truncate(time.Microsecond), repository.InteractionDirectionInbound)
 		require.NoError(t, err)
-		_ = interaction // referenced for explicitness
 
 		// Down must refuse on the CHECK-revert guard.
 		mig, err := newMigrator(databaseURL)
@@ -182,15 +181,11 @@ func TestPhoneCallMigration055(t *testing.T) {
 		closeMigrator(t, mig)
 
 		// Confirm the CHECK reverted: inserting a phone_calls
-		// interaction must now fail.
+		// interaction must now fail (raw insert, same v55-shape rationale).
 		ref2 := "mig-pc-ix-post-" + suffix
-		_, err = interactionRepo.CreateInteraction(ctx, repository.CreateInteractionRequest{
-			ContactID:  contact.ID,
-			Source:     "phone_calls",
-			SourceRef:  &ref2,
-			OccurredAt: accelerated.GetCurrentTime().Truncate(time.Microsecond),
-			Direction:  repository.InteractionDirectionInbound,
-		})
+		_, err = database.Pool.Exec(ctx,
+			`INSERT INTO interaction (contact_id, source, source_ref, occurred_at, direction) VALUES ($1, $2, $3, $4, $5)`,
+			contact.ID, "phone_calls", ref2, accelerated.GetCurrentTime().Truncate(time.Microsecond), repository.InteractionDirectionInbound)
 		require.Error(t, err, "phone_calls source must be rejected after 055 down")
 		assert.True(t, strings.Contains(err.Error(), "interaction_source_check") ||
 			strings.Contains(err.Error(), "check constraint"),

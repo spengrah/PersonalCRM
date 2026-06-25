@@ -80,6 +80,13 @@ func TestSyntheticSeedAll_CleanupEmptiesNamespace(t *testing.T) {
 	_, err = target.ReplayGmail(ctx, targetContact.ID, tgen.GmailMessage(tspec, factory.MatchSeeded))
 	require.NoError(t, err)
 
+	// The target's Gmail replay drives the real recorder, which mints a venue node
+	// (interaction.venue_id). Scoped to THIS run's tracked venue node ids so the
+	// check is parallel-test-safe. Non-vacuous precondition: at least one exists.
+	venueBefore, err := target.VenueNodesRemaining(ctx)
+	require.NoError(t, err)
+	require.Greater(t, venueBefore, int64(0), "the Gmail replay must mint a venue node")
+
 	// Run the target's teardown (quiesce + Gate-B-gated cleanup).
 	require.NoError(t, teardown(context.Background()))
 
@@ -87,6 +94,12 @@ func TestSyntheticSeedAll_CleanupEmptiesNamespace(t *testing.T) {
 	gone, err := target.ContactsRemaining(ctx)
 	require.NoError(t, err)
 	require.Equal(t, int64(0), gone, "target namespace cleanup should remove its contacts")
+
+	// The target's venue nodes are gone too — no leak (the exact failure class the
+	// teardown's venue_node step exists to prevent).
+	venueAfter, err := target.VenueNodesRemaining(ctx)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), venueAfter, "teardown must remove the venue nodes the replay created (no leak)")
 
 	// The sentinel's contact survives (non-destructive scoping).
 	surviving, err := sentinel.ContactsRemaining(ctx)

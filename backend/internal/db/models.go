@@ -346,6 +346,7 @@ type Interaction struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	DeletedAt   pgtype.Timestamptz `json:"deleted_at"`
 	Direction   string             `json:"direction"`
+	VenueID     pgtype.UUID        `json:"venue_id"`
 }
 
 type MacHost struct {

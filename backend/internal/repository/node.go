@@ -149,6 +149,17 @@ func (r *NodeRepository) SetNodeMergedIntoTx(ctx context.Context, tx pgx.Tx, los
 	})
 }
 
+// TestCountVenueNodes counts venue-type nodes. Test-only.
+func (r *NodeRepository) TestCountVenueNodes(ctx context.Context) (int64, error) {
+	return r.queries.TestCountVenueNodes(ctx)
+}
+
+// TestCountOrphanVenueNodes counts venue-type nodes no live interaction
+// references via venue_id. Test-only.
+func (r *NodeRepository) TestCountOrphanVenueNodes(ctx context.Context) (int64, error) {
+	return r.queries.TestCountOrphanVenueNodes(ctx)
+}
+
 // UpdateNodeCanonicalLabel keeps the node's display label loosely synced with
 // its owning entity (e.g. a contact rename). The underlying query is :exec, so a
 // missing node is a silent no-op (no rows-affected check). This is deliberate:

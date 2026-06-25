@@ -163,6 +163,28 @@ func (q *Queries) GetMessagesMessageByReplyTarget(ctx context.Context, arg GetMe
 	return &i, err
 }
 
+const GetMessagesMessageContainer = `-- name: GetMessagesMessageContainer :one
+SELECT chat_guid, is_group_chat
+FROM messages_message
+WHERE id = $1 AND deleted_at IS NULL
+`
+
+type GetMessagesMessageContainerRow struct {
+	ChatGuid    string `json:"chat_guid"`
+	IsGroupChat bool   `json:"is_group_chat"`
+}
+
+// Returns the venue-container key (chat_guid + group flag) for a staging row by
+// its UUID. Used by the live interaction recorder to resolve the messages
+// venue. The container is consistent across all messages in one aggregated
+// session, so reading the first id is sufficient.
+func (q *Queries) GetMessagesMessageContainer(ctx context.Context, id pgtype.UUID) (*GetMessagesMessageContainerRow, error) {
+	row := q.db.QueryRow(ctx, GetMessagesMessageContainer, id)
+	var i GetMessagesMessageContainerRow
+	err := row.Scan(&i.ChatGuid, &i.IsGroupChat)
+	return &i, err
+}
+
 const HardDeleteMessagesMessagesByMacHost = `-- name: HardDeleteMessagesMessagesByMacHost :exec
 DELETE FROM messages_message
 WHERE mac_host_id = $1
@@ -462,6 +484,63 @@ func (q *Queries) MarkMessagesMessagesProcessedForSession(ctx context.Context, a
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const TestInsertMessagesMessageLinked = `-- name: TestInsertMessagesMessageLinked :one
+INSERT INTO messages_message (
+    guid, chat_guid, peer_handle, sent_at, is_outgoing, is_group_chat, interaction_id
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7
+)
+RETURNING id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at
+`
+
+type TestInsertMessagesMessageLinkedParams struct {
+	Guid          string             `json:"guid"`
+	ChatGuid      string             `json:"chat_guid"`
+	PeerHandle    string             `json:"peer_handle"`
+	SentAt        pgtype.Timestamptz `json:"sent_at"`
+	IsOutgoing    bool               `json:"is_outgoing"`
+	IsGroupChat   bool               `json:"is_group_chat"`
+	InteractionID pgtype.UUID        `json:"interaction_id"`
+}
+
+// Test-only: inserts a messages_message already linked to an interaction. Used
+// by the venue backfill test to seed an iMessage chat container row. Production
+// code MUST NOT call this.
+func (q *Queries) TestInsertMessagesMessageLinked(ctx context.Context, arg TestInsertMessagesMessageLinkedParams) (*MessagesMessage, error) {
+	row := q.db.QueryRow(ctx, TestInsertMessagesMessageLinked,
+		arg.Guid,
+		arg.ChatGuid,
+		arg.PeerHandle,
+		arg.SentAt,
+		arg.IsOutgoing,
+		arg.IsGroupChat,
+		arg.InteractionID,
+	)
+	var i MessagesMessage
+	err := row.Scan(
+		&i.ID,
+		&i.Guid,
+		&i.ChatGuid,
+		&i.PeerHandle,
+		&i.PeerNormalized,
+		&i.Text,
+		&i.MessageType,
+		&i.SentAt,
+		&i.IsOutgoing,
+		&i.IsGroupChat,
+		&i.ReplyToGuid,
+		&i.MatchedContactID,
+		&i.InteractionID,
+		&i.MacHostID,
+		&i.ProcessedAt,
+		&i.ClaimedAt,
+		&i.ClaimedSessionRef,
+		&i.DeletedAt,
+		&i.CreatedAt,
+	)
+	return &i, err
 }
 
 const UpdateMatchedContactForStrandedMessage = `-- name: UpdateMatchedContactForStrandedMessage :exec

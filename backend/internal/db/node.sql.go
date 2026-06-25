@@ -100,6 +100,33 @@ func (q *Queries) SoftDeleteNode(ctx context.Context, id pgtype.UUID) error {
 	return err
 }
 
+const TestCountOrphanVenueNodes = `-- name: TestCountOrphanVenueNodes :one
+SELECT COUNT(*) FROM node nd
+WHERE nd.type = 'venue'
+  AND NOT EXISTS (SELECT 1 FROM interaction i WHERE i.venue_id = nd.id)
+`
+
+// Test-only: counts venue-type nodes that no live interaction references via
+// venue_id. Used by the venue backfill test to assert the no-orphan-node guard.
+func (q *Queries) TestCountOrphanVenueNodes(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, TestCountOrphanVenueNodes)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const TestCountVenueNodes = `-- name: TestCountVenueNodes :one
+SELECT COUNT(*) FROM node WHERE type = 'venue'
+`
+
+// Test-only: counts venue-type nodes. Used by the venue backfill test.
+func (q *Queries) TestCountVenueNodes(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, TestCountVenueNodes)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const UpdateNodeCanonicalLabel = `-- name: UpdateNodeCanonicalLabel :exec
 UPDATE node SET canonical_label = $2 WHERE id = $1
 `
