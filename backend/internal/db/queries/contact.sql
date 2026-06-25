@@ -113,16 +113,23 @@ ORDER BY
 LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
 
 -- name: CreateContact :one
+-- location/birthday/how_met are NOT written here: they are derived cache
+-- columns whose sole writer is the knowledge-cache consumer, which fills
+-- them from the current-accepted lives_in/birthday/how_met assertions
+-- ContactService emits in the same tx. The columns retain their values
+-- via that consumer; the create INSERT leaves them at their DB default
+-- (NULL) until the consumer refreshes.
 INSERT INTO contact (
-  full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, created_at, contact_by
+  full_name, cadence, last_contacted, profile_photo, created_at, contact_by
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8, $9
+  $1, $2, $3, $4, $5, $6
 ) RETURNING *;
 
 -- name: UpdateContact :one
--- Profile-only update path. Writes name, location, birthday, how_met,
--- cadence, profile_photo — NEVER writes last_contacted,
--- last_outreach_at, last_response_at, or contact_by.
+-- Profile-only update path. Writes name, cadence, profile_photo — NEVER
+-- writes last_contacted, last_outreach_at, last_response_at, contact_by,
+-- or the location/birthday/how_met cache columns (those flow from the
+-- knowledge-cache consumer off the assertion store).
 -- ContactService.UpdateContact handles the cadence-change side-effect
 -- (recomputing contact_by) by calling
 -- CadenceUpdater.ApplyContactByOverride in the same tx;
@@ -131,14 +138,28 @@ INSERT INTO contact (
 -- an explicit cadence preference.
 UPDATE contact SET
   full_name = $2,
-  location = $3,
-  birthday = $4,
-  how_met = $5,
-  cadence = $6,
-  profile_photo = $7,
+  cadence = $3,
+  profile_photo = $4,
   updated_at = NOW()
 WHERE id = $1 AND deleted_at IS NULL
 RETURNING *;
+
+-- name: UpdateContactLocationCache :exec
+-- Knowledge-cache sole-writer: refreshes the derived location cache column
+-- from the current-accepted lives_in edge's place node label (NULL when no
+-- current value). updated_at is intentionally NOT bumped — a cache refresh
+-- is bookkeeping, not a user profile edit.
+UPDATE contact SET location = $2 WHERE id = $1 AND deleted_at IS NULL;
+
+-- name: UpdateContactBirthdayCache :exec
+-- Knowledge-cache sole-writer: refreshes the derived birthday cache column
+-- from the current-accepted birthday fact (NULL when no current value).
+UPDATE contact SET birthday = $2 WHERE id = $1 AND deleted_at IS NULL;
+
+-- name: UpdateContactHowMetCache :exec
+-- Knowledge-cache sole-writer: refreshes the derived how_met cache column
+-- from the current-accepted how_met fact (NULL when no current value).
+UPDATE contact SET how_met = $2 WHERE id = $1 AND deleted_at IS NULL;
 
 -- name: UpdateContactLastContacted :exec
 -- Updates last_contacted, contact_by, and all direction timestamp fields (for mutual interactions)
@@ -651,3 +672,20 @@ UPDATE contact SET
   contact_by          = sqlc.narg(new_contact_by)::date,
   updated_at = NOW()
 WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
+
+-- name: ListContactsWithKnowledgeColumns :many
+-- Backfill source for --migrate-contact-knowledge-columns: every non-deleted
+-- contact whose location/birthday/how_met cache column still holds a value, so
+-- the migration can mirror each into the assertion store with the contact's
+-- created_at as the knowledge time. A soft-deleted contact is excluded (the
+-- write API rejects a deleted subject node, matching the tag migration's
+-- permanent skip). Deterministic order keeps a re-run's logs comparable.
+SELECT id, location, birthday, how_met, created_at
+FROM contact
+WHERE deleted_at IS NULL
+  AND (
+       (location IS NOT NULL AND location != '')
+    OR birthday IS NOT NULL
+    OR (how_met IS NOT NULL AND how_met != '')
+  )
+ORDER BY created_at ASC, id ASC;

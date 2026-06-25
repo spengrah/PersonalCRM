@@ -142,7 +142,19 @@ func getEntity(ctx context.Context, q db.Querier, nodeID uuid.UUID) (*Entity, er
 // FindEntityBySubtypeName resolves an entity via the (subtype, normalized_name)
 // unique — the entity-resolution dedup lookup.
 func (r *EntityRepository) FindEntityBySubtypeName(ctx context.Context, subtype, normalizedName string) (*Entity, error) {
-	dbEntity, err := r.queries.FindEntityBySubtypeName(ctx, db.FindEntityBySubtypeNameParams{
+	return findEntityBySubtypeName(ctx, r.queries, subtype, normalizedName)
+}
+
+// FindEntityBySubtypeNameTx is the tx-bound variant of FindEntityBySubtypeName.
+// The place-node find-or-create runs inside the contact create/update tx so the
+// dedup sees in-tx state (a second contact asserting the same place in the same
+// tx reuses the node).
+func (r *EntityRepository) FindEntityBySubtypeNameTx(ctx context.Context, tx pgx.Tx, subtype, normalizedName string) (*Entity, error) {
+	return findEntityBySubtypeName(ctx, db.New(tx), subtype, normalizedName)
+}
+
+func findEntityBySubtypeName(ctx context.Context, q db.Querier, subtype, normalizedName string) (*Entity, error) {
+	dbEntity, err := q.FindEntityBySubtypeName(ctx, db.FindEntityBySubtypeNameParams{
 		Subtype:        subtype,
 		NormalizedName: normalizedName,
 	})

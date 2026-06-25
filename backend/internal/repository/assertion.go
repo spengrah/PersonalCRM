@@ -55,6 +55,17 @@ const (
 	ProducerKindUser      = "user"
 )
 
+// Predicate-key constants for the contact knowledge-column cutover. These three
+// predicates back the derived contact.location / contact.birthday /
+// contact.how_met cache columns: lives_in is an edge to a place entity node
+// (the cache holds the place node's canonical_label); birthday/how_met are
+// facts (the cache holds value_date / value_text).
+const (
+	PredicateLivesIn  = "lives_in"
+	PredicateBirthday = "birthday"
+	PredicateHowMet   = "how_met"
+)
+
 // Assertion is the bi-temporal fact/edge row. Exactly one payload field is set
 // (ObjectNodeID for an edge, or one ValueX for a fact). Nullable temporal bounds
 // and the supersession/closure fields are pointers; an open-ended bound is nil.

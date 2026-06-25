@@ -378,9 +378,6 @@ func (r *ContactRepository) CreateContact(ctx context.Context, req CreateContact
 
 	dbContact, err := r.queries.CreateContact(ctx, db.CreateContactParams{
 		FullName:      req.FullName,
-		Location:      stringToPgText(req.Location),
-		Birthday:      timeToPgDate(req.Birthday),
-		HowMet:        stringToPgText(req.HowMet),
 		Cadence:       stringToPgText(req.Cadence),
 		LastContacted: timeToPgTimestamptz(req.LastContacted),
 		ProfilePhoto:  stringToPgText(req.ProfilePhoto),
@@ -410,9 +407,6 @@ func (r *ContactRepository) UpdateContact(ctx context.Context, id uuid.UUID, req
 	dbContact, err := r.queries.UpdateContact(ctx, db.UpdateContactParams{
 		ID:           uuidToPgUUID(id),
 		FullName:     req.FullName,
-		Location:     stringToPgText(req.Location),
-		Birthday:     timeToPgDate(req.Birthday),
-		HowMet:       stringToPgText(req.HowMet),
 		Cadence:      stringToPgText(req.Cadence),
 		ProfilePhoto: stringToPgText(req.ProfilePhoto),
 	})
@@ -422,6 +416,35 @@ func (r *ContactRepository) UpdateContact(ctx context.Context, id uuid.UUID, req
 
 	contact := convertDbContact(dbContact)
 	return &contact, nil
+}
+
+// UpdateContactLocationCacheTx refreshes the derived location cache column from
+// the knowledge store (nil clears it to NULL). The knowledge-cache consumer is
+// the sole writer of this column post-cutover; it recomputes the value from the
+// current-accepted lives_in edge's place-node label.
+func (r *ContactRepository) UpdateContactLocationCacheTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, location *string) error {
+	return db.New(tx).UpdateContactLocationCache(ctx, db.UpdateContactLocationCacheParams{
+		ID:       uuidToPgUUID(id),
+		Location: stringToPgText(location),
+	})
+}
+
+// UpdateContactBirthdayCacheTx refreshes the derived birthday cache column from
+// the knowledge store (nil clears it to NULL). Sole-writer consumer path.
+func (r *ContactRepository) UpdateContactBirthdayCacheTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, birthday *time.Time) error {
+	return db.New(tx).UpdateContactBirthdayCache(ctx, db.UpdateContactBirthdayCacheParams{
+		ID:       uuidToPgUUID(id),
+		Birthday: timeToPgDate(birthday),
+	})
+}
+
+// UpdateContactHowMetCacheTx refreshes the derived how_met cache column from the
+// knowledge store (nil clears it to NULL). Sole-writer consumer path.
+func (r *ContactRepository) UpdateContactHowMetCacheTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, howMet *string) error {
+	return db.New(tx).UpdateContactHowMetCache(ctx, db.UpdateContactHowMetCacheParams{
+		ID:     uuidToPgUUID(id),
+		HowMet: stringToPgText(howMet),
+	})
 }
 
 // UpdateContactLastContacted updates the last contacted date and contact_by for a contact.
@@ -848,6 +871,46 @@ func (r *ContactRepository) ListContactsWithContactBy(ctx context.Context, limit
 	}
 
 	return contacts, nil
+}
+
+// ContactKnowledgeColumns is one non-deleted contact's location/birthday/how_met
+// cache values plus its created_at, the source for the knowledge-column backfill.
+type ContactKnowledgeColumns struct {
+	ContactID uuid.UUID
+	Location  *string
+	Birthday  *time.Time
+	HowMet    *string
+	CreatedAt time.Time
+}
+
+// ListContactsWithKnowledgeColumns returns every non-deleted contact whose
+// location/birthday/how_met cache column still holds a value — the backfill
+// source for --migrate-contact-knowledge-columns.
+func (r *ContactRepository) ListContactsWithKnowledgeColumns(ctx context.Context) ([]ContactKnowledgeColumns, error) {
+	rows, err := r.queries.ListContactsWithKnowledgeColumns(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ContactKnowledgeColumns, 0, len(rows))
+	for _, row := range rows {
+		rec := ContactKnowledgeColumns{
+			Birthday:  pgDateToTimePtr(row.Birthday),
+			CreatedAt: row.CreatedAt.Time,
+		}
+		if row.ID.Valid {
+			rec.ContactID = uuid.UUID(row.ID.Bytes)
+		}
+		if row.Location.Valid {
+			loc := row.Location.String
+			rec.Location = &loc
+		}
+		if row.HowMet.Valid {
+			hm := row.HowMet.String
+			rec.HowMet = &hm
+		}
+		out = append(out, rec)
+	}
+	return out, nil
 }
 
 // RecomputeContactDatesAfterDeleteTx surgically rolls back the contact's
