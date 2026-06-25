@@ -294,6 +294,9 @@ JOIN venue ce_venue
 WHERE i.source = 'anarlog_sessions'
   AND i.venue_id IS NULL AND i.deleted_at IS NULL
   AND i.source_ref IS NOT NULL
+  -- Guard the ::uuid cast: skip a malformed source_ref (segment 2 not a UUID)
+  -- rather than aborting the whole BEGIN..COMMIT migration on one bad row.
+  AND split_part(i.source_ref, ':', 2) ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
   AND mn.anarlog_session_id = split_part(i.source_ref, ':', 2)::uuid
   AND mn.deleted_at IS NULL
   AND mn.linked_kind = 'event';

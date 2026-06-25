@@ -166,7 +166,7 @@ func (q *Queries) GetMessagesMessageByReplyTarget(ctx context.Context, arg GetMe
 const GetMessagesMessageContainer = `-- name: GetMessagesMessageContainer :one
 SELECT chat_guid, is_group_chat
 FROM messages_message
-WHERE id = $1
+WHERE id = $1 AND deleted_at IS NULL
 `
 
 type GetMessagesMessageContainerRow struct {

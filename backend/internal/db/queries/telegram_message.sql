@@ -48,7 +48,7 @@ WHERE telegram_chat_id = @telegram_chat_id
 -- session, so reading the first id is sufficient.
 SELECT telegram_chat_id, chat_type, chat_title
 FROM telegram_message
-WHERE id = $1;
+WHERE id = $1 AND deleted_at IS NULL;
 
 -- name: ListTelegramMessagesByChatUnprocessed :many
 SELECT * FROM telegram_message

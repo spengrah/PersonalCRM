@@ -70,12 +70,17 @@ func (h *Harness) gcalSettled(gcalEventID string, contactID uuid.UUID) gateA {
 
 // assertContactVenue verifies that the contact has at least one interaction of
 // the given source whose venue_id resolves to a live venue node. Called by the
-// venue-bearing replay adapters (telegram/messages/gchat/email/gcal/anarlog)
-// after settle so a replay fails loudly if the venue-populating recorder path
-// silently stopped setting venue_id. Returns an error (not a panic) so the
-// adapter surfaces it like any other replay failure. expectedSource scopes the
-// check to this replay's source so an unrelated prior interaction can't satisfy
-// it.
+// replay adapters that drive a venue-bearing recorder through the bus
+// (telegram/messages/gchat/email/gcal) after settle, so a replay fails loudly if
+// the venue-populating recorder path silently stopped setting venue_id. Returns
+// an error (not a panic) so the adapter surfaces it like any other replay
+// failure. expectedSource scopes the check to this replay's source so an
+// unrelated prior interaction can't satisfy it.
+//
+// phone_calls + anarlog_sessions have NO replay adapter (they are ingest-driven
+// via IngestService.handleCall / handleMeetingNoteRecorded, not a Replay* path),
+// so their live venue population is instead covered by the ingest integration
+// tests and the venue backfill integration test's per-source seeds.
 func (h *Harness) assertContactVenue(ctx context.Context, contactID uuid.UUID, expectedSource string) error {
 	rows, err := h.interactionRepo.ListContactInteractions(ctx, contactID, 100, 0)
 	if err != nil {

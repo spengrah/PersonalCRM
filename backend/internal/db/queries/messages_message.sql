@@ -45,7 +45,7 @@ RETURNING *;
 -- session, so reading the first id is sufficient.
 SELECT chat_guid, is_group_chat
 FROM messages_message
-WHERE id = $1;
+WHERE id = $1 AND deleted_at IS NULL;
 
 -- name: GetMessagesMessageByReplyTarget :one
 -- Source-neutral analog of GetTelegramMessage for the aggregator's

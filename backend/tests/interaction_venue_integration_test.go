@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
+	"personal-crm/backend/internal/consumer"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/synthetic"
@@ -130,6 +132,7 @@ func TestInteractionVenue_Backfill(t *testing.T) {
 	calendarRepo := repository.NewCalendarEventRepository(database.Queries)
 	meetingNoteRepo := repository.NewMeetingNoteRepository(database.Queries)
 	venueRepo := repository.NewVenueRepository(database.Queries)
+	nodeRepo := repository.NewNodeRepository(database.Queries)
 
 	now := accelerated.GetCurrentTime().UTC()
 
@@ -286,6 +289,28 @@ func TestInteractionVenue_Backfill(t *testing.T) {
 	assert.Equal(t, beforeBackfill.LastResponseAt, afterBackfill.LastResponseAt, "backfill must not touch last_response_at")
 	assert.Equal(t, beforeBackfill.ContactBy, afterBackfill.ContactBy, "backfill must not touch contact_by")
 
+	// Recompute leg (plan §459): run a CadenceUpdater apply against the now-
+	// venue-bearing interactions and assert the cadence columns are STILL
+	// byte-identical. The cadence machinery partitions purely by contact_id and
+	// never reads venue_id, so applying a stale (older-than-last_contacted)
+	// telegram interaction is a forward-only no-op that must leave cadence
+	// untouched — proving the recompute path is unperturbed by the new column.
+	claimRepo := repository.NewEventConsumerClaimRepository(database.Queries)
+	cadenceUpdater := consumer.NewCadenceUpdater(claimRepo, contactRepo, database.Queries, consumer.CadenceModeCutover, false)
+	recomputeTx, err := database.Pool.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, cadenceUpdater.ApplyInteraction(ctx, recomputeTx, repository.ApplyInteractionRequest{
+		ContactID:  contact.ID,
+		Direction:  repository.InteractionDirectionInbound,
+		Source:     repository.InteractionSourceTelegram,
+		OccurredAt: lastContacted.Add(-24 * time.Hour), // older than last_contacted → forward-only no-op
+	}))
+	require.NoError(t, recomputeTx.Commit(ctx))
+	afterRecompute, err := contactRepo.GetContact(ctx, contact.ID)
+	require.NoError(t, err)
+	assert.Equal(t, afterBackfill.LastContacted, afterRecompute.LastContacted, "cadence recompute must be identical post-backfill")
+	assert.Equal(t, afterBackfill.ContactBy, afterRecompute.ContactBy, "cadence recompute must be identical post-backfill")
+
 	// gcal interaction resolves to a meeting venue keyed on the 3-tuple.
 	gcalVenueID := requireInteractionVenue(t, ctx, interactionRepo, venueRepo, gcalID, repository.InteractionSourceGCal, repository.VenueKindMeeting, gcalContainer)
 
@@ -322,7 +347,7 @@ func TestInteractionVenue_Backfill(t *testing.T) {
 
 	// No orphan venue nodes: every venue-type node is referenced by at least one
 	// interaction (proves the WHERE NOT EXISTS node-mint guard).
-	require.Zero(t, countOrphanVenueNodes(ctx, t, database), "backfill must leave no orphan venue nodes")
+	require.Zero(t, countOrphanVenueNodes(ctx, t, nodeRepo), "backfill must leave no orphan venue nodes")
 
 	// manual interaction has NO venue.
 	manualInteraction, err := interactionRepo.GetInteraction(ctx, manualID)
@@ -333,41 +358,42 @@ func TestInteractionVenue_Backfill(t *testing.T) {
 	// (no down) and assert it is a true no-op — the venue node count and every
 	// venue_id are unchanged (proves WHERE venue_id IS NULL + the ON CONFLICT
 	// guards, not just down/up symmetry).
-	venueNodesBefore := countVenueNodes(ctx, t, database)
+	venueNodesBefore := countVenueNodes(ctx, t, nodeRepo)
 	upSQL, readErr := os.ReadFile(migrationsPath + "/069_interaction_venue.up.sql")
 	require.NoError(t, readErr)
 	_, err = database.Pool.Exec(ctx, string(upSQL))
 	require.NoError(t, err, "re-running the up migration backfill in-place must succeed")
-	require.Equal(t, venueNodesBefore, countVenueNodes(ctx, t, database), "in-place re-run must not create new venue nodes")
+	require.Equal(t, venueNodesBefore, countVenueNodes(ctx, t, nodeRepo), "in-place re-run must not create new venue nodes")
 	tg1VenueAgain := requireInteractionVenue(t, ctx, interactionRepo, venueRepo, tg1, repository.InteractionSourceTelegram, repository.VenueKindDM, tgContainer)
 	require.Equal(t, tg1Venue, tg1VenueAgain, "in-place re-run must leave venue_id unchanged")
 }
 
-// countVenueNodes returns the number of venue-type nodes.
-func countVenueNodes(ctx context.Context, t *testing.T, database *db.Database) int64 {
+// countVenueNodes returns the number of venue-type nodes (via the test-only
+// sqlc count, not raw SQL).
+func countVenueNodes(ctx context.Context, t *testing.T, nodeRepo *repository.NodeRepository) int64 {
 	t.Helper()
-	var n int64
-	require.NoError(t, database.Pool.QueryRow(ctx, `SELECT count(*) FROM node WHERE type = 'venue'`).Scan(&n))
+	n, err := nodeRepo.TestCountVenueNodes(ctx)
+	require.NoError(t, err)
 	return n
 }
 
 // countOrphanVenueNodes returns the number of venue-type nodes that no live
-// interaction references via venue_id.
-func countOrphanVenueNodes(ctx context.Context, t *testing.T, database *db.Database) int64 {
+// interaction references via venue_id (via the test-only sqlc count).
+func countOrphanVenueNodes(ctx context.Context, t *testing.T, nodeRepo *repository.NodeRepository) int64 {
 	t.Helper()
-	var n int64
-	require.NoError(t, database.Pool.QueryRow(ctx, `
-		SELECT count(*) FROM node nd
-		WHERE nd.type = 'venue'
-		  AND NOT EXISTS (SELECT 1 FROM interaction i WHERE i.venue_id = nd.id)`).Scan(&n))
+	n, err := nodeRepo.TestCountOrphanVenueNodes(ctx)
+	require.NoError(t, err)
 	return n
 }
 
-// TestInteractionVenue_MigrationAtomicity proves the 069 up migration is
-// explicitly transactional: a forced mid-migration error must leave NO venue_id
-// column (the explicit BEGIN/COMMIT rolls back the ADD COLUMN + CREATE INDEX
-// that ran before the error). Without the explicit tx the postgres driver would
-// leave the partial DDL committed.
+// TestInteractionVenue_MigrationAtomicity proves the REAL 069 up migration is
+// explicitly transactional: it runs the actual 069_interaction_venue.up.sql
+// content (with a deterministic error injected just before its own COMMIT) and
+// asserts venue_id did NOT survive. Because the injected error is placed inside
+// the real file's own BEGIN..COMMIT boundary, the test FAILS if a future edit
+// strips BEGIN;/COMMIT; from the real file (the ADD COLUMN would then commit
+// before the error). The companion guard-skip case below proves the actual file
+// also tolerates a malformed anarlog source_ref without aborting.
 func TestInteractionVenue_MigrationAtomicity(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -386,10 +412,10 @@ func TestInteractionVenue_MigrationAtomicity(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(database.Close)
 
-	// Roll the venue model down so the column is absent, then attempt a broken
-	// up that mirrors 069's opening (ADD COLUMN + CREATE INDEX) wrapped in
-	// BEGIN/COMMIT but with a forced error before COMMIT.
-	m, err := migrate.New(fmt.Sprintf("file://%s", getMigrationsPath()), cloneURL)
+	migrationsPath := getMigrationsPath()
+
+	// Roll the venue model down so the column is absent.
+	m, err := migrate.New(fmt.Sprintf("file://%s", migrationsPath), cloneURL)
 	require.NoError(t, err)
 	t.Cleanup(func() { _, _ = m.Close() })
 	if err := m.Migrate(interactionVenueVersion); err != nil && !errors.Is(err, migrate.ErrNoChange) {
@@ -398,25 +424,175 @@ func TestInteractionVenue_MigrationAtomicity(t *testing.T) {
 	require.NoError(t, m.Steps(-1), "roll the venue model down so venue_id is absent")
 	require.False(t, interactionVenueColumnExists(ctx, t, database), "precondition: venue_id absent after down")
 
-	// A broken transactional migration that runs the DDL then errors before COMMIT.
-	broken := `BEGIN;
-ALTER TABLE interaction ADD COLUMN IF NOT EXISTS venue_id UUID REFERENCES node(id);
-CREATE INDEX IF NOT EXISTS idx_interaction_venue_id ON interaction (venue_id) WHERE venue_id IS NOT NULL AND deleted_at IS NULL;
-SELECT 1/0;
-COMMIT;`
-	_, execErr := database.Pool.Exec(ctx, broken)
-	require.Error(t, execErr, "the broken migration must fail (division by zero)")
-
-	// Atomicity: the explicit BEGIN/COMMIT rolled the ADD COLUMN back — no column.
+	// Take the REAL 069 up SQL and inject a deterministic error immediately
+	// before its OWN final COMMIT; — so the whole real file (its BEGIN, its DDL,
+	// its backfill) runs and then errors while still inside the file's own
+	// transaction. If BEGIN;/COMMIT; are present (they are), the ADD COLUMN rolls
+	// back. If a future edit removes them, the ADD COLUMN auto-commits before the
+	// error and this assertion fails — which is exactly the regression we guard.
+	realUp, readErr := os.ReadFile(migrationsPath + "/069_interaction_venue.up.sql")
+	require.NoError(t, readErr)
+	brokenReal := injectErrorBeforeFinalCommit(t, string(realUp))
+	_, execErr := database.Pool.Exec(ctx, brokenReal)
+	require.Error(t, execErr, "the error injected into the real migration must fail it")
 	require.False(t, interactionVenueColumnExists(ctx, t, database),
-		"venue_id must NOT survive a mid-migration error (proves the explicit transaction)")
+		"venue_id must NOT survive an error inside the real file's BEGIN..COMMIT (proves it is explicitly transactional)")
 
 	// Re-apply the real migration cleanly so teardown is on a consistent schema.
 	require.NoError(t, m.Steps(1), "re-apply the real venue model")
 	require.True(t, interactionVenueColumnExists(ctx, t, database))
 }
 
+// TestInteractionVenue_MalformedAnarlogRefIsSkipped runs the REAL 069 migration
+// over a malformed anarlog interaction (source_ref segment-2 is NOT a UUID) and
+// asserts the migration SUCCEEDS — the Step-1 ::uuid-cast guard skips the bad row
+// rather than aborting the whole BEGIN..COMMIT. A well-formed anarlog row in the
+// same run still resolves to its session venue. This test FAILS if the guard is
+// removed from the real file (the cast then raises invalid-uuid and aborts).
+func TestInteractionVenue_MalformedAnarlogRefIsSkipped(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	if os.Getenv("DATABASE_URL") == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	ctx := context.Background()
+	cloneURL, drop := testdb.NewEphemeralClone(t)
+	t.Cleanup(drop)
+
+	cfg := config.TestConfig()
+	cfg.Database.URL = cloneURL
+	database, err := db.NewDatabase(ctx, cfg.Database)
+	require.NoError(t, err)
+	t.Cleanup(database.Close)
+
+	contactRepo := repository.NewContactRepository(database.Queries)
+	interactionRepo := repository.NewInteractionRepository(database.Queries)
+	venueRepo := repository.NewVenueRepository(database.Queries)
+	now := accelerated.GetCurrentTime().UTC()
+
+	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: "Malformed Anarlog Subject"})
+	require.NoError(t, err)
+
+	// A malformed anarlog ref: segment 2 is not a UUID. The Step-1 ::uuid cast
+	// must NOT fire on this row.
+	badID := uuid.New()
+	badRef := fmt.Sprintf("anarlog:not-a-uuid:%s", contact.ID)
+	_, err = interactionRepo.TestInsertInteraction(ctx, badID, contact.ID, repository.InteractionSourceAnarlogSessions, &badRef, now, repository.InteractionDirectionMutual)
+	require.NoError(t, err)
+
+	// A well-formed anarlog (unlinked) ref in the same run → a session venue.
+	goodSession := uuid.New()
+	goodID := uuid.New()
+	goodRef := fmt.Sprintf("anarlog:%s:%s", goodSession, contact.ID)
+	_, err = interactionRepo.TestInsertInteraction(ctx, goodID, contact.ID, repository.InteractionSourceAnarlogSessions, &goodRef, now, repository.InteractionDirectionMutual)
+	require.NoError(t, err)
+
+	// Run the REAL 069 by rolling it down then up over the seeded rows.
+	m, err := migrate.New(fmt.Sprintf("file://%s", getMigrationsPath()), cloneURL)
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = m.Close() })
+	if err := m.Migrate(interactionVenueVersion); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+	require.NoError(t, m.Steps(-1), "roll the venue model down")
+	require.NoError(t, m.Steps(1), "the REAL backfill must SUCCEED despite the malformed anarlog ref (guard skips it)")
+
+	// The well-formed row resolves to its session venue.
+	requireInteractionVenue(t, ctx, interactionRepo, venueRepo, goodID,
+		repository.InteractionSourceAnarlogSessions, repository.VenueKindSession, goodSession.String())
+
+	// The malformed row did NOT trip the Step-1 ::uuid cast: Step-2 (text-based)
+	// gives it a session venue keyed on the raw segment-2 text, so the migration
+	// completes. The key invariant is that the migration succeeded at all.
+	badInteraction, err := interactionRepo.GetInteraction(ctx, badID)
+	require.NoError(t, err)
+	require.NotNil(t, badInteraction.VenueID, "malformed row gets a session venue from the text-based Step 2")
+}
+
+// TestInteractionVenue_DownGuardPreservesReferencedVenue runs the 069 DOWN over
+// two venue nodes — one referenced by an assertion, one not — and asserts the
+// guarded cleanup deletes ONLY the unreferenced one. This exercises the down
+// migration's assertion-reference guard (otherwise only ever run as a bare
+// reposition Steps(-1)).
+func TestInteractionVenue_DownGuardPreservesReferencedVenue(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	if os.Getenv("DATABASE_URL") == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	ctx := context.Background()
+	cloneURL, drop := testdb.NewEphemeralClone(t)
+	t.Cleanup(drop)
+
+	cfg := config.TestConfig()
+	cfg.Database.URL = cloneURL
+	database, err := db.NewDatabase(ctx, cfg.Database)
+	require.NoError(t, err)
+	t.Cleanup(database.Close)
+
+	nodeRepo := repository.NewNodeRepository(database.Queries)
+	venueRepo := repository.NewVenueRepository(database.Queries)
+	assertionRepo := repository.NewAssertionRepository(database.Queries)
+	now := accelerated.GetCurrentTime().UTC()
+
+	// Two venue nodes via the resolver (clone is at the tip, venue_id present).
+	tx, err := database.Pool.Begin(ctx)
+	require.NoError(t, err)
+	referencedVenue, err := venueRepo.ResolveVenueForInteraction(ctx, tx, repository.InteractionSourceTelegram, repository.VenueKindDM, "down-guard-referenced", "")
+	require.NoError(t, err)
+	unreferencedVenue, err := venueRepo.ResolveVenueForInteraction(ctx, tx, repository.InteractionSourceTelegram, repository.VenueKindDM, "down-guard-unreferenced", "")
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit(ctx))
+
+	// An accepted assertion whose subject is the referenced venue node. The
+	// assertion→node FK is restrict, so the down's guard must keep this node.
+	addr := "down-guard-value"
+	_, err = assertionRepo.InsertAssertion(ctx, repository.InsertAssertionParams{
+		SubjectNodeID:  referencedVenue,
+		PredicateKey:   "home_address",
+		ValueText:      &addr,
+		KnowledgeFrom:  now,
+		Confidence:     80,
+		Salience:       40,
+		Status:         repository.AssertionStatusAccepted,
+		PropositionKey: "down-guard-prop-1",
+	})
+	require.NoError(t, err)
+
+	// Roll 069 DOWN.
+	m, err := migrate.New(fmt.Sprintf("file://%s", getMigrationsPath()), cloneURL)
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = m.Close() })
+	if err := m.Migrate(interactionVenueVersion); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err)
+	}
+	require.NoError(t, m.Steps(-1), "roll the venue model down")
+
+	// The assertion-referenced venue node SURVIVES; the unreferenced one is gone.
+	_, err = nodeRepo.GetNode(ctx, referencedVenue)
+	require.NoError(t, err, "the assertion-referenced venue node must survive the guarded down")
+	_, err = nodeRepo.GetNode(ctx, unreferencedVenue)
+	require.ErrorIs(t, err, db.ErrNotFound, "the unreferenced venue node must be removed by the down")
+}
+
 // --- helpers ---
+
+// injectErrorBeforeFinalCommit returns the migration SQL with a deterministic
+// failing statement (SELECT 1/0) inserted immediately before the file's LAST
+// COMMIT; line. The error therefore fires INSIDE the file's own transaction —
+// so the test is sensitive to whether the real file actually has BEGIN;/COMMIT;
+// (strip them and the DDL auto-commits before the error). Fails the test loudly
+// if the file has no COMMIT; to anchor against.
+func injectErrorBeforeFinalCommit(t *testing.T, sql string) string {
+	t.Helper()
+	idx := strings.LastIndex(sql, "COMMIT;")
+	require.GreaterOrEqual(t, idx, 0, "the real migration must contain a COMMIT; to anchor the injected error")
+	return sql[:idx] + "SELECT 1/0;\n" + sql[idx:]
+}
 
 // seedTelegramInteraction inserts a venue-less interaction plus a telegram_message
 // content row linked back to it (private chat → dm venue). Uses the test-only

@@ -2,9 +2,14 @@
 --
 -- Drops the venue_id index + column, then removes the venue nodes the backfill
 -- created — but only those that have become non-load-bearing (guarded like the
--- person-node down in 068). A venue node still referenced by a live interaction
--- (via venue_id) or by an assertion is left intact, so the down degrades
--- gracefully if the graph has grown beyond this migration's seed.
+-- person-node down in 068). Because the column is dropped FIRST, the guard at
+-- delete time is assertion/merge references only (NOT interaction.venue_id,
+-- which no longer exists): a venue node referenced by an assertion (or a
+-- merge-loser) is left intact, so the down degrades gracefully if the graph has
+-- grown beyond this migration's seed. (The plan's interaction.venue_id-based
+-- guard is subsumed: after the column drop, no interaction can reference a venue
+-- node, so ALL backfilled venues become deletion candidates and only the
+-- assertion/merge-load-bearing ones are kept.)
 --
 -- Wrapped in an explicit transaction for the same reason as the up: the
 -- postgres driver does not auto-wrap, and this drops a column AND deletes data.

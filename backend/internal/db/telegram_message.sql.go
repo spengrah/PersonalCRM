@@ -436,7 +436,7 @@ func (q *Queries) GetTelegramMessageByIDForTest(ctx context.Context, id pgtype.U
 const GetTelegramMessageContainer = `-- name: GetTelegramMessageContainer :one
 SELECT telegram_chat_id, chat_type, chat_title
 FROM telegram_message
-WHERE id = $1
+WHERE id = $1 AND deleted_at IS NULL
 `
 
 type GetTelegramMessageContainerRow struct {

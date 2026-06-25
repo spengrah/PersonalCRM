@@ -1852,6 +1852,11 @@ type Querier interface {
 	// list by the test before it reaches here; format() with %I quotes the
 	// identifier so it can never be an injection vector.
 	TestCountAllRows(ctx context.Context, tableName string) (int64, error)
+	// Test-only: counts venue-type nodes that no live interaction references via
+	// venue_id. Used by the venue backfill test to assert the no-orphan-node guard.
+	TestCountOrphanVenueNodes(ctx context.Context) (int64, error)
+	// Test-only: counts venue-type nodes. Used by the venue backfill test.
+	TestCountVenueNodes(ctx context.Context) (int64, error)
 	// TEST ONLY. Hard-deletes calendar_event rows whose gcal_event_id starts
 	// with the given prefix. Used by t.Cleanup to remove fixtures.
 	TestDeleteCalendarEventsByGcalEventIDPrefix(ctx context.Context, prefix string) error

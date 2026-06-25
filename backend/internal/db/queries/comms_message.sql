@@ -123,7 +123,7 @@ RETURNING *;
 -- reading the first id is sufficient.
 SELECT source, thread_id
 FROM comms_message
-WHERE id = $1;
+WHERE id = $1 AND deleted_at IS NULL;
 
 -- name: ListCommsMessagesByContact :many
 -- Per-contact content, newest first (backs idx_comms_message_contact_sent).

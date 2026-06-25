@@ -386,7 +386,7 @@ func (q *Queries) GetCommsMessageByReplyTarget(ctx context.Context, arg GetComms
 const GetCommsMessageContainer = `-- name: GetCommsMessageContainer :one
 SELECT source, thread_id
 FROM comms_message
-WHERE id = $1
+WHERE id = $1 AND deleted_at IS NULL
 `
 
 type GetCommsMessageContainerRow struct {
