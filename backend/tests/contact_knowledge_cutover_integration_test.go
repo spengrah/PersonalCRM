@@ -510,6 +510,79 @@ func TestContactKnowledgeCutover_EnrichmentEmitsAssertionAndCache(t *testing.T) 
 	assert.True(t, foundAgent, "enrichment-inferred assertion carries agent provenance")
 }
 
+func TestContactKnowledgeCutover_EmptyFieldNormalization(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	h := newKnowledgeCutoverHarness(t, ctx)
+
+	ns := uuid.New().String()[:8]
+	blank := "   " // whitespace-only
+
+	// Create with whitespace-only location/how_met → no assertion, no error, cache
+	// stays empty (the pre-cutover leniency for blank fields).
+	contact, _, err := h.contactSvc.CreateContact(ctx, repository.CreateContactRequest{
+		FullName: "Empty Field " + ns,
+		Location: &blank,
+		HowMet:   &blank,
+	}, nil)
+	require.NoError(t, err, "whitespace-only fields must not error the create")
+	h.track(contact.ID)
+	assert.Nil(t, contact.Location, "blank location is not stored")
+	assert.Nil(t, contact.HowMet, "blank how_met is not stored")
+
+	now := accelerated.GetCurrentTime().UTC()
+	_, err = h.assertionRepo.GetCurrentAccepted(ctx, contact.ID, repository.PredicateLivesIn, now)
+	assert.ErrorIs(t, err, db.ErrNotFound, "no lives_in assertion minted for a blank location")
+
+	// Now set a real location, then update with an empty string → treated as a
+	// CLEAR (closure), cache blanks to NULL.
+	realLoc := "Phoenix " + ns
+	h.trackPlace(realLoc)
+	_, _, err = h.contactSvc.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
+		FullName: contact.FullName,
+		Location: &realLoc,
+	}, nil, false)
+	require.NoError(t, err)
+	withLoc, err := h.contactRepo.GetContact(ctx, contact.ID)
+	require.NoError(t, err)
+	require.NotNil(t, withLoc.Location)
+	assert.Equal(t, realLoc, *withLoc.Location)
+
+	empty := ""
+	cleared, _, err := h.contactSvc.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
+		FullName: contact.FullName,
+		Location: &empty,
+	}, nil, false)
+	require.NoError(t, err, "empty-string location must not error")
+	assert.Nil(t, cleared.Location, "empty-string update clears the location cache")
+	_, err = h.assertionRepo.GetCurrentAccepted(ctx, contact.ID, repository.PredicateLivesIn, now)
+	assert.ErrorIs(t, err, db.ErrNotFound, "empty-string update closes the lives_in slot")
+}
+
+func TestContactKnowledgeCutover_EnrichmentErrorPropagates(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	h := newKnowledgeCutoverHarness(t, ctx)
+
+	ns := uuid.New().String()[:8]
+	loc := "Tucson " + ns
+	h.trackPlace(loc)
+
+	// Seed a contact whose PERSON NODE is soft-deleted: the assert path rejects a
+	// soft-deleted subject node, so the inferred-knowledge write fails — and the
+	// enrichment must surface that as an error (not log-and-continue) since the
+	// inferred location would otherwise be silently dropped.
+	contact := h.seedPreCutoverContact(t, ctx, "Enrich Fail "+ns, nil, nil)
+	h.track(contact.ID)
+	require.NoError(t, h.nodeRepo.SoftDeleteNode(ctx, contact.ID))
+
+	external := &repository.ExternalContact{
+		Addresses: []repository.AddressEntry{{Formatted: loc}},
+	}
+	_, err := h.enrichSvc.EnrichContactFromExternal(ctx, contact.ID, external)
+	require.Error(t, err, "a dropped inferred location must surface as an error, not a silent success")
+}
+
 // assertHasUserProvenance asserts the assertion has at least one user-producer
 // provenance locator.
 func assertHasUserProvenance(t *testing.T, ctx context.Context, assertionRepo *repository.AssertionRepository, assertionID uuid.UUID) {
