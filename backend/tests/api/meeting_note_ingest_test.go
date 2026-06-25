@@ -146,6 +146,7 @@ func setupMeetingNoteIngestEnv(t *testing.T) *meetingNoteIngestEnv {
 	// full path the production wiring uses.
 	contactSvc := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, eventBus, service.NewRematchService())
 	contactSvc.SetCadenceUpdater(wireCadenceUpdaterForAPITest(t, database, contactSvc))
+	knowledgeAssertSvc, knowledgeCache := wireKnowledgeWriterForAPITest(t, database, nil, contactSvc)
 
 	titleMatcher := anarlog.NewTitleMatcher(contactRepo)
 	titleDiscoveryWriter := anarlog.NewDiscoveryWriter(externalRepo)
@@ -209,6 +210,7 @@ func setupMeetingNoteIngestEnv(t *testing.T) *meetingNoteIngestEnv {
 	matchService := service.NewImportMatchService(contactRepo)
 	enrichmentSvc := service.NewEnrichmentService(database, contactRepo, contactMethodRepo, enrichmentRepo, nil, nil)
 	enrichmentSvc.SetCadenceUpdater(wireCadenceUpdaterForAPITest(t, database, contactSvc))
+	enrichmentSvc.SetKnowledgeWriter(knowledgeAssertSvc, knowledgeCache)
 	suggestionSvc := service.NewSuggestionService(externalRepo, contactRepo, contactMethodRepo, enrichmentSvc, matchService, database)
 	importHandler := handlers.NewImportHandler(externalRepo, identityService, contactSvc, matchService, enrichmentSvc, suggestionSvc)
 	imports := router.Group("/api/v1/imports")

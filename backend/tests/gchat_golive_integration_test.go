@@ -62,6 +62,7 @@ func TestGChatGoLive_RegisteredProvider_SchedulerSweep_ProducesInteractionsAndCa
 	// nil-bus ContactService (single-tx contact+method write, no River client).
 	contactSvc := service.NewContactService(e.database, contactRepo, methodRepo,
 		e.interactionRepo, repository.NewContactTaskRepository(e.database.Queries), nil, nil)
+	wireKnowledgeWriterForTest(t, e.database, nil, contactSvc)
 	spec := gen.Contact(factory.WithEmail(), factory.WithCadence("weekly"))
 	peerEmail := spec.Email
 	contact, _, err := contactSvc.CreateContact(e.ctx, repository.CreateContactRequest{

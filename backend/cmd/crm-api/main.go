@@ -480,6 +480,15 @@ func run() int {
 	// the sole writer.
 	contactService.SetCadenceUpdater(cadenceUpdater)
 
+	// Knowledge-cache consumer (the location/birthday/how_met authority flip):
+	// the sole writer of those three derived cache columns. ContactService emits
+	// lives_in/birthday/how_met assertions through AssertService and calls
+	// knowledgeCacheUpdater.RefreshTx inline (no read-path gap on a user edit);
+	// the registered KnowledgeCacheUpdaterWorker (below) handles assertion.accepted
+	// /superseded events from any other producer (extractors, rollover, retraction).
+	knowledgeCacheUpdater := consumer.NewKnowledgeCacheUpdater(graphAssertionRepo, graphNodeRepo, contactRepo)
+	contactService.SetKnowledgeWriter(assertService, knowledgeCacheUpdater)
+
 	// Todoist client factory, built once with the running CRM_ENV so the
 	// outbound-write guard (Spec C) applies at every production write site.
 	// Non-prod instances holding real OAuth tokens (a restored prod DB, a
@@ -712,6 +721,13 @@ func run() int {
 	// mode=off HandleEvent short-circuits before any DB write.
 	river.AddWorker(riverWorkers, consumer.NewCadenceUpdaterWorker(eventBus, database.Pool, cadenceUpdater))
 
+	// KnowledgeCacheUpdater worker: refreshes the contact.location/birthday/how_met
+	// cache columns on assertion.accepted / assertion.superseded events (the bus
+	// routes both kinds here; the worker no-ops unless the predicate is one of the
+	// three cutover predicates). Covers supersession / closure / retraction from
+	// any producer; the inline RefreshTx in ContactService handles direct edits.
+	river.AddWorker(riverWorkers, consumer.NewKnowledgeCacheUpdaterWorker(eventBus, database.Pool, knowledgeCacheUpdater))
+
 	// FollowUpManager + river workers. Routing is config-blind
 	// (events.consumerJobsForKind always enqueues cadence + follow-up
 	// jobs for interaction.recorded); HandleEvent short-circuits on
@@ -765,6 +781,10 @@ func run() int {
 	// scope so both feature blocks share a single instance.
 	enrichmentService := service.NewEnrichmentService(database, contactRepo, contactMethodRepo, enrichmentRepo, eventBus, rematchService)
 	enrichmentService.SetCadenceUpdater(cadenceUpdater)
+	// Inferred location/birthday from external contact data flow through the
+	// assertion store (agent provenance), not the contact SQL — wire the same
+	// knowledge writer the contact service uses.
+	enrichmentService.SetKnowledgeWriter(assertService, knowledgeCacheUpdater)
 
 	// Address-book method reconcile: re-propagates address-book methods
 	// onto already-linked contacts (auto-propagate for matched, record

@@ -96,6 +96,16 @@ type ContactService struct {
 	// return an error rather than silently no-op-ing on a code path
 	// that was supposed to mutate cadence state.
 	cadence cadenceWriter
+	// knowledge emits the lives_in/birthday/how_met assertions for
+	// location/birthday/how_met and refreshes the derived cache columns
+	// inline (the authority flip — the assertion store is the source of
+	// truth, the columns are a cache). Injected via SetKnowledgeWriter
+	// after construction to avoid a circular dep with the assert service +
+	// cache-consumer wiring. When unset, CreateContact / UpdateContact /
+	// MergeContacts return an error rather than silently dropping a
+	// location/birthday/how_met write (the columns are no longer written
+	// by the contact SQL).
+	knowledge *knowledgeWriter
 }
 
 // NewContactService constructs a ContactService. bus and rematchRegistry
@@ -156,6 +166,17 @@ func (s *ContactService) InjectBusForTest(bus *events.Bus) {
 // was supposed to mutate cadence state.
 func (s *ContactService) SetCadenceUpdater(c cadenceWriter) {
 	s.cadence = c
+}
+
+// SetKnowledgeWriter injects the assertion-store knowledge writer. Main.go
+// wires this after constructing both the AssertService and the
+// KnowledgeCacheUpdater consumer; the deferred wire-in avoids a circular
+// construction dependency (the cache consumer reads the assertion store the
+// AssertService writes). CreateContact / UpdateContact / MergeContacts require
+// it to be set — otherwise a location/birthday/how_met write would silently
+// vanish, since the contact SQL no longer writes those cache columns.
+func (s *ContactService) SetKnowledgeWriter(assertSvc *AssertService, cache knowledgeCacheRefresher) {
+	s.knowledge = newKnowledgeWriter(assertSvc, cache)
 }
 
 // HasPendingFollowUp checks if a contact has a pending follow-up task
@@ -254,6 +275,13 @@ func (s *ContactService) ListContactIDs(ctx context.Context, params repository.L
 }
 
 func (s *ContactService) CreateContact(ctx context.Context, req repository.CreateContactRequest, methods []ContactMethodInput) (contact *repository.Contact, jobID uuid.UUID, err error) {
+	if s.knowledge == nil {
+		// Authority-flip invariant: location/birthday/how_met are no longer
+		// written by the contact SQL — they flow from the assertion store via
+		// the knowledge writer. Refusing to operate without it prevents a
+		// silent drop of those fields.
+		return nil, uuid.Nil, errors.New("create contact: knowledge writer not wired (call SetKnowledgeWriter)")
+	}
 	tx, err := s.database.Pool.Begin(ctx)
 	if err != nil {
 		return nil, uuid.Nil, err
@@ -282,6 +310,29 @@ func (s *ContactService) CreateContact(ctx context.Context, req repository.Creat
 	// silent graph infra (no event); assertion events are the graph's signal.
 	if _, err = nodeRepo.CreateNodeTx(ctx, tx, contact.ID, repository.NodeTypePerson, contact.FullName); err != nil {
 		return nil, uuid.Nil, fmt.Errorf("create person node: %w", err)
+	}
+
+	// Authority flip: persist location/birthday/how_met as user assertions in
+	// the same tx (the contact SQL no longer writes those columns) and refresh
+	// the derived cache columns inline so the returned contact reflects them on
+	// commit. A live user create stamps knowledge_from = now (no override).
+	if err = s.knowledge.assertCreate(ctx, tx, contact.ID,
+		knowledgeFieldValues{Location: req.Location, Birthday: req.Birthday, HowMet: req.HowMet},
+		knowledgeFieldProvenance{
+			SourceKind:     repository.SourceKindUser,
+			ProducerKind:   repository.ProducerKindUser,
+			SourceIDPrefix: "edit",
+		}); err != nil {
+		return nil, uuid.Nil, fmt.Errorf("assert contact knowledge: %w", err)
+	}
+
+	// The cache refresh above is a second write on the contact row, so the
+	// struct returned by CreateContact (which never carried location/birthday/
+	// how_met) is stale for those columns. Re-fetch inside the tx so the caller
+	// receives the committed values.
+	contact, err = contactRepo.GetContact(ctx, contact.ID)
+	if err != nil {
+		return nil, uuid.Nil, fmt.Errorf("refetch contact after knowledge assert: %w", err)
 	}
 
 	createdMethods, err := createContactMethods(ctx, contactMethodRepo, contact.ID, methods)
@@ -334,6 +385,11 @@ func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req re
 		// without it prevents a silent rollback to the direct-path
 		// behavior.
 		return nil, uuid.Nil, errors.New("update contact: cadence updater not wired (call SetCadenceUpdater)")
+	}
+	if s.knowledge == nil {
+		// Authority-flip invariant: location/birthday/how_met flow from the
+		// assertion store, not the contact SQL. See SetKnowledgeWriter.
+		return nil, uuid.Nil, errors.New("update contact: knowledge writer not wired (call SetKnowledgeWriter)")
 	}
 	tx, err := s.database.Pool.Begin(ctx)
 	if err != nil {
@@ -397,14 +453,31 @@ func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req re
 		return nil, uuid.Nil, fmt.Errorf("sync person node label: %w", err)
 	}
 
+	// Authority flip: reconcile location/birthday/how_met against the contact's
+	// pre-update cache values — assert a new/changed value, close a cleared
+	// slot — then refresh the cache columns inline. existingContact's cache
+	// columns reflect the current-accepted assertions, so the next/existing diff
+	// drives the supersession-vs-closure decision.
+	if err = s.knowledge.applyUpdate(ctx, tx, id,
+		knowledgeFieldValues{Location: req.Location, Birthday: req.Birthday, HowMet: req.HowMet},
+		knowledgeFieldValues{Location: existingContact.Location, Birthday: existingContact.Birthday, HowMet: existingContact.HowMet},
+		knowledgeFieldProvenance{
+			SourceKind:     repository.SourceKindUser,
+			ProducerKind:   repository.ProducerKindUser,
+			SourceIDPrefix: "edit",
+		}); err != nil {
+		return nil, uuid.Nil, fmt.Errorf("apply contact knowledge: %w", err)
+	}
+
 	if err := s.cadence.ApplyContactByOverride(ctx, tx, id, newContactBy); err != nil {
 		return nil, uuid.Nil, fmt.Errorf("apply cadence contact_by override: %w", err)
 	}
 	// ApplyContactByOverride is a second UPDATE on the contact row, so
 	// the profile-only UpdateContact's RETURNING values (notably
 	// updated_at AND contact_by) are stale by the time we'd use them.
-	// Re-fetch inside the tx so the struct the caller receives matches
-	// the committed row bit-for-bit.
+	// The knowledge cache refresh above is likewise a separate write on
+	// location/birthday/how_met. Re-fetch inside the tx so the struct the
+	// caller receives matches the committed row bit-for-bit.
 	contact, err = contactRepo.GetContact(ctx, id)
 	if err != nil {
 		return nil, uuid.Nil, fmt.Errorf("refetch contact after cadence override: %w", err)
@@ -1345,6 +1418,28 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 	nodeRepo := repository.NewNodeRepository(txQueries)
 	if err := nodeRepo.UpdateNodeCanonicalLabelTx(ctx, tx, req.TargetContactID, updateReq.FullName); err != nil {
 		return nil, fmt.Errorf("sync target person node label: %w", err)
+	}
+
+	// Authority flip: the merged profile's location/birthday/how_met (target-or-
+	// source per field selection) are persisted as assertions on the target node,
+	// then the cache columns refresh inline. updateReq carries the chosen values;
+	// targetContact carries the pre-merge values, so the diff drives
+	// supersession (a source-preferred field) vs corroboration (target kept).
+	// Re-pointing the SOURCE contact's own assertions onto the target node is a
+	// separate graph-merge concern (the node-merge procedure), not this column
+	// cutover — so the source's knowledge edges are not touched here.
+	if s.knowledge == nil {
+		return nil, errors.New("merge contacts: knowledge writer not wired (call SetKnowledgeWriter)")
+	}
+	if err := s.knowledge.applyUpdate(ctx, tx, req.TargetContactID,
+		knowledgeFieldValues{Location: updateReq.Location, Birthday: updateReq.Birthday, HowMet: updateReq.HowMet},
+		knowledgeFieldValues{Location: targetContact.Location, Birthday: targetContact.Birthday, HowMet: targetContact.HowMet},
+		knowledgeFieldProvenance{
+			SourceKind:     repository.SourceKindUser,
+			ProducerKind:   repository.ProducerKindUser,
+			SourceIDPrefix: "merge",
+		}); err != nil {
+		return nil, fmt.Errorf("apply merged contact knowledge: %w", err)
 	}
 
 	// 9a. Forward-max merged cadence columns through

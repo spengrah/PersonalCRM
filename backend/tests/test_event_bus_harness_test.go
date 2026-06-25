@@ -78,6 +78,9 @@ func setupTestEventBus(
 	// can enqueue legally. Suites that want the REAL email consumer use
 	// setupTestEventBusForEmail.
 	river.AddWorker(workers, &emailInteractionNoopWorker{})
+	// assertion.accepted/superseded route a knowledge_cache_updater job; register
+	// the kind so a contact-create-with-location publish enqueues legally.
+	river.AddWorker(workers, &knowledgeCacheNoopWorker{})
 
 	client, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
 		Queues: map[string]river.QueueConfig{
@@ -104,6 +107,7 @@ func setupTestEventBus(
 	// wrapper / UpdateContact cadence-edit) work in these async
 	// integration tests.
 	contactService.SetCadenceUpdater(cadenceUpdater)
+	wireKnowledgeWriterForTest(t, database, bus, contactService)
 	stagingRegistry := repository.NewStagingProcessorRegistry(map[string]repository.StagingProcessor{
 		repository.InteractionSourceTelegram: repository.NewTelegramStagingProcessor(telegramMessageRepo),
 	})
@@ -162,6 +166,7 @@ func setupTestEventBusWithRematch(
 	river.AddWorker(workers, &cadenceUpdaterNoopWorker{})
 	river.AddWorker(workers, &followUpManagerNoopWorker{})
 	river.AddWorker(workers, &emailInteractionNoopWorker{})
+	river.AddWorker(workers, &knowledgeCacheNoopWorker{})
 	rematchShim := &deferredRematchWorker{}
 	river.AddWorker(workers, rematchShim)
 
@@ -185,6 +190,7 @@ func setupTestEventBusWithRematch(
 		false,
 	)
 	contactService.SetCadenceUpdater(cadenceUpdater)
+	wireKnowledgeWriterForTest(t, database, bus, contactService)
 	stagingRegistry2 := repository.NewStagingProcessorRegistry(map[string]repository.StagingProcessor{
 		repository.InteractionSourceTelegram: repository.NewTelegramStagingProcessor(telegramMessageRepo),
 	})
@@ -274,6 +280,7 @@ func setupTestEventBusForEmail(
 	river.AddWorker(workers, cadenceShim)
 	followUpShim := &deferredFollowUpWorker{}
 	river.AddWorker(workers, followUpShim)
+	river.AddWorker(workers, &knowledgeCacheNoopWorker{})
 
 	client, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
 		Queues: map[string]river.QueueConfig{
@@ -285,6 +292,7 @@ func setupTestEventBusForEmail(
 	require.NoError(t, err)
 
 	bus := events.NewBus(database.Pool, client, eventRepo)
+	wireKnowledgeWriterForTest(t, database, bus, contactService)
 
 	emailConsumer := consumer.NewEmailInteractionConsumer(
 		contactService, commsMessageRepo, interactionRepo, contactService,
@@ -437,6 +445,69 @@ func wireCadenceUpdaterForTest(t *testing.T, database *db.Database, contactServi
 	)
 	contactService.SetCadenceUpdater(cadenceUpdater)
 	return cadenceUpdater
+}
+
+// wireKnowledgeWriterForTest wires the location/birthday/how_met authority-flip
+// writer into the contact service so CreateContact / UpdateContact /
+// MergeContacts persist those fields via the assertion store + refresh the cache
+// columns inline. When bus is non-nil it is reused (so the emitted assertion.*
+// events land in the same event log the harness asserts on); when nil, a
+// self-contained insert-only bus is built so contact-only tests (no event bus)
+// can still create contacts. The inline cache refresh happens regardless of the
+// bus, so cache columns are correct on commit either way.
+func wireKnowledgeWriterForTest(t *testing.T, database *db.Database, bus *events.Bus, contactService *service.ContactService) {
+	t.Helper()
+	assertSvc, cache := buildKnowledgeDeps(t, database, bus)
+	contactService.SetKnowledgeWriter(assertSvc, cache)
+}
+
+// buildKnowledgeDeps constructs the AssertService + KnowledgeCacheUpdater the
+// authority flip needs. Returned concrete types so a test can wire BOTH the
+// contact service and the enrichment service against the same instances. A nil
+// bus builds a self-contained insert-only bus.
+func buildKnowledgeDeps(t *testing.T, database *db.Database, bus *events.Bus) (*service.AssertService, *consumer.KnowledgeCacheUpdater) {
+	t.Helper()
+	if bus == nil {
+		bus = newInsertOnlyAssertBus(t, database)
+	}
+	contactRepo := repository.NewContactRepository(database.Queries)
+	nodeRepo := repository.NewNodeRepository(database.Queries)
+	entityRepo := repository.NewEntityRepository(database.Queries)
+	predicateRepo := repository.NewPredicateRepository(database.Queries)
+	assertionRepo := repository.NewAssertionRepository(database.Queries)
+	assertSvc := service.NewAssertService(database.Pool, nodeRepo, entityRepo, predicateRepo, assertionRepo, bus)
+	cache := consumer.NewKnowledgeCacheUpdater(assertionRepo, nodeRepo, contactRepo)
+	return assertSvc, cache
+}
+
+// newInsertOnlyAssertBus builds an insert-only event bus (a river client with a
+// no-op knowledge_cache_updater worker registered so assertion.accepted/
+// superseded enqueues validate) for contact-only tests that have no live bus of
+// their own. The client is not started — PublishTx only inserts the event row +
+// enqueues the job; the job never runs (no started client), which is fine: the
+// authority-flip tests that need the async worker build the full event bus.
+func newInsertOnlyAssertBus(t *testing.T, database *db.Database) *events.Bus {
+	t.Helper()
+	workers := river.NewWorkers()
+	river.AddWorker(workers, &knowledgeCacheNoopWorker{})
+	client, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
+		Queues:   map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: 1}},
+		Workers:  workers,
+		TestOnly: true,
+	})
+	require.NoError(t, err)
+	return events.NewBus(database.Pool, client, repository.NewEventRepository(database.Queries))
+}
+
+// knowledgeCacheNoopWorker satisfies the knowledge_cache_updater kind for the
+// insert-only assert bus so river accepts the enqueue. It never runs (the
+// client is not started).
+type knowledgeCacheNoopWorker struct {
+	river.WorkerDefaults[consumerjobs.KnowledgeCacheUpdaterJobArgs]
+}
+
+func (*knowledgeCacheNoopWorker) Work(context.Context, *river.Job[consumerjobs.KnowledgeCacheUpdaterJobArgs]) error {
+	return nil
 }
 
 // cadenceUpdaterNoopWorker satisfies the cadence_updater kind for test

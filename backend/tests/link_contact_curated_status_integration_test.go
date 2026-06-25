@@ -55,10 +55,16 @@ func setupLinkCuratedEnv(t *testing.T) *linkCuratedEnv {
 
 	identitySvc := service.NewIdentityService(identityRepo)
 	contactSvc := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, contactTaskRepo, nil, nil)
+	wireCadenceUpdaterForTest(t, database, contactSvc)
 	matchSvc := service.NewImportMatchService(contactRepo)
 	// nil bus/registry → enrichment skips publish (no rematch wiring needed
 	// for the status-classification assertion).
 	enrichSvc := service.NewEnrichmentService(database, contactRepo, methodRepo, enrichmentRepo, nil, nil)
+	// CreateContact (import path) + enrichment infer location/birthday through the
+	// assertion store now, so both services need the knowledge writer.
+	assertSvc, knowledgeCache := buildKnowledgeDeps(t, database, nil)
+	contactSvc.SetKnowledgeWriter(assertSvc, knowledgeCache)
+	enrichSvc.SetKnowledgeWriter(assertSvc, knowledgeCache)
 	suggestionSvc := service.NewSuggestionService(externalRepo, contactRepo, methodRepo, enrichSvc, matchSvc, database)
 	handler := handlers.NewImportHandler(externalRepo, identitySvc, contactSvc, matchSvc, enrichSvc, suggestionSvc)
 

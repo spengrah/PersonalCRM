@@ -197,6 +197,7 @@ Cross-cutting concerns that require checking multiple locations:
 | OAuth flow changes | Both callback route AND auth URL endpoint |
 | Contact method types | `contact_method` CHECK constraint + `identity.IdentifierType` enum |
 | Cadence options | `contact` CHECK constraint + frontend dropdown options |
+| `contact.location`/`birthday`/`how_met` write path | These are DERIVED cache columns, NOT directly writable. `KnowledgeCacheUpdater` is their sole writer (recompute from the current-accepted `lives_in`/`birthday`/`how_met` assertion). The contact SQL (`CreateContact`/`UpdateContact`) does NOT write them. Any code that wants to set one MUST emit an assertion via `AssertService` + refresh via `KnowledgeCacheUpdater.RefreshTx` (see `ContactService.knowledge` / `EnrichmentService.assertInferredKnowledge`). Adding a new direct writer of these columns is a bug; route it through the assertion store |
 | E2E test file patterns | `frontend/tests/e2e/test-map.json` tag mappings |
 | Scheduled job changes | Scheduler section in `.ai/guides/architecture.md` |
 | New sortable contact field | 4 SQL sorted queries + handler oneof + `SortField` type + `ContactListParams.sort` |

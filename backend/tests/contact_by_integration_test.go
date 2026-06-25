@@ -347,6 +347,7 @@ func TestContactBy_CadenceStateTransitions(t *testing.T) {
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
 	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, nil, nil)
 	wireCadenceUpdaterForTest(t, database, contactService)
+	wireKnowledgeWriterForTest(t, database, nil, contactService)
 
 	t.Run("set cadence -> clear cadence -> set cadence", func(t *testing.T) {
 		weeklyStr := "weekly"

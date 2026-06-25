@@ -145,6 +145,7 @@ func setupPhoneCallIngestEnv(t *testing.T) *phoneCallIngestEnv {
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &apiTestCadenceShim{})
 	river.AddWorker(workers, &apiTestFollowUpShim{})
+	river.AddWorker(workers, &apiKnowledgeCacheNoopWorker{})
 	riverClient, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
 		JobTimeout: cfg.River.JobTimeout,
 		Queues: map[string]river.QueueConfig{
@@ -172,6 +173,7 @@ func setupPhoneCallIngestEnv(t *testing.T) *phoneCallIngestEnv {
 		false,
 	)
 	contactService.SetCadenceUpdater(cadenceUpdater)
+	wireKnowledgeWriterForAPITest(t, database, eventBus, contactService)
 
 	// FollowUpManager wired to ErrTodoistUnconfigured so the post-commit
 	// Todoist branch degrades to local-only writes. Phone_calls v1.5 has

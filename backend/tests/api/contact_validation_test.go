@@ -68,6 +68,7 @@ func setupContactValidationTestRouter() (*gin.Engine, func()) {
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, repository.NewContactTaskRepository(database.Queries), nil, nil)
 	wireCadenceUpdaterForAPITest(nil, database, contactService)
+	wireKnowledgeWriterForAPITest(nil, database, nil, contactService)
 	contactHandler := handlers.NewContactHandler(contactService)
 
 	router := gin.New()

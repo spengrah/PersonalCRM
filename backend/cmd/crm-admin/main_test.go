@@ -606,6 +606,66 @@ func TestRunMigrateTagsMutualExclusion(t *testing.T) {
 	}
 }
 
+type fakeContactKnowledgeMigrator struct {
+	result service.ContactKnowledgeMigrationResult
+	err    error
+	calls  int
+}
+
+func (f *fakeContactKnowledgeMigrator) MigrateContactKnowledgeColumns(_ context.Context) (service.ContactKnowledgeMigrationResult, error) {
+	f.calls++
+	if f.err != nil {
+		return service.ContactKnowledgeMigrationResult{}, f.err
+	}
+	return f.result, nil
+}
+
+func TestRunMigrateContactKnowledgeHappy(t *testing.T) {
+	deps, stdout, _, _, _, _ := newTestDeps()
+	migrator := &fakeContactKnowledgeMigrator{result: service.ContactKnowledgeMigrationResult{
+		Contacts: 5, LocationsMigrated: 3, BirthdaysMigrated: 4, HowMetMigrated: 2,
+	}}
+	deps.migrateContactKnowledge = migrator
+
+	err := run(context.Background(), runOptions{migrateContactKnowledge: true}, deps)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if migrator.calls != 1 {
+		t.Fatalf("expected 1 migrate call, got %d", migrator.calls)
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"contacts_scanned:", "locations_migrated:", "birthdays_migrated:", "how_met_migrated:",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing label %q: %s", want, out)
+		}
+	}
+}
+
+func TestRunMigrateContactKnowledgeError(t *testing.T) {
+	deps, _, _, _, _, _ := newTestDeps()
+	deps.migrateContactKnowledge = &fakeContactKnowledgeMigrator{err: errors.New("boom")}
+
+	err := run(context.Background(), runOptions{migrateContactKnowledge: true}, deps)
+	if err == nil {
+		t.Fatal("expected error when the contact-knowledge migrator errors")
+	}
+}
+
+func TestRunMigrateContactKnowledgeMutualExclusion(t *testing.T) {
+	deps, _, _, _, _, _ := newTestDeps()
+	deps.migrateContactKnowledge = &fakeContactKnowledgeMigrator{}
+	err := run(context.Background(), runOptions{
+		migrateContactKnowledge: true,
+		migrateTags:             true,
+	}, deps)
+	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("expected mutual-exclusion error, got %v", err)
+	}
+}
+
 func TestRunResetGmailBackfillMutualExclusion(t *testing.T) {
 	deps, _, _, _, _, _ := newTestDeps()
 	err := run(context.Background(), runOptions{

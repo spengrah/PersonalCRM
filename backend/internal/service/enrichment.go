@@ -40,6 +40,13 @@ type EnrichmentService struct {
 	bus             *events.Bus
 	rematchRegistry RematchRegistry
 	cadence         cadenceWriter
+	// knowledge persists inferred location/birthday/how_met as assertions and
+	// refreshes the derived cache columns inline. Post-cutover the contact SQL
+	// no longer writes those columns, so an enrichment that infers them MUST
+	// route through this writer or the value silently vanishes. Injected via
+	// SetKnowledgeWriter; when unset, an enrichment that would set one of those
+	// three fields returns an error rather than dropping it.
+	knowledge *knowledgeWriter
 }
 
 // NewEnrichmentService creates a new enrichment service. database is
@@ -76,6 +83,15 @@ func (s *EnrichmentService) SetCadenceUpdater(c cadenceWriter) {
 	s.cadence = c
 }
 
+// SetKnowledgeWriter injects the assertion-store knowledge writer. Required for
+// any enrichment that infers location/birthday/how_met (those columns are no
+// longer written by the contact SQL). Inferred enrichment is stamped with agent
+// provenance (producer=agent, source_kind=agent_session) since it is derived
+// from external contact data, not a direct user edit.
+func (s *EnrichmentService) SetKnowledgeWriter(assertSvc *AssertService, cache knowledgeCacheRefresher) {
+	s.knowledge = newKnowledgeWriter(assertSvc, cache)
+}
+
 // InjectBusForTest swaps the event bus reference after construction.
 // Integration tests have a chicken-and-egg dependency where the bus
 // needs the ContactService (via InteractionRecorder) AND the services
@@ -100,16 +116,22 @@ func (s *EnrichmentService) EnrichContactFromExternal(
 		return uuid.Nil, err
 	}
 
-	// Track what needs updating
+	// Track what needs updating. location/birthday/how_met are NOT carried on
+	// updateReq: the profile UPDATE SQL no longer writes those cache columns —
+	// they flow from the assertion store. An inferred location/birthday is tracked
+	// in `inferred` and asserted via the knowledge writer below.
 	needsUpdate := false
 	updateReq := repository.UpdateContactRequest{
 		FullName:     contact.FullName,
-		Location:     contact.Location,
-		Birthday:     contact.Birthday,
-		HowMet:       contact.HowMet,
 		Cadence:      contact.Cadence,
 		ProfilePhoto: contact.ProfilePhoto,
 	}
+
+	// inferred holds the location/birthday this enrichment newly derives; each
+	// becomes an agent-provenance assertion below. Fields the contact already has
+	// stay nil here (enrichment only fills empty fields), so no spurious assertion
+	// fires.
+	var inferred knowledgeFieldValues
 
 	// Enrich profile photo if CRM contact has none
 	if contact.ProfilePhoto == nil && external.PhotoURL != nil && *external.PhotoURL != "" {
@@ -120,7 +142,7 @@ func (s *EnrichmentService) EnrichContactFromExternal(
 
 	// Enrich birthday if CRM contact has none
 	if contact.Birthday == nil && external.Birthday != nil {
-		updateReq.Birthday = external.Birthday
+		inferred.Birthday = external.Birthday
 		needsUpdate = true
 		s.recordEnrichment(ctx, crmContactID, external, "birthday", external.Birthday.Format("2006-01-02"))
 	}
@@ -128,9 +150,13 @@ func (s *EnrichmentService) EnrichContactFromExternal(
 	// Enrich location from addresses if CRM contact has none
 	if contact.Location == nil && len(external.Addresses) > 0 && external.Addresses[0].Formatted != "" {
 		location := external.Addresses[0].Formatted
-		updateReq.Location = &location
+		inferred.Location = &location
 		needsUpdate = true
 		s.recordEnrichment(ctx, crmContactID, external, "location", location)
+	}
+
+	if (inferred.Location != nil || inferred.Birthday != nil) && s.knowledge == nil {
+		return uuid.Nil, errors.New("enrichment: inferred location/birthday but knowledge writer not wired")
 	}
 
 	// Apply updates to contact if any enrichment occurred. This path never
@@ -144,9 +170,23 @@ func (s *EnrichmentService) EnrichContactFromExternal(
 			if _, txErr := repository.NewContactRepository(txQueries).UpdateContact(ctx, crmContactID, updateReq); txErr != nil {
 				return fmt.Errorf("update contact profile: %w", txErr)
 			}
+			if txErr := s.assertInferredKnowledge(ctx, tx, crmContactID, inferred); txErr != nil {
+				return txErr
+			}
 			return repository.NewNodeRepository(txQueries).UpdateNodeCanonicalLabelTx(ctx, tx, crmContactID, updateReq.FullName)
 		})
 		if txErr != nil {
+			// When the enrichment inferred a location/birthday, a failed tx means
+			// that value was dropped — the cache columns are no longer written by
+			// the profile UPDATE, so the assertion store is the ONLY home for it.
+			// Surface that as an error instead of logging-and-continuing (which
+			// would report enrichment success while silently losing the field).
+			// A photo/cadence-only enrichment (no inferred knowledge) keeps the
+			// historical best-effort warn so an unrelated profile-write hiccup
+			// doesn't fail the whole link/import.
+			if inferred.Location != nil || inferred.Birthday != nil {
+				return uuid.Nil, fmt.Errorf("apply inferred contact knowledge: %w", txErr)
+			}
 			logger.Warn().Err(txErr).Msg("failed to update contact with enrichments")
 		}
 	}
@@ -253,13 +293,13 @@ func (s *EnrichmentService) EnrichContactFromExternalWithSelections(
 		return uuid.Nil, err
 	}
 
-	// Track what needs updating
+	// Track what needs updating. location/birthday/how_met are NOT carried on
+	// updateReq (the profile UPDATE no longer writes those cache columns — they
+	// flow from the assertion store); an inferred location/birthday is asserted
+	// via the knowledge writer below.
 	needsUpdate := false
 	updateReq := repository.UpdateContactRequest{
 		FullName:     contact.FullName,
-		Location:     contact.Location,
-		Birthday:     contact.Birthday,
-		HowMet:       contact.HowMet,
 		Cadence:      contact.Cadence,
 		ProfilePhoto: contact.ProfilePhoto,
 	}
@@ -271,9 +311,14 @@ func (s *EnrichmentService) EnrichContactFromExternalWithSelections(
 		s.recordEnrichment(ctx, crmContactID, external, "profile_photo", *external.PhotoURL)
 	}
 
+	// inferred holds the location/birthday this enrichment newly derives; each
+	// becomes an agent-provenance assertion (the cache columns are no longer
+	// written by the contact SQL).
+	var inferred knowledgeFieldValues
+
 	// Enrich birthday if CRM contact has none
 	if contact.Birthday == nil && external.Birthday != nil {
-		updateReq.Birthday = external.Birthday
+		inferred.Birthday = external.Birthday
 		needsUpdate = true
 		s.recordEnrichment(ctx, crmContactID, external, "birthday", external.Birthday.Format("2006-01-02"))
 	}
@@ -281,9 +326,13 @@ func (s *EnrichmentService) EnrichContactFromExternalWithSelections(
 	// Enrich location from addresses if CRM contact has none
 	if contact.Location == nil && len(external.Addresses) > 0 && external.Addresses[0].Formatted != "" {
 		location := external.Addresses[0].Formatted
-		updateReq.Location = &location
+		inferred.Location = &location
 		needsUpdate = true
 		s.recordEnrichment(ctx, crmContactID, external, "location", location)
+	}
+
+	if (inferred.Location != nil || inferred.Birthday != nil) && s.knowledge == nil {
+		return uuid.Nil, errors.New("enrichment: inferred location/birthday but knowledge writer not wired")
 	}
 
 	// Update cadence if provided. Explicit cadence overrides from the
@@ -325,6 +374,9 @@ func (s *EnrichmentService) EnrichContactFromExternalWithSelections(
 			if _, txErr := repository.NewContactRepository(txQueries).UpdateContact(ctx, crmContactID, updateReq); txErr != nil {
 				return fmt.Errorf("update contact profile: %w", txErr)
 			}
+			if txErr := s.assertInferredKnowledge(ctx, tx, crmContactID, inferred); txErr != nil {
+				return txErr
+			}
 			if txErr := repository.NewNodeRepository(txQueries).UpdateNodeCanonicalLabelTx(ctx, tx, crmContactID, updateReq.FullName); txErr != nil {
 				return fmt.Errorf("sync person node label: %w", txErr)
 			}
@@ -334,6 +386,14 @@ func (s *EnrichmentService) EnrichContactFromExternalWithSelections(
 			return nil
 		})
 		if txErr != nil {
+			// A failed tx drops an inferred location/birthday (the cache columns
+			// are no longer written by the profile UPDATE — the assertion store is
+			// the only home). Surface it instead of reporting false success. A
+			// photo/cadence/name-only enrichment keeps the historical best-effort
+			// warn so an unrelated profile-write hiccup doesn't fail link/import.
+			if inferred.Location != nil || inferred.Birthday != nil {
+				return uuid.Nil, fmt.Errorf("apply inferred contact knowledge: %w", txErr)
+			}
 			logger.Warn().Err(txErr).Msg("failed to update contact with enrichments")
 		}
 	}
@@ -847,6 +907,23 @@ func deriveContactByFromCadence(contact *repository.Contact, cadenceArg *string)
 	}
 	t := cadence.CalculateContactBy(base, cadenceType)
 	return &t
+}
+
+// assertInferredKnowledge persists the enrichment-inferred location/birthday as
+// agent-provenance assertions inside the caller's tx and refreshes the derived
+// cache columns inline. No-op when nothing was inferred. The provenance is
+// producer=agent / source_kind=agent_session (the values come from external
+// contact data, not a direct user edit), keyed deterministically so a re-run
+// corroborates rather than duplicates.
+func (s *EnrichmentService) assertInferredKnowledge(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, inferred knowledgeFieldValues) error {
+	if inferred.Location == nil && inferred.Birthday == nil && inferred.HowMet == nil {
+		return nil
+	}
+	return s.knowledge.assertCreate(ctx, tx, contactID, inferred, knowledgeFieldProvenance{
+		SourceKind:     repository.SourceKindAgentSession,
+		ProducerKind:   repository.ProducerKindAgent,
+		SourceIDPrefix: "enrichment",
+	})
 }
 
 // mapMethodTypeToIdentifier maps contact method type to identity type for normalization

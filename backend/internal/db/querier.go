@@ -293,6 +293,12 @@ type Querier interface {
 	// Counts messages about to be linked for a given peer. Read BEFORE
 	// OnPeerLinked so the matched-count reporting observes the pre-link state.
 	CountUnmatchedMessagesByPeer(ctx context.Context, peerUserID pgtype.Int8) (int64, error)
+	// location/birthday/how_met are NOT written here: they are derived cache
+	// columns whose sole writer is the knowledge-cache consumer, which fills
+	// them from the current-accepted lives_in/birthday/how_met assertions
+	// ContactService emits in the same tx. The columns retain their values
+	// via that consumer; the create INSERT leaves them at their DB default
+	// (NULL) until the consumer refreshes.
 	CreateContact(ctx context.Context, arg CreateContactParams) (*Contact, error)
 	CreateContactMethod(ctx context.Context, arg CreateContactMethodParams) (*ContactMethod, error)
 	CreateContactTask(ctx context.Context, arg CreateContactTaskParams) (*ContactTask, error)
@@ -1091,6 +1097,13 @@ type Querier interface {
 	// Lists contacts that have a contact_by date set (used for testing mode filtering).
 	// Returns contacts ordered by contact_by (soonest first).
 	ListContactsWithContactBy(ctx context.Context, limit int32) ([]*Contact, error)
+	// Backfill source for --migrate-contact-knowledge-columns: every non-deleted
+	// contact whose location/birthday/how_met cache column still holds a value, so
+	// the migration can mirror each into the assertion store with the contact's
+	// created_at as the knowledge time. A soft-deleted contact is excluded (the
+	// write API rejects a deleted subject node, matching the tag migration's
+	// permanent skip). Deterministic order keeps a re-run's logs comparable.
+	ListContactsWithKnowledgeColumns(ctx context.Context) ([]*ListContactsWithKnowledgeColumnsRow, error)
 	ListCuratedPredicates(ctx context.Context) ([]*ListCuratedPredicatesRow, error)
 	// Prefer rows with username/phone for identity matching, then rows with
 	// populated names so a single aggregation pass picks the most-populated row
@@ -2066,9 +2079,10 @@ type Querier interface {
 	// Dedup re-aggregate: on a corroborating write, raise confidence (SP1 rule:
 	// max(existing, incoming)) and recompute trust_tier. trust_tier is nullable.
 	UpdateAssertionConfidenceTrust(ctx context.Context, arg UpdateAssertionConfidenceTrustParams) error
-	// Profile-only update path. Writes name, location, birthday, how_met,
-	// cadence, profile_photo — NEVER writes last_contacted,
-	// last_outreach_at, last_response_at, or contact_by.
+	// Profile-only update path. Writes name, cadence, profile_photo — NEVER
+	// writes last_contacted, last_outreach_at, last_response_at, contact_by,
+	// or the location/birthday/how_met cache columns (those flow from the
+	// knowledge-cache consumer off the assertion store).
 	// ContactService.UpdateContact handles the cadence-change side-effect
 	// (recomputing contact_by) by calling
 	// CadenceUpdater.ApplyContactByOverride in the same tx;
@@ -2076,6 +2090,9 @@ type Querier interface {
 	// and CadenceUpdater.ApplyContactByOverride when the input DTO carries
 	// an explicit cadence preference.
 	UpdateContact(ctx context.Context, arg UpdateContactParams) (*Contact, error)
+	// Knowledge-cache sole-writer: refreshes the derived birthday cache column
+	// from the current-accepted birthday fact (NULL when no current value).
+	UpdateContactBirthdayCache(ctx context.Context, arg UpdateContactBirthdayCacheParams) error
 	// Updates just the contact_by field (for Todoist deadline sync).
 	UpdateContactBy(ctx context.Context, arg UpdateContactByParams) error
 	// Forward-only cadence write (spec §3.4.2). Each of the cadence columns
@@ -2102,6 +2119,9 @@ type Querier interface {
 	// (apply_last_interaction_at); see UpdateContactCadenceForward above
 	// for the rationale.
 	UpdateContactCadenceUnconditional(ctx context.Context, arg UpdateContactCadenceUnconditionalParams) error
+	// Knowledge-cache sole-writer: refreshes the derived how_met cache column
+	// from the current-accepted how_met fact (NULL when no current value).
+	UpdateContactHowMetCache(ctx context.Context, arg UpdateContactHowMetCacheParams) error
 	// Updates last_contacted, contact_by, and all direction timestamp fields (for mutual interactions)
 	UpdateContactLastContacted(ctx context.Context, arg UpdateContactLastContactedParams) error
 	// Updates last_contacted and contact_by only if the new date is later.
@@ -2109,6 +2129,11 @@ type Querier interface {
 	// contact_by is recalculated from the new last_contacted date using the contact's existing cadence.
 	// Cadence day mappings: weekly=7, biweekly=14, monthly=30, quarterly=90, biannual=180, annual=365
 	UpdateContactLastContactedIfLater(ctx context.Context, arg UpdateContactLastContactedIfLaterParams) error
+	// Knowledge-cache sole-writer: refreshes the derived location cache column
+	// from the current-accepted lives_in edge's place node label (NULL when no
+	// current value). updated_at is intentionally NOT bumped — a cache refresh
+	// is bookkeeping, not a user profile edit.
+	UpdateContactLocationCache(ctx context.Context, arg UpdateContactLocationCacheParams) error
 	UpdateContactMethodValue(ctx context.Context, arg UpdateContactMethodValueParams) (*ContactMethod, error)
 	// Updates all direction fields + last_contacted + contact_by (for mutual interactions).
 	// Uses forward-only semantics for automated sources; manual always updates.

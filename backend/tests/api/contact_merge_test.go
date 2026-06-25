@@ -33,6 +33,16 @@ func setupTestDB(t *testing.T) (*db.Database, func()) {
 	return database, func() { database.Close() }
 }
 
+// seedContactForMerge creates a contact through the ContactService write path so
+// location/birthday/how_met are persisted as assertions and reflected in the
+// cache columns (the repository's CreateContact no longer writes those columns
+// post-cutover). Matches the repo's 2-value return shape so the merge fixtures
+// read unchanged.
+func seedContactForMerge(ctx context.Context, svc *service.ContactService, req repository.CreateContactRequest) (*repository.Contact, error) {
+	c, _, err := svc.CreateContact(ctx, req, nil)
+	return c, err
+}
+
 func TestContactMerge_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -57,10 +67,11 @@ func TestContactMerge_Integration(t *testing.T) {
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, repository.NewContactTaskRepository(database.Queries), nil, nil)
 	wireCadenceUpdaterForAPITest(t, database, contactService)
+	wireKnowledgeWriterForAPITest(t, database, nil, contactService)
 
 	t.Run("GetMergePreview_BasicCounts", func(t *testing.T) {
 		// Create target contact
-		target, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+		target, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
 			FullName: "Merge Target " + ns,
 			Location: stringPtr("New York"),
 			Cadence:  stringPtr("monthly"),
@@ -69,7 +80,7 @@ func TestContactMerge_Integration(t *testing.T) {
 		defer func() { _ = contactRepo.HardDeleteContact(ctx, target.ID) }()
 
 		// Create source contact
-		source, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+		source, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
 			FullName: "Merge Source " + ns,
 			Location: stringPtr("Los Angeles"),
 			Cadence:  stringPtr("weekly"),
@@ -102,14 +113,14 @@ func TestContactMerge_Integration(t *testing.T) {
 
 	t.Run("GetMergePreview_WithDuplicateMethods", func(t *testing.T) {
 		// Create target contact
-		target, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+		target, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
 			FullName: "Merge Target Dupe " + ns,
 		})
 		require.NoError(t, err)
 		defer func() { _ = contactRepo.HardDeleteContact(ctx, target.ID) }()
 
 		// Create source contact
-		source, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+		source, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
 			FullName: "Merge Source Dupe " + ns,
 		})
 		require.NoError(t, err)
@@ -148,14 +159,14 @@ func TestContactMerge_Integration(t *testing.T) {
 
 	t.Run("MergeContacts_TransfersAllData", func(t *testing.T) {
 		// Create target contact
-		target, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+		target, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
 			FullName: "Merge Target Full " + ns,
 			Cadence:  stringPtr("monthly"),
 		})
 		require.NoError(t, err)
 
 		// Create source contact
-		source, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+		source, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
 			FullName: "Merge Source Full " + ns,
 			Location: stringPtr("Boston"),
 		})
@@ -210,13 +221,13 @@ func TestContactMerge_Integration(t *testing.T) {
 
 	t.Run("MergeContacts_NameOverride", func(t *testing.T) {
 		// Create target contact
-		target, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+		target, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
 			FullName: "Target Name " + ns,
 		})
 		require.NoError(t, err)
 
 		// Create source contact
-		source, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+		source, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
 			FullName: "Source Name " + ns,
 		})
 		require.NoError(t, err)
@@ -237,13 +248,13 @@ func TestContactMerge_Integration(t *testing.T) {
 
 	t.Run("MergeContacts_DeduplicatesMethods", func(t *testing.T) {
 		// Create target contact
-		target, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+		target, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
 			FullName: "Dedup Target " + ns,
 		})
 		require.NoError(t, err)
 
 		// Create source contact
-		source, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+		source, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
 			FullName: "Dedup Source " + ns,
 		})
 		require.NoError(t, err)
@@ -284,7 +295,7 @@ func TestContactMerge_Integration(t *testing.T) {
 
 	t.Run("MergeContacts_CombinesNotes", func(t *testing.T) {
 		// Create target contact
-		target, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+		target, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
 			FullName: "Notes Target " + ns,
 		})
 		require.NoError(t, err)
@@ -294,7 +305,7 @@ func TestContactMerge_Integration(t *testing.T) {
 		require.NoError(t, err)
 
 		// Create source contact
-		source, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+		source, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
 			FullName: "Notes Source " + ns,
 		})
 		require.NoError(t, err)
@@ -323,7 +334,7 @@ func TestContactMerge_Integration(t *testing.T) {
 
 	t.Run("MergeContacts_InvalidTargetID", func(t *testing.T) {
 		// Create source contact
-		source, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+		source, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
 			FullName: "Invalid Test Source " + ns,
 		})
 		require.NoError(t, err)
@@ -339,7 +350,7 @@ func TestContactMerge_Integration(t *testing.T) {
 
 	t.Run("MergeContacts_InvalidSourceID", func(t *testing.T) {
 		// Create target contact
-		target, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+		target, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
 			FullName: "Invalid Test Target " + ns,
 		})
 		require.NoError(t, err)
@@ -355,7 +366,7 @@ func TestContactMerge_Integration(t *testing.T) {
 
 	t.Run("MergeContacts_SameSourceAndTarget", func(t *testing.T) {
 		// Create a contact
-		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+		contact, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
 			FullName: "Self Merge Test " + ns,
 		})
 		require.NoError(t, err)
@@ -371,14 +382,14 @@ func TestContactMerge_Integration(t *testing.T) {
 
 	t.Run("MergeContacts_FieldSelectionsPreserveCadence", func(t *testing.T) {
 		// Create target contact with weekly cadence
-		target, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+		target, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
 			FullName: "Cadence Target " + ns,
 			Cadence:  stringPtr("weekly"),
 		})
 		require.NoError(t, err)
 
 		// Create source contact with quarterly cadence
-		source, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+		source, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
 			FullName: "Cadence Source " + ns,
 			Cadence:  stringPtr("quarterly"),
 		})
@@ -402,7 +413,7 @@ func TestContactMerge_Integration(t *testing.T) {
 
 	t.Run("MergeContacts_FieldSelectionsPreserveTarget", func(t *testing.T) {
 		// Create target contact with monthly cadence and NYC location
-		target, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+		target, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
 			FullName: "Keep Target " + ns,
 			Cadence:  stringPtr("monthly"),
 			Location: stringPtr("New York"),
@@ -410,7 +421,7 @@ func TestContactMerge_Integration(t *testing.T) {
 		require.NoError(t, err)
 
 		// Create source contact with different values
-		source, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+		source, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
 			FullName: "Ignore Source " + ns,
 			Cadence:  stringPtr("annual"),
 			Location: stringPtr("Miami"),
@@ -443,7 +454,7 @@ func TestContactMerge_Integration(t *testing.T) {
 		// post-BulkApply committed state, not the stale post-profile
 		// value.
 		initialLastContacted := time.Date(2026, 2, 1, 10, 0, 0, 0, time.UTC)
-		target, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+		target, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
 			FullName:      "Refetch Target " + ns,
 			Cadence:       stringPtr("weekly"),
 			LastContacted: &initialLastContacted,
@@ -456,7 +467,7 @@ func TestContactMerge_Integration(t *testing.T) {
 		// only UpdateContact cannot write — so the returned struct
 		// must show the new timestamp.
 		sourceLastContacted := time.Date(2026, 4, 1, 10, 0, 0, 0, time.UTC)
-		source, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+		source, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
 			FullName:      "Refetch Source " + ns,
 			Cadence:       stringPtr("weekly"),
 			LastContacted: &sourceLastContacted,

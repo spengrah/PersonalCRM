@@ -138,17 +138,14 @@ func (q *Queries) CountSearchContacts(ctx context.Context, arg CountSearchContac
 
 const CreateContact = `-- name: CreateContact :one
 INSERT INTO contact (
-  full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, created_at, contact_by
+  full_name, cadence, last_contacted, profile_photo, created_at, contact_by
 ) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8, $9
+  $1, $2, $3, $4, $5, $6
 ) RETURNING id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at
 `
 
 type CreateContactParams struct {
 	FullName      string             `json:"full_name"`
-	Location      pgtype.Text        `json:"location"`
-	Birthday      pgtype.Date        `json:"birthday"`
-	HowMet        pgtype.Text        `json:"how_met"`
 	Cadence       pgtype.Text        `json:"cadence"`
 	LastContacted pgtype.Timestamptz `json:"last_contacted"`
 	ProfilePhoto  pgtype.Text        `json:"profile_photo"`
@@ -156,12 +153,15 @@ type CreateContactParams struct {
 	ContactBy     pgtype.Date        `json:"contact_by"`
 }
 
+// location/birthday/how_met are NOT written here: they are derived cache
+// columns whose sole writer is the knowledge-cache consumer, which fills
+// them from the current-accepted lives_in/birthday/how_met assertions
+// ContactService emits in the same tx. The columns retain their values
+// via that consumer; the create INSERT leaves them at their DB default
+// (NULL) until the consumer refreshes.
 func (q *Queries) CreateContact(ctx context.Context, arg CreateContactParams) (*Contact, error) {
 	row := q.db.QueryRow(ctx, CreateContact,
 		arg.FullName,
-		arg.Location,
-		arg.Birthday,
-		arg.HowMet,
 		arg.Cadence,
 		arg.LastContacted,
 		arg.ProfilePhoto,
@@ -720,6 +720,58 @@ func (q *Queries) ListContactsWithContactBy(ctx context.Context, limit int32) ([
 	return items, nil
 }
 
+const ListContactsWithKnowledgeColumns = `-- name: ListContactsWithKnowledgeColumns :many
+SELECT id, location, birthday, how_met, created_at
+FROM contact
+WHERE deleted_at IS NULL
+  AND (
+       (location IS NOT NULL AND location != '')
+    OR birthday IS NOT NULL
+    OR (how_met IS NOT NULL AND how_met != '')
+  )
+ORDER BY created_at ASC, id ASC
+`
+
+type ListContactsWithKnowledgeColumnsRow struct {
+	ID        pgtype.UUID        `json:"id"`
+	Location  pgtype.Text        `json:"location"`
+	Birthday  pgtype.Date        `json:"birthday"`
+	HowMet    pgtype.Text        `json:"how_met"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+// Backfill source for --migrate-contact-knowledge-columns: every non-deleted
+// contact whose location/birthday/how_met cache column still holds a value, so
+// the migration can mirror each into the assertion store with the contact's
+// created_at as the knowledge time. A soft-deleted contact is excluded (the
+// write API rejects a deleted subject node, matching the tag migration's
+// permanent skip). Deterministic order keeps a re-run's logs comparable.
+func (q *Queries) ListContactsWithKnowledgeColumns(ctx context.Context) ([]*ListContactsWithKnowledgeColumnsRow, error) {
+	rows, err := q.db.Query(ctx, ListContactsWithKnowledgeColumns)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListContactsWithKnowledgeColumnsRow{}
+	for rows.Next() {
+		var i ListContactsWithKnowledgeColumnsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Location,
+			&i.Birthday,
+			&i.HowMet,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListOverdueContacts = `-- name: ListOverdueContacts :many
 SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at FROM contact
 WHERE deleted_at IS NULL
@@ -1146,11 +1198,8 @@ func (q *Queries) TestLockContactForUpdateNoWait(ctx context.Context, id pgtype.
 const UpdateContact = `-- name: UpdateContact :one
 UPDATE contact SET
   full_name = $2,
-  location = $3,
-  birthday = $4,
-  how_met = $5,
-  cadence = $6,
-  profile_photo = $7,
+  cadence = $3,
+  profile_photo = $4,
   updated_at = NOW()
 WHERE id = $1 AND deleted_at IS NULL
 RETURNING id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at
@@ -1159,16 +1208,14 @@ RETURNING id, full_name, location, birthday, how_met, cadence, last_contacted, p
 type UpdateContactParams struct {
 	ID           pgtype.UUID `json:"id"`
 	FullName     string      `json:"full_name"`
-	Location     pgtype.Text `json:"location"`
-	Birthday     pgtype.Date `json:"birthday"`
-	HowMet       pgtype.Text `json:"how_met"`
 	Cadence      pgtype.Text `json:"cadence"`
 	ProfilePhoto pgtype.Text `json:"profile_photo"`
 }
 
-// Profile-only update path. Writes name, location, birthday, how_met,
-// cadence, profile_photo — NEVER writes last_contacted,
-// last_outreach_at, last_response_at, or contact_by.
+// Profile-only update path. Writes name, cadence, profile_photo — NEVER
+// writes last_contacted, last_outreach_at, last_response_at, contact_by,
+// or the location/birthday/how_met cache columns (those flow from the
+// knowledge-cache consumer off the assertion store).
 // ContactService.UpdateContact handles the cadence-change side-effect
 // (recomputing contact_by) by calling
 // CadenceUpdater.ApplyContactByOverride in the same tx;
@@ -1179,9 +1226,6 @@ func (q *Queries) UpdateContact(ctx context.Context, arg UpdateContactParams) (*
 	row := q.db.QueryRow(ctx, UpdateContact,
 		arg.ID,
 		arg.FullName,
-		arg.Location,
-		arg.Birthday,
-		arg.HowMet,
 		arg.Cadence,
 		arg.ProfilePhoto,
 	)
@@ -1204,6 +1248,22 @@ func (q *Queries) UpdateContact(ctx context.Context, arg UpdateContactParams) (*
 		&i.LastResponseAt,
 	)
 	return &i, err
+}
+
+const UpdateContactBirthdayCache = `-- name: UpdateContactBirthdayCache :exec
+UPDATE contact SET birthday = $2 WHERE id = $1 AND deleted_at IS NULL
+`
+
+type UpdateContactBirthdayCacheParams struct {
+	ID       pgtype.UUID `json:"id"`
+	Birthday pgtype.Date `json:"birthday"`
+}
+
+// Knowledge-cache sole-writer: refreshes the derived birthday cache column
+// from the current-accepted birthday fact (NULL when no current value).
+func (q *Queries) UpdateContactBirthdayCache(ctx context.Context, arg UpdateContactBirthdayCacheParams) error {
+	_, err := q.db.Exec(ctx, UpdateContactBirthdayCache, arg.ID, arg.Birthday)
+	return err
 }
 
 const UpdateContactBy = `-- name: UpdateContactBy :exec
@@ -1371,6 +1431,22 @@ func (q *Queries) UpdateContactCadenceUnconditional(ctx context.Context, arg Upd
 	return err
 }
 
+const UpdateContactHowMetCache = `-- name: UpdateContactHowMetCache :exec
+UPDATE contact SET how_met = $2 WHERE id = $1 AND deleted_at IS NULL
+`
+
+type UpdateContactHowMetCacheParams struct {
+	ID     pgtype.UUID `json:"id"`
+	HowMet pgtype.Text `json:"how_met"`
+}
+
+// Knowledge-cache sole-writer: refreshes the derived how_met cache column
+// from the current-accepted how_met fact (NULL when no current value).
+func (q *Queries) UpdateContactHowMetCache(ctx context.Context, arg UpdateContactHowMetCacheParams) error {
+	_, err := q.db.Exec(ctx, UpdateContactHowMetCache, arg.ID, arg.HowMet)
+	return err
+}
+
 const UpdateContactLastContacted = `-- name: UpdateContactLastContacted :exec
 UPDATE contact SET
   last_contacted = $2,
@@ -1429,6 +1505,24 @@ type UpdateContactLastContactedIfLaterParams struct {
 // Cadence day mappings: weekly=7, biweekly=14, monthly=30, quarterly=90, biannual=180, annual=365
 func (q *Queries) UpdateContactLastContactedIfLater(ctx context.Context, arg UpdateContactLastContactedIfLaterParams) error {
 	_, err := q.db.Exec(ctx, UpdateContactLastContactedIfLater, arg.ID, arg.LastContacted)
+	return err
+}
+
+const UpdateContactLocationCache = `-- name: UpdateContactLocationCache :exec
+UPDATE contact SET location = $2 WHERE id = $1 AND deleted_at IS NULL
+`
+
+type UpdateContactLocationCacheParams struct {
+	ID       pgtype.UUID `json:"id"`
+	Location pgtype.Text `json:"location"`
+}
+
+// Knowledge-cache sole-writer: refreshes the derived location cache column
+// from the current-accepted lives_in edge's place node label (NULL when no
+// current value). updated_at is intentionally NOT bumped — a cache refresh
+// is bookkeeping, not a user profile edit.
+func (q *Queries) UpdateContactLocationCache(ctx context.Context, arg UpdateContactLocationCacheParams) error {
+	_, err := q.db.Exec(ctx, UpdateContactLocationCache, arg.ID, arg.Location)
 	return err
 }
 

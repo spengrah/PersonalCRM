@@ -48,6 +48,9 @@ func newTagMigrationHarness(t *testing.T, ctx context.Context) (*tagMigrationHar
 	eventRepo := repository.NewEventRepository(database.Queries)
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &assertNoopWorker{})
+	// assertion.accepted/superseded now route a knowledge_cache_updater job; the
+	// no-op worker registers the kind so the insert-only client accepts the enqueue.
+	river.AddWorker(workers, &knowledgeCacheNoopWorker{})
 	client, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
 		Queues:   map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: cfg.River.WorkerConcurrency}},
 		Workers:  workers,

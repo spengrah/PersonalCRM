@@ -149,6 +149,7 @@ func newConsumerTestEnv(t *testing.T, ctx context.Context) *consumerTestEnv {
 		false,
 	)
 	contactService.SetCadenceUpdater(cadenceUpdater)
+	wireKnowledgeWriterForTest(t, database, bus, contactService)
 	stagingRegistry := repository.NewStagingProcessorRegistry(map[string]repository.StagingProcessor{
 		repository.InteractionSourceTelegram: repository.NewTelegramStagingProcessor(telegramMessageRepo),
 	})

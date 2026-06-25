@@ -129,12 +129,22 @@ func consumerJobsForKind(env *Envelope) ([]consumerJob, error) {
 				},
 			},
 		}}, nil
-	case KindAssertionProposed, KindAssertionAccepted, KindAssertionSuperseded,
-		KindAssertionRejected, KindAssertionProvenanceAdded:
-		// SP1 ships the assertion store + write contract only — no consumer.
-		// The events land durably in the event log for audit + (source,
-		// source_id) idempotency; a later layer routes accepted/superseded to
-		// the projection-cache worker. An explicit no-consumer case (over the
+	case KindAssertionAccepted, KindAssertionSuperseded:
+		// Projection-cache routing: every accepted/superseded assertion event
+		// enqueues the knowledge-cache worker, which decodes the payload and
+		// no-ops unless the predicate is one of the contact cache predicates
+		// (lives_in/birthday/how_met). The bus routes by KIND, not predicate, so
+		// the per-predicate filter lives in the worker. Recompute-from-scratch
+		// makes the refresh idempotent under river retries.
+		return []consumerJob{{
+			Args: consumerjobs.KnowledgeCacheUpdaterJobArgs{EventID: env.ID},
+			Opts: &river.InsertOpts{MaxAttempts: 5},
+		}}, nil
+	case KindAssertionProposed, KindAssertionRejected, KindAssertionProvenanceAdded:
+		// No consumer: proposed/rejected never change a current-accepted value,
+		// and provenance_added only re-aggregates confidence/trust on an existing
+		// row (no value change). The events land durably for audit + (source,
+		// source_id) idempotency. An explicit no-consumer case (over the
 		// fallthrough) documents the deliberate decision.
 		return nil, nil
 	}
