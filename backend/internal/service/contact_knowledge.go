@@ -109,32 +109,49 @@ func (w *knowledgeWriter) assertCreate(ctx context.Context, tx pgx.Tx, contactID
 }
 
 // applyUpdate reconciles each field against the contact's existing (cache)
-// value: a non-nil new value is asserted (idempotent corroboration when
-// unchanged, supersession when changed); a value cleared to nil while a prior
-// existed closes the slot (cache blanks to NULL). It then refreshes the cache
-// inline. `existing` is the contact's pre-update state (cache columns reflect
-// the current-accepted assertions).
+// value, then refreshes the cache inline. `existing` is the contact's pre-update
+// state (cache columns reflect the current-accepted assertions).
+//
+// location/birthday and how_met intentionally differ on a nil incoming value,
+// because the contact form manages location/birthday but NOT how_met:
+//   - location/birthday: nil means the user cleared the field → close the slot.
+//   - how_met: nil means the form simply doesn't carry how_met (it has no
+//     how_met input), NOT a user clear → NO-OP, leaving the existing how_met
+//     assertion untouched. (This both avoids polluting the assertion history with
+//     a spurious closure on every edit AND preserves how_met across edits — the
+//     pre-cutover SQL path wiped how_met on every save, which this fixes.)
+//
+// An explicit how_met value (non-nil after trim) is always asserted.
 func (w *knowledgeWriter) applyUpdate(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, next, existing knowledgeFieldValues, prov knowledgeFieldProvenance) error {
 	next = next.normalized()
 	existing = existing.normalized()
-	if err := w.reconcileLocation(ctx, tx, contactID, next.Location, existing.Location, prov); err != nil {
+	if err := w.reconcileClearable(ctx, tx, contactID, next.Location, existing.Location, repository.PredicateLivesIn, func(label string) error {
+		return w.assertLocation(ctx, tx, contactID, label, prov)
+	}); err != nil {
 		return err
 	}
 	if err := w.reconcileBirthday(ctx, tx, contactID, next.Birthday, existing.Birthday, prov); err != nil {
 		return err
 	}
-	if err := w.reconcileHowMet(ctx, tx, contactID, next.HowMet, existing.HowMet, prov); err != nil {
-		return err
+	// how_met: assert when present, NO-OP when absent (never close) — see the
+	// method doc above.
+	if next.HowMet != nil {
+		if err := w.assertHowMet(ctx, tx, contactID, *next.HowMet, prov); err != nil {
+			return err
+		}
 	}
 	return w.refreshAll(ctx, tx, contactID)
 }
 
-func (w *knowledgeWriter) reconcileLocation(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, next, existing *string, prov knowledgeFieldProvenance) error {
+// reconcileClearable handles a form-managed string field where a nil incoming
+// value is a legitimate user clear: assert a non-nil value, close the slot when
+// the value transitions non-nil→nil.
+func (w *knowledgeWriter) reconcileClearable(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, next, existing *string, predicateKey string, assert func(string) error) error {
 	switch {
 	case next != nil:
-		return w.assertLocation(ctx, tx, contactID, *next, prov)
+		return assert(*next)
 	case existing != nil:
-		return w.closeSlot(ctx, tx, contactID, repository.PredicateLivesIn)
+		return w.closeSlot(ctx, tx, contactID, predicateKey)
 	default:
 		return nil
 	}
@@ -146,17 +163,6 @@ func (w *knowledgeWriter) reconcileBirthday(ctx context.Context, tx pgx.Tx, cont
 		return w.assertBirthday(ctx, tx, contactID, *next, prov)
 	case existing != nil:
 		return w.closeSlot(ctx, tx, contactID, repository.PredicateBirthday)
-	default:
-		return nil
-	}
-}
-
-func (w *knowledgeWriter) reconcileHowMet(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, next, existing *string, prov knowledgeFieldProvenance) error {
-	switch {
-	case next != nil:
-		return w.assertHowMet(ctx, tx, contactID, *next, prov)
-	case existing != nil:
-		return w.closeSlot(ctx, tx, contactID, repository.PredicateHowMet)
 	default:
 		return nil
 	}

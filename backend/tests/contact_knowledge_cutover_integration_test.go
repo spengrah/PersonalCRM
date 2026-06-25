@@ -559,6 +559,60 @@ func TestContactKnowledgeCutover_EmptyFieldNormalization(t *testing.T) {
 	assert.ErrorIs(t, err, db.ErrNotFound, "empty-string update closes the lives_in slot")
 }
 
+func TestContactKnowledgeCutover_HowMetPreservedWhenFormOmitsIt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	h := newKnowledgeCutoverHarness(t, ctx)
+
+	ns := uuid.New().String()[:8]
+	how := "met through a mutual friend " + ns
+	loc := "Reno " + ns
+	h.trackPlace(loc)
+
+	// Create a contact WITH how_met.
+	contact, _, err := h.contactSvc.CreateContact(ctx, repository.CreateContactRequest{
+		FullName: "HowMet Keep " + ns,
+		HowMet:   &how,
+	}, nil)
+	require.NoError(t, err)
+	h.track(contact.ID)
+
+	now := accelerated.GetCurrentTime().UTC()
+	before, err := h.assertionRepo.GetCurrentAccepted(ctx, contact.ID, repository.PredicateHowMet, now)
+	require.NoError(t, err)
+
+	// Edit the contact the way the form does — how_met ABSENT (nil), other fields
+	// set. how_met must be UNTOUCHED: no closure, the SAME assertion stays current,
+	// and the cache column still holds the value. (The form has no how_met input,
+	// so a nil how_met is "not managed by this edit," not a user clear.)
+	updated, _, err := h.contactSvc.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
+		FullName: "HowMet Keep Renamed " + ns,
+		Location: &loc, // an unrelated field changes
+		HowMet:   nil,  // the form omits how_met
+	}, nil, false)
+	require.NoError(t, err)
+	require.NotNil(t, updated.HowMet, "how_met cache must survive an edit that omits it")
+	assert.Equal(t, how, *updated.HowMet)
+
+	after, err := h.assertionRepo.GetCurrentAccepted(ctx, contact.ID, repository.PredicateHowMet, now)
+	require.NoError(t, err)
+	assert.Equal(t, before.ID, after.ID, "the SAME how_met assertion stays current (no closure/supersession churn)")
+	assert.Equal(t, repository.AssertionStatusAccepted, after.Status)
+	assert.Nil(t, after.KnowledgeTo, "how_met assertion is not closed by an omitting edit")
+
+	// Sanity: an EXPLICIT how_met value still asserts (changes the slot).
+	newHow := "actually met at work " + ns
+	_, _, err = h.contactSvc.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
+		FullName: updated.FullName,
+		HowMet:   &newHow,
+	}, nil, false)
+	require.NoError(t, err)
+	current, err := h.assertionRepo.GetCurrentAccepted(ctx, contact.ID, repository.PredicateHowMet, now)
+	require.NoError(t, err)
+	require.NotNil(t, current.ValueText)
+	assert.Equal(t, newHow, *current.ValueText, "an explicit how_met value still updates the slot")
+}
+
 func TestContactKnowledgeCutover_EnrichmentErrorPropagates(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
