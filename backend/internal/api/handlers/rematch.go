@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/api"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -74,7 +73,7 @@ func (h *RematchHandler) GetJob(c *gin.Context) {
 			api.SendNotFound(c, "Rematch job")
 			return
 		}
-		api.SendInternalError(c, "Failed to load rematch job")
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -102,11 +101,7 @@ func (h *RematchHandler) Rescan(c *gin.Context) {
 
 	jobID, err := h.contactSvc.RescanRematch(ctx, id)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Contact")
-			return
-		}
-		api.SendInternalError(c, "Failed to start rematch")
+		api.RespondError(c, err, "Contact")
 		return
 	}
 	api.SendSuccess(c, http.StatusOK, RescanResponse{

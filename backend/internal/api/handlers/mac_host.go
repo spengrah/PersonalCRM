@@ -182,8 +182,7 @@ func (h *MacHostHandler) Pair(c *gin.Context) {
 			api.SendValidationError(c, err.Error(), "")
 			return
 		}
-		logger.Error().Err(err).Msg("pair handler: unexpected error")
-		api.SendInternalError(c, "pairing failed")
+		api.RespondInternal(c, err)
 		return
 	}
 	api.SendSuccess(c, http.StatusOK, pairResponse{
@@ -217,7 +216,7 @@ type heartbeatResponse struct {
 func (h *MacHostHandler) Heartbeat(c *gin.Context) {
 	hostID, ok := auth.MacHostIDFromContext(c)
 	if !ok {
-		api.SendInternalError(c, "missing mac_host context")
+		api.RespondInternal(c, errors.New("missing mac_host context"))
 		return
 	}
 	var req heartbeatRequest
@@ -251,8 +250,7 @@ func (h *MacHostHandler) Heartbeat(c *gin.Context) {
 			api.SendError(c, http.StatusUnauthorized, "UNKNOWN_HOST", "host not found or revoked", "")
 			return
 		}
-		logger.Error().Err(err).Msg("heartbeat: update failed")
-		api.SendInternalError(c, "heartbeat failed")
+		api.RespondInternal(c, err)
 		return
 	}
 	api.SendSuccess(c, http.StatusOK, heartbeatResponse{
@@ -290,7 +288,7 @@ type rotateKeyResponse struct {
 func (h *MacHostHandler) RotateKey(c *gin.Context) {
 	host, ok := auth.MacHostFromContext(c)
 	if !ok {
-		api.SendInternalError(c, "missing mac_host context")
+		api.RespondInternal(c, errors.New("missing mac_host context"))
 		return
 	}
 
@@ -332,8 +330,7 @@ func (h *MacHostHandler) RotateKey(c *gin.Context) {
 			api.SendNotFound(c, "Mac host")
 			return
 		}
-		logger.Error().Err(err).Msg("rotate key handler: unexpected error")
-		api.SendInternalError(c, "rotate key failed")
+		api.RespondInternal(c, err)
 		return
 	}
 	api.SendSuccess(c, http.StatusOK, rotateKeyResponse{
@@ -356,7 +353,7 @@ type cursorResponse struct {
 func (h *MacHostHandler) GetCursor(c *gin.Context) {
 	host, ok := auth.MacHostFromContext(c)
 	if !ok {
-		api.SendInternalError(c, "missing mac_host context")
+		api.RespondInternal(c, errors.New("missing mac_host context"))
 		return
 	}
 	source := c.Param("source")
@@ -370,8 +367,7 @@ func (h *MacHostHandler) GetCursor(c *gin.Context) {
 	}
 	cur, err := h.svc.GetCursor(c.Request.Context(), source, host.ID)
 	if err != nil && !errors.Is(err, db.ErrNotFound) {
-		logger.Error().Err(err).Msg("get cursor: failed")
-		api.SendInternalError(c, "get cursor failed")
+		api.RespondInternal(c, err)
 		return
 	}
 	resp := cursorResponse{
@@ -407,7 +403,7 @@ type commitCursorConflict struct {
 func (h *MacHostHandler) CommitCursor(c *gin.Context) {
 	host, ok := auth.MacHostFromContext(c)
 	if !ok {
-		api.SendInternalError(c, "missing mac_host context")
+		api.RespondInternal(c, errors.New("missing mac_host context"))
 		return
 	}
 	source := c.Param("source")
@@ -475,8 +471,7 @@ func (h *MacHostHandler) CommitCursor(c *gin.Context) {
 		return
 	}
 
-	logger.Error().Err(err).Msg("commit cursor: unexpected error")
-	api.SendInternalError(c, "commit cursor failed")
+	api.RespondInternal(c, err)
 }
 
 // KnownIDs returns the per-(host, source) set of live
@@ -494,7 +489,7 @@ func (h *MacHostHandler) CommitCursor(c *gin.Context) {
 func (h *MacHostHandler) KnownIDs(c *gin.Context) {
 	host, ok := auth.MacHostFromContext(c)
 	if !ok {
-		api.SendInternalError(c, "missing mac_host context")
+		api.RespondInternal(c, errors.New("missing mac_host context"))
 		return
 	}
 	source := c.Param("source")
@@ -508,8 +503,7 @@ func (h *MacHostHandler) KnownIDs(c *gin.Context) {
 	}
 	ids, err := h.svc.KnownIDsForSource(c.Request.Context(), host.ID, source)
 	if err != nil {
-		logger.Error().Err(err).Msg("known IDs: failed")
-		api.SendInternalError(c, "known IDs failed")
+		api.RespondInternal(c, err)
 		return
 	}
 	// Always emit a non-nil slice so the JSON encodes as `[]`, not `null`.
@@ -535,8 +529,7 @@ func (h *MacHostHandler) KnownIDs(c *gin.Context) {
 func (h *MacHostHandler) KnownIdentifiers(c *gin.Context) {
 	result, err := h.svc.KnownIdentifiers(c.Request.Context())
 	if err != nil {
-		logger.Error().Err(err).Msg("known-identifiers: failed")
-		api.SendInternalError(c, "known identifiers failed")
+		api.RespondInternal(c, err)
 		return
 	}
 	api.SendSuccess(c, http.StatusOK, result, nil)
@@ -546,8 +539,7 @@ func (h *MacHostHandler) KnownIdentifiers(c *gin.Context) {
 func (h *MacHostHandler) ListHosts(c *gin.Context) {
 	hosts, err := h.svc.ListActiveHosts(c.Request.Context())
 	if err != nil {
-		logger.Error().Err(err).Msg("list mac hosts: failed")
-		api.SendInternalError(c, "list hosts failed")
+		api.RespondInternal(c, err)
 		return
 	}
 	views := make([]MacHostView, 0, len(hosts))
@@ -566,12 +558,7 @@ func (h *MacHostHandler) GetHostAdmin(c *gin.Context) {
 	}
 	host, err := h.svc.GetHost(c.Request.Context(), id)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Mac host")
-			return
-		}
-		logger.Error().Err(err).Msg("get mac host: failed")
-		api.SendInternalError(c, "get host failed")
+		api.RespondError(c, err, "Mac host")
 		return
 	}
 	api.SendSuccess(c, http.StatusOK, toMacHostView(host), nil)
@@ -596,12 +583,7 @@ func (h *MacHostHandler) GetSourceCounts(c *gin.Context) {
 	}
 	counts, err := h.svc.GetSourceCounts(c.Request.Context(), id)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Mac host")
-			return
-		}
-		logger.Error().Err(err).Msg("get source counts: failed")
-		api.SendInternalError(c, "get source counts failed")
+		api.RespondError(c, err, "Mac host")
 		return
 	}
 	api.SendSuccess(c, http.StatusOK, sourceCountsResponse{Counts: counts}, nil)
@@ -617,12 +599,7 @@ func (h *MacHostHandler) DeleteHost(c *gin.Context) {
 		return
 	}
 	if err := h.svc.RevokeHost(c.Request.Context(), id); err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Mac host")
-			return
-		}
-		logger.Error().Err(err).Msg("revoke mac host: failed")
-		api.SendInternalError(c, "revoke host failed")
+		api.RespondError(c, err, "Mac host")
 		return
 	}
 	api.SendSuccess(c, http.StatusOK, gin.H{"ok": true}, nil)
@@ -641,8 +618,7 @@ type createPairingTokenResponse struct {
 func (h *MacHostHandler) CreatePairingToken(c *gin.Context) {
 	token, expiresAt, err := h.svc.CreatePairingToken(c.Request.Context())
 	if err != nil {
-		logger.Error().Err(err).Msg("create pairing token: failed")
-		api.SendInternalError(c, "create pairing token failed")
+		api.RespondInternal(c, err)
 		return
 	}
 	api.SendSuccess(c, http.StatusOK, createPairingTokenResponse{

@@ -1,12 +1,10 @@
 package handlers
 
 import (
-	"errors"
 	"net/http"
 	"strconv"
 
 	"personal-crm/backend/internal/api"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -59,13 +57,13 @@ func (h *IdentityHandler) ListUnmatchedIdentities(c *gin.Context) {
 
 	identities, err := h.identityService.ListUnmatchedIdentities(c.Request.Context(), int32(limit), offset)
 	if err != nil {
-		api.SendInternalError(c, "Failed to list unmatched identities")
+		api.RespondInternal(c, err)
 		return
 	}
 
 	total, err := h.identityService.CountUnmatchedIdentities(c.Request.Context())
 	if err != nil {
-		api.SendInternalError(c, "Failed to count unmatched identities")
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -105,11 +103,7 @@ func (h *IdentityHandler) GetIdentity(c *gin.Context) {
 
 	identity, err := h.identityService.GetIdentity(c.Request.Context(), id)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Identity")
-			return
-		}
-		api.SendInternalError(c, "Failed to get identity")
+		api.RespondError(c, err, "Identity")
 		return
 	}
 
@@ -151,11 +145,7 @@ func (h *IdentityHandler) LinkIdentity(c *gin.Context) {
 
 	identity, err := h.identityService.LinkIdentity(c.Request.Context(), identityID, contactID)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Identity")
-			return
-		}
-		api.SendInternalError(c, "Failed to link identity")
+		api.RespondError(c, err, "Identity")
 		return
 	}
 
@@ -183,11 +173,7 @@ func (h *IdentityHandler) UnlinkIdentity(c *gin.Context) {
 
 	identity, err := h.identityService.UnlinkIdentity(c.Request.Context(), identityID)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Identity")
-			return
-		}
-		api.SendInternalError(c, "Failed to unlink identity")
+		api.RespondError(c, err, "Identity")
 		return
 	}
 
@@ -213,7 +199,7 @@ func (h *IdentityHandler) DeleteIdentity(c *gin.Context) {
 	}
 
 	if err := h.identityService.DeleteIdentity(c.Request.Context(), id); err != nil {
-		api.SendInternalError(c, "Failed to delete identity")
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -240,7 +226,7 @@ func (h *IdentityHandler) ListIdentitiesForContact(c *gin.Context) {
 
 	identities, err := h.identityService.ListIdentitiesForContact(c.Request.Context(), contactID)
 	if err != nil {
-		api.SendInternalError(c, "Failed to list identities for contact")
+		api.RespondInternal(c, err)
 		return
 	}
 

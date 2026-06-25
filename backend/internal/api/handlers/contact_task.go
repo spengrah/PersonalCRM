@@ -119,7 +119,7 @@ func (h *ContactTaskHandler) CreateManualTask(c *gin.Context) {
 			api.SendError(c, http.StatusBadRequest, api.ErrCodeBadRequest, "Todoist settings not configured", "Configure Todoist project and label in Settings")
 			return
 		}
-		api.SendInternalError(c, "Failed to create task")
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -192,11 +192,7 @@ func (h *ContactTaskHandler) ListContactTasks(c *gin.Context) {
 	// List tasks
 	tasks, err := h.contactTaskService.ListContactTasks(ctx, contactID, stateFilter, kindFilter, lifecycleFilter)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Contact")
-			return
-		}
-		api.SendInternalError(c, "Failed to list tasks")
+		api.RespondError(c, err, "Contact")
 		return
 	}
 
@@ -240,11 +236,7 @@ func (h *ContactTaskHandler) DeleteTaskLink(c *gin.Context) {
 	// Delete task link
 	err = h.contactTaskService.DeleteTaskLink(ctx, contactID, taskID)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Task")
-			return
-		}
-		api.SendInternalError(c, "Failed to delete task link")
+		api.RespondError(c, err, "Task")
 		return
 	}
 

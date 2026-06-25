@@ -69,7 +69,7 @@ func (h *TelegramHandler) StartAuth(c *gin.Context) {
 			api.SendConflict(c, "Already connected — disconnect first")
 			return
 		}
-		api.SendInternalError(c, "Failed to start auth")
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -109,7 +109,7 @@ func (h *TelegramHandler) VerifyCode(c *gin.Context) {
 			return
 		}
 		if errors.Is(err, tg.ErrAuthInternal) {
-			api.SendInternalError(c, "Failed to verify code")
+			api.RespondInternal(c, err)
 			return
 		}
 		api.SendError(c, http.StatusUnauthorized, "UNAUTHORIZED", "Invalid verification code", "")
@@ -155,7 +155,7 @@ func (h *TelegramHandler) VerifyPassword(c *gin.Context) {
 			return
 		}
 		if errors.Is(err, tg.ErrAuthInternal) {
-			api.SendInternalError(c, "Failed to verify password")
+			api.RespondInternal(c, err)
 			return
 		}
 		api.SendError(c, http.StatusUnauthorized, "UNAUTHORIZED", "Invalid password", "")
@@ -182,7 +182,7 @@ func (h *TelegramHandler) CancelAuth(c *gin.Context) {
 // Disconnect handles DELETE /api/v1/telegram/auth
 func (h *TelegramHandler) Disconnect(c *gin.Context) {
 	if err := h.manager.Disconnect(c.Request.Context()); err != nil {
-		api.SendInternalError(c, "Failed to disconnect")
+		api.RespondInternal(c, err)
 		return
 	}
 	api.SendSuccess(c, http.StatusOK, gin.H{"status": "disconnected"}, nil)
@@ -232,7 +232,7 @@ type updateChatStatusRequest struct {
 func (h *TelegramHandler) ListChats(c *gin.Context) {
 	chats, err := h.manager.ListChats(c.Request.Context())
 	if err != nil {
-		api.SendInternalError(c, "Failed to list chats")
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -268,17 +268,13 @@ func (h *TelegramHandler) UpdateChatStatus(c *gin.Context) {
 	// Get current status to detect changes (not-found is fine — chat may not exist yet)
 	previousStatus, err := h.manager.GetChatStatus(c.Request.Context(), chatID)
 	if err != nil && !errors.Is(err, db.ErrNotFound) {
-		api.SendInternalError(c, "Failed to read chat status")
+		api.RespondInternal(c, err)
 		return
 	}
 
 	chat, err := h.manager.UpdateChatStatus(c.Request.Context(), chatID, status)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Chat")
-			return
-		}
-		api.SendInternalError(c, "Failed to update chat status")
+		api.RespondError(c, err, "Chat")
 		return
 	}
 

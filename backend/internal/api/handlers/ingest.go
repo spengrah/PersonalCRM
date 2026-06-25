@@ -255,12 +255,15 @@ func (h *IngestHandler) IngestEvents(c *gin.Context) {
 				"host revoked during ingest batch", "")
 			return
 		}
+		// Keep the structured diagnostic log: batch_size/validated_batch_size are
+		// not recoverable from the request path. RespondInternal adds the request_id
+		// log + c.Error revival on top.
 		logger.Error().
 			Err(err).
 			Int("batch_size", len(req.Events)).
 			Int("validated_batch_size", len(envsToIngest)).
 			Msg("event batch ingest failed (tx rolled back)")
-		api.SendInternalError(c, "Failed to ingest events")
+		api.RespondInternal(c, err)
 		return
 	}
 

@@ -1,12 +1,10 @@
 package handlers
 
 import (
-	"errors"
 	"net/http"
 	"time"
 
 	"personal-crm/backend/internal/api"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
@@ -78,11 +76,7 @@ func (h *NoteHandler) GetContactNotepad(c *gin.Context) {
 
 	note, err := h.noteService.GetContactNotepad(c.Request.Context(), contactID)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Contact")
-			return
-		}
-		api.SendInternalError(c, "Failed to retrieve note")
+		api.RespondError(c, err, "Contact")
 		return
 	}
 
@@ -130,11 +124,7 @@ func (h *NoteHandler) SaveContactNotepad(c *gin.Context) {
 
 	note, err := h.noteService.SaveContactNotepad(c.Request.Context(), contactID, req.Body)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Contact")
-			return
-		}
-		api.SendInternalError(c, "Failed to save note")
+		api.RespondError(c, err, "Contact")
 		return
 	}
 

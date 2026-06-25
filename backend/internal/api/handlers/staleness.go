@@ -37,7 +37,7 @@ func NewStalenessHandler(reader StalenessReader) *StalenessHandler {
 func (h *StalenessHandler) GetActiveBreaches(c *gin.Context) {
 	breaches, err := h.reader.ListActiveBreaches(c.Request.Context())
 	if err != nil {
-		api.SendInternalError(c, err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 	api.SendSuccess(c, http.StatusOK, breaches, nil)

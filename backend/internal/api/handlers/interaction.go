@@ -1,14 +1,12 @@
 package handlers
 
 import (
-	"errors"
 	"net/http"
 	"strconv"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/api"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
@@ -100,13 +98,13 @@ func (h *InteractionHandler) ListContactInteractions(c *gin.Context) {
 
 	interactions, err := h.interactionRepo.ListContactInteractions(c.Request.Context(), contactID, int32(limit), int32(offset))
 	if err != nil {
-		api.SendInternalError(c, "Failed to list interactions")
+		api.RespondInternal(c, err)
 		return
 	}
 
 	total, err := h.interactionRepo.CountContactInteractions(c.Request.Context(), contactID)
 	if err != nil {
-		api.SendInternalError(c, "Failed to count interactions")
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -202,11 +200,7 @@ func (h *InteractionHandler) CreateInteraction(c *gin.Context) {
 
 	interaction, err := h.manualHandler.Run(c.Request.Context(), contactID, direction, occurredAt, description)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Contact")
-			return
-		}
-		api.SendInternalError(c, "Failed to create interaction")
+		api.RespondError(c, err, "Contact")
 		return
 	}
 
@@ -230,16 +224,12 @@ func (h *InteractionHandler) DeleteInteraction(c *gin.Context) {
 	// Verify interaction exists
 	_, err = h.interactionRepo.GetInteraction(c.Request.Context(), id)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Interaction")
-			return
-		}
-		api.SendInternalError(c, "Failed to retrieve interaction")
+		api.RespondError(c, err, "Interaction")
 		return
 	}
 
 	if err := h.interactionRepo.SoftDeleteInteraction(c.Request.Context(), id); err != nil {
-		api.SendInternalError(c, "Failed to delete interaction")
+		api.RespondInternal(c, err)
 		return
 	}
 

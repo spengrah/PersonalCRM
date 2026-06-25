@@ -59,7 +59,7 @@ func (h *AnarlogDiscoveryHandler) ListAnarlogTitle(c *gin.Context) {
 	}
 	groups, err := h.svc.ListGroups(c.Request.Context())
 	if err != nil {
-		api.SendInternalError(c, err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 	api.SendSuccess(c, http.StatusOK, groups, nil)
@@ -125,6 +125,6 @@ func (h *AnarlogDiscoveryHandler) mapResolveError(c *gin.Context, err error) {
 	case errors.Is(err, service.ErrDiscoveryContactMissing):
 		api.SendNotFound(c, "Contact")
 	default:
-		api.SendInternalError(c, err.Error())
+		api.RespondInternal(c, err)
 	}
 }
