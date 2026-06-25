@@ -171,6 +171,12 @@ func setupMeetingNoteIngestEnv(t *testing.T) *meetingNoteIngestEnv {
 		titleDiscoveryWriter,
 		phoneCallRepo, // phone_call linkage candidates (read)
 	)
+	// Wire the venue resolver (mirrors production main.go) so the meeting_note
+	// path populates interaction.venue_id and a leak (a venue node minted with no
+	// interaction to reference it) is observable.
+	venueResolver := repository.NewVenueResolverRegistry(
+		repository.NewVenueRepository(database.Queries), nil, calendarRepo)
+	ingestService.SetVenueResolver(venueResolver)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 
 	gin.SetMode(gin.TestMode)
@@ -227,6 +233,7 @@ func setupMeetingNoteIngestEnv(t *testing.T) *meetingNoteIngestEnv {
 		contactSvc,
 		contactRepo,
 	)
+	meetingNoteService.SetVenueResolver(venueResolver)
 	meetingNoteHandler := handlers.NewMeetingNoteHandler(meetingNoteService)
 	// Wiring mirrors production main.go: resolve-link stays under
 	// the v1 API-key group; needs-attention sits under the composite
@@ -618,6 +625,10 @@ func TestMeetingNote_OrphanNoTagged(t *testing.T) {
 	env := setupMeetingNoteIngestEnv(t)
 	sessionUUID := env.newSessionUUID()
 	meetingAt := time.Date(2026, 5, 1, 14, 30, 0, 0, time.UTC)
+
+	ctx := context.Background()
+	nodeRepo := repository.NewNodeRepository(env.database.Queries)
+
 	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Orphan Session", nil)
 	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
@@ -638,6 +649,18 @@ func TestMeetingNote_OrphanNoTagged(t *testing.T) {
 	require.Len(t, resp.NeedsAttention, 1)
 	require.Equal(t, sessionUUID, resp.NeedsAttention[0].SessionID)
 	require.Equal(t, "orphan", resp.NeedsAttention[0].Reason)
+
+	// No venue node was minted: a desired-less (orphan) session must not resolve a
+	// venue. Assert the SPECIFIC deterministic session-venue node for this session
+	// does not exist (parallel-test-safe — scoped to this session's id, not a
+	// global count). Without the len(desiredByRef)>0 gate the handler would mint
+	// exactly this node with no interaction to reference it.
+	sessionUUIDVal, err := uuid.Parse(sessionUUID)
+	require.NoError(t, err)
+	leakedVenueNodeID := repository.VenueNodeID(
+		repository.InteractionSourceAnarlogSessions, repository.VenueKindSession, sessionUUIDVal.String())
+	_, err = nodeRepo.GetNode(ctx, leakedVenueNodeID)
+	require.ErrorIs(t, err, db.ErrNotFound, "orphan_needs_review (no interactions) must not mint a session venue node")
 }
 
 // ----------------------------------------------------------------------------

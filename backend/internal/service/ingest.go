@@ -2217,11 +2217,23 @@ func (s *IngestService) handleMeetingNoteRecorded(
 		// for BOTH retained interactions (whose linkage may have changed on this
 		// re-sync) and newly-added ones. An unwired resolver / unresolvable linked
 		// event leaves venue_id NULL; a real DB error rejects the event below.
-		sessionVenueID, venueErr := resolveAnarlogSessionVenue(ctx, tx, s.venue, sessionID, finalLinkedKind, finalLinkedID)
-		if venueErr != nil {
-			return nil, nil, &IngestPerEventRejection{
-				Code:    ingestRejectInteractionWriteFailed,
-				Message: fmt.Sprintf("resolve session venue: %s", venueErr.Error()),
+		//
+		// GATED on len(desiredByRef) > 0: both the in-both update loop and the
+		// to-add loop iterate desiredByRef, so when there are NO desired
+		// interactions (e.g. decideLinkage returned an orphan-needs-review /
+		// conflict-pending state with no walk-ins) nothing would consume the venue
+		// — and resolveAnarlogSessionVenue CREATES a node, so resolving it here
+		// would mint an unreferenced venue node onto the DB. Only resolve when an
+		// interaction will actually carry the venue_id.
+		var sessionVenueID *uuid.UUID
+		if len(desiredByRef) > 0 {
+			var venueErr error
+			sessionVenueID, venueErr = resolveAnarlogSessionVenue(ctx, tx, s.venue, sessionID, finalLinkedKind, finalLinkedID)
+			if venueErr != nil {
+				return nil, nil, &IngestPerEventRejection{
+					Code:    ingestRejectInteractionWriteFailed,
+					Message: fmt.Sprintf("resolve session venue: %s", venueErr.Error()),
+				}
 			}
 		}
 		// to_drop = existing \ desired
