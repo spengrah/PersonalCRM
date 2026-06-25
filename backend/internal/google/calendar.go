@@ -255,6 +255,7 @@ func (p *CalendarSyncProvider) Config() sync.SourceConfig {
 		SupportsMultiAccount: true,
 		SupportsDiscovery:    true,
 		DefaultInterval:      CalendarDefaultInterval,
+		RequiresAccount:      true, // OAuth token is keyed by account; Sync nil-checks AccountID
 	}
 }
 

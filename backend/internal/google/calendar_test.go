@@ -24,6 +24,9 @@ func TestCalendarSyncProvider_Config(t *testing.T) {
 	assert.True(t, config.SupportsMultiAccount)
 	assert.True(t, config.SupportsDiscovery)
 	assert.Equal(t, CalendarDefaultInterval, config.DefaultInterval)
+	// Account-scoped: OAuth token is keyed by account, so TriggerSync must
+	// reject a nil/empty account instead of bootstrapping an erroring row.
+	assert.True(t, config.RequiresAccount)
 }
 
 func TestGetEventStatus(t *testing.T) {

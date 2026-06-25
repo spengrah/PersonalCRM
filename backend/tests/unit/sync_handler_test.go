@@ -25,9 +25,13 @@ import (
 // mockSyncService implements handlers.SyncService for testing
 type mockSyncService struct {
 	triggerSyncCalled  atomic.Bool
+	triggerSyncAccount *string
 	triggerSyncDelay   time.Duration
 	triggerSyncStarted chan struct{}
 	triggerSyncDone    chan struct{}
+	// availableProviders is returned by GetAvailableProviders. Defaults nil so
+	// existing tests (whose pre-flight loop finds no match) are unaffected.
+	availableProviders []psync.SourceConfig
 }
 
 // Verify mockSyncService implements handlers.SyncService
@@ -42,6 +46,7 @@ func newMockSyncService() *mockSyncService {
 
 func (m *mockSyncService) TriggerSync(ctx context.Context, source string, accountID *string) error {
 	m.triggerSyncCalled.Store(true)
+	m.triggerSyncAccount = accountID
 	if m.triggerSyncStarted != nil {
 		select {
 		case m.triggerSyncStarted <- struct{}{}:
@@ -91,7 +96,7 @@ func (m *mockSyncService) GetRecentSyncLogs(ctx context.Context, limit int32) ([
 }
 
 func (m *mockSyncService) GetAvailableProviders() []psync.SourceConfig {
-	return nil
+	return m.availableProviders
 }
 
 func setupSyncHandlerTestRouter(mockService *mockSyncService) *gin.Engine {
@@ -196,4 +201,117 @@ func TestTriggerSync_RequiresSource(t *testing.T) {
 
 	// Handler returns 400 with "Source is required" validation error
 	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// TestTriggerSync_RejectsAccountScopedSourceWithoutAccount verifies the
+// synchronous pre-flight: when the source is account-scoped (RequiresAccount)
+// and the request carries no usable account ID, the handler returns 400
+// (VALIDATION_ERROR) BEFORE spawning the background goroutine — so the client
+// sees the error instead of a 202 that hides a background failure.
+func TestTriggerSync_RejectsAccountScopedSourceWithoutAccount(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		body string
+	}{
+		{name: "empty body", body: ""},
+		{name: "empty account_id", body: `{"account_id":""}`},
+		{name: "whitespace account_id", body: `{"account_id":"  "}`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			mockService := newMockSyncService()
+			mockService.availableProviders = []psync.SourceConfig{
+				{Name: "todoist", RequiresAccount: true},
+			}
+			router := setupSyncHandlerTestRouter(mockService)
+
+			req, _ := http.NewRequest("POST", "/api/v1/sync/todoist/trigger", strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+
+			router.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+
+			var response api.APIResponse
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+			require.False(t, response.Success)
+			require.NotNil(t, response.Error)
+			assert.Equal(t, api.ErrCodeValidation, response.Error.Code)
+
+			// No goroutine was spawned: TriggerSync must never be called. Give
+			// any (incorrectly-spawned) goroutine a moment to run before asserting.
+			time.Sleep(50 * time.Millisecond)
+			assert.False(t, mockService.triggerSyncCalled.Load(),
+				"TriggerSync must not be called when the pre-flight rejects the request")
+		})
+	}
+}
+
+// TestTriggerSync_AllowsAccountScopedSourceWithAccount verifies the pre-flight
+// lets a valid account through: an account-scoped source with a non-empty
+// account_id returns 202 and TriggerSync is invoked with the provided account.
+func TestTriggerSync_AllowsAccountScopedSourceWithAccount(t *testing.T) {
+	t.Parallel()
+	mockService := newMockSyncService()
+	mockService.availableProviders = []psync.SourceConfig{
+		{Name: "todoist", RequiresAccount: true},
+	}
+	router := setupSyncHandlerTestRouter(mockService)
+
+	req, _ := http.NewRequest("POST", "/api/v1/sync/todoist/trigger",
+		strings.NewReader(`{"account_id":"acct-1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusAccepted, w.Code)
+
+	// Wait for the background goroutine to invoke TriggerSync.
+	select {
+	case <-mockService.triggerSyncStarted:
+		require.True(t, mockService.triggerSyncCalled.Load())
+		require.NotNil(t, mockService.triggerSyncAccount, "account ID should be passed through")
+		assert.Equal(t, "acct-1", *mockService.triggerSyncAccount)
+	case <-time.After(2 * time.Second):
+		t.Fatal("TriggerSync should have run in the background")
+	}
+}
+
+// TestTriggerSync_AllowsAccountOptionalSourceWithoutAccount verifies the
+// pre-flight does NOT reject account-optional sources (RequiresAccount false,
+// e.g. push-only providers like messages): a missing account ID still returns
+// 202 and TriggerSync runs. This guards the cfg.RequiresAccount term in the
+// pre-flight condition — dropping that term would wrongly 400 account-optional
+// sources, and only this test (a RequiresAccount:false provider in the registry
+// with no account) would catch it.
+func TestTriggerSync_AllowsAccountOptionalSourceWithoutAccount(t *testing.T) {
+	t.Parallel()
+	mockService := newMockSyncService()
+	mockService.availableProviders = []psync.SourceConfig{
+		{Name: "messages", RequiresAccount: false},
+	}
+	router := setupSyncHandlerTestRouter(mockService)
+
+	req, _ := http.NewRequest("POST", "/api/v1/sync/messages/trigger", strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusAccepted, w.Code)
+
+	// Wait for the background goroutine to invoke TriggerSync.
+	select {
+	case <-mockService.triggerSyncStarted:
+		require.True(t, mockService.triggerSyncCalled.Load(),
+			"account-optional source must pass the pre-flight and trigger sync")
+	case <-time.After(2 * time.Second):
+		t.Fatal("TriggerSync should have run in the background")
+	}
 }

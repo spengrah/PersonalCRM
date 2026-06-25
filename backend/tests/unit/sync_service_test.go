@@ -404,6 +404,240 @@ func TestSyncService_ListDueAccounts_FiltersUnregisteredProviders(t *testing.T) 
 	assert.False(t, foundDead, "unregistered provider's source should be filtered out")
 }
 
+// TestSyncService_ListDueAccounts_SkipsAccountScopedRowsMissingAccount verifies
+// the scheduler tick does not enqueue an account-scoped provider's sync_state
+// row whose account_id is missing: the provider's Sync rejects the nil/empty
+// account, so the job would only burn retry budget forever. The trigger guard
+// prevents creating such rows; this covers any that already exist. A row WITH
+// an account for the same provider is still listed (positive control).
+func TestSyncService_ListDueAccounts_SkipsAccountScopedRowsMissingAccount(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping db-backed service test in short mode")
+	}
+	t.Parallel()
+	database, ctx := newServiceSuiteDB(t)
+
+	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
+
+	source := "service_test_acct_scoped_source"
+	cleanup := func(c context.Context) { _ = syncRepo.DeleteSyncStatesBySourceForTest(c, source) }
+	cleanup(ctx)
+	t.Cleanup(func() { cleanup(context.Background()) })
+
+	contactRepo := repository.NewContactRepository(database.Queries)
+	registry := syncpkg.NewProviderRegistry()
+	registry.Register(&countingProvider{cfg: syncpkg.SourceConfig{
+		Name:            source,
+		DisplayName:     source,
+		Strategy:        repository.SyncStrategyFetchAll,
+		DefaultInterval: 15 * time.Minute,
+		RequiresAccount: true,
+	}})
+
+	past := accelerated.GetCurrentTime().Add(-1 * time.Minute)
+	validAccount := "service_test_valid_account"
+	// Poisoned row: account-scoped provider with no account_id.
+	_, err := syncRepo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
+		Source:     source,
+		Enabled:    true,
+		Strategy:   repository.SyncStrategyFetchAll,
+		NextSyncAt: &past,
+	})
+	require.NoError(t, err)
+	// Healthy row: same provider, valid account_id.
+	_, err = syncRepo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
+		Source:     source,
+		AccountID:  &validAccount,
+		Enabled:    true,
+		Strategy:   repository.SyncStrategyFetchAll,
+		NextSyncAt: &past,
+	})
+	require.NoError(t, err)
+
+	svc := service.NewSyncService(syncRepo, contactRepo, registry)
+	accounts, err := svc.ListDueAccounts(ctx)
+	require.NoError(t, err)
+
+	foundMissing, foundValid := false, false
+	for _, a := range accounts {
+		if a.Source != source {
+			continue
+		}
+		if a.AccountID == nil || *a.AccountID == "" {
+			foundMissing = true
+		} else if *a.AccountID == validAccount {
+			foundValid = true
+		}
+	}
+	assert.False(t, foundMissing, "account-scoped row with missing account_id must be skipped")
+	assert.True(t, foundValid, "account-scoped row with a valid account must still be listed")
+}
+
+// TestSyncService_TriggerSync_RejectsNilAccountForAccountScopedProvider is the
+// primary regression: an account-scoped provider (Config().RequiresAccount)
+// triggered with a nil account must be rejected with ErrAccountRequired and must
+// NOT bootstrap an external_sync_state row (which would error on every dispatch
+// forever). The enqueuer is wired so we can also assert no river_job was queued.
+func TestSyncService_TriggerSync_RejectsNilAccountForAccountScopedProvider(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping db-backed service test in short mode")
+	}
+	t.Parallel()
+	database, ctx := newServiceSuiteDB(t)
+
+	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
+
+	source := "service_test_requires_account_nil"
+	_ = syncRepo.DeleteRiverJobsBySourceArgForTest(ctx, source)
+	_ = syncRepo.DeleteSyncStatesBySourceForTest(ctx, source)
+	t.Cleanup(func() {
+		_ = syncRepo.DeleteRiverJobsBySourceArgForTest(context.Background(), source)
+		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.Background(), source)
+	})
+
+	contactRepo := repository.NewContactRepository(database.Queries)
+	registry := syncpkg.NewProviderRegistry()
+	provider := &countingProvider{cfg: syncpkg.SourceConfig{
+		Name:            source,
+		DisplayName:     source,
+		Strategy:        repository.SyncStrategyFetchAll,
+		DefaultInterval: 15 * time.Minute,
+		RequiresAccount: true,
+	}}
+	registry.Register(provider)
+
+	svc := service.NewSyncService(syncRepo, contactRepo, registry)
+	// Wire the enqueuer so the "no river_job enqueued" assertion is meaningful
+	// (the guard returns before the enqueue branch).
+	workers := river.NewWorkers()
+	river.AddWorker(workers, &syncWorkerNoop{})
+	client := mustTestClient(t, database, workers)
+	svc.SetRiverEnqueuer(client)
+
+	err := svc.TriggerSync(ctx, source, nil)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, service.ErrAccountRequired),
+		"expected ErrAccountRequired, got %v", err)
+
+	// No external_sync_state row was created. GetSyncStateBySource uses
+	// COALESCE(account_id,'') = COALESCE($2,'') so a nil lookup matches both a
+	// NULL and an empty-string row — this single check covers both variants.
+	_, getErr := syncRepo.GetSyncStateBySource(ctx, source, nil)
+	assert.True(t, errors.Is(getErr, db.ErrNotFound),
+		"no sync_state row should exist, got %v", getErr)
+
+	// Provider.Sync was never called and nothing was enqueued.
+	assert.Equal(t, 0, provider.count, "provider.Sync must not run when account is missing")
+	cnt, err := syncRepo.CountRiverJobsBySourceArgForTest(ctx, source)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), cnt, "no river_job should be enqueued for a rejected trigger")
+}
+
+// TestSyncService_TriggerSync_RejectsMissingAccountVariants covers the empty and
+// whitespace-only account paths in addition to nil. AccountIDMissing trims, so
+// "", " ", and "\t" are all rejected — without this a {"account_id":""} body
+// would bootstrap a non-NULL empty-string row that still errors at OAuth lookup.
+func TestSyncService_TriggerSync_RejectsMissingAccountVariants(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping db-backed service test in short mode")
+	}
+	t.Parallel()
+	database, ctx := newServiceSuiteDB(t)
+
+	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
+	contactRepo := repository.NewContactRepository(database.Queries)
+
+	cases := []struct {
+		name      string
+		accountID *string
+	}{
+		{name: "nil", accountID: nil},
+		{name: "empty", accountID: strPtr("")},
+		{name: "whitespace", accountID: strPtr("  ")},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			source := "service_test_requires_account_" + tc.name
+			_ = syncRepo.DeleteRiverJobsBySourceArgForTest(ctx, source)
+			_ = syncRepo.DeleteSyncStatesBySourceForTest(ctx, source)
+			t.Cleanup(func() {
+				_ = syncRepo.DeleteRiverJobsBySourceArgForTest(context.Background(), source)
+				_ = syncRepo.DeleteSyncStatesBySourceForTest(context.Background(), source)
+			})
+
+			registry := syncpkg.NewProviderRegistry()
+			provider := &countingProvider{cfg: syncpkg.SourceConfig{
+				Name:            source,
+				DisplayName:     source,
+				Strategy:        repository.SyncStrategyFetchAll,
+				DefaultInterval: 15 * time.Minute,
+				RequiresAccount: true,
+			}}
+			registry.Register(provider)
+			svc := service.NewSyncService(syncRepo, contactRepo, registry)
+
+			err := svc.TriggerSync(ctx, source, tc.accountID)
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, service.ErrAccountRequired),
+				"expected ErrAccountRequired for %q, got %v", tc.name, err)
+
+			// No row created for the exact value passed. The COALESCE lookup
+			// collapses NULL/'' (covering nil + empty); for whitespace we query
+			// with the same whitespace value, which the guard never wrote.
+			_, getErr := syncRepo.GetSyncStateBySource(ctx, source, tc.accountID)
+			assert.True(t, errors.Is(getErr, db.ErrNotFound),
+				"no sync_state row should exist for %q, got %v", tc.name, getErr)
+			assert.Equal(t, 0, provider.count, "provider.Sync must not run for %q", tc.name)
+		})
+	}
+}
+
+// TestSyncService_TriggerSync_AccountOptionalProviderStillBootstraps guards the
+// second acceptance criterion: a provider that does NOT require an account
+// (RequiresAccount defaults false) keeps its create-on-first-trigger behavior
+// when called with a nil account. Prevents an over-broad rejection regression.
+func TestSyncService_TriggerSync_AccountOptionalProviderStillBootstraps(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping db-backed service test in short mode")
+	}
+	t.Parallel()
+	database, ctx := newServiceSuiteDB(t)
+
+	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
+
+	source := "service_test_account_optional_bootstrap"
+	_ = syncRepo.DeleteSyncStatesBySourceForTest(ctx, source)
+	_ = syncRepo.DeleteSyncLogsBySourceForTest(ctx, source)
+	t.Cleanup(func() {
+		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.Background(), source)
+		_ = syncRepo.DeleteSyncLogsBySourceForTest(context.Background(), source)
+	})
+
+	contactRepo := repository.NewContactRepository(database.Queries)
+	registry := syncpkg.NewProviderRegistry()
+	provider := &countingProvider{cfg: syncpkg.SourceConfig{
+		Name:            source,
+		DisplayName:     source,
+		Strategy:        repository.SyncStrategyFetchAll,
+		DefaultInterval: 15 * time.Minute,
+		// RequiresAccount left false (the push/account-optional default).
+	}}
+	registry.Register(provider)
+
+	svc := service.NewSyncService(syncRepo, contactRepo, registry)
+	// No enqueuer: TriggerSync falls back to inline runSyncForState after
+	// bootstrapping the row.
+	require.NoError(t, svc.TriggerSync(ctx, source, nil))
+
+	// The create-on-first-trigger row exists and the inline sync ran.
+	state, err := syncRepo.GetSyncStateBySource(ctx, source, nil)
+	require.NoError(t, err)
+	assert.Equal(t, source, state.Source)
+	assert.Equal(t, 1, provider.count, "account-optional provider should still sync inline")
+}
+
 // --- test helpers ---
 
 // mustTestClient builds a test-only *river.Client[pgx.Tx] so callers can

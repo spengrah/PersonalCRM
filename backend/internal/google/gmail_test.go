@@ -119,6 +119,9 @@ func TestGmailSyncProvider_Config(t *testing.T) {
 	require.True(t, cfg.SupportsMultiAccount)
 	require.False(t, cfg.SupportsDiscovery)
 	require.Equal(t, GmailDefaultInterval, cfg.DefaultInterval)
+	// Account-scoped: OAuth token is keyed by account, so TriggerSync must
+	// reject a nil/empty account instead of bootstrapping an erroring row.
+	require.True(t, cfg.RequiresAccount)
 }
 
 // --- OR-chunk byte budgeting + sanitization ---

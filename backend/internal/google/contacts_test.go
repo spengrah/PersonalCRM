@@ -20,6 +20,9 @@ func TestContactsProvider_Config(t *testing.T) {
 	assert.True(t, config.SupportsMultiAccount)
 	assert.True(t, config.SupportsDiscovery)
 	assert.Equal(t, ContactsDefaultInterval, config.DefaultInterval)
+	// Account-scoped: OAuth token is keyed by account, so TriggerSync must
+	// reject a nil/empty account instead of bootstrapping an erroring row.
+	assert.True(t, config.RequiresAccount)
 }
 
 func TestContactsProvider_ConvertPersonToRequest(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
@@ -15,6 +16,23 @@ import (
 
 	"github.com/google/uuid"
 )
+
+// ErrAccountRequired is returned by TriggerSync when an account-scoped
+// provider (Config().RequiresAccount) is triggered with a nil/empty account
+// ID. Bootstrapping a sync_state row here would create a permanently-erroring
+// row, so we reject instead. This is a backstop for non-HTTP/internal callers;
+// the HTTP 400 is produced separately by the handler's synchronous pre-flight
+// (which shares AccountIDMissing), not by mapping this sentinel.
+var ErrAccountRequired = errors.New("account ID required for this source")
+
+// AccountIDMissing reports whether an account ID is absent for the purpose of
+// account-scoped provider validation: nil, empty, or whitespace-only. A
+// padded-but-nonempty ID (e.g. " acct ") is intentionally NOT treated as
+// missing — normalizing caller input is out of scope here. Exported so the
+// sync HTTP handler shares this single definition.
+func AccountIDMissing(accountID *string) bool {
+	return accountID == nil || strings.TrimSpace(*accountID) == ""
+}
 
 // Backoff intervals for error retries (exponential backoff)
 var backoffIntervals = []time.Duration{
@@ -122,6 +140,19 @@ func (s *SyncService) ListDueAccounts(ctx context.Context) ([]repository.DueAcco
 				Msg("scheduler tick: push-strategy provider; skipping due account")
 			continue
 		}
+		// Account-scoped providers (Config().RequiresAccount) whose row has a
+		// missing account_id can never sync: the provider's Sync rejects the
+		// nil/empty account, so enqueuing only burns retry budget forever —
+		// the same poisoned-row failure mode as the unregistered-source filter
+		// above. The trigger path refuses to bootstrap such rows; this skips
+		// any that already exist. Operators disable/delete them explicitly;
+		// the stalled next_sync_at surfaces them via the staleness banner.
+		if provider.Config().RequiresAccount && AccountIDMissing(acct.AccountID) {
+			logger.Debug().
+				Str("source", acct.Source).
+				Msg("scheduler tick: account-scoped provider with missing account_id; skipping due account")
+			continue
+		}
 		accounts = append(accounts, acct)
 	}
 	return accounts, nil
@@ -138,6 +169,12 @@ func (s *SyncService) TriggerSync(ctx context.Context, source string, accountID 
 	provider, ok := s.registry.Get(source)
 	if !ok {
 		return fmt.Errorf("unknown sync source: %s", source)
+	}
+
+	// Reject account-scoped providers triggered without an account, before we
+	// would otherwise bootstrap a permanently-erroring sync_state row.
+	if provider.Config().RequiresAccount && AccountIDMissing(accountID) {
+		return fmt.Errorf("%w: source %q requires an account ID", ErrAccountRequired, source)
 	}
 
 	// Get or create sync state. The state itself is not needed on the
