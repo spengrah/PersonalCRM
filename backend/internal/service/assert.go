@@ -1746,15 +1746,23 @@ func (s *AssertService) applyRepoint(ctx context.Context, tx pgx.Tx, plan *repoi
 		return s.mergeSameValue(ctx, tx, plan.row, collider)
 	}
 
-	// No collision: re-point the loser row into the winner slot.
+	// No collision: re-point the loser row into the winner slot, then emit the
+	// move so SP3/SP4 derived signals recompute (the row is now live on the winner
+	// node — a fresh accepted/proposed state for the winner's graph).
 	if err := s.repointRow(ctx, tx, plan); err != nil {
+		return err
+	}
+	moveKind := events.KindAssertionProposed
+	if plan.row.Status == repository.AssertionStatusAccepted {
+		moveKind = events.KindAssertionAccepted
+	}
+	if err := s.emitMergeMoveEvent(ctx, tx, plan.row, moveKind, now); err != nil {
 		return err
 	}
 
 	// A re-pointed ACCEPTED single-cardinality row now sits in the winner's slot and
-	// may overlap a DIFFERENT-value accepted prior → run the valid-time supersession
-	// so exactly one stays current. The re-pointed loser is treated as the incoming
-	// successor (D9 step 3 third bullet). Proposed / multi rows coexist (no slot).
+	// may overlap an accepted prior on that slot. Proposed / multi rows coexist
+	// (no slot). The re-pointed row is the incoming successor (D9 step 3).
 	if plan.row.Status != repository.AssertionStatusAccepted ||
 		plan.predicate.Cardinality != repository.PredicateCardinalitySingle {
 		return nil
@@ -1771,10 +1779,93 @@ func (s *AssertService) applyRepoint(ctx context.Context, tx pgx.Tx, plan *repoi
 	if err != nil {
 		return fmt.Errorf("merge slot overlap probe: %w", err)
 	}
-	// closeConflicts skips the successor row itself (by id) and closes the
-	// different-value priors; a same-value prior cannot appear here because it would
-	// have collided on the live-proposition key above and merged instead.
-	return s.closeConflicts(ctx, tx, conflicts, plan.row, effectiveFrom, now)
+	// The probe (subject+predicate, or symmetric participants) returns the
+	// just-re-pointed row itself — exclude it before classifying, or it would be
+	// "merged into itself" / "superseded by itself".
+	conflicts = excludeAssertion(conflicts, plan.row.ID)
+	// Split the overlapping priors by value. SAME-value priors are the SAME fact in
+	// different valid-time buckets (so they did NOT collide on proposition_key
+	// above) → WIDEN the re-pointed row over their union and merge them in, per the
+	// D6 same-value reaffirmation rule (not a supersession). DIFFERENT-value priors
+	// are superseded by the re-pointed successor.
+	signature := assertionSignature(plan.row)
+	same := sameValueConflicts(conflicts, signature)
+	if len(same) > 0 {
+		if err := s.widenMergedSurvivor(ctx, tx, plan, same); err != nil {
+			return err
+		}
+	}
+	different := differentValueConflicts(conflicts, signature)
+	return s.closeConflicts(ctx, tx, different, plan.row, effectiveFrom, now)
+}
+
+// widenMergedSurvivor folds same-value priors (same fact in other buckets) into
+// the just-re-pointed row: union the windows, merge each prior's provenance into
+// the survivor + close it superseded, and recompute the survivor's
+// proposition_key over the widened window. Mirrors widenReaffirmation but the
+// survivor is the re-pointed merge row (already live at the winner slot).
+func (s *AssertService) widenMergedSurvivor(ctx context.Context, tx pgx.Tx, plan *repointedAssertion, same []*repository.Assertion) error {
+	survivor := plan.row
+	widenedFrom := survivor.ValidFrom
+	widenedTo := survivor.ValidTo
+	for _, other := range same {
+		widenedFrom = minStart(widenedFrom, other.ValidFrom)
+		widenedTo = maxEnd(widenedTo, other.ValidTo)
+		if err := s.mergeSameValue(ctx, tx, other, survivor); err != nil {
+			return err
+		}
+	}
+	// A pending-future-successor bound on the survivor caps the upper extension
+	// (widening past it would leave two current rows once the date passes).
+	if survivor.SupersededBy != nil {
+		widenedTo = utcPtr(survivor.ValidTo)
+	}
+	widenReq := assertionAsRequest(survivor)
+	widenReq.ValidFrom = widenedFrom
+	newKey := computePropositionKey(plan.predicate, plan.canonKey, plan.canonSubject, plan.canonObject, widenReq)
+	if err := s.assertionRepo.WidenAssertionValidityTx(ctx, tx, survivor.ID, widenedFrom, widenedTo, newKey); err != nil {
+		return fmt.Errorf("widen merged survivor: %w", err)
+	}
+	survivor.ValidFrom = widenedFrom
+	survivor.ValidTo = widenedTo
+	survivor.PropositionKey = newKey
+	return nil
+}
+
+// excludeAssertion returns conflicts with the row matching id removed (the
+// overlap probe returns the just-re-pointed row itself, which must not be
+// classified as its own same/different-value prior).
+func excludeAssertion(conflicts []repository.Assertion, id uuid.UUID) []repository.Assertion {
+	out := make([]repository.Assertion, 0, len(conflicts))
+	for i := range conflicts {
+		if conflicts[i].ID != id {
+			out = append(out, conflicts[i])
+		}
+	}
+	return out
+}
+
+// differentValueConflicts returns the conflict rows whose value differs from
+// signature (the complement of sameValueConflicts).
+func differentValueConflicts(conflicts []repository.Assertion, signature string) []repository.Assertion {
+	out := make([]repository.Assertion, 0, len(conflicts))
+	for i := range conflicts {
+		if assertionSignature(&conflicts[i]) != signature {
+			out = append(out, conflicts[i])
+		}
+	}
+	return out
+}
+
+// emitMergeMoveEvent emits the transition event for a row re-pointed onto the
+// winner during a merge, so SP3/SP4 derived signals recompute against the new
+// subject. It carries the row's live kind (accepted/proposed) but is keyed by a
+// DEDICATED '<assertion_id>:merged' source_id — NOT the one-shot ':accepted'/
+// ':proposed' token the row already emitted on its original insert — so the move
+// is a genuinely new event (not deduped against the insert) yet still idempotent
+// across a merge retry (one move per assertion).
+func (s *AssertService) emitMergeMoveEvent(ctx context.Context, tx pgx.Tx, row *repository.Assertion, kind events.Kind, now time.Time) error {
+	return s.publishAssertionEnvelope(ctx, tx, kind, row, row.ID.String()+":merged", now)
 }
 
 // repointRow applies the node-reference UPDATE (subject and/or object) for a
@@ -1820,10 +1911,18 @@ func (s *AssertService) closeSelfLoop(ctx context.Context, tx pgx.Tx, row *repos
 	if row.KnowledgeFrom.After(knowledgeTo) {
 		knowledgeTo = row.KnowledgeFrom.UTC()
 	}
+	// valid_to = now closes a currently-true edge. But a FUTURE-dated edge
+	// (valid_from > now) would get valid_to < valid_from → the assertion_valid_range
+	// CHECK fails. For such a never-yet-current row keep its EXISTING valid_to (it is
+	// terminal regardless), mirroring closeBoundary on the supersession path.
+	validTo := &now
+	if row.ValidFrom != nil && !now.After(*row.ValidFrom) {
+		validTo = utcPtr(row.ValidTo)
+	}
 	closure := repository.ClosureReasonEnded
 	if err := s.assertionRepo.CloseAssertionTx(ctx, tx, repository.CloseAssertionParams{
 		ID:            row.ID,
-		ValidTo:       &now,
+		ValidTo:       validTo,
 		Status:        repository.AssertionStatusSuperseded,
 		ClosureReason: &closure,
 		SupersededBy:  nil,

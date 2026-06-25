@@ -266,14 +266,21 @@ func TestContactMergeNode_Integration(t *testing.T) {
 		assert.ErrorIs(t, err, db.ErrNotFound, "live node read excludes the tombstoned node")
 
 		// The assertion row is RETAINED in the table (the tombstone is on the NODE,
-		// not the assertion — graph projection reads filter node.deleted_at IS NULL,
-		// which the GetNode live-read above proves drops the node).
+		// not the assertion).
 		retained, err := h.assertionRepo.GetAssertion(ctx, edgeID)
 		require.NoError(t, err)
 		assert.Equal(t, edgeID, retained.ID, "assertion retained after soft-delete")
 		n, err := h.support.CountAssertionsForSubject(ctx, contact.ID)
 		require.NoError(t, err)
 		assert.EqualValues(t, 1, n, "assertion remains in the table after soft-delete")
+
+		// But graph LIVE reads drop it: the lives_in edge and the current-accepted
+		// value are gone once the contact node is tombstoned.
+		after, err := h.assertionRepo.ListLiveEdgesForNode(ctx, contact.ID, repository.PredicateLivesIn)
+		require.NoError(t, err)
+		assert.Empty(t, after, "lives_in edge drops from live reads after node tombstone")
+		_, err = h.assertionRepo.GetCurrentAccepted(ctx, contact.ID, repository.PredicateLivesIn, nowMicro())
+		assert.ErrorIs(t, err, db.ErrNotFound, "current-accepted drops from live reads after node tombstone")
 	})
 }
 
@@ -437,5 +444,97 @@ func TestMergeAssertions_Integration(t *testing.T) {
 			selfLoop := e.SubjectNodeID == winner && e.ObjectNodeID != nil && *e.ObjectNodeID == winner
 			assert.False(t, selfLoop, "no live self-loop knows(winner, winner)")
 		}
+	})
+
+	// Case 7: a live node A knows() a node B that is then soft-deleted → the edge
+	// drops from A's live edge read (an edge is live only when BOTH endpoints are).
+	t.Run("7 edge to a soft-deleted node drops from live reads", func(t *testing.T) {
+		t.Parallel()
+		h, _ := newAssertHarness(t, ctx0())
+		gen, _ := migrationGenerator(t)
+
+		a := h.seedPerson(t, ctx, gen.Prefix(), "A")
+		b := h.seedPerson(t, ctx, gen.Prefix(), "B")
+		edge, err := h.svc.Assert(ctx, edgeReq(a, b, "knows", gen.Prefix(), "knows"))
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, edge.ID)
+
+		before, err := h.assertionRepo.ListLiveEdgesForNode(ctx, a, "knows")
+		require.NoError(t, err)
+		require.Len(t, before, 1)
+
+		require.NoError(t, h.nodeRepo.SoftDeleteNode(ctx, b))
+
+		after, err := h.assertionRepo.ListLiveEdgesForNode(ctx, a, "knows")
+		require.NoError(t, err)
+		assert.Empty(t, after, "edge to a soft-deleted endpoint drops from live reads")
+	})
+
+	// Case 8: merge two nodes each with lives_in(SAME place) in DIFFERENT valid-time
+	// buckets (year) → the re-pointed loser does NOT collide on proposition_key (the
+	// bucket differs) but is the SAME fact → it WIDENS/merges with the winner's row
+	// (one live edge, union window), NOT a supersession.
+	t.Run("8 same-value different-bucket merge widens not supersedes", func(t *testing.T) {
+		t.Parallel()
+		h, _ := newAssertHarness(t, ctx0())
+		gen, _ := migrationGenerator(t)
+
+		loser := h.seedPerson(t, ctx, gen.Prefix(), "loser")
+		winner := h.seedPerson(t, ctx, gen.Prefix(), "winner")
+		place := h.seedPlace(t, ctx, gen.Prefix(), "shared-place")
+
+		from2018 := time.Date(2018, 1, 1, 0, 0, 0, 0, time.UTC)
+		from2024 := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+		loserReq := edgeReq(loser, place, "lives_in", gen.Prefix(), "loser-lives")
+		loserReq.ValidFrom = &from2018
+		loserEdge, err := h.svc.Assert(ctx, loserReq)
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, loserEdge.ID)
+
+		winnerReq := edgeReq(winner, place, "lives_in", gen.Prefix(), "winner-lives")
+		winnerReq.ValidFrom = &from2024
+		winnerEdge, err := h.svc.Assert(ctx, winnerReq)
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, winnerEdge.ID)
+		require.NotEqual(t, loserEdge.ID, winnerEdge.ID, "different buckets → two distinct propositions pre-merge")
+
+		mergeAssertionsInTx(t, ctx, h, loser, winner)
+
+		// Exactly one live lives_in for the winner (same place, the union of the two
+		// stints), NOT two competing accepted rows and NOT a supersession that loses
+		// one stint.
+		edges, err := h.assertionRepo.ListLiveEdgesForNode(ctx, winner, "lives_in")
+		require.NoError(t, err)
+		assert.Len(t, edges, 1, "same-value stints collapse to one live edge")
+		// The survivor's window covers the earlier (2018) stint (widened backward).
+		require.NotNil(t, edges[0].ValidFrom)
+		assert.False(t, edges[0].ValidFrom.After(from2018), "survivor window widened to cover the earlier stint")
+	})
+
+	// Case 9: a FUTURE-dated edge between loser and winner (valid_from > now)
+	// collapses to a self-loop on merge → closing it must NOT stamp valid_to=now
+	// (which would be < valid_from and violate assertion_valid_range).
+	t.Run("9 future-dated self-loop closes without range violation", func(t *testing.T) {
+		t.Parallel()
+		h, _ := newAssertHarness(t, ctx0())
+		gen, _ := migrationGenerator(t)
+
+		loser := h.seedPerson(t, ctx, gen.Prefix(), "loser")
+		winner := h.seedPerson(t, ctx, gen.Prefix(), "winner")
+
+		future := accelerated.GetCurrentTime().UTC().Add(72 * time.Hour)
+		req := edgeReq(loser, winner, "knows", gen.Prefix(), "future-knows")
+		req.ValidFrom = &future
+		edge, err := h.svc.Assert(ctx, req)
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, edge.ID)
+
+		// Must not error on the assertion_valid_range CHECK.
+		mergeAssertionsInTx(t, ctx, h, loser, winner)
+
+		closed, err := h.assertionRepo.GetAssertion(ctx, edge.ID)
+		require.NoError(t, err)
+		assert.Equal(t, repository.AssertionStatusSuperseded, closed.Status, "future-dated self-loop closed")
 	})
 }

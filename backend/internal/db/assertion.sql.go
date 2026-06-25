@@ -332,14 +332,17 @@ func (q *Queries) GetAssertionForUpdate(ctx context.Context, id pgtype.UUID) (*A
 }
 
 const GetCurrentAccepted = `-- name: GetCurrentAccepted :one
-SELECT id, subject_node_id, predicate_key, object_node_id, value_text, value_num, value_date, value_bool, valid_from, valid_to, knowledge_from, knowledge_to, confidence, salience, status, closure_reason, superseded_by, trust_tier, proposition_key, created_at FROM assertion
-WHERE subject_node_id = $1
-  AND predicate_key = $2
-  AND status = 'accepted'
-  AND knowledge_to IS NULL
-  AND (valid_from IS NULL OR valid_from <= $3)
-  AND (valid_to IS NULL OR valid_to > $3)
-ORDER BY created_at
+SELECT a.id, a.subject_node_id, a.predicate_key, a.object_node_id, a.value_text, a.value_num, a.value_date, a.value_bool, a.valid_from, a.valid_to, a.knowledge_from, a.knowledge_to, a.confidence, a.salience, a.status, a.closure_reason, a.superseded_by, a.trust_tier, a.proposition_key, a.created_at FROM assertion a
+JOIN node sn ON sn.id = a.subject_node_id AND sn.deleted_at IS NULL
+LEFT JOIN node ob ON ob.id = a.object_node_id
+WHERE a.subject_node_id = $1
+  AND a.predicate_key = $2
+  AND a.status = 'accepted'
+  AND a.knowledge_to IS NULL
+  AND (a.object_node_id IS NULL OR ob.deleted_at IS NULL)
+  AND (a.valid_from IS NULL OR a.valid_from <= $3)
+  AND (a.valid_to IS NULL OR a.valid_to > $3)
+ORDER BY a.created_at
 LIMIT 1
 `
 
@@ -355,6 +358,8 @@ type GetCurrentAcceptedParams struct {
 // needing all live rows use ListLiveEdgesForNode / ListAssertionsBySubject). All
 // params are named (the now arg appears twice; mixing positional + named is
 // disallowed by sqlc, so the whole query uses sqlc.arg()).
+// A soft-deleted subject node (or, for an edge, a soft-deleted object node) drops
+// from this live read — a merged-away or deleted contact has no current value.
 func (q *Queries) GetCurrentAccepted(ctx context.Context, arg GetCurrentAcceptedParams) (*Assertion, error) {
 	row := q.db.QueryRow(ctx, GetCurrentAccepted, arg.SubjectNodeID, arg.PredicateKey, arg.Now)
 	var i Assertion
@@ -576,12 +581,15 @@ func (q *Queries) ListAssertionsTouchingNode(ctx context.Context, subjectNodeID 
 }
 
 const ListLiveEdgesForNode = `-- name: ListLiveEdgesForNode :many
-SELECT id, subject_node_id, predicate_key, object_node_id, value_text, value_num, value_date, value_bool, valid_from, valid_to, knowledge_from, knowledge_to, confidence, salience, status, closure_reason, superseded_by, trust_tier, proposition_key, created_at FROM assertion
-WHERE predicate_key = $2
-  AND (subject_node_id = $1 OR object_node_id = $1)
-  AND status IN ('proposed', 'accepted')
-  AND knowledge_to IS NULL
-ORDER BY created_at
+SELECT a.id, a.subject_node_id, a.predicate_key, a.object_node_id, a.value_text, a.value_num, a.value_date, a.value_bool, a.valid_from, a.valid_to, a.knowledge_from, a.knowledge_to, a.confidence, a.salience, a.status, a.closure_reason, a.superseded_by, a.trust_tier, a.proposition_key, a.created_at FROM assertion a
+JOIN node sn ON sn.id = a.subject_node_id AND sn.deleted_at IS NULL
+LEFT JOIN node ob ON ob.id = a.object_node_id
+WHERE a.predicate_key = $2
+  AND (a.subject_node_id = $1 OR a.object_node_id = $1)
+  AND (a.object_node_id IS NULL OR ob.deleted_at IS NULL)
+  AND a.status IN ('proposed', 'accepted')
+  AND a.knowledge_to IS NULL
+ORDER BY a.created_at
 `
 
 type ListLiveEdgesForNodeParams struct {
@@ -589,9 +597,12 @@ type ListLiveEdgesForNodeParams struct {
 	PredicateKey  string      `json:"predicate_key"`
 }
 
-// Live edges of a predicate touching a node in EITHER orientation (the symmetric
-// two-direction read): a node may be subject or object of a stored edge. Returns
-// proposed + accepted, knowledge-open rows.
+// Live edges (or facts) of a predicate touching a node in EITHER orientation (the
+// symmetric two-direction read): a node may be subject or object of a stored edge.
+// Returns proposed + accepted, knowledge-open rows. A live row requires its
+// subject node live AND — for an edge (object_node_id set) — its object node live,
+// so a soft-deleted (merged-away or deleted) endpoint drops the row. A fact
+// (object_node_id NULL) is gated on the subject only.
 func (q *Queries) ListLiveEdgesForNode(ctx context.Context, arg ListLiveEdgesForNodeParams) ([]*Assertion, error) {
 	rows, err := q.db.Query(ctx, ListLiveEdgesForNode, arg.SubjectNodeID, arg.PredicateKey)
 	if err != nil {
