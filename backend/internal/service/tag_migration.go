@@ -218,11 +218,10 @@ func tagDetailJSON(color *string) ([]byte, error) {
 // entity node. User provenance + the contact_tag's created_at as the knowledge
 // time make this a faithful, idempotent mirror of the legacy link.
 func (s *TagMigrationService) assertTaggedAs(ctx context.Context, link repository.ContactTagLink, tagNodeID uuid.UUID) error {
-	knowledgeFrom := link.CreatedAt
 	// A deterministic source_id keys the provenance idempotently: a re-run hashes
 	// to the same locator and ON CONFLICT no-ops rather than appending a duplicate.
 	sourceID := fmt.Sprintf("tag-migration:%s:%s", link.ContactID, link.TagID)
-	_, err := s.assertSvc.Assert(ctx, AssertRequest{
+	req := AssertRequest{
 		SubjectNodeID: link.ContactID,
 		PredicateKey:  "tagged_as",
 		ObjectNodeID:  &tagNodeID,
@@ -232,7 +231,14 @@ func (s *TagMigrationService) assertTaggedAs(ctx context.Context, link repositor
 			SourceID:     sourceID,
 			ProducerKind: repository.ProducerKindUser,
 		}},
-		KnowledgeFromOverride: &knowledgeFrom,
-	})
+	}
+	// Preserve the legacy link's created_at as the knowledge time when present; a
+	// NULL legacy created_at has no knowable knowledge time, so leave the override
+	// nil and let AssertService default knowledge_from to now (the honest fallback,
+	// not a bogus zero time).
+	if link.CreatedAt != nil {
+		req.KnowledgeFromOverride = link.CreatedAt
+	}
+	_, err := s.assertSvc.Assert(ctx, req)
 	return err
 }

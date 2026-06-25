@@ -115,6 +115,13 @@ func (h *tagMigrationHarness) seedContactTag(t *testing.T, ctx context.Context, 
 	require.NoError(t, h.support.InsertContactTagAtTime(ctx, contactID, tagID, createdAt))
 }
 
+// seedContactTagNull links a contact to a tag with a NULL created_at (the legacy
+// column is nullable), so a test can assert the migration falls back to "now".
+func (h *tagMigrationHarness) seedContactTagNull(t *testing.T, ctx context.Context, contactID, tagID uuid.UUID) {
+	t.Helper()
+	require.NoError(t, h.support.InsertContactTagNullCreatedAt(ctx, contactID, tagID))
+}
+
 // registerCleanup tears down everything the test created, FK-ordered. Registered
 // once per test; t.Cleanup runs LIFO so call it right after the harness is built
 // (before seeding), and it executes after every subtest finishes.
@@ -325,6 +332,30 @@ func TestTagMigration_Integration(t *testing.T) {
 		secondEventIDs, err := h.support.ListEventIdsBySourceAndSourceIDPrefix(ctx, "assertion", firstAssertion.ID.String())
 		require.NoError(t, err)
 		assert.Equal(t, len(firstEventIDs), len(secondEventIDs), "re-run must emit no new assertion events")
+	})
+
+	t.Run("falls back to now when contact_tag.created_at is NULL", func(t *testing.T) {
+		h, ctx := newTagMigrationHarness(t, ctx)
+		h.registerCleanup(t, ctx)
+		ns := syntheticNS(t)
+
+		contactID := h.seedContactWithNode(t, ctx, ns+" Erin")
+		tagID := h.seedTag(t, ctx, ns+"-nulltime", nil)
+		h.seedContactTagNull(t, ctx, contactID, tagID)
+
+		before := accelerated.GetCurrentTime().UTC()
+		_, err := h.svc.MigrateTags(ctx)
+		require.NoError(t, err)
+		after := accelerated.GetCurrentTime().UTC()
+
+		entity, err := h.entityRepo.FindEntityBySubtypeName(ctx, repository.EntitySubtypeTag, ns+"-nulltime")
+		require.NoError(t, err)
+		a := h.findTaggedAs(t, ctx, contactID, entity.NodeID)
+		// A NULL legacy created_at must NOT become a zero/ancient knowledge time:
+		// it falls back to "now" (knowledge_from is within the run window).
+		kf := a.KnowledgeFrom.UTC()
+		assert.Falsef(t, kf.Before(before.Add(-time.Minute)), "knowledge_from %s must not predate the run (no zero-time)", kf)
+		assert.Falsef(t, kf.After(after.Add(time.Minute)), "knowledge_from %s must not postdate the run", kf)
 	})
 }
 

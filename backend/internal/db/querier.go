@@ -1938,6 +1938,10 @@ type Querier interface {
 	// (KnowledgeFromOverride). The (contact_id, tag_id) PK makes re-seeding a no-op
 	// under ON CONFLICT (not needed here — tests use fresh ids).
 	TestInsertContactTagAtTime(ctx context.Context, arg TestInsertContactTagAtTimeParams) error
+	// Tag-migration test only: seed a contact_tag row with a NULL created_at (the
+	// column is nullable), so a test can assert the migration falls back to "now" for
+	// the assertion knowledge time rather than stamping a bogus zero time.
+	TestInsertContactTagNullCreatedAt(ctx context.Context, arg TestInsertContactTagNullCreatedAtParams) error
 	// Reset test only: a person node with a fixed sentinel id that the embedding and
 	// relationship_signal markers anchor to (relationship_signal.subject_node_id is a
 	// real FK→node, so the node must exist first). Idempotent so the marker seeding

@@ -750,6 +750,15 @@ func TestParseArgsAllFlags(t *testing.T) {
 				}
 			},
 		},
+		{
+			"migrate-tags",
+			[]string{"--migrate-tags"},
+			func(t *testing.T, o runOptions) {
+				if !o.migrateTags {
+					t.Fatal("--migrate-tags not set")
+				}
+			},
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

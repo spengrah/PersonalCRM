@@ -800,6 +800,13 @@ INSERT INTO tag (name, color) VALUES (@name, @color) RETURNING id;
 INSERT INTO contact_tag (contact_id, tag_id, created_at)
 VALUES (@contact_id, @tag_id, @created_at);
 
+-- name: TestInsertContactTagNullCreatedAt :exec
+-- Tag-migration test only: seed a contact_tag row with a NULL created_at (the
+-- column is nullable), so a test can assert the migration falls back to "now" for
+-- the assertion knowledge time rather than stamping a bogus zero time.
+INSERT INTO contact_tag (contact_id, tag_id, created_at)
+VALUES (@contact_id, @tag_id, NULL);
+
 -- name: TestDeleteContactTagsByContactIds :execrows
 -- Tag-migration cleanup: hard-delete the contact_tag rows a test seeded, keyed by
 -- the tracked contact ids (scoped to the test's own contacts on the shared DB).

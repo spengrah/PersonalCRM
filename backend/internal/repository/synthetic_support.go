@@ -788,6 +788,16 @@ func (r *SyntheticSupportRepository) InsertContactTagAtTime(ctx context.Context,
 	})
 }
 
+// InsertContactTagNullCreatedAt seeds a contact_tag row with a NULL created_at
+// (the column is nullable), so a --migrate-tags test can assert the migration
+// falls back to "now" for the assertion knowledge time rather than a zero time.
+func (r *SyntheticSupportRepository) InsertContactTagNullCreatedAt(ctx context.Context, contactID, tagID uuid.UUID) error {
+	return r.queries.TestInsertContactTagNullCreatedAt(ctx, db.TestInsertContactTagNullCreatedAtParams{
+		ContactID: pgtype.UUID{Bytes: contactID, Valid: true},
+		TagID:     pgtype.UUID{Bytes: tagID, Valid: true},
+	})
+}
+
 // DeleteContactTagsByContactIds hard-deletes the contact_tag rows a test seeded,
 // keyed by the tracked contact ids.
 func (r *SyntheticSupportRepository) DeleteContactTagsByContactIds(ctx context.Context, contactIDs []uuid.UUID) (int64, error) {

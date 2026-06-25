@@ -1758,6 +1758,24 @@ func (q *Queries) TestInsertContactTagAtTime(ctx context.Context, arg TestInsert
 	return err
 }
 
+const TestInsertContactTagNullCreatedAt = `-- name: TestInsertContactTagNullCreatedAt :exec
+INSERT INTO contact_tag (contact_id, tag_id, created_at)
+VALUES ($1, $2, NULL)
+`
+
+type TestInsertContactTagNullCreatedAtParams struct {
+	ContactID pgtype.UUID `json:"contact_id"`
+	TagID     pgtype.UUID `json:"tag_id"`
+}
+
+// Tag-migration test only: seed a contact_tag row with a NULL created_at (the
+// column is nullable), so a test can assert the migration falls back to "now" for
+// the assertion knowledge time rather than stamping a bogus zero time.
+func (q *Queries) TestInsertContactTagNullCreatedAt(ctx context.Context, arg TestInsertContactTagNullCreatedAtParams) error {
+	_, err := q.db.Exec(ctx, TestInsertContactTagNullCreatedAt, arg.ContactID, arg.TagID)
+	return err
+}
+
 const TestInsertDerivedStorageMarkerNode = `-- name: TestInsertDerivedStorageMarkerNode :exec
 INSERT INTO node (id, type, canonical_label)
 VALUES ('00000000-0000-0000-0000-0000000000d5'::uuid, 'person', 'synthetic-reset-marker')

@@ -19,12 +19,13 @@ type Tag struct {
 }
 
 // ContactTagLink is one legacy contact_tag edge: which contact carries which
-// tag, and when the link was created (preserved as the assertion's knowledge
-// time during migration).
+// tag, and when the link was created. CreatedAt is nil when the legacy row's
+// created_at is NULL (the column is nullable: DEFAULT NOW() but no NOT NULL), so
+// the migration can fall back to "now" rather than stamping a bogus zero time.
 type ContactTagLink struct {
 	ContactID uuid.UUID
 	TagID     uuid.UUID
-	CreatedAt time.Time
+	CreatedAt *time.Time
 }
 
 // TagRepository reads the legacy tag / contact_tag tables for the tag→graph
@@ -70,11 +71,17 @@ func (r *TagRepository) ListContactTagsWithLiveContact(ctx context.Context) ([]C
 	}
 	links := make([]ContactTagLink, 0, len(dbLinks))
 	for _, l := range dbLinks {
-		links = append(links, ContactTagLink{
+		link := ContactTagLink{
 			ContactID: uuid.UUID(l.ContactID.Bytes),
 			TagID:     uuid.UUID(l.TagID.Bytes),
-			CreatedAt: l.CreatedAt.Time.UTC(),
-		})
+		}
+		// created_at is nullable; only carry it when present (an invalid
+		// pgtype.Timestamptz would otherwise read as Go zero time).
+		if l.CreatedAt.Valid {
+			t := l.CreatedAt.Time.UTC()
+			link.CreatedAt = &t
+		}
+		links = append(links, link)
 	}
 	return links, nil
 }
