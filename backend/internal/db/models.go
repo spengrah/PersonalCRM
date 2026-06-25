@@ -223,6 +223,14 @@ type ContactTask struct {
 	Lifecycle      string             `json:"lifecycle"`
 }
 
+type Embedding struct {
+	TargetKind   string             `json:"target_kind"`
+	TargetID     pgtype.UUID        `json:"target_id"`
+	ModelVersion string             `json:"model_version"`
+	Vector       pgvector.Vector    `json:"vector"`
+	ComputedAt   pgtype.Timestamptz `json:"computed_at"`
+}
+
 type Entity struct {
 	NodeID         pgtype.UUID `json:"node_id"`
 	Subtype        string      `json:"subtype"`
@@ -513,6 +521,15 @@ type PromptQuery struct {
 	Response    string             `json:"response"`
 	ContextUsed []byte             `json:"context_used"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type RelationshipSignal struct {
+	SubjectNodeID pgtype.UUID        `json:"subject_node_id"`
+	SignalKey     string             `json:"signal_key"`
+	Value         float64            `json:"value"`
+	ComputedAt    pgtype.Timestamptz `json:"computed_at"`
+	AsOf          pgtype.Timestamptz `json:"as_of"`
+	MethodVersion string             `json:"method_version"`
 }
 
 type RiverJob struct {
