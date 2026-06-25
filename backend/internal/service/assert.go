@@ -1588,6 +1588,301 @@ func (s *AssertService) EnsureLatentPerson(ctx context.Context, tx pgx.Tx, label
 	return id, nil
 }
 
+// --------------------------------------------------------------------------
+// Node merge: re-point a loser node's assertions onto the winner (D9).
+// --------------------------------------------------------------------------
+
+// repointedAssertion is one loser assertion after its node references are
+// rewritten loser→winner and its proposition_key recomputed. It carries the
+// canonical (key, subject, object) the row would have on the normal write path,
+// so the slot-lock + collision steps reuse the standard helpers.
+type repointedAssertion struct {
+	row          *repository.Assertion // the loser-side row (pointer into the slice)
+	predicate    *repository.Predicate
+	canonKey     string
+	canonSubject uuid.UUID
+	canonObject  *uuid.UUID
+	newKey       string
+	live         bool // status is proposed/accepted AND knowledge_to IS NULL
+	// selfLoop is true when the rewrite collapses an edge BETWEEN the loser and the
+	// winner into a self-edge (subject == object) — e.g. knows(loser, winner). A
+	// self-edge is meaningless, so a live one is closed (not re-pointed) and a
+	// terminal one is left as-is (dead history pointing at the tombstoned loser).
+	selfLoop bool
+}
+
+// MergeAssertionsTx re-points every assertion touching the loser node onto the
+// winner (D9). It is the graph half of a contact merge: the merge tx tombstones
+// the loser node (merged_into=winner, deleted_at=now) and calls this to migrate
+// the assertion store. It runs inside the caller's merge tx (never commits).
+//
+// Procedure (D9 step 1-3):
+//  1. For each loser assertion, rewrite subject/object loser→winner, re-apply
+//     symmetric/inverse canonicalization, and recompute proposition_key — in Go.
+//  2. Lock EVERY slot implied by a recomputed LIVE single-cardinality assertion
+//     (the slot may be the winner's, an unrelated node's — introduced_by(A,loser)
+//     re-points to a slot owned by A, not the winner — or both participants of a
+//     symmetric edge). Collect, sort by lock key (deadlock-safe), acquire each.
+//  3. Per row: a TERMINAL row (closed history) is plainly re-pointed (no live
+//     index to collide with, no event). A LIVE row either MERGES into a colliding
+//     winner-side proposition (provenance moved, loser closed superseded — avoids
+//     the idx_assertion_live_proposition 23505), or is re-pointed into the winner
+//     slot and then runs the D6-step-4 valid-time supersession against any
+//     different-value overlapping prior so exactly one stays current.
+func (s *AssertService) MergeAssertionsTx(ctx context.Context, tx pgx.Tx, loser, winner uuid.UUID) error {
+	rows, err := s.assertionRepo.ListAssertionsTouchingNodeTx(ctx, tx, loser)
+	if err != nil {
+		return fmt.Errorf("list loser assertions: %w", err)
+	}
+
+	// Pass 1: rewrite + recompute, and collect the slot locks the LIVE
+	// single-cardinality rows imply.
+	plans := make([]repointedAssertion, 0, len(rows))
+	lockKeys := make(map[int64]struct{})
+	for i := range rows {
+		plan, err := s.planRepoint(ctx, &rows[i], loser, winner)
+		if err != nil {
+			return err
+		}
+		plans = append(plans, plan)
+		// A self-loop row is closed, not re-pointed into a slot, so it implies no lock.
+		if plan.live && !plan.selfLoop && plan.predicate.Cardinality == repository.PredicateCardinalitySingle {
+			for _, k := range slotLockKeysFor(plan.predicate, plan.canonKey, plan.canonSubject, plan.canonObject) {
+				lockKeys[k] = struct{}{}
+			}
+		}
+	}
+
+	// Acquire every implied slot lock in sorted order (deadlock-safe across
+	// concurrent asserts touching any affected slot).
+	if err := s.acquireSortedSlotLocks(ctx, tx, lockKeys); err != nil {
+		return err
+	}
+
+	// Pass 2: apply each row. Process in list order (oldest-first) so a re-pointed
+	// row a later row would collide with is already live at its new key.
+	now := accelerated.GetCurrentTime().UTC()
+	for i := range plans {
+		if err := s.applyRepoint(ctx, tx, &plans[i], now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// planRepoint rewrites one loser assertion's node references onto the winner,
+// re-canonicalizes, and recomputes its proposition_key — without writing.
+func (s *AssertService) planRepoint(ctx context.Context, row *repository.Assertion, loser, winner uuid.UUID) (repointedAssertion, error) {
+	predicate, err := s.predicateRepo.GetPredicate(ctx, row.PredicateKey)
+	if err != nil {
+		return repointedAssertion{}, fmt.Errorf("load predicate %q for merge: %w", row.PredicateKey, err)
+	}
+
+	// Rewrite loser→winner in whichever position(s) it appears (subject and object
+	// cannot both be the loser — an edge connects two distinct nodes).
+	newSubject := row.SubjectNodeID
+	if newSubject == loser {
+		newSubject = winner
+	}
+	var newObject *uuid.UUID
+	if row.ObjectNodeID != nil {
+		o := *row.ObjectNodeID
+		if o == loser {
+			o = winner
+		}
+		newObject = &o
+	}
+
+	// An edge BETWEEN loser and winner collapses to a self-edge after the rewrite
+	// (both ends become the winner) — meaningless, so it is closed, not re-pointed.
+	selfLoop := newObject != nil && newSubject == *newObject
+
+	canonKey, canonSubject, canonObject := canonicalEdge(predicate, newSubject, newObject)
+	newKey := computePropositionKey(predicate, canonKey, canonSubject, canonObject, assertionAsRequest(row))
+
+	return repointedAssertion{
+		row:          row,
+		predicate:    predicate,
+		canonKey:     canonKey,
+		canonSubject: canonSubject,
+		canonObject:  canonObject,
+		newKey:       newKey,
+		live:         isLiveAssertion(row),
+		selfLoop:     selfLoop,
+	}, nil
+}
+
+// applyRepoint writes one planned re-point. A terminal row is plainly re-pointed
+// (its proposition_key is recomputed for consistency but never collides — the
+// live-proposition index excludes terminal rows). A live row merges into a
+// colliding winner proposition or re-points + supersedes (D9 step 3).
+func (s *AssertService) applyRepoint(ctx context.Context, tx pgx.Tx, plan *repointedAssertion, now time.Time) error {
+	// An edge between loser and winner collapses to a self-edge. A live one is
+	// closed superseded (a person does not "know"/"partner" themselves); a terminal
+	// one is left untouched as dead history (it still references the tombstoned
+	// loser, resolvable via the merge alias).
+	if plan.selfLoop {
+		if !plan.live {
+			return nil
+		}
+		return s.closeSelfLoop(ctx, tx, plan.row, now)
+	}
+
+	if !plan.live {
+		return s.repointRow(ctx, tx, plan)
+	}
+
+	// Live row. Check for a DIFFERENT live winner-side proposition already holding
+	// the recomputed key (the loser row still carries its OLD loser-based key, so a
+	// hit here is genuinely another row).
+	collider, err := s.assertionRepo.FindLivePropositionTx(ctx, tx, plan.newKey)
+	if err != nil && !errors.Is(err, db.ErrNotFound) {
+		return fmt.Errorf("merge collision check: %w", err)
+	}
+	if err == nil && collider.ID != plan.row.ID {
+		// Collision: same proposition already live on the winner. Move the loser's
+		// provenance onto it and close the loser superseded (no UPDATE into the
+		// unique index → no 23505).
+		return s.mergeSameValue(ctx, tx, plan.row, collider)
+	}
+
+	// No collision: re-point the loser row into the winner slot.
+	if err := s.repointRow(ctx, tx, plan); err != nil {
+		return err
+	}
+
+	// A re-pointed ACCEPTED single-cardinality row now sits in the winner's slot and
+	// may overlap a DIFFERENT-value accepted prior → run the valid-time supersession
+	// so exactly one stays current. The re-pointed loser is treated as the incoming
+	// successor (D9 step 3 third bullet). Proposed / multi rows coexist (no slot).
+	if plan.row.Status != repository.AssertionStatusAccepted ||
+		plan.predicate.Cardinality != repository.PredicateCardinalitySingle {
+		return nil
+	}
+	effectiveFrom := now
+	if plan.row.ValidFrom != nil {
+		effectiveFrom = plan.row.ValidFrom.UTC()
+	}
+	// A past-bounded re-pointed row is historical → it coexists, never supersedes.
+	if plan.row.ValidTo != nil && !plan.row.ValidTo.UTC().After(now) {
+		return nil
+	}
+	conflicts, err := s.findOverlappingAccepted(ctx, tx, plan.predicate, plan.canonKey, plan.canonSubject, plan.canonObject, effectiveFrom, plan.row.ValidTo)
+	if err != nil {
+		return fmt.Errorf("merge slot overlap probe: %w", err)
+	}
+	// closeConflicts skips the successor row itself (by id) and closes the
+	// different-value priors; a same-value prior cannot appear here because it would
+	// have collided on the live-proposition key above and merged instead.
+	return s.closeConflicts(ctx, tx, conflicts, plan.row, effectiveFrom, now)
+}
+
+// repointRow applies the node-reference UPDATE (subject and/or object) for a
+// planned re-point, stamping the recomputed proposition_key. The merge service
+// reaches RepointAssertionSubject/Object ONLY here.
+func (s *AssertService) repointRow(ctx context.Context, tx pgx.Tx, plan *repointedAssertion) error {
+	row := plan.row
+	if row.SubjectNodeID != plan.canonSubject {
+		if err := s.assertionRepo.RepointAssertionSubjectTx(ctx, tx, row.ID, plan.canonSubject, plan.newKey); err != nil {
+			return fmt.Errorf("repoint assertion subject: %w", err)
+		}
+		row.SubjectNodeID = plan.canonSubject
+		row.PropositionKey = plan.newKey
+	}
+	if plan.canonObject != nil && (row.ObjectNodeID == nil || *row.ObjectNodeID != *plan.canonObject) {
+		if err := s.assertionRepo.RepointAssertionObjectTx(ctx, tx, row.ID, *plan.canonObject, plan.newKey); err != nil {
+			return fmt.Errorf("repoint assertion object: %w", err)
+		}
+		o := *plan.canonObject
+		row.ObjectNodeID = &o
+		row.PropositionKey = plan.newKey
+	}
+	// Inverse/symmetric canonicalization can swap subject↔object without changing the
+	// stored id set, leaving the key recomputed but neither UPDATE above firing (e.g.
+	// a symmetric edge whose pair order is unchanged). Persist the recomputed key so
+	// it always reflects the canonical orientation.
+	if row.PropositionKey != plan.newKey {
+		if err := s.assertionRepo.RepointAssertionSubjectTx(ctx, tx, row.ID, row.SubjectNodeID, plan.newKey); err != nil {
+			return fmt.Errorf("repoint assertion key: %w", err)
+		}
+		row.PropositionKey = plan.newKey
+	}
+	return nil
+}
+
+// closeSelfLoop terminalizes a live edge that collapsed to a self-edge after the
+// merge rewrite (it can never sanely be live). It closes the row superseded with
+// no successor (closure_reason='ended', like a slot closure) and emits the event,
+// leaving the row's node references at the loser (dead history). knowledge_to is
+// clamped >= knowledge_from for the assertion_knowledge_range CHECK.
+func (s *AssertService) closeSelfLoop(ctx context.Context, tx pgx.Tx, row *repository.Assertion, now time.Time) error {
+	knowledgeTo := now
+	if row.KnowledgeFrom.After(knowledgeTo) {
+		knowledgeTo = row.KnowledgeFrom.UTC()
+	}
+	closure := repository.ClosureReasonEnded
+	if err := s.assertionRepo.CloseAssertionTx(ctx, tx, repository.CloseAssertionParams{
+		ID:            row.ID,
+		ValidTo:       &now,
+		Status:        repository.AssertionStatusSuperseded,
+		ClosureReason: &closure,
+		SupersededBy:  nil,
+		KnowledgeTo:   &knowledgeTo,
+	}); err != nil {
+		return fmt.Errorf("close merge self-loop: %w", err)
+	}
+	return s.emitAssertionEvent(ctx, tx, events.KindAssertionSuperseded, row, now)
+}
+
+// slotLockKeysFor returns the advisory slot-lock key(s) a single-cardinality
+// recomputed assertion implies: asymmetric → one on (subject, canonical
+// predicate); symmetric edge → one per participant. Mirrors acquireSlotLocks's
+// key derivation (without taking the lock) so the merge can collect every
+// implied slot up front.
+func slotLockKeysFor(predicate *repository.Predicate, canonKey string, canonSubject uuid.UUID, canonObject *uuid.UUID) []int64 {
+	if predicate.Symmetric && canonObject != nil {
+		return []int64{slotLockKey(canonKey, canonSubject), slotLockKey(canonKey, *canonObject)}
+	}
+	return []int64{slotLockKey(canonKey, canonSubject)}
+}
+
+// acquireSortedSlotLocks takes every collected slot lock in ascending key order
+// (deadlock-safe).
+func (s *AssertService) acquireSortedSlotLocks(ctx context.Context, tx pgx.Tx, keys map[int64]struct{}) error {
+	ordered := make([]int64, 0, len(keys))
+	for k := range keys {
+		ordered = append(ordered, k)
+	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
+	for _, k := range ordered {
+		if err := s.assertionRepo.AcquirePropositionSlotLockTx(ctx, tx, k); err != nil {
+			return fmt.Errorf("acquire merge slot lock: %w", err)
+		}
+	}
+	return nil
+}
+
+// isLiveAssertion reports whether a stored row is live (proposed/accepted and
+// knowledge-open) — i.e. it participates in idx_assertion_live_proposition.
+func isLiveAssertion(a *repository.Assertion) bool {
+	return (a.Status == repository.AssertionStatusProposed || a.Status == repository.AssertionStatusAccepted) &&
+		a.KnowledgeTo == nil
+}
+
+// assertionAsRequest projects a stored assertion's payload + valid_from into the
+// minimal AssertRequest computePropositionKey reads (the fact value fields for a
+// fact, valid_from for the bucket). The object is keyed via canonObject, so it is
+// not carried here.
+func assertionAsRequest(a *repository.Assertion) *AssertRequest {
+	return &AssertRequest{
+		ValueText: a.ValueText,
+		ValueNum:  a.ValueNum,
+		ValueDate: a.ValueDate,
+		ValueBool: a.ValueBool,
+		ValidFrom: a.ValidFrom,
+	}
+}
+
 // EnsurePlaceTx find-or-creates the place entity node for a location label and
 // returns its node id. The entity is resolved by (subtype='place',
 // normalized_name=lower(trim(label))) so repeated asserts of the same place

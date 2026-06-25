@@ -226,6 +226,22 @@ func (w *knowledgeWriter) assertHowMet(ctx context.Context, tx pgx.Tx, contactID
 	return nil
 }
 
+// mergeNodes runs the graph half of a contact merge: tombstone the loser node
+// (merged_into=winner, deleted_at=now) and re-point every assertion touching the
+// loser onto the winner (D9). The caller (ContactService.MergeContacts) already
+// holds the merge tx; both the tombstone and the re-point commit/roll back with
+// it. Run AFTER the contact-level transfers so the surviving (winner) node is
+// the live one and the loser's knowledge migrates onto it.
+func (w *knowledgeWriter) mergeNodes(ctx context.Context, tx pgx.Tx, loser, winner uuid.UUID) error {
+	if err := w.assertSvc.nodeRepo.SetNodeMergedIntoTx(ctx, tx, loser, winner); err != nil {
+		return fmt.Errorf("tombstone loser node: %w", err)
+	}
+	if err := w.assertSvc.MergeAssertionsTx(ctx, tx, loser, winner); err != nil {
+		return fmt.Errorf("merge loser assertions onto winner: %w", err)
+	}
+	return nil
+}
+
 // closeSlot closes the current-accepted assertion for a single-cardinality slot
 // (the user cleared the field). AssertClosureTx is a no-op when there is no
 // current value, so a redundant clear is safe.
