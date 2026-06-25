@@ -1425,8 +1425,9 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 	// then the cache columns refresh inline. updateReq carries the chosen values;
 	// targetContact carries the pre-merge values, so the diff drives
 	// supersession (a source-preferred field) vs corroboration (target kept).
-	// Re-pointing the source contact's OWN assertions to the target is PR10's
-	// MergeAssertions concern, not this column cutover.
+	// Re-pointing the SOURCE contact's own assertions onto the target node is a
+	// separate graph-merge concern (the node-merge procedure), not this column
+	// cutover — so the source's knowledge edges are not touched here.
 	if s.knowledge == nil {
 		return nil, errors.New("merge contacts: knowledge writer not wired (call SetKnowledgeWriter)")
 	}

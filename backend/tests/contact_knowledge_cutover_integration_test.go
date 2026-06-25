@@ -31,6 +31,7 @@ import (
 type knowledgeCutoverHarness struct {
 	database      *db.Database
 	contactSvc    *service.ContactService
+	enrichSvc     *service.EnrichmentService
 	migrationSvc  *service.ContactKnowledgeMigrationService
 	cacheUpdater  *consumer.KnowledgeCacheUpdater
 	contactRepo   *repository.ContactRepository
@@ -82,11 +83,17 @@ func newKnowledgeCutoverHarness(t *testing.T, ctx context.Context) *knowledgeCut
 	contactSvc := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, taskRepo, nil, nil)
 	contactSvc.SetKnowledgeWriter(assertSvc, cacheUpdater)
 	wireCadenceUpdaterForTest(t, database, contactSvc)
+
+	enrichmentRepo := repository.NewEnrichmentRepository(database.Queries)
+	enrichSvc := service.NewEnrichmentService(database, contactRepo, methodRepo, enrichmentRepo, nil, nil)
+	enrichSvc.SetKnowledgeWriter(assertSvc, cacheUpdater)
+
 	migrationSvc := service.NewContactKnowledgeMigrationService(database.Pool, contactRepo, assertSvc)
 
 	h := &knowledgeCutoverHarness{
 		database:      database,
 		contactSvc:    contactSvc,
+		enrichSvc:     enrichSvc,
 		migrationSvc:  migrationSvc,
 		cacheUpdater:  cacheUpdater,
 		contactRepo:   contactRepo,
@@ -401,6 +408,106 @@ func TestContactKnowledgeCutover_SortStillWorks(t *testing.T) {
 	}
 	require.Len(t, ordered, len(seeds))
 	assert.Equal(t, []string{"Aville " + ns, "Bville " + ns, "Cville " + ns}, ordered, "location sort order intact")
+}
+
+func TestContactKnowledgeCutover_ListAndSearchReadCache(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	h := newKnowledgeCutoverHarness(t, ctx)
+
+	ns := uuid.New().String()[:8]
+	loc := "Denver " + ns
+	bday := time.Date(1988, 11, 9, 0, 0, 0, 0, time.UTC)
+	h.trackPlace(loc)
+
+	c, _, err := h.contactSvc.CreateContact(ctx, repository.CreateContactRequest{
+		FullName: "Readback Person " + ns,
+		Location: &loc,
+		Birthday: &bday,
+	}, nil)
+	require.NoError(t, err)
+	h.track(c.ID)
+
+	// Birthday-sorted list still returns the cache value (the sort query reads the
+	// unchanged cache column).
+	byBirthday, err := h.contactRepo.ListContacts(ctx, repository.ListContactsParams{
+		Limit: 1000, Offset: 0, Sort: "birthday", Order: "asc",
+	})
+	require.NoError(t, err)
+	foundInList := false
+	for _, lc := range byBirthday {
+		if lc.ID == c.ID {
+			foundInList = true
+			require.NotNil(t, lc.Birthday)
+			assert.Equal(t, bday, *lc.Birthday, "birthday cache returned in list")
+			require.NotNil(t, lc.Location)
+			assert.Equal(t, loc, *lc.Location, "location cache returned in list")
+		}
+	}
+	assert.True(t, foundInList, "contact present in birthday-sorted list")
+
+	// Search by name still returns the contact with its cache columns populated.
+	results, err := h.contactRepo.SearchContacts(ctx, repository.SearchContactsParams{
+		Query: "Readback Person " + ns, Limit: 1000, Offset: 0,
+	})
+	require.NoError(t, err)
+	foundInSearch := false
+	for _, sc := range results {
+		if sc.ID == c.ID {
+			foundInSearch = true
+			require.NotNil(t, sc.Location)
+			assert.Equal(t, loc, *sc.Location, "location cache returned in search")
+		}
+	}
+	assert.True(t, foundInSearch, "contact found by name search with cache populated")
+}
+
+func TestContactKnowledgeCutover_EnrichmentEmitsAssertionAndCache(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	h := newKnowledgeCutoverHarness(t, ctx)
+
+	ns := uuid.New().String()[:8]
+	loc := "Austin " + ns
+	bday := time.Date(1979, 2, 17, 0, 0, 0, 0, time.UTC)
+	h.trackPlace(loc)
+
+	// A contact with NO location/birthday (so enrichment fills both).
+	contact, _, err := h.contactSvc.CreateContact(ctx, repository.CreateContactRequest{
+		FullName: "Enrich Person " + ns,
+	}, nil)
+	require.NoError(t, err)
+	h.track(contact.ID)
+
+	external := &repository.ExternalContact{
+		Birthday:  &bday,
+		Addresses: []repository.AddressEntry{{Formatted: loc}},
+	}
+	_, err = h.enrichSvc.EnrichContactFromExternal(ctx, contact.ID, external)
+	require.NoError(t, err)
+
+	// Cache columns now reflect the inferred values (filled inline).
+	refetched, err := h.contactRepo.GetContact(ctx, contact.ID)
+	require.NoError(t, err)
+	require.NotNil(t, refetched.Location)
+	assert.Equal(t, loc, *refetched.Location)
+	require.NotNil(t, refetched.Birthday)
+	assert.Equal(t, bday, *refetched.Birthday)
+
+	// The lives_in assertion carries AGENT provenance (inferred, not a user edit).
+	now := accelerated.GetCurrentTime().UTC()
+	livesIn, err := h.assertionRepo.GetCurrentAccepted(ctx, contact.ID, repository.PredicateLivesIn, now)
+	require.NoError(t, err)
+	prov, err := h.assertionRepo.ListProvenance(ctx, livesIn.ID)
+	require.NoError(t, err)
+	require.NotEmpty(t, prov)
+	foundAgent := false
+	for _, p := range prov {
+		if p.ProducerKind == repository.ProducerKindAgent && p.SourceKind == repository.SourceKindAgentSession {
+			foundAgent = true
+		}
+	}
+	assert.True(t, foundAgent, "enrichment-inferred assertion carries agent provenance")
 }
 
 // assertHasUserProvenance asserts the assertion has at least one user-producer

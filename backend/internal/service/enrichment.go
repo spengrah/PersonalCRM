@@ -179,6 +179,17 @@ func (s *EnrichmentService) EnrichContactFromExternal(
 			return repository.NewNodeRepository(txQueries).UpdateNodeCanonicalLabelTx(ctx, tx, crmContactID, updateReq.FullName)
 		})
 		if txErr != nil {
+			// When the enrichment inferred a location/birthday, a failed tx means
+			// that value was dropped — the cache columns are no longer written by
+			// the profile UPDATE, so the assertion store is the ONLY home for it.
+			// Surface that as an error instead of logging-and-continuing (which
+			// would report enrichment success while silently losing the field).
+			// A photo/cadence-only enrichment (no inferred knowledge) keeps the
+			// historical best-effort warn so an unrelated profile-write hiccup
+			// doesn't fail the whole link/import.
+			if inferred.Location != nil || inferred.Birthday != nil {
+				return uuid.Nil, fmt.Errorf("apply inferred contact knowledge: %w", txErr)
+			}
 			logger.Warn().Err(txErr).Msg("failed to update contact with enrichments")
 		}
 	}
@@ -380,6 +391,14 @@ func (s *EnrichmentService) EnrichContactFromExternalWithSelections(
 			return nil
 		})
 		if txErr != nil {
+			// A failed tx drops an inferred location/birthday (the cache columns
+			// are no longer written by the profile UPDATE — the assertion store is
+			// the only home). Surface it instead of reporting false success. A
+			// photo/cadence/name-only enrichment keeps the historical best-effort
+			// warn so an unrelated profile-write hiccup doesn't fail link/import.
+			if inferred.Location != nil || inferred.Birthday != nil {
+				return uuid.Nil, fmt.Errorf("apply inferred contact knowledge: %w", txErr)
+			}
 			logger.Warn().Err(txErr).Msg("failed to update contact with enrichments")
 		}
 	}

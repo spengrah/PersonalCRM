@@ -51,6 +51,24 @@ type knowledgeFieldValues struct {
 	HowMet   *string
 }
 
+// normalized collapses a whitespace-only Location/HowMet to nil so an
+// empty-string field (the HTTP layer forwards request strings verbatim) reads as
+// "no value" — a create skips it and an update treats it as a CLEAR, matching the
+// pre-cutover leniency where a blank field was unset rather than rejected.
+func (v knowledgeFieldValues) normalized() knowledgeFieldValues {
+	v.Location = nonBlank(v.Location)
+	v.HowMet = nonBlank(v.HowMet)
+	return v
+}
+
+// nonBlank returns nil when s is nil or whitespace-only, else s unchanged.
+func nonBlank(s *string) *string {
+	if s == nil || strings.TrimSpace(*s) == "" {
+		return nil
+	}
+	return s
+}
+
 // knowledgeWriter emits knowledge assertions for the cutover predicates and
 // refreshes the cache inline. It wraps AssertService (the validated write path)
 // + the cache refresher (sole-writer column update). ContactService and
@@ -71,6 +89,7 @@ func newKnowledgeWriter(assertSvc *AssertService, cache knowledgeCacheRefresher)
 // freshly-created contact, then refreshes that contact's cache columns inline.
 // A nil value is skipped (no closure needed — a new contact has no prior slot).
 func (w *knowledgeWriter) assertCreate(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, values knowledgeFieldValues, prov knowledgeFieldProvenance) error {
+	values = values.normalized()
 	if values.Location != nil {
 		if err := w.assertLocation(ctx, tx, contactID, *values.Location, prov); err != nil {
 			return err
@@ -96,6 +115,8 @@ func (w *knowledgeWriter) assertCreate(ctx context.Context, tx pgx.Tx, contactID
 // inline. `existing` is the contact's pre-update state (cache columns reflect
 // the current-accepted assertions).
 func (w *knowledgeWriter) applyUpdate(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, next, existing knowledgeFieldValues, prov knowledgeFieldProvenance) error {
+	next = next.normalized()
+	existing = existing.normalized()
 	if err := w.reconcileLocation(ctx, tx, contactID, next.Location, existing.Location, prov); err != nil {
 		return err
 	}

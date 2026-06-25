@@ -1598,11 +1598,10 @@ func (s *AssertService) EnsureLatentPerson(ctx context.Context, tx pgx.Tx, label
 //
 // Concurrency note: two concurrent first-asserts of the same brand-new place can
 // race the find→create window and hit the entity (subtype, normalized_name)
-// unique on the second insert (23505). That is acceptable here — the loser's
-// outer tx fails loudly and retries (the contact create/update path is not a
-// high-contention same-place hot loop), and a savepoint-recovery would add
-// complexity disproportionate to single-user scale. The backfill command is
-// single-threaded, so it never races itself.
+// unique on the second insert (23505). The node+entity insert runs in a nested
+// savepoint, so the loser rolls back JUST the savepoint (the outer tx stays
+// usable), re-finds the winner's place node, and returns it — no caller-visible
+// error. The backfill command is single-threaded, so it never races itself.
 func (s *AssertService) EnsurePlaceTx(ctx context.Context, tx pgx.Tx, label string) (uuid.UUID, error) {
 	normalized := strings.ToLower(strings.TrimSpace(label))
 	if normalized == "" {
