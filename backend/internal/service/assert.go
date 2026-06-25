@@ -1752,48 +1752,52 @@ func (s *AssertService) applyRepoint(ctx context.Context, tx pgx.Tx, plan *repoi
 		return fmt.Errorf("merge collision check: %w", err)
 	}
 	if err == nil && collider.ID != plan.row.ID {
-		// Collision: the same proposition is already live on the winner. Merge the two
-		// into one survivor (move provenance, close the other superseded — no UPDATE
-		// into the unique index → no 23505). Pick the ACCEPTED row as survivor so the
-		// merge never demotes a current accepted fact to a proposed one: if only the
-		// loser is accepted, close the proposed collider into the loser and re-point
-		// the loser (now safe — the collider is no longer live at that key); otherwise
-		// the collider survives and the loser is folded in.
-		if plan.row.Status == repository.AssertionStatusAccepted && collider.Status == repository.AssertionStatusProposed {
-			if err := s.mergeSameValue(ctx, tx, collider, plan.row); err != nil {
-				return err
-			}
-			// The loser (survivor) still points at the loser node; re-point it onto the
-			// winner. The colliding key is now free (collider closed), so no 23505.
-			if err := s.repointRow(ctx, tx, plan); err != nil {
-				return err
-			}
-			return s.emitMergeMoveEvent(ctx, tx, plan.row, events.KindAssertionAccepted, winner, now)
+		// Collision: the same proposition is already live on the winner. Pick the
+		// ACCEPTED row as survivor so the merge never demotes a current accepted fact
+		// to a proposed one. If ONLY the loser is accepted, close the proposed collider
+		// into the loser, re-point the loser (the colliding key is now free → no
+		// 23505), emit the move, and FALL THROUGH to the single-cardinality conflict
+		// resolution below (the accepted survivor still has to supersede any OTHER
+		// accepted value on the winner slot — e.g. winner already had accepted Y).
+		// Otherwise the collider survives and the loser is folded in (done).
+		loserWins := plan.row.Status == repository.AssertionStatusAccepted &&
+			collider.Status == repository.AssertionStatusProposed
+		if !loserWins {
+			return s.mergeSameValue(ctx, tx, plan.row, collider)
 		}
-		return s.mergeSameValue(ctx, tx, plan.row, collider)
-	}
-
-	// No collision (as of the check above): re-point the loser row into the winner
-	// slot. The check→UPDATE window is covered by a nested savepoint — if a writer
-	// raced an identical live proposition onto the winner between the check and the
-	// UPDATE, the repoint 23505s on idx_assertion_live_proposition; we recover by
-	// re-finding the now-present collider and merging the loser into it (rather than
-	// letting the unique violation abort the whole merge tx). A single-cardinality
-	// repoint additionally holds the slot advisory lock, so only the multi-card path
-	// can actually reach the race; the savepoint covers both uniformly.
-	recovered, err := s.repointWithRecover(ctx, tx, plan)
-	if err != nil {
-		return err
-	}
-	if recovered {
-		return nil
-	}
-	moveKind := events.KindAssertionProposed
-	if plan.row.Status == repository.AssertionStatusAccepted {
-		moveKind = events.KindAssertionAccepted
-	}
-	if err := s.emitMergeMoveEvent(ctx, tx, plan.row, moveKind, winner, now); err != nil {
-		return err
+		if err := s.mergeSameValue(ctx, tx, collider, plan.row); err != nil {
+			return err
+		}
+		if err := s.repointRow(ctx, tx, plan); err != nil {
+			return err
+		}
+		if err := s.emitMergeMoveEvent(ctx, tx, plan.row, events.KindAssertionAccepted, winner, now); err != nil {
+			return err
+		}
+		// Fall through to the conflict resolution (skip the no-collision repoint below).
+	} else {
+		// No collision (as of the check above): re-point the loser row into the winner
+		// slot. The check→UPDATE window is covered by a nested savepoint — if a writer
+		// raced an identical live proposition onto the winner between the check and the
+		// UPDATE, the repoint 23505s on idx_assertion_live_proposition; we recover by
+		// re-finding the now-present collider and merging the loser into it (rather than
+		// letting the unique violation abort the whole merge tx). A single-cardinality
+		// repoint additionally holds the slot advisory lock, so only the multi-card path
+		// can actually reach the race; the savepoint covers both uniformly.
+		recovered, rerr := s.repointWithRecover(ctx, tx, plan)
+		if rerr != nil {
+			return rerr
+		}
+		if recovered {
+			return nil
+		}
+		moveKind := events.KindAssertionProposed
+		if plan.row.Status == repository.AssertionStatusAccepted {
+			moveKind = events.KindAssertionAccepted
+		}
+		if err := s.emitMergeMoveEvent(ctx, tx, plan.row, moveKind, winner, now); err != nil {
+			return err
+		}
 	}
 
 	// A re-pointed ACCEPTED single-cardinality row now sits in the winner's slot and

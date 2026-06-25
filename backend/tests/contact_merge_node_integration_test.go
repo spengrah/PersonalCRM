@@ -664,15 +664,23 @@ func TestMergeAssertions_Integration(t *testing.T) {
 		loser := h.seedPerson(t, ctx, gen.Prefix(), "loser")
 		winner := h.seedPerson(t, ctx, gen.Prefix(), "winner")
 
-		// Winner: a PROPOSED home_address("X") (ForceConfirm routes it to proposed).
-		winReq := textFactReq(winner, "home_address", gen.Prefix()+"X", gen.Prefix(), "w")
+		// Winner: an ACCEPTED home_address("Y") AND a PROPOSED home_address("X")
+		// (ForceConfirm routes X to proposed; proposed does not supersede accepted, so
+		// both coexist on the single-card slot). The merge must end with exactly ONE
+		// current accepted value, NOT both X and Y accepted.
+		winAcceptedY, err := h.svc.Assert(ctx, textFactReq(winner, "home_address", gen.Prefix()+"Y", gen.Prefix(), "wy"))
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, winAcceptedY.ID)
+		require.Equal(t, repository.AssertionStatusAccepted, winAcceptedY.Status)
+		winReq := textFactReq(winner, "home_address", gen.Prefix()+"X", gen.Prefix(), "wx")
 		winReq.ForceConfirm = true
 		winProposed, err := h.svc.Assert(ctx, winReq)
 		require.NoError(t, err)
 		h.cleanupAssertionEvents(t, ctx, winProposed.ID)
 		require.Equal(t, repository.AssertionStatusProposed, winProposed.Status)
 
-		// Loser: an ACCEPTED home_address("X") (same value + year bucket → same key).
+		// Loser: an ACCEPTED home_address("X") (same value + year bucket as winner's
+		// proposed X → same proposition key).
 		loserAccepted, err := h.svc.Assert(ctx, textFactReq(loser, "home_address", gen.Prefix()+"X", gen.Prefix(), "l"))
 		require.NoError(t, err)
 		h.cleanupAssertionEvents(t, ctx, loserAccepted.ID)
@@ -680,18 +688,22 @@ func TestMergeAssertions_Integration(t *testing.T) {
 
 		mergeAssertionsInTx(t, ctx, h, loser, winner)
 
-		// The accepted loser survives (re-pointed onto the winner); the proposed
-		// collider is closed. The winner's current home_address is accepted, not lost.
+		// The accepted loser X survives (re-pointed onto the winner); the proposed X
+		// collider is closed; AND the winner's other accepted value Y is superseded —
+		// so exactly ONE current accepted value remains.
 		survivor, err := h.assertionRepo.GetAssertion(ctx, loserAccepted.ID)
 		require.NoError(t, err)
 		assert.Equal(t, repository.AssertionStatusAccepted, survivor.Status, "accepted loser stays accepted")
 		assert.Equal(t, winner, survivor.SubjectNodeID, "accepted survivor re-pointed onto the winner")
-		closed, err := h.assertionRepo.GetAssertion(ctx, winProposed.ID)
+		collider, err := h.assertionRepo.GetAssertion(ctx, winProposed.ID)
 		require.NoError(t, err)
-		assert.Equal(t, repository.AssertionStatusSuperseded, closed.Status, "proposed collider closed")
+		assert.Equal(t, repository.AssertionStatusSuperseded, collider.Status, "proposed collider closed")
+		priorY, err := h.assertionRepo.GetAssertion(ctx, winAcceptedY.ID)
+		require.NoError(t, err)
+		assert.Equal(t, repository.AssertionStatusSuperseded, priorY.Status, "the winner's other accepted Y is superseded")
 		cur, err := h.assertionRepo.GetCurrentAccepted(ctx, winner, "home_address", nowMicro())
 		require.NoError(t, err)
-		assert.Equal(t, loserAccepted.ID, cur.ID, "winner's current home_address is the accepted survivor")
+		assert.Equal(t, loserAccepted.ID, cur.ID, "exactly one current accepted value: the X survivor")
 	})
 
 	// Case 13: a PAST-bounded self-loop (knows(loser,winner) [2018,2019)) collapses
