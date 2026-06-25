@@ -895,6 +895,64 @@ func (q *Queries) SoftDeleteCommsMessagesByExternalID(ctx context.Context, arg S
 	return result.RowsAffected(), nil
 }
 
+const TestInsertCommsMessageLinked = `-- name: TestInsertCommsMessageLinked :one
+INSERT INTO comms_message (
+    source, external_id, thread_id, direction, sent_at, matched_contact_id, interaction_id
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7
+)
+RETURNING id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at
+`
+
+type TestInsertCommsMessageLinkedParams struct {
+	Source           string             `json:"source"`
+	ExternalID       string             `json:"external_id"`
+	ThreadID         pgtype.Text        `json:"thread_id"`
+	Direction        string             `json:"direction"`
+	SentAt           pgtype.Timestamptz `json:"sent_at"`
+	MatchedContactID pgtype.UUID        `json:"matched_contact_id"`
+	InteractionID    pgtype.UUID        `json:"interaction_id"`
+}
+
+// Test-only: inserts a comms_message already linked to an interaction. Used by
+// the venue backfill test to seed an email/gchat thread container row.
+// Production code MUST NOT call this.
+func (q *Queries) TestInsertCommsMessageLinked(ctx context.Context, arg TestInsertCommsMessageLinkedParams) (*CommsMessage, error) {
+	row := q.db.QueryRow(ctx, TestInsertCommsMessageLinked,
+		arg.Source,
+		arg.ExternalID,
+		arg.ThreadID,
+		arg.Direction,
+		arg.SentAt,
+		arg.MatchedContactID,
+		arg.InteractionID,
+	)
+	var i CommsMessage
+	err := row.Scan(
+		&i.ID,
+		&i.Source,
+		&i.ExternalID,
+		&i.ThreadID,
+		&i.Subject,
+		&i.Body,
+		&i.Snippet,
+		&i.PeerHandle,
+		&i.PeerNormalized,
+		&i.Direction,
+		&i.SentAt,
+		&i.AccountID,
+		&i.SourceMetadata,
+		&i.MatchedContactID,
+		&i.InteractionID,
+		&i.ClaimedAt,
+		&i.ClaimedSessionRef,
+		&i.ProcessedAt,
+		&i.DeletedAt,
+		&i.CreatedAt,
+	)
+	return &i, err
+}
+
 const UpsertCommsMessage = `-- name: UpsertCommsMessage :one
 INSERT INTO comms_message (
     source, external_id, thread_id, subject, body, snippet,

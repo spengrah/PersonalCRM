@@ -104,6 +104,17 @@ SELECT * FROM comms_message
 WHERE id = @id
   AND deleted_at IS NULL;
 
+-- name: TestInsertCommsMessageLinked :one
+-- Test-only: inserts a comms_message already linked to an interaction. Used by
+-- the venue backfill test to seed an email/gchat thread container row.
+-- Production code MUST NOT call this.
+INSERT INTO comms_message (
+    source, external_id, thread_id, direction, sent_at, matched_contact_id, interaction_id
+) VALUES (
+    @source, @external_id, @thread_id, @direction, @sent_at, @matched_contact_id, @interaction_id
+)
+RETURNING *;
+
 -- name: GetCommsMessageContainer :one
 -- Returns the venue-container key (source + thread_id) for a staging row by its
 -- UUID. Used by the live interaction recorder to resolve the gchat venue (email

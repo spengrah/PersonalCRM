@@ -1887,6 +1887,10 @@ type Querier interface {
 	// TEST ONLY. See TestInsertExternalContactRawEmails. Same rationale for
 	// calendar_event.attendees.
 	TestInsertCalendarEventRawAttendees(ctx context.Context, arg TestInsertCalendarEventRawAttendeesParams) (*CalendarEvent, error)
+	// Test-only: inserts a comms_message already linked to an interaction. Used by
+	// the venue backfill test to seed an email/gchat thread container row.
+	// Production code MUST NOT call this.
+	TestInsertCommsMessageLinked(ctx context.Context, arg TestInsertCommsMessageLinkedParams) (*CommsMessage, error)
 	// TEST ONLY. Fixture queries used by jsonb_gin_index_test.go to construct
 	// edge-case JSONB shapes (non-array, NULL, missing keys) that production
 	// code paths cannot create, plus permanent regression-guard queries that
@@ -1905,6 +1909,10 @@ type Querier interface {
 	// backfill migration test to stand up pre-existing (venue-less) interactions
 	// that the 069 backfill then populates. Production code MUST NOT call this.
 	TestInsertInteraction(ctx context.Context, arg TestInsertInteractionParams) (*Interaction, error)
+	// Test-only: inserts a messages_message already linked to an interaction. Used
+	// by the venue backfill test to seed an iMessage chat container row. Production
+	// code MUST NOT call this.
+	TestInsertMessagesMessageLinked(ctx context.Context, arg TestInsertMessagesMessageLinkedParams) (*MessagesMessage, error)
 	// Reset/additive-seed test only: plant ONE queued (non-finalized) river_job so a
 	// test can assert the additive --seed preflight REFUSES while --reset-and-seed
 	// PROCEEDS (it wipes river_job). Minimal valid row: River requires kind, queue,
@@ -1915,6 +1923,10 @@ type Querier interface {
 	// The token columns are bytea (encrypted-at-rest); dummy bytes are fine for a
 	// marker that is never decrypted.
 	TestInsertOAuthCredentialMarker(ctx context.Context) error
+	// Test-only: inserts a phone_call already linked to an interaction. Used by the
+	// venue backfill test to seed a phone container row. Production code MUST NOT
+	// call this (the live path sets interaction_id via MarkPhoneCallProcessed).
+	TestInsertPhoneCallLinked(ctx context.Context, arg TestInsertPhoneCallLinkedParams) (*PhoneCall, error)
 	// /health river-component integration test only: plant one river_job with an
 	// explicit kind, state, scheduled_at, and (nullable) finalized_at so the
 	// discarded-count / oldest-due / latest-completed-by-kind queries can be

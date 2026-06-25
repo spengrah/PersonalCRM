@@ -2215,8 +2215,8 @@ func (s *IngestService) handleMeetingNoteRecorded(
 		// interactions belong to the same session): reuse the linked gcal meeting
 		// venue when this note links to an event, else mint a session venue. Used
 		// for BOTH retained interactions (whose linkage may have changed on this
-		// re-sync) and newly-added ones. Best-effort — a resolution error leaves
-		// venue_id NULL.
+		// re-sync) and newly-added ones. An unwired resolver / unresolvable linked
+		// event leaves venue_id NULL; a real DB error rejects the event below.
 		sessionVenueID, venueErr := resolveAnarlogSessionVenue(ctx, tx, s.venue, sessionID, finalLinkedKind, finalLinkedID)
 		if venueErr != nil {
 			return nil, nil, &IngestPerEventRejection{

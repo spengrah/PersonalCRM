@@ -79,9 +79,16 @@ WITH containers AS (
       AND cm.thread_id IS NOT NULL AND cm.thread_id <> ''
       AND cm.source IN ('email', 'gchat')
 ), ins_node AS (
+    -- Mint the deterministic venue node ONLY when no venue exists yet for this
+    -- container (the WHERE NOT EXISTS guard prevents an orphan node when a venue
+    -- pre-exists with a different node id; the venue insert below would DO
+    -- NOTHING in that case, stranding an un-minted node otherwise).
     INSERT INTO node (id, type, canonical_label)
-    SELECT venue_node_id(source, kind, container_id), 'venue', ''
-    FROM containers
+    SELECT venue_node_id(c.source, c.kind, c.container_id), 'venue', ''
+    FROM containers c
+    WHERE NOT EXISTS (
+        SELECT 1 FROM venue v
+        WHERE v.source = c.source AND v.kind = c.kind AND v.source_container_id = c.container_id)
     ON CONFLICT (id) DO NOTHING
     RETURNING id
 )
@@ -115,8 +122,11 @@ WITH containers AS (
       AND mm.chat_guid IS NOT NULL AND mm.chat_guid <> ''
 ), ins_node AS (
     INSERT INTO node (id, type, canonical_label)
-    SELECT venue_node_id('messages', kind, container_id), 'venue', ''
-    FROM containers
+    SELECT venue_node_id('messages', c.kind, c.container_id), 'venue', ''
+    FROM containers c
+    WHERE NOT EXISTS (
+        SELECT 1 FROM venue v
+        WHERE v.source = 'messages' AND v.kind = c.kind AND v.source_container_id = c.container_id)
     ON CONFLICT (id) DO NOTHING
     RETURNING id
 )
@@ -153,8 +163,11 @@ WITH containers AS (
              CASE WHEN tm.chat_type = 'private' THEN 'dm' ELSE 'group_chat' END
 ), ins_node AS (
     INSERT INTO node (id, type, canonical_label)
-    SELECT venue_node_id('telegram', kind, container_id), 'venue', ''
-    FROM containers
+    SELECT venue_node_id('telegram', c.kind, c.container_id), 'venue', ''
+    FROM containers c
+    WHERE NOT EXISTS (
+        SELECT 1 FROM venue v
+        WHERE v.source = 'telegram' AND v.kind = c.kind AND v.source_container_id = c.container_id)
     ON CONFLICT (id) DO NOTHING
     RETURNING id
 )
@@ -183,8 +196,11 @@ WITH containers AS (
     WHERE i.venue_id IS NULL AND i.deleted_at IS NULL
 ), ins_node AS (
     INSERT INTO node (id, type, canonical_label)
-    SELECT venue_node_id('phone_calls', 'call', container_id), 'venue', ''
-    FROM containers
+    SELECT venue_node_id('phone_calls', 'call', c.container_id), 'venue', ''
+    FROM containers c
+    WHERE NOT EXISTS (
+        SELECT 1 FROM venue v
+        WHERE v.source = 'phone_calls' AND v.kind = 'call' AND v.source_container_id = c.container_id)
     ON CONFLICT (id) DO NOTHING
     RETURNING id
 )
@@ -227,8 +243,11 @@ WITH containers AS (
         octet_length(ce.google_account_id)::text || ':' || ce.google_account_id
 ), ins_node AS (
     INSERT INTO node (id, type, canonical_label)
-    SELECT venue_node_id('gcal', 'meeting', container_id), 'venue', ''
-    FROM containers
+    SELECT venue_node_id('gcal', 'meeting', c.container_id), 'venue', ''
+    FROM containers c
+    WHERE NOT EXISTS (
+        SELECT 1 FROM venue v
+        WHERE v.source = 'gcal' AND v.kind = 'meeting' AND v.source_container_id = c.container_id)
     ON CONFLICT (id) DO NOTHING
     RETURNING id
 )
@@ -289,8 +308,11 @@ WITH containers AS (
       AND split_part(i.source_ref, ':', 2) <> ''
 ), ins_node AS (
     INSERT INTO node (id, type, canonical_label)
-    SELECT venue_node_id('anarlog_sessions', 'session', container_id), 'venue', ''
-    FROM containers
+    SELECT venue_node_id('anarlog_sessions', 'session', c.container_id), 'venue', ''
+    FROM containers c
+    WHERE NOT EXISTS (
+        SELECT 1 FROM venue v
+        WHERE v.source = 'anarlog_sessions' AND v.kind = 'session' AND v.source_container_id = c.container_id)
     ON CONFLICT (id) DO NOTHING
     RETURNING id
 )

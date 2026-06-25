@@ -92,15 +92,6 @@ func TestInteractionVenue_LivePath(t *testing.T) {
 	}
 }
 
-// venueBackfillSeed is one seeded interaction (+ optional content) for the
-// backfill test, plus the venue identity the backfill must resolve it to.
-type venueBackfillSeed struct {
-	interactionID   uuid.UUID
-	source          string
-	expectKind      string // "" → expect NULL venue (manual)
-	expectContainer string
-}
-
 // TestInteractionVenue_Backfill seeds pre-existing venue-less interactions across
 // the distinct backfill JOIN SHAPES and asserts each resolves to the expected
 // venue. The three shapes are: the content interaction_id FK (telegram here;
@@ -142,9 +133,18 @@ func TestInteractionVenue_Backfill(t *testing.T) {
 
 	now := accelerated.GetCurrentTime().UTC()
 
-	// A contact + its person node (the interaction FK target).
-	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: "Venue Backfill Subject"})
+	// A contact + its person node (the interaction FK target). Seed it with a
+	// populated cadence + last_contacted so the byte-identical cadence assertion
+	// below is a non-trivial check (a mostly-NULL contact would pass vacuously).
+	cadence := "weekly"
+	lastContacted := now.Add(-72 * time.Hour)
+	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+		FullName:      "Venue Backfill Subject",
+		Cadence:       &cadence,
+		LastContacted: &lastContacted,
+	})
 	require.NoError(t, err)
+	require.NotNil(t, contact.LastContacted, "precondition: seeded contact has a populated cadence state")
 
 	// --- telegram: two messages in ONE chat (must share one venue node) ---
 	tgChatID := int64(778899)
@@ -195,6 +195,64 @@ func TestInteractionVenue_Backfill(t *testing.T) {
 	anarlogUnlinkedID := uuid.New()
 	anarlogUnlinkedRef := fmt.Sprintf("anarlog:%s:%s", unlinkedSession, contact.ID)
 	_, err = interactionRepo.TestInsertInteraction(ctx, anarlogUnlinkedID, contact.ID, repository.InteractionSourceAnarlogSessions, &anarlogUnlinkedRef, now, repository.InteractionDirectionMutual)
+	require.NoError(t, err)
+
+	// --- messages: group chat keyed on chat_guid (content interaction_id FK) ---
+	messagesID := uuid.New()
+	messagesContainer := "iMessage;+;chat-guid-backfill"
+	mRef := "msg-ix"
+	_, err = interactionRepo.TestInsertInteraction(ctx, messagesID, contact.ID, repository.InteractionSourceMessages, &mRef, now, repository.InteractionDirectionInbound)
+	require.NoError(t, err)
+	_, err = database.Queries.TestInsertMessagesMessageLinked(ctx, db.TestInsertMessagesMessageLinkedParams{
+		Guid: "imsg-guid-1", ChatGuid: messagesContainer, PeerHandle: "+15551110000",
+		SentAt: pgtype.Timestamptz{Time: now, Valid: true}, IsOutgoing: false, IsGroupChat: true,
+		InteractionID: pgtype.UUID{Bytes: messagesID, Valid: true},
+	})
+	require.NoError(t, err)
+
+	// --- email: thread keyed on comms_message.thread_id (content FK) ---
+	emailID := uuid.New()
+	emailContainer := "THREAD-backfill-1"
+	eRef := "email-ix"
+	_, err = interactionRepo.TestInsertInteraction(ctx, emailID, contact.ID, repository.InteractionSourceEmail, &eRef, now, repository.InteractionDirectionInbound)
+	require.NoError(t, err)
+	_, err = database.Queries.TestInsertCommsMessageLinked(ctx, db.TestInsertCommsMessageLinkedParams{
+		Source: repository.InteractionSourceEmail, ExternalID: "msgid-backfill-1",
+		ThreadID: pgtype.Text{String: emailContainer, Valid: true}, Direction: "inbound",
+		SentAt:           pgtype.Timestamptz{Time: now, Valid: true},
+		MatchedContactID: pgtype.UUID{Bytes: contact.ID, Valid: true},
+		InteractionID:    pgtype.UUID{Bytes: emailID, Valid: true},
+	})
+	require.NoError(t, err)
+
+	// --- gchat: group_chat keyed on comms_message.thread_id (space resource) ---
+	gchatID := uuid.New()
+	gchatContainer := "spaces/AAAAbackfill"
+	gcRef := "gchat-ix"
+	_, err = interactionRepo.TestInsertInteraction(ctx, gchatID, contact.ID, repository.InteractionSourceGChat, &gcRef, now, repository.InteractionDirectionInbound)
+	require.NoError(t, err)
+	_, err = database.Queries.TestInsertCommsMessageLinked(ctx, db.TestInsertCommsMessageLinkedParams{
+		Source: repository.InteractionSourceGChat, ExternalID: "gcmsg-backfill-1",
+		ThreadID: pgtype.Text{String: gchatContainer, Valid: true}, Direction: "inbound",
+		SentAt:           pgtype.Timestamptz{Time: now, Valid: true},
+		MatchedContactID: pgtype.UUID{Bytes: contact.ID, Valid: true},
+		InteractionID:    pgtype.UUID{Bytes: gchatID, Valid: true},
+	})
+	require.NoError(t, err)
+
+	// --- phone: call keyed on phone_call.call_unique_id (content FK) ---
+	phoneID := uuid.New()
+	phoneContainer := "call-uid-backfill-1"
+	pRef := "phone-ix"
+	_, err = interactionRepo.TestInsertInteraction(ctx, phoneID, contact.ID, repository.InteractionSourcePhoneCalls, &pRef, now, repository.InteractionDirectionInbound)
+	require.NoError(t, err)
+	_, err = database.Queries.TestInsertPhoneCallLinked(ctx, db.TestInsertPhoneCallLinkedParams{
+		CallUniqueID: phoneContainer, PeerHandle: "+15551110000", PeerNormalized: "+15551110000",
+		Service: "voice", Direction: "inbound", DurationSeconds: 60,
+		StartedAt:        pgtype.Timestamptz{Time: now, Valid: true},
+		MatchedContactID: pgtype.UUID{Bytes: contact.ID, Valid: true},
+		InteractionID:    pgtype.UUID{Bytes: phoneID, Valid: true},
+	})
 	require.NoError(t, err)
 
 	// --- manual: no container → venue_id stays NULL ---
@@ -251,6 +309,21 @@ func TestInteractionVenue_Backfill(t *testing.T) {
 	requireInteractionVenue(t, ctx, interactionRepo, venueRepo, anarlogUnlinkedID,
 		repository.InteractionSourceAnarlogSessions, repository.VenueKindSession, unlinkedSession.String())
 
+	// messages / email / gchat / phone each resolve to their expected venue
+	// (the content interaction_id FK join shapes).
+	requireInteractionVenue(t, ctx, interactionRepo, venueRepo, messagesID,
+		repository.InteractionSourceMessages, repository.VenueKindGroupChat, messagesContainer)
+	requireInteractionVenue(t, ctx, interactionRepo, venueRepo, emailID,
+		repository.InteractionSourceEmail, repository.VenueKindEmailThread, emailContainer)
+	requireInteractionVenue(t, ctx, interactionRepo, venueRepo, gchatID,
+		repository.InteractionSourceGChat, repository.VenueKindGroupChat, gchatContainer)
+	requireInteractionVenue(t, ctx, interactionRepo, venueRepo, phoneID,
+		repository.InteractionSourcePhoneCalls, repository.VenueKindCall, phoneContainer)
+
+	// No orphan venue nodes: every venue-type node is referenced by at least one
+	// interaction (proves the WHERE NOT EXISTS node-mint guard).
+	require.Zero(t, countOrphanVenueNodes(ctx, t, database), "backfill must leave no orphan venue nodes")
+
 	// manual interaction has NO venue.
 	manualInteraction, err := interactionRepo.GetInteraction(ctx, manualID)
 	require.NoError(t, err)
@@ -275,6 +348,18 @@ func countVenueNodes(ctx context.Context, t *testing.T, database *db.Database) i
 	t.Helper()
 	var n int64
 	require.NoError(t, database.Pool.QueryRow(ctx, `SELECT count(*) FROM node WHERE type = 'venue'`).Scan(&n))
+	return n
+}
+
+// countOrphanVenueNodes returns the number of venue-type nodes that no live
+// interaction references via venue_id.
+func countOrphanVenueNodes(ctx context.Context, t *testing.T, database *db.Database) int64 {
+	t.Helper()
+	var n int64
+	require.NoError(t, database.Pool.QueryRow(ctx, `
+		SELECT count(*) FROM node nd
+		WHERE nd.type = 'venue'
+		  AND NOT EXISTS (SELECT 1 FROM interaction i WHERE i.venue_id = nd.id)`).Scan(&n))
 	return n
 }
 
