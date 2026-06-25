@@ -786,6 +786,40 @@ INSERT INTO relationship_signal (subject_node_id, signal_key, value, as_of, meth
 VALUES ('00000000-0000-0000-0000-0000000000d5'::uuid, 'synthetic-reset-marker', 0, NOW(),
         'synthetic-reset-marker');
 
+-- name: TestInsertTagForMigration :one
+-- Tag-migration test only: seed a legacy tag row with an explicit name + color
+-- so a test can run `--migrate-tags` over it and assert the color survives into
+-- the tag entity node's detail JSONB. Returns the generated id.
+INSERT INTO tag (name, color) VALUES (@name, @color) RETURNING id;
+
+-- name: TestInsertContactTagAtTime :exec
+-- Tag-migration test only: seed a contact_tag row with an explicit created_at so
+-- a test can assert the migration preserves it as the assertion's KnowledgeFrom
+-- (KnowledgeFromOverride). The (contact_id, tag_id) PK makes re-seeding a no-op
+-- under ON CONFLICT (not needed here — tests use fresh ids).
+INSERT INTO contact_tag (contact_id, tag_id, created_at)
+VALUES (@contact_id, @tag_id, @created_at);
+
+-- name: TestDeleteContactTagsByContactIds :execrows
+-- Tag-migration cleanup: hard-delete the contact_tag rows a test seeded, keyed by
+-- the tracked contact ids (scoped to the test's own contacts on the shared DB).
+DELETE FROM contact_tag WHERE contact_id = ANY(@contact_ids::uuid[]);
+
+-- name: TestDeleteTagsByIds :execrows
+-- Tag-migration cleanup: hard-delete the legacy tag rows a test seeded, keyed by
+-- the tracked tag ids (scoped to the test's own tags on the shared DB).
+DELETE FROM tag WHERE id = ANY(@tag_ids::uuid[]);
+
+-- name: TestCountTaggedAsAssertionsForSubject :one
+-- Tag-migration test only: count the LIVE accepted `tagged_as` assertions whose
+-- subject is a given node, so a test asserts exactly one per migrated contact_tag
+-- and that an idempotent re-run creates no duplicates.
+SELECT COUNT(*) FROM assertion
+WHERE subject_node_id = $1
+  AND predicate_key = 'tagged_as'
+  AND status = 'accepted'
+  AND knowledge_to IS NULL;
+
 -- name: TestListContactBucketsByNamePrefix :many
 -- Profile coverage test only: list the namespace's contacts (by full_name
 -- prefix) with the bucket-defining columns + a method count, so the test can

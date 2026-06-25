@@ -761,3 +761,54 @@ func (r *SyntheticSupportRepository) CountVenueNodesByIds(ctx context.Context, n
 func (r *SyntheticSupportRepository) DeleteAssertionsForNode(ctx context.Context, nodeID uuid.UUID) (int64, error) {
 	return r.queries.SyntheticDeleteAssertionsForNode(ctx, pgtype.UUID{Bytes: nodeID, Valid: true})
 }
+
+// InsertTagForMigration seeds a legacy tag row with an explicit name + color (a
+// nil color round-trips as SQL NULL), returning the generated id, so a
+// --migrate-tags test can assert the color survives into the tag entity node's
+// detail JSONB.
+func (r *SyntheticSupportRepository) InsertTagForMigration(ctx context.Context, name string, color *string) (uuid.UUID, error) {
+	id, err := r.queries.TestInsertTagForMigration(ctx, db.TestInsertTagForMigrationParams{
+		Name:  name,
+		Color: stringToPgText(color),
+	})
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return uuid.UUID(id.Bytes), nil
+}
+
+// InsertContactTagAtTime seeds a contact_tag row with an explicit created_at so a
+// --migrate-tags test can assert the migration preserves it as the assertion's
+// KnowledgeFrom (KnowledgeFromOverride).
+func (r *SyntheticSupportRepository) InsertContactTagAtTime(ctx context.Context, contactID, tagID uuid.UUID, createdAt time.Time) error {
+	return r.queries.TestInsertContactTagAtTime(ctx, db.TestInsertContactTagAtTimeParams{
+		ContactID: pgtype.UUID{Bytes: contactID, Valid: true},
+		TagID:     pgtype.UUID{Bytes: tagID, Valid: true},
+		CreatedAt: pgtype.Timestamptz{Time: createdAt, Valid: true},
+	})
+}
+
+// DeleteContactTagsByContactIds hard-deletes the contact_tag rows a test seeded,
+// keyed by the tracked contact ids.
+func (r *SyntheticSupportRepository) DeleteContactTagsByContactIds(ctx context.Context, contactIDs []uuid.UUID) (int64, error) {
+	if len(contactIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.TestDeleteContactTagsByContactIds(ctx, pgUUIDs(contactIDs))
+}
+
+// DeleteTagsByIds hard-deletes the legacy tag rows a test seeded, keyed by the
+// tracked tag ids.
+func (r *SyntheticSupportRepository) DeleteTagsByIds(ctx context.Context, tagIDs []uuid.UUID) (int64, error) {
+	if len(tagIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.TestDeleteTagsByIds(ctx, pgUUIDs(tagIDs))
+}
+
+// CountTaggedAsAssertionsForSubject counts the LIVE accepted `tagged_as`
+// assertions whose subject is a given node, so a test asserts exactly one per
+// migrated contact_tag and that an idempotent re-run creates no duplicates.
+func (r *SyntheticSupportRepository) CountTaggedAsAssertionsForSubject(ctx context.Context, subjectNodeID uuid.UUID) (int64, error) {
+	return r.queries.TestCountTaggedAsAssertionsForSubject(ctx, pgtype.UUID{Bytes: subjectNodeID, Valid: true})
+}

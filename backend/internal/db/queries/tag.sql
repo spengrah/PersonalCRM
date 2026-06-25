@@ -9,6 +9,18 @@ SELECT * FROM tag WHERE name = $1;
 -- name: ListTags :many
 SELECT * FROM tag ORDER BY name ASC;
 
+-- ListContactTagsWithLiveContact returns every contact_tag whose contact is NOT
+-- soft-deleted (the `crm-admin --migrate-tags` source set). Deleted contacts are
+-- skipped permanently — the assertion write path rejects a tombstoned subject
+-- node anyway. Ordered deterministically so the migration processes rows in a
+-- stable sequence.
+-- name: ListContactTagsWithLiveContact :many
+SELECT ct.contact_id, ct.tag_id, ct.created_at
+FROM contact_tag ct
+JOIN contact c ON c.id = ct.contact_id
+WHERE c.deleted_at IS NULL
+ORDER BY ct.contact_id ASC, ct.tag_id ASC;
+
 -- name: CreateTag :one
 INSERT INTO tag (name, color) VALUES ($1, $2) RETURNING *;
 

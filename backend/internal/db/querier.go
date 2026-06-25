@@ -1064,6 +1064,12 @@ type Querier interface {
 	// Contact method queries
 	ListContactMethodsByContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactMethod, error)
 	ListContactNotes(ctx context.Context, arg ListContactNotesParams) ([]*Note, error)
+	// ListContactTagsWithLiveContact returns every contact_tag whose contact is NOT
+	// soft-deleted (the `crm-admin --migrate-tags` source set). Deleted contacts are
+	// skipped permanently — the assertion write path rejects a tombstoned subject
+	// node anyway. Ordered deterministically so the migration processes rows in a
+	// stable sequence.
+	ListContactTagsWithLiveContact(ctx context.Context) ([]*ContactTag, error)
 	// List all tasks for a contact
 	ListContactTasksByContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactTask, error)
 	// List tasks for a contact with optional state, kind, and lifecycle filters
@@ -1876,14 +1882,24 @@ type Querier interface {
 	// Test-only: counts venue-type nodes that no live interaction references via
 	// venue_id. Used by the venue backfill test to assert the no-orphan-node guard.
 	TestCountOrphanVenueNodes(ctx context.Context) (int64, error)
+	// Tag-migration test only: count the LIVE accepted `tagged_as` assertions whose
+	// subject is a given node, so a test asserts exactly one per migrated contact_tag
+	// and that an idempotent re-run creates no duplicates.
+	TestCountTaggedAsAssertionsForSubject(ctx context.Context, subjectNodeID pgtype.UUID) (int64, error)
 	// Test-only: counts venue-type nodes. Used by the venue backfill test.
 	TestCountVenueNodes(ctx context.Context) (int64, error)
 	// TEST ONLY. Hard-deletes calendar_event rows whose gcal_event_id starts
 	// with the given prefix. Used by t.Cleanup to remove fixtures.
 	TestDeleteCalendarEventsByGcalEventIDPrefix(ctx context.Context, prefix string) error
+	// Tag-migration cleanup: hard-delete the contact_tag rows a test seeded, keyed by
+	// the tracked contact ids (scoped to the test's own contacts on the shared DB).
+	TestDeleteContactTagsByContactIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error)
 	// TEST ONLY. Hard-deletes external_contact rows whose source_id starts with
 	// the given prefix. Used by t.Cleanup to remove fixtures inserted by a test.
 	TestDeleteExternalContactsBySourceIDPrefix(ctx context.Context, prefix string) error
+	// Tag-migration cleanup: hard-delete the legacy tag rows a test seeded, keyed by
+	// the tracked tag ids (scoped to the test's own tags on the shared DB).
+	TestDeleteTagsByIds(ctx context.Context, tagIds []pgtype.UUID) (int64, error)
 	// TEST ONLY. Probe a calendar_event row with FOR UPDATE NOWAIT: returns the
 	// row if no conflicting lock is held, or fails immediately (lock_not_available)
 	// when another tx holds a conflicting lock (e.g. a FOR SHARE from the attended
@@ -1917,6 +1933,11 @@ type Querier interface {
 	// the venue backfill test to seed an email/gchat thread container row.
 	// Production code MUST NOT call this.
 	TestInsertCommsMessageLinked(ctx context.Context, arg TestInsertCommsMessageLinkedParams) (*CommsMessage, error)
+	// Tag-migration test only: seed a contact_tag row with an explicit created_at so
+	// a test can assert the migration preserves it as the assertion's KnowledgeFrom
+	// (KnowledgeFromOverride). The (contact_id, tag_id) PK makes re-seeding a no-op
+	// under ON CONFLICT (not needed here — tests use fresh ids).
+	TestInsertContactTagAtTime(ctx context.Context, arg TestInsertContactTagAtTimeParams) error
 	// Reset test only: a person node with a fixed sentinel id that the embedding and
 	// relationship_signal markers anchor to (relationship_signal.subject_node_id is a
 	// real FK→node, so the node must exist first). Idempotent so the marker seeding
@@ -1976,6 +1997,10 @@ type Querier interface {
 	// TestInsertNonFinalRiverJob: River requires kind, queue, state, args,
 	// metadata, max_attempts.
 	TestInsertRiverJobWithStateForTest(ctx context.Context, arg TestInsertRiverJobWithStateForTestParams) error
+	// Tag-migration test only: seed a legacy tag row with an explicit name + color
+	// so a test can run `--migrate-tags` over it and assert the color survives into
+	// the tag entity node's detail JSONB. Returns the generated id.
+	TestInsertTagForMigration(ctx context.Context, arg TestInsertTagForMigrationParams) (pgtype.UUID, error)
 	// Reset test only: a marker row in tag (a standalone table the harness does not
 	// touch).
 	TestInsertTagMarker(ctx context.Context) error
