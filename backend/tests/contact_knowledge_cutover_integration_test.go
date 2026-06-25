@@ -32,6 +32,7 @@ type knowledgeCutoverHarness struct {
 	database      *db.Database
 	contactSvc    *service.ContactService
 	enrichSvc     *service.EnrichmentService
+	assertSvc     *service.AssertService
 	migrationSvc  *service.ContactKnowledgeMigrationService
 	cacheUpdater  *consumer.KnowledgeCacheUpdater
 	contactRepo   *repository.ContactRepository
@@ -94,6 +95,7 @@ func newKnowledgeCutoverHarness(t *testing.T, ctx context.Context) *knowledgeCut
 		database:      database,
 		contactSvc:    contactSvc,
 		enrichSvc:     enrichSvc,
+		assertSvc:     assertSvc,
 		migrationSvc:  migrationSvc,
 		cacheUpdater:  cacheUpdater,
 		contactRepo:   contactRepo,
@@ -295,6 +297,61 @@ func TestContactKnowledgeCutover_AsyncWorkerRefreshesCache(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, refetched.Location)
 	assert.Equal(t, loc, *refetched.Location, "async worker recomputed the cache from the assertion")
+}
+
+// TestContactKnowledgeCutover_AsyncWorkerBlanksCacheOnClosure proves the
+// async stale-cache failure mode end-to-end: when a producer OTHER than the
+// inline ContactService path closes the current-accepted assertion (so the cache
+// column is left holding a stale value), driving the KnowledgeCacheUpdater worker
+// on the assertion.superseded event recomputes from GetCurrentAccepted (which now
+// returns nothing) and sets the cache column to NULL.
+func TestContactKnowledgeCutover_AsyncWorkerBlanksCacheOnClosure(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	h := newKnowledgeCutoverHarness(t, ctx)
+
+	ns := uuid.New().String()[:8]
+	loc := "Miami " + ns
+	h.trackPlace(loc)
+
+	contact, _, err := h.contactSvc.CreateContact(ctx, repository.CreateContactRequest{
+		FullName: "Async Blank " + ns,
+		Location: &loc,
+	}, nil)
+	require.NoError(t, err)
+	h.track(contact.ID)
+
+	// Close the lives_in slot directly through AssertService (a "between jobs"
+	// closure — the path SP3 extractors / agents use). AssertClosure publishes
+	// assertion.superseded but does NOT touch the contact cache column, so the
+	// cache is now STALE (still "Miami") while GetCurrentAccepted returns nothing.
+	require.NoError(t, h.assertSvc.AssertClosure(ctx, service.ClosureRequest{
+		SubjectNodeID: contact.ID,
+		PredicateKey:  repository.PredicateLivesIn,
+	}))
+	stale, err := h.contactRepo.GetContact(ctx, contact.ID)
+	require.NoError(t, err)
+	require.NotNil(t, stale.Location, "cache is intentionally stale until the async worker runs")
+	assert.Equal(t, loc, *stale.Location)
+
+	// Drive the async worker on the superseded event → recompute-from-scratch finds
+	// no current lives_in → cache column set to NULL.
+	payload, err := events.Marshal(events.KindAssertionSuperseded, events.AssertionEventPayload{
+		Version:       1,
+		AssertionID:   uuid.New(),
+		SubjectNodeID: contact.ID,
+		PredicateKey:  repository.PredicateLivesIn,
+	})
+	require.NoError(t, err)
+	env := &events.Envelope{Source: "assertion", Kind: events.KindAssertionSuperseded, Payload: payload}
+	err = pgx.BeginTxFunc(ctx, h.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		return h.cacheUpdater.HandleEvent(ctx, tx, env)
+	})
+	require.NoError(t, err)
+
+	blanked, err := h.contactRepo.GetContact(ctx, contact.ID)
+	require.NoError(t, err)
+	assert.Nil(t, blanked.Location, "async worker blanks the cache to NULL when no current assertion remains")
 }
 
 func TestContactKnowledgeCutover_Backfill(t *testing.T) {

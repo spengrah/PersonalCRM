@@ -895,12 +895,16 @@ func (r *ContactRepository) ListContactsWithKnowledgeColumns(ctx context.Context
 	}
 	out := make([]ContactKnowledgeColumns, 0, len(rows))
 	for _, row := range rows {
+		// contact.id is a non-null PK, so an invalid id is unreachable; skip it
+		// defensively rather than emit a uuid.Nil-keyed row a caller would then
+		// assert against the wrong (nil) subject node.
+		if !row.ID.Valid {
+			continue
+		}
 		rec := ContactKnowledgeColumns{
+			ContactID: uuid.UUID(row.ID.Bytes),
 			Birthday:  pgDateToTimePtr(row.Birthday),
 			CreatedAt: row.CreatedAt.Time,
-		}
-		if row.ID.Valid {
-			rec.ContactID = uuid.UUID(row.ID.Bytes)
 		}
 		if row.Location.Valid {
 			loc := row.Location.String

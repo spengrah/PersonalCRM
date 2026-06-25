@@ -116,22 +116,21 @@ func (s *EnrichmentService) EnrichContactFromExternal(
 		return uuid.Nil, err
 	}
 
-	// Track what needs updating
+	// Track what needs updating. location/birthday/how_met are NOT carried on
+	// updateReq: the profile UPDATE SQL no longer writes those cache columns —
+	// they flow from the assertion store. An inferred location/birthday is tracked
+	// in `inferred` and asserted via the knowledge writer below.
 	needsUpdate := false
 	updateReq := repository.UpdateContactRequest{
 		FullName:     contact.FullName,
-		Location:     contact.Location,
-		Birthday:     contact.Birthday,
-		HowMet:       contact.HowMet,
 		Cadence:      contact.Cadence,
 		ProfilePhoto: contact.ProfilePhoto,
 	}
 
-	// inferred holds the location/birthday/how_met values this enrichment newly
-	// derives. Post-cutover those columns are NOT written by the contact SQL —
-	// they flow from the assertion store — so each inferred field becomes an
-	// agent-provenance assertion below. Fields the contact already has stay nil
-	// here (enrichment only fills empty fields), so no spurious assertion fires.
+	// inferred holds the location/birthday this enrichment newly derives; each
+	// becomes an agent-provenance assertion below. Fields the contact already has
+	// stay nil here (enrichment only fills empty fields), so no spurious assertion
+	// fires.
 	var inferred knowledgeFieldValues
 
 	// Enrich profile photo if CRM contact has none
@@ -143,7 +142,6 @@ func (s *EnrichmentService) EnrichContactFromExternal(
 
 	// Enrich birthday if CRM contact has none
 	if contact.Birthday == nil && external.Birthday != nil {
-		updateReq.Birthday = external.Birthday
 		inferred.Birthday = external.Birthday
 		needsUpdate = true
 		s.recordEnrichment(ctx, crmContactID, external, "birthday", external.Birthday.Format("2006-01-02"))
@@ -152,7 +150,6 @@ func (s *EnrichmentService) EnrichContactFromExternal(
 	// Enrich location from addresses if CRM contact has none
 	if contact.Location == nil && len(external.Addresses) > 0 && external.Addresses[0].Formatted != "" {
 		location := external.Addresses[0].Formatted
-		updateReq.Location = &location
 		inferred.Location = &location
 		needsUpdate = true
 		s.recordEnrichment(ctx, crmContactID, external, "location", location)
@@ -296,13 +293,13 @@ func (s *EnrichmentService) EnrichContactFromExternalWithSelections(
 		return uuid.Nil, err
 	}
 
-	// Track what needs updating
+	// Track what needs updating. location/birthday/how_met are NOT carried on
+	// updateReq (the profile UPDATE no longer writes those cache columns — they
+	// flow from the assertion store); an inferred location/birthday is asserted
+	// via the knowledge writer below.
 	needsUpdate := false
 	updateReq := repository.UpdateContactRequest{
 		FullName:     contact.FullName,
-		Location:     contact.Location,
-		Birthday:     contact.Birthday,
-		HowMet:       contact.HowMet,
 		Cadence:      contact.Cadence,
 		ProfilePhoto: contact.ProfilePhoto,
 	}
@@ -321,7 +318,6 @@ func (s *EnrichmentService) EnrichContactFromExternalWithSelections(
 
 	// Enrich birthday if CRM contact has none
 	if contact.Birthday == nil && external.Birthday != nil {
-		updateReq.Birthday = external.Birthday
 		inferred.Birthday = external.Birthday
 		needsUpdate = true
 		s.recordEnrichment(ctx, crmContactID, external, "birthday", external.Birthday.Format("2006-01-02"))
@@ -330,7 +326,6 @@ func (s *EnrichmentService) EnrichContactFromExternalWithSelections(
 	// Enrich location from addresses if CRM contact has none
 	if contact.Location == nil && len(external.Addresses) > 0 && external.Addresses[0].Formatted != "" {
 		location := external.Addresses[0].Formatted
-		updateReq.Location = &location
 		inferred.Location = &location
 		needsUpdate = true
 		s.recordEnrichment(ctx, crmContactID, external, "location", location)
