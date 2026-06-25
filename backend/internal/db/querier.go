@@ -383,6 +383,9 @@ type Querier interface {
 	// Delete source's connections (as contact_b) where target already connects to the same contact_a
 	// Prevents duplicate (X, target) rows after transfer
 	DeleteDuplicateThirdPartyConnectionsB(ctx context.Context, arg DeleteDuplicateThirdPartyConnectionsBParams) error
+	// Wipe every model's embedding for one target (e.g. when the target's content
+	// changes and all embeddings must be rebuilt).
+	DeleteEmbeddingsForTarget(ctx context.Context, arg DeleteEmbeddingsForTargetParams) error
 	DeleteEnrichment(ctx context.Context, id pgtype.UUID) error
 	DeleteEnrichmentsForContact(ctx context.Context, contactID pgtype.UUID) error
 	// Delete all events for a Google account (used when revoking access)
@@ -449,6 +452,9 @@ type Querier interface {
 	// whose args JSON source = @source. Mirrors the (source) JSONB path used
 	// by CountInFlightSyncJobs.
 	DeleteRiverJobsBySourceArgForTest(ctx context.Context, source string) (int64, error)
+	// Wipe every signal for one node (e.g. when the node's inputs change and all
+	// signals must be rebuilt).
+	DeleteSignalsForSubject(ctx context.Context, subjectNodeID pgtype.UUID) error
 	// Test teardown only — hard-deletes external_sync_log rows for a given
 	// source. external_sync_log carries its own source column (migration 011).
 	DeleteSyncLogsBySourceForTest(ctx context.Context, source string) (int64, error)
@@ -724,6 +730,7 @@ type Querier interface {
 	// params are named (the now arg appears twice; mixing positional + named is
 	// disallowed by sqlc, so the whole query uses sqlc.arg()).
 	GetCurrentAccepted(ctx context.Context, arg GetCurrentAcceptedParams) (*Assertion, error)
+	GetEmbedding(ctx context.Context, arg GetEmbeddingParams) (*Embedding, error)
 	GetEnrichmentByField(ctx context.Context, arg GetEnrichmentByFieldParams) (*ContactEnrichment, error)
 	// Contact Enrichment queries
 	GetEnrichmentsForContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactEnrichment, error)
@@ -846,6 +853,7 @@ type Querier interface {
 	// value type cannot scan a SQL NULL (it panics decoding an empty buffer), so
 	// this layer — which never needs the embedding — simply does not select it.
 	GetPredicate(ctx context.Context, key string) (*GetPredicateRow, error)
+	GetRelationshipSignal(ctx context.Context, arg GetRelationshipSignalParams) (*RelationshipSignal, error)
 	// Test assertion — returns the river_job.state for a single job id. Used by
 	// rescue-on-crash polling to wait out River's async completer
 	// (running->completed lands after the worker returns). River exposes no
@@ -1202,6 +1210,7 @@ type Querier interface {
 	// handler to compute the (existing - desired) set that needs
 	// soft-deleting.
 	ListSessionAttributedInteractions(ctx context.Context, sourceRefPrefix pgtype.Text) ([]*Interaction, error)
+	ListSignalsForSubject(ctx context.Context, subjectNodeID pgtype.UUID) ([]*RelationshipSignal, error)
 	// Lists rows with matched_contact_id IS NULL — i.e., rows that the
 	// ingest service accepted into staging but couldn't match to a contact
 	// at the time. The crm-admin --messages-rematch-stranded command
@@ -1908,6 +1917,15 @@ type Querier interface {
 	// the venue backfill test to seed an email/gchat thread container row.
 	// Production code MUST NOT call this.
 	TestInsertCommsMessageLinked(ctx context.Context, arg TestInsertCommsMessageLinkedParams) (*CommsMessage, error)
+	// Reset test only: a person node with a fixed sentinel id that the embedding and
+	// relationship_signal markers anchor to (relationship_signal.subject_node_id is a
+	// real FK→node, so the node must exist first). Idempotent so the marker seeding
+	// can re-run on a reused clone.
+	TestInsertDerivedStorageMarkerNode(ctx context.Context) error
+	// Reset test only: a marker row in embedding (a derived-storage projection the
+	// harness does not touch), so the reset test proves TRUNCATE empties it. The
+	// vector(1536) is a zero-filled sentinel; target_id is no-FK polymorphic.
+	TestInsertEmbeddingMarker(ctx context.Context) error
 	// TEST ONLY. Fixture queries used by jsonb_gin_index_test.go to construct
 	// edge-case JSONB shapes (non-array, NULL, missing keys) that production
 	// code paths cannot create, plus permanent regression-guard queries that
@@ -1944,6 +1962,10 @@ type Querier interface {
 	// venue backfill test to seed a phone container row. Production code MUST NOT
 	// call this (the live path sets interaction_id via MarkPhoneCallProcessed).
 	TestInsertPhoneCallLinked(ctx context.Context, arg TestInsertPhoneCallLinkedParams) (*PhoneCall, error)
+	// Reset test only: a marker row in relationship_signal (a derived-storage
+	// projection the harness does not touch), so the reset test proves TRUNCATE
+	// empties it. subject_node_id references the marker node inserted above.
+	TestInsertRelationshipSignalMarker(ctx context.Context) error
 	// /health river-component integration test only: plant one river_job with an
 	// explicit kind, state, scheduled_at, and (nullable) finalized_at so the
 	// discarded-count / oldest-due / latest-completed-by-kind queries can be
@@ -2161,6 +2183,16 @@ type Querier interface {
 	UpsertContactNoteByCategory(ctx context.Context, arg UpsertContactNoteByCategoryParams) (*Note, error)
 	// Upsert a contact task by external_task_id (Todoist task IDs are globally unique)
 	UpsertContactTask(ctx context.Context, arg UpsertContactTaskParams) (*ContactTask, error)
+	// Embedding storage queries (graph foundation, derived storage).
+	//
+	// The embedding table is a disposable projection: a vector(1536) keyed by a
+	// polymorphic (target_kind, target_id) + model_version. Storage only — SP1 has
+	// no generators, so there is no per-kind read fan-out or vector-search query
+	// here (that arrives in SP3 with the index).
+	// Idempotently store the embedding for one (target_kind, target_id,
+	// model_version): a recompute for the same key overwrites the vector and
+	// refreshes computed_at.
+	UpsertEmbedding(ctx context.Context, arg UpsertEmbeddingParams) error
 	// Entity-type catalog queries (graph foundation).
 	// Idempotent entity-type seed support (the curated subtypes are seeded by the
 	// predicate-catalog migration).
@@ -2231,6 +2263,15 @@ type Querier interface {
 	// row's audit value is unchanged. If this gap matters later, widen the
 	// DO UPDATE to refresh has_voicemail / duration_seconds / answered.
 	UpsertPhoneCall(ctx context.Context, arg UpsertPhoneCallParams) (*PhoneCall, error)
+	// Relationship signal storage queries (graph foundation, derived storage).
+	//
+	// relationship_signal is a disposable projection: a per-node scalar keyed by
+	// (subject_node_id, signal_key). subject_node_id is a real FK→node. Storage
+	// only — SP1 has no generators, so there is no ranking/aggregation read here
+	// (that arrives in SP3 when signals go live).
+	// Idempotently store one (subject_node_id, signal_key) signal: a recompute for
+	// the same key overwrites the value and refreshes the watermarks.
+	UpsertRelationshipSignal(ctx context.Context, arg UpsertRelationshipSignalParams) error
 	// Used by ChannelAccessHasher — only updates access_hash, preserves existing pts.
 	UpsertTelegramChannelAccessHash(ctx context.Context, arg UpsertTelegramChannelAccessHashParams) (*TelegramChannelState, error)
 	UpsertTelegramChannelState(ctx context.Context, arg UpsertTelegramChannelStateParams) (*TelegramChannelState, error)
