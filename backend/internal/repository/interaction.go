@@ -446,6 +446,16 @@ func (r *InteractionRepository) TestInsertInteraction(ctx context.Context, id, c
 	return &interaction, nil
 }
 
+// UpdateInteractionVenueTx sets venue_id on an existing interaction inside the
+// caller's tx. Used by the anarlog re-sync path so a retained interaction whose
+// session was re-linked moves to the correct venue node. nil venueID clears it.
+func (r *InteractionRepository) UpdateInteractionVenueTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, venueID *uuid.UUID) error {
+	return db.New(tx).UpdateInteractionVenue(ctx, db.UpdateInteractionVenueParams{
+		ID:      uuidToPgUUID(id),
+		VenueID: uuidPtrToPgUUID(venueID),
+	})
+}
+
 // CreateInteractionTx creates a new interaction inside the caller's tx.
 // Used by the InteractionRecorder consumer so the insert commits atomically
 // with the interaction.recorded event row (spec §3.4.1).

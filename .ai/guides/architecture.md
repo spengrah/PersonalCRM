@@ -187,7 +187,7 @@ sequenceDiagram
 | **Observability** | | |
 | `sync_staleness_breach` | Open/resolved sync-staleness breaches recorded by the watchdog (partial unique index on open rows; no `updated_at`/`deleted_at`) | (system-derived; no FKs) |
 | **Future/Unused** | | |
-| `interaction` | Interaction logging (not yet used); nullable `venue_id` links each interaction to the shared-container venue node it happened in (set by the live recorders + the `069` backfill; never a dedup/cadence-partition dimension) | → contact; → node (`venue_id`, restrict) |
+| `interaction` | Interaction logging (the recorder pipeline's core row); nullable `venue_id` links each interaction to the shared-container venue node it happened in (set by the live recorders + the `069` backfill; never a dedup/cadence-partition dimension) | → contact; → node (`venue_id`, restrict) |
 | `connection` | Contact-to-contact relationships | → contact × 2 |
 | `note_embedding` | Vector embeddings (future AI) | → note |
 | `contact_summary` | AI summaries (future) | → contact |

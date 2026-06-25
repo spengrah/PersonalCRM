@@ -665,3 +665,23 @@ func (q *Queries) UpdateInteractionTimestamp(ctx context.Context, arg UpdateInte
 	)
 	return &i, err
 }
+
+const UpdateInteractionVenue = `-- name: UpdateInteractionVenue :exec
+UPDATE interaction
+SET venue_id = $1
+WHERE id = $2
+  AND deleted_at IS NULL
+`
+
+type UpdateInteractionVenueParams struct {
+	VenueID pgtype.UUID `json:"venue_id"`
+	ID      pgtype.UUID `json:"id"`
+}
+
+// Sets venue_id on an existing interaction. Used by the anarlog re-sync path so
+// a retained interaction whose session was re-linked (e.g. session -> gcal event)
+// moves to the correct venue node. Does not touch cadence columns.
+func (q *Queries) UpdateInteractionVenue(ctx context.Context, arg UpdateInteractionVenueParams) error {
+	_, err := q.db.Exec(ctx, UpdateInteractionVenue, arg.VenueID, arg.ID)
+	return err
+}

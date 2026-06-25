@@ -211,8 +211,9 @@ func (c *EmailInteractionConsumer) HandleEvent(ctx context.Context, tx pgx.Tx, e
 			Direction:   p.Direction,
 		}
 		// Resolve the email-thread venue from the content row's thread_id, set
-		// atomically with the insert. Best-effort: an empty thread or resolution
-		// error leaves venue_id NULL rather than failing the interaction.
+		// atomically with the insert. An empty/absent thread leaves venue_id NULL
+		// (no shared container); a real DB error during resolution propagates and
+		// rolls back the interaction (the recorder retries).
 		if c.venue != nil && commsMsg.ThreadID != nil && *commsMsg.ThreadID != "" {
 			venueID, venueErr := c.venue.ResolveVenueForInteraction(
 				ctx, tx, repository.InteractionSourceEmail, repository.VenueKindEmailThread, *commsMsg.ThreadID, "")

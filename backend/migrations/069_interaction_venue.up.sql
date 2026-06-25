@@ -17,7 +17,7 @@
 -- The deterministic node id is the SAME function the live
 -- ResolveVenueForInteraction helper uses (Go uuid.NewSHA1 over the same
 -- namespace + name), so the backfill and the live recorders converge on one
--- venue node per container; a PR6 test asserts they agree.
+-- venue node per container; an integration test asserts they agree.
 --
 -- Per-source container key:
 --   email/gchat        -> comms_message.thread_id        (via interaction_id FK)
@@ -91,11 +91,12 @@ FROM containers
 ON CONFLICT (source, kind, source_container_id) DO NOTHING;
 
 UPDATE interaction i
-SET venue_id = venue_node_id(
-        cm.source,
-        CASE WHEN cm.source = 'email' THEN 'email_thread' ELSE 'group_chat' END,
-        cm.thread_id)
+SET venue_id = v.node_id
 FROM comms_message cm
+JOIN venue v
+  ON v.source = cm.source
+ AND v.kind = CASE WHEN cm.source = 'email' THEN 'email_thread' ELSE 'group_chat' END
+ AND v.source_container_id = cm.thread_id
 WHERE cm.interaction_id = i.id
   AND i.venue_id IS NULL AND i.deleted_at IS NULL
   AND cm.thread_id IS NOT NULL AND cm.thread_id <> ''
@@ -125,11 +126,12 @@ FROM containers
 ON CONFLICT (source, kind, source_container_id) DO NOTHING;
 
 UPDATE interaction i
-SET venue_id = venue_node_id(
-        'messages',
-        CASE WHEN mm.is_group_chat THEN 'group_chat' ELSE 'dm' END,
-        mm.chat_guid)
+SET venue_id = v.node_id
 FROM messages_message mm
+JOIN venue v
+  ON v.source = 'messages'
+ AND v.kind = CASE WHEN mm.is_group_chat THEN 'group_chat' ELSE 'dm' END
+ AND v.source_container_id = mm.chat_guid
 WHERE mm.interaction_id = i.id
   AND i.venue_id IS NULL AND i.deleted_at IS NULL
   AND mm.chat_guid IS NOT NULL AND mm.chat_guid <> '';
@@ -162,11 +164,12 @@ FROM containers
 ON CONFLICT (source, kind, source_container_id) DO NOTHING;
 
 UPDATE interaction i
-SET venue_id = venue_node_id(
-        'telegram',
-        CASE WHEN tm.chat_type = 'private' THEN 'dm' ELSE 'group_chat' END,
-        tm.telegram_chat_id::text)
+SET venue_id = v.node_id
 FROM telegram_message tm
+JOIN venue v
+  ON v.source = 'telegram'
+ AND v.kind = CASE WHEN tm.chat_type = 'private' THEN 'dm' ELSE 'group_chat' END
+ AND v.source_container_id = tm.telegram_chat_id::text
 WHERE tm.interaction_id = i.id
   AND i.venue_id IS NULL AND i.deleted_at IS NULL;
 
@@ -191,8 +194,12 @@ FROM containers
 ON CONFLICT (source, kind, source_container_id) DO NOTHING;
 
 UPDATE interaction i
-SET venue_id = venue_node_id('phone_calls', 'call', pc.call_unique_id)
+SET venue_id = v.node_id
 FROM phone_call pc
+JOIN venue v
+  ON v.source = 'phone_calls'
+ AND v.kind = 'call'
+ AND v.source_container_id = pc.call_unique_id
 WHERE pc.interaction_id = i.id
   AND i.venue_id IS NULL AND i.deleted_at IS NULL;
 
@@ -231,11 +238,15 @@ FROM containers
 ON CONFLICT (source, kind, source_container_id) DO NOTHING;
 
 UPDATE interaction i
-SET venue_id = venue_node_id('gcal', 'meeting',
+SET venue_id = v.node_id
+FROM calendar_event ce
+JOIN venue v
+  ON v.source = 'gcal'
+ AND v.kind = 'meeting'
+ AND v.source_container_id =
         octet_length(ce.gcal_event_id)::text || ':' || ce.gcal_event_id || '|' ||
         octet_length(ce.gcal_calendar_id)::text || ':' || ce.gcal_calendar_id || '|' ||
-        octet_length(ce.google_account_id)::text || ':' || ce.google_account_id)
-FROM calendar_event ce
+        octet_length(ce.google_account_id)::text || ':' || ce.google_account_id
 WHERE i.source = 'gcal'
   AND i.source_ref = ce.id::text
   AND i.venue_id IS NULL AND i.deleted_at IS NULL;
@@ -251,10 +262,7 @@ WHERE i.source = 'gcal'
 
 -- Step 1: REUSE the linked gcal meeting venue (the only cross-source merge).
 UPDATE interaction i
-SET venue_id = venue_node_id('gcal', 'meeting',
-        octet_length(ce.gcal_event_id)::text || ':' || ce.gcal_event_id || '|' ||
-        octet_length(ce.gcal_calendar_id)::text || ':' || ce.gcal_calendar_id || '|' ||
-        octet_length(ce.google_account_id)::text || ':' || ce.google_account_id)
+SET venue_id = ce_venue.node_id
 FROM meeting_note mn
 JOIN calendar_event ce ON ce.id = mn.linked_id
 JOIN venue ce_venue
@@ -292,8 +300,12 @@ FROM containers
 ON CONFLICT (source, kind, source_container_id) DO NOTHING;
 
 UPDATE interaction i
-SET venue_id = venue_node_id('anarlog_sessions', 'session', split_part(i.source_ref, ':', 2))
-WHERE i.source = 'anarlog_sessions'
+SET venue_id = v.node_id
+FROM venue v
+WHERE v.source = 'anarlog_sessions'
+  AND v.kind = 'session'
+  AND v.source_container_id = split_part(i.source_ref, ':', 2)
+  AND i.source = 'anarlog_sessions'
   AND i.venue_id IS NULL AND i.deleted_at IS NULL
   AND i.source_ref IS NOT NULL
   AND split_part(i.source_ref, ':', 2) <> '';

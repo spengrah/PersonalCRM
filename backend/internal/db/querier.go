@@ -2055,6 +2055,10 @@ type Querier interface {
 	UpdateInteractionDirection(ctx context.Context, arg UpdateInteractionDirectionParams) (*Interaction, error)
 	// Extend an existing interaction's occurred_at and description (incremental coalescing)
 	UpdateInteractionTimestamp(ctx context.Context, arg UpdateInteractionTimestampParams) (*Interaction, error)
+	// Sets venue_id on an existing interaction. Used by the anarlog re-sync path so
+	// a retained interaction whose session was re-linked (e.g. session -> gcal event)
+	// moves to the correct venue node. Does not touch cadence columns.
+	UpdateInteractionVenue(ctx context.Context, arg UpdateInteractionVenueParams) error
 	UpdateMacHostHeartbeat(ctx context.Context, arg UpdateMacHostHeartbeatParams) (*MacHost, error)
 	// CAS-style update: only updates when sync_cursor matches base_cursor.
 	// Zero rows returned means another writer slipped in between the

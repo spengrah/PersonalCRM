@@ -102,12 +102,17 @@ type venueBackfillSeed struct {
 }
 
 // TestInteractionVenue_Backfill seeds pre-existing venue-less interactions across
-// the distinct join shapes (telegram content-FK, gcal source_ref, anarlog
-// split_part + gcal reuse, manual NULL), runs the 069 backfill via a down/up
-// round-trip on an isolated clone, and asserts each interaction resolves to the
-// expected venue — including two same-chat telegram rows sharing one node, the
-// anarlog→gcal venue reuse, the NULL-venue manual case, idempotent re-run, and
-// that the backfill node id matches the live helper's deterministic id.
+// the distinct backfill JOIN SHAPES and asserts each resolves to the expected
+// venue. The three shapes are: the content interaction_id FK (telegram here;
+// email/gchat/messages/phone share this exact shape, differing only in the
+// column read + the kind), the gcal source_ref = calendar_event.id::text join,
+// and the anarlog split_part(source_ref) extraction + the gcal-meeting-venue
+// reuse. Also covered: two same-chat telegram rows sharing one node, the
+// anarlog→gcal venue reuse, the unlinked-anarlog session venue, the NULL-venue
+// manual case, in-place idempotent re-run, and that the backfill node id matches
+// the live helper's deterministic id. (The LIVE recorder path for every source —
+// email/messages/gchat/telegram/gcal — is covered by the synthetic replay
+// adapters' assertContactVenue assertions in TestSyntheticReplay_*.)
 func TestInteractionVenue_Backfill(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -251,11 +256,26 @@ func TestInteractionVenue_Backfill(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, manualInteraction.VenueID, "manual interaction must have a NULL venue_id")
 
-	// Idempotent re-run: rolling down+up again leaves identical venue ids.
-	require.NoError(t, m.Steps(-1), "roll down again")
-	require.NoError(t, m.Steps(1), "re-run the backfill (must be idempotent)")
+	// In-place idempotency: re-execute the up migration's backfill SQL directly
+	// (no down) and assert it is a true no-op — the venue node count and every
+	// venue_id are unchanged (proves WHERE venue_id IS NULL + the ON CONFLICT
+	// guards, not just down/up symmetry).
+	venueNodesBefore := countVenueNodes(ctx, t, database)
+	upSQL, readErr := os.ReadFile(migrationsPath + "/069_interaction_venue.up.sql")
+	require.NoError(t, readErr)
+	_, err = database.Pool.Exec(ctx, string(upSQL))
+	require.NoError(t, err, "re-running the up migration backfill in-place must succeed")
+	require.Equal(t, venueNodesBefore, countVenueNodes(ctx, t, database), "in-place re-run must not create new venue nodes")
 	tg1VenueAgain := requireInteractionVenue(t, ctx, interactionRepo, venueRepo, tg1, repository.InteractionSourceTelegram, repository.VenueKindDM, tgContainer)
-	require.Equal(t, tg1Venue, tg1VenueAgain, "idempotent re-run must resolve to the same venue node")
+	require.Equal(t, tg1Venue, tg1VenueAgain, "in-place re-run must leave venue_id unchanged")
+}
+
+// countVenueNodes returns the number of venue-type nodes.
+func countVenueNodes(ctx context.Context, t *testing.T, database *db.Database) int64 {
+	t.Helper()
+	var n int64
+	require.NoError(t, database.Pool.QueryRow(ctx, `SELECT count(*) FROM node WHERE type = 'venue'`).Scan(&n))
+	return n
 }
 
 // TestInteractionVenue_MigrationAtomicity proves the 069 up migration is

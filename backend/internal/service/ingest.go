@@ -221,6 +221,7 @@ type PhoneCallLinkageReader interface {
 type InteractionWriter interface {
 	ListSessionAttributedInteractionsTx(ctx context.Context, tx pgx.Tx, sourceRefPrefix string) ([]repository.Interaction, error)
 	SoftDeleteInteractionTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) error
+	UpdateInteractionVenueTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, venueID *uuid.UUID) error
 }
 
 // AnarlogIdentityLookup is the narrow surface used by the
@@ -2210,6 +2211,19 @@ func (s *IngestService) handleMeetingNoteRecorded(
 		for _, d := range desired {
 			desiredByRef[d.SourceRef] = d
 		}
+		// Resolve the session venue once for the whole batch (all desired
+		// interactions belong to the same session): reuse the linked gcal meeting
+		// venue when this note links to an event, else mint a session venue. Used
+		// for BOTH retained interactions (whose linkage may have changed on this
+		// re-sync) and newly-added ones. Best-effort — a resolution error leaves
+		// venue_id NULL.
+		sessionVenueID, venueErr := resolveAnarlogSessionVenue(ctx, tx, s.venue, sessionID, finalLinkedKind, finalLinkedID)
+		if venueErr != nil {
+			return nil, nil, &IngestPerEventRejection{
+				Code:    ingestRejectInteractionWriteFailed,
+				Message: fmt.Sprintf("resolve session venue: %s", venueErr.Error()),
+			}
+		}
 		// to_drop = existing \ desired
 		for ref, x := range existingByRef {
 			if _, want := desiredByRef[ref]; want {
@@ -2240,6 +2254,18 @@ func (s *IngestService) handleMeetingNoteRecorded(
 			if !have {
 				continue
 			}
+			// Move a retained interaction to the (possibly re-resolved) session
+			// venue when its linkage changed on this re-sync (e.g. session ->
+			// gcal event). venue_id is not a cadence column, so this is a plain
+			// update separate from the content refresh below.
+			if !uuidPtrEqual(x.VenueID, sessionVenueID) {
+				if err := s.interactions.UpdateInteractionVenueTx(ctx, tx, x.ID, sessionVenueID); err != nil {
+					return nil, nil, &IngestPerEventRejection{
+						Code:    ingestRejectInteractionWriteFailed,
+						Message: fmt.Sprintf("update session interaction venue: %s", err.Error()),
+					}
+				}
+			}
 			needsRefresh := !x.OccurredAt.Equal(p.MeetingAt) ||
 				!stringPtrEqual(x.Description, p.Title)
 			if !needsRefresh {
@@ -2259,18 +2285,7 @@ func (s *IngestService) handleMeetingNoteRecorded(
 		// to_add = desired \ existing (route through ContactService so
 		// cadence + follow-up evaluation fire correctly). Capture the
 		// FollowUpFn closures so the dispatch loop can run them after
-		// the outer tx commits.
-		// Resolve the session venue once for the whole batch (all desired
-		// interactions belong to the same session): reuse the linked gcal
-		// meeting venue when this note links to an event, else mint a session
-		// venue. Best-effort — a resolution error leaves venue_id NULL.
-		sessionVenueID, venueErr := resolveAnarlogSessionVenue(ctx, tx, s.venue, sessionID, finalLinkedKind, finalLinkedID)
-		if venueErr != nil {
-			return nil, nil, &IngestPerEventRejection{
-				Code:    ingestRejectInteractionWriteFailed,
-				Message: fmt.Sprintf("resolve session venue: %s", venueErr.Error()),
-			}
-		}
+		// the outer tx commits. sessionVenueID was resolved above.
 		for ref, d := range desiredByRef {
 			if _, have := existingByRef[ref]; have {
 				continue
@@ -2372,9 +2387,9 @@ func (s *IngestService) handleMeetingNoteRecorded(
 // interactions. When the note links to a calendar event (linked_kind='event')
 // the session REUSES that event's meeting venue (the only cross-source venue
 // merge); otherwise it mints/finds a session venue keyed on the session id.
-// Best-effort: returns (nil, nil) when the venue resolver is unwired or the
-// linked gcal venue can't be resolved, so the interaction records with a NULL
-// venue_id rather than failing. Only a real DB error propagates. Shared by the
+// Returns (nil, nil) — record with NULL venue_id — when the venue resolver is
+// unwired or the linked gcal venue can't be resolved (e.g. the event row is
+// gone). A real DB error propagates so the caller rolls back. Shared by the
 // ingest inline handler and MeetingNoteService's resolve-link path.
 func resolveAnarlogSessionVenue(
 	ctx context.Context, tx pgx.Tx, venue IngestVenueResolver, sessionID uuid.UUID, linkedKind *string, linkedID *uuid.UUID,
@@ -2893,6 +2908,18 @@ func (s *IngestService) handleMeetingNoteDeleted(
 // stringPtrEqual reports whether two *string pointers point to the
 // same string value (nil == nil; nil != "x").
 func stringPtrEqual(a, b *string) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
+// uuidPtrEqual reports whether two *uuid.UUID pointers point to the same value
+// (nil == nil; nil != a set id).
+func uuidPtrEqual(a, b *uuid.UUID) bool {
 	if a == nil && b == nil {
 		return true
 	}

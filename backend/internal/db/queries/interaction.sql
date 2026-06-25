@@ -144,6 +144,15 @@ DELETE FROM interaction
 WHERE source = sqlc.arg(source)
   AND source_ref LIKE sqlc.arg(source_ref_prefix);
 
+-- name: UpdateInteractionVenue :exec
+-- Sets venue_id on an existing interaction. Used by the anarlog re-sync path so
+-- a retained interaction whose session was re-linked (e.g. session -> gcal event)
+-- moves to the correct venue node. Does not touch cadence columns.
+UPDATE interaction
+SET venue_id = sqlc.narg('venue_id')
+WHERE id = sqlc.arg('id')
+  AND deleted_at IS NULL;
+
 -- name: UpdateInteractionTimestamp :one
 -- Extend an existing interaction's occurred_at and description (incremental coalescing)
 UPDATE interaction
