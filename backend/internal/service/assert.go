@@ -2027,14 +2027,15 @@ func (s *AssertService) closeSelfLoop(ctx context.Context, tx pgx.Tx, row *repos
 		knowledgeTo = row.KnowledgeFrom.UTC()
 	}
 	// valid_to = now closes a currently-true edge. But stamping now is WRONG for a
-	// row whose interval is not open-at-now: a FUTURE-dated edge (valid_from > now)
-	// would get valid_to < valid_from (assertion_valid_range CHECK fails), and a
-	// PAST-bounded edge (valid_to already <= now) would have its closed historical
-	// interval stretched forward to now (history corruption). In both cases the row
-	// is terminal regardless, so keep its EXISTING valid_to; only an open-or-
-	// future-reaching row (valid_from <= now AND (valid_to nil OR valid_to > now)) is
-	// genuinely closed AT now.
-	openAtNow := (row.ValidFrom == nil || !row.ValidFrom.After(now)) &&
+	// row whose interval is not open-with-room-to-close at now: a FUTURE-or-AT-now
+	// start (valid_from >= now) would make valid_to <= valid_from — the STRICT
+	// assertion_valid_range CHECK (valid_to > valid_from) fails — and a PAST-bounded
+	// edge (valid_to already <= now) would have its closed historical interval
+	// stretched forward (history corruption). In all those cases the row is terminal
+	// regardless, so keep its EXISTING valid_to; only a row that genuinely STARTED in
+	// the past (valid_from nil or strictly < now) and is still open-at-now (valid_to
+	// nil or > now) is closed AT now.
+	openAtNow := (row.ValidFrom == nil || row.ValidFrom.Before(now)) &&
 		(row.ValidTo == nil || row.ValidTo.After(now))
 	validTo := utcPtr(row.ValidTo)
 	if openAtNow {

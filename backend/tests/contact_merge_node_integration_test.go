@@ -734,6 +734,32 @@ func TestMergeAssertions_Integration(t *testing.T) {
 		assert.True(t, closed.ValidTo.Equal(to), "historical valid_to preserved (NOT stretched to now)")
 	})
 
+	// Case 14: a self-loop whose valid_from == now (the boundary) collapses on merge
+	// → closing it must NOT stamp valid_to = now (that would be valid_to == valid_from,
+	// violating the STRICT valid_to > valid_from CHECK). It keeps its existing valid_to.
+	t.Run("14 self-loop at the valid_from==now boundary closes cleanly", func(t *testing.T) {
+		t.Parallel()
+		h, _ := newAssertHarness(t, ctx0())
+		gen, _ := migrationGenerator(t)
+
+		loser := h.seedPerson(t, ctx, gen.Prefix(), "loser")
+		winner := h.seedPerson(t, ctx, gen.Prefix(), "winner")
+
+		nowAtAssert := accelerated.GetCurrentTime().UTC()
+		req := edgeReq(loser, winner, "knows", gen.Prefix(), "boundary-knows")
+		req.ValidFrom = &nowAtAssert // valid_from == the merge's now (no time advance)
+		edge, err := h.svc.Assert(ctx, req)
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, edge.ID)
+
+		// The merge runs at the SAME accelerated now → valid_from == now boundary.
+		mergeAssertionsInTx(t, ctx, h, loser, winner)
+
+		closed, err := h.assertionRepo.GetAssertion(ctx, edge.ID)
+		require.NoError(t, err)
+		assert.Equal(t, repository.AssertionStatusSuperseded, closed.Status, "boundary self-loop closed without CHECK violation")
+	})
+
 	// Case 10: a CHAINED merge (A→B then B→C) moves the same assertion row twice.
 	// The merge-move event is keyed by the WINNER, so each move emits a distinct
 	// event (not deduped away) → derived consumers recompute after each re-point.
