@@ -187,7 +187,8 @@ Cross-cutting concerns that require checking multiple locations:
 
 | When You Change | Also Check/Update |
 |-----------------|-------------------|
-| Contact soft-delete logic | Identity cleanup, note cascade, contact_method cascade |
+| Contact soft-delete logic | Identity cleanup, note cascade, contact_method cascade, AND the person node: `ContactService.DeleteContact` propagates `node.deleted_at` (node.id == contact.id) in the same tx so the contact's assertions drop from graph reads (node-level live filter); assertions are retained in the table |
+| Contact merge | `ContactService.MergeContacts` runs the GRAPH merge alongside the existing `connection`/method/note/interaction transfers: tombstone the loser node (`SetNodeMergedIntoTx` → `merged_into`+`deleted_at`) and re-point its assertions onto the winner (`AssertService.MergeAssertionsTx`). The graph merge runs BEFORE the field-selection knowledge apply so the user's per-field choice is the last writer. The `RepointAssertionSubject/Object` sqlc primitives are called ONLY by `MergeAssertionsTx`, never the normal write path. Follow-on (NOT yet done): dormant `connection` table removal (D10) |
 | Sync provider implementation | Provider registry table in `.ai/patterns/sync.md` |
 | New React Query hook | Hooks inventory in `.ai/patterns/frontend.md` |
 | New API endpoint | API routes table in `.ai/guides/feature-development.md` |
