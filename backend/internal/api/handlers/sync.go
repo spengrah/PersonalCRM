@@ -259,18 +259,8 @@ func (h *SyncHandler) GetSyncLogs(c *gin.Context) {
 		return
 	}
 
-	pages := int(total) / limit
-	if int(total)%limit > 0 {
-		pages++
-	}
-
 	api.SendSuccess(c, http.StatusOK, logs, &api.Meta{
-		Pagination: &api.PaginationMeta{
-			Page:  page,
-			Limit: limit,
-			Total: total,
-			Pages: pages,
-		},
+		Pagination: api.BuildPaginationMeta(page, limit, total),
 	})
 }
 

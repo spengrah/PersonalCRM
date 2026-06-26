@@ -136,14 +136,11 @@ func (h *SuggestionHandler) ListSuggestions(c *gin.Context) {
 		})
 	}
 
+	// list.Pages is the service's ceil(CandidateTotal/Limit); BuildPaginationMeta
+	// reproduces that exact formula, so meta.pagination is unchanged.
 	api.SendSuccess(c, http.StatusOK, items, &api.Meta{
 		HiddenUnresolvedTelegramCount: list.HiddenUnresolvedTelegramCount,
-		Pagination: &api.PaginationMeta{
-			Page:  list.Page,
-			Limit: list.Limit,
-			Total: int64(list.CandidateTotal),
-			Pages: list.Pages,
-		},
+		Pagination:                    api.BuildPaginationMeta(list.Page, list.Limit, int64(list.CandidateTotal)),
 	})
 }
 

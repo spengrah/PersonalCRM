@@ -50,6 +50,21 @@ const (
 	ErrCodeBadRequest   = "BAD_REQUEST"
 )
 
+// BuildPaginationMeta computes pagination metadata using ceil-style page counting.
+// It reproduces the hand-rolled formula every call site used (pages = ceil(total/limit)),
+// so meta.pagination is byte-identical before/after adoption. The limit > 0 guard is
+// purely defensive — no current caller passes limit == 0.
+func BuildPaginationMeta(page, limit int, total int64) *PaginationMeta {
+	pages := 0
+	if limit > 0 {
+		pages = int(total) / limit
+		if int(total)%limit > 0 {
+			pages++
+		}
+	}
+	return &PaginationMeta{Page: page, Limit: limit, Total: total, Pages: pages}
+}
+
 // SendSuccess sends a successful response
 func SendSuccess(c *gin.Context, statusCode int, data interface{}, meta *Meta) {
 	response := APIResponse{

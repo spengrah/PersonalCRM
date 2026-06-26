@@ -156,6 +156,33 @@ func TestRespondInternal_ConstructedSentinel(t *testing.T) {
 	assert.Contains(t, buf.String(), "missing mac_host context")
 }
 
+// handRolledPages is the exact formula every call site used before adoption.
+func handRolledPages(total int64, limit int) int {
+	pages := int(total) / limit
+	if int(total)%limit > 0 {
+		pages++
+	}
+	return pages
+}
+
+func TestBuildPaginationMeta_MatchesHandRolledFormula(t *testing.T) {
+	const limit = 20
+	for _, total := range []int64{0, 1, 19, 20, 21, 40} {
+		meta := BuildPaginationMeta(3, limit, total)
+		assert.Equal(t, 3, meta.Page)
+		assert.Equal(t, limit, meta.Limit)
+		assert.Equal(t, total, meta.Total)
+		assert.Equal(t, handRolledPages(total, limit), meta.Pages, "total=%d", total)
+	}
+}
+
+func TestBuildPaginationMeta_ZeroLimitGuard(t *testing.T) {
+	meta := BuildPaginationMeta(1, 0, 100)
+	assert.Equal(t, 0, meta.Pages)
+	assert.Equal(t, 0, meta.Limit)
+	assert.Equal(t, int64(100), meta.Total)
+}
+
 func TestLogServerError_NilIsNoop(t *testing.T) {
 	var buf bytes.Buffer
 	restore := logger.SetOutput(&buf)

@@ -214,19 +214,9 @@ func (h *ImportHandler) ListImportCandidates(c *gin.Context) {
 
 	paginatedCandidates := candidates[offset:end]
 
-	totalPages := int(total) / limit
-	if int(total)%limit > 0 {
-		totalPages++
-	}
-
 	api.SendSuccess(c, http.StatusOK, paginatedCandidates, &api.Meta{
 		HiddenUnresolvedTelegramCount: hiddenCount,
-		Pagination: &api.PaginationMeta{
-			Page:  page,
-			Limit: limit,
-			Total: total,
-			Pages: totalPages,
-		},
+		Pagination:                    api.BuildPaginationMeta(page, limit, total),
 	})
 }
 

@@ -110,18 +110,8 @@ func (h *InteractionHandler) ListContactInteractions(c *gin.Context) {
 		responses[i] = interactionToResponse(&interaction)
 	}
 
-	totalPages := int(total) / limit
-	if int(total)%limit > 0 {
-		totalPages++
-	}
-
 	meta := &api.Meta{
-		Pagination: &api.PaginationMeta{
-			Page:  page,
-			Limit: limit,
-			Total: total,
-			Pages: totalPages,
-		},
+		Pagination: api.BuildPaginationMeta(page, limit, total),
 	}
 
 	api.SendSuccess(c, http.StatusOK, responses, meta)

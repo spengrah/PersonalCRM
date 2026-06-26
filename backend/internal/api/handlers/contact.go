@@ -451,18 +451,8 @@ func (h *ContactHandler) ListContacts(c *gin.Context) {
 		responses[i] = contactToResponse(&contact)
 	}
 
-	totalPages := int(total) / query.Limit
-	if int(total)%query.Limit > 0 {
-		totalPages++
-	}
-
 	meta := &api.Meta{
-		Pagination: &api.PaginationMeta{
-			Page:  query.Page,
-			Limit: query.Limit,
-			Total: total,
-			Pages: totalPages,
-		},
+		Pagination: api.BuildPaginationMeta(query.Page, query.Limit, total),
 	}
 
 	api.SendSuccess(c, http.StatusOK, responses, meta)
