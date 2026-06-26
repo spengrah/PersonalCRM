@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev dev-seed staging-reset build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry
+.PHONY: help setup dev dev-seed staging-reset build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -122,6 +122,7 @@ help:
 	@echo "  dev-seed     - Seed the dev synthetic world, then start dev servers (opt-in; dev is unchanged)"
 	@echo "  dev-native   - Start dev servers with native PostgreSQL (no Docker)"
 	@echo "  worktree-env - Symlink the main checkout's gitignored env files into this worktree"
+	@echo "  worktree-deps - Install per-worktree frontend deps (node_modules) into this worktree"
 	@echo "  staging-reset - HARD reset + reseed STAGING with the prod-shaped synthetic world (refuses production)"
 	@echo "  build       - Build both frontend and backend"
 	@echo "  crm-admin   - Build the operator-only admin CLI (backend/crm-admin)"
@@ -283,6 +284,14 @@ staging-reset: ## HARD reset + reseed STAGING with the prod-shaped synthetic wor
 # checkout.
 worktree-env:
 	@WORKTREE_ENV_VERBOSE=1 bash scripts/link-worktree-env.sh
+
+# Install per-worktree dependencies that can't be symlinked (frontend
+# node_modules is branch-specific, tied to this branch's lockfile). Normally
+# automatic via the post-checkout git hook on `git worktree add`; run this
+# manually if a worktree was created before the hook existed. No-op in the main
+# checkout (use `make setup` there). Go deps need nothing (global modcache).
+worktree-deps:
+	@WORKTREE_DEPS_VERBOSE=1 bash scripts/install-worktree-deps.sh
 
 postgres-native:
 	@bash scripts/start-postgres-native.sh
