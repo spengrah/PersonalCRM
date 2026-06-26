@@ -69,6 +69,8 @@ deps_unit() {
   local main="$1" this="$2" pth="$3" fexit="$4"
   : > "$BUN_LOG"
   OUT=$(
+    # PATH/env are deliberately scoped to this subshell (per-case isolation).
+    # shellcheck disable=SC2030,SC2031
     export INJ_MAIN="$main" INJ_THIS="$this" PATH="$pth" \
            FAKE_BUN_LOG="$BUN_LOG" FAKE_BUN_EXIT="$fexit"
     run_worktree_deps 2>&1
@@ -194,6 +196,8 @@ printf 'ROOT=1\n' > "$main/.env"
 printf 'FE=1\n'   > "$main/frontend/.env.local"
 log="$e2e/bun.log"; : > "$log"
 wt="$e2e/wt"
+# PATH/env deliberately scoped to the worktree-add subshell.
+# shellcheck disable=SC2030,SC2031
 if ( export PATH="$FAKE_BIN:/usr/bin:/bin" FAKE_BUN_LOG="$log" FAKE_BUN_EXIT=0
      git -C "$main" worktree add -q "$wt" -b feature HEAD ) 2>/dev/null; then
   addrc=0
@@ -222,6 +226,8 @@ mainf="$e2e/mainf"; setup_hooked_main "$mainf"
 printf 'ROOT=1\n' > "$mainf/.env"
 logf="$e2e/bunf.log"; : > "$logf"
 wtf="$e2e/wtf"; errf="$e2e/wtf.err"
+# PATH/env deliberately scoped to the worktree-add subshell.
+# shellcheck disable=SC2030,SC2031
 if ( export PATH="$FAKE_BIN:/usr/bin:/bin" FAKE_BUN_LOG="$logf" FAKE_BUN_EXIT=1
      git -C "$mainf" worktree add -q "$wtf" -b feature HEAD ) 2>"$errf"; then
   addrcf=0
