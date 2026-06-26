@@ -94,10 +94,8 @@ func (h *IdentityHandler) ListUnmatchedIdentities(c *gin.Context) {
 // @Failure 500 {object} api.APIResponse{error=api.APIError}
 // @Router /identities/{id} [get]
 func (h *IdentityHandler) GetIdentity(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := uuid.Parse(idStr)
-	if err != nil {
-		api.SendValidationError(c, "Invalid identity ID", err.Error())
+	id, ok := api.ParseUUIDParam(c, "id", "identity")
+	if !ok {
 		return
 	}
 
@@ -124,10 +122,8 @@ func (h *IdentityHandler) GetIdentity(c *gin.Context) {
 // @Failure 500 {object} api.APIResponse{error=api.APIError}
 // @Router /identities/{id}/link [post]
 func (h *IdentityHandler) LinkIdentity(c *gin.Context) {
-	idStr := c.Param("id")
-	identityID, err := uuid.Parse(idStr)
-	if err != nil {
-		api.SendValidationError(c, "Invalid identity ID", err.Error())
+	identityID, ok := api.ParseUUIDParam(c, "id", "identity")
+	if !ok {
 		return
 	}
 
@@ -164,10 +160,8 @@ func (h *IdentityHandler) LinkIdentity(c *gin.Context) {
 // @Failure 500 {object} api.APIResponse{error=api.APIError}
 // @Router /identities/{id}/unlink [post]
 func (h *IdentityHandler) UnlinkIdentity(c *gin.Context) {
-	idStr := c.Param("id")
-	identityID, err := uuid.Parse(idStr)
-	if err != nil {
-		api.SendValidationError(c, "Invalid identity ID", err.Error())
+	identityID, ok := api.ParseUUIDParam(c, "id", "identity")
+	if !ok {
 		return
 	}
 
@@ -191,10 +185,8 @@ func (h *IdentityHandler) UnlinkIdentity(c *gin.Context) {
 // @Failure 500 {object} api.APIResponse{error=api.APIError}
 // @Router /identities/{id} [delete]
 func (h *IdentityHandler) DeleteIdentity(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := uuid.Parse(idStr)
-	if err != nil {
-		api.SendValidationError(c, "Invalid identity ID", err.Error())
+	id, ok := api.ParseUUIDParam(c, "id", "identity")
+	if !ok {
 		return
 	}
 
@@ -217,10 +209,8 @@ func (h *IdentityHandler) DeleteIdentity(c *gin.Context) {
 // @Failure 500 {object} api.APIResponse{error=api.APIError}
 // @Router /contacts/{id}/identities [get]
 func (h *IdentityHandler) ListIdentitiesForContact(c *gin.Context) {
-	idStr := c.Param("id")
-	contactID, err := uuid.Parse(idStr)
-	if err != nil {
-		api.SendValidationError(c, "Invalid contact ID", err.Error())
+	contactID, ok := api.ParseUUIDParam(c, "id", "contact")
+	if !ok {
 		return
 	}
 

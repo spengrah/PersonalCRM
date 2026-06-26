@@ -10,7 +10,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
-	"github.com/google/uuid"
 )
 
 // NoteHandler handles note-related HTTP requests
@@ -67,10 +66,8 @@ func noteToResponse(note *repository.Note) NoteResponse {
 // @Failure 500 {object} api.APIResponse{error=api.APIError} "Internal server error"
 // @Router /contacts/{id}/notes [get]
 func (h *NoteHandler) GetContactNotepad(c *gin.Context) {
-	idStr := c.Param("id")
-	contactID, err := uuid.Parse(idStr)
-	if err != nil {
-		api.SendValidationError(c, "Invalid contact ID", "ID must be a valid UUID")
+	contactID, ok := api.ParseUUIDParam(c, "id", "contact")
+	if !ok {
 		return
 	}
 
@@ -104,10 +101,8 @@ func (h *NoteHandler) GetContactNotepad(c *gin.Context) {
 // @Failure 500 {object} api.APIResponse{error=api.APIError} "Internal server error"
 // @Router /contacts/{id}/notes [put]
 func (h *NoteHandler) SaveContactNotepad(c *gin.Context) {
-	idStr := c.Param("id")
-	contactID, err := uuid.Parse(idStr)
-	if err != nil {
-		api.SendValidationError(c, "Invalid contact ID", "ID must be a valid UUID")
+	contactID, ok := api.ParseUUIDParam(c, "id", "contact")
+	if !ok {
 		return
 	}
 

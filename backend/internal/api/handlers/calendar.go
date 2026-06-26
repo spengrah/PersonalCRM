@@ -9,7 +9,6 @@ import (
 	"personal-crm/backend/internal/repository"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 )
 
 // CalendarHandler handles calendar-related HTTP requests
@@ -100,10 +99,8 @@ func convertToEventResponse(event *repository.CalendarEvent) CalendarEventRespon
 // @Router /contacts/{id}/events [get]
 func (h *CalendarHandler) ListEventsForContact(c *gin.Context) {
 	// Parse contact ID
-	idStr := c.Param("id")
-	contactID, err := uuid.Parse(idStr)
-	if err != nil {
-		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Invalid contact ID", err.Error())
+	contactID, ok := api.ParseUUIDParam(c, "id", "contact")
+	if !ok {
 		return
 	}
 
@@ -139,10 +136,8 @@ func (h *CalendarHandler) ListEventsForContact(c *gin.Context) {
 // @Router /contacts/{id}/events/upcoming [get]
 func (h *CalendarHandler) ListUpcomingEventsForContact(c *gin.Context) {
 	// Parse contact ID
-	idStr := c.Param("id")
-	contactID, err := uuid.Parse(idStr)
-	if err != nil {
-		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Invalid contact ID", err.Error())
+	contactID, ok := api.ParseUUIDParam(c, "id", "contact")
+	if !ok {
 		return
 	}
 

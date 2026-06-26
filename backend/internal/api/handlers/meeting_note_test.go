@@ -62,7 +62,7 @@ func TestResolveLink_PathParamInvalidUUID(t *testing.T) {
 	w := post(t, router, "/api/v1/meeting-notes/not-a-uuid/resolve-link",
 		map[string]interface{}{"action": "none_of_these"})
 	require.Equal(t, http.StatusBadRequest, w.Code)
-	require.Contains(t, w.Body.String(), "Invalid meeting_note id")
+	require.Contains(t, w.Body.String(), "Invalid meeting_note ID")
 }
 
 // TestResolveLink_EmptyBody — handler returns 400 when the body is

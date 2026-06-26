@@ -190,10 +190,8 @@ func (h *SyncHandler) TriggerSync(c *gin.Context) {
 // @Failure 500 {object} api.APIResponse{error=api.APIError}
 // @Router /sync/{id}/enable [patch]
 func (h *SyncHandler) EnableSync(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := uuid.Parse(idStr)
-	if err != nil {
-		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Invalid sync state ID", err.Error())
+	id, ok := api.ParseUUIDParam(c, "id", "sync state")
+	if !ok {
 		return
 	}
 
@@ -231,10 +229,8 @@ func (h *SyncHandler) EnableSync(c *gin.Context) {
 // @Failure 500 {object} api.APIResponse{error=api.APIError}
 // @Router /sync/{id}/logs [get]
 func (h *SyncHandler) GetSyncLogs(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := uuid.Parse(idStr)
-	if err != nil {
-		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Invalid sync state ID", err.Error())
+	id, ok := api.ParseUUIDParam(c, "id", "sync state")
+	if !ok {
 		return
 	}
 

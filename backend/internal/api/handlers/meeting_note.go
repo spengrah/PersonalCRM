@@ -77,9 +77,8 @@ const (
 
 // ResolveLink implements POST /api/v1/meeting-notes/:id/resolve-link.
 func (h *MeetingNoteHandler) ResolveLink(c *gin.Context) {
-	mnID, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		api.SendValidationError(c, "Invalid meeting_note id", "id must be a valid UUID")
+	mnID, ok := api.ParseUUIDParam(c, "id", "meeting_note")
+	if !ok {
 		return
 	}
 

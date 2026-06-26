@@ -551,9 +551,8 @@ func (h *MacHostHandler) ListHosts(c *gin.Context) {
 
 // GetHostAdmin returns a single host (admin view) including revoked.
 func (h *MacHostHandler) GetHostAdmin(c *gin.Context) {
-	id, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		api.SendValidationError(c, "invalid id", err.Error())
+	id, ok := api.ParseUUIDParam(c, "id", "Mac host")
+	if !ok {
 		return
 	}
 	host, err := h.svc.GetHost(c.Request.Context(), id)
@@ -576,9 +575,8 @@ type sourceCountsResponse struct {
 // the host. Admin endpoint (global API key); powers the Hosts page's
 // "Cursor" column substitute for icloud_contacts (issue #327).
 func (h *MacHostHandler) GetSourceCounts(c *gin.Context) {
-	id, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		api.SendValidationError(c, "invalid id", err.Error())
+	id, ok := api.ParseUUIDParam(c, "id", "Mac host")
+	if !ok {
 		return
 	}
 	counts, err := h.svc.GetSourceCounts(c.Request.Context(), id)
@@ -593,9 +591,8 @@ func (h *MacHostHandler) GetSourceCounts(c *gin.Context) {
 // cascades by deleting push-strategy external_sync_state rows. 404 if
 // the host is missing or already revoked.
 func (h *MacHostHandler) DeleteHost(c *gin.Context) {
-	id, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		api.SendValidationError(c, "invalid id", err.Error())
+	id, ok := api.ParseUUIDParam(c, "id", "Mac host")
+	if !ok {
 		return
 	}
 	if err := h.svc.RevokeHost(c.Request.Context(), id); err != nil {

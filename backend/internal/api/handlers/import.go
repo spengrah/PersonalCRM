@@ -243,9 +243,8 @@ func (h *ImportHandler) ListImportCandidates(c *gin.Context) {
 func (h *ImportHandler) GetImportCandidate(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	id, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Invalid ID", err.Error())
+	id, ok := api.ParseUUIDParam(c, "id", "external contact")
+	if !ok {
 		return
 	}
 
@@ -278,9 +277,8 @@ func (h *ImportHandler) GetImportCandidate(c *gin.Context) {
 func (h *ImportHandler) ImportContact(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	id, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Invalid ID", err.Error())
+	id, ok := api.ParseUUIDParam(c, "id", "external contact")
+	if !ok {
 		return
 	}
 
@@ -475,9 +473,8 @@ func (h *ImportHandler) buildMethodsFromSelection(external *repository.ExternalC
 func (h *ImportHandler) LinkContact(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	id, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Invalid ID", err.Error())
+	id, ok := api.ParseUUIDParam(c, "id", "external contact")
+	if !ok {
 		return
 	}
 
@@ -640,9 +637,8 @@ func toEnrichmentMethodSelections(selections []SelectedMethodInput) []service.Me
 func (h *ImportHandler) IgnoreContact(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	id, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Invalid ID", err.Error())
+	id, ok := api.ParseUUIDParam(c, "id", "external contact")
+	if !ok {
 		return
 	}
 

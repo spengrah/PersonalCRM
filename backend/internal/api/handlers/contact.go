@@ -316,10 +316,8 @@ func (h *ContactHandler) CreateContact(c *gin.Context) {
 // @Failure 500 {object} api.APIResponse{error=api.APIError} "Internal server error"
 // @Router /contacts/{id} [get]
 func (h *ContactHandler) GetContact(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := uuid.Parse(idStr)
-	if err != nil {
-		api.SendValidationError(c, "Invalid contact ID", "ID must be a valid UUID")
+	id, ok := api.ParseUUIDParam(c, "id", "contact")
+	if !ok {
 		return
 	}
 
@@ -484,10 +482,8 @@ func (h *ContactHandler) ListContacts(c *gin.Context) {
 // @Failure 500 {object} api.APIResponse{error=api.APIError} "Internal server error"
 // @Router /contacts/{id} [put]
 func (h *ContactHandler) UpdateContact(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := uuid.Parse(idStr)
-	if err != nil {
-		api.SendValidationError(c, "Invalid contact ID", "ID must be a valid UUID")
+	id, ok := api.ParseUUIDParam(c, "id", "contact")
+	if !ok {
 		return
 	}
 
@@ -544,14 +540,12 @@ func (h *ContactHandler) UpdateContact(c *gin.Context) {
 // @Failure 500 {object} api.APIResponse{error=api.APIError} "Internal server error"
 // @Router /contacts/{id} [delete]
 func (h *ContactHandler) DeleteContact(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := uuid.Parse(idStr)
-	if err != nil {
-		api.SendValidationError(c, "Invalid contact ID", "ID must be a valid UUID")
+	id, ok := api.ParseUUIDParam(c, "id", "contact")
+	if !ok {
 		return
 	}
 
-	err = h.contactService.DeleteContact(c.Request.Context(), id)
+	err := h.contactService.DeleteContact(c.Request.Context(), id)
 	if err != nil {
 		api.RespondError(c, err, "Contact")
 		return
@@ -722,10 +716,8 @@ type MergePreviewResponse struct {
 // @Router /contacts/{id}/merge/preview [get]
 func (h *ContactHandler) GetMergePreview(c *gin.Context) {
 	// Parse target contact ID from path
-	targetIDStr := c.Param("id")
-	targetID, err := uuid.Parse(targetIDStr)
-	if err != nil {
-		api.SendValidationError(c, "Invalid target contact ID", "ID must be a valid UUID")
+	targetID, ok := api.ParseUUIDParam(c, "id", "target contact")
+	if !ok {
 		return
 	}
 
@@ -775,10 +767,8 @@ func (h *ContactHandler) GetMergePreview(c *gin.Context) {
 // @Router /contacts/{id}/merge [post]
 func (h *ContactHandler) MergeContacts(c *gin.Context) {
 	// Parse target contact ID from path
-	targetIDStr := c.Param("id")
-	targetID, err := uuid.Parse(targetIDStr)
-	if err != nil {
-		api.SendValidationError(c, "Invalid target contact ID", "ID must be a valid UUID")
+	targetID, ok := api.ParseUUIDParam(c, "id", "target contact")
+	if !ok {
 		return
 	}
 

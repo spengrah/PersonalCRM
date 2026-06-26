@@ -14,7 +14,6 @@ import (
 	"personal-crm/backend/internal/todoist"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 )
 
 // OAuthHandler handles OAuth-related HTTP requests
@@ -283,10 +282,8 @@ func (h *OAuthHandler) ListGoogleAccounts(c *gin.Context) {
 // @Failure 500 {object} api.APIResponse{error=api.APIError}
 // @Router /auth/google/accounts/{id}/status [get]
 func (h *OAuthHandler) GetGoogleAccountStatus(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := uuid.Parse(idStr)
-	if err != nil {
-		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Invalid account ID", err.Error())
+	id, ok := api.ParseUUIDParam(c, "id", "account")
+	if !ok {
 		return
 	}
 
@@ -324,14 +321,12 @@ func (h *OAuthHandler) GetGoogleAccountStatus(c *gin.Context) {
 // @Failure 500 {object} api.APIResponse{error=api.APIError}
 // @Router /auth/google/accounts/{id}/revoke [post]
 func (h *OAuthHandler) RevokeGoogleAccount(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := uuid.Parse(idStr)
-	if err != nil {
-		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Invalid account ID", err.Error())
+	id, ok := api.ParseUUIDParam(c, "id", "account")
+	if !ok {
 		return
 	}
 
-	err = h.googleOAuth.RevokeAccount(c.Request.Context(), id)
+	err := h.googleOAuth.RevokeAccount(c.Request.Context(), id)
 	if err != nil {
 		api.RespondError(c, err, "Account")
 		return
@@ -484,10 +479,8 @@ func (h *OAuthHandler) ListTodoistAccounts(c *gin.Context) {
 // @Failure 500 {object} api.APIResponse{error=api.APIError}
 // @Router /auth/todoist/accounts/{id}/status [get]
 func (h *OAuthHandler) GetTodoistAccountStatus(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := uuid.Parse(idStr)
-	if err != nil {
-		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Invalid account ID", err.Error())
+	id, ok := api.ParseUUIDParam(c, "id", "account")
+	if !ok {
 		return
 	}
 
@@ -525,14 +518,12 @@ func (h *OAuthHandler) GetTodoistAccountStatus(c *gin.Context) {
 // @Failure 500 {object} api.APIResponse{error=api.APIError}
 // @Router /auth/todoist/accounts/{id}/revoke [post]
 func (h *OAuthHandler) RevokeTodoistAccount(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := uuid.Parse(idStr)
-	if err != nil {
-		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Invalid account ID", err.Error())
+	id, ok := api.ParseUUIDParam(c, "id", "account")
+	if !ok {
 		return
 	}
 
-	err = h.todoistOAuth.RevokeAccount(c.Request.Context(), id)
+	err := h.todoistOAuth.RevokeAccount(c.Request.Context(), id)
 	if err != nil {
 		api.RespondError(c, err, "Account")
 		return
