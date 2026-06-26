@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -61,7 +62,7 @@ func TestResolveLink_PathParamInvalidUUID(t *testing.T) {
 	w := post(t, router, "/api/v1/meeting-notes/not-a-uuid/resolve-link",
 		map[string]interface{}{"action": "none_of_these"})
 	require.Equal(t, http.StatusBadRequest, w.Code)
-	require.Contains(t, w.Body.String(), "Invalid meeting_note id")
+	require.Contains(t, w.Body.String(), "Invalid meeting_note ID")
 }
 
 // TestResolveLink_EmptyBody — handler returns 400 when the body is
@@ -175,6 +176,39 @@ func TestListNeedsAttention_InvalidHostID(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/meeting-notes/needs-attention?host_id=not-uuid", nil)
 	router.ServeHTTP(w, req)
 	require.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// TestMapResolveError_DomainNotFound — a domain not-found sentinel still
+// maps to 404 after the default arm was routed through RespondInternal.
+func TestMapResolveError_DomainNotFound(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := NewMeetingNoteHandler(nil) // mapResolveError does not touch svc
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+
+	h.mapResolveError(c, service.ErrResolveLinkRowNotFound)
+
+	require.Equal(t, http.StatusNotFound, w.Code)
+	require.Contains(t, w.Body.String(), "Meeting note not found")
+	// A not-found is expected, not a server fault: c.Errors stays empty.
+	require.Empty(t, c.Errors)
+}
+
+// TestMapResolveError_GenericNoLeak — an unmapped error hits the default
+// arm: it must 500 with a generic body (no err.Error() leak) and append
+// the cause to c.Errors so the access log carries it.
+func TestMapResolveError_GenericNoLeak(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := NewMeetingNoteHandler(nil)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+
+	h.mapResolveError(c, errors.New("secret internal detail"))
+
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+	require.NotContains(t, w.Body.String(), "secret internal detail")
+	require.Contains(t, w.Body.String(), `"success":false`)
+	require.Len(t, c.Errors, 1)
 }
 
 // Ensure stubMeetingNoteService stays a placeholder — used only to

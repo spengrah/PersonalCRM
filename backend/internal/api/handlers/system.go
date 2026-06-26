@@ -89,6 +89,9 @@ func (h *SystemHandler) SetTimeAcceleration(c *gin.Context) {
 
 	// Set environment variables (note: this only affects current process)
 	if err := os.Setenv("TIME_ACCELERATION", strconv.Itoa(settings.Factor)); err != nil {
+		// Preserve the existing non-standard body (system.go is E2E-selected); just
+		// add the logged cause + c.Error revival.
+		api.LogServerError(c, err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Failed to set TIME_ACCELERATION environment variable",
 		})
@@ -96,6 +99,7 @@ func (h *SystemHandler) SetTimeAcceleration(c *gin.Context) {
 	}
 	if settings.Factor > 1 {
 		if err := os.Setenv("TIME_BASE", strconv.FormatInt(time.Now().Unix(), 10)); err != nil { //nolint:forbidigo // Need wall-clock base for acceleration
+			api.LogServerError(c, err)
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": "Failed to set TIME_BASE environment variable",
 			})
@@ -103,6 +107,7 @@ func (h *SystemHandler) SetTimeAcceleration(c *gin.Context) {
 		}
 	} else {
 		if err := os.Unsetenv("TIME_BASE"); err != nil {
+			api.LogServerError(c, err)
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": "Failed to unset TIME_BASE environment variable",
 			})
@@ -128,6 +133,7 @@ func (h *SystemHandler) ExportData(c *gin.Context) {
 		Limit: 1000, // Large limit to get all
 	})
 	if err != nil {
+		api.LogServerError(c, err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"error": gin.H{

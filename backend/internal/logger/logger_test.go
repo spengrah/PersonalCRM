@@ -157,6 +157,40 @@ func TestWith(t *testing.T) {
 	})
 }
 
+func TestSetOutput(t *testing.T) {
+	// Establish a known baseline logger writing to origBuf.
+	var origBuf bytes.Buffer
+	log = zerolog.New(&origBuf).Level(zerolog.InfoLevel)
+
+	t.Run("redirects output and restores", func(t *testing.T) {
+		var capture bytes.Buffer
+		restore := SetOutput(&capture)
+
+		Error().Str("request_id", "rid-1").Msg("captured")
+		assert.Contains(t, capture.String(), "captured")
+		assert.Contains(t, capture.String(), "rid-1")
+		assert.Empty(t, origBuf.String(), "output should not reach the original writer")
+
+		restore()
+
+		origBuf.Reset()
+		Error().Msg("after restore")
+		assert.Contains(t, origBuf.String(), "after restore")
+	})
+
+	t.Run("preserves the configured level", func(t *testing.T) {
+		log = zerolog.New(&origBuf).Level(zerolog.WarnLevel)
+		var capture bytes.Buffer
+		restore := SetOutput(&capture)
+		defer restore()
+
+		Info().Msg("filtered info")
+		Warn().Msg("kept warn")
+		assert.NotContains(t, capture.String(), "filtered info")
+		assert.Contains(t, capture.String(), "kept warn")
+	})
+}
+
 func TestLogLevelFiltering(t *testing.T) {
 	var buf bytes.Buffer
 

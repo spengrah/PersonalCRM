@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,8 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
+	"personal-crm/backend/internal/api"
+	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/gin-gonic/gin"
@@ -82,7 +85,7 @@ func TestStalenessHandler_GetActiveBreaches_EmptyIsArrayNotNull(t *testing.T) {
 }
 
 func TestStalenessHandler_GetActiveBreaches_ErrorReturns500(t *testing.T) {
-	reader := &fakeStalenessReader{err: errors.New("db down")}
+	reader := &fakeStalenessReader{err: errors.New("db down secret detail")}
 	r := newStalenessTestRouter(reader)
 
 	w := httptest.NewRecorder()
@@ -91,4 +94,34 @@ func TestStalenessHandler_GetActiveBreaches_ErrorReturns500(t *testing.T) {
 
 	require.Equal(t, http.StatusInternalServerError, w.Code)
 	assert.Contains(t, w.Body.String(), `"success":false`)
+	// The raw cause must not leak into the 500 body.
+	assert.NotContains(t, w.Body.String(), "db down secret detail")
+	assert.NotContains(t, w.Body.String(), `"details"`)
+}
+
+// TestStalenessHandler_GetActiveBreaches_LogsCauseThroughMiddleware proves the
+// end-to-end acceptance criterion: a 500 logs its cause with request_id, and the
+// revived c.Error revives the LoggingMiddleware access-log error branch. It is SERIAL
+// (no t.Parallel) because it mutates the process-global logger via logger.SetOutput.
+func TestStalenessHandler_GetActiveBreaches_LogsCauseThroughMiddleware(t *testing.T) {
+	var buf bytes.Buffer
+	restore := logger.SetOutput(&buf)
+	defer restore()
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(api.RequestIDMiddleware(), api.LoggingMiddleware())
+	h := NewStalenessHandler(&fakeStalenessReader{err: errors.New("upstream exploded")})
+	r.GET("/sync/staleness", h.GetActiveBreaches)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/sync/staleness", nil)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+	logOutput := buf.String()
+	// The explicit handler-error log carries the cause...
+	assert.Contains(t, logOutput, "upstream exploded")
+	// ...and the access-log line now carries the error field (c.Error revived the branch).
+	assert.Contains(t, logOutput, `"error"`)
 }

@@ -12,7 +12,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
-	"github.com/google/uuid"
 )
 
 // ContactTaskHandler handles contact task-related HTTP requests
@@ -25,7 +24,7 @@ type ContactTaskHandler struct {
 func NewContactTaskHandler(contactTaskService *service.ContactTaskService) *ContactTaskHandler {
 	return &ContactTaskHandler{
 		contactTaskService: contactTaskService,
-		validator:          validator.New(),
+		validator:          sharedValidator,
 	}
 }
 
@@ -75,9 +74,8 @@ func (h *ContactTaskHandler) CreateManualTask(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	// Parse contact ID
-	contactID, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		api.SendValidationError(c, "Invalid contact ID", "ID must be a valid UUID")
+	contactID, ok := api.ParseUUIDParam(c, "id", "contact")
+	if !ok {
 		return
 	}
 
@@ -119,7 +117,7 @@ func (h *ContactTaskHandler) CreateManualTask(c *gin.Context) {
 			api.SendError(c, http.StatusBadRequest, api.ErrCodeBadRequest, "Todoist settings not configured", "Configure Todoist project and label in Settings")
 			return
 		}
-		api.SendInternalError(c, "Failed to create task")
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -158,9 +156,8 @@ func (h *ContactTaskHandler) ListContactTasks(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	// Parse contact ID
-	contactID, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		api.SendValidationError(c, "Invalid contact ID", "ID must be a valid UUID")
+	contactID, ok := api.ParseUUIDParam(c, "id", "contact")
+	if !ok {
 		return
 	}
 
@@ -192,11 +189,7 @@ func (h *ContactTaskHandler) ListContactTasks(c *gin.Context) {
 	// List tasks
 	tasks, err := h.contactTaskService.ListContactTasks(ctx, contactID, stateFilter, kindFilter, lifecycleFilter)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Contact")
-			return
-		}
-		api.SendInternalError(c, "Failed to list tasks")
+		api.RespondError(c, err, "Contact")
 		return
 	}
 
@@ -224,27 +217,21 @@ func (h *ContactTaskHandler) DeleteTaskLink(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	// Parse contact ID
-	contactID, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		api.SendValidationError(c, "Invalid contact ID", "ID must be a valid UUID")
+	contactID, ok := api.ParseUUIDParam(c, "id", "contact")
+	if !ok {
 		return
 	}
 
 	// Parse task ID
-	taskID, err := uuid.Parse(c.Param("taskId"))
-	if err != nil {
-		api.SendValidationError(c, "Invalid task ID", "ID must be a valid UUID")
+	taskID, ok := api.ParseUUIDParam(c, "taskId", "task")
+	if !ok {
 		return
 	}
 
 	// Delete task link
-	err = h.contactTaskService.DeleteTaskLink(ctx, contactID, taskID)
+	err := h.contactTaskService.DeleteTaskLink(ctx, contactID, taskID)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Task")
-			return
-		}
-		api.SendInternalError(c, "Failed to delete task link")
+		api.RespondError(c, err, "Task")
 		return
 	}
 

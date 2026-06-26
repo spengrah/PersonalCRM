@@ -12,7 +12,6 @@ import (
 	"personal-crm/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 )
 
 // bindOptionalJSON binds a JSON body that may legitimately be empty. An
@@ -114,7 +113,7 @@ func (h *SuggestionHandler) ListSuggestions(c *gin.Context) {
 		IncludeUnresolvedTelegram: includeUnresolvedTelegramParam(c),
 	}, MaxCandidatesForSorting)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to list suggestions", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -137,14 +136,11 @@ func (h *SuggestionHandler) ListSuggestions(c *gin.Context) {
 		})
 	}
 
+	// list.Pages is the service's ceil(CandidateTotal/Limit); BuildPaginationMeta
+	// reproduces that exact formula, so meta.pagination is unchanged.
 	api.SendSuccess(c, http.StatusOK, items, &api.Meta{
 		HiddenUnresolvedTelegramCount: list.HiddenUnresolvedTelegramCount,
-		Pagination: &api.PaginationMeta{
-			Page:  list.Page,
-			Limit: list.Limit,
-			Total: int64(list.CandidateTotal),
-			Pages: list.Pages,
-		},
+		Pagination:                    api.BuildPaginationMeta(list.Page, list.Limit, int64(list.CandidateTotal)),
 	})
 }
 
@@ -196,9 +192,8 @@ type DismissMethodSuggestionsResponse struct {
 func (h *SuggestionHandler) ResolveMethodSuggestions(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	id, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Invalid ID", err.Error())
+	id, ok := api.ParseUUIDParam(c, "id", "external contact")
+	if !ok {
 		return
 	}
 
@@ -235,9 +230,8 @@ func (h *SuggestionHandler) ResolveMethodSuggestions(c *gin.Context) {
 func (h *SuggestionHandler) DismissMethodSuggestions(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	id, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Invalid ID", err.Error())
+	id, ok := api.ParseUUIDParam(c, "id", "external contact")
+	if !ok {
 		return
 	}
 
@@ -272,7 +266,7 @@ func (h *SuggestionHandler) sendActionError(c *gin.Context, err error) {
 	case errors.Is(err, service.ErrSuggestionInvalidMethod):
 		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Malformed method (empty type or value)", "")
 	default:
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to process suggestion", err.Error())
+		api.RespondInternal(c, err)
 	}
 }
 

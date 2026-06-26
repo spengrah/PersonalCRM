@@ -1,19 +1,16 @@
 package handlers
 
 import (
-	"errors"
 	"net/http"
 	"strconv"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/api"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 )
 
 // InteractionHandler handles interaction-related HTTP requests.
@@ -81,10 +78,8 @@ func interactionToResponse(i *repository.Interaction) InteractionResponse {
 // @Success 200 {object} api.APIResponse{data=[]InteractionResponse}
 // @Router /contacts/{id}/interactions [get]
 func (h *InteractionHandler) ListContactInteractions(c *gin.Context) {
-	idStr := c.Param("id")
-	contactID, err := uuid.Parse(idStr)
-	if err != nil {
-		api.SendValidationError(c, "Invalid contact ID", "ID must be a valid UUID")
+	contactID, ok := api.ParseUUIDParam(c, "id", "contact")
+	if !ok {
 		return
 	}
 
@@ -100,13 +95,13 @@ func (h *InteractionHandler) ListContactInteractions(c *gin.Context) {
 
 	interactions, err := h.interactionRepo.ListContactInteractions(c.Request.Context(), contactID, int32(limit), int32(offset))
 	if err != nil {
-		api.SendInternalError(c, "Failed to list interactions")
+		api.RespondInternal(c, err)
 		return
 	}
 
 	total, err := h.interactionRepo.CountContactInteractions(c.Request.Context(), contactID)
 	if err != nil {
-		api.SendInternalError(c, "Failed to count interactions")
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -115,18 +110,8 @@ func (h *InteractionHandler) ListContactInteractions(c *gin.Context) {
 		responses[i] = interactionToResponse(&interaction)
 	}
 
-	totalPages := int(total) / limit
-	if int(total)%limit > 0 {
-		totalPages++
-	}
-
 	meta := &api.Meta{
-		Pagination: &api.PaginationMeta{
-			Page:  page,
-			Limit: limit,
-			Total: total,
-			Pages: totalPages,
-		},
+		Pagination: api.BuildPaginationMeta(page, limit, total),
 	}
 
 	api.SendSuccess(c, http.StatusOK, responses, meta)
@@ -142,10 +127,8 @@ func (h *InteractionHandler) ListContactInteractions(c *gin.Context) {
 // @Success 201 {object} api.APIResponse{data=InteractionResponse}
 // @Router /contacts/{id}/interactions [post]
 func (h *InteractionHandler) CreateInteraction(c *gin.Context) {
-	idStr := c.Param("id")
-	contactID, err := uuid.Parse(idStr)
-	if err != nil {
-		api.SendValidationError(c, "Invalid contact ID", "ID must be a valid UUID")
+	contactID, ok := api.ParseUUIDParam(c, "id", "contact")
+	if !ok {
 		return
 	}
 
@@ -202,11 +185,7 @@ func (h *InteractionHandler) CreateInteraction(c *gin.Context) {
 
 	interaction, err := h.manualHandler.Run(c.Request.Context(), contactID, direction, occurredAt, description)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Contact")
-			return
-		}
-		api.SendInternalError(c, "Failed to create interaction")
+		api.RespondError(c, err, "Contact")
 		return
 	}
 
@@ -220,26 +199,20 @@ func (h *InteractionHandler) CreateInteraction(c *gin.Context) {
 // @Success 204 "Interaction deleted"
 // @Router /interactions/{id} [delete]
 func (h *InteractionHandler) DeleteInteraction(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := uuid.Parse(idStr)
-	if err != nil {
-		api.SendValidationError(c, "Invalid interaction ID", "ID must be a valid UUID")
+	id, ok := api.ParseUUIDParam(c, "id", "interaction")
+	if !ok {
 		return
 	}
 
 	// Verify interaction exists
-	_, err = h.interactionRepo.GetInteraction(c.Request.Context(), id)
+	_, err := h.interactionRepo.GetInteraction(c.Request.Context(), id)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Interaction")
-			return
-		}
-		api.SendInternalError(c, "Failed to retrieve interaction")
+		api.RespondError(c, err, "Interaction")
 		return
 	}
 
 	if err := h.interactionRepo.SoftDeleteInteraction(c.Request.Context(), id); err != nil {
-		api.SendInternalError(c, "Failed to delete interaction")
+		api.RespondInternal(c, err)
 		return
 	}
 

@@ -1,18 +1,15 @@
 package handlers
 
 import (
-	"errors"
 	"net/http"
 	"time"
 
 	"personal-crm/backend/internal/api"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
-	"github.com/google/uuid"
 )
 
 // NoteHandler handles note-related HTTP requests
@@ -25,7 +22,7 @@ type NoteHandler struct {
 func NewNoteHandler(noteService *service.NoteService) *NoteHandler {
 	return &NoteHandler{
 		noteService: noteService,
-		validator:   validator.New(),
+		validator:   sharedValidator,
 	}
 }
 
@@ -69,20 +66,14 @@ func noteToResponse(note *repository.Note) NoteResponse {
 // @Failure 500 {object} api.APIResponse{error=api.APIError} "Internal server error"
 // @Router /contacts/{id}/notes [get]
 func (h *NoteHandler) GetContactNotepad(c *gin.Context) {
-	idStr := c.Param("id")
-	contactID, err := uuid.Parse(idStr)
-	if err != nil {
-		api.SendValidationError(c, "Invalid contact ID", "ID must be a valid UUID")
+	contactID, ok := api.ParseUUIDParam(c, "id", "contact")
+	if !ok {
 		return
 	}
 
 	note, err := h.noteService.GetContactNotepad(c.Request.Context(), contactID)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Contact")
-			return
-		}
-		api.SendInternalError(c, "Failed to retrieve note")
+		api.RespondError(c, err, "Contact")
 		return
 	}
 
@@ -110,10 +101,8 @@ func (h *NoteHandler) GetContactNotepad(c *gin.Context) {
 // @Failure 500 {object} api.APIResponse{error=api.APIError} "Internal server error"
 // @Router /contacts/{id}/notes [put]
 func (h *NoteHandler) SaveContactNotepad(c *gin.Context) {
-	idStr := c.Param("id")
-	contactID, err := uuid.Parse(idStr)
-	if err != nil {
-		api.SendValidationError(c, "Invalid contact ID", "ID must be a valid UUID")
+	contactID, ok := api.ParseUUIDParam(c, "id", "contact")
+	if !ok {
 		return
 	}
 
@@ -130,11 +119,7 @@ func (h *NoteHandler) SaveContactNotepad(c *gin.Context) {
 
 	note, err := h.noteService.SaveContactNotepad(c.Request.Context(), contactID, req.Body)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Contact")
-			return
-		}
-		api.SendInternalError(c, "Failed to save note")
+		api.RespondError(c, err, "Contact")
 		return
 	}
 

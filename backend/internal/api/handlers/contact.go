@@ -10,7 +10,6 @@ import (
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/api"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
@@ -71,7 +70,7 @@ type ContactHandler struct {
 func NewContactHandler(contactService *service.ContactService) *ContactHandler {
 	return &ContactHandler{
 		contactService: contactService,
-		validator:      validator.New(),
+		validator:      sharedValidator,
 	}
 }
 
@@ -296,7 +295,7 @@ func (h *ContactHandler) CreateContact(c *gin.Context) {
 		buildContactMethodInputs(req.Methods),
 	)
 	if err != nil {
-		api.SendInternalError(c, "Failed to create contact")
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -317,20 +316,14 @@ func (h *ContactHandler) CreateContact(c *gin.Context) {
 // @Failure 500 {object} api.APIResponse{error=api.APIError} "Internal server error"
 // @Router /contacts/{id} [get]
 func (h *ContactHandler) GetContact(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := uuid.Parse(idStr)
-	if err != nil {
-		api.SendValidationError(c, "Invalid contact ID", "ID must be a valid UUID")
+	id, ok := api.ParseUUIDParam(c, "id", "contact")
+	if !ok {
 		return
 	}
 
 	contact, err := h.contactService.GetContact(c.Request.Context(), id)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Contact")
-			return
-		}
-		api.SendInternalError(c, "Failed to retrieve contact")
+		api.RespondError(c, err, "Contact")
 		return
 	}
 
@@ -399,7 +392,7 @@ func (h *ContactHandler) ListContacts(c *gin.Context) {
 			FollowupFilter: query.FollowupFilter,
 		})
 		if err != nil {
-			api.SendInternalError(c, "Failed to retrieve contact IDs")
+			api.RespondInternal(c, err)
 			return
 		}
 
@@ -448,7 +441,7 @@ func (h *ContactHandler) ListContacts(c *gin.Context) {
 	}
 
 	if err != nil {
-		api.SendInternalError(c, "Failed to retrieve contacts")
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -458,18 +451,8 @@ func (h *ContactHandler) ListContacts(c *gin.Context) {
 		responses[i] = contactToResponse(&contact)
 	}
 
-	totalPages := int(total) / query.Limit
-	if int(total)%query.Limit > 0 {
-		totalPages++
-	}
-
 	meta := &api.Meta{
-		Pagination: &api.PaginationMeta{
-			Page:  query.Page,
-			Limit: query.Limit,
-			Total: total,
-			Pages: totalPages,
-		},
+		Pagination: api.BuildPaginationMeta(query.Page, query.Limit, total),
 	}
 
 	api.SendSuccess(c, http.StatusOK, responses, meta)
@@ -489,10 +472,8 @@ func (h *ContactHandler) ListContacts(c *gin.Context) {
 // @Failure 500 {object} api.APIResponse{error=api.APIError} "Internal server error"
 // @Router /contacts/{id} [put]
 func (h *ContactHandler) UpdateContact(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := uuid.Parse(idStr)
-	if err != nil {
-		api.SendValidationError(c, "Invalid contact ID", "ID must be a valid UUID")
+	id, ok := api.ParseUUIDParam(c, "id", "contact")
+	if !ok {
 		return
 	}
 
@@ -528,11 +509,7 @@ func (h *ContactHandler) UpdateContact(c *gin.Context) {
 		methodsProvided,
 	)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Contact")
-			return
-		}
-		api.SendInternalError(c, "Failed to update contact")
+		api.RespondError(c, err, "Contact")
 		return
 	}
 
@@ -553,20 +530,14 @@ func (h *ContactHandler) UpdateContact(c *gin.Context) {
 // @Failure 500 {object} api.APIResponse{error=api.APIError} "Internal server error"
 // @Router /contacts/{id} [delete]
 func (h *ContactHandler) DeleteContact(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := uuid.Parse(idStr)
-	if err != nil {
-		api.SendValidationError(c, "Invalid contact ID", "ID must be a valid UUID")
+	id, ok := api.ParseUUIDParam(c, "id", "contact")
+	if !ok {
 		return
 	}
 
-	err = h.contactService.DeleteContact(c.Request.Context(), id)
+	err := h.contactService.DeleteContact(c.Request.Context(), id)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Contact")
-			return
-		}
-		api.SendInternalError(c, "Failed to delete contact")
+		api.RespondError(c, err, "Contact")
 		return
 	}
 
@@ -584,7 +555,7 @@ func (h *ContactHandler) DeleteContact(c *gin.Context) {
 func (h *ContactHandler) ListOverdueContacts(c *gin.Context) {
 	overdueContacts, err := h.contactService.ListOverdueContacts(c.Request.Context())
 	if err != nil {
-		api.SendInternalError(c, "Failed to retrieve contacts")
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -735,10 +706,8 @@ type MergePreviewResponse struct {
 // @Router /contacts/{id}/merge/preview [get]
 func (h *ContactHandler) GetMergePreview(c *gin.Context) {
 	// Parse target contact ID from path
-	targetIDStr := c.Param("id")
-	targetID, err := uuid.Parse(targetIDStr)
-	if err != nil {
-		api.SendValidationError(c, "Invalid target contact ID", "ID must be a valid UUID")
+	targetID, ok := api.ParseUUIDParam(c, "id", "target contact")
+	if !ok {
 		return
 	}
 
@@ -756,11 +725,7 @@ func (h *ContactHandler) GetMergePreview(c *gin.Context) {
 
 	preview, err := h.contactService.GetMergePreview(c.Request.Context(), sourceID, targetID)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Contact")
-			return
-		}
-		api.SendInternalError(c, "Failed to get merge preview")
+		api.RespondError(c, err, "Contact")
 		return
 	}
 
@@ -792,10 +757,8 @@ func (h *ContactHandler) GetMergePreview(c *gin.Context) {
 // @Router /contacts/{id}/merge [post]
 func (h *ContactHandler) MergeContacts(c *gin.Context) {
 	// Parse target contact ID from path
-	targetIDStr := c.Param("id")
-	targetID, err := uuid.Parse(targetIDStr)
-	if err != nil {
-		api.SendValidationError(c, "Invalid target contact ID", "ID must be a valid UUID")
+	targetID, ok := api.ParseUUIDParam(c, "id", "target contact")
+	if !ok {
 		return
 	}
 
@@ -830,11 +793,7 @@ func (h *ContactHandler) MergeContacts(c *gin.Context) {
 
 	mergedContact, err := h.contactService.MergeContacts(c.Request.Context(), serviceReq)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Contact")
-			return
-		}
-		api.SendInternalError(c, "Failed to merge contacts")
+		api.RespondError(c, err, "Contact")
 		return
 	}
 

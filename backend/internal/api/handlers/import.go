@@ -68,7 +68,7 @@ func NewImportHandler(
 		matchSvc:      matchSvc,
 		enricher:      enricher,
 		suggestionSvc: suggestionSvc,
-		validator:     validator.New(),
+		validator:     sharedValidator,
 	}
 }
 
@@ -185,12 +185,12 @@ func (h *ImportHandler) ListImportCandidates(c *gin.Context) {
 	// at the DB level.
 	sorted, err := h.suggestionSvc.BuildSortedCandidates(ctx, source, MaxCandidatesForSorting, includeUnresolvedTelegram)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to list candidates", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 	hiddenCount, err := h.externalRepo.CountHiddenUnresolvedTelegram(ctx, source)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to count hidden candidates", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -214,19 +214,9 @@ func (h *ImportHandler) ListImportCandidates(c *gin.Context) {
 
 	paginatedCandidates := candidates[offset:end]
 
-	totalPages := int(total) / limit
-	if int(total)%limit > 0 {
-		totalPages++
-	}
-
 	api.SendSuccess(c, http.StatusOK, paginatedCandidates, &api.Meta{
 		HiddenUnresolvedTelegramCount: hiddenCount,
-		Pagination: &api.PaginationMeta{
-			Page:  page,
-			Limit: limit,
-			Total: total,
-			Pages: totalPages,
-		},
+		Pagination:                    api.BuildPaginationMeta(page, limit, total),
 	})
 }
 
@@ -243,15 +233,14 @@ func (h *ImportHandler) ListImportCandidates(c *gin.Context) {
 func (h *ImportHandler) GetImportCandidate(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	id, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Invalid ID", err.Error())
+	id, ok := api.ParseUUIDParam(c, "id", "external contact")
+	if !ok {
 		return
 	}
 
 	contact, err := h.externalRepo.GetByID(ctx, id)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to get candidate", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 	if contact == nil {
@@ -278,9 +267,8 @@ func (h *ImportHandler) GetImportCandidate(c *gin.Context) {
 func (h *ImportHandler) ImportContact(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	id, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Invalid ID", err.Error())
+	id, ok := api.ParseUUIDParam(c, "id", "external contact")
+	if !ok {
 		return
 	}
 
@@ -298,7 +286,7 @@ func (h *ImportHandler) ImportContact(c *gin.Context) {
 	// Get external contact
 	external, err := h.externalRepo.GetByID(ctx, id)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to get candidate", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 	if external == nil {
@@ -361,7 +349,7 @@ func (h *ImportHandler) ImportContact(c *gin.Context) {
 	// Create the CRM contact
 	contact, rematchJobID, err := h.contactSvc.CreateContact(ctx, createReq, methods)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to create contact", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -386,8 +374,7 @@ func (h *ImportHandler) ImportContact(c *gin.Context) {
 	// errors as 500 because a silent failure would leave the user with
 	// an imported contact whose anarlog sessions don't link to it.
 	if err := h.backfillAnarlogIdentity(ctx, external, contact.ID); err != nil {
-		logger.Error().Err(err).Str("external_id", id.String()).Msg("anarlog import backfill failed")
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to link anarlog identity to imported contact", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -475,9 +462,8 @@ func (h *ImportHandler) buildMethodsFromSelection(external *repository.ExternalC
 func (h *ImportHandler) LinkContact(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	id, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Invalid ID", err.Error())
+	id, ok := api.ParseUUIDParam(c, "id", "external contact")
+	if !ok {
 		return
 	}
 
@@ -502,7 +488,7 @@ func (h *ImportHandler) LinkContact(c *gin.Context) {
 	// Get external contact
 	external, err := h.externalRepo.GetByID(ctx, id)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to get candidate", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 	if external == nil {
@@ -533,7 +519,7 @@ func (h *ImportHandler) LinkContact(c *gin.Context) {
 	// Update match status
 	updated, err := h.externalRepo.UpdateMatch(ctx, id, &crmContactID, linkStatus)
 	if err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to link contact", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -573,8 +559,7 @@ func (h *ImportHandler) LinkContact(c *gin.Context) {
 	// resolves the human and produces the right interaction. Surfaces
 	// errors as 500 — see ImportContact above for the rationale.
 	if err := h.backfillAnarlogIdentity(ctx, external, crmContactID); err != nil {
-		logger.Error().Err(err).Str("external_id", id.String()).Msg("anarlog import backfill failed")
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to link anarlog identity to linked contact", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -640,14 +625,13 @@ func toEnrichmentMethodSelections(selections []SelectedMethodInput) []service.Me
 func (h *ImportHandler) IgnoreContact(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	id, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Invalid ID", err.Error())
+	id, ok := api.ParseUUIDParam(c, "id", "external contact")
+	if !ok {
 		return
 	}
 
 	if err := h.externalRepo.Ignore(ctx, id); err != nil {
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Failed to ignore contact", err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 

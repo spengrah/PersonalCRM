@@ -6,11 +6,9 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/api"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 )
 
 // RematchHandler exposes HTTP endpoints for inspecting and triggering rematch
@@ -62,9 +60,8 @@ type RescanResponse struct {
 // @Failure 404 {object} api.APIResponse{error=api.APIError}
 // @Router /rematch/jobs/{jobID} [get]
 func (h *RematchHandler) GetJob(c *gin.Context) {
-	id, err := uuid.Parse(c.Param("jobID"))
-	if err != nil {
-		api.SendValidationError(c, "Invalid job ID", "ID must be a valid UUID")
+	id, ok := api.ParseUUIDParam(c, "jobID", "job")
+	if !ok {
 		return
 	}
 
@@ -74,7 +71,7 @@ func (h *RematchHandler) GetJob(c *gin.Context) {
 			api.SendNotFound(c, "Rematch job")
 			return
 		}
-		api.SendInternalError(c, "Failed to load rematch job")
+		api.RespondInternal(c, err)
 		return
 	}
 
@@ -94,19 +91,14 @@ func (h *RematchHandler) GetJob(c *gin.Context) {
 func (h *RematchHandler) Rescan(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	id, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		api.SendValidationError(c, "Invalid contact ID", "ID must be a valid UUID")
+	id, ok := api.ParseUUIDParam(c, "id", "contact")
+	if !ok {
 		return
 	}
 
 	jobID, err := h.contactSvc.RescanRematch(ctx, id)
 	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			api.SendNotFound(c, "Contact")
-			return
-		}
-		api.SendInternalError(c, "Failed to start rematch")
+		api.RespondError(c, err, "Contact")
 		return
 	}
 	api.SendSuccess(c, http.StatusOK, RescanResponse{

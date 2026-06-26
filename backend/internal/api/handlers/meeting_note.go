@@ -55,7 +55,7 @@ type MeetingNoteHandler struct {
 func NewMeetingNoteHandler(svc *service.MeetingNoteService) *MeetingNoteHandler {
 	return &MeetingNoteHandler{
 		svc:       svc,
-		validator: validator.New(),
+		validator: sharedValidator,
 	}
 }
 
@@ -77,9 +77,8 @@ const (
 
 // ResolveLink implements POST /api/v1/meeting-notes/:id/resolve-link.
 func (h *MeetingNoteHandler) ResolveLink(c *gin.Context) {
-	mnID, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		api.SendValidationError(c, "Invalid meeting_note id", "id must be a valid UUID")
+	mnID, ok := api.ParseUUIDParam(c, "id", "meeting_note")
+	if !ok {
 		return
 	}
 
@@ -155,7 +154,7 @@ func (h *MeetingNoteHandler) mapResolveError(c *gin.Context, err error) {
 		api.SendError(c, http.StatusUnprocessableEntity, api.ErrCodeValidation,
 			"conflict_candidates snapshot missing on conflict_pending row; please re-trigger sync", "")
 	default:
-		api.SendInternalError(c, err.Error())
+		api.RespondInternal(c, err)
 	}
 }
 
@@ -181,7 +180,7 @@ func (h *MeetingNoteHandler) ListNeedsAttention(c *gin.Context) {
 
 	items, err := h.svc.ListNeedsAttention(c.Request.Context(), hostID)
 	if err != nil {
-		api.SendInternalError(c, err.Error())
+		api.RespondInternal(c, err)
 		return
 	}
 	api.SendSuccess(c, http.StatusOK, items, nil)
