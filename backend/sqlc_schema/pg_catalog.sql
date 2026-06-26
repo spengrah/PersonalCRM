@@ -18,3 +18,15 @@ CREATE TABLE pg_constraint (
 CREATE FUNCTION pg_get_constraintdef(constraint_oid oid) RETURNS text AS $$
     SELECT ''::text;
 $$ LANGUAGE sql;
+
+-- pg_indexes is a system catalog VIEW (over pg_class/pg_index) that sqlc
+-- v1.30.0 does not model; the read-only catalog query TestListIndexDefsForComms
+-- (internal/db/queries/test.sql) fails to compile without this stub. We declare
+-- only the columns that query touches. As above, the live catalog is the source
+-- of truth at runtime; this file is never applied by golang-migrate.
+CREATE TABLE pg_indexes (
+    schemaname text NOT NULL,
+    tablename  text NOT NULL,
+    indexname  text NOT NULL,
+    indexdef   text NOT NULL
+);

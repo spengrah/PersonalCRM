@@ -731,6 +731,15 @@ SELECT table_name::text FROM information_schema.tables
 WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
 ORDER BY table_name;
 
+-- name: TestListIndexDefsForComms :many
+-- Index-definition test only: enumerate every index on comms_message with
+-- Postgres's own deterministic indexdef reconstruction, so a test can assert the
+-- exact key columns + partial predicate of the eligible/stale-claim indexes
+-- (migration 073). Read-only catalog access, mirroring TestListPublicTables.
+SELECT indexname::text, indexdef::text FROM pg_indexes
+WHERE schemaname = 'public' AND tablename = 'comms_message'
+ORDER BY indexname;
+
 -- name: TestInsertNonFinalRiverJob :exec
 -- Reset/additive-seed test only: plant ONE queued (non-finalized) river_job so a
 -- test can assert the additive --seed preflight REFUSES while --reset-and-seed

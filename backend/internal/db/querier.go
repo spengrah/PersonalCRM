@@ -2043,6 +2043,11 @@ type Querier interface {
 	// proving the cadence/no-method states SURVIVE (a settling replay would
 	// overwrite last_contacted). Caller passes a BARE prefix; '%' appended.
 	TestListContactBucketsByNamePrefix(ctx context.Context, namePrefix pgtype.Text) ([]*TestListContactBucketsByNamePrefixRow, error)
+	// Index-definition test only: enumerate every index on comms_message with
+	// Postgres's own deterministic indexdef reconstruction, so a test can assert the
+	// exact key columns + partial predicate of the eligible/stale-claim indexes
+	// (migration 073). Read-only catalog access, mirroring TestListPublicTables.
+	TestListIndexDefsForComms(ctx context.Context) ([]*TestListIndexDefsForCommsRow, error)
 	// Reset integration test only: enumerate every base table in the public schema
 	// so the catalog guard can assert each is in the wiped list, is schema_migrations,
 	// or matches the river_% allowlist. Read-only catalog access.
