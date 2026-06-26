@@ -238,6 +238,26 @@ check_swift() {
   fi
 }
 
+# check_frontend_deps: fast-fail GATE that runs BEFORE the parallel block so a
+# missing/partial frontend/node_modules produces a clear, actionable message
+# instead of the concurrent LINT/FRONTEND phases' cryptic `next`/`vitest:
+# command not found` (exit 127). Modeled on check_swift. It must be a hook gate,
+# NOT a .ai/pre-push.json lint.commands[] entry: LINT does not short-circuit on
+# the first failure and runs concurrently with FRONTEND, so a config-command
+# preflight would print its message ALONGSIDE the cryptic errors, not instead of
+# them. Only the fast-fail here (under the hook's set -e, before run_phases_parallel)
+# prevents the frontend commands from running at all.
+check_frontend_deps() {
+  # Only enforce when frontend tooling will actually run (lint and/or tests on).
+  # LINT (incl. Frontend lint) runs on every push regardless of should_skip_tests,
+  # so deps are required whenever lint is enabled — even a backend-only push.
+  local lint_on test_on
+  lint_on=$(jq -r '.lint.enabled // false' "$CONFIG_FILE")
+  test_on=$(jq -r '.test.enabled // false' "$CONFIG_FILE")
+  [[ "$lint_on" == "true" || "$test_on" == "true" ]] || return 0
+  bash "$PROJECT_ROOT/scripts/hooks/check-frontend-deps.sh" || exit 1   # set -e fast-fail
+}
+
 # run_phase <log> <rcfile> <shell-command-string>
 # Runs the command string FOREGROUND in an isolating subshell, buffering all
 # output to <log> and writing the exit code to <rcfile>. The subshell isolates
@@ -535,6 +555,9 @@ check_review_log
 
 # Swift gate (path-filtered, fast-fail before the heavy parallel block)
 check_swift
+
+# Frontend-deps gate: clear message for missing deps before the parallel block.
+check_frontend_deps
 
 # L3: LINT + GO + FRONTEND + FILTER run concurrently; E2E runs exclusively last.
 # Lint is one of the aggregated phases (no longer a separate fast-fail gate).

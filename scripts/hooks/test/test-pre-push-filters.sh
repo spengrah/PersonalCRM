@@ -114,6 +114,8 @@ echo "--- per-worktree test-pg resolver unit (shim-only, DB/port-free) ---"
 bash scripts/test/test-worktree-test-pg.sh || fail=1
 echo "--- worktree env-link resolver + post-checkout gate (fs/git-only) ---"
 bash scripts/test/test-link-worktree-env.sh || fail=1
+echo "--- worktree dep-install + preflight + post-checkout/pre-push wiring (stubbed bun, fs/git-only) ---"
+bash scripts/test/test-install-worktree-deps.sh || fail=1
 echo "--- repo-hygiene check guard ---"
 bash scripts/hooks/test/test-repo-hygiene-check.sh || fail=1
 echo "--- e2e test-map coverage guard ---"
