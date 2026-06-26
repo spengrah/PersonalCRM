@@ -24,7 +24,7 @@ type ContactTaskHandler struct {
 func NewContactTaskHandler(contactTaskService *service.ContactTaskService) *ContactTaskHandler {
 	return &ContactTaskHandler{
 		contactTaskService: contactTaskService,
-		validator:          validator.New(),
+		validator:          sharedValidator,
 	}
 }
 

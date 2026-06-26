@@ -68,7 +68,7 @@ func NewImportHandler(
 		matchSvc:      matchSvc,
 		enricher:      enricher,
 		suggestionSvc: suggestionSvc,
-		validator:     validator.New(),
+		validator:     sharedValidator,
 	}
 }
 

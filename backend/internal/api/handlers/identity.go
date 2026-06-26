@@ -22,7 +22,7 @@ type IdentityHandler struct {
 func NewIdentityHandler(identityService *service.IdentityService) *IdentityHandler {
 	return &IdentityHandler{
 		identityService: identityService,
-		validator:       validator.New(),
+		validator:       sharedValidator,
 	}
 }
 

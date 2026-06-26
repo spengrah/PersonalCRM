@@ -22,7 +22,7 @@ type NoteHandler struct {
 func NewNoteHandler(noteService *service.NoteService) *NoteHandler {
 	return &NoteHandler{
 		noteService: noteService,
-		validator:   validator.New(),
+		validator:   sharedValidator,
 	}
 }
 

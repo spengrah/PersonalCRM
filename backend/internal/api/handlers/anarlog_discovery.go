@@ -26,7 +26,7 @@ type AnarlogDiscoveryHandler struct {
 func NewAnarlogDiscoveryHandler(svc *service.AnarlogDiscoveryService) *AnarlogDiscoveryHandler {
 	return &AnarlogDiscoveryHandler{
 		svc:       svc,
-		validator: validator.New(),
+		validator: sharedValidator,
 	}
 }
 

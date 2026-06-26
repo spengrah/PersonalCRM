@@ -70,7 +70,7 @@ type ContactHandler struct {
 func NewContactHandler(contactService *service.ContactService) *ContactHandler {
 	return &ContactHandler{
 		contactService: contactService,
-		validator:      validator.New(),
+		validator:      sharedValidator,
 	}
 }
 

@@ -40,7 +40,7 @@ type SyncHandler struct {
 func NewSyncHandler(syncService SyncService) *SyncHandler {
 	return &SyncHandler{
 		syncService: syncService,
-		validator:   validator.New(),
+		validator:   sharedValidator,
 	}
 }
 

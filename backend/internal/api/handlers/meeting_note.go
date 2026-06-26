@@ -55,7 +55,7 @@ type MeetingNoteHandler struct {
 func NewMeetingNoteHandler(svc *service.MeetingNoteService) *MeetingNoteHandler {
 	return &MeetingNoteHandler{
 		svc:       svc,
-		validator: validator.New(),
+		validator: sharedValidator,
 	}
 }
 

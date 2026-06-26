@@ -31,7 +31,7 @@ type TestHandler struct {
 func NewTestHandler(seedSvc *service.TestSeedService) *TestHandler {
 	return &TestHandler{
 		seedSvc:   seedSvc,
-		validator: validator.New(),
+		validator: sharedValidator,
 	}
 }
 
