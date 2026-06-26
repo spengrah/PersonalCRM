@@ -374,7 +374,6 @@ func (h *ImportHandler) ImportContact(c *gin.Context) {
 	// errors as 500 because a silent failure would leave the user with
 	// an imported contact whose anarlog sessions don't link to it.
 	if err := h.backfillAnarlogIdentity(ctx, external, contact.ID); err != nil {
-		logger.Error().Err(err).Str("external_id", id.String()).Msg("anarlog import backfill failed")
 		api.RespondInternal(c, err)
 		return
 	}
@@ -560,7 +559,6 @@ func (h *ImportHandler) LinkContact(c *gin.Context) {
 	// resolves the human and produces the right interaction. Surfaces
 	// errors as 500 — see ImportContact above for the rationale.
 	if err := h.backfillAnarlogIdentity(ctx, external, crmContactID); err != nil {
-		logger.Error().Err(err).Str("external_id", id.String()).Msg("anarlog import backfill failed")
 		api.RespondInternal(c, err)
 		return
 	}
