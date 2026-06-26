@@ -452,6 +452,13 @@ type PgConstraint struct {
 	Conrelid pgtype.Uint32 `json:"conrelid"`
 }
 
+type PgIndex struct {
+	Schemaname string `json:"schemaname"`
+	Tablename  string `json:"tablename"`
+	Indexname  string `json:"indexname"`
+	Indexdef   string `json:"indexdef"`
+}
+
 type PhoneCall struct {
 	ID               pgtype.UUID        `json:"id"`
 	CallUniqueID     string             `json:"call_unique_id"`

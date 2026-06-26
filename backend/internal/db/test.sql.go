@@ -1997,6 +1997,41 @@ func (q *Queries) TestListContactBucketsByNamePrefix(ctx context.Context, namePr
 	return items, nil
 }
 
+const TestListIndexDefsForComms = `-- name: TestListIndexDefsForComms :many
+SELECT indexname::text, indexdef::text FROM pg_indexes
+WHERE schemaname = 'public' AND tablename = 'comms_message'
+ORDER BY indexname
+`
+
+type TestListIndexDefsForCommsRow struct {
+	Indexname string `json:"indexname"`
+	Indexdef  string `json:"indexdef"`
+}
+
+// Index-definition test only: enumerate every index on comms_message with
+// Postgres's own deterministic indexdef reconstruction, so a test can assert the
+// exact key columns + partial predicate of the eligible/stale-claim indexes
+// (migration 073). Read-only catalog access, mirroring TestListPublicTables.
+func (q *Queries) TestListIndexDefsForComms(ctx context.Context) ([]*TestListIndexDefsForCommsRow, error) {
+	rows, err := q.db.Query(ctx, TestListIndexDefsForComms)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*TestListIndexDefsForCommsRow{}
+	for rows.Next() {
+		var i TestListIndexDefsForCommsRow
+		if err := rows.Scan(&i.Indexname, &i.Indexdef); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const TestListPublicTables = `-- name: TestListPublicTables :many
 SELECT table_name::text FROM information_schema.tables
 WHERE table_schema = 'public' AND table_type = 'BASE TABLE'

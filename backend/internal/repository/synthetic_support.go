@@ -586,6 +586,22 @@ func (r *SyntheticSupportRepository) ListPublicTables(ctx context.Context) ([]st
 	return r.queries.TestListPublicTables(ctx)
 }
 
+// ListCommsIndexDefs returns Postgres's deterministic index definition for every
+// index on comms_message, keyed by index name. Backs the migration-073
+// index-definition test (exact key-column + partial-predicate assertions).
+// Index-definition test only.
+func (r *SyntheticSupportRepository) ListCommsIndexDefs(ctx context.Context) (map[string]string, error) {
+	rows, err := r.queries.TestListIndexDefsForComms(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defs := make(map[string]string, len(rows))
+	for _, row := range rows {
+		defs[row.Indexname] = row.Indexdef
+	}
+	return defs, nil
+}
+
 // InsertNonFinalRiverJob plants one queued river_job so a test can assert the
 // additive --seed preflight refuses while --reset-and-seed proceeds. Test only.
 func (r *SyntheticSupportRepository) InsertNonFinalRiverJob(ctx context.Context) error {
