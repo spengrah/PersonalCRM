@@ -174,6 +174,10 @@ test_workflow_three_way_gate_and_job_split() {
     if [ "$n_env" -eq 1 ]; then ok; else fail "environment: must appear on exactly one job, found $n_env"; fi
     # Gate filtering is branch-only: no job if: gates on the upstream conclusion.
     if wf_lacks "conclusion == 'success'"; then ok; else fail "no job if: may gate on conclusion == 'success'"; fi
+    # Stale-SHA guard: the gate deploys only the current develop tip (an older
+    # push whose upstreams finish after a newer push deployed must not roll back).
+    if wf_has "commits/develop"; then ok; else fail "gate must query the current develop tip"; fi
+    if wf_has "tip_sha"; then ok; else fail "gate must compare head_sha against the develop tip"; fi
 }
 
 test_workflow_ci_gate_qualifier() {
