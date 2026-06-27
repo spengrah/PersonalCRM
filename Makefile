@@ -123,7 +123,7 @@ help:
 	@echo "  dev-native   - Start dev servers with native PostgreSQL (no Docker)"
 	@echo "  worktree-env - Symlink the main checkout's gitignored env files into this worktree"
 	@echo "  worktree-deps - Install per-worktree frontend deps (node_modules) into this worktree"
-	@echo "  staging-reset - HARD reset + reseed STAGING with the prod-shaped synthetic world (refuses non-staging CRM_ENV)"
+	@echo "  staging-reset - HARD reset + reseed STAGING with the prod-shaped synthetic world (fail-closed: refuses a production-alias/empty CRM_ENV)"
 	@echo "  build       - Build both frontend and backend"
 	@echo "  crm-admin   - Build the operator-only admin CLI (backend/crm-admin)"
 	@echo "  mac-daemon  - Build the macOS daemon app bundle (optionally set CRM_MAC_CODESIGN_IDENTITY)"
@@ -273,8 +273,8 @@ dev-api-restart:
 	@sleep 1
 	@make dev-api-start
 
-staging-reset: ## HARD reset + reseed STAGING with the prod-shaped synthetic world (refuses non-staging CRM_ENV; STAGING-only)
-	@bash scripts/staging-reset.sh   # ssh STAGING_HOST -> refuse if CRM_ENV not staging -> stop backend -> ephemeral crm-admin --reset-and-seed --profile prod-shaped --yes (deployed image) -> start backend
+staging-reset: ## HARD reset + reseed STAGING with the prod-shaped synthetic world (fail-closed production refuse; STAGING-only)
+	@bash scripts/staging-reset.sh   # ssh STAGING_HOST -> refuse if CRM_ENV is a production alias or empty -> stop backend -> ephemeral crm-admin --reset-and-seed --profile prod-shaped --yes (deployed image) -> start backend
 
 # Native PostgreSQL (for containerized development without Docker-in-Docker)
 # Symlink the main checkout's gitignored env files (.env, frontend/.env.local,
