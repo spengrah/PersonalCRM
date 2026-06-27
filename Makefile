@@ -123,7 +123,7 @@ help:
 	@echo "  dev-native   - Start dev servers with native PostgreSQL (no Docker)"
 	@echo "  worktree-env - Symlink the main checkout's gitignored env files into this worktree"
 	@echo "  worktree-deps - Install per-worktree frontend deps (node_modules) into this worktree"
-	@echo "  staging-reset - HARD reset + reseed STAGING with the prod-shaped synthetic world (refuses production)"
+	@echo "  staging-reset - HARD reset + reseed STAGING with the prod-shaped synthetic world (refuses non-staging CRM_ENV)"
 	@echo "  build       - Build both frontend and backend"
 	@echo "  crm-admin   - Build the operator-only admin CLI (backend/crm-admin)"
 	@echo "  mac-daemon  - Build the macOS daemon app bundle (optionally set CRM_MAC_CODESIGN_IDENTITY)"
