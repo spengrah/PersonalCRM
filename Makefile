@@ -273,8 +273,8 @@ dev-api-restart:
 	@sleep 1
 	@make dev-api-start
 
-staging-reset: ## HARD reset + reseed STAGING with the prod-shaped synthetic world (refuses CRM_ENV=production; STAGING-only)
-	@bash scripts/staging-reset.sh   # stops service -> sources staging env -> crm-admin --reset-and-seed --profile prod-shaped --yes -> starts service
+staging-reset: ## HARD reset + reseed STAGING with the prod-shaped synthetic world (refuses non-staging CRM_ENV; STAGING-only)
+	@bash scripts/staging-reset.sh   # ssh STAGING_HOST -> refuse if CRM_ENV not staging -> stop backend -> ephemeral crm-admin --reset-and-seed --profile prod-shaped --yes (deployed image) -> start backend
 
 # Native PostgreSQL (for containerized development without Docker-in-Docker)
 # Symlink the main checkout's gitignored env files (.env, frontend/.env.local,
@@ -515,6 +515,7 @@ test-deploy-scripts:
 	@bash scripts/backup-db.test.sh
 	@bash scripts/restore-db.test.sh
 	@bash scripts/deploy-staging.test.sh
+	@bash scripts/staging-reset.test.sh
 	@bash scripts/reconcile-mac-daemon.test.sh
 	@bash scripts/setup-mac-deploy.test.sh
 	@bash scripts/trigger-mac-deploy.test.sh
