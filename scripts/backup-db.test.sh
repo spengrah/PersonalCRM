@@ -57,14 +57,21 @@ EOF
     cat > "$SANDBOX/bin/sudo" <<EOF
 #!/usr/bin/env bash
 echo "sudo \$*" >> "$CALL_LOG"
+# Mirror real sudo: parse options (-u <user>, -n, leading KEY=val env) ONLY until
+# the first non-option token (the command); the rest is the command's own argv,
+# copied verbatim — so a command flag like \`sed -n\` is never stripped.
 args=("\$@")
 out=()
 i=0
+opts=1
 while [ \$i -lt \${#args[@]} ]; do
     a="\${args[\$i]}"
-    if [ "\$a" = "-u" ]; then i=\$((i + 2)); continue; fi
-    if [ "\$a" = "-n" ]; then i=\$((i + 1)); continue; fi
-    if [[ "\$a" == *=* ]] && [ \${#out[@]} -eq 0 ]; then i=\$((i + 1)); continue; fi
+    if [ "\$opts" = "1" ]; then
+        if [ "\$a" = "-u" ]; then i=\$((i + 2)); continue; fi
+        if [ "\$a" = "-n" ]; then i=\$((i + 1)); continue; fi
+        if [[ "\$a" == *=* ]]; then i=\$((i + 1)); continue; fi
+        opts=0
+    fi
     out+=("\$a")
     i=\$((i + 1))
 done
