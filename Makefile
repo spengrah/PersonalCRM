@@ -512,6 +512,8 @@ test-api:
 test-deploy-scripts:
 	@echo "Running deploy-script shell tests..."
 	@bash scripts/deploy-artifact.test.sh
+	@bash scripts/backup-db.test.sh
+	@bash scripts/restore-db.test.sh
 	@bash scripts/reconcile-mac-daemon.test.sh
 	@bash scripts/setup-mac-deploy.test.sh
 	@bash scripts/trigger-mac-deploy.test.sh

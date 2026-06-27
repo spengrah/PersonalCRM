@@ -2,15 +2,22 @@
 # PersonalCRM Database Backup Script (rootless Podman edition).
 # Creates a point-in-time physical copy of the PostgreSQL data volume on the Pi.
 #
-# Post-A0-cutover: the stack runs as rootless Podman Quadlets under the `crm`
-# system user, so this stops the *user* systemd services and copies the Podman
-# named volume (`personalcrm-db`) rather than the old Docker volume.
+# Post-A0-cutover: the stack runs as rootless Podman Quadlets under a tenant
+# system user (CRM_USER, default `crm`), so this stops the *user* systemd
+# services and copies the Podman named volume (`personalcrm-db`) rather than the
+# old Docker volume.
+#
+# The tenant user + its home are parameterized via CRM_USER / CRM_HOME so the
+# same script drives prod (`crm` / `/var/lib/personalcrm`) and the staging tenant
+# (`staging` / `/var/lib/staging`). Everything else is SHARED across tenants and
+# stays literal: the `personalcrm-db` volume, the `personalcrm-*` services, the
+# `crm-postgres` container, and the `crm_user` PG role.
 #
 # Usage: ./scripts/backup-db.sh [--no-restart] [--local]
 #   --no-restart  Stop services for backup but don't restart (e.g., before a deploy)
-#   --local       Run on the Pi as root (no ssh). The crm-user podman/systemctl
-#                 helpers run via `sudo -u crm ...` locally instead of over ssh.
-#                 Used by deploy-artifact.sh for the pre-migrate snapshot.
+#   --local       Run on the Pi as root (no ssh). The tenant podman/systemctl
+#                 helpers run via `sudo -u "$CRM_USER" ...` locally instead of
+#                 over ssh. Used by deploy-artifact.sh for the pre-migrate snapshot.
 #
 # Stops the writers + postgres for a clean copy, then restarts them. Backup is
 # stored alongside the volume data as _data.bak-YYYYMMDD-HHMMSS.
@@ -34,7 +41,9 @@ for arg in "$@"; do
     esac
 done
 
-CRM_HOME=/var/lib/personalcrm
+# Tenant identity (overridable for staging; defaults are prod).
+CRM_USER="${CRM_USER:-crm}"
+CRM_HOME="${CRM_HOME:-/var/lib/personalcrm}"
 
 # log: progress messages. ssh mode → stdout (unchanged behavior); local mode →
 # stderr (so stdout carries only the captured BACKUP_PATH line).
@@ -45,17 +54,18 @@ else
 fi
 
 if [ "$LOCAL" = true ]; then
-    # On-Pi mode: no ssh. Resolve the crm uid locally and wrap podman/systemctl
-    # in `sudo -u crm` so they hit the rootless crm-user store, never root's.
-    # The `cd /tmp` mirrors the ssh form: an interactive `sudo -u crm` inherits
-    # the caller's CWD, which crm can't access (rootless podman fails to chdir).
-    CRM_UID=$(id -u crm)
+    # On-Pi mode: no ssh. Resolve the tenant uid locally and wrap podman/systemctl
+    # in `sudo -u "$CRM_USER"` so they hit the rootless tenant store, never root's.
+    # The `cd /tmp` mirrors the ssh form: an interactive `sudo -u "$CRM_USER"`
+    # inherits the caller's CWD, which the tenant can't access (rootless podman
+    # fails to chdir).
+    CRM_UID=$(id -u "$CRM_USER")
     USERENV="HOME=$CRM_HOME XDG_RUNTIME_DIR=/run/user/$CRM_UID DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$CRM_UID/bus"
     # USERENV is deliberately unquoted: it must word-split into separate KEY=val
-    # arguments for env-style `sudo -u crm KEY=val KEY=val ...`.
+    # arguments for env-style `sudo -u "$CRM_USER" KEY=val KEY=val ...`.
     # shellcheck disable=SC2086
-    crm_ctl()    { cd /tmp && sudo -u crm $USERENV systemctl --user "$@"; }
-    crm_podman() { cd /tmp && sudo -u crm HOME=$CRM_HOME XDG_RUNTIME_DIR=/run/user/"$CRM_UID" podman "$@"; }
+    crm_ctl()    { cd /tmp && sudo -u "$CRM_USER" $USERENV systemctl --user "$@"; }
+    crm_podman() { cd /tmp && sudo -u "$CRM_USER" HOME=$CRM_HOME XDG_RUNTIME_DIR=/run/user/"$CRM_UID" podman "$@"; }
     root_cp()    { sudo cp -a "$1" "$2"; }
     root_du()    { sudo du -sh "$1" | cut -f1; }
 
@@ -72,18 +82,19 @@ else
         exit 1
     fi
 
-    # Resolve the crm user context for rootless systemctl --user / podman.
-    # `cd /tmp` + explicit HOME: interactive `sudo -u crm` inherits the SSH user's
-    # CWD/HOME, which crm can't access (rootless podman then fails to chdir). The
-    # Quadlet services themselves run under systemd and are unaffected.
-    CRM_UID=$(ssh "$PI_HOST" "id -u crm")
+    # Resolve the tenant user context for rootless systemctl --user / podman.
+    # `cd /tmp` + explicit HOME: interactive `sudo -u "$CRM_USER"` inherits the
+    # SSH user's CWD/HOME, which the tenant can't access (rootless podman then
+    # fails to chdir). The Quadlet services themselves run under systemd and are
+    # unaffected.
+    CRM_UID=$(ssh "$PI_HOST" "id -u $CRM_USER")
     USERENV="HOME=$CRM_HOME XDG_RUNTIME_DIR=/run/user/$CRM_UID DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$CRM_UID/bus"
     # Vars below deliberately expand client-side (resolved here, then sent over
     # ssh as a literal remote command). SC2029 is the intended behavior.
     # shellcheck disable=SC2029
-    crm_ctl()    { ssh "$PI_HOST" "cd /tmp && sudo -n -u crm $USERENV systemctl --user $*"; }
+    crm_ctl()    { ssh "$PI_HOST" "cd /tmp && sudo -n -u $CRM_USER $USERENV systemctl --user $*"; }
     # shellcheck disable=SC2029
-    crm_podman() { ssh "$PI_HOST" "cd /tmp && sudo -n -u crm HOME=$CRM_HOME XDG_RUNTIME_DIR=/run/user/$CRM_UID podman $*"; }
+    crm_podman() { ssh "$PI_HOST" "cd /tmp && sudo -n -u $CRM_USER HOME=$CRM_HOME XDG_RUNTIME_DIR=/run/user/$CRM_UID podman $*"; }
     # shellcheck disable=SC2029
     root_cp()    { ssh "$PI_HOST" "sudo cp -a '$1' '$2'"; }
     # shellcheck disable=SC2029
@@ -101,9 +112,9 @@ on_exit() {
         if ! crm_ctl start personalcrm-database.service personalcrm-backend.service personalcrm-frontend.service; then
             echo "   AUTO-RESTART FAILED. Restart manually:" >&2
             if [ "$LOCAL" = true ]; then
-                echo "   sudo -u crm $USERENV systemctl --user start personalcrm-database.service personalcrm-backend.service personalcrm-frontend.service" >&2
+                echo "   sudo -u $CRM_USER $USERENV systemctl --user start personalcrm-database.service personalcrm-backend.service personalcrm-frontend.service" >&2
             else
-                echo "   ssh $PI_HOST \"cd /tmp && sudo -n -u crm $USERENV systemctl --user start personalcrm-database.service personalcrm-backend.service personalcrm-frontend.service\"" >&2
+                echo "   ssh $PI_HOST \"cd /tmp && sudo -n -u $CRM_USER $USERENV systemctl --user start personalcrm-database.service personalcrm-backend.service personalcrm-frontend.service\"" >&2
             fi
         fi
     fi
@@ -137,9 +148,9 @@ if [ "$NO_RESTART" = true ]; then
     log "⚠️  --no-restart specified. Services are stopped."
     log "   Restart manually with:"
     if [ "$LOCAL" = true ]; then
-        log "   sudo -u crm $USERENV systemctl --user start personalcrm-database.service personalcrm-backend.service personalcrm-frontend.service"
+        log "   sudo -u $CRM_USER $USERENV systemctl --user start personalcrm-database.service personalcrm-backend.service personalcrm-frontend.service"
     else
-        log "   ssh $PI_HOST \"sudo -n -u crm $USERENV systemctl --user start personalcrm-database.service personalcrm-backend.service personalcrm-frontend.service\""
+        log "   ssh $PI_HOST \"sudo -n -u $CRM_USER $USERENV systemctl --user start personalcrm-database.service personalcrm-backend.service personalcrm-frontend.service\""
     fi
 else
     log "Restarting postgres..."
