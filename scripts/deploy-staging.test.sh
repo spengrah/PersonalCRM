@@ -1,10 +1,18 @@
 #!/usr/bin/env bash
-# Tests for the develop->staging deploy plumbing.
+# Tests for the develop->staging deploy plumbing. Two concerns:
 #
-# deploy-staging.sh WRAPPER behavior (the env-trust seam): it forces
-# CRM_USER=staging + CRM_HOME=/var/lib/staging, forwards the SHA verbatim, does
-# NOT export DEPLOY_ENV_FILE/NTFY_ENV_FILE, and survives a no-arg call (set -u +
-# "${1:-}") by reaching deploy-artifact.sh with an empty arg.
+#   1. deploy-staging.sh WRAPPER behavior (the env-trust seam): it forces
+#      CRM_USER=staging + CRM_HOME=/var/lib/staging, forwards the SHA verbatim,
+#      does NOT export DEPLOY_ENV_FILE/NTFY_ENV_FILE, and survives a no-arg call
+#      (set -u + "${1:-}") by reaching deploy-artifact.sh with an empty arg.
+#
+#   2. A SEMANTIC static guard over .github/workflows/deploy-staging.yml — the
+#      load-bearing env-trust + three-way-gate invariants live in YAML, so a
+#      syntax check is insufficient. Pure bash/grep (no YAML/Python parser:
+#      make test-deploy-scripts runs on ubuntu-latest with only bash + stdlib;
+#      PyYAML is not provisioned and there is no actionlint). YAML validity is
+#      therefore out of scope for this guard — GitHub's on-push validation is the
+#      runtime backstop.
 #
 # All checks run anywhere (no Pi/podman/root). The wrapper hardcodes the absolute
 # /usr/local/sbin/deploy-artifact.sh path (that IS the seam), so the test rewrites
@@ -15,6 +23,7 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WRAPPER="$REPO_ROOT/scripts/deploy-staging.sh"
+WORKFLOW="$REPO_ROOT/.github/workflows/deploy-staging.yml"
 VALID_SHA="abcdef0123456789abcdef0123456789abcdef01"
 
 PASS=0
@@ -111,6 +120,68 @@ test_wrapper_uses_default_empty_expansion() {
     if grep -qE 'deploy-artifact\.sh[[:space:]]+"\$1"' "$WRAPPER"; then fail "wrapper must not use a bare \"\$1\""; else ok; fi
 }
 
+# ===========================================================================
+# Semantic static guard over deploy-staging.yml
+# ===========================================================================
+
+wf_has()   { grep -qF -- "$1" "$WORKFLOW"; }
+wf_lacks() { ! grep -qF -- "$1" "$WORKFLOW"; }
+
+test_workflow_trigger() {
+    echo "test: workflow triggers on workflow_run, NOT push"
+    if wf_has "workflow_run:"; then ok; else fail "workflow must trigger on workflow_run"; fi
+    # No real push trigger KEY (anchored — comments that mention 'push:' don't count).
+    if grep -qE '^[[:space:]]*push:' "$WORKFLOW"; then fail "workflow must NOT have a push: trigger"; else ok; fi
+}
+
+test_workflow_deploy_target() {
+    echo "test: deploy step invokes the root-owned wrapper, never deploy-artifact.sh"
+    if wf_has "/usr/local/sbin/deploy-staging.sh"; then ok; else fail "deploy step must call deploy-staging.sh"; fi
+    if wf_lacks "deploy-artifact.sh"; then ok; else fail "workflow must NOT call deploy-artifact.sh directly"; fi
+}
+
+test_workflow_no_env_passthrough() {
+    echo "test: workflow does not preserve/pass env into sudo (the catch-all breach)"
+    for forbidden in "sudo -E" "--preserve-env" "env_keep" "SETENV"; do
+        if wf_lacks "$forbidden"; then ok; else fail "workflow must not use '$forbidden'"; fi
+    done
+}
+
+test_workflow_no_trusted_knob() {
+    echo "test: workflow sets NO deploy-artifact.sh trusted-knob (any occurrence is a regression)"
+    local knob
+    for knob in CRM_USER CRM_HOME QUADLET_DIR BACKEND_UNIT FRONTEND_UNIT \
+                BACKEND_REPO FRONTEND_REPO DEPLOY_ENV_FILE PODMAN_NETWORK \
+                DEPLOY_MIGRATIONS_PATH BACKUP_SCRIPT RESTORE_SCRIPT \
+                NTFY_ENV_FILE HEALTH_RETRIES; do
+        if wf_lacks "$knob"; then ok; else fail "workflow leaks trusted knob '$knob'"; fi
+    done
+}
+
+test_workflow_three_way_gate_and_job_split() {
+    echo "test: three-way-gate + job-split invariants"
+    # The deploy-prod-style completed-only filter was deliberately dropped.
+    if wf_lacks "status=completed"; then ok; else fail "workflow must NOT use the status=completed filter"; fi
+    # Gate exposes a deploy_ready output; deploy job gates on it.
+    if wf_has "deploy_ready:"; then ok; else fail "gate job must expose a deploy_ready output"; fi
+    if wf_has "needs.gate.outputs.deploy_ready == 'true'"; then ok
+    else fail "deploy job must gate on needs.gate.outputs.deploy_ready == 'true'"; fi
+    # environment: staging attaches to exactly one job (the deploy job), so a
+    # green-skipping gate can't record a phantom Environment deployment.
+    if wf_has "environment: staging"; then ok; else fail "deploy job must set environment: staging"; fi
+    local n_env
+    n_env=$(grep -cE '^[[:space:]]*environment:' "$WORKFLOW")
+    if [ "$n_env" -eq 1 ]; then ok; else fail "environment: must appear on exactly one job, found $n_env"; fi
+    # Gate filtering is branch-only: no job if: gates on the upstream conclusion.
+    if wf_lacks "conclusion == 'success'"; then ok; else fail "no job if: may gate on conclusion == 'success'"; fi
+}
+
+test_workflow_ci_gate_qualifier() {
+    echo "test: CI gate query is qualified to the develop-push run"
+    if wf_has "event=push"; then ok; else fail "CI gate query must include event=push"; fi
+    if wf_has "branch=develop"; then ok; else fail "CI gate query must include branch=develop"; fi
+}
+
 # ---------------------------------------------------------------------------
 main() {
     test_wrapper_forces_tenant_and_forwards_sha
@@ -118,6 +189,12 @@ main() {
     test_wrapper_does_not_export_env_or_ntfy_file
     test_wrapper_no_arg_reaches_deploy_artifact
     test_wrapper_uses_default_empty_expansion
+    test_workflow_trigger
+    test_workflow_deploy_target
+    test_workflow_no_env_passthrough
+    test_workflow_no_trusted_knob
+    test_workflow_three_way_gate_and_job_split
+    test_workflow_ci_gate_qualifier
 
     echo ""
     echo "===================="
