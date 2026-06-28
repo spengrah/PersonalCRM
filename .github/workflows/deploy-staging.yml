@@ -1,0 +1,128 @@
+name: Deploy to Staging
+
+# develop -> staging deploy. Unlike deploy-prod.yml (push: main, deploying an
+# already-CI'd SHA), staging deploys a develop SHA that is still being CI'd and
+# image-built, so the trigger is `on: workflow_run` keyed to CI + image-build
+# COMPLETION on develop — NOT `push: develop` (which would fire before either
+# upstream starts). workflow_run fires once per named-workflow completion; the
+# gate re-evaluates BOTH upstreams for the SHA and only deploys when both are
+# completed+success. The common case (the other upstream still in-flight) defers
+# quietly (green, no deploy); the last upstream to finish re-triggers and deploys.
+#
+# Two jobs so `environment: staging` attaches ONLY to a real deploy: a single job
+# carrying the environment that green-skips would record a phantom "successful
+# staging deployment" for a SHA that was never deployed. The gate runs on
+# ubuntu-latest (jq+curl preinstalled); only the deploy job touches the box.
+#
+# workflow_run always runs this file + context from the default branch (develop)
+# and never fork code; the repo is private + solo, so no pull_request trigger.
+
+on:
+  workflow_run:
+    workflows: ["CI", "Build & Push Images"]
+    types: [completed]
+    branches: [develop]
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    # Job filter is BRANCH-ONLY — it must never gate on the upstream conclusion. A
+    # success-only prefilter would skip this job when the TRIGGERING upstream
+    # failed, so a late-failing upstream would produce no red signal. All
+    # conclusion handling lives in the gate step's three-way logic below.
+    if: github.event.workflow_run.head_branch == 'develop'
+    permissions:
+      actions: read     # query ci.yml / build-images.yml run conclusions
+      contents: read    # read the current develop tip (stale-SHA guard)
+    outputs:
+      sha: ${{ steps.gate.outputs.sha }}
+      deploy_ready: ${{ steps.gate.outputs.deploy_ready }}
+    steps:
+      - name: Gate on CI + image build for this SHA
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHA="${{ github.event.workflow_run.head_sha }}"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+
+          # Deploy ONLY the current develop tip. A stale SHA — an older push whose
+          # upstreams finish AFTER a newer push already deployed — must never roll
+          # staging back to older code/schema (its image would swap in behind the
+          # already-applied newer migrations). If head_sha is no longer the develop
+          # tip, green-skip; the newer push's trigger deploys the newer SHA.
+          tip_api="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/commits/develop"
+          tip_sha=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$tip_api" | jq -r '.sha // "missing"')
+          if [ "$tip_sha" != "$SHA" ]; then
+            echo "SHA ${SHA} is no longer the develop tip (${tip_sha}); skipping (a newer push deploys)."
+            echo "deploy_ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Query each upstream's latest run for the SHA WITHOUT a status filter.
+          # Staging's first trigger usually fires while the OTHER upstream is still
+          # running, so a deploy-prod-style completed-only REST filter -> exit 1
+          # gate would turn that NORMAL "not ready yet" state into a spurious red.
+          #
+          # CI: ci.yml runs on BOTH push and pull_request, so the same SHA can
+          # have a completed pull_request run AND an in-flight develop-push run
+          # (whenever develop's tip equals a PR head SHA). event=push&branch=develop
+          # picks the authoritative develop-push run — without it the gate could
+          # green-light off the earlier PR run while develop-push CI still runs.
+          ci_api="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${SHA}&event=push&branch=develop&per_page=1"
+          ci_json=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$ci_api")
+          ci_status=$(printf '%s' "$ci_json" | jq -r '.workflow_runs[0].status // "missing"')
+          ci_conclusion=$(printf '%s' "$ci_json" | jq -r '.workflow_runs[0].conclusion // "missing"')
+
+          # build-images: never runs on pull_request; no event filter (event=push
+          # would wrongly exclude a workflow_dispatch rebuild).
+          bi_api="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/workflows/build-images.yml/runs?head_sha=${SHA}&per_page=1"
+          bi_json=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$bi_api")
+          bi_status=$(printf '%s' "$bi_json" | jq -r '.workflow_runs[0].status // "missing"')
+          bi_conclusion=$(printf '%s' "$bi_json" | jq -r '.workflow_runs[0].conclusion // "missing"')
+
+          echo "CI: status=${ci_status} conclusion=${ci_conclusion}; image-build: status=${bi_status} conclusion=${bi_conclusion} (sha ${SHA})"
+
+          # Decision precedence — COMPLETENESS FIRST, then success (eventual-red,
+          # never skip-forever). (1) If either run is missing or not yet completed,
+          # defer: end GREEN with deploy_ready=false (a later trigger re-evaluates).
+          if [ "$ci_status" != "completed" ] || [ "$bi_status" != "completed" ]; then
+            echo "An upstream is not completed yet; deferring (no deploy)."
+            echo "deploy_ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # (2) Both completed: deploy only if BOTH succeeded; any non-success is a
+          # genuine red. Because every run always reaches completed, a failed
+          # upstream is caught as soon as the other completes.
+          if [ "$ci_conclusion" = "success" ] && [ "$bi_conclusion" = "success" ]; then
+            echo "Both upstreams succeeded; proceeding to deploy."
+            echo "deploy_ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "An upstream did not succeed (CI=${ci_conclusion}, image-build=${bi_conclusion}); aborting."
+            echo "deploy_ready=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+  deploy:
+    needs: gate
+    if: needs.gate.outputs.deploy_ready == 'true'
+    runs-on: [self-hosted, staging]
+    environment: staging
+    concurrency:
+      group: deploy-staging        # serialize deploys; never overlap
+      cancel-in-progress: false    # never cancel a deploy mid-migrate/rollback
+    permissions:
+      contents: read
+    steps:
+      - name: Deploy
+        run: sudo /usr/local/sbin/deploy-staging.sh "${{ needs.gate.outputs.sha }}"

@@ -48,11 +48,16 @@ make_sandbox() {
     BACKEND_UNIT="$SANDBOX/units/backend.container"
     FRONTEND_UNIT="$SANDBOX/units/frontend.container"
 
-    # --- stub: id (resolve crm uid without a real account) ---
+    # --- stub: id (resolve a tenant uid without a real account) ---
     cat > "$SANDBOX/bin/id" <<'EOF'
 #!/usr/bin/env bash
-# id -u crm  -> a fixed fake uid; everything else -> real id.
-if [ "$1" = "-u" ] && [ "$2" = "crm" ]; then echo 4242; exit 0; fi
+# id -u <tenant> -> a fixed fake uid per tenant; everything else -> real id.
+if [ "$1" = "-u" ]; then
+    case "$2" in
+        crm)     echo 4242; exit 0 ;;
+        staging) echo 1995; exit 0 ;;
+    esac
+fi
 exec /usr/bin/id "$@"
 EOF
 
@@ -190,9 +195,13 @@ fi
 EOF
 
     # --- stub: backup-db.sh ---
+    # Also records the tenant identity it INHERITED from deploy-artifact.sh's
+    # `export CRM_USER CRM_HOME` (distinct `child-env-backup` prefix so it never
+    # collides with the `backup-db.sh` argv assertions / log_lacks checks).
     cat > "$SANDBOX/bin/backup-db.sh" <<EOF
 #!/usr/bin/env bash
 echo "backup-db.sh \$*" >> "$CALL_LOG"
+echo "child-env-backup CRM_USER=\${CRM_USER:-} CRM_HOME=\${CRM_HOME:-}" >> "$CALL_LOG"
 if [ "\${STUB_BACKUP_RC:-0}" != "0" ]; then exit "\${STUB_BACKUP_RC}"; fi
 echo "BACKUP_PATH=$SANDBOX/volume/_data.bak-20260611-000000"
 exit 0
@@ -202,6 +211,7 @@ EOF
     cat > "$SANDBOX/bin/restore-db.sh" <<EOF
 #!/usr/bin/env bash
 echo "restore-db.sh \$*" >> "$CALL_LOG"
+echo "child-env-restore CRM_USER=\${CRM_USER:-} CRM_HOME=\${CRM_HOME:-}" >> "$CALL_LOG"
 exit "\${STUB_RESTORE_RC:-0}"
 EOF
 
@@ -218,12 +228,14 @@ EOF
 
 cleanup_sandbox() { [ -n "${SANDBOX:-}" ] && rm -rf "$SANDBOX"; }
 
-# run_deploy <sha> : run deploy-artifact.sh in the sandbox; sets RC + OUT.
+# run_deploy <sha> : run deploy-artifact.sh in the sandbox; sets RC + OUT. The
+# tenant defaults to prod (crm / $SANDBOX/home); a test can override CRM_USER /
+# CRM_HOME via CRM_USER_OVERRIDE / CRM_HOME_OVERRIDE to exercise the staging path.
 run_deploy() {
     OUT="$(
         PATH="$SANDBOX/bin:$PATH" \
-        CRM_USER=crm \
-        CRM_HOME="$SANDBOX/home" \
+        CRM_USER="${CRM_USER_OVERRIDE:-crm}" \
+        CRM_HOME="${CRM_HOME_OVERRIDE:-$SANDBOX/home}" \
         BACKEND_UNIT="$BACKEND_UNIT" \
         FRONTEND_UNIT="$FRONTEND_UNIT" \
         DEPLOY_ENV_FILE="$SANDBOX/env" \
@@ -649,6 +661,30 @@ test_snapshot_retained_on_failure() {
     cleanup_sandbox
 }
 
+test_export_propagates_crm_user_home_to_children() {
+    echo "test: deploy-artifact exports CRM_USER/CRM_HOME to backup/restore children"
+    # DEFAULT (prod) tenant: children inherit crm + the sandbox home. Drive the
+    # pending+rollback path so BOTH backup (snapshot) and restore (rollback) run.
+    make_sandbox
+    STUB_MIGRATE_CHECK_RC=2 STUB_MIGRATE_RC=0 STUB_HEALTH_OK=0 run_deploy "$VALID_SHA"
+    if grep -qF "child-env-backup CRM_USER=crm CRM_HOME=$SANDBOX/home" "$CALL_LOG"; then ok
+    else fail "default backup child did not inherit crm/$SANDBOX/home"; fi
+    if grep -qF "child-env-restore CRM_USER=crm CRM_HOME=$SANDBOX/home" "$CALL_LOG"; then ok
+    else fail "default restore child did not inherit crm/$SANDBOX/home"; fi
+    cleanup_sandbox
+
+    # STAGING tenant: the `export CRM_USER CRM_HOME` carries staging values through
+    # to the children (without it, the children would die on the staging tenant).
+    make_sandbox
+    CRM_USER_OVERRIDE=staging CRM_HOME_OVERRIDE=/var/lib/staging \
+      STUB_MIGRATE_CHECK_RC=2 STUB_MIGRATE_RC=0 STUB_HEALTH_OK=0 run_deploy "$VALID_SHA"
+    if grep -qF 'child-env-backup CRM_USER=staging CRM_HOME=/var/lib/staging' "$CALL_LOG"; then ok
+    else fail "staging backup child did not inherit the exported CRM_USER/CRM_HOME"; fi
+    if grep -qF 'child-env-restore CRM_USER=staging CRM_HOME=/var/lib/staging' "$CALL_LOG"; then ok
+    else fail "staging restore child did not inherit the exported CRM_USER/CRM_HOME"; fi
+    cleanup_sandbox
+}
+
 # ---------------------------------------------------------------------------
 main() {
     test_sha_validation
@@ -676,6 +712,7 @@ main() {
     test_ntfy_present_outcomes
     test_ntfy_post_failure_does_not_change_outcome
     test_snapshot_retained_on_failure
+    test_export_propagates_crm_user_home_to_children
 
     echo ""
     echo "===================="

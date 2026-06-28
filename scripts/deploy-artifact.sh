@@ -28,6 +28,10 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 CRM_USER="${CRM_USER:-crm}"
 CRM_HOME="${CRM_HOME:-/var/lib/personalcrm}"
+# Export the tenant identity so the backup/restore children inherit it. In prod
+# both equal their prior hardcoded defaults (crm / /var/lib/personalcrm), so the
+# children behave identically; on the staging tenant they pick up staging values.
+export CRM_USER CRM_HOME
 QUADLET_DIR="${QUADLET_DIR:-$CRM_HOME/.config/containers/systemd}"
 BACKEND_UNIT="${BACKEND_UNIT:-$QUADLET_DIR/personalcrm-backend.container}"
 FRONTEND_UNIT="${FRONTEND_UNIT:-$QUADLET_DIR/personalcrm-frontend.container}"

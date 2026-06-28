@@ -3,13 +3,16 @@
 # Replaces the live PostgreSQL data volume with a previously-taken physical
 # snapshot (a `_data.bak-*` directory produced by backup-db.sh).
 #
-# Mirror of backup-db.sh: same rootless crm-user helpers, same ssh/local split.
+# Mirror of backup-db.sh: same rootless tenant helpers, same ssh/local split, and
+# the same CRM_USER / CRM_HOME parameterization so one script drives prod (`crm` /
+# `/var/lib/personalcrm`) and the staging tenant (`staging` / `/var/lib/staging`).
 # The cold copy requires postgres stopped, so this stops the writers + postgres,
 # swaps the volume contents, then brings postgres (and optionally the app) back.
 #
 # Usage: ./scripts/restore-db.sh [--local] [--no-app-start] [<snapshot-path>]
-#   --local         Run on the Pi as root (no ssh). crm-user podman/systemctl
-#                   helpers run via `sudo -u crm ...` locally instead of over ssh.
+#   --local         Run on the Pi as root (no ssh). The tenant podman/systemctl
+#                   helpers run via `sudo -u "$CRM_USER" ...` locally instead of
+#                   over ssh.
 #   --no-app-start  Restore the volume and bring Postgres up to pg_isready, but
 #                   do NOT start backend/frontend. Used by deploy-artifact.sh's
 #                   rollback path so it can re-pin the OLD Image= itself, then
@@ -37,7 +40,9 @@ for arg in "$@"; do
     esac
 done
 
-CRM_HOME=/var/lib/personalcrm
+# Tenant identity (overridable for staging; defaults are prod).
+CRM_USER="${CRM_USER:-crm}"
+CRM_HOME="${CRM_HOME:-/var/lib/personalcrm}"
 
 # log: progress messages. ssh mode → stdout; local mode → stderr (so stdout stays
 # clean for any future machine-readable output and matches backup-db.sh's split).
@@ -48,15 +53,15 @@ else
 fi
 
 if [ "$LOCAL" = true ]; then
-    # On-Pi mode: no ssh. Resolve the crm uid locally and wrap podman/systemctl
-    # in `sudo -u crm` so they hit the rootless crm-user store, never root's.
-    CRM_UID=$(id -u crm)
+    # On-Pi mode: no ssh. Resolve the tenant uid locally and wrap podman/systemctl
+    # in `sudo -u "$CRM_USER"` so they hit the rootless tenant store, never root's.
+    CRM_UID=$(id -u "$CRM_USER")
     USERENV="HOME=$CRM_HOME XDG_RUNTIME_DIR=/run/user/$CRM_UID DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$CRM_UID/bus"
     # USERENV is deliberately unquoted: it must word-split into separate KEY=val
-    # arguments for env-style `sudo -u crm KEY=val KEY=val ...`.
+    # arguments for env-style `sudo -u "$CRM_USER" KEY=val KEY=val ...`.
     # shellcheck disable=SC2086
-    crm_ctl()    { cd /tmp && sudo -u crm $USERENV systemctl --user "$@"; }
-    crm_podman() { cd /tmp && sudo -u crm HOME=$CRM_HOME XDG_RUNTIME_DIR=/run/user/"$CRM_UID" podman "$@"; }
+    crm_ctl()    { cd /tmp && sudo -u "$CRM_USER" $USERENV systemctl --user "$@"; }
+    crm_podman() { cd /tmp && sudo -u "$CRM_USER" HOME=$CRM_HOME XDG_RUNTIME_DIR=/run/user/"$CRM_UID" podman "$@"; }
     root_mv()    { sudo mv "$1" "$2"; }
     root_cp()    { sudo cp -a "$1" "$2"; }
     root_rm()    { sudo rm -rf "$1"; }
@@ -75,14 +80,14 @@ else
         exit 1
     fi
 
-    CRM_UID=$(ssh "$PI_HOST" "id -u crm")
+    CRM_UID=$(ssh "$PI_HOST" "id -u $CRM_USER")
     USERENV="HOME=$CRM_HOME XDG_RUNTIME_DIR=/run/user/$CRM_UID DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$CRM_UID/bus"
     # Vars below deliberately expand client-side (resolved here, then sent over
     # ssh as a literal remote command). SC2029 is the intended behavior.
     # shellcheck disable=SC2029
-    crm_ctl()    { ssh "$PI_HOST" "cd /tmp && sudo -n -u crm $USERENV systemctl --user $*"; }
+    crm_ctl()    { ssh "$PI_HOST" "cd /tmp && sudo -n -u $CRM_USER $USERENV systemctl --user $*"; }
     # shellcheck disable=SC2029
-    crm_podman() { ssh "$PI_HOST" "cd /tmp && sudo -n -u crm HOME=$CRM_HOME XDG_RUNTIME_DIR=/run/user/$CRM_UID podman $*"; }
+    crm_podman() { ssh "$PI_HOST" "cd /tmp && sudo -n -u $CRM_USER HOME=$CRM_HOME XDG_RUNTIME_DIR=/run/user/$CRM_UID podman $*"; }
     # shellcheck disable=SC2029
     root_mv()    { ssh "$PI_HOST" "sudo mv '$1' '$2'"; }
     # shellcheck disable=SC2029
@@ -106,9 +111,9 @@ on_exit() {
         echo "   The snapshot is preserved. Inspect and recover manually." >&2
         echo "   Bring the database back with:" >&2
         if [ "$LOCAL" = true ]; then
-            echo "   sudo -u crm $USERENV systemctl --user start personalcrm-database.service" >&2
+            echo "   sudo -u $CRM_USER $USERENV systemctl --user start personalcrm-database.service" >&2
         else
-            echo "   ssh $PI_HOST \"sudo -n -u crm $USERENV systemctl --user start personalcrm-database.service\"" >&2
+            echo "   ssh $PI_HOST \"sudo -n -u $CRM_USER $USERENV systemctl --user start personalcrm-database.service\"" >&2
         fi
     fi
 }
