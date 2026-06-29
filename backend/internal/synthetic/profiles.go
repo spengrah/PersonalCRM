@@ -406,7 +406,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	// rule as the text-fact spread above: the gen.BoolFact / gen.DateFact /
 	// gen.EdgeAssertion constructors bump the generator's sourceIDSeq, so they run
 	// AFTER the source replays whose ids depend on the sequence. (They draw NO name
-	// PRNG — only sourceIDSeq — so they cannot shift the name/handle stream; the §6
+	// PRNG — only sourceIDSeq — so they cannot shift the name/handle stream; the
 	// determinism fingerprint guards any drift regardless.)
 	//
 	// Bool facts (job_seeking/on_sabbatical/traveling) on distinct catalog person
@@ -443,10 +443,10 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	// Person→person EDGE assertions among already-seeded catalog person nodes (no
 	// new entity nodes — those are a later PR). knows/introduced_by are
 	// auto-if-confident → accepted; sibling_of is always-confirm → proposed, so the
-	// spread covers BOTH review surfaces (D6). The object is the NEXT catalog
-	// contact (wrapping), so there is never a self-edge; bounded by the catalog size
-	// so each subject is distinct (the single-cardinality introduced_by never
-	// supersedes). Both endpoints are person nodes, so the existing per-node
+	// spread covers BOTH the accepted and pending review surfaces. The object is the
+	// NEXT catalog contact (wrapping), so there is never a self-edge; bounded by the
+	// catalog size so each subject is distinct (the single-cardinality introduced_by
+	// never supersedes). Both endpoints are person nodes, so the existing per-node
 	// assertion teardown sweep (subject OR object) already removes them.
 	relationships := params.Counts.SeededRelationships
 	if len(catalogContactIDs) < 2 {
@@ -534,8 +534,8 @@ var catalogBoolFactPredicates = []string{
 
 // catalogEdgePredicates is the person→person edge predicate cycle. knows and
 // introduced_by are auto-if-confident → accepted; sibling_of is always-confirm →
-// proposed, so a full cycle covers both the accepted and pending edge surfaces
-// (D6). All are migration-066 catalog person→person edge predicates.
+// proposed, so a full cycle covers both the accepted and pending edge surfaces.
+// All are migration-066 catalog person→person edge predicates.
 var catalogEdgePredicates = []string{
 	"knows",
 	"introduced_by",

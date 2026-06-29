@@ -227,8 +227,8 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 		if a.PredicateKey == "birthday" && a.ValueDate != nil && !strings.HasPrefix(*a.ValueDate, "1900-") {
 			realYearBirthday = true
 		}
-		// item 6: a bool fact must carry value_bool (proves the ValueBool plumbing
-		// routes the scalar, not just the predicate).
+		// A bool fact must carry value_bool (proves the ValueBool plumbing routes
+		// the scalar, not just the predicate).
 		if a.ValueBool != nil && *a.ValueBool {
 			boolFactTrue = true
 		}
@@ -239,11 +239,11 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 		"home_address/" + repository.AssertionStatusAccepted,
 		"job_title/" + repository.AssertionStatusAccepted,
 		"preference/" + repository.AssertionStatusAccepted,
-		// item 6 (bool facts) — all auto-if-confident → accepted.
+		// bool facts — all auto-if-confident → accepted.
 		"job_seeking/" + repository.AssertionStatusAccepted,
 		"on_sabbatical/" + repository.AssertionStatusAccepted,
 		"traveling/" + repository.AssertionStatusAccepted,
-		// item 9 (person→person edges) — knows/introduced_by accepted, sibling_of
+		// person→person edges — knows/introduced_by accepted, sibling_of
 		// (always-confirm) proposed, so BOTH edge review surfaces are present.
 		"knows/" + repository.AssertionStatusAccepted,
 		"introduced_by/" + repository.AssertionStatusAccepted,
@@ -254,8 +254,8 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	require.True(t, realYearBirthday, "≥1 real-year (non-1900-sentinel) birthday from the spread")
 	require.True(t, boolFactTrue, "≥1 bool fact carrying value_bool=true")
 
-	// Value-type + edge result counts (item 6 bool facts + the toolkit date fact,
-	// item 9 person→person edges). The CI override seeds one full cycle of each.
+	// Value-type + edge result counts (bool facts + the toolkit date fact +
+	// person→person edges). The CI override seeds one full cycle of each.
 	require.GreaterOrEqual(t, res.SeededBoolFacts, 1, "bool facts seeded")
 	require.GreaterOrEqual(t, res.SeededRelationships, 1, "person→person edges seeded")
 	require.GreaterOrEqual(t, res.SeededDateFacts, 1, "toolkit-authored date fact seeded")
@@ -345,7 +345,7 @@ func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
 
 	require.Equal(t, res1, res2, "prod-shaped ProfileResult must be deterministic across runs")
 	require.NotEmpty(t, fp1, "the seed must produce assertions to fingerprint")
-	require.Equal(t, fp1, fp2, "assertion (value_text, value_date) fingerprint must be deterministic across runs")
+	require.Equal(t, fp1, fp2, "assertion (value_text, value_date, value_bool) fingerprint must be deterministic across runs")
 }
 
 // TestSyntheticProfile_QuiesceLeavesRows proves the seed-and-leave lifecycle:
