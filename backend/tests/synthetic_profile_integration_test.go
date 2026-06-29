@@ -456,7 +456,7 @@ func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
 	require.NotEmpty(t, ent1, "the seed must produce entity nodes to fingerprint")
 	require.Equal(t, ent1, ent2, "entity (subtype, normalized_name) fingerprint must be deterministic across runs")
 
-	// Ordering guard for the "seed gen.X() LAST" rule (D2/R3). The run-to-run
+	// Ordering guard for the "seed gen.X() LAST" rule. The run-to-run
 	// comparison above catches NON-deterministic drift but NOT a DETERMINISTIC
 	// mis-ordering of the gen.Entity pool (both runs would shift identically). A
 	// literal name golden is precluded here — syntheticNS(t) randomizes the namespace
@@ -491,7 +491,7 @@ func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
 	require.GreaterOrEqual(t, maxTextFactSeq, 0, "the seed must produce text-fact assertions with a seq witness")
 	require.GreaterOrEqual(t, minEntitySeq, 0, "the seed must produce gen.Entity pool nodes with a seq witness")
 	require.Greater(t, minEntitySeq, maxTextFactSeq,
-		"gen.Entity pool must be seeded LAST (after the text-fact spread): entity seq %d must exceed max text-fact seq %d — a smaller entity seq means a mis-ordered gen.X() insertion (D2/R3)",
+		"gen.Entity pool must be seeded LAST (after the text-fact spread): entity seq %d must exceed max text-fact seq %d — a smaller entity seq means a mis-ordered gen.X() insertion",
 		minEntitySeq, maxTextFactSeq)
 }
 
