@@ -47,6 +47,7 @@ type contactConfig struct {
 	overdue      bool
 	recent       bool
 	birthday     *time.Time
+	howMet       *string
 	unicodeName  bool
 	descender    bool
 }
@@ -85,6 +86,28 @@ func WithBirthday1900Sentinel(month time.Month, day int) ContactOption {
 	return func(c *contactConfig) {
 		b := time.Date(1900, month, day, 0, 0, 0, 0, time.UTC)
 		c.birthday = &b
+	}
+}
+
+// WithBirthday sets a general (real-year) birthday. The caller supplies an
+// absolute date (anchor-relative so it tracks the configured time); this is the
+// non-sentinel counterpart to WithBirthday1900Sentinel. It routes through the
+// contact-create authority flip into a `birthday` date assertion.
+func WithBirthday(t time.Time) ContactOption {
+	return func(c *contactConfig) {
+		b := t
+		c.birthday = &b
+	}
+}
+
+// WithHowMet sets the contact's how_met text. It routes through the
+// contact-create authority flip into an accepted `how_met` text assertion (the
+// ContactSpec.HowMet field the harness forwards to CreateContact). A blank
+// string is normalized away by the service, so callers pass a meaningful value.
+func WithHowMet(s string) ContactOption {
+	return func(c *contactConfig) {
+		v := s
+		c.howMet = &v
 	}
 }
 
@@ -127,6 +150,7 @@ func (g *Generator) Contact(opts ...ContactOption) ContactSpec {
 		FullName: fullName,
 		Cadence:  cfg.cadence,
 		Birthday: cfg.birthday,
+		HowMet:   cfg.howMet,
 	}
 
 	if cfg.withEmail {

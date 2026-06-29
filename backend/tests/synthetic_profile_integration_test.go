@@ -86,6 +86,10 @@ func TestSyntheticProfile_DevCoversCatalog(t *testing.T) {
 	require.Equal(t, params.Counts.OrphanMeetingNote, res.OrphanMeetingNote)
 	require.Equal(t, params.Counts.SeededAssertions, res.SeededAssertions)
 	require.Equal(t, 2, res.SeededAssertions, "dev profile seeds graph assertions")
+	// Bio facts (birthday / how_met) ride on the contact-create authority flip,
+	// spread by catalog index; the dev catalog is large enough to carry ≥1 of each.
+	require.GreaterOrEqual(t, res.ContactsWithBirthday, 1, "dev profile seeds birthday bio facts")
+	require.GreaterOrEqual(t, res.ContactsWithHowMet, 1, "dev profile seeds how_met bio facts")
 
 	remaining, err := h.ContactsRemaining(ctx)
 	require.NoError(t, err)
@@ -112,6 +116,10 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	params.Counts.StrandedMessages = 1
 	params.Counts.UnmatchedCalendar = 1
 	params.Counts.OrphanMeetingNote = 1
+	// 4 assertions walk the full text-fact predicate cycle once (CI-safe), so the
+	// always-confirm predicate (health_condition → proposed) is exercised
+	// alongside the accepted predicates.
+	params.Counts.SeededAssertions = 4
 
 	h := synthetic.NewHarnessForNamespace(t, ctx, database, params.Namespace, params.Seed)
 	res, err := synthetic.RunProfile(ctx, h, params)
@@ -170,9 +178,81 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	require.GreaterOrEqual(t, neverContacted, 1, "≥1 cadence-bearing never-contacted contact (NULL last_contacted survived)")
 	require.GreaterOrEqual(t, noMethod, 1, "≥1 no-method contact (the no-method bucket exists)")
 
+	// Bio facts (item 4 how_met + item 5 real-year birthdays) ride on the
+	// contact-create authority flip; the catalog carries ≥1 of each.
+	require.GreaterOrEqual(t, res.ContactsWithBirthday, 1, "≥1 contact with a birthday bio fact")
+	require.GreaterOrEqual(t, res.ContactsWithHowMet, 1, "≥1 contact with a how_met bio fact")
+
+	// Accept/pending coverage (D6): the text-fact spread must populate BOTH the
+	// accepted-knowledge surface (home_address/job_title/preference + the
+	// how_met/birthday contact-path facts) AND the pending-review surface
+	// (health_condition is always-confirm → proposed). Scoped to the namespace.
+	assertions, err := support.ListAssertionsByNodePrefix(ctx, h.Generator().Prefix())
+	require.NoError(t, err)
+	var accepted, proposed int
+	for _, a := range assertions {
+		switch a.Status {
+		case repository.AssertionStatusAccepted:
+			accepted++
+		case repository.AssertionStatusProposed:
+			proposed++
+		}
+	}
+	require.GreaterOrEqual(t, accepted, 1, "≥1 accepted assertion (accepted-knowledge surface)")
+	require.GreaterOrEqual(t, proposed, 1, "≥1 proposed assertion (pending-review surface; health_condition)")
+
 	remaining, err := h.ContactsRemaining(ctx)
 	require.NoError(t, err)
 	require.Greater(t, remaining, int64(0), "prod-shaped profile seeds contacts")
+}
+
+// TestSyntheticProfile_ProdShapedDeterministic proves the prod-shaped seed is
+// deterministic: two runs at the same (namespace, seed) produce byte-identical
+// ProfileResult counts AND an identical fingerprint of the generated assertion
+// value_texts. Count-pinning alone is insufficient — counts can match while a
+// non-deterministic source (map iteration, wall-clock leak) shifts generated
+// identifiers — so the value_text fingerprint is the drift detector. Both runs
+// share the SAME namespace (with a full teardown between) so the ns-prefix and
+// PRNG stream line up; value_text (NOT proposition_key, which embeds the per-run
+// subject UUID) is the run-stable identifier the fingerprint reads.
+func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
+	testsupport.RequireLongTests(t)
+	database, ctx := newSyntheticDB(t)
+
+	params, err := synthetic.ProfileParams(synthetic.ProfileProdShaped)
+	require.NoError(t, err)
+	params.Namespace = syntheticNS(t)
+	// Bound the volume for CI: determinism is a property of the orchestration, not
+	// of the scale.
+	params.Counts.SeededContacts = 4
+	params.Counts.SeededAssertions = 4
+	params.Counts.UnmatchedExternal = 1
+	params.Counts.StrandedTelegram = 1
+	params.Counts.StrandedMessages = 1
+	params.Counts.UnmatchedCalendar = 1
+	params.Counts.OrphanMeetingNote = 1
+
+	support := repository.NewSyntheticSupportRepository(database.Queries)
+
+	// run seeds the profile, captures (ProfileResult, assertion fingerprint), then
+	// fully tears down so the next run starts from a clean namespace.
+	run := func() (synthetic.ProfileResult, []repository.AssertionSummary) {
+		h, teardown, err := synthetic.NewHarnessWithDBForNamespace(ctx, database, params.Namespace, params.Seed)
+		require.NoError(t, err)
+		res, err := synthetic.RunProfile(ctx, h, params)
+		require.NoError(t, err)
+		fp, err := support.ListAssertionsByNodePrefix(ctx, h.Generator().Prefix())
+		require.NoError(t, err)
+		require.NoError(t, teardown(context.Background()))
+		return res, fp
+	}
+
+	res1, fp1 := run()
+	res2, fp2 := run()
+
+	require.Equal(t, res1, res2, "prod-shaped ProfileResult must be deterministic across runs")
+	require.NotEmpty(t, fp1, "the seed must produce assertions to fingerprint")
+	require.Equal(t, fp1, fp2, "assertion value_text fingerprint must be deterministic across runs")
 }
 
 // TestSyntheticProfile_QuiesceLeavesRows proves the seed-and-leave lifecycle:

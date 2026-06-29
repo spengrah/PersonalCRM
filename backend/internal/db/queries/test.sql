@@ -560,6 +560,22 @@ DELETE FROM node WHERE canonical_label LIKE @label_prefix || '%';
 -- the shared test DB.
 SELECT COUNT(*) FROM assertion WHERE subject_node_id = $1;
 
+-- name: SyntheticListAssertionsByNodePrefix :many
+-- Profile coverage + determinism test support: list the LIVE (proposed/accepted)
+-- assertions whose subject node is ns-prefixed (catalog person nodes own
+-- ns-prefixed canonical_labels). The coverage check uses (predicate_key, status)
+-- to assert ≥1 accepted AND ≥1 proposed landed; the determinism check
+-- fingerprints value_text across a re-run (value_text is NULL for non-text
+-- payloads like birthday — proposition_key is NOT used because it embeds the
+-- per-run subject UUID and so is not run-stable). Deterministically ordered so
+-- the fingerprint is stable. Caller passes a BARE prefix; '%' is appended here.
+SELECT a.predicate_key, a.status, a.value_text
+FROM assertion a
+JOIN node n ON a.subject_node_id = n.id
+WHERE n.canonical_label LIKE @label_prefix || '%'
+  AND a.status IN ('proposed', 'accepted')
+ORDER BY a.predicate_key, a.value_text NULLS LAST, a.status;
+
 -- name: SyntheticGetNodeForContact :one
 -- Contact→node dual-write test support: fetch the person node a contact owns
 -- (node.id == contact.id). Returns the live (non-soft-deleted) node row so a

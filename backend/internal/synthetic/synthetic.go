@@ -79,7 +79,7 @@ type Counts struct {
 	StrandedMessages  int // stranded messages_message (iMessage) rows
 	UnmatchedCalendar int // calendar_event rows with an unmatched attendee
 	OrphanMeetingNote int // orphan_needs_review meeting_note rows
-	SeededAssertions  int // graph (SP1) fact assertions seeded on the first contact node
+	SeededAssertions  int // graph (SP1) text-fact assertions spread across catalog contact nodes
 }
 
 // SeedParams is the profile/volume seam consumed by the seed orchestration.

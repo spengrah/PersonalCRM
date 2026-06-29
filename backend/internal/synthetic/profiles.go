@@ -3,6 +3,7 @@ package synthetic
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/synthetic/factory"
@@ -51,6 +52,11 @@ type ProfileResult struct {
 	UnmatchedCalendar int
 	OrphanMeetingNote int
 	SeededAssertions  int
+	// ContactsWithBirthday / ContactsWithHowMet count the catalog contacts that
+	// carried a birthday / how_met bio fact (produced through the contact-create
+	// authority-flip path, not the Phase-4 assertion loop). Counts-only / no PII.
+	ContactsWithBirthday int
+	ContactsWithHowMet   int
 }
 
 // ProfileParams returns the default SeedParams for a named profile (error on an
@@ -89,7 +95,11 @@ func ProfileParams(name Profile) (SeedParams, error) {
 				StrandedMessages:  5,
 				UnmatchedCalendar: 7,
 				OrphanMeetingNote: 4,
-				SeededAssertions:  4,
+				// ~1/3 of 150 catalog contacts carry a bio text fact (the
+				// Phase-4 spread cycles home_address/job_title/preference/
+				// health_condition across distinct contacts). The coverage test
+				// overrides this down to a CI-safe minimum.
+				SeededAssertions: 50,
 			},
 		}, nil
 	default:
@@ -164,14 +174,25 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	// no-method bucket). The settled per-source interactions live on the
 	// dedicated contacts below instead.
 	var firstCatalogContactID uuid.UUID
+	catalogContactIDs := make([]uuid.UUID, 0, n)
 	for i := 0; i < n; i++ {
-		opts := catalogOptionsFor(i, n)
+		opts := catalogOptionsFor(i, n, gen.Anchor(), gen.Prefix())
 		spec := gen.Contact(opts...)
 		contact, err := h.SeedContact(ctx, spec)
 		if err != nil {
 			return res, fmt.Errorf("profile %s: seed catalog contact %d: %w", params.Profile, i, err)
 		}
 		res.Contacts++
+		// Bio facts ride on the contact-create authority flip (SeedContact →
+		// CreateContact → birthday/how_met assertions); count them off the spec so
+		// the coverage check can assert the bio surfaces are populated.
+		if spec.Birthday != nil {
+			res.ContactsWithBirthday++
+		}
+		if spec.HowMet != nil {
+			res.ContactsWithHowMet++
+		}
+		catalogContactIDs = append(catalogContactIDs, contact.ID)
 		if i == 0 {
 			firstCatalogContactID = contact.ID
 		}
@@ -306,17 +327,24 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		res.OrphanMeetingNote++
 	}
 
-	// Graph (SP1) assertions on the first catalog contact's person node
+	// Graph (SP1) text-fact assertions spread across the catalog person nodes
 	// (node.id == contact.id). Seeded LAST so the generator-PRNG advancement these
 	// FactAssertion calls cause does not shift the deterministic peer-id / handle
 	// sequence the earlier source replays depend on (a mid-sequence insert would
-	// collide a "stranded" peer with a seeded contact's identity). Each
-	// FactAssertion produces a distinct value + proposition_key; preference is a
-	// multi-cardinality fact so they coexist (all accepted), giving the graph
-	// surfaces content without supersession.
-	if firstCatalogContactID != uuid.Nil {
+	// collide a "stranded" peer with a seeded contact's identity).
+	//
+	// The predicate cycle covers BOTH review surfaces (D6): home_address /
+	// job_title / preference are auto-if-confident → accepted; health_condition is
+	// always-confirm → it lands proposed/pending. health_condition leads the cycle
+	// so even a single seeded assertion exercises the pending-review surface. Each
+	// FactAssertion produces a distinct value + proposition_key, and successive
+	// assertions land on distinct contacts (i % len), so the single-cardinality
+	// predicates (home_address/job_title) never supersede a same-subject prior.
+	if len(catalogContactIDs) > 0 {
 		for i := 0; i < params.Counts.SeededAssertions; i++ {
-			if _, err := h.ReplayAssertion(ctx, firstCatalogContactID, gen.FactAssertion("preference")); err != nil {
+			subject := catalogContactIDs[i%len(catalogContactIDs)]
+			predicate := catalogTextFactPredicates[i%len(catalogTextFactPredicates)]
+			if _, err := h.ReplayAssertion(ctx, subject, gen.FactAssertion(predicate)); err != nil {
 				return res, fmt.Errorf("profile %s: replay assertion %d: %w", params.Profile, i, err)
 			}
 			res.SeededAssertions++
@@ -326,17 +354,34 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	return res, nil
 }
 
+// catalogTextFactPredicates is the predicate cycle the Phase-4 assertion spread
+// walks. health_condition (always-confirm → proposed) leads so any non-zero
+// SeededAssertions count covers the pending-review surface; the rest are
+// auto-if-confident → accepted. All are migration-066 catalog text predicates.
+var catalogTextFactPredicates = []string{
+	"health_condition",
+	"home_address",
+	"job_title",
+	"preference",
+}
+
 // catalogOptionsFor returns the contact-builder options for catalog contact i of
 // n, deterministically spreading the edge-case shapes across the population:
 // cadence states (overdue / recent / never-contacted), the 1900 birthday
-// sentinel, a unicode name, a descender name, and a no-method contact. Catalog
-// contacts get NO settling replay, so these last_contacted states survive (a
-// MatchSeeded inbound would otherwise let the cadence updater overwrite them).
+// sentinel, a unicode name, a descender name, a no-method contact, plus a
+// fraction carrying real-year birthdays and how_met bio facts. Catalog contacts
+// get NO settling replay, so these last_contacted states survive (a MatchSeeded
+// inbound would otherwise let the cadence updater overwrite them).
+//
+// anchor is the generator's clock (real-year birthdays are anchor-relative, so
+// no time.Now()); prefix is the namespace prefix the how_met value carries so it
+// stays obviously synthetic. Neither draws from the PRNG, so the options are
+// ordering-safe in place (they only set config on the existing gen.Contact call).
 //
 // The no-method slot (i == 3) carries WithNoMethods, which overrides the email
-// default — so it must NOT also request a method. The slots are mutually
-// exclusive by i, so no contact gets both.
-func catalogOptionsFor(i, n int) []factory.ContactOption {
+// default — so it must NOT also request a method; it returns early and gets no
+// bio facts. The name edge cases (unicode/descender) are mutually exclusive by i.
+func catalogOptionsFor(i, n int, anchor time.Time, prefix string) []factory.ContactOption {
 	var opts []factory.ContactOption
 
 	// The no-method bucket: a cadence-bearing contact with NO contact_method.
@@ -369,7 +414,31 @@ func catalogOptionsFor(i, n int) []factory.ContactOption {
 	case i == 2 && n > 3:
 		opts = append(opts, factory.WithDescenderName())
 	}
+
+	// Real-year birthdays on ~1/5 of contacts (excluding i == 0, which carries the
+	// 1900 sentinel above). Anchor-relative ages 25–54, deterministic month/day.
+	if i != 0 && i%5 == 2 {
+		birthYear := anchor.Year() - (25 + i%30)
+		bday := time.Date(birthYear, time.Month(1+i%12), 1+i%28, 0, 0, 0, 0, time.UTC)
+		opts = append(opts, factory.WithBirthday(bday))
+	}
+
+	// how_met on ~1/4 of contacts (ns-prefixed synthetic text, rotated stem).
+	if i%4 == 1 {
+		stem := catalogHowMetStems[(i/4)%len(catalogHowMetStems)]
+		opts = append(opts, factory.WithHowMet(prefix+"met-"+stem))
+	}
+
 	return opts
+}
+
+// catalogHowMetStems is the small fixed pool the how_met bio fact rotates over so
+// the value repeats across contacts (prod-like) while staying deterministic.
+var catalogHowMetStems = []string{
+	"at-a-conference",
+	"through-a-mutual-friend",
+	"at-work",
+	"online-community",
 }
 
 // perSourceSettledCount bounds the per-source settled-interaction count by

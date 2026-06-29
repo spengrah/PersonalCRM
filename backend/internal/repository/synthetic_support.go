@@ -714,6 +714,36 @@ func (r *SyntheticSupportRepository) CountAssertionsForSubject(ctx context.Conte
 	return r.queries.SyntheticCountAssertionsForSubject(ctx, pgtype.UUID{Bytes: subjectNodeID, Valid: true})
 }
 
+// AssertionSummary is the status + value projection of a LIVE assertion
+// (proposed/accepted) on an ns-prefixed subject node — profile coverage +
+// determinism test only. ValueText is nil for non-text payloads (e.g. birthday).
+type AssertionSummary struct {
+	PredicateKey string
+	Status       string
+	ValueText    *string
+}
+
+// ListAssertionsByNodePrefix returns the LIVE assertions whose subject node's
+// canonical_label is ns-prefixed, so a profile test can assert the
+// accepted/proposed split and fingerprint the generated value_texts across a
+// re-run. Caller passes a BARE prefix.
+func (r *SyntheticSupportRepository) ListAssertionsByNodePrefix(ctx context.Context, prefix string) ([]AssertionSummary, error) {
+	rows, err := r.queries.SyntheticListAssertionsByNodePrefix(ctx, pgtype.Text{String: prefix, Valid: true})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]AssertionSummary, 0, len(rows))
+	for _, row := range rows {
+		s := AssertionSummary{PredicateKey: row.PredicateKey, Status: row.Status}
+		if row.ValueText.Valid {
+			v := row.ValueText.String
+			s.ValueText = &v
+		}
+		out = append(out, s)
+	}
+	return out, nil
+}
+
 // GetNodeForContact fetches the person node a contact owns (node.id ==
 // contact.id), so a contact→node dual-write test can assert the node exists
 // with the expected type and canonical_label. Returns db.ErrNotFound when no
