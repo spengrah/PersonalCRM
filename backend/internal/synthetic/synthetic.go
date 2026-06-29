@@ -122,6 +122,12 @@ type Counts struct {
 	// it rides the contact-create authority flip via WithLocation, index-spread like
 	// the birthday/how_met bio facts.)
 	SeededEntityEdges int
+	// SeededSignals is the number of relationship_signal rows seeded across distinct
+	// catalog person nodes (one signal per node, rotating a small fixed signal-key
+	// pool so a few signal kinds repeat prod-like). Bounded by the catalog size at
+	// run time. Written through the production UpsertRelationshipSignal path
+	// (storage-only — SP1 has no signal generators). 0 disables.
+	SeededSignals int
 }
 
 // SeedParams is the profile/volume seam consumed by the seed orchestration.

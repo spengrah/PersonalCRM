@@ -1713,6 +1713,11 @@ type Querier interface {
 	// matched_contact_ids AND last_contacted_updated=true (the attended interaction
 	// published). Idempotent: a re-replay leaves the row processed.
 	SyntheticCountProcessedCalendarEventByGcalId(ctx context.Context, arg SyntheticCountProcessedCalendarEventByGcalIdParams) (int64, error)
+	// Cleanup/coverage assertion — count relationship_signal rows for the given subject
+	// nodes (scoped to THIS run's tracked node ids, so it is immune to parallel tests
+	// seeding their own signals on the shared DB). Used to assert ≥1 signal exists for
+	// the seeded nodes (coverage) and that 0 remain after teardown.
+	SyntheticCountRelationshipSignalsForNodes(ctx context.Context, nodeIds []pgtype.UUID) (int64, error)
 	// Settle Gate A (iMessage unknown-sender): the staging row for the guid landed
 	// (processed) with matched_contact_id IS NULL.
 	SyntheticCountStrandedMessagesMessageByGuid(ctx context.Context, guid string) (int64, error)
@@ -1855,6 +1860,12 @@ type Querier interface {
 	// predicates clears them by key prefix (the curated seed rows use bare keys and
 	// are never prefix-matched). Caller passes a BARE prefix; '%' is appended here.
 	SyntheticDeletePredicatesByKeyPrefix(ctx context.Context, keyPrefix pgtype.Text) (int64, error)
+	// Cleanup: hard-delete the relationship_signal rows a profile seeded on the given
+	// subject nodes, keyed by the tracked node ids. relationship_signal.subject_node_id
+	// is a real FK→node (NO ACTION, no soft delete), so these rows MUST be cleared
+	// BEFORE their subject nodes — the teardown runs this before the person/entity node
+	// deletes.
+	SyntheticDeleteRelationshipSignalsForNodes(ctx context.Context, nodeIds []pgtype.UUID) (int64, error)
 	// Cleanup: delete the group telegram_chat_config rows a group replay created, by
 	// the exact tracked chat ids (telegram_chat_config has no namespace column —
 	// keyed only by telegram_chat_id).

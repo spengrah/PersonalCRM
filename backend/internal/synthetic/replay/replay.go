@@ -89,6 +89,11 @@ type created struct {
 	// (after the interaction delete, which clears the restrict FK) or the shared
 	// DB leaks a venue node per distinct container.
 	venueNodeIDs []uuid.UUID
+	// signalNodeIDs are the subject node ids a profile seeded a relationship_signal
+	// on. relationship_signal has no namespace column + no deleted_at, and its
+	// subject_node_id → node FK is NO ACTION, so cleanup MUST delete these rows by
+	// the tracked node ids BEFORE the node deletes.
+	signalNodeIDs []uuid.UUID
 	// directSources is the set of sources the adapters published root events
 	// under, so Cleanup can capture no-contact root events that the
 	// contact-scoped read misses.
@@ -102,6 +107,7 @@ func newCreated() *created {
 func (c *created) addContact(id uuid.UUID)       { c.contactIDs = append(c.contactIDs, id) }
 func (c *created) addInteraction(id uuid.UUID)   { c.interactionIDs = append(c.interactionIDs, id) }
 func (c *created) addVenueNode(id uuid.UUID)     { c.venueNodeIDs = append(c.venueNodeIDs, id) }
+func (c *created) addSignalNode(id uuid.UUID)    { c.signalNodeIDs = append(c.signalNodeIDs, id) }
 func (c *created) addTelegramPeer(id int64)      { c.telegramPeerIDs = append(c.telegramPeerIDs, id) }
 func (c *created) addTelegramChat(id int64)      { c.telegramChatIDs = append(c.telegramChatIDs, id) }
 func (c *created) addContactTask(id uuid.UUID)   { c.contactTaskIDs = append(c.contactTaskIDs, id) }
@@ -264,6 +270,21 @@ func (h *Harness) SeedEntity(ctx context.Context, spec factory.EntitySpec) (uuid
 		return uuid.Nil, fmt.Errorf("seed entity: commit: %w", err)
 	}
 	return nodeID, nil
+}
+
+// SeedRelationshipSignal writes one relationship_signal row for a seeded node
+// through the PRODUCTION UpsertRelationshipSignal write path (storage-only — SP1
+// has no signal generators, so the toolkit direct-writes the projection the way
+// SP3 eventually will). subjectNodeID must be a node the harness seeded (a person
+// node, node.id == contact.id) so the teardown — which deletes signals by the
+// tracked node ids BEFORE the node deletes — cleans it. Idempotent on
+// (subjectNodeID, signalKey). asOf is anchor-relative (no time.Now()).
+func (h *Harness) SeedRelationshipSignal(ctx context.Context, subjectNodeID uuid.UUID, signalKey string, value float64, asOf time.Time, methodVersion string) error {
+	if err := h.support.UpsertRelationshipSignal(ctx, subjectNodeID, signalKey, value, asOf, methodVersion); err != nil {
+		return fmt.Errorf("seed relationship signal: %w", err)
+	}
+	h.track(func(c *created) { c.addSignalNode(subjectNodeID) })
+	return nil
 }
 
 // SeedNote attaches a notepad note to a seeded contact via the EXISTING
@@ -458,6 +479,12 @@ func (h *Harness) snapshotVenueNodeIDs() []uuid.UUID {
 	h.createdMu.Lock()
 	defer h.createdMu.Unlock()
 	return append([]uuid.UUID(nil), h.created.venueNodeIDs...)
+}
+
+func (h *Harness) snapshotSignalNodeIDs() []uuid.UUID {
+	h.createdMu.Lock()
+	defer h.createdMu.Unlock()
+	return append([]uuid.UUID(nil), h.created.signalNodeIDs...)
 }
 
 // gateBClear reports whether Gate B has reached zero for this replay's contacts.

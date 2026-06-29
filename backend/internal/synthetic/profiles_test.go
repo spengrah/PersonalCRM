@@ -83,6 +83,9 @@ func TestProfileParams(t *testing.T) {
 	// has org/topic/tag entity nodes + works_at/interested_in/tagged_as edges.
 	require.Greater(t, prod.Counts.SeededEntities, 0)
 	require.Greater(t, prod.Counts.SeededEntityEdges, 0)
+	// prod-shaped seeds relationship_signal rows so the coverage check has SP1
+	// derived-storage signals to assert.
+	require.Greater(t, prod.Counts.SeededSignals, 0)
 }
 
 // TestDefaultParamsUnchanged pins DefaultParams field-for-field so the
@@ -106,4 +109,5 @@ func TestDefaultParamsUnchanged(t *testing.T) {
 	require.Equal(t, 0, p.Counts.SeededTasks)
 	require.Equal(t, 0, p.Counts.SeededEntities)
 	require.Equal(t, 0, p.Counts.SeededEntityEdges)
+	require.Equal(t, 0, p.Counts.SeededSignals)
 }
