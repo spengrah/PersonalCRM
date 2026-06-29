@@ -264,6 +264,18 @@ func (r *SyntheticSupportRepository) DeleteContactTasksByIds(ctx context.Context
 	return r.queries.SyntheticDeleteContactTasksByIds(ctx, pgUUIDs(taskIDs))
 }
 
+// CountContactTasksByStateAndNamePrefix counts contact_task rows in a given state
+// whose contact's full_name is ns-prefixed, so the prod-shaped coverage test can
+// assert each surface state (managed/unmanaged/completed/dismissed) has ≥1
+// representative scoped to its own namespace on the shared test DB. Caller passes
+// a BARE prefix.
+func (r *SyntheticSupportRepository) CountContactTasksByStateAndNamePrefix(ctx context.Context, state, namePrefix string) (int64, error) {
+	return r.queries.SyntheticCountContactTasksByStateAndNamePrefix(ctx, db.SyntheticCountContactTasksByStateAndNamePrefixParams{
+		NamePrefix: pgtype.Text{String: namePrefix, Valid: true},
+		State:      state,
+	})
+}
+
 // DeleteContactMethodsByContactIds removes contact_method rows by contact
 // (cleanup step 11).
 func (r *SyntheticSupportRepository) DeleteContactMethodsByContactIds(ctx context.Context, contactIDs []uuid.UUID) (int64, error) {

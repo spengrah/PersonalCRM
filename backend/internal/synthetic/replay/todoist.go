@@ -158,3 +158,25 @@ func (h *Harness) ReplayTodoist(ctx context.Context, contactIDs []uuid.UUID) (To
 	}
 	return TodoistResult{ContactIDs: contactIDs}, nil
 }
+
+// TransitionTodoistCadenceTaskState fetches the seeded contact's managed Todoist
+// cadence-due task (created by ReplayTodoist's reconcile) and transitions it to
+// the target state via the production UpdateContactTaskState path, returning the
+// task id. The prod-shaped profile uses it to cover the non-managed contact_task
+// surface states (completed/dismissed/unmanaged) that the empty fake-Todoist sync
+// never produces — reconcile alone creates only `managed` rows. The task id is
+// already in the cleanup ledger (ReplayTodoist tracked it), so no extra tracking
+// is needed. Errors (rather than no-ops) if the contact has no cadence-due Todoist
+// task, so a mis-wired seed fails loudly.
+func (h *Harness) TransitionTodoistCadenceTaskState(ctx context.Context, contactID uuid.UUID, state repository.ContactTaskState) (uuid.UUID, error) {
+	taskRepo := repository.NewContactTaskRepository(h.database.Queries)
+	task, err := taskRepo.GetContactTaskByContactCadenceDue(ctx, contactID, todoist.SourceName)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("get cadence-due task for contact %s: %w", contactID, err)
+	}
+	updated, err := taskRepo.UpdateContactTaskState(ctx, task.ID, state)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("transition contact_task %s to %s: %w", task.ID, state, err)
+	}
+	return updated.ID, nil
+}

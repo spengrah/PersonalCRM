@@ -91,6 +91,10 @@ func TestSyntheticProfile_DevCoversCatalog(t *testing.T) {
 	// spread by catalog index; the dev catalog is large enough to carry ≥1 of each.
 	require.GreaterOrEqual(t, res.ContactsWithBirthday, 1, "dev profile seeds birthday bio facts")
 	require.GreaterOrEqual(t, res.ContactsWithHowMet, 1, "dev profile seeds how_met bio facts")
+	// Cadence tasks: the dev catalog is cadence-bearing, so ReplayTodoist seeds a
+	// managed task per contact (res.SeededTasks is the actual rows, a catalog-wide
+	// count, not the >0 gate value in Counts.SeededTasks).
+	require.GreaterOrEqual(t, res.SeededTasks, 1, "dev profile seeds cadence tasks")
 
 	remaining, err := h.ContactsRemaining(ctx)
 	require.NoError(t, err)
@@ -122,6 +126,10 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	// proposed) and the accepted ones (home_address/job_title/preference) — is
 	// exercised.
 	params.Counts.SeededAssertions = 5
+	// Enable cadence-task seeding (>0 gate). The 9-contact catalog is all
+	// cadence-bearing, so reconcile creates 9 `managed` tasks and three are
+	// transitioned to completed/dismissed/unmanaged — every surface state present.
+	params.Counts.SeededTasks = 1
 
 	h := synthetic.NewHarnessForNamespace(t, ctx, database, params.Namespace, params.Seed)
 	res, err := synthetic.RunProfile(ctx, h, params)
@@ -216,6 +224,25 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 		require.True(t, seen[want], "Phase-4 text-fact spread must land %s", want)
 	}
 	require.True(t, realYearBirthday, "≥1 real-year (non-1900-sentinel) birthday from the spread")
+
+	// Cadence tasks: ReplayTodoist seeds a `managed` cadence task on each
+	// cadence-bearing catalog contact, and the profile transitions a deterministic
+	// three to completed/dismissed/unmanaged. Assert ≥1 row in EACH state the seed
+	// produces (namespace-scoped), so every cadence-task surface the staging UI
+	// renders has content. pending_remote_create is out of scope (a transient
+	// create-in-flight state the seed does not produce).
+	require.GreaterOrEqual(t, res.SeededTasks, 1, "cadence tasks seeded")
+	prefix := h.Generator().Prefix()
+	for _, state := range []repository.ContactTaskState{
+		repository.ContactTaskStateManaged,
+		repository.ContactTaskStateUnmanaged,
+		repository.ContactTaskStateCompleted,
+		repository.ContactTaskStateDismissed,
+	} {
+		count, err := support.CountContactTasksByStateAndNamePrefix(ctx, string(state), prefix)
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, count, int64(1), "≥1 contact_task in state %q", state)
+	}
 
 	remaining, err := h.ContactsRemaining(ctx)
 	require.NoError(t, err)

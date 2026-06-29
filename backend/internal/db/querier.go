@@ -1663,6 +1663,13 @@ type Querier interface {
 	// rows whose normalized value shares the namespace's phone prefix. Caller passes
 	// a BARE prefix; '%' is appended here.
 	SyntheticCountContactMethodsByValueNormalizedPrefix(ctx context.Context, valueNormalizedPrefix pgtype.Text) (int64, error)
+	// Profile coverage test only: count contact_task rows in a given state whose
+	// contact's full_name is ns-prefixed, so the prod-shaped coverage check can assert
+	// each surface state (managed/unmanaged/completed/dismissed) has ≥1 representative
+	// scoped to its own namespace on the shared test DB. contact_task has no
+	// deleted_at; the contact soft-delete filter scopes to live catalog contacts.
+	// Caller passes a BARE prefix; '%' appended.
+	SyntheticCountContactTasksByStateAndNamePrefix(ctx context.Context, arg SyntheticCountContactTasksByStateAndNamePrefixParams) (int64, error)
 	// Contact→node dual-write test support: count contacts with an exact full_name
 	// (namespace-prefixed names are unique per test), so a rollback test asserts a
 	// failed-tx contact did not survive without paging the whole contact list.

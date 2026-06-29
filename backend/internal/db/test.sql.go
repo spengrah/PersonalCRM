@@ -783,6 +783,33 @@ func (q *Queries) SyntheticCountContactMethodsByValueNormalizedPrefix(ctx contex
 	return count, err
 }
 
+const SyntheticCountContactTasksByStateAndNamePrefix = `-- name: SyntheticCountContactTasksByStateAndNamePrefix :one
+SELECT COUNT(*)
+FROM contact_task ct
+JOIN contact c ON ct.contact_id = c.id
+WHERE c.full_name LIKE $1 || '%'
+  AND ct.state = $2
+  AND c.deleted_at IS NULL
+`
+
+type SyntheticCountContactTasksByStateAndNamePrefixParams struct {
+	NamePrefix pgtype.Text `json:"name_prefix"`
+	State      string      `json:"state"`
+}
+
+// Profile coverage test only: count contact_task rows in a given state whose
+// contact's full_name is ns-prefixed, so the prod-shaped coverage check can assert
+// each surface state (managed/unmanaged/completed/dismissed) has ≥1 representative
+// scoped to its own namespace on the shared test DB. contact_task has no
+// deleted_at; the contact soft-delete filter scopes to live catalog contacts.
+// Caller passes a BARE prefix; '%' appended.
+func (q *Queries) SyntheticCountContactTasksByStateAndNamePrefix(ctx context.Context, arg SyntheticCountContactTasksByStateAndNamePrefixParams) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountContactTasksByStateAndNamePrefix, arg.NamePrefix, arg.State)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const SyntheticCountContactsByFullName = `-- name: SyntheticCountContactsByFullName :one
 SELECT COUNT(*) FROM contact WHERE full_name = $1 AND deleted_at IS NULL
 `
