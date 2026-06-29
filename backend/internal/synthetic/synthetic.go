@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/synthetic/factory"
@@ -68,6 +69,14 @@ func NewHarnessWithDBForNamespace(ctx context.Context, database *db.Database, na
 	return replay.NewHarnessWithDBForNamespace(ctx, database, namespace, seed)
 }
 
+// NewHarnessWithDBForNamespaceAt is NewHarnessWithDBForNamespace with an EXPLICIT
+// generator anchor (instead of the live accelerated clock), so a determinism test
+// can pin the anchor and get byte-identical TIMESTAMPED output across two runs at
+// the same namespace + seed. Re-exported for the profile determinism check.
+func NewHarnessWithDBForNamespaceAt(ctx context.Context, database *db.Database, namespace string, seed uint64, anchor time.Time) (*Harness, func(context.Context) error, error) {
+	return replay.NewHarnessWithDBForNamespaceAt(ctx, database, namespace, seed, anchor)
+}
+
 // Counts tunes the per-entity volume a profile produces. The per-profile
 // distribution knobs the profiles read; only the knobs a profile actually
 // consumes are present (no distribution DSL). DefaultParams supplies the small
@@ -79,7 +88,7 @@ type Counts struct {
 	StrandedMessages  int // stranded messages_message (iMessage) rows
 	UnmatchedCalendar int // calendar_event rows with an unmatched attendee
 	OrphanMeetingNote int // orphan_needs_review meeting_note rows
-	SeededAssertions  int // graph (SP1) fact assertions seeded on the first contact node
+	SeededAssertions  int // graph (SP1) text-fact assertions spread across catalog contact nodes
 }
 
 // SeedParams is the profile/volume seam consumed by the seed orchestration.

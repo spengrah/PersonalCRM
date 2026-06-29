@@ -69,6 +69,9 @@ func TestProfileParams(t *testing.T) {
 	require.Greater(t, prod.Counts.StrandedMessages, 0)
 	require.Greater(t, prod.Counts.UnmatchedCalendar, 0)
 	require.Greater(t, prod.Counts.OrphanMeetingNote, 0)
+	// prod-shaped seeds a prod-shaped slice of text-fact assertions (~1/3 of the
+	// catalog); the coverage check overrides this down for CI.
+	require.Greater(t, prod.Counts.SeededAssertions, 0)
 }
 
 // TestDefaultParamsUnchanged pins DefaultParams field-for-field so the
@@ -86,4 +89,5 @@ func TestDefaultParamsUnchanged(t *testing.T) {
 	require.Equal(t, 0, p.Counts.StrandedMessages)
 	require.Equal(t, 0, p.Counts.UnmatchedCalendar)
 	require.Equal(t, 0, p.Counts.OrphanMeetingNote)
+	require.Equal(t, 0, p.Counts.SeededAssertions)
 }

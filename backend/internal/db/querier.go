@@ -1871,6 +1871,17 @@ type Querier interface {
 	// (node.id == contact.id). Returns the live (non-soft-deleted) node row so a
 	// test can assert the dual-write created it with the expected type/label.
 	SyntheticGetNodeForContact(ctx context.Context, id pgtype.UUID) (*Node, error)
+	// Profile coverage + determinism test support: list the LIVE (proposed/accepted)
+	// assertions whose subject node is ns-prefixed (catalog person nodes own
+	// ns-prefixed canonical_labels). The coverage check uses (predicate_key, status)
+	// to assert the accepted vs proposed split; the determinism check fingerprints
+	// (value_text, value_date) across a re-run — value_text is NULL for date payloads
+	// (birthday) and value_date is NULL for text payloads, so both are projected so
+	// neither bio surface is a blind spot. proposition_key is NOT used because it
+	// embeds the per-run subject UUID and so is not run-stable. Deterministically
+	// ordered so the fingerprint is stable. Caller passes a BARE prefix; '%' is
+	// appended here.
+	SyntheticListAssertionsByNodePrefix(ctx context.Context, labelPrefix pgtype.Text) ([]*SyntheticListAssertionsByNodePrefixRow, error)
 	// Todoist replay: snapshot the set of contact_task ids for a provider so the
 	// replay can diff before/after its (globally-scoped) reconcile and track the
 	// rows it created — even for cadence-bearing contacts it did not seed — so
