@@ -334,12 +334,13 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	// collide a "stranded" peer with a seeded contact's identity).
 	//
 	// The predicate cycle covers BOTH review surfaces (D6): home_address /
-	// job_title / preference are auto-if-confident → accepted; health_condition is
-	// always-confirm → it lands proposed/pending. health_condition leads the cycle
-	// so even a single seeded assertion exercises the pending-review surface. Each
-	// FactAssertion produces a distinct value + proposition_key, and successive
-	// assertions land on distinct contacts (i % len), so the single-cardinality
-	// predicates (home_address/job_title) never supersede a same-subject prior.
+	// job_title / preference are auto-if-confident → accepted; health_condition and
+	// occurrence are always-confirm → they land proposed/pending. health_condition
+	// leads the cycle so even a single seeded assertion exercises the
+	// pending-review surface. Each FactAssertion produces a distinct value +
+	// proposition_key, and successive assertions land on distinct contacts
+	// (i % len), so the single-cardinality predicates (home_address/job_title)
+	// never supersede a same-subject prior.
 	if len(catalogContactIDs) > 0 {
 		for i := 0; i < params.Counts.SeededAssertions; i++ {
 			subject := catalogContactIDs[i%len(catalogContactIDs)]
@@ -356,13 +357,16 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 
 // catalogTextFactPredicates is the predicate cycle the Phase-4 assertion spread
 // walks. health_condition (always-confirm → proposed) leads so any non-zero
-// SeededAssertions count covers the pending-review surface; the rest are
-// auto-if-confident → accepted. All are migration-066 catalog text predicates.
+// SeededAssertions count covers the pending-review surface; home_address /
+// job_title / preference are auto-if-confident → accepted; occurrence is also
+// always-confirm → proposed (seeded without a valid_from in PR1; the dated
+// valid_from is a later PR). All are migration-066 catalog text predicates.
 var catalogTextFactPredicates = []string{
 	"health_condition",
 	"home_address",
 	"job_title",
 	"preference",
+	"occurrence",
 }
 
 // catalogOptionsFor returns the contact-builder options for catalog contact i of

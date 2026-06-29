@@ -716,17 +716,20 @@ func (r *SyntheticSupportRepository) CountAssertionsForSubject(ctx context.Conte
 
 // AssertionSummary is the status + value projection of a LIVE assertion
 // (proposed/accepted) on an ns-prefixed subject node — profile coverage +
-// determinism test only. ValueText is nil for non-text payloads (e.g. birthday).
+// determinism test only. Exactly one of ValueText / ValueDate is set per the
+// payload (ValueText for text facts, ValueDate "2006-01-02" for birthday); both
+// are projected so the determinism fingerprint covers text AND date bio facts.
 type AssertionSummary struct {
 	PredicateKey string
 	Status       string
 	ValueText    *string
+	ValueDate    *string
 }
 
 // ListAssertionsByNodePrefix returns the LIVE assertions whose subject node's
 // canonical_label is ns-prefixed, so a profile test can assert the
-// accepted/proposed split and fingerprint the generated value_texts across a
-// re-run. Caller passes a BARE prefix.
+// accepted/proposed split and fingerprint the generated values across a re-run.
+// Caller passes a BARE prefix.
 func (r *SyntheticSupportRepository) ListAssertionsByNodePrefix(ctx context.Context, prefix string) ([]AssertionSummary, error) {
 	rows, err := r.queries.SyntheticListAssertionsByNodePrefix(ctx, pgtype.Text{String: prefix, Valid: true})
 	if err != nil {
@@ -738,6 +741,10 @@ func (r *SyntheticSupportRepository) ListAssertionsByNodePrefix(ctx context.Cont
 		if row.ValueText.Valid {
 			v := row.ValueText.String
 			s.ValueText = &v
+		}
+		if row.ValueDate.Valid {
+			d := row.ValueDate.Time.Format("2006-01-02")
+			s.ValueDate = &d
 		}
 		out = append(out, s)
 	}

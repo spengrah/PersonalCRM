@@ -116,10 +116,11 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	params.Counts.StrandedMessages = 1
 	params.Counts.UnmatchedCalendar = 1
 	params.Counts.OrphanMeetingNote = 1
-	// 4 assertions walk the full text-fact predicate cycle once (CI-safe), so the
-	// always-confirm predicate (health_condition → proposed) is exercised
-	// alongside the accepted predicates.
-	params.Counts.SeededAssertions = 4
+	// 5 assertions walk the full text-fact predicate cycle once (CI-safe), so every
+	// predicate — incl. the always-confirm ones (health_condition, occurrence →
+	// proposed) and the accepted ones (home_address/job_title/preference) — is
+	// exercised.
+	params.Counts.SeededAssertions = 5
 
 	h := synthetic.NewHarnessForNamespace(t, ctx, database, params.Namespace, params.Seed)
 	res, err := synthetic.RunProfile(ctx, h, params)
@@ -183,23 +184,25 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	require.GreaterOrEqual(t, res.ContactsWithBirthday, 1, "≥1 contact with a birthday bio fact")
 	require.GreaterOrEqual(t, res.ContactsWithHowMet, 1, "≥1 contact with a how_met bio fact")
 
-	// Accept/pending coverage (D6): the text-fact spread must populate BOTH the
-	// accepted-knowledge surface (home_address/job_title/preference + the
-	// how_met/birthday contact-path facts) AND the pending-review surface
-	// (health_condition is always-confirm → proposed). Scoped to the namespace.
+	// Accept/pending coverage (D6): assert the SPECIFIC review-policy outcomes, not
+	// merely that some assertion of each status exists — health_condition
+	// (always-confirm) must land PROPOSED (pending-review surface) and an
+	// auto-if-confident text predicate (home_address/job_title/preference) must
+	// land ACCEPTED (accepted-knowledge surface). Scoped to the namespace.
 	assertions, err := support.ListAssertionsByNodePrefix(ctx, h.Generator().Prefix())
 	require.NoError(t, err)
-	var accepted, proposed int
+	acceptedTextPredicates := map[string]bool{"home_address": true, "job_title": true, "preference": true}
+	var healthProposed, textAccepted bool
 	for _, a := range assertions {
-		switch a.Status {
-		case repository.AssertionStatusAccepted:
-			accepted++
-		case repository.AssertionStatusProposed:
-			proposed++
+		if a.PredicateKey == "health_condition" && a.Status == repository.AssertionStatusProposed {
+			healthProposed = true
+		}
+		if acceptedTextPredicates[a.PredicateKey] && a.Status == repository.AssertionStatusAccepted {
+			textAccepted = true
 		}
 	}
-	require.GreaterOrEqual(t, accepted, 1, "≥1 accepted assertion (accepted-knowledge surface)")
-	require.GreaterOrEqual(t, proposed, 1, "≥1 proposed assertion (pending-review surface; health_condition)")
+	require.True(t, healthProposed, "health_condition (always-confirm) lands proposed (pending-review surface)")
+	require.True(t, textAccepted, "an auto-if-confident text predicate lands accepted (accepted-knowledge surface)")
 
 	remaining, err := h.ContactsRemaining(ctx)
 	require.NoError(t, err)
@@ -207,14 +210,17 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 }
 
 // TestSyntheticProfile_ProdShapedDeterministic proves the prod-shaped seed is
-// deterministic: two runs at the same (namespace, seed) produce byte-identical
-// ProfileResult counts AND an identical fingerprint of the generated assertion
-// value_texts. Count-pinning alone is insufficient — counts can match while a
-// non-deterministic source (map iteration, wall-clock leak) shifts generated
-// identifiers — so the value_text fingerprint is the drift detector. Both runs
-// share the SAME namespace (with a full teardown between) so the ns-prefix and
-// PRNG stream line up; value_text (NOT proposition_key, which embeds the per-run
-// subject UUID) is the run-stable identifier the fingerprint reads.
+// deterministic: two runs at the same (namespace, seed, anchor) produce
+// byte-identical ProfileResult counts AND an identical fingerprint of the
+// generated assertion values. Count-pinning alone is insufficient — counts can
+// match while a non-deterministic source (map iteration, wall-clock leak) shifts
+// generated values — so the (value_text, value_date) fingerprint is the drift
+// detector. Both runs share the SAME namespace (with a full teardown between) so
+// the ns-prefix + PRNG stream line up, AND a PINNED generator anchor so the
+// anchor-relative timestamps (birthday date) are byte-identical too — without the
+// pin, birthday value_date would legitimately drift between runs (anchor-relative
+// per the factory contract) and could not be fingerprinted. proposition_key is
+// NOT fingerprinted (it embeds the per-run subject UUID, so it is not run-stable).
 func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
 	testsupport.RequireLongTests(t)
 	database, ctx := newSyntheticDB(t)
@@ -223,21 +229,28 @@ func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
 	require.NoError(t, err)
 	params.Namespace = syntheticNS(t)
 	// Bound the volume for CI: determinism is a property of the orchestration, not
-	// of the scale.
-	params.Counts.SeededContacts = 4
-	params.Counts.SeededAssertions = 4
+	// of the scale. 5 assertions walk the full predicate cycle.
+	params.Counts.SeededContacts = 5
+	params.Counts.SeededAssertions = 5
 	params.Counts.UnmatchedExternal = 1
 	params.Counts.StrandedTelegram = 1
 	params.Counts.StrandedMessages = 1
 	params.Counts.UnmatchedCalendar = 1
 	params.Counts.OrphanMeetingNote = 1
 
+	// Capture the generator anchor ONCE and reuse it for both runs: identical
+	// across runs (so timestamped output incl. birthday value_date is
+	// byte-identical and the fingerprint covers it) yet ≈now so the settle
+	// pipeline — which runs on the real system clock — is not skewed by a far-past
+	// anchor (a far-past anchor starves Gate A: the consumers never link the
+	// stale-dated messages within the real-time budget).
+	anchor := accelerated.GetCurrentTime()
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 
 	// run seeds the profile, captures (ProfileResult, assertion fingerprint), then
 	// fully tears down so the next run starts from a clean namespace.
 	run := func() (synthetic.ProfileResult, []repository.AssertionSummary) {
-		h, teardown, err := synthetic.NewHarnessWithDBForNamespace(ctx, database, params.Namespace, params.Seed)
+		h, teardown, err := synthetic.NewHarnessWithDBForNamespaceAt(ctx, database, params.Namespace, params.Seed, anchor)
 		require.NoError(t, err)
 		res, err := synthetic.RunProfile(ctx, h, params)
 		require.NoError(t, err)
@@ -252,7 +265,7 @@ func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
 
 	require.Equal(t, res1, res2, "prod-shaped ProfileResult must be deterministic across runs")
 	require.NotEmpty(t, fp1, "the seed must produce assertions to fingerprint")
-	require.Equal(t, fp1, fp2, "assertion value_text fingerprint must be deterministic across runs")
+	require.Equal(t, fp1, fp2, "assertion (value_text, value_date) fingerprint must be deterministic across runs")
 }
 
 // TestSyntheticProfile_QuiesceLeavesRows proves the seed-and-leave lifecycle:

@@ -52,7 +52,7 @@ func NewHarness(t *testing.T, ctx context.Context, database *db.Database) *Harne
 // Gate B == 0). The namespace defaults to a stable token derived from the
 // current time so concurrent harnesses do not collide.
 func NewHarnessWithDB(ctx context.Context, database *db.Database) (*Harness, func(context.Context) error, error) {
-	return newHarness(ctx, database, defaultNamespace(), factory.DefaultSeed)
+	return newHarness(ctx, database, defaultNamespace(), factory.DefaultSeed, accelerated.GetCurrentTime())
 }
 
 // NewHarnessWithDBForNamespace builds a harness without a *testing.T for an
@@ -64,7 +64,18 @@ func NewHarnessWithDB(ctx context.Context, database *db.Database) (*Harness, fun
 // so the stable namespace is used verbatim. Returns the harness + the quiesce/
 // conditional-cleanup teardown closure + an error.
 func NewHarnessWithDBForNamespace(ctx context.Context, database *db.Database, namespace string, seed uint64) (*Harness, func(context.Context) error, error) {
-	return newHarness(ctx, database, namespace, seed)
+	return newHarness(ctx, database, namespace, seed, accelerated.GetCurrentTime())
+}
+
+// NewHarnessWithDBForNamespaceAt is NewHarnessWithDBForNamespace with an EXPLICIT
+// generator anchor instead of the live accelerated clock. A determinism test
+// pins the anchor so two runs at the same (namespace, seed) produce byte-
+// identical TIMESTAMPED output too (last_contacted, birthday date) — not just the
+// non-timestamp identifiers — per the factory's anchor-relative determinism
+// contract (NewGeneratorAt). Production seed paths use the live-anchor
+// constructor above.
+func NewHarnessWithDBForNamespaceAt(ctx context.Context, database *db.Database, namespace string, seed uint64, anchor time.Time) (*Harness, func(context.Context) error, error) {
+	return newHarness(ctx, database, namespace, seed, anchor)
 }
 
 // NewHarnessForNamespace builds a harness with an explicit namespace + seed.
@@ -72,7 +83,7 @@ func NewHarnessWithDBForNamespace(ctx context.Context, database *db.Database, na
 // reuse cannot collide.
 func NewHarnessForNamespace(t *testing.T, ctx context.Context, database *db.Database, namespace string, seed uint64) *Harness {
 	t.Helper()
-	h, teardown, err := newHarness(ctx, database, namespace, seed)
+	h, teardown, err := newHarness(ctx, database, namespace, seed, accelerated.GetCurrentTime())
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		if err := teardown(context.Background()); err != nil {
@@ -102,7 +113,7 @@ func ValidateNamespace(namespace string) error {
 	return nil
 }
 
-func newHarness(ctx context.Context, database *db.Database, namespace string, seed uint64) (*Harness, func(context.Context) error, error) {
+func newHarness(ctx context.Context, database *db.Database, namespace string, seed uint64, anchor time.Time) (*Harness, func(context.Context) error, error) {
 	// Reject namespaces with characters outside the safe charset. Cleanup deletes
 	// by `LIKE 'synth-<ns>-%'`, so a namespace containing a LIKE metacharacter
 	// (`_` or `%`) would over-match and could wipe another namespace's rows;
@@ -145,7 +156,7 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 	// re-salt the namespace if its telegram peer sub-block is already occupied by
 	// a different namespace's live rows. Probabilistically disjoint, with this
 	// detection it is "disjoint + detected at setup," not a hard guarantee.
-	gen, namespace, err := resolveNamespace(ctx, support, namespace, seed)
+	gen, namespace, err := resolveNamespace(ctx, support, namespace, seed, anchor)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -353,10 +364,10 @@ const bandResaltAttempts = 8
 // lives — the primary cross-match origin) AND external_identity (where a replay
 // later mints the identity). The practical guarantee is "probabilistically
 // disjoint + detected at setup," not a hard mathematical guarantee.
-func resolveNamespace(ctx context.Context, support *repository.SyntheticSupportRepository, namespace string, seed uint64) (*factory.Generator, string, error) {
+func resolveNamespace(ctx context.Context, support *repository.SyntheticSupportRepository, namespace string, seed uint64, anchor time.Time) (*factory.Generator, string, error) {
 	candidate := namespace
 	for attempt := 0; attempt < bandResaltAttempts; attempt++ {
-		gen := factory.NewGenerator(seed, candidate)
+		gen := factory.NewGeneratorAt(seed, candidate, anchor)
 		peerOccupied, err := support.CountTelegramMessagesInPeerBand(ctx, gen.PeerBandStart(), gen.PeerBandEnd())
 		if err != nil {
 			return nil, "", fmt.Errorf("peer-band collision check: %w", err)
