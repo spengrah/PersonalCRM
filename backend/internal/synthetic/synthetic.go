@@ -128,6 +128,14 @@ type Counts struct {
 	// run time. Written through the production UpsertRelationshipSignal path
 	// (storage-only — SP1 has no signal generators). 0 disables.
 	SeededSignals int
+	// MessagesPerContact is how many settled interactions each DEDICATED per-source
+	// settled contact receives, spread back over time on distinct days (a prod-like
+	// interaction history) rather than a single ~1h window. The source replay for a
+	// contact is looped this many times with growing per-message ages; 1 (or 0,
+	// which clamps to 1) reproduces the single-interaction shape. Applies only to
+	// the dedicated settled contacts — the edge-case catalog stays interaction-free
+	// so its overdue / never-contacted / no-method buckets survive.
+	MessagesPerContact int
 }
 
 // SeedParams is the profile/volume seam consumed by the seed orchestration.

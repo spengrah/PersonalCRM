@@ -133,6 +133,13 @@ func TestSyntheticProfile_DevCoversCatalog(t *testing.T) {
 	// lives_in locations ride the contact-create authority flip, spread by catalog
 	// index; the dev catalog is large enough to carry ≥1.
 	require.GreaterOrEqual(t, res.ContactsWithLocation, 1, "dev profile seeds location bio facts")
+	// MessagesPerContact spreads MULTIPLE settled interactions per dedicated source
+	// contact: SettledInteractions == (settled contacts) × MessagesPerContact, and
+	// strictly more than one interaction per contact.
+	settledContacts := res.GmailSettled + res.TelegramSettled + res.GCalSettled + res.GChatSettled + res.IMessageSettled
+	require.Equal(t, settledContacts*params.Counts.MessagesPerContact, res.SettledInteractions,
+		"dev profile spreads MessagesPerContact interactions per settled contact")
+	require.Greater(t, res.SettledInteractions, settledContacts, "dev profile seeds >1 interaction per settled contact")
 
 	remaining, err := h.ContactsRemaining(ctx)
 	require.NoError(t, err)
@@ -184,6 +191,11 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	// A few relationship_signal rows (SP1 derived storage) across distinct catalog
 	// person nodes, one full signal-key cycle (closeness/real_cadence_days/trend).
 	params.Counts.SeededSignals = 3
+	// Two settled interactions per dedicated source contact (the CI-safe minimum
+	// that still exercises the temporal spread): the second message is one
+	// interactionSpreadInterval (~3 weeks) older, so the per-contact span clears the
+	// multi-day floor asserted below. Kept small to bound the settle budget.
+	params.Counts.MessagesPerContact = 2
 
 	h := synthetic.NewHarnessForNamespace(t, ctx, database, params.Namespace, params.Seed)
 	res, err := synthetic.RunProfile(ctx, h, params)
@@ -373,6 +385,30 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 		require.GreaterOrEqual(t, count, int64(1), "≥1 contact_task in state %q", state)
 	}
 
+	// Interaction volume: each dedicated source contact carries MessagesPerContact
+	// settled interactions, so SettledInteractions == (settled contacts) ×
+	// MessagesPerContact, strictly more than one per contact.
+	settledContacts := res.GmailSettled + res.TelegramSettled + res.GCalSettled + res.GChatSettled + res.IMessageSettled
+	require.Equal(t, settledContacts*params.Counts.MessagesPerContact, res.SettledInteractions,
+		"MessagesPerContact interactions per settled contact")
+	require.Greater(t, res.SettledInteractions, settledContacts, ">1 interaction per settled contact")
+
+	// Interaction temporal spread (DB-level): ≥1 settled contact must carry ≥2
+	// interactions whose earliest→latest span clears a multi-day floor — proving the
+	// per-message age offsets landed them on distinct days (a prod-like history),
+	// not a single ~1h window. Scoped to the namespace; the interaction-free
+	// edge-case catalog contacts are excluded by the query's INNER JOIN.
+	spreads, err := support.ListInteractionSpreadByContactNamePrefix(ctx, prefix)
+	require.NoError(t, err)
+	var spread bool
+	for _, s := range spreads {
+		if s.InteractionCount >= 2 && s.Span >= 7*24*time.Hour {
+			spread = true
+			break
+		}
+	}
+	require.True(t, spread, "≥1 settled contact has ≥2 interactions spanning ≥7 days (temporal spread, not one window)")
+
 	remaining, err := h.ContactsRemaining(ctx)
 	require.NoError(t, err)
 	require.Greater(t, remaining, int64(0), "prod-shaped profile seeds contacts")
@@ -432,6 +468,12 @@ func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
 	// A few relationship_signal rows so the run-to-run ProfileResult count
 	// (res.SeededSignals) is exercised and the teardown sweep is asserted below.
 	params.Counts.SeededSignals = 3
+	// One settled message per source contact: the temporal-spread timestamps are a
+	// pure function of the (pinned) anchor + message index, so they are
+	// deterministic by construction and not fingerprinted here (interactions are not
+	// in the fingerprint); keeping this at 1 holds the settle load at baseline while
+	// res.SettledInteractions still participates in the run-to-run count equality.
+	params.Counts.MessagesPerContact = 1
 	params.Counts.UnmatchedExternal = 1
 	params.Counts.StrandedTelegram = 1
 	params.Counts.StrandedMessages = 1

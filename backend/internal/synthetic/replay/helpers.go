@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/db"
 
 	"github.com/google/uuid"
@@ -121,11 +120,15 @@ func (h *Harness) trackContactInteractions(ctx context.Context, contactID uuid.U
 	})
 }
 
-// gmailBackfillSince returns a backfill floor far enough in the past that the
-// synthetic message (anchored ~2h before the live anchor) is inside the scanned,
-// already-closed Gmail window.
-func gmailBackfillSince() string {
-	return accelerated.GetCurrentTime().Add(-30 * 24 * time.Hour).UTC().Format("2006-01-02")
+// gmailBackfillSince returns the Gmail scan-window floor for a message sent at
+// sentAt: a couple of days before the message itself. The Gmail provider filters
+// fetched messages by internalDate against the scan window [floor, safeHorizon]
+// (the only source whose replay re-applies a time window), so a message replayed
+// at ANY age — the interaction temporal spread replays the same contact across
+// weeks/months — lands in the very first scan window regardless of how far back
+// it is dated. The floor is day-granular (the Gmail metadata format) and UTC.
+func gmailBackfillSince(sentAt time.Time) string {
+	return sentAt.Add(-2 * 24 * time.Hour).UTC().Format("2006-01-02")
 }
 
 // telegramPeerStranded reports whether a telegram_message row exists for the

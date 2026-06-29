@@ -933,6 +933,24 @@ FROM contact c
 WHERE c.full_name LIKE @name_prefix || '%'
   AND c.deleted_at IS NULL;
 
+-- name: TestListInteractionSpreadByContactNamePrefix :many
+-- Profile coverage test only: for the namespace's contacts (by full_name prefix)
+-- that have interactions, return the per-contact interaction count and the span
+-- (in seconds) between the earliest and latest interaction, so the test can
+-- assert the dedicated settled contacts carry MULTIPLE interactions spread over
+-- TIME (count ≥ 2 with a multi-day span) rather than a single ~1h window. The
+-- INNER JOIN excludes the interaction-free edge-case catalog contacts. Caller
+-- passes a BARE prefix; '%' appended.
+SELECT
+    c.id,
+    COUNT(i.id) AS interaction_count,
+    EXTRACT(EPOCH FROM (MAX(i.occurred_at) - MIN(i.occurred_at)))::bigint AS span_seconds
+FROM contact c
+JOIN interaction i ON i.contact_id = c.id AND i.deleted_at IS NULL
+WHERE c.full_name LIKE @name_prefix || '%'
+  AND c.deleted_at IS NULL
+GROUP BY c.id;
+
 -- name: DeleteSyncStatesBySourceForTest :execrows
 -- Test teardown only — hard-deletes external_sync_state rows for a given
 -- source. Used by sync-service tests to scope per-source cleanup without

@@ -3,6 +3,7 @@ package replay
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"personal-crm/backend/internal/google"
 	"personal-crm/backend/internal/repository"
@@ -45,10 +46,15 @@ func (h *Harness) ReplayGmail(ctx context.Context, contactID uuid.UUID, spec fac
 	}))
 	provider.SetMeSetForTest(map[string]struct{}{spec.AccountID: {}})
 
+	// Floor the scan window just before THIS message's own send time so a message
+	// replayed at any age (the interaction temporal spread) is still inside the
+	// scanned window. InternalDate is the wire epoch the factory stamped from the
+	// (aged) anchor-relative sentAt.
+	sentAt := time.UnixMilli(spec.Message.InternalDate).UTC()
 	state := &repository.SyncState{
 		Source:    repository.InteractionSourceEmail,
 		AccountID: &spec.AccountID,
-		Metadata:  map[string]any{"backfill_since": gmailBackfillSince()},
+		Metadata:  map[string]any{"backfill_since": gmailBackfillSince(sentAt)},
 	}
 	if _, err := provider.Sync(ctx, state, nil); err != nil {
 		return GmailResult{}, fmt.Errorf("gmail sync: %w", err)
