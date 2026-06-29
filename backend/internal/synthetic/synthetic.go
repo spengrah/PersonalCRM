@@ -128,6 +128,17 @@ type Counts struct {
 	// run time. Written through the production UpsertRelationshipSignal path
 	// (storage-only — SP1 has no signal generators). 0 disables.
 	SeededSignals int
+	// SeededSoftDeleted is the number of soft-deleted contact scenarios to seed: a
+	// contact with one assertion routed through ContactService.DeleteContact, so its
+	// person node is tombstoned and the assertion drops from live graph reads while
+	// remaining in the table. Each is a standalone contact (not a catalog slot). 0
+	// disables.
+	SeededSoftDeleted int
+	// SeededMerged is the number of merge scenarios to seed: a pair of contacts
+	// (winner + loser, each with one assertion) merged via ContactService.MergeContacts
+	// so the loser node is tombstoned (merged_into=winner) and its assertions are
+	// re-pointed onto the winner. Each pair is two standalone contacts. 0 disables.
+	SeededMerged int
 	// MessagesPerContact is how many settled interactions each DEDICATED per-source
 	// settled contact receives, spread back over time on distinct days (a prod-like
 	// interaction history) rather than a single ~1h window. The source replay for a

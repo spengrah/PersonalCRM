@@ -94,6 +94,14 @@ type ProfileResult struct {
 	// upper bound on the interaction rows produced (same-day messages on one contact
 	// would aggregate, but the spread lands them on distinct days). Counts-only / no PII.
 	SettledInteractions int
+	// SeededSoftDeleted / SeededMerged count the merge + soft-delete scenarios the
+	// profile seeded: soft-deleted contacts (person node tombstoned via DeleteContact,
+	// assertion dropped from live reads but retained in the table) and merged pairs
+	// (loser node tombstoned via MergeContacts, its assertions re-pointed onto the
+	// winner). SeededMerged is the PAIR count (each pair is two contacts). Counts-only
+	// / no PII.
+	SeededSoftDeleted int
+	SeededMerged      int
 }
 
 // ProfileParams returns the default SeedParams for a named profile (error on an
@@ -138,6 +146,10 @@ func ProfileParams(name Profile) (SeedParams, error) {
 				// so the dev graph shows a small multi-interaction history (fast: the dev
 				// per-source settled count is 1).
 				MessagesPerContact: 2,
+				// One soft-deleted contact + one merged pair so the dev graph surfaces the
+				// tombstone + merge re-point scenarios.
+				SeededSoftDeleted: 1,
+				SeededMerged:      1,
 			},
 		}, nil
 	case ProfileProdShaped:
@@ -184,6 +196,11 @@ func ProfileParams(name Profile) (SeedParams, error) {
 				// source instead of a single recent message. The coverage + determinism
 				// tests override this down for CI runtime.
 				MessagesPerContact: 4,
+				// A handful of soft-deleted contacts + merged pairs so staging shows the
+				// tombstoned-contact and merge re-point surfaces. The coverage + determinism
+				// tests override these down for CI.
+				SeededSoftDeleted: 3,
+				SeededMerged:      3,
 			},
 		}, nil
 	default:
@@ -676,8 +693,48 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		res.SeededTasks = len(cadenceBearingCatalogIDs)
 	}
 
+	// Merge + soft-delete scenarios. Seeded LAST: each draws gen.Contact (name PRNG)
+	// + gen.BoolFact, so appending them after every other generator-driven block keeps
+	// the deterministic id/handle sequence the earlier source replays depend on
+	// unshifted. They are STANDALONE contacts (not catalog slots) that route through
+	// the production ContactService.DeleteContact / MergeContacts paths; SeedContact
+	// already tracks their ids, so the existing by-id teardown sweeps clean the
+	// tombstoned + merged rows (the merged_into self-FK is NO ACTION, dropped in one
+	// statement). The assertions are BOOL facts (value_bool, not value_text) so they
+	// add no live value_text on the surviving merge winner — keeping the determinism
+	// ordering guard's "entity pool seq > text-fact seq" invariant intact.
+	for i := 0; i < params.Counts.SeededSoftDeleted; i++ {
+		if _, err := h.SeedSoftDeletedContact(ctx, gen.Contact(),
+			gen.BoolFact(softDeleteFactPredicate, true)); err != nil {
+			return res, fmt.Errorf("profile %s: seed soft-deleted contact %d: %w", params.Profile, i, err)
+		}
+		res.SeededSoftDeleted++
+	}
+	for i := 0; i < params.Counts.SeededMerged; i++ {
+		// Distinct winner/loser predicates so the re-pointed loser fact lands beside the
+		// winner's own without single-cardinality supersession.
+		if _, _, err := h.SeedMergedContact(ctx,
+			gen.Contact(), gen.Contact(),
+			gen.BoolFact(mergeWinnerFactPredicate, true),
+			gen.BoolFact(mergeLoserFactPredicate, true)); err != nil {
+			return res, fmt.Errorf("profile %s: seed merged contact %d: %w", params.Profile, i, err)
+		}
+		res.SeededMerged++
+	}
+
 	return res, nil
 }
+
+// softDeleteFactPredicate / mergeWinnerFactPredicate / mergeLoserFactPredicate are
+// the bool-fact predicates the merge + soft-delete scenarios assert (all
+// auto-if-confident → accepted, migration-066 catalog bool predicates). The merge
+// winner + loser use DISTINCT predicates so the re-pointed loser fact does not
+// supersede the winner's own (each bool predicate is single-cardinality).
+const (
+	softDeleteFactPredicate  = "job_seeking"
+	mergeWinnerFactPredicate = "traveling"
+	mergeLoserFactPredicate  = "on_sabbatical"
+)
 
 // nonManagedTaskStates is the deterministic spread of non-`managed` contact_task
 // surface states the profile transitions cadence tasks into (one each), so staging

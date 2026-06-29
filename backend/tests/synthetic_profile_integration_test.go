@@ -140,6 +140,10 @@ func TestSyntheticProfile_DevCoversCatalog(t *testing.T) {
 	require.Equal(t, settledContacts*params.Counts.MessagesPerContact, res.SettledInteractions,
 		"dev profile spreads MessagesPerContact interactions per settled contact")
 	require.Greater(t, res.SettledInteractions, settledContacts, "dev profile seeds >1 interaction per settled contact")
+	// Merge + soft-delete scenarios are standalone contacts seeded at full count
+	// (independent of catalog size), so the dev result equals the dev knobs.
+	require.Equal(t, params.Counts.SeededSoftDeleted, res.SeededSoftDeleted, "dev profile seeds soft-deleted contacts")
+	require.Equal(t, params.Counts.SeededMerged, res.SeededMerged, "dev profile seeds merged contact pairs")
 
 	remaining, err := h.ContactsRemaining(ctx)
 	require.NoError(t, err)
@@ -196,6 +200,10 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	// interactionSpreadInterval (~3 weeks) older, so the per-contact span clears the
 	// multi-day floor asserted below. Kept small to bound the settle budget.
 	params.Counts.MessagesPerContact = 2
+	// One soft-deleted contact + one merged pair (the CI-safe minimum): enough to
+	// assert the tombstone + assertion re-point invariants below.
+	params.Counts.SeededSoftDeleted = 1
+	params.Counts.SeededMerged = 1
 
 	h := synthetic.NewHarnessForNamespace(t, ctx, database, params.Namespace, params.Seed)
 	res, err := synthetic.RunProfile(ctx, h, params)
@@ -409,6 +417,51 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	}
 	require.True(t, spread, "≥1 settled contact has ≥2 interactions spanning ≥7 days (temporal spread, not one window)")
 
+	// Merge + soft-delete scenarios (item 12). These are standalone contacts seeded
+	// at full count (independent of the catalog), so the result equals the override.
+	require.Equal(t, params.Counts.SeededSoftDeleted, res.SeededSoftDeleted, "soft-deleted contacts seeded")
+	require.Equal(t, params.Counts.SeededMerged, res.SeededMerged, "merged contact pairs seeded")
+
+	// Soft-delete invariant: the person node is tombstoned, so its assertion is
+	// RETAINED in the table but DROPS from live graph reads. Scoped to THIS run's
+	// tracked soft-delete node ids.
+	softNodeIDs := h.SoftDeletedNodeIDs()
+	require.Len(t, softNodeIDs, res.SeededSoftDeleted, "tracked soft-delete node ids match the result count")
+	softInTable, err := support.CountAssertionsForSubjects(ctx, softNodeIDs)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, softInTable, int64(len(softNodeIDs)), "soft-deleted assertions retained in the table")
+	softLive, err := support.CountLiveAssertionsForSubjects(ctx, softNodeIDs)
+	require.NoError(t, err)
+	require.Zero(t, softLive, "soft-deleted assertions dropped from live graph reads")
+	softLiveNodes, err := support.CountLiveNodesByIds(ctx, softNodeIDs)
+	require.NoError(t, err)
+	require.Zero(t, softLiveNodes, "soft-deleted person nodes tombstoned (not live)")
+
+	// Merge invariant: the loser node is tombstoned with merged_into set, its
+	// assertions are re-pointed OFF the loser onto the live winner, and the winner
+	// stays live carrying its own + the re-pointed assertions. Scoped to THIS run's
+	// tracked merge node ids.
+	loserIDs := h.MergedLoserNodeIDs()
+	winnerIDs := h.MergedWinnerNodeIDs()
+	require.Len(t, loserIDs, res.SeededMerged, "tracked merge-loser node ids match the pair count")
+	require.Len(t, winnerIDs, res.SeededMerged, "tracked merge-winner node ids match the pair count")
+	loserMerged, err := support.CountMergedIntoNodesByIds(ctx, loserIDs)
+	require.NoError(t, err)
+	require.Equal(t, int64(len(loserIDs)), loserMerged, "every merge-loser node carries merged_into")
+	loserLiveNodes, err := support.CountLiveNodesByIds(ctx, loserIDs)
+	require.NoError(t, err)
+	require.Zero(t, loserLiveNodes, "merge-loser nodes tombstoned (not live)")
+	loserAssertions, err := support.CountAssertionsForSubjects(ctx, loserIDs)
+	require.NoError(t, err)
+	require.Zero(t, loserAssertions, "merge-loser assertions re-pointed off the loser")
+	winnerLiveNodes, err := support.CountLiveNodesByIds(ctx, winnerIDs)
+	require.NoError(t, err)
+	require.Equal(t, int64(len(winnerIDs)), winnerLiveNodes, "merge-winner nodes stay live")
+	winnerLiveAssertions, err := support.CountLiveAssertionsForSubjects(ctx, winnerIDs)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, winnerLiveAssertions, int64(2*len(winnerIDs)),
+		"merge-winner carries its own + the re-pointed loser assertion (≥2 per pair)")
+
 	remaining, err := h.ContactsRemaining(ctx)
 	require.NoError(t, err)
 	require.Greater(t, remaining, int64(0), "prod-shaped profile seeds contacts")
@@ -479,6 +532,11 @@ func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
 	params.Counts.StrandedMessages = 1
 	params.Counts.UnmatchedCalendar = 1
 	params.Counts.OrphanMeetingNote = 1
+	// One soft-deleted contact + one merged pair so the run-to-run ProfileResult
+	// count is exercised and the teardown of the tombstoned + merged rows (the
+	// merged_into self-FK is the trickiest sweep) is asserted FK-clean below.
+	params.Counts.SeededSoftDeleted = 1
+	params.Counts.SeededMerged = 1
 
 	// Capture the generator anchor ONCE and reuse it for both runs: identical
 	// across runs (so timestamped output incl. birthday value_date is
@@ -516,6 +574,14 @@ func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
 		sigRemaining, err := h.SignalsRemaining(ctx)
 		require.NoError(t, err)
 		require.Zero(t, sigRemaining, "relationship_signal rows swept by teardown")
+		// Teardown correctness for merge + soft-delete: the require.NoError(teardown)
+		// above already proves the merged_into self-FK did not block the
+		// single-statement node sweep; this confirms every seeded contact (incl. the
+		// tombstoned soft-deleted + merged-loser rows) was hard-deleted, leaving no
+		// stranded node/assertion behind.
+		contactsRemaining, err := h.ContactsRemaining(ctx)
+		require.NoError(t, err)
+		require.Zero(t, contactsRemaining, "all seeded contacts (incl. merge/soft-delete) swept by teardown")
 		return res, fp, entFP
 	}
 
