@@ -127,6 +127,9 @@ func TestSyntheticProfile_DevCoversCatalog(t *testing.T) {
 	// dev knob counts, so the seeded counts are exact (no catalog-size bounding).
 	require.Equal(t, params.Counts.SeededEntities, res.SeededEntities, "dev profile seeds the entity pool")
 	require.Equal(t, params.Counts.SeededEntityEdges, res.SeededEntityEdges, "dev profile seeds person→entity edges")
+	// relationship_signal rows: the dev catalog (18) exceeds the small dev signal
+	// knob, so the seeded count is exact (no catalog-size bounding).
+	require.Equal(t, params.Counts.SeededSignals, res.SeededSignals, "dev profile seeds relationship signals")
 	// lives_in locations ride the contact-create authority flip, spread by catalog
 	// index; the dev catalog is large enough to carry ≥1.
 	require.GreaterOrEqual(t, res.ContactsWithLocation, 1, "dev profile seeds location bio facts")
@@ -178,6 +181,9 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	// size) — not a count knob.
 	params.Counts.SeededEntities = 3
 	params.Counts.SeededEntityEdges = 3
+	// A few relationship_signal rows (SP1 derived storage) across distinct catalog
+	// person nodes, one full signal-key cycle (closeness/real_cadence_days/trend).
+	params.Counts.SeededSignals = 3
 
 	h := synthetic.NewHarnessForNamespace(t, ctx, database, params.Namespace, params.Seed)
 	res, err := synthetic.RunProfile(ctx, h, params)
@@ -338,6 +344,17 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(0), legacyContactTags, "tags seeded as tagged_as edges, not legacy contact_tag rows")
 
+	// relationship_signal (SP1 derived storage): the seed writes per-node scalar
+	// signals on a subset of catalog person nodes through the production upsert path.
+	// Assert the result count and that the rows actually landed in the DB (scoped to
+	// THIS run's tracked signal nodes). The harness teardown (t.Cleanup) deletes them
+	// before the node deletes; the explicit signals-remaining==0 check lives in the
+	// determinism test, which tears down inline.
+	require.GreaterOrEqual(t, res.SeededSignals, 1, "relationship signals seeded")
+	signalsLanded, err := h.SignalsRemaining(ctx)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, signalsLanded, int64(1), "≥1 relationship_signal row present for the seeded nodes")
+
 	// Cadence tasks: ReplayTodoist seeds a `managed` cadence task on each
 	// cadence-bearing catalog contact, and the profile transitions a deterministic
 	// three to completed/dismissed/unmanaged. Assert ≥1 row in EACH state the seed
@@ -412,6 +429,9 @@ func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
 	// the entity normalized_name fingerprint covers org/topic/tag/place subtypes.
 	params.Counts.SeededEntities = 3
 	params.Counts.SeededEntityEdges = 3
+	// A few relationship_signal rows so the run-to-run ProfileResult count
+	// (res.SeededSignals) is exercised and the teardown sweep is asserted below.
+	params.Counts.SeededSignals = 3
 	params.Counts.UnmatchedExternal = 1
 	params.Counts.StrandedTelegram = 1
 	params.Counts.StrandedMessages = 1
@@ -448,6 +468,12 @@ func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
 		remaining, err := support.ListEntityNamesByNodePrefix(ctx, prefix)
 		require.NoError(t, err)
 		require.Empty(t, remaining, "entity nodes (pool + place) swept by teardown")
+		// Teardown correctness: the relationship_signal rows (FK→node, NO ACTION) are
+		// swept BEFORE the node deletes, so none remain for the seeded subject nodes —
+		// a leaked signal would FK-block the next run's person-node delete.
+		sigRemaining, err := h.SignalsRemaining(ctx)
+		require.NoError(t, err)
+		require.Zero(t, sigRemaining, "relationship_signal rows swept by teardown")
 		return res, fp, entFP
 	}
 

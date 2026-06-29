@@ -991,6 +991,21 @@ func (q *Queries) SyntheticCountProcessedCalendarEventByGcalId(ctx context.Conte
 	return count, err
 }
 
+const SyntheticCountRelationshipSignalsForNodes = `-- name: SyntheticCountRelationshipSignalsForNodes :one
+SELECT COUNT(*) FROM relationship_signal WHERE subject_node_id = ANY($1::uuid[])
+`
+
+// Cleanup/coverage assertion — count relationship_signal rows for the given subject
+// nodes (scoped to THIS run's tracked node ids, so it is immune to parallel tests
+// seeding their own signals on the shared DB). Used to assert ≥1 signal exists for
+// the seeded nodes (coverage) and that 0 remain after teardown.
+func (q *Queries) SyntheticCountRelationshipSignalsForNodes(ctx context.Context, nodeIds []pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountRelationshipSignalsForNodes, nodeIds)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const SyntheticCountStrandedMessagesMessageByGuid = `-- name: SyntheticCountStrandedMessagesMessageByGuid :one
 SELECT COUNT(*) FROM messages_message
 WHERE guid = $1
@@ -1518,6 +1533,23 @@ DELETE FROM predicate WHERE key LIKE $1 || '%'
 // are never prefix-matched). Caller passes a BARE prefix; '%' is appended here.
 func (q *Queries) SyntheticDeletePredicatesByKeyPrefix(ctx context.Context, keyPrefix pgtype.Text) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeletePredicatesByKeyPrefix, keyPrefix)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const SyntheticDeleteRelationshipSignalsForNodes = `-- name: SyntheticDeleteRelationshipSignalsForNodes :execrows
+DELETE FROM relationship_signal WHERE subject_node_id = ANY($1::uuid[])
+`
+
+// Cleanup: hard-delete the relationship_signal rows a profile seeded on the given
+// subject nodes, keyed by the tracked node ids. relationship_signal.subject_node_id
+// is a real FK→node (NO ACTION, no soft delete), so these rows MUST be cleared
+// BEFORE their subject nodes — the teardown runs this before the person/entity node
+// deletes.
+func (q *Queries) SyntheticDeleteRelationshipSignalsForNodes(ctx context.Context, nodeIds []pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteRelationshipSignalsForNodes, nodeIds)
 	if err != nil {
 		return 0, err
 	}

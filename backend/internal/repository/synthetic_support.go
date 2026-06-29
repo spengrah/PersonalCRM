@@ -938,3 +938,43 @@ func (r *SyntheticSupportRepository) ListEntityNamesByNodePrefix(ctx context.Con
 func (r *SyntheticSupportRepository) CountContactTagsByContactNamePrefix(ctx context.Context, namePrefix string) (int64, error) {
 	return r.queries.SyntheticCountContactTagsByContactNamePrefix(ctx, pgtype.Text{String: namePrefix, Valid: true})
 }
+
+// --- relationship_signal support (graph derived-storage) -------------------
+
+// UpsertRelationshipSignal writes one relationship_signal row through the
+// PRODUCTION UpsertRelationshipSignal query (storage-only — SP1 has no signal
+// generators, so the seed direct-writes the projection the way SP3 eventually
+// will). Idempotent on (subject_node_id, signal_key): a re-seed overwrites the
+// value + watermarks. computed_at is set by the query (NOW()); as_of is supplied
+// by the caller (anchor-relative, no time.Now()).
+func (r *SyntheticSupportRepository) UpsertRelationshipSignal(ctx context.Context, subjectNodeID uuid.UUID, signalKey string, value float64, asOf time.Time, methodVersion string) error {
+	return r.queries.UpsertRelationshipSignal(ctx, db.UpsertRelationshipSignalParams{
+		SubjectNodeID: uuidToPgUUID(subjectNodeID),
+		SignalKey:     signalKey,
+		Value:         value,
+		AsOf:          pgtype.Timestamptz{Time: asOf, Valid: true},
+		MethodVersion: methodVersion,
+	})
+}
+
+// DeleteRelationshipSignalsForNodes hard-deletes the relationship_signal rows a
+// profile seeded on the given subject nodes (cleanup). relationship_signal has no
+// deleted_at and its subject_node_id → node FK is NO ACTION, so the teardown MUST
+// run this BEFORE the node deletes. Keyed by the tracked node ids.
+func (r *SyntheticSupportRepository) DeleteRelationshipSignalsForNodes(ctx context.Context, nodeIDs []uuid.UUID) (int64, error) {
+	if len(nodeIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticDeleteRelationshipSignalsForNodes(ctx, pgUUIDs(nodeIDs))
+}
+
+// CountRelationshipSignalsForNodes counts surviving relationship_signal rows for
+// the given subject nodes (scoped to the run's tracked node ids, so it is
+// parallel-test-safe). Used to assert ≥1 signal exists for the seeded nodes
+// (coverage) and that 0 remain after teardown.
+func (r *SyntheticSupportRepository) CountRelationshipSignalsForNodes(ctx context.Context, nodeIDs []uuid.UUID) (int64, error) {
+	if len(nodeIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticCountRelationshipSignalsForNodes(ctx, pgUUIDs(nodeIDs))
+}

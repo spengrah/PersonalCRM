@@ -237,6 +237,15 @@ func (h *Harness) cleanup(ctx context.Context) error {
 		_, err := h.support.DeleteContactsByIds(ctx, c.contactIDs)
 		return err
 	})
+	// 13a-pre2. relationship_signal on the seeded nodes: relationship_signal has no
+	// deleted_at and its subject_node_id → node FK is NO ACTION, so any signal a
+	// profile seeded MUST be deleted BEFORE the person/entity node deletes below.
+	// Keyed by the tracked subject node ids (the seed only writes signals on person
+	// nodes). No-op when no profile seeded any.
+	step("relationship_signal", func() error {
+		_, err := h.support.DeleteRelationshipSignalsForNodes(ctx, c.signalNodeIDs)
+		return err
+	})
 	// 13a-pre. assertions on the seeded contact nodes: the assertion→node FK is
 	// RESTRICT, so any assertion ReplayAssertion seeded on a person node MUST be
 	// deleted BEFORE the person-node delete below. Provenance cascades from the
@@ -318,6 +327,16 @@ func (h *Harness) ContactsRemaining(ctx context.Context) (int64, error) {
 // parallel tests creating their own venue nodes on the shared DB.
 func (h *Harness) VenueNodesRemaining(ctx context.Context) (int64, error) {
 	return h.support.CountVenueNodesByIds(ctx, h.snapshotVenueNodeIDs())
+}
+
+// SignalsRemaining counts how many relationship_signal rows still exist on THIS
+// run's tracked signal subject nodes. Used both ways: before teardown a coverage
+// test asserts it is ≥1 (signals were seeded), and after an explicit teardown a
+// determinism test asserts it is 0 (the signal-cleanup step ran before the node
+// deletes). Scoped to the tracked node ids, so it is immune to parallel tests
+// seeding their own signals on the shared DB.
+func (h *Harness) SignalsRemaining(ctx context.Context) (int64, error) {
+	return h.support.CountRelationshipSignalsForNodes(ctx, h.snapshotSignalNodeIDs())
 }
 
 // --- deferred shim workers (bus needs client; real workers need bus) -------

@@ -82,6 +82,11 @@ type ProfileResult struct {
 	// reflected by ContactsWithLocation, not here.)
 	SeededEntities    int
 	SeededEntityEdges int
+	// SeededSignals counts the relationship_signal rows the profile seeded across
+	// catalog person nodes (one per node, keys from a small fixed pool). These are
+	// SP1 derived storage (per-node scalars), written through the production upsert
+	// path. Counts-only / no PII.
+	SeededSignals int
 }
 
 // ProfileParams returns the default SeedParams for a named profile (error on an
@@ -119,6 +124,9 @@ func ProfileParams(name Profile) (SeedParams, error) {
 				// edges so the dev graph surfaces show works_at/interested_in/tagged_as.
 				SeededEntities:    3,
 				SeededEntityEdges: 6,
+				// A few relationship_signal rows (SP1 derived storage) so the dev graph
+				// has per-node signals. One signal per node, rotating the signal-key pool.
+				SeededSignals: 6,
 			},
 		}, nil
 	case ProfileProdShaped:
@@ -155,6 +163,11 @@ func ProfileParams(name Profile) (SeedParams, error) {
 				// coverage + determinism tests override these down for CI.
 				SeededEntities:    9,
 				SeededEntityEdges: 30,
+				// ~20 relationship_signal rows (SP1 derived storage) across a subset of
+				// the catalog person nodes, one signal per node from a small fixed
+				// signal-key pool (a few signal kinds repeat across people, prod-like).
+				// The coverage + determinism tests override this down for CI.
+				SeededSignals: 20,
 			},
 		}, nil
 	default:
@@ -563,6 +576,32 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		res.SeededEntityEdges++
 	}
 
+	// relationship_signal rows (SP1 derived storage) on a subset of the catalog
+	// person nodes. In prod these are computed from comms analysis; SP1 has no
+	// signal generators yet, so the seed direct-writes them through the production
+	// UpsertRelationshipSignal path. SeedRelationshipSignal READS the already-seeded
+	// person nodes (no generator PRNG draw), so its position relative to the gen.X()
+	// blocks above is free; the subject_node_id → node FK (NO ACTION) means the
+	// teardown clears these BEFORE the node deletes. Each node gets one signal with a
+	// rotated key from a small fixed pool (a few signal kinds repeat across people,
+	// prod-like) and a deterministic value; as_of is the generator anchor (no
+	// time.Now()).
+	signals := params.Counts.SeededSignals
+	if signals > len(catalogContactIDs) {
+		signals = len(catalogContactIDs)
+	}
+	signalAsOf := gen.Anchor()
+	for i := 0; i < signals; i++ {
+		node := catalogContactIDs[i]
+		key := catalogSignalKeys[i%len(catalogSignalKeys)]
+		// Deterministic value in [0.50, 0.99] so signals carry varied non-zero scalars.
+		value := float64(50+i%50) / 100.0
+		if err := h.SeedRelationshipSignal(ctx, node, key, value, signalAsOf, syntheticSignalMethodVersion); err != nil {
+			return res, fmt.Errorf("profile %s: seed relationship signal %d: %w", params.Profile, i, err)
+		}
+		res.SeededSignals++
+	}
+
 	// Cadence tasks (Todoist) on the cadence-bearing catalog contacts. ReplayTodoist
 	// drives the REAL CadenceSyncProvider reconcile, which reads
 	// ListContactsWithContactBy (contact_by auto-computed from cadence by
@@ -660,6 +699,22 @@ var catalogEntityEdgePredicates = []string{
 	"interested_in",
 	"tagged_as",
 }
+
+// catalogSignalKeys is the small fixed pool of relationship_signal keys the seed
+// rotates over (one key per seeded node) so a few signal kinds repeat across many
+// person nodes (prod-like). These are the keys the app expects for SP1 derived
+// storage (closeness / real_cadence_days / trend, per repository.RelationshipSignal),
+// so seeded rows match what consumers read; teardown deletes by subject node id
+// (not key), so they need no namespace prefix.
+var catalogSignalKeys = []string{
+	"closeness",
+	"real_cadence_days",
+	"trend",
+}
+
+// syntheticSignalMethodVersion tags the method_version of the seeded
+// relationship_signal rows so they are identifiable as toolkit-authored.
+const syntheticSignalMethodVersion = "synthetic-seed"
 
 // catalogLocationStems is the small fixed pool the lives_in location rotates over
 // so locations repeat across contacts (prod-like) while staying deterministic. The

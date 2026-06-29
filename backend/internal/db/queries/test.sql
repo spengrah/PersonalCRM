@@ -667,6 +667,21 @@ SELECT COUNT(*) FROM node WHERE id = ANY(@node_ids::uuid[]) AND type = 'venue';
 -- self-FK, so a single multi-row DELETE clears a closed-pair set in one shot.
 DELETE FROM assertion WHERE subject_node_id = $1 OR object_node_id = $1;
 
+-- name: SyntheticDeleteRelationshipSignalsForNodes :execrows
+-- Cleanup: hard-delete the relationship_signal rows a profile seeded on the given
+-- subject nodes, keyed by the tracked node ids. relationship_signal.subject_node_id
+-- is a real FK→node (NO ACTION, no soft delete), so these rows MUST be cleared
+-- BEFORE their subject nodes — the teardown runs this before the person/entity node
+-- deletes.
+DELETE FROM relationship_signal WHERE subject_node_id = ANY(@node_ids::uuid[]);
+
+-- name: SyntheticCountRelationshipSignalsForNodes :one
+-- Cleanup/coverage assertion — count relationship_signal rows for the given subject
+-- nodes (scoped to THIS run's tracked node ids, so it is immune to parallel tests
+-- seeding their own signals on the shared DB). Used to assert ≥1 signal exists for
+-- the seeded nodes (coverage) and that 0 remain after teardown.
+SELECT COUNT(*) FROM relationship_signal WHERE subject_node_id = ANY(@node_ids::uuid[]);
+
 -- name: TestInsertContactAtID :exec
 -- Latent-person promotion test support: insert a contact row AT a caller-supplied
 -- id (node.id == contact.id), so a test can promote a latent person node (created
