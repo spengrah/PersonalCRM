@@ -2,6 +2,7 @@ package tests
 
 import (
 	"context"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,6 +16,27 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+// trailingSeqRE extracts the generator's monotonic sourceIDSeq embedded as the
+// trailing "-<digits>" of a synthetic value_text / entity normalized_name (e.g.
+// "synth-<ns>-organization-Alice-42" → 42). The seq is namespace-INDEPENDENT (a
+// pure counter, unlike the PRNG-drawn name component), so it is a stable
+// cross-run/cross-namespace ordering witness. Returns ok=false for values with no
+// trailing seq (e.g. the how_met "synth-<ns>-met-<stem>" or a place
+// "synth-<ns>-place-<stem>"), which the caller skips.
+var trailingSeqRE = regexp.MustCompile(`-(\d+)$`)
+
+func trailingSeq(s string) (int, bool) {
+	m := trailingSeqRE.FindStringSubmatch(s)
+	if m == nil {
+		return 0, false
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
 
 // fixedAccelBaseUnix is a deterministic TIME_BASE (a fixed Unix second) for the
 // high-acceleration settle-budget test, so the fixture makes no wall-clock call.
@@ -433,6 +455,44 @@ func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
 	require.Equal(t, fp1, fp2, "assertion (value_text, value_date, value_bool) fingerprint must be deterministic across runs")
 	require.NotEmpty(t, ent1, "the seed must produce entity nodes to fingerprint")
 	require.Equal(t, ent1, ent2, "entity (subtype, normalized_name) fingerprint must be deterministic across runs")
+
+	// Ordering guard for the "seed gen.X() LAST" rule (D2/R3). The run-to-run
+	// comparison above catches NON-deterministic drift but NOT a DETERMINISTIC
+	// mis-ordering of the gen.Entity pool (both runs would shift identically). A
+	// literal name golden is precluded here — syntheticNS(t) randomizes the namespace
+	// per run and the PRNG is seeded fnv(namespace), so the name component is not
+	// run-stable. The embedded sourceIDSeq IS run-stable (a pure counter, namespace-
+	// independent), so it is the pinnable witness: gen.Entity is seeded LAST, after
+	// the Phase-4 text-fact spread, so every gen.Entity-pool seq must exceed every
+	// text-fact value seq. A mis-ordered entity block (moved before the spread, or
+	// earlier among the source replays) inverts this and fails loudly — the
+	// regression class a same-impl two-run comparison cannot see. (place nodes ride
+	// WithLocation, not gen.Entity, and carry a stem not a seq, so they are excluded.)
+	maxTextFactSeq := -1
+	for _, a := range fp1 {
+		if a.ValueText == nil {
+			continue
+		}
+		if seq, ok := trailingSeq(*a.ValueText); ok && seq > maxTextFactSeq {
+			maxTextFactSeq = seq
+		}
+	}
+	minEntitySeq := -1
+	for _, e := range ent1 {
+		if e.Subtype == repository.EntitySubtypePlace {
+			continue // place names carry a stem, not a seq
+		}
+		seq, ok := trailingSeq(e.NormalizedName)
+		require.True(t, ok, "gen.Entity normalized_name %q must carry a trailing sourceIDSeq", e.NormalizedName)
+		if minEntitySeq == -1 || seq < minEntitySeq {
+			minEntitySeq = seq
+		}
+	}
+	require.GreaterOrEqual(t, maxTextFactSeq, 0, "the seed must produce text-fact assertions with a seq witness")
+	require.GreaterOrEqual(t, minEntitySeq, 0, "the seed must produce gen.Entity pool nodes with a seq witness")
+	require.Greater(t, minEntitySeq, maxTextFactSeq,
+		"gen.Entity pool must be seeded LAST (after the text-fact spread): entity seq %d must exceed max text-fact seq %d — a smaller entity seq means a mis-ordered gen.X() insertion (D2/R3)",
+		minEntitySeq, maxTextFactSeq)
 }
 
 // TestSyntheticProfile_QuiesceLeavesRows proves the seed-and-leave lifecycle:
