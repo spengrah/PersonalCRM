@@ -1601,12 +1601,12 @@ func (q *Queries) SyntheticGetNodeForContact(ctx context.Context, id pgtype.UUID
 }
 
 const SyntheticListAssertionsByNodePrefix = `-- name: SyntheticListAssertionsByNodePrefix :many
-SELECT a.predicate_key, a.status, a.value_text, a.value_date
+SELECT a.predicate_key, a.status, a.value_text, a.value_date, a.value_bool
 FROM assertion a
 JOIN node n ON a.subject_node_id = n.id
 WHERE n.canonical_label LIKE $1 || '%'
   AND a.status IN ('proposed', 'accepted')
-ORDER BY a.predicate_key, a.value_text NULLS LAST, a.value_date NULLS LAST, a.status
+ORDER BY a.predicate_key, a.value_text NULLS LAST, a.value_date NULLS LAST, a.value_bool NULLS LAST, a.status
 `
 
 type SyntheticListAssertionsByNodePrefixRow struct {
@@ -1614,18 +1614,21 @@ type SyntheticListAssertionsByNodePrefixRow struct {
 	Status       string      `json:"status"`
 	ValueText    pgtype.Text `json:"value_text"`
 	ValueDate    pgtype.Date `json:"value_date"`
+	ValueBool    pgtype.Bool `json:"value_bool"`
 }
 
 // Profile coverage + determinism test support: list the LIVE (proposed/accepted)
 // assertions whose subject node is ns-prefixed (catalog person nodes own
 // ns-prefixed canonical_labels). The coverage check uses (predicate_key, status)
 // to assert the accepted vs proposed split; the determinism check fingerprints
-// (value_text, value_date) across a re-run — value_text is NULL for date payloads
-// (birthday) and value_date is NULL for text payloads, so both are projected so
-// neither bio surface is a blind spot. proposition_key is NOT used because it
-// embeds the per-run subject UUID and so is not run-stable. Deterministically
-// ordered so the fingerprint is stable. Caller passes a BARE prefix; '%' is
-// appended here.
+// (value_text, value_date, value_bool) across a re-run — exactly one value column
+// is set per fact (text → value_text, birthday → value_date, bool facts →
+// value_bool) and edges set none, so all three are projected so no value-type
+// surface is a blind spot. The object node id (and proposition_key) are NOT used
+// because they embed the per-run subject/object UUID and so are not run-stable;
+// an edge therefore contributes only (predicate_key, status) to the fingerprint.
+// Deterministically ordered so the fingerprint is stable. Caller passes a BARE
+// prefix; '%' is appended here.
 func (q *Queries) SyntheticListAssertionsByNodePrefix(ctx context.Context, labelPrefix pgtype.Text) ([]*SyntheticListAssertionsByNodePrefixRow, error) {
 	rows, err := q.db.Query(ctx, SyntheticListAssertionsByNodePrefix, labelPrefix)
 	if err != nil {
@@ -1640,6 +1643,7 @@ func (q *Queries) SyntheticListAssertionsByNodePrefix(ctx context.Context, label
 			&i.Status,
 			&i.ValueText,
 			&i.ValueDate,
+			&i.ValueBool,
 		); err != nil {
 			return nil, err
 		}

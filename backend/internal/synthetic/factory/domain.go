@@ -3,6 +3,8 @@ package factory
 import (
 	"fmt"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // MethodSpec is a synthetic contact_method description. The replay harness maps
@@ -266,17 +268,24 @@ func (g *Generator) Venue(source, kind string) VenueSpec {
 	}
 }
 
-// AssertionSpec is a synthetic fact-assertion description. The caller supplies
-// the SubjectNodeID and PredicateKey when persisting (the factory does not know
-// the subject's id or which catalog predicate to use). ValueText and
+// AssertionSpec is a synthetic fact/edge-assertion description. The caller
+// supplies the SubjectNodeID and PredicateKey when persisting (the factory does
+// not know the subject's id or which catalog predicate to use). ValueText and
 // PropositionKey are namespace-prefixed so a test scopes its reads to its own
 // namespace on the shared DB; Confidence/Salience are sensible defaults the test
-// may override. The write LOGIC (the real proposition_key derivation) is a later
-// layer — this spec is for the repository round-trip tests that insert via the
-// repository directly.
+// may override.
+//
+// Exactly one value carrier is set per the predicate's kind (ReplayAssertion
+// routes whichever is non-nil onto AssertRequest): ObjectNodeID for an edge
+// predicate (person→person, etc.); ValueBool / ValueDate for a bool / date fact;
+// otherwise ValueText for a text fact. A non-nil ObjectNodeID takes precedence
+// (edges carry no scalar), then ValueBool, then ValueDate, then ValueText.
 type AssertionSpec struct {
 	PredicateKey   string
 	ValueText      string
+	ValueBool      *bool
+	ValueDate      *time.Time
+	ObjectNodeID   *uuid.UUID
 	Confidence     int16
 	Salience       int16
 	PropositionKey string
@@ -296,4 +305,50 @@ func (g *Generator) FactAssertion(predicateKey string) AssertionSpec {
 		Salience:       50,
 		PropositionKey: fmt.Sprintf("%sprop-%s-%d", g.Prefix(), predicateKey, g.sourceIDSeq),
 	}
+}
+
+// valueCarrierSpec is the shared base for the value-carrier AssertionSpecs (bool
+// / date facts + edges). They have NO text value, so unlike FactAssertion they
+// draw NO name PRNG — only the monotonic sourceIDSeq for a distinct proposition_key.
+// That makes them strictly ordering-safe to append after the name-drawing
+// generators (they cannot shift the name/handle stream), but they still bump
+// sourceIDSeq, so callers seed them LAST per the profile ordering rule.
+func (g *Generator) valueCarrierSpec(predicateKey string) AssertionSpec {
+	g.sourceIDSeq++
+	return AssertionSpec{
+		PredicateKey:   predicateKey,
+		Confidence:     80,
+		Salience:       50,
+		PropositionKey: fmt.Sprintf("%sprop-%s-%d", g.Prefix(), predicateKey, g.sourceIDSeq),
+	}
+}
+
+// BoolFact builds a deterministic bool-fact AssertionSpec (e.g. job_seeking /
+// on_sabbatical / traveling) carrying ValueBool. Draws no name PRNG.
+func (g *Generator) BoolFact(predicateKey string, value bool) AssertionSpec {
+	spec := g.valueCarrierSpec(predicateKey)
+	v := value
+	spec.ValueBool = &v
+	return spec
+}
+
+// DateFact builds a deterministic date-fact AssertionSpec (e.g. birthday)
+// carrying ValueDate, asserted DIRECTLY through the assert write path (distinct
+// from the contact-create authority-flip birthday path). Draws no name PRNG.
+func (g *Generator) DateFact(predicateKey string, value time.Time) AssertionSpec {
+	spec := g.valueCarrierSpec(predicateKey)
+	d := value
+	spec.ValueDate = &d
+	return spec
+}
+
+// EdgeAssertion builds a deterministic edge AssertionSpec for the given edge
+// predicate (e.g. knows / introduced_by / sibling_of) pointing at an
+// already-seeded object node. Carries ObjectNodeID and NO scalar value (the
+// assert validator rejects an edge with any scalar). Draws no name PRNG.
+func (g *Generator) EdgeAssertion(predicateKey string, objectNodeID uuid.UUID) AssertionSpec {
+	spec := g.valueCarrierSpec(predicateKey)
+	id := objectNodeID
+	spec.ObjectNodeID = &id
+	return spec
 }

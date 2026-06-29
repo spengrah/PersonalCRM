@@ -95,6 +95,12 @@ func TestSyntheticProfile_DevCoversCatalog(t *testing.T) {
 	// managed task per contact (res.SeededTasks is the actual rows, a catalog-wide
 	// count, not the >0 gate value in Counts.SeededTasks).
 	require.GreaterOrEqual(t, res.SeededTasks, 1, "dev profile seeds cadence tasks")
+	// Value-type + edge graph rows: the dev catalog (18) far exceeds the small
+	// dev knob counts, so the seeded counts are exact (no catalog-size bounding),
+	// and the bool-fact gate produces exactly one toolkit date fact.
+	require.Equal(t, params.Counts.SeededBoolFacts, res.SeededBoolFacts, "dev profile seeds bool facts")
+	require.Equal(t, params.Counts.SeededRelationships, res.SeededRelationships, "dev profile seeds person→person edges")
+	require.Equal(t, 1, res.SeededDateFacts, "dev profile seeds one toolkit date fact")
 
 	remaining, err := h.ContactsRemaining(ctx)
 	require.NoError(t, err)
@@ -126,6 +132,13 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	// proposed) and the accepted ones (home_address/job_title/preference) — is
 	// exercised.
 	params.Counts.SeededAssertions = 5
+	// One full bool-fact cycle (job_seeking/on_sabbatical/traveling) + one full
+	// edge cycle (knows/introduced_by/sibling_of) so every new predicate — incl.
+	// the always-confirm sibling_of (→ proposed) and the auto-if-confident rest
+	// (→ accepted) — is exercised. The bool-fact gate also seeds one toolkit date
+	// fact.
+	params.Counts.SeededBoolFacts = 3
+	params.Counts.SeededRelationships = 3
 	// Enable cadence-task seeding (>0 gate). The 9-contact catalog is all
 	// cadence-bearing, so reconcile creates 9 `managed` tasks and three are
 	// transitioned to completed/dismissed/unmanaged — every surface state present.
@@ -205,6 +218,7 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	require.NoError(t, err)
 	seen := make(map[string]bool) // "<predicate>/<status>"
 	var realYearBirthday bool
+	var boolFactTrue bool
 	for _, a := range assertions {
 		seen[a.PredicateKey+"/"+a.Status] = true
 		// item 5: a real-year birthday from the spread must exist, not just the
@@ -213,6 +227,11 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 		if a.PredicateKey == "birthday" && a.ValueDate != nil && !strings.HasPrefix(*a.ValueDate, "1900-") {
 			realYearBirthday = true
 		}
+		// A bool fact must carry value_bool (proves the ValueBool plumbing routes
+		// the scalar, not just the predicate).
+		if a.ValueBool != nil && *a.ValueBool {
+			boolFactTrue = true
+		}
 	}
 	for _, want := range []string{
 		"health_condition/" + repository.AssertionStatusProposed,
@@ -220,10 +239,26 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 		"home_address/" + repository.AssertionStatusAccepted,
 		"job_title/" + repository.AssertionStatusAccepted,
 		"preference/" + repository.AssertionStatusAccepted,
+		// bool facts — all auto-if-confident → accepted.
+		"job_seeking/" + repository.AssertionStatusAccepted,
+		"on_sabbatical/" + repository.AssertionStatusAccepted,
+		"traveling/" + repository.AssertionStatusAccepted,
+		// person→person edges — knows/introduced_by accepted, sibling_of
+		// (always-confirm) proposed, so BOTH edge review surfaces are present.
+		"knows/" + repository.AssertionStatusAccepted,
+		"introduced_by/" + repository.AssertionStatusAccepted,
+		"sibling_of/" + repository.AssertionStatusProposed,
 	} {
-		require.True(t, seen[want], "Phase-4 text-fact spread must land %s", want)
+		require.True(t, seen[want], "graph value-type/edge spread must land %s", want)
 	}
 	require.True(t, realYearBirthday, "≥1 real-year (non-1900-sentinel) birthday from the spread")
+	require.True(t, boolFactTrue, "≥1 bool fact carrying value_bool=true")
+
+	// Value-type + edge result counts (bool facts + the toolkit date fact +
+	// person→person edges). The CI override seeds one full cycle of each.
+	require.GreaterOrEqual(t, res.SeededBoolFacts, 1, "bool facts seeded")
+	require.GreaterOrEqual(t, res.SeededRelationships, 1, "person→person edges seeded")
+	require.GreaterOrEqual(t, res.SeededDateFacts, 1, "toolkit-authored date fact seeded")
 
 	// Cadence tasks: ReplayTodoist seeds a `managed` cadence task on each
 	// cadence-bearing catalog contact, and the profile transitions a deterministic
@@ -254,13 +289,15 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 // byte-identical ProfileResult counts AND an identical fingerprint of the
 // generated assertion values. Count-pinning alone is insufficient — counts can
 // match while a non-deterministic source (map iteration, wall-clock leak) shifts
-// generated values — so the (value_text, value_date) fingerprint is the drift
-// detector. Both runs share the SAME namespace (with a full teardown between) so
-// the ns-prefix + PRNG stream line up, AND a PINNED generator anchor so the
-// anchor-relative timestamps (birthday date) are byte-identical too — without the
-// pin, birthday value_date would legitimately drift between runs (anchor-relative
-// per the factory contract) and could not be fingerprinted. proposition_key is
-// NOT fingerprinted (it embeds the per-run subject UUID, so it is not run-stable).
+// generated values — so the (value_text, value_date, value_bool) fingerprint is
+// the drift detector. Both runs share the SAME namespace (with a full teardown
+// between) so the ns-prefix + PRNG stream line up, AND a PINNED generator anchor
+// so the anchor-relative timestamps (birthday date) are byte-identical too —
+// without the pin, birthday value_date would legitimately drift between runs
+// (anchor-relative per the factory contract) and could not be fingerprinted.
+// proposition_key and the edge object node id are NOT fingerprinted (they embed
+// the per-run subject/object UUID, so they are not run-stable); a person→person
+// edge therefore contributes only its (predicate_key, status) to the fingerprint.
 func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
 	testsupport.RequireLongTests(t)
 	database, ctx := newSyntheticDB(t)
@@ -272,6 +309,9 @@ func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
 	// of the scale. 5 assertions walk the full predicate cycle.
 	params.Counts.SeededContacts = 5
 	params.Counts.SeededAssertions = 5
+	// One full bool-fact + edge cycle each (bounded, deterministic at this scale).
+	params.Counts.SeededBoolFacts = 3
+	params.Counts.SeededRelationships = 3
 	params.Counts.UnmatchedExternal = 1
 	params.Counts.StrandedTelegram = 1
 	params.Counts.StrandedMessages = 1
@@ -305,7 +345,7 @@ func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
 
 	require.Equal(t, res1, res2, "prod-shaped ProfileResult must be deterministic across runs")
 	require.NotEmpty(t, fp1, "the seed must produce assertions to fingerprint")
-	require.Equal(t, fp1, fp2, "assertion (value_text, value_date) fingerprint must be deterministic across runs")
+	require.Equal(t, fp1, fp2, "assertion (value_text, value_date, value_bool) fingerprint must be deterministic across runs")
 }
 
 // TestSyntheticProfile_QuiesceLeavesRows proves the seed-and-leave lifecycle:
