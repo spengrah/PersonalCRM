@@ -345,7 +345,22 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 // generated assertion values. Count-pinning alone is insufficient — counts can
 // match while a non-deterministic source (map iteration, wall-clock leak) shifts
 // generated values — so the (value_text, value_date, value_bool) fingerprint is
-// the drift detector. Both runs share the SAME namespace (with a full teardown
+// the drift detector.
+//
+// Scope (what this catches vs. where): a run-to-run comparison detects
+// NON-deterministic drift only. It cannot detect a DETERMINISTIC mis-ordering of a
+// gen.X() call (the "seed gen.X() LAST" rule), because both runs shift identically
+// and still match — and a golden/pinned fingerprint is not an option here:
+// syntheticNS(t) randomizes the namespace per run and the generator PRNG is seeded
+// with fnv(namespace), so there is no run-stable canonical sequence to pin. The
+// "seed LAST" rule is instead enforced by the coverage test's Gate-A settle: a
+// mis-placed gen.X() shifts later source-replay ids into a cross-contact peer-id
+// collision that fails the settle loudly (the original SP1 mis-order regression
+// surfaced exactly this way). A mis-ordering that shifts NO subsequent source-replay
+// draw is harmless (distinct-but-valid synthetic data), so the two guards together
+// cover the load-bearing class.
+//
+// Both runs share the SAME namespace (with a full teardown
 // between) so the ns-prefix + PRNG stream line up, AND a PINNED generator anchor
 // so the anchor-relative timestamps (birthday date) are byte-identical too —
 // without the pin, birthday value_date would legitimately drift between runs
