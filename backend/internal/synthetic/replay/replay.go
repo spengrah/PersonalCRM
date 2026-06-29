@@ -94,6 +94,17 @@ type created struct {
 	// subject_node_id → node FK is NO ACTION, so cleanup MUST delete these rows by
 	// the tracked node ids BEFORE the node deletes.
 	signalNodeIDs []uuid.UUID
+	// softDeletedNodeIDs / mergedLoserNodeIDs / mergedWinnerNodeIDs are person node
+	// ids a soft-delete / merge scenario produced, tracked ONLY for the seed-shape
+	// invariant assertions (tombstone + assertion re-point checks). Teardown needs no
+	// separate step for them: each is a node.id == contact.id that SeedContact already
+	// added to contactIDs, so the existing by-id assertion → person_node → contact
+	// sweeps remove the tombstoned (soft-deleted / merged-loser) and live (merge
+	// winner) rows. The merged_into self-FK is NO ACTION, so the single-statement
+	// person_node delete drops a merged pair together without ordering grief.
+	softDeletedNodeIDs  []uuid.UUID
+	mergedLoserNodeIDs  []uuid.UUID
+	mergedWinnerNodeIDs []uuid.UUID
 	// directSources is the set of sources the adapters published root events
 	// under, so Cleanup can capture no-contact root events that the
 	// contact-scoped read misses.
@@ -104,10 +115,17 @@ func newCreated() *created {
 	return &created{directSources: map[string]struct{}{}}
 }
 
-func (c *created) addContact(id uuid.UUID)       { c.contactIDs = append(c.contactIDs, id) }
-func (c *created) addInteraction(id uuid.UUID)   { c.interactionIDs = append(c.interactionIDs, id) }
-func (c *created) addVenueNode(id uuid.UUID)     { c.venueNodeIDs = append(c.venueNodeIDs, id) }
-func (c *created) addSignalNode(id uuid.UUID)    { c.signalNodeIDs = append(c.signalNodeIDs, id) }
+func (c *created) addContact(id uuid.UUID)     { c.contactIDs = append(c.contactIDs, id) }
+func (c *created) addInteraction(id uuid.UUID) { c.interactionIDs = append(c.interactionIDs, id) }
+func (c *created) addVenueNode(id uuid.UUID)   { c.venueNodeIDs = append(c.venueNodeIDs, id) }
+func (c *created) addSignalNode(id uuid.UUID)  { c.signalNodeIDs = append(c.signalNodeIDs, id) }
+func (c *created) addSoftDeletedNode(id uuid.UUID) {
+	c.softDeletedNodeIDs = append(c.softDeletedNodeIDs, id)
+}
+func (c *created) addMergedPair(winner, loser uuid.UUID) {
+	c.mergedWinnerNodeIDs = append(c.mergedWinnerNodeIDs, winner)
+	c.mergedLoserNodeIDs = append(c.mergedLoserNodeIDs, loser)
+}
 func (c *created) addTelegramPeer(id int64)      { c.telegramPeerIDs = append(c.telegramPeerIDs, id) }
 func (c *created) addTelegramChat(id int64)      { c.telegramChatIDs = append(c.telegramChatIDs, id) }
 func (c *created) addContactTask(id uuid.UUID)   { c.contactTaskIDs = append(c.contactTaskIDs, id) }
@@ -285,6 +303,67 @@ func (h *Harness) SeedRelationshipSignal(ctx context.Context, subjectNodeID uuid
 	}
 	h.track(func(c *created) { c.addSignalNode(subjectNodeID) })
 	return nil
+}
+
+// SeedSoftDeletedContact seeds a contact (with one assertion on its person node),
+// then routes it through the PRODUCTION ContactService.DeleteContact path so the
+// person node (node.id == contact.id) is tombstoned: the assertion drops from LIVE
+// graph reads while remaining in the assertion table. The contact id is already in
+// the cleanup ledger (SeedContact tracked it) and the assertion rides the node, so
+// the existing by-id assertion → node → contact teardown sweeps remove the whole
+// set — no extra cleanup step. The node id is tracked separately ONLY so the
+// coverage check can assert the tombstone + retained-vs-live-assertion invariant.
+// Returns the soft-deleted contact id.
+func (h *Harness) SeedSoftDeletedContact(ctx context.Context, spec factory.ContactSpec, fact factory.AssertionSpec) (uuid.UUID, error) {
+	contact, err := h.SeedContact(ctx, spec)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("seed soft-deleted contact: %w", err)
+	}
+	if _, err := h.ReplayAssertion(ctx, contact.ID, fact); err != nil {
+		return uuid.Nil, fmt.Errorf("seed soft-deleted contact assertion: %w", err)
+	}
+	if err := h.contactService.DeleteContact(ctx, contact.ID); err != nil {
+		return uuid.Nil, fmt.Errorf("soft-delete contact %s: %w", contact.ID, err)
+	}
+	h.track(func(c *created) { c.addSoftDeletedNode(contact.ID) })
+	return contact.ID, nil
+}
+
+// SeedMergedContact seeds TWO contacts — a winner + a loser, each with one assertion
+// on its person node — then merges the loser INTO the winner via the PRODUCTION
+// ContactService.MergeContacts path. That re-points the loser's assertions onto the
+// winner (MergeAssertionsTx), tombstones the loser node (merged_into=winner +
+// deleted_at via SetNodeMergedInto), and soft-deletes the loser contact. Give the
+// winner + loser DISTINCT predicates so the re-pointed loser fact lands beside the
+// winner's own without single-cardinality supersession (the merge internals are
+// exhaustively covered elsewhere; this is a SEED, not a re-derivation). Both contact
+// ids are already in the cleanup ledger (SeedContact); the merged_into self-FK is NO
+// ACTION, so the existing single-statement by-id person_node sweep drops the pair
+// together at teardown. The winner/loser node ids are tracked separately ONLY for
+// the coverage check's tombstone + re-point invariants. Returns (winnerID, loserID).
+func (h *Harness) SeedMergedContact(ctx context.Context, winnerSpec, loserSpec factory.ContactSpec, winnerFact, loserFact factory.AssertionSpec) (winnerID, loserID uuid.UUID, err error) {
+	winner, err := h.SeedContact(ctx, winnerSpec)
+	if err != nil {
+		return uuid.Nil, uuid.Nil, fmt.Errorf("seed merge winner: %w", err)
+	}
+	if _, err := h.ReplayAssertion(ctx, winner.ID, winnerFact); err != nil {
+		return uuid.Nil, uuid.Nil, fmt.Errorf("seed merge winner assertion: %w", err)
+	}
+	loser, err := h.SeedContact(ctx, loserSpec)
+	if err != nil {
+		return uuid.Nil, uuid.Nil, fmt.Errorf("seed merge loser: %w", err)
+	}
+	if _, err := h.ReplayAssertion(ctx, loser.ID, loserFact); err != nil {
+		return uuid.Nil, uuid.Nil, fmt.Errorf("seed merge loser assertion: %w", err)
+	}
+	if _, err := h.contactService.MergeContacts(ctx, service.MergeContactsRequest{
+		SourceContactID: loser.ID,  // source = archived loser
+		TargetContactID: winner.ID, // target = surviving winner
+	}); err != nil {
+		return uuid.Nil, uuid.Nil, fmt.Errorf("merge contact %s into %s: %w", loser.ID, winner.ID, err)
+	}
+	h.track(func(c *created) { c.addMergedPair(winner.ID, loser.ID) })
+	return winner.ID, loser.ID, nil
 }
 
 // SeedNote attaches a notepad note to a seeded contact via the EXISTING
@@ -485,6 +564,29 @@ func (h *Harness) snapshotSignalNodeIDs() []uuid.UUID {
 	h.createdMu.Lock()
 	defer h.createdMu.Unlock()
 	return append([]uuid.UUID(nil), h.created.signalNodeIDs...)
+}
+
+// SoftDeletedNodeIDs / MergedLoserNodeIDs / MergedWinnerNodeIDs return THIS run's
+// tracked soft-delete / merge person node ids so a coverage test can scope its
+// tombstone + assertion-re-point invariant assertions to its own namespace's nodes
+// on the shared DB. Snapshots (mutex-guarded copies), so a caller can range them
+// without holding the ledger lock.
+func (h *Harness) SoftDeletedNodeIDs() []uuid.UUID {
+	h.createdMu.Lock()
+	defer h.createdMu.Unlock()
+	return append([]uuid.UUID(nil), h.created.softDeletedNodeIDs...)
+}
+
+func (h *Harness) MergedLoserNodeIDs() []uuid.UUID {
+	h.createdMu.Lock()
+	defer h.createdMu.Unlock()
+	return append([]uuid.UUID(nil), h.created.mergedLoserNodeIDs...)
+}
+
+func (h *Harness) MergedWinnerNodeIDs() []uuid.UUID {
+	h.createdMu.Lock()
+	defer h.createdMu.Unlock()
+	return append([]uuid.UUID(nil), h.created.mergedWinnerNodeIDs...)
 }
 
 // gateBClear reports whether Gate B has reached zero for this replay's contacts.

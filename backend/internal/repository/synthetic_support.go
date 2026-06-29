@@ -1009,3 +1009,49 @@ func (r *SyntheticSupportRepository) CountRelationshipSignalsForNodes(ctx contex
 	}
 	return r.queries.SyntheticCountRelationshipSignalsForNodes(ctx, pgUUIDs(nodeIDs))
 }
+
+// CountAssertionsForSubjects counts ALL assertions (live or not) whose subject is
+// one of the given nodes, scoped to the run's tracked node ids (parallel-test-safe).
+// Used by the merge/soft-delete coverage check to assert a soft-deleted contact's
+// assertions are RETAINED in the table (≥1) and a merge loser's are re-pointed OFF
+// the loser (==0).
+func (r *SyntheticSupportRepository) CountAssertionsForSubjects(ctx context.Context, nodeIDs []uuid.UUID) (int64, error) {
+	if len(nodeIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticCountAssertionsForSubjects(ctx, pgUUIDs(nodeIDs))
+}
+
+// CountLiveAssertionsForSubjects counts the assertions whose subject is one of the
+// given nodes AND whose subject node is live (deleted_at IS NULL), scoped to the
+// run's tracked node ids. Used by the merge/soft-delete coverage check to assert a
+// soft-deleted contact's assertions DROP from live graph reads (==0) and a merge
+// winner carries its own + the re-pointed loser assertions on its live node (≥1).
+func (r *SyntheticSupportRepository) CountLiveAssertionsForSubjects(ctx context.Context, nodeIDs []uuid.UUID) (int64, error) {
+	if len(nodeIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticCountLiveAssertionsForSubjects(ctx, pgUUIDs(nodeIDs))
+}
+
+// CountLiveNodesByIds counts the live (deleted_at IS NULL) nodes among the given
+// ids, scoped to the run's tracked node ids. Used by the merge/soft-delete coverage
+// check to assert a merge winner stays live (== id count) while soft-deleted +
+// merge-loser nodes are tombstoned (==0).
+func (r *SyntheticSupportRepository) CountLiveNodesByIds(ctx context.Context, nodeIDs []uuid.UUID) (int64, error) {
+	if len(nodeIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticCountLiveNodesByIds(ctx, pgUUIDs(nodeIDs))
+}
+
+// CountMergedIntoNodesByIds counts the nodes among the given ids that carry a merge
+// alias (merged_into IS NOT NULL), scoped to the run's tracked node ids. Used by the
+// merge coverage check to assert every merge-loser node was tombstoned via
+// SetNodeMergedInto (== loser count); soft-deleted nodes carry no merged_into.
+func (r *SyntheticSupportRepository) CountMergedIntoNodesByIds(ctx context.Context, nodeIDs []uuid.UUID) (int64, error) {
+	if len(nodeIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticCountMergedIntoNodesByIds(ctx, pgUUIDs(nodeIDs))
+}

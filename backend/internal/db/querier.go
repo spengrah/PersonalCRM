@@ -1650,6 +1650,12 @@ type Querier interface {
 	// node, so a test scopes its assertions to its own namespace's subject node on
 	// the shared test DB.
 	SyntheticCountAssertionsForSubject(ctx context.Context, subjectNodeID pgtype.UUID) (int64, error)
+	// Merge/soft-delete coverage test support: count ALL assertions (live or not — no
+	// node-liveness join) whose subject is one of the given nodes, scoped to THIS run's
+	// tracked node ids. Used to assert (a) a soft-deleted contact's assertions are
+	// RETAINED in the table (≥1) even though its node is tombstoned, and (b) a merge
+	// loser's assertions are re-pointed OFF the loser (==0) onto the winner.
+	SyntheticCountAssertionsForSubjects(ctx context.Context, nodeIds []pgtype.UUID) (int64, error)
 	// Settle Gate A (GCal decline terminal): count ALL calendar_event rows for the
 	// gcal id regardless of status/match. The cutover decline branch DELETES the
 	// row, so the decline test settles on this reaching 0. calendar_event has no
@@ -1702,9 +1708,32 @@ type Querier interface {
 	// checked; scoping by both means a colliding-message-id row in another namespace
 	// (necessarily a different peer band) can never satisfy this predicate early.
 	SyntheticCountLinkedTelegramMessageByMessageId(ctx context.Context, arg SyntheticCountLinkedTelegramMessageByMessageIdParams) (int64, error)
+	// Merge/soft-delete coverage test support: count the LIVE assertions whose subject
+	// is one of the given nodes, scoped to THIS run's tracked node ids. LIVE mirrors the
+	// production live-graph read: subject node live (deleted_at IS NULL) AND — for an
+	// edge (object_node_id set) — object node live AND status IN (proposed,accepted) AND
+	// knowledge-open (knowledge_to IS NULL). A fact (object_node_id NULL) is gated on the
+	// subject endpoint only. The object join MUST be a LEFT JOIN: facts carry a NULL
+	// object_node_id and an inner join would silently drop every fact row. Used to assert
+	// (a) a soft-deleted contact's assertions DROP from live graph reads (==0, node
+	// tombstoned), and (b) a merge winner carries its own + the re-pointed loser
+	// assertions as LIVE on its still-live node (≥1) — so the count proves re-pointing,
+	// not just presence of a terminal/closed row.
+	SyntheticCountLiveAssertionsForSubjects(ctx context.Context, nodeIds []pgtype.UUID) (int64, error)
+	// Merge/soft-delete coverage test support: count the live (deleted_at IS NULL) nodes
+	// among the given ids, scoped to THIS run's tracked node ids. Used to assert a merge
+	// winner node stays live (== id count) while soft-deleted + merge-loser nodes are
+	// tombstoned (== 0).
+	SyntheticCountLiveNodesByIds(ctx context.Context, nodeIds []pgtype.UUID) (int64, error)
 	// Settle Gate A (Mac-contact seeded): the external_contact row for the entity
 	// id exists linked to a CRM contact (match_status='matched').
 	SyntheticCountMatchedExternalContactBySourceId(ctx context.Context, sourceID string) (int64, error)
+	// Merge coverage test support: count the nodes among the given ids that carry a
+	// merge alias (merged_into IS NOT NULL), scoped to THIS run's tracked node ids. Used
+	// to assert every merge-loser node was tombstoned via SetNodeMergedInto (== loser
+	// count); a soft-deleted (non-merged) node has merged_into NULL, so this stays 0 for
+	// the soft-delete set.
+	SyntheticCountMergedIntoNodesByIds(ctx context.Context, nodeIds []pgtype.UUID) (int64, error)
 	// Graph identity test support: count nodes whose canonical_label is ns-prefixed,
 	// so a test can scope assertions to its own namespace's nodes on the shared test
 	// DB. Caller passes a BARE prefix; '%' is appended here.
@@ -1895,18 +1924,25 @@ type Querier interface {
 	// (node.id == contact.id). Returns the live (non-soft-deleted) node row so a
 	// test can assert the dual-write created it with the expected type/label.
 	SyntheticGetNodeForContact(ctx context.Context, id pgtype.UUID) (*Node, error)
-	// Profile coverage + determinism test support: list the LIVE (proposed/accepted)
-	// assertions whose subject node is ns-prefixed (catalog person nodes own
-	// ns-prefixed canonical_labels). The coverage check uses (predicate_key, status)
-	// to assert the accepted vs proposed split; the determinism check fingerprints
-	// (value_text, value_date, value_bool) across a re-run — exactly one value column
-	// is set per fact (text → value_text, birthday → value_date, bool facts →
-	// value_bool) and edges set none, so all three are projected so no value-type
-	// surface is a blind spot. The object node id (and proposition_key) are NOT used
-	// because they embed the per-run subject/object UUID and so are not run-stable;
-	// an edge therefore contributes only (predicate_key, status) to the fingerprint.
-	// Deterministically ordered so the fingerprint is stable. Caller passes a BARE
-	// prefix; '%' is appended here.
+	// Profile coverage + determinism test support: list the LIVE assertions whose
+	// subject node is ns-prefixed (catalog person nodes own ns-prefixed
+	// canonical_labels). LIVE mirrors the production live-graph read: subject node
+	// live (deleted_at IS NULL) AND — for an edge (object_node_id set) — object node
+	// live AND status IN (proposed,accepted) AND knowledge-open (knowledge_to IS
+	// NULL). A fact (object_node_id NULL) is gated on the subject endpoint only. So a
+	// soft-deleted/merged-away (tombstoned) endpoint, a terminal/superseded row, or a
+	// knowledge-closed row drops from this projection, matching the graph read path.
+	// The object join MUST be a LEFT JOIN: facts carry a NULL object_node_id and an
+	// inner join would silently drop every fact row. The coverage check uses
+	// (predicate_key, status) to assert the accepted vs proposed split; the
+	// determinism check fingerprints (value_text, value_date, value_bool) across a
+	// re-run — exactly one value column is set per fact (text → value_text, birthday
+	// → value_date, bool facts → value_bool) and edges set none, so all three are
+	// projected so no value-type surface is a blind spot. The object node id (and
+	// proposition_key) are NOT used because they embed the per-run subject/object
+	// UUID and so are not run-stable; an edge therefore contributes only
+	// (predicate_key, status) to the fingerprint. Deterministically ordered so the
+	// fingerprint is stable. Caller passes a BARE prefix; '%' is appended here.
 	SyntheticListAssertionsByNodePrefix(ctx context.Context, labelPrefix pgtype.Text) ([]*SyntheticListAssertionsByNodePrefixRow, error)
 	// Todoist replay: snapshot the set of contact_task ids for a provider so the
 	// replay can diff before/after its (globally-scoped) reconcile and track the

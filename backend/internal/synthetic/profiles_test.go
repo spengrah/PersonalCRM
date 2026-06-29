@@ -89,6 +89,10 @@ func TestProfileParams(t *testing.T) {
 	// prod-shaped seeds MULTIPLE settled interactions per dedicated source contact
 	// (>1) so the coverage check has a multi-interaction temporal spread to assert.
 	require.Greater(t, prod.Counts.MessagesPerContact, 1)
+	// prod-shaped seeds merge + soft-delete scenarios so the coverage check has
+	// tombstoned + re-pointed graph rows to assert.
+	require.Greater(t, prod.Counts.SeededSoftDeleted, 0)
+	require.Greater(t, prod.Counts.SeededMerged, 0)
 }
 
 // TestDefaultParamsUnchanged pins DefaultParams field-for-field so the
@@ -114,4 +118,6 @@ func TestDefaultParamsUnchanged(t *testing.T) {
 	require.Equal(t, 0, p.Counts.SeededEntityEdges)
 	require.Equal(t, 0, p.Counts.SeededSignals)
 	require.Equal(t, 0, p.Counts.MessagesPerContact)
+	require.Equal(t, 0, p.Counts.SeededSoftDeleted)
+	require.Equal(t, 0, p.Counts.SeededMerged)
 }

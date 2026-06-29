@@ -746,6 +746,22 @@ func (q *Queries) SyntheticCountAssertionsForSubject(ctx context.Context, subjec
 	return count, err
 }
 
+const SyntheticCountAssertionsForSubjects = `-- name: SyntheticCountAssertionsForSubjects :one
+SELECT COUNT(*) FROM assertion WHERE subject_node_id = ANY($1::uuid[])
+`
+
+// Merge/soft-delete coverage test support: count ALL assertions (live or not — no
+// node-liveness join) whose subject is one of the given nodes, scoped to THIS run's
+// tracked node ids. Used to assert (a) a soft-deleted contact's assertions are
+// RETAINED in the table (≥1) even though its node is tombstoned, and (b) a merge
+// loser's assertions are re-pointed OFF the loser (==0) onto the winner.
+func (q *Queries) SyntheticCountAssertionsForSubjects(ctx context.Context, nodeIds []pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountAssertionsForSubjects, nodeIds)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const SyntheticCountCalendarEventByGcalId = `-- name: SyntheticCountCalendarEventByGcalId :one
 SELECT COUNT(*) FROM calendar_event
 WHERE gcal_event_id = $1
@@ -938,6 +954,50 @@ func (q *Queries) SyntheticCountLinkedTelegramMessageByMessageId(ctx context.Con
 	return count, err
 }
 
+const SyntheticCountLiveAssertionsForSubjects = `-- name: SyntheticCountLiveAssertionsForSubjects :one
+SELECT COUNT(*) FROM assertion a
+JOIN node n ON a.subject_node_id = n.id
+LEFT JOIN node ob ON ob.id = a.object_node_id
+WHERE a.subject_node_id = ANY($1::uuid[])
+  AND n.deleted_at IS NULL
+  AND (a.object_node_id IS NULL OR ob.deleted_at IS NULL)
+  AND a.status IN ('proposed', 'accepted')
+  AND a.knowledge_to IS NULL
+`
+
+// Merge/soft-delete coverage test support: count the LIVE assertions whose subject
+// is one of the given nodes, scoped to THIS run's tracked node ids. LIVE mirrors the
+// production live-graph read: subject node live (deleted_at IS NULL) AND — for an
+// edge (object_node_id set) — object node live AND status IN (proposed,accepted) AND
+// knowledge-open (knowledge_to IS NULL). A fact (object_node_id NULL) is gated on the
+// subject endpoint only. The object join MUST be a LEFT JOIN: facts carry a NULL
+// object_node_id and an inner join would silently drop every fact row. Used to assert
+// (a) a soft-deleted contact's assertions DROP from live graph reads (==0, node
+// tombstoned), and (b) a merge winner carries its own + the re-pointed loser
+// assertions as LIVE on its still-live node (≥1) — so the count proves re-pointing,
+// not just presence of a terminal/closed row.
+func (q *Queries) SyntheticCountLiveAssertionsForSubjects(ctx context.Context, nodeIds []pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountLiveAssertionsForSubjects, nodeIds)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const SyntheticCountLiveNodesByIds = `-- name: SyntheticCountLiveNodesByIds :one
+SELECT COUNT(*) FROM node WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL
+`
+
+// Merge/soft-delete coverage test support: count the live (deleted_at IS NULL) nodes
+// among the given ids, scoped to THIS run's tracked node ids. Used to assert a merge
+// winner node stays live (== id count) while soft-deleted + merge-loser nodes are
+// tombstoned (== 0).
+func (q *Queries) SyntheticCountLiveNodesByIds(ctx context.Context, nodeIds []pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountLiveNodesByIds, nodeIds)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const SyntheticCountMatchedExternalContactBySourceId = `-- name: SyntheticCountMatchedExternalContactBySourceId :one
 SELECT COUNT(*) FROM external_contact
 WHERE source_id = $1
@@ -950,6 +1010,22 @@ WHERE source_id = $1
 // id exists linked to a CRM contact (match_status='matched').
 func (q *Queries) SyntheticCountMatchedExternalContactBySourceId(ctx context.Context, sourceID string) (int64, error) {
 	row := q.db.QueryRow(ctx, SyntheticCountMatchedExternalContactBySourceId, sourceID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const SyntheticCountMergedIntoNodesByIds = `-- name: SyntheticCountMergedIntoNodesByIds :one
+SELECT COUNT(*) FROM node WHERE id = ANY($1::uuid[]) AND merged_into IS NOT NULL
+`
+
+// Merge coverage test support: count the nodes among the given ids that carry a
+// merge alias (merged_into IS NOT NULL), scoped to THIS run's tracked node ids. Used
+// to assert every merge-loser node was tombstoned via SetNodeMergedInto (== loser
+// count); a soft-deleted (non-merged) node has merged_into NULL, so this stays 0 for
+// the soft-delete set.
+func (q *Queries) SyntheticCountMergedIntoNodesByIds(ctx context.Context, nodeIds []pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountMergedIntoNodesByIds, nodeIds)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -1655,8 +1731,12 @@ const SyntheticListAssertionsByNodePrefix = `-- name: SyntheticListAssertionsByN
 SELECT a.predicate_key, a.status, a.value_text, a.value_date, a.value_bool
 FROM assertion a
 JOIN node n ON a.subject_node_id = n.id
+LEFT JOIN node ob ON ob.id = a.object_node_id
 WHERE n.canonical_label LIKE $1 || '%'
+  AND n.deleted_at IS NULL
+  AND (a.object_node_id IS NULL OR ob.deleted_at IS NULL)
   AND a.status IN ('proposed', 'accepted')
+  AND a.knowledge_to IS NULL
 ORDER BY a.predicate_key, a.value_text NULLS LAST, a.value_date NULLS LAST, a.value_bool NULLS LAST, a.status
 `
 
@@ -1668,18 +1748,25 @@ type SyntheticListAssertionsByNodePrefixRow struct {
 	ValueBool    pgtype.Bool `json:"value_bool"`
 }
 
-// Profile coverage + determinism test support: list the LIVE (proposed/accepted)
-// assertions whose subject node is ns-prefixed (catalog person nodes own
-// ns-prefixed canonical_labels). The coverage check uses (predicate_key, status)
-// to assert the accepted vs proposed split; the determinism check fingerprints
-// (value_text, value_date, value_bool) across a re-run — exactly one value column
-// is set per fact (text → value_text, birthday → value_date, bool facts →
-// value_bool) and edges set none, so all three are projected so no value-type
-// surface is a blind spot. The object node id (and proposition_key) are NOT used
-// because they embed the per-run subject/object UUID and so are not run-stable;
-// an edge therefore contributes only (predicate_key, status) to the fingerprint.
-// Deterministically ordered so the fingerprint is stable. Caller passes a BARE
-// prefix; '%' is appended here.
+// Profile coverage + determinism test support: list the LIVE assertions whose
+// subject node is ns-prefixed (catalog person nodes own ns-prefixed
+// canonical_labels). LIVE mirrors the production live-graph read: subject node
+// live (deleted_at IS NULL) AND — for an edge (object_node_id set) — object node
+// live AND status IN (proposed,accepted) AND knowledge-open (knowledge_to IS
+// NULL). A fact (object_node_id NULL) is gated on the subject endpoint only. So a
+// soft-deleted/merged-away (tombstoned) endpoint, a terminal/superseded row, or a
+// knowledge-closed row drops from this projection, matching the graph read path.
+// The object join MUST be a LEFT JOIN: facts carry a NULL object_node_id and an
+// inner join would silently drop every fact row. The coverage check uses
+// (predicate_key, status) to assert the accepted vs proposed split; the
+// determinism check fingerprints (value_text, value_date, value_bool) across a
+// re-run — exactly one value column is set per fact (text → value_text, birthday
+// → value_date, bool facts → value_bool) and edges set none, so all three are
+// projected so no value-type surface is a blind spot. The object node id (and
+// proposition_key) are NOT used because they embed the per-run subject/object
+// UUID and so are not run-stable; an edge therefore contributes only
+// (predicate_key, status) to the fingerprint. Deterministically ordered so the
+// fingerprint is stable. Caller passes a BARE prefix; '%' is appended here.
 func (q *Queries) SyntheticListAssertionsByNodePrefix(ctx context.Context, labelPrefix pgtype.Text) ([]*SyntheticListAssertionsByNodePrefixRow, error) {
 	rows, err := q.db.Query(ctx, SyntheticListAssertionsByNodePrefix, labelPrefix)
 	if err != nil {
