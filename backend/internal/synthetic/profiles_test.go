@@ -86,6 +86,9 @@ func TestProfileParams(t *testing.T) {
 	// prod-shaped seeds relationship_signal rows so the coverage check has SP1
 	// derived-storage signals to assert.
 	require.Greater(t, prod.Counts.SeededSignals, 0)
+	// prod-shaped seeds MULTIPLE settled interactions per dedicated source contact
+	// (>1) so the coverage check has a multi-interaction temporal spread to assert.
+	require.Greater(t, prod.Counts.MessagesPerContact, 1)
 }
 
 // TestDefaultParamsUnchanged pins DefaultParams field-for-field so the
@@ -110,4 +113,5 @@ func TestDefaultParamsUnchanged(t *testing.T) {
 	require.Equal(t, 0, p.Counts.SeededEntities)
 	require.Equal(t, 0, p.Counts.SeededEntityEdges)
 	require.Equal(t, 0, p.Counts.SeededSignals)
+	require.Equal(t, 0, p.Counts.MessagesPerContact)
 }

@@ -2208,6 +2208,51 @@ func (q *Queries) TestListIndexDefsForComms(ctx context.Context) ([]*TestListInd
 	return items, nil
 }
 
+const TestListInteractionSpreadByContactNamePrefix = `-- name: TestListInteractionSpreadByContactNamePrefix :many
+SELECT
+    c.id,
+    COUNT(i.id) AS interaction_count,
+    EXTRACT(EPOCH FROM (MAX(i.occurred_at) - MIN(i.occurred_at)))::bigint AS span_seconds
+FROM contact c
+JOIN interaction i ON i.contact_id = c.id AND i.deleted_at IS NULL
+WHERE c.full_name LIKE $1 || '%'
+  AND c.deleted_at IS NULL
+GROUP BY c.id
+`
+
+type TestListInteractionSpreadByContactNamePrefixRow struct {
+	ID               pgtype.UUID `json:"id"`
+	InteractionCount int64       `json:"interaction_count"`
+	SpanSeconds      int64       `json:"span_seconds"`
+}
+
+// Profile coverage test only: for the namespace's contacts (by full_name prefix)
+// that have interactions, return the per-contact interaction count and the span
+// (in seconds) between the earliest and latest interaction, so the test can
+// assert the dedicated settled contacts carry MULTIPLE interactions spread over
+// TIME (count ≥ 2 with a multi-day span) rather than a single ~1h window. The
+// INNER JOIN excludes the interaction-free edge-case catalog contacts. Caller
+// passes a BARE prefix; '%' appended.
+func (q *Queries) TestListInteractionSpreadByContactNamePrefix(ctx context.Context, namePrefix pgtype.Text) ([]*TestListInteractionSpreadByContactNamePrefixRow, error) {
+	rows, err := q.db.Query(ctx, TestListInteractionSpreadByContactNamePrefix, namePrefix)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*TestListInteractionSpreadByContactNamePrefixRow{}
+	for rows.Next() {
+		var i TestListInteractionSpreadByContactNamePrefixRow
+		if err := rows.Scan(&i.ID, &i.InteractionCount, &i.SpanSeconds); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const TestListPublicTables = `-- name: TestListPublicTables :many
 SELECT table_name::text FROM information_schema.tables
 WHERE table_schema = 'public' AND table_type = 'BASE TABLE'

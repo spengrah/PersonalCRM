@@ -19,6 +19,43 @@ import (
 // MatchUnknown the factory addresses an unknown identifier the seeded contacts
 // do NOT own, exercising the per-source pending / match-only path.
 
+// MessageOption tunes a source-message payload. The only knob today is the
+// message's age — how far before the generator anchor it is timestamped — so the
+// same contact can be replayed repeatedly with its interactions spread back over
+// time (weeks/months) instead of all landing in one ~1h window.
+type MessageOption func(*messageConfig)
+
+type messageConfig struct {
+	// age is an EXTRA backward offset added on top of each source's small default
+	// offset (e.g. Gmail's −2h). Zero leaves the default (the most-recent message);
+	// growing it across a replay loop spreads older interactions back over time.
+	age time.Duration
+}
+
+// WithMessageAge shifts a source message's timestamp further back by age, added
+// on top of the source's small default offset. Looping a source replay with
+// growing ages spreads a contact's interactions over time. The anchor stays the
+// generator's (accelerated.GetCurrentTime() by default — never time.Now()), so
+// the result is still anchor-relative/deterministic. age is clamped to ≥ 0 (a
+// negative age, which would date a message into the future, is treated as 0).
+func WithMessageAge(age time.Duration) MessageOption {
+	return func(c *messageConfig) {
+		if age < 0 {
+			age = 0
+		}
+		c.age = age
+	}
+}
+
+// applyMessageOptions folds the variadic options into a config.
+func applyMessageOptions(opts []MessageOption) messageConfig {
+	var c messageConfig
+	for _, o := range opts {
+		o(&c)
+	}
+	return c
+}
+
 // --- Gmail -----------------------------------------------------------------
 
 // GmailMessageSpec bundles a *gmail.Message plus the account ("me") it was
@@ -35,7 +72,8 @@ type GmailMessageSpec struct {
 // from an unknown correspondent (MatchUnknown → match-only: no contact, no
 // interaction). SentAt is anchored before now − safety lag so the Gmail cursor
 // window includes it.
-func (g *Generator) GmailMessage(target ContactSpec, intent MatchIntent) GmailMessageSpec {
+func (g *Generator) GmailMessage(target ContactSpec, intent MatchIntent, opts ...MessageOption) GmailMessageSpec {
+	mo := applyMessageOptions(opts)
 	account := g.accountEmail()
 	from := target.Email
 	if intent == MatchUnknown {
@@ -48,8 +86,8 @@ func (g *Generator) GmailMessage(target ContactSpec, intent MatchIntent) GmailMe
 	}
 	externalID := fmt.Sprintf("<%sgmail-%d@synthetic.example>", g.Prefix(), g.bumpSourceSeq())
 	// 2h before now − safety lag (anchor-relative) so it is inside the scanned,
-	// already-closed window.
-	sentAt := g.at(-(2 * time.Hour))
+	// already-closed window; mo.age shifts it further back for the temporal spread.
+	sentAt := g.at(-(2 * time.Hour) - mo.age)
 	gmailID := g.Prefix() + "gid-" + fmt.Sprint(g.sourceIDSeq)
 
 	msg := &gmailapi.Message{
@@ -97,13 +135,14 @@ type GChatMessageSpec struct {
 // GChatMessage builds an inbound chat message from the target contact
 // (MatchSeeded) or an unknown sender (MatchUnknown → match-only: no row, no
 // interaction, no contact). Anchor-relative create time.
-func (g *Generator) GChatMessage(target ContactSpec, intent MatchIntent) GChatMessageSpec {
+func (g *Generator) GChatMessage(target ContactSpec, intent MatchIntent, opts ...MessageOption) GChatMessageSpec {
+	mo := applyMessageOptions(opts)
 	account := g.accountEmail()
 	seq := g.bumpSourceSeq()
 	ns := g.Prefix()
 	spaceName := fmt.Sprintf("spaces/%sSP-%d", ns, seq)
 	msgName := fmt.Sprintf("%s/messages/%sm-%d", spaceName, ns, seq)
-	createTime := g.at(-time.Hour)
+	createTime := g.at(-time.Hour - mo.age)
 
 	senderUser := fmt.Sprintf("users/%ssender-%d", ns, seq)
 	meUser := fmt.Sprintf("users/%sme-%d", ns, seq)
@@ -153,7 +192,8 @@ type GCalEventSpec struct {
 // contact (MatchSeeded → matched attendee + attended interaction) or with an
 // unknown attendee (MatchUnknown → unmatched attendee → matched_contact_ids='{}'
 // + external_contact candidate).
-func (g *Generator) GCalEvent(target ContactSpec, intent MatchIntent) GCalEventSpec {
+func (g *Generator) GCalEvent(target ContactSpec, intent MatchIntent, opts ...MessageOption) GCalEventSpec {
+	mo := applyMessageOptions(opts)
 	account := g.accountEmail()
 	seq := g.bumpSourceSeq()
 	gcalEventID := fmt.Sprintf("%sgcal-%d", g.Prefix(), seq)
@@ -162,9 +202,10 @@ func (g *Generator) GCalEvent(target ContactSpec, intent MatchIntent) GCalEventS
 	if intent == MatchUnknown || attendeeEmail == "" {
 		attendeeEmail = g.unknownEmail()
 	}
-	// Past meeting: started 2h ago, ended 1h ago (anchor-relative).
-	start := g.at(-2 * time.Hour)
-	end := g.at(-1 * time.Hour)
+	// Past meeting: started 2h ago, ended 1h ago (anchor-relative); mo.age shifts
+	// the whole meeting further back for the temporal spread.
+	start := g.at(-2*time.Hour - mo.age)
+	end := g.at(-1*time.Hour - mo.age)
 
 	ev := &calendarapi.Event{
 		Id:      gcalEventID,
@@ -204,12 +245,13 @@ type TelegramMessageSpec struct {
 // or an unknown peer (MatchUnknown → telegram_message.matched_contact_id IS NULL
 // + discovery candidate). PeerUserID/TelegramMessageID come from this namespace's
 // reserved numeric sub-blocks.
-func (g *Generator) TelegramMessage(target ContactSpec, intent MatchIntent) TelegramMessageSpec {
+func (g *Generator) TelegramMessage(target ContactSpec, intent MatchIntent, opts ...MessageOption) TelegramMessageSpec {
+	mo := applyMessageOptions(opts)
 	peerUserID := g.nextPeerUserID()
 	msgID := g.nextTelegramMessageID()
 	// Private chat id == peer user id (1:1 chat).
 	chatID := peerUserID
-	sentAt := g.at(-time.Hour)
+	sentAt := g.at(-time.Hour - mo.age)
 
 	handle := target.TelegramHandle
 	username := handle
@@ -319,7 +361,8 @@ type IMessageSpec struct {
 // messages_message.matched_contact_id IS NULL). hostID is the revoked synthetic
 // mac host the harness seeded (the payload's HostID field; the host-only kind
 // allowlist requires a non-nil host).
-func (g *Generator) IMessage(target ContactSpec, intent MatchIntent, hostID uuid.UUID) (IMessageSpec, error) {
+func (g *Generator) IMessage(target ContactSpec, intent MatchIntent, hostID uuid.UUID, opts ...MessageOption) (IMessageSpec, error) {
+	mo := applyMessageOptions(opts)
 	seq := g.bumpSourceSeq()
 	guid := fmt.Sprintf("%simsg-%d", g.Prefix(), seq)
 	chatGuid := fmt.Sprintf("%schat-%d", g.Prefix(), seq)
@@ -328,7 +371,7 @@ func (g *Generator) IMessage(target ContactSpec, intent MatchIntent, hostID uuid
 	if intent == MatchUnknown || peerHandle == "" {
 		peerHandle = g.unknownPhone()
 	}
-	sentAt := g.at(-time.Hour)
+	sentAt := g.at(-time.Hour - mo.age)
 
 	payload := events.RawMessageReceivedPayload{
 		Version:     1,

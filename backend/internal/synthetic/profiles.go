@@ -87,6 +87,13 @@ type ProfileResult struct {
 	// SP1 derived storage (per-node scalars), written through the production upsert
 	// path. Counts-only / no PII.
 	SeededSignals int
+	// SettledInteractions counts the settled source replays the profile drove on the
+	// dedicated per-source contacts — MessagesPerContact messages each, across the
+	// five sources — so the staging history is multi-interaction and spread over
+	// time rather than one message per contact. It is the replay-call count, the
+	// upper bound on the interaction rows produced (same-day messages on one contact
+	// would aggregate, but the spread lands them on distinct days). Counts-only / no PII.
+	SettledInteractions int
 }
 
 // ProfileParams returns the default SeedParams for a named profile (error on an
@@ -127,6 +134,10 @@ func ProfileParams(name Profile) (SeedParams, error) {
 				// A few relationship_signal rows (SP1 derived storage) so the dev graph
 				// has per-node signals. One signal per node, rotating the signal-key pool.
 				SeededSignals: 6,
+				// Two settled interactions per dedicated source contact, spread over time,
+				// so the dev graph shows a small multi-interaction history (fast: the dev
+				// per-source settled count is 1).
+				MessagesPerContact: 2,
 			},
 		}, nil
 	case ProfileProdShaped:
@@ -168,6 +179,11 @@ func ProfileParams(name Profile) (SeedParams, error) {
 				// signal-key pool (a few signal kinds repeat across people, prod-like).
 				// The coverage + determinism tests override this down for CI.
 				SeededSignals: 20,
+				// Four settled interactions per dedicated source contact, spread back over
+				// ~9 weeks, so staging shows a prod-like multi-interaction history per
+				// source instead of a single recent message. The coverage + determinism
+				// tests override this down for CI runtime.
+				MessagesPerContact: 4,
 			},
 		}, nil
 	default:
@@ -294,9 +310,22 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 
 	// A few settled interactions on DEDICATED contacts per source so every source
 	// surface has matched content WITHOUT clobbering the catalog's cadence states.
-	// Each settled contact carries a recent last_contacted (the inbound message),
+	// Each settled contact carries a recent last_contacted (its newest message),
 	// which is the correct "recently contacted via X" representation.
+	//
+	// Each contact is replayed messagesPer times with growing per-message ages
+	// (interactionSpreadAge), so its interactions land on distinct days spread back
+	// over time (a prod-like history) instead of one ~1h window. The newest message
+	// (age 0) drives last_contacted; older ones never move it back (the consumers'
+	// forward-only occurred_at guard), so the "recently contacted" state holds while
+	// the contact also carries a deeper history. The spread targets ONLY these
+	// dedicated contacts — the edge-case catalog above stays interaction-free so its
+	// overdue / never-contacted / no-method buckets survive.
 	perSource := perSourceSettledCount(params.Profile)
+	messagesPer := params.Counts.MessagesPerContact
+	if messagesPer < 1 {
+		messagesPer = 1
+	}
 
 	for i := 0; i < perSource; i++ {
 		// Gmail-settled (email match).
@@ -306,8 +335,11 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 			return res, fmt.Errorf("profile %s: seed gmail contact %d: %w", params.Profile, i, err)
 		}
 		res.Contacts++
-		if _, err := h.ReplayGmail(ctx, gmContact.ID, gen.GmailMessage(gmSpec, factory.MatchSeeded)); err != nil {
-			return res, fmt.Errorf("profile %s: replay gmail %d: %w", params.Profile, i, err)
+		for j := 0; j < messagesPer; j++ {
+			if _, err := h.ReplayGmail(ctx, gmContact.ID, gen.GmailMessage(gmSpec, factory.MatchSeeded, factory.WithMessageAge(interactionSpreadAge(j)))); err != nil {
+				return res, fmt.Errorf("profile %s: replay gmail %d msg %d: %w", params.Profile, i, j, err)
+			}
+			res.SettledInteractions++
 		}
 		res.GmailSettled++
 
@@ -318,8 +350,11 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 			return res, fmt.Errorf("profile %s: seed telegram contact %d: %w", params.Profile, i, err)
 		}
 		res.Contacts++
-		if _, err := h.ReplayTelegram(ctx, tgContact.ID, gen.TelegramMessage(tgSpec, factory.MatchSeeded)); err != nil {
-			return res, fmt.Errorf("profile %s: replay telegram %d: %w", params.Profile, i, err)
+		for j := 0; j < messagesPer; j++ {
+			if _, err := h.ReplayTelegram(ctx, tgContact.ID, gen.TelegramMessage(tgSpec, factory.MatchSeeded, factory.WithMessageAge(interactionSpreadAge(j)))); err != nil {
+				return res, fmt.Errorf("profile %s: replay telegram %d msg %d: %w", params.Profile, i, j, err)
+			}
+			res.SettledInteractions++
 		}
 		res.TelegramSettled++
 
@@ -330,8 +365,11 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 			return res, fmt.Errorf("profile %s: seed gcal contact %d: %w", params.Profile, i, err)
 		}
 		res.Contacts++
-		if _, err := h.ReplayGCal(ctx, gcContact.ID, gen.GCalEvent(gcSpec, factory.MatchSeeded)); err != nil {
-			return res, fmt.Errorf("profile %s: replay gcal %d: %w", params.Profile, i, err)
+		for j := 0; j < messagesPer; j++ {
+			if _, err := h.ReplayGCal(ctx, gcContact.ID, gen.GCalEvent(gcSpec, factory.MatchSeeded, factory.WithMessageAge(interactionSpreadAge(j)))); err != nil {
+				return res, fmt.Errorf("profile %s: replay gcal %d msg %d: %w", params.Profile, i, j, err)
+			}
+			res.SettledInteractions++
 		}
 		res.GCalSettled++
 
@@ -342,8 +380,11 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 			return res, fmt.Errorf("profile %s: seed gchat contact %d: %w", params.Profile, i, err)
 		}
 		res.Contacts++
-		if _, err := h.ReplayGChat(ctx, gchatContact.ID, gen.GChatMessage(gchatSpec, factory.MatchSeeded)); err != nil {
-			return res, fmt.Errorf("profile %s: replay gchat %d: %w", params.Profile, i, err)
+		for j := 0; j < messagesPer; j++ {
+			if _, err := h.ReplayGChat(ctx, gchatContact.ID, gen.GChatMessage(gchatSpec, factory.MatchSeeded, factory.WithMessageAge(interactionSpreadAge(j)))); err != nil {
+				return res, fmt.Errorf("profile %s: replay gchat %d msg %d: %w", params.Profile, i, j, err)
+			}
+			res.SettledInteractions++
 		}
 		res.GChatSettled++
 
@@ -354,12 +395,15 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 			return res, fmt.Errorf("profile %s: seed imessage contact %d: %w", params.Profile, i, err)
 		}
 		res.Contacts++
-		imageSpec, err := gen.IMessage(imSpec, factory.MatchSeeded, h.MacHostID())
-		if err != nil {
-			return res, fmt.Errorf("profile %s: build imessage spec %d: %w", params.Profile, i, err)
-		}
-		if _, err := h.ReplayIMessage(ctx, imContact.ID, imageSpec); err != nil {
-			return res, fmt.Errorf("profile %s: replay imessage %d: %w", params.Profile, i, err)
+		for j := 0; j < messagesPer; j++ {
+			imageSpec, err := gen.IMessage(imSpec, factory.MatchSeeded, h.MacHostID(), factory.WithMessageAge(interactionSpreadAge(j)))
+			if err != nil {
+				return res, fmt.Errorf("profile %s: build imessage spec %d msg %d: %w", params.Profile, i, j, err)
+			}
+			if _, err := h.ReplayIMessage(ctx, imContact.ID, imageSpec); err != nil {
+				return res, fmt.Errorf("profile %s: replay imessage %d msg %d: %w", params.Profile, i, j, err)
+			}
+			res.SettledInteractions++
 		}
 		res.IMessageSettled++
 	}
@@ -821,6 +865,21 @@ func perSourceSettledCount(p Profile) int {
 		return 3
 	}
 	return 1
+}
+
+// interactionSpreadInterval is the deterministic gap between successive settled
+// interactions on one contact. It is wider than a day so the messaging-aggregate
+// sources (gchat / messages / telegram), which collapse same-day messages into a
+// single interaction, still yield one interaction per replayed message; ~3 weeks
+// gives a months-scale history at the profile message counts.
+const interactionSpreadInterval = 21 * 24 * time.Hour
+
+// interactionSpreadAge is the backward age of the j-th settled message on a
+// contact: 0 for the newest (so it drives last_contacted), then one
+// interactionSpreadInterval older per step. Deterministic (a pure function of j),
+// anchor-relative via the source factories' WithMessageAge (no time.Now()).
+func interactionSpreadAge(j int) time.Duration {
+	return time.Duration(j) * interactionSpreadInterval
 }
 
 // SeedAllowed is the single chokepoint guard the seed/reset entrypoints route

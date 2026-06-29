@@ -2096,6 +2096,14 @@ type Querier interface {
 	// exact key columns + partial predicate of the eligible/stale-claim indexes
 	// (migration 073). Read-only catalog access, mirroring TestListPublicTables.
 	TestListIndexDefsForComms(ctx context.Context) ([]*TestListIndexDefsForCommsRow, error)
+	// Profile coverage test only: for the namespace's contacts (by full_name prefix)
+	// that have interactions, return the per-contact interaction count and the span
+	// (in seconds) between the earliest and latest interaction, so the test can
+	// assert the dedicated settled contacts carry MULTIPLE interactions spread over
+	// TIME (count ≥ 2 with a multi-day span) rather than a single ~1h window. The
+	// INNER JOIN excludes the interaction-free edge-case catalog contacts. Caller
+	// passes a BARE prefix; '%' appended.
+	TestListInteractionSpreadByContactNamePrefix(ctx context.Context, namePrefix pgtype.Text) ([]*TestListInteractionSpreadByContactNamePrefixRow, error)
 	// Reset integration test only: enumerate every base table in the public schema
 	// so the catalog guard can assert each is in the wiped list, is schema_migrations,
 	// or matches the river_% allowlist. Read-only catalog access.

@@ -687,6 +687,37 @@ func (r *SyntheticSupportRepository) ListContactBucketsByNamePrefix(ctx context.
 	return out, nil
 }
 
+// InteractionSpread is the per-contact interaction-history projection of a seeded
+// contact (profile coverage test only): how many interactions it carries and the
+// span between its earliest and latest one.
+type InteractionSpread struct {
+	ContactID        uuid.UUID
+	InteractionCount int64
+	Span             time.Duration
+}
+
+// ListInteractionSpreadByContactNamePrefix returns, for the namespace's contacts
+// (by full_name prefix) that have interactions, the per-contact interaction count
+// and the span between the earliest and latest interaction, so the profile
+// coverage test can assert the dedicated settled contacts carry MULTIPLE
+// interactions spread over TIME (count ≥ 2 with a multi-day span) rather than a
+// single window. Test only.
+func (r *SyntheticSupportRepository) ListInteractionSpreadByContactNamePrefix(ctx context.Context, namePrefix string) ([]InteractionSpread, error) {
+	rows, err := r.queries.TestListInteractionSpreadByContactNamePrefix(ctx, pgtype.Text{String: namePrefix, Valid: true})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]InteractionSpread, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, InteractionSpread{
+			ContactID:        uuid.UUID(row.ID.Bytes),
+			InteractionCount: row.InteractionCount,
+			Span:             time.Duration(row.SpanSeconds) * time.Second,
+		})
+	}
+	return out, nil
+}
+
 // --- Graph identity support -------------------------------------------------
 
 // CountNodesByLabelPrefix counts nodes whose canonical_label is ns-prefixed, so
