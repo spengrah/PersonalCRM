@@ -24,6 +24,7 @@ import (
 	"personal-crm/backend/internal/consumer"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
+	"personal-crm/backend/internal/google"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/synthetic/factory"
@@ -288,6 +289,51 @@ func (h *Harness) SeedEntity(ctx context.Context, spec factory.EntitySpec) (uuid
 		return uuid.Nil, fmt.Errorf("seed entity: commit: %w", err)
 	}
 	return nodeID, nil
+}
+
+// SeedExternalContactCandidate writes one UNMATCHED external_contact import
+// candidate through the PRODUCTION ExternalContactRepository.Upsert path — the
+// SAME write the Google sync providers use for sources the ingest registry does
+// NOT allow (gcontacts: google/contacts.go; gmail_correspondence:
+// google/gmail_correspondence.go). The Upsert hardcodes match_status='unmatched'
+// on insert, so this produces an Imports-queue candidate only (matched/linked
+// candidates need the match path and are out of scope here). The field shape
+// mirrors each provider so the Imports UI renders the candidate: gcontacts is
+// account-scoped with first/last name and an id-shaped source_id; the
+// correspondence source keys its source_id on the email and carries the evidence
+// metadata the card reads. The ns-prefixed source_id is reclaimed by the
+// teardown's external_contact source_id-prefix sweep — no per-id tracking needed.
+// Returns the created row id.
+func (h *Harness) SeedExternalContactCandidate(ctx context.Context, spec factory.ExternalContactCandidateSpec) (uuid.UUID, error) {
+	now := accelerated.GetCurrentTime()
+	req := repository.UpsertExternalContactRequest{
+		Source:      spec.Source,
+		DisplayName: &spec.DisplayName,
+		Emails:      []repository.EmailEntry{{Value: spec.Email, Primary: true}},
+		SyncedAt:    &now,
+	}
+	switch spec.Source {
+	case google.CorrespondenceSource:
+		// The correspondence discoverer keys source_id on the email address and
+		// attaches the evidence metadata the card renders (observed names + count).
+		req.SourceID = spec.Email
+		req.Metadata = map[string]any{
+			"display_names_seen": []string{spec.DisplayName},
+			"message_count":      1,
+		}
+	default:
+		// Address-book sources (gcontacts) are account-scoped, id-keyed, and carry
+		// the name parts the provider extracts from the Person record.
+		req.SourceID = spec.EntityID
+		req.AccountID = &spec.AccountID
+		req.FirstName = &spec.FirstName
+		req.LastName = &spec.LastName
+	}
+	ec, err := h.externalRepo.Upsert(ctx, req)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("seed external contact candidate (%s): %w", spec.Source, err)
+	}
+	return ec.ID, nil
 }
 
 // SeedRelationshipSignal writes one relationship_signal row for a seeded node

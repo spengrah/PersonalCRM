@@ -1815,9 +1815,22 @@ type Querier interface {
 	// unmatched candidates for this namespace. Caller passes a BARE prefix; '%'
 	// appended here.
 	SyntheticCountUnmatchedExternalContactByEmailPrefix(ctx context.Context, sourceIDPrefix pgtype.Text) (int64, error)
+	// Coverage (Imports subtabs): count UNMATCHED external_contact candidates for a
+	// given source whose source_id is ns-prefixed. The direct-upsert (gcontacts,
+	// gmail_correspondence) + ingest (anarlog_humans) import producers all carry an
+	// ns-prefixed source_id, so the prod-shaped coverage check asserts each subtab has
+	// ≥1 candidate scoped to its own namespace on the shared test DB. Caller passes a
+	// BARE prefix; '%' appended here.
+	SyntheticCountUnmatchedExternalContactBySourceAndSourceIdPrefix(ctx context.Context, arg SyntheticCountUnmatchedExternalContactBySourceAndSourceIdPrefixParams) (int64, error)
 	// Settle Gate A (Mac-contact unknown-sender): the external_contact row for the
 	// entity id exists with match_status='unmatched'.
 	SyntheticCountUnmatchedExternalContactBySourceId(ctx context.Context, sourceID string) (int64, error)
+	// Coverage (Imports telegram-discovery subtab): count UNMATCHED telegram discovery
+	// external_contact candidates whose source_id (the BARE peer id, NOT ns-prefixed)
+	// falls in this namespace's reserved peer band [band_start, band_end). The CASE
+	// guards the bigint cast for non-numeric telegram source_ids (other tests create
+	// text source ids), mirroring SyntheticCountTelegramBarePeerRowsInBand.
+	SyntheticCountUnmatchedTelegramDiscoveryInBand(ctx context.Context, arg SyntheticCountUnmatchedTelegramDiscoveryInBandParams) (int64, error)
 	// Cleanup assertion — count surviving venue nodes among the given ids (scoped to
 	// THIS run's tracked venue node ids, so it is immune to parallel tests creating
 	// their own venue nodes on the shared DB, unlike a global venue-node count).
@@ -1976,6 +1989,13 @@ type Querier interface {
 	// (interaction.recorded uses interaction.ID as source_id, calendar.attended
 	// uses an internal ref, etc.) generically via payload->>'contact_id'.
 	SyntheticListEventIdsForContacts(ctx context.Context, contactIds []string) ([]pgtype.UUID, error)
+	// Determinism fingerprint (import producers): the (source, source_id) of every live
+	// external_contact whose source_id is ns-prefixed, sorted, so a determinism test can
+	// assert the import-candidate source_ids are byte-identical across two seed runs in
+	// the same namespace. (Telegram discovery candidates key on the bare peer id, not the
+	// prefix, so they are excluded here — their determinism rides the deterministic peer
+	// band + the run-to-run ProfileResult count equality.) Caller passes a BARE prefix.
+	SyntheticListExternalContactSourceIdsByPrefix(ctx context.Context, sourceIDPrefix pgtype.Text) ([]*SyntheticListExternalContactSourceIdsByPrefixRow, error)
 	// Reset integration test only: count ALL rows in a single table by name. Used by
 	// the clone-DB reset test to assert each wiped table is empty after the reset and
 	// that schema_migrations survives. The table name is validated against the wiped

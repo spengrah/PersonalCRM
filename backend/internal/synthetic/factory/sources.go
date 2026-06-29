@@ -412,11 +412,21 @@ type MacContactSpec struct {
 	Intent   MatchIntent
 }
 
-// MacContact builds an external_contact.upserted envelope whose email matches
-// the target contact (MatchSeeded → linked to seeded contact) or is unknown
-// (MatchUnknown → external_contact.match_status='unmatched'). hostID is the
-// revoked synthetic host.
+// MacContact builds an icloud_contacts external_contact.upserted envelope whose
+// email matches the target contact (MatchSeeded → linked to seeded contact) or
+// is unknown (MatchUnknown → external_contact.match_status='unmatched'). hostID
+// is the revoked synthetic host.
 func (g *Generator) MacContact(target ContactSpec, intent MatchIntent, hostID uuid.UUID) (MacContactSpec, error) {
+	return g.MacContactForSource(target, intent, hostID, "icloud_contacts")
+}
+
+// MacContactForSource is MacContact parameterized by the external_contact ingest
+// source. source MUST be an ingest-allowed external_contact source
+// (icloud_contacts or anarlog_humans — service.externalContactAllowedSources);
+// the ReplayMacContacts adapter feeds the envelope through IngestService, which
+// rejects any other source. Used to emit anarlog_humans import candidates (an
+// Imports subtab the icloud path does not cover) through the same ingest pipeline.
+func (g *Generator) MacContactForSource(target ContactSpec, intent MatchIntent, hostID uuid.UUID, source string) (MacContactSpec, error) {
 	seq := g.bumpSourceSeq()
 	entityID := fmt.Sprintf("%sec-%d", g.Prefix(), seq)
 
@@ -429,7 +439,7 @@ func (g *Generator) MacContact(target ContactSpec, intent MatchIntent, hostID uu
 	payload := events.ExternalContactUpsertedPayload{
 		Version:     1,
 		HostID:      hostID,
-		Source:      "icloud_contacts",
+		Source:      source,
 		EntityID:    entityID,
 		DisplayName: &displayName,
 		Emails:      []events.ExternalContactMethodValue{{Value: email, Primary: true}},
@@ -440,7 +450,7 @@ func (g *Generator) MacContact(target ContactSpec, intent MatchIntent, hostID uu
 	}
 	return MacContactSpec{
 		Envelope: &events.Envelope{
-			Source:     "icloud_contacts",
+			Source:     source,
 			SourceID:   entityID,
 			Kind:       events.KindExternalContactUpserted,
 			Payload:    raw,
@@ -449,6 +459,47 @@ func (g *Generator) MacContact(target ContactSpec, intent MatchIntent, hostID uu
 		EntityID: entityID,
 		Intent:   intent,
 	}, nil
+}
+
+// --- Direct-upsert external_contact candidates (gcontacts/gmail_correspondence) -
+
+// ExternalContactCandidateSpec is a direct-upsert (non-ingest) external_contact
+// import candidate — the shape the Google sync providers write straight through
+// ExternalContactRepository.Upsert (gcontacts via contacts.go, gmail_correspondence
+// via gmail_correspondence.go). Those sources are NOT ingest-allowed, so the seed
+// mirrors the providers' write path rather than the ingest envelope path. The
+// replay harness maps this neutral spec into an UpsertExternalContactRequest and
+// chooses the source_id keying + extra fields per source. All identifiers are
+// ns-prefixed (so the teardown's source_id-prefix sweep reclaims the row); the
+// email is an unknown *.example address no seeded contact owns, so the upsert lands
+// match_status='unmatched' (the Imports-queue surface).
+type ExternalContactCandidateSpec struct {
+	Source      string
+	EntityID    string // ns-prefixed id-shaped key (the source_id for id-keyed sources, e.g. gcontacts)
+	Email       string // unknown *.example address (the source_id for email-keyed sources, e.g. gmail_correspondence)
+	DisplayName string
+	FirstName   string
+	LastName    string
+	AccountID   string // the connected account ("me"); the harness sets it only for account-scoped sources
+}
+
+// ExternalContactCandidate builds a neutral UNMATCHED import-candidate spec for a
+// direct-upsert source. It generates deterministic ns-prefixed identifiers (id +
+// unknown email) plus display/name parts; the harness's SeedExternalContactCandidate
+// decides which become the external_contact.source_id and which extra fields apply
+// for the given source. Deterministic (source seq), no PRNG name draw.
+func (g *Generator) ExternalContactCandidate(source string) ExternalContactCandidateSpec {
+	seq := g.bumpSourceSeq()
+	ns := g.Prefix()
+	return ExternalContactCandidateSpec{
+		Source:      source,
+		EntityID:    fmt.Sprintf("%scand-%d", ns, seq),
+		Email:       fmt.Sprintf("%scand-%d@synthetic.example", ns, seq),
+		DisplayName: fmt.Sprintf("%sImport Candidate %d", ns, seq),
+		FirstName:   ns + "Import",
+		LastName:    fmt.Sprintf("Candidate%d", seq),
+		AccountID:   g.accountEmail(),
+	}
 }
 
 // --- Todoist (fake Client SyncItem) ----------------------------------------

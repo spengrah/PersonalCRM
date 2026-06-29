@@ -93,6 +93,10 @@ func TestProfileParams(t *testing.T) {
 	// tombstoned + re-pointed graph rows to assert.
 	require.Greater(t, prod.Counts.SeededSoftDeleted, 0)
 	require.Greater(t, prod.Counts.SeededMerged, 0)
+	// prod-shaped seeds per-subtab Imports candidates (gcontacts/gmail_correspondence/
+	// anarlog_humans/telegram-discovery) so the coverage check can assert every Imports
+	// subtab has a queue.
+	require.Greater(t, prod.Counts.ImportCandidatesPerSource, 0)
 }
 
 // TestDefaultParamsUnchanged pins DefaultParams field-for-field so the
@@ -120,4 +124,5 @@ func TestDefaultParamsUnchanged(t *testing.T) {
 	require.Equal(t, 0, p.Counts.MessagesPerContact)
 	require.Equal(t, 0, p.Counts.SeededSoftDeleted)
 	require.Equal(t, 0, p.Counts.SeededMerged)
+	require.Equal(t, 0, p.Counts.ImportCandidatesPerSource)
 }

@@ -145,6 +145,13 @@ func TestSyntheticProfile_DevCoversCatalog(t *testing.T) {
 	require.Equal(t, params.Counts.SeededSoftDeleted, res.SeededSoftDeleted, "dev profile seeds soft-deleted contacts")
 	require.Equal(t, params.Counts.SeededMerged, res.SeededMerged, "dev profile seeds merged contact pairs")
 
+	// Import-source candidates: one per subtab per ImportCandidatesPerSource, seeded at
+	// full count (independent of catalog size), so each result equals the dev knob.
+	require.Equal(t, params.Counts.ImportCandidatesPerSource, res.UnmatchedGContacts, "dev profile seeds gcontacts candidates")
+	require.Equal(t, params.Counts.ImportCandidatesPerSource, res.UnmatchedGmailCorrespondence, "dev profile seeds gmail_correspondence candidates")
+	require.Equal(t, params.Counts.ImportCandidatesPerSource, res.UnmatchedAnarlogHumans, "dev profile seeds anarlog_humans candidates")
+	require.Equal(t, params.Counts.ImportCandidatesPerSource, res.TelegramDiscovery, "dev profile seeds telegram discovery candidates")
+
 	remaining, err := h.ContactsRemaining(ctx)
 	require.NoError(t, err)
 	require.Greater(t, remaining, int64(0), "dev profile seeds catalog contacts")
@@ -204,6 +211,11 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	// assert the tombstone + assertion re-point invariants below.
 	params.Counts.SeededSoftDeleted = 1
 	params.Counts.SeededMerged = 1
+	// One candidate per Imports subtab (gcontacts/gmail_correspondence/anarlog_humans/
+	// telegram-discovery): the CI-safe minimum that still gives each subtab ≥1 queue
+	// entry. Kept at 1 to bound the settle budget (telegram discovery replays 3 group
+	// messages + settles; anarlog ingests + settles).
+	params.Counts.ImportCandidatesPerSource = 1
 
 	h := synthetic.NewHarnessForNamespace(t, ctx, database, params.Namespace, params.Seed)
 	res, err := synthetic.RunProfile(ctx, h, params)
@@ -462,6 +474,24 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	require.GreaterOrEqual(t, winnerLiveAssertions, int64(2*len(winnerIDs)),
 		"merge-winner carries its own + the re-pointed loser assertion (≥2 per pair)")
 
+	// Import-source candidates (item 13): EVERY Imports subtab must have ≥1 unmatched
+	// candidate so staging's Imports queue is populated. Assert both the result counter
+	// and the actual DB row, scoped to THIS namespace. gcontacts/gmail_correspondence/
+	// anarlog_humans carry an ns-prefixed source_id; telegram discovery keys on the bare
+	// peer id, so it is scoped by the namespace's reserved peer band instead.
+	require.GreaterOrEqual(t, res.UnmatchedGContacts, 1, "gcontacts candidate seeded")
+	require.GreaterOrEqual(t, res.UnmatchedGmailCorrespondence, 1, "gmail_correspondence candidate seeded")
+	require.GreaterOrEqual(t, res.UnmatchedAnarlogHumans, 1, "anarlog_humans candidate seeded")
+	require.GreaterOrEqual(t, res.TelegramDiscovery, 1, "telegram discovery candidate seeded")
+	for _, source := range []string{"gcontacts", "gmail_correspondence", "anarlog_humans"} {
+		count, err := support.CountUnmatchedExternalContactBySourceAndPrefix(ctx, source, prefix)
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, count, int64(1), "≥1 unmatched %q import candidate present", source)
+	}
+	tgDiscovery, err := support.CountUnmatchedTelegramDiscoveryInBand(ctx, h.Generator().PeerBandStart(), h.Generator().PeerBandEnd())
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, tgDiscovery, int64(1), "≥1 unmatched telegram discovery candidate present")
+
 	remaining, err := h.ContactsRemaining(ctx)
 	require.NoError(t, err)
 	require.Greater(t, remaining, int64(0), "prod-shaped profile seeds contacts")
@@ -537,6 +567,11 @@ func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
 	// merged_into self-FK is the trickiest sweep) is asserted FK-clean below.
 	params.Counts.SeededSoftDeleted = 1
 	params.Counts.SeededMerged = 1
+	// One candidate per Imports subtab so the import-producer source_ids participate in
+	// the determinism fingerprint (the direct-upsert + ingest source_ids are ns-prefixed)
+	// and the run-to-run ProfileResult count equality, and the teardown of the
+	// external_contact candidates is asserted clean below.
+	params.Counts.ImportCandidatesPerSource = 1
 
 	// Capture the generator anchor ONCE and reuse it for both runs: identical
 	// across runs (so timestamped output incl. birthday value_date is
@@ -548,11 +583,12 @@ func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 
 	// run seeds the profile, captures (ProfileResult, assertion fingerprint, entity
-	// normalized_name fingerprint), then fully tears down so the next run starts from
-	// a clean namespace. It also asserts the teardown swept every entity node (pool
-	// + place) — a leaked entity node would FK-block or duplicate-violate the next
-	// run, and a surviving place node from a `within` edge would FK-block the sweep.
-	run := func() (synthetic.ProfileResult, []repository.AssertionSummary, []repository.EntityNameSummary) {
+	// normalized_name fingerprint, import-candidate source_id fingerprint), then fully
+	// tears down so the next run starts from a clean namespace. It also asserts the
+	// teardown swept every entity node (pool + place) — a leaked entity node would
+	// FK-block or duplicate-violate the next run, and a surviving place node from a
+	// `within` edge would FK-block the sweep — and every import-candidate row.
+	run := func() (synthetic.ProfileResult, []repository.AssertionSummary, []repository.EntityNameSummary, []repository.ExternalContactSummary) {
 		h, teardown, err := synthetic.NewHarnessWithDBForNamespaceAt(ctx, database, params.Namespace, params.Seed, anchor)
 		require.NoError(t, err)
 		res, err := synthetic.RunProfile(ctx, h, params)
@@ -562,12 +598,29 @@ func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
 		require.NoError(t, err)
 		entFP, err := support.ListEntityNamesByNodePrefix(ctx, prefix)
 		require.NoError(t, err)
+		// Import-producer fingerprint: the ns-prefixed external_contact source_ids
+		// (gcontacts/gmail_correspondence/anarlog_humans + the existing icloud/gcal
+		// candidates). The telegram discovery candidate keys on the bare peer id (not
+		// the prefix), so it is excluded here; its determinism rides the deterministic
+		// peer band + the run-to-run ProfileResult count equality.
+		extFP, err := support.ListExternalContactSourceIDsByPrefix(ctx, prefix)
+		require.NoError(t, err)
 		require.NoError(t, teardown(context.Background()))
 		// Teardown correctness: the entity nodes (org/topic/tag pool + place nodes)
 		// are swept, so the namespace is clean for the next run.
 		remaining, err := support.ListEntityNamesByNodePrefix(ctx, prefix)
 		require.NoError(t, err)
 		require.Empty(t, remaining, "entity nodes (pool + place) swept by teardown")
+		// Teardown correctness: the import-candidate external_contact rows are swept —
+		// the ns-prefixed ones (gcontacts/gmail_correspondence/anarlog/icloud/gcal) by
+		// the source_id-prefix sweep, the telegram discovery candidate (bare peer id) by
+		// the telegram-peer sweep — so none remain for the next run.
+		extRemaining, err := support.ListExternalContactSourceIDsByPrefix(ctx, prefix)
+		require.NoError(t, err)
+		require.Empty(t, extRemaining, "ns-prefixed external_contact candidates swept by teardown")
+		tgDiscoveryRemaining, err := support.CountUnmatchedTelegramDiscoveryInBand(ctx, h.Generator().PeerBandStart(), h.Generator().PeerBandEnd())
+		require.NoError(t, err)
+		require.Zero(t, tgDiscoveryRemaining, "telegram discovery candidate swept by teardown")
 		// Teardown correctness: the relationship_signal rows (FK→node, NO ACTION) are
 		// swept BEFORE the node deletes, so none remain for the seeded subject nodes —
 		// a leaked signal would FK-block the next run's person-node delete.
@@ -582,17 +635,19 @@ func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
 		contactsRemaining, err := h.ContactsRemaining(ctx)
 		require.NoError(t, err)
 		require.Zero(t, contactsRemaining, "all seeded contacts (incl. merge/soft-delete) swept by teardown")
-		return res, fp, entFP
+		return res, fp, entFP, extFP
 	}
 
-	res1, fp1, ent1 := run()
-	res2, fp2, ent2 := run()
+	res1, fp1, ent1, ext1 := run()
+	res2, fp2, ent2, ext2 := run()
 
 	require.Equal(t, res1, res2, "prod-shaped ProfileResult must be deterministic across runs")
 	require.NotEmpty(t, fp1, "the seed must produce assertions to fingerprint")
 	require.Equal(t, fp1, fp2, "assertion (value_text, value_date, value_bool) fingerprint must be deterministic across runs")
 	require.NotEmpty(t, ent1, "the seed must produce entity nodes to fingerprint")
 	require.Equal(t, ent1, ent2, "entity (subtype, normalized_name) fingerprint must be deterministic across runs")
+	require.NotEmpty(t, ext1, "the seed must produce import-candidate external_contact rows to fingerprint")
+	require.Equal(t, ext1, ext2, "import-candidate (source, source_id) fingerprint must be deterministic across runs")
 
 	// Ordering guard for the "seed gen.X() LAST" rule. The run-to-run
 	// comparison above catches NON-deterministic drift but NOT a DETERMINISTIC

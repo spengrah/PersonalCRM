@@ -478,6 +478,44 @@ WHERE source = 'gcal_attendee'
   AND match_status = 'unmatched'
   AND deleted_at IS NULL;
 
+-- name: SyntheticCountUnmatchedExternalContactBySourceAndSourceIdPrefix :one
+-- Coverage (Imports subtabs): count UNMATCHED external_contact candidates for a
+-- given source whose source_id is ns-prefixed. The direct-upsert (gcontacts,
+-- gmail_correspondence) + ingest (anarlog_humans) import producers all carry an
+-- ns-prefixed source_id, so the prod-shaped coverage check asserts each subtab has
+-- ≥1 candidate scoped to its own namespace on the shared test DB. Caller passes a
+-- BARE prefix; '%' appended here.
+SELECT COUNT(*) FROM external_contact
+WHERE source = @source
+  AND source_id LIKE @source_id_prefix || '%'
+  AND match_status = 'unmatched'
+  AND deleted_at IS NULL;
+
+-- name: SyntheticCountUnmatchedTelegramDiscoveryInBand :one
+-- Coverage (Imports telegram-discovery subtab): count UNMATCHED telegram discovery
+-- external_contact candidates whose source_id (the BARE peer id, NOT ns-prefixed)
+-- falls in this namespace's reserved peer band [band_start, band_end). The CASE
+-- guards the bigint cast for non-numeric telegram source_ids (other tests create
+-- text source ids), mirroring SyntheticCountTelegramBarePeerRowsInBand.
+SELECT COUNT(*) FROM external_contact
+WHERE source = 'telegram'
+  AND match_status = 'unmatched'
+  AND deleted_at IS NULL
+  AND (CASE WHEN source_id ~ '^[0-9]{1,18}$' THEN source_id::bigint END) >= @band_start::bigint
+  AND (CASE WHEN source_id ~ '^[0-9]{1,18}$' THEN source_id::bigint END) < @band_end::bigint;
+
+-- name: SyntheticListExternalContactSourceIdsByPrefix :many
+-- Determinism fingerprint (import producers): the (source, source_id) of every live
+-- external_contact whose source_id is ns-prefixed, sorted, so a determinism test can
+-- assert the import-candidate source_ids are byte-identical across two seed runs in
+-- the same namespace. (Telegram discovery candidates key on the bare peer id, not the
+-- prefix, so they are excluded here — their determinism rides the deterministic peer
+-- band + the run-to-run ProfileResult count equality.) Caller passes a BARE prefix.
+SELECT source, source_id FROM external_contact
+WHERE source_id LIKE @source_id_prefix || '%'
+  AND deleted_at IS NULL
+ORDER BY source, source_id;
+
 -- name: SyntheticCountTelegramMessagesByChatAndMessageId :one
 -- Group assertion: count telegram_message rows for (telegram_chat_id,
 -- telegram_message_id). Tests assert 0 for the untracked-by-size group case (the
