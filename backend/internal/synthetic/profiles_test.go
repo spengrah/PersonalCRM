@@ -79,6 +79,10 @@ func TestProfileParams(t *testing.T) {
 	// prod-shaped enables cadence-task seeding (>0 gate) so the coverage check has
 	// contact_task rows to assert per-state.
 	require.Greater(t, prod.Counts.SeededTasks, 0)
+	// prod-shaped seeds an entity pool + person→entity edges so the coverage check
+	// has org/topic/tag entity nodes + works_at/interested_in/tagged_as edges.
+	require.Greater(t, prod.Counts.SeededEntities, 0)
+	require.Greater(t, prod.Counts.SeededEntityEdges, 0)
 }
 
 // TestDefaultParamsUnchanged pins DefaultParams field-for-field so the
@@ -100,4 +104,6 @@ func TestDefaultParamsUnchanged(t *testing.T) {
 	require.Equal(t, 0, p.Counts.SeededBoolFacts)
 	require.Equal(t, 0, p.Counts.SeededRelationships)
 	require.Equal(t, 0, p.Counts.SeededTasks)
+	require.Equal(t, 0, p.Counts.SeededEntities)
+	require.Equal(t, 0, p.Counts.SeededEntityEdges)
 }

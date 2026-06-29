@@ -259,6 +259,21 @@ func (h *Harness) cleanup(ctx context.Context) error {
 		_, err := h.support.DeleteNodesByIds(ctx, c.contactIDs)
 		return err
 	})
+	// 13a-entity. entity nodes (place/org/topic/tag): SeedEntity mints org/topic/tag
+	// nodes and the contact-create authority flip (WithLocation) mints place nodes;
+	// both carry an ns-prefixed canonical_label, so one label-prefix sweep removes
+	// them (the entity subtype rows cascade on the node delete). Runs AFTER the
+	// assertions step (the assertion→node FK is RESTRICT, and person→entity edges
+	// reference these nodes as the OBJECT) so no edge still points at them. It
+	// re-matches the already-deleted ns-prefixed person nodes harmlessly (0 rows) and
+	// misses the empty-label venue nodes (cleaned by the by-id venue step below). A
+	// surviving place→place `within` edge — which EnsurePlaceTx does NOT mint today
+	// (flat place nodes) — would FK-block this delete loudly; the coverage test
+	// asserts zero such edges so the regression is caught before this point.
+	step("graph_entity_nodes", func() error {
+		_, err := h.support.DeleteNodesByLabelPrefix(ctx, prefix)
+		return err
+	})
 	// 13b. venue node (interaction.venue_id → node): the real recorders mint a
 	// venue node per distinct container on the replay path. They are not contacts
 	// (so person_node misses them) and have an empty canonical_label (so the

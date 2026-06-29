@@ -904,3 +904,37 @@ func (r *SyntheticSupportRepository) DeleteTagsByIds(ctx context.Context, tagIDs
 func (r *SyntheticSupportRepository) CountTaggedAsAssertionsForSubject(ctx context.Context, subjectNodeID uuid.UUID) (int64, error) {
 	return r.queries.TestCountTaggedAsAssertionsForSubject(ctx, pgtype.UUID{Bytes: subjectNodeID, Valid: true})
 }
+
+// EntityNameSummary is the (subtype, normalized_name) projection of an entity node
+// whose node label is ns-prefixed — the profile coverage / determinism / teardown
+// fingerprint of the org/topic/tag pool + the place nodes the contact-create
+// authority flip minted from WithLocation.
+type EntityNameSummary struct {
+	Subtype        string
+	NormalizedName string
+}
+
+// ListEntityNamesByNodePrefix returns the entity subtype rows whose node's
+// canonical_label is ns-prefixed, sorted, so a profile test can assert each
+// expected subtype is present (coverage), fingerprint the generated normalized
+// names across a re-run (determinism), and assert the list is empty after teardown
+// (cleanup). Caller passes a BARE prefix.
+func (r *SyntheticSupportRepository) ListEntityNamesByNodePrefix(ctx context.Context, prefix string) ([]EntityNameSummary, error) {
+	rows, err := r.queries.SyntheticListEntityNamesByNodePrefix(ctx, pgtype.Text{String: prefix, Valid: true})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]EntityNameSummary, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, EntityNameSummary{Subtype: row.Subtype, NormalizedName: row.NormalizedName})
+	}
+	return out, nil
+}
+
+// CountContactTagsByContactNamePrefix counts legacy contact_tag rows whose
+// contact's full_name is ns-prefixed, so the prod-shaped coverage check can assert
+// the seed leaves the legacy table at ZERO (tags are modeled as `tagged_as` graph
+// edges, not contact_tag rows). Caller passes a BARE prefix.
+func (r *SyntheticSupportRepository) CountContactTagsByContactNamePrefix(ctx context.Context, namePrefix string) (int64, error) {
+	return r.queries.SyntheticCountContactTagsByContactNamePrefix(ctx, pgtype.Text{String: namePrefix, Valid: true})
+}

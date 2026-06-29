@@ -1663,6 +1663,12 @@ type Querier interface {
 	// rows whose normalized value shares the namespace's phone prefix. Caller passes
 	// a BARE prefix; '%' is appended here.
 	SyntheticCountContactMethodsByValueNormalizedPrefix(ctx context.Context, valueNormalizedPrefix pgtype.Text) (int64, error)
+	// Profile coverage test only: count legacy contact_tag rows whose contact's
+	// full_name is ns-prefixed. The prod-shaped seed models tags as `tagged_as` graph
+	// edges (the SP1 live path), NOT legacy contact_tag rows, so this MUST stay ZERO —
+	// a positive guard so a future reader does not "fix" a perceived gap by re-seeding
+	// the legacy table. Caller passes a BARE prefix; '%' is appended here.
+	SyntheticCountContactTagsByContactNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error)
 	// Profile coverage test only: count contact_task rows in a given state whose
 	// contact's full_name is ns-prefixed, so the prod-shaped coverage check can assert
 	// each surface state (managed/unmanaged/completed/dismissed) has ≥1 representative
@@ -1897,6 +1903,17 @@ type Querier interface {
 	// cleanup removes exactly those rows and never strands a task on an unrelated
 	// contact in the shared test DB.
 	SyntheticListContactTaskIdsByProvider(ctx context.Context, provider string) ([]pgtype.UUID, error)
+	// Profile coverage + determinism + teardown test support: list the entity subtype
+	// rows whose node's canonical_label is ns-prefixed — the org/topic/tag pool nodes
+	// (SeedEntity) AND the place nodes the contact-create authority flip minted from
+	// WithLocation. The coverage check asserts each expected subtype (place/
+	// organization/topic/tag) is present; the determinism check fingerprints the sorted
+	// (subtype, normalized_name) set across a re-run (these are deterministic
+	// ns-prefixed synthetic strings — the entity-node generated-id kind); the
+	// teardown check asserts the list is EMPTY after cleanup (the entity nodes were
+	// swept). Deterministically ordered so the fingerprint is stable. Caller passes a
+	// BARE prefix; '%' is appended here.
+	SyntheticListEntityNamesByNodePrefix(ctx context.Context, labelPrefix pgtype.Text) ([]*SyntheticListEntityNamesByNodePrefixRow, error)
 	// Cleanup event-id capture (part 2): adapter-direct root events that carry NO
 	// CRM contact id (raw_message.* / external_contact.upserted roots, and
 	// unknown/pending replays that touch no seeded contact). Keyed by the

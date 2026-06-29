@@ -107,6 +107,21 @@ type Counts struct {
 	// for surface coverage. ProfileResult.SeededTasks reports the actual rows. 0
 	// disables (minimal-scoped stays task-free / byte-stable).
 	SeededTasks int
+	// SeededEntities is the size of the org/topic/tag entity pool the profile
+	// creates (round-robin across the three subtypes, so a value ≥3 yields ≥1 of
+	// each). The pool is intentionally SMALL so the person→entity edges below draw
+	// objects from it repeatedly (prod-like: many people share a few orgs/topics/
+	// tags). >0 enables the entity pool + person→entity edge seeding; 0 disables.
+	SeededEntities int
+	// SeededEntityEdges is the number of person→entity EDGE assertions seeded across
+	// the catalog person nodes (cycling works_at→org / interested_in→topic /
+	// tagged_as→tag, all auto-if-confident → accepted), with objects drawn from the
+	// SeededEntities pool. Bounded by the catalog size at run time (works_at and
+	// lives_in are single-cardinality, so one per subject). Needs SeededEntities ≥3
+	// so every edge type has an object. 0 disables. (lives_in is NOT counted here —
+	// it rides the contact-create authority flip via WithLocation, index-spread like
+	// the birthday/how_met bio facts.)
+	SeededEntityEdges int
 }
 
 // SeedParams is the profile/volume seam consumed by the seed orchestration.

@@ -53,11 +53,14 @@ type ProfileResult struct {
 	UnmatchedCalendar int
 	OrphanMeetingNote int
 	SeededAssertions  int
-	// ContactsWithBirthday / ContactsWithHowMet count the catalog contacts that
-	// carried a birthday / how_met bio fact (produced through the contact-create
-	// authority-flip path, not the Phase-4 assertion loop). Counts-only / no PII.
+	// ContactsWithBirthday / ContactsWithHowMet / ContactsWithLocation count the
+	// catalog contacts that carried a birthday / how_met / location bio fact
+	// (produced through the contact-create authority-flip path, not the Phase-4
+	// assertion loop). A location additionally mints a place entity node + a
+	// `lives_in` edge. Counts-only / no PII.
 	ContactsWithBirthday int
 	ContactsWithHowMet   int
+	ContactsWithLocation int
 	// SeededTasks counts the contact_task rows the profile seeded — one `managed`
 	// cadence task per cadence-bearing catalog contact (via ReplayTodoist's
 	// reconcile), a deterministic three of which are then transitioned to the
@@ -72,6 +75,13 @@ type ProfileResult struct {
 	SeededBoolFacts     int
 	SeededRelationships int
 	SeededDateFacts     int
+	// SeededEntities / SeededEntityEdges count the graph rows the entity layer
+	// seeded: the org/topic/tag entity nodes in the pool, and the person→entity edge
+	// assertions (works_at/interested_in/tagged_as) drawn from that pool. Counts-only
+	// / no PII. (The place entity nodes + lives_in edges from WithLocation are
+	// reflected by ContactsWithLocation, not here.)
+	SeededEntities    int
+	SeededEntityEdges int
 }
 
 // ProfileParams returns the default SeedParams for a named profile (error on an
@@ -105,6 +115,10 @@ func ProfileParams(name Profile) (SeedParams, error) {
 				// cadence-bearing, so reconcile creates a managed task on each and
 				// three are transitioned for surface coverage.
 				SeededTasks: 1,
+				// Small entity pool (1 org + 1 topic + 1 tag) + a few person→entity
+				// edges so the dev graph surfaces show works_at/interested_in/tagged_as.
+				SeededEntities:    3,
+				SeededEntityEdges: 6,
 			},
 		}, nil
 	case ProfileProdShaped:
@@ -135,6 +149,12 @@ func ProfileParams(name Profile) (SeedParams, error) {
 				// each (catalog-wide, like prod) and three are transitioned to the
 				// completed/dismissed/unmanaged surface states.
 				SeededTasks: 1,
+				// Small org/topic/tag pool (3 each) + ~1/5 of the catalog carrying a
+				// person→entity edge (works_at/interested_in/tagged_as), drawn from the
+				// pool so the few entities repeat across many people (prod-like). The
+				// coverage + determinism tests override these down for CI.
+				SeededEntities:    9,
+				SeededEntityEdges: 30,
 			},
 		}, nil
 	default:
@@ -238,6 +258,9 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		}
 		if spec.HowMet != nil {
 			res.ContactsWithHowMet++
+		}
+		if spec.Location != nil {
+			res.ContactsWithLocation++
 		}
 		catalogContactIDs = append(catalogContactIDs, contact.ID)
 		if spec.Cadence != nil && *spec.Cadence != "" {
@@ -465,6 +488,81 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		res.SeededRelationships++
 	}
 
+	// Entity nodes (org/topic/tag pool) + person→entity EDGE assertions. Seeded
+	// LAST because gen.Entity DRAWS the name PRNG (givenName) — appending it after
+	// the source replays + the person-subject assertion spread above keeps the
+	// deterministic id/handle sequence those earlier replays depend on unshifted.
+	// (The person→entity gen.EdgeAssertion calls draw no name PRNG, only sourceIDSeq.)
+	//
+	// The pool is small and round-robins org/topic/tag, so the edges below draw
+	// objects from it repeatedly — prod-like (many people share a few orgs/topics/
+	// tags). place entity nodes + lives_in edges are NOT seeded here; they ride the
+	// contact-create authority flip via WithLocation (Phase 1 above).
+	var orgNodeIDs, topicNodeIDs, tagNodeIDs []uuid.UUID
+	for j := 0; j < params.Counts.SeededEntities; j++ {
+		subtype := catalogEntitySubtypes[j%len(catalogEntitySubtypes)]
+		entityID, err := h.SeedEntity(ctx, gen.Entity(subtype))
+		if err != nil {
+			return res, fmt.Errorf("profile %s: seed entity %d: %w", params.Profile, j, err)
+		}
+		switch subtype {
+		case repository.EntitySubtypeOrganization:
+			orgNodeIDs = append(orgNodeIDs, entityID)
+		case repository.EntitySubtypeTopic:
+			topicNodeIDs = append(topicNodeIDs, entityID)
+		case repository.EntitySubtypeTag:
+			tagNodeIDs = append(tagNodeIDs, entityID)
+		}
+		res.SeededEntities++
+	}
+
+	// Person→entity edges cycle works_at→org / interested_in→topic / tagged_as→tag,
+	// all auto-if-confident → accepted. The subject is a distinct catalog contact
+	// per edge (works_at is single-cardinality, so a distinct subject keeps it from
+	// superseding); the object is drawn from the matching subtype pool (round-robin,
+	// so the small pool repeats across subjects). Both review surfaces for these
+	// predicates are accepted; the proposed surface is covered by the person→person
+	// sibling_of edge above. A subtype with an empty pool is skipped (only possible
+	// when SeededEntities < 3, which the profiles avoid).
+	entityEdges := params.Counts.SeededEntityEdges
+	if entityEdges > len(catalogContactIDs) {
+		entityEdges = len(catalogContactIDs)
+	}
+	for i := 0; i < entityEdges; i++ {
+		subject := catalogContactIDs[i]
+		// cursor is the per-predicate occurrence index (0,0,0,1,1,1,2,...): the loop
+		// picks a predicate by i%3, so for a fixed predicate i advances in steps of 3.
+		// Indexing the object pool by i would therefore stride by 3 and pin every edge
+		// of a predicate to one entity whenever the pool size divides 3 (the prod pool
+		// is 3 per subtype). Indexing by i/3 advances one slot per occurrence, so the
+		// edges walk the whole pool and wrap once the catalog outgrows it (prod-like:
+		// many people share a few orgs/topics/tags).
+		cursor := i / len(catalogEntityEdgePredicates)
+		var predicate string
+		var object uuid.UUID
+		switch i % len(catalogEntityEdgePredicates) {
+		case 0:
+			if len(orgNodeIDs) == 0 {
+				continue
+			}
+			predicate, object = "works_at", orgNodeIDs[cursor%len(orgNodeIDs)]
+		case 1:
+			if len(topicNodeIDs) == 0 {
+				continue
+			}
+			predicate, object = "interested_in", topicNodeIDs[cursor%len(topicNodeIDs)]
+		default:
+			if len(tagNodeIDs) == 0 {
+				continue
+			}
+			predicate, object = "tagged_as", tagNodeIDs[cursor%len(tagNodeIDs)]
+		}
+		if _, err := h.ReplayAssertion(ctx, subject, gen.EdgeAssertion(predicate, object)); err != nil {
+			return res, fmt.Errorf("profile %s: replay entity edge %d: %w", params.Profile, i, err)
+		}
+		res.SeededEntityEdges++
+	}
+
 	// Cadence tasks (Todoist) on the cadence-bearing catalog contacts. ReplayTodoist
 	// drives the REAL CadenceSyncProvider reconcile, which reads
 	// ListContactsWithContactBy (contact_by auto-computed from cadence by
@@ -542,6 +640,38 @@ var catalogEdgePredicates = []string{
 	"sibling_of",
 }
 
+// catalogEntitySubtypes is the round-robin order the entity pool is built in, so a
+// SeededEntities value ≥3 yields ≥1 of each subtype. They are migration-066
+// curated entity subtypes.
+var catalogEntitySubtypes = []string{
+	repository.EntitySubtypeOrganization,
+	repository.EntitySubtypeTopic,
+	repository.EntitySubtypeTag,
+}
+
+// catalogEntityEdgePredicates is the person→entity edge predicate cycle, aligned
+// 1:1 with catalogEntitySubtypes (works_at→org, interested_in→topic,
+// tagged_as→tag). All three are auto-if-confident → accepted (migration-066
+// catalog person→entity edge predicates). NOTE the alignment with
+// catalogEntitySubtypes is load-bearing: the edge loop's `i % 3` branch picks the
+// object pool for the matching subtype.
+var catalogEntityEdgePredicates = []string{
+	"works_at",
+	"interested_in",
+	"tagged_as",
+}
+
+// catalogLocationStems is the small fixed pool the lives_in location rotates over
+// so locations repeat across contacts (prod-like) while staying deterministic. The
+// values are flat (no comma/hierarchy) so EnsurePlaceTx mints a flat place node
+// with no `within` parent edge.
+var catalogLocationStems = []string{
+	"riverton",
+	"lakeside",
+	"hillcrest",
+	"meadowbrook",
+}
+
 // catalogOptionsFor returns the contact-builder options for catalog contact i of
 // n, deterministically spreading the edge-case shapes across the population:
 // cadence states (overdue / recent / never-contacted), the 1900 birthday
@@ -604,6 +734,16 @@ func catalogOptionsFor(i, n int, anchor time.Time, prefix string) []factory.Cont
 	if i%4 == 1 {
 		stem := catalogHowMetStems[(i/4)%len(catalogHowMetStems)]
 		opts = append(opts, factory.WithHowMet(prefix+"met-"+stem))
+	}
+
+	// lives_in location on ~1/5 of contacts (ns-prefixed flat label → place entity
+	// node + lives_in edge via the contact-create authority flip). Rotated stem so
+	// locations repeat across contacts (prod-like); ns-prefixed so the entity
+	// teardown's label-prefix sweep catches the auto-created place node. Avoids
+	// i == 3 (the no-method slot returns early above).
+	if i%5 == 4 {
+		stem := catalogLocationStems[(i/5)%len(catalogLocationStems)]
+		opts = append(opts, factory.WithLocation(prefix+"place-"+stem))
 	}
 
 	return opts

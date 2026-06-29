@@ -230,6 +230,42 @@ func (h *Harness) SeedContact(ctx context.Context, spec factory.ContactSpec) (*r
 	return contact, nil
 }
 
+// SeedEntity creates an entity node + its entity subtype row (org / topic / tag)
+// in one tx, mirroring the find-or-create-tag-node path in the tag migration but
+// always creating (the synthetic pool is a fresh, per-namespace set, so there is
+// no find step). The node's canonical_label is namespace-prefixed (from
+// gen.Entity), so the teardown's graph_entity_nodes label-prefix sweep removes it
+// — no per-id ledger tracking is needed. Returns the created node id so the caller
+// can point person→entity edge assertions at it.
+func (h *Harness) SeedEntity(ctx context.Context, spec factory.EntitySpec) (uuid.UUID, error) {
+	nodeRepo := repository.NewNodeRepository(h.database.Queries)
+	entityRepo := repository.NewEntityRepository(h.database.Queries)
+
+	nodeID := uuid.New()
+	tx, err := h.database.Pool.Begin(ctx)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("seed entity: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// node + entity must commit together: the entity.node_id FK requires the node,
+	// and a partial entity node must never linger on the shared DB.
+	if _, err := nodeRepo.CreateNodeTx(ctx, tx, nodeID, repository.NodeTypeEntity, spec.Node.CanonicalLabel); err != nil {
+		return uuid.Nil, fmt.Errorf("seed entity: create node: %w", err)
+	}
+	if _, err := entityRepo.CreateEntityTx(ctx, tx, repository.CreateEntityRequest{
+		NodeID:         nodeID,
+		Subtype:        spec.Subtype,
+		NormalizedName: spec.NormalizedName,
+	}); err != nil {
+		return uuid.Nil, fmt.Errorf("seed entity: create entity: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return uuid.Nil, fmt.Errorf("seed entity: commit: %w", err)
+	}
+	return nodeID, nil
+}
+
 // SeedNote attaches a notepad note to a seeded contact via the EXISTING
 // NoteRepository (orchestration over an existing repo, not new machinery). The
 // contact must be one the harness seeded (so the teardown's note step — delete
