@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/config"
+	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/synthetic/factory"
 
 	"github.com/google/uuid"
@@ -57,6 +58,12 @@ type ProfileResult struct {
 	// authority-flip path, not the Phase-4 assertion loop). Counts-only / no PII.
 	ContactsWithBirthday int
 	ContactsWithHowMet   int
+	// SeededTasks counts the contact_task rows the profile seeded — one `managed`
+	// cadence task per cadence-bearing catalog contact (via ReplayTodoist's
+	// reconcile), a deterministic three of which are then transitioned to the
+	// completed/dismissed/unmanaged surface states. The state-transitions do not
+	// change the row count, so this is the total cadence-task population.
+	SeededTasks int
 }
 
 // ProfileParams returns the default SeedParams for a named profile (error on an
@@ -81,6 +88,10 @@ func ProfileParams(name Profile) (SeedParams, error) {
 				UnmatchedCalendar: 1,
 				OrphanMeetingNote: 1,
 				SeededAssertions:  2,
+				// Enable cadence-task seeding (>0 gate). The dev catalog is all
+				// cadence-bearing, so reconcile creates a managed task on each and
+				// three are transitioned for surface coverage.
+				SeededTasks: 1,
 			},
 		}, nil
 	case ProfileProdShaped:
@@ -100,6 +111,11 @@ func ProfileParams(name Profile) (SeedParams, error) {
 				// health_condition across distinct contacts). The coverage test
 				// overrides this down to a CI-safe minimum.
 				SeededAssertions: 50,
+				// Enable cadence-task seeding (>0 gate). The prod-shaped catalog is
+				// all cadence-bearing, so reconcile creates a managed cadence task on
+				// each (catalog-wide, like prod) and three are transitioned to the
+				// completed/dismissed/unmanaged surface states.
+				SeededTasks: 1,
 			},
 		}, nil
 	default:
@@ -175,6 +191,12 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	// dedicated contacts below instead.
 	var firstCatalogContactID uuid.UUID
 	catalogContactIDs := make([]uuid.UUID, 0, n)
+	// cadenceBearingCatalogIDs is the subset whose spec carries a cadence —
+	// CreateContact auto-computes contact_by from cadence, making them eligible for
+	// ReplayTodoist's reconcile (which seeds one `managed` cadence task per such
+	// contact). Tracked off the spec rather than assumed so a future catalog change
+	// that drops cadence from a slot is reflected in res.SeededTasks.
+	cadenceBearingCatalogIDs := make([]uuid.UUID, 0, n)
 	for i := 0; i < n; i++ {
 		opts := catalogOptionsFor(i, n, gen.Anchor(), gen.Prefix())
 		spec := gen.Contact(opts...)
@@ -193,6 +215,9 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 			res.ContactsWithHowMet++
 		}
 		catalogContactIDs = append(catalogContactIDs, contact.ID)
+		if spec.Cadence != nil && *spec.Cadence != "" {
+			cadenceBearingCatalogIDs = append(cadenceBearingCatalogIDs, contact.ID)
+		}
 		if i == 0 {
 			firstCatalogContactID = contact.ID
 		}
@@ -352,7 +377,48 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		}
 	}
 
+	// Cadence tasks (Todoist) on the cadence-bearing catalog contacts. ReplayTodoist
+	// drives the REAL CadenceSyncProvider reconcile, which reads
+	// ListContactsWithContactBy (contact_by auto-computed from cadence by
+	// CreateContact) and creates one `managed` cadence-due task per cadence-bearing
+	// contact — the live cadence-task state. It draws NO generator PRNG (it only
+	// READS the seeded contacts), so it runs after the gen.X() assertion spread above
+	// without shifting the deterministic id sequence the earlier replays depend on.
+	//
+	// The empty fake-Todoist sync produces only `managed` rows, so the remaining
+	// surface states are seeded by transitioning a deterministic three of the
+	// just-created tasks via the production UpdateContactTaskState path:
+	// completed / dismissed / unmanaged. pending_remote_create (a transient
+	// create-in-flight state) is out of scope.
+	if params.Counts.SeededTasks > 0 && len(cadenceBearingCatalogIDs) > 0 {
+		if _, err := h.ReplayTodoist(ctx, cadenceBearingCatalogIDs); err != nil {
+			return res, fmt.Errorf("profile %s: replay todoist: %w", params.Profile, err)
+		}
+		// Each transition flips one managed task's state; the row count is unchanged,
+		// so res.SeededTasks (the cadence-bearing population) still reflects every row.
+		for idx, state := range nonManagedTaskStates {
+			if idx >= len(cadenceBearingCatalogIDs) {
+				break
+			}
+			if _, err := h.TransitionTodoistCadenceTaskState(ctx, cadenceBearingCatalogIDs[idx], state); err != nil {
+				return res, fmt.Errorf("profile %s: transition cadence task %d: %w", params.Profile, idx, err)
+			}
+		}
+		res.SeededTasks = len(cadenceBearingCatalogIDs)
+	}
+
 	return res, nil
+}
+
+// nonManagedTaskStates is the deterministic spread of non-`managed` contact_task
+// surface states the profile transitions cadence tasks into (one each), so staging
+// shows every state the cadence-task UI renders. `managed` is the reconcile
+// default (the remaining, un-transitioned tasks); pending_remote_create is a
+// transient create-in-flight state and is out of scope.
+var nonManagedTaskStates = []repository.ContactTaskState{
+	repository.ContactTaskStateCompleted,
+	repository.ContactTaskStateDismissed,
+	repository.ContactTaskStateUnmanaged,
 }
 
 // catalogTextFactPredicates is the predicate cycle the Phase-4 assertion spread

@@ -307,6 +307,20 @@ SELECT id FROM contact_task WHERE provider = @provider;
 -- created (the before/after diff from SyntheticListContactTaskIdsByProvider).
 DELETE FROM contact_task WHERE id = ANY(@task_ids::uuid[]);
 
+-- name: SyntheticCountContactTasksByStateAndNamePrefix :one
+-- Profile coverage test only: count contact_task rows in a given state whose
+-- contact's full_name is ns-prefixed, so the prod-shaped coverage check can assert
+-- each surface state (managed/unmanaged/completed/dismissed) has ≥1 representative
+-- scoped to its own namespace on the shared test DB. contact_task has no
+-- deleted_at; the contact soft-delete filter scopes to live catalog contacts.
+-- Caller passes a BARE prefix; '%' appended.
+SELECT COUNT(*)
+FROM contact_task ct
+JOIN contact c ON ct.contact_id = c.id
+WHERE c.full_name LIKE @name_prefix || '%'
+  AND ct.state = @state
+  AND c.deleted_at IS NULL;
+
 -- name: SyntheticDeleteContactMethodsByContactIds :execrows
 -- Cleanup step 11: contact_method by contact.
 DELETE FROM contact_method WHERE contact_id = ANY(@contact_ids::uuid[]);

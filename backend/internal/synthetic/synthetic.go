@@ -89,6 +89,13 @@ type Counts struct {
 	UnmatchedCalendar int // calendar_event rows with an unmatched attendee
 	OrphanMeetingNote int // orphan_needs_review meeting_note rows
 	SeededAssertions  int // graph (SP1) text-fact assertions spread across catalog contact nodes
+	// SeededTasks is a >0 GATE (not a hard cap) for Todoist cadence-task seeding:
+	// when non-zero the profile runs ReplayTodoist, whose reconcile creates one
+	// `managed` cadence task per cadence-bearing catalog contact (catalog-wide, like
+	// prod), then transitions a deterministic three to completed/dismissed/unmanaged
+	// for surface coverage. ProfileResult.SeededTasks reports the actual rows. 0
+	// disables (minimal-scoped stays task-free / byte-stable).
+	SeededTasks int
 }
 
 // SeedParams is the profile/volume seam consumed by the seed orchestration.
