@@ -3,6 +3,7 @@ package tests
 import (
 	"context"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -184,25 +185,37 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	require.GreaterOrEqual(t, res.ContactsWithBirthday, 1, "≥1 contact with a birthday bio fact")
 	require.GreaterOrEqual(t, res.ContactsWithHowMet, 1, "≥1 contact with a how_met bio fact")
 
-	// Accept/pending coverage (D6): assert the SPECIFIC review-policy outcomes, not
-	// merely that some assertion of each status exists — health_condition
-	// (always-confirm) must land PROPOSED (pending-review surface) and an
-	// auto-if-confident text predicate (home_address/job_title/preference) must
-	// land ACCEPTED (accepted-knowledge surface). Scoped to the namespace.
+	// Accept/pending coverage (D6) + full text-fact spread: assert the SPECIFIC
+	// (predicate, review-policy) outcome for EVERY predicate in the Phase-4 cycle,
+	// not merely that some assertion of each status exists — so a predicate
+	// silently dropping out of the spread (e.g. occurrence) or no longer landing
+	// its expected status is caught. health_condition + occurrence (always-confirm)
+	// land PROPOSED (pending-review surface); home_address / job_title / preference
+	// (auto-if-confident) land ACCEPTED (accepted-knowledge surface). Scoped to the
+	// namespace.
 	assertions, err := support.ListAssertionsByNodePrefix(ctx, h.Generator().Prefix())
 	require.NoError(t, err)
-	acceptedTextPredicates := map[string]bool{"home_address": true, "job_title": true, "preference": true}
-	var healthProposed, textAccepted bool
+	seen := make(map[string]bool) // "<predicate>/<status>"
+	var realYearBirthday bool
 	for _, a := range assertions {
-		if a.PredicateKey == "health_condition" && a.Status == repository.AssertionStatusProposed {
-			healthProposed = true
-		}
-		if acceptedTextPredicates[a.PredicateKey] && a.Status == repository.AssertionStatusAccepted {
-			textAccepted = true
+		seen[a.PredicateKey+"/"+a.Status] = true
+		// item 5: a real-year birthday from the spread must exist, not just the
+		// 1900 month/day-only sentinel (which alone would satisfy
+		// ContactsWithBirthday even if the real-year spread regressed).
+		if a.PredicateKey == "birthday" && a.ValueDate != nil && !strings.HasPrefix(*a.ValueDate, "1900-") {
+			realYearBirthday = true
 		}
 	}
-	require.True(t, healthProposed, "health_condition (always-confirm) lands proposed (pending-review surface)")
-	require.True(t, textAccepted, "an auto-if-confident text predicate lands accepted (accepted-knowledge surface)")
+	for _, want := range []string{
+		"health_condition/" + repository.AssertionStatusProposed,
+		"occurrence/" + repository.AssertionStatusProposed,
+		"home_address/" + repository.AssertionStatusAccepted,
+		"job_title/" + repository.AssertionStatusAccepted,
+		"preference/" + repository.AssertionStatusAccepted,
+	} {
+		require.True(t, seen[want], "Phase-4 text-fact spread must land %s", want)
+	}
+	require.True(t, realYearBirthday, "≥1 real-year (non-1900-sentinel) birthday from the spread")
 
 	remaining, err := h.ContactsRemaining(ctx)
 	require.NoError(t, err)
