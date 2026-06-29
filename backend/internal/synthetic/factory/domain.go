@@ -50,6 +50,7 @@ type contactConfig struct {
 	recent       bool
 	birthday     *time.Time
 	howMet       *string
+	location     *string
 	unicodeName  bool
 	descender    bool
 }
@@ -113,6 +114,20 @@ func WithHowMet(s string) ContactOption {
 	}
 }
 
+// WithLocation sets the contact's location (a flat place label). It routes
+// through the contact-create authority flip into an accepted `lives_in` edge to a
+// place entity node (EnsurePlaceTx find-or-creates the flat place node from the
+// label — no synonym/hierarchy resolution, so no `within` edge). The label must
+// be namespace-prefixed so the entity teardown's label-prefix sweep catches the
+// auto-created place node. A blank string is normalized away by the service, so
+// callers pass a meaningful value.
+func WithLocation(s string) ContactOption {
+	return func(c *contactConfig) {
+		v := s
+		c.location = &v
+	}
+}
+
 // WithUnicodeName uses a unicode-bearing display name (edge case).
 func WithUnicodeName() ContactOption { return func(c *contactConfig) { c.unicodeName = true } }
 
@@ -153,6 +168,7 @@ func (g *Generator) Contact(opts ...ContactOption) ContactSpec {
 		Cadence:  cfg.cadence,
 		Birthday: cfg.birthday,
 		HowMet:   cfg.howMet,
+		Location: cfg.location,
 	}
 
 	if cfg.withEmail {

@@ -568,6 +568,34 @@ SELECT COUNT(*) FROM node WHERE canonical_label LIKE @label_prefix || '%';
 -- prefix; '%' is appended here.
 DELETE FROM node WHERE canonical_label LIKE @label_prefix || '%';
 
+-- name: SyntheticListEntityNamesByNodePrefix :many
+-- Profile coverage + determinism + teardown test support: list the entity subtype
+-- rows whose node's canonical_label is ns-prefixed — the org/topic/tag pool nodes
+-- (SeedEntity) AND the place nodes the contact-create authority flip minted from
+-- WithLocation. The coverage check asserts each expected subtype (place/
+-- organization/topic/tag) is present; the determinism check fingerprints the sorted
+-- (subtype, normalized_name) set across a re-run (these are deterministic
+-- ns-prefixed synthetic strings — the entity-node generated-id kind); the
+-- teardown check asserts the list is EMPTY after cleanup (the entity nodes were
+-- swept). Deterministically ordered so the fingerprint is stable. Caller passes a
+-- BARE prefix; '%' is appended here.
+SELECT e.subtype, e.normalized_name
+FROM entity e
+JOIN node n ON e.node_id = n.id
+WHERE n.canonical_label LIKE @label_prefix || '%'
+ORDER BY e.subtype, e.normalized_name;
+
+-- name: SyntheticCountContactTagsByContactNamePrefix :one
+-- Profile coverage test only: count legacy contact_tag rows whose contact's
+-- full_name is ns-prefixed. The prod-shaped seed models tags as `tagged_as` graph
+-- edges (the SP1 live path), NOT legacy contact_tag rows, so this MUST stay ZERO —
+-- a positive guard so a future reader does not "fix" a perceived gap by re-seeding
+-- the legacy table. Caller passes a BARE prefix; '%' is appended here.
+SELECT COUNT(*)
+FROM contact_tag ct
+JOIN contact c ON ct.contact_id = c.id
+WHERE c.full_name LIKE @name_prefix || '%';
+
 -- name: SyntheticCountAssertionsForSubject :one
 -- Assertion-store test support: count the assertions whose subject is a given
 -- node, so a test scopes its assertions to its own namespace's subject node on

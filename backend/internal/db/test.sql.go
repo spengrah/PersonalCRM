@@ -783,6 +783,25 @@ func (q *Queries) SyntheticCountContactMethodsByValueNormalizedPrefix(ctx contex
 	return count, err
 }
 
+const SyntheticCountContactTagsByContactNamePrefix = `-- name: SyntheticCountContactTagsByContactNamePrefix :one
+SELECT COUNT(*)
+FROM contact_tag ct
+JOIN contact c ON ct.contact_id = c.id
+WHERE c.full_name LIKE $1 || '%'
+`
+
+// Profile coverage test only: count legacy contact_tag rows whose contact's
+// full_name is ns-prefixed. The prod-shaped seed models tags as `tagged_as` graph
+// edges (the SP1 live path), NOT legacy contact_tag rows, so this MUST stay ZERO —
+// a positive guard so a future reader does not "fix" a perceived gap by re-seeding
+// the legacy table. Caller passes a BARE prefix; '%' is appended here.
+func (q *Queries) SyntheticCountContactTagsByContactNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountContactTagsByContactNamePrefix, namePrefix)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const SyntheticCountContactTasksByStateAndNamePrefix = `-- name: SyntheticCountContactTasksByStateAndNamePrefix :one
 SELECT COUNT(*)
 FROM contact_task ct
@@ -1677,6 +1696,49 @@ func (q *Queries) SyntheticListContactTaskIdsByProvider(ctx context.Context, pro
 			return nil, err
 		}
 		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const SyntheticListEntityNamesByNodePrefix = `-- name: SyntheticListEntityNamesByNodePrefix :many
+SELECT e.subtype, e.normalized_name
+FROM entity e
+JOIN node n ON e.node_id = n.id
+WHERE n.canonical_label LIKE $1 || '%'
+ORDER BY e.subtype, e.normalized_name
+`
+
+type SyntheticListEntityNamesByNodePrefixRow struct {
+	Subtype        string `json:"subtype"`
+	NormalizedName string `json:"normalized_name"`
+}
+
+// Profile coverage + determinism + teardown test support: list the entity subtype
+// rows whose node's canonical_label is ns-prefixed — the org/topic/tag pool nodes
+// (SeedEntity) AND the place nodes the contact-create authority flip minted from
+// WithLocation. The coverage check asserts each expected subtype (place/
+// organization/topic/tag) is present; the determinism check fingerprints the sorted
+// (subtype, normalized_name) set across a re-run (these are deterministic
+// ns-prefixed synthetic strings — the entity-node generated-id kind); the
+// teardown check asserts the list is EMPTY after cleanup (the entity nodes were
+// swept). Deterministically ordered so the fingerprint is stable. Caller passes a
+// BARE prefix; '%' is appended here.
+func (q *Queries) SyntheticListEntityNamesByNodePrefix(ctx context.Context, labelPrefix pgtype.Text) ([]*SyntheticListEntityNamesByNodePrefixRow, error) {
+	rows, err := q.db.Query(ctx, SyntheticListEntityNamesByNodePrefix, labelPrefix)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*SyntheticListEntityNamesByNodePrefixRow{}
+	for rows.Next() {
+		var i SyntheticListEntityNamesByNodePrefixRow
+		if err := rows.Scan(&i.Subtype, &i.NormalizedName); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

@@ -2,6 +2,7 @@ package tests
 
 import (
 	"context"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,6 +16,27 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+// trailingSeqRE extracts the generator's monotonic sourceIDSeq embedded as the
+// trailing "-<digits>" of a synthetic value_text / entity normalized_name (e.g.
+// "synth-<ns>-organization-Alice-42" → 42). The seq is namespace-INDEPENDENT (a
+// pure counter, unlike the PRNG-drawn name component), so it is a stable
+// cross-run/cross-namespace ordering witness. Returns ok=false for values with no
+// trailing seq (e.g. the how_met "synth-<ns>-met-<stem>" or a place
+// "synth-<ns>-place-<stem>"), which the caller skips.
+var trailingSeqRE = regexp.MustCompile(`-(\d+)$`)
+
+func trailingSeq(s string) (int, bool) {
+	m := trailingSeqRE.FindStringSubmatch(s)
+	if m == nil {
+		return 0, false
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
 
 // fixedAccelBaseUnix is a deterministic TIME_BASE (a fixed Unix second) for the
 // high-acceleration settle-budget test, so the fixture makes no wall-clock call.
@@ -101,6 +123,13 @@ func TestSyntheticProfile_DevCoversCatalog(t *testing.T) {
 	require.Equal(t, params.Counts.SeededBoolFacts, res.SeededBoolFacts, "dev profile seeds bool facts")
 	require.Equal(t, params.Counts.SeededRelationships, res.SeededRelationships, "dev profile seeds person→person edges")
 	require.Equal(t, 1, res.SeededDateFacts, "dev profile seeds one toolkit date fact")
+	// Entity pool + person→entity edges: the dev catalog (18) far exceeds the small
+	// dev knob counts, so the seeded counts are exact (no catalog-size bounding).
+	require.Equal(t, params.Counts.SeededEntities, res.SeededEntities, "dev profile seeds the entity pool")
+	require.Equal(t, params.Counts.SeededEntityEdges, res.SeededEntityEdges, "dev profile seeds person→entity edges")
+	// lives_in locations ride the contact-create authority flip, spread by catalog
+	// index; the dev catalog is large enough to carry ≥1.
+	require.GreaterOrEqual(t, res.ContactsWithLocation, 1, "dev profile seeds location bio facts")
 
 	remaining, err := h.ContactsRemaining(ctx)
 	require.NoError(t, err)
@@ -143,6 +172,12 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	// cadence-bearing, so reconcile creates 9 `managed` tasks and three are
 	// transitioned to completed/dismissed/unmanaged — every surface state present.
 	params.Counts.SeededTasks = 1
+	// Entity pool of 3 (1 org + 1 topic + 1 tag) + one full person→entity edge cycle
+	// (works_at/interested_in/tagged_as) so every entity subtype + edge type is
+	// exercised. lives_in rides WithLocation (index-spread, present at this catalog
+	// size) — not a count knob.
+	params.Counts.SeededEntities = 3
+	params.Counts.SeededEntityEdges = 3
 
 	h := synthetic.NewHarnessForNamespace(t, ctx, database, params.Namespace, params.Seed)
 	res, err := synthetic.RunProfile(ctx, h, params)
@@ -201,10 +236,12 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	require.GreaterOrEqual(t, neverContacted, 1, "≥1 cadence-bearing never-contacted contact (NULL last_contacted survived)")
 	require.GreaterOrEqual(t, noMethod, 1, "≥1 no-method contact (the no-method bucket exists)")
 
-	// Bio facts (item 4 how_met + item 5 real-year birthdays) ride on the
-	// contact-create authority flip; the catalog carries ≥1 of each.
+	// Bio facts (how_met, location, real-year birthdays) ride on the contact-create
+	// authority flip; the catalog carries ≥1 of each. A location additionally mints
+	// a place entity node + a lives_in edge (asserted below).
 	require.GreaterOrEqual(t, res.ContactsWithBirthday, 1, "≥1 contact with a birthday bio fact")
 	require.GreaterOrEqual(t, res.ContactsWithHowMet, 1, "≥1 contact with a how_met bio fact")
+	require.GreaterOrEqual(t, res.ContactsWithLocation, 1, "≥1 contact with a location bio fact")
 
 	// Accept/pending coverage (D6) + full text-fact spread: assert the SPECIFIC
 	// (predicate, review-policy) outcome for EVERY predicate in the Phase-4 cycle,
@@ -221,6 +258,12 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	var boolFactTrue bool
 	for _, a := range assertions {
 		seen[a.PredicateKey+"/"+a.Status] = true
+		// Positive guard: EnsurePlaceTx mints FLAT place nodes (no synonym /
+		// hierarchy resolution), so the seed must produce ZERO place→place `within`
+		// edges. A surviving `within` would FK-block the entity-node teardown sweep;
+		// catching it here makes the regression loud at seed time. (A `within`
+		// subject is an ns-prefixed place node, so it would appear in this list.)
+		require.NotEqual(t, "within", a.PredicateKey, "no place→place within hierarchy assertion (flat place nodes)")
 		// item 5: a real-year birthday from the spread must exist, not just the
 		// 1900 month/day-only sentinel (which alone would satisfy
 		// ContactsWithBirthday even if the real-year spread regressed).
@@ -248,6 +291,13 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 		"knows/" + repository.AssertionStatusAccepted,
 		"introduced_by/" + repository.AssertionStatusAccepted,
 		"sibling_of/" + repository.AssertionStatusProposed,
+		// person→entity edges — all auto-if-confident → accepted. lives_in rides the
+		// contact-create authority flip (WithLocation); works_at/interested_in/
+		// tagged_as ride the entity pool + edge spread.
+		"lives_in/" + repository.AssertionStatusAccepted,
+		"works_at/" + repository.AssertionStatusAccepted,
+		"interested_in/" + repository.AssertionStatusAccepted,
+		"tagged_as/" + repository.AssertionStatusAccepted,
 	} {
 		require.True(t, seen[want], "graph value-type/edge spread must land %s", want)
 	}
@@ -260,6 +310,34 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	require.GreaterOrEqual(t, res.SeededRelationships, 1, "person→person edges seeded")
 	require.GreaterOrEqual(t, res.SeededDateFacts, 1, "toolkit-authored date fact seeded")
 
+	// Entity layer: the org/topic/tag pool + the place nodes from WithLocation must
+	// all be present, and the person→entity edges seeded. Scoped to the namespace via
+	// the node label prefix.
+	require.GreaterOrEqual(t, res.SeededEntities, 1, "entity pool seeded")
+	require.GreaterOrEqual(t, res.SeededEntityEdges, 1, "person→entity edges seeded")
+	prefix := h.Generator().Prefix()
+	entityNames, err := support.ListEntityNamesByNodePrefix(ctx, prefix)
+	require.NoError(t, err)
+	subtypesSeen := make(map[string]bool)
+	for _, e := range entityNames {
+		subtypesSeen[e.Subtype] = true
+	}
+	for _, subtype := range []string{
+		repository.EntitySubtypePlace, // from WithLocation (contact-create authority flip)
+		repository.EntitySubtypeOrganization,
+		repository.EntitySubtypeTopic,
+		repository.EntitySubtypeTag,
+	} {
+		require.True(t, subtypesSeen[subtype], "≥1 %q entity node present", subtype)
+	}
+
+	// Positive guard: tags are modeled as `tagged_as` graph edges (asserted above),
+	// NOT legacy contact_tag rows — the legacy table MUST stay zero for the
+	// namespace, so a future reader does not "fix" a perceived gap by re-seeding it.
+	legacyContactTags, err := support.CountContactTagsByContactNamePrefix(ctx, prefix)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), legacyContactTags, "tags seeded as tagged_as edges, not legacy contact_tag rows")
+
 	// Cadence tasks: ReplayTodoist seeds a `managed` cadence task on each
 	// cadence-bearing catalog contact, and the profile transitions a deterministic
 	// three to completed/dismissed/unmanaged. Assert ≥1 row in EACH state the seed
@@ -267,7 +345,6 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	// renders has content. pending_remote_create is out of scope (a transient
 	// create-in-flight state the seed does not produce).
 	require.GreaterOrEqual(t, res.SeededTasks, 1, "cadence tasks seeded")
-	prefix := h.Generator().Prefix()
 	for _, state := range []repository.ContactTaskState{
 		repository.ContactTaskStateManaged,
 		repository.ContactTaskStateUnmanaged,
@@ -290,7 +367,26 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 // generated assertion values. Count-pinning alone is insufficient — counts can
 // match while a non-deterministic source (map iteration, wall-clock leak) shifts
 // generated values — so the (value_text, value_date, value_bool) fingerprint is
-// the drift detector. Both runs share the SAME namespace (with a full teardown
+// the drift detector.
+//
+// Scope (what this catches vs. where): the "seed gen.X() LAST" rule is covered by
+// THREE complementary guards. (1) This run-to-run fingerprint comparison detects
+// NON-deterministic drift only (map iteration, wall-clock leak); on its own it
+// cannot see a DETERMINISTIC mis-ordering (both runs shift identically and still
+// match), and a full-VALUE golden is precluded — syntheticNS(t) randomizes the
+// namespace per run and the PRNG is seeded with fnv(namespace), so the fingerprinted
+// values have no run-stable form to pin. (2) The ordering guard below pins the one
+// thing that IS run-stable: the monotonic sourceIDSeq counter (namespace-independent),
+// asserting every gen.Entity-pool seq exceeds every text-fact seq — so a deterministic
+// mis-ordering of the entity block (the case (1) can't see) fails there. (3) The
+// coverage test's Gate-A settle catches a mis-placed gen.X() that shifts later
+// source-replay ids into a cross-contact peer-id collision that fails the settle
+// loudly (the original SP1 mis-order regression surfaced exactly this way). A
+// mis-ordering that shifts NO subsequent source-replay draw is harmless
+// (distinct-but-valid synthetic data), so the three guards together cover the
+// load-bearing class.
+//
+// Both runs share the SAME namespace (with a full teardown
 // between) so the ns-prefix + PRNG stream line up, AND a PINNED generator anchor
 // so the anchor-relative timestamps (birthday date) are byte-identical too —
 // without the pin, birthday value_date would legitimately drift between runs
@@ -312,6 +408,10 @@ func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
 	// One full bool-fact + edge cycle each (bounded, deterministic at this scale).
 	params.Counts.SeededBoolFacts = 3
 	params.Counts.SeededRelationships = 3
+	// Entity pool (1 org + 1 topic + 1 tag) + one full person→entity edge cycle, so
+	// the entity normalized_name fingerprint covers org/topic/tag/place subtypes.
+	params.Counts.SeededEntities = 3
+	params.Counts.SeededEntityEdges = 3
 	params.Counts.UnmatchedExternal = 1
 	params.Counts.StrandedTelegram = 1
 	params.Counts.StrandedMessages = 1
@@ -327,25 +427,76 @@ func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
 	anchor := accelerated.GetCurrentTime()
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 
-	// run seeds the profile, captures (ProfileResult, assertion fingerprint), then
-	// fully tears down so the next run starts from a clean namespace.
-	run := func() (synthetic.ProfileResult, []repository.AssertionSummary) {
+	// run seeds the profile, captures (ProfileResult, assertion fingerprint, entity
+	// normalized_name fingerprint), then fully tears down so the next run starts from
+	// a clean namespace. It also asserts the teardown swept every entity node (pool
+	// + place) — a leaked entity node would FK-block or duplicate-violate the next
+	// run, and a surviving place node from a `within` edge would FK-block the sweep.
+	run := func() (synthetic.ProfileResult, []repository.AssertionSummary, []repository.EntityNameSummary) {
 		h, teardown, err := synthetic.NewHarnessWithDBForNamespaceAt(ctx, database, params.Namespace, params.Seed, anchor)
 		require.NoError(t, err)
 		res, err := synthetic.RunProfile(ctx, h, params)
 		require.NoError(t, err)
-		fp, err := support.ListAssertionsByNodePrefix(ctx, h.Generator().Prefix())
+		prefix := h.Generator().Prefix()
+		fp, err := support.ListAssertionsByNodePrefix(ctx, prefix)
+		require.NoError(t, err)
+		entFP, err := support.ListEntityNamesByNodePrefix(ctx, prefix)
 		require.NoError(t, err)
 		require.NoError(t, teardown(context.Background()))
-		return res, fp
+		// Teardown correctness: the entity nodes (org/topic/tag pool + place nodes)
+		// are swept, so the namespace is clean for the next run.
+		remaining, err := support.ListEntityNamesByNodePrefix(ctx, prefix)
+		require.NoError(t, err)
+		require.Empty(t, remaining, "entity nodes (pool + place) swept by teardown")
+		return res, fp, entFP
 	}
 
-	res1, fp1 := run()
-	res2, fp2 := run()
+	res1, fp1, ent1 := run()
+	res2, fp2, ent2 := run()
 
 	require.Equal(t, res1, res2, "prod-shaped ProfileResult must be deterministic across runs")
 	require.NotEmpty(t, fp1, "the seed must produce assertions to fingerprint")
 	require.Equal(t, fp1, fp2, "assertion (value_text, value_date, value_bool) fingerprint must be deterministic across runs")
+	require.NotEmpty(t, ent1, "the seed must produce entity nodes to fingerprint")
+	require.Equal(t, ent1, ent2, "entity (subtype, normalized_name) fingerprint must be deterministic across runs")
+
+	// Ordering guard for the "seed gen.X() LAST" rule. The run-to-run
+	// comparison above catches NON-deterministic drift but NOT a DETERMINISTIC
+	// mis-ordering of the gen.Entity pool (both runs would shift identically). A
+	// literal name golden is precluded here — syntheticNS(t) randomizes the namespace
+	// per run and the PRNG is seeded fnv(namespace), so the name component is not
+	// run-stable. The embedded sourceIDSeq IS run-stable (a pure counter, namespace-
+	// independent), so it is the pinnable witness: gen.Entity is seeded LAST, after
+	// the Phase-4 text-fact spread, so every gen.Entity-pool seq must exceed every
+	// text-fact value seq. A mis-ordered entity block (moved before the spread, or
+	// earlier among the source replays) inverts this and fails loudly — the
+	// regression class a same-impl two-run comparison cannot see. (place nodes ride
+	// WithLocation, not gen.Entity, and carry a stem not a seq, so they are excluded.)
+	maxTextFactSeq := -1
+	for _, a := range fp1 {
+		if a.ValueText == nil {
+			continue
+		}
+		if seq, ok := trailingSeq(*a.ValueText); ok && seq > maxTextFactSeq {
+			maxTextFactSeq = seq
+		}
+	}
+	minEntitySeq := -1
+	for _, e := range ent1 {
+		if e.Subtype == repository.EntitySubtypePlace {
+			continue // place names carry a stem, not a seq
+		}
+		seq, ok := trailingSeq(e.NormalizedName)
+		require.True(t, ok, "gen.Entity normalized_name %q must carry a trailing sourceIDSeq", e.NormalizedName)
+		if minEntitySeq == -1 || seq < minEntitySeq {
+			minEntitySeq = seq
+		}
+	}
+	require.GreaterOrEqual(t, maxTextFactSeq, 0, "the seed must produce text-fact assertions with a seq witness")
+	require.GreaterOrEqual(t, minEntitySeq, 0, "the seed must produce gen.Entity pool nodes with a seq witness")
+	require.Greater(t, minEntitySeq, maxTextFactSeq,
+		"gen.Entity pool must be seeded LAST (after the text-fact spread): entity seq %d must exceed max text-fact seq %d — a smaller entity seq means a mis-ordered gen.X() insertion",
+		minEntitySeq, maxTextFactSeq)
 }
 
 // TestSyntheticProfile_QuiesceLeavesRows proves the seed-and-leave lifecycle:
