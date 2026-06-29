@@ -603,27 +603,34 @@ WHERE c.full_name LIKE @name_prefix || '%';
 SELECT COUNT(*) FROM assertion WHERE subject_node_id = $1;
 
 -- name: SyntheticListAssertionsByNodePrefix :many
--- Profile coverage + determinism test support: list the LIVE (proposed/accepted)
--- assertions whose subject node is ns-prefixed (catalog person nodes own
--- ns-prefixed canonical_labels) AND whose subject node is itself live
--- (deleted_at IS NULL) — so a soft-deleted or merged-away (tombstoned) node's
--- assertions drop from this LIVE projection, matching the graph read path. The
--- coverage check uses (predicate_key, status)
--- to assert the accepted vs proposed split; the determinism check fingerprints
--- (value_text, value_date, value_bool) across a re-run — exactly one value column
--- is set per fact (text → value_text, birthday → value_date, bool facts →
--- value_bool) and edges set none, so all three are projected so no value-type
--- surface is a blind spot. The object node id (and proposition_key) are NOT used
--- because they embed the per-run subject/object UUID and so are not run-stable;
--- an edge therefore contributes only (predicate_key, status) to the fingerprint.
--- Deterministically ordered so the fingerprint is stable. Caller passes a BARE
--- prefix; '%' is appended here.
+-- Profile coverage + determinism test support: list the LIVE assertions whose
+-- subject node is ns-prefixed (catalog person nodes own ns-prefixed
+-- canonical_labels). LIVE mirrors the production live-graph read: subject node
+-- live (deleted_at IS NULL) AND — for an edge (object_node_id set) — object node
+-- live AND status IN (proposed,accepted) AND knowledge-open (knowledge_to IS
+-- NULL). A fact (object_node_id NULL) is gated on the subject endpoint only. So a
+-- soft-deleted/merged-away (tombstoned) endpoint, a terminal/superseded row, or a
+-- knowledge-closed row drops from this projection, matching the graph read path.
+-- The object join MUST be a LEFT JOIN: facts carry a NULL object_node_id and an
+-- inner join would silently drop every fact row. The coverage check uses
+-- (predicate_key, status) to assert the accepted vs proposed split; the
+-- determinism check fingerprints (value_text, value_date, value_bool) across a
+-- re-run — exactly one value column is set per fact (text → value_text, birthday
+-- → value_date, bool facts → value_bool) and edges set none, so all three are
+-- projected so no value-type surface is a blind spot. The object node id (and
+-- proposition_key) are NOT used because they embed the per-run subject/object
+-- UUID and so are not run-stable; an edge therefore contributes only
+-- (predicate_key, status) to the fingerprint. Deterministically ordered so the
+-- fingerprint is stable. Caller passes a BARE prefix; '%' is appended here.
 SELECT a.predicate_key, a.status, a.value_text, a.value_date, a.value_bool
 FROM assertion a
 JOIN node n ON a.subject_node_id = n.id
+LEFT JOIN node ob ON ob.id = a.object_node_id
 WHERE n.canonical_label LIKE @label_prefix || '%'
   AND n.deleted_at IS NULL
+  AND (a.object_node_id IS NULL OR ob.deleted_at IS NULL)
   AND a.status IN ('proposed', 'accepted')
+  AND a.knowledge_to IS NULL
 ORDER BY a.predicate_key, a.value_text NULLS LAST, a.value_date NULLS LAST, a.value_bool NULLS LAST, a.status;
 
 -- name: SyntheticGetNodeForContact :one
@@ -695,14 +702,25 @@ SELECT COUNT(*) FROM relationship_signal WHERE subject_node_id = ANY(@node_ids::
 SELECT COUNT(*) FROM assertion WHERE subject_node_id = ANY(@node_ids::uuid[]);
 
 -- name: SyntheticCountLiveAssertionsForSubjects :one
--- Merge/soft-delete coverage test support: count the assertions whose subject is one
--- of the given nodes AND whose subject node is live (deleted_at IS NULL), scoped to
--- THIS run's tracked node ids. Used to assert (a) a soft-deleted contact's assertions
--- DROP from live graph reads (==0, node tombstoned), and (b) a merge winner carries
--- its own + the re-pointed loser assertions on its still-live node (≥1).
+-- Merge/soft-delete coverage test support: count the LIVE assertions whose subject
+-- is one of the given nodes, scoped to THIS run's tracked node ids. LIVE mirrors the
+-- production live-graph read: subject node live (deleted_at IS NULL) AND — for an
+-- edge (object_node_id set) — object node live AND status IN (proposed,accepted) AND
+-- knowledge-open (knowledge_to IS NULL). A fact (object_node_id NULL) is gated on the
+-- subject endpoint only. The object join MUST be a LEFT JOIN: facts carry a NULL
+-- object_node_id and an inner join would silently drop every fact row. Used to assert
+-- (a) a soft-deleted contact's assertions DROP from live graph reads (==0, node
+-- tombstoned), and (b) a merge winner carries its own + the re-pointed loser
+-- assertions as LIVE on its still-live node (≥1) — so the count proves re-pointing,
+-- not just presence of a terminal/closed row.
 SELECT COUNT(*) FROM assertion a
 JOIN node n ON a.subject_node_id = n.id
-WHERE a.subject_node_id = ANY(@node_ids::uuid[]) AND n.deleted_at IS NULL;
+LEFT JOIN node ob ON ob.id = a.object_node_id
+WHERE a.subject_node_id = ANY(@node_ids::uuid[])
+  AND n.deleted_at IS NULL
+  AND (a.object_node_id IS NULL OR ob.deleted_at IS NULL)
+  AND a.status IN ('proposed', 'accepted')
+  AND a.knowledge_to IS NULL;
 
 -- name: SyntheticCountLiveNodesByIds :one
 -- Merge/soft-delete coverage test support: count the live (deleted_at IS NULL) nodes
