@@ -702,13 +702,14 @@ var catalogEntityEdgePredicates = []string{
 
 // catalogSignalKeys is the small fixed pool of relationship_signal keys the seed
 // rotates over (one key per seeded node) so a few signal kinds repeat across many
-// person nodes (prod-like). SP1 has no signal generators, so these are
-// representative synthetic keys; teardown deletes by subject node id (not key), so
-// they need no namespace prefix.
+// person nodes (prod-like). These are the keys the app expects for SP1 derived
+// storage (closeness / real_cadence_days / trend, per repository.RelationshipSignal),
+// so seeded rows match what consumers read; teardown deletes by subject node id
+// (not key), so they need no namespace prefix.
 var catalogSignalKeys = []string{
 	"closeness",
-	"reciprocity",
-	"frequency",
+	"real_cadence_days",
+	"trend",
 }
 
 // syntheticSignalMethodVersion tags the method_version of the seeded

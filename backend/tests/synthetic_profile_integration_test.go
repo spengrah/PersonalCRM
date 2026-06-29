@@ -182,7 +182,7 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	params.Counts.SeededEntities = 3
 	params.Counts.SeededEntityEdges = 3
 	// A few relationship_signal rows (SP1 derived storage) across distinct catalog
-	// person nodes, one full signal-key cycle (closeness/reciprocity/frequency).
+	// person nodes, one full signal-key cycle (closeness/real_cadence_days/trend).
 	params.Counts.SeededSignals = 3
 
 	h := synthetic.NewHarnessForNamespace(t, ctx, database, params.Namespace, params.Seed)
