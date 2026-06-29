@@ -64,6 +64,14 @@ type ProfileResult struct {
 	// completed/dismissed/unmanaged surface states. The state-transitions do not
 	// change the row count, so this is the total cadence-task population.
 	SeededTasks int
+	// SeededBoolFacts / SeededRelationships / SeededDateFacts count the graph rows
+	// the value-type + edge plumbing seeded: bool facts (job_seeking etc.) on
+	// catalog person nodes, person→person edge assertions among catalog person
+	// nodes, and the single toolkit-authored date fact (a birthday asserted
+	// directly through the assert path). Counts-only / no PII.
+	SeededBoolFacts     int
+	SeededRelationships int
+	SeededDateFacts     int
 }
 
 // ProfileParams returns the default SeedParams for a named profile (error on an
@@ -88,6 +96,11 @@ func ProfileParams(name Profile) (SeedParams, error) {
 				UnmatchedCalendar: 1,
 				OrphanMeetingNote: 1,
 				SeededAssertions:  2,
+				// Bool facts + person→person edges (small, fast) so the dev graph
+				// surfaces have content. Both exercise the value-type/edge assert
+				// plumbing; the bool-fact gate also seeds one toolkit date fact.
+				SeededBoolFacts:     2,
+				SeededRelationships: 2,
 				// Enable cadence-task seeding (>0 gate). The dev catalog is all
 				// cadence-bearing, so reconcile creates a managed task on each and
 				// three are transitioned for surface coverage.
@@ -111,6 +124,12 @@ func ProfileParams(name Profile) (SeedParams, error) {
 				// health_condition across distinct contacts). The coverage test
 				// overrides this down to a CI-safe minimum.
 				SeededAssertions: 50,
+				// Prod-shaped graph slice: ~1/10 of the catalog carry a bool fact and
+				// ~12 person→person edges connect the catalog (knows/introduced_by +
+				// a few family edges). Bounded by the catalog size at run time; the
+				// coverage + determinism tests override these down for CI.
+				SeededBoolFacts:     15,
+				SeededRelationships: 12,
 				// Enable cadence-task seeding (>0 gate). The prod-shaped catalog is
 				// all cadence-bearing, so reconcile creates a managed cadence task on
 				// each (catalog-wide, like prod) and three are transitioned to the
@@ -197,6 +216,10 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	// contact). Tracked off the spec rather than assumed so a future catalog change
 	// that drops cadence from a slot is reflected in res.SeededTasks.
 	cadenceBearingCatalogIDs := make([]uuid.UUID, 0, n)
+	// catalogContactsWithoutBirthday is the subset that carries NO contact-path
+	// birthday, so the toolkit-authored date fact (a `birthday`, single-cardinality)
+	// can occupy a fresh slot rather than superseding a contact-create birthday.
+	catalogContactsWithoutBirthday := make([]uuid.UUID, 0, n)
 	for i := 0; i < n; i++ {
 		opts := catalogOptionsFor(i, n, gen.Anchor(), gen.Prefix())
 		spec := gen.Contact(opts...)
@@ -210,6 +233,8 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		// the coverage check can assert the bio surfaces are populated.
 		if spec.Birthday != nil {
 			res.ContactsWithBirthday++
+		} else {
+			catalogContactsWithoutBirthday = append(catalogContactsWithoutBirthday, contact.ID)
 		}
 		if spec.HowMet != nil {
 			res.ContactsWithHowMet++
@@ -377,6 +402,69 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		}
 	}
 
+	// Graph (SP1) value-type + edge assertions. These ride the SAME "seeded LAST"
+	// rule as the text-fact spread above: the gen.BoolFact / gen.DateFact /
+	// gen.EdgeAssertion constructors bump the generator's sourceIDSeq, so they run
+	// AFTER the source replays whose ids depend on the sequence. (They draw NO name
+	// PRNG — only sourceIDSeq — so they cannot shift the name/handle stream; the §6
+	// determinism fingerprint guards any drift regardless.)
+	//
+	// Bool facts (job_seeking/on_sabbatical/traveling) on distinct catalog person
+	// nodes — all auto-if-confident → accepted. Bounded by the catalog size so a
+	// distinct subject per fact keeps the single-cardinality bool predicates from
+	// superseding one another.
+	boolFacts := params.Counts.SeededBoolFacts
+	if boolFacts > len(catalogContactIDs) {
+		boolFacts = len(catalogContactIDs)
+	}
+	for i := 0; i < boolFacts; i++ {
+		subject := catalogContactIDs[i]
+		predicate := catalogBoolFactPredicates[i%len(catalogBoolFactPredicates)]
+		if _, err := h.ReplayAssertion(ctx, subject, gen.BoolFact(predicate, true)); err != nil {
+			return res, fmt.Errorf("profile %s: replay bool fact %d: %w", params.Profile, i, err)
+		}
+		res.SeededBoolFacts++
+	}
+
+	// One toolkit-authored date fact (a `birthday`) asserted DIRECTLY through the
+	// assert path (distinct from the contact-create authority-flip birthday path),
+	// to exercise the new ValueDate plumbing end-to-end. Seeded on a catalog
+	// contact that carries no contact-path birthday so it occupies a fresh
+	// single-cardinality slot. Gated with the bool facts (both demonstrate the new
+	// value-type routing). Anchor-relative so no time.Now().
+	if boolFacts > 0 && len(catalogContactsWithoutBirthday) > 0 {
+		bday := time.Date(gen.Anchor().Year()-40, time.April, 12, 0, 0, 0, 0, time.UTC)
+		if _, err := h.ReplayAssertion(ctx, catalogContactsWithoutBirthday[0], gen.DateFact("birthday", bday)); err != nil {
+			return res, fmt.Errorf("profile %s: replay date fact: %w", params.Profile, err)
+		}
+		res.SeededDateFacts++
+	}
+
+	// Person→person EDGE assertions among already-seeded catalog person nodes (no
+	// new entity nodes — those are a later PR). knows/introduced_by are
+	// auto-if-confident → accepted; sibling_of is always-confirm → proposed, so the
+	// spread covers BOTH review surfaces (D6). The object is the NEXT catalog
+	// contact (wrapping), so there is never a self-edge; bounded by the catalog size
+	// so each subject is distinct (the single-cardinality introduced_by never
+	// supersedes). Both endpoints are person nodes, so the existing per-node
+	// assertion teardown sweep (subject OR object) already removes them.
+	relationships := params.Counts.SeededRelationships
+	if len(catalogContactIDs) < 2 {
+		relationships = 0 // an edge needs two distinct nodes
+	}
+	if relationships > len(catalogContactIDs) {
+		relationships = len(catalogContactIDs)
+	}
+	for i := 0; i < relationships; i++ {
+		subject := catalogContactIDs[i]
+		object := catalogContactIDs[(i+1)%len(catalogContactIDs)]
+		predicate := catalogEdgePredicates[i%len(catalogEdgePredicates)]
+		if _, err := h.ReplayAssertion(ctx, subject, gen.EdgeAssertion(predicate, object)); err != nil {
+			return res, fmt.Errorf("profile %s: replay relationship %d: %w", params.Profile, i, err)
+		}
+		res.SeededRelationships++
+	}
+
 	// Cadence tasks (Todoist) on the cadence-bearing catalog contacts. ReplayTodoist
 	// drives the REAL CadenceSyncProvider reconcile, which reads
 	// ListContactsWithContactBy (contact_by auto-computed from cadence by
@@ -433,6 +521,25 @@ var catalogTextFactPredicates = []string{
 	"job_title",
 	"preference",
 	"occurrence",
+}
+
+// catalogBoolFactPredicates is the bool-fact predicate cycle the value-type
+// spread walks. All three are auto-if-confident → accepted (migration-066
+// catalog bool predicates). Asserted with value=true ("currently X").
+var catalogBoolFactPredicates = []string{
+	"job_seeking",
+	"on_sabbatical",
+	"traveling",
+}
+
+// catalogEdgePredicates is the person→person edge predicate cycle. knows and
+// introduced_by are auto-if-confident → accepted; sibling_of is always-confirm →
+// proposed, so a full cycle covers both the accepted and pending edge surfaces
+// (D6). All are migration-066 catalog person→person edge predicates.
+var catalogEdgePredicates = []string{
+	"knows",
+	"introduced_by",
+	"sibling_of",
 }
 
 // catalogOptionsFor returns the contact-builder options for catalog contact i of

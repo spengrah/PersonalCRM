@@ -728,14 +728,16 @@ func (r *SyntheticSupportRepository) CountAssertionsForSubject(ctx context.Conte
 
 // AssertionSummary is the status + value projection of a LIVE assertion
 // (proposed/accepted) on an ns-prefixed subject node — profile coverage +
-// determinism test only. Exactly one of ValueText / ValueDate is set per the
-// payload (ValueText for text facts, ValueDate "2006-01-02" for birthday); both
-// are projected so the determinism fingerprint covers text AND date bio facts.
+// determinism test only. At most one value carrier is set per the payload
+// (ValueText for text facts, ValueDate "2006-01-02" for birthday, ValueBool for
+// bool facts); an edge sets none. All three are projected so the determinism
+// fingerprint covers every value-type surface.
 type AssertionSummary struct {
 	PredicateKey string
 	Status       string
 	ValueText    *string
 	ValueDate    *string
+	ValueBool    *bool
 }
 
 // ListAssertionsByNodePrefix returns the LIVE assertions whose subject node's
@@ -757,6 +759,10 @@ func (r *SyntheticSupportRepository) ListAssertionsByNodePrefix(ctx context.Cont
 		if row.ValueDate.Valid {
 			d := row.ValueDate.Time.Format("2006-01-02")
 			s.ValueDate = &d
+		}
+		if row.ValueBool.Valid {
+			b := row.ValueBool.Bool
+			s.ValueBool = &b
 		}
 		out = append(out, s)
 	}

@@ -72,6 +72,10 @@ func TestProfileParams(t *testing.T) {
 	// prod-shaped seeds a prod-shaped slice of text-fact assertions (~1/3 of the
 	// catalog); the coverage check overrides this down for CI.
 	require.Greater(t, prod.Counts.SeededAssertions, 0)
+	// prod-shaped seeds bool facts + person→person edges (the value-type/edge
+	// plumbing) so the coverage check has graph rows to assert per-status.
+	require.Greater(t, prod.Counts.SeededBoolFacts, 0)
+	require.Greater(t, prod.Counts.SeededRelationships, 0)
 	// prod-shaped enables cadence-task seeding (>0 gate) so the coverage check has
 	// contact_task rows to assert per-state.
 	require.Greater(t, prod.Counts.SeededTasks, 0)
@@ -93,5 +97,7 @@ func TestDefaultParamsUnchanged(t *testing.T) {
 	require.Equal(t, 0, p.Counts.UnmatchedCalendar)
 	require.Equal(t, 0, p.Counts.OrphanMeetingNote)
 	require.Equal(t, 0, p.Counts.SeededAssertions)
+	require.Equal(t, 0, p.Counts.SeededBoolFacts)
+	require.Equal(t, 0, p.Counts.SeededRelationships)
 	require.Equal(t, 0, p.Counts.SeededTasks)
 }

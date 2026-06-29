@@ -47,17 +47,33 @@ func (h *Harness) assertService() *service.AssertService {
 // RESTRICT).
 func (h *Harness) ReplayAssertion(ctx context.Context, subjectNodeID uuid.UUID, spec factory.AssertionSpec) (AssertionResult, error) {
 	svc := h.assertService()
-	value := spec.ValueText
 	req := service.AssertRequest{
 		SubjectNodeID: subjectNodeID,
 		PredicateKey:  spec.PredicateKey,
-		ValueText:     &value,
 		Confidence:    spec.Confidence,
 		Locators: []service.ProvenanceLocator{{
 			SourceKind:   repository.SourceKindUser,
 			SourceID:     spec.PropositionKey + ":user",
 			ProducerKind: repository.ProducerKindUser,
 		}},
+	}
+	// Route exactly one value carrier per the spec's kind. scalarCount counts ANY
+	// non-nil value pointer, so an edge must set object-only (no empty ValueText)
+	// and a bool/date fact must set its scalar only. ObjectNodeID wins (edges carry
+	// no scalar), then ValueBool, then ValueDate, else a text fact.
+	switch {
+	case spec.ObjectNodeID != nil:
+		obj := *spec.ObjectNodeID
+		req.ObjectNodeID = &obj
+	case spec.ValueBool != nil:
+		v := *spec.ValueBool
+		req.ValueBool = &v
+	case spec.ValueDate != nil:
+		d := *spec.ValueDate
+		req.ValueDate = &d
+	default:
+		value := spec.ValueText
+		req.ValueText = &value
 	}
 	a, err := svc.Assert(ctx, req)
 	if err != nil {

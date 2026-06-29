@@ -89,6 +89,17 @@ type Counts struct {
 	UnmatchedCalendar int // calendar_event rows with an unmatched attendee
 	OrphanMeetingNote int // orphan_needs_review meeting_note rows
 	SeededAssertions  int // graph (SP1) text-fact assertions spread across catalog contact nodes
+	// SeededBoolFacts is the number of bool-fact assertions (job_seeking /
+	// on_sabbatical / traveling, all auto-if-confident → accepted) seeded across
+	// distinct catalog person nodes; bounded by the catalog size at run time. >0
+	// also gates the single toolkit-authored date fact (both exercise the new
+	// value-type assert plumbing). 0 disables.
+	SeededBoolFacts int
+	// SeededRelationships is the number of person→person EDGE assertions seeded
+	// among already-seeded catalog person nodes (knows/introduced_by → accepted,
+	// sibling_of → proposed, so the spread covers both review surfaces); bounded by
+	// the catalog size at run time. Needs ≥2 catalog contacts. 0 disables.
+	SeededRelationships int
 	// SeededTasks is a >0 GATE (not a hard cap) for Todoist cadence-task seeding:
 	// when non-zero the profile runs ReplayTodoist, whose reconcile creates one
 	// `managed` cadence task per cadence-bearing catalog contact (catalog-wide, like
