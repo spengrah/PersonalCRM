@@ -154,14 +154,28 @@ oauth_credential_count() {
             return 1
             ;;
     esac
-    # Count over the in-container local socket (trust auth). `|| true` keeps a psql
-    # failure from tripping set -e before the fail-closed check below prints why.
-    count="$(staging_podman exec crm-postgres psql -U "$user" -d "$dbname" -tAc "SELECT count(*) FROM oauth_credential" 2>/dev/null | tr -d '[:space:]' || true)"
-    if [[ "$count" =~ ^[0-9]+$ ]]; then
-        printf '%s\n' "$count"
+    # Count over the in-container local socket (trust auth). Capture the command's
+    # exit status EXPLICITLY and reject any non-zero BEFORE validating the numeric
+    # output — a count command that fails yet still prints "0" (partial error, psql
+    # quirk) must NOT be read as verified-empty and proceed to the destructive wipe.
+    # The `if cmd; then ... else rc=$?` form keeps the failure from tripping set -e
+    # while preserving the real status (no `|| true` to swallow it).
+    local rc trimmed
+    if count="$(staging_podman exec crm-postgres psql -U "$user" -d "$dbname" -tAc "SELECT count(*) FROM oauth_credential" 2>/dev/null)"; then
+        rc=0
+    else
+        rc=$?
+    fi
+    if [ "$rc" -ne 0 ]; then
+        echo "staging-reset: REFUSING — oauth_credential count command failed (rc=$rc); not reseeding (host script/DB state?)" >&2
+        return 1
+    fi
+    trimmed="$(printf '%s' "$count" | tr -d '[:space:]')"
+    if [[ "$trimmed" =~ ^[0-9]+$ ]]; then
+        printf '%s\n' "$trimmed"
         return 0
     fi
-    echo "staging-reset: REFUSING — could not verify oauth_credential count (got '$count'); not reseeding (host script/DB state?)" >&2
+    echo "staging-reset: REFUSING — could not verify oauth_credential count (got '$trimmed'); not reseeding (host script/DB state?)" >&2
     return 1
 }
 

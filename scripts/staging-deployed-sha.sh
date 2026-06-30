@@ -15,15 +15,17 @@
 # Root-owned wrapper invoked by deploy-staging.yml's deploy job via a single
 # args-free sudoers entry (`sudo /usr/local/sbin/staging-deployed-sha.sh`), read
 # BEFORE the deploy swaps the image (the host-pinned diff base). The tenant
-# identity is hardcoded here (not workflow-controllable), mirroring
-# staging-reseed.sh / deploy-staging.sh; sudo resets the environment, so the
-# sudoers entry must NOT use SETENV/env_keep and the workflow must NEVER use
-# sudo -E.
+# identity + unit path are HARDCODED (not environment-overridable), mirroring
+# staging-reseed.sh / deploy-staging.sh: sudo resets the environment, and even a
+# misconfigured sudoers (SETENV/env_keep) or a `sudo -E` must NEVER let the runner
+# redirect which tenant/unit this reads. So the sudoers entry must NOT use
+# SETENV/env_keep and the workflow must NEVER use sudo -E — and as defense-in-depth
+# nothing below honors a caller-supplied CRM_USER/CRM_HOME/unit override.
 set -uo pipefail
 
-CRM_USER="${CRM_USER:-staging}"
-CRM_HOME="${CRM_HOME:-/var/lib/staging}"
-BACKEND_UNIT="${STAGING_BACKEND_UNIT:-$CRM_HOME/.config/containers/systemd/personalcrm-backend.container}"
+CRM_USER=staging
+CRM_HOME=/var/lib/staging
+BACKEND_UNIT="$CRM_HOME/.config/containers/systemd/personalcrm-backend.container"
 
 # Read the pinned Image= line as the tenant (mirrors staging-reset.sh read_image_ref).
 image="$(sudo -u "$CRM_USER" sed -n 's/^Image=//p' "$BACKEND_UNIT" 2>/dev/null | head -1)"

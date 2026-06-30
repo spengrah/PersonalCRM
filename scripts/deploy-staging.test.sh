@@ -234,9 +234,18 @@ test_workflow_checkout_resilient() {
 }
 
 test_workflow_decision_inline_fallback() {
-    echo "test: decision step has the inline missing-script fallback (checkout-flake safe)"
-    if wf_has "[ -x scripts/ci/staging-reseed-decision.sh ]"; then ok; else fail "decision must guard on the script being present (else a flaked checkout 127-reds the job)"; fi
+    echo "test: decision degrades to no-reseed on a non-success checkout OR a missing script (stale-checkout + flake safe)"
+    # Gate on the checkout OUTCOME, not just script presence: a failed
+    # continue-on-error checkout on a persistent self-hosted runner can leave a
+    # STALE older checkout whose script still exists — so existence alone would
+    # decide from stale path-filters.yml/script contents.
+    if wf_has "id: checkout"; then ok; else fail "checkout step must have an id for outcome gating"; fi
+    if wf_has "steps.checkout.outcome"; then ok; else fail "decision must gate on steps.checkout.outcome"; fi
+    if wf_has "CHECKOUT_OUTCOME" && grep -qF 'CHECKOUT_OUTCOME" = "success"' "$WORKFLOW"; then ok
+    else fail "decision must run the real script only when CHECKOUT_OUTCOME == success"; fi
+    if wf_has "[ -x scripts/ci/staging-reseed-decision.sh ]"; then ok; else fail "decision must also guard on the script being present (else a flaked checkout 127-reds the job)"; fi
     if wf_has "seed_changed=false"; then ok; else fail "fallback must default seed_changed=false"; fi
+    if wf_has "migrations_changed=false"; then ok; else fail "fallback must default migrations_changed=false"; fi
     if wf_has "base_known=false"; then ok; else fail "fallback must default base_known=false"; fi
 }
 

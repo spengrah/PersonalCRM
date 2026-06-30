@@ -96,7 +96,9 @@ if [ "\$1" = "exec" ]; then
     if [[ "\$*" == *oauth_credential* ]]; then
         if [ "\${STUB_OAUTH_PSQL_FAIL:-0}" = "1" ]; then exit 1; fi
         echo "\${STUB_OAUTH_COUNT:-0}"
-        exit 0
+        # STUB_OAUTH_PSQL_RC lets a test emit output AND exit non-zero (a count
+        # command that fails yet still prints a number must NOT be trusted).
+        exit "\${STUB_OAUTH_PSQL_RC:-0}"
     fi
     exit 0
 fi
@@ -400,6 +402,14 @@ test_oauth_unverifiable_fails() {
     if [ "$RC" -ne 0 ]; then ok; else fail "non-numeric count must fail-closed (exit !=0), got $RC"; fi
     if log_lacks "stop personalcrm-backend.service"; then ok; else fail "non-numeric count must NOT stop the backend"; fi
     if grep -F 'podman run' "$CALL_LOG" | grep -q -- '--reset-and-seed'; then fail "non-numeric count must NOT run the reset"; else ok; fi
+    cleanup_sandbox
+    # (c) count command emits a clean number BUT exits non-zero -> must NOT trust it
+    #     (a failed count that still prints "0" must never be read as verified-empty).
+    make_sandbox
+    STUB_OAUTH_COUNT=0 STUB_OAUTH_PSQL_RC=1 run_local_oauth
+    if [ "$RC" -ne 0 ]; then ok; else fail "count command exiting non-zero must fail-closed even with numeric output, got $RC"; fi
+    if log_lacks "stop personalcrm-backend.service"; then ok; else fail "count-command failure must NOT stop the backend"; fi
+    if grep -F 'podman run' "$CALL_LOG" | grep -q -- '--reset-and-seed'; then fail "count-command failure must NOT run the reset"; else ok; fi
     cleanup_sandbox
 }
 

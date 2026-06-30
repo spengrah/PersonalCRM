@@ -148,6 +148,7 @@ jobs:
         run: sudo /usr/local/sbin/deploy-staging.sh "${{ needs.gate.outputs.sha }}"
 
       - name: Checkout (post-deploy; for the reseed decision only)
+        id: checkout
         uses: actions/checkout@v4
         continue-on-error: true
         with:
@@ -155,11 +156,20 @@ jobs:
           fetch-depth: 0
 
       - name: Decide reseed (seed/migration diff vs the live base)
+        env:
+          CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
         run: |
-          if [ -x scripts/ci/staging-reseed-decision.sh ]; then
+          # Fail-closed on a non-success checkout, NOT merely a missing script: a
+          # failed continue-on-error checkout on a persistent self-hosted runner can
+          # leave a STALE older checkout in the workspace (the script + path-filters.yml
+          # are still present, just stale), so script-existence alone would decide from
+          # stale contents. Only a CLEAN checkout (outcome == success) AND the script
+          # present runs the real decision; anything else degrades to no-reseed
+          # (persistence wins on any uncertainty after the already-completed deploy).
+          if [ "$CHECKOUT_OUTCOME" = "success" ] && [ -x scripts/ci/staging-reseed-decision.sh ]; then
             scripts/ci/staging-reseed-decision.sh "$prev_sha" "${{ needs.gate.outputs.sha }}"
           else
-            echo "reseed-decision: script missing (checkout failed?); defaulting to no-reseed" >&2
+            echo "reseed-decision: checkout outcome='$CHECKOUT_OUTCOME' or script missing; defaulting to no-reseed (fail-closed)" >&2
             { echo "seed_changed=false"; echo "migrations_changed=false"; echo "base_known=false"; } >> "$GITHUB_ENV"
           fi
 
