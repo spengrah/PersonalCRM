@@ -419,7 +419,7 @@ test_oauth_dbname_authoritative() {
     make_sandbox
     # POSTGRES_DB/POSTGRES_USER deliberately DISAGREE with DATABASE_URL; the count
     # MUST use the DATABASE_URL values (else it could count an empty wrong DB and
-    # wipe real oauth rows). regression guard for the round-2 [P1] finding.
+    # wipe real oauth rows). Regression guard for the wrong-DB wipe hazard.
     write_env_raw $'CRM_ENV=staging\nDATABASE_URL=postgres://crm_user:x@crm-postgres:5432/personal_crm\nPOSTGRES_DB=crm_staging\nPOSTGRES_USER=other\n'
     STUB_OAUTH_COUNT=0 run_local_oauth
     if [ "$RC" -eq 0 ]; then ok; else fail "should proceed with count 0, got $RC"; fi
