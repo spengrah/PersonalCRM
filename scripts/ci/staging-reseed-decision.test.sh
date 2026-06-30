@@ -63,11 +63,32 @@ make_fixture() {
         git commit -q -m "unrelated change"
         C3="$(git rev-parse HEAD)"
 
-        printf '%s\n%s\n%s\n%s\n' "$C0" "$C1" "$C2" "$C3" > shas.txt
+        # Test-ONLY synthetic change (a *_test.go under synthetic/) — in the seed
+        # path-group but NOT the built seed surface, so it must NOT trigger a reseed.
+        echo "package synthetic" > backend/internal/synthetic/profiles_test.go
+        git add backend/internal/synthetic/profiles_test.go
+        git commit -q -m "synthetic test-only change"
+        C4="$(git rev-parse HEAD)"
+
+        # Synthetic testdata fixture — also not the built seed surface.
+        mkdir -p backend/internal/synthetic/testdata
+        echo "{}" > backend/internal/synthetic/testdata/seed.json
+        git add backend/internal/synthetic/testdata/seed.json
+        git commit -q -m "synthetic testdata change"
+        C5="$(git rev-parse HEAD)"
+
+        # RUNTIME synthetic change (no test file) — the built seed surface.
+        mkdir -p backend/internal/synthetic/factory
+        echo "package factory" > backend/internal/synthetic/factory/foo.go
+        git add backend/internal/synthetic/factory/foo.go
+        git commit -q -m "synthetic runtime change"
+        C6="$(git rev-parse HEAD)"
+
+        printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "$C0" "$C1" "$C2" "$C3" "$C4" "$C5" "$C6" > shas.txt
     )
     # Portable read (no bash-4 mapfile): the commit SHAs are set in the subshell,
     # so read them back from the fixture file, one per line.
-    { read -r C0; read -r C1; read -r C2; read -r C3; } < "$FIXTURE/shas.txt"
+    { read -r C0; read -r C1; read -r C2; read -r C3; read -r C4; read -r C5; read -r C6; } < "$FIXTURE/shas.txt"
 }
 
 cleanup_fixture() { [ -n "${FIXTURE:-}" ] && rm -rf "$FIXTURE"; }
@@ -130,6 +151,52 @@ test_both_changed() {
     cleanup_fixture
 }
 
+test_test_only_synthetic_no_reseed() {
+    echo "test: test-only synthetic change (*_test.go) -> seed_changed=false (not the built seed surface)"
+    make_fixture
+    run_decision "$C3" "$C4"
+    if [ "$RC" -eq 0 ]; then ok; else fail "must exit 0, got $RC"; fi
+    assert_flag seed_changed false
+    assert_flag base_known true
+    cleanup_fixture
+}
+
+test_testdata_synthetic_no_reseed() {
+    echo "test: synthetic testdata change -> seed_changed=false"
+    make_fixture
+    run_decision "$C4" "$C5"
+    assert_flag seed_changed false
+    assert_flag base_known true
+    cleanup_fixture
+}
+
+test_test_and_testdata_only_no_reseed() {
+    echo "test: combined test+testdata-only range (no runtime) -> seed_changed=false"
+    make_fixture
+    run_decision "$C3" "$C5"
+    assert_flag seed_changed false
+    assert_flag base_known true
+    cleanup_fixture
+}
+
+test_runtime_synthetic_reseed() {
+    echo "test: runtime synthetic change (factory/foo.go) -> seed_changed=true"
+    make_fixture
+    run_decision "$C5" "$C6"
+    assert_flag seed_changed true
+    assert_flag base_known true
+    cleanup_fixture
+}
+
+test_mixed_runtime_and_test_reseed() {
+    echo "test: mixed range (test + testdata + runtime synthetic) -> seed_changed=true (runtime present)"
+    make_fixture
+    run_decision "$C3" "$C6"   # spans profiles_test.go + testdata/seed.json + factory/foo.go
+    assert_flag seed_changed true
+    assert_flag base_known true
+    cleanup_fixture
+}
+
 test_empty_base() {
     echo "test: empty BASE -> base_known=false, seed_changed=false, exit 0"
     make_fixture
@@ -157,6 +224,11 @@ main() {
     test_migration_only
     test_unrelated_only
     test_both_changed
+    test_test_only_synthetic_no_reseed
+    test_testdata_synthetic_no_reseed
+    test_test_and_testdata_only_no_reseed
+    test_runtime_synthetic_reseed
+    test_mixed_runtime_and_test_reseed
     test_empty_base
     test_base_not_in_history
 

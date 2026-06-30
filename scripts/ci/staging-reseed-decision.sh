@@ -6,8 +6,12 @@
 # read by staging-deployed-sha.sh BEFORE the deploy swaps it) against the SHA
 # being deployed (HEAD). Writes three flags to $GITHUB_ENV (and echoes them for
 # local runs / tests):
-#   seed_changed        any changed file is in the `seed` path-filters group
-#                       (backend/internal/synthetic/**) -> reseed candidate.
+#   seed_changed        a changed file is in the `seed` path-filters group
+#                       (backend/internal/synthetic/**) AND is a RUNTIME synthetic
+#                       file -> reseed candidate. Test-only changes (`*_test.go`,
+#                       `**/testdata/**`) are NOT the built seed surface and do not
+#                       trigger a reseed (the test exclusion lives below, not in the
+#                       dual-purpose path-group which still feeds test selection).
 #   migrations_changed  any changed file is under backend/migrations/ -> nudge only
 #                       (migrations transform the accumulated world; never auto-wipe).
 #   base_known          true iff BASE was a resolvable commit and the diff ran.
@@ -80,8 +84,18 @@ seed_changed=false
 migrations_changed=false
 while IFS= read -r f; do
   [ -n "$f" ] || continue
+  # A seed-group match counts as a seed-surface change ONLY for a RUNTIME synthetic
+  # file. The `seed` path-group (backend/internal/synthetic/**) is dual-purpose — it
+  # also drives CI/pre-push test SELECTION, which legitimately includes `_test.go` +
+  # testdata — but those are NOT part of the BUILT seed surface, so a test-only
+  # change must not trigger the destructive staging reseed. (Test exclusion lives
+  # here, not in path-filters.yml, so test selection keeps seeing the test files.)
   if file_in_group "$f" seed; then
-    seed_changed=true
+    case "$f" in
+      *_test.go)    ;;  # synthetic test file — not part of the built seed surface
+      */testdata/*) ;;  # synthetic testdata fixture — not part of the built seed surface
+      *) seed_changed=true ;;  # runtime synthetic file (profiles.go, factory/*.go, ...)
+    esac
   fi
   case "$f" in
     backend/migrations/*) migrations_changed=true ;;
