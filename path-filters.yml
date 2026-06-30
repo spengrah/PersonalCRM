@@ -13,6 +13,10 @@
 #   mac_daemon  → CI mac-daemon-tests. NOTE: the local Swift gate (check_swift) does NOT
 #                 use this group; it uses a stricter literal 'mac-daemon/' prefix test, so a
 #                 ci.yml-only push runs mac-daemon-tests in CI but NOT swift test locally.
+#   seed        → deploy-staging.yml reseed decision (scripts/ci/staging-reseed-decision.sh,
+#                 via file_in_group). ORTHOGONAL: synthetic stays in `backend` too, so this
+#                 group changes NO CI/pre-push test selection — it only flags the seed surface
+#                 the staging auto-reseed diffs against. No CI/pre-push consumer reads it.
 
 backend:
   - 'backend/**'
@@ -29,3 +33,5 @@ frontend:
 mac_daemon:
   - 'mac-daemon/**'
   - '.github/workflows/ci.yml'
+seed:
+  - 'backend/internal/synthetic/**'

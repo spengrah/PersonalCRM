@@ -186,6 +186,83 @@ test_workflow_ci_gate_qualifier() {
     if wf_has "branch=develop"; then ok; else fail "CI gate query must include branch=develop"; fi
 }
 
+# ===========================================================================
+# Auto-reseed wiring (D2 + D5): ordered deploy-job steps over deploy-staging.yml
+# ===========================================================================
+
+test_workflow_reseed_steps_exist() {
+    echo "test: the capture/checkout/decision/reseed/breadcrumb/nudge steps all exist"
+    if wf_has "staging-deployed-sha.sh"; then ok; else fail "missing the host-pinned base capture step"; fi
+    if wf_has "uses: actions/checkout@v4"; then ok; else fail "missing the post-deploy checkout step"; fi
+    if wf_has "staging-reseed-decision.sh"; then ok; else fail "missing the reseed-decision step"; fi
+    if wf_has "/usr/local/sbin/staging-reseed.sh"; then ok; else fail "missing the reseed step"; fi
+    if wf_has "skipping auto-reseed"; then ok; else fail "missing the OAuth-skip breadcrumb (greps the stable marker)"; fi
+    if wf_has "GITHUB_STEP_SUMMARY"; then ok; else fail "nudges must write to GITHUB_STEP_SUMMARY"; fi
+    if wf_has "make staging-reset"; then ok; else fail "summaries must point at the make staging-reset escape hatch"; fi
+}
+
+test_workflow_reseed_step_order() {
+    echo "test: load-bearing step ORDER — capture < deploy < checkout < decision < reseed"
+    local cap dep chk dec res
+    cap=$(grep -n 'staging-deployed-sha.sh'            "$WORKFLOW" | head -1 | cut -d: -f1)
+    dep=$(grep -n '/usr/local/sbin/deploy-staging.sh'  "$WORKFLOW" | head -1 | cut -d: -f1)
+    chk=$(grep -n 'uses: actions/checkout@v4'          "$WORKFLOW" | head -1 | cut -d: -f1)
+    dec=$(grep -n 'staging-reseed-decision.sh'         "$WORKFLOW" | head -1 | cut -d: -f1)
+    res=$(grep -n '/usr/local/sbin/staging-reseed.sh'  "$WORKFLOW" | head -1 | cut -d: -f1)
+    if [ -n "$cap" ] && [ -n "$dep" ] && [ -n "$chk" ] && [ -n "$dec" ] && [ -n "$res" ]; then ok
+    else fail "a step marker is missing (cap=$cap dep=$dep chk=$chk dec=$dec res=$res)"; fi
+    if [ -n "$cap" ] && [ -n "$dep" ] && [ "$cap" -lt "$dep" ]; then ok; else fail "capture must precede deploy (cap=$cap dep=$dep)"; fi
+    if [ -n "$dep" ] && [ -n "$chk" ] && [ "$dep" -lt "$chk" ]; then ok; else fail "deploy must precede checkout (dep=$dep chk=$chk)"; fi
+    if [ -n "$chk" ] && [ -n "$dec" ] && [ "$chk" -lt "$dec" ]; then ok; else fail "checkout must precede decision (chk=$chk dec=$dec)"; fi
+    if [ -n "$dec" ] && [ -n "$res" ] && [ "$dec" -lt "$res" ]; then ok; else fail "decision must precede reseed (dec=$dec res=$res)"; fi
+}
+
+test_workflow_reseed_step_target_and_condition() {
+    echo "test: reseed gated on seed_changed, calls the wrapper (never reset/artifact directly), PIPESTATUS"
+    if wf_has "env.seed_changed == 'true'"; then ok; else fail "reseed must be gated on env.seed_changed == 'true'"; fi
+    if wf_has "PIPESTATUS"; then ok; else fail "reseed must propagate PIPESTATUS through the tee"; fi
+    # The workflow only ever calls the root-owned wrappers, never the reset/artifact
+    # scripts directly. ('make staging-reset' has no '.sh', so it does not match.)
+    if wf_lacks "staging-reset.sh"; then ok; else fail "workflow must NOT call staging-reset.sh directly (use the wrapper)"; fi
+    if wf_lacks "deploy-artifact.sh"; then ok; else fail "workflow must NOT call deploy-artifact.sh directly"; fi
+}
+
+test_workflow_checkout_resilient() {
+    echo "test: post-deploy checkout is resilient (fetch-depth: 0 + continue-on-error)"
+    if wf_has "fetch-depth: 0"; then ok; else fail "checkout must use fetch-depth: 0 (base + HEAD present for git diff)"; fi
+    if wf_has "continue-on-error: true"; then ok; else fail "checkout must be continue-on-error: true (a flake costs only the reseed)"; fi
+}
+
+test_workflow_decision_inline_fallback() {
+    echo "test: decision degrades to no-reseed on a non-success checkout OR a missing script (stale-checkout + flake safe)"
+    # Gate on the checkout OUTCOME, not just script presence: a failed
+    # continue-on-error checkout on a persistent self-hosted runner can leave a
+    # STALE older checkout whose script still exists — so existence alone would
+    # decide from stale path-filters.yml/script contents.
+    if wf_has "id: checkout"; then ok; else fail "checkout step must have an id for outcome gating"; fi
+    if wf_has "steps.checkout.outcome"; then ok; else fail "decision must gate on steps.checkout.outcome"; fi
+    if wf_has "CHECKOUT_OUTCOME" && grep -qF 'CHECKOUT_OUTCOME" = "success"' "$WORKFLOW"; then ok
+    else fail "decision must run the real script only when CHECKOUT_OUTCOME == success"; fi
+    if wf_has "[ -x scripts/ci/staging-reseed-decision.sh ]"; then ok; else fail "decision must also guard on the script being present (else a flaked checkout 127-reds the job)"; fi
+    if wf_has "seed_changed=false"; then ok; else fail "fallback must default seed_changed=false"; fi
+    if wf_has "migrations_changed=false"; then ok; else fail "fallback must default migrations_changed=false"; fi
+    if wf_has "base_known=false"; then ok; else fail "fallback must default base_known=false"; fi
+}
+
+test_workflow_single_job_no_decision_job_no_deployments() {
+    echo "test: single deploy job (needs: gate only); no reseed_decision job; no deployments permission"
+    if wf_has "needs: gate"; then ok; else fail "deploy job must keep needs: gate"; fi
+    if wf_lacks "reseed_decision"; then ok; else fail "must NOT introduce a separate reseed_decision job"; fi
+    if wf_lacks "deployments:"; then ok; else fail "must NOT add a deployments: permission"; fi
+}
+
+test_workflow_nudge_conditions() {
+    echo "test: migration-nudge + no-base-nudge conditions are exact (no double-nudge)"
+    if wf_has "env.migrations_changed == 'true' && env.seed_changed != 'true'"; then ok
+    else fail "migration nudge must fire only when migrations changed AND seed did not"; fi
+    if wf_has "env.base_known == 'false'"; then ok; else fail "no-base nudge must fire on base_known == 'false'"; fi
+}
+
 # ---------------------------------------------------------------------------
 main() {
     test_wrapper_forces_tenant_and_forwards_sha
@@ -199,6 +276,13 @@ main() {
     test_workflow_no_trusted_knob
     test_workflow_three_way_gate_and_job_split
     test_workflow_ci_gate_qualifier
+    test_workflow_reseed_steps_exist
+    test_workflow_reseed_step_order
+    test_workflow_reseed_step_target_and_condition
+    test_workflow_checkout_resilient
+    test_workflow_decision_inline_fallback
+    test_workflow_single_job_no_decision_job_no_deployments
+    test_workflow_nudge_conditions
 
     echo ""
     echo "===================="

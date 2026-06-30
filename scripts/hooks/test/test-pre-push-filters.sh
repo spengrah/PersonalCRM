@@ -68,6 +68,18 @@ assert_not_in_group "frontendx/y.ts" frontend
 # Self-gating regression guard: the filter file routes to validation.
 assert_in_group     "path-filters.yml" backend
 
+# --- seed group: the staging auto-reseed surface (orthogonal to test selection) ---
+# Synthetic toolkit + profiles ARE the seed surface.
+assert_in_group     "backend/internal/synthetic/profiles.go" seed
+assert_in_group     "backend/internal/synthetic/factory/foo.go" seed
+# Orthogonality: a synthetic file is ALSO in backend, so the seed group changes no
+# Go/frontend test selection (it is a separate classification consumed only by the
+# reseed decision).
+assert_in_group     "backend/internal/synthetic/profiles.go" backend
+# Non-seed backend code and migrations are NOT in the seed group.
+assert_not_in_group "backend/internal/api/handlers/contact.go" seed
+assert_not_in_group "backend/migrations/074_x.up.sql" seed
+
 # --- any_file_in_groups: the Go/frontend gate's decision boundary ---
 # Daemon-only push does NOT run Go suite (headline invariant).
 assert_false "any_file_in_groups daemon-only -> Go suite NOT run" \

@@ -19,11 +19,21 @@
 # SeedAllowed gate is the authoritative in-process guard; this shell check is the
 # earlier, stricter backstop.
 #
-# Usage: ./scripts/staging-reset.sh [--local]
-#   --local   Run on the VPS as root (no ssh): the tenant podman/systemctl helpers
-#             run via `sudo -u <tenant>` locally. Default (ssh) mode targets
-#             STAGING_HOST (default stovepipes) so `make staging-reset` and the QA
-#             harness (#380) can drive it from the Mac.
+# Usage: ./scripts/staging-reset.sh [--local] [--require-oauth-empty]
+#   --local                Run on the VPS as root (no ssh): the tenant podman/
+#                          systemctl helpers run via `sudo -u <tenant>` locally.
+#                          Default (ssh) mode targets STAGING_HOST (default
+#                          stovepipes) so `make staging-reset` and the QA harness
+#                          (#380) can drive it from the Mac.
+#   --require-oauth-empty  Auto-path guard (deploy-staging.yml). BEFORE stopping
+#                          anything, count live oauth_credential rows; skip the
+#                          reseed cleanly (exit 0, service untouched, stable
+#                          "skipping auto-reseed" log marker) if any exist —
+#                          connecting a sync account to staging disables the
+#                          destructive wipe so the connection survives. Fail-closed
+#                          (exit non-zero) if the count cannot be verified. Manual
+#                          `make staging-reset` omits this (operator force = full
+#                          wipe regardless of oauth).
 #
 # Dev seeding is a SEPARATE tool: `make dev-seed` -> scripts/dev-seed.sh. Running
 # this on a dev Mac fails loudly (no staging tenant / no STAGING_HOST) — by design.
@@ -32,10 +42,15 @@ set -euo pipefail
 
 # Parse arguments
 LOCAL=false
+REQUIRE_OAUTH_EMPTY=false
 for arg in "$@"; do
     case "$arg" in
         --local) LOCAL=true ;;
-        *) echo "staging-reset: unknown argument: $arg" >&2; exit 2 ;;
+        --require-oauth-empty) REQUIRE_OAUTH_EMPTY=true ;;
+        # The fail-loud drift guard: a stale host copy that predates a newer flag
+        # hits this branch and reds the deploy reseed step instead of silently
+        # wiping. Keep the message actionable (reinstall the host copy).
+        *) echo "staging-reset: unknown argument: $arg (host copy out of date? reinstall /usr/local/sbin/staging-reset.sh)" >&2; exit 2 ;;
     esac
 done
 
@@ -65,6 +80,7 @@ if [ "$LOCAL" = true ]; then
     staging_podman() { cd /tmp && sudo -u "$CRM_USER" HOME=$CRM_HOME XDG_RUNTIME_DIR=/run/user/"$CRM_UID" podman "$@"; }
     read_crm_env()   { sudo -u "$CRM_USER" sed -n 's/^CRM_ENV=//p' "$ENV_FILE" 2>/dev/null | head -1; }
     read_image_ref() { sudo -u "$CRM_USER" sed -n 's/^Image=//p' "$BACKEND_UNIT" 2>/dev/null | head -1; }
+    read_database_url(){ sudo -u "$CRM_USER" sed -n 's/^DATABASE_URL=//p' "$ENV_FILE" 2>/dev/null | head -1; }
     env_file_exists(){ sudo -u "$CRM_USER" test -e "$ENV_FILE"; }
 else
     if ! ssh -q -o ConnectTimeout=5 "$STAGING_HOST" exit; then
@@ -84,8 +100,84 @@ else
     # shellcheck disable=SC2029
     read_image_ref() { ssh "$STAGING_HOST" "sudo -n -u $CRM_USER sed -n 's/^Image=//p' '$BACKEND_UNIT' 2>/dev/null | head -1"; }
     # shellcheck disable=SC2029
+    read_database_url(){ ssh "$STAGING_HOST" "sudo -n -u $CRM_USER sed -n 's/^DATABASE_URL=//p' '$ENV_FILE' 2>/dev/null | head -1"; }
+    # shellcheck disable=SC2029
     env_file_exists(){ ssh "$STAGING_HOST" "sudo -n -u $CRM_USER test -e '$ENV_FILE'"; }
 fi
+
+# oauth_credential_count: echo the live oauth_credential row count on stdout, or
+# fail-closed (return non-zero + a loud, specific stderr reason) on ANY uncertainty.
+# The auto path gates on this: a non-empty oauth_credential means a sync account is
+# connected to staging, so the destructive --reset-and-seed (which hard-wipes
+# oauth_credential) must be skipped to preserve that connection.
+#
+# DATABASE_URL is the SOLE authoritative source for user/dbname/host: it is the
+# only guaranteed .env contract AND the exact DB the app/reset connects with.
+# POSTGRES_USER/POSTGRES_DB are NEVER consulted — they are baked into the DB unit,
+# are not a .env contract, and can DISAGREE with the live DB; counting an empty
+# wrong DB would wipe real oauth rows. The count runs INSIDE the crm-postgres
+# container over its local socket (default pg_hba `local ... trust` -> no password
+# in podman argv/env, no -h/TCP), so it always counts THAT container's DB. We
+# therefore require DATABASE_URL's host to BE that local target before counting,
+# else the count would target a different DB than the reset wipes.
+oauth_credential_count() {
+    local url rest userinfo user after_at hostport host dbname count
+    url="$(read_database_url || true)"
+    # Strip surrounding quotes (a quoted .env value).
+    url="${url%\"}"; url="${url#\"}"
+    url="${url%\'}"; url="${url#\'}"
+    if [ -z "$url" ]; then
+        echo "staging-reset: REFUSING — DATABASE_URL not found in $ENV_FILE; cannot verify oauth_credential count" >&2
+        return 1
+    fi
+    # Parse postgres://user[:pass]@host[:port]/dbname[?query] authoritatively.
+    rest="${url#*://}"          # strip scheme
+    rest="${rest%%\?*}"         # strip ?query
+    userinfo="${rest%%@*}"      # user[:pass]
+    user="${userinfo%%:*}"      # user
+    after_at="${rest#*@}"       # host[:port]/dbname
+    hostport="${after_at%%/*}"  # host[:port]
+    host="${hostport%%:*}"      # host
+    dbname="${after_at#*/}"     # dbname (path after the first '/')
+    dbname="${dbname%%/*}"      # defensively drop any extra path segment
+    if [ -z "$user" ] || [ -z "$host" ] || [ -z "$dbname" ]; then
+        echo "staging-reset: REFUSING — could not parse user/host/dbname from DATABASE_URL; not reseeding" >&2
+        return 1
+    fi
+    # The in-container count only matches the DB the reset wipes when DATABASE_URL's
+    # host IS that local target. Refuse on a foreign host (we'd count the local DB
+    # while the reset wipes a remote one). localhost/127.0.0.1 accepted for native.
+    case "$host" in
+        crm-postgres|localhost|127.0.0.1) ;;
+        *)
+            echo "staging-reset: REFUSING — DATABASE_URL host '$host' is not the local crm-postgres target; refusing to verify a different DB than the reset wipes" >&2
+            return 1
+            ;;
+    esac
+    # Count over the in-container local socket (trust auth). Capture the command's
+    # exit status EXPLICITLY and reject any non-zero BEFORE validating the numeric
+    # output — a count command that fails yet still prints "0" (partial error, psql
+    # quirk) must NOT be read as verified-empty and proceed to the destructive wipe.
+    # The `if cmd; then ... else rc=$?` form keeps the failure from tripping set -e
+    # while preserving the real status (no `|| true` to swallow it).
+    local rc trimmed
+    if count="$(staging_podman exec crm-postgres psql -U "$user" -d "$dbname" -tAc "SELECT count(*) FROM oauth_credential" 2>/dev/null)"; then
+        rc=0
+    else
+        rc=$?
+    fi
+    if [ "$rc" -ne 0 ]; then
+        echo "staging-reset: REFUSING — oauth_credential count command failed (rc=$rc); not reseeding (host script/DB state?)" >&2
+        return 1
+    fi
+    trimmed="$(printf '%s' "$count" | tr -d '[:space:]')"
+    if [[ "$trimmed" =~ ^[0-9]+$ ]]; then
+        printf '%s\n' "$trimmed"
+        return 0
+    fi
+    echo "staging-reset: REFUSING — could not verify oauth_credential count (got '$trimmed'); not reseeding (host script/DB state?)" >&2
+    return 1
+}
 
 # 1. The deployed staging .env must exist (read as the tenant; perms hold).
 if ! env_file_exists; then
@@ -114,6 +206,23 @@ IMAGE_REF="$(read_image_ref || true)"
 if [ -z "$IMAGE_REF" ]; then
     echo "staging-reset: could not read a pinned Image= from $BACKEND_UNIT" >&2
     exit 1
+fi
+
+# 3b. OAuth guard (auto path only). BEFORE the trap/stop, so every branch is a true
+#     no-op on the running service. --reset-and-seed hard-wipes oauth_credential, so
+#     a connected sync account (non-empty oauth_credential) disables the destructive
+#     path — persistence wins exactly when a sync test is in flight. Unverifiable
+#     count ⇒ fail-closed (exit non-zero, loud) — never wipe on uncertainty.
+if [ "$REQUIRE_OAUTH_EMPTY" = true ]; then
+    if ! OAUTH_COUNT="$(oauth_credential_count)"; then
+        # oauth_credential_count already logged the specific, loud refuse reason.
+        exit 1
+    fi
+    if [ "$OAUTH_COUNT" -gt 0 ]; then
+        echo "staging-reset: oauth present ($OAUTH_COUNT credential(s)); skipping auto-reseed to preserve sync connections" >&2
+        exit 0
+    fi
+    echo "staging-reset: oauth_credential empty; proceeding with auto-reseed" >&2
 fi
 
 # 4. Install the EXIT trap that restarts the backend — BEFORE the stop. If the

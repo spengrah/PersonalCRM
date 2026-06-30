@@ -91,6 +91,17 @@ EOF
     cat > "$SANDBOX/bin/podman" <<EOF
 #!/usr/bin/env bash
 echo "podman \$*" >> "$CALL_LOG"
+if [ "\$1" = "exec" ]; then
+    # podman exec crm-postgres psql ... -tAc "SELECT count(*) FROM oauth_credential"
+    if [[ "\$*" == *oauth_credential* ]]; then
+        if [ "\${STUB_OAUTH_PSQL_FAIL:-0}" = "1" ]; then exit 1; fi
+        echo "\${STUB_OAUTH_COUNT:-0}"
+        # STUB_OAUTH_PSQL_RC lets a test emit output AND exit non-zero (a count
+        # command that fails yet still prints a number must NOT be trusted).
+        exit "\${STUB_OAUTH_PSQL_RC:-0}"
+    fi
+    exit 0
+fi
 if [ "\$1" = "run" ]; then
     for a in "\$@"; do
         if [ "\$a" = "--reset-and-seed" ]; then exit "\${STUB_RESET_RC:-0}"; fi
@@ -156,6 +167,18 @@ run_ssh() {
         bash "$SCRIPT" >/dev/null 2>"$SANDBOX/stderr"
     RC=$?
 }
+
+# run_local_oauth : --local --require-oauth-empty (the auto path's invocation).
+run_local_oauth() {
+    PATH="$SANDBOX/bin:$PATH" \
+        STAGING_ENV_FILE="$SANDBOX/staging.env" \
+        STAGING_BACKEND_UNIT="$SANDBOX/backend.container" \
+        bash "$SCRIPT" --local --require-oauth-empty >/dev/null 2>"$SANDBOX/stderr"
+    RC=$?
+}
+
+# write_env_raw <contents> : write the fixture .env verbatim (for custom URLs).
+write_env_raw() { printf '%s' "$1" > "$SANDBOX/staging.env"; }
 
 log_has()   { grep -qF -- "$1" "$CALL_LOG"; }
 log_lacks() { ! grep -qF -- "$1" "$CALL_LOG"; }
@@ -330,6 +353,118 @@ test_ssh_refuses_production() {
     cleanup_sandbox
 }
 
+# --- OAuth guard (--require-oauth-empty), the auto path's destructive-skip gate ---
+
+# psql_count_line : the recorded `podman exec ... psql ... oauth_credential` line.
+psql_count_line() { grep -F 'podman exec' "$CALL_LOG" | grep -F 'oauth_credential' | head -1; }
+
+test_oauth_empty_proceeds() {
+    echo "test: --require-oauth-empty + count 0 -> proceeds (stop -> reseed -> start)"
+    make_sandbox
+    STUB_OAUTH_COUNT=0 run_local_oauth
+    if [ "$RC" -eq 0 ]; then ok; else fail "oauth-empty must proceed (exit 0), got $RC ($(cat "$SANDBOX/stderr"))"; fi
+    if log_has "stop personalcrm-backend.service"; then ok; else fail "oauth-empty must stop the backend"; fi
+    if grep -F 'podman run' "$CALL_LOG" | grep -q -- '--reset-and-seed'; then ok; else fail "oauth-empty must run the reset"; fi
+    # The count targets the DATABASE_URL user/dbname over the in-container local
+    # socket: no PGPASSWORD, no -h/TCP (trust auth).
+    local line; line="$(psql_count_line)"
+    if [ -n "$line" ]; then ok; else fail "no oauth_credential count recorded"; fi
+    if [[ "$line" == *"-U crm_user"* ]]; then ok; else fail "count must use DATABASE_URL user (-U crm_user): $line"; fi
+    if [[ "$line" == *"-d personal_crm"* ]]; then ok; else fail "count must use DATABASE_URL dbname (-d personal_crm): $line"; fi
+    if [[ "$line" == *"PGPASSWORD"* ]]; then fail "count must NOT pass PGPASSWORD: $line"; else ok; fi
+    if [[ "$line" == *" -h "* ]]; then fail "count must NOT use -h/TCP: $line"; else ok; fi
+    cleanup_sandbox
+}
+
+test_oauth_present_skips() {
+    echo "test: --require-oauth-empty + count >0 -> clean skip (no stop, no reseed, marker)"
+    make_sandbox
+    STUB_OAUTH_COUNT=2 run_local_oauth
+    if [ "$RC" -eq 0 ]; then ok; else fail "oauth-present must skip cleanly (exit 0), got $RC"; fi
+    if log_lacks "stop personalcrm-backend.service"; then ok; else fail "oauth-present must NOT stop the backend"; fi
+    if grep -F 'podman run' "$CALL_LOG" | grep -q -- '--reset-and-seed'; then fail "oauth-present must NOT run the reset"; else ok; fi
+    if grep -qF 'skipping auto-reseed' "$SANDBOX/stderr"; then ok; else fail "oauth-present must log the stable 'skipping auto-reseed' marker"; fi
+    cleanup_sandbox
+}
+
+test_oauth_unverifiable_fails() {
+    echo "test: --require-oauth-empty + unverifiable count -> fail-closed (exit !=0, no stop/reseed)"
+    # (a) psql connection fails entirely.
+    make_sandbox
+    STUB_OAUTH_PSQL_FAIL=1 run_local_oauth
+    if [ "$RC" -ne 0 ]; then ok; else fail "psql failure must fail-closed (exit !=0), got $RC"; fi
+    if log_lacks "stop personalcrm-backend.service"; then ok; else fail "unverifiable count must NOT stop the backend"; fi
+    if grep -F 'podman run' "$CALL_LOG" | grep -q -- '--reset-and-seed'; then fail "unverifiable count must NOT run the reset"; else ok; fi
+    cleanup_sandbox
+    # (b) non-numeric count output.
+    make_sandbox
+    STUB_OAUTH_COUNT=boom run_local_oauth
+    if [ "$RC" -ne 0 ]; then ok; else fail "non-numeric count must fail-closed (exit !=0), got $RC"; fi
+    if log_lacks "stop personalcrm-backend.service"; then ok; else fail "non-numeric count must NOT stop the backend"; fi
+    if grep -F 'podman run' "$CALL_LOG" | grep -q -- '--reset-and-seed'; then fail "non-numeric count must NOT run the reset"; else ok; fi
+    cleanup_sandbox
+    # (c) count command emits a clean number BUT exits non-zero -> must NOT trust it
+    #     (a failed count that still prints "0" must never be read as verified-empty).
+    make_sandbox
+    STUB_OAUTH_COUNT=0 STUB_OAUTH_PSQL_RC=1 run_local_oauth
+    if [ "$RC" -ne 0 ]; then ok; else fail "count command exiting non-zero must fail-closed even with numeric output, got $RC"; fi
+    if log_lacks "stop personalcrm-backend.service"; then ok; else fail "count-command failure must NOT stop the backend"; fi
+    if grep -F 'podman run' "$CALL_LOG" | grep -q -- '--reset-and-seed'; then fail "count-command failure must NOT run the reset"; else ok; fi
+    cleanup_sandbox
+}
+
+test_oauth_missing_database_url_fails() {
+    echo "test: --require-oauth-empty + no DATABASE_URL -> fail-closed (exit !=0, no stop/reseed)"
+    make_sandbox
+    write_env_raw $'CRM_ENV=staging\n'   # staging passes prod-refuse, but no DATABASE_URL
+    STUB_OAUTH_COUNT=0 run_local_oauth
+    if [ "$RC" -ne 0 ]; then ok; else fail "missing DATABASE_URL must fail-closed, got $RC"; fi
+    if log_lacks "stop personalcrm-backend.service"; then ok; else fail "missing DATABASE_URL must NOT stop the backend"; fi
+    if grep -F 'podman run' "$CALL_LOG" | grep -q -- '--reset-and-seed'; then fail "missing DATABASE_URL must NOT run the reset"; else ok; fi
+    cleanup_sandbox
+}
+
+test_oauth_dbname_authoritative() {
+    echo "test: DATABASE_URL dbname/user are authoritative even when POSTGRES_* disagree"
+    make_sandbox
+    # POSTGRES_DB/POSTGRES_USER deliberately DISAGREE with DATABASE_URL; the count
+    # MUST use the DATABASE_URL values (else it could count an empty wrong DB and
+    # wipe real oauth rows). Regression guard for the wrong-DB wipe hazard.
+    write_env_raw $'CRM_ENV=staging\nDATABASE_URL=postgres://crm_user:x@crm-postgres:5432/personal_crm\nPOSTGRES_DB=crm_staging\nPOSTGRES_USER=other\n'
+    STUB_OAUTH_COUNT=0 run_local_oauth
+    if [ "$RC" -eq 0 ]; then ok; else fail "should proceed with count 0, got $RC"; fi
+    local line; line="$(psql_count_line)"
+    if [[ "$line" == *"-d personal_crm"* ]]; then ok; else fail "count must use DATABASE_URL dbname personal_crm: $line"; fi
+    if [[ "$line" == *"crm_staging"* ]]; then fail "count must NOT use POSTGRES_DB crm_staging: $line"; else ok; fi
+    if [[ "$line" == *"-U crm_user"* ]]; then ok; else fail "count must use DATABASE_URL user crm_user: $line"; fi
+    if [[ "$line" == *"-U other"* ]]; then fail "count must NOT use POSTGRES_USER other: $line"; else ok; fi
+    cleanup_sandbox
+}
+
+test_oauth_foreign_host_fails() {
+    echo "test: DATABASE_URL host not the local target -> fail-closed BEFORE counting"
+    make_sandbox
+    write_env_raw $'CRM_ENV=staging\nDATABASE_URL=postgres://crm_user:x@db.example.com:5432/personal_crm\n'
+    STUB_OAUTH_COUNT=0 run_local_oauth
+    if [ "$RC" -ne 0 ]; then ok; else fail "foreign host must fail-closed, got $RC"; fi
+    # Refused BEFORE counting: no psql count attempted, no stop, no reseed.
+    if grep -F 'podman exec' "$CALL_LOG" | grep -q 'oauth_credential'; then fail "foreign host must NOT attempt the count"; else ok; fi
+    if log_lacks "stop personalcrm-backend.service"; then ok; else fail "foreign host must NOT stop the backend"; fi
+    if grep -F 'podman run' "$CALL_LOG" | grep -q -- '--reset-and-seed'; then fail "foreign host must NOT run the reset"; else ok; fi
+    cleanup_sandbox
+}
+
+test_oauth_flag_is_the_gate() {
+    echo "test: WITHOUT --require-oauth-empty, reseed runs regardless of oauth (no count)"
+    make_sandbox
+    STUB_OAUTH_COUNT=5 run_local   # default invocation, NO flag
+    if [ "$RC" -eq 0 ]; then ok; else fail "no-flag default must reseed (exit 0), got $RC"; fi
+    if log_has "stop personalcrm-backend.service"; then ok; else fail "no-flag default must stop the backend"; fi
+    if grep -F 'podman run' "$CALL_LOG" | grep -q -- '--reset-and-seed'; then ok; else fail "no-flag default must run the reset"; fi
+    if grep -F 'podman exec' "$CALL_LOG" | grep -q 'oauth_credential'; then fail "no-flag default must NOT count oauth_credential (flag is the gate)"; else ok; fi
+    cleanup_sandbox
+}
+
 # ---------------------------------------------------------------------------
 main() {
     test_happy_path_ordering
@@ -343,6 +478,13 @@ main() {
     test_local_does_not_ssh
     test_ssh_targets_host
     test_ssh_refuses_production
+    test_oauth_empty_proceeds
+    test_oauth_present_skips
+    test_oauth_unverifiable_fails
+    test_oauth_missing_database_url_fails
+    test_oauth_dbname_authoritative
+    test_oauth_foreign_host_fails
+    test_oauth_flag_is_the_gate
 
     echo ""
     echo "===================="
