@@ -43,8 +43,10 @@ EOF
 
 cleanup_sandbox() { [ -n "${SANDBOX:-}" ] && rm -rf "$SANDBOX"; }
 
+# run_wrapper : the wrapper is args-free by design (the sudoers entry is args-free),
+# so this passes no args — it only exercises the hardcoded exec + tenant exports.
 run_wrapper() {
-    bash "$SANDBOX/staging-reseed.sh" "$@" >/dev/null 2>&1
+    bash "$SANDBOX/staging-reseed.sh" >/dev/null 2>&1
     RC=$?
 }
 
