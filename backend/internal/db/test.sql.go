@@ -1320,6 +1320,32 @@ func (q *Queries) SyntheticCountUnmatchedExternalContactByEmailPrefix(ctx contex
 	return count, err
 }
 
+const SyntheticCountUnmatchedExternalContactBySourceAndSourceIdPrefix = `-- name: SyntheticCountUnmatchedExternalContactBySourceAndSourceIdPrefix :one
+SELECT COUNT(*) FROM external_contact
+WHERE source = $1
+  AND source_id LIKE $2 || '%'
+  AND match_status = 'unmatched'
+  AND deleted_at IS NULL
+`
+
+type SyntheticCountUnmatchedExternalContactBySourceAndSourceIdPrefixParams struct {
+	Source         string      `json:"source"`
+	SourceIDPrefix pgtype.Text `json:"source_id_prefix"`
+}
+
+// Coverage (Imports subtabs): count UNMATCHED external_contact candidates for a
+// given source whose source_id is ns-prefixed. The direct-upsert (gcontacts,
+// gmail_correspondence) + ingest (anarlog_humans) import producers all carry an
+// ns-prefixed source_id, so the prod-shaped coverage check asserts each subtab has
+// ≥1 candidate scoped to its own namespace on the shared test DB. Caller passes a
+// BARE prefix; '%' appended here.
+func (q *Queries) SyntheticCountUnmatchedExternalContactBySourceAndSourceIdPrefix(ctx context.Context, arg SyntheticCountUnmatchedExternalContactBySourceAndSourceIdPrefixParams) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountUnmatchedExternalContactBySourceAndSourceIdPrefix, arg.Source, arg.SourceIDPrefix)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const SyntheticCountUnmatchedExternalContactBySourceId = `-- name: SyntheticCountUnmatchedExternalContactBySourceId :one
 SELECT COUNT(*) FROM external_contact
 WHERE source_id = $1
@@ -1331,6 +1357,32 @@ WHERE source_id = $1
 // entity id exists with match_status='unmatched'.
 func (q *Queries) SyntheticCountUnmatchedExternalContactBySourceId(ctx context.Context, sourceID string) (int64, error) {
 	row := q.db.QueryRow(ctx, SyntheticCountUnmatchedExternalContactBySourceId, sourceID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const SyntheticCountUnmatchedTelegramDiscoveryInBand = `-- name: SyntheticCountUnmatchedTelegramDiscoveryInBand :one
+SELECT COUNT(*) FROM external_contact
+WHERE source = 'telegram'
+  AND match_status = 'unmatched'
+  AND deleted_at IS NULL
+  AND (CASE WHEN source_id ~ '^[0-9]{1,18}$' THEN source_id::bigint END) >= $1::bigint
+  AND (CASE WHEN source_id ~ '^[0-9]{1,18}$' THEN source_id::bigint END) < $2::bigint
+`
+
+type SyntheticCountUnmatchedTelegramDiscoveryInBandParams struct {
+	BandStart int64 `json:"band_start"`
+	BandEnd   int64 `json:"band_end"`
+}
+
+// Coverage (Imports telegram-discovery subtab): count UNMATCHED telegram discovery
+// external_contact candidates whose source_id (the BARE peer id, NOT ns-prefixed)
+// falls in this namespace's reserved peer band [band_start, band_end). The CASE
+// guards the bigint cast for non-numeric telegram source_ids (other tests create
+// text source ids), mirroring SyntheticCountTelegramBarePeerRowsInBand.
+func (q *Queries) SyntheticCountUnmatchedTelegramDiscoveryInBand(ctx context.Context, arg SyntheticCountUnmatchedTelegramDiscoveryInBandParams) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountUnmatchedTelegramDiscoveryInBand, arg.BandStart, arg.BandEnd)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -1927,6 +1979,44 @@ func (q *Queries) SyntheticListEventIdsForContacts(ctx context.Context, contactI
 			return nil, err
 		}
 		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const SyntheticListExternalContactSourceIdsByPrefix = `-- name: SyntheticListExternalContactSourceIdsByPrefix :many
+SELECT source, source_id FROM external_contact
+WHERE source_id LIKE $1 || '%'
+  AND deleted_at IS NULL
+ORDER BY source, source_id
+`
+
+type SyntheticListExternalContactSourceIdsByPrefixRow struct {
+	Source   string `json:"source"`
+	SourceID string `json:"source_id"`
+}
+
+// Determinism fingerprint (import producers): the (source, source_id) of every live
+// external_contact whose source_id is ns-prefixed, sorted, so a determinism test can
+// assert the import-candidate source_ids are byte-identical across two seed runs in
+// the same namespace. (Telegram discovery candidates key on the bare peer id, not the
+// prefix, so they are excluded here — their determinism rides the deterministic peer
+// band + the run-to-run ProfileResult count equality.) Caller passes a BARE prefix.
+func (q *Queries) SyntheticListExternalContactSourceIdsByPrefix(ctx context.Context, sourceIDPrefix pgtype.Text) ([]*SyntheticListExternalContactSourceIdsByPrefixRow, error) {
+	rows, err := q.db.Query(ctx, SyntheticListExternalContactSourceIdsByPrefix, sourceIDPrefix)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*SyntheticListExternalContactSourceIdsByPrefixRow{}
+	for rows.Next() {
+		var i SyntheticListExternalContactSourceIdsByPrefixRow
+		if err := rows.Scan(&i.Source, &i.SourceID); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

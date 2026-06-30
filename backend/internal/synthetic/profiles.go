@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/config"
+	"personal-crm/backend/internal/google"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/synthetic/factory"
 
@@ -102,6 +103,17 @@ type ProfileResult struct {
 	// / no PII.
 	SeededSoftDeleted int
 	SeededMerged      int
+	// UnmatchedGContacts / UnmatchedGmailCorrespondence / UnmatchedAnarlogHumans /
+	// TelegramDiscovery count the per-subtab Imports-queue candidates the profile
+	// seeded (item 13) beyond the icloud_contacts (UnmatchedExternal) + gcal_attendee
+	// (UnmatchedCalendar) surfaces above. gcontacts + gmail_correspondence ride the
+	// direct repo-upsert path (NOT ingest-allowed); anarlog_humans rides the ingest
+	// path; telegram discovery crosses the per-peer discovery threshold. All are
+	// unmatched candidates. Counts-only / no PII.
+	UnmatchedGContacts           int
+	UnmatchedGmailCorrespondence int
+	UnmatchedAnarlogHumans       int
+	TelegramDiscovery            int
 }
 
 // ProfileParams returns the default SeedParams for a named profile (error on an
@@ -150,6 +162,9 @@ func ProfileParams(name Profile) (SeedParams, error) {
 				// tombstone + merge re-point scenarios.
 				SeededSoftDeleted: 1,
 				SeededMerged:      1,
+				// One unmatched candidate per Imports subtab (gcontacts/gmail_correspondence/
+				// anarlog_humans/telegram-discovery) so every local Imports surface has content.
+				ImportCandidatesPerSource: 1,
 			},
 		}, nil
 	case ProfileProdShaped:
@@ -201,6 +216,11 @@ func ProfileParams(name Profile) (SeedParams, error) {
 				// tests override these down for CI.
 				SeededSoftDeleted: 3,
 				SeededMerged:      3,
+				// A few unmatched candidates per Imports subtab (gcontacts/gmail_correspondence/
+				// anarlog_humans/telegram-discovery) so every staging Imports subtab has a queue.
+				// The coverage + determinism tests override this down for CI runtime (telegram
+				// discovery replays 3 group messages + settles per candidate).
+				ImportCandidatesPerSource: 4,
 			},
 		}, nil
 	default:
@@ -722,8 +742,85 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		res.SeededMerged++
 	}
 
+	// Import-source candidates so EVERY Imports subtab has unmatched content (item
+	// 13). Seeded LAST — the very end of the generator-driven sequence — because
+	// gen.ExternalContactCandidate / gen.MacContactForSource / gen.TelegramGroupMessage
+	// advance the generator's source seq (and the latter two draw the name PRNG via
+	// gen.Contact); appending them here keeps the deterministic id/handle sequence the
+	// earlier source replays + graph blocks depend on unshifted. icloud_contacts
+	// (UnmatchedExternal) + gcal_attendee (UnmatchedCalendar) are already covered
+	// above; this fills the remaining subtabs:
+	//   - gcontacts + gmail_correspondence: written via the production
+	//     ExternalContactRepository.Upsert path (the Google sync providers' write path),
+	//     because the ingest registry does NOT allow these as ingest events. The upsert
+	//     lands match_status='unmatched' (the Imports-queue surface only).
+	//   - anarlog_humans: ingest-allowed → routed through ReplayMacContacts like icloud,
+	//     so it passes the 0-accepted-events guard.
+	//   - telegram discovery: telegramDiscoveryMessages group messages from ONE unknown
+	//     peer (shared chat + sender, distinct message ids) cross the per-peer discovery
+	//     threshold, so UpdateDiscoveryCandidatesForPeer upserts the discovery candidate.
+	// Teardown reclaims them via the existing external_contact source_id-prefix sweep
+	// (gcontacts/gmail_correspondence/anarlog carry an ns-prefixed source_id) and the
+	// telegram-peer sweep (the discovery candidate is keyed by the bare peer id).
+	for i := 0; i < params.Counts.ImportCandidatesPerSource; i++ {
+		// gcontacts (direct repo upsert).
+		if _, err := h.SeedExternalContactCandidate(ctx, gen.ExternalContactCandidate(importSourceGContacts)); err != nil {
+			return res, fmt.Errorf("profile %s: seed gcontacts candidate %d: %w", params.Profile, i, err)
+		}
+		res.UnmatchedGContacts++
+
+		// gmail_correspondence (direct repo upsert).
+		if _, err := h.SeedExternalContactCandidate(ctx, gen.ExternalContactCandidate(importSourceGmailCorrespondence)); err != nil {
+			return res, fmt.Errorf("profile %s: seed gmail_correspondence candidate %d: %w", params.Profile, i, err)
+		}
+		res.UnmatchedGmailCorrespondence++
+
+		// anarlog_humans (ingest path).
+		anarlogSpec, err := gen.MacContactForSource(gen.Contact(factory.WithEmail()), factory.MatchUnknown, h.MacHostID(), importSourceAnarlogHumans)
+		if err != nil {
+			return res, fmt.Errorf("profile %s: build anarlog candidate %d: %w", params.Profile, i, err)
+		}
+		if _, err := h.ReplayMacContacts(ctx, uuid.Nil, anarlogSpec); err != nil {
+			return res, fmt.Errorf("profile %s: replay anarlog candidate %d: %w", params.Profile, i, err)
+		}
+		res.UnmatchedAnarlogHumans++
+
+		// telegram discovery: a group conversation of telegramDiscoveryMessages messages
+		// sharing ONE chat + unknown sender (distinct message ids), built by copying the
+		// first spec and only bumping the message id — so the per-peer message count
+		// crosses the discovery threshold and a discovery candidate is upserted.
+		first := gen.TelegramGroupMessage(gen.Contact(factory.WithTelegram()), factory.MatchUnknown, h.GroupMaxMembers())
+		discoverySpecs := []factory.TelegramGroupMessageSpec{first}
+		for k := 1; k < telegramDiscoveryMessages; k++ {
+			next := first
+			next.TelegramMessageID = first.TelegramMessageID + int32(k)
+			discoverySpecs = append(discoverySpecs, next)
+		}
+		if _, err := h.ReplayTelegramGroupMessages(ctx, uuid.Nil, discoverySpecs); err != nil {
+			return res, fmt.Errorf("profile %s: replay telegram discovery %d: %w", params.Profile, i, err)
+		}
+		res.TelegramDiscovery++
+	}
+
 	return res, nil
 }
+
+// importSourceGContacts / importSourceGmailCorrespondence / importSourceAnarlogHumans
+// name the Imports subtabs the seed fills beyond icloud_contacts (UnmatchedExternal)
+// + gcal_attendee (UnmatchedCalendar). The two Google sources reference the providers'
+// canonical source constants so they cannot drift from the live write paths; anarlog_humans
+// matches the ingest registry's allowed-source literal (service/ingest_registry.go).
+const (
+	importSourceGContacts           = google.ContactsSourceName
+	importSourceGmailCorrespondence = google.CorrespondenceSource
+	importSourceAnarlogHumans       = "anarlog_humans"
+)
+
+// telegramDiscoveryMessages is how many group messages one unknown peer must send
+// to cross the harness's telegram discovery threshold (the peer matcher is built with
+// DiscoveryMinMessages=3 in harness_setup.go), so UpdateDiscoveryCandidatesForPeer
+// upserts a discovery candidate.
+const telegramDiscoveryMessages = 3
 
 // softDeleteFactPredicate / mergeWinnerFactPredicate / mergeLoserFactPredicate are
 // the bool-fact predicates the merge + soft-delete scenarios assert (all

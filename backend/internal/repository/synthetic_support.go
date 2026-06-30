@@ -475,6 +475,54 @@ func (r *SyntheticSupportRepository) CountUnmatchedExternalContactByEmailPrefix(
 	return r.queries.SyntheticCountUnmatchedExternalContactByEmailPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
 }
 
+// CountUnmatchedExternalContactBySourceAndPrefix counts UNMATCHED import
+// candidates for a given source whose source_id is ns-prefixed. The direct-upsert
+// (gcontacts, gmail_correspondence) + ingest (anarlog_humans) import producers all
+// carry an ns-prefixed source_id, so the prod-shaped coverage check asserts each
+// Imports subtab has ≥1 candidate scoped to its own namespace. Caller passes a
+// BARE prefix.
+func (r *SyntheticSupportRepository) CountUnmatchedExternalContactBySourceAndPrefix(ctx context.Context, source, prefix string) (int64, error) {
+	return r.queries.SyntheticCountUnmatchedExternalContactBySourceAndSourceIdPrefix(ctx, db.SyntheticCountUnmatchedExternalContactBySourceAndSourceIdPrefixParams{
+		Source:         source,
+		SourceIDPrefix: pgtype.Text{String: prefix, Valid: true},
+	})
+}
+
+// CountUnmatchedTelegramDiscoveryInBand counts UNMATCHED telegram discovery
+// candidates whose source_id (the BARE peer id) falls in this namespace's reserved
+// peer band [bandStart, bandEnd). The telegram discovery candidate keys on the peer
+// id rather than an ns-prefix, so the coverage check scopes it by band instead.
+func (r *SyntheticSupportRepository) CountUnmatchedTelegramDiscoveryInBand(ctx context.Context, bandStart, bandEnd int64) (int64, error) {
+	return r.queries.SyntheticCountUnmatchedTelegramDiscoveryInBand(ctx, db.SyntheticCountUnmatchedTelegramDiscoveryInBandParams{
+		BandStart: bandStart,
+		BandEnd:   bandEnd,
+	})
+}
+
+// ExternalContactSummary is the (source, source_id) projection of a live
+// external_contact whose source_id is ns-prefixed — the import-producer determinism
+// fingerprint.
+type ExternalContactSummary struct {
+	Source   string
+	SourceID string
+}
+
+// ListExternalContactSourceIDsByPrefix returns the sorted (source, source_id) of
+// every live external_contact whose source_id is ns-prefixed, so a determinism test
+// can assert the import-candidate source_ids are byte-identical across two seed runs
+// in the same namespace. Caller passes a BARE prefix.
+func (r *SyntheticSupportRepository) ListExternalContactSourceIDsByPrefix(ctx context.Context, prefix string) ([]ExternalContactSummary, error) {
+	rows, err := r.queries.SyntheticListExternalContactSourceIdsByPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ExternalContactSummary, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, ExternalContactSummary{Source: row.Source, SourceID: row.SourceID})
+	}
+	return out, nil
+}
+
 // --- revoked synthetic Mac host (host-only ingest kinds) -------------------
 
 // SeedRevokedMacHost inserts a REVOKED mac_host (api_key_revoked_at set) and

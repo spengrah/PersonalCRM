@@ -147,6 +147,14 @@ type Counts struct {
 	// the dedicated settled contacts — the edge-case catalog stays interaction-free
 	// so its overdue / never-contacted / no-method buckets survive.
 	MessagesPerContact int
+	// ImportCandidatesPerSource is how many UNMATCHED import candidates to seed for
+	// EACH Imports subtab the icloud_contacts (UnmatchedExternal) + gcal_attendee
+	// (UnmatchedCalendar) knobs do not already cover: gcontacts + gmail_correspondence
+	// (direct repo upsert — NOT ingest-allowed, mirroring the Google sync providers),
+	// anarlog_humans (ingest path), and telegram discovery (≥3 group messages from one
+	// unknown peer crossing the discovery threshold). All land match_status='unmatched'.
+	// 0 disables (minimal-scoped stays import-free / byte-stable).
+	ImportCandidatesPerSource int
 }
 
 // SeedParams is the profile/volume seam consumed by the seed orchestration.
