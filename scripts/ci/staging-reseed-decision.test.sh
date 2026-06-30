@@ -13,6 +13,15 @@
 
 set -uo pipefail
 
+# Sanitize hook-inherited git env BEFORE any git command. Git pre-push hooks export
+# GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE into the environment; without unsetting them,
+# the fixture's `git init`/`git add`/`git commit` below (and the decision script's
+# own `git cat-file`/`git diff`, run in the fixture CWD) operate against the hook's
+# repo instead of the throwaway fixture and fail with "fatal: this operation must be
+# run in a work tree". Unsetting restores cwd-based discovery so the fixture is
+# isolated. (Run directly the vars are absent, so this is a no-op outside the hook.)
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPT="$REPO_ROOT/scripts/ci/staging-reseed-decision.sh"
 ABSENT_SHA="0123456789abcdef0123456789abcdef01234567"  # 40-hex, not in the fixture
