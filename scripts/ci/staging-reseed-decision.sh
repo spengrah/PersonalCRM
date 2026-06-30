@@ -10,8 +10,9 @@
 #                       (backend/internal/synthetic/**) AND is a RUNTIME synthetic
 #                       file -> reseed candidate. Test-only changes (`*_test.go`,
 #                       `**/testdata/**`) are NOT the built seed surface and do not
-#                       trigger a reseed (the test exclusion lives below, not in the
-#                       dual-purpose path-group which still feeds test selection).
+#                       trigger a reseed. The exclusion lives below, not in
+#                       path-filters.yml, which is LCD (flat globs, NO negation) and
+#                       cannot express "synthetic/** except tests".
 #   migrations_changed  any changed file is under backend/migrations/ -> nudge only
 #                       (migrations transform the accumulated world; never auto-wipe).
 #   base_known          true iff BASE was a resolvable commit and the diff ran.
@@ -85,11 +86,12 @@ migrations_changed=false
 while IFS= read -r f; do
   [ -n "$f" ] || continue
   # A seed-group match counts as a seed-surface change ONLY for a RUNTIME synthetic
-  # file. The `seed` path-group (backend/internal/synthetic/**) is dual-purpose — it
-  # also drives CI/pre-push test SELECTION, which legitimately includes `_test.go` +
-  # testdata — but those are NOT part of the BUILT seed surface, so a test-only
-  # change must not trigger the destructive staging reseed. (Test exclusion lives
-  # here, not in path-filters.yml, so test selection keeps seeing the test files.)
+  # file. `*_test.go` and `**/testdata/**` are inside the seed glob but are NOT the
+  # BUILT seed surface, so a test-only change must not fire the destructive staging
+  # reseed. The exclusion lives HERE, not in path-filters.yml, because that file is
+  # LCD (flat globs, NO negation) and cannot express "synthetic/** except tests". The
+  # `seed` group is reseed-only — orthogonal to CI/pre-push test selection (which
+  # runs off the `backend` group) — so excluding tests here can't affect selection.
   if file_in_group "$f" seed; then
     case "$f" in
       *_test.go)    ;;  # synthetic test file — not part of the built seed surface
