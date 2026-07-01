@@ -13,8 +13,9 @@
 #                       trigger a reseed. The exclusion lives below, not in
 #                       path-filters.yml, which is LCD (flat globs, NO negation) and
 #                       cannot express "synthetic/** except tests".
-#   migrations_changed  any changed file is under backend/migrations/ -> nudge only
-#                       (migrations transform the accumulated world; never auto-wipe).
+#   migrations_changed  a changed file is in the `migrations` path-filters group
+#                       (backend/migrations/**) -> nudge only (migrations transform
+#                       the accumulated world; never auto-wipe).
 #   base_known          true iff BASE was a resolvable commit and the diff ran.
 #
 # TWO-DOT `git diff BASE HEAD` (direct tree-vs-tree), NOT three-dot (BASE...HEAD,
@@ -99,9 +100,11 @@ while IFS= read -r f; do
       *) seed_changed=true ;;  # runtime synthetic file (profiles.go, factory/*.go, ...)
     esac
   fi
-  case "$f" in
-    backend/migrations/*) migrations_changed=true ;;
-  esac
+  # migrations_changed is sourced from the same path-filters.yml group matcher as
+  # seed_changed (no second hardcoded prefix): backend/migrations/** -> nudge only.
+  if file_in_group "$f" migrations; then
+    migrations_changed=true
+  fi
 done <<< "$changed"
 
 emit seed_changed "$seed_changed"

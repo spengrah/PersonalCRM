@@ -17,6 +17,11 @@
 #                 via file_in_group). ORTHOGONAL: synthetic stays in `backend` too, so this
 #                 group changes NO CI/pre-push test selection — it only flags the seed surface
 #                 the staging auto-reseed diffs against. No CI/pre-push consumer reads it.
+#   migrations  → deploy-staging.yml reseed decision (scripts/ci/staging-reseed-decision.sh,
+#                 via file_in_group). ORTHOGONAL: backend/migrations/** is also in the `backend`
+#                 group, so this group changes NO CI/pre-push test selection — it only flags a
+#                 schema change so the reseed decision emits a migration nudge. No CI/pre-push
+#                 consumer reads it.
 
 backend:
   - 'backend/**'
@@ -35,3 +40,5 @@ mac_daemon:
   - '.github/workflows/ci.yml'
 seed:
   - 'backend/internal/synthetic/**'
+migrations:
+  - 'backend/migrations/**'
