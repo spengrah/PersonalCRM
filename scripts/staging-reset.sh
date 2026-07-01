@@ -90,11 +90,17 @@ else
     CRM_UID=$(ssh "$STAGING_HOST" "id -u $CRM_USER")
     USERENV="HOME=$CRM_HOME XDG_RUNTIME_DIR=/run/user/$CRM_UID DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$CRM_UID/bus"
     # Vars below deliberately expand client-side (resolved here, then sent over ssh
-    # as a literal remote command). SC2029 is the intended behavior.
+    # as a literal remote command). SC2029 is the intended behavior. Caller args are
+    # quoted per-arg with printf '%q' so the remote shell rebuilds the exact argv
+    # after its single parse — otherwise $* would flatten e.g. a quoted SQL string
+    # into bare words that the remote shell re-splits (SELECT count(*) FROM ...). The
+    # guarantee is scoped to the arg shapes these helpers pass (SQL strings,
+    # systemctl/podman subcommands, unit names — no control chars); %q emits plain
+    # backslash-escaping any POSIX shell reconstructs, not $'...' ANSI-C quoting.
     # shellcheck disable=SC2029
-    staging_ctl()    { ssh "$STAGING_HOST" "cd /tmp && sudo -n -u $CRM_USER $USERENV systemctl --user $*"; }
+    staging_ctl()    { local a; a="$(printf '%q ' "$@")"; ssh "$STAGING_HOST" "cd /tmp && sudo -n -u $CRM_USER $USERENV systemctl --user $a"; }
     # shellcheck disable=SC2029
-    staging_podman() { ssh "$STAGING_HOST" "cd /tmp && sudo -n -u $CRM_USER HOME=$CRM_HOME XDG_RUNTIME_DIR=/run/user/$CRM_UID podman $*"; }
+    staging_podman() { local a; a="$(printf '%q ' "$@")"; ssh "$STAGING_HOST" "cd /tmp && sudo -n -u $CRM_USER HOME=$CRM_HOME XDG_RUNTIME_DIR=/run/user/$CRM_UID podman $a"; }
     # shellcheck disable=SC2029
     read_crm_env()   { ssh "$STAGING_HOST" "sudo -n -u $CRM_USER sed -n 's/^CRM_ENV=//p' '$ENV_FILE' 2>/dev/null | head -1"; }
     # shellcheck disable=SC2029
