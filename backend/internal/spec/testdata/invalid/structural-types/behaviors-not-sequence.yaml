@@ -1,0 +1,4 @@
+domain: contacts
+prefix: CON
+maturity: reviewed
+behaviors: not-a-list

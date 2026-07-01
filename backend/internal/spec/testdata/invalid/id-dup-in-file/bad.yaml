@@ -1,0 +1,18 @@
+domain: sample
+prefix: DUP
+maturity: reviewed
+behaviors:
+  - id: DUP-001
+    title: first occurrence
+    type: business-logic
+    status: current
+    when: x
+    then:
+      - y
+  - id: DUP-001
+    title: second occurrence
+    type: business-logic
+    status: current
+    when: x
+    then:
+      - y

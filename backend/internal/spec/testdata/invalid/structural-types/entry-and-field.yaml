@@ -1,0 +1,13 @@
+domain: knowledge
+prefix: KNW
+maturity: reviewed
+behaviors:
+  - just a bare string entry
+  - id: KNW-001
+    title:
+      - a list where a scalar is required
+    type: business-logic
+    status: current
+    when: x
+    then:
+      - y

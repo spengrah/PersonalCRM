@@ -1,0 +1,19 @@
+domain: cadence-followup
+prefix: CAD
+maturity: reviewed
+behaviors:
+  - id: CAD-001
+    title: duplicate when key
+    type: business-logic
+    status: current
+    when: first trigger
+    when: second trigger
+    then:
+      - something happens
+  - id: CAD-002
+    title: sibling validates cleanly
+    type: business-logic
+    status: current
+    when: another trigger
+    then:
+      - fine

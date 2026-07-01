@@ -1,0 +1,18 @@
+domain: contacts
+prefix: CON
+maturity: reviewed
+behaviors:
+  - id: CON-001
+    title: empty string when
+    type: business-logic
+    status: current
+    when: ""
+    then:
+      - y
+  - id: CON-002
+    title: null when
+    type: business-logic
+    status: current
+    when: null
+    then:
+      - y

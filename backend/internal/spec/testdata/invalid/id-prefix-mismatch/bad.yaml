@@ -1,0 +1,11 @@
+domain: sample
+prefix: AAA
+maturity: reviewed
+behaviors:
+  - id: BBB-001
+    title: id does not carry the declared prefix
+    type: business-logic
+    status: current
+    when: x
+    then:
+      - y

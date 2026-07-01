@@ -1,0 +1,11 @@
+domain: alpha
+prefix: PFX
+maturity: reviewed
+behaviors:
+  - id: PFX-001
+    title: in file a
+    type: business-logic
+    status: current
+    when: x
+    then:
+      - y

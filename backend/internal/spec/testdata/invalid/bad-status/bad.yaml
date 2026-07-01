@@ -1,0 +1,11 @@
+domain: contacts
+prefix: CON
+maturity: reviewed
+behaviors:
+  - id: CON-001
+    title: an unknown status
+    type: business-logic
+    status: pending
+    when: x
+    then:
+      - y

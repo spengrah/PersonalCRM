@@ -1,0 +1,45 @@
+domain: contacts
+prefix: CON
+maturity: reviewed
+behaviors:
+  - id: CON-001
+    title: Soft-deleting a contact cascades to its dependents
+    type: business-logic
+    status: current
+    given: a contact with methods and notes
+    when: the contact is deleted
+    then:
+      - the contact is soft-deleted
+      - its contact methods are soft-deleted
+    provenance: [ContactService.DeleteContact, contact_delete_test.go]
+    notes: cascade is explicit, not FK-driven
+  - id: CON-002
+    title: All contact reads filter soft-deleted rows
+    type: invariant
+    status: current
+    statement: every contact query filters deleted_at IS NULL
+  - id: CON-003
+    title: Creating a contact persists a valid payload
+    type: data
+    status: proposed
+    given:
+      - a valid payload
+      - no duplicate exists
+    when: a contact is created
+    then: the row is persisted
+  - id: CON-005
+    title: Hard deletes were replaced by soft deletes
+    type: business-logic
+    status: retired
+    given: a contact
+    when: the contact is deleted
+    then:
+      - nothing is hard-deleted
+    notes: superseded by CON-001
+  - id: CON-1000
+    title: The contacts list can be opened with no precondition
+    type: ux
+    status: current
+    when: the contacts list is opened
+    then:
+      - contacts are shown

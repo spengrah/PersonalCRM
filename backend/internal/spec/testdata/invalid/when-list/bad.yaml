@@ -1,0 +1,13 @@
+domain: contacts
+prefix: CON
+maturity: reviewed
+behaviors:
+  - id: CON-001
+    title: when is a list
+    type: business-logic
+    status: current
+    when:
+      - first
+      - second
+    then:
+      - y

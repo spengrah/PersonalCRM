@@ -1,0 +1,25 @@
+domain: sample
+prefix: XXX
+maturity: reviewed
+behaviors:
+  - id: XXX-1
+    title: too few digits
+    type: business-logic
+    status: current
+    when: x
+    then:
+      - y
+  - id: XXX-0001
+    title: four digits with a leading zero
+    type: business-logic
+    status: current
+    when: x
+    then:
+      - y
+  - id: xxx-002
+    title: lowercase prefix
+    type: business-logic
+    status: current
+    when: x
+    then:
+      - y
