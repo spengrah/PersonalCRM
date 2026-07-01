@@ -267,7 +267,7 @@ test_workflow_nudge_conditions() {
 }
 
 # ===========================================================================
-# D6: workflow_dispatch force_reseed (manual, reseed-only, develop-ref-only)
+# workflow_dispatch force_reseed (manual, reseed-only, develop-ref-only)
 # ===========================================================================
 
 test_workflow_has_dispatch_trigger() {
@@ -299,11 +299,24 @@ test_dispatch_false_is_noop() {
     if wf_has 'echo "deploy_ready=false"'; then ok; else fail "dispatch branch must be able to set deploy_ready=false"; fi
 }
 
+# step_block_has_dispatch_guard <name-substr> : true iff the step whose "- name:"
+# line contains <name-substr> carries the dispatch-skip guard BEFORE the next step.
+# Anchoring per-step (not a raw occurrence count) catches an unguarded step even if
+# another guard is duplicated/commented elsewhere.
+step_block_has_dispatch_guard() {
+    awk -v want="$1" '
+        /^[[:space:]]*- name:/ { in_blk = (index($0, want) > 0) }
+        in_blk && index($0, "github.event_name !=") > 0 && index($0, "workflow_dispatch") > 0 { found = 1 }
+        END { exit(found ? 0 : 1) }
+    ' "$WORKFLOW"
+}
+
 test_deploy_steps_skip_on_dispatch() {
-    echo "test: capture/deploy/checkout/decide steps skip on a workflow_dispatch"
-    local n
-    n=$(grep -cF "github.event_name != 'workflow_dispatch'" "$WORKFLOW")
-    if [ "$n" -ge 4 ]; then ok; else fail "expected >=4 deploy-only step-skip guards, got $n"; fi
+    echo "test: capture/deploy/checkout/decide steps EACH carry the workflow_dispatch skip guard"
+    if step_block_has_dispatch_guard "Capture live staging SHA"; then ok; else fail "capture step must skip on workflow_dispatch"; fi
+    if step_block_has_dispatch_guard "name: Deploy"; then ok; else fail "deploy step must skip on workflow_dispatch"; fi
+    if step_block_has_dispatch_guard "Checkout (post-deploy"; then ok; else fail "checkout step must skip on workflow_dispatch"; fi
+    if step_block_has_dispatch_guard "Decide reseed"; then ok; else fail "decide step must skip on workflow_dispatch"; fi
 }
 
 test_reseed_fires_on_force() {

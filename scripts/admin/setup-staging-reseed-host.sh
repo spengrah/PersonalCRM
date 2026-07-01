@@ -40,7 +40,8 @@ SUDOERSD="${SUDOERSD:-/etc/sudoers.d}"
 
 SUDOERS_DROPIN="$SUDOERSD/gha-runner-staging-reseed"
 # The three scripts installed to /usr/local/sbin. Only the two wrappers the runner
-# sudo-invokes get a sudoers line (see build_sudoers); staging-reset.sh does not.
+# sudo-invokes get a sudoers line (the two NOPASSWD lines written below);
+# staging-reset.sh does not.
 INSTALL_SCRIPTS=(staging-reset.sh staging-reseed.sh staging-deployed-sha.sh)
 
 die() { echo "setup-staging-reseed-host: $*" >&2; exit 1; }
