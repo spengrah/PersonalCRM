@@ -1,8 +1,9 @@
 # Admin scripts
 
-Destructive operator scripts for one-off recovery scenarios that the
-production code path deliberately does not automate. Each script
-prompts for confirmation before running.
+Operator scripts for one-off recovery and host-standup scenarios that
+the production code path deliberately does not automate. Destructive
+scripts prompt for confirmation before running; idempotent,
+non-destructive installers (e.g. `setup-staging-reseed-host.sh`) do not.
 
 ## reset_icloud_contacts.sh
 
@@ -61,6 +62,56 @@ The script:
 
 After the script finishes, the daemon's next full resync repopulates
 the rows with `host_id` set to the currently-paired host.
+
+## setup-staging-reseed-host.sh
+
+Provisions the **staging** host (`stovepipes`) for the develop→staging
+auto-reseed: installs the three reseed scripts to `/usr/local/sbin`
+(`root:root`, `0755`) and grants the staging GitHub Actions runner the
+**two** NOPASSWD sudoers lines it invokes from `deploy-staging.yml`:
+
+```
+<RUNNER_USER> ALL=(root) NOPASSWD: /usr/local/sbin/staging-reseed.sh
+<RUNNER_USER> ALL=(root) NOPASSWD: /usr/local/sbin/staging-deployed-sha.sh
+```
+
+`staging-reset.sh` is installed too (it is `exec`'d by
+`staging-reseed.sh`, already root) but gets **no** sudoers line — the
+runner never sudo-invokes it directly, so only the two wrappers it
+actually calls are granted. The sudoers lines are **args-free** (any-args
+form; both wrappers ignore args and `staging-deployed-sha.sh` is
+read-only) and carry **no** `SETENV`/`env_keep`, preserving the env-trust
+seam that pins the staging tenant identity inside the wrappers (sudo
+resets the environment; nothing is passed from the workflow).
+
+**When to run:** once, on the staging host, after the staging code-deploy
+standup is complete and before the first seed-touching staging deploy is
+expected to actually reseed.
+
+**Preconditions (fail-loud):** must run as root; the staging runner user
+must exist (default `gha-runner`; override with `RUNNER_USER=…` — the
+account the `[self-hosted, staging]` agent runs as); and
+`/usr/local/sbin/deploy-staging.sh` must already be installed (this
+script does **not** install it — a host missing it is only partially
+stood up, so the script refuses). This is the **staging** standup, not
+the Pi/prod runner install — the runbook
+(`infra/runner-installation-runbook.md`) is only a *pattern reference*
+for the `install`/`visudo` mechanics; staging differs (`[self-hosted,
+staging]` label, `deploy-staging.sh`, the reseed wrappers).
+
+**Usage:**
+```bash
+# On the staging host, from a repo checkout:
+sudo scripts/admin/setup-staging-reseed-host.sh
+
+# With a non-default runner account:
+sudo RUNNER_USER=my-runner scripts/admin/setup-staging-reseed-host.sh
+```
+
+The script is idempotent (install overwrites in place; the sudoers
+drop-in is a fixed-name file overwritten atomically — no appends, no
+duplicate lines) and safe to re-run. The sudoers drop-in is validated
+with `visudo -cf` before install and re-validated after.
 
 ## Same-host reinstall (no script needed)
 

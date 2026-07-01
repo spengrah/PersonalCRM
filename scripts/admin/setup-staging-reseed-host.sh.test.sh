@@ -1,0 +1,240 @@
+#!/usr/bin/env bash
+# Tests for setup-staging-reseed-host.sh — the staging reseed provisioning helper.
+#
+# PATH-shadowed stubs (id/install/visudo/stat) + sandbox destination dirs
+# (USRLOCALSBIN/SUDOERSD seams) so the install + sudoers writes happen without root.
+# The install stub records its argv AND copies src->dst so the generated sudoers
+# drop-in is real and its content can be asserted. Covers: the 3-script install
+# (root:root/0755), the exactly-2 args-free sudoers lines (no SETENV/env_keep), the
+# $RUNNER_USER principal (default + override), visudo ordering, the fail-loud
+# preconditions, and idempotency.
+#
+# Portability: no BSD-only stat -f / sed -i.
+
+set -uo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SCRIPT="$REPO_ROOT/scripts/admin/setup-staging-reseed-host.sh"
+
+PASS=0
+FAIL=0
+fail() { echo "  FAIL: $1" >&2; FAIL=$((FAIL + 1)); }
+ok()   { PASS=$((PASS + 1)); }
+
+make_sandbox() {
+    SANDBOX="$(mktemp -d)"
+    CALL_LOG="$SANDBOX/calls.log"
+    : > "$CALL_LOG"
+    mkdir -p "$SANDBOX/bin" "$SANDBOX/sbin" "$SANDBOX/sudoers.d"
+    # deploy-staging.sh is a precondition (installed by the earlier standup).
+    echo '#!/bin/bash' > "$SANDBOX/sbin/deploy-staging.sh"
+
+    cat > "$SANDBOX/bin/id" <<EOF
+#!/usr/bin/env bash
+echo "id \$*" >> "$CALL_LOG"
+if [ "\$1" = "-u" ]; then
+    if [ "\${STUB_NOT_ROOT:-0}" = "1" ]; then echo 1000; else echo 0; fi
+    exit 0
+fi
+# id <user>: exit 0 only for a KNOWN runner account.
+case "\$1" in
+    gha-runner|custom-runner) exit 0 ;;
+    *) exit 1 ;;
+esac
+EOF
+
+    # install stub: record argv, then copy the last two positional args (src dst)
+    # so the sudoers drop-in is a real file whose content the test can assert.
+    cat > "$SANDBOX/bin/install" <<EOF
+#!/usr/bin/env bash
+echo "install \$*" >> "$CALL_LOG"
+args=("\$@")
+n=\${#args[@]}
+# cp -f mimics install(1)'s atomic replace: overwrite even a 0440 dest (a plain
+# cp cannot reopen a read-only file, which would break the idempotent second run).
+cp -f "\${args[\$((n-2))]}" "\${args[\$((n-1))]}"
+EOF
+
+    cat > "$SANDBOX/bin/visudo" <<EOF
+#!/usr/bin/env bash
+echo "visudo \$*" >> "$CALL_LOG"
+exit "\${STUB_VISUDO_RC:-0}"
+EOF
+
+    cat > "$SANDBOX/bin/stat" <<EOF
+#!/usr/bin/env bash
+echo "stat \$*" >> "$CALL_LOG"
+echo "root root 755"
+exit 0
+EOF
+
+    chmod +x "$SANDBOX"/bin/*
+}
+
+cleanup_sandbox() { [ -n "${SANDBOX:-}" ] && rm -rf "$SANDBOX"; }
+
+# run_setup : run the provisioning script with the sandbox stubs + destinations.
+# Caller may prefix env (e.g. RUNNER_USER=custom-runner run_setup, STUB_NOT_ROOT=1).
+run_setup() {
+    PATH="$SANDBOX/bin:$PATH" \
+        USRLOCALSBIN="$SANDBOX/sbin" \
+        SUDOERSD="$SANDBOX/sudoers.d" \
+        bash "$SCRIPT" >/dev/null 2>"$SANDBOX/stderr"
+    RC=$?
+}
+
+DROPIN() { echo "$SANDBOX/sudoers.d/gha-runner-staging-reseed"; }
+
+# ===========================================================================
+test_installs_three_scripts_root_0755() {
+    echo "test: installs all 3 scripts with -o root -g root -m 0755"
+    make_sandbox
+    run_setup
+    if [ "$RC" -eq 0 ]; then ok; else fail "happy path should exit 0, got $RC ($(cat "$SANDBOX/stderr"))"; fi
+    local name n
+    for name in staging-reset.sh staging-reseed.sh staging-deployed-sha.sh; do
+        if grep -F 'install ' "$CALL_LOG" | grep -F -- '-o root -g root -m 0755' | grep -q "/sbin/$name"; then ok
+        else fail "must install $name root:root 0755 to the sbin dir"; fi
+    done
+    # Exactly 3 script installs at 0755 (the sudoers install is 0440, not counted).
+    n=$(grep -F 'install ' "$CALL_LOG" | grep -c -- '-m 0755')
+    if [ "$n" -eq 3 ]; then ok; else fail "expected exactly 3 0755 installs, got $n"; fi
+    cleanup_sandbox
+}
+
+test_sudoers_two_lines_no_setenv() {
+    echo "test: sudoers drop-in has exactly 2 args-free NOPASSWD lines, no SETENV/env_keep"
+    make_sandbox
+    run_setup
+    local f n
+    f="$(DROPIN)"
+    if [ -f "$f" ]; then ok; else fail "sudoers drop-in not written to $f"; cleanup_sandbox; return; fi
+    n=$(grep -c 'NOPASSWD:' "$f")
+    if [ "$n" -eq 2 ]; then ok; else fail "expected exactly 2 NOPASSWD lines, got $n"; fi
+    if grep -qF 'NOPASSWD: /usr/local/sbin/staging-reseed.sh' "$f"; then ok; else fail "missing the staging-reseed.sh sudoers line"; fi
+    if grep -qF 'NOPASSWD: /usr/local/sbin/staging-deployed-sha.sh' "$f"; then ok; else fail "missing the staging-deployed-sha.sh sudoers line"; fi
+    # staging-reset.sh must NOT get a sudoers line (the runner never sudo-calls it).
+    if grep -q 'staging-reset.sh' "$f"; then fail "staging-reset.sh must NOT get a sudoers line"; else ok; fi
+    if grep -q 'SETENV' "$f"; then fail "sudoers must NOT contain SETENV"; else ok; fi
+    if grep -q 'env_keep' "$f"; then fail "sudoers must NOT contain env_keep"; else ok; fi
+    cleanup_sandbox
+}
+
+test_sudoers_principal_default_and_override() {
+    echo "test: sudoers principal is \$RUNNER_USER (default gha-runner; override honored)"
+    make_sandbox
+    run_setup
+    local f
+    f="$(DROPIN)"
+    if grep -qE '^gha-runner ALL=' "$f"; then ok; else fail "default principal must be gha-runner"; fi
+    cleanup_sandbox
+    # Override with a KNOWN custom runner: the lines must start with it (proves the
+    # override actually grants the capability to the real account, not a dead knob).
+    make_sandbox
+    RUNNER_USER=custom-runner run_setup
+    f="$(DROPIN)"
+    if [ "$RC" -eq 0 ]; then ok; else fail "override run should exit 0, got $RC ($(cat "$SANDBOX/stderr"))"; fi
+    if grep -qE '^custom-runner ALL=' "$f"; then ok; else fail "override principal must be custom-runner"; fi
+    if grep -qE '^gha-runner ALL=' "$f"; then fail "override must not leave gha-runner as the principal"; else ok; fi
+    cleanup_sandbox
+}
+
+test_visudo_validates_before_install_and_after() {
+    echo "test: visudo -cf runs on the temp file BEFORE the sudoers install, and on the installed file after"
+    make_sandbox
+    run_setup
+    local i_first_visudo i_sudoers_install i_revalidate
+    i_first_visudo=$(grep -nF 'visudo -cf' "$CALL_LOG" | head -1 | cut -d: -f1)
+    i_sudoers_install=$(grep -nF 'install ' "$CALL_LOG" | grep -F 'gha-runner-staging-reseed' | head -1 | cut -d: -f1)
+    i_revalidate=$(grep -nF 'visudo -cf' "$CALL_LOG" | grep -F 'gha-runner-staging-reseed' | head -1 | cut -d: -f1)
+    if [ -n "$i_first_visudo" ] && [ -n "$i_sudoers_install" ] && [ "$i_first_visudo" -lt "$i_sudoers_install" ]; then ok
+    else fail "visudo must validate the temp file BEFORE installing it (first=$i_first_visudo install=$i_sudoers_install)"; fi
+    if [ -n "$i_revalidate" ] && [ -n "$i_sudoers_install" ] && [ "$i_sudoers_install" -lt "$i_revalidate" ]; then ok
+    else fail "visudo must re-validate the installed file AFTER install (install=$i_sudoers_install reval=$i_revalidate)"; fi
+    cleanup_sandbox
+}
+
+test_fail_not_root() {
+    echo "test: fail-loud when not root"
+    make_sandbox
+    STUB_NOT_ROOT=1 run_setup
+    if [ "$RC" -ne 0 ]; then ok; else fail "non-root must fail, got $RC"; fi
+    if grep -q 'must run as root' "$SANDBOX/stderr"; then ok; else fail "must print a root-required message"; fi
+    cleanup_sandbox
+}
+
+test_fail_missing_runner_user() {
+    echo "test: fail-loud when the runner user is absent (staging remediation, not the Pi runbook)"
+    make_sandbox
+    RUNNER_USER=ghost-runner run_setup
+    if [ "$RC" -ne 0 ]; then ok; else fail "missing runner user must fail, got $RC"; fi
+    if grep -q 'self-hosted, staging' "$SANDBOX/stderr"; then ok; else fail "message must reference the staging runner context"; fi
+    cleanup_sandbox
+}
+
+test_fail_missing_deploy_staging() {
+    echo "test: fail-loud when deploy-staging.sh is not installed (partial-standup refusal)"
+    make_sandbox
+    rm -f "$SANDBOX/sbin/deploy-staging.sh"
+    run_setup
+    if [ "$RC" -ne 0 ]; then ok; else fail "missing deploy-staging.sh must fail, got $RC"; fi
+    if grep -q 'deploy-staging.sh' "$SANDBOX/stderr"; then ok; else fail "message must reference deploy-staging.sh"; fi
+    # Must refuse BEFORE writing the sudoers drop-in.
+    if [ -f "$(DROPIN)" ]; then fail "must not write the sudoers drop-in on a partial standup"; else ok; fi
+    cleanup_sandbox
+}
+
+test_fail_missing_source_script() {
+    echo "test: fail-loud when a source script is missing from the checkout"
+    make_sandbox
+    # Build a fake repo checkout missing one of the three source scripts, and run a
+    # copy of the setup script from it (REPO_ROOT resolves relative to its location).
+    local fake="$SANDBOX/fakerepo"
+    mkdir -p "$fake/scripts/admin"
+    cp "$SCRIPT" "$fake/scripts/admin/setup-staging-reseed-host.sh"
+    echo '#!/bin/bash' > "$fake/scripts/staging-reseed.sh"
+    echo '#!/bin/bash' > "$fake/scripts/staging-deployed-sha.sh"
+    # staging-reset.sh deliberately absent.
+    PATH="$SANDBOX/bin:$PATH" \
+        USRLOCALSBIN="$SANDBOX/sbin" \
+        SUDOERSD="$SANDBOX/sudoers.d" \
+        bash "$fake/scripts/admin/setup-staging-reseed-host.sh" >/dev/null 2>"$SANDBOX/stderr"
+    RC=$?
+    if [ "$RC" -ne 0 ]; then ok; else fail "missing source script must fail, got $RC"; fi
+    if grep -q 'staging-reset.sh' "$SANDBOX/stderr"; then ok; else fail "message must name the missing source script"; fi
+    cleanup_sandbox
+}
+
+test_idempotent_second_run() {
+    echo "test: running twice converges (second run exits 0, sudoers still exactly 2 lines)"
+    make_sandbox
+    run_setup
+    local first_rc="$RC" f n
+    run_setup
+    f="$(DROPIN)"
+    if [ "$first_rc" -eq 0 ] && [ "$RC" -eq 0 ]; then ok; else fail "both runs must exit 0 (first=$first_rc second=$RC)"; fi
+    n=$(grep -c 'NOPASSWD:' "$f")
+    if [ "$n" -eq 2 ]; then ok; else fail "sudoers must still have exactly 2 lines after a second run, got $n"; fi
+    cleanup_sandbox
+}
+
+# ---------------------------------------------------------------------------
+main() {
+    test_installs_three_scripts_root_0755
+    test_sudoers_two_lines_no_setenv
+    test_sudoers_principal_default_and_override
+    test_visudo_validates_before_install_and_after
+    test_fail_not_root
+    test_fail_missing_runner_user
+    test_fail_missing_deploy_staging
+    test_fail_missing_source_script
+    test_idempotent_second_run
+
+    echo ""
+    echo "===================="
+    echo "PASS=$PASS FAIL=$FAIL"
+    echo "===================="
+    [ "$FAIL" -eq 0 ]
+}
+
+main "$@"
