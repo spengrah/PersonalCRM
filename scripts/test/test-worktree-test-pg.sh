@@ -74,6 +74,8 @@ EOF
   # Never binds a real port. The port comes from the -o "-p <port> ..." arg. ---
   cat > "$bin/pg_ctl" <<EOF
 #!/usr/bin/env bash
+maj=\$(cat "$d/pg_major" 2>/dev/null || echo 16)
+[ "\$1" = "--version" ] && { echo "pg_ctl (PostgreSQL) \$maj.2"; exit 0; }
 echo "pg_ctl \$*" >> "$d/calls"
 [ -f "$d/pgctl_fail" ] && exit 1
 dd=""; opts=""; mode=""
@@ -82,9 +84,15 @@ while [ \$# -gt 0 ]; do
   shift
 done
 port=\$(echo "\$opts" | grep -oE -- '-p [0-9]+' | grep -oE '[0-9]+')
+# stop-by-datadir carries no -o; recover the port from the start-time sidecar.
+[ -z "\$port" ] && [ -n "\$dd" ] && port=\$(cat "\$dd/.fakeport" 2>/dev/null || true)
 case "\$mode" in
-  start) [ -n "\$dd" ] && echo "\${FAKE_PG_PID:-\$\$}" > "\$dd/postmaster.pid"; [ -n "\$port" ] && echo "\$port" >> "$d/port_busy" ;;
-  stop)  [ -n "\$port" ] && { grep -vx "\$port" "$d/port_busy" 2>/dev/null > "$d/port_busy.tmp" || true; mv "$d/port_busy.tmp" "$d/port_busy" 2>/dev/null || true; } ;;
+  start)
+    [ -n "\$dd" ] && { echo "\${FAKE_PG_PID:-\$\$}" > "\$dd/postmaster.pid"; [ -n "\$port" ] && echo "\$port" > "\$dd/.fakeport"; }
+    [ -n "\$port" ] && echo "\$port" >> "$d/port_busy" ;;
+  stop)
+    [ -n "\$dd" ] && rm -f "\$dd/postmaster.pid" 2>/dev/null
+    [ -n "\$port" ] && { grep -vx "\$port" "$d/port_busy" 2>/dev/null > "$d/port_busy.tmp" || true; mv "$d/port_busy.tmp" "$d/port_busy" 2>/dev/null || true; } ;;
 esac
 exit 0
 EOF
@@ -98,8 +106,15 @@ EOF
 #!/usr/bin/env bash
 echo "psql \$*" >> "$d/calls"
 if [ -f "$d/psql_role_fail" ]; then
-  in=\$(cat 2>/dev/null)
-  case "\$in" in *ROLE\ crm_user*) exit 1 ;; esac
+  # Only heredoc-fed role SQL (no -c/-tAc) carries the CREATE/ALTER on stdin;
+  # the -tAc existence-check and -c creations must NOT consume stdin (would
+  # block on an interactive tty or a non-tty open pipe, and could false-match).
+  has_cmd=0
+  for a in "\$@"; do case "\$a" in -*c) has_cmd=1 ;; esac; done
+  if [ "\$has_cmd" -eq 0 ]; then
+    in=\$(cat 2>/dev/null)
+    case "\$in" in *ROLE\ crm_user*) exit 1 ;; esac
+  fi
 fi
 exit 0
 EOF
@@ -219,11 +234,13 @@ grep -q '^psql ' "$d/calls" && ok "warm ensure: reconciles role password (idempo
 # against the emitted DSN.) Fresh worktree, cold ensure to warm it, then fail.
 d=$(make_env | tail -1); set_linked "$d"
 run "$d" ensure >/dev/null 2>&1            # cold -> warm
+warmport=$(run "$d" port)
 [ -n "$(run "$d" url)" ] && ok "8b setup: warm url present" || bad "8b setup: no warm url"
 touch "$d/psql_role_fail"                  # next reconcile fails
 run "$d" ensure 2>"$d/err"; rc=$?
 [ "$rc" -eq 0 ] && ok "warm-reconcile-fail non-strict: exit 0" || bad "warm-reconcile-fail non-strict exit=$rc"
 [ -z "$(run "$d" url)" ] && ok "warm-reconcile-fail: url now empty (stale endpoint not emitted)" || bad "warm-reconcile-fail: url still emits stale endpoint"
+! grep -qx "$warmport" "$d/port_busy" && ok "warm-reconcile-fail: server force-stopped (port down, not orphaned)" || bad "warm-reconcile-fail: server left running with cleared meta"
 grep -qi 'reconcile' "$d/err" && ok "warm-reconcile-fail: loud warning" || bad "warm-reconcile-fail: no warning"
 # strict: rebuild a warm instance, then fail -> non-zero exit
 rm -f "$d/psql_role_fail"; run "$d" ensure >/dev/null 2>&1; touch "$d/psql_role_fail"
@@ -231,11 +248,45 @@ CRM_WORKTREE_PG=strict run "$d" ensure 2>/dev/null; rc=$?
 [ "$rc" -ne 0 ] && ok "warm-reconcile-fail strict: exit non-zero ($rc)" || bad "warm-reconcile-fail strict: exit 0"
 rm -f "$d/psql_role_fail"
 
-# 9. Port reuse: persisted port survives a stop (claimed, server down)
+# 8d. force_stop_instance resolves pg_ctl WITHOUT psql (resolve_bindir requires
+# psql; resolve_pg_ctl must not). Warm an instance, delete psql, then teardown:
+# _stop_locked's toolchain-gated `-m fast` is skipped, but force_stop_instance
+# still brings the server down by data dir before the data dir is removed.
+d=$(make_env | tail -1); set_linked "$d"
+run "$d" ensure >/dev/null 2>&1
+tport=$(run "$d" port)
+grep -qx "$tport" "$d/port_busy" && ok "8d setup: warm server answering" || bad "8d setup: server not up"
+rm -f "$d/bin/psql"                        # psql gone -> resolve_bindir fails, resolve_pg_ctl must not
+run "$d" teardown >/dev/null 2>&1
+! grep -qx "$tport" "$d/port_busy" && ok "8d: force-stop without psql (resolve_pg_ctl scan) brought server down" || bad "8d: server left running (data dir deleted under a live server)"
+
+# 8e. teardown must KEEP the data dir + warn when the server can't be stopped.
+# With the fake pg_ctl forced to fail its stop, postmaster.pid is never removed
+# -> force_stop_instance verifies the postmaster still alive and returns
+# non-zero -> teardown keeps the data dir and warns, instead of rm-ing it under a
+# live server (which would defeat manual `pg_ctl -D` recovery).
+d=$(make_env | tail -1); set_linked "$d"
+run "$d" ensure >/dev/null 2>&1
+id=$(run "$d" status | grep -oE 'id=[0-9a-f]+' | sed 's/id=//')
+touch "$d/pgctl_fail"                       # every pg_ctl (incl. stop) now fails
+run "$d" teardown 2>"$d/err"
+[ -d "$d/pghome/$id" ] && ok "8e: teardown kept data dir when server could not be stopped" || bad "8e: teardown deleted data dir under a live server"
+grep -qi 'could not stop' "$d/err" && ok "8e: teardown warned about the un-stoppable instance" || bad "8e: no warning on un-stoppable teardown ($(cat "$d/err"))"
+rm -f "$d/pgctl_fail"                        # allow the follow-up teardown to clean up
+run "$d" teardown >/dev/null 2>&1
+[ ! -d "$d/pghome/$id" ] && ok "8e: teardown removes the instance once stoppable again" || bad "8e: instance dir left after recoverable teardown"
+
+# 9. Port reuse: a genuinely stopped instance keeps its persisted meta port
+# (STATE=claimed, server down). Fresh env + real warm instance so this isn't a
+# torn-down instance falling back to the deterministic seed.
+d=$(make_env | tail -1); set_linked "$d"
+run "$d" ensure >/dev/null 2>&1            # cold -> warm (real running instance)
 port_before=$(run "$d" port)
-run "$d" stop >/dev/null 2>&1
+run "$d" stop >/dev/null 2>&1              # graceful stop: meta demoted to claimed, port persisted
 port_after=$(run "$d" port)
 [ "$port_before" = "$port_after" ] && ok "port persists across stop ($port_after)" || bad "port changed on stop: $port_before -> $port_after"
+id=$(run "$d" status | grep -oE 'id=[0-9a-f]+' | sed 's/id=//')
+grep -q '^STATE=claimed' "$d/pghome/$id/meta" && ok "stop persists meta as claimed (port held for restart)" || bad "stop did not persist claimed meta: $(cat "$d/pghome/$id/meta" 2>/dev/null)"
 
 # 10. Port collision: a sibling already on the seed -> probe advances
 d=$(make_env | tail -1); set_linked "$d" gamma
@@ -330,6 +381,50 @@ run "$d" reap >/dev/null 2>&1
 [ -d "$d/pghome/$liveid" ] && ok "reap kept live-worktree instance" || bad "reap removed live instance"
 [ ! -d "$d/pghome/deadbeefdeadbeef" ] && ok "reap pruned dead-worktree instance" || bad "reap left dead instance"
 [ -f "$sentinel" ] && ok "reap never touched anything outside HOME" || bad "reap removed the sentinel!"
+
+# 16b. Reap must KEEP a dead-worktree instance's data dir + warn when its
+# postmaster can't be stopped (the reap-path analogue of 8e). The dead instance
+# has an initialized data dir with a LIVE postmaster.pid; pgctl_fail makes every
+# pg_ctl stop fail, so force_stop_instance verifies the server still up and
+# _reap_one keeps the data dir instead of deleting it under a live server. Once
+# stoppable again, a follow-up reap prunes it.
+d=$(make_env | tail -1); set_linked "$d" reapstuck
+livegd=$(cat "$d/git-dir")
+liveid=$(printf '%s' "$livegd" | { command -v sha256sum >/dev/null && sha256sum || shasum -a 256; } | awk '{print $1}' | head -c 16)
+printf 'worktree %s\n' "$d/repo" > "$d/worktrees"
+cat > "$d/bin/git" <<EOF
+#!/usr/bin/env bash
+if [ "\${GIT_DIR+set}" = set ] && [ -z "\$GIT_DIR" ]; then
+  echo "fatal: not a git repository: ''" >&2; exit 128
+fi
+case "\$*" in
+  "rev-parse --git-dir")          cat "$d/git-dir" ;;
+  "rev-parse --git-common-dir")   cat "$d/common-dir" ;;
+  "rev-parse --absolute-git-dir") cat "$d/git-dir" ;;
+  "rev-parse --show-toplevel")    echo "$d/repo" ;;
+  "worktree list --porcelain")    cat "$d/worktrees" ;;
+  "-C $d/repo rev-parse --absolute-git-dir") cat "$d/git-dir" ;;
+  *"rev-parse --absolute-git-dir") echo "/nonexistent/.git" ;;
+  *) exit 0 ;;
+esac
+EOF
+chmod +x "$d/bin/git"
+mkdir -p "$d/pghome/$liveid"
+printf 'PORT=5591\nPID=1\nSTATE=running\nDATADIR=%s\n' "$d/pghome/$liveid/data" > "$d/pghome/$liveid/meta"
+# Dead-worktree instance: initialized + LIVE postmaster + port marked busy.
+dead="$d/pghome/deadbeefdeadbeef"; ddir="$dead/data"; mkdir -p "$ddir"
+echo 16 > "$ddir/PG_VERSION"
+echo "$$" > "$ddir/postmaster.pid"
+echo 5601 > "$ddir/.fakeport"
+echo 5601 >> "$d/port_busy"
+printf 'PORT=5601\nPID=%s\nSTATE=running\nDATADIR=%s\n' "$$" "$ddir" > "$dead/meta"
+touch "$d/pgctl_fail"                        # every pg_ctl stop fails
+run "$d" reap 2>"$d/err"
+[ -d "$dead" ] && ok "16b: reap kept dead instance's data dir when server could not be stopped" || bad "16b: reap deleted data dir under a live server"
+grep -qi 'could not stop' "$d/err" && ok "16b: reap warned about the un-stoppable instance" || bad "16b: no warning on un-stoppable reap ($(cat "$d/err"))"
+rm -f "$d/pgctl_fail"                         # now stoppable
+run "$d" reap >/dev/null 2>&1
+[ ! -d "$dead" ] && ok "16b: reap prunes the dead instance once stoppable again" || bad "16b: dead instance left after recoverable reap"
 
 # 17. Test-hook counter: increments once per invocation
 d=$(make_env | tail -1); set_linked "$d"

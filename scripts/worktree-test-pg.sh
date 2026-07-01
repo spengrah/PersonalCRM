@@ -146,38 +146,54 @@ meta_get() {
 # Resolve a Postgres 16 bindir holding initdb/pg_ctl/postgres/psql. Echoes the
 # bindir on stdout; returns non-zero (and the caller warns) if none qualifies.
 PG_BINDIR=""
+
+# Candidate Postgres bindirs, most-specific first. Single source of truth for
+# both resolve_bindir (full toolchain) and resolve_pg_ctl (pg_ctl only). Honors
+# the CRM_WORKTREE_PG_BINDIR test hook (then it is the ONLY candidate).
+pg_bin_candidates() {
+  if [ -n "${CRM_WORKTREE_PG_BINDIR:-}" ]; then
+    printf '%s\n' "$CRM_WORKTREE_PG_BINDIR"
+    return 0
+  fi
+  command -v pg_config >/dev/null 2>&1 && printf '%s\n' "$(pg_config --bindir 2>/dev/null || true)"
+  printf '%s\n' \
+    "${PGBIN:-}" \
+    "/opt/homebrew/opt/postgresql@16/bin" \
+    "/usr/local/opt/postgresql@16/bin" \
+    "/usr/lib/postgresql/16/bin" \
+    "/usr/pgsql-16/bin"
+}
+
 resolve_bindir() {
   [ -n "$PG_BINDIR" ] && { printf '%s' "$PG_BINDIR"; return 0; }
-  local candidates=() d
-  # Test hook: when set, this is the ONLY candidate considered (so unit tests
-  # with a fake bindir aren't defeated by a real pg16 install on the host).
-  if [ -n "${CRM_WORKTREE_PG_BINDIR:-}" ]; then
-    candidates=("$CRM_WORKTREE_PG_BINDIR")
-  else
-    if command -v pg_config >/dev/null 2>&1; then
-      candidates+=("$(pg_config --bindir 2>/dev/null || true)")
-    fi
-    candidates+=(
-      "${PGBIN:-}"
-      "/opt/homebrew/opt/postgresql@16/bin"
-      "/usr/local/opt/postgresql@16/bin"
-      "/usr/lib/postgresql/16/bin"
-      "/usr/pgsql-16/bin"
-    )
-  fi
-  for d in "${candidates[@]}"; do
+  local d ver
+  while IFS= read -r d; do
     [ -n "$d" ] || continue
-    # psql is required too — role/db/extension provisioning AND the warm-instance
-    # password reconcile all run through it.
+    # psql is required for provisioning + the warm-instance password reconcile.
     [ -x "$d/initdb" ] && [ -x "$d/pg_ctl" ] && [ -x "$d/postgres" ] && [ -x "$d/psql" ] || continue
-    # Must be major 16.
-    local ver
     ver=$("$d/postgres" --version 2>/dev/null | grep -oE '[0-9]+' | head -1) || true
     [ "$ver" = "16" ] || continue
-    PG_BINDIR="$d"
-    printf '%s' "$PG_BINDIR"
-    return 0
-  done
+    PG_BINDIR="$d"; printf '%s' "$PG_BINDIR"; return 0
+  done < <(pg_bin_candidates)
+  return 1
+}
+
+# Resolve JUST a pg_ctl executable, INDEPENDENTLY of resolve_bindir's full
+# initdb/postgres/psql requirement. Used only to force-stop a warm instance when
+# reconcile failed — psql may be the very binary that's missing, and stopping a
+# running server needs only pg_ctl. Prefers the already-resolved full bindir (a
+# cached PG_BINDIR is already major-16-validated); when scanning fresh it
+# validates the pg_ctl is major 16 too, so a non-16 pg_config/PGBIN ahead of the
+# real pg16 bindir can't hand back the wrong control binary.
+resolve_pg_ctl() {
+  [ -n "$PG_BINDIR" ] && [ -x "$PG_BINDIR/pg_ctl" ] && { printf '%s' "$PG_BINDIR/pg_ctl"; return 0; }
+  local d ver
+  while IFS= read -r d; do
+    [ -n "$d" ] && [ -x "$d/pg_ctl" ] || continue
+    ver=$("$d/pg_ctl" --version 2>/dev/null | grep -oE '[0-9]+' | head -1) || true
+    [ "$ver" = "16" ] || continue
+    printf '%s' "$d/pg_ctl"; return 0
+  done < <(pg_bin_candidates)
   return 1
 }
 
@@ -445,10 +461,19 @@ _ensure_locked() {
     local port bindir; port=$(meta_get "$id" PORT 2>/dev/null || true)
     bindir=$(resolve_bindir 2>/dev/null || true)
     if [ -z "$bindir" ] || [ -z "$port" ] || ! reconcile_role_password "$bindir" "$port"; then
-      [ -n "$bindir" ] && [ -s "$(data_dir "$id")/PG_VERSION" ] && \
-        "$bindir/pg_ctl" -D "$(data_dir "$id")" -m fast stop >/dev/null 2>&1 || true
+      # Attempt to force the server down before clearing meta: if we cleared meta
+      # while the postmaster stayed up, the next ensure would cold-start against a
+      # live data dir ("lock file already exists") and wedge. force_stop_instance
+      # resolves pg_ctl independently of psql, so it also covers the "psql
+      # missing" entry (bindir empty) — a bindir-gated stop would skip it. We
+      # clear meta REGARDLESS of the stop result (`|| true`): meta is cheap and
+      # reversible, and clearing it enables graceful shared-instance fallback; a
+      # residual un-stoppable postmaster is the documented wedge, recoverable via
+      # `make test-pg-teardown`. (Contrast teardown/reap, which gate the
+      # DESTRUCTIVE rm on a verified stop.)
+      force_stop_instance "$id" || true
       clear_meta_claim "$id"
-      _ensure_fail "$mode" "could not reconcile the per-worktree crm_user password on the warm instance; stopped it and falling back to the shared instance."
+      _ensure_fail "$mode" "could not reconcile the per-worktree crm_user password on the warm instance; attempted to force-stop it and falling back to the shared instance."
       return $?
     fi
     return 0
@@ -591,6 +616,38 @@ provision_instance() {
 }
 
 # ===========================================================================
+# Force-stop helper (shared by the warm-failure block, teardown, and reap)
+# ===========================================================================
+# True iff the instance's postmaster is still alive (reads postmaster.pid, which
+# real pg_ctl removes on a clean stop; a stale/dead pid reads as not-alive).
+postmaster_alive() {
+  local datadir="$1" pid
+  pid=$(head -1 "$datadir/postmaster.pid" 2>/dev/null || true)
+  [ -n "$pid" ] && pid_alive "$pid"
+}
+
+# Attempt to FORCE-STOP a per-worktree instance's postmaster by DATA DIR, then
+# VERIFY. Uses `pg_ctl -m immediate` (SIGQUIT): the most reliable stop; the next
+# start just crash-recovers — safe for a throwaway test cluster. Resolves pg_ctl
+# INDEPENDENTLY of the full toolchain (resolve_pg_ctl), so the "psql missing"
+# reconcile-failure case still stops the server instead of orphaning it (a
+# bindir-gated stop would silently skip it). The stop is best-effort, but the
+# RETURN VALUE is verified: 0 iff the postmaster is confirmed gone (or was never
+# up), non-zero if it is still alive (no resolvable pg_ctl, or it ignored
+# SIGQUIT). Callers that delete the data dir MUST gate on this: deleting under a
+# live server is worse than the wedge and defeats manual `pg_ctl -D` recovery.
+force_stop_instance() {
+  local id="$1" datadir; datadir=$(data_dir "$id")
+  [ -s "$datadir/PG_VERSION" ] || return 0     # never initialized -> nothing to stop
+  local pgctl; pgctl=$(resolve_pg_ctl 2>/dev/null || true)
+  if [ -n "$pgctl" ]; then
+    "$pgctl" -D "$datadir" -m immediate stop >/dev/null 2>&1 || true
+  fi
+  postmaster_alive "$datadir" && return 1      # still up -> report failure
+  return 0
+}
+
+# ===========================================================================
 # Subcommand: stop
 # ===========================================================================
 cmd_stop() {
@@ -625,7 +682,16 @@ cmd_teardown() {
 _teardown_locked() {
   local id="$1"
   _stop_locked "$id"
-  rm -rf "$(instance_dir "$id")" "$(socket_dir "$id")" 2>/dev/null || true
+  # Force-stop and VERIFY the server is down before deleting its data dir.
+  # _stop_locked is a best-effort `-m fast` (skipped entirely when the toolchain
+  # doesn't resolve, e.g. psql missing). Deleting a live server's data dir is
+  # worse than the wedge and defeats manual `pg_ctl -D <datadir>` recovery — so
+  # only rm on a verified stop; otherwise keep the data dir and warn.
+  if force_stop_instance "$id"; then
+    rm -rf "$(instance_dir "$id")" "$(socket_dir "$id")" 2>/dev/null || true
+  else
+    warn "teardown: could not stop the postmaster for instance $id; keeping its data dir ($(data_dir "$id")) intact. Stop it manually ('$(resolve_pg_ctl 2>/dev/null || echo pg_ctl) -D <datadir> -m immediate stop' or kill the postmaster pid), then re-run 'make test-pg-teardown'."
+  fi
 }
 
 # ===========================================================================
@@ -692,8 +758,12 @@ _reap_one() {
   if [ -n "$bindir" ] && [ -s "$datadir/PG_VERSION" ]; then
     "$bindir/pg_ctl" -D "$datadir" -m fast stop >/dev/null 2>&1 || true
   fi
-  rm -rf "$(instance_dir "$id")" "$(socket_dir "$id")" 2>/dev/null || true
-  echo "reaped per-worktree pg instance $id (worktree gone)"
+  if force_stop_instance "$id"; then
+    rm -rf "$(instance_dir "$id")" "$(socket_dir "$id")" 2>/dev/null || true
+    echo "reaped per-worktree pg instance $id (worktree gone)"
+  else
+    warn "reap: could not stop the postmaster for instance $id; keeping its data dir ($datadir) intact (stop it manually, then re-run 'make test-pg-reap')."
+  fi
 }
 
 # ===========================================================================
