@@ -84,34 +84,54 @@ read-only) and carry **no** `SETENV`/`env_keep`, preserving the env-trust
 seam that pins the staging tenant identity inside the wrappers (sudo
 resets the environment; nothing is passed from the workflow).
 
-**When to run:** once, on the staging host, after the staging code-deploy
-standup is complete and before the first seed-touching staging deploy is
-expected to actually reseed.
+**When to run:** once, after the staging code-deploy standup is complete
+and before the first seed-touching staging deploy is expected to actually
+reseed.
 
-**Preconditions (fail-loud):** must run as root; the staging runner user
-must exist (default `gha-runner`; override with `RUNNER_USER=…` — the
-account the `[self-hosted, staging]` agent runs as); and
-`/usr/local/sbin/deploy-staging.sh` must already be installed (this
-script does **not** install it — a host missing it is only partially
-stood up, so the script refuses). This is the **staging** standup, not
-the Pi/prod runner install — the runbook
-(`infra/runner-installation-runbook.md`) is only a *pattern reference*
-for the `install`/`visudo` mechanics; staging differs (`[self-hosted,
-staging]` label, `deploy-staging.sh`, the reseed wrappers).
+**Two modes (mirrors `staging-reset.sh`):** there is no repo checkout on
+the staging host, so the **default** mode runs from a dev Mac and
+provisions `STAGING_HOST` (default `stovepipes`) over ssh — it ships the
+installer + the three source scripts to a temp dir on the host and
+re-invokes itself there with `--local` (the temp dir is removed
+afterward). `ssh -t` allocates a TTY so `sudo` can prompt for a password.
+The `--local` mode does the real install/sudoers work on the host itself
+(this is what the ssh mode calls on the far side); run it directly only
+if you already have a checkout on the host.
+
+**Preconditions (fail-loud):**
+- *ssh mode:* `ssh` + `tar` on PATH; the three source scripts present in
+  this checkout; `STAGING_HOST` reachable over ssh.
+- *`--local` mode:* must run as root; the staging runner user must exist
+  (default `gha-runner`; override with `RUNNER_USER=…` — the account the
+  `[self-hosted, staging]` agent runs as); and
+  `/usr/local/sbin/deploy-staging.sh` must already be installed (this
+  script does **not** install it — a host missing it is only partially
+  stood up, so the script refuses).
+
+This is the **staging** standup, not the Pi/prod runner install — the
+runbook (`infra/runner-installation-runbook.md`) is only a *pattern
+reference* for the `install`/`visudo` mechanics; staging differs
+(`[self-hosted, staging]` label, `deploy-staging.sh`, the reseed
+wrappers).
 
 **Usage:**
 ```bash
-# On the staging host, from a repo checkout:
-sudo scripts/admin/setup-staging-reseed-host.sh
+# From a dev Mac (default): provisions STAGING_HOST over ssh
+./scripts/admin/setup-staging-reseed-host.sh
 
-# With a non-default runner account:
-sudo RUNNER_USER=my-runner scripts/admin/setup-staging-reseed-host.sh
+# Non-default host and/or runner account:
+STAGING_HOST=my-staging RUNNER_USER=my-runner ./scripts/admin/setup-staging-reseed-host.sh
+
+# On the staging host itself, from a checkout, as root:
+sudo ./scripts/admin/setup-staging-reseed-host.sh --local
 ```
 
-The script is idempotent (install overwrites in place; the sudoers
-drop-in is a fixed-name file overwritten atomically — no appends, no
-duplicate lines) and safe to re-run. The sudoers drop-in is validated
-with `visudo -cf` before install and re-validated after.
+In ssh mode `RUNNER_USER` is threaded to the host as a `--runner-user`
+flag (args survive `sudo`; env does not — no `SETENV` needed). The script
+is idempotent (install overwrites in place; the sudoers drop-in is a
+fixed-name file overwritten atomically — no appends, no duplicate lines)
+and safe to re-run. The sudoers drop-in is validated with `visudo -cf`
+before install and re-validated after.
 
 ## Same-host reinstall (no script needed)
 

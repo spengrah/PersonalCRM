@@ -79,6 +79,44 @@ run_setup() {
     PATH="$SANDBOX/bin:$PATH" \
         USRLOCALSBIN="$SANDBOX/sbin" \
         SUDOERSD="$SANDBOX/sudoers.d" \
+        bash "$SCRIPT" --local >/dev/null 2>"$SANDBOX/stderr"
+    RC=$?
+}
+
+# setup_ssh_stubs : add ssh + tar stubs so ssh mode (the default) can be exercised
+# without a real host. The ssh stub records argv, drains any piped tarball, and
+# answers the three call shapes the script makes: the reachability probe
+# (-o ConnectTimeout), the bundle-ship step (mktemp — echoes a fake remote dir so
+# the caller's $(...) capture is non-empty), and the remote run step (sudo).
+setup_ssh_stubs() {
+    cat > "$SANDBOX/bin/ssh" <<EOF
+#!/usr/bin/env bash
+echo "ssh \$*" >> "$CALL_LOG"
+cat >/dev/null 2>&1 || true   # drain a piped tarball if present
+case " \$* " in
+    *ConnectTimeout*) exit 0 ;;                       # reachability probe
+    *mktemp*)         echo "$SANDBOX/remote_stage" ;; # bundle-ship: echo remote dir
+    *sudo*)                                           # remote --local run
+        # Capture the remote command (the last positional arg) so a test can
+        # re-parse it under a controlled shell and prove %q quoting + rc handling.
+        for _last in "\$@"; do :; done
+        printf '%s' "\$_last" > "$SANDBOX/remote_cmd.txt"
+        exit "\${STUB_SSH_RUN_RC:-0}" ;;
+    *)                exit 0 ;;
+esac
+EOF
+    cat > "$SANDBOX/bin/tar" <<EOF
+#!/usr/bin/env bash
+echo "tar \$*" >> "$CALL_LOG"
+printf 'TARBYTES'   # give the pipe some content
+exit 0
+EOF
+    chmod +x "$SANDBOX/bin/ssh" "$SANDBOX/bin/tar"
+}
+
+# run_ssh : run the script in ssh mode (default, no --local). Caller may prefix env.
+run_ssh() {
+    PATH="$SANDBOX/bin:$PATH" \
         bash "$SCRIPT" >/dev/null 2>"$SANDBOX/stderr"
     RC=$?
 }
@@ -198,7 +236,7 @@ test_fail_missing_source_script() {
     PATH="$SANDBOX/bin:$PATH" \
         USRLOCALSBIN="$SANDBOX/sbin" \
         SUDOERSD="$SANDBOX/sudoers.d" \
-        bash "$fake/scripts/admin/setup-staging-reseed-host.sh" >/dev/null 2>"$SANDBOX/stderr"
+        bash "$fake/scripts/admin/setup-staging-reseed-host.sh" --local >/dev/null 2>"$SANDBOX/stderr"
     RC=$?
     if [ "$RC" -ne 0 ]; then ok; else fail "missing source script must fail, got $RC"; fi
     if grep -q 'staging-reset.sh' "$SANDBOX/stderr"; then ok; else fail "message must name the missing source script"; fi
@@ -218,6 +256,112 @@ test_idempotent_second_run() {
     cleanup_sandbox
 }
 
+test_ssh_mode_bootstraps_remote() {
+    echo "test: ssh mode (default) ships the bundle and runs the installer --local on the host"
+    make_sandbox
+    setup_ssh_stubs
+    # No --local, and STUB_NOT_ROOT=1 to prove ssh mode does NOT require local root.
+    STUB_NOT_ROOT=1 run_ssh
+    if [ "$RC" -eq 0 ]; then ok; else fail "ssh mode should exit 0, got $RC ($(cat "$SANDBOX/stderr"))"; fi
+    # ships the installer via tar
+    if grep -F 'tar ' "$CALL_LOG" | grep -q 'setup-staging-reseed-host.sh'; then ok; else fail "must tar the installer bundle"; fi
+    # remote command runs the installer in --local mode, via sudo, with the runner flag
+    if grep -F 'ssh ' "$CALL_LOG" | grep -F 'sudo' | grep -q -- '--local'; then ok; else fail "remote command must sudo-run the installer with --local"; fi
+    if grep -F 'ssh ' "$CALL_LOG" | grep -q -- '--runner-user gha-runner'; then ok; else fail "remote command must thread --runner-user (default gha-runner)"; fi
+    # uses an interactive TTY so sudo can prompt
+    if grep -F 'ssh ' "$CALL_LOG" | grep -F 'sudo' | grep -q -- '-t'; then ok; else fail "remote run must use ssh -t for the sudo prompt"; fi
+    # cleans up the remote temp dir
+    if grep -F 'ssh ' "$CALL_LOG" | grep -q 'rm -rf'; then ok; else fail "remote command must remove the temp dir"; fi
+    # no local install happened (the real work is on the far side)
+    if grep -qF 'install ' "$CALL_LOG"; then fail "ssh mode must NOT install locally"; else ok; fi
+    cleanup_sandbox
+}
+
+test_ssh_mode_runner_user_override() {
+    echo "test: ssh mode threads a RUNNER_USER override to the remote --runner-user flag"
+    make_sandbox
+    setup_ssh_stubs
+    RUNNER_USER=custom-runner run_ssh
+    if [ "$RC" -eq 0 ]; then ok; else fail "ssh override run should exit 0, got $RC ($(cat "$SANDBOX/stderr"))"; fi
+    if grep -F 'ssh ' "$CALL_LOG" | grep -q -- '--runner-user custom-runner'; then ok; else fail "override must pass --runner-user custom-runner to the remote"; fi
+    cleanup_sandbox
+}
+
+test_ssh_mode_quotes_hostile_runner_user() {
+    echo "test: ssh mode %q-quotes a hostile RUNNER_USER (no injection; value survives as one token)"
+    make_sandbox
+    setup_ssh_stubs
+    # A value with a shell metachar + command separator. ssh mode does NOT validate
+    # the runner locally (that is the remote --local's job), so it flows straight
+    # into the remote command string — the exact thing printf %q must neutralize.
+    local hostile='a b; touch pwned'
+    RUNNER_USER="$hostile" run_ssh
+    if [ "$RC" -eq 0 ]; then ok; else fail "ssh mode run should exit 0, got $RC ($(cat "$SANDBOX/stderr"))"; fi
+    local rc_file="$SANDBOX/remote_cmd.txt"
+    if [ ! -f "$rc_file" ]; then fail "no remote command captured"; cleanup_sandbox; return; fi
+
+    # Re-parse the captured remote command under a controlled shell. A `sudo` stub
+    # records the args it receives (the `bash <installer> --local --runner-user X`
+    # invocation) instead of running them, so a failed %q cannot do harm and the
+    # reconstructed argv is captured. `touch` is deliberately REAL — if %q failed,
+    # the injected `; touch pwned` would run as its own statement and create the file.
+    # (The stub is named `sudo`, NOT `bash`, so a bash-named stub can't recurse into
+    # itself via its own #!/usr/bin/env bash shebang.)
+    mkdir -p "$SANDBOX/parsebin"
+    cat > "$SANDBOX/parsebin/sudo" <<PB
+#!/usr/bin/env bash
+printf '%s\n' "\$@" > "$SANDBOX/remote_argv.txt"
+exit 0
+PB
+    chmod +x "$SANDBOX/parsebin/sudo"
+    ( cd "$SANDBOX" && PATH="$SANDBOX/parsebin:$PATH" bash -c "$(cat "$rc_file")" ) >/dev/null 2>&1 || true
+
+    # No injection: the metacharacter payload must NOT have executed.
+    if [ -e "$SANDBOX/pwned" ]; then fail "injection: 'pwned' created — %q did not neutralize the hostile value"; else ok; fi
+    # The runner value must reconstruct as EXACTLY one token equal to the original.
+    if [ -f "$SANDBOX/remote_argv.txt" ]; then
+        local val
+        val="$(awk '/^--runner-user$/{getline; print; exit}' "$SANDBOX/remote_argv.txt")"
+        if [ "$val" = "$hostile" ]; then ok; else fail "runner-user not reconstructed as one token (got: '$val')"; fi
+    else
+        fail "installer argv not captured from the reconstructed remote command"
+    fi
+    cleanup_sandbox
+}
+
+test_ssh_mode_propagates_remote_rc_and_cleans_up() {
+    echo "test: ssh mode propagates the remote exit code and still removes the temp dir"
+    make_sandbox
+    setup_ssh_stubs
+    STUB_SSH_RUN_RC=7 run_ssh
+    if [ "$RC" -eq 7 ]; then ok; else fail "remote rc must propagate to the local exit, got $RC"; fi
+    # Cleanup is part of the remote command, so it runs even when the install fails.
+    if [ -f "$SANDBOX/remote_cmd.txt" ] && grep -q 'rm -rf' "$SANDBOX/remote_cmd.txt"; then ok
+    else fail "remote command must remove the temp dir even on a failed run"; fi
+    cleanup_sandbox
+}
+
+test_ssh_mode_missing_local_source_fails_before_ssh() {
+    echo "test: ssh mode validates local sources BEFORE contacting the host"
+    make_sandbox
+    setup_ssh_stubs
+    # Run a copy from a fake checkout missing one source script; ssh mode (default).
+    local fake="$SANDBOX/fakerepo"
+    mkdir -p "$fake/scripts/admin"
+    cp "$SCRIPT" "$fake/scripts/admin/setup-staging-reseed-host.sh"
+    echo '#!/bin/bash' > "$fake/scripts/staging-reseed.sh"
+    echo '#!/bin/bash' > "$fake/scripts/staging-deployed-sha.sh"
+    # staging-reset.sh deliberately absent.
+    PATH="$SANDBOX/bin:$PATH" \
+        bash "$fake/scripts/admin/setup-staging-reseed-host.sh" >/dev/null 2>"$SANDBOX/stderr"
+    RC=$?
+    if [ "$RC" -ne 0 ]; then ok; else fail "missing local source must fail, got $RC"; fi
+    if grep -q 'staging-reset.sh' "$SANDBOX/stderr"; then ok; else fail "message must name the missing source"; fi
+    # must fail BEFORE any ssh run of the installer
+    if grep -F 'ssh ' "$CALL_LOG" | grep -q 'sudo'; then fail "must not contact the host when a local source is missing"; else ok; fi
+    cleanup_sandbox
+}
+
 # ---------------------------------------------------------------------------
 main() {
     test_installs_three_scripts_root_0755
@@ -229,6 +373,11 @@ main() {
     test_fail_missing_deploy_staging
     test_fail_missing_source_script
     test_idempotent_second_run
+    test_ssh_mode_bootstraps_remote
+    test_ssh_mode_runner_user_override
+    test_ssh_mode_quotes_hostile_runner_user
+    test_ssh_mode_propagates_remote_rc_and_cleans_up
+    test_ssh_mode_missing_local_source_fails_before_ssh
 
     echo ""
     echo "===================="
