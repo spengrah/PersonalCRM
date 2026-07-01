@@ -39,6 +39,7 @@ Load as needed, not upfront:
 - Code patterns: `.ai/patterns/`
 - Testing rules: `.ai/rules/testing.md`
 - Code review standards: `.ai/rules/code-review.md`
+- Behavior specs (intended-behavior SSOT): `spec/README.md`
 
 ## Quick Symbol Searches
 
