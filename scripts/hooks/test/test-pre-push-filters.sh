@@ -80,6 +80,17 @@ assert_in_group     "backend/internal/synthetic/profiles.go" backend
 assert_not_in_group "backend/internal/api/handlers/contact.go" seed
 assert_not_in_group "backend/migrations/074_x.up.sql" seed
 
+# --- migrations group: the staging reseed-decision schema-change surface ---
+# Migrations at the top level and at depth are in the migrations group (** depth).
+assert_in_group     "backend/migrations/074_x.up.sql" migrations
+assert_in_group     "backend/migrations/subdir/075_y.up.sql" migrations
+# Orthogonality: a migration is ALSO in backend, so the migrations group changes no
+# Go/frontend test selection (it is a separate classification consumed only by the
+# reseed decision).
+assert_in_group     "backend/migrations/074_x.up.sql" backend
+# Non-migration backend code is NOT in the migrations group.
+assert_not_in_group "backend/internal/api/handlers/contact.go" migrations
+
 # --- any_file_in_groups: the Go/frontend gate's decision boundary ---
 # Daemon-only push does NOT run Go suite (headline invariant).
 assert_false "any_file_in_groups daemon-only -> Go suite NOT run" \

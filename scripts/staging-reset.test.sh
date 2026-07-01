@@ -132,7 +132,14 @@ case "\$all" in
   *"id -u staging"*) echo $STAGING_UID; exit 0 ;;
   *"s/^CRM_ENV=//p"*) echo "\${STUB_CRM_ENV:-staging}"; exit 0 ;;
   *"s/^Image=//p"*)   echo "\${STUB_IMAGE_REF:-$SHA_REF}"; exit 0 ;;
+  *"s/^DATABASE_URL=//p"*) echo "\${STUB_DATABASE_URL:-postgres://crm_user:x@crm-postgres:5432/personal_crm}"; exit 0 ;;
   *"test -e"*) exit "\${STUB_ENV_MISSING:-0}" ;;
+  # podman exec ... psql ... oauth_credential (the ssh-mode oauth count). The SQL
+  # arrives %q-escaped in the remote command; match on the literal table name.
+  *oauth_credential*)
+    if [ "\${STUB_OAUTH_PSQL_FAIL:-0}" = "1" ]; then exit 1; fi
+    echo "\${STUB_OAUTH_COUNT:-0}"
+    exit "\${STUB_OAUTH_PSQL_RC:-0}" ;;
   *systemctl*) if [ "\${STUB_STOP_FAIL:-0}" = "1" ] && [[ "\$all" == *stop* ]]; then exit 1; fi; exit 0 ;;
   *"podman run"*) if [[ "\$all" == *--reset-and-seed* ]]; then exit "\${STUB_RESET_RC:-0}"; fi; exit 0 ;;
   *) exit 0 ;;
@@ -174,6 +181,18 @@ run_local_oauth() {
         STAGING_ENV_FILE="$SANDBOX/staging.env" \
         STAGING_BACKEND_UNIT="$SANDBOX/backend.container" \
         bash "$SCRIPT" --local --require-oauth-empty >/dev/null 2>"$SANDBOX/stderr"
+    RC=$?
+}
+
+# run_ssh_oauth : ssh mode + --require-oauth-empty (the auto path over ssh). The
+# ssh stub answers the DATABASE_URL read and the oauth_credential count so the
+# guard reaches the count instead of REFUSING on a missing DATABASE_URL first.
+run_ssh_oauth() {
+    PATH="$SANDBOX/bin:$PATH" \
+        STAGING_HOST=stovepipes \
+        STAGING_ENV_FILE=/srv/personalcrm/.env \
+        STAGING_BACKEND_UNIT=/var/lib/staging/.config/containers/systemd/personalcrm-backend.container \
+        bash "$SCRIPT" --require-oauth-empty >/dev/null 2>"$SANDBOX/stderr"
     RC=$?
 }
 
@@ -339,6 +358,31 @@ test_ssh_targets_host() {
     if grep -E '^ssh ' "$CALL_LOG" | grep -F -- '--reset-and-seed' | grep -q "$SHA_REF"; then ok
     else fail "ssh reset must run the pinned ref on the host"; fi
     if grep -E '^ssh ' "$CALL_LOG" | grep -q 'sudo -n -u staging'; then ok; else fail "ssh remote ops must use sudo -n -u staging"; fi
+    # staging_ctl args survive the %q per-arg quoting: a single-token unit name is
+    # unchanged, so the recorded systemctl remote command carries it verbatim.
+    if grep -E '^ssh ' "$CALL_LOG" | grep -F 'systemctl --user' | grep -q 'personalcrm-backend.service'; then ok
+    else fail "ssh staging_ctl must carry the unit name into the systemctl remote command"; fi
+    cleanup_sandbox
+}
+
+test_ssh_oauth_count_preserves_sql() {
+    echo "test: ssh oauth-count SQL survives the remote shell parse as ONE argument"
+    make_sandbox
+    STUB_CRM_ENV=staging STUB_OAUTH_COUNT=0 run_ssh_oauth
+    if [ "$RC" -eq 0 ]; then ok; else fail "ssh oauth-empty should proceed (exit 0), got $RC ($(cat "$SANDBOX/stderr"))"; fi
+    local line sql_part n arg
+    line="$(grep -F 'oauth_credential' "$CALL_LOG" | grep -F 'psql' | head -1)"
+    if [ -n "$line" ]; then ok; else fail "no ssh oauth_credential count recorded"; cleanup_sandbox; return; fi
+    # Everything after the -tAc flag is the single SQL argument, %q-escaped so ONE
+    # remote-shell parse rebuilds it. Assert the post-parse argv (not the raw %q
+    # bytes, which vary across bash versions): the old $* form would parse into 4
+    # tokens (SELECT / count(*) / FROM / oauth_credential); the fix yields exactly 1.
+    sql_part="${line#*-tAc }"
+    ( eval "set -- $sql_part"; printf 'count=%s\n' "$#"; printf 'arg=%s\n' "$1" ) > "$SANDBOX/parsed"
+    n="$(grep '^count=' "$SANDBOX/parsed" | cut -d= -f2)"
+    arg="$(grep '^arg=' "$SANDBOX/parsed" | cut -d= -f2-)"
+    if [ "$n" = "1" ]; then ok; else fail "SQL must reconstruct as exactly 1 arg, got $n (sql_part='$sql_part')"; fi
+    if [ "$arg" = "SELECT count(*) FROM oauth_credential" ]; then ok; else fail "reconstructed SQL wrong: '$arg'"; fi
     cleanup_sandbox
 }
 
@@ -477,6 +521,7 @@ main() {
     test_reset_failure_restarts
     test_local_does_not_ssh
     test_ssh_targets_host
+    test_ssh_oauth_count_preserves_sql
     test_ssh_refuses_production
     test_oauth_empty_proceeds
     test_oauth_present_skips

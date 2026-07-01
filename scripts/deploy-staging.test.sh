@@ -166,8 +166,11 @@ test_workflow_three_way_gate_and_job_split() {
     if wf_has "deploy_ready:"; then ok; else fail "gate job must expose a deploy_ready output"; fi
     if wf_has "needs.gate.outputs.deploy_ready == 'true'"; then ok
     else fail "deploy job must gate on needs.gate.outputs.deploy_ready == 'true'"; fi
-    # environment: staging attaches to exactly one job (the deploy job), so a
-    # green-skipping gate can't record a phantom Environment deployment.
+    # environment: staging attaches to exactly one job (the deploy job), so it is
+    # recorded only for a real staging mutation (a code deploy or a manual reseed) —
+    # never for a green-skip. A force_reseed=false dispatch never starts the deploy
+    # job, so no phantom Environment deployment is recorded. The exactly-once count
+    # assertion below stays green (no second environment: is added).
     if wf_has "environment: staging"; then ok; else fail "deploy job must set environment: staging"; fi
     local n_env
     n_env=$(grep -cE '^[[:space:]]*environment:' "$WORKFLOW")
@@ -263,6 +266,71 @@ test_workflow_nudge_conditions() {
     if wf_has "env.base_known == 'false'"; then ok; else fail "no-base nudge must fire on base_known == 'false'"; fi
 }
 
+# ===========================================================================
+# workflow_dispatch force_reseed (manual, reseed-only, develop-ref-only)
+# ===========================================================================
+
+test_workflow_has_dispatch_trigger() {
+    echo "test: workflow declares a workflow_dispatch trigger with a boolean force_reseed input"
+    if wf_has "workflow_dispatch:"; then ok; else fail "workflow must declare workflow_dispatch:"; fi
+    if wf_has "force_reseed:"; then ok; else fail "workflow_dispatch must expose a force_reseed input"; fi
+    if wf_has "type: boolean"; then ok; else fail "force_reseed input must be type: boolean"; fi
+}
+
+test_gate_handles_dispatch() {
+    echo "test: gate job allows the dispatch event and the gate step branches on it"
+    if wf_has "github.event_name == 'workflow_dispatch'"; then ok; else fail "gate if: must allow the workflow_dispatch event"; fi
+    if grep -qF 'if [ "${{ github.event_name }}" = "workflow_dispatch" ]' "$WORKFLOW"; then ok
+    else fail "gate step must branch at the top on the workflow_dispatch event"; fi
+}
+
+test_dispatch_is_develop_only() {
+    echo "test: a workflow_dispatch is develop-ref-only (gate if: conjoins the ref check)"
+    if grep -qF "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/develop'" "$WORKFLOW"; then ok
+    else fail "gate if: must require github.ref == 'refs/heads/develop' on the dispatch path"; fi
+}
+
+test_dispatch_false_is_noop() {
+    echo "test: gate ties deploy_ready to force_reseed so an unchecked box is a true no-op"
+    if grep -qF 'if [ "${{ github.event.inputs.force_reseed }}" = "true" ]' "$WORKFLOW"; then ok
+    else fail "gate step must branch deploy_ready on github.event.inputs.force_reseed"; fi
+    # Both deploy_ready values must be reachable from the dispatch branch.
+    if wf_has 'echo "deploy_ready=true"'; then ok; else fail "dispatch branch must be able to set deploy_ready=true"; fi
+    if wf_has 'echo "deploy_ready=false"'; then ok; else fail "dispatch branch must be able to set deploy_ready=false"; fi
+}
+
+# step_block_has_dispatch_guard <name-substr> : true iff the step whose "- name:"
+# line contains <name-substr> carries the dispatch-skip guard BEFORE the next step.
+# Anchoring per-step (not a raw occurrence count) catches an unguarded step even if
+# another guard is duplicated/commented elsewhere.
+step_block_has_dispatch_guard() {
+    awk -v want="$1" '
+        /^[[:space:]]*- name:/ { in_blk = (index($0, want) > 0) }
+        in_blk && index($0, "github.event_name !=") > 0 && index($0, "workflow_dispatch") > 0 { found = 1 }
+        END { exit(found ? 0 : 1) }
+    ' "$WORKFLOW"
+}
+
+test_deploy_steps_skip_on_dispatch() {
+    echo "test: capture/deploy/checkout/decide steps EACH carry the workflow_dispatch skip guard"
+    if step_block_has_dispatch_guard "Capture live staging SHA"; then ok; else fail "capture step must skip on workflow_dispatch"; fi
+    if step_block_has_dispatch_guard "name: Deploy"; then ok; else fail "deploy step must skip on workflow_dispatch"; fi
+    if step_block_has_dispatch_guard "Checkout (post-deploy"; then ok; else fail "checkout step must skip on workflow_dispatch"; fi
+    if step_block_has_dispatch_guard "Decide reseed"; then ok; else fail "decide step must skip on workflow_dispatch"; fi
+}
+
+test_reseed_fires_on_force() {
+    echo "test: the Auto-reseed step fires on force_reseed==true (in addition to seed_changed)"
+    if wf_has "force_reseed == 'true'"; then ok; else fail "Auto-reseed if: must include force_reseed == 'true'"; fi
+    if wf_has "env.seed_changed == 'true'"; then ok; else fail "Auto-reseed if: must keep seed_changed == 'true'"; fi
+}
+
+test_oauth_breadcrumb_covers_force() {
+    echo "test: the OAuth-skip breadcrumb also fires on a forced reseed"
+    if grep -qF "always() && (env.seed_changed == 'true' || (github.event_name == 'workflow_dispatch' && github.event.inputs.force_reseed == 'true'))" "$WORKFLOW"; then ok
+    else fail "OAuth-skip if: must broaden to cover the force_reseed dispatch path"; fi
+}
+
 # ---------------------------------------------------------------------------
 main() {
     test_wrapper_forces_tenant_and_forwards_sha
@@ -283,6 +351,13 @@ main() {
     test_workflow_decision_inline_fallback
     test_workflow_single_job_no_decision_job_no_deployments
     test_workflow_nudge_conditions
+    test_workflow_has_dispatch_trigger
+    test_gate_handles_dispatch
+    test_dispatch_is_develop_only
+    test_dispatch_false_is_noop
+    test_deploy_steps_skip_on_dispatch
+    test_reseed_fires_on_force
+    test_oauth_breadcrumb_covers_force
 
     echo ""
     echo "===================="

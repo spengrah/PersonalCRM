@@ -84,11 +84,19 @@ make_fixture() {
         git commit -q -m "synthetic runtime change"
         C6="$(git rev-parse HEAD)"
 
-        printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "$C0" "$C1" "$C2" "$C3" "$C4" "$C5" "$C6" > shas.txt
+        # NESTED migration path — proves the `migrations` group's ** glob matches at
+        # depth (equivalence with the old backend/migrations/* prefix case + depth).
+        mkdir -p backend/migrations/subdir
+        echo "-- up" > backend/migrations/subdir/075_y.up.sql
+        git add backend/migrations/subdir/075_y.up.sql
+        git commit -q -m "nested migration change"
+        C7="$(git rev-parse HEAD)"
+
+        printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "$C0" "$C1" "$C2" "$C3" "$C4" "$C5" "$C6" "$C7" > shas.txt
     )
     # Portable read (no bash-4 mapfile): the commit SHAs are set in the subshell,
     # so read them back from the fixture file, one per line.
-    { read -r C0; read -r C1; read -r C2; read -r C3; read -r C4; read -r C5; read -r C6; } < "$FIXTURE/shas.txt"
+    { read -r C0; read -r C1; read -r C2; read -r C3; read -r C4; read -r C5; read -r C6; read -r C7; } < "$FIXTURE/shas.txt"
 }
 
 cleanup_fixture() { [ -n "${FIXTURE:-}" ] && rm -rf "$FIXTURE"; }
@@ -197,6 +205,17 @@ test_mixed_runtime_and_test_reseed() {
     cleanup_fixture
 }
 
+test_migration_nested_path() {
+    echo "test: nested migration path (backend/migrations/subdir/...) -> migrations_changed=true (** depth)"
+    make_fixture
+    run_decision "$C6" "$C7"
+    if [ "$RC" -eq 0 ]; then ok; else fail "must exit 0, got $RC"; fi
+    assert_flag migrations_changed true
+    assert_flag seed_changed false
+    assert_flag base_known true
+    cleanup_fixture
+}
+
 test_empty_base() {
     echo "test: empty BASE -> base_known=false, seed_changed=false, exit 0"
     make_fixture
@@ -229,6 +248,7 @@ main() {
     test_test_and_testdata_only_no_reseed
     test_runtime_synthetic_reseed
     test_mixed_runtime_and_test_reseed
+    test_migration_nested_path
     test_empty_base
     test_base_not_in_history
 

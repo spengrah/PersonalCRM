@@ -9,7 +9,7 @@ grep -q 'filters: ./path-filters.yml' .github/workflows/ci.yml \
   || { echo "FAIL: ci.yml changes job must use filters: ./path-filters.yml"; exit 1; }
 grep -qE '^\s*filters:\s*\|' .github/workflows/ci.yml \
   && { echo "FAIL: ci.yml reintroduced an inline filters block"; exit 1; } || true
-for g in backend frontend mac_daemon seed; do
+for g in backend frontend mac_daemon seed migrations; do
   grep -qE "^${g}:" path-filters.yml || { echo "FAIL: path-filters.yml missing group $g"; exit 1; }
 done
 echo "OK: path-filter parity"

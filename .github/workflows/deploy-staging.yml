@@ -9,19 +9,32 @@ name: Deploy to Staging
 # completed+success. The common case (the other upstream still in-flight) defers
 # quietly (green, no deploy); the last upstream to finish re-triggers and deploys.
 #
-# Two jobs so `environment: staging` attaches ONLY to a real deploy: a single job
-# carrying the environment that green-skips would record a phantom "successful
-# staging deployment" for a SHA that was never deployed. The gate runs on
-# ubuntu-latest (jq+curl preinstalled); only the deploy job touches the box.
+# Two jobs so `environment: staging` attaches only to a real staging mutation (a
+# code deploy or a manual reseed) — never to a green-skip: a single job carrying
+# the environment that green-skips would record a phantom "successful staging
+# deployment" for a SHA that was never deployed. The gate runs on ubuntu-latest
+# (jq+curl preinstalled); only the deploy job touches the box.
 #
 # workflow_run always runs this file + context from the default branch (develop)
 # and never fork code; the repo is private + solo, so no pull_request trigger.
+#
+# A second trigger, `workflow_dispatch` (force_reseed), is a manual, reseed-only
+# path: no code deploy, no CI/build gate. It reseeds against the image already live
+# on the host (deploy/checkout/decision steps are skipped) and still honors the
+# oauth guard in the reseed wrapper. It is develop-ref-only (gate if: below), and
+# an unchecked force_reseed box is a true no-op (deploy job never starts).
 
 on:
   workflow_run:
     workflows: ["CI", "Build & Push Images"]
     types: [completed]
     branches: [develop]
+  workflow_dispatch:
+    inputs:
+      force_reseed:
+        description: "Force a staging reseed regardless of path changes (still skipped if a sync account is connected — oauth_credential non-empty). No code is deployed; reseeds against the currently-deployed image."
+        type: boolean
+        default: false
 
 permissions:
   actions: read
@@ -34,7 +47,7 @@ jobs:
     # success-only prefilter would skip this job when the TRIGGERING upstream
     # failed, so a late-failing upstream would produce no red signal. All
     # conclusion handling lives in the gate step's three-way logic below.
-    if: github.event.workflow_run.head_branch == 'develop'
+    if: (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/develop') || github.event.workflow_run.head_branch == 'develop'
     permissions:
       actions: read     # query ci.yml / build-images.yml run conclusions
       contents: read    # read the current develop tip (stale-SHA guard)
@@ -47,6 +60,23 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # Manual reseed: no code deploy, no CI/build gate needed (the reseed runs
+            # against the image already live on the host). The job-level if: already
+            # restricted this to the develop ref. deploy_ready follows force_reseed:
+            # an unchecked box does NOTHING (the deploy job never runs, so no Environment
+            # deployment is recorded). A checked box runs the deploy job for its reseed
+            # step only (deploy/checkout/decision steps are skipped on this event).
+            echo "sha=" >> "$GITHUB_OUTPUT"
+            if [ "${{ github.event.inputs.force_reseed }}" = "true" ]; then
+              echo "deploy_ready=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "force_reseed=false; nothing to do (no deploy, no reseed)."
+              echo "deploy_ready=false" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
+
           SHA="${{ github.event.workflow_run.head_sha }}"
           echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
 
@@ -137,18 +167,23 @@ jobs:
     # (sudo resets the env; nothing is passed from here). The diff base is the live
     # backend unit's pinned 40-hex Image= git sha; a failed/skipped reseed advances
     # it, so the next deploy does NOT auto-retry — recover with `make staging-reset`
-    # (also the manual escape hatch to force a reseed regardless of paths).
+    # (the on-host escape hatch) or the GitHub Actions UI `workflow_dispatch`
+    # (force_reseed), the from-UI on-demand reseed. On a workflow_dispatch the
+    # deploy/checkout/decision steps below are skipped (reseed-only, no code deploy).
     steps:
       - name: Capture live staging SHA (host-pinned reseed base, before the swap)
+        if: ${{ github.event_name != 'workflow_dispatch' }}
         run: |
           prev_sha=$(sudo /usr/local/sbin/staging-deployed-sha.sh || true)
           echo "prev_sha=${prev_sha}" >> "$GITHUB_ENV"
 
       - name: Deploy
+        if: ${{ github.event_name != 'workflow_dispatch' }}
         run: sudo /usr/local/sbin/deploy-staging.sh "${{ needs.gate.outputs.sha }}"
 
       - name: Checkout (post-deploy; for the reseed decision only)
         id: checkout
+        if: ${{ github.event_name != 'workflow_dispatch' }}
         uses: actions/checkout@v4
         continue-on-error: true
         with:
@@ -156,6 +191,7 @@ jobs:
           fetch-depth: 0
 
       - name: Decide reseed (seed/migration diff vs the live base)
+        if: ${{ github.event_name != 'workflow_dispatch' }}
         env:
           CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
         run: |
@@ -174,13 +210,13 @@ jobs:
           fi
 
       - name: Auto-reseed staging (seed surface changed)
-        if: ${{ env.seed_changed == 'true' }}
+        if: ${{ env.seed_changed == 'true' || (github.event_name == 'workflow_dispatch' && github.event.inputs.force_reseed == 'true') }}
         run: |
           sudo /usr/local/sbin/staging-reseed.sh 2>&1 | tee "$RUNNER_TEMP/reseed.out"
           exit "${PIPESTATUS[0]}"
 
       - name: Note OAuth-skip (sync account connected -> reseed skipped)
-        if: ${{ always() && env.seed_changed == 'true' }}
+        if: ${{ always() && (env.seed_changed == 'true' || (github.event_name == 'workflow_dispatch' && github.event.inputs.force_reseed == 'true')) }}
         run: |
           if [ -f "$RUNNER_TEMP/reseed.out" ] && grep -q 'skipping auto-reseed' "$RUNNER_TEMP/reseed.out"; then
             {

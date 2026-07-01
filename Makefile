@@ -519,6 +519,7 @@ test-deploy-scripts:
 	@bash scripts/ci/staging-reseed-decision.test.sh
 	@bash scripts/staging-deployed-sha.test.sh
 	@bash scripts/staging-reseed.test.sh
+	@bash scripts/admin/setup-staging-reseed-host.sh.test.sh
 	@bash scripts/reconcile-mac-daemon.test.sh
 	@bash scripts/setup-mac-deploy.test.sh
 	@bash scripts/trigger-mac-deploy.test.sh
