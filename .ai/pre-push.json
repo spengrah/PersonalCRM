@@ -8,7 +8,8 @@
       { "name": "Backend lint", "command": "make lint" },
       { "name": "Frontend lint", "command": "cd frontend && bun run lint" },
       { "name": "Repo hygiene", "command": "bash scripts/hooks/repo-hygiene-check.sh" },
-      { "name": "E2E test-map coverage", "command": "bash scripts/hooks/test-map-coverage-check.sh" }
+      { "name": "E2E test-map coverage", "command": "bash scripts/hooks/test-map-coverage-check.sh" },
+      { "name": "Spec lint", "command": "make spec-lint" }
     ]
   },
   "swift": {

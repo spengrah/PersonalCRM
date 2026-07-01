@@ -91,6 +91,15 @@ assert_in_group     "backend/migrations/074_x.up.sql" backend
 # Non-migration backend code is NOT in the migrations group.
 assert_not_in_group "backend/internal/api/handlers/contact.go" migrations
 
+# --- spec group: the behavior-SSOT corpus (CI spec-lint job selection) ---
+assert_in_group     "spec/contacts.yaml" spec
+assert_in_group     "spec/README.md" spec
+# .ai/spec design docs are NOT the behavior corpus.
+assert_not_in_group ".ai/spec/2026-07-01-behavior-ssot-design.md" spec
+# Orthogonality: spec/** is not in backend/frontend — a spec-only push changes no test selection.
+assert_not_in_group "spec/contacts.yaml" backend
+assert_not_in_group "spec/contacts.yaml" frontend
+
 # --- any_file_in_groups: the Go/frontend gate's decision boundary ---
 # Daemon-only push does NOT run Go suite (headline invariant).
 assert_false "any_file_in_groups daemon-only -> Go suite NOT run" \
