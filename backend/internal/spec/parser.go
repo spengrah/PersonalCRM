@@ -19,15 +19,35 @@ const (
 )
 
 // parsedFile is the walker's rich output for one document: the typed File plus
-// the presence/breakage bookkeeping the semantic pass needs (D16). It is
+// the presence/breakage bookkeeping the semantic pass needs. It is
 // package-internal; the exported entrypoints project it down to *File +
 // []Violation.
+//
+// Structural failures degrade by tier — each broken scope reports exactly its
+// own violation and suppresses only its own downstream checks, so one root
+// cause is never double-reported and a broken field never hides an unrelated
+// finding elsewhere:
+//
+//   - file-tier (syntax error; root not a mapping; duplicate key in the root
+//     mapping; behaviors present but not a sequence): the file reports only
+//     that violation and is excluded from semantic AND cross-file checks —
+//     its prefix and IDs never register.
+//   - file-field-tier (a file-level field with a structurally wrong node):
+//     that field's own semantic checks are skipped. If prefix is the broken
+//     field, per-behavior ID-format checks are skipped too (they need the
+//     prefix), but cleanly-parsed IDs still register for global uniqueness.
+//   - entry-tier (a behaviors[i] that is not a mapping, or with a duplicate
+//     key inside it): the entry is skipped entirely — no semantic checks, no
+//     ID registration; sibling behaviors validate normally.
+//   - behavior-field-tier (a behavior field with a structurally wrong node):
+//     only that field's semantic checks are skipped; the behavior's other
+//     fields validate normally and its cleanly-parsed ID registers.
 type parsedFile struct {
 	file       *File
 	path       string
-	fatal      bool // file-tier (D18 tier 1): excluded from semantic + cross-file checks
+	fatal      bool // file-tier break: excluded from semantic + cross-file checks
 	fileKeys   map[string]bool
-	fileBroken map[string]bool // file-field-tier (D18 tier 2): structurally broken file fields
+	fileBroken map[string]bool // file-field-tier: structurally broken file fields
 	behaviors  []*parsedBehavior
 	parseViol  []scopedViolation
 }
@@ -41,7 +61,7 @@ type parsedBehavior struct {
 	line   int             // behavior mapping line
 	keys   map[string]bool // present keys
 	broken map[string]bool // fields with a structural/typing violation (suppress their semantic checks)
-	skip   bool            // entry-tier (D18 tier 3): skip all semantic checks + no ID registration
+	skip   bool            // entry-tier break: skip all semantic checks + no ID registration
 }
 
 func (pf *parsedFile) emit(order, bIdx, line int, ref, msg string) {
@@ -53,9 +73,10 @@ func (pf *parsedFile) emit(order, bIdx, line int, ref, msg string) {
 }
 
 // ParseFile parses a single spec YAML file. It returns the typed File, any
-// parse/structural violations (checks 1–2 and the when-singular rule), and an
-// IO-level error if the file cannot be read. Semantic and cross-file checks are
-// NOT run here — use Lint for those. Exported for Piece 3's parse-only needs.
+// parse/structural violations (YAML syntax, node shape, string typing, and the
+// when-singular rule), and an IO-level error if the file cannot be read.
+// Semantic and cross-file checks are NOT run here — use Lint for those.
+// Exported for the traceability scanner's parse-only needs.
 func ParseFile(path string) (*File, []Violation, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -66,7 +87,7 @@ func ParseFile(path string) (*File, []Violation, error) {
 }
 
 // ParseDir globs <dir>/*.yaml (top-level only; README.md, subdirectories, and
-// .yml are ignored — D11) and parses each file. It returns the typed files that
+// .yml are ignored) and parses each file. It returns the typed files that
 // parsed, all per-file parse/structural violations, and an IO-level error only
 // if the directory (or a file within it) cannot be read. Per-file parse
 // failures surface as violations so one broken file does not hide the others.
@@ -102,7 +123,7 @@ func parseDirInternal(dir string) ([]*parsedFile, error) {
 			paths = append(paths, filepath.Join(dir, e.Name()))
 		}
 	}
-	sort.Strings(paths) // deterministic file order (D15)
+	sort.Strings(paths) // deterministic file order
 
 	parsed := make([]*parsedFile, 0, len(paths))
 	for _, p := range paths {
@@ -116,7 +137,8 @@ func parseDirInternal(dir string) ([]*parsedFile, error) {
 }
 
 // parseFileNode walks the decoded yaml.Node tree of one file into a parsedFile,
-// emitting parse/structural violations and tiering per D18.
+// emitting parse/structural violations and degrading broken scopes per the
+// tiered rule documented on parsedFile.
 func parseFileNode(path string, data []byte) *parsedFile {
 	pf := &parsedFile{
 		path:       path,
@@ -126,8 +148,8 @@ func parseFileNode(path string, data []byte) *parsedFile {
 
 	var root yaml.Node
 	if err := yaml.Unmarshal(data, &root); err != nil {
-		// YAML syntax error — file-tier (D18 tier 1). yaml.v3 error text
-		// already carries the line.
+		// YAML syntax error — file-tier. yaml.v3 error text already
+		// carries the line.
 		pf.fatal = true
 		pf.emit(orderStructural, -1, 0, "", fmt.Sprintf("YAML parse error: %v", err))
 		return pf
@@ -152,7 +174,7 @@ func parseFileNode(path string, data []byte) *parsedFile {
 
 	fields, dupRoot := mappingFields(doc)
 	if len(dupRoot) > 0 {
-		// Root-level duplicate key — file-tier (D18 tier 1).
+		// Root-level duplicate key — file-tier.
 		pf.fatal = true
 		pf.emit(orderStructural, -1, doc.Line, "",
 			fmt.Sprintf("duplicate key %q in document mapping", dupRoot[0]))
@@ -161,7 +183,7 @@ func parseFileNode(path string, data []byte) *parsedFile {
 
 	file := &File{Path: path}
 
-	// behaviors: presence + must be a sequence when present (D18 tier 1 if not).
+	// behaviors: presence + must be a sequence when present (file-tier if not).
 	if bn, ok := fields["behaviors"]; ok {
 		pf.fileKeys["behaviors"] = true
 		if bn.Kind != yaml.SequenceNode {
@@ -174,14 +196,21 @@ func parseFileNode(path string, data []byte) *parsedFile {
 		}
 	}
 
-	// domain / prefix / maturity: any scalar, string-coerced (D16). A non-scalar
-	// node is a file-field-tier structural violation (D18 tier 2).
+	// domain / prefix / maturity: any scalar, string-coerced. A non-scalar
+	// node is a file-field-tier structural violation.
 	file.Domain = pf.fileScalar(fields, "domain")
 	file.Prefix = pf.fileScalar(fields, "prefix")
 	file.Maturity = pf.fileScalar(fields, "maturity")
 
 	file.Behaviors = make([]Behavior, 0, len(pf.behaviors))
 	for _, pb := range pf.behaviors {
+		// A structurally unusable entry (non-mapping / duplicate key) never
+		// populated its Behavior; exporting the zero-value stub would hand
+		// downstream consumers a phantom all-empty behavior. It is already
+		// reported as a violation, so drop it from the typed output.
+		if pb.skip {
+			continue
+		}
 		file.Behaviors = append(file.Behaviors, *pb.b)
 	}
 	pf.file = file
@@ -204,9 +233,9 @@ func (pf *parsedFile) fileScalar(fields map[string]*yaml.Node, key string) strin
 	return node.Value
 }
 
-// walkBehavior walks one behaviors[i] node into a parsedBehavior, tiering per
-// D18 (entry-tier for a non-mapping or duplicate key; behavior-field-tier for a
-// structurally broken field).
+// walkBehavior walks one behaviors[i] node into a parsedBehavior, degrading
+// per the tiered rule on parsedFile (entry-tier for a non-mapping or duplicate
+// key; behavior-field-tier for a structurally broken field).
 func (pf *parsedFile) walkBehavior(idx int, node *yaml.Node) *parsedBehavior {
 	pb := &parsedBehavior{
 		b:      &Behavior{},
@@ -218,7 +247,7 @@ func (pf *parsedFile) walkBehavior(idx int, node *yaml.Node) *parsedBehavior {
 	}
 
 	if node.Kind != yaml.MappingNode {
-		// Entry-tier (D18 tier 3): not a mapping.
+		// Entry-tier: not a mapping.
 		pb.skip = true
 		pf.emit(orderStructural, idx, node.Line, pb.ref, "behavior entry must be a mapping")
 		return pb
@@ -226,7 +255,7 @@ func (pf *parsedFile) walkBehavior(idx int, node *yaml.Node) *parsedBehavior {
 
 	fields, dup := mappingFields(node)
 	if len(dup) > 0 {
-		// Behavior-level duplicate key — entry-tier (D18 tier 3).
+		// Behavior-level duplicate key — entry-tier.
 		pb.skip = true
 		pf.emit(orderStructural, idx, node.Line, pb.ref,
 			fmt.Sprintf("duplicate key %q in behavior mapping", dup[0]))
@@ -244,7 +273,7 @@ func (pf *parsedFile) walkBehavior(idx int, node *yaml.Node) *parsedBehavior {
 		pb.ref = pb.b.ID
 	}
 
-	// String-typed fields: !!str (or !!null → empty) only (D16).
+	// Fields the schema mandates as strings: !!str (or !!null → empty) only.
 	pb.b.When = pf.behaviorWhen(pb, fields)
 	pb.b.Statement = pf.behaviorString(pb, fields, "statement")
 
@@ -275,9 +304,11 @@ func (pf *parsedFile) behaviorScalar(pb *parsedBehavior, fields map[string]*yaml
 	return node.Value
 }
 
-// behaviorString extracts a !!str-typed behavior field (D16): a !!str scalar
-// (value, possibly empty) or !!null (empty). Any other scalar tag or a
-// non-scalar node is a behavior-field-tier structural violation.
+// behaviorString extracts a behavior field the schema mandates as a string: a
+// !!str scalar (value, possibly empty) or !!null (empty). Any other scalar tag
+// or a non-scalar node is a behavior-field-tier structural violation. (Fields
+// the schema does NOT call strings go through behaviorScalar instead and
+// string-coerce any scalar.)
 func (pf *parsedFile) behaviorString(pb *parsedBehavior, fields map[string]*yaml.Node, key string) string {
 	node, ok := fields[key]
 	if !ok {
@@ -293,9 +324,9 @@ func (pf *parsedFile) behaviorString(pb *parsedBehavior, fields map[string]*yaml
 	return val
 }
 
-// behaviorWhen extracts the when field with the schema-rule message for a
-// sequence (check 12's single emission site: a when list is reported once, at
-// parse time, phrased as the schema rule).
+// behaviorWhen extracts the when field. A when sequence is reported exactly
+// once, HERE, phrased as the schema rule — the field is then marked broken so
+// the semantic pass does not re-report it as a missing when.
 func (pf *parsedFile) behaviorWhen(pb *parsedBehavior, fields map[string]*yaml.Node) string {
 	node, ok := fields["when"]
 	if !ok {

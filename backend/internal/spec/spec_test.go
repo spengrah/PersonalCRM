@@ -136,6 +136,11 @@ func TestLintViolationClasses(t *testing.T) {
 		{"invariant-with-gwt", 1, []string{"must not use given/when/then"}},
 		{"invariant-missing-statement", 2, []string{"must have a non-empty statement"}},
 		{"empty-list-item", 2, []string{"then list items must be non-empty", "given list items must be non-empty"}},
+		// A structurally broken GWT/statement field on the "wrong" type must
+		// yield ONLY its structural violation — the count of 2 (one per
+		// behavior) proves the type-based presence checks did not re-report
+		// the same broken fields.
+		{"broken-field-no-cascade", 2, []string{"when must be a single string", "statement must be a string"}},
 	}
 
 	for _, tc := range cases {
@@ -167,7 +172,7 @@ func TestLintAggregation(t *testing.T) {
 		t.Fatalf("want 4 aggregate violations, got %d:\n%s", len(viol), joinViolations(viol))
 	}
 
-	// Deterministic order (D15): sorted by file path, so a_broken precedes b_multi.
+	// Deterministic order: sorted by file path, so a_broken precedes b_multi.
 	if !strings.HasSuffix(viol[0].Path, "a_broken.yaml") {
 		t.Errorf("first violation should be from a_broken.yaml, got %s", viol[0].Path)
 	}
@@ -192,7 +197,7 @@ func TestLintAggregation(t *testing.T) {
 	}
 
 	// A behavior-field-tier break (AGG-001 then) does NOT suppress a sibling's
-	// semantic violation (AGG-002 bad status) in the same file (D18).
+	// semantic violation (AGG-002 bad status) in the same file.
 	out := joinViolations(viol)
 	if !strings.Contains(out, "AGG-001") || !strings.Contains(out, "then items must be strings") {
 		t.Errorf("expected AGG-001's structural then violation; got:\n%s", out)
@@ -256,6 +261,33 @@ func TestParseDirIsParseOnly(t *testing.T) {
 	}
 	if len(viol) != 1 {
 		t.Fatalf("ParseDir should report the parse violation, got %d", len(viol))
+	}
+}
+
+// TestSkippedEntriesExcludedFromBehaviors pins that a structurally unusable
+// behaviors[i] entry (reported as a violation) is NOT exported as a zero-value
+// stub in File.Behaviors — downstream consumers must never see a phantom
+// all-empty behavior.
+func TestSkippedEntriesExcludedFromBehaviors(t *testing.T) {
+	files, _, err := ParseDir("testdata/invalid/structural-types")
+	if err != nil {
+		t.Fatalf("ParseDir returned error: %v", err)
+	}
+	var target *File
+	for _, f := range files {
+		if strings.HasSuffix(f.Path, "entry-and-field.yaml") {
+			target = f
+		}
+	}
+	if target == nil {
+		t.Fatal("entry-and-field.yaml not among parsed files")
+	}
+	// The fixture has two entries: a bare-string entry (skipped) and KNW-001.
+	if len(target.Behaviors) != 1 {
+		t.Fatalf("want 1 exported behavior (skipped entry excluded), got %d: %#v", len(target.Behaviors), target.Behaviors)
+	}
+	if target.Behaviors[0].ID != "KNW-001" {
+		t.Errorf("surviving behavior should be KNW-001, got %q", target.Behaviors[0].ID)
 	}
 }
 

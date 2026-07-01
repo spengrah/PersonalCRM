@@ -32,17 +32,20 @@ func main() {
 
 // run executes the linter against the directory named by args. Split from
 // main so tests can drive the argument/exit-code contract without a
-// subprocess (crm-admin precedent).
+// subprocess (crm-admin precedent). A stdout write failure is an operational
+// error (exit 2): a truncated violation listing must not pass for a clean or
+// fully-reported run. The stderr writes are best-effort — those paths already
+// return 2, so the exit code carries the signal even if the message is lost.
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) != 1 {
-		fmt.Fprintln(stderr, "usage: spec-lint <spec-directory>")
+		_, _ = fmt.Fprintln(stderr, "usage: spec-lint <spec-directory>")
 		return 2
 	}
 	dir := args[0]
 
 	files, violations, err := spec.Lint(dir)
 	if err != nil {
-		fmt.Fprintf(stderr, "spec-lint: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "spec-lint: %v\n", err)
 		return 2
 	}
 
@@ -52,18 +55,22 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	for _, v := range violations {
-		fmt.Fprintln(stdout, v.String())
+		if _, err := fmt.Fprintln(stdout, v.String()); err != nil {
+			return 2
+		}
 	}
 
+	summary := fmt.Sprintf("spec-lint: %d files, %d behaviors — OK\n", len(files), behaviors)
+	exit := 0
 	switch {
 	case len(violations) > 0:
-		fmt.Fprintf(stdout, "spec-lint: %d files, %d behaviors — %d violations\n", len(files), behaviors, len(violations))
-		return 1
+		summary = fmt.Sprintf("spec-lint: %d files, %d behaviors — %d violations\n", len(files), behaviors, len(violations))
+		exit = 1
 	case len(files) == 0:
-		fmt.Fprintf(stdout, "spec-lint: no spec files found in %s — OK\n", dir)
-		return 0
-	default:
-		fmt.Fprintf(stdout, "spec-lint: %d files, %d behaviors — OK\n", len(files), behaviors)
-		return 0
+		summary = fmt.Sprintf("spec-lint: no spec files found in %s — OK\n", dir)
 	}
+	if _, err := fmt.Fprint(stdout, summary); err != nil {
+		return 2
+	}
+	return exit
 }

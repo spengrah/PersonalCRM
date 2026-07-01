@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -62,6 +63,19 @@ func TestRunNonexistentDir(t *testing.T) {
 	}
 	if stdout != "" {
 		t.Errorf("stdout should be empty on operational error, got %q", stdout)
+	}
+}
+
+type failWriter struct{}
+
+func (failWriter) Write([]byte) (int, error) { return 0, errors.New("sink failed") }
+
+// A stdout write failure is an operational error: the run cannot prove it
+// reported everything, so it must not exit 0 or 1.
+func TestRunStdoutWriteFailure(t *testing.T) {
+	var errBuf strings.Builder
+	if code := run([]string{fixtures + "/valid"}, failWriter{}, &errBuf); code != 2 {
+		t.Fatalf("want exit 2 on stdout write failure, got %d", code)
 	}
 }
 
