@@ -21,17 +21,48 @@
 # staging code-deploy standup) — it ASSERTS both and refuses loudly if either is
 # missing, so a partial standup is caught before the first seed-touching deploy.
 #
-# Usage (on the staging host, from a repo checkout):
-#   sudo scripts/admin/setup-staging-reseed-host.sh
-#   sudo RUNNER_USER=my-runner scripts/admin/setup-staging-reseed-host.sh
+# TWO MODES (mirrors staging-reset.sh):
+#   default (ssh)  Run from a dev Mac against STAGING_HOST (default stovepipes).
+#                  There is no repo checkout on the host, so this ships the
+#                  installer + the three source scripts to a temp dir on the host
+#                  and re-invokes itself there with --local. Uses `ssh -t` so sudo
+#                  can prompt for a password interactively; the temp dir is removed
+#                  afterward. The source of truth is THIS local checkout.
+#   --local        Run on the staging host itself, as root, from a repo checkout
+#                  (the ssh mode calls this on the far side). Does the real install
+#                  + sudoers work described above.
+#
+# Usage:
+#   # from a dev Mac (default): provisions STAGING_HOST over ssh
+#   ./scripts/admin/setup-staging-reseed-host.sh
+#   STAGING_HOST=my-staging RUNNER_USER=my-runner ./scripts/admin/setup-staging-reseed-host.sh
+#   # on the staging host, from a checkout, as root:
+#   sudo ./scripts/admin/setup-staging-reseed-host.sh --local
+#   sudo RUNNER_USER=my-runner ./scripts/admin/setup-staging-reseed-host.sh --local
 
 set -euo pipefail
 
+# --- Args / mode ---------------------------------------------------------------
+LOCAL=false
+RUNNER_USER_FLAG=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --local) LOCAL=true; shift ;;
+        --runner-user)
+            [ $# -ge 2 ] || { echo "setup-staging-reseed-host: --runner-user needs a value" >&2; exit 2; }
+            RUNNER_USER_FLAG="$2"; shift 2 ;;
+        *) echo "setup-staging-reseed-host: unknown argument: $1" >&2; exit 2 ;;
+    esac
+done
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-# Runner account the sudoers capability is granted to. Overridable in case the
-# staging runner account name differs from the prod one.
-RUNNER_USER="${RUNNER_USER:-gha-runner}"
+# Runner account the sudoers capability is granted to. Precedence: --runner-user
+# flag (how ssh mode threads it through sudo, which resets env) > RUNNER_USER env >
+# default. Overridable in case the staging runner account name differs from prod.
+RUNNER_USER="${RUNNER_USER_FLAG:-${RUNNER_USER:-gha-runner}}"
+# Staging host targeted in ssh mode. Mirrors staging-reset.sh's default.
+STAGING_HOST="${STAGING_HOST:-stovepipes}"
 # Install destination + sudoers dir. Real defaults; overridable so the test can
 # redirect without root. The sudoers LINES always reference the canonical
 # /usr/local/sbin path (that is what the runner sudo-invokes at runtime).
@@ -46,9 +77,51 @@ INSTALL_SCRIPTS=(staging-reset.sh staging-reseed.sh staging-deployed-sha.sh)
 
 die() { echo "setup-staging-reseed-host: $*" >&2; exit 1; }
 
-# --- Preconditions (fail-loud) -------------------------------------------------
+# --- SSH mode (default): bootstrap onto the host, then run --local there --------
+# There is no repo checkout on the staging host, so ship the installer + the three
+# source scripts over ssh and re-invoke this script with --local on the far side.
+# All the real install/sudoers logic lives in the --local path below (one source of
+# truth); this branch is purely the transport.
+if [ "$LOCAL" != true ]; then
+    command -v ssh >/dev/null 2>&1 || die "'ssh' not found on PATH"
+    command -v tar >/dev/null 2>&1 || die "'tar' not found on PATH"
 
-[ "$(id -u)" -eq 0 ] || die "must run as root — re-run: sudo RUNNER_USER=$RUNNER_USER scripts/admin/setup-staging-reseed-host.sh"
+    # Validate the local sources BEFORE touching the host (friendlier than a remote
+    # failure). The installer itself + the three scripts it installs.
+    [ -r "$REPO_ROOT/scripts/admin/setup-staging-reseed-host.sh" ] \
+        || die "installer not found in this checkout: $REPO_ROOT/scripts/admin/setup-staging-reseed-host.sh"
+    for name in "${INSTALL_SCRIPTS[@]}"; do
+        [ -r "$REPO_ROOT/scripts/$name" ] || die "source script not found or unreadable: $REPO_ROOT/scripts/$name"
+    done
+
+    if ! ssh -q -o ConnectTimeout=5 "$STAGING_HOST" exit; then
+        die "cannot reach STAGING_HOST '$STAGING_HOST' over ssh (set STAGING_HOST=... to override)"
+    fi
+
+    echo "Provisioning '$STAGING_HOST' over ssh (installer runs there as root; sudo may prompt)..."
+
+    # 1. Ship installer + sources to a fresh 0700 temp dir on the host; capture it.
+    #    Non-TTY ssh here so the tarball can stream on stdin.
+    remote_dir="$(tar czf - -C "$REPO_ROOT" \
+        scripts/admin/setup-staging-reseed-host.sh \
+        scripts/staging-reset.sh scripts/staging-reseed.sh scripts/staging-deployed-sha.sh \
+        | ssh "$STAGING_HOST" 'd="$(mktemp -d /tmp/crm-reseed-provision.XXXXXX)" && tar xzf - -C "$d" && printf %s "$d"')" \
+        || die "failed to ship the provisioning bundle to '$STAGING_HOST'"
+    [ -n "$remote_dir" ] || die "could not create a staging temp dir on '$STAGING_HOST'"
+
+    # 2. Run the installer on the host as root, then remove the temp dir. `-t`
+    #    allocates a TTY so sudo can prompt. RUNNER_USER is passed as a --local
+    #    FLAG (args survive sudo; env does not) — no SETENV needed. printf %q keeps
+    #    the interpolated values shell-safe in the remote command string.
+    remote_installer="$remote_dir/scripts/admin/setup-staging-reseed-host.sh"
+    remote_cmd="sudo bash $(printf %q "$remote_installer") --local --runner-user $(printf %q "$RUNNER_USER"); rc=\$?; rm -rf $(printf %q "$remote_dir"); exit \$rc"
+    ssh -t "$STAGING_HOST" "$remote_cmd"
+    exit $?
+fi
+
+# --- LOCAL mode: install on THIS host (must be root) ----------------------------
+
+[ "$(id -u)" -eq 0 ] || die "must run as root — re-run: sudo RUNNER_USER=$RUNNER_USER scripts/admin/setup-staging-reseed-host.sh --local"
 
 command -v install >/dev/null 2>&1 || die "'install' not found on PATH"
 command -v visudo  >/dev/null 2>&1 || die "'visudo' not found on PATH"
