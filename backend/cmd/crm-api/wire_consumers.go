@@ -7,6 +7,7 @@ import (
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/todoist"
 
 	"github.com/jackc/pgx/v5"
@@ -200,4 +201,207 @@ func buildEventConsumers(
 		FollowUpManager:            followUpManager,
 		InteractionRecorder:        interactionRecorder,
 	}
+}
+
+// registerCoreConsumerWorkers registers the three always-on core consumer
+// workers (InteractionRecorder, CalendarDecline, EmailInteraction). Each is
+// registered UNCONDITIONALLY — river rejects unknown job kinds at dequeue
+// time, so having the worker present with mode=off costs nothing (no events
+// route to it when pubBus is nil). Mode gating happens at the publisher
+// sites via pubBus and at the manual-handler level via manualHandler.
+func registerCoreConsumerWorkers(
+	reg *riverRegistrar,
+	database *db.Database,
+	core coreRepos,
+	graph contactCore,
+	messaging messagingFoundation,
+	consumers eventConsumers,
+	eventBus *events.Bus,
+) {
+	interactionRepo := core.Interaction
+	contactRepo := core.Contact
+	contactService := graph.ContactService
+	commsMessageRepo := messaging.CommsMessageRepo
+	venueRepo := messaging.VenueRepo
+	interactionRecorder := consumers.InteractionRecorder
+	aggregatorReenqueuerHolder := consumers.AggregatorReenqueuerHolder
+	cadenceUpdater := consumers.CadenceUpdater
+	followUpManager := consumers.FollowUpManager
+
+	// aggregatorReenqueuerHolder is wired in here; the actual telegram
+	// entry is filled by the cfg.Features.EnableTelegramSync branch
+	// further down. Until that branch runs (or in test/no-telegram
+	// modes), the holder dispatches to a logged-warn no-op.
+	addWorker(reg, consumer.NewInteractionRecorderWorker(eventBus, database.Pool, interactionRecorder, aggregatorReenqueuerHolder))
+
+	// Calendar decline consumer: when a stored calendar_event is
+	// declined / cancelled / user-removed upstream, the publisher removes
+	// the row + emits calendar.declined per matched contact; this consumer
+	// soft-deletes the derived gcal interaction and recomputes the contact's
+	// date columns. Registered unconditionally — no events route to it when
+	// the publisher (CalendarSyncProvider) is in off mode.
+	calendarDeclineHandler := consumer.NewCalendarDeclineHandler(interactionRepo, contactRepo)
+	addWorker(reg, consumer.NewCalendarDeclineHandlerWorker(eventBus, database.Pool, calendarDeclineHandler))
+
+	// Email-interaction consumer: derives a per-(contact, thread, local-day)
+	// aggregated interaction from email.received / email.sent events + their
+	// comms_message content rows. contactService fills both the
+	// interactionWriter slot (create branch) and the emailAggregator slot
+	// (found-branch extend/promote). cadenceUpdater + followUpManager are the
+	// SAME instances the InteractionRecorder uses, so the create branch's
+	// inline cadence/follow-up apply shares the durable event-claim store.
+	// Registered unconditionally; it processes the email.received /
+	// email.sent events the Gmail provider publishes in production (and
+	// stays idle when no such event is routed, e.g. event-bus off mode).
+	// commsMessageRepo was hoisted earlier (above the staging registry).
+	emailInteractionConsumer := consumer.NewEmailInteractionConsumer(
+		contactService, commsMessageRepo, interactionRepo, contactService,
+		eventBus, cadenceUpdater, followUpManager,
+	)
+	// Populate interaction.venue_id with the email-thread venue on the create
+	// branch. The venue repo resolves directly (email carries thread_id).
+	emailInteractionConsumer.SetVenueResolver(venueRepo)
+	addWorker(reg, consumer.NewEmailInteractionConsumerWorker(eventBus, database.Pool, emailInteractionConsumer))
+}
+
+// resolveInteractionMode applies the interaction-mode wiring gate. Cutover
+// is the normal operating posture; off is the emergency-override retained so
+// rollback can silence publisher-driven paths without a code change. A
+// deploy in off mode does NOT restore any pre-cutover direct path — rollback
+// is `git revert`. Returns pubBus as a CONCRETE *events.Bus (nil in off
+// mode) so it is threaded by concrete type through the provider wiring, and
+// the manual-interaction handler (nil in off mode).
+func resolveInteractionMode(cfg *config.Config, database *db.Database, consumers eventConsumers, eventBus *events.Bus) (*events.Bus, *service.ManualInteractionHandler) {
+	interactionRecorder := consumers.InteractionRecorder
+
+	effectiveMode := cfg.EventBus.InteractionMode
+	var pubBus *events.Bus
+	var manualHandler *service.ManualInteractionHandler
+	switch effectiveMode {
+	case config.EventBusInteractionModeCutover:
+		pubBus = eventBus
+		manualHandler = service.NewManualInteractionHandler(database.Pool, eventBus, interactionRecorder)
+		logger.Info().
+			Str("mode", "cutover").
+			Msg("event-bus interaction consumer: cutover active")
+	default: // off
+		pubBus = nil
+		manualHandler = nil
+		logger.Warn().
+			Str("mode", effectiveMode).
+			Msg("event-bus interaction consumer: mode=off — publisher-driven " +
+				"(telegram/calendar/manual) interactions will NOT be recorded. " +
+				"HTTP ingest path is unaffected. Use EVENT_BUS_INTERACTION_MODE=cutover (default) to restore publisher paths.")
+	}
+
+	// Informational warning when ingest is enabled but cutover isn't —
+	// ingested events still write interactions (the HTTP ingest path is
+	// an intentional carve-out of the off-mode gate); this log line
+	// makes the seam visible in operator logs.
+	if cfg.Features.EnableEventBusIngest && effectiveMode != config.EventBusInteractionModeCutover {
+		logger.Warn().
+			Str("interaction_mode", effectiveMode).
+			Bool("ingest_enabled", cfg.Features.EnableEventBusIngest).
+			Msg("event-bus ingest enabled but InteractionRecorder is not in cutover mode; " +
+				"ingested events WILL still be written by the consumer — the mode=off warning " +
+				"above does NOT apply to ingested-event-driven writes.")
+	}
+
+	return pubBus, manualHandler
+}
+
+// registerModeWorkers registers the cadence / knowledge-cache / follow-up /
+// Todoist follow-up workers (all config-blind; HandleEvent short-circuits on
+// mode=off) and emits the follow-up + cadence mode boot logs.
+func registerModeWorkers(
+	reg *riverRegistrar,
+	cfg *config.Config,
+	database *db.Database,
+	core coreRepos,
+	consumers eventConsumers,
+	eventBus *events.Bus,
+	riverClient *river.Client[pgx.Tx],
+) {
+	contactTaskRepo := core.ContactTask
+	cadenceUpdater := consumers.CadenceUpdater
+	knowledgeCacheUpdater := consumers.KnowledgeCacheUpdater
+	followUpManager := consumers.FollowUpManager
+	followUpMode := consumers.FollowUpMode
+	followUpSettings := consumers.FollowUpSettings
+	todoistClientFactory := consumers.TodoistClientFactory
+
+	// CadenceUpdater is constructed above (alongside InteractionRecorder).
+	// Register its river worker unconditionally — events.consumerJobsForKind
+	// always enqueues a cadence_updater job for interaction.recorded. In
+	// cutover mode the inline recorder path claims the event first, so
+	// this worker is almost always a durable no-op on re-delivery. In
+	// mode=off HandleEvent short-circuits before any DB write.
+	addWorker(reg, consumer.NewCadenceUpdaterWorker(eventBus, database.Pool, cadenceUpdater))
+
+	// KnowledgeCacheUpdater worker: refreshes the contact.location/birthday/how_met
+	// cache columns on assertion.accepted / assertion.superseded events (the bus
+	// routes both kinds here; the worker no-ops unless the predicate is one of the
+	// three cutover predicates). Covers supersession / closure / retraction from
+	// any producer; the inline RefreshTx in ContactService handles direct edits.
+	addWorker(reg, consumer.NewKnowledgeCacheUpdaterWorker(eventBus, database.Pool, knowledgeCacheUpdater))
+
+	// FollowUpManager + river workers. Routing is config-blind
+	// (events.consumerJobsForKind always enqueues cadence + follow-up
+	// jobs for interaction.recorded); HandleEvent short-circuits on
+	// mode=off without DB writes. The Todoist create / close / refresh
+	// workers are registered so river knows their kinds even when
+	// Todoist isn't wired — in that case the settings func returns an
+	// ErrNoTodoistAccount-equivalent error and the worker returns a
+	// retryable failure for river to back off.
+	addWorker(reg, consumer.NewFollowUpManagerWorker(eventBus, database.Pool, followUpManager))
+	addWorker(reg, consumer.NewTodoistFollowUpCreateJobWorker(
+		followUpMode, contactTaskRepo, followUpSettings, todoistClientFactory, riverClient, database.Pool,
+	))
+	addWorker(reg, consumer.NewTodoistFollowUpCloseJobWorker(
+		followUpMode, contactTaskRepo, followUpSettings, todoistClientFactory,
+	))
+	addWorker(reg, consumer.NewTodoistFollowUpRefreshJobWorker(
+		followUpMode, contactTaskRepo, followUpSettings, todoistClientFactory,
+	))
+
+	switch cfg.EventBus.FollowUpMode {
+	case config.EventBusFollowUpModeCutover:
+		logger.Info().
+			Str("mode", "cutover").
+			Msg("event-bus FollowUpManager: cutover active (sole writer of follow-up tasks; inline recorder dispatch enabled)")
+	default: // off
+		cfg.EventBus.MaybeWarnUnsafeOff()
+		logger.Warn().
+			Str("mode", "off").
+			Msg("event-bus FollowUpManager: mode=off active — NO follow-up tasks will be created or completed until EVENT_BUS_FOLLOWUP_UNSAFE_ALLOW_OFF is unset or a `git revert` ships")
+	}
+
+	switch cfg.EventBus.CadenceMode {
+	case config.EventBusCadenceModeCutover:
+		logger.Info().
+			Str("mode", "cutover").
+			Msg("event-bus CadenceUpdater: cutover active (sole writer of cadence columns; inline recorder dispatch enabled)")
+	default: // off
+		// Validate() already rejected this unless UnsafeAllowOffMode is
+		// true; we reach here only via the emergency escape hatch. The
+		// WARN log in config.Load already fired; repeat it here for
+		// observability on the main-wire path.
+		cfg.EventBus.MaybeWarnUnsafeOff()
+		logger.Warn().
+			Str("mode", "off").
+			Msg("event-bus CadenceUpdater: mode=off active — NO cadence columns will be updated until EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF is unset or a `git revert` ships")
+	}
+}
+
+// registerRematchDispatcher registers the rematch-dispatcher consumer worker.
+// Always-on (no mode flag): a registered River worker that returned nil in
+// kill-switch mode would permanently ack queued jobs, so rollback is
+// `git revert` only. Rematch handlers themselves (calendar, telegram) are
+// registered elsewhere once their deps are constructed.
+func registerRematchDispatcher(reg *riverRegistrar, graph contactCore, database *db.Database, eventBus *events.Bus) {
+	rematchService := graph.RematchService
+
+	rematchDispatcher := consumer.NewRematchDispatcher(rematchService)
+	addWorker(reg, consumer.NewRematchDispatcherWorker(eventBus, database.Pool, rematchDispatcher))
+	logger.Info().Msg("event-bus RematchDispatcher: cutover active")
 }
