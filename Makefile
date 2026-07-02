@@ -223,7 +223,9 @@ dev-seed: ## Seed the `dev` synthetic world into local Postgres, then start dev 
 # Development helpers
 dev-stop:
 	@echo "Stopping development servers (backend and frontend dev)..."
-	@# Kill backend by port (go run creates binary named 'main', not 'crm-api')
+	@# Kill backend by port. `go run ./cmd/crm-api` names the child binary
+	@# 'crm-api' (so `pkill -f crm-api` reaches it), but port-kill is the
+	@# reliable mechanism regardless of process name.
 	@lsof -ti:8080 | xargs kill -9 2>/dev/null || true
 	@pkill -f "next dev" || true
 	@pkill -f "node.*next" || true
@@ -240,10 +242,10 @@ dev-restart:
 dev-api-stop:
 	@echo "Stopping backend dev server..."
 	@pkill -f crm-api || true
-	@# `go run cmd/crm-api/main.go` execs a child binary named `main` (NOT
-	@# `crm-api`), so the pkill above can miss it. Kill by listening port 8080
-	@# too, then wait for the port to be released — `make dev-seed` + the seed
-	@# CLI rely on the backend's River workers being genuinely gone.
+	@# `go run ./cmd/crm-api` execs a child binary named `crm-api`, so the
+	@# pkill above reaches it. Kill by listening port 8080 too, then wait for
+	@# the port to be released — `make dev-seed` + the seed CLI rely on the
+	@# backend's River workers being genuinely gone.
 	@lsof -ti tcp:8080 | xargs kill -9 2>/dev/null || true
 	@for i in 1 2 3 4 5; do \
 	  if lsof -ti tcp:8080 >/dev/null 2>&1; then \
@@ -389,7 +391,7 @@ e2e-db:
 # Build
 build:
 	@echo "Building backend..."
-	@cd backend && go build -ldflags "$(STAMP_LDFLAGS)" -o bin/crm-api cmd/crm-api/main.go
+	@cd backend && go build -ldflags "$(STAMP_LDFLAGS)" -o bin/crm-api ./cmd/crm-api
 	@echo "Building frontend..."
 	@cd frontend && bun run build
 
@@ -398,7 +400,7 @@ build:
 # `./crm-admin --messages-rematch-stranded`).
 crm-admin:
 	@echo "Building crm-admin..."
-	@cd backend && go build -ldflags "$(STAMP_LDFLAGS)" -o crm-admin cmd/crm-admin/main.go
+	@cd backend && go build -ldflags "$(STAMP_LDFLAGS)" -o crm-admin ./cmd/crm-admin
 	@echo "✓ crm-admin built at backend/crm-admin"
 
 # Mac daemon. Built locally on a Mac; not wired into `make build`
@@ -535,8 +537,8 @@ smoke-test:
 # CI/CD targets
 ci-build-backend:
 	@echo "Building backend for ARM64..."
-	@cd backend && GOOS=linux GOARCH=arm64 go build -ldflags "$(STAMP_LDFLAGS)" -o bin/crm-api cmd/crm-api/main.go
-	@cd backend && GOOS=linux GOARCH=arm64 go build -ldflags "$(STAMP_LDFLAGS)" -o bin/crm-admin cmd/crm-admin/main.go
+	@cd backend && GOOS=linux GOARCH=arm64 go build -ldflags "$(STAMP_LDFLAGS)" -o bin/crm-api ./cmd/crm-api
+	@cd backend && GOOS=linux GOARCH=arm64 go build -ldflags "$(STAMP_LDFLAGS)" -o bin/crm-admin ./cmd/crm-admin
 
 ci-build-frontend:
 	@echo "Building frontend..."
@@ -622,7 +624,7 @@ api-docs:
 
 api-build:
 	@echo "Building API server..."
-	@cd backend && go build -ldflags "$(STAMP_LDFLAGS)" -o bin/crm-api cmd/crm-api/main.go
+	@cd backend && go build -ldflags "$(STAMP_LDFLAGS)" -o bin/crm-api ./cmd/crm-api
 
 api-run: api-build
 	@echo "Starting API server..."
@@ -675,7 +677,7 @@ test-cadence-ultra:
 	@bash scripts/sync-postgres-auth.sh
 	@make logs
 	@echo "Starting backend with ultra-fast cadences..."
-	@set -a && source ./.env && set +a && export DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:$${POSTGRES_PORT:-5432}/$${POSTGRES_DB}?sslmode=disable" && cd backend && nohup go run cmd/crm-api/main.go > ../logs/backend-testing.log 2>&1 & echo $$! > ../logs/backend-testing.pid && cd ../.. && bash -c "disown %1" 2>/dev/null || true
+	@set -a && source ./.env && set +a && export DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:$${POSTGRES_PORT:-5432}/$${POSTGRES_DB}?sslmode=disable" && cd backend && nohup go run ./cmd/crm-api > ../logs/backend-testing.log 2>&1 & echo $$! > ../logs/backend-testing.pid && cd ../.. && bash -c "disown %1" 2>/dev/null || true
 	@echo ""
 	@echo "⏱️  CADENCE TIMING (ultra-fast):"
 	@echo "   - Weekly: 2 minutes"
@@ -697,7 +699,7 @@ test-cadence-fast:
 	@bash scripts/sync-postgres-auth.sh
 	@make logs
 	@echo "Starting backend with fast cadences..."
-	@set -a && source ./.env && set +a && export DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:$${POSTGRES_PORT:-5432}/$${POSTGRES_DB}?sslmode=disable" && cd backend && nohup go run cmd/crm-api/main.go > ../logs/backend-staging.log 2>&1 & echo $$! > ../logs/backend-staging.pid && cd ../.. && bash -c "disown %1" 2>/dev/null || true
+	@set -a && source ./.env && set +a && export DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:$${POSTGRES_PORT:-5432}/$${POSTGRES_DB}?sslmode=disable" && cd backend && nohup go run ./cmd/crm-api > ../logs/backend-staging.log 2>&1 & echo $$! > ../logs/backend-staging.pid && cd ../.. && bash -c "disown %1" 2>/dev/null || true
 	@echo ""
 	@echo "⏱️  CADENCE TIMING (fast):"
 	@echo "   - Weekly: 10 minutes (1 week = 10 min)"

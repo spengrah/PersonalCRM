@@ -54,8 +54,8 @@ jobs:
         run: |
           BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           STAMP="-X personal-crm/backend/internal/health.Version=${GITHUB_SHA::7} -X personal-crm/backend/internal/health.GitCommit=${GITHUB_SHA} -X personal-crm/backend/internal/health.BuildTime=${BUILD_TIME}"
-          go build -trimpath -ldflags="-s -w ${STAMP}" -o bin/crm-api-arm64 cmd/crm-api/main.go
-          go build -trimpath -ldflags="-s -w ${STAMP}" -o bin/crm-admin-arm64 cmd/crm-admin/main.go
+          go build -trimpath -ldflags="-s -w ${STAMP}" -o bin/crm-api-arm64 ./cmd/crm-api
+          go build -trimpath -ldflags="-s -w ${STAMP}" -o bin/crm-admin-arm64 ./cmd/crm-admin
           grep -a -q "${GITHUB_SHA}" bin/crm-api-arm64 || { echo "build stamp missing from crm-api binary" >&2; exit 1; }
 
       - name: Build frontend standalone (key-less, same-origin)

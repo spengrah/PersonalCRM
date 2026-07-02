@@ -88,7 +88,7 @@ export default defineConfig({
       },
     },
     {
-      command: 'cd ../backend && go run cmd/crm-api/main.go',
+      command: 'cd ../backend && go run ./cmd/crm-api',
       url: `${backendURL}/health`,
       reuseExistingServer: !process.env.CI,
       timeout: 120000,
