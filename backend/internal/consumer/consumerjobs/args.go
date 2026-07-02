@@ -99,6 +99,44 @@ type TodoistFollowUpRefreshJobArgs struct {
 // refresh retry jobs.
 func (TodoistFollowUpRefreshJobArgs) Kind() string { return "todoist_followup_refresh" }
 
+// Todoist task-op verbs. This set is the arc's wire contract — the single
+// executor (consumer.TodoistTaskOpWorker) dispatches Work() on Op. Kept in
+// consumerjobs so every enqueue site (consumer, todoist/service) and the
+// executor share the constants without importing the consumer package.
+const (
+	TaskOpCreate            = "create"
+	TaskOpClose             = "close"
+	TaskOpDelete            = "delete"
+	TaskOpUpdateDeadline    = "update_deadline"
+	TaskOpUpdateDescription = "update_description"
+)
+
+// TodoistTaskOpArgs is the single job-arg type for every Todoist mutation.
+// Args carry ONLY the row id and the verb — never values: the executor
+// reads the row's current authoritative local state at execution time and
+// pushes that (ops are convergence instructions, not value carriers).
+//
+// Deliberately NO `river:"unique"` tags and NO UniqueOpts at any enqueue
+// site: ops are enqueued at-least-once by design. River v0.34 hard-requires
+// any custom ByState to include `running`, so "dedup except against running
+// jobs" is inexpressible; dedup that swallows an enqueue against a running
+// job reintroduces the lost-update race. With no dedup, every local change
+// inserts its own op in the same tx and nothing can be swallowed; duplicate
+// jobs are harmless because ops are convergent (each re-reads current state
+// and pushes it; identical pushes dedup Todoist-side via the temp_id /
+// payload-fingerprint command UUID). Do NOT add uniqueness here.
+//
+// JSON tag names ("contact_task_id" / "op") are load-bearing for River's
+// args-hash; do not rename without auditing all consumers/tests.
+type TodoistTaskOpArgs struct {
+	ContactTaskID uuid.UUID `json:"contact_task_id"`
+	Op            string    `json:"op"`
+}
+
+// Kind returns the river job-kind identifier for the unified Todoist
+// task-op executor.
+func (TodoistTaskOpArgs) Kind() string { return "todoist_task_op" }
+
 // MessagingAggregateForContactArgs is enqueued by the ingest service
 // after a batch of raw_message.* events lands. The worker drives the
 // chat-aware aggregation engine over all unprocessed chats for the
