@@ -28,7 +28,7 @@ nohup env CRM_ENV="testing" NODE_ENV="development" GIN_MODE="debug" \
     CORS_ALLOW_ALL="true" FRONTEND_URL="http://localhost:3000" \
     MIGRATIONS_PATH="migrations" DATABASE_URL="$DATABASE_URL" \
     API_KEY="$API_KEY" SESSION_SECRET="$SESSION_SECRET" \
-    go run cmd/crm-api/main.go > "$PROJECT_ROOT/logs/backend-dev.log" 2>&1 &
+    go run ./cmd/crm-api > "$PROJECT_ROOT/logs/backend-dev.log" 2>&1 &
 sleep 2
 
 # Get the actual PID - try multiple patterns

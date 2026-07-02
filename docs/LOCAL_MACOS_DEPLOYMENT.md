@@ -271,7 +271,7 @@ If this fails, see [Troubleshooting](#troubleshooting).
 ```bash
 # Build Go backend binary
 cd backend
-go build -o bin/crm-api cmd/crm-api/main.go
+go build -o bin/crm-api ./cmd/crm-api
 cd ..
 
 # Verify binary was created

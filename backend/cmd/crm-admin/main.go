@@ -169,9 +169,9 @@
 // (a compile guard) but does not ship it; in prod the binary is baked into the
 // backend image and invoked by the runner deploy (scripts/deploy-artifact.sh).
 //
-// Single-file pkg-main per .ai/rules/core.md "Adding types to
-// cmd/crm-api/ in a companion file": all types referenced from this
-// file must be DEFINED here or in their own internal packages.
+// This binary is built as a package (`go build ./cmd/crm-admin`), so new
+// types it needs may live in sibling `package main` files here or in their
+// own internal packages.
 package main
 
 import (

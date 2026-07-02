@@ -28,4 +28,4 @@ PROFILE="${DEV_SEED_PROFILE:-dev}"
 
 echo "Seeding the '$PROFILE' synthetic world into local Postgres (backend must be stopped)..."
 cd "$PROJECT_ROOT/backend"
-go run cmd/crm-admin/main.go --seed --profile "$PROFILE" --yes
+go run ./cmd/crm-admin --seed --profile "$PROFILE" --yes

@@ -52,7 +52,7 @@ echo ""
 # Build backend
 echo "Building backend..."
 cd "$PROJECT_DIR/backend"
-go build -o "$INSTALL_DIR/backend/bin/crm-api" ./cmd/crm-api/main.go
+go build -o "$INSTALL_DIR/backend/bin/crm-api" ./cmd/crm-api
 echo "✓ Backend built"
 echo ""
 

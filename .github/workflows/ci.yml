@@ -115,7 +115,7 @@ jobs:
         env:
           GOOS: linux
           GOARCH: arm64
-        run: go build -o bin/crm-api-arm64 cmd/crm-api/main.go
+        run: go build -o bin/crm-api-arm64 ./cmd/crm-api
 
       - name: Cross-compile crm-admin for ARM64
         working-directory: backend
@@ -123,10 +123,10 @@ jobs:
           GOOS: linux
           GOARCH: arm64
         # crm-admin is built into the backend image at release time, not in
-        # this CI job, so a compile error in its single-file main.go (e.g. a new
-        # --seed subcommand type not defined there) would otherwise ship
-        # uncaught. This cross-compile guards it.
-        run: go build -o bin/crm-admin-arm64 cmd/crm-admin/main.go
+        # this CI job, so a compile error in the crm-admin package (e.g. a new
+        # --seed subcommand type) would otherwise ship uncaught. This
+        # cross-compile builds the package and guards it.
+        run: go build -o bin/crm-admin-arm64 ./cmd/crm-admin
 
   # Lints the behavior SSOT corpus (spec/*.yaml). Gated on spec OR backend:
   # spec/** changes must lint the corpus, and the backend OR closes the drift
