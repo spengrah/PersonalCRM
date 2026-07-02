@@ -1,9 +1,9 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { Suspense, useState, useEffect, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import {
   Plus,
   Search,
@@ -24,36 +24,25 @@ import { Pagination } from '@/components/ui/pagination'
 import { Navigation } from '@/components/layout/navigation'
 import { FORM_CONTROL_WITH_ICON, FORM_SELECT_BASE } from '@/lib/form-classes'
 import { formatDateOnly, formatCadence, formatBirthday } from '@/lib/utils'
-import type { Contact, ContactListParams } from '@/types/contact'
-
-type SortField =
-  | 'name'
-  | 'location'
-  | 'birthday'
-  | 'last_contacted'
-  | 'last_response_at'
-  | 'contact_by'
-  | 'cadence'
-
-// Default sort configuration
-const DEFAULT_SORT_FIELD: SortField = 'cadence'
-const DEFAULT_SORT_ORDER: 'asc' | 'desc' = 'desc'
+import type { Contact } from '@/types/contact'
+import {
+  buildContactDetailUrl,
+  buildContactListUrl,
+  defaultOrderFor,
+  parseListContext,
+  type ContactListContext,
+  type SortField,
+} from '@/lib/contact-list-params'
 
 function ContactsTable({
   contacts,
   loading,
-  sortBy,
-  sortOrder,
-  searchTerm,
-  cadenceFilter,
+  listContext,
   onSort,
 }: {
   contacts: Contact[]
   loading: boolean
-  sortBy?: SortField
-  sortOrder?: 'asc' | 'desc'
-  searchTerm?: string
-  cadenceFilter?: 'has_cadence' | 'no_cadence'
+  listContext: ContactListContext
   onSort: (field: SortField) => void
 }) {
   const router = useRouter()
@@ -71,27 +60,20 @@ function ContactsTable({
   }, [])
 
   const getSortIcon = (field: SortField) => {
-    if (sortBy !== field) {
+    if (listContext.sort !== field) {
       return <ArrowUpDown className="w-4 h-4 ml-1 text-gray-400" />
     }
-    return sortOrder === 'asc' ? (
+    return listContext.order === 'asc' ? (
       <ArrowUp className="w-4 h-4 ml-1 text-blue-600" />
     ) : (
       <ArrowDown className="w-4 h-4 ml-1 text-blue-600" />
     )
   }
 
-  // Build URL with navigation context params
-  // Always include sort/order so navigation order matches list order
-  const buildContactUrl = (contactId: string, action?: 'edit' | 'merge') => {
-    const params = new URLSearchParams()
-    params.set('sort', sortBy || DEFAULT_SORT_FIELD)
-    params.set('order', sortOrder || DEFAULT_SORT_ORDER)
-    if (searchTerm) params.set('search', searchTerm)
-    if (cadenceFilter) params.set('cadence_filter', cadenceFilter)
-    if (action) params.set('action', action)
-    return `/contacts/${contactId}?${params.toString()}`
-  }
+  // Links into detail pages carry the full list context so navigation
+  // order matches list order and back-to-list restores this view.
+  const buildContactUrl = (contactId: string, action?: 'edit' | 'merge') =>
+    buildContactDetailUrl(listContext, contactId, action)
 
   const handleRowClick = (contactId: string) => {
     router.push(buildContactUrl(contactId))
@@ -422,43 +404,79 @@ function ContactsTable({
   )
 }
 
-export default function ContactsPage() {
-  const [searchTerm, setSearchTerm] = useState('')
-  const [params, setParams] = useState<ContactListParams>({
-    page: 1,
-    limit: 20,
-    sort: DEFAULT_SORT_FIELD,
-    order: DEFAULT_SORT_ORDER,
-  })
+function ContactsPageContent() {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+
+  // The URL is the source of truth for the list view: sort, order, and
+  // filters are derived from it every render, and event handlers write the
+  // next view straight back to it (replace, not push — view tweaks
+  // shouldn't grow history). Back-to-list, refresh, bookmarks, and
+  // same-route navigation all restore the view for free. Pagination is
+  // deliberately kept out of the URL.
+  const urlContext = parseListContext(searchParams)
+  const [page, setPage] = useState(1)
+
+  // The search input keeps local state so keystrokes render instantly
+  // (router.replace is async), overlaying the URL's search value.
+  const [searchTerm, setSearchTerm] = useState(urlContext.search ?? '')
+  const searchInputRef = useRef<HTMLInputElement>(null)
+
+  const listContext: ContactListContext = {
+    sort: urlContext.sort,
+    order: urlContext.order,
+    ...(searchTerm ? { search: searchTerm } : {}),
+    ...(urlContext.cadence_filter ? { cadence_filter: urlContext.cadence_filter } : {}),
+    ...(urlContext.followup_filter ? { followup_filter: urlContext.followup_filter } : {}),
+  }
+
+  const applyContext = (next: ContactListContext) => {
+    setPage(1)
+    router.replace(buildContactListUrl(next), { scroll: false })
+  }
+
+  // Sync the search input when the URL's search changes under us (nav link,
+  // back/forward). Skipped while the user is typing — during typing the URL
+  // briefly lags the input, and adopting the lagged value would eat
+  // keystrokes.
+  useEffect(() => {
+    if (document.activeElement === searchInputRef.current) return
+    setSearchTerm(urlContext.search ?? '')
+  }, [urlContext.search])
 
   const { data, isLoading, error } = useContacts({
-    ...params,
+    page,
+    limit: 20,
+    sort: listContext.sort,
+    order: listContext.order,
+    cadence_filter: listContext.cadence_filter,
+    followup_filter: listContext.followup_filter,
     ...(searchTerm && { search: searchTerm }),
   })
 
+  const handleSearchInput = (value: string) => {
+    setSearchTerm(value)
+    router.replace(buildContactListUrl({ ...listContext, search: value || undefined }), {
+      scroll: false,
+    })
+  }
+
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault()
-    setParams(prev => ({ ...prev, page: 1 }))
+    setPage(1)
   }
 
   const handleSort = (field: SortField) => {
-    setParams(prev => {
-      // If clicking the same field, toggle order
-      if (prev.sort === field) {
-        return {
-          ...prev,
-          order: prev.order === 'asc' ? 'desc' : 'asc',
-          page: 1, // Reset to first page when sorting
-        }
-      }
-      // Default sort: cadence/last_response_at → desc (most frequent/recent first)
-      // contact_by/birthday/name/location → asc (soonest due/alphabetical first)
-      return {
-        ...prev,
-        sort: field,
-        order: field === 'cadence' || field === 'last_response_at' ? 'desc' : 'asc',
-        page: 1,
-      }
+    applyContext({
+      ...listContext,
+      sort: field,
+      // Same field toggles direction; a new field starts at its natural order
+      order:
+        listContext.sort === field
+          ? listContext.order === 'asc'
+            ? 'desc'
+            : 'asc'
+          : defaultOrderFor(field),
     })
   }
 
@@ -495,10 +513,11 @@ export default function ContactsPage() {
                 <Search className="h-5 w-5 text-gray-400" />
               </div>
               <input
+                ref={searchInputRef}
                 type="text"
                 placeholder="Search contacts..."
                 value={searchTerm}
-                onChange={e => setSearchTerm(e.target.value)}
+                onChange={e => handleSearchInput(e.target.value)}
                 className={FORM_CONTROL_WITH_ICON}
               />
             </div>
@@ -508,14 +527,13 @@ export default function ContactsPage() {
               <ListFilter className="h-5 w-5 text-gray-400" />
             </div>
             <select
-              value={params.cadence_filter || ''}
+              value={listContext.cadence_filter || ''}
               onChange={e =>
-                setParams(prev => ({
-                  ...prev,
+                applyContext({
+                  ...listContext,
                   cadence_filter:
-                    (e.target.value as ContactListParams['cadence_filter']) || undefined,
-                  page: 1,
-                }))
+                    (e.target.value as ContactListContext['cadence_filter']) || undefined,
+                })
               }
               className={FORM_SELECT_BASE + ' pl-10 w-auto'}
               aria-label="Filter by cadence"
@@ -534,7 +552,7 @@ export default function ContactsPage() {
               page={data.page}
               pages={data.pages}
               total={data.total}
-              onPageChange={p => setParams(prev => ({ ...prev, page: p }))}
+              onPageChange={p => setPage(p)}
               noun="contacts"
             />
           </div>
@@ -568,10 +586,7 @@ export default function ContactsPage() {
           <ContactsTable
             contacts={data?.contacts || []}
             loading={isLoading}
-            sortBy={params.sort}
-            sortOrder={params.order}
-            searchTerm={searchTerm || undefined}
-            cadenceFilter={params.cadence_filter}
+            listContext={listContext}
             onSort={handleSort}
           />
         </div>
@@ -583,12 +598,22 @@ export default function ContactsPage() {
               page={data.page}
               pages={data.pages}
               total={data.total}
-              onPageChange={p => setParams(prev => ({ ...prev, page: p }))}
+              onPageChange={p => setPage(p)}
               noun="contacts"
             />
           </div>
         )}
       </div>
     </div>
+  )
+}
+
+// useSearchParams forces a client-side bailout, so the statically
+// prerendered page needs a Suspense boundary around the content.
+export default function ContactsPage() {
+  return (
+    <Suspense>
+      <ContactsPageContent />
+    </Suspense>
   )
 }

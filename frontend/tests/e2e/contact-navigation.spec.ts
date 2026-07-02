@@ -264,4 +264,41 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     // Should be back on contacts list
     await expect(page.getByRole('heading', { name: 'Contacts' })).toBeVisible()
   })
+
+  test('should restore search and sort state after Escape back to list', async ({ page }) => {
+    // Two contacts so search + sort visibly shape the list
+    await testApi.seedContacts([
+      { full_name: 'Restore State Alpha' },
+      { full_name: 'Restore State Beta' },
+    ])
+
+    const fullNameAlpha = `${testApi.prefix}-Restore State Alpha`
+
+    // Apply a search and a name-asc sort on the list
+    await page.goto('/contacts')
+    await page.waitForLoadState('domcontentloaded')
+    await page.getByPlaceholder('Search contacts...').fill(testApi.prefix)
+    await expect(page.getByText(fullNameAlpha)).toBeVisible({ timeout: 15000 })
+    await page.getByRole('columnheader').filter({ hasText: /^Name/ }).click()
+
+    // The list mirrors its state into the URL
+    await expect(page).toHaveURL(/sort=name/)
+    await expect(page).toHaveURL(/order=asc/)
+
+    // Enter a detail page, then Escape back
+    await page.getByText(fullNameAlpha).click()
+    await page.waitForURL(/\/contacts\/[A-Za-z0-9-]+/)
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: fullNameAlpha })).toBeVisible({
+      timeout: 15000,
+    })
+    await page.keyboard.press('Escape')
+    await page.waitForLoadState('domcontentloaded')
+
+    // Back on the list with search + sort restored, not reset to defaults
+    await expect(page.getByRole('heading', { name: 'Contacts' })).toBeVisible()
+    await expect(page).toHaveURL(/sort=name/)
+    await expect(page).toHaveURL(/order=asc/)
+    await expect(page.getByPlaceholder('Search contacts...')).toHaveValue(testApi.prefix)
+  })
 })

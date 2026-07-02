@@ -1,3 +1,5 @@
+import type { CadenceFilter, FollowupFilter, SortField, SortOrder } from '@/lib/contact-list-params'
+
 export type ContactMethodType =
   | 'email'
   | 'phone'
@@ -66,15 +68,8 @@ export interface ContactListParams {
   page?: number
   limit?: number
   search?: string
-  sort?:
-    | 'name'
-    | 'location'
-    | 'birthday'
-    | 'last_contacted'
-    | 'last_response_at'
-    | 'contact_by'
-    | 'cadence'
-  order?: 'asc' | 'desc'
-  cadence_filter?: 'has_cadence' | 'no_cadence'
-  followup_filter?: 'has_followup' | 'no_followup'
+  sort?: SortField
+  order?: SortOrder
+  cadence_filter?: CadenceFilter
+  followup_filter?: FollowupFilter
 }

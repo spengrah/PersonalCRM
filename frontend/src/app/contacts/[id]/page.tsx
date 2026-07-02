@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { Navigation } from '@/components/layout/navigation'
 import { ContactForm } from '@/components/contacts/contact-form'
@@ -36,6 +36,11 @@ import {
   sortContactMethods,
 } from '@/lib/contact-methods'
 import type { ContactSubmitData } from '@/lib/validations/contact'
+import {
+  buildContactDetailUrl,
+  buildContactListUrl,
+  parseListContext,
+} from '@/lib/contact-list-params'
 import { MergeContactModal } from '@/components/contacts/merge-contact-modal'
 import { TasksSection } from '@/components/contacts/tasks-section'
 import { LogInteractionModal } from '@/components/contacts/log-interaction-modal'
@@ -71,15 +76,7 @@ export default function ContactDetailPage() {
   const notesRef = useRef<HTMLDivElement>(null)
 
   // Extract list context from URL params (or use defaults)
-  const listContext = {
-    sort: searchParams.get('sort') || 'cadence',
-    order: (searchParams.get('order') as 'asc' | 'desc') || 'desc',
-    search: searchParams.get('search') || undefined,
-    cadence_filter:
-      (searchParams.get('cadence_filter') as 'has_cadence' | 'no_cadence') || undefined,
-    followup_filter:
-      (searchParams.get('followup_filter') as 'has_followup' | 'no_followup') || undefined,
-  }
+  const listContext = useMemo(() => parseListContext(searchParams), [searchParams])
 
   const { data: contact, isLoading, error } = useContact(contactId)
   const { data: contactNote } = useContactNote(contactId)
@@ -114,24 +111,9 @@ export default function ContactDetailPage() {
 
   // Build URL preserving list context params
   const buildNavigationUrl = useCallback(
-    (newId?: string) => {
-      const params = new URLSearchParams()
-      if (listContext.sort) params.set('sort', listContext.sort)
-      if (listContext.order) params.set('order', listContext.order)
-      if (listContext.search) params.set('search', listContext.search)
-      if (listContext.cadence_filter) params.set('cadence_filter', listContext.cadence_filter)
-      if (listContext.followup_filter) params.set('followup_filter', listContext.followup_filter)
-      const queryString = params.toString()
-      const path = newId ? `/contacts/${newId}` : '/contacts'
-      return `${path}${queryString ? `?${queryString}` : ''}`
-    },
-    [
-      listContext.sort,
-      listContext.order,
-      listContext.search,
-      listContext.cadence_filter,
-      listContext.followup_filter,
-    ]
+    (newId?: string) =>
+      newId ? buildContactDetailUrl(listContext, newId) : buildContactListUrl(listContext),
+    [listContext]
   )
 
   // Keyboard navigation
