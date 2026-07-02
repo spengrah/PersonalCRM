@@ -33,7 +33,6 @@ import (
 	"syscall"
 	"time"
 
-	"personal-crm/backend/internal/anarlog"
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/auth"
@@ -181,14 +180,12 @@ func run() int {
 	// Several instances are reused by the external-sync / mac-host /
 	// calendar / telegram blocks below.
 	ingest := buildIngestRepos(database.Queries)
-	identityRepoForIngest := ingest.Identity
 	identityServiceForIngest := ingest.IdentityService
 	messagesMessageRepo := ingest.MessagesMessage
 	externalContactRepoForIngest := ingest.ExternalContact
 	macHostRepoForIngest := ingest.MacHost
 	meetingNoteRepoForIngest := ingest.MeetingNote
 	calendarRepoForIngest := ingest.CalendarEvent
-	phoneCallRepoForIngest := ingest.PhoneCall
 
 	// Rematch service + ContactService + graph (SP1) store. Rematch is
 	// constructed above ContactService so it can be passed as the
@@ -196,210 +193,34 @@ func run() int {
 	graph := buildContactGraphCore(database, core, eventBus)
 	rematchService := graph.RematchService
 	contactService := graph.ContactService
-	graphNodeRepo := graph.GraphNode
-	graphAssertionRepo := graph.GraphAssertion
 	assertService := graph.AssertService
 
 	// Message-store repos + staging registry + venue resolver.
 	messaging := buildMessagingFoundation(database.Queries, messagesMessageRepo, calendarRepoForIngest)
 	telegramMessageRepo := messaging.TelegramMessageRepo
 	commsMessageRepo := messaging.CommsMessageRepo
-	stagingRegistry := messaging.StagingRegistry
 	venueRepo := messaging.VenueRepo
-	venueResolver := messaging.VenueResolver
 
-	// Aggregator reenqueuer holder. The Telegram entry needs the
-	// Telegram aggregation engine, which is constructed later (inside
-	// the cfg.Features.EnableTelegramSync branch). The worker is
-	// constructed earlier, so we wrap the registry in a deferred
-	// pointer that the Telegram branch fills in once the engine
-	// exists. When Telegram is disabled the registry's telegram entry
-	// stays unset and the consumer's reenqueue degrades to "no entry
-	// registered for source" (logged warn) — safe, the consumer's
-	// interaction has already committed.
-	aggregatorReenqueuerHolder := &deferredAggregatorReenqueuer{}
+	// Event-bus consumers (Cadence / Knowledge / FollowUp / InteractionRecorder)
+	// + their shared collaborators, wired into ContactService via its setters.
+	consumers := buildEventConsumers(cfg, database, core, graph, ingest, messaging, eventBus, riverClient)
+	aggregatorReenqueuerHolder := consumers.AggregatorReenqueuerHolder
+	cadenceUpdater := consumers.CadenceUpdater
+	knowledgeCacheUpdater := consumers.KnowledgeCacheUpdater
+	todoistClientFactory := consumers.TodoistClientFactory
+	followUpMode := consumers.FollowUpMode
+	followUpSettingsHolder := consumers.FollowUpSettingsHolder
+	followUpSettings := consumers.FollowUpSettings
+	followUpManager := consumers.FollowUpManager
+	interactionRecorder := consumers.InteractionRecorder
 
-	// CadenceUpdater must be constructed BEFORE InteractionRecorder so
-	// the recorder can inline-invoke it after bus.PublishTx on fresh
-	// writes. Wired here even though its worker is registered further
-	// down, so the construction order matches the runtime dispatch
-	// order. contactRepo.SetPool is called at the first writer-path
-	// construction so the cadence updater can open its own tx if ever
-	// needed outside the caller's tx (defensive — the current path
-	// always runs in the caller's tx).
-	contactRepo.SetPool(database.Pool)
-	eventClaimRepo := repository.NewEventConsumerClaimRepository(database.Queries)
-	cadenceUpdater := consumer.NewCadenceUpdater(
-		eventClaimRepo,
-		contactRepo,
-		database.Queries,
-		consumer.CadenceModeFromConfig(cfg.EventBus.CadenceMode),
-		cfg.EventBus.UnsafeAllowOffMode,
-	)
-
-	// Wire CadenceUpdater into ContactService so Merge / Extend / Promote
-	// / UpdateContact cadence-edit paths route cadence writes through
-	// the sole writer.
-	contactService.SetCadenceUpdater(cadenceUpdater)
-
-	// Knowledge-cache consumer (the location/birthday/how_met authority flip):
-	// the sole writer of those three derived cache columns. ContactService emits
-	// lives_in/birthday/how_met assertions through AssertService and calls
-	// knowledgeCacheUpdater.RefreshTx inline (no read-path gap on a user edit);
-	// the registered KnowledgeCacheUpdaterWorker (below) handles assertion.accepted
-	// /superseded events from any other producer (extractors, rollover, retraction).
-	knowledgeCacheUpdater := consumer.NewKnowledgeCacheUpdater(graphAssertionRepo, graphNodeRepo, contactRepo)
-	contactService.SetKnowledgeWriter(assertService, knowledgeCacheUpdater)
-
-	// Todoist client factory, built once with the running CRM_ENV so the
-	// outbound-write guard (Spec C) applies at every production write site.
-	// Non-prod instances holding real OAuth tokens (a restored prod DB, a
-	// partial env copy) refuse Todoist writes; see todoist.ErrNonProdWriteRefused.
-	todoistClientFactory := todoist.NewClientFactory(cfg.Runtime.CRMEnvironment)
-	if config.IsProductionCRMEnv(cfg.Runtime.CRMEnvironment) {
-		// Logged at Warn so it survives prod's LOG_LEVEL=warn threshold — this
-		// is the operator-facing signal that writes are live. Expected on every
-		// prod boot; the stable "event" field lets alerting route it as
-		// informational.
-		logger.Warn().
-			Str("event", "todoist_writes_enabled").
-			Str("crm_env", cfg.Runtime.CRMEnvironment).
-			Bool("todoist_writes_enabled", true).
-			Msg("Todoist outbound writes ENABLED (production CRM_ENV)")
-	} else {
-		logger.Info().
-			Str("event", "todoist_writes_enabled").
-			Str("crm_env", cfg.Runtime.CRMEnvironment).
-			Bool("todoist_writes_enabled", false).
-			Msg("Todoist outbound writes refused (non-production CRM_ENV)")
-	}
-
-	// FollowUpManager consumer — the sole writer of
-	// contact_task.kind='follow_up' lifecycle post-cutover. Constructed
-	// BEFORE the InteractionRecorder because the recorder takes it as a
-	// constructor arg (inline-invoke on fresh writes). Todoist settings
-	// are looked up via a deferred holder populated later in the
-	// external-sync branch; until populated, Todoist-dependent post-
-	// commit paths (refresh item_update, close retries) degrade to
-	// local-only writes with a logged warning.
-	followUpMode := consumer.FollowUpModeFromConfig(cfg.EventBus.FollowUpMode)
-	followUpSettingsHolder := &followUpSettingsRef{frontendURL: cfg.CORS.FrontendURL}
-	followUpSettings := followUpSettingsHolder.fn()
-	followUpManager := consumer.NewFollowUpManager(
-		followUpMode,
-		eventClaimRepo,
-		contactRepo,
-		contactTaskRepo,
-		contactTaskRepo,
-		interactionRepo,
-		riverClient,
-		database.Pool,
-		followUpSettings,
-		todoistClientFactory,
-		cfg.CORS.FrontendURL,
-		cfg.Watchdog,
-	)
-	// Wire the consumer as the sole follow-up writer on the direct path.
-	// Non-bus callers (Todoist completion, Promote/Extend) route through
-	// FollowUpManager.ApplyInteraction via ContactService.
-	contactService.SetFollowUpConsumer(followUpManager)
-
-	// Wire the merge-time task-close enqueuer. MergeContacts closes the
-	// source contact's live automated tasks and enqueues the durable Todoist
-	// close job for rows with a real external id; the mode gate matches the
-	// close worker's cutover-only contract (enqueuing in mode 'off' would
-	// only manufacture failing jobs — merge then closes locally with a WARN,
-	// that mode's documented "completion disabled" semantics).
-	contactService.SetTaskCloseEnqueuer(riverClient, cfg.EventBus.FollowUpMode == config.EventBusFollowUpModeCutover)
-
-	// InteractionRecorder consumer + manual handler (spec §3.4.1).
-	// Delegates the write to ContactService.RecordInteractionTx, then
-	// marks telegram_messages processed (for message.* kinds) and emits
-	// interaction.recorded — all inside the caller's tx. After emitting
-	// interaction.recorded, the recorder inline-invokes
-	// cadenceUpdater.HandleEvent + followUpManager.HandleEvent on
-	// fresh writes so cadence + follow-up state apply synchronously and
-	// queued re-deliveries become durable no-ops via
-	// event_consumer_claim.
-	interactionRecorder := consumer.NewInteractionRecorder(
-		contactService,
-		stagingRegistry,
-		eventBus,
-		cadenceUpdater,
-		followUpManager,
-		// calendarRepoForIngest satisfies calendarEventLocker: the
-		// calendar.attended branch takes a FOR SHARE lock on the backing
-		// calendar_event so a concurrent decline DELETE cannot strand a
-		// false interaction.
-		calendarRepoForIngest,
-	)
-	// Populate interaction.venue_id for message.* (telegram/messages/gchat) and
-	// gcal interactions this recorder writes.
-	interactionRecorder.SetVenueResolver(venueResolver)
-
-	// IngestService — hoisted here so the call.* inline handler can
-	// reuse contactService.RecordInteractionTx, cadenceUpdater,
-	// followUpManager, and eventBus.PublishTx to emit
-	// interaction.recorded + apply cadence + follow-up in the SAME tx
-	// as the phone_call staging row write (spec §`phone_calls`
-	// content-delivered cadence). raw_message.* and external_contact.*
-	// inline handlers don't need these four — they were nil before the
-	// v1.5 expansion. The meeting_note.* inline handler reuses
-	// contactService via the ContactInteractionRecorder interface for
-	// session-attributed interaction writes so cadence + follow-up
-	// fire correctly.
-	//
-	// anarlog title-extraction deps for the meeting_note.recorded inline
-	// handler: TitleMatcher disambiguates a single name token against
-	// the CRM contact table (trigram + collision-gap); DiscoveryWriter
-	// persists weak-candidate anarlog_title rows for unmatched tokens.
-	titleMatcher := anarlog.NewTitleMatcher(contactRepo)
-	titleDiscoveryWriter := anarlog.NewDiscoveryWriter(externalContactRepoForIngest)
-	ingestService := service.NewIngestService(
-		database,
-		eventBus,
-		identityServiceForIngest,
-		messagesMessageRepo,
-		riverClient,
-		externalContactRepoForIngest,
-		macHostRepoForIngest, // host-liveness re-check inside the batch tx
-		meetingNoteRepoForIngest,
-		calendarRepoForIngest,
-		interactionRepo,
-		identityRepoForIngest,
-		contactService,
-		phoneCallRepoForIngest,
-		contactService,
-		cadenceUpdater,
-		followUpManager,
-		titleMatcher,
-		titleDiscoveryWriter,
-		phoneCallRepoForIngest, // phone_call linkage candidates for meeting_note Step 1
-	)
-	// Populate interaction.venue_id for phone_calls + anarlog_sessions
-	// interactions the ingest inline handlers write.
-	ingestService.SetVenueResolver(venueResolver)
-	ingestHandler := handlers.NewIngestHandler(ingestService)
-
-	// User-driven conflict-resolution surface for meeting_note rows.
-	// Mirrors the daemon-side IngestService.handleMeetingNoteRecorded
-	// path; uses a small adapter to satisfy the polymorphic
-	// LinkageTargetReader interface (event vs phone_call lookup by UUID).
-	meetingNoteLinkageTargets := service.NewLinkageTargetReader(calendarRepoForIngest, phoneCallRepoForIngest)
-	meetingNoteService := service.NewMeetingNoteService(
-		database,
-		meetingNoteRepoForIngest,
-		meetingNoteRepoForIngest,
-		meetingNoteLinkageTargets,
-		identityRepoForIngest,
-		titleMatcher,
-		titleDiscoveryWriter,
-		contactService,
-		contactRepo,
-	)
-	// Populate venue_id on the resolve-link interaction path.
-	meetingNoteService.SetVenueResolver(venueResolver)
-	meetingNoteHandler := handlers.NewMeetingNoteHandler(meetingNoteService)
+	// IngestService + meeting-note conflict-resolution surface. Hoisted
+	// after the consumers so the call.* inline handler can reuse them in
+	// the same tx as the staging-row write.
+	ingestStk := buildIngestStack(database, core, graph, ingest, messaging, consumers, eventBus, riverClient)
+	ingestService := ingestStk.IngestService
+	ingestHandler := ingestStk.IngestHandler
+	meetingNoteHandler := ingestStk.MeetingNoteHandler
 
 	// Register the consumer worker. The worker is registered UNCONDITIONALLY —
 	// river rejects unknown job kinds at dequeue time, so having the worker
