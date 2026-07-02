@@ -1,16 +1,232 @@
 package consumer
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"time"
 
 	"personal-crm/backend/internal/consumer/consumerjobs"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/todoist"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
 )
+
+// opUpdateSnoozeDelay is how long an update op waits when it lands on a
+// row whose remote task does not exist yet (still pending_remote_create),
+// or when verify-after-push detects the pushed value is already stale.
+// Snoozing is attempts-neutral (River bumps MaxAttempts), so an update can
+// wait out an arbitrarily long create outage without being discarded.
+const opUpdateSnoozeDelay = 30 * time.Second
+
+// todoistOpTaskRepo is the subset of ContactTaskRepository the executor
+// needs: a pool-scoped read to branch on state (and to verify-after-push),
+// plus the tx-threaded finalize writes for the create verb.
+type todoistOpTaskRepo interface {
+	GetContactTask(ctx context.Context, id uuid.UUID) (*repository.ContactTask, error)
+	GetContactTaskTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*repository.ContactTask, error)
+	UpdateContactTaskExternalIDTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, externalTaskID string) (*repository.ContactTask, error)
+	SetContactTaskExternalIDOnlyTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, externalTaskID string) error
+}
+
+// todoistTaskOpDeps bundles the executor's dependencies. Interface-typed
+// (consumer-package convention) so unit tests substitute fakes. Mirrors
+// the deleted followUpCreateWorkerDeps: a task-repo subset, the settings
+// func, the client factory, a river inserter (finalize enqueues a close
+// op), and the pool for the create verb's short finalize tx.
+type todoistTaskOpDeps struct {
+	taskRepo      todoistOpTaskRepo
+	settings      TodoistSettingsFunc
+	clientFactory todoist.ClientFactory
+	riverInserter RiverInserter
+	pool          *pgxpool.Pool
+}
+
+// TodoistTaskOpWorker is the single River executor for every Todoist
+// mutation. Work dispatches on the op verb (create / close / delete /
+// update_deadline / update_description). Ops are convergence instructions:
+// the executor reads the row's CURRENT authoritative local state at
+// execution time and pushes that, so duplicate/at-least-once ops are
+// harmless (each re-reads and re-pushes; identical pushes dedup Todoist-
+// side via temp_id / payload-fingerprint UUID). There is no mode gate —
+// the executor runs whatever was enqueued (arc D11).
+type TodoistTaskOpWorker struct {
+	river.WorkerDefaults[consumerjobs.TodoistTaskOpArgs]
+	deps todoistTaskOpDeps
+}
+
+// NewTodoistTaskOpWorker constructs the executor. All dependencies are
+// required in production wiring; a nil-dep invocation fails closed with a
+// descriptive error rather than panicking mid-verb.
+func NewTodoistTaskOpWorker(
+	taskRepo todoistOpTaskRepo,
+	settings TodoistSettingsFunc,
+	clientFactory todoist.ClientFactory,
+	riverInserter RiverInserter,
+	pool *pgxpool.Pool,
+) *TodoistTaskOpWorker {
+	return &TodoistTaskOpWorker{
+		deps: todoistTaskOpDeps{
+			taskRepo:      taskRepo,
+			settings:      settings,
+			clientFactory: clientFactory,
+			riverInserter: riverInserter,
+			pool:          pool,
+		},
+	}
+}
+
+// Work dispatches the op verb. Unknown verbs are a permanent failure
+// (river.JobCancel) — a malformed enqueue must never retry forever.
+func (w *TodoistTaskOpWorker) Work(ctx context.Context, j *river.Job[consumerjobs.TodoistTaskOpArgs]) error {
+	if w.deps.taskRepo == nil || w.deps.settings == nil || w.deps.clientFactory == nil {
+		return errors.New("todoist_task_op: worker dependencies not wired")
+	}
+	taskID := j.Args.ContactTaskID
+	switch j.Args.Op {
+	case consumerjobs.TaskOpUpdateDeadline:
+		return w.executeUpdate(ctx, taskID, deadlineUpdateVerb())
+	case consumerjobs.TaskOpUpdateDescription:
+		return w.executeUpdate(ctx, taskID, descriptionUpdateVerb())
+	default:
+		return river.JobCancel(fmt.Errorf("todoist_task_op: unknown op %q", j.Args.Op))
+	}
+}
+
+// Timeout bounds the per-job runtime. Create issues one or two HTTP calls
+// plus a short write tx; the other verbs issue a single HTTP call. 60s
+// covers the create path; per-verb tightening isn't worth the complexity.
+func (*TodoistTaskOpWorker) Timeout(*river.Job[consumerjobs.TodoistTaskOpArgs]) time.Duration {
+	return 60 * time.Second
+}
+
+// opUpdateVerb describes an update_* verb: how to extract the value being
+// pushed from the row's current metadata, and how to fingerprint it for
+// the command UUID.
+type opUpdateVerb struct {
+	op string
+	// extract reads the value to push + builds the item_update args from
+	// the row's CURRENT metadata. ok=false means a required metadata key
+	// is absent → permanent error (the verb has nothing valid to push).
+	extract func(task *repository.ContactTask) (value string, args map[string]any, ok bool)
+	// fingerprint maps the pushed value to the command-UUID fingerprint.
+	fingerprint func(value string) string
+}
+
+// deadlineUpdateVerb pushes the row's current `due_date` metadata as a
+// Todoist deadline. Fingerprint is the deadline string itself.
+func deadlineUpdateVerb() opUpdateVerb {
+	return opUpdateVerb{
+		op: consumerjobs.TaskOpUpdateDeadline,
+		extract: func(task *repository.ContactTask) (string, map[string]any, bool) {
+			due, ok := metadataString(task, "due_date")
+			if !ok || due == "" {
+				return "", nil, false
+			}
+			return due, map[string]any{"deadline": map[string]string{"date": due}}, true
+		},
+		fingerprint: func(value string) string { return value },
+	}
+}
+
+// descriptionUpdateVerb pushes the row's current `description` metadata
+// verbatim. Fails permanently if the key is absent (arc §5.3 / DD4).
+// Fingerprint is sha256(description) so distinct descriptions get distinct
+// command UUIDs.
+func descriptionUpdateVerb() opUpdateVerb {
+	return opUpdateVerb{
+		op: consumerjobs.TaskOpUpdateDescription,
+		extract: func(task *repository.ContactTask) (string, map[string]any, bool) {
+			desc, ok := metadataString(task, "description")
+			if !ok {
+				return "", nil, false
+			}
+			return desc, map[string]any{"description": desc}, true
+		},
+		fingerprint: descriptionFingerprint,
+	}
+}
+
+// metadataString reads a string metadata key. ok=false when the key is
+// absent or not a string.
+func metadataString(task *repository.ContactTask, key string) (string, bool) {
+	if task.Metadata == nil {
+		return "", false
+	}
+	v, present := task.Metadata[key]
+	if !present {
+		return "", false
+	}
+	s, ok := v.(string)
+	return s, ok
+}
+
+// executeUpdate runs an update_* verb. Phases: (1) pool read + state
+// dispatch — pending_remote_create snoozes attempts-neutrally (a create is
+// in flight; wait for finalize), ANY terminal state no-ops (the close/
+// delete op owns terminal convergence — a stale update must never touch a
+// retired task, even one with an external id), managed pushes the current
+// value. (2) HTTP item_update built from the row's CURRENT metadata with
+// the payload-fingerprint command UUID. (3) verify-after-push: re-read the
+// row and, if the value just pushed is no longer current, snooze so the
+// same job re-runs and pushes the newer value — closing the out-of-order-
+// HTTP race that at-least-once enqueue alone does not.
+func (w *TodoistTaskOpWorker) executeUpdate(ctx context.Context, taskID uuid.UUID, verb opUpdateVerb) error {
+	task, err := w.deps.taskRepo.GetContactTask(ctx, taskID)
+	if err != nil {
+		return fmt.Errorf("fetch contact_task %s: %w", taskID, err)
+	}
+	switch task.State {
+	case repository.ContactTaskStatePendingRemoteCreate:
+		return river.JobSnooze(opUpdateSnoozeDelay)
+	case repository.ContactTaskStateManaged:
+		// Continue to push.
+	default:
+		// Any terminal state (completed/dismissed/superseded/unmanaged):
+		// the close/delete op owns terminal convergence. No-op.
+		return nil
+	}
+
+	value, args, ok := verb.extract(task)
+	if !ok {
+		return river.JobCancel(fmt.Errorf("todoist_task_op %s: contact_task %s missing metadata to push", verb.op, taskID))
+	}
+	if task.ExternalTaskID == "" {
+		// Managed rows carry an external id (finalize sets state + id in one
+		// UPDATE); an empty id here is a can't-happen ordering surprise —
+		// snooze rather than push to nothing.
+		return river.JobSnooze(opUpdateSnoozeDelay)
+	}
+
+	_, accessToken, err := w.deps.settings(ctx)
+	if err != nil {
+		return fmt.Errorf("get todoist settings: %w", err)
+	}
+	client := w.deps.clientFactory(accessToken)
+	cmd := todoist.NewItemUpdateCommand(task.ExternalTaskID, args)
+	cmd.UUID = taskOpCommandUUID(verb.op, taskID, verb.fingerprint(value))
+	if _, err := client.Sync(ctx, "*", nil, []todoist.SyncCommand{cmd}); err != nil {
+		return fmt.Errorf("todoist %s: %w", verb.op, err)
+	}
+
+	// Verify-after-push: a concurrent fresher op may have pushed a newer
+	// value whose HTTP request landed BEFORE ours, silently reverting
+	// Todoist. Detect value ≠ current and snooze to re-run.
+	fresh, err := w.deps.taskRepo.GetContactTask(ctx, taskID)
+	if err != nil {
+		return fmt.Errorf("verify-after-push re-read %s: %w", taskID, err)
+	}
+	if freshValue, _, freshOK := verb.extract(fresh); freshOK && freshValue != value {
+		return river.JobSnooze(opUpdateSnoozeDelay)
+	}
+	return nil
+}
 
 // taskOpCommandUUID derives the deterministic Todoist Sync command UUID
 // (v5) for a task op. Computed at execution time over the value actually
