@@ -1,0 +1,441 @@
+domain: imports-matching
+prefix: IMP
+maturity: reviewed
+behaviors:
+  # --- Matching engine ---
+
+  - id: IMP-001
+    title: Identifiers are normalized before any matching
+    type: business-logic
+    status: current
+    given: an external identifier entering the matching engine
+    when: it is compared against CRM data
+    then:
+      - emails are lowercased and trimmed
+      - handles are diacritic-folded, lowercased, and stripped of decoration before comparison
+      - phones compare loosely by digits with any leading plus preserved (the canonical-form intent is IMP-033)
+      - email and canonical phone normalization are shared with the mac daemon via a cross-platform parity fixture
+    provenance: [matching/normalize.go, matching/handle_normalize.go, normalization_parity.json]
+
+  - id: IMP-002
+    title: Candidate match scores blend name similarity and method overlap
+    type: business-logic
+    status: current
+    given: an external candidate and a CRM contact
+    when: a match score is computed
+    then:
+      - the score weighs trigram name similarity at 0.6 and shared-method fraction at 0.4
+      - name candidates are considered only strictly above the minimum similarity (0.3)
+      - soft-deleted contacts are never candidates
+    provenance: [matching.FuzzyConfig, FindSimilarContactsBatch, countMethodOverlap]
+
+  - id: IMP-003
+    title: A suggestion surfaces only above the confidence gate, deterministically
+    type: business-logic
+    status: current
+    given: scored match candidates for an external contact
+    when: the suggested match is selected
+    then:
+      - only candidates at or above the confidence threshold (0.5 for imports) are kept
+      - the best score wins, with contact id as the deterministic tie-breaker
+    provenance: [ImportMatchService.FindBestMatch, selectBestSuggestion, matching.ImportConfig]
+
+  - id: IMP-004
+    title: Username-derived matches must be decisive
+    type: business-logic
+    status: current
+    given: a match whose best evidence is a messaging username
+    when: the suggestion is finalized
+    then:
+      - if a runner-up sits within the collision gap (0.15) of a username-derived top match, no suggestion is made
+      - handles shorter than five runes never enter name matching
+      - an exact handle-to-name equality earns a score bonus
+    provenance: [usernameMatchGap, NormalizeHandleForNameMatch, applyExactHandleBonus]
+    notes: Ambiguous common handles must not guess; the collision-gap rule is reused by anarlog title-token matching.
+
+  - id: IMP-005
+    title: The import queue only ever suggests
+    type: invariant
+    status: current
+    statement: import-queue matching produces suggestions, never links — resolving a candidate from within the queue requires an explicit user action (import, link, or ignore); candidates can additionally be auto-matched from outside the queue (source sync and rematch housekeeping) when an identifier match is found.
+    provenance: [ImportMatchService, ImportSuggestedMatch]
+
+  # --- External-contact lifecycle ---
+
+  - id: IMP-006
+    title: External contacts deduplicate per source and address
+    type: data
+    status: current
+    given: an incoming external contact record
+    when: it is upserted
+    then:
+      - uniqueness is per (source, source id, account)
+      - a new row starts unmatched
+      - the update branch refreshes content but never touches linkage (match status, linked contact, tombstone)
+    provenance: [idx_external_contact_unique, ExternalContactRepository.Upsert]
+
+  - id: IMP-007
+    title: Match status is a four-state lifecycle with sticky ignore
+    type: data
+    status: current
+    given: an external contact row
+    when: its match status changes
+    then:
+      - unmatched rows await review in the queue
+      - imported marks rows resolved with human curation (import-as-new, or a curated link)
+      - matched marks rows linked without curation (bare link, or source auto-match)
+      - ignored is terminal and sticky; the row never resurfaces in the queue
+    provenance: [external_contact match_status CHECK, LinkContact curated signal, Ignore]
+    notes: imported-vs-matched is the discriminator that drives auto-propagate vs suggest in reconciliation (IMP-017) — imported means a human curated the method set.
+
+  - id: IMP-008
+    title: Tombstoned external contacts revive with their linkage intact
+    type: data
+    status: current
+    given: an external contact deleted at its source
+    when: it is tombstoned and later reappears
+    then:
+      - the tombstone hides the row from queue and matching reads but preserves its linked contact and match status
+      - reappearance of the same source id revives the row with its original link intact
+      - linkage mutations against a tombstoned row report not-found
+    provenance: [SoftDeleteTx, ReviveTx, migration 050]
+    notes: The mac-daemon delete/revive event mechanics are mac-host domain; this pins the lifecycle contract on the shared table.
+
+  - id: IMP-009
+    title: Suggestion state survives source resyncs
+    type: data
+    status: current
+    given: an external contact carrying pending or dismissed method suggestions
+    when: its source resyncs and the producer upsert replaces the row's content
+    then:
+      - pending and dismissed suggestion state is untouched (excluded from the upsert column set)
+    provenance: [migration 060, ExternalContactRepository.Upsert]
+
+  # --- Import queue actions ---
+
+  - id: IMP-010
+    title: The candidate list is globally confidence-ranked
+    type: api
+    status: current
+    given: unmatched external contacts
+    when: the candidate list is requested
+    then:
+      - candidates are sorted by suggestion confidence descending before pagination; unsuggested candidates order by name with empty names last
+      - unresolved telegram peers are hidden by default, with a count surfaced and an opt-in include flag
+      - weak title-derived discovery rows never appear in this list; they surface only through the grouped names section
+    provenance: [ListImportCandidates, SuggestionService.BuildSortedCandidates, external_contact.sql unmatched queries]
+    notes: Equal-confidence suggested candidates currently have no tie-breaker among themselves.
+
+  - id: IMP-011
+    title: Import-as-new is guarded
+    type: api
+    status: current
+    given: an import request for a candidate
+    when: the request is validated
+    then:
+      - an already-processed candidate is rejected (400)
+      - a link-only source is forbidden from importing (403), enforced server-side
+      - an import without a name is rejected (400)
+      - an unknown candidate is not-found (404)
+    provenance: [ImportContact guards, IsLinkOnlySource]
+
+  - id: IMP-012
+    title: Importing a candidate creates a full CRM contact
+    type: business-logic
+    status: current
+    given: a valid import of an unmatched candidate
+    when: the import runs
+    then:
+      - a CRM contact is created through the normal creation path (person node, knowledge routing, methods)
+      - methods come from the user's selection when provided, else from the external record
+      - the candidate row is marked imported and linked to the new contact
+      - the response reports the new contact and a rematch job id
+    provenance: [ImportContact, buildMethodsFromSelection, BuildMethodsFromExternal]
+
+  - id: IMP-013
+    title: Curation on link decides imported versus matched
+    type: business-logic
+    status: current
+    given: a link of a candidate to an existing contact
+    when: the link is recorded
+    then:
+      - any curation signal (method selection, conflict resolution, cadence, name, or an explicit curated flag) marks the row imported
+      - a bare link with no curation marks the row matched
+    provenance: [LinkContact curated signal, EnrichContactFromExternalWithSelections]
+    notes: Method-value conflicts neither block nor prompt today — a same-type different-value method is simply offered as an addition (IMP-027) — and the server does not reject links over conflicts; conflict resolutions still count as a curation signal at the API level.
+
+  - id: IMP-014
+    title: Link-only sources can never create contacts
+    type: invariant
+    status: current
+    statement: candidates from link-only sources (currently gmail correspondence) can only be linked to an existing contact or ignored — never imported as a new contact; the policy is enforced server-side and the allowed actions are declared by the server per candidate.
+    provenance: [linkOnlySources, AllowedActionsForSource, 2026-06-02-contact-method-enrichment-suggestions-design.md]
+
+  # --- Enrichment at link/import ---
+
+  - id: IMP-015
+    title: Enrichment fills gaps on existing contacts, never creates them
+    type: business-logic
+    status: current
+    given: a contact linked to an external record
+    when: enrichment runs
+    then:
+      - enrichment never creates a contact
+      - profile fields are filled only when empty, never overwritten
+      - location and birthday enrich via knowledge assertions with agent provenance, not direct column writes
+    provenance: [EnrichContactFromExternal, enrichment.go assertInferredKnowledge]
+    notes: The assertion mechanics are knowledge-domain scope; the derived-column rule is CON-004.
+
+  - id: IMP-016
+    title: User method curation is respected forever
+    type: business-logic
+    status: current
+    given: a link where the user selected a subset of the external record's methods
+    when: later reconciliation sees methods missing from the contact
+    then:
+      - only the user-selected methods were added at link time
+      - deselected methods are treated as missing by design and are never auto-added later
+    provenance: [EnrichContactFromExternalWithSelections, address_book_reconcile.go]
+
+  - id: IMP-017
+    title: Reconciliation auto-propagates for auto-matches and suggests for curated links
+    type: business-logic
+    status: current
+    given: a linked address-book external contact with methods missing from its CRM contact
+    when: reconciliation runs
+    then:
+      - a matched (never-curated) row auto-adds the missing methods
+      - an imported (curated) row records the missing set as pending suggestions instead
+      - dismissed suggestions are subtracted from the pending set
+      - duplicate rows resolve to one effective status with ignored taking precedence over imported over matched
+    provenance: [ReconcileLinkedExternalContactMethods, autoPropagate, recordSuggestions]
+
+  - id: IMP-018
+    title: Suggestion resolve and dismiss are idempotent set operations
+    type: business-logic
+    status: current
+    given: pending method suggestions on a linked external contact
+    when: the user resolves or dismisses them
+    then:
+      - resolve confirms the requested methods (or all when unspecified), adds them via enrichment, and clears them from pending
+      - dismiss is sticky per method (type and value) and appends to the dismissed set
+      - entries already on the contact or no longer offered by the source are pruned without being dismissed
+      - actions re-check live state under lock and tolerate repeats; a soft-deleted contact reports gone (410)
+    provenance: [ResolveMethodSuggestions, DismissMethodSuggestions, ErrSuggestionContactGone]
+
+  # --- Rematch ---
+
+  - id: IMP-019
+    title: Adding contact methods triggers a historical rematch
+    type: business-logic
+    status: current
+    given: new methods appearing on a CRM contact (create, method-replacing update, enrichment, or suggestion resolve)
+    when: the write commits
+    then:
+      - a rematch event is published for the methods that have a registered handler
+      - the caller receives the rematch job id
+      - no job is minted when no handler covers any of the methods
+    provenance: [rematchRegistry.EligibleMethods, contact_methods.added publishers, RematchDispatcher]
+
+  - id: IMP-020
+    title: Rematch fans out per method type and backfills history
+    type: business-logic
+    status: current
+    given: a rematch job for a contact's new methods
+    when: the job runs
+    then:
+      - every handler registered for each method's type runs (email fans out to calendar, gmail, and gchat backfills; telegram and phone link stranded telegram messages)
+      - matched historical items are linked to the contact
+      - a handler failure fails the job and it is retried as a whole
+    provenance: [RematchService.Run, CalendarRematchHandler, GmailRematchHandler, UsernameRematchHandler]
+
+  - id: IMP-021
+    title: Rematch jobs are pollable from the moment they are announced
+    type: api
+    status: current
+    given: a rematch job id returned by a write
+    when: the caller polls the job endpoint
+    then:
+      - the job is visible immediately (registered pending before the worker picks it up)
+      - the response reports status, matched count, and the methods being rematched
+      - a manual rescan endpoint re-publishes over all of a contact's currently eligible methods, returning a null job id when none are eligible
+    provenance: [RematchRegistry.RegisterPending, GetRematchJob, RescanRematch]
+
+  # --- Review surfaces ---
+
+  - id: IMP-022
+    title: The suggestions feed unifies method suggestions and candidates
+    type: api
+    status: current
+    given: pending method suggestions and unmatched candidates
+    when: the suggestions feed is requested
+    then:
+      - method suggestions ride on top as a group (first page only)
+      - contact candidates follow, confidence-ranked and paginated
+      - each candidate declares its server-decided allowed actions
+    provenance: [GET /imports/suggestions, SuggestionItem, buildMethodSuggestionItems]
+
+  - id: IMP-023
+    title: Repeated messages from an unknown peer become a discovery candidate
+    type: business-logic
+    status: current
+    given: messages from a sender matched to no contact
+    when: the per-peer threshold is crossed
+    then:
+      - a discovery candidate is upserted into the import queue
+      - existing name fields are never overwritten with blanks, and metadata is merged rather than replaced
+    provenance: [UpsertTelegramDiscoveryCandidate]
+    notes: The message-ingest mechanics are telegram-domain scope; this pins the queue-side contract.
+
+  - id: IMP-024
+    title: Weak title-derived name tokens resolve as a group
+    type: business-logic
+    status: current
+    given: name tokens extracted from session titles (low-confidence discovery)
+    when: the user resolves a token
+    then:
+      - candidates are grouped by normalized token with their session-title evidence
+      - resolving (import, link, or ignore) applies to all live rows of the group atomically
+      - a concurrent import or link of the same group reports not-found rather than double-applying; a raced ignore is an idempotent no-op
+      - title tokens never auto-create contacts or interactions on their own
+    provenance: [anarlog title group queries, ResolveAnarlogTitle, mac-daemon-phase-2-anarlog-matching.md]
+    notes: Title extraction itself is mac-host domain; this pins the review-queue semantics.
+
+  - id: IMP-025
+    title: Unmatched meeting sessions surface as conflicts or orphans
+    type: business-logic
+    status: current
+    given: an ingested meeting session needing linkage review
+    when: it enters the needs-attention queue
+    then:
+      - a session with no linkage candidate is an orphan, resolvable by logging an impromptu interaction
+      - a session with multiple candidates is a conflict, carrying a persisted snapshot of the candidates and their participant overlap
+      - resolving a conflict validates the chosen candidate against that snapshot
+    provenance: [meeting_note linkage_state, conflict_candidates migration 056, needs-attention endpoint]
+    notes: Session ingest and linkage-state transitions are mac-host domain; this pins the review-surface contract.
+
+  # --- Surfaces ---
+
+  - id: IMP-026
+    title: The imports page is one review hub with two tabs
+    type: ux
+    status: current
+    given: pending imports and interaction reviews
+    when: the imports page renders
+    then:
+      - a People tab (default) holds method suggestions on top, then confidence-ranked candidates with source filters and pagination
+      - an Interactions tab holds conflicts and orphans, with an attention badge counting only those (discovery items excluded)
+      - manual sync triggers are offered for contact and calendar sources
+      - a low-confidence names section appears at the bottom only when title-derived tokens exist
+    provenance: [imports/page.tsx, SubTabs, NameCandidateSection]
+
+  - id: IMP-027
+    title: Candidates resolve in a single-view modal
+    type: ux
+    status: current
+    given: a candidate opened for resolution
+    when: the modal renders
+    then:
+      - everything is one scrollable view — no multi-step wizard
+      - the user chooses import-as-new or link-to-existing; link-only sources are locked to link
+      - the name is editable inline, and an empty name blocks resolution; an unresolved telegram peer requires a name edit before import
+      - methods are individually selectable with at most one marked primary; link mode distinguishes to-add from already-present methods (already-present ones cannot be re-selected), and a same-type different-value method is offered as an addition alongside the CRM value
+      - a cadence can be chosen; link mode pre-fills it from the existing contact
+    provenance: [suggestion-modal.tsx, method-selector.tsx, detectMethodConflicts]
+    notes: A conflict-resolution affordance (keep-CRM vs use-external toggle) exists in the code but is currently unreachable — the detector never emits a conflict state.
+
+  - id: IMP-028
+    title: The modal pages the whole queue
+    type: ux
+    status: current
+    given: several candidates in the queue
+    when: the modal is open
+    then:
+      - a position pager and arrow keys (inert while typing) move between candidates independent of list pagination (bounded at 1000 candidates)
+      - after resolving a candidate the modal advances to the next one, closing only when the queue is exhausted
+      - the suggested match, when present, is pre-selected in link mode
+    provenance: [ContactCandidateResolver pager, navigateModalToCandidate]
+
+  - id: IMP-029
+    title: Suggestion confidence surfaces on the link affordance
+    type: ux
+    status: current
+    given: a candidate with a suggested match
+    when: its card renders
+    then:
+      - the link action names the suggested contact with its confidence percentage
+      - without a suggestion, the link action asks the user to select a contact
+      - import is not offered on link-only sources
+    provenance: [CandidateCard, sourceAllowsImport]
+
+  - id: IMP-030
+    title: Method suggestions resolve against a fixed contact
+    type: ux
+    status: current
+    given: a pending method suggestion opened for review
+    when: the resolver renders
+    then:
+      - the target contact is fixed — no contact selection, no import mode
+      - methods already on the contact are shown disabled
+      - confirming requires at least one selected method; dismissing dismisses all pending ones stickily
+    provenance: [method-suggestion-resolver.tsx]
+
+  - id: IMP-031
+    title: Resolving review items updates every dependent surface without reload
+    type: ux
+    status: current
+    given: a resolution action on any review surface (import, link, ignore, suggestion, conflict, orphan, name token)
+    when: the action succeeds
+    then:
+      - the item leaves its queue and dependent counts update immediately
+      - dependent surfaces refresh through query invalidation scoped to the action (queue surfaces always; contact surfaces as affected by the action)
+      - a returned rematch job is registered for polling
+    provenance: [query-invalidation.ts import events, use-imports.ts]
+
+  # --- Proposed ---
+
+  - id: IMP-032
+    title: Import marks the candidate processed atomically with contact creation
+    type: business-logic
+    status: proposed
+    given: an import whose contact creation succeeds
+    when: the candidate row is marked imported
+    then:
+      - the candidate cannot remain unmatched once its contact exists (no duplicate-import window)
+    provenance: [ImportContact post-create UpdateMatch]
+    notes: 'Proposed: today a failure updating the candidate after creation logs a warning and still returns success, leaving the candidate re-importable as a duplicate.'
+
+  - id: IMP-033
+    title: Phone overlap scoring uses the canonical phone form
+    type: business-logic
+    status: proposed
+    given: phone methods compared for match-overlap scoring
+    when: the overlap is computed
+    then:
+      - both sides compare in canonical E.164 form, consistent with identity matching
+    provenance: [countMethodOverlap, NormalizePhoneLoose, NormalizePhoneE164]
+    notes: 'Proposed: today import overlap uses loose digit comparison, so differently shaped stored phones (with and without country code) can silently fail to overlap; flagged as open work in the enrichment design doc.'
+
+  - id: IMP-034
+    title: Every method-adding path triggers rematch
+    type: business-logic
+    status: proposed
+    given: any code path that adds methods to a contact from an external source
+    when: the methods are added
+    then:
+      - a rematch event is published so historical data backfills for the new identifiers
+    provenance: [SyncMethodsFromExternal, enrichment.go]
+    notes: 'Proposed: today the sync-methods path used by source auto-match adds methods without publishing the rematch event — a known divergence — so history is not backfilled until a later enrichment or manual rescan.'
+
+  - id: IMP-035
+    title: Duplicate-marked external contacts never surface as candidates
+    type: data
+    status: current
+    given: the same person synced from multiple accounts of a source
+    when: a row is marked as a duplicate of a canonical row
+    then:
+      - the duplicate row carries a pointer to its canonical row
+      - every candidate listing and count excludes duplicate-marked rows
+      - the person is represented in the queue only by the canonical row
+    provenance: [MarkAsDuplicate, external_contact.sql unmatched queries, duplicate_of_id]
+    notes: Reconciliation-side duplicate precedence is IMP-017.
