@@ -385,3 +385,93 @@ func TestOpWorker_UpdateDescription_MissingKeyPermanent(t *testing.T) {
 	require.Truef(t, errors.As(err, &cancel), "missing description key must be a permanent JobCancel, got %v", err)
 	require.Empty(t, client.commands)
 }
+
+// -----------------------------------------------------------------------------
+// close / delete verbs (step 4).
+// -----------------------------------------------------------------------------
+
+func TestOpWorker_Close_ManagedIssuesItemClose(t *testing.T) {
+	taskID := uuid.New()
+	repo := newFakeOpTaskRepo(&repository.ContactTask{
+		ID:             taskID,
+		State:          repository.ContactTaskStateManaged,
+		ExternalTaskID: "remote-7",
+	})
+	client := &fakeOpClient{}
+	w := newOpWorker(repo, client, &recordingInserter{})
+
+	err := w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpClose))
+	require.NoError(t, err)
+	require.Len(t, client.commands, 1)
+	require.Equal(t, "item_close", client.commands[0].Type)
+	require.Equal(t, "remote-7", client.commands[0].Args["id"])
+	require.Equal(t, taskOpCommandUUID(consumerjobs.TaskOpClose, taskID, ""), client.commands[0].UUID)
+}
+
+func TestOpWorker_Close_EmptyExternalID_PendingSnoozes(t *testing.T) {
+	taskID := uuid.New()
+	repo := newFakeOpTaskRepo(&repository.ContactTask{
+		ID:             taskID,
+		State:          repository.ContactTaskStatePendingRemoteCreate,
+		ExternalTaskID: "",
+	})
+	client := &fakeOpClient{}
+	w := newOpWorker(repo, client, &recordingInserter{})
+
+	err := w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpClose))
+	requireSnooze(t, err)
+	require.Empty(t, client.commands)
+}
+
+func TestOpWorker_Close_EmptyExternalID_TerminalNoOp(t *testing.T) {
+	taskID := uuid.New()
+	repo := newFakeOpTaskRepo(&repository.ContactTask{
+		ID:             taskID,
+		State:          repository.ContactTaskStateCompleted,
+		ExternalTaskID: "",
+	})
+	client := &fakeOpClient{}
+	w := newOpWorker(repo, client, &recordingInserter{})
+
+	err := w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpClose))
+	require.NoError(t, err, "terminal row that never created a remote task → no-op")
+	require.Empty(t, client.commands)
+}
+
+func TestOpWorker_Delete_IssuesItemDeleteIdempotent(t *testing.T) {
+	taskID := uuid.New()
+	repo := newFakeOpTaskRepo(&repository.ContactTask{
+		ID:             taskID,
+		State:          repository.ContactTaskStateManaged,
+		ExternalTaskID: "remote-8",
+	})
+	client := &fakeOpClient{}
+	w := newOpWorker(repo, client, &recordingInserter{})
+
+	require.NoError(t, w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpDelete)))
+	// Idempotent on repeat: a second execution issues item_delete again
+	// without error (Todoist ignores a delete of an already-gone task).
+	require.NoError(t, w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpDelete)))
+	require.Len(t, client.commands, 2)
+	require.Equal(t, "item_delete", client.commands[0].Type)
+	require.Equal(t, "item_delete", client.commands[1].Type)
+	require.Equal(t, "remote-8", client.commands[0].Args["id"])
+	require.Equal(t, taskOpCommandUUID(consumerjobs.TaskOpDelete, taskID, ""), client.commands[0].UUID,
+		"both delete attempts carry the same deterministic UUID (harmless retry)")
+	require.Equal(t, client.commands[0].UUID, client.commands[1].UUID)
+}
+
+func TestOpWorker_TerminalOp_TodoistFailureBubblesUp(t *testing.T) {
+	taskID := uuid.New()
+	repo := newFakeOpTaskRepo(&repository.ContactTask{
+		ID:             taskID,
+		State:          repository.ContactTaskStateManaged,
+		ExternalTaskID: "remote-7",
+	})
+	client := &fakeOpClient{syncErr: errors.New("500 upstream")}
+	w := newOpWorker(repo, client, &recordingInserter{})
+
+	err := w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpClose))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "todoist close")
+}

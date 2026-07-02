@@ -90,6 +90,8 @@ func (w *TodoistTaskOpWorker) Work(ctx context.Context, j *river.Job[consumerjob
 	}
 	taskID := j.Args.ContactTaskID
 	switch j.Args.Op {
+	case consumerjobs.TaskOpClose, consumerjobs.TaskOpDelete:
+		return w.executeTerminalOp(ctx, taskID, j.Args.Op)
 	case consumerjobs.TaskOpUpdateDeadline:
 		return w.executeUpdate(ctx, taskID, deadlineUpdateVerb())
 	case consumerjobs.TaskOpUpdateDescription:
@@ -104,6 +106,47 @@ func (w *TodoistTaskOpWorker) Work(ctx context.Context, j *river.Job[consumerjob
 // covers the create path; per-verb tightening isn't worth the complexity.
 func (*TodoistTaskOpWorker) Timeout(*river.Job[consumerjobs.TodoistTaskOpArgs]) time.Duration {
 	return 60 * time.Second
+}
+
+// executeTerminalOp runs the close or delete verb. Pool read only (no
+// local write): if the row has no external id yet it snoozes while the
+// row is still pending_remote_create (a create is in flight; the close/
+// delete will succeed once finalize lands) and no-ops otherwise (nothing
+// was ever created remotely). With an external id it issues item_close /
+// item_delete with the deterministic command UUID; both are naturally
+// idempotent server-side, so retries are harmless.
+func (w *TodoistTaskOpWorker) executeTerminalOp(ctx context.Context, taskID uuid.UUID, op string) error {
+	task, err := w.deps.taskRepo.GetContactTask(ctx, taskID)
+	if err != nil {
+		return fmt.Errorf("fetch contact_task %s: %w", taskID, err)
+	}
+	if task.ExternalTaskID == "" {
+		if task.State == repository.ContactTaskStatePendingRemoteCreate {
+			return river.JobSnooze(opUpdateSnoozeDelay)
+		}
+		// Terminal row, nothing created remotely — nothing to close/delete.
+		return nil
+	}
+
+	_, accessToken, err := w.deps.settings(ctx)
+	if err != nil {
+		return fmt.Errorf("get todoist settings: %w", err)
+	}
+	client := w.deps.clientFactory(accessToken)
+	var cmd todoist.SyncCommand
+	switch op {
+	case consumerjobs.TaskOpClose:
+		cmd = todoist.NewItemCloseCommand(task.ExternalTaskID)
+	case consumerjobs.TaskOpDelete:
+		cmd = todoist.NewItemDeleteCommand(task.ExternalTaskID)
+	default:
+		return river.JobCancel(fmt.Errorf("executeTerminalOp: non-terminal op %q", op))
+	}
+	cmd.UUID = taskOpCommandUUID(op, taskID, "")
+	if _, err := client.Sync(ctx, "*", nil, []todoist.SyncCommand{cmd}); err != nil {
+		return fmt.Errorf("todoist %s: %w", op, err)
+	}
+	return nil
 }
 
 // opUpdateVerb describes an update_* verb: how to extract the value being
