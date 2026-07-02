@@ -6,6 +6,7 @@ import type {
   ContactListParams,
   OverdueContact,
 } from '@/types/contact'
+import type { CadenceFilter, FollowupFilter, SortField, SortOrder } from './contact-list-params'
 
 export interface ContactsListResponse {
   contacts: Contact[]
@@ -21,11 +22,11 @@ export interface ContactIDsResponse {
 }
 
 export interface ContactIDsParams {
-  sort?: string
-  order?: 'asc' | 'desc'
+  sort?: SortField
+  order?: SortOrder
   search?: string
-  cadence_filter?: 'has_cadence' | 'no_cadence'
-  followup_filter?: 'has_followup' | 'no_followup'
+  cadence_filter?: CadenceFilter
+  followup_filter?: FollowupFilter
 }
 
 export const contactsApi = {

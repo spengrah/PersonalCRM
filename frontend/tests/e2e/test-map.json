@@ -225,6 +225,10 @@
     "tags": ["@area:contacts", "@area:contact-navigation", "@area:overdue"]
   },
   {
+    "pattern": "^frontend/src/lib/contact-list-params\\.ts$",
+    "tags": ["@area:contacts", "@area:contact-navigation", "@area:overdue"]
+  },
+  {
     "pattern": "^frontend/src/lib/contact-methods\\.ts$",
     "tags": ["@area:contacts", "@area:contact-merge"]
   },
