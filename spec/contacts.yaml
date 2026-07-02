@@ -1,0 +1,578 @@
+domain: contacts
+prefix: CON
+maturity: reviewed
+behaviors:
+  # --- CRUD ---
+
+  - id: CON-001
+    title: Creating a contact initializes cadence tracking from creation time
+    type: business-logic
+    status: current
+    given: a create request with a full name and optionally a cadence
+    when: the contact is created
+    then:
+      - last_contacted is initialized to the creation time
+      - contact_by is computed from the cadence and last_contacted
+      - without a cadence, contact_by is unset
+    provenance: [ContactService.CreateContact, createRequestToRepo, ContactRepository.CreateContact]
+    notes: last_contacted at creation is deliberate — a new contact starts its cadence clock immediately rather than appearing overdue.
+
+  - id: CON-002
+    title: Contact create validates fields and returns the created contact
+    type: api
+    status: current
+    given: a POST to the contacts collection
+    when: the request is validated
+    then:
+      - full_name is required, 1-255 characters
+      - location is limited to 255 characters and how_met to 500
+      - profile_photo must be a URL of at most 500 characters
+      - birthday must parse as a valid date
+      - cadence must be one of weekly, biweekly, monthly, quarterly, biannual, annual
+      - an invalid request is rejected with a validation error (400)
+      - a valid request creates the contact and returns it (201)
+    provenance: [ContactHandler.CreateContact, CreateContactRequest]
+
+  - id: CON-003
+    title: Creating a contact dual-writes its person node
+    type: data
+    status: current
+    given: a contact create in progress
+    when: the contact row is written
+    then:
+      - a person-type graph node is created in the same transaction
+      - the node id equals the contact id
+      - the node canonical label equals the contact full name
+    provenance: [ContactService.CreateContact, NodeRepository.CreateNodeTx, .ai/guides/architecture.md]
+
+  - id: CON-004
+    title: Contact writes never set location, birthday, or how-met directly
+    type: invariant
+    status: current
+    statement: contact create, update, and merge never write the location, birthday, or how_met columns directly — those fields are routed through the knowledge domain, and the contact returned from a write already reflects the routed values.
+    provenance: [knowledgeWriter.assertCreate, contact.sql, .ai/guides/architecture.md]
+    notes: Enforced by code wiring (services hard-error if the knowledge writer is unset), not by a DB constraint. How the knowledge domain derives and refreshes these cache columns is knowledge-domain scope.
+
+  - id: CON-005
+    title: Fetching a contact reports liveness and follow-up state
+    type: api
+    status: current
+    given: a GET for a single contact by id
+    when: the contact is fetched
+    then:
+      - a live contact is returned with a has_pending_followup flag
+      - an unknown or soft-deleted contact returns not-found (404)
+      - a malformed id returns a validation error (400)
+    provenance: [ContactHandler.GetContact, ContactTaskRepository.HasPendingFollowUp]
+    notes: has_pending_followup is best-effort — a failure computing it logs and reports false rather than failing the read.
+
+  - id: CON-006
+    title: Contact update is full-replace for managed profile fields
+    type: business-logic
+    status: current
+    given: an existing contact with cadence, location, and birthday set
+    when: an update request omits or blanks some of those fields
+    then:
+      - an omitted cadence clears the cadence and its contact_by
+      - an omitted or blank location clears the location
+      - an omitted birthday clears the birthday
+      - an omitted how_met is a no-op (preserved, not cleared)
+    provenance: [ContactService.UpdateContact, knowledgeWriter.applyUpdate]
+    notes: how_met is asymmetric by design — the edit form has no how-met input, so its absence must not wipe assertion history.
+
+  - id: CON-007
+    title: contact_by is server-derived on update
+    type: business-logic
+    status: current
+    given: an update request carrying a cadence
+    when: the contact is updated
+    then:
+      - contact_by is recomputed from the submitted cadence and the existing base date (last_contacted, else created_at)
+      - any client-supplied contact_by value is ignored
+    provenance: [ContactService.UpdateContact, cadence.ApplyContactByOverride]
+
+  - id: CON-008
+    title: Method replacement is gated on the methods field being present
+    type: business-logic
+    status: current
+    given: an existing contact with contact methods
+    when: an update request is applied
+    then:
+      - if the methods field is omitted, existing methods are untouched
+      - if the methods field is provided (including as an empty list), the method set is fully replaced
+    provenance: [ContactHandler.UpdateContact, ContactService.replaceMethods]
+
+  - id: CON-009
+    title: Renaming a contact syncs its person-node label
+    type: data
+    status: current
+    given: an existing contact and its person node
+    when: the contact full name changes (update or merge)
+    then:
+      - the node canonical label is updated to the new name in the same transaction
+    provenance: [ContactService.UpdateContact, UpdateNodeCanonicalLabelTx]
+
+  - id: CON-010
+    title: Deleting a contact is a minimal two-row soft delete
+    type: data
+    status: current
+    given: a live contact with methods, interactions, notes, and tasks
+    when: the contact is deleted
+    then:
+      - the contact row is soft-deleted (deleted_at set)
+      - the contact's person node is soft-deleted in the same transaction
+      - the contact's assertions are retained in the assertion table but drop out of live graph reads
+      - dependent records (methods, interactions, notes, tasks, identities) are not deleted or repointed; they are hidden via the contact's liveness filter
+    provenance: [ContactService.DeleteContact, SoftDeleteNodeTx, contact_merge_node_integration_test.go]
+    notes: Deliberately minimal — recovery/audit is the rationale for soft deletes. Stale external-identity pointers are defended at read time by contact-liveness guards. HTTP contract in CON-048.
+
+  # --- Contact methods ---
+
+  - id: CON-011
+    title: Contact method types are a closed set
+    type: data
+    status: current
+    given: a contact method write
+    when: the method type is checked
+    then:
+      - only email, phone, telegram, discord, twitter, signal, gchat, and whatsapp are accepted
+      - the set is enforced both by request validation and a database CHECK constraint
+    provenance: [contact_method CHECK constraint, ContactMethodRequest, migrations 007/008/020]
+
+  - id: CON-012
+    title: Method values are normalized per family and deduplicated on the normalized form
+    type: data
+    status: current
+    given: a contact method value being saved
+    when: the value is normalized
+    then:
+      - email-family values (email, gchat) are lowercased and trimmed
+      - handle-family values (telegram, twitter, discord) are lowercased with any leading @ stripped
+      - phone-family values (phone, signal, whatsapp) are normalized toward E.164
+      - uniqueness is enforced per contact on (type, normalized value)
+    provenance: [identity.Normalize, NormalizeContactMethodValue, idx_contact_method_unique_value]
+
+  - id: CON-013
+    title: At most one primary contact method per contact
+    type: invariant
+    status: current
+    statement: a contact can have at most one primary contact method across all types, enforced by request validation (rejecting multiple primaries) and a partial unique index over rows flagged primary.
+    provenance: [validateContactMethods, idx_contact_method_primary]
+
+  - id: CON-014
+    title: Contact methods display in a stable priority order
+    type: business-logic
+    status: current
+    given: a contact with several methods
+    when: methods are listed
+    then:
+      - the primary method sorts first
+      - remaining methods follow a fixed type priority (email, phone, whatsapp, telegram, signal, discord, twitter, gchat)
+      - ties are broken oldest-first
+    provenance: [sortContactMethods, ListContactMethodsByContact]
+
+  - id: CON-015
+    title: Method payload validation catches format and duplicate errors
+    type: api
+    status: current
+    given: a create or update request carrying contact methods
+    when: methods are validated
+    then:
+      - blank-valued entries are dropped rather than rejected
+      - email-family values must be valid email addresses
+      - phone-family values are limited to 50 characters
+      - two entries with the same type and normalized value are rejected as duplicates
+      - more than one entry marked primary is rejected
+    provenance: [normalizeContactMethodRequests, validateContactMethods]
+
+  # --- List, sort, filter, search ---
+
+  - id: CON-017
+    title: Contact list is paginated with a bounded page size
+    type: api
+    status: current
+    given: a GET on the contacts collection
+    when: pagination parameters are applied
+    then:
+      - the default is page 1 with 20 rows
+      - the page size is capped at 1000
+      - the response meta reports the total filtered row count and page count
+    provenance: [ListContactsQuery, BuildPaginationMeta]
+
+  - id: CON-018
+    title: List sorting and filtering accept a fixed vocabulary
+    type: api
+    status: current
+    given: a GET on the contacts collection with sort or filter parameters
+    when: parameters are validated
+    then:
+      - sort accepts name, location, birthday, last_contacted, last_response_at, contact_by, cadence
+      - order accepts asc and desc
+      - cadence_filter accepts has_cadence and no_cadence
+      - followup_filter accepts has_followup and no_followup
+      - anything else is rejected with a validation error (400)
+    provenance: [ListContactsQuery, ContactHandler.ListContacts]
+    notes: sort=last_contacted is accepted by the API but no list column currently exposes it in the UI.
+
+  - id: CON-019
+    title: Date-typed sorts keep missing values at the end
+    type: business-logic
+    status: current
+    given: contacts with and without a value in a date-typed sort field (birthday, last_contacted, last_response_at, contact_by)
+    when: the list is sorted by that field
+    then:
+      - contacts without a value sort after all contacts with a value
+      - this holds for both ascending and descending order
+    provenance: [contact.sql sorted queries, .ai/rules/core.md NULLS LAST gotcha]
+
+  - id: CON-020
+    title: Cadence sort orders by contact frequency
+    type: business-logic
+    status: current
+    given: contacts with mixed cadences
+    when: the list is sorted by cadence
+    then:
+      - cadences rank by frequency (weekly most frequent through annual least, no-cadence last)
+      - descending order puts the most frequent cadence first
+      - ties are broken by full name ascending
+    provenance: [ListContactsSorted cadence rank CASE, contact.sql]
+
+  - id: CON-021
+    title: Cadence filter treats null and empty string as "no cadence"
+    type: business-logic
+    status: current
+    given: contacts whose cadence is null, empty string, or a valid value
+    when: cadence_filter is applied
+    then:
+      - has_cadence matches only contacts whose cadence is non-null and non-empty
+      - no_cadence matches contacts whose cadence is null or empty
+    provenance: [contact.sql cadence_filter predicates, .ai/rules/core.md three-state gotcha]
+
+  - id: CON-022
+    title: Follow-up filter keys on live follow-up tasks
+    type: business-logic
+    status: current
+    given: contacts with and without follow-up tasks
+    when: followup_filter is applied
+    then:
+      - has_followup matches contacts with a live follow-up-loop task (managed or pending remote create)
+      - no_followup matches the complement
+    provenance: [contact.sql followup_filter EXISTS predicate]
+
+  - id: CON-023
+    title: Search matches names and method values, ranked by relevance
+    type: business-logic
+    status: current
+    given: a search term
+    when: the contact list is searched
+    then:
+      - the term is matched full-text against the full name and all contact method values
+      - without an explicit sort, results order by relevance
+      - an explicit sort overrides relevance ordering
+    provenance: [SearchContacts, SearchContactsSorted, contact.sql]
+
+  - id: CON-024
+    title: Soft-deleted contacts are invisible to all reads
+    type: invariant
+    status: current
+    statement: soft-deleted contacts are excluded from every list, search, count, navigation-ID, and single-contact read; only their id-preserving rows remain in the database.
+    provenance: [contact.sql deleted_at IS NULL filters, .ai/rules/core.md Soft Deletes]
+
+  - id: CON-025
+    title: Navigation IDs apply the same query semantics as the list
+    type: business-logic
+    status: current
+    given: a sort/filter/search context
+    when: the ordered ID list is requested (ids_only)
+    then:
+      - the complete list of matching contact ids is returned, with the same sort and filter semantics applied as the visible list
+      - no pagination is applied to the ID list
+    provenance: [ListContactIDsSorted, ContactHandler.ListContacts ids_only path]
+    notes: Exact order agreement with the list is CON-039; it is only guaranteed once orderings are tie-broken deterministically (CON-026).
+
+  - id: CON-026
+    title: Every list ordering is deterministic under ties
+    type: invariant
+    status: proposed
+    statement: every contact list ordering (all sorts, relevance-ranked search, and the no-sort default) includes a final unique tie-breaker so that equal-valued rows never swap between requests, paginated pages never drop or duplicate rows, and prev/next navigation order is stable.
+    provenance: [.ai/rules/core.md deterministic ordering gotcha, contact.sql]
+    notes: 'Proposed: today only the cadence sort has a tie-breaker (full name) and the default unsorted list has no ORDER BY at all; ties can reorder across requests.'
+
+  # --- Merge ---
+
+  - id: CON-027
+    title: Merge transfers source methods, skipping duplicates
+    type: business-logic
+    status: current
+    given: a merge of a source contact into a target, where source and target do not hold primaries of different method types
+    when: contact methods are merged
+    then:
+      - source methods whose type and normalized value already exist on the target are dropped
+      - source primary flags are demoted where the target already has a primary of the same type
+      - remaining source methods are repointed to the target
+    provenance: [DeleteDuplicateContactMethods, DemoteSourcePrimaryMethods, TransferContactMethods]
+    notes: Demotion is per-type while the one-primary rule is per-contact — a cross-type dual-primary pair currently fails the merge; CON-049 proposes the fix.
+
+  - id: CON-028
+    title: Merge combines notepad notes and transfers the rest
+    type: business-logic
+    status: current
+    given: source and target contacts that both have notepad notes
+    when: they are merged
+    then:
+      - the notepad bodies are combined into the target with a visible separator
+      - non-notepad notes are transferred to the target
+    provenance: [ContactService.MergeContacts notepad step, TransferNotes]
+
+  - id: CON-029
+    title: Merge transfers the full interaction history
+    type: business-logic
+    status: current
+    given: a source contact with interactions, including soft-deleted ones
+    when: it is merged into a target
+    then:
+      - all source interactions are repointed to the target, including soft-deleted ones (audit trail preserved)
+    provenance: [TransferInteractions]
+
+  - id: CON-030
+    title: Merge repoints attribution and defends against racing ingest
+    type: business-logic
+    status: current
+    given: a source contact referenced by calendar events, external identities, external contacts, and ingested messages
+    when: it is merged into a target
+    then:
+      - calendar event contact references are replaced and deduplicated
+      - external identities, external contacts, and message attributions are repointed to the target
+      - after commit, a best-effort second pass re-repoints rows raced in by concurrent ingest
+    provenance: [ReplaceContactInCalendarEvents, repointMergedAttributionSecondPass, contact_merge_identity_attribution_integration_test.go]
+    notes: A row raced in after the second pass strands until fixed via the import UI — accepted residual.
+
+  - id: CON-031
+    title: Merge closes automated tasks and repoints manual ones
+    type: business-logic
+    status: current
+    given: a source contact with live contact tasks
+    when: it is merged into a target
+    then:
+      - manual tasks (user content) are repointed to the target
+      - automated tasks (cadence/follow-up) are closed rather than repointed
+    provenance: [RepointManualContactTasksToContact, CompleteLiveTasksForContactTx]
+    notes: Repointing automated tasks would collide with the target's own live automated rows under the per-contact uniqueness rule. Propagating the close to the remote task provider is todoist-domain scope.
+
+  - id: CON-032
+    title: Merge applies per-field user selections with the target as default
+    type: business-logic
+    status: current
+    given: a merge where source and target differ on cadence, location, or birthday
+    when: the merged profile is assembled
+    then:
+      - each of cadence, location, and birthday follows the user's source/target selection
+      - a source selection applies only when the source value is non-nil
+      - an optional new name overrides the merged full name
+    provenance: [buildMergeUpdateRequest, MergeContactsRequest.FieldSelections]
+
+  - id: CON-033
+    title: Merge tombstones the loser node and repoints its assertions first
+    type: data
+    status: current
+    given: a merge in progress
+    when: the graph merge step runs
+    then:
+      - the source node is tombstoned with a merged-into pointer and deleted_at
+      - all source assertions are repointed onto the target node
+      - the graph merge runs before the field-selection apply, so the user's chosen values are asserted last and win
+    provenance: [SetNodeMergedIntoTx, AssertService.MergeAssertionsTx, knowledgeWriter.mergeNodes]
+
+  - id: CON-034
+    title: Merged cadence timestamps take the most recent of the pair
+    type: business-logic
+    status: current
+    given: source and target contacts with differing cadence timestamps
+    when: they are merged
+    then:
+      - last_contacted, last_outreach_at, and last_response_at each take the max of source and target
+      - contact_by is re-derived from the chosen merged cadence and the merged base date
+      - last_interaction_at is not bumped (a merge is not an interaction)
+    provenance: [buildMergeCadenceFields, cadence.BulkApply]
+
+  - id: CON-035
+    title: Merge archives the source contact
+    type: business-logic
+    status: current
+    given: a completed merge
+    when: the transaction finishes
+    then:
+      - the source contact is soft-deleted
+      - the merged target contact is returned with its methods attached
+    provenance: [ContactService.MergeContacts final step]
+
+  - id: CON-036
+    title: Self-merge is rejected as a client error
+    type: api
+    status: proposed
+    given: a merge request whose source and target are the same contact
+    when: the request is handled
+    then:
+      - the request is rejected with a client-error status (400-level), not a server error
+    provenance: [ContactService.MergeContacts self-merge check, ContactHandler.MergeContacts]
+    notes: 'Proposed: today the self-merge guard returns a plain error that the handler maps to 500.'
+
+  - id: CON-037
+    title: Merge preview reports what a merge would transfer
+    type: api
+    status: current
+    given: a GET of the merge preview for a source/target pair
+    when: the preview is computed
+    then:
+      - it reports methods to transfer (net of duplicates), duplicate methods skipped, notes, interactions, and calendar events affected
+      - a missing source or target returns not-found (404)
+      - a missing or malformed source id returns a validation error (400)
+    provenance: [ContactHandler.GetMergePreview, MergePreviewResponse]
+
+  # --- Surfaces (list page, detail, navigation, birthdays) ---
+
+  - id: CON-038
+    title: List and detail navigation share one default ordering
+    type: ux
+    status: current
+    given: no explicit sort has been chosen
+    when: the contact list renders and a contact is opened from it
+    then:
+      - the list defaults to cadence order, most frequent first
+      - the detail page's prev/next navigation uses the same default
+    provenance: [DEFAULT_SORT_FIELD/DEFAULT_SORT_ORDER, contacts page, contact detail listContext]
+
+  - id: CON-039
+    title: Prev/next order equals list order under the same context
+    type: invariant
+    status: proposed
+    statement: the detail page's prev/next navigation traverses contacts in exactly the order of the list the user came from — the sort, order, search, and filter context is carried in the navigation URLs and drives the same ordered ID query that backs the list.
+    provenance: [buildContactUrl, buildNavigationUrl, useContactIDs]
+    notes: 'Proposed: the context is carried and the same query semantics run today, but exact order agreement is not guaranteed under ties until orderings are deterministic (CON-026).'
+
+  - id: CON-040
+    title: Keyboard navigation drives the contact detail page
+    type: ux
+    status: current
+    given: a contact detail page opened from a list
+    when: keyboard input is used outside form fields
+    then:
+      - left/right arrows move to the previous/next contact, disabled at the boundaries
+      - arrows are inert while editing or while focus is in an input
+      - Enter opens edit mode
+      - Escape discards edit mode, or returns to the list (context preserved) when not editing
+    provenance: [ContactNavigationBar, use-keyboard-navigation.ts, contact-navigation.spec.ts]
+
+  - id: CON-041
+    title: Action parameters trigger once and are consumed
+    type: ux
+    status: current
+    given: a detail URL carrying a one-time action parameter (edit or merge)
+    when: the page mounts
+    then:
+      - the action runs once (edit mode opens, or the merge modal opens)
+      - the parameter is stripped from the URL so refresh or back-navigation does not re-trigger it
+    provenance: [contact detail action-param effect, .ai/rules/core.md one-time action gotcha]
+
+  - id: CON-042
+    title: Deleting a contact requires explicit confirmation
+    type: ux
+    status: current
+    given: a contact detail page
+    when: the user asks to delete the contact
+    then:
+      - a confirmation prompt warns the action cannot be undone
+      - only on confirmation is the contact deleted
+      - on success the user is returned to the contact list
+    provenance: [contact detail handleDeleteContact, useDeleteContact]
+
+  - id: CON-043
+    title: The merge flow keeps the current contact and archives the chosen source
+    type: ux
+    status: current
+    given: a merge started from a contact (detail button or list action)
+    when: the merge modal is used
+    then:
+      - the current contact is marked as kept; the user picks a source to archive from a searchable selector that excludes the target
+      - selecting a source loads a preview of what will transfer
+      - conflicting fields (cadence, location, birthday) offer a source/target toggle defaulting to keep the target's value
+      - the merged name is editable, with a quick-fill to adopt the source's name
+      - the merge cannot be submitted before a source is selected, while the preview is loading, or while a merge is in flight
+      - the outcome is reported and auto-dismissed
+    provenance: [merge-contact-modal.tsx, use-merge.ts, contact-merge.spec.ts]
+
+  - id: CON-044
+    title: Mark-as-contacted logs a mutual interaction from the list
+    type: ux
+    status: current
+    given: a contact row in the list
+    when: the user marks it as contacted via the row actions
+    then:
+      - a mutual-direction interaction is logged, timestamped by the server
+    provenance: [contacts page handleMarkAsContacted, useCreateInteraction]
+
+  - id: CON-045
+    title: The birthdays page groups contacts by proximity
+    type: ux
+    status: current
+    given: contacts with birthdays, some with a placeholder year
+    when: the birthdays page renders
+    then:
+      - contacts are grouped into today, upcoming, and already-celebrated-this-year sections
+      - a gift-planning section for early next year appears only near year end
+      - upcoming birthdays sort soonest-first; celebrated ones sink to the end
+      - placeholder-year birthdays display without an age
+      - the page follows the app's accelerated time
+    provenance: [birthdays/page.tsx, birthdays.spec.ts, isPlaceholderBirthday]
+    notes: Month/day-only birthdays are stored with a placeholder year (1900) — the sentinel drives the age suppression.
+
+  - id: CON-046
+    title: Failed quick actions surface an error to the user
+    type: ux
+    status: proposed
+    given: a quick action (mark-as-contacted or delete) whose request fails
+    when: the failure occurs
+    then:
+      - the user sees an error indication rather than silent inaction
+    provenance: [contacts page handleMarkAsContacted, contact detail handleDeleteContact]
+    notes: 'Proposed: today a mark-as-contacted failure is logged to the console only and a delete failure is swallowed entirely; the user gets no feedback either way.'
+
+  - id: CON-047
+    title: Contact update validates fields and returns the updated contact
+    type: api
+    status: current
+    given: a PUT for an existing contact
+    when: the request is handled
+    then:
+      - field validation follows the same rules as create (name required and bounded, cadence from the closed set, methods validated)
+      - an invalid request is rejected with a validation error (400)
+      - an unknown or soft-deleted contact returns not-found (404)
+      - a valid request returns the updated contact (200)
+    provenance: [ContactHandler.UpdateContact, UpdateContactRequest]
+
+  - id: CON-048
+    title: Contact delete returns no content and admits no hard delete
+    type: api
+    status: current
+    given: a DELETE for a contact
+    when: the request is handled
+    then:
+      - a malformed id returns a validation error (400)
+      - an unknown or already-deleted contact returns not-found (404)
+      - a successful delete returns no content (204) with an empty body
+      - no hard-delete operation is exposed through the API
+    provenance: [ContactHandler.DeleteContact]
+    notes: Delete persistence semantics in CON-010.
+
+  - id: CON-049
+    title: Merge resolves primary-method collisions without failing
+    type: business-logic
+    status: proposed
+    given: a source and target that each have a primary contact method of different types
+    when: they are merged
+    then:
+      - the merge succeeds
+      - the target's existing primary is preserved
+      - the source's primary flags are demoted regardless of method type
+    provenance: [DemoteSourcePrimaryMethods, idx_contact_method_primary]
+    notes: 'Proposed: demotion is currently per-type while the unique index is one-primary-per-contact, so a cross-type dual-primary merge fails with a constraint violation today (see CON-027).'
