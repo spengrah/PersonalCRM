@@ -8,7 +8,9 @@ import type {
 export const contactTasksApi = {
   // List tasks for a contact
   async listTasks(contactId: string, params: ContactTaskListParams = {}): Promise<ContactTask[]> {
-    return apiClient.get<ContactTask[]>(`/api/v1/contacts/${contactId}/tasks`, params)
+    // Spread into a fresh object literal: interfaces lack the implicit index
+    // signature that apiClient's Record<string, unknown> params require.
+    return apiClient.get<ContactTask[]>(`/api/v1/contacts/${contactId}/tasks`, { ...params })
   },
 
   // Create a manual (user-picker) task — kind in {reach_out, send, reminder}.

@@ -100,6 +100,10 @@
     "tags": ["@area:settings"]
   },
   {
+    "pattern": "^frontend/src/app/test-api/",
+    "tags": ["@smoke"]
+  },
+  {
     "pattern": "^frontend/src/components/contacts/",
     "tags": [
       "@area:contacts",
@@ -116,6 +120,10 @@
   {
     "pattern": "^frontend/src/components/settings/",
     "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^frontend/src/components/ui/time-acceleration-widget\\.tsx$",
+    "tags": ["@area:navigation"]
   },
   {
     "pattern": "^frontend/src/components/ui/pagination\\.tsx$",
@@ -223,6 +231,16 @@
   {
     "pattern": "^frontend/src/lib/method-conflict-detection\\.ts$",
     "tags": ["@area:contact-merge"]
+  },
+  {
+    "pattern": "^frontend/src/lib/validations/",
+    "tags": [
+      "@area:contacts",
+      "@area:contact-navigation",
+      "@area:contact-merge",
+      "@area:meetings",
+      "@area:overdue"
+    ]
   },
   {
     "pattern": "^frontend/src/lib/notes-api\\.ts$",
@@ -608,6 +626,10 @@
   },
   {
     "pattern": "^backend/internal/spec/",
+    "tags": []
+  },
+  {
+    "pattern": "^frontend/src/.*/__tests__/",
     "tags": []
   }
 ]

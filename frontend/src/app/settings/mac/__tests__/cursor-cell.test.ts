@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { renderCursorCell } from '../page'
+import { renderCursorCell } from '../cursor-cell'
 
 describe('renderCursorCell', () => {
   it('renders contact count for icloud_contacts when backfill_complete and counts loaded', () => {

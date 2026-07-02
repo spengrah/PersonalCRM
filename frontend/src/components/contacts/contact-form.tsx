@@ -12,6 +12,8 @@ import {
   contactSchema,
   transformContactFormData,
   type ContactFormData,
+  type ContactFormInput,
+  type ContactSubmitData,
 } from '@/lib/validations/contact'
 import {
   CONTACT_METHOD_OPTIONS,
@@ -24,7 +26,7 @@ import { clsx } from 'clsx'
 interface ContactFormProps {
   contact?: Contact
   initialNotes?: string
-  onSubmit: (data: ContactFormData) => void | Promise<void>
+  onSubmit: (data: ContactSubmitData) => void | Promise<void>
   loading?: boolean
   submitText?: string
 }
@@ -62,7 +64,7 @@ export function ContactForm({
     control,
     setValue,
     watch,
-  } = useForm<ContactFormData>({
+  } = useForm<ContactFormInput, unknown, ContactFormData>({
     resolver: zodResolver(contactSchema),
     defaultValues: contact
       ? {

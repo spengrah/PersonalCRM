@@ -138,7 +138,10 @@ export const contactSchema = z
     }
   })
 
-export type ContactFormData = z.infer<typeof contactSchema>
+// Raw form values (schema input): is_primary may be absent before zod applies its default
+export type ContactFormInput = z.input<typeof contactSchema>
+// Validated form values (schema output)
+export type ContactFormData = z.output<typeof contactSchema>
 
 // Transform form data to API format (convert empty strings to undefined)
 export function transformContactFormData(data: ContactFormData) {
@@ -171,3 +174,7 @@ export function transformContactFormData(data: ContactFormData) {
     notes: data.notes && data.notes.trim() !== '' ? data.notes : undefined,
   }
 }
+
+// Payload the form submits after normalization/filtering — methods are guaranteed
+// to have a valid type, non-empty value, and explicit is_primary
+export type ContactSubmitData = ReturnType<typeof transformContactFormData>
