@@ -166,6 +166,8 @@ func newProviderTestEnv(t *testing.T) *providerTestEnv {
 		cadenceFake,
 		database.Pool,
 		DefaultClientFactory,
+		nil,   // riverInserter: dismissal paths never reach the temp-ID finalize
+		false, // remoteCloseEnabled: mirrors follow-up mode off in this harness
 	)
 
 	settings := Settings{

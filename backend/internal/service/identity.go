@@ -132,24 +132,52 @@ func (s *IdentityService) MatchOrCreate(ctx context.Context, req MatchRequest) (
 		return s.recordKnownMatch(ctx, normalized, req)
 	}
 
-	// 3. Discovery path: check cache first
+	// 3. Discovery path: check cache first. Liveness guard: only
+	// short-circuit when the cached contact is still live — a cached
+	// contact_id pointing at a soft-deleted contact (e.g. merged away)
+	// must fall through to discovery, which filters deleted_at and finds
+	// the survivor via the transferred contact_method.
+	var staleIdentityID *uuid.UUID
 	existing, err := s.identityRepo.GetByIdentifier(ctx, req.Type, normalized, req.Source)
 	if err == nil && existing.ContactID != nil {
+		live, lerr := s.identityRepo.ContactIsLive(ctx, *existing.ContactID)
+		if lerr != nil {
+			return nil, fmt.Errorf("check cached contact liveness: %w", lerr)
+		}
+		if live {
+			logger.Debug().
+				Str("identifier", normalized).
+				Str("source", req.Source).
+				Str("contact_id", existing.ContactID.String()).
+				Msg("found cached identity match")
+			return &MatchResult{
+				Identity:  existing,
+				ContactID: existing.ContactID,
+				MatchType: existing.MatchType,
+				Cached:    true,
+			}, nil
+		}
+		staleIdentityID = &existing.ID
 		logger.Debug().
 			Str("identifier", normalized).
 			Str("source", req.Source).
 			Str("contact_id", existing.ContactID.String()).
-			Msg("found cached identity match")
-		return &MatchResult{
-			Identity:  existing,
-			ContactID: existing.ContactID,
-			MatchType: existing.MatchType,
-			Cached:    true,
-		}, nil
+			Msg("cached identity points at tombstoned contact; falling through to discovery")
 	}
 
 	// 4. Discovery path: search contact_method table for matches
 	contactID, matchType := s.findContactByMethod(ctx, normalized, req.Type)
+
+	// 4b. No live match for a stale cached identity: explicitly unlink so
+	// the row surfaces in the unmatched queue — UpsertIdentity's
+	// COALESCE(EXCLUDED.contact_id, existing) would otherwise preserve the
+	// dead contact_id forever. Covers both no-match and ambiguous
+	// multi-match (discovery returns nil for both).
+	if contactID == nil && staleIdentityID != nil {
+		if _, uerr := s.identityRepo.UnlinkFromContact(ctx, *staleIdentityID); uerr != nil {
+			return nil, fmt.Errorf("unlink stale identity from tombstoned contact: %w", uerr)
+		}
+	}
 
 	// 5. Store/update the identity record
 	now := accelerated.GetCurrentTime()
@@ -273,15 +301,32 @@ func (s *IdentityService) MatchOrCreateTx(ctx context.Context, tx pgx.Tx, req Ma
 
 	// Cache check (matches MatchOrCreate's step 3): if we already
 	// know this identifier for this source AND a contact, return the
-	// cached match.
+	// cached match. Liveness guard: only short-circuit when the cached
+	// contact is still live — a cached contact_id pointing at a
+	// soft-deleted contact (e.g. merged away) must fall through to
+	// discovery, which filters deleted_at and finds the survivor via the
+	// transferred contact_method.
+	var staleIdentityID *uuid.UUID
 	existing, err := s.identityRepo.GetByIdentifierTx(ctx, tx, req.Type, normalized, req.Source)
 	if err == nil && existing.ContactID != nil {
-		return &MatchResult{
-			Identity:  existing,
-			ContactID: existing.ContactID,
-			MatchType: existing.MatchType,
-			Cached:    true,
-		}, nil
+		live, lerr := s.identityRepo.ContactIsLiveTx(ctx, tx, *existing.ContactID)
+		if lerr != nil {
+			return nil, fmt.Errorf("check cached contact liveness: %w", lerr)
+		}
+		if live {
+			return &MatchResult{
+				Identity:  existing,
+				ContactID: existing.ContactID,
+				MatchType: existing.MatchType,
+				Cached:    true,
+			}, nil
+		}
+		staleIdentityID = &existing.ID
+		logger.Debug().
+			Str("identifier", normalized).
+			Str("source", req.Source).
+			Str("contact_id", existing.ContactID.String()).
+			Msg("cached identity points at tombstoned contact; falling through to discovery")
 	}
 
 	// Discovery path: search contact_method for a match. Error
@@ -290,6 +335,17 @@ func (s *IdentityService) MatchOrCreateTx(ctx context.Context, tx pgx.Tx, req Ma
 	contactID, matchType, err := s.findContactByMethodTx(ctx, tx, normalized, req.Type)
 	if err != nil {
 		return nil, fmt.Errorf("find contact methods: %w", err)
+	}
+
+	// No live match for a stale cached identity: explicitly unlink so the
+	// row surfaces in the unmatched queue — UpsertIdentity's
+	// COALESCE(EXCLUDED.contact_id, existing) would otherwise preserve the
+	// dead contact_id forever. Covers both no-match and ambiguous
+	// multi-match (discovery returns nil for both).
+	if contactID == nil && staleIdentityID != nil {
+		if _, uerr := s.identityRepo.UnlinkFromContactTx(ctx, tx, *staleIdentityID); uerr != nil {
+			return nil, fmt.Errorf("unlink stale identity from tombstoned contact: %w", uerr)
+		}
 	}
 
 	now := accelerated.GetCurrentTime()

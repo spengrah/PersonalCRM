@@ -111,6 +111,11 @@ func (h *Harness) ReplayTodoist(ctx context.Context, contactIDs []uuid.UUID) (To
 		h.cadenceUpdater,
 		h.database.Pool,
 		func(string) todoist.Client { return fakeTodoistClient{} },
+		// Temp-ID finalize deps: the fake client returns an empty sync (no
+		// temp_id_mapping), so the state-aware finalize never runs here.
+		// remoteCloseEnabled=false mirrors the harness's follow-up mode (off).
+		nil,
+		false,
 	)
 
 	// Snapshot todoist contact_task ids before the (globally-scoped) reconcile.

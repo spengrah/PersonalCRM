@@ -57,6 +57,64 @@ func (q *Queries) CompleteFollowUpForContact(ctx context.Context, contactID pgty
 	return items, nil
 }
 
+const CompleteLiveContactTasksForContact = `-- name: CompleteLiveContactTasksForContact :many
+UPDATE contact_task
+SET state = 'completed',
+    updated_at = NOW()
+WHERE contact_id = $1
+  AND lifecycle IN ('cadence_due', 'followup_loop')
+  AND state IN ('managed', 'pending_remote_create')
+RETURNING id, external_task_id, provider,
+    COALESCE(metadata->>$2::text, '')::text AS pending_temp_id
+`
+
+type CompleteLiveContactTasksForContactParams struct {
+	ContactID        pgtype.UUID `json:"contact_id"`
+	PendingTempIDKey string      `json:"pending_temp_id_key"`
+}
+
+type CompleteLiveContactTasksForContactRow struct {
+	ID             pgtype.UUID `json:"id"`
+	ExternalTaskID string      `json:"external_task_id"`
+	Provider       string      `json:"provider"`
+	PendingTempID  string      `json:"pending_temp_id"`
+}
+
+// Merge-time close of the source contact's live AUTOMATED tasks (cadence_due
+// + followup_loop). Manual-lifecycle rows are deliberately excluded — they
+// are user content and are REPOINTED to the merge target instead (see
+// RepointManualContactTasksToContact). Automated rows cannot be repointed:
+// unique_contact_provider_cadence has no state filter, so a repoint collides
+// whenever the target has ANY cadence_due row, and the target's own automated
+// rows already cover the survivor. Returns the closed rows' identifying
+// fields plus the pending_temp_id metadata key so the service can decide
+// remote-close enqueue eligibility (real external id only — never a pending
+// temp id, mirroring todoist.isPendingTempID).
+func (q *Queries) CompleteLiveContactTasksForContact(ctx context.Context, arg CompleteLiveContactTasksForContactParams) ([]*CompleteLiveContactTasksForContactRow, error) {
+	rows, err := q.db.Query(ctx, CompleteLiveContactTasksForContact, arg.ContactID, arg.PendingTempIDKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*CompleteLiveContactTasksForContactRow{}
+	for rows.Next() {
+		var i CompleteLiveContactTasksForContactRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ExternalTaskID,
+			&i.Provider,
+			&i.PendingTempID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const CountContactTasksByProvider = `-- name: CountContactTasksByProvider :one
 SELECT COUNT(*) FROM contact_task
 WHERE provider = $1 AND state = $2
@@ -746,6 +804,32 @@ func (q *Queries) ListManagedContactTasks(ctx context.Context, provider string) 
 		return nil, err
 	}
 	return items, nil
+}
+
+const RepointManualContactTasksToContact = `-- name: RepointManualContactTasksToContact :exec
+UPDATE contact_task
+SET contact_id = $1,
+    updated_at = NOW()
+WHERE contact_id = $2
+  AND lifecycle = 'manual'
+`
+
+type RepointManualContactTasksToContactParams struct {
+	TargetContactID pgtype.UUID `json:"target_contact_id"`
+	SourceContactID pgtype.UUID `json:"source_contact_id"`
+}
+
+// Merge-time repoint of the source contact's MANUAL tasks (user to-dos) to
+// the target, all states — closing one would silently check off the user's
+// live task, and leaving it would let the Todoist sync's contact-deleted
+// branch hard-DELETE the remote task. Collision-free: neither partial unique
+// index covers lifecycle='manual', and unique_external_task_id keys on
+// external_task_id, which this update does not touch. Repointing terminal
+// states too keeps the survivor's task history intact (mirrors
+// TransferInteractions).
+func (q *Queries) RepointManualContactTasksToContact(ctx context.Context, arg RepointManualContactTasksToContactParams) error {
+	_, err := q.db.Exec(ctx, RepointManualContactTasksToContact, arg.TargetContactID, arg.SourceContactID)
+	return err
 }
 
 const SetContactTaskExternalIDOnly = `-- name: SetContactTaskExternalIDOnly :exec

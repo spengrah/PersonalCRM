@@ -155,6 +155,39 @@ WHERE id = ANY(@message_ids::uuid[])
   AND processed_at IS NULL
   AND deleted_at IS NULL;
 
+-- name: SoftDeleteDuplicateCommsMessagesForMerge :exec
+-- Merge dedup step 1 (see CommsMessageRepository.RepointContactForMergeTx):
+-- tombstone the merge source's live copy of any (source, external_id) the
+-- target ALSO has live — the email-fanout shape, where one upstream message
+-- produced a row under both contacts. Without this, the follow-up repoint
+-- would collide on idx_comms_message_dedup (partial UNIQUE (source,
+-- external_id, matched_contact_id) WHERE deleted_at IS NULL). Soft-delete
+-- (not hard DELETE) preserves the row for audit, matching the table's
+-- tombstone semantics; the surviving target row carries the same upstream
+-- message. MUST run strictly BEFORE RepointCommsMessageContact.
+UPDATE comms_message
+SET deleted_at = NOW()
+WHERE comms_message.matched_contact_id = sqlc.arg(source_contact_id)
+  AND comms_message.deleted_at IS NULL
+  AND EXISTS (
+    SELECT 1 FROM comms_message t
+    WHERE t.source = comms_message.source
+      AND t.external_id = comms_message.external_id
+      AND t.matched_contact_id = sqlc.arg(target_contact_id)
+      AND t.deleted_at IS NULL
+  );
+
+-- name: RepointCommsMessageContact :exec
+-- Merge dedup step 2: re-point ALL remaining source-matched rows (live +
+-- soft-deleted — the dedup index is partial on deleted_at IS NULL, so
+-- soft-deleted rows cannot collide; including them mirrors
+-- TransferInteractions' includes-soft-deleted audit stance). Runs strictly
+-- AFTER SoftDeleteDuplicateCommsMessagesForMerge inside
+-- RepointContactForMergeTx's savepoint.
+UPDATE comms_message
+SET matched_contact_id = sqlc.arg(target_contact_id)
+WHERE matched_contact_id = sqlc.arg(source_contact_id);
+
 -- name: HardDeleteCommsMessagesByContact :exec
 -- Test-only cleanup helper (scoped by matched_contact_id). Hard delete because
 -- the upsert does not clear deleted_at on conflict, so soft-deleted rows would

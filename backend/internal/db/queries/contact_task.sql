@@ -226,6 +226,41 @@ WHERE contact_id = $1
   AND state IN ('managed', 'pending_remote_create')
 RETURNING *;
 
+-- name: CompleteLiveContactTasksForContact :many
+-- Merge-time close of the source contact's live AUTOMATED tasks (cadence_due
+-- + followup_loop). Manual-lifecycle rows are deliberately excluded — they
+-- are user content and are REPOINTED to the merge target instead (see
+-- RepointManualContactTasksToContact). Automated rows cannot be repointed:
+-- unique_contact_provider_cadence has no state filter, so a repoint collides
+-- whenever the target has ANY cadence_due row, and the target's own automated
+-- rows already cover the survivor. Returns the closed rows' identifying
+-- fields plus the pending_temp_id metadata key so the service can decide
+-- remote-close enqueue eligibility (real external id only — never a pending
+-- temp id, mirroring todoist.isPendingTempID).
+UPDATE contact_task
+SET state = 'completed',
+    updated_at = NOW()
+WHERE contact_id = @contact_id
+  AND lifecycle IN ('cadence_due', 'followup_loop')
+  AND state IN ('managed', 'pending_remote_create')
+RETURNING id, external_task_id, provider,
+    COALESCE(metadata->>sqlc.arg(pending_temp_id_key)::text, '')::text AS pending_temp_id;
+
+-- name: RepointManualContactTasksToContact :exec
+-- Merge-time repoint of the source contact's MANUAL tasks (user to-dos) to
+-- the target, all states — closing one would silently check off the user's
+-- live task, and leaving it would let the Todoist sync's contact-deleted
+-- branch hard-DELETE the remote task. Collision-free: neither partial unique
+-- index covers lifecycle='manual', and unique_external_task_id keys on
+-- external_task_id, which this update does not touch. Repointing terminal
+-- states too keeps the survivor's task history intact (mirrors
+-- TransferInteractions).
+UPDATE contact_task
+SET contact_id = sqlc.arg(target_contact_id),
+    updated_at = NOW()
+WHERE contact_id = sqlc.arg(source_contact_id)
+  AND lifecycle = 'manual';
+
 -- name: FindPendingFollowUpTx :one
 -- Transactional sibling of FindPendingFollowUp. Matches both 'managed'
 -- and 'pending_remote_create' live states so the future cutover's

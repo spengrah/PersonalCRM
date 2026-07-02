@@ -83,6 +83,23 @@ func (q *Queries) ComputeContactDatesAfterDelete(ctx context.Context, arg Comput
 	return &i, err
 }
 
+const ContactIsLive = `-- name: ContactIsLive :one
+SELECT EXISTS(
+    SELECT 1 FROM contact
+    WHERE id = $1 AND deleted_at IS NULL
+) AS is_live
+`
+
+// Liveness probe for the identity-match guard: a cached
+// external_identity.contact_id pointing at a soft-deleted (e.g. merged-away)
+// contact must not short-circuit the discovery path.
+func (q *Queries) ContactIsLive(ctx context.Context, id pgtype.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, ContactIsLive, id)
+	var is_live bool
+	err := row.Scan(&is_live)
+	return is_live, err
+}
+
 const CountContacts = `-- name: CountContacts :one
 SELECT COUNT(*) FROM contact
 WHERE deleted_at IS NULL
