@@ -1,0 +1,415 @@
+domain: cadence-followup
+prefix: CAD
+maturity: reviewed
+behaviors:
+  # --- Cadence computation ---
+
+  - id: CAD-001
+    title: A contact without a cadence is outside the engine
+    type: business-logic
+    status: current
+    given: a contact with an empty or absent cadence
+    when: cadence-driven behavior is evaluated
+    then:
+      - the contact is never overdue
+      - no new cadence-due task is created for it
+      - no follow-up loop opens on its interactions
+    provenance: [cadence.ParseCadence, FollowUpManager, CadenceSyncProvider.reconcileContactTasks]
+    notes: The cadence vocabulary itself is CON-002/CON-047. Clearing a cadence does not retire tasks that already exist; those resolve through their own lifecycle triggers.
+
+  - id: CAD-002
+    title: The next-contact date derives from the last contact plus the cadence interval
+    type: business-logic
+    status: current
+    given: a contact with a cadence
+    when: contact_by is computed
+    then:
+      - the base date is last_contacted when set, else created_at
+      - the interval is fixed-length per cadence (7, 14, 30, 90, 180, 365 days in production)
+      - in production the result is a date (day precision, timezone-safe)
+    provenance: [cadence.CalculateContactBy, cadence.GetCadenceDuration, .ai/guides/architecture.md]
+
+  - id: CAD-003
+    title: Cadence intervals scale with the environment for accelerated testing
+    type: business-logic
+    status: current
+    given: the app running in a testing or accelerated environment
+    when: cadence intervals are resolved
+    then:
+      - production resolves real-day intervals
+      - testing and accelerated environments compress the same cadences to minutes or hours
+      - all cadence math reads the app's accelerated clock, never the wall clock
+    provenance: [cadence.GetCadenceConfig, accelerated.GetCurrentTime, .ai/rules/core.md]
+
+  - id: CAD-004
+    title: A contact is overdue only strictly past its next-contact date
+    type: business-logic
+    status: current
+    given: a contact with a cadence and a next-contact date
+    when: overdue status is evaluated
+    then:
+      - in production the contact is overdue when contact_by is strictly before today (due today is not overdue)
+      - in testing mode the comparison is timestamp-based and recomputed in memory, since day precision cannot express sub-day cadences
+    provenance: [cadence.IsContactByOverdue, ContactService.listOverdueContactsInMemory]
+
+  - id: CAD-005
+    title: The cadence engine is the sole writer of cadence timestamps
+    type: invariant
+    status: current
+    statement: outside contact creation (which seeds last_contacted and contact_by, CON-001), last_contacted, last_interaction_at, last_outreach_at, last_response_at, and contact_by are written only by the cadence engine's apply paths (interaction consumer, merge bulk-apply, cadence override, and delete rollback); contact_by is kept in sync on every write path that changes the cadence or the base timestamps.
+    provenance: [CadenceUpdater, .ai/guides/architecture.md sole-writer map, scripts/ci sole-writer guard]
+
+  # --- Direction and write semantics ---
+
+  - id: CAD-006
+    title: Interaction direction determines which timestamps move
+    type: business-logic
+    status: current
+    given: a contact with a recorded interaction
+    when: the interaction's direction is applied
+    then:
+      - outbound bumps last_outreach_at only
+      - inbound bumps last_contacted, last_interaction_at, and last_response_at, and reschedules contact_by
+      - mutual bumps all four timestamps and reschedules contact_by
+      - an interaction recorded without a direction defaults to mutual; an unrecognized direction reaching the consumer moves nothing
+    provenance: [CadenceApplyFlagsByDirection, interaction direction CHECK migration 031, contact-direction.spec.ts]
+
+  - id: CAD-007
+    title: Automated sources move timestamps forward only; manual entries always win
+    type: business-logic
+    status: current
+    given: an incoming timestamp update for a cadence column
+    when: the update source is considered
+    then:
+      - an automated source (synced providers) advances a column only when the incoming value is strictly newer
+      - a manual entry writes unconditionally, allowing backdating as user correction
+    provenance: [cadence_branch.go, CadenceUpdater.buildInteractionWrite, .ai/rules/core.md forward-only row]
+
+  - id: CAD-008
+    title: Rescheduling gates on cadence and recency
+    type: business-logic
+    status: current
+    given: an inbound or mutual interaction
+    when: contact_by rescheduling is considered
+    then:
+      - contact_by is rescheduled only when the contact has a cadence
+      - automated interactions reschedule only on first contact or when the interaction is newer than the previous last_contacted
+      - the new contact_by is the interaction time plus the cadence interval
+    provenance: [ShouldApplyContactBy, cadence.CalculateContactBy]
+
+  - id: CAD-009
+    title: Cadence overrides never touch interaction history
+    type: business-logic
+    status: current
+    given: a user-driven cadence change (set, change, or clear)
+    when: the override is applied
+    then:
+      - the override applies unconditionally, and may move contact_by backward or clear it
+      - the interaction timestamps (last_contacted, last_outreach_at, last_response_at) are untouched
+    provenance: [CadenceUpdater.ApplyContactByOverride]
+    notes: How the update request derives the new contact_by is CON-007; this pins the engine-side properties of the override path.
+
+  - id: CAD-010
+    title: Deleting an interaction rolls back only the timestamps it sourced
+    type: data
+    status: current
+    given: a contact whose cadence timestamps were driven by an interaction that is being deleted
+    when: the deletion is processed
+    then:
+      - a timestamp column is rolled back only if the deleted interaction was its source
+      - the column is recomputed to the newest remaining live interaction of the matching direction, or cleared
+      - contact_by is re-derived only when the contact has a cadence, the recompute actually moved last_contacted, and no user or provider override is in effect; otherwise it is preserved
+      - the recompute runs under a row lock in a single transaction
+    provenance: [RecomputeContactDatesAfterDeleteTx, CalendarDeclineHandler]
+
+  # --- Follow-up loop ---
+
+  - id: CAD-011
+    title: An outbound interaction opens a follow-up with a cadence-scaled deadline
+    type: business-logic
+    status: current
+    given: a contact with a cadence and no live follow-up, and an outbound that passes the creation guards (CAD-012)
+    when: the outbound interaction is recorded
+    then:
+      - a follow-up task is created to track the awaited reply
+      - its deadline is the interaction day plus a cadence-scaled window (defaults weekly 3, biweekly 5, monthly 7, quarterly 14, biannual 21, annual 21 days; environment-configurable)
+    provenance: [FollowUpManager, watchdogDaysForCadenceStr, config.WatchdogConfig]
+
+  - id: CAD-012
+    title: Follow-up creation is guarded so only genuinely awaited replies open loops
+    type: business-logic
+    status: current
+    given: an outbound interaction that would open a follow-up
+    when: the creation guards run
+    then:
+      - a one-shot outbound (send-kind completion) is suppressed
+      - a contact without a cadence gets no follow-up
+      - an automated outbound older than the follow-up window is skipped as backdated; manual outbounds are exempt
+      - an outbound that already has a later response is skipped as out of order
+      - an existing live follow-up is refreshed (deadline updated) instead of duplicated
+      - if the remote task provider is unconfigured, the interaction still records and the follow-up is skipped with a warning
+    provenance: [FollowUpManager creation guards, HasResponseAfterTx, FindPendingFollowUpTx]
+
+  - id: CAD-013
+    title: At most one live follow-up per contact and provider
+    type: invariant
+    status: current
+    statement: a contact can have at most one live follow-up task per provider (states managed or pending_remote_create), enforced by a partial unique index; terminal-state follow-ups (completed, dismissed) accumulate freely.
+    provenance: [idx_contact_task_followup_unique_live, migrations 041/046]
+
+  - id: CAD-014
+    title: Follow-up creation is crash-safe and idempotent
+    type: data
+    status: current
+    given: a follow-up being created against a remote task provider
+    when: the two-step create runs
+    then:
+      - a local row is inserted first in state pending_remote_create with a deterministic idempotency key
+      - the remote task is created second by a durable background job (retried on failure), which atomically finalizes the row to managed with the remote id
+      - retries and concurrent creates cannot produce duplicates (idempotency index; a uniqueness collision is recovered via savepoint and routed to refresh)
+      - a reply arriving mid-create closes the pending row rather than leaving it live
+    provenance: [FollowUpManager.applyCreate, idx_contact_task_followup_idempotency, event-bus-foundation.md]
+
+  - id: CAD-015
+    title: A reply closes the live follow-up
+    type: business-logic
+    status: current
+    given: a contact with a live follow-up
+    when: an inbound or mutual interaction is recorded
+    then:
+      - the follow-up is completed (the awaited reply arrived)
+      - the close is propagated to the remote task only when a real remote id exists; otherwise the in-flight create handles it
+    provenance: [FollowUpManager.applyInboundMutual]
+
+  - id: CAD-016
+    title: Dismissing a follow-up stops the loop silently
+    type: business-logic
+    status: current
+    given: a live follow-up task
+    when: the user dismisses it in the remote task app
+    then:
+      - the follow-up state becomes dismissed
+      - no interaction is recorded
+      - no successor follow-up is created
+    provenance: [handleFollowUpDismissal, task-direction-taxonomy.md]
+
+  - id: CAD-017
+    title: Task kind determines what completing a task records
+    type: business-logic
+    status: current
+    given: a live task linked to a contact
+    when: the task is completed
+    then:
+      - completing a reach-out records an outbound interaction, which opens the follow-up loop when the creation guards pass (CAD-011, CAD-012)
+      - completing a send records a one-shot outbound interaction that suppresses the follow-up loop
+      - completing a reminder records no interaction
+      - completing a legacy meet or action task records a mutual interaction
+    provenance: [handleTaskCompletion, task-direction-taxonomy.md]
+
+  # --- Cadence-due and manual tasks ---
+
+  - id: CAD-018
+    title: A cadence-bearing contact is represented by one live cadence-due task
+    type: business-logic
+    status: current
+    given: a contact with a cadence and a next-contact date
+    when: task reconciliation runs
+    then:
+      - a cadence-due reach-out task exists for the contact
+      - at most one cadence-due task row exists per contact and provider regardless of state; completed rows are removed to make room for the next cycle
+      - while a live follow-up exists, cadence-due creation is deferred (the follow-up already covers the contact)
+    provenance: [CadenceSyncProvider.reconcileContactTasks, unique_contact_provider_cadence]
+    notes: Reconciliation rides the provider sync tick; there is no dedicated cron job. Provider mechanics are todoist-domain scope.
+
+  - id: CAD-019
+    title: Skipping a cadence task advances the schedule without recording contact
+    type: business-logic
+    status: current
+    given: a live cadence-due task
+    when: the user skips it in the remote task app
+    then:
+      - contact_by advances by one cadence interval from today or the old date, whichever lands later
+      - no interaction is recorded
+      - a replacement cadence task is created for the new date
+    provenance: [handleSkipTrigger, cadence.CadenceDays]
+
+  - id: CAD-020
+    title: Outreach closes the open cadence task
+    type: business-logic
+    status: current
+    given: a contact with a live cadence-due task
+    when: an outreach interaction is detected from any source
+    then:
+      - the cadence task is completed (the nudge served its purpose)
+    provenance: [closeOnOutreach]
+    notes: This pins the CRM-side task-state intent; the provider-side close propagation and watermark mechanics are todoist-domain scope.
+
+  - id: CAD-021
+    title: Manual task dismissal is terminal, with a legacy carve-out
+    type: business-logic
+    status: current
+    given: a live manual task
+    when: the user dismisses it in the remote task app
+    then:
+      - reach-out, send, reminder, and legacy meet tasks become dismissed, recording no interaction
+      - legacy action tasks become unmanaged instead, preserving the user's content
+    provenance: [handleManualDismissal, handleActionTaskTriggers, task-direction-taxonomy.md]
+
+  - id: CAD-022
+    title: Task kind and lifecycle are orthogonal axes with constrained combinations
+    type: invariant
+    status: current
+    statement: task kinds are reach_out, send, and reminder (plus legacy meet and action); lifecycles are manual, cadence_due, and followup_loop; only reach_out may take all three lifecycles (every other kind is manual-only, enforced by a composite CHECK); kind determines the interaction recorded on completion, while lifecycle determines origin, scheduling, and dismissal routing — with one legacy exception, action tasks, which are routed by kind (CAD-021).
+    provenance: [contact_task_kind_lifecycle_check migration 046, internal/contacttask/kinds.go, task-direction-taxonomy.md]
+
+  # --- Overdue surface ---
+
+  - id: CAD-023
+    title: The overdue endpoint reports who needs attention and how urgently
+    type: api
+    status: current
+    given: contacts past their next-contact date
+    when: the overdue list is requested
+    then:
+      - each entry carries the contact plus days overdue, the next due date, and a suggested action
+      - entries are ordered most-overdue first
+      - the list is bounded (1000), and truncation retains the most overdue contacts
+    provenance: [ContactHandler.ListOverdueContacts, ContactService.ListOverdueContacts]
+
+  - id: CAD-024
+    title: Suggested actions escalate with how overdue a contact is
+    type: business-logic
+    status: current
+    given: an overdue contact
+    when: the suggested action is computed
+    then:
+      - up to 2 days overdue suggests a quick check-in
+      - up to 7 days suggests a call or coffee
+      - up to 30 days suggests a meaningful update
+      - beyond that suggests reconnecting with something specific and personal
+    provenance: [suggestedActionForOverdueDays]
+
+  # --- Surfaces ---
+
+  - id: CAD-026
+    title: The dashboard is an action-required list of overdue contacts
+    type: ux
+    status: current
+    given: contacts past their next-contact date
+    when: the dashboard renders
+    then:
+      - overdue contacts appear as cards with the count in the header
+      - each card shows urgency (tiers at up to 2, up to 7, and more days overdue), cadence, how long since last contact, reachable contact methods, and the suggested action
+      - with nothing overdue, an all-caught-up state is shown instead
+    provenance: [dashboard/page.tsx, OverdueContactCard, dashboard.spec.ts]
+
+  - id: CAD-027
+    title: The overdue list offers urgency, name, and recency orderings
+    type: ux
+    status: current
+    given: an overdue list with several contacts
+    when: the user switches the sort
+    then:
+      - urgency (default) orders most-overdue first
+      - name orders alphabetically
+      - last-contacted orders oldest contact first, with never-contacted at the end
+    provenance: [dashboard/page.tsx sort controls]
+
+  - id: CAD-028
+    title: Marking contacted from the dashboard clears the contact immediately
+    type: ux
+    status: current
+    given: an overdue contact card
+    when: the user marks the contact as contacted
+    then:
+      - a mutual interaction is logged, timestamped by the server's accelerated clock
+      - the contact leaves the overdue list without a page reload, and the count updates
+      - the change is consistent across dashboard, contact list, and contact detail
+    provenance: [OverdueContactCard, overdue-contact-updates.spec.ts, dashboard.spec.ts]
+    notes: The list-row variant of this action is CON-044.
+
+  - id: CAD-029
+    title: Recent activity summarizes the direction timestamps and pending reply
+    type: ux
+    status: current
+    given: a contact detail page
+    when: the recent-activity summary renders
+    then:
+      - the last outreach time is shown when one exists
+      - the last response time is shown when one exists
+      - an awaiting-reply indicator is shown while a follow-up is pending
+      - with none of these, an explicit no-recent-activity state is shown
+    provenance: ['contacts/[id]/page.tsx recent activity block', contact-direction.spec.ts]
+
+  - id: CAD-030
+    title: The tasks section shows live work first and history on demand
+    type: ux
+    status: current
+    given: a contact with follow-up, manual, and completed tasks
+    when: the tasks section renders
+    then:
+      - managed follow-up tasks appear first with a distinct pending indicator, then live manual tasks
+      - each task carries a badge derived from its kind and lifecycle
+      - completed tasks are collapsed behind a toggle with a count
+      - with no tasks, an empty state invites adding one
+    provenance: [tasks-section.tsx, contact detail task queries]
+    notes: A follow-up still in pending_remote_create is not listed in the section; during that window it surfaces only via the awaiting-reply indicator (CAD-029).
+
+  - id: CAD-031
+    title: Users can add manual tasks of three kinds
+    type: ux
+    status: current
+    given: the add-task flow on a contact
+    when: the user creates a task
+    then:
+      - the kind is chosen from reach-out, send, and reminder
+      - task text is required; notes are optional
+      - the created task appears in the contact's live tasks
+    provenance: [add-task-modal.tsx, ContactTaskService.CreateManualTask]
+
+  - id: CAD-032
+    title: Contact task endpoints validate their vocabulary
+    type: api
+    status: current
+    given: the contact task endpoints
+    when: requests are handled
+    then:
+      - task listing filters by state, kind, and lifecycle from their closed sets; invalid values are rejected (400) and an unknown contact is not-found (404)
+      - task creation requires a user-pickable kind and text (1-1000 chars, notes up to 5000), returning the created task (201)
+      - unlinking removes only the CRM link, returning no content (204), and is not-found (404) when the task does not belong to the contact
+    provenance: [contact_task_routes.go, ContactTaskHandler]
+
+  - id: CAD-033
+    title: Unlinking is the only in-CRM mutation of a linked task
+    type: ux
+    status: current
+    given: a task linked to a contact
+    when: the user manages it from the CRM
+    then:
+      - the CRM offers unlink (with confirmation), which keeps the task alive in the remote app
+      - completing and dismissing happen in the remote task app, not the CRM
+    provenance: [tasks-section.tsx TaskRow, useDeleteTaskLink]
+
+  - id: CAD-034
+    title: Cadence interval arithmetic is uniform across recompute paths
+    type: business-logic
+    status: proposed
+    given: any path that recomputes a next-contact date
+    when: the cadence interval is applied
+    then:
+      - every recompute path uses the same environment-scaled interval definition
+    provenance: [handleSkipTrigger, cadence.CadenceDays, cadence.GetCadenceDuration]
+    notes: 'Proposed: today the skip path advances contact_by by fixed real days even in accelerated environments, diverging from every other path; a dead calendar-month implementation also lingers in the cadence package.'
+
+  - id: CAD-035
+    title: A remote deadline edit on a cadence task reschedules the contact
+    type: business-logic
+    status: current
+    given: a live cadence-due task whose deadline the user edits in the remote task app
+    when: the edit is detected
+    then:
+      - contact_by is overridden to the edited deadline (the remote edit wins)
+      - a deadline matching what the CRM last pushed is recognized as stale and does not override
+      - follow-up task deadlines never touch contact_by
+    provenance: [todoist provider deadline-edit handling, CadenceUpdater.ApplyContactByOverride, MetadataKeySyncedDeadline]
+    notes: The last-pushed watermark mechanics live in the todoist domain; this pins the cadence-side outcome.
