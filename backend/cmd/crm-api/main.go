@@ -30,7 +30,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	stdsync "sync"
 	"syscall"
 	"time"
 
@@ -58,7 +57,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	swaggerFiles "github.com/swaggo/files"
@@ -73,166 +71,6 @@ import (
 // river_job) rely on. Single-user row counts are trivial, so we keep discarded
 // jobs for 90 days. Not exposed via config — no caller needs to vary it.
 const riverDiscardedJobRetention = 90 * 24 * time.Hour
-
-// noopJobArgs is the args type for the placeholder worker below. It is
-// never enqueued in production; its sole purpose is to satisfy river's
-// "must have at least one registered worker" invariant when external
-// sync is disabled.
-type noopJobArgs struct{}
-
-func (noopJobArgs) Kind() string { return "noop" }
-
-// noopWorker exists so the river client always has at least one
-// registered worker, even when cfg.Features.EnableExternalSync is false
-// and the scheduler workers are not registered. river.NewClient rejects
-// an empty Workers bundle (the constructor returns an error), so the
-// API fails to boot in the default non-sync configuration without this
-// placeholder.
-type noopWorker struct {
-	river.WorkerDefaults[noopJobArgs]
-}
-
-// Work implements river.Worker. Since no 'noop' jobs are enqueued
-// anywhere in the codebase, this method is never called at runtime.
-func (*noopWorker) Work(_ context.Context, _ *river.Job[noopJobArgs]) error {
-	return nil
-}
-
-// followUpSettingsRef holds a deferred reference to the Todoist OAuth
-// service + sync repo so the FollowUpManager settings func can be
-// wired at construction time (before the external-sync branch decides
-// whether Todoist is configured). The external-sync branch populates
-// oauth+sync when Todoist is initialized; until then fn() returns
-// service.ErrNoTodoistAccount to keep the consumer's Todoist-dependent
-// post-commit paths a best-effort no-op.
-type followUpSettingsRef struct {
-	oauth       *todoist.OAuthService
-	sync        *repository.SyncRepository
-	frontendURL string
-}
-
-// fn returns a TodoistSettingsFunc closure that resolves settings
-// through the populated refs. Todoist-unconfigured states (no account,
-// no sync state, missing label) collapse to consumer.ErrTodoistUnconfigured
-// so the follow-up consumer can treat them as a non-fatal skip rather
-// than rolling back the interaction write.
-func (r *followUpSettingsRef) fn() consumer.TodoistSettingsFunc {
-	return func(ctx context.Context) (*todoist.Settings, string, error) {
-		if r.oauth == nil || r.sync == nil {
-			return nil, "", consumer.ErrTodoistUnconfigured
-		}
-		accounts, err := r.oauth.ListAccounts(ctx)
-		if err != nil {
-			return nil, "", fmt.Errorf("list todoist accounts: %w", err)
-		}
-		if len(accounts) == 0 {
-			return nil, "", consumer.ErrTodoistUnconfigured
-		}
-		accountID := accounts[0].AccountID
-		accessToken, err := r.oauth.GetAccessToken(ctx, accountID)
-		if err != nil {
-			return nil, "", fmt.Errorf("get access token: %w", err)
-		}
-		state, err := r.sync.GetSyncStateBySource(ctx, todoist.SourceName, &accountID)
-		if err != nil {
-			if errors.Is(err, db.ErrNotFound) {
-				return nil, "", consumer.ErrTodoistUnconfigured
-			}
-			return nil, "", fmt.Errorf("get sync state: %w", err)
-		}
-		settings := &todoist.Settings{}
-		if state.Metadata != nil {
-			if v, ok := state.Metadata[todoist.MetadataKeyProjectID].(string); ok {
-				settings.ProjectID = v
-			}
-			if v, ok := state.Metadata[todoist.MetadataKeyProjectName].(string); ok {
-				settings.ProjectName = v
-			}
-			if v, ok := state.Metadata[todoist.MetadataKeyLabelID].(string); ok {
-				settings.LabelID = v
-			}
-			if v, ok := state.Metadata[todoist.MetadataKeyLabelName].(string); ok {
-				settings.LabelName = v
-			}
-			if v, ok := state.Metadata[todoist.MetadataKeyIntegrationInstance].(string); ok {
-				settings.IntegrationInstanceID = v
-			}
-		}
-		if settings.LabelID == "" {
-			return nil, "", consumer.ErrTodoistUnconfigured
-		}
-		return settings, accessToken, nil
-	}
-}
-
-// deferredAggregatorReenqueuer is a thread-safe holder that the
-// InteractionRecorderWorker is constructed against before the
-// Telegram aggregation engine exists. The cfg.Features.EnableTelegramSync
-// branch calls .set once telegramManager is built; until then the
-// holder dispatches every Reenqueue call to a logged-warn no-op.
-//
-// Satisfies consumer.AggregatorReenqueuer (via the holder pointer);
-// safe to pass to the worker constructor before the inner registry
-// is wired.
-type deferredAggregatorReenqueuer struct {
-	mu    stdsync.RWMutex
-	inner consumer.AggregatorReenqueuer
-}
-
-// set installs the concrete reenqueuer. May be called once after the
-// Telegram aggregation engine exists.
-func (d *deferredAggregatorReenqueuer) set(inner consumer.AggregatorReenqueuer) {
-	d.mu.Lock()
-	d.inner = inner
-	d.mu.Unlock()
-}
-
-// Reenqueue implements consumer.AggregatorReenqueuer. Falls back to a
-// logged-warn no-op when the inner registry has not been wired yet
-// (e.g. cfg.Features.EnableTelegramSync is false).
-func (d *deferredAggregatorReenqueuer) Reenqueue(ctx context.Context, env *events.Envelope, contactID uuid.UUID) error {
-	d.mu.RLock()
-	inner := d.inner
-	d.mu.RUnlock()
-	if inner == nil {
-		log.Printf("aggregator-reenqueuer: registry not yet wired; skipping (source=%s contact=%s)",
-			env.Source, contactID.String())
-		return nil
-	}
-	return inner.Reenqueue(ctx, env, contactID)
-}
-
-// meetingNoteLinkageTargetReader adapts the calendar + phone_call
-// repositories into the polymorphic service.LinkageTargetReader
-// interface that MeetingNoteService consumes. Kept inline in main.go
-// per the single-file build convention (any file the binary needs must
-// be compilable as part of `go build cmd/crm-api/main.go`).
-type meetingNoteLinkageTargetReader struct {
-	calendarRepo  *repository.CalendarEventRepository
-	phoneCallRepo *repository.PhoneCallRepository
-}
-
-// GetEventByID satisfies service.LinkageTargetReader.
-func (r *meetingNoteLinkageTargetReader) GetEventByID(ctx context.Context, id uuid.UUID) (*repository.CalendarEvent, error) {
-	return r.calendarRepo.GetByID(ctx, id)
-}
-
-// GetPhoneCallByID satisfies service.LinkageTargetReader.
-func (r *meetingNoteLinkageTargetReader) GetPhoneCallByID(ctx context.Context, id uuid.UUID) (*repository.PhoneCall, error) {
-	return r.phoneCallRepo.GetCallByID(ctx, id)
-}
-
-// GetEventByIDTx satisfies service.LinkageTargetReader for the
-// tx-bound resolve flow.
-func (r *meetingNoteLinkageTargetReader) GetEventByIDTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*repository.CalendarEvent, error) {
-	return r.calendarRepo.GetByIDTx(ctx, tx, id)
-}
-
-// GetPhoneCallByIDTx satisfies service.LinkageTargetReader for the
-// tx-bound resolve flow.
-func (r *meetingNoteLinkageTargetReader) GetPhoneCallByIDTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*repository.PhoneCall, error) {
-	return r.phoneCallRepo.GetCallByIDTx(ctx, tx, id)
-}
 
 func main() {
 	// Run the server body in a helper so its defers (database.Close,
@@ -623,10 +461,7 @@ func run() int {
 	// Mirrors the daemon-side IngestService.handleMeetingNoteRecorded
 	// path; uses a small adapter to satisfy the polymorphic
 	// LinkageTargetReader interface (event vs phone_call lookup by UUID).
-	meetingNoteLinkageTargets := &meetingNoteLinkageTargetReader{
-		calendarRepo:  calendarRepoForIngest,
-		phoneCallRepo: phoneCallRepoForIngest,
-	}
+	meetingNoteLinkageTargets := service.NewLinkageTargetReader(calendarRepoForIngest, phoneCallRepoForIngest)
 	meetingNoteService := service.NewMeetingNoteService(
 		database,
 		meetingNoteRepoForIngest,
@@ -1310,9 +1145,8 @@ func run() int {
 	sweeperListers := map[string]scheduler.UnprocessedContactLister{
 		repository.InteractionSourceMessages: messagesMessageRepo,
 		// Source-bound adapter: comms_message is multi-source, so wrap the
-		// repo with a 'gchat'-pinned lister (built type, not inline struct,
-		// per the single-file build convention).
-		repository.InteractionSourceGChat: repository.NewCommsSourceContactLister(commsMessageRepo, repository.InteractionSourceGChat),
+		// repo with a 'gchat'-pinned lister.
+		repository.InteractionSourceGChat: newCommsSourceContactLister(commsMessageRepo, repository.InteractionSourceGChat),
 	}
 	river.AddWorker(riverWorkers, scheduler.NewMessagingAggregateSweeperWorker(sweeperListers, riverClient))
 	riverClient.PeriodicJobs().Add(river.NewPeriodicJob(

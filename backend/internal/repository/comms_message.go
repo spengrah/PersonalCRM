@@ -806,26 +806,6 @@ func (r *CommsMessageRepository) GetLatestByExternalID(ctx context.Context, sour
 	return &msg, nil
 }
 
-// CommsSourceContactLister adapts *CommsMessageRepository to the source-neutral
-// scheduler.UnprocessedContactLister interface, pinning a source. The sweeper's
-// interface is single-source (ListUnprocessedContactIDs(ctx)) but comms_message
-// is multi-source; this adapter binds the source so main.go references a built
-// type (single-file build convention) rather than an inline closure-struct.
-type CommsSourceContactLister struct {
-	repo   *CommsMessageRepository
-	source string
-}
-
-// NewCommsSourceContactLister builds the source-bound sweeper lister adapter.
-func NewCommsSourceContactLister(repo *CommsMessageRepository, source string) *CommsSourceContactLister {
-	return &CommsSourceContactLister{repo: repo, source: source}
-}
-
-// ListUnprocessedContactIDs implements scheduler.UnprocessedContactLister.
-func (l *CommsSourceContactLister) ListUnprocessedContactIDs(ctx context.Context) ([]uuid.UUID, error) {
-	return l.repo.ListUnprocessedContactIDsForSource(ctx, l.source)
-}
-
 // CommsSessionStagingProcessor adapts *CommsMessageRepository to the
 // source-neutral StagingProcessor interface for CHAT sources (gchat). It uses
 // the SESSION-scoped, claim-clearing MarkProcessedForSessionTx — unlike the

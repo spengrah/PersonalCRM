@@ -2518,7 +2518,8 @@ func TestMeetingNote_TitleMatch_LegacySessionBackfillsDiscoveryOnCarryForward(t 
 
 // mnTestLinkageTargetReader adapts the calendar + phone_call repositories
 // into the polymorphic service.LinkageTargetReader interface used by
-// MeetingNoteService. Mirrors the production adapter in cmd/crm-api/main.go.
+// MeetingNoteService. Mirrors the production adapter service.NewLinkageTargetReader
+// (internal/service/meeting_note_linkage.go).
 type mnTestLinkageTargetReader struct {
 	calendarRepo  *repository.CalendarEventRepository
 	phoneCallRepo *repository.PhoneCallRepository
