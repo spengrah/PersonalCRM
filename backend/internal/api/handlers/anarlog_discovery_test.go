@@ -193,8 +193,10 @@ func TestListAnarlogTitle_NilService(t *testing.T) {
 // tree resolves the static /imports/anarlog-title segment to the
 // discovery handler while /imports/<uuid> still resolves to the :id
 // candidate handler, when the static routes are declared before :id
-// exactly as cmd/crm-api/main.go registers them. Uses sentinel handlers
-// so the test isolates routing behavior from handler internals.
+// exactly as RegisterImportRoutes registers them. Uses sentinel handlers
+// so the test isolates Gin routing behavior from handler internals; the
+// companion TestRegisterImportRoutes_StaticBeforeParamOrdering drives the
+// real helper.
 func TestAnarlogTitleRoute_DoesNotShadowGetCandidate(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
