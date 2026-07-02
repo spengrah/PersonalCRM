@@ -30,7 +30,7 @@ import (
 // the resolve tx so the read+write are serializable) and the
 // needs-attention preview projection (best-effort, no tx). Concrete is
 // a small adapter over CalendarEventRepository + PhoneCallRepository
-// (see meetingNoteLinkageTargetReader in cmd/crm-api/main.go).
+// (see NewLinkageTargetReader in meeting_note_linkage.go).
 type LinkageTargetReader interface {
 	GetEventByID(ctx context.Context, id uuid.UUID) (*repository.CalendarEvent, error)
 	GetPhoneCallByID(ctx context.Context, id uuid.UUID) (*repository.PhoneCall, error)
