@@ -39,7 +39,6 @@ import (
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/consumer"
 	"personal-crm/backend/internal/consumer/consumerjobs"
-	"personal-crm/backend/internal/crypto"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/google"
@@ -49,7 +48,6 @@ import (
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/scheduler"
 	"personal-crm/backend/internal/service"
-	tgpkg "personal-crm/backend/internal/telegram"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -190,7 +188,6 @@ func run() int {
 
 	// Message-store repos + staging registry + venue resolver.
 	messaging := buildMessagingFoundation(database.Queries, messagesMessageRepo, calendarRepoForIngest)
-	telegramMessageRepo := messaging.TelegramMessageRepo
 	commsMessageRepo := messaging.CommsMessageRepo
 
 	// Event-bus consumers (Cadence / Knowledge / FollowUp / InteractionRecorder)
@@ -222,7 +219,6 @@ func run() int {
 	// AddressBookReconciler back-reference.
 	domain := buildDomainServices(database, core, graph, ingest, consumers, ingestStk, eventBus)
 	noteService := domain.NoteService
-	enrichmentService := domain.EnrichmentService
 
 	// Rematch dispatcher consumer — subscribes to contact_methods.added
 	// events and runs RematchService.Run with per-contact mutex
@@ -252,71 +248,20 @@ func run() int {
 	gchatProvider := syncStk.GChatProvider
 	gchatSyncStates := syncStk.GChatSyncStates
 
-	// Telegram integration (independent of external sync)
-	var telegramManager *tgpkg.TelegramManager
-	var telegramHandler *handlers.TelegramHandler
-
+	// Telegram integration (independent of external sync). A zero
+	// telegramStack reproduces today's nil manager/handler when disabled.
+	var telegramStk telegramStack
 	if cfg.Features.EnableTelegramSync && cfg.External.TelegramAPIID != 0 {
-		telegramSessionRepo := repository.NewTelegramSessionRepository(database.Queries)
-		telegramUpdateStateRepo := repository.NewTelegramUpdateStateRepository(database.Queries)
-		telegramChatConfigRepo := repository.NewTelegramChatConfigRepository(database.Queries)
-		// telegramMessageRepo is hoisted above (needed by the consumer
-		// wiring); no re-construction here.
-		telegramSyncRepo := repository.NewSyncRepository(database.Queries)
-
-		// Phase 4: identity + aggregation dependencies
-		tgIdentityRepo := repository.NewIdentityRepository(database.Queries)
-		tgIdentityService := service.NewIdentityService(tgIdentityRepo)
-		tgExternalContactRepo := repository.NewExternalContactRepository(database.Queries)
-
-		encryptor, err := crypto.NewTokenEncryptor(cfg.External.TokenEncryptionKey)
-		if err != nil {
-			logger.Fatal().Err(err).Msg("failed to initialize Telegram encryptor (TOKEN_ENCRYPTION_KEY required)")
-		}
-
-		// River-backed stale-claim recovery enqueuer. Uses UniqueOpts
-		// {ByArgs: true} paired with the InteractionRecorderJobArgs.EventID
-		// `river:"unique"` tag so repeated recovery enqueues against the
-		// same event coalesce into one in-flight job (spec §3 Race
-		// Mechanics).
-		tgRecoveryEnqueuer := consumer.NewRiverInteractionRecorderEnqueuer(riverClient)
-
-		telegramManager = tgpkg.NewTelegramManager(
-			telegramSessionRepo,
-			telegramUpdateStateRepo,
-			telegramChatConfigRepo,
-			telegramMessageRepo,
-			telegramSyncRepo,
-			encryptor,
-			cfg.External.TelegramAPIID,
-			cfg.External.TelegramAPIHash,
-			&cfg.Telegram,
-			tgIdentityService,
-			tgExternalContactRepo,
-			enrichmentService,
-			interactionRepo,
-			contactService,
-			contactService,
-			pubBus,
-			database.Pool,
-			tgRecoveryEnqueuer,
-		)
-
-		if err := telegramManager.Start(ctx); err != nil {
-			logger.Warn().Err(err).Msg("failed to start Telegram connection")
-		}
+		telegramStk = buildTelegram(ctx, cfg, database, core, graph, messaging, domain, pubBus, riverClient)
+	}
+	telegramManager := telegramStk.Manager
+	telegramHandler := telegramStk.Handler
+	// The Stop defer lives here (not inside buildTelegram) so it fires on
+	// run() return, not when the wire function returns. Nil-guarded:
+	// registers only when a manager was built, exactly as the old
+	// branch-local defer did (decision 4).
+	if telegramManager != nil {
 		defer telegramManager.Stop()
-
-		telegramHandler = handlers.NewTelegramHandler(telegramManager)
-
-		// Register telegram rematch handlers (telegram + phone identifiers)
-		// against the same matcher/aggregator instances the manager owns so
-		// rematch behavior is identical to the post-import path.
-		rematchService.Register(tgpkg.NewUsernameRematchHandler(telegramMessageRepo, telegramManager.PeerMatcher(), telegramManager.AggregationEngine()))
-		rematchService.Register(tgpkg.NewPhoneRematchHandler(telegramMessageRepo, telegramManager.PeerMatcher(), telegramManager.AggregationEngine()))
-		logger.Info().Msg("Telegram rematch handlers registered")
-
-		logger.Info().Msg("Telegram integration initialized")
 	}
 
 	// Wire Telegram post-import hook (if both Telegram and imports are enabled)
