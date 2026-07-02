@@ -350,7 +350,7 @@ v1 := router.Group("/api/v1")
 | | `/host/:id` | GET/DELETE | MacHostHandler | Get / revoke host (delete cascades push-cursor rows) |
 | | `/host/pairing-token` | POST | MacHostHandler | Mint single-use pairing token (10-min TTL) |
 
-Routes defined in `backend/cmd/crm-api/main.go`.
+Routes defined in per-domain `RegisterXRoutes` helpers under `backend/internal/api/handlers/*_routes.go`; their gated call sites live in `backend/cmd/crm-api/main.go`.
 
 ---
 

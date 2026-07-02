@@ -1313,12 +1313,10 @@ func run() int {
 
 	// OAuth callback routes (no auth - called by provider redirects)
 	if oauthHandler != nil {
-		if googleOAuthService != nil {
-			router.GET("/api/v1/auth/google/callback", oauthHandler.GoogleCallback)
-		}
-		if oauthHandler.HasTodoistOAuth() {
-			router.GET("/api/v1/auth/todoist/callback", oauthHandler.TodoistCallback)
-		}
+		handlers.RegisterOAuthCallbackRoutes(router, handlers.OAuthCallbackDeps{
+			Handler:       oauthHandler,
+			GoogleEnabled: googleOAuthService != nil,
+		})
 	}
 
 	// Mac-daemon public + host-auth routes (Pair + heartbeat + cursor +
@@ -1344,77 +1342,42 @@ func run() int {
 			auth.APIKeyMiddleware(cfg),
 			auth.MacHostAuthMiddleware(macHostRepo, auth.DefaultPasswordComparator, auth.DefaultMacHostAuthLimiterConfig()),
 		)
-		ingestGroup := router.Group("/api/v1/ingest")
-		ingestGroup.Use(ingestAuth)
-		ingestGroup.POST("/events", ingestHandler.IngestEvents)
+		handlers.RegisterIngestRoutes(router, handlers.IngestRouteDeps{
+			Auth:        ingestAuth,
+			Ingest:      ingestHandler,
+			MeetingNote: meetingNoteHandler,
+		})
 		logger.Info().Msg("event bus ingestion endpoint enabled")
-
-		// Daemon recovery endpoint: the Mac daemon polls this on
-		// startup to reconcile its local pending-notification table
-		// against the Pi's current truth. Lives under composite auth
-		// so the daemon's X-Mac-Host-ID + Bearer pair-key path
-		// resolves; the frontend (global API key) can also reach it.
-		meetingNoteRecoveryGroup := router.Group("/api/v1/meeting-notes")
-		meetingNoteRecoveryGroup.Use(ingestAuth)
-		meetingNoteRecoveryGroup.GET("/needs-attention", meetingNoteHandler.ListNeedsAttention)
 	}
 
 	// API routes
 	v1 := router.Group("/api/v1")
 	v1.Use(auth.APIKeyMiddleware(cfg))
 	{
-		// Contact routes
-		contacts := v1.Group("/contacts")
-		{
-			contacts.POST("", contactHandler.CreateContact)
-			contacts.GET("/overdue", contactHandler.ListOverdueContacts)
-			contacts.GET("", contactHandler.ListContacts)
-			contacts.GET("/:id", contactHandler.GetContact)
-			contacts.PUT("/:id", contactHandler.UpdateContact)
-			contacts.DELETE("/:id", contactHandler.DeleteContact)
-			contacts.GET("/:id/interactions", interactionHandler.ListContactInteractions)
-			contacts.POST("/:id/interactions", interactionHandler.CreateInteraction)
-			contacts.GET("/:id/notes", noteHandler.GetContactNotepad)
-			contacts.PUT("/:id/notes", noteHandler.SaveContactNotepad)
-			// Merge routes
-			contacts.GET("/:id/merge/preview", contactHandler.GetMergePreview)
-			contacts.POST("/:id/merge", contactHandler.MergeContacts)
-		}
-
-		// Interaction routes (non-contact-scoped)
-		interactions := v1.Group("/interactions")
-		{
-			interactions.DELETE("/:id", interactionHandler.DeleteInteraction)
-		}
+		// Contact + interaction routes (unconditional).
+		handlers.RegisterContactRoutes(v1, handlers.ContactRouteDeps{
+			Contact:     contactHandler,
+			Interaction: interactionHandler,
+			Note:        noteHandler,
+		})
 
 		// Meeting-note conflict-resolution — user-driven, called from
 		// the frontend with the global API key. Stays under the v1
 		// APIKeyMiddleware group.
-		meetingNotes := v1.Group("/meeting-notes")
-		{
-			meetingNotes.POST("/:id/resolve-link", meetingNoteHandler.ResolveLink)
-		}
+		handlers.RegisterMeetingNoteRoutes(v1, meetingNoteHandler)
 
 		// Rematch routes — always registered; service no-ops when no handlers
 		// are registered (e.g. telegram-disabled deployments still get calendar).
-		rematchRoutes := v1.Group("/rematch")
-		{
-			rematchRoutes.GET("/jobs/:jobID", rematchHandler.GetJob)
-			rematchRoutes.POST("/contacts/:id/rescan", rematchHandler.Rescan)
-		}
+		handlers.RegisterRematchRoutes(v1, rematchHandler)
 
 		// Sync-staleness breaches — registered unconditionally (OUTSIDE the
 		// EnableExternalSync-gated /sync group below): heartbeat/push breaches
 		// must be visible even with external sync off. The static 2-segment
 		// path coexists with that group's 3-segment param routes.
-		v1.GET("/sync/staleness", stalenessHandler.GetActiveBreaches)
+		handlers.RegisterSyncStalenessRoutes(v1, stalenessHandler)
 
 		// System routes
-		system := v1.Group("/system")
-		{
-			system.GET("/time", systemHandler.GetSystemTime)
-			system.POST("/time/acceleration", systemHandler.SetTimeAcceleration)
-		}
+		handlers.RegisterSystemRoutes(v1, systemHandler)
 
 		// Mac-daemon admin routes (under global API key middleware).
 		// Pairing-token mint + revoke + list/get for the Mac settings UI.
@@ -1422,137 +1385,49 @@ func run() int {
 
 		// OAuth routes (feature-flagged with external sync)
 		if oauthHandler != nil {
-			authRoutes := v1.Group("/auth")
-			{
-				// Google OAuth (only if configured)
-				if googleOAuthService != nil {
-					authRoutes.GET("/google", oauthHandler.GetGoogleAuthURL)
-					authRoutes.GET("/google/accounts", oauthHandler.ListGoogleAccounts)
-					authRoutes.GET("/google/accounts/:id/status", oauthHandler.GetGoogleAccountStatus)
-					authRoutes.POST("/google/accounts/:id/revoke", oauthHandler.RevokeGoogleAccount)
-				}
-
-				// Todoist OAuth (only if configured)
-				if oauthHandler.HasTodoistOAuth() {
-					authRoutes.GET("/todoist", oauthHandler.GetTodoistAuthURL)
-					authRoutes.GET("/todoist/accounts", oauthHandler.ListTodoistAccounts)
-					authRoutes.GET("/todoist/accounts/:id/status", oauthHandler.GetTodoistAccountStatus)
-					authRoutes.POST("/todoist/accounts/:id/revoke", oauthHandler.RevokeTodoistAccount)
-				}
-			}
+			handlers.RegisterOAuthRoutes(v1, handlers.OAuthCallbackDeps{
+				Handler:       oauthHandler,
+				GoogleEnabled: googleOAuthService != nil,
+			})
 		}
 
 		// Todoist settings routes (only if Todoist is configured)
 		if todoistHandler != nil {
-			todoistRoutes := v1.Group("/todoist")
-			{
-				todoistRoutes.GET("/settings", todoistHandler.GetSettings)
-				todoistRoutes.PATCH("/settings", todoistHandler.UpdateSettings)
-				todoistRoutes.GET("/projects", todoistHandler.ListProjects)
-				todoistRoutes.GET("/labels", todoistHandler.ListLabels)
-			}
+			handlers.RegisterTodoistRoutes(v1, todoistHandler)
 		}
 
 		// Telegram routes (feature-flagged)
 		if telegramHandler != nil {
-			tgRoutes := v1.Group("/telegram")
-			{
-				tgAuth := tgRoutes.Group("/auth")
-				{
-					tgAuth.POST("/start", telegramHandler.StartAuth)
-					tgAuth.POST("/verify-code", telegramHandler.VerifyCode)
-					tgAuth.POST("/verify-password", telegramHandler.VerifyPassword)
-					tgAuth.POST("/cancel", telegramHandler.CancelAuth)
-					tgAuth.DELETE("", telegramHandler.Disconnect)
-					tgAuth.GET("/status", telegramHandler.GetStatus)
-				}
-				tgChats := tgRoutes.Group("/chats")
-				{
-					tgChats.GET("", telegramHandler.ListChats)
-					tgChats.PATCH("/:chat_id", telegramHandler.UpdateChatStatus)
-				}
-			}
+			handlers.RegisterTelegramRoutes(v1, telegramHandler)
 		}
 
 		// External sync routes (feature-flagged)
 		if cfg.Features.EnableExternalSync && syncHandler != nil {
-			syncRoutes := v1.Group("/sync")
-			{
-				syncRoutes.GET("/status", syncHandler.GetSyncStatus)
-				syncRoutes.GET("/providers", syncHandler.GetAvailableProviders)
-				syncRoutes.GET("/logs", syncHandler.GetRecentSyncLogs)
-				// Source-based routes (by source name like "gmail", "calendar")
-				syncRoutes.GET("/:source/status", syncHandler.GetSyncState)
-				syncRoutes.POST("/:source/trigger", syncHandler.TriggerSync)
-				// State-based routes (by sync state UUID)
-				syncRoutes.PATCH("/states/:id/enable", syncHandler.EnableSync)
-				syncRoutes.GET("/states/:id/logs", syncHandler.GetSyncLogs)
-			}
-
-			// Identity matching routes
-			identities := v1.Group("/identities")
-			{
-				identities.GET("/unmatched", identityHandler.ListUnmatchedIdentities)
-				identities.GET("/:id", identityHandler.GetIdentity)
-				identities.POST("/:id/link", identityHandler.LinkIdentity)
-				identities.POST("/:id/unlink", identityHandler.UnlinkIdentity)
-				identities.DELETE("/:id", identityHandler.DeleteIdentity)
-			}
-
-			// Add identity route to contacts
-			contacts.GET("/:id/identities", identityHandler.ListIdentitiesForContact)
+			handlers.RegisterSyncRoutes(v1, syncHandler)
+			handlers.RegisterIdentityRoutes(v1, identityHandler)
 
 			// Add contact task routes (manual tasks) if Todoist is configured
 			if contactTaskHandler != nil {
-				contacts.GET("/:id/tasks", contactTaskHandler.ListContactTasks)
-				contacts.POST("/:id/tasks", contactTaskHandler.CreateManualTask)
-				contacts.DELETE("/:id/tasks/:taskId", contactTaskHandler.DeleteTaskLink)
+				handlers.RegisterContactTaskRoutes(v1, contactTaskHandler)
 			}
 
 			// Add calendar event routes to contacts if calendar handler is initialized
 			if calendarHandler != nil {
-				contacts.GET("/:id/events", calendarHandler.ListEventsForContact)
-				contacts.GET("/:id/events/upcoming", calendarHandler.ListUpcomingEventsForContact)
-
-				// Add global events route
-				events := v1.Group("/events")
-				{
-					events.GET("/upcoming", calendarHandler.ListUpcomingEvents)
-				}
+				handlers.RegisterCalendarRoutes(v1, calendarHandler)
 			}
 
 			// Import candidates routes
 			if importHandler != nil {
-				imports := v1.Group("/imports")
-				{
-					imports.GET("/candidates", importHandler.ListImportCandidates)
-					// Static anarlog-title discovery routes are declared
-					// BEFORE the /:id param route so Gin's tree inserts the
-					// static segment first and /imports/anarlog-title cannot
-					// be shadowed by the :id match.
-					if anarlogDiscoveryHandler != nil {
-						imports.GET("/anarlog-title", anarlogDiscoveryHandler.ListAnarlogTitle)
-						imports.POST("/anarlog-title/resolve", anarlogDiscoveryHandler.ResolveAnarlogTitle)
-					}
-					// Static suggestions routes are likewise declared BEFORE
-					// the /:id param route so the literal `suggestions`
-					// segment is not shadowed by the :id wildcard.
-					if suggestionHandler != nil {
-						imports.GET("/suggestions", suggestionHandler.ListSuggestions)
-						imports.POST("/suggestions/:id/methods/resolve", suggestionHandler.ResolveMethodSuggestions)
-						imports.POST("/suggestions/:id/methods/dismiss", suggestionHandler.DismissMethodSuggestions)
-					}
-					imports.GET("/:id", importHandler.GetImportCandidate)
-					imports.POST("/:id/import", importHandler.ImportContact)
-					imports.POST("/:id/link", importHandler.LinkContact)
-					imports.POST("/:id/ignore", importHandler.IgnoreContact)
-				}
+				handlers.RegisterImportRoutes(v1, handlers.ImportRouteDeps{
+					Import:           importHandler,
+					AnarlogDiscovery: anarlogDiscoveryHandler,
+					Suggestions:      suggestionHandler,
+				})
 			}
 		}
 
 		// Export/Import routes
-		v1.POST("/export", systemHandler.ExportData)
-		v1.POST("/import", systemHandler.ImportData)
+		handlers.RegisterDataExchangeRoutes(v1, systemHandler)
 
 		// Test routes (gated by CRM_ENV=testing or CRM_ENV=test)
 		if cfg.Runtime.CRMEnvironment == "testing" || cfg.Runtime.CRMEnvironment == "test" {
@@ -1569,29 +1444,13 @@ func run() int {
 			if calendarHandler == nil {
 				calendarHandler = handlers.NewCalendarHandler(testCalendarRepo)
 				// Register calendar routes that weren't registered earlier (OAuth not configured)
-				contacts.GET("/:id/events", calendarHandler.ListEventsForContact)
-				contacts.GET("/:id/events/upcoming", calendarHandler.ListUpcomingEventsForContact)
-				events := v1.Group("/events")
-				{
-					events.GET("/upcoming", calendarHandler.ListUpcomingEvents)
-				}
+				handlers.RegisterCalendarRoutes(v1, calendarHandler)
 				logger.Info().Msg("calendar handler initialized for testing (no OAuth)")
 			}
 
 			testSeedService := service.NewTestSeedService(database, testExternalRepo, contactService, testCalendarRepo, macHostRepo, meetingNoteRepoForIngest)
 			testHandler := handlers.NewTestHandler(testSeedService)
-			testRoutes := v1.Group("/test")
-			{
-				testRoutes.POST("/seed/contacts", testHandler.SeedContacts)
-				testRoutes.POST("/seed/external-contacts", testHandler.SeedExternalContacts)
-				testRoutes.POST("/seed/method-suggestions", testHandler.SeedMethodSuggestions)
-				testRoutes.POST("/seed/overdue-contacts", testHandler.SeedOverdueContacts)
-				testRoutes.POST("/seed/calendar-events", testHandler.SeedCalendarEvents)
-				testRoutes.POST("/seed/mac-hosts", testHandler.SeedMacHost)
-				testRoutes.POST("/seed/meeting-notes", testHandler.SeedMeetingNotes)
-				testRoutes.POST("/cleanup", testHandler.Cleanup)
-				testRoutes.POST("/trigger-error", testHandler.TriggerError)
-			}
+			handlers.RegisterTestRoutes(v1, testHandler)
 			logger.Info().Msg("test API endpoints enabled (CRM_ENV=testing)")
 		}
 	}
