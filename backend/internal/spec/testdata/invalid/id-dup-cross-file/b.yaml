@@ -1,0 +1,11 @@
+domain: beta
+prefix: SHR
+maturity: reviewed
+behaviors:
+  - id: SHR-001
+    title: in file b
+    type: business-logic
+    status: current
+    when: x
+    then:
+      - y

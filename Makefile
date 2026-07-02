@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev dev-seed staging-reset build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry
+.PHONY: help setup dev dev-seed staging-reset build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry spec-lint
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -129,6 +129,7 @@ help:
 	@echo "  mac-daemon  - Build the macOS daemon app bundle (optionally set CRM_MAC_CODESIGN_IDENTITY)"
 	@echo "  sqlc        - Regenerate sqlc code from SQL queries"
 	@echo "  lint        - Run all linters (backend + frontend)"
+	@echo "  spec-lint   - Lint the behavior spec corpus (spec/*.yaml)"
 	@echo "  clean       - Clean build artifacts"
 	@echo ""
 	@echo "Testing:"
@@ -430,7 +431,7 @@ test: test-unit test-integration test-frontend
 
 test-unit:
 	@echo "Running backend unit tests..."
-	@cd backend && go test ./tests/... ./internal/matching/... ./internal/events/... ./internal/service/... ./internal/contacttask/... $(GOTEST_VERBOSE) -short
+	@cd backend && go test ./tests/... ./internal/matching/... ./internal/events/... ./internal/service/... ./internal/contacttask/... ./internal/spec/... ./cmd/spec-lint/... $(GOTEST_VERBOSE) -short
 
 # Provisions the per-worktree Postgres instance BEFORE the integration recipes
 # expand $(TEST_DATABASE_URL) (gh #433). As a prerequisite it runs to
@@ -553,6 +554,13 @@ lint: lint-ingest-registry
 lint-fix:
 	@echo "Running golangci-lint with auto-fix..."
 	@cd backend && $(GOLANGCI_LINT) run --fix ./...
+
+# Lint the behavior SSOT corpus (spec/*.yaml) against the schema in
+# spec/README.md. Standalone target (NOT a `lint` prerequisite): the pre-push
+# LINT lane runs it as its own entry, so chaining it into `lint` would
+# double-run it in that lane.
+spec-lint:
+	@cd backend && go run ./cmd/spec-lint $(REPO_ROOT)/spec
 
 # Grep guard for #342's descriptor table: fails if the IngestBatch body
 # names any event kind (constant or dotted literal) or per-family

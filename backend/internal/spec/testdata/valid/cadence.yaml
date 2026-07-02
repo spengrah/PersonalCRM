@@ -1,0 +1,27 @@
+domain: cadence-followup
+prefix: CAD
+maturity: draft
+behaviors:
+  - id: CAD-001
+    title: Overdue contacts surface a follow-up task
+    type: api
+    status: current
+    given: a contact past its cadence
+    when: the scheduler runs
+    then:
+      - a follow-up task is created
+  - id: CAD-002
+    title: Recording an interaction advances the cadence
+    type: business-logic
+    status: current
+    when: an interaction is recorded
+    then:
+      - the next contact_by date advances
+  - id: CAD-003
+    title: An empty given list is valid on a GWT behavior
+    type: business-logic
+    status: current
+    given: []
+    when: a trigger fires
+    then:
+      - an outcome is observable

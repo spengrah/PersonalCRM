@@ -1,0 +1,11 @@
+domain: beta
+prefix: PFX
+maturity: reviewed
+behaviors:
+  - id: PFX-002
+    title: in file b
+    type: business-logic
+    status: current
+    when: x
+    then:
+      - y

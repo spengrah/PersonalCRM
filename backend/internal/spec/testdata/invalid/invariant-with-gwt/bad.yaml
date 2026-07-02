@@ -1,0 +1,11 @@
+domain: contacts
+prefix: CON
+maturity: reviewed
+behaviors:
+  - id: CON-001
+    title: invariant that also uses GWT keys
+    type: invariant
+    status: current
+    statement: some property always holds
+    when: ""
+    given: []

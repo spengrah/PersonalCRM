@@ -1,0 +1,23 @@
+domain: contacts
+prefix: CON
+maturity: reviewed
+behaviors:
+  - id: CON-001
+    title: when is an int
+    type: business-logic
+    status: current
+    when: 42
+    then:
+      - ok
+  - id: CON-002
+    title: statement is an int
+    type: invariant
+    status: current
+    statement: 42
+  - id: CON-003
+    title: then has a bool item
+    type: business-logic
+    status: current
+    when: a trigger
+    then:
+      - true

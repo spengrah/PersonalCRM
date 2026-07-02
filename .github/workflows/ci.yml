@@ -17,6 +17,7 @@ jobs:
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
       mac_daemon: ${{ steps.filter.outputs.mac_daemon }}
+      spec: ${{ steps.filter.outputs.spec }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -126,6 +127,29 @@ jobs:
         # --seed subcommand type not defined there) would otherwise ship
         # uncaught. This cross-compile guards it.
         run: go build -o bin/crm-admin-arm64 cmd/crm-admin/main.go
+
+  # Lints the behavior SSOT corpus (spec/*.yaml). Gated on spec OR backend:
+  # spec/** changes must lint the corpus, and the backend OR closes the drift
+  # window where a linter-rule change (under backend/**, not touching spec/**)
+  # invalidates the existing corpus and lands green. Deliberately minimal (no
+  # module/build caches, no go mod download): `go run ./cmd/spec-lint` compiles
+  # only the spec package's dependency closure (yaml.v3 + stdlib), so the cold
+  # path is seconds.
+  spec-lint:
+    name: Spec Lint
+    runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ needs.changes.outputs.spec == 'true' || needs.changes.outputs.backend == 'true' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: false
+      - name: Run spec linter
+        run: make spec-lint
 
   backend-tests:
     name: Backend Tests

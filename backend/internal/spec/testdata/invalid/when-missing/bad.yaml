@@ -1,0 +1,10 @@
+domain: contacts
+prefix: CON
+maturity: reviewed
+behaviors:
+  - id: CON-001
+    title: no when key
+    type: business-logic
+    status: current
+    then:
+      - y

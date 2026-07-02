@@ -1,0 +1,11 @@
+domain: contacts
+prefix: CON
+maturity: reviewed
+behaviors:
+  - id: CON-001
+    title: an unknown type
+    type: frobnicate
+    status: current
+    when: x
+    then:
+      - y

@@ -1,0 +1,18 @@
+domain: agg
+prefix: AGG
+maturity: gold
+behaviors:
+  - id: AGG-001
+    title: behavior with a structurally broken then field
+    type: business-logic
+    status: current
+    when: x
+    then:
+      - true
+  - id: AGG-002
+    title: sibling with a semantic status violation
+    type: business-logic
+    status: bogus
+    when: y
+    then:
+      - z

@@ -1,0 +1,20 @@
+domain: contacts
+prefix: CON
+maturity: reviewed
+behaviors:
+  - id: CON-001
+    title: invariant with a structurally broken when
+    type: invariant
+    status: current
+    statement: some property always holds
+    when:
+      - first
+      - second
+  - id: CON-002
+    title: gwt type with a structurally broken statement
+    type: business-logic
+    status: current
+    when: a trigger
+    then:
+      - an outcome
+    statement: 42

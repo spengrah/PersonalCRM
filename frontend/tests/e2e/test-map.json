@@ -605,5 +605,9 @@
   {
     "pattern": "^backend/internal/config/config\\.go$",
     "tags": ["@smoke"]
+  },
+  {
+    "pattern": "^backend/internal/spec/",
+    "tags": []
   }
 ]

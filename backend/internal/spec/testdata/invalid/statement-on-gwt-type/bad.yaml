@@ -1,0 +1,12 @@
+domain: contacts
+prefix: CON
+maturity: reviewed
+behaviors:
+  - id: CON-001
+    title: gwt type carrying a statement
+    type: business-logic
+    status: current
+    when: x
+    then:
+      - y
+    statement: this belongs only on invariants

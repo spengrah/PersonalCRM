@@ -22,6 +22,10 @@
 #                 group, so this group changes NO CI/pre-push test selection — it only flags a
 #                 schema change so the reseed decision emits a migration nudge. No CI/pre-push
 #                 consumer reads it.
+#   spec        → CI spec-lint job (unlike seed/migrations this IS a CI-selection group: the
+#                 changes job exposes outputs.spec and the spec-lint job gates on it). No local
+#                 consumer reads the group — the pre-push side runs `make spec-lint`
+#                 unconditionally in the LINT lane.
 
 backend:
   - 'backend/**'
@@ -42,3 +46,5 @@ seed:
   - 'backend/internal/synthetic/**'
 migrations:
   - 'backend/migrations/**'
+spec:
+  - 'spec/**'
