@@ -91,7 +91,7 @@ GOTEST_VERBOSE ?= -v
 #   INTEGRATION_RUN  -> appends -run '<regex>' when non-empty (else no -run).
 #   INTEGRATION_PKGS -> the package list (default = today's full list).
 INTEGRATION_RUN ?=
-INTEGRATION_PKGS ?= ./tests/... ./internal/todoist/... ./internal/google/... ./internal/testdb/... ./cmd/crm-admin/...
+INTEGRATION_PKGS ?= ./tests/... ./internal/todoist/... ./internal/google/... ./internal/testdb/... ./cmd/crm-admin/... ./cmd/crm-api/...
 # The leading space is embedded ONLY when non-empty so the recipe is
 # byte-identical to today when the knob is unset (no trailing/double space).
 INTEGRATION_RUN_FLAG := $(if $(INTEGRATION_RUN), -run '$(INTEGRATION_RUN)')
