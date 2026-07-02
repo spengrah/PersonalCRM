@@ -101,53 +101,28 @@ func (q *Queries) ContactIsLive(ctx context.Context, id pgtype.UUID) (bool, erro
 }
 
 const CountContacts = `-- name: CountContacts :one
-SELECT COUNT(*) FROM contact
-WHERE deleted_at IS NULL
-  AND ($1 = '' OR
-       ($1 = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
-       ($1 = 'no_cadence' AND (cadence IS NULL OR cadence = '')))
-  AND ($2 = '' OR
-       ($2 = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       ($2 = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
+SELECT COUNT(*)
+FROM contact c
+WHERE c.deleted_at IS NULL
+  AND ($1::text = '' OR
+       ($1::text = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
+       ($1::text = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
+  AND ($2::text = '' OR
+       ($2::text = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
+       ($2::text = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
+  AND ($3::text IS NULL OR
+       to_tsvector('english', c.full_name || ' ' || COALESCE((SELECT string_agg(cm.value, ' ') FROM contact_method cm WHERE cm.contact_id = c.id), '')) @@ plainto_tsquery('english', $3::text))
 `
 
 type CountContactsParams struct {
-	CadenceFilter  interface{} `json:"cadence_filter"`
-	FollowupFilter interface{} `json:"followup_filter"`
+	CadenceFilter  string      `json:"cadence_filter"`
+	FollowupFilter string      `json:"followup_filter"`
+	SearchQuery    pgtype.Text `json:"search_query"`
 }
 
+// Count variant of ListContacts; same WHERE shape as ListContacts.
 func (q *Queries) CountContacts(ctx context.Context, arg CountContactsParams) (int64, error) {
-	row := q.db.QueryRow(ctx, CountContacts, arg.CadenceFilter, arg.FollowupFilter)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
-const CountSearchContacts = `-- name: CountSearchContacts :one
-SELECT COUNT(*) FROM contact c
-LEFT JOIN (
-  SELECT contact_id, string_agg(value, ' ') AS method_values
-  FROM contact_method
-  GROUP BY contact_id
-) cm ON cm.contact_id = c.id
-WHERE c.deleted_at IS NULL
-  AND ($1 = '' OR
-       ($1 = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
-       ($1 = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
-  AND ($2 = '' OR
-       ($2 = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       ($2 = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
-  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $3)
-`
-
-type CountSearchContactsParams struct {
-	CadenceFilter  interface{} `json:"cadence_filter"`
-	FollowupFilter interface{} `json:"followup_filter"`
-	SearchQuery    string      `json:"search_query"`
-}
-
-func (q *Queries) CountSearchContacts(ctx context.Context, arg CountSearchContactsParams) (int64, error) {
-	row := q.db.QueryRow(ctx, CountSearchContacts, arg.CadenceFilter, arg.FollowupFilter, arg.SearchQuery)
+	row := q.db.QueryRow(ctx, CountContacts, arg.CadenceFilter, arg.FollowupFilter, arg.SearchQuery)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -393,87 +368,64 @@ func (q *Queries) HardDeleteContact(ctx context.Context, id pgtype.UUID) error {
 }
 
 const ListContactIDs = `-- name: ListContactIDs :many
-SELECT id FROM contact
-WHERE deleted_at IS NULL
-  AND ($1 = '' OR
-       ($1 = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
-       ($1 = 'no_cadence' AND (cadence IS NULL OR cadence = '')))
-  AND ($2 = '' OR
-       ($2 = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       ($2 = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
+SELECT c.id
+FROM contact c
+WHERE c.deleted_at IS NULL
+  AND ($1::text = '' OR
+       ($1::text = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
+       ($1::text = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
+  AND ($2::text = '' OR
+       ($2::text = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
+       ($2::text = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
+  AND ($3::text IS NULL OR
+       to_tsvector('english', c.full_name || ' ' || COALESCE((SELECT string_agg(cm.value, ' ') FROM contact_method cm WHERE cm.contact_id = c.id), '')) @@ plainto_tsquery('english', $3::text))
+ORDER BY
+  -- Relevance order applies only when searching without an explicit sort.
+  CASE WHEN $3::text IS NOT NULL AND $4::text = '' THEN
+    ts_rank(to_tsvector('english', c.full_name || ' ' || COALESCE((SELECT string_agg(cm.value, ' ') FROM contact_method cm WHERE cm.contact_id = c.id), '')), plainto_tsquery('english', $3::text))
+  END DESC,
+  CASE WHEN $4::text = 'name' AND $5::text = 'asc' THEN c.full_name END ASC,
+  CASE WHEN $4::text = 'name' AND $5::text = 'desc' THEN c.full_name END DESC,
+  CASE WHEN $4::text = 'location' AND $5::text = 'asc' THEN COALESCE(c.location, '') END ASC,
+  CASE WHEN $4::text = 'location' AND $5::text = 'desc' THEN COALESCE(c.location, '') END DESC,
+  CASE WHEN $4::text = 'birthday' AND $5::text = 'asc' THEN c.birthday END ASC NULLS LAST,
+  CASE WHEN $4::text = 'birthday' AND $5::text = 'desc' THEN c.birthday END DESC NULLS LAST,
+  CASE WHEN $4::text = 'last_contacted' AND $5::text = 'asc' THEN c.last_contacted END ASC NULLS LAST,
+  CASE WHEN $4::text = 'last_contacted' AND $5::text = 'desc' THEN c.last_contacted END DESC NULLS LAST,
+  CASE WHEN $4::text = 'last_response_at' AND $5::text = 'asc' THEN c.last_response_at END ASC NULLS LAST,
+  CASE WHEN $4::text = 'last_response_at' AND $5::text = 'desc' THEN c.last_response_at END DESC NULLS LAST,
+  CASE WHEN $4::text = 'contact_by' AND $5::text = 'asc' THEN c.contact_by END ASC NULLS LAST,
+  CASE WHEN $4::text = 'contact_by' AND $5::text = 'desc' THEN c.contact_by END DESC NULLS LAST,
+  -- Cadence sort by frequency: weekly=1 (most frequent) to annual=6 (least frequent), null=7
+  -- 'desc' = most frequent first (ASC on number), 'asc' = least frequent first (DESC on number)
+  CASE WHEN $4::text = 'cadence' AND $5::text = 'desc' THEN
+    CASE c.cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
+  END ASC,
+  CASE WHEN $4::text = 'cadence' AND $5::text = 'asc' THEN
+    CASE c.cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
+  END DESC,
+  -- Deterministic fallback + tiebreaker: name asc then id, so the unsorted
+  -- list has a stable default order and equal sort keys never paginate
+  -- nondeterministically.
+  c.full_name ASC,
+  c.id ASC
 `
 
 type ListContactIDsParams struct {
-	CadenceFilter  interface{} `json:"cadence_filter"`
-	FollowupFilter interface{} `json:"followup_filter"`
+	CadenceFilter  string      `json:"cadence_filter"`
+	FollowupFilter string      `json:"followup_filter"`
+	SearchQuery    pgtype.Text `json:"search_query"`
+	SortField      string      `json:"sort_field"`
+	SortOrder      string      `json:"sort_order"`
 }
 
-// Lightweight query returning only IDs for navigation
+// Lightweight IDs-only variant of ListContacts for navigation (no pagination);
+// same WHERE + ORDER BY shape as ListContacts.
 func (q *Queries) ListContactIDs(ctx context.Context, arg ListContactIDsParams) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, ListContactIDs, arg.CadenceFilter, arg.FollowupFilter)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []pgtype.UUID{}
-	for rows.Next() {
-		var id pgtype.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const ListContactIDsSorted = `-- name: ListContactIDsSorted :many
-SELECT id FROM contact
-WHERE deleted_at IS NULL
-  AND ($1 = '' OR
-       ($1 = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
-       ($1 = 'no_cadence' AND (cadence IS NULL OR cadence = '')))
-  AND ($2 = '' OR
-       ($2 = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       ($2 = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
-ORDER BY
-  CASE WHEN $3 = 'name' AND $4 = 'asc' THEN full_name END ASC,
-  CASE WHEN $3 = 'name' AND $4 = 'desc' THEN full_name END DESC,
-  CASE WHEN $3 = 'location' AND $4 = 'asc' THEN COALESCE(location, '') END ASC,
-  CASE WHEN $3 = 'location' AND $4 = 'desc' THEN COALESCE(location, '') END DESC,
-  CASE WHEN $3 = 'birthday' AND $4 = 'asc' THEN birthday END ASC NULLS LAST,
-  CASE WHEN $3 = 'birthday' AND $4 = 'desc' THEN birthday END DESC NULLS LAST,
-  CASE WHEN $3 = 'last_contacted' AND $4 = 'asc' THEN last_contacted END ASC NULLS LAST,
-  CASE WHEN $3 = 'last_contacted' AND $4 = 'desc' THEN last_contacted END DESC NULLS LAST,
-  CASE WHEN $3 = 'last_response_at' AND $4 = 'asc' THEN last_response_at END ASC NULLS LAST,
-  CASE WHEN $3 = 'last_response_at' AND $4 = 'desc' THEN last_response_at END DESC NULLS LAST,
-  CASE WHEN $3 = 'contact_by' AND $4 = 'asc' THEN contact_by END ASC NULLS LAST,
-  CASE WHEN $3 = 'contact_by' AND $4 = 'desc' THEN contact_by END DESC NULLS LAST,
-  -- Cadence sort by frequency: weekly=1 (most frequent) to annual=6 (least frequent), null=7
-  CASE WHEN $3 = 'cadence' AND $4 = 'desc' THEN
-    CASE cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
-  END ASC,
-  CASE WHEN $3 = 'cadence' AND $4 = 'asc' THEN
-    CASE cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
-  END DESC,
-  -- Secondary sort by name for cadence sorting
-  CASE WHEN $3 = 'cadence' THEN full_name END ASC
-`
-
-type ListContactIDsSortedParams struct {
-	CadenceFilter  interface{} `json:"cadence_filter"`
-	FollowupFilter interface{} `json:"followup_filter"`
-	SortField      interface{} `json:"sort_field"`
-	SortOrder      interface{} `json:"sort_order"`
-}
-
-// Lightweight query returning only IDs with sorting for navigation
-func (q *Queries) ListContactIDsSorted(ctx context.Context, arg ListContactIDsSortedParams) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, ListContactIDsSorted,
+	rows, err := q.db.Query(ctx, ListContactIDs,
 		arg.CadenceFilter,
 		arg.FollowupFilter,
+		arg.SearchQuery,
 		arg.SortField,
 		arg.SortOrder,
 	)
@@ -496,116 +448,73 @@ func (q *Queries) ListContactIDsSorted(ctx context.Context, arg ListContactIDsSo
 }
 
 const ListContacts = `-- name: ListContacts :many
-SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at FROM contact
-WHERE deleted_at IS NULL
-  AND ($1 = '' OR
-       ($1 = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
-       ($1 = 'no_cadence' AND (cadence IS NULL OR cadence = '')))
-  AND ($2 = '' OR
-       ($2 = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       ($2 = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
-LIMIT $4 OFFSET $3
+SELECT c.id, c.full_name, c.location, c.birthday, c.how_met, c.cadence, c.last_contacted, c.profile_photo, c.deleted_at, c.created_at, c.updated_at, c.contact_by, c.last_interaction_at, c.last_outreach_at, c.last_response_at
+FROM contact c
+WHERE c.deleted_at IS NULL
+  AND ($1::text = '' OR
+       ($1::text = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
+       ($1::text = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
+  AND ($2::text = '' OR
+       ($2::text = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
+       ($2::text = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
+  AND ($3::text IS NULL OR
+       to_tsvector('english', c.full_name || ' ' || COALESCE((SELECT string_agg(cm.value, ' ') FROM contact_method cm WHERE cm.contact_id = c.id), '')) @@ plainto_tsquery('english', $3::text))
+ORDER BY
+  -- Relevance order applies only when searching without an explicit sort.
+  CASE WHEN $3::text IS NOT NULL AND $4::text = '' THEN
+    ts_rank(to_tsvector('english', c.full_name || ' ' || COALESCE((SELECT string_agg(cm.value, ' ') FROM contact_method cm WHERE cm.contact_id = c.id), '')), plainto_tsquery('english', $3::text))
+  END DESC,
+  CASE WHEN $4::text = 'name' AND $5::text = 'asc' THEN c.full_name END ASC,
+  CASE WHEN $4::text = 'name' AND $5::text = 'desc' THEN c.full_name END DESC,
+  CASE WHEN $4::text = 'location' AND $5::text = 'asc' THEN COALESCE(c.location, '') END ASC,
+  CASE WHEN $4::text = 'location' AND $5::text = 'desc' THEN COALESCE(c.location, '') END DESC,
+  CASE WHEN $4::text = 'birthday' AND $5::text = 'asc' THEN c.birthday END ASC NULLS LAST,
+  CASE WHEN $4::text = 'birthday' AND $5::text = 'desc' THEN c.birthday END DESC NULLS LAST,
+  CASE WHEN $4::text = 'last_contacted' AND $5::text = 'asc' THEN c.last_contacted END ASC NULLS LAST,
+  CASE WHEN $4::text = 'last_contacted' AND $5::text = 'desc' THEN c.last_contacted END DESC NULLS LAST,
+  CASE WHEN $4::text = 'last_response_at' AND $5::text = 'asc' THEN c.last_response_at END ASC NULLS LAST,
+  CASE WHEN $4::text = 'last_response_at' AND $5::text = 'desc' THEN c.last_response_at END DESC NULLS LAST,
+  CASE WHEN $4::text = 'contact_by' AND $5::text = 'asc' THEN c.contact_by END ASC NULLS LAST,
+  CASE WHEN $4::text = 'contact_by' AND $5::text = 'desc' THEN c.contact_by END DESC NULLS LAST,
+  -- Cadence sort by frequency: weekly=1 (most frequent) to annual=6 (least frequent), null=7
+  -- 'desc' = most frequent first (ASC on number), 'asc' = least frequent first (DESC on number)
+  CASE WHEN $4::text = 'cadence' AND $5::text = 'desc' THEN
+    CASE c.cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
+  END ASC,
+  CASE WHEN $4::text = 'cadence' AND $5::text = 'asc' THEN
+    CASE c.cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
+  END DESC,
+  -- Deterministic fallback + tiebreaker: name asc then id, so the unsorted
+  -- list has a stable default order and equal sort keys never paginate
+  -- nondeterministically.
+  c.full_name ASC,
+  c.id ASC
+LIMIT $7 OFFSET $6
 `
 
 type ListContactsParams struct {
-	CadenceFilter  interface{} `json:"cadence_filter"`
-	FollowupFilter interface{} `json:"followup_filter"`
+	CadenceFilter  string      `json:"cadence_filter"`
+	FollowupFilter string      `json:"followup_filter"`
+	SearchQuery    pgtype.Text `json:"search_query"`
+	SortField      string      `json:"sort_field"`
+	SortOrder      string      `json:"sort_order"`
 	PageOffset     int32       `json:"page_offset"`
 	PageLimit      int32       `json:"page_limit"`
 }
 
-// cadence_filter: ” = no filter (Go zero value), 'has_cadence' = non-empty cadence,
-// 'no_cadence' = NULL or empty string (defensive; CHECK constraint prevents empty strings)
-// followup_filter: ” = no filter, 'has_followup' = pending follow-up exists, 'no_followup' = no pending follow-up
+// Unified contact listing (one WHERE + ORDER BY shape shared by the rows,
+// IDs, and count queries below — keep the three in lockstep):
+//
+//	search_query: NULL = no search; else full-text over full_name + method values
+//	cadence_filter: '' = no filter, 'has_cadence' = non-empty cadence,
+//	  'no_cadence' = NULL or empty string (defensive; CHECK constraint prevents empty strings)
+//	followup_filter: '' = no filter, 'has_followup' = pending follow-up exists, 'no_followup' = no pending follow-up
+//	sort_field/'sort_order': '' = default order (relevance when searching, else name asc)
 func (q *Queries) ListContacts(ctx context.Context, arg ListContactsParams) ([]*Contact, error) {
 	rows, err := q.db.Query(ctx, ListContacts,
 		arg.CadenceFilter,
 		arg.FollowupFilter,
-		arg.PageOffset,
-		arg.PageLimit,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []*Contact{}
-	for rows.Next() {
-		var i Contact
-		if err := rows.Scan(
-			&i.ID,
-			&i.FullName,
-			&i.Location,
-			&i.Birthday,
-			&i.HowMet,
-			&i.Cadence,
-			&i.LastContacted,
-			&i.ProfilePhoto,
-			&i.DeletedAt,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.ContactBy,
-			&i.LastInteractionAt,
-			&i.LastOutreachAt,
-			&i.LastResponseAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, &i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const ListContactsSorted = `-- name: ListContactsSorted :many
-SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at FROM contact
-WHERE deleted_at IS NULL
-  AND ($1 = '' OR
-       ($1 = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
-       ($1 = 'no_cadence' AND (cadence IS NULL OR cadence = '')))
-  AND ($2 = '' OR
-       ($2 = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       ($2 = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
-ORDER BY
-  CASE WHEN $3 = 'name' AND $4 = 'asc' THEN full_name END ASC,
-  CASE WHEN $3 = 'name' AND $4 = 'desc' THEN full_name END DESC,
-  CASE WHEN $3 = 'location' AND $4 = 'asc' THEN COALESCE(location, '') END ASC,
-  CASE WHEN $3 = 'location' AND $4 = 'desc' THEN COALESCE(location, '') END DESC,
-  CASE WHEN $3 = 'birthday' AND $4 = 'asc' THEN birthday END ASC NULLS LAST,
-  CASE WHEN $3 = 'birthday' AND $4 = 'desc' THEN birthday END DESC NULLS LAST,
-  CASE WHEN $3 = 'last_contacted' AND $4 = 'asc' THEN last_contacted END ASC NULLS LAST,
-  CASE WHEN $3 = 'last_contacted' AND $4 = 'desc' THEN last_contacted END DESC NULLS LAST,
-  CASE WHEN $3 = 'last_response_at' AND $4 = 'asc' THEN last_response_at END ASC NULLS LAST,
-  CASE WHEN $3 = 'last_response_at' AND $4 = 'desc' THEN last_response_at END DESC NULLS LAST,
-  CASE WHEN $3 = 'contact_by' AND $4 = 'asc' THEN contact_by END ASC NULLS LAST,
-  CASE WHEN $3 = 'contact_by' AND $4 = 'desc' THEN contact_by END DESC NULLS LAST,
-  -- Cadence sort by frequency: weekly=1 (most frequent) to annual=6 (least frequent), null=7
-  -- 'desc' = most frequent first (ASC on number), 'asc' = least frequent first (DESC on number)
-  CASE WHEN $3 = 'cadence' AND $4 = 'desc' THEN
-    CASE cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
-  END ASC,
-  CASE WHEN $3 = 'cadence' AND $4 = 'asc' THEN
-    CASE cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
-  END DESC,
-  -- Secondary sort by name for cadence sorting
-  CASE WHEN $3 = 'cadence' THEN full_name END ASC
-LIMIT $6 OFFSET $5
-`
-
-type ListContactsSortedParams struct {
-	CadenceFilter  interface{} `json:"cadence_filter"`
-	FollowupFilter interface{} `json:"followup_filter"`
-	SortField      interface{} `json:"sort_field"`
-	SortOrder      interface{} `json:"sort_order"`
-	PageOffset     int32       `json:"page_offset"`
-	PageLimit      int32       `json:"page_limit"`
-}
-
-func (q *Queries) ListContactsSorted(ctx context.Context, arg ListContactsSortedParams) ([]*Contact, error) {
-	rows, err := q.db.Query(ctx, ListContactsSorted,
-		arg.CadenceFilter,
-		arg.FollowupFilter,
+		arg.SearchQuery,
 		arg.SortField,
 		arg.SortOrder,
 		arg.PageOffset,
@@ -864,294 +773,6 @@ func (q *Queries) LockContactForDateRecompute(ctx context.Context, id pgtype.UUI
 	row := q.db.QueryRow(ctx, LockContactForDateRecompute, id)
 	err := row.Scan(&id)
 	return id, err
-}
-
-const SearchContactIDs = `-- name: SearchContactIDs :many
-SELECT c.id FROM contact c
-LEFT JOIN (
-  SELECT contact_id, string_agg(value, ' ') AS method_values
-  FROM contact_method
-  GROUP BY contact_id
-) cm ON cm.contact_id = c.id
-WHERE c.deleted_at IS NULL
-  AND ($1 = '' OR
-       ($1 = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
-       ($1 = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
-  AND ($2 = '' OR
-       ($2 = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       ($2 = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
-  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $3)
-ORDER BY ts_rank(
-  to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')),
-  plainto_tsquery('english', $3)
-) DESC
-`
-
-type SearchContactIDsParams struct {
-	CadenceFilter  interface{} `json:"cadence_filter"`
-	FollowupFilter interface{} `json:"followup_filter"`
-	SearchQuery    string      `json:"search_query"`
-}
-
-// Lightweight query returning only IDs with search for navigation
-func (q *Queries) SearchContactIDs(ctx context.Context, arg SearchContactIDsParams) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, SearchContactIDs, arg.CadenceFilter, arg.FollowupFilter, arg.SearchQuery)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []pgtype.UUID{}
-	for rows.Next() {
-		var id pgtype.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const SearchContactIDsSorted = `-- name: SearchContactIDsSorted :many
-SELECT c.id FROM contact c
-LEFT JOIN (
-  SELECT contact_id, string_agg(value, ' ') AS method_values
-  FROM contact_method
-  GROUP BY contact_id
-) cm ON cm.contact_id = c.id
-WHERE c.deleted_at IS NULL
-  AND ($1 = '' OR
-       ($1 = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
-       ($1 = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
-  AND ($2 = '' OR
-       ($2 = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       ($2 = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
-  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $3)
-ORDER BY
-  CASE WHEN $4 = 'name' AND $5 = 'asc' THEN c.full_name END ASC,
-  CASE WHEN $4 = 'name' AND $5 = 'desc' THEN c.full_name END DESC,
-  CASE WHEN $4 = 'location' AND $5 = 'asc' THEN COALESCE(c.location, '') END ASC,
-  CASE WHEN $4 = 'location' AND $5 = 'desc' THEN COALESCE(c.location, '') END DESC,
-  CASE WHEN $4 = 'birthday' AND $5 = 'asc' THEN c.birthday END ASC NULLS LAST,
-  CASE WHEN $4 = 'birthday' AND $5 = 'desc' THEN c.birthday END DESC NULLS LAST,
-  CASE WHEN $4 = 'last_contacted' AND $5 = 'asc' THEN c.last_contacted END ASC NULLS LAST,
-  CASE WHEN $4 = 'last_contacted' AND $5 = 'desc' THEN c.last_contacted END DESC NULLS LAST,
-  CASE WHEN $4 = 'last_response_at' AND $5 = 'asc' THEN c.last_response_at END ASC NULLS LAST,
-  CASE WHEN $4 = 'last_response_at' AND $5 = 'desc' THEN c.last_response_at END DESC NULLS LAST,
-  CASE WHEN $4 = 'contact_by' AND $5 = 'asc' THEN c.contact_by END ASC NULLS LAST,
-  CASE WHEN $4 = 'contact_by' AND $5 = 'desc' THEN c.contact_by END DESC NULLS LAST,
-  -- Cadence sort by frequency: weekly=1 (most frequent) to annual=6 (least frequent), null=7
-  CASE WHEN $4 = 'cadence' AND $5 = 'desc' THEN
-    CASE c.cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
-  END ASC,
-  CASE WHEN $4 = 'cadence' AND $5 = 'asc' THEN
-    CASE c.cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
-  END DESC,
-  -- Secondary sort by name for cadence sorting
-  CASE WHEN $4 = 'cadence' THEN c.full_name END ASC
-`
-
-type SearchContactIDsSortedParams struct {
-	CadenceFilter  interface{} `json:"cadence_filter"`
-	FollowupFilter interface{} `json:"followup_filter"`
-	SearchQuery    string      `json:"search_query"`
-	SortField      interface{} `json:"sort_field"`
-	SortOrder      interface{} `json:"sort_order"`
-}
-
-// Lightweight query returning only IDs with search and sorting for navigation
-func (q *Queries) SearchContactIDsSorted(ctx context.Context, arg SearchContactIDsSortedParams) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, SearchContactIDsSorted,
-		arg.CadenceFilter,
-		arg.FollowupFilter,
-		arg.SearchQuery,
-		arg.SortField,
-		arg.SortOrder,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []pgtype.UUID{}
-	for rows.Next() {
-		var id pgtype.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const SearchContacts = `-- name: SearchContacts :many
-SELECT c.id, c.full_name, c.location, c.birthday, c.how_met, c.cadence, c.last_contacted, c.profile_photo, c.deleted_at, c.created_at, c.updated_at, c.contact_by, c.last_interaction_at, c.last_outreach_at, c.last_response_at FROM contact c
-LEFT JOIN (
-  SELECT contact_id, string_agg(value, ' ') AS method_values
-  FROM contact_method
-  GROUP BY contact_id
-) cm ON cm.contact_id = c.id
-WHERE c.deleted_at IS NULL
-  AND ($1 = '' OR
-       ($1 = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
-       ($1 = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
-  AND ($2 = '' OR
-       ($2 = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       ($2 = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
-  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $3)
-ORDER BY ts_rank(
-  to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')),
-  plainto_tsquery('english', $3)
-) DESC
-LIMIT $5 OFFSET $4
-`
-
-type SearchContactsParams struct {
-	CadenceFilter  interface{} `json:"cadence_filter"`
-	FollowupFilter interface{} `json:"followup_filter"`
-	SearchQuery    string      `json:"search_query"`
-	PageOffset     int32       `json:"page_offset"`
-	PageLimit      int32       `json:"page_limit"`
-}
-
-func (q *Queries) SearchContacts(ctx context.Context, arg SearchContactsParams) ([]*Contact, error) {
-	rows, err := q.db.Query(ctx, SearchContacts,
-		arg.CadenceFilter,
-		arg.FollowupFilter,
-		arg.SearchQuery,
-		arg.PageOffset,
-		arg.PageLimit,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []*Contact{}
-	for rows.Next() {
-		var i Contact
-		if err := rows.Scan(
-			&i.ID,
-			&i.FullName,
-			&i.Location,
-			&i.Birthday,
-			&i.HowMet,
-			&i.Cadence,
-			&i.LastContacted,
-			&i.ProfilePhoto,
-			&i.DeletedAt,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.ContactBy,
-			&i.LastInteractionAt,
-			&i.LastOutreachAt,
-			&i.LastResponseAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, &i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const SearchContactsSorted = `-- name: SearchContactsSorted :many
-SELECT c.id, c.full_name, c.location, c.birthday, c.how_met, c.cadence, c.last_contacted, c.profile_photo, c.deleted_at, c.created_at, c.updated_at, c.contact_by, c.last_interaction_at, c.last_outreach_at, c.last_response_at FROM contact c
-LEFT JOIN (
-  SELECT contact_id, string_agg(value, ' ') AS method_values
-  FROM contact_method
-  GROUP BY contact_id
-) cm ON cm.contact_id = c.id
-WHERE c.deleted_at IS NULL
-  AND ($1 = '' OR
-       ($1 = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
-       ($1 = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
-  AND ($2 = '' OR
-       ($2 = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       ($2 = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
-  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $3)
-ORDER BY
-  CASE WHEN $4 = 'name' AND $5 = 'asc' THEN c.full_name END ASC,
-  CASE WHEN $4 = 'name' AND $5 = 'desc' THEN c.full_name END DESC,
-  CASE WHEN $4 = 'location' AND $5 = 'asc' THEN COALESCE(c.location, '') END ASC,
-  CASE WHEN $4 = 'location' AND $5 = 'desc' THEN COALESCE(c.location, '') END DESC,
-  CASE WHEN $4 = 'birthday' AND $5 = 'asc' THEN c.birthday END ASC NULLS LAST,
-  CASE WHEN $4 = 'birthday' AND $5 = 'desc' THEN c.birthday END DESC NULLS LAST,
-  CASE WHEN $4 = 'last_contacted' AND $5 = 'asc' THEN c.last_contacted END ASC NULLS LAST,
-  CASE WHEN $4 = 'last_contacted' AND $5 = 'desc' THEN c.last_contacted END DESC NULLS LAST,
-  CASE WHEN $4 = 'last_response_at' AND $5 = 'asc' THEN c.last_response_at END ASC NULLS LAST,
-  CASE WHEN $4 = 'last_response_at' AND $5 = 'desc' THEN c.last_response_at END DESC NULLS LAST,
-  CASE WHEN $4 = 'contact_by' AND $5 = 'asc' THEN c.contact_by END ASC NULLS LAST,
-  CASE WHEN $4 = 'contact_by' AND $5 = 'desc' THEN c.contact_by END DESC NULLS LAST,
-  -- Cadence sort by frequency: weekly=1 (most frequent) to annual=6 (least frequent), null=7
-  CASE WHEN $4 = 'cadence' AND $5 = 'desc' THEN
-    CASE c.cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
-  END ASC,
-  CASE WHEN $4 = 'cadence' AND $5 = 'asc' THEN
-    CASE c.cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
-  END DESC,
-  -- Secondary sort by name for cadence sorting
-  CASE WHEN $4 = 'cadence' THEN c.full_name END ASC
-LIMIT $7 OFFSET $6
-`
-
-type SearchContactsSortedParams struct {
-	CadenceFilter  interface{} `json:"cadence_filter"`
-	FollowupFilter interface{} `json:"followup_filter"`
-	SearchQuery    string      `json:"search_query"`
-	SortField      interface{} `json:"sort_field"`
-	SortOrder      interface{} `json:"sort_order"`
-	PageOffset     int32       `json:"page_offset"`
-	PageLimit      int32       `json:"page_limit"`
-}
-
-func (q *Queries) SearchContactsSorted(ctx context.Context, arg SearchContactsSortedParams) ([]*Contact, error) {
-	rows, err := q.db.Query(ctx, SearchContactsSorted,
-		arg.CadenceFilter,
-		arg.FollowupFilter,
-		arg.SearchQuery,
-		arg.SortField,
-		arg.SortOrder,
-		arg.PageOffset,
-		arg.PageLimit,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []*Contact{}
-	for rows.Next() {
-		var i Contact
-		if err := rows.Scan(
-			&i.ID,
-			&i.FullName,
-			&i.Location,
-			&i.Birthday,
-			&i.HowMet,
-			&i.Cadence,
-			&i.LastContacted,
-			&i.ProfilePhoto,
-			&i.DeletedAt,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.ContactBy,
-			&i.LastInteractionAt,
-			&i.LastOutreachAt,
-			&i.LastResponseAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, &i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }
 
 const SnapshotContactCadenceFields = `-- name: SnapshotContactCadenceFields :one

@@ -75,7 +75,7 @@ func TestContactSearch_Integration(t *testing.T) {
 		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmail), "alice.johnson."+ns+"@example.com", true)
 
 		// Search for exact name
-		results, err := repo.SearchContacts(ctx, repository.SearchContactsParams{
+		results, err := repo.ListContacts(ctx, repository.ListContactsParams{
 			Query:  name,
 			Limit:  10,
 			Offset: 0,
@@ -110,7 +110,7 @@ func TestContactSearch_Integration(t *testing.T) {
 		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmail), "bob.smith."+ns+"@example.com", true)
 
 		// Search for partial name (single word)
-		results, err := repo.SearchContacts(ctx, repository.SearchContactsParams{
+		results, err := repo.ListContacts(ctx, repository.ListContactsParams{
 			Query:  surname,
 			Limit:  10,
 			Offset: 0,
@@ -140,7 +140,7 @@ func TestContactSearch_Integration(t *testing.T) {
 		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodEmail), "carol.davis."+ns+"@example.com", true)
 
 		// Search by name (FTS tokenizes email addresses specially, so search by name)
-		results, err := repo.SearchContacts(ctx, repository.SearchContactsParams{
+		results, err := repo.ListContacts(ctx, repository.ListContactsParams{
 			Query:  firstName,
 			Limit:  10,
 			Offset: 0,
@@ -167,7 +167,7 @@ func TestContactSearch_Integration(t *testing.T) {
 		handle := "handle" + ns
 		addContactMethod(t, ctx, methodRepo, contact.ID, string(repository.ContactMethodTelegram), handle, true)
 
-		results, err := repo.SearchContacts(ctx, repository.SearchContactsParams{
+		results, err := repo.ListContacts(ctx, repository.ListContactsParams{
 			Query:  handle,
 			Limit:  10,
 			Offset: 0,
@@ -186,7 +186,7 @@ func TestContactSearch_Integration(t *testing.T) {
 
 	t.Run("NoResults", func(t *testing.T) {
 		// Search for non-existent contact
-		results, err := repo.SearchContacts(ctx, repository.SearchContactsParams{
+		results, err := repo.ListContacts(ctx, repository.ListContactsParams{
 			Query:  "ZZZNonExistentPerson12345XYZ",
 			Limit:  10,
 			Offset: 0,
@@ -199,7 +199,7 @@ func TestContactSearch_Integration(t *testing.T) {
 
 	t.Run("SpecialCharacters", func(t *testing.T) {
 		// FTS should handle special characters gracefully
-		results, err := repo.SearchContacts(ctx, repository.SearchContactsParams{
+		results, err := repo.ListContacts(ctx, repository.ListContactsParams{
 			Query:  "Test & User | Name",
 			Limit:  10,
 			Offset: 0,
@@ -224,7 +224,7 @@ func TestContactSearch_Integration(t *testing.T) {
 		}
 
 		// Test limit
-		page1, err := repo.SearchContacts(ctx, repository.SearchContactsParams{
+		page1, err := repo.ListContacts(ctx, repository.ListContactsParams{
 			Query:  pageTerm,
 			Limit:  2,
 			Offset: 0,
@@ -233,7 +233,7 @@ func TestContactSearch_Integration(t *testing.T) {
 		assert.LessOrEqual(t, len(page1), 2)
 
 		// Test offset
-		page2, err := repo.SearchContacts(ctx, repository.SearchContactsParams{
+		page2, err := repo.ListContacts(ctx, repository.ListContactsParams{
 			Query:  pageTerm,
 			Limit:  2,
 			Offset: 2,
@@ -265,7 +265,7 @@ func TestContactSearch_Integration(t *testing.T) {
 		addContactMethod(t, ctx, methodRepo, contact2.ID, string(repository.ContactMethodEmail), "sarah.m."+ns+"@example.com", true)
 
 		// Search for the unique token
-		results, err := repo.SearchContacts(ctx, repository.SearchContactsParams{
+		results, err := repo.ListContacts(ctx, repository.ListContactsParams{
 			Query:  token,
 			Limit:  10,
 			Offset: 0,
@@ -304,7 +304,7 @@ func TestContactSearch_Integration(t *testing.T) {
 		// Search with different cases of the word, all carrying the ns suffix.
 		testCases := []string{"david" + ns, "DAVID" + ns, "David" + ns, "dAvId" + ns}
 		for _, query := range testCases {
-			results, err := repo.SearchContacts(ctx, repository.SearchContactsParams{
+			results, err := repo.ListContacts(ctx, repository.ListContactsParams{
 				Query:  query,
 				Limit:  10,
 				Offset: 0,

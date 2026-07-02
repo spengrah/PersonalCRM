@@ -252,20 +252,8 @@ func (s *ContactService) GetContact(ctx context.Context, id uuid.UUID) (*reposit
 	return contact, nil
 }
 
-// Deprecated: Use ListContactsPage when pagination metadata is needed.
-func (s *ContactService) ListContacts(ctx context.Context, params repository.ListContactsParams) ([]repository.Contact, error) {
-	contacts, err := s.contactRepo.ListContacts(ctx, params)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := s.attachMethodsToContacts(ctx, contacts); err != nil {
-		return nil, err
-	}
-
-	return contacts, nil
-}
-
+// ListContactsPage returns one page of contacts (optionally searched via
+// params.Query) plus the total count for the same filters.
 func (s *ContactService) ListContactsPage(ctx context.Context, params repository.ListContactsParams) ([]repository.Contact, int64, error) {
 	contacts, err := s.contactRepo.ListContacts(ctx, params)
 	if err != nil {
@@ -276,39 +264,7 @@ func (s *ContactService) ListContactsPage(ctx context.Context, params repository
 		return nil, 0, err
 	}
 
-	total, err := s.contactRepo.CountContacts(ctx, params.CadenceFilter, params.FollowupFilter)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	return contacts, total, nil
-}
-
-// Deprecated: Use SearchContactsPage when pagination metadata is needed.
-func (s *ContactService) SearchContacts(ctx context.Context, params repository.SearchContactsParams) ([]repository.Contact, error) {
-	contacts, err := s.contactRepo.SearchContacts(ctx, params)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := s.attachMethodsToContacts(ctx, contacts); err != nil {
-		return nil, err
-	}
-
-	return contacts, nil
-}
-
-func (s *ContactService) SearchContactsPage(ctx context.Context, params repository.SearchContactsParams) ([]repository.Contact, int64, error) {
-	contacts, err := s.contactRepo.SearchContacts(ctx, params)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	if err := s.attachMethodsToContacts(ctx, contacts); err != nil {
-		return nil, 0, err
-	}
-
-	total, err := s.contactRepo.CountSearchContacts(ctx, params.Query, params.CadenceFilter, params.FollowupFilter)
+	total, err := s.contactRepo.CountContacts(ctx, params)
 	if err != nil {
 		return nil, 0, err
 	}

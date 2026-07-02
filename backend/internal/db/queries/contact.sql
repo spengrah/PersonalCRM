@@ -14,111 +14,54 @@ SELECT EXISTS(
 ) AS is_live;
 
 -- name: ListContacts :many
--- cadence_filter: '' = no filter (Go zero value), 'has_cadence' = non-empty cadence,
--- 'no_cadence' = NULL or empty string (defensive; CHECK constraint prevents empty strings)
--- followup_filter: '' = no filter, 'has_followup' = pending follow-up exists, 'no_followup' = no pending follow-up
-SELECT * FROM contact
-WHERE deleted_at IS NULL
-  AND (sqlc.arg(cadence_filter) = '' OR
-       (sqlc.arg(cadence_filter) = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
-       (sqlc.arg(cadence_filter) = 'no_cadence' AND (cadence IS NULL OR cadence = '')))
-  AND (sqlc.arg(followup_filter) = '' OR
-       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
-LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
-
--- name: ListContactsSorted :many
-SELECT * FROM contact
-WHERE deleted_at IS NULL
-  AND (sqlc.arg(cadence_filter) = '' OR
-       (sqlc.arg(cadence_filter) = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
-       (sqlc.arg(cadence_filter) = 'no_cadence' AND (cadence IS NULL OR cadence = '')))
-  AND (sqlc.arg(followup_filter) = '' OR
-       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
+-- Unified contact listing (one WHERE + ORDER BY shape shared by the rows,
+-- IDs, and count queries below — keep the three in lockstep):
+--   search_query: NULL = no search; else full-text over full_name + method values
+--   cadence_filter: '' = no filter, 'has_cadence' = non-empty cadence,
+--     'no_cadence' = NULL or empty string (defensive; CHECK constraint prevents empty strings)
+--   followup_filter: '' = no filter, 'has_followup' = pending follow-up exists, 'no_followup' = no pending follow-up
+--   sort_field/'sort_order': '' = default order (relevance when searching, else name asc)
+SELECT c.*
+FROM contact c
+WHERE c.deleted_at IS NULL
+  AND (sqlc.arg(cadence_filter)::text = '' OR
+       (sqlc.arg(cadence_filter)::text = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
+       (sqlc.arg(cadence_filter)::text = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
+  AND (sqlc.arg(followup_filter)::text = '' OR
+       (sqlc.arg(followup_filter)::text = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
+       (sqlc.arg(followup_filter)::text = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
+  AND (sqlc.narg(search_query)::text IS NULL OR
+       to_tsvector('english', c.full_name || ' ' || COALESCE((SELECT string_agg(cm.value, ' ') FROM contact_method cm WHERE cm.contact_id = c.id), '')) @@ plainto_tsquery('english', sqlc.narg(search_query)::text))
 ORDER BY
-  CASE WHEN sqlc.arg(sort_field) = 'name' AND sqlc.arg(sort_order) = 'asc' THEN full_name END ASC,
-  CASE WHEN sqlc.arg(sort_field) = 'name' AND sqlc.arg(sort_order) = 'desc' THEN full_name END DESC,
-  CASE WHEN sqlc.arg(sort_field) = 'location' AND sqlc.arg(sort_order) = 'asc' THEN COALESCE(location, '') END ASC,
-  CASE WHEN sqlc.arg(sort_field) = 'location' AND sqlc.arg(sort_order) = 'desc' THEN COALESCE(location, '') END DESC,
-  CASE WHEN sqlc.arg(sort_field) = 'birthday' AND sqlc.arg(sort_order) = 'asc' THEN birthday END ASC NULLS LAST,
-  CASE WHEN sqlc.arg(sort_field) = 'birthday' AND sqlc.arg(sort_order) = 'desc' THEN birthday END DESC NULLS LAST,
-  CASE WHEN sqlc.arg(sort_field) = 'last_contacted' AND sqlc.arg(sort_order) = 'asc' THEN last_contacted END ASC NULLS LAST,
-  CASE WHEN sqlc.arg(sort_field) = 'last_contacted' AND sqlc.arg(sort_order) = 'desc' THEN last_contacted END DESC NULLS LAST,
-  CASE WHEN sqlc.arg(sort_field) = 'last_response_at' AND sqlc.arg(sort_order) = 'asc' THEN last_response_at END ASC NULLS LAST,
-  CASE WHEN sqlc.arg(sort_field) = 'last_response_at' AND sqlc.arg(sort_order) = 'desc' THEN last_response_at END DESC NULLS LAST,
-  CASE WHEN sqlc.arg(sort_field) = 'contact_by' AND sqlc.arg(sort_order) = 'asc' THEN contact_by END ASC NULLS LAST,
-  CASE WHEN sqlc.arg(sort_field) = 'contact_by' AND sqlc.arg(sort_order) = 'desc' THEN contact_by END DESC NULLS LAST,
+  -- Relevance order applies only when searching without an explicit sort.
+  CASE WHEN sqlc.narg(search_query)::text IS NOT NULL AND sqlc.arg(sort_field)::text = '' THEN
+    ts_rank(to_tsvector('english', c.full_name || ' ' || COALESCE((SELECT string_agg(cm.value, ' ') FROM contact_method cm WHERE cm.contact_id = c.id), '')), plainto_tsquery('english', sqlc.narg(search_query)::text))
+  END DESC,
+  CASE WHEN sqlc.arg(sort_field)::text = 'name' AND sqlc.arg(sort_order)::text = 'asc' THEN c.full_name END ASC,
+  CASE WHEN sqlc.arg(sort_field)::text = 'name' AND sqlc.arg(sort_order)::text = 'desc' THEN c.full_name END DESC,
+  CASE WHEN sqlc.arg(sort_field)::text = 'location' AND sqlc.arg(sort_order)::text = 'asc' THEN COALESCE(c.location, '') END ASC,
+  CASE WHEN sqlc.arg(sort_field)::text = 'location' AND sqlc.arg(sort_order)::text = 'desc' THEN COALESCE(c.location, '') END DESC,
+  CASE WHEN sqlc.arg(sort_field)::text = 'birthday' AND sqlc.arg(sort_order)::text = 'asc' THEN c.birthday END ASC NULLS LAST,
+  CASE WHEN sqlc.arg(sort_field)::text = 'birthday' AND sqlc.arg(sort_order)::text = 'desc' THEN c.birthday END DESC NULLS LAST,
+  CASE WHEN sqlc.arg(sort_field)::text = 'last_contacted' AND sqlc.arg(sort_order)::text = 'asc' THEN c.last_contacted END ASC NULLS LAST,
+  CASE WHEN sqlc.arg(sort_field)::text = 'last_contacted' AND sqlc.arg(sort_order)::text = 'desc' THEN c.last_contacted END DESC NULLS LAST,
+  CASE WHEN sqlc.arg(sort_field)::text = 'last_response_at' AND sqlc.arg(sort_order)::text = 'asc' THEN c.last_response_at END ASC NULLS LAST,
+  CASE WHEN sqlc.arg(sort_field)::text = 'last_response_at' AND sqlc.arg(sort_order)::text = 'desc' THEN c.last_response_at END DESC NULLS LAST,
+  CASE WHEN sqlc.arg(sort_field)::text = 'contact_by' AND sqlc.arg(sort_order)::text = 'asc' THEN c.contact_by END ASC NULLS LAST,
+  CASE WHEN sqlc.arg(sort_field)::text = 'contact_by' AND sqlc.arg(sort_order)::text = 'desc' THEN c.contact_by END DESC NULLS LAST,
   -- Cadence sort by frequency: weekly=1 (most frequent) to annual=6 (least frequent), null=7
   -- 'desc' = most frequent first (ASC on number), 'asc' = least frequent first (DESC on number)
-  CASE WHEN sqlc.arg(sort_field) = 'cadence' AND sqlc.arg(sort_order) = 'desc' THEN
-    CASE cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
-  END ASC,
-  CASE WHEN sqlc.arg(sort_field) = 'cadence' AND sqlc.arg(sort_order) = 'asc' THEN
-    CASE cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
-  END DESC,
-  -- Secondary sort by name for cadence sorting
-  CASE WHEN sqlc.arg(sort_field) = 'cadence' THEN full_name END ASC
-LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
-
--- name: SearchContacts :many
-SELECT c.* FROM contact c
-LEFT JOIN (
-  SELECT contact_id, string_agg(value, ' ') AS method_values
-  FROM contact_method
-  GROUP BY contact_id
-) cm ON cm.contact_id = c.id
-WHERE c.deleted_at IS NULL
-  AND (sqlc.arg(cadence_filter) = '' OR
-       (sqlc.arg(cadence_filter) = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
-       (sqlc.arg(cadence_filter) = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
-  AND (sqlc.arg(followup_filter) = '' OR
-       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
-  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', sqlc.arg(search_query))
-ORDER BY ts_rank(
-  to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')),
-  plainto_tsquery('english', sqlc.arg(search_query))
-) DESC
-LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
-
--- name: SearchContactsSorted :many
-SELECT c.* FROM contact c
-LEFT JOIN (
-  SELECT contact_id, string_agg(value, ' ') AS method_values
-  FROM contact_method
-  GROUP BY contact_id
-) cm ON cm.contact_id = c.id
-WHERE c.deleted_at IS NULL
-  AND (sqlc.arg(cadence_filter) = '' OR
-       (sqlc.arg(cadence_filter) = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
-       (sqlc.arg(cadence_filter) = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
-  AND (sqlc.arg(followup_filter) = '' OR
-       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
-  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', sqlc.arg(search_query))
-ORDER BY
-  CASE WHEN sqlc.arg(sort_field) = 'name' AND sqlc.arg(sort_order) = 'asc' THEN c.full_name END ASC,
-  CASE WHEN sqlc.arg(sort_field) = 'name' AND sqlc.arg(sort_order) = 'desc' THEN c.full_name END DESC,
-  CASE WHEN sqlc.arg(sort_field) = 'location' AND sqlc.arg(sort_order) = 'asc' THEN COALESCE(c.location, '') END ASC,
-  CASE WHEN sqlc.arg(sort_field) = 'location' AND sqlc.arg(sort_order) = 'desc' THEN COALESCE(c.location, '') END DESC,
-  CASE WHEN sqlc.arg(sort_field) = 'birthday' AND sqlc.arg(sort_order) = 'asc' THEN c.birthday END ASC NULLS LAST,
-  CASE WHEN sqlc.arg(sort_field) = 'birthday' AND sqlc.arg(sort_order) = 'desc' THEN c.birthday END DESC NULLS LAST,
-  CASE WHEN sqlc.arg(sort_field) = 'last_contacted' AND sqlc.arg(sort_order) = 'asc' THEN c.last_contacted END ASC NULLS LAST,
-  CASE WHEN sqlc.arg(sort_field) = 'last_contacted' AND sqlc.arg(sort_order) = 'desc' THEN c.last_contacted END DESC NULLS LAST,
-  CASE WHEN sqlc.arg(sort_field) = 'last_response_at' AND sqlc.arg(sort_order) = 'asc' THEN c.last_response_at END ASC NULLS LAST,
-  CASE WHEN sqlc.arg(sort_field) = 'last_response_at' AND sqlc.arg(sort_order) = 'desc' THEN c.last_response_at END DESC NULLS LAST,
-  CASE WHEN sqlc.arg(sort_field) = 'contact_by' AND sqlc.arg(sort_order) = 'asc' THEN c.contact_by END ASC NULLS LAST,
-  CASE WHEN sqlc.arg(sort_field) = 'contact_by' AND sqlc.arg(sort_order) = 'desc' THEN c.contact_by END DESC NULLS LAST,
-  -- Cadence sort by frequency: weekly=1 (most frequent) to annual=6 (least frequent), null=7
-  CASE WHEN sqlc.arg(sort_field) = 'cadence' AND sqlc.arg(sort_order) = 'desc' THEN
+  CASE WHEN sqlc.arg(sort_field)::text = 'cadence' AND sqlc.arg(sort_order)::text = 'desc' THEN
     CASE c.cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
   END ASC,
-  CASE WHEN sqlc.arg(sort_field) = 'cadence' AND sqlc.arg(sort_order) = 'asc' THEN
+  CASE WHEN sqlc.arg(sort_field)::text = 'cadence' AND sqlc.arg(sort_order)::text = 'asc' THEN
     CASE c.cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
   END DESC,
-  -- Secondary sort by name for cadence sorting
-  CASE WHEN sqlc.arg(sort_field) = 'cadence' THEN c.full_name END ASC
+  -- Deterministic fallback + tiebreaker: name asc then id, so the unsorted
+  -- list has a stable default order and equal sort keys never paginate
+  -- nondeterministically.
+  c.full_name ASC,
+  c.id ASC
 LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
 
 -- name: CreateContact :one
@@ -379,134 +322,63 @@ WHERE id = $1 AND deleted_at IS NULL;
 DELETE FROM contact WHERE id = $1;
 
 -- name: CountContacts :one
-SELECT COUNT(*) FROM contact
-WHERE deleted_at IS NULL
-  AND (sqlc.arg(cadence_filter) = '' OR
-       (sqlc.arg(cadence_filter) = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
-       (sqlc.arg(cadence_filter) = 'no_cadence' AND (cadence IS NULL OR cadence = '')))
-  AND (sqlc.arg(followup_filter) = '' OR
-       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))));
+-- Count variant of ListContacts; same WHERE shape as ListContacts.
+SELECT COUNT(*)
+FROM contact c
+WHERE c.deleted_at IS NULL
+  AND (sqlc.arg(cadence_filter)::text = '' OR
+       (sqlc.arg(cadence_filter)::text = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
+       (sqlc.arg(cadence_filter)::text = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
+  AND (sqlc.arg(followup_filter)::text = '' OR
+       (sqlc.arg(followup_filter)::text = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
+       (sqlc.arg(followup_filter)::text = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
+  AND (sqlc.narg(search_query)::text IS NULL OR
+       to_tsvector('english', c.full_name || ' ' || COALESCE((SELECT string_agg(cm.value, ' ') FROM contact_method cm WHERE cm.contact_id = c.id), '')) @@ plainto_tsquery('english', sqlc.narg(search_query)::text));
 
 -- name: ListContactIDs :many
--- Lightweight query returning only IDs for navigation
-SELECT id FROM contact
-WHERE deleted_at IS NULL
-  AND (sqlc.arg(cadence_filter) = '' OR
-       (sqlc.arg(cadence_filter) = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
-       (sqlc.arg(cadence_filter) = 'no_cadence' AND (cadence IS NULL OR cadence = '')))
-  AND (sqlc.arg(followup_filter) = '' OR
-       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))));
-
--- name: ListContactIDsSorted :many
--- Lightweight query returning only IDs with sorting for navigation
-SELECT id FROM contact
-WHERE deleted_at IS NULL
-  AND (sqlc.arg(cadence_filter) = '' OR
-       (sqlc.arg(cadence_filter) = 'has_cadence' AND cadence IS NOT NULL AND cadence != '') OR
-       (sqlc.arg(cadence_filter) = 'no_cadence' AND (cadence IS NULL OR cadence = '')))
-  AND (sqlc.arg(followup_filter) = '' OR
-       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = contact.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
+-- Lightweight IDs-only variant of ListContacts for navigation (no pagination);
+-- same WHERE + ORDER BY shape as ListContacts.
+SELECT c.id
+FROM contact c
+WHERE c.deleted_at IS NULL
+  AND (sqlc.arg(cadence_filter)::text = '' OR
+       (sqlc.arg(cadence_filter)::text = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
+       (sqlc.arg(cadence_filter)::text = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
+  AND (sqlc.arg(followup_filter)::text = '' OR
+       (sqlc.arg(followup_filter)::text = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
+       (sqlc.arg(followup_filter)::text = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
+  AND (sqlc.narg(search_query)::text IS NULL OR
+       to_tsvector('english', c.full_name || ' ' || COALESCE((SELECT string_agg(cm.value, ' ') FROM contact_method cm WHERE cm.contact_id = c.id), '')) @@ plainto_tsquery('english', sqlc.narg(search_query)::text))
 ORDER BY
-  CASE WHEN sqlc.arg(sort_field) = 'name' AND sqlc.arg(sort_order) = 'asc' THEN full_name END ASC,
-  CASE WHEN sqlc.arg(sort_field) = 'name' AND sqlc.arg(sort_order) = 'desc' THEN full_name END DESC,
-  CASE WHEN sqlc.arg(sort_field) = 'location' AND sqlc.arg(sort_order) = 'asc' THEN COALESCE(location, '') END ASC,
-  CASE WHEN sqlc.arg(sort_field) = 'location' AND sqlc.arg(sort_order) = 'desc' THEN COALESCE(location, '') END DESC,
-  CASE WHEN sqlc.arg(sort_field) = 'birthday' AND sqlc.arg(sort_order) = 'asc' THEN birthday END ASC NULLS LAST,
-  CASE WHEN sqlc.arg(sort_field) = 'birthday' AND sqlc.arg(sort_order) = 'desc' THEN birthday END DESC NULLS LAST,
-  CASE WHEN sqlc.arg(sort_field) = 'last_contacted' AND sqlc.arg(sort_order) = 'asc' THEN last_contacted END ASC NULLS LAST,
-  CASE WHEN sqlc.arg(sort_field) = 'last_contacted' AND sqlc.arg(sort_order) = 'desc' THEN last_contacted END DESC NULLS LAST,
-  CASE WHEN sqlc.arg(sort_field) = 'last_response_at' AND sqlc.arg(sort_order) = 'asc' THEN last_response_at END ASC NULLS LAST,
-  CASE WHEN sqlc.arg(sort_field) = 'last_response_at' AND sqlc.arg(sort_order) = 'desc' THEN last_response_at END DESC NULLS LAST,
-  CASE WHEN sqlc.arg(sort_field) = 'contact_by' AND sqlc.arg(sort_order) = 'asc' THEN contact_by END ASC NULLS LAST,
-  CASE WHEN sqlc.arg(sort_field) = 'contact_by' AND sqlc.arg(sort_order) = 'desc' THEN contact_by END DESC NULLS LAST,
-  -- Cadence sort by frequency: weekly=1 (most frequent) to annual=6 (least frequent), null=7
-  CASE WHEN sqlc.arg(sort_field) = 'cadence' AND sqlc.arg(sort_order) = 'desc' THEN
-    CASE cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
-  END ASC,
-  CASE WHEN sqlc.arg(sort_field) = 'cadence' AND sqlc.arg(sort_order) = 'asc' THEN
-    CASE cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
+  -- Relevance order applies only when searching without an explicit sort.
+  CASE WHEN sqlc.narg(search_query)::text IS NOT NULL AND sqlc.arg(sort_field)::text = '' THEN
+    ts_rank(to_tsvector('english', c.full_name || ' ' || COALESCE((SELECT string_agg(cm.value, ' ') FROM contact_method cm WHERE cm.contact_id = c.id), '')), plainto_tsquery('english', sqlc.narg(search_query)::text))
   END DESC,
-  -- Secondary sort by name for cadence sorting
-  CASE WHEN sqlc.arg(sort_field) = 'cadence' THEN full_name END ASC;
-
--- name: SearchContactIDs :many
--- Lightweight query returning only IDs with search for navigation
-SELECT c.id FROM contact c
-LEFT JOIN (
-  SELECT contact_id, string_agg(value, ' ') AS method_values
-  FROM contact_method
-  GROUP BY contact_id
-) cm ON cm.contact_id = c.id
-WHERE c.deleted_at IS NULL
-  AND (sqlc.arg(cadence_filter) = '' OR
-       (sqlc.arg(cadence_filter) = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
-       (sqlc.arg(cadence_filter) = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
-  AND (sqlc.arg(followup_filter) = '' OR
-       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
-  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', sqlc.arg(search_query))
-ORDER BY ts_rank(
-  to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')),
-  plainto_tsquery('english', sqlc.arg(search_query))
-) DESC;
-
--- name: SearchContactIDsSorted :many
--- Lightweight query returning only IDs with search and sorting for navigation
-SELECT c.id FROM contact c
-LEFT JOIN (
-  SELECT contact_id, string_agg(value, ' ') AS method_values
-  FROM contact_method
-  GROUP BY contact_id
-) cm ON cm.contact_id = c.id
-WHERE c.deleted_at IS NULL
-  AND (sqlc.arg(cadence_filter) = '' OR
-       (sqlc.arg(cadence_filter) = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
-       (sqlc.arg(cadence_filter) = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
-  AND (sqlc.arg(followup_filter) = '' OR
-       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
-  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', sqlc.arg(search_query))
-ORDER BY
-  CASE WHEN sqlc.arg(sort_field) = 'name' AND sqlc.arg(sort_order) = 'asc' THEN c.full_name END ASC,
-  CASE WHEN sqlc.arg(sort_field) = 'name' AND sqlc.arg(sort_order) = 'desc' THEN c.full_name END DESC,
-  CASE WHEN sqlc.arg(sort_field) = 'location' AND sqlc.arg(sort_order) = 'asc' THEN COALESCE(c.location, '') END ASC,
-  CASE WHEN sqlc.arg(sort_field) = 'location' AND sqlc.arg(sort_order) = 'desc' THEN COALESCE(c.location, '') END DESC,
-  CASE WHEN sqlc.arg(sort_field) = 'birthday' AND sqlc.arg(sort_order) = 'asc' THEN c.birthday END ASC NULLS LAST,
-  CASE WHEN sqlc.arg(sort_field) = 'birthday' AND sqlc.arg(sort_order) = 'desc' THEN c.birthday END DESC NULLS LAST,
-  CASE WHEN sqlc.arg(sort_field) = 'last_contacted' AND sqlc.arg(sort_order) = 'asc' THEN c.last_contacted END ASC NULLS LAST,
-  CASE WHEN sqlc.arg(sort_field) = 'last_contacted' AND sqlc.arg(sort_order) = 'desc' THEN c.last_contacted END DESC NULLS LAST,
-  CASE WHEN sqlc.arg(sort_field) = 'last_response_at' AND sqlc.arg(sort_order) = 'asc' THEN c.last_response_at END ASC NULLS LAST,
-  CASE WHEN sqlc.arg(sort_field) = 'last_response_at' AND sqlc.arg(sort_order) = 'desc' THEN c.last_response_at END DESC NULLS LAST,
-  CASE WHEN sqlc.arg(sort_field) = 'contact_by' AND sqlc.arg(sort_order) = 'asc' THEN c.contact_by END ASC NULLS LAST,
-  CASE WHEN sqlc.arg(sort_field) = 'contact_by' AND sqlc.arg(sort_order) = 'desc' THEN c.contact_by END DESC NULLS LAST,
+  CASE WHEN sqlc.arg(sort_field)::text = 'name' AND sqlc.arg(sort_order)::text = 'asc' THEN c.full_name END ASC,
+  CASE WHEN sqlc.arg(sort_field)::text = 'name' AND sqlc.arg(sort_order)::text = 'desc' THEN c.full_name END DESC,
+  CASE WHEN sqlc.arg(sort_field)::text = 'location' AND sqlc.arg(sort_order)::text = 'asc' THEN COALESCE(c.location, '') END ASC,
+  CASE WHEN sqlc.arg(sort_field)::text = 'location' AND sqlc.arg(sort_order)::text = 'desc' THEN COALESCE(c.location, '') END DESC,
+  CASE WHEN sqlc.arg(sort_field)::text = 'birthday' AND sqlc.arg(sort_order)::text = 'asc' THEN c.birthday END ASC NULLS LAST,
+  CASE WHEN sqlc.arg(sort_field)::text = 'birthday' AND sqlc.arg(sort_order)::text = 'desc' THEN c.birthday END DESC NULLS LAST,
+  CASE WHEN sqlc.arg(sort_field)::text = 'last_contacted' AND sqlc.arg(sort_order)::text = 'asc' THEN c.last_contacted END ASC NULLS LAST,
+  CASE WHEN sqlc.arg(sort_field)::text = 'last_contacted' AND sqlc.arg(sort_order)::text = 'desc' THEN c.last_contacted END DESC NULLS LAST,
+  CASE WHEN sqlc.arg(sort_field)::text = 'last_response_at' AND sqlc.arg(sort_order)::text = 'asc' THEN c.last_response_at END ASC NULLS LAST,
+  CASE WHEN sqlc.arg(sort_field)::text = 'last_response_at' AND sqlc.arg(sort_order)::text = 'desc' THEN c.last_response_at END DESC NULLS LAST,
+  CASE WHEN sqlc.arg(sort_field)::text = 'contact_by' AND sqlc.arg(sort_order)::text = 'asc' THEN c.contact_by END ASC NULLS LAST,
+  CASE WHEN sqlc.arg(sort_field)::text = 'contact_by' AND sqlc.arg(sort_order)::text = 'desc' THEN c.contact_by END DESC NULLS LAST,
   -- Cadence sort by frequency: weekly=1 (most frequent) to annual=6 (least frequent), null=7
-  CASE WHEN sqlc.arg(sort_field) = 'cadence' AND sqlc.arg(sort_order) = 'desc' THEN
+  -- 'desc' = most frequent first (ASC on number), 'asc' = least frequent first (DESC on number)
+  CASE WHEN sqlc.arg(sort_field)::text = 'cadence' AND sqlc.arg(sort_order)::text = 'desc' THEN
     CASE c.cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
   END ASC,
-  CASE WHEN sqlc.arg(sort_field) = 'cadence' AND sqlc.arg(sort_order) = 'asc' THEN
+  CASE WHEN sqlc.arg(sort_field)::text = 'cadence' AND sqlc.arg(sort_order)::text = 'asc' THEN
     CASE c.cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
   END DESC,
-  -- Secondary sort by name for cadence sorting
-  CASE WHEN sqlc.arg(sort_field) = 'cadence' THEN c.full_name END ASC;
-
--- name: CountSearchContacts :one
-SELECT COUNT(*) FROM contact c
-LEFT JOIN (
-  SELECT contact_id, string_agg(value, ' ') AS method_values
-  FROM contact_method
-  GROUP BY contact_id
-) cm ON cm.contact_id = c.id
-WHERE c.deleted_at IS NULL
-  AND (sqlc.arg(cadence_filter) = '' OR
-       (sqlc.arg(cadence_filter) = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
-       (sqlc.arg(cadence_filter) = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
-  AND (sqlc.arg(followup_filter) = '' OR
-       (sqlc.arg(followup_filter) = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       (sqlc.arg(followup_filter) = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
-  AND to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', sqlc.arg(search_query));
+  -- Deterministic fallback + tiebreaker: name asc then id, so the unsorted
+  -- list has a stable default order and equal sort keys never paginate
+  -- nondeterministically.
+  c.full_name ASC,
+  c.id ASC;
 
 -- name: FindSimilarContacts :many
 SELECT
