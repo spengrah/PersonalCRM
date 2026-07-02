@@ -112,9 +112,6 @@ func run() int {
 
 	// Initialize repositories
 	core := buildCoreRepos(database.Queries)
-	contactRepo := core.Contact
-	contactMethodRepo := core.ContactMethod
-	interactionRepo := core.Interaction
 
 	// River client + event bus + consumer wiring. Built EARLY (before
 	// downstream services) so `pubBus` and `manualHandler` are in scope
@@ -168,8 +165,6 @@ func run() int {
 	// calendar / telegram blocks below.
 	ingest := buildIngestRepos(database.Queries)
 	messagesMessageRepo := ingest.MessagesMessage
-	externalContactRepoForIngest := ingest.ExternalContact
-	macHostRepoForIngest := ingest.MacHost
 	meetingNoteRepoForIngest := ingest.MeetingNote
 	calendarRepoForIngest := ingest.CalendarEvent
 
@@ -177,9 +172,7 @@ func run() int {
 	// constructed above ContactService so it can be passed as the
 	// RematchRegistry constructor arg.
 	graph := buildContactGraphCore(database, core, eventBus)
-	rematchService := graph.RematchService
 	contactService := graph.ContactService
-	assertService := graph.AssertService
 
 	// Message-store repos + staging registry + venue resolver.
 	messaging := buildMessagingFoundation(database.Queries, messagesMessageRepo, calendarRepoForIngest)
@@ -226,7 +219,6 @@ func run() int {
 	if cfg.Features.EnableExternalSync {
 		syncStk = buildExternalSync(ctx, cfg, database, core, graph, ingest, messaging, consumers, domain, eventBus, riverClient, pubBus)
 	}
-	syncService := syncStk.SyncService
 	syncHandler := syncStk.SyncHandler
 	identityHandler := syncStk.IdentityHandler
 	oauthHandler := syncStk.OAuthHandler
@@ -268,117 +260,30 @@ func run() int {
 	// Register the chat-aware messaging aggregate worker + sweeper (+ periodic).
 	registerMessagingWorkers(reg, ingest, messaging, agg, riverClient)
 
-	// Initialize handlers
-	contactHandler := handlers.NewContactHandler(contactService)
-	noteHandler := handlers.NewNoteHandler(noteService)
-	interactionHandler := handlers.NewInteractionHandler(interactionRepo, manualHandler)
-	systemHandler := handlers.NewSystemHandler(contactRepo, cfg.Runtime)
-	rematchHandler := handlers.NewRematchHandler(rematchService, contactService)
+	// Core HTTP handlers.
+	handlersCore := buildCoreHandlers(core, graph, cfg, noteService, manualHandler)
+	contactHandler := handlersCore.Contact
+	noteHandler := handlersCore.Note
+	interactionHandler := handlersCore.Interaction
+	systemHandler := handlersCore.System
+	rematchHandler := handlersCore.Rematch
 
-	// Mac-daemon host management. Wires the pairing flow, heartbeat,
-	// cursor protocol, and admin revoke. The pairing endpoint is
-	// unauthenticated (token-gated) so it lives on the bare router; the
-	// daemon endpoints live behind MacHostAuthMiddleware (sibling
-	// /api/v1 group); the admin endpoints live behind the existing
-	// global API-key middleware.
-	// macHostRepoForIngest was constructed earlier (line ~308) so the
-	// IngestService could take it as a HostLivenessChecker dep. Reuse
-	// the same instance here so the host-management service shares the
-	// same repository wrapper.
-	macHostRepo := macHostRepoForIngest
-	pairingTokenRepo := repository.NewMacHostPairingTokenRepository(database.Queries)
-	// Mac cursor commit needs a tx — use the pool-wired SyncRepository.
-	macSyncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
-	macHostService := service.NewMacHostService(
-		macHostRepo,
-		pairingTokenRepo,
-		macSyncRepo,
-		contactMethodRepo,
-		externalContactRepoForIngest, // /known-ids reader (external_contact)
-		meetingNoteRepoForIngest,     // /known-ids reader (anarlog_sessions)
-		database.Pool,
-		0, // default bcrypt cost
-	)
-	pairingIPLimiter := auth.NewPairingIPRateLimiter()
-	macHostHandler := handlers.NewMacHostHandler(macHostService, pairingIPLimiter)
+	// Mac-daemon host management (+ pairing-token janitor worker/periodic).
+	machost := buildMacHost(reg, database, core, ingest)
+	macHostRepo := machost.Repo
+	macHostHandler := machost.Handler
 
-	// Register the pairing-token janitor periodic job (5 min). Worker
-	// registered unconditionally; the periodic-job inserter triggers it
-	// on the same River client. See
-	// backend/internal/scheduler/pairing_token_janitor_worker.go.
-	river.AddWorker(riverWorkers, scheduler.NewPairingTokenJanitorWorker(pairingTokenRepo))
-	riverClient.PeriodicJobs().Add(river.NewPeriodicJob(
-		river.PeriodicInterval(5*time.Minute),
-		func() (river.JobArgs, *river.InsertOpts) {
-			return scheduler.PairingTokenJanitorArgs{}, nil
-		},
-		&river.PeriodicJobOpts{RunOnStart: true},
-	))
+	// Sync-staleness watchdog (+ periodic).
+	staleness := buildStaleness(reg, cfg, database, machost)
+	stalenessService := staleness.Service
+	stalenessHandler := staleness.Handler
 
-	// Sync-staleness watchdog. Registered unconditionally (like the janitor):
-	// heartbeat/push breaches must be detected even with external sync off,
-	// and the watchdog reads existing freshness state rather than driving any
-	// provider sync. The endpoint reader uses the same service instance.
-	stalenessBreachRepo := repository.NewStalenessRepository(database.Queries)
-	stalenessService := service.NewStalenessService(
-		cfg.Staleness,
-		cfg.Features.EnableExternalSync,
-		macSyncRepo,
-		macHostRepo,
-		stalenessBreachRepo,
-	)
-	stalenessHandler := handlers.NewStalenessHandler(stalenessService)
-	river.AddWorker(riverWorkers, scheduler.NewStalenessWatchdogWorker(stalenessService))
-	riverClient.PeriodicJobs().Add(river.NewPeriodicJob(
-		river.PeriodicInterval(5*time.Minute),
-		func() (river.JobArgs, *river.InsertOpts) {
-			return scheduler.StalenessWatchdogArgs{}, nil
-		},
-		&river.PeriodicJobOpts{RunOnStart: true},
-	))
+	// Assertion valid-time rollover (daily worker + periodic).
+	registerAssertionRollover(reg, graph)
 
-	// Assertion valid-time rollover — a daily catch-up sweep that terminalizes the
-	// bounded-with-pending-successor assertions whose valid_to has passed (no event
-	// fires at that future date otherwise). Stateless; RunOnStart catches up any
-	// overdue rollovers on boot.
-	river.AddWorker(riverWorkers, scheduler.NewAssertionRolloverWorker(assertService))
-	riverClient.PeriodicJobs().Add(river.NewPeriodicJob(
-		river.PeriodicInterval(24*time.Hour),
-		func() (river.JobArgs, *river.InsertOpts) {
-			return scheduler.AssertionRolloverArgs{}, nil
-		},
-		&river.PeriodicJobOpts{RunOnStart: true},
-	))
-
-	// Build the River worker set, periodic-job list, and client. The
-	// scheduler-tick + sync-provider-account workers are only registered
-	// when external sync is enabled and we have a real syncService —
-	// otherwise there is nothing for them to do. See DD 6 in
-	// .ai/log/plan/event-bus-foundation-pr3-scheduler-river.md for the
-	// construction-order rationale.
-	//
-	// Sync workers + periodic job are registered AFTER syncService is
-	// constructed. Safe between NewClient (done earlier) and Start —
-	// river.AddWorker and PeriodicJobs().Add both mutate the client
-	// in-place.
-	if cfg.Features.EnableExternalSync && syncService != nil {
-		river.AddWorker(riverWorkers, scheduler.NewSchedulerTickWorker(syncService))
-		river.AddWorker(riverWorkers, scheduler.NewSyncProviderAccountWorker(syncService))
-		riverClient.PeriodicJobs().Add(river.NewPeriodicJob(
-			river.PeriodicInterval(5*time.Minute),
-			func() (river.JobArgs, *river.InsertOpts) {
-				return scheduler.SchedulerTickArgs{}, nil
-			},
-			&river.PeriodicJobOpts{RunOnStart: true},
-		))
-	}
-
-	// Wire the enqueuer onto the service BEFORE starting the client so
-	// any tick fire or TriggerSync that races with bring-up goes through
-	// river instead of falling back to inline sync. See DD 6 step 8.
-	if syncService != nil && cfg.Features.EnableExternalSync {
-		syncService.SetRiverEnqueuer(riverClient)
-	}
+	// Scheduler-tick + sync-provider workers (gated) + River enqueuer wiring,
+	// all before riverClient.Start.
+	registerSyncScheduler(reg, cfg, syncStk, riverClient)
 
 	if err := riverClient.Start(ctx); err != nil {
 		logger.Fatal().Err(err).Msg("failed to start river client")
