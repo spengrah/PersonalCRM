@@ -43,19 +43,21 @@ SET deleted_at = NOW()
 WHERE id = $1 AND deleted_at IS NULL;
 ```
 
-## Search Query Pattern
+## Optional-Search Query Pattern
+
+Fold search into the listing query with `sqlc.narg` (NULL = no search) instead
+of maintaining a separate search variant — see `ListContacts` in
+`contact.sql` for the real full-text version:
 
 ```sql
--- name: SearchContacts :many
-SELECT * FROM contact
+-- name: ListWidgets :many
+SELECT * FROM widget
 WHERE
     deleted_at IS NULL
-    AND (
-        full_name ILIKE '%' || $1 || '%'
-        OR email ILIKE '%' || $1 || '%'
-    )
-ORDER BY created_at DESC
-LIMIT $2 OFFSET $3;
+    AND (sqlc.narg(search_query)::text IS NULL
+         OR name ILIKE '%' || sqlc.narg(search_query)::text || '%')
+ORDER BY name ASC, id ASC
+LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
 ```
 
 ## Aggregate Query Pattern
