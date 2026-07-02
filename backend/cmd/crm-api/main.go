@@ -122,12 +122,13 @@ func run() int {
 	logger.Info().Msg("database connected successfully")
 
 	// Initialize repositories
-	contactRepo := repository.NewContactRepository(database.Queries)
-	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
-	noteRepo := repository.NewNoteRepository(database.Queries)
-	interactionRepo := repository.NewInteractionRepository(database.Queries)
-	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
-	enrichmentRepo := repository.NewEnrichmentRepository(database.Queries)
+	core := buildCoreRepos(database.Queries)
+	contactRepo := core.Contact
+	contactMethodRepo := core.ContactMethod
+	noteRepo := core.Note
+	interactionRepo := core.Interaction
+	contactTaskRepo := core.ContactTask
+	enrichmentRepo := core.Enrichment
 
 	// River client + event bus + consumer wiring. Built EARLY (before
 	// downstream services) so `pubBus` and `manualHandler` are in scope
@@ -141,7 +142,14 @@ func run() int {
 	// args (the rematch registry is required; SetRematchService setter
 	// is gone).
 	riverWorkers := river.NewWorkers()
-	river.AddWorker(riverWorkers, &noopWorker{})
+	// Recording delegate over the worker + periodic-job bundles. Built
+	// around riverWorkers BEFORE river.NewClient so the noopWorker
+	// registration is recorded; its periodic bundle is attached
+	// immediately after NewClient returns. The wire functions register
+	// through reg instead of calling river.AddWorker / PeriodicJobs().Add
+	// directly, so the golden-list test can pin the registration set.
+	reg := newRiverRegistrar(riverWorkers)
+	addWorker(reg, &noopWorker{})
 
 	riverClient, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
 		JobTimeout: cfg.River.JobTimeout,
@@ -161,128 +169,44 @@ func run() int {
 	if err != nil {
 		logger.Fatal().Err(err).Msg("failed to build river client")
 	}
+	// Attach the periodic-job bundle now that the client exists. Every
+	// addPeriodic call happens later in the wire chain, so this late
+	// attach is safe by construction.
+	reg.periodic = riverClient.PeriodicJobs()
 
 	eventRepo := repository.NewEventRepository(database.Queries)
 	eventBus := events.NewBus(database.Pool, riverClient, eventRepo)
 
-	// Identity repository + service for the ingest path. The host-auth
-	// ingest path (raw_message.* envelopes from the Mac daemon) needs a
-	// tx-bound identity matcher so the per-event savepoint can roll back
-	// the identity write atomically with the staging-row insert on
-	// failure. The external-sync block (further down) constructs its own
-	// IdentityService for the providers that use it — IdentityService is
-	// stateless so the two instances are interchangeable.
-	identityRepoForIngest := repository.NewIdentityRepository(database.Queries)
-	identityServiceForIngest := service.NewIdentityService(identityRepoForIngest)
+	// Ingest repositories + identity service (host-auth ingest path).
+	// Several instances are reused by the external-sync / mac-host /
+	// calendar / telegram blocks below.
+	ingest := buildIngestRepos(database.Queries)
+	identityRepoForIngest := ingest.Identity
+	identityServiceForIngest := ingest.IdentityService
+	messagesMessageRepo := ingest.MessagesMessage
+	externalContactRepoForIngest := ingest.ExternalContact
+	macHostRepoForIngest := ingest.MacHost
+	meetingNoteRepoForIngest := ingest.MeetingNote
+	calendarRepoForIngest := ingest.CalendarEvent
+	phoneCallRepoForIngest := ingest.PhoneCall
 
-	// Messages staging repo (Mac daemon spec §3). Wired here so the
-	// InteractionRecorder's staging registry can dispatch
-	// source="messages" mark-processed calls correctly once the Mac
-	// daemon ingest writer is live, and so the IngestService can upsert
-	// staging rows from raw_message.* envelopes inside its per-event
-	// savepoint.
-	messagesMessageRepo := repository.NewMessagesMessageRepository(database.Queries)
+	// Rematch service + ContactService + graph (SP1) store. Rematch is
+	// constructed above ContactService so it can be passed as the
+	// RematchRegistry constructor arg.
+	graph := buildContactGraphCore(database, core, eventBus)
+	rematchService := graph.RematchService
+	contactService := graph.ContactService
+	graphNodeRepo := graph.GraphNode
+	graphAssertionRepo := graph.GraphAssertion
+	assertService := graph.AssertService
 
-	// External contact repo for the IngestService's inline
-	// external_contact.* handler (Mac daemon iCloud Contacts watcher
-	// path). Constructed unconditionally because the IngestService is
-	// always wired even when external sync is disabled — the daemon
-	// can still call /api/v1/ingest/events on a host-auth path. A
-	// later block under `if cfg.Features.EnableExternalSync` reuses
-	// the same instance for the Import / Calendar rematch wiring.
-	externalContactRepoForIngest := repository.NewExternalContactRepository(database.Queries)
-
-	// Mac host repo for the IngestService's per-batch host-liveness
-	// re-check (SELECT ... FOR UPDATE on mac_host inside the batch tx).
-	// Constructed here so the IngestService can take it as a dep; the
-	// host-auth / pairing / heartbeat handlers below construct their
-	// own MacHostService that wraps the same repo instance.
-	macHostRepoForIngest := repository.NewMacHostRepository(database.Queries)
-
-	// meeting_note repo + calendar repo + identity repo for the inline
-	// meeting_note.recorded / .deleted handlers. Constructed
-	// unconditionally because the IngestService is always wired even
-	// when external sync is disabled — the Mac daemon can still post
-	// meeting_note.* on the host-auth path. The calendarRepo here is
-	// the same logical resource the feature-flagged
-	// google.NewCalendarRematchHandler block below constructs; safe to
-	// have two instances pointing at the same queries since
-	// CalendarEventRepository is stateless.
-	meetingNoteRepoForIngest := repository.NewMeetingNoteRepository(database.Queries)
-	calendarRepoForIngest := repository.NewCalendarEventRepository(database.Queries)
-
-	// PhoneCall repository for the IngestService's call.* inline
-	// handler (phase 1.5).
-	phoneCallRepoForIngest := repository.NewPhoneCallRepository(database.Queries)
-
-	// Note: ingestService construction is hoisted DOWN to after
-	// contactService / cadenceUpdater / followUpManager are built —
-	// the call.* inline handler needs those collaborators to emit
-	// interaction.recorded + apply cadence/follow-up in the same tx
-	// as the staging-row write. See the construction near
-	// "ingestService := service.NewIngestService" further below.
-
-	// Rematch service — constructed above ContactService so it can be
-	// passed as the RematchRegistry constructor arg. Handlers register
-	// later once their dependencies are constructed.
-	rematchService := service.NewRematchService()
-
-	// Initialize services
-	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, eventBus, rematchService)
-
-	// Graph (SP1) write API — the single validated assert() write path over the
-	// node/entity/predicate/assertion store. SP1 ships the service + the daily
-	// rollover worker (registered below); no HTTP handler yet (SP3/SP4 consume it).
-	graphNodeRepo := repository.NewNodeRepository(database.Queries)
-	graphEntityRepo := repository.NewEntityRepository(database.Queries)
-	graphPredicateRepo := repository.NewPredicateRepository(database.Queries)
-	graphAssertionRepo := repository.NewAssertionRepository(database.Queries)
-	assertService := service.NewAssertService(
-		database.Pool, graphNodeRepo, graphEntityRepo, graphPredicateRepo, graphAssertionRepo, eventBus,
-	)
-
-	// Telegram message repo construction (hoisted above the
-	// InteractionRecorder wiring so the consumer can mark messages
-	// processed in the same tx as the interaction insert).
-	telegramMessageRepo := repository.NewTelegramMessageRepository(database.Queries)
-	// Comms message repo (shared cross-source content store). Hoisted here
-	// so the staging registry below can add the gchat session-scoped
-	// processor; also reused by the email-consumer wiring + the gchat
-	// aggregation engine further down.
-	commsMessageRepo := repository.NewCommsMessageRepository(database.Queries)
-
-	// Source-neutral staging registry — InteractionRecorder dispatches
-	// MarkProcessedTx by env.Source to the right repository. Unknown
-	// sources are a logged warning (not an error) so non-message kinds
-	// continue to bypass the registry without erroring.
-	stagingRegistry := repository.NewStagingProcessorRegistry(
-		map[string]repository.StagingProcessor{
-			repository.InteractionSourceTelegram: repository.NewTelegramStagingProcessor(telegramMessageRepo),
-			repository.InteractionSourceMessages: repository.NewMessagesStagingProcessor(messagesMessageRepo),
-			// GChat create-path: the InteractionRecorder consumer marks
-			// comms_message(source='gchat') rows processed via this
-			// session-scoped processor. Without it the recorder's
-			// zero-rows-affected rollback fires and the engine reprocesses
-			// forever. Inert until a chat provider writes gchat rows.
-			repository.InteractionSourceGChat: repository.NewCommsSessionStagingProcessor(commsMessageRepo),
-		},
-	)
-
-	// Venue resolution — populates interaction.venue_id (the shared-container
-	// node an interaction happened in). The registry routes message.* sources
-	// to per-source container readers and resolves gcal via the calendar 3-tuple;
-	// the venue repo also serves the email + phone + anarlog recorders directly.
-	// Wired into each recorder via its SetVenueResolver setter below.
-	venueRepo := repository.NewVenueRepository(database.Queries)
-	venueResolver := repository.NewVenueResolverRegistry(
-		venueRepo,
-		map[string]repository.VenueContainerReader{
-			repository.InteractionSourceTelegram: repository.NewTelegramVenueContainerReader(),
-			repository.InteractionSourceMessages: repository.NewMessagesVenueContainerReader(),
-			repository.InteractionSourceGChat:    repository.NewGChatVenueContainerReader(),
-		},
-		calendarRepoForIngest,
-	)
+	// Message-store repos + staging registry + venue resolver.
+	messaging := buildMessagingFoundation(database.Queries, messagesMessageRepo, calendarRepoForIngest)
+	telegramMessageRepo := messaging.TelegramMessageRepo
+	commsMessageRepo := messaging.CommsMessageRepo
+	stagingRegistry := messaging.StagingRegistry
+	venueRepo := messaging.VenueRepo
+	venueResolver := messaging.VenueResolver
 
 	// Aggregator reenqueuer holder. The Telegram entry needs the
 	// Telegram aggregation engine, which is constructed later (inside
