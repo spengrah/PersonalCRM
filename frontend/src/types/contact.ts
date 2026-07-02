@@ -1,68 +1,26 @@
+// Contact API types are generated from the backend Go wire structs
+// (backend/internal/api/handlers/contact_dto.go via `make api-types`) —
+// see src/types/generated/contact.ts. This module re-exports them under
+// the names the app uses, plus the few frontend-only types.
 import type { CadenceFilter, FollowupFilter, SortField, SortOrder } from '@/lib/contact-list-params'
+import type {
+  ContactMethodRequest,
+  ContactResponse,
+  OverdueContactResponse,
+} from './generated/contact'
 
-export type ContactMethodType =
-  | 'email'
-  | 'phone'
-  | 'telegram'
-  | 'signal'
-  | 'discord'
-  | 'twitter'
-  | 'gchat'
-  | 'whatsapp'
+export type {
+  ContactMethodType,
+  CreateContactRequest,
+  UpdateContactRequest,
+} from './generated/contact'
 
-export interface ContactMethod {
-  id?: string
-  type: ContactMethodType
-  value: string
-  is_primary: boolean
-}
+export type Contact = ContactResponse
+export type OverdueContact = OverdueContactResponse
 
-export interface Contact {
-  id: string
-  full_name: string
-  methods?: ContactMethod[]
-  primary_method?: ContactMethod
-  location?: string
-  birthday?: string
-  cadence?: string
-  last_contacted?: string
-  contact_by?: string
-  last_interaction_at?: string
-  last_outreach_at?: string
-  last_response_at?: string
-  has_pending_followup?: boolean
-  created_at: string
-  updated_at: string
-  deleted_at?: string
-  /**
-   * Set when create/update kicked off a rematch job to retroactively link
-   * historical calendar events / telegram messages. Null when no methods
-   * matched a registered handler. Polled by RematchJobsProvider.
-   */
-  rematch_job_id?: string | null
-}
-
-export interface OverdueContact extends Contact {
-  days_overdue: number
-  next_due_date: string
-  suggested_action: string
-}
-
-export interface CreateContactRequest {
-  full_name: string
-  methods?: ContactMethod[]
-  location?: string
-  birthday?: string
-  cadence?: string
-}
-
-export interface UpdateContactRequest {
-  full_name?: string
-  methods?: ContactMethod[]
-  location?: string
-  birthday?: string
-  cadence?: string
-}
+// UI-side method shape: response methods (id required) and form-built
+// methods (no id yet) both flow through this type.
+export type ContactMethod = ContactMethodRequest & { id?: string }
 
 export interface ContactListParams {
   page?: number

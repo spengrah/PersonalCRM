@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev dev-seed staging-reset build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry spec-lint
+.PHONY: help setup dev dev-seed staging-reset build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry spec-lint api-types api-types-check
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -128,6 +128,8 @@ help:
 	@echo "  crm-admin   - Build the operator-only admin CLI (backend/crm-admin)"
 	@echo "  mac-daemon  - Build the macOS daemon app bundle (optionally set CRM_MAC_CODESIGN_IDENTITY)"
 	@echo "  sqlc        - Regenerate sqlc code from SQL queries"
+	@echo "  api-types   - Regenerate frontend API types from Go wire structs"
+	@echo "  api-types-check - Fail if generated API types drifted (non-mutating)"
 	@echo "  lint        - Run all linters (backend + frontend)"
 	@echo "  spec-lint   - Lint the behavior spec corpus (spec/*.yaml)"
 	@echo "  clean       - Clean build artifacts"
@@ -621,6 +623,28 @@ sqlc:
 api-docs:
 	@echo "Generating API documentation..."
 	@cd backend && ~/go/bin/swag init -g cmd/crm-api/main.go --output ./docs
+
+# Generate frontend TypeScript API types from the Go wire structs
+# (backend/tygo.yaml). CI + pre-push guard drift via api-types-check.
+api-types:
+	@echo "Generating frontend API types from Go structs..."
+	@cd backend && go tool tygo generate
+	@echo "✅ API types generated"
+
+# Non-mutating drift check: generates into a temp dir and diffs against the
+# committed files, so it is safe to run concurrently with readers of
+# frontend/src/types/generated (the pre-push LINT lane runs alongside the
+# FRONTEND test lane).
+api-types-check:
+	@tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT && \
+	sed "s|\.\./frontend/src/types/generated/|$$tmp/out/|g" backend/tygo.yaml > "$$tmp/tygo.yaml" && \
+	mkdir -p "$$tmp/out" && \
+	(cd backend && go tool tygo generate --config "$$tmp/tygo.yaml") && \
+	if ! diff -ru frontend/src/types/generated "$$tmp/out"; then \
+		echo "❌ Generated API types are stale — run 'make api-types' and commit"; \
+		exit 1; \
+	fi && \
+	echo "✅ Generated API types are in sync"
 
 api-build:
 	@echo "Building API server..."

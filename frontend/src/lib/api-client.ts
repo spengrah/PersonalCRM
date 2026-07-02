@@ -1,3 +1,5 @@
+import type { APIError as WireAPIError, Meta } from '@/types/generated/api-envelope'
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || ''
 
 class ApiError extends Error {
@@ -12,23 +14,13 @@ class ApiError extends Error {
   }
 }
 
+// Envelope shape generated from the backend's api.APIResponse (data is
+// narrowed per call site via the generic).
 interface ApiResponse<T = unknown> {
   success: boolean
   data?: T
-  error?: {
-    code: string
-    message: string
-    details?: Record<string, unknown>
-  }
-  meta?: {
-    pagination?: {
-      total: number
-      page: number
-      limit: number
-      pages: number
-    }
-    hidden_unresolved_telegram_count?: number
-  }
+  error?: WireAPIError
+  meta?: Meta
 }
 
 interface ApiResponseWithMeta<T> {

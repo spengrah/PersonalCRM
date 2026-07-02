@@ -1,5 +1,21 @@
 [
   {
+    "pattern": "^frontend/src/types/",
+    "tags": [
+      "@area:dashboard",
+      "@area:contacts",
+      "@area:contact-navigation",
+      "@area:contact-merge",
+      "@area:imports",
+      "@area:meetings",
+      "@area:overdue",
+      "@area:settings",
+      "@area:navigation",
+      "@area:birthdays",
+      "@area:error-boundary"
+    ]
+  },
+  {
     "pattern": "^frontend/playwright\\.config\\.ts$",
     "tags": [
       "@area:dashboard",

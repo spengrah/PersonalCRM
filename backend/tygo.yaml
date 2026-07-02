@@ -1,0 +1,36 @@
+# Generates frontend TypeScript API types from the Go structs that actually
+# serialize the wire payloads (the swagger docs are stale Swagger 2.0 and not
+# a viable source of truth). Regenerate with `make api-types`; CI fails on
+# drift between these Go structs and the committed generated files.
+#
+# Incremental adoption: currently covers the api envelope + the contact
+# domain. Migrate further domains by widening the handlers include_files
+# list and re-pointing the corresponding frontend/src/types/* file at the
+# generated output.
+packages:
+  - path: 'personal-crm/backend/internal/api'
+    output_path: '../frontend/src/types/generated/api-envelope.ts'
+    include_files:
+      - 'response.go'
+    fallback_type: 'unknown'
+    type_mappings:
+      time.Time: 'string'
+  - path: 'personal-crm/backend/internal/api/handlers'
+    output_path: '../frontend/src/types/generated/contact.ts'
+    include_files:
+      - 'contact_dto.go'
+    type_mappings:
+      time.Time: 'string'
+    frontmatter: |
+      // ContactMethodType mirrors the `oneof` validation on
+      // ContactMethodRequest.Type (backend/internal/api/handlers/contact.go);
+      // referenced from Go via tstype tags.
+      export type ContactMethodType =
+        | 'email'
+        | 'phone'
+        | 'telegram'
+        | 'signal'
+        | 'discord'
+        | 'twitter'
+        | 'gchat'
+        | 'whatsapp'
