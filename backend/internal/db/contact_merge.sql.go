@@ -191,6 +191,107 @@ func (q *Queries) ReplaceContactInCalendarEvents(ctx context.Context, arg Replac
 	return err
 }
 
+const RepointExternalContactsToContact = `-- name: RepointExternalContactsToContact :exec
+UPDATE external_contact
+SET crm_contact_id = $1,
+    updated_at = NOW()
+WHERE crm_contact_id = $2
+`
+
+type RepointExternalContactsToContactParams struct {
+	TargetContactID pgtype.UUID `json:"target_contact_id"`
+	SourceContactID pgtype.UUID `json:"source_contact_id"`
+}
+
+// Re-point import links from the merge source to the target. Both
+// crm_contact_id indexes are non-unique, so this is collision-free. The
+// external_contact upsert preserves crm_contact_id on re-sync, so the
+// repoint is not overwritten by the next daemon sync.
+func (q *Queries) RepointExternalContactsToContact(ctx context.Context, arg RepointExternalContactsToContactParams) error {
+	_, err := q.db.Exec(ctx, RepointExternalContactsToContact, arg.TargetContactID, arg.SourceContactID)
+	return err
+}
+
+const RepointIdentitiesToContact = `-- name: RepointIdentitiesToContact :exec
+UPDATE external_identity
+SET contact_id = $1,
+    updated_at = NOW()
+WHERE contact_id = $2
+`
+
+type RepointIdentitiesToContactParams struct {
+	TargetContactID pgtype.UUID `json:"target_contact_id"`
+	SourceContactID pgtype.UUID `json:"source_contact_id"`
+}
+
+// Re-point identity-cache rows from the merge source (loser) to the target
+// (winner) so future inbound events from the loser's handles attribute to
+// the survivor. Collision-free: external_identity uniqueness is on
+// (identifier, identifier_type, source) globally, so at most one row exists
+// per triple regardless of contact.
+func (q *Queries) RepointIdentitiesToContact(ctx context.Context, arg RepointIdentitiesToContactParams) error {
+	_, err := q.db.Exec(ctx, RepointIdentitiesToContact, arg.TargetContactID, arg.SourceContactID)
+	return err
+}
+
+const RepointMessagesMessageContact = `-- name: RepointMessagesMessageContact :exec
+UPDATE messages_message
+SET matched_contact_id = $1
+WHERE matched_contact_id = $2
+`
+
+type RepointMessagesMessageContactParams struct {
+	TargetContactID pgtype.UUID `json:"target_contact_id"`
+	SourceContactID pgtype.UUID `json:"source_contact_id"`
+}
+
+// Re-point iMessage staging rows (committed pre-merge, incl. unprocessed)
+// from the merge source to the target. messages_message uniqueness is on
+// the message guid, not the contact — collision-free. NOTE: the table has
+// no updated_at column (049); do not set one.
+func (q *Queries) RepointMessagesMessageContact(ctx context.Context, arg RepointMessagesMessageContactParams) error {
+	_, err := q.db.Exec(ctx, RepointMessagesMessageContact, arg.TargetContactID, arg.SourceContactID)
+	return err
+}
+
+const RepointPhoneCallContact = `-- name: RepointPhoneCallContact :exec
+UPDATE phone_call
+SET matched_contact_id = $1
+WHERE matched_contact_id = $2
+`
+
+type RepointPhoneCallContactParams struct {
+	TargetContactID pgtype.UUID `json:"target_contact_id"`
+	SourceContactID pgtype.UUID `json:"source_contact_id"`
+}
+
+// Re-point call staging rows from the merge source to the target.
+// Uniqueness is on call_unique_id — collision-free. NOTE: phone_call has
+// no updated_at column (055); do not set one.
+func (q *Queries) RepointPhoneCallContact(ctx context.Context, arg RepointPhoneCallContactParams) error {
+	_, err := q.db.Exec(ctx, RepointPhoneCallContact, arg.TargetContactID, arg.SourceContactID)
+	return err
+}
+
+const RepointTelegramMessageContact = `-- name: RepointTelegramMessageContact :exec
+UPDATE telegram_message
+SET matched_contact_id = $1
+WHERE matched_contact_id = $2
+`
+
+type RepointTelegramMessageContactParams struct {
+	TargetContactID pgtype.UUID `json:"target_contact_id"`
+	SourceContactID pgtype.UUID `json:"source_contact_id"`
+}
+
+// Re-point Telegram staging rows from the merge source to the target.
+// Uniqueness is on (telegram_chat_id, telegram_message_id) — collision-free.
+// NOTE: telegram_message has no updated_at column (032); do not set one.
+func (q *Queries) RepointTelegramMessageContact(ctx context.Context, arg RepointTelegramMessageContactParams) error {
+	_, err := q.db.Exec(ctx, RepointTelegramMessageContact, arg.TargetContactID, arg.SourceContactID)
+	return err
+}
+
 const TransferContactMethods = `-- name: TransferContactMethods :exec
 
 UPDATE contact_method

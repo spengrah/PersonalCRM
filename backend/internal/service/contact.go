@@ -9,14 +9,17 @@ import (
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/cadence"
+	"personal-crm/backend/internal/consumer/consumerjobs"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/todoist"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/riverqueue/river"
 )
 
 type ContactMethodInput struct {
@@ -106,6 +109,28 @@ type ContactService struct {
 	// location/birthday/how_met write (the columns are no longer written
 	// by the contact SQL).
 	knowledge *knowledgeWriter
+	// commsRepo carries the savepoint-wrapped comms_message merge repoint
+	// (dedup soft-delete + repoint with one scoped retry). Constructed
+	// internally from database.Queries — no new constructor arg.
+	commsRepo *repository.CommsMessageRepository
+	// taskCloseEnqueuer inserts the durable Todoist close job for automated
+	// contact_task rows the merge closes with a REAL external id. Injected
+	// via SetTaskCloseEnqueuer after construction (same convention as
+	// SetCadenceUpdater). taskCloseConfigured tracks "setter called"
+	// separately from taskCloseRemoteEnabled: setter never called + eligible
+	// refs exist → error (wiring bug); called with remoteEnabled=false
+	// (follow-up mode 'off', the documented completion-disabled emergency
+	// override) → WARN + skip enqueue; enabled → enqueue.
+	taskCloseEnqueuer      repository.JobEnqueuer
+	taskCloseConfigured    bool
+	taskCloseRemoteEnabled bool
+	// mergeCommitBarrier, when non-nil, is invoked after the in-tx
+	// attribution repoints and immediately before the merge tx commit.
+	// Test-only hook (InjectMergeCommitBarrierForTest) that makes the
+	// concurrent-ingest race deterministic: a test commits a raced
+	// source-attributed row from a second connection inside the hook, and
+	// the post-commit second pass must repoint it. Nil in production.
+	mergeCommitBarrier func()
 }
 
 // NewContactService constructs a ContactService. bus and rematchRegistry
@@ -129,9 +154,32 @@ func NewContactService(
 		contactMethodRepo: contactMethodRepo,
 		interactionRepo:   interactionRepo,
 		contactTaskRepo:   contactTaskRepo,
+		commsRepo:         repository.NewCommsMessageRepository(database.Queries),
 		bus:               bus,
 		rematchRegistry:   rematchRegistry,
 	}
+}
+
+// SetTaskCloseEnqueuer injects the river job enqueuer MergeContacts uses to
+// schedule remote Todoist closes for the source contact's automated tasks.
+// remoteCloseEnabled reflects the follow-up mode gate (cutover only): the
+// close worker refuses to run outside cutover, so enqueuing in mode 'off'
+// would only manufacture failing jobs — MergeContacts skips the enqueue with
+// a WARN instead (that mode's documented contract is "completion disabled").
+// Calling the setter at all marks the dependency as configured; a merge that
+// closes an enqueue-eligible task without the setter ever being called
+// errors, surfacing the wiring bug instead of stranding a remote task.
+func (s *ContactService) SetTaskCloseEnqueuer(e repository.JobEnqueuer, remoteCloseEnabled bool) {
+	s.taskCloseEnqueuer = e
+	s.taskCloseConfigured = true
+	s.taskCloseRemoteEnabled = remoteCloseEnabled
+}
+
+// InjectMergeCommitBarrierForTest installs the test-only pre-commit barrier
+// for MergeContacts (see the mergeCommitBarrier field). Must only be called
+// before the service is used concurrently; no synchronization is performed.
+func (s *ContactService) InjectMergeCommitBarrierForTest(fn func()) {
+	s.mergeCommitBarrier = fn
 }
 
 // SetFollowUpConsumer injects the FollowUpManager consumer. Matches
@@ -1383,6 +1431,95 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		return nil, fmt.Errorf("deduplicate calendar event contacts: %w", err)
 	}
 
+	// 6b. Re-point identity + attribution state. Soft-deleting the source
+	// below fires no FK cascades, so every one of these references would
+	// otherwise dangle at a live-but-tombstoned row: the external_identity
+	// cache would keep attributing future inbound events from the source's
+	// handles to the dead contact, and already-committed staging rows
+	// (including unprocessed ones) would strand against it.
+	if err := txQueries.RepointIdentitiesToContact(ctx, db.RepointIdentitiesToContactParams{
+		SourceContactID: sourceUUID,
+		TargetContactID: targetUUID,
+	}); err != nil {
+		return nil, fmt.Errorf("repoint external identities: %w", err)
+	}
+	if err := txQueries.RepointExternalContactsToContact(ctx, db.RepointExternalContactsToContactParams{
+		SourceContactID: sourceUUID,
+		TargetContactID: targetUUID,
+	}); err != nil {
+		return nil, fmt.Errorf("repoint external contacts: %w", err)
+	}
+	if err := txQueries.RepointMessagesMessageContact(ctx, db.RepointMessagesMessageContactParams{
+		SourceContactID: sourceUUID,
+		TargetContactID: targetUUID,
+	}); err != nil {
+		return nil, fmt.Errorf("repoint messages_message staging rows: %w", err)
+	}
+	if err := txQueries.RepointTelegramMessageContact(ctx, db.RepointTelegramMessageContactParams{
+		SourceContactID: sourceUUID,
+		TargetContactID: targetUUID,
+	}); err != nil {
+		return nil, fmt.Errorf("repoint telegram_message staging rows: %w", err)
+	}
+	if err := txQueries.RepointPhoneCallContact(ctx, db.RepointPhoneCallContactParams{
+		SourceContactID: sourceUUID,
+		TargetContactID: targetUUID,
+	}); err != nil {
+		return nil, fmt.Errorf("repoint phone_call staging rows: %w", err)
+	}
+	// comms_message needs the savepoint-wrapped two-step (dedup soft-delete
+	// then repoint): its dedup unique index includes matched_contact_id, so
+	// an email fanned out to both contacts collides on a bare repoint.
+	if err := s.commsRepo.RepointContactForMergeTx(ctx, tx, req.SourceContactID, req.TargetContactID); err != nil {
+		return nil, fmt.Errorf("repoint comms_message staging rows: %w", err)
+	}
+
+	// 6c. contact_task, split by lifecycle: manual rows are USER CONTENT and
+	// follow the survivor (collision-free — no unique index covers
+	// lifecycle='manual'); automated rows (cadence_due/followup_loop) are
+	// CLOSED instead, because repointing them collides with the target's own
+	// automated rows (unique_contact_provider_cadence has no state filter)
+	// and the target's rows already cover the survivor.
+	if err := txQueries.RepointManualContactTasksToContact(ctx, db.RepointManualContactTasksToContactParams{
+		SourceContactID: sourceUUID,
+		TargetContactID: targetUUID,
+	}); err != nil {
+		return nil, fmt.Errorf("repoint manual contact tasks: %w", err)
+	}
+	closedRefs, err := s.contactTaskRepo.CompleteLiveTasksForContactTx(ctx, tx, req.SourceContactID, todoist.MetadataKeyPendingTempID)
+	if err != nil {
+		return nil, fmt.Errorf("close live contact tasks: %w", err)
+	}
+	// Remote-close enqueue for rows with a REAL external id (non-empty and
+	// not a pending temp id — mirrors every existing close path's
+	// isPendingTempID gate; the close worker has no temp-id guard of its
+	// own). Temp-ID and empty-ID rows are closed locally only: their remote
+	// cleanup is owned by the create worker's close-while-pending branch
+	// (empty id) and the state-aware temp-mapping finalize (temp id).
+	var eligibleRefs []repository.CompletedTaskRef
+	for _, ref := range closedRefs {
+		if ref.ExternalTaskID != "" && ref.PendingTempID != ref.ExternalTaskID {
+			eligibleRefs = append(eligibleRefs, ref)
+		}
+	}
+	if len(eligibleRefs) > 0 {
+		switch {
+		case !s.taskCloseConfigured:
+			return nil, errors.New("merge contacts: task close enqueuer not wired (call SetTaskCloseEnqueuer)")
+		case !s.taskCloseRemoteEnabled:
+			logger.Warn().
+				Str("source_contact_id", req.SourceContactID.String()).
+				Int("closed_tasks", len(eligibleRefs)).
+				Msg("merge: remote task close disabled (follow-up mode off); tasks closed locally only")
+		default:
+			for _, ref := range eligibleRefs {
+				if _, err := s.taskCloseEnqueuer.InsertTx(ctx, tx, consumerjobs.TodoistFollowUpCloseJobArgs{ContactTaskID: ref.ID}, &river.InsertOpts{MaxAttempts: 10}); err != nil {
+					return nil, fmt.Errorf("enqueue todoist close for merged task %s: %w", ref.ID, err)
+				}
+			}
+		}
+	}
+
 	// 7. Update target contact with field selections and optional new
 	// name. This write is profile-only (name/location/birthday/cadence/
 	// photo/how_met) and NEVER touches the four cadence columns.
@@ -1464,10 +1601,32 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		return nil, fmt.Errorf("soft delete source contact: %w", err)
 	}
 
+	// Test-only commit barrier: lets a race test commit a source-attributed
+	// row from a second connection between the in-tx repoints above and the
+	// commit below, deterministically exercising the post-commit second
+	// pass. Nil in production.
+	if s.mergeCommitBarrier != nil {
+		s.mergeCommitBarrier()
+	}
+
 	// Commit transaction
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("commit: %w", err)
 	}
+
+	// Post-commit second pass over the attribution repoints. The merge tx
+	// runs at READ COMMITTED and only tombstones the source at commit, so a
+	// concurrently racing ingest can read the pre-merge identity row (cache
+	// hit → source) and commit a source-attributed row AFTER the in-tx
+	// repoint statements took their snapshots. Re-running the idempotent
+	// repoints once post-commit catches every raced row committed before
+	// this pass. Best-effort: the merge itself committed, so failures are
+	// logged at ERROR and do not fail the merge. (Residual: a raced ingest
+	// committing after this pass strands at most one row — staging rows
+	// self-heal via the identity liveness guard on the next event;
+	// external_contact is the documented indefinite residual, fixed
+	// manually via the import UI.)
+	s.repointMergedAttributionSecondPass(ctx, req.SourceContactID, req.TargetContactID)
 
 	// Attach methods to the merged contact
 	if err := s.attachMethods(ctx, mergedContact); err != nil {
@@ -1475,6 +1634,57 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 	}
 
 	return mergedContact, nil
+}
+
+// repointMergedAttributionSecondPass re-runs the merge's identity +
+// external_contact + staging repoints once via the non-tx path. Every
+// statement is an idempotent "WHERE ... = source" update, so re-running after
+// commit is safe; comms_message reuses the savepoint-wrapped two-step inside
+// a short transaction. Errors are logged at ERROR and swallowed — see the
+// call site in MergeContacts.
+func (s *ContactService) repointMergedAttributionSecondPass(ctx context.Context, sourceID, targetID uuid.UUID) {
+	sourceUUID := uuidToPgUUID(sourceID)
+	targetUUID := uuidToPgUUID(targetID)
+	q := s.database.Queries
+
+	logSecondPassErr := func(step string, err error) {
+		logger.Error().Err(err).
+			Str("source_contact_id", sourceID.String()).
+			Str("target_contact_id", targetID.String()).
+			Str("step", step).
+			Msg("merge attribution second pass failed; raced rows may remain attributed to the merged-away contact")
+	}
+
+	if err := q.RepointIdentitiesToContact(ctx, db.RepointIdentitiesToContactParams{
+		SourceContactID: sourceUUID, TargetContactID: targetUUID,
+	}); err != nil {
+		logSecondPassErr("external_identity", err)
+	}
+	if err := q.RepointExternalContactsToContact(ctx, db.RepointExternalContactsToContactParams{
+		SourceContactID: sourceUUID, TargetContactID: targetUUID,
+	}); err != nil {
+		logSecondPassErr("external_contact", err)
+	}
+	if err := q.RepointMessagesMessageContact(ctx, db.RepointMessagesMessageContactParams{
+		SourceContactID: sourceUUID, TargetContactID: targetUUID,
+	}); err != nil {
+		logSecondPassErr("messages_message", err)
+	}
+	if err := q.RepointTelegramMessageContact(ctx, db.RepointTelegramMessageContactParams{
+		SourceContactID: sourceUUID, TargetContactID: targetUUID,
+	}); err != nil {
+		logSecondPassErr("telegram_message", err)
+	}
+	if err := q.RepointPhoneCallContact(ctx, db.RepointPhoneCallContactParams{
+		SourceContactID: sourceUUID, TargetContactID: targetUUID,
+	}); err != nil {
+		logSecondPassErr("phone_call", err)
+	}
+	if err := pgx.BeginTxFunc(ctx, s.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		return s.commsRepo.RepointContactForMergeTx(ctx, tx, sourceID, targetID)
+	}); err != nil {
+		logSecondPassErr("comms_message", err)
+	}
 }
 
 // buildMergeUpdateRequest creates an UpdateContactRequest based on field selections

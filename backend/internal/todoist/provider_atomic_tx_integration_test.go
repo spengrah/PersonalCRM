@@ -155,6 +155,9 @@ func setupAtomicTxTestEnv(t *testing.T) (*atomicTxTestEnv, func()) {
 	river.AddWorker(workers, &noopCadenceUpdaterWorker{})
 	river.AddWorker(workers, &noopFollowUpManagerWorker{})
 	river.AddWorker(workers, &noopRematchDispatcherWorker{})
+	// The state-aware temp-ID finalize enqueues todoist_followup_close for a
+	// completed row; register a noop worker so the insert validates.
+	river.AddWorker(workers, &noopTodoistCloseWorker{})
 
 	riverClient, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
 		Queues: map[string]river.QueueConfig{
@@ -180,6 +183,8 @@ func setupAtomicTxTestEnv(t *testing.T) (*atomicTxTestEnv, func()) {
 		cadenceFake,
 		database.Pool,
 		DefaultClientFactory,
+		riverClient,
+		true,
 	)
 
 	cleanup := func() {
@@ -861,6 +866,8 @@ func TestTodoist_Sync_ReconcileDefersSkipDriftAfterMappingRollback(t *testing.T)
 		env.cadenceFake,
 		env.pool,
 		func(_ string) Client { return mock },
+		env.riverClient,
+		true,
 	)
 
 	// Prime the post-items TempIDMap by pre-registering the temp_id.
@@ -1077,6 +1084,8 @@ func TestSync_StaleTodoistDeadline_OutreachRecovery(t *testing.T) {
 		env.cadenceFake,
 		env.pool,
 		func(_ string) Client { return mock },
+		env.riverClient,
+		true,
 	)
 
 	state := makeStaleDeadlineSyncState(env)
@@ -1173,6 +1182,8 @@ func TestSync_StaleTodoistDeadline_CRMDriftPath(t *testing.T) {
 		env.cadenceFake,
 		env.pool,
 		func(_ string) Client { return mock },
+		env.riverClient,
+		true,
 	)
 
 	state := makeStaleDeadlineSyncState(env)
@@ -1285,6 +1296,8 @@ func TestProcessItem_DeadlineEditTxFailure_RollsBackAndSurfacesErr(t *testing.T)
 		env.cadenceFake,
 		env.pool,
 		func(_ string) Client { return mock },
+		env.riverClient,
+		true,
 	)
 
 	state := makeStaleDeadlineSyncState(env)
@@ -1370,6 +1383,8 @@ func TestSync_LegitimateTodoistEdit_SameTickReconcileIsNotSpuriousCloseCreate(t 
 		env.cadenceFake,
 		env.pool,
 		func(_ string) Client { return mock },
+		env.riverClient,
+		true,
 	)
 
 	state := makeStaleDeadlineSyncState(env)

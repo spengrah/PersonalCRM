@@ -854,6 +854,28 @@ func (q *Queries) MarkCommsMessagesProcessedForSession(ctx context.Context, arg 
 	return result.RowsAffected(), nil
 }
 
+const RepointCommsMessageContact = `-- name: RepointCommsMessageContact :exec
+UPDATE comms_message
+SET matched_contact_id = $1
+WHERE matched_contact_id = $2
+`
+
+type RepointCommsMessageContactParams struct {
+	TargetContactID pgtype.UUID `json:"target_contact_id"`
+	SourceContactID pgtype.UUID `json:"source_contact_id"`
+}
+
+// Merge dedup step 2: re-point ALL remaining source-matched rows (live +
+// soft-deleted — the dedup index is partial on deleted_at IS NULL, so
+// soft-deleted rows cannot collide; including them mirrors
+// TransferInteractions' includes-soft-deleted audit stance). Runs strictly
+// AFTER SoftDeleteDuplicateCommsMessagesForMerge inside
+// RepointContactForMergeTx's savepoint.
+func (q *Queries) RepointCommsMessageContact(ctx context.Context, arg RepointCommsMessageContactParams) error {
+	_, err := q.db.Exec(ctx, RepointCommsMessageContact, arg.TargetContactID, arg.SourceContactID)
+	return err
+}
+
 const SoftDeleteCommsMessageByID = `-- name: SoftDeleteCommsMessageByID :exec
 UPDATE comms_message
 SET deleted_at = NOW()
@@ -893,6 +915,39 @@ func (q *Queries) SoftDeleteCommsMessagesByExternalID(ctx context.Context, arg S
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const SoftDeleteDuplicateCommsMessagesForMerge = `-- name: SoftDeleteDuplicateCommsMessagesForMerge :exec
+UPDATE comms_message
+SET deleted_at = NOW()
+WHERE comms_message.matched_contact_id = $1
+  AND comms_message.deleted_at IS NULL
+  AND EXISTS (
+    SELECT 1 FROM comms_message t
+    WHERE t.source = comms_message.source
+      AND t.external_id = comms_message.external_id
+      AND t.matched_contact_id = $2
+      AND t.deleted_at IS NULL
+  )
+`
+
+type SoftDeleteDuplicateCommsMessagesForMergeParams struct {
+	SourceContactID pgtype.UUID `json:"source_contact_id"`
+	TargetContactID pgtype.UUID `json:"target_contact_id"`
+}
+
+// Merge dedup step 1 (see CommsMessageRepository.RepointContactForMergeTx):
+// tombstone the merge source's live copy of any (source, external_id) the
+// target ALSO has live — the email-fanout shape, where one upstream message
+// produced a row under both contacts. Without this, the follow-up repoint
+// would collide on idx_comms_message_dedup (partial UNIQUE (source,
+// external_id, matched_contact_id) WHERE deleted_at IS NULL). Soft-delete
+// (not hard DELETE) preserves the row for audit, matching the table's
+// tombstone semantics; the surviving target row carries the same upstream
+// message. MUST run strictly BEFORE RepointCommsMessageContact.
+func (q *Queries) SoftDeleteDuplicateCommsMessagesForMerge(ctx context.Context, arg SoftDeleteDuplicateCommsMessagesForMergeParams) error {
+	_, err := q.db.Exec(ctx, SoftDeleteDuplicateCommsMessagesForMerge, arg.SourceContactID, arg.TargetContactID)
+	return err
 }
 
 const TestInsertCommsMessageLinked = `-- name: TestInsertCommsMessageLinked :one

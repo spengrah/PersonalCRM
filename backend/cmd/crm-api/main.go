@@ -542,6 +542,14 @@ func run() int {
 	// FollowUpManager.ApplyInteraction via ContactService.
 	contactService.SetFollowUpConsumer(followUpManager)
 
+	// Wire the merge-time task-close enqueuer. MergeContacts closes the
+	// source contact's live automated tasks and enqueues the durable Todoist
+	// close job for rows with a real external id; the mode gate matches the
+	// close worker's cutover-only contract (enqueuing in mode 'off' would
+	// only manufacture failing jobs — merge then closes locally with a WARN,
+	// that mode's documented "completion disabled" semantics).
+	contactService.SetTaskCloseEnqueuer(riverClient, cfg.EventBus.FollowUpMode == config.EventBusFollowUpModeCutover)
+
 	// InteractionRecorder consumer + manual handler (spec §3.4.1).
 	// Delegates the write to ContactService.RecordInteractionTx, then
 	// marks telegram_messages processed (for message.* kinds) and emits
@@ -1000,6 +1008,8 @@ func run() int {
 				cadenceUpdater,
 				database.Pool,
 				todoistClientFactory,
+				riverClient,
+				cfg.EventBus.FollowUpMode == config.EventBusFollowUpModeCutover,
 			)
 			providerRegistry.Register(todoistProvider)
 			logger.Info().Msg("Todoist Cadence sync provider registered")

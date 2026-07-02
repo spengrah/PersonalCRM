@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"personal-crm/backend/internal/db"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -89,11 +92,107 @@ type GChatIdentity struct {
 // CommsMessageRepository wraps the sqlc-generated comms_message queries.
 type CommsMessageRepository struct {
 	queries db.Querier
+	// repointBarrierForTest, when non-nil, is invoked between the dedup and
+	// repoint statements of RepointContactForMergeTx's FIRST savepoint attempt
+	// only. Test-only hook (same convention as
+	// ContactService.InjectMergeCommitBarrierForTest) that lets a test commit
+	// a colliding row from a second connection at exactly the point where the
+	// READ COMMITTED race fires, making the savepoint-retry path
+	// deterministic. Nil in production.
+	repointBarrierForTest func()
 }
 
 // NewCommsMessageRepository creates a new comms_message repository.
 func NewCommsMessageRepository(queries db.Querier) *CommsMessageRepository {
 	return &CommsMessageRepository{queries: queries}
+}
+
+// commsMessageDedupIndex is the partial unique index
+// (source, external_id, matched_contact_id) WHERE deleted_at IS NULL that the
+// merge repoint can collide with when a concurrent ingest commits a target-
+// contact row between the dedup and repoint statements.
+const commsMessageDedupIndex = "idx_comms_message_dedup"
+
+// SetRepointBarrierForTest installs the test-only barrier hook. Must only be
+// called before the repository is used concurrently; no synchronization.
+func (r *CommsMessageRepository) SetRepointBarrierForTest(fn func()) {
+	r.repointBarrierForTest = fn
+}
+
+// isCommsDedupUniqueViolation reports whether err is a 23505 raised against
+// idx_comms_message_dedup. Scoped narrowly so unrelated unique violations
+// still propagate.
+func isCommsDedupUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+	return pgErr.Code == pgerrcode.UniqueViolation && pgErr.ConstraintName == commsMessageDedupIndex
+}
+
+// RepointContactForMergeTx re-points the merge source contact's comms_message
+// rows to the target inside the caller's tx. Two ordered steps: (1) soft-
+// delete the source's live rows whose (source, external_id) the target ALSO
+// has live (the email-fanout dedup collision, D-index idx_comms_message_dedup),
+// then (2) re-point the remainder (incl. previously soft-deleted rows — the
+// partial index ignores them).
+//
+// The pair runs in a savepoint (nested tx) with ONE retry scoped to a 23505
+// on idx_comms_message_dedup: at READ COMMITTED, a concurrent ingest can
+// commit a target-contact row for the same (source, external_id) between the
+// two statements, making the repoint collide even though the dedup statement
+// saw nothing. The savepoint confines the abort, and the retry's dedup
+// statement takes a fresh snapshot that sees the raced row. A second
+// collision (sustained concurrent inserts) propagates and fails the merge
+// safely — full rollback, user retries.
+func (r *CommsMessageRepository) RepointContactForMergeTx(ctx context.Context, tx pgx.Tx, sourceContactID, targetContactID uuid.UUID) error {
+	attempt := func(withBarrier bool) error {
+		sp, err := tx.Begin(ctx)
+		if err != nil {
+			return fmt.Errorf("open comms repoint savepoint: %w", err)
+		}
+		q := db.New(sp)
+		if err := q.SoftDeleteDuplicateCommsMessagesForMerge(ctx, db.SoftDeleteDuplicateCommsMessagesForMergeParams{
+			SourceContactID: uuidToPgUUID(sourceContactID),
+			TargetContactID: uuidToPgUUID(targetContactID),
+		}); err != nil {
+			if rbErr := sp.Rollback(ctx); rbErr != nil {
+				return fmt.Errorf("rollback comms repoint savepoint: %w (dedup: %w)", rbErr, err)
+			}
+			return fmt.Errorf("soft-delete duplicate comms messages: %w", err)
+		}
+		if withBarrier && r.repointBarrierForTest != nil {
+			r.repointBarrierForTest()
+		}
+		if err := q.RepointCommsMessageContact(ctx, db.RepointCommsMessageContactParams{
+			SourceContactID: uuidToPgUUID(sourceContactID),
+			TargetContactID: uuidToPgUUID(targetContactID),
+		}); err != nil {
+			if rbErr := sp.Rollback(ctx); rbErr != nil {
+				return fmt.Errorf("rollback comms repoint savepoint: %w (repoint: %w)", rbErr, err)
+			}
+			return fmt.Errorf("repoint comms messages: %w", err)
+		}
+		if err := sp.Commit(ctx); err != nil {
+			return fmt.Errorf("commit comms repoint savepoint: %w", err)
+		}
+		return nil
+	}
+
+	err := attempt(true)
+	if err == nil {
+		return nil
+	}
+	if !isCommsDedupUniqueViolation(err) {
+		return err
+	}
+	// Raced insert committed between the dedup and repoint statements; the
+	// savepoint rollback confined the abort. Retry once — the fresh dedup
+	// snapshot sees the raced row and tombstones the collision first.
+	if retryErr := attempt(false); retryErr != nil {
+		return fmt.Errorf("comms repoint retry after dedup collision: %w", retryErr)
+	}
+	return nil
 }
 
 func convertDbCommsMessage(m *db.CommsMessage) CommsMessage {

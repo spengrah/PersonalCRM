@@ -4,6 +4,15 @@
 SELECT * FROM contact
 WHERE id = $1 AND deleted_at IS NULL;
 
+-- name: ContactIsLive :one
+-- Liveness probe for the identity-match guard: a cached
+-- external_identity.contact_id pointing at a soft-deleted (e.g. merged-away)
+-- contact must not short-circuit the discovery path.
+SELECT EXISTS(
+    SELECT 1 FROM contact
+    WHERE id = $1 AND deleted_at IS NULL
+) AS is_live;
+
 -- name: ListContacts :many
 -- cadence_filter: '' = no filter (Go zero value), 'has_cadence' = non-empty cadence,
 -- 'no_cadence' = NULL or empty string (defensive; CHECK constraint prevents empty strings)

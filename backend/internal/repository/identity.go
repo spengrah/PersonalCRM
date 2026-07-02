@@ -323,6 +323,37 @@ func (r *IdentityRepository) UnlinkFromContact(ctx context.Context, id uuid.UUID
 	return &ident, nil
 }
 
+// UnlinkFromContactTx is the tx-bound variant of UnlinkFromContact. Used by
+// IdentityService's liveness guard when the cached contact is tombstoned and
+// discovery finds no live match: clearing contact_id (+ match_type unmatched)
+// surfaces the identity in the unmatched queue instead of leaving it pinned
+// to a dead contact (the upsert's COALESCE would preserve the stale link).
+func (r *IdentityRepository) UnlinkFromContactTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*ExternalIdentity, error) {
+	dbIdentity, err := db.New(tx).UnlinkIdentityFromContact(ctx, uuidToPgUUID(id))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	ident := convertDbIdentity(dbIdentity)
+	return &ident, nil
+}
+
+// ContactIsLive reports whether the contact exists and is not soft-deleted.
+// Backs the identity-match liveness guard: a cached external_identity row
+// pointing at a merged-away (tombstoned) contact must not short-circuit the
+// discovery path. Lives on IdentityRepository because the guard's caller is
+// the identity service (which already joins contact in discovery).
+func (r *IdentityRepository) ContactIsLive(ctx context.Context, id uuid.UUID) (bool, error) {
+	return r.queries.ContactIsLive(ctx, uuidToPgUUID(id))
+}
+
+// ContactIsLiveTx is the tx-bound variant of ContactIsLive.
+func (r *IdentityRepository) ContactIsLiveTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (bool, error) {
+	return db.New(tx).ContactIsLive(ctx, uuidToPgUUID(id))
+}
+
 // ListUnmatched lists unmatched identities with pagination
 func (r *IdentityRepository) ListUnmatched(ctx context.Context, limit, offset int32) ([]ExternalIdentity, error) {
 	dbIdentities, err := r.queries.ListUnmatchedIdentities(ctx, db.ListUnmatchedIdentitiesParams{

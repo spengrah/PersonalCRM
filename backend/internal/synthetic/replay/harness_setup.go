@@ -216,6 +216,13 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 	knowledgeCache := consumer.NewKnowledgeCacheUpdater(graphAssertionRepo, graphNodeRepo, contactRepo)
 	contactService.SetKnowledgeWriter(assertService, knowledgeCache)
 
+	// Merge-time task-close enqueuer. Replay merge scenarios seed STANDALONE
+	// contacts (no cadence tasks), so no enqueue-eligible refs exist today;
+	// wiring with remoteCloseEnabled=false (mirroring this harness's
+	// follow-up mode: off) keeps a future profile that merges a task-bearing
+	// contact on the safe WARN-and-skip path instead of erroring.
+	contactService.SetTaskCloseEnqueuer(client, false)
+
 	// Staging registry covers telegram + messages + gchat sources. The gchat
 	// session processor is REQUIRED: without it the InteractionRecorder cannot
 	// mark comms_message(source='gchat') rows processed, the zero-rows rollback

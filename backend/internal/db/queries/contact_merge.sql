@@ -43,6 +43,52 @@ WHERE sqlc.arg(target_contact_id)::uuid = ANY(matched_contact_ids)
     SELECT COUNT(*) FROM unnest(matched_contact_ids) AS cid WHERE cid = sqlc.arg(target_contact_id)::uuid
   ) > 1;
 
+-- name: RepointIdentitiesToContact :exec
+-- Re-point identity-cache rows from the merge source (loser) to the target
+-- (winner) so future inbound events from the loser's handles attribute to
+-- the survivor. Collision-free: external_identity uniqueness is on
+-- (identifier, identifier_type, source) globally, so at most one row exists
+-- per triple regardless of contact.
+UPDATE external_identity
+SET contact_id = sqlc.arg(target_contact_id),
+    updated_at = NOW()
+WHERE contact_id = sqlc.arg(source_contact_id);
+
+-- name: RepointExternalContactsToContact :exec
+-- Re-point import links from the merge source to the target. Both
+-- crm_contact_id indexes are non-unique, so this is collision-free. The
+-- external_contact upsert preserves crm_contact_id on re-sync, so the
+-- repoint is not overwritten by the next daemon sync.
+UPDATE external_contact
+SET crm_contact_id = sqlc.arg(target_contact_id),
+    updated_at = NOW()
+WHERE crm_contact_id = sqlc.arg(source_contact_id);
+
+-- name: RepointMessagesMessageContact :exec
+-- Re-point iMessage staging rows (committed pre-merge, incl. unprocessed)
+-- from the merge source to the target. messages_message uniqueness is on
+-- the message guid, not the contact — collision-free. NOTE: the table has
+-- no updated_at column (049); do not set one.
+UPDATE messages_message
+SET matched_contact_id = sqlc.arg(target_contact_id)
+WHERE matched_contact_id = sqlc.arg(source_contact_id);
+
+-- name: RepointTelegramMessageContact :exec
+-- Re-point Telegram staging rows from the merge source to the target.
+-- Uniqueness is on (telegram_chat_id, telegram_message_id) — collision-free.
+-- NOTE: telegram_message has no updated_at column (032); do not set one.
+UPDATE telegram_message
+SET matched_contact_id = sqlc.arg(target_contact_id)
+WHERE matched_contact_id = sqlc.arg(source_contact_id);
+
+-- name: RepointPhoneCallContact :exec
+-- Re-point call staging rows from the merge source to the target.
+-- Uniqueness is on call_unique_id — collision-free. NOTE: phone_call has
+-- no updated_at column (055); do not set one.
+UPDATE phone_call
+SET matched_contact_id = sqlc.arg(target_contact_id)
+WHERE matched_contact_id = sqlc.arg(source_contact_id);
+
 -- name: CountMergeContactMethods :one
 -- Count contact methods for a contact (for merge preview)
 SELECT COUNT(*) FROM contact_method

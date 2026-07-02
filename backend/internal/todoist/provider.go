@@ -10,6 +10,7 @@ import (
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/cadence"
 	"personal-crm/backend/internal/config"
+	"personal-crm/backend/internal/consumer/consumerjobs"
 	"personal-crm/backend/internal/contacttask"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
@@ -20,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
 )
 
 const (
@@ -85,6 +87,7 @@ type contactTaskWriter interface {
 	GetContactTaskByContactCadenceDue(ctx context.Context, contactID uuid.UUID, provider string) (*repository.ContactTask, error)
 	GetContactTaskByPendingTempID(ctx context.Context, provider, tempID string) (*repository.ContactTask, error)
 	GetContactTask(ctx context.Context, id uuid.UUID) (*repository.ContactTask, error)
+	GetContactTaskTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*repository.ContactTask, error)
 	CreateContactTask(ctx context.Context, req repository.CreateContactTaskRequest) (*repository.ContactTask, error)
 	DeleteContactTask(ctx context.Context, id uuid.UUID) error
 	UpdateContactTaskState(ctx context.Context, id uuid.UUID, state repository.ContactTaskState) (*repository.ContactTask, error)
@@ -93,6 +96,7 @@ type contactTaskWriter interface {
 	UpdateContactTaskMetadataTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, metadata map[string]any) (*repository.ContactTask, error)
 	UpdateContactTaskExternalID(ctx context.Context, id uuid.UUID, externalID string) (*repository.ContactTask, error)
 	UpdateContactTaskExternalIDTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, externalID string) (*repository.ContactTask, error)
+	SetContactTaskExternalIDOnlyTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, externalTaskID string) error
 	FindPendingFollowUp(ctx context.Context, contactID uuid.UUID) (*repository.ContactTask, error)
 	ListContactTasksByContact(ctx context.Context, contactID uuid.UUID) ([]repository.ContactTask, error)
 }
@@ -127,9 +131,23 @@ type CadenceSyncProvider struct {
 	pool          *pgxpool.Pool
 	clientFactory ClientFactory
 	frontendURL   string
+	// riverInserter + remoteCloseEnabled back the state-aware temp-ID
+	// finalize: when a temp mapping lands on a row that is no longer
+	// 'managed' (e.g. completed by a contact merge mid-flight), the finalize
+	// records the real external id WITHOUT resurrecting the row, and — for
+	// completed rows — enqueues the durable todoist_followup_close job in
+	// the same per-task tx. remoteCloseEnabled mirrors the follow-up
+	// cutover-mode gate (the close worker refuses to run outside cutover);
+	// when false the enqueue is skipped with a WARN. A nil riverInserter on
+	// the enqueue path is a wiring bug and is logged at ERROR.
+	riverInserter      repository.JobEnqueuer
+	remoteCloseEnabled bool
 }
 
-// NewCadenceSyncProvider creates a new Todoist cadence sync provider
+// NewCadenceSyncProvider creates a new Todoist cadence sync provider.
+// riverInserter + remoteCloseEnabled feed the state-aware temp-ID finalize
+// (see the struct fields); main.go passes the river client and the
+// follow-up cutover-mode gate.
 func NewCadenceSyncProvider(
 	oauthService oauthTokenProvider,
 	contactTaskRepo contactTaskWriter,
@@ -140,17 +158,21 @@ func NewCadenceSyncProvider(
 	cadenceUpdater cadenceOverrider,
 	pool *pgxpool.Pool,
 	clientFactory ClientFactory,
+	riverInserter repository.JobEnqueuer,
+	remoteCloseEnabled bool,
 ) *CadenceSyncProvider {
 	return &CadenceSyncProvider{
-		oauthService:    oauthService,
-		contactTaskRepo: contactTaskRepo,
-		contactRepo:     contactRepo,
-		cadenceUpdater:  cadenceUpdater,
-		syncRepo:        syncRepo,
-		bus:             bus,
-		pool:            pool,
-		clientFactory:   clientFactory,
-		frontendURL:     cfg.CORS.FrontendURL,
+		oauthService:       oauthService,
+		contactTaskRepo:    contactTaskRepo,
+		contactRepo:        contactRepo,
+		cadenceUpdater:     cadenceUpdater,
+		syncRepo:           syncRepo,
+		bus:                bus,
+		pool:               pool,
+		clientFactory:      clientFactory,
+		frontendURL:        cfg.CORS.FrontendURL,
+		riverInserter:      riverInserter,
+		remoteCloseEnabled: remoteCloseEnabled,
 	}
 }
 
@@ -1554,16 +1576,22 @@ func (p *CadenceSyncProvider) tryRecoverPendingTempID(ctx context.Context, item 
 		return nil, true
 	}
 
-	// Broadened guard: any managed task with a non-empty pending_temp_id
-	// is a candidate for finalizing the mapping. See function docstring.
+	// Broadened guard: any task with a non-empty pending_temp_id is a
+	// candidate for finalizing the mapping. The row's state is dispatched
+	// INSIDE the per-task tx (finalizeTempIDMappingTx): managed rows take
+	// the normal external_id + state='managed' update; rows in a terminal
+	// state (e.g. completed by a merge while the item_add was in flight)
+	// record the real id without resurrecting, and completed rows enqueue
+	// the durable remote close.
 	pendingTempID, _ := task.Metadata[MetadataKeyPendingTempID].(string)
-	if task.State != repository.ContactTaskStateManaged || pendingTempID == "" {
+	if pendingTempID == "" {
 		return nil, false
 	}
 
 	oldID := task.ExternalTaskID
 
-	// Atomic: external_id update + metadata clear inside one tx.
+	// Atomic: external_id update + metadata clear (+ any close-job enqueue)
+	// inside one tx.
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		logger.Warn().Err(err).
@@ -1573,22 +1601,13 @@ func (p *CadenceSyncProvider) tryRecoverPendingTempID(ctx context.Context, item 
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	if _, err := p.contactTaskRepo.UpdateContactTaskExternalIDTx(ctx, tx, task.ID, item.ID); err != nil {
+	fresh, err := p.finalizeTempIDMappingTx(ctx, tx, task.ID, item.ID)
+	if err != nil {
 		logger.Warn().Err(err).
 			Str("contactId", marker.ContactID).
 			Str("oldExternalId", oldID).
 			Str("newExternalId", item.ID).
-			Msg("tryRecoverPendingTempID: update external_id failed")
-		return task, true
-	}
-
-	metadata := task.Metadata
-	if metadata == nil {
-		metadata = make(map[string]any)
-	}
-	delete(metadata, MetadataKeyPendingTempID)
-	if _, err := p.contactTaskRepo.UpdateContactTaskMetadataTx(ctx, tx, task.ID, metadata); err != nil {
-		logger.Warn().Err(err).Msg("tryRecoverPendingTempID: clear pending_temp_id failed")
+			Msg("tryRecoverPendingTempID: finalize failed")
 		return task, true
 	}
 
@@ -1597,17 +1616,84 @@ func (p *CadenceSyncProvider) tryRecoverPendingTempID(ctx context.Context, item 
 		return task, true
 	}
 
-	// Reflect in the returned task (in-memory).
-	task.ExternalTaskID = item.ID
-	task.Metadata = metadata
-
 	logger.Info().
 		Str("contactId", marker.ContactID).
 		Str("oldTempId", oldID).
 		Str("realId", item.ID).
+		Str("state", string(fresh.State)).
 		Msg("recovered pending temp ID mapping (atomic commit)")
 
-	return task, false
+	return fresh, false
+}
+
+// finalizeTempIDMappingTx records the real Todoist id for a task whose temp
+// mapping (or marker-matched sync item) arrived, dispatching on the row's
+// CURRENT state re-read inside the caller's tx — the caller's pre-tx snapshot
+// can be stale when a concurrent close (contact merge, inbound response)
+// landed between lookup and tx start. Mirrors the follow-up create worker's
+// phase-3 dispatch:
+//   - managed: normal finalize (external_id + state='managed' in one UPDATE).
+//   - terminal states: record the id WITHOUT touching state —
+//     UpdateContactTaskExternalIDTx sets state='managed' unconditionally,
+//     which would resurrect a closed row (on a merged-away contact that
+//     zombie would be invisible to reconcile forever, since
+//     ListManagedContactTasks joins live contacts only).
+//   - completed additionally enqueues the durable todoist_followup_close job
+//     (river, MaxAttempts 10) in the same tx, mode- and wiring-gated. Durable
+//     rather than an inline command-batch close because batch failures are
+//     logged-and-forgotten while the sync cursor advances, and a completed
+//     row is skipped by every future reconcile — an inline close that fails
+//     once would strand the remote task permanently. Other terminal states
+//     (dismissed, unmanaged) deliberately get NO remote close: they mean the
+//     user dismissed the task or the CRM stopped managing it.
+//
+// Clears pending_temp_id from the FRESH row's metadata (in-tx read-modify-
+// write). Returns the fresh task with the new external id + cleared metadata
+// reflected in-memory.
+func (p *CadenceSyncProvider) finalizeTempIDMappingTx(ctx context.Context, tx pgx.Tx, taskID uuid.UUID, realID string) (*repository.ContactTask, error) {
+	fresh, err := p.contactTaskRepo.GetContactTaskTx(ctx, tx, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("re-read contact_task: %w", err)
+	}
+	metadata := fresh.Metadata
+	if metadata == nil {
+		metadata = make(map[string]any)
+	}
+	delete(metadata, MetadataKeyPendingTempID)
+
+	if fresh.State == repository.ContactTaskStateManaged {
+		if _, err := p.contactTaskRepo.UpdateContactTaskExternalIDTx(ctx, tx, taskID, realID); err != nil {
+			return nil, fmt.Errorf("update external_id: %w", err)
+		}
+	} else {
+		if err := p.contactTaskRepo.SetContactTaskExternalIDOnlyTx(ctx, tx, taskID, realID); err != nil {
+			return nil, fmt.Errorf("persist external_id on %s row: %w", fresh.State, err)
+		}
+		if fresh.State == repository.ContactTaskStateCompleted {
+			switch {
+			case !p.remoteCloseEnabled:
+				logger.Warn().
+					Str("contactTaskId", taskID.String()).
+					Msg("temp-id finalize on completed row: remote close disabled (follow-up mode off); recorded id locally only")
+			case p.riverInserter == nil:
+				logger.Error().
+					Str("contactTaskId", taskID.String()).
+					Msg("temp-id finalize on completed row: river inserter not wired; remote Todoist task will dangle")
+			default:
+				if _, err := p.riverInserter.InsertTx(ctx, tx, consumerjobs.TodoistFollowUpCloseJobArgs{ContactTaskID: taskID}, &river.InsertOpts{MaxAttempts: 10}); err != nil {
+					return nil, fmt.Errorf("enqueue close for completed row: %w", err)
+				}
+			}
+		}
+	}
+
+	if _, err := p.contactTaskRepo.UpdateContactTaskMetadataTx(ctx, tx, taskID, metadata); err != nil {
+		return nil, fmt.Errorf("clear pending_temp_id: %w", err)
+	}
+
+	fresh.ExternalTaskID = realID
+	fresh.Metadata = metadata
+	return fresh, nil
 }
 
 // createTaskCommand creates a Todoist task creation command
@@ -1688,16 +1774,12 @@ func (p *CadenceSyncProvider) processTempIDMappings(ctx context.Context, tempIDM
 			}
 			defer func() { _ = tx.Rollback(ctx) }()
 
-			if _, err := p.contactTaskRepo.UpdateContactTaskExternalIDTx(ctx, tx, task.ID, realID); err != nil {
-				return fmt.Errorf("update external_id: %w", err)
-			}
-			metadata := task.Metadata
-			if metadata == nil {
-				metadata = make(map[string]any)
-			}
-			delete(metadata, MetadataKeyPendingTempID)
-			if _, err := p.contactTaskRepo.UpdateContactTaskMetadataTx(ctx, tx, task.ID, metadata); err != nil {
-				return fmt.Errorf("clear pending_temp_id: %w", err)
+			// State-aware finalize (re-reads the row inside the tx): a row
+			// closed mid-flight (e.g. by a contact merge) records the real
+			// id without being resurrected to 'managed', and a completed
+			// row's remote task is closed via the durable river job.
+			if _, err := p.finalizeTempIDMappingTx(ctx, tx, task.ID, realID); err != nil {
+				return err
 			}
 			return tx.Commit(ctx)
 		}()

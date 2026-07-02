@@ -732,6 +732,55 @@ func (r *ContactTaskRepository) UpdateContactTaskExternalIDTx(ctx context.Contex
 	return &task, nil
 }
 
+// CompletedTaskRef identifies a contact_task row the merge-time close
+// transitioned to 'completed', with the fields the service needs to decide
+// remote-close enqueue eligibility (a real external id — non-empty AND not a
+// pending temp id).
+type CompletedTaskRef struct {
+	ID             uuid.UUID
+	ExternalTaskID string
+	Provider       string
+	// PendingTempID is metadata->>'pending_temp_id' ('' when absent). When it
+	// equals ExternalTaskID the row still carries a Todoist temp id, so no
+	// close job may be enqueued for it (mirrors todoist.isPendingTempID).
+	PendingTempID string
+}
+
+// CompleteLiveTasksForContactTx closes (state='completed') the contact's live
+// AUTOMATED tasks (lifecycle cadence_due/followup_loop, state managed/
+// pending_remote_create) inside the caller's tx and returns refs for the
+// closed rows. Manual-lifecycle rows are untouched — the merge repoints them
+// instead (RepointManualContactTasksToContact). pendingTempIDKey is the
+// metadata key holding the provider's pending temp id
+// (todoist.MetadataKeyPendingTempID), passed in so the repository stays
+// provider-blind.
+func (r *ContactTaskRepository) CompleteLiveTasksForContactTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, pendingTempIDKey string) ([]CompletedTaskRef, error) {
+	q := r.queries
+	if tx != nil {
+		q = db.New(tx)
+	}
+	rows, err := q.CompleteLiveContactTasksForContact(ctx, db.CompleteLiveContactTasksForContactParams{
+		ContactID:        uuidToPgUUID(contactID),
+		PendingTempIDKey: pendingTempIDKey,
+	})
+	if err != nil {
+		return nil, err
+	}
+	refs := make([]CompletedTaskRef, 0, len(rows))
+	for _, row := range rows {
+		ref := CompletedTaskRef{
+			ExternalTaskID: row.ExternalTaskID,
+			Provider:       row.Provider,
+			PendingTempID:  row.PendingTempID,
+		}
+		if row.ID.Valid {
+			ref.ID = uuid.UUID(row.ID.Bytes)
+		}
+		refs = append(refs, ref)
+	}
+	return refs, nil
+}
+
 // SetContactTaskExternalIDOnlyTx persists external_task_id WITHOUT
 // touching state. Used only by the close-while-pending race path in the
 // cutover follow-up create worker — the row is already in state='completed'

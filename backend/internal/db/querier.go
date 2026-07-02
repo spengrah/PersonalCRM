@@ -158,6 +158,17 @@ type Querier interface {
 	// so an inbound arriving while the create worker is mid-flight still
 	// transitions the row to completed.
 	CompleteFollowUpForContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactTask, error)
+	// Merge-time close of the source contact's live AUTOMATED tasks (cadence_due
+	// + followup_loop). Manual-lifecycle rows are deliberately excluded — they
+	// are user content and are REPOINTED to the merge target instead (see
+	// RepointManualContactTasksToContact). Automated rows cannot be repointed:
+	// unique_contact_provider_cadence has no state filter, so a repoint collides
+	// whenever the target has ANY cadence_due row, and the target's own automated
+	// rows already cover the survivor. Returns the closed rows' identifying
+	// fields plus the pending_temp_id metadata key so the service can decide
+	// remote-close enqueue eligibility (real external id only — never a pending
+	// temp id, mirroring todoist.isPendingTempID).
+	CompleteLiveContactTasksForContact(ctx context.Context, arg CompleteLiveContactTasksForContactParams) ([]*CompleteLiveContactTasksForContactRow, error)
 	CompleteSyncLog(ctx context.Context, arg CompleteSyncLogParams) (*ExternalSyncLog, error)
 	// Returns the surgically-recomputed timestamp columns (each touched ONLY
 	// when the deleted interaction at @deleted_at_ts was its source: column =
@@ -173,6 +184,10 @@ type Querier interface {
 	// FOR UPDATE retained below re-takes the held lock; the load-bearing
 	// serialization is the prior LockContactForDateRecompute statement).
 	ComputeContactDatesAfterDelete(ctx context.Context, arg ComputeContactDatesAfterDeleteParams) (*ComputeContactDatesAfterDeleteRow, error)
+	// Liveness probe for the identity-match guard: a cached
+	// external_identity.contact_id pointing at a soft-deleted (e.g. merged-away)
+	// contact must not short-circuit the discovery path.
+	ContactIsLive(ctx context.Context, id pgtype.UUID) (bool, error)
 	CountAllUnmatchedExternalContacts(ctx context.Context, includeUnresolvedTelegram bool) (int64, error)
 	CountContactInteractions(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountContactNotes(ctx context.Context, contactID pgtype.UUID) (int64, error)
@@ -1464,6 +1479,46 @@ type Querier interface {
 	// winner and set the recomputed proposition_key. Called only by the merge
 	// procedure, never the normal write path.
 	RepointAssertionSubject(ctx context.Context, arg RepointAssertionSubjectParams) error
+	// Merge dedup step 2: re-point ALL remaining source-matched rows (live +
+	// soft-deleted — the dedup index is partial on deleted_at IS NULL, so
+	// soft-deleted rows cannot collide; including them mirrors
+	// TransferInteractions' includes-soft-deleted audit stance). Runs strictly
+	// AFTER SoftDeleteDuplicateCommsMessagesForMerge inside
+	// RepointContactForMergeTx's savepoint.
+	RepointCommsMessageContact(ctx context.Context, arg RepointCommsMessageContactParams) error
+	// Re-point import links from the merge source to the target. Both
+	// crm_contact_id indexes are non-unique, so this is collision-free. The
+	// external_contact upsert preserves crm_contact_id on re-sync, so the
+	// repoint is not overwritten by the next daemon sync.
+	RepointExternalContactsToContact(ctx context.Context, arg RepointExternalContactsToContactParams) error
+	// Re-point identity-cache rows from the merge source (loser) to the target
+	// (winner) so future inbound events from the loser's handles attribute to
+	// the survivor. Collision-free: external_identity uniqueness is on
+	// (identifier, identifier_type, source) globally, so at most one row exists
+	// per triple regardless of contact.
+	RepointIdentitiesToContact(ctx context.Context, arg RepointIdentitiesToContactParams) error
+	// Merge-time repoint of the source contact's MANUAL tasks (user to-dos) to
+	// the target, all states — closing one would silently check off the user's
+	// live task, and leaving it would let the Todoist sync's contact-deleted
+	// branch hard-DELETE the remote task. Collision-free: neither partial unique
+	// index covers lifecycle='manual', and unique_external_task_id keys on
+	// external_task_id, which this update does not touch. Repointing terminal
+	// states too keeps the survivor's task history intact (mirrors
+	// TransferInteractions).
+	RepointManualContactTasksToContact(ctx context.Context, arg RepointManualContactTasksToContactParams) error
+	// Re-point iMessage staging rows (committed pre-merge, incl. unprocessed)
+	// from the merge source to the target. messages_message uniqueness is on
+	// the message guid, not the contact — collision-free. NOTE: the table has
+	// no updated_at column (049); do not set one.
+	RepointMessagesMessageContact(ctx context.Context, arg RepointMessagesMessageContactParams) error
+	// Re-point call staging rows from the merge source to the target.
+	// Uniqueness is on call_unique_id — collision-free. NOTE: phone_call has
+	// no updated_at column (055); do not set one.
+	RepointPhoneCallContact(ctx context.Context, arg RepointPhoneCallContactParams) error
+	// Re-point Telegram staging rows from the merge source to the target.
+	// Uniqueness is on (telegram_chat_id, telegram_message_id) — collision-free.
+	// NOTE: telegram_message has no updated_at column (032); do not set one.
+	RepointTelegramMessageContact(ctx context.Context, arg RepointTelegramMessageContactParams) error
 	ResetSyncStateBackfillCursor(ctx context.Context, arg ResetSyncStateBackfillCursorParams) (*ExternalSyncState, error)
 	// ============================================================================
 	// crm-admin --reset-and-seed support: a HARD wipe of every live data table
@@ -1618,6 +1673,16 @@ type Querier interface {
 	// affects 0 rows.
 	SoftDeleteCommsMessagesByExternalID(ctx context.Context, arg SoftDeleteCommsMessagesByExternalIDParams) (int64, error)
 	SoftDeleteContact(ctx context.Context, id pgtype.UUID) error
+	// Merge dedup step 1 (see CommsMessageRepository.RepointContactForMergeTx):
+	// tombstone the merge source's live copy of any (source, external_id) the
+	// target ALSO has live — the email-fanout shape, where one upstream message
+	// produced a row under both contacts. Without this, the follow-up repoint
+	// would collide on idx_comms_message_dedup (partial UNIQUE (source,
+	// external_id, matched_contact_id) WHERE deleted_at IS NULL). Soft-delete
+	// (not hard DELETE) preserves the row for audit, matching the table's
+	// tombstone semantics; the surviving target row carries the same upstream
+	// message. MUST run strictly BEFORE RepointCommsMessageContact.
+	SoftDeleteDuplicateCommsMessagesForMerge(ctx context.Context, arg SoftDeleteDuplicateCommsMessagesForMergeParams) error
 	// Tombstones a live row. Defensive WHERE deleted_at IS NULL keeps the
 	// statement idempotent against a concurrent delete. crm_contact_id,
 	// match_status, and duplicate_of_id are preserved per the external_contact
