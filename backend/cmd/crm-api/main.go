@@ -46,13 +46,10 @@ import (
 	"personal-crm/backend/internal/health"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/messages"
-	"personal-crm/backend/internal/push"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/scheduler"
 	"personal-crm/backend/internal/service"
-	"personal-crm/backend/internal/sync"
 	tgpkg "personal-crm/backend/internal/telegram"
-	"personal-crm/backend/internal/todoist"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -125,7 +122,6 @@ func run() int {
 	contactRepo := core.Contact
 	contactMethodRepo := core.ContactMethod
 	interactionRepo := core.Interaction
-	contactTaskRepo := core.ContactTask
 
 	// River client + event bus + consumer wiring. Built EARLY (before
 	// downstream services) so `pubBus` and `manualHandler` are in scope
@@ -178,7 +174,6 @@ func run() int {
 	// Several instances are reused by the external-sync / mac-host /
 	// calendar / telegram blocks below.
 	ingest := buildIngestRepos(database.Queries)
-	identityServiceForIngest := ingest.IdentityService
 	messagesMessageRepo := ingest.MessagesMessage
 	externalContactRepoForIngest := ingest.ExternalContact
 	macHostRepoForIngest := ingest.MacHost
@@ -202,9 +197,6 @@ func run() int {
 	// + their shared collaborators, wired into ContactService via its setters.
 	consumers := buildEventConsumers(cfg, database, core, graph, ingest, messaging, eventBus, riverClient)
 	aggregatorReenqueuerHolder := consumers.AggregatorReenqueuerHolder
-	cadenceUpdater := consumers.CadenceUpdater
-	todoistClientFactory := consumers.TodoistClientFactory
-	followUpSettingsHolder := consumers.FollowUpSettingsHolder
 
 	// IngestService + meeting-note conflict-resolution surface. Hoisted
 	// after the consumers so the call.* inline handler can reuse them in
@@ -230,9 +222,7 @@ func run() int {
 	// AddressBookReconciler back-reference.
 	domain := buildDomainServices(database, core, graph, ingest, consumers, ingestStk, eventBus)
 	noteService := domain.NoteService
-	importMatchService := domain.ImportMatchService
 	enrichmentService := domain.EnrichmentService
-	addressBookReconcileService := domain.AddressBookReconcileService
 
 	// Rematch dispatcher consumer — subscribes to contact_methods.added
 	// events and runs RematchService.Run with per-contact mutex
@@ -240,305 +230,27 @@ func run() int {
 	// registered below once their deps are constructed.
 	registerRematchDispatcher(reg, graph, database, eventBus)
 
-	// Initialize external sync components (feature-flagged)
-	var syncService *service.SyncService
-	var syncHandler *handlers.SyncHandler
-	var identityHandler *handlers.IdentityHandler
-	var oauthHandler *handlers.OAuthHandler
-	var importHandler *handlers.ImportHandler
-	var suggestionHandler *handlers.SuggestionHandler
-	var anarlogDiscoveryHandler *handlers.AnarlogDiscoveryHandler
-	var calendarHandler *handlers.CalendarHandler
-	var todoistHandler *handlers.TodoistHandler
-	var contactTaskHandler *handlers.ContactTaskHandler
-	var googleOAuthService *google.OAuthService
-	var todoistOAuthService *todoist.OAuthService
-	var externalContactRepo *repository.ExternalContactRepository
-
-	// GChat provider + enabled-state lister, hoisted to function scope so the
-	// LATE depth-0 gchatEngine block (below, OUTSIDE the EnableExternalSync block)
-	// can register the gchat rematch handlers. The provider is constructed but
-	// INTENTIONALLY NOT registered into providerRegistry: the scheduler must
-	// never run it until an enablement/boot-reconciliation path creates an
-	// enabled external_sync_state(source='gchat') row (not wired here). Both stay
-	// nil unless Google OAuth is configured AND external sync is enabled.
-	var gchatProvider *google.GChatSyncProvider
-	var gchatSyncStates google.GChatSyncStateLister
-
+	// External sync components (feature-flagged). A zero syncStack
+	// reproduces today's all-nil handler set when disabled; the gate stays
+	// here so buildExternalSync runs only when the feature is on.
+	var syncStk syncStack
 	if cfg.Features.EnableExternalSync {
-		syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
-		identityRepo := repository.NewIdentityRepository(database.Queries)
-		oauthRepo := repository.NewOAuthRepository(database.Queries)
-		providerRegistry := sync.NewProviderRegistry()
-
-		// Initialize Google OAuth service if configured
-		if cfg.Google.ClientID != "" && cfg.Google.ClientSecret != "" {
-			var err error
-			googleOAuthService, err = google.NewOAuthService(cfg, oauthRepo, syncRepo)
-			if err != nil {
-				logger.Warn().Err(err).Msg("failed to initialize Google OAuth service")
-			} else {
-				oauthHandler = handlers.NewOAuthHandler(googleOAuthService, cfg.CORS.FrontendURL)
-				logger.Info().Msg("Google OAuth service initialized")
-			}
-		} else {
-			logger.Info().Msg("Google OAuth not configured (GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET required)")
-		}
-
-		// Initialize Todoist OAuth service if configured
-		if cfg.Todoist.ClientID != "" && cfg.Todoist.ClientSecret != "" {
-			var err error
-			todoistOAuthService, err = todoist.NewOAuthService(cfg, oauthRepo, syncRepo)
-			if err != nil {
-				logger.Warn().Err(err).Msg("failed to initialize Todoist OAuth service")
-			} else {
-				// If OAuth handler exists (from Google), add Todoist to it
-				// Otherwise create a new handler with nil Google service
-				if oauthHandler != nil {
-					oauthHandler.SetTodoistOAuth(todoistOAuthService)
-				} else {
-					oauthHandler = handlers.NewOAuthHandler(nil, cfg.CORS.FrontendURL)
-					oauthHandler.SetTodoistOAuth(todoistOAuthService)
-				}
-
-				// Initialize Todoist settings handler
-				todoistHandler = handlers.NewTodoistHandler(todoistOAuthService, syncRepo)
-
-				// Populate the FollowUpManager's deferred Todoist settings
-				// ref so the cutover consumer can resolve settings via the
-				// real OAuth service for its post-commit refresh / close /
-				// retry workers.
-				followUpSettingsHolder.oauth = todoistOAuthService
-				followUpSettingsHolder.sync = syncRepo
-
-				logger.Info().Msg("Todoist OAuth service initialized")
-			}
-		} else {
-			logger.Info().Msg("Todoist OAuth not configured (TODOIST_CLIENT_ID and TODOIST_CLIENT_SECRET required)")
-		}
-
-		// External contact repository — reuse the instance constructed
-		// at outer scope for the IngestService so all code paths share
-		// the same repo (no behavioral difference today; future stateful
-		// caching is centralized).
-		externalContactRepo = externalContactRepoForIngest
-
-		// Initialize identity service (enrichmentService is constructed at outer scope
-		// so the Telegram block can share it).
-		identityService := service.NewIdentityService(identityRepo)
-
-		// Calendar repo + handler + rematch handler are wired whenever external
-		// sync is enabled, regardless of OAuth configuration. Rematch over
-		// calendar_event is pure DB work and must run in test/local environments
-		// that don't have Google OAuth set up.
-		calendarRepo := repository.NewCalendarEventRepository(database.Queries)
-		calendarHandler = handlers.NewCalendarHandler(calendarRepo)
-		rematchService.Register(google.NewCalendarRematchHandler(calendarRepo, externalContactRepo, pubBus))
-		logger.Info().Msg("Calendar rematch handler registered")
-
-		// Register Google Contacts provider if OAuth is configured
-		if googleOAuthService != nil {
-			gcontactsProvider := google.NewContactsProvider(
-				googleOAuthService,
-				externalContactRepo,
-				enrichmentService,
-				identityService,
-				addressBookReconcileService,
-			)
-			providerRegistry.Register(gcontactsProvider)
-			logger.Info().Msg("Google Contacts sync provider registered")
-
-			// Register Google Calendar provider
-			gcalProvider := google.NewCalendarSyncProvider(
-				googleOAuthService,
-				calendarRepo,
-				contactRepo,
-				identityService,
-				externalContactRepo,
-				pubBus,
-				database.Pool,
-			)
-			providerRegistry.Register(gcalProvider)
-			logger.Info().Msg("Google Calendar sync provider registered")
-
-			// Gmail provider + rematch handler: publisher-driven, so register
-			// ONLY in cutover mode. In off-mode pubBus is a nil *events.Bus;
-			// passing it into the provider's busTx interface field would create
-			// a non-nil-interface-wrapping-typed-nil and bypass the provider's
-			// own `bus == nil` guard, panicking on the first PublishTx. Off-mode
-			// is an emergency rollback posture where no publisher should run.
-			// commsMessageRepo is reused from the email-consumer wiring above.
-			if pubBus != nil {
-				gmailProvider := google.NewGmailSyncProvider(
-					googleOAuthService,
-					commsMessageRepo,
-					pubBus,
-					database.Pool,
-				)
-				providerRegistry.Register(gmailProvider)
-				// syncRepo is the enabled-email-states lister: the rematch scan
-				// runs only over accounts whose email sync is enabled (the same
-				// gate the scheduler uses), not every connected OAuth account.
-				rematchService.Register(google.NewGmailRematchHandler(
-					gmailProvider,
-					syncRepo,
-					commsMessageRepo,
-				))
-				// Correspondence discovery: an in-sync hook that runs the link-only
-				// candidate gate over every fetched message's From/To/Cc
-				// participants (between fetch and storage), so multi-party threads
-				// the storage gate drops still surface unknown addresses that
-				// strong-match an existing contact. Wired into the provider via a
-				// setter (nil-safe; the hook is a no-op when unset). No periodic
-				// job — discovery piggybacks the existing sync fetch.
-				gmailProvider.SetCorrespondenceDiscoverer(google.NewCorrespondenceDiscoverer(
-					contactRepo,
-					externalContactRepo,
-				))
-				logger.Info().Msg("Gmail sync provider + rematch handler + correspondence discovery registered")
-			} else {
-				logger.Warn().Msg("Gmail provider NOT registered: event-bus interaction mode=off (pubBus nil)")
-			}
-
-			// GChat provider: registered into providerRegistry so the scheduler
-			// can run it — this is the go-live switch (PR 3). It stays inert
-			// until enablement reconciliation creates an enabled gchat sync state
-			// (no state → ListDueSyncStates filters enabled=TRUE → nothing to
-			// dispatch). It is store-only + event-free, so unlike Gmail it does
-			// NOT gate on pubBus. gchatSyncStates = syncRepo is the enabled-state
-			// lister the gchat rematch handlers gate on (registered in the late
-			// depth-0 block).
-			gchatProvider = google.NewGChatSyncProvider(
-				googleOAuthService,
-				commsMessageRepo,
-				syncRepo,
-			)
-			gchatSyncStates = syncRepo
-			providerRegistry.Register(gchatProvider)
-			logger.Info().Msg("GChat sync provider registered (inert until a gchat sync state is enabled)")
-		}
-
-		// Register Todoist Cadence provider if OAuth is configured
-		if todoistOAuthService != nil {
-			todoistProvider := todoist.NewCadenceSyncProvider(
-				todoistOAuthService,
-				contactTaskRepo,
-				contactRepo,
-				syncRepo,
-				cfg,
-				eventBus,
-				cadenceUpdater,
-				database.Pool,
-				todoistClientFactory,
-				riverClient,
-				cfg.EventBus.FollowUpMode == config.EventBusFollowUpModeCutover,
-			)
-			providerRegistry.Register(todoistProvider)
-			logger.Info().Msg("Todoist Cadence sync provider registered")
-
-			// Follow-up lifecycle is handled by consumer.FollowUpManager
-			// (wired above via SetFollowUpConsumer). The Todoist
-			// dependency (settings + client factory) routes through
-			// followUpSettingsHolder which was populated when Todoist
-			// OAuth initialized. No follow-up service is constructed
-			// here — FollowUpManager is the sole writer.
-
-			// Initialize contact task service and handler for action tasks
-			contactTaskService := service.NewContactTaskService(
-				contactTaskRepo,
-				contactRepo,
-				syncRepo,
-				todoistOAuthService,
-				cfg,
-			)
-			contactTaskHandler = handlers.NewContactTaskHandler(contactTaskService)
-			logger.Info().Msg("Contact task handler initialized")
-		}
-
-		// Register every Mac-daemon push-source provider. Each is
-		// push-only — data lands via /api/v1/ingest/events, never via the
-		// scheduler (ListDueAccounts skips push strategy) — so Sync() is a
-		// no-op. The registration lives in one helper so the daemonFamily
-		// agreement test can cross-check it against the descriptor table.
-		push.RegisterPushProviders(providerRegistry)
-		logger.Info().Msg("Push providers registered (messages, icloud_contacts, phone_calls)")
-
-		syncService = service.NewSyncService(syncRepo, contactRepo, providerRegistry)
-
-		// Email enablement reconciliation (Gmail go-live). Only meaningful in
-		// cutover mode with a connected Google account: the Gmail provider is
-		// registered only when pubBus != nil, so there is no point reconciling
-		// email states no registered provider can serve. Wire the account
-		// lister + OAuth-connect hook, then run the idempotent boot
-		// reconciliation BEFORE riverClient.Start so the RunOnStart tick already
-		// sees the freshly-enabled email states.
-		if googleOAuthService != nil && pubBus != nil {
-			syncService.SetEmailAccountLister(googleOAuthService)
-			if oauthHandler != nil {
-				oauthHandler.SetEmailStateReconciler(func(ctx context.Context) error {
-					return syncService.ReconcileEmailSyncStates(ctx)
-				})
-			}
-			if err := syncService.ReconcileEmailSyncStates(ctx); err != nil {
-				// Non-fatal: the scheduler simply has nothing to do for email
-				// until states exist; the next connect or next boot retries.
-				logger.Warn().Err(err).Msg("boot email sync reconciliation failed (non-fatal)")
-			}
-		}
-
-		// GChat enablement reconciliation (Chat go-live). Guarded ONLY by
-		// googleOAuthService != nil — NOT pubBus: GChat is store-only + event-free,
-		// so its registration + reconciliation are independent of the event-bus
-		// interaction mode (gating on pubBus would wrongly disable GChat in
-		// off-mode). The provider is registered above whenever Google OAuth is
-		// configured; here we wire the account lister + OAuth-connect hook, then
-		// run the idempotent, chat-scope-gated boot reconciliation BEFORE
-		// riverClient.Start so the RunOnStart tick already sees any freshly-enabled
-		// gchat states. No state is created until a connected account carries the
-		// chat scopes (re-consent), keeping the feature inert until the operator
-		// completes the Chat App config + re-consent.
-		if googleOAuthService != nil {
-			syncService.SetGChatAccountLister(googleOAuthService)
-			if oauthHandler != nil {
-				oauthHandler.SetGChatStateReconciler(func(ctx context.Context) error {
-					return syncService.ReconcileGChatSyncStates(ctx)
-				})
-			}
-			if err := syncService.ReconcileGChatSyncStates(ctx); err != nil {
-				// Non-fatal: the scheduler simply has nothing to do for gchat
-				// until states exist; the next connect or next boot retries.
-				logger.Warn().Err(err).Msg("boot gchat sync reconciliation failed (non-fatal)")
-			}
-		}
-
-		syncHandler = handlers.NewSyncHandler(syncService)
-		identityHandler = handlers.NewIdentityHandler(identityService)
-
-		// Suggestion service composes the method-suggestion group with the
-		// confidence-ranked candidate list and runs resolve/dismiss. Shared
-		// by the import handler (its candidate sort) and the suggestion
-		// handler (the new People-tab surface).
-		suggestionService := service.NewSuggestionService(
-			externalContactRepo,
-			contactRepo,
-			contactMethodRepo,
-			enrichmentService,
-			importMatchService,
-			database,
-		)
-		suggestionHandler = handlers.NewSuggestionHandler(suggestionService)
-
-		// Initialize import handler
-		importHandler = handlers.NewImportHandler(externalContactRepo, identityServiceForIngest, contactService, importMatchService, enrichmentService, suggestionService)
-
-		// Anarlog-title discovery surface (People-tab grouped weak
-		// candidates + token-group resolve). Reuses the external_contact
-		// repo and ContactService — both already constructed above.
-		anarlogDiscoveryService := service.NewAnarlogDiscoveryService(externalContactRepo, contactService)
-		anarlogDiscoveryHandler = handlers.NewAnarlogDiscoveryHandler(anarlogDiscoveryService)
-
-		logger.Info().Msg("external sync infrastructure enabled")
+		syncStk = buildExternalSync(ctx, cfg, database, core, graph, ingest, messaging, consumers, domain, eventBus, riverClient, pubBus)
 	}
+	syncService := syncStk.SyncService
+	syncHandler := syncStk.SyncHandler
+	identityHandler := syncStk.IdentityHandler
+	oauthHandler := syncStk.OAuthHandler
+	importHandler := syncStk.ImportHandler
+	suggestionHandler := syncStk.SuggestionHandler
+	anarlogDiscoveryHandler := syncStk.AnarlogDiscoveryHandler
+	calendarHandler := syncStk.CalendarHandler
+	todoistHandler := syncStk.TodoistHandler
+	contactTaskHandler := syncStk.ContactTaskHandler
+	googleOAuthService := syncStk.GoogleOAuthService
+	externalContactRepo := syncStk.ExternalContactRepo
+	gchatProvider := syncStk.GChatProvider
+	gchatSyncStates := syncStk.GChatSyncStates
 
 	// Telegram integration (independent of external sync)
 	var telegramManager *tgpkg.TelegramManager
