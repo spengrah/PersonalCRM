@@ -279,25 +279,44 @@ See [`.ai/patterns/backend.md`](../patterns/backend.md) for full handler and err
 
 ## 6. Register Routes
 
+Routes live in a per-domain `RegisterXRoutes` helper in
+`backend/internal/api/handlers/<domain>_routes.go` (follow the
+`mac_host_routes.go` template). Construction of the handler goes in the
+matching `backend/cmd/crm-api/wire_*.go` file; the gated call site goes in
+`backend/cmd/crm-api/routes.go`. Do NOT inline `v1.Group(...)` route
+registration into `main.go` — `run()` is a lifecycle orchestrator only.
+
 ```go
-// backend/cmd/crm-api/main.go
+// backend/internal/api/handlers/new_table_routes.go
 
-// Initialize repository and handler
-newTableRepo := repository.NewNewTableRepository(database.Queries)
-newTableHandler := handlers.NewNewTableHandler(newTableRepo)
+// NewTableRouteDeps carries the handlers this domain's routes need.
+type NewTableRouteDeps struct {
+    NewTable *NewTableHandler
+}
 
-// Add routes
-v1 := router.Group("/api/v1")
-{
+// RegisterNewTableRoutes registers the domain's routes on the authenticated
+// v1 group (caller has already applied APIKeyMiddleware).
+func RegisterNewTableRoutes(v1 *gin.RouterGroup, deps NewTableRouteDeps) {
     newTables := v1.Group("/new-tables")
     {
-        newTables.POST("", newTableHandler.CreateNewTable)
-        newTables.GET("/:id", newTableHandler.GetNewTable)
-        newTables.GET("", newTableHandler.ListNewTables)
-        newTables.PUT("/:id", newTableHandler.UpdateNewTable)
-        newTables.DELETE("/:id", newTableHandler.DeleteNewTable)
+        newTables.POST("", deps.NewTable.CreateNewTable)
+        newTables.GET("/:id", deps.NewTable.GetNewTable)
+        newTables.GET("", deps.NewTable.ListNewTables)
+        newTables.PUT("/:id", deps.NewTable.UpdateNewTable)
+        newTables.DELETE("/:id", deps.NewTable.DeleteNewTable)
     }
 }
+```
+
+Construct the repository + handler in a `wire_*.go` `build*` function (add a
+field to the matching deps struct returned to `run()`), then call the
+helper from `registerRoutes` in `backend/cmd/crm-api/routes.go`:
+
+```go
+// backend/cmd/crm-api/routes.go — inside registerRoutes, in the v1 group
+handlers.RegisterNewTableRoutes(v1, handlers.NewTableRouteDeps{
+    NewTable: deps.NewTableHandler,
+})
 ```
 
 ### Current API Routes
@@ -350,7 +369,7 @@ v1 := router.Group("/api/v1")
 | | `/host/:id` | GET/DELETE | MacHostHandler | Get / revoke host (delete cascades push-cursor rows) |
 | | `/host/pairing-token` | POST | MacHostHandler | Mint single-use pairing token (10-min TTL) |
 
-Routes defined in per-domain `RegisterXRoutes` helpers under `backend/internal/api/handlers/*_routes.go`; their gated call sites live in `backend/cmd/crm-api/main.go`.
+Routes defined in per-domain `RegisterXRoutes` helpers under `backend/internal/api/handlers/*_routes.go`; their gated call sites live in `registerRoutes` in `backend/cmd/crm-api/routes.go`.
 
 ---
 
