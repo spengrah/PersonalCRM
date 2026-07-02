@@ -44,6 +44,16 @@ SHAPES=("$@")
 if [[ ${#SHAPES[@]} -eq 0 ]]; then
   SHAPES=(1 2 3 4 5 6)
 fi
+# Validate every requested shape against the literal set 1..6 up front.
+# shape_env's `return 1` on an unknown shape is swallowed by the
+# `< <(shape_env ...)` process substitution in boot_tree, so an unknown
+# shape would otherwise boot the BASE env and false-PASS. Reject here.
+for shape in "${SHAPES[@]}"; do
+  case "$shape" in
+    1|2|3|4|5|6) ;;
+    *) echo "error: unknown shape '$shape' (valid: 1..6)" >&2; exit 2 ;;
+  esac
+done
 
 DATABASE_URL="${DATABASE_URL:-postgres://crm_user:crm_password@localhost:5432/personal_crm_test?sslmode=disable}"
 API_KEY="${API_KEY:-route-parity-key}"
@@ -223,6 +233,20 @@ for shape in "${SHAPES[@]}"; do
 
   na=$(wc -l <"$ra"); nb=$(wc -l <"$rb")
   echo "  routes: tree-a=$na  tree-b=$nb"
+
+  # Minimum-route-count floor. Shapes 2/6 assert only absence/log
+  # sentinels, so a doubly-empty capture (both trees emitting 0
+  # [GIN-debug] lines — e.g. a botched capture) would pass parity + those
+  # sentinels trivially. The SMALLEST legitimate shape (shape 2, ~35
+  # routes) sits well above this floor; a broken/empty capture (~0) sits
+  # well below it.
+  MIN_ROUTES=25
+  if (( na < MIN_ROUTES || nb < MIN_ROUTES )); then
+    echo "  ROUTE COUNT FLOOR FAIL: tree-a=$na tree-b=$nb (min $MIN_ROUTES) — capture likely broken/empty"
+    OVERALL=1
+    echo
+    continue
+  fi
 
   if diff -u "$ra" "$rb" >"$WORKDIR/shape${shape}.diff"; then
     echo "  ROUTE PARITY: identical"
