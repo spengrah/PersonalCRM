@@ -34,22 +34,16 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/api"
-	"personal-crm/backend/internal/api/handlers"
-	"personal-crm/backend/internal/auth"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/health"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
-	"personal-crm/backend/internal/scheduler"
-	"personal-crm/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
-	swaggerFiles "github.com/swaggo/files"
-	ginSwagger "github.com/swaggo/gin-swagger"
 
 	_ "personal-crm/backend/docs" // Import generated docs
 )
@@ -306,173 +300,39 @@ func run() int {
 	router.Use(api.CORSMiddleware(cfg.CORS))
 	router.Use(api.ErrorHandlerMiddleware())
 
-	// Health check endpoint. Bare /health is the liveness probe (DB-only
-	// top-level status, today's contract); ?ready=1 aggregates the
-	// river/sync/disk components for an external pinger. The stalenessService
-	// (constructed above) and a HealthRepository over river_job back the new
-	// components; the watchdog kind ties the sync component's freshness guard to
-	// the periodic watchdog job registered on the same River client.
-	healthRepo := repository.NewHealthRepository(database.Queries)
-	healthChecker := health.NewHealthChecker(database, cfg.Database.HealthTimeout, health.Deps{
-		River:            healthRepo,
-		Staleness:        stalenessService,
-		SyncWatchdogKind: scheduler.StalenessWatchdogArgs{}.Kind(),
-		Thresholds: health.Thresholds{
-			RiverDiscardedMax:  cfg.Health.RiverDiscardedMax,
-			RiverOldestDueMax:  cfg.Health.RiverOldestDueMax,
-			SyncWatchdogMaxAge: cfg.Health.SyncWatchdogMaxAge,
-			DiskPath:           cfg.Health.DiskPath,
-			DiskMinFreePercent: cfg.Health.DiskMinFreePercent,
-		},
+	// Register the full route tree (health, OAuth callbacks, mac-host,
+	// ingest, the /api/v1 authenticated group, swagger). All conditional
+	// gates live at their call sites inside registerRoutes.
+	registerRoutes(routeDeps{
+		Router:                   router,
+		Cfg:                      cfg,
+		Database:                 database,
+		StalenessService:         stalenessService,
+		MacHostRepo:              macHostRepo,
+		MacHostHandler:           macHostHandler,
+		IngestHandler:            ingestHandler,
+		MeetingNoteHandler:       meetingNoteHandler,
+		ContactHandler:           contactHandler,
+		InteractionHandler:       interactionHandler,
+		NoteHandler:              noteHandler,
+		RematchHandler:           rematchHandler,
+		StalenessHandler:         stalenessHandler,
+		SystemHandler:            systemHandler,
+		OAuthHandler:             oauthHandler,
+		GoogleOAuthService:       googleOAuthService,
+		TodoistHandler:           todoistHandler,
+		TelegramHandler:          telegramHandler,
+		SyncHandler:              syncHandler,
+		IdentityHandler:          identityHandler,
+		ContactTaskHandler:       contactTaskHandler,
+		CalendarHandler:          calendarHandler,
+		ImportHandler:            importHandler,
+		AnarlogDiscoveryHandler:  anarlogDiscoveryHandler,
+		SuggestionHandler:        suggestionHandler,
+		ExternalContactRepo:      externalContactRepo,
+		ContactService:           contactService,
+		MeetingNoteRepoForIngest: meetingNoteRepoForIngest,
 	})
-	router.GET("/health", healthChecker.Handler)
-
-	// OAuth callback routes (no auth - called by provider redirects)
-	if oauthHandler != nil {
-		handlers.RegisterOAuthCallbackRoutes(router, handlers.OAuthCallbackDeps{
-			Handler:       oauthHandler,
-			GoogleEnabled: googleOAuthService != nil,
-		})
-	}
-
-	// Mac-daemon public + host-auth routes (Pair + heartbeat + cursor +
-	// known-ids). Registered via the shared helper so integration tests
-	// exercise the same code path. Admin routes are registered later
-	// inside the global-API-key-protected v1 group.
-	handlers.RegisterMacHostRoutes(router, handlers.MacHostRouteDeps{
-		HostRepo:    macHostRepo,
-		Handler:     macHostHandler,
-		AuthLimiter: auth.DefaultMacHostAuthLimiterConfig(),
-	})
-
-	// Event bus ingestion endpoint (feature-flagged per spec §3.9).
-	// Registered as a SIBLING of /api/v1 (not inside it) so the
-	// composite IngestAuthMiddleware can branch per-request:
-	//   - X-Mac-Host-ID present → MacHostAuthMiddleware (daemon path)
-	//   - X-Mac-Host-ID absent  → APIKeyMiddleware (global-key path)
-	// gin route trees reject duplicate registration of the same prefix
-	// under different middleware groups, so the composite dispatch is
-	// the minimum seam to support both auth paths on one URL.
-	if cfg.Features.EnableEventBusIngest {
-		ingestAuth := auth.IngestAuthMiddleware(
-			auth.APIKeyMiddleware(cfg),
-			auth.MacHostAuthMiddleware(macHostRepo, auth.DefaultPasswordComparator, auth.DefaultMacHostAuthLimiterConfig()),
-		)
-		handlers.RegisterIngestRoutes(router, handlers.IngestRouteDeps{
-			Auth:        ingestAuth,
-			Ingest:      ingestHandler,
-			MeetingNote: meetingNoteHandler,
-		})
-		logger.Info().Msg("event bus ingestion endpoint enabled")
-	}
-
-	// API routes
-	v1 := router.Group("/api/v1")
-	v1.Use(auth.APIKeyMiddleware(cfg))
-	{
-		// Contact + interaction routes (unconditional).
-		handlers.RegisterContactRoutes(v1, handlers.ContactRouteDeps{
-			Contact:     contactHandler,
-			Interaction: interactionHandler,
-			Note:        noteHandler,
-		})
-
-		// Meeting-note conflict-resolution — user-driven, called from
-		// the frontend with the global API key. Stays under the v1
-		// APIKeyMiddleware group.
-		handlers.RegisterMeetingNoteRoutes(v1, meetingNoteHandler)
-
-		// Rematch routes — always registered; service no-ops when no handlers
-		// are registered (e.g. telegram-disabled deployments still get calendar).
-		handlers.RegisterRematchRoutes(v1, rematchHandler)
-
-		// Sync-staleness breaches — registered unconditionally (OUTSIDE the
-		// EnableExternalSync-gated /sync group below): heartbeat/push breaches
-		// must be visible even with external sync off. The static 2-segment
-		// path coexists with that group's 3-segment param routes.
-		handlers.RegisterSyncStalenessRoutes(v1, stalenessHandler)
-
-		// System routes
-		handlers.RegisterSystemRoutes(v1, systemHandler)
-
-		// Mac-daemon admin routes (under global API key middleware).
-		// Pairing-token mint + revoke + list/get for the Mac settings UI.
-		handlers.RegisterMacHostAdminRoutes(v1, macHostHandler)
-
-		// OAuth routes (feature-flagged with external sync)
-		if oauthHandler != nil {
-			handlers.RegisterOAuthRoutes(v1, handlers.OAuthCallbackDeps{
-				Handler:       oauthHandler,
-				GoogleEnabled: googleOAuthService != nil,
-			})
-		}
-
-		// Todoist settings routes (only if Todoist is configured)
-		if todoistHandler != nil {
-			handlers.RegisterTodoistRoutes(v1, todoistHandler)
-		}
-
-		// Telegram routes (feature-flagged)
-		if telegramHandler != nil {
-			handlers.RegisterTelegramRoutes(v1, telegramHandler)
-		}
-
-		// External sync routes (feature-flagged)
-		if cfg.Features.EnableExternalSync && syncHandler != nil {
-			handlers.RegisterSyncRoutes(v1, syncHandler)
-			handlers.RegisterIdentityRoutes(v1, identityHandler)
-
-			// Add contact task routes (manual tasks) if Todoist is configured
-			if contactTaskHandler != nil {
-				handlers.RegisterContactTaskRoutes(v1, contactTaskHandler)
-			}
-
-			// Add calendar event routes to contacts if calendar handler is initialized
-			if calendarHandler != nil {
-				handlers.RegisterCalendarRoutes(v1, calendarHandler)
-			}
-
-			// Import candidates routes
-			if importHandler != nil {
-				handlers.RegisterImportRoutes(v1, handlers.ImportRouteDeps{
-					Import:           importHandler,
-					AnarlogDiscovery: anarlogDiscoveryHandler,
-					Suggestions:      suggestionHandler,
-				})
-			}
-		}
-
-		// Export/Import routes
-		handlers.RegisterDataExchangeRoutes(v1, systemHandler)
-
-		// Test routes (gated by CRM_ENV=testing or CRM_ENV=test)
-		if cfg.Runtime.CRMEnvironment == "testing" || cfg.Runtime.CRMEnvironment == "test" {
-			// Initialize external contact repo if not already done (for non-sync environments)
-			testExternalRepo := externalContactRepo
-			if testExternalRepo == nil {
-				testExternalRepo = repository.NewExternalContactRepository(database.Queries)
-			}
-
-			// Initialize calendar repo for test seeding
-			testCalendarRepo := repository.NewCalendarEventRepository(database.Queries)
-
-			// Initialize calendar handler if not already done (allows reading seeded events in tests)
-			if calendarHandler == nil {
-				calendarHandler = handlers.NewCalendarHandler(testCalendarRepo)
-				// Register calendar routes that weren't registered earlier (OAuth not configured)
-				handlers.RegisterCalendarRoutes(v1, calendarHandler)
-				logger.Info().Msg("calendar handler initialized for testing (no OAuth)")
-			}
-
-			testSeedService := service.NewTestSeedService(database, testExternalRepo, contactService, testCalendarRepo, macHostRepo, meetingNoteRepoForIngest)
-			testHandler := handlers.NewTestHandler(testSeedService)
-			handlers.RegisterTestRoutes(v1, testHandler)
-			logger.Info().Msg("test API endpoints enabled (CRM_ENV=testing)")
-		}
-	}
-
-	// Swagger documentation
-	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
 	// Start server with configured bind address
 	addr := cfg.GetBindAddress()
