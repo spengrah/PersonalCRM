@@ -155,6 +155,9 @@ func setupAtomicTxTestEnv(t *testing.T) (*atomicTxTestEnv, func()) {
 	river.AddWorker(workers, &noopCadenceUpdaterWorker{})
 	river.AddWorker(workers, &noopFollowUpManagerWorker{})
 	river.AddWorker(workers, &noopRematchDispatcherWorker{})
+	// The state-aware temp-ID finalize enqueues todoist_followup_close for a
+	// completed row; register a noop worker so the insert validates.
+	river.AddWorker(workers, &noopTodoistCloseWorker{})
 
 	riverClient, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
 		Queues: map[string]river.QueueConfig{
