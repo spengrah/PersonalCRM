@@ -13,6 +13,8 @@ import {
   useMacHosts,
 } from '@/hooks/use-mac-hosts'
 import type { MacHost } from '@/lib/mac-hosts-api'
+import { renderCursorCell, type SourceHealthEntry } from './cursor-cell'
+import { RotateKeyModal } from './rotate-key-modal'
 
 const HEARTBEAT_FRESH_MS = 5 * 60 * 1000
 const HEARTBEAT_STALE_MS = 30 * 60 * 1000
@@ -341,93 +343,6 @@ function PairingTokenModal({ token, isPending, isError, onClose }: PairingTokenM
   )
 }
 
-export interface RotateKeyModalProps {
-  hostname: string
-  token: { token: string; expires_at: string } | null
-  isPending: boolean
-  isError: boolean
-  onClose: () => void
-}
-
-/**
- * RotateKeyModal mints + displays a single-use pairing token plus
- * the templated `crm-mac install --re-pair --pair <token>` command
- * the operator runs on the Mac. The browser never holds the
- * daemon's current pair-key — the rotation itself runs on the Mac,
- * authenticated by the daemon's current key + the token shown here.
- *
- * Exported for the RTL unit test that locks the templated-command
- * rendering + copy behavior.
- */
-export function RotateKeyModal({
-  hostname,
-  token,
-  isPending,
-  isError,
-  onClose,
-}: RotateKeyModalProps) {
-  const [copied, setCopied] = useState(false)
-
-  const fullCommand = token ? `crm-mac install --re-pair --pair ${token.token}` : ''
-
-  const handleCopy = async () => {
-    if (!token) return
-    try {
-      await navigator.clipboard.writeText(fullCommand)
-      setCopied(true)
-      window.setTimeout(() => setCopied(false), 2000)
-    } catch (err) {
-      console.error('clipboard write failed', err)
-    }
-  }
-
-  return (
-    <div
-      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
-      role="dialog"
-      aria-modal="true"
-      aria-label={`Rotate pair-key for ${hostname}`}
-    >
-      <div className="bg-white rounded-lg shadow-lg max-w-md w-full m-4 p-6">
-        <h2 className="text-xl font-semibold text-gray-900 mb-4">Rotate pair-key for {hostname}</h2>
-        {isPending ? (
-          <p className="text-gray-600">Generating pairing token...</p>
-        ) : isError ? (
-          <p className="text-red-700">Failed to mint pairing token. Please try again.</p>
-        ) : token ? (
-          <div className="space-y-3">
-            <p className="text-sm text-gray-700">
-              Run this on the Mac to rotate its api-key. The daemon will restart automatically; no
-              re-install, no re-grant of permissions required. The current api-key stops working the
-              moment the rotation completes.
-            </p>
-            <div className="flex items-center space-x-2">
-              <code
-                className="flex-1 min-w-0 px-3 py-2 bg-gray-100 rounded text-sm font-mono text-gray-900 break-all"
-                data-testid="rotate-key-command"
-              >
-                {fullCommand}
-              </code>
-              <Button variant="outline" size="sm" onClick={handleCopy}>
-                <Copy className="w-4 h-4 mr-1" /> {copied ? 'Copied' : 'Copy'}
-              </Button>
-            </div>
-            <p className="text-xs text-gray-600">
-              Token expires at {new Date(token.expires_at).toLocaleString()} and can be used only
-              once.
-            </p>
-          </div>
-        ) : null}
-        <div className="mt-6 flex justify-end">
-          <Button variant="outline" onClick={onClose}>
-            Close
-          </Button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 interface ConfirmDeleteModalProps {
   isPending: boolean
   onCancel: () => void
@@ -507,19 +422,6 @@ function PermissionsBadges({ permissions }: PermissionsBadgesProps) {
   )
 }
 
-interface SourceHealthEntry {
-  last_pushed_at?: string
-  // Cursor fields are emitted by the daemon as the underlying JSON
-  // type — number for sources with a numeric watermark (messages
-  // ROWID) and string for composite cursors (phone_calls' `<ISO
-  // ZDATE>:<Z_PK>` tuple). renderCursorCell handles both.
-  observed_cursor?: string | number
-  pushed_cursor?: string | number
-  backfill_complete?: boolean
-  last_error?: string
-  [key: string]: unknown
-}
-
 interface SourceHealthTableProps {
   health: Record<string, unknown>
   hostId: string
@@ -532,69 +434,6 @@ const SOURCE_LABELS: Record<string, string> = {
   messages: 'Messages',
   icloud_contacts: 'iCloud Contacts',
   phone_calls: 'Phone & FaceTime',
-}
-
-/**
- * renderCursorCell decides what to display in the Cursor column for
- * a single source row (issue #327). Exported for the unit test that
- * locks the per-source branches.
- *
- * The interim fix is narrow: when a source is in
- * `BACKFILL_PROGRESS_SOURCES` and its `backfill_complete` flag is
- * true, swap the dash for `<N> contacts ✓` where `N` is the live
- * external_contact row count for that host+source. Everything else
- * falls through to the previous `pushed_cursor ?? observed_cursor ??
- * '—'` rendering — so messages keeps its rowid, phone_calls renders
- * its own cursor, etc.
- *
- * Future sources that ship a 'caught up' indicator should add their
- * key to `BACKFILL_PROGRESS_SOURCES` rather than adding more
- * if-branches here.
- */
-const BACKFILL_PROGRESS_SOURCES = new Set(['icloud_contacts'])
-
-// Coerce a raw cursor value (string | number | undefined | null) to
-// a displayable string. Returns undefined when there's nothing to
-// show, so the caller can choose its own fallback.
-function cursorToString(raw: unknown): string | undefined {
-  if (raw === undefined || raw === null) return undefined
-  if (typeof raw === 'string') return raw === '' ? undefined : raw
-  if (typeof raw === 'number') return String(raw)
-  return undefined
-}
-
-// Phone_calls writes its cursor as `<ISO ZDATE>:<Z_PK>` (e.g.
-// `2026-05-19T02:31:34Z:1966`). Split off the ISO portion for a more
-// operator-friendly display. Falls back to the raw cursor if parse
-// fails — anything with a `T` and a `Z` followed by `:` is treated as
-// a parseable composite.
-function formatPhoneCallsCursor(raw: string): string {
-  const match = raw.match(
-    /^([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?Z):.+$/
-  )
-  return match ? match[1] : raw
-}
-
-export function renderCursorCell(
-  source: string,
-  entry: SourceHealthEntry,
-  counts: Record<string, number> | undefined
-): string {
-  if (BACKFILL_PROGRESS_SOURCES.has(source) && entry.backfill_complete === true) {
-    const n = counts?.[source]
-    if (typeof n === 'number') {
-      return `${n} contacts ✓`
-    }
-    // counts not yet loaded / missing — graceful fallback to dash so
-    // the row still renders. We deliberately don't fall through to
-    // the pushed_cursor branch because an iCloud row's cursor is a
-    // change-token, not a number (the whole point of #327).
-    return '—'
-  }
-  const cursor = cursorToString(entry.pushed_cursor) ?? cursorToString(entry.observed_cursor)
-  if (cursor === undefined) return '—'
-  if (source === 'phone_calls') return formatPhoneCallsCursor(cursor)
-  return cursor
 }
 
 function SourceHealthTable({ health, hostId }: SourceHealthTableProps) {

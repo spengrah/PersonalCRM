@@ -35,7 +35,7 @@ import {
   getContactMethodLabel,
   sortContactMethods,
 } from '@/lib/contact-methods'
-import type { ContactFormData } from '@/lib/validations/contact'
+import type { ContactSubmitData } from '@/lib/validations/contact'
 import { MergeContactModal } from '@/components/contacts/merge-contact-modal'
 import { TasksSection } from '@/components/contacts/tasks-section'
 import { LogInteractionModal } from '@/components/contacts/log-interaction-modal'
@@ -213,7 +213,7 @@ export default function ContactDetailPage() {
   }, [contactNote?.body, notesExpanded])
   const deleteContactMutation = useDeleteContact()
 
-  const handleUpdateContact = async (data: ContactFormData) => {
+  const handleUpdateContact = async (data: ContactSubmitData) => {
     try {
       // Extract notes from form data and save separately
       const { notes, ...contactData } = data

@@ -76,12 +76,9 @@ describe('method-conflict-detection', () => {
 
     const createMethod = (type: string, value: string): ContactMethod => ({
       id: 'method-1',
-      contact_id: 'contact-1',
       type: type as ContactMethod['type'],
       value,
       is_primary: false,
-      created_at: '2024-01-01',
-      updated_at: '2024-01-01',
     })
 
     it('returns adding state for new emails not in CRM', () => {

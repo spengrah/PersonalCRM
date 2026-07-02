@@ -80,7 +80,7 @@ export function TimeAccelerationWidget({
       {!isExpanded && (
         <Button
           onClick={() => setIsExpanded(true)}
-          variant={isAccelerated ? 'default' : 'outline'}
+          variant={isAccelerated ? 'primary' : 'outline'}
           size="sm"
           className={clsx(
             'shadow-lg border-2',
@@ -135,7 +135,7 @@ export function TimeAccelerationWidget({
             <div className="grid grid-cols-2 gap-2">
               <Button
                 onClick={() => handleSetAcceleration(ACCELERATION_PRESETS.NORMAL)}
-                variant={accelerationFactor === ACCELERATION_PRESETS.NORMAL ? 'default' : 'outline'}
+                variant={accelerationFactor === ACCELERATION_PRESETS.NORMAL ? 'primary' : 'outline'}
                 size="sm"
                 disabled={setAcceleration.isPending}
                 className="justify-start"
@@ -146,7 +146,7 @@ export function TimeAccelerationWidget({
 
               <Button
                 onClick={() => handleSetAcceleration(ACCELERATION_PRESETS.FAST)}
-                variant={accelerationFactor === ACCELERATION_PRESETS.FAST ? 'default' : 'outline'}
+                variant={accelerationFactor === ACCELERATION_PRESETS.FAST ? 'primary' : 'outline'}
                 size="sm"
                 disabled={setAcceleration.isPending}
                 className="justify-start"
@@ -158,7 +158,7 @@ export function TimeAccelerationWidget({
               <Button
                 onClick={() => handleSetAcceleration(ACCELERATION_PRESETS.VERY_FAST)}
                 variant={
-                  accelerationFactor === ACCELERATION_PRESETS.VERY_FAST ? 'default' : 'outline'
+                  accelerationFactor === ACCELERATION_PRESETS.VERY_FAST ? 'primary' : 'outline'
                 }
                 size="sm"
                 disabled={setAcceleration.isPending}
@@ -171,7 +171,7 @@ export function TimeAccelerationWidget({
               <Button
                 onClick={() => handleSetAcceleration(ACCELERATION_PRESETS.ULTRA_FAST)}
                 variant={
-                  accelerationFactor === ACCELERATION_PRESETS.ULTRA_FAST ? 'default' : 'outline'
+                  accelerationFactor === ACCELERATION_PRESETS.ULTRA_FAST ? 'primary' : 'outline'
                 }
                 size="sm"
                 disabled={setAcceleration.isPending}

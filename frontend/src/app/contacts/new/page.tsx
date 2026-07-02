@@ -5,14 +5,14 @@ import { Navigation } from '@/components/layout/navigation'
 import { ContactForm } from '@/components/contacts/contact-form'
 import { useCreateContact } from '@/hooks/use-contacts'
 import { useSaveContactNote } from '@/hooks/use-contact-note'
-import type { ContactFormData } from '@/lib/validations/contact'
+import type { ContactSubmitData } from '@/lib/validations/contact'
 
 export default function NewContactPage() {
   const router = useRouter()
   const createContactMutation = useCreateContact()
   const saveContactNoteMutation = useSaveContactNote()
 
-  const handleSubmit = async (data: ContactFormData) => {
+  const handleSubmit = async (data: ContactSubmitData) => {
     try {
       // Extract notes from form data
       const { notes, ...contactData } = data

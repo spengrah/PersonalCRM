@@ -20,6 +20,7 @@ describe('ErrorBoundary', () => {
 
   afterEach(() => {
     console.error = originalError
+    vi.unstubAllEnvs()
   })
 
   describe('rendering', () => {
@@ -78,8 +79,7 @@ describe('ErrorBoundary', () => {
     })
 
     it('logs error in development mode', () => {
-      const originalEnv = process.env.NODE_ENV
-      process.env.NODE_ENV = 'development'
+      vi.stubEnv('NODE_ENV', 'development')
 
       render(
         <ErrorBoundary>
@@ -88,8 +88,6 @@ describe('ErrorBoundary', () => {
       )
 
       expect(console.error).toHaveBeenCalled()
-
-      process.env.NODE_ENV = originalEnv
     })
   })
 
@@ -119,8 +117,7 @@ describe('ErrorBoundary', () => {
 
   describe('development mode error details', () => {
     it('shows error details in development mode', () => {
-      const originalEnv = process.env.NODE_ENV
-      process.env.NODE_ENV = 'development'
+      vi.stubEnv('NODE_ENV', 'development')
 
       render(
         <ErrorBoundary>
@@ -131,13 +128,10 @@ describe('ErrorBoundary', () => {
       // Look for the details element
       const details = screen.getByText('Error Details (Development Only)')
       expect(details).toBeInTheDocument()
-
-      process.env.NODE_ENV = originalEnv
     })
 
     it('shows error message in details', () => {
-      const originalEnv = process.env.NODE_ENV
-      process.env.NODE_ENV = 'development'
+      vi.stubEnv('NODE_ENV', 'development')
 
       render(
         <ErrorBoundary>
@@ -146,13 +140,10 @@ describe('ErrorBoundary', () => {
       )
 
       expect(screen.getByText('Test error message')).toBeInTheDocument()
-
-      process.env.NODE_ENV = originalEnv
     })
 
     it('hides error details in production mode', () => {
-      const originalEnv = process.env.NODE_ENV
-      process.env.NODE_ENV = 'production'
+      vi.stubEnv('NODE_ENV', 'production')
 
       render(
         <ErrorBoundary>
@@ -162,8 +153,6 @@ describe('ErrorBoundary', () => {
 
       // Error details should not be present
       expect(screen.queryByText('Error Details (Development Only)')).not.toBeInTheDocument()
-
-      process.env.NODE_ENV = originalEnv
     })
   })
 })

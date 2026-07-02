@@ -1,10 +1,16 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import type { OverdueContact } from '@/types/contact'
+
+interface OverdueApiResponse {
+  success: boolean
+  data?: OverdueContact[]
+}
 
 export default function TestApiPage() {
   const [status, setStatus] = useState('Testing...')
-  const [result, setResult] = useState<unknown>(null)
+  const [result, setResult] = useState<OverdueApiResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -27,7 +33,7 @@ export default function TestApiPage() {
           throw new Error(`HTTP ${response.status}: ${response.statusText}`)
         }
 
-        const data = await response.json()
+        const data: OverdueApiResponse = await response.json()
         setStatus('✅ Success')
         setResult(data)
       } catch (err: unknown) {
