@@ -90,6 +90,8 @@ func (w *TodoistTaskOpWorker) Work(ctx context.Context, j *river.Job[consumerjob
 	}
 	taskID := j.Args.ContactTaskID
 	switch j.Args.Op {
+	case consumerjobs.TaskOpCreate:
+		return w.executeCreate(ctx, taskID, defaultCreateCommandUUID)
 	case consumerjobs.TaskOpClose, consumerjobs.TaskOpDelete:
 		return w.executeTerminalOp(ctx, taskID, j.Args.Op)
 	case consumerjobs.TaskOpUpdateDeadline:
@@ -106,6 +108,122 @@ func (w *TodoistTaskOpWorker) Work(ctx context.Context, j *river.Job[consumerjob
 // covers the create path; per-verb tightening isn't worth the complexity.
 func (*TodoistTaskOpWorker) Timeout(*river.Job[consumerjobs.TodoistTaskOpArgs]) time.Duration {
 	return 60 * time.Second
+}
+
+// defaultCreateCommandUUID is the command UUID for a new-kind create op:
+// v5 over (create, taskID, "") — matching buildItemAddFromMetadata's
+// default. The legacy create adapter injects a different derivation so a
+// queued legacy job retries with its original UUID (DD5/DD9).
+func defaultCreateCommandUUID(taskID uuid.UUID) string {
+	return taskOpCommandUUID(consumerjobs.TaskOpCreate, taskID, "")
+}
+
+// executeCreate runs the create verb as a three-phase operation so the
+// no-tx-across-HTTP rule holds. Phase 1: pool read + state dispatch
+// (managed → no-op; pending/completed/superseded/dismissed/unmanaged →
+// continue; unknown → error). Phase 2: HTTP item_add from the metadata
+// snapshot with temp_id = row id and the command UUID from uuidFn. Phase
+// 3: short tx — re-read and dispatch on the FRESH state:
+//   - pending_remote_create → finalize (state=managed + external id)
+//   - completed | superseded → record external id only + enqueue a close
+//     op in the finalize tx (the remote task was just created but the row
+//     is already retired; one op = one HTTP write)
+//   - dismissed | unmanaged → record external id only, NO close
+//   - managed → no-op (another worker finalized mid-flight)
+func (w *TodoistTaskOpWorker) executeCreate(ctx context.Context, taskID uuid.UUID, uuidFn func(uuid.UUID) string) error {
+	// Phase 1 — read (pool-scoped; single SELECT needs no tx).
+	task, err := w.deps.taskRepo.GetContactTask(ctx, taskID)
+	if err != nil {
+		return fmt.Errorf("fetch contact_task %s: %w", taskID, err)
+	}
+	switch task.State {
+	case repository.ContactTaskStateManaged:
+		// Another worker already finalized this row. Idempotent no-op.
+		return nil
+	case repository.ContactTaskStatePendingRemoteCreate,
+		repository.ContactTaskStateCompleted,
+		repository.ContactTaskStateSuperseded,
+		repository.ContactTaskStateDismissed,
+		repository.ContactTaskStateUnmanaged:
+		// Continue to phase 2.
+	default:
+		return fmt.Errorf("todoist_task_op create: unexpected state %q for %s", task.State, taskID)
+	}
+
+	// Phase 2 — HTTP item_add (no tx open).
+	itemAdd, err := buildItemAddFromMetadata(task)
+	if err != nil {
+		return fmt.Errorf("build item_add command: %w", err)
+	}
+	itemAdd.UUID = uuidFn(taskID)
+	_, accessToken, err := w.deps.settings(ctx)
+	if err != nil {
+		return fmt.Errorf("get todoist settings: %w", err)
+	}
+	client := w.deps.clientFactory(accessToken)
+	resp, err := client.Sync(ctx, "*", nil, []todoist.SyncCommand{itemAdd})
+	if err != nil {
+		return fmt.Errorf("todoist item_add: %w", err)
+	}
+	realID, ok := resp.TempIDMap[itemAdd.TempID]
+	if !ok {
+		return fmt.Errorf("todoist: no temp_id mapping in response for %s", itemAdd.TempID)
+	}
+
+	// Phase 3 — write (short tx). Re-read inside the tx so the finalize
+	// decision gates on the FRESH state (a parallel writer may have
+	// completed/dismissed/superseded the row while we were mid-HTTP).
+	if w.deps.pool == nil {
+		return errors.New("todoist_task_op create: pool not wired")
+	}
+	return pgx.BeginTxFunc(ctx, w.deps.pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		fresh, err := w.deps.taskRepo.GetContactTaskTx(ctx, tx, taskID)
+		if err != nil {
+			return fmt.Errorf("re-read contact_task %s: %w", taskID, err)
+		}
+		return w.finalizeCreate(ctx, tx, fresh, realID)
+	})
+}
+
+// finalizeCreate is phase 3 of the create verb: it dispatches on the
+// FRESH (in-tx re-read) row state to persist the real external id and,
+// for a row retired mid-create, enqueue a close op in the same tx. Split
+// out so the dispatch matrix is unit-testable with a fake tx + repo +
+// inserter without a live pool.
+func (w *TodoistTaskOpWorker) finalizeCreate(ctx context.Context, tx pgx.Tx, fresh *repository.ContactTask, realID string) error {
+	switch fresh.State {
+	case repository.ContactTaskStatePendingRemoteCreate:
+		if _, err := w.deps.taskRepo.UpdateContactTaskExternalIDTx(ctx, tx, fresh.ID, realID); err != nil {
+			return fmt.Errorf("finalize pending_remote_create: %w", err)
+		}
+		return nil
+	case repository.ContactTaskStateCompleted, repository.ContactTaskStateSuperseded:
+		// Row retired mid-create: record the real id, then close the
+		// freshly-created remote task via a close op in this tx.
+		if err := w.deps.taskRepo.SetContactTaskExternalIDOnlyTx(ctx, tx, fresh.ID, realID); err != nil {
+			return fmt.Errorf("persist external id on retired row: %w", err)
+		}
+		if w.deps.riverInserter == nil {
+			return errors.New("todoist_task_op create finalize: river inserter not wired for close op")
+		}
+		if _, err := w.deps.riverInserter.InsertTx(ctx, tx,
+			consumerjobs.TodoistTaskOpArgs{ContactTaskID: fresh.ID, Op: consumerjobs.TaskOpClose},
+			&river.InsertOpts{MaxAttempts: 10}); err != nil {
+			return fmt.Errorf("enqueue close op for retired row: %w", err)
+		}
+		return nil
+	case repository.ContactTaskStateDismissed, repository.ContactTaskStateUnmanaged:
+		// Record the real id, no close (legacy finalize rule preserved).
+		if err := w.deps.taskRepo.SetContactTaskExternalIDOnlyTx(ctx, tx, fresh.ID, realID); err != nil {
+			return fmt.Errorf("persist external id on dismissed/unmanaged row: %w", err)
+		}
+		return nil
+	case repository.ContactTaskStateManaged:
+		// Another worker finalized while we were mid-HTTP — idempotent.
+		return nil
+	default:
+		return fmt.Errorf("todoist_task_op create: unexpected state %q at finalize", fresh.State)
+	}
 }
 
 // executeTerminalOp runs the close or delete verb. Pool read only (no

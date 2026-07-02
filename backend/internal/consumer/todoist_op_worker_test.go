@@ -475,3 +475,146 @@ func TestOpWorker_TerminalOp_TodoistFailureBubblesUp(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "todoist close")
 }
+
+// -----------------------------------------------------------------------------
+// create verb — phase-1/phase-2 dispatch (step 5). The phase-3 finalize
+// matrix is unit-tested directly via finalizeCreate below (BeginTxFunc
+// needs a live pool; the end-to-end create flow is integration-tested).
+// -----------------------------------------------------------------------------
+
+func createMetadata() map[string]any {
+	return map[string]any{
+		"content":     "Follow up: contact",
+		"due_date":    "2026-01-01",
+		"marker_json": `{"k":"v"}`,
+		"project_id":  "proj",
+		"label_name":  "followup",
+	}
+}
+
+func TestOpWorker_Create_ManagedRowNoOp(t *testing.T) {
+	taskID := uuid.New()
+	repo := newFakeOpTaskRepo(&repository.ContactTask{
+		ID:       taskID,
+		State:    repository.ContactTaskStateManaged,
+		Metadata: createMetadata(),
+	})
+	client := &fakeOpClient{}
+	w := newOpWorker(repo, client, &recordingInserter{})
+
+	err := w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpCreate))
+	require.NoError(t, err, "already-managed row → idempotent no-op")
+	require.Empty(t, client.commands, "must not re-create an already-managed row")
+}
+
+func TestOpWorker_Create_MissingMetadataPermanent(t *testing.T) {
+	taskID := uuid.New()
+	repo := newFakeOpTaskRepo(&repository.ContactTask{
+		ID:       taskID,
+		State:    repository.ContactTaskStatePendingRemoteCreate,
+		Metadata: map[string]any{"content": "x"}, // no due_date
+	})
+	client := &fakeOpClient{}
+	w := newOpWorker(repo, client, &recordingInserter{})
+
+	err := w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpCreate))
+	require.Error(t, err, "incomplete item_add metadata is a permanent build error")
+	require.Empty(t, client.commands)
+}
+
+func TestOpWorker_Create_UnknownStateErrors(t *testing.T) {
+	taskID := uuid.New()
+	repo := newFakeOpTaskRepo(&repository.ContactTask{
+		ID:       taskID,
+		State:    repository.ContactTaskState("weird"),
+		Metadata: createMetadata(),
+	})
+	client := &fakeOpClient{}
+	w := newOpWorker(repo, client, &recordingInserter{})
+
+	err := w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpCreate))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unexpected state")
+}
+
+// -----------------------------------------------------------------------------
+// create verb — phase-3 finalize dispatch matrix (step 5, fake tx).
+// -----------------------------------------------------------------------------
+
+func opCloseArgs(args []river.JobArgs) int {
+	n := 0
+	for _, a := range args {
+		if op, ok := a.(consumerjobs.TodoistTaskOpArgs); ok && op.Op == consumerjobs.TaskOpClose {
+			n++
+		}
+	}
+	return n
+}
+
+func TestOpWorker_FinalizeCreate_Pending_FinalizesManaged(t *testing.T) {
+	taskID := uuid.New()
+	row := &repository.ContactTask{ID: taskID, State: repository.ContactTaskStatePendingRemoteCreate}
+	repo := newFakeOpTaskRepo(row)
+	inserter := &recordingInserter{}
+	w := newOpWorker(repo, &fakeOpClient{}, inserter)
+
+	err := w.finalizeCreate(context.Background(), nonNilFakeTx(), row, "real-1")
+	require.NoError(t, err)
+	require.Equal(t, repository.ContactTaskStateManaged, repo.rows[taskID].State)
+	require.Equal(t, "real-1", repo.rows[taskID].ExternalTaskID)
+	require.Empty(t, inserter.args, "pending finalize must NOT enqueue a close op")
+}
+
+func TestOpWorker_FinalizeCreate_RetiredMidFlight_RecordsIDAndEnqueuesClose(t *testing.T) {
+	for _, state := range []repository.ContactTaskState{
+		repository.ContactTaskStateCompleted,
+		repository.ContactTaskStateSuperseded,
+	} {
+		t.Run(string(state), func(t *testing.T) {
+			taskID := uuid.New()
+			row := &repository.ContactTask{ID: taskID, State: state}
+			repo := newFakeOpTaskRepo(row)
+			inserter := &recordingInserter{}
+			w := newOpWorker(repo, &fakeOpClient{}, inserter)
+
+			err := w.finalizeCreate(context.Background(), nonNilFakeTx(), row, "real-2")
+			require.NoError(t, err)
+			require.Equal(t, "real-2", repo.rows[taskID].ExternalTaskID, "records the real id")
+			require.Equal(t, state, repo.rows[taskID].State, "state is NOT flipped to managed")
+			require.Equal(t, 1, opCloseArgs(inserter.args), "retired-mid-flight must enqueue exactly one close op")
+		})
+	}
+}
+
+func TestOpWorker_FinalizeCreate_DismissedUnmanaged_RecordsIDNoClose(t *testing.T) {
+	for _, state := range []repository.ContactTaskState{
+		repository.ContactTaskStateDismissed,
+		repository.ContactTaskStateUnmanaged,
+	} {
+		t.Run(string(state), func(t *testing.T) {
+			taskID := uuid.New()
+			row := &repository.ContactTask{ID: taskID, State: state}
+			repo := newFakeOpTaskRepo(row)
+			inserter := &recordingInserter{}
+			w := newOpWorker(repo, &fakeOpClient{}, inserter)
+
+			err := w.finalizeCreate(context.Background(), nonNilFakeTx(), row, "real-3")
+			require.NoError(t, err)
+			require.Equal(t, "real-3", repo.rows[taskID].ExternalTaskID)
+			require.Empty(t, inserter.args, "dismissed/unmanaged finalize records id only, NO close")
+		})
+	}
+}
+
+func TestOpWorker_FinalizeCreate_ManagedNoOp(t *testing.T) {
+	taskID := uuid.New()
+	row := &repository.ContactTask{ID: taskID, State: repository.ContactTaskStateManaged, ExternalTaskID: "already"}
+	repo := newFakeOpTaskRepo(row)
+	inserter := &recordingInserter{}
+	w := newOpWorker(repo, &fakeOpClient{}, inserter)
+
+	err := w.finalizeCreate(context.Background(), nonNilFakeTx(), row, "real-4")
+	require.NoError(t, err, "another worker finalized first → idempotent no-op")
+	require.Equal(t, "already", repo.rows[taskID].ExternalTaskID)
+	require.Empty(t, inserter.args)
+}
