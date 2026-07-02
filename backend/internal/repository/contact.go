@@ -171,19 +171,11 @@ type UpdateContactRequest struct {
 	ProfilePhoto *string    `json:"profile_photo,omitempty"`
 }
 
-// ListContactsParams represents parameters for listing contacts
+// ListContactsParams represents parameters for listing contacts. Query is an
+// optional full-text search over full_name + contact-method values; empty
+// means no search.
 type ListContactsParams struct {
-	Limit          int32  `json:"limit"`
-	Offset         int32  `json:"offset"`
-	Sort           string `json:"sort,omitempty"`
-	Order          string `json:"order,omitempty"`
-	CadenceFilter  string `json:"cadence_filter,omitempty"`
-	FollowupFilter string `json:"followup_filter,omitempty"`
-}
-
-// SearchContactsParams represents parameters for searching contacts
-type SearchContactsParams struct {
-	Query          string `json:"query"`
+	Query          string `json:"query,omitempty"`
 	Limit          int32  `json:"limit"`
 	Offset         int32  `json:"offset"`
 	Sort           string `json:"sort,omitempty"`
@@ -283,68 +275,24 @@ func (r *ContactRepository) GetContactTx(ctx context.Context, tx pgx.Tx, id uuid
 	return &contact, nil
 }
 
-// ListContacts retrieves a paginated list of contacts
-func (r *ContactRepository) ListContacts(ctx context.Context, params ListContactsParams) ([]Contact, error) {
-	var (
-		dbContacts []*db.Contact
-		err        error
-	)
-
-	if params.Sort != "" {
-		dbContacts, err = r.queries.ListContactsSorted(ctx, db.ListContactsSortedParams{
-			CadenceFilter:  params.CadenceFilter,
-			FollowupFilter: params.FollowupFilter,
-			SortField:      params.Sort,
-			SortOrder:      params.Order,
-			PageOffset:     params.Offset,
-			PageLimit:      params.Limit,
-		})
-	} else {
-		dbContacts, err = r.queries.ListContacts(ctx, db.ListContactsParams{
-			CadenceFilter:  params.CadenceFilter,
-			FollowupFilter: params.FollowupFilter,
-			PageOffset:     params.Offset,
-			PageLimit:      params.Limit,
-		})
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	contacts := make([]Contact, len(dbContacts))
-	for i, dbContact := range dbContacts {
-		contacts[i] = convertDbContact(dbContact)
-	}
-
-	return contacts, nil
+// searchToPgText maps an optional search string to the SQL search_query
+// param: empty string means "no search" and must arrive as NULL.
+func searchToPgText(query string) pgtype.Text {
+	return pgtype.Text{String: query, Valid: query != ""}
 }
 
-// SearchContacts searches for contacts by query
-func (r *ContactRepository) SearchContacts(ctx context.Context, params SearchContactsParams) ([]Contact, error) {
-	var (
-		dbContacts []*db.Contact
-		err        error
-	)
-
-	if params.Sort != "" {
-		dbContacts, err = r.queries.SearchContactsSorted(ctx, db.SearchContactsSortedParams{
-			CadenceFilter:  params.CadenceFilter,
-			FollowupFilter: params.FollowupFilter,
-			SearchQuery:    params.Query,
-			SortField:      params.Sort,
-			SortOrder:      params.Order,
-			PageOffset:     params.Offset,
-			PageLimit:      params.Limit,
-		})
-	} else {
-		dbContacts, err = r.queries.SearchContacts(ctx, db.SearchContactsParams{
-			CadenceFilter:  params.CadenceFilter,
-			FollowupFilter: params.FollowupFilter,
-			SearchQuery:    params.Query,
-			PageOffset:     params.Offset,
-			PageLimit:      params.Limit,
-		})
-	}
+// ListContacts retrieves a paginated list of contacts, optionally searched
+// via params.Query.
+func (r *ContactRepository) ListContacts(ctx context.Context, params ListContactsParams) ([]Contact, error) {
+	dbContacts, err := r.queries.ListContacts(ctx, db.ListContactsParams{
+		CadenceFilter:  params.CadenceFilter,
+		FollowupFilter: params.FollowupFilter,
+		SearchQuery:    searchToPgText(params.Query),
+		SortField:      params.Sort,
+		SortOrder:      params.Order,
+		PageOffset:     params.Offset,
+		PageLimit:      params.Limit,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -607,20 +555,14 @@ func (r *ContactRepository) HardDeleteContact(ctx context.Context, id uuid.UUID)
 	return r.queries.HardDeleteContact(ctx, uuidToPgUUID(id))
 }
 
-// CountContacts returns the total number of active contacts
-func (r *ContactRepository) CountContacts(ctx context.Context, cadenceFilter string, followupFilter string) (int64, error) {
+// CountContacts returns the total number of active contacts matching the
+// same filters (and optional search) as ListContacts. Limit/Offset/Sort/Order
+// are ignored.
+func (r *ContactRepository) CountContacts(ctx context.Context, params ListContactsParams) (int64, error) {
 	return r.queries.CountContacts(ctx, db.CountContactsParams{
-		CadenceFilter:  cadenceFilter,
-		FollowupFilter: followupFilter,
-	})
-}
-
-// CountSearchContacts returns the total number of contacts matching a search query.
-func (r *ContactRepository) CountSearchContacts(ctx context.Context, query string, cadenceFilter string, followupFilter string) (int64, error) {
-	return r.queries.CountSearchContacts(ctx, db.CountSearchContactsParams{
-		CadenceFilter:  cadenceFilter,
-		FollowupFilter: followupFilter,
-		SearchQuery:    query,
+		CadenceFilter:  params.CadenceFilter,
+		FollowupFilter: params.FollowupFilter,
+		SearchQuery:    searchToPgText(params.Query),
 	})
 }
 
@@ -636,43 +578,13 @@ type ListContactIDsParams struct {
 // ListContactIDs retrieves a list of contact IDs with optional sorting and search.
 // This is a lightweight method for navigation purposes.
 func (r *ContactRepository) ListContactIDs(ctx context.Context, params ListContactIDsParams) ([]uuid.UUID, error) {
-	var (
-		dbIDs []pgtype.UUID
-		err   error
-	)
-
-	hasSearch := params.Search != ""
-	hasSort := params.Sort != ""
-
-	switch {
-	case hasSearch && hasSort:
-		dbIDs, err = r.queries.SearchContactIDsSorted(ctx, db.SearchContactIDsSortedParams{
-			CadenceFilter:  params.CadenceFilter,
-			FollowupFilter: params.FollowupFilter,
-			SearchQuery:    params.Search,
-			SortField:      params.Sort,
-			SortOrder:      params.Order,
-		})
-	case hasSearch:
-		dbIDs, err = r.queries.SearchContactIDs(ctx, db.SearchContactIDsParams{
-			CadenceFilter:  params.CadenceFilter,
-			FollowupFilter: params.FollowupFilter,
-			SearchQuery:    params.Search,
-		})
-	case hasSort:
-		dbIDs, err = r.queries.ListContactIDsSorted(ctx, db.ListContactIDsSortedParams{
-			CadenceFilter:  params.CadenceFilter,
-			FollowupFilter: params.FollowupFilter,
-			SortField:      params.Sort,
-			SortOrder:      params.Order,
-		})
-	default:
-		dbIDs, err = r.queries.ListContactIDs(ctx, db.ListContactIDsParams{
-			CadenceFilter:  params.CadenceFilter,
-			FollowupFilter: params.FollowupFilter,
-		})
-	}
-
+	dbIDs, err := r.queries.ListContactIDs(ctx, db.ListContactIDsParams{
+		CadenceFilter:  params.CadenceFilter,
+		FollowupFilter: params.FollowupFilter,
+		SearchQuery:    searchToPgText(params.Search),
+		SortField:      params.Sort,
+		SortOrder:      params.Order,
+	})
 	if err != nil {
 		return nil, err
 	}

@@ -410,36 +410,18 @@ func (h *ContactHandler) ListContacts(c *gin.Context) {
 		return
 	}
 
-	var (
-		contacts []repository.Contact
-		total    int64
-		err      error
-	)
-
 	offset := int32((query.Page - 1) * query.Limit)
 	limit := int32(query.Limit)
 
-	if query.Search != "" {
-		contacts, total, err = h.contactService.SearchContactsPage(c.Request.Context(), repository.SearchContactsParams{
-			Query:          query.Search,
-			Limit:          limit,
-			Offset:         offset,
-			Sort:           query.Sort,
-			Order:          query.Order,
-			CadenceFilter:  query.CadenceFilter,
-			FollowupFilter: query.FollowupFilter,
-		})
-	} else {
-		contacts, total, err = h.contactService.ListContactsPage(c.Request.Context(), repository.ListContactsParams{
-			Limit:          limit,
-			Offset:         offset,
-			Sort:           query.Sort,
-			Order:          query.Order,
-			CadenceFilter:  query.CadenceFilter,
-			FollowupFilter: query.FollowupFilter,
-		})
-	}
-
+	contacts, total, err := h.contactService.ListContactsPage(c.Request.Context(), repository.ListContactsParams{
+		Query:          query.Search,
+		Limit:          limit,
+		Offset:         offset,
+		Sort:           query.Sort,
+		Order:          query.Order,
+		CadenceFilter:  query.CadenceFilter,
+		FollowupFilter: query.FollowupFilter,
+	})
 	if err != nil {
 		api.RespondInternal(c, err)
 		return

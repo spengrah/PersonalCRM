@@ -142,10 +142,10 @@ func TestCadenceFilter_Integration(t *testing.T) {
 		// concurrent tests can only ADD rows, never drop the count below our
 		// contribution. (A stricter "== N" over the whole table would be
 		// shared-DB-unsafe under t.Parallel().)
-		totalHas, err := repo.CountContacts(ctx, "has_cadence", "")
+		totalHas, err := repo.CountContacts(ctx, repository.ListContactsParams{CadenceFilter: "has_cadence"})
 		require.NoError(t, err)
 
-		totalNo, err := repo.CountContacts(ctx, "no_cadence", "")
+		totalNo, err := repo.CountContacts(ctx, repository.ListContactsParams{CadenceFilter: "no_cadence"})
 		require.NoError(t, err)
 
 		assert.GreaterOrEqual(t, totalHas, int64(1), "this test's own cadence contact guarantees >= 1")

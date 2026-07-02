@@ -504,7 +504,7 @@ func TestContactKnowledgeCutover_ListAndSearchReadCache(t *testing.T) {
 	assert.True(t, foundInList, "contact present in birthday-sorted list")
 
 	// Search by name still returns the contact with its cache columns populated.
-	results, err := h.contactRepo.SearchContacts(ctx, repository.SearchContactsParams{
+	results, err := h.contactRepo.ListContacts(ctx, repository.ListContactsParams{
 		Query: "Readback Person " + ns, Limit: 1000, Offset: 0,
 	})
 	require.NoError(t, err)

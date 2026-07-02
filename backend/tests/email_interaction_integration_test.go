@@ -599,7 +599,7 @@ func (e *emailEnv) countContacts(t *testing.T) int64 {
 	// Empty filters → global count. Used only for a single before/after delta
 	// within ONE test; package tests run serially (no t.Parallel), so no
 	// cross-test pollution lands between the two reads.
-	n, err := e.contactRepo.CountContacts(e.ctx, "", "")
+	n, err := e.contactRepo.CountContacts(e.ctx, repository.ListContactsParams{})
 	require.NoError(t, err)
 	return n
 }

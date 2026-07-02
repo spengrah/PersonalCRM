@@ -197,6 +197,8 @@ type Querier interface {
 	// count doesn't match the raw contact_tag table.
 	CountContactTagsWithDeletedContact(ctx context.Context) (int64, error)
 	CountContactTasksByProvider(ctx context.Context, arg CountContactTasksByProviderParams) (int64, error)
+	// Count variant of ListContacts; same WHERE shape as ListContacts. The
+	// grouped contact_method join is 1:1 per contact, so COUNT(*) is not inflated.
 	CountContacts(ctx context.Context, arg CountContactsParams) (int64, error)
 	CountContactsByNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	// /health component queries over river_job.
@@ -289,7 +291,6 @@ type Querier interface {
 	// source = @source. Used by sync-service tests to assert enqueue/dedup
 	// behavior without inlining raw SQL (core.md rule 2).
 	CountRiverJobsBySourceArgForTest(ctx context.Context, source string) (int64, error)
-	CountSearchContacts(ctx context.Context, arg CountSearchContactsParams) (int64, error)
 	// Test-only: counts ALL breach rows (open or resolved) for an account_id. The
 	// production read path exposes open breaches only, so the retention test uses
 	// this to confirm resolved history was (or was not) pruned. Production code
@@ -1080,10 +1081,9 @@ type Querier interface {
 	// to comms_message), so the re-derivation never spends Gmail quota re-fetching
 	// mail for a deleted contact.
 	ListCommsMessagesMissingParticipantNames(ctx context.Context, arg ListCommsMessagesMissingParticipantNamesParams) ([]*ListCommsMessagesMissingParticipantNamesRow, error)
-	// Lightweight query returning only IDs for navigation
+	// Lightweight IDs-only variant of ListContacts for navigation (no pagination);
+	// same WHERE + ORDER BY shape as ListContacts.
 	ListContactIDs(ctx context.Context, arg ListContactIDsParams) ([]pgtype.UUID, error)
-	// Lightweight query returning only IDs with sorting for navigation
-	ListContactIDsSorted(ctx context.Context, arg ListContactIDsSortedParams) ([]pgtype.UUID, error)
 	ListContactInteractions(ctx context.Context, arg ListContactInteractionsParams) ([]*Interaction, error)
 	// Contact method queries
 	ListContactMethodsByContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactMethod, error)
@@ -1100,11 +1100,14 @@ type Querier interface {
 	ListContactTasksByContactFiltered(ctx context.Context, arg ListContactTasksByContactFilteredParams) ([]*ContactTask, error)
 	// List all tasks for a provider (optionally filtered by state)
 	ListContactTasksByProvider(ctx context.Context, arg ListContactTasksByProviderParams) ([]*ContactTask, error)
-	// cadence_filter: '' = no filter (Go zero value), 'has_cadence' = non-empty cadence,
-	// 'no_cadence' = NULL or empty string (defensive; CHECK constraint prevents empty strings)
-	// followup_filter: '' = no filter, 'has_followup' = pending follow-up exists, 'no_followup' = no pending follow-up
+	// Unified contact listing (one WHERE + ORDER BY shape shared by the rows,
+	// IDs, and count queries below — keep the three in lockstep):
+	//   search_query: NULL = no search; else full-text over full_name + method values
+	//   cadence_filter: '' = no filter, 'has_cadence' = non-empty cadence,
+	//     'no_cadence' = NULL or empty string (defensive; CHECK constraint prevents empty strings)
+	//   followup_filter: '' = no filter, 'has_followup' = pending follow-up exists, 'no_followup' = no pending follow-up
+	//   sort_field/'sort_order': '' = default order (relevance when searching, else name asc)
 	ListContacts(ctx context.Context, arg ListContactsParams) ([]*Contact, error)
-	ListContactsSorted(ctx context.Context, arg ListContactsSortedParams) ([]*Contact, error)
 	// Lists contacts that have a cadence set (used for Todoist sync reconciliation).
 	ListContactsWithCadence(ctx context.Context, limit int32) ([]*Contact, error)
 	// Lists contacts that have a contact_by date set (used for testing mode filtering).
@@ -1581,12 +1584,6 @@ type Querier interface {
 	// by the rotate-key endpoint. Filters revoked hosts so a revoked host
 	// cannot be silently re-activated by a rotation.
 	RotateMacHostAPIKey(ctx context.Context, arg RotateMacHostAPIKeyParams) (*MacHost, error)
-	// Lightweight query returning only IDs with search for navigation
-	SearchContactIDs(ctx context.Context, arg SearchContactIDsParams) ([]pgtype.UUID, error)
-	// Lightweight query returning only IDs with search and sorting for navigation
-	SearchContactIDsSorted(ctx context.Context, arg SearchContactIDsSortedParams) ([]pgtype.UUID, error)
-	SearchContacts(ctx context.Context, arg SearchContactsParams) ([]*Contact, error)
-	SearchContactsSorted(ctx context.Context, arg SearchContactsSortedParams) ([]*Contact, error)
 	SearchNotes(ctx context.Context, arg SearchNotesParams) ([]*Note, error)
 	// Seeds an external_sync_state row at caller-supplied next_sync_at.
 	// Used by scheduler-exclusion tests to plant a push-strategy row whose
