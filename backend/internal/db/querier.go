@@ -197,8 +197,7 @@ type Querier interface {
 	// count doesn't match the raw contact_tag table.
 	CountContactTagsWithDeletedContact(ctx context.Context) (int64, error)
 	CountContactTasksByProvider(ctx context.Context, arg CountContactTasksByProviderParams) (int64, error)
-	// Count variant of ListContacts; same WHERE shape as ListContacts. The
-	// grouped contact_method join is 1:1 per contact, so COUNT(*) is not inflated.
+	// Count variant of ListContacts; same WHERE shape as ListContacts.
 	CountContacts(ctx context.Context, arg CountContactsParams) (int64, error)
 	CountContactsByNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	// /health component queries over river_job.

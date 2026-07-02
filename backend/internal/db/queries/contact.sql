@@ -23,11 +23,6 @@ SELECT EXISTS(
 --   sort_field/'sort_order': '' = default order (relevance when searching, else name asc)
 SELECT c.*
 FROM contact c
-LEFT JOIN (
-  SELECT contact_id, string_agg(value, ' ') AS method_values
-  FROM contact_method
-  GROUP BY contact_id
-) cm ON cm.contact_id = c.id
 WHERE c.deleted_at IS NULL
   AND (sqlc.arg(cadence_filter)::text = '' OR
        (sqlc.arg(cadence_filter)::text = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
@@ -36,11 +31,11 @@ WHERE c.deleted_at IS NULL
        (sqlc.arg(followup_filter)::text = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
        (sqlc.arg(followup_filter)::text = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
   AND (sqlc.narg(search_query)::text IS NULL OR
-       to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', sqlc.narg(search_query)::text))
+       to_tsvector('english', c.full_name || ' ' || COALESCE((SELECT string_agg(cm.value, ' ') FROM contact_method cm WHERE cm.contact_id = c.id), '')) @@ plainto_tsquery('english', sqlc.narg(search_query)::text))
 ORDER BY
   -- Relevance order applies only when searching without an explicit sort.
   CASE WHEN sqlc.narg(search_query)::text IS NOT NULL AND sqlc.arg(sort_field)::text = '' THEN
-    ts_rank(to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')), plainto_tsquery('english', sqlc.narg(search_query)::text))
+    ts_rank(to_tsvector('english', c.full_name || ' ' || COALESCE((SELECT string_agg(cm.value, ' ') FROM contact_method cm WHERE cm.contact_id = c.id), '')), plainto_tsquery('english', sqlc.narg(search_query)::text))
   END DESC,
   CASE WHEN sqlc.arg(sort_field)::text = 'name' AND sqlc.arg(sort_order)::text = 'asc' THEN c.full_name END ASC,
   CASE WHEN sqlc.arg(sort_field)::text = 'name' AND sqlc.arg(sort_order)::text = 'desc' THEN c.full_name END DESC,
@@ -327,15 +322,9 @@ WHERE id = $1 AND deleted_at IS NULL;
 DELETE FROM contact WHERE id = $1;
 
 -- name: CountContacts :one
--- Count variant of ListContacts; same WHERE shape as ListContacts. The
--- grouped contact_method join is 1:1 per contact, so COUNT(*) is not inflated.
+-- Count variant of ListContacts; same WHERE shape as ListContacts.
 SELECT COUNT(*)
 FROM contact c
-LEFT JOIN (
-  SELECT contact_id, string_agg(value, ' ') AS method_values
-  FROM contact_method
-  GROUP BY contact_id
-) cm ON cm.contact_id = c.id
 WHERE c.deleted_at IS NULL
   AND (sqlc.arg(cadence_filter)::text = '' OR
        (sqlc.arg(cadence_filter)::text = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
@@ -344,18 +333,13 @@ WHERE c.deleted_at IS NULL
        (sqlc.arg(followup_filter)::text = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
        (sqlc.arg(followup_filter)::text = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
   AND (sqlc.narg(search_query)::text IS NULL OR
-       to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', sqlc.narg(search_query)::text));
+       to_tsvector('english', c.full_name || ' ' || COALESCE((SELECT string_agg(cm.value, ' ') FROM contact_method cm WHERE cm.contact_id = c.id), '')) @@ plainto_tsquery('english', sqlc.narg(search_query)::text));
 
 -- name: ListContactIDs :many
 -- Lightweight IDs-only variant of ListContacts for navigation (no pagination);
 -- same WHERE + ORDER BY shape as ListContacts.
 SELECT c.id
 FROM contact c
-LEFT JOIN (
-  SELECT contact_id, string_agg(value, ' ') AS method_values
-  FROM contact_method
-  GROUP BY contact_id
-) cm ON cm.contact_id = c.id
 WHERE c.deleted_at IS NULL
   AND (sqlc.arg(cadence_filter)::text = '' OR
        (sqlc.arg(cadence_filter)::text = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
@@ -364,11 +348,11 @@ WHERE c.deleted_at IS NULL
        (sqlc.arg(followup_filter)::text = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
        (sqlc.arg(followup_filter)::text = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
   AND (sqlc.narg(search_query)::text IS NULL OR
-       to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', sqlc.narg(search_query)::text))
+       to_tsvector('english', c.full_name || ' ' || COALESCE((SELECT string_agg(cm.value, ' ') FROM contact_method cm WHERE cm.contact_id = c.id), '')) @@ plainto_tsquery('english', sqlc.narg(search_query)::text))
 ORDER BY
   -- Relevance order applies only when searching without an explicit sort.
   CASE WHEN sqlc.narg(search_query)::text IS NOT NULL AND sqlc.arg(sort_field)::text = '' THEN
-    ts_rank(to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')), plainto_tsquery('english', sqlc.narg(search_query)::text))
+    ts_rank(to_tsvector('english', c.full_name || ' ' || COALESCE((SELECT string_agg(cm.value, ' ') FROM contact_method cm WHERE cm.contact_id = c.id), '')), plainto_tsquery('english', sqlc.narg(search_query)::text))
   END DESC,
   CASE WHEN sqlc.arg(sort_field)::text = 'name' AND sqlc.arg(sort_order)::text = 'asc' THEN c.full_name END ASC,
   CASE WHEN sqlc.arg(sort_field)::text = 'name' AND sqlc.arg(sort_order)::text = 'desc' THEN c.full_name END DESC,

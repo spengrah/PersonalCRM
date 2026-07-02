@@ -103,11 +103,6 @@ func (q *Queries) ContactIsLive(ctx context.Context, id pgtype.UUID) (bool, erro
 const CountContacts = `-- name: CountContacts :one
 SELECT COUNT(*)
 FROM contact c
-LEFT JOIN (
-  SELECT contact_id, string_agg(value, ' ') AS method_values
-  FROM contact_method
-  GROUP BY contact_id
-) cm ON cm.contact_id = c.id
 WHERE c.deleted_at IS NULL
   AND ($1::text = '' OR
        ($1::text = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
@@ -116,7 +111,7 @@ WHERE c.deleted_at IS NULL
        ($2::text = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
        ($2::text = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
   AND ($3::text IS NULL OR
-       to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $3::text))
+       to_tsvector('english', c.full_name || ' ' || COALESCE((SELECT string_agg(cm.value, ' ') FROM contact_method cm WHERE cm.contact_id = c.id), '')) @@ plainto_tsquery('english', $3::text))
 `
 
 type CountContactsParams struct {
@@ -125,8 +120,7 @@ type CountContactsParams struct {
 	SearchQuery    pgtype.Text `json:"search_query"`
 }
 
-// Count variant of ListContacts; same WHERE shape as ListContacts. The
-// grouped contact_method join is 1:1 per contact, so COUNT(*) is not inflated.
+// Count variant of ListContacts; same WHERE shape as ListContacts.
 func (q *Queries) CountContacts(ctx context.Context, arg CountContactsParams) (int64, error) {
 	row := q.db.QueryRow(ctx, CountContacts, arg.CadenceFilter, arg.FollowupFilter, arg.SearchQuery)
 	var count int64
@@ -376,11 +370,6 @@ func (q *Queries) HardDeleteContact(ctx context.Context, id pgtype.UUID) error {
 const ListContactIDs = `-- name: ListContactIDs :many
 SELECT c.id
 FROM contact c
-LEFT JOIN (
-  SELECT contact_id, string_agg(value, ' ') AS method_values
-  FROM contact_method
-  GROUP BY contact_id
-) cm ON cm.contact_id = c.id
 WHERE c.deleted_at IS NULL
   AND ($1::text = '' OR
        ($1::text = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
@@ -389,11 +378,11 @@ WHERE c.deleted_at IS NULL
        ($2::text = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
        ($2::text = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
   AND ($3::text IS NULL OR
-       to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $3::text))
+       to_tsvector('english', c.full_name || ' ' || COALESCE((SELECT string_agg(cm.value, ' ') FROM contact_method cm WHERE cm.contact_id = c.id), '')) @@ plainto_tsquery('english', $3::text))
 ORDER BY
   -- Relevance order applies only when searching without an explicit sort.
   CASE WHEN $3::text IS NOT NULL AND $4::text = '' THEN
-    ts_rank(to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')), plainto_tsquery('english', $3::text))
+    ts_rank(to_tsvector('english', c.full_name || ' ' || COALESCE((SELECT string_agg(cm.value, ' ') FROM contact_method cm WHERE cm.contact_id = c.id), '')), plainto_tsquery('english', $3::text))
   END DESC,
   CASE WHEN $4::text = 'name' AND $5::text = 'asc' THEN c.full_name END ASC,
   CASE WHEN $4::text = 'name' AND $5::text = 'desc' THEN c.full_name END DESC,
@@ -461,11 +450,6 @@ func (q *Queries) ListContactIDs(ctx context.Context, arg ListContactIDsParams) 
 const ListContacts = `-- name: ListContacts :many
 SELECT c.id, c.full_name, c.location, c.birthday, c.how_met, c.cadence, c.last_contacted, c.profile_photo, c.deleted_at, c.created_at, c.updated_at, c.contact_by, c.last_interaction_at, c.last_outreach_at, c.last_response_at
 FROM contact c
-LEFT JOIN (
-  SELECT contact_id, string_agg(value, ' ') AS method_values
-  FROM contact_method
-  GROUP BY contact_id
-) cm ON cm.contact_id = c.id
 WHERE c.deleted_at IS NULL
   AND ($1::text = '' OR
        ($1::text = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
@@ -474,11 +458,11 @@ WHERE c.deleted_at IS NULL
        ($2::text = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
        ($2::text = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
   AND ($3::text IS NULL OR
-       to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')) @@ plainto_tsquery('english', $3::text))
+       to_tsvector('english', c.full_name || ' ' || COALESCE((SELECT string_agg(cm.value, ' ') FROM contact_method cm WHERE cm.contact_id = c.id), '')) @@ plainto_tsquery('english', $3::text))
 ORDER BY
   -- Relevance order applies only when searching without an explicit sort.
   CASE WHEN $3::text IS NOT NULL AND $4::text = '' THEN
-    ts_rank(to_tsvector('english', c.full_name || ' ' || COALESCE(cm.method_values, '')), plainto_tsquery('english', $3::text))
+    ts_rank(to_tsvector('english', c.full_name || ' ' || COALESCE((SELECT string_agg(cm.value, ' ') FROM contact_method cm WHERE cm.contact_id = c.id), '')), plainto_tsquery('english', $3::text))
   END DESC,
   CASE WHEN $4::text = 'name' AND $5::text = 'asc' THEN c.full_name END ASC,
   CASE WHEN $4::text = 'name' AND $5::text = 'desc' THEN c.full_name END DESC,
