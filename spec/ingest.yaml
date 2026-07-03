@@ -1,0 +1,435 @@
+domain: ingest
+prefix: ING
+maturity: reviewed
+behaviors:
+  # --- HTTP ingest surface ---
+
+  - id: ING-001
+    title: The ingest endpoint is feature-gated and auth-dispatched by request header
+    type: api
+    status: current
+    given: the daemon ingest events endpoint
+    when: a batch is posted to the ingest endpoint
+    then:
+      - the endpoint is registered only when event-bus ingest is enabled
+      - a request carrying the Mac-host header is authenticated as a daemon host and that host identity is threaded into batch processing
+      - a request without the host header is authenticated by the global API key and carries no host identity
+    provenance: [IngestHandler.IngestEvents, IngestAuthMiddleware, auth.MacHostIDFromContext, EnableEventBusIngest]
+
+  - id: ING-002
+    title: Request-level limits reject the whole ingest request
+    type: api
+    status: current
+    given: a POST to the ingest endpoint
+    when: the request envelope is checked before per-event processing
+    then:
+      - a body over the size cap is rejected as payload-too-large (413)
+      - a malformed JSON body is rejected with a validation error (400)
+      - an empty events array is rejected with a validation error (400)
+      - a batch exceeding the maximum event count is rejected with a validation error (400)
+    provenance: [IngestHandler.IngestEvents, maxIngestBodyBytes, maxBatchSize]
+
+  - id: ING-003
+    title: A bad event is rejected individually without failing the batch
+    type: api
+    status: current
+    given: a batch of events that pass request-level checks
+    when: the batch is processed
+    then:
+      - the HTTP response is success (200) even when every event in the batch is rejected
+      - each rejected event appears in an errors list with its original request-array index and a stable error code
+      - the response reports separate accepted, duplicate, and rejected counts and is deliberately not wrapped in the standard API envelope
+    provenance: [IngestHandler.IngestEvents, IngestResponse, IngestError]
+    notes: Attention items for sessions needing review are surfaced separately (ING-035).
+
+  - id: ING-004
+    title: Per-event validation checks fields, bounds, kind, and payload shape
+    type: api
+    status: current
+    given: a single event in the batch
+    when: the event is validated
+    then:
+      - source is required and length-bounded, and source_id is length-bounded
+      - kind is required and must be a known event kind
+      - observed_at is required and must be a non-zero timestamp
+      - payload is required, size-bounded, and must pass structural validation for its kind (a literal JSON null is rejected)
+    provenance: [validateIngestEvent, events.IsKnownKind, events.ValidatePayload]
+
+  - id: ING-005
+    title: The daemon payload version envelope gates on a known version
+    type: api
+    status: current
+    given: a daemon-emitted event (message, external-contact, meeting-note, or call)
+    when: the payload version is checked
+    then:
+      - a version below the supported minimum is rejected as an invalid payload
+      - a version above the highest known version is rejected as an invalid payload with an upgrade signal
+    provenance: [validateRawMessagePayload, validateCallPayloadVersion, validateExternalContactPayloadVersion, validateMeetingNotePayloadVersion]
+    notes: The "upgrade Pi" rejection makes an out-of-range daemon build fail loudly instead of silently dropping unknown fields on a lenient decode.
+
+  - id: ING-006
+    title: A host revoked mid-batch stops the daemon
+    type: api
+    status: current
+    given: a daemon batch whose host is revoked between authentication and commit
+    when: the batch reaches its in-transaction host-liveness check
+    then:
+      - the whole batch is rolled back with nothing persisted
+      - the response is unauthorized (401) so the daemon stops retrying
+    provenance: [IngestHandler.IngestEvents, service.ErrHostRevokedDuringBatch]
+
+  # --- Auth-path allowlist ---
+
+  - id: ING-007
+    title: Event kinds are partitioned across the two auth paths
+    type: business-logic
+    status: current
+    given: an authenticated ingest request
+    when: each event's kind is checked against the auth path it arrived on
+    then:
+      - daemon-push kinds are accepted only on the host-auth path
+      - internally-published kinds are accepted only on the global-key path
+      - a kind on the wrong path is rejected for that event without failing the batch
+    provenance: [isHostOnlyKind, IngestService.IngestBatch]
+    notes: A daemon-push kind is one that belongs to a registered ingest family (ING-024); these kinds have exactly one legitimate producer.
+
+  # --- Batch transaction state machine ---
+
+  - id: ING-008
+    title: Domain failures reject one event while infrastructure failures roll back the batch
+    type: business-logic
+    status: current
+    given: a batch persisted in a single transaction
+    when: an event fails
+    then:
+      - a domain-level failure (auth-path, payload invariant, identity match, staging write) rejects just that event and the batch continues
+      - an infrastructure-level failure (begin, the batch's durable-event publish, savepoint commit, aggregator enqueue, outer commit) aborts the whole batch and returns all counts as zero
+    provenance: [IngestService.IngestBatch, IngestPerEventRejection]
+    notes: The batch-aborting publish is the durable event-log publish; a secondary interaction.recorded publish failure inside the inline call handler is instead treated as a per-event rejection (savepoint rollback, batch continues), not a batch abort.
+
+  - id: ING-009
+    title: Each event's writes are isolated in a savepoint
+    type: invariant
+    status: current
+    statement: every event in a batch is processed inside its own nested savepoint, so a domain rejection rolls back only that event's writes (event-log row, identity row, staging row) while already-committed events in the same batch are unaffected.
+    provenance: [IngestService.IngestBatch]
+
+  - id: ING-010
+    title: Ingest side effects are ordered around the transaction boundary
+    type: invariant
+    status: current
+    statement: within batch processing, payload invariants are verified before any savepoint opens, the durable event row is published before its domain mutation, aggregator jobs are enqueued in the outer transaction, and external HTTP side effects (follow-up task sync) run only after the transaction commits.
+    provenance: [IngestService.IngestBatch, batchPostCommit]
+    notes: Publish-before-mutate keeps events from being stranded on a mutation failure, and external-HTTP-after-commit keeps network I/O from stalling the connection inside the transaction.
+
+  - id: ING-011
+    title: A duplicate re-submit is a counted no-op
+    type: business-logic
+    status: current
+    given: an event whose (source, source_id) already exists in the event log
+    when: it is re-submitted in a batch
+    then:
+      - the event is counted as a duplicate, separate from accepted events
+      - the inline domain handler is skipped so no staging revive, last-seen bump, or re-enqueue occurs
+      - the sole exception re-runs the inline handler for a re-recorded meeting note, so a tombstone can revive or participant-resolution drift can be absorbed
+    provenance: [IngestService.IngestBatch, shouldRunInlineOnDuplicate]
+
+  - id: ING-012
+    title: Host liveness is re-checked inside the batch transaction
+    type: business-logic
+    status: current
+    given: a daemon batch on the host-auth path
+    when: the batch transaction opens
+    then:
+      - the host row is re-read under a row lock so a concurrent revoke serializes against the batch
+      - an already-revoked host aborts the batch before any event is written
+    provenance: [IngestService.IngestBatch, GetActiveHostByIDForUpdateTx]
+    notes: Closes the race between the auth-middleware read and the commit; the 401 the handler maps this to is ING-006.
+
+  # --- Event bus ---
+
+  - id: ING-013
+    title: Event publication is idempotent by source identity
+    type: data
+    status: current
+    given: an event carrying a non-empty source_id
+    when: it is published within a transaction
+    then:
+      - a first publish inserts the event row and enqueues its consumer jobs
+      - a re-publish of the same (source, source_id) is a no-op that inserts nothing and enqueues no jobs
+    provenance: [Bus.PublishTx, idx_event_source_source_id]
+
+  - id: ING-014
+    title: Consumer routing runs before the event row is inserted
+    type: invariant
+    status: current
+    statement: consumer-job routing is resolved before the event row is inserted, so a routing or payload-decode failure rolls the transaction back without leaving a durable event row that has no consumer attached.
+    provenance: [Bus.PublishTx, consumerJobsForKind]
+
+  - id: ING-015
+    title: Malformed envelopes are refused at publish
+    type: business-logic
+    status: current
+    given: an event envelope handed to the bus
+    when: it is published
+    then:
+      - a nil envelope or transaction, an empty kind, source, or payload, or a zero observed_at is refused
+      - an unknown kind is refused so arbitrary strings never reach the event log
+    provenance: [Bus.PublishTx, kindPayloadTypes]
+
+  - id: ING-016
+    title: Each event kind routes to a fixed set of consumers
+    type: business-logic
+    status: current
+    given: a published event
+    when: its consumer jobs are enqueued
+    then:
+      - message, calendar-attended, and task completion/outreach kinds route to the interaction recorder
+      - a recorded-interaction event fans out to both the cadence and follow-up consumers
+      - calendar-declined, email, contact-methods-added, and accepted/superseded-assertion kinds each route to their own dedicated consumer
+      - proposed/rejected/provenance assertion kinds, task-skipped, and interaction.manual route to no consumer — the assertion/task kinds land durably for audit, while interaction.manual is invoked inline by the manual handler
+    provenance: [consumerJobsForKind]
+    notes: Consumer internals belong to their own domains (CAD for cadence/follow-up, IMP for rematch, KNW for the knowledge cache, CAL for calendar decline); ING owns only the routing table.
+
+  - id: ING-017
+    title: The event log is an append-only durable record
+    type: invariant
+    status: current
+    statement: published events are written to an append-only log that is never updated or deleted in place, giving every ingested signal a durable audit row independent of whether its downstream consumers succeed.
+    provenance: [InsertEvent, migrations/036_event_table.up.sql]
+
+  # --- Interaction dedup ---
+
+  - id: ING-018
+    title: Interaction dedup is source-aware
+    type: data
+    status: current
+    given: an interaction being recorded
+    when: the recorder checks for an existing row
+    then:
+      - a source that carries a source_ref dedups on the exact (contact, source, source_ref) tuple
+      - a source with no source_ref (manual entry) dedups within a fixed time window around the timestamp
+      - a dedup hit returns the existing interaction and records nothing new
+    provenance: [ContactService.RecordInteractionTx, FindInteractionBySourceRef, FindInteractionInWindow]
+
+  - id: ING-019
+    title: The time-window dedup key includes direction
+    type: data
+    status: current
+    given: two manual interactions for the same contact within the dedup window
+    when: they carry opposite directions
+    then:
+      - they are treated as distinct interactions rather than collapsed into one row
+    provenance: [FindInteractionInWindow, interaction.sql]
+    notes: Direction is part of the window key so an outbound logged just before an inbound reply both survive.
+
+  - id: ING-020
+    title: A replayed interaction fires no downstream side effects
+    type: invariant
+    status: current
+    statement: source_ref interaction uniqueness is enforced by a partial unique index, and a dedup/replay hit short-circuits before the recorded-event emit, so redelivery of the same source event never re-fires cadence, follow-up, or aggregation side effects.
+    provenance: [idx_interaction_source_ref, ContactService.RecordInteractionTx, RecordInteractionResult.IsReplay]
+
+  # --- Per-entity source_ref ---
+
+  - id: ING-021
+    title: Multi-entity events attribute one interaction per entity via per-entity source_ref
+    type: data
+    status: current
+    given: a single ingested event that concerns several contacts (e.g. a meeting with several participants)
+    when: interactions are written for that event
+    then:
+      - each contact's interaction carries a source_ref that embeds both the event and the contact
+      - the per-entity ref keeps the rows from deduplicating against each other under the shared (contact, source, source_ref) key
+    provenance: [handleMeetingNoteRecorded, taggedImpromptuInteractions, stepFiveWalkins]
+
+  # --- Sole-writer / ordering ---
+
+  - id: ING-022
+    title: One recorder is the sole writer of ingested interactions
+    type: invariant
+    status: current
+    statement: interaction rows for the recorder's input kinds (messages, calendar-attended, task completion/outreach, manual) are written only through the shared record-interaction path, so dedup and cadence application stay centralized and no ingest path inserts interaction rows directly.
+    provenance: [InteractionRecorder, ContactService.RecordInteractionTx]
+
+  - id: ING-023
+    title: Recorded interactions apply cadence and follow-up in the same transaction
+    type: invariant
+    status: current
+    statement: when an ingested interaction is recorded it publishes a recorded-interaction event and applies cadence and follow-up inline in the same transaction (claimed exactly-once against redelivery), while the external follow-up task sync is deferred to a post-commit step.
+    provenance: [InteractionRecorder.HandleEvent, ContactService.RecordInteractionTx, event_consumer_claim]
+    notes: The cadence math and follow-up task lifecycle are cadence-followup scope (see CAD-005, CAD-011); ING owns the ordering and the sole-writer routing.
+
+  # --- Ingest source registry ---
+
+  - id: ING-024
+    title: The ingest source registry is the single descriptor table for daemon families
+    type: invariant
+    status: current
+    statement: the four daemon-push families (message, external-contact, meeting-note, call) are defined in one descriptor table that owns each family's kinds, allowed sources, verifier, and interaction pairing; every kind belongs to at most one family, and a family writes interactions if and only if it declares an interaction source.
+    provenance: [daemonFamilies, kindToFamily, buildKindToFamilyIndex]
+    notes: Cross-package agreement (event kinds, allowed push sources, the interaction.source SQL CHECK, provider stubs) is enforced against this table by tests, not by runtime wiring.
+
+  - id: ING-025
+    title: Batch routing carries no hard-coded per-kind branching
+    type: invariant
+    status: current
+    statement: batch dispatch routes every event through the registry index rather than per-kind constants or family predicates, enforced by a lint guard over the batch function, so a new family is added by extending the descriptor table instead of editing the batch control flow.
+    provenance: [scripts/check-ingest-registry.sh, ingest_registry_guard_static_test.go]
+
+  # --- Comms aggregation into interactions ---
+
+  - id: ING-026
+    title: Staged messages aggregate into interactions with reply-bridging and coalescing
+    type: business-logic
+    status: current
+    given: unprocessed staged messages for a contact and chat
+    when: incremental aggregation runs
+    then:
+      - an explicit or time-based reply to a prior outbound message promotes that interaction to mutual
+      - same-direction messages within the burst window extend the existing interaction rather than creating a new one
+      - otherwise a new interaction is created by publishing a message event
+    provenance: [Engine.AggregateForContact, tryExplicitReplyBridge]
+    notes: Batch/backfill aggregation is create-only (no extend or bridge); provider-specific staging adapters are CAL/TGM/MAC scope.
+
+  - id: ING-027
+    title: Reply bridging never crosses contacts
+    type: business-logic
+    status: current
+    given: a reply whose referenced message resolves to an existing interaction
+    when: the bridge is considered
+    then:
+      - the promotion applies only when the referenced interaction belongs to the contact being aggregated
+      - a referenced interaction on another contact is left untouched
+    provenance: [Engine.tryExplicitReplyBridge]
+
+  - id: ING-028
+    title: Aggregation is enqueued per batch and backstopped by a periodic sweeper
+    type: business-logic
+    status: current
+    given: staged messages awaiting aggregation
+    when: they need to become interactions
+    then:
+      - an ingest batch that stages messages enqueues a per-contact aggregation job, deduplicated within the batch and against in-flight jobs
+      - a periodic sweeper independently enqueues aggregation for contacts with eligible staged rows, bounding how long a stranded row waits
+    provenance: [IngestService.IngestBatch, MessagingAggregateSweeperWorker, MessagingAggregateUniqueOpts]
+
+  # --- Per-pipeline ingest mechanics ---
+
+  - id: ING-029
+    title: Raw messages stage with first-push-wins cross-host dedup
+    type: data
+    status: current
+    given: a raw message event from a host
+    when: it is staged
+    then:
+      - the staging row is keyed on the message guid and deduplicated across hosts (first push wins)
+      - the same guid is the event-log dedup key, so the event key and the staging key never diverge
+    provenance: [handleRawMessage, verifyRawMessageInvariants, UpsertMessagesMessage]
+
+  - id: ING-030
+    title: Call outcome decides whether an interaction is recorded
+    type: business-logic
+    status: current
+    given: an ingested call
+    when: the interaction-creation decision is applied
+    then:
+      - an outbound call always records an outbound interaction (connected or attempted)
+      - an answered inbound call, or a missed inbound call that left a voicemail, records an inbound interaction
+      - a missed inbound call with no voicemail records no interaction but keeps its staging row for audit
+    provenance: [decideCallInteraction, handleCall]
+
+  - id: ING-031
+    title: Peer-resolution outcomes differ across the message and call pipelines
+    type: business-logic
+    status: current
+    given: an ingested message or call
+    when: its peer handle is resolved to a contact
+    then:
+      - a peer that cannot be normalized is rejected in both pipelines so the daemon holds its cursor and retries
+      - a normalizable but unmatched peer is rejected for calls (no discovery path) yet retained for messages (staged, with aggregation skipped)
+    provenance: [handleRawMessage, handleCall, NormalizationFailEmpty]
+    notes: Identity normalization and matching internals are IMP; the message unknown-peer discovery candidate is IMP-023.
+
+  - id: ING-032
+    title: A re-recorded meeting note dedups via content and resolution hashes
+    type: business-logic
+    status: current
+    given: a meeting note that already exists for its session
+    when: it is re-recorded
+    then:
+      - an unchanged content hash and resolution hash carry the existing linkage forward without rewriting interactions
+      - a changed hash re-links the session and diffs its interactions
+      - a tombstoned session re-recorded with identical content is revived
+    provenance: [handleMeetingNoteRecorded, input_hash, resolved_set_hash]
+    notes: Meeting-note linkage states are notes-meetings scope; conflict/orphan surfacing is IMP (IMP-024, IMP-025). ING owns the hash-keyed idempotency branch and the interaction writes.
+
+  - id: ING-033
+    title: Deleting a meeting note cascades soft-delete to its session interactions
+    type: data
+    status: current
+    given: a meeting-note deletion for a known session
+    when: the deletion is applied
+    then:
+      - every interaction attributed to that session is soft-deleted explicitly
+      - the meeting-note row is then soft-deleted
+      - an unknown session, an already-tombstoned session, or one owned by another host is a silent no-op
+    provenance: [handleMeetingNoteDeleted]
+    notes: A soft-delete does not fire ON DELETE CASCADE, so the interaction cascade is done explicitly.
+
+  - id: ING-034
+    title: Session interaction re-sync diffs through the sole-writer path
+    type: business-logic
+    status: current
+    given: a re-recorded meeting note whose resolved participant set changed
+    when: its session interactions are reconciled
+    then:
+      - interactions no longer desired are soft-deleted
+      - interactions still desired are refreshed only when their timestamp or description actually changed
+      - newly desired interactions are added
+      - every write routes through the shared record/extend path so cadence stays under the sole writer, and only session-attributed rows are touched
+    provenance: [handleMeetingNoteRecorded, ListSessionAttributedInteractions, ContactService.ExtendInteractionTx]
+
+  - id: ING-035
+    title: Sessions needing review are surfaced in the ingest response
+    type: api
+    status: current
+    given: a batch containing meeting-note recordings
+    when: a recording lands in a conflict or orphan state
+    then:
+      - the response carries a needs-attention entry naming the session and the reason
+      - the field is omitted for daemons that predate it
+    provenance: [IngestResponse.NeedsAttention, NeedsAttentionItem]
+    notes: What makes a session a conflict or an orphan is imports-matching scope (IMP-025).
+
+  - id: ING-036
+    title: Daemon-asserted payload facts are re-verified server-side
+    type: invariant
+    status: current
+    statement: for every daemon family the server re-checks the daemon's claims before trusting them — the payload host id must equal the authenticated host, the envelope source must be in the family's allow-list, and the source_id must match the payload's own dedup key (verbatim for message and call, or as an <entity>@<content-hash> composite whose entity prefix must match the payload and whose hash suffix must equal a server-recomputed content hash, for external-contact and meeting-note); normalized phone peers are likewise recomputed and must match — so a buggy or compromised daemon is rejected rather than allowed to corrupt state.
+    provenance: [verifyRawMessageInvariants, verifyCallInvariants, verifyExternalContactInvariants, verifyMeetingNoteInvariants, ComputeContentHash]
+    notes: External-contact match-state and revive lifecycle is IMP (IMP-007, IMP-008); this behavior covers only the ingest-side integrity re-checks.
+
+  - id: ING-037
+    title: Call direction forces the answered and voicemail fields during staging
+    type: business-logic
+    status: current
+    given: a call being staged
+    when: direction-specific fields are normalized
+    then:
+      - an outbound call forces answered to unset and voicemail to false, ignoring any daemon-supplied values
+      - an inbound call keeps the daemon-supplied answered value
+    provenance: [IngestService.handleCall direction normalization]
+    notes: Calls reach ingest exclusively from the Mac daemon's call log (mac-host anarlog); this pins the backend-side field normalization, distinct from the interaction decision (ING-030).
+
+  - id: ING-038
+    title: Phone calls deduplicate on the Apple call id across hosts
+    type: data
+    status: current
+    given: the same call pushed more than once, including from two hosts
+    when: it is upserted into the phone-call staging table
+    then:
+      - the upsert deduplicates on the globally-unique call id and converges to a single row
+      - a re-push is a no-op that returns the existing row
+    provenance: [phone_call.call_unique_id UNIQUE, UpsertPhoneCall ON CONFLICT DO UPDATE]
+    notes: The call-staging analog of the message-guid dedup (ING-029). A late-arriving field change (e.g. a voicemail flag flip) is deduplicated by the event log before reaching the upsert and is dropped — an accepted v1.5 limitation.

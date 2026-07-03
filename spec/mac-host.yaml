@@ -1,0 +1,453 @@
+domain: mac-host
+prefix: MAC
+maturity: reviewed
+behaviors:
+  # --- Pairing & token lifecycle ---
+
+  - id: MAC-001
+    title: Pairing tokens are short-lived single-use secrets stored only as a hash
+    type: business-logic
+    status: current
+    given: an operator mints a pairing token
+    when: the token is created
+    then:
+      - a high-entropy random token is generated and returned to the operator exactly once
+      - only a hash of the token is persisted; the plaintext is never stored at rest
+      - the token expires after a short fixed lifetime
+    provenance: [MacHostService.CreatePairingToken, hashPairingToken, PairingTokenTTL]
+
+  - id: MAC-002
+    title: Pairing atomically consumes the token and provisions the host
+    type: business-logic
+    status: current
+    given: a valid unconsumed unexpired pairing token
+    when: a host pairs with it
+    then:
+      - the token is validated under a row lock before the api key is minted, so the expensive key hashing cost is paid only for a valid token
+      - token consume, host creation, and api-key mint commit together in a single transaction
+      - if the singleton constraint rejects a second host the whole transaction rolls back and the token is left unconsumed
+    provenance: [MacHostService.PairWithToken, GetTokenByHashForUpdateTx, CreateHostTx, MarkConsumedTx]
+
+  - id: MAC-003
+    title: Pair endpoint contract
+    type: api
+    status: current
+    given: a request to the pairing endpoint
+    when: it is handled
+    then:
+      - a valid token pairs the host and returns the host id, plaintext api key, and current cursor epoch, with the api key shown only once
+      - an invalid, already-consumed, or expired token all collapse to a single opaque gone response (410) that does not reveal which condition failed
+      - a second pairing attempt while a host is already live is rejected as a conflict (409)
+      - a missing pairing token or hostname is a validation error (400)
+    provenance: [MacHostHandler.Pair, pairResponse]
+    notes: The opaque 410 is deliberate — distinct token-state codes would let a caller probe whether a guessed token ever existed. Rotation deliberately does the opposite (MAC-010).
+
+  - id: MAC-004
+    title: At most one live host exists at any time
+    type: invariant
+    status: current
+    statement: at most one non-revoked mac_host row exists at a time, enforced by a partial unique index over live rows; revoked host rows may coexist freely, and a pairing attempt while a host is already live is rejected rather than creating a second host.
+    provenance: [idx_mac_host_singleton, migrations/047_mac_host.up.sql, ErrHostAlreadyPaired]
+    notes: Multi-host is deferred (cross-host content-hash source_id collisions are unresolved).
+
+  - id: MAC-005
+    title: Pairing is rate-limited per source address ahead of any lookup
+    type: business-logic
+    status: current
+    given: repeated pairing attempts from one source address
+    when: the per-address limit is exceeded
+    then:
+      - further attempts are rejected as rate-limited before any database lookup
+      - the limiter keys on the raw connection address and ignores client-supplied forwarding headers, so a Tailnet peer cannot spoof its way around the limit
+      - the limiter is bounded so a flood of distinct addresses cannot grow memory unboundedly
+    provenance: [PairingIPRateLimiter, MacHostHandler.remoteIP, ipRateLimiter]
+
+  - id: MAC-006
+    title: Expired unconsumed pairing tokens are reaped
+    type: data
+    status: current
+    given: pairing tokens that expired without being consumed
+    when: the periodic janitor runs
+    then:
+      - expired unconsumed tokens are hard-deleted
+      - consumed tokens are retained so the consuming host can still be audited
+    provenance: [DeleteExpiredPairingTokens, pairing_token_janitor_worker.go, consumed_host_id FK]
+
+  # --- Daemon authentication ---
+
+  - id: MAC-007
+    title: Daemon authentication flow and error taxonomy
+    type: api
+    status: current
+    given: a request to a daemon-authenticated endpoint
+    when: authentication runs
+    then:
+      - a missing or malformed host-id header is rejected (401)
+      - presenting global-api-key auth alongside daemon auth is rejected as ambiguous (400)
+      - a missing or empty bearer token is rejected (401)
+      - an unknown or revoked host is rejected (401)
+      - a bearer token that fails the constant-time key comparison is rejected (401)
+      - a route id parameter that does not match the header host id is rejected as an authorization failure (403), distinct from an authentication failure
+    provenance: [MacHostAuthMiddleware, abortAuth]
+
+  - id: MAC-008
+    title: Per-host failed-auth limiting precedes the key comparison and refunds on success
+    type: business-logic
+    status: current
+    given: repeated failed authentication attempts for one host id
+    when: the per-host limiter is consulted
+    then:
+      - a token is reserved from the host's bucket before the expensive key comparison runs
+      - exhausting the budget returns a rate-limited response without performing the comparison
+      - a successful authentication refunds the token so a legitimate daemon is not penalized for earlier typos
+      - concurrent attempts for one host serialize on the bucket so only the burst budget reaches the comparison
+    provenance: [macHostAuthLimiter, macHostAuthReservation, reserve/Commit/Refund]
+
+  # --- API-key rotation ---
+
+  - id: MAC-009
+    title: API-key rotation is compare-and-swap guarded and identity-preserving
+    type: business-logic
+    status: current
+    given: a rotate request authenticated with the current key plus a pairing token
+    when: rotation runs
+    then:
+      - the host row is locked and its live key hash is compared against the hash the caller authenticated with; a mismatch aborts as stale-auth and leaves the token unconsumed
+      - a new key is minted and swapped in atomically with consuming the pairing token
+      - the host id, cursor epoch, hostname, permissions, and source health are all preserved
+      - the previous key stops authenticating immediately after commit
+    provenance: [MacHostService.RotateAPIKey, GetActiveHostByIDForUpdateTx, RotateAPIKeyTx]
+
+  - id: MAC-010
+    title: Rotate-key endpoint contract
+    type: api
+    status: current
+    given: a rotate-key request
+    when: it is handled
+    then:
+      - success returns the new plaintext key and rotation timestamp (200), with the key shown only once
+      - token-state failures return distinct client-error codes for invalid, already-used, and expired, because the caller has already proven control of the current key
+      - a key rotated out from under the caller returns stale-auth (401)
+      - a missing or revoked host returns not-found (404)
+    provenance: [MacHostHandler.RotateKey, rotateKeyResponse]
+    notes: The distinct token-state codes are the opposite choice from pairing (MAC-003) — leaking token state is safe here because the caller already holds the current key.
+
+  # --- Heartbeat & protocol ---
+
+  - id: MAC-011
+    title: Heartbeat records liveness and echoes restore-detection state
+    type: api
+    status: current
+    given: an authenticated daemon heartbeat
+    when: it is handled
+    then:
+      - the host's last-heartbeat time, daemon version, protocol version, permissions, and source health are recorded
+      - the response echoes the current cursor epoch so the daemon can detect a backend backup-restore
+      - the response reports the server's current and minimum protocol versions
+      - a host revoked between authentication and the write returns unknown-host (401)
+    provenance: [MacHostHandler.Heartbeat, UpdateMacHostHeartbeat, heartbeatResponse]
+
+  - id: MAC-012
+    title: Heartbeat enforces a minimum daemon protocol version
+    type: api
+    status: current
+    given: a heartbeat whose protocol version is below the server minimum
+    when: it is handled
+    then:
+      - the request is rejected with an upgrade-required response (412) before any database write
+      - the response carries the minimum acceptable protocol version
+    provenance: [MacHostHandler.Heartbeat protocol gate, mac.MinProtocolVersion]
+    notes: Newer additive versions are accepted (older daemons simply do not emit newer event kinds), so the floor moves only on breaking contract changes.
+
+  - id: MAC-013
+    title: Push sources are a fixed allowlist
+    type: invariant
+    status: current
+    statement: the cursor get/commit and known-ids endpoints accept only a fixed allowlist of push sources (messages, icloud_contacts, anarlog_humans, anarlog_sessions, phone_calls), validated at the handler before any database access; the cursor get/commit service methods additionally re-check the allowlist as defence-in-depth for a non-HTTP caller, while known-ids relies on the handler check (an unguarded unknown source there merely returns an empty set). An unknown source is a validation error, which prevents a daemon from creating a push-strategy sync row keyed on a poll-strategy source name.
+    provenance: [mac.AllowedPushSources, IsAllowedPushSource, MacHostService.CommitCursor/GetCursor]
+
+  # --- Cursor protocol ---
+
+  - id: MAC-014
+    title: Cursor commit is an epoch-and-base compare-and-swap
+    type: business-logic
+    status: current
+    given: a cursor commit carrying a claimed epoch and a base cursor
+    when: the commit runs
+    then:
+      - the host is locked and its epoch read in the same transaction
+      - a claimed epoch not matching the server epoch is rejected as an epoch-mismatch conflict
+      - a base cursor not matching the stored cursor is rejected as a base-mismatch conflict
+      - both conflicts return the current cursor and epoch so the daemon can reconcile
+      - a concurrent writer that loses the race re-reads and surfaces the same conflict rather than double-writing
+    provenance: [SyncRepository.CommitMacHostCursor, ErrCursorEpochMismatch, ErrCursorBaseMismatch, MacHostHandler.CommitCursor]
+
+  - id: MAC-015
+    title: Reading a cursor returns committed state or an empty baseline
+    type: api
+    status: current
+    given: a daemon reading its cursor for a source
+    when: the read is handled
+    then:
+      - a committed cursor is returned along with the daemon-owned backfill-complete flag
+      - before any commit, an empty cursor and the host's current epoch are returned
+      - the backfill-complete flag is opaque to the backend and defaults to false when absent or malformed
+    provenance: [MacHostHandler.GetCursor, extractBackfillComplete, cursorResponse]
+
+  # --- Admin & revoke ---
+
+  - id: MAC-016
+    title: Revoking a host cascades its cursor rows atomically
+    type: data
+    status: current
+    given: a live host with push-strategy cursor rows
+    when: the host is revoked
+    then:
+      - the host row is marked revoked and its push cursor rows are hard-deleted in one transaction
+      - a missing or already-revoked host returns not-found
+    provenance: [MacHostService.RevokeHost, RevokeHostTx, DeleteMacHostSyncStatesTx]
+    notes: The cascade is explicit application logic — revoke does not fire an FK cascade — and is required so a stale cursor row cannot block a future re-pair.
+
+  - id: MAC-017
+    title: Revoked hosts are invisible to all authentication and ingest reads
+    type: invariant
+    status: current
+    statement: every authentication and ingest-liveness read filters out revoked hosts, so a revoked host cannot authenticate, heartbeat, rotate, commit a cursor, or ingest; only the admin detail view returns revoked host rows.
+    provenance: [GetActiveMacHostByID, GetActiveMacHostByIDForUpdate, RevokeMacHost/UpdateMacHostHeartbeat/RotateMacHostAPIKey WHERE clauses]
+
+  - id: MAC-018
+    title: Admin host surfaces list, inspect, count, mint, and revoke
+    type: api
+    status: current
+    given: admin requests (global api key) against the hosts collection
+    when: they are handled
+    then:
+      - the list returns the live hosts
+      - the detail view returns a single host including revoked ones, and not-found (404) for an unknown id
+      - per-source live counts distinguish a missing host (404) from a host with no rows (an empty count map)
+      - an admin can mint a fresh pairing token and revoke a host
+    provenance: [MacHostHandler.ListHosts/GetHostAdmin/GetSourceCounts/CreatePairingToken/DeleteHost, RegisterMacHostAdminRoutes]
+
+  # --- Daemon read endpoints ---
+
+  - id: MAC-019
+    title: Known-IDs drives daemon tombstone reconciliation
+    type: business-logic
+    status: current
+    given: a daemon requests its known ids for a source
+    when: the set is computed
+    then:
+      - the live source ids owned by the host (external-contact rows, or meeting-note session ids for the anarlog-sessions source) are returned, each with its last observed content hash
+      - the set is scoped to the calling host and source, excludes tombstoned rows, and is sorted deterministically by source id
+      - the response is always a possibly-empty array, never null
+    provenance: [MacHostService.KnownIDsForSource, ListKnownIDsByHostAndSource, ListKnownMeetingNoteSessionIDsByHost]
+    notes: The daemon set-diffs this against a fresh upstream scan to emit deletes; the last content hash supplies the prior-hash component of the delete source id. Matching and dedup of these external-contact rows is imports-matching scope (see IMP-006).
+
+  - id: MAC-020
+    title: Known-identifiers exposes the user's canonical contact identifiers
+    type: business-logic
+    status: current
+    given: a daemon polls for the user's known identifiers
+    when: the set is computed
+    then:
+      - the distinct canonical phone and email values across all live contacts are returned under separate keys
+      - both arrays are sorted and deduplicated, and are empty on a fresh CRM
+    provenance: [MacHostService.KnownIdentifiers, ListCanonicalIdentifiersByType]
+    notes: The daemon filters incoming message senders against this set. The canonical-identifier normalization itself is contacts scope (see CON-012).
+
+  # --- Daemon external-contact host ownership ---
+  # The generic ingest auth dispatch, in-transaction host-liveness recheck, event-kind/auth-path
+  # partition, and server-side payload re-verification (host-id binding, source allow-list, content-hash
+  # parity) are the ingest domain's (ING-001, ING-006, ING-007, ING-012, ING-036); mac-host keeps only
+  # the external-contact host-ownership facets below.
+
+  - id: MAC-025
+    title: External-contact host ownership is claimed once and preserved
+    type: data
+    status: current
+    given: a daemon upsert of an external contact
+    when: ownership is written
+    then:
+      - the host id is claimed on the first non-null emit and preserved thereafter, never re-owned by a later emit
+      - the last observed content hash is written on both insert and update
+    provenance: [external_contact.sql upsert COALESCE(host_id, EXCLUDED.host_id), repository/external_contact.go last_content_hash]
+    notes: Forward-only revive and soft-delete are separate defensive paths; the upsert's linkage-preservation facet (update refreshes content but never touches soft-delete, crm-contact link, or match status) and external-contact dedup/match lifecycle are imports-matching scope (see IMP-006, IMP-008).
+
+  - id: MAC-026
+    title: External-contact deletes validate the daemon content hash against stored state
+    type: invariant
+    status: current
+    statement: an external-contact delete carries a source-id hash suffix that the backend validates against the row's stored last content hash before tombstoning, rejecting a stale delete, with defined bypasses for the unknown-hash sentinel and already-tombstoned rows; the daemon and backend compute this hash identically (strip the top-level host id, canonicalize, then hash).
+    provenance: [service/ingest.go EXTERNAL_CONTACT_DELETE_HASH_MISMATCH, external_contact_hash.go, CRMMacCore/ContentHasher.swift]
+    notes: The upsert-side content-hash parity — rejecting an upsert whose source-id hash suffix disagrees with the server recompute — is the ingest server-side re-verification invariant ING-036; this row pins the delete-side validation, which ING-036 does not cover.
+
+  - id: MAC-027
+    title: External-contact deletes are host-scoped and idempotent
+    type: business-logic
+    status: current
+    given: a daemon delete for an external contact
+    when: the delete is processed
+    then:
+      - a live row owned by a different host is left untouched as a silent no-op rather than a rejection, so a delete stranded after a re-pair does not stall the cursor
+      - a delete of an unknown or already-tombstoned row is an idempotent no-op that preserves the audit event
+    provenance: [service/ingest.go external_contact.deleted host-scope guard, unknown/already-tombstoned no-op paths]
+
+  # --- Address-book reconcile ---
+  # The call pipeline — cross-field call verification, the call-outcome interaction decision, call
+  # peer resolution, direction-field normalization, and phone-call staging dedup — is the ingest
+  # domain's (ING-030, ING-031, ING-036, ING-037, ING-038). Calls originate solely from the daemon's
+  # anarlog call log, but the backend staging/decision logic lives in the ingest service.
+
+  - id: MAC-033
+    title: Address-book reconcile triggers method re-propagation for linked contacts
+    type: business-logic
+    status: current
+    given: an address-book external contact already linked to a CRM contact that later gains a method upstream
+    when: reconcile runs for that row
+    then:
+      - the row's linked contact is re-evaluated for methods gained upstream so a source that enriched only once (or never) no longer leaks
+    provenance: [AddressBookReconcileService.ReconcileLinkedExternalContactMethods]
+    notes: The propagate-for-auto-matched vs record-a-pending-suggestion-for-curated-import decision (and any other-status no-op) is the landed IMP-017 rule, applied here; the rematch fan-out is IMP-019. This row pins only the address-book reconcile trigger that invokes it.
+
+  - id: MAC-034
+    title: Reconcile skips dead targets and survives per-row failures
+    type: business-logic
+    status: current
+    given: an address-book row still pointing at a contact
+    when: reconcile evaluates the target
+    then:
+      - a soft-deleted contact (whose external pointer was not cleared) is skipped rather than erroring or recording suggestions against a dead contact
+      - the one-time catchup continues past a failing row and reports how many rows failed
+    provenance: [ReconcileLinkedExternalContactMethods liveness guard, ReconcileAllAddressBookMethods]
+
+  # --- Staleness watchdog ---
+
+  - id: MAC-035
+    title: A silent host raises a heartbeat-staleness breach
+    type: business-logic
+    status: current
+    given: an active host whose last heartbeat is older than the heartbeat threshold
+    when: the staleness watchdog runs
+    then:
+      - a heartbeat breach is opened for the host
+      - the staleness boundary is exclusive, so an age exactly equal to the threshold is not stale
+      - the host's creation time is the reference when no heartbeat has yet been recorded
+    provenance: [StalenessService.evaluateHeartbeatBreaches, isStale]
+
+  - id: MAC-036
+    title: A stale enabled source raises a push-staleness breach
+    type: business-logic
+    status: current
+    given: a host reporting per-source health with enabled sources
+    when: the watchdog evaluates push freshness
+    then:
+      - an enabled source whose last push is older than the push threshold opens a push breach for that source
+      - malformed source health is skipped with a warning, and heartbeat evaluation still covers the host's liveness
+      - a source with no recorded last-push timestamp is skipped
+    provenance: [StalenessService.evaluatePushBreaches, parseSourceHealth]
+
+  - id: MAC-037
+    title: Breaches are reconciled to the current candidate set
+    type: business-logic
+    status: current
+    given: the set of current breach candidates
+    when: the watchdog reconciles
+    then:
+      - each candidate breach is opened or refreshed idempotently, with at most one open breach per source, account, and breach type
+      - a breach whose condition has cleared (recovery, disable, revoke, or feature-flag-off) is resolved
+      - long-resolved breaches are pruned after a retention window
+    provenance: [StalenessService.RunChecks, idx_sync_staleness_breach_open]
+    notes: Sync-stale and sync-error breaches over non-push sources are ingest/sync-domain adjacency.
+
+  # --- Daemon-side (intent level) ---
+
+  - id: MAC-038
+    title: The daemon persists its api key device-locally and config-independently
+    type: invariant
+    status: current
+    statement: the daemon stores its api key on-device only and never iCloud-synced, keyed by a constant account name rather than the host id so the key survives a corrupted config, and the file-store fallback writes atomically with restrictive permissions.
+    provenance: [ProductionKeychainStore.swift, FileAPIKeyStore.swift]
+    notes: File-store fallback details are asserted from the surface inventory, not read line-by-line.
+
+  - id: MAC-039
+    title: Daemon exit codes surface operator-actionable states
+    type: business-logic
+    status: current
+    given: the launchd-managed daemon terminates
+    when: it exits
+    then:
+      - distinct exit codes distinguish a clean shutdown, an auth-revoked heartbeat, an upgrade-required heartbeat, a missing or corrupt config, a missing or access-denied key, a missing or corrupt state file, and an already-running instance
+    provenance: [DaemonCommand.swift exit-code map, DaemonStartupError]
+
+  - id: MAC-040
+    title: Source plugins run on independent schedules
+    type: business-logic
+    status: current
+    given: the running daemon
+    when: its source plugins are scheduled
+    then:
+      - message, call, contact, and anarlog sources each tick on their own interval, and a filesystem change under the sessions directory triggers a sessions tick promptly
+      - the orphan-notification reconcile runs once after the first successful heartbeat and then on a steady-state loop
+    provenance: [DaemonCommand.swift plugin wiring, NotificationReconcileLoopPlugin, FirstSuccessLatch.swift]
+
+  - id: MAC-041
+    title: Sessions needing attention raise self-healing macOS notifications
+    type: ux
+    status: current
+    given: the daemon learns a meeting session needs attention as an orphan or a conflict
+    when: it surfaces a notification
+    then:
+      - an orphan prompts the operator to tag the session's participants, and a conflict prompts resolving it in the imports UI
+      - tapping an orphan opens the note-taking app while tapping a conflict opens the imports page scoped to that session
+      - notifications for sessions that no longer need attention are removed on the next reconcile
+      - an unrecognized linkage state is dropped without crashing
+    provenance: [OrphanNotificationCenter.swift, clickTargetURL, LinkageStateMapping.swift]
+    notes: The needs-attention review queue and linkage-state semantics are imports-matching scope (see IMP-025); this pins the daemon notification surface.
+
+  - id: MAC-042
+    title: Notification delivery recovers from denial and collapses duplicates
+    type: business-logic
+    status: current
+    given: a notification whose delivery is denied or fails
+    when: the daemon next reconciles
+    then:
+      - a denied or failed entry is retried rather than permanently lost
+      - within one batch, duplicate notifications for the same session and reason collapse to one
+    provenance: [OrphanNotificationCenter.swift delivery de-dup + retry paths]
+
+  - id: MAC-043
+    title: Status and doctor are read-only operator diagnostics
+    type: ux
+    status: current
+    given: an operator runs the daemon's status or doctor command
+    when: it executes
+    then:
+      - status reports install, registration, and pairing state plus per-source watermarks without making any network call
+      - doctor runs health checks (key presence, agent registration, config and state integrity, Pi reachability, and permissions) and exits non-zero by the count of failing checks
+    provenance: [StatusCommand.swift, DoctorCommand.swift, Doctor.swift]
+    notes: CLI specifics asserted from the surface inventory, not read line-by-line.
+
+  - id: MAC-044
+    title: Operator ops commands refuse to run against a live daemon
+    type: ux
+    status: current
+    given: an operator runs an ops command such as configure, backfill, scan, or cursor-reset
+    when: the daemon is running
+    then:
+      - the command refuses and instructs the operator to stop the daemon first
+      - backfill and scan commit Pi-side through the same cursor compare-and-swap the daemon uses, and local state mirrors the result on the next tick
+    provenance: [ConfigureCommand.swift pidfile guard, MessagesCommand.swift, CallHistoryOps.swift]
+    notes: CLI specifics asserted from the surface inventory, not read line-by-line.
+
+  - id: MAC-045
+    title: Install pairs, registers, and provisions the daemon
+    type: ux
+    status: current
+    given: an operator installs the daemon with pairing
+    when: install runs
+    then:
+      - it pairs with the Pi, registers the launchd agent, and provisions the contacts permission and container allowlist
+      - a plaintext non-loopback Pi URL warns about bearer-key leakage but does not block
+      - re-pair rotates the key in place, and a failure to persist the rotated key prints the plaintext key so the operator can recover
+    provenance: [InstallCommand.swift]
+    notes: CLI specifics asserted from the surface inventory, not read line-by-line.

@@ -1,0 +1,443 @@
+domain: telegram
+prefix: TGM
+maturity: reviewed
+behaviors:
+  # --- Enablement & config gating ---
+
+  - id: TGM-001
+    title: Telegram integration is gated on the feature flag and credentials
+    type: invariant
+    status: current
+    statement: Telegram runs only when the sync feature flag is enabled and non-zero MTProto API credentials are configured; when disabled, no Telegram HTTP routes are registered, no MTProto connection is attempted, the post-import hook is not wired, and the Telegram aggregation reenqueuer is a no-op.
+    provenance: [config.Features.EnableTelegramSync, cmd/crm-api/main.go gate, RegisterTelegramRoutes, NoopAggregatorReenqueuer]
+    notes: The settings surface that exposes enablement/connection to the user is settings-domain scope; this pins only the backend gating.
+
+  - id: TGM-002
+    title: Enabling Telegram sync requires credentials at startup
+    type: business-logic
+    status: current
+    given: the Telegram sync feature flag is enabled
+    when: configuration is validated at startup
+    then:
+      - a non-zero API id and a non-empty API hash are required, and missing either fails startup with a configuration error
+      - a token-encryption key is required to construct the session encryptor
+    provenance: [config.Validate, crypto.NewTokenEncryptor]
+
+  - id: TGM-034
+    title: MTProto session data is encrypted at rest
+    type: data
+    status: current
+    given: a Telegram MTProto session persisted during or after key exchange
+    when: the session bytes are stored and later loaded
+    then:
+      - session bytes are encrypted through the token encryptor before being written to the session row
+      - loading the session decrypts the stored ciphertext with its nonce before returning it to the client
+    provenance: [DatabaseSessionStorage.StoreSession, DatabaseSessionStorage.LoadSession, telegram_session.session_data_encrypted]
+
+  - id: TGM-037
+    title: MTProto update state is persisted so reconnects resume without gaps
+    type: data
+    status: current
+    given: an active MTProto connection whose update manager tracks gap-recovery state
+    when: the update manager persists and reloads MTProto state
+    then:
+      - global pts/qts/seq/date are persisted per user and reloaded on reconnect so recovery resumes from the last acknowledged point
+      - per-channel pts and access hash are persisted per channel, and an access-hash write preserves the existing pts
+      - a missing state row is reported as absent (fresh start), not an error
+    provenance: [PostgresStateStorage, PostgresChannelHasher, telegram_update_state, telegram_channel_state, manager.go updates.Config]
+
+  # --- Auth flow ---
+
+  - id: TGM-003
+    title: An in-flight Telegram auth flow expires after a fixed TTL and tears down
+    type: business-logic
+    status: current
+    given: an in-flight auth session (at most one exists at a time)
+    when: its fixed 5-minute TTL expires
+    then:
+      - the flow is torn down — its client context is cancelled and any partial session row written during key exchange is deleted
+      - the in-memory session is cleared, so a later verification against the expired token is rejected as an invalid token
+      - only a verification already in flight when the timer fires observes the token as expired
+    provenance: [AuthSessionManager, authTTL, cleanup, ErrAuthTokenExpired]
+
+  - id: TGM-004
+    title: Starting auth sends a login code
+    type: business-logic
+    status: current
+    given: no connected session and no auth flow in progress
+    when: auth is started for a phone number
+    then:
+      - an already-connected account is rejected, and a second concurrent start is rejected
+      - a login code is requested and the flow advances to awaiting-code
+      - the delivery channel (app, sms, or call; any other sent-code type maps to unknown) and a token with a 5-minute expiry are returned
+    provenance: [AuthSessionManager.StartAuth, mapSentCodeType, ErrAlreadyConnected, ErrAuthInProgress]
+
+  - id: TGM-005
+    title: Verification progresses code then optional password to connected
+    type: business-logic
+    status: current
+    given: an auth flow awaiting a verification step
+    when: a verification value is submitted
+    then:
+      - the submission must carry the flow's token and match the currently-expected step, else it is rejected
+      - a valid code either connects the account or, for a two-factor account, advances to a password step
+      - a valid password connects the account
+      - on connect the session is persisted with the resolved user id and username and marked connected
+    provenance: [AuthSessionManager.VerifyCode, AuthSessionManager.VerifyPassword, UpdateUserInfo, UpdateAuthState]
+
+  - id: TGM-006
+    title: Auth rejections are retryable while infrastructure errors abort
+    type: business-logic
+    status: current
+    given: a verification submission that Telegram rejects
+    when: the error is classified
+    then:
+      - known user rejections (invalid or expired code, invalid password) are retryable within the TTL without ending the flow
+      - infrastructure or transport errors abort the flow
+    provenance: [classifyAuthError, ErrAuthInternal]
+
+  - id: TGM-007
+    title: Telegram auth endpoints map outcomes to status codes
+    type: api
+    status: current
+    given: requests to the Telegram auth endpoints
+    when: they are handled
+    then:
+      - an empty or malformed phone number, or a missing token, code, or password, is a validation error (400)
+      - an auth-already-in-progress or already-connected start is a conflict (409)
+      - an invalid token is a client error (400) and an expired token is gone (410)
+      - a wrong code or password is unauthorized (401) and an internal auth error is a server error (500)
+      - cancel always succeeds (200) and a successful step returns 200 with the flow status
+      - disconnect succeeds (200) unless the session-row delete fails, which is a server error (500)
+      - status always returns 200 with the current connection state
+    provenance: [TelegramHandler.StartAuth, TelegramHandler.VerifyCode, TelegramHandler.VerifyPassword, TelegramHandler.CancelAuth, TelegramHandler.Disconnect, TelegramHandler.GetStatus]
+
+  - id: TGM-008
+    title: Disconnect tears down in order and requires the session row to clear
+    type: business-logic
+    status: current
+    given: a connected or authenticating Telegram integration
+    when: the user disconnects
+    then:
+      - any in-progress auth is cancelled and the live client is stopped
+      - deleting the persisted session row is required — if it fails the teardown is not committed and status keeps reflecting the database so the user can retry
+      - on success the in-memory connection state is cleared and the sync-state row is best-effort deleted
+    provenance: [TelegramManager.Disconnect]
+
+  # --- Connection lifecycle ---
+
+  - id: TGM-009
+    title: The connection starts only when authenticated
+    type: business-logic
+    status: current
+    given: a stored Telegram session
+    when: the manager starts
+    then:
+      - startup connects only when a session exists and is marked connected; otherwise it stays idle
+      - a running connection is single-flighted so a second start does not spawn a duplicate
+    provenance: [TelegramManager.Start, startConnection]
+
+  - id: TGM-010
+    title: Reported status resolves from the live connection then the database
+    type: business-logic
+    status: current
+    given: a request for Telegram status
+    when: the status is resolved
+    then:
+      - a running connection reports its in-memory state enriched with last-sync time and any backfill progress
+      - an explicit disconnect reports not-connected without falling back to stale database state
+      - otherwise the stored session's connected flag, username, and phone are reported
+    provenance: [TelegramManager.Status, enrichStatusFromSyncState]
+
+  - id: TGM-033
+    title: A dropped connection reconnects with bounded backoff
+    type: business-logic
+    status: current
+    given: a running Telegram connection
+    when: the live connection drops
+    then:
+      - a dropped connection reconnects with exponential backoff bounded between five seconds and five minutes, reset on a clean connect
+      - a cancelled context exits cleanly without reconnecting
+    provenance: [runWithReconnect, reconnectBaseDelay, reconnectMaxDelay]
+
+  # --- Chat tracking ---
+
+  - id: TGM-011
+    title: Effective tracking derives from status and chat size
+    type: business-logic
+    status: current
+    given: a group chat with a tracking status and a known-or-unknown member count
+    when: effective tracking is computed
+    then:
+      - tracked is always tracked and ignored is never tracked
+      - auto is tracked when the member count is unknown or at or below the configured group maximum
+      - private chats are always tracked and are not exposed for user management
+    provenance: [EffectiveTracked, TelegramManager.ListChats]
+
+  - id: TGM-012
+    title: A first-seen group chat is auto-configured before the tracking gate
+    type: business-logic
+    status: current
+    given: a message from a group chat with no config row yet
+    when: it is ingested
+    then:
+      - a config row is created with status auto and the observed member count
+      - the message is stored only if the chat is effectively tracked
+    provenance: [MessageHandler.shouldTrackChat]
+
+  - id: TGM-013
+    title: Switching a chat to tracked backfills its history retroactively
+    type: business-logic
+    status: current
+    given: a chat whose status changes to tracked from a non-tracked status
+    when: the change is applied
+    then:
+      - the chat's backfill state is reset and a retroactive backfill of its history is triggered
+    provenance: [TelegramHandler.UpdateChatStatus, TelegramManager.TriggerChatBackfill]
+
+  - id: TGM-035
+    title: Participant changes refresh a group chat's member count
+    type: business-logic
+    status: current
+    given: an existing group chat config
+    when: a chat-participant update is handled
+    then:
+      - the full chat is fetched and the config row's member count is updated from the current participant list
+      - a fetch failure is a non-fatal no-op that is logged; a non-regular-chat participant shape is a silent non-fatal no-op
+    provenance: [MessageHandler.HandleChatParticipant, UpdateTelegramChatConfigMemberCount]
+    notes: Member count feeds EffectiveTracked (TGM-011), so refreshing it can flip an auto chat's effective-tracked state.
+
+  - id: TGM-014
+    title: The chats endpoints list groups and validate status updates
+    type: api
+    status: current
+    given: requests to the Telegram chats endpoints
+    when: they are handled
+    then:
+      - the list returns only group chats, each with its effective-tracked flag
+      - a status update accepts only auto, ignored, or tracked, else a validation error (400)
+      - a non-numeric chat id is a validation error (400) and an unknown chat on update is not-found (404)
+    provenance: [TelegramHandler.ListChats, TelegramHandler.UpdateChatStatus]
+
+  # --- Message ingest & parsing ---
+
+  - id: TGM-015
+    title: Only person-to-person messages are ingested
+    type: business-logic
+    status: current
+    given: an incoming Telegram update
+    when: it is parsed
+    then:
+      - self-chat (Saved Messages), bot conversations, and channel or supergroup peers are filtered out
+      - private and regular-group messages are stored with direction, media class (text, photo, voice, video, sticker, document, or other), reply target, and edit time
+      - a self-authored group message is stored without peer info
+    provenance: [ParseMessage, classifyMedia]
+
+  - id: TGM-016
+    title: Post-store matching and aggregation are best-effort
+    type: business-logic
+    status: current
+    given: a stored live message
+    when: post-store processing runs
+    then:
+      - only the message upsert itself can fail ingest
+      - peer matching, and either aggregation for a matched peer or a discovery-candidate update for an unmatched peer, run best-effort with failures logged, not fatal
+    provenance: [MessageHandler.HandleNewMessage]
+
+  - id: TGM-017
+    title: Sparse peer entities are backfilled without overriding authoritative data
+    type: business-logic
+    status: current
+    given: an ingested message
+    when: its peer entity fields are resolved
+    then:
+      - when the update carried no authoritative peer entity, missing peer fields are filled from the best-known cached entity
+      - when the update carried entity data it is trusted verbatim, including empty fields that signal a user-removed value
+    provenance: [MessageHandler.enrichSparseEntity, ParseMessage PeerEntityResolved]
+
+  - id: TGM-018
+    title: Edits re-store the message text
+    type: data
+    status: current
+    given: an edit update for a tracked chat
+    when: it is handled
+    then:
+      - an edit re-upserts the message with its new text and edit time
+    provenance: [MessageHandler.HandleEditMessage, UpsertTelegramMessage]
+
+  - id: TGM-036
+    title: Deletes soft-delete by message id and do not revive
+    type: data
+    status: current
+    given: a delete update
+    when: it is handled
+    then:
+      - a delete soft-deletes messages by Telegram message id, since the delete update carries no chat scope
+      - re-ingesting a soft-deleted message does not revive it, since the upsert never clears deleted_at
+    provenance: [MessageHandler.HandleDeleteMessages, SoftDeleteTelegramMessages, UpsertTelegramMessage]
+
+  # --- telegram_message data semantics ---
+
+  - id: TGM-019
+    title: Re-ingest deduplicates and preserves known peer data
+    type: data
+    status: current
+    given: a message re-ingested for a chat and message id already stored
+    when: it is upserted
+    then:
+      - dedup is on the chat id and message id pair
+      - message text is overwritten while edit time and populated peer fields are preserved rather than blanked
+      - the resolved-entity flag is monotonic — a true resolution is never downgraded by a later sparse re-ingest
+    provenance: [UpsertTelegramMessage]
+
+  - id: TGM-020
+    title: Soft-deleted Telegram messages are invisible to production reads
+    type: invariant
+    status: current
+    statement: every production read of telegram_message excludes soft-deleted rows; only explicitly test-only queries bypass the deleted-at filter.
+    provenance: [telegram_message.sql deleted_at filters, idx_telegram_message_not_deleted]
+
+  - id: TGM-021
+    title: Automated matching never re-points an already-matched message
+    type: data
+    status: current
+    given: stored messages for a peer
+    when: the peer is matched to a contact by the automated path
+    then:
+      - the matched contact is set only on messages whose match is currently empty
+      - an existing match is never overwritten by automated matching
+    provenance: [UpdateTelegramMessageContact]
+    notes: Manual re-linking via the import queue is imports-domain scope (IMP-013).
+
+  - id: TGM-022
+    title: Telegram tables enforce closed vocabularies and identity keys
+    type: invariant
+    status: current
+    statement: chat type, message type, chat status, and session auth-state are each constrained to closed sets; the session is a singleton row; a chat config is unique per Telegram chat id; and a message is unique per chat-and-message-id pair.
+    provenance: [migration 032_telegram.up.sql CHECK and UNIQUE constraints]
+
+  - id: TGM-023
+    title: Re-discovering a chat preserves the user's tracking choice
+    type: data
+    status: current
+    given: an existing chat config
+    when: discovery re-upserts it
+    then:
+      - the title and member count are preserved when the new record omits them
+      - a user-set status (tracked or ignored) is never overwritten by discovery
+    provenance: [UpsertTelegramChatConfig status preserve]
+
+  # --- Aggregation binding (telegram-specific) ---
+
+  - id: TGM-024
+    title: Telegram interactions carry a stable source reference and labels
+    type: data
+    status: current
+    given: Telegram messages aggregated into an interaction
+    when: the interaction is written
+    then:
+      - the source is telegram and the source reference is the chat id joined with the first message id, forming the dedup key
+      - the description labels an outbound session outreach, an inbound session response, and a mixed session exchange, with the message count
+    provenance: [telegramAdapter.SourceRef, telegramAdapter.Description, InteractionSourceTelegram]
+    notes: The shared burst/session/claim/event machinery that produces the interaction is ingest-domain scope; this pins only the telegram-specific binding.
+
+  - id: TGM-025
+    title: Live messages aggregate incrementally while batches create only
+    type: business-logic
+    status: current
+    given: a trigger to aggregate a contact's Telegram messages
+    when: aggregation runs
+    then:
+      - a live single-message match aggregates incrementally for that contact and chat, coalescing within the burst window and bridging replies within the reply-bridge window
+      - post-import, post-backfill, and rematch use the batch create-only path with no extend or bridge
+    provenance: [AggregationEngine.AggregateForContact, AggregationEngine.AggregateForContactBatch]
+    notes: Window sizes and the shared aggregation semantics are ingest-domain scope.
+
+  # --- Identity linkage ---
+
+  - id: TGM-026
+    title: Peer matching tries username then phone and syncs on match
+    type: business-logic
+    status: current
+    given: a peer carrying a username and/or phone
+    when: it is matched to a contact
+    then:
+      - the Telegram username identity is tried first, then the phone
+      - a phone match also links the Telegram username identity so future matches resolve by handle
+      - on any match the peer's messages are re-pointed, an existing discovery candidate is marked matched, and the Telegram handle is synced as a contact method
+    provenance: [PeerMatcher.MatchPeer, PeerMatcher.ensureMethodsOnMatch]
+    notes: Telegram is a valid contact-method type with handle normalization (CON-011, CON-012); the identity-service match/create mechanics are imports-domain scope. Whether the method-sync path itself publishes a rematch event is tracked as proposed in IMP-034.
+
+  - id: TGM-027
+    title: A Telegram peer over the discovery minimum is normalized into a discovery candidate
+    type: business-logic
+    status: current
+    given: messages from a peer matched to no contact
+    when: the peer's message count reaches the configured discovery minimum
+    then:
+      - a discovery candidate is upserted for the peer, carrying message-count and handle metadata
+      - blank peer fields are normalized to absent so stored names and handles are preserved
+    provenance: [PeerMatcher.UpdateDiscoveryCandidatesForPeer, PeerMatcher.UpdateDiscoveryCandidates, nilIfEmpty]
+    notes: The queue-side upsert and dedup contract for the discovery candidate is imports-domain scope (IMP-023).
+
+  - id: TGM-028
+    title: Linking a peer to a contact backfills its message history
+    type: business-logic
+    status: current
+    given: a Telegram peer linked to a contact through import, link, or rematch
+    when: the link is recorded
+    then:
+      - the Telegram identity is linked to the contact
+      - all of the peer's messages are re-pointed to the contact
+      - the contact's Telegram messages are aggregated into interactions
+    provenance: [PeerMatcher.OnPeerLinked, TelegramManager.OnPeerLinked]
+
+  - id: TGM-029
+    title: Rematch links stranded Telegram peers by handle or phone
+    type: business-logic
+    status: current
+    given: new Telegram-username or phone methods on a contact
+    when: a rematch job runs for that contact
+    then:
+      - stranded unmatched peers whose username matches case-insensitively, or whose phone matches by digits, are linked to the contact
+      - the newly-linked peers' messages are aggregated
+    provenance: [UsernameRematchHandler, PhoneRematchHandler, rematchPeers]
+    notes: The rematch dispatcher and fan-out across sources are imports-domain scope (IMP-020).
+
+  - id: TGM-030
+    title: Matching an ignored peer must not resurrect it
+    type: business-logic
+    status: proposed
+    given: a Telegram discovery candidate the user has ignored
+    when: a later message matches that peer's identity to a contact
+    then:
+      - the ignore is respected and the candidate is not flipped back into the queue
+    provenance: [PeerMatcher.markExternalContactMatched, UpdateExternalContactMatch]
+    notes: 'Proposed: today the mark-matched step skips only already-matched or imported rows, so an ignored candidate is overwritten to matched — violating the sticky-ignore lifecycle (IMP-007).'
+
+  # --- Backfill ---
+
+  - id: TGM-031
+    title: Backfill discovers dialogs and fetches history to a horizon
+    type: business-logic
+    status: current
+    given: a fresh or reconnecting authenticated connection needing history
+    when: backfill runs
+    then:
+      - dialogs are discovered as private chats and regular groups, skipping self, bots, and channels
+      - only effectively-tracked chats are backfilled; the rest are marked complete without fetching
+      - history is fetched back to the configured backfill-since date
+      - a cursor is persisted periodically so an interrupted backfill resumes, and flood-wait limits are respected
+    provenance: [Backfiller.Run, Backfiller.discoverDialogs, Backfiller.backfillChatWithPeer]
+
+  - id: TGM-032
+    title: Backfill completion reconciles matches, interactions, and candidates
+    type: business-logic
+    status: current
+    given: a completed backfill pass
+    when: the batch reconcile phase runs
+    then:
+      - all unmatched peers are re-run through identity matching
+      - all unprocessed messages are aggregated into interactions
+      - discovery candidates are refreshed for peers over the threshold
+    provenance: [TelegramManager.maybeStartBackfill, PeerMatcher.MatchAllUnmatched, AggregationEngine.AggregateAll, PeerMatcher.UpdateDiscoveryCandidates]

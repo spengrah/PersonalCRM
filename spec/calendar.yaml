@@ -1,0 +1,370 @@
+domain: calendar
+prefix: CAL
+maturity: reviewed
+behaviors:
+  # --- Sync provider config & entry ---
+
+  - id: CAL-001
+    title: Calendar syncs as an account-scoped fetch-all provider
+    type: business-logic
+    status: current
+    given: the Google Calendar sync provider
+    when: its configuration is read by the scheduler
+    then:
+      - it identifies as source gcal, display name Google Calendar
+      - it uses a fetch-all strategy (scheduler-ticked, not push) with a default 15-minute interval
+      - it supports multiple accounts and attendee discovery, and requires an account to run
+    provenance: [CalendarSyncProvider.Config, sync.SourceConfig]
+    notes: Interval enforcement and scheduler tick wiring are generic sync-state scope — cross-reference the ingest domain.
+
+  - id: CAL-002
+    title: A calendar sync is scoped to one Google account
+    type: business-logic
+    status: current
+    given: a sync invocation for the calendar provider
+    when: the sync runs
+    then:
+      - a sync with no account id fails fast rather than syncing a default calendar
+      - the account id keys the OAuth token used to fetch events
+    provenance: [CalendarSyncProvider.Sync, CalendarSyncProvider.ValidateCredentials]
+    notes: The OAuth token lifecycle and account listing are settings-domain scope (SET).
+
+  - id: CAL-003
+    title: The stored cursor selects a full or incremental sync
+    type: business-logic
+    status: current
+    given: a sync invocation carrying the account's stored sync cursor
+    when: the sync path is chosen
+    then:
+      - an empty or unset cursor triggers a full-window initial sync
+      - a non-empty cursor (a Google sync token) triggers an incremental sync of only changed events
+      - each path records the next sync token as the new cursor once the final page is fetched
+    provenance: [CalendarSyncProvider.Sync, initialSync, incrementalSync]
+
+  - id: CAL-004
+    title: Initial sync spans one year past to thirty days ahead
+    type: business-logic
+    status: current
+    given: an initial (full) calendar sync
+    when: the event window is computed
+    then:
+      - the window runs from 365 days before the current time to 30 days after it
+      - events are requested expanded to single instances, ordered by start time, and paginated
+      - the current time follows the app's accelerated clock, not wall-clock time
+    provenance: [initialSync, CalendarPastSyncDays, CalendarFutureSyncDays, accelerated.GetCurrentTime]
+
+  - id: CAL-005
+    title: An expired sync token falls back to a full resync
+    type: business-logic
+    status: current
+    given: an incremental sync whose stored sync token is no longer valid
+    when: the calendar API reports the token expired (410 / full sync required)
+    then:
+      - the provider abandons the incremental path and re-runs a full initial sync
+      - a fresh sync token is captured for subsequent incremental syncs
+    provenance: [incrementalSync]
+
+  - id: CAL-006
+    title: One malformed event never aborts the whole sync
+    type: business-logic
+    status: current
+    given: a sync page containing an event that fails to process
+    when: that event is handled
+    then:
+      - the failure is logged and the event is skipped
+      - remaining events in the page and later pages still process
+    provenance: [initialSync, incrementalSync, processEvent]
+
+  # --- Keep / remove gate ---
+
+  - id: CAL-007
+    title: The CRM stores an event only while the user has accepted it
+    type: business-logic
+    status: current
+    given: a calendar event observed during sync
+    when: the keep decision is evaluated
+    then:
+      - an event is stored only when the user's response is accepted and its status is not cancelled
+      - the account holder acting as organizer counts as accepted
+      - all-day events (holidays, birthdays) are never stored as meetings
+      - any other observation (declined, tentative, needs-action, user-removed, cancelled) triggers the remove branch
+    provenance: [processEvent, getUserResponse, getEventStatus]
+    notes: The keep decision is evaluated before time-parsing so a cancelled event arriving as a minimal stub with no start/end time is still routed to removal.
+
+  - id: CAL-008
+    title: A previously-stored event that turns non-accepted is removed and its interactions cleaned up
+    type: business-logic
+    status: current
+    given: an event the CRM had stored that is now observed non-accepted (declined, tentative, needs-action, cancelled, or user-removed)
+    when: the remove branch runs
+    then:
+      - the stored calendar event is deleted and a decline is emitted for each matched contact so the derived interactions are cleaned up
+      - a decline observed for an event that was never stored emits nothing (no interaction to clean up)
+    provenance: [removeDeclinedEvent, publishCalendarDeclinedTx]
+    notes: 'Cutover mode publishes the declines and deletes the row in one transaction. In event-bus off mode the provider instead marks the stored row cancelled (deferred cleanup) so a later cutover resume can finish it; interaction cleanup itself is business-logic CAL-016.'
+
+  # --- Attendee assembly & candidate discovery (CAL-owned; matching mechanics are IMP) ---
+
+  - id: CAL-009
+    title: The attendee list is assembled with the organizer always included
+    type: business-logic
+    status: current
+    given: a stored calendar event
+    when: its attendee list is built
+    then:
+      - every attendee on the event is captured with display name and response status
+      - the organizer is added as a synthetic attendee when the event omits them from the attendee array
+      - the account holder is flagged as self across both their attendee entry and organizer aliases
+    provenance: [buildAttendeeList]
+
+  - id: CAL-010
+    title: System and resource addresses are excluded from attendee matching
+    type: business-logic
+    status: current
+    given: an event's assembled attendee list
+    when: attendees are considered for contact matching
+    then:
+      - the account holder's own entry and any attendee with no email are skipped
+      - attendees on Google calendar/resource/temp-account domains are skipped
+      - attendees whose local part is an automated-mailer prefix (noreply, notifications, mailer-daemon, postmaster, and similar) are skipped
+    provenance: [matchAttendees, isBlockedCalendarEmail, blockedCalendarDomains, blockedEmailPrefixes]
+    notes: The matching itself (exact via identity, fuzzy via name+method overlap) is imports-matching scope — cross-reference IMP-002.
+
+  - id: CAL-011
+    title: Unmatched attendees become per-person import candidates with meeting context
+    type: business-logic
+    status: current
+    given: an attendee who matched no existing contact
+    when: the attendee is recorded for later import
+    then:
+      - an external contact is upserted under source gcal_attendee, keyed by normalized email so one person yields a single candidate across meetings
+      - meeting title, date, and link are stored as discovery context
+      - a display name is inferred from the email local part when the invite carried none
+    provenance: [storeUnmatchedAttendee, inferNameFromEmail]
+    notes: The import-candidate review surface and the per-source/per-address dedup lifecycle are imports-matching scope — cross-reference IMP-006.
+
+  # --- Event-to-interaction projection ---
+
+  - id: CAL-012
+    title: Past accepted meetings project a mutual interaction per matched contact
+    type: business-logic
+    status: current
+    given: a stored, confirmed event with matched contacts whose end time is in the past
+    when: past-event projection runs after each sync
+    then:
+      - a mutual-direction interaction is recorded for each matched contact, timestamped at the event end and described by the event title
+      - a future accepted event is stored but projects no interaction until it is past
+      - the event is marked processed only once every matched contact's interaction has been emitted
+    provenance: [updateLastContactedForPastEvents, publishCalendarAttended, ListPastEventsNeedingUpdate]
+    notes: The interaction feeds the contact's last-contacted cadence timestamps — cross-reference CAD-006.
+
+  - id: CAL-013
+    title: One meeting with N attendees yields N independent interactions
+    type: data
+    status: current
+    given: a single calendar event with several matched contacts
+    when: attendance is projected and interactions are recorded
+    then:
+      - the emitted event carries a per-(event, contact) identity so contacts two through N are not collapsed against the first by the event-log uniqueness constraint
+      - each contact's interaction is deduplicated independently on contact plus source plus the event's internal id
+      - re-emitting an already-recorded pair is a no-op, so partial-failure retries never double-record
+    provenance: [publishCalendarAttended, interaction_recorder.go calendar.attended branch, idx_event_source_source_id]
+    notes: The generic event-log and interaction dedup-window rules are ingest scope (ING). This behavior is the calendar-specific guard against fan-out collapse.
+
+  - id: CAL-014
+    title: A calendar event is uniquely one row per event, calendar, and account
+    type: data
+    status: current
+    given: repeated syncs observing the same Google event
+    when: the event is written
+    then:
+      - the event upserts on the natural key of Google event id, calendar id, and account id
+      - re-syncing an unchanged event updates it in place rather than duplicating it
+    provenance: [UpsertCalendarEvent, migrations/016_calendar_event.up.sql]
+
+  - id: CAL-015
+    title: Re-matching an event reopens it for projection without re-projecting unchanged ones
+    type: data
+    status: current
+    given: an event being re-synced whose matched-contact set may have changed
+    when: the event is upserted
+    then:
+      - the processed flag is cleared only when the matched-contact set actually changes, compared order-insensitively
+      - an unchanged matched-contact set preserves the processed flag so already-projected attendance is not re-emitted
+    provenance: [UpsertCalendarEvent last_contacted_updated CASE]
+
+  # --- Decline cleanup & ordering guarantees ---
+
+  - id: CAL-016
+    title: Declining a past meeting retracts the interaction it created
+    type: business-logic
+    status: current
+    given: a matched contact with an interaction derived from a now-declined event
+    when: the decline is handled
+    then:
+      - the derived interaction is soft-deleted and the contact's cadence dates are recomputed from remaining history
+      - a decline for an interaction that was never recorded (a future meeting, or an already-cleaned replay) is a benign no-op
+    provenance: [CalendarDeclineHandler.HandleEvent, RecomputeContactDatesAfterDeleteTx]
+    notes: The date recompute is cadence/contacts scope — cross-reference CAD-010. A decline whose contact was concurrently deleted is also a no-op rather than a retry-poisoning error.
+
+  - id: CAL-017
+    title: Calendar state changes publish their downstream event before they mutate
+    type: invariant
+    status: current
+    statement: every calendar removal or re-link publishes its downstream event before it mutates the backing state, so a publish failure never strands a false or orphaned interaction and the next sync or rematch re-runs cleanly. The decline remove branch is atomic — it publishes each contact's decline and deletes the event row in a single transaction, so a publish failure rolls back the delete. Rematch is not transactional — it publishes attendance in its own already-committed transaction, then appends the contact as a separate write, so a publish failure skips the append and leaves the matched set unchanged; the next rematch re-selects the pair, the publish dedups as a no-op, and only the append retries.
+    provenance: [removeDeclinedEvent, CalendarRematchHandler.Rematch, publishCalendarDeclinedTx, publishCalendarAttended, events.Bus.Publish]
+
+  - id: CAL-018
+    title: A decline racing an attendance projection never leaves a false interaction
+    type: data
+    status: current
+    given: a past-attendance projection and a decline of the same event racing
+    when: the attendance interaction is about to be inserted
+    then:
+      - the insert takes a share lock on the backing calendar event
+      - if the event was already deleted by the winning decline, the insert is skipped and no interaction is written
+    provenance: [interaction_recorder.go calendar.attended lock branch, GetCalendarEventByIDForShare]
+    notes: The decline emission carries a distinct namespace so it can never dedup-collide with the attendance emission on the event log (which would strand the interaction with no cleanup handler).
+
+  # --- Rematch (calendar side; trigger dispatch is IMP) ---
+
+  - id: CAL-019
+    title: Adding a matching email retroactively links a contact to past meetings
+    type: business-logic
+    status: current
+    given: a contact who gains an email address that appears on stored events not yet linked to them
+    when: a calendar rematch runs for that email
+    then:
+      - the contact is appended to each matching event's matched set
+      - past confirmed events additionally project the contact's attendance, while future events are only linked
+      - the append does not reset the event's processed flag, so already-projected attendees are not re-emitted
+    provenance: [CalendarRematchHandler.Rematch, AppendMatchedContact, FindEventsByAttendeeEmailUnmatchedForContact]
+    notes: The rematch trigger and job dispatch are imports-matching scope — cross-reference IMP-019 and IMP-020.
+
+  # --- Cross-cutting invariants ---
+
+  - id: CAL-020
+    title: Calendar events are hard-deleted and cancelled ones are invisible
+    type: invariant
+    status: current
+    statement: the calendar event table has no soft-delete column — removal is a hard delete — and every contact-facing read filters out cancelled events, so cancelled or removed meetings never appear in any contact's event list, count, or upcoming view.
+    provenance: [DeleteCalendarEventByGcalID, calendar_event.sql status filters, migrations/016_calendar_event.up.sql]
+
+  - id: CAL-021
+    title: Every contact-facing event read has a deterministic order
+    type: invariant
+    status: current
+    statement: all contact-facing calendar reads impose an explicit order — meeting history is returned most-recent-first and upcoming lists soonest-first — so results never depend on arbitrary database ordering.
+    provenance: [ListEventsForContact, ListUpcomingEventsForContact, calendar_event.sql ORDER BY clauses]
+
+  # --- API ---
+
+  - id: CAL-022
+    title: Calendar events are exposed only through read endpoints
+    type: api
+    status: current
+    given: the calendar HTTP surface
+    when: a client requests events
+    then:
+      - a contact's events, a contact's upcoming events, and a global upcoming-events feed are readable
+      - page size is clamped to a bounded maximum with a sensible default
+      - a malformed contact id is rejected with a validation error (400)
+      - no endpoint creates, updates, or deletes an event — all writes flow through sync
+    provenance: [RegisterCalendarRoutes, handlers/calendar.go, parsePagination]
+
+  - id: CAL-023
+    title: Event responses expose an attendee count, never attendee addresses
+    type: api
+    status: current
+    given: a calendar event serialized for an API response
+    when: the response body is built
+    then:
+      - the response reports the number of attendees
+      - raw attendee emails and names are never included in the response
+    provenance: [CalendarEventResponse, convertToEventResponse]
+
+  # --- Surfaces (contact detail Meetings, settings) ---
+
+  - id: CAL-024
+    title: The Meetings section appears only when a contact has events
+    type: ux
+    status: current
+    given: a contact detail page
+    when: the page renders
+    then:
+      - a Meetings section is shown when the contact has at least one calendar event
+      - nothing is shown when the contact has no events or the events fail to load
+    provenance: [contacts detail page, components/contacts/meetings.tsx]
+
+  - id: CAL-025
+    title: Meetings can be filtered into all, upcoming, and past with live counts
+    type: ux
+    status: current
+    given: a contact with a mix of upcoming and past meetings
+    when: the Meetings section is used
+    then:
+      - three filters — all, upcoming, and past — each show a live count
+      - upcoming is the default view
+      - a meeting is classified as past once its end time is before the app's accelerated current time
+      - past meetings are ordered most-recent-first
+    provenance: [components/contacts/meetings.tsx, useAcceleratedTime]
+
+  - id: CAL-026
+    title: A meeting card summarizes its time, place, and size
+    type: ux
+    status: current
+    given: a meeting in the Meetings section
+    when: its card renders
+    then:
+      - it shows the title (a fallback label when untitled), the date, and the start-to-end time range
+      - it shows a location when the meeting has one
+      - it shows an attendee count only when the meeting has more than one attendee
+      - a past meeting is visually de-emphasized and carries a past marker
+    provenance: [components/contacts/meetings.tsx MeetingCard]
+
+  - id: CAL-027
+    title: A meeting with a source link opens it externally
+    type: ux
+    status: current
+    given: a meeting card
+    when: the meeting carries a source link
+    then:
+      - the title becomes a link that opens the meeting in a new tab with an external-link affordance
+      - a meeting without a link renders as plain text
+    provenance: [components/contacts/meetings.tsx html_link branch]
+
+  - id: CAL-028
+    title: A long meeting list reveals progressively
+    type: ux
+    status: current
+    given: a filtered meeting list longer than the initial page
+    when: the user asks for more
+    then:
+      - a fixed number of meetings show initially, with a control reporting how many remain
+      - each activation reveals more until the list is exhausted, when the control disappears
+      - switching filters resets the reveal back to the initial page
+    provenance: [components/contacts/meetings.tsx displayLimit]
+
+  - id: CAL-029
+    title: Each calendar-enabled account offers a manual sync with visible state
+    type: ux
+    status: current
+    given: a connected Google account granted calendar access
+    when: the settings account section renders
+    then:
+      - a calendar sync control shows the account's current calendar sync state and lets the user trigger a sync on demand
+      - a triggered sync reports that it started and reflects progress or errors as the state polls
+    provenance: [components/settings/google-accounts-section.tsx, hooks/use-sync-states.ts]
+    notes: The OAuth connect and reconnect flows themselves are settings scope (SET); the reconnect-on-auth-failure prompt is SET-025 and the scope-gated visibility of this sync affordance is SET-024. This behavior covers only the calendar sync trigger and its state surface.
+
+  - id: CAL-030
+    title: A stalled calendar sync surfaces in the settings banner
+    type: ux
+    status: current
+    given: the calendar sync has stalled past its watchdog threshold
+    when: the settings page renders
+    then:
+      - a staleness banner names Google Calendar among the stalled sources
+      - the banner stays quiet while loading or when nothing is stalled
+    provenance: [components/sync-staleness-banner.tsx]
+    notes: The watchdog that detects staleness is settings/ingest scope; this behavior covers only the calendar labeling on the banner.

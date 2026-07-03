@@ -1,0 +1,397 @@
+domain: todoist
+prefix: TDS
+maturity: reviewed
+behaviors:
+  # --- Provider identity and sync orchestration ---
+
+  - id: TDS-001
+    title: Todoist is a single-account, account-required cadence-task sync provider
+    type: business-logic
+    status: current
+    given: the Todoist sync provider
+    when: its configuration is resolved
+    then:
+      - the source is identified as todoist with a fetch-all sync strategy and no task discovery (new tasks are never discovered from Todoist)
+      - a connected account is required, and only one account is supported
+      - the default sync interval is five minutes
+    provenance: [CadenceSyncProvider.Config, DefaultSyncInterval]
+    notes: Account connection and OAuth token issuance are settings-domain scope (SET); this pins the provider's own shape.
+
+  - id: TDS-002
+    title: Sync will not run until a projection target is configured
+    type: business-logic
+    status: current
+    given: a sync attempt for a connected account
+    when: the provider validates its preconditions
+    then:
+      - a project and a label must both be configured, otherwise the sync fails without issuing any request
+      - the sync also fails when the account id or a required dependency is missing
+    provenance: [CadenceSyncProvider.Sync, getSettingsFromMetadata]
+
+  - id: TDS-003
+    title: Outbound Todoist writes are structurally refused outside production
+    type: invariant
+    status: current
+    statement: a Todoist client built for a non-production CRM environment refuses every outbound write (any command-carrying sync and every quick-add) before issuing HTTP, while read-only syncs are always allowed so a non-prod instance can still fetch remote state for comparison; production write paths must build the client with the runtime CRM environment so the guard applies.
+    provenance: [ErrNonProdWriteRefused, SyncClient.Sync, SyncClient.QuickAdd, config.IsProductionCRMEnv, NewClientFactory]
+    notes: Defense-in-depth against a restored prod DB or partial env copy mutating the operator's real Todoist account. A verbatim full prod-env clone carrying a production CRM_ENV is intentionally not defended by this guard.
+
+  - id: TDS-004
+    title: Sync uses full-then-incremental fetch with bounded command batches
+    type: business-logic
+    status: current
+    given: a sync tick
+    when: the provider exchanges state with Todoist
+    then:
+      - a first-time sync requests full state, otherwise it resumes from the stored cursor
+      - a first-time full sync is immediately followed by an incremental item fetch whose only effect is to advance the stored cursor to the latest point, so the next tick resumes from there
+      - outbound commands are split into batches within the provider's per-request command limit
+    provenance: [CadenceSyncProvider.Sync, BatchCommands]
+    notes: The follow-up fetch after a full sync advances the cursor only; its item payload is not fed into item processing or reconciliation (reconciliation reads current DB state, not the fetched items).
+
+  - id: TDS-005
+    title: A fatal item error replays the batch and never orphans remote cleanup
+    type: business-logic
+    status: current
+    given: a batch of synced items where one item fails fatally mid-processing
+    when: the sync tick finishes
+    then:
+      - the sync cursor is not advanced, so the next tick reprocesses the batch from the pre-batch cursor
+      - every command already accumulated by items that committed before the failing item is still flushed to Todoist before the error is returned — this includes a skip's replacement create, not only remote-cleanup close/delete commands
+    provenance: [CadenceSyncProvider.Sync, processItems]
+    notes: Each successfully processed item commits in its own transaction. On replay a completion or dismissal short-circuits because its row is already terminal (TDS-006); a skip leaves its row managed, so its replay is instead deduped by the skip event key (TDS-011).
+
+  - id: TDS-006
+    title: A task not in the managed state is inert to incremental processing
+    type: invariant
+    status: current
+    statement: incremental item processing only acts on tasks whose local row is in the managed state; completed, dismissed, and unmanaged rows short-circuit so a replayed or stale item redelivery cannot re-fire completion, skip, or dismissal handling.
+    provenance: [CadenceSyncProvider.processItem]
+
+  - id: TDS-007
+    title: Project, label, and timezone renames are self-healed from each sync
+    type: data
+    status: current
+    given: a configured Todoist project and label whose names change, or an updated account timezone
+    when: a sync response is processed
+    then:
+      - the stored project name, label name, and user timezone are refreshed from the response
+      - the configured project id and label id are unchanged by a rename
+    provenance: [CadenceSyncProvider.Sync, updateSyncStateMetadata]
+
+  - id: TDS-008
+    title: Todoist API errors are classified to drive retry and backoff
+    type: business-logic
+    status: current
+    given: a Todoist API error response
+    when: the error is classified
+    then:
+      - authentication failures (unauthorized or forbidden) are surfaced as an authentication error
+      - rate-limit responses are surfaced as rate-limited, carrying any retry-after hint
+      - server and rate-limit responses are treated as transient
+    provenance: [APIError, handleSyncError]
+    notes: The escalating backoff schedule and success reset live in the shared sync service, not the Todoist provider.
+
+  # --- Per-item detection and event projection ---
+
+  - id: TDS-009
+    title: Completing a Todoist task publishes a completion event atomically
+    type: business-logic
+    status: current
+    given: a managed reach-out, send, or legacy task marked complete in Todoist
+    when: the completion is processed
+    then:
+      - a task-completed event is published and the local state advanced to completed in one transaction, publishing before the state mutation
+      - the event carries the interaction direction and follow-up-suppression flag derived from the task kind
+      - the event is keyed on the task's stable internal id so a duplicate publish short-circuits without a second state change
+      - a reminder-kind completion short-circuits to completed with no event and no interaction
+    provenance: [handleTaskCompletion, events.KindTaskCompleted, PublishTx]
+    notes: What the downstream consumer records from the event (interaction direction, follow-up loop) is CAD-017. The internal-id event key survives the temp-to-real external id swap; the downstream interaction row keys on the external id instead.
+
+  - id: TDS-010
+    title: Removing a task's managed markers is routed to a skip by lifecycle
+    type: business-logic
+    status: current
+    given: a managed task that is deleted, has its CRM label removed, or has its deadline removed in Todoist
+    when: the change is detected
+    then:
+      - a follow-up-loop task is dismissed
+      - a cadence-due task is skipped (its schedule advanced)
+      - a manual task is dismissed, and a legacy action task is relinquished to unmanaged (action tasks unmanage only on deletion or CRM-label removal, never on deadline removal — they are dispatched by kind before the deadline-based skip check)
+    provenance: [CadenceSyncProvider.processItem, handleSkipTrigger, handleFollowUpDismissal, handleManualDismissal, handleActionTaskTriggers]
+    notes: The CRM-side outcomes of each route are CAD-016 (follow-up dismissal), CAD-019 (cadence skip), and CAD-021 (manual/action dismissal); this pins the Todoist-side detection and routing.
+
+  - id: TDS-011
+    title: A cadence skip dedups replays and enqueues its replacement post-commit
+    type: business-logic
+    status: current
+    given: a cadence-due task being skipped
+    when: the skip is applied
+    then:
+      - the skip event is keyed on the task id plus the item's last-updated marker, so a replay of the unchanged item dedups while a genuine re-edit produces a fresh event
+      - the schedule advance and event publish commit together, publish-before-mutate
+      - the replacement cadence task's create command is only emitted after the commit succeeds
+    provenance: [handleSkipTrigger]
+    notes: The schedule-advance arithmetic (later of today or the old date, plus one interval) is CAD-019.
+
+  - id: TDS-012
+    title: A recurring Todoist task is relinquished rather than managed
+    type: business-logic
+    status: current
+    given: a managed task the user has made recurring in Todoist
+    when: the recurrence is detected
+    then:
+      - the task is set to unmanaged, so the CRM stops reconciling it
+      - no interaction and no schedule change result
+    provenance: [handleRecurringDetection]
+
+  - id: TDS-013
+    title: A task whose contact is gone is deleted remotely and locally
+    type: data
+    status: current
+    given: a managed task whose contact has been soft-deleted (or otherwise reads as not-live)
+    when: the task's item is processed on the next sync
+    then:
+      - a delete command is emitted to remove the task from Todoist
+      - the local task row is hard-deleted
+    provenance: [CadenceSyncProvider.processItem]
+    notes: Contact soft-delete does not cascade to contact_task rows (CON-010); this deferred sync-time cleanup is how orphaned Todoist tasks are removed.
+
+  - id: TDS-014
+    title: A remote deadline edit on a cadence task wins over the last pushed date
+    type: business-logic
+    status: current
+    given: a cadence-due task whose deadline differs from the contact's next-contact date
+    when: the deadline change is processed
+    then:
+      - a deadline equal to the last date the CRM pushed is recognized as a stale redelivery and does not override
+      - a genuine user edit overrides the contact's next-contact date and records the new pushed-date watermark in the same transaction
+      - a missing watermark (legacy task) is treated as a real edit so a genuine change is never silently dropped
+      - follow-up-loop task deadlines are never allowed to move the next-contact date
+    provenance: [CadenceSyncProvider.processItem deadline-edit branch, MetadataKeySyncedDeadline]
+    notes: The cadence-side outcome (next-contact date overridden via the sole writer) is CAD-035; this pins the watermark/stale-detection mechanics on the Todoist side.
+
+  # --- Reconciliation ---
+
+  - id: TDS-015
+    title: Reconciliation projects one cadence-due task per cadence-bearing contact
+    type: business-logic
+    status: current
+    given: a contact with a cadence and a next-contact date but no live cadence-due task
+    when: reconciliation runs on a sync tick
+    then:
+      - a create command for a reach-out cadence-due task is emitted and a local row recorded in the managed state with pending-create watermarks
+      - reconciliation is skipped for a contact that has a live follow-up (the follow-up already covers it)
+    provenance: [CadenceSyncProvider.reconcileContactTasks, FindPendingFollowUp]
+    notes: The one-cadence-task-per-contact intent and the follow-up grace deferral are CAD-018; this pins the provider-side projection. There is no dedicated cron — reconciliation rides the sync tick.
+
+  - id: TDS-016
+    title: Outreach detected outside Todoist closes the cadence task via a watermark
+    type: business-logic
+    status: current
+    given: a managed cadence-due task whose contact was reached out to since the last sync
+    when: reconciliation evaluates the task
+    then:
+      - fresh outreach is recognized by comparing the contact's last-outreach time against a stored watermark
+      - the local task is completed first, then a remote close command is emitted only when the task has a real external id
+      - the outreach watermark is advanced so the same outreach does not re-close on a later tick
+    provenance: [closeOnOutreach, wasReachedOutSinceSync]
+    notes: The CRM-side intent (outreach closes the open cadence task) is CAD-020; this pins the watermark and remote-close mechanics.
+
+  - id: TDS-017
+    title: Drift is corrected by replacing the remote task, never by writing the date
+    type: business-logic
+    status: current
+    given: a managed cadence-due task whose remote deadline no longer matches the contact's next-contact date
+    when: reconciliation detects the drift
+    then:
+      - the old remote task is closed (when it has a real external id) and a new task is created for the current date
+      - the new task's deadline is read from the live contact record; reconciliation never itself writes the next-contact date
+    provenance: [reconcileExistingTask]
+    notes: The next-contact date is written only by the cadence engine (CAD-005); the provider deliberately reads it live rather than recomputing.
+
+  - id: TDS-018
+    title: Skip-drift recovery re-emits a lost create and defers when ambiguous
+    type: business-logic
+    status: current
+    given: a task whose recorded pending temp id differs from its external id (the create command never landed remotely)
+    when: reconciliation processes it
+    then:
+      - a close-old plus create-new pair is re-emitted, and the new pending temp id is persisted before the commands are emitted
+      - the recovery is suppressed for one tick when temp-id mapping was ambiguous this tick, to avoid a duplicate create against an already-created remote task
+    provenance: [reconcileExistingTask skip-drift branch, deferSkipDrift]
+
+  - id: TDS-019
+    title: Legacy tasks backfill their watermarks and detection requires them
+    type: data
+    status: current
+    given: a legacy task missing its synced-state watermark metadata
+    when: it is reconciled
+    then:
+      - the missing watermark keys are backfilled, including a pre-gate backfill so contacts with a pending follow-up are still covered
+      - since-last-sync outreach and contact detection require the watermark to be present, so an unbackfilled legacy task never produces a false positive
+    provenance: [reconcileExistingTask backfill, closeOnOutreach pre-gate backfill, wasContactedSinceSync, wasReachedOutSinceSync]
+
+  - id: TDS-020
+    title: Task metadata is mutated key-wise, never wholesale replaced
+    type: invariant
+    status: current
+    statement: every write to a task's metadata (marker link, pending temp id, and the synced-deadline / synced-last-contacted / synced-last-outreach watermarks) preserves the sibling keys rather than replacing the whole object, so no path drops a marker or watermark it did not intend to touch.
+    provenance: [setPendingCreateState, setSyncedLastContacted, setSyncedLastOutreachAt, UpdateContactTaskMetadataTx]
+
+  # --- Temp-id recovery and finalize ---
+
+  - id: TDS-021
+    title: Temp-to-real id finalize is forward-only and never resurrects a dead row
+    type: data
+    status: current
+    given: a create command whose Todoist-assigned real id has arrived while the local row may have advanced state
+    when: the temp-to-real id mapping is finalized
+    then:
+      - the row state is re-read inside the finalize transaction, since it may have changed since the pre-transaction snapshot
+      - a still-managed row records the real id and stays managed
+      - a terminal-state row records the real id without being flipped back to managed
+      - the pending temp id is cleared in every case
+    provenance: [finalizeTempIDMappingTx, UpdateContactTaskExternalIDTx, SetContactTaskExternalIDOnlyTx]
+
+  - id: TDS-022
+    title: Marker-based temp-id recovery is cadence-only and defers skip-drift on failure
+    type: business-logic
+    status: current
+    given: an incoming item with no external-id match but a decodable CRM marker
+    when: recovery attempts to reattach it to a pending local task
+    then:
+      - recovery only proceeds for a cadence-due marker; follow-up and manual markers are not recovered this way
+      - a recovery whose transaction rolls back forces skip-drift to be deferred for the current tick, so no duplicate create is emitted against the freshly delivered remote item
+    provenance: [tryRecoverPendingTempID, processTempIDMappings]
+
+  - id: TDS-023
+    title: Finalizing an already-completed row enqueues a durable remote close
+    type: business-logic
+    status: current
+    given: a temp-id finalize landing on a row that has already completed
+    when: the real id is recorded
+    then:
+      - a durable, retried background job is enqueued to close the now-identifiable remote task
+      - if remote close is disabled or the job runner is unwired, the id is still recorded locally and the condition is logged rather than lost silently
+    provenance: [finalizeTempIDMappingTx, TodoistFollowUpCloseJob]
+
+  # --- CRM marker codec ---
+
+  - id: TDS-024
+    title: The CRM marker is the sole-constructor task-to-contact link
+    type: invariant
+    status: current
+    statement: the JSON marker embedded in a managed Todoist task description — the canonical sorted-key object linking the task to a contact id, kind, lifecycle, and instance — is produced only through the single sanctioned encoder, enforced by a construction guard that forbids any other code path from building it.
+    provenance: [contacttask.EncodeMarker, crm_marker_construction_static_test.go]
+
+  - id: TDS-025
+    title: Marker decoding tolerates markdown prefixes and normalizes legacy kinds
+    type: business-logic
+    status: current
+    given: a Todoist task description that may carry a plain or markdown-prefixed CRM marker, possibly in a pre-split legacy shape
+    when: the marker is decoded
+    then:
+      - a marker embedded after leading text is recovered by parsing from the last opening brace
+      - a legacy kind is mapped to its modern kind and lifecycle pair
+      - a description with no valid CRM marker, or an unrecognized legacy kind, is rejected as not-a-marker
+    provenance: [DecodeMarker, parseMarker, normalizeLegacyMarker]
+
+  - id: TDS-026
+    title: A projected task carries a contact deep link in its title and a marker in its description
+    type: business-logic
+    status: current
+    given: a task being created in Todoist for a contact
+    when: the create command is built
+    then:
+      - the task title carries a human-readable contact link into the CRM
+      - the task description carries the CRM marker used for later reconciliation
+    provenance: [createTaskCommand, ContactTaskService.CreateManualTask]
+
+  - id: TDS-027
+    title: A manual task is projected via quick-add then a marker attach, cleaning up on failure
+    type: business-logic
+    status: current
+    given: a user creating a manual task on a contact
+    when: the task is projected to Todoist
+    then:
+      - the task text is sent through the natural-language quick-add so dates, project, label, and priority syntax are parsed by Todoist
+      - the CRM marker is attached in a second step that updates the task description
+      - if the marker attach fails, the remote task is deleted so no unreconcilable task is left behind
+    provenance: [ContactTaskService.CreateManualTask, NewItemUpdateCommand]
+    notes: The user-facing add-task flow and validation are CAD-031. Quick-add's note parameter creates comments, not descriptions, which is why the marker is applied via a description update.
+
+  # --- Follow-up loop projection ---
+
+  - id: TDS-028
+    title: The follow-up loop is projected to Todoist by durable, cutover-gated jobs
+    type: business-logic
+    status: current
+    given: a follow-up loop transition owned by the cadence domain (create, refresh, or close)
+    when: the transition is projected to Todoist
+    then:
+      - each projection runs as a durable background job that retries on failure
+      - all three projection jobs hard-fail if invoked while follow-up cutover mode is not enabled
+    provenance: [TodoistFollowUpCreateJobWorker, TodoistFollowUpCloseJobWorker, TodoistFollowUpRefreshJobWorker]
+    notes: The follow-up loop state machine (create-on-outbound, refresh, close-on-reply, one-live-follow-up) is CAD-013/CAD-014/CAD-015; this pins the Todoist-side projection workers.
+
+  - id: TDS-029
+    title: The follow-up create projection is crash-safe and idempotent
+    type: data
+    status: current
+    given: a follow-up create job, possibly retried or racing a concurrent worker
+    when: the remote task is created
+    then:
+      - the work is split into read, remote-call, and write phases so no database transaction is held open across the HTTP call
+      - the remote create uses deterministic command identifiers so a crash-retry does not create a duplicate task
+      - a row already finalized by another worker is an idempotent no-op, and a reply that completed the row mid-create records the real id without resurrecting the row and ensures the remote task is closed
+    provenance: [TodoistFollowUpCreateJobWorker, buildItemAddCommandFromMetadata, deterministicCommandUUID]
+    notes: The CRM-side crash-safety and idempotency guarantees are CAD-014; this pins the projection worker's phasing.
+
+  - id: TDS-030
+    title: Remote close is only ever propagated for a task with a real external id
+    type: invariant
+    status: current
+    statement: across every path that closes a Todoist task (reply-driven close, temp-id finalize, cadence outreach, and merge cleanup), a remote close command is issued only when the task holds a real external id; a task still carrying its pending temp id is closed by whichever create path owns it, never by a second close against a non-existent remote task.
+    provenance: [isPendingTempID, closeOnOutreach, finalizeTempIDMappingTx, ContactService.MergeContacts task close]
+    notes: The reply-driven close single-owner rule is CAD-015; the merge-time close is CON-031. This pins the shared real-id gate.
+
+  # --- Settings and surfaces ---
+
+  - id: TDS-034
+    title: A Todoist task sync can be triggered on demand from settings
+    type: ux
+    status: current
+    given: a connected Todoist account
+    when: the user triggers a manual task sync
+    then:
+      - a sync is requested for that account and its success or failure is indicated
+      - the account's read/write permission state is visible
+    provenance: [todoist-accounts-section.tsx sync badge, useTriggerSync]
+    notes: The Todoist projection-target settings surface — the read/write settings endpoints, the project and label pickers, and the sync-configuration UI — is owned by the settings domain (SET-015, SET-016, SET-017, SET-018, SET-026), not re-minted here. This row pins only the on-demand sync trigger.
+
+  - id: TDS-035
+    title: Projected tasks display cleaned content with a deep link into Todoist
+    type: ux
+    status: current
+    given: a contact with tasks projected into Todoist
+    when: the contact's tasks are shown
+    then:
+      - the CRM link markers are stripped so the task shows human-readable content, falling back to a placeholder when empty
+      - each linked task offers a deep link that opens it in the Todoist app
+      - the cadence-due projection is not surfaced on the contact page (cadence is surfaced through the overdue and recent-activity surfaces instead)
+    provenance: [tasks-section.tsx, contact detail task queries]
+    notes: The tasks-section layout, badges, and completed-toggle are CAD-030; unlinking (which keeps the task alive in Todoist) is CAD-033. This pins the Todoist-projection-specific display concerns.
+
+  - id: TDS-037
+    title: The follow-up refresh projection pushes the new deadline and no-ops before the task exists
+    type: business-logic
+    status: current
+    given: a follow-up whose local deadline changed after its create was projected
+    when: the refresh projection runs
+    then:
+      - an item_update carrying the stored deadline is issued so Todoist is brought back in line with the local row
+      - the job is a no-op when the row has no real external id yet, since the pending create will pick up the new deadline
+      - the create worker enqueues a durable refresh job when the deadline drifted between its read and write phases, so a late deadline change is not stranded on the old remote task
+    provenance: [TodoistFollowUpRefreshJobWorker.Work, TodoistFollowUpCreateJobWorker drift-refresh enqueue]
+    notes: The three durable cutover-gated projection jobs are enumerated in TDS-028; this pins the refresh job's Todoist-side semantics, parallel to create (TDS-029) and close (TDS-023/TDS-030). The local row is authoritative — the refresh worker only keeps Todoist eventually consistent.
