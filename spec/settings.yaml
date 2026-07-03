@@ -9,7 +9,7 @@ behaviors:
     type: invariant
     status: current
     statement: the provider redirect callback routes are registered outside the global-API-key middleware (external providers cannot carry the key), while every OAuth auth-URL and account-management route is registered inside the API-key-protected group and requires the key.
-    provenance: [RegisterOAuthCallbackRoutes, RegisterOAuthRoutes, cmd/crm-api/main.go v1.Use APIKeyMiddleware]
+    provenance: [RegisterOAuthCallbackRoutes, RegisterOAuthRoutes, cmd/crm-api/routes.go v1.Use APIKeyMiddleware]
     notes: The callback routes only redirect to the settings surface with an outcome (SET-004); they never expose account data, so no-auth exposure is bounded to the CSRF-gated exchange.
 
   - id: SET-002

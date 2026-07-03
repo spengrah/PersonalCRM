@@ -326,27 +326,27 @@ behaviors:
   - id: TDS-028
     title: The follow-up loop is projected to Todoist by durable, cutover-gated jobs
     type: business-logic
-    status: current
+    status: retired
     given: a follow-up loop transition owned by the cadence domain (create, refresh, or close)
     when: the transition is projected to Todoist
     then:
       - each projection runs as a durable background job that retries on failure
       - all three projection jobs hard-fail if invoked while follow-up cutover mode is not enabled
     provenance: [TodoistFollowUpCreateJobWorker, TodoistFollowUpCloseJobWorker, TodoistFollowUpRefreshJobWorker]
-    notes: The follow-up loop state machine (create-on-outbound, refresh, close-on-reply, one-live-follow-up) is CAD-013/CAD-014/CAD-015; this pins the Todoist-side projection workers.
+    notes: Retired — superseded by TDS-038. The three bespoke cutover-gated projection workers (create/close/refresh) were replaced by a single shared op executor whose off-mode gate snoozes (retry-budget-neutral, follow-up-loop-scoped) rather than hard-failing the projection. The follow-up loop state machine (create-on-outbound, refresh, close-on-reply, one-live-follow-up) is CAD-013/CAD-014/CAD-015.
 
   - id: TDS-029
     title: The follow-up create projection is crash-safe and idempotent
     type: data
     status: current
-    given: a follow-up create job, possibly retried or racing a concurrent worker
+    given: a follow-up create op, possibly retried or racing a concurrent worker
     when: the remote task is created
     then:
       - the work is split into read, remote-call, and write phases so no database transaction is held open across the HTTP call
-      - the remote create uses deterministic command identifiers so a crash-retry does not create a duplicate task
-      - a row already finalized by another worker is an idempotent no-op, and a reply that completed the row mid-create records the real id without resurrecting the row and ensures the remote task is closed
-    provenance: [TodoistFollowUpCreateJobWorker, buildItemAddCommandFromMetadata, deterministicCommandUUID]
-    notes: The CRM-side crash-safety and idempotency guarantees are CAD-014; this pins the projection worker's phasing.
+      - the remote create uses a deterministic temp id (the local row id) and command uuid so a crash-retry dedups server-side rather than creating a duplicate task
+      - a row already finalized by another worker is an idempotent no-op, and a reply that completed (or a reconciler that superseded) the row mid-create records the real id without resurrecting the row and enqueues a close op so the freshly-created remote task is closed
+    provenance: [TodoistTaskOpWorker.executeCreate, buildItemAddFromMetadata, taskOpCommandUUID]
+    notes: The CRM-side crash-safety and idempotency guarantees are CAD-014; this pins the executor create verb's phasing. Create is one verb of the single shared op executor (TDS-038).
 
   - id: TDS-030
     title: Remote close is only ever propagated for a task with a real external id
@@ -384,14 +384,28 @@ behaviors:
     notes: The tasks-section layout, badges, and completed-toggle are CAD-030; unlinking (which keeps the task alive in Todoist) is CAD-033. This pins the Todoist-projection-specific display concerns.
 
   - id: TDS-037
-    title: The follow-up refresh projection pushes the new deadline and no-ops before the task exists
+    title: The follow-up refresh projection converges the remote deadline to the current local row
     type: business-logic
     status: current
     given: a follow-up whose local deadline changed after its create was projected
-    when: the refresh projection runs
+    when: the refresh op runs
     then:
-      - an item_update carrying the stored deadline is issued so Todoist is brought back in line with the local row
-      - the job is a no-op when the row has no real external id yet, since the pending create will pick up the new deadline
-      - the create worker enqueues a durable refresh job when the deadline drifted between its read and write phases, so a late deadline change is not stranded on the old remote task
-    provenance: [TodoistFollowUpRefreshJobWorker.Work, TodoistFollowUpCreateJobWorker drift-refresh enqueue]
-    notes: The three durable cutover-gated projection jobs are enumerated in TDS-028; this pins the refresh job's Todoist-side semantics, parallel to create (TDS-029) and close (TDS-023/TDS-030). The local row is authoritative — the refresh worker only keeps Todoist eventually consistent.
+      - an item_update pushes the deadline read from the row's current metadata at execution time (a convergence instruction, not a value carried on the job), so Todoist is brought back in line with the authoritative local row
+      - when the row has no real external id yet (its create is still pending), the op pauses — snoozing without consuming its retry budget — and re-runs after the create finalizes, rather than pushing to a task that does not exist
+      - after pushing, the op re-reads the row and, if the deadline changed again mid-flight, pauses to re-run so the newest deadline is the value that ultimately lands (out-of-order HTTP is self-correcting)
+    provenance: [TodoistTaskOpWorker.executeUpdate, deadlineUpdateVerb, opUpdateSnoozeDelay]
+    notes: The follow-up projection is the single shared op executor (TDS-038); this pins the refresh (update_deadline) verb, parallel to create (TDS-029) and close (TDS-023/TDS-030). The local row is authoritative — the refresh op only keeps Todoist eventually consistent, reading the live deadline at execution rather than replaying a carried value.
+
+  - id: TDS-038
+    title: The follow-up loop is projected to Todoist by a single durable op executor, paused when follow-up writes are off
+    type: business-logic
+    status: current
+    given: a follow-up loop transition owned by the cadence domain (create, refresh, or close)
+    when: the transition is projected to Todoist
+    then:
+      - each transition is projected by a durable operation job (retried on failure) run by the single shared Todoist op executor — one worker dispatching by verb — rather than a bespoke per-transition worker; the one exception is a reply that closes a still-pending follow-up, whose remote close the in-flight create op's finalize owns, so no separate close job is enqueued (single-owner close, TDS-030)
+      - the op job is enqueued in the same transaction as the local follow-up state change it serves, so the projection intent commits atomically with the state it reflects
+      - when follow-up writes are disabled, a follow-up-loop op pauses — snoozing without consuming its retry budget — before any Todoist call, so it resumes when writes are re-enabled rather than failing or being discarded
+      - the pause is scoped to follow-up-loop ops by lifecycle, so cadence-due and manual Todoist writes are never suppressed by the follow-up kill switch
+    provenance: [TodoistTaskOpWorker, FollowUpManager.applyCreate, FollowUpManager.applyRefresh, FollowUpManager.applyInboundMutual, opModeOffSnoozeDelay]
+    notes: Supersedes TDS-028. The three bespoke cutover-gated workers (create/close/refresh) were replaced by one shared executor; transitional adapter workers still drain any queued legacy follow-up jobs until they are removed. The follow-up loop state machine is CAD-013/CAD-014/CAD-015. Per-verb executor semantics — create TDS-029, refresh TDS-037, close TDS-023/TDS-030.
