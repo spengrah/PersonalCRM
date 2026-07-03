@@ -12,11 +12,12 @@
 | iCloud Contacts | `icloud_contacts` | `push` | `backend/internal/icloudcontacts/provider.go` |
 | Phone & FaceTime | `phone_calls` | `push` | `backend/internal/phonecalls/provider.go` |
 
-The poll-strategy providers register themselves in
-`backend/cmd/crm-api/main.go` via `providerRegistry.Register()`. The three
-**push** providers register through one helper,
-`push.RegisterPushProviders(providerRegistry)`
-(`backend/internal/push/push.go`), which main.go calls once.
+The poll-strategy providers register via `providerRegistry.Register()` in
+the external-sync wire files (`backend/cmd/crm-api/wire_google.go` for
+gcontacts/gcal/gmail/gchat, `wire_todoist.go` for todoist), orchestrated by
+`buildExternalSync` in `wire_sync.go`. The three **push** providers register
+through one helper, `push.RegisterPushProviders(providerRegistry)`
+(`backend/internal/push/push.go`), which `buildExternalSync` calls once.
 
 **Google Chat is registered but enablement-gated.** `gchat` registers
 unconditionally whenever Google OAuth is configured (it is store-only +

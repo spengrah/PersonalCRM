@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	stdsync "sync"
+	"sync"
 
 	"personal-crm/backend/internal/consumer"
 	"personal-crm/backend/internal/db"
@@ -47,7 +47,7 @@ func (*noopWorker) Work(_ context.Context, _ *river.Job[noopJobArgs]) error {
 // wired at construction time (before the external-sync branch decides
 // whether Todoist is configured). The external-sync branch populates
 // oauth+sync when Todoist is initialized; until then fn() returns
-// service.ErrNoTodoistAccount to keep the consumer's Todoist-dependent
+// consumer.ErrTodoistUnconfigured to keep the consumer's Todoist-dependent
 // post-commit paths a best-effort no-op.
 type followUpSettingsRef struct {
 	oauth       *todoist.OAuthService
@@ -119,7 +119,7 @@ func (r *followUpSettingsRef) fn() consumer.TodoistSettingsFunc {
 // safe to pass to the worker constructor before the inner registry
 // is wired.
 type deferredAggregatorReenqueuer struct {
-	mu    stdsync.RWMutex
+	mu    sync.RWMutex
 	inner consumer.AggregatorReenqueuer
 }
 

@@ -53,7 +53,7 @@ Find all instances of a layer:
 
 | What | Where |
 |------|-------|
-| API routes | `backend/internal/api/handlers/*_routes.go` (per-domain `RegisterXRoutes`); gated call sites in `backend/cmd/crm-api/main.go` (search for `RegisterXRoutes`) |
+| API routes | `backend/internal/api/handlers/*_routes.go` (per-domain `RegisterXRoutes`); gated call sites in `registerRoutes` in `backend/cmd/crm-api/routes.go` (search for `RegisterXRoutes`) |
 | Scheduler/cron jobs | `backend/internal/scheduler/scheduler.go` |
 | Time acceleration | `backend/internal/accelerated/time.go` |
 | Query invalidation | `frontend/src/lib/query-invalidation.ts` |
