@@ -566,11 +566,10 @@ func TestFollowUpModeFromConfig(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// Refresh-path coverage. The refresh branch is the only path that emits
-// TWO Decision observations: one at the in-tx decision point (with
-// CalledTodoist=false) and one from the post-commit closure after the
-// Todoist item_update succeeds (with CalledTodoist=true). These tests
-// assert both emissions land with the expected payload fields.
+// Refresh-path coverage. The refresh branch advances the local due_date
+// and enqueues an update_deadline op in the same tx (all remote effects
+// leave via op jobs — no post-commit Todoist call). It emits exactly one
+// Decision at the in-tx decision point.
 // -----------------------------------------------------------------------------
 
 // stubFollowUpTaskWriter records metadata updates and returns a

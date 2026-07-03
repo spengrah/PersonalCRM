@@ -138,6 +138,13 @@ func requireSnooze(t *testing.T, err error) {
 	require.Truef(t, errors.As(err, &snooze), "expected *river.JobSnoozeError, got %v", err)
 }
 
+// settingsOK returns a TodoistSettingsFunc that always resolves.
+func settingsOK() TodoistSettingsFunc {
+	return func(context.Context) (*todoist.Settings, string, error) {
+		return &todoist.Settings{ProjectID: "proj", LabelName: "followup", IntegrationInstanceID: "inst"}, "token", nil
+	}
+}
+
 func newOpWorker(repo todoistOpTaskRepo, client *fakeOpClient, inserter RiverInserter) *TodoistTaskOpWorker {
 	return NewTodoistTaskOpWorker(repo, settingsOK(), newFakeOpClientFactory(client), inserter, nil)
 }

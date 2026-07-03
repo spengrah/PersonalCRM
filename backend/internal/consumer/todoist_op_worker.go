@@ -82,11 +82,21 @@ func NewTodoistTaskOpWorker(
 	}
 }
 
+// depsWired returns a descriptive error when a required dependency is
+// nil, so the executor and the legacy adapters that delegate to it fail
+// closed instead of panicking mid-verb.
+func (w *TodoistTaskOpWorker) depsWired() error {
+	if w.deps.taskRepo == nil || w.deps.settings == nil || w.deps.clientFactory == nil {
+		return errors.New("todoist_task_op: worker dependencies not wired")
+	}
+	return nil
+}
+
 // Work dispatches the op verb. Unknown verbs are a permanent failure
 // (river.JobCancel) — a malformed enqueue must never retry forever.
 func (w *TodoistTaskOpWorker) Work(ctx context.Context, j *river.Job[consumerjobs.TodoistTaskOpArgs]) error {
-	if w.deps.taskRepo == nil || w.deps.settings == nil || w.deps.clientFactory == nil {
-		return errors.New("todoist_task_op: worker dependencies not wired")
+	if err := w.depsWired(); err != nil {
+		return err
 	}
 	taskID := j.Args.ContactTaskID
 	switch j.Args.Op {

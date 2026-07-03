@@ -773,9 +773,9 @@ func (s *ContactService) PromoteInteractionToMutual(ctx context.Context, interac
 }
 
 // PromoteInteractionToMutualTx is the tx-threaded variant. Caller owns the tx.
-// The returned postCommit closure (nil-safe) captures follow-up-manager work
-// that should fire AFTER the tx commits so Todoist side effects run
-// outside the caller's transaction.
+// The returned postCommit closure (nil-safe) runs the direct-invoke
+// FollowUpManager.ApplyInteraction on a fresh tx after the caller's tx
+// commits; all remote effects leave via op jobs enqueued in that tx.
 func (s *ContactService) PromoteInteractionToMutualTx(
 	ctx context.Context, tx pgx.Tx, interactionID, contactID uuid.UUID, replyAt time.Time,
 ) (func(context.Context), error) {
