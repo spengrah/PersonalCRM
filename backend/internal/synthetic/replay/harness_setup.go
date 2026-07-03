@@ -270,7 +270,7 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 	followUpManager := consumer.NewFollowUpManager(
 		consumer.FollowUpModeOff,
 		claimRepo, contactRepo, nil, nil, interactionRepo, nil,
-		database.Pool, nil, nil, "", cfg.Watchdog,
+		nil, "", cfg.Watchdog,
 	)
 	followUpShim.real = consumer.NewFollowUpManagerWorker(bus, database.Pool, followUpManager)
 

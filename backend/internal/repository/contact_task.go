@@ -22,6 +22,14 @@ const (
 	ContactTaskStateCompleted           ContactTaskState = "completed"
 	ContactTaskStateDismissed           ContactTaskState = "dismissed"
 	ContactTaskStatePendingRemoteCreate ContactTaskState = "pending_remote_create"
+	// ContactTaskStateSuperseded marks an old generation retired by the
+	// reconciler itself (deadline-drift close+recreate, skip replacement) —
+	// distinct from completed (a real engagement was recorded) and
+	// dismissed (user opted out). The migration adding it to the DB CHECK
+	// constraint lands with the cadence cutover; no code path inserts this
+	// state yet, but the op executor's finalize dispatch handles it for
+	// forward compatibility (a row can go superseded-mid-create).
+	ContactTaskStateSuperseded ContactTaskState = "superseded"
 )
 
 // ContactTask represents a link between a contact and an external task provider
@@ -594,6 +602,17 @@ func (r *ContactTaskRepository) CountRiverJobsByContactTask(ctx context.Context,
 	return r.queries.CountRiverJobsByContactTask(ctx, db.CountRiverJobsByContactTaskParams{
 		Kind:          kind,
 		ContactTaskID: contactTaskID.String(),
+	})
+}
+
+// CountTodoistOpJobsByOp is a test-only count of todoist_task_op river_job
+// rows for a contact_task id and op verb. Wraps the sqlc query so cutover
+// integration tests can assert a specific op was (or was not) enqueued
+// without inlining raw SQL.
+func (r *ContactTaskRepository) CountTodoistOpJobsByOp(ctx context.Context, contactTaskID uuid.UUID, op string) (int64, error) {
+	return r.queries.CountTodoistOpJobsByOp(ctx, db.CountTodoistOpJobsByOpParams{
+		ContactTaskID: contactTaskID.String(),
+		Op:            op,
 	})
 }
 

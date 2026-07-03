@@ -36,18 +36,16 @@ type OverdueContact struct {
 }
 
 // FollowUpConsumer is the subset of *consumer.FollowUpManager
-// ContactService depends on post-cutover. HandleEvent is exposed for
-// completeness (ContactService itself doesn't call it — the
-// InteractionRecorder does), and ApplyInteraction is the direct-invoke
-// path for non-bus callers (Todoist completion wrapper,
-// Promote/ExtendInteraction). Both methods return a post-commit
-// closure so the refresh path's Todoist item_update runs outside the
-// caller's tx per core.md rule 153.
+// ContactService depends on post-cutover. ApplyInteraction is the
+// direct-invoke path for non-bus callers (Todoist completion wrapper,
+// Promote/ExtendInteraction). All remote effects leave via
+// todoist_task_op jobs enqueued in the caller's tx, so no post-commit
+// closure is returned.
 //
 // Interface lives here (not on the consumer) so tests can stub
 // follow-up behavior without building the full consumer graph.
 type FollowUpConsumer interface {
-	ApplyInteraction(ctx context.Context, tx pgx.Tx, req repository.ApplyInteractionRequest) (postCommit func(context.Context), err error)
+	ApplyInteraction(ctx context.Context, tx pgx.Tx, req repository.ApplyInteractionRequest) error
 }
 
 // cadenceWriter abstracts the direct-invoke write surface of
@@ -75,10 +73,11 @@ type ContactService struct {
 	contactTaskRepo   *repository.ContactTaskRepository
 	// followUp is the FollowUpManager consumer — the sole writer of
 	// contact_task.kind='follow_up' lifecycle post-cutover. Passed to
-	// NewContactService. Nil-tolerant: when nil, deriveFollowUpClosure
-	// returns a nil closure and non-bus follow-up work is silently
-	// skipped. Non-bus callers (Todoist completion path, Promote/Extend)
-	// route through followUp.ApplyInteraction inside deriveFollowUpClosure.
+	// NewContactService. Nil-tolerant: when nil, applyFollowUpInlineTx
+	// no-ops and non-bus follow-up work is silently skipped. Non-bus
+	// callers (Todoist completion path, Promote/Extend) route through
+	// followUp.ApplyInteraction inline in the caller's tx via
+	// applyFollowUpInlineTx.
 	followUp FollowUpConsumer
 	// bus is the event bus used to publish contact_methods.added on
 	// method-adding mutations. Required in production wiring (main.go).
@@ -613,9 +612,8 @@ func (s *ContactService) RecordInteraction(ctx context.Context, req repository.R
 	if err != nil {
 		return nil, err
 	}
-	if res.FollowUpFn != nil {
-		res.FollowUpFn(ctx)
-	}
+	// Follow-up (and its op enqueue) already ran inside the tx above; no
+	// post-commit work remains.
 	return res.Interaction, nil
 }
 
@@ -728,21 +726,21 @@ func (s *ContactService) RecordInteractionTx(
 
 	// 7. Derive the follow-up closure. Cadence writes happen via either
 	// the recorder's inline CadenceUpdater.HandleEvent (publishesEvent true)
-	// or the direct ApplyInteraction call above (publishesEvent false). The
-	// FollowUpManager consumer runs inline in the recorder on the
-	// publishesEvent=true path (post-commit closure for refresh path only);
-	// the publishesEvent=false path (Todoist completion wrapper) still
-	// needs a post-commit closure that calls
-	// FollowUpManager.ApplyInteraction on a fresh tx.
-	var followUpFn func(context.Context)
+	// or the direct ApplyInteraction call above (publishesEvent false).
+	// Follow-up runs the same way: publishesEvent=true callers rely on the
+	// recorder's inline FollowUpManager.HandleEvent; the publishesEvent=false
+	// path (Todoist completion wrapper) applies it INLINE here, in the
+	// caller's tx, so the op enqueue commits atomically with the interaction
+	// (I4 — no best-effort post-commit closure).
 	if !publishesEvent {
-		followUpFn = s.deriveFollowUpClosure(contact, interaction)
+		if err := s.applyFollowUpInlineTx(ctx, tx, interaction); err != nil {
+			return nil, err
+		}
 	}
 
 	res := &RecordInteractionResult{
 		Interaction: interaction,
 		IsReplay:    false,
-		FollowUpFn:  followUpFn,
 	}
 	if publishesEvent {
 		// The caller will publish interaction.recorded after this returns;
@@ -759,38 +757,23 @@ func (s *ContactService) RecordInteractionTx(
 //
 // Non-tx wrapper. See PromoteInteractionToMutualTx for the tx-threaded variant.
 func (s *ContactService) PromoteInteractionToMutual(ctx context.Context, interactionID, contactID uuid.UUID, replyAt time.Time) error {
-	var postCommit func(context.Context)
-	err := pgx.BeginTxFunc(ctx, s.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
-		var txErr error
-		postCommit, txErr = s.PromoteInteractionToMutualTx(ctx, tx, interactionID, contactID, replyAt)
-		return txErr
+	return pgx.BeginTxFunc(ctx, s.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		return s.PromoteInteractionToMutualTx(ctx, tx, interactionID, contactID, replyAt)
 	})
-	if err != nil {
-		return err
-	}
-	if postCommit != nil {
-		postCommit(ctx)
-	}
-	return nil
 }
 
 // PromoteInteractionToMutualTx is the tx-threaded variant. Caller owns the tx.
-// The returned postCommit closure (nil-safe) captures follow-up-manager work
-// that should fire AFTER the tx commits so Todoist side effects run
-// outside the caller's transaction.
+// Cadence + follow-up effects (including the follow-up's op enqueue) run
+// inline in that tx; there is no post-commit work.
 func (s *ContactService) PromoteInteractionToMutualTx(
 	ctx context.Context, tx pgx.Tx, interactionID, contactID uuid.UUID, replyAt time.Time,
-) (func(context.Context), error) {
+) error {
 	if s.cadence == nil {
-		return nil, errors.New("promote interaction: cadence updater not wired (pass cadence to NewContactService)")
+		return errors.New("promote interaction: cadence updater not wired (pass cadence to NewContactService)")
 	}
 	updated, err := s.updateInteractionDirectionTx(ctx, tx, interactionID, repository.InteractionDirectionMutual, replyAt)
 	if err != nil {
-		return nil, fmt.Errorf("update interaction direction: %w", err)
-	}
-	contact, err := s.contactRepo.GetContactTx(ctx, tx, contactID)
-	if err != nil {
-		return nil, fmt.Errorf("get contact for promotion: %w", err)
+		return fmt.Errorf("update interaction direction: %w", err)
 	}
 	// Route cadence writes through CadenceUpdater so the sole-writer
 	// invariant holds. Promote does NOT emit interaction.recorded and
@@ -802,9 +785,9 @@ func (s *ContactService) PromoteInteractionToMutualTx(
 		Source:     updated.Source,
 		OccurredAt: replyAt,
 	}); err != nil {
-		return nil, fmt.Errorf("apply promote cadence: %w", err)
+		return fmt.Errorf("apply promote cadence: %w", err)
 	}
-	return s.deriveFollowUpClosure(contact, updated), nil
+	return s.applyFollowUpInlineTx(ctx, tx, updated)
 }
 
 // ExtendInteraction extends an existing interaction's timestamp/description (incremental
@@ -812,19 +795,9 @@ func (s *ContactService) PromoteInteractionToMutualTx(
 //
 // Non-tx wrapper. See ExtendInteractionTx for the tx-threaded variant.
 func (s *ContactService) ExtendInteraction(ctx context.Context, interactionID, contactID uuid.UUID, direction string, occurredAt time.Time, description *string) error {
-	var postCommit func(context.Context)
-	err := pgx.BeginTxFunc(ctx, s.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
-		var txErr error
-		postCommit, txErr = s.ExtendInteractionTx(ctx, tx, interactionID, contactID, direction, occurredAt, description)
-		return txErr
+	return pgx.BeginTxFunc(ctx, s.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		return s.ExtendInteractionTx(ctx, tx, interactionID, contactID, direction, occurredAt, description)
 	})
-	if err != nil {
-		return err
-	}
-	if postCommit != nil {
-		postCommit(ctx)
-	}
-	return nil
 }
 
 // ExtendInteractionTx is the tx-threaded variant. Caller owns the tx. Note
@@ -833,24 +806,20 @@ func (s *ContactService) ExtendInteraction(ctx context.Context, interactionID, c
 // applies to the session being extended.
 func (s *ContactService) ExtendInteractionTx(
 	ctx context.Context, tx pgx.Tx, interactionID, contactID uuid.UUID, direction string, occurredAt time.Time, description *string,
-) (func(context.Context), error) {
+) error {
 	if s.cadence == nil {
-		return nil, errors.New("extend interaction: cadence updater not wired (pass cadence to NewContactService)")
+		return errors.New("extend interaction: cadence updater not wired (pass cadence to NewContactService)")
 	}
 	updated, err := s.updateInteractionTimestampTx(ctx, tx, interactionID, occurredAt, description)
 	if err != nil {
-		return nil, fmt.Errorf("update interaction timestamp: %w", err)
-	}
-	contact, err := s.contactRepo.GetContactTx(ctx, tx, contactID)
-	if err != nil {
-		return nil, fmt.Errorf("get contact for extension: %w", err)
+		return fmt.Errorf("update interaction timestamp: %w", err)
 	}
 	// UpdateInteractionTimestamp did not change the row's Direction column —
 	// the persisted Direction may be outbound/inbound/mutual from a prior
-	// write. deriveFollowUpClosure reads the persisted row's Direction,
-	// which for same-direction coalescing equals the caller-supplied
-	// direction. Guard against surprises by overriding the row's
-	// Direction in-memory with the caller's intent before applying effects.
+	// write. The follow-up apply reads the row's Direction, which for
+	// same-direction coalescing equals the caller-supplied direction. Guard
+	// against surprises by overriding the row's Direction in-memory with the
+	// caller's intent before applying effects.
 	updated.Direction = direction
 	// Route cadence writes through CadenceUpdater. Extend does NOT emit
 	// interaction.recorded; ApplyInteraction is the direct-invoke path.
@@ -860,9 +829,9 @@ func (s *ContactService) ExtendInteractionTx(
 		Source:     updated.Source,
 		OccurredAt: occurredAt,
 	}); err != nil {
-		return nil, fmt.Errorf("apply extend cadence: %w", err)
+		return fmt.Errorf("apply extend cadence: %w", err)
 	}
-	return s.deriveFollowUpClosure(contact, updated), nil
+	return s.applyFollowUpInlineTx(ctx, tx, updated)
 }
 
 // updateInteractionDirectionTx / updateInteractionTimestampTx are thin
@@ -883,66 +852,28 @@ func (s *ContactService) updateInteractionTimestampTx(
 	return s.interactionRepo.UpdateInteractionTimestampTx(ctx, tx, id, occurredAt, description)
 }
 
-// deriveFollowUpClosure builds the nil-safe post-commit closure that
-// routes follow-up work through FollowUpManager.ApplyInteraction. Used
-// by non-bus callers (non-tx RecordInteraction wrapper for Todoist
-// completion, Promote/Extend) where no interaction.recorded event is
-// published and therefore the recorder's inline dispatch never fires.
-// The closure opens a fresh tx on the pool, invokes ApplyInteraction
-// inside it, and runs the returned inner post-commit closure (refresh
-// path only) after the fresh tx commits.
-func (s *ContactService) deriveFollowUpClosure(contact *repository.Contact, interaction *repository.Interaction) func(context.Context) {
-	if contact == nil || interaction == nil || s.followUp == nil {
+// applyFollowUpInlineTx routes non-bus follow-up work through
+// FollowUpManager.ApplyInteraction INSIDE the caller's tx. Used by the
+// non-bus callers (RecordInteractionTx for Todoist completion, Promote/
+// Extend) where no interaction.recorded event is published and therefore
+// the recorder's inline dispatch never fires. ApplyInteraction performs
+// its own direction dispatch (unknown directions no-op) and enqueues any
+// op job in the same tx, so the follow-up write commits atomically with
+// the interaction — no best-effort post-commit closure (I4). No-op when
+// the follow-up consumer isn't wired (tests).
+func (s *ContactService) applyFollowUpInlineTx(ctx context.Context, tx pgx.Tx, interaction *repository.Interaction) error {
+	if s.followUp == nil || interaction == nil {
 		return nil
 	}
-	direction := interaction.Direction
-	switch direction {
-	case repository.InteractionDirectionOutbound,
-		repository.InteractionDirectionInbound,
-		repository.InteractionDirectionMutual:
-		// ok
-	default:
-		return nil
+	if err := s.followUp.ApplyInteraction(ctx, tx, repository.ApplyInteractionRequest{
+		ContactID:  interaction.ContactID,
+		Direction:  interaction.Direction,
+		Source:     interaction.Source,
+		OccurredAt: interaction.OccurredAt,
+	}); err != nil {
+		return fmt.Errorf("apply follow-up: %w", err)
 	}
-
-	contactID := contact.ID
-	contactSource := interaction.Source
-	occ := interaction.OccurredAt
-	dir := direction
-	fm := s.followUp
-	pool := s.database.Pool
-
-	return func(postCtx context.Context) {
-		req := repository.ApplyInteractionRequest{
-			ContactID:  contactID,
-			Direction:  dir,
-			Source:     contactSource,
-			OccurredAt: occ,
-		}
-		var innerPostCommit func(context.Context)
-		err := pgx.BeginTxFunc(postCtx, pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
-			pc, applyErr := fm.ApplyInteraction(postCtx, tx, req)
-			if applyErr != nil {
-				return applyErr
-			}
-			innerPostCommit = pc
-			return nil
-		})
-		if err != nil {
-			logger.Warn().Err(err).
-				Str("contactId", contactID.String()).
-				Str("direction", dir).
-				Msg("failed to apply follow-up via consumer")
-			return
-		}
-		// Run the nested post-commit closure OUTSIDE the fresh tx —
-		// this is where the Todoist item_update (refresh path) runs.
-		// On failure, the closure itself handles enqueueing a
-		// TodoistFollowUpRefreshJob for river-managed retry.
-		if innerPostCommit != nil {
-			innerPostCommit(postCtx)
-		}
-	}
+	return nil
 }
 
 // ListOverdueContacts retrieves contacts whose contact_by date is in the past.

@@ -466,8 +466,7 @@ func TestEmailIntegration_Concurrent_NoBackwardMove(t *testing.T) {
 	errCh := make(chan error, 2)
 	run := func(env *events.Envelope) {
 		err := pgx.BeginTxFunc(ctx, e.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
-			_, herr := e.emailConsumer.HandleEvent(ctx, tx, env)
-			return herr
+			return e.emailConsumer.HandleEvent(ctx, tx, env)
 		})
 		errCh <- err
 	}

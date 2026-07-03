@@ -129,12 +129,11 @@ type venueResolver interface {
 }
 
 // followUpDispatcher is the subset of *FollowUpManager the recorder
-// needs for the inline-apply path. Returns a post-commit closure (non-
-// nil on the refresh branch) that the recorder folds into its own
-// post-commit callback so the Todoist item_update runs outside the
-// caller's tx (core.md rule 153).
+// needs for the inline-apply path. All remote effects leave via
+// todoist_task_op jobs enqueued in the caller's tx, so no post-commit
+// closure is returned.
 type followUpDispatcher interface {
-	HandleEvent(ctx context.Context, tx pgx.Tx, env *events.Envelope) (postCommit func(context.Context), err error)
+	HandleEvent(ctx context.Context, tx pgx.Tx, env *events.Envelope) error
 }
 
 // InteractionRecorder is the event-bus consumer that turns raw provider
@@ -205,21 +204,21 @@ func (r *InteractionRecorder) SetVenueResolver(v venueResolver) {
 // Returns:
 //   - interaction: the persisted row (either freshly-inserted or the
 //     existing dedup-hit row). Caller may use the ID for HTTP responses.
-//   - postCommit:  non-nil when the write warrants a best-effort follow-up-
-//     manager call. Nil on replay (dedup-hit) so re-delivery never
-//     re-triggers side effects. Callers invoke AFTER the outer tx commits.
 //   - error:       wrapped. Caller rolls back tx.
-func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *events.Envelope) (*repository.Interaction, func(context.Context), error) {
+//
+// All effects — cadence, follow-up, and any todoist_task_op enqueue —
+// commit in the caller's tx, so there is no post-commit closure.
+func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *events.Envelope) (*repository.Interaction, error) {
 	if env == nil {
-		return nil, nil, errors.New("consumer: nil envelope")
+		return nil, errors.New("consumer: nil envelope")
 	}
 	if tx == nil {
-		return nil, nil, errors.New("consumer: nil tx")
+		return nil, errors.New("consumer: nil tx")
 	}
 
 	req, direction, suppressFollowUp, err := r.extractRequest(env)
 	if err != nil {
-		return nil, nil, fmt.Errorf("extract %s: %w", env.Kind, err)
+		return nil, fmt.Errorf("extract %s: %w", env.Kind, err)
 	}
 
 	// ContactID is resolved by the publisher before PublishTx; the
@@ -230,7 +229,7 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 			Str("event_id", env.ID.String()).
 			Str("kind", string(env.Kind)).
 			Msg("consumer: contact_id unresolved for kind; dropping")
-		return nil, nil, fmt.Errorf("consumer: contact_id unresolved for kind %s", env.Kind)
+		return nil, fmt.Errorf("consumer: contact_id unresolved for kind %s", env.Kind)
 	}
 
 	// calendar.attended: serialize against a concurrent decline DELETE on
@@ -244,16 +243,16 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 	if env.Kind == events.KindCalendarAttended && r.calendarLock != nil && req.SourceRef != nil {
 		eventID, parseErr := uuid.Parse(*req.SourceRef)
 		if parseErr != nil {
-			return nil, nil, fmt.Errorf("calendar.attended: source_ref %q not a calendar_event UUID: %w", *req.SourceRef, parseErr)
+			return nil, fmt.Errorf("calendar.attended: source_ref %q not a calendar_event UUID: %w", *req.SourceRef, parseErr)
 		}
 		exists, lockErr := r.calendarLock.LockExistsByIDTx(ctx, tx, eventID)
 		if lockErr != nil {
-			return nil, nil, fmt.Errorf("lock backing calendar_event: %w", lockErr)
+			return nil, fmt.Errorf("lock backing calendar_event: %w", lockErr)
 		}
 		if !exists {
 			// Backing calendar_event already deleted (decline won the race).
-			// Skip the insert; no interaction, nil postCommit.
-			return nil, nil, nil
+			// Skip the insert; no interaction.
+			return nil, nil
 		}
 	}
 
@@ -266,7 +265,7 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 	if r.venue != nil {
 		venueID, venueErr := r.resolveVenue(ctx, tx, env, &req)
 		if venueErr != nil {
-			return nil, nil, fmt.Errorf("resolve venue: %w", venueErr)
+			return nil, fmt.Errorf("resolve venue: %w", venueErr)
 		}
 		req.VenueID = venueID
 	}
@@ -278,7 +277,7 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 	// the interaction.recorded event we publish below.
 	res, err := r.writer.RecordInteractionTx(ctx, tx, true, req)
 	if err != nil {
-		return nil, nil, fmt.Errorf("record interaction tx: %w", err)
+		return nil, fmt.Errorf("record interaction tx: %w", err)
 	}
 
 	// Mark staging rows processed inside the SAME tx as the
@@ -299,7 +298,7 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 		if msgIDs, extractErr := extractMessageIDs(env); extractErr == nil && len(msgIDs) > 0 && r.staging != nil && res.Interaction != nil {
 			affected, markErr := r.staging.MarkProcessedTx(ctx, tx, env.Source, msgIDs, res.Interaction.ID, env.SourceID)
 			if markErr != nil {
-				return nil, nil, fmt.Errorf("mark staging messages processed: %w", markErr)
+				return nil, fmt.Errorf("mark staging messages processed: %w", markErr)
 			}
 			// Zero-rows-affected with a non-empty msgIDs list on a
 			// FRESH write means the predicate filtered everything out
@@ -320,16 +319,16 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 			// them out on retry — zero affected is expected. Replay
 			// short-circuits below before this check is reached.
 			if affected == 0 && !res.IsReplay {
-				return nil, nil, fmt.Errorf("recorder: staging mark-processed matched zero rows for source=%s source_id=%s (cross-session race; tx rolled back to let other writer win)",
+				return nil, fmt.Errorf("recorder: staging mark-processed matched zero rows for source=%s source_id=%s (cross-session race; tx rolled back to let other writer win)",
 					env.Source, env.SourceID)
 			}
 		}
 	}
 
-	// Replay: skip interaction.recorded emit (spec §3.4.1) and return
-	// nil postCommit so re-delivery doesn't re-fire side effects.
+	// Replay: skip interaction.recorded emit (spec §3.4.1) so re-delivery
+	// doesn't re-fire side effects.
 	if res.IsReplay {
-		return res.Interaction, nil, nil
+		return res.Interaction, nil
 	}
 
 	// Fresh-write: emit interaction.recorded atomically in the same tx.
@@ -341,7 +340,7 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 	// task.completed V2 for FollowUpManager.
 	recordedPayload, err := marshalRecordedPayload(res.Interaction, direction, req, res.PrevCadence, res.CadenceAtEmit, suppressFollowUp)
 	if err != nil {
-		return nil, nil, fmt.Errorf("marshal interaction.recorded: %w", err)
+		return nil, fmt.Errorf("marshal interaction.recorded: %w", err)
 	}
 	recordedEnv := &events.Envelope{
 		Source:     env.Source,
@@ -351,7 +350,7 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 		ObservedAt: req.OccurredAt,
 	}
 	if err := r.bus.PublishTx(ctx, tx, recordedEnv); err != nil {
-		return nil, nil, fmt.Errorf("publish interaction.recorded: %w", err)
+		return nil, fmt.Errorf("publish interaction.recorded: %w", err)
 	}
 
 	// Inline-apply cadence synchronously in the SAME tx so the manual
@@ -362,44 +361,24 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 	// is safe.
 	if r.cadence != nil {
 		if cadenceErr := r.cadence.HandleEvent(ctx, tx, recordedEnv); cadenceErr != nil {
-			return nil, nil, fmt.Errorf("inline apply cadence: %w", cadenceErr)
+			return nil, fmt.Errorf("inline apply cadence: %w", cadenceErr)
 		}
 	}
 
 	// Inline-apply follow-up under the same atomicity + dedupe rules as
 	// cadence. The consumer claims the event via event_consumer_claim so
 	// the queued worker for the same event becomes a durable no-op on
-	// re-delivery. The returned post-commit closure (non-nil on the
-	// refresh branch) carries the Todoist item_update call out of the
-	// tx per core.md rule 153.
-	var followUpPostCommit func(context.Context)
+	// re-delivery. All remote effects leave via todoist_task_op jobs
+	// enqueued in this tx — no post-commit closure.
 	if r.followUp != nil {
-		pc, followUpErr := r.followUp.HandleEvent(ctx, tx, recordedEnv)
-		if followUpErr != nil {
-			return nil, nil, fmt.Errorf("inline apply follow-up: %w", followUpErr)
-		}
-		followUpPostCommit = pc
-	}
-
-	// Build the post-commit callback. res.FollowUpFn is nil on the bus
-	// path (publishesEvent=true); it's set only when the non-bus wrapper
-	// path runs (publishesEvent=false — Todoist completion). The follow-up
-	// consumer's own post-commit closure fires on the bus path's
-	// refresh branch.
-	followUpFn := res.FollowUpFn
-	var postCommit func(context.Context)
-	if followUpFn != nil || followUpPostCommit != nil {
-		postCommit = func(pctx context.Context) {
-			if followUpFn != nil {
-				followUpFn(pctx)
-			}
-			if followUpPostCommit != nil {
-				followUpPostCommit(pctx)
-			}
+		if followUpErr := r.followUp.HandleEvent(ctx, tx, recordedEnv); followUpErr != nil {
+			return nil, fmt.Errorf("inline apply follow-up: %w", followUpErr)
 		}
 	}
 
-	return res.Interaction, postCommit, nil
+	// Follow-up already ran inline above (r.followUp.HandleEvent in this
+	// tx); no post-commit work remains.
+	return res.Interaction, nil
 }
 
 // resolveVenue resolves the shared-container venue node id for the interaction
@@ -694,31 +673,26 @@ func NewInteractionRecorderWorker(bus eventBusTx, pool *pgxpool.Pool, recorder *
 // Work implements river.Worker. Fetches the event envelope by id, opens a
 // fresh tx, and invokes HandleEvent. On error river will retry per
 // MaxAttempts (set to 5 via InsertOpts in events.consumerJobsForKind).
-// After the tx commits, invokes the recorder's returned postCommit
-// closure (best-effort follow-up manager invocation) followed by the
-// per-source aggregator reenqueue (best-effort; logged warn on
-// failure, does NOT roll back the interaction).
+// After the tx commits, runs the per-source aggregator reenqueue
+// (best-effort; logged warn on failure, does NOT roll back the
+// interaction). HandleEvent itself has no post-commit closure — all its
+// effects commit in the tx.
 func (w *InteractionRecorderWorker) Work(ctx context.Context, j *river.Job[consumerjobs.InteractionRecorderJobArgs]) error {
 	env, err := w.bus.GetEvent(ctx, j.Args.EventID)
 	if err != nil {
 		return fmt.Errorf("fetch event %s: %w", j.Args.EventID, err)
 	}
-	var postCommit func(context.Context)
 	var interactionRow *repository.Interaction
 	err = pgx.BeginTxFunc(ctx, w.pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
-		interaction, pc, handleErr := w.recorder.HandleEvent(ctx, tx, env)
+		interaction, handleErr := w.recorder.HandleEvent(ctx, tx, env)
 		if handleErr != nil {
 			return handleErr
 		}
-		postCommit = pc
 		interactionRow = interaction
 		return nil
 	})
 	if err != nil {
 		return err
-	}
-	if postCommit != nil {
-		postCommit(ctx)
 	}
 	// Post-commit aggregator reenqueue. Best-effort: a failure here
 	// does NOT roll back the interaction (already committed); the

@@ -127,7 +127,6 @@ type stubEmailAggregator struct {
 	promoteCalls  int
 	lastPromoteID uuid.UUID
 	lastPromoteTS time.Time
-	promotePC     func(context.Context)
 	promoteErr    error
 
 	extendCalls    int
@@ -135,21 +134,20 @@ type stubEmailAggregator struct {
 	lastExtendTS   time.Time
 	lastExtendDir  string
 	lastExtendDesc *string
-	extendPC       func(context.Context)
 	extendErr      error
 }
 
-func (s *stubEmailAggregator) PromoteInteractionToMutualTx(_ context.Context, _ pgx.Tx, interactionID, _ uuid.UUID, replyAt time.Time) (func(context.Context), error) {
+func (s *stubEmailAggregator) PromoteInteractionToMutualTx(_ context.Context, _ pgx.Tx, interactionID, _ uuid.UUID, replyAt time.Time) error {
 	s.promoteCalls++
 	if s.seq != nil {
 		s.seq.record("promote")
 	}
 	s.lastPromoteID = interactionID
 	s.lastPromoteTS = replyAt
-	return s.promotePC, s.promoteErr
+	return s.promoteErr
 }
 
-func (s *stubEmailAggregator) ExtendInteractionTx(_ context.Context, _ pgx.Tx, interactionID, _ uuid.UUID, direction string, occurredAt time.Time, description *string) (func(context.Context), error) {
+func (s *stubEmailAggregator) ExtendInteractionTx(_ context.Context, _ pgx.Tx, interactionID, _ uuid.UUID, direction string, occurredAt time.Time, description *string) error {
 	s.extendCalls++
 	if s.seq != nil {
 		s.seq.record("extend")
@@ -158,7 +156,7 @@ func (s *stubEmailAggregator) ExtendInteractionTx(_ context.Context, _ pgx.Tx, i
 	s.lastExtendTS = occurredAt
 	s.lastExtendDir = direction
 	s.lastExtendDesc = description
-	return s.extendPC, s.extendErr
+	return s.extendErr
 }
 
 // -----------------------------------------------------------------------------
@@ -239,9 +237,8 @@ func TestEmailConsumer_Create_Inbound_PublishesAndApplies(t *testing.T) {
 	p := basePayload(cid, repository.InteractionDirectionInbound)
 	env := mustEmailEnv(t, events.KindEmailReceived, p)
 
-	pc, err := c.HandleEvent(context.Background(), nonNilTx(), env)
+	err := c.HandleEvent(context.Background(), nonNilTx(), env)
 	require.NoError(t, err)
-	require.Nil(t, pc, "no follow-up post-commit closure on this create (stub returns nil)")
 
 	// Create path: writer ran with publishesEvent=true, source=email, the
 	// computed source_ref, occurred_at=SentAt, direction passed through.
@@ -273,20 +270,6 @@ func TestEmailConsumer_Create_Inbound_PublishesAndApplies(t *testing.T) {
 	require.Equal(t, expectedSourceRef(cid, "thread-1", emailDay), s.comms.lastMarkRef)
 }
 
-func TestEmailConsumer_Create_ThreadsFollowUpPostCommit(t *testing.T) {
-	cid := uuid.New()
-	c, s := newEmailConsumerWithStubs()
-	ran := false
-	s.followUp.postCommit = func(context.Context) { ran = true }
-
-	env := mustEmailEnv(t, events.KindEmailReceived, basePayload(cid, repository.InteractionDirectionInbound))
-	pc, err := c.HandleEvent(context.Background(), nonNilTx(), env)
-	require.NoError(t, err)
-	require.NotNil(t, pc, "create branch returns the follow-up post-commit closure")
-	pc(context.Background())
-	require.True(t, ran, "returned closure invokes the follow-up post-commit")
-}
-
 // -----------------------------------------------------------------------------
 // Found branch — same direction → extend; different direction → promote.
 // -----------------------------------------------------------------------------
@@ -300,7 +283,7 @@ func TestEmailConsumer_Found_SameDirection_Extends(t *testing.T) {
 	}
 
 	env := mustEmailEnv(t, events.KindEmailReceived, basePayload(cid, repository.InteractionDirectionInbound))
-	_, err := c.HandleEvent(context.Background(), nonNilTx(), env)
+	err := c.HandleEvent(context.Background(), nonNilTx(), env)
 	require.NoError(t, err)
 
 	require.Zero(t, s.writer.calls, "found branch never calls RecordInteractionTx")
@@ -325,7 +308,7 @@ func TestEmailConsumer_Found_DifferentDirection_Promotes(t *testing.T) {
 
 	// Inbound stored, now an outbound event → promote to mutual.
 	env := mustEmailEnv(t, events.KindEmailSent, basePayload(cid, repository.InteractionDirectionOutbound))
-	_, err := c.HandleEvent(context.Background(), nonNilTx(), env)
+	err := c.HandleEvent(context.Background(), nonNilTx(), env)
 	require.NoError(t, err)
 
 	require.Equal(t, 1, s.aggregator.promoteCalls)
@@ -355,7 +338,7 @@ func TestEmailConsumer_ForwardOnly_EarlierSentAt_HoldsStoredTS(t *testing.T) {
 	p.ExternalID = "<msg-earlier@example.test>"
 	env := mustEmailEnv(t, events.KindEmailReceived, p)
 
-	_, err := c.HandleEvent(context.Background(), nonNilTx(), env)
+	err := c.HandleEvent(context.Background(), nonNilTx(), env)
 	require.NoError(t, err)
 
 	require.Equal(t, 1, s.aggregator.extendCalls)
@@ -376,7 +359,7 @@ func TestEmailConsumer_ForwardOnly_EarlierMixedDirection_PromotesButHoldsTS(t *t
 	p.SentAt = stored.Add(-2 * time.Hour)
 	env := mustEmailEnv(t, events.KindEmailSent, p)
 
-	_, err := c.HandleEvent(context.Background(), nonNilTx(), env)
+	err := c.HandleEvent(context.Background(), nonNilTx(), env)
 	require.NoError(t, err)
 
 	require.Equal(t, 1, s.aggregator.promoteCalls)
@@ -392,7 +375,7 @@ func TestEmailConsumer_ForwardOnly_EqualSentAt_HoldsStoredTS(t *testing.T) {
 	}
 	env := mustEmailEnv(t, events.KindEmailReceived, basePayload(cid, repository.InteractionDirectionInbound))
 
-	_, err := c.HandleEvent(context.Background(), nonNilTx(), env)
+	err := c.HandleEvent(context.Background(), nonNilTx(), env)
 	require.NoError(t, err)
 
 	require.Equal(t, 1, s.aggregator.extendCalls)
@@ -412,7 +395,7 @@ func TestEmailConsumer_SourceRef_BuiltFromLocalDay(t *testing.T) {
 	p.SentAt = time.Date(2026, 4, 11, 1, 0, 0, 0, time.UTC)
 	env := mustEmailEnv(t, events.KindEmailReceived, p)
 
-	_, err := c.HandleEvent(context.Background(), nonNilTx(), env)
+	err := c.HandleEvent(context.Background(), nonNilTx(), env)
 	require.NoError(t, err)
 
 	want := expectedSourceRef(cid, "thread-1", emailDay)
@@ -430,7 +413,7 @@ func TestEmailConsumer_SourceRef_EmptyThread(t *testing.T) {
 	p.ThreadID = ""
 	env := mustEmailEnv(t, events.KindEmailReceived, p)
 
-	_, err := c.HandleEvent(context.Background(), nonNilTx(), env)
+	err := c.HandleEvent(context.Background(), nonNilTx(), env)
 	require.NoError(t, err)
 	require.Equal(t, expectedSourceRef(cid, "", emailDay), s.finder.lastLockRef)
 }
@@ -444,7 +427,7 @@ func TestEmailConsumer_LockTakenBeforeReadAndFind(t *testing.T) {
 	c, s := newEmailConsumerWithStubs()
 	env := mustEmailEnv(t, events.KindEmailReceived, basePayload(cid, repository.InteractionDirectionInbound))
 
-	_, err := c.HandleEvent(context.Background(), nonNilTx(), env)
+	err := c.HandleEvent(context.Background(), nonNilTx(), env)
 	require.NoError(t, err)
 
 	require.Equal(t, 1, s.finder.lockCalls)
@@ -471,7 +454,7 @@ func TestEmailConsumer_GetMessageNotFound_Errors(t *testing.T) {
 	s.comms.getErr = db.ErrNotFound
 	env := mustEmailEnv(t, events.KindEmailReceived, basePayload(cid, repository.InteractionDirectionInbound))
 
-	_, err := c.HandleEvent(context.Background(), nonNilTx(), env)
+	err := c.HandleEvent(context.Background(), nonNilTx(), env)
 	require.Error(t, err, "ErrNotFound on content read is error-and-retry, not benign-skip")
 	require.Zero(t, s.writer.calls, "no interaction write when content row is missing")
 	require.Zero(t, s.aggregator.extendCalls)
@@ -498,7 +481,7 @@ func TestEmailConsumer_CreateBranch_IsReplay_FallsThroughToFound(t *testing.T) {
 	s.writer.existing = existing
 
 	env := mustEmailEnv(t, events.KindEmailReceived, basePayload(cid, repository.InteractionDirectionInbound))
-	_, err := c.HandleEvent(context.Background(), nonNilTx(), env)
+	err := c.HandleEvent(context.Background(), nonNilTx(), env)
 	require.NoError(t, err)
 
 	require.Equal(t, 1, s.writer.calls, "RecordInteractionTx was attempted")
@@ -519,7 +502,7 @@ func TestEmailConsumer_CreateBranch_IsReplay_MixedDirection_Promotes(t *testing.
 	s.writer.existing = existing
 
 	env := mustEmailEnv(t, events.KindEmailSent, basePayload(cid, repository.InteractionDirectionOutbound))
-	_, err := c.HandleEvent(context.Background(), nonNilTx(), env)
+	err := c.HandleEvent(context.Background(), nonNilTx(), env)
 	require.NoError(t, err)
 
 	require.Equal(t, 1, s.aggregator.promoteCalls, "replay fall-through promotes on direction mismatch")
@@ -550,7 +533,7 @@ func TestEmailConsumer_PublisherBugGuards_Error(t *testing.T) {
 			tc.mutate(&p)
 			env := mustEmailEnv(t, tc.kind, p)
 
-			_, err := c.HandleEvent(context.Background(), nonNilTx(), env)
+			err := c.HandleEvent(context.Background(), nonNilTx(), env)
 			require.Error(t, err)
 			require.Zero(t, s.finder.lockCalls, "no lock taken on a malformed payload")
 			require.Zero(t, s.comms.getCalls)
@@ -561,7 +544,7 @@ func TestEmailConsumer_PublisherBugGuards_Error(t *testing.T) {
 
 func TestEmailConsumer_NilEnvelope_Errors(t *testing.T) {
 	c, _ := newEmailConsumerWithStubs()
-	_, err := c.HandleEvent(context.Background(), nonNilTx(), nil)
+	err := c.HandleEvent(context.Background(), nonNilTx(), nil)
 	require.Error(t, err)
 }
 
@@ -569,7 +552,7 @@ func TestEmailConsumer_NilTx_Errors(t *testing.T) {
 	cid := uuid.New()
 	c, _ := newEmailConsumerWithStubs()
 	env := mustEmailEnv(t, events.KindEmailReceived, basePayload(cid, repository.InteractionDirectionInbound))
-	_, err := c.HandleEvent(context.Background(), nil, env)
+	err := c.HandleEvent(context.Background(), nil, env)
 	require.Error(t, err)
 }
 
@@ -577,7 +560,7 @@ func TestEmailConsumer_WrongKind_Errors(t *testing.T) {
 	c, _ := newEmailConsumerWithStubs()
 	// Hand the consumer a non-email envelope; it must reject before any work.
 	env := &events.Envelope{ID: uuid.New(), Kind: events.KindMessageReceived, Source: "telegram"}
-	_, err := c.HandleEvent(context.Background(), nonNilTx(), env)
+	err := c.HandleEvent(context.Background(), nonNilTx(), env)
 	require.Error(t, err)
 }
 
@@ -588,7 +571,7 @@ func TestEmailConsumer_LockError_Propagates(t *testing.T) {
 	s.finder.lockErr = errors.New("lock failed")
 	env := mustEmailEnv(t, events.KindEmailReceived, basePayload(cid, repository.InteractionDirectionInbound))
 
-	_, err := c.HandleEvent(context.Background(), nonNilTx(), env)
+	err := c.HandleEvent(context.Background(), nonNilTx(), env)
 	require.Error(t, err)
 	require.Zero(t, s.comms.getCalls, "no read after a failed lock")
 }

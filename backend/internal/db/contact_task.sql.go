@@ -154,6 +154,29 @@ func (q *Queries) CountRiverJobsByContactTask(ctx context.Context, arg CountRive
 	return count, err
 }
 
+const CountTodoistOpJobsByOp = `-- name: CountTodoistOpJobsByOp :one
+SELECT COUNT(*) FROM river_job
+WHERE kind = 'todoist_task_op'
+  AND (args->>'contact_task_id') = $1::text
+  AND (args->>'op') = $2::text
+`
+
+type CountTodoistOpJobsByOpParams struct {
+	ContactTaskID string `json:"contact_task_id"`
+	Op            string `json:"op"`
+}
+
+// Test-only count of todoist_task_op river_job rows for a given
+// contact_task_id and op verb. Used by the follow-up cutover integration
+// tests to assert a create/close/update_deadline op was (or was not)
+// enqueued, without inlining raw SQL into Go test code (core.md rule 2).
+func (q *Queries) CountTodoistOpJobsByOp(ctx context.Context, arg CountTodoistOpJobsByOpParams) (int64, error) {
+	row := q.db.QueryRow(ctx, CountTodoistOpJobsByOp, arg.ContactTaskID, arg.Op)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const CreateContactTask = `-- name: CreateContactTask :one
 INSERT INTO contact_task (
     contact_id,

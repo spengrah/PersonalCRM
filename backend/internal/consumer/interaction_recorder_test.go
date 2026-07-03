@@ -40,8 +40,6 @@ type stubWriter struct {
 	returnErr error
 	// lastCreated records the fabricated row on fresh writes (nil on replay).
 	lastCreated *repository.Interaction
-	// postCommit is returned on fresh writes; caller may invoke it.
-	postCommit func(context.Context)
 	// prev + cadenceAtEmit are the pre-cadence snapshot returns. Tests
 	// set these to exercise V2 payload construction in HandleEvent.
 	prev          *repository.ContactCadenceFields
@@ -77,7 +75,6 @@ func (s *stubWriter) RecordInteractionTx(
 		IsReplay:      false,
 		PrevCadence:   s.prev,
 		CadenceAtEmit: s.cadenceAtEmit,
-		FollowUpFn:    s.postCommit,
 	}, nil
 }
 
@@ -240,7 +237,7 @@ func TestHandleEvent_MessageReceived_CutoverFreshWrite(t *testing.T) {
 		MessageIDs:        []uuid.UUID{msgID},
 	})
 
-	interaction, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	interaction, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.NoError(t, err)
 	require.NotNil(t, interaction)
 
@@ -272,7 +269,7 @@ func TestHandleEvent_MessageSent_CutoverFreshWrite_DefaultOutbound(t *testing.T)
 		MessageAt:         time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 		ExternalMessageID: "tg:1:2:11",
 	})
-	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	_, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.NoError(t, err)
 	require.Equal(t, repository.InteractionDirectionOutbound, w.lastReq.Direction)
 }
@@ -288,7 +285,7 @@ func TestHandleEvent_MessageReceived_PayloadDirectionMutual(t *testing.T) {
 		ExternalMessageID: "tg:1:2:20",
 		Direction:         "mutual",
 	})
-	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	_, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.NoError(t, err)
 	require.Equal(t, repository.InteractionDirectionMutual, w.lastReq.Direction)
 }
@@ -304,7 +301,7 @@ func TestHandleEvent_MessageSent_PayloadDirectionMutual(t *testing.T) {
 		ExternalMessageID: "tg:1:2:21",
 		Direction:         "mutual",
 	})
-	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	_, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.NoError(t, err)
 	require.Equal(t, repository.InteractionDirectionMutual, w.lastReq.Direction)
 }
@@ -318,7 +315,7 @@ func TestHandleEvent_CalendarAttended_CutoverFreshWrite_NoMarkProcessed(t *testi
 		EventID:    "gcal-evt-1",
 		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	})
-	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	_, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.NoError(t, err)
 	require.Equal(t, repository.InteractionSourceGCal, w.lastReq.Source)
 	require.NotNil(t, w.lastReq.SourceRef)
@@ -350,10 +347,9 @@ func TestHandleEvent_CalendarAttended_SkipsInsertWhenEventDeleted(t *testing.T) 
 		EventID:    eventID.String(),
 		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	})
-	interaction, postCommit, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	interaction, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.NoError(t, err)
 	require.Nil(t, interaction, "no interaction written when backing event deleted")
-	require.Nil(t, postCommit)
 	require.Equal(t, 1, locker.calls, "lock check ran once")
 	require.Equal(t, eventID, locker.lastID)
 	require.Zero(t, w.calls, "writer must not be invoked when the event is gone")
@@ -380,7 +376,7 @@ func TestHandleEvent_CalendarAttended_InsertsWhenEventPresent(t *testing.T) {
 		EventID:    eventID.String(),
 		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	})
-	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	_, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.NoError(t, err)
 	require.Equal(t, 1, locker.calls)
 	require.Equal(t, 1, w.calls, "writer invoked when the event is present")
@@ -400,7 +396,7 @@ func TestHandleEvent_CalendarAttended_CopiesTitleToDescription(t *testing.T) {
 		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 		Title:      &title,
 	})
-	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	_, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.NoError(t, err)
 	require.NotNil(t, w.lastReq.Description)
 	require.Equal(t, title, *w.lastReq.Description)
@@ -417,7 +413,7 @@ func TestHandleEvent_TaskCompleted_CutoverFreshWrite(t *testing.T) {
 		CompletedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 		Direction:   "mutual",
 	})
-	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	_, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.NoError(t, err)
 	require.Equal(t, repository.InteractionSourceTodoist, w.lastReq.Source)
 	require.NotNil(t, w.lastReq.SourceRef)
@@ -435,7 +431,7 @@ func TestHandleEvent_TaskCompleted_EmptyDirectionDefaultsMutual(t *testing.T) {
 		TaskKind:    "cadence",
 		CompletedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	})
-	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	_, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.NoError(t, err)
 	require.Equal(t, repository.InteractionDirectionMutual, w.lastReq.Direction)
 }
@@ -449,7 +445,7 @@ func TestHandleEvent_TaskOutreachDetected_CutoverFreshWrite(t *testing.T) {
 		TaskID:     "tk-outreach",
 		DetectedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	})
-	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	_, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.NoError(t, err)
 	require.Equal(t, repository.InteractionSourceTodoist, w.lastReq.Source)
 	require.Equal(t, repository.InteractionDirectionOutbound, w.lastReq.Direction)
@@ -464,7 +460,7 @@ func TestHandleEvent_InteractionManual_CutoverReturnsInteraction(t *testing.T) {
 		Direction:  "mutual",
 		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	})
-	interaction, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	interaction, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.NoError(t, err)
 	require.NotNil(t, interaction, "manual kind must return the interaction for the HTTP response")
 	require.Equal(t, repository.InteractionSourceManual, w.lastReq.Source)
@@ -481,14 +477,14 @@ func TestHandleEvent_InteractionManual_EmptyDirectionDefaultsMutual(t *testing.T
 		ContactID:  cid,
 		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	})
-	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	_, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.NoError(t, err)
 	require.Equal(t, repository.InteractionDirectionMutual, w.lastReq.Direction)
 }
 
 // -----------------------------------------------------------------------------
 // Replay cases. Writer returns isReplay=true → consumer skips
-// interaction.recorded emit, returns nil postCommit, but mark-processed
+// interaction.recorded emit, but mark-processed
 // still fires for telegram kinds — matches the pre-cutover publisher's
 // unconditional MarkMessagesProcessed call.
 // -----------------------------------------------------------------------------
@@ -513,10 +509,9 @@ func TestHandleEvent_MessageReceived_CutoverReplay(t *testing.T) {
 		ExternalMessageID: "tg:1:2:10",
 		MessageIDs:        []uuid.UUID{msgID},
 	})
-	interaction, postCommit, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	interaction, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.NoError(t, err)
 	require.Equal(t, existing.ID, interaction.ID, "replay returns the existing row")
-	require.Nil(t, postCommit, "replay returns nil postCommit")
 	require.Zero(t, b.publishCalls, "replay must not emit interaction.recorded (spec §3.4.1)")
 	require.Equal(t, 1, tg.calls, "mark-processed runs on replay")
 	require.Equal(t, existing.ID, tg.lastInteraction)
@@ -539,10 +534,9 @@ func TestHandleEvent_InteractionManual_Replay(t *testing.T) {
 		Direction:  "mutual",
 		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	})
-	interaction, postCommit, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	interaction, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.NoError(t, err)
 	require.Equal(t, existing.ID, interaction.ID)
-	require.Nil(t, postCommit)
 	require.Zero(t, b.publishCalls)
 }
 
@@ -562,7 +556,7 @@ func TestHandleEvent_MessageReceived_MissingContact(t *testing.T) {
 		MessageAt:         time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 		ExternalMessageID: "tg:1:2:10",
 	})
-	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	_, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.Error(t, err)
 	require.ErrorIs(t, err, db.ErrNotFound)
 	require.Zero(t, tg.calls)
@@ -580,7 +574,7 @@ func TestHandleEvent_CalendarAttended_MissingContact(t *testing.T) {
 		EventID:    "gcal-evt-miss",
 		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	})
-	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	_, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.ErrorIs(t, err, db.ErrNotFound)
 	require.Zero(t, b.publishCalls)
 }
@@ -601,7 +595,7 @@ func TestHandleEvent_WriterFailure_SkipsPublishAndMarkProcessed(t *testing.T) {
 		EventID:    "gcal-evt-fail",
 		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	})
-	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	_, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "record interaction tx")
 	require.Zero(t, b.publishCalls)
@@ -622,7 +616,7 @@ func TestHandleEvent_MarkProcessedFailure_RollsBack(t *testing.T) {
 		ExternalMessageID: "tg:1:2:mp-fail",
 		MessageIDs:        []uuid.UUID{msgID},
 	})
-	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	_, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "mark staging messages processed")
 	require.Zero(t, b.publishCalls, "publish must not run after mark-processed fails")
@@ -649,7 +643,7 @@ func TestHandleEvent_MarkProcessedZeroRows_FreshWrite_RollsBack(t *testing.T) {
 		ExternalMessageID: "tg:1:2:zero-fresh",
 		MessageIDs:        []uuid.UUID{msgID},
 	})
-	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	_, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "matched zero rows")
 	require.Zero(t, b.publishCalls, "interaction.recorded must not fire when staging mark matched zero rows on fresh write")
@@ -682,11 +676,10 @@ func TestHandleEvent_MarkProcessedZeroRows_Replay_Tolerated(t *testing.T) {
 		ExternalMessageID: "tg:1:2:zero-replay",
 		MessageIDs:        []uuid.UUID{msgID},
 	})
-	interaction, postCommit, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	interaction, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.NoError(t, err, "replay with zero affected must NOT error")
 	require.NotNil(t, interaction)
 	assert.Equal(t, existing.ID, interaction.ID)
-	assert.Nil(t, postCommit, "replay returns nil postCommit so re-delivery doesn't re-fire side effects")
 	require.Zero(t, b.publishCalls, "replay skips interaction.recorded emit")
 }
 
@@ -701,33 +694,9 @@ func TestHandleEvent_PublishFailure_ReturnsError(t *testing.T) {
 		EventID:    "gcal-evt-pub-fail",
 		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	})
-	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	_, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "publish interaction.recorded")
-}
-
-// -----------------------------------------------------------------------------
-// postCommit propagation.
-// -----------------------------------------------------------------------------
-
-func TestHandleEvent_PostCommitBubblesUp(t *testing.T) {
-	cid := uuid.New()
-	rec, w, _, _, _ := newRecorderWithStubs()
-	invoked := false
-	w.postCommit = func(context.Context) { invoked = true }
-
-	env := mustEnv(t, events.KindInteractionManual, events.InteractionManualPayload{
-		Version:    1,
-		ContactID:  cid,
-		Direction:  "outbound",
-		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
-	})
-	_, postCommit, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
-	require.NoError(t, err)
-	require.NotNil(t, postCommit, "fresh write must return non-nil postCommit when writer supplied one")
-	require.False(t, invoked, "HandleEvent must not invoke postCommit itself (caller runs it after tx commit)")
-	postCommit(context.Background())
-	require.True(t, invoked)
 }
 
 // TestHandleEvent_FollowUpDispatcher_InlineInvoked asserts that the
@@ -746,7 +715,7 @@ func TestHandleEvent_FollowUpDispatcher_InlineInvoked(t *testing.T) {
 		Direction:  "outbound",
 		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	})
-	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	_, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.NoError(t, err)
 	require.Equal(t, 1, followUp.calls, "follow-up dispatcher must be invoked inline for fresh writes")
 	require.NotNil(t, b.lastEnv)
@@ -754,37 +723,12 @@ func TestHandleEvent_FollowUpDispatcher_InlineInvoked(t *testing.T) {
 		"follow-up dispatcher must receive the interaction.recorded envelope id")
 }
 
-// TestHandleEvent_FollowUpDispatcher_PostCommitFolded asserts that a
-// non-nil post-commit closure returned by the follow-up dispatcher is
-// invoked when the recorder's returned post-commit fires.
-func TestHandleEvent_FollowUpDispatcher_PostCommitFolded(t *testing.T) {
-	cid := uuid.New()
-	rec, _, _, _, _ := newRecorderWithStubs()
-	var postFired bool
-	followUp := &stubFollowUpDispatcher{postCommit: func(context.Context) { postFired = true }}
-	rec.followUp = followUp
-
-	env := mustEnv(t, events.KindInteractionManual, events.InteractionManualPayload{
-		Version:    1,
-		ContactID:  cid,
-		Direction:  "outbound",
-		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
-	})
-	_, postCommit, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
-	require.NoError(t, err)
-	require.NotNil(t, postCommit, "non-nil follow-up post-commit must surface in recorder post-commit")
-	require.False(t, postFired, "post-commit must not run inside HandleEvent")
-	postCommit(context.Background())
-	require.True(t, postFired)
-}
-
-// TestHandleEvent_NoFollowUpOrPostCommit_NilReturned asserts that
-// without either a non-bus FollowUpFn or a bus-path follow-up post-
-// commit, the recorder returns nil post-commit (no empty wrapper).
+// TestHandleEvent_NoFollowUpOrPostCommit_NilReturned asserts that the
+// recorder returns a nil post-commit — follow-up (and its op enqueue)
+// runs inline in the tx, so there is no post-commit closure.
 func TestHandleEvent_NoFollowUpOrPostCommit_NilReturned(t *testing.T) {
 	cid := uuid.New()
-	rec, w, _, _, _ := newRecorderWithStubs()
-	w.postCommit = nil
+	rec, _, _, _, _ := newRecorderWithStubs()
 	rec.followUp = nil
 
 	env := mustEnv(t, events.KindInteractionManual, events.InteractionManualPayload{
@@ -793,26 +737,25 @@ func TestHandleEvent_NoFollowUpOrPostCommit_NilReturned(t *testing.T) {
 		Direction:  "outbound",
 		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	})
-	_, postCommit, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	_, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.NoError(t, err)
-	require.Nil(t, postCommit, "no follow-up dispatcher + no post-commit must return nil post-commit")
 }
 
-// stubFollowUpDispatcher captures HandleEvent invocations and returns
-// the pre-configured post-commit closure.
+// stubFollowUpDispatcher captures HandleEvent invocations. All remote
+// effects leave via op jobs enqueued in the caller's tx, so HandleEvent
+// returns only an error.
 type stubFollowUpDispatcher struct {
 	calls       int
 	lastEventID uuid.UUID
-	postCommit  func(context.Context)
 	err         error
 }
 
-func (s *stubFollowUpDispatcher) HandleEvent(_ context.Context, _ pgx.Tx, env *events.Envelope) (func(context.Context), error) {
+func (s *stubFollowUpDispatcher) HandleEvent(_ context.Context, _ pgx.Tx, env *events.Envelope) error {
 	s.calls++
 	if env != nil {
 		s.lastEventID = env.ID
 	}
-	return s.postCommit, s.err
+	return s.err
 }
 
 // -----------------------------------------------------------------------------
@@ -821,7 +764,7 @@ func (s *stubFollowUpDispatcher) HandleEvent(_ context.Context, _ pgx.Tx, env *e
 
 func TestHandleEvent_NilEnvelope_Errors(t *testing.T) {
 	rec, _, _, _, _ := newRecorderWithStubs()
-	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), nil)
+	_, err := rec.HandleEvent(context.Background(), nonNilTx(), nil)
 	require.Error(t, err)
 }
 
@@ -832,7 +775,7 @@ func TestHandleEvent_NilTx_Errors(t *testing.T) {
 		Version: 1, ContactID: cid, EventID: "x",
 		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	})
-	_, _, err := rec.HandleEvent(context.Background(), nil, env)
+	_, err := rec.HandleEvent(context.Background(), nil, env)
 	require.Error(t, err)
 }
 
@@ -844,7 +787,7 @@ func TestHandleEvent_UnknownKind_Errors(t *testing.T) {
 		Payload:    json.RawMessage(`{"version":1}`),
 		ObservedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	}
-	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	_, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "extract made.up")
 }
@@ -858,7 +801,7 @@ func TestHandleEvent_UnresolvedContactID_Errors(t *testing.T) {
 		MessageAt:         time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 		ExternalMessageID: "tg:1:2:unresolved",
 	})
-	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	_, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "contact_id unresolved")
 	require.Zero(t, w.calls)
@@ -933,7 +876,7 @@ func TestHandleEvent_RefBearingKind_EmptySourceRef_Errors(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rec, w, _, b, _ := newRecorderWithStubs()
-			_, _, err := rec.HandleEvent(ctx, nonNilTx(), tt.env())
+			_, err := rec.HandleEvent(ctx, nonNilTx(), tt.env())
 			require.Error(t, err)
 			require.Contains(t, err.Error(), tt.wantSub)
 			require.Zero(t, w.calls)
@@ -951,7 +894,7 @@ func TestHandleEvent_PayloadUnmarshalFailure_Errors(t *testing.T) {
 		Payload:    json.RawMessage(`{not valid json`),
 		ObservedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	}
-	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	_, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.Error(t, err)
 }
 
@@ -968,7 +911,7 @@ func TestHandleEvent_RecordedEventSourceIDIsInteractionID(t *testing.T) {
 		EventID:    "gcal-evt-sid",
 		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	})
-	_, _, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
+	_, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
 	require.NoError(t, err)
 	require.NotNil(t, w.lastCreated)
 	require.Equal(t, w.lastCreated.ID.String(), b.lastEnv.SourceID,

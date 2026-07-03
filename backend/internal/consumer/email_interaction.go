@@ -37,10 +37,10 @@ type emailInteractionFinder interface {
 // emailAggregator is the subset of *service.ContactService the email
 // consumer depends on for the found-branch aggregation primitives. Both
 // methods write the supplied occurred_at unconditionally + apply cadence
-// inline + publish nothing; they return a nil-safe post-commit closure.
+// and follow-up inline in the caller's tx + publish nothing.
 type emailAggregator interface {
-	PromoteInteractionToMutualTx(ctx context.Context, tx pgx.Tx, interactionID, contactID uuid.UUID, replyAt time.Time) (func(context.Context), error)
-	ExtendInteractionTx(ctx context.Context, tx pgx.Tx, interactionID, contactID uuid.UUID, direction string, occurredAt time.Time, description *string) (func(context.Context), error)
+	PromoteInteractionToMutualTx(ctx context.Context, tx pgx.Tx, interactionID, contactID uuid.UUID, replyAt time.Time) error
+	ExtendInteractionTx(ctx context.Context, tx pgx.Tx, interactionID, contactID uuid.UUID, direction string, occurredAt time.Time, description *string) error
 }
 
 // emailVenueResolver resolves the email-thread venue for a freshly-created email
@@ -115,24 +115,24 @@ func (c *EmailInteractionConsumer) SetVenueResolver(v emailVenueResolver) {
 }
 
 // HandleEvent processes an email.received / email.sent envelope inside the
-// caller's tx. Returns a nil-safe post-commit closure (the FollowUpManager's
-// Todoist item_update runs outside the tx per core.md rule) and an error
-// (caller rolls back). See the EmailInteractionConsumer doc comment for the
-// branch contract.
-func (c *EmailInteractionConsumer) HandleEvent(ctx context.Context, tx pgx.Tx, env *events.Envelope) (func(context.Context), error) {
+// caller's tx. All effects — cadence, follow-up, and any todoist_task_op
+// enqueue — happen in that tx, so there is no post-commit work; returns an
+// error (caller rolls back) only. See the EmailInteractionConsumer doc
+// comment for the branch contract.
+func (c *EmailInteractionConsumer) HandleEvent(ctx context.Context, tx pgx.Tx, env *events.Envelope) error {
 	if env == nil {
-		return nil, errors.New("email_interaction: nil envelope")
+		return errors.New("email_interaction: nil envelope")
 	}
 	if tx == nil {
-		return nil, errors.New("email_interaction: nil tx")
+		return errors.New("email_interaction: nil tx")
 	}
 	if env.Kind != events.KindEmailReceived && env.Kind != events.KindEmailSent {
-		return nil, fmt.Errorf("email_interaction: unsupported kind %q", env.Kind)
+		return fmt.Errorf("email_interaction: unsupported kind %q", env.Kind)
 	}
 
 	var p events.EmailEventPayload
 	if err := events.Unmarshal(env, &p); err != nil {
-		return nil, fmt.Errorf("unmarshal email payload: %w", err)
+		return fmt.Errorf("unmarshal email payload: %w", err)
 	}
 
 	// Publisher-bug guards (mirroring CalendarDeclineHandler). The publisher
@@ -142,17 +142,17 @@ func (c *EmailInteractionConsumer) HandleEvent(ctx context.Context, tx pgx.Tx, e
 	// implies it, but defend against a malformed publisher). SentAt anchors
 	// occurred_at + the forward-only compare.
 	if p.ContactID == uuid.Nil {
-		return nil, fmt.Errorf("email_interaction: empty contact_id (event %s)", env.ID)
+		return fmt.Errorf("email_interaction: empty contact_id (event %s)", env.ID)
 	}
 	if p.ExternalID == "" {
-		return nil, fmt.Errorf("email_interaction: empty external_id (event %s)", env.ID)
+		return fmt.Errorf("email_interaction: empty external_id (event %s)", env.ID)
 	}
 	if p.Direction != repository.InteractionDirectionInbound && p.Direction != repository.InteractionDirectionOutbound {
-		return nil, fmt.Errorf("email_interaction: direction must be %q or %q, got %q (event %s)",
+		return fmt.Errorf("email_interaction: direction must be %q or %q, got %q (event %s)",
 			repository.InteractionDirectionInbound, repository.InteractionDirectionOutbound, p.Direction, env.ID)
 	}
 	if p.SentAt.IsZero() {
-		return nil, fmt.Errorf("email_interaction: zero sent_at (event %s)", env.ID)
+		return fmt.Errorf("email_interaction: zero sent_at (event %s)", env.ID)
 	}
 
 	// source_ref = "<contact_uuid>:<thread_id>:<local_day>". Built from the
@@ -170,7 +170,7 @@ func (c *EmailInteractionConsumer) HandleEvent(ctx context.Context, tx pgx.Tx, e
 	// takes the found branch — so the forward-only occurred_at guard never
 	// regresses under concurrency.
 	if err := c.interactions.AcquireSourceRefLockTx(ctx, tx, sourceRef); err != nil {
-		return nil, fmt.Errorf("acquire source_ref lock: %w", err)
+		return fmt.Errorf("acquire source_ref lock: %w", err)
 	}
 
 	// Locate the content row inside the tx. A miss is an
@@ -186,16 +186,15 @@ func (c *EmailInteractionConsumer) HandleEvent(ctx context.Context, tx pgx.Tx, e
 	// legitimate-miss case.
 	commsMsg, err := c.comms.GetMessageTx(ctx, tx, repository.InteractionSourceEmail, p.ExternalID, p.ContactID)
 	if err != nil {
-		return nil, fmt.Errorf("locate comms_message for email event %s: %w", env.ID, err)
+		return fmt.Errorf("locate comms_message for email event %s: %w", env.ID, err)
 	}
 
 	found, err := c.interactions.FindBySourceRefTx(ctx, tx, p.ContactID, repository.InteractionSourceEmail, sourceRef)
 	if err != nil && !errors.Is(err, db.ErrNotFound) {
-		return nil, fmt.Errorf("find email interaction by source_ref: %w", err)
+		return fmt.Errorf("find email interaction by source_ref: %w", err)
 	}
 
 	var interactionID uuid.UUID
-	var postCommit func(context.Context)
 
 	if errors.Is(err, db.ErrNotFound) {
 		// Create branch: reuse the InteractionRecorder's
@@ -218,13 +217,13 @@ func (c *EmailInteractionConsumer) HandleEvent(ctx context.Context, tx pgx.Tx, e
 			venueID, venueErr := c.venue.ResolveVenueForInteraction(
 				ctx, tx, repository.InteractionSourceEmail, repository.VenueKindEmailThread, *commsMsg.ThreadID, "")
 			if venueErr != nil {
-				return nil, fmt.Errorf("resolve email venue: %w", venueErr)
+				return fmt.Errorf("resolve email venue: %w", venueErr)
 			}
 			req.VenueID = &venueID
 		}
 		res, recordErr := c.writer.RecordInteractionTx(ctx, tx, true, req)
 		if recordErr != nil {
-			return nil, fmt.Errorf("record email interaction: %w", recordErr)
+			return fmt.Errorf("record email interaction: %w", recordErr)
 		}
 
 		if res.IsReplay {
@@ -239,31 +238,27 @@ func (c *EmailInteractionConsumer) HandleEvent(ctx context.Context, tx pgx.Tx, e
 			// forward-only timestamp rather than silently marking it processed
 			// (which would be a lost update). No second interaction.recorded
 			// is published; the found path publishes nothing.
-			pc, aggErr := c.aggregate(ctx, tx, &p, res.Interaction)
-			if aggErr != nil {
-				return nil, aggErr
+			if aggErr := c.aggregate(ctx, tx, &p, res.Interaction); aggErr != nil {
+				return aggErr
 			}
 			interactionID = res.Interaction.ID
-			postCommit = pc
 		} else {
 			// Fresh write: emit interaction.recorded atomically + inline-apply
-			// cadence + follow-up, exactly as InteractionRecorder does.
-			pc, emitErr := c.emitRecorded(ctx, tx, env, &p, res, req)
-			if emitErr != nil {
-				return nil, emitErr
+			// cadence + follow-up, exactly as InteractionRecorder does. The
+			// fresh branch's remote effects leave via op jobs enqueued in this
+			// tx, so it contributes no post-commit closure.
+			if emitErr := c.emitRecorded(ctx, tx, env, &p, res, req); emitErr != nil {
+				return emitErr
 			}
 			interactionID = res.Interaction.ID
-			postCommit = pc
 		}
 	} else {
 		// Found branch: extend (same direction) or promote (direction
-		// differs). Both apply cadence inline and publish nothing.
-		pc, aggErr := c.aggregate(ctx, tx, &p, found)
-		if aggErr != nil {
-			return nil, aggErr
+		// differs). Both apply cadence + follow-up inline and publish nothing.
+		if aggErr := c.aggregate(ctx, tx, &p, found); aggErr != nil {
+			return aggErr
 		}
 		interactionID = found.ID
-		postCommit = pc
 	}
 
 	// Link the content row to the interaction it rolled into, on every
@@ -271,10 +266,12 @@ func (c *EmailInteractionConsumer) HandleEvent(ctx context.Context, tx pgx.Tx, e
 	// already processed on a prior run (genuine re-delivery) — benign under
 	// the tx-bound read + per-key lock, so we don't error on it.
 	if _, err := c.comms.MarkProcessedTx(ctx, tx, []uuid.UUID{commsMsg.ID}, interactionID, sourceRef); err != nil {
-		return nil, fmt.Errorf("mark comms_message processed: %w", err)
+		return fmt.Errorf("mark comms_message processed: %w", err)
 	}
 
-	return postCommit, nil
+	// All follow-up effects (and their op enqueues) ran inline in this tx —
+	// no post-commit work.
+	return nil
 }
 
 // aggregate applies the found-branch extend/promote to an existing
@@ -283,7 +280,7 @@ func (c *EmailInteractionConsumer) HandleEvent(ctx context.Context, tx pgx.Tx, e
 // fall-through.
 func (c *EmailInteractionConsumer) aggregate(
 	ctx context.Context, tx pgx.Tx, p *events.EmailEventPayload, found *repository.Interaction,
-) (func(context.Context), error) {
+) error {
 	// Forward-only: only advance occurred_at when SentAt is strictly later
 	// than the stored value. Equal needs no write; an earlier (out-of-order
 	// backfill) SentAt holds the stored value so occurred_at never moves
@@ -299,18 +296,16 @@ func (c *EmailInteractionConsumer) aggregate(
 		// even when ts == found.OccurredAt (the held value), so an
 		// out-of-order mixed-direction backfill still promotes without
 		// moving occurred_at backward.
-		pc, err := c.aggregator.PromoteInteractionToMutualTx(ctx, tx, found.ID, p.ContactID, ts)
-		if err != nil {
-			return nil, fmt.Errorf("promote email interaction to mutual: %w", err)
+		if err := c.aggregator.PromoteInteractionToMutualTx(ctx, tx, found.ID, p.ContactID, ts); err != nil {
+			return fmt.Errorf("promote email interaction to mutual: %w", err)
 		}
-		return pc, nil
+		return nil
 	}
 
-	pc, err := c.aggregator.ExtendInteractionTx(ctx, tx, found.ID, p.ContactID, p.Direction, ts, p.Subject)
-	if err != nil {
-		return nil, fmt.Errorf("extend email interaction: %w", err)
+	if err := c.aggregator.ExtendInteractionTx(ctx, tx, found.ID, p.ContactID, p.Direction, ts, p.Subject); err != nil {
+		return fmt.Errorf("extend email interaction: %w", err)
 	}
-	return pc, nil
+	return nil
 }
 
 // emitRecorded runs the InteractionRecorder's fresh-write post-record
@@ -318,16 +313,17 @@ func (c *EmailInteractionConsumer) aggregate(
 // payload, publish it in the same tx (so CadenceUpdater + FollowUpManager
 // get enqueued — cadence delivery path #1), then inline-apply cadence +
 // follow-up (the inline apply wins the durable event claim, so the async
-// workers no-op; the recorder pattern reused verbatim). Returns the
-// follow-up's post-commit closure (nil-safe).
+// workers no-op; the recorder pattern reused verbatim). All remote follow-
+// up effects leave via todoist_task_op jobs enqueued in this tx, so there
+// is no post-commit closure to return.
 func (c *EmailInteractionConsumer) emitRecorded(
 	ctx context.Context, tx pgx.Tx, env *events.Envelope, p *events.EmailEventPayload,
 	res *repository.RecordInteractionResult, req repository.RecordInteractionRequest,
-) (func(context.Context), error) {
+) error {
 	// Email never suppresses follow-ups (only kind=send task completions do).
 	recordedPayload, err := marshalRecordedPayload(res.Interaction, p.Direction, req, res.PrevCadence, res.CadenceAtEmit, false)
 	if err != nil {
-		return nil, fmt.Errorf("marshal interaction.recorded: %w", err)
+		return fmt.Errorf("marshal interaction.recorded: %w", err)
 	}
 	recordedEnv := &events.Envelope{
 		Source:     repository.InteractionSourceEmail,
@@ -337,28 +333,25 @@ func (c *EmailInteractionConsumer) emitRecorded(
 		ObservedAt: req.OccurredAt,
 	}
 	if err := c.bus.PublishTx(ctx, tx, recordedEnv); err != nil {
-		return nil, fmt.Errorf("publish interaction.recorded: %w", err)
+		return fmt.Errorf("publish interaction.recorded: %w", err)
 	}
 	if c.cadence != nil {
 		if cadenceErr := c.cadence.HandleEvent(ctx, tx, recordedEnv); cadenceErr != nil {
-			return nil, fmt.Errorf("inline apply cadence: %w", cadenceErr)
+			return fmt.Errorf("inline apply cadence: %w", cadenceErr)
 		}
 	}
-	var followUpPostCommit func(context.Context)
 	if c.followUp != nil {
-		pc, followUpErr := c.followUp.HandleEvent(ctx, tx, recordedEnv)
-		if followUpErr != nil {
-			return nil, fmt.Errorf("inline apply follow-up: %w", followUpErr)
+		if followUpErr := c.followUp.HandleEvent(ctx, tx, recordedEnv); followUpErr != nil {
+			return fmt.Errorf("inline apply follow-up: %w", followUpErr)
 		}
-		followUpPostCommit = pc
 	}
-	return followUpPostCommit, nil
+	return nil
 }
 
 // --------------------------------------------------------------------------
 // River worker wrapper. Mirrors InteractionRecorderWorker: fetch the
-// envelope by id, open a fresh tx, call HandleEvent, then run the returned
-// post-commit closure after the tx commits.
+// envelope by id, open a fresh tx, call HandleEvent — all effects commit
+// in that tx.
 // --------------------------------------------------------------------------
 
 // EmailInteractionConsumerWorker is the river worker that dispatches queued
@@ -377,30 +370,17 @@ func NewEmailInteractionConsumerWorker(bus eventBusTx, pool *pgxpool.Pool, consu
 }
 
 // Work implements river.Worker. Fetches the event envelope by id, opens a
-// fresh tx, invokes HandleEvent, and runs the returned post-commit closure
-// after the tx commits. On error River retries per MaxAttempts (5 from the
-// InsertOpts in events.consumerJobsForKind).
+// fresh tx, and invokes HandleEvent — all effects commit in that tx, so
+// there is no post-commit work. On error River retries per MaxAttempts (5
+// from the InsertOpts in events.consumerJobsForKind).
 func (w *EmailInteractionConsumerWorker) Work(ctx context.Context, j *river.Job[consumerjobs.EmailInteractionConsumerJobArgs]) error {
 	env, err := w.bus.GetEvent(ctx, j.Args.EventID)
 	if err != nil {
 		return fmt.Errorf("fetch event %s: %w", j.Args.EventID, err)
 	}
-	var postCommit func(context.Context)
-	err = pgx.BeginTxFunc(ctx, w.pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
-		pc, handleErr := w.consumer.HandleEvent(ctx, tx, env)
-		if handleErr != nil {
-			return handleErr
-		}
-		postCommit = pc
-		return nil
+	return pgx.BeginTxFunc(ctx, w.pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		return w.consumer.HandleEvent(ctx, tx, env)
 	})
-	if err != nil {
-		return err
-	}
-	if postCommit != nil {
-		postCommit(ctx)
-	}
-	return nil
 }
 
 // Timeout bounds a single email-consumer run. A lock + read + single

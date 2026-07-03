@@ -300,6 +300,11 @@ type Querier interface {
 	CountTelegramMessagesByPeer(ctx context.Context) ([]*CountTelegramMessagesByPeerRow, error)
 	// Count messages for a single peer (for incremental discovery threshold check)
 	CountTelegramMessagesByPeerID(ctx context.Context, peerUserID pgtype.Int8) (*CountTelegramMessagesByPeerIDRow, error)
+	// Test-only count of todoist_task_op river_job rows for a given
+	// contact_task_id and op verb. Used by the follow-up cutover integration
+	// tests to assert a create/close/update_deadline op was (or was not)
+	// enqueued, without inlining raw SQL into Go test code (core.md rule 2).
+	CountTodoistOpJobsByOp(ctx context.Context, arg CountTodoistOpJobsByOpParams) (int64, error)
 	// Per-source count; mirrors ListUnmatched's anarlog_title exclusion
 	// so list+count cardinality stays consistent regardless of caller-
 	// supplied source.

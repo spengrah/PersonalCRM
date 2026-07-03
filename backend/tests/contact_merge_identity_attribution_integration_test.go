@@ -778,3 +778,74 @@ func TestMatchOrCreate_TombstonedCacheFallsThroughToSurvivor(t *testing.T) {
 		assert.Nil(t, ident.ContactID, "identity unlinked from the tombstoned contact")
 	})
 }
+
+// mergeAdapterMockTodoist records Sync calls for the adapter-through-
+// live-site test.
+type mergeAdapterMockTodoist struct {
+	commands []todoist.SyncCommand
+}
+
+func (m *mergeAdapterMockTodoist) QuickAdd(context.Context, string, string) (*todoist.QuickAddTask, error) {
+	return nil, assertErr("QuickAdd not used")
+}
+
+func (m *mergeAdapterMockTodoist) Sync(_ context.Context, _ string, _ []string, cmds []todoist.SyncCommand) (*todoist.SyncResponse, error) {
+	m.commands = append(m.commands, cmds...)
+	return &todoist.SyncResponse{}, nil
+}
+
+type assertErr string
+
+func (e assertErr) Error() string { return string(e) }
+
+// TestMergeContacts_CloseEnqueue_ExecutesThroughAdapter is the binding
+// gate for the reconciler PR1 cutover: the merge-close call site keeps
+// enqueuing the LEGACY todoist_followup_close kind, and after the bespoke
+// close worker is deleted the surviving legacy job must still execute —
+// via the transitional close adapter delegating to the unified executor.
+// Drives the live merge site, then runs the enqueued legacy-kind job
+// through the adapter and asserts it reaches an item_close for the row's
+// real external id.
+func TestMergeContacts_CloseEnqueue_ExecutesThroughAdapter(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	t.Parallel()
+	ctx := ctx0()
+
+	h := newMergeAttrHarness(t, ctx)
+	a := h.createContact(t, ctx, "adapter survivor")
+	b := h.createContact(t, ctx, "adapter loser")
+	// B carries a real-external-id follow-up so the merge enqueues a close.
+	bTask := h.seedTask(t, ctx, b.ID, contacttask.LifecycleFollowUpLoop, "managed", "tsk-adapter-b", nil)
+
+	_, err := h.contactSvc.MergeContacts(ctx, service.MergeContactsRequest{
+		SourceContactID: b.ID,
+		TargetContactID: a.ID,
+	})
+	require.NoError(t, err)
+
+	// The live site enqueued exactly one LEGACY-kind close job.
+	require.EqualValues(t, 1, h.closeJobCount(t, ctx, bTask.ID),
+		"merge close must enqueue a legacy todoist_followup_close job")
+
+	// Now execute that legacy-kind job through the close adapter →
+	// unified executor → item_close.
+	mock := &mergeAdapterMockTodoist{}
+	settings := func(context.Context) (*todoist.Settings, string, error) {
+		return &todoist.Settings{ProjectID: "p", LabelName: "l", IntegrationInstanceID: "i"}, "token", nil
+	}
+	executor := consumer.NewTodoistTaskOpWorker(
+		consumer.FollowUpModeCutover,
+		h.taskRepo, settings, func(string) todoist.Client { return mock }, nil, h.database.Pool,
+	)
+	adapter := consumer.NewTodoistFollowUpCloseAdapterWorker(executor)
+	require.NoError(t, adapter.Work(ctx, &river.Job[consumerjobs.TodoistFollowUpCloseJobArgs]{
+		Args: consumerjobs.TodoistFollowUpCloseJobArgs{ContactTaskID: bTask.ID},
+	}))
+
+	require.Len(t, mock.commands, 1)
+	assert.Equal(t, "item_close", mock.commands[0].Type)
+	assert.Equal(t, "tsk-adapter-b", mock.commands[0].Args["id"],
+		"adapter must close the row's real external id")
+}

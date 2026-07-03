@@ -55,7 +55,7 @@ func migrationsPathForTest() string {
 
 // --- golden lists (sorted) -------------------------------------------------
 
-// baseWorkerKinds is the 16 unconditionally-registered workers (shapes 1 & 4).
+// baseWorkerKinds is the 17 unconditionally-registered workers (shapes 1 & 4).
 var baseWorkerKinds = sortedCopy([]string{
 	"noop",
 	"interaction_recorder",
@@ -64,6 +64,7 @@ var baseWorkerKinds = sortedCopy([]string{
 	"cadence_updater",
 	"knowledge_cache_updater",
 	"followup_manager",
+	"todoist_task_op",
 	"todoist_followup_create",
 	"todoist_followup_close",
 	"todoist_followup_refresh",

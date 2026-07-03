@@ -42,7 +42,7 @@ func TestContactService_NilKnowledge_CreateContactErrors(t *testing.T) {
 
 func TestContactService_NilCadence_PromoteErrors(t *testing.T) {
 	t.Parallel()
-	_, err := nilContactService().PromoteInteractionToMutualTx(
+	err := nilContactService().PromoteInteractionToMutualTx(
 		context.Background(), nil, uuid.New(), uuid.New(), time.Time{})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "cadence updater not wired")
@@ -50,7 +50,7 @@ func TestContactService_NilCadence_PromoteErrors(t *testing.T) {
 
 func TestContactService_NilCadence_ExtendErrors(t *testing.T) {
 	t.Parallel()
-	_, err := nilContactService().ExtendInteractionTx(
+	err := nilContactService().ExtendInteractionTx(
 		context.Background(), nil, uuid.New(), uuid.New(), repository.InteractionDirectionMutual, time.Time{}, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "cadence updater not wired")
