@@ -29,7 +29,7 @@ type ingestStack struct {
 func buildIngestStack(
 	database *db.Database,
 	core coreRepos,
-	graph contactCore,
+	contactService *service.ContactService,
 	ingest ingestRepos,
 	messaging messagingFoundation,
 	consumers eventConsumers,
@@ -38,7 +38,6 @@ func buildIngestStack(
 ) ingestStack {
 	contactRepo := core.Contact
 	interactionRepo := core.Interaction
-	contactService := graph.ContactService
 	identityServiceForIngest := ingest.IdentityService
 	messagesMessageRepo := ingest.MessagesMessage
 	externalContactRepoForIngest := ingest.ExternalContact

@@ -104,9 +104,8 @@ func newMergeAttrHarnessWith(t *testing.T, ctx context.Context, wireTaskCloseEnq
 	assertSvc := service.NewAssertService(database.Pool, nodeRepo, entityRepo, predicateRepo, assertionRepo, bus)
 	cacheUpdater := consumer.NewKnowledgeCacheUpdater(assertionRepo, nodeRepo, contactRepo)
 
-	contactSvc := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, taskRepo, nil, nil)
-	contactSvc.SetKnowledgeWriter(assertSvc, cacheUpdater)
-	wireCadenceUpdaterForTest(t, database, contactSvc)
+	contactSvc := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, taskRepo, nil, nil,
+		buildCadenceUpdaterForTest(t, database), assertSvc, cacheUpdater, nil)
 	if wireTaskCloseEnqueuer {
 		contactSvc.SetTaskCloseEnqueuer(client, remoteCloseEnabled)
 	}

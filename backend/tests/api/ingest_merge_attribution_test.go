@@ -41,12 +41,11 @@ func newMergeCapableContactService(t *testing.T, env *ingestRawTestEnv) *service
 	assertSvc := service.NewAssertService(database.Pool, nodeRepo, entityRepo, predicateRepo, assertionRepo, bus)
 	cache := consumer.NewKnowledgeCacheUpdater(assertionRepo, nodeRepo, env.contactRepo)
 
-	svc := service.NewContactService(database, env.contactRepo, env.cmRepo, interactionRepo, taskRepo, nil, nil)
-	svc.SetKnowledgeWriter(assertSvc, cache)
-
 	claimRepo := repository.NewEventConsumerClaimRepository(database.Queries)
 	cadenceUpdater := consumer.NewCadenceUpdater(claimRepo, env.contactRepo, database.Queries, consumer.CadenceModeCutover, false)
-	svc.SetCadenceUpdater(cadenceUpdater)
+
+	svc := service.NewContactService(database, env.contactRepo, env.cmRepo, interactionRepo, taskRepo, nil, nil,
+		cadenceUpdater, assertSvc, cache, nil)
 
 	// No contact tasks are seeded in this env; wired defensively so a merge
 	// that ever closes an eligible task takes the WARN-skip path, not the

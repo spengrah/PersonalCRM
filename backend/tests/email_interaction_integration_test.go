@@ -56,8 +56,12 @@ func newEmailEnv(t *testing.T, ctx context.Context) *emailEnv {
 	commsRepo := repository.NewCommsMessageRepository(database.Queries)
 
 	// nil bus + nil rematch: the email consumer publishes interaction.recorded
-	// through the live bus the harness builds, not through the service.
-	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, nil, nil)
+	// through the live bus the harness builds, not through the service. cadence +
+	// knowledge are ctor args (the setters are gone).
+	cadenceUpdater := buildCadenceUpdaterForTest(t, database)
+	assertSvc, cache := buildKnowledgeDeps(t, database, nil)
+	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, nil, nil,
+		cadenceUpdater, assertSvc, cache, nil)
 
 	bus, emailConsumer := setupTestEventBusForEmail(t, ctx, database, contactService)
 

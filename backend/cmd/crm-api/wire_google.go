@@ -120,7 +120,7 @@ func registerGoogleProviders(deps googleProviderDeps) (*google.GChatSyncProvider
 	}
 
 	// GChat provider: registered into providerRegistry so the scheduler
-	// can run it — this is the go-live switch (PR 3). It stays inert
+	// can run it — this is the go-live switch. It stays inert
 	// until enablement reconciliation creates an enabled gchat sync state
 	// (no state → ListDueSyncStates filters enabled=TRUE → nothing to
 	// dispatch). It is store-only + event-free, so unlike Gmail it does

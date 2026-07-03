@@ -1,10 +1,14 @@
 package main
 
 import (
+	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/riverqueue/river"
 )
 
 // coreRepos holds the six core-entity repositories every downstream
@@ -70,28 +74,24 @@ func buildIngestRepos(queries db.Querier) ingestRepos {
 	}
 }
 
-// contactCore holds the rematch service, contact service, and graph
-// (SP1) store built around the core repos + event bus.
-type contactCore struct {
+// graphCore holds the rematch service and the graph (SP1) store built
+// around the core repos + event bus. ContactService is NOT built here —
+// it depends on the event-bus consumers (cadence / knowledge / follow-up),
+// so it is constructed by buildContactService once those exist.
+type graphCore struct {
 	RematchService *service.RematchService
-	ContactService *service.ContactService
 	GraphNode      *repository.NodeRepository
-	GraphEntity    *repository.EntityRepository
-	GraphPredicate *repository.PredicateRepository
 	GraphAssertion *repository.AssertionRepository
 	AssertService  *service.AssertService
 }
 
-// buildContactGraphCore constructs the rematch service (above
-// ContactService so it can be passed as the RematchRegistry constructor
-// arg), the ContactService, and the graph (SP1) write store. Handlers
-// register later once their dependencies are constructed.
-func buildContactGraphCore(database *db.Database, repos coreRepos, eventBus *events.Bus) contactCore {
-	// Rematch service — constructed above ContactService so it can be
-	// passed as the RematchRegistry constructor arg.
+// buildGraphCore constructs the rematch service (passed as the ContactService
+// RematchRegistry constructor arg once ContactService is built) and the graph
+// (SP1) write store. Handlers register later once their dependencies are
+// constructed.
+func buildGraphCore(database *db.Database, eventBus *events.Bus) graphCore {
+	// Rematch service — the RematchRegistry ContactService takes as a ctor arg.
 	rematchService := service.NewRematchService()
-
-	contactService := service.NewContactService(database, repos.Contact, repos.ContactMethod, repos.Interaction, repos.ContactTask, eventBus, rematchService)
 
 	// Graph (SP1) write API — the single validated assert() write path over the
 	// node/entity/predicate/assertion store. SP1 ships the service + the daily
@@ -104,15 +104,46 @@ func buildContactGraphCore(database *db.Database, repos coreRepos, eventBus *eve
 		database.Pool, graphNodeRepo, graphEntityRepo, graphPredicateRepo, graphAssertionRepo, eventBus,
 	)
 
-	return contactCore{
+	return graphCore{
 		RematchService: rematchService,
-		ContactService: contactService,
 		GraphNode:      graphNodeRepo,
-		GraphEntity:    graphEntityRepo,
-		GraphPredicate: graphPredicateRepo,
 		GraphAssertion: graphAssertionRepo,
 		AssertService:  assertService,
 	}
+}
+
+// buildContactService constructs the ContactService with its consumer
+// dependencies as constructor args (the INV-5 reorder: the cadence /
+// knowledge / follow-up consumers and the AssertService are all built before
+// the service). cadence + the assertSvc/knowledgeCache pair are the HARD-
+// required deps (their nil-guards fire on the cadence/knowledge write paths);
+// followUp is nil-tolerant. The merge-time task-close enqueuer is a
+// cross-block dependency (the river client is decided here), so it stays a
+// setter, called immediately after construction.
+func buildContactService(
+	cfg *config.Config,
+	database *db.Database,
+	core coreRepos,
+	graph graphCore,
+	consumers eventConsumers,
+	eventBus *events.Bus,
+	riverClient *river.Client[pgx.Tx],
+) *service.ContactService {
+	contactService := service.NewContactService(
+		database, core.Contact, core.ContactMethod, core.Interaction, core.ContactTask,
+		eventBus, graph.RematchService,
+		consumers.CadenceUpdater, graph.AssertService, consumers.KnowledgeCacheUpdater, consumers.FollowUpManager,
+	)
+
+	// Wire the merge-time task-close enqueuer. MergeContacts closes the
+	// source contact's live automated tasks and enqueues the durable Todoist
+	// close job for rows with a real external id; the mode gate matches the
+	// close worker's cutover-only contract (enqueuing in mode 'off' would
+	// only manufacture failing jobs — merge then closes locally with a WARN,
+	// that mode's documented "completion disabled" semantics).
+	contactService.SetTaskCloseEnqueuer(riverClient, cfg.EventBus.FollowUpMode == config.EventBusFollowUpModeCutover)
+
+	return contactService
 }
 
 // messagingFoundation holds the message-store repositories, the

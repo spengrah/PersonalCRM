@@ -65,9 +65,9 @@ func TestContactMerge_Integration(t *testing.T) {
 
 	// Create service
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
-	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, repository.NewContactTaskRepository(database.Queries), nil, nil)
-	wireCadenceUpdaterForAPITest(t, database, contactService)
-	wireKnowledgeWriterForAPITest(t, database, nil, contactService)
+	cadenceUpdater := buildCadenceUpdaterForAPITest(t, database)
+	assertSvc, cache := buildKnowledgeDepsForAPITest(t, database, nil)
+	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, repository.NewContactTaskRepository(database.Queries), nil, nil, cadenceUpdater, assertSvc, cache, nil)
 
 	t.Run("GetMergePreview_BasicCounts", func(t *testing.T) {
 		// Create target contact

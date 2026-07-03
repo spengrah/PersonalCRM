@@ -70,11 +70,12 @@ func seedMigrationContact(
 
 	// nil bus + nil rematchRegistry → CreateContact writes contact+methods in one
 	// tx with no event publish, no River client (the lightweight seed path).
-	contactSvc := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, taskRepo, nil, nil)
 	// CreateContact persists location/birthday/how_met through the assertion
 	// store now (the spec carries those fields), so the knowledge writer must be
-	// wired or the create errors.
-	wireKnowledgeWriterForTest(t, database, nil, contactSvc)
+	// passed to the constructor or the create errors.
+	assertSvc, cache := buildKnowledgeDeps(t, database, nil)
+	contactSvc := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, taskRepo, nil, nil,
+		nil, assertSvc, cache, nil)
 
 	spec := gen.Contact(opts...)
 	methods := make([]service.ContactMethodInput, 0, len(spec.Methods))

@@ -60,9 +60,10 @@ func TestGChatGoLive_RegisteredProvider_SchedulerSweep_ProducesInteractionsAndCa
 	// Known contact + email method (appears in the provider's dual-source known
 	// map). A cadence makes the contact_by recompute observable. Seeded via the
 	// nil-bus ContactService (single-tx contact+method write, no River client).
+	assertSvc, cache := buildKnowledgeDeps(t, e.database, nil)
 	contactSvc := service.NewContactService(e.database, contactRepo, methodRepo,
-		e.interactionRepo, repository.NewContactTaskRepository(e.database.Queries), nil, nil)
-	wireKnowledgeWriterForTest(t, e.database, nil, contactSvc)
+		e.interactionRepo, repository.NewContactTaskRepository(e.database.Queries), nil, nil,
+		nil, assertSvc, cache, nil)
 	spec := gen.Contact(factory.WithEmail(), factory.WithCadence("weekly"))
 	peerEmail := spec.Email
 	contact, _, err := contactSvc.CreateContact(e.ctx, repository.CreateContactRequest{

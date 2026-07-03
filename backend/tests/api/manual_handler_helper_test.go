@@ -38,8 +38,6 @@ func buildManualHandlerForTest(ctx context.Context, database *db.Database, cfg *
 	telegramMessageRepo := repository.NewTelegramMessageRepository(database.Queries)
 	eventRepo := repository.NewEventRepository(database.Queries)
 
-	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, nil, nil)
-
 	// Chicken-and-egg: the worker needs the bus, the bus needs the client,
 	// the client needs the workers bundle pre-registered. Register a shim
 	// pointer-wrapper worker, construct client + bus + real recorder, then
@@ -66,7 +64,7 @@ func buildManualHandlerForTest(ctx context.Context, database *db.Database, cfg *
 	}
 
 	bus := events.NewBus(database.Pool, client, eventRepo)
-	// Wire a real CadenceUpdater so API manual-handler tests exercise
+	// Build a real CadenceUpdater so API manual-handler tests exercise
 	// the inline apply-on-publish path against a live DB. contactRepo's
 	// pool is already set upstream by the router wiring; if not,
 	// cadence_updater direct-invoke APIs fall back to the caller's tx.
@@ -77,12 +75,16 @@ func buildManualHandlerForTest(ctx context.Context, database *db.Database, cfg *
 		consumer.CadenceModeCutover, // API tests exercise the cutover writer
 		false,
 	)
-	// Wire cadenceUpdater into the contact service so direct-invoke
-	// paths (Merge / Extend / Promote / RecordInteraction non-bus
-	// wrapper / UpdateContact cadence-edit) reach the sole writer in
-	// these tests.
-	contactService.SetCadenceUpdater(cadenceUpdater)
-	wireKnowledgeWriterForAPITest(nil, database, bus, contactService)
+	// Build the knowledge writer deps + construct the contact service with
+	// cadence + knowledge as ctor args (the setters are gone) so direct-invoke
+	// paths (Merge / Extend / Promote / RecordInteraction non-bus wrapper /
+	// UpdateContact cadence-edit + location/birthday/how_met) reach the sole
+	// writers in these tests.
+	assertSvc, cache := buildKnowledgeDepsForAPITest(nil, database, bus)
+	contactService := service.NewContactService(
+		database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, nil, nil,
+		cadenceUpdater, assertSvc, cache, nil,
+	)
 	stagingRegistry := repository.NewStagingProcessorRegistry(map[string]repository.StagingProcessor{
 		repository.InteractionSourceTelegram: repository.NewTelegramStagingProcessor(telegramMessageRepo),
 	})
@@ -119,44 +121,26 @@ func mustBuildManualHandlerForTest(t *testing.T, ctx context.Context, database *
 	return mh, cs
 }
 
-// wireCadenceUpdaterForAPITest constructs a real CadenceUpdater
-// against the given database and injects it into contactService so
-// cadence entry points (RecordInteraction direct path, MergeContacts,
-// cadence edits via UpdateContact, link/import cadence overrides)
-// exercise the sole writer in API-layer tests that don't need the full
-// event-bus wiring of buildManualHandlerForTest. Returns the
-// constructed CadenceUpdater so callers can also wire it into
-// EnrichmentService. Takes *testing.T so callers that have one can
-// still use t.Helper; pass nil from non-test helpers like
-// setupImportTestRouter.
-func wireCadenceUpdaterForAPITest(t *testing.T, database *db.Database, contactService *service.ContactService) *consumer.CadenceUpdater {
+// buildCadenceUpdaterForAPITest constructs a real CadenceUpdater against the
+// given database so callers can pass it as the cadence ctor arg to
+// NewContactService / NewEnrichmentService and exercise cadence entry points
+// (RecordInteraction direct path, MergeContacts, cadence edits via
+// UpdateContact, link/import cadence overrides) in API-layer tests that don't
+// need the full event-bus wiring of buildManualHandlerForTest. Takes *testing.T
+// so callers that have one can still use t.Helper; pass nil from non-test
+// helpers like setupImportTestRouter.
+func buildCadenceUpdaterForAPITest(t *testing.T, database *db.Database) *consumer.CadenceUpdater {
 	if t != nil {
 		t.Helper()
 	}
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactRepo.SetPool(database.Pool)
 	claimRepo := repository.NewEventConsumerClaimRepository(database.Queries)
-	cadenceUpdater := consumer.NewCadenceUpdater(
+	return consumer.NewCadenceUpdater(
 		claimRepo, contactRepo, database.Queries,
 		consumer.CadenceModeCutover,
 		false,
 	)
-	contactService.SetCadenceUpdater(cadenceUpdater)
-	return cadenceUpdater
-}
-
-// wireKnowledgeWriterForAPITest wires the location/birthday/how_met authority-flip
-// writer into the contact service. A non-nil bus is reused; a nil bus builds a
-// self-contained insert-only bus so contact-only API tests can still create
-// contacts. Returns the assert service + cache so a caller can also wire an
-// enrichment service against the same instances.
-func wireKnowledgeWriterForAPITest(t *testing.T, database *db.Database, bus *events.Bus, contactService *service.ContactService) (*service.AssertService, *consumer.KnowledgeCacheUpdater) {
-	if t != nil {
-		t.Helper()
-	}
-	assertSvc, cache := buildKnowledgeDepsForAPITest(t, database, bus)
-	contactService.SetKnowledgeWriter(assertSvc, cache)
-	return assertSvc, cache
 }
 
 // buildKnowledgeDepsForAPITest constructs the AssertService + KnowledgeCacheUpdater

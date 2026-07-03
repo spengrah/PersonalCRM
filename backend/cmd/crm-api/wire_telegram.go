@@ -36,14 +36,14 @@ func buildTelegram(
 	cfg *config.Config,
 	database *db.Database,
 	core coreRepos,
-	graph contactCore,
+	contactService *service.ContactService,
+	graph graphCore,
 	messaging messagingFoundation,
 	domain domainServices,
 	pubBus *events.Bus,
 	riverClient *river.Client[pgx.Tx],
 ) telegramStack {
 	interactionRepo := core.Interaction
-	contactService := graph.ContactService
 	rematchService := graph.RematchService
 	telegramMessageRepo := messaging.TelegramMessageRepo
 	enrichmentService := domain.EnrichmentService

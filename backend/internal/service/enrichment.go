@@ -43,9 +43,10 @@ type EnrichmentService struct {
 	// knowledge persists inferred location/birthday/how_met as assertions and
 	// refreshes the derived cache columns inline. Post-cutover the contact SQL
 	// no longer writes those columns, so an enrichment that infers them MUST
-	// route through this writer or the value silently vanishes. Injected via
-	// SetKnowledgeWriter; when unset, an enrichment that would set one of those
-	// three fields returns an error rather than dropping it.
+	// route through this writer or the value silently vanishes. Built by
+	// NewEnrichmentService from the (assertSvc, knowledgeCache) pair; when nil,
+	// an enrichment that would set one of those three fields returns an error
+	// rather than dropping it.
 	knowledge *knowledgeWriter
 }
 
@@ -57,6 +58,17 @@ type EnrichmentService struct {
 // and seed the in-memory job entry via rematchRegistry. Tests that
 // don't exercise rematch may pass nil for both — the publisher silently
 // skips when bus is nil.
+//
+// The promoted consumer dependencies carry the nil semantics their former
+// setters had:
+//   - cadence: conditionally required ⇒ nil is legal (crm-admin passes nil);
+//     only a cadence-override request errors when it is nil.
+//   - assertSvc + knowledgeCache: both-or-neither. Both non-nil builds the
+//     knowledge writer; both nil leaves it nil (an inferred
+//     location/birthday enrichment then errors). A half-set pair panics at
+//     construction. Inferred enrichment is stamped with agent provenance
+//     (producer=agent, source_kind=agent_session) since it is derived from
+//     external contact data, not a direct user edit.
 func NewEnrichmentService(
 	database *db.Database,
 	contactRepo *repository.ContactRepository,
@@ -64,6 +76,9 @@ func NewEnrichmentService(
 	enrichmentRepo *repository.EnrichmentRepository,
 	bus *events.Bus,
 	rematchRegistry RematchRegistry,
+	cadence cadenceWriter,
+	assertSvc *AssertService,
+	knowledgeCache knowledgeCacheRefresher,
 ) *EnrichmentService {
 	return &EnrichmentService{
 		database:        database,
@@ -72,24 +87,9 @@ func NewEnrichmentService(
 		enrichmentRepo:  enrichmentRepo,
 		bus:             bus,
 		rematchRegistry: rematchRegistry,
+		cadence:         cadence,
+		knowledge:       buildKnowledgeWriter(assertSvc, knowledgeCache),
 	}
-}
-
-// SetCadenceUpdater injects the cadence writer. Required for the
-// cadence-present link/import override path. When unset, cadence-
-// present enrichment calls return an error rather than silently
-// skipping the sole-writer invariant.
-func (s *EnrichmentService) SetCadenceUpdater(c cadenceWriter) {
-	s.cadence = c
-}
-
-// SetKnowledgeWriter injects the assertion-store knowledge writer. Required for
-// any enrichment that infers location/birthday/how_met (those columns are no
-// longer written by the contact SQL). Inferred enrichment is stamped with agent
-// provenance (producer=agent, source_kind=agent_session) since it is derived
-// from external contact data, not a direct user edit.
-func (s *EnrichmentService) SetKnowledgeWriter(assertSvc *AssertService, cache knowledgeCacheRefresher) {
-	s.knowledge = newKnowledgeWriter(assertSvc, cache)
 }
 
 // InjectBusForTest swaps the event bus reference after construction.
@@ -156,7 +156,7 @@ func (s *EnrichmentService) EnrichContactFromExternal(
 	}
 
 	if (inferred.Location != nil || inferred.Birthday != nil) && s.knowledge == nil {
-		return uuid.Nil, errors.New("enrichment: inferred location/birthday but knowledge writer not wired")
+		return uuid.Nil, errors.New("enrichment: inferred location/birthday but knowledge writer not wired (pass assertSvc+knowledgeCache to NewEnrichmentService)")
 	}
 
 	// Apply updates to contact if any enrichment occurred. This path never
@@ -332,7 +332,7 @@ func (s *EnrichmentService) EnrichContactFromExternalWithSelections(
 	}
 
 	if (inferred.Location != nil || inferred.Birthday != nil) && s.knowledge == nil {
-		return uuid.Nil, errors.New("enrichment: inferred location/birthday but knowledge writer not wired")
+		return uuid.Nil, errors.New("enrichment: inferred location/birthday but knowledge writer not wired (pass assertSvc+knowledgeCache to NewEnrichmentService)")
 	}
 
 	// Update cadence if provided. Explicit cadence overrides from the
@@ -363,7 +363,7 @@ func (s *EnrichmentService) EnrichContactFromExternalWithSelections(
 		var newContactBy *time.Time
 		if cadencePresent {
 			if s.cadence == nil {
-				return uuid.Nil, errors.New("enrichment: cadence override requested but CadenceUpdater not wired")
+				return uuid.Nil, errors.New("enrichment: cadence override requested but cadence updater not wired (pass cadence to NewEnrichmentService)")
 			}
 			newContactBy = deriveContactByFromCadence(contact, cadenceArg)
 		}

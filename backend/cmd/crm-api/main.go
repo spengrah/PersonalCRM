@@ -162,33 +162,42 @@ func run() int {
 	meetingNoteRepoForIngest := ingest.MeetingNote
 	calendarRepoForIngest := ingest.CalendarEvent
 
-	// Rematch service + ContactService + graph (SP1) store. Rematch is
-	// constructed above ContactService so it can be passed as the
-	// RematchRegistry constructor arg.
-	graph := buildContactGraphCore(database, core, eventBus)
-	contactService := graph.ContactService
+	// Rematch service + graph (SP1) store. ContactService is NOT built here
+	// (INV-5): it depends on the event-bus consumers, so it is constructed by
+	// buildContactService once those exist.
+	graph := buildGraphCore(database, eventBus)
 
 	// Message-store repos + staging registry + venue resolver.
 	messaging := buildMessagingFoundation(database.Queries, messagesMessageRepo, calendarRepoForIngest)
 
-	// Event-bus consumers (Cadence / Knowledge / FollowUp / InteractionRecorder)
-	// + their shared collaborators, wired into ContactService via its setters.
-	consumers := buildEventConsumers(cfg, database, core, graph, ingest, messaging, eventBus, riverClient)
+	// Event-bus consumers (Cadence / Knowledge / FollowUp) + their shared
+	// collaborators, built BEFORE ContactService so they can be passed to
+	// NewContactService as constructor args (INV-5 reorder).
+	consumers := buildDomainConsumers(cfg, database, core, graph, eventBus, riverClient)
+
+	// ContactService — constructed with the consumers + AssertService as
+	// constructor args (the setters are gone). The merge-time task-close
+	// enqueuer (a cross-block dep) is wired inside buildContactService.
+	contactService := buildContactService(cfg, database, core, graph, consumers, eventBus, riverClient)
+
+	// InteractionRecorder — takes ContactService as a ctor arg, so it is
+	// built after buildContactService.
+	interactionRecorder := buildInteractionRecorder(contactService, messaging, ingest, consumers, eventBus)
 
 	// IngestService + meeting-note conflict-resolution surface. Hoisted
 	// after the consumers so the call.* inline handler can reuse them in
 	// the same tx as the staging-row write.
-	ingestStk := buildIngestStack(database, core, graph, ingest, messaging, consumers, eventBus, riverClient)
+	ingestStk := buildIngestStack(database, core, contactService, ingest, messaging, consumers, eventBus, riverClient)
 	ingestHandler := ingestStk.IngestHandler
 	meetingNoteHandler := ingestStk.MeetingNoteHandler
 
 	// Register the three always-on core consumer workers (recorder,
 	// calendar-decline, email-interaction).
-	registerCoreConsumerWorkers(reg, database, core, graph, messaging, consumers, eventBus)
+	registerCoreConsumerWorkers(reg, database, core, contactService, interactionRecorder, messaging, consumers, eventBus)
 
 	// Interaction-mode wiring gate → pubBus (concrete *events.Bus, nil in
 	// off mode) + manual handler.
-	pubBus, manualHandler := resolveInteractionMode(cfg, database, consumers, eventBus)
+	pubBus, manualHandler := resolveInteractionMode(cfg, database, interactionRecorder, eventBus)
 
 	// Register the cadence / knowledge-cache / follow-up / Todoist workers
 	// + their mode boot logs.
@@ -211,7 +220,7 @@ func run() int {
 	// here so buildExternalSync runs only when the feature is on.
 	var syncStk syncStack
 	if cfg.Features.EnableExternalSync {
-		syncStk = buildExternalSync(ctx, cfg, database, core, graph, ingest, messaging, consumers, domain, eventBus, riverClient, pubBus)
+		syncStk = buildExternalSync(ctx, cfg, database, core, contactService, graph, ingest, messaging, consumers, domain, eventBus, riverClient, pubBus)
 	}
 	syncHandler := syncStk.SyncHandler
 	identityHandler := syncStk.IdentityHandler
@@ -231,14 +240,14 @@ func run() int {
 	// telegramStack reproduces today's nil manager/handler when disabled.
 	var telegramStk telegramStack
 	if cfg.Features.EnableTelegramSync && cfg.External.TelegramAPIID != 0 {
-		telegramStk = buildTelegram(ctx, cfg, database, core, graph, messaging, domain, pubBus, riverClient)
+		telegramStk = buildTelegram(ctx, cfg, database, core, contactService, graph, messaging, domain, pubBus, riverClient)
 	}
 	telegramManager := telegramStk.Manager
 	telegramHandler := telegramStk.Handler
 	// The Stop defer lives here (not inside buildTelegram) so it fires on
 	// run() return, not when the wire function returns. Nil-guarded:
 	// registers only when a manager was built, exactly as the old
-	// branch-local defer did (decision 4).
+	// branch-local defer did.
 	if telegramManager != nil {
 		defer telegramManager.Stop()
 	}
@@ -249,13 +258,13 @@ func run() int {
 	}
 
 	// Aggregation engines (messages + gchat) + reenqueuer registry.
-	agg := buildAggregationEngines(database, core, graph, ingest, messaging, consumers, eventBus, riverClient, telegramManager, gchatProvider, gchatSyncStates)
+	agg := buildAggregationEngines(database, core, contactService, graph, ingest, messaging, consumers, eventBus, riverClient, telegramManager, gchatProvider, gchatSyncStates)
 
 	// Register the chat-aware messaging aggregate worker + sweeper (+ periodic).
 	registerMessagingWorkers(reg, ingest, messaging, agg, riverClient)
 
 	// Core HTTP handlers.
-	handlersCore := buildCoreHandlers(core, graph, cfg, noteService, manualHandler)
+	handlersCore := buildCoreHandlers(core, contactService, graph, cfg, noteService, manualHandler)
 	contactHandler := handlersCore.Contact
 	noteHandler := handlersCore.Note
 	interactionHandler := handlersCore.Interaction

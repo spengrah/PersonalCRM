@@ -77,7 +77,10 @@ func newGmailProviderEnv(t *testing.T) *gmailProviderEnv {
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
 	eventRepo := repository.NewEventRepository(database.Queries)
 	// nil bus + nil rematch: a single-tx multi-method seed write, no River client.
-	contactService := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, contactTaskRepo, nil, nil)
+	cadenceUpdater := buildCadenceUpdaterForTest(t, database)
+	assertSvc, cache := buildKnowledgeDeps(t, database, nil)
+	contactService := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, contactTaskRepo, nil, nil,
+		cadenceUpdater, assertSvc, cache, nil)
 
 	// Live bus via the shared harness. email.* kinds enqueue an
 	// email_interaction_consumer job, drained by the harness's no-op email

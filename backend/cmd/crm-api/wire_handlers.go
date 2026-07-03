@@ -21,14 +21,14 @@ type coreHandlers struct {
 // InteractionHandler tolerates a nil manual handler exactly as today).
 func buildCoreHandlers(
 	core coreRepos,
-	graph contactCore,
+	contactService *service.ContactService,
+	graph graphCore,
 	cfg *config.Config,
 	noteService *service.NoteService,
 	manualHandler *service.ManualInteractionHandler,
 ) coreHandlers {
 	contactRepo := core.Contact
 	interactionRepo := core.Interaction
-	contactService := graph.ContactService
 	rematchService := graph.RematchService
 
 	return coreHandlers{

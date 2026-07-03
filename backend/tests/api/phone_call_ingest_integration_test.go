@@ -162,7 +162,6 @@ func setupPhoneCallIngestEnv(t *testing.T) *phoneCallIngestEnv {
 	// Started — avoiding the leadership-Elector teardown cost.
 
 	eventBus := events.NewBus(database.Pool, riverClient, eventRepo)
-	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, eventBus, nil)
 
 	eventClaimRepo := repository.NewEventConsumerClaimRepository(database.Queries)
 	cadenceUpdater := consumer.NewCadenceUpdater(
@@ -172,8 +171,7 @@ func setupPhoneCallIngestEnv(t *testing.T) *phoneCallIngestEnv {
 		consumer.CadenceModeCutover,
 		false,
 	)
-	contactService.SetCadenceUpdater(cadenceUpdater)
-	wireKnowledgeWriterForAPITest(t, database, eventBus, contactService)
+	knowledgeAssertSvc, knowledgeCache := buildKnowledgeDepsForAPITest(t, database, eventBus)
 
 	// FollowUpManager wired to ErrTodoistUnconfigured so the post-commit
 	// Todoist branch degrades to local-only writes. Phone_calls v1.5 has
@@ -196,7 +194,9 @@ func setupPhoneCallIngestEnv(t *testing.T) *phoneCallIngestEnv {
 		cfg.CORS.FrontendURL,
 		cfg.Watchdog,
 	)
-	contactService.SetFollowUpConsumer(followUpManager)
+
+	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, eventBus, nil,
+		cadenceUpdater, knowledgeAssertSvc, knowledgeCache, followUpManager)
 
 	// Optional fail-writer wrapper. failWriter starts disabled (both
 	// failOn* fields nil) so it behaves identically to the real repo.

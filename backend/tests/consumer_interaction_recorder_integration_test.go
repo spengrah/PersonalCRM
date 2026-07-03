@@ -137,10 +137,9 @@ func newConsumerTestEnv(t *testing.T, ctx context.Context) *consumerTestEnv {
 	var recorder *consumer.InteractionRecorder
 	bus := newConsumerTestBus(t, ctx, database, cfg, &recorder)
 
-	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, nil, nil)
-	// Wire a real CadenceUpdater so the recorder's inline-apply seam
+	// Build a real CadenceUpdater so the recorder's inline-apply seam
 	// writes cadence columns against a live DB in these integration
-	// tests.
+	// tests. cadence + knowledge are ctor args (the setters are gone).
 	contactRepo.SetPool(database.Pool)
 	claimRepo := repository.NewEventConsumerClaimRepository(database.Queries)
 	cadenceUpdater := consumer.NewCadenceUpdater(
@@ -148,8 +147,9 @@ func newConsumerTestEnv(t *testing.T, ctx context.Context) *consumerTestEnv {
 		consumer.CadenceModeCutover,
 		false,
 	)
-	contactService.SetCadenceUpdater(cadenceUpdater)
-	wireKnowledgeWriterForTest(t, database, bus, contactService)
+	assertSvc, cache := buildKnowledgeDeps(t, database, bus)
+	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, nil, nil,
+		cadenceUpdater, assertSvc, cache, nil)
 	stagingRegistry := repository.NewStagingProcessorRegistry(map[string]repository.StagingProcessor{
 		repository.InteractionSourceTelegram: repository.NewTelegramStagingProcessor(telegramMessageRepo),
 	})

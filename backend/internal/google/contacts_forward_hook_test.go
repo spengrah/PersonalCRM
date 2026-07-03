@@ -59,7 +59,7 @@ func setupGcontactsForwardEnv(t *testing.T) *gcontactsForwardEnv {
 	// nil bus/registry → enrichment adds methods but skips publish (the
 	// forward-hook assertion is on the method landing, not the rematch
 	// event, which the reconcile integration suite covers).
-	enrichSvc := service.NewEnrichmentService(database, contactRepo, methodRepo, enrichmentRepo, nil, nil)
+	enrichSvc := service.NewEnrichmentService(database, contactRepo, methodRepo, enrichmentRepo, nil, nil, nil, nil, nil)
 	reconcile := service.NewAddressBookReconcileService(enrichSvc, contactRepo, methodRepo, externalRepo)
 
 	provider := NewContactsProvider(nil, externalRepo, enrichSvc, identitySvc, reconcile)

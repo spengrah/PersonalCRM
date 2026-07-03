@@ -53,7 +53,7 @@ func setupABReconcileEnv(t *testing.T) *abReconcileEnv {
 	rematchSvc.Register(stubRematchHandler{idType: "phone"})
 	bus := setupRematchEnqueueOnlyBus(t, database)
 
-	enrichmentSvc := service.NewEnrichmentService(database, contactRepo, methodRepo, enrichmentRepo, bus, rematchSvc)
+	enrichmentSvc := service.NewEnrichmentService(database, contactRepo, methodRepo, enrichmentRepo, bus, rematchSvc, nil, nil, nil)
 	reconcile := service.NewAddressBookReconcileService(enrichmentSvc, contactRepo, methodRepo, externalRepo)
 	matchSvc := service.NewImportMatchService(contactRepo)
 

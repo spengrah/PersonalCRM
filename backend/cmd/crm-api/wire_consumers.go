@@ -15,13 +15,14 @@ import (
 )
 
 // eventConsumers holds the event-bus consumers + their shared collaborators
-// constructed before the interaction-mode gate. The InteractionRecorder,
-// CadenceUpdater, KnowledgeCacheUpdater, and FollowUpManager are the sole
-// writers of their respective columns; the holders carry deferred wiring
-// (Telegram aggregation engine, Todoist settings) populated later.
+// constructed before ContactService (INV-5 order). The CadenceUpdater,
+// KnowledgeCacheUpdater, and FollowUpManager are the sole writers of their
+// respective columns; the holders carry deferred wiring (Telegram aggregation
+// engine, Todoist settings) populated later. The InteractionRecorder is NOT
+// held here — it takes ContactService as a ctor arg, so it is built by
+// buildInteractionRecorder after buildContactService.
 type eventConsumers struct {
 	AggregatorReenqueuerHolder *deferredAggregatorReenqueuer
-	EventClaimRepo             *repository.EventConsumerClaimRepository
 	CadenceUpdater             *consumer.CadenceUpdater
 	KnowledgeCacheUpdater      *consumer.KnowledgeCacheUpdater
 	TodoistClientFactory       todoist.ClientFactory
@@ -29,36 +30,30 @@ type eventConsumers struct {
 	FollowUpSettingsHolder     *followUpSettingsRef
 	FollowUpSettings           consumer.TodoistSettingsFunc
 	FollowUpManager            *consumer.FollowUpManager
-	InteractionRecorder        *consumer.InteractionRecorder
 }
 
-// buildEventConsumers constructs the CadenceUpdater, KnowledgeCacheUpdater,
-// FollowUpManager, and InteractionRecorder in their required order (each
-// downstream consumer takes the earlier ones as constructor args), wiring
-// them into ContactService via its setters exactly as before. The Todoist
-// client factory + writes-enabled boot log and the deferred holders are
-// created here too. No River workers are registered here — that happens in
-// registerCoreConsumerWorkers / registerModeWorkers.
-func buildEventConsumers(
+// buildDomainConsumers constructs the CadenceUpdater, KnowledgeCacheUpdater,
+// and FollowUpManager in their required order (each downstream consumer takes
+// the earlier ones as constructor args). These are built BEFORE ContactService
+// (INV-5) so they can be passed to NewContactService as constructor args. The
+// Todoist client factory + writes-enabled boot log and the deferred holders
+// are created here too. The InteractionRecorder is built separately
+// (buildInteractionRecorder) after ContactService exists. No River workers are
+// registered here — that happens in registerCoreConsumerWorkers /
+// registerModeWorkers.
+func buildDomainConsumers(
 	cfg *config.Config,
 	database *db.Database,
 	core coreRepos,
-	graph contactCore,
-	ingest ingestRepos,
-	messaging messagingFoundation,
+	graph graphCore,
 	eventBus *events.Bus,
 	riverClient *river.Client[pgx.Tx],
 ) eventConsumers {
 	contactRepo := core.Contact
 	contactTaskRepo := core.ContactTask
 	interactionRepo := core.Interaction
-	contactService := graph.ContactService
-	assertService := graph.AssertService
 	graphAssertionRepo := graph.GraphAssertion
 	graphNodeRepo := graph.GraphNode
-	stagingRegistry := messaging.StagingRegistry
-	venueResolver := messaging.VenueResolver
-	calendarRepoForIngest := ingest.CalendarEvent
 
 	// Aggregator reenqueuer holder. The Telegram entry needs the
 	// Telegram aggregation engine, which is constructed later (inside
@@ -71,14 +66,13 @@ func buildEventConsumers(
 	// interaction has already committed.
 	aggregatorReenqueuerHolder := &deferredAggregatorReenqueuer{}
 
-	// CadenceUpdater must be constructed BEFORE InteractionRecorder so
-	// the recorder can inline-invoke it after bus.PublishTx on fresh
-	// writes. Wired here even though its worker is registered further
-	// down, so the construction order matches the runtime dispatch
-	// order. contactRepo.SetPool is called at the first writer-path
-	// construction so the cadence updater can open its own tx if ever
-	// needed outside the caller's tx (defensive — the current path
-	// always runs in the caller's tx).
+	// CadenceUpdater must be constructed BEFORE ContactService so it can be
+	// passed as a NewContactService arg (inline-invoked after bus.PublishTx on
+	// fresh writes). Wired here even though its worker is registered further
+	// down, so the construction order matches the runtime dispatch order.
+	// contactRepo.SetPool is called at the first writer-path construction so
+	// the cadence updater can open its own tx if ever needed outside the
+	// caller's tx (defensive — the current path always runs in the caller's tx).
 	contactRepo.SetPool(database.Pool)
 	eventClaimRepo := repository.NewEventConsumerClaimRepository(database.Queries)
 	cadenceUpdater := consumer.NewCadenceUpdater(
@@ -89,19 +83,15 @@ func buildEventConsumers(
 		cfg.EventBus.UnsafeAllowOffMode,
 	)
 
-	// Wire CadenceUpdater into ContactService so Merge / Extend / Promote
-	// / UpdateContact cadence-edit paths route cadence writes through
-	// the sole writer.
-	contactService.SetCadenceUpdater(cadenceUpdater)
-
 	// Knowledge-cache consumer (the location/birthday/how_met authority flip):
 	// the sole writer of those three derived cache columns. ContactService emits
 	// lives_in/birthday/how_met assertions through AssertService and calls
 	// knowledgeCacheUpdater.RefreshTx inline (no read-path gap on a user edit);
 	// the registered KnowledgeCacheUpdaterWorker (below) handles assertion.accepted
 	// /superseded events from any other producer (extractors, rollover, retraction).
+	// Built before ContactService so it (with graph.AssertService) is passed as
+	// the knowledge-writer ctor pair.
 	knowledgeCacheUpdater := consumer.NewKnowledgeCacheUpdater(graphAssertionRepo, graphNodeRepo, contactRepo)
-	contactService.SetKnowledgeWriter(assertService, knowledgeCacheUpdater)
 
 	// Todoist client factory, built once with the running CRM_ENV so the
 	// outbound-write guard (Spec C) applies at every production write site.
@@ -128,14 +118,14 @@ func buildEventConsumers(
 
 	// FollowUpManager consumer — the sole writer of
 	// contact_task.kind='follow_up' lifecycle post-cutover. Constructed
-	// BEFORE the InteractionRecorder because the recorder takes it as a
-	// constructor arg (inline-invoke on fresh writes). Todoist settings
-	// are looked up via a deferred holder populated later in the
-	// external-sync branch; until populated, Todoist-dependent post-
-	// commit paths (refresh item_update, close retries) degrade to
+	// BEFORE ContactService because it is passed to NewContactService as the
+	// followUp arg (and to the InteractionRecorder for inline-invoke on fresh
+	// writes). Todoist settings are looked up via a deferred holder populated
+	// later in the external-sync branch; until populated, Todoist-dependent
+	// post-commit paths (refresh item_update, close retries) degrade to
 	// local-only writes with a logged warning.
 	followUpMode := consumer.FollowUpModeFromConfig(cfg.EventBus.FollowUpMode)
-	followUpSettingsHolder := &followUpSettingsRef{frontendURL: cfg.CORS.FrontendURL}
+	followUpSettingsHolder := &followUpSettingsRef{}
 	followUpSettings := followUpSettingsHolder.fn()
 	followUpManager := consumer.NewFollowUpManager(
 		followUpMode,
@@ -151,47 +141,9 @@ func buildEventConsumers(
 		cfg.CORS.FrontendURL,
 		cfg.Watchdog,
 	)
-	// Wire the consumer as the sole follow-up writer on the direct path.
-	// Non-bus callers (Todoist completion, Promote/Extend) route through
-	// FollowUpManager.ApplyInteraction via ContactService.
-	contactService.SetFollowUpConsumer(followUpManager)
-
-	// Wire the merge-time task-close enqueuer. MergeContacts closes the
-	// source contact's live automated tasks and enqueues the durable Todoist
-	// close job for rows with a real external id; the mode gate matches the
-	// close worker's cutover-only contract (enqueuing in mode 'off' would
-	// only manufacture failing jobs — merge then closes locally with a WARN,
-	// that mode's documented "completion disabled" semantics).
-	contactService.SetTaskCloseEnqueuer(riverClient, cfg.EventBus.FollowUpMode == config.EventBusFollowUpModeCutover)
-
-	// InteractionRecorder consumer + manual handler (spec §3.4.1).
-	// Delegates the write to ContactService.RecordInteractionTx, then
-	// marks telegram_messages processed (for message.* kinds) and emits
-	// interaction.recorded — all inside the caller's tx. After emitting
-	// interaction.recorded, the recorder inline-invokes
-	// cadenceUpdater.HandleEvent + followUpManager.HandleEvent on
-	// fresh writes so cadence + follow-up state apply synchronously and
-	// queued re-deliveries become durable no-ops via
-	// event_consumer_claim.
-	interactionRecorder := consumer.NewInteractionRecorder(
-		contactService,
-		stagingRegistry,
-		eventBus,
-		cadenceUpdater,
-		followUpManager,
-		// calendarRepoForIngest satisfies calendarEventLocker: the
-		// calendar.attended branch takes a FOR SHARE lock on the backing
-		// calendar_event so a concurrent decline DELETE cannot strand a
-		// false interaction.
-		calendarRepoForIngest,
-	)
-	// Populate interaction.venue_id for message.* (telegram/messages/gchat) and
-	// gcal interactions this recorder writes.
-	interactionRecorder.SetVenueResolver(venueResolver)
 
 	return eventConsumers{
 		AggregatorReenqueuerHolder: aggregatorReenqueuerHolder,
-		EventClaimRepo:             eventClaimRepo,
 		CadenceUpdater:             cadenceUpdater,
 		KnowledgeCacheUpdater:      knowledgeCacheUpdater,
 		TodoistClientFactory:       todoistClientFactory,
@@ -199,8 +151,41 @@ func buildEventConsumers(
 		FollowUpSettingsHolder:     followUpSettingsHolder,
 		FollowUpSettings:           followUpSettings,
 		FollowUpManager:            followUpManager,
-		InteractionRecorder:        interactionRecorder,
 	}
+}
+
+// buildInteractionRecorder constructs the InteractionRecorder — the consumer
+// that delegates the write to ContactService.RecordInteractionTx, marks
+// telegram_messages processed (for message.* kinds), and emits
+// interaction.recorded (all inside the caller's tx). After emitting
+// interaction.recorded, the recorder inline-invokes cadenceUpdater.HandleEvent
+// + followUpManager.HandleEvent on fresh writes so cadence + follow-up state
+// apply synchronously and queued re-deliveries become durable no-ops via
+// event_consumer_claim. Built AFTER ContactService (it takes contactService as
+// a ctor arg), unlike the sole-writer consumers built in buildDomainConsumers.
+func buildInteractionRecorder(
+	contactService *service.ContactService,
+	messaging messagingFoundation,
+	ingest ingestRepos,
+	consumers eventConsumers,
+	eventBus *events.Bus,
+) *consumer.InteractionRecorder {
+	interactionRecorder := consumer.NewInteractionRecorder(
+		contactService,
+		messaging.StagingRegistry,
+		eventBus,
+		consumers.CadenceUpdater,
+		consumers.FollowUpManager,
+		// ingest.CalendarEvent satisfies calendarEventLocker: the
+		// calendar.attended branch takes a FOR SHARE lock on the backing
+		// calendar_event so a concurrent decline DELETE cannot strand a
+		// false interaction.
+		ingest.CalendarEvent,
+	)
+	// Populate interaction.venue_id for message.* (telegram/messages/gchat) and
+	// gcal interactions this recorder writes.
+	interactionRecorder.SetVenueResolver(messaging.VenueResolver)
+	return interactionRecorder
 }
 
 // registerCoreConsumerWorkers registers the three always-on core consumer
@@ -213,17 +198,16 @@ func registerCoreConsumerWorkers(
 	reg *riverRegistrar,
 	database *db.Database,
 	core coreRepos,
-	graph contactCore,
+	contactService *service.ContactService,
+	interactionRecorder *consumer.InteractionRecorder,
 	messaging messagingFoundation,
 	consumers eventConsumers,
 	eventBus *events.Bus,
 ) {
 	interactionRepo := core.Interaction
 	contactRepo := core.Contact
-	contactService := graph.ContactService
 	commsMessageRepo := messaging.CommsMessageRepo
 	venueRepo := messaging.VenueRepo
-	interactionRecorder := consumers.InteractionRecorder
 	aggregatorReenqueuerHolder := consumers.AggregatorReenqueuerHolder
 	cadenceUpdater := consumers.CadenceUpdater
 	followUpManager := consumers.FollowUpManager
@@ -271,9 +255,7 @@ func registerCoreConsumerWorkers(
 // is `git revert`. Returns pubBus as a CONCRETE *events.Bus (nil in off
 // mode) so it is threaded by concrete type through the provider wiring, and
 // the manual-interaction handler (nil in off mode).
-func resolveInteractionMode(cfg *config.Config, database *db.Database, consumers eventConsumers, eventBus *events.Bus) (*events.Bus, *service.ManualInteractionHandler) {
-	interactionRecorder := consumers.InteractionRecorder
-
+func resolveInteractionMode(cfg *config.Config, database *db.Database, interactionRecorder *consumer.InteractionRecorder, eventBus *events.Bus) (*events.Bus, *service.ManualInteractionHandler) {
 	effectiveMode := cfg.EventBus.InteractionMode
 	var pubBus *events.Bus
 	var manualHandler *service.ManualInteractionHandler
@@ -398,7 +380,7 @@ func registerModeWorkers(
 // kill-switch mode would permanently ack queued jobs, so rollback is
 // `git revert` only. Rematch handlers themselves (calendar, telegram) are
 // registered elsewhere once their deps are constructed.
-func registerRematchDispatcher(reg *riverRegistrar, graph contactCore, database *db.Database, eventBus *events.Bus) {
+func registerRematchDispatcher(reg *riverRegistrar, graph graphCore, database *db.Database, eventBus *events.Bus) {
 	rematchService := graph.RematchService
 
 	rematchDispatcher := consumer.NewRematchDispatcher(rematchService)

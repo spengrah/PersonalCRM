@@ -37,6 +37,9 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	// Hoisted out of buildWireChainForGolden (called from parallel subtests) so
+	// the global logger is initialized once, avoiding a data race on logger.Get.
+	logger.Init(config.TestConfig().Logger)
 	os.Exit(testdb.SetupPackage(m, testdb.WithMigrationsPath(migrationsPathForTest())))
 }
 
@@ -187,7 +190,6 @@ func TestWireGoldenLists(t *testing.T) {
 // external-sync stack (for provider enumeration).
 func buildWireChainForGolden(t *testing.T, cfg *config.Config) (*riverRegistrar, syncStack) {
 	t.Helper()
-	logger.Init(cfg.Logger)
 	ctx := context.Background()
 
 	database, err := db.NewDatabase(ctx, cfg.Database)
@@ -217,24 +219,26 @@ func buildWireChainForGolden(t *testing.T, cfg *config.Config) (*riverRegistrar,
 	eventBus := events.NewBus(database.Pool, riverClient, eventRepo)
 
 	ingest := buildIngestRepos(database.Queries)
-	graph := buildContactGraphCore(database, core, eventBus)
+	graph := buildGraphCore(database, eventBus)
 	messaging := buildMessagingFoundation(database.Queries, ingest.MessagesMessage, ingest.CalendarEvent)
-	consumers := buildEventConsumers(cfg, database, core, graph, ingest, messaging, eventBus, riverClient)
-	ingestStk := buildIngestStack(database, core, graph, ingest, messaging, consumers, eventBus, riverClient)
-	registerCoreConsumerWorkers(reg, database, core, graph, messaging, consumers, eventBus)
-	pubBus, _ := resolveInteractionMode(cfg, database, consumers, eventBus)
+	consumers := buildDomainConsumers(cfg, database, core, graph, eventBus, riverClient)
+	contactService := buildContactService(cfg, database, core, graph, consumers, eventBus, riverClient)
+	interactionRecorder := buildInteractionRecorder(contactService, messaging, ingest, consumers, eventBus)
+	ingestStk := buildIngestStack(database, core, contactService, ingest, messaging, consumers, eventBus, riverClient)
+	registerCoreConsumerWorkers(reg, database, core, contactService, interactionRecorder, messaging, consumers, eventBus)
+	pubBus, _ := resolveInteractionMode(cfg, database, interactionRecorder, eventBus)
 	registerModeWorkers(reg, cfg, database, core, consumers, eventBus, riverClient)
 	domain := buildDomainServices(database, core, graph, ingest, consumers, ingestStk, eventBus)
 	registerRematchDispatcher(reg, graph, database, eventBus)
 
 	var syncStk syncStack
 	if cfg.Features.EnableExternalSync {
-		syncStk = buildExternalSync(ctx, cfg, database, core, graph, ingest, messaging, consumers, domain, eventBus, riverClient, pubBus)
+		syncStk = buildExternalSync(ctx, cfg, database, core, contactService, graph, ingest, messaging, consumers, domain, eventBus, riverClient, pubBus)
 	}
 
 	// Telegram is intentionally SKIPPED (Start must not run); a nil
 	// telegramManager is exactly a telegram-disabled boot for aggregation.
-	agg := buildAggregationEngines(database, core, graph, ingest, messaging, consumers, eventBus, riverClient, nil, syncStk.GChatProvider, syncStk.GChatSyncStates)
+	agg := buildAggregationEngines(database, core, contactService, graph, ingest, messaging, consumers, eventBus, riverClient, nil, syncStk.GChatProvider, syncStk.GChatSyncStates)
 	registerMessagingWorkers(reg, ingest, messaging, agg, riverClient)
 
 	machost := buildMacHost(reg, database, core, ingest)

@@ -74,11 +74,11 @@ type ContactService struct {
 	interactionRepo   *repository.InteractionRepository
 	contactTaskRepo   *repository.ContactTaskRepository
 	// followUp is the FollowUpManager consumer — the sole writer of
-	// contact_task.kind='follow_up' lifecycle post-cutover. Injected via
-	// SetFollowUpConsumer after construction to avoid a circular dep
-	// with consumer wiring. Non-bus callers (Todoist completion path,
-	// Promote/Extend) route through followUp.ApplyInteraction inside
-	// deriveFollowUpClosure.
+	// contact_task.kind='follow_up' lifecycle post-cutover. Passed to
+	// NewContactService. Nil-tolerant: when nil, deriveFollowUpClosure
+	// returns a nil closure and non-bus follow-up work is silently
+	// skipped. Non-bus callers (Todoist completion path, Promote/Extend)
+	// route through followUp.ApplyInteraction inside deriveFollowUpClosure.
 	followUp FollowUpConsumer
 	// bus is the event bus used to publish contact_methods.added on
 	// method-adding mutations. Required in production wiring (main.go).
@@ -92,9 +92,8 @@ type ContactService struct {
 	// bus in production; nil-safe for tests.
 	rematchRegistry RematchRegistry
 	// cadence is the direct-invoke writer (the sole writer of the four
-	// cadence columns post-cutover). Injected via SetCadenceUpdater
-	// after construction to avoid a circular dep with consumer wiring.
-	// When unset, MergeContacts / ExtendInteraction /
+	// cadence columns post-cutover). Passed to NewContactService.
+	// When nil, MergeContacts / ExtendInteraction /
 	// PromoteInteractionToMutual / cadence-edit UpdateContact paths
 	// return an error rather than silently no-op-ing on a code path
 	// that was supposed to mutate cadence state.
@@ -102,12 +101,12 @@ type ContactService struct {
 	// knowledge emits the lives_in/birthday/how_met assertions for
 	// location/birthday/how_met and refreshes the derived cache columns
 	// inline (the authority flip — the assertion store is the source of
-	// truth, the columns are a cache). Injected via SetKnowledgeWriter
-	// after construction to avoid a circular dep with the assert service +
-	// cache-consumer wiring. When unset, CreateContact / UpdateContact /
-	// MergeContacts return an error rather than silently dropping a
-	// location/birthday/how_met write (the columns are no longer written
-	// by the contact SQL).
+	// truth, the columns are a cache). Built by NewContactService from the
+	// (assertSvc, knowledgeCache) pair when both are provided; left nil
+	// when neither is (a half-set pair is a constructor-time panic). When
+	// nil, CreateContact / UpdateContact / MergeContacts return an error
+	// rather than silently dropping a location/birthday/how_met write (the
+	// columns are no longer written by the contact SQL).
 	knowledge *knowledgeWriter
 	// commsRepo carries the savepoint-wrapped comms_message merge repoint
 	// (dedup soft-delete + repoint with one scoped retry). Constructed
@@ -115,8 +114,8 @@ type ContactService struct {
 	commsRepo *repository.CommsMessageRepository
 	// taskCloseEnqueuer inserts the durable Todoist close job for automated
 	// contact_task rows the merge closes with a REAL external id. Injected
-	// via SetTaskCloseEnqueuer after construction (same convention as
-	// SetCadenceUpdater). taskCloseConfigured tracks "setter called"
+	// via SetTaskCloseEnqueuer after construction (a cross-block dependency:
+	// the river client is decided later). taskCloseConfigured tracks "setter called"
 	// separately from taskCloseRemoteEnabled: setter never called + eligible
 	// refs exist → error (wiring bug); called with remoteEnabled=false
 	// (follow-up mode 'off', the documented completion-disabled emergency
@@ -139,6 +138,16 @@ type ContactService struct {
 // contact_methods.added through bus and seed the in-memory job entry via
 // rematchRegistry. Tests that don't exercise rematch may pass nil for
 // both — the publisher silently skips when bus is nil.
+//
+// The promoted consumer dependencies (cadence, assertSvc+knowledgeCache,
+// followUp) carry the nil semantics their former setters had:
+//   - cadence: nil ⇒ Merge/Extend/Promote/cadence-edit paths error (they
+//     must mutate cadence state; a nil writer is a wiring bug on those paths).
+//   - assertSvc + knowledgeCache: both-or-neither. Both non-nil ⇒ the
+//     knowledge writer is built; both nil ⇒ knowledge stays nil and the
+//     create/update/merge knowledge guards error. A HALF-set pair is a
+//     wiring bug and panics at construction (the writer needs both).
+//   - followUp: nil-tolerant ⇒ non-bus follow-up work is silently skipped.
 func NewContactService(
 	database *db.Database,
 	contactRepo *repository.ContactRepository,
@@ -147,6 +156,10 @@ func NewContactService(
 	contactTaskRepo *repository.ContactTaskRepository,
 	bus *events.Bus,
 	rematchRegistry RematchRegistry,
+	cadence cadenceWriter,
+	assertSvc *AssertService,
+	knowledgeCache knowledgeCacheRefresher,
+	followUp FollowUpConsumer,
 ) *ContactService {
 	return &ContactService{
 		database:          database,
@@ -157,6 +170,25 @@ func NewContactService(
 		commsRepo:         repository.NewCommsMessageRepository(database.Queries),
 		bus:               bus,
 		rematchRegistry:   rematchRegistry,
+		cadence:           cadence,
+		knowledge:         buildKnowledgeWriter(assertSvc, knowledgeCache),
+		followUp:          followUp,
+	}
+}
+
+// buildKnowledgeWriter enforces the both-or-neither knowledge-pair rule shared
+// by NewContactService and NewEnrichmentService: both non-nil builds the
+// writer, both nil leaves it nil (the "not wired" guards fire), a half-set pair
+// panics loudly at construction (a wiring bug — the writer cannot persist
+// location/birthday/how_met without both the assert service and the cache).
+func buildKnowledgeWriter(assertSvc *AssertService, knowledgeCache knowledgeCacheRefresher) *knowledgeWriter {
+	switch {
+	case assertSvc != nil && knowledgeCache != nil:
+		return newKnowledgeWriter(assertSvc, knowledgeCache)
+	case assertSvc == nil && knowledgeCache == nil:
+		return nil
+	default:
+		panic("service: knowledge writer requires both assertSvc and knowledgeCache (or neither)")
 	}
 }
 
@@ -182,16 +214,6 @@ func (s *ContactService) InjectMergeCommitBarrierForTest(fn func()) {
 	s.mergeCommitBarrier = fn
 }
 
-// SetFollowUpConsumer injects the FollowUpManager consumer. Matches
-// SetCadenceUpdater's setter-after-construction pattern so main.go
-// can build the service and consumer independently and wire them
-// together once both exist. Non-bus callers (Todoist completion,
-// Promote/Extend) require this dependency to be set — otherwise
-// deriveFollowUpClosure returns nil and no follow-up work fires.
-func (s *ContactService) SetFollowUpConsumer(fm FollowUpConsumer) {
-	s.followUp = fm
-}
-
 // InjectBusForTest swaps the event bus reference after construction.
 // Integration tests have a chicken-and-egg dependency where the bus
 // needs the ContactService (via InteractionRecorder) AND the
@@ -202,29 +224,6 @@ func (s *ContactService) SetFollowUpConsumer(fm FollowUpConsumer) {
 // service is used concurrently; no synchronization is performed.
 func (s *ContactService) InjectBusForTest(bus *events.Bus) {
 	s.bus = bus
-}
-
-// SetCadenceUpdater injects the cadence writer. Main.go wires this
-// after constructing both the service and the consumer.CadenceUpdater;
-// the deferred wire-in avoids a circular construction dependency.
-// Non-event-bus cadence entry points (MergeContacts, ExtendInteraction,
-// PromoteInteractionToMutual, user-driven cadence edits in
-// UpdateContact) require this dependency to be set — otherwise they
-// return an error rather than silently no-op-ing on a code path that
-// was supposed to mutate cadence state.
-func (s *ContactService) SetCadenceUpdater(c cadenceWriter) {
-	s.cadence = c
-}
-
-// SetKnowledgeWriter injects the assertion-store knowledge writer. Main.go
-// wires this after constructing both the AssertService and the
-// KnowledgeCacheUpdater consumer; the deferred wire-in avoids a circular
-// construction dependency (the cache consumer reads the assertion store the
-// AssertService writes). CreateContact / UpdateContact / MergeContacts require
-// it to be set — otherwise a location/birthday/how_met write would silently
-// vanish, since the contact SQL no longer writes those cache columns.
-func (s *ContactService) SetKnowledgeWriter(assertSvc *AssertService, cache knowledgeCacheRefresher) {
-	s.knowledge = newKnowledgeWriter(assertSvc, cache)
 }
 
 // HasPendingFollowUp checks if a contact has a pending follow-up task
@@ -284,7 +283,7 @@ func (s *ContactService) CreateContact(ctx context.Context, req repository.Creat
 		// written by the contact SQL — they flow from the assertion store via
 		// the knowledge writer. Refusing to operate without it prevents a
 		// silent drop of those fields.
-		return nil, uuid.Nil, errors.New("create contact: knowledge writer not wired (call SetKnowledgeWriter)")
+		return nil, uuid.Nil, errors.New("create contact: knowledge writer not wired (pass assertSvc+knowledgeCache to NewContactService)")
 	}
 	tx, err := s.database.Pool.Begin(ctx)
 	if err != nil {
@@ -388,12 +387,12 @@ func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req re
 		// edits must route through CadenceUpdater. Refusing to operate
 		// without it prevents a silent rollback to the direct-path
 		// behavior.
-		return nil, uuid.Nil, errors.New("update contact: cadence updater not wired (call SetCadenceUpdater)")
+		return nil, uuid.Nil, errors.New("update contact: cadence updater not wired (pass cadence to NewContactService)")
 	}
 	if s.knowledge == nil {
 		// Authority-flip invariant: location/birthday/how_met flow from the
-		// assertion store, not the contact SQL. See SetKnowledgeWriter.
-		return nil, uuid.Nil, errors.New("update contact: knowledge writer not wired (call SetKnowledgeWriter)")
+		// assertion store, not the contact SQL.
+		return nil, uuid.Nil, errors.New("update contact: knowledge writer not wired (pass assertSvc+knowledgeCache to NewContactService)")
 	}
 	tx, err := s.database.Pool.Begin(ctx)
 	if err != nil {
@@ -715,7 +714,7 @@ func (s *ContactService) RecordInteractionTx(
 	// queued delivery.
 	if !publishesEvent {
 		if s.cadence == nil {
-			return nil, errors.New("record interaction: cadence updater not wired (call SetCadenceUpdater)")
+			return nil, errors.New("record interaction: cadence updater not wired (pass cadence to NewContactService)")
 		}
 		if err := s.cadence.ApplyInteraction(ctx, tx, repository.ApplyInteractionRequest{
 			ContactID:  req.ContactID,
@@ -783,7 +782,7 @@ func (s *ContactService) PromoteInteractionToMutualTx(
 	ctx context.Context, tx pgx.Tx, interactionID, contactID uuid.UUID, replyAt time.Time,
 ) (func(context.Context), error) {
 	if s.cadence == nil {
-		return nil, errors.New("promote interaction: cadence updater not wired (call SetCadenceUpdater)")
+		return nil, errors.New("promote interaction: cadence updater not wired (pass cadence to NewContactService)")
 	}
 	updated, err := s.updateInteractionDirectionTx(ctx, tx, interactionID, repository.InteractionDirectionMutual, replyAt)
 	if err != nil {
@@ -836,7 +835,7 @@ func (s *ContactService) ExtendInteractionTx(
 	ctx context.Context, tx pgx.Tx, interactionID, contactID uuid.UUID, direction string, occurredAt time.Time, description *string,
 ) (func(context.Context), error) {
 	if s.cadence == nil {
-		return nil, errors.New("extend interaction: cadence updater not wired (call SetCadenceUpdater)")
+		return nil, errors.New("extend interaction: cadence updater not wired (pass cadence to NewContactService)")
 	}
 	updated, err := s.updateInteractionTimestampTx(ctx, tx, interactionID, occurredAt, description)
 	if err != nil {
@@ -1497,7 +1496,7 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 	}
 
 	if s.knowledge == nil {
-		return nil, errors.New("merge contacts: knowledge writer not wired (call SetKnowledgeWriter)")
+		return nil, errors.New("merge contacts: knowledge writer not wired (pass assertSvc+knowledgeCache to NewContactService)")
 	}
 
 	// 7-graph. Graph merge FIRST: tombstone the source person node
@@ -1536,7 +1535,7 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 	// the pre-merge target.cadence, which might have been overwritten
 	// above.
 	if s.cadence == nil {
-		return nil, errors.New("merge contacts: cadence updater not wired (call SetCadenceUpdater)")
+		return nil, errors.New("merge contacts: cadence updater not wired (pass cadence to NewContactService)")
 	}
 	mergedFields := buildMergeCadenceFields(targetContact, sourceContact, updateReq.Cadence)
 	if err := s.cadence.BulkApply(ctx, tx, req.TargetContactID, mergedFields); err != nil {

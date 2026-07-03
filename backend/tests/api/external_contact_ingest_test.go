@@ -113,7 +113,7 @@ func setupExtContactIngestEnv(t *testing.T) *extContactIngestEnv {
 	// rows that don't resolve to a linked contact, so wiring it here does
 	// not change the behavior of the existing non-reconcile tests.
 	enrichmentRepo := repository.NewEnrichmentRepository(database.Queries)
-	enrichSvc := service.NewEnrichmentService(database, contactRepo, contactMethodRepo, enrichmentRepo, nil, nil)
+	enrichSvc := service.NewEnrichmentService(database, contactRepo, contactMethodRepo, enrichmentRepo, nil, nil, nil, nil, nil)
 	addressBookReconcile := service.NewAddressBookReconcileService(enrichSvc, contactRepo, contactMethodRepo, externalRepo)
 	ingestService.SetAddressBookReconciler(addressBookReconcile)
 

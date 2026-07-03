@@ -81,13 +81,12 @@ func newKnowledgeCutoverHarness(t *testing.T, ctx context.Context) *knowledgeCut
 	assertSvc := service.NewAssertService(database.Pool, nodeRepo, entityRepo, predicateRepo, assertionRepo, bus)
 	cacheUpdater := consumer.NewKnowledgeCacheUpdater(assertionRepo, nodeRepo, contactRepo)
 
-	contactSvc := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, taskRepo, nil, nil)
-	contactSvc.SetKnowledgeWriter(assertSvc, cacheUpdater)
-	wireCadenceUpdaterForTest(t, database, contactSvc)
+	contactSvc := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, taskRepo, nil, nil,
+		buildCadenceUpdaterForTest(t, database), assertSvc, cacheUpdater, nil)
 
 	enrichmentRepo := repository.NewEnrichmentRepository(database.Queries)
-	enrichSvc := service.NewEnrichmentService(database, contactRepo, methodRepo, enrichmentRepo, nil, nil)
-	enrichSvc.SetKnowledgeWriter(assertSvc, cacheUpdater)
+	enrichSvc := service.NewEnrichmentService(database, contactRepo, methodRepo, enrichmentRepo, nil, nil,
+		nil, assertSvc, cacheUpdater)
 
 	migrationSvc := service.NewContactKnowledgeMigrationService(database.Pool, contactRepo, assertSvc)
 
