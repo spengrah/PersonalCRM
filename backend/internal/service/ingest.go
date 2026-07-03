@@ -242,7 +242,7 @@ type AnarlogIdentityLookup interface {
 // fire correctly on both inserts and refreshes). Concrete is *ContactService.
 type ContactInteractionRecorder interface {
 	RecordInteractionTx(ctx context.Context, tx pgx.Tx, publishesEvent bool, req repository.RecordInteractionRequest) (*RecordInteractionResult, error)
-	ExtendInteractionTx(ctx context.Context, tx pgx.Tx, interactionID, contactID uuid.UUID, direction string, occurredAt time.Time, description *string) (func(context.Context), error)
+	ExtendInteractionTx(ctx context.Context, tx pgx.Tx, interactionID, contactID uuid.UUID, direction string, occurredAt time.Time, description *string) error
 }
 
 // PhoneCallWriter is the narrow surface for the per-event phone_call
@@ -549,12 +549,10 @@ func (s *IngestService) IngestBatch(
 	pendingAggregate := make(map[pendingAggregateKey]struct{})
 
 	// batchPostCommit accumulates post-commit closures returned by
-	// per-event handlers — meeting_note.recorded routes session
-	// interactions through ContactService.RecordInteractionTx whose
-	// FollowUpFn fires the FollowUpManager after commit, and the
-	// inline call handler returns FollowUpManager.HandleEvent
-	// closures. They run AFTER tx.Commit so any external HTTP work
-	// (Todoist item_update) does not stall the connection inside the
+	// per-event handlers (e.g. the icloud_contacts address-book method
+	// reconcile). Follow-up work is NOT here — it runs inline in the
+	// per-event tx via RecordInteractionTx. Remaining closures run AFTER
+	// tx.Commit so external work does not stall the connection inside the
 	// tx.
 	var batchPostCommit []func(context.Context)
 
@@ -699,9 +697,9 @@ func (s *IngestService) IngestBatch(
 		if pendingNA != nil {
 			needsAttention = append(needsAttention, *pendingNA)
 		}
-		// Collect post-commit follow-up closures for execution after
-		// the outer tx commits. Discarding them here would silently lose
-		// follow-up task side effects on session-attributed interactions.
+		// Collect any post-commit closures a family returned (e.g. the
+		// address-book method reconcile) for execution after the outer tx
+		// commits. Follow-up work already ran inline in the per-event tx.
 		if len(pendingFollowUps) > 0 {
 			batchPostCommit = append(batchPostCommit, pendingFollowUps...)
 		}
@@ -739,14 +737,12 @@ func (s *IngestService) IngestBatch(
 	if commitErr := tx.Commit(ctx); commitErr != nil {
 		return 0, 0, nil, nil, fmt.Errorf("commit: %w", commitErr)
 	}
-	// Execute post-commit follow-up closures (FollowUpFn returned by
-	// ContactService.RecordInteractionTx for meeting_note.recorded; also
-	// FollowUpManager refresh-branch Todoist item_update closures from
-	// the inline call handler). Run sequentially AFTER tx.Commit so any
-	// external HTTP work doesn't stall the connection inside the tx.
-	// Each closure is best-effort: failures are logged inside the
+	// Execute any post-commit closures a family returned (e.g. the
+	// icloud_contacts address-book method reconcile). Run sequentially
+	// AFTER tx.Commit so external work doesn't stall the connection inside
+	// the tx. Each closure is best-effort: failures are logged inside the
 	// closure and do NOT roll back the batch (the interactions already
-	// committed).
+	// committed). Follow-up work is not here — it ran inline in the tx.
 	for _, fn := range batchPostCommit {
 		fn(ctx)
 	}
@@ -1817,10 +1813,9 @@ type desiredInteraction struct {
 //
 // Returns (needsAttention, followUps, rejection): needsAttention is
 // non-nil when the final linkage_state requires user attention
-// (conflict_pending or orphan_needs_review). followUps carries the
-// post-commit closures returned by RecordInteractionTx for the new
-// session-attributed interactions (so FollowUpManager fires after
-// the outer tx commits). rejection != nil rolls back the savepoint.
+// (conflict_pending or orphan_needs_review). The post-commit slice is
+// always empty here — follow-up runs inline in the per-event tx via
+// RecordInteractionTx. rejection != nil rolls back the savepoint.
 func (s *IngestService) handleMeetingNoteRecorded(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -1835,13 +1830,6 @@ func (s *IngestService) handleMeetingNoteRecorded(
 			Message: "ingest service was not configured for meeting_note processing",
 		}
 	}
-
-	// followUps accumulates post-commit closures returned by
-	// ContactService.RecordInteractionTx so the dispatch loop can run
-	// them after the outer tx commits. FollowUpManager updates
-	// contact_task rows + may schedule Todoist work; running it inside
-	// the tx would hold the lock across an external HTTP call.
-	var followUps []func(context.Context)
 
 	var p events.MeetingNoteRecordedPayload
 	if err := json.Unmarshal(env.Payload, &p); err != nil {
@@ -2283,21 +2271,18 @@ func (s *IngestService) handleMeetingNoteRecorded(
 			if !needsRefresh {
 				continue
 			}
-			refreshFn, err := s.contactSvc.ExtendInteractionTx(ctx, tx, x.ID, d.ContactID, repository.InteractionDirectionMutual, p.MeetingAt, p.Title)
-			if err != nil {
+			// ExtendInteractionTx applies cadence + follow-up (and enqueues
+			// any op) inline in this tx.
+			if err := s.contactSvc.ExtendInteractionTx(ctx, tx, x.ID, d.ContactID, repository.InteractionDirectionMutual, p.MeetingAt, p.Title); err != nil {
 				return nil, nil, &IngestPerEventRejection{
 					Code:    ingestRejectInteractionWriteFailed,
 					Message: fmt.Sprintf("refresh session interaction: %s", err.Error()),
 				}
 			}
-			if refreshFn != nil {
-				followUps = append(followUps, refreshFn)
-			}
 		}
 		// to_add = desired \ existing (route through ContactService so
-		// cadence + follow-up evaluation fire correctly). Capture the
-		// FollowUpFn closures so the dispatch loop can run them after
-		// the outer tx commits. sessionVenueID was resolved above.
+		// cadence + follow-up evaluation fire inline). sessionVenueID was
+		// resolved above.
 		for ref, d := range desiredByRef {
 			if _, have := existingByRef[ref]; have {
 				continue
@@ -2312,15 +2297,13 @@ func (s *IngestService) handleMeetingNoteRecorded(
 				Direction:   repository.InteractionDirectionMutual,
 				VenueID:     sessionVenueID,
 			}
-			res, err := s.contactSvc.RecordInteractionTx(ctx, tx, false, req)
-			if err != nil {
+			// publishesEvent=false: RecordInteractionTx applies cadence +
+			// follow-up (and enqueues any op) inline in this tx.
+			if _, err := s.contactSvc.RecordInteractionTx(ctx, tx, false, req); err != nil {
 				return nil, nil, &IngestPerEventRejection{
 					Code:    ingestRejectInteractionWriteFailed,
 					Message: fmt.Sprintf("record session interaction: %s", err.Error()),
 				}
-			}
-			if res != nil && res.FollowUpFn != nil {
-				followUps = append(followUps, res.FollowUpFn)
 			}
 			interactionsCreated++
 		}
@@ -2392,7 +2375,9 @@ func (s *IngestService) handleMeetingNoteRecorded(
 		Bool("resolved_set_changed", priorResolvedSetHash != newResolvedSetHash).
 		Msg("meeting_note linkage decision")
 
-	return needs, followUps, nil
+	// No post-commit closures: follow-up (and its op enqueue) ran inline
+	// in the per-event tx via RecordInteractionTx/ExtendInteractionTx.
+	return needs, nil, nil
 }
 
 // resolveAnarlogSessionVenue resolves the venue node id for an anarlog session's

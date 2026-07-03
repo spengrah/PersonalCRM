@@ -113,11 +113,14 @@ func (w *TodoistTaskOpWorker) Work(ctx context.Context, j *river.Job[consumerjob
 	}
 }
 
-// Timeout bounds the per-job runtime. Every verb issues a single HTTP
-// call (create adds a short write tx); one op = one HTTP write. 60s
-// covers the create path; per-verb tightening isn't worth the complexity.
-func (*TodoistTaskOpWorker) Timeout(*river.Job[consumerjobs.TodoistTaskOpArgs]) time.Duration {
-	return 60 * time.Second
+// Timeout bounds the per-job runtime. Create runs three phases (read →
+// HTTP item_add → short finalize tx) so it gets 60s; the other verbs
+// issue a single HTTP call and get 30s (matching the legacy adapters).
+func (*TodoistTaskOpWorker) Timeout(j *river.Job[consumerjobs.TodoistTaskOpArgs]) time.Duration {
+	if j.Args.Op == consumerjobs.TaskOpCreate {
+		return 60 * time.Second
+	}
+	return 30 * time.Second
 }
 
 // defaultCreateCommandUUID is the command UUID for a new-kind create op:

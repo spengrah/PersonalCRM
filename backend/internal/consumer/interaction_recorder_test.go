@@ -40,8 +40,6 @@ type stubWriter struct {
 	returnErr error
 	// lastCreated records the fabricated row on fresh writes (nil on replay).
 	lastCreated *repository.Interaction
-	// postCommit is returned on fresh writes; caller may invoke it.
-	postCommit func(context.Context)
 	// prev + cadenceAtEmit are the pre-cadence snapshot returns. Tests
 	// set these to exercise V2 payload construction in HandleEvent.
 	prev          *repository.ContactCadenceFields
@@ -77,7 +75,6 @@ func (s *stubWriter) RecordInteractionTx(
 		IsReplay:      false,
 		PrevCadence:   s.prev,
 		CadenceAtEmit: s.cadenceAtEmit,
-		FollowUpFn:    s.postCommit,
 	}, nil
 }
 
@@ -706,30 +703,6 @@ func TestHandleEvent_PublishFailure_ReturnsError(t *testing.T) {
 	require.Contains(t, err.Error(), "publish interaction.recorded")
 }
 
-// -----------------------------------------------------------------------------
-// postCommit propagation.
-// -----------------------------------------------------------------------------
-
-func TestHandleEvent_PostCommitBubblesUp(t *testing.T) {
-	cid := uuid.New()
-	rec, w, _, _, _ := newRecorderWithStubs()
-	invoked := false
-	w.postCommit = func(context.Context) { invoked = true }
-
-	env := mustEnv(t, events.KindInteractionManual, events.InteractionManualPayload{
-		Version:    1,
-		ContactID:  cid,
-		Direction:  "outbound",
-		OccurredAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
-	})
-	_, postCommit, err := rec.HandleEvent(context.Background(), nonNilTx(), env)
-	require.NoError(t, err)
-	require.NotNil(t, postCommit, "fresh write must return non-nil postCommit when writer supplied one")
-	require.False(t, invoked, "HandleEvent must not invoke postCommit itself (caller runs it after tx commit)")
-	postCommit(context.Background())
-	require.True(t, invoked)
-}
-
 // TestHandleEvent_FollowUpDispatcher_InlineInvoked asserts that the
 // configured follow-up dispatcher's HandleEvent is called inline in
 // the same tx as the cadence dispatch, with the interaction.recorded
@@ -754,13 +727,12 @@ func TestHandleEvent_FollowUpDispatcher_InlineInvoked(t *testing.T) {
 		"follow-up dispatcher must receive the interaction.recorded envelope id")
 }
 
-// TestHandleEvent_NoFollowUpOrPostCommit_NilReturned asserts that
-// without either a non-bus FollowUpFn or a bus-path follow-up post-
-// commit, the recorder returns nil post-commit (no empty wrapper).
+// TestHandleEvent_NoFollowUpOrPostCommit_NilReturned asserts that the
+// recorder returns a nil post-commit — follow-up (and its op enqueue)
+// runs inline in the tx, so there is no post-commit closure.
 func TestHandleEvent_NoFollowUpOrPostCommit_NilReturned(t *testing.T) {
 	cid := uuid.New()
-	rec, w, _, _, _ := newRecorderWithStubs()
-	w.postCommit = nil
+	rec, _, _, _, _ := newRecorderWithStubs()
 	rec.followUp = nil
 
 	env := mustEnv(t, events.KindInteractionManual, events.InteractionManualPayload{

@@ -204,9 +204,9 @@ func (r *InteractionRecorder) SetVenueResolver(v venueResolver) {
 // Returns:
 //   - interaction: the persisted row (either freshly-inserted or the
 //     existing dedup-hit row). Caller may use the ID for HTTP responses.
-//   - postCommit:  non-nil when the write warrants a best-effort follow-up-
-//     manager call. Nil on replay (dedup-hit) so re-delivery never
-//     re-triggers side effects. Callers invoke AFTER the outer tx commits.
+//   - postCommit:  reserved for post-commit work; currently always nil —
+//     follow-up (and its op enqueue) runs inline in this tx. Callers
+//     invoke it nil-safe AFTER the outer tx commits.
 //   - error:       wrapped. Caller rolls back tx.
 func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *events.Envelope) (*repository.Interaction, func(context.Context), error) {
 	if env == nil {
@@ -376,11 +376,9 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 		}
 	}
 
-	// res.FollowUpFn is nil on the bus path (publishesEvent=true); it's
-	// set only when the non-bus wrapper path runs (publishesEvent=false —
-	// Todoist completion) and carries the direct-invoke
-	// FollowUpManager.ApplyInteraction call on a fresh tx after commit.
-	return res.Interaction, res.FollowUpFn, nil
+	// Follow-up already ran inline above (r.followUp.HandleEvent in this
+	// tx); no post-commit work remains.
+	return res.Interaction, nil, nil
 }
 
 // resolveVenue resolves the shared-container venue node id for the interaction

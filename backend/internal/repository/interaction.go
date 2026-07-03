@@ -85,12 +85,6 @@ type RecordInteractionResult struct {
 	// (may be nil if the contact has no cadence). Non-nil only when
 	// publishesEvent=true and cadence is set.
 	CadenceAtEmit *string
-	// FollowUpFn is the non-bus path's post-commit hook. Set only when
-	// publishesEvent=false — the bus path runs FollowUpManager.HandleEvent
-	// inline inside the recorder's tx and carries any refresh
-	// post-commit closure through the recorder's own return. Nil
-	// otherwise. Caller invokes AFTER tx commit.
-	FollowUpFn func(context.Context)
 }
 
 // InteractionRepository handles interaction persistence

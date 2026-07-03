@@ -170,7 +170,6 @@ func (s *MeetingNoteService) ResolveLink(ctx context.Context, mnID uuid.UUID, in
 	}
 
 	var result *ResolveLinkResult
-	var followUps []func(context.Context)
 
 	// Service-layer errors are returned from the tx closure so
 	// pgx.BeginTxFunc rolls back any partial writes (interactions,
@@ -195,20 +194,18 @@ func (s *MeetingNoteService) ResolveLink(ctx context.Context, mnID uuid.UUID, in
 		switch prior.LinkageState {
 		case repository.LinkageStateConflictPending:
 			if input != nil {
-				res, created, fus, ferr := s.resolveToLinked(ctx, tx, prior, *input)
+				res, created, ferr := s.resolveToLinked(ctx, tx, prior, *input)
 				if ferr != nil {
 					return ferr
 				}
 				result = &ResolveLinkResult{MeetingNote: res, InteractionsCreated: created}
-				followUps = fus
 				return nil
 			}
-			res, created, fus, ferr := s.resolveNoneOfThese(ctx, tx, prior)
+			res, created, ferr := s.resolveNoneOfThese(ctx, tx, prior)
 			if ferr != nil {
 				return ferr
 			}
 			result = &ResolveLinkResult{MeetingNote: res, InteractionsCreated: created}
-			followUps = fus
 			return nil
 		case repository.LinkageStateOrphanNeedsReview:
 			// An orphan has no candidate snapshot, so action="link" is
@@ -218,12 +215,11 @@ func (s *MeetingNoteService) ResolveLink(ctx context.Context, mnID uuid.UUID, in
 			if input != nil {
 				return ErrResolveLinkIDNotCandidate
 			}
-			res, created, fus, ferr := s.resolveOrphanToImpromptu(ctx, tx, prior)
+			res, created, ferr := s.resolveOrphanToImpromptu(ctx, tx, prior)
 			if ferr != nil {
 				return ferr
 			}
 			result = &ResolveLinkResult{MeetingNote: res, InteractionsCreated: created}
-			followUps = fus
 			return nil
 		default:
 			return ErrResolveLinkNotPending
@@ -233,30 +229,23 @@ func (s *MeetingNoteService) ResolveLink(ctx context.Context, mnID uuid.UUID, in
 		return nil, txErr
 	}
 
-	// Run follow-up closures best-effort outside the tx. The user-facing
-	// HTTP response does not fail when a follow-up callback panics or
-	// returns an error — mirrors the daemon-side dispatch loop's
-	// post-commit semantics. We recover panics per-closure so one bad
-	// closure cannot poison the rest.
-	for _, fn := range followUps {
-		runFollowUpBestEffort(ctx, fn)
-	}
-
+	// Follow-up (and its op enqueue) ran inline in the resolve tx above;
+	// no best-effort post-commit work remains.
 	s.logResolution(result, input)
 	return result, nil
 }
 
 // resolveToLinked implements the action="link" branch.
-func (s *MeetingNoteService) resolveToLinked(ctx context.Context, tx pgx.Tx, prior *repository.MeetingNote, input ResolveLinkInput) (*repository.MeetingNote, []CreatedInteraction, []func(context.Context), error) {
+func (s *MeetingNoteService) resolveToLinked(ctx context.Context, tx pgx.Tx, prior *repository.MeetingNote, input ResolveLinkInput) (*repository.MeetingNote, []CreatedInteraction, error) {
 	if len(prior.ConflictCandidates) == 0 {
-		return nil, nil, nil, ErrResolveLinkSnapshotMissing
+		return nil, nil, ErrResolveLinkSnapshotMissing
 	}
 	var snapshot []repository.ConflictCandidateSummary
 	if err := json.Unmarshal(prior.ConflictCandidates, &snapshot); err != nil {
-		return nil, nil, nil, fmt.Errorf("decode conflict_candidates: %w", err)
+		return nil, nil, fmt.Errorf("decode conflict_candidates: %w", err)
 	}
 	if !snapshotContains(snapshot, input.Kind, input.ID) {
-		return nil, nil, nil, ErrResolveLinkIDNotCandidate
+		return nil, nil, ErrResolveLinkIDNotCandidate
 	}
 
 	// Verify the target row still exists inside the SAME tx as the
@@ -267,7 +256,7 @@ func (s *MeetingNoteService) resolveToLinked(ctx context.Context, tx pgx.Tx, pri
 	// clear 404 over a silently broken pointer.
 	candidate, err := s.fetchCandidateAsLinkageTx(ctx, tx, input.Kind, input.ID)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 
 	// Re-resolve tagged participants against the current contact
@@ -275,16 +264,16 @@ func (s *MeetingNoteService) resolveToLinked(ctx context.Context, tx pgx.Tx, pri
 	// resolve-time still produces walk-in interactions.
 	resolvedTagged, err := s.reResolveTagged(ctx, tx, prior.Participants)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 
 	walkins := stepFiveWalkins(*candidate, resolvedTagged, prior.AnarlogSessionID)
 	// Use the candidate being linked (input.Kind/input.ID) for venue resolution,
 	// NOT prior's stale linkage — the link is written below (ResolveMeetingNoteToLinkedTx)
 	// in this same tx, so an event-linked session reuses the gcal meeting venue.
-	created, followUps, err := s.writeDesiredInteractions(ctx, tx, prior, &input.Kind, &input.ID, walkins)
+	created, err := s.writeDesiredInteractions(ctx, tx, prior, &input.Kind, &input.ID, walkins)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 
 	updated, err := s.meetingWriter.ResolveMeetingNoteToLinkedTx(ctx, tx, prior.ID, input.Kind, input.ID)
@@ -293,20 +282,20 @@ func (s *MeetingNoteService) resolveToLinked(ctx context.Context, tx pgx.Tx, pri
 			// A concurrent writer moved the row out of conflict_pending
 			// between our pre-read and the state-guarded UPDATE. Surface
 			// as 409 — the resolve attempt lost the race.
-			return nil, nil, nil, ErrResolveLinkNotPending
+			return nil, nil, ErrResolveLinkNotPending
 		}
-		return nil, nil, nil, fmt.Errorf("resolve meeting_note: %w", err)
+		return nil, nil, fmt.Errorf("resolve meeting_note: %w", err)
 	}
-	return updated, created, followUps, nil
+	return updated, created, nil
 }
 
 // resolveNoneOfThese implements the action="none_of_these" branch by
 // re-running the no-candidates branch of decideLinkage with the row's
 // persisted participants and a freshly-extracted title-match set.
-func (s *MeetingNoteService) resolveNoneOfThese(ctx context.Context, tx pgx.Tx, prior *repository.MeetingNote) (*repository.MeetingNote, []CreatedInteraction, []func(context.Context), error) {
+func (s *MeetingNoteService) resolveNoneOfThese(ctx context.Context, tx pgx.Tx, prior *repository.MeetingNote) (*repository.MeetingNote, []CreatedInteraction, error) {
 	resolvedTagged, err := s.reResolveTagged(ctx, tx, prior.Participants)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 
 	titleStr := ""
@@ -323,7 +312,7 @@ func (s *MeetingNoteService) resolveNoneOfThese(ctx context.Context, tx pgx.Tx, 
 		}
 		match, mErr := s.titleMatcher.MatchTitleToken(ctx, token)
 		if mErr != nil {
-			return nil, nil, nil, fmt.Errorf("match title token %q: %w", token, mErr)
+			return nil, nil, fmt.Errorf("match title token %q: %w", token, mErr)
 		}
 		if match == nil {
 			titleUnmatched = append(titleUnmatched, token)
@@ -356,7 +345,7 @@ func (s *MeetingNoteService) resolveNoneOfThese(ctx context.Context, tx pgx.Tx, 
 	}
 	newResolvedSetHash, err := computeResolvedSetHash(resolvedIDs, titleMatchedIDs)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("compute resolved set hash: %w", err)
+		return nil, nil, fmt.Errorf("compute resolved set hash: %w", err)
 	}
 
 	// Force zero candidates so decideLinkage walks the no-candidates path.
@@ -369,9 +358,9 @@ func (s *MeetingNoteService) resolveNoneOfThese(ctx context.Context, tx pgx.Tx, 
 	)
 
 	// none_of_these → no calendar link → a session venue (nil linkage).
-	created, followUps, err := s.writeDesiredInteractions(ctx, tx, prior, nil, nil, desired)
+	created, err := s.writeDesiredInteractions(ctx, tx, prior, nil, nil, desired)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 
 	// Discovery upsert for unmatched title tokens. Surfaces the same
@@ -380,7 +369,7 @@ func (s *MeetingNoteService) resolveNoneOfThese(ctx context.Context, tx pgx.Tx, 
 	if s.titleDiscovery != nil {
 		for _, token := range titleUnmatched {
 			if dErr := s.titleDiscovery.UpsertTitleCandidateTx(ctx, tx, prior.AnarlogSessionID, strings.ToLower(token), token); dErr != nil {
-				return nil, nil, nil, fmt.Errorf("upsert title candidate %q: %w", token, dErr)
+				return nil, nil, fmt.Errorf("upsert title candidate %q: %w", token, dErr)
 			}
 		}
 	}
@@ -388,11 +377,11 @@ func (s *MeetingNoteService) resolveNoneOfThese(ctx context.Context, tx pgx.Tx, 
 	updated, err := s.meetingWriter.ClearMeetingNoteConflictTx(ctx, tx, prior.ID, newState, newResolvedSetHash)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
-			return nil, nil, nil, ErrResolveLinkNotPending
+			return nil, nil, ErrResolveLinkNotPending
 		}
-		return nil, nil, nil, fmt.Errorf("clear meeting_note conflict: %w", err)
+		return nil, nil, fmt.Errorf("clear meeting_note conflict: %w", err)
 	}
-	return updated, created, followUps, nil
+	return updated, created, nil
 }
 
 // resolveOrphanToImpromptu implements the "Log as impromptu" action on an
@@ -420,10 +409,10 @@ func (s *MeetingNoteService) resolveNoneOfThese(ctx context.Context, tx pgx.Tx, 
 // empty, desired is empty, and the row lands linked_impromptu with zero
 // interactions — a terminal outcome reached only via explicit user
 // decision, which the daemon path never produces on its own.
-func (s *MeetingNoteService) resolveOrphanToImpromptu(ctx context.Context, tx pgx.Tx, prior *repository.MeetingNote) (*repository.MeetingNote, []CreatedInteraction, []func(context.Context), error) {
+func (s *MeetingNoteService) resolveOrphanToImpromptu(ctx context.Context, tx pgx.Tx, prior *repository.MeetingNote) (*repository.MeetingNote, []CreatedInteraction, error) {
 	resolvedTagged, err := s.reResolveTagged(ctx, tx, prior.Participants)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 
 	// Tagged-participant interactions only — never title-derived.
@@ -447,7 +436,7 @@ func (s *MeetingNoteService) resolveOrphanToImpromptu(ctx context.Context, tx pg
 		}
 		match, mErr := s.titleMatcher.MatchTitleToken(ctx, token)
 		if mErr != nil {
-			return nil, nil, nil, fmt.Errorf("match title token %q: %w", token, mErr)
+			return nil, nil, fmt.Errorf("match title token %q: %w", token, mErr)
 		}
 		if match == nil {
 			titleUnmatched = append(titleUnmatched, token)
@@ -481,13 +470,13 @@ func (s *MeetingNoteService) resolveOrphanToImpromptu(ctx context.Context, tx pg
 	// decision.
 	newResolvedSetHash, err := computeResolvedSetHash(resolvedIDs, titleMatchedIDs)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("compute resolved set hash: %w", err)
+		return nil, nil, fmt.Errorf("compute resolved set hash: %w", err)
 	}
 
 	// orphan → impromptu → no calendar link → a session venue (nil linkage).
-	created, followUps, err := s.writeDesiredInteractions(ctx, tx, prior, nil, nil, desired)
+	created, err := s.writeDesiredInteractions(ctx, tx, prior, nil, nil, desired)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 
 	// Surface unmatched title tokens as weak discovery candidates — the
@@ -495,7 +484,7 @@ func (s *MeetingNoteService) resolveOrphanToImpromptu(ctx context.Context, tx pg
 	if s.titleDiscovery != nil {
 		for _, token := range titleUnmatched {
 			if dErr := s.titleDiscovery.UpsertTitleCandidateTx(ctx, tx, prior.AnarlogSessionID, strings.ToLower(token), token); dErr != nil {
-				return nil, nil, nil, fmt.Errorf("upsert title candidate %q: %w", token, dErr)
+				return nil, nil, fmt.Errorf("upsert title candidate %q: %w", token, dErr)
 			}
 		}
 	}
@@ -505,11 +494,11 @@ func (s *MeetingNoteService) resolveOrphanToImpromptu(ctx context.Context, tx pg
 	updated, err := s.meetingWriter.ClearMeetingNoteConflictTx(ctx, tx, prior.ID, repository.LinkageStateLinkedImpromptu, newResolvedSetHash)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
-			return nil, nil, nil, ErrResolveLinkNotPending
+			return nil, nil, ErrResolveLinkNotPending
 		}
-		return nil, nil, nil, fmt.Errorf("clear meeting_note conflict: %w", err)
+		return nil, nil, fmt.Errorf("clear meeting_note conflict: %w", err)
 	}
-	return updated, created, followUps, nil
+	return updated, created, nil
 }
 
 // reResolveTagged maps prior.Participants (anarlog_human UUIDs) into
@@ -549,17 +538,16 @@ func (s *MeetingNoteService) reResolveTagged(ctx context.Context, tx pgx.Tx, par
 // resolve-to-candidate caller passes the candidate it is linking to so an
 // event-linked session reuses the gcal meeting venue; the none/impromptu callers
 // pass nil so the session gets its own venue.
-func (s *MeetingNoteService) writeDesiredInteractions(ctx context.Context, tx pgx.Tx, prior *repository.MeetingNote, linkedKind *string, linkedID *uuid.UUID, desired []desiredInteraction) ([]CreatedInteraction, []func(context.Context), error) {
+func (s *MeetingNoteService) writeDesiredInteractions(ctx context.Context, tx pgx.Tx, prior *repository.MeetingNote, linkedKind *string, linkedID *uuid.UUID, desired []desiredInteraction) ([]CreatedInteraction, error) {
 	if s.contactRecorder == nil || len(desired) == 0 {
-		return nil, nil, nil
+		return nil, nil
 	}
 	created := make([]CreatedInteraction, 0, len(desired))
-	var followUps []func(context.Context)
 	// Resolve the session venue once (all desired interactions share the
 	// session): reuse a linked gcal meeting venue, else mint a session venue.
 	sessionVenueID, venueErr := resolveAnarlogSessionVenue(ctx, tx, s.venue, prior.AnarlogSessionID, linkedKind, linkedID)
 	if venueErr != nil {
-		return nil, nil, fmt.Errorf("resolve session venue: %w", venueErr)
+		return nil, fmt.Errorf("resolve session venue: %w", venueErr)
 	}
 	for _, d := range desired {
 		sourceRef := d.SourceRef
@@ -572,12 +560,11 @@ func (s *MeetingNoteService) writeDesiredInteractions(ctx context.Context, tx pg
 			Direction:   repository.InteractionDirectionMutual,
 			VenueID:     sessionVenueID,
 		}
+		// publishesEvent=false: RecordInteractionTx applies cadence +
+		// follow-up (and enqueues any op) inline in this tx.
 		res, err := s.contactRecorder.RecordInteractionTx(ctx, tx, false, req)
 		if err != nil {
-			return nil, nil, fmt.Errorf("record session interaction: %w", err)
-		}
-		if res != nil && res.FollowUpFn != nil {
-			followUps = append(followUps, res.FollowUpFn)
+			return nil, fmt.Errorf("record session interaction: %w", err)
 		}
 		if res != nil && res.Interaction != nil {
 			created = append(created, CreatedInteraction{
@@ -589,7 +576,7 @@ func (s *MeetingNoteService) writeDesiredInteractions(ctx context.Context, tx pg
 			})
 		}
 	}
-	return created, followUps, nil
+	return created, nil
 }
 
 // fetchCandidateAsLinkageTx reads the target row referenced by a
@@ -682,24 +669,6 @@ func (s *MeetingNoteService) logResolution(result *ResolveLinkResult, input *Res
 		Int("interactions_created", len(result.InteractionsCreated)).
 		Bool("none_of_these", input == nil).
 		Msg("meeting_note conflict resolution")
-}
-
-// runFollowUpBestEffort runs a post-commit closure with panic recovery
-// + structured error logging. Failures do not bubble up to the
-// HTTP-visible path — the linkage_resolution log line and the
-// follow-up's own diagnostics suffice for audit.
-func runFollowUpBestEffort(ctx context.Context, fn func(context.Context)) {
-	if fn == nil {
-		return
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			logger.Error().
-				Interface("panic", r).
-				Msg("meeting_note resolve-link follow-up panicked")
-		}
-	}()
-	fn(ctx)
 }
 
 // NeedsAttentionAttendee is one attendee label on a conflict candidate.

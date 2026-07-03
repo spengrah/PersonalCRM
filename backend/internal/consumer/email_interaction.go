@@ -39,8 +39,8 @@ type emailInteractionFinder interface {
 // methods write the supplied occurred_at unconditionally + apply cadence
 // inline + publish nothing; they return a nil-safe post-commit closure.
 type emailAggregator interface {
-	PromoteInteractionToMutualTx(ctx context.Context, tx pgx.Tx, interactionID, contactID uuid.UUID, replyAt time.Time) (func(context.Context), error)
-	ExtendInteractionTx(ctx context.Context, tx pgx.Tx, interactionID, contactID uuid.UUID, direction string, occurredAt time.Time, description *string) (func(context.Context), error)
+	PromoteInteractionToMutualTx(ctx context.Context, tx pgx.Tx, interactionID, contactID uuid.UUID, replyAt time.Time) error
+	ExtendInteractionTx(ctx context.Context, tx pgx.Tx, interactionID, contactID uuid.UUID, direction string, occurredAt time.Time, description *string) error
 }
 
 // emailVenueResolver resolves the email-thread venue for a freshly-created email
@@ -195,7 +195,6 @@ func (c *EmailInteractionConsumer) HandleEvent(ctx context.Context, tx pgx.Tx, e
 	}
 
 	var interactionID uuid.UUID
-	var postCommit func(context.Context)
 
 	if errors.Is(err, db.ErrNotFound) {
 		// Create branch: reuse the InteractionRecorder's
@@ -239,12 +238,10 @@ func (c *EmailInteractionConsumer) HandleEvent(ctx context.Context, tx pgx.Tx, e
 			// forward-only timestamp rather than silently marking it processed
 			// (which would be a lost update). No second interaction.recorded
 			// is published; the found path publishes nothing.
-			pc, aggErr := c.aggregate(ctx, tx, &p, res.Interaction)
-			if aggErr != nil {
+			if aggErr := c.aggregate(ctx, tx, &p, res.Interaction); aggErr != nil {
 				return nil, aggErr
 			}
 			interactionID = res.Interaction.ID
-			postCommit = pc
 		} else {
 			// Fresh write: emit interaction.recorded atomically + inline-apply
 			// cadence + follow-up, exactly as InteractionRecorder does. The
@@ -257,13 +254,11 @@ func (c *EmailInteractionConsumer) HandleEvent(ctx context.Context, tx pgx.Tx, e
 		}
 	} else {
 		// Found branch: extend (same direction) or promote (direction
-		// differs). Both apply cadence inline and publish nothing.
-		pc, aggErr := c.aggregate(ctx, tx, &p, found)
-		if aggErr != nil {
+		// differs). Both apply cadence + follow-up inline and publish nothing.
+		if aggErr := c.aggregate(ctx, tx, &p, found); aggErr != nil {
 			return nil, aggErr
 		}
 		interactionID = found.ID
-		postCommit = pc
 	}
 
 	// Link the content row to the interaction it rolled into, on every
@@ -274,7 +269,9 @@ func (c *EmailInteractionConsumer) HandleEvent(ctx context.Context, tx pgx.Tx, e
 		return nil, fmt.Errorf("mark comms_message processed: %w", err)
 	}
 
-	return postCommit, nil
+	// All follow-up effects (and their op enqueues) ran inline in this tx —
+	// no post-commit work.
+	return nil, nil
 }
 
 // aggregate applies the found-branch extend/promote to an existing
@@ -283,7 +280,7 @@ func (c *EmailInteractionConsumer) HandleEvent(ctx context.Context, tx pgx.Tx, e
 // fall-through.
 func (c *EmailInteractionConsumer) aggregate(
 	ctx context.Context, tx pgx.Tx, p *events.EmailEventPayload, found *repository.Interaction,
-) (func(context.Context), error) {
+) error {
 	// Forward-only: only advance occurred_at when SentAt is strictly later
 	// than the stored value. Equal needs no write; an earlier (out-of-order
 	// backfill) SentAt holds the stored value so occurred_at never moves
@@ -299,18 +296,16 @@ func (c *EmailInteractionConsumer) aggregate(
 		// even when ts == found.OccurredAt (the held value), so an
 		// out-of-order mixed-direction backfill still promotes without
 		// moving occurred_at backward.
-		pc, err := c.aggregator.PromoteInteractionToMutualTx(ctx, tx, found.ID, p.ContactID, ts)
-		if err != nil {
-			return nil, fmt.Errorf("promote email interaction to mutual: %w", err)
+		if err := c.aggregator.PromoteInteractionToMutualTx(ctx, tx, found.ID, p.ContactID, ts); err != nil {
+			return fmt.Errorf("promote email interaction to mutual: %w", err)
 		}
-		return pc, nil
+		return nil
 	}
 
-	pc, err := c.aggregator.ExtendInteractionTx(ctx, tx, found.ID, p.ContactID, p.Direction, ts, p.Subject)
-	if err != nil {
-		return nil, fmt.Errorf("extend email interaction: %w", err)
+	if err := c.aggregator.ExtendInteractionTx(ctx, tx, found.ID, p.ContactID, p.Direction, ts, p.Subject); err != nil {
+		return fmt.Errorf("extend email interaction: %w", err)
 	}
-	return pc, nil
+	return nil
 }
 
 // emitRecorded runs the InteractionRecorder's fresh-write post-record

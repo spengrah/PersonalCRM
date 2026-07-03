@@ -127,7 +127,6 @@ type stubEmailAggregator struct {
 	promoteCalls  int
 	lastPromoteID uuid.UUID
 	lastPromoteTS time.Time
-	promotePC     func(context.Context)
 	promoteErr    error
 
 	extendCalls    int
@@ -135,21 +134,20 @@ type stubEmailAggregator struct {
 	lastExtendTS   time.Time
 	lastExtendDir  string
 	lastExtendDesc *string
-	extendPC       func(context.Context)
 	extendErr      error
 }
 
-func (s *stubEmailAggregator) PromoteInteractionToMutualTx(_ context.Context, _ pgx.Tx, interactionID, _ uuid.UUID, replyAt time.Time) (func(context.Context), error) {
+func (s *stubEmailAggregator) PromoteInteractionToMutualTx(_ context.Context, _ pgx.Tx, interactionID, _ uuid.UUID, replyAt time.Time) error {
 	s.promoteCalls++
 	if s.seq != nil {
 		s.seq.record("promote")
 	}
 	s.lastPromoteID = interactionID
 	s.lastPromoteTS = replyAt
-	return s.promotePC, s.promoteErr
+	return s.promoteErr
 }
 
-func (s *stubEmailAggregator) ExtendInteractionTx(_ context.Context, _ pgx.Tx, interactionID, _ uuid.UUID, direction string, occurredAt time.Time, description *string) (func(context.Context), error) {
+func (s *stubEmailAggregator) ExtendInteractionTx(_ context.Context, _ pgx.Tx, interactionID, _ uuid.UUID, direction string, occurredAt time.Time, description *string) error {
 	s.extendCalls++
 	if s.seq != nil {
 		s.seq.record("extend")
@@ -158,7 +156,7 @@ func (s *stubEmailAggregator) ExtendInteractionTx(_ context.Context, _ pgx.Tx, i
 	s.lastExtendTS = occurredAt
 	s.lastExtendDir = direction
 	s.lastExtendDesc = description
-	return s.extendPC, s.extendErr
+	return s.extendErr
 }
 
 // -----------------------------------------------------------------------------
