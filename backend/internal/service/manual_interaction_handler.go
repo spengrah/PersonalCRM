@@ -41,8 +41,8 @@ type manualInteractionBus interface {
 //     which does dedup + contact check + insert + cadence updates. The
 //     consumer also emits interaction.recorded in the same tx on fresh
 //     writes (spec §3.4.1 atomicity contract).
-//  5. Tx commit.
-//  6. Invoke the returned postCommit closure (best-effort follow-up).
+//  5. Tx commit. Follow-up (and any op enqueue) already ran inline in the
+//     tx via HandleEvent — there is no post-commit closure.
 //
 // Returns the persisted interaction row so the handler can render a 201
 // response. Errors are propagated — db.ErrNotFound surfaces for a missing

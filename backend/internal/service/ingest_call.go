@@ -108,14 +108,14 @@ func verifyCallInvariants(env *events.Envelope, authenticatedHostID uuid.UUID) *
 //  5. If qualified: RecordInteractionTx → publish interaction.recorded
 //     in the same tx → inline cadence.HandleEvent → inline
 //     followUp.HandleEvent. Mirrors consumer/interaction_recorder.go's
-//     HandleEvent. Returns the follow-up's post-commit closure (if
-//     any) so the caller can invoke it after tx.Commit.
+//     HandleEvent. Follow-up (and any op enqueue) runs inline in the tx.
 //  6. MarkProcessedTx with the interaction_id (or nil for missed-
 //     no-voicemail rows).
 //
-// Returns (postCommit, rejection). postCommit may be nil even on
-// success (no follow-up refresh branch fired). rejection != nil
-// indicates a domain refusal; the caller rolls back the savepoint.
+// Returns (postCommit, rejection). postCommit is always nil — follow-up
+// runs inline, so this handler contributes nil into the shared batch-
+// post-commit slice. rejection != nil indicates a domain refusal; the
+// caller rolls back the savepoint.
 //
 // isOutbound is true for KindCallSent, false for KindCallReceived. Used
 // to apply the decision table without re-checking the kind.

@@ -18,11 +18,12 @@ import (
 	"github.com/riverqueue/river"
 )
 
-// opUpdateSnoozeDelay is how long an update op waits when it lands on a
-// row whose remote task does not exist yet (still pending_remote_create),
-// or when verify-after-push detects the pushed value is already stale.
-// Snoozing is attempts-neutral (River bumps MaxAttempts), so an update can
-// wait out an arbitrarily long create outage without being discarded.
+// opUpdateSnoozeDelay is how long an update/close/delete op waits when it
+// lands on a row whose remote task does not exist yet (still
+// pending_remote_create), or when an update's verify-after-push detects
+// the pushed value is already stale. Snoozing is attempts-neutral (River
+// bumps MaxAttempts), so the op can wait out an arbitrarily long create
+// outage without being discarded.
 const opUpdateSnoozeDelay = 30 * time.Second
 
 // todoistOpTaskRepo is the subset of ContactTaskRepository the executor
@@ -372,10 +373,12 @@ func (w *TodoistTaskOpWorker) executeUpdate(ctx context.Context, taskID uuid.UUI
 		return river.JobCancel(fmt.Errorf("todoist_task_op %s: contact_task %s missing metadata to push", verb.op, taskID))
 	}
 	if task.ExternalTaskID == "" {
-		// Managed rows carry an external id (finalize sets state + id in one
-		// UPDATE); an empty id here is a can't-happen ordering surprise —
-		// snooze rather than push to nothing.
-		return river.JobSnooze(opUpdateSnoozeDelay)
+		// Managed rows always carry an external id (finalize sets state + id
+		// in one UPDATE; PR3's manual adopt does likewise), so an empty id on
+		// a managed row is genuine corruption, not a race. Return a retryable
+		// error so it exhausts MaxAttempts and surfaces in dead-letter rather
+		// than snoozing forever.
+		return fmt.Errorf("todoist_task_op %s: managed contact_task %s has empty external_task_id (corrupt row)", verb.op, taskID)
 	}
 
 	_, accessToken, err := w.deps.settings(ctx)
@@ -447,8 +450,9 @@ func buildItemAddFromMetadata(task *repository.ContactTask) (todoist.SyncCommand
 		labels = append(labels, labelName)
 	}
 	cmd := todoist.NewItemAddCommand(content, markerJSON, projectID, labels, &dueDate)
-	// Deterministic temp_id + UUID so crash-retries dedup server-side.
+	// Deterministic temp_id so crash-retries dedup server-side. The command
+	// UUID is set by the caller (executeCreate) via its uuidFn, so the
+	// default random UUID here is always overwritten.
 	cmd.TempID = task.ID.String()
-	cmd.UUID = taskOpCommandUUID(consumerjobs.TaskOpCreate, task.ID, "")
 	return cmd, nil
 }

@@ -211,8 +211,9 @@ func TestBuildItemAddFromMetadata_TempIDIsRowID(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "item_add", cmd.Type)
 	require.Equal(t, taskID.String(), cmd.TempID, "temp_id must be the row id for server-side create dedup")
-	require.Equal(t, taskOpCommandUUID(consumerjobs.TaskOpCreate, taskID, ""), cmd.UUID)
 	require.Equal(t, "Follow up: contact", cmd.Args["content"])
+	// The command UUID is set by executeCreate's uuidFn, not the builder —
+	// TestOpWorker_UpdateDeadline_ManagedPushesCurrentValue et al. cover it.
 }
 
 func TestBuildItemAddFromMetadata_MissingMetadataErrors(t *testing.T) {
@@ -318,6 +319,24 @@ func TestOpWorker_UpdateDeadline_ManagedPushesCurrentValue(t *testing.T) {
 	require.Equal(t, map[string]string{"date": "2026-03-15"}, cmd.Args["deadline"])
 	require.Equal(t, taskOpCommandUUID(consumerjobs.TaskOpUpdateDeadline, taskID, "2026-03-15"), cmd.UUID,
 		"command UUID must carry the pushed-value fingerprint")
+}
+
+func TestOpWorker_UpdateDeadline_ManagedEmptyExternalID_Errors(t *testing.T) {
+	taskID := uuid.New()
+	repo := newFakeOpTaskRepo(&repository.ContactTask{
+		ID:             taskID,
+		State:          repository.ContactTaskStateManaged,
+		ExternalTaskID: "", // corrupt: managed rows always carry an external id
+		Metadata:       map[string]any{"due_date": "2026-03-15"},
+	})
+	client := &fakeOpClient{}
+	w := newOpWorker(repo, client, &recordingInserter{})
+
+	err := w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpUpdateDeadline))
+	require.Error(t, err, "a managed row with an empty external id is corrupt — retryable error, not a snooze")
+	var snooze *river.JobSnoozeError
+	require.False(t, errors.As(err, &snooze), "must not snooze forever on a corrupt row")
+	require.Empty(t, client.commands)
 }
 
 func TestOpWorker_UpdateDeadline_VerifyAfterPush_StaleSnoozes(t *testing.T) {
