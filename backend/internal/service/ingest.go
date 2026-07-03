@@ -363,8 +363,9 @@ func (s *IngestService) SetVenueResolver(v IngestVenueResolver) {
 // reconciler. Optional — when unset, handleExternalContactUpserted skips
 // scheduling the reconcile closure (icloud method propagation then only
 // happens via the one-time catchup subcommand). Must be called before
-// the service handles concurrent batches. Mirrors EnrichmentService's
-// SetCadenceUpdater injection pattern.
+// the service handles concurrent batches. This is a genuine cross-block
+// deferred wire-in (the reconciler is built after the IngestService),
+// so it stays a setter.
 func (s *IngestService) SetAddressBookReconciler(r AddressBookReconciler) {
 	s.addressBookReconciler = r
 }

@@ -73,7 +73,10 @@ func newDiscoveryEnv(t *testing.T) *discoveryEnv {
 	eventRepo := repository.NewEventRepository(database.Queries)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
-	contactService := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, contactTaskRepo, nil, nil)
+	cadenceUpdater := buildCadenceUpdaterForTest(t, database)
+	assertSvc, cache := buildKnowledgeDeps(t, database, nil)
+	contactService := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, contactTaskRepo, nil, nil,
+		cadenceUpdater, assertSvc, cache, nil)
 
 	// Sync early-returns when bus == nil, so wire a live bus + pool (the shared
 	// harness). email.* kinds are drained by the harness's no-op email worker.
@@ -281,7 +284,7 @@ func TestDiscovery_LinkAddsMethodAndDispatchesRematch(t *testing.T) {
 	rematchSvc := service.NewRematchService()
 	rematchSvc.Register(discoveryEmailEligibleHandler{})
 	enrichmentRepo := repository.NewEnrichmentRepository(e.database.Queries)
-	enrichment := service.NewEnrichmentService(e.database, e.contactRepo, e.methodRepo, enrichmentRepo, bus, rematchSvc)
+	enrichment := service.NewEnrichmentService(e.database, e.contactRepo, e.methodRepo, enrichmentRepo, bus, rematchSvc, nil, nil, nil)
 
 	jobID, err := enrichment.EnrichContactFromExternalWithSelections(
 		e.ctx, contactB.ID, row,

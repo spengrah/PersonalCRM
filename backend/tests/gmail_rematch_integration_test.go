@@ -97,7 +97,10 @@ func newGmailRematchEnv(t *testing.T, accountIDs []string) *gmailRematchEnv {
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
 	eventRepo := repository.NewEventRepository(database.Queries)
 	syncRepo := repository.NewSyncRepository(database.Queries)
-	contactService := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, contactTaskRepo, nil, nil)
+	cadenceUpdater := buildCadenceUpdaterForTest(t, database)
+	assertSvc, cache := buildKnowledgeDeps(t, database, nil)
+	contactService := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, contactTaskRepo, nil, nil,
+		cadenceUpdater, assertSvc, cache, nil)
 
 	// Real email consumer wired on the live bus so the handler's published
 	// email.* events are turned into interactions (not just logged).

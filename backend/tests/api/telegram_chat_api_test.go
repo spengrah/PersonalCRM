@@ -86,9 +86,9 @@ func setupTelegramChatRouter(t *testing.T) (*gin.Engine, *repository.TelegramCha
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
-	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, nil, nil)
-	wireCadenceUpdaterForAPITest(t, database, contactService)
-	wireKnowledgeWriterForAPITest(t, database, nil, contactService)
+	cadenceUpdater := buildCadenceUpdaterForAPITest(t, database)
+	assertSvc, cache := buildKnowledgeDepsForAPITest(t, database, nil)
+	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, nil, nil, cadenceUpdater, assertSvc, cache, nil)
 
 	manager := tgpkg.NewTelegramManager(
 		sessionRepo,

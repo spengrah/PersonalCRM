@@ -50,9 +50,8 @@ func (*noopWorker) Work(_ context.Context, _ *river.Job[noopJobArgs]) error {
 // consumer.ErrTodoistUnconfigured to keep the consumer's Todoist-dependent
 // post-commit paths a best-effort no-op.
 type followUpSettingsRef struct {
-	oauth       *todoist.OAuthService
-	sync        *repository.SyncRepository
-	frontendURL string
+	oauth *todoist.OAuthService
+	sync  *repository.SyncRepository
 }
 
 // fn returns a TodoistSettingsFunc closure that resolves settings

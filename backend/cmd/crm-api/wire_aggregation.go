@@ -9,6 +9,7 @@ import (
 	"personal-crm/backend/internal/messages"
 	"personal-crm/backend/internal/messaging/aggregation"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/service"
 	tgpkg "personal-crm/backend/internal/telegram"
 
 	"github.com/jackc/pgx/v5"
@@ -31,7 +32,8 @@ type aggregationStack struct {
 func buildAggregationEngines(
 	database *db.Database,
 	core coreRepos,
-	graph contactCore,
+	contactService *service.ContactService,
+	graph graphCore,
 	ingest ingestRepos,
 	messaging messagingFoundation,
 	consumers eventConsumers,
@@ -42,7 +44,6 @@ func buildAggregationEngines(
 	gchatSyncStates google.GChatSyncStateLister,
 ) aggregationStack {
 	interactionRepo := core.Interaction
-	contactService := graph.ContactService
 	rematchService := graph.RematchService
 	messagesMessageRepo := ingest.MessagesMessage
 	commsMessageRepo := messaging.CommsMessageRepo

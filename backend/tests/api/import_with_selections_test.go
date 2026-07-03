@@ -51,13 +51,13 @@ func setupImportTestRouter() (*gin.Engine, *repository.ExternalContactRepository
 
 	// Create services
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
-	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, repository.NewContactTaskRepository(database.Queries), nil, nil)
-	cadenceUpdater := wireCadenceUpdaterForAPITest(nil, database, contactService)
-	knowledgeAssertSvc, knowledgeCache := wireKnowledgeWriterForAPITest(nil, database, nil, contactService)
+	cadenceUpdater := buildCadenceUpdaterForAPITest(nil, database)
+	knowledgeAssertSvc, knowledgeCache := buildKnowledgeDepsForAPITest(nil, database, nil)
+	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, repository.NewContactTaskRepository(database.Queries), nil, nil,
+		cadenceUpdater, knowledgeAssertSvc, knowledgeCache, nil)
 	matchService := service.NewImportMatchService(contactRepo)
-	enrichmentService := service.NewEnrichmentService(database, contactRepo, contactMethodRepo, enrichmentRepo, nil, nil)
-	enrichmentService.SetCadenceUpdater(cadenceUpdater)
-	enrichmentService.SetKnowledgeWriter(knowledgeAssertSvc, knowledgeCache)
+	enrichmentService := service.NewEnrichmentService(database, contactRepo, contactMethodRepo, enrichmentRepo, nil, nil,
+		cadenceUpdater, knowledgeAssertSvc, knowledgeCache)
 	suggestionService := service.NewSuggestionService(externalRepo, contactRepo, contactMethodRepo, enrichmentService, matchService, database)
 
 	// Create handler

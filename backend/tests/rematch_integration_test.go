@@ -68,8 +68,12 @@ func setupRematchEnv(t *testing.T) *rematchTestEnv {
 	// is gone). Handlers register AFTER the bus exists, below.
 	rematchSvc := service.NewRematchService()
 
-	contactSvc := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, nil, rematchSvc)
-	enrichmentSvc := service.NewEnrichmentService(database, contactRepo, contactMethodRepo, enrichmentRepo, nil, rematchSvc)
+	cadenceUpdater := buildCadenceUpdaterForTest(t, database)
+	assertSvc, cache := buildKnowledgeDeps(t, database, nil)
+	contactSvc := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, nil, rematchSvc,
+		cadenceUpdater, assertSvc, cache, nil)
+	enrichmentSvc := service.NewEnrichmentService(database, contactRepo, contactMethodRepo, enrichmentRepo, nil, rematchSvc,
+		cadenceUpdater, assertSvc, cache)
 
 	// Cutover wiring: live bus + InteractionRecorderWorker +
 	// RematchDispatcherWorker so UpdateContact's publish flows through

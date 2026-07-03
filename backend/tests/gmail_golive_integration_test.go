@@ -60,7 +60,10 @@ func TestGmailGoLive_RegisteredProvider_SchedulerSweep_ProducesInteractionsAndCa
 
 	// nil bus + nil rematch on this ContactService: the email consumer
 	// publishes interaction.recorded through the live bus the harness builds.
-	contactService := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, contactTaskRepo, nil, nil)
+	cadenceUpdater := buildCadenceUpdaterForTest(t, database)
+	assertSvc, cache := buildKnowledgeDeps(t, database, nil)
+	contactService := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, contactTaskRepo, nil, nil,
+		cadenceUpdater, assertSvc, cache, nil)
 
 	// Live bus with the REAL EmailInteractionConsumer + CadenceUpdater wired
 	// (FollowUpManager in off-mode to drain) — derived interactions + cadence

@@ -1287,16 +1287,15 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
 	enrichmentRepo := repository.NewEnrichmentRepository(database.Queries)
 	eventBus := events.NewBus(database.Pool, riverClient, repository.NewEventRepository(database.Queries))
-	enrichmentService := service.NewEnrichmentService(
-		database, contactRepo, contactMethodRepo, enrichmentRepo, eventBus, rematchService,
-	)
-	addressBookReconcile := service.NewAddressBookReconcileService(
-		enrichmentService, contactRepo, contactMethodRepo, externalContactRepo,
-	)
 
-	// Tag→graph migration. Reuses the same event bus (so the tagged_as asserts
-	// emit assertion.* events) + the graph repos. AssertService owns proposition
-	// identity / dedup, which makes --migrate-tags idempotent.
+	// Graph repos + AssertService + knowledge-cache updater. Reuses the same
+	// event bus (so the tagged_as asserts emit assertion.* events); AssertService
+	// owns proposition identity / dedup, which makes --migrate-tags idempotent.
+	// Built ABOVE NewEnrichmentService so the knowledge-writer pair can be passed
+	// as constructor args: the address-book reconcile path
+	// (--reconcile-address-book-methods → EnrichContactFromExternal) persists an
+	// inferred location/birthday through the assertion store + refreshes the cache
+	// inline, instead of erroring on the now-required knowledge writer.
 	graphNodeRepo := repository.NewNodeRepository(database.Queries)
 	graphEntityRepo := repository.NewEntityRepository(database.Queries)
 	graphPredicateRepo := repository.NewPredicateRepository(database.Queries)
@@ -1304,12 +1303,18 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 	assertService := service.NewAssertService(
 		database.Pool, graphNodeRepo, graphEntityRepo, graphPredicateRepo, graphAssertionRepo, eventBus,
 	)
-	// Wire the knowledge writer into EnrichmentService so the address-book
-	// reconcile path (--reconcile-address-book-methods → EnrichContactFromExternal)
-	// persists an inferred location/birthday through the assertion store + refreshes
-	// the cache inline, instead of erroring on the now-required knowledge writer.
 	knowledgeCacheUpdater := consumer.NewKnowledgeCacheUpdater(graphAssertionRepo, graphNodeRepo, contactRepo)
-	enrichmentService.SetKnowledgeWriter(assertService, knowledgeCacheUpdater)
+
+	// crm-admin never wires enrichment cadence (its paths never pass a cadence
+	// override), so cadence is nil — preserving today's unset-cadence behavior.
+	enrichmentService := service.NewEnrichmentService(
+		database, contactRepo, contactMethodRepo, enrichmentRepo, eventBus, rematchService,
+		nil, assertService, knowledgeCacheUpdater,
+	)
+	addressBookReconcile := service.NewAddressBookReconcileService(
+		enrichmentService, contactRepo, contactMethodRepo, externalContactRepo,
+	)
+
 	tagMigration := service.NewTagMigrationService(
 		database.Pool, repository.NewTagRepository(database.Queries),
 		graphNodeRepo, graphEntityRepo, assertService,

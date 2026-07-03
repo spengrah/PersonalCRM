@@ -74,10 +74,10 @@ func setupRawMessageE2E(t *testing.T) *rawMessageE2EEnv {
 	claimRepo := repository.NewEventConsumerClaimRepository(database.Queries)
 	eventRepo := repository.NewEventRepository(database.Queries)
 	rematchSvc := service.NewRematchService()
-	contactSvc := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, nil, rematchSvc)
 	cadenceUpdater := consumer.NewCadenceUpdater(claimRepo, contactRepo, database.Queries, consumer.CadenceModeCutover, false)
-	contactSvc.SetCadenceUpdater(cadenceUpdater)
-	wireKnowledgeWriterForAPITest(t, database, nil, contactSvc)
+	assertSvc, cache := buildKnowledgeDepsForAPITest(t, database, nil)
+	contactSvc := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, nil, rematchSvc,
+		cadenceUpdater, assertSvc, cache, nil)
 	macService := service.NewMacHostService(hostRepo, pairingRepo, syncRepo, nil, nil, nil, database.Pool, 4)
 
 	// River client — wires the real MessagingAggregateForContactWorker

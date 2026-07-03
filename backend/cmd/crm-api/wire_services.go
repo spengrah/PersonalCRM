@@ -24,7 +24,7 @@ type domainServices struct {
 func buildDomainServices(
 	database *db.Database,
 	core coreRepos,
-	graph contactCore,
+	graph graphCore,
 	ingest ingestRepos,
 	consumers eventConsumers,
 	ingestStk ingestStack,
@@ -45,13 +45,15 @@ func buildDomainServices(
 	importMatchService := service.NewImportMatchService(contactRepo)
 	// EnrichmentService is shared by the import handler (link/import flows) and
 	// the Telegram peer matcher (auto-match enrichment). Constructed at outer
-	// scope so both feature blocks share a single instance.
-	enrichmentService := service.NewEnrichmentService(database, contactRepo, contactMethodRepo, enrichmentRepo, eventBus, rematchService)
-	enrichmentService.SetCadenceUpdater(cadenceUpdater)
-	// Inferred location/birthday from external contact data flow through the
-	// assertion store (agent provenance), not the contact SQL — wire the same
-	// knowledge writer the contact service uses.
-	enrichmentService.SetKnowledgeWriter(assertService, knowledgeCacheUpdater)
+	// scope so both feature blocks share a single instance. The cadence writer
+	// (link/import cadence override) and the knowledge writer (inferred
+	// location/birthday from external contact data flow through the assertion
+	// store, agent provenance, not the contact SQL — the same knowledge writer
+	// the contact service uses) are constructor args.
+	enrichmentService := service.NewEnrichmentService(
+		database, contactRepo, contactMethodRepo, enrichmentRepo, eventBus, rematchService,
+		cadenceUpdater, assertService, knowledgeCacheUpdater,
+	)
 
 	// Address-book method reconcile: re-propagates address-book methods
 	// onto already-linked contacts (auto-propagate for matched, record

@@ -51,11 +51,12 @@ func setupGChatEngineTest(t *testing.T) *gchatTestEnv {
 	commsRepo := repository.NewCommsMessageRepository(database.Queries)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	contactRepo := repository.NewContactRepository(database.Queries)
-	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
-	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
-	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, nil, nil)
 
-	bus := setupGChatEventBus(t, ctx, database, contactService, commsRepo)
+	// setupGChatEventBus builds the bus + the ContactService together: the
+	// service takes the cadence/knowledge consumers as ctor args, and the
+	// knowledge writer needs the bus, so the bus must exist first (the bus's
+	// recorder worker is a deferred shim, filled after the service exists).
+	bus, contactService := setupGChatEventBus(t, ctx, database, commsRepo)
 
 	engine := google.NewGChatAggregationEngine(
 		2, 48, // burst window 2h, reply bridge 48h
@@ -83,9 +84,8 @@ func setupGChatEventBus(
 	t *testing.T,
 	ctx context.Context,
 	database *db.Database,
-	contactService *service.ContactService,
 	commsRepo *repository.CommsMessageRepository,
-) *events.Bus {
+) (*events.Bus, *service.ContactService) {
 	t.Helper()
 
 	eventRepo := repository.NewEventRepository(database.Queries)
@@ -116,8 +116,15 @@ func setupGChatEventBus(
 		consumer.CadenceModeCutover,
 		false,
 	)
-	contactService.SetCadenceUpdater(cadenceUpdater)
-	wireKnowledgeWriterForTest(t, database, bus, contactService)
+	assertSvc, cache := buildKnowledgeDeps(t, database, bus)
+	contactService := service.NewContactService(
+		database, contactRepo,
+		repository.NewContactMethodRepository(database.Queries),
+		repository.NewInteractionRepository(database.Queries),
+		repository.NewContactTaskRepository(database.Queries),
+		nil, nil,
+		cadenceUpdater, assertSvc, cache, nil,
+	)
 	// The gchat session-scoped processor is the load-bearing decision-8b entry.
 	stagingRegistry := repository.NewStagingProcessorRegistry(map[string]repository.StagingProcessor{
 		repository.InteractionSourceGChat: repository.NewCommsSessionStagingProcessor(commsRepo),
@@ -132,7 +139,7 @@ func setupGChatEventBus(
 		_ = client.Stop(stopCtx)
 	})
 
-	return bus
+	return bus, contactService
 }
 
 // newGChatContact creates a contact and registers hard-delete cleanup for its

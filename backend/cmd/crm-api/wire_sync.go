@@ -13,7 +13,6 @@ import (
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/sync"
-	"personal-crm/backend/internal/todoist"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
@@ -34,7 +33,6 @@ type syncStack struct {
 	TodoistHandler          *handlers.TodoistHandler
 	ContactTaskHandler      *handlers.ContactTaskHandler
 	GoogleOAuthService      *google.OAuthService
-	TodoistOAuthService     *todoist.OAuthService
 	ExternalContactRepo     *repository.ExternalContactRepository
 	GChatProvider           *google.GChatSyncProvider
 	GChatSyncStates         google.GChatSyncStateLister
@@ -50,7 +48,8 @@ func buildExternalSync(
 	cfg *config.Config,
 	database *db.Database,
 	core coreRepos,
-	graph contactCore,
+	contactService *service.ContactService,
+	graph graphCore,
 	ingest ingestRepos,
 	messaging messagingFoundation,
 	consumers eventConsumers,
@@ -63,7 +62,6 @@ func buildExternalSync(
 	contactMethodRepo := core.ContactMethod
 	contactTaskRepo := core.ContactTask
 	rematchService := graph.RematchService
-	contactService := graph.ContactService
 	commsMessageRepo := messaging.CommsMessageRepo
 	cadenceUpdater := consumers.CadenceUpdater
 	todoistClientFactory := consumers.TodoistClientFactory
@@ -85,7 +83,6 @@ func buildExternalSync(
 	googleOAuthService, oauthHandler := buildGoogleOAuth(cfg, oauthRepo, syncRepo)
 	todoistOAuthService, oauthHandler, todoistHandler := buildTodoistOAuth(cfg, oauthRepo, syncRepo, oauthHandler, followUpSettingsHolder)
 	stack.GoogleOAuthService = googleOAuthService
-	stack.TodoistOAuthService = todoistOAuthService
 	stack.OAuthHandler = oauthHandler
 	stack.TodoistHandler = todoistHandler
 

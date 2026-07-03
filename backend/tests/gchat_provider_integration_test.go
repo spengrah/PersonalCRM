@@ -53,8 +53,9 @@ func setupGChatProviderTest(t *testing.T) *gchatProviderEnv {
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
 	// nil bus + nil rematch: a single-tx multi-method seed write, no River client.
-	contactService := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, contactTaskRepo, nil, nil)
-	wireKnowledgeWriterForTest(t, database, nil, contactService)
+	assertSvc, cache := buildKnowledgeDeps(t, database, nil)
+	contactService := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, contactTaskRepo, nil, nil,
+		nil, assertSvc, cache, nil)
 
 	gen, _ := migrationGenerator(t)
 

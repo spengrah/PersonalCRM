@@ -118,7 +118,7 @@ func buildStaleness(reg *riverRegistrar, cfg *config.Config, database *db.Databa
 // registerAssertionRollover registers the daily assertion valid-time
 // rollover worker + its periodic job. Stateless; RunOnStart catches up any
 // overdue rollovers on boot.
-func registerAssertionRollover(reg *riverRegistrar, graph contactCore) {
+func registerAssertionRollover(reg *riverRegistrar, graph graphCore) {
 	assertService := graph.AssertService
 
 	// Assertion valid-time rollover — a daily catch-up sweep that terminalizes the

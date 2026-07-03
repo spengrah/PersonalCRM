@@ -144,9 +144,10 @@ func setupMeetingNoteIngestEnv(t *testing.T) *meetingNoteIngestEnv {
 	// publishesEvent=false which would normally require cadence. Wire a
 	// minimal cadence updater for completeness so the tests exercise the
 	// full path the production wiring uses.
-	contactSvc := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, eventBus, service.NewRematchService())
-	contactSvc.SetCadenceUpdater(wireCadenceUpdaterForAPITest(t, database, contactSvc))
-	knowledgeAssertSvc, knowledgeCache := wireKnowledgeWriterForAPITest(t, database, nil, contactSvc)
+	cadenceUpdater := buildCadenceUpdaterForAPITest(t, database)
+	knowledgeAssertSvc, knowledgeCache := buildKnowledgeDepsForAPITest(t, database, nil)
+	contactSvc := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, eventBus, service.NewRematchService(),
+		cadenceUpdater, knowledgeAssertSvc, knowledgeCache, nil)
 
 	titleMatcher := anarlog.NewTitleMatcher(contactRepo)
 	titleDiscoveryWriter := anarlog.NewDiscoveryWriter(externalRepo)
@@ -208,9 +209,8 @@ func setupMeetingNoteIngestEnv(t *testing.T) *meetingNoteIngestEnv {
 	// row to the imported contact).
 	enrichmentRepo := repository.NewEnrichmentRepository(database.Queries)
 	matchService := service.NewImportMatchService(contactRepo)
-	enrichmentSvc := service.NewEnrichmentService(database, contactRepo, contactMethodRepo, enrichmentRepo, nil, nil)
-	enrichmentSvc.SetCadenceUpdater(wireCadenceUpdaterForAPITest(t, database, contactSvc))
-	enrichmentSvc.SetKnowledgeWriter(knowledgeAssertSvc, knowledgeCache)
+	enrichmentSvc := service.NewEnrichmentService(database, contactRepo, contactMethodRepo, enrichmentRepo, nil, nil,
+		buildCadenceUpdaterForAPITest(t, database), knowledgeAssertSvc, knowledgeCache)
 	suggestionSvc := service.NewSuggestionService(externalRepo, contactRepo, contactMethodRepo, enrichmentSvc, matchService, database)
 	importHandler := handlers.NewImportHandler(externalRepo, identityService, contactSvc, matchService, enrichmentSvc, suggestionSvc)
 	imports := router.Group("/api/v1/imports")

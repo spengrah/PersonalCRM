@@ -76,9 +76,9 @@ func TestContactNodeDualWrite_Integration(t *testing.T) {
 		methodRepo := repository.NewContactMethodRepository(database.Queries)
 		interactionRepo := repository.NewInteractionRepository(database.Queries)
 		taskRepo := repository.NewContactTaskRepository(database.Queries)
-		svc := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, taskRepo, nil, nil)
-		wireCadenceUpdaterForTest(t, database, svc)
-		wireKnowledgeWriterForTest(t, database, nil, svc)
+		cadenceUpdater := buildCadenceUpdaterForTest(t, database)
+		assertSvc, cache := buildKnowledgeDeps(t, database, nil)
+		svc := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, taskRepo, nil, nil, cadenceUpdater, assertSvc, cache, nil)
 
 		spec := gen.Contact()
 		contact, _, err := svc.CreateContact(ctx, repository.CreateContactRequest{
@@ -109,9 +109,9 @@ func TestContactNodeDualWrite_Integration(t *testing.T) {
 		methodRepo := repository.NewContactMethodRepository(database.Queries)
 		interactionRepo := repository.NewInteractionRepository(database.Queries)
 		taskRepo := repository.NewContactTaskRepository(database.Queries)
-		svc := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, taskRepo, nil, nil)
-		wireCadenceUpdaterForTest(t, database, svc)
-		wireKnowledgeWriterForTest(t, database, nil, svc)
+		cadenceUpdater := buildCadenceUpdaterForTest(t, database)
+		assertSvc, cache := buildKnowledgeDeps(t, database, nil)
+		svc := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, taskRepo, nil, nil, cadenceUpdater, assertSvc, cache, nil)
 
 		spec := gen.Contact()
 		contact, _, err := svc.CreateContact(ctx, repository.CreateContactRequest{
@@ -148,12 +148,12 @@ func TestContactNodeDualWrite_Integration(t *testing.T) {
 		taskRepo := repository.NewContactTaskRepository(database.Queries)
 		enrichmentRepo := repository.NewEnrichmentRepository(database.Queries)
 		externalRepo := repository.NewExternalContactRepository(database.Queries)
-		svc := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, taskRepo, nil, nil)
-		// nil bus/registry → enrichment skips publish.
-		enrichSvc := service.NewEnrichmentService(database, contactRepo, methodRepo, enrichmentRepo, nil, nil)
 		knowledgeAssertSvc, knowledgeCache := buildKnowledgeDeps(t, database, nil)
-		svc.SetKnowledgeWriter(knowledgeAssertSvc, knowledgeCache)
-		enrichSvc.SetKnowledgeWriter(knowledgeAssertSvc, knowledgeCache)
+		svc := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, taskRepo, nil, nil,
+			nil, knowledgeAssertSvc, knowledgeCache, nil)
+		// nil bus/registry → enrichment skips publish.
+		enrichSvc := service.NewEnrichmentService(database, contactRepo, methodRepo, enrichmentRepo, nil, nil,
+			nil, knowledgeAssertSvc, knowledgeCache)
 
 		spec := gen.Contact()
 		contact, _, err := svc.CreateContact(ctx, repository.CreateContactRequest{
@@ -193,15 +193,14 @@ func TestContactNodeDualWrite_Integration(t *testing.T) {
 		taskRepo := repository.NewContactTaskRepository(database.Queries)
 		enrichmentRepo := repository.NewEnrichmentRepository(database.Queries)
 		externalRepo := repository.NewExternalContactRepository(database.Queries)
-		svc := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, taskRepo, nil, nil)
-		enrichSvc := service.NewEnrichmentService(database, contactRepo, methodRepo, enrichmentRepo, nil, nil)
 		// The cadence-present branch routes through CadenceUpdater and writes
-		// the node label inside the same tx — wire cadence on both services.
-		cadenceUpdater := wireCadenceUpdaterForTest(t, database, svc)
-		enrichSvc.SetCadenceUpdater(cadenceUpdater)
+		// the node label inside the same tx — pass cadence to both services.
+		cadenceUpdater := buildCadenceUpdaterForTest(t, database)
 		assertSvc, knowledgeCache := buildKnowledgeDeps(t, database, nil)
-		svc.SetKnowledgeWriter(assertSvc, knowledgeCache)
-		enrichSvc.SetKnowledgeWriter(assertSvc, knowledgeCache)
+		svc := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, taskRepo, nil, nil,
+			cadenceUpdater, assertSvc, knowledgeCache, nil)
+		enrichSvc := service.NewEnrichmentService(database, contactRepo, methodRepo, enrichmentRepo, nil, nil,
+			cadenceUpdater, assertSvc, knowledgeCache)
 
 		spec := gen.Contact()
 		contact, _, err := svc.CreateContact(ctx, repository.CreateContactRequest{
@@ -242,11 +241,11 @@ func TestContactNodeDualWrite_Integration(t *testing.T) {
 		taskRepo := repository.NewContactTaskRepository(database.Queries)
 		enrichmentRepo := repository.NewEnrichmentRepository(database.Queries)
 		externalRepo := repository.NewExternalContactRepository(database.Queries)
-		svc := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, taskRepo, nil, nil)
-		enrichSvc := service.NewEnrichmentService(database, contactRepo, methodRepo, enrichmentRepo, nil, nil)
 		knowledgeAssertSvc, knowledgeCache := buildKnowledgeDeps(t, database, nil)
-		svc.SetKnowledgeWriter(knowledgeAssertSvc, knowledgeCache)
-		enrichSvc.SetKnowledgeWriter(knowledgeAssertSvc, knowledgeCache)
+		svc := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, taskRepo, nil, nil,
+			nil, knowledgeAssertSvc, knowledgeCache, nil)
+		enrichSvc := service.NewEnrichmentService(database, contactRepo, methodRepo, enrichmentRepo, nil, nil,
+			nil, knowledgeAssertSvc, knowledgeCache)
 
 		spec := gen.Contact()
 		contact, _, err := svc.CreateContact(ctx, repository.CreateContactRequest{
@@ -285,9 +284,9 @@ func TestContactNodeDualWrite_Integration(t *testing.T) {
 		methodRepo := repository.NewContactMethodRepository(database.Queries)
 		interactionRepo := repository.NewInteractionRepository(database.Queries)
 		taskRepo := repository.NewContactTaskRepository(database.Queries)
-		svc := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, taskRepo, nil, nil)
-		wireCadenceUpdaterForTest(t, database, svc)
-		wireKnowledgeWriterForTest(t, database, nil, svc)
+		cadenceUpdater := buildCadenceUpdaterForTest(t, database)
+		assertSvc, cache := buildKnowledgeDeps(t, database, nil)
+		svc := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, taskRepo, nil, nil, cadenceUpdater, assertSvc, cache, nil)
 
 		monthly := "monthly"
 		target, _, err := svc.CreateContact(ctx, repository.CreateContactRequest{
@@ -323,8 +322,8 @@ func TestContactNodeDualWrite_Integration(t *testing.T) {
 		methodRepo := repository.NewContactMethodRepository(database.Queries)
 		interactionRepo := repository.NewInteractionRepository(database.Queries)
 		taskRepo := repository.NewContactTaskRepository(database.Queries)
-		svc := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, taskRepo, nil, nil)
-		wireKnowledgeWriterForTest(t, database, nil, svc)
+		assertSvc, cache := buildKnowledgeDeps(t, database, nil)
+		svc := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, taskRepo, nil, nil, nil, assertSvc, cache, nil)
 
 		// Force a failure AFTER the contact + node inserts but inside the same
 		// tx: an invalid contact_method type violates the contact_method CHECK
@@ -383,11 +382,12 @@ func TestContactNodeDualWrite_MigrationDownUp(t *testing.T) {
 	// Seed a contact via the dual-write service path so a live person node
 	// exists at the contact's id (this is what 068's down must consider). It
 	// has no assertions, so the guarded down is free to delete it.
+	assertSvc, cache := buildKnowledgeDeps(t, database, nil)
 	contactSvc := service.NewContactService(database, contactRepo,
 		repository.NewContactMethodRepository(database.Queries),
 		repository.NewInteractionRepository(database.Queries),
-		repository.NewContactTaskRepository(database.Queries), nil, nil)
-	wireKnowledgeWriterForTest(t, database, nil, contactSvc)
+		repository.NewContactTaskRepository(database.Queries), nil, nil,
+		nil, assertSvc, cache, nil)
 	unreferenced, _, err := contactSvc.CreateContact(ctx, repository.CreateContactRequest{
 		FullName: "migration-unreferenced-person",
 	}, nil)

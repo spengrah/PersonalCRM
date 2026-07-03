@@ -49,7 +49,7 @@ func readCrmAPISource(t *testing.T) []byte {
 
 // TestTaskCloseEnqueuerWiring_Static asserts the crm-api wiring calls the
 // merge-time close enqueuer with the river client and the follow-up
-// cutover-mode gate (in buildEventConsumers).
+// cutover-mode gate (in buildContactService).
 func TestTaskCloseEnqueuerWiring_Static(t *testing.T) {
 	t.Parallel()
 	src := readCrmAPISource(t)
@@ -73,5 +73,16 @@ func TestCadenceProviderCloseDepsWiring_Static(t *testing.T) {
 		`todoist\.NewCadenceSyncProvider\((?s:.*?)deps\.RiverClient,\s*deps\.Config\.EventBus\.FollowUpMode == config\.EventBusFollowUpModeCutover,\s*\)`)
 	if !provider.Match(src) {
 		t.Error("crm-api must pass the river client + the cutover-mode gate to todoist.NewCadenceSyncProvider — without them the temp-ID finalize on a completed row cannot enqueue the durable remote close")
+	}
+
+	// The provider reads deps.RiverClient / deps.Config, but only if the caller
+	// actually POPULATES those fields in the todoistProviderDeps literal. Assert
+	// the construction→wiring span: the literal must set RiverClient: riverClient
+	// and Config: cfg (otherwise the provider silently receives nil/zero and the
+	// remote close never enqueues).
+	literal := regexp.MustCompile(
+		`registerTodoistProvider\(todoistProviderDeps\{(?s:.*?)Config:\s*cfg,(?s:.*?)RiverClient:\s*riverClient,(?s:.*?)\}\)`)
+	if !literal.Match(src) {
+		t.Error("crm-api must populate the todoistProviderDeps literal with Config: cfg and RiverClient: riverClient — without them registerTodoistProvider passes a zero river client / config to the cadence provider and the durable remote close never enqueues")
 	}
 }

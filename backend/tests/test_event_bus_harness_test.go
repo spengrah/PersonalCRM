@@ -93,7 +93,9 @@ func setupTestEventBus(
 
 	bus := events.NewBus(database.Pool, client, eventRepo)
 	// Build a real CadenceUpdater so the recorder's inline apply fires
-	// in these end-to-end integration tests.
+	// in these end-to-end integration tests. The caller passes its own
+	// cadence + knowledge deps to NewContactService (the setters are gone);
+	// this instance drives the recorder's inline-apply seam.
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactRepo.SetPool(database.Pool)
 	claimRepo := repository.NewEventConsumerClaimRepository(database.Queries)
@@ -102,12 +104,6 @@ func setupTestEventBus(
 		consumer.CadenceModeCutover,
 		false,
 	)
-	// Wire cadenceUpdater into the contact service so direct-invoke
-	// paths (Merge / Extend / Promote / RecordInteraction non-bus
-	// wrapper / UpdateContact cadence-edit) work in these async
-	// integration tests.
-	contactService.SetCadenceUpdater(cadenceUpdater)
-	wireKnowledgeWriterForTest(t, database, bus, contactService)
 	stagingRegistry := repository.NewStagingProcessorRegistry(map[string]repository.StagingProcessor{
 		repository.InteractionSourceTelegram: repository.NewTelegramStagingProcessor(telegramMessageRepo),
 	})
@@ -189,8 +185,6 @@ func setupTestEventBusWithRematch(
 		consumer.CadenceModeCutover,
 		false,
 	)
-	contactService.SetCadenceUpdater(cadenceUpdater)
-	wireKnowledgeWriterForTest(t, database, bus, contactService)
 	stagingRegistry2 := repository.NewStagingProcessorRegistry(map[string]repository.StagingProcessor{
 		repository.InteractionSourceTelegram: repository.NewTelegramStagingProcessor(telegramMessageRepo),
 	})
@@ -263,7 +257,6 @@ func setupTestEventBusForEmail(
 		consumer.CadenceModeCutover,
 		false,
 	)
-	contactService.SetCadenceUpdater(cadenceUpdater)
 
 	// Off-mode FollowUpManager: cutover-only Todoist deps are nil (gated on
 	// mode == cutover per NewFollowUpManager's doc comment).
@@ -292,7 +285,6 @@ func setupTestEventBusForEmail(
 	require.NoError(t, err)
 
 	bus := events.NewBus(database.Pool, client, eventRepo)
-	wireKnowledgeWriterForTest(t, database, bus, contactService)
 
 	emailConsumer := consumer.NewEmailInteractionConsumer(
 		contactService, commsMessageRepo, interactionRepo, contactService,
@@ -427,38 +419,23 @@ func (w *deferredRecorderWorker) Timeout(j *river.Job[consumerjobs.InteractionRe
 	return w.real.Timeout(j)
 }
 
-// wireCadenceUpdaterForTest constructs a real CadenceUpdater against
-// the given database and injects it into contactService so cadence
-// entry points (RecordInteraction direct path, MergeContacts,
-// ExtendInteraction, PromoteInteractionToMutual, UpdateContact cadence
-// edits) work in tests without needing the full event-bus harness.
-// Uses cutover mode so cadence columns get written.
-func wireCadenceUpdaterForTest(t *testing.T, database *db.Database, contactService *service.ContactService) *consumer.CadenceUpdater {
+// buildCadenceUpdaterForTest constructs a real CadenceUpdater against the given
+// database so callers can pass it as the cadence ctor arg to
+// NewContactService / NewEnrichmentService and exercise cadence entry points
+// (RecordInteraction direct path, MergeContacts, ExtendInteraction,
+// PromoteInteractionToMutual, UpdateContact cadence edits) in tests without
+// needing the full event-bus harness. Uses cutover mode so cadence columns get
+// written.
+func buildCadenceUpdaterForTest(t *testing.T, database *db.Database) *consumer.CadenceUpdater {
 	t.Helper()
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactRepo.SetPool(database.Pool)
 	claimRepo := repository.NewEventConsumerClaimRepository(database.Queries)
-	cadenceUpdater := consumer.NewCadenceUpdater(
+	return consumer.NewCadenceUpdater(
 		claimRepo, contactRepo, database.Queries,
 		consumer.CadenceModeCutover,
 		false,
 	)
-	contactService.SetCadenceUpdater(cadenceUpdater)
-	return cadenceUpdater
-}
-
-// wireKnowledgeWriterForTest wires the location/birthday/how_met authority-flip
-// writer into the contact service so CreateContact / UpdateContact /
-// MergeContacts persist those fields via the assertion store + refresh the cache
-// columns inline. When bus is non-nil it is reused (so the emitted assertion.*
-// events land in the same event log the harness asserts on); when nil, a
-// self-contained insert-only bus is built so contact-only tests (no event bus)
-// can still create contacts. The inline cache refresh happens regardless of the
-// bus, so cache columns are correct on commit either way.
-func wireKnowledgeWriterForTest(t *testing.T, database *db.Database, bus *events.Bus, contactService *service.ContactService) {
-	t.Helper()
-	assertSvc, cache := buildKnowledgeDeps(t, database, bus)
-	contactService.SetKnowledgeWriter(assertSvc, cache)
 }
 
 // buildKnowledgeDeps constructs the AssertService + KnowledgeCacheUpdater the

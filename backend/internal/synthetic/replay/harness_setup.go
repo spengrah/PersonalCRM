@@ -162,9 +162,6 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 	}
 
 	identityService := service.NewIdentityService(identityRepo)
-	// Contact service built with nil bus first; the real bus is injected after
-	// the client/bus exist (chicken-and-egg, mirroring the canonical harness).
-	contactService := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, contactTaskRepo, nil, nil)
 
 	// River workers: the deferred-shim construction order (bus needs client; the
 	// real workers need bus). Real workers: interaction_recorder, cadence_updater,
@@ -199,22 +196,31 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 	}
 
 	bus := events.NewBus(database.Pool, client, eventRepo)
-	contactService.InjectBusForTest(bus)
 
-	// Cadence updater (cutover) wired into the contact service.
+	// Cadence updater (cutover) — passed to NewContactService as a ctor arg.
 	cadenceUpdater := consumer.NewCadenceUpdater(claimRepo, contactRepo, database.Queries, consumer.CadenceModeCutover, false)
-	contactService.SetCadenceUpdater(cadenceUpdater)
 
 	// Knowledge writer (location/birthday/how_met authority flip): the contact
 	// service emits lives_in/birthday/how_met assertions through AssertService and
-	// refreshes the derived cache columns inline via KnowledgeCacheUpdater.
+	// refreshes the derived cache columns inline via KnowledgeCacheUpdater. Both
+	// are passed to NewContactService as the knowledge-writer ctor pair.
 	graphNodeRepo := repository.NewNodeRepository(database.Queries)
 	graphEntityRepo := repository.NewEntityRepository(database.Queries)
 	graphPredicateRepo := repository.NewPredicateRepository(database.Queries)
 	graphAssertionRepo := repository.NewAssertionRepository(database.Queries)
 	assertService := service.NewAssertService(database.Pool, graphNodeRepo, graphEntityRepo, graphPredicateRepo, graphAssertionRepo, bus)
 	knowledgeCache := consumer.NewKnowledgeCacheUpdater(graphAssertionRepo, graphNodeRepo, contactRepo)
-	contactService.SetKnowledgeWriter(assertService, knowledgeCache)
+
+	// Contact service — built AFTER cadence + assertService + knowledgeCache so
+	// they pass as ctor args (INV-5 order). followUp is deliberately nil (this
+	// harness never wires non-bus follow-up work). The real bus is injected after
+	// construction because it needs the client (chicken-and-egg), mirroring the
+	// canonical harness.
+	contactService := service.NewContactService(
+		database, contactRepo, methodRepo, interactionRepo, contactTaskRepo, nil, nil,
+		cadenceUpdater, assertService, knowledgeCache, nil,
+	)
+	contactService.InjectBusForTest(bus)
 
 	// Merge-time task-close enqueuer. Replay merge scenarios seed STANDALONE
 	// contacts (no cadence tasks), so no enqueue-eligible refs exist today;

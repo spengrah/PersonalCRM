@@ -73,9 +73,8 @@ func newMergeNodeHarness(t *testing.T, ctx context.Context) *mergeNodeHarness {
 	assertSvc := service.NewAssertService(database.Pool, nodeRepo, entityRepo, predicateRepo, assertionRepo, bus)
 	cacheUpdater := consumer.NewKnowledgeCacheUpdater(assertionRepo, nodeRepo, contactRepo)
 
-	contactSvc := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, taskRepo, nil, nil)
-	contactSvc.SetKnowledgeWriter(assertSvc, cacheUpdater)
-	wireCadenceUpdaterForTest(t, database, contactSvc)
+	contactSvc := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, taskRepo, nil, nil,
+		buildCadenceUpdaterForTest(t, database), assertSvc, cacheUpdater, nil)
 
 	h := &mergeNodeHarness{
 		database:      database,
