@@ -605,6 +605,17 @@ func (r *ContactTaskRepository) CountRiverJobsByContactTask(ctx context.Context,
 	})
 }
 
+// CountTodoistOpJobsByOp is a test-only count of todoist_task_op river_job
+// rows for a contact_task id and op verb. Wraps the sqlc query so cutover
+// integration tests can assert a specific op was (or was not) enqueued
+// without inlining raw SQL.
+func (r *ContactTaskRepository) CountTodoistOpJobsByOp(ctx context.Context, contactTaskID uuid.UUID, op string) (int64, error) {
+	return r.queries.CountTodoistOpJobsByOp(ctx, db.CountTodoistOpJobsByOpParams{
+		ContactTaskID: contactTaskID.String(),
+		Op:            op,
+	})
+}
+
 // GetContactTaskTx is the tx-threaded variant of GetContactTask. Used by
 // the Todoist follow-up create worker's phase-3 re-read so the write
 // phase sees any state transition that happened during the HTTP phase.

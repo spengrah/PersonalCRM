@@ -111,12 +111,11 @@ type RiverInserter = repository.JobEnqueuer
 type TodoistSettingsFunc func(ctx context.Context) (*todoist.Settings, string, error)
 
 // FollowUpHandler is the subset of FollowUpManager used by
-// InteractionRecorder's inline invoke. Returns a post-commit closure
-// (may be nil) carrying the refresh path's Todoist item_update call
-// out of the caller's tx (core.md rule 153: no external HTTP inside
-// a pgx.Tx).
+// InteractionRecorder's inline invoke. All remote effects leave via
+// todoist_task_op jobs enqueued in the caller's tx, so no post-commit
+// closure is returned.
 type FollowUpHandler interface {
-	HandleEvent(ctx context.Context, tx pgx.Tx, env *events.Envelope) (postCommit func(context.Context), err error)
+	HandleEvent(ctx context.Context, tx pgx.Tx, env *events.Envelope) error
 }
 
 // Decision is the observer payload emitted at each terminal branch of
@@ -133,14 +132,9 @@ type FollowUpHandler interface {
 //     modify the manager's branches.
 //
 // Production wiring leaves the observer nil — the hot path pays only
-// a nil check per branch (`emit` is the only call site).
-//
-// Observer calls are emitted AT the decision point, inside the
-// caller's tx. For the refresh/close paths that schedule a post-commit
-// Todoist call, a SECOND observer call (with CalledTodoist=true) is
-// emitted after the post-commit closure finishes its remote call; the
-// closure is best-effort so the second call may never fire if the
-// closure never runs (e.g. skipped for empty externalID).
+// a nil check per branch (`emit` is the only call site). Observer calls
+// are emitted AT the decision point, inside the caller's tx — exactly
+// once per handled event.
 type Decision struct {
 	// Action is one of FollowUpActionCreate / Refresh / Complete / Skip.
 	Action string
@@ -149,8 +143,7 @@ type Decision struct {
 	// string for non-skip actions and for non-guard-class skips.
 	SkipReason string
 	// WouldDeadline is the deadline the manager WOULD set for create /
-	// refresh actions. Nil for skip / complete and for the post-Todoist
-	// second call on refresh (which only reports CalledTodoist).
+	// refresh actions. Nil for skip / complete.
 	WouldDeadline *time.Time
 	// WouldIdempotencyKey is the local idempotency key the manager
 	// WOULD use for a create branch. Non-nil only on create branches.
@@ -158,12 +151,6 @@ type Decision struct {
 	// ContactTaskID is the target contact_task.id for refresh /
 	// complete branches, and on create after the row is inserted.
 	ContactTaskID *uuid.UUID
-	// CalledTodoist is true only on the second observer call for
-	// refresh / close branches, reported from the post-commit closure
-	// after the Todoist sync API call returns successfully. false on
-	// the in-tx first call and on branches that do not schedule a
-	// post-commit call.
-	CalledTodoist bool
 }
 
 // DecisionObserver receives Decision payloads at every terminal branch.
@@ -175,9 +162,10 @@ type DecisionObserver func(Decision)
 // management. In cutover mode it is the sole writer of the
 // contact_task.kind='follow_up' lifecycle: three-guard skip logic,
 // two-step crash-safe create (pending_remote_create → managed once the
-// Todoist item_add succeeds), refresh with post-commit Todoist call +
-// river-retry fallback, and complete with a river-retried
-// TodoistFollowUpCloseJob.
+// executor's item_add succeeds), refresh (metadata due_date update +
+// update_deadline op in the same tx), and complete (state transition +
+// close op). Every remote effect leaves via a todoist_task_op job
+// enqueued in the caller's tx — no post-commit Todoist call.
 type FollowUpManager struct {
 	mode            string
 	claims          eventClaimer
@@ -186,15 +174,9 @@ type FollowUpManager struct {
 	taskWriter      followUpTaskWriter
 	interactionRepo interactionResponseReader
 	riverInserter   RiverInserter
-	// pool is used only by the refresh post-commit closure to open a
-	// short tx for enqueueing TodoistFollowUpRefreshJob when the inline
-	// item_update attempt fails. Nil is legal in unit tests that don't
-	// exercise the post-commit retry path.
-	pool          *pgxpool.Pool
-	settings      TodoistSettingsFunc
-	clientFactory todoist.ClientFactory
-	frontendURL   string
-	watchdog      config.WatchdogConfig
+	settings        TodoistSettingsFunc
+	frontendURL     string
+	watchdog        config.WatchdogConfig
 	// onDecision is an optional test-only hook emitted at every terminal
 	// branch. Production wiring leaves it nil for zero cost. See Decision
 	// docs above for semantics.
@@ -204,9 +186,8 @@ type FollowUpManager struct {
 // NewFollowUpManager constructs the consumer. mode must be one of
 // FollowUpMode*; unknown values are treated as off so a misconfigured
 // consumer never writes. The cutover-only dependencies (claims,
-// contacts, taskWriter, riverInserter, settings, clientFactory,
-// frontendURL) may be nil in off-mode tests — their use is gated on
-// mode == cutover.
+// contacts, taskWriter, riverInserter, settings, frontendURL) may be nil
+// in off-mode tests — their use is gated on mode == cutover.
 func NewFollowUpManager(
 	mode string,
 	claims eventClaimer,
@@ -215,9 +196,7 @@ func NewFollowUpManager(
 	taskWriter followUpTaskWriter,
 	interactionRepo interactionResponseReader,
 	riverInserter RiverInserter,
-	pool *pgxpool.Pool,
 	settings TodoistSettingsFunc,
-	clientFactory todoist.ClientFactory,
 	frontendURL string,
 	watchdog config.WatchdogConfig,
 ) *FollowUpManager {
@@ -229,9 +208,7 @@ func NewFollowUpManager(
 		taskWriter:      taskWriter,
 		interactionRepo: interactionRepo,
 		riverInserter:   riverInserter,
-		pool:            pool,
 		settings:        settings,
-		clientFactory:   clientFactory,
 		frontendURL:     frontendURL,
 		watchdog:        watchdog,
 	}
@@ -278,51 +255,43 @@ func (h *FollowUpManager) validateCutoverDeps() error {
 	if h.settings == nil {
 		return errors.New("followup_manager: cutover requires a todoist settings func")
 	}
-	if h.clientFactory == nil {
-		return errors.New("followup_manager: cutover requires a todoist client factory")
-	}
 	return nil
 }
 
 // HandleEvent processes an interaction.recorded envelope. In mode=off
 // returns nil immediately. In mode=cutover it claims the event via
 // event_consumer_claim then performs the authoritative follow-up
-// write (create / refresh / complete / skip), enqueuing Todoist
-// create/close river jobs as needed.
-//
-// Returns a post-commit closure on the refresh path (outbound when a
-// pending follow-up already exists): the closure calls Todoist
-// item_update outside the caller's tx and, on failure, enqueues
-// TodoistFollowUpRefreshJob for river-managed retry. All other paths
-// return a nil closure.
-func (h *FollowUpManager) HandleEvent(ctx context.Context, tx pgx.Tx, env *events.Envelope) (func(context.Context), error) {
+// write (create / refresh / complete / skip), enqueuing todoist_task_op
+// create/close/update_deadline jobs in the caller's tx as needed. No
+// post-commit closure — every remote effect leaves via an op job.
+func (h *FollowUpManager) HandleEvent(ctx context.Context, tx pgx.Tx, env *events.Envelope) error {
 	if env == nil {
-		return nil, errors.New("followup_manager: nil envelope")
+		return errors.New("followup_manager: nil envelope")
 	}
 	if tx == nil {
-		return nil, errors.New("followup_manager: nil tx")
+		return errors.New("followup_manager: nil tx")
 	}
 
 	if h.mode == FollowUpModeOff {
 		logger.Debug().
 			Str("event_id", env.ID.String()).
 			Msg("followup_manager: mode=off; skipping")
-		return nil, nil
+		return nil
 	}
 	if err := h.validateCutoverDeps(); err != nil {
-		return nil, err
+		return err
 	}
 
 	var p events.InteractionRecordedPayload
 	if err := events.Unmarshal(env, &p); err != nil {
-		return nil, fmt.Errorf("unmarshal interaction.recorded payload: %w", err)
+		return fmt.Errorf("unmarshal interaction.recorded payload: %w", err)
 	}
 	if p.Version != 2 && p.Version != 3 {
 		logger.Error().
 			Str("event_id", env.ID.String()).
 			Int("version", p.Version).
 			Msg("followup_manager: rejecting interaction.recorded payload with Version not in {2, 3}")
-		return nil, nil
+		return nil
 	}
 
 	var cadenceStr string
@@ -335,13 +304,13 @@ func (h *FollowUpManager) HandleEvent(ctx context.Context, tx pgx.Tx, env *event
 	// atomically in the caller's tx.
 	claimed, err := h.claims.TryClaimTx(ctx, tx, env.ID, repository.EventConsumerFollowUpManager)
 	if err != nil {
-		return nil, fmt.Errorf("claim event for followup_manager: %w", err)
+		return fmt.Errorf("claim event for followup_manager: %w", err)
 	}
 	if !claimed {
 		logger.Debug().
 			Str("event_id", env.ID.String()).
 			Msg("followup_manager: event already claimed by another path; no-op")
-		return nil, nil
+		return nil
 	}
 
 	switch p.Direction {
@@ -354,7 +323,7 @@ func (h *FollowUpManager) HandleEvent(ctx context.Context, tx pgx.Tx, env *event
 			Str("event_id", envIDString(env)).
 			Str("direction", p.Direction).
 			Msg("followup_manager: unknown direction; skipping")
-		return nil, nil
+		return nil
 	}
 }
 
@@ -375,23 +344,20 @@ func envIDString(env *events.Envelope) string {
 // No event is published, so no claim is taken. Synthesizes the payload
 // from the contact row (inside the caller's tx) and dispatches to the
 // same create / refresh / complete branches the event-driven path
-// uses.
-//
-// Returns a post-commit closure on the refresh path matching
-// HandleEvent's semantics.
-func (h *FollowUpManager) ApplyInteraction(ctx context.Context, tx pgx.Tx, req repository.ApplyInteractionRequest) (func(context.Context), error) {
+// uses. Every remote effect leaves via an op job; no post-commit closure.
+func (h *FollowUpManager) ApplyInteraction(ctx context.Context, tx pgx.Tx, req repository.ApplyInteractionRequest) error {
 	if tx == nil {
-		return nil, errors.New("followup_manager: nil tx")
+		return errors.New("followup_manager: nil tx")
 	}
 	if h.mode == FollowUpModeOff {
-		return nil, nil
+		return nil
 	}
 	if err := h.validateCutoverDeps(); err != nil {
-		return nil, err
+		return err
 	}
 	contact, err := h.contacts.GetContactTx(ctx, tx, req.ContactID)
 	if err != nil {
-		return nil, fmt.Errorf("get contact for apply interaction: %w", err)
+		return fmt.Errorf("get contact for apply interaction: %w", err)
 	}
 	var cadenceStr string
 	if contact.Cadence != nil {
@@ -411,7 +377,7 @@ func (h *FollowUpManager) ApplyInteraction(ctx context.Context, tx pgx.Tx, req r
 	case repository.InteractionDirectionInbound, repository.InteractionDirectionMutual:
 		return h.applyInboundMutual(ctx, tx, payload)
 	default:
-		return nil, nil
+		return nil
 	}
 }
 
@@ -420,14 +386,14 @@ func (h *FollowUpManager) ApplyInteraction(ctx context.Context, tx pgx.Tx, req r
 func (h *FollowUpManager) handleOutbound(
 	ctx context.Context, tx pgx.Tx, env *events.Envelope,
 	p events.InteractionRecordedPayload, cadenceStr string,
-) (func(context.Context), error) {
+) error {
 	// SuppressFollowUp short-circuit (V3+). Set true by Todoist provider
 	// when the completed task is kind=send. Polarity: zero=do-not-suppress
 	// preserves the legacy behavior, so V1/V2 payloads (where the field
 	// decodes to false) still spawn a follow-up.
 	if p.SuppressFollowUp {
 		h.emit(Decision{Action: repository.FollowUpActionSkip, SkipReason: repository.FollowUpSkipReasonSuppressed})
-		return nil, nil
+		return nil
 	}
 
 	// Guard 0 (implicit): no cadence → no follow-up. Matches direct-path
@@ -435,7 +401,7 @@ func (h *FollowUpManager) handleOutbound(
 	days := watchdogDaysForCadenceStr(cadenceStr, h.watchdog)
 	if days == 0 {
 		h.emit(Decision{Action: repository.FollowUpActionSkip})
-		return nil, nil
+		return nil
 	}
 
 	// Guard 1: backdated outbound. Manual interactions are exempt so a
@@ -445,7 +411,7 @@ func (h *FollowUpManager) handleOutbound(
 		cutoff := time.Duration(days) * 24 * time.Hour
 		if accelerated.GetCurrentTime().Sub(p.OccurredAt) > cutoff {
 			h.emit(Decision{Action: repository.FollowUpActionSkip, SkipReason: repository.FollowUpSkipReasonBackdated})
-			return nil, nil
+			return nil
 		}
 	}
 
@@ -454,16 +420,16 @@ func (h *FollowUpManager) handleOutbound(
 	// be stale.
 	hasResp, err := h.interactionRepo.HasResponseAfterTx(ctx, tx, p.ContactID, p.OccurredAt)
 	if err != nil {
-		return nil, fmt.Errorf("has-response check: %w", err)
+		return fmt.Errorf("has-response check: %w", err)
 	}
 	if hasResp {
 		h.emit(Decision{Action: repository.FollowUpActionSkip, SkipReason: repository.FollowUpSkipReasonOutOfOrder})
-		return nil, nil
+		return nil
 	}
 
 	contact, err := h.contacts.GetContactTx(ctx, tx, p.ContactID)
 	if err != nil {
-		return nil, fmt.Errorf("get contact for outbound: %w", err)
+		return fmt.Errorf("get contact for outbound: %w", err)
 	}
 	return h.applyOutbound(ctx, tx, env, contact, p, cadenceStr)
 }
@@ -473,16 +439,16 @@ func (h *FollowUpManager) handleOutbound(
 func (h *FollowUpManager) applyOutbound(
 	ctx context.Context, tx pgx.Tx, env *events.Envelope,
 	contact *repository.Contact, p events.InteractionRecordedPayload, cadenceStr string,
-) (func(context.Context), error) {
+) error {
 	days := watchdogDaysForCadenceStr(cadenceStr, h.watchdog)
 	if days == 0 {
 		// ApplyInteraction short-circuit: direct-invoke callers may get
 		// here when the contact has no cadence.
-		return nil, nil
+		return nil
 	}
 	pending, err := h.taskRepo.FindPendingFollowUpTx(ctx, tx, p.ContactID)
 	if err != nil && !errors.Is(err, db.ErrNotFound) {
-		return nil, fmt.Errorf("find pending follow-up: %w", err)
+		return fmt.Errorf("find pending follow-up: %w", err)
 	}
 	if pending != nil {
 		return h.applyRefresh(ctx, tx, pending, p, days)
@@ -495,17 +461,17 @@ func (h *FollowUpManager) applyOutbound(
 func (h *FollowUpManager) applyCreate(
 	ctx context.Context, tx pgx.Tx, env *events.Envelope,
 	contact *repository.Contact, p events.InteractionRecordedPayload, days int,
-) (func(context.Context), error) {
+) error {
 	deadline := cadence.Today(p.OccurredAt).AddDate(0, 0, days)
 	idemKey := buildFollowUpIdempotencyKey(p.ContactID, p.OccurredAt)
 
 	// Guard against a prior step-1 insert that raced us (crash-retry of
 	// a queued worker, or duplicate inline call). If the idempotency-key
 	// row already exists, we have nothing to do: the caller lost the
-	// race and the winner's step-2 worker will finalize.
+	// race and the winner's create op will finalize.
 	if existing, err := h.taskWriter.GetContactTaskByIdempotencyKeyTx(ctx, tx, p.ContactID, idemKey); err != nil {
 		if !errors.Is(err, db.ErrNotFound) {
-			return nil, fmt.Errorf("check idempotency key: %w", err)
+			return fmt.Errorf("check idempotency key: %w", err)
 		}
 	} else if existing != nil {
 		logger.Debug().
@@ -513,11 +479,11 @@ func (h *FollowUpManager) applyCreate(
 			Str("contact_id", p.ContactID.String()).
 			Str("contact_task_id", existing.ID.String()).
 			Msg("followup_manager: idempotency key already present; skipping insert")
-		return nil, nil
+		return nil
 	}
 
 	if contact == nil {
-		return nil, errors.New("followup_manager: cutover create requires a contact")
+		return errors.New("followup_manager: cutover create requires a contact")
 	}
 
 	// Build the Todoist item_add shape at step-1 time so step-2 can
@@ -539,9 +505,9 @@ func (h *FollowUpManager) applyCreate(
 				Str("event_id", envIDString(env)).
 				Str("contact_id", p.ContactID.String()).
 				Msg("followup_manager: todoist not configured; skipping create")
-			return nil, nil
+			return nil
 		}
-		return nil, fmt.Errorf("get todoist settings for create: %w", err)
+		return fmt.Errorf("get todoist settings for create: %w", err)
 	}
 	deadlineStr := deadline.Format(todoist.DateFormat)
 	contactLink := fmt.Sprintf("%s/contacts/%s", h.frontendURL, p.ContactID.String())
@@ -553,7 +519,7 @@ func (h *FollowUpManager) applyCreate(
 		Instance:  settings.IntegrationInstanceID,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("marshal marker: %w", err)
+		return fmt.Errorf("marshal marker: %w", err)
 	}
 
 	metadata := map[string]any{
@@ -574,7 +540,7 @@ func (h *FollowUpManager) applyCreate(
 	// refresh, not bubbled up as an error.
 	sp, spErr := tx.Begin(ctx)
 	if spErr != nil {
-		return nil, fmt.Errorf("open savepoint for follow-up insert: %w", spErr)
+		return fmt.Errorf("open savepoint for follow-up insert: %w", spErr)
 	}
 	newTask, err := h.taskWriter.CreateContactTaskTx(ctx, sp, repository.CreateContactTaskRequest{
 		ContactID:      p.ContactID,
@@ -587,7 +553,7 @@ func (h *FollowUpManager) applyCreate(
 	}, &idemKey)
 	if err != nil {
 		if rbErr := sp.Rollback(ctx); rbErr != nil {
-			return nil, fmt.Errorf("rollback follow-up savepoint: %w", rbErr)
+			return fmt.Errorf("rollback follow-up savepoint: %w", rbErr)
 		}
 		if isFollowUpLiveUniqueViolation(err) {
 			// Another tx inserted the pending follow-up for this contact
@@ -596,7 +562,7 @@ func (h *FollowUpManager) applyCreate(
 			// the deadline advances to this event's occurred_at.
 			existing, findErr := h.taskRepo.FindPendingFollowUpTx(ctx, tx, p.ContactID)
 			if findErr != nil && !errors.Is(findErr, db.ErrNotFound) {
-				return nil, fmt.Errorf("re-read pending follow-up after unique-violation: %w", findErr)
+				return fmt.Errorf("re-read pending follow-up after unique-violation: %w", findErr)
 			}
 			if existing == nil {
 				// Winner's row no longer live (e.g. already completed). Nothing
@@ -605,7 +571,7 @@ func (h *FollowUpManager) applyCreate(
 					Str("event_id", envIDString(env)).
 					Str("contact_id", p.ContactID.String()).
 					Msg("followup_manager: unique-violation but no live row on re-read; skipping")
-				return nil, nil
+				return nil
 			}
 			logger.Debug().
 				Str("event_id", envIDString(env)).
@@ -614,14 +580,16 @@ func (h *FollowUpManager) applyCreate(
 				Msg("followup_manager: concurrent insert detected; routing to refresh")
 			return h.applyRefresh(ctx, tx, existing, p, days)
 		}
-		return nil, fmt.Errorf("insert pending_remote_create row: %w", err)
+		return fmt.Errorf("insert pending_remote_create row: %w", err)
 	}
 	if commitErr := sp.Commit(ctx); commitErr != nil {
-		return nil, fmt.Errorf("commit follow-up savepoint: %w", commitErr)
+		return fmt.Errorf("commit follow-up savepoint: %w", commitErr)
 	}
 
-	if _, err := h.riverInserter.InsertTx(ctx, tx, consumerjobs.TodoistFollowUpCreateJobArgs{ContactTaskID: newTask.ID}, &river.InsertOpts{MaxAttempts: 10}); err != nil {
-		return nil, fmt.Errorf("enqueue todoist followup create job: %w", err)
+	if _, err := h.riverInserter.InsertTx(ctx, tx,
+		consumerjobs.TodoistTaskOpArgs{ContactTaskID: newTask.ID, Op: consumerjobs.TaskOpCreate},
+		&river.InsertOpts{MaxAttempts: 10}); err != nil {
+		return fmt.Errorf("enqueue todoist create op: %w", err)
 	}
 
 	taskID := newTask.ID
@@ -631,16 +599,18 @@ func (h *FollowUpManager) applyCreate(
 		WouldIdempotencyKey: &idemKey,
 		ContactTaskID:       &taskID,
 	})
-	return nil, nil
+	return nil
 }
 
-// applyRefresh updates the local metadata deadline in tx and returns a
-// post-commit closure that calls Todoist item_update + on failure
-// enqueues TodoistFollowUpRefreshJob for river-managed retry.
+// applyRefresh updates the local metadata deadline in tx and enqueues an
+// update_deadline op in the SAME tx. The op is a convergence instruction:
+// the executor re-reads the row's current due_date at execution time and
+// pushes it (snoozing while the row is still pending_remote_create), so no
+// carried deadline and no post-commit Todoist call are needed.
 func (h *FollowUpManager) applyRefresh(
 	ctx context.Context, tx pgx.Tx,
 	pending *repository.ContactTask, p events.InteractionRecordedPayload, days int,
-) (func(context.Context), error) {
+) error {
 	deadline := cadence.Today(p.OccurredAt).AddDate(0, 0, days)
 
 	// Update local metadata in tx.
@@ -657,7 +627,17 @@ func (h *FollowUpManager) applyRefresh(
 	}
 	metadata["due_date"] = deadlineStr
 	if _, err := h.taskWriter.UpdateContactTaskMetadataTx(ctx, tx, pending.ID, metadata); err != nil {
-		return nil, fmt.Errorf("refresh local metadata: %w", err)
+		return fmt.Errorf("refresh local metadata: %w", err)
+	}
+
+	// Enqueue the update_deadline op in the same tx (no UniqueOpts —
+	// at-least-once by design; duplicate ops converge). If the row is
+	// still pending_remote_create the op snoozes until finalize lands and
+	// then pushes the current due_date.
+	if _, err := h.riverInserter.InsertTx(ctx, tx,
+		consumerjobs.TodoistTaskOpArgs{ContactTaskID: pending.ID, Op: consumerjobs.TaskOpUpdateDeadline},
+		&river.InsertOpts{MaxAttempts: 10}); err != nil {
+		return fmt.Errorf("enqueue todoist update_deadline op: %w", err)
 	}
 
 	taskID := pending.ID
@@ -666,91 +646,7 @@ func (h *FollowUpManager) applyRefresh(
 		WouldDeadline: &deadline,
 		ContactTaskID: &taskID,
 	})
-
-	// Capture externalID so the post-commit closure can issue item_update.
-	// If externalID is empty the row is still pending_remote_create — no
-	// remote task yet, so no item_update is needed. The create worker's
-	// metadata build reads due_date from the same local row.
-	externalID := pending.ExternalTaskID
-	return h.buildRefreshPostCommit(externalID, taskID, deadline), nil
-}
-
-// buildRefreshPostCommit returns a closure that calls Todoist
-// item_update after the outer tx commits and, on failure, enqueues
-// TodoistFollowUpRefreshJob for river-managed retry. externalID may be
-// empty, in which case the closure is a no-op (create worker will pick
-// up the refreshed metadata on finalize).
-func (h *FollowUpManager) buildRefreshPostCommit(externalID string, contactTaskID uuid.UUID, newDeadline time.Time) func(context.Context) {
-	if externalID == "" {
-		return nil
-	}
-	return func(postCtx context.Context) {
-		deadlineStr := newDeadline.Format(todoist.DateFormat)
-		_, accessToken, err := h.settings(postCtx)
-		if err != nil {
-			if errors.Is(err, ErrTodoistUnconfigured) {
-				// Todoist disabled — local deadline is authoritative;
-				// a retry would never succeed. Skip silently.
-				logger.Debug().
-					Str("contact_task_id", contactTaskID.String()).
-					Msg("followup_manager: refresh skipped — todoist not configured")
-				return
-			}
-			logger.Warn().Err(err).
-				Str("contact_task_id", contactTaskID.String()).
-				Msg("followup_manager: refresh post-commit settings lookup failed; enqueuing retry")
-			h.enqueueRefreshRetry(postCtx, contactTaskID, newDeadline)
-			return
-		}
-		client := h.clientFactory(accessToken)
-		updateCmd := todoist.NewItemUpdateCommand(externalID, map[string]any{
-			"deadline": map[string]string{"date": deadlineStr},
-		})
-		if _, err := client.Sync(postCtx, "*", []string{}, []todoist.SyncCommand{updateCmd}); err != nil {
-			logger.Warn().Err(err).
-				Str("contact_task_id", contactTaskID.String()).
-				Str("external_task_id", externalID).
-				Msg("followup_manager: refresh item_update failed post-commit; enqueuing retry")
-			h.enqueueRefreshRetry(postCtx, contactTaskID, newDeadline)
-			return
-		}
-		// Second observer call: remote call succeeded. WouldDeadline is
-		// deliberately nil — the first observer call (inside the tx)
-		// already reported the deadline; this one is purely a "Todoist
-		// side of the world caught up" signal.
-		id := contactTaskID
-		h.emit(Decision{
-			Action:        repository.FollowUpActionRefresh,
-			ContactTaskID: &id,
-			CalledTodoist: true,
-		})
-	}
-}
-
-// enqueueRefreshRetry opens a fresh tx on the pool and enqueues a
-// TodoistFollowUpRefreshJob for river-managed retry. Best-effort: if
-// enqueue itself fails the only recovery is the user's next outbound
-// triggering a fresh flow for the same contact.
-func (h *FollowUpManager) enqueueRefreshRetry(ctx context.Context, contactTaskID uuid.UUID, newDeadline time.Time) {
-	if h.riverInserter == nil || h.pool == nil {
-		logger.Error().
-			Str("contact_task_id", contactTaskID.String()).
-			Msg("followup_manager: refresh retry enqueue skipped — inserter or pool unwired")
-		return
-	}
-	args := consumerjobs.TodoistFollowUpRefreshJobArgs{
-		ContactTaskID: contactTaskID,
-		NewDeadline:   newDeadline,
-	}
-	err := pgx.BeginTxFunc(ctx, h.pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
-		_, insertErr := h.riverInserter.InsertTx(ctx, tx, args, &river.InsertOpts{MaxAttempts: 10})
-		return insertErr
-	})
-	if err != nil {
-		logger.Error().Err(err).
-			Str("contact_task_id", contactTaskID.String()).
-			Msg("followup_manager: failed to enqueue refresh retry job")
-	}
+	return nil
 }
 
 // handleInboundMutual handles inbound/mutual direction. Finds any
@@ -762,7 +658,7 @@ func (h *FollowUpManager) enqueueRefreshRetry(ctx context.Context, contactTaskID
 // close-while-pending race itself (create-then-close).
 func (h *FollowUpManager) handleInboundMutual(
 	ctx context.Context, tx pgx.Tx, p events.InteractionRecordedPayload,
-) (func(context.Context), error) {
+) error {
 	return h.applyInboundMutual(ctx, tx, p)
 }
 
@@ -770,35 +666,37 @@ func (h *FollowUpManager) handleInboundMutual(
 // HandleEvent and ApplyInteraction.
 func (h *FollowUpManager) applyInboundMutual(
 	ctx context.Context, tx pgx.Tx, p events.InteractionRecordedPayload,
-) (func(context.Context), error) {
+) error {
 	pending, err := h.taskRepo.FindPendingFollowUpTx(ctx, tx, p.ContactID)
 	if err != nil && !errors.Is(err, db.ErrNotFound) {
-		return nil, fmt.Errorf("find pending follow-up for complete: %w", err)
+		return fmt.Errorf("find pending follow-up for complete: %w", err)
 	}
 	if pending == nil {
 		h.emit(Decision{Action: repository.FollowUpActionSkip})
-		return nil, nil
+		return nil
 	}
 
 	// Transition to completed in tx. Use the RETURNING row so the
-	// close-enqueue decision reads post-update state. The create worker
-	// can finalize (pending_remote_create → managed + external task id)
-	// between our guard-3 read and this update; reading the pre-update
-	// snapshot strands the close when that race fires.
+	// close-enqueue decision reads post-update state. The create op
+	// executor can finalize (pending_remote_create → managed + external
+	// task id) between our guard-3 read and this update; reading the
+	// pre-update snapshot strands the close when that race fires.
 	updated, err := h.taskWriter.UpdateContactTaskStateTx(ctx, tx, pending.ID, repository.ContactTaskStateCompleted)
 	if err != nil {
-		return nil, fmt.Errorf("mark follow-up completed: %w", err)
+		return fmt.Errorf("mark follow-up completed: %w", err)
 	}
 
-	// Single-owner close-job enqueue: only enqueue when the row carries a
-	// Todoist external_task_id (i.e. the create worker finished before we
+	// Single-owner close-op enqueue: only enqueue when the row carries a
+	// Todoist external_task_id (i.e. the create op finished before we
 	// completed). An empty external_task_id means the row is still
-	// pending_remote_create remotely; the create worker handles the
-	// close-while-pending race itself (create-then-close), so enqueuing
-	// here would produce a duplicate close.
+	// pending_remote_create remotely; the create op's finalize handles the
+	// close-while-pending race itself (it enqueues the close op), so
+	// enqueuing here would produce a duplicate close.
 	if updated.ExternalTaskID != "" {
-		if _, err := h.riverInserter.InsertTx(ctx, tx, consumerjobs.TodoistFollowUpCloseJobArgs{ContactTaskID: updated.ID}, &river.InsertOpts{MaxAttempts: 10}); err != nil {
-			return nil, fmt.Errorf("enqueue todoist followup close job: %w", err)
+		if _, err := h.riverInserter.InsertTx(ctx, tx,
+			consumerjobs.TodoistTaskOpArgs{ContactTaskID: updated.ID, Op: consumerjobs.TaskOpClose},
+			&river.InsertOpts{MaxAttempts: 10}); err != nil {
+			return fmt.Errorf("enqueue todoist close op: %w", err)
 		}
 	}
 
@@ -807,7 +705,7 @@ func (h *FollowUpManager) applyInboundMutual(
 		Action:        repository.FollowUpActionComplete,
 		ContactTaskID: &taskID,
 	})
-	return nil, nil
+	return nil
 }
 
 // buildFollowUpIdempotencyKey derives the deterministic local idempotency
@@ -870,29 +768,16 @@ func NewFollowUpManagerWorker(bus eventBusTx, pool *pgxpool.Pool, handler *Follo
 }
 
 // Work fetches the event and dispatches HandleEvent inside a fresh tx.
-// After the tx commits, invokes the returned post-commit closure (non-
-// nil on the refresh path).
+// All remote effects leave via op jobs enqueued in that tx, so there is
+// no post-commit closure to run.
 func (w *FollowUpManagerWorker) Work(ctx context.Context, j *river.Job[consumerjobs.FollowUpManagerJobArgs]) error {
 	env, err := w.bus.GetEvent(ctx, j.Args.EventID)
 	if err != nil {
 		return fmt.Errorf("fetch event %s: %w", j.Args.EventID, err)
 	}
-	var postCommit func(context.Context)
-	err = pgx.BeginTxFunc(ctx, w.pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
-		pc, handleErr := w.handler.HandleEvent(ctx, tx, env)
-		if handleErr != nil {
-			return handleErr
-		}
-		postCommit = pc
-		return nil
+	return pgx.BeginTxFunc(ctx, w.pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		return w.handler.HandleEvent(ctx, tx, env)
 	})
-	if err != nil {
-		return err
-	}
-	if postCommit != nil {
-		postCommit(ctx)
-	}
-	return nil
 }
 
 // Timeout bounds the per-job runtime.

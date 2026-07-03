@@ -273,20 +273,6 @@ func TestEmailConsumer_Create_Inbound_PublishesAndApplies(t *testing.T) {
 	require.Equal(t, expectedSourceRef(cid, "thread-1", emailDay), s.comms.lastMarkRef)
 }
 
-func TestEmailConsumer_Create_ThreadsFollowUpPostCommit(t *testing.T) {
-	cid := uuid.New()
-	c, s := newEmailConsumerWithStubs()
-	ran := false
-	s.followUp.postCommit = func(context.Context) { ran = true }
-
-	env := mustEmailEnv(t, events.KindEmailReceived, basePayload(cid, repository.InteractionDirectionInbound))
-	pc, err := c.HandleEvent(context.Background(), nonNilTx(), env)
-	require.NoError(t, err)
-	require.NotNil(t, pc, "create branch returns the follow-up post-commit closure")
-	pc(context.Background())
-	require.True(t, ran, "returned closure invokes the follow-up post-commit")
-}
-
 // -----------------------------------------------------------------------------
 // Found branch — same direction → extend; different direction → promote.
 // -----------------------------------------------------------------------------

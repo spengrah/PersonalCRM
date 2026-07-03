@@ -129,12 +129,11 @@ type venueResolver interface {
 }
 
 // followUpDispatcher is the subset of *FollowUpManager the recorder
-// needs for the inline-apply path. Returns a post-commit closure (non-
-// nil on the refresh branch) that the recorder folds into its own
-// post-commit callback so the Todoist item_update runs outside the
-// caller's tx (core.md rule 153).
+// needs for the inline-apply path. All remote effects leave via
+// todoist_task_op jobs enqueued in the caller's tx, so no post-commit
+// closure is returned.
 type followUpDispatcher interface {
-	HandleEvent(ctx context.Context, tx pgx.Tx, env *events.Envelope) (postCommit func(context.Context), err error)
+	HandleEvent(ctx context.Context, tx pgx.Tx, env *events.Envelope) error
 }
 
 // InteractionRecorder is the event-bus consumer that turns raw provider
@@ -369,37 +368,19 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 	// Inline-apply follow-up under the same atomicity + dedupe rules as
 	// cadence. The consumer claims the event via event_consumer_claim so
 	// the queued worker for the same event becomes a durable no-op on
-	// re-delivery. The returned post-commit closure (non-nil on the
-	// refresh branch) carries the Todoist item_update call out of the
-	// tx per core.md rule 153.
-	var followUpPostCommit func(context.Context)
+	// re-delivery. All remote effects leave via todoist_task_op jobs
+	// enqueued in this tx — no post-commit closure.
 	if r.followUp != nil {
-		pc, followUpErr := r.followUp.HandleEvent(ctx, tx, recordedEnv)
-		if followUpErr != nil {
+		if followUpErr := r.followUp.HandleEvent(ctx, tx, recordedEnv); followUpErr != nil {
 			return nil, nil, fmt.Errorf("inline apply follow-up: %w", followUpErr)
 		}
-		followUpPostCommit = pc
 	}
 
-	// Build the post-commit callback. res.FollowUpFn is nil on the bus
-	// path (publishesEvent=true); it's set only when the non-bus wrapper
-	// path runs (publishesEvent=false — Todoist completion). The follow-up
-	// consumer's own post-commit closure fires on the bus path's
-	// refresh branch.
-	followUpFn := res.FollowUpFn
-	var postCommit func(context.Context)
-	if followUpFn != nil || followUpPostCommit != nil {
-		postCommit = func(pctx context.Context) {
-			if followUpFn != nil {
-				followUpFn(pctx)
-			}
-			if followUpPostCommit != nil {
-				followUpPostCommit(pctx)
-			}
-		}
-	}
-
-	return res.Interaction, postCommit, nil
+	// res.FollowUpFn is nil on the bus path (publishesEvent=true); it's
+	// set only when the non-bus wrapper path runs (publishesEvent=false —
+	// Todoist completion) and carries the direct-invoke
+	// FollowUpManager.ApplyInteraction call on a fresh tx after commit.
+	return res.Interaction, res.FollowUpFn, nil
 }
 
 // resolveVenue resolves the shared-container venue node id for the interaction

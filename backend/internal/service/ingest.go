@@ -273,11 +273,10 @@ type CadenceApplier interface {
 
 // FollowUpApplier is the narrow surface IngestService needs to inline-
 // apply follow-up after publishing interaction.recorded. Concrete is
-// *consumer.FollowUpManager. Returns a post-commit closure (non-nil on
-// the refresh branch) that the caller folds into a batch-level
-// post-commit slice so the Todoist item_update runs outside the tx.
+// *consumer.FollowUpManager. All remote effects leave via todoist_task_op
+// jobs enqueued in the caller's tx, so no post-commit closure is returned.
 type FollowUpApplier interface {
-	HandleEvent(ctx context.Context, tx pgx.Tx, env *events.Envelope) (postCommit func(context.Context), err error)
+	HandleEvent(ctx context.Context, tx pgx.Tx, env *events.Envelope) error
 }
 
 // IngestTitleMatcher is the narrow surface the meeting_note.recorded

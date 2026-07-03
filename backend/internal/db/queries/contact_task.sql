@@ -290,3 +290,13 @@ WHERE contact_id = sqlc.arg('contact_id')
 SELECT COUNT(*) FROM river_job
 WHERE kind = sqlc.arg('kind')::text
   AND (args->>'contact_task_id') = sqlc.arg('contact_task_id')::text;
+
+-- name: CountTodoistOpJobsByOp :one
+-- Test-only count of todoist_task_op river_job rows for a given
+-- contact_task_id and op verb. Used by the follow-up cutover integration
+-- tests to assert a create/close/update_deadline op was (or was not)
+-- enqueued, without inlining raw SQL into Go test code (core.md rule 2).
+SELECT COUNT(*) FROM river_job
+WHERE kind = 'todoist_task_op'
+  AND (args->>'contact_task_id') = sqlc.arg('contact_task_id')::text
+  AND (args->>'op') = sqlc.arg('op')::text;

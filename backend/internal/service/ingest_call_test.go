@@ -326,17 +326,17 @@ func (s *stubCadenceApplier) HandleEvent(_ context.Context, _ pgx.Tx, _ *events.
 	return s.err
 }
 
-// stubFollowUpApplier records HandleEvent calls and returns a
-// configurable post-commit closure.
+// stubFollowUpApplier records HandleEvent calls. All remote effects leave
+// via op jobs enqueued in the caller's tx, so HandleEvent returns only an
+// error.
 type stubFollowUpApplier struct {
-	calls            int
-	err              error
-	returnPostCommit func(context.Context)
+	calls int
+	err   error
 }
 
-func (s *stubFollowUpApplier) HandleEvent(_ context.Context, _ pgx.Tx, _ *events.Envelope) (func(context.Context), error) {
+func (s *stubFollowUpApplier) HandleEvent(_ context.Context, _ pgx.Tx, _ *events.Envelope) error {
 	s.calls++
-	return s.returnPostCommit, s.err
+	return s.err
 }
 
 // stubEventBusForCall is a no-op bus stub that records publishes. The

@@ -263,7 +263,7 @@ func setupTestEventBusForEmail(
 	followUpManager := consumer.NewFollowUpManager(
 		consumer.FollowUpModeOff,
 		claimRepo, contactRepo, nil, nil, interactionRepo, nil,
-		database.Pool, nil, nil, "", cfg.Watchdog,
+		nil, "", cfg.Watchdog,
 	)
 
 	workers := river.NewWorkers()

@@ -55,9 +55,7 @@ func newApplyInteractionEnv(t *testing.T, settingsErr error) (*applyInteractionE
 	claimRepo := repository.NewEventConsumerClaimRepository(database.Queries)
 
 	workers := river.NewWorkers()
-	river.AddWorker(workers, &followUpTestNoopCreate{})
-	river.AddWorker(workers, &followUpTestNoopClose{})
-	river.AddWorker(workers, &followUpTestNoopRefresh{})
+	river.AddWorker(workers, &followUpTestNoopOp{})
 	riverClient, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
 		Queues:   map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: 1}},
 		Workers:  workers,
@@ -71,9 +69,6 @@ func newApplyInteractionEnv(t *testing.T, settingsErr error) (*applyInteractionE
 		}
 		return &todoist.Settings{ProjectID: "proj", LabelName: "followup", IntegrationInstanceID: "inst"}, "token", nil
 	}
-	factory := func(string) todoist.Client {
-		return &followUpIntegrationNoopClient{}
-	}
 	watchdog := config.WatchdogConfig{WeeklyDays: 3, BiweeklyDays: 5, MonthlyDays: 7, QuarterlyDays: 14, BiannualDays: 21, AnnualDays: 21}
 
 	manager := consumer.NewFollowUpManager(
@@ -84,9 +79,7 @@ func newApplyInteractionEnv(t *testing.T, settingsErr error) (*applyInteractionE
 		taskRepo,
 		interRepo,
 		riverClient,
-		database.Pool,
 		settings,
-		factory,
 		"http://localhost:3000",
 		watchdog,
 	)
@@ -134,20 +127,16 @@ func TestIntegration_ApplyInteraction_NilEnvelope_DoesNotPanic(t *testing.T) {
 	ctx := context.Background()
 	contact := env.seedContact(t, "weekly")
 
-	var postCommit func(context.Context)
 	require.NotPanics(t, func() {
 		require.NoError(t, pgx.BeginTxFunc(ctx, env.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
-			pc, err := env.manager.ApplyInteraction(ctx, tx, repository.ApplyInteractionRequest{
+			return env.manager.ApplyInteraction(ctx, tx, repository.ApplyInteractionRequest{
 				ContactID:  contact.ID,
 				Direction:  repository.InteractionDirectionOutbound,
 				Source:     repository.InteractionSourceManual,
 				OccurredAt: accelerated.GetCurrentTime(),
 			})
-			postCommit = pc
-			return err
 		}))
 	})
-	assert.Nil(t, postCommit, "outbound fresh create returns nil postCommit")
 
 	pending, err := env.taskRepo.FindPendingFollowUp(ctx, contact.ID)
 	require.NoError(t, err)
@@ -176,7 +165,7 @@ func TestIntegration_ApplyInteraction_TodoistUnconfigured_NoRowNoRollback(t *tes
 	// rollback, and no contact_task row gets written.
 	var applyErr error
 	commitErr := pgx.BeginTxFunc(ctx, env.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
-		_, applyErr = env.manager.ApplyInteraction(ctx, tx, repository.ApplyInteractionRequest{
+		applyErr = env.manager.ApplyInteraction(ctx, tx, repository.ApplyInteractionRequest{
 			ContactID:  contact.ID,
 			Direction:  repository.InteractionDirectionOutbound,
 			Source:     repository.InteractionSourceManual,
@@ -207,7 +196,7 @@ func TestIntegration_ApplyInteraction_SettingsError_PropagatesRollback(t *testin
 
 	var applyErr error
 	commitErr := pgx.BeginTxFunc(ctx, env.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
-		_, applyErr = env.manager.ApplyInteraction(ctx, tx, repository.ApplyInteractionRequest{
+		applyErr = env.manager.ApplyInteraction(ctx, tx, repository.ApplyInteractionRequest{
 			ContactID:  contact.ID,
 			Direction:  repository.InteractionDirectionOutbound,
 			Source:     repository.InteractionSourceManual,

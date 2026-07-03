@@ -186,11 +186,9 @@ func setupPhoneCallIngestEnv(t *testing.T) *phoneCallIngestEnv {
 		contactTaskRepo,
 		interactionRepo,
 		riverClient,
-		database.Pool,
 		func(ctx context.Context) (*todoist.Settings, string, error) {
 			return nil, "", consumer.ErrTodoistUnconfigured
 		},
-		todoist.DefaultClientFactory,
 		cfg.CORS.FrontendURL,
 		cfg.Watchdog,
 	)

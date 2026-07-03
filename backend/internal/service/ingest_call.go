@@ -348,24 +348,20 @@ func (s *IngestService) handleCall(
 		}
 	}
 
-	// Inline follow-up apply. Returns a post-commit closure (non-nil on
-	// the refresh branch). For v1.5 phone_calls has no Todoist
-	// integration, so the closure is expected to be nil — but the
-	// machinery is wired through correctly so when a follow-up source
-	// eventually attaches to phone_calls contacts the path works.
-	var postCommit func(context.Context)
+	// Inline follow-up apply. All remote effects leave via todoist_task_op
+	// jobs enqueued in this tx, so no post-commit closure is produced —
+	// phone_calls contributes nil into the batch post-commit slice (shared
+	// with other ingest families that still return real closures).
 	if s.followUp != nil {
-		pc, err := s.followUp.HandleEvent(ctx, tx, recordedEnv)
-		if err != nil {
+		if err := s.followUp.HandleEvent(ctx, tx, recordedEnv); err != nil {
 			return nil, &IngestPerEventRejection{
 				Code:    ingestRejectStagingUpsertFailed,
 				Message: fmt.Sprintf("inline apply follow-up: %s", err.Error()),
 			}
 		}
-		postCommit = pc
 	}
 
-	return postCommit, nil
+	return nil, nil
 }
 
 // decideCallInteraction applies the content-delivered decision table

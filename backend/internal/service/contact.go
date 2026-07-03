@@ -36,18 +36,16 @@ type OverdueContact struct {
 }
 
 // FollowUpConsumer is the subset of *consumer.FollowUpManager
-// ContactService depends on post-cutover. HandleEvent is exposed for
-// completeness (ContactService itself doesn't call it — the
-// InteractionRecorder does), and ApplyInteraction is the direct-invoke
-// path for non-bus callers (Todoist completion wrapper,
-// Promote/ExtendInteraction). Both methods return a post-commit
-// closure so the refresh path's Todoist item_update runs outside the
-// caller's tx per core.md rule 153.
+// ContactService depends on post-cutover. ApplyInteraction is the
+// direct-invoke path for non-bus callers (Todoist completion wrapper,
+// Promote/ExtendInteraction). All remote effects leave via
+// todoist_task_op jobs enqueued in the caller's tx, so no post-commit
+// closure is returned.
 //
 // Interface lives here (not on the consumer) so tests can stub
 // follow-up behavior without building the full consumer graph.
 type FollowUpConsumer interface {
-	ApplyInteraction(ctx context.Context, tx pgx.Tx, req repository.ApplyInteractionRequest) (postCommit func(context.Context), err error)
+	ApplyInteraction(ctx context.Context, tx pgx.Tx, req repository.ApplyInteractionRequest) error
 }
 
 // cadenceWriter abstracts the direct-invoke write surface of
@@ -888,9 +886,9 @@ func (s *ContactService) updateInteractionTimestampTx(
 // by non-bus callers (non-tx RecordInteraction wrapper for Todoist
 // completion, Promote/Extend) where no interaction.recorded event is
 // published and therefore the recorder's inline dispatch never fires.
-// The closure opens a fresh tx on the pool, invokes ApplyInteraction
-// inside it, and runs the returned inner post-commit closure (refresh
-// path only) after the fresh tx commits.
+// The closure opens a fresh tx on the pool and invokes ApplyInteraction
+// inside it; all remote effects leave via op jobs enqueued in that tx, so
+// there is nothing to run after it commits.
 func (s *ContactService) deriveFollowUpClosure(contact *repository.Contact, interaction *repository.Interaction) func(context.Context) {
 	if contact == nil || interaction == nil || s.followUp == nil {
 		return nil
@@ -919,14 +917,8 @@ func (s *ContactService) deriveFollowUpClosure(contact *repository.Contact, inte
 			Source:     contactSource,
 			OccurredAt: occ,
 		}
-		var innerPostCommit func(context.Context)
 		err := pgx.BeginTxFunc(postCtx, pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
-			pc, applyErr := fm.ApplyInteraction(postCtx, tx, req)
-			if applyErr != nil {
-				return applyErr
-			}
-			innerPostCommit = pc
-			return nil
+			return fm.ApplyInteraction(postCtx, tx, req)
 		})
 		if err != nil {
 			logger.Warn().Err(err).
@@ -935,13 +927,8 @@ func (s *ContactService) deriveFollowUpClosure(contact *repository.Contact, inte
 				Msg("failed to apply follow-up via consumer")
 			return
 		}
-		// Run the nested post-commit closure OUTSIDE the fresh tx —
-		// this is where the Todoist item_update (refresh path) runs.
-		// On failure, the closure itself handles enqueueing a
-		// TodoistFollowUpRefreshJob for river-managed retry.
-		if innerPostCommit != nil {
-			innerPostCommit(postCtx)
-		}
+		// All remote effects were enqueued as op jobs inside the fresh tx
+		// above; nothing to run post-commit here.
 	}
 }
 

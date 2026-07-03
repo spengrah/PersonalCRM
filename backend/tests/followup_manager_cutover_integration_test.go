@@ -109,9 +109,7 @@ func newFollowUpIntegrationEnv(t *testing.T) (*followUpIntegrationEnv, func()) {
 	// never run. Exactly what we need to assert on enqueue + dedupe
 	// without worker-driven HTTP side effects.
 	workers := river.NewWorkers()
-	river.AddWorker(workers, &followUpTestNoopCreate{})
-	river.AddWorker(workers, &followUpTestNoopClose{})
-	river.AddWorker(workers, &followUpTestNoopRefresh{})
+	river.AddWorker(workers, &followUpTestNoopOp{})
 	// PublishTx's fanout for interaction.recorded enqueues Cadence +
 	// FollowUpManager jobs; those kinds must be registered even though
 	// the test never runs them.
@@ -135,9 +133,6 @@ func newFollowUpIntegrationEnv(t *testing.T) (*followUpIntegrationEnv, func()) {
 			IntegrationInstanceID: "inst-test",
 		}, "token-test", nil
 	}
-	clientFactory := func(string) todoist.Client {
-		return &followUpIntegrationNoopClient{}
-	}
 
 	watchdog := config.TestConfig().Watchdog
 	if watchdog.WeeklyDays == 0 {
@@ -154,9 +149,7 @@ func newFollowUpIntegrationEnv(t *testing.T) (*followUpIntegrationEnv, func()) {
 		taskRepo,
 		interRepo,
 		riverClient,
-		database.Pool,
 		settings,
-		clientFactory,
 		"http://localhost:3000",
 		watchdog,
 	)
@@ -189,30 +182,14 @@ func newFollowUpIntegrationEnv(t *testing.T) (*followUpIntegrationEnv, func()) {
 	}
 }
 
-// followUpTestNoopCreate / noop close / noop refresh satisfy river's
-// "known kind" requirement so InsertTx succeeds; Work never runs
+// followUpTestNoopOp satisfies river's "known kind" requirement for the
+// unified todoist_task_op kind so InsertTx succeeds; Work never runs
 // because we never call Start().
-type followUpTestNoopCreate struct {
-	river.WorkerDefaults[consumerjobs.TodoistFollowUpCreateJobArgs]
+type followUpTestNoopOp struct {
+	river.WorkerDefaults[consumerjobs.TodoistTaskOpArgs]
 }
 
-func (*followUpTestNoopCreate) Work(context.Context, *river.Job[consumerjobs.TodoistFollowUpCreateJobArgs]) error {
-	return nil
-}
-
-type followUpTestNoopClose struct {
-	river.WorkerDefaults[consumerjobs.TodoistFollowUpCloseJobArgs]
-}
-
-func (*followUpTestNoopClose) Work(context.Context, *river.Job[consumerjobs.TodoistFollowUpCloseJobArgs]) error {
-	return nil
-}
-
-type followUpTestNoopRefresh struct {
-	river.WorkerDefaults[consumerjobs.TodoistFollowUpRefreshJobArgs]
-}
-
-func (*followUpTestNoopRefresh) Work(context.Context, *river.Job[consumerjobs.TodoistFollowUpRefreshJobArgs]) error {
+func (*followUpTestNoopOp) Work(context.Context, *river.Job[consumerjobs.TodoistTaskOpArgs]) error {
 	return nil
 }
 
@@ -326,21 +303,27 @@ func (e *followUpIntegrationEnv) countRiverJobsByKind(t *testing.T, kind string,
 	return int(n)
 }
 
+// countOpJobs returns the count of todoist_task_op river_job rows for a
+// contact_task id + op verb.
+func (e *followUpIntegrationEnv) countOpJobs(t *testing.T, contactTaskID uuid.UUID, op string) int {
+	t.Helper()
+	ctx := context.Background()
+	n, err := e.taskRepo.CountTodoistOpJobsByOp(ctx, contactTaskID, op)
+	require.NoError(t, err)
+	return int(n)
+}
+
 func ptr[T any](v T) *T { return &v }
 
 // applyInEventTx opens a tx, calls manager.HandleEvent inside, and
-// commits. Returns the post-commit closure (may be nil) and any error.
-func (e *followUpIntegrationEnv) applyInEventTx(t *testing.T, env *events.Envelope) func(context.Context) {
+// commits. All remote effects leave via op jobs enqueued in that tx.
+func (e *followUpIntegrationEnv) applyInEventTx(t *testing.T, env *events.Envelope) {
 	t.Helper()
 	ctx := context.Background()
-	var postCommit func(context.Context)
 	err := pgx.BeginTxFunc(ctx, e.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
-		pc, err := e.manager.HandleEvent(ctx, tx, env)
-		postCommit = pc
-		return err
+		return e.manager.HandleEvent(ctx, tx, env)
 	})
 	require.NoError(t, err)
-	return postCommit
 }
 
 // TestIntegration_FollowUpManager_BackdatedOutbound asserts guard 1: a
@@ -358,8 +341,7 @@ func TestIntegration_FollowUpManager_BackdatedOutbound(t *testing.T) {
 	occurred := accelerated.GetCurrentTime().Add(-90 * 24 * time.Hour)
 	recorded := env.recordedEnv(t, contact.ID, repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, occurred, "weekly")
 
-	postCommit := env.applyInEventTx(t, recorded)
-	assert.Nil(t, postCommit, "backdated skip must not return a post-commit closure")
+	env.applyInEventTx(t, recorded)
 
 	assert.Equal(t, 0, env.countContactTaskRows(t, contact.ID), "backdated outbound must not create a contact_task row")
 
@@ -466,9 +448,9 @@ func TestIntegration_FollowUpManager_OutboundFreshCreatesPendingRow(t *testing.T
 	assert.Equal(t, contacttask.LifecycleFollowUpLoop, marker.Lifecycle)
 	assert.Equal(t, "inst-test", marker.Instance)
 
-	// river_job row: kind=todoist_followup_create, args contains contact_task_id.
-	n := env.countRiverJobsByKind(t, (consumerjobs.TodoistFollowUpCreateJobArgs{}).Kind(), pending.ID)
-	assert.Equal(t, 1, n, "a single TodoistFollowUpCreateJob must be enqueued in the same tx")
+	// river_job row: kind=todoist_task_op with op=create for this row.
+	n := env.countOpJobs(t, pending.ID, consumerjobs.TaskOpCreate)
+	assert.Equal(t, 1, n, "a single create op must be enqueued in the same tx")
 
 	// Decision classification: create action with matching idempotency key.
 	require.Len(t, *env.decisions, 1)
@@ -512,10 +494,10 @@ func TestIntegration_FollowUpManager_InboundCompletesPending(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, repository.ContactTaskStateCompleted, got.State, "inbound must flip pending_remote_create → completed")
 
-	// Single-owner rule: no close job enqueued for a pending_remote_create
-	// row. The create worker handles the create-then-close race itself.
-	closeN := env.countRiverJobsByKind(t, (consumerjobs.TodoistFollowUpCloseJobArgs{}).Kind(), pending.ID)
-	assert.Equal(t, 0, closeN, "single-owner rule: no close job when pending row was still pending_remote_create")
+	// Single-owner rule: no close op enqueued for a pending_remote_create
+	// row. The create op's finalize handles the create-then-close race.
+	closeN := env.countOpJobs(t, pending.ID, consumerjobs.TaskOpClose)
+	assert.Equal(t, 0, closeN, "single-owner rule: no close op when pending row was still pending_remote_create")
 
 	// Decision classification: outbound→create, then inbound→complete.
 	require.Len(t, *env.decisions, 2)
@@ -609,9 +591,7 @@ func TestIntegration_FollowUpManager_UniqueLiveCollisionRecovers(t *testing.T) {
 	_, err = txA.Conn().Exec(ctx, "-- snapshot primed")
 	require.NoError(t, err)
 
-	pcB, err := runHandleEventInFreshTx(ctx, env, envB)
-	require.NoError(t, err)
-	assert.Nil(t, pcB)
+	require.NoError(t, runHandleEventInFreshTx(ctx, env, envB))
 
 	// Tx A: HandleEvent. Guard 3 reads txA's snapshot → no row.
 	// The insert hits idx_contact_task_followup_unique_live → savepoint
@@ -620,9 +600,8 @@ func TestIntegration_FollowUpManager_UniqueLiveCollisionRecovers(t *testing.T) {
 	// (tx A) which STILL doesn't see the winner in REPEATABLE READ,
 	// so the recovery path falls through to "no live row on re-read;
 	// skipping" and returns nil. The outer tx must commit cleanly.
-	pcA, err := env.manager.HandleEvent(ctx, txA, envA)
+	err = env.manager.HandleEvent(ctx, txA, envA)
 	require.NoError(t, err, "savepoint recovery must not bubble an error out to the outer tx")
-	assert.Nil(t, pcA)
 	require.NoError(t, txA.Commit(ctx))
 
 	// Only one follow-up row exists.
@@ -632,17 +611,13 @@ func TestIntegration_FollowUpManager_UniqueLiveCollisionRecovers(t *testing.T) {
 }
 
 // runHandleEventInFreshTx opens a fresh tx on the pool, runs
-// HandleEvent, commits, and returns the post-commit closure + error.
-// Used by the concurrency test so it can drive a second consumer
-// invocation while another tx holds an older snapshot.
-func runHandleEventInFreshTx(ctx context.Context, env *followUpIntegrationEnv, envelope *events.Envelope) (func(context.Context), error) {
-	var pc func(context.Context)
-	err := pgx.BeginTxFunc(ctx, env.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
-		p, err := env.manager.HandleEvent(ctx, tx, envelope)
-		pc = p
-		return err
+// HandleEvent, and commits. Used by the concurrency test so it can
+// drive a second consumer invocation while another tx holds an older
+// snapshot.
+func runHandleEventInFreshTx(ctx context.Context, env *followUpIntegrationEnv, envelope *events.Envelope) error {
+	return pgx.BeginTxFunc(ctx, env.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		return env.manager.HandleEvent(ctx, tx, envelope)
 	})
-	return pc, err
 }
 
 // TestIntegration_FollowUpManager_InboundClosesFinalizedRow asserts the
@@ -688,8 +663,8 @@ func TestIntegration_FollowUpManager_InboundClosesFinalizedRow(t *testing.T) {
 	assert.Equal(t, repository.ContactTaskStateCompleted, got.State)
 	assert.NotEmpty(t, got.ExternalTaskID, "external_task_id preserved through state update")
 
-	closeN := env.countRiverJobsByKind(t, (consumerjobs.TodoistFollowUpCloseJobArgs{}).Kind(), pending.ID)
-	assert.Equal(t, 1, closeN, "inbound on a finalized row must enqueue a close job (post-update state check)")
+	closeN := env.countOpJobs(t, pending.ID, consumerjobs.TaskOpClose)
+	assert.Equal(t, 1, closeN, "inbound on a finalized row must enqueue a close op (post-update state check)")
 }
 
 // silence "imported and not used" when rivertype isn't directly

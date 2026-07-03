@@ -10,6 +10,7 @@ import (
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
+	"personal-crm/backend/internal/consumer/consumerjobs"
 	"personal-crm/backend/internal/contacttask"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
@@ -120,9 +121,8 @@ func newUnitFollowUp(mode string) (*FollowUpManager, *stubFollowUpTaskReader, *s
 	settings := func(context.Context) (*todoist.Settings, string, error) {
 		return &todoist.Settings{ProjectID: "p", LabelName: "l", IntegrationInstanceID: "i"}, "token", nil
 	}
-	factory := func(string) todoist.Client { return &stubRefreshTodoistClient{} }
 	var observed []Decision
-	h := NewFollowUpManager(mode, claims, contacts, tasks, writer, inters, inserter, nil, settings, factory, "http://localhost", testWatchdog())
+	h := NewFollowUpManager(mode, claims, contacts, tasks, writer, inters, inserter, settings, "http://localhost", testWatchdog())
 	h.SetDecisionObserver(func(d Decision) { observed = append(observed, d) })
 	return h, tasks, inters, &observed
 }
@@ -180,7 +180,7 @@ func TestFollowUpManager_ModeOff_NoWrites(t *testing.T) {
 	h, tasks, inters, observed := newUnitFollowUp(FollowUpModeOff)
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 
-	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)
 	require.Equal(t, 0, tasks.calls, "mode=off must not query task repo")
 	require.Equal(t, 0, inters.calls, "mode=off must not query interaction repo")
@@ -198,8 +198,8 @@ func TestFollowUpManager_ModeCutover_RequiresCollaborators(t *testing.T) {
 	// out a single dep while leaving the rest populated. Returning a
 	// builder closure rather than a manager keeps each sub-test's null
 	// substitution local.
-	fullDeps := func() (eventClaimer, followUpContactReader, contactTaskReader, followUpTaskWriter, interactionResponseReader, RiverInserter, TodoistSettingsFunc, todoist.ClientFactory) {
-		return &stubEventClaimer{}, &stubFollowUpContactReader{}, &stubFollowUpTaskReader{}, &stubFollowUpTaskWriter{}, &stubInteractionResponseReader{}, &stubRiverInserter{}, settingsOKStub(), factoryStub()
+	fullDeps := func() (eventClaimer, followUpContactReader, contactTaskReader, followUpTaskWriter, interactionResponseReader, RiverInserter, TodoistSettingsFunc) {
+		return &stubEventClaimer{}, &stubFollowUpContactReader{}, &stubFollowUpTaskReader{}, &stubFollowUpTaskWriter{}, &stubInteractionResponseReader{}, &stubRiverInserter{}, settingsOKStub()
 	}
 	cases := []struct {
 		name     string
@@ -209,73 +209,65 @@ func TestFollowUpManager_ModeCutover_RequiresCollaborators(t *testing.T) {
 		{
 			name: "nil_claims",
 			build: func() *FollowUpManager {
-				_, contacts, taskRepo, taskWriter, inters, inserter, settings, factory := fullDeps()
-				return NewFollowUpManager(FollowUpModeCutover, nil, contacts, taskRepo, taskWriter, inters, inserter, nil, settings, factory, "", testWatchdog())
+				_, contacts, taskRepo, taskWriter, inters, inserter, settings := fullDeps()
+				return NewFollowUpManager(FollowUpModeCutover, nil, contacts, taskRepo, taskWriter, inters, inserter, settings, "", testWatchdog())
 			},
 			contains: "claim repository",
 		},
 		{
 			name: "nil_contacts",
 			build: func() *FollowUpManager {
-				claims, _, taskRepo, taskWriter, inters, inserter, settings, factory := fullDeps()
-				return NewFollowUpManager(FollowUpModeCutover, claims, nil, taskRepo, taskWriter, inters, inserter, nil, settings, factory, "", testWatchdog())
+				claims, _, taskRepo, taskWriter, inters, inserter, settings := fullDeps()
+				return NewFollowUpManager(FollowUpModeCutover, claims, nil, taskRepo, taskWriter, inters, inserter, settings, "", testWatchdog())
 			},
 			contains: "contact reader",
 		},
 		{
 			name: "nil_task_repo",
 			build: func() *FollowUpManager {
-				claims, contacts, _, taskWriter, inters, inserter, settings, factory := fullDeps()
-				return NewFollowUpManager(FollowUpModeCutover, claims, contacts, nil, taskWriter, inters, inserter, nil, settings, factory, "", testWatchdog())
+				claims, contacts, _, taskWriter, inters, inserter, settings := fullDeps()
+				return NewFollowUpManager(FollowUpModeCutover, claims, contacts, nil, taskWriter, inters, inserter, settings, "", testWatchdog())
 			},
 			contains: "contact-task reader",
 		},
 		{
 			name: "nil_task_writer",
 			build: func() *FollowUpManager {
-				claims, contacts, taskRepo, _, inters, inserter, settings, factory := fullDeps()
-				return NewFollowUpManager(FollowUpModeCutover, claims, contacts, taskRepo, nil, inters, inserter, nil, settings, factory, "", testWatchdog())
+				claims, contacts, taskRepo, _, inters, inserter, settings := fullDeps()
+				return NewFollowUpManager(FollowUpModeCutover, claims, contacts, taskRepo, nil, inters, inserter, settings, "", testWatchdog())
 			},
 			contains: "contact-task writer",
 		},
 		{
 			name: "nil_interaction_repo",
 			build: func() *FollowUpManager {
-				claims, contacts, taskRepo, taskWriter, _, inserter, settings, factory := fullDeps()
-				return NewFollowUpManager(FollowUpModeCutover, claims, contacts, taskRepo, taskWriter, nil, inserter, nil, settings, factory, "", testWatchdog())
+				claims, contacts, taskRepo, taskWriter, _, inserter, settings := fullDeps()
+				return NewFollowUpManager(FollowUpModeCutover, claims, contacts, taskRepo, taskWriter, nil, inserter, settings, "", testWatchdog())
 			},
 			contains: "interaction reader",
 		},
 		{
 			name: "nil_river_inserter",
 			build: func() *FollowUpManager {
-				claims, contacts, taskRepo, taskWriter, inters, _, settings, factory := fullDeps()
-				return NewFollowUpManager(FollowUpModeCutover, claims, contacts, taskRepo, taskWriter, inters, nil, nil, settings, factory, "", testWatchdog())
+				claims, contacts, taskRepo, taskWriter, inters, _, settings := fullDeps()
+				return NewFollowUpManager(FollowUpModeCutover, claims, contacts, taskRepo, taskWriter, inters, nil, settings, "", testWatchdog())
 			},
 			contains: "river inserter",
 		},
 		{
 			name: "nil_settings",
 			build: func() *FollowUpManager {
-				claims, contacts, taskRepo, taskWriter, inters, inserter, _, factory := fullDeps()
-				return NewFollowUpManager(FollowUpModeCutover, claims, contacts, taskRepo, taskWriter, inters, inserter, nil, nil, factory, "", testWatchdog())
+				claims, contacts, taskRepo, taskWriter, inters, inserter, _ := fullDeps()
+				return NewFollowUpManager(FollowUpModeCutover, claims, contacts, taskRepo, taskWriter, inters, inserter, nil, "", testWatchdog())
 			},
 			contains: "todoist settings",
-		},
-		{
-			name: "nil_client_factory",
-			build: func() *FollowUpManager {
-				claims, contacts, taskRepo, taskWriter, inters, inserter, settings, _ := fullDeps()
-				return NewFollowUpManager(FollowUpModeCutover, claims, contacts, taskRepo, taskWriter, inters, inserter, nil, settings, nil, "", testWatchdog())
-			},
-			contains: "todoist client factory",
 		},
 	}
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			h := tc.build()
-			_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+			err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), tc.contains)
 		})
@@ -288,20 +280,16 @@ func settingsOKStub() TodoistSettingsFunc {
 	}
 }
 
-func factoryStub() todoist.ClientFactory {
-	return func(string) todoist.Client { return &stubRefreshTodoistClient{} }
-}
-
 func TestFollowUpManager_NilEnvelope(t *testing.T) {
 	h, _, _, _ := newUnitFollowUp(FollowUpModeCutover)
-	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), nil)
+	err := h.HandleEvent(context.Background(), nonNilFakeTx(), nil)
 	require.Error(t, err)
 }
 
 func TestFollowUpManager_NilTx(t *testing.T) {
 	h, _, _, _ := newUnitFollowUp(FollowUpModeCutover)
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
-	_, err := h.HandleEvent(context.Background(), nil, env)
+	err := h.HandleEvent(context.Background(), nil, env)
 	require.Error(t, err)
 }
 
@@ -325,7 +313,7 @@ func TestFollowUpManager_V1PayloadRejected(t *testing.T) {
 		ObservedAt: accelerated.GetCurrentTime(),
 	}
 
-	_, err = h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	err = h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err, "V1 payload is logged but not returned as error")
 	require.Empty(t, *observed)
 }
@@ -347,7 +335,7 @@ func TestFollowUpManager_AcceptsV2AndV3(t *testing.T) {
 				accelerated.GetCurrentTime(),
 				"" /* no cadence -> skips at guard 0 */, false)
 
-			_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+			err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 			require.NoError(t, err)
 			require.Len(t, *observed, 1,
 				"V%d payload must produce exactly one decision", version)
@@ -374,7 +362,7 @@ func TestFollowUpManager_SuppressFollowUp_TrueEarlyReturns(t *testing.T) {
 		repository.InteractionSourceTodoist,
 		accelerated.GetCurrentTime(), "weekly", true /* suppress */)
 
-	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)
 	require.Equal(t, 0, tasks.calls,
 		"SuppressFollowUp=true must short-circuit before task lookup")
@@ -399,7 +387,7 @@ func TestFollowUpManager_SuppressFollowUp_FalseDispatches(t *testing.T) {
 		repository.InteractionSourceTodoist,
 		accelerated.GetCurrentTime(), "weekly", false /* do not suppress */)
 
-	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)
 	require.Equal(t, 1, inters.calls,
 		"SuppressFollowUp=false must reach the out-of-order guard")
@@ -422,7 +410,7 @@ func TestFollowUpManager_SuppressFollowUp_TelegramPathIgnored(t *testing.T) {
 		repository.InteractionSourceTelegram,
 		accelerated.GetCurrentTime(), "weekly", false)
 
-	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)
 	require.Len(t, *observed, 1)
 	require.NotEqual(t, repository.FollowUpSkipReasonSuppressed, (*observed)[0].SkipReason,
@@ -437,7 +425,7 @@ func TestFollowUpManager_UnknownDirection_Skips(t *testing.T) {
 	h, _, _, observed := newUnitFollowUp(FollowUpModeCutover)
 	env := buildRecordedEnv(t, uuid.New(), "bogus", repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 
-	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)
 	require.Empty(t, *observed)
 }
@@ -453,7 +441,7 @@ func TestFollowUpManager_Outbound_NoCadence_SkipsWithoutReason(t *testing.T) {
 	h, tasks, inters, observed := newUnitFollowUp(FollowUpModeCutover)
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "")
 
-	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)
 	require.Equal(t, 0, tasks.calls, "no-cadence skip must not run guard 3")
 	require.Equal(t, 0, inters.calls, "no-cadence skip must not run guard 2")
@@ -469,7 +457,7 @@ func TestFollowUpManager_Outbound_Backdated_NonManual_SkipsBackdated(t *testing.
 	occurred := accelerated.GetCurrentTime().Add(-90 * 24 * time.Hour)
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, occurred, "weekly")
 
-	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)
 	require.Len(t, *observed, 1)
 	require.Equal(t, repository.FollowUpActionSkip, (*observed)[0].Action)
@@ -481,7 +469,7 @@ func TestFollowUpManager_Outbound_OutOfOrder_Skips(t *testing.T) {
 	inters.hasResp = true
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 
-	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)
 	require.Equal(t, 1, inters.calls)
 	require.Len(t, *observed, 1)
@@ -494,7 +482,7 @@ func TestFollowUpManager_Outbound_HasResponseErr_Propagates(t *testing.T) {
 	inters.err = errors.New("boom")
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 
-	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.Error(t, err)
 }
 
@@ -509,7 +497,7 @@ func TestFollowUpManager_Mutual_NoPending_RecordsSkipNoReason(t *testing.T) {
 	h, _, _, observed := newUnitFollowUp(FollowUpModeCutover)
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionMutual, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 
-	_, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)
 	require.Len(t, *observed, 1)
 	require.Equal(t, repository.FollowUpActionSkip, (*observed)[0].Action)
@@ -624,34 +612,15 @@ func (s *stubFollowUpTaskWriter) GetContactTaskTx(context.Context, pgx.Tx, uuid.
 	return s.updatedTask, nil
 }
 
-// stubRefreshTodoistClient records Sync calls and returns a configurable
-// response / error. Used by the refresh post-commit test to exercise
-// the CalledTodoist=true observer emission.
-type stubRefreshTodoistClient struct {
-	syncCalls int
-	syncErr   error
-}
-
-func (s *stubRefreshTodoistClient) QuickAdd(context.Context, string, string) (*todoist.QuickAddTask, error) {
-	return nil, errors.New("stubRefreshTodoistClient.QuickAdd: not used in refresh-path test")
-}
-func (s *stubRefreshTodoistClient) Sync(context.Context, string, []string, []todoist.SyncCommand) (*todoist.SyncResponse, error) {
-	s.syncCalls++
-	return &todoist.SyncResponse{}, s.syncErr
-}
-
-// TestFollowUpManager_Refresh_EmitsTwoDecisions drives the refresh
-// branch end-to-end via the test-only DecisionObserver hook. Asserts:
+// TestFollowUpManager_Refresh_UpdatesMetadataAndEnqueuesUpdateOp drives
+// the refresh branch and asserts the new op-based contract:
 //
-//  1. The in-tx decision emits Action=Refresh with WouldDeadline and
-//     ContactTaskID set, CalledTodoist=false.
-//  2. The post-commit closure (once invoked) emits a SECOND Decision
-//     with Action=Refresh, CalledTodoist=true, and a matching
-//     ContactTaskID.
-//
-// Guards the Decision contract that stands in for the retired
-// shadow-table-based integration assertions.
-func TestFollowUpManager_Refresh_EmitsTwoDecisions(t *testing.T) {
+//  1. The local metadata due_date is advanced to the new deadline in tx.
+//  2. An update_deadline op for the row is enqueued in the SAME tx (no
+//     post-commit Todoist call, no carried deadline).
+//  3. Exactly one Decision is emitted (Action=Refresh) — the second
+//     post-Todoist emission is gone with the closure.
+func TestFollowUpManager_Refresh_UpdatesMetadataAndEnqueuesUpdateOp(t *testing.T) {
 	contactID := uuid.New()
 	taskID := uuid.New()
 	cadenceStr := "weekly"
@@ -671,49 +640,42 @@ func TestFollowUpManager_Refresh_EmitsTwoDecisions(t *testing.T) {
 	claims := &stubEventClaimer{}
 	contacts := &stubFollowUpContactReader{cadence: &cadenceStr}
 	writer := &stubFollowUpTaskWriter{updatedTask: tasks.pending}
-	inserter := &stubRiverInserter{}
-	client := &stubRefreshTodoistClient{}
+	inserter := &recordingInserter{}
 	settings := func(context.Context) (*todoist.Settings, string, error) {
 		return &todoist.Settings{ProjectID: "p", LabelName: "l", IntegrationInstanceID: "i"}, "token", nil
 	}
-	factory := func(string) todoist.Client { return client }
 
 	var observed []Decision
-	h := NewFollowUpManager(FollowUpModeCutover, claims, contacts, tasks, writer, inters, inserter, nil, settings, factory, "http://localhost", testWatchdog())
+	h := NewFollowUpManager(FollowUpModeCutover, claims, contacts, tasks, writer, inters, inserter, settings, "http://localhost", testWatchdog())
 	h.SetDecisionObserver(func(d Decision) { observed = append(observed, d) })
 
 	env := buildRecordedEnv(t, contactID, repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), cadenceStr)
-	postCommit, err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
 	require.NoError(t, err)
-	require.NotNil(t, postCommit, "refresh branch must return a non-nil post-commit closure")
 
-	// First emission — in-tx, CalledTodoist=false.
-	require.Len(t, observed, 1, "refresh must emit exactly one decision before post-commit runs")
+	// Metadata due_date advanced in tx.
+	require.Equal(t, taskID, writer.lastMetadataID)
+	require.NotEmpty(t, writer.lastMetadata["due_date"])
+
+	// Exactly one update_deadline op enqueued for this row, in-tx.
+	require.Len(t, inserter.args, 1, "refresh must enqueue exactly one op")
+	op, ok := inserter.args[0].(consumerjobs.TodoistTaskOpArgs)
+	require.True(t, ok, "enqueued arg must be a TodoistTaskOpArgs")
+	require.Equal(t, consumerjobs.TaskOpUpdateDeadline, op.Op)
+	require.Equal(t, taskID, op.ContactTaskID)
+
+	// Exactly one Decision emitted (the post-Todoist second emit is gone).
+	require.Len(t, observed, 1, "refresh must emit exactly one decision")
 	d0 := observed[0]
 	require.Equal(t, repository.FollowUpActionRefresh, d0.Action)
 	require.Empty(t, d0.SkipReason)
 	require.NotNil(t, d0.WouldDeadline, "refresh must report the would-be deadline")
 	require.NotNil(t, d0.ContactTaskID)
 	require.Equal(t, taskID, *d0.ContactTaskID)
-	require.False(t, d0.CalledTodoist, "in-tx emission must precede the post-commit Todoist call")
-
-	// Run the post-commit closure. It should call Todoist Sync + emit
-	// a second observer event with CalledTodoist=true.
-	postCommit(context.Background())
-	require.Equal(t, 1, client.syncCalls, "post-commit closure must invoke Todoist Sync exactly once")
-	require.Len(t, observed, 2, "post-commit Todoist success must emit a second decision")
-	d1 := observed[1]
-	require.Equal(t, repository.FollowUpActionRefresh, d1.Action)
-	require.True(t, d1.CalledTodoist, "second emission must carry CalledTodoist=true")
-	require.NotNil(t, d1.ContactTaskID)
-	require.Equal(t, taskID, *d1.ContactTaskID)
 }
 
-// stubRiverInserter records InsertTx calls and returns a nil result.
-// Refresh path doesn't enqueue a job on success (item_update is done
-// inline via the post-commit closure), so this stub should NOT be
-// invoked — but a type-satisfying stub is required for the manager
-// constructor.
+// stubRiverInserter satisfies the manager constructor for tests that
+// don't assert on enqueued jobs. Returns a nil result.
 type stubRiverInserter struct{}
 
 func (*stubRiverInserter) InsertTx(context.Context, pgx.Tx, river.JobArgs, *river.InsertOpts) (*rivertype.JobInsertResult, error) {

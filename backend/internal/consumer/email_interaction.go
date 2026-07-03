@@ -247,13 +247,13 @@ func (c *EmailInteractionConsumer) HandleEvent(ctx context.Context, tx pgx.Tx, e
 			postCommit = pc
 		} else {
 			// Fresh write: emit interaction.recorded atomically + inline-apply
-			// cadence + follow-up, exactly as InteractionRecorder does.
-			pc, emitErr := c.emitRecorded(ctx, tx, env, &p, res, req)
-			if emitErr != nil {
+			// cadence + follow-up, exactly as InteractionRecorder does. The
+			// fresh branch's remote effects leave via op jobs enqueued in this
+			// tx, so it contributes no post-commit closure.
+			if emitErr := c.emitRecorded(ctx, tx, env, &p, res, req); emitErr != nil {
 				return nil, emitErr
 			}
 			interactionID = res.Interaction.ID
-			postCommit = pc
 		}
 	} else {
 		// Found branch: extend (same direction) or promote (direction
@@ -318,16 +318,17 @@ func (c *EmailInteractionConsumer) aggregate(
 // payload, publish it in the same tx (so CadenceUpdater + FollowUpManager
 // get enqueued — cadence delivery path #1), then inline-apply cadence +
 // follow-up (the inline apply wins the durable event claim, so the async
-// workers no-op; the recorder pattern reused verbatim). Returns the
-// follow-up's post-commit closure (nil-safe).
+// workers no-op; the recorder pattern reused verbatim). All remote follow-
+// up effects leave via todoist_task_op jobs enqueued in this tx, so there
+// is no post-commit closure to return.
 func (c *EmailInteractionConsumer) emitRecorded(
 	ctx context.Context, tx pgx.Tx, env *events.Envelope, p *events.EmailEventPayload,
 	res *repository.RecordInteractionResult, req repository.RecordInteractionRequest,
-) (func(context.Context), error) {
+) error {
 	// Email never suppresses follow-ups (only kind=send task completions do).
 	recordedPayload, err := marshalRecordedPayload(res.Interaction, p.Direction, req, res.PrevCadence, res.CadenceAtEmit, false)
 	if err != nil {
-		return nil, fmt.Errorf("marshal interaction.recorded: %w", err)
+		return fmt.Errorf("marshal interaction.recorded: %w", err)
 	}
 	recordedEnv := &events.Envelope{
 		Source:     repository.InteractionSourceEmail,
@@ -337,22 +338,19 @@ func (c *EmailInteractionConsumer) emitRecorded(
 		ObservedAt: req.OccurredAt,
 	}
 	if err := c.bus.PublishTx(ctx, tx, recordedEnv); err != nil {
-		return nil, fmt.Errorf("publish interaction.recorded: %w", err)
+		return fmt.Errorf("publish interaction.recorded: %w", err)
 	}
 	if c.cadence != nil {
 		if cadenceErr := c.cadence.HandleEvent(ctx, tx, recordedEnv); cadenceErr != nil {
-			return nil, fmt.Errorf("inline apply cadence: %w", cadenceErr)
+			return fmt.Errorf("inline apply cadence: %w", cadenceErr)
 		}
 	}
-	var followUpPostCommit func(context.Context)
 	if c.followUp != nil {
-		pc, followUpErr := c.followUp.HandleEvent(ctx, tx, recordedEnv)
-		if followUpErr != nil {
-			return nil, fmt.Errorf("inline apply follow-up: %w", followUpErr)
+		if followUpErr := c.followUp.HandleEvent(ctx, tx, recordedEnv); followUpErr != nil {
+			return fmt.Errorf("inline apply follow-up: %w", followUpErr)
 		}
-		followUpPostCommit = pc
 	}
-	return followUpPostCommit, nil
+	return nil
 }
 
 // --------------------------------------------------------------------------
