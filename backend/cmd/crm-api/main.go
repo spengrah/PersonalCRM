@@ -107,6 +107,10 @@ func run() int {
 	// Initialize repositories
 	core := buildCoreRepos(database.Queries)
 
+	// River job-execution sampling repository (job_exec_sample). Feeds both the
+	// Subscribe recorder and the job_sample_trim periodic worker below.
+	jobSampleRepo := repository.NewJobSampleRepository(database.Queries)
+
 	// River client + event bus + consumer wiring. Built EARLY (before
 	// downstream services) so `pubBus` and `manualHandler` are in scope
 	// for constructors that need them (Calendar, Telegram, manual handlers).
@@ -288,6 +292,12 @@ func run() int {
 	// all before riverClient.Start.
 	registerSyncScheduler(reg, cfg, syncStk, riverClient)
 
+	// River job-execution sampling: register the trim periodic job, then start
+	// the Subscribe recorder BEFORE Start so no early finished-job events are
+	// missed. jobSampleWait joins the recorder goroutine on shutdown.
+	registerJobSampleWorkers(reg, jobSampleRepo, cfg)
+	jobSampleWait := startJobSampleRecorder(ctx, riverClient, jobSampleRepo)
+
 	if err := riverClient.Start(ctx); err != nil {
 		logger.Fatal().Err(err).Msg("failed to start river client")
 	}
@@ -410,6 +420,12 @@ func run() int {
 	if err := riverClient.Stop(riverCtx); err != nil {
 		logger.Warn().Err(err).Msg("river client stop returned error")
 	}
+
+	// Join the job-exec-sample recorder goroutine. Stop closed its subscription
+	// channel above, so this returns promptly; the DB pool is still open
+	// (database.Close is the last-running LIFO defer) so any in-flight write in
+	// the drain completes.
+	jobSampleWait()
 
 	logger.Info().Msg("server exited")
 

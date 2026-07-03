@@ -995,6 +995,19 @@ type Querier interface {
 	// future explicit SELECT list that drops a column is caught by a non-zero read.
 	// Production code MUST NOT call this.
 	InsertFullTelegramMessageForTest(ctx context.Context, arg InsertFullTelegramMessageForTestParams) (*TelegramMessage, error)
+	// Queries over job_exec_sample (the River job-execution sampling table) plus
+	// the Tier-0 one-shot read over live river_job.
+	//
+	// Convention (mirrors health.sql / sync_staleness.sql): every timestamp is
+	// supplied by the caller from accelerated time — these queries NEVER call
+	// NOW(). Analyst decision queries take @window_start/@window_end; the trim + Tier-0 take an
+	// accelerated @cutoff. This keeps insert-time (job_exec_sample.created_at) and
+	// trim-time on the same clock under time acceleration.
+	// Plain per-event insert (no tx). created_at is supplied explicitly from
+	// accelerated time (no DEFAULT NOW()). ON CONFLICT dedups a re-delivered
+	// Subscribe event so it cannot double-count and skew the aggregates, without
+	// erroring the writer.
+	InsertJobExecSample(ctx context.Context, arg InsertJobExecSampleParams) error
 	// First-commit insert path. ON CONFLICT DO NOTHING handles the
 	// concurrent-first-write race: the loser gets zero rows, re-reads the
 	// now-committed state, and surfaces ErrCursorBaseMismatch with the
@@ -1032,6 +1045,38 @@ type Querier interface {
 	// the atomic-claim dedup path observes count>0. Mirrors the row a real
 	// enqueue would insert; the worker never runs in these tests.
 	InsertRiverJobForTest(ctx context.Context, args []byte) error
+	// Metric 1: peak concurrency over [@window_start,@window_end]. Intervals are selected by
+	// OVERLAP with the window and clamped to it (so a job spanning the whole window
+	// still contributes); deltas are netted per timestamp before the running sum
+	// (so a release and an acquire at the same instant cancel — no false peak).
+	JobExecMaxConcurrency(ctx context.Context, arg JobExecMaxConcurrencyParams) (int32, error)
+	// Metric 3: run duration percentiles per kind over [@window_start,@window_end].
+	JobExecRunDurationByKind(ctx context.Context, arg JobExecRunDurationByKindParams) ([]*JobExecRunDurationByKindRow, error)
+	// Metric 1: total wall-seconds spent at concurrency >= @threshold (pass
+	// MaxWorkers). Same netted, window-clipped timeline as JobExecMaxConcurrency.
+	JobExecSaturatedSeconds(ctx context.Context, arg JobExecSaturatedSecondsParams) (float64, error)
+	// Metric 2 (context): overall wait percentiles per kind, from the stored
+	// queue_wait_ms (River's exact QueueWaitDuration — NOT a timestamp subtraction).
+	JobExecWaitByKind(ctx context.Context, arg JobExecWaitByKindParams) ([]*JobExecWaitByKindRow, error)
+	// THE gate query for metric 2. For each waiter, its wait window is
+	// [eligible_at, attempted_at] where eligible_at = attempted_at - queue_wait
+	// (robust to retry scheduled_at mutation). Reports, per kind, the wait DURATION
+	// that overlapped a SATURATED segment (c >= @threshold) vs. window-clipped
+	// denominators. Denominators (all consistent, window-clipped so a
+	// boundary-spanning wait can't understate the ratio): waited_in_window_s = the
+	// wait window clipped to [@window_start,@window_end]; saturated_wait_s ⊆ waited_in_window_s
+	// (both window-clipped). total_wait_s is the FULL per-attempt queue_wait for
+	// context only (may exceed the window). Use saturated_wait_s / waited_in_window_s
+	// as the "waits because the pool is full" ratio.
+	JobExecWaitDuringSaturationByKind(ctx context.Context, arg JobExecWaitDuringSaturationByKindParams) ([]*JobExecWaitDuringSaturationByKindRow, error)
+	// THE decisive metric-2 query: duration-weighted "who held the pool WHILE a
+	// given kind was waiting during saturation." For each waiter, intersect its wait
+	// window [eligible_at, attempted_at] with the saturated segments; then, over
+	// exactly those intersections, attribute slot-seconds to each OTHER running
+	// job's kind. Grouped by (wait_kind, running_kind), so a consumer kind's blame
+	// mix is scoped to ITS OWN saturated waits — a different saturated period
+	// dominated by other kinds cannot bleed into it.
+	JobExecWaitSlotBlameByKind(ctx context.Context, arg JobExecWaitSlotBlameByKindParams) ([]*JobExecWaitSlotBlameByKindRow, error)
 	// The newest finalized_at among COMPLETED jobs of a given kind — the
 	// watchdog-liveness signal that breaks the circular dependency where the sync
 	// component trusts a breach table that only the watchdog (itself a River job)
@@ -1177,6 +1222,9 @@ type Querier interface {
 	ListGChatIdentitiesForSync(ctx context.Context) ([]*ListGChatIdentitiesForSyncRow, error)
 	ListIdentitiesBySource(ctx context.Context, arg ListIdentitiesBySourceParams) ([]*ExternalIdentity, error)
 	ListIdentitiesForContact(ctx context.Context, contactID pgtype.UUID) ([]*ExternalIdentity, error)
+	// Test-only read of sample rows by river_job_id (raw SQL is banned in Go tests,
+	// so the real-Subscribe integration test reads rows back through this query).
+	ListJobExecSamplesByRiverJobIDForTest(ctx context.Context, riverJobIds []int64) ([]*ListJobExecSamplesByRiverJobIDForTestRow, error)
 	// Returns (source_id, last_content_hash) for every live
 	// external_contact row owned by the given (host_id, source). Powers
 	// GET /api/v1/host/:id/sync/:source/known-ids. Tombstoned rows are
@@ -2186,6 +2234,14 @@ type Querier interface {
 	// projection the harness does not touch), so the reset test proves TRUNCATE
 	// empties it. subject_node_id references the marker node inserted above.
 	TestInsertRelationshipSignalMarker(ctx context.Context) error
+	// Tier-0 integration test only: plant one FINISHED river_job with explicit
+	// kind, state, scheduled_at, attempted_at, and finalized_at so the
+	// Tier0RiverJobStatsByKind wait (attempted_at - scheduled_at) and run
+	// (finalized_at - attempted_at) percentiles can be asserted against known
+	// values. All timestamps are caller-supplied (no NOW()). Extends
+	// TestInsertRiverJobWithStateForTest with an explicit attempted_at (which that
+	// query leaves NULL) since Tier-0's wait/run arithmetic needs it populated.
+	TestInsertRiverJobFullTimingForTest(ctx context.Context, arg TestInsertRiverJobFullTimingForTestParams) error
 	// /health river-component integration test only: plant one river_job with an
 	// explicit kind, state, scheduled_at, and (nullable) finalized_at so the
 	// discarded-count / oldest-due / latest-completed-by-kind queries can be
@@ -2248,6 +2304,15 @@ type Querier interface {
 	// to well-formed JSONB arrays (jsonb_array_elements raises on scalar/object
 	// input). Do NOT call from production code.
 	TestParityFindExternalContactsByNormalizedEmailLegacy(ctx context.Context, lower string) ([]*ExternalContact, error)
+	// One-shot wait/run-by-kind read over river_job rows finalized since @cutoff,
+	// before job_exec_sample has accrued. finalized_at is authoritative here (only
+	// finished rows have it); this reads the live River table, not our sample table.
+	// APPROXIMATE: wait here is attempted_at - scheduled_at over the LAST attempt
+	// only, and River mutates scheduled_at on retry, so for retried jobs this
+	// under/over-states the true available-wait. It is a rough first signal ONLY; do
+	// NOT compare it numerically to the Tier-1 queue_wait_ms metric, which is
+	// River's exact QueueWaitDuration.
+	Tier0RiverJobStatsByKind(ctx context.Context, cutoff pgtype.Timestamptz) ([]*Tier0RiverJobStatsByKindRow, error)
 	// Contact merge queries
 	// These queries support merging one contact (source) into another (target)
 	// Transfer contact methods from source to target contact
@@ -2260,6 +2325,9 @@ type Querier interface {
 	// transitions) knowledge_to + closure_reason. The terminal-knowledge_to CHECK
 	// enforces the iff at the schema level.
 	TransitionStatus(ctx context.Context, arg TransitionStatusParams) error
+	// Housekeeping DELETE. Cutoff is accelerated-now minus the retention window,
+	// computed by the caller (NOT SQL NOW()).
+	TrimJobExecSamples(ctx context.Context, cutoff pgtype.Timestamptz) (int64, error)
 	UnlinkIdentityFromContact(ctx context.Context, id pgtype.UUID) (*ExternalIdentity, error)
 	// Dedup re-aggregate: on a corroborating write, raise confidence (SP1 rule:
 	// max(existing, incoming)) and recompute trust_tier. trust_tier is nullable.

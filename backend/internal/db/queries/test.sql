@@ -844,6 +844,7 @@ TRUNCATE TABLE
     external_sync_log,
     external_sync_state,
     interaction,
+    job_exec_sample,
     mac_host,
     mac_host_pairing_token,
     meeting_note,
@@ -1095,3 +1096,14 @@ INSERT INTO river_job (
 -- metadata, max_attempts.
 INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts, scheduled_at, finalized_at)
 VALUES (@kind, 'default', @state::river_job_state, '{}'::jsonb, '{}'::jsonb, 1, 1, @scheduled_at, @finalized_at);
+
+-- name: TestInsertRiverJobFullTimingForTest :exec
+-- Tier-0 integration test only: plant one FINISHED river_job with explicit
+-- kind, state, scheduled_at, attempted_at, and finalized_at so the
+-- Tier0RiverJobStatsByKind wait (attempted_at - scheduled_at) and run
+-- (finalized_at - attempted_at) percentiles can be asserted against known
+-- values. All timestamps are caller-supplied (no NOW()). Extends
+-- TestInsertRiverJobWithStateForTest with an explicit attempted_at (which that
+-- query leaves NULL) since Tier-0's wait/run arithmetic needs it populated.
+INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts, scheduled_at, attempted_at, finalized_at)
+VALUES (@kind, 'default', @state::river_job_state, '{}'::jsonb, '{}'::jsonb, 1, 1, @scheduled_at, @attempted_at, @finalized_at);

@@ -497,6 +497,7 @@ TRUNCATE TABLE
     external_sync_log,
     external_sync_state,
     interaction,
+    job_exec_sample,
     mac_host,
     mac_host_pairing_token,
     meeting_note,
@@ -2225,6 +2226,37 @@ VALUES ('00000000-0000-0000-0000-0000000000d5'::uuid, 'synthetic-reset-marker', 
 // empties it. subject_node_id references the marker node inserted above.
 func (q *Queries) TestInsertRelationshipSignalMarker(ctx context.Context) error {
 	_, err := q.db.Exec(ctx, TestInsertRelationshipSignalMarker)
+	return err
+}
+
+const TestInsertRiverJobFullTimingForTest = `-- name: TestInsertRiverJobFullTimingForTest :exec
+INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts, scheduled_at, attempted_at, finalized_at)
+VALUES ($1, 'default', $2::river_job_state, '{}'::jsonb, '{}'::jsonb, 1, 1, $3, $4, $5)
+`
+
+type TestInsertRiverJobFullTimingForTestParams struct {
+	Kind        string             `json:"kind"`
+	State       RiverJobState      `json:"state"`
+	ScheduledAt pgtype.Timestamptz `json:"scheduled_at"`
+	AttemptedAt pgtype.Timestamptz `json:"attempted_at"`
+	FinalizedAt pgtype.Timestamptz `json:"finalized_at"`
+}
+
+// Tier-0 integration test only: plant one FINISHED river_job with explicit
+// kind, state, scheduled_at, attempted_at, and finalized_at so the
+// Tier0RiverJobStatsByKind wait (attempted_at - scheduled_at) and run
+// (finalized_at - attempted_at) percentiles can be asserted against known
+// values. All timestamps are caller-supplied (no NOW()). Extends
+// TestInsertRiverJobWithStateForTest with an explicit attempted_at (which that
+// query leaves NULL) since Tier-0's wait/run arithmetic needs it populated.
+func (q *Queries) TestInsertRiverJobFullTimingForTest(ctx context.Context, arg TestInsertRiverJobFullTimingForTestParams) error {
+	_, err := q.db.Exec(ctx, TestInsertRiverJobFullTimingForTest,
+		arg.Kind,
+		arg.State,
+		arg.ScheduledAt,
+		arg.AttemptedAt,
+		arg.FinalizedAt,
+	)
 	return err
 }
 

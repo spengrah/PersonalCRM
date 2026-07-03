@@ -1,0 +1,5 @@
+BEGIN;
+
+DROP TABLE IF EXISTS job_exec_sample;
+
+COMMIT;

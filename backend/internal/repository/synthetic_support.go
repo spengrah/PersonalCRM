@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/db"
 
 	"github.com/google/uuid"
@@ -670,10 +671,11 @@ func (r *SyntheticSupportRepository) InsertNonFinalRiverJob(ctx context.Context)
 
 // InsertResetMarkers seeds a marker row into the standalone (harness-untouched)
 // wiped tables — oauth_credential, external_sync_state, telegram_session, tag,
-// and the derived-storage projections (embedding, relationship_signal) — so the
-// reset test proves TRUNCATE empties tables the synthetic harness does not
-// populate. The two projections start empty otherwise, so without a marker the
-// catalog guard could not catch their omission from the TRUNCATE list. Test only.
+// the derived-storage projections (embedding, relationship_signal), and
+// job_exec_sample — so the reset test proves TRUNCATE empties tables the
+// synthetic harness does not populate. These tables start empty otherwise, so
+// without a marker the catalog guard could not catch their omission from the
+// TRUNCATE list. Test only.
 func (r *SyntheticSupportRepository) InsertResetMarkers(ctx context.Context) error {
 	if err := r.queries.TestInsertOAuthCredentialMarker(ctx); err != nil {
 		return err
@@ -694,7 +696,26 @@ func (r *SyntheticSupportRepository) InsertResetMarkers(ctx context.Context) err
 	if err := r.queries.TestInsertEmbeddingMarker(ctx); err != nil {
 		return err
 	}
-	return r.queries.TestInsertRelationshipSignalMarker(ctx)
+	if err := r.queries.TestInsertRelationshipSignalMarker(ctx); err != nil {
+		return err
+	}
+	// job_exec_sample is written only by the live Subscribe recorder, never by
+	// the synthetic harness, so it starts empty — seed one row (via the
+	// production sqlc insert path; created_at = accelerated now, attempted_at
+	// backdated 1s to satisfy the finalized_at >= attempted_at CHECK) so the
+	// catalog guard genuinely fails if the table drops out of the TRUNCATE list.
+	now := accelerated.GetCurrentTime()
+	return r.queries.InsertJobExecSample(ctx, db.InsertJobExecSampleParams{
+		RiverJobID:  1,
+		Kind:        "reset_marker",
+		Queue:       "default",
+		AttemptedAt: pgtype.Timestamptz{Time: now.Add(-time.Second), Valid: true},
+		FinalizedAt: pgtype.Timestamptz{Time: now, Valid: true},
+		Attempt:     1,
+		State:       "completed",
+		QueueWaitMs: 0,
+		CreatedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+	})
 }
 
 // ContactBucket is the bucket-defining projection of a seeded contact (profile

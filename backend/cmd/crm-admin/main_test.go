@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/google"
 	"personal-crm/backend/internal/messages"
 	"personal-crm/backend/internal/repository"
@@ -1567,6 +1568,135 @@ func TestRunRetryJobError(t *testing.T) {
 		t.Fatal("expected error")
 	}
 	if !strings.Contains(err.Error(), "retry job 412") {
+		t.Fatalf("expected wrapped error, got %v", err)
+	}
+}
+
+// fakeTier0Reader records the cutoff it was called with and returns canned rows.
+type fakeTier0Reader struct {
+	rows       []repository.Tier0Row
+	err        error
+	calls      int
+	lastCutoff time.Time
+}
+
+func (f *fakeTier0Reader) Tier0StatsByKind(_ context.Context, cutoff time.Time) ([]repository.Tier0Row, error) {
+	f.calls++
+	f.lastCutoff = cutoff
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.rows, nil
+}
+
+func TestParseArgsRiverTier0Flags(t *testing.T) {
+	t.Run("default window-hours", func(t *testing.T) {
+		opts, err := parseArgs([]string{"--river-tier0"})
+		if err != nil {
+			t.Fatalf("parse error: %v", err)
+		}
+		if !opts.riverTier0 {
+			t.Fatal("--river-tier0 not set")
+		}
+		if opts.windowHours != 24 {
+			t.Fatalf("expected default window-hours 24, got %d", opts.windowHours)
+		}
+	})
+
+	t.Run("window-hours override", func(t *testing.T) {
+		opts, err := parseArgs([]string{"--river-tier0", "--window-hours", "72"})
+		if err != nil {
+			t.Fatalf("parse error: %v", err)
+		}
+		if opts.windowHours != 72 {
+			t.Fatalf("expected window-hours 72, got %d", opts.windowHours)
+		}
+	})
+}
+
+func TestRunRiverTier0DispatchesAndFormats(t *testing.T) {
+	deps, stdout, _, _, _, _ := newTestDeps()
+	tier0 := &fakeTier0Reader{rows: []repository.Tier0Row{
+		{Kind: "gcal_sync", N: 5, P50WaitS: 0.250, P50RunS: 1.500},
+		{Kind: "cadence_updater", N: 12, P50WaitS: 0.010, P50RunS: 0.020},
+	}}
+	deps.tier0 = tier0
+
+	before := accelerated.GetCurrentTime()
+	err := run(context.Background(), runOptions{riverTier0: true, windowHours: 24}, deps)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if tier0.calls != 1 {
+		t.Fatalf("expected 1 tier0 call, got %d", tier0.calls)
+	}
+	// Cutoff is ~24h before now (accelerated time == wall time in tests).
+	wantCutoff := before.Add(-24 * time.Hour)
+	if diff := tier0.lastCutoff.Sub(wantCutoff); diff < -time.Minute || diff > time.Minute {
+		t.Fatalf("cutoff not ~24h before now: got %s, want ~%s", tier0.lastCutoff, wantCutoff)
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"river-tier0 (last 24h",
+		"APPROXIMATE",
+		"kind=gcal_sync n=5 p50_wait_s=0.250 p50_run_s=1.500",
+		"kind=cadence_updater n=12 p50_wait_s=0.010 p50_run_s=0.020",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q: %s", want, out)
+		}
+	}
+}
+
+func TestRunRiverTier0Empty(t *testing.T) {
+	deps, stdout, _, _, _, _ := newTestDeps()
+	deps.tier0 = &fakeTier0Reader{rows: nil}
+
+	if err := run(context.Background(), runOptions{riverTier0: true, windowHours: 24}, deps); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "no finished jobs in window") {
+		t.Fatalf("expected empty-window message, got %s", stdout.String())
+	}
+}
+
+func TestRunRiverTier0RejectsBadWindow(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		windowHours int
+	}{
+		{"zero", 0},
+		{"negative", -5},
+		{"above_max", maxTier0WindowHours + 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			deps, _, _, _, _, _ := newTestDeps()
+			tier0 := &fakeTier0Reader{}
+			deps.tier0 = tier0
+
+			err := run(context.Background(), runOptions{riverTier0: true, windowHours: tc.windowHours}, deps)
+			if err == nil {
+				t.Fatalf("expected error for window-hours=%d", tc.windowHours)
+			}
+			if !strings.Contains(err.Error(), "--window-hours must be between") {
+				t.Fatalf("expected window-hours validation error, got %v", err)
+			}
+			if tier0.calls != 0 {
+				t.Fatalf("Tier0StatsByKind must not be called on a bad window; got %d", tier0.calls)
+			}
+		})
+	}
+}
+
+func TestRunRiverTier0Error(t *testing.T) {
+	deps, _, _, _, _, _ := newTestDeps()
+	deps.tier0 = &fakeTier0Reader{err: errors.New("db down")}
+
+	err := run(context.Background(), runOptions{riverTier0: true, windowHours: 24}, deps)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "river tier0 stats") {
 		t.Fatalf("expected wrapped error, got %v", err)
 	}
 }
