@@ -113,8 +113,8 @@ func (w *TodoistTaskOpWorker) Work(ctx context.Context, j *river.Job[consumerjob
 	}
 }
 
-// Timeout bounds the per-job runtime. Create issues one or two HTTP calls
-// plus a short write tx; the other verbs issue a single HTTP call. 60s
+// Timeout bounds the per-job runtime. Every verb issues a single HTTP
+// call (create adds a short write tx); one op = one HTTP write. 60s
 // covers the create path; per-verb tightening isn't worth the complexity.
 func (*TodoistTaskOpWorker) Timeout(*river.Job[consumerjobs.TodoistTaskOpArgs]) time.Duration {
 	return 60 * time.Second
