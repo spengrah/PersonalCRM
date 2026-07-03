@@ -1,0 +1,446 @@
+domain: knowledge
+prefix: KNW
+maturity: reviewed
+behaviors:
+  # --- Assertion write path ---
+
+  - id: KNW-001
+    title: All assertion-store writes go through one validated write path
+    type: invariant
+    status: current
+    statement: every producer of knowledge (user profile edits, contact merges, enrichment inference, operator backfills) writes to the assertion store through the single validated assert path — which owns proposition identity, cardinality and supersession, the bi-temporal clocks, provenance dedup, and event emission in one transaction — and a validation failure rejects the write (rolling back the transaction) rather than silently dropping the assertion.
+    provenance: [AssertService, ErrAssertValidation, knowledgeWriter, ContactKnowledgeMigrationService, TagMigrationService]
+    notes: There is no raw-INSERT side door; even the tag/column data migrations route through this path so dedup and events apply uniformly.
+
+  - id: KNW-002
+    title: Assertion writes are validated against the catalog and the live graph
+    type: business-logic
+    status: current
+    given: an assert request naming a subject, predicate, and payload
+    when: the write is validated
+    then:
+      - the predicate must exist in the predicate catalog
+      - the subject node must exist, not be soft-deleted, and match the predicate's subject type (person, venue, or a specific entity subtype)
+      - an edge predicate requires a live, type-matched object node and no scalar value
+      - a fact predicate requires exactly one scalar value matching the predicate's value type, and text values must be non-empty after trimming
+      - confidence must be within 0-100, and any salience override within 0-100 (salience defaults from the predicate)
+      - a validity range whose end does not fall after its effective start is rejected as degenerate, even when an existing row would otherwise have matched
+    provenance: [AssertService.validate, validateFactValue, matchNodeType]
+    notes: The salience range check runs on the new-row path; a write that corroborates an existing live proposition never touches salience, so an out-of-range override there is ignored rather than rejected.
+
+  - id: KNW-003
+    title: Provenance locators are validated per source kind
+    type: business-logic
+    status: current
+    given: an assert request carrying provenance locators
+    when: the locators are validated
+    then:
+      - at least one locator is required on every assertion
+      - producer kind and source kind must come from their closed vocabularies
+      - metadata-only sources (phone calls, calendar events) may not back a fact assertion
+      - a locator referencing a content row must point at an existing (non-deleted) row at write time
+      - locators without a content row (user, agent session, transcript kinds) still require a stable non-empty source id, since it keys idempotent re-runs
+    provenance: [AssertService.validateLocators, SourceKindRequiresExistenceCheck, assertion_provenance.sql]
+
+  - id: KNW-004
+    title: Landing status follows the predicate's review policy
+    type: business-logic
+    status: current
+    given: a valid assert request for a predicate with a default review policy
+    when: the new assertion lands
+    then:
+      - an auto-if-confident predicate lands the assertion as accepted
+      - an always-confirm predicate lands it as proposed, awaiting review
+      - a caller may force an otherwise auto-applied write to land proposed
+    provenance: [AssertService.AssertTx landingAccepted, predicate.default_review_policy, 066_seed_predicate_catalog.up.sql]
+
+  - id: KNW-005
+    title: Relationship edges are stored in one canonical form
+    type: data
+    status: current
+    given: an edge assertion whose predicate is symmetric or has an inverse
+    when: the edge is written
+    then:
+      - a symmetric edge stores its pair in a deterministic participant order, so both statements of the relationship are one row
+      - an inverse pair rewrites to the canonical predicate with subject and object swapped, so the relationship stated from either side collapses to one row
+    provenance: [canonicalEdge, 066_seed_predicate_catalog.up.sql inverse seeding]
+
+  - id: KNW-006
+    title: Re-asserting an existing proposition corroborates instead of duplicating
+    type: data
+    status: current
+    given: a live assertion whose proposition identity (canonical subject, predicate, normalized value, valid-time bucket) matches an incoming write
+    when: the write is applied
+    then:
+      - no new assertion row is created
+      - the incoming provenance locators are appended, with already-known locators deduplicated on their full locator identity
+      - confidence re-aggregates to the maximum across old and new evidence
+      - the trust tier re-aggregates to the strongest producer across all locators (user over agent over extractor)
+      - a proposed row that is corroborated by an accepted-landing write is upgraded to accepted, including accept-time conflict resolution
+    provenance: [computePropositionKey, AssertService.corroborate, appendProvenance, computeLocatorHash]
+    notes: Value normalization for identity is case/whitespace-insensitive for text, calendar-day for dates, canonical float form for numbers; valid-time bucketing granularity is per-predicate (day/month/year/none).
+
+  - id: KNW-007
+    title: At most one live assertion exists per proposition
+    type: invariant
+    status: current
+    statement: the database enforces at most one live (proposed or accepted, knowledge-open) assertion per proposition key via a partial unique index, and a concurrent identical write that loses the race is recovered inside the transaction (savepoint rollback, re-read, corroborate the winner) rather than failing the caller.
+    provenance: [idx_assertion_live_proposition, insertAssertionWithRecover, isLivePropositionViolation]
+
+  - id: KNW-008
+    title: A different value written to a single-cardinality slot supersedes the current one
+    type: business-logic
+    status: current
+    given: a single-cardinality slot (e.g. a person's current location) holding an accepted value
+    when: a different value is asserted as accepted with an overlapping validity window
+    then:
+      - the new row is inserted and becomes the current value
+      - the prior row is closed as superseded with a pointer to its successor and its knowledge window closed
+      - exactly one accepted row remains current for the slot
+    provenance: [AssertService.writeNew, closeConflicts, FindAcceptedForSlot]
+    notes: Concurrent writers to the same slot serialize on a per-slot advisory lock taken before any row lock; symmetric predicates lock per participant in sorted order to stay deadlock-free.
+
+  - id: KNW-009
+    title: Reaffirming the same value widens the existing stint instead of superseding it
+    type: business-logic
+    status: current
+    given: an accepted assertion and an incoming accepted write carrying the same value for the same slot with an overlapping window
+    when: the write is applied
+    then:
+      - no new row is created and nothing is superseded as a value change
+      - the surviving row's validity window widens to the union of the windows
+      - a window that bridges several non-contiguous same-value stints merges them all into one survivor (provenance moved, losers closed pointing at the survivor)
+      - a survivor already bounded by a pending future successor keeps that upper bound (only the backward extension applies)
+    provenance: [widenReaffirmation, sameValueConflicts, mergeSameValue]
+
+  - id: KNW-010
+    title: Past-bounded history coexists with the current value
+    type: business-logic
+    status: current
+    given: a slot with a current accepted value
+    when: a different value is asserted with a validity window that ended in the past
+    then:
+      - the historical row is inserted alongside the current one without superseding it
+      - the current value is unchanged
+      - a same-value past stint still merges into the existing row for that value rather than duplicating it
+    provenance: [AssertService.writeNew pastBounded branch]
+
+  - id: KNW-011
+    title: A future-dated successor bounds the current value until its date arrives
+    type: business-logic
+    status: current
+    given: a slot with a current accepted value
+    when: a different value is asserted with a validity start in the future
+    then:
+      - the prior stays accepted (still the current value) but its validity end is bounded at the successor's start and it records the successor
+      - a prior that would never be current under the new timeline is terminalized immediately, keeping its own validity end
+    provenance: [closeConflicts, closeBoundary, BoundPendingSuccessor]
+
+  - id: KNW-012
+    title: A scheduled rollover terminalizes bounded values whose date has passed
+    type: business-logic
+    status: current
+    given: accepted assertions bounded by a pending successor whose validity end has been reached
+    when: the periodic rollover sweep runs
+    then:
+      - each due row flips to superseded with its knowledge window closed, and a superseded event is emitted per row in the same transaction
+      - an event-publish failure rolls the flip back so the next run retries
+      - the sweep is stateless and idempotent, runs daily, and catches up overdue rollovers on startup
+      - a bounded-past row with no successor is never touched (it remains legitimate accepted history)
+    provenance: [AssertService.RunRollover, RolloverDueBoundedSuccessors, AssertionRolloverWorker]
+
+  - id: KNW-013
+    title: Clearing a slot closes the current value with no successor
+    type: business-logic
+    status: current
+    given: a single-cardinality slot
+    when: a closure is requested for the slot
+    then:
+      - the current accepted row, if any, is closed as ended at the current time with no successor, and the slot becomes a gap
+      - with no current row the closure is an idempotent no-op
+    provenance: [AssertService.AssertClosure, ClosureReasonEnded]
+    notes: This is what a user clearing the location or birthday field on the contact form invokes (see KNW-028 and CON-006) — history is closed, never deleted.
+
+  - id: KNW-014
+    title: Accepting a proposed assertion applies full slot conflict resolution
+    type: business-logic
+    status: current
+    given: a proposed assertion under review
+    when: it is accepted
+    then:
+      - only a proposed assertion may be accepted; any other status is rejected as a validation error
+      - the acceptance runs single-cardinality conflict resolution as if the value were being written now, superseding different-value priors
+      - an acceptance that reaffirms an existing accepted value is absorbed into that survivor (provenance and confidence folded in, the accepting row closed) and the survivor is returned
+      - a past-bounded row is accepted as coexisting history without superseding anything
+      - concurrent lifecycle transitions on the same row are serialized so only one succeeds
+    provenance: [AssertService.Accept, resolveAcceptConflicts, GetAssertionForUpdate]
+
+  - id: KNW-015
+    title: Reject and retract are status-guarded terminal transitions
+    type: business-logic
+    status: current
+    given: an assertion under review or correction
+    when: a reject or retract transition is applied
+    then:
+      - only a proposed assertion may be rejected; only an accepted assertion may be retracted
+      - the row becomes terminal with its closure reason recorded and its knowledge window closed
+      - a rejected proposal never becomes a current value
+      - a retraction removes the value from current knowledge and is announced as a supersession (there is no separate retract event kind); the closure reason distinguishes it
+    provenance: [AssertService.Reject, AssertService.Retract, terminalTransition]
+
+  - id: KNW-016
+    title: The assertion row enforces its shape and clocks at the schema level
+    type: data
+    status: current
+    given: any attempt to persist an assertion row
+    when: the row is written
+    then:
+      - exactly one payload is set (an object node reference, or one typed scalar)
+      - the knowledge window is closed if and only if the status is terminal (rejected, superseded, retracted)
+      - when both validity bounds are present the end is strictly after the start
+      - the knowledge end is never before the knowledge start
+      - numeric values must be finite (NaN and infinities are rejected)
+      - status, confidence, and salience are constrained to their closed sets and 0-100 ranges
+      - node and predicate references restrict hard deletes rather than cascading
+    provenance: [067_assertion_store.up.sql CHECK constraints]
+
+  - id: KNW-017
+    title: Every assertion state change emits a durable event inside the write transaction
+    type: invariant
+    status: current
+    statement: assertion lifecycle changes (proposed, accepted, superseded, rejected) and provenance additions publish events on the transactional event bus within the same transaction as the state change, keyed idempotently (one-shot per lifecycle transition, per-locator for provenance, per merge-destination for merge moves) so retries never double-publish; the event bus is mandatory wiring — the write path does not operate without it.
+    provenance: [emitAssertionEvent, emitProvenanceAddedEvent, emitMergeMoveEvent, busPublisher]
+
+  - id: KNW-018
+    title: Only accepted and superseded events drive downstream recomputation
+    type: business-logic
+    status: current
+    given: a published assertion event
+    when: consumer jobs are routed
+    then:
+      - accepted and superseded events enqueue the knowledge-cache refresh worker (with bounded retries)
+      - proposed, rejected, and provenance-added events deliberately have no consumer — they never change a current value and land durably for audit only
+    provenance: [events/bus.go consumerJobsForKind, KnowledgeCacheUpdaterJobArgs]
+
+  # --- Graph nodes and entities ---
+
+  - id: KNW-019
+    title: Node tombstones gate all live graph reads
+    type: invariant
+    status: current
+    statement: a node's single tombstone (deleted-at, set by contact deletion or merge) removes it from every live graph read — an assertion is only current/live when its subject node is live and, for an edge, its object node is live — and entity and venue subtype rows carry no tombstone of their own, inheriting liveness from their parent node; assertion rows themselves are retained as history.
+    provenance: [GetCurrentAccepted, ListLiveEdgesForNode, node.deleted_at, entity.sql]
+    notes: This is why a deleted or merged-away contact's knowledge never resurfaces (see KNW-026); node soft-deletion itself is contact-domain scope (CON-010, CON-033).
+
+  - id: KNW-020
+    title: Place entities deduplicate on their normalized name
+    type: data
+    status: current
+    given: a location label to resolve to a place node
+    when: the place is ensured
+    then:
+      - the place is found or created by its case- and whitespace-insensitive normalized name, so the same place asserted across contacts or edits resolves to one node
+      - the node's display label preserves the original casing and spacing of its first write
+      - an empty label is rejected as a validation error
+      - two concurrent first-writes of the same new place resolve to a single node (the loser recovers from the uniqueness collision and adopts the winner's node)
+    provenance: [EnsurePlaceTx, idx_entity_subtype_name, isPlaceNameViolation]
+
+  # --- Node merge mechanics (invoked by contact merge — CON-033) ---
+
+  - id: KNW-021
+    title: Merging nodes re-canonicalizes repointed assertions and resolves winner-side collisions
+    type: business-logic
+    status: current
+    given: a loser node being merged into a winner (the loser already tombstoned with a merge alias)
+    when: the assertion merge runs
+    then:
+      - every assertion touching the loser (as subject or object) is rewritten onto the winner, re-canonicalized, and its proposition identity recomputed
+      - terminal rows are repointed silently as history
+      - a live row whose recomputed identity collides with a live winner-side row merges into it, and the accepted row always survives a collision with a proposed one — a merge never demotes accepted knowledge
+      - repointed live rows announce their move with an event keyed per merge destination, so retrying the same merge is idempotent while a chained merge announces again
+      - all implied single-cardinality slot locks are collected up front and acquired in sorted order
+    provenance: [MergeAssertionsTx, planRepoint, applyRepoint, emitMergeMoveEvent]
+    notes: The domain boundary is intentional. CON-033 owns the merge-level contract (loser assertions repoint onto the winner node, before the field-selection apply so the user's choices win); this behavior owns the knowledge-side mechanics that bare repointing elides — re-canonicalization, proposition-identity recompute, winner-side collision resolution (accepted always survives), self-loop closure (KNW-022), slot re-competition (KNW-023), and per-destination merge events. When the graph merge runs relative to the field-selection apply is contact-domain scope — CON-033.
+
+  - id: KNW-022
+    title: Edges between the merging pair collapse and close
+    type: business-logic
+    status: current
+    given: an edge connecting the loser and winner of a node merge
+    when: the merge rewrite would turn it into a self-referencing edge
+    then:
+      - a live self-collapsed edge is closed as ended (a node cannot relate to itself), with its validity end stamped only if the edge was genuinely open at that moment
+      - a terminal self-collapsed edge is left untouched as dead history
+    provenance: [closeSelfLoop, repointedAssertion.selfLoop]
+
+  - id: KNW-023
+    title: A repointed current value competes in the winner's slot
+    type: business-logic
+    status: current
+    given: an accepted single-cardinality assertion repointed onto the winner during a node merge
+    when: it lands in the winner's slot
+    then:
+      - same-value priors on the winner widen into the repointed row (windows unioned, provenance folded)
+      - the widened survivor inherits the tightest pending-future-successor bound among the rows folded in, so the scheduled rollover still terminalizes it on time
+      - different-value overlapping priors are superseded exactly as on the normal write path
+      - a past-bounded repointed row coexists as history and supersedes nothing
+    provenance: [applyRepoint slot resolution, widenMergedSurvivor]
+
+  # --- Derived cache columns (contact location / birthday / how-met) ---
+
+  - id: KNW-024
+    title: Contact knowledge columns are derived from current-accepted assertions
+    type: data
+    status: current
+    given: a contact's location, birthday, and how-met cache columns
+    when: a cache refresh recomputes a column
+    then:
+      - the value is recomputed from scratch from the current-accepted assertion for that contact and predicate (never patched incrementally), which makes supersession, closure, and retraction all land correctly
+      - when no current-accepted assertion exists, the column is cleared to NULL
+      - the location column carries the linked place node's display label
+      - a current location edge with no place node is surfaced as a hard error, never a silently blank cache
+    provenance: [KnowledgeCacheUpdater.RefreshTx, resolveLivesInLabel, GetCurrentAccepted]
+    notes: The contact-side rule that contact writes never touch these columns directly is CON-004; this behavior owns the derivation itself.
+
+  - id: KNW-025
+    title: Cache refresh is inline for the writer and event-driven for everyone else
+    type: business-logic
+    status: current
+    given: an assertion write that affects a contact knowledge column
+    when: the cache is refreshed
+    then:
+      - writes made inside a contact create/update/merge/enrichment transaction refresh the columns inline in that transaction, so the returned contact already reflects the new values on commit
+      - accepted and superseded assertion events from any other producer refresh the column asynchronously via a queued worker with bounded retries
+      - the event path ignores predicates that do not back a cache column, while a direct refresh call with an unsupported predicate is rejected as a programming error
+    provenance: [knowledgeWriter.refreshAll, KnowledgeCacheUpdater.HandleEvent, KnowledgeCacheUpdaterWorker]
+
+  - id: KNW-026
+    title: Cache maintenance is bookkeeping, not a profile edit
+    type: data
+    status: current
+    given: a contact whose knowledge cache column is being refreshed
+    when: the column update is applied
+    then:
+      - the contact's updated-at timestamp is not bumped
+      - a soft-deleted contact row is never written
+      - a deleted or merged-away contact has no current-accepted values (node liveness gating), so its cached knowledge never resurrects
+    provenance: [UpdateContactLocationCache, contact.sql cache queries, GetCurrentAccepted node join]
+
+  # --- Contact profile fields as knowledge (the cutover write path) ---
+
+  - id: KNW-027
+    title: Contact profile knowledge fields are written as assertions
+    type: business-logic
+    status: current
+    given: a contact create, update, or merge carrying location, birthday, or how-met values
+    when: the profile write is applied
+    then:
+      - each field value becomes an accepted assertion (location as an edge to a deduplicated place, birthday as a date fact, how-met as a text fact) in the same transaction as the contact write
+      - a direct user edit carries user provenance at full confidence
+      - the provenance locator is deterministic per source, contact, and field, so a retry or re-run corroborates the same assertion instead of duplicating it
+      - the services refuse to run without the knowledge writer wired, rather than silently dropping a value
+    provenance: [knowledgeWriter.assertCreate, knowledgeWriter.locator, knowledgeAssertConfidence, ContactService.SetKnowledgeWriter]
+    notes: The contact-domain statements of this seam are CON-004 (columns never written directly) and CON-006 (clear semantics); this behavior owns the assertion-side mechanics.
+
+  - id: KNW-028
+    title: Blank knowledge values mean no value, and clears close slots
+    type: business-logic
+    status: current
+    given: a contact write whose location or how-met value is blank or whitespace-only, or whose location/birthday was cleared
+    when: the knowledge fields are reconciled
+    then:
+      - a whitespace-only location or how-met normalizes to no-value; a blank location never mints a place node
+      - on update, a cleared location or birthday closes that slot (KNW-013), preserving the assertion history
+      - an absent how-met on update is a no-op rather than a clear, because the contact form carries no how-met input and its absence must not wipe history
+    provenance: [knowledgeFieldValues.normalized, knowledgeWriter.applyUpdate, reconcileClearable]
+
+  # --- Enrichment-inferred knowledge ---
+
+  - id: KNW-029
+    title: Enrichment infers knowledge only into empty fields, as agent-provenance assertions
+    type: business-logic
+    status: current
+    given: a contact being enriched from a linked external contact
+    when: the enrichment computes inferred fields
+    then:
+      - an inferred birthday or location is taken only when the contact's corresponding field is currently empty; existing values are never overwritten
+      - inferred values land as assertions with agent provenance at reduced (non-certain) confidence, in the same transaction as the profile update
+      - the enrichment provenance locator is deterministic, so re-running the enrichment corroborates rather than duplicates
+    provenance: [EnrichmentService.EnrichContactFromExternal, assertInferredKnowledge, knowledgeAssertConfidence]
+    notes: The enrichment trigger and method-enrichment mechanics are imports-domain scope (IMP-015 cross-references this seam).
+
+  - id: KNW-030
+    title: Losing an inferred knowledge value is an error, not a warning
+    type: business-logic
+    status: current
+    given: an enrichment that inferred a location or birthday
+    when: the transaction persisting the inferred assertions fails, or the knowledge writer is not wired
+    then:
+      - the enrichment surfaces an error instead of reporting success, because the assertion store is the value's only home
+      - an enrichment carrying no inferred knowledge (photo, cadence, or name only) keeps best-effort warn-and-continue semantics for profile-write failures
+    provenance: [EnrichmentService inferred-knowledge error branches]
+
+  # --- Operator backfills ---
+
+  - id: KNW-031
+    title: The knowledge-column backfill is an idempotent mirror into the graph
+    type: business-logic
+    status: current
+    given: legacy contact rows with location, birthday, or how-met column values
+    when: the operator runs the knowledge-column migration command
+    then:
+      - each populated column of every live contact becomes an accepted assertion through the standard write path (location via the deduplicated place entity)
+      - migrated assertions carry user provenance at full confidence, with the contact's creation time preserved as the knowledge time
+      - soft-deleted contacts and blank values are skipped
+      - re-running the command corroborates existing assertions instead of duplicating them (deterministic per-contact-per-column locators)
+    provenance: [ContactKnowledgeMigrationService, ListContactsWithKnowledgeColumns, crm-admin --migrate-contact-knowledge-columns]
+    notes: Preserving historical knowledge time (the override) is reserved for migrations/backfills; live producers always get the current time as knowledge time.
+
+  - id: KNW-032
+    title: The tag migration mirrors legacy tags into the graph, failing loudly on ambiguity
+    type: business-logic
+    status: current
+    given: legacy tags and contact-tag links
+    when: the operator runs the tag migration command
+    then:
+      - each distinct case-insensitive tag name becomes one tag entity node, preserving the original display casing and carrying the tag color in the entity detail
+      - each tag link of a live contact becomes an accepted tagged-as assertion with user provenance, using the link's creation time as knowledge time when known (otherwise the current time)
+      - tags whose names differ only by case abort the whole run before any node is created, listing the collisions for the operator to resolve
+      - a link referencing an unknown tag, or a contact missing its person node, fails the run loudly rather than skipping silently
+      - links of soft-deleted contacts are skipped and counted
+      - a re-run is idempotent (deterministic locators corroborate)
+    provenance: [TagMigrationService, ErrTagCaseCollision, assertTaggedAs, crm-admin --migrate-tags]
+    notes: Live tag CRUD does not currently dual-write tagged-as assertions — the graph mirror exists only via this migration. Deliberate phasing, with the graph consuming tags in a later phase.
+
+  # --- Surfaces ---
+
+  - id: KNW-033
+    title: Knowledge reaches the user only through the contact's derived fields
+    type: invariant
+    status: current
+    statement: no HTTP endpoint exposes assertions, graph nodes, edges, predicates, or provenance — the assertion store is invisible to clients, and the only client-visible projection of the knowledge graph is the contact payload's derived location, birthday, and how-met fields.
+    provenance: [cmd/crm-api/main.go SP1 no-handler comment, contact_dto.go]
+    notes: Deliberate phasing — the write API exists for later phases to consume over HTTP. how-met is carried on the wire contract but currently has no rendering or editing surface anywhere in the UI (which is why its absence on update is a no-op — KNW-028).
+
+  - id: KNW-034
+    title: Contact detail shows knowledge fields only when known
+    type: ux
+    status: current
+    given: a contact detail page
+    when: the profile section renders
+    then:
+      - a known location appears as a labeled row; an unknown location renders no row at all
+      - a known birthday appears as a labeled, human-readable date row; an unknown birthday renders no row
+    provenance: ["contacts/[id]/page.tsx knowledge rows"]
+
+  - id: KNW-035
+    title: Year-less birthdays display without a year or age
+    type: ux
+    status: current
+    given: a contact whose birthday was stored with the placeholder year that marks a year-less (imported) birthday
+    when: the birthday is displayed on any surface
+    then:
+      - the date renders as month and day only, with the placeholder year never shown
+      - no age is computed or displayed for it
+    provenance: [formatBirthday, isPlaceholderBirthday, birthdays.spec.ts placeholder assertions]
+    notes: The placeholder-year sentinel convention and the year-less rendering (formatBirthday drops the year on every surface — contact detail per KNW-034, the birthdays page, etc.) are the knowledge-domain derived-data concern owned here. Because no real year is stored there is no year to derive an age from; the landed CON-045 owns the birthdays-page display of that age-suppression outcome. The two are consistent, not competing — this row does not claim authority over CON-045.

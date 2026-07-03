@@ -1,0 +1,310 @@
+domain: notes-meetings
+prefix: NTS
+maturity: reviewed
+behaviors:
+  # --- Contact notepad note (per-contact freeform scratchpad) ---
+
+  - id: NTS-001
+    title: A contact has at most one notepad note
+    type: data
+    status: current
+    given: a contact
+    when: its notepad note is saved
+    then:
+      - at most one notepad note exists per contact, enforced by a partial unique index over notepad-category rows
+      - the notepad is the single note keyed by the reserved notepad category
+      - concurrent saves resolve to one row via an atomic upsert rather than creating duplicates
+    provenance: [idx_note_contact_notepad_unique, UpsertContactNoteByCategory, NoteRepository.UpsertNotepad, migration 024]
+    notes: The note table's category is otherwise free-form text, but notepad is the only category any live path writes.
+
+  - id: NTS-002
+    title: Saving the notepad is an upsert-or-delete keyed on emptiness
+    type: business-logic
+    status: current
+    given: a save of a contact's notepad body
+    when: the body is applied
+    then:
+      - the body is trimmed of surrounding whitespace before persistence
+      - a whitespace-only or empty body deletes the notepad, idempotently even when none exists
+      - a non-empty body creates or updates the single notepad note with the trimmed text
+    provenance: [NoteService.SaveContactNotepad]
+    notes: The same save endpoint is both save and delete; there is no separate delete route.
+
+  - id: NTS-003
+    title: Notepad notes are hard-deleted
+    type: invariant
+    status: current
+    statement: the note table has no soft-delete column, so deleting a notepad is a hard row delete — no liveness filter applies to notes and a deleted notepad leaves no recoverable row.
+    provenance: [note schema migration 001, DeleteContactNoteByCategory, NoteRepository.DeleteContactNotepad]
+    notes: Deliberately unlike contacts (soft-deleted) — the notepad is a single-user scratchpad with no audit requirement.
+
+  - id: NTS-004
+    title: Fetching a contact's notepad reports presence or absence
+    type: api
+    status: current
+    given: a GET for a contact's notepad
+    when: the request is handled
+    then:
+      - a live contact with a notepad returns it (200)
+      - a live contact without a notepad returns no content (204)
+      - a malformed contact id returns a validation error (400)
+      - an unknown or soft-deleted contact returns not-found (404)
+    provenance: [NoteHandler.GetContactNotepad, NoteResponse]
+
+  - id: NTS-005
+    title: Saving the notepad validates and returns the saved note or no content
+    type: api
+    status: current
+    given: a PUT of a contact's notepad body
+    when: the request is handled
+    then:
+      - a non-empty body returns the saved note (200)
+      - an empty or whitespace-only body deletes the note and returns no content (204)
+      - the body is limited to 50000 characters, else a validation error (400)
+      - a malformed contact id or unparseable body returns a validation error (400)
+      - an unknown or soft-deleted contact returns not-found (404)
+    provenance: [NoteHandler.SaveContactNotepad, SaveNoteRequest]
+    notes: The length cap is validated on the raw body before trimming, so an over-length whitespace-only body is rejected rather than treated as an empty delete.
+
+  - id: NTS-006
+    title: Notepad access is gated on a live contact
+    type: business-logic
+    status: current
+    given: a notepad read or save
+    when: the target contact is checked
+    then:
+      - the contact's existence is verified before the notepad is read or written
+      - a missing or soft-deleted contact yields not-found rather than a server error
+    provenance: [NoteService.GetContactNotepad, NoteService.SaveContactNotepad]
+    notes: After a contact soft-delete its retained notes become inaccessible through this liveness gate (cross-ref CON-010). Merge combining of notepad bodies is cross-ref CON-028.
+
+  - id: NTS-007
+    title: The notepad displays on the contact detail with overflow-aware truncation
+    type: ux
+    status: current
+    given: a contact detail page
+    when: the notepad renders
+    then:
+      - the notepad appears only when it has content; an empty or absent notepad shows nothing
+      - the body preserves the user's line breaks
+      - long content is clamped with an expand and collapse control that appears only when the content overflows
+    provenance: [contact detail notes block, contacts.spec.ts]
+
+  - id: NTS-008
+    title: The notepad is edited through the contact form and saved separately
+    type: ux
+    status: current
+    given: the contact edit or create form
+    when: the notepad field is edited and the form is submitted
+    then:
+      - the notepad is saved as its own operation alongside the contact update, both completing before edit mode closes
+      - clearing the notepad field removes the note
+      - the displayed notepad reflects the new content after a successful save
+    provenance: [contact-form.tsx notes field, contact detail submit, new contact page]
+
+  # --- Meeting-note linkage states and user-driven resolution ---
+
+  - id: NTS-009
+    title: Meeting-note linkage states are a closed set with two resolvable states
+    type: data
+    status: current
+    given: a meeting_note row
+    when: its linkage_state is written
+    then:
+      - linkage_state is one of linked, linked_impromptu, orphan_title_augmented, orphan_needs_review, or conflict_pending, enforced by a database CHECK
+      - only conflict_pending and orphan_needs_review are user-resolvable; the other three are terminal
+      - every writer supplies the state explicitly, as the column has no database default
+    provenance: [meeting_note_linkage_state_check migration 053, repository LinkageState constants]
+    notes: How ingest first assigns these states (the decideLinkage detection algorithm) is ingest-domain (ING); the review-queue surfacing of the two attention states is cross-ref IMP-025.
+
+  - id: NTS-010
+    title: Resolving a conflict by linking a candidate transitions to linked
+    type: business-logic
+    status: current
+    given: a meeting_note in conflict_pending
+    when: the user links one of its recorded candidates
+    then:
+      - the chosen kind-and-id must be present in the persisted candidate snapshot
+      - the target row's existence is re-checked inside the resolve transaction
+      - on success the row transitions to linked with the chosen kind and id and its snapshot cleared
+      - walk-in interactions are written for tagged participants outside the linked candidate's attendee set
+    provenance: [MeetingNoteService.resolveToLinked, ResolveMeetingNoteToLinkedTx]
+
+  - id: NTS-011
+    title: Resolving a conflict with none-of-these recomputes the zero-candidate outcome
+    type: business-logic
+    status: current
+    given: a meeting_note in conflict_pending
+    when: the user chooses none-of-these
+    then:
+      - linkage is recomputed as if there were no time-overlap candidates
+      - the row lands in linked_impromptu, orphan_title_augmented, or orphan_needs_review according to its tagged and title-matched participants
+      - the candidate snapshot is cleared and the desired interactions are written with no linked meeting
+    provenance: [MeetingNoteService.resolveNoneOfThese, ClearMeetingNoteConflictTx]
+
+  - id: NTS-012
+    title: Resolving an orphan forces an impromptu log
+    type: business-logic
+    status: current
+    given: a meeting_note in orphan_needs_review
+    when: the user logs it as impromptu (none-of-these)
+    then:
+      - the row is forced to linked_impromptu regardless of whether any interactions result
+      - only tagged-participant interactions are created, never title-derived ones
+      - a genuine orphan with no resolvable participants still lands linked_impromptu, with zero interactions
+    provenance: [MeetingNoteService.resolveOrphanToImpromptu]
+    notes: Forcing the state prevents the recompute-to-orphan loop that would otherwise keep the row in the queue forever; the decision's persistence across re-sync is NTS-020.
+
+  - id: NTS-013
+    title: Orphans cannot be resolved by linking a candidate
+    type: business-logic
+    status: current
+    given: a meeting_note in orphan_needs_review
+    when: a link action is submitted
+    then:
+      - the request is rejected because an orphan carries no candidate snapshot to validate against
+    provenance: [MeetingNoteService.ResolveLink orphan branch]
+
+  - id: NTS-014
+    title: Only attention-state rows are resolvable, and resolves are serialized
+    type: business-logic
+    status: current
+    given: a resolve-link request against a meeting_note
+    when: the row's state is checked under a row lock
+    then:
+      - a terminal, soft-deleted, or missing row is rejected rather than mutated
+      - the row is read for update so concurrent resolves are serialized and a lost race is rejected rather than double-applied
+    provenance: [MeetingNoteService.ResolveLink switch, GetMeetingNoteByIDForUpdateTx, state-guarded resolve writes]
+
+  - id: NTS-015
+    title: The conflict snapshot exists exactly while the row is in conflict
+    type: invariant
+    status: current
+    statement: a meeting_note's conflict_candidates snapshot is non-null exactly when linkage_state is conflict_pending — every transition out of conflict_pending clears it and no non-conflict outcome ever persists a snapshot; the rule is enforced in application code, not by a database constraint.
+    provenance: [migration 056, ResolveMeetingNoteToLinkedTx, ClearMeetingNoteConflictTx, decideLinkage snapshot handling]
+
+  - id: NTS-016
+    title: The candidate snapshot is the authorization list for linking
+    type: business-logic
+    status: current
+    given: a link resolution of a conflict_pending meeting_note
+    when: the chosen candidate is validated
+    then:
+      - a chosen kind-and-id absent from the persisted snapshot is rejected as a non-candidate
+      - a conflict_pending row whose snapshot is missing is rejected defensively rather than linked
+      - a snapshot-referenced target that no longer exists is reported as a missing target
+    provenance: [MeetingNoteService.resolveToLinked, snapshotContains, fetchCandidateAsLinkageTx]
+
+  - id: NTS-017
+    title: Polymorphic linkage pointer is paired but has no foreign key
+    type: data
+    status: current
+    given: a meeting_note linked to an interaction-bearing target
+    when: its link columns are written
+    then:
+      - linked_kind is event or phone_call, or both link columns are null together (both-or-neither)
+      - the pointer carries no foreign key, so referential integrity is not enforced by the database
+    provenance: [meeting_note_linked_kind_check, meeting_note_linked_pair_check migration 053]
+    notes: The calendar-event and phone-call target rows are owned by CAL; cross-ref CAL.
+
+  - id: NTS-018
+    title: Resolve-link exposes a validated action contract
+    type: api
+    status: current
+    given: a POST to resolve-link for a meeting_note
+    when: the request is handled
+    then:
+      - action is required and must be link or none_of_these
+      - action=link requires kind in event or phone_call and an id parseable as a UUID, else a validation error (400)
+      - a successful resolve returns the updated meeting note and the interactions created (200)
+      - a missing row, or a snapshot target that no longer exists, returns not-found (404)
+      - a row not in an attention state returns conflict (409)
+      - a chosen id absent from the snapshot returns a validation error (400)
+      - a conflict_pending row missing its snapshot returns unprocessable content (422)
+    provenance: [MeetingNoteHandler.ResolveLink, mapResolveError]
+
+  - id: NTS-019
+    title: Resolution writes session interactions through the shared cadence path
+    type: business-logic
+    status: current
+    given: a resolve-link that produces interactions
+    when: the interactions are written
+    then:
+      - each interaction is attributed to the anarlog-session source with a per-session-per-contact source ref
+      - interactions are written through the same recorder that updates cadence and follow-up state, inside the resolve transaction
+      - the session venue is resolved once, and only when at least one interaction will carry it
+    provenance: [MeetingNoteService.writeDesiredInteractions, ContactInteractionRecorder.RecordInteractionTx, resolveAnarlogSessionVenue]
+    notes: Cadence and follow-up recompute is cadence-domain (CAD); the daemon re-sync interaction reconciliation and the interaction cascade on meeting-note delete are ingest-domain (ING). Downstream surface refresh on resolve is cross-ref IMP-031.
+
+  - id: NTS-020
+    title: A user's linkage decision survives daemon re-sync
+    type: business-logic
+    status: current
+    given: a resolved meeting_note
+    when: its resolved_set_hash is written
+    then:
+      - the hash is computed over the union of tag-resolved and title-matched contacts, matching the daemon's recipe byte-for-byte
+      - an identical re-sync recognizes the decision and carries the resolved state forward rather than recomputing a divergent one
+    provenance: [computeResolvedSetHash, resolveOrphanToImpromptu, resolveNoneOfThese]
+    notes: The daemon-side re-sync and carry-forward mechanics are ingest-domain (ING); this pins only the resolve-side contract that makes carry-forward possible.
+
+  - id: NTS-021
+    title: Resolve is transactional with best-effort follow-ups
+    type: business-logic
+    status: current
+    given: a resolve-link in progress
+    when: the transaction commits
+    then:
+      - the interaction writes and the state transition commit atomically or roll back together
+      - cadence and task follow-ups run after commit, best-effort, and a follow-up failure or panic never fails the response
+    provenance: [MeetingNoteService.ResolveLink tx, runFollowUpBestEffort]
+
+  - id: NTS-022
+    title: Deleting a meeting note tombstones it, preserving content for revive
+    type: data
+    status: current
+    given: a live meeting_note for an anarlog session
+    when: the session's meeting note is soft-deleted
+    then:
+      - the row is soft-deleted while its content and hashes are preserved for a later revive
+      - session-id uniqueness is enforced only over live rows, so the tombstone and a fresh live row for the same session can coexist
+    provenance: [SoftDeleteMeetingNoteBySessionID, idx_meeting_note_session_id]
+    notes: The ingest re-sync flow that drives the delete, and the explicit interaction cascade on delete, are ingest-domain (ING); this pins the entity's soft-delete persistence contract. The revive half of the lifecycle is NTS-024.
+
+  - id: NTS-023
+    title: Stale linkage pointers are reconciled to null
+    type: data
+    status: proposed
+    given: a meeting_note whose linked target row has been deleted
+    when: the stale pointer is reconciled
+    then:
+      - the linked_kind and linked_id pair is nullified so the row no longer points at a missing target
+    provenance: [migration 053 cleanup-job comment]
+    notes: 'Proposed: the periodic cleanup job the schema promises does not exist. Today a deleted target is only detected lazily at read time (surfaced as target-missing in the review queue) and the stale pointer is never cleared. Reviewer should probe whether lazy read-time detection is acceptable and this ought retired instead.'
+
+  - id: NTS-024
+    title: A reappearing session revives its tombstoned meeting note
+    type: data
+    status: current
+    given: a tombstoned meeting_note for an anarlog session
+    when: the same session reappears in a re-sync
+    then:
+      - the tombstoned row is revived in place with the new content and hashes rather than orphaned or duplicated
+      - revive is idempotent under concurrent races, guarded to act only on a still-tombstoned row
+    provenance: [ReviveMeetingNote, GetTombstonedMeetingNoteBySessionID, idx_meeting_note_session_id]
+    notes: The ingest re-sync flow that detects reappearance and drives the revive is ingest-domain (ING); this pins the entity's revive persistence contract. The soft-delete half of the lifecycle is NTS-022.
+
+  - id: NTS-025
+    title: The needs-attention list exposes a projected review-queue contract
+    type: api
+    status: current
+    given: a GET to needs-attention for meeting notes
+    when: the request is handled
+    then:
+      - a malformed host_id query parameter returns a validation error (400)
+      - the response returns every live meeting note in an attention state, newest first, optionally scoped to a host_id (200)
+      - each conflict_pending row carries a candidates array projecting each snapshot candidate with a per-kind preview; an orphan_needs_review row carries no candidates
+      - a snapshot candidate whose target row has been deleted is marked target-missing with a null preview rather than dropped from the response
+      - each candidate's overlap count is carried independently of the per-attendee matched flags, which drive only visual emphasis
+    provenance: [MeetingNoteHandler.ListNeedsAttention, MeetingNoteService.ListNeedsAttention, projectCandidates, candidatePreview, ListMeetingNotesNeedingAttention]
+    notes: The business-logic of what makes a session a conflict versus an orphan is cross-ref IMP-025; this pins the read endpoint's API and projection contract, mirroring NTS-018 for the resolve-link write endpoint.

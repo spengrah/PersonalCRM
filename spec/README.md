@@ -43,7 +43,7 @@ Field rules:
 - **`type`** — what kind of consumer cares:
   - `business-logic` — domain rules observable through outcomes (state machines, computations).
   - `api` — HTTP contract (status codes, validation, response shapes). Track A's handler tests.
-  - `ux` — what the user can see/do at a surface, expressed DOM-free (no selectors, no copy). Track B's judge.
+  - `ux` — what the user can see/do at a surface, expressed DOM-free (no selectors, no copy). Track B's judge. `ux` behaviors are also produced *forward* by design sessions (including AI design work): a design mints its intended surface behavior as `status: proposed`, the implementation PR flips it to `current` under the maintenance rule, and a design that reverses an existing surface follows retire-and-mint.
   - `invariant` — always-true cross-cutting property (e.g. soft-delete filtering, deterministic ordering).
   - `data` — persistence/derived-data correctness (cascades, dedup, derived cache columns).
 - **`status`** — carries the is/ought split. `current` = faithfully describes today's behavior. `proposed` = desired behavior that does not (fully) hold today. If curation reveals today's behavior is a bug, the intended behavior is written as `proposed` (optionally with a filed bug) — **a bug is never enshrined as `current` intent**. `retired` = tombstone; the row stays intact so the ID is never reused, with a pointer in `notes` if superseded.
@@ -86,8 +86,8 @@ A behavior that moves domains gets a new ID; the old one is retired with a point
 
 ## Curation rules
 
-- **One domain per PR.** Derivation is an interactive session: the agent drafts behaviors with `type`/`status`/`provenance`, then an in-session chunked walkthrough (~10 behaviors per chunk) happens **before the PR opens** — the human accepts / edits / rejects / reclassifies each behavior (`current` → `proposed` for anything that is actually a bug or an aspiration).
-- The PR lands the file at `maturity: reviewed`, and the PR description records what the walkthrough rejected or rewrote — durable evidence that curation happened.
+- **Curation is an adversarial-review pass, not an interactive walkthrough.** The agent drafts behaviors with `type`/`status`/`provenance`, then a fresh-context reviewer (Codex at xhigh, or a Claude reviewer when Codex is quota-blocked) audits the whole file for completeness (missing in-scope behaviors) and correctness (fidelity to code, `current`-vs-`proposed` classification, type/consumer-harness fit) until it passes with zero blocking findings; a final cross-corpus consistency pass over the whole SSOT catches inter-file duplication, contradiction, and boundary drift. Every derived behavior is verified against code before it is enshrined, and a bug is written as `proposed`, never `current`. (The earlier interactive human-by-behavior walkthrough is superseded by this pass.)
+- **PR granularity is flexible.** One domain per PR is the default and keeps git history clean, but a batched multi-domain PR is fine when the whole set went through the review + consistency pass together (the exemplar backfill landed nine domains in one PR). Either way the PR lands the file(s) at `maturity: reviewed`, and the PR description records what review rejected or rewrote — durable evidence that curation happened.
 - **Granularity:** one behavior = one durable intent, one `when`; `then` lists enumerate facets of that single intent. Rough expectation: 20–50 behaviors per domain. Derivation is not transcription — write at the intent level (survives any UI redesign), not one-per-test-assertion.
 - **PII:** behaviors are generic statements of intent. No real contact data, UUIDs, or hostnames appear in spec files (standard repo privacy rule).
 

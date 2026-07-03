@@ -1,0 +1,406 @@
+domain: settings
+prefix: SET
+maturity: reviewed
+behaviors:
+  # --- OAuth flow & auth boundary ---
+
+  - id: SET-001
+    title: Provider redirect callbacks are the only OAuth routes reachable without the API key
+    type: invariant
+    status: current
+    statement: the provider redirect callback routes are registered outside the global-API-key middleware (external providers cannot carry the key), while every OAuth auth-URL and account-management route is registered inside the API-key-protected group and requires the key.
+    provenance: [RegisterOAuthCallbackRoutes, RegisterOAuthRoutes, cmd/crm-api/main.go v1.Use APIKeyMiddleware]
+    notes: The callback routes only redirect to the settings surface with an outcome (SET-004); they never expose account data, so no-auth exposure is bounded to the CSRF-gated exchange.
+
+  - id: SET-002
+    title: Requesting a provider auth URL mints a single-use CSRF state
+    type: business-logic
+    status: current
+    given: a configured OAuth provider
+    when: the frontend requests that provider's authorization URL
+    then:
+      - a random CSRF state is generated and stored server-side
+      - the stored state expires after ten minutes
+      - the response returns the provider authorization URL and the state
+    provenance: [OAuthHandler.GetGoogleAuthURL, OAuthHandler.GetTodoistAuthURL, storeState, google.GenerateState]
+    notes: The state store is in-process and not persisted, so a backend restart between issuance and callback invalidates outstanding states (they then fail as invalid_state). Google and Todoist share one state namespace with no provider tag; states are 32 random bytes so cross-provider collision is not a practical concern.
+
+  - id: SET-003
+    title: The OAuth callback validates CSRF state before exchanging the code
+    type: business-logic
+    status: current
+    given: a provider redirect back to the callback route
+    when: the callback is processed
+    then:
+      - a provider-supplied error parameter short-circuits before any state check or code exchange
+      - the CSRF state is validated and consumed before the authorization code is exchanged
+      - a state is accepted at most once, so replaying the same state fails validation
+      - an expired, unknown, or already-used state aborts the flow without exchanging the code
+    provenance: [OAuthHandler.GoogleCallback, OAuthHandler.TodoistCallback, validateState]
+
+  - id: SET-004
+    title: OAuth callbacks always redirect to the settings surface with an injection-safe outcome
+    type: api
+    status: current
+    given: a completed or failed OAuth callback
+    when: the callback responds
+    then:
+      - the response is a redirect back to the settings surface, never a rendered page or JSON body
+      - a success carries an outcome of success plus the provider name
+      - a failure carries an outcome of error plus the provider name and a typed reason (the provider error, invalid_state, or exchange_failed)
+      - all redirect query parameters are URL-encoded rather than string-concatenated
+    provenance: [OAuthHandler.GoogleCallback, OAuthHandler.TodoistCallback, url.Values.Encode]
+    notes: Google's callback additionally runs email/gchat sync reconciliation post-exchange (SET-013); those steps are non-fatal and do not change the redirect outcome.
+
+  - id: SET-005
+    title: A provider's OAuth routes exist only when that provider is configured
+    type: invariant
+    status: current
+    statement: a provider's callback, auth-URL, and account-management routes are registered only when external sync is enabled and that provider's client credentials are configured; a provider that is disabled or unconfigured exposes none of its routes and its callback URL returns not-found (404).
+    provenance: [RegisterOAuthCallbackRoutes GoogleEnabled/HasTodoistOAuth gates, cmd/crm-api/main.go oauthHandler construction]
+    notes: Google and Todoist gate independently, so a Todoist-only deployment serves Todoist OAuth routes while Google's 404.
+
+  # --- API key handling ---
+
+  - id: SET-006
+    title: The global API key is accepted from either header form and rejected with a typed 401
+    type: api
+    status: current
+    given: a request to an API-key-protected route
+    when: the API key is checked
+    then:
+      - the key is read from an X-API-Key header, falling back to an Authorization header of the form ApiKey <key>
+      - a missing key is rejected with 401 and a missing-key error code
+      - a key that does not match the configured key is rejected with 401 and an invalid-key error code
+      - a matching key allows the request to proceed
+    provenance: [auth.APIKeyMiddleware]
+
+  - id: SET-007
+    title: API key comparison is constant-time
+    type: invariant
+    status: proposed
+    statement: the submitted API key is compared against the configured key in constant time, so comparison latency does not leak how many leading bytes matched.
+    provenance: [auth.APIKeyMiddleware]
+    notes: 'Proposed: today the comparison is a plain inequality, which is not timing-safe. Low priority under the single-user, local-first, Tailscale-only threat model; recorded as defence-in-depth intent for the reviewer to weigh.'
+
+  # --- Connected-account management ---
+
+  - id: SET-008
+    title: Account listing, status, and revoke share a validation-and-not-found contract
+    type: api
+    status: current
+    given: a request to one of a provider's connected-account management routes (list, status read, or revoke)
+    when: the request is handled
+    then:
+      - listing returns an array of connected accounts (200)
+      - a malformed account id returns a validation error (400)
+      - an unknown account id returns not-found (404)
+      - a successful status read returns the account (200) and a successful revoke returns a confirmation (200)
+    provenance: [OAuthHandler.ListGoogleAccounts, OAuthHandler.GetGoogleAccountStatus, OAuthHandler.RevokeGoogleAccount, OAuthHandler Todoist counterparts]
+
+  - id: SET-009
+    title: OAuth tokens are encrypted at rest and never leave the backend
+    type: invariant
+    status: current
+    statement: OAuth access and refresh tokens are stored encrypted (each token under its own nonce) and the encrypted token bytes and nonces are never serialized into any API response — account listing and status responses expose only non-sensitive account metadata.
+    provenance: [google/oauth.go storeToken AES-256-GCM, repository/oauth.go json:"-" token fields, GoogleAccountResponse/TodoistAccountResponse]
+
+  - id: SET-010
+    title: Revoking an account removes it locally even when remote revocation fails
+    type: business-logic
+    status: current
+    given: a connected provider account
+    when: the account is revoked
+    then:
+      - the account's sync states are deleted first, best-effort
+      - the provider is asked to revoke the token remotely, best-effort
+      - the local credential is deleted, and this is the only step that can fail the revoke
+      - a failure to decrypt the token or reach the provider is logged and does not block local deletion
+    provenance: [google/oauth.go RevokeAccount, todoist/oauth.go RevokeAccount]
+
+  - id: SET-011
+    title: One credential per provider account, preserving a refresh token across re-exchange
+    type: data
+    status: current
+    given: an existing stored credential for a provider account
+    when: the same provider account completes OAuth again
+    then:
+      - the credential is upserted on the unique provider-and-account key rather than duplicated
+      - a re-exchange that returns no refresh token preserves the previously stored refresh token
+    provenance: [oauth.sql UpsertOAuthCredential ON CONFLICT + COALESCE, idx_oauth_credential_provider_account, migrations 013/062]
+
+  - id: SET-012
+    title: Revoke cleanup deletes only the account's own sync states
+    type: data
+    status: current
+    given: a revoke that cascades into sync-state cleanup
+    when: sync states are deleted for the account
+    then:
+      - only sync states whose account id matches the revoked account are deleted
+      - sync states with no account id (local sources) are never touched
+    provenance: [external_sync.sql DeleteSyncStatesByAccountID]
+
+  # --- Enablement / reconciliation ---
+
+  - id: SET-013
+    title: A successful Google connect enables the account's downstream sync without a reboot
+    type: business-logic
+    status: current
+    given: a Google account completing OAuth
+    when: the callback finishes exchanging the code
+    then:
+      - the account's email and Google Chat sync states are reconciled immediately rather than waiting for a restart
+      - reconciliation is idempotent, so reconnecting an already-reconciled account changes nothing
+      - a reconciliation failure is non-fatal and leaves the account connected
+    provenance: [OAuthHandler.GoogleCallback emailStateReconciler/gchatStateReconciler]
+    notes: What each reconciled sync state then sweeps, the scope-gating that decides whether a state is created, and the guarantee that a user-disabled state is never re-enabled are calendar/telegram/todoist-domain scope; settings owns only that the connect act triggers reconciliation.
+
+  - id: SET-014
+    title: Toggling a sync state's enablement requires an explicit flag and sets a matching status
+    type: api
+    status: current
+    given: an existing sync state
+    when: its enablement is toggled
+    then:
+      - the enabled value is required and must parse as a boolean, otherwise a validation error (400) is returned
+      - a malformed sync-state id returns a validation error (400) and an unknown one returns not-found (404)
+      - disabling sets the state's status to disabled and enabling sets it to idle
+    provenance: [SyncHandler.EnableSync, external_sync.sql UpdateSyncStateEnabled]
+
+  # --- Todoist settings surface ---
+
+  - id: SET-015
+    title: Reading Todoist settings requires a connected account
+    type: api
+    status: current
+    given: a request for the current Todoist integration settings
+    when: the settings are read
+    then:
+      - with no Todoist account connected, the request returns not-found (404)
+      - with an account connected but no sync state yet, empty settings are returned (200)
+      - with a sync state present, the stored project, label, and related settings are returned (200)
+    provenance: [TodoistHandler.GetSettings]
+
+  - id: SET-016
+    title: Updating Todoist settings merges metadata and lazily provisions the sync state
+    type: api
+    status: current
+    given: a Todoist settings update for the connected account
+    when: the update is applied
+    then:
+      - a malformed body returns a validation error (400) and no connected account returns not-found (404)
+      - the sync state is created if absent (enabled, fetch-all) before the update is written
+      - the update merges into the existing settings metadata rather than replacing it wholesale
+      - an integration instance id is generated once if absent and then left stable
+    provenance: [TodoistHandler.UpdateSettings, UpdateSyncStateMetadata]
+
+  - id: SET-017
+    title: Changing the Todoist label invalidates the cached label name
+    type: business-logic
+    status: current
+    given: stored Todoist settings carrying a cached label name
+    when: the label id is changed
+    then:
+      - the cached label name is cleared so it is refreshed on the next sync
+    provenance: [TodoistHandler.UpdateSettings label_id path]
+
+  - id: SET-018
+    title: Todoist project and label pickers list live provider entries excluding deleted ones
+    type: api
+    status: current
+    given: a connected Todoist account
+    when: the available projects or labels are requested
+    then:
+      - with no account connected the request returns not-found (404)
+      - the live provider is queried and deleted entries are filtered out of the result
+      - a token or provider-API failure surfaces as a server error (500)
+    provenance: [TodoistHandler.ListProjects, TodoistHandler.ListLabels]
+
+  # --- Settings surfaces (Track B) ---
+
+  - id: SET-019
+    title: The settings page presents provider connection sections
+    type: ux
+    status: current
+    given: the settings page
+    when: it renders
+    then:
+      - each supported provider has its own section showing whether an account is connected
+      - a connected account shows its identity and when it was connected
+      - each section offers a way to connect an account and to disconnect a connected one
+    provenance: [settings/page.tsx, google-accounts-section.tsx, todoist-accounts-section.tsx]
+
+  - id: SET-020
+    title: Connecting a provider hands off to the provider's consent screen
+    type: ux
+    status: current
+    given: a provider section with a connect affordance
+    when: the user starts connecting
+    then:
+      - the app fetches the provider authorization URL and navigates the whole page to the provider's consent screen
+    provenance: [startGoogleOAuthFlow, startTodoistOAuthFlow, oauth-api.ts]
+
+  - id: SET-021
+    title: Returning from a connect shows the outcome and clears the one-time parameters
+    type: ux
+    status: current
+    given: a redirect back to the settings surface carrying a connect outcome
+    when: the settings page mounts
+    then:
+      - a success outcome shows a success indication and refreshes the account list
+      - an error outcome shows the failure reason to the user
+      - the one-time outcome parameters are stripped from the URL so a refresh does not re-trigger the notification
+    provenance: [google-accounts-section.tsx auth-param effect, todoist-accounts-section.tsx, .ai/rules/core.md one-time action gotcha]
+
+  - id: SET-022
+    title: Disconnecting an account requires explicit confirmation
+    type: ux
+    status: current
+    given: a connected provider account
+    when: the user asks to disconnect it
+    then:
+      - a confirmation prompt identifies the account and warns what access is revoked
+      - only on confirmation is the account revoked
+      - the outcome is reported and the account list reflects the removal
+    provenance: [google-accounts-section.tsx handleDisconnect, todoist-accounts-section.tsx handleDisconnect]
+
+  - id: SET-023
+    title: An unconfigured or errored provider section collapses to a not-connected state with setup guidance
+    type: ux
+    status: current
+    given: a provider whose credentials are not configured or whose account list failed to load
+    when: its section renders
+    then:
+      - the section shows a not-connected empty state rather than an error stack
+      - the section lists the configuration the deployment must supply to enable the provider
+    provenance: [google-accounts-section.tsx showEmptyState, todoist-accounts-section.tsx, Configuration Required panels]
+    notes: Treating a not-configured provider (a 4xx from its routes per SET-005) as an empty state is deliberate — the surface degrades gracefully on a deployment that never set the provider up.
+
+  - id: SET-024
+    title: Per-scope sync affordances follow the account's granted scopes
+    type: ux
+    status: current
+    given: a connected Google account with a stored scope set
+    when: its section renders
+    then:
+      - a per-source sync affordance appears only when the account holds the scope that source requires
+      - the Google Chat affordance appears only when all of the chat scopes are held; a partial grant shows a reconnect prompt instead
+    provenance: [google-accounts-section.tsx accountHasChatScopes/GCHAT_REQUIRED_SCOPES, SyncBadge]
+    notes: The badges key off the stored requested-scope list as a proxy, not a live grant check. What each triggered sync source does once run is calendar/contacts/gmail/gchat-domain scope.
+
+  - id: SET-025
+    title: An account whose sync failed on authentication surfaces a reconnect prompt
+    type: ux
+    status: current
+    given: a connected account whose sync state is in an auth-related error
+    when: its section renders
+    then:
+      - a reconnect affordance appears for that account
+      - the prompt is suppressed once the account credential is newer than the failing sync state
+    provenance: [use-sync-states.ts accountNeedsReconnection, google-accounts-section.tsx, todoist-accounts-section.tsx]
+    notes: The error strings this keys on are produced by the sync providers (calendar/gmail/gchat/todoist domains); settings owns only the reconnect affordance the errored state drives.
+
+  - id: SET-026
+    title: The Todoist configuration surface guides selecting a project and label
+    type: ux
+    status: current
+    given: a connected Todoist account
+    when: the Todoist configuration is shown
+    then:
+      - project and label pickers are offered, each populated from the live provider lists
+      - selecting a project or label persists that choice and reports the outcome
+      - the surface indicates that both a project and a label must be chosen before cadence sync is active
+    provenance: [todoist-accounts-section.tsx Sync Configuration, use-todoist-settings.ts]
+
+  - id: SET-027
+    title: The Telegram section renders on settings with a not-configured state when the feature is off
+    type: ux
+    status: current
+    given: the settings page
+    when: the Telegram section renders
+    then:
+      - the section is present on the settings surface
+      - when the Telegram feature is not enabled on the backend, the section shows a not-configured state naming the configuration required to enable it
+    provenance: [telegram-section.tsx not_configured state, use-telegram.ts status 404 handling]
+    notes: The connect / code-verification / two-factor / disconnect flow and group-chat tracking live under this section but are telegram-domain scope; settings owns only that the section renders and its not-configured empty state.
+
+  # --- Data backup & restore ---
+
+  - id: SET-028
+    title: The settings page presents a data backup and restore surface
+    type: ux
+    status: current
+    given: the settings page
+    when: the data backup and restore section renders
+    then:
+      - an export affordance downloads the user's data as a JSON backup file
+      - an import affordance accepts a backup file to restore from
+      - the surface communicates that import does not yet modify stored data
+    provenance: [settings/page.tsx Data Backup & Restore section, handleExportData, handleImportData]
+    notes: Export is live and its HTTP contract is SET-030; it streams the current dataset — contacts only today — as a JSON download, even though the surface copy frames it as a complete backup. The restore path itself is not yet implemented and is recorded as proposed (SET-029).
+
+  - id: SET-029
+    title: Importing a backup restores its records
+    type: api
+    status: proposed
+    given: a previously exported backup file
+    when: the backup is submitted to the import endpoint
+    then:
+      - the backup file is parsed and its format validated, with a malformed backup returning a validation error (400)
+      - the records the backup contains are restored into the database
+      - a summary of the restored data is returned (200)
+    provenance: [SystemHandler.ImportData, settings/page.tsx handleImportData]
+    notes: 'Proposed: today the import endpoint is a placeholder that ignores the uploaded file and returns a not-implemented message (no parse, no validation, no write), while the settings surface labels import as validation-only. Restore is unimplemented, so the intended behavior is recorded as proposed rather than current.'
+
+  - id: SET-030
+    title: Exporting data returns a contacts-only JSON backup attachment
+    type: api
+    status: current
+    given: a request to the data export endpoint
+    when: the export is requested
+    then:
+      - the response is a JSON attachment (a Content-Disposition download) wrapping an export envelope
+      - the envelope carries a version tag and an export timestamp
+      - the exported dataset contains the contact records only — interactions and notes are not included
+      - a failure to read the contacts returns a server error (500)
+    provenance: [SystemHandler.ExportData, system_routes.go RegisterDataExchangeRoutes]
+    notes: The settings surface (SET-028) frames export as a complete backup, but today the endpoint serializes contacts only; widening the payload to interactions and notes is unbuilt and recorded as proposed (SET-033). The contacts read is bounded by a large fixed limit rather than true pagination.
+
+  # --- Google token lifecycle ---
+
+  - id: SET-031
+    title: Google authorization requests offline access and forces re-consent
+    type: business-logic
+    status: current
+    given: a Google authorization URL being built
+    when: the consent URL is constructed
+    then:
+      - offline access is requested so the provider returns a refresh token
+      - consent is forced so an already-connected account re-consents when its scope set changes
+    provenance: [google.OAuthService.GetAuthURL]
+    notes: Re-consent is what lets a scope addition (e.g. chat scopes) reach an existing account; the refresh token it yields backs the lazy refresh in SET-032 and the preservation rule in SET-011. Todoist issues no refresh token.
+
+  - id: SET-032
+    title: Google access tokens refresh on demand and persist exactly once
+    type: business-logic
+    status: current
+    given: a connected Google account whose access token is expired or near expiry
+    when: a client for that account is requested
+    then:
+      - the access token is refreshed using the stored refresh token
+      - a changed token is persisted back to the credential store exactly once
+      - a persistence failure is non-fatal and still yields a usable token
+      - there is no proactive scheduled refresh; refresh happens only on demand
+    provenance: [google.OAuthService.GetClientForAccount, persistOnRefreshSource, UpdateOAuthCredentialTokens]
+
+  - id: SET-033
+    title: A data export contains the full backup the surface promises
+    type: api
+    status: proposed
+    given: a request to the data export endpoint
+    when: the export is requested
+    then:
+      - the exported envelope contains contacts together with their interactions and notes
+      - the payload matches the complete-backup scope the settings surface advertises
+    provenance: [SystemHandler.ExportData, settings/page.tsx Export Data copy]
+    notes: 'Proposed: today the endpoint serializes contacts only (SET-030), while the settings surface frames export as a complete backup including interactions and notes. The widened scope is unbuilt, so the intended behavior is recorded as proposed rather than current.'

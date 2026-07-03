@@ -1,0 +1,108 @@
+domain: dashboard
+prefix: DSH
+maturity: reviewed
+behaviors:
+  - id: DSH-001
+    title: The dashboard is the application's default landing surface
+    type: ux
+    status: current
+    given: the application root is opened
+    when: the entry route resolves
+    then:
+      - the user is taken to the dashboard as the default destination
+      - a brief loading indicator shows while the redirect resolves
+    provenance: [app/page.tsx, dashboard.spec.ts]
+    notes: The dashboard's overdue content is CAD-026; this behavior only pins that the dashboard is where the app opens.
+
+  - id: DSH-002
+    title: Every primary surface is reachable from a persistent global navigation
+    type: ux
+    status: current
+    given: any primary application surface, including the dashboard
+    when: the global navigation renders
+    then:
+      - at wide (>= sm) viewports, links to the dashboard, contacts, birthdays, imports, and settings sections are present
+      - the link matching the current section is visually marked active
+      - the navigation bar stays visible while the page scrolls (sticky)
+    provenance: [components/layout/navigation.tsx, dashboard.spec.ts]
+    notes: The bar also hosts a time-acceleration control and an aggregate sync-status indicator on the imports link — those belong to the settings and imports domains respectively. The birthdays surface itself is CON-045. App-shell nav renders on every primary surface, not only the dashboard; it is captured here because no dedicated navigation domain exists. Scoped to wide (>= sm) viewports deliberately — at narrow (below-sm) widths the link list is hidden (`hidden sm:flex`) and collapses to a menu button that is currently non-functional (no open/close state, no menu panel rendered), so navigation is not reachable on mobile. That mobile gap is a known bug, not claimed as working here.
+
+  - id: DSH-003
+    title: The dashboard always offers a path to add or browse contacts
+    type: ux
+    status: current
+    given: the dashboard is open
+    when: the surface renders in any state
+    then:
+      - an add-contact action is always available from the header
+      - the caught-up state additionally offers a path to add a contact and to view the full contact list
+    provenance: [dashboard/page.tsx header CTA, EmptyState]
+    notes: The caught-up (all-clear) state itself is CAD-026; this pins the follow-on affordances it offers.
+
+  - id: DSH-004
+    title: The overdue widget distinguishes loading and error states from its content
+    type: ux
+    status: current
+    given: the overdue widget is loading or its request has failed
+    when: the dashboard renders
+    then:
+      - while loading, placeholder content is shown rather than an empty or caught-up state
+      - on request failure, an error state carrying the failure reason is shown rather than an empty or caught-up state
+    provenance: [dashboard/page.tsx loading and error branches]
+    notes: The populated and caught-up states are CAD-026; this fills the loading and error states CAD does not cover.
+
+  - id: DSH-005
+    title: The overdue widget reflects overdue-membership changes made in other flows
+    type: ux
+    status: current
+    given: an open dashboard whose overdue list has been fetched
+    when: an action elsewhere changes who is overdue
+    then:
+      - the overdue list refreshes to reflect the change without a manual page reload
+      - this covers logging an interaction, merging contacts, and resolving a meeting note that touches a contact's cadence
+      - purely cosmetic contact edits that do not change overdue membership do not disturb the list
+      - returning focus to the window re-checks freshness, but refetches only once the list has gone stale (a 5-minute staleTime); refocusing sooner does not refetch
+    provenance: [query-invalidation.ts overdue invalidation rules, use-contacts.ts useOverdueContacts]
+    notes: The mark-as-contacted-from-dashboard path specifically is CAD-028; this pins the freshness contract for the flows that DO invalidate the overdue key today — interaction:created, contact:merged, and meeting-note:resolved. The import-link resolution and cadence-changing contact-edit flows do NOT refresh overdue today; that intended-but-broken freshness is DSH-009 (proposed), so it is deliberately excluded from this current claim. refetchOnWindowFocus is on but gated by the query's 5-minute staleTime (useOverdueContacts), so refocus refetches only when the list is already stale; there is no polling interval.
+
+  - id: DSH-006
+    title: A failed dashboard mark-as-contacted surfaces an error to the user
+    type: ux
+    status: proposed
+    given: a dashboard mark-as-contacted action that fails
+    when: the failure occurs
+    then:
+      - the user sees an error indication rather than silent inaction
+    provenance: [dashboard/page.tsx handleMarkContacted]
+    notes: 'Proposed: today the failure is logged to the console only, with no user-facing feedback. The success path is CAD-028; this pins the failure path, which CAD-028 does not cover. Sibling gap on the contact-list/detail surfaces is CON-046.'
+
+  - id: DSH-007
+    title: Search is the contact list's search; the dashboard exposes no separate global search
+    type: ux
+    status: current
+    given: a user wanting to find a contact by text
+    when: they look for a search affordance
+    then:
+      - contact text search is provided through the contact list's search input
+      - no dedicated dashboard-level or app-global search surface exists (no top-bar search box or command palette)
+    provenance: [components/layout/navigation.tsx, contacts/page.tsx search input, contacts-api.ts]
+    notes: Full-text matching semantics and relevance ordering are CON-023; this behavior records that the domain's "search" scope resolves to the contact list rather than a distinct surface, so the boundary is explicit.
+
+  - id: DSH-008
+    title: The dashboard owns no persisted state of its own
+    type: invariant
+    status: current
+    statement: the dashboard materializes no data or scheduled job of its own — every widget is a live read over existing contact and cadence data, and its only write is the mark-as-contacted interaction (CAD-028); there is no dashboard-specific table, cron, or cached aggregate.
+    provenance: [dashboard/page.tsx, ContactService.ListOverdueContacts, no dashboard scheduler job]
+    notes: Consequence — dashboard correctness follows entirely from the contacts and cadence domains; there is nothing to backfill or reconcile on the dashboard side.
+
+  - id: DSH-009
+    title: Import-link and cadence-changing contact edits should refresh the overdue widget
+    type: ux
+    status: proposed
+    given: an open dashboard whose overdue list has been fetched
+    when: a flow whose invalidation rule omits the overdue key changes who is overdue
+    then:
+      - the overdue list refreshes to reflect the resulting membership change without a manual page reload
+    provenance: [query-invalidation.ts import:linked and contact:updated rules, use-imports.ts useLinkCandidate, use-contacts.ts useUpdateContact, import.go ImportHandler.LinkContact]
+    notes: 'Proposed: two concrete flows leak staleness today. import:linked invalidates importKeys.lists/suggestionsLists + contactKeys.lists() but NOT contactKeys.overdue(), even though ImportHandler.LinkContact can set cadence via EnrichContactFromExternalWithSelections (import.go) — so linking a match that changes cadence leaves the overdue widget stale. contact:updated invalidates only contactKeys.lists(), so a contact edit that changes cadence likewise does not refresh overdue. Both recover only on a manual reload or window refocus (refetchOnWindowFocus). The sibling flows in DSH-005 (interaction:created, contact:merged, meeting-note:resolved) already invalidate overdue. Import resolution is imports-matching scope, cross-ref IMP.'
