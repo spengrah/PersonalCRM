@@ -217,20 +217,6 @@ func (*followUpTestNoopInteractionRec) Work(context.Context, *river.Job[consumer
 	return nil
 }
 
-// followUpIntegrationNoopClient is a Todoist client that never gets
-// called — integration tests don't invoke workers, so the client
-// factory's returned value is held but not exercised. If something
-// accidentally invokes Sync the test fails loudly.
-type followUpIntegrationNoopClient struct{}
-
-func (*followUpIntegrationNoopClient) QuickAdd(context.Context, string, string) (*todoist.QuickAddTask, error) {
-	panic("followUpIntegrationNoopClient.QuickAdd must not be called in integration tests")
-}
-
-func (*followUpIntegrationNoopClient) Sync(context.Context, string, []string, []todoist.SyncCommand) (*todoist.SyncResponse, error) {
-	panic("followUpIntegrationNoopClient.Sync must not be called in integration tests")
-}
-
 // seedContact creates a contact with an optional cadence.
 func (e *followUpIntegrationEnv) seedContact(t *testing.T, cadenceStr string) *repository.Contact {
 	t.Helper()
@@ -289,18 +275,6 @@ func (e *followUpIntegrationEnv) countContactTaskRows(t *testing.T, contactID uu
 	rows, err := e.taskRepo.ListContactTasksFiltered(ctx, contactID, nil, nil, ptr(contacttask.LifecycleFollowUpLoop))
 	require.NoError(t, err)
 	return len(rows)
-}
-
-// countRiverJobsByKind returns the count of river_job rows of a given
-// kind related to the contact_task (via args JSON membership).
-// Delegates to the repository's test-only sqlc wrapper so Go test code
-// doesn't inline raw SQL (core.md rule 2).
-func (e *followUpIntegrationEnv) countRiverJobsByKind(t *testing.T, kind string, contactTaskID uuid.UUID) int {
-	t.Helper()
-	ctx := context.Background()
-	n, err := e.taskRepo.CountRiverJobsByContactTask(ctx, kind, contactTaskID)
-	require.NoError(t, err)
-	return int(n)
 }
 
 // countOpJobs returns the count of todoist_task_op river_job rows for a

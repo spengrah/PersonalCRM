@@ -529,8 +529,8 @@ func (s *MeetingNoteService) reResolveTagged(ctx context.Context, tx pgx.Tx, par
 
 // writeDesiredInteractions persists each desiredInteraction through
 // ContactInteractionRecorder.RecordInteractionTx so cadence + follow-up
-// state apply correctly. Returns the materialized list for the response
-// PLUS the post-commit follow-up closures.
+// state apply inline in the caller's tx. Returns the materialized list
+// for the response.
 //
 // linkedKind/linkedID are the EFFECTIVE post-resolution linkage for venue
 // resolution — NOT necessarily prior.LinkedKind/LinkedID, which may be stale in

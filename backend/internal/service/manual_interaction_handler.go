@@ -19,7 +19,7 @@ import (
 // package can stub it in tests without importing the consumer package
 // wholesale. Production wiring passes the concrete type.
 type manualInteractionRecorder interface {
-	HandleEvent(ctx context.Context, tx pgx.Tx, env *events.Envelope) (*repository.Interaction, func(context.Context), error)
+	HandleEvent(ctx context.Context, tx pgx.Tx, env *events.Envelope) (*repository.Interaction, error)
 }
 
 // manualInteractionBus is the subset of *events.Bus used by
@@ -95,28 +95,23 @@ func (s *ManualInteractionHandler) Run(
 		return nil, fmt.Errorf("build manual envelope: %w", err)
 	}
 
-	var (
-		interaction *repository.Interaction
-		postCommit  func(context.Context)
-	)
+	var interaction *repository.Interaction
 	err = pgx.BeginTxFunc(ctx, s.pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
 		if pubErr := s.bus.PublishTx(ctx, tx, env); pubErr != nil {
 			return fmt.Errorf("publish interaction.manual: %w", pubErr)
 		}
-		row, pc, invErr := s.recorder.HandleEvent(ctx, tx, env)
+		row, invErr := s.recorder.HandleEvent(ctx, tx, env)
 		if invErr != nil {
 			return fmt.Errorf("inline consumer: %w", invErr)
 		}
 		interaction = row
-		postCommit = pc
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	if postCommit != nil {
-		postCommit(ctx)
-	}
+	// HandleEvent's effects (including any op enqueue) committed in the tx
+	// above; no post-commit work.
 	return interaction, nil
 }
 

@@ -211,26 +211,14 @@ func (e *consumerTestEnv) newContact(t *testing.T, name string) uuid.UUID {
 
 // runHandleEvent wraps InteractionRecorder.HandleEvent in a fresh tx
 // (matching the river worker's behavior). Commits on success, rolls back
-// on error. Ignores the returned interaction / postCommit — tests assert
-// via direct DB queries.
+// on error. Ignores the returned interaction — tests assert via direct
+// DB queries.
 func (e *consumerTestEnv) runHandleEvent(t *testing.T, env *events.Envelope) error {
 	t.Helper()
-	var postCommit func(context.Context)
-	err := pgx.BeginTxFunc(e.ctx, e.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
-		_, pc, handleErr := e.recorder.HandleEvent(e.ctx, tx, env)
-		if handleErr != nil {
-			return handleErr
-		}
-		postCommit = pc
-		return nil
+	return pgx.BeginTxFunc(e.ctx, e.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		_, handleErr := e.recorder.HandleEvent(e.ctx, tx, env)
+		return handleErr
 	})
-	if err != nil {
-		return err
-	}
-	if postCommit != nil {
-		postCommit(e.ctx)
-	}
-	return nil
 }
 
 // mustPublish publishes the envelope and asserts the ID is populated.

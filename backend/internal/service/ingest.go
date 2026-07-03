@@ -2246,9 +2246,9 @@ func (s *IngestService) handleMeetingNoteRecorded(
 		// content fields (occurred_at + description) when the payload
 		// changed so the timeline view reflects the latest meeting_at
 		// and title. Routes through ContactService.ExtendInteractionTx
-		// which re-applies cadence (last_contacted / contact_by) via
-		// the sole-writer path and returns a follow-up closure to run
-		// after commit — direct UPDATE would leave cadence stale.
+		// which re-applies cadence (last_contacted / contact_by) and
+		// follow-up inline in this tx via the sole-writer path — a
+		// direct UPDATE would leave cadence stale.
 		for ref, d := range desiredByRef {
 			x, have := existingByRef[ref]
 			if !have {
