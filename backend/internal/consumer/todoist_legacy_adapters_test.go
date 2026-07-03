@@ -103,7 +103,7 @@ func TestLegacyRefreshAdapter_IgnoresCarriedDeadline(t *testing.T) {
 }
 
 func TestLegacyAdapters_MissingDepsError(t *testing.T) {
-	executor := NewTodoistTaskOpWorker(nil, nil, nil, nil, nil)
+	executor := NewTodoistTaskOpWorker(FollowUpModeCutover, nil, nil, nil, nil, nil)
 
 	err := NewTodoistFollowUpCreateAdapterWorker(executor).Work(context.Background(),
 		&river.Job[consumerjobs.TodoistFollowUpCreateJobArgs]{Args: consumerjobs.TodoistFollowUpCreateJobArgs{ContactTaskID: uuid.New()}})

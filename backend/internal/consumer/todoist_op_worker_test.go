@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"personal-crm/backend/internal/consumer/consumerjobs"
+	"personal-crm/backend/internal/contacttask"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/todoist"
 
@@ -146,7 +147,13 @@ func settingsOK() TodoistSettingsFunc {
 }
 
 func newOpWorker(repo todoistOpTaskRepo, client *fakeOpClient, inserter RiverInserter) *TodoistTaskOpWorker {
-	return NewTodoistTaskOpWorker(repo, settingsOK(), newFakeOpClientFactory(client), inserter, nil)
+	return newOpWorkerMode(FollowUpModeCutover, repo, client, inserter)
+}
+
+// newOpWorkerMode builds an executor with an explicit follow-up mode so the
+// off-mode gate tests can exercise the lifecycle-scoped kill switch.
+func newOpWorkerMode(mode string, repo todoistOpTaskRepo, client *fakeOpClient, inserter RiverInserter) *TodoistTaskOpWorker {
+	return NewTodoistTaskOpWorker(mode, repo, settingsOK(), newFakeOpClientFactory(client), inserter, nil)
 }
 
 func opJob(taskID uuid.UUID, op string) *river.Job[consumerjobs.TodoistTaskOpArgs] {
@@ -247,7 +254,7 @@ func TestOpWorker_UnknownVerb_PermanentCancel(t *testing.T) {
 }
 
 func TestOpWorker_MissingDependencies_Errors(t *testing.T) {
-	w := NewTodoistTaskOpWorker(nil, nil, nil, nil, nil)
+	w := NewTodoistTaskOpWorker(FollowUpModeCutover, nil, nil, nil, nil, nil)
 	err := w.Work(context.Background(), opJob(uuid.New(), consumerjobs.TaskOpUpdateDeadline))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not wired")
@@ -630,6 +637,122 @@ func TestOpWorker_FinalizeCreate_DismissedUnmanaged_RecordsIDNoClose(t *testing.
 			require.Empty(t, inserter.args, "dismissed/unmanaged finalize records id only, NO close")
 		})
 	}
+}
+
+// -----------------------------------------------------------------------------
+// Follow-up off-mode gate (lifecycle-scoped kill switch).
+// -----------------------------------------------------------------------------
+
+// TestTodoistTaskOpWorker_FollowUpOffMode_SnoozesWithoutRemoteWrite proves the
+// lifecycle-scoped kill switch: when follow-up writes are off, every verb on a
+// followup_loop row snoozes (attempts-neutral) before any Todoist call or local
+// write. The forward-safety subtests lock the scoping so other-lifecycle ops
+// cannot regress it: cadence_due rows are never gated, cutover never snoozes,
+// and the legacy adapters inherit the gate through the shared executor.
+func TestTodoistTaskOpWorker_FollowUpOffMode_SnoozesWithoutRemoteWrite(t *testing.T) {
+	// failIfCalled builds a client that fails the (sub)test if Todoist is
+	// ever hit — the gate must snooze BEFORE any remote call.
+	failIfCalled := func(t *testing.T) *fakeOpClient {
+		c := &fakeOpClient{}
+		c.beforeSync = func() { t.Fatalf("off-mode followup_loop op must not call Todoist") }
+		return c
+	}
+
+	t.Run("create pending followup_loop snoozes with no remote or local write", func(t *testing.T) {
+		taskID := uuid.New()
+		repo := newFakeOpTaskRepo(&repository.ContactTask{
+			ID:        taskID,
+			State:     repository.ContactTaskStatePendingRemoteCreate,
+			Lifecycle: contacttask.LifecycleFollowUpLoop,
+			Metadata:  createMetadata(),
+		})
+		client := failIfCalled(t)
+		w := newOpWorkerMode(FollowUpModeOff, repo, client, &recordingInserter{})
+
+		err := w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpCreate))
+		requireSnooze(t, err)
+		require.Empty(t, client.commands)
+		require.Equal(t, repository.ContactTaskStatePendingRemoteCreate, repo.rows[taskID].State,
+			"gate must snooze before any local write")
+		require.Empty(t, repo.rows[taskID].ExternalTaskID, "gate must snooze before any local write")
+	})
+
+	for _, op := range []string{
+		consumerjobs.TaskOpClose,
+		consumerjobs.TaskOpDelete,
+		consumerjobs.TaskOpUpdateDeadline,
+		consumerjobs.TaskOpUpdateDescription,
+	} {
+		t.Run(op+" managed followup_loop snoozes with no remote write", func(t *testing.T) {
+			taskID := uuid.New()
+			repo := newFakeOpTaskRepo(&repository.ContactTask{
+				ID:             taskID,
+				State:          repository.ContactTaskStateManaged,
+				Lifecycle:      contacttask.LifecycleFollowUpLoop,
+				ExternalTaskID: "remote-1",
+				Metadata:       map[string]any{"due_date": "2026-03-15", "description": "notes"},
+			})
+			client := failIfCalled(t)
+			w := newOpWorkerMode(FollowUpModeOff, repo, client, &recordingInserter{})
+
+			err := w.Work(context.Background(), opJob(taskID, op))
+			requireSnooze(t, err)
+			require.Empty(t, client.commands)
+		})
+	}
+
+	t.Run("cadence_due row is never gated by the follow-up kill switch", func(t *testing.T) {
+		taskID := uuid.New()
+		repo := newFakeOpTaskRepo(&repository.ContactTask{
+			ID:             taskID,
+			State:          repository.ContactTaskStateManaged,
+			Lifecycle:      contacttask.LifecycleCadenceDue,
+			ExternalTaskID: "remote-2",
+		})
+		client := &fakeOpClient{}
+		w := newOpWorkerMode(FollowUpModeOff, repo, client, &recordingInserter{})
+
+		err := w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpClose))
+		require.NoError(t, err, "a follow-up kill switch must never suppress cadence writes")
+		require.Len(t, client.commands, 1)
+		require.Equal(t, "item_close", client.commands[0].Type)
+	})
+
+	t.Run("cutover mode never snoozes a followup_loop op", func(t *testing.T) {
+		taskID := uuid.New()
+		repo := newFakeOpTaskRepo(&repository.ContactTask{
+			ID:             taskID,
+			State:          repository.ContactTaskStateManaged,
+			Lifecycle:      contacttask.LifecycleFollowUpLoop,
+			ExternalTaskID: "remote-3",
+		})
+		client := &fakeOpClient{}
+		w := newOpWorkerMode(FollowUpModeCutover, repo, client, &recordingInserter{})
+
+		err := w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpClose))
+		require.NoError(t, err)
+		require.Len(t, client.commands, 1)
+		require.Equal(t, "item_close", client.commands[0].Type)
+	})
+
+	t.Run("legacy create adapter inherits the off-mode gate", func(t *testing.T) {
+		taskID := uuid.New()
+		repo := newFakeOpTaskRepo(&repository.ContactTask{
+			ID:        taskID,
+			State:     repository.ContactTaskStatePendingRemoteCreate,
+			Lifecycle: contacttask.LifecycleFollowUpLoop,
+			Metadata:  createMetadata(),
+		})
+		client := failIfCalled(t)
+		executor := newOpWorkerMode(FollowUpModeOff, repo, client, &recordingInserter{})
+		adapter := NewTodoistFollowUpCreateAdapterWorker(executor)
+
+		err := adapter.Work(context.Background(), &river.Job[consumerjobs.TodoistFollowUpCreateJobArgs]{
+			Args: consumerjobs.TodoistFollowUpCreateJobArgs{ContactTaskID: taskID},
+		})
+		requireSnooze(t, err)
+		require.Empty(t, client.commands)
+	})
 }
 
 func TestOpWorker_FinalizeCreate_ManagedNoOp(t *testing.T) {

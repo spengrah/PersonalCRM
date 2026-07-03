@@ -128,7 +128,7 @@ func newOpWorkerEnv(t *testing.T) (*opWorkerEnv, func()) {
 	}
 	clientFactory := func(string) todoist.Client { return mock }
 
-	worker := consumer.NewTodoistTaskOpWorker(taskRepo, settings, clientFactory, riverClient, database.Pool)
+	worker := consumer.NewTodoistTaskOpWorker(consumer.FollowUpModeCutover, taskRepo, settings, clientFactory, riverClient, database.Pool)
 	gen, _ := migrationGenerator(t)
 	env := &opWorkerEnv{
 		database:    database,

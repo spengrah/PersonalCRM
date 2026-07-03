@@ -836,6 +836,7 @@ func TestMergeContacts_CloseEnqueue_ExecutesThroughAdapter(t *testing.T) {
 		return &todoist.Settings{ProjectID: "p", LabelName: "l", IntegrationInstanceID: "i"}, "token", nil
 	}
 	executor := consumer.NewTodoistTaskOpWorker(
+		consumer.FollowUpModeCutover,
 		h.taskRepo, settings, func(string) todoist.Client { return mock }, nil, h.database.Pool,
 	)
 	adapter := consumer.NewTodoistFollowUpCloseAdapterWorker(executor)

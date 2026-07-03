@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/consumer/consumerjobs"
+	"personal-crm/backend/internal/contacttask"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/todoist"
 
@@ -25,6 +26,15 @@ import (
 // bumps MaxAttempts), so the op can wait out an arbitrarily long create
 // outage without being discarded.
 const opUpdateSnoozeDelay = 30 * time.Second
+
+// opModeOffSnoozeDelay is how long a followup_loop op waits when follow-up
+// writes are disabled (EVENT_BUS_FOLLOWUP_MODE=off). Snoozing is
+// attempts-neutral, so the queued op pauses under the emergency kill switch
+// and resumes — draining the suppressed work — once the operator restarts
+// into cutover, rather than burning MaxAttempts and dead-lettering. Modestly
+// longer than the create-wait to cut wake churn; the exact value is not
+// load-bearing.
+const opModeOffSnoozeDelay = 60 * time.Second
 
 // todoistOpTaskRepo is the subset of ContactTaskRepository the executor
 // needs: a pool-scoped read to branch on state (and to verify-after-push),
@@ -55,17 +65,26 @@ type todoistTaskOpDeps struct {
 // the executor reads the row's CURRENT authoritative local state at
 // execution time and pushes that, so duplicate/at-least-once ops are
 // harmless (each re-reads and re-pushes; identical pushes dedup Todoist-
-// side via temp_id / payload-fingerprint UUID). There is no mode gate —
-// the executor runs whatever was enqueued (arc D11).
+// side via temp_id / payload-fingerprint UUID).
+//
+// The executor serves all lifecycles and is mode-blind for every lifecycle
+// EXCEPT followup_loop: when follow-up writes are disabled
+// (followUpMode == off) it snoozes followup_loop ops before any Todoist call
+// or local write, preserving the deleted follow-up workers' emergency kill
+// switch. cadence_due / manual ops are never gated.
 type TodoistTaskOpWorker struct {
 	river.WorkerDefaults[consumerjobs.TodoistTaskOpArgs]
-	deps todoistTaskOpDeps
+	followUpMode string
+	deps         todoistTaskOpDeps
 }
 
-// NewTodoistTaskOpWorker constructs the executor. All dependencies are
-// required in production wiring; a nil-dep invocation fails closed with a
-// descriptive error rather than panicking mid-verb.
+// NewTodoistTaskOpWorker constructs the executor. followUpMode is the
+// process-wide follow-up write mode (off / cutover) used only to gate
+// followup_loop ops; all other dependencies are required in production
+// wiring, and a nil-dep invocation fails closed with a descriptive error
+// rather than panicking mid-verb.
 func NewTodoistTaskOpWorker(
+	followUpMode string,
 	taskRepo todoistOpTaskRepo,
 	settings TodoistSettingsFunc,
 	clientFactory todoist.ClientFactory,
@@ -73,6 +92,7 @@ func NewTodoistTaskOpWorker(
 	pool *pgxpool.Pool,
 ) *TodoistTaskOpWorker {
 	return &TodoistTaskOpWorker{
+		followUpMode: followUpMode,
 		deps: todoistTaskOpDeps{
 			taskRepo:      taskRepo,
 			settings:      settings,
@@ -91,6 +111,15 @@ func (w *TodoistTaskOpWorker) depsWired() error {
 		return errors.New("todoist_task_op: worker dependencies not wired")
 	}
 	return nil
+}
+
+// followUpWritesDisabled reports whether the follow-up emergency kill
+// switch (followUpMode == off) suppresses this row's op. Scoped strictly to
+// followup_loop rows so a follow-up-only switch never suppresses cadence_due
+// or manual Todoist writes. Callers snooze (attempts-neutral) when true so
+// the queued op resumes on a restart into cutover.
+func (w *TodoistTaskOpWorker) followUpWritesDisabled(task *repository.ContactTask) bool {
+	return w.followUpMode == FollowUpModeOff && task.Lifecycle == contacttask.LifecycleFollowUpLoop
 }
 
 // Work dispatches the op verb. Unknown verbs are a permanent failure
@@ -149,6 +178,9 @@ func (w *TodoistTaskOpWorker) executeCreate(ctx context.Context, taskID uuid.UUI
 	task, err := w.deps.taskRepo.GetContactTask(ctx, taskID)
 	if err != nil {
 		return fmt.Errorf("fetch contact_task %s: %w", taskID, err)
+	}
+	if w.followUpWritesDisabled(task) {
+		return river.JobSnooze(opModeOffSnoozeDelay)
 	}
 	switch task.State {
 	case repository.ContactTaskStateManaged:
@@ -251,6 +283,9 @@ func (w *TodoistTaskOpWorker) executeTerminalOp(ctx context.Context, taskID uuid
 	task, err := w.deps.taskRepo.GetContactTask(ctx, taskID)
 	if err != nil {
 		return fmt.Errorf("fetch contact_task %s: %w", taskID, err)
+	}
+	if w.followUpWritesDisabled(task) {
+		return river.JobSnooze(opModeOffSnoozeDelay)
 	}
 	if task.ExternalTaskID == "" {
 		if task.State == repository.ContactTaskStatePendingRemoteCreate {
@@ -356,6 +391,9 @@ func (w *TodoistTaskOpWorker) executeUpdate(ctx context.Context, taskID uuid.UUI
 	task, err := w.deps.taskRepo.GetContactTask(ctx, taskID)
 	if err != nil {
 		return fmt.Errorf("fetch contact_task %s: %w", taskID, err)
+	}
+	if w.followUpWritesDisabled(task) {
+		return river.JobSnooze(opModeOffSnoozeDelay)
 	}
 	switch task.State {
 	case repository.ContactTaskStatePendingRemoteCreate:

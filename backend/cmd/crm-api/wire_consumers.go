@@ -331,10 +331,12 @@ func registerModeWorkers(
 	addWorker(reg, consumer.NewFollowUpManagerWorker(eventBus, database.Pool, followUpManager))
 	// Unified Todoist op executor: the single worker for every Todoist
 	// mutation (create/close/delete/update_deadline/update_description).
-	// Mode-blind — it executes whatever was enqueued. Registered so river
-	// knows the kind even when Todoist isn't wired; in that case the
-	// settings func errors and the worker returns a retryable failure.
+	// Mode-blind for every lifecycle except followup_loop, which it snoozes
+	// under the follow-up off-mode kill switch. Registered so river knows the
+	// kind even when Todoist isn't wired; in that case the settings func
+	// errors and the worker returns a retryable failure.
 	todoistOpWorker := consumer.NewTodoistTaskOpWorker(
+		consumer.FollowUpModeFromConfig(cfg.EventBus.FollowUpMode),
 		contactTaskRepo, followUpSettings, todoistClientFactory, riverClient, database.Pool,
 	)
 	addWorker(reg, todoistOpWorker)
