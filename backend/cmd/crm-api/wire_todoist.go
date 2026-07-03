@@ -98,7 +98,7 @@ func registerTodoistProvider(deps todoistProviderDeps) *handlers.ContactTaskHand
 	logger.Info().Msg("Todoist Cadence sync provider registered")
 
 	// Follow-up lifecycle is handled by consumer.FollowUpManager
-	// (wired above via SetFollowUpConsumer). The Todoist
+	// (passed to NewContactService as the followUp ctor arg). The Todoist
 	// dependency (settings + client factory) routes through
 	// followUpSettingsHolder which was populated when Todoist
 	// OAuth initialized. No follow-up service is constructed

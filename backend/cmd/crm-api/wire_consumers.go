@@ -135,9 +135,7 @@ func buildDomainConsumers(
 		contactTaskRepo,
 		interactionRepo,
 		riverClient,
-		database.Pool,
 		followUpSettings,
-		todoistClientFactory,
 		cfg.CORS.FrontendURL,
 		cfg.Watchdog,
 	)
@@ -308,7 +306,6 @@ func registerModeWorkers(
 	cadenceUpdater := consumers.CadenceUpdater
 	knowledgeCacheUpdater := consumers.KnowledgeCacheUpdater
 	followUpManager := consumers.FollowUpManager
-	followUpMode := consumers.FollowUpMode
 	followUpSettings := consumers.FollowUpSettings
 	todoistClientFactory := consumers.TodoistClientFactory
 
@@ -330,21 +327,24 @@ func registerModeWorkers(
 	// FollowUpManager + river workers. Routing is config-blind
 	// (events.consumerJobsForKind always enqueues cadence + follow-up
 	// jobs for interaction.recorded); HandleEvent short-circuits on
-	// mode=off without DB writes. The Todoist create / close / refresh
-	// workers are registered so river knows their kinds even when
-	// Todoist isn't wired — in that case the settings func returns an
-	// ErrNoTodoistAccount-equivalent error and the worker returns a
-	// retryable failure for river to back off.
+	// mode=off without DB writes.
 	addWorker(reg, consumer.NewFollowUpManagerWorker(eventBus, database.Pool, followUpManager))
-	addWorker(reg, consumer.NewTodoistFollowUpCreateJobWorker(
-		followUpMode, contactTaskRepo, followUpSettings, todoistClientFactory, riverClient, database.Pool,
-	))
-	addWorker(reg, consumer.NewTodoistFollowUpCloseJobWorker(
-		followUpMode, contactTaskRepo, followUpSettings, todoistClientFactory,
-	))
-	addWorker(reg, consumer.NewTodoistFollowUpRefreshJobWorker(
-		followUpMode, contactTaskRepo, followUpSettings, todoistClientFactory,
-	))
+	// Unified Todoist op executor: the single worker for every Todoist
+	// mutation (create/close/delete/update_deadline/update_description).
+	// Mode-blind — it executes whatever was enqueued. Registered so river
+	// knows the kind even when Todoist isn't wired; in that case the
+	// settings func errors and the worker returns a retryable failure.
+	todoistOpWorker := consumer.NewTodoistTaskOpWorker(
+		contactTaskRepo, followUpSettings, todoistClientFactory, riverClient, database.Pool,
+	)
+	addWorker(reg, todoistOpWorker)
+	// Transitional adapters for the three legacy follow-up kinds: queued
+	// pre-cutover jobs, plus the two surviving legacy close-enqueue sites
+	// (provider temp-id finalize, contact-merge close), still execute by
+	// delegating to the shared executor. Removed once drained in prod.
+	addWorker(reg, consumer.NewTodoistFollowUpCreateAdapterWorker(todoistOpWorker))
+	addWorker(reg, consumer.NewTodoistFollowUpCloseAdapterWorker(todoistOpWorker))
+	addWorker(reg, consumer.NewTodoistFollowUpRefreshAdapterWorker(todoistOpWorker))
 
 	switch cfg.EventBus.FollowUpMode {
 	case config.EventBusFollowUpModeCutover:
