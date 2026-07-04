@@ -1,6 +1,6 @@
 # Behavior Specs — the intended-behavior SSOT
 
-This directory is the single source of truth (SSOT) for the application's intended behavior: durable, DOM-free statements of what the system is supposed to do, independent of how any test or UI currently expresses it. Consumers: deterministic tests (which cite behavior IDs — annotation format arrives with Piece 2 of #380), the Piece 3 traceability/coverage scanner, the Track B agentic QA judge, and the MCP server. Humans read it as the behavior index.
+This directory is the single source of truth (SSOT) for the application's intended behavior: durable, DOM-free statements of what the system is supposed to do, independent of how any test or UI currently expresses it. Consumers: deterministic tests (which cite behavior IDs — see [Test → behavior citations](#test--behavior-citations)), the Piece 3 traceability/coverage scanner, the Track B agentic QA judge, and the MCP server. Humans read it as the behavior index.
 
 It is deliberately distinct from `.ai/spec/`, which holds design documents. This directory holds product behavior, one YAML file per domain at `spec/<domain>.yaml`. The `.yaml` extension is required — the linter globs `*.yaml` only (this README, subdirectories, and `.yml` files are ignored).
 
@@ -90,6 +90,48 @@ A behavior that moves domains gets a new ID; the old one is retired with a point
 - **PR granularity is flexible.** One domain per PR is the default and keeps git history clean, but a batched multi-domain PR is fine when the whole set went through the review + consistency pass together (the exemplar backfill landed nine domains in one PR). Either way the PR lands the file(s) at `maturity: reviewed`, and the PR description records what review rejected or rewrote — durable evidence that curation happened.
 - **Granularity:** one behavior = one durable intent, one `when`; `then` lists enumerate facets of that single intent. Rough expectation: 20–50 behaviors per domain. Derivation is not transcription — write at the intent level (survives any UI redesign), not one-per-test-assertion.
 - **PII:** behaviors are generic statements of intent. No real contact data, UUIDs, or hostnames appear in spec files (standard repo privacy rule).
+
+## Test → behavior citations
+
+Deterministic tests cite the behavior IDs they cover with a source-comment marker. The pointer points **into** the SSOT (a test names the behavior it proves); the SSOT never points back at tests — there is no `coverage` field. Piece 3's traceability scanner reads these markers and diffs them against the corpus; Piece 2 ships only the format and its first hand-applied uses, no tooling.
+
+**Marker.** A citation is a line comment of the exact form `// spec: <ID>[, <ID> ...]` — literally `//`, one space, `spec:`, then one or more behavior IDs separated by commas. To cite many IDs, either comma-separate them on one line or stack multiple `// spec:` lines. The same marker string is used on every test surface (Go `testing`, Playwright, Vitest, and any future MCP tests): a line comment is byte-identical across surfaces, inert (it cannot break compilation or a test run), and couples test code to no framework annotation API.
+
+**Placement.** Put the citation next to the assertions that prove the behavior. Two canonical placements:
+
+- **Function level** — the marker sits on the line(s) immediately preceding the test declaration (`func TestXxx`, `test(...)`, `test.describe(...)`), separated from it only by blank or other comment lines. It binds to the whole test.
+- **Subtest level** — the marker is the first statement line(s) inside a `t.Run("name", func(t *testing.T) { ... })` body (or inside a `test(...)` body). It binds to that subtest. Prefer this when only some subtests prove the cited behavior — a function-level marker binds to every subtest, including generic ones that prove no behavior.
+
+**Granularity and cardinality.** Citations are behavior-granular only — cite `IMP-021`, never a `then`-item index (the SSOT has no sub-IDs, and coverage is defined at behavior granularity). Cardinality is free N:M: one test may cite several behaviors, and one behavior may be cited by many tests. No uniqueness constraint.
+
+**Cite-on-write.** Every new or deliberately-relaxed test carries citations. The existing suite is **not** retrofitted — untouched tests stay un-cited and read as orphans in Piece 3's report, which drives a later backfill. Going forward, cite-on-write is the soft norm for new and changed tests.
+
+**A citation asserts truth.** `// spec: X` means *this test verifies behavior X holds today*. Cite only `status: current` behaviors your test actually asserts green — never cite a `proposed` behavior as if a passing test proved it (a bug is never enshrined as `current`; see the maintenance rule). Not every assertion maps to a behavior: a generic framework-level contract (an unknown-id 404, a malformed-input 400) that no behavior owns simply carries no marker.
+
+**Worked examples.**
+
+```go
+// Go — subtest-level, citing the api behavior the subtest proves.
+func TestRematchAPI_PollableRescan(t *testing.T) {
+    t.Run("rescan with an eligible method returns a pollable job", func(t *testing.T) {
+        // spec: IMP-021
+        ...
+    })
+}
+```
+
+```ts
+// Playwright — function-level above the describe, plus a subtest-level cite inside.
+// spec: IMP-021
+test.describe('Rematch on add email', () => {
+  test('adding a matching email links a past event', async ({ page, request }) => {
+    // spec: CAL-019
+    ...
+  })
+})
+```
+
+**Scanner-readiness / validity.** The authoritative valid-ID set is `spec.ParseDir("spec/")` → the parsed behaviors' `.ID` values (the `backend/internal/spec` package, unchanged by Piece 2). A citation is *dead* iff its ID is not in that set; a behavior is an *orphan* iff no citation names it. Piece 2 does not build the scanner, validator, or CI gate that computes these (that is Piece 3); its proof is a one-off grep that resolves each cited ID against the corpus.
 
 ## Linting
 

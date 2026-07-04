@@ -260,6 +260,24 @@ await candidateCard.getByRole('button', { name: /Import/i }).click()
 
 **Modal stays open**: ImportLinkModal only closes when `candidates.length <= 1`. After importing, verify the card disappeared—don't wait for modal to close.
 
+## Citing behaviors in tests
+
+New and deliberately-relaxed tests cite the `spec/*.yaml` behavior IDs they prove with a line comment: `// spec: <ID>[, <ID> ...]`. Put the marker next to the assertions that prove the behavior — function-level (immediately preceding the `func TestXxx` / `test(...)` / `test.describe(...)`) or subtest-level (first line inside the `t.Run` / `test(...)` body). Cite only `status: current` behaviors the test actually asserts green; generic contracts that no behavior owns carry no marker.
+
+```go
+t.Run("rescan with an eligible method returns a pollable job", func(t *testing.T) {
+    // spec: IMP-021
+    ...
+})
+```
+
+```ts
+// spec: CAL-019
+test('adding a matching email links a past event', async ({ page, request }) => { ... })
+```
+
+Full grammar, placement rules, cite-on-write policy, and scanner-readiness: `spec/README.md` → [Test → behavior citations](../../spec/README.md#test--behavior-citations).
+
 ## Writing Good Tests
 
 ### Integration Test Template
