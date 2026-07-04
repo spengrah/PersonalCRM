@@ -9,10 +9,11 @@ const API_HEADERS = {
 }
 
 // Exercise the full rematch happy path: seed an unmatched calendar event
-// with an attendee email, add that email to a CRM contact, and assert the
-// Meetings tab shows the event once the rematch job completes. The frontend
-// polls the job silently (RematchJobsProvider); invalidation causes the
-// Meetings list to refresh. @area:contacts
+// with an attendee email, add that email to a CRM contact, and assert — via
+// the calendar API, not the DOM — that the event is linked to the contact once
+// the rematch job completes. The frontend polls the job silently
+// (RematchJobsProvider); this test polls the backend directly. @area:contacts
+// spec: IMP-021
 test.describe('Rematch on add email @area:contacts', () => {
   let testApi: TestAPI
 
@@ -28,6 +29,7 @@ test.describe('Rematch on add email @area:contacts', () => {
     page,
     request,
   }) => {
+    // spec: CAL-019
     const attendeeEmail = `rematch-${Date.now()}@example.com`
 
     // Seed a contact with no email so the rematch handler has something to link to.
@@ -36,8 +38,9 @@ test.describe('Rematch on add email @area:contacts', () => {
 
     // Seed an unmatched past calendar event with the attendee email. The
     // `unmatched` flag keeps contact_id OUT of matched_contact_ids so the
-    // event isn't visible on the Meetings tab until rematch links it.
-    await testApi.seedCalendarEvents(contactId, [
+    // event stays unlinked (absent from GET /contacts/:id/events) until rematch
+    // links it.
+    const { ids: eventIds } = await testApi.seedCalendarEvents(contactId, [
       {
         title: 'Rematch Meeting',
         is_past: true,
@@ -46,6 +49,7 @@ test.describe('Rematch on add email @area:contacts', () => {
         unmatched: true,
       },
     ])
+    const seededEventId = eventIds[0]
 
     // Navigate straight into the edit view via the existing ?action=edit query
     // param (same path the list-page "Edit" context menu uses).
@@ -77,9 +81,8 @@ test.describe('Rematch on add email @area:contacts', () => {
     const rematchJobId: string | undefined = updateBody?.data?.rematch_job_id
     expect(rematchJobId, 'PUT /contacts response should carry rematch_job_id').toBeTruthy()
 
-    // The frontend polls the job silently. Poll the backend directly from the
-    // test so we can fail fast if something is wrong — visual assertions below
-    // cover the actual user-visible outcome (Meetings tab refresh).
+    // The frontend polls the job silently; poll the backend directly here so
+    // the test observes the pollable job endpoint (IMP-021) and fails fast.
     let jobCompleted = false
     for (let i = 0; i < 40 && !jobCompleted; i++) {
       const res = await request.get(`${API_BASE_URL}/api/v1/rematch/jobs/${rematchJobId}`, {
@@ -98,12 +101,26 @@ test.describe('Rematch on add email @area:contacts', () => {
     }
     expect(jobCompleted, 'rematch job should reach a terminal state').toBe(true)
 
-    // The provider's invalidation should refresh the Meetings list. Click the
-    // All tab so past events are visible regardless of default filter.
-    await page.getByRole('button', { name: /All \(\d+\)/i }).click()
-
-    await expect(page.getByText(`${testApi.prefix}-Rematch Meeting`)).toBeVisible({
-      timeout: 10000,
-    })
+    // Assert the data outcome via the calendar API, not the DOM: the previously
+    // unmatched event is now linked to the contact, so it appears in
+    // GET /contacts/:id/events (which returns only events matched to the
+    // contact). This is CAL-019's observable — the contact is appended to the
+    // matching event's matched set.
+    let eventLinked = false
+    for (let i = 0; i < 20 && !eventLinked; i++) {
+      const res = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}/events`, {
+        headers: API_HEADERS,
+      })
+      if (res.ok()) {
+        const body = await res.json()
+        const events: Array<{ id: string }> = body?.data ?? []
+        if (events.some(e => e.id === seededEventId)) {
+          eventLinked = true
+          break
+        }
+      }
+      await new Promise(r => setTimeout(r, 250))
+    }
+    expect(eventLinked, 'rematched event should be linked to the contact').toBe(true)
   })
 })
