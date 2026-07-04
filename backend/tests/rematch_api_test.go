@@ -23,7 +23,8 @@ import (
 // on (setupRematchEnv guarantees the registry ← bus ← contactSvc wiring), so a
 // job minted by Rescan is immediately visible through GetJob.
 func newRematchRouter(env *rematchTestEnv) *gin.Engine {
-	gin.SetMode(gin.TestMode)
+	// Gin mode is set once in TestMain; setting it here would race the
+	// unsynchronized ginMode global across the two t.Parallel() tests.
 	router := gin.New()
 	v1 := router.Group("/api/v1")
 	handlers.RegisterRematchRoutes(v1, handlers.NewRematchHandler(env.rematchSvc, env.contactSvc))
@@ -41,7 +42,12 @@ type rematchJobResponse struct {
 	ID        string `json:"id"`
 	ContactID string `json:"contact_id"`
 	Status    string `json:"status"`
-	Methods   []struct {
+	// Pointer so a dropped "matched" key (API stops reporting the count)
+	// is detectable as nil. The value itself is legitimately 0 at immediate
+	// poll time — the async dispatcher has not run yet (D3) — so we assert
+	// presence, not a specific count.
+	Matched *int `json:"matched"`
+	Methods []struct {
 		Type  string `json:"type"`
 		Value string `json:"value"`
 	} `json:"methods"`
@@ -106,6 +112,7 @@ func TestRematchAPI_PollableRescan(t *testing.T) {
 		assert.Equal(t, jobID, jobEnvelope.Data.ID)
 		assert.Equal(t, contact.ID.String(), jobEnvelope.Data.ContactID)
 		assert.NotEmpty(t, jobEnvelope.Data.Status, "job status is reported immediately")
+		require.NotNil(t, jobEnvelope.Data.Matched, "job response reports a matched count (IMP-021)")
 
 		// The methods being rematched are reported and include the email.
 		var foundEmail bool
