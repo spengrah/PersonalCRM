@@ -55,7 +55,7 @@ func migrationsPathForTest() string {
 
 // --- golden lists (sorted) -------------------------------------------------
 
-// baseWorkerKinds is the 17 unconditionally-registered workers (shapes 1 & 4).
+// baseWorkerKinds is the 18 unconditionally-registered workers (shapes 1 & 4).
 var baseWorkerKinds = sortedCopy([]string{
 	"noop",
 	"interaction_recorder",
@@ -74,6 +74,7 @@ var baseWorkerKinds = sortedCopy([]string{
 	"pairing_token_janitor",
 	"sync_staleness_watchdog",
 	"assertion_rollover",
+	"job_sample_trim",
 })
 
 // syncWorkerKinds adds the two external-sync-gated workers (shapes 3 & 6).
@@ -82,12 +83,13 @@ var syncWorkerKinds = sortedCopy(append([]string{
 	"sync_provider_account",
 }, baseWorkerKinds...))
 
-// basePeriodicKinds is the 4 unconditionally-registered periodic jobs.
+// basePeriodicKinds is the 5 unconditionally-registered periodic jobs.
 var basePeriodicKinds = sortedCopy([]string{
 	"messaging_aggregate_sweeper",
 	"pairing_token_janitor",
 	"sync_staleness_watchdog",
 	"assertion_rollover",
+	"job_sample_trim",
 })
 
 // syncPeriodicKinds adds the external-sync-gated scheduler tick.
@@ -246,6 +248,10 @@ func buildWireChainForGolden(t *testing.T, cfg *config.Config) (*riverRegistrar,
 	buildStaleness(reg, cfg, database, machost)
 	registerAssertionRollover(reg, graph)
 	registerSyncScheduler(reg, cfg, syncStk, riverClient)
+	// The recorder is intentionally NOT started here (it starts a goroutine and
+	// is neither a worker nor a periodic job); only the trim worker/periodic is
+	// pinned by the golden lists.
+	registerJobSampleWorkers(reg, repository.NewJobSampleRepository(database.Queries), cfg)
 
 	return reg, syncStk
 }

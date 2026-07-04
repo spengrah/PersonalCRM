@@ -42,6 +42,7 @@ var wipedTables = []string{
 	"external_sync_log",
 	"external_sync_state",
 	"interaction",
+	"job_exec_sample",
 	"mac_host",
 	"mac_host_pairing_token",
 	"meeting_note",
@@ -150,6 +151,9 @@ func TestSyntheticResetSyntheticData_WipesEveryDataTable(t *testing.T) {
 	beforeTags, err := support.CountAllRows(ctx, "tag")
 	require.NoError(t, err)
 	require.Greater(t, beforeTags, int64(0), "expected the tag marker before reset")
+	beforeJobExecSamples, err := support.CountAllRows(ctx, "job_exec_sample")
+	require.NoError(t, err)
+	require.Greater(t, beforeJobExecSamples, int64(0), "expected the job_exec_sample marker before reset")
 
 	// The reset.
 	require.NoError(t, support.ResetSyntheticData(ctx))

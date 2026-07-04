@@ -676,6 +676,84 @@ func TestConfig_Validate_RiverJobTimeout(t *testing.T) {
 	}
 }
 
+func TestConfig_River_JobSampleRetentionDays_Default(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	if cfg.River.JobSampleRetentionDays != DefaultRiverJobSampleRetentionDays {
+		t.Errorf("Expected default JobSampleRetentionDays=%d, got %d",
+			DefaultRiverJobSampleRetentionDays, cfg.River.JobSampleRetentionDays)
+	}
+}
+
+// TestConfig_River_JobSampleRetentionDays_FromEnv asserts
+// RIVER_JOB_SAMPLE_RETENTION_DAYS is parsed from the environment.
+func TestConfig_River_JobSampleRetentionDays_FromEnv(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+	WithEnv(t, "RIVER_JOB_SAMPLE_RETENTION_DAYS", "30")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	if cfg.River.JobSampleRetentionDays != 30 {
+		t.Errorf("Expected JobSampleRetentionDays=30, got %d", cfg.River.JobSampleRetentionDays)
+	}
+}
+
+// TestConfig_Validate_RiverJobSampleRetentionDays exercises the [1, 365] range.
+func TestConfig_Validate_RiverJobSampleRetentionDays(t *testing.T) {
+	tests := []struct {
+		name    string
+		days    int
+		wantErr bool
+	}{
+		{"zero", 0, true},
+		{"negative", -1, true},
+		{"at_min", 1, false},
+		{"default", DefaultRiverJobSampleRetentionDays, false},
+		{"at_max", 365, false},
+		{"above_max", 366, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := TestConfig()
+			cfg.River.JobSampleRetentionDays = tt.days
+
+			err := cfg.Validate()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("Expected validation error for days=%d", tt.days)
+				}
+				verr, ok := err.(ValidationErrors)
+				if !ok {
+					t.Fatalf("Expected ValidationErrors, got %T", err)
+				}
+				found := false
+				for _, e := range verr {
+					if e.Field == "RIVER_JOB_SAMPLE_RETENTION_DAYS" {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("Expected RIVER_JOB_SAMPLE_RETENTION_DAYS validation error, got: %v", err)
+				}
+			} else if err != nil {
+				t.Errorf("Expected no error for days=%d, got: %v", tt.days, err)
+			}
+		})
+	}
+}
+
 func TestConfig_DatabasePoolInvalidDuration(t *testing.T) {
 	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
 	WithEnv(t, "NODE_ENV", "development")

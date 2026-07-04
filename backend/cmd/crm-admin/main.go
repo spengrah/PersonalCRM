@@ -151,6 +151,16 @@
 //	                              The cache columns are retained (the consumer keeps
 //	                              them in sync from the assertions).
 //
+//	--river-tier0 [--window-hours N]
+//	                              One-shot wait/run-by-kind read over live river_job
+//	                              rows finalized in the last N hours (default 24).
+//	                              An APPROXIMATE first signal before job_exec_sample
+//	                              accrues — its wait is attempted_at - scheduled_at
+//	                              over the last attempt only and River mutates
+//	                              scheduled_at on retry, so do NOT compare it
+//	                              numerically to the Tier-1 queue_wait_ms metric.
+//	                              Read-only; SAFE with crm-api running.
+//
 // The seed/reset subcommands inherit the process env (CRM_ENV / TIME_BASE /
 // TIME_ACCELERATION / DATABASE_URL / MIGRATIONS_PATH) — on the Pi via
 // `set -a; . /srv/personalcrm/.env; set +a` — so the seeded world's cadence /
@@ -185,6 +195,7 @@ import (
 	"strings"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/consumer"
 	"personal-crm/backend/internal/consumer/consumerjobs"
@@ -283,6 +294,12 @@ type riverJobAdmin interface {
 	JobRetry(ctx context.Context, id int64) (*rivertype.JobRow, error)
 }
 
+// tier0Reader is the narrow interface --river-tier0 needs. Production wires
+// this to *repository.JobSampleRepository.
+type tier0Reader interface {
+	Tier0StatsByKind(ctx context.Context, cutoff time.Time) ([]repository.Tier0Row, error)
+}
+
 // adminDeps groups the per-subcommand dependencies. Tests inject
 // fakes for each interface; the production wiring builds a single
 // MacHostService and a small adapter for rematch.
@@ -310,8 +327,11 @@ type adminDeps struct {
 	// legacy contact.location/birthday/how_met into the graph via AssertService).
 	// Wired to a ContactKnowledgeMigrationService.
 	migrateContactKnowledge contactKnowledgeMigrator
-	stdout                  io.Writer
-	stderr                  io.Writer
+	// tier0 serves --river-tier0 (one-shot wait/run-by-kind read over live
+	// river_job). Wired to a JobSampleRepository.
+	tier0  tier0Reader
+	stdout io.Writer
+	stderr io.Writer
 }
 
 // runOptions captures parsed flags. Exposed as a struct so tests can
@@ -357,6 +377,11 @@ type runOptions struct {
 	// contact.location/birthday/how_met into the graph via the validated assertion
 	// write path). Idempotent; counts-only output.
 	migrateContactKnowledge bool
+	// riverTier0 ← --river-tier0 (one-shot wait/run-by-kind read over live
+	// river_job for the last --window-hours). windowHours is auxiliary, used only
+	// by --river-tier0.
+	riverTier0  bool
+	windowHours int
 }
 
 // exitErr carries an explicit process exit code so a subcommand can drive a
@@ -510,6 +535,9 @@ func validateSubcommand(opts runOptions) error {
 	if opts.migrateContactKnowledge {
 		active++
 	}
+	if opts.riverTier0 {
+		active++
+	}
 	if active == 0 {
 		return errors.New("no subcommand specified; pass exactly one of " +
 			subcommandList)
@@ -527,7 +555,7 @@ const subcommandList = "--messages-rematch-stranded, --reconcile-address-book-me
 	"--rederive-correspondence-names, --reset-gmail-backfill-cursors, --mint-pairing-token, " +
 	"--list-hosts, --revoke-host <uuid>, --rotate-host-key <uuid>, --seed, --reset-and-seed, " +
 	"--migrate, --migrate-check, --list-jobs, --retry-job <id>, --migrate-tags, " +
-	"--migrate-contact-knowledge-columns"
+	"--migrate-contact-knowledge-columns, --river-tier0"
 
 // parseArgs uses a private FlagSet so tests can drive the parser
 // without polluting flag's global state.
@@ -609,6 +637,12 @@ func parseArgs(args []string) (runOptions, error) {
 			"(lives_in edges to place nodes + birthday/how_met facts, for non-deleted contacts) "+
 			"via the validated assertion write path with each contact's created_at as the "+
 			"knowledge time. Idempotent; counts-only output. Cache columns are retained.")
+	fs.BoolVar(&opts.riverTier0, "river-tier0", false,
+		"One-shot wait/run-by-kind read over live river_job rows finalized in the last "+
+			"--window-hours. An APPROXIMATE first signal before job_exec_sample accrues; do NOT "+
+			"compare it numerically to the Tier-1 queue_wait_ms metric. Read-only; safe with crm-api running.")
+	fs.IntVar(&opts.windowHours, "window-hours", 24,
+		"Look-back window in hours for --river-tier0 (default 24; must be >= 1).")
 	if err := fs.Parse(args); err != nil {
 		return runOptions{}, err
 	}
@@ -716,6 +750,8 @@ func run(ctx context.Context, opts runOptions, deps adminDeps) error {
 		return runMigrateTags(ctx, deps)
 	case opts.migrateContactKnowledge:
 		return runMigrateContactKnowledge(ctx, deps)
+	case opts.riverTier0:
+		return runRiverTier0(ctx, opts, deps)
 	case opts.migrate, opts.migrateCheck:
 		// Migration subcommands are dispatched PRE-DB in runMain (they need
 		// only the database URL + migrations path, not deps), so they never
@@ -995,6 +1031,49 @@ func runMigrateContactKnowledge(ctx context.Context, deps adminDeps) error {
 		"  how_met_migrated:    %d\n",
 		res.Contacts, res.LocationsMigrated, res.BirthdaysMigrated, res.HowMetMigrated); err != nil {
 		return fmt.Errorf("write summary: %w", err)
+	}
+	return nil
+}
+
+// maxTier0WindowHours bounds --window-hours (10 years) so an extreme value
+// can't overflow the int64 duration arithmetic that computes the cutoff.
+const maxTier0WindowHours = 24 * 365 * 10
+
+// runRiverTier0 prints a one-shot wait/run-by-kind read over live river_job
+// rows finalized in the last --window-hours. The cutoff is computed in Go from
+// accelerated time (NOT SQL NOW()) so the window tracks the running app's clock.
+// The output is an APPROXIMATE first signal (its wait is attempted_at -
+// scheduled_at over the last attempt only, and River mutates scheduled_at on
+// retry), so it must NOT be compared numerically to the Tier-1 queue_wait_ms
+// metric — the header says so.
+func runRiverTier0(ctx context.Context, opts runOptions, deps adminDeps) error {
+	if opts.windowHours < 1 || opts.windowHours > maxTier0WindowHours {
+		return fmt.Errorf("--window-hours must be between 1 and %d (got %d)", maxTier0WindowHours, opts.windowHours)
+	}
+	cutoff := accelerated.GetCurrentTime().Add(-time.Duration(opts.windowHours) * time.Hour)
+
+	rows, err := deps.tier0.Tier0StatsByKind(ctx, cutoff)
+	if err != nil {
+		return fmt.Errorf("river tier0 stats: %w", err)
+	}
+
+	if _, err := fmt.Fprintf(deps.stdout,
+		"river-tier0 (last %dh; APPROXIMATE — do NOT compare to Tier-1 queue_wait_ms):\n",
+		opts.windowHours); err != nil {
+		return fmt.Errorf("write tier0 header: %w", err)
+	}
+	if len(rows) == 0 {
+		if _, err := fmt.Fprintln(deps.stdout, "  no finished jobs in window"); err != nil {
+			return fmt.Errorf("write tier0 empty: %w", err)
+		}
+		return nil
+	}
+	for _, row := range rows {
+		if _, err := fmt.Fprintf(deps.stdout,
+			"  kind=%s n=%d p50_wait_s=%.3f p50_run_s=%.3f\n",
+			row.Kind, row.N, row.P50WaitS, row.P50RunS); err != nil {
+			return fmt.Errorf("write tier0 row: %w", err)
+		}
 	}
 	return nil
 }
@@ -1339,6 +1418,8 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 		jobs:                    riverClient,
 		migrateTags:             tagMigration,
 		migrateContactKnowledge: contactKnowledgeMigration,
+		// --river-tier0: read-only wait/run-by-kind over live river_job.
+		tier0: repository.NewJobSampleRepository(database.Queries),
 	}
 
 	// LAZY: build the correspondence re-derivation stack ONLY for

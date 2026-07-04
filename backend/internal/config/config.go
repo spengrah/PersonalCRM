@@ -169,6 +169,10 @@ type RiverConfig struct {
 	// [1s, 1h] — lower is unsafe (full provider syncs exceed a second);
 	// higher indicates a misbehaving provider that should be investigated.
 	JobTimeout time.Duration
+	// JobSampleRetentionDays is how many days of job_exec_sample rows the
+	// job_sample_trim periodic worker keeps. Default 14 ("let it run a couple
+	// of weeks"); validated 1–365.
+	JobSampleRetentionDays int
 }
 
 // EventBusConfig holds the event-bus consumer mode flags. See
@@ -320,6 +324,9 @@ const (
 	// budget + 1m headroom. River cancels the worker's context when the
 	// budget is exceeded.
 	DefaultRiverJobTimeout = 6 * time.Minute
+	// DefaultRiverJobSampleRetentionDays is the default retention window for
+	// job_exec_sample rows (the River job-execution sampling table).
+	DefaultRiverJobSampleRetentionDays = 14
 	// Sync-staleness watchdog defaults. See the StalenessConfig doc
 	// comment for the full rationale: 15m heartbeat (~15 missed ~60s
 	// beats), 24h pull (5m–15m intervals for everything but gcontacts),
@@ -495,8 +502,9 @@ func Load() (*Config, error) {
 			GroupMaxMembers:      getEnvAsInt("TELEGRAM_GROUP_MAX_MEMBERS", 10),
 		},
 		River: RiverConfig{
-			WorkerConcurrency: getEnvAsInt("RIVER_WORKER_CONCURRENCY", DefaultRiverWorkerConcurrency),
-			JobTimeout:        getEnvAsDuration("RIVER_JOB_TIMEOUT", DefaultRiverJobTimeout),
+			WorkerConcurrency:      getEnvAsInt("RIVER_WORKER_CONCURRENCY", DefaultRiverWorkerConcurrency),
+			JobTimeout:             getEnvAsDuration("RIVER_JOB_TIMEOUT", DefaultRiverJobTimeout),
+			JobSampleRetentionDays: getEnvAsInt("RIVER_JOB_SAMPLE_RETENTION_DAYS", DefaultRiverJobSampleRetentionDays),
 		},
 		EventBus: EventBusConfig{
 			InteractionMode:        getEnv("EVENT_BUS_INTERACTION_MODE", EventBusInteractionModeCutover),
@@ -625,6 +633,14 @@ func (c *Config) Validate() error {
 		errors = append(errors, ValidationError{
 			Field:   "RIVER_JOB_TIMEOUT",
 			Message: fmt.Sprintf("must be between 1s and 1h, got %s", c.River.JobTimeout),
+		})
+	}
+
+	// River job-sample retention range.
+	if c.River.JobSampleRetentionDays < 1 || c.River.JobSampleRetentionDays > 365 {
+		errors = append(errors, ValidationError{
+			Field:   "RIVER_JOB_SAMPLE_RETENTION_DAYS",
+			Message: fmt.Sprintf("must be between 1 and 365, got %d", c.River.JobSampleRetentionDays),
 		})
 	}
 
@@ -978,8 +994,9 @@ func TestConfig() *Config {
 			// Lowered alongside Database.MaxConns above so Validate()'s
 			// MaxConns >= WorkerConcurrency+3 holds (4+3 <= 8). The River test
 			// harnesses cap MaxWorkers at this value; 4 is plenty for tests.
-			WorkerConcurrency: 4,
-			JobTimeout:        DefaultRiverJobTimeout,
+			WorkerConcurrency:      4,
+			JobTimeout:             DefaultRiverJobTimeout,
+			JobSampleRetentionDays: DefaultRiverJobSampleRetentionDays,
 		},
 		EventBus: EventBusConfig{
 			InteractionMode: EventBusInteractionModeCutover,

@@ -340,6 +340,19 @@ type Interaction struct {
 	VenueID     pgtype.UUID        `json:"venue_id"`
 }
 
+type JobExecSample struct {
+	ID          pgtype.UUID        `json:"id"`
+	RiverJobID  int64              `json:"river_job_id"`
+	Kind        string             `json:"kind"`
+	Queue       string             `json:"queue"`
+	AttemptedAt pgtype.Timestamptz `json:"attempted_at"`
+	FinalizedAt pgtype.Timestamptz `json:"finalized_at"`
+	Attempt     int32              `json:"attempt"`
+	State       string             `json:"state"`
+	QueueWaitMs int64              `json:"queue_wait_ms"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
 type MacHost struct {
 	ID              pgtype.UUID        `json:"id"`
 	Hostname        string             `json:"hostname"`
