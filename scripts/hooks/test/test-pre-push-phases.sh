@@ -121,10 +121,10 @@ assert_eq "lane runs every command (2nd failure fails lane)" "1" "$([[ "$(cat "$
 
 rm -rf "$tmpd"
 
-# --- D1: PROJECT_ROOT resolves to the PUSHING worktree, not the hook-file's
+# --- PROJECT_ROOT resolves to the PUSHING worktree, not the hook-file's
 # location. Simulates core.hooksPath pointing at a DIFFERENT checkout: copy the
 # hook OUTSIDE this repo, then source/run the copy under the cwd/GIT_DIR shapes
-# git actually uses. The mutation check (revert D1 locally) confirms (a) goes
+# git actually uses. The mutation check (reverting the derivation locally) confirms (a) goes
 # red against the old script-location derivation.
 repo_root="$(pwd)"
 outside_dir=$(mktemp -d) || { echo "FAIL: mktemp -d failed"; exit 1; }
@@ -170,7 +170,7 @@ assert_eq "no-GIT_DIR manual invocation: PROJECT_ROOT == pushing worktree root" 
 # branch ref) is deliberate: it proves the missing-config guard fires BEFORE
 # the promotion-to-main skip check — a feature-branch ref would pass this
 # assertion even if a regression moved the guard below the skip, since that ref
-# never enters the skip branch either way. This pins D1's fail-closed guard: a
+# never enters the skip branch either way. This pins the fail-closed guard: a
 # wrong resolution must neither reach the fail-open "no config -> skip checks"
 # branch NOR silently re-root to the hook checkout.
 config_less_dir=$(mktemp -d) || { echo "FAIL: mktemp -d failed"; exit 1; }
