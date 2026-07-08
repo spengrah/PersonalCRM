@@ -37,16 +37,28 @@ func searchNS(t *testing.T) string {
 func newContactSearchAPITest(t *testing.T) (*gin.Engine, *repository.ContactRepository, *repository.ContactMethodRepository) {
 	t.Helper()
 	ctx := context.Background()
-	database, cfg := newAPISharedTestDB(t, ctx)
-
-	manualHandler, contactService := mustBuildManualHandlerForTest(t, ctx, database, cfg)
-	contactHandler := handlers.NewContactHandler(contactService)
-
-	interactionRepo := repository.NewInteractionRepository(database.Queries)
-	interactionHandler := handlers.NewInteractionHandler(interactionRepo, manualHandler)
+	database, _ := newAPISharedTestDB(t, ctx)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	methodRepo := repository.NewContactMethodRepository(database.Queries)
+	interactionRepo := repository.NewInteractionRepository(database.Queries)
+
+	// List-only wiring (contact_ids_test.go pattern): nil bus/rematch/followUp
+	// plus the light cadence/knowledge deps. This deliberately avoids
+	// mustBuildManualHandlerForTest, which starts a live River client on the
+	// shared package DB — shared TestOnly clients steal each other's
+	// river_job work (see river_isolated_testdb_test.go), and this GET-only
+	// suite never exercises a write path that needs the event-bus wiring.
+	cadenceUpdater := buildCadenceUpdaterForAPITest(t, database)
+	assertSvc, cache := buildKnowledgeDepsForAPITest(t, database, nil)
+	contactService := service.NewContactService(database, contactRepo, methodRepo, interactionRepo, repository.NewContactTaskRepository(database.Queries), nil, nil, cadenceUpdater, assertSvc, cache, nil)
+	contactHandler := handlers.NewContactHandler(contactService)
+
+	// The interaction handler's manual write path is likewise unwired (nil
+	// ManualInteractionHandler); no search subtest touches an interaction
+	// write route.
+	interactionHandler := handlers.NewInteractionHandler(interactionRepo, nil)
+
 	noteHandler := handlers.NewNoteHandler(service.NewNoteService(repository.NewNoteRepository(database.Queries), contactRepo))
 
 	router := gin.New()
