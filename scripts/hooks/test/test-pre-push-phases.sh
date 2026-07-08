@@ -165,16 +165,20 @@ assert_eq "no-GIT_DIR manual invocation: PROJECT_ROOT == pushing worktree root" 
 # tree, GIT_DIR exported (so --show-toplevel yields that config-less dir per
 # documented git behavior: cwd is treated as toplevel when GIT_WORK_TREE is
 # unset). RUN the copy (not source — the guard sits in the executed body) with
-# promotion-shaped stdin and assert exit 1 plus the "refusing to gate" message.
-# This pins D1's fail-closed guard: a wrong resolution must neither reach the
-# fail-open "no config -> skip checks" branch NOR silently re-root to the hook
-# checkout.
+# PROMOTION-SHAPED stdin (every ref targets refs/heads/main) and assert exit 1
+# plus the "refusing to gate" message. Promotion-shaped stdin (not a feature-
+# branch ref) is deliberate: it proves the missing-config guard fires BEFORE
+# the promotion-to-main skip check — a feature-branch ref would pass this
+# assertion even if a regression moved the guard below the skip, since that ref
+# never enters the skip branch either way. This pins D1's fail-closed guard: a
+# wrong resolution must neither reach the fail-open "no config -> skip checks"
+# branch NOR silently re-root to the hook checkout.
 config_less_dir=$(mktemp -d) || { echo "FAIL: mktemp -d failed"; exit 1; }
 c_rc=0
 c_out=$(
   cd "$config_less_dir" || exit 1
   export GIT_DIR="$real_git_dir"
-  printf 'refs/heads/feat/x a refs/heads/feat/x b\n' | bash "$outside_dir/hooks/pre-push" 2>&1
+  printf 'refs/heads/develop a refs/heads/main b\n' | bash "$outside_dir/hooks/pre-push" 2>&1
 ) || c_rc=$?
 assert_eq "missing-config fail-closed: exit 1"          "1" "$c_rc"
 assert_eq "missing-config fail-closed: refusing message" "1" "$(grep -c 'Refusing to gate' <<<"$c_out")"
