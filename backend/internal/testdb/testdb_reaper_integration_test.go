@@ -122,6 +122,26 @@ func createSyntheticTemplate(t *testing.T, ctx context.Context, admin *pgx.Conn,
 	}
 }
 
+// waitForZeroBackends waits (bounded) until pg_stat_database reports no
+// backends on name — client disconnects release backends asynchronously, and
+// under parallel-suite load the lag is long enough to race reapTemplates's
+// open-backend skip. Fixed attempt count, no time.Now() (core rule #1).
+func waitForZeroBackends(t *testing.T, ctx context.Context, admin *pgx.Conn, name string) {
+	t.Helper()
+	const maxAttempts = 50 // ~5s total at 100ms between attempts
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		n, err := templateActiveBackends(ctx, admin, name)
+		if err != nil {
+			t.Fatalf("templateActiveBackends(%q): %v", name, err)
+		}
+		if n == 0 {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("backends on %q did not reach zero within %d attempts", name, maxAttempts)
+}
+
 func mustOID(t *testing.T, ctx context.Context, admin *pgx.Conn, name string) uint32 {
 	t.Helper()
 	oid, ok, err := databaseOID(ctx, admin, name)
@@ -299,6 +319,7 @@ func TestTestdbReaperSweepsStaleTemplate(t *testing.T) {
 
 	_, hash, templateName := syntheticMigDir(t)
 	createSyntheticTemplate(t, ctx, admin, baseURL, templateName, hash)
+	waitForZeroBackends(t, ctx, admin, templateName)
 
 	dropped, err := reapTemplates(ctx, admin, []string{templateName}, "")
 	if err != nil {
@@ -328,6 +349,7 @@ func TestTestdbReaperBlocksOnAdvisoryLock(t *testing.T) {
 
 	_, hash, templateName := syntheticMigDir(t)
 	createSyntheticTemplate(t, ctx, admin, baseURL, templateName, hash)
+	waitForZeroBackends(t, ctx, admin, templateName)
 
 	// Three distinct connections: `holder` holds the lock, `reaperConn` runs the
 	// blocked reapTemplates in a goroutine, and `admin` stays free for the main
