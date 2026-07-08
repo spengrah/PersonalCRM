@@ -121,4 +121,64 @@ assert_eq "lane runs every command (2nd failure fails lane)" "1" "$([[ "$(cat "$
 
 rm -rf "$tmpd"
 
+# --- D1: PROJECT_ROOT resolves to the PUSHING worktree, not the hook-file's
+# location. Simulates core.hooksPath pointing at a DIFFERENT checkout: copy the
+# hook OUTSIDE this repo, then source/run the copy under the cwd/GIT_DIR shapes
+# git actually uses. The mutation check (revert D1 locally) confirms (a) goes
+# red against the old script-location derivation.
+repo_root="$(pwd)"
+outside_dir=$(mktemp -d) || { echo "FAIL: mktemp -d failed"; exit 1; }
+mkdir -p "$outside_dir/hooks"
+cp scripts/hooks/pre-push "$outside_dir/hooks/pre-push"
+real_git_dir="$(git rev-parse --absolute-git-dir)"
+expected_root="$(git rev-parse --show-toplevel)"
+
+# (a) hooksPath-simulation, the actual bug shape: cwd = repo root, GIT_DIR
+# exported (exactly what git sets for a pre-push hook during a linked-worktree
+# push). PROJECT_ROOT must be the pushing root, NOT the copy's grandparent
+# (outside_dir) — which is what the old script-location derivation would yield.
+# (rc captured via `|| rc=$?`, NOT a bare trailing `$?`: the harness runs under
+# `set -e` from the earlier rc-aggregation section, so a `(...)` subshell that
+# exits nonzero as a bare simple command would abort the whole script before
+# assert_eq ever ran. `||` exempts the preceding command from -e.)
+a_rc=0
+(
+  cd "$repo_root" || exit 1
+  export GIT_DIR="$real_git_dir"
+  source "$outside_dir/hooks/pre-push"
+  [[ "$PROJECT_ROOT" == "$expected_root" ]]
+) || a_rc=$?
+assert_eq "hooksPath-sim (GIT_DIR set): PROJECT_ROOT == pushing worktree root" "0" "$a_rc"
+
+# (b) no-GIT_DIR manual invocation (discovery path): same copy, cwd = repo
+# root, GIT_DIR unset. Same assertion.
+b_rc=0
+(
+  cd "$repo_root" || exit 1
+  unset GIT_DIR
+  source "$outside_dir/hooks/pre-push"
+  [[ "$PROJECT_ROOT" == "$expected_root" ]]
+) || b_rc=$?
+assert_eq "no-GIT_DIR manual invocation: PROJECT_ROOT == pushing worktree root" "0" "$b_rc"
+
+# (c) missing-config hard fail-closed: cwd = an empty temp dir OUTSIDE any repo
+# tree, GIT_DIR exported (so --show-toplevel yields that config-less dir per
+# documented git behavior: cwd is treated as toplevel when GIT_WORK_TREE is
+# unset). RUN the copy (not source — the guard sits in the executed body) with
+# promotion-shaped stdin and assert exit 1 plus the "refusing to gate" message.
+# This pins D1's fail-closed guard: a wrong resolution must neither reach the
+# fail-open "no config -> skip checks" branch NOR silently re-root to the hook
+# checkout.
+config_less_dir=$(mktemp -d) || { echo "FAIL: mktemp -d failed"; exit 1; }
+c_rc=0
+c_out=$(
+  cd "$config_less_dir" || exit 1
+  export GIT_DIR="$real_git_dir"
+  printf 'refs/heads/feat/x a refs/heads/feat/x b\n' | bash "$outside_dir/hooks/pre-push" 2>&1
+) || c_rc=$?
+assert_eq "missing-config fail-closed: exit 1"          "1" "$c_rc"
+assert_eq "missing-config fail-closed: refusing message" "1" "$(grep -c 'Refusing to gate' <<<"$c_out")"
+
+rm -rf "$outside_dir" "$config_less_dir"
+
 [[ "$fail" -eq 0 ]] && { echo "ALL PASS (pre-push phases)"; exit 0; } || { echo "FAILURES (pre-push phases)"; exit 1; }

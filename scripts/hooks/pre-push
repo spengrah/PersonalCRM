@@ -25,7 +25,20 @@
 # To bypass (not recommended): git push --no-verify
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+# Git invokes hooks with cwd = the top of the PUSHING work tree (and GIT_DIR set
+# to that worktree's git dir), so the repo root to gate must come from git, not
+# from this file's location. core.hooksPath can point at a DIFFERENT checkout
+# (e.g. a shared hooks install shared across linked worktrees) whose tree is not
+# the content being pushed — deriving PROJECT_ROOT from SCRIPT_DIR would gate
+# that other checkout instead of the pushed one. Fall back to the hook-checkout
+# root only when invoked outside any repo (manual runs, e.g. sourcing this file
+# from an empty directory for testing).
+if PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+  PROJECT_ROOT_FROM_GIT=true
+else
+  PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+  PROJECT_ROOT_FROM_GIT=false
+fi
 
 CONFIG_FILE=".ai/pre-push.json"
 
@@ -525,6 +538,20 @@ set -e
 cd "$PROJECT_ROOT"
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
+  # PROJECT_ROOT resolved via git but has no config: fail CLOSED, not open — a
+  # wrong cwd/GIT_DIR resolution must never silently skip checks (fail-open) nor
+  # silently re-root to the hook checkout (which would reintroduce the bug this
+  # hardening fixes). The script-derived fallback below is only reachable when
+  # git resolution itself failed (manual invocation outside any repo).
+  if [[ "$PROJECT_ROOT_FROM_GIT" == "true" ]]; then
+    echo "" >&2
+    echo "==============================================================" >&2
+    echo "FAILED: resolved project root $PROJECT_ROOT has no $CONFIG_FILE" >&2
+    echo "Refusing to gate a tree that is not the pushed content." >&2
+    echo "Check cwd/GIT_DIR, or bypass with --no-verify." >&2
+    echo "==============================================================" >&2
+    exit 1
+  fi
   echo "Warning: No $CONFIG_FILE found, skipping pre-push checks" >&2
   exit 0
 fi

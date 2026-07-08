@@ -83,6 +83,7 @@ See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full s
 | sqlc changed types after regeneration | Update repository to use `pgtype.X{Value: v, Valid: true}` wrappers |
 | Assuming all tables have `updated_at` | It's per-table opt-in (explicit column + `update_updated_at_column()` trigger); many tables lack it (e.g. `tag`, `interaction`, `reminder`). Check the table's migration before selecting or setting `updated_at` |
 | `git add -A` includes binaries | Review `git status` before commit, exclude `backend/crm-api` |
+| Pre-push hook push hangs then the SSH connection dies mid-run | The pre-push hook gates the PUSHING worktree's tree (not the `core.hooksPath` checkout's), and a long hook run can outlive GitHub's ~6-min idle SSH channel. Fix: set a local HTTPS pushurl once (`git config remote.origin.pushurl https://github.com/<owner>/<repo>.git` + `git config credential."https://github.com".helper '!gh auth git-credential'`), or per-push `git -c credential.helper='!gh auth git-credential' push https://github.com/<owner>/<repo>.git <branch>` |
 | Merging PRs with UI changes | Never merge UI PRs autonomously - wait for human review |
 | `git add path/[id]/file` fails | Use quotes: `git add "path/[id]/file"` (bash interprets brackets as globs) |
 | Fixing only one instance of a pattern | Search entire codebase and fix ALL instances to maintain consistency |
