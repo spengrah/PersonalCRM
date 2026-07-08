@@ -125,6 +125,10 @@ func TestCalendarAPI_ReadEndpoints(t *testing.T) {
 		contactID := seedContact("Calendar Upcoming Test Contact " + ns)
 		now := accelerated.GetCurrentTime()
 		seedEvent(t, ctx, calendarRepo, ns, "past", now.Add(-48*time.Hour), now.Add(-47*time.Hour), []uuid.UUID{contactID}, nil)
+		// Started-but-not-ended: excluded because the contract keys on start
+		// time — a regression filtering on end_time > now would wrongly
+		// include this in-progress event.
+		seedEvent(t, ctx, calendarRepo, ns, "inprogress", now.Add(-30*time.Minute), now.Add(time.Hour), []uuid.UUID{contactID}, nil)
 		future := seedEvent(t, ctx, calendarRepo, ns, "future", now.Add(48*time.Hour), now.Add(49*time.Hour), []uuid.UUID{contactID}, nil)
 
 		w := doCalendarGet(router, "/api/v1/contacts/"+contactID.String()+"/events/upcoming")
@@ -133,7 +137,7 @@ func TestCalendarAPI_ReadEndpoints(t *testing.T) {
 		var envelope calendarEventsEnvelope
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &envelope))
 		require.True(t, envelope.Success)
-		require.Len(t, envelope.Data, 1, "only the future event should be returned")
+		require.Len(t, envelope.Data, 1, "only the future event should be returned; past and in-progress events must be excluded")
 		assert.Equal(t, future.ID.String(), envelope.Data[0].ID)
 	})
 
@@ -144,6 +148,8 @@ func TestCalendarAPI_ReadEndpoints(t *testing.T) {
 		ns := "cal-global-" + uuid.NewString()[:8]
 		contactID := seedContact("Calendar Global Test Contact " + ns)
 		now := accelerated.GetCurrentTime()
+		seedEvent(t, ctx, calendarRepo, ns, "past", now.Add(-24*time.Hour), now.Add(-23*time.Hour), []uuid.UUID{contactID}, nil)
+		seedEvent(t, ctx, calendarRepo, ns, "inprogress", now.Add(-30*time.Minute), now.Add(time.Hour), []uuid.UUID{contactID}, nil)
 		future := seedEvent(t, ctx, calendarRepo, ns, "future", now.Add(24*time.Hour), now.Add(25*time.Hour), []uuid.UUID{contactID}, nil)
 
 		w := doCalendarGet(router, "/api/v1/events/upcoming")
@@ -152,8 +158,9 @@ func TestCalendarAPI_ReadEndpoints(t *testing.T) {
 		var envelope calendarEventsEnvelope
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &envelope))
 		require.True(t, envelope.Success)
-		// The clone is empty apart from this subtest's own seeding, so
-		// the global feed is exactly the seeded future event.
+		// The clone is empty apart from this subtest's own seeding, so the
+		// global feed is exactly the seeded future event — the past and
+		// in-progress (started-but-not-ended) events must be excluded.
 		require.Len(t, envelope.Data, 1)
 		assert.Equal(t, future.ID.String(), envelope.Data[0].ID)
 	})
