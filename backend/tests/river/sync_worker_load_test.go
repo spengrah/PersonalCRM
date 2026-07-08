@@ -109,14 +109,20 @@ func TestSyncWorker_LoadNoDuplicateConcurrentSyncs(t *testing.T) {
 
 	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
 
-	// Clean up previous runs (hard-delete via test-only sqlc helpers, not raw
-	// SQL — core.md rule 2).
-	cleanup := func(c context.Context) {
-		_ = syncRepo.DeleteRiverJobsBySourceArgForTest(c, source)
-		_ = syncRepo.DeleteSyncLogsBySourceForTest(c, source)
-		_ = syncRepo.DeleteSyncStatesBySourceForTest(c, source)
+	// Clean up rows from prior runs (hard-delete via test-only sqlc helpers,
+	// not raw SQL — core.md rule 2).
+	cleanup := func(c context.Context) error {
+		if err := syncRepo.DeleteRiverJobsBySourceArgForTest(c, source); err != nil {
+			return err
+		}
+		if err := syncRepo.DeleteSyncLogsBySourceForTest(c, source); err != nil {
+			return err
+		}
+		return syncRepo.DeleteSyncStatesBySourceForTest(c, source)
 	}
-	cleanup(ctx)
+	// Setup cleanup must succeed: a failed delete would leave stale rows that
+	// corrupt the drain/assertions. Teardown cleanup (below) is best-effort.
+	require.NoError(t, cleanup(ctx))
 	contactRepo := repository.NewContactRepository(database.Queries)
 	registry := syncpkg.NewProviderRegistry()
 	provider := &loadTestProvider{
@@ -147,7 +153,7 @@ func TestSyncWorker_LoadNoDuplicateConcurrentSyncs(t *testing.T) {
 		})
 		require.NoError(t, err)
 	}
-	t.Cleanup(func() { cleanup(context.Background()) })
+	t.Cleanup(func() { _ = cleanup(context.Background()) })
 
 	workers := river.NewWorkers()
 	river.AddWorker(workers, scheduler.NewSchedulerTickWorker(svc))
