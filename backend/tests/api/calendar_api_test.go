@@ -263,6 +263,14 @@ func TestCalendarAPI_AttendeeRedaction(t *testing.T) {
 		w := doCalendarGet(router, "/api/v1/contacts/"+contactID.String()+"/events")
 		require.Equal(t, http.StatusOK, w.Code)
 
+		// Prove the attendees were actually stored before asserting their
+		// absence from the body — otherwise a seed path that silently drops
+		// attendees would make the redaction assertions pass vacuously.
+		var envelope calendarEventsEnvelope
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &envelope))
+		require.Len(t, envelope.Data, 1)
+		require.Equal(t, 2, envelope.Data[0].AttendeeCount)
+
 		body := w.Body.String()
 		assert.NotContains(t, body, organizerEmail, "response must not leak the organizer's raw email")
 		assert.NotContains(t, body, organizerName, "response must not leak the organizer's display name")
