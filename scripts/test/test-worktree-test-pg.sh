@@ -89,7 +89,15 @@ port=\$(echo "\$opts" | grep -oE -- '-p [0-9]+' | grep -oE '[0-9]+')
 case "\$mode" in
   start)
     [ -n "\$dd" ] && { echo "\${FAKE_PG_PID:-\$\$}" > "\$dd/postmaster.pid"; [ -n "\$port" ] && echo "\$port" > "\$dd/.fakeport"; }
-    [ -n "\$port" ] && echo "\$port" >> "$d/port_busy" ;;
+    [ -n "\$port" ] && echo "\$port" >> "$d/port_busy"
+    # Optional (\$d/pgctl_spawn_child): mimic daemonization ONE level deep — the
+    # exact pg_ctl -> postmaster edge. Background a child that (a) records, in ITS
+    # OWN context, whether fd 200 is writable (open) and (b) lingers, so a LEAKED
+    # fd 200 would keep the instance lock held for the child's whole life. The
+    # single quotes are literal in this heredoc; only \$d expands (bakes the path).
+    if [ -f "$d/pgctl_spawn_child" ]; then
+      bash -c 'if { true >&200; } 2>/dev/null; then echo open; else echo closed; fi > "$d/fd200"; sleep 8' &
+    fi ;;
   stop)
     [ -n "\$dd" ] && rm -f "\$dd/postmaster.pid" 2>/dev/null
     [ -n "\$port" ] && { grep -vx "\$port" "$d/port_busy" 2>/dev/null > "$d/port_busy.tmp" || true; mv "$d/port_busy.tmp" "$d/port_busy" 2>/dev/null || true; } ;;
@@ -425,6 +433,96 @@ grep -qi 'could not stop' "$d/err" && ok "16b: reap warned about the un-stoppabl
 rm -f "$d/pgctl_fail"                         # now stoppable
 run "$d" reap >/dev/null 2>&1
 [ ! -d "$dead" ] && ok "16b: reap prunes the dead instance once stoppable again" || bad "16b: dead instance left after recoverable reap"
+
+# 18. fd 200 NOT leaked into the daemonized postmaster (#600). The fake pg_ctl
+# backgrounds a child one level deep (the pg_ctl -> postmaster edge) that records
+# whether fd 200 is open in ITS OWN context. With the `200>&-` fix the child sees
+# fd 200 CLOSED; a regression (no close) would leak the with_lock fd into it.
+d=$(make_env | tail -1); set_linked "$d"
+touch "$d/pgctl_spawn_child"
+run "$d" ensure >/dev/null 2>&1
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$d/fd200" ] && break; sleep 0.2; done
+[ "$(cat "$d/fd200" 2>/dev/null)" = "closed" ] && ok "fd 200 closed in the daemonized child (no lock leak)" \
+  || bad "fd 200 leaked into the daemonized child: '$(cat "$d/fd200" 2>/dev/null)'"
+
+# 18b. Functional lock-liveness pin (the actual #600 symptom): with that child
+# STILL alive (sleeping), a second lock-taking command must acquire the lock
+# promptly. If fd 200 leaked into the child, `stop`'s flock -w would expire and
+# with_lock returns 124 (non-zero). A low timeout keeps the regression fast.
+CRM_WORKTREE_PG_LOCK_TIMEOUT=4 run "$d" stop 2>"$d/err"; rc=$?
+[ "$rc" -eq 0 ] && ok "instance lock live after the daemonized-child spawn (stop acquired promptly)" \
+  || bad "stop rc=$rc after child spawn — fd 200 leaked and wedged the lock"
+
+# 19. Lock timeout, NOT-running branch: hold an UNPROVISIONED worktree's instance
+# lock from the background, then ensure with a 1s timeout. Non-strict fails LOUD
+# (naming the direct pg_ctl recovery) but exits 0 with a genuine shared-instance
+# fallback (url empty); strict exits non-zero. flock-only (the mkdir backend's
+# ceiling is already covered and can't be held this precisely from a subshell).
+if command -v flock >/dev/null 2>&1; then
+  d=$(make_env | tail -1); set_linked "$d" locknone
+  id=$(run "$d" status | grep -oE 'id=[0-9a-f]+' | sed 's/id=//')
+  lockdir="$d/pghome/$id"; mkdir -p "$lockdir"; lockfile="$lockdir/lock"
+  ( flock 200; sleep 2 ) 200>"$lockfile" & holder=$!
+  sleep 0.3
+  CRM_WORKTREE_PG_LOCK_TIMEOUT=1 run "$d" ensure 2>"$d/err"; rc=$?
+  [ "$rc" -eq 0 ] && ok "lock-timeout not-running non-strict: exit 0" || bad "lock-timeout not-running non-strict exit=$rc"
+  grep -qi 'pg_ctl -D' "$d/err" && ok "lock-timeout not-running: loud warning names pg_ctl recovery" || bad "lock-timeout not-running: no pg_ctl recovery hint ($(cat "$d/err"))"
+  [ -z "$(run "$d" url)" ] && ok "lock-timeout not-running: url empty (genuine shared fallback)" || bad "lock-timeout not-running: url not empty"
+  wait "$holder" 2>/dev/null || true
+  # strict: same setup -> non-zero exit
+  ( flock 200; sleep 2 ) 200>"$lockfile" & holder=$!
+  sleep 0.3
+  CRM_WORKTREE_PG_LOCK_TIMEOUT=1 CRM_WORKTREE_PG=strict run "$d" ensure 2>/dev/null; rc=$?
+  [ "$rc" -ne 0 ] && ok "lock-timeout not-running strict: exit non-zero ($rc)" || bad "lock-timeout not-running strict: exit 0"
+  wait "$holder" 2>/dev/null || true
+
+  # 20. Lock timeout, RUNNING branch: warm a real (fake) instance, hold its lock,
+  # ensure with a 1s timeout. Non-strict proceeds against the running instance
+  # (warn says "server is up", url still emits the instance URL — NOT a false
+  # fallback claim); strict fails. Exercises both mode routings of this branch.
+  d=$(make_env | tail -1); set_linked "$d" lockrun
+  run "$d" ensure >/dev/null 2>&1                       # cold -> warm
+  id=$(run "$d" status | grep -oE 'id=[0-9a-f]+' | sed 's/id=//')
+  runurl=$(run "$d" url)
+  lockfile="$d/pghome/$id/lock"
+  ( flock 200; sleep 2 ) 200>"$lockfile" & holder=$!
+  sleep 0.3
+  CRM_WORKTREE_PG_LOCK_TIMEOUT=1 run "$d" ensure 2>"$d/err"; rc=$?
+  [ "$rc" -eq 0 ] && ok "lock-timeout running non-strict: exit 0" || bad "lock-timeout running non-strict exit=$rc"
+  grep -qi 'server is up' "$d/err" && ok "lock-timeout running: warn says the server is up" || bad "lock-timeout running: no 'server is up' warning ($(cat "$d/err"))"
+  [ "$(run "$d" url)" = "$runurl" ] && ok "lock-timeout running: url still emits the instance (no false fallback)" || bad "lock-timeout running: url changed/empty"
+  wait "$holder" 2>/dev/null || true
+  # strict: same setup -> non-zero exit
+  ( flock 200; sleep 2 ) 200>"$lockfile" & holder=$!
+  sleep 0.3
+  CRM_WORKTREE_PG_LOCK_TIMEOUT=1 CRM_WORKTREE_PG=strict run "$d" ensure 2>/dev/null; rc=$?
+  [ "$rc" -ne 0 ] && ok "lock-timeout running strict: exit non-zero ($rc)" || bad "lock-timeout running strict: exit 0"
+  wait "$holder" 2>/dev/null || true
+else
+  ok "flock absent -> skipping lock-timeout branch tests (mkdir backend ceiling covered elsewhere)"
+fi
+
+# 21. Knob validation. Every INVALID form (non-numeric, empty-but-set, zero,
+# negative) warns on a side-effecting subcommand and falls back to the default
+# (ensure still provisions, exits 0). A VALID positive integer is accepted
+# silently. And the render-safe `url` NEVER warns, even for an invalid knob.
+for badval in banana "" 0 -5; do
+  d=$(make_env | tail -1); set_linked "$d"
+  CRM_WORKTREE_PG_LOCK_TIMEOUT="$badval" run "$d" ensure 2>"$d/err"; rc=$?
+  label="'$badval'"
+  [ "$rc" -eq 0 ] && ok "invalid knob $label: ensure exits 0" || bad "invalid knob $label exit=$rc"
+  grep -q '^pg_ctl .*start' "$d/calls" && ok "invalid knob $label: still provisioned (default 120s)" || bad "invalid knob $label: not provisioned"
+  grep -qi 'invalid CRM_WORKTREE_PG_LOCK_TIMEOUT' "$d/err" && ok "invalid knob $label: loud warning" || bad "invalid knob $label: no warning ($(cat "$d/err"))"
+done
+# Valid positive integer -> accepted, NO warning.
+d=$(make_env | tail -1); set_linked "$d"
+CRM_WORKTREE_PG_LOCK_TIMEOUT=30 run "$d" ensure 2>"$d/err"; rc=$?
+[ "$rc" -eq 0 ] && ok "valid lock-timeout knob (30): ensure exits 0" || bad "valid knob exit=$rc"
+! grep -qi 'invalid CRM_WORKTREE_PG_LOCK_TIMEOUT' "$d/err" && ok "valid lock-timeout knob: no warning" || bad "valid knob warned: $(cat "$d/err")"
+# render-safe `url` stays SILENT even with an invalid knob (url NEVER warns).
+d=$(make_env | tail -1); set_linked "$d"
+CRM_WORKTREE_PG_LOCK_TIMEOUT=banana run "$d" url >/dev/null 2>"$d/err"
+[ ! -s "$d/err" ] && ok "invalid knob: url still silent on stderr (render-safe)" || bad "invalid knob: url wrote stderr: $(cat "$d/err")"
 
 # 17. Test-hook counter: increments once per invocation
 d=$(make_env | tail -1); set_linked "$d"

@@ -19,6 +19,12 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 RESOLVER="$REPO_ROOT/scripts/worktree-test-pg.sh"
 REQUIRED="${CRM_PG_SMOKE_REQUIRED:-0}"
 
+# Bound every lock this smoke takes: with the #600 fix all locks acquire
+# instantly, so this is invisible on a healthy tree; a regression that re-leaks
+# fd 200 into the postmaster would otherwise HANG here forever — instead it fails
+# LOUD after the timeout. Overridable, defaults to a generous 60s.
+export CRM_WORKTREE_PG_LOCK_TIMEOUT="${CRM_WORKTREE_PG_LOCK_TIMEOUT:-60}"
+
 fail=0
 ok()   { echo "ok: $1"; }
 bad()  { echo "FAIL: $1"; fail=1; }
@@ -120,6 +126,36 @@ done
 # real TestFindSimilarContactsBatch_Integration run in Phase C below.
 sim=$( "${PSQL[@]}" -c "SELECT (similarity('Jonathan','Jonathon') > 0.4);" | tr -d '[:space:]' )
 [ "$sim" = "t" ] && ok "pg_trgm similarity('Jonathan','Jonathon')>0.4 (collation-correct scoring)" || bad "trigram probe returned '$sim'"
+
+# --- #600 regression: the REAL postmaster must NOT have inherited fd 200 -----
+# A leaked fd 200 keeps the per-instance flock held for the postmaster's whole
+# life, wedging every later ensure/stop/teardown/reap. This is the exact leak
+# signature from the issue (/proc/<postmaster>/fd/200 -> the instance lock). The
+# shim suite proves this with fakes one inheritance level deep; this proves it
+# against a real daemonized postmaster. Linux-only (/proc); a clean skip on macOS.
+note "#600: real postmaster did not inherit the instance-lock fd"
+if [ -d /proc ]; then
+  DD_B=$(run_in_wt bash "$RESOLVER" status | grep -oE 'datadir=[^ ]+' | sed 's/datadir=//')
+  LOCKPATH_B="$(dirname "$DD_B")/lock"
+  PMPID_B=$(head -1 "$DD_B/postmaster.pid" 2>/dev/null || true)
+  leaked=0
+  if [ -n "$PMPID_B" ] && [ -d "/proc/$PMPID_B/fd" ]; then
+    for fdlink in /proc/"$PMPID_B"/fd/*; do
+      [ "$(readlink "$fdlink" 2>/dev/null || true)" = "$LOCKPATH_B" ] && leaked=1
+    done
+  fi
+  [ "$leaked" -eq 0 ] && ok "#600: postmaster (pid $PMPID_B) did not inherit the instance-lock fd" \
+    || bad "#600: postmaster leaked the instance-lock fd ($LOCKPATH_B) — the wedge bug is back"
+else
+  note "no /proc; skipping the postmaster fd-leak check (macOS)"
+fi
+
+# A second ensure must complete under the (bounded) lock timeout — the direct
+# functional proof that the first ensure did not wedge the lock.
+note "#600: a second ensure returns under the lock timeout"
+run_in_wt env CRM_WORKTREE_PG=strict bash "$RESOLVER" ensure \
+  && ok "#600: second ensure returned under the lock timeout (lock not wedged)" \
+  || bad "#600: second ensure did not return under the lock timeout (lock wedged?)"
 
 # ---------------------------------------------------------------------------
 # Phase C: end-to-end through the REAL Make recipe (cold-first-run ordering).
