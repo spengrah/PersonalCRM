@@ -32,7 +32,7 @@ type calendarEventsEnvelope struct {
 // (newIsolatedRiverTestDB) and a router carrying only the production
 // calendar route surface (handlers.RegisterCalendarRoutes). Because the
 // clone starts empty, global-feed and pagination assertions in the caller
-// are exact and independent of sibling subtests/tests (DC1). Returns the
+// are exact and independent of sibling subtests/tests. Returns the
 // router, the calendar repository (for seeding events), and a seedContact
 // helper (for seeding a matched contact).
 func newCalendarAPITest(t *testing.T, ctx context.Context) (*gin.Engine, *repository.CalendarEventRepository, func(name string) uuid.UUID) {
@@ -152,7 +152,7 @@ func TestCalendarAPI_ReadEndpoints(t *testing.T) {
 		var envelope calendarEventsEnvelope
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &envelope))
 		require.True(t, envelope.Success)
-		// The clone is empty apart from this subtest's own seeding (DC1), so
+		// The clone is empty apart from this subtest's own seeding, so
 		// the global feed is exactly the seeded future event.
 		require.Len(t, envelope.Data, 1)
 		assert.Equal(t, future.ID.String(), envelope.Data[0].ID)
