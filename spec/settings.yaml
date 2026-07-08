@@ -404,3 +404,17 @@ behaviors:
       - the payload matches the complete-backup scope the settings surface advertises
     provenance: [SystemHandler.ExportData, settings/page.tsx Export Data copy]
     notes: 'Proposed: today the endpoint serializes contacts only (SET-030), while the settings surface frames export as a complete backup including interactions and notes. The widened scope is unbuilt, so the intended behavior is recorded as proposed rather than current.'
+
+  # --- Manual sync trigger ---
+
+  - id: SET-034
+    title: Manually triggering a sync validates an account-scoped source before accepting it
+    type: api
+    status: current
+    given: a manual sync-trigger request for a source
+    when: the trigger is handled
+    then:
+      - an account-scoped source triggered without an account id is rejected with a validation error (400) before any sync state is created
+      - a trigger with a well-formed body for a source the account guard does not reject is acknowledged with a 202 whose body carries only an acknowledgement (a message and the source) and no sync result
+    provenance: [SyncHandler.TriggerSync, service.AccountIDMissing, service.ErrAccountRequired]
+    notes: The trigger is fire-and-forget — acceptance dispatches the sync in a detached goroutine off the request path, so whether/when the sync actually runs is owned by the sync service and worker paths, not this HTTP contract. This behavior pins only the guard (400) and the acknowledgement status+body shape (202). The 400 guard mirrors the service-layer ErrAccountRequired backstop.
