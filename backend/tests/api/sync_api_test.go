@@ -30,8 +30,8 @@ import (
 
 // syncNS builds a unique per-test source-name token so seeded sync states
 // never collide across subtests/parallel runs, even though each subtest
-// gets its own isolated DB clone (D4/D5 — kept for pattern consistency with
-// the rest of the suite).
+// gets its own isolated DB clone (kept for pattern consistency with the
+// rest of the suite).
 func syncNS(t *testing.T) string {
 	t.Helper()
 	return "sync-" + uuid.NewString()[:8]
@@ -63,7 +63,7 @@ func (f *fakeSyncProvider) ValidateCredentials(ctx context.Context, accountID *s
 // repository directly. Every subtest MUST call this as its first line:
 // GetSyncStatus/GetRecentSyncLogs are DB-wide and unfiltered, so a shared
 // clone would let one subtest's seeded rows leak into a sibling's
-// exact-count/404 assertion, especially under -shuffle=on (D4).
+// exact-count/404 assertion, especially under -shuffle=on.
 func newSyncAPITest(t *testing.T) (router *gin.Engine, syncRepo *repository.SyncRepository, registry *sync.ProviderRegistry, ctx context.Context) {
 	t.Helper()
 	ctx = context.Background()
@@ -218,6 +218,12 @@ func TestSyncAPI_EnableSync(t *testing.T) {
 // non-await is unprovable at handler level without a seam. Those facets
 // are owned by the sync service/worker integration tests; SET-034 item 2
 // is scoped to the status+body-shape contract this subtest proves.
+//
+// SET-034's `notes` field mentions the fire-and-forget/detached-goroutine
+// dispatch as background context for why item 2 is scoped so narrowly —
+// that sentence is deliberately not part of `then` and is not asserted by
+// either subtest below (the same non-load-bearing-notes pattern the corpus
+// already uses, e.g. SET-030/SET-031's notes).
 // spec: SET-034
 func TestSyncAPI_TriggerSync(t *testing.T) {
 	t.Parallel()
