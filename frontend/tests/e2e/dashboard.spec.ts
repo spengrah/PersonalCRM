@@ -127,10 +127,14 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
     // Click "Mark as Contacted"
     await markContactedButton.click()
 
-    // A mutual interaction is logged.
+    // A mutual interaction is logged: the request asks for direction=mutual
+    // AND the server persists it as mutual (the response body reflects the
+    // stored interaction, not just the request).
     const markContactedResponse = await markContactedResponsePromise
     expect(markContactedResponse.ok()).toBe(true)
     expect(markContactedResponse.request().postDataJSON()?.direction).toBe('mutual')
+    const interactionBody = await markContactedResponse.json()
+    expect(interactionBody?.data?.direction).toBe('mutual')
 
     // The contact leaves the overdue list without a page reload: the open
     // dashboard's own refetch no longer includes it.
