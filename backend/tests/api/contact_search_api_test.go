@@ -110,12 +110,14 @@ func searchResultIDs(t *testing.T, w *httptest.ResponseRecorder) []string {
 	for _, item := range dataIface {
 		row, ok := item.(map[string]interface{})
 		require.True(t, ok)
-		ids = append(ids, row["id"].(string))
+		id, ok := row["id"].(string)
+		require.True(t, ok, "expected contact row to carry a string id")
+		ids = append(ids, id)
 	}
 	return ids
 }
 
-func containsID(ids []string, target string) bool {
+func searchContainsID(ids []string, target string) bool {
 	for _, id := range ids {
 		if id == target {
 			return true
@@ -124,7 +126,7 @@ func containsID(ids []string, target string) bool {
 	return false
 }
 
-func positionOf(ids []string, target string) int {
+func searchPositionOf(ids []string, target string) int {
 	for i, id := range ids {
 		if id == target {
 			return i
@@ -149,7 +151,7 @@ func TestContactSearchAPI_MatchesNameAndMethod(t *testing.T) {
 		w := doSearchGet(t, router, "/api/v1/contacts?search="+tok)
 		ids := searchResultIDs(t, w)
 
-		assert.True(t, containsID(ids, id.String()), "a name-matched contact should be in the search results")
+		assert.True(t, searchContainsID(ids, id.String()), "a name-matched contact should be in the search results")
 	})
 
 	t.Run("MethodValueMatch", func(t *testing.T) {
@@ -169,7 +171,7 @@ func TestContactSearchAPI_MatchesNameAndMethod(t *testing.T) {
 		w := doSearchGet(t, router, "/api/v1/contacts?search="+tokM)
 		ids := searchResultIDs(t, w)
 
-		assert.True(t, containsID(ids, id.String()), "a match via a non-primary contact method value should surface the contact")
+		assert.True(t, searchContainsID(ids, id.String()), "a match via a non-primary contact method value should surface the contact")
 	})
 }
 
@@ -197,8 +199,8 @@ func TestContactSearchAPI_RelevanceAndSortOverride(t *testing.T) {
 		w := doSearchGet(t, router, "/api/v1/contacts?search="+tok)
 		ids := searchResultIDs(t, w)
 
-		hiPos := positionOf(ids, hiID.String())
-		loPos := positionOf(ids, loID.String())
+		hiPos := searchPositionOf(ids, hiID.String())
+		loPos := searchPositionOf(ids, loID.String())
 		require.NotEqual(t, -1, hiPos, "HI contact should be in the search results")
 		require.NotEqual(t, -1, loPos, "LO contact should be in the search results")
 
@@ -217,8 +219,8 @@ func TestContactSearchAPI_RelevanceAndSortOverride(t *testing.T) {
 		w := doSearchGet(t, router, "/api/v1/contacts?search="+tok+"&sort=name&order=asc")
 		ids := searchResultIDs(t, w)
 
-		hiPos := positionOf(ids, hiID.String())
-		loPos := positionOf(ids, loID.String())
+		hiPos := searchPositionOf(ids, hiID.String())
+		loPos := searchPositionOf(ids, loID.String())
 		require.NotEqual(t, -1, hiPos, "HI contact should be in the search results")
 		require.NotEqual(t, -1, loPos, "LO contact should be in the search results")
 
@@ -251,6 +253,6 @@ func TestContactSearchAPI_EmptyResult(t *testing.T) {
 		// assertion is sibling-data-proof on the shared DB.
 		ids := searchResultIDs(t, w)
 		assert.Empty(t, ids, "an unmatched search term must return no contacts")
-		assert.False(t, containsID(ids, seededID.String()), "an unmatched search term must not return the unrelated seeded contact")
+		assert.False(t, searchContainsID(ids, seededID.String()), "an unmatched search term must not return the unrelated seeded contact")
 	})
 }
