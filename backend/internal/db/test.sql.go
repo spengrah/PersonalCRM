@@ -11,6 +11,64 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const CountActiveRiverJobsBySourceArgForTest = `-- name: CountActiveRiverJobsBySourceArgForTest :one
+SELECT COUNT(*) FROM river_job
+WHERE kind = 'sync_provider_account'
+  AND (args->>'source') = $1::text
+  AND state IN ('available', 'pending', 'running', 'retryable', 'scheduled')
+`
+
+// Test-only count of ACTIVE sync_provider_account river_job rows whose args
+// JSON source = @source. "Active" means not yet finalized (available, pending,
+// running, retryable, scheduled); completed/discarded/cancelled are excluded.
+// Used by the load test's drain-to-zero convergence check (core.md rule 2).
+func (q *Queries) CountActiveRiverJobsBySourceArgForTest(ctx context.Context, source string) (int64, error) {
+	row := q.db.QueryRow(ctx, CountActiveRiverJobsBySourceArgForTest, source)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const CountActiveRiverJobsByStateBySourceForTest = `-- name: CountActiveRiverJobsByStateBySourceForTest :many
+SELECT state, COUNT(*) AS count FROM river_job
+WHERE kind = 'sync_provider_account'
+  AND (args->>'source') = $1::text
+  AND state IN ('available', 'pending', 'running', 'retryable', 'scheduled')
+GROUP BY state
+ORDER BY state
+`
+
+type CountActiveRiverJobsByStateBySourceForTestRow struct {
+	State RiverJobState `json:"state"`
+	Count int64         `json:"count"`
+}
+
+// Test-only per-state breakdown of ACTIVE sync_provider_account river_job rows
+// whose args JSON source = @source, using the SAME active-state predicate as
+// CountActiveRiverJobsBySourceArgForTest. Backs the load test's drain-timeout
+// diagnostic so a stuck backlog is reported per state (all 'available' means a
+// dead fetch loop; jobs cycling through 'running' means genuine starvation).
+// ORDER BY state for deterministic output.
+func (q *Queries) CountActiveRiverJobsByStateBySourceForTest(ctx context.Context, source string) ([]*CountActiveRiverJobsByStateBySourceForTestRow, error) {
+	rows, err := q.db.Query(ctx, CountActiveRiverJobsByStateBySourceForTest, source)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*CountActiveRiverJobsByStateBySourceForTestRow{}
+	for rows.Next() {
+		var i CountActiveRiverJobsByStateBySourceForTestRow
+		if err := rows.Scan(&i.State, &i.Count); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const CountContactsByNamePrefix = `-- name: CountContactsByNamePrefix :one
 SELECT COUNT(*) FROM contact WHERE full_name LIKE $1 || '%'
 `
@@ -129,6 +187,46 @@ WHERE kind = 'sync_provider_account'
 // behavior without inlining raw SQL (core.md rule 2).
 func (q *Queries) CountRiverJobsBySourceArgForTest(ctx context.Context, source string) (int64, error) {
 	row := q.db.QueryRow(ctx, CountRiverJobsBySourceArgForTest, source)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const CountSyncLogsByStatusForTest = `-- name: CountSyncLogsByStatusForTest :one
+SELECT COUNT(*) FROM external_sync_log
+WHERE source = $1 AND status = $2
+`
+
+type CountSyncLogsByStatusForTestParams struct {
+	Source string `json:"source"`
+	Status string `json:"status"`
+}
+
+// Test-only count of external_sync_log rows for a given source in a given
+// status. Backs the load test's quiescence assertion that no log row ends in
+// 'running' (core.md rule 2).
+func (q *Queries) CountSyncLogsByStatusForTest(ctx context.Context, arg CountSyncLogsByStatusForTestParams) (int64, error) {
+	row := q.db.QueryRow(ctx, CountSyncLogsByStatusForTest, arg.Source, arg.Status)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const CountSyncStatesByStatusForTest = `-- name: CountSyncStatesByStatusForTest :one
+SELECT COUNT(*) FROM external_sync_state
+WHERE source = $1 AND status = $2
+`
+
+type CountSyncStatesByStatusForTestParams struct {
+	Source string `json:"source"`
+	Status string `json:"status"`
+}
+
+// Test-only count of external_sync_state rows for a given source in a given
+// status. Backs the load test's quiescence assertion that no state row ends
+// in 'syncing' (core.md rule 2).
+func (q *Queries) CountSyncStatesByStatusForTest(ctx context.Context, arg CountSyncStatesByStatusForTestParams) (int64, error) {
+	row := q.db.QueryRow(ctx, CountSyncStatesByStatusForTest, arg.Source, arg.Status)
 	var count int64
 	err := row.Scan(&count)
 	return count, err

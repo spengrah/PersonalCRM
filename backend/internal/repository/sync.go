@@ -1031,6 +1031,56 @@ func (r *SyncRepository) CountRiverJobsBySourceArgForTest(ctx context.Context, s
 	return r.queries.CountRiverJobsBySourceArgForTest(ctx, source)
 }
 
+// CountActiveRiverJobsBySourceArgForTest returns the number of ACTIVE (not yet
+// finalized) sync_provider_account river_job rows whose args JSON source
+// matches. TEST ONLY — backs the load test's drain-to-zero convergence check.
+func (r *SyncRepository) CountActiveRiverJobsBySourceArgForTest(ctx context.Context, source string) (int64, error) {
+	return r.queries.CountActiveRiverJobsBySourceArgForTest(ctx, source)
+}
+
+// ActiveRiverJobStateCountForTest pairs a river_job state with the number of
+// active jobs in it. TEST ONLY — used for the load test's drain-timeout
+// diagnostic breakdown.
+type ActiveRiverJobStateCountForTest struct {
+	State string
+	Count int64
+}
+
+// CountActiveRiverJobsByStateBySourceForTest returns the per-state breakdown of
+// ACTIVE sync_provider_account river_job rows whose args JSON source matches,
+// ordered by state. TEST ONLY.
+func (r *SyncRepository) CountActiveRiverJobsByStateBySourceForTest(ctx context.Context, source string) ([]ActiveRiverJobStateCountForTest, error) {
+	rows, err := r.queries.CountActiveRiverJobsByStateBySourceForTest(ctx, source)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ActiveRiverJobStateCountForTest, len(rows))
+	for i, row := range rows {
+		out[i] = ActiveRiverJobStateCountForTest{State: string(row.State), Count: row.Count}
+	}
+	return out, nil
+}
+
+// CountSyncStatesByStatusForTest counts external_sync_state rows for the given
+// source in the given status. TEST ONLY — backs the load test's 'syncing'
+// quiescence assertion.
+func (r *SyncRepository) CountSyncStatesByStatusForTest(ctx context.Context, source, status string) (int64, error) {
+	return r.queries.CountSyncStatesByStatusForTest(ctx, db.CountSyncStatesByStatusForTestParams{
+		Source: source,
+		Status: status,
+	})
+}
+
+// CountSyncLogsByStatusForTest counts external_sync_log rows for the given
+// source in the given status. TEST ONLY — backs the load test's 'running'
+// quiescence assertion.
+func (r *SyncRepository) CountSyncLogsByStatusForTest(ctx context.Context, source, status string) (int64, error) {
+	return r.queries.CountSyncLogsByStatusForTest(ctx, db.CountSyncLogsByStatusForTestParams{
+		Source: source,
+		Status: status,
+	})
+}
+
 // InsertRiverJobForTest seeds an in-flight sync_provider_account river_job
 // row with the given args JSON so the atomic-claim dedup path observes
 // count>0. TEST ONLY.

@@ -188,6 +188,18 @@ type Querier interface {
 	// external_identity.contact_id pointing at a soft-deleted (e.g. merged-away)
 	// contact must not short-circuit the discovery path.
 	ContactIsLive(ctx context.Context, id pgtype.UUID) (bool, error)
+	// Test-only count of ACTIVE sync_provider_account river_job rows whose args
+	// JSON source = @source. "Active" means not yet finalized (available, pending,
+	// running, retryable, scheduled); completed/discarded/cancelled are excluded.
+	// Used by the load test's drain-to-zero convergence check (core.md rule 2).
+	CountActiveRiverJobsBySourceArgForTest(ctx context.Context, source string) (int64, error)
+	// Test-only per-state breakdown of ACTIVE sync_provider_account river_job rows
+	// whose args JSON source = @source, using the SAME active-state predicate as
+	// CountActiveRiverJobsBySourceArgForTest. Backs the load test's drain-timeout
+	// diagnostic so a stuck backlog is reported per state (all 'available' means a
+	// dead fetch loop; jobs cycling through 'running' means genuine starvation).
+	// ORDER BY state for deterministic output.
+	CountActiveRiverJobsByStateBySourceForTest(ctx context.Context, source string) ([]*CountActiveRiverJobsByStateBySourceForTestRow, error)
 	CountAllUnmatchedExternalContacts(ctx context.Context, includeUnresolvedTelegram bool) (int64, error)
 	CountContactInteractions(ctx context.Context, contactID pgtype.UUID) (int64, error)
 	CountContactNotes(ctx context.Context, contactID pgtype.UUID) (int64, error)
@@ -296,6 +308,14 @@ type Querier interface {
 	// never calls this.
 	CountStalenessBreachesByAccountForTest(ctx context.Context, accountID string) (int64, error)
 	CountSyncLogsByState(ctx context.Context, syncStateID pgtype.UUID) (int64, error)
+	// Test-only count of external_sync_log rows for a given source in a given
+	// status. Backs the load test's quiescence assertion that no log row ends in
+	// 'running' (core.md rule 2).
+	CountSyncLogsByStatusForTest(ctx context.Context, arg CountSyncLogsByStatusForTestParams) (int64, error)
+	// Test-only count of external_sync_state rows for a given source in a given
+	// status. Backs the load test's quiescence assertion that no state row ends
+	// in 'syncing' (core.md rule 2).
+	CountSyncStatesByStatusForTest(ctx context.Context, arg CountSyncStatesByStatusForTestParams) (int64, error)
 	CountTelegramMessagesByChat(ctx context.Context) ([]*CountTelegramMessagesByChatRow, error)
 	CountTelegramMessagesByPeer(ctx context.Context) ([]*CountTelegramMessagesByPeerRow, error)
 	// Count messages for a single peer (for incremental discovery threshold check)
