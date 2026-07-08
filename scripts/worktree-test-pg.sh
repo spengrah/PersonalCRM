@@ -40,6 +40,13 @@
 #                               real pg16 install on the host).
 #   CRM_WORKTREE_PG_BASE_PORT   port seed base (default 5440).
 #   CRM_WORKTREE_PG_PORT_SPAN   port seed span (default 200).
+#   CRM_WORKTREE_PG_LOCK_TIMEOUT  seconds to wait for a per-instance lock before
+#                               failing LOUD instead of blocking forever (default
+#                               120). Positive integer; empty/zero/negative/non-
+#                               numeric values warn and fall back to 120. Mainly a
+#                               test hook. On timeout `ensure` degrades per mode
+#                               (proceeds against a running instance, else falls
+#                               back to shared); stop/teardown/reap fail loud.
 set -euo pipefail
 
 # --- Test hook: count real invocations (render-guard laziness assertion) ----
@@ -271,8 +278,36 @@ instance_running() {
 # callback so both backends share one call shape.
 LOCK_STALE_SECS=120
 
+# Seconds to wait for a per-instance lock before failing LOUD (rc 124) instead
+# of blocking forever. Resolved ONCE, at top-level scope (NOT local to with_lock)
+# so both lock backends AND cmd_ensure's rc-124 messages can reference it without
+# tripping `set -u`. rc 124 is the timeout sentinel (matches timeout(1)); the
+# locked callbacks (_ensure_locked/_stop_locked/_teardown_locked/_reap_one) return
+# only 0/1 today, so 124 can't collide — a future callback returning 124 would be
+# misread as a lock timeout.
+LOCK_TIMEOUT_SECS=120
+case "${CRM_WORKTREE_PG_LOCK_TIMEOUT:-}" in
+  '') ;;                                       # unset/empty -> default
+  *[!0-9]*)                                    # negative / non-numeric
+    warn "ignoring invalid CRM_WORKTREE_PG_LOCK_TIMEOUT='${CRM_WORKTREE_PG_LOCK_TIMEOUT}' (want a positive integer); using ${LOCK_TIMEOUT_SECS}s" ;;
+  *)                                           # all-digits, non-empty
+    if [ "$CRM_WORKTREE_PG_LOCK_TIMEOUT" -gt 0 ]; then
+      LOCK_TIMEOUT_SECS="$CRM_WORKTREE_PG_LOCK_TIMEOUT"
+    else
+      warn "ignoring invalid CRM_WORKTREE_PG_LOCK_TIMEOUT='${CRM_WORKTREE_PG_LOCK_TIMEOUT}' (want a positive integer); using ${LOCK_TIMEOUT_SECS}s"
+    fi ;;
+esac
+
+# Loud, actionable warning shared by both lock backends on a wait timeout. Names
+# the DIRECT pg_ctl recovery: stop/teardown/reap all contend on this same lock,
+# so they cannot recover a leaked one.
+_lock_timeout_warn() {
+  warn "timed out after ${LOCK_TIMEOUT_SECS}s waiting for lock $1; if a per-worktree postmaster leaked this lock, stop it DIRECTLY: pg_ctl -D <datadir> -m fast stop (make test-pg-teardown/stop would block on this same lock)."
+}
+
 with_lock() {
-  # with_lock <lockpath> <command...>
+  # with_lock <lockpath> <command...>. Returns the callback's rc, or 124 if the
+  # lock could not be acquired within LOCK_TIMEOUT_SECS (fail loud, never wedge).
   local lockpath="$1"; shift
   mkdir -p "$(dirname "$lockpath")"
   if command -v flock >/dev/null 2>&1; then
@@ -280,8 +315,12 @@ with_lock() {
     # bash 3.2 — macOS's default bash — where it errors `exec: {fd}: not found`).
     local rc=0
     {
-      flock 200
-      "$@" || rc=$?
+      if flock -w "$LOCK_TIMEOUT_SECS" 200; then
+        "$@" || rc=$?
+      else
+        _lock_timeout_warn "$lockpath"
+        rc=124
+      fi
     } 200>"$lockpath"
     return $rc
   fi
@@ -303,9 +342,10 @@ with_lock() {
     fi
     sleep 0.2
     waited=$((waited + 1))
-    if [ "$waited" -gt 600 ]; then  # ~120s ceiling
-      warn "timed out acquiring lock $lockpath"
-      return 1
+    # Ceiling derived from the same knob: 0.2s steps => 5 iterations/second.
+    if [ "$waited" -gt $((LOCK_TIMEOUT_SECS * 5)) ]; then
+      _lock_timeout_warn "$lockpath"
+      return 124
     fi
   done
   echo "$$" > "$dir/pid" 2>/dev/null || true
@@ -441,7 +481,33 @@ cmd_ensure() {
 
   local id; id=$(worktree_id) || { _ensure_fail "$mode" "could not derive worktree id"; return $?; }
   # Serialize same-worktree ensure/stop/teardown under the per-worktree lock.
-  with_lock "$(instance_dir "$id")/lock" _ensure_locked "$id" "$mode"
+  # Capture rc (|| rc=$? keeps set -e from aborting on a non-zero return) so a
+  # lock timeout (124) maps to an HONEST outcome instead of hard-failing the
+  # Makefile ensure prereq even in non-strict mode.
+  local rc=0
+  with_lock "$(instance_dir "$id")/lock" _ensure_locked "$id" "$mode" || rc=$?
+  if [ "$rc" -eq 124 ]; then
+    if instance_running "$id"; then
+      # Lock busy but the server is up and serving. url reads meta lock-free and
+      # emits this instance's URL regardless, so the only skipped work is the
+      # idempotent password reconcile (a stale password surfaces as an auth
+      # failure in the tests, not silently). NON-STRICT: proceed against it.
+      # STRICT: fail — an expired wait on a running instance signals a leaked
+      # lock or an abnormally long sibling ensure, both worth failing over.
+      # Mode-specific wording so strict stderr does not claim "proceeding".
+      if [ "$mode" = strict ]; then
+        _ensure_fail "$mode" "instance lock busy after ${LOCK_TIMEOUT_SECS}s with the server up; strict mode fails rather than proceed unreconciled. If this repeats: pg_ctl -D $(data_dir "$id") -m fast stop"
+      else
+        _ensure_fail "$mode" "instance lock busy after ${LOCK_TIMEOUT_SECS}s but the server is up; proceeding against it. If this repeats: pg_ctl -D $(data_dir "$id") -m fast stop"
+      fi
+      return $?
+    fi
+    # Not running: the fallback claim is genuinely true — url emits nothing and
+    # the Makefile falls back to the shared instance.
+    _ensure_fail "$mode" "timed out waiting for the instance lock and no server is running; falling back to the shared instance. Recover: pg_ctl -D $(data_dir "$id") -m fast stop (make test-pg-teardown would block on the same lock)."
+    return $?
+  fi
+  return $rc
 }
 
 _ensure_locked() {
@@ -519,9 +585,15 @@ _ensure_locked() {
 
   local logf sockdir; logf=$(log_file "$id"); sockdir=$(socket_dir "$id")
   mkdir -p "$sockdir"
+  # Close fd 200 (the per-instance lock held by the enclosing with_lock) for
+  # pg_ctl and, crucially, for the postmaster it daemonizes. flock locks live on
+  # the OPEN FILE DESCRIPTION, so a postmaster that inherited fd 200 would hold
+  # this instance's lock for its ENTIRE lifetime — wedging every later ensure/
+  # stop/teardown/reap on that instance. `200>&-` closes it only for this child;
+  # the shell's own fd 200 (the lock holder) is untouched.
   if ! "$bindir/pg_ctl" -D "$datadir" -w -t 30 \
       -o "-p $port -c max_connections=$MAX_CONNECTIONS -c listen_addresses=127.0.0.1 -c unix_socket_directories=$sockdir" \
-      -l "$logf" start >/dev/null 2>&1; then
+      -l "$logf" start >/dev/null 2>&1 200>&-; then
     warn "pg_ctl start failed on port $port (see $logf)"
     clear_meta_claim "$id"   # failed-start cleanup: release the port claim
     _ensure_fail "$mode" "Postgres failed to start. Falling back to the shared instance."
@@ -747,8 +819,10 @@ EOF
     esac
     # Dead worktree: stop (if running) + remove the data dir, serialized under
     # the per-worktree lock (same as ensure/stop/teardown). Operates ONLY under
-    # $home — never :5432, never Docker.
-    with_lock "$(instance_dir "$id")/lock" _reap_one "$id" "$bindir"
+    # $home — never :5432, never Docker. Guard with `|| true`: under set -e a
+    # non-zero with_lock (e.g. a 124 lock timeout on one wedged instance) would
+    # abort the loop and strand the reap of every remaining instance.
+    with_lock "$(instance_dir "$id")/lock" _reap_one "$id" "$bindir" || true
   done
   shopt -u nullglob
 }
