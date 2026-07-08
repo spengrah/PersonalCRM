@@ -267,6 +267,7 @@ behaviors:
     when: a client requests events
     then:
       - a contact's events, a contact's upcoming events, and a global upcoming-events feed are readable
+      - the upcoming feeds exclude events that have already started
       - page size is clamped to a bounded maximum with a sensible default
       - a malformed contact id is rejected with a validation error (400)
       - no endpoint creates, updates, or deletes an event — all writes flow through sync
