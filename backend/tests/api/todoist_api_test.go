@@ -37,7 +37,7 @@ import (
 // ListAccounts lists ALL todoist credentials with no filter, so a shared
 // clone would let one subtest's seeded account leak into a sibling
 // "NoAccount" subtest, especially under -shuffle=on.
-func newTodoistAPITest(t *testing.T) (router *gin.Engine, syncRepo *repository.SyncRepository, oauthSvc *todoist.OAuthService, seedAccount func() string) {
+func newTodoistAPITest(t *testing.T) (router *gin.Engine, syncRepo *repository.SyncRepository, seedAccount func() string) {
 	t.Helper()
 	ctx := context.Background()
 	database, cfg := newIsolatedRiverTestDB(t, ctx)
@@ -45,8 +45,7 @@ func newTodoistAPITest(t *testing.T) (router *gin.Engine, syncRepo *repository.S
 	oauthRepo := repository.NewOAuthRepository(database.Queries)
 	syncRepo = repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
 
-	var err error
-	oauthSvc, err = todoist.NewOAuthService(cfg, oauthRepo, syncRepo)
+	oauthSvc, err := todoist.NewOAuthService(cfg, oauthRepo, syncRepo)
 	require.NoError(t, err)
 
 	handler := handlers.NewTodoistHandler(oauthSvc, syncRepo)
@@ -71,7 +70,7 @@ func newTodoistAPITest(t *testing.T) (router *gin.Engine, syncRepo *repository.S
 		return accountID
 	}
 
-	return router, syncRepo, oauthSvc, seedAccount
+	return router, syncRepo, seedAccount
 }
 
 // todoistSettingsResponse mirrors handlers.TodoistSettingsResponse for JSON
@@ -122,14 +121,14 @@ func TestTodoistAPI_GetSettings(t *testing.T) {
 	t.Parallel()
 
 	t.Run("NoAccount_Returns404", func(t *testing.T) {
-		router, _, _, _ := newTodoistAPITest(t)
+		router, _, _ := newTodoistAPITest(t)
 
 		w := doTodoistRequest(router, http.MethodGet, "/api/v1/todoist/settings", nil)
 		assert.Equal(t, http.StatusNotFound, w.Code)
 	})
 
 	t.Run("AccountNoSyncState_ReturnsEmpty200", func(t *testing.T) {
-		router, _, _, seedAccount := newTodoistAPITest(t)
+		router, _, seedAccount := newTodoistAPITest(t)
 		seedAccount()
 
 		w := doTodoistRequest(router, http.MethodGet, "/api/v1/todoist/settings", nil)
@@ -143,12 +142,14 @@ func TestTodoistAPI_GetSettings(t *testing.T) {
 	})
 
 	t.Run("WithSyncState_ReturnsStoredSettings", func(t *testing.T) {
-		router, syncRepo, _, seedAccount := newTodoistAPITest(t)
+		router, syncRepo, seedAccount := newTodoistAPITest(t)
 		accountID := seedAccount()
 
 		wantProjectID := "proj-" + uuid.NewString()[:8]
 		wantLabelID := "label-" + uuid.NewString()[:8]
 		wantLabelName := "label-name-" + uuid.NewString()[:8]
+		wantInstanceID := "instance-" + uuid.NewString()[:8]
+		wantTimezone := "America/Chicago"
 
 		_, err := syncRepo.CreateSyncState(context.Background(), repository.CreateSyncStateRequest{
 			Source:    todoist.SourceName,
@@ -156,9 +157,11 @@ func TestTodoistAPI_GetSettings(t *testing.T) {
 			Enabled:   true,
 			Strategy:  repository.SyncStrategyFetchAll,
 			Metadata: map[string]any{
-				todoist.MetadataKeyProjectID: wantProjectID,
-				todoist.MetadataKeyLabelID:   wantLabelID,
-				todoist.MetadataKeyLabelName: wantLabelName,
+				todoist.MetadataKeyProjectID:           wantProjectID,
+				todoist.MetadataKeyLabelID:             wantLabelID,
+				todoist.MetadataKeyLabelName:           wantLabelName,
+				todoist.MetadataKeyIntegrationInstance: wantInstanceID,
+				todoist.MetadataKeyUserTimezone:        wantTimezone,
 			},
 		})
 		require.NoError(t, err)
@@ -173,6 +176,10 @@ func TestTodoistAPI_GetSettings(t *testing.T) {
 		assert.Equal(t, wantLabelID, *settings.LabelID)
 		require.NotNil(t, settings.LabelName)
 		assert.Equal(t, wantLabelName, *settings.LabelName)
+		require.NotNil(t, settings.IntegrationInstanceID)
+		assert.Equal(t, wantInstanceID, *settings.IntegrationInstanceID)
+		require.NotNil(t, settings.UserTimezone)
+		assert.Equal(t, wantTimezone, *settings.UserTimezone)
 	})
 }
 
@@ -186,8 +193,9 @@ func TestTodoistAPI_UpdateSettings(t *testing.T) {
 	t.Parallel()
 
 	t.Run("MalformedBody_Returns400", func(t *testing.T) {
-		router, _, _, seedAccount := newTodoistAPITest(t)
-		seedAccount()
+		// Deliberately NO seeded account: getting a 400 (not the no-account
+		// 404) proves body validation runs before the account check.
+		router, _, _ := newTodoistAPITest(t)
 
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPatch, "/api/v1/todoist/settings", bytes.NewReader([]byte("{not-json")))
@@ -197,7 +205,7 @@ func TestTodoistAPI_UpdateSettings(t *testing.T) {
 	})
 
 	t.Run("NoAccount_Returns404", func(t *testing.T) {
-		router, _, _, _ := newTodoistAPITest(t)
+		router, _, _ := newTodoistAPITest(t)
 
 		w := doTodoistRequest(router, http.MethodPatch, "/api/v1/todoist/settings", map[string]any{
 			"project_id": "proj-" + uuid.NewString()[:8],
@@ -206,7 +214,7 @@ func TestTodoistAPI_UpdateSettings(t *testing.T) {
 	})
 
 	t.Run("CreatesSyncStateIfAbsent", func(t *testing.T) {
-		router, syncRepo, _, seedAccount := newTodoistAPITest(t)
+		router, syncRepo, seedAccount := newTodoistAPITest(t)
 		accountID := seedAccount()
 
 		projectID := "proj-" + uuid.NewString()[:8]
@@ -223,7 +231,7 @@ func TestTodoistAPI_UpdateSettings(t *testing.T) {
 	})
 
 	t.Run("MergesMetadataNotReplace", func(t *testing.T) {
-		router, syncRepo, _, seedAccount := newTodoistAPITest(t)
+		router, syncRepo, seedAccount := newTodoistAPITest(t)
 		accountID := seedAccount()
 
 		unrelatedValue := "unrelated-" + uuid.NewString()[:8]
@@ -251,7 +259,7 @@ func TestTodoistAPI_UpdateSettings(t *testing.T) {
 	})
 
 	t.Run("IntegrationInstanceIDStableOnce", func(t *testing.T) {
-		router, _, _, seedAccount := newTodoistAPITest(t)
+		router, _, seedAccount := newTodoistAPITest(t)
 		seedAccount()
 
 		w := doTodoistRequest(router, http.MethodPatch, "/api/v1/todoist/settings", map[string]any{
@@ -273,7 +281,7 @@ func TestTodoistAPI_UpdateSettings(t *testing.T) {
 
 	t.Run("LabelChangeClearsCachedName", func(t *testing.T) {
 		// spec: SET-017
-		router, syncRepo, _, seedAccount := newTodoistAPITest(t)
+		router, syncRepo, seedAccount := newTodoistAPITest(t)
 		accountID := seedAccount()
 
 		oldLabelID := "label-" + uuid.NewString()[:8]
