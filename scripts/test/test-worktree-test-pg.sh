@@ -479,7 +479,7 @@ if command -v flock >/dev/null 2>&1; then
   # 20. Lock timeout, RUNNING branch: warm a real (fake) instance, hold its lock,
   # ensure with a 1s timeout. Non-strict proceeds against the running instance
   # (warn says "server is up", url still emits the instance URL — NOT a false
-  # fallback claim); strict fails. Pins D3's routing for both timeout branches.
+  # fallback claim); strict fails. Exercises both mode routings of this branch.
   d=$(make_env | tail -1); set_linked "$d" lockrun
   run "$d" ensure >/dev/null 2>&1                       # cold -> warm
   id=$(run "$d" status | grep -oE 'id=[0-9a-f]+' | sed 's/id=//')
@@ -502,13 +502,27 @@ else
   ok "flock absent -> skipping lock-timeout branch tests (mkdir backend ceiling covered elsewhere)"
 fi
 
-# 21. Knob validation: an invalid CRM_WORKTREE_PG_LOCK_TIMEOUT warns and falls
-# back to the default (ensure still provisions, exits 0).
+# 21. Knob validation. Every INVALID form (non-numeric, empty-but-set, zero,
+# negative) warns on a side-effecting subcommand and falls back to the default
+# (ensure still provisions, exits 0). A VALID positive integer is accepted
+# silently. And the render-safe `url` NEVER warns, even for an invalid knob.
+for badval in banana "" 0 -5; do
+  d=$(make_env | tail -1); set_linked "$d"
+  CRM_WORKTREE_PG_LOCK_TIMEOUT="$badval" run "$d" ensure 2>"$d/err"; rc=$?
+  label="'$badval'"
+  [ "$rc" -eq 0 ] && ok "invalid knob $label: ensure exits 0" || bad "invalid knob $label exit=$rc"
+  grep -q '^pg_ctl .*start' "$d/calls" && ok "invalid knob $label: still provisioned (default 120s)" || bad "invalid knob $label: not provisioned"
+  grep -qi 'invalid CRM_WORKTREE_PG_LOCK_TIMEOUT' "$d/err" && ok "invalid knob $label: loud warning" || bad "invalid knob $label: no warning ($(cat "$d/err"))"
+done
+# Valid positive integer -> accepted, NO warning.
 d=$(make_env | tail -1); set_linked "$d"
-CRM_WORKTREE_PG_LOCK_TIMEOUT=banana run "$d" ensure 2>"$d/err"; rc=$?
-[ "$rc" -eq 0 ] && ok "invalid lock-timeout knob: ensure exits 0" || bad "invalid lock-timeout knob exit=$rc"
-grep -q '^pg_ctl .*start' "$d/calls" && ok "invalid lock-timeout knob: instance still provisioned (default 120s)" || bad "invalid knob: instance not provisioned"
-grep -qi 'invalid CRM_WORKTREE_PG_LOCK_TIMEOUT' "$d/err" && ok "invalid lock-timeout knob: loud warning" || bad "invalid knob: no warning ($(cat "$d/err"))"
+CRM_WORKTREE_PG_LOCK_TIMEOUT=30 run "$d" ensure 2>"$d/err"; rc=$?
+[ "$rc" -eq 0 ] && ok "valid lock-timeout knob (30): ensure exits 0" || bad "valid knob exit=$rc"
+! grep -qi 'invalid CRM_WORKTREE_PG_LOCK_TIMEOUT' "$d/err" && ok "valid lock-timeout knob: no warning" || bad "valid knob warned: $(cat "$d/err")"
+# render-safe `url` stays SILENT even with an invalid knob (url NEVER warns).
+d=$(make_env | tail -1); set_linked "$d"
+CRM_WORKTREE_PG_LOCK_TIMEOUT=banana run "$d" url >/dev/null 2>"$d/err"
+[ ! -s "$d/err" ] && ok "invalid knob: url still silent on stderr (render-safe)" || bad "invalid knob: url wrote stderr: $(cat "$d/err")"
 
 # 17. Test-hook counter: increments once per invocation
 d=$(make_env | tail -1); set_linked "$d"

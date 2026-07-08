@@ -285,18 +285,25 @@ LOCK_STALE_SECS=120
 # locked callbacks (_ensure_locked/_stop_locked/_teardown_locked/_reap_one) return
 # only 0/1 today, so 124 can't collide — a future callback returning 124 would be
 # misread as a lock timeout.
+# Resolve the VALUE here (silently) so it is ready before any dispatch; the
+# invalid-value WARNING is deferred to main() and emitted only for side-effecting
+# subcommands, so `url`/`active`/`port`/`status` stay silent (the render-safe
+# `url` contract is "NEVER warns"). An empty-but-SET value is invalid (distinct
+# from unset, which is a plain default).
 LOCK_TIMEOUT_SECS=120
-case "${CRM_WORKTREE_PG_LOCK_TIMEOUT:-}" in
-  '') ;;                                       # unset/empty -> default
-  *[!0-9]*)                                    # negative / non-numeric
-    warn "ignoring invalid CRM_WORKTREE_PG_LOCK_TIMEOUT='${CRM_WORKTREE_PG_LOCK_TIMEOUT}' (want a positive integer); using ${LOCK_TIMEOUT_SECS}s" ;;
-  *)                                           # all-digits, non-empty
-    if [ "$CRM_WORKTREE_PG_LOCK_TIMEOUT" -gt 0 ]; then
-      LOCK_TIMEOUT_SECS="$CRM_WORKTREE_PG_LOCK_TIMEOUT"
-    else
-      warn "ignoring invalid CRM_WORKTREE_PG_LOCK_TIMEOUT='${CRM_WORKTREE_PG_LOCK_TIMEOUT}' (want a positive integer); using ${LOCK_TIMEOUT_SECS}s"
-    fi ;;
-esac
+LOCK_TIMEOUT_KNOB_INVALID=""                   # "1" when the knob was set invalid
+if [ "${CRM_WORKTREE_PG_LOCK_TIMEOUT+set}" = set ]; then
+  case "$CRM_WORKTREE_PG_LOCK_TIMEOUT" in
+    ''|*[!0-9]*)                               # empty / negative / non-numeric
+      LOCK_TIMEOUT_KNOB_INVALID=1 ;;
+    *)                                         # all-digits, non-empty
+      if [ "$CRM_WORKTREE_PG_LOCK_TIMEOUT" -gt 0 ]; then
+        LOCK_TIMEOUT_SECS="$CRM_WORKTREE_PG_LOCK_TIMEOUT"
+      else                                     # zero
+        LOCK_TIMEOUT_KNOB_INVALID=1
+      fi ;;
+  esac
+fi
 
 # Loud, actionable warning shared by both lock backends on a wait timeout. Names
 # the DIRECT pg_ctl recovery: stop/teardown/reap all contend on this same lock,
@@ -866,6 +873,13 @@ cmd_port() {
 # ===========================================================================
 main() {
   local sub="${1:-}"
+  # Warn about an invalid lock-timeout knob only for side-effecting subcommands;
+  # the render-safe read-only ones (url/active/port/status) must stay silent.
+  case "$sub" in
+    ensure|stop|teardown|reap)
+      [ -n "$LOCK_TIMEOUT_KNOB_INVALID" ] && \
+        warn "ignoring invalid CRM_WORKTREE_PG_LOCK_TIMEOUT='${CRM_WORKTREE_PG_LOCK_TIMEOUT:-}' (want a positive integer); using ${LOCK_TIMEOUT_SECS}s" ;;
+  esac
   case "$sub" in
     url)      cmd_url ;;
     active)   cmd_active ;;
