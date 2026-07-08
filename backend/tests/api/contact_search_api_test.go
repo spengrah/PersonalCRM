@@ -228,7 +228,7 @@ func TestContactSearchAPI_RelevanceAndSortOverride(t *testing.T) {
 
 // TestContactSearchAPI_EmptyResult is a generic robustness check, not a
 // CON-023 then-item (it is the trivial complement of "the term is
-// matched"), so it deliberately carries no // spec: citation.
+// matched"), so it deliberately carries no behavior citation.
 func TestContactSearchAPI_EmptyResult(t *testing.T) {
 	t.Parallel()
 	router, contactRepo, _ := newContactSearchAPITest(t)
@@ -246,7 +246,11 @@ func TestContactSearchAPI_EmptyResult(t *testing.T) {
 		assert.Contains(t, body, `"data":[`, "data must serialize as a JSON array literal, got: %s", body)
 		assert.NotContains(t, body, `"data":null`)
 
+		// The unmatched token is a unique lexeme no row anywhere contains, so
+		// the FTS-filtered result set must be fully empty -- this emptiness
+		// assertion is sibling-data-proof on the shared DB.
 		ids := searchResultIDs(t, w)
-		assert.False(t, containsID(ids, seededID.String()), "an unmatched search term must not return an unrelated seeded contact")
+		assert.Empty(t, ids, "an unmatched search term must return no contacts")
+		assert.False(t, containsID(ids, seededID.String()), "an unmatched search term must not return the unrelated seeded contact")
 	})
 }
