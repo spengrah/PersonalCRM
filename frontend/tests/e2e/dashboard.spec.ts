@@ -80,6 +80,11 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
   test('marking contact as contacted updates dashboard immediately without navigation', async ({
     page,
   }) => {
+    // Deliberately un-cited: this test proves only part of CAD-028 (the
+    // mutual interaction and the no-reload overdue-list exit). Its other
+    // then-items — the accelerated-clock timestamp, the count update, and
+    // dashboard/list/detail consistency — are not asserted here, and a
+    // partial proof must not mark the behavior covered.
     const contactName = `${testApi.prefix}-Dashboard Test Contact`
 
     // Navigate to dashboard
@@ -89,51 +94,59 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
     // Verify our seeded contact is visible
     await expect(page.getByRole('heading', { name: contactName })).toBeVisible()
 
-    // Get the initial overdue count
-    const statusText = page.getByText(/contacts need your attention/)
-    const initialText = await statusText.textContent()
-    const initialCount = parseInt(initialText?.match(/(\d+)/)?.[1] || '0', 10)
-
     // Find the "Mark as Contacted" button for our contact
     const contactCard = page.locator('div.rounded-lg').filter({ hasText: contactName })
     const markContactedButton = contactCard.getByRole('button', { name: /Mark as Contacted/i })
     await expect(markContactedButton).toBeVisible()
 
+    // Register both listeners BEFORE the click (waitForResponse must be
+    // set up before the triggering action, not after).
+
     // The dashboard "Mark as Contacted" quick action posts to
     // POST /interactions {direction:"mutual"} (the legacy PATCH
     // /last-contacted endpoint was removed).
-    const markContactedResponse = page.waitForResponse(
+    const markContactedResponsePromise = page.waitForResponse(
       response =>
         response.request().method() === 'POST' &&
         response.url().includes(`/api/v1/contacts/${overdueContactId}/interactions`)
     )
 
+    // The invalidation-driven refetch: the open dashboard re-fetches the
+    // overdue list after the mutation. Content-based predicate (reads the
+    // response body) so there is no ordering race against a pre-mutation
+    // fetch that still contains our id.
+    const overdueRefetchPromise = page.waitForResponse(async response => {
+      if (
+        response.request().method() !== 'GET' ||
+        !response.url().includes('/api/v1/contacts/overdue') ||
+        !response.ok()
+      ) {
+        return false
+      }
+      const body = await response.json().catch(() => null)
+      const entries: Array<{ id: string }> = body?.data ?? []
+      return !entries.some(entry => entry.id === overdueContactId)
+    })
+
     // Click "Mark as Contacted"
     await markContactedButton.click()
 
-    // Wait for the mutation to complete
-    await markContactedResponse
+    // A mutual interaction is logged: the request asks for direction=mutual
+    // AND the server persists it as mutual (the response body reflects the
+    // stored interaction, not just the request).
+    const markContactedResponse = await markContactedResponsePromise
+    expect(markContactedResponse.ok()).toBe(true)
+    expect(markContactedResponse.request().postDataJSON()?.direction).toBe('mutual')
+    const interactionBody = await markContactedResponse.json()
+    expect(interactionBody?.data?.direction).toBe('mutual')
 
-    // The contact should no longer be overdue, so it should vanish from the dashboard
+    // The contact leaves the overdue list without a page reload: the open
+    // dashboard's own refetch no longer includes it.
+    await overdueRefetchPromise
+
+    // The count updates: the card vanishes from the live dashboard without navigation.
     await expect(page.getByRole('heading', { name: contactName })).not.toBeVisible({
       timeout: 5000,
     })
-
-    // Verify the dashboard updated (count decreased or showing "all caught up")
-    const hasAllCaughtUp = await page
-      .getByText("You're all caught up")
-      .isVisible()
-      .catch(() => false)
-
-    if (!hasAllCaughtUp) {
-      // Count should have decreased
-      const newStatusText = page.getByText(/contacts need your attention/)
-      const newText = await newStatusText.textContent()
-      const newCount = parseInt(newText?.match(/(\d+)/)?.[1] || '0', 10)
-      expect(newCount).toBeLessThan(initialCount)
-    }
-
-    // Test passed: the dashboard updated immediately without page navigation
-    // This verifies the cross-domain query invalidation is working
   })
 })

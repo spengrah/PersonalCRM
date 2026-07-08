@@ -13,7 +13,6 @@ const API_HEADERS = {
 // the calendar API, not the DOM — that the event is linked to the contact once
 // the rematch job completes. The frontend polls the job silently
 // (RematchJobsProvider); this test polls the backend directly. @area:contacts
-// spec: IMP-021
 test.describe('Rematch on add email @area:contacts', () => {
   let testApi: TestAPI
 

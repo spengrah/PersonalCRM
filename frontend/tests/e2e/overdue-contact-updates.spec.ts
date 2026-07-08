@@ -245,12 +245,14 @@ test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => 
 
 test.describe('Overdue Contact Updates - Multiple Contacts @area:overdue', () => {
   let testApi: TestAPI
+  let firstId: string
+  let secondId: string
 
   test.beforeEach(async ({ request }, testInfo) => {
     testApi = createTestAPI(request, testInfo)
 
     // Seed multiple overdue contacts
-    await testApi.seedOverdueContacts([
+    const { ids } = await testApi.seedOverdueContacts([
       {
         full_name: 'First Overdue',
         cadence: 'weekly',
@@ -262,17 +264,20 @@ test.describe('Overdue Contact Updates - Multiple Contacts @area:overdue', () =>
         days_overdue: 10,
       },
     ])
+    firstId = ids[0]
+    secondId = ids[1]
   })
 
   test.afterEach(async () => {
     await testApi.cleanup()
   })
 
-  test('should show multiple overdue contacts on dashboard', async ({ page }) => {
+  test('should show multiple overdue contacts on dashboard', async ({ page, request }) => {
     await page.goto('/dashboard')
     await page.waitForLoadState('domcontentloaded')
 
-    // Both contacts should be visible
+    // Both contacts should be visible (DOM precondition: the dashboard rendered
+    // the seeded cards).
     await expect(
       page.getByRole('heading', { name: `${testApi.prefix}-First Overdue` })
     ).toBeVisible()
@@ -280,7 +285,37 @@ test.describe('Overdue Contact Updates - Multiple Contacts @area:overdue', () =>
       page.getByRole('heading', { name: `${testApi.prefix}-Second Overdue` })
     ).toBeVisible()
 
-    // Status should show correct count
-    await expect(page.getByText(/contacts need your attention/)).toBeVisible()
+    // spec: CAD-023
+    const overdueRes = await request.get(`${API_BASE_URL}/api/v1/contacts/overdue`, {
+      headers: API_HEADERS,
+    })
+    expect(overdueRes.ok()).toBe(true)
+    const overdueBody = await overdueRes.json()
+    const entries: Array<{
+      id: string
+      days_overdue: number
+      next_due_date: string
+      suggested_action: string
+    }> = overdueBody?.data ?? []
+
+    // Membership: both our seeded contacts are in the overdue list.
+    const firstEntry = entries.find(e => e.id === firstId)
+    const secondEntry = entries.find(e => e.id === secondId)
+    expect(firstEntry, 'first overdue contact should be in the list').toBeTruthy()
+    expect(secondEntry, 'second overdue contact should be in the list').toBeTruthy()
+
+    // Entry metadata: each entry carries days overdue, next due date, and a
+    // suggested action.
+    for (const entry of [firstEntry, secondEntry]) {
+      expect(entry!.days_overdue).toBeGreaterThanOrEqual(1)
+      expect(entry!.next_due_date).toBeTruthy()
+      expect(typeof entry!.suggested_action).toBe('string')
+      expect(entry!.suggested_action.length).toBeGreaterThan(0)
+    }
+
+    // Relative ordering, scoped to our own two rows: the 10-days-overdue
+    // contact ranks before the 3-days-overdue one.
+    const ourIds = entries.map(e => e.id).filter(id => id === firstId || id === secondId)
+    expect(ourIds.indexOf(secondId)).toBeLessThan(ourIds.indexOf(firstId))
   })
 })
