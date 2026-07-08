@@ -149,6 +149,16 @@ Added 2026-06-07 — the deploy/staging design surfaced concrete couplings betwe
 - **Test parallelization (#413, `.ai/spec/2026-06-07-test-parallelization-design.md`) parallelizes the post-rebalance suite.** Coordinate so E2E assertions aren't rewritten twice — Track A's Playwright relaxation lands before #413's E2E-scoping — and build Track A's new API-level tests parallelization-ready (D-backed scoping). #413 is gated on D's suite migration.
 - **The VPS host this spec sketched is now sub-project B** (`.ai/spec/2026-06-07-vps-and-tailnet-isolation-design.md`); the harness graduates onto the box B provisions, and Track B tours target the staging instance (sub-project C, `.ai/spec/2026-06-07-staging-environment-design.md`).
 
+## Piece 4 sub-spec + current-state corrections (added 2026-07-08)
+
+Piece 4 is now designed: `.ai/spec/2026-07-08-piece4-track-b-agentic-qa-harness-design.md`. Discovery during that brainstorm corrected several assumptions above; the sub-spec supersedes this document on each point:
+
+- **Staging exists** (#556 deploy plumbing, #566/#569 auto-reseed, #570 host provisioning) — tours target staging from day one; the "prove on Pi → graduate to VPS" host arc is obsolete. The prove phase runs from the dev sandbox via an ops network exception; #477 is superseded by the shipped work.
+- **Tours are a separate assertion-free suite**, not the relaxed E2E suite doing double duty — decoupling Piece 4 from Piece 2's Playwright-relaxation work (Piece 2 has since completed as #596–#604). Piece 4 proceeds before Piece 3 (it depends only on the SSOT, and tour annotations become a coverage producer for Piece 3's scanner to index).
+- **Judge invoker is `@openai/codex-sdk`** (with `codex exec --json --output-schema` as degraded mode) behind an adapter seam that keeps the brain swappable; the economics and model-routing table above still hold.
+- **The judge ships with an eval harness** (golden corpus incl. doctored captures, fail-precision-gated advisory→issue-mode transition) — the "prove the judge loop with a human in the loop" mitigation above, made mechanical.
+- **Instrumentation is shared tooling with #379** (OTel GenAI spans, common eval-runner pattern, future self-hosted observability platform) — see the sub-spec's Instrumentation section.
+
 ## Key risks
 
 - **Spec quality is unproven.** The whole edifice rests on the intent specs being good oracles. Mitigation: prove the judge loop against real specs with a human in the loop ($0 interactive Claude) *before* investing in autonomous infra.
