@@ -217,7 +217,11 @@ func TestSyncAPI_EnableSync(t *testing.T) {
 // and a synchronous fast path would produce an identical 202 body, so
 // non-await is unprovable at handler level without a seam. Those facets
 // are owned by the sync service/worker integration tests; SET-034 item 2
-// is scoped to the status+body-shape contract this subtest proves.
+// is scoped to the status+body-shape contract this subtest proves. The
+// proven 202 instance is specifically the unknown-source/empty-body path
+// (the only hermetic 202); the ack body is built by one unconditional
+// SendSuccess call regardless of source, so proving the shape once locks
+// it for all sources.
 //
 // SET-034's `notes` field mentions the fire-and-forget/detached-goroutine
 // dispatch as background context for why item 2 is scoped so narrowly —
@@ -275,7 +279,7 @@ func TestSyncAPI_TriggerSync(t *testing.T) {
 // spec/README.md ("a generic framework-level contract... that no behavior
 // owns simply carries no marker") and the arc's leave-uncited sanction, no
 // SET behavior is minted for this surface — the tests are still valuable
-// (they lock the read shapes) but deliberately carry no // spec: citation.
+// (they lock the read shapes) but deliberately carry no spec citation.
 func TestSyncAPI_ReadEndpoints(t *testing.T) {
 	t.Parallel()
 
