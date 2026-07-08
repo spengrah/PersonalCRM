@@ -122,7 +122,7 @@ test.describe('Imports Actions @area:imports', () => {
       // Capture the import POST before triggering it.
       const importResponsePromise = page.waitForResponse(
         res =>
-          res.url() === `${API_BASE_URL}/api/v1/imports/${externalId}/import` &&
+          res.url().includes(`/api/v1/imports/${externalId}/import`) &&
           res.request().method() === 'POST'
       )
 
@@ -207,7 +207,7 @@ test.describe('Imports Actions @area:imports', () => {
 
       const ignoreResponsePromise = page.waitForResponse(
         res =>
-          res.url() === `${API_BASE_URL}/api/v1/imports/${externalId}/ignore` &&
+          res.url().includes(`/api/v1/imports/${externalId}/ignore`) &&
           res.request().method() === 'POST'
       )
       await ignoreButton.click()
@@ -313,7 +313,7 @@ test.describe('Imports Actions @area:imports', () => {
       // Capture the link POST before triggering it.
       const linkResponsePromise = page.waitForResponse(
         res =>
-          res.url() === `${API_BASE_URL}/api/v1/imports/${externalId}/link` &&
+          res.url().includes(`/api/v1/imports/${externalId}/link`) &&
           res.request().method() === 'POST'
       )
 
