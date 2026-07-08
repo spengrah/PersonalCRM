@@ -7,8 +7,9 @@
 // ListProjects/ListLabels (SET-018) are deliberately NOT covered here: they
 // construct todoist.NewSyncClient(accessToken) inline with no injection
 // seam, so their live-provider contract can't be exercised without a real
-// Todoist account or a handler client seam. See the arc's tracked
-// follow-up: inject the existing todoist.ClientFactory into TodoistHandler.
+// Todoist account or a handler client seam. Closing that gap needs a small
+// production change (inject the existing todoist.ClientFactory into
+// TodoistHandler) before a picker suite can be added.
 package api
 
 import (
@@ -29,8 +30,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// newTodoistAPITest builds a fresh, empty isolated-River DB clone (DT3),
-// wires the production Todoist settings route surface over it, and returns a
+// newTodoistAPITest builds a fresh, empty isolated-River DB clone, wires the
+// production Todoist settings route surface over it, and returns a
 // seedAccount closure that upserts a connected-account credential on demand.
 // Every subtest MUST call this as its first line: TodoistOAuthService.
 // ListAccounts lists ALL todoist credentials with no filter, so a shared
@@ -57,8 +58,8 @@ func newTodoistAPITest(t *testing.T) (router *gin.Engine, syncRepo *repository.S
 		t.Helper()
 		accountID := "todoist-acct-" + uuid.NewString()[:8]
 		// access_token_encrypted / encryption_nonce are NOT NULL columns,
-		// but GetSettings/UpdateSettings never decrypt them (DT2) — dummy
-		// non-nil bytes satisfy the constraint without a real token.
+		// but GetSettings/UpdateSettings never decrypt them — dummy non-nil
+		// bytes satisfy the constraint without a real token.
 		_, err := oauthRepo.Upsert(ctx, repository.UpsertOAuthCredentialRequest{
 			Provider:             todoist.ProviderName,
 			AccountID:            accountID,
