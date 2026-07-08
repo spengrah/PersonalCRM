@@ -80,7 +80,11 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
   test('marking contact as contacted updates dashboard immediately without navigation', async ({
     page,
   }) => {
-    // spec: CAD-028
+    // Deliberately un-cited: this test proves only part of CAD-028 (the
+    // mutual interaction and the no-reload overdue-list exit). Its other
+    // then-items — the accelerated-clock timestamp, the count update, and
+    // dashboard/list/detail consistency — are not asserted here, and a
+    // partial proof must not mark the behavior covered.
     const contactName = `${testApi.prefix}-Dashboard Test Contact`
 
     // Navigate to dashboard
