@@ -1,0 +1,29 @@
+{
+  "id": "CAD-031-clean",
+  "behavior_id": "CAD-031",
+  "source": "clean",
+  "metadata": {
+    "capture_generator_version": 1
+  },
+  "captures": [
+    "cadence-followup/005-add-task-modal-empty-text-kind-picker-submit-disabled.json",
+    "cadence-followup/006-add-task-modal-text-entered-submit-enabled-create-needs-a-pr.json"
+  ],
+  "expected": [
+    {
+      "then_index": 0,
+      "grader": "verifier",
+      "verdict": "pass"
+    },
+    {
+      "then_index": 1,
+      "grader": "verifier",
+      "verdict": "pass"
+    },
+    {
+      "then_index": 2,
+      "grader": "verifier",
+      "verdict": "unsure"
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "id": "DSH-003-doctored",
+  "behavior_id": "DSH-003",
+  "source": "doctored",
+  "metadata": {
+    "capture_generator_version": 1
+  },
+  "captures": [
+    "dashboard/002-dashboard-shell-global-nav-header-add-contact-no-dashboard-s.json",
+    "dashboard/011-caught-up-empty-state-add-view-list-affordances.json"
+  ],
+  "doctor": {
+    "base_case": "DSH-003-clean",
+    "mutation": {
+      "op": "remove_aria_subtree",
+      "role": "dashboard",
+      "node_role": "link",
+      "node_name": "Add Contact"
+    }
+  },
+  "expected": [
+    {
+      "then_index": 0,
+      "grader": "verifier",
+      "verdict": "fail"
+    },
+    {
+      "then_index": 1,
+      "grader": "verifier",
+      "verdict": "pass"
+    }
+  ]
+}

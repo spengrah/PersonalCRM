@@ -1,0 +1,33 @@
+{
+  "id": "CAD-030-clean",
+  "behavior_id": "CAD-030",
+  "source": "clean",
+  "metadata": {
+    "capture_generator_version": 1
+  },
+  "captures": [
+    "cadence-followup/004-tasks-section-no-tasks-empty-state-populated-ordering-unlink.json"
+  ],
+  "expected": [
+    {
+      "then_index": 0,
+      "grader": "verifier",
+      "verdict": "unsure"
+    },
+    {
+      "then_index": 1,
+      "grader": "verifier",
+      "verdict": "unsure"
+    },
+    {
+      "then_index": 2,
+      "grader": "verifier",
+      "verdict": "unsure"
+    },
+    {
+      "then_index": 3,
+      "grader": "verifier",
+      "verdict": "pass"
+    }
+  ]
+}

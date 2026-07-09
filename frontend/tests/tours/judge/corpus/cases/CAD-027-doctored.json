@@ -1,0 +1,52 @@
+{
+  "id": "CAD-027-doctored",
+  "behavior_id": "CAD-027",
+  "source": "doctored",
+  "metadata": {
+    "capture_generator_version": 1
+  },
+  "captures": [
+    "dashboard/004-overdue-list-urgency-default-sort-cards-count-tiers.json",
+    "dashboard/005-overdue-list-name-sort-alphabetical.json",
+    "dashboard/006-overdue-list-last-contacted-sort-oldest-first.json"
+  ],
+  "doctor": {
+    "base_case": "CAD-027-clean",
+    "mutation": {
+      "op": "set_field",
+      "role": "sort-urgency",
+      "field": "overdueCards",
+      "value": [
+        {
+          "name": "a",
+          "daysOverdue": 1,
+          "tierClass": "x",
+          "lastContacted": null
+        },
+        {
+          "name": "b",
+          "daysOverdue": 90,
+          "tierClass": "x",
+          "lastContacted": null
+        }
+      ]
+    }
+  },
+  "expected": [
+    {
+      "then_index": 0,
+      "grader": "verifier",
+      "verdict": "fail"
+    },
+    {
+      "then_index": 1,
+      "grader": "verifier",
+      "verdict": "pass"
+    },
+    {
+      "then_index": 2,
+      "grader": "verifier",
+      "verdict": "pass"
+    }
+  ]
+}

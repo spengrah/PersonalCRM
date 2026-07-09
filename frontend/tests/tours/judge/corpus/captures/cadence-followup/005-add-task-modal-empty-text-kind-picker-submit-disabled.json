@@ -1,0 +1,84 @@
+{
+  "captureFormatVersion": 1,
+  "captureGeneratorVersion": 1,
+  "tour": "cadence-followup",
+  "seq": 5,
+  "behaviors": ["CAD-031"],
+  "note": "add-task modal, empty text: kind picker + submit disabled",
+  "url": "/contacts/<id:3>",
+  "pair": {
+    "id": "addtask",
+    "role": "add-task-empty"
+  },
+  "serverTime": {
+    "currentTime": "2026-07-10T14:16:36.44089478Z",
+    "isAccelerated": true,
+    "accelerationFactor": 60,
+    "baseTime": "2026-07-09T15:07:20Z",
+    "environment": "testing"
+  },
+  "aria": {
+    "role": "root",
+    "children": [
+      {
+        "role": "heading",
+        "name": "Add Task for synth-prodshaped-Brux Fakeman",
+        "level": 2
+      },
+      {
+        "role": "button"
+      },
+      {
+        "role": "text",
+        "text": "Type"
+      },
+      {
+        "role": "group",
+        "name": "Task type",
+        "children": [
+          {
+            "role": "button",
+            "name": "Reach out",
+            "pressed": true
+          },
+          {
+            "role": "button",
+            "name": "Send"
+          },
+          {
+            "role": "button",
+            "name": "Reminder"
+          }
+        ]
+      },
+      {
+        "role": "textbox",
+        "name": "Follow up about surgery next tuesday p2"
+      },
+      {
+        "role": "paragraph",
+        "children": [
+          {
+            "role": "text",
+            "text": "Supports: dates, #project, @label, p1-p4"
+          }
+        ]
+      },
+      {
+        "role": "button",
+        "name": "Add notes"
+      },
+      {
+        "role": "button",
+        "name": "Cancel"
+      },
+      {
+        "role": "button",
+        "name": "Add Task",
+        "disabled": true
+      }
+    ]
+  },
+  "apiResponses": {},
+  "dialogs": []
+}

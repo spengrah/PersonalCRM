@@ -1,0 +1,45 @@
+{
+  "id": "CAD-026-doctored",
+  "behavior_id": "CAD-026",
+  "source": "doctored",
+  "metadata": {
+    "capture_generator_version": 1
+  },
+  "captures": [
+    "dashboard/004-overdue-list-urgency-default-sort-cards-count-tiers.json",
+    "dashboard/011-caught-up-empty-state-add-view-list-affordances.json"
+  ],
+  "doctor": {
+    "base_case": "CAD-026-clean",
+    "mutation": {
+      "op": "set_field",
+      "role": "sort-urgency",
+      "field": "overdueCards",
+      "value": [
+        {
+          "name": "synth-prodshaped-Wrong Tier",
+          "daysOverdue": 90,
+          "tierClass": "bg-white border-yellow-200 bg-yellow-50",
+          "lastContacted": null
+        }
+      ]
+    }
+  },
+  "expected": [
+    {
+      "then_index": 0,
+      "grader": "verifier",
+      "verdict": "pass"
+    },
+    {
+      "then_index": 1,
+      "grader": "verifier",
+      "verdict": "fail"
+    },
+    {
+      "then_index": 2,
+      "grader": "verifier",
+      "verdict": "pass"
+    }
+  ]
+}
