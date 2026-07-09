@@ -71,6 +71,15 @@ func eventToSample(ev *river.Event) (repository.JobExecSampleRow, bool) {
 	if job.FinalizedAt != nil {
 		finalizedAt = *job.FinalizedAt
 	}
+	// AttemptedAt is stamped by River's fetch query (DB clock) while
+	// job.FinalizedAt is stamped by the River client (Go clock). When the
+	// client clock lags the DB clock by more than the job's run time,
+	// FinalizedAt lands before AttemptedAt and the insert would violate
+	// job_exec_sample_interval_chk, silently dropping the sample. Clamp so
+	// best-effort capture survives bounded clock skew.
+	if finalizedAt.Before(*job.AttemptedAt) {
+		finalizedAt = *job.AttemptedAt
+	}
 
 	return repository.JobExecSampleRow{
 		RiverJobID:  job.ID,

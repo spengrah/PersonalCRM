@@ -54,6 +54,39 @@ func TestEventToSample_Completed(t *testing.T) {
 	assert.True(t, row.CreatedAt.IsZero())
 }
 
+func TestEventToSample_ClockSkew_ClampsFinalizedAt(t *testing.T) {
+	t.Parallel()
+	// AttemptedAt comes from the DB clock and FinalizedAt from the client
+	// clock; a client clock lagging the DB clock by more than the run time
+	// yields FinalizedAt < AttemptedAt, which the interval check constraint
+	// would reject. eventToSample must clamp instead of emitting a row the
+	// insert will drop.
+	attempted := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	finalized := attempted.Add(-40 * time.Millisecond)
+
+	ev := &river.Event{
+		Kind: river.EventKindJobCompleted,
+		Job: &rivertype.JobRow{
+			ID:          43,
+			Kind:        "test_kind",
+			Queue:       "default",
+			Attempt:     1,
+			AttemptedAt: ptrTime(attempted),
+			FinalizedAt: ptrTime(finalized),
+			State:       rivertype.JobStateCompleted,
+		},
+		JobStats: &river.JobStatistics{
+			RunDuration:       2 * time.Millisecond,
+			QueueWaitDuration: 250 * time.Millisecond,
+		},
+	}
+
+	row, ok := eventToSample(ev)
+	require.True(t, ok)
+	assert.Equal(t, attempted, row.AttemptedAt)
+	assert.Equal(t, attempted, row.FinalizedAt, "FinalizedAt must be clamped to AttemptedAt, never before it")
+}
+
 func TestEventToSample_RetryableFailure_SynthesizesFinalizedAt(t *testing.T) {
 	t.Parallel()
 	attempted := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
