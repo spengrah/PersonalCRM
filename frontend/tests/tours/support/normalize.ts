@@ -1,7 +1,6 @@
-// Deterministic, conservative normalization for the tours capture format
-// (arc §1c/§1d). Pure functions only — NO Playwright import — so this module is
-// unit-testable without a browser (see normalize.test.ts) and importable by
-// PR2's grader.
+// Deterministic, conservative normalization for the tours capture format.
+// Pure functions only — NO Playwright import — so this module is unit-testable
+// without a browser (see normalize.test.ts) and importable by the grader.
 //
 // Design: preserve-by-default, deny-list only. A blunt "strip all
 // timestamps/ids" would destroy the very evidence time- and identity-dependent
@@ -26,7 +25,7 @@ const REDACT_DENY = new Set(['etag', 'request_id', 'requestid', 'trace_id', 'tra
 const TOKEN_KEY = /token|csrf|secret|session_id/i
 
 // ---------------------------------------------------------------------------
-// Run-scoped UUID → ordinal mapper (arc §1c-1)
+// Run-scoped UUID → ordinal mapper
 // ---------------------------------------------------------------------------
 
 export interface UuidMapper {
@@ -56,7 +55,7 @@ export function mapUuids(value: string, mapper: UuidMapper): string {
 }
 
 // ---------------------------------------------------------------------------
-// URL normalization (arc §1c-3): host-stripped, query preserved, UUIDs mapped
+// URL normalization: host-stripped, query preserved, UUIDs mapped
 // ---------------------------------------------------------------------------
 
 function stripHost(url: string): string {
@@ -75,7 +74,9 @@ export function normalizeUrl(url: string, mapper: UuidMapper): string {
 export function parseQuery(url: string, mapper: UuidMapper): Record<string, string> {
   const out: Record<string, string> = {}
   try {
-    const u = new URL(url)
+    // A dummy base lets both absolute URLs (base ignored) and relative paths
+    // (e.g. a harness probe path) parse, so probe items preserve query too.
+    const u = new URL(url, 'http://localhost')
     const keys = [...u.searchParams.keys()].sort()
     for (const k of keys) {
       out[k] = mapUuids(u.searchParams.get(k) ?? '', mapper)
@@ -86,7 +87,7 @@ export function parseQuery(url: string, mapper: UuidMapper): Record<string, stri
   return out
 }
 
-// The grouping key: "<METHOD> <path with UUID segments → :id>" (arc §1a).
+// The grouping key: "<METHOD> <path with UUID segments → :id>".
 export function endpointKey(method: string, url: string): string {
   let path: string
   try {
@@ -102,7 +103,7 @@ export function endpointKey(method: string, url: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// JSON body normalization (arc §1c-2/4/5)
+// JSON body normalization: sentinel deny-list keys, sort keys, cap arrays
 // ---------------------------------------------------------------------------
 
 export function normalizeJson(value: unknown, mapper: UuidMapper, arrayCap: number): unknown {
@@ -141,7 +142,7 @@ export function normalizeJson(value: unknown, mapper: UuidMapper, arrayCap: numb
 }
 
 // ---------------------------------------------------------------------------
-// Aria snapshot YAML → node tree (arc §1d) — the key testable seam
+// Aria snapshot YAML → node tree — the key testable seam
 // ---------------------------------------------------------------------------
 
 // Unescape a YAML double-quoted scalar (Playwright's yamlEscapeValueIfNeeded /

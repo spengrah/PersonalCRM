@@ -83,6 +83,15 @@ describe('normalizeUrl / parseQuery / endpointKey', () => {
     )
     expect(parseQuery('https://h/api/v1/contacts?limit=1000', m).limit).toBe('1000')
   })
+
+  it('parses query on a RELATIVE path too (harness probe paths)', () => {
+    const m = createUuidMapper()
+    expect(parseQuery(`/api/v1/contacts?source_id=${UUID_A}&x=1`, m)).toEqual({
+      source_id: '<id:1>',
+      x: '1',
+    })
+    expect(parseQuery(`/api/v1/contacts/${UUID_A}`, m)).toEqual({})
+  })
 })
 
 describe('normalizeJson deny-list vs preserve-list', () => {

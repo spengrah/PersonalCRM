@@ -1,7 +1,7 @@
-// The capture engine (arc §1). Emits one parseable capture record per capture()
-// call: a structured aria node tree, self-describing endpoint-grouped /api/v1
-// responses, the accelerated serverTime frame, native dialogs, and optional
-// probes/fields — with conservative deterministic normalization (normalize.ts).
+// The capture engine. Emits one parseable capture record per capture() call: a
+// structured aria node tree, self-describing endpoint-grouped /api/v1 responses,
+// the accelerated serverTime frame, native dialogs, and optional probes/fields —
+// with conservative deterministic normalization (normalize.ts).
 
 import * as fs from 'fs'
 import * as path from 'path'
@@ -62,8 +62,8 @@ function slugify(note: string): string {
 }
 
 // One TourApi per test (a tour is a single serial test). Its UUID mapper is
-// shared across every capture in the tour so before/after pairs correlate
-// (arc §1c-1). The response buffer + listener are set up by the fixture.
+// shared across every capture in the tour so before/after pairs correlate. The
+// response buffer + listener are set up by the fixture.
 export class TourApi {
   private seq = 0
   private readonly uuid: UuidMapper = createUuidMapper()
@@ -78,8 +78,8 @@ export class TourApi {
     this.tour = path.basename(testInfo.file).replace(/\.tour\.ts$/, '')
   }
 
-  // Write one capture record (arc §1a). Every call site must first pass an
-  // explicit readiness gate (D9) so the response buffer is complete.
+  // Write one capture record. Every call site must first pass an explicit
+  // readiness gate so the response buffer is complete.
   async capture(page: Page, opts: CaptureOptions): Promise<void> {
     const arrayCap = opts.arrayCap ?? DEFAULT_ARRAY_CAP
     const ariaCap = opts.ariaCap ?? DEFAULT_ARIA_CAP
@@ -123,7 +123,7 @@ export class TourApi {
     this.write(seq, opts.note, record)
   }
 
-  // Register a native-dialog handler (D5): record the message into the pending
+  // Register a native-dialog handler: record the message into the pending
   // capture's dialogs[], accept/dismiss per the flag, await both the dialog and
   // the triggering action, and throw loudly if no dialog fires in time (a
   // delete flow that no longer prompts is a real regression, not to be
@@ -145,8 +145,8 @@ export class TourApi {
     }
   }
 
-  // Readiness sugar (D9): resolve on the matching buffered response, else wait
-  // for the next one — NOT expect(), so tours stay assertion-free.
+  // Readiness sugar: resolve on the matching buffered response, else wait for
+  // the next one — NOT expect(), so tours stay assertion-free.
   async waitForApi(
     page: Page,
     method: string,
@@ -161,8 +161,8 @@ export class TourApi {
     return page.waitForResponse(matches, { timeout })
   }
 
-  // Deterministically hold a route until release() (D5/CON-043 transient
-  // states): captures a loading/in-flight disabled state without timing luck.
+  // Deterministically hold a route until release() (for capturing a
+  // loading/in-flight disabled state without timing luck).
   // The handler continues each intercepted route exactly once after the gate
   // opens; we deliberately do NOT page.unroute() on release — that races the
   // held route's continue and throws "Route is already handled". Leaving the
@@ -250,24 +250,33 @@ export class TourApi {
     }
   }
 
-  // The authoritative accelerated frame (D3): fetched via the dedicated apiCtx
-  // (NOT the page context) so it is not caught by the response listener.
-  private async fetchServerTime(): Promise<ServerTimeFrame | null> {
+  // The authoritative accelerated frame: fetched via the dedicated apiCtx (NOT
+  // the page context) so it is not caught by the response listener. Every
+  // capture must be stamped with this frame — a failed or malformed fetch
+  // THROWS to fail the sweep loudly rather than emit a frame-less capture.
+  private async fetchServerTime(): Promise<ServerTimeFrame> {
+    const resp = await this.apiCtx.get('/api/v1/system/time')
+    if (!resp.ok()) {
+      throw new Error(
+        `tours: GET /api/v1/system/time returned ${resp.status()} — cannot stamp the capture with a server-time frame`
+      )
+    }
+    let envelope: ({ data?: Record<string, unknown> } & Record<string, unknown>) | undefined
     try {
-      const resp = await this.apiCtx.get('/api/v1/system/time')
-      const envelope = (await resp.json()) as {
-        data?: Record<string, unknown>
-      } & Record<string, unknown>
-      const data = (envelope.data ?? envelope) as Record<string, unknown>
-      return {
-        currentTime: String(data.current_time ?? ''),
-        isAccelerated: Boolean(data.is_accelerated),
-        accelerationFactor: Number(data.acceleration_factor ?? 1),
-        baseTime: String(data.base_time ?? ''),
-        environment: data.environment ? String(data.environment) : undefined,
-      }
+      envelope = await resp.json()
     } catch {
-      return null
+      throw new Error('tours: GET /api/v1/system/time returned a non-JSON body')
+    }
+    const data = (envelope?.data ?? envelope) as Record<string, unknown> | undefined
+    if (!data || !data.current_time) {
+      throw new Error('tours: GET /api/v1/system/time response is missing current_time')
+    }
+    return {
+      currentTime: String(data.current_time),
+      isAccelerated: Boolean(data.is_accelerated),
+      accelerationFactor: Number(data.acceleration_factor ?? 1),
+      baseTime: String(data.base_time ?? ''),
+      environment: data.environment ? String(data.environment) : undefined,
     }
   }
 

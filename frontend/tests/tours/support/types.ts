@@ -1,21 +1,21 @@
-// Shared capture-format contract for the tours harness (Piece 4 Track B, #606).
+// Shared capture-format contract for the tours harness.
 //
-// This is the single load-bearing interface of the arc: PR1 produces it, and
-// PR2's hybrid grader + PR3's corpus consume it. The schema is authored here
-// per arc §1 and versioned via captureFormatVersion / captureGeneratorVersion —
-// any schema change bumps both (arc §3). The only Playwright reference is the
-// type-only `Locator` import below (erased at compile time — the pure normalizer
-// and its vitest unit tests never load a browser runtime).
+// This is the single load-bearing interface: the tours produce these records
+// and the downstream grader + corpus consume them. It is versioned via
+// captureFormatVersion / captureGeneratorVersion — bump both on any schema
+// change. The only Playwright reference is the type-only `Locator` import below
+// (erased at compile time — the pure normalizer and its vitest unit tests never
+// load a browser runtime).
 
 import type { Locator } from '@playwright/test'
 
 export const CAPTURE_FORMAT_VERSION = 1
 export const CAPTURE_GENERATOR_VERSION = 1
 
-// A single accessibility node parsed from Playwright's ariaSnapshot() YAML
-// (arc §1d). Element nodes carry a role, an optional accessible name, per-node
-// state (only when its token is present), and children. Visible copy is
-// preserved as leaf text nodes: { role: 'text', text }.
+// A single accessibility node parsed from Playwright's ariaSnapshot() YAML.
+// Element nodes carry a role, an optional accessible name, per-node state (only
+// when its token is present), and children. Visible copy is preserved as leaf
+// text nodes: { role: 'text', text }.
 export interface AriaNode {
   role: string
   /** Accessible name (element nodes) — UUID-mapped, host-redacted. */
@@ -44,11 +44,11 @@ export interface JsonTruncationMarker {
   __truncated__: number
 }
 
-// A single self-describing /api/v1 response item (arc §1a). Items are grouped
-// under a templated endpoint key (e.g. "GET /api/v1/contacts/:id"); the
-// requestUrl + parsed query disambiguate otherwise-identical keys. Mutating
-// requests also carry a normalized requestBody. `probe: true` flags an item
-// obtained by a harness-initiated fetch (D4), not observed on the page.
+// A single self-describing /api/v1 response item. Items are grouped under a
+// templated endpoint key (e.g. "GET /api/v1/contacts/:id"); the requestUrl +
+// parsed query disambiguate otherwise-identical keys. Mutating requests also
+// carry a normalized requestBody. `probe: true` flags an item obtained by a
+// harness-initiated fetch, not observed on the page.
 export interface ApiResponseItem {
   method: string
   requestUrl: string
@@ -63,8 +63,9 @@ export interface ApiResponseItem {
 
 export type ApiResponses = Record<string, ApiResponseItem[]>
 
-// The accelerated server-time frame from GET /api/v1/system/time (arc §1a).
-// Preserved raw — it is the interpretation anchor for time-dependent evidence.
+// The accelerated server-time frame from GET /api/v1/system/time. Preserved raw
+// — it is the interpretation anchor for time-dependent evidence. Every capture
+// is stamped with one (a failed fetch fails the sweep loudly).
 export interface ServerTimeFrame {
   currentTime: string
   isAccelerated: boolean
@@ -74,19 +75,19 @@ export interface ServerTimeFrame {
 }
 
 // Groups an ordered sequence of captures (by seq) that the grader diffs as one
-// bracket. `role` is a free label, NOT an enum (arc §1a).
+// bracket. `role` is a free label, NOT an enum.
 export interface CapturePair {
   id: string
   role: string
 }
 
-// A native browser dialog observed during a capture's bracketed action (D5).
+// A native browser dialog observed during a capture's bracketed action.
 export interface DialogRecord {
   type: string
   message: string
 }
 
-// One capture record — one JSON object per capture() call (arc §1a).
+// One capture record — one JSON object per capture() call.
 export interface Capture {
   captureFormatVersion: number
   tour: string
@@ -95,14 +96,14 @@ export interface Capture {
   note: string
   url: string
   pair: CapturePair | null
-  serverTime: ServerTimeFrame | null
+  serverTime: ServerTimeFrame
   aria: AriaNode
   apiResponses: ApiResponses
   fields?: Record<string, unknown>
   dialogs: DialogRecord[]
 }
 
-// The run manifest (arc §1b). The staging host is redacted.
+// The run manifest. The staging host is redacted.
 export interface Manifest {
   captureFormatVersion: number
   captureGeneratorVersion: number
@@ -115,8 +116,8 @@ export interface Manifest {
 }
 
 // Options accepted by capture(). `behaviors` + `note` are required; everything
-// else is optional per-capture tuning (arc §1a/§1c-5). `ariaRoot` is an
-// authoring-time locator, NOT part of the emitted record.
+// else is optional per-capture tuning. `ariaRoot` is an authoring-time locator,
+// NOT part of the emitted record.
 export interface CaptureOptions {
   behaviors: string[]
   note: string

@@ -14,7 +14,7 @@ const supportDir =
 export const RUNS_ROOT = path.resolve(supportDir, '..', '.runs')
 const MARKER = path.join(RUNS_ROOT, 'CURRENT_RUN_ID')
 
-// A filesystem-safe wall-clock run id (arc §1a: <runId> = run wall timestamp).
+// A filesystem-safe wall-clock run id (the run's wall timestamp).
 export function generateRunId(): string {
   return new Date().toISOString().replace(/[:.]/g, '-')
 }

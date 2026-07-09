@@ -281,7 +281,7 @@ dev-api-restart:
 staging-reset: ## HARD reset + reseed STAGING — manual force / escape hatch (full wipe regardless of oauth; deploy-staging.yml auto-reseeds on seed-surface changes; fail-closed production refuse; STAGING-only)
 	@bash scripts/staging-reset.sh   # ssh STAGING_HOST -> refuse if CRM_ENV is a production alias or empty -> stop backend -> ephemeral crm-admin --reset-and-seed --profile prod-shaped --yes (deployed image) -> start backend
 
-tours: ## Reset staging + run the agentic UX QA tours (#606). Config from env only: TOURS_BASE_URL, TOURS_API_KEY, TOURS_API_URL. Captures land in frontend/tests/tours/.runs/ (gitignored). TOURS_SKIP_RESET=1 skips the reset.
+tours: ## Reset staging + run the agentic UX QA tours. Config from env only: TOURS_BASE_URL, TOURS_API_KEY, TOURS_API_URL. Captures land in frontend/tests/tours/.runs/ (gitignored). TOURS_SKIP_RESET=1 skips the reset.
 	@scripts/run-tours.sh
 
 # Native PostgreSQL (for containerized development without Docker-in-Docker)

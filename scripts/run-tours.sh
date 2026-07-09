@@ -1,5 +1,5 @@
 #!/bin/bash
-# Reset-before-run wrapper for the agentic UX QA tours (Piece 4 Track B, #606).
+# Reset-before-run wrapper for the agentic UX QA tours.
 #
 # Runs staging-reset.sh (ssh) for a known prod-shaped world BEFORE Playwright
 # launches, resolves the deployed staging image digest (read-only ssh, mirroring

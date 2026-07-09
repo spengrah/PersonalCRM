@@ -1,10 +1,11 @@
 // The tours test fixture. Extends @playwright/test with a per-test `tour` that
-// bundles: a dedicated APIRequestContext carrying X-API-Key (D3), a
-// context-level /api/v1 response buffer attached BEFORE the first navigation
-// (D4/D9), and the capture()/withDialog()/waitForApi()/holdRoute() helpers.
+// bundles: a dedicated APIRequestContext carrying X-API-Key, a context-level
+// /api/v1 response buffer attached BEFORE the first navigation (so no early
+// response is missed), and the capture()/withDialog()/waitForApi()/holdRoute()
+// helpers.
 //
 // Tours import ONLY `test` from here — never `expect` — so they stay
-// assertion-free (arc §3).
+// assertion-free.
 
 import { test as base, type Response } from '@playwright/test'
 import { TourApi } from './capture'

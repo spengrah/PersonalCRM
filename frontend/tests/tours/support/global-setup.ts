@@ -1,6 +1,6 @@
-// Tours globalSetup (D6): validate required env, establish the run dir, and
-// write the run manifest (arc §1b). Runs once in the main process before any
-// worker; the runId is handed to capture() via run-dir's marker.
+// Tours globalSetup: validate required env, establish the run dir, and write
+// the run manifest. Runs once in the main process before any worker; the runId
+// is handed to capture() via run-dir's marker.
 
 import * as fs from 'fs'
 import type { FullConfig } from '@playwright/test'

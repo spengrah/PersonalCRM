@@ -1,6 +1,6 @@
 import { defineConfig, devices } from '@playwright/test'
 
-// Dedicated, ISOLATED tours config (arc §0, PR1 D1). This file is NEVER imported
+// Dedicated, ISOLATED tours config. This file is NEVER imported
 // by playwright.config.ts and is only ever reached via an explicit
 // `--config=playwright.tours.config.ts` (make tours / scripts/run-tours.sh).
 //

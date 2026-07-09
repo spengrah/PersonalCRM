@@ -1,11 +1,11 @@
 // contacts.tour.ts — an assertion-free walk of the 7 CURRENT contacts `ux`
 // behaviors (CON-038, CON-040, CON-041, CON-042, CON-043, CON-044, CON-045).
 // CON-046 is status:proposed → SKIPPED. Read-only captures run first, then the
-// mutating ones on DISTINCT, API-selected contacts, destructive-last (D7).
+// mutating ones on DISTINCT, API-selected contacts, destructive-last.
 //
 // Imports ONLY `test` from the fixtures — never `expect` — so the tour stays
-// assertion-free (arc §3). Readiness is via waitForApi / locator.waitFor /
-// waitForURL (D9), never expect().
+// assertion-free. Readiness is via waitForApi / locator.waitFor / waitForURL,
+// never expect().
 
 import { test } from './support/tour-fixtures'
 
@@ -49,7 +49,7 @@ test('contacts tour — 7 current ux behaviors', async ({ page, tour }) => {
 
   // CON-043 REQUIRES a cadence-differing pair with unique names (so the
   // client-side selector filter is unambiguous). Throw if none — a tour error
-  // is signal (arc §7), not a silent evidence-less capture.
+  // is signal, not a silent evidence-less capture.
   let target: TourContact | undefined
   let source: TourContact | undefined
   for (let i = 0; i < contacts.length && !target; i++) {
@@ -97,6 +97,7 @@ test('contacts tour — 7 current ux behaviors', async ({ page, tour }) => {
   await tour.capture(page, {
     behaviors: ['CON-038'],
     note: 'contact list, default cadence order (no explicit sort)',
+    pair: { id: 'default-order-CON-038', role: 'list' },
   })
 
   await page.locator('tbody tr').first().getByRole('link').first().click()
@@ -107,6 +108,7 @@ test('contacts tour — 7 current ux behaviors', async ({ page, tour }) => {
   await tour.capture(page, {
     behaviors: ['CON-038'],
     note: 'contact detail opened from default list; prev/next nav bar',
+    pair: { id: 'default-order-CON-038', role: 'detail' },
   })
 
   // --- CON-045: birthdays grouped by proximity under accelerated time ---
@@ -147,29 +149,42 @@ test('contacts tour — 7 current ux behaviors', async ({ page, tour }) => {
   await page.getByRole('heading', { name: 'Merge Contacts' }).waitFor({ state: 'hidden' })
 
   // --- CON-040: keyboard navigation drives the detail page ---
+  // The whole keyboard sequence is one bracket the grader diffs by seq: the
+  // nav/inert then-items are proven by comparing consecutive captures' urls.
+  const navPair = 'keyboard-nav-CON-040'
   await gotoDetailReady(midId)
   await tour.capture(page, {
     behaviors: ['CON-040'],
     note: 'detail before keyboard nav (view mode)',
+    pair: { id: navPair, role: 'view-before' },
   })
 
   let beforePath = new URL(page.url()).pathname
   await page.keyboard.press('ArrowRight')
   await page.waitForURL(u => new URL(u).pathname !== beforePath)
   await page.getByRole('button', { name: 'Edit' }).waitFor({ state: 'visible' })
-  await tour.capture(page, { behaviors: ['CON-040'], note: 'ArrowRight moved to next contact' })
+  await tour.capture(page, {
+    behaviors: ['CON-040'],
+    note: 'ArrowRight moved to next contact',
+    pair: { id: navPair, role: 'arrow-right-next' },
+  })
 
   beforePath = new URL(page.url()).pathname
   await page.keyboard.press('ArrowLeft')
   await page.waitForURL(u => new URL(u).pathname !== beforePath)
   await page.getByRole('button', { name: 'Edit' }).waitFor({ state: 'visible' })
-  await tour.capture(page, { behaviors: ['CON-040'], note: 'ArrowLeft moved to previous contact' })
+  await tour.capture(page, {
+    behaviors: ['CON-040'],
+    note: 'ArrowLeft moved to previous contact',
+    pair: { id: navPair, role: 'arrow-left-prev' },
+  })
 
   // Boundary: first contact → Previous nav disabled (aria [disabled]).
   await gotoDetailReady(firstId)
   await tour.capture(page, {
     behaviors: ['CON-040'],
     note: 'boundary: first contact, Previous nav disabled',
+    pair: { id: navPair, role: 'boundary-first' },
   })
 
   // Input-focus inertness (view mode, unconfounded from edit): the Add-Task
@@ -185,6 +200,7 @@ test('contacts tour — 7 current ux behaviors', async ({ page, tour }) => {
   await tour.capture(page, {
     behaviors: ['CON-040'],
     note: 'focus in Add-Task input (view mode): ArrowRight does NOT navigate — input-focus guard',
+    pair: { id: navPair, role: 'input-focus-inert' },
   })
   await page.keyboard.press('Escape')
   await page.getByRole('heading', { name: /Add Task for/ }).waitFor({ state: 'hidden' })
@@ -196,6 +212,7 @@ test('contacts tour — 7 current ux behaviors', async ({ page, tour }) => {
   await tour.capture(page, {
     behaviors: ['CON-040'],
     note: 'Enter opened edit mode (ContactForm)',
+    pair: { id: navPair, role: 'enter-edit' },
   })
 
   // Arrows inert while editing — evidence is the UNCHANGED url (nav is also
@@ -206,6 +223,7 @@ test('contacts tour — 7 current ux behaviors', async ({ page, tour }) => {
   await tour.capture(page, {
     behaviors: ['CON-040'],
     note: 'ArrowRight in edit mode: url unchanged — arrows inert while editing',
+    pair: { id: navPair, role: 'arrow-edit-inert' },
   })
 
   // Escape discards edit, back to view mode.
@@ -215,6 +233,7 @@ test('contacts tour — 7 current ux behaviors', async ({ page, tour }) => {
   await tour.capture(page, {
     behaviors: ['CON-040'],
     note: 'Escape discards edit, back to view mode',
+    pair: { id: navPair, role: 'escape-discard' },
   })
 
   // Escape from view returns to the list (context preserved).
@@ -225,6 +244,7 @@ test('contacts tour — 7 current ux behaviors', async ({ page, tour }) => {
   await tour.capture(page, {
     behaviors: ['CON-040'],
     note: 'Escape from view returns to the list, context preserved',
+    pair: { id: navPair, role: 'escape-to-list' },
   })
 
   // =====================================================================
