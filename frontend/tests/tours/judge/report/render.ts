@@ -162,6 +162,10 @@ async function main(): Promise<void> {
   const path = await import('path')
   const { groupByBehavior, gradeBehavior } = await import('../grader/grade')
   const [runDir, outFile] = process.argv.slice(2)
+  if (runDir === '-h' || runDir === '--help') {
+    console.log('usage: render.ts <runDir> [outFile]')
+    process.exit(0)
+  }
   if (!runDir) {
     console.error('usage: render.ts <runDir> [outFile]')
     process.exit(2)
