@@ -6,6 +6,8 @@
 // Pure `renderReport` (testable) + a bun CLI that loads a .runs run dir.
 
 import { CLASSIFICATION } from '../grader/classification'
+import { SPEC_CATALOG } from '../spec-catalog'
+import { SKIP_LIST } from './skip-list'
 import type { BehaviorGrade } from '../grader/grade'
 import type { Verdict } from '../grader/types'
 
@@ -26,6 +28,47 @@ function countByVerdict(grade: BehaviorGrade): Record<Verdict, number> {
   const c: Record<Verdict, number> = { pass: 0, fail: 0, unsure: 0 }
   for (const i of grade.items) c[i.verdict] += 1
   return c
+}
+
+// The 3 first-cut domains, keyed by behavior-id prefix. The current-ux behavior
+// set is the spec-catalog (hand-transcribed, completeness-guarded by a test).
+const DOMAINS: { name: string; prefix: string }[] = [
+  { name: 'contacts', prefix: 'CON-' },
+  { name: 'dashboard', prefix: 'DSH-' },
+  { name: 'cadence-followup', prefix: 'CAD-' },
+]
+
+function renderCoverage(grades: BehaviorGrade[]): string[] {
+  const toured = new Set(grades.map(g => g.behaviorId))
+  const catalogIds = Object.keys(SPEC_CATALOG).sort()
+  const lines: string[] = []
+  lines.push('## Coverage — first-cut scope')
+  lines.push('')
+  lines.push(
+    '> Scoped to the 3 first-cut domains (contacts, dashboard, cadence-followup). The other SSOT ' +
+      'domains are out of scope here (Piece 3 owns the repo-wide scanner). Advisory — files no issues.'
+  )
+  lines.push('')
+  for (const { name, prefix } of DOMAINS) {
+    const ids = catalogIds.filter(id => id.startsWith(prefix))
+    if (ids.length === 0) continue
+    lines.push(`### ${name}`)
+    lines.push('')
+    for (const id of ids) {
+      const isToured = toured.has(id)
+      lines.push(
+        `- ${isToured ? '✅ toured' : '⬜ untoured'} — **${id}** ${SPEC_CATALOG[id].title}`
+      )
+    }
+    lines.push('')
+  }
+  lines.push('### Skip-list (untoured behaviors / clauses, with reasons)')
+  lines.push('')
+  for (const s of SKIP_LIST) {
+    lines.push(`- **${s.id}** — ${s.reason}`)
+  }
+  lines.push('')
+  return lines
 }
 
 export function renderReport(input: ReportInput): string {
@@ -79,6 +122,11 @@ export function renderReport(input: ReportInput): string {
     }
     lines.push('')
   }
+
+  // Coverage — first-cut scope (D5): the 3 scoped domains' current-ux behaviors
+  // (toured vs untoured) + the explicit skip-list. Advisory; files no issues; NOT
+  // a repo-wide scanner (the other SSOT domains are Piece 3's scope).
+  lines.push(...renderCoverage(grades))
 
   // Capture-coverage caveats (honest limitations, NOT graded passes).
   const caveats = CLASSIFICATION.filter(c => c.caveat)

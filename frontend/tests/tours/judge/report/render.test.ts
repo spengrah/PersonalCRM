@@ -69,9 +69,27 @@ describe('renderReport', () => {
     expect(md).toMatch(/judge \(pending labels\)/)
   })
 
-  it('lists the capture-coverage caveats (CON-038[0], CON-040[0])', () => {
-    expect(md).toMatch(/CON-038\[0\]/)
-    expect(md).toMatch(/CON-040\[0\]/)
+  it('lists the capture-coverage caveats (the provider / multi-surface abstains)', () => {
+    expect(md).toMatch(/Capture-coverage caveats/)
+    // The lifted CON-038[0]/CON-040[0] caveats are gone (now toured).
+    expect(md).not.toMatch(/CON-038\[0\]/)
+    expect(md).not.toMatch(/CON-040\[0\]/)
+    // A representative surviving caveat is present.
+    expect(md).toMatch(/DSH-005\[1\]|CAD-030\[0\]/)
+  })
+
+  it('renders the first-cut coverage section + skip-list (D5)', () => {
+    expect(md).toContain('## Coverage — first-cut scope')
+    expect(md).toContain('### contacts')
+    expect(md).toContain('### dashboard')
+    expect(md).toContain('### cadence-followup')
+    // Behaviors in the run's grades are toured; the rest are untoured.
+    expect(md).toMatch(/✅ toured — \*\*CON-041\*\*/)
+    expect(md).toMatch(/⬜ untoured — \*\*DSH-001\*\*/)
+    // The skip-list carries the proposed + provider-dependent entries with reasons.
+    expect(md).toContain('### Skip-list')
+    expect(md).toMatch(/DSH-006/)
+    expect(md).toMatch(/CAD-033\[0\]/)
   })
 
   it('stubs the label-gated metrics as N/A', () => {

@@ -1,13 +1,13 @@
 # Agentic UX QA — judge, hybrid grader, eval + corpus
 
-The consumer half of the tours harness (Piece 4 · Track B, PR2). It reads the §1 capture records `contacts.tour.ts` produces (`../support/types` `Capture`) and grades each behavior's spec `then`-items. **Advisory only** — it files no issues and gates no CI beyond its own offline tests.
+The consumer half of the tours harness. It reads the §1 capture records the tours (`contacts.tour.ts`, `dashboard.tour.ts`, `cadence-followup.tour.ts`) produce (`../support/types` `Capture`) and grades each behavior's spec `then`-items. **Advisory only** — it files no issues and gates no CI beyond its own offline tests.
 
 ## The hybrid grader (verifiers before judges)
 
-Each behavior's `then`-items are classified in `grader/classification.ts`, keyed by `(behavior_id, then_index)` (23 items across the 7 current contacts `ux` behaviors):
+Each behavior's `then`-items are classified in `grader/classification.ts`, keyed by `(behavior_id, then_index)` (60 items across the 20 current first-cut `ux` behaviors — 7 contacts, 6 dashboard, 7 cadence-followup):
 
-- **verifier** — a pure function over structured evidence (`url` / `apiResponses` / `aria` / `serverTime` / `dialogs`). Returns `unsure` (never `fail`) when its evidence is absent, so a missing capture never manufactures a false fail. A **required** mutation absent from a _present_ bracket (e.g. no interaction POST after mark-as-contacted) IS a `fail`.
-- **judge** — the LLM (`adapter/`) owns only the semantic residue: exactly **CON-042[0]** ("warns cannot be undone"), plus **CON-043[5]** as a fallback when the verifier can't bind the success wording.
+- **verifier** — a pure function over structured evidence (`url` / `apiResponses` / `aria` / `serverTime` / `dialogs` / `fields`). Returns `unsure` (never `fail`) when its evidence is absent, so a missing capture never manufactures a false fail. A **required** mutation absent from a _present_ bracket (e.g. no interaction POST after mark-as-contacted) IS a `fail`. Aria-invisible visual state (loading skeletons, urgency tier, active-nav mark, nav stickiness, redirect spinner) binds to targeted `fields` reads the tour records.
+- **judge** — the LLM (`adapter/`) owns only the semantic residue: exactly **CON-042[0]** ("warns cannot be undone"), plus **CON-043[5]** and **DSH-004[1]** as fallbacks when the verifier can't bind (the success wording / the error-reason faithfulness).
 
 Aggregation: any item `fail` → behavior `fail`; all `pass` → `pass`; else `unsure`. The **grounding rule** downgrades an uncited `fail` to `unsure` (`grader/grade.ts`).
 
@@ -23,14 +23,26 @@ bun run tests/tours/judge/eval/run.ts --judge --repeat 5                       #
 
 ## The corpus
 
-- `corpus/captures/contacts/*.json` — base capture fixtures, curated from a **local `prod-shaped` sweep**, UUID-mapped + host-redacted by the normalizer, then scrubbed (`corpus/scrub.ts`: email/phone → `<email:N>`/`<phone:N>`). Provably synthetic: every contact name carries the `synth-prodshaped-` factory prefix.
+- `corpus/captures/{contacts,dashboard,cadence-followup}/*.json` — base capture fixtures, curated from a **local `prod-shaped` sweep**, UUID-mapped + host-redacted by the normalizer, then scrubbed (`corpus/scrub.ts`: email/phone → `<email:N>`/`<phone:N>`). Provably synthetic: every contact name carries the `synth-prodshaped-` factory prefix.
 - `corpus/cases/*.json` — clean cases (self-label the grader's deterministic verdicts) + doctored cases (self-labeled by a single-point mutation from `doctor.ts`).
 - `corpus/labels/*.draft.json` — draft judge labels (the real stronger-model fill is manual — see `DEFERRED.md`).
 - `corpus/pii-audit.ts` — the mechanical P0 gate over ALL committed artifacts: bans raw UUIDs / real-host URLs / emails / phones / secrets and asserts the `synth-prodshaped-` name prefix. Runs as a vitest (`corpus/pii-audit.test.ts`) over the committed tree AND as a CLI: `bun run tests/tours/judge/corpus/pii-audit.ts corpus`.
 
+## Regenerating the captures (local, provably-synthetic sweep)
+
+The committed captures come from a LOCAL `prod-shaped` sweep (staging is not required). Seed a clean world, run the app in the accelerated `testing` frame, and run the tours:
+
+```bash
+crm-admin --reset-and-seed --profile prod-shaped --yes    # synthetic prod-shaped seed (synth-prodshaped- names)
+# start native Postgres + `go run ./cmd/crm-api` (CRM_ENV=testing, accelerated TIME_*) + `next dev`
+TOURS_SEED_PROFILE=prod-shaped TOURS_SKIP_RESET=1 make tours   # runs ALL *.tour.ts against localhost
+```
+
+Captures land in `frontend/tests/tours/.runs/<runId>/captures/{contacts,dashboard,cadence-followup}/` (gitignored). Curate the relevant ones into `corpus/captures/<tour>/`, refresh the affected `corpus/cases/*.json` + `PROVENANCE.json`, then run the PII audit + `make qa-eval`. Regeneration is intentionally NOT byte-stable (accelerated timestamps + first-seen id ordinals leak through); the grader keys on semantics, so regenerate rarely and review the diff by eye.
+
 ## Adding a doctored case
 
-Pick a **verifier**-tagged item, add a single-point mutation to a new `corpus/cases/*.json` (`op: inject_query | delete_endpoint | set_aria_disabled | reorder_ids | blank_dialog`), and set its `then_index` expected verdict to `fail` (others unchanged). Merge-gating doctored cases mutate a verifier item; a `judge`-item mutation (e.g. `blank_dialog`) is exercised only under `--judge`. Run `make qa-eval` to confirm it's caught with zero collateral.
+Pick a **verifier**-tagged item, add a single-point mutation to a new `corpus/cases/*.json` (`op: inject_query | delete_endpoint | set_aria_disabled | reorder_ids | blank_dialog | remove_aria_subtree | set_field | set_json_field`), and set its `then_index` expected verdict to `fail` (others unchanged). `remove_aria_subtree` drops an aria-rendered node (by role + name/text), `set_field` overwrites an aria-invisible `fields` value (skeleton count, tier class, nav position), and `set_json_field` overwrites a body JSON path. Merge-gating doctored cases mutate a verifier item; a `judge`-item mutation (e.g. `blank_dialog`) is exercised only under `--judge`. Run `make qa-eval` to confirm it's caught with zero collateral.
 
 ## Correcting draft labels (deferred, cheap)
 
