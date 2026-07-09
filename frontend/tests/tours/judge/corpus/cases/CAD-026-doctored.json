@@ -12,17 +12,10 @@
   "doctor": {
     "base_case": "CAD-026-clean",
     "mutation": {
-      "op": "set_field",
+      "op": "remove_aria_subtree",
       "role": "sort-urgency",
-      "field": "overdueCards",
-      "value": [
-        {
-          "name": "synth-prodshaped-Wrong Tier",
-          "daysOverdue": 90,
-          "tierClass": "bg-white border-yellow-200 bg-yellow-50",
-          "lastContacted": null
-        }
-      ]
+      "node_role": "text",
+      "node_name": "Email"
     }
   },
   "expected": [

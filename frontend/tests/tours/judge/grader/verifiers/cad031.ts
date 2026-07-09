@@ -38,16 +38,28 @@ export function cad031(set: CaptureSet): ItemVerdicts {
     }
     const emptyDisabled = findByRoleName(empty.aria, 'button', 'Add Task')?.disabled === true
     const filledEnabled = findByRoleName(filled.aria, 'button', 'Add Task')?.disabled !== true
-    if (emptyDisabled && filledEnabled) {
+    if (!emptyDisabled || !filledEnabled) {
       return {
-        verdict: 'pass',
-        citation: "'Add Task' submit disabled with empty text, enabled after typing",
+        verdict: 'fail',
+        citation: 'add-task submit disabled state',
+        reason: `text-required not enforced (empty=${emptyDisabled ? 'disabled' : 'enabled'}, filled=${filledEnabled ? 'enabled' : 'disabled'})`,
+      }
+    }
+    // Notes are OPTIONAL: the submit enables on text alone (filledEnabled, with
+    // no notes entered), and notes are a separate collapsed affordance ('Add
+    // notes'), not a required field.
+    const notesAffordance = findByRoleName(filled.aria, 'button', 'Add notes')
+    if (!notesAffordance) {
+      return {
+        verdict: 'fail',
+        citation: 'add-task modal',
+        reason: 'no separate optional notes affordance — cannot bind "notes are optional"',
       }
     }
     return {
-      verdict: 'fail',
-      citation: 'add-task submit disabled state',
-      reason: `text-required not enforced (empty=${emptyDisabled ? 'disabled' : 'enabled'}, filled=${filledEnabled ? 'enabled' : 'disabled'})`,
+      verdict: 'pass',
+      citation:
+        "'Add Task' disabled with empty text, enabled on text alone (no notes) with a separate optional 'Add notes' affordance",
     }
   })()
 

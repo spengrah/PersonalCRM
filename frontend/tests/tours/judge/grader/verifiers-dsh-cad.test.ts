@@ -261,31 +261,42 @@ describe('dsh007', () => {
 
 // --- CAD-026 ---
 describe('cad026', () => {
-  const overdue = cap({
-    behaviors: ['CAD-026'],
-    pair: pair('u', 'sort-urgency'),
-    aria: root([
+  // A single overdue card carrying all five sub-elements (count + heading +
+  // cadence + recency + method + suggested action); omit any via the `drop` set.
+  const overdueAria = (over: { count?: string; drop?: Set<string> } = {}): AriaNode => {
+    const drop = over.drop ?? new Set<string>()
+    return root([
       { role: 'heading', name: 'Action Required', level: 2 },
+      { role: 'text', text: over.count ?? '148 contacts need your attention' },
+      { role: 'heading', name: 'synth-a', level: 3 },
+      ...(drop.has('cadence') ? [] : [{ role: 'text' as const, text: '(weekly cadence)' }]),
+      ...(drop.has('recency')
+        ? []
+        : [
+            { role: 'text' as const, text: '1 days overdue' },
+            { role: 'text' as const, text: '- Last contacted 2 days ago' },
+          ]),
+      ...(drop.has('method') ? [] : [{ role: 'text' as const, text: 'Email' }]),
+      ...(drop.has('action') ? [] : [{ role: 'text' as const, text: '💡 A quick check-in' }]),
       { role: 'button', name: 'Mark as Contacted' },
-      { role: 'button', name: 'Mark as Contacted' },
-    ]),
-    fields: {
-      overdueCards: [
-        {
-          name: 'synth-a',
-          daysOverdue: 1,
-          tierClass: 'border-yellow-200 bg-yellow-50',
-          lastContacted: '2026-07-11T00:00:00Z',
-        },
-        {
-          name: 'synth-b',
-          daysOverdue: 12,
-          tierClass: 'border-red-200 bg-red-50',
-          lastContacted: null,
-        },
-      ],
-    },
-  })
+    ])
+  }
+  const overdue = (over: { count?: string; drop?: Set<string>; tier?: string } = {}): Capture =>
+    cap({
+      behaviors: ['CAD-026'],
+      pair: pair('u', 'sort-urgency'),
+      aria: overdueAria(over),
+      fields: {
+        overdueCards: [
+          {
+            name: 'synth-a',
+            daysOverdue: 1,
+            tierClass: over.tier ?? 'border-yellow-200 bg-yellow-50',
+            lastContacted: '2026-07-11T00:00:00Z',
+          },
+        ],
+      },
+    })
   const caughtUp = cap({
     behaviors: ['CAD-026'],
     pair: pair('c', 'caught-up'),
@@ -293,28 +304,37 @@ describe('cad026', () => {
   })
 
   it('clean: [0]/[1]/[2] pass', () => {
-    const v = cad026(set('CAD-026', [overdue, caughtUp]))
+    const v = cad026(set('CAD-026', [overdue(), caughtUp]))
     expect(v[0].verdict).toBe('pass')
     expect(v[1].verdict).toBe('pass')
     expect(v[2].verdict).toBe('pass')
   })
   it('doctored: wrong tierClass → [1] fail', () => {
+    expect(cad026(set('CAD-026', [overdue({ tier: 'border-red-200 bg-red-50' })]))[1].verdict).toBe(
+      'fail'
+    )
+  })
+  it('[1] fails when a card sub-element is dropped (cadence / method / action)', () => {
+    for (const el of ['cadence', 'recency', 'method', 'action']) {
+      const v = cad026(set('CAD-026', [overdue({ drop: new Set([el]) })]))
+      expect(v[1].verdict, `dropping ${el}`).toBe('fail')
+    }
+  })
+  it('doctored: remove_aria_subtree drops the only method label → [1] fail', () => {
     const v = cad026(
-      doctored('CAD-026', [overdue, caughtUp], {
-        op: 'set_field',
+      doctored('CAD-026', [overdue()], {
+        op: 'remove_aria_subtree',
         role: 'sort-urgency',
-        field: 'overdueCards',
-        value: [
-          {
-            name: 'synth-a',
-            daysOverdue: 1,
-            tierClass: 'border-red-200 bg-red-50',
-            lastContacted: null,
-          },
-        ],
+        node_role: 'text',
+        node_name: 'Email',
       })
     )
     expect(v[1].verdict).toBe('fail')
+  })
+  it('[0] fails when the header count is below the visible-card count', () => {
+    expect(
+      cad026(set('CAD-026', [overdue({ count: '0 contacts need your attention' })]))[0].verdict
+    ).toBe('fail')
   })
   it('missing → unsure', () => {
     const v = cad026(set('CAD-026', []))
@@ -374,7 +394,9 @@ describe('cad027', () => {
 
 // --- CAD-028 ---
 describe('cad028', () => {
-  const after = (over: { overdueIds?: string[] } = {}): Capture =>
+  // The default frame() currentTime is 2026-07-12T15:48:12Z; an accelerated stamp
+  // sits just before it. (over.occurredAt lets a test place it outside the frame.)
+  const after = (over: { overdueIds?: string[]; occurredAt?: string } = {}): Capture =>
     cap({
       behaviors: ['CAD-028'],
       pair: pair('m', 'mark-after'),
@@ -386,7 +408,12 @@ describe('cad028', () => {
             requestUrl: '/api/v1/contacts/<id:5>/interactions',
             status: 201,
             requestBody: { direction: 'mutual' },
-            body: { data: { direction: 'mutual', occurred_at: '2026-07-12T16:00:00Z' } },
+            body: {
+              data: {
+                direction: 'mutual',
+                occurred_at: over.occurredAt ?? '2026-07-12T15:47:00Z',
+              },
+            },
           }),
         ],
         'GET /api/v1/contacts/overdue': [
@@ -395,10 +422,16 @@ describe('cad028', () => {
       },
     })
 
-  it('clean: [0] pass (mutual), [1] pass (marked left the list)', () => {
+  it('clean: [0] pass (mutual, in accelerated frame), [1] pass (marked left the list)', () => {
     const v = cad028(set('CAD-028', [after()]))
     expect(v[0].verdict).toBe('pass')
     expect(v[1].verdict).toBe('pass')
+  })
+  it('[0] fails on a wall-clock stamp outside the accelerated frame', () => {
+    // A day behind the accelerated currentTime — fails the recency bound.
+    expect(cad028(set('CAD-028', [after({ occurredAt: '2026-07-11T15:47:00Z' })]))[0].verdict).toBe(
+      'fail'
+    )
   })
   it('doctored: POST interaction deleted → [0] fail', () => {
     const v = cad028(
@@ -516,7 +549,10 @@ describe('cad031', () => {
   const filled = cap({
     behaviors: ['CAD-031'],
     pair: pair('f', 'add-task-filled'),
-    aria: root([{ role: 'button', name: 'Add Task' }]),
+    aria: root([
+      { role: 'button', name: 'Add notes' },
+      { role: 'button', name: 'Add Task' },
+    ]),
   })
 
   it('clean: [0] pass, [1] pass, [2] abstain', () => {
@@ -524,6 +560,14 @@ describe('cad031', () => {
     expect(v[0].verdict).toBe('pass')
     expect(v[1].verdict).toBe('pass')
     expect(v[2].verdict).toBe('unsure')
+  })
+  it('[1] fails when the optional notes affordance is absent', () => {
+    const noNotes = cap({
+      behaviors: ['CAD-031'],
+      pair: pair('f', 'add-task-filled'),
+      aria: root([{ role: 'button', name: 'Add Task' }]),
+    })
+    expect(cad031(set('CAD-031', [empty, noNotes]))[1].verdict).toBe('fail')
   })
   it('doctored: a kind removed → [0] fail', () => {
     const v = cad031(

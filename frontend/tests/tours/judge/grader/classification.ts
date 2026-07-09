@@ -288,7 +288,9 @@ export const CLASSIFICATION: Classification[] = [
     behaviorId: 'CAD-026',
     thenIndex: 1,
     grader: 'verifier',
-    note: 'each card shows tier/cadence/recency/methods/action (card aria + fields.overdueCards[].tierClass)',
+    caveat:
+      'The urgency tier is graded per-card from fields.overdueCards[].tierClass; the other four sub-elements (cadence, recency, a reachable method, the suggested action) are graded at CARD-TEMPLATE level (>= 1 present across the captured cards), not per-card, because ariaCap truncates deep card nodes.',
+    note: 'each card shows tier (fields) + cadence/recency/methods/suggested-action (card aria)',
   },
   {
     behaviorId: 'CAD-026',

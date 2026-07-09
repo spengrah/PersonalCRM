@@ -57,17 +57,38 @@ export function cad028(set: CaptureSet): ItemVerdicts {
     const data = asRecord(envelopeData(post.body))
     const direction = asString(data?.direction)
     const occurredAt = asString(data?.occurred_at)
-    const ok = post.status === 201 && direction === 'mutual' && !!occurredAt
-    return ok
-      ? {
-          verdict: 'pass',
-          citation: 'POST .../interactions body direction=mutual + server occurred_at',
-        }
-      : {
-          verdict: 'fail',
-          citation: 'POST .../interactions body',
-          reason: `expected a mutual, server-timestamped interaction (direction=${direction ?? 'none'}, occurred_at=${occurredAt ?? 'none'}, status=${post.status})`,
-        }
+    if (post.status !== 201 || direction !== 'mutual' || !occurredAt) {
+      return {
+        verdict: 'fail',
+        citation: 'POST .../interactions body',
+        reason: `expected a mutual, server-timestamped interaction (direction=${direction ?? 'none'}, occurred_at=${occurredAt ?? 'none'}, status=${post.status})`,
+      }
+    }
+    // Accelerated-clock check: occurred_at must fall inside the recorded frame
+    // (>= baseTime, not in the future) AND be recent within it. A wall-clock
+    // stamp would sit ~a day behind the accelerated currentTime (base + elapsed
+    // x accelerationFactor) and fail the recency bound.
+    const occ = Date.parse(occurredAt)
+    const now = Date.parse(after.serverTime.currentTime)
+    const base = Date.parse(after.serverTime.baseTime)
+    const ACCEL_RECENCY_MS = 6 * 60 * 60 * 1000
+    if (Number.isNaN(occ) || Number.isNaN(now)) {
+      return { verdict: 'unsure', reason: 'unparseable occurred_at / serverTime frame' }
+    }
+    const inFrame = (Number.isNaN(base) || occ >= base) && occ <= now + 5 * 60 * 1000
+    const recent = now - occ < ACCEL_RECENCY_MS
+    if (!inFrame || !recent) {
+      return {
+        verdict: 'fail',
+        citation: 'POST .../interactions occurred_at vs serverTime frame',
+        reason: `occurred_at (${occurredAt}) is not within the accelerated serverTime frame (now=${after.serverTime.currentTime}) — not stamped by the accelerated clock`,
+      }
+    }
+    return {
+      verdict: 'pass',
+      citation:
+        'POST .../interactions body direction=mutual + occurred_at within the accelerated serverTime frame',
+    }
   })()
 
   out[1] = ((): ItemVerdict => {
