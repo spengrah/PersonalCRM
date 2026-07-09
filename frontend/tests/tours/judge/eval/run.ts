@@ -12,10 +12,11 @@ import * as path from 'path'
 import { loadCorpus } from '../corpus/load'
 import { resolveCaseCaptures } from '../doctor'
 import { buildJudgeInput } from '../judge-input'
+import { behaviorSpec } from '../spec-catalog'
 import { selectJudge } from '../adapter'
-import type { Capture } from '../../support/types'
-import type { ItemVerdicts, Verdict } from '../grader/types'
-import { runEval, type JudgeRunner } from './core'
+import { makeJudgeRunner } from '../judge-runner'
+import type { Verdict } from '../grader/types'
+import { runEval } from './core'
 import {
   abstentionRate,
   fmtPct,
@@ -45,26 +46,13 @@ function parseArgs(argv: string[]): {
   return { corpusRoot, judge, limit, repeat }
 }
 
-function judgeRunnerFromProfile(): JudgeRunner {
-  const judge = selectJudge(process.env.QA_JUDGE ?? 'codex-exec')
-  return async (behaviorId: string, captures: Capture[]): Promise<ItemVerdicts> => {
-    const input = buildJudgeInput(behaviorId, captures)
-    if (!input || input.items.length === 0) return {}
-    const verdicts = await judge(input)
-    const out: ItemVerdicts = {}
-    for (const v of verdicts)
-      out[v.itemIndex] = { verdict: v.verdict, citation: v.citation, reason: v.critique }
-    return out
-  }
-}
-
 async function main(): Promise<void> {
   const { corpusRoot, judge, limit, repeat } = parseArgs(process.argv.slice(2))
   const corpus = loadCorpus(corpusRoot)
   let cases = corpus.cases
   if (limit !== undefined) cases = cases.slice(0, limit)
 
-  const runner = judge ? judgeRunnerFromProfile() : undefined
+  const runner = judge ? makeJudgeRunner() : undefined
   const result = await runEval(cases, c => corpus.capturesFor(c), { judge: runner })
 
   console.log(
@@ -106,6 +94,34 @@ async function main(): Promise<void> {
     }
     const avg = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : 1
     console.log(`  judge self-consistency (${repeat} repeats): ${fmtPct(avg)} (advisory)\n`)
+  }
+
+  // The JUDGE's actual verdicts on the residue items — the whole point of the
+  // agentic layer. Advisory + label-gated, so these are EXCLUDED from the matrix
+  // above; printed here so the judgment is visible, not merely counted. These
+  // are the candidate critiques a human later corrects into ground-truth labels.
+  if (judge) {
+    const icon: Record<Verdict, string> = { pass: '✅', fail: '❌', unsure: '⚠️' }
+    console.log('Judge verdicts — residue items (advisory; not part of the merge gate):')
+    let shown = 0
+    for (const c of result.cases) {
+      // source==='judge' = every item the judge actually ruled on: pure
+      // judge-tagged items AND verifier items that abstained and fell back.
+      const judged = c.items.filter(i => i.source === 'judge')
+      if (judged.length === 0) continue
+      const spec = behaviorSpec(c.behaviorId)
+      for (const it of judged) {
+        shown += 1
+        const thenText = spec?.then[it.thenIndex] ?? ''
+        const kind = it.grader === 'verifier' ? ' (verifier-fallback)' : ''
+        console.log(`  ${c.caseId} [${it.thenIndex}] ${icon[it.predicted]} ${it.predicted}${kind}`)
+        if (thenText) console.log(`      then: ${thenText}`)
+        if (it.citation) console.log(`      cite: ${it.citation}`)
+        if (it.reason) console.log(`      critique: ${it.reason}`)
+      }
+    }
+    if (shown === 0) console.log('  (none — no judge-tagged residue items in this corpus)')
+    console.log('')
   }
 
   // Label-gated metrics.

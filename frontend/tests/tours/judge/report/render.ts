@@ -161,13 +161,18 @@ async function main(): Promise<void> {
   const fs = await import('fs')
   const path = await import('path')
   const { groupByBehavior, gradeBehavior } = await import('../grader/grade')
-  const [runDir, outFile] = process.argv.slice(2)
-  if (runDir === '-h' || runDir === '--help') {
-    console.log('usage: render.ts <runDir> [outFile]')
+  const argv = process.argv.slice(2)
+  if (argv.includes('-h') || argv.includes('--help')) {
+    console.log('usage: render.ts <runDir> [outFile] [--judge]')
+    console.log(
+      '  --judge  run the LLM judge over residue items (advisory; needs codex quota / QA_JUDGE)'
+    )
     process.exit(0)
   }
+  const useJudge = argv.includes('--judge')
+  const [runDir, outFile] = argv.filter(a => !a.startsWith('--'))
   if (!runDir) {
-    console.error('usage: render.ts <runDir> [outFile]')
+    console.error('usage: render.ts <runDir> [outFile] [--judge]')
     process.exit(2)
   }
   const capturesRoot = path.join(runDir, 'captures')
@@ -181,7 +186,16 @@ async function main(): Promise<void> {
   }
   walk(capturesRoot)
   const captures = files.map(f => JSON.parse(fs.readFileSync(f, 'utf8')))
-  const grades = groupByBehavior(captures).map(set => gradeBehavior(set))
+
+  // The advisory judge layer over residue items (opt-in; the report is advisory
+  // either way). Without --judge, judge-tagged items render as "pending labels";
+  // with it, the judge's grounded verdict + critique lands in the per-item detail.
+  const runner = useJudge ? (await import('../judge-runner')).makeJudgeRunner() : undefined
+  const grades = await Promise.all(
+    groupByBehavior(captures).map(async set =>
+      gradeBehavior(set, runner ? { judge: await runner(set.behaviorId, set.captures) } : {})
+    )
+  )
   let runId: string | undefined
   let gitSha: string | undefined
   const manifestPath = path.join(runDir, 'manifest.json')
