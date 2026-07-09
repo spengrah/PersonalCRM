@@ -49,7 +49,13 @@ export function con043(set: CaptureSet): ItemVerdicts {
     const targetName = open ? keptContactName(open) : undefined
     let excludes: boolean | undefined
     if (selectorOpen && targetName) {
-      excludes = findAllAria(selectorOpen.aria, n => n.name === targetName).length === 0
+      // The target's name legitimately appears as the modal's kept-contact
+      // HEADING; exclude headings so we only flag it appearing as a selectable
+      // CANDIDATE (option/link/button) — that would mean the selector did not
+      // exclude the target.
+      excludes =
+        findAllAria(selectorOpen.aria, n => n.role !== 'heading' && n.name === targetName)
+          .length === 0
     }
     if (keptBadge === undefined && excludes === undefined) {
       return { verdict: 'unsure', reason: 'no merge-modal captures — no evidence' }
@@ -151,30 +157,34 @@ export function con043(set: CaptureSet): ItemVerdicts {
   })()
 
   // [4] submit disabled before source / while preview loading / while in flight.
+  // open + preview-loading reliably carry the aria `disabled` token; the
+  // in-flight sub-state disables via a spinner (pointer-events, NOT the aria
+  // disabled token), so an aria-enabled in-flight is inconclusive rather than a
+  // proven violation — it never manufactures a fail.
   out[4] = ((): ItemVerdict => {
-    const states: Array<[string, boolean | undefined]> = [
-      ['open', open ? submitDisabled(open) : undefined],
-      ['preview-loading', previewLoading ? submitDisabled(previewLoading) : undefined],
-      ['in-flight', inFlight ? submitDisabled(inFlight) : undefined],
-    ]
-    const present = states.filter(([, v]) => v !== undefined)
-    if (present.length === 0)
+    const openD = open ? submitDisabled(open) : undefined
+    const previewD = previewLoading ? submitDisabled(previewLoading) : undefined
+    if (openD === undefined && previewD === undefined) {
       return { verdict: 'unsure', reason: 'no submit-disabled captures — no evidence' }
-    const enabled = present.find(([, v]) => v === false)
-    return enabled
-      ? {
-          verdict: 'fail',
-          citation: `submit button in the ${enabled[0]} state`,
-          reason: 'the merge submit was enabled when it should be disabled',
-        }
-      : {
-          verdict: 'pass',
-          citation: 'Merge Contacts submit [disabled] across open/preview-loading/in-flight',
-        }
+    }
+    if (openD === false || previewD === false) {
+      return {
+        verdict: 'fail',
+        citation: 'open / preview-loading submit button',
+        reason:
+          'the merge submit was enabled before a source was selected or while the preview loaded',
+      }
+    }
+    return {
+      verdict: 'pass',
+      citation: 'Merge Contacts submit [disabled] before source + while preview loading',
+    }
   })()
 
   // [5] outcome reported + auto-dismissed. Verifier binds the banner presence
-  // then absence; the success-WORDING faithfulness is the judge residue.
+  // then absence; the success-WORDING faithfulness is the judge residue. The
+  // page-level success toast is not always surfaced by ariaSnapshot at the body
+  // root — an absent banner is UNSURE (residue → judge), never a fabricated fail.
   out[5] = ((): ItemVerdict => {
     if (!outcomeReported)
       return { verdict: 'unsure', reason: 'no outcome-reported capture — no evidence' }
@@ -182,9 +192,9 @@ export function con043(set: CaptureSet): ItemVerdicts {
     const stillShown = dismissed ? bannerText(dismissed.aria) !== undefined : undefined
     if (banner === undefined) {
       return {
-        verdict: 'fail',
-        citation: 'outcome-reported aria',
-        reason: 'no success banner reported after the merge',
+        verdict: 'unsure',
+        reason:
+          'success banner not present in the captured aria (page-level toast not surfaced by ariaSnapshot) — residue routes to the judge',
       }
     }
     if (stillShown === true) {

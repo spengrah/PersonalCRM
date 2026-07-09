@@ -74,7 +74,10 @@ export function applyMutation(baseCaptures: Capture[], mutation: Mutation): Capt
       break
     }
     case 'blank_dialog': {
-      for (const d of cap.dialogs) d.message = ''
+      // Remove the irreversibility warning wherever it appears in the bracket
+      // (the confirm dialog is recorded on every capture whose action fired it),
+      // so the judge sees no warning at all — one semantic single-point change.
+      for (const c of captures) for (const d of c.dialogs) d.message = ''
       break
     }
   }

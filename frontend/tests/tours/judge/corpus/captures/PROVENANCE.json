@@ -1,0 +1,6 @@
+{
+  "seedProfile": "prod-shaped",
+  "captureGeneratorVersion": 1,
+  "sourceRun": "local-20260709T071439Z",
+  "note": "Base capture fixtures curated from a LOCAL prod-shaped sweep (crm-admin --reset-and-seed --profile prod-shaped) against a CRM_ENV=testing localhost stack on the merged PR1 tree. Every capture is UUID-mapped + host-redacted by the tours normalizer, then run through judge/corpus/scrub.ts (email/phone -> <email:N>/<phone:N>). Provenance is proven MECHANICALLY: every contact name carries the synth-prodshaped- factory prefix (asserted by judge/corpus/pii-audit.ts), so a real target's un-prefixed names would fail the audit regardless of this label."
+}

@@ -1,0 +1,539 @@
+{
+  "captureFormatVersion": 1,
+  "captureGeneratorVersion": 1,
+  "tour": "contacts",
+  "seq": 4,
+  "behaviors": ["CON-041"],
+  "note": "action=edit consumed once and stripped from URL",
+  "url": "/contacts/<id:3>?sort=cadence&order=desc",
+  "pair": null,
+  "serverTime": {
+    "currentTime": "2026-07-12T15:51:56.14478752Z",
+    "isAccelerated": true,
+    "accelerationFactor": 60,
+    "baseTime": "2026-07-09T05:52:58Z",
+    "environment": "testing"
+  },
+  "aria": {
+    "role": "root",
+    "children": [
+      {
+        "role": "navigation",
+        "children": [
+          {
+            "role": "heading",
+            "name": "Personal CRM",
+            "level": 1
+          },
+          {
+            "role": "link",
+            "name": "Dashboard",
+            "children": [
+              {
+                "role": "/url",
+                "children": [
+                  {
+                    "role": "text",
+                    "text": "/dashboard"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "role": "link",
+            "name": "Contacts",
+            "children": [
+              {
+                "role": "/url",
+                "children": [
+                  {
+                    "role": "text",
+                    "text": "/contacts"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "role": "link",
+            "name": "Birthdays",
+            "children": [
+              {
+                "role": "/url",
+                "children": [
+                  {
+                    "role": "text",
+                    "text": "/birthdays"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "role": "link",
+            "name": "Imports",
+            "children": [
+              {
+                "role": "/url",
+                "children": [
+                  {
+                    "role": "text",
+                    "text": "/imports"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "role": "link",
+            "name": "Settings",
+            "children": [
+              {
+                "role": "/url",
+                "children": [
+                  {
+                    "role": "text",
+                    "text": "/settings"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "role": "button",
+            "name": "Jul 12, 03:51:38 PM 60x"
+          }
+        ]
+      },
+      {
+        "role": "button",
+        "name": "Previous contact",
+        "disabled": true
+      },
+      {
+        "role": "text",
+        "text": "3 of 168"
+      },
+      {
+        "role": "button",
+        "name": "Next contact",
+        "disabled": true
+      },
+      {
+        "role": "heading",
+        "name": "Edit Contact",
+        "level": 2
+      },
+      {
+        "role": "paragraph",
+        "children": [
+          {
+            "role": "text",
+            "text": "Update synth-prodshaped-Brux Placeholdt's information"
+          }
+        ]
+      },
+      {
+        "role": "button",
+        "name": "Cancel"
+      },
+      {
+        "role": "text",
+        "text": "Full Name*"
+      },
+      {
+        "role": "textbox",
+        "name": "Full Name*",
+        "children": [
+          {
+            "role": "/placeholder",
+            "children": [
+              {
+                "role": "text",
+                "text": "Enter full name"
+              }
+            ]
+          },
+          {
+            "role": "text",
+            "text": "synth-prodshaped-Brux Placeholdt"
+          }
+        ]
+      },
+      {
+        "role": "text",
+        "text": "Contact methods"
+      },
+      {
+        "role": "paragraph",
+        "children": [
+          {
+            "role": "text",
+            "text": "Add one or more ways to reach this contact."
+          }
+        ]
+      },
+      {
+        "role": "combobox",
+        "children": [
+          {
+            "role": "option",
+            "name": "Select"
+          },
+          {
+            "role": "option",
+            "name": "Email",
+            "selected": true
+          },
+          {
+            "role": "option",
+            "name": "Phone"
+          },
+          {
+            "role": "option",
+            "name": "Telegram"
+          },
+          {
+            "role": "option",
+            "name": "Signal"
+          },
+          {
+            "role": "option",
+            "name": "Discord"
+          },
+          {
+            "role": "option",
+            "name": "Twitter"
+          },
+          {
+            "role": "option",
+            "name": "Google Chat"
+          },
+          {
+            "role": "option",
+            "name": "WhatsApp"
+          }
+        ]
+      },
+      {
+        "role": "img"
+      },
+      {
+        "role": "textbox",
+        "name": "<email:165>",
+        "children": [
+          {
+            "role": "text",
+            "text": "<email:3>"
+          }
+        ]
+      },
+      {
+        "role": "button",
+        "name": "Primary contact method",
+        "children": [
+          {
+            "role": "img"
+          }
+        ]
+      },
+      {
+        "role": "button",
+        "name": "Remove",
+        "disabled": true,
+        "children": [
+          {
+            "role": "img"
+          }
+        ]
+      },
+      {
+        "role": "button",
+        "name": "Add method",
+        "children": [
+          {
+            "role": "img"
+          },
+          {
+            "role": "text",
+            "text": "Add method"
+          }
+        ]
+      },
+      {
+        "role": "text",
+        "text": "Location"
+      },
+      {
+        "role": "textbox",
+        "name": "Location",
+        "children": [
+          {
+            "role": "/placeholder",
+            "children": [
+              {
+                "role": "text",
+                "text": "Enter location (city, country)"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "role": "text",
+        "text": "Birthday"
+      },
+      {
+        "__ariaTruncated__": 13
+      }
+    ]
+  },
+  "apiResponses": {
+    "GET /api/v1/contacts": [
+      {
+        "method": "GET",
+        "requestUrl": "/api/v1/contacts?ids_only=true&sort=cadence&order=desc",
+        "query": {
+          "ids_only": "true",
+          "order": "desc",
+          "sort": "cadence"
+        },
+        "status": 200,
+        "body": {
+          "data": {
+            "ids": [
+              "<id:1>",
+              "<id:2>",
+              "<id:3>",
+              "<id:4>",
+              "<id:5>",
+              "<id:6>",
+              "<id:7>",
+              "<id:8>",
+              "<id:9>",
+              "<id:10>",
+              "<id:11>",
+              "<id:12>",
+              "<id:13>",
+              "<id:14>",
+              "<id:15>",
+              "<id:16>",
+              "<id:17>",
+              "<id:18>",
+              "<id:19>",
+              "<id:20>",
+              "<id:41>",
+              "<id:42>",
+              "<id:43>",
+              "<id:44>",
+              "<id:45>",
+              "<id:46>",
+              "<id:47>",
+              "<id:48>",
+              "<id:49>",
+              "<id:50>",
+              "<id:51>",
+              "<id:52>",
+              "<id:53>",
+              "<id:54>",
+              "<id:55>",
+              "<id:56>",
+              "<id:57>",
+              "<id:58>",
+              "<id:59>",
+              "<id:60>",
+              "<id:61>",
+              "<id:62>",
+              "<id:63>",
+              "<id:64>",
+              "<id:65>",
+              "<id:66>",
+              "<id:67>",
+              "<id:68>",
+              "<id:69>",
+              "<id:70>",
+              {
+                "__truncated__": 118
+              }
+            ],
+            "total": 168
+          },
+          "success": true
+        }
+      }
+    ],
+    "GET /api/v1/contacts/:id": [
+      {
+        "method": "GET",
+        "requestUrl": "/api/v1/contacts/<id:2>",
+        "query": {},
+        "status": 200,
+        "body": {
+          "data": {
+            "cadence": "weekly",
+            "contact_by": "2026-07-11T00:00:00Z",
+            "created_at": "<ts>",
+            "full_name": "synth-prodshaped-Brux Fixtura",
+            "has_pending_followup": false,
+            "how_met": "synth-prodshaped-met-at-a-conference",
+            "id": "<id:2>",
+            "last_contacted": "2026-07-11T16:16:34.129344Z",
+            "location": "synth-prodshaped-place-lakeside",
+            "methods": [
+              {
+                "id": "<id:22>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:2>"
+              }
+            ],
+            "primary_method": {
+              "id": "<id:22>",
+              "is_primary": true,
+              "type": "email",
+              "value": "<email:2>"
+            },
+            "updated_at": "<ts>"
+          },
+          "success": true
+        }
+      },
+      {
+        "method": "GET",
+        "requestUrl": "/api/v1/contacts/<id:3>",
+        "query": {},
+        "status": 200,
+        "body": {
+          "data": {
+            "cadence": "weekly",
+            "contact_by": "2026-07-11T00:00:00Z",
+            "created_at": "<ts>",
+            "full_name": "synth-prodshaped-Brux Placeholdt",
+            "has_pending_followup": false,
+            "id": "<id:3>",
+            "last_contacted": "2026-07-11T14:51:44.314149Z",
+            "methods": [
+              {
+                "id": "<id:23>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:3>"
+              }
+            ],
+            "primary_method": {
+              "id": "<id:23>",
+              "is_primary": true,
+              "type": "email",
+              "value": "<email:3>"
+            },
+            "updated_at": "<ts>"
+          },
+          "success": true
+        }
+      },
+      {
+        "method": "GET",
+        "requestUrl": "/api/v1/contacts/<id:4>",
+        "query": {},
+        "status": 200,
+        "body": {
+          "data": {
+            "cadence": "weekly",
+            "contact_by": "2026-07-11T00:00:00Z",
+            "created_at": "<ts>",
+            "full_name": "synth-prodshaped-Brux Testwell",
+            "has_pending_followup": false,
+            "id": "<id:4>",
+            "last_contacted": "2026-07-11T05:34:12.703215Z",
+            "methods": [
+              {
+                "id": "<id:24>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:4>"
+              }
+            ],
+            "primary_method": {
+              "id": "<id:24>",
+              "is_primary": true,
+              "type": "email",
+              "value": "<email:4>"
+            },
+            "updated_at": "<ts>"
+          },
+          "success": true
+        }
+      }
+    ],
+    "GET /api/v1/contacts/:id/notes": [
+      {
+        "method": "GET",
+        "requestUrl": "/api/v1/contacts/<id:3>/notes",
+        "query": {},
+        "status": 204,
+        "body": null
+      }
+    ],
+    "GET /api/v1/contacts/:id/tasks": [
+      {
+        "method": "GET",
+        "requestUrl": "/api/v1/contacts/<id:3>/tasks?state=completed&lifecycle=manual",
+        "query": {
+          "lifecycle": "manual",
+          "state": "completed"
+        },
+        "status": 404,
+        "body": null
+      },
+      {
+        "method": "GET",
+        "requestUrl": "/api/v1/contacts/<id:3>/tasks?state=managed&lifecycle=followup_loop",
+        "query": {
+          "lifecycle": "followup_loop",
+          "state": "managed"
+        },
+        "status": 404,
+        "body": null
+      },
+      {
+        "method": "GET",
+        "requestUrl": "/api/v1/contacts/<id:3>/tasks?state=managed&lifecycle=manual",
+        "query": {
+          "lifecycle": "manual",
+          "state": "managed"
+        },
+        "status": 404,
+        "body": null
+      }
+    ],
+    "GET /api/v1/sync/status": [
+      {
+        "method": "GET",
+        "requestUrl": "/api/v1/sync/status",
+        "query": {},
+        "status": 404,
+        "body": null
+      }
+    ],
+    "GET /api/v1/system/time": [
+      {
+        "method": "GET",
+        "requestUrl": "/api/v1/system/time",
+        "query": {},
+        "status": 200,
+        "body": {
+          "data": {
+            "acceleration_factor": 60,
+            "base_time": "2026-07-09T05:52:58Z",
+            "current_time": "2026-07-12T15:50:20.35041082Z",
+            "environment": "testing",
+            "is_accelerated": true
+          },
+          "success": true
+        }
+      }
+    ]
+  },
+  "dialogs": []
+}
