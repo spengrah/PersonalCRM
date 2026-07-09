@@ -22,7 +22,10 @@ const UUID_SEGMENT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 const TIMESTAMP_DENY = new Set(['created_at', 'updated_at'])
 // Transport noise → inert <redacted> sentinel.
 const REDACT_DENY = new Set(['etag', 'request_id', 'requestid', 'trace_id', 'traceid'])
-const TOKEN_KEY = /token|csrf|secret|session_id/i
+// Secret-bearing key names → inert <redacted> sentinel. Kept broad so a future
+// tour over a settings/oauth surface cannot leak a credential value.
+const TOKEN_KEY =
+  /token|csrf|secret|session_id|password|passphrase|api[_-]?key|apikey|authorization|bearer|private[_-]?key|access[_-]?key/i
 
 // ---------------------------------------------------------------------------
 // Run-scoped UUID → ordinal mapper
@@ -52,6 +55,26 @@ export function createUuidMapper(): UuidMapper {
 
 export function mapUuids(value: string, mapper: UuidMapper): string {
   return value.replace(UUID_GLOBAL, m => mapper.map(m))
+}
+
+// Redact the host of any absolute http(s) URL embedded in a string value (e.g. a
+// profile_photo DTO field or an error-body URL), keeping the path + query. This
+// is defense-in-depth alongside the non-production target guard, so captures
+// never carry a real hostname even inside body/aria text.
+export function scrubHosts(value: string): string {
+  return value.replace(/https?:\/\/[^\s"'<>)\]}]+/gi, m => {
+    try {
+      const u = new URL(m)
+      return `${u.protocol}//<host>${u.pathname}${u.search}`
+    } catch {
+      return m
+    }
+  })
+}
+
+// Host-redact then UUID-map a free-text value (body strings, aria names/text).
+function scrubString(value: string, mapper: UuidMapper): string {
+  return mapUuids(scrubHosts(value), mapper)
 }
 
 // ---------------------------------------------------------------------------
@@ -108,7 +131,7 @@ export function endpointKey(method: string, url: string): string {
 
 export function normalizeJson(value: unknown, mapper: UuidMapper, arrayCap: number): unknown {
   if (value === null || value === undefined) return value
-  if (typeof value === 'string') return mapUuids(value, mapper)
+  if (typeof value === 'string') return scrubString(value, mapper)
   if (typeof value === 'number' || typeof value === 'boolean') return value
 
   if (Array.isArray(value)) {
@@ -342,8 +365,8 @@ export function parseAriaSnapshot(yaml: string): AriaNode {
 // Normalize a parsed aria tree: UUID-map names + text, cap repeated siblings.
 export function normalizeAriaTree(node: AriaNode, mapper: UuidMapper, ariaCap: number): AriaNode {
   const out: AriaNode = { role: node.role }
-  if (node.name !== undefined) out.name = mapUuids(node.name, mapper)
-  if (node.text !== undefined) out.text = mapUuids(node.text, mapper)
+  if (node.name !== undefined) out.name = scrubString(node.name, mapper)
+  if (node.text !== undefined) out.text = scrubString(node.text, mapper)
   if (node.disabled !== undefined) out.disabled = node.disabled
   if (node.checked !== undefined) out.checked = node.checked
   if (node.expanded !== undefined) out.expanded = node.expanded

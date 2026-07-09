@@ -87,9 +87,12 @@ export interface DialogRecord {
   message: string
 }
 
-// One capture record — one JSON object per capture() call.
+// One capture record — one JSON object per capture() call. Both version fields
+// are stamped so a single capture file is self-describing (the manifest also
+// carries captureGeneratorVersion at the run level).
 export interface Capture {
   captureFormatVersion: number
+  captureGeneratorVersion: number
   tour: string
   seq: number
   behaviors: string[]

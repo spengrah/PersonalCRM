@@ -92,6 +92,13 @@ describe('normalizeUrl / parseQuery / endpointKey', () => {
     })
     expect(parseQuery(`/api/v1/contacts/${UUID_A}`, m)).toEqual({})
   })
+
+  it('templates the endpoint key on a RELATIVE path too (harness probe paths)', () => {
+    expect(endpointKey('GET', `/api/v1/contacts/${UUID_A}`)).toBe('GET /api/v1/contacts/:id')
+    expect(endpointKey('GET', `/api/v1/contacts/${UUID_A}/merge/preview?source_id=x`)).toBe(
+      'GET /api/v1/contacts/:id/merge/preview'
+    )
+  })
 })
 
 describe('normalizeJson deny-list vs preserve-list', () => {
@@ -137,6 +144,59 @@ describe('normalizeJson deny-list vs preserve-list', () => {
     expect(out.csrf_token).toBe('<redacted>')
     expect(out.session_id).toBe('<redacted>')
     expect(out.name).toBe('Contact A')
+  })
+
+  it('sentinels every transport-noise and secret-bearing key name', () => {
+    const m = createUuidMapper()
+    const secretKeys = [
+      // REDACT_DENY
+      'etag',
+      'request_id',
+      'requestid',
+      'trace_id',
+      'traceid',
+      // TOKEN_KEY
+      'token',
+      'access_token',
+      'refresh_token',
+      'csrf',
+      'secret',
+      'client_secret',
+      'session_id',
+      'password',
+      'passphrase',
+      'api_key',
+      'apikey',
+      'api-key',
+      'authorization',
+      'bearer',
+      'private_key',
+      'private-key',
+      'access_key',
+    ]
+    for (const key of secretKeys) {
+      const out = normalizeJson({ [key]: 'sensitive-value' }, m, DEFAULT_ARRAY_CAP) as Record<
+        string,
+        string
+      >
+      expect(out[key], `${key} should be sentineled`).toBe('<redacted>')
+    }
+  })
+
+  it('scrubs the host of absolute URLs inside body string values', () => {
+    const m = createUuidMapper()
+    const out = normalizeJson(
+      {
+        profile_photo: `https://staging-secret.example.com/photos/${UUID_A}.jpg?v=1`,
+        error: 'failed to reach http://staging-secret.example.com:8080/api/v1/x',
+        full_name: 'Contact A',
+      },
+      m,
+      DEFAULT_ARRAY_CAP
+    ) as Record<string, string>
+    expect(out.profile_photo).toBe('https://<host>/photos/<id:1>.jpg?v=1')
+    expect(out.error).toBe('failed to reach http://<host>/api/v1/x')
+    expect(out.full_name).toBe('Contact A') // non-URL strings untouched
   })
 
   it('preserves error envelopes and status evidence (404 body kept)', () => {
@@ -212,6 +272,7 @@ describe('parseAriaSnapshot', () => {
       '- heading "Contacts" [level=2]',
       '- button "Toggle" [pressed] [expanded]',
       '- option "Selected" [selected]',
+      '- option "Focused" [active]',
     ].join('\n')
     const kids = parseAriaSnapshot(yaml).children as AriaNode[]
     expect(kids[0]).toEqual({ role: 'button', name: 'Previous contact', disabled: true })
@@ -222,6 +283,7 @@ describe('parseAriaSnapshot', () => {
     expect(kids[5].pressed).toBe(true)
     expect(kids[5].expanded).toBe(true)
     expect(kids[6].selected).toBe(true)
+    expect(kids[7].active).toBe(true)
   })
 
   it('preserves leaf text nodes verbatim (banner / card copy)', () => {
@@ -289,5 +351,18 @@ describe('normalizeAriaTree', () => {
       DEFAULT_ARIA_CAP
     )
     expect(out).toEqual({ role: 'button', name: 'Previous contact', disabled: true })
+  })
+
+  it('host-scrubs absolute URLs inside aria names/text', () => {
+    const out = normalizeAriaTree(
+      {
+        role: 'link',
+        name: 'photo',
+        children: [{ role: 'text', text: 'https://staging-secret.example.com/p.jpg' }],
+      },
+      createUuidMapper(),
+      DEFAULT_ARIA_CAP
+    )
+    expect((out.children![0] as AriaNode).text).toBe('https://<host>/p.jpg')
   })
 })
