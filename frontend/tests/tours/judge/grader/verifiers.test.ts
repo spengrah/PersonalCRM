@@ -129,6 +129,14 @@ describe('con040', () => {
     expect(v[1].verdict).toBe('fail')
   })
 
+  it('[1] abstains (unsure) when one inert bracket is missing — never a lone-half pass', () => {
+    // Drop the input-focus-inert capture: the edit-mode half passes, but the
+    // item must abstain, not pass on a single half.
+    const caps = build().filter(c => c.pair?.role !== 'input-focus-inert')
+    const v = con040(set('CON-040', caps))
+    expect(v[1].verdict).toBe('unsure')
+  })
+
   it('missing evidence → unsure', () => {
     const v = con040(set('CON-040', []))
     for (const i of [0, 1, 2, 3]) expect(v[i].verdict).toBe('unsure')
@@ -205,7 +213,18 @@ describe('con042', () => {
     expect(v[1].verdict).toBe('fail')
   })
 
-  it('missing evidence → unsure', () => {
+  it('[1] fails when the after-accept bracket is PRESENT but its DELETE/404 evidence is absent', () => {
+    // A present bracket missing its required mutation is a fail, not unsure.
+    const emptyAccept = cap({
+      behaviors: ['CON-042'],
+      pair: pair('del', 'after-accept'),
+      url: '/contacts',
+    })
+    const v = con042(set('CON-042', [emptyAccept]))
+    expect(v[1].verdict).toBe('fail')
+  })
+
+  it('missing evidence (no brackets) → unsure', () => {
     const v = con042(set('CON-042', []))
     expect(v[1].verdict).toBe('unsure')
     expect(v[2].verdict).toBe('unsure')

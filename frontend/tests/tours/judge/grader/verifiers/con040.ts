@@ -56,14 +56,21 @@ export function con040(set: CaptureSet): ItemVerdicts {
   })()
 
   // [1] arrows inert: edit-mode arrow leaves the url unchanged (== enter-edit),
-  // and an input-focus arrow leaves the url unchanged (== boundary-first).
+  // and an input-focus arrow leaves the url unchanged (== boundary-first). BOTH
+  // brackets must be present to prove the item — a missing bracket abstains
+  // (unsure), never passes on a single half.
   out[1] = ((): ItemVerdict => {
-    const editInert = enterEdit && arrowEditInert && arrowEditInert.url === enterEdit.url
-    const focusInert = boundaryFirst && inputFocusInert && inputFocusInert.url === boundaryFirst.url
-    if (editInert === undefined && focusInert === undefined) {
-      return { verdict: 'unsure', reason: 'missing inert-arrow captures — no evidence' }
+    const editPresent = enterEdit !== undefined && arrowEditInert !== undefined
+    const focusPresent = boundaryFirst !== undefined && inputFocusInert !== undefined
+    if (!editPresent || !focusPresent) {
+      return {
+        verdict: 'unsure',
+        reason: 'missing an inert-arrow bracket (edit and/or input-focus) — cannot bind',
+      }
     }
-    if (editInert === false || focusInert === false) {
+    const editInert = arrowEditInert.url === enterEdit.url
+    const focusInert = inputFocusInert.url === boundaryFirst.url
+    if (!editInert || !focusInert) {
       return {
         verdict: 'fail',
         citation: 'arrow-edit-inert.url / input-focus-inert.url',

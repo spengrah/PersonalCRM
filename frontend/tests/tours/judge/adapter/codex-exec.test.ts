@@ -79,7 +79,7 @@ describe('verdictsFromCodexOutput', () => {
 })
 
 describe('codexArgs', () => {
-  it('spawns read-only with the output schema and --json', () => {
+  it('spawns read-only with the output schema and --json (no --model when unset)', () => {
     expect(codexArgs('/tmp/s.json')).toEqual([
       'exec',
       '--json',
@@ -87,6 +87,20 @@ describe('codexArgs', () => {
       '/tmp/s.json',
       '--sandbox',
       'read-only',
+      '-',
+    ])
+  })
+
+  it('passes --model when a model is set', () => {
+    expect(codexArgs('/tmp/s.json', 'gpt-5-codex-high')).toEqual([
+      'exec',
+      '--json',
+      '--output-schema',
+      '/tmp/s.json',
+      '--sandbox',
+      'read-only',
+      '--model',
+      'gpt-5-codex-high',
       '-',
     ])
   })
@@ -130,6 +144,22 @@ describe('makeCodexExecJudge (injected run — no live call)', () => {
     const judge = makeCodexExecJudge({ run: async () => stream({ verdicts: [] }) })
     const verdicts = await judge(input)
     expect(verdicts[0].verdict).toBe('unsure')
+  })
+
+  it('threads the configured model into the codex argv', async () => {
+    let seenArgs: string[] = []
+    const judge = makeCodexExecJudge({
+      model: 'gpt-5-codex-high',
+      run: async args => {
+        seenArgs = args
+        return stream({
+          verdicts: [{ item_index: 0, verdict: 'pass', citation: 'c', critique: 'k' }],
+        })
+      },
+    })
+    await judge(input)
+    expect(seenArgs).toContain('--model')
+    expect(seenArgs[seenArgs.indexOf('--model') + 1]).toBe('gpt-5-codex-high')
   })
 
   it('grounding rule: an uncited judge fail downgrades to unsure', async () => {

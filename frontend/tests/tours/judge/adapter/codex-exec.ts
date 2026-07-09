@@ -156,9 +156,14 @@ function defaultRun(
     })
 }
 
-// Build the argv for `codex exec` (schema written to a temp file).
-export function codexArgs(schemaPath: string): string[] {
-  return ['exec', '--json', '--output-schema', schemaPath, '--sandbox', 'read-only', '-']
+// Build the argv for `codex exec` (schema written to a temp file). Passes
+// --model when set so the stronger-model labeling path (QA_JUDGE_MODEL /
+// QA_LABELER_MODEL) actually selects that model, not just labels the trace.
+export function codexArgs(schemaPath: string, model?: string): string[] {
+  const args = ['exec', '--json', '--output-schema', schemaPath, '--sandbox', 'read-only']
+  if (model) args.push('--model', model)
+  args.push('-')
+  return args
 }
 
 function allUnsure(input: JudgeInput, critique: string): PerItemVerdict[] {
@@ -188,7 +193,7 @@ export function makeCodexExecJudge(opts: CodexExecOptions = {}): Judge {
     let error: string | undefined
     try {
       for (let attempt = 0; attempt < 2; attempt++) {
-        const stdout = await run(codexArgs(schemaPath), prompt)
+        const stdout = await run(codexArgs(schemaPath, model), prompt)
         result = verdictsFromCodexOutput(stdout)
         if (!result.rejectedForTool) break // pure-criticism run — accept
       }

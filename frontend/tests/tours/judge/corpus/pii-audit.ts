@@ -73,6 +73,130 @@ export function auditNames(names: string[], source: string): Violation[] {
     .map(n => ({ kind: 'unprefixed-name', source, match: n.slice(0, 80) }))
 }
 
+// The UI word vocabulary — words that legitimately appear in the contacts
+// surface's aria labels. A TitleCase bigram is treated as a UI label (NOT a
+// contact name) when EITHER word is in this set, so real contact names — whose
+// words are outside the vocabulary — are the only ones flagged. (PR3 extends
+// this set when it tours new surfaces; a new UI label trips a loud failure.)
+const UI_VOCAB = new Set(
+  [
+    'all',
+    'contact',
+    'contacts',
+    'already',
+    'celebrated',
+    'archiving',
+    'search',
+    'birthday',
+    'birthdays',
+    'tracker',
+    'information',
+    'edit',
+    'email',
+    'primary',
+    'full',
+    'name',
+    'google',
+    'chat',
+    'interaction',
+    'interactions',
+    'none',
+    'keeping',
+    'merge',
+    'location',
+    'log',
+    'cadence',
+    'new',
+    'next',
+    'previous',
+    'notes',
+    'note',
+    'open',
+    'tanstack',
+    'resolve',
+    'conflicts',
+    'this',
+    'year',
+    'total',
+    'upcoming',
+    'with',
+    'personal',
+    'crm',
+    'add',
+    'task',
+    'gift',
+    'planning',
+    'mark',
+    'contacted',
+    'delete',
+    'cancel',
+    'save',
+    'dashboard',
+    'imports',
+    'settings',
+    'methods',
+    'actions',
+    'pending',
+    'followup',
+    'will',
+    'merged',
+    'from',
+    'kept',
+    'source',
+    'target',
+    'has',
+    'phone',
+    'telegram',
+    'discord',
+    'twitter',
+    'signal',
+    'whatsapp',
+    'gchat',
+    'today',
+    'tracking',
+  ].map(w => w.toLowerCase())
+)
+
+// A TitleCase name bigram, optionally carrying the synthetic prefix.
+const NAME_BIGRAM_RE = /(synth-prodshaped-)?([A-Z][a-z]{2,}(?:-[A-Z][a-z]+)? [A-Z][a-z]{2,})/g
+
+// Collect the name/text on every aria node (any object carrying a string role).
+export function collectAriaNodeStrings(value: unknown): string[] {
+  const out: string[] = []
+  const walk = (v: unknown): void => {
+    if (Array.isArray(v)) {
+      for (const x of v) walk(x)
+    } else if (v !== null && typeof v === 'object') {
+      const rec = v as Record<string, unknown>
+      if (typeof rec.role === 'string') {
+        if (typeof rec.name === 'string') out.push(rec.name)
+        if (typeof rec.text === 'string') out.push(rec.text)
+      }
+      for (const val of Object.values(rec)) walk(val)
+    }
+  }
+  walk(value)
+  return out
+}
+
+// (d, aria) the synthetic-name gate over VISIBLE aria copy: any un-prefixed
+// contact-name-shaped bigram (both words outside UI_VOCAB) in an aria name/text
+// node fails — a wrong-target capture's real names in aria-only evidence are
+// caught here, not just in response bodies.
+export function auditAriaNames(ariaStrings: string[], source: string): Violation[] {
+  const out: Violation[] = []
+  for (const s of ariaStrings) {
+    for (const m of s.matchAll(NAME_BIGRAM_RE)) {
+      if (m[1]) continue // synth-prefixed → provably synthetic
+      const [w1, w2] = m[2].toLowerCase().split(' ')
+      if (!UI_VOCAB.has(w1) && !UI_VOCAB.has(w2)) {
+        out.push({ kind: 'unprefixed-aria-name', source, match: m[2].slice(0, 80) })
+      }
+    }
+  }
+  return out
+}
+
 export interface CorpusFile {
   path: string
   content: string
@@ -87,7 +211,10 @@ export function auditCorpus(files: CorpusFile[], opts: AuditOptions = {}): Viola
   const out: Violation[] = []
   for (const f of files) {
     out.push(...auditText(f.content, f.path))
-    if (f.json !== undefined) out.push(...auditNames(collectContactNames(f.json), f.path))
+    if (f.json !== undefined) {
+      out.push(...auditNames(collectContactNames(f.json), f.path))
+      out.push(...auditAriaNames(collectAriaNodeStrings(f.json), f.path))
+    }
   }
   // (e) secondary provenance hint.
   if (opts.provenance && opts.provenance.seedProfile !== 'prod-shaped') {
@@ -126,20 +253,21 @@ export function runAudit(corpusRoot: string): Violation[] {
       provenance = { seedProfile: 'unparseable' }
     }
   }
-  const files: CorpusFile[] = walkFiles(corpusRoot)
-    .filter(f => path.basename(f) !== 'PROVENANCE.json')
-    .map(f => {
-      const content = fs.readFileSync(f, 'utf8')
-      let json: unknown
-      if (JSON_EXT.has(path.extname(f))) {
-        try {
-          json = JSON.parse(content)
-        } catch {
-          json = undefined
-        }
+  // Every committed artifact is text-audited — including PROVENANCE.json (a
+  // stray host/UUID/email/phone/token/name in its note must be caught). It is
+  // ALSO parsed above for the seedProfile provenance hint.
+  const files: CorpusFile[] = walkFiles(corpusRoot).map(f => {
+    const content = fs.readFileSync(f, 'utf8')
+    let json: unknown
+    if (JSON_EXT.has(path.extname(f))) {
+      try {
+        json = JSON.parse(content)
+      } catch {
+        json = undefined
       }
-      return { path: f, content, json }
-    })
+    }
+    return { path: f, content, json }
+  })
   return auditCorpus(files, { provenance })
 }
 

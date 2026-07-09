@@ -1,6 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import * as path from 'path'
-import { auditCorpus, auditNames, auditText, collectContactNames, runAudit } from './pii-audit'
+import {
+  auditAriaNames,
+  auditCorpus,
+  auditNames,
+  auditText,
+  collectAriaNodeStrings,
+  collectContactNames,
+  runAudit,
+} from './pii-audit'
 
 describe('auditText — pattern bans', () => {
   it('flags a raw UUID', () => {
@@ -49,6 +57,68 @@ describe('synthetic-name gate', () => {
     const violations = auditNames(collectContactNames(json), 'cap.json')
     expect(violations).toHaveLength(1)
     expect(violations[0]).toMatchObject({ kind: 'unprefixed-name', match: 'Real Person' })
+  })
+})
+
+describe('aria-name synthetic gate', () => {
+  const aria = {
+    aria: {
+      role: 'root',
+      children: [
+        { role: 'heading', name: 'Merge Contacts', level: 2 },
+        { role: 'heading', name: 'synth-prodshaped-Brux Testwell', level: 3 },
+        { role: 'text', text: 'Keeping Merge from Archiving synth-prodshaped-Brux Dummond' },
+      ],
+    },
+  }
+
+  it('collects name + text from every aria node', () => {
+    expect(collectAriaNodeStrings(aria)).toContain('Merge Contacts')
+    expect(collectAriaNodeStrings(aria)).toContain('synth-prodshaped-Brux Testwell')
+  })
+
+  it('does NOT flag synth-prefixed contact names or UI labels', () => {
+    expect(auditAriaNames(collectAriaNodeStrings(aria), 'c.json')).toEqual([])
+  })
+
+  it('FLAGS an un-prefixed real name appearing in an aria-only node (wrong target)', () => {
+    const leaked = {
+      aria: { role: 'root', children: [{ role: 'heading', name: 'Jane Smith', level: 3 }] },
+    }
+    const v = auditAriaNames(collectAriaNodeStrings(leaked), 'c.json')
+    expect(v).toHaveLength(1)
+    expect(v[0]).toMatchObject({ kind: 'unprefixed-aria-name', match: 'Jane Smith' })
+  })
+
+  it('auditCorpus catches a real name present ONLY in an aria node (no body full_name)', () => {
+    const files = [
+      {
+        path: 'captures/leak.json',
+        content: JSON.stringify({ aria: { role: 'heading', name: 'Jane Smith' } }),
+        json: { aria: { role: 'heading', name: 'Jane Smith' } },
+      },
+    ]
+    expect(auditCorpus(files).map(v => v.kind)).toContain('unprefixed-aria-name')
+  })
+})
+
+describe('PROVENANCE.json is text-audited (every committed artifact)', () => {
+  it('catches PII in a provenance-note artifact', () => {
+    const files = [
+      {
+        path: 'captures/PROVENANCE.json',
+        content: JSON.stringify({
+          seedProfile: 'prod-shaped',
+          note: 'from https://real.host/x a@b.com',
+        }),
+        json: { seedProfile: 'prod-shaped' },
+      },
+    ]
+    const kinds = auditCorpus(files, { provenance: { seedProfile: 'prod-shaped' } }).map(
+      v => v.kind
+    )
+    expect(kinds).toContain('real-host-url')
+    expect(kinds).toContain('email')
   })
 })
 

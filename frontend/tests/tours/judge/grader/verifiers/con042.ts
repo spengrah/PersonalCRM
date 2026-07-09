@@ -26,32 +26,50 @@ export function con042(set: CaptureSet): ItemVerdicts {
     const acceptProbe = afterAccept
       ? findApiItem(afterAccept, (i, k) => i.probe === true && k === 'GET /api/v1/contacts/:id')
       : undefined
-    if (!dismissProbe && !del && !acceptProbe) {
-      return { verdict: 'unsure', reason: 'no delete probes captured — no evidence' }
+    // A genuinely missing bracket abstains; a PRESENT bracket lacking its
+    // required evidence is a fail (a required datum absent, not "no evidence").
+    if (!afterDismiss && !afterAccept) {
+      return { verdict: 'unsure', reason: 'no delete brackets captured — no evidence' }
     }
-    const dismissLive = dismissProbe?.status === 200
-    const deleted = del?.status === 204 && acceptProbe?.status === 404
-    if (dismissLive && deleted) {
+    if (afterAccept && (!del || !acceptProbe)) {
       return {
-        verdict: 'pass',
-        citation: 'dismiss probe GET 200; accept DELETE 204 + probe GET 404',
+        verdict: 'fail',
+        citation: 'after-accept bracket',
+        reason:
+          'confirmed-delete evidence absent from the present after-accept bracket (no DELETE 204 + probe GET 404)',
       }
     }
-    if (dismissProbe && !dismissLive) {
+    if (afterDismiss && !dismissProbe) {
+      return {
+        verdict: 'fail',
+        citation: 'after-dismiss bracket',
+        reason: 'liveness probe absent from the present after-dismiss bracket',
+      }
+    }
+    const dismissLive = !afterDismiss || dismissProbe?.status === 200
+    const deleted = !afterAccept || (del?.status === 204 && acceptProbe?.status === 404)
+    if (!dismissLive) {
       return {
         verdict: 'fail',
         citation: 'after-dismiss probe status',
         reason: 'contact was deleted WITHOUT confirmation (dismiss probe not 200)',
       }
     }
-    if ((del || acceptProbe) && !deleted) {
+    if (!deleted) {
       return {
         verdict: 'fail',
         citation: 'after-accept DELETE/probe status',
         reason: 'confirmed delete did not remove the contact (no 204 + 404)',
       }
     }
-    return { verdict: 'unsure', reason: 'partial delete evidence — cannot bind' }
+    // Both halves are needed to fully bind "only on confirmation is it deleted".
+    if (afterDismiss && afterAccept) {
+      return {
+        verdict: 'pass',
+        citation: 'dismiss probe GET 200; accept DELETE 204 + probe GET 404',
+      }
+    }
+    return { verdict: 'unsure', reason: 'only one delete half captured — cannot fully bind' }
   })()
 
   // [2] after confirmed delete, back on the contact list.
