@@ -78,6 +78,20 @@ describe('parseMutation', () => {
       mode: 'swap-first-two',
     })
     expect(parseMutation({ op: 'blank_dialog' }).op).toBe('blank_dialog')
+    expect(
+      parseMutation({ op: 'remove_aria_subtree', node_role: 'link', node_name: 'Add Contact' }).op
+    ).toBe('remove_aria_subtree')
+    expect(parseMutation({ op: 'set_field', field: 'overdueLoadingSkeletons', value: 0 }).op).toBe(
+      'set_field'
+    )
+    expect(
+      parseMutation({
+        op: 'set_json_field',
+        endpoint: 'GET /api/v1/contacts/:id',
+        path: ['data', 'last_outreach_at'],
+        value: null,
+      }).op
+    ).toBe('set_json_field')
   })
 
   it('rejects an unknown op', () => {
