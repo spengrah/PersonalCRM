@@ -139,20 +139,37 @@ export function con045(set: CaptureSet): ItemVerdicts {
     const month = new Date(cap.serverTime.currentTime).getUTCMonth() // 0=Jan
     const nearYearEnd = month >= 10 // November or December
     const giftShown = sectionsPresent.has('gift')
+    const candidates = giftPlanningCandidatesExist(fullList(cap))
+
     if (giftShown) {
-      return nearYearEnd
-        ? { verdict: 'pass', citation: 'gift-planning section shown near year end' }
-        : {
-            verdict: 'fail',
-            citation: 'Gift Planning section',
-            reason: 'gift-planning shown while NOT near year end',
-          }
+      // The app renders the section only near year-end AND when there is >= 1
+      // Jan-Mar candidate (birthdays/page.tsx). Verify BOTH: a heading shown off
+      // year-end, OR shown with no candidates in the list, is spurious → fail.
+      if (!nearYearEnd) {
+        return {
+          verdict: 'fail',
+          citation: 'Gift Planning section',
+          reason: 'gift-planning shown while NOT near year end',
+        }
+      }
+      if (candidates === false) {
+        return {
+          verdict: 'fail',
+          citation: 'Gift Planning section',
+          reason:
+            'gift-planning heading shown but the list has no Jan-Mar (early-next-year) candidates',
+        }
+      }
+      return {
+        verdict: 'pass',
+        citation: 'gift-planning shown near year end with early-next-year candidates',
+      }
     }
+
     // heading absent
     if (!nearYearEnd) {
       return { verdict: 'pass', citation: 'gift-planning correctly hidden away from year end' }
     }
-    const candidates = giftPlanningCandidatesExist(fullList(cap))
     if (candidates === true) {
       return {
         verdict: 'fail',

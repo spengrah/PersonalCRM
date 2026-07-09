@@ -102,8 +102,23 @@ describe('aria-name synthetic gate', () => {
   })
 
   it('does NOT flag a genuine two-word UI bigram (BOTH tokens vocab)', () => {
-    for (const label of ['Merge Contacts', 'Contact Information', 'Total Contacts']) {
+    for (const label of [
+      'Merge Contacts',
+      'Contact Information',
+      'Total Contacts',
+      'No Cadence',
+      'Will Be',
+    ]) {
       expect(auditAriaNames([label], 'c.json'), label).toEqual([])
+    }
+  })
+
+  it('FLAGS SHORT real-name tokens too (Al Smith / Jo Kim), not only >=3-letter tokens', () => {
+    for (const name of ['Al Smith', 'Jo Kim']) {
+      expect(
+        auditAriaNames([name], 'c.json').map(x => x.match),
+        name
+      ).toContain(name)
     }
   })
 

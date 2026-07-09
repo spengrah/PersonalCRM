@@ -74,10 +74,10 @@ export function auditNames(names: string[], source: string): Violation[] {
 }
 
 // The UI word vocabulary — words that legitimately appear in the contacts
-// surface's aria labels. A TitleCase bigram is treated as a UI label (NOT a
-// contact name) when EITHER word is in this set, so real contact names — whose
-// words are outside the vocabulary — are the only ones flagged. (PR3 extends
-// this set when it tours new surfaces; a new UI label trips a loud failure.)
+// surface's aria labels. A TitleCase bigram is exempt (treated as a UI label,
+// NOT a contact name) ONLY when BOTH words are in this set; a bigram with even
+// one out-of-vocabulary token is flagged. (PR3 extends this set when it tours
+// new surfaces; a new UI label trips a loud failure.)
 const UI_VOCAB = new Set(
   [
     'all',
@@ -154,11 +154,15 @@ const UI_VOCAB = new Set(
     'gchat',
     'today',
     'tracking',
+    'no',
+    'be',
   ].map(w => w.toLowerCase())
 )
 
-// A TitleCase name bigram, optionally carrying the synthetic prefix.
-const NAME_BIGRAM_RE = /(synth-prodshaped-)?([A-Z][a-z]{2,}(?:-[A-Z][a-z]+)? [A-Z][a-z]{2,})/g
+// A TitleCase name bigram, optionally carrying the synthetic prefix. Tokens are
+// >= 2 chars (cap + >= 1 lower) so SHORT names like "Al Smith" / "Jo Kim" are
+// covered, not only >= 3-letter tokens.
+const NAME_BIGRAM_RE = /(synth-prodshaped-)?([A-Z][a-z]+(?:-[A-Z][a-z]+)? [A-Z][a-z]+)/g
 
 // Collect the name/text on every aria node (any object carrying a string role).
 export function collectAriaNodeStrings(value: unknown): string[] {
@@ -179,10 +183,18 @@ export function collectAriaNodeStrings(value: unknown): string[] {
   return out
 }
 
-// (d, aria) the synthetic-name gate over VISIBLE aria copy: any un-prefixed
-// contact-name-shaped bigram (both words outside UI_VOCAB) in an aria name/text
-// node fails — a wrong-target capture's real names in aria-only evidence are
-// caught here, not just in response bodies.
+// (d, aria) BEST-EFFORT SECONDARY heuristic over VISIBLE aria copy. It flags an
+// un-prefixed contact-name-shaped bigram (a TitleCase pair NOT both-UI-vocab) in
+// an aria name/text node. It is NOT a completeness guarantee: "does arbitrary
+// free text look like a real name" is fundamentally incompletable (a name whose
+// tokens all coincide with UI vocab, or an unusual single-token shape, can slip).
+//
+// The BINDING PII guarantees are: (a) synthetic-seed provenance — captures come
+// from a `--reset-and-seed --profile prod-shaped` world; and (b) the airtight
+// full_name/new_name prefix gate (auditNames) over response bodies, which is
+// where contact names authoritatively live and which the UI renders into aria.
+// This aria scan is defense-in-depth on top of those — it closes the obvious
+// bypass (a real name visible in aria) without claiming to catch every name.
 export function auditAriaNames(ariaStrings: string[], source: string): Violation[] {
   const out: Violation[] = []
   for (const s of ariaStrings) {
@@ -191,11 +203,9 @@ export function auditAriaNames(ariaStrings: string[], source: string): Violation
       const [w1, w2] = m[2].toLowerCase().split(' ')
       // Exempt a bigram ONLY when BOTH tokens are UI vocabulary (a genuine UI
       // label like "Contact Information"). A bigram with even one non-vocab
-      // token — e.g. "Mark Smith" (mark ∈ vocab, smith ∉) — is flagged, closing
-      // the single-token bypass. On the synthetic corpus this can only produce
-      // harmless false-positives on UI phrases (extend UI_VOCAB), never a MISS
-      // on a real-name bigram. Heuristic defense-in-depth; the airtight primary
-      // gate is the synthetic-seed provenance + full_name/new_name prefix check.
+      // token — "Mark Smith", "Al Smith" — is flagged. On the synthetic corpus
+      // this can only produce harmless false-positives on UI phrases (extend
+      // UI_VOCAB); it never misses a real-name bigram of this shape.
       if (!(UI_VOCAB.has(w1) && UI_VOCAB.has(w2))) {
         out.push({ kind: 'unprefixed-aria-name', source, match: m[2].slice(0, 80) })
       }

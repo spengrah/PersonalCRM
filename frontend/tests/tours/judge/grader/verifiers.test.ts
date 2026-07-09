@@ -498,6 +498,13 @@ describe('con045', () => {
     expect(con045(set('CON-045', [december({ hasJan: false })]))[1].verdict).toBe('pass')
   })
 
+  it('[1] FAIL near year-end: gift-planning heading shown but no Jan-Mar candidates (spurious)', () => {
+    // Heading present + list has no early-next-year candidate = spurious render.
+    expect(con045(set('CON-045', [december({ gift: true, hasJan: false })]))[1].verdict).toBe(
+      'fail'
+    )
+  })
+
   it('[3] fail: a placeholder-year birthday shows an age', () => {
     const v = con045(set('CON-045', [birthdays({ placeholderAged: true })]))
     expect(v[3].verdict).toBe('fail')
