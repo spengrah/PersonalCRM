@@ -35,6 +35,37 @@ function setAriaDisabled(node: AriaNode, role: string, name: string, value: bool
   return false
 }
 
+// Remove the first descendant node matching role + (name OR text) by splicing it
+// from its parent's children. Named nodes (buttons/links/headings) match on name;
+// text leaves ({ role: 'text', text }) match on text.
+function removeAriaNode(node: AriaNode, role: string, nameOrText: string): boolean {
+  const children = node.children
+  if (!children) return false
+  for (let i = 0; i < children.length; i++) {
+    const c = children[i]
+    if (isAriaNode(c) && c.role === role && (c.name === nameOrText || c.text === nameOrText)) {
+      children.splice(i, 1)
+      return true
+    }
+  }
+  for (const c of children) {
+    if (isAriaNode(c) && removeAriaNode(c, role, nameOrText)) return true
+  }
+  return false
+}
+
+// Set body[path[0]][path[1]]... = value on an already-parsed JSON body.
+function setJsonPath(body: unknown, path: string[], value: unknown): void {
+  let cur: unknown = body
+  for (let i = 0; i < path.length - 1; i++) {
+    if (cur === null || typeof cur !== 'object' || Array.isArray(cur)) return
+    cur = (cur as Record<string, unknown>)[path[i]]
+  }
+  if (cur !== null && typeof cur === 'object' && !Array.isArray(cur)) {
+    ;(cur as Record<string, unknown>)[path[path.length - 1]] = value
+  }
+}
+
 // Apply a single-point mutation to a deep clone of the base captures. The base
 // is never mutated; the returned array carries exactly one changed datum.
 export function applyMutation(baseCaptures: Capture[], mutation: Mutation): Capture[] {
@@ -78,6 +109,19 @@ export function applyMutation(baseCaptures: Capture[], mutation: Mutation): Capt
       // (the confirm dialog is recorded on every capture whose action fired it),
       // so the judge sees no warning at all — one semantic single-point change.
       for (const c of captures) for (const d of c.dialogs) d.message = ''
+      break
+    }
+    case 'remove_aria_subtree': {
+      removeAriaNode(cap.aria, mutation.node_role, mutation.node_name)
+      break
+    }
+    case 'set_field': {
+      cap.fields = { ...(cap.fields ?? {}), [mutation.field]: mutation.value }
+      break
+    }
+    case 'set_json_field': {
+      const item = (cap.apiResponses[mutation.endpoint] ?? [])[0]
+      if (item) setJsonPath(item.body, mutation.path, mutation.value)
       break
     }
   }

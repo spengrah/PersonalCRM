@@ -76,6 +76,73 @@ describe('applyMutation — single-point, deterministic, non-mutating', () => {
     expect(out[0].dialogs[0].message).toBe('')
   })
 
+  it('remove_aria_subtree drops a named node (the Add Contact CTA)', () => {
+    const base = [
+      cap({
+        behaviors: ['DSH-003'],
+        aria: root([
+          { role: 'heading', name: 'Action Required', level: 2 },
+          { role: 'link', name: 'Add Contact' },
+        ]),
+      }),
+    ]
+    const out = applyMutation(base, {
+      op: 'remove_aria_subtree',
+      node_role: 'link',
+      node_name: 'Add Contact',
+    })
+    expect(out[0].aria.children).toEqual([{ role: 'heading', name: 'Action Required', level: 2 }])
+    expect(base[0].aria.children).toHaveLength(2) // input untouched
+  })
+
+  it('remove_aria_subtree drops a text leaf (the No tasks yet empty state)', () => {
+    const base = [
+      cap({
+        behaviors: ['CAD-030'],
+        aria: root([
+          { role: 'heading', name: 'Tasks', level: 3 },
+          { role: 'text', text: 'No tasks yet' },
+        ]),
+      }),
+    ]
+    const out = applyMutation(base, {
+      op: 'remove_aria_subtree',
+      node_role: 'text',
+      node_name: 'No tasks yet',
+    })
+    expect(out[0].aria.children).toEqual([{ role: 'heading', name: 'Tasks', level: 3 }])
+  })
+
+  it('set_field overwrites a fields value (skeleton count)', () => {
+    const base = [cap({ behaviors: ['DSH-004'], fields: { overdueLoadingSkeletons: 3 } })]
+    const out = applyMutation(base, { op: 'set_field', field: 'overdueLoadingSkeletons', value: 0 })
+    expect(out[0].fields?.overdueLoadingSkeletons).toBe(0)
+    expect(base[0].fields?.overdueLoadingSkeletons).toBe(3) // input untouched
+  })
+
+  it('set_json_field clears a body path (detail last_outreach_at)', () => {
+    const base = [
+      cap({
+        behaviors: ['CAD-029'],
+        apiResponses: {
+          'GET /api/v1/contacts/:id': [
+            apiItem({ body: { data: { last_outreach_at: '2026-07-12T12:00:00Z' } } }),
+          ],
+        },
+      }),
+    ]
+    const out = applyMutation(base, {
+      op: 'set_json_field',
+      endpoint: 'GET /api/v1/contacts/:id',
+      path: ['data', 'last_outreach_at'],
+      value: null,
+    })
+    const body = out[0].apiResponses['GET /api/v1/contacts/:id'][0].body as {
+      data: { last_outreach_at: unknown }
+    }
+    expect(body.data.last_outreach_at).toBeNull()
+  })
+
   it('is byte-stable across two runs', () => {
     const base = [cap({ behaviors: ['CON-041'], url: '/contacts/<id:1>' })]
     const m: Mutation = { op: 'inject_query', param: 'action', value: 'edit' }

@@ -1,6 +1,6 @@
 {
   "seedProfile": "prod-shaped",
   "captureGeneratorVersion": 1,
-  "sourceRun": "local-20260709T071439Z",
-  "note": "Base capture fixtures curated from a LOCAL prod-shaped sweep (crm-admin --reset-and-seed --profile prod-shaped) against a CRM_ENV=testing localhost stack on the merged PR1 tree. Every capture is UUID-mapped + host-redacted by the tours normalizer, then run through judge/corpus/scrub.ts (email/phone -> <email:N>/<phone:N>). Provenance is proven MECHANICALLY: every contact name carries the synth-prodshaped- factory prefix (asserted by judge/corpus/pii-audit.ts), so a real target's un-prefixed names would fail the audit regardless of this label."
+  "sourceRun": "local-final-20260709T153008Z",
+  "note": "Base capture fixtures for the 3 first-cut tours (contacts, dashboard, cadence-followup), curated from a LOCAL prod-shaped sweep (crm-admin --reset-and-seed --profile prod-shaped) against a CRM_ENV=testing localhost stack (native Postgres + go run ./cmd/crm-api, accelerated TIME_ACCELERATION=60). Staging was unreachable from the sweep host; the local reset is the source. Every capture is UUID-mapped + host-redacted by the tours normalizer, then run through judge/corpus/scrub.ts (email/phone -> <email:N>/<phone:N>). Provenance is proven MECHANICALLY: every contact name carries the synth-prodshaped- factory prefix (asserted by judge/corpus/pii-audit.ts), so a real target's un-prefixed names would fail the audit regardless of this label."
 }

@@ -1,0 +1,253 @@
+{
+  "captureFormatVersion": 1,
+  "captureGeneratorVersion": 1,
+  "tour": "dashboard",
+  "seq": 11,
+  "behaviors": ["DSH-003", "CAD-026"],
+  "note": "caught-up empty state: add + view-list affordances",
+  "url": "/dashboard",
+  "pair": {
+    "id": "caughtup",
+    "role": "caught-up"
+  },
+  "serverTime": {
+    "currentTime": "2026-07-10T16:30:37.44732914Z",
+    "isAccelerated": true,
+    "accelerationFactor": 60,
+    "baseTime": "2026-07-09T15:07:20Z",
+    "environment": "testing"
+  },
+  "aria": {
+    "role": "root",
+    "children": [
+      {
+        "role": "navigation",
+        "children": [
+          {
+            "role": "heading",
+            "name": "Personal CRM",
+            "level": 1
+          },
+          {
+            "role": "link",
+            "name": "Dashboard",
+            "children": [
+              {
+                "role": "/url",
+                "children": [
+                  {
+                    "role": "text",
+                    "text": "/dashboard"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "role": "link",
+            "name": "Contacts",
+            "children": [
+              {
+                "role": "/url",
+                "children": [
+                  {
+                    "role": "text",
+                    "text": "/contacts"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "role": "link",
+            "name": "Birthdays",
+            "children": [
+              {
+                "role": "/url",
+                "children": [
+                  {
+                    "role": "text",
+                    "text": "/birthdays"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "role": "link",
+            "name": "Imports",
+            "children": [
+              {
+                "role": "/url",
+                "children": [
+                  {
+                    "role": "text",
+                    "text": "/imports"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "role": "link",
+            "name": "Settings",
+            "children": [
+              {
+                "role": "/url",
+                "children": [
+                  {
+                    "role": "text",
+                    "text": "/settings"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "role": "button",
+            "name": "Jul 10, 04:30:25 PM 60x"
+          }
+        ]
+      },
+      {
+        "role": "heading",
+        "name": "Action Required",
+        "level": 2
+      },
+      {
+        "role": "paragraph",
+        "children": [
+          {
+            "role": "text",
+            "text": "You're all caught up! No contacts need attention right now."
+          }
+        ]
+      },
+      {
+        "role": "link",
+        "name": "Add Contact",
+        "children": [
+          {
+            "role": "/url",
+            "children": [
+              {
+                "role": "text",
+                "text": "/contacts/new"
+              }
+            ]
+          },
+          {
+            "role": "button",
+            "name": "Add Contact"
+          }
+        ]
+      },
+      {
+        "role": "heading",
+        "name": "All caught up! 🎉",
+        "level": 3
+      },
+      {
+        "role": "paragraph",
+        "children": [
+          {
+            "role": "text",
+            "text": "You don't have any overdue contacts right now. You're doing a great job staying connected with your network!"
+          }
+        ]
+      },
+      {
+        "role": "link",
+        "name": "View All Contacts",
+        "children": [
+          {
+            "role": "/url",
+            "children": [
+              {
+                "role": "text",
+                "text": "/contacts"
+              }
+            ]
+          },
+          {
+            "role": "button",
+            "name": "View All Contacts"
+          }
+        ]
+      },
+      {
+        "role": "link",
+        "name": "Add New Contact",
+        "children": [
+          {
+            "role": "/url",
+            "children": [
+              {
+                "role": "text",
+                "text": "/contacts/new"
+              }
+            ]
+          },
+          {
+            "role": "button",
+            "name": "Add New Contact"
+          }
+        ]
+      },
+      {
+        "role": "button",
+        "name": "Open Tanstack query devtools",
+        "children": [
+          {
+            "role": "img"
+          }
+        ]
+      },
+      {
+        "role": "alert"
+      }
+    ]
+  },
+  "apiResponses": {
+    "GET /api/v1/contacts/overdue": [
+      {
+        "method": "GET",
+        "requestUrl": "/api/v1/contacts/overdue",
+        "query": {},
+        "status": 200,
+        "body": {
+          "data": [],
+          "success": true
+        }
+      }
+    ],
+    "GET /api/v1/sync/status": [
+      {
+        "method": "GET",
+        "requestUrl": "/api/v1/sync/status",
+        "query": {},
+        "status": 404,
+        "body": null
+      }
+    ],
+    "GET /api/v1/system/time": [
+      {
+        "method": "GET",
+        "requestUrl": "/api/v1/system/time",
+        "query": {},
+        "status": 200,
+        "body": {
+          "data": {
+            "acceleration_factor": 60,
+            "base_time": "2026-07-09T15:07:20Z",
+            "current_time": "2026-07-10T16:29:16.8287564Z",
+            "environment": "testing",
+            "is_accelerated": true
+          },
+          "success": true
+        }
+      }
+    ]
+  },
+  "dialogs": []
+}

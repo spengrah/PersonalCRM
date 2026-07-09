@@ -60,6 +60,61 @@ describe('con038', () => {
     expect(v[1].verdict).toBe('fail')
   })
 
+  // Follow-up 3: the bare-/contacts capture proves the implicit no-sort default.
+  const bareCap = (cadences: string[]) =>
+    cap({
+      behaviors: ['CON-038'],
+      pair: pair('d', 'list-bare'),
+      apiResponses: {
+        'GET /api/v1/contacts': [
+          apiItem({
+            query: {},
+            body: { data: cadences.map((c, i) => ({ id: `<id:${i + 1}>`, cadence: c })) },
+          }),
+        ],
+      },
+    })
+
+  it('bare-/contacts capture, ordered → [0] pass', () => {
+    const v = con038(
+      set('CON-038', [listCap, bareCap(['weekly', 'monthly', 'annual']), detailCap(['<id:1>'])])
+    )
+    expect(v[0].verdict).toBe('pass')
+  })
+
+  it('bare-/contacts capture, VIOLATED order → [0] fail', () => {
+    // monthly (rank 2) before weekly (rank 0) violates most-frequent-first.
+    const v = con038(set('CON-038', [bareCap(['monthly', 'weekly'])]))
+    expect(v[0].verdict).toBe('fail')
+  })
+
+  it('no bare capture, explicit-sort ordered → [0] abstains with the caveat', () => {
+    const v = con038(set('CON-038', [listCap]))
+    expect(v[0].verdict).toBe('unsure')
+    expect(v[0].reason).toMatch(/holds/)
+  })
+
+  it('no bare capture, explicit-sort VIOLATED → [0] fail (a captured violation is real)', () => {
+    const badList = cap({
+      behaviors: ['CON-038'],
+      pair: pair('d', 'list'),
+      apiResponses: {
+        'GET /api/v1/contacts': [
+          apiItem({
+            query: { sort: 'cadence', order: 'desc' },
+            body: {
+              data: [
+                { id: '<id:1>', cadence: 'monthly' },
+                { id: '<id:2>', cadence: 'weekly' },
+              ],
+            },
+          }),
+        ],
+      },
+    })
+    expect(con038(set('CON-038', [badList]))[0].verdict).toBe('fail')
+  })
+
   it('missing evidence → unsure (never a false fail)', () => {
     const v = con038(set('CON-038', []))
     expect(v[0].verdict).toBe('unsure')
@@ -121,6 +176,28 @@ describe('con040', () => {
 
   it('doctored: Previous NOT disabled at the first boundary → [0] fail', () => {
     const v = con040(set('CON-040', build({ prevDisabled: false })))
+    expect(v[0].verdict).toBe('fail')
+  })
+
+  // Follow-up 3: the last-boundary capture (Next disabled at the last contact).
+  const boundaryLast = (nextDisabled = true): Capture =>
+    cap({
+      behaviors: ['CON-040'],
+      pair: pair('k', 'boundary-last'),
+      url: '/contacts/<id:9>',
+      aria: root([
+        { role: 'button', name: 'Previous contact' },
+        { role: 'button', name: 'Next contact', ...(nextDisabled ? { disabled: true } : {}) },
+      ]),
+    })
+
+  it('both boundaries captured (Previous + Next disabled) → [0] pass', () => {
+    const v = con040(set('CON-040', [...build(), boundaryLast(true)]))
+    expect(v[0].verdict).toBe('pass')
+  })
+
+  it('doctored: Next NOT disabled at the last boundary → [0] fail', () => {
+    const v = con040(set('CON-040', [...build(), boundaryLast(false)]))
     expect(v[0].verdict).toBe('fail')
   })
 
@@ -548,6 +625,57 @@ describe('con045', () => {
       ]),
     })
     expect(con045(set('CON-045', [missingCelebrated]))[0].verdict).toBe('fail')
+  })
+
+  // DECISION 1: the verifier reads the birthday projection from
+  // fields.birthdayContacts (no full API body needed).
+  it('reads the birthday ground-truth from fields.birthdayContacts (no API body)', () => {
+    const c = cap({
+      behaviors: ['CON-045'],
+      note: 'birthdays page',
+      serverTime: frame({ currentTime: '2026-07-12T15:48:12Z' }),
+      fields: {
+        birthdayContacts: [
+          { full_name: 'synth-a', birthday: '1990-07-15' },
+          { full_name: 'synth-b', birthday: '1990-01-10' },
+        ],
+      },
+      aria: root([
+        { role: 'text', text: 'Sunday, July 12, 2026' },
+        { role: 'heading', name: 'Upcoming Birthdays (1)', level: 2 },
+        { role: 'heading', name: 'synth-a', level: 3 },
+        { role: 'text', text: '3 days' },
+        { role: 'heading', name: 'Already Celebrated This Year (1)', level: 2 },
+        { role: 'heading', name: 'synth-b', level: 3 },
+      ]),
+    })
+    const v = con045(set('CON-045', [c]))
+    expect(v[0].verdict).toBe('pass') // upcoming + celebrated both expected & present
+    expect(v[4].verdict).toBe('pass')
+  })
+
+  it('[3] abstains when a placeholder is in the list but no card was rendered', () => {
+    const c = cap({
+      behaviors: ['CON-045'],
+      note: 'birthdays page',
+      serverTime: frame({ currentTime: '2026-07-12T15:48:12Z' }),
+      fields: { birthdayContacts: [{ full_name: 'synth-placeholder', birthday: '1900-07-19' }] },
+      aria: root([
+        { role: 'text', text: 'Sunday, July 12, 2026' },
+        { role: 'heading', name: 'Upcoming Birthdays (0)', level: 2 },
+      ]),
+    })
+    expect(con045(set('CON-045', [c]))[3].verdict).toBe('unsure')
+  })
+
+  it('UTC-lexical: a T..Z-suffixed birthday does not shift the group', () => {
+    // A local-TZ parse of 1990-07-12T23:00:00Z could roll to 07-13; lexical
+    // extraction keeps 07-12 → the "today" group for a 07-12 frame.
+    const s = expectedProximitySections(
+      [{ birthday: '1990-07-12T23:00:00Z' }],
+      '2026-07-12T00:00:00Z'
+    )
+    expect([...(s ?? [])]).toEqual(['today'])
   })
 
   it('expectedProximitySections computes the non-empty groups from the frame', () => {

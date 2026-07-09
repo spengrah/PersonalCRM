@@ -1,0 +1,94 @@
+{
+  "captureFormatVersion": 1,
+  "captureGeneratorVersion": 1,
+  "tour": "contacts",
+  "seq": 24,
+  "behaviors": ["CON-043"],
+  "note": "quick-fill applied: merged name adopts source name",
+  "url": "/contacts/<id:4>?sort=cadence&order=desc",
+  "pair": {
+    "id": "merge-CON-043",
+    "role": "name-quickfilled"
+  },
+  "serverTime": {
+    "currentTime": "2026-07-10T15:22:21.26703626Z",
+    "isAccelerated": true,
+    "accelerationFactor": 60,
+    "baseTime": "2026-07-09T15:07:20Z",
+    "environment": "testing"
+  },
+  "aria": {
+    "role": "root",
+    "children": [
+      {
+        "role": "heading",
+        "name": "Merge Contacts",
+        "level": 2
+      },
+      {
+        "role": "button"
+      },
+      {
+        "role": "text",
+        "text": "S"
+      },
+      {
+        "role": "heading",
+        "name": "synth-prodshaped-Brux Dummond",
+        "level": 3,
+        "children": [
+          {
+            "role": "text",
+            "text": "synth-prodshaped-Brux Dummond"
+          },
+          {
+            "role": "img"
+          }
+        ]
+      },
+      {
+        "role": "text",
+        "text": "Keeping Merge from Archiving synth-prodshaped-Brux Dummond (<email:21>)"
+      },
+      {
+        "role": "button"
+      },
+      {
+        "role": "heading",
+        "name": "Resolve Conflicts",
+        "level": 4
+      },
+      {
+        "role": "text",
+        "text": "Cadence"
+      },
+      {
+        "role": "button",
+        "name": "Weekly"
+      },
+      {
+        "role": "button",
+        "name": "Monthly"
+      },
+      {
+        "role": "heading",
+        "name": "Will Be Merged",
+        "level": 4
+      },
+      {
+        "role": "text",
+        "text": "Contact methods 1 unique added Notes None Interactions None Calendar events None"
+      },
+      {
+        "role": "button",
+        "name": "Cancel"
+      },
+      {
+        "role": "button",
+        "name": "Merge Contacts"
+      }
+    ]
+  },
+  "apiResponses": {},
+  "dialogs": []
+}

@@ -1,0 +1,29 @@
+{
+  "id": "CAD-026-clean",
+  "behavior_id": "CAD-026",
+  "source": "clean",
+  "metadata": {
+    "capture_generator_version": 1
+  },
+  "captures": [
+    "dashboard/004-overdue-list-urgency-default-sort-cards-count-tiers.json",
+    "dashboard/011-caught-up-empty-state-add-view-list-affordances.json"
+  ],
+  "expected": [
+    {
+      "then_index": 0,
+      "grader": "verifier",
+      "verdict": "pass"
+    },
+    {
+      "then_index": 1,
+      "grader": "verifier",
+      "verdict": "pass"
+    },
+    {
+      "then_index": 2,
+      "grader": "verifier",
+      "verdict": "pass"
+    }
+  ]
+}

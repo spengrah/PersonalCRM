@@ -6,17 +6,17 @@
     "capture_generator_version": 1
   },
   "captures": [
-    "contacts/017-merge-modal-open-no-source-submit-disabled.json",
-    "contacts/018-selector-filtered-by-target-name-target-absent-from-candidat.json",
-    "contacts/019-preview-loading-submit-disabled.json",
-    "contacts/020-preview-loaded-transfer-summary-conflict-toggle-s-for-the-ac.json",
-    "contacts/021-quick-fill-affordance-visible-merged-name-not-yet-source.json",
-    "contacts/022-quick-fill-applied-merged-name-adopts-source-name.json",
-    "contacts/023-merged-name-manually-edited-in-edit-mode.json",
-    "contacts/024-merge-in-flight-submit-disabled.json",
-    "contacts/025-merge-succeeded-post-kept-target-field-selections-default-to.json",
-    "contacts/026-success-banner-shown-page-level-mergemessage.json",
-    "contacts/027-success-banner-auto-dismissed-after-5s.json"
+    "contacts/019-merge-modal-open-no-source-submit-disabled.json",
+    "contacts/020-selector-filtered-by-target-name-target-absent-from-candidat.json",
+    "contacts/021-preview-loading-submit-disabled.json",
+    "contacts/022-preview-loaded-transfer-summary-conflict-toggle-s-for-the-ac.json",
+    "contacts/023-quick-fill-affordance-visible-merged-name-not-yet-source.json",
+    "contacts/024-quick-fill-applied-merged-name-adopts-source-name.json",
+    "contacts/025-merged-name-manually-edited-in-edit-mode.json",
+    "contacts/026-merge-in-flight-submit-disabled.json",
+    "contacts/027-merge-succeeded-post-kept-target-field-selections-default-to.json",
+    "contacts/028-success-banner-shown-page-level-mergemessage.json",
+    "contacts/029-success-banner-auto-dismissed-after-5s.json"
   ],
   "expected": [
     {

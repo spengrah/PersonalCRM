@@ -6,8 +6,8 @@
     "capture_generator_version": 1
   },
   "captures": [
-    "contacts/015-before-mark-as-contacted-list-row-activity-state.json",
-    "contacts/016-after-mark-as-contacted-mutual-interaction-logged-server-tim.json"
+    "contacts/017-before-mark-as-contacted-list-row-activity-state.json",
+    "contacts/018-after-mark-as-contacted-mutual-interaction-logged-server-tim.json"
   ],
   "expected": [
     {

@@ -1,0 +1,24 @@
+{
+  "id": "DSH-003-clean",
+  "behavior_id": "DSH-003",
+  "source": "clean",
+  "metadata": {
+    "capture_generator_version": 1
+  },
+  "captures": [
+    "dashboard/002-dashboard-shell-global-nav-header-add-contact-no-dashboard-s.json",
+    "dashboard/011-caught-up-empty-state-add-view-list-affordances.json"
+  ],
+  "expected": [
+    {
+      "then_index": 0,
+      "grader": "verifier",
+      "verdict": "pass"
+    },
+    {
+      "then_index": 1,
+      "grader": "verifier",
+      "verdict": "pass"
+    }
+  ]
+}

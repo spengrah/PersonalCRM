@@ -1,0 +1,33 @@
+{
+  "id": "DSH-004-doctored",
+  "behavior_id": "DSH-004",
+  "source": "doctored",
+  "metadata": {
+    "capture_generator_version": 1
+  },
+  "captures": [
+    "dashboard/009-overdue-loading-state-route-held-placeholder-shown-not-empty.json",
+    "dashboard/010-overdue-error-state-500-error-carries-the-reason-not-caught-.json"
+  ],
+  "doctor": {
+    "base_case": "DSH-004-clean",
+    "mutation": {
+      "op": "remove_aria_subtree",
+      "role": "error",
+      "node_role": "heading",
+      "node_name": "Error loading overdue contacts"
+    }
+  },
+  "expected": [
+    {
+      "then_index": 0,
+      "grader": "verifier",
+      "verdict": "pass"
+    },
+    {
+      "then_index": 1,
+      "grader": "verifier",
+      "verdict": "fail"
+    }
+  ]
+}

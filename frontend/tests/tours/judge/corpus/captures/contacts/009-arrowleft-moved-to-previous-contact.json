@@ -1,0 +1,304 @@
+{
+  "captureFormatVersion": 1,
+  "captureGeneratorVersion": 1,
+  "tour": "contacts",
+  "seq": 9,
+  "behaviors": ["CON-040"],
+  "note": "ArrowLeft moved to previous contact",
+  "url": "/contacts/<id:2>?sort=cadence&order=desc",
+  "pair": {
+    "id": "keyboard-nav-CON-040",
+    "role": "arrow-left-prev"
+  },
+  "serverTime": {
+    "currentTime": "2026-07-10T14:54:40.94733428Z",
+    "isAccelerated": true,
+    "accelerationFactor": 60,
+    "baseTime": "2026-07-09T15:07:20Z",
+    "environment": "testing"
+  },
+  "aria": {
+    "role": "root",
+    "children": [
+      {
+        "role": "navigation",
+        "children": [
+          {
+            "role": "heading",
+            "name": "Personal CRM",
+            "level": 1
+          },
+          {
+            "role": "link",
+            "name": "Dashboard",
+            "children": [
+              {
+                "role": "/url",
+                "children": [
+                  {
+                    "role": "text",
+                    "text": "/dashboard"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "role": "link",
+            "name": "Contacts",
+            "children": [
+              {
+                "role": "/url",
+                "children": [
+                  {
+                    "role": "text",
+                    "text": "/contacts"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "role": "link",
+            "name": "Birthdays",
+            "children": [
+              {
+                "role": "/url",
+                "children": [
+                  {
+                    "role": "text",
+                    "text": "/birthdays"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "role": "link",
+            "name": "Imports",
+            "children": [
+              {
+                "role": "/url",
+                "children": [
+                  {
+                    "role": "text",
+                    "text": "/imports"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "role": "link",
+            "name": "Settings",
+            "children": [
+              {
+                "role": "/url",
+                "children": [
+                  {
+                    "role": "text",
+                    "text": "/settings"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "role": "button",
+            "name": "Jul 10, 02:54:05 PM 60x"
+          }
+        ]
+      },
+      {
+        "role": "button",
+        "name": "Previous contact"
+      },
+      {
+        "role": "text",
+        "text": "2 of 168"
+      },
+      {
+        "role": "button",
+        "name": "Next contact"
+      },
+      {
+        "role": "heading",
+        "name": "synth-prodshaped-Brux Fixtura",
+        "level": 2
+      },
+      {
+        "role": "button",
+        "name": "Log Interaction"
+      },
+      {
+        "role": "button",
+        "name": "Edit"
+      },
+      {
+        "role": "button",
+        "name": "Merge"
+      },
+      {
+        "role": "button",
+        "name": "Delete"
+      },
+      {
+        "role": "heading",
+        "name": "Contact Information",
+        "level": 3
+      },
+      {
+        "role": "term",
+        "children": [
+          {
+            "role": "text",
+            "text": "Full name"
+          }
+        ]
+      },
+      {
+        "role": "definition",
+        "children": [
+          {
+            "role": "text",
+            "text": "synth-prodshaped-Brux Fixtura"
+          }
+        ]
+      },
+      {
+        "role": "term",
+        "children": [
+          {
+            "role": "text",
+            "text": "Contact methods"
+          }
+        ]
+      },
+      {
+        "role": "definition",
+        "children": [
+          {
+            "role": "link",
+            "name": "<email:2>",
+            "children": [
+              {
+                "role": "/url",
+                "children": [
+                  {
+                    "role": "text",
+                    "text": "mailto:<email:2>"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "role": "text",
+            "text": "Email Primary"
+          }
+        ]
+      },
+      {
+        "role": "term",
+        "children": [
+          {
+            "role": "text",
+            "text": "Location"
+          }
+        ]
+      },
+      {
+        "role": "definition",
+        "children": [
+          {
+            "role": "text",
+            "text": "synth-prodshaped-place-lakeside"
+          }
+        ]
+      },
+      {
+        "role": "term",
+        "children": [
+          {
+            "role": "text",
+            "text": "Contact cadence"
+          }
+        ]
+      },
+      {
+        "role": "definition",
+        "children": [
+          {
+            "role": "text",
+            "text": "weekly"
+          }
+        ]
+      },
+      {
+        "role": "term",
+        "children": [
+          {
+            "role": "text",
+            "text": "Recent activity"
+          }
+        ]
+      },
+      {
+        "role": "definition",
+        "children": [
+          {
+            "role": "text",
+            "text": "No recent activity"
+          }
+        ]
+      },
+      {
+        "__ariaTruncated__": 8
+      }
+    ]
+  },
+  "apiResponses": {
+    "GET /api/v1/contacts/:id/tasks": [
+      {
+        "method": "GET",
+        "requestUrl": "/api/v1/contacts/<id:2>/tasks?state=completed&lifecycle=manual",
+        "query": {
+          "lifecycle": "manual",
+          "state": "completed"
+        },
+        "status": 404,
+        "body": null
+      },
+      {
+        "method": "GET",
+        "requestUrl": "/api/v1/contacts/<id:2>/tasks?state=managed&lifecycle=followup_loop",
+        "query": {
+          "lifecycle": "followup_loop",
+          "state": "managed"
+        },
+        "status": 404,
+        "body": null
+      },
+      {
+        "method": "GET",
+        "requestUrl": "/api/v1/contacts/<id:2>/tasks?state=managed&lifecycle=manual",
+        "query": {
+          "lifecycle": "manual",
+          "state": "managed"
+        },
+        "status": 404,
+        "body": null
+      }
+    ],
+    "GET /api/v1/sync/status": [
+      {
+        "method": "GET",
+        "requestUrl": "/api/v1/sync/status",
+        "query": {},
+        "status": 404,
+        "body": null
+      }
+    ]
+  },
+  "dialogs": []
+}

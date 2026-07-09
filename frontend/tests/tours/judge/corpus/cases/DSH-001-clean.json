@@ -1,0 +1,21 @@
+{
+  "id": "DSH-001-clean",
+  "behavior_id": "DSH-001",
+  "source": "clean",
+  "metadata": {
+    "capture_generator_version": 1
+  },
+  "captures": ["dashboard/001-app-root-redirected-to-the-dashboard-default-landing.json"],
+  "expected": [
+    {
+      "then_index": 0,
+      "grader": "verifier",
+      "verdict": "pass"
+    },
+    {
+      "then_index": 1,
+      "grader": "verifier",
+      "verdict": "pass"
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "id": "DSH-001-doctored",
+  "behavior_id": "DSH-001",
+  "source": "doctored",
+  "metadata": {
+    "capture_generator_version": 1
+  },
+  "captures": ["dashboard/001-app-root-redirected-to-the-dashboard-default-landing.json"],
+  "doctor": {
+    "base_case": "DSH-001-clean",
+    "mutation": {
+      "op": "remove_aria_subtree",
+      "node_role": "heading",
+      "node_name": "Action Required"
+    }
+  },
+  "expected": [
+    {
+      "then_index": 0,
+      "grader": "verifier",
+      "verdict": "fail"
+    },
+    {
+      "then_index": 1,
+      "grader": "verifier",
+      "verdict": "pass"
+    }
+  ]
+}

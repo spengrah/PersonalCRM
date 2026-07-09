@@ -7,7 +7,8 @@
   },
   "captures": [
     "contacts/001-contact-list-default-cadence-order-no-explicit-sort.json",
-    "contacts/002-contact-detail-opened-from-default-list-prev-next-nav-bar.json"
+    "contacts/002-contact-detail-opened-from-default-list-prev-next-nav-bar.json",
+    "contacts/003-bare-contact-list-no-explicit-sort-implicit-default-cadence-.json"
   ],
   "doctor": {
     "base_case": "CON-038-clean",
@@ -21,7 +22,7 @@
     {
       "then_index": 0,
       "grader": "verifier",
-      "verdict": "unsure"
+      "verdict": "pass"
     },
     {
       "then_index": 1,

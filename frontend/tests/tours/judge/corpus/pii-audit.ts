@@ -159,6 +159,23 @@ const UI_VOCAB = new Set(
   ].map(w => w.toLowerCase())
 )
 
+// Exact multi-word UI label phrases (lowercased). A TitleCase bigram is exempt
+// when it is a substring of one of these — preferred over unioning each label's
+// constituent words into UI_VOCAB, which would erode the heuristic (a real name
+// whose two tokens both coincide with unrelated label words would slip). PR3's
+// dashboard + cadence-followup surfaces add their multi-word labels here.
+const UI_PHRASES = [
+  'action required',
+  'most urgent',
+  'last contacted',
+  'view all contacts',
+  'add new contact',
+  'add contact',
+  'add task',
+  'contact information',
+  'birthday tracker',
+]
+
 // A TitleCase name bigram, optionally carrying the synthetic prefix. Tokens are
 // >= 2 chars (cap + >= 1 lower) so SHORT names like "Al Smith" / "Jo Kim" are
 // covered, not only >= 3-letter tokens.
@@ -200,12 +217,18 @@ export function auditAriaNames(ariaStrings: string[], source: string): Violation
   for (const s of ariaStrings) {
     for (const m of s.matchAll(NAME_BIGRAM_RE)) {
       if (m[1]) continue // synth-prefixed → provably synthetic
-      const [w1, w2] = m[2].toLowerCase().split(' ')
-      // Exempt a bigram ONLY when BOTH tokens are UI vocabulary (a genuine UI
-      // label like "Contact Information"). A bigram with even one non-vocab
-      // token — "Mark Smith", "Al Smith" — is flagged. On the synthetic corpus
-      // this can only produce harmless false-positives on UI phrases (extend
-      // UI_VOCAB); it never misses a real-name bigram of this shape.
+      const bigram = m[2].toLowerCase()
+      // Exempt a bigram when it is part of a known multi-word UI PHRASE (e.g.
+      // "action required", "view all contacts") — preferred over unioning every
+      // constituent word into UI_VOCAB, so a real name whose two tokens happen to
+      // coincide with unrelated label words is still flagged.
+      if (UI_PHRASES.some(p => p.includes(bigram))) continue
+      // Fallback: both tokens are single-domain UI vocabulary (a label like
+      // "Contact Information"). A bigram with even one non-vocab token — "Mark
+      // Smith", "Al Smith" — is flagged. On the synthetic corpus this can only
+      // produce harmless false-positives on UI phrases (extend UI_PHRASES); it
+      // never misses a real-name bigram of this shape.
+      const [w1, w2] = bigram.split(' ')
       if (!(UI_VOCAB.has(w1) && UI_VOCAB.has(w2))) {
         out.push({ kind: 'unprefixed-aria-name', source, match: m[2].slice(0, 80) })
       }

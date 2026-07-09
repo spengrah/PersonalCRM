@@ -79,6 +79,12 @@ test('contacts tour — 7 current ux behaviors', async ({ page, tour }) => {
   // Mid-list + first contact for keyboard-nav (read-only; order = default nav).
   const firstId = contacts[0].id
   const midId = contacts[1].id
+  // The true LAST contact in the ids_only nav order (the list may exceed page 1,
+  // so read the full navigation id list, not the limit=100 page).
+  const idsResp = await tour.apiCtx.get('/api/v1/contacts?ids_only=true&sort=cadence&order=desc')
+  const navIds = ((await idsResp.json())?.data?.ids ?? []) as string[]
+  const lastId = navIds[navIds.length - 1]
+  if (!lastId) throw new Error('tour: no ids_only navigation order for the last-boundary capture')
 
   // The merge modal overlay — used to root the aria snapshot on the modal for
   // its captures, so its subtree is not truncated out of the content-rich body.
@@ -111,17 +117,40 @@ test('contacts tour — 7 current ux behaviors', async ({ page, tour }) => {
     pair: { id: 'default-order-CON-038', role: 'detail' },
   })
 
+  // Bare /contacts (NO explicit sort param) — proves the IMPLICIT default is
+  // cadence order (most frequent first), the half the explicit-sort list cannot.
+  await page.goto('/contacts')
+  await tour.waitForApi(page, 'GET', CONTACTS_LIST_PATH)
+  await page.getByRole('heading', { name: 'Contacts', level: 2 }).waitFor({ state: 'visible' })
+  await tour.capture(page, {
+    behaviors: ['CON-038'],
+    note: 'bare contact list (no explicit sort): implicit default cadence order',
+    pair: { id: 'default-order-CON-038', role: 'list-bare' },
+  })
+
   // --- CON-045: birthdays grouped by proximity under accelerated time ---
   // Readiness = rendered cards (the cache-warm accelerated frame), NOT a fresh
   // system/time GET (which would deadlock on the warm 5m-stale cache).
   await page.goto('/birthdays')
   await tour.waitForApi(page, 'GET', CONTACTS_LIST_PATH) // the limit=1000 load
   await page.getByTestId('birthday-card').first().waitFor({ state: 'visible', timeout: 20_000 })
+  // DECISION 1 (capture weight): the con045 verifier's birthday ground-truth
+  // ([0] grouping / [1] gift candidates / [3] placeholder names) needs only
+  // { full_name, birthday } per birthday-bearing contact — NOT the full
+  // 1000-contact body, whose per-contact bloat dominated the committed capture's
+  // git weight. Record that compact projection as a field and let the API body
+  // fall back to the default array cap. The aria (ariaCap: Infinity) stays the
+  // source for section headings / order / per-card age / frame date.
+  const birthdayResp = await tour.apiCtx.get('/api/v1/contacts?limit=1000')
+  const allContacts = ((await birthdayResp.json())?.data ?? []) as TourContact[]
+  const birthdayContacts = allContacts
+    .filter(c => c.birthday)
+    .map(c => ({ full_name: c.full_name, birthday: c.birthday }))
   await tour.capture(page, {
     behaviors: ['CON-045'],
-    note: 'birthdays page, rendered accelerated frame (full list + all cards)',
-    arrayCap: Infinity, // preserve the FULL limit=1000 list (grouping/order/placeholder-year)
+    note: 'birthdays page, rendered accelerated frame (all cards + birthday projection)',
     ariaCap: Infinity, // preserve ALL visible birthday cards (a display behavior)
+    fields: { birthdayContacts },
   })
 
   // --- CON-041: one-shot ?action= param strip ---
@@ -204,6 +233,16 @@ test('contacts tour — 7 current ux behaviors', async ({ page, tour }) => {
   })
   await page.keyboard.press('Escape')
   await page.getByRole('heading', { name: /Add Task for/ }).waitFor({ state: 'hidden' })
+
+  // Boundary: last contact → Next nav disabled (the other half of CON-040[0]).
+  // Placed after the input-focus capture so it does not move the page off the
+  // first contact that input-focus-inert's url is diffed against.
+  await gotoDetailReady(lastId)
+  await tour.capture(page, {
+    behaviors: ['CON-040'],
+    note: 'boundary: last contact, Next nav disabled',
+    pair: { id: navPair, role: 'boundary-last' },
+  })
 
   // Enter opens edit mode (view swaps to ContactForm).
   await page.getByRole('heading', { name: 'Contact Information' }).click() // focus → body

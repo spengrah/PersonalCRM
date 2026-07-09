@@ -1,0 +1,80 @@
+{
+  "captureFormatVersion": 1,
+  "captureGeneratorVersion": 1,
+  "tour": "contacts",
+  "seq": 20,
+  "behaviors": ["CON-043"],
+  "note": "selector filtered by TARGET name: target absent from candidates = selector excludes target",
+  "url": "/contacts/<id:4>?sort=cadence&order=desc",
+  "pair": {
+    "id": "merge-CON-043",
+    "role": "selector-open"
+  },
+  "serverTime": {
+    "currentTime": "2026-07-10T15:21:07.5706055Z",
+    "isAccelerated": true,
+    "accelerationFactor": 60,
+    "baseTime": "2026-07-09T15:07:20Z",
+    "environment": "testing"
+  },
+  "aria": {
+    "role": "root",
+    "children": [
+      {
+        "role": "heading",
+        "name": "Merge Contacts",
+        "level": 2
+      },
+      {
+        "role": "button"
+      },
+      {
+        "role": "text",
+        "text": "S"
+      },
+      {
+        "role": "heading",
+        "name": "synth-prodshaped-Brux Testwell",
+        "level": 3,
+        "children": [
+          {
+            "role": "text",
+            "text": "synth-prodshaped-Brux Testwell"
+          },
+          {
+            "role": "img"
+          }
+        ]
+      },
+      {
+        "role": "text",
+        "text": "Keeping Merge from Archiving"
+      },
+      {
+        "role": "textbox",
+        "name": "Search for a contact to merge...",
+        "children": [
+          {
+            "role": "text",
+            "text": "synth-prodshaped-Brux Testwell"
+          }
+        ]
+      },
+      {
+        "role": "text",
+        "text": "No contacts found for “synth-prodshaped-Brux Testwell”"
+      },
+      {
+        "role": "button",
+        "name": "Cancel"
+      },
+      {
+        "role": "button",
+        "name": "Merge Contacts",
+        "disabled": true
+      }
+    ]
+  },
+  "apiResponses": {},
+  "dialogs": []
+}

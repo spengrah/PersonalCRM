@@ -1,0 +1,2060 @@
+{
+  "captureFormatVersion": 1,
+  "captureGeneratorVersion": 1,
+  "tour": "contacts",
+  "seq": 18,
+  "behaviors": ["CON-044"],
+  "note": "after mark-as-contacted: mutual interaction logged (server-timestamped)",
+  "url": "/contacts?sort=cadence&order=desc",
+  "pair": {
+    "id": "markcontacted-CON-044",
+    "role": "after"
+  },
+  "serverTime": {
+    "currentTime": "2026-07-10T15:15:44.741612Z",
+    "isAccelerated": true,
+    "accelerationFactor": 60,
+    "baseTime": "2026-07-09T15:07:20Z",
+    "environment": "testing"
+  },
+  "aria": {
+    "role": "root",
+    "children": [
+      {
+        "role": "navigation",
+        "children": [
+          {
+            "role": "heading",
+            "name": "Personal CRM",
+            "level": 1
+          },
+          {
+            "role": "link",
+            "name": "Dashboard",
+            "children": [
+              {
+                "role": "/url",
+                "children": [
+                  {
+                    "role": "text",
+                    "text": "/dashboard"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "role": "link",
+            "name": "Contacts",
+            "children": [
+              {
+                "role": "/url",
+                "children": [
+                  {
+                    "role": "text",
+                    "text": "/contacts"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "role": "link",
+            "name": "Birthdays",
+            "children": [
+              {
+                "role": "/url",
+                "children": [
+                  {
+                    "role": "text",
+                    "text": "/birthdays"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "role": "link",
+            "name": "Imports",
+            "children": [
+              {
+                "role": "/url",
+                "children": [
+                  {
+                    "role": "text",
+                    "text": "/imports"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "role": "link",
+            "name": "Settings",
+            "children": [
+              {
+                "role": "/url",
+                "children": [
+                  {
+                    "role": "text",
+                    "text": "/settings"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "role": "button",
+            "name": "Jul 10, 03:15:00 PM 60x"
+          }
+        ]
+      },
+      {
+        "role": "heading",
+        "name": "Contacts",
+        "level": 2
+      },
+      {
+        "role": "paragraph",
+        "children": [
+          {
+            "role": "text",
+            "text": "168 contacts"
+          }
+        ]
+      },
+      {
+        "role": "link",
+        "name": "New Contact",
+        "children": [
+          {
+            "role": "/url",
+            "children": [
+              {
+                "role": "text",
+                "text": "/contacts/new"
+              }
+            ]
+          },
+          {
+            "role": "button",
+            "name": "New Contact"
+          }
+        ]
+      },
+      {
+        "role": "textbox",
+        "name": "Search contacts..."
+      },
+      {
+        "role": "combobox",
+        "name": "Filter by cadence",
+        "children": [
+          {
+            "role": "option",
+            "name": "All Contacts",
+            "selected": true
+          },
+          {
+            "role": "option",
+            "name": "With Cadence"
+          },
+          {
+            "role": "option",
+            "name": "No Cadence"
+          }
+        ]
+      },
+      {
+        "role": "navigation",
+        "name": "Pagination",
+        "children": [
+          {
+            "role": "text",
+            "text": "Page 1 of 9 (168 total contacts)"
+          },
+          {
+            "role": "button",
+            "name": "Previous",
+            "disabled": true
+          },
+          {
+            "role": "button",
+            "name": "1"
+          },
+          {
+            "role": "button",
+            "name": "2"
+          },
+          {
+            "role": "button",
+            "name": "3"
+          },
+          {
+            "role": "button",
+            "name": "4"
+          },
+          {
+            "role": "button",
+            "name": "9"
+          },
+          {
+            "role": "button",
+            "name": "Next"
+          }
+        ]
+      },
+      {
+        "role": "table",
+        "children": [
+          {
+            "role": "rowgroup",
+            "children": [
+              {
+                "role": "row",
+                "name": "Name Cadence Location Birthday Last response Next Contact Actions",
+                "children": [
+                  {
+                    "role": "columnheader",
+                    "name": "Name"
+                  },
+                  {
+                    "role": "columnheader",
+                    "name": "Cadence"
+                  },
+                  {
+                    "role": "columnheader",
+                    "name": "Location"
+                  },
+                  {
+                    "role": "columnheader",
+                    "name": "Birthday"
+                  },
+                  {
+                    "role": "columnheader",
+                    "name": "Last response"
+                  },
+                  {
+                    "role": "columnheader",
+                    "name": "Next Contact"
+                  },
+                  {
+                    "role": "columnheader",
+                    "name": "Actions"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "role": "rowgroup",
+            "children": [
+              {
+                "role": "row",
+                "name": "S synth-prodshaped-Brux Fakeman Weekly - 7/10/26 7/10/26 Contact actions",
+                "children": [
+                  {
+                    "role": "cell",
+                    "name": "S synth-prodshaped-Brux Fakeman",
+                    "children": [
+                      {
+                        "role": "text",
+                        "text": "S"
+                      },
+                      {
+                        "role": "link",
+                        "name": "synth-prodshaped-Brux Fakeman",
+                        "children": [
+                          {
+                            "role": "/url",
+                            "children": [
+                              {
+                                "role": "text",
+                                "text": "/contacts/<id:1>?sort=cadence&order=desc"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Weekly"
+                  },
+                  {
+                    "role": "cell"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "7/10/26"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "7/10/26"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Contact actions",
+                    "children": [
+                      {
+                        "role": "button",
+                        "name": "Contact actions"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "role": "row",
+                "name": "S synth-prodshaped-Brux Fixtura Weekly synth-prodshaped-place-lakeside - - 7/9/26 Contact actions",
+                "children": [
+                  {
+                    "role": "cell",
+                    "name": "S synth-prodshaped-Brux Fixtura",
+                    "children": [
+                      {
+                        "role": "text",
+                        "text": "S"
+                      },
+                      {
+                        "role": "link",
+                        "name": "synth-prodshaped-Brux Fixtura",
+                        "children": [
+                          {
+                            "role": "/url",
+                            "children": [
+                              {
+                                "role": "text",
+                                "text": "/contacts/<id:2>?sort=cadence&order=desc"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Weekly"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "synth-prodshaped-place-lakeside"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "7/9/26"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Contact actions",
+                    "children": [
+                      {
+                        "role": "button",
+                        "name": "Contact actions"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "role": "row",
+                "name": "S synth-prodshaped-Brux Placeholdt Weekly - - 7/9/26 Contact actions",
+                "children": [
+                  {
+                    "role": "cell",
+                    "name": "S synth-prodshaped-Brux Placeholdt",
+                    "children": [
+                      {
+                        "role": "text",
+                        "text": "S"
+                      },
+                      {
+                        "role": "link",
+                        "name": "synth-prodshaped-Brux Placeholdt",
+                        "children": [
+                          {
+                            "role": "/url",
+                            "children": [
+                              {
+                                "role": "text",
+                                "text": "/contacts/<id:3>?sort=cadence&order=desc"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Weekly"
+                  },
+                  {
+                    "role": "cell"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "7/9/26"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Contact actions",
+                    "children": [
+                      {
+                        "role": "button",
+                        "name": "Contact actions"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "role": "row",
+                "name": "S synth-prodshaped-Brux Testwell Weekly - - 7/9/26 Contact actions",
+                "children": [
+                  {
+                    "role": "cell",
+                    "name": "S synth-prodshaped-Brux Testwell",
+                    "children": [
+                      {
+                        "role": "text",
+                        "text": "S"
+                      },
+                      {
+                        "role": "link",
+                        "name": "synth-prodshaped-Brux Testwell",
+                        "children": [
+                          {
+                            "role": "/url",
+                            "children": [
+                              {
+                                "role": "text",
+                                "text": "/contacts/<id:4>?sort=cadence&order=desc"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Weekly"
+                  },
+                  {
+                    "role": "cell"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "7/9/26"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Contact actions",
+                    "children": [
+                      {
+                        "role": "button",
+                        "name": "Contact actions"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "role": "row",
+                "name": "S synth-prodshaped-Cyon Sampleby Weekly synth-prodshaped-place-riverton - - 7/9/26 Contact actions",
+                "children": [
+                  {
+                    "role": "cell",
+                    "name": "S synth-prodshaped-Cyon Sampleby",
+                    "children": [
+                      {
+                        "role": "text",
+                        "text": "S"
+                      },
+                      {
+                        "role": "link",
+                        "name": "synth-prodshaped-Cyon Sampleby",
+                        "children": [
+                          {
+                            "role": "/url",
+                            "children": [
+                              {
+                                "role": "text",
+                                "text": "/contacts/<id:5>?sort=cadence&order=desc"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Weekly"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "synth-prodshaped-place-riverton"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "7/9/26"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Contact actions",
+                    "children": [
+                      {
+                        "role": "button",
+                        "name": "Contact actions"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "role": "row",
+                "name": "S synth-prodshaped-Cyon Synthington Weekly - - 7/9/26 Contact actions",
+                "children": [
+                  {
+                    "role": "cell",
+                    "name": "S synth-prodshaped-Cyon Synthington",
+                    "children": [
+                      {
+                        "role": "text",
+                        "text": "S"
+                      },
+                      {
+                        "role": "link",
+                        "name": "synth-prodshaped-Cyon Synthington",
+                        "children": [
+                          {
+                            "role": "/url",
+                            "children": [
+                              {
+                                "role": "text",
+                                "text": "/contacts/<id:6>?sort=cadence&order=desc"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Weekly"
+                  },
+                  {
+                    "role": "cell"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "7/9/26"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Contact actions",
+                    "children": [
+                      {
+                        "role": "button",
+                        "name": "Contact actions"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "role": "row",
+                "name": "S synth-prodshaped-Cyon Testwell Weekly - - 7/10/26 Contact actions",
+                "children": [
+                  {
+                    "role": "cell",
+                    "name": "S synth-prodshaped-Cyon Testwell",
+                    "children": [
+                      {
+                        "role": "text",
+                        "text": "S"
+                      },
+                      {
+                        "role": "link",
+                        "name": "synth-prodshaped-Cyon Testwell",
+                        "children": [
+                          {
+                            "role": "/url",
+                            "children": [
+                              {
+                                "role": "text",
+                                "text": "/contacts/<id:7>?sort=cadence&order=desc"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Weekly"
+                  },
+                  {
+                    "role": "cell"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "7/10/26"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Contact actions",
+                    "children": [
+                      {
+                        "role": "button",
+                        "name": "Contact actions"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "role": "row",
+                "name": "S synth-prodshaped-Cyon Testwell Weekly - - 7/9/26 Contact actions",
+                "children": [
+                  {
+                    "role": "cell",
+                    "name": "S synth-prodshaped-Cyon Testwell",
+                    "children": [
+                      {
+                        "role": "text",
+                        "text": "S"
+                      },
+                      {
+                        "role": "link",
+                        "name": "synth-prodshaped-Cyon Testwell",
+                        "children": [
+                          {
+                            "role": "/url",
+                            "children": [
+                              {
+                                "role": "text",
+                                "text": "/contacts/<id:8>?sort=cadence&order=desc"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Weekly"
+                  },
+                  {
+                    "role": "cell"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "7/9/26"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Contact actions",
+                    "children": [
+                      {
+                        "role": "button",
+                        "name": "Contact actions"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "role": "row",
+                "name": "S synth-prodshaped-Dax Fakeman Weekly - - 7/10/26 Contact actions",
+                "children": [
+                  {
+                    "role": "cell",
+                    "name": "S synth-prodshaped-Dax Fakeman",
+                    "children": [
+                      {
+                        "role": "text",
+                        "text": "S"
+                      },
+                      {
+                        "role": "link",
+                        "name": "synth-prodshaped-Dax Fakeman",
+                        "children": [
+                          {
+                            "role": "/url",
+                            "children": [
+                              {
+                                "role": "text",
+                                "text": "/contacts/<id:9>?sort=cadence&order=desc"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Weekly"
+                  },
+                  {
+                    "role": "cell"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "7/10/26"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Contact actions",
+                    "children": [
+                      {
+                        "role": "button",
+                        "name": "Contact actions"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "role": "row",
+                "name": "S synth-prodshaped-Dax Mockford Weekly synth-prodshaped-place-hillcrest - - 7/8/26 Contact actions",
+                "children": [
+                  {
+                    "role": "cell",
+                    "name": "S synth-prodshaped-Dax Mockford",
+                    "children": [
+                      {
+                        "role": "text",
+                        "text": "S"
+                      },
+                      {
+                        "role": "link",
+                        "name": "synth-prodshaped-Dax Mockford",
+                        "children": [
+                          {
+                            "role": "/url",
+                            "children": [
+                              {
+                                "role": "text",
+                                "text": "/contacts/<id:10>?sort=cadence&order=desc"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Weekly"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "synth-prodshaped-place-hillcrest"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "7/8/26"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Contact actions",
+                    "children": [
+                      {
+                        "role": "button",
+                        "name": "Contact actions"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "role": "row",
+                "name": "S synth-prodshaped-Dax Mockford Weekly - - 7/9/26 Contact actions",
+                "children": [
+                  {
+                    "role": "cell",
+                    "name": "S synth-prodshaped-Dax Mockford",
+                    "children": [
+                      {
+                        "role": "text",
+                        "text": "S"
+                      },
+                      {
+                        "role": "link",
+                        "name": "synth-prodshaped-Dax Mockford",
+                        "children": [
+                          {
+                            "role": "/url",
+                            "children": [
+                              {
+                                "role": "text",
+                                "text": "/contacts/<id:11>?sort=cadence&order=desc"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Weekly"
+                  },
+                  {
+                    "role": "cell"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "7/9/26"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Contact actions",
+                    "children": [
+                      {
+                        "role": "button",
+                        "name": "Contact actions"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "role": "row",
+                "name": "S synth-prodshaped-Dax Placeholdt Weekly - - 7/8/26 Contact actions",
+                "children": [
+                  {
+                    "role": "cell",
+                    "name": "S synth-prodshaped-Dax Placeholdt",
+                    "children": [
+                      {
+                        "role": "text",
+                        "text": "S"
+                      },
+                      {
+                        "role": "link",
+                        "name": "synth-prodshaped-Dax Placeholdt",
+                        "children": [
+                          {
+                            "role": "/url",
+                            "children": [
+                              {
+                                "role": "text",
+                                "text": "/contacts/<id:12>?sort=cadence&order=desc"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Weekly"
+                  },
+                  {
+                    "role": "cell"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "7/8/26"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Contact actions",
+                    "children": [
+                      {
+                        "role": "button",
+                        "name": "Contact actions"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "role": "row",
+                "name": "S synth-prodshaped-Dax Synthington Weekly 11/3/79 - 7/9/26 Contact actions",
+                "children": [
+                  {
+                    "role": "cell",
+                    "name": "S synth-prodshaped-Dax Synthington",
+                    "children": [
+                      {
+                        "role": "text",
+                        "text": "S"
+                      },
+                      {
+                        "role": "link",
+                        "name": "synth-prodshaped-Dax Synthington",
+                        "children": [
+                          {
+                            "role": "/url",
+                            "children": [
+                              {
+                                "role": "text",
+                                "text": "/contacts/<id:13>?sort=cadence&order=desc"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Weekly"
+                  },
+                  {
+                    "role": "cell"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "11/3/79"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "7/9/26"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Contact actions",
+                    "children": [
+                      {
+                        "role": "button",
+                        "name": "Contact actions"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "role": "row",
+                "name": "S synth-prodshaped-Dax Testwell Weekly synth-prodshaped-place-meadowbrook - - 7/8/26 Contact actions",
+                "children": [
+                  {
+                    "role": "cell",
+                    "name": "S synth-prodshaped-Dax Testwell",
+                    "children": [
+                      {
+                        "role": "text",
+                        "text": "S"
+                      },
+                      {
+                        "role": "link",
+                        "name": "synth-prodshaped-Dax Testwell",
+                        "children": [
+                          {
+                            "role": "/url",
+                            "children": [
+                              {
+                                "role": "text",
+                                "text": "/contacts/<id:14>?sort=cadence&order=desc"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Weekly"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "synth-prodshaped-place-meadowbrook"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "7/8/26"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Contact actions",
+                    "children": [
+                      {
+                        "role": "button",
+                        "name": "Contact actions"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "role": "row",
+                "name": "S synth-prodshaped-Dax Testwell Weekly - - 7/9/26 Contact actions",
+                "children": [
+                  {
+                    "role": "cell",
+                    "name": "S synth-prodshaped-Dax Testwell",
+                    "children": [
+                      {
+                        "role": "text",
+                        "text": "S"
+                      },
+                      {
+                        "role": "link",
+                        "name": "synth-prodshaped-Dax Testwell",
+                        "children": [
+                          {
+                            "role": "/url",
+                            "children": [
+                              {
+                                "role": "text",
+                                "text": "/contacts/<id:15>?sort=cadence&order=desc"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Weekly"
+                  },
+                  {
+                    "role": "cell"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "7/9/26"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Contact actions",
+                    "children": [
+                      {
+                        "role": "button",
+                        "name": "Contact actions"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "role": "row",
+                "name": "S synth-prodshaped-Glyph Fakeman Weekly 2/14/94 - 7/8/26 Contact actions",
+                "children": [
+                  {
+                    "role": "cell",
+                    "name": "S synth-prodshaped-Glyph Fakeman",
+                    "children": [
+                      {
+                        "role": "text",
+                        "text": "S"
+                      },
+                      {
+                        "role": "link",
+                        "name": "synth-prodshaped-Glyph Fakeman",
+                        "children": [
+                          {
+                            "role": "/url",
+                            "children": [
+                              {
+                                "role": "text",
+                                "text": "/contacts/<id:16>?sort=cadence&order=desc"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Weekly"
+                  },
+                  {
+                    "role": "cell"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "2/14/94"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "7/8/26"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Contact actions",
+                    "children": [
+                      {
+                        "role": "button",
+                        "name": "Contact actions"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "role": "row",
+                "name": "S synth-prodshaped-Glyph Sampleby Weekly - - 7/9/26 Contact actions",
+                "children": [
+                  {
+                    "role": "cell",
+                    "name": "S synth-prodshaped-Glyph Sampleby",
+                    "children": [
+                      {
+                        "role": "text",
+                        "text": "S"
+                      },
+                      {
+                        "role": "link",
+                        "name": "synth-prodshaped-Glyph Sampleby",
+                        "children": [
+                          {
+                            "role": "/url",
+                            "children": [
+                              {
+                                "role": "text",
+                                "text": "/contacts/<id:17>?sort=cadence&order=desc"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Weekly"
+                  },
+                  {
+                    "role": "cell"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "7/9/26"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Contact actions",
+                    "children": [
+                      {
+                        "role": "button",
+                        "name": "Contact actions"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "role": "row",
+                "name": "S synth-prodshaped-Jovi Fakeman Weekly 8/12/94 - 7/8/26 Contact actions",
+                "children": [
+                  {
+                    "role": "cell",
+                    "name": "S synth-prodshaped-Jovi Fakeman",
+                    "children": [
+                      {
+                        "role": "text",
+                        "text": "S"
+                      },
+                      {
+                        "role": "link",
+                        "name": "synth-prodshaped-Jovi Fakeman",
+                        "children": [
+                          {
+                            "role": "/url",
+                            "children": [
+                              {
+                                "role": "text",
+                                "text": "/contacts/<id:18>?sort=cadence&order=desc"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Weekly"
+                  },
+                  {
+                    "role": "cell"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "8/12/94"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "7/8/26"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Contact actions",
+                    "children": [
+                      {
+                        "role": "button",
+                        "name": "Contact actions"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "role": "row",
+                "name": "S synth-prodshaped-Jovi Sampleby Weekly 8/8/94 - 7/9/26 Contact actions",
+                "children": [
+                  {
+                    "role": "cell",
+                    "name": "S synth-prodshaped-Jovi Sampleby",
+                    "children": [
+                      {
+                        "role": "text",
+                        "text": "S"
+                      },
+                      {
+                        "role": "link",
+                        "name": "synth-prodshaped-Jovi Sampleby",
+                        "children": [
+                          {
+                            "role": "/url",
+                            "children": [
+                              {
+                                "role": "text",
+                                "text": "/contacts/<id:19>?sort=cadence&order=desc"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Weekly"
+                  },
+                  {
+                    "role": "cell"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "8/8/94"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "7/9/26"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Contact actions",
+                    "children": [
+                      {
+                        "role": "button",
+                        "name": "Contact actions"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "role": "row",
+                "name": "S synth-prodshaped-Jovi Stubbings Weekly - - 7/9/26 Contact actions",
+                "children": [
+                  {
+                    "role": "cell",
+                    "name": "S synth-prodshaped-Jovi Stubbings",
+                    "children": [
+                      {
+                        "role": "text",
+                        "text": "S"
+                      },
+                      {
+                        "role": "link",
+                        "name": "synth-prodshaped-Jovi Stubbings",
+                        "children": [
+                          {
+                            "role": "/url",
+                            "children": [
+                              {
+                                "role": "text",
+                                "text": "/contacts/<id:20>?sort=cadence&order=desc"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Weekly"
+                  },
+                  {
+                    "role": "cell"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "-"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "7/9/26"
+                  },
+                  {
+                    "role": "cell",
+                    "name": "Contact actions",
+                    "children": [
+                      {
+                        "role": "button",
+                        "name": "Contact actions"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "role": "navigation",
+        "name": "Pagination",
+        "children": [
+          {
+            "role": "text",
+            "text": "Page 1 of 9 (168 total contacts)"
+          },
+          {
+            "role": "button",
+            "name": "Previous",
+            "disabled": true
+          },
+          {
+            "role": "button",
+            "name": "1"
+          },
+          {
+            "role": "button",
+            "name": "2"
+          },
+          {
+            "role": "button",
+            "name": "3"
+          },
+          {
+            "role": "button",
+            "name": "4"
+          },
+          {
+            "role": "button",
+            "name": "9"
+          },
+          {
+            "role": "button",
+            "name": "Next"
+          }
+        ]
+      },
+      {
+        "role": "button",
+        "name": "Open Tanstack query devtools",
+        "children": [
+          {
+            "role": "img"
+          }
+        ]
+      },
+      {
+        "role": "alert"
+      }
+    ]
+  },
+  "apiResponses": {
+    "GET /api/v1/contacts": [
+      {
+        "method": "GET",
+        "requestUrl": "/api/v1/contacts?page=1&limit=20&sort=cadence&order=desc",
+        "query": {
+          "limit": "20",
+          "order": "desc",
+          "page": "1",
+          "sort": "cadence"
+        },
+        "status": 200,
+        "body": {
+          "data": [
+            {
+              "cadence": "weekly",
+              "contact_by": "2026-07-10T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Brux Fakeman",
+              "has_pending_followup": false,
+              "how_met": "synth-prodshaped-met-online-community",
+              "id": "<id:1>",
+              "last_contacted": "2026-07-10T15:15:21.569786Z",
+              "last_interaction_at": "2026-07-10T15:15:21.569786Z",
+              "last_outreach_at": "2026-07-10T15:15:21.569786Z",
+              "last_response_at": "2026-07-10T15:15:21.569786Z",
+              "methods": [
+                {
+                  "id": "<id:21>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:1>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:21>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:1>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "weekly",
+              "contact_by": "2026-07-09T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Brux Fixtura",
+              "has_pending_followup": false,
+              "how_met": "synth-prodshaped-met-at-a-conference",
+              "id": "<id:2>",
+              "last_contacted": "2026-07-09T16:04:04.646687Z",
+              "location": "synth-prodshaped-place-lakeside",
+              "methods": [
+                {
+                  "id": "<id:22>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:2>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:22>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:2>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "weekly",
+              "contact_by": "2026-07-09T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Brux Placeholdt",
+              "has_pending_followup": false,
+              "id": "<id:3>",
+              "last_contacted": "2026-07-09T14:39:14.831492Z",
+              "methods": [
+                {
+                  "id": "<id:23>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:3>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:23>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:3>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "weekly",
+              "contact_by": "2026-07-09T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Brux Testwell",
+              "has_pending_followup": false,
+              "id": "<id:4>",
+              "last_contacted": "2026-07-09T05:21:43.220559Z",
+              "methods": [
+                {
+                  "id": "<id:24>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:4>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:24>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:4>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "weekly",
+              "contact_by": "2026-07-09T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Cyon Sampleby",
+              "has_pending_followup": false,
+              "id": "<id:5>",
+              "last_contacted": "2026-07-09T17:12:03.531428Z",
+              "location": "synth-prodshaped-place-riverton",
+              "methods": [
+                {
+                  "id": "<id:25>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:5>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:25>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:5>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "weekly",
+              "contact_by": "2026-07-09T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Cyon Synthington",
+              "has_pending_followup": false,
+              "how_met": "synth-prodshaped-met-through-a-mutual-friend",
+              "id": "<id:6>",
+              "last_contacted": "2026-07-09T16:51:12.629975Z",
+              "methods": [
+                {
+                  "id": "<id:26>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:6>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:26>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:6>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "weekly",
+              "contact_by": "2026-07-10T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Cyon Testwell",
+              "has_pending_followup": false,
+              "id": "<id:7>",
+              "last_contacted": "2026-07-10T02:21:44.20176Z",
+              "methods": [
+                {
+                  "id": "<id:27>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:7>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:27>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:7>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "weekly",
+              "contact_by": "2026-07-09T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Cyon Testwell",
+              "has_pending_followup": false,
+              "id": "<id:8>",
+              "last_contacted": "2026-07-09T14:18:14.36908Z",
+              "methods": [
+                {
+                  "id": "<id:28>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:8>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:28>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:8>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "weekly",
+              "contact_by": "2026-07-10T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Dax Fakeman",
+              "has_pending_followup": false,
+              "id": "<id:9>",
+              "last_contacted": "2026-07-10T12:13:51.81225Z",
+              "methods": [
+                {
+                  "id": "<id:29>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:9>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:29>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:9>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "weekly",
+              "contact_by": "2026-07-08T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Dax Mockford",
+              "has_pending_followup": false,
+              "id": "<id:10>",
+              "last_contacted": "2026-07-08T21:56:20.35743Z",
+              "location": "synth-prodshaped-place-hillcrest",
+              "methods": [
+                {
+                  "id": "<id:30>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:10>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:30>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:10>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "weekly",
+              "contact_by": "2026-07-09T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Dax Mockford",
+              "has_pending_followup": false,
+              "id": "<id:11>",
+              "last_contacted": "2026-07-09T08:20:11.706182Z",
+              "methods": [
+                {
+                  "id": "<id:31>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:11>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:31>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:11>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "weekly",
+              "contact_by": "2026-07-08T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Dax Placeholdt",
+              "has_pending_followup": false,
+              "id": "<id:12>",
+              "last_contacted": "2026-07-08T21:00:59.288783Z",
+              "methods": [
+                {
+                  "id": "<id:32>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:12>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:32>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:12>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "birthday": "1979-11-03T00:00:00Z",
+              "cadence": "weekly",
+              "contact_by": "2026-07-09T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Dax Synthington",
+              "has_pending_followup": false,
+              "id": "<id:13>",
+              "last_contacted": "2026-07-09T17:35:52.820053Z",
+              "methods": [
+                {
+                  "id": "<id:33>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:13>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:33>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:13>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "weekly",
+              "contact_by": "2026-07-08T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Dax Testwell",
+              "has_pending_followup": false,
+              "id": "<id:14>",
+              "last_contacted": "2026-07-08T18:35:19.321611Z",
+              "location": "synth-prodshaped-place-meadowbrook",
+              "methods": [
+                {
+                  "id": "<id:34>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:14>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:34>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:14>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "weekly",
+              "contact_by": "2026-07-09T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Dax Testwell",
+              "has_pending_followup": false,
+              "id": "<id:15>",
+              "last_contacted": "2026-07-09T12:49:41.598778Z",
+              "methods": [
+                {
+                  "id": "<id:35>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:15>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:35>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:15>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "birthday": "1994-02-14T00:00:00Z",
+              "cadence": "weekly",
+              "contact_by": "2026-07-08T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Glyph Fakeman",
+              "has_pending_followup": false,
+              "how_met": "synth-prodshaped-met-at-a-conference",
+              "id": "<id:16>",
+              "last_contacted": "2026-07-08T14:14:39.662256Z",
+              "methods": [
+                {
+                  "id": "<id:36>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:16>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:36>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:16>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "weekly",
+              "contact_by": "2026-07-09T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Glyph Sampleby",
+              "has_pending_followup": false,
+              "id": "<id:17>",
+              "last_contacted": "2026-07-09T14:02:56.585982Z",
+              "methods": [
+                {
+                  "id": "<id:37>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:17>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:37>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:17>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "birthday": "1994-08-12T00:00:00Z",
+              "cadence": "weekly",
+              "contact_by": "2026-07-08T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Jovi Fakeman",
+              "has_pending_followup": false,
+              "id": "<id:18>",
+              "last_contacted": "2026-07-08T16:55:59.741874Z",
+              "methods": [
+                {
+                  "id": "<id:38>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:18>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:38>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:18>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "birthday": "1994-08-08T00:00:00Z",
+              "cadence": "weekly",
+              "contact_by": "2026-07-09T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Jovi Sampleby",
+              "has_pending_followup": false,
+              "id": "<id:19>",
+              "last_contacted": "2026-07-09T16:23:43.538744Z",
+              "methods": [
+                {
+                  "id": "<id:39>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:19>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:39>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:19>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "weekly",
+              "contact_by": "2026-07-09T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Jovi Stubbings",
+              "has_pending_followup": false,
+              "how_met": "synth-prodshaped-met-at-a-conference",
+              "id": "<id:20>",
+              "last_contacted": "2026-07-09T21:27:45.936833Z",
+              "methods": [
+                {
+                  "id": "<id:40>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:20>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:40>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:20>"
+              },
+              "updated_at": "<ts>"
+            }
+          ],
+          "meta": {
+            "pagination": {
+              "limit": 20,
+              "page": 1,
+              "pages": 9,
+              "total": 168
+            }
+          },
+          "success": true
+        }
+      }
+    ],
+    "POST /api/v1/contacts/:id/interactions": [
+      {
+        "method": "POST",
+        "requestUrl": "/api/v1/contacts/<id:1>/interactions",
+        "query": {},
+        "status": 201,
+        "body": {
+          "data": {
+            "contact_id": "<id:1>",
+            "created_at": "<ts>",
+            "direction": "mutual",
+            "id": "<id:144>",
+            "occurred_at": "2026-07-10T15:15:21.569786Z",
+            "source": "manual"
+          },
+          "success": true
+        },
+        "requestBody": {
+          "direction": "mutual"
+        }
+      }
+    ]
+  },
+  "dialogs": []
+}

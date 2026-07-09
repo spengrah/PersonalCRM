@@ -1,0 +1,568 @@
+{
+  "captureFormatVersion": 1,
+  "captureGeneratorVersion": 1,
+  "tour": "dashboard",
+  "seq": 5,
+  "behaviors": ["CAD-027"],
+  "note": "overdue list, name sort (alphabetical)",
+  "url": "/dashboard",
+  "pair": {
+    "id": "sort",
+    "role": "sort-name"
+  },
+  "serverTime": {
+    "currentTime": "2026-07-10T16:03:03.93589016Z",
+    "isAccelerated": true,
+    "accelerationFactor": 60,
+    "baseTime": "2026-07-09T15:07:20Z",
+    "environment": "testing"
+  },
+  "aria": {
+    "role": "root",
+    "children": [
+      {
+        "role": "navigation",
+        "children": [
+          {
+            "role": "heading",
+            "name": "Personal CRM",
+            "level": 1
+          },
+          {
+            "role": "link",
+            "name": "Dashboard",
+            "children": [
+              {
+                "role": "/url",
+                "children": [
+                  {
+                    "role": "text",
+                    "text": "/dashboard"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "role": "link",
+            "name": "Contacts",
+            "children": [
+              {
+                "role": "/url",
+                "children": [
+                  {
+                    "role": "text",
+                    "text": "/contacts"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "role": "link",
+            "name": "Birthdays",
+            "children": [
+              {
+                "role": "/url",
+                "children": [
+                  {
+                    "role": "text",
+                    "text": "/birthdays"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "role": "link",
+            "name": "Imports",
+            "children": [
+              {
+                "role": "/url",
+                "children": [
+                  {
+                    "role": "text",
+                    "text": "/imports"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "role": "link",
+            "name": "Settings",
+            "children": [
+              {
+                "role": "/url",
+                "children": [
+                  {
+                    "role": "text",
+                    "text": "/settings"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "role": "button",
+            "name": "Jul 10, 04:02:22 PM 60x"
+          }
+        ]
+      },
+      {
+        "role": "heading",
+        "name": "Action Required",
+        "level": 2
+      },
+      {
+        "role": "paragraph",
+        "children": [
+          {
+            "role": "text",
+            "text": "148 contacts need your attention"
+          }
+        ]
+      },
+      {
+        "role": "link",
+        "name": "Add Contact",
+        "children": [
+          {
+            "role": "/url",
+            "children": [
+              {
+                "role": "text",
+                "text": "/contacts/new"
+              }
+            ]
+          },
+          {
+            "role": "button",
+            "name": "Add Contact"
+          }
+        ]
+      },
+      {
+        "role": "text",
+        "text": "Sort by:"
+      },
+      {
+        "role": "button",
+        "name": "Most Urgent"
+      },
+      {
+        "role": "button",
+        "name": "Name"
+      },
+      {
+        "role": "button",
+        "name": "Last Contacted"
+      },
+      {
+        "role": "heading",
+        "name": "synth-prodshaped-Brux Dummond (merged)",
+        "level": 3
+      },
+      {
+        "role": "text",
+        "text": "(weekly cadence)"
+      },
+      {
+        "role": "strong",
+        "children": [
+          {
+            "role": "text",
+            "text": "1 days overdue"
+          }
+        ]
+      },
+      {
+        "role": "text",
+        "text": "- Last contacted Yesterday"
+      },
+      {
+        "role": "link",
+        "name": "<email:4>",
+        "children": [
+          {
+            "role": "/url",
+            "children": [
+              {
+                "role": "text",
+                "text": "mailto:<email:4>"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "role": "text",
+        "text": "Email"
+      },
+      {
+        "role": "link",
+        "name": "<email:21>",
+        "children": [
+          {
+            "role": "/url",
+            "children": [
+              {
+                "role": "text",
+                "text": "mailto:<email:21>"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "role": "text",
+        "text": "Email"
+      },
+      {
+        "role": "link",
+        "name": "View details",
+        "children": [
+          {
+            "role": "/url",
+            "children": [
+              {
+                "role": "text",
+                "text": "/contacts/<id:100>"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "role": "paragraph",
+        "children": [
+          {
+            "role": "text",
+            "text": "💡 Send a quick check-in message"
+          }
+        ]
+      },
+      {
+        "role": "button",
+        "name": "Mark as Contacted"
+      },
+      {
+        "role": "heading",
+        "name": "synth-prodshaped-Brux Fakeman",
+        "level": 3
+      },
+      {
+        "__ariaTruncated__": 1322
+      }
+    ]
+  },
+  "apiResponses": {},
+  "fields": {
+    "overdueCards": [
+      {
+        "daysOverdue": 1,
+        "lastContacted": "2026-07-09T05:21:43.220559Z",
+        "name": "synth-prodshaped-Brux Dummond (merged)",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-yellow-200 bg-yellow-50"
+      },
+      {
+        "daysOverdue": 0,
+        "lastContacted": "2026-07-10T15:15:21.569786Z",
+        "name": "synth-prodshaped-Brux Fakeman",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-yellow-200 bg-yellow-50"
+      },
+      {
+        "daysOverdue": 0,
+        "lastContacted": null,
+        "name": "synth-prodshaped-Brux Fakeman",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-yellow-200 bg-yellow-50"
+      },
+      {
+        "daysOverdue": 90,
+        "lastContacted": "2026-04-11T13:07:04.304758Z",
+        "name": "synth-prodshaped-Brux Fixtura",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-red-200 bg-red-50"
+      },
+      {
+        "daysOverdue": 0,
+        "lastContacted": null,
+        "name": "synth-prodshaped-Brux Fixtura",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-yellow-200 bg-yellow-50"
+      },
+      {
+        "daysOverdue": 90,
+        "lastContacted": "2026-04-11T13:07:04.304758Z",
+        "name": "synth-prodshaped-Brux Placeholdt",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-red-200 bg-red-50"
+      },
+      {
+        "daysOverdue": 90,
+        "lastContacted": "2026-04-11T13:07:04.304758Z",
+        "name": "synth-prodshaped-Brux Placeholdt",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-red-200 bg-red-50"
+      },
+      {
+        "daysOverdue": 1,
+        "lastContacted": "2026-07-09T14:39:14.831492Z",
+        "name": "synth-prodshaped-Brux Placeholdt",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-yellow-200 bg-yellow-50"
+      },
+      {
+        "daysOverdue": 90,
+        "lastContacted": "2026-04-11T13:07:04.304758Z",
+        "name": "synth-prodshaped-Brux Sampleby",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-red-200 bg-red-50"
+      },
+      {
+        "daysOverdue": 90,
+        "lastContacted": "2026-04-11T13:07:04.304758Z",
+        "name": "synth-prodshaped-Brux Sampleby",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-red-200 bg-red-50"
+      },
+      {
+        "daysOverdue": 90,
+        "lastContacted": "2026-04-11T13:07:04.304758Z",
+        "name": "synth-prodshaped-Brux Stubbings",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-red-200 bg-red-50"
+      },
+      {
+        "daysOverdue": 90,
+        "lastContacted": "2026-04-11T13:07:04.304758Z",
+        "name": "synth-prodshaped-Cyon Fakeman",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-red-200 bg-red-50"
+      },
+      {
+        "daysOverdue": 90,
+        "lastContacted": "2026-04-11T13:07:04.304758Z",
+        "name": "synth-prodshaped-Cyon Fixtura",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-red-200 bg-red-50"
+      },
+      {
+        "daysOverdue": 0,
+        "lastContacted": null,
+        "name": "synth-prodshaped-Cyon Placeholdt",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-yellow-200 bg-yellow-50"
+      },
+      {
+        "daysOverdue": 0,
+        "lastContacted": null,
+        "name": "synth-prodshaped-Cyon Probeworth",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-yellow-200 bg-yellow-50"
+      },
+      {
+        "daysOverdue": 0,
+        "lastContacted": "2026-07-09T17:12:03.531428Z",
+        "name": "synth-prodshaped-Cyon Sampleby",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-yellow-200 bg-yellow-50"
+      },
+      {
+        "daysOverdue": 90,
+        "lastContacted": "2026-04-11T13:07:04.304758Z",
+        "name": "synth-prodshaped-Cyon Synthington",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-red-200 bg-red-50"
+      },
+      {
+        "daysOverdue": 0,
+        "lastContacted": "2026-07-09T16:51:12.629975Z",
+        "name": "synth-prodshaped-Cyon Synthington",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-yellow-200 bg-yellow-50"
+      },
+      {
+        "daysOverdue": 1,
+        "lastContacted": "2026-07-09T14:18:14.36908Z",
+        "name": "synth-prodshaped-Cyon Testwell",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-yellow-200 bg-yellow-50"
+      },
+      {
+        "daysOverdue": 0,
+        "lastContacted": "2026-07-10T02:21:44.20176Z",
+        "name": "synth-prodshaped-Cyon Testwell",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-yellow-200 bg-yellow-50"
+      },
+      {
+        "daysOverdue": 0,
+        "lastContacted": null,
+        "name": "synth-prodshaped-Cyon Testwell",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-yellow-200 bg-yellow-50"
+      },
+      {
+        "daysOverdue": 90,
+        "lastContacted": "2026-04-11T13:07:04.304758Z",
+        "name": "synth-prodshaped-Dax Fakeman",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-red-200 bg-red-50"
+      },
+      {
+        "daysOverdue": 0,
+        "lastContacted": "2026-07-10T12:13:51.81225Z",
+        "name": "synth-prodshaped-Dax Fakeman",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-yellow-200 bg-yellow-50"
+      },
+      {
+        "daysOverdue": 90,
+        "lastContacted": "2026-04-11T13:07:04.304758Z",
+        "name": "synth-prodshaped-Dax Fixtura",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-red-200 bg-red-50"
+      },
+      {
+        "daysOverdue": 0,
+        "lastContacted": null,
+        "name": "synth-prodshaped-Dax Fixtura",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-yellow-200 bg-yellow-50"
+      },
+      {
+        "daysOverdue": 90,
+        "lastContacted": "2026-04-11T13:07:04.304758Z",
+        "name": "synth-prodshaped-Dax Mockford",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-red-200 bg-red-50"
+      },
+      {
+        "daysOverdue": 1,
+        "lastContacted": "2026-07-08T21:56:20.35743Z",
+        "name": "synth-prodshaped-Dax Mockford",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-yellow-200 bg-yellow-50"
+      },
+      {
+        "daysOverdue": 1,
+        "lastContacted": "2026-07-09T08:20:11.706182Z",
+        "name": "synth-prodshaped-Dax Mockford",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-yellow-200 bg-yellow-50"
+      },
+      {
+        "daysOverdue": 1,
+        "lastContacted": "2026-07-08T21:00:59.288783Z",
+        "name": "synth-prodshaped-Dax Placeholdt",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-yellow-200 bg-yellow-50"
+      },
+      {
+        "daysOverdue": 0,
+        "lastContacted": null,
+        "name": "synth-prodshaped-Dax Probeworth",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-yellow-200 bg-yellow-50"
+      },
+      {
+        "daysOverdue": 0,
+        "lastContacted": "2026-07-09T17:35:52.820053Z",
+        "name": "synth-prodshaped-Dax Synthington",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-yellow-200 bg-yellow-50"
+      },
+      {
+        "daysOverdue": 1,
+        "lastContacted": "2026-07-08T18:35:19.321611Z",
+        "name": "synth-prodshaped-Dax Testwell",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-yellow-200 bg-yellow-50"
+      },
+      {
+        "daysOverdue": 1,
+        "lastContacted": "2026-07-09T12:49:41.598778Z",
+        "name": "synth-prodshaped-Dax Testwell",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-yellow-200 bg-yellow-50"
+      },
+      {
+        "daysOverdue": 90,
+        "lastContacted": "2026-04-11T13:07:04.304758Z",
+        "name": "synth-prodshaped-Fenn Fakeman",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-red-200 bg-red-50"
+      },
+      {
+        "daysOverdue": 0,
+        "lastContacted": null,
+        "name": "synth-prodshaped-Fenn Fixtura",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-yellow-200 bg-yellow-50"
+      },
+      {
+        "daysOverdue": 90,
+        "lastContacted": "2026-04-11T13:07:04.304758Z",
+        "name": "synth-prodshaped-Fenn Probeworth",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-red-200 bg-red-50"
+      },
+      {
+        "daysOverdue": 90,
+        "lastContacted": "2026-04-11T13:07:04.304758Z",
+        "name": "synth-prodshaped-Glyph Dummond",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-red-200 bg-red-50"
+      },
+      {
+        "daysOverdue": 0,
+        "lastContacted": null,
+        "name": "synth-prodshaped-Glyph Dummond",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-yellow-200 bg-yellow-50"
+      },
+      {
+        "daysOverdue": 90,
+        "lastContacted": "2026-04-11T13:07:04.304758Z",
+        "name": "synth-prodshaped-Glyph Fakeman",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-red-200 bg-red-50"
+      },
+      {
+        "daysOverdue": 2,
+        "lastContacted": "2026-07-08T14:14:39.662256Z",
+        "name": "synth-prodshaped-Glyph Fakeman",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-yellow-200 bg-yellow-50"
+      },
+      {
+        "daysOverdue": 0,
+        "lastContacted": null,
+        "name": "synth-prodshaped-Glyph Fakeman",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-yellow-200 bg-yellow-50"
+      },
+      {
+        "daysOverdue": 90,
+        "lastContacted": "2026-04-11T13:07:04.304758Z",
+        "name": "synth-prodshaped-Glyph Fixtura",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-red-200 bg-red-50"
+      },
+      {
+        "daysOverdue": 0,
+        "lastContacted": null,
+        "name": "synth-prodshaped-Glyph Mockford",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-yellow-200 bg-yellow-50"
+      },
+      {
+        "daysOverdue": 90,
+        "lastContacted": "2026-04-11T13:07:04.304758Z",
+        "name": "synth-prodshaped-Glyph Placeholdt",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-red-200 bg-red-50"
+      },
+      {
+        "daysOverdue": 1,
+        "lastContacted": "2026-07-09T14:02:56.585982Z",
+        "name": "synth-prodshaped-Glyph Sampleby",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-yellow-200 bg-yellow-50"
+      },
+      {
+        "daysOverdue": 0,
+        "lastContacted": null,
+        "name": "synth-prodshaped-Glyph Stubbings",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-yellow-200 bg-yellow-50"
+      },
+      {
+        "daysOverdue": 90,
+        "lastContacted": "2026-04-11T13:07:04.304758Z",
+        "name": "synth-prodshaped-Glyph Synthington",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-red-200 bg-red-50"
+      },
+      {
+        "daysOverdue": 1,
+        "lastContacted": "2026-07-08T16:55:59.741874Z",
+        "name": "synth-prodshaped-Jovi Fakeman",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-yellow-200 bg-yellow-50"
+      },
+      {
+        "daysOverdue": 90,
+        "lastContacted": "2026-04-11T13:07:04.304758Z",
+        "name": "synth-prodshaped-Jovi Placeholdt",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-red-200 bg-red-50"
+      },
+      {
+        "daysOverdue": 0,
+        "lastContacted": null,
+        "name": "synth-prodshaped-Jovi Probeworth",
+        "tierClass": "bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow border-yellow-200 bg-yellow-50"
+      },
+      {
+        "__truncated__": 98
+      }
+    ]
+  },
+  "dialogs": []
+}

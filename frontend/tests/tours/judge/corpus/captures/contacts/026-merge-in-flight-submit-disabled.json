@@ -1,0 +1,119 @@
+{
+  "captureFormatVersion": 1,
+  "captureGeneratorVersion": 1,
+  "tour": "contacts",
+  "seq": 26,
+  "behaviors": ["CON-043"],
+  "note": "merge in flight: submit disabled",
+  "url": "/contacts/<id:4>?sort=cadence&order=desc",
+  "pair": {
+    "id": "merge-CON-043",
+    "role": "in-flight"
+  },
+  "serverTime": {
+    "currentTime": "2026-07-10T15:23:31.1689697Z",
+    "isAccelerated": true,
+    "accelerationFactor": 60,
+    "baseTime": "2026-07-09T15:07:20Z",
+    "environment": "testing"
+  },
+  "aria": {
+    "role": "root",
+    "children": [
+      {
+        "role": "heading",
+        "name": "Merge Contacts",
+        "level": 2
+      },
+      {
+        "role": "button"
+      },
+      {
+        "role": "text",
+        "text": "S"
+      },
+      {
+        "role": "heading",
+        "name": "synth-prodshaped-Brux Dummond (merged)",
+        "level": 3,
+        "children": [
+          {
+            "role": "text",
+            "text": "synth-prodshaped-Brux Dummond (merged)"
+          },
+          {
+            "role": "img"
+          }
+        ]
+      },
+      {
+        "role": "paragraph",
+        "children": [
+          {
+            "role": "text",
+            "text": "Source: \"synth-prodshaped-Brux Dummond\" —"
+          },
+          {
+            "role": "button",
+            "name": "use this"
+          }
+        ]
+      },
+      {
+        "role": "text",
+        "text": "Keeping Merge from Archiving synth-prodshaped-Brux Dummond (<email:21>)"
+      },
+      {
+        "role": "button",
+        "disabled": true
+      },
+      {
+        "role": "heading",
+        "name": "Resolve Conflicts",
+        "level": 4
+      },
+      {
+        "role": "text",
+        "text": "Cadence"
+      },
+      {
+        "role": "button",
+        "name": "Weekly"
+      },
+      {
+        "role": "button",
+        "name": "Monthly"
+      },
+      {
+        "role": "heading",
+        "name": "Will Be Merged",
+        "level": 4
+      },
+      {
+        "role": "text",
+        "text": "Contact methods 1 unique added Notes None Interactions None Calendar events None"
+      },
+      {
+        "role": "button",
+        "name": "Cancel",
+        "disabled": true
+      },
+      {
+        "role": "button",
+        "name": "Merging...",
+        "disabled": true,
+        "children": [
+          {
+            "role": "img"
+          },
+          {
+            "role": "text",
+            "text": "Merging..."
+          }
+        ]
+      }
+    ]
+  },
+  "apiResponses": {},
+  "dialogs": []
+}

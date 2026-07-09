@@ -1,0 +1,176 @@
+{
+  "captureFormatVersion": 1,
+  "captureGeneratorVersion": 1,
+  "tour": "contacts",
+  "seq": 22,
+  "behaviors": ["CON-043"],
+  "note": "preview loaded: transfer summary + conflict toggle(s) for the actually-conflicting field(s)",
+  "url": "/contacts/<id:4>?sort=cadence&order=desc",
+  "pair": {
+    "id": "merge-CON-043",
+    "role": "preview-loaded"
+  },
+  "serverTime": {
+    "currentTime": "2026-07-10T15:21:56.08961534Z",
+    "isAccelerated": true,
+    "accelerationFactor": 60,
+    "baseTime": "2026-07-09T15:07:20Z",
+    "environment": "testing"
+  },
+  "aria": {
+    "role": "root",
+    "children": [
+      {
+        "role": "heading",
+        "name": "Merge Contacts",
+        "level": 2
+      },
+      {
+        "role": "button"
+      },
+      {
+        "role": "text",
+        "text": "S"
+      },
+      {
+        "role": "heading",
+        "name": "synth-prodshaped-Brux Testwell",
+        "level": 3,
+        "children": [
+          {
+            "role": "text",
+            "text": "synth-prodshaped-Brux Testwell"
+          },
+          {
+            "role": "img"
+          }
+        ]
+      },
+      {
+        "role": "paragraph",
+        "children": [
+          {
+            "role": "text",
+            "text": "Source: \"synth-prodshaped-Brux Dummond\" —"
+          },
+          {
+            "role": "button",
+            "name": "use this"
+          }
+        ]
+      },
+      {
+        "role": "text",
+        "text": "Keeping Merge from Archiving synth-prodshaped-Brux Dummond (<email:21>)"
+      },
+      {
+        "role": "button"
+      },
+      {
+        "role": "heading",
+        "name": "Resolve Conflicts",
+        "level": 4
+      },
+      {
+        "role": "text",
+        "text": "Cadence"
+      },
+      {
+        "role": "button",
+        "name": "Weekly"
+      },
+      {
+        "role": "button",
+        "name": "Monthly"
+      },
+      {
+        "role": "heading",
+        "name": "Will Be Merged",
+        "level": 4
+      },
+      {
+        "role": "text",
+        "text": "Contact methods 1 unique added Notes None Interactions None Calendar events None"
+      },
+      {
+        "role": "button",
+        "name": "Cancel"
+      },
+      {
+        "role": "button",
+        "name": "Merge Contacts"
+      }
+    ]
+  },
+  "apiResponses": {
+    "GET /api/v1/contacts/:id/merge/preview": [
+      {
+        "method": "GET",
+        "requestUrl": "/api/v1/contacts/<id:4>/merge/preview?source_id=<id:71>",
+        "query": {
+          "source_id": "<id:71>"
+        },
+        "status": 200,
+        "body": {
+          "data": {
+            "calendar_events_to_update": 0,
+            "duplicate_methods": 0,
+            "interactions_to_transfer": 0,
+            "methods_to_transfer": 1,
+            "notes_to_transfer": 0,
+            "source_contact": {
+              "cadence": "monthly",
+              "contact_by": "2026-04-11T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Brux Dummond",
+              "has_pending_followup": false,
+              "id": "<id:71>",
+              "last_contacted": "2026-04-11T13:07:04.304758Z",
+              "methods": [
+                {
+                  "id": "<id:72>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:21>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:72>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:21>"
+              },
+              "updated_at": "<ts>"
+            },
+            "target_contact": {
+              "cadence": "weekly",
+              "contact_by": "2026-07-09T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Brux Testwell",
+              "has_pending_followup": false,
+              "id": "<id:4>",
+              "last_contacted": "2026-07-09T05:21:43.220559Z",
+              "methods": [
+                {
+                  "id": "<id:24>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:4>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:24>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:4>"
+              },
+              "updated_at": "<ts>"
+            }
+          },
+          "success": true
+        }
+      }
+    ]
+  },
+  "dialogs": []
+}

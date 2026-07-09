@@ -1,0 +1,39 @@
+{
+  "id": "DSH-005-doctored",
+  "behavior_id": "DSH-005",
+  "source": "doctored",
+  "metadata": {
+    "capture_generator_version": 1
+  },
+  "captures": ["dashboard/008-after-mark-as-contacted-mutual-interaction-overdue-refetch-n.json"],
+  "doctor": {
+    "base_case": "DSH-005-clean",
+    "mutation": {
+      "op": "delete_endpoint",
+      "role": "mark-after",
+      "endpoint": "GET /api/v1/contacts/overdue"
+    }
+  },
+  "expected": [
+    {
+      "then_index": 0,
+      "grader": "verifier",
+      "verdict": "fail"
+    },
+    {
+      "then_index": 1,
+      "grader": "verifier",
+      "verdict": "unsure"
+    },
+    {
+      "then_index": 2,
+      "grader": "verifier",
+      "verdict": "unsure"
+    },
+    {
+      "then_index": 3,
+      "grader": "verifier",
+      "verdict": "unsure"
+    }
+  ]
+}
