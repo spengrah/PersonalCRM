@@ -37,6 +37,7 @@ import {
   type UuidMapper,
 } from './normalize'
 import { capturesDir, getCurrentRunId } from './run-dir'
+import { sortApiResponses } from './sort-responses'
 
 const MUTATING = new Set(['POST', 'PUT', 'PATCH'])
 
@@ -50,22 +51,6 @@ export interface WithDialogOptions {
 
 export interface RouteHold {
   release: () => Promise<void>
-}
-
-// Emit apiResponses with a deterministic order: keys sorted, and each
-// endpoint's items sorted by (method, requestUrl, status) — the buffer drains
-// in response-completion order, which is non-deterministic run-to-run.
-function sortApiResponses(map: ApiResponses): ApiResponses {
-  const sorted: ApiResponses = {}
-  for (const key of Object.keys(map).sort()) {
-    sorted[key] = [...map[key]].sort(
-      (a, b) =>
-        a.method.localeCompare(b.method) ||
-        a.requestUrl.localeCompare(b.requestUrl) ||
-        a.status - b.status
-    )
-  }
-  return sorted
 }
 
 function slugify(note: string): string {

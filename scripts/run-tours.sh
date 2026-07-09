@@ -53,7 +53,23 @@ fi
 export TOURS_RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
 export TOURS_GIT_SHA="$(git rev-parse HEAD)"
 export TOURS_IMAGE_DIGEST="$IMAGE_DIGEST"
-export TOURS_SEED_PROFILE="prod-shaped"
+
+# Seed-profile provenance recorded in the manifest:
+#   - an explicit TOURS_SEED_PROFILE (operator-declared) always wins — this is
+#     how a LOCAL corpus sweep declares the 'prod-shaped' provenance it
+#     established out-of-band (crm-admin --reset-and-seed --profile prod-shaped);
+#   - else, when the staging reset was SKIPPED, the seed is whatever was already
+#     on the target → 'unknown' (do NOT assert 'prod-shaped');
+#   - else (this wrapper ran the prod-shaped reset) → 'prod-shaped'.
+# The manifest label is a hint only; the binding PII guarantee is the corpus
+# data audit (synth-prodshaped- name gate + email/phone scrub).
+if [ -n "${TOURS_SEED_PROFILE:-}" ]; then
+    export TOURS_SEED_PROFILE
+elif [ "${TOURS_SKIP_RESET:-0}" = "1" ]; then
+    export TOURS_SEED_PROFILE="unknown"
+else
+    export TOURS_SEED_PROFILE="prod-shaped"
+fi
 
 echo "run-tours: launching tours (runId=$TOURS_RUN_ID)..." >&2
 cd "$REPO_ROOT/frontend"

@@ -1,0 +1,30 @@
+{
+  "id": "CON-042-clean",
+  "behavior_id": "CON-042",
+  "source": "clean",
+  "metadata": {
+    "capture_generator_version": 1
+  },
+  "captures": [
+    "contacts/028-detail-before-delete-dismiss-path.json",
+    "contacts/029-after-dismiss-still-on-detail-contact-not-deleted-probe-get-.json",
+    "contacts/030-after-accept-returned-to-list-delete-204-probe-get-404-confi.json"
+  ],
+  "expected": [
+    {
+      "then_index": 0,
+      "grader": "judge",
+      "verdict": "pass"
+    },
+    {
+      "then_index": 1,
+      "grader": "verifier",
+      "verdict": "pass"
+    },
+    {
+      "then_index": 2,
+      "grader": "verifier",
+      "verdict": "pass"
+    }
+  ]
+}

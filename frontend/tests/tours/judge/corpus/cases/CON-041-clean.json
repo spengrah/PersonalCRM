@@ -1,0 +1,24 @@
+{
+  "id": "CON-041-clean",
+  "behavior_id": "CON-041",
+  "source": "clean",
+  "metadata": {
+    "capture_generator_version": 1
+  },
+  "captures": [
+    "contacts/004-action-edit-consumed-once-and-stripped-from-url.json",
+    "contacts/005-action-merge-consumed-once-and-stripped-from-url.json"
+  ],
+  "expected": [
+    {
+      "then_index": 0,
+      "grader": "verifier",
+      "verdict": "pass"
+    },
+    {
+      "then_index": 1,
+      "grader": "verifier",
+      "verdict": "pass"
+    }
+  ]
+}

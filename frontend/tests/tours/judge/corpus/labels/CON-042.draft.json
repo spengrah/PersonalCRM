@@ -1,0 +1,14 @@
+{
+  "case_id": "CON-042-clean",
+  "behavior_id": "CON-042",
+  "drafted_by": "PENDING-manual-stronger-model-run",
+  "note": "DRAFT — placeholder pending the manual stronger-model authoring run and the maintainer's correction. NOT ground truth and NOT a merge gate.",
+  "items": [
+    {
+      "then_index": 0,
+      "draft_verdict": "unsure",
+      "draft_critique": "PENDING: the delete confirm dialog message (dialogs[].message = \"Are you sure you want to delete this contact? This action cannot be undone.\") must be judged for whether it warns of irreversibility. Fill via the labeling CLI, then correct.",
+      "status": "draft"
+    }
+  ]
+}
