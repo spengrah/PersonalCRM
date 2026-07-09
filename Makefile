@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev dev-seed staging-reset build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry spec-lint api-types api-types-check
+.PHONY: help setup dev dev-seed staging-reset tours build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry spec-lint api-types api-types-check
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -280,6 +280,9 @@ dev-api-restart:
 
 staging-reset: ## HARD reset + reseed STAGING — manual force / escape hatch (full wipe regardless of oauth; deploy-staging.yml auto-reseeds on seed-surface changes; fail-closed production refuse; STAGING-only)
 	@bash scripts/staging-reset.sh   # ssh STAGING_HOST -> refuse if CRM_ENV is a production alias or empty -> stop backend -> ephemeral crm-admin --reset-and-seed --profile prod-shaped --yes (deployed image) -> start backend
+
+tours: ## Reset staging + run the agentic UX QA tours. Config from env only: TOURS_BASE_URL, TOURS_API_KEY, TOURS_API_URL. Captures land in frontend/tests/tours/.runs/ (gitignored). TOURS_SKIP_RESET=1 skips the reset.
+	@scripts/run-tours.sh
 
 # Native PostgreSQL (for containerized development without Docker-in-Docker)
 # Symlink the main checkout's gitignored env files (.env, frontend/.env.local,

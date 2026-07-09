@@ -123,3 +123,29 @@ Vision/screenshot escalation, free-form agentic exploration, per-PR diff-scoped 
 ## SSOT note
 
 One authoring-guidance spillover, no schema change: where relevant, ux behaviors benefit from negative/collateral `then` items ("no unrelated destructive action is visible/enabled") — the judge checks unexpected side effects only if the spec names them. Apply opportunistically during future curation; no bulk edit.
+
+## Addendum — 2026-07-09: arc refinement & implementation decisions
+
+This addendum extends the design in place (it does not supersede the narrative above) with the decisions taken when scoping the implementation as a plan-and-ship arc. Where a decision refines an earlier section, it is noted.
+
+### Arc shape
+
+The implementation ships as **three PRs (PR1 → PR2 → PR3), terminating in advisory mode**; **PR4 (reporter issue-mode) is deferred to a separate later arc**. This refines "Implementation shape (~4 PRs)" above. Rationale: the prove phase that gates issue-mode (held-out fail-precision bar + N consecutive human-confirmed clean live sweeps) is inherently time-based and human-gated, so an automated arc cannot merge its way through it. The arc therefore terminates with the harness running in advisory mode across the first cut — which is precisely the substrate the prove phase then runs on. Planning PR4 becomes sensible only once a v0 corpus exists and live sweeps are accumulating. Two human-in-the-loop gates remain: (1) corpus labeling mid-arc, (2) the prove-phase → issue-mode flip in the deferred PR4.
+
+The first-cut inventory, stated exactly (current `ux` only; `proposed` skipped): **20 current behaviors** — PR1 `contacts.tour.ts` covers 7 (CON-038/040/041/042/043/044/045; CON-046 is `proposed`); PR3 covers 13 (`dashboard.tour.ts`: DSH-001/002/003/004/005/007, with DSH-006/009 `proposed`; `cadence-followup.tour.ts`: CAD-026/027/028/029/030/031/033).
+
+### Environment
+
+The **sandbox→staging network exception is complete** (the ops prerequisite in "Environment & prerequisites"); staging is the PR1 target from day one, no local-stack workaround required. The sandbox has a Playwright chromium build available; what it lacks is docker (the app-under-test's stack manager), not the browser — which does not matter when tours point at staging over the network.
+
+### Decisions
+
+- **Reset-before-run per sweep.** Each tour sweep first invokes `scripts/staging-reset.sh` (ssh mode) to obtain a known prod-shaped world, then runs all tours against it. This makes the destructive `when`s in the contacts scope (CON-042 delete, CON-043 merge, CON-044 mark-contacted) repeatable, and the run manifest pins the resulting staging image digest.
+- **Hybrid grader (refines "Judge").** Each `then` item is classified as **deterministic-verifiable** (checkable in code from captured evidence — e.g. CON-041 URL-param stripped via regex, CON-044 interaction logged via a `/api/v1` JSON-path, "arrows inert" via aria-node presence) or **judge-only** (semantic — e.g. CON-042 "warns the action cannot be undone"). Deterministic items are checked by verifiers with ordinary unit tests; the LLM judge owns only the semantic residue, and **fail-precision (the north star) is measured over the judge's residual items**. This follows the surveyed "verifiers before judges" rule and directly lifts judge precision by removing mechanical noise. Consequence for the capture contract: captures must be stored **parseably** (queryable aria structure, `/api/v1` responses keyed by endpoint, URL as a field), not as opaque text blobs.
+- **Server-time frame per capture (refines "Capture contract").** Accelerated time cannot be frozen — `accelerated.GetCurrentTime()` returns `TIME_BASE + wall_elapsed × TIME_ACCELERATION`, always advancing. Rather than perturb staging's clock, each capture records the app's current accelerated `now` plus the acceleration factor (read from the system-time endpoint); the judge and verifiers evaluate time-dependent `then` items (CON-045 birthdays, CAD due-dates, DSH widgets) **in that recorded frame**, and time-dependent before/after brackets are kept tight enough not to straddle a day boundary.
+- **Before/after state-delta captures (refines "Capture contract").** Behaviors whose `when` mutates state are captured as an explicit before/after **pair** the grader can diff, rather than two independent snapshots — the "grade what changed in the world" discipline.
+- **Corpus labeling = agent-drafted, human-corrected (refines "Judge evals").** Doctored fails remain self-labeled by construction (a deterministic single-point mutation of a clean capture manufactures a known fail on exactly one item; the human validates the mutation). For the real/clean/ambiguous cases that need genuine ground truth, a labeling CLI pre-fills **draft** per-item verdicts + critiques using a **different/stronger model than the judge** (avoiding the circularity the "no LLM-generated ground truth" rule guards against); the maintainer reviews and corrects, and the corrected labels are the ground truth. PR2 lands the deterministic doctoring tool and this labeling CLI alongside the seed corpus.
+
+### Eval-guide fold-ins
+
+A practitioner synthesis of the BenchFlow `awesome-evals` corpus (the same sources this design already drew on) largely validated the plan; because this judge is a read-only, no-tools *criticism* classifier rather than an action agent, the survey's trajectory/world-state/RL material is out of scope. Four items were folded in: the verifier layer (→ hybrid grader above); before/after state-delta captures (→ capture contract above); a **judge self-consistency metric** (repeat-verdict stability on a fixed capture) added to the PR2 eval harness; and **error-analysis-first sequencing** — deriving the judge's failure taxonomy from an open-coding pass over the first advisory sweep's real captures before finalizing the prompt and few-shots.

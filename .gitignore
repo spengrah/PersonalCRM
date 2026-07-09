@@ -192,6 +192,9 @@ test-results/
 playwright-report/
 playwright/.cache/
 
+# Tours harness live-run output (captures + manifest + traces) — never committed
+frontend/tests/tours/.runs/
+
 # Screenshots and videos from tests
 tests/screenshots/
 tests/videos/
