@@ -2,7 +2,10 @@
 version: "2"
 
 run:
-  timeout: 5m
+  # 10m (not 5m): the pre-push hook runs lint CONCURRENTLY with the -p 8 GO lane,
+  # starving golangci-lint's package-load phase past a 5m budget under load.
+  # Standalone lint finishes in ~1-2m; 10m is a real backstop, not a hang mask.
+  timeout: 10m
 
 linters:
   enable:
