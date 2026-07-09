@@ -24,17 +24,17 @@ bun run tests/tours/judge/eval/run.ts --judge --repeat 5                       #
 ## The corpus
 
 - `corpus/captures/contacts/*.json` — base capture fixtures, curated from a **local `prod-shaped` sweep**, UUID-mapped + host-redacted by the normalizer, then scrubbed (`corpus/scrub.ts`: email/phone → `<email:N>`/`<phone:N>`). Provably synthetic: every contact name carries the `synth-prodshaped-` factory prefix.
-- `corpus/cases/*.yaml` — clean cases (self-label the grader's deterministic verdicts) + doctored cases (self-labeled by a single-point mutation from `doctor.ts`).
-- `corpus/labels/*.draft.yaml` — draft judge labels (the real stronger-model fill is manual — see `DEFERRED.md`).
+- `corpus/cases/*.json` — clean cases (self-label the grader's deterministic verdicts) + doctored cases (self-labeled by a single-point mutation from `doctor.ts`).
+- `corpus/labels/*.draft.json` — draft judge labels (the real stronger-model fill is manual — see `DEFERRED.md`).
 - `corpus/pii-audit.ts` — the mechanical P0 gate over ALL committed artifacts: bans raw UUIDs / real-host URLs / emails / phones / secrets and asserts the `synth-prodshaped-` name prefix. Runs as a vitest (`corpus/pii-audit.test.ts`) over the committed tree AND as a CLI: `bun run tests/tours/judge/corpus/pii-audit.ts corpus`.
 
 ## Adding a doctored case
 
-Pick a **verifier**-tagged item, add a single-point mutation to a new `corpus/cases/*.yaml` (`op: inject_query | delete_endpoint | set_aria_disabled | reorder_ids | blank_dialog`), and set its `then_index` expected verdict to `fail` (others unchanged). Merge-gating doctored cases mutate a verifier item; a `judge`-item mutation (e.g. `blank_dialog`) is exercised only under `--judge`. Run `make qa-eval` to confirm it's caught with zero collateral.
+Pick a **verifier**-tagged item, add a single-point mutation to a new `corpus/cases/*.json` (`op: inject_query | delete_endpoint | set_aria_disabled | reorder_ids | blank_dialog`), and set its `then_index` expected verdict to `fail` (others unchanged). Merge-gating doctored cases mutate a verifier item; a `judge`-item mutation (e.g. `blank_dialog`) is exercised only under `--judge`. Run `make qa-eval` to confirm it's caught with zero collateral.
 
 ## Correcting draft labels (deferred, cheap)
 
-Edit `corpus/labels/*.draft.yaml` in place → `*.labeled.yaml`, flipping `status: draft` → `human-confirmed` and correcting the verdict/critique. Re-run nothing. See `DEFERRED.md`.
+Edit `corpus/labels/*.draft.json` in place → `*.labeled.json`, flipping `status: draft` → `human-confirmed` and correcting the verdict/critique. Re-run nothing. See `DEFERRED.md`.
 
 ## The mechanical-vs-deferred split
 

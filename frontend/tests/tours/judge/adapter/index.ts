@@ -9,12 +9,18 @@ import type { Judge } from './types'
 
 export type JudgeKind = 'codex-exec' | 'http' | 'codex-sdk'
 
-export function selectJudge(kind: string = process.env.QA_JUDGE ?? 'codex-exec'): Judge {
+// `model` overrides the adapter's default model env, so a caller (e.g. the
+// labeling CLI passing QA_LABELER_MODEL) selects a specific/stronger model
+// rather than falling back to the judge's model env.
+export function selectJudge(
+  kind: string = process.env.QA_JUDGE ?? 'codex-exec',
+  model?: string
+): Judge {
   switch (kind) {
     case 'codex-exec':
-      return makeCodexExecJudge()
+      return makeCodexExecJudge(model ? { model } : {})
     case 'http':
-      return makeHttpJudge()
+      return makeHttpJudge(model ? { model } : {})
     case 'codex-sdk':
       throw new Error(
         'QA_JUDGE=codex-sdk is a deferred follow-up (add @openai/codex-sdk + the impl behind the ' +

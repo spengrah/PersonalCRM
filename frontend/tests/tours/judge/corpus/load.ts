@@ -1,6 +1,6 @@
-// Corpus loader — bun runtime only (Bun.YAML + fs). NOT imported by any vitest
-// test (the pure schema/doctor/eval logic is tested over already-parsed
-// objects), so its use of Bun.YAML never runs under node/vitest.
+// Corpus loader. Cases + labels are committed as JSON (parsed with the portable
+// JSON.parse — no Bun.YAML dependency), so the loader runs identically under
+// node/vitest AND bun; the loader is exercised end-to-end by a vitest.
 
 import * as fs from 'fs'
 import * as path from 'path'
@@ -12,7 +12,7 @@ export function loadCapture(capturesRoot: string, ref: string): Capture {
 }
 
 export function loadCaseFile(file: string): Case {
-  return parseCase(Bun.YAML.parse(fs.readFileSync(file, 'utf8')))
+  return parseCase(JSON.parse(fs.readFileSync(file, 'utf8')))
 }
 
 export interface LoadedCorpus {
@@ -28,7 +28,7 @@ export function loadCorpus(corpusRoot: string): LoadedCorpus {
   const cases: Case[] = []
   if (fs.existsSync(casesDir)) {
     for (const f of fs.readdirSync(casesDir).sort()) {
-      if (!/\.ya?ml$/.test(f)) continue
+      if (!f.endsWith('.json')) continue
       cases.push(loadCaseFile(path.join(casesDir, f)))
     }
   }

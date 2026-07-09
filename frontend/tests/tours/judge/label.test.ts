@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { buildDraftArtifact, draftForCase } from './label'
+import { resolveCaseCaptures } from './doctor'
 import { cap } from './grader/fixtures'
 import type { Judge, PerItemVerdict } from './adapter/types'
 
@@ -72,5 +73,28 @@ describe('draftForCase (mocked stronger-model drafter — offline)', () => {
     )
     expect(called).toBe(false)
     expect(artifact.items).toEqual([])
+  })
+
+  it('drafts a doctored case over the MUTATED evidence (dialog blanked), not the clean one', async () => {
+    let sawDialogMessage: string | undefined
+    const drafter: Judge = async input => {
+      sawDialogMessage = input.evidence.dialogs?.[0]?.message
+      return input.items.map(i => ({
+        itemIndex: i.itemIndex,
+        verdict: 'fail',
+        citation: 'dialogs',
+        critique: 'no warning',
+      }))
+    }
+    const base = [
+      cap({ behaviors: ['CON-042'], dialogs: [{ type: 'confirm', message: 'cannot be undone' }] }),
+    ]
+    // The labeling CLI resolves captures the SAME way (applies the mutation).
+    const captures = resolveCaseCaptures(
+      { source: 'doctored', doctor: { mutation: { op: 'blank_dialog' } } },
+      base
+    )
+    await draftForCase('CON-042-doctored-nowarn', 'CON-042', captures, drafter, 'strong')
+    expect(sawDialogMessage).toBe('') // the drafter saw the DOCTORED (blanked) dialog
   })
 })

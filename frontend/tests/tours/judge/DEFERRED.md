@@ -13,13 +13,13 @@ The user is unavailable, so PR2 is engineered to be mergeable with **zero** huma
 **How to un-defer (cheap, later):**
 
 1. Run the labeling CLI to draft labels with a **stronger** model than the runtime judge (breaks the "no LLM-generated ground truth" circularity):
-   `QA_LABELER=<stronger-profile> bun run tests/tours/judge/label.ts` → writes `corpus/labels/*.draft.yaml`.
-2. The maintainer edits each `*.draft.yaml` in place into `*.labeled.yaml` (flip `status: draft` → `human-confirmed`, correct the verdict/critique). **Re-run nothing** — the corrected file is the ground truth.
+   `QA_LABELER=<stronger-profile> bun run tests/tours/judge/label.ts` → writes `corpus/labels/*.draft.json`.
+2. The maintainer edits each `*.draft.json` in place into `*.labeled.json` (flip `status: draft` → `human-confirmed`, correct the verdict/critique). **Re-run nothing** — the corrected file is the ground truth.
 3. PR4 wires the held-out fail-precision bar + the issue-mode flip on top of those labels.
 
 ## Manual authoring (needs codex quota — not a CI gate)
 
-- **Real stronger-model draft labels.** `corpus/labels/CON-042.draft.yaml` is a structural placeholder. The genuine model-drafted critiques come from the manual `label.ts` run above and are committed like the corpus captures. The merge gate is only the CLI's **machinery** (unit-tested with a mocked drafter).
+- **Real stronger-model draft labels.** `corpus/labels/CON-042.draft.json` is a structural placeholder. The genuine model-drafted critiques come from the manual `label.ts` run above and are committed like the corpus captures. The merge gate is only the CLI's **machinery** (unit-tested with a mocked drafter).
 - **Live judge smoke.** `QA_JUDGE=codex-exec bun run tests/tours/judge/eval/run.ts --judge --limit 2` exercises the live `codex exec` adapter over judge-tagged cases; `--repeat N` measures self-consistency. Advisory, never a merge gate.
 
 ## Tooling follow-ups

@@ -1,16 +1,7 @@
-// Minimal ambient declarations for the bun-runtime bits the judge CLIs use
-// (doctor.ts / label.ts / eval/run.ts / corpus/load.ts run under `bun run`).
-// These are NOT exercised by the vitest suite (which imports only the pure
-// modules), so keeping the surface tiny avoids adding @types/bun as a devDep
-// (design: no frontend/package.json change).
-
-declare namespace Bun {
-  // Bun 1.2+ built-in YAML parser (used to load corpus *.yaml cases/labels).
-  const YAML: {
-    parse(input: string): unknown
-    stringify(value: unknown): string
-  }
-}
+// Minimal ambient declaration for the bun/node runtime bits the judge CLIs use
+// (doctor.ts / label.ts / eval/run.ts run as entry scripts). Kept tiny so no
+// @types/bun devDep is needed (design: no frontend/package.json change). The
+// corpus loader parses committed JSON with the portable JSON.parse — NO Bun.YAML.
 
 interface ImportMeta {
   // Bun sets `import.meta.main` true when the module is the entry script.

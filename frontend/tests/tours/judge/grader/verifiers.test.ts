@@ -7,7 +7,7 @@ import { con041 } from './verifiers/con041'
 import { con042 } from './verifiers/con042'
 import { con043 } from './verifiers/con043'
 import { con044 } from './verifiers/con044'
-import { con045 } from './verifiers/con045'
+import { con045, expectedProximitySections } from './verifiers/con045'
 import type { Capture } from '../../support/types'
 
 function set(behaviorId: string, captures: Capture[]): CaptureSet {
@@ -354,6 +354,30 @@ describe('con043', () => {
     expect(con043(set('CON-043', caps))[2].verdict).toBe('fail')
   })
 
+  it('[4] abstains (unsure) when the in-flight submit is not aria-disabled (spinner-based)', () => {
+    const caps = clean()
+    // in-flight capture present but the submit is NOT aria-[disabled].
+    caps[6] = cap({
+      behaviors: ['CON-043'],
+      pair: pair('m', 'in-flight'),
+      aria: root([{ role: 'button', name: 'Merge Contacts' }]),
+    })
+    expect(con043(set('CON-043', caps))[4].verdict).toBe('unsure')
+  })
+
+  it('[4] fails when the before-source submit is enabled', () => {
+    const caps = clean()
+    caps[0] = cap({
+      behaviors: ['CON-043'],
+      pair: pair('m', 'open'),
+      aria: root([
+        { role: 'heading', name: 'synth-target', level: 3 },
+        { role: 'button', name: 'Merge Contacts' },
+      ]),
+    })
+    expect(con043(set('CON-043', caps))[4].verdict).toBe('fail')
+  })
+
   it('doctored: target appears in the selector → [0] fail', () => {
     const caps = clean()
     caps[1] = cap({
@@ -428,6 +452,41 @@ describe('con045', () => {
   it('[3] fail: a placeholder-year birthday shows an age', () => {
     const v = con045(set('CON-045', [birthdays({ placeholderAged: true })]))
     expect(v[3].verdict).toBe('fail')
+  })
+
+  it('[0] fail: a data-expected section heading is missing (page regressed to fewer sections)', () => {
+    // A celebrated birthday (Jan, md < July) is present in the list, but the
+    // aria carries no "Already Celebrated" heading → the expected section is
+    // missing → fail (not a lenient any-section pass).
+    const missingCelebrated = cap({
+      behaviors: ['CON-045'],
+      note: 'birthdays page',
+      serverTime: frame({ currentTime: '2026-07-12T15:48:12Z' }),
+      apiResponses: {
+        'GET /api/v1/contacts': [
+          apiItem({
+            query: { limit: '1000' },
+            body: { data: [{ full_name: 'synth-c', birthday: '1990-01-15' }] },
+          }),
+        ],
+      },
+      aria: root([
+        { role: 'text', text: 'Sunday, July 12, 2026' },
+        { role: 'heading', name: 'Upcoming Birthdays (0)', level: 2 },
+      ]),
+    })
+    expect(con045(set('CON-045', [missingCelebrated]))[0].verdict).toBe('fail')
+  })
+
+  it('expectedProximitySections computes the non-empty groups from the frame', () => {
+    const contacts = [
+      { birthday: '1990-07-12' }, // today (same month/day as the frame)
+      { birthday: '1990-08-01' }, // upcoming (later this year)
+      { birthday: '1990-01-15' }, // already celebrated (earlier this year)
+    ]
+    const s = expectedProximitySections(contacts, '2026-07-12T00:00:00Z')
+    expect([...(s ?? [])].sort()).toEqual(['celebrated', 'today', 'upcoming'])
+    expect(expectedProximitySections([], '2026-07-12T00:00:00Z')).toBeUndefined()
   })
 
   it('missing capture → unsure across all items', () => {

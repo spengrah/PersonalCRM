@@ -84,6 +84,19 @@ export function applyMutation(baseCaptures: Capture[], mutation: Mutation): Capt
   return captures
 }
 
+// Resolve the captures a case grades: for a doctored case, apply its
+// single-point mutation to the base fixtures; a clean case returns them as-is.
+// The SINGLE place the doctor mutation is applied — the eval AND the labeling
+// CLI both go through here, so a doctored case never drafts/grades the clean
+// evidence.
+export function resolveCaseCaptures(
+  c: { source: 'clean' | 'doctored'; doctor?: { mutation: Mutation } },
+  baseCaptures: Capture[]
+): Capture[] {
+  if (c.source === 'doctored' && c.doctor) return applyMutation(baseCaptures, c.doctor.mutation)
+  return baseCaptures
+}
+
 // CLI: bun run tests/tours/judge/doctor.ts <baseCaptureFile> <mutationJson> [outFile]
 // Applies the mutation to a single base capture and writes the doctored JSON.
 async function main(): Promise<void> {

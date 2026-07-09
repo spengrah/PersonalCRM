@@ -50,6 +50,30 @@ function fullList(capture: Capture): Array<Record<string, unknown>> {
     .filter((x): x is Record<string, unknown> => x !== undefined)
 }
 
+// Which proximity groups (today / upcoming / celebrated) SHOULD render, computed
+// from the dated birthdays in the recorded serverTime frame. Returns undefined
+// when the full list is missing / the frame is unparseable (no data to compute
+// from). An empty set means the list is present but holds no dated birthdays.
+export function expectedProximitySections(
+  contacts: Array<Record<string, unknown>>,
+  currentTime: string
+): Set<'today' | 'upcoming' | 'celebrated'> | undefined {
+  const now = new Date(currentTime)
+  if (Number.isNaN(now.getTime()) || contacts.length === 0) return undefined
+  // 1-indexed month to match the birthday string's captured month (07 = July).
+  const todayMd = (now.getUTCMonth() + 1) * 100 + now.getUTCDate()
+  const out = new Set<'today' | 'upcoming' | 'celebrated'>()
+  for (const c of contacts) {
+    const m = asString(c.birthday)?.match(/^\d{4}-(\d{2})-(\d{2})/)
+    if (!m) continue
+    const md = Number(m[1]) * 100 + Number(m[2])
+    if (md === todayMd) out.add('today')
+    else if (md > todayMd) out.add('upcoming')
+    else out.add('celebrated')
+  }
+  return out
+}
+
 export function con045(set: CaptureSet): ItemVerdicts {
   const cap = birthdaysCapture(set)
   const out: ItemVerdicts = {}
@@ -63,18 +87,33 @@ export function con045(set: CaptureSet): ItemVerdicts {
     nodes.map(sectionOf).filter((s): s is Exclude<Section, undefined> => s !== undefined)
   )
 
-  // [0] grouping sections present.
+  // [0] grouped into today / upcoming / already-celebrated. Data-driven: from
+  // the full list + serverTime, compute WHICH of the three groups actually has
+  // members, then require EACH such section's heading to be present. A group
+  // with members but no heading → fail; a group with no members legitimately
+  // renders no heading. Abstain when the full list is unavailable.
   out[0] = ((): ItemVerdict => {
-    if (sectionsPresent.size === 0) {
+    const expected = expectedProximitySections(fullList(cap), cap.serverTime.currentTime)
+    if (expected === undefined) {
+      return {
+        verdict: 'unsure',
+        reason: 'no full birthdays list — cannot compute expected sections',
+      }
+    }
+    const missing = [...expected].filter(s => !sectionsPresent.has(s))
+    if (missing.length > 0) {
       return {
         verdict: 'fail',
-        citation: 'birthdays aria',
-        reason: 'no proximity grouping section headings found',
+        citation: 'birthdays section headings',
+        reason: `expected proximity section(s) missing: ${missing.join(', ')}`,
       }
+    }
+    if (expected.size === 0) {
+      return { verdict: 'unsure', reason: 'no dated birthdays in the frame — grouping unprovable' }
     }
     return {
       verdict: 'pass',
-      citation: `section headings present: ${[...sectionsPresent].join(', ')}`,
+      citation: `all expected sections present: ${[...expected].join(', ')}`,
     }
   })()
 

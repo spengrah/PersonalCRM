@@ -1,0 +1,36 @@
+{
+  "id": "CON-045-clean",
+  "behavior_id": "CON-045",
+  "source": "clean",
+  "metadata": {
+    "capture_generator_version": 1
+  },
+  "captures": ["contacts/003-birthdays-page-rendered-accelerated-frame-full-list-all-card.json"],
+  "expected": [
+    {
+      "then_index": 0,
+      "grader": "verifier",
+      "verdict": "pass"
+    },
+    {
+      "then_index": 1,
+      "grader": "verifier",
+      "verdict": "pass"
+    },
+    {
+      "then_index": 2,
+      "grader": "verifier",
+      "verdict": "pass"
+    },
+    {
+      "then_index": 3,
+      "grader": "verifier",
+      "verdict": "pass"
+    },
+    {
+      "then_index": 4,
+      "grader": "verifier",
+      "verdict": "pass"
+    }
+  ]
+}

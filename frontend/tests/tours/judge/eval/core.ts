@@ -7,7 +7,7 @@
 
 import type { Capture } from '../../support/types'
 import type { Case } from '../corpus/schema'
-import { applyMutation } from '../doctor'
+import { resolveCaseCaptures } from '../doctor'
 import { gradeBehavior } from '../grader/grade'
 import type { ItemVerdicts } from '../grader/types'
 import { addToMatrix, emptyMatrix, type ConfusionMatrix, type Verdict } from './metrics'
@@ -50,10 +50,7 @@ export async function runEval(
   let judgeItemsPending = 0
 
   for (const c of cases) {
-    let captures = capturesFor(c)
-    if (c.source === 'doctored' && c.doctor) {
-      captures = applyMutation(captures, c.doctor.mutation)
-    }
+    const captures = resolveCaseCaptures(c, capturesFor(c))
     const set = { behaviorId: c.behavior_id, captures }
     const judgeVerdicts: ItemVerdicts | undefined = opts.judge
       ? await opts.judge(c.behavior_id, captures)

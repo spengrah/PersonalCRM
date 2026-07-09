@@ -157,14 +157,16 @@ export function con043(set: CaptureSet): ItemVerdicts {
   })()
 
   // [4] submit disabled before source / while preview loading / while in flight.
-  // open + preview-loading reliably carry the aria `disabled` token; the
-  // in-flight sub-state disables via a spinner (pointer-events, NOT the aria
-  // disabled token), so an aria-enabled in-flight is inconclusive rather than a
-  // proven violation — it never manufactures a fail.
+  // open + preview-loading reliably carry the aria `disabled` token, so an
+  // ENABLED one is a real violation (fail). The in-flight sub-state must be
+  // POSITIVELY verified disabled to fully bind the item; because its disable is
+  // spinner-based (not always the aria token), an absent/aria-enabled in-flight
+  // signal is UNVERIFIABLE → abstain (unsure), never pass and never fail.
   out[4] = ((): ItemVerdict => {
     const openD = open ? submitDisabled(open) : undefined
     const previewD = previewLoading ? submitDisabled(previewLoading) : undefined
-    if (openD === undefined && previewD === undefined) {
+    const inFlightD = inFlight ? submitDisabled(inFlight) : undefined
+    if (openD === undefined && previewD === undefined && inFlightD === undefined) {
       return { verdict: 'unsure', reason: 'no submit-disabled captures — no evidence' }
     }
     if (openD === false || previewD === false) {
@@ -175,9 +177,17 @@ export function con043(set: CaptureSet): ItemVerdicts {
           'the merge submit was enabled before a source was selected or while the preview loaded',
       }
     }
+    if (openD === true && previewD === true && inFlightD === true) {
+      return {
+        verdict: 'pass',
+        citation:
+          'Merge Contacts submit [disabled] before source + while preview loading + in flight',
+      }
+    }
     return {
-      verdict: 'pass',
-      citation: 'Merge Contacts submit [disabled] before source + while preview loading',
+      verdict: 'unsure',
+      reason:
+        'the in-flight submit-disabled sub-state could not be verified from the aria (spinner-based disable) — cannot fully bind',
     }
   })()
 

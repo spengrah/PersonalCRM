@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { applyMutation } from './doctor'
+import { applyMutation, resolveCaseCaptures } from './doctor'
 import { apiItem, cap, pair, root } from './grader/fixtures'
 import type { Mutation } from './corpus/schema'
 
@@ -80,5 +80,25 @@ describe('applyMutation — single-point, deterministic, non-mutating', () => {
     const base = [cap({ behaviors: ['CON-041'], url: '/contacts/<id:1>' })]
     const m: Mutation = { op: 'inject_query', param: 'action', value: 'edit' }
     expect(JSON.stringify(applyMutation(base, m))).toBe(JSON.stringify(applyMutation(base, m)))
+  })
+})
+
+describe('resolveCaseCaptures', () => {
+  const base = [
+    cap({ behaviors: ['CON-042'], dialogs: [{ type: 'confirm', message: 'cannot be undone' }] }),
+  ]
+
+  it('applies the doctor mutation for a doctored case', () => {
+    const out = resolveCaseCaptures(
+      { source: 'doctored', doctor: { mutation: { op: 'blank_dialog' } } },
+      base
+    )
+    expect(out[0].dialogs[0].message).toBe('')
+    expect(base[0].dialogs[0].message).toBe('cannot be undone') // input untouched
+  })
+
+  it('returns base captures unchanged for a clean case', () => {
+    const out = resolveCaseCaptures({ source: 'clean' }, base)
+    expect(out).toBe(base)
   })
 })

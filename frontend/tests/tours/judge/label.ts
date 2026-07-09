@@ -81,20 +81,27 @@ async function main(): Promise<void> {
   const path = await import('path')
   const { loadCorpus } = await import('./corpus/load')
   const { selectJudge } = await import('./adapter')
+  const { resolveCaseCaptures } = await import('./doctor')
 
   const corpusRoot = process.argv[2] ?? path.join(import.meta.dirname ?? __dirname, 'corpus')
   const outDir = process.argv[3] ?? path.join(corpusRoot, 'labels')
   const labelerProfile = process.env.QA_LABELER ?? 'codex-exec'
-  const drafter = selectJudge(labelerProfile)
-  const draftedBy = `${labelerProfile}${process.env.QA_LABELER_MODEL ? `:${process.env.QA_LABELER_MODEL}` : ''}`
+  // QA_LABELER_MODEL selects the stronger drafter model AND is stamped in
+  // drafted_by — it must actually reach the adapter, not just the label.
+  const labelerModel = process.env.QA_LABELER_MODEL
+  const drafter = selectJudge(labelerProfile, labelerModel)
+  const draftedBy = `${labelerProfile}${labelerModel ? `:${labelerModel}` : ''}`
 
   const { cases, capturesFor } = loadCorpus(corpusRoot)
   fs.mkdirSync(outDir, { recursive: true })
   for (const c of cases) {
     if (judgeItemsFor(c.behavior_id).length === 0) continue
-    const artifact = await draftForCase(c.id, c.behavior_id, capturesFor(c), drafter, draftedBy)
-    const outPath = path.join(outDir, `${c.id}.draft.yaml`)
-    fs.writeFileSync(outPath, Bun.YAML.stringify(artifact), 'utf8')
+    // Draft over the SAME captures the eval grades — for a doctored case that
+    // means the mutated evidence, so the draft describes the doctored world.
+    const captures = resolveCaseCaptures(c, capturesFor(c))
+    const artifact = await draftForCase(c.id, c.behavior_id, captures, drafter, draftedBy)
+    const outPath = path.join(outDir, `${c.id}.draft.json`)
+    fs.writeFileSync(outPath, `${JSON.stringify(artifact, null, 2)}\n`, 'utf8')
     console.log(`labeled (draft): ${outPath}`)
   }
 }
