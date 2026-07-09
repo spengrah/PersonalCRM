@@ -106,9 +106,10 @@ func TestRiverClient_StartStop_Integration(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	startCtx, startCancel := context.WithTimeout(ctx, 10*time.Second)
-	defer startCancel()
-	require.NoError(t, client.Start(startCtx))
+	// Root ctx, not a timeout-derived one: River binds its fetch/work loops to
+	// the Start ctx, so a start-deadline cancel silently stops fetching
+	// (documented project gotcha; applies to test harnesses too).
+	require.NoError(t, client.Start(ctx))
 
 	stopCtx, stopCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer stopCancel()
@@ -147,9 +148,10 @@ func TestRiverClient_InsertAndWork_Integration(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	startCtx, startCancel := context.WithTimeout(ctx, 10*time.Second)
-	defer startCancel()
-	require.NoError(t, client.Start(startCtx))
+	// Root ctx, not a timeout-derived one: River binds its fetch/work loops to
+	// the Start ctx, so a start-deadline cancel silently stops fetching
+	// (documented project gotcha; applies to test harnesses too).
+	require.NoError(t, client.Start(ctx))
 
 	t.Cleanup(func() {
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -218,9 +220,10 @@ func TestRiverClient_BootsWithNoopWorkerOnly(t *testing.T) {
 	})
 	require.NoError(t, err, "river.NewClient must accept a Workers bundle with just the noop worker")
 
-	startCtx, startCancel := context.WithTimeout(ctx, 10*time.Second)
-	defer startCancel()
-	require.NoError(t, client.Start(startCtx), "client.Start must succeed when only the noop worker is registered")
+	// Root ctx, not a timeout-derived one: River binds its fetch/work loops to
+	// the Start ctx, so a start-deadline cancel silently stops fetching
+	// (documented project gotcha; applies to test harnesses too).
+	require.NoError(t, client.Start(ctx), "client.Start must succeed when only the noop worker is registered")
 
 	stopCtx, stopCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer stopCancel()

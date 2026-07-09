@@ -1072,6 +1072,44 @@ SELECT COUNT(*) FROM river_job
 WHERE kind = 'sync_provider_account'
   AND (args->>'source') = sqlc.arg('source')::text;
 
+-- name: CountActiveRiverJobsBySourceArgForTest :one
+-- Test-only count of ACTIVE sync_provider_account river_job rows whose args
+-- JSON source = @source. "Active" means not yet finalized (available, pending,
+-- running, retryable, scheduled); completed/discarded/cancelled are excluded.
+-- Used by the load test's drain-to-zero convergence check (core.md rule 2).
+SELECT COUNT(*) FROM river_job
+WHERE kind = 'sync_provider_account'
+  AND (args->>'source') = sqlc.arg('source')::text
+  AND state IN ('available', 'pending', 'running', 'retryable', 'scheduled');
+
+-- name: CountActiveRiverJobsByStateBySourceForTest :many
+-- Test-only per-state breakdown of ACTIVE sync_provider_account river_job rows
+-- whose args JSON source = @source, using the SAME active-state predicate as
+-- CountActiveRiverJobsBySourceArgForTest. Backs the load test's drain-timeout
+-- diagnostic so a stuck backlog is reported per state (all 'available' means a
+-- dead fetch loop; jobs cycling through 'running' means genuine starvation).
+-- ORDER BY state for deterministic output.
+SELECT state, COUNT(*) AS count FROM river_job
+WHERE kind = 'sync_provider_account'
+  AND (args->>'source') = sqlc.arg('source')::text
+  AND state IN ('available', 'pending', 'running', 'retryable', 'scheduled')
+GROUP BY state
+ORDER BY state;
+
+-- name: CountSyncStatesByStatusForTest :one
+-- Test-only count of external_sync_state rows for a given source in a given
+-- status. Backs the load test's quiescence assertion that no state row ends
+-- in 'syncing' (core.md rule 2).
+SELECT COUNT(*) FROM external_sync_state
+WHERE source = @source AND status = @status;
+
+-- name: CountSyncLogsByStatusForTest :one
+-- Test-only count of external_sync_log rows for a given source in a given
+-- status. Backs the load test's quiescence assertion that no log row ends in
+-- 'running' (core.md rule 2).
+SELECT COUNT(*) FROM external_sync_log
+WHERE source = @source AND status = @status;
+
 -- name: InsertRiverJobForTest :exec
 -- Test-only seed of an in-flight sync_provider_account river_job row so
 -- the atomic-claim dedup path observes count>0. Mirrors the row a real
