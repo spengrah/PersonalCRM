@@ -67,6 +67,8 @@ assert_in_group     "frontend/playwright.config.ts" frontend
 assert_not_in_group "frontendx/y.ts" frontend
 # Self-gating regression guard: the filter file routes to validation.
 assert_in_group     "path-filters.yml" backend
+# Lint config is in backend so a config-only lint change triggers CI's lint job.
+assert_in_group     ".golangci.yml" backend
 
 # --- seed group: the staging auto-reseed surface (orthogonal to test selection) ---
 # Synthetic toolkit + profiles ARE the seed surface.

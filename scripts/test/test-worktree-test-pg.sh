@@ -15,6 +15,29 @@ fail=0
 ok()  { echo "ok: $1"; }
 bad() { echo "FAIL: $1"; fail=1; }
 
+# --- Deterministic lock holder (no fixed timing window) --------------------
+# start_lock_holder backgrounds a child that ACQUIRES the per-instance lock,
+# signals readiness, then BLOCKS holding it until release_lock_holder writes to
+# the fifo. It returns only once the lock is provably held (readiness poll), so a
+# subsequent lock-contending command is GUARANTEED to hit a held lock regardless
+# of scheduling latency — replacing the old ( flock 200; sleep 2 ) fixed window
+# that could release before a starved `ensure` reached its flock attempt.
+# Sets HOLDER_PID + HOLDER_FIFO for release_lock_holder.
+start_lock_holder() {                     # <lockfile>
+  local lockfile="$1" readyf i
+  HOLDER_FIFO=$(mktemp -u); mkfifo "$HOLDER_FIFO"
+  readyf=$(mktemp -u)                     # NON-precreated: [ -e ] flips only once the holder creates it
+  ( flock 200; : > "$readyf"; read -r _ < "$HOLDER_FIFO" ) 200>"$lockfile" & HOLDER_PID=$!
+  for i in $(seq 1 100); do [ -e "$readyf" ] && break; sleep 0.05; done
+  [ -e "$readyf" ] || bad "lock holder failed to acquire the lock (setup)"
+  rm -f "$readyf"
+}
+release_lock_holder() {                   # release + reap so the next case can re-lock
+  echo x > "$HOLDER_FIFO" 2>/dev/null || true
+  wait "$HOLDER_PID" 2>/dev/null || true
+  rm -f "$HOLDER_FIFO"
+}
+
 # --- Fake toolchain factory -------------------------------------------------
 # Builds a temp dir with: a fake git (configurable git-dir/common-dir + worktree
 # list), a fake bindir (initdb/pg_ctl/postgres/psql/pg_isready/pg_config), a
@@ -462,19 +485,17 @@ if command -v flock >/dev/null 2>&1; then
   d=$(make_env | tail -1); set_linked "$d" locknone
   id=$(run "$d" status | grep -oE 'id=[0-9a-f]+' | sed 's/id=//')
   lockdir="$d/pghome/$id"; mkdir -p "$lockdir"; lockfile="$lockdir/lock"
-  ( flock 200; sleep 2 ) 200>"$lockfile" & holder=$!
-  sleep 0.3
+  start_lock_holder "$lockfile"
   CRM_WORKTREE_PG_LOCK_TIMEOUT=1 run "$d" ensure 2>"$d/err"; rc=$?
   [ "$rc" -eq 0 ] && ok "lock-timeout not-running non-strict: exit 0" || bad "lock-timeout not-running non-strict exit=$rc"
   grep -qi 'pg_ctl -D' "$d/err" && ok "lock-timeout not-running: loud warning names pg_ctl recovery" || bad "lock-timeout not-running: no pg_ctl recovery hint ($(cat "$d/err"))"
   [ -z "$(run "$d" url)" ] && ok "lock-timeout not-running: url empty (genuine shared fallback)" || bad "lock-timeout not-running: url not empty"
-  wait "$holder" 2>/dev/null || true
+  release_lock_holder
   # strict: same setup -> non-zero exit
-  ( flock 200; sleep 2 ) 200>"$lockfile" & holder=$!
-  sleep 0.3
+  start_lock_holder "$lockfile"
   CRM_WORKTREE_PG_LOCK_TIMEOUT=1 CRM_WORKTREE_PG=strict run "$d" ensure 2>/dev/null; rc=$?
   [ "$rc" -ne 0 ] && ok "lock-timeout not-running strict: exit non-zero ($rc)" || bad "lock-timeout not-running strict: exit 0"
-  wait "$holder" 2>/dev/null || true
+  release_lock_holder
 
   # 20. Lock timeout, RUNNING branch: warm a real (fake) instance, hold its lock,
   # ensure with a 1s timeout. Non-strict proceeds against the running instance
@@ -485,19 +506,17 @@ if command -v flock >/dev/null 2>&1; then
   id=$(run "$d" status | grep -oE 'id=[0-9a-f]+' | sed 's/id=//')
   runurl=$(run "$d" url)
   lockfile="$d/pghome/$id/lock"
-  ( flock 200; sleep 2 ) 200>"$lockfile" & holder=$!
-  sleep 0.3
+  start_lock_holder "$lockfile"
   CRM_WORKTREE_PG_LOCK_TIMEOUT=1 run "$d" ensure 2>"$d/err"; rc=$?
   [ "$rc" -eq 0 ] && ok "lock-timeout running non-strict: exit 0" || bad "lock-timeout running non-strict exit=$rc"
   grep -qi 'server is up' "$d/err" && ok "lock-timeout running: warn says the server is up" || bad "lock-timeout running: no 'server is up' warning ($(cat "$d/err"))"
   [ "$(run "$d" url)" = "$runurl" ] && ok "lock-timeout running: url still emits the instance (no false fallback)" || bad "lock-timeout running: url changed/empty"
-  wait "$holder" 2>/dev/null || true
+  release_lock_holder
   # strict: same setup -> non-zero exit
-  ( flock 200; sleep 2 ) 200>"$lockfile" & holder=$!
-  sleep 0.3
+  start_lock_holder "$lockfile"
   CRM_WORKTREE_PG_LOCK_TIMEOUT=1 CRM_WORKTREE_PG=strict run "$d" ensure 2>/dev/null; rc=$?
   [ "$rc" -ne 0 ] && ok "lock-timeout running strict: exit non-zero ($rc)" || bad "lock-timeout running strict: exit 0"
-  wait "$holder" 2>/dev/null || true
+  release_lock_holder
 else
   ok "flock absent -> skipping lock-timeout branch tests (mkdir backend ceiling covered elsewhere)"
 fi
