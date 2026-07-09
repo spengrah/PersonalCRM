@@ -121,6 +121,7 @@ export function verdictsFromCodexOutput(stdout: string): {
 export interface CodexExecOptions {
   bin?: string
   model?: string
+  effort?: string
   tracePath?: string
   // Injected for tests: run codex and return raw stdout (defaults to a spawn).
   run?: (args: string[], prompt: string) => Promise<string>
@@ -156,12 +157,25 @@ function defaultRun(
     })
 }
 
+// The spec mandates a CHEAP judge ("cheap model judges, stronger model authors
+// issues"). Pin a mini-tier model + low reasoning effort as the DEFAULT so the
+// judge never silently inherits the operator's codex config (a global
+// gpt-5.5 / xhigh default is both costly AND miscalibrating here — over-reasoning
+// invents false fails). Overridable via QA_JUDGE_MODEL / QA_JUDGE_EFFORT or opts
+// (e.g. the labeler passes a stronger model). gpt-5.4-mini is the cheapest tier
+// the pinned Codex CLI supports on a ChatGPT account; gpt-5.6-luna is cheaper/
+// newer but needs a Codex CLI upgrade (revalidate exact models at build time).
+export const DEFAULT_JUDGE_MODEL = 'gpt-5.4-mini'
+export const DEFAULT_JUDGE_EFFORT = 'low'
+
 // Build the argv for `codex exec` (schema written to a temp file). Passes
-// --model when set so the stronger-model labeling path (QA_JUDGE_MODEL /
-// QA_LABELER_MODEL) actually selects that model, not just labels the trace.
-export function codexArgs(schemaPath: string, model?: string): string[] {
+// --model when set (so the model is actually selected, not just labeled in the
+// trace) and pins reasoning effort via `-c` when set — the judge must NOT
+// inherit the operator's codex config effort (e.g. a global xhigh).
+export function codexArgs(schemaPath: string, model?: string, effort?: string): string[] {
   const args = ['exec', '--json', '--output-schema', schemaPath, '--sandbox', 'read-only']
   if (model) args.push('--model', model)
+  if (effort) args.push('-c', `model_reasoning_effort=${effort}`)
   args.push('-')
   return args
 }
@@ -179,7 +193,8 @@ function allUnsure(input: JudgeInput, critique: string): PerItemVerdict[] {
 // tool-using run (or a parse miss) yields all-unsure (never a fabricated fail).
 export function makeCodexExecJudge(opts: CodexExecOptions = {}): Judge {
   const bin = opts.bin ?? process.env.QA_JUDGE_CODEX_BIN ?? 'codex'
-  const model = opts.model ?? process.env.QA_JUDGE_MODEL
+  const model = opts.model ?? process.env.QA_JUDGE_MODEL ?? DEFAULT_JUDGE_MODEL
+  const effort = opts.effort ?? process.env.QA_JUDGE_EFFORT ?? DEFAULT_JUDGE_EFFORT
   const timeoutMs = opts.timeoutMs ?? 120_000
   const run = opts.run ?? defaultRun(bin, timeoutMs)
   const tracePath = opts.tracePath ?? process.env.QA_JUDGE_TRACE
@@ -193,7 +208,7 @@ export function makeCodexExecJudge(opts: CodexExecOptions = {}): Judge {
     let error: string | undefined
     try {
       for (let attempt = 0; attempt < 2; attempt++) {
-        const stdout = await run(codexArgs(schemaPath, model), prompt)
+        const stdout = await run(codexArgs(schemaPath, model, effort), prompt)
         result = verdictsFromCodexOutput(stdout)
         if (!result.rejectedForTool) break // pure-criticism run — accept
       }

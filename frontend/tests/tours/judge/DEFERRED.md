@@ -19,7 +19,7 @@ The user is unavailable, so PR2 is engineered to be mergeable with **zero** huma
 
 ## Manual authoring (needs codex quota — not a CI gate)
 
-- **Real stronger-model draft labels.** `corpus/labels/CON-042.draft.json` is a structural placeholder. The genuine model-drafted critiques come from the manual `label.ts` run above and are committed like the corpus captures. The merge gate is only the CLI's **machinery** (unit-tested with a mocked drafter).
+- **Real stronger-model draft labels.** `corpus/labels/CON-042.draft.json` is a structural placeholder. The genuine model-drafted critiques come from the manual `label.ts` run above and are committed like the corpus captures. The merge gate is only the CLI's **machinery** (unit-tested with a mocked drafter). **Chosen drafter: Claude** — a _different model family_ from the cheap codex judge (`gpt-5.4-mini`), which maximally breaks the "no LLM-generated ground truth" circularity (a codex judge is never graded against codex-drafted labels). Needs a `Judge`-interface adapter (Anthropic endpoint, selected via `QA_LABELER=claude`); until it lands, labeling stays deferred (residue is 3 items).
 - **Live judge smoke.** `QA_JUDGE=codex-exec bun run tests/tours/judge/eval/run.ts --judge --limit 2` exercises the live `codex exec` adapter over judge-tagged cases; `--repeat N` measures self-consistency. Advisory, never a merge gate.
 
 ## Tooling follow-ups
