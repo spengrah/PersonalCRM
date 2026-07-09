@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev dev-seed staging-reset tours build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry spec-lint api-types api-types-check
+.PHONY: help setup dev dev-seed staging-reset tours build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast qa-eval prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry spec-lint api-types api-types-check
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -283,6 +283,9 @@ staging-reset: ## HARD reset + reseed STAGING — manual force / escape hatch (f
 
 tours: ## Reset staging + run the agentic UX QA tours. Config from env only: TOURS_BASE_URL, TOURS_API_KEY, TOURS_API_URL. Captures land in frontend/tests/tours/.runs/ (gitignored). TOURS_SKIP_RESET=1 skips the reset.
 	@scripts/run-tours.sh
+
+qa-eval: ## Run the agentic UX QA hybrid grader over the seed corpus (verifiers-only merge gate; OFFLINE, deterministic). QA_JUDGE + `--judge` add the advisory live-judge layer.
+	@cd frontend && bun run tests/tours/judge/eval/run.ts
 
 # Native PostgreSQL (for containerized development without Docker-in-Docker)
 # Symlink the main checkout's gitignored env files (.env, frontend/.env.local,
