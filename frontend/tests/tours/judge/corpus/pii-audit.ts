@@ -189,7 +189,14 @@ export function auditAriaNames(ariaStrings: string[], source: string): Violation
     for (const m of s.matchAll(NAME_BIGRAM_RE)) {
       if (m[1]) continue // synth-prefixed → provably synthetic
       const [w1, w2] = m[2].toLowerCase().split(' ')
-      if (!UI_VOCAB.has(w1) && !UI_VOCAB.has(w2)) {
+      // Exempt a bigram ONLY when BOTH tokens are UI vocabulary (a genuine UI
+      // label like "Contact Information"). A bigram with even one non-vocab
+      // token — e.g. "Mark Smith" (mark ∈ vocab, smith ∉) — is flagged, closing
+      // the single-token bypass. On the synthetic corpus this can only produce
+      // harmless false-positives on UI phrases (extend UI_VOCAB), never a MISS
+      // on a real-name bigram. Heuristic defense-in-depth; the airtight primary
+      // gate is the synthetic-seed provenance + full_name/new_name prefix check.
+      if (!(UI_VOCAB.has(w1) && UI_VOCAB.has(w2))) {
         out.push({ kind: 'unprefixed-aria-name', source, match: m[2].slice(0, 80) })
       }
     }

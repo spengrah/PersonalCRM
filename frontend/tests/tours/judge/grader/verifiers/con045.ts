@@ -74,6 +74,19 @@ export function expectedProximitySections(
   return out
 }
 
+// Whether the gift-planning section SHOULD have members: ≥1 contact with a
+// Jan-Mar (month <= 3) birthday. Returns undefined when the list is absent (no
+// data to tell). Mirrors getNextYearEarlyBirthdays' month<=3 filter.
+export function giftPlanningCandidatesExist(
+  contacts: Array<Record<string, unknown>>
+): boolean | undefined {
+  if (contacts.length === 0) return undefined
+  return contacts.some(c => {
+    const m = asString(c.birthday)?.match(/^\d{4}-(\d{2})-/)
+    return m ? Number(m[1]) <= 3 : false
+  })
+}
+
 export function con045(set: CaptureSet): ItemVerdicts {
   const cap = birthdaysCapture(set)
   const out: ItemVerdicts = {}
@@ -117,26 +130,47 @@ export function con045(set: CaptureSet): ItemVerdicts {
     }
   })()
 
-  // [1] gift-planning only near year end (recorded serverTime frame).
+  // [1] gift-planning only near year end — data-driven. The app shows the
+  // section iff month >= 11 (Nov/Dec) AND ≥1 contact has a Jan-Mar birthday
+  // (birthdays/page.tsx shouldShowNextYearBirthdays + getNextYearEarlyBirthdays).
+  // When the data proves the section SHOULD render but its heading is absent →
+  // fail; unsure only when the list is genuinely unavailable (can't tell).
   out[1] = ((): ItemVerdict => {
     const month = new Date(cap.serverTime.currentTime).getUTCMonth() // 0=Jan
     const nearYearEnd = month >= 10 // November or December
     const giftShown = sectionsPresent.has('gift')
-    if (giftShown && nearYearEnd)
-      return { verdict: 'pass', citation: 'gift-planning section shown near year end' }
-    if (giftShown && !nearYearEnd) {
+    if (giftShown) {
+      return nearYearEnd
+        ? { verdict: 'pass', citation: 'gift-planning section shown near year end' }
+        : {
+            verdict: 'fail',
+            citation: 'Gift Planning section',
+            reason: 'gift-planning shown while NOT near year end',
+          }
+    }
+    // heading absent
+    if (!nearYearEnd) {
+      return { verdict: 'pass', citation: 'gift-planning correctly hidden away from year end' }
+    }
+    const candidates = giftPlanningCandidatesExist(fullList(cap))
+    if (candidates === true) {
       return {
         verdict: 'fail',
         citation: 'Gift Planning section',
-        reason: 'gift-planning shown while NOT near year end',
+        reason:
+          'near year end with early-next-year (Jan-Mar) birthdays present, but the gift-planning heading is absent',
       }
     }
-    if (!giftShown && !nearYearEnd)
-      return { verdict: 'pass', citation: 'gift-planning correctly hidden away from year end' }
+    if (candidates === false) {
+      return {
+        verdict: 'pass',
+        citation: 'gift-planning correctly absent (no early-next-year birthdays)',
+      }
+    }
     return {
       verdict: 'unsure',
       reason:
-        'near year end but no gift-planning section — may just lack early-next-year birthdays',
+        'near year end but the full list is unavailable — cannot tell if gift-planning should render',
     }
   })()
 

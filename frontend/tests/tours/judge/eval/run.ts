@@ -5,11 +5,12 @@
 //   - --judge: adds the live judge layer over residue items (ADVISORY, manual,
 //     needs codex quota). --repeat N measures judge self-consistency.
 //
-// Bun runtime (loads the YAML corpus). The pure eval logic is core.ts (unit
-// tested); this file wires I/O + prints.
+// Loads the JSON corpus (portable JSON.parse). The pure eval logic is core.ts
+// (unit tested); this file wires I/O + prints.
 
 import * as path from 'path'
 import { loadCorpus } from '../corpus/load'
+import { resolveCaseCaptures } from '../doctor'
 import { buildJudgeInput } from '../judge-input'
 import { selectJudge } from '../adapter'
 import type { Capture } from '../../support/types'
@@ -93,7 +94,9 @@ async function main(): Promise<void> {
   if (judge && repeat > 1) {
     const scores: number[] = []
     for (const c of cases) {
-      const captures = corpus.capturesFor(c)
+      // Doctored cases must repeat against the MUTATED evidence (same resolver
+      // the merge-gate path uses), so self-consistency reflects the real inputs.
+      const captures = resolveCaseCaptures(c, corpus.capturesFor(c))
       const input = buildJudgeInput(c.behavior_id, captures)
       if (!input || input.items.length === 0) continue
       const j = selectJudge(process.env.QA_JUDGE ?? 'codex-exec')

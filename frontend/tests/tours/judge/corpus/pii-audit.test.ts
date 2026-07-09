@@ -90,6 +90,23 @@ describe('aria-name synthetic gate', () => {
     expect(v[0]).toMatchObject({ kind: 'unprefixed-aria-name', match: 'Jane Smith' })
   })
 
+  it('FLAGS a real name even when ONE token overlaps UI vocabulary (both-tokens exemption)', () => {
+    // mark/will are UI vocab but smith/jones are not — a single vocab token
+    // must NOT exempt the bigram.
+    for (const name of ['Mark Smith', 'Will Jones']) {
+      expect(
+        auditAriaNames([name], 'c.json').map(x => x.match),
+        name
+      ).toContain(name)
+    }
+  })
+
+  it('does NOT flag a genuine two-word UI bigram (BOTH tokens vocab)', () => {
+    for (const label of ['Merge Contacts', 'Contact Information', 'Total Contacts']) {
+      expect(auditAriaNames([label], 'c.json'), label).toEqual([])
+    }
+  })
+
   it('auditCorpus catches a real name present ONLY in an aria node (no body full_name)', () => {
     const files = [
       {

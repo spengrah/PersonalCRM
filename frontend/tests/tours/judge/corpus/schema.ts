@@ -1,11 +1,11 @@
-// Corpus case schema + validator (design D6). A case is a git-diffable YAML:
+// Corpus case schema + validator (design D6). A case is a git-diffable JSON file:
 // captures (fixture refs) + expected per-then-item verdicts + a clean|doctored
 // source. A doctored case references a base clean case + a single-point mutation
 // the doctoring tool applies deterministically at eval time.
 //
 // Pure zod over an already-parsed object — the vitest tests build objects
-// directly (no YAML parse), so this module has no bun/node runtime dependency.
-// The YAML file loading lives in load.ts (bun runtime).
+// directly (no parse needed), so this module has no runtime file dependency.
+// The JSON file loading lives in load.ts (portable JSON.parse).
 
 import { z } from 'zod'
 

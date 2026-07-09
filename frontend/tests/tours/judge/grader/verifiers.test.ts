@@ -449,6 +449,55 @@ describe('con045', () => {
     expect(v[1].verdict).toBe('fail')
   })
 
+  // A December frame with a Jan-Mar (gift-planning) birthday present.
+  const december = (over: { gift?: boolean; hasJan?: boolean } = {}): Capture =>
+    cap({
+      behaviors: ['CON-045'],
+      note: 'birthdays page',
+      serverTime: frame({ currentTime: '2026-12-15T12:00:00Z' }),
+      apiResponses: {
+        'GET /api/v1/contacts': [
+          apiItem({
+            query: { limit: '1000' },
+            body: {
+              data: [
+                {
+                  full_name: 'synth-jan',
+                  birthday: over.hasJan === false ? '1990-07-15' : '1990-01-20',
+                },
+              ],
+            },
+          }),
+        ],
+      },
+      aria: root([
+        { role: 'text', text: 'Tuesday, December 15, 2026' },
+        ...(over.gift
+          ? [
+              {
+                role: 'heading' as const,
+                name: 'Gift Planning - Early 2027 Birthdays (1)',
+                level: 2,
+              },
+            ]
+          : []),
+        { role: 'heading' as const, name: 'Already Celebrated This Year (1)', level: 2 },
+        { role: 'heading' as const, name: 'synth-jan', level: 3 },
+      ]),
+    })
+
+  it('[1] FAIL near year-end: Jan birthday present but the gift-planning heading is absent', () => {
+    expect(con045(set('CON-045', [december({ gift: false })]))[1].verdict).toBe('fail')
+  })
+
+  it('[1] pass near year-end: gift-planning heading present', () => {
+    expect(con045(set('CON-045', [december({ gift: true })]))[1].verdict).toBe('pass')
+  })
+
+  it('[1] pass near year-end: no Jan-Mar birthdays → section correctly absent', () => {
+    expect(con045(set('CON-045', [december({ hasJan: false })]))[1].verdict).toBe('pass')
+  })
+
   it('[3] fail: a placeholder-year birthday shows an age', () => {
     const v = con045(set('CON-045', [birthdays({ placeholderAged: true })]))
     expect(v[3].verdict).toBe('fail')

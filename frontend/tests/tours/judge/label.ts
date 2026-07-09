@@ -1,12 +1,12 @@
 // The labeling CLI (design D6 / invariant §4.1). Pre-fills DRAFT per-item
 // verdicts + critiques using a DIFFERENT/STRONGER model than the judge (breaking
 // the "no LLM-generated ground truth" circularity by construction), and writes a
-// *.draft.yaml the maintainer later CORRECTS in place into *.labeled.yaml
+// *.draft.json the maintainer later CORRECTS in place into *.labeled.json
 // (re-running nothing).
 //
 // MERGE GATE = the non-model MACHINERY (scaffolding + artifact structure),
 // unit-tested with a MOCKED stronger-model drafter (offline, no quota). The REAL
-// model-drafted *.draft.yaml is a MANUAL authoring artifact committed like the
+// model-drafted *.draft.json is a MANUAL authoring artifact committed like the
 // corpus captures — never a CI gate (see judge/DEFERRED.md).
 
 import type { Capture } from '../support/types'
@@ -30,7 +30,7 @@ export interface DraftArtifact {
 
 const DRAFT_NOTE =
   'DRAFT labels from a stronger model — NOT ground truth. The maintainer corrects ' +
-  'these into *.labeled.yaml before they gate anything (see judge/DEFERRED.md).'
+  'these into *.labeled.json before they gate anything (see judge/DEFERRED.md).'
 
 // Pure: assemble a draft artifact from a stronger model's verdicts. Only the
 // behavior's residue (judge + judgeFallback) items are drafted.
@@ -74,7 +74,7 @@ export async function draftForCase(
   return buildDraftArtifact(caseId, behaviorId, draftedBy, verdicts)
 }
 
-// CLI (bun): draft labels for every case, writing *.draft.yaml.
+// CLI (bun): draft labels for every case, writing *.draft.json.
 // QA_LABELER selects the (stronger) drafter profile — DISTINCT from QA_JUDGE.
 async function main(): Promise<void> {
   const fs = await import('fs')
