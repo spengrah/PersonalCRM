@@ -84,7 +84,37 @@ func TestEventToSample_ClockSkew_ClampsFinalizedAt(t *testing.T) {
 	row, ok := eventToSample(ev)
 	require.True(t, ok)
 	assert.Equal(t, attempted, row.AttemptedAt)
-	assert.Equal(t, attempted, row.FinalizedAt, "FinalizedAt must be clamped to AttemptedAt, never before it")
+	assert.Equal(t, attempted.Add(2*time.Millisecond), row.FinalizedAt,
+		"skewed FinalizedAt must fall back to AttemptedAt+RunDuration (skew-immune), preserving interval width")
+}
+
+func TestEventToSample_ClockSkew_ClampsNegativeWait(t *testing.T) {
+	t.Parallel()
+	// QueueWaitDuration = client start - DB-stamped scheduled_at, so the same
+	// client-behind-DB skew can drive it negative; an unclamped negative wait
+	// violates job_exec_sample_wait_chk and silently drops the sample.
+	attempted := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+
+	ev := &river.Event{
+		Kind: river.EventKindJobCompleted,
+		Job: &rivertype.JobRow{
+			ID:          44,
+			Kind:        "test_kind",
+			Queue:       "default",
+			Attempt:     1,
+			AttemptedAt: ptrTime(attempted),
+			FinalizedAt: ptrTime(attempted.Add(3 * time.Millisecond)),
+			State:       rivertype.JobStateCompleted,
+		},
+		JobStats: &river.JobStatistics{
+			RunDuration:       3 * time.Millisecond,
+			QueueWaitDuration: -40 * time.Millisecond,
+		},
+	}
+
+	row, ok := eventToSample(ev)
+	require.True(t, ok)
+	assert.Equal(t, int64(0), row.QueueWaitMs, "negative (skewed) queue wait must clamp to 0")
 }
 
 func TestEventToSample_RetryableFailure_SynthesizesFinalizedAt(t *testing.T) {

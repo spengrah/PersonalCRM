@@ -75,11 +75,18 @@ func eventToSample(ev *river.Event) (repository.JobExecSampleRow, bool) {
 	// job.FinalizedAt is stamped by the River client (Go clock). When the
 	// client clock lags the DB clock by more than the job's run time,
 	// FinalizedAt lands before AttemptedAt and the insert would violate
-	// job_exec_sample_interval_chk, silently dropping the sample. Clamp so
-	// best-effort capture survives bounded clock skew.
+	// job_exec_sample_interval_chk, silently dropping the sample. Fall back
+	// to the synthesized end: RunDuration is measured client-side, so it is
+	// skew-immune and non-negative, and the row keeps its true width for the
+	// sweep-line occupancy query. (No-op for the synthesized default above.)
 	if finalizedAt.Before(*job.AttemptedAt) {
-		finalizedAt = *job.AttemptedAt
+		finalizedAt = job.AttemptedAt.Add(ev.JobStats.RunDuration)
 	}
+
+	// QueueWaitDuration mixes the same two clocks (client start minus
+	// DB-stamped scheduled_at), so the same skew can drive it negative and
+	// violate job_exec_sample_wait_chk. Clamp to zero.
+	waitMs := max(ev.JobStats.QueueWaitDuration.Milliseconds(), 0)
 
 	return repository.JobExecSampleRow{
 		RiverJobID:  job.ID,
@@ -89,7 +96,7 @@ func eventToSample(ev *river.Event) (repository.JobExecSampleRow, bool) {
 		FinalizedAt: finalizedAt,
 		Attempt:     job.Attempt,
 		State:       string(job.State),
-		QueueWaitMs: ev.JobStats.QueueWaitDuration.Milliseconds(),
+		QueueWaitMs: waitMs,
 	}, true
 }
 
