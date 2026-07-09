@@ -2,19 +2,19 @@
   "captureFormatVersion": 1,
   "captureGeneratorVersion": 1,
   "tour": "contacts",
-  "seq": 9,
+  "seq": 12,
   "behaviors": ["CON-040"],
-  "note": "boundary: first contact, Previous nav disabled",
-  "url": "/contacts/<id:1>?sort=cadence&order=desc",
+  "note": "boundary: last contact, Next nav disabled",
+  "url": "/contacts/<id:140>?sort=cadence&order=desc",
   "pair": {
     "id": "keyboard-nav-CON-040",
-    "role": "boundary-first"
+    "role": "boundary-last"
   },
   "serverTime": {
-    "currentTime": "2026-07-12T16:05:56.40314182Z",
+    "currentTime": "2026-07-10T15:03:21.55182104Z",
     "isAccelerated": true,
     "accelerationFactor": 60,
-    "baseTime": "2026-07-09T05:52:58Z",
+    "baseTime": "2026-07-09T15:07:20Z",
     "environment": "testing"
   },
   "aria": {
@@ -105,26 +105,26 @@
           },
           {
             "role": "button",
-            "name": "Jul 12, 04:05:07 PM 60x"
+            "name": "Jul 10, 03:03:11 PM 60x"
           }
         ]
       },
       {
         "role": "button",
-        "name": "Previous contact",
-        "disabled": true
+        "name": "Previous contact"
       },
       {
         "role": "text",
-        "text": "1 of 168"
+        "text": "168 of 168"
       },
       {
         "role": "button",
-        "name": "Next contact"
+        "name": "Next contact",
+        "disabled": true
       },
       {
         "role": "heading",
-        "name": "synth-prodshaped-Brux Fakeman",
+        "name": "synth-prodshaped-Zeta Placeholdt",
         "level": 2
       },
       {
@@ -162,7 +162,7 @@
         "children": [
           {
             "role": "text",
-            "text": "synth-prodshaped-Brux Fakeman"
+            "text": "synth-prodshaped-Zeta Placeholdt"
           }
         ]
       },
@@ -180,14 +180,14 @@
         "children": [
           {
             "role": "link",
-            "name": "<email:1>",
+            "name": "@synth_prodshaped_157",
             "children": [
               {
                 "role": "/url",
                 "children": [
                   {
                     "role": "text",
-                    "text": "mailto:<email:1>"
+                    "text": "https://<host>/synth_prodshaped_157"
                   }
                 ]
               }
@@ -195,25 +195,7 @@
           },
           {
             "role": "text",
-            "text": "Email Primary"
-          }
-        ]
-      },
-      {
-        "role": "term",
-        "children": [
-          {
-            "role": "text",
-            "text": "Contact cadence"
-          }
-        ]
-      },
-      {
-        "role": "definition",
-        "children": [
-          {
-            "role": "text",
-            "text": "weekly"
+            "text": "Telegram Primary"
           }
         ]
       },
@@ -231,7 +213,7 @@
         "children": [
           {
             "role": "text",
-            "text": "No recent activity"
+            "text": "↙ Last response: in the future"
           }
         ]
       },
@@ -249,12 +231,21 @@
         "children": [
           {
             "role": "text",
-            "text": "7/12/2026"
+            "text": "7/10/2026"
           }
         ]
       },
       {
-        "__ariaTruncated__": 6
+        "role": "heading",
+        "name": "Tasks",
+        "level": 3
+      },
+      {
+        "role": "button",
+        "name": "Add"
+      },
+      {
+        "__ariaTruncated__": 4
       }
     ]
   },
@@ -335,32 +326,31 @@
     "GET /api/v1/contacts/:id": [
       {
         "method": "GET",
-        "requestUrl": "/api/v1/contacts/<id:1>",
+        "requestUrl": "/api/v1/contacts/<id:140>",
         "query": {},
         "status": 200,
         "body": {
           "data": {
-            "cadence": "weekly",
-            "contact_by": "2026-07-11T00:00:00Z",
             "created_at": "<ts>",
-            "full_name": "synth-prodshaped-Brux Fakeman",
+            "full_name": "synth-prodshaped-Zeta Placeholdt",
             "has_pending_followup": false,
-            "how_met": "synth-prodshaped-met-online-community",
-            "id": "<id:1>",
-            "last_contacted": "2026-07-11T07:51:20.02948Z",
+            "id": "<id:140>",
+            "last_contacted": "2026-07-10T12:07:04Z",
+            "last_interaction_at": "2026-07-10T12:07:04Z",
+            "last_response_at": "2026-07-10T12:07:04Z",
             "methods": [
               {
-                "id": "<id:21>",
+                "id": "<id:141>",
                 "is_primary": true,
-                "type": "email",
-                "value": "<email:1>"
+                "type": "telegram",
+                "value": "synth_prodshaped_157"
               }
             ],
             "primary_method": {
-              "id": "<id:21>",
+              "id": "<id:141>",
               "is_primary": true,
-              "type": "email",
-              "value": "<email:1>"
+              "type": "telegram",
+              "value": "synth_prodshaped_157"
             },
             "updated_at": "<ts>"
           },
@@ -369,33 +359,31 @@
       },
       {
         "method": "GET",
-        "requestUrl": "/api/v1/contacts/<id:2>",
+        "requestUrl": "/api/v1/contacts/<id:142>",
         "query": {},
         "status": 200,
         "body": {
           "data": {
-            "cadence": "weekly",
-            "contact_by": "2026-07-11T00:00:00Z",
             "created_at": "<ts>",
-            "full_name": "synth-prodshaped-Brux Fixtura",
+            "full_name": "synth-prodshaped-Vex Placeholdt",
             "has_pending_followup": false,
-            "how_met": "synth-prodshaped-met-at-a-conference",
-            "id": "<id:2>",
-            "last_contacted": "2026-07-11T16:16:34.129344Z",
-            "location": "synth-prodshaped-place-lakeside",
+            "id": "<id:142>",
+            "last_contacted": "2026-07-10T11:07:04.304Z",
+            "last_interaction_at": "2026-07-10T11:07:04.304Z",
+            "last_response_at": "2026-07-10T11:07:04.304Z",
             "methods": [
               {
-                "id": "<id:22>",
+                "id": "<id:143>",
                 "is_primary": true,
                 "type": "email",
-                "value": "<email:2>"
+                "value": "<email:57>"
               }
             ],
             "primary_method": {
-              "id": "<id:22>",
+              "id": "<id:143>",
               "is_primary": true,
               "type": "email",
-              "value": "<email:2>"
+              "value": "<email:57>"
             },
             "updated_at": "<ts>"
           },
@@ -406,7 +394,7 @@
     "GET /api/v1/contacts/:id/events": [
       {
         "method": "GET",
-        "requestUrl": "/api/v1/contacts/<id:1>/events?limit=100",
+        "requestUrl": "/api/v1/contacts/<id:140>/events?limit=100",
         "query": {
           "limit": "100"
         },
@@ -420,7 +408,7 @@
     "GET /api/v1/contacts/:id/notes": [
       {
         "method": "GET",
-        "requestUrl": "/api/v1/contacts/<id:1>/notes",
+        "requestUrl": "/api/v1/contacts/<id:140>/notes",
         "query": {},
         "status": 204,
         "body": null
@@ -429,7 +417,7 @@
     "GET /api/v1/contacts/:id/tasks": [
       {
         "method": "GET",
-        "requestUrl": "/api/v1/contacts/<id:1>/tasks?state=completed&lifecycle=manual",
+        "requestUrl": "/api/v1/contacts/<id:140>/tasks?state=completed&lifecycle=manual",
         "query": {
           "lifecycle": "manual",
           "state": "completed"
@@ -439,7 +427,7 @@
       },
       {
         "method": "GET",
-        "requestUrl": "/api/v1/contacts/<id:1>/tasks?state=managed&lifecycle=followup_loop",
+        "requestUrl": "/api/v1/contacts/<id:140>/tasks?state=managed&lifecycle=followup_loop",
         "query": {
           "lifecycle": "followup_loop",
           "state": "managed"
@@ -449,7 +437,7 @@
       },
       {
         "method": "GET",
-        "requestUrl": "/api/v1/contacts/<id:1>/tasks?state=managed&lifecycle=manual",
+        "requestUrl": "/api/v1/contacts/<id:140>/tasks?state=managed&lifecycle=manual",
         "query": {
           "lifecycle": "manual",
           "state": "managed"
@@ -476,8 +464,8 @@
         "body": {
           "data": {
             "acceleration_factor": 60,
-            "base_time": "2026-07-09T05:52:58Z",
-            "current_time": "2026-07-12T16:04:49.84146598Z",
+            "base_time": "2026-07-09T15:07:20Z",
+            "current_time": "2026-07-10T15:01:48.85127378Z",
             "environment": "testing",
             "is_accelerated": true
           },

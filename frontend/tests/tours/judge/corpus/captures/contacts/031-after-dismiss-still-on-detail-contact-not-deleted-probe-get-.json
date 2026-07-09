@@ -2,7 +2,7 @@
   "captureFormatVersion": 1,
   "captureGeneratorVersion": 1,
   "tour": "contacts",
-  "seq": 29,
+  "seq": 31,
   "behaviors": ["CON-042"],
   "note": "after dismiss: still on detail, contact NOT deleted (probe GET 200)",
   "url": "/contacts/<id:2>?sort=cadence&order=desc",
@@ -11,10 +11,10 @@
     "role": "after-dismiss"
   },
   "serverTime": {
-    "currentTime": "2026-07-12T16:30:03.45853174Z",
+    "currentTime": "2026-07-10T15:34:19.36697378Z",
     "isAccelerated": true,
     "accelerationFactor": 60,
-    "baseTime": "2026-07-09T05:52:58Z",
+    "baseTime": "2026-07-09T15:07:20Z",
     "environment": "testing"
   },
   "aria": {
@@ -105,7 +105,7 @@
           },
           {
             "role": "button",
-            "name": "Jul 12, 04:29:38 PM 60x"
+            "name": "Jul 10, 03:34:11 PM 60x"
           }
         ]
       },
@@ -267,13 +267,13 @@
         "body": {
           "data": {
             "cadence": "weekly",
-            "contact_by": "2026-07-11T00:00:00Z",
+            "contact_by": "2026-07-09T00:00:00Z",
             "created_at": "<ts>",
             "full_name": "synth-prodshaped-Brux Fixtura",
             "has_pending_followup": false,
             "how_met": "synth-prodshaped-met-at-a-conference",
             "id": "<id:2>",
-            "last_contacted": "2026-07-11T16:16:34.129344Z",
+            "last_contacted": "2026-07-09T16:04:04.646687Z",
             "location": "synth-prodshaped-place-lakeside",
             "methods": [
               {

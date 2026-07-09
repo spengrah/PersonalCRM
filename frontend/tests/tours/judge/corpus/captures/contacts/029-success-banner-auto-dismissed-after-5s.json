@@ -2,19 +2,19 @@
   "captureFormatVersion": 1,
   "captureGeneratorVersion": 1,
   "tour": "contacts",
-  "seq": 26,
+  "seq": 29,
   "behaviors": ["CON-043"],
-  "note": "success banner shown (page-level mergeMessage)",
+  "note": "success banner auto-dismissed after ~5s",
   "url": "/contacts/<id:4>?sort=cadence&order=desc",
   "pair": {
     "id": "merge-CON-043",
-    "role": "outcome-reported"
+    "role": "dismissed"
   },
   "serverTime": {
-    "currentTime": "2026-07-12T16:21:16.02420766Z",
+    "currentTime": "2026-07-10T15:28:50.774339Z",
     "isAccelerated": true,
     "accelerationFactor": 60,
-    "baseTime": "2026-07-09T05:52:58Z",
+    "baseTime": "2026-07-09T15:07:20Z",
     "environment": "testing"
   },
   "aria": {
@@ -105,7 +105,7 @@
           },
           {
             "role": "button",
-            "name": "Jul 12, 04:20:34 PM 60x"
+            "name": "Jul 10, 03:28:00 PM 60x"
           }
         ]
       },
@@ -268,12 +268,12 @@
         "children": [
           {
             "role": "text",
-            "text": "7/12/2026"
+            "text": "7/10/2026"
           }
         ]
       },
       {
-        "__ariaTruncated__": 8
+        "__ariaTruncated__": 6
       }
     ]
   },

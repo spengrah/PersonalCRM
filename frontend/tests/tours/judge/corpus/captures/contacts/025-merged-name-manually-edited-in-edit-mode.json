@@ -2,19 +2,19 @@
   "captureFormatVersion": 1,
   "captureGeneratorVersion": 1,
   "tour": "contacts",
-  "seq": 24,
+  "seq": 25,
   "behaviors": ["CON-043"],
-  "note": "merge in flight: submit disabled",
+  "note": "merged name manually edited in edit mode",
   "url": "/contacts/<id:4>?sort=cadence&order=desc",
   "pair": {
     "id": "merge-CON-043",
-    "role": "in-flight"
+    "role": "name-edited"
   },
   "serverTime": {
-    "currentTime": "2026-07-12T16:20:37.19212198Z",
+    "currentTime": "2026-07-10T15:22:59.9873096Z",
     "isAccelerated": true,
     "accelerationFactor": 60,
-    "baseTime": "2026-07-09T05:52:58Z",
+    "baseTime": "2026-07-09T15:07:20Z",
     "environment": "testing"
   },
   "aria": {
@@ -103,5 +103,8 @@
     ]
   },
   "apiResponses": {},
+  "fields": {
+    "mergedNameInput": "synth-prodshaped-Brux Dummond (merged)"
+  },
   "dialogs": []
 }

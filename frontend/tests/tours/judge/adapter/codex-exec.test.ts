@@ -162,6 +162,34 @@ describe('makeCodexExecJudge (injected run — no live call)', () => {
     expect(seenArgs[seenArgs.indexOf('--model') + 1]).toBe('gpt-5-codex-high')
   })
 
+  // Follow-up 5: the judge path also reads QA_JUDGE_MODEL as the default model
+  // when no explicit model is passed. (The labeler path — QA_LABELER_MODEL →
+  // selectJudge(profile, model) → makeCodexExecJudge({ model }) — is covered by
+  // composition: adapter/index.test.ts proves selectJudge threads its model arg
+  // into the adapter, and the explicit-model test above proves the adapter
+  // threads it into the codex argv.)
+  it('falls back to QA_JUDGE_MODEL for the codex --model when no model is passed', async () => {
+    const prev = process.env.QA_JUDGE_MODEL
+    process.env.QA_JUDGE_MODEL = 'gpt-5-codex-env'
+    try {
+      let seenArgs: string[] = []
+      const judge = makeCodexExecJudge({
+        run: async args => {
+          seenArgs = args
+          return stream({
+            verdicts: [{ item_index: 0, verdict: 'pass', citation: 'c', critique: 'k' }],
+          })
+        },
+      })
+      await judge(input)
+      expect(seenArgs).toContain('--model')
+      expect(seenArgs[seenArgs.indexOf('--model') + 1]).toBe('gpt-5-codex-env')
+    } finally {
+      if (prev === undefined) delete process.env.QA_JUDGE_MODEL
+      else process.env.QA_JUDGE_MODEL = prev
+    }
+  })
+
   it('grounding rule: an uncited judge fail downgrades to unsure', async () => {
     const judge = makeCodexExecJudge({
       run: async () =>

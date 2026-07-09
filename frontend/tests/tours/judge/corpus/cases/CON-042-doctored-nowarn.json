@@ -6,9 +6,9 @@
     "capture_generator_version": 1
   },
   "captures": [
-    "contacts/028-detail-before-delete-dismiss-path.json",
-    "contacts/029-after-dismiss-still-on-detail-contact-not-deleted-probe-get-.json",
-    "contacts/030-after-accept-returned-to-list-delete-204-probe-get-404-confi.json"
+    "contacts/030-detail-before-delete-dismiss-path.json",
+    "contacts/031-after-dismiss-still-on-detail-contact-not-deleted-probe-get-.json",
+    "contacts/032-after-accept-returned-to-list-delete-204-probe-get-404-confi.json"
   ],
   "doctor": {
     "base_case": "CON-042-clean",

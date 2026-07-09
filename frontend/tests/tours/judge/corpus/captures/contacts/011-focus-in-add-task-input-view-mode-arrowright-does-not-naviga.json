@@ -2,7 +2,7 @@
   "captureFormatVersion": 1,
   "captureGeneratorVersion": 1,
   "tour": "contacts",
-  "seq": 10,
+  "seq": 11,
   "behaviors": ["CON-040"],
   "note": "focus in Add-Task input (view mode): ArrowRight does NOT navigate — input-focus guard",
   "url": "/contacts/<id:1>?sort=cadence&order=desc",
@@ -11,10 +11,10 @@
     "role": "input-focus-inert"
   },
   "serverTime": {
-    "currentTime": "2026-07-12T16:06:22.21013722Z",
+    "currentTime": "2026-07-10T14:59:06.9749168Z",
     "isAccelerated": true,
     "accelerationFactor": 60,
-    "baseTime": "2026-07-09T05:52:58Z",
+    "baseTime": "2026-07-09T15:07:20Z",
     "environment": "testing"
   },
   "aria": {
@@ -105,7 +105,7 @@
           },
           {
             "role": "button",
-            "name": "Jul 12, 04:06:07 PM 60x"
+            "name": "Jul 10, 02:58:30 PM 60x"
           }
         ]
       },
@@ -249,7 +249,7 @@
         "children": [
           {
             "role": "text",
-            "text": "7/12/2026"
+            "text": "7/10/2026"
           }
         ]
       },

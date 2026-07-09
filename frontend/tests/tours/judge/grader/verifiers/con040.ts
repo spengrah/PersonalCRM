@@ -12,6 +12,7 @@ export function con040(set: CaptureSet): ItemVerdicts {
   const arrowRight = byRole(set, 'arrow-right-next')
   const arrowLeft = byRole(set, 'arrow-left-prev')
   const boundaryFirst = byRole(set, 'boundary-first')
+  const boundaryLast = byRole(set, 'boundary-last')
   const inputFocusInert = byRole(set, 'input-focus-inert')
   const enterEdit = byRole(set, 'enter-edit')
   const arrowEditInert = byRole(set, 'arrow-edit-inert')
@@ -20,10 +21,11 @@ export function con040(set: CaptureSet): ItemVerdicts {
 
   const out: ItemVerdicts = {}
 
-  // [0] prev/next movement + FIRST boundary. The doctor flips boundary-first's
+  // [0] prev/next movement + BOTH boundaries. The doctor flips boundary-first's
   // `Previous contact` disabled → fail. The last boundary (Next disabled at the
-  // last contact) is uncaptured → the verifier abstains on that half (caveat).
+  // last contact) is now captured (follow-up 3), so both boundaries are graded.
   out[0] = ((): ItemVerdict => {
+    // A present boundary whose disabled state is wrong is a real defect.
     if (boundaryFirst) {
       const prevNode = findByRoleName(boundaryFirst.aria, 'button', 'Previous contact')
       if (prevNode && prevNode.disabled !== true) {
@@ -31,6 +33,16 @@ export function con040(set: CaptureSet): ItemVerdicts {
           verdict: 'fail',
           citation: "aria button 'Previous contact' at the first boundary",
           reason: 'the Previous nav is NOT disabled at the first-contact boundary',
+        }
+      }
+    }
+    if (boundaryLast) {
+      const nextNode = findByRoleName(boundaryLast.aria, 'button', 'Next contact')
+      if (nextNode && nextNode.disabled !== true) {
+        return {
+          verdict: 'fail',
+          citation: "aria button 'Next contact' at the last boundary",
+          reason: 'the Next nav is NOT disabled at the last-contact boundary',
         }
       }
     }
@@ -43,7 +55,19 @@ export function con040(set: CaptureSet): ItemVerdicts {
     const firstBoundaryDisabled =
       boundaryFirst !== undefined &&
       findByRoleName(boundaryFirst.aria, 'button', 'Previous contact')?.disabled === true
-    if (moved && firstBoundaryDisabled) {
+    const lastBoundaryDisabled =
+      boundaryLast !== undefined &&
+      findByRoleName(boundaryLast.aria, 'button', 'Next contact')?.disabled === true
+    if (moved && firstBoundaryDisabled && lastBoundaryDisabled) {
+      return {
+        verdict: 'pass',
+        citation:
+          "url deltas + aria 'Previous contact' [disabled] (first) + 'Next contact' [disabled] (last)",
+      }
+    }
+    // Only the first boundary captured (e.g. an older fixture) → abstain on the
+    // uncaptured last half rather than claim it proven.
+    if (moved && firstBoundaryDisabled && boundaryLast === undefined) {
       return {
         verdict: 'unsure',
         citation: "url deltas + aria 'Previous contact' [disabled]",

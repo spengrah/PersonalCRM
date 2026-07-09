@@ -2,19 +2,19 @@
   "captureFormatVersion": 1,
   "captureGeneratorVersion": 1,
   "tour": "contacts",
-  "seq": 28,
-  "behaviors": ["CON-042"],
-  "note": "detail before delete (dismiss path)",
-  "url": "/contacts/<id:2>?sort=cadence&order=desc",
+  "seq": 10,
+  "behaviors": ["CON-040"],
+  "note": "boundary: first contact, Previous nav disabled",
+  "url": "/contacts/<id:1>?sort=cadence&order=desc",
   "pair": {
-    "id": "delete-CON-042",
-    "role": "before"
+    "id": "keyboard-nav-CON-040",
+    "role": "boundary-first"
   },
   "serverTime": {
-    "currentTime": "2026-07-12T16:29:42.97781392Z",
+    "currentTime": "2026-07-10T14:58:43.83202376Z",
     "isAccelerated": true,
     "accelerationFactor": 60,
-    "baseTime": "2026-07-09T05:52:58Z",
+    "baseTime": "2026-07-09T15:07:20Z",
     "environment": "testing"
   },
   "aria": {
@@ -105,17 +105,18 @@
           },
           {
             "role": "button",
-            "name": "Jul 12, 04:28:38 PM 60x"
+            "name": "Jul 10, 02:58:30 PM 60x"
           }
         ]
       },
       {
         "role": "button",
-        "name": "Previous contact"
+        "name": "Previous contact",
+        "disabled": true
       },
       {
         "role": "text",
-        "text": "3 of 167"
+        "text": "1 of 168"
       },
       {
         "role": "button",
@@ -123,7 +124,7 @@
       },
       {
         "role": "heading",
-        "name": "synth-prodshaped-Brux Fixtura",
+        "name": "synth-prodshaped-Brux Fakeman",
         "level": 2
       },
       {
@@ -161,7 +162,7 @@
         "children": [
           {
             "role": "text",
-            "text": "synth-prodshaped-Brux Fixtura"
+            "text": "synth-prodshaped-Brux Fakeman"
           }
         ]
       },
@@ -179,14 +180,14 @@
         "children": [
           {
             "role": "link",
-            "name": "<email:2>",
+            "name": "<email:1>",
             "children": [
               {
                 "role": "/url",
                 "children": [
                   {
                     "role": "text",
-                    "text": "mailto:<email:2>"
+                    "text": "mailto:<email:1>"
                   }
                 ]
               }
@@ -195,24 +196,6 @@
           {
             "role": "text",
             "text": "Email Primary"
-          }
-        ]
-      },
-      {
-        "role": "term",
-        "children": [
-          {
-            "role": "text",
-            "text": "Location"
-          }
-        ]
-      },
-      {
-        "role": "definition",
-        "children": [
-          {
-            "role": "text",
-            "text": "synth-prodshaped-place-lakeside"
           }
         ]
       },
@@ -253,7 +236,25 @@
         ]
       },
       {
-        "__ariaTruncated__": 8
+        "role": "term",
+        "children": [
+          {
+            "role": "text",
+            "text": "Created"
+          }
+        ]
+      },
+      {
+        "role": "definition",
+        "children": [
+          {
+            "role": "text",
+            "text": "7/10/2026"
+          }
+        ]
+      },
+      {
+        "__ariaTruncated__": 6
       }
     ]
   },
@@ -271,10 +272,10 @@
         "body": {
           "data": {
             "ids": [
-              "<id:4>",
               "<id:1>",
               "<id:2>",
               "<id:3>",
+              "<id:4>",
               "<id:5>",
               "<id:6>",
               "<id:7>",
@@ -322,10 +323,10 @@
               "<id:69>",
               "<id:70>",
               {
-                "__truncated__": 117
+                "__truncated__": 118
               }
             ],
-            "total": 167
+            "total": 168
           },
           "success": true
         }
@@ -340,16 +341,13 @@
         "body": {
           "data": {
             "cadence": "weekly",
-            "contact_by": "2026-07-12T00:00:00Z",
+            "contact_by": "2026-07-09T00:00:00Z",
             "created_at": "<ts>",
             "full_name": "synth-prodshaped-Brux Fakeman",
             "has_pending_followup": false,
             "how_met": "synth-prodshaped-met-online-community",
             "id": "<id:1>",
-            "last_contacted": "2026-07-12T16:14:34.223608Z",
-            "last_interaction_at": "2026-07-12T16:14:34.223608Z",
-            "last_outreach_at": "2026-07-12T16:14:34.223608Z",
-            "last_response_at": "2026-07-12T16:14:34.223608Z",
+            "last_contacted": "2026-07-09T07:38:50.546824Z",
             "methods": [
               {
                 "id": "<id:21>",
@@ -377,13 +375,13 @@
         "body": {
           "data": {
             "cadence": "weekly",
-            "contact_by": "2026-07-11T00:00:00Z",
+            "contact_by": "2026-07-09T00:00:00Z",
             "created_at": "<ts>",
             "full_name": "synth-prodshaped-Brux Fixtura",
             "has_pending_followup": false,
             "how_met": "synth-prodshaped-met-at-a-conference",
             "id": "<id:2>",
-            "last_contacted": "2026-07-11T16:16:34.129344Z",
+            "last_contacted": "2026-07-09T16:04:04.646687Z",
             "location": "synth-prodshaped-place-lakeside",
             "methods": [
               {
@@ -403,45 +401,12 @@
           },
           "success": true
         }
-      },
-      {
-        "method": "GET",
-        "requestUrl": "/api/v1/contacts/<id:3>",
-        "query": {},
-        "status": 200,
-        "body": {
-          "data": {
-            "cadence": "weekly",
-            "contact_by": "2026-07-11T00:00:00Z",
-            "created_at": "<ts>",
-            "full_name": "synth-prodshaped-Brux Placeholdt",
-            "has_pending_followup": false,
-            "id": "<id:3>",
-            "last_contacted": "2026-07-11T14:51:44.314149Z",
-            "methods": [
-              {
-                "id": "<id:23>",
-                "is_primary": true,
-                "type": "email",
-                "value": "<email:3>"
-              }
-            ],
-            "primary_method": {
-              "id": "<id:23>",
-              "is_primary": true,
-              "type": "email",
-              "value": "<email:3>"
-            },
-            "updated_at": "<ts>"
-          },
-          "success": true
-        }
       }
     ],
     "GET /api/v1/contacts/:id/events": [
       {
         "method": "GET",
-        "requestUrl": "/api/v1/contacts/<id:2>/events?limit=100",
+        "requestUrl": "/api/v1/contacts/<id:1>/events?limit=100",
         "query": {
           "limit": "100"
         },
@@ -455,7 +420,7 @@
     "GET /api/v1/contacts/:id/notes": [
       {
         "method": "GET",
-        "requestUrl": "/api/v1/contacts/<id:2>/notes",
+        "requestUrl": "/api/v1/contacts/<id:1>/notes",
         "query": {},
         "status": 204,
         "body": null
@@ -464,7 +429,7 @@
     "GET /api/v1/contacts/:id/tasks": [
       {
         "method": "GET",
-        "requestUrl": "/api/v1/contacts/<id:2>/tasks?state=completed&lifecycle=manual",
+        "requestUrl": "/api/v1/contacts/<id:1>/tasks?state=completed&lifecycle=manual",
         "query": {
           "lifecycle": "manual",
           "state": "completed"
@@ -474,7 +439,7 @@
       },
       {
         "method": "GET",
-        "requestUrl": "/api/v1/contacts/<id:2>/tasks?state=managed&lifecycle=followup_loop",
+        "requestUrl": "/api/v1/contacts/<id:1>/tasks?state=managed&lifecycle=followup_loop",
         "query": {
           "lifecycle": "followup_loop",
           "state": "managed"
@@ -484,7 +449,7 @@
       },
       {
         "method": "GET",
-        "requestUrl": "/api/v1/contacts/<id:2>/tasks?state=managed&lifecycle=manual",
+        "requestUrl": "/api/v1/contacts/<id:1>/tasks?state=managed&lifecycle=manual",
         "query": {
           "lifecycle": "manual",
           "state": "managed"
@@ -511,8 +476,8 @@
         "body": {
           "data": {
             "acceleration_factor": 60,
-            "base_time": "2026-07-09T05:52:58Z",
-            "current_time": "2026-07-12T16:28:37.3983349Z",
+            "base_time": "2026-07-09T15:07:20Z",
+            "current_time": "2026-07-10T14:57:18.18019118Z",
             "environment": "testing",
             "is_accelerated": true
           },

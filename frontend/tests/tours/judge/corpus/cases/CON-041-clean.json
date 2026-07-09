@@ -6,8 +6,8 @@
     "capture_generator_version": 1
   },
   "captures": [
-    "contacts/004-action-edit-consumed-once-and-stripped-from-url.json",
-    "contacts/005-action-merge-consumed-once-and-stripped-from-url.json"
+    "contacts/005-action-edit-consumed-once-and-stripped-from-url.json",
+    "contacts/006-action-merge-consumed-once-and-stripped-from-url.json"
   ],
   "expected": [
     {

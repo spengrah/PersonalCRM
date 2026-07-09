@@ -2,16 +2,16 @@
   "captureFormatVersion": 1,
   "captureGeneratorVersion": 1,
   "tour": "contacts",
-  "seq": 4,
+  "seq": 5,
   "behaviors": ["CON-041"],
   "note": "action=edit consumed once and stripped from URL",
   "url": "/contacts/<id:3>?sort=cadence&order=desc",
   "pair": null,
   "serverTime": {
-    "currentTime": "2026-07-12T15:51:56.14478752Z",
+    "currentTime": "2026-07-10T14:40:00.44482166Z",
     "isAccelerated": true,
     "accelerationFactor": 60,
-    "baseTime": "2026-07-09T05:52:58Z",
+    "baseTime": "2026-07-09T15:07:20Z",
     "environment": "testing"
   },
   "aria": {
@@ -102,7 +102,7 @@
           },
           {
             "role": "button",
-            "name": "Jul 12, 03:51:38 PM 60x"
+            "name": "Jul 10, 02:39:12 PM 60x"
           }
         ]
       },
@@ -221,7 +221,7 @@
       },
       {
         "role": "textbox",
-        "name": "<email:165>",
+        "name": "<email:56>",
         "children": [
           {
             "role": "text",
@@ -372,13 +372,13 @@
         "body": {
           "data": {
             "cadence": "weekly",
-            "contact_by": "2026-07-11T00:00:00Z",
+            "contact_by": "2026-07-09T00:00:00Z",
             "created_at": "<ts>",
             "full_name": "synth-prodshaped-Brux Fixtura",
             "has_pending_followup": false,
             "how_met": "synth-prodshaped-met-at-a-conference",
             "id": "<id:2>",
-            "last_contacted": "2026-07-11T16:16:34.129344Z",
+            "last_contacted": "2026-07-09T16:04:04.646687Z",
             "location": "synth-prodshaped-place-lakeside",
             "methods": [
               {
@@ -407,12 +407,12 @@
         "body": {
           "data": {
             "cadence": "weekly",
-            "contact_by": "2026-07-11T00:00:00Z",
+            "contact_by": "2026-07-09T00:00:00Z",
             "created_at": "<ts>",
             "full_name": "synth-prodshaped-Brux Placeholdt",
             "has_pending_followup": false,
             "id": "<id:3>",
-            "last_contacted": "2026-07-11T14:51:44.314149Z",
+            "last_contacted": "2026-07-09T14:39:14.831492Z",
             "methods": [
               {
                 "id": "<id:23>",
@@ -440,12 +440,12 @@
         "body": {
           "data": {
             "cadence": "weekly",
-            "contact_by": "2026-07-11T00:00:00Z",
+            "contact_by": "2026-07-09T00:00:00Z",
             "created_at": "<ts>",
             "full_name": "synth-prodshaped-Brux Testwell",
             "has_pending_followup": false,
             "id": "<id:4>",
-            "last_contacted": "2026-07-11T05:34:12.703215Z",
+            "last_contacted": "2026-07-09T05:21:43.220559Z",
             "methods": [
               {
                 "id": "<id:24>",
@@ -525,8 +525,8 @@
         "body": {
           "data": {
             "acceleration_factor": 60,
-            "base_time": "2026-07-09T05:52:58Z",
-            "current_time": "2026-07-12T15:50:20.35041082Z",
+            "base_time": "2026-07-09T15:07:20Z",
+            "current_time": "2026-07-10T14:37:47.7866378Z",
             "environment": "testing",
             "is_accelerated": true
           },

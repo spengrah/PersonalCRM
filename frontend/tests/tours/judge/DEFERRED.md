@@ -27,9 +27,8 @@ The user is unavailable, so PR2 is engineered to be mergeable with **zero** huma
 - **`@openai/codex-sdk` judge implementation (D2 ordering inversion).** The arc names the SDK as the eventual primary; PR2 ships `codex-exec` (present in this env) + the `Judge` interface + an `http` stub, but NOT a `codex-sdk.ts` (a hard `@openai/codex-sdk` import would fail `tsc`, and the dep is unvetted). Follow-up: add the devDep + a `codex-sdk.ts` behind the identical `Judge` interface; select via `QA_JUDGE=codex-sdk`. Zero grader change.
 - **promptfoo spike (D5).** PR2 ships a ~200-line bun runner (the arc's sanctioned fallback). A later spike decides whether promptfoo fits the per-`then`-item verdict schema without contortion and plausibly serves #379's Venice-provider extractor evals. The corpus/artifact conventions are kept tool-neutral so the spike inherits them.
 
-## Capture-coverage caveats (tour follow-ups, surfaced in the advisory report)
+## Deferred: the v0 human-validated corpus freeze (label-gated)
 
-The merged `contacts.tour.ts` leaves two then-items only partially captured; the verifiers **abstain** (`unsure`) rather than claim them proven:
+PR3 grows the corpus toward the v0 size **mechanically** (new tours' synthetic captures + doctored self-labeled + clean cases) and lands the verifiers-only eval end-to-end, but the **full v0 human-validated freeze stays deferred** — exactly like the label-gated metrics above. It needs the maintainer's corrected ground-truth labels for the real/clean/ambiguous cases, the 70/30 frozen dev/held-out split, and the fail-precision-over-held-out bar. Un-defer via the same recipe: draft with a stronger model (`*.draft.json`), the maintainer corrects in place (`*.labeled.json`), and PR4 wires the bar + issue-mode flip. **No human-labeling ask is surfaced by PR3** — everything it ships is mergeable with zero human labels.
 
-- **CON-038[0]** — the tour opens `/contacts?sort=cadence&order=desc` (explicit), proving cadence-ordering in the default-equivalent context but NOT the _implicit_ no-sort default. A bare-`/contacts` capture is the follow-up.
-- **CON-040[0]** — only the FIRST boundary (`Previous` disabled) is captured; the last boundary (`Next` disabled at the last contact) is not. A last-contact capture is the follow-up.
+_(The PR2 capture-coverage caveats CON-038[0] / CON-040[0] are now toured — the bare-`/contacts` and last-contact-boundary captures land in `contacts.tour.ts` (PR3 follow-up 3), so those then-items are proven, not abstained.)_

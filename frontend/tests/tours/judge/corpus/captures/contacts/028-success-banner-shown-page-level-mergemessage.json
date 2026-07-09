@@ -2,19 +2,19 @@
   "captureFormatVersion": 1,
   "captureGeneratorVersion": 1,
   "tour": "contacts",
-  "seq": 12,
-  "behaviors": ["CON-040"],
-  "note": "ArrowRight in edit mode: url unchanged — arrows inert while editing",
-  "url": "/contacts/<id:1>?sort=cadence&order=desc",
+  "seq": 28,
+  "behaviors": ["CON-043"],
+  "note": "success banner shown (page-level mergeMessage)",
+  "url": "/contacts/<id:4>?sort=cadence&order=desc",
   "pair": {
-    "id": "keyboard-nav-CON-040",
-    "role": "arrow-edit-inert"
+    "id": "merge-CON-043",
+    "role": "outcome-reported"
   },
   "serverTime": {
-    "currentTime": "2026-07-12T16:07:09.86466124Z",
+    "currentTime": "2026-07-10T15:24:13.97071892Z",
     "isAccelerated": true,
     "accelerationFactor": 60,
-    "baseTime": "2026-07-09T05:52:58Z",
+    "baseTime": "2026-07-09T15:07:20Z",
     "environment": "testing"
   },
   "aria": {
@@ -105,7 +105,7 @@
           },
           {
             "role": "button",
-            "name": "Jul 12, 04:07:07 PM 60x"
+            "name": "Jul 10, 03:24:01 PM 60x"
           }
         ]
       },
@@ -116,179 +116,164 @@
       },
       {
         "role": "text",
-        "text": "1 of 168"
+        "text": "1 of 167"
       },
       {
         "role": "button",
-        "name": "Next contact",
-        "disabled": true
+        "name": "Next contact"
       },
       {
         "role": "heading",
-        "name": "Edit Contact",
+        "name": "synth-prodshaped-Brux Dummond (merged)",
         "level": 2
       },
       {
-        "role": "paragraph",
+        "role": "button",
+        "name": "Log Interaction"
+      },
+      {
+        "role": "button",
+        "name": "Edit"
+      },
+      {
+        "role": "button",
+        "name": "Merge"
+      },
+      {
+        "role": "button",
+        "name": "Delete"
+      },
+      {
+        "role": "heading",
+        "name": "Contact Information",
+        "level": 3
+      },
+      {
+        "role": "term",
         "children": [
           {
             "role": "text",
-            "text": "Update synth-prodshaped-Brux Fakeman's information"
+            "text": "Full name"
           }
         ]
       },
       {
-        "role": "button",
-        "name": "Cancel"
-      },
-      {
-        "role": "text",
-        "text": "Full Name*"
-      },
-      {
-        "role": "textbox",
-        "name": "Full Name*",
+        "role": "definition",
         "children": [
           {
-            "role": "/placeholder",
+            "role": "text",
+            "text": "synth-prodshaped-Brux Dummond (merged)"
+          }
+        ]
+      },
+      {
+        "role": "term",
+        "children": [
+          {
+            "role": "text",
+            "text": "Contact methods"
+          }
+        ]
+      },
+      {
+        "role": "definition",
+        "children": [
+          {
+            "role": "link",
+            "name": "<email:4>",
             "children": [
               {
-                "role": "text",
-                "text": "Enter full name"
+                "role": "/url",
+                "children": [
+                  {
+                    "role": "text",
+                    "text": "mailto:<email:4>"
+                  }
+                ]
               }
             ]
           },
           {
             "role": "text",
-            "text": "synth-prodshaped-Brux Fakeman"
-          }
-        ]
-      },
-      {
-        "role": "text",
-        "text": "Contact methods"
-      },
-      {
-        "role": "paragraph",
-        "children": [
-          {
-            "role": "text",
-            "text": "Add one or more ways to reach this contact."
-          }
-        ]
-      },
-      {
-        "role": "combobox",
-        "children": [
-          {
-            "role": "option",
-            "name": "Select"
+            "text": "Email Primary"
           },
           {
-            "role": "option",
-            "name": "Email",
-            "selected": true
-          },
-          {
-            "role": "option",
-            "name": "Phone"
-          },
-          {
-            "role": "option",
-            "name": "Telegram"
-          },
-          {
-            "role": "option",
-            "name": "Signal"
-          },
-          {
-            "role": "option",
-            "name": "Discord"
-          },
-          {
-            "role": "option",
-            "name": "Twitter"
-          },
-          {
-            "role": "option",
-            "name": "Google Chat"
-          },
-          {
-            "role": "option",
-            "name": "WhatsApp"
-          }
-        ]
-      },
-      {
-        "role": "img"
-      },
-      {
-        "role": "textbox",
-        "name": "<email:165>",
-        "children": [
-          {
-            "role": "text",
-            "text": "<email:1>"
-          }
-        ]
-      },
-      {
-        "role": "button",
-        "name": "Primary contact method",
-        "children": [
-          {
-            "role": "img"
-          }
-        ]
-      },
-      {
-        "role": "button",
-        "name": "Remove",
-        "disabled": true,
-        "children": [
-          {
-            "role": "img"
-          }
-        ]
-      },
-      {
-        "role": "button",
-        "name": "Add method",
-        "children": [
-          {
-            "role": "img"
-          },
-          {
-            "role": "text",
-            "text": "Add method"
-          }
-        ]
-      },
-      {
-        "role": "text",
-        "text": "Location"
-      },
-      {
-        "role": "textbox",
-        "name": "Location",
-        "children": [
-          {
-            "role": "/placeholder",
+            "role": "link",
+            "name": "<email:21>",
             "children": [
               {
-                "role": "text",
-                "text": "Enter location (city, country)"
+                "role": "/url",
+                "children": [
+                  {
+                    "role": "text",
+                    "text": "mailto:<email:21>"
+                  }
+                ]
               }
             ]
+          },
+          {
+            "role": "text",
+            "text": "Email"
           }
         ]
       },
       {
-        "role": "text",
-        "text": "Birthday"
+        "role": "term",
+        "children": [
+          {
+            "role": "text",
+            "text": "Contact cadence"
+          }
+        ]
       },
       {
-        "__ariaTruncated__": 13
+        "role": "definition",
+        "children": [
+          {
+            "role": "text",
+            "text": "weekly"
+          }
+        ]
+      },
+      {
+        "role": "term",
+        "children": [
+          {
+            "role": "text",
+            "text": "Recent activity"
+          }
+        ]
+      },
+      {
+        "role": "definition",
+        "children": [
+          {
+            "role": "text",
+            "text": "No recent activity"
+          }
+        ]
+      },
+      {
+        "role": "term",
+        "children": [
+          {
+            "role": "text",
+            "text": "Created"
+          }
+        ]
+      },
+      {
+        "role": "definition",
+        "children": [
+          {
+            "role": "text",
+            "text": "7/10/2026"
+          }
+        ]
+      },
+      {
+        "__ariaTruncated__": 8
       }
     ]
   },

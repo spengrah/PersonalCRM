@@ -2,7 +2,7 @@
   "captureFormatVersion": 1,
   "captureGeneratorVersion": 1,
   "tour": "contacts",
-  "seq": 8,
+  "seq": 9,
   "behaviors": ["CON-040"],
   "note": "ArrowLeft moved to previous contact",
   "url": "/contacts/<id:2>?sort=cadence&order=desc",
@@ -11,10 +11,10 @@
     "role": "arrow-left-prev"
   },
   "serverTime": {
-    "currentTime": "2026-07-12T16:02:43.38488164Z",
+    "currentTime": "2026-07-10T14:54:40.94733428Z",
     "isAccelerated": true,
     "accelerationFactor": 60,
-    "baseTime": "2026-07-09T05:52:58Z",
+    "baseTime": "2026-07-09T15:07:20Z",
     "environment": "testing"
   },
   "aria": {
@@ -105,7 +105,7 @@
           },
           {
             "role": "button",
-            "name": "Jul 12, 04:02:13 PM 60x"
+            "name": "Jul 10, 02:54:05 PM 60x"
           }
         ]
       },

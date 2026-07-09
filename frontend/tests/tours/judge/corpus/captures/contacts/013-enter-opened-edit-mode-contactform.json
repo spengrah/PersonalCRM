@@ -4,17 +4,17 @@
   "tour": "contacts",
   "seq": 13,
   "behaviors": ["CON-040"],
-  "note": "Escape discards edit, back to view mode",
-  "url": "/contacts/<id:1>?sort=cadence&order=desc",
+  "note": "Enter opened edit mode (ContactForm)",
+  "url": "/contacts/<id:140>?sort=cadence&order=desc",
   "pair": {
     "id": "keyboard-nav-CON-040",
-    "role": "escape-discard"
+    "role": "enter-edit"
   },
   "serverTime": {
-    "currentTime": "2026-07-12T16:07:22.40427634Z",
+    "currentTime": "2026-07-10T15:03:47.96310362Z",
     "isAccelerated": true,
     "accelerationFactor": 60,
-    "baseTime": "2026-07-09T05:52:58Z",
+    "baseTime": "2026-07-09T15:07:20Z",
     "environment": "testing"
   },
   "aria": {
@@ -105,7 +105,7 @@
           },
           {
             "role": "button",
-            "name": "Jul 12, 04:07:07 PM 60x"
+            "name": "Jul 10, 03:03:11 PM 60x"
           }
         ]
       },
@@ -116,145 +116,179 @@
       },
       {
         "role": "text",
-        "text": "1 of 168"
+        "text": "168 of 168"
       },
       {
         "role": "button",
-        "name": "Next contact"
+        "name": "Next contact",
+        "disabled": true
       },
       {
         "role": "heading",
-        "name": "synth-prodshaped-Brux Fakeman",
+        "name": "Edit Contact",
         "level": 2
       },
       {
-        "role": "button",
-        "name": "Log Interaction"
-      },
-      {
-        "role": "button",
-        "name": "Edit"
-      },
-      {
-        "role": "button",
-        "name": "Merge"
-      },
-      {
-        "role": "button",
-        "name": "Delete"
-      },
-      {
-        "role": "heading",
-        "name": "Contact Information",
-        "level": 3
-      },
-      {
-        "role": "term",
+        "role": "paragraph",
         "children": [
           {
             "role": "text",
-            "text": "Full name"
+            "text": "Update synth-prodshaped-Zeta Placeholdt's information"
           }
         ]
       },
       {
-        "role": "definition",
-        "children": [
-          {
-            "role": "text",
-            "text": "synth-prodshaped-Brux Fakeman"
-          }
-        ]
+        "role": "button",
+        "name": "Cancel"
       },
       {
-        "role": "term",
-        "children": [
-          {
-            "role": "text",
-            "text": "Contact methods"
-          }
-        ]
+        "role": "text",
+        "text": "Full Name*"
       },
       {
-        "role": "definition",
+        "role": "textbox",
+        "name": "Full Name*",
         "children": [
           {
-            "role": "link",
-            "name": "<email:1>",
+            "role": "/placeholder",
             "children": [
               {
-                "role": "/url",
-                "children": [
-                  {
-                    "role": "text",
-                    "text": "mailto:<email:1>"
-                  }
-                ]
+                "role": "text",
+                "text": "Enter full name"
               }
             ]
           },
           {
             "role": "text",
-            "text": "Email Primary"
+            "text": "synth-prodshaped-Zeta Placeholdt"
           }
         ]
       },
       {
-        "role": "term",
+        "role": "text",
+        "text": "Contact methods"
+      },
+      {
+        "role": "paragraph",
         "children": [
           {
             "role": "text",
-            "text": "Contact cadence"
+            "text": "Add one or more ways to reach this contact."
           }
         ]
       },
       {
-        "role": "definition",
+        "role": "combobox",
+        "children": [
+          {
+            "role": "option",
+            "name": "Select"
+          },
+          {
+            "role": "option",
+            "name": "Email"
+          },
+          {
+            "role": "option",
+            "name": "Phone"
+          },
+          {
+            "role": "option",
+            "name": "Telegram",
+            "selected": true
+          },
+          {
+            "role": "option",
+            "name": "Signal"
+          },
+          {
+            "role": "option",
+            "name": "Discord"
+          },
+          {
+            "role": "option",
+            "name": "Twitter"
+          },
+          {
+            "role": "option",
+            "name": "Google Chat"
+          },
+          {
+            "role": "option",
+            "name": "WhatsApp"
+          }
+        ]
+      },
+      {
+        "role": "img"
+      },
+      {
+        "role": "textbox",
+        "name": "@username",
         "children": [
           {
             "role": "text",
-            "text": "weekly"
+            "text": "@synth_prodshaped_157"
           }
         ]
       },
       {
-        "role": "term",
+        "role": "button",
+        "name": "Primary contact method",
         "children": [
           {
-            "role": "text",
-            "text": "Recent activity"
+            "role": "img"
           }
         ]
       },
       {
-        "role": "definition",
+        "role": "button",
+        "name": "Remove",
+        "disabled": true,
         "children": [
           {
-            "role": "text",
-            "text": "No recent activity"
+            "role": "img"
           }
         ]
       },
       {
-        "role": "term",
+        "role": "button",
+        "name": "Add method",
         "children": [
           {
-            "role": "text",
-            "text": "Created"
-          }
-        ]
-      },
-      {
-        "role": "definition",
-        "children": [
+            "role": "img"
+          },
           {
             "role": "text",
-            "text": "7/12/2026"
+            "text": "Add method"
           }
         ]
       },
       {
-        "__ariaTruncated__": 6
+        "role": "text",
+        "text": "Location"
+      },
+      {
+        "role": "textbox",
+        "name": "Location",
+        "children": [
+          {
+            "role": "/placeholder",
+            "children": [
+              {
+                "role": "text",
+                "text": "Enter location (city, country)"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "role": "text",
+        "text": "Birthday"
+      },
+      {
+        "__ariaTruncated__": 13
       }
     ]
   },

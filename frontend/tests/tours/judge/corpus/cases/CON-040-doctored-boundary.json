@@ -6,15 +6,16 @@
     "capture_generator_version": 1
   },
   "captures": [
-    "contacts/006-detail-before-keyboard-nav-view-mode.json",
-    "contacts/007-arrowright-moved-to-next-contact.json",
-    "contacts/008-arrowleft-moved-to-previous-contact.json",
-    "contacts/009-boundary-first-contact-previous-nav-disabled.json",
-    "contacts/010-focus-in-add-task-input-view-mode-arrowright-does-not-naviga.json",
-    "contacts/011-enter-opened-edit-mode-contactform.json",
-    "contacts/012-arrowright-in-edit-mode-url-unchanged-arrows-inert-while-edi.json",
-    "contacts/013-escape-discards-edit-back-to-view-mode.json",
-    "contacts/014-escape-from-view-returns-to-the-list-context-preserved.json"
+    "contacts/007-detail-before-keyboard-nav-view-mode.json",
+    "contacts/008-arrowright-moved-to-next-contact.json",
+    "contacts/009-arrowleft-moved-to-previous-contact.json",
+    "contacts/010-boundary-first-contact-previous-nav-disabled.json",
+    "contacts/012-boundary-last-contact-next-nav-disabled.json",
+    "contacts/011-focus-in-add-task-input-view-mode-arrowright-does-not-naviga.json",
+    "contacts/013-enter-opened-edit-mode-contactform.json",
+    "contacts/014-arrowright-in-edit-mode-url-unchanged-arrows-inert-while-edi.json",
+    "contacts/015-escape-discards-edit-back-to-view-mode.json",
+    "contacts/016-escape-from-view-returns-to-the-list-context-preserved.json"
   ],
   "doctor": {
     "base_case": "CON-040-clean",

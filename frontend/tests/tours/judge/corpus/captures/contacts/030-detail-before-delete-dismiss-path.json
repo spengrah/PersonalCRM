@@ -2,19 +2,19 @@
   "captureFormatVersion": 1,
   "captureGeneratorVersion": 1,
   "tour": "contacts",
-  "seq": 6,
-  "behaviors": ["CON-040"],
-  "note": "detail before keyboard nav (view mode)",
+  "seq": 30,
+  "behaviors": ["CON-042"],
+  "note": "detail before delete (dismiss path)",
   "url": "/contacts/<id:2>?sort=cadence&order=desc",
   "pair": {
-    "id": "keyboard-nav-CON-040",
-    "role": "view-before"
+    "id": "delete-CON-042",
+    "role": "before"
   },
   "serverTime": {
-    "currentTime": "2026-07-12T16:00:15.70371262Z",
+    "currentTime": "2026-07-10T15:33:55.1821949Z",
     "isAccelerated": true,
     "accelerationFactor": 60,
-    "baseTime": "2026-07-09T05:52:58Z",
+    "baseTime": "2026-07-09T15:07:20Z",
     "environment": "testing"
   },
   "aria": {
@@ -105,7 +105,7 @@
           },
           {
             "role": "button",
-            "name": "Jul 12, 03:59:20 PM 60x"
+            "name": "Jul 10, 03:33:35 PM 60x"
           }
         ]
       },
@@ -115,7 +115,7 @@
       },
       {
         "role": "text",
-        "text": "2 of 168"
+        "text": "3 of 167"
       },
       {
         "role": "button",
@@ -271,10 +271,10 @@
         "body": {
           "data": {
             "ids": [
+              "<id:4>",
               "<id:1>",
               "<id:2>",
               "<id:3>",
-              "<id:4>",
               "<id:5>",
               "<id:6>",
               "<id:7>",
@@ -322,25 +322,13 @@
               "<id:69>",
               "<id:70>",
               {
-                "__truncated__": 118
+                "__truncated__": 117
               }
             ],
-            "total": 168
+            "total": 167
           },
           "success": true
         }
-      },
-      {
-        "method": "GET",
-        "requestUrl": "/api/v1/contacts?page=1&limit=20&sort=cadence&order=desc",
-        "query": {
-          "limit": "20",
-          "order": "desc",
-          "page": "1",
-          "sort": "cadence"
-        },
-        "status": 200,
-        "body": null
       }
     ],
     "GET /api/v1/contacts/:id": [
@@ -352,13 +340,16 @@
         "body": {
           "data": {
             "cadence": "weekly",
-            "contact_by": "2026-07-11T00:00:00Z",
+            "contact_by": "2026-07-10T00:00:00Z",
             "created_at": "<ts>",
             "full_name": "synth-prodshaped-Brux Fakeman",
             "has_pending_followup": false,
             "how_met": "synth-prodshaped-met-online-community",
             "id": "<id:1>",
-            "last_contacted": "2026-07-11T07:51:20.02948Z",
+            "last_contacted": "2026-07-10T15:15:21.569786Z",
+            "last_interaction_at": "2026-07-10T15:15:21.569786Z",
+            "last_outreach_at": "2026-07-10T15:15:21.569786Z",
+            "last_response_at": "2026-07-10T15:15:21.569786Z",
             "methods": [
               {
                 "id": "<id:21>",
@@ -386,13 +377,13 @@
         "body": {
           "data": {
             "cadence": "weekly",
-            "contact_by": "2026-07-11T00:00:00Z",
+            "contact_by": "2026-07-09T00:00:00Z",
             "created_at": "<ts>",
             "full_name": "synth-prodshaped-Brux Fixtura",
             "has_pending_followup": false,
             "how_met": "synth-prodshaped-met-at-a-conference",
             "id": "<id:2>",
-            "last_contacted": "2026-07-11T16:16:34.129344Z",
+            "last_contacted": "2026-07-09T16:04:04.646687Z",
             "location": "synth-prodshaped-place-lakeside",
             "methods": [
               {
@@ -421,12 +412,12 @@
         "body": {
           "data": {
             "cadence": "weekly",
-            "contact_by": "2026-07-11T00:00:00Z",
+            "contact_by": "2026-07-09T00:00:00Z",
             "created_at": "<ts>",
             "full_name": "synth-prodshaped-Brux Placeholdt",
             "has_pending_followup": false,
             "id": "<id:3>",
-            "last_contacted": "2026-07-11T14:51:44.314149Z",
+            "last_contacted": "2026-07-09T14:39:14.831492Z",
             "methods": [
               {
                 "id": "<id:23>",
@@ -509,13 +500,6 @@
         "query": {},
         "status": 404,
         "body": null
-      },
-      {
-        "method": "GET",
-        "requestUrl": "/api/v1/sync/status",
-        "query": {},
-        "status": 404,
-        "body": null
       }
     ],
     "GET /api/v1/system/time": [
@@ -527,8 +511,8 @@
         "body": {
           "data": {
             "acceleration_factor": 60,
-            "base_time": "2026-07-09T05:52:58Z",
-            "current_time": "2026-07-12T15:59:08.17544254Z",
+            "base_time": "2026-07-09T15:07:20Z",
+            "current_time": "2026-07-10T15:32:05.12164646Z",
             "environment": "testing",
             "is_accelerated": true
           },

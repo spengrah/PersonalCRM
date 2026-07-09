@@ -2,7 +2,7 @@
   "captureFormatVersion": 1,
   "captureGeneratorVersion": 1,
   "tour": "contacts",
-  "seq": 18,
+  "seq": 20,
   "behaviors": ["CON-043"],
   "note": "selector filtered by TARGET name: target absent from candidates = selector excludes target",
   "url": "/contacts/<id:4>?sort=cadence&order=desc",
@@ -11,10 +11,10 @@
     "role": "selector-open"
   },
   "serverTime": {
-    "currentTime": "2026-07-12T16:18:55.97690896Z",
+    "currentTime": "2026-07-10T15:21:07.5706055Z",
     "isAccelerated": true,
     "accelerationFactor": 60,
-    "baseTime": "2026-07-09T05:52:58Z",
+    "baseTime": "2026-07-09T15:07:20Z",
     "environment": "testing"
   },
   "aria": {

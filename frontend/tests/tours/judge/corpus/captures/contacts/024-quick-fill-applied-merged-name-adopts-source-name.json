@@ -2,19 +2,19 @@
   "captureFormatVersion": 1,
   "captureGeneratorVersion": 1,
   "tour": "contacts",
-  "seq": 19,
+  "seq": 24,
   "behaviors": ["CON-043"],
-  "note": "preview loading: submit disabled",
+  "note": "quick-fill applied: merged name adopts source name",
   "url": "/contacts/<id:4>?sort=cadence&order=desc",
   "pair": {
     "id": "merge-CON-043",
-    "role": "preview-loading"
+    "role": "name-quickfilled"
   },
   "serverTime": {
-    "currentTime": "2026-07-12T16:19:17.1282352Z",
+    "currentTime": "2026-07-10T15:22:21.26703626Z",
     "isAccelerated": true,
     "accelerationFactor": 60,
-    "baseTime": "2026-07-09T05:52:58Z",
+    "baseTime": "2026-07-09T15:07:20Z",
     "environment": "testing"
   },
   "aria": {
@@ -34,12 +34,12 @@
       },
       {
         "role": "heading",
-        "name": "synth-prodshaped-Brux Testwell",
+        "name": "synth-prodshaped-Brux Dummond",
         "level": 3,
         "children": [
           {
             "role": "text",
-            "text": "synth-prodshaped-Brux Testwell"
+            "text": "synth-prodshaped-Brux Dummond"
           },
           {
             "role": "img"
@@ -54,13 +54,38 @@
         "role": "button"
       },
       {
+        "role": "heading",
+        "name": "Resolve Conflicts",
+        "level": 4
+      },
+      {
+        "role": "text",
+        "text": "Cadence"
+      },
+      {
+        "role": "button",
+        "name": "Weekly"
+      },
+      {
+        "role": "button",
+        "name": "Monthly"
+      },
+      {
+        "role": "heading",
+        "name": "Will Be Merged",
+        "level": 4
+      },
+      {
+        "role": "text",
+        "text": "Contact methods 1 unique added Notes None Interactions None Calendar events None"
+      },
+      {
         "role": "button",
         "name": "Cancel"
       },
       {
         "role": "button",
-        "name": "Merge Contacts",
-        "disabled": true
+        "name": "Merge Contacts"
       }
     ]
   },

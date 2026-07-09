@@ -2,7 +2,7 @@
   "captureFormatVersion": 1,
   "captureGeneratorVersion": 1,
   "tour": "contacts",
-  "seq": 21,
+  "seq": 23,
   "behaviors": ["CON-043"],
   "note": "quick-fill affordance visible (merged name not yet source)",
   "url": "/contacts/<id:4>?sort=cadence&order=desc",
@@ -11,10 +11,10 @@
     "role": "name-quickfill-available"
   },
   "serverTime": {
-    "currentTime": "2026-07-12T16:19:34.20257494Z",
+    "currentTime": "2026-07-10T15:22:02.85679232Z",
     "isAccelerated": true,
     "accelerationFactor": 60,
-    "baseTime": "2026-07-09T05:52:58Z",
+    "baseTime": "2026-07-09T15:07:20Z",
     "environment": "testing"
   },
   "aria": {

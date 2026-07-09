@@ -2,16 +2,16 @@
   "captureFormatVersion": 1,
   "captureGeneratorVersion": 1,
   "tour": "contacts",
-  "seq": 1,
-  "behaviors": ["CON-038"],
-  "note": "contact list, default cadence order (no explicit sort)",
+  "seq": 17,
+  "behaviors": ["CON-044"],
+  "note": "before mark-as-contacted (list row activity state)",
   "url": "/contacts?sort=cadence&order=desc",
   "pair": {
-    "id": "default-order-CON-038",
-    "role": "list"
+    "id": "markcontacted-CON-044",
+    "role": "before"
   },
   "serverTime": {
-    "currentTime": "2026-07-10T14:23:40.68550652Z",
+    "currentTime": "2026-07-10T15:14:58.00259258Z",
     "isAccelerated": true,
     "accelerationFactor": 60,
     "baseTime": "2026-07-09T15:07:20Z",
@@ -105,7 +105,7 @@
           },
           {
             "role": "button",
-            "name": "Jul 10, 02:22:28 PM 60x"
+            "name": "Jul 10, 03:13:59 PM 60x"
           }
         ]
       },
@@ -2049,7 +2049,7 @@
           "data": {
             "acceleration_factor": 60,
             "base_time": "2026-07-09T15:07:20Z",
-            "current_time": "2026-07-10T14:22:23.05830728Z",
+            "current_time": "2026-07-10T15:13:35.91123056Z",
             "environment": "testing",
             "is_accelerated": true
           },

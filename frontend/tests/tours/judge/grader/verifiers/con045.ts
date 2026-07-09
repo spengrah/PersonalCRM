@@ -5,8 +5,19 @@
 //   [3] placeholder-year birthdays display without an age
 //   [4] the page follows accelerated time
 //
-// A single birthdays capture (arrayCap/ariaCap = Infinity — full list + all
-// cards). Time-dependent items are graded in the recorded serverTime frame.
+// A single birthdays capture. The ground-truth birthday data ([0]/[1]/[3]) is
+// read from the compact `fields.birthdayContacts` projection the tour records
+// ({ full_name, birthday } for every birthday-bearing contact) — NOT the full
+// GET /contacts?limit=1000 body, whose per-contact bloat dominated the committed
+// capture's git weight (DECISION 1). The projection carries exactly what the
+// verifier needs; the aria cards (ariaCap = Infinity) stay the source for
+// section headings / order / per-card age / frame date. Older captures without
+// the projection fall back to the API body. Time-dependent items are graded in
+// the recorded serverTime frame.
+//
+// UTC-lexical convention: a birthday's calendar month/day is extracted LEXICALLY
+// from the leading YYYY-MM-DD (never `new Date(birthday)`), so a value emitted
+// with a `T..Z` suffix or a local offset does not shift the group.
 
 import { asArray, asRecord, asString, envelopeData, endpointItems, flattenAria } from '../evidence'
 import type { CaptureSet, ItemVerdict, ItemVerdicts } from '../types'
@@ -42,7 +53,16 @@ function birthdaysCapture(set: CaptureSet): Capture | undefined {
   return set.captures.find(c => c.behaviors.includes('CON-045')) ?? set.captures[0]
 }
 
-function fullList(capture: Capture): Array<Record<string, unknown>> {
+// The birthday-bearing contacts ({ full_name, birthday }) the verifier grades.
+// Prefer the compact fields.birthdayContacts projection (DECISION 1); fall back
+// to the full GET /contacts?limit=1000 body for captures recorded before it.
+function birthdayContacts(capture: Capture): Array<Record<string, unknown>> {
+  const projected = asArray(capture.fields?.birthdayContacts)
+  if (projected) {
+    return projected
+      .map(x => asRecord(x))
+      .filter((x): x is Record<string, unknown> => x !== undefined)
+  }
   const item = endpointItems(capture, 'GET /api/v1/contacts').find(i => i.query.limit === '1000')
   const data = asArray(envelopeData(item?.body))
   return (data ?? [])
@@ -106,7 +126,7 @@ export function con045(set: CaptureSet): ItemVerdicts {
   // with members but no heading → fail; a group with no members legitimately
   // renders no heading. Abstain when the full list is unavailable.
   out[0] = ((): ItemVerdict => {
-    const expected = expectedProximitySections(fullList(cap), cap.serverTime.currentTime)
+    const expected = expectedProximitySections(birthdayContacts(cap), cap.serverTime.currentTime)
     if (expected === undefined) {
       return {
         verdict: 'unsure',
@@ -139,7 +159,7 @@ export function con045(set: CaptureSet): ItemVerdicts {
     const month = new Date(cap.serverTime.currentTime).getUTCMonth() // 0=Jan
     const nearYearEnd = month >= 10 // November or December
     const giftShown = sectionsPresent.has('gift')
-    const candidates = giftPlanningCandidatesExist(fullList(cap))
+    const candidates = giftPlanningCandidatesExist(birthdayContacts(cap))
 
     if (giftShown) {
       // The app renders the section only near year-end AND when there is >= 1
@@ -237,7 +257,7 @@ export function con045(set: CaptureSet): ItemVerdicts {
 
   // [3] placeholder-year (1900) birthdays show no age.
   out[3] = ((): ItemVerdict => {
-    const placeholders = fullList(cap)
+    const placeholders = birthdayContacts(cap)
       .filter(c => asString(c.birthday)?.startsWith('1900'))
       .map(c => asString(c.full_name))
       .filter((x): x is string => x !== undefined)
@@ -247,11 +267,13 @@ export function con045(set: CaptureSet): ItemVerdicts {
         reason: 'no placeholder-year birthdays in the frame — no evidence',
       }
     }
+    let placeholderCardFound = false
     for (const name of placeholders) {
       const headingIdx = nodes.findIndex(
         n => n.role === 'heading' && n.level === 3 && n.name === name
       )
       if (headingIdx === -1) continue // not currently carded (e.g. no birthday-day match)
+      placeholderCardFound = true
       // Scan the card subtree (until the next level-3 heading) for an age line.
       for (let i = headingIdx + 1; i < nodes.length; i++) {
         if (nodes[i].role === 'heading' && nodes[i].level === 3) break
@@ -263,6 +285,15 @@ export function con045(set: CaptureSet): ItemVerdicts {
             reason: 'a placeholder-year birthday displays an age',
           }
         }
+      }
+    }
+    // A placeholder exists in the list but NONE of them was actually carded in
+    // the aria — there is nothing to check, so abstain rather than vacuously
+    // pass (a pass here would claim "no age shown" over zero rendered cards).
+    if (!placeholderCardFound) {
+      return {
+        verdict: 'unsure',
+        reason: 'no placeholder-year birthday card rendered in the aria — nothing to check',
       }
     }
     return {

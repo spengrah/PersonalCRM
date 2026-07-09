@@ -2,19 +2,19 @@
   "captureFormatVersion": 1,
   "captureGeneratorVersion": 1,
   "tour": "contacts",
-  "seq": 23,
+  "seq": 26,
   "behaviors": ["CON-043"],
-  "note": "merged name manually edited in edit mode",
+  "note": "merge in flight: submit disabled",
   "url": "/contacts/<id:4>?sort=cadence&order=desc",
   "pair": {
     "id": "merge-CON-043",
-    "role": "name-edited"
+    "role": "in-flight"
   },
   "serverTime": {
-    "currentTime": "2026-07-12T16:20:20.12448076Z",
+    "currentTime": "2026-07-10T15:23:31.1689697Z",
     "isAccelerated": true,
     "accelerationFactor": 60,
-    "baseTime": "2026-07-09T05:52:58Z",
+    "baseTime": "2026-07-09T15:07:20Z",
     "environment": "testing"
   },
   "aria": {
@@ -64,7 +64,8 @@
         "text": "Keeping Merge from Archiving synth-prodshaped-Brux Dummond (<email:21>)"
       },
       {
-        "role": "button"
+        "role": "button",
+        "disabled": true
       },
       {
         "role": "heading",
@@ -94,17 +95,25 @@
       },
       {
         "role": "button",
-        "name": "Cancel"
+        "name": "Cancel",
+        "disabled": true
       },
       {
         "role": "button",
-        "name": "Merge Contacts"
+        "name": "Merging...",
+        "disabled": true,
+        "children": [
+          {
+            "role": "img"
+          },
+          {
+            "role": "text",
+            "text": "Merging..."
+          }
+        ]
       }
     ]
   },
   "apiResponses": {},
-  "fields": {
-    "mergedNameInput": "synth-prodshaped-Brux Dummond (merged)"
-  },
   "dialogs": []
 }

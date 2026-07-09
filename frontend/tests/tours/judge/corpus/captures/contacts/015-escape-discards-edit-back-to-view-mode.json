@@ -2,19 +2,19 @@
   "captureFormatVersion": 1,
   "captureGeneratorVersion": 1,
   "tour": "contacts",
-  "seq": 27,
-  "behaviors": ["CON-043"],
-  "note": "success banner auto-dismissed after ~5s",
-  "url": "/contacts/<id:4>?sort=cadence&order=desc",
+  "seq": 15,
+  "behaviors": ["CON-040"],
+  "note": "Escape discards edit, back to view mode",
+  "url": "/contacts/<id:140>?sort=cadence&order=desc",
   "pair": {
-    "id": "merge-CON-043",
-    "role": "dismissed"
+    "id": "keyboard-nav-CON-040",
+    "role": "escape-discard"
   },
   "serverTime": {
-    "currentTime": "2026-07-12T16:26:17.22630682Z",
+    "currentTime": "2026-07-10T15:04:20.1570956Z",
     "isAccelerated": true,
     "accelerationFactor": 60,
-    "baseTime": "2026-07-09T05:52:58Z",
+    "baseTime": "2026-07-09T15:07:20Z",
     "environment": "testing"
   },
   "aria": {
@@ -105,26 +105,26 @@
           },
           {
             "role": "button",
-            "name": "Jul 12, 04:25:31 PM 60x"
+            "name": "Jul 10, 03:04:13 PM 60x"
           }
         ]
       },
       {
         "role": "button",
-        "name": "Previous contact",
-        "disabled": true
+        "name": "Previous contact"
       },
       {
         "role": "text",
-        "text": "1 of 167"
+        "text": "168 of 168"
       },
       {
         "role": "button",
-        "name": "Next contact"
+        "name": "Next contact",
+        "disabled": true
       },
       {
         "role": "heading",
-        "name": "synth-prodshaped-Brux Dummond (merged)",
+        "name": "synth-prodshaped-Zeta Placeholdt",
         "level": 2
       },
       {
@@ -162,7 +162,7 @@
         "children": [
           {
             "role": "text",
-            "text": "synth-prodshaped-Brux Dummond (merged)"
+            "text": "synth-prodshaped-Zeta Placeholdt"
           }
         ]
       },
@@ -180,14 +180,14 @@
         "children": [
           {
             "role": "link",
-            "name": "<email:4>",
+            "name": "@synth_prodshaped_157",
             "children": [
               {
                 "role": "/url",
                 "children": [
                   {
                     "role": "text",
-                    "text": "mailto:<email:4>"
+                    "text": "https://<host>/synth_prodshaped_157"
                   }
                 ]
               }
@@ -195,44 +195,7 @@
           },
           {
             "role": "text",
-            "text": "Email Primary"
-          },
-          {
-            "role": "link",
-            "name": "<email:21>",
-            "children": [
-              {
-                "role": "/url",
-                "children": [
-                  {
-                    "role": "text",
-                    "text": "mailto:<email:21>"
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "role": "text",
-            "text": "Email"
-          }
-        ]
-      },
-      {
-        "role": "term",
-        "children": [
-          {
-            "role": "text",
-            "text": "Contact cadence"
-          }
-        ]
-      },
-      {
-        "role": "definition",
-        "children": [
-          {
-            "role": "text",
-            "text": "weekly"
+            "text": "Telegram Primary"
           }
         ]
       },
@@ -250,7 +213,7 @@
         "children": [
           {
             "role": "text",
-            "text": "No recent activity"
+            "text": "↙ Last response: in the future"
           }
         ]
       },
@@ -268,12 +231,21 @@
         "children": [
           {
             "role": "text",
-            "text": "7/12/2026"
+            "text": "7/10/2026"
           }
         ]
       },
       {
-        "__ariaTruncated__": 6
+        "role": "heading",
+        "name": "Tasks",
+        "level": 3
+      },
+      {
+        "role": "button",
+        "name": "Add"
+      },
+      {
+        "__ariaTruncated__": 4
       }
     ]
   },

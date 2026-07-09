@@ -1,9 +1,9 @@
 // CON-038 — list and detail navigation share one default ordering.
-//   [0] list defaults to cadence order, most frequent first (verifier† caveat)
+//   [0] list defaults to cadence order, most frequent first
 //   [1] detail prev/next uses the same default ordering (ids_only == list order)
 
 import { asArray, asRecord, asString, byRole, endpointItems, envelopeData } from '../evidence'
-import type { CaptureSet, ItemVerdicts } from '../types'
+import type { CaptureSet, ItemVerdict, ItemVerdicts } from '../types'
 import type { ApiResponseItem, Capture } from '../../../support/types'
 
 // Frequency rank: most frequent first (weekly) → least (annual) → no-cadence last.
@@ -41,30 +41,61 @@ function idsOnlyIds(capture: Capture): string[] | undefined {
   return ids?.map(x => asString(x)).filter((x): x is string => x !== undefined)
 }
 
+// Is the contacts array in most-frequent-first cadence order?
+function cadenceOrdered(contacts: Array<Record<string, unknown>>): boolean {
+  for (let i = 1; i < contacts.length; i++) {
+    if (cadenceRank(contacts[i].cadence) < cadenceRank(contacts[i - 1].cadence)) return false
+  }
+  return true
+}
+
 export function con038(set: CaptureSet): ItemVerdicts {
   const list = byRole(set, 'list')
   const detail = byRole(set, 'detail')
+  // The bare-/contacts capture (no explicit sort) proves the IMPLICIT default
+  // ordering; the merged tour now captures it (follow-up 3).
+  const bare = byRole(set, 'list-bare')
+  const contacts = list ? listContacts(list) : undefined
   const out: ItemVerdicts = {}
 
-  // [0] cadence-ordered list — capture-coverage caveat: the tour forces an
-  // explicit sort, so the IMPLICIT no-sort default is not captured → abstain.
-  const contacts = list ? listContacts(list) : undefined
-  if (!contacts || contacts.length === 0) {
-    out[0] = { verdict: 'unsure', reason: 'no list capture / empty contacts body — no evidence' }
-  } else {
-    let ordered = true
-    for (let i = 1; i < contacts.length; i++) {
-      if (cadenceRank(contacts[i].cadence) < cadenceRank(contacts[i - 1].cadence)) ordered = false
+  // [0] the list defaults to cadence order (most frequent first). A CAPTURED
+  // order violation is a real defect regardless of context → fail. When the
+  // bare-/contacts (implicit-default) capture is present, an ordered bare list
+  // is a clean pass. Without it, an ordered explicit-sort list only proves the
+  // default-EQUIVALENT context → abstain with a capture-coverage caveat.
+  out[0] = ((): ItemVerdict => {
+    const bareContacts = bare ? listContacts(bare) : undefined
+    if (bareContacts && bareContacts.length > 0) {
+      return cadenceOrdered(bareContacts)
+        ? {
+            verdict: 'pass',
+            citation: 'GET /api/v1/contacts (bare, no sort param) body cadence order',
+          }
+        : {
+            verdict: 'fail',
+            citation: 'GET /api/v1/contacts (bare) body cadence order',
+            reason:
+              'the implicit-default contact list is NOT in cadence (most-frequent-first) order',
+          }
     }
-    out[0] = {
+    if (!contacts || contacts.length === 0) {
+      return { verdict: 'unsure', reason: 'no list capture / empty contacts body — no evidence' }
+    }
+    if (!cadenceOrdered(contacts)) {
+      return {
+        verdict: 'fail',
+        citation: 'GET /api/v1/contacts (sort=cadence&order=desc) body cadence order',
+        reason: 'the explicit-sort contact list is NOT in cadence (most-frequent-first) order',
+      }
+    }
+    return {
       verdict: 'unsure',
       citation: 'GET /api/v1/contacts (sort=cadence&order=desc) body cadence order',
       reason:
-        `capture-coverage caveat: cadence-ordering ${ordered ? 'holds' : 'is VIOLATED'} in the ` +
-        'explicit-sort context, but the implicit no-sort default is not captured (tour follows ' +
-        'sort=cadence&order=desc) — a bare-/contacts capture is a tour follow-up.',
+        'capture-coverage caveat: cadence-ordering holds in the explicit-sort context, but the ' +
+        'implicit no-sort default is not captured (no bare-/contacts capture in this set).',
     }
-  }
+  })()
 
   // [1] detail ids_only order == list order (the visible list ids are a prefix
   // of the full ids_only navigation order).

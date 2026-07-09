@@ -5,7 +5,7 @@
   "metadata": {
     "capture_generator_version": 1
   },
-  "captures": ["contacts/003-birthdays-page-rendered-accelerated-frame-full-list-all-card.json"],
+  "captures": ["contacts/004-birthdays-page-rendered-accelerated-frame-all-cards-birthday.json"],
   "expected": [
     {
       "then_index": 0,
