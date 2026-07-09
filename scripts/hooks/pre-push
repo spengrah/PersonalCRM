@@ -4,8 +4,9 @@
 # Reads configuration from .ai/pre-push.json. Runs enabled checks; blocks push
 # if any required check fails.
 #
-# Execution model (L3): review-log and the Swift gate run first (cheap / path-
-# gated fast-fail). Then four independent phases run CONCURRENTLY — LINT,
+# Execution model (L3): review-log (advisory warn only — the Claude review
+# verdict is enforced at merge time, not push time) and the Swift gate run first
+# (cheap / path-gated fast-fail). Then four independent phases run CONCURRENTLY — LINT,
 # GO (test-unit && test-integration, the DB-owning long pole), FRONTEND, and
 # FILTER (pre-push filter unit tests) — each buffered to its own log. Once all
 # four pass, E2E runs EXCLUSIVELY and last, because make test-e2e-diff DROPs the
@@ -45,10 +46,13 @@ CONFIG_FILE=".ai/pre-push.json"
 # path-filters.yml is the single source of truth (shared with CI's dorny filter).
 FILTERS_FILE="path-filters.yml"
 
-# Check Claude review log for HEAD. Replaces the prior CI claude-review job —
-# /review-head writes the verdict to .ai/log/review/<HEAD-sha>.md, and the push
-# is allowed only if that file contains "RESULT=PASS".
-# Bypass with `git push --no-verify` if you really need to skip.
+# Check Claude review log for HEAD — ADVISORY ONLY (merge-gated review model).
+# /review-head writes the verdict to .ai/log/review/<HEAD-sha>.md. The verdict is
+# enforced at MERGE time by the workflow's merge gate (monitor-pr with
+# verdict-required=true / plan-and-ship Phase 2.5 barrier: verdict PASS + review
+# bot clean + CI green), NOT at push time. Pushing first lets review-head, CI,
+# and the PR review bot run in parallel instead of in series; the deterministic
+# gates below (lint + tests + E2E) still block the push.
 check_review_log() {
   local enabled
   enabled=$(jq -r '.review.enabled // false' "$CONFIG_FILE")
@@ -61,23 +65,13 @@ check_review_log() {
   local review_file=".ai/log/review/${head_sha}.md"
 
   if [[ ! -f "$review_file" ]]; then
-    echo "" >&2
-    echo "==============================================================" >&2
-    echo "FAILED: No Claude review found for HEAD (${head_sha:0:12})" >&2
-    echo "Expected: $review_file" >&2
-    echo "Run /review-head before pushing (or use --no-verify to skip)." >&2
-    echo "==============================================================" >&2
-    exit 1
+    echo "  [review] WARN no Claude review for HEAD (${head_sha:0:12}) — required at MERGE time; run /review-head in parallel with CI + the PR bot after pushing" >&2
+    return 0
   fi
 
   if ! grep -q '^RESULT=PASS$' "$review_file"; then
-    echo "" >&2
-    echo "==============================================================" >&2
-    echo "FAILED: Claude review for HEAD did not pass" >&2
-    echo "File:  $review_file" >&2
-    echo "Address findings and re-run /review-head (HEAD must change)." >&2
-    echo "==============================================================" >&2
-    exit 1
+    echo "  [review] WARN Claude review for HEAD (${head_sha:0:12}) is not PASS — the merge gate will block until a passing (delta) review exists" >&2
+    return 0
   fi
 
   echo "  [review] OK Claude review of ${head_sha:0:12}" >&2
