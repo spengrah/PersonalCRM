@@ -23,11 +23,14 @@ const LIST_URL = '/contacts?sort=cadence&order=desc'
 const detailUrl = (id: string, action?: 'edit' | 'merge'): string =>
   `/contacts/${id}?sort=cadence&order=desc${action ? `&action=${action}` : ''}`
 
+// Backend API paths (matched by waitForApi against /api/v1 response URLs).
 const CONTACT_ID_PATH = /\/api\/v1\/contacts\/[0-9a-f-]{36}$/
 const CONTACTS_LIST_PATH = /\/api\/v1\/contacts$/
+// Frontend route path (matched by waitForURL against page URLs).
+const DETAIL_PAGE_PATH = /^\/contacts\/[0-9a-f-]{36}$/
 
 test('contacts tour — 7 current ux behaviors', async ({ page, tour }) => {
-  test.setTimeout(300_000)
+  test.setTimeout(480_000)
 
   // --- Reserve distinct contacts up front, by API query, not list position ---
   const listResp = await tour.apiCtx.get('/api/v1/contacts?limit=100&sort=cadence&order=desc')
@@ -77,6 +80,12 @@ test('contacts tour — 7 current ux behaviors', async ({ page, tour }) => {
   const firstId = contacts[0].id
   const midId = contacts[1].id
 
+  // The merge modal overlay — used to root the aria snapshot on the modal for
+  // its captures, so its subtree is not truncated out of the content-rich body.
+  const mergeModal = page
+    .locator('div.fixed.inset-0')
+    .filter({ has: page.getByRole('heading', { name: 'Merge Contacts' }) })
+
   // =====================================================================
   // READ-ONLY BEHAVIORS FIRST
   // =====================================================================
@@ -91,7 +100,7 @@ test('contacts tour — 7 current ux behaviors', async ({ page, tour }) => {
   })
 
   await page.locator('tbody tr').first().getByRole('link').first().click()
-  await page.waitForURL(u => CONTACT_ID_PATH.test(new URL(u).pathname))
+  await page.waitForURL(u => DETAIL_PAGE_PATH.test(new URL(u).pathname))
   await tour.waitForApi(page, 'GET', CONTACT_ID_PATH) // detail contact
   await tour.waitForApi(page, 'GET', CONTACTS_LIST_PATH) // ids_only nav order
   await page.getByRole('button', { name: 'Edit' }).waitFor({ state: 'visible' })
@@ -132,6 +141,7 @@ test('contacts tour — 7 current ux behaviors', async ({ page, tour }) => {
   await tour.capture(page, {
     behaviors: ['CON-041'],
     note: 'action=merge consumed once and stripped from URL',
+    ariaRoot: mergeModal,
   })
   await page.keyboard.press('Escape') // close merge modal without merging
   await page.getByRole('heading', { name: 'Merge Contacts' }).waitFor({ state: 'hidden' })
@@ -249,10 +259,9 @@ test('contacts tour — 7 current ux behaviors', async ({ page, tour }) => {
   })
 
   // --- CON-043: the merge flow keeps the current contact, archives the source ---
-  const modal = page
-    .locator('div.fixed.inset-0')
-    .filter({ has: page.getByRole('heading', { name: 'Merge Contacts' }) })
-
+  // The modal-open captures root aria on `mergeModal` (defined above) so the
+  // modal's queryable evidence (submit disabled, conflict toggles, summary,
+  // name affordances) survives rather than being truncated behind the page.
   await page.goto(detailUrl(target.id))
   await tour.waitForApi(page, 'GET', CONTACT_ID_PATH)
   await page.getByRole('button', { name: 'Merge' }).waitFor({ state: 'visible' })
@@ -263,23 +272,25 @@ test('contacts tour — 7 current ux behaviors', async ({ page, tour }) => {
     behaviors: ['CON-043'],
     note: 'merge modal open, no source: submit disabled',
     pair: { id: 'merge-CON-043', role: 'open' },
+    ariaRoot: mergeModal,
   })
 
   // Binding selector-exclusion: typing the TARGET's own name yields no target
   // candidate (excluded upstream), despite the query matching it.
-  await modal.getByText('Search for a contact to merge...').click()
-  const selectorInput = modal.getByPlaceholder('Search for a contact to merge...')
+  await mergeModal.getByText('Search for a contact to merge...').click()
+  const selectorInput = mergeModal.getByPlaceholder('Search for a contact to merge...')
   await selectorInput.waitFor({ state: 'visible' })
   await selectorInput.fill(target.full_name)
   await tour.capture(page, {
     behaviors: ['CON-043'],
     note: 'selector filtered by TARGET name: target absent from candidates = selector excludes target',
     pair: { id: 'merge-CON-043', role: 'selector-open' },
+    ariaRoot: mergeModal,
   })
 
   // Select the source; hold the preview response to capture the loading state.
   await selectorInput.fill(source.full_name)
-  const sourceOption = modal.getByText(source.full_name, { exact: true })
+  const sourceOption = mergeModal.getByText(source.full_name, { exact: true })
   await sourceOption.waitFor({ state: 'visible' })
   const previewHold = await tour.holdRoute(page, u => u.pathname.endsWith('/merge/preview'))
   await sourceOption.click()
@@ -287,35 +298,39 @@ test('contacts tour — 7 current ux behaviors', async ({ page, tour }) => {
     behaviors: ['CON-043'],
     note: 'preview loading: submit disabled',
     pair: { id: 'merge-CON-043', role: 'preview-loading' },
+    ariaRoot: mergeModal,
   })
   await previewHold.release()
   await tour.waitForApi(page, 'GET', /\/merge\/preview$/)
-  await modal.getByRole('heading', { name: 'Will Be Merged' }).waitFor({ state: 'visible' })
+  await mergeModal.getByRole('heading', { name: 'Will Be Merged' }).waitFor({ state: 'visible' })
   await tour.capture(page, {
     behaviors: ['CON-043'],
     note: 'preview loaded: transfer summary + conflict toggle(s) for the actually-conflicting field(s)',
     pair: { id: 'merge-CON-043', role: 'preview-loaded' },
+    ariaRoot: mergeModal,
   })
 
   // Name quick-fill (renders only when not editing and source_name !== edited).
-  await modal.getByRole('button', { name: 'use this' }).waitFor({ state: 'visible' })
+  await mergeModal.getByRole('button', { name: 'use this' }).waitFor({ state: 'visible' })
   await tour.capture(page, {
     behaviors: ['CON-043'],
     note: 'quick-fill affordance visible (merged name not yet source)',
     pair: { id: 'merge-CON-043', role: 'name-quickfill-available' },
+    ariaRoot: mergeModal,
   })
-  await modal.getByRole('button', { name: 'use this' }).click()
+  await mergeModal.getByRole('button', { name: 'use this' }).click()
   await tour.capture(page, {
     behaviors: ['CON-043'],
     note: 'quick-fill applied: merged name adopts source name',
     pair: { id: 'merge-CON-043', role: 'name-quickfilled' },
+    ariaRoot: mergeModal,
   })
 
   // Manual name edit in edit mode; the live input value is captured via fields
   // (ariaSnapshot does not reliably emit a textbox's value).
   const editedMergedName = `${source.full_name} (merged)`
-  await modal.getByRole('heading', { level: 3 }).click() // handleStartEditingName
-  const nameInput = modal.getByRole('textbox').first()
+  await mergeModal.getByRole('heading', { level: 3 }).click() // handleStartEditingName
+  const nameInput = mergeModal.getByRole('textbox').first()
   await nameInput.waitFor({ state: 'visible' })
   await nameInput.fill(editedMergedName)
   const mergedNameValue = await nameInput.inputValue() // read while visible
@@ -325,15 +340,17 @@ test('contacts tour — 7 current ux behaviors', async ({ page, tour }) => {
     note: 'merged name manually edited in edit mode',
     pair: { id: 'merge-CON-043', role: 'name-edited' },
     fields: { mergedNameInput: mergedNameValue },
+    ariaRoot: mergeModal,
   })
 
   // Merge in flight: hold the POST to capture the disabled submit.
   const mergeHold = await tour.holdRoute(page, u => u.pathname.endsWith('/merge'))
-  await modal.getByRole('button', { name: 'Merge Contacts' }).click()
+  await mergeModal.getByRole('button', { name: 'Merge Contacts' }).click()
   await tour.capture(page, {
     behaviors: ['CON-043'],
     note: 'merge in flight: submit disabled',
     pair: { id: 'merge-CON-043', role: 'in-flight' },
+    ariaRoot: mergeModal,
   })
   await mergeHold.release()
   await tour.waitForApi(page, 'POST', /\/merge$/)

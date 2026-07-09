@@ -3,9 +3,11 @@
 // This is the single load-bearing interface of the arc: PR1 produces it, and
 // PR2's hybrid grader + PR3's corpus consume it. The schema is authored here
 // per arc §1 and versioned via captureFormatVersion / captureGeneratorVersion —
-// any schema change bumps both (arc §3). Keep this file free of any Playwright
-// import so the pure normalizer + its unit tests can consume it without a
-// browser runtime.
+// any schema change bumps both (arc §3). The only Playwright reference is the
+// type-only `Locator` import below (erased at compile time — the pure normalizer
+// and its vitest unit tests never load a browser runtime).
+
+import type { Locator } from '@playwright/test'
 
 export const CAPTURE_FORMAT_VERSION = 1
 export const CAPTURE_GENERATOR_VERSION = 1
@@ -113,7 +115,8 @@ export interface Manifest {
 }
 
 // Options accepted by capture(). `behaviors` + `note` are required; everything
-// else is optional per-capture tuning (arc §1a/§1c-5).
+// else is optional per-capture tuning (arc §1a/§1c-5). `ariaRoot` is an
+// authoring-time locator, NOT part of the emitted record.
 export interface CaptureOptions {
   behaviors: string[]
   note: string
@@ -126,6 +129,12 @@ export interface CaptureOptions {
   arrayCap?: number
   /** Aria sibling cap (default 20; Infinity preserves all siblings). */
   ariaCap?: number
+  /**
+   * Element to root the aria snapshot at (default: the page body). Scope to an
+   * overlay (e.g. a modal) so its focused subtree is not truncated out of a
+   * content-rich body by ariaCap.
+   */
+  ariaRoot?: Locator
 }
 
 export interface ApiProbe {

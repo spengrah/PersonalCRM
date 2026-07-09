@@ -8,6 +8,9 @@ dist/
 playwright-report/
 test-results/
 
+# Tours harness live-run output (captures + manifest + traces)
+tests/tours/.runs/
+
 # Dependencies
 node_modules/
 

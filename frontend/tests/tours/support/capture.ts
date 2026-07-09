@@ -86,7 +86,8 @@ export class TourApi {
     const seq = ++this.seq
 
     const url = normalizeUrl(page.url(), this.uuid)
-    const ariaYaml = await page.locator('body').ariaSnapshot()
+    const ariaRoot = opts.ariaRoot ?? page.locator('body')
+    const ariaYaml = await ariaRoot.ariaSnapshot()
     const aria = normalizeAriaTree(parseAriaSnapshot(ariaYaml), this.uuid, ariaCap)
 
     const apiResponses: ApiResponses = {}
@@ -162,19 +163,26 @@ export class TourApi {
 
   // Deterministically hold a route until release() (D5/CON-043 transient
   // states): captures a loading/in-flight disabled state without timing luck.
+  // The handler continues each intercepted route exactly once after the gate
+  // opens; we deliberately do NOT page.unroute() on release — that races the
+  // held route's continue and throws "Route is already handled". Leaving the
+  // registration is harmless once the gate is open (later matching requests
+  // continue immediately) and it is torn down when the page closes.
   async holdRoute(page: Page, matcher: RouteMatcher): Promise<RouteHold> {
     let releaseGate!: () => void
     const gate = new Promise<void>(resolve => {
       releaseGate = resolve
     })
+    let released = false
     await page.route(matcher, async route => {
       await gate
       await route.continue()
     })
     return {
       release: async () => {
+        if (released) return
+        released = true
         releaseGate()
-        await page.unroute(matcher)
       },
     }
   }
