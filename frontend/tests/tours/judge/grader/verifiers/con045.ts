@@ -160,6 +160,14 @@ export function con045(set: CaptureSet): ItemVerdicts {
             'gift-planning heading shown but the list has no Jan-Mar (early-next-year) candidates',
         }
       }
+      // Absent list = absent evidence → abstain (never pass on missing evidence).
+      if (candidates === undefined) {
+        return {
+          verdict: 'unsure',
+          reason:
+            'gift-planning shown near year end but the full list is unavailable to confirm candidates',
+        }
+      }
       return {
         verdict: 'pass',
         citation: 'gift-planning shown near year end with early-next-year candidates',

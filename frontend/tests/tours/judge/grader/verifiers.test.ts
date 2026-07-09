@@ -505,6 +505,22 @@ describe('con045', () => {
     )
   })
 
+  it('[1] UNSURE near year-end: gift heading shown but the full list is absent (no evidence)', () => {
+    // Heading present near year-end but NO limit=1000 list to confirm candidates
+    // → abstain, never pass on missing evidence.
+    const noList = cap({
+      behaviors: ['CON-045'],
+      note: 'birthdays page',
+      serverTime: frame({ currentTime: '2026-12-15T12:00:00Z' }),
+      apiResponses: {},
+      aria: root([
+        { role: 'heading', name: 'Gift Planning - Early 2027 Birthdays (1)', level: 2 },
+        { role: 'heading', name: 'Upcoming Birthdays (0)', level: 2 },
+      ]),
+    })
+    expect(con045(set('CON-045', [noList]))[1].verdict).toBe('unsure')
+  })
+
   it('[3] fail: a placeholder-year birthday shows an age', () => {
     const v = con045(set('CON-045', [birthdays({ placeholderAged: true })]))
     expect(v[3].verdict).toBe('fail')
