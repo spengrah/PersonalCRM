@@ -51,6 +51,17 @@ describe('UUID mapper', () => {
     const m = createUuidMapper()
     expect(mapUuids(`${UUID_A} and ${UUID_B}`, m)).toBe('<id:1> and <id:2>')
   })
+
+  it('is ordinal-deterministic: the same input sequence → the same assignment', () => {
+    // Underwrites the grader's before/after correlation: two fresh mappers fed
+    // the same UUID sequence must assign identical placeholders, so replaying a
+    // tour maps the same UUIDs to the same ordinals every run.
+    const seq = [UUID_A, UUID_B, UUID_A, UUID_B]
+    const run1 = createUuidMapper()
+    const run2 = createUuidMapper()
+    expect(seq.map(u => run1.map(u))).toEqual(seq.map(u => run2.map(u)))
+    expect(seq.map(u => run1.map(u))).toEqual(['<id:1>', '<id:2>', '<id:1>', '<id:2>'])
+  })
 })
 
 describe('normalizeUrl / parseQuery / endpointKey', () => {
@@ -351,6 +362,35 @@ describe('normalizeAriaTree', () => {
       DEFAULT_ARIA_CAP
     )
     expect(out).toEqual({ role: 'button', name: 'Previous contact', disabled: true })
+  })
+
+  it('carries ALL aria state fields (not just disabled) through normalization', () => {
+    // The grader's verifiers read active/pressed/selected/checked (+ mixed) and
+    // level, not only disabled (CON-040 boundary, CON-043 toggles) — every
+    // state token must survive normalizeAriaTree verbatim.
+    const node: AriaNode = {
+      role: 'container',
+      children: [
+        { role: 'button', name: 'Toggle', pressed: true },
+        { role: 'button', name: 'Partial', pressed: 'mixed' },
+        { role: 'option', name: 'Sel', selected: true },
+        { role: 'option', name: 'Focused', active: true },
+        { role: 'checkbox', name: 'Yes', checked: true },
+        { role: 'checkbox', name: 'Maybe', checked: 'mixed' },
+        { role: 'group', expanded: true },
+        { role: 'heading', name: 'H', level: 3 },
+      ],
+    }
+    const out = normalizeAriaTree(node, createUuidMapper(), DEFAULT_ARIA_CAP)
+    const kids = out.children as AriaNode[]
+    expect(kids[0].pressed).toBe(true)
+    expect(kids[1].pressed).toBe('mixed')
+    expect(kids[2].selected).toBe(true)
+    expect(kids[3].active).toBe(true)
+    expect(kids[4].checked).toBe(true)
+    expect(kids[5].checked).toBe('mixed')
+    expect(kids[6].expanded).toBe(true)
+    expect(kids[7].level).toBe(3)
   })
 
   it('host-scrubs absolute URLs inside aria names/text', () => {
