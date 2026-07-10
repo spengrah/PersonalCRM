@@ -4,10 +4,13 @@
 // "Verifiers before judges" — the judge residue is deliberately tiny.
 //
 // A `verifier` item is graded by pure code over structured evidence. A `judge`
-// item is graded by the LLM judge (semantic residue). `judgeFallback` marks a
-// verifier item whose success-wording faithfulness MAY route to the judge when
-// the verifier cannot bind (CON-043[5]). `caveat` records a capture-coverage
-// limitation surfaced in the advisory report (NOT a silent proven-pass).
+// item is graded by the LLM judge (semantic residue). A verifier that cannot
+// bind a BINDING-VEHICLE anchor (copy incidental to the asserted fact) emits
+// `unbound`, which routes that item to the judge at grade time — the dynamic
+// replacement for the old static judgeFallback flag. PRESENCE-CONTRACT items
+// keep deterministic fail-on-missing (see grader/types.ts for the policy).
+// `caveat` records a capture-coverage limitation surfaced in the advisory
+// report (NOT a silent proven-pass).
 
 export type GraderKind = 'verifier' | 'judge'
 
@@ -15,8 +18,6 @@ export interface Classification {
   behaviorId: string
   thenIndex: number
   grader: GraderKind
-  /** A verifier item that hands the residue to the judge when it cannot bind. */
-  judgeFallback?: boolean
   /** Capture-coverage limitation flagged in the advisory report. */
   caveat?: string
   note: string
@@ -122,8 +123,7 @@ export const CLASSIFICATION: Classification[] = [
     behaviorId: 'CON-043',
     thenIndex: 5,
     grader: 'verifier',
-    judgeFallback: true,
-    note: 'outcome reported and auto-dismissed (success-wording faithfulness → judge if unbindable)',
+    note: 'outcome reported and auto-dismissed (banner is a copy anchor — unbindable → unbound → judge)',
   },
 
   // --- CON-044: mark-as-contacted logs a mutual interaction ---

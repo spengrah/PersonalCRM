@@ -1,10 +1,10 @@
 // The hybrid grader: run the deterministic verifiers, merge the LLM judge's
 // residue verdicts, apply the grounding rule, and aggregate to a behavior
 // verdict. "Verifiers before judges" — the judge only supplies judge-tagged
-// items (and verifier items that abstained AND carry judgeFallback).
+// items and verifier items that emitted `unbound` (dynamic routing).
 
 import { classificationFor, type GraderKind } from './classification'
-import type { CaptureSet, ItemVerdict, ItemVerdicts, Verdict } from './types'
+import type { CaptureSet, ItemVerdict, ItemVerdicts, Verdict, VerifierItemVerdicts } from './types'
 import { VERIFIERS } from './verifiers'
 import type { Capture } from '../../support/types'
 
@@ -48,10 +48,16 @@ export function applyGrounding(v: ItemVerdict): ItemVerdict {
   return v
 }
 
+// Run the deterministic verifiers alone (the two-phase judge runner uses this
+// to learn which items unbound before asking the judge).
+export function runVerifiers(set: CaptureSet): VerifierItemVerdicts {
+  const verifier = VERIFIERS[set.behaviorId]
+  return verifier ? verifier(set) : {}
+}
+
 export function gradeBehavior(set: CaptureSet, opts: GradeOptions = {}): BehaviorGrade {
   const classification = classificationFor(set.behaviorId)
-  const verifier = VERIFIERS[set.behaviorId]
-  const verifierVerdicts: ItemVerdicts = verifier ? verifier(set) : {}
+  const verifierVerdicts = runVerifiers(set)
   const judge = opts.judge ?? {}
 
   const items: GradedItem[] = classification.map(c => {
@@ -76,11 +82,22 @@ export function gradeBehavior(set: CaptureSet, opts: GradeOptions = {}): Behavio
       verdict: 'unsure' as Verdict,
       reason: 'no verifier verdict emitted',
     }
-    if (c.judgeFallback && vv.verdict === 'unsure' && judge[idx]) {
-      const grounded = applyGrounding(judge[idx])
-      return { thenIndex: idx, grader: 'verifier', source: 'judge', ...grounded }
+    if (vv.verdict === 'unbound') {
+      // The binding-vehicle anchor was not found in present evidence: route to
+      // the judge (which reasons over the same aria without the copy pin).
+      if (judge[idx]) {
+        const grounded = applyGrounding(judge[idx])
+        return { thenIndex: idx, grader: 'verifier', source: 'judge', ...grounded }
+      }
+      return {
+        thenIndex: idx,
+        grader: 'verifier',
+        source: 'pending',
+        verdict: 'unsure',
+        reason: `${vv.reason ?? 'anchor unbound'} — judge routing pending (verifiers-only mode)`,
+      }
     }
-    return { thenIndex: idx, grader: 'verifier', source: 'verifier', ...vv }
+    return { thenIndex: idx, grader: 'verifier', source: 'verifier', ...(vv as ItemVerdict) }
   })
 
   return {

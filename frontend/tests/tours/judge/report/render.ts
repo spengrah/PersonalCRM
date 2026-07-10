@@ -232,7 +232,20 @@ async function main(): Promise<void> {
   // The advisory judge layer over residue items (opt-in; the report is advisory
   // either way). Without --judge, judge-tagged items render as "pending labels";
   // with it, the judge's grounded verdict + critique lands in the per-item detail.
-  const runner = useJudge ? (await import('../judge-runner')).makeJudgeRunner() : undefined
+  // Capability gate shared by the item-judge and intent passes: only the
+  // codex-exec adapter can attach image files.
+  const canAttachImages = (process.env.QA_JUDGE ?? 'codex-exec') === 'codex-exec'
+  const resolveScreenshot = (c: { screenshot?: string }): string | undefined => {
+    if (!c.screenshot) return undefined
+    const abs = path.resolve(runDir, c.screenshot)
+    return fs.existsSync(abs) ? abs : undefined
+  }
+  const runner = useJudge
+    ? (await import('../judge-runner')).makeJudgeRunner(
+        undefined,
+        canAttachImages ? resolveScreenshot : undefined
+      )
+    : undefined
   // Grade SERIALLY (matching eval/core.ts's `for … await` loop). The judge calls
   // must NOT fan out: concurrent codex spawns storm a quota-limited account, and
   // parallel invocation is what the eval path deliberately avoids. Serial keeps
@@ -252,15 +265,6 @@ async function main(): Promise<void> {
     const { makeIntentJudge, runIntentPass } = await import('../intent-runner')
     const { INTENT_CAPTURE_CAP } = await import('../intent-input')
     const { allIntents } = await import('../intent-catalog')
-    // Capability gate: only the codex-exec adapter can attach image files.
-    // Resolving screenshots for a text-only adapter would clear the aria-only
-    // caveat for evidence the model never sees.
-    const canAttachImages = (process.env.QA_JUDGE ?? 'codex-exec') === 'codex-exec'
-    const resolveScreenshot = (c: { screenshot?: string }): string | undefined => {
-      if (!c.screenshot) return undefined
-      const abs = path.resolve(runDir, c.screenshot)
-      return fs.existsSync(abs) ? abs : undefined
-    }
     intents = await runIntentPass(
       captures,
       makeIntentJudge(),

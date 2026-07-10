@@ -3,7 +3,11 @@
 //   [1] the parameter is stripped from the URL
 
 import { byNoteIncludes, findByRoleName, urlQuery } from '../evidence'
-import type { CaptureSet, ItemVerdict, ItemVerdicts } from '../types'
+import type {
+  CaptureSet,
+  VerifierItemVerdict as ItemVerdict,
+  VerifierItemVerdicts as ItemVerdicts,
+} from '../types'
 
 export function con041(set: CaptureSet): ItemVerdicts {
   const editCap = byNoteIncludes(set, 'action=edit')
@@ -21,10 +25,12 @@ export function con041(set: CaptureSet): ItemVerdicts {
       ? findByRoleName(mergeCap.aria, 'heading', 'Merge Contacts') !== undefined
       : undefined
     if (editOk === false || mergeOk === false) {
+      // The headings are copy anchors (binding vehicles): a miss may be a
+      // rename, not a failed action — route to the judge.
       return {
-        verdict: 'fail',
-        citation: 'action capture aria',
-        reason: 'the action did not open its expected surface',
+        verdict: 'unbound',
+        reason:
+          "the expected surface heading ('Edit Contact' / 'Merge Contacts') was not found — anchor may be renamed",
       }
     }
     return { verdict: 'pass', citation: "aria 'Edit Contact' / 'Merge Contacts' heading" }

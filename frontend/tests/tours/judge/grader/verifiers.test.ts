@@ -165,6 +165,16 @@ describe('con040', () => {
     }),
   ]
 
+  it('renamed Edit Contact heading after Enter → [2] unbound (routed to the judge)', () => {
+    const caps = build()
+    const idx = caps.findIndex(c => c.pair?.role === 'enter-edit')
+    caps[idx] = {
+      ...caps[idx],
+      aria: root([{ role: 'heading', name: 'Update Contact', level: 2 }]),
+    }
+    expect(con040(set('CON-040', caps))[2].verdict).toBe('unbound')
+  })
+
   it('clean: [0] abstains (last-boundary caveat), [1]/[2]/[3] pass', () => {
     const v = con040(set('CON-040', build()))
     expect(v[0].verdict).toBe('unsure')
@@ -246,6 +256,15 @@ describe('con041', () => {
   it('doctored: re-injected action=edit → [1] fail', () => {
     const v = con041(set('CON-041', build('/contacts/<id:1>?sort=cadence&order=desc&action=edit')))
     expect(v[1].verdict).toBe('fail')
+  })
+
+  it('renamed surface heading → [0] unbound (routed to the judge, never fail)', () => {
+    const caps = build()
+    const renamed = [
+      { ...caps[0], aria: root([{ role: 'heading', name: 'Update Contact', level: 2 }]) },
+      caps[1],
+    ]
+    expect(con041(set('CON-041', renamed))[0].verdict).toBe('unbound')
   })
 
   it('missing evidence → unsure', () => {
@@ -406,6 +425,47 @@ describe('con043', () => {
     aria: root([{ role: 'text', text: 'Contacts merged successfully!' }]),
   })
   const dismissedCap = cap({ behaviors: ['CON-043'], pair: pair('m', 'dismissed'), aria: root([]) })
+
+  it('renamed copy anchors → unbound, never fail: Keeping badge / Will Be Merged / use this / banner', () => {
+    // [0] preview + open present but no 'Keeping' text anywhere.
+    const noKeeping = {
+      ...previewCap,
+      aria: root([
+        { role: 'heading', name: 'Resolve Conflicts', level: 3 },
+        { role: 'heading', name: 'Will Be Merged', level: 3 },
+      ]),
+    }
+    expect(con043(set('CON-043', [openCap, noKeeping]))[0].verdict).toBe('unbound')
+
+    // [1] preview REQUEST present but the 'Will Be Merged' heading renamed.
+    const renamedPreview = {
+      ...previewCap,
+      aria: root([{ role: 'heading', name: 'To Be Combined', level: 3 }]),
+    }
+    expect(con043(set('CON-043', [renamedPreview]))[1].verdict).toBe('unbound')
+
+    // [1] preview REQUEST missing entirely stays a structural FAIL.
+    const noRequest = { ...previewCap, apiResponses: {} }
+    expect(con043(set('CON-043', [noRequest]))[1].verdict).toBe('fail')
+
+    // [3] 'use this' quick-fill renamed in BOTH carrying captures (a single
+    // absent side leaves the disjunction undefined → unsure, not unbound).
+    const renamedQuickfill = {
+      ...quickfilledCap,
+      aria: root([{ role: 'button', name: 'adopt name' }]),
+    }
+    const previewNoQuickfill = {
+      ...previewCap,
+      aria: root([{ role: 'heading', name: 'Will Be Merged', level: 3 }]),
+    }
+    expect(con043(set('CON-043', [renamedQuickfill, previewNoQuickfill]))[3].verdict).toBe(
+      'unbound'
+    )
+
+    // [5] success banner not bound in the captured aria.
+    const noBanner = { ...outcomeCap, aria: root([{ role: 'text', text: 'done' }]) }
+    expect(con043(set('CON-043', [noBanner]))[5].verdict).toBe('unbound')
+  })
 
   const clean = (): Capture[] => [
     openCap,

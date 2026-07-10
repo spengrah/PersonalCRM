@@ -61,7 +61,7 @@ describe('buildPrompt (intent variant)', () => {
     expect(prompt).toContain('[0] the statement')
   })
 
-  it('does not affect the behavior-path prompt', () => {
+  it('does not affect the section-less behavior-path prompt', () => {
     const behaviorInput: JudgeInput = {
       behaviorId: 'CON-042',
       behaviorTitle: 't',
@@ -75,5 +75,27 @@ describe('buildPrompt (intent variant)', () => {
     expect(p).toContain('=== SPEC ===')
     expect(p).not.toContain('=== INTENT ===')
     expect(p).not.toContain('CAPTURE[')
+  })
+
+  it('behavior prompts render per-capture sections when supplied', () => {
+    const behaviorInput: JudgeInput = {
+      behaviorId: 'CON-042',
+      behaviorTitle: 't',
+      given: 'g',
+      when: 'w',
+      then: ['a'],
+      items: [{ itemIndex: 0, thenText: 'a' }],
+      evidence: { url: 'http://merged' },
+      captureSections: [
+        { note: 'first', evidence: { url: 'http://y/1' } },
+        { note: 'second', evidence: { url: 'http://y/2' } },
+      ],
+    }
+    const p = buildPrompt(behaviorInput)
+    expect(p).toContain('=== CAPTURE[0] — first ===')
+    expect(p).toContain('=== CAPTURE[1] — second ===')
+    expect(p).toContain('cite the capture index')
+    expect(p).not.toContain('http://merged')
+    expect(p).not.toContain('=== INTENT ===')
   })
 })

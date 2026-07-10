@@ -97,4 +97,27 @@ describe('draftForCase (mocked stronger-model drafter — offline)', () => {
     await draftForCase('CON-042-doctored-nowarn', 'CON-042', captures, drafter, 'strong')
     expect(sawDialogMessage).toBe('') // the drafter saw the DOCTORED (blanked) dialog
   })
+
+  it('drafts dynamically-unbound residue (no statically judge-tagged items needed)', async () => {
+    // CON-041 has no judge-tagged items; a present capture whose surface
+    // heading is renamed makes [0] emit `unbound`, which the labeling flow
+    // must draft (the old static-fallback flow would have skipped it).
+    const drafter: Judge = async input =>
+      input.items.map(i => ({
+        itemIndex: i.itemIndex,
+        verdict: 'unsure' as const,
+        citation: '',
+        critique: 'renamed?',
+      }))
+    const captures = [
+      cap({
+        behaviors: ['CON-041'],
+        note: 'action=edit consumed',
+        url: '/contacts/x',
+        aria: { role: 'root', children: [{ role: 'heading', name: 'Update Contact' }] },
+      }),
+    ]
+    const artifact = await draftForCase('CON-041-renamed', 'CON-041', captures, drafter, 'strong')
+    expect(artifact.items.map(i => i.then_index)).toContain(0)
+  })
 })

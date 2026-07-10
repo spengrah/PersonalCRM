@@ -15,7 +15,11 @@ import {
   findApiItem,
   findByRoleName,
 } from '../evidence'
-import type { CaptureSet, ItemVerdict, ItemVerdicts } from '../types'
+import type {
+  CaptureSet,
+  VerifierItemVerdict as ItemVerdict,
+  VerifierItemVerdicts as ItemVerdicts,
+} from '../types'
 import type { AriaNode, Capture } from '../../../support/types'
 
 // The kept contact's name — the level-3 heading in the merge modal.
@@ -61,10 +65,11 @@ export function con043(set: CaptureSet): ItemVerdicts {
       return { verdict: 'unsure', reason: 'no merge-modal captures — no evidence' }
     }
     if (keptBadge === false) {
+      // 'Keeping' is a copy anchor: a miss may be a rename of the badge, not
+      // an unmarked current contact — route to the judge.
       return {
-        verdict: 'fail',
-        citation: 'merge modal aria',
-        reason: 'no visible "Keeping" badge on the current contact',
+        verdict: 'unbound',
+        reason: 'no "Keeping" text found in the merge modal — badge anchor may be renamed',
       }
     }
     if (excludes === false) {
@@ -86,13 +91,22 @@ export function con043(set: CaptureSet): ItemVerdicts {
       (_i, k) => k === 'GET /api/v1/contacts/:id/merge/preview'
     )
     const willBeMerged = findByRoleName(previewLoaded.aria, 'heading', 'Will Be Merged')
-    return previewReq && willBeMerged
-      ? { verdict: 'pass', citation: 'GET /merge/preview + aria heading "Will Be Merged"' }
-      : {
-          verdict: 'fail',
-          citation: 'preview-loaded evidence',
-          reason: 'selecting a source did not load a preview',
-        }
+    if (previewReq && willBeMerged) {
+      return { verdict: 'pass', citation: 'GET /merge/preview + aria heading "Will Be Merged"' }
+    }
+    if (!previewReq) {
+      // Structural: the preview REQUEST is missing — the preview did not load.
+      return {
+        verdict: 'fail',
+        citation: 'preview-loaded apiResponses',
+        reason: 'selecting a source did not issue the merge-preview request',
+      }
+    }
+    // Request present but the heading is missing: copy anchor — judge.
+    return {
+      verdict: 'unbound',
+      reason: 'preview request seen but no "Will Be Merged" heading — anchor may be renamed',
+    }
   })()
 
   // [2] conflict toggle present + POST field_selections default to target.
@@ -137,10 +151,10 @@ export function con043(set: CaptureSet): ItemVerdicts {
       return { verdict: 'unsure', reason: 'no name-edit captures — no evidence' }
     }
     if (quickfill === false) {
+      // 'use this' is a copy anchor — route to the judge.
       return {
-        verdict: 'fail',
-        citation: 'name aria',
-        reason: 'no "use this" source quick-fill affordance',
+        verdict: 'unbound',
+        reason: 'no "use this" quick-fill text found — anchor may be renamed',
       }
     }
     if (edited !== undefined && edited.trim() === '') {
@@ -201,10 +215,12 @@ export function con043(set: CaptureSet): ItemVerdicts {
     const banner = bannerText(outcomeReported.aria)
     const stillShown = dismissed ? bannerText(dismissed.aria) !== undefined : undefined
     if (banner === undefined) {
+      // The success banner is a copy anchor AND may be a page-level toast the
+      // body-rooted ariaSnapshot misses — unbound routes it to the judge.
       return {
-        verdict: 'unsure',
+        verdict: 'unbound',
         reason:
-          'success banner not present in the captured aria (page-level toast not surfaced by ariaSnapshot) — residue routes to the judge',
+          'success banner not bound in the captured aria (copy anchor / toast not surfaced) — routed to the judge',
       }
     }
     if (stillShown === true) {
