@@ -581,6 +581,7 @@ behaviors:
       - the target's existing primary is preserved
       - the source's primary flags are demoted regardless of method type
     provenance: [DemoteSourcePrimaryMethods, idx_contact_method_primary]
+    notes: 'Proposed: demotion is currently per-type while the unique index is one-primary-per-contact, so a cross-type dual-primary merge fails with a constraint violation today (see CON-027).'
 
   # --- Intents (judged experience goals — Track B agentic judge only) ---
 
@@ -604,4 +605,3 @@ behaviors:
     status: current
     statement: the birthdays page answers whose birthday needs attention now and soon — imminent birthdays stand apart from distant ones, celebrated ones recede, and the user never has to compute dates themselves
     provenance: ['.ai/spec/2026-07-10-ssot-intent-layer-and-judged-ux-goals-design.md']
-    notes: 'Proposed: demotion is currently per-type while the unique index is one-primary-per-contact, so a cross-type dual-primary merge fails with a constraint violation today (see CON-027).'

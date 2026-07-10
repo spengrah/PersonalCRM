@@ -419,6 +419,7 @@ behaviors:
       - a deadline matching what the CRM last pushed is recognized as stale and does not override
       - follow-up task deadlines never touch contact_by
     provenance: [todoist provider deadline-edit handling, CadenceUpdater.ApplyContactByOverride, MetadataKeySyncedDeadline]
+    notes: The last-pushed watermark mechanics live in the todoist domain; this pins the cadence-side outcome.
 
   # --- Intents (judged experience goals — Track B agentic judge only) ---
 
@@ -435,4 +436,3 @@ behaviors:
     status: current
     statement: managing a linked task from the CRM never silently mutates or destroys the user's task in the remote app — remote state changes only where the user expects them to happen
     provenance: ['.ai/spec/2026-07-10-ssot-intent-layer-and-judged-ux-goals-design.md']
-    notes: The last-pushed watermark mechanics live in the todoist domain; this pins the cadence-side outcome.

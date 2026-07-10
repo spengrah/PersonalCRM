@@ -171,6 +171,9 @@ func semanticChecks(parsed []*parsedFile) []scopedViolation {
 // checkServesResolve enforces that every serves target names an existing
 // intent behavior somewhere in the corpus. A target whose own type is broken
 // or invalid is not re-reported here (its own violation already flags it).
+// Under a globally-duplicated ID (itself a violation) resolution binds to the
+// first-registered behavior, so the serves message may name the wrong twin —
+// the dup violation is the root cause to fix first.
 func checkServesResolve(pf *parsedFile, pb *parsedBehavior, idToBehavior map[string]*parsedBehavior, c *collector) {
 	if !pb.keys["serves"] || pb.broken["serves"] {
 		return
