@@ -63,9 +63,20 @@ const INTENT_PREAMBLE = [
   '  - unsure : the evidence is insufficient to judge the goal (abstention)',
   'GROUNDING RULE: a `fail` MUST cite the capture index AND the exact aria node',
   'label or JSON path that undermines the goal (e.g. "CAPTURE[2]: <cite>") in',
-  '`citation`. An uncited fail is treated as unsure. The aria tree carries no',
-  'visual styling — do not fail a goal for purely visual qualities (size, color,',
-  'spacing) you cannot observe; abstain instead. Categorical only — no scores.',
+  '`citation`. An uncited fail is treated as unsure. Categorical only — no scores.',
+].join('\n')
+
+// Visual framing switches on whether screenshots are attached: aria-only runs
+// must not fail goals on unobservable visual qualities; image-carrying runs may.
+const INTENT_ARIA_ONLY_CAUTION = [
+  'The aria tree carries no visual styling — do not fail a goal for purely visual',
+  'qualities (size, color, spacing) you cannot observe; abstain instead.',
+].join('\n')
+
+const INTENT_IMAGES_NOTE = [
+  'Screenshots of the captured states are attached in CAPTURE[n] order — visual',
+  'qualities (layout, hierarchy, spacing, color, readability) MAY ground your',
+  'verdict; cite the capture index for visual observations too.',
 ].join('\n')
 
 // Render the normalized aria tree as a stable indented outline.
@@ -163,6 +174,7 @@ function buildIntentPrompt(input: JudgeInput): string {
 
   const parts = [
     INTENT_PREAMBLE,
+    (input.images?.length ?? 0) > 0 ? INTENT_IMAGES_NOTE : INTENT_ARIA_ONLY_CAUTION,
     fewShotBlock(),
     block('INTENT', head),
     ...sections,

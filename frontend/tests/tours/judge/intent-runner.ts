@@ -9,7 +9,12 @@ import type { Judge } from './adapter'
 import { applyGrounding } from './grader/grade'
 import type { Verdict } from './grader/types'
 import { allIntents, type IntentSpec, type IntentStatus } from './intent-catalog'
-import { bindIntentCaptures, buildIntentJudgeInput, INTENT_CAPTURE_CAP } from './intent-input'
+import {
+  bindIntentCaptures,
+  buildIntentJudgeInput,
+  INTENT_CAPTURE_CAP,
+  type ScreenshotResolver,
+} from './intent-input'
 import type { Capture } from '../support/types'
 
 export interface IntentGrade {
@@ -22,6 +27,8 @@ export interface IntentGrade {
   boundCount: number
   droppedCount: number
   servedBy: string[]
+  /** The intent is visual (catalog flag) but was judged without screenshots. */
+  ariaOnly?: boolean
 }
 
 // Intent judgment is the semantically hard task and the call count is small
@@ -67,11 +74,13 @@ export async function runIntentPass(
   captures: Capture[],
   judge: Judge,
   intents: IntentSpec[] = allIntents(),
-  cap: number = INTENT_CAPTURE_CAP
+  cap: number = INTENT_CAPTURE_CAP,
+  resolveScreenshot?: ScreenshotResolver
 ): Promise<IntentGrade[]> {
   const grades: IntentGrade[] = []
   for (const intent of intents) {
     const { captures: bound, dropped } = bindIntentCaptures(intent, captures, cap)
+    const input = buildIntentJudgeInput(intent, bound, resolveScreenshot)
     const base = {
       intentId: intent.id,
       title: intent.title,
@@ -79,6 +88,7 @@ export async function runIntentPass(
       boundCount: bound.length,
       droppedCount: dropped,
       servedBy: intent.servedBy,
+      ...(intent.visual && (input.images?.length ?? 0) === 0 ? { ariaOnly: true } : {}),
     }
     if (bound.length === 0) {
       grades.push({
@@ -88,7 +98,7 @@ export async function runIntentPass(
       })
       continue
     }
-    const verdicts = await judge(buildIntentJudgeInput(intent, bound))
+    const verdicts = await judge(input)
     const v = verdicts.find(x => x.itemIndex === 0)
     if (!v) {
       grades.push({ ...base, verdict: 'unsure', reason: 'no verdict returned' })

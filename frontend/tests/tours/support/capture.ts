@@ -36,7 +36,7 @@ import {
   parseQuery,
   type UuidMapper,
 } from './normalize'
-import { capturesDir, getCurrentRunId } from './run-dir'
+import { capturesDir, getCurrentRunId, runDir } from './run-dir'
 import { sortApiResponses } from './sort-responses'
 
 const MUTATING = new Set(['POST', 'PUT', 'PATCH'])
@@ -108,6 +108,8 @@ export class TourApi {
       : undefined
     const dialogs = this.pendingDialogs.splice(0)
 
+    const screenshot = await this.takeScreenshot(page, seq, opts.note)
+
     const record: Capture = {
       captureFormatVersion: CAPTURE_FORMAT_VERSION,
       captureGeneratorVersion: CAPTURE_GENERATOR_VERSION,
@@ -122,8 +124,31 @@ export class TourApi {
       apiResponses: sortApiResponses(apiResponses),
       ...(fields ? { fields } : {}),
       dialogs,
+      ...(screenshot ? { screenshot } : {}),
     }
     this.write(seq, opts.note, record)
+  }
+
+  // Best-effort viewport screenshot per capture point (TOURS_SCREENSHOTS=0
+  // disables). Live-run evidence for the intent judge's visual goals; lives in
+  // the gitignored run dir, never the committed corpus. A screenshot failure
+  // must never fail the sweep — the capture simply omits the field.
+  private async takeScreenshot(page: Page, seq: number, note: string): Promise<string | undefined> {
+    if (process.env.TOURS_SCREENSHOTS === '0') return undefined
+    const runId = getCurrentRunId()
+    const rel = path.join(
+      'screenshots',
+      this.tour,
+      `${String(seq).padStart(3, '0')}-${slugify(note)}.png`
+    )
+    const abs = path.join(runDir(runId), rel)
+    try {
+      fs.mkdirSync(path.dirname(abs), { recursive: true })
+      await page.screenshot({ path: abs })
+      return rel
+    } catch {
+      return undefined
+    }
   }
 
   // Register a native-dialog handler: record the message into the pending

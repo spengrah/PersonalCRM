@@ -154,6 +154,11 @@ export function renderReport(input: ReportInput): string {
         `- evidence: ${g.boundCount} capture(s) via serves-edges [${g.servedBy.join(', ')}]` +
           (g.droppedCount > 0 ? ` — ${g.droppedCount} over the cap DROPPED (not judged)` : '')
       )
+      if (g.ariaOnly) {
+        lines.push(
+          '- ⚠️ EVIDENCE CAVEAT: visual intent judged aria-only (no screenshots attached) — the verdict cannot observe layout/hierarchy/salience'
+        )
+      }
       if (g.citation) lines.push(`- cite: ${g.citation}`)
       if (g.reason) lines.push(`- critique: ${g.reason}`)
       lines.push('')
@@ -239,11 +244,26 @@ async function main(): Promise<void> {
   }
 
   // The intent pass (judge-only; serial like the residue path). Uses its own
-  // stronger-model default (QA_INTENT_MODEL / QA_INTENT_EFFORT).
+  // stronger-model default (QA_INTENT_MODEL / QA_INTENT_EFFORT). Screenshots
+  // recorded by the tours attach as model images when the file exists in the
+  // run dir (live evidence only — the committed corpus stays aria-only).
   let intents
   if (useJudge) {
     const { makeIntentJudge, runIntentPass } = await import('../intent-runner')
-    intents = await runIntentPass(captures, makeIntentJudge())
+    const { INTENT_CAPTURE_CAP } = await import('../intent-input')
+    const { allIntents } = await import('../intent-catalog')
+    const resolveScreenshot = (c: { screenshot?: string }): string | undefined => {
+      if (!c.screenshot) return undefined
+      const abs = path.resolve(runDir, c.screenshot)
+      return fs.existsSync(abs) ? abs : undefined
+    }
+    intents = await runIntentPass(
+      captures,
+      makeIntentJudge(),
+      allIntents(),
+      INTENT_CAPTURE_CAP,
+      resolveScreenshot
+    )
   }
   let runId: string | undefined
   let gitSha: string | undefined

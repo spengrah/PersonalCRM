@@ -83,5 +83,14 @@ describe('buildIntentJudgeInput', () => {
     expect(input.captureSections).toHaveLength(2)
     expect(input.captureSections?.[0].note).toBe('dashboard#1 — note-dashboard-1')
     expect(input.captureSections?.[0].evidence.url).toBe('http://x/dashboard/1')
+    expect(input.images).toBeUndefined()
+  })
+
+  it('attaches resolver-supplied screenshots and skips unresolved ones', () => {
+    const bound = [cap('dashboard', 1, ['CAD-026']), cap('dashboard', 2, ['CAD-027'])]
+    const input = buildIntentJudgeInput(intent, bound, c =>
+      c.seq === 1 ? '/runs/x/screenshots/dashboard/001.png' : undefined
+    )
+    expect(input.images).toEqual(['/runs/x/screenshots/dashboard/001.png'])
   })
 })

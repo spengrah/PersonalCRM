@@ -104,6 +104,14 @@ export interface Capture {
   apiResponses: ApiResponses
   fields?: Record<string, unknown>
   dialogs: DialogRecord[]
+  /**
+   * Run-dir-relative path of the capture-point screenshot (e.g.
+   * screenshots/dashboard/004-....png). Live-run evidence for the intent
+   * judge's visual goals — NEVER committed to the corpus (the PII audit can
+   * grep JSON, not pixels). Absent when screenshots are disabled or the
+   * best-effort capture failed.
+   */
+  screenshot?: string
 }
 
 // The run manifest. The staging host is redacted.

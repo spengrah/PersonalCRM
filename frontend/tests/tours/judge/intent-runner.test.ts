@@ -116,4 +116,24 @@ describe('runIntentPass', () => {
     expect(g.verdict).toBe('unsure')
     expect(g.reason).toMatch(/no verdict returned/)
   })
+
+  it('flags a visual intent judged without screenshots as ariaOnly', async () => {
+    const visual = { ...intent, visual: true }
+    const [g] = await runIntentPass([cap(['CAD-026'])], fakeJudge('pass', ''), [visual])
+    expect(g.ariaOnly).toBe(true)
+  })
+
+  it('does not flag ariaOnly when screenshots attach or the intent is not visual', async () => {
+    const visual = { ...intent, visual: true }
+    const [withShots] = await runIntentPass(
+      [cap(['CAD-026'])],
+      fakeJudge('pass', ''),
+      [visual],
+      8,
+      () => '/runs/x/shot.png'
+    )
+    expect(withShots.ariaOnly).toBeUndefined()
+    const [nonVisual] = await runIntentPass([cap(['CAD-026'])], fakeJudge('pass', ''), [intent])
+    expect(nonVisual.ariaOnly).toBeUndefined()
+  })
 })
