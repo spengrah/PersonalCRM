@@ -10,10 +10,9 @@ behaviors:
     when: the entry route resolves
     then:
       - the user is taken to the dashboard as the default destination
-      - the redirect does not present as a broken or blank surface while it resolves
     serves: [DSH-011]
     provenance: [app/page.tsx, dashboard.spec.ts]
-    notes: The dashboard's overdue content is CAD-026; this behavior only pins that the dashboard is where the app opens.
+    notes: The dashboard's overdue content is CAD-026; this behavior only pins that the dashboard is where the app opens. A former second clause pinned the redirect's interim presentation (not broken/blank while resolving); the maintainer retired it at the first label session — the interim is imperceptibly brief in practice, so its presentation is not worth pinning at item level. Interim-surface quality remains judgeable holistically under the DSH-011 intent this behavior serves.
 
   - id: DSH-002
     title: Every primary surface is reachable from a persistent global navigation

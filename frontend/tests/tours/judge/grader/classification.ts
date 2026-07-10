@@ -173,12 +173,6 @@ export const CLASSIFICATION: Classification[] = [
     grader: 'verifier',
     note: 'taken to the dashboard as default (landing capture url pathname /dashboard)',
   },
-  {
-    behaviorId: 'DSH-001',
-    thenIndex: 1,
-    grader: 'judge',
-    note: 'the redirect does not present as broken/blank (intent-level; was a spinner pin graded from a best-effort fields.rootSpinnerSeen read — retired)',
-  },
 
   // --- DSH-002: persistent global navigation ---
   {
@@ -445,10 +439,10 @@ export const CLASSIFICATION: Classification[] = [
 
 // The count MUST match the SSOT then-item totals: spec/contacts.yaml (CON-038×2,
 // CON-040×4, CON-041×2, CON-042×3, CON-043×6, CON-044×1, CON-045×5 = 23) +
-// spec/dashboard.yaml (DSH-001×2, DSH-002×3, DSH-003×2, DSH-004×3, DSH-005×4,
+// spec/dashboard.yaml (DSH-001×1, DSH-002×3, DSH-003×2, DSH-004×3, DSH-005×4,
 // DSH-007×2 = 16) + spec/cadence-followup.yaml (CAD-026×3, CAD-027×3, CAD-028×3,
 // CAD-029×4, CAD-030×4, CAD-031×3, CAD-033×2 = 22) = 61 — guarded by a unit test.
-export const CLASSIFICATION_ITEM_COUNT = 61
+export const CLASSIFICATION_ITEM_COUNT = 60
 
 export function classificationFor(behaviorId: string): Classification[] {
   return CLASSIFICATION.filter(c => c.behaviorId === behaviorId).sort(

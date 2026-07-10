@@ -97,10 +97,7 @@ export const SPEC_CATALOG: Record<string, BehaviorSpec> = {
     title: "The dashboard is the application's default landing surface",
     given: 'the application root is opened',
     when: 'the entry route resolves',
-    then: [
-      'the user is taken to the dashboard as the default destination',
-      'the redirect does not present as a broken or blank surface while it resolves',
-    ],
+    then: ['the user is taken to the dashboard as the default destination'],
   },
   'DSH-002': {
     id: 'DSH-002',

@@ -4,7 +4,7 @@ import { aggregate, applyGrounding, gradeBehavior, groupByBehavior } from './gra
 import { apiItem, cap, pair } from './fixtures'
 
 describe('classification map', () => {
-  it('has exactly one row per spec then-item (61 total, index-faithful)', () => {
+  it('has exactly one row per spec then-item (60 total, index-faithful)', () => {
     expect(CLASSIFICATION).toHaveLength(CLASSIFICATION_ITEM_COUNT)
     const counts: Record<string, number> = {}
     for (const c of CLASSIFICATION) counts[c.behaviorId] = (counts[c.behaviorId] ?? 0) + 1
@@ -16,7 +16,7 @@ describe('classification map', () => {
       'CON-043': 6,
       'CON-044': 1,
       'CON-045': 5,
-      'DSH-001': 2,
+      'DSH-001': 1,
       'DSH-002': 3,
       'DSH-003': 2,
       'DSH-004': 3,
@@ -37,11 +37,10 @@ describe('classification map', () => {
     }
   })
 
-  it('the judge owns the semantic residue: CON-042[0], DSH-001[1], DSH-004[2] (unbound routing is dynamic)', () => {
+  it('the judge owns the semantic residue: CON-042[0], DSH-004[2] (unbound routing is dynamic)', () => {
     const judgeItems = CLASSIFICATION.filter(c => c.grader === 'judge')
     expect(judgeItems.map(c => `${c.behaviorId}[${c.thenIndex}]`)).toEqual([
       'CON-042[0]',
-      'DSH-001[1]',
       'DSH-004[2]',
     ])
   })
