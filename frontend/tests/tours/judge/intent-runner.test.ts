@@ -94,6 +94,13 @@ describe('runIntentPass', () => {
     expect(g.verdict).toBe('unsure')
   })
 
+  it('downgrades a fail whose residue is punctuation-only', async () => {
+    const [g] = await runIntentPass([cap(['CAD-026'])], fakeJudge('fail', 'CAPTURE[0] ()."'), [
+      intent,
+    ])
+    expect(g.verdict).toBe('unsure')
+  })
+
   it('downgrades a fail whose capture index is out of range', async () => {
     const [g] = await runIntentPass(
       [cap(['CAD-026'])],

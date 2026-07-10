@@ -32,16 +32,18 @@ export const DEFAULT_INTENT_MODEL = 'gpt-5.5'
 export const DEFAULT_INTENT_EFFORT = 'medium'
 
 // A fail citation is grounded iff it names at least one IN-RANGE CAPTURE[n]
-// index AND carries a non-empty node label / JSON path beyond the marker(s).
+// index AND carries a node label / JSON path beyond the marker(s) — the
+// residue must contain a word character (allow-list), so punctuation-only
+// tails like "CAPTURE[0]." never ground. Deliberately a flat heuristic: the
+// in-range and residue checks are independent over the whole string (no
+// marker↔residue association — the model's citation syntax isn't guaranteed),
+// and its worst failure mode is a conservative fail→unsure downgrade.
 // Pure; exported for tests.
 export function isGroundedIntentCitation(citation: string, boundCount: number): boolean {
   const indices = [...citation.matchAll(/CAPTURE\[(\d+)\]/g)].map(m => Number(m[1]))
   if (indices.length === 0 || !indices.some(i => i < boundCount)) return false
-  const residue = citation
-    .replace(/CAPTURE\[\d+\]/g, ' ')
-    .replace(/[:;,\s—–-]+/g, ' ')
-    .trim()
-  return residue !== ''
+  const residue = citation.replace(/CAPTURE\[\d+\]/g, ' ')
+  return /[\p{L}\p{N}]/u.test(residue)
 }
 
 export function makeIntentJudge(kind: string = process.env.QA_JUDGE ?? 'codex-exec'): Judge {
