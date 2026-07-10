@@ -65,6 +65,10 @@ export const MutationSchema = z.discriminatedUnion('op', [
     endpoint: z.string(),
     path: z.array(z.string()).min(1),
     value: z.unknown(),
+    // Which item in the endpoint group to mutate (default 0). Needed when the
+    // meaningful body is not the first entry (e.g. mutating the FINAL 500 of a
+    // retried failure bracket to manufacture a stale-reason faithfulness fail).
+    itemIndex: z.number().int().nonnegative().optional(),
   }),
 ])
 

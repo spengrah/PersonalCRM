@@ -143,6 +143,32 @@ describe('applyMutation — single-point, deterministic, non-mutating', () => {
     expect(body.data.last_outreach_at).toBeNull()
   })
 
+  it('set_json_field itemIndex targets a later endpoint item (stale-reason mutation)', () => {
+    const base = [
+      cap({
+        behaviors: ['DSH-004'],
+        apiResponses: {
+          'GET /api/v1/contacts/overdue': [
+            apiItem({ status: 200, body: null }),
+            apiItem({ status: 500, body: { error: { message: 'overdue fetch failed' } } }),
+          ],
+        },
+      }),
+    ]
+    const out = applyMutation(base, {
+      op: 'set_json_field',
+      endpoint: 'GET /api/v1/contacts/overdue',
+      path: ['error', 'message'],
+      value: 'database connection lost',
+      itemIndex: 1,
+    })
+    const items = out[0].apiResponses['GET /api/v1/contacts/overdue']
+    expect(items[0].body).toBeNull() // untouched (and a null body never throws)
+    expect((items[1].body as { error: { message: string } }).error.message).toBe(
+      'database connection lost'
+    )
+  })
+
   it('is byte-stable across two runs', () => {
     const base = [cap({ behaviors: ['CON-041'], url: '/contacts/<id:1>' })]
     const m: Mutation = { op: 'inject_query', param: 'action', value: 'edit' }

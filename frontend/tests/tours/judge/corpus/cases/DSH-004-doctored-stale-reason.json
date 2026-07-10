@@ -1,5 +1,5 @@
 {
-  "id": "DSH-004-doctored",
+  "id": "DSH-004-doctored-stale-reason",
   "behavior_id": "DSH-004",
   "source": "doctored",
   "metadata": {
@@ -12,10 +12,15 @@
   "doctor": {
     "base_case": "DSH-004-clean",
     "mutation": {
-      "op": "remove_aria_subtree",
+      "op": "set_json_field",
       "role": "error",
-      "node_role": "heading",
-      "node_name": "Error loading overdue contacts"
+      "endpoint": "GET /api/v1/contacts/overdue",
+      "path": [
+        "error",
+        "message"
+      ],
+      "value": "database connection lost",
+      "itemIndex": 4
     }
   },
   "expected": [
@@ -27,12 +32,12 @@
     {
       "then_index": 1,
       "grader": "verifier",
-      "verdict": "fail"
+      "verdict": "pass"
     },
     {
       "then_index": 2,
       "grader": "judge",
-      "verdict": "unsure"
+      "verdict": "fail"
     }
   ]
 }

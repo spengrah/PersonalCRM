@@ -165,7 +165,7 @@ describe('dsh004', () => {
     expect(v[0].verdict).toBe('pass')
     expect(v[1].verdict).toBe('pass')
   })
-  it('doctored: error heading removed → [1] fail', () => {
+  it('error heading absent without wrong-state signals → [1] unbound (binding vehicle → judge)', () => {
     const v = dsh004(
       doctored('DSH-004', [loading(), errorCap], {
         op: 'remove_aria_subtree',
@@ -174,6 +174,15 @@ describe('dsh004', () => {
         node_name: 'Error loading overdue contacts',
       })
     )
+    expect(v[1].verdict).toBe('unbound')
+  })
+  it('failure surface shows caught-up instead of an error → [1] fail (wrong state, deterministic)', () => {
+    const wrongState = cap({
+      behaviors: ['DSH-004'],
+      pair: pair('e', 'error'),
+      aria: root([{ role: 'text', text: 'All caught up' }]),
+    })
+    const v = dsh004(set('DSH-004', [loading(), wrongState]))
     expect(v[1].verdict).toBe('fail')
   })
   it('skeleton count 0 → [0] abstains (racy read, never false-pass)', () => {

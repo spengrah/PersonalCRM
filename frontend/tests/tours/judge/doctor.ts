@@ -120,7 +120,7 @@ export function applyMutation(baseCaptures: Capture[], mutation: Mutation): Capt
       break
     }
     case 'set_json_field': {
-      const item = (cap.apiResponses[mutation.endpoint] ?? [])[0]
+      const item = (cap.apiResponses[mutation.endpoint] ?? [])[mutation.itemIndex ?? 0]
       if (item) setJsonPath(item.body, mutation.path, mutation.value)
       break
     }

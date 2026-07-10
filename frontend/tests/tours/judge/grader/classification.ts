@@ -219,7 +219,7 @@ export const CLASSIFICATION: Classification[] = [
     behaviorId: 'DSH-004',
     thenIndex: 1,
     grader: 'verifier',
-    note: 'failure → an error state carrying a reason, not empty/caught-up (route-500 capture; reason-presence — faithfulness is [2])',
+    note: 'failure → an error state carrying a reason, not empty/caught-up (route-500 capture; heading is a BINDING VEHICLE: absent without wrong-state signals → unbound → judge; caught-up/cards on failure fail deterministically; faithfulness is [2])',
   },
   {
     behaviorId: 'DSH-004',
