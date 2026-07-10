@@ -1,0 +1,18 @@
+domain: dashboard
+prefix: DSH
+maturity: reviewed
+behaviors:
+  - id: DSH-001
+    title: The dashboard tells the user who to reach out to, at a glance
+    type: intent
+    status: current
+    statement: a user opening the dashboard can decide who to contact next without clicking through
+    provenance: [design session]
+  - id: DSH-002
+    title: Overdue contacts appear as cards
+    type: ux
+    status: current
+    when: the dashboard renders
+    then:
+      - overdue contacts appear as cards
+    serves: DSH-001

@@ -1,0 +1,12 @@
+domain: contacts
+prefix: CON
+maturity: reviewed
+behaviors:
+  - id: CON-001
+    title: an intent carrying GWT
+    type: intent
+    status: current
+    statement: the goal
+    when: something happens
+    then:
+      - an outcome

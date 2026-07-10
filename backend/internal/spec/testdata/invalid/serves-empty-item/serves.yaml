@@ -1,0 +1,12 @@
+domain: contacts
+prefix: CON
+maturity: reviewed
+behaviors:
+  - id: CON-001
+    title: a ux behavior with an empty serves item
+    type: ux
+    status: current
+    when: the surface renders
+    then:
+      - something shows
+    serves: ['']

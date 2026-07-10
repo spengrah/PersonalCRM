@@ -132,9 +132,17 @@ func TestLintViolationClasses(t *testing.T) {
 		{"when-empty", 2, []string{"must have a non-empty when"}},
 		{"then-missing", 1, []string{"must have a then with at least one outcome"}},
 		{"then-empty", 1, []string{"must have a then with at least one outcome"}},
-		{"statement-on-gwt-type", 1, []string{"statement is only for invariant"}},
+		{"statement-on-gwt-type", 1, []string{"statement is only for invariant and intent"}},
 		{"invariant-with-gwt", 1, []string{"must not use given/when/then"}},
 		{"invariant-missing-statement", 2, []string{"must have a non-empty statement"}},
+		{"intent-with-gwt", 1, []string{"intent behavior must not use given/when/then"}},
+		{"intent-missing-statement", 1, []string{"intent behavior must have a non-empty statement"}},
+		{"serves-on-wrong-type", 1, []string{`serves is only for ux and intent behaviors (type "api")`}},
+		{"serves-unknown-target", 1, []string{`serves target "ZZZ-999" does not exist in the corpus`}},
+		{"serves-non-intent-target", 1, []string{`serves target "CON-001" is not an intent behavior (type "ux")`}},
+		{"serves-self", 1, []string{`serves target "CON-001" is the behavior itself`}},
+		{"serves-empty-item", 1, []string{"serves list items must be non-empty"}},
+		{"serves-not-list", 1, []string{"serves must be a string or a list of strings"}},
 		{"empty-list-item", 2, []string{"then list items must be non-empty", "given list items must be non-empty"}},
 		// A structurally broken GWT/statement field on the "wrong" type must
 		// yield ONLY its structural violation — the count of 2 (one per
@@ -159,6 +167,50 @@ func TestLintViolationClasses(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestLintServesAndIntent pins the intent/serves additions on a valid corpus:
+// intent behaviors carry a statement and no GWT, serves normalizes a scalar to
+// a one-element list, and cross-file serves references (including an intent
+// serving a broader intent) resolve clean.
+func TestLintServesAndIntent(t *testing.T) {
+	files, viol, err := Lint("testdata/valid-serves")
+	if err != nil {
+		t.Fatalf("Lint returned error: %v", err)
+	}
+	if len(viol) != 0 {
+		t.Fatalf("valid-serves corpus should be clean, got %d violations:\n%s", len(viol), joinViolations(viol))
+	}
+
+	if b := findBehavior(files, "DSH-001"); b == nil {
+		t.Fatal("DSH-001 missing")
+	} else {
+		if b.Type != "intent" || b.Statement == "" {
+			t.Errorf("DSH-001 should be an intent with a statement, got type=%q statement=%q", b.Type, b.Statement)
+		}
+		if b.Serves != nil {
+			t.Errorf("DSH-001 omitted serves should be nil, got %#v", b.Serves)
+		}
+	}
+
+	// Scalar serves normalized to a one-element list (same-file reference).
+	if b := findBehavior(files, "DSH-002"); b == nil {
+		t.Fatal("DSH-002 missing")
+	} else if len(b.Serves) != 1 || b.Serves[0] != "DSH-001" {
+		t.Errorf("DSH-002 scalar serves not normalized: %#v", b.Serves)
+	}
+
+	// Cross-file ux→intent and intent→intent references resolve.
+	if b := findBehavior(files, "CAD-001"); b == nil {
+		t.Fatal("CAD-001 missing")
+	} else if len(b.Serves) != 1 || b.Serves[0] != "DSH-001" {
+		t.Errorf("CAD-001 cross-file serves not parsed: %#v", b.Serves)
+	}
+	if b := findBehavior(files, "CAD-002"); b == nil {
+		t.Fatal("CAD-002 missing")
+	} else if b.Type != "intent" || len(b.Serves) != 1 {
+		t.Errorf("CAD-002 should be an intent serving another intent: type=%q serves=%#v", b.Type, b.Serves)
 	}
 }
 

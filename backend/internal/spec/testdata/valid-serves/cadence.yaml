@@ -1,0 +1,18 @@
+domain: cadence
+prefix: CAD
+maturity: reviewed
+behaviors:
+  - id: CAD-001
+    title: The overdue list offers sort orderings
+    type: ux
+    status: current
+    when: the user switches the sort
+    then:
+      - urgency orders most-overdue first
+    serves: [DSH-001]
+  - id: CAD-002
+    title: Overdue ordering is decidable at a glance
+    type: intent
+    status: proposed
+    statement: the user can tell why the list is ordered the way it is
+    serves: [DSH-001]

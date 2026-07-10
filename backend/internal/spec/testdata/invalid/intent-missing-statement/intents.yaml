@@ -1,0 +1,8 @@
+domain: contacts
+prefix: CON
+maturity: reviewed
+behaviors:
+  - id: CON-001
+    title: an intent without a statement
+    type: intent
+    status: current

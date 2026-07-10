@@ -50,13 +50,19 @@ const (
 	orderIDDupFile        = 24 // ids unique within a file
 	orderIDDupGlobal      = 25 // ids unique across files
 	orderGWT              = 26 // GWT xor statement, by type
-	orderListItems        = 27 // given/then list items non-empty
+	orderListItems        = 27 // given/then/serves list items non-empty
+	orderServesType       = 28 // serves only on ux/intent behaviors
+	orderServesResolve    = 29 // serves targets resolve to intent behaviors
 )
 
 var (
 	validMaturity = map[string]bool{"draft": true, "reviewed": true, "ratified": true}
-	validType     = map[string]bool{"business-logic": true, "api": true, "ux": true, "invariant": true, "data": true}
+	validType     = map[string]bool{"business-logic": true, "api": true, "ux": true, "invariant": true, "data": true, "intent": true}
 	validStatus   = map[string]bool{"current": true, "proposed": true, "retired": true}
+	// statementTypes use statement instead of GWT (mutually exclusive).
+	statementTypes = map[string]bool{"invariant": true, "intent": true}
+	// servesTypes may carry a serves list of intent-behavior targets.
+	servesTypes = map[string]bool{"ux": true, "intent": true}
 )
 
 // idRegex builds the ID pattern for a file's declared prefix: the prefix
@@ -103,8 +109,9 @@ func (c *collector) add(pf *parsedFile, order, bIdx, line int, ref, msg string) 
 func semanticChecks(parsed []*parsedFile) []scopedViolation {
 	c := &collector{}
 
-	prefixFiles := map[string][]*parsedFile{}   // prefix -> files declaring it
-	idFilePaths := map[string]map[string]bool{} // id -> set of file paths declaring it
+	prefixFiles := map[string][]*parsedFile{}    // prefix -> files declaring it
+	idFilePaths := map[string]map[string]bool{}  // id -> set of file paths declaring it
+	idToBehavior := map[string]*parsedBehavior{} // id -> first registered behavior (serves resolution)
 
 	for _, pf := range parsed {
 		if pf.fatal {
@@ -133,6 +140,9 @@ func semanticChecks(parsed []*parsedFile) []scopedViolation {
 					idFilePaths[pb.b.ID] = map[string]bool{}
 				}
 				idFilePaths[pb.b.ID][pf.path] = true
+				if _, exists := idToBehavior[pb.b.ID]; !exists {
+					idToBehavior[pb.b.ID] = pb
+				}
 			}
 		}
 		checkIDDupInFile(pf, idInFile, c)
@@ -140,7 +150,54 @@ func semanticChecks(parsed []*parsedFile) []scopedViolation {
 
 	checkPrefixDup(prefixFiles, c)
 	checkIDDupGlobal(parsed, idFilePaths, c)
+
+	// serves resolution is corpus-wide (cross-domain references are legal), so
+	// it needs the full ID registry — a second pass after every file's IDs
+	// have registered.
+	for _, pf := range parsed {
+		if pf.fatal {
+			continue
+		}
+		for _, pb := range pf.behaviors {
+			if pb.skip {
+				continue
+			}
+			checkServesResolve(pf, pb, idToBehavior, c)
+		}
+	}
 	return c.items
+}
+
+// checkServesResolve enforces that every serves target names an existing
+// intent behavior somewhere in the corpus. A target whose own type is broken
+// or invalid is not re-reported here (its own violation already flags it).
+// Under a globally-duplicated ID (itself a violation) resolution binds to the
+// first-registered behavior, so the serves message may name the wrong twin —
+// the dup violation is the root cause to fix first.
+func checkServesResolve(pf *parsedFile, pb *parsedBehavior, idToBehavior map[string]*parsedBehavior, c *collector) {
+	if !pb.keys["serves"] || pb.broken["serves"] {
+		return
+	}
+	for _, target := range pb.b.Serves {
+		if target == "" {
+			continue // already reported by the list-items check
+		}
+		if target == pb.b.ID {
+			c.add(pf, orderServesResolve, pb.idx, pb.line, pb.ref,
+				fmt.Sprintf("serves target %q is the behavior itself", target))
+			continue
+		}
+		tpb, ok := idToBehavior[target]
+		if !ok {
+			c.add(pf, orderServesResolve, pb.idx, pb.line, pb.ref,
+				fmt.Sprintf("serves target %q does not exist in the corpus", target))
+			continue
+		}
+		if tpb.keys["type"] && !tpb.broken["type"] && validType[tpb.b.Type] && tpb.b.Type != "intent" {
+			c.add(pf, orderServesResolve, pb.idx, pb.line, pb.ref,
+				fmt.Sprintf("serves target %q is not an intent behavior (type %q)", target, tpb.b.Type))
+		}
+	}
 }
 
 func prefixUsable(pf *parsedFile) bool {
@@ -181,7 +238,7 @@ func checkBehavior(pf *parsedFile, pb *parsedBehavior, idRe *regexp.Regexp, c *c
 	// Type enum.
 	if pb.keys["type"] && !pb.broken["type"] && pb.b.Type != "" && !validType[pb.b.Type] {
 		c.add(pf, orderTypeEnum, pb.idx, pb.line, pb.ref,
-			fmt.Sprintf("invalid type %q (want business-logic|api|ux|invariant|data)", pb.b.Type))
+			fmt.Sprintf("invalid type %q (want business-logic|api|ux|invariant|data|intent)", pb.b.Type))
 	}
 	// Status enum.
 	if pb.keys["status"] && !pb.broken["status"] && pb.b.Status != "" && !validStatus[pb.b.Status] {
@@ -195,9 +252,18 @@ func checkBehavior(pf *parsedFile, pb *parsedBehavior, idRe *regexp.Regexp, c *c
 	}
 	// GWT xor statement, presence-based by type.
 	checkGWT(pf, pb, c)
-	// given/then list items non-empty.
+	// given/then/serves list items non-empty.
 	checkListItems(pf, pb, c, "given", pb.b.Given, pb.broken["given"])
 	checkListItems(pf, pb, c, "then", pb.b.Then, pb.broken["then"])
+	checkListItems(pf, pb, c, "serves", pb.b.Serves, pb.broken["serves"])
+
+	// serves is only for ux and intent behaviors (decidable only when the
+	// type is a known enum value; an absent/invalid type is already reported).
+	if pb.keys["serves"] && !pb.broken["serves"] &&
+		pb.keys["type"] && !pb.broken["type"] && validType[pb.b.Type] && !servesTypes[pb.b.Type] {
+		c.add(pf, orderServesType, pb.idx, pb.line, pb.ref,
+			fmt.Sprintf("serves is only for ux and intent behaviors (type %q)", pb.b.Type))
+	}
 }
 
 func checkRequiredBehaviorField(pf *parsedFile, pb *parsedBehavior, c *collector, key, val string) {
@@ -221,17 +287,18 @@ func checkGWT(pf *parsedFile, pb *parsedBehavior, c *collector) {
 	thenPresent := pb.keys["then"]
 	stmtPresent := pb.keys["statement"]
 
-	if pb.b.Type == "invariant" {
+	if statementTypes[pb.b.Type] {
 		// statement present + non-empty AND none of given/when/then present.
 		// Each presence test is suppressed for a structurally broken field:
 		// the parser already reported that field, and re-reporting it here
 		// would be two violations for one root cause.
 		if !pb.broken["statement"] && (!stmtPresent || pb.b.Statement == "") {
-			c.add(pf, orderGWT, pb.idx, pb.line, pb.ref, "invariant behavior must have a non-empty statement")
+			c.add(pf, orderGWT, pb.idx, pb.line, pb.ref,
+				fmt.Sprintf("%s behavior must have a non-empty statement", pb.b.Type))
 		}
 		if (givenPresent && !pb.broken["given"]) || (whenPresent && !pb.broken["when"]) || (thenPresent && !pb.broken["then"]) {
 			c.add(pf, orderGWT, pb.idx, pb.line, pb.ref,
-				"invariant behavior must not use given/when/then (statement replaces GWT)")
+				fmt.Sprintf("%s behavior must not use given/when/then (statement replaces GWT)", pb.b.Type))
 		}
 		return
 	}
@@ -239,7 +306,7 @@ func checkGWT(pf *parsedFile, pb *parsedBehavior, c *collector) {
 	// Every other type: statement absent AND when present+non-empty AND then present with >=1 item.
 	if stmtPresent && !pb.broken["statement"] {
 		c.add(pf, orderGWT, pb.idx, pb.line, pb.ref,
-			"statement is only for invariant behaviors; other types use given/when/then")
+			"statement is only for invariant and intent behaviors; other types use given/when/then")
 	}
 	if !pb.broken["when"] && (!whenPresent || pb.b.When == "") {
 		c.add(pf, orderGWT, pb.idx, pb.line, pb.ref, "behavior must have a non-empty when")

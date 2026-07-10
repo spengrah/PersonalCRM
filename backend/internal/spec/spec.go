@@ -24,12 +24,13 @@ type File struct {
 type Behavior struct {
 	ID         string
 	Title      string
-	Type       string   // business-logic | api | ux | invariant | data
+	Type       string   // business-logic | api | ux | invariant | data | intent
 	Status     string   // current | proposed | retired
 	Given      []string // scalar input normalized to a one-element list; nil = absent
 	When       string
 	Then       []string // same normalization as Given
-	Statement  string   // invariant type only; mutually exclusive with GWT
+	Statement  string   // invariant and intent types only; mutually exclusive with GWT
+	Serves     []string // ux and intent types only; targets must be intent behavior IDs
 	Provenance []string
 	Notes      string
 }

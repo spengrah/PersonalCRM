@@ -440,6 +440,7 @@ behaviors:
     then:
       - the list defaults to cadence order, most frequent first
       - the detail page's prev/next navigation uses the same default
+    serves: [CON-051]
     provenance: [DEFAULT_SORT_FIELD/DEFAULT_SORT_ORDER, contacts page, contact detail listContext]
 
   - id: CON-039
@@ -461,6 +462,7 @@ behaviors:
       - arrows are inert while editing or while focus is in an input
       - Enter opens edit mode
       - Escape discards edit mode, or returns to the list (context preserved) when not editing
+    serves: [CON-051]
     provenance: [ContactNavigationBar, use-keyboard-navigation.ts, contact-navigation.spec.ts]
 
   - id: CON-041
@@ -472,6 +474,7 @@ behaviors:
     then:
       - the action runs once (edit mode opens, or the merge modal opens)
       - the parameter is stripped from the URL so refresh or back-navigation does not re-trigger it
+    serves: [CON-051]
     provenance: [contact detail action-param effect, .ai/rules/core.md one-time action gotcha]
 
   - id: CON-042
@@ -484,6 +487,7 @@ behaviors:
       - a confirmation prompt warns the action cannot be undone
       - only on confirmation is the contact deleted
       - on success the user is returned to the contact list
+    serves: [CON-050]
     provenance: [contact detail handleDeleteContact, useDeleteContact]
 
   - id: CON-043
@@ -499,6 +503,7 @@ behaviors:
       - the merged name is editable, with a quick-fill to adopt the source's name
       - the merge cannot be submitted before a source is selected, while the preview is loading, or while a merge is in flight
       - the outcome is reported and auto-dismissed
+    serves: [CON-050]
     provenance: [merge-contact-modal.tsx, use-merge.ts, contact-merge.spec.ts]
 
   - id: CON-044
@@ -523,6 +528,7 @@ behaviors:
       - upcoming birthdays sort soonest-first; celebrated ones sink to the end
       - placeholder-year birthdays display without an age
       - the page follows the app's accelerated time
+    serves: [CON-052]
     provenance: [birthdays/page.tsx, birthdays.spec.ts, isPlaceholderBirthday]
     notes: Month/day-only birthdays are stored with a placeholder year (1900) — the sentinel drives the age suppression.
 
@@ -576,3 +582,26 @@ behaviors:
       - the source's primary flags are demoted regardless of method type
     provenance: [DemoteSourcePrimaryMethods, idx_contact_method_primary]
     notes: 'Proposed: demotion is currently per-type while the unique index is one-primary-per-contact, so a cross-type dual-primary merge fails with a constraint violation today (see CON-027).'
+
+  # --- Intents (judged experience goals — Track B agentic judge only) ---
+
+  - id: CON-050
+    title: Destructive contact actions are deliberate
+    type: intent
+    status: current
+    statement: contact data is never lost through a single accidental interaction — destructive flows demand an explicit, informed confirmation, and what will happen is visible before it happens
+    provenance: ['.ai/spec/2026-07-10-ssot-intent-layer-and-judged-ux-goals-design.md']
+
+  - id: CON-051
+    title: Browsing contacts never loses the user's place
+    type: intent
+    status: current
+    statement: moving between the contact list and contact detail feels like traversing one consistent, ordered list — sort, search, and filter context carries across navigation in both directions, with keyboard and mouse as equals
+    provenance: ['.ai/spec/2026-07-10-ssot-intent-layer-and-judged-ux-goals-design.md']
+
+  - id: CON-052
+    title: The birthdays page is a planning surface, not a data dump
+    type: intent
+    status: current
+    statement: the birthdays page answers whose birthday needs attention now and soon — imminent birthdays stand apart from distant ones, celebrated ones recede, and the user never has to compute dates themselves
+    provenance: ['.ai/spec/2026-07-10-ssot-intent-layer-and-judged-ux-goals-design.md']

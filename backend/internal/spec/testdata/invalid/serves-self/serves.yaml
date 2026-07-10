@@ -1,0 +1,10 @@
+domain: contacts
+prefix: CON
+maturity: reviewed
+behaviors:
+  - id: CON-001
+    title: an intent serving itself
+    type: intent
+    status: current
+    statement: the goal
+    serves: [CON-001]
