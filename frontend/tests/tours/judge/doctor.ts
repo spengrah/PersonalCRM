@@ -120,9 +120,12 @@ export function applyMutation(baseCaptures: Capture[], mutation: Mutation): Capt
       break
     }
     case 'set_json_field': {
-      // Out-of-range itemIndex is a silent no-op here — but a fail-expecting
-      // doctored case whose mutation no-ops surfaces loudly as a qa-eval
-      // regression (predicted != expected), so mis-indexing cannot pass silently.
+      // Out-of-range itemIndex is a silent no-op here. A no-oped mutation
+      // surfaces as a qa-eval regression only when the expected fail is a
+      // VERIFIER item; a judge-layer expectation (the pattern's primary use,
+      // e.g. the stale-reason case) sits pending in the verifier-only gate and
+      // is only checked by the live-judge / labeled evaluation — so verify the
+      // index against the committed capture when authoring the case.
       const item = (cap.apiResponses[mutation.endpoint] ?? [])[mutation.itemIndex ?? 0]
       if (item) setJsonPath(item.body, mutation.path, mutation.value)
       break
