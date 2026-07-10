@@ -5,6 +5,7 @@
 import type { Capture } from '../support/types'
 import type { EvidenceBlocks, JudgeInput, JudgeItem } from './adapter/types'
 import { classificationFor } from './grader/classification'
+import { runVerifiers } from './grader/grade'
 import type { VerifierItemVerdicts } from './grader/types'
 import { captureSection, type ScreenshotResolver } from './intent-input'
 import { behaviorSpec } from './spec-catalog'
@@ -46,7 +47,11 @@ export function judgeItemsFor(
 export function buildJudgeInput(
   behaviorId: string,
   captures: Capture[],
-  items: JudgeItem[] = judgeItemsFor(behaviorId),
+  // Default: discover the FULL residue — judge-tagged plus dynamically
+  // unbound items — by running the (pure, cheap) verifiers over the given
+  // captures, so direct callers (labeling CLI, self-consistency) stay in
+  // lockstep with the two-phase runner.
+  items: JudgeItem[] = judgeItemsFor(behaviorId, runVerifiers({ behaviorId, captures })),
   resolveScreenshot?: ScreenshotResolver
 ): JudgeInput | undefined {
   const spec = behaviorSpec(behaviorId)

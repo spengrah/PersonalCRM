@@ -1,7 +1,7 @@
 // The hybrid grader: run the deterministic verifiers, merge the LLM judge's
 // residue verdicts, apply the grounding rule, and aggregate to a behavior
 // verdict. "Verifiers before judges" — the judge only supplies judge-tagged
-// items (and verifier items that abstained AND carry judgeFallback).
+// items and verifier items that emitted `unbound` (dynamic routing).
 
 import { classificationFor, type GraderKind } from './classification'
 import type { CaptureSet, ItemVerdict, ItemVerdicts, Verdict, VerifierItemVerdicts } from './types'
