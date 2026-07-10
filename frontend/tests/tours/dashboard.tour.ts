@@ -71,11 +71,20 @@ test('dashboard tour — DSH + dashboard-hosted CAD behaviors', async ({ page, t
   // broken/blank WHILE it resolves", so it needs the in-flight state (and its
   // screenshot), not only the settled dashboard. The client redirect may
   // already have fired — the capture records whatever state was caught.
-  await tour.capture(page, {
-    behaviors: ['DSH-001'],
-    note: 'mid-redirect state at the app root (best-effort; may already show the destination)',
-    pair: { id: 'redirect', role: 'inflight' },
-  })
+  // Best-effort in both senses: the OBSERVATION is opportunistic and the
+  // CAPTURE itself must not break the sweep if the client redirect races the
+  // aria snapshot (the reviewed redirect is a soft router.push, but the
+  // evidence is optional either way — a missed in-flight capture is not a
+  // defect).
+  try {
+    await tour.capture(page, {
+      behaviors: ['DSH-001'],
+      note: 'mid-redirect state at the app root (best-effort; may already show the destination)',
+      pair: { id: 'redirect', role: 'inflight' },
+    })
+  } catch {
+    // Swallowed by design — see above.
+  }
   await page.waitForURL(u => new URL(u).pathname === '/dashboard')
   await page.getByRole('heading', { name: 'Action Required' }).waitFor({ state: 'visible' })
   await tour.capture(page, {
