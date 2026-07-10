@@ -10,7 +10,6 @@ import { describe, expect, it } from 'vitest'
 import { INTENT_CATALOG } from './intent-catalog'
 
 const SPEC_DIR = path.join(import.meta.dirname ?? __dirname, '..', '..', '..', '..', 'spec')
-const TOURED_DOMAINS = ['contacts.yaml', 'dashboard.yaml', 'cadence-followup.yaml']
 
 interface YamlBehavior {
   id: string
@@ -21,20 +20,27 @@ interface YamlBehavior {
   serves?: string | string[]
 }
 
+// Genuinely corpus-wide: every spec/*.yaml, matching the linter's resolution
+// scope — a cross-domain serves edge or an intent minted in a non-toured
+// domain lands in the inversion (and fails the sync assertions) instead of
+// silently under-binding evidence.
 function loadBehaviors(): YamlBehavior[] {
-  return TOURED_DOMAINS.flatMap(f => {
-    const doc = parse(fs.readFileSync(path.join(SPEC_DIR, f), 'utf8')) as {
-      behaviors: YamlBehavior[]
-    }
-    return doc.behaviors
-  })
+  return fs
+    .readdirSync(SPEC_DIR)
+    .filter(f => f.endsWith('.yaml'))
+    .flatMap(f => {
+      const doc = parse(fs.readFileSync(path.join(SPEC_DIR, f), 'utf8')) as {
+        behaviors: YamlBehavior[]
+      }
+      return doc.behaviors
+    })
 }
 
 describe('intent-catalog ↔ spec YAML sync', () => {
   const behaviors = loadBehaviors()
   const yamlIntents = behaviors.filter(b => b.type === 'intent')
 
-  it('transcribes exactly the intent set of the toured domains', () => {
+  it('transcribes exactly the intent set of the whole corpus', () => {
     expect(Object.keys(INTENT_CATALOG).sort()).toEqual(yamlIntents.map(b => b.id).sort())
   })
 

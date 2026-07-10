@@ -5,6 +5,7 @@
 import * as path from 'path'
 import { describe, expect, it } from 'vitest'
 import { INTENT_CATALOG } from '../intent-catalog'
+import { bindIntentCaptures } from '../intent-input'
 import { loadCorpus } from './load'
 import { parseIntentCase } from './schema'
 
@@ -49,6 +50,26 @@ describe('committed intent-cases', () => {
       expect(INTENT_CATALOG[ic.intent_id], `${ic.id} intent`).toBeDefined()
       const captures = corpus.capturesFor(ic)
       expect(captures.length).toBe(ic.captures.length)
+    }
+  })
+
+  // File resolution alone is not enough: a case whose captures carry no
+  // serving-behavior tag would silently produce "no evidence bound" on every
+  // live run, defeating the hypothesis it exists to test.
+  it('every case actually binds evidence; doctored mutations hit a bound capture', () => {
+    for (const ic of corpus.intentCases) {
+      const intent = INTENT_CATALOG[ic.intent_id]
+      const captures = corpus.capturesFor(ic)
+      const { captures: bound } = bindIntentCaptures(intent, captures)
+      expect(bound.length, `${ic.id} binds no captures`).toBeGreaterThan(0)
+      if (ic.mutation && 'captureIndex' in ic.mutation && ic.mutation.captureIndex !== undefined) {
+        const target = captures[ic.mutation.captureIndex]
+        expect(target, `${ic.id} mutation captureIndex out of range`).toBeDefined()
+        expect(
+          bound.some(c => c.tour === target.tour && c.seq === target.seq),
+          `${ic.id} mutated capture is not in the bound set — the doctored fail never reaches the judge`
+        ).toBe(true)
+      }
     }
   })
 })

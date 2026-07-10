@@ -69,7 +69,7 @@ describe('runIntentPass', () => {
     expect(g.reason).toMatch(/no grounding citation/)
   })
 
-  it('keeps a cited fail', async () => {
+  it('keeps a fail cited with a CAPTURE[n] index', async () => {
     const [g] = await runIntentPass(
       [cap(['CAD-026'])],
       fakeJudge('fail', 'CAPTURE[0]: heading "x"'),
@@ -77,6 +77,16 @@ describe('runIntentPass', () => {
     )
     expect(g.verdict).toBe('fail')
     expect(g.citation).toBe('CAPTURE[0]: heading "x"')
+  })
+
+  it('downgrades a fail whose citation lacks the CAPTURE[n] index', async () => {
+    const [g] = await runIntentPass(
+      [cap(['CAD-026'])],
+      fakeJudge('fail', 'heading "Error loading overdue contacts"'),
+      [intent]
+    )
+    expect(g.verdict).toBe('unsure')
+    expect(g.reason).toMatch(/citation lacks the required CAPTURE\[n\] index/)
   })
 
   it('degrades a missing verdict to unsure', async () => {

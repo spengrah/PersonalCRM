@@ -75,11 +75,20 @@ export async function runIntentPass(
       grades.push({ ...base, verdict: 'unsure', reason: 'no verdict returned' })
       continue
     }
-    const grounded = applyGrounding({
+    let grounded = applyGrounding({
       verdict: v.verdict,
       citation: v.citation,
       reason: v.critique,
     })
+    // Intent grounding is stricter than the generic rule: the prompt requires
+    // a fail to name the capture index it bound to, so a citation without a
+    // CAPTURE[n] reference cannot anchor a regression/progress signal.
+    if (grounded.verdict === 'fail' && !/CAPTURE\[\d+\]/.test(grounded.citation ?? '')) {
+      grounded = {
+        verdict: 'unsure',
+        reason: `${grounded.reason ?? 'fail'} — downgraded to unsure: citation lacks the required CAPTURE[n] index`,
+      }
+    }
     grades.push({ ...base, ...grounded })
   }
   return grades
