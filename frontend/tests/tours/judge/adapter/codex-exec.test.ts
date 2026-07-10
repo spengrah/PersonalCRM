@@ -236,6 +236,42 @@ describe('makeCodexExecJudge (injected run — no live call)', () => {
     }
   })
 
+  it('threads opts.effort into the codex reasoning-effort arg', async () => {
+    let seenArgs: string[] = []
+    const judge = makeCodexExecJudge({
+      effort: 'high',
+      run: async args => {
+        seenArgs = args
+        return stream({
+          verdicts: [{ item_index: 0, verdict: 'pass', citation: 'c', critique: 'k' }],
+        })
+      },
+    })
+    await judge(input)
+    expect(seenArgs).toContain('model_reasoning_effort=high')
+  })
+
+  it('falls back to QA_JUDGE_EFFORT when no effort is passed', async () => {
+    const prev = process.env.QA_JUDGE_EFFORT
+    process.env.QA_JUDGE_EFFORT = 'medium'
+    try {
+      let seenArgs: string[] = []
+      const judge = makeCodexExecJudge({
+        run: async args => {
+          seenArgs = args
+          return stream({
+            verdicts: [{ item_index: 0, verdict: 'pass', citation: 'c', critique: 'k' }],
+          })
+        },
+      })
+      await judge(input)
+      expect(seenArgs).toContain('model_reasoning_effort=medium')
+    } finally {
+      if (prev === undefined) delete process.env.QA_JUDGE_EFFORT
+      else process.env.QA_JUDGE_EFFORT = prev
+    }
+  })
+
   it('grounding rule: an uncited judge fail downgrades to unsure', async () => {
     const judge = makeCodexExecJudge({
       run: async () =>

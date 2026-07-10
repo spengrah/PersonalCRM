@@ -288,7 +288,7 @@ qa-eval: ## Run the agentic UX QA hybrid grader over the seed corpus (verifiers-
 	@cd frontend && bun run tests/tours/judge/eval/run.ts
 
 qa-report: ## Render the advisory report over a tours run dir (RUNDIR relative to frontend/, or absolute). JUDGE=1 adds the live judge over residue items (codex quota); OUT=<file> writes to a file instead of stdout.
-	@cd frontend && bun run tests/tours/judge/report/render.ts "$(RUNDIR)" $(OUT) $(if $(filter 1,$(JUDGE)),--judge,)
+	@cd frontend && bun run tests/tours/judge/report/render.ts "$(RUNDIR)" $(if $(OUT),"$(OUT)",) $(if $(filter 1,$(JUDGE)),--judge,)
 
 # Native PostgreSQL (for containerized development without Docker-in-Docker)
 # Symlink the main checkout's gitignored env files (.env, frontend/.env.local,

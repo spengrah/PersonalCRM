@@ -168,6 +168,11 @@ function defaultRun(
 export const DEFAULT_JUDGE_MODEL = 'gpt-5.4-mini'
 export const DEFAULT_JUDGE_EFFORT = 'low'
 
+// Monotonic per-process counter for the schema temp file, so judge calls in one
+// process can never collide on the same pid+millisecond path (callers may invoke
+// the judge for several behaviors close together).
+let schemaSeq = 0
+
 // Build the argv for `codex exec` (schema written to a temp file). Passes
 // --model when set (so the model is actually selected, not just labeled in the
 // trace) and pins reasoning effort via `-c` when set — the judge must NOT
@@ -201,7 +206,10 @@ export function makeCodexExecJudge(opts: CodexExecOptions = {}): Judge {
 
   return async (input: JudgeInput): Promise<PerItemVerdict[]> => {
     const prompt = buildPrompt(input)
-    const schemaPath = path.join(os.tmpdir(), `qa-judge-schema-${process.pid}-${Date.now()}.json`)
+    const schemaPath = path.join(
+      os.tmpdir(),
+      `qa-judge-schema-${process.pid}-${Date.now()}-${schemaSeq++}.json`
+    )
     fs.writeFileSync(schemaPath, JSON.stringify(OUTPUT_SCHEMA), 'utf8')
     const start = Date.now()
     let result: ReturnType<typeof verdictsFromCodexOutput> | undefined

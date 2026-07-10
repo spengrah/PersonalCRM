@@ -191,11 +191,15 @@ async function main(): Promise<void> {
   // either way). Without --judge, judge-tagged items render as "pending labels";
   // with it, the judge's grounded verdict + critique lands in the per-item detail.
   const runner = useJudge ? (await import('../judge-runner')).makeJudgeRunner() : undefined
-  const grades = await Promise.all(
-    groupByBehavior(captures).map(async set =>
-      gradeBehavior(set, runner ? { judge: await runner(set.behaviorId, set.captures) } : {})
-    )
-  )
+  // Grade SERIALLY (matching eval/core.ts's `for … await` loop). The judge calls
+  // must NOT fan out: concurrent codex spawns storm a quota-limited account, and
+  // parallel invocation is what the eval path deliberately avoids. Serial keeps
+  // the report identical to the eval and one codex subprocess at a time.
+  const grades = []
+  for (const set of groupByBehavior(captures)) {
+    const judge = runner ? await runner(set.behaviorId, set.captures) : undefined
+    grades.push(gradeBehavior(set, judge ? { judge } : {}))
+  }
   let runId: string | undefined
   let gitSha: string | undefined
   const manifestPath = path.join(runDir, 'manifest.json')
