@@ -128,13 +128,17 @@ async function main(): Promise<void> {
   // Expectations are self-labeled HYPOTHESES, not ground truth — printed for
   // eyeballing, NEVER part of the merge gate (ground truth is the deferred
   // human-labeling path).
-  if (judge && corpus.intentCases.length > 0) {
+  // --limit caps live judge cost for intent cases exactly as it does for the
+  // main corpus (each intent case is a potential LLM call).
+  let intentCases = corpus.intentCases
+  if (limit !== undefined) intentCases = intentCases.slice(0, limit)
+  if (judge && intentCases.length > 0) {
     const { intentSpec } = await import('../intent-catalog')
     const { makeIntentJudge, runIntentPass } = await import('../intent-runner')
     const intentJudge = makeIntentJudge()
     const icon: Record<Verdict, string> = { pass: '✅', fail: '❌', unsure: '⚠️' }
     console.log('Intent-pass verdicts vs self-labeled hypotheses (advisory; never the merge gate):')
-    for (const ic of corpus.intentCases) {
+    for (const ic of intentCases) {
       // One malformed advisory case must not abort the run (the merge-gate
       // section below still has to print and exit-code).
       try {
