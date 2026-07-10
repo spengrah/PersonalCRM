@@ -10,7 +10,7 @@
 
 import * as path from 'path'
 import { loadCorpus } from '../corpus/load'
-import { resolveCaseCaptures } from '../doctor'
+import { applyMutation, resolveCaseCaptures } from '../doctor'
 import { buildJudgeInput } from '../judge-input'
 import { behaviorSpec } from '../spec-catalog'
 import { selectJudge } from '../adapter'
@@ -121,6 +121,45 @@ async function main(): Promise<void> {
       }
     }
     if (shown === 0) console.log('  (none — no judge-tagged residue items in this corpus)')
+    console.log('')
+  }
+
+  // The intent pass over the corpus's intent-hypothesis cases (--judge only).
+  // Expectations are self-labeled HYPOTHESES, not ground truth — printed for
+  // eyeballing, NEVER part of the merge gate (ground truth is the deferred
+  // human-labeling path).
+  // --limit caps live judge cost for intent cases exactly as it does for the
+  // main corpus (each intent case is a potential LLM call).
+  let intentCases = corpus.intentCases
+  if (limit !== undefined) intentCases = intentCases.slice(0, limit)
+  if (judge && intentCases.length > 0) {
+    const { intentSpec } = await import('../intent-catalog')
+    const { makeIntentJudge, runIntentPass } = await import('../intent-runner')
+    const intentJudge = makeIntentJudge()
+    const icon: Record<Verdict, string> = { pass: '✅', fail: '❌', unsure: '⚠️' }
+    console.log('Intent-pass verdicts vs self-labeled hypotheses (advisory; never the merge gate):')
+    for (const ic of intentCases) {
+      // One malformed advisory case must not abort the run (the merge-gate
+      // section below still has to print and exit-code).
+      try {
+        const spec = intentSpec(ic.intent_id)
+        if (!spec) {
+          console.log(`  ${ic.id}: SKIP — unknown intent ${ic.intent_id} (catalog drift?)`)
+          continue
+        }
+        let captures = corpus.capturesFor(ic)
+        if (ic.mutation) captures = applyMutation(captures, ic.mutation)
+        const [grade] = await runIntentPass(captures, intentJudge, [spec])
+        const agree = grade.verdict === ic.expected_hypothesis ? 'agrees with' : 'DIFFERS from'
+        console.log(
+          `  ${ic.id} ${icon[grade.verdict]} ${grade.verdict} — ${agree} hypothesis (${ic.expected_hypothesis})`
+        )
+        if (grade.citation) console.log(`      cite: ${grade.citation}`)
+        if (grade.reason) console.log(`      critique: ${grade.reason}`)
+      } catch (err) {
+        console.log(`  ${ic.id}: ERROR — ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
     console.log('')
   }
 

@@ -11,6 +11,10 @@ Each behavior's `then`-items are classified in `grader/classification.ts`, keyed
 
 Aggregation: any item `fail` → behavior `fail`; all `pass` → `pass`; else `unsure`. The **grounding rule** downgrades an uncited `fail` to `unsure` (`grader/grade.ts`).
 
+## The intent pass (judged experience goals)
+
+Sibling of the item-judge residue: one judge call per `type: intent` behavior in the SSOT (`intent-catalog.ts`, a transcription kept YAML-synced by `intent-catalog.test.ts`). Evidence binds via the inverted `serves:` edges — captures tagged with the intent's ID or any serving behavior, deduped, capped at 8 with the dropped count surfaced (`intent-input.ts`). The prompt renders an INTENT block + per-capture `CAPTURE[n]` sections; a `fail` must cite the capture index + node/path, and the preamble forbids failing goals for aria-invisible visual qualities (abstain instead — screenshots are the PR3 follow-up). Verdicts land in the report's **Intents** section: a `current` intent failing is a regression signal, a `proposed` intent passing is a progress signal. The pass runs only under `--judge` (report CLI `JUDGE=1` / eval `--judge`), defaults to a stronger model than the cheap item judge (`QA_INTENT_MODEL`/`QA_INTENT_EFFORT`, default gpt-5.5/medium), and never touches the offline merge gate. `corpus/intent-cases/*.json` carry self-labeled hypothesis verdicts (see `DEFERRED.md` — labels pending).
+
 ## Running the eval
 
 ```bash

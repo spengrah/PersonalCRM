@@ -10,6 +10,7 @@ import { SPEC_CATALOG } from '../spec-catalog'
 import { SKIP_LIST } from './skip-list'
 import type { BehaviorGrade } from '../grader/grade'
 import type { Verdict } from '../grader/types'
+import type { IntentGrade } from '../intent-runner'
 
 export interface ReportMeta {
   runId?: string
@@ -20,6 +21,8 @@ export interface ReportMeta {
 export interface ReportInput {
   meta?: ReportMeta
   grades: BehaviorGrade[]
+  // Intent-pass grades (present only on --judge runs; the pass costs quota).
+  intents?: IntentGrade[]
 }
 
 const ICON: Record<Verdict, string> = { pass: '✅', fail: '❌', unsure: '⚠️' }
@@ -123,6 +126,40 @@ export function renderReport(input: ReportInput): string {
     lines.push('')
   }
 
+  // Intents — the judged experience goals (type: intent in the SSOT). A current
+  // intent failing is a REGRESSION signal; a proposed intent passing is a
+  // PROGRESS signal (candidate to flip current). Advisory, judge-only.
+  if (input.intents && input.intents.length > 0) {
+    lines.push('## Intents — judged experience goals (advisory)')
+    lines.push('')
+    lines.push(
+      '> One judge call per intent over the captures bound via its `serves:` edges. ' +
+        'A `current` intent failing is a regression signal; a `proposed` intent passing is a ' +
+        'progress signal (consider flipping it current in the SSOT).'
+    )
+    lines.push('')
+    for (const g of input.intents) {
+      const signal =
+        g.status === 'current'
+          ? g.verdict === 'fail'
+            ? ' — ⚠️ REGRESSION SIGNAL'
+            : ''
+          : g.verdict === 'pass'
+            ? ' — 📈 progress signal (proposed goal judged achieved)'
+            : ' (proposed)'
+      lines.push(`### ${g.intentId} — ${ICON[g.verdict]} ${g.verdict}${signal}`)
+      lines.push('')
+      lines.push(`- ${g.title}`)
+      lines.push(
+        `- evidence: ${g.boundCount} capture(s) via serves-edges [${g.servedBy.join(', ')}]` +
+          (g.droppedCount > 0 ? ` — ${g.droppedCount} over the cap DROPPED (not judged)` : '')
+      )
+      if (g.citation) lines.push(`- cite: ${g.citation}`)
+      if (g.reason) lines.push(`- critique: ${g.reason}`)
+      lines.push('')
+    }
+  }
+
   // Coverage — first-cut scope (D5): the 3 scoped domains' current-ux behaviors
   // (toured vs untoured) + the explicit skip-list. Advisory; files no issues; NOT
   // a repo-wide scanner (the other SSOT domains are Piece 3's scope).
@@ -200,6 +237,14 @@ async function main(): Promise<void> {
     const judge = runner ? await runner(set.behaviorId, set.captures) : undefined
     grades.push(gradeBehavior(set, judge ? { judge } : {}))
   }
+
+  // The intent pass (judge-only; serial like the residue path). Uses its own
+  // stronger-model default (QA_INTENT_MODEL / QA_INTENT_EFFORT).
+  let intents
+  if (useJudge) {
+    const { makeIntentJudge, runIntentPass } = await import('../intent-runner')
+    intents = await runIntentPass(captures, makeIntentJudge())
+  }
   let runId: string | undefined
   let gitSha: string | undefined
   const manifestPath = path.join(runDir, 'manifest.json')
@@ -211,7 +256,7 @@ async function main(): Promise<void> {
     runId = m.runId
     gitSha = m.gitSha
   }
-  const md = renderReport({ meta: { runId, gitSha }, grades })
+  const md = renderReport({ meta: { runId, gitSha }, grades, intents })
   if (outFile) fs.writeFileSync(outFile, md, 'utf8')
   else process.stdout.write(md)
 }
