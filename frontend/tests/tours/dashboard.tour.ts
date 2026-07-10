@@ -67,15 +67,12 @@ test('dashboard tour — DSH + dashboard-hosted CAD behaviors', async ({ page, t
 
   // --- DSH-001: the dashboard is the default landing surface ---
   await page.goto('/')
-  // Best-effort: the redirect spinner is transient + aria-invisible (D2a).
-  const rootSpinnerSeen = (await page.locator('[class*="animate-spin"]').count()) > 0
   await page.waitForURL(u => new URL(u).pathname === '/dashboard')
   await page.getByRole('heading', { name: 'Action Required' }).waitFor({ state: 'visible' })
   await tour.capture(page, {
     behaviors: ['DSH-001'],
     note: 'app root redirected to the dashboard (default landing)',
     pair: { id: 'landing', role: 'landing' },
-    fields: { rootSpinnerSeen },
   })
 
   // --- DSH-002 / DSH-003 / DSH-007: global nav + header CTA + no dashboard search ---

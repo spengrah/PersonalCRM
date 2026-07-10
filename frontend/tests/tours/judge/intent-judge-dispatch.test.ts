@@ -81,6 +81,7 @@ describe('makeIntentJudge adapter dispatch', () => {
 
   it('http keeps the aria-only visual framing even when images were resolved', async () => {
     vi.stubEnv('QA_JUDGE_HTTP_URL', 'http://judge.local/v1/chat/completions')
+    vi.stubEnv('QA_INTENT_MODEL', '')
     delete process.env.QA_INTENT_MODEL
     const fetchStub = stubFetch()
     await makeIntentJudge('http')({ ...INPUT, images: ['/runs/x/1.png'] })

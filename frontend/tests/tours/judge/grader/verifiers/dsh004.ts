@@ -1,6 +1,7 @@
 // DSH-004 — the overdue widget distinguishes loading + error from its content.
 //   [0] loading → placeholder, not empty/caught-up (route-held capture, D2a)
-//   [1] failure → error state carrying the reason (route-500 capture)
+//   [1] failure → an error state, not empty/caught-up (route-500 capture; presence)
+//   [2] reason-faithfulness — JUDGE-owned (no verifier)
 //
 // [0]'s loading skeletons are anonymous animate-pulse divs (no aria role/name),
 // so the verifier binds the tour's fields.overdueLoadingSkeletons count AND the

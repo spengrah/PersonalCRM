@@ -4,7 +4,7 @@ import { aggregate, applyGrounding, gradeBehavior, groupByBehavior } from './gra
 import { apiItem, cap, pair } from './fixtures'
 
 describe('classification map', () => {
-  it('has exactly one row per spec then-item (60 total, index-faithful)', () => {
+  it('has exactly one row per spec then-item (61 total, index-faithful)', () => {
     expect(CLASSIFICATION).toHaveLength(CLASSIFICATION_ITEM_COUNT)
     const counts: Record<string, number> = {}
     for (const c of CLASSIFICATION) counts[c.behaviorId] = (counts[c.behaviorId] ?? 0) + 1
@@ -19,7 +19,7 @@ describe('classification map', () => {
       'DSH-001': 2,
       'DSH-002': 3,
       'DSH-003': 2,
-      'DSH-004': 2,
+      'DSH-004': 3,
       'DSH-005': 4,
       'DSH-007': 2,
       'CAD-026': 3,
@@ -37,14 +37,15 @@ describe('classification map', () => {
     }
   })
 
-  it('the judge residue is tiny: exactly CON-042[0] is judge-tagged; CON-043[5]+DSH-004[1] are fallbacks', () => {
+  it('the judge owns the semantic residue: CON-042[0], DSH-001[1], DSH-004[2]; CON-043[5] is the sole fallback', () => {
     const judgeItems = CLASSIFICATION.filter(c => c.grader === 'judge')
-    expect(judgeItems.map(c => `${c.behaviorId}[${c.thenIndex}]`)).toEqual(['CON-042[0]'])
-    const fallbacks = CLASSIFICATION.filter(c => c.judgeFallback)
-    expect(fallbacks.map(c => `${c.behaviorId}[${c.thenIndex}]`)).toEqual([
-      'CON-043[5]',
-      'DSH-004[1]',
+    expect(judgeItems.map(c => `${c.behaviorId}[${c.thenIndex}]`)).toEqual([
+      'CON-042[0]',
+      'DSH-001[1]',
+      'DSH-004[2]',
     ])
+    const fallbacks = CLASSIFICATION.filter(c => c.judgeFallback)
+    expect(fallbacks.map(c => `${c.behaviorId}[${c.thenIndex}]`)).toEqual(['CON-043[5]'])
   })
 })
 

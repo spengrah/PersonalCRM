@@ -99,7 +99,7 @@ export const SPEC_CATALOG: Record<string, BehaviorSpec> = {
     when: 'the entry route resolves',
     then: [
       'the user is taken to the dashboard as the default destination',
-      'a brief loading indicator shows while the redirect resolves',
+      'the redirect does not present as a broken or blank surface while it resolves',
     ],
   },
   'DSH-002': {
@@ -130,7 +130,8 @@ export const SPEC_CATALOG: Record<string, BehaviorSpec> = {
     when: 'the dashboard renders',
     then: [
       'while loading, placeholder content is shown rather than an empty or caught-up state',
-      'on request failure, an error state carrying the failure reason is shown rather than an empty or caught-up state',
+      'on request failure, an error state is shown rather than an empty or caught-up state',
+      'the shown failure reason faithfully reflects the actual failure',
     ],
   },
   'DSH-005': {
