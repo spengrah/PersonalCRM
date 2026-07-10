@@ -176,6 +176,18 @@ describe('dsh004', () => {
     )
     expect(v[1].verdict).toBe('unbound')
   })
+  it('error heading PRESENT but stale cards remain → [1] fail (cards are a wrong-state signal)', () => {
+    const staleCards = cap({
+      behaviors: ['DSH-004'],
+      pair: pair('e', 'error'),
+      aria: root([
+        { role: 'heading', name: 'Error loading overdue contacts', level: 3 },
+        { role: 'button', name: 'Mark as Contacted' },
+      ]),
+    })
+    const v = dsh004(set('DSH-004', [loading(), staleCards]))
+    expect(v[1].verdict).toBe('fail')
+  })
   it('failure surface shows caught-up instead of an error → [1] fail (wrong state, deterministic)', () => {
     const wrongState = cap({
       behaviors: ['DSH-004'],

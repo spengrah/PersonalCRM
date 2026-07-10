@@ -120,6 +120,9 @@ export function applyMutation(baseCaptures: Capture[], mutation: Mutation): Capt
       break
     }
     case 'set_json_field': {
+      // Out-of-range itemIndex is a silent no-op here — but a fail-expecting
+      // doctored case whose mutation no-ops surfaces loudly as a qa-eval
+      // regression (predicted != expected), so mis-indexing cannot pass silently.
       const item = (cap.apiResponses[mutation.endpoint] ?? [])[mutation.itemIndex ?? 0]
       if (item) setJsonPath(item.body, mutation.path, mutation.value)
       break

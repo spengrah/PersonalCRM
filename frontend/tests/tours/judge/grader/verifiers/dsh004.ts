@@ -68,10 +68,10 @@ export function dsh004(set: CaptureSet): VerifierItemVerdicts {
     const errShown = ariaTextIncludes(error.aria, 'Error loading overdue contacts')
     const caughtUp = ariaTextIncludes(error.aria, 'All caught up')
     const cards = hasOverdueCards(error.aria)
-    if (errShown && !caughtUp) {
+    if (errShown && !caughtUp && !cards) {
       return {
         verdict: 'pass',
-        citation: "'Error loading overdue contacts' error state (not caught-up)",
+        citation: "'Error loading overdue contacts' error state (no caught-up/cards)",
       }
     }
     if (caughtUp || cards) {
