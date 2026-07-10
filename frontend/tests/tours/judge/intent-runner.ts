@@ -32,12 +32,16 @@ export const DEFAULT_INTENT_MODEL = 'gpt-5.5'
 export const DEFAULT_INTENT_EFFORT = 'medium'
 
 export function makeIntentJudge(kind: string = process.env.QA_JUDGE ?? 'codex-exec'): Judge {
-  const model = process.env.QA_INTENT_MODEL ?? DEFAULT_INTENT_MODEL
   if (kind === 'codex-exec') {
+    const model = process.env.QA_INTENT_MODEL ?? DEFAULT_INTENT_MODEL
     const effort = process.env.QA_INTENT_EFFORT ?? DEFAULT_INTENT_EFFORT
     return makeCodexExecJudge({ model, effort })
   }
-  return selectJudge(kind, model)
+  // Non-codex adapters own their model config (e.g. QA_JUDGE_HTTP_MODEL) and
+  // an explicit opts.model would override it — so the codex-oriented
+  // DEFAULT_INTENT_MODEL must not leak onto other endpoints. Only an explicit
+  // QA_INTENT_MODEL overrides.
+  return selectJudge(kind, process.env.QA_INTENT_MODEL)
 }
 
 // Run the pass SERIALLY (matching the residue path: concurrent codex spawns
