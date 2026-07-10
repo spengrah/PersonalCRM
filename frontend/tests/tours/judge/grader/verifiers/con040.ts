@@ -5,7 +5,11 @@
 //   [3] Escape discards edit, or returns to the list (context preserved)
 
 import { byRole, findByRoleName, urlPathname, urlQuery } from '../evidence'
-import type { CaptureSet, ItemVerdict, ItemVerdicts } from '../types'
+import type {
+  CaptureSet,
+  VerifierItemVerdict as ItemVerdict,
+  VerifierItemVerdicts as ItemVerdicts,
+} from '../types'
 
 export function con040(set: CaptureSet): ItemVerdicts {
   const viewBefore = byRole(set, 'view-before')
@@ -114,9 +118,10 @@ export function con040(set: CaptureSet): ItemVerdicts {
     return heading
       ? { verdict: 'pass', citation: "aria heading 'Edit Contact'" }
       : {
-          verdict: 'fail',
-          citation: 'enter-edit aria',
-          reason: 'Enter did not open edit mode (no Edit Contact heading)',
+          // Copy anchor (binding vehicle): a missing heading may be a rename,
+          // not a failed Enter — route to the judge.
+          verdict: 'unbound',
+          reason: "the 'Edit Contact' heading was not found after Enter — anchor may be renamed",
         }
   })()
 

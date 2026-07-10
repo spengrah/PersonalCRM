@@ -5,11 +5,15 @@
 import type { Capture } from '../support/types'
 import type { EvidenceBlocks, JudgeInput, JudgeItem } from './adapter/types'
 import { classificationFor } from './grader/classification'
+import type { VerifierItemVerdicts } from './grader/types'
+import { captureSection, type ScreenshotResolver } from './intent-input'
 import { behaviorSpec } from './spec-catalog'
 
 // Aggregate a behavior's captures into one evidence bundle: all dialogs, a
 // merged aria root (so every visible text node is present), merged api, the
-// first frame's url + serverTime.
+// first frame's url + serverTime. Retained for callers that need the flat
+// bundle (self-consistency repeats); judge prompts now prefer the per-capture
+// sections below, which keep in-flight vs settled states distinguishable.
 export function buildEvidence(captures: Capture[]): EvidenceBlocks {
   const aria = {
     role: 'root' as const,
@@ -25,23 +29,33 @@ export function buildEvidence(captures: Capture[]): EvidenceBlocks {
   }
 }
 
-// The residue items a judge grades for a behavior: judge-tagged items plus
-// verifier items flagged judgeFallback.
-export function judgeItemsFor(behaviorId: string): JudgeItem[] {
+// The residue items a judge grades for a behavior: judge-tagged items plus any
+// verifier items that emitted `unbound` (the anchor was not found in present
+// evidence — the judge reasons over the same aria without the copy pin).
+export function judgeItemsFor(
+  behaviorId: string,
+  verifierVerdicts?: VerifierItemVerdicts
+): JudgeItem[] {
   const spec = behaviorSpec(behaviorId)
   if (!spec) return []
   return classificationFor(behaviorId)
-    .filter(c => c.grader === 'judge' || c.judgeFallback)
+    .filter(c => c.grader === 'judge' || verifierVerdicts?.[c.thenIndex]?.verdict === 'unbound')
     .map(c => ({ itemIndex: c.thenIndex, thenText: spec.then[c.thenIndex] ?? '' }))
 }
 
 export function buildJudgeInput(
   behaviorId: string,
   captures: Capture[],
-  items: JudgeItem[] = judgeItemsFor(behaviorId)
+  items: JudgeItem[] = judgeItemsFor(behaviorId),
+  resolveScreenshot?: ScreenshotResolver
 ): JudgeInput | undefined {
   const spec = behaviorSpec(behaviorId)
   if (!spec) return undefined
+  // Screenshots attach all-or-nothing, mirroring the intent pass: a gap would
+  // silently misalign images against the CAPTURE[n] sections.
+  const resolved = resolveScreenshot ? captures.map(resolveScreenshot) : []
+  const images =
+    resolved.length > 0 && resolved.every((p): p is string => p !== undefined) ? resolved : []
   return {
     behaviorId,
     behaviorTitle: spec.title,
@@ -50,5 +64,7 @@ export function buildJudgeInput(
     then: spec.then,
     items,
     evidence: buildEvidence(captures),
+    captureSections: captures.map(captureSection),
+    ...(images.length > 0 ? { images } : {}),
   }
 }

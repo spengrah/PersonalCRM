@@ -31,7 +31,7 @@ The user is unavailable, so PR2 is engineered to be mergeable with **zero** huma
 
 PR3 grows the corpus toward the v0 size **mechanically** (new tours' synthetic captures + doctored self-labeled + clean cases) and lands the verifiers-only eval end-to-end, but the **full v0 human-validated freeze stays deferred** — exactly like the label-gated metrics above. It needs the maintainer's corrected ground-truth labels for the real/clean/ambiguous cases, the 70/30 frozen dev/held-out split, and the fail-precision-over-held-out bar. Un-defer via the same recipe: draft with a stronger model (`*.draft.json`), the maintainer corrects in place (`*.labeled.json`), and PR4 wires the bar + issue-mode flip. **No human-labeling ask is surfaced by PR3** — everything it ships is mergeable with zero human labels.
 
-_(The PR2 capture-coverage caveats CON-038[0] / CON-040[0] are now toured — the bare-`/contacts` and last-contact-boundary captures land in `contacts.tour.ts` (PR3 follow-up 3), so those then-items are proven, not abstained.)_
+_(The DSH-001 in-flight corpus fixture lands at the next curated regen — the live tours already record it; until then the corpus judge hypothesis for DSH-001[1] grades the settled state only. The PR2 capture-coverage caveats CON-038[0] / CON-040[0] are now toured — the bare-`/contacts` and last-contact-boundary captures land in `contacts.tour.ts` (PR3 follow-up 3), so those then-items are proven, not abstained.)_
 
 ## Intent-pass labels (label-gated, same recipe)
 

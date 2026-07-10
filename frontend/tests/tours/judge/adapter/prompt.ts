@@ -145,11 +145,34 @@ export function buildPrompt(input: JudgeInput): string {
 
   const items = input.items.map(i => `  [${i.itemIndex}] ${i.thenText}`).join('\n')
 
+  // Per-capture sections (when present) keep distinct captured states — e.g.
+  // an in-flight redirect vs the settled page — distinguishable; the merged
+  // bundle is the fallback for section-less inputs (older corpus paths).
+  const sections =
+    input.captureSections && input.captureSections.length > 0
+      ? input.captureSections.map((s, n) =>
+          block(`CAPTURE[${n}] — ${s.note}`, renderEvidence(s.evidence))
+        )
+      : [renderEvidence(input.evidence)]
+
+  const sectionNotes: string[] = []
+  if (input.captureSections && input.captureSections.length > 0) {
+    sectionNotes.push(
+      'Evidence is presented as one CAPTURE[n] section per captured state, in tour order — cite the capture index alongside the node/path.'
+    )
+  }
+  if ((input.images?.length ?? 0) > 0) {
+    sectionNotes.push(
+      'Screenshots of the captured states are attached in CAPTURE[n] order — visual qualities MAY ground your verdict.'
+    )
+  }
+
   const parts = [
     SYSTEM_PREAMBLE,
+    ...sectionNotes,
     fewShotBlock(),
     block('SPEC', spec),
-    renderEvidence(input.evidence),
+    ...sections,
     block('ITEMS', items),
     'Return ONLY JSON matching the required schema: { "verdicts": [ { "item_index", "verdict", "citation", "critique" } ] }.',
   ].filter(p => p.trim() !== '')

@@ -17,6 +17,31 @@ const cap = (behavior: string): Capture =>
   }) as unknown as Capture
 
 describe('runnerFromJudge', () => {
+  it('two-phase: an unbound verifier item joins the judge call dynamically', async () => {
+    // CON-041 has NO statically judge-tagged items, but a present capture with
+    // no 'Edit Contact'/'Merge Contacts' heading makes [0] emit `unbound`.
+    const asked: number[] = []
+    const judge: Judge = vi.fn(async (input: Parameters<Judge>[0]) => {
+      asked.push(...input.items.map(i => i.itemIndex))
+      return input.items.map(i => ({
+        itemIndex: i.itemIndex,
+        verdict: 'unsure' as const,
+        citation: '',
+        critique: '',
+      }))
+    })
+    const run = runnerFromJudge(judge)
+    const c = {
+      ...cap('CON-041'),
+      note: 'action=edit consumed',
+      aria: { role: 'root', children: [{ role: 'heading', name: 'Renamed Heading' }] },
+    } as unknown as Capture
+    const out = await run('CON-041', [c])
+    expect(judge).toHaveBeenCalledOnce()
+    expect(asked).toContain(0)
+    expect(out[0]).toBeDefined()
+  })
+
   it('maps the judge per-item verdicts into ItemVerdicts keyed by then-index', async () => {
     // CON-042[0] ("a confirmation prompt warns…") is a judge-tagged residue item.
     const judge: Judge = vi.fn(async () => [
