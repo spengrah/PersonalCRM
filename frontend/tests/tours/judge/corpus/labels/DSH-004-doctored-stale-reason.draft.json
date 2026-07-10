@@ -1,0 +1,14 @@
+{
+  "case_id": "DSH-004-doctored-stale-reason",
+  "behavior_id": "DSH-004",
+  "drafted_by": "codex-exec:gpt-5.5",
+  "note": "DRAFT labels from a stronger model — NOT ground truth. The maintainer corrects these into *.labeled.json before they gate anything (see judge/DEFERRED.md).",
+  "items": [
+    {
+      "then_index": 2,
+      "draft_verdict": "fail",
+      "draft_critique": "The widget shows the failure reason as \"overdue fetch failed\", but the actual recorded failing response reason is \"database connection lost\", so the displayed reason does not faithfully reflect the actual failure.",
+      "status": "draft"
+    }
+  ]
+}

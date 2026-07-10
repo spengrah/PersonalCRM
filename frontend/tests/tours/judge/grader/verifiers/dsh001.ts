@@ -1,7 +1,7 @@
 // DSH-001 — the dashboard is the application's default landing surface.
 //   [0] taken to the dashboard as the default destination (landing url /dashboard)
-//   [1] the redirect does not present as broken/blank — JUDGE-owned (intent-level;
-//       the old spinner pin + its best-effort fields.rootSpinnerSeen read retired)
+//   (a former [1] pinned the redirect's interim presentation; the maintainer
+//   retired that clause — interim quality is judged holistically under DSH-011)
 
 import { byRole, findByRoleName, urlPathname } from '../evidence'
 import type { CaptureSet, ItemVerdict, ItemVerdicts } from '../types'

@@ -14,11 +14,6 @@
       "then_index": 0,
       "grader": "verifier",
       "verdict": "pass"
-    },
-    {
-      "then_index": 1,
-      "grader": "judge",
-      "verdict": "pass"
     }
   ]
 }

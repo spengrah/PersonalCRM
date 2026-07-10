@@ -1,0 +1,14 @@
+{
+  "case_id": "CON-043-clean",
+  "behavior_id": "CON-043",
+  "drafted_by": "codex-exec:gpt-5.5",
+  "note": "Human-confirmed ground truth (maintainer label session, 2026-07-10): corrected in place from the codex draft per judge/DEFERRED.md. This file, not the case expected/hypothesis fields, is the ground truth for judge evaluation.",
+  "items": [
+    {
+      "then_index": 5,
+      "draft_verdict": "pass",
+      "draft_critique": "Outcome reported via the visible page-level toast ('Contacts merged successfully! <kept contact> has been archived.') and absent in the later capture (auto-dismissed after the timeout) - PASS on full evidence. CAVEAT: the toast never appears in the aria tree, so an aria-only judge must abstain here (the tour note is metadata, not evidence). Side-findings: the toast lacks any accessible role/name (screen readers never receive the merge outcome - app a11y gap), and binding it via a fields.mergeMessage tour read would make the item aria-judgeable.",
+      "status": "human-confirmed"
+    }
+  ]
+}

@@ -2,13 +2,13 @@
   "case_id": "DSH-004-clean",
   "behavior_id": "DSH-004",
   "drafted_by": "codex-exec:gpt-5.5",
-  "note": "DRAFT labels from a stronger model — NOT ground truth. The maintainer corrects these into *.labeled.json before they gate anything (see judge/DEFERRED.md).",
+  "note": "Human-confirmed ground truth (maintainer label session, 2026-07-10): corrected in place from the codex draft per judge/DEFERRED.md. This file, not the case expected/hypothesis fields, is the ground truth for judge evaluation.",
   "items": [
     {
       "then_index": 2,
       "draft_verdict": "pass",
       "draft_critique": "The displayed failure reason exactly matches the actual 500 response message: \"overdue fetch failed\".",
-      "status": "draft"
+      "status": "human-confirmed"
     }
   ]
 }
