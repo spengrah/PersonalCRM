@@ -301,6 +301,7 @@ behaviors:
       - overdue contacts appear as cards with the count in the header
       - each card shows urgency (tiers at up to 2, up to 7, and more days overdue), cadence, how long since last contact, reachable contact methods, and the suggested action
       - with nothing overdue, an all-caught-up state is shown instead
+    serves: [DSH-010, DSH-011]
     provenance: [dashboard/page.tsx, OverdueContactCard, dashboard.spec.ts]
 
   - id: CAD-027
@@ -313,6 +314,7 @@ behaviors:
       - urgency (default) orders most-overdue first
       - name orders alphabetically
       - last-contacted orders oldest contact first, with never-contacted at the end
+    serves: [DSH-010]
     provenance: [dashboard/page.tsx sort controls]
 
   - id: CAD-028
@@ -325,6 +327,7 @@ behaviors:
       - a mutual interaction is logged, timestamped by the server's accelerated clock
       - the contact leaves the overdue list without a page reload, and the count updates
       - the change is consistent across dashboard, contact list, and contact detail
+    serves: [DSH-010, DSH-012]
     provenance: [OverdueContactCard, overdue-contact-updates.spec.ts, dashboard.spec.ts]
     notes: The list-row variant of this action is CON-044.
 
@@ -339,6 +342,7 @@ behaviors:
       - the last response time is shown when one exists
       - an awaiting-reply indicator is shown while a follow-up is pending
       - with none of these, an explicit no-recent-activity state is shown
+    serves: [CAD-036]
     provenance: ['contacts/[id]/page.tsx recent activity block', contact-direction.spec.ts]
 
   - id: CAD-030
@@ -352,6 +356,7 @@ behaviors:
       - each task carries a badge derived from its kind and lifecycle
       - completed tasks are collapsed behind a toggle with a count
       - with no tasks, an empty state invites adding one
+    serves: [CAD-036]
     provenance: [tasks-section.tsx, contact detail task queries]
     notes: A follow-up still in pending_remote_create is not listed in the section; during that window it surfaces only via the awaiting-reply indicator (CAD-029).
 
@@ -365,6 +370,7 @@ behaviors:
       - the kind is chosen from reach-out, send, and reminder
       - task text is required; notes are optional
       - the created task appears in the contact's live tasks
+    serves: [CAD-036]
     provenance: [add-task-modal.tsx, ContactTaskService.CreateManualTask]
 
   - id: CAD-032
@@ -388,6 +394,7 @@ behaviors:
     then:
       - the CRM offers unlink (with confirmation), which keeps the task alive in the remote app
       - completing and dismissing happen in the remote task app, not the CRM
+    serves: [CAD-037]
     provenance: [tasks-section.tsx TaskRow, useDeleteTaskLink]
 
   - id: CAD-034
@@ -412,4 +419,20 @@ behaviors:
       - a deadline matching what the CRM last pushed is recognized as stale and does not override
       - follow-up task deadlines never touch contact_by
     provenance: [todoist provider deadline-edit handling, CadenceUpdater.ApplyContactByOverride, MetadataKeySyncedDeadline]
+
+  # --- Intents (judged experience goals — Track B agentic judge only) ---
+
+  - id: CAD-036
+    title: A contact page answers where the relationship stands
+    type: intent
+    status: current
+    statement: a contact's detail page answers where things stand with this person — when we last talked in each direction, whether a reply is pending, and what work is queued — without the user digging through raw history
+    provenance: ['.ai/spec/2026-07-10-ssot-intent-layer-and-judged-ux-goals-design.md']
+
+  - id: CAD-037
+    title: CRM task actions are safe for remote task state
+    type: intent
+    status: current
+    statement: managing a linked task from the CRM never silently mutates or destroys the user's task in the remote app — remote state changes only where the user expects them to happen
+    provenance: ['.ai/spec/2026-07-10-ssot-intent-layer-and-judged-ux-goals-design.md']
     notes: The last-pushed watermark mechanics live in the todoist domain; this pins the cadence-side outcome.

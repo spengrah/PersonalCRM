@@ -1,0 +1,19 @@
+domain: contacts
+prefix: CON
+maturity: reviewed
+behaviors:
+  - id: CON-001
+    title: a plain ux behavior
+    type: ux
+    status: current
+    when: the surface renders
+    then:
+      - something shows
+  - id: CON-002
+    title: a ux behavior serving a non-intent
+    type: ux
+    status: current
+    when: the surface renders
+    then:
+      - something else shows
+    serves: [CON-001]

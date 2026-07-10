@@ -1,0 +1,17 @@
+domain: contacts
+prefix: CON
+maturity: reviewed
+behaviors:
+  - id: CON-001
+    title: a real intent target
+    type: intent
+    status: current
+    statement: the goal
+  - id: CON-002
+    title: an api behavior carrying serves
+    type: api
+    status: current
+    when: a request is handled
+    then:
+      - a response is returned
+    serves: [CON-001]

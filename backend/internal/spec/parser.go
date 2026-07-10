@@ -277,9 +277,11 @@ func (pf *parsedFile) walkBehavior(idx int, node *yaml.Node) *parsedBehavior {
 	pb.b.When = pf.behaviorWhen(pb, fields)
 	pb.b.Statement = pf.behaviorString(pb, fields, "statement")
 
-	// given / then: !!str scalar (→ one-element list) or a sequence of !!str.
+	// given / then / serves: !!str scalar (→ one-element list) or a sequence
+	// of !!str.
 	pb.b.Given = pf.behaviorStrList(pb, fields, "given")
 	pb.b.Then = pf.behaviorStrList(pb, fields, "then")
+	pb.b.Serves = pf.behaviorStrList(pb, fields, "serves")
 
 	// provenance: best-effort scalar list, no checks (non-load-bearing).
 	pb.b.Provenance = provenance(fields)

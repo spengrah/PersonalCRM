@@ -1,0 +1,13 @@
+domain: contacts
+prefix: CON
+maturity: reviewed
+behaviors:
+  - id: CON-001
+    title: a ux behavior with a mapping serves
+    type: ux
+    status: current
+    when: the surface renders
+    then:
+      - something shows
+    serves:
+      target: CON-002
