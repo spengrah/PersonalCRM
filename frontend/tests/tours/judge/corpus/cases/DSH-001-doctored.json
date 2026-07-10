@@ -5,13 +5,17 @@
   "metadata": {
     "capture_generator_version": 1
   },
-  "captures": ["dashboard/002-app-root-redirected-to-the-dashboard-default-landing.json"],
+  "captures": [
+    "dashboard/001-mid-redirect-state-at-the-app-root-best-effort-may-already-s.json",
+    "dashboard/002-app-root-redirected-to-the-dashboard-default-landing.json"
+  ],
   "doctor": {
     "base_case": "DSH-001-clean",
     "mutation": {
       "op": "remove_aria_subtree",
       "node_role": "heading",
-      "node_name": "Action Required"
+      "node_name": "Action Required",
+      "role": "landing"
     }
   },
   "expected": [
