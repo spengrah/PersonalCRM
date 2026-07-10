@@ -38,6 +38,12 @@ describe('selectJudge', () => {
     expect(sentModel).toBe('stronger-labeler-model')
   })
 
+  it('selects the claude adapter (labeler drafter) without throwing', () => {
+    // Model threading into `claude -p --model` is proven at the adapter level
+    // (claude.test.ts); selectJudge passes the model opt identically to http.
+    expect(typeof selectJudge('claude', 'stronger-labeler-model')).toBe('function')
+  })
+
   it('codex-sdk is deferred (throws pointing at DEFERRED.md)', () => {
     expect(() => selectJudge('codex-sdk')).toThrow(/DEFERRED\.md/)
   })

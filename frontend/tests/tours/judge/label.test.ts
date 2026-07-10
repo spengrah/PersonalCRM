@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { buildDraftArtifact, draftForCase } from './label'
+import { buildDraftArtifact, draftForCase, draftForIntentCase } from './label'
 import { resolveCaseCaptures } from './doctor'
 import { cap } from './grader/fixtures'
+import type { IntentSpec } from './intent-catalog'
 import type { Judge, PerItemVerdict } from './adapter/types'
 
 describe('buildDraftArtifact (machinery, no model)', () => {
@@ -119,5 +120,41 @@ describe('draftForCase (mocked stronger-model drafter — offline)', () => {
     ]
     const artifact = await draftForCase('CON-041-renamed', 'CON-041', captures, drafter, 'strong')
     expect(artifact.items.map(i => i.then_index)).toContain(0)
+  })
+})
+
+describe('draftForIntentCase (mocked stronger-model drafter — offline)', () => {
+  const spec: IntentSpec = {
+    id: 'DSH-010',
+    title: 'at a glance',
+    statement: 's',
+    status: 'current',
+    servedBy: ['CAD-026'],
+  }
+
+  it('drafts the intent verdict via runIntentPass and stamps status=draft', async () => {
+    const drafter: Judge = async () => [
+      { itemIndex: 0, verdict: 'fail', citation: 'CAPTURE[0]: heading "x"', critique: 'bad' },
+    ]
+    const captures = [cap({ behaviors: ['CAD-026'], note: 'overdue list' })]
+    const artifact = await draftForIntentCase('DSH-010-clean', spec, captures, drafter, 'strong')
+    expect(artifact).toMatchObject({
+      intent_case_id: 'DSH-010-clean',
+      intent_id: 'DSH-010',
+      drafted_by: 'strong',
+      draft_verdict: 'fail',
+      draft_citation: 'CAPTURE[0]: heading "x"',
+      draft_critique: 'bad',
+      status: 'draft',
+    })
+  })
+
+  it('inherits the grounding downgrade: an uncited fail drafts as unsure', async () => {
+    const drafter: Judge = async () => [
+      { itemIndex: 0, verdict: 'fail', citation: '', critique: 'vibes' },
+    ]
+    const captures = [cap({ behaviors: ['CAD-026'], note: 'overdue list' })]
+    const artifact = await draftForIntentCase('DSH-010-clean', spec, captures, drafter, 'strong')
+    expect(artifact.draft_verdict).toBe('unsure')
   })
 })

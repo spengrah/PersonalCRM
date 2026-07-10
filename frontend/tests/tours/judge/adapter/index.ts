@@ -3,11 +3,12 @@
 // import (an unresolvable import would fail tsc), so selecting it throws with a
 // pointer to the follow-up.
 
+import { makeClaudeJudge } from './claude'
 import { makeCodexExecJudge } from './codex-exec'
 import { makeHttpJudge } from './http'
 import type { Judge } from './types'
 
-export type JudgeKind = 'codex-exec' | 'http' | 'codex-sdk'
+export type JudgeKind = 'codex-exec' | 'http' | 'claude' | 'codex-sdk'
 
 // `model` overrides the adapter's default model env, so a caller (e.g. the
 // labeling CLI passing QA_LABELER_MODEL) selects a specific/stronger model
@@ -21,13 +22,15 @@ export function selectJudge(
       return makeCodexExecJudge(model ? { model } : {})
     case 'http':
       return makeHttpJudge(model ? { model } : {})
+    case 'claude':
+      return makeClaudeJudge(model ? { model } : {})
     case 'codex-sdk':
       throw new Error(
         'QA_JUDGE=codex-sdk is a deferred follow-up (add @openai/codex-sdk + the impl behind the ' +
           'identical Judge interface) — see judge/DEFERRED.md. Use codex-exec (default) or http.'
       )
     default:
-      throw new Error(`unknown QA_JUDGE='${kind}' (expected codex-exec | http)`)
+      throw new Error(`unknown QA_JUDGE='${kind}' (expected codex-exec | http | claude)`)
   }
 }
 
