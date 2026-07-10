@@ -1,0 +1,10 @@
+{
+  "intent_case_id": "DSH-010-clean",
+  "intent_id": "DSH-010",
+  "drafted_by": "codex-exec:gpt-5.5",
+  "note": "Human-confirmed ground truth (maintainer label session, 2026-07-10): corrected in place from the codex draft per judge/DEFERRED.md. This file, not the case expected/hypothesis fields, is the ground truth for judge evaluation.",
+  "draft_verdict": "pass",
+  "draft_citation": "CAPTURE[0]: 'Most Urgent' sort with the most-overdue cards first; per-card name + cadence + overdue age + reachable method + suggested action; CAPTURE[5]: clear caught-up empty state",
+  "draft_critique": "PASS (maintainer override of the codex draft's fail): the urgency sort answers 'who first' by position, cross-band urgency is visible via tier treatment, and each card carries everything needed to decide and act without opening a contact page. The draft's 'wall of undifferentiated entries' reading was REJECTED: equally-overdue contacts are genuinely equivalent priorities the UI cannot further differentiate, and part of the draft's grounding was an aria-cap truncation artifact ('(1322 more)'), not UI.",
+  "status": "human-confirmed"
+}

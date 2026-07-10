@@ -13,6 +13,6 @@
     "node_role": "heading",
     "node_name": "Error loading overdue contacts"
   },
-  "expected_hypothesis": "fail",
-  "notes": "Self-labeled HYPOTHESIS, not ground truth: removing the error announcement leaves the failed-load state blank/ambiguous - the goal explicitly names 'never stranded on a blank or ambiguous screen', so the doctored surface should be judged a violation. If the judge abstains instead (nav + Add Contact remain), that disagreement is exactly what this case is meant to surface for labeling."
+  "expected_hypothesis": "pass",
+  "notes": "Self-labeled HYPOTHESIS, not ground truth: a deliberate FALSE-POSITIVE check (maintainer-adjudicated 2026-07-10, see labels/DSH-011-doctored.labeled.json). The mutation removes only the error heading; the reason paragraph, global nav, and actions survive, so the doctored dashboard still does not dead-end - the intent judge should PASS it, and failing this case means over-failing on cosmetic doctoring."
 }

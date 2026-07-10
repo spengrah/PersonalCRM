@@ -1,0 +1,10 @@
+{
+  "intent_case_id": "DSH-011-doctored",
+  "intent_id": "DSH-011",
+  "drafted_by": "codex-exec:gpt-5.5",
+  "note": "Human-confirmed ground truth (maintainer label session, 2026-07-10): corrected in place from the codex draft per judge/DEFERRED.md. This file, not the case expected/hypothesis fields, is the ground truth for judge evaluation.",
+  "draft_verdict": "pass",
+  "draft_citation": "CAPTURE[0]: link \"Add Contact\" / button \"Mark as Contacted\"; CAPTURE[1]: paragraph \"overdue fetch failed\" and link \"Add Contact\"; CAPTURE[2]: link \"View All Contacts\" and link \"Add New Contact\"",
+  "draft_critique": "The populated, failed, and caught-up dashboard states all expose a non-blank screen with understandable status text and at least one clear action. The failed state also surfaces the error reason instead of presenting a silent empty state. CONFIRMED as a false-positive check: the mutation removes only the error heading; the reason paragraph, global nav, and actions survive, so the doctored dashboard genuinely does not dead-end - a judge failing this case is over-failing on cosmetic doctoring.",
+  "status": "human-confirmed"
+}

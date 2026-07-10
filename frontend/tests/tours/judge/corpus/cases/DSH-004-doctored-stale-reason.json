@@ -15,10 +15,7 @@
       "op": "set_json_field",
       "role": "error",
       "endpoint": "GET /api/v1/contacts/overdue",
-      "path": [
-        "error",
-        "message"
-      ],
+      "path": ["error", "message"],
       "value": "database connection lost",
       "itemIndex": 4
     }
