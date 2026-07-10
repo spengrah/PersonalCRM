@@ -27,7 +27,7 @@ function doctored(behaviorId: string, captures: Capture[], m: Mutation): Capture
 
 // --- DSH-001 ---
 describe('dsh001', () => {
-  const landing = (over: Partial<{ spinner: boolean; heading: boolean }> = {}): Capture =>
+  const landing = (over: Partial<{ heading: boolean }> = {}): Capture =>
     cap({
       behaviors: ['DSH-001'],
       pair: pair('l', 'landing'),
@@ -35,13 +35,12 @@ describe('dsh001', () => {
       aria: root(
         over.heading === false ? [] : [{ role: 'heading', name: 'Action Required', level: 2 }]
       ),
-      fields: { rootSpinnerSeen: over.spinner ?? true },
     })
 
-  it('clean: [0] pass, [1] pass', () => {
+  it('clean: [0] pass; [1] is judge-owned (no verifier verdict)', () => {
     const v = dsh001(set('DSH-001', [landing()]))
     expect(v[0].verdict).toBe('pass')
-    expect(v[1].verdict).toBe('pass')
+    expect(v[1]).toBeUndefined()
   })
   it('doctored: Action Required heading removed → [0] fail', () => {
     const v = dsh001(
@@ -53,13 +52,9 @@ describe('dsh001', () => {
     )
     expect(v[0].verdict).toBe('fail')
   })
-  it('spinner not observed → [1] abstains (never fail)', () => {
-    expect(dsh001(set('DSH-001', [landing({ spinner: false })]))[1].verdict).toBe('unsure')
-  })
   it('missing → unsure', () => {
     const v = dsh001(set('DSH-001', []))
     expect(v[0].verdict).toBe('unsure')
-    expect(v[1].verdict).toBe('unsure')
   })
 })
 

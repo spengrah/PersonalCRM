@@ -176,10 +176,8 @@ export const CLASSIFICATION: Classification[] = [
   {
     behaviorId: 'DSH-001',
     thenIndex: 1,
-    grader: 'verifier',
-    caveat:
-      'The redirect spinner is aria-invisible and transient; the verifier reads fields.rootSpinnerSeen best-effort and abstains (unsure) if the redirect out-raced the read.',
-    note: 'a brief loading indicator shows during the redirect (fields.rootSpinnerSeen, best-effort)',
+    grader: 'judge',
+    note: 'the redirect does not present as broken/blank (intent-level; was a spinner pin graded from a best-effort fields.rootSpinnerSeen read — retired)',
   },
 
   // --- DSH-002: persistent global navigation ---
@@ -227,8 +225,13 @@ export const CLASSIFICATION: Classification[] = [
     behaviorId: 'DSH-004',
     thenIndex: 1,
     grader: 'verifier',
-    judgeFallback: true,
-    note: 'failure → error state with the reason (route-500: Error loading overdue contacts; reason-faithfulness → judge if unbindable)',
+    note: 'failure → an error state carrying a reason, not empty/caught-up (route-500 capture; reason-presence — faithfulness is [2])',
+  },
+  {
+    behaviorId: 'DSH-004',
+    thenIndex: 2,
+    grader: 'judge',
+    note: 'the shown failure reason faithfully reflects the actual failure (judge-primary; was a judgeFallback residue on the old combined item)',
   },
 
   // --- DSH-005: overdue widget reflects out-of-flow membership changes ---
@@ -442,10 +445,10 @@ export const CLASSIFICATION: Classification[] = [
 
 // The count MUST match the SSOT then-item totals: spec/contacts.yaml (CON-038×2,
 // CON-040×4, CON-041×2, CON-042×3, CON-043×6, CON-044×1, CON-045×5 = 23) +
-// spec/dashboard.yaml (DSH-001×2, DSH-002×3, DSH-003×2, DSH-004×2, DSH-005×4,
-// DSH-007×2 = 15) + spec/cadence-followup.yaml (CAD-026×3, CAD-027×3, CAD-028×3,
-// CAD-029×4, CAD-030×4, CAD-031×3, CAD-033×2 = 22) = 60 — guarded by a unit test.
-export const CLASSIFICATION_ITEM_COUNT = 60
+// spec/dashboard.yaml (DSH-001×2, DSH-002×3, DSH-003×2, DSH-004×3, DSH-005×4,
+// DSH-007×2 = 16) + spec/cadence-followup.yaml (CAD-026×3, CAD-027×3, CAD-028×3,
+// CAD-029×4, CAD-030×4, CAD-031×3, CAD-033×2 = 22) = 61 — guarded by a unit test.
+export const CLASSIFICATION_ITEM_COUNT = 61
 
 export function classificationFor(behaviorId: string): Classification[] {
   return CLASSIFICATION.filter(c => c.behaviorId === behaviorId).sort(

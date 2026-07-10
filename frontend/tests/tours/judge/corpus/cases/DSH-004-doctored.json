@@ -28,6 +28,11 @@
       "then_index": 1,
       "grader": "verifier",
       "verdict": "fail"
+    },
+    {
+      "then_index": 2,
+      "grader": "judge",
+      "verdict": "unsure"
     }
   ]
 }
