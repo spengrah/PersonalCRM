@@ -135,16 +135,14 @@ export class TourApi {
   // must never fail the sweep — the capture simply omits the field.
   private async takeScreenshot(page: Page, seq: number, note: string): Promise<string | undefined> {
     if (process.env.TOURS_SCREENSHOTS === '0') return undefined
-    const runId = getCurrentRunId()
     const rel = path.join(
       'screenshots',
       this.tour,
       `${String(seq).padStart(3, '0')}-${slugify(note)}.png`
     )
-    const abs = path.join(runDir(runId), rel)
     try {
-      fs.mkdirSync(path.dirname(abs), { recursive: true })
-      await page.screenshot({ path: abs })
+      // page.screenshot creates missing parent directories itself.
+      await page.screenshot({ path: path.join(runDir(getCurrentRunId()), rel) })
       return rel
     } catch {
       return undefined

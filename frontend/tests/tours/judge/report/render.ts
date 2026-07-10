@@ -252,6 +252,10 @@ async function main(): Promise<void> {
     const { makeIntentJudge, runIntentPass } = await import('../intent-runner')
     const { INTENT_CAPTURE_CAP } = await import('../intent-input')
     const { allIntents } = await import('../intent-catalog')
+    // Capability gate: only the codex-exec adapter can attach image files.
+    // Resolving screenshots for a text-only adapter would clear the aria-only
+    // caveat for evidence the model never sees.
+    const canAttachImages = (process.env.QA_JUDGE ?? 'codex-exec') === 'codex-exec'
     const resolveScreenshot = (c: { screenshot?: string }): string | undefined => {
       if (!c.screenshot) return undefined
       const abs = path.resolve(runDir, c.screenshot)
@@ -262,7 +266,7 @@ async function main(): Promise<void> {
       makeIntentJudge(),
       allIntents(),
       INTENT_CAPTURE_CAP,
-      resolveScreenshot
+      canAttachImages ? resolveScreenshot : undefined
     )
   }
   let runId: string | undefined

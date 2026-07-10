@@ -20,12 +20,17 @@ const INPUT: JudgeInput = {
   captureSections: [],
 }
 
-function stubFetch(): { posted: () => { model?: string } } {
-  let body: { model?: string } = {}
+interface PostedBody {
+  model?: string
+  messages?: Array<{ content?: string }>
+}
+
+function stubFetch(): { posted: () => PostedBody } {
+  let body: PostedBody = {}
   vi.stubGlobal(
     'fetch',
     vi.fn(async (_url: unknown, init?: { body?: string }) => {
-      body = JSON.parse(init?.body ?? '{}') as { model?: string }
+      body = JSON.parse(init?.body ?? '{}') as PostedBody
       return {
         ok: true,
         json: async () => ({
@@ -72,5 +77,15 @@ describe('makeIntentJudge adapter dispatch', () => {
     const fetchStub = stubFetch()
     await makeIntentJudge('http')(INPUT)
     expect(fetchStub.posted().model).toBe('venice-xl')
+  })
+
+  it('http keeps the aria-only visual framing even when images were resolved', async () => {
+    vi.stubEnv('QA_JUDGE_HTTP_URL', 'http://judge.local/v1/chat/completions')
+    delete process.env.QA_INTENT_MODEL
+    const fetchStub = stubFetch()
+    await makeIntentJudge('http')({ ...INPUT, images: ['/runs/x/1.png'] })
+    const prompt = fetchStub.posted().messages?.[0]?.content ?? ''
+    expect(prompt).toMatch(/do not fail a goal for purely visual\s+qualities/)
+    expect(prompt).not.toMatch(/Screenshots of the captured states are attached/)
   })
 })

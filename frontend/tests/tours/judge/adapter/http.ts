@@ -37,7 +37,11 @@ export function makeHttpJudge(opts: HttpJudgeOptions = {}): Judge {
         'QA_JUDGE_HTTP_URL is not set — the HTTP judge is an interface stub (see judge/DEFERRED.md)'
       )
     }
-    const prompt = buildPrompt(input)
+    // This adapter posts text only — it cannot attach image files, so the
+    // prompt must keep the aria-only visual framing even when the caller
+    // resolved screenshots (else the model is told images exist that it
+    // cannot see, licensing false visual grounding).
+    const prompt = buildPrompt({ ...input, images: undefined })
     const start = Date.now()
     let content: string | undefined
     let error: string | undefined

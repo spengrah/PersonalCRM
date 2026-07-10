@@ -65,9 +65,14 @@ export function buildIntentJudgeInput(
   bound: Capture[],
   resolveScreenshot?: ScreenshotResolver
 ): JudgeInput {
-  const images = resolveScreenshot
-    ? bound.map(resolveScreenshot).filter((p): p is string => p !== undefined)
-    : []
+  // ALL-OR-NOTHING: the prompt promises images in CAPTURE[n] order, so a gap
+  // (one capture's best-effort screenshot missing) would silently shift every
+  // later image onto the wrong capture — a miscited visual verdict. Any gap
+  // drops ALL images: the run degrades to aria-only framing + the visual
+  // caveat instead of corrupting the mapping.
+  const resolved = resolveScreenshot ? bound.map(resolveScreenshot) : []
+  const images =
+    resolved.length > 0 && resolved.every((p): p is string => p !== undefined) ? resolved : []
   return {
     behaviorId: intent.id,
     behaviorTitle: intent.title,

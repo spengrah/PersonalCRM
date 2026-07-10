@@ -86,11 +86,17 @@ describe('buildIntentJudgeInput', () => {
     expect(input.images).toBeUndefined()
   })
 
-  it('attaches resolver-supplied screenshots and skips unresolved ones', () => {
+  it('attaches screenshots only when EVERY bound capture resolves (order preserved)', () => {
+    const bound = [cap('dashboard', 1, ['CAD-026']), cap('dashboard', 2, ['CAD-027'])]
+    const input = buildIntentJudgeInput(intent, bound, c => `/runs/x/${c.seq}.png`)
+    expect(input.images).toEqual(['/runs/x/1.png', '/runs/x/2.png'])
+  })
+
+  it('drops ALL images on a gap — a partial set would misalign CAPTURE[n]', () => {
     const bound = [cap('dashboard', 1, ['CAD-026']), cap('dashboard', 2, ['CAD-027'])]
     const input = buildIntentJudgeInput(intent, bound, c =>
-      c.seq === 1 ? '/runs/x/screenshots/dashboard/001.png' : undefined
+      c.seq === 2 ? '/runs/x/2.png' : undefined
     )
-    expect(input.images).toEqual(['/runs/x/screenshots/dashboard/001.png'])
+    expect(input.images).toBeUndefined()
   })
 })
