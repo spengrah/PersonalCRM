@@ -32,3 +32,11 @@ The user is unavailable, so PR2 is engineered to be mergeable with **zero** huma
 PR3 grows the corpus toward the v0 size **mechanically** (new tours' synthetic captures + doctored self-labeled + clean cases) and lands the verifiers-only eval end-to-end, but the **full v0 human-validated freeze stays deferred** — exactly like the label-gated metrics above. It needs the maintainer's corrected ground-truth labels for the real/clean/ambiguous cases, the 70/30 frozen dev/held-out split, and the fail-precision-over-held-out bar. Un-defer via the same recipe: draft with a stronger model (`*.draft.json`), the maintainer corrects in place (`*.labeled.json`), and PR4 wires the bar + issue-mode flip. **No human-labeling ask is surfaced by PR3** — everything it ships is mergeable with zero human labels.
 
 _(The PR2 capture-coverage caveats CON-038[0] / CON-040[0] are now toured — the bare-`/contacts` and last-contact-boundary captures land in `contacts.tour.ts` (PR3 follow-up 3), so those then-items are proven, not abstained.)_
+
+## Intent-pass labels (label-gated, same recipe)
+
+The intent pass (`intent-runner.ts`, one judge call per `type: intent` SSOT behavior) is advisory and label-gated exactly like the item-judge residue:
+
+- **Intent fail-precision joins the north star**: fail-precision is measured over the judge's residual item fails AND intent fails, over a human-labeled held-out set. Deferred with the same dependency.
+- **Intent-case expectations are hypotheses.** `corpus/intent-cases/*.json` carry `expected_hypothesis` — self-labeled guesses printed for eyeballing under `--judge`, never trusted ground truth and never a merge gate. The maintainer's corrected labels supersede them via the label.ts draft → `*.labeled.json` recipe above (the Claude drafter covers intents too).
+- **Live intent smoke**: `QA_JUDGE=codex-exec bun run tests/tours/judge/eval/run.ts --judge` now also prints intent verdicts vs hypotheses; `QA_INTENT_MODEL`/`QA_INTENT_EFFORT` override the pass's stronger-model default (`gpt-5.5`/`medium` — revalidate against the pinned Codex CLI's model list at first live run).

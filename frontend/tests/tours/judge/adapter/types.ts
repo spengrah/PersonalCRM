@@ -20,6 +20,13 @@ export interface EvidenceBlocks {
   dialogs?: DialogRecord[]
 }
 
+// One capture rendered as its own labeled CAPTURE[n] section in an intent
+// prompt (multi-capture evidence stays sectioned, never merged).
+export interface CaptureSection {
+  note: string
+  evidence: EvidenceBlocks
+}
+
 export interface JudgeInput {
   behaviorId: string
   behaviorTitle: string
@@ -28,6 +35,14 @@ export interface JudgeInput {
   then: string[] // full then list (context)
   items: JudgeItem[] // the residual items to grade
   evidence: EvidenceBlocks
+  /**
+   * Intent variant: set on an intent-pass call. The prompt renders an INTENT
+   * block (statement instead of GWT) and per-capture CAPTURE[n] sections from
+   * captureSections; `evidence` is ignored. behaviorId/behaviorTitle carry the
+   * intent's id/title; items is the single statement item (index 0).
+   */
+  intent?: { statement: string; status: 'current' | 'proposed' }
+  captureSections?: CaptureSection[]
 }
 
 // Categorical per-item verdict. `citation` is the exact aria node label / JSON

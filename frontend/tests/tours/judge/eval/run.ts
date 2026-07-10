@@ -124,6 +124,36 @@ async function main(): Promise<void> {
     console.log('')
   }
 
+  // The intent pass over the corpus's intent-hypothesis cases (--judge only).
+  // Expectations are self-labeled HYPOTHESES, not ground truth — printed for
+  // eyeballing, NEVER part of the merge gate (ground truth is the deferred
+  // human-labeling path).
+  if (judge && corpus.intentCases.length > 0) {
+    const { applyMutation } = await import('../doctor')
+    const { intentSpec } = await import('../intent-catalog')
+    const { makeIntentJudge, runIntentPass } = await import('../intent-runner')
+    const intentJudge = makeIntentJudge()
+    const icon: Record<Verdict, string> = { pass: '✅', fail: '❌', unsure: '⚠️' }
+    console.log('Intent-pass verdicts vs self-labeled hypotheses (advisory; never the merge gate):')
+    for (const ic of corpus.intentCases) {
+      const spec = intentSpec(ic.intent_id)
+      if (!spec) {
+        console.log(`  ${ic.id}: SKIP — unknown intent ${ic.intent_id} (catalog drift?)`)
+        continue
+      }
+      let captures = corpus.capturesFor(ic)
+      if (ic.mutation) captures = applyMutation(captures, ic.mutation)
+      const [grade] = await runIntentPass(captures, intentJudge, [spec])
+      const agree = grade.verdict === ic.expected_hypothesis ? 'agrees with' : 'DIFFERS from'
+      console.log(
+        `  ${ic.id} ${icon[grade.verdict]} ${grade.verdict} — ${agree} hypothesis (${ic.expected_hypothesis})`
+      )
+      if (grade.citation) console.log(`      cite: ${grade.citation}`)
+      if (grade.reason) console.log(`      critique: ${grade.reason}`)
+    }
+    console.log('')
+  }
+
   // Label-gated metrics.
   console.log(
     '  fail-precision over held-out (north star): N/A — pending human labels (see judge/DEFERRED.md)'

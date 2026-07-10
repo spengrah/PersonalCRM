@@ -1,0 +1,18 @@
+{
+  "id": "DSH-011-doctored",
+  "intent_id": "DSH-011",
+  "source": "doctored",
+  "captures": [
+    "dashboard/002-dashboard-shell-global-nav-header-add-contact-no-dashboard-s.json",
+    "dashboard/010-overdue-error-state-500-error-carries-the-reason-not-caught-.json",
+    "dashboard/011-caught-up-empty-state-add-view-list-affordances.json"
+  ],
+  "mutation": {
+    "op": "remove_aria_subtree",
+    "captureIndex": 1,
+    "node_role": "heading",
+    "node_name": "Error loading overdue contacts"
+  },
+  "expected_hypothesis": "fail",
+  "notes": "Self-labeled HYPOTHESIS, not ground truth: removing the error announcement leaves the failed-load state blank/ambiguous - the goal explicitly names 'never stranded on a blank or ambiguous screen', so the doctored surface should be judged a violation. If the judge abstains instead (nav + Add Contact remain), that disagreement is exactly what this case is meant to surface for labeling."
+}

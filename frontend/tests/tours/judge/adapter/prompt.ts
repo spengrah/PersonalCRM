@@ -45,6 +45,29 @@ const SYSTEM_PREAMBLE = [
   '`citation`. An uncited fail is treated as unsure. Categorical only — no scores.',
 ].join('\n')
 
+// The intent-pass preamble: the judge grades ONE experience goal over several
+// CAPTURE[n] sections instead of then-items over one merged evidence bundle.
+const INTENT_PREAMBLE = [
+  'You are a read-only UX experience JUDGE. You are criticism, not agency: reason',
+  'ONLY over the labeled evidence blocks below. Do NOT use any tool, run any',
+  'command, browse, or fetch — a run that calls a tool is DISCARDED.',
+  '',
+  'Under INTENT is one experience GOAL the surface exists to achieve. Under',
+  'CAPTURE[0..n] are independent captured states of that surface (accessibility',
+  'tree + recorded API responses). Judge whether the captured surface, taken as',
+  'a whole, ACHIEVES the goal — not whether individual elements exist, but',
+  'whether a user in these states would actually get the experience the goal',
+  'names. Return ONE categorical verdict for item [0]:',
+  '  - pass   : the evidence shows the goal is achieved in the captured states',
+  '  - fail   : the evidence shows the goal is violated or undermined',
+  '  - unsure : the evidence is insufficient to judge the goal (abstention)',
+  'GROUNDING RULE: a `fail` MUST cite the capture index AND the exact aria node',
+  'label or JSON path that undermines the goal (e.g. "CAPTURE[2]: <cite>") in',
+  '`citation`. An uncited fail is treated as unsure. The aria tree carries no',
+  'visual styling — do not fail a goal for purely visual qualities (size, color,',
+  'spacing) you cannot observe; abstain instead. Categorical only — no scores.',
+].join('\n')
+
 // Render the normalized aria tree as a stable indented outline.
 export function renderAria(node: AriaNode, indent = 0): string {
   const pad = '  '.repeat(indent)
@@ -99,6 +122,8 @@ export function fewShotBlock(): string {
 }
 
 export function buildPrompt(input: JudgeInput): string {
+  if (input.intent) return buildIntentPrompt(input)
+
   const spec = [
     `BEHAVIOR ${input.behaviorId}: ${input.behaviorTitle}`,
     `GIVEN: ${input.given}`,
@@ -115,6 +140,33 @@ export function buildPrompt(input: JudgeInput): string {
     block('SPEC', spec),
     renderEvidence(input.evidence),
     block('ITEMS', items),
+    'Return ONLY JSON matching the required schema: { "verdicts": [ { "item_index", "verdict", "citation", "critique" } ] }.',
+  ].filter(p => p.trim() !== '')
+
+  return parts.join('\n\n')
+}
+
+// The intent-pass prompt: INTENT block + one CAPTURE[n] section per bound
+// capture (same labeled-block protocol inside each section), fixed order.
+function buildIntentPrompt(input: JudgeInput): string {
+  const intent = input.intent
+  if (!intent) throw new Error('buildIntentPrompt requires input.intent')
+  const head = [
+    `INTENT ${input.behaviorId}: ${input.behaviorTitle}`,
+    `STATUS: ${intent.status} (current = achieved today, judge as regression; proposed = aspirational, judge as progress)`,
+    `STATEMENT: ${intent.statement}`,
+  ].join('\n')
+
+  const sections = (input.captureSections ?? []).map((s, n) =>
+    block(`CAPTURE[${n}] — ${s.note}`, renderEvidence(s.evidence))
+  )
+
+  const parts = [
+    INTENT_PREAMBLE,
+    fewShotBlock(),
+    block('INTENT', head),
+    ...sections,
+    block('ITEMS', `  [0] ${intent.statement}`),
     'Return ONLY JSON matching the required schema: { "verdicts": [ { "item_index", "verdict", "citation", "critique" } ] }.',
   ].filter(p => p.trim() !== '')
 

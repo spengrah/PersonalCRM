@@ -112,3 +112,29 @@ export function parseCase(obj: unknown): Case {
   }
   return c
 }
+
+// An intent-pass case. Its expectation is a self-labeled HYPOTHESIS — intent
+// verdicts are judge-only, so these run under --judge only and NEVER gate the
+// merge (ground truth comes from the deferred human-labeling path).
+export const IntentCaseSchema = z.object({
+  id: z.string().min(1),
+  intent_id: z.string().min(1),
+  captures: z.array(z.string()).min(1),
+  source: z.enum(['clean', 'doctored']),
+  mutation: MutationSchema.optional(),
+  expected_hypothesis: VerdictSchema,
+  notes: z.string().optional(),
+})
+
+export type IntentCase = z.infer<typeof IntentCaseSchema>
+
+export function parseIntentCase(obj: unknown): IntentCase {
+  const c = IntentCaseSchema.parse(obj)
+  if (c.source === 'doctored' && !c.mutation) {
+    throw new Error(`intent case ${c.id}: source=doctored requires a mutation`)
+  }
+  if (c.source === 'clean' && c.mutation) {
+    throw new Error(`intent case ${c.id}: source=clean must not carry a mutation`)
+  }
+  return c
+}
