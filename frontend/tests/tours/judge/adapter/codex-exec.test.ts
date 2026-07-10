@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   codexArgs,
+  DEFAULT_JUDGE_EFFORT,
+  DEFAULT_JUDGE_MODEL,
   makeCodexExecJudge,
   parseCodexEventStream,
   verdictsFromCodexOutput,
@@ -104,6 +106,22 @@ describe('codexArgs', () => {
       '-',
     ])
   })
+
+  it('pins reasoning effort via -c when set', () => {
+    expect(codexArgs('/tmp/s.json', 'm', 'low')).toEqual([
+      'exec',
+      '--json',
+      '--output-schema',
+      '/tmp/s.json',
+      '--sandbox',
+      'read-only',
+      '--model',
+      'm',
+      '-c',
+      'model_reasoning_effort=low',
+      '-',
+    ])
+  })
 })
 
 describe('makeCodexExecJudge (injected run — no live call)', () => {
@@ -187,6 +205,70 @@ describe('makeCodexExecJudge (injected run — no live call)', () => {
     } finally {
       if (prev === undefined) delete process.env.QA_JUDGE_MODEL
       else process.env.QA_JUDGE_MODEL = prev
+    }
+  })
+
+  it('defaults to the pinned cheap model + low effort (never inherits operator config)', async () => {
+    const prevModel = process.env.QA_JUDGE_MODEL
+    const prevEffort = process.env.QA_JUDGE_EFFORT
+    delete process.env.QA_JUDGE_MODEL
+    delete process.env.QA_JUDGE_EFFORT
+    try {
+      let seenArgs: string[] = []
+      const judge = makeCodexExecJudge({
+        run: async args => {
+          seenArgs = args
+          return stream({
+            verdicts: [{ item_index: 0, verdict: 'pass', citation: 'c', critique: 'k' }],
+          })
+        },
+      })
+      await judge(input)
+      // The bug this guards: with nothing pinned the judge must use the cheap
+      // default, NOT silently inherit the operator's codex config (gpt-5.5/xhigh).
+      expect(seenArgs[seenArgs.indexOf('--model') + 1]).toBe(DEFAULT_JUDGE_MODEL)
+      expect(seenArgs).toContain(`model_reasoning_effort=${DEFAULT_JUDGE_EFFORT}`)
+    } finally {
+      if (prevModel === undefined) delete process.env.QA_JUDGE_MODEL
+      else process.env.QA_JUDGE_MODEL = prevModel
+      if (prevEffort === undefined) delete process.env.QA_JUDGE_EFFORT
+      else process.env.QA_JUDGE_EFFORT = prevEffort
+    }
+  })
+
+  it('threads opts.effort into the codex reasoning-effort arg', async () => {
+    let seenArgs: string[] = []
+    const judge = makeCodexExecJudge({
+      effort: 'high',
+      run: async args => {
+        seenArgs = args
+        return stream({
+          verdicts: [{ item_index: 0, verdict: 'pass', citation: 'c', critique: 'k' }],
+        })
+      },
+    })
+    await judge(input)
+    expect(seenArgs).toContain('model_reasoning_effort=high')
+  })
+
+  it('falls back to QA_JUDGE_EFFORT when no effort is passed', async () => {
+    const prev = process.env.QA_JUDGE_EFFORT
+    process.env.QA_JUDGE_EFFORT = 'medium'
+    try {
+      let seenArgs: string[] = []
+      const judge = makeCodexExecJudge({
+        run: async args => {
+          seenArgs = args
+          return stream({
+            verdicts: [{ item_index: 0, verdict: 'pass', citation: 'c', critique: 'k' }],
+          })
+        },
+      })
+      await judge(input)
+      expect(seenArgs).toContain('model_reasoning_effort=medium')
+    } finally {
+      if (prev === undefined) delete process.env.QA_JUDGE_EFFORT
+      else process.env.QA_JUDGE_EFFORT = prev
     }
   })
 
