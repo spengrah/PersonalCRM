@@ -110,8 +110,9 @@ behaviors:
       - no new row is created and nothing is superseded as a value change
       - the surviving row's validity window widens to the union of the windows
       - a window that bridges several non-contiguous same-value stints merges them all into one survivor (provenance moved, losers closed pointing at the survivor)
+      - the survivor is deterministic — the earliest stint by validity start (an open start sorts earliest, row id as the tie-break)
       - a survivor already bounded by a pending future successor keeps that upper bound (only the backward extension applies)
-    provenance: [widenReaffirmation, sameValueConflicts, mergeSameValue]
+    provenance: [widenReaffirmation, sameValueConflicts, mergeSameValue, FindAcceptedForSlot]
 
   - id: KNW-010
     title: Past-bounded history coexists with the current value

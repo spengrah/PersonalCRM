@@ -542,6 +542,9 @@ type Querier interface {
 	// currently-open accepted row. FOR UPDATE locks any found row as the second belt
 	// behind the advisory lock. The ::timestamptz casts pin the probe-range param
 	// types (sqlc cannot infer the type of a bare arg inside tstzrange()).
+	// Deterministic order: widenReaffirmation takes rows[0] as the surviving
+	// stint, so an unordered result flips the survivor between runs (earliest
+	// stint wins; NULL valid_from = open start = earliest; id as the tie-break).
 	FindAcceptedForSlot(ctx context.Context, arg FindAcceptedForSlotParams) ([]*Assertion, error)
 	// Single-cardinality conflict check for a SYMMETRIC predicate: the single-current
 	// invariant is PER-PARTICIPANT, so the slot is any accepted edge where EITHER new

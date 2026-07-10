@@ -88,6 +88,7 @@ WHERE status = 'accepted'
   AND predicate_key = $2
   AND tstzrange(valid_from, valid_to, '[)')
    && tstzrange($3::timestamptz, $4::timestamptz, '[)')
+ORDER BY valid_from ASC NULLS FIRST, id ASC
 FOR UPDATE
 `
 
@@ -106,6 +107,9 @@ type FindAcceptedForSlotParams struct {
 // currently-open accepted row. FOR UPDATE locks any found row as the second belt
 // behind the advisory lock. The ::timestamptz casts pin the probe-range param
 // types (sqlc cannot infer the type of a bare arg inside tstzrange()).
+// Deterministic order: widenReaffirmation takes rows[0] as the surviving
+// stint, so an unordered result flips the survivor between runs (earliest
+// stint wins; NULL valid_from = open start = earliest; id as the tie-break).
 func (q *Queries) FindAcceptedForSlot(ctx context.Context, arg FindAcceptedForSlotParams) ([]*Assertion, error) {
 	rows, err := q.db.Query(ctx, FindAcceptedForSlot,
 		arg.SubjectNodeID,
@@ -163,6 +167,7 @@ WHERE status = 'accepted'
       )
   AND tstzrange(valid_from, valid_to, '[)')
    && tstzrange($4::timestamptz, $5::timestamptz, '[)')
+ORDER BY valid_from ASC NULLS FIRST, id ASC
 FOR UPDATE
 `
 
