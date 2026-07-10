@@ -441,6 +441,16 @@ func (r *AssertionRepository) BoundPendingSuccessorTx(ctx context.Context, tx pg
 	})
 }
 
+// SetAssertionPendingSuccessorTx stamps superseded_by on a still-accepted
+// survivor that inherited a merged stint's pending future successor, so the
+// rollover sweep terminalizes it at the bound.
+func (r *AssertionRepository) SetAssertionPendingSuccessorTx(ctx context.Context, tx pgx.Tx, id, successorID uuid.UUID) error {
+	return db.New(tx).SetAssertionPendingSuccessor(ctx, db.SetAssertionPendingSuccessorParams{
+		ID:           uuidToPgUUID(id),
+		SupersededBy: uuidToPgUUID(successorID),
+	})
+}
+
 // WidenAssertionValidityTx widens an accepted row's valid window to cover new
 // evidence and sets the recomputed proposition_key.
 func (r *AssertionRepository) WidenAssertionValidityTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, validFrom, validTo *time.Time, propositionKey string) error {

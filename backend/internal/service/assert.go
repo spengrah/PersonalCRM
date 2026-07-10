@@ -997,14 +997,6 @@ func (s *AssertService) widenReaffirmation(ctx context.Context, tx pgx.Tx, predi
 		}
 	}
 
-	// If the survivor is bounded by a PENDING future successor (superseded_by set
-	// while still accepted), widening valid_to past that bound would un-bound it and
-	// leave two current rows once the successor's date passes. Keep the existing
-	// valid_to as the upper cap (only the backward lower-bound extension is safe).
-	if survivor.SupersededBy != nil {
-		widenedTo = utcPtr(survivor.ValidTo)
-	}
-
 	// Recompute the proposition_key from the widened valid_from bucket.
 	widenedReq := *req
 	widenedReq.ValidFrom = widenedFrom
@@ -1013,6 +1005,7 @@ func (s *AssertService) widenReaffirmation(ctx context.Context, tx pgx.Tx, predi
 	// Collision: another LIVE row (NOT in the overlap probe — e.g. a disjoint stint)
 	// already holds the recomputed key. Merge it into the survivor instead of
 	// UPDATE-ing into the unique index (which would 23505).
+	var mergedCollider *repository.Assertion
 	if newKey != survivor.PropositionKey {
 		collider, err := s.assertionRepo.FindLivePropositionTx(ctx, tx, newKey)
 		if err != nil && !errors.Is(err, db.ErrNotFound) {
@@ -1026,7 +1019,54 @@ func (s *AssertService) widenReaffirmation(ctx context.Context, tx pgx.Tx, predi
 			if err := s.mergeSameValue(ctx, tx, collider, survivor); err != nil {
 				return nil, err
 			}
+			mergedCollider = collider
 		}
+	}
+
+	// Pending-successor cap + linkage inheritance, AFTER the collider merge so
+	// ordering (not bucket geometry) guarantees a collider can neither un-cap
+	// the window nor dodge the scan. Widening valid_to past a pending future
+	// successor's bound would leave two current rows once its date passes, and
+	// the bound can sit on ANY merged stint — the deterministic earliest-first
+	// order routinely merges a later bounded stint into an older survivor. Cap
+	// at the EARLIEST bound and inherit that stint's successor linkage so the
+	// rollover sweep still terminalizes the survivor at the bound (emitting the
+	// assertion.superseded event the derived caches rely on). Deliberately reads
+	// the PRE-merge in-memory structs: mergeSameValue has already re-stamped the
+	// losers' superseded_by to the survivor in the DB, and the cap needs the
+	// original successor pointer (the stale struct is load-bearing here).
+	capCandidates := same
+	if mergedCollider != nil {
+		capCandidates = append(append([]*repository.Assertion{}, same...), mergedCollider)
+	}
+	var capSource *repository.Assertion
+	for _, st := range capCandidates {
+		if st.SupersededBy == nil || st.ValidTo == nil {
+			continue
+		}
+		// Floor: never shrink below the survivor's own pre-widen valid_to — a
+		// due-but-unrolled bounded collider's past bound would otherwise rewrite
+		// the current stint entirely into the past. A nil valid_to is +inf, so an
+		// open-ended survivor skips EVERY bound (capping an open current row at a
+		// collider's past-ward bound is always wrong; the underlying design gap
+		// is #626's scope).
+		if survivor.ValidTo == nil || st.ValidTo.Before(*survivor.ValidTo) {
+			continue
+		}
+		if widenedTo == nil || st.ValidTo.Before(*widenedTo) {
+			widenedTo = utcPtr(st.ValidTo)
+			capSource = st
+		}
+	}
+	// Linkage follows the cap: if the tightest bound came from a merged stint,
+	// the survivor's rollover lineage must point at THAT stint's successor
+	// (keeping a pre-existing later successor pointer would emit the wrong
+	// lineage when the earlier bound falls due).
+	if capSource != nil && capSource.ID != survivor.ID {
+		if err := s.assertionRepo.SetAssertionPendingSuccessorTx(ctx, tx, survivor.ID, *capSource.SupersededBy); err != nil {
+			return nil, fmt.Errorf("inherit pending successor on widen: %w", err)
+		}
+		survivor.SupersededBy = capSource.SupersededBy
 	}
 
 	existing := survivor
@@ -1252,9 +1292,31 @@ func (s *AssertService) resolveAcceptConflicts(ctx context.Context, tx pgx.Tx, p
 		}
 		// Do NOT clear a pending-successor bound (superseded_by set): widening past it
 		// would leave two current rows once the successor date passes (only the
-		// backward lower-bound extends). Mirrors widenReaffirmation.
-		if survivor.SupersededBy != nil {
-			widenedTo = utcPtr(survivor.ValidTo)
+		// backward lower-bound extends). The bound can sit on ANY merged stint, not
+		// only the survivor — cap at the earliest bound and inherit that stint's
+		// successor linkage so the rollover sweep still terminalizes the survivor
+		// at the bound. Pre-merge in-memory structs are read on purpose (the stale
+		// struct carries the original successor pointer). Mirrors widenReaffirmation.
+		var capSource *repository.Assertion
+		for _, st := range same {
+			if st.SupersededBy == nil || st.ValidTo == nil {
+				continue
+			}
+			// Floor + linkage-follows-cap: mirrors widenReaffirmation (nil
+			// valid_to = +inf → an open-ended survivor skips every bound).
+			if survivor.ValidTo == nil || st.ValidTo.Before(*survivor.ValidTo) {
+				continue
+			}
+			if widenedTo == nil || st.ValidTo.Before(*widenedTo) {
+				widenedTo = utcPtr(st.ValidTo)
+				capSource = st
+			}
+		}
+		if capSource != nil && capSource.ID != survivor.ID {
+			if err := s.assertionRepo.SetAssertionPendingSuccessorTx(ctx, tx, survivor.ID, *capSource.SupersededBy); err != nil {
+				return nil, false, fmt.Errorf("inherit pending successor at accept: %w", err)
+			}
+			survivor.SupersededBy = capSource.SupersededBy
 		}
 		survivor.ValidFrom = widenedFrom
 		survivor.ValidTo = widenedTo

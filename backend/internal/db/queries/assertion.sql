@@ -51,6 +51,9 @@ WHERE proposition_key = $1
 -- Deterministic order: widenReaffirmation takes rows[0] as the surviving
 -- stint, so an unordered result flips the survivor between runs (earliest
 -- stint wins; NULL valid_from = open start = earliest; id as the tie-break).
+-- An open-start row coexists with a later DISJOINT same-value stint only via
+-- a future-bounded valid_to; NULLS FIRST makes the open start — logically the
+-- earliest — the survivor when a bridge merges them.
 SELECT * FROM assertion
 WHERE status = 'accepted'
   AND knowledge_to IS NULL
@@ -111,6 +114,16 @@ SET valid_from = $2,
     valid_to = $3,
     proposition_key = $4
 WHERE id = $1;
+
+-- name: SetAssertionPendingSuccessor :exec
+-- Widen-merge linkage inheritance: when a same-value merge absorbs a stint
+-- bounded by a pending future successor into a survivor that has none, the
+-- survivor takes over the predecessor role (superseded_by while still
+-- accepted) so the rollover sweep terminalizes it at the bound and emits the
+-- assertion.superseded event the derived caches rely on.
+UPDATE assertion
+SET superseded_by = sqlc.arg(superseded_by)
+WHERE id = sqlc.arg(id);
 
 -- name: RolloverDueBoundedSuccessors :many
 -- The rollover job: terminalize the bounded-with-pending-successor rows whose

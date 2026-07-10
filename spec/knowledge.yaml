@@ -111,7 +111,7 @@ behaviors:
       - the surviving row's validity window widens to the union of the windows
       - a window that bridges several non-contiguous same-value stints merges them all into one survivor (provenance moved, losers closed pointing at the survivor)
       - the survivor is deterministic — the earliest stint by validity start (an open start sorts earliest, row id as the tie-break)
-      - a survivor already bounded by a pending future successor keeps that upper bound (only the backward extension applies)
+      - a pending future successor's bound on any merged stint caps the widened window at the earliest such bound, and the survivor inherits that successor linkage so the rollover still terminalizes it at the bound (only the backward extension applies)
     provenance: [widenReaffirmation, sameValueConflicts, mergeSameValue, FindAcceptedForSlot]
 
   - id: KNW-010
