@@ -1,0 +1,14 @@
+{
+  "case_id": "DSH-001-doctored",
+  "behavior_id": "DSH-001",
+  "drafted_by": "codex-exec:gpt-5.5",
+  "note": "DRAFT labels from a stronger model — NOT ground truth. The maintainer corrects these into *.labeled.json before they gate anything (see judge/DEFERRED.md).",
+  "items": [
+    {
+      "then_index": 1,
+      "draft_verdict": "fail",
+      "draft_critique": "The mid-redirect state at the app root exposes only an alert and no navigational or dashboard content, so the resolving redirect presents as a broken/empty surface rather than a usable interim state.",
+      "status": "draft"
+    }
+  ]
+}
