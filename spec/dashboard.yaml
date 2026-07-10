@@ -11,6 +11,7 @@ behaviors:
     then:
       - the user is taken to the dashboard as the default destination
       - the redirect does not present as a broken or blank surface while it resolves
+    serves: [DSH-011]
     provenance: [app/page.tsx, dashboard.spec.ts]
     notes: The dashboard's overdue content is CAD-026; this behavior only pins that the dashboard is where the app opens.
 

@@ -41,7 +41,7 @@ export const INTENT_CATALOG: Record<string, IntentSpec> = {
     statement:
       'whatever state the dashboard is in — populated, all caught up, still loading, or failed — the user always has a clear next action available and is never stranded on a blank or ambiguous screen',
     status: 'current',
-    servedBy: ['CAD-026', 'DSH-003', 'DSH-004'],
+    servedBy: ['CAD-026', 'DSH-001', 'DSH-003', 'DSH-004'],
   },
   'DSH-012': {
     id: 'DSH-012',
