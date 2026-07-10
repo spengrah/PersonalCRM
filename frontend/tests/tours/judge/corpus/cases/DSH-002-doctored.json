@@ -5,7 +5,7 @@
   "metadata": {
     "capture_generator_version": 1
   },
-  "captures": ["dashboard/002-dashboard-shell-global-nav-header-add-contact-no-dashboard-s.json"],
+  "captures": ["dashboard/003-dashboard-shell-global-nav-header-add-contact-no-dashboard-s.json"],
   "doctor": {
     "base_case": "DSH-002-clean",
     "mutation": {

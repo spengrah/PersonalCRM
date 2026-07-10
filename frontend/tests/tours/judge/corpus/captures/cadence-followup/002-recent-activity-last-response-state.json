@@ -11,7 +11,7 @@
     "role": "activity-response"
   },
   "serverTime": {
-    "currentTime": "2026-07-10T14:10:47.93215688Z",
+    "currentTime": "2026-09-08T23:43:12.41484008Z",
     "isAccelerated": true,
     "accelerationFactor": 60,
     "baseTime": "2026-07-09T15:07:20Z",
@@ -105,7 +105,7 @@
           },
           {
             "role": "button",
-            "name": "Jul 10, 02:10:18 PM 60x"
+            "name": "Sep 8, 11:42:32 PM 60x"
           }
         ]
       },
@@ -230,7 +230,7 @@
         "children": [
           {
             "role": "text",
-            "text": "7/10/2026"
+            "text": "9/8/2026"
           }
         ]
       },
@@ -325,7 +325,7 @@
     "GET /api/v1/contacts/:id": [
       {
         "method": "GET",
-        "requestUrl": "/api/v1/contacts/<id:57>",
+        "requestUrl": "/api/v1/contacts/<id:60>",
         "query": {},
         "status": 200,
         "body": {
@@ -333,20 +333,20 @@
             "created_at": "<ts>",
             "full_name": "synth-prodshaped-Cyon Fixtura",
             "has_pending_followup": false,
-            "id": "<id:57>",
-            "last_contacted": "2026-07-10T11:07:04.304Z",
-            "last_interaction_at": "2026-07-10T11:07:04.304Z",
-            "last_response_at": "2026-07-10T11:07:04.304Z",
+            "id": "<id:60>",
+            "last_contacted": "2026-09-08T19:33:32.694784Z",
+            "last_interaction_at": "2026-09-08T19:33:32.694784Z",
+            "last_response_at": "2026-09-08T19:33:32.694784Z",
             "methods": [
               {
-                "id": "<id:58>",
+                "id": "<id:61>",
                 "is_primary": true,
                 "type": "email",
                 "value": "<email:32>"
               }
             ],
             "primary_method": {
-              "id": "<id:58>",
+              "id": "<id:61>",
               "is_primary": true,
               "type": "email",
               "value": "<email:32>"
@@ -367,9 +367,9 @@
             "full_name": "synth-prodshaped-Cyon Fixtura",
             "has_pending_followup": false,
             "id": "<id:62>",
-            "last_contacted": "2026-07-10T12:07:04.304758Z",
-            "last_interaction_at": "2026-07-10T12:07:04.304758Z",
-            "last_response_at": "2026-07-10T12:07:04.304758Z",
+            "last_contacted": "2026-09-08T18:33:32.694Z",
+            "last_interaction_at": "2026-09-08T18:33:32.694Z",
+            "last_response_at": "2026-09-08T18:33:32.694Z",
             "methods": [
               {
                 "id": "<id:63>",
@@ -397,7 +397,7 @@
         "body": {
           "data": {
             "cadence": "quarterly",
-            "contact_by": "2026-07-10T00:00:00Z",
+            "contact_by": "2026-09-08T00:00:00Z",
             "created_at": "<ts>",
             "full_name": "synth-prodshaped-Zeta Stubbings",
             "has_pending_followup": false,
@@ -407,14 +407,14 @@
                 "id": "<id:65>",
                 "is_primary": true,
                 "type": "email",
-                "value": "<email:60>"
+                "value": "<email:92>"
               }
             ],
             "primary_method": {
               "id": "<id:65>",
               "is_primary": true,
               "type": "email",
-              "value": "<email:60>"
+              "value": "<email:92>"
             },
             "updated_at": "<ts>"
           },
@@ -482,8 +482,11 @@
         "method": "GET",
         "requestUrl": "/api/v1/sync/status",
         "query": {},
-        "status": 404,
-        "body": null
+        "status": 200,
+        "body": {
+          "data": [],
+          "success": true
+        }
       }
     ],
     "GET /api/v1/system/time": [
@@ -496,7 +499,7 @@
           "data": {
             "acceleration_factor": 60,
             "base_time": "2026-07-09T15:07:20Z",
-            "current_time": "2026-07-10T14:08:40.8935429Z",
+            "current_time": "2026-09-08T23:41:07.21594466Z",
             "environment": "testing",
             "is_accelerated": true
           },

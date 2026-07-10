@@ -3,15 +3,15 @@
   "captureGeneratorVersion": 1,
   "tour": "dashboard",
   "seq": 11,
-  "behaviors": ["DSH-003", "CAD-026"],
-  "note": "caught-up empty state: add + view-list affordances",
+  "behaviors": ["DSH-004"],
+  "note": "overdue error state (500): error carries the reason, not caught-up",
   "url": "/dashboard",
   "pair": {
-    "id": "caughtup",
-    "role": "caught-up"
+    "id": "dsh004",
+    "role": "error"
   },
   "serverTime": {
-    "currentTime": "2026-07-10T16:30:37.44732914Z",
+    "currentTime": "2026-09-09T02:42:11.23390784Z",
     "isAccelerated": true,
     "accelerationFactor": 60,
     "baseTime": "2026-07-09T15:07:20Z",
@@ -105,7 +105,7 @@
           },
           {
             "role": "button",
-            "name": "Jul 10, 04:30:25 PM 60x"
+            "name": "Sep 9, 02:41:17 AM 60x"
           }
         ]
       },
@@ -119,7 +119,7 @@
         "children": [
           {
             "role": "text",
-            "text": "You're all caught up! No contacts need attention right now."
+            "text": "0 contacts need your attention"
           }
         ]
       },
@@ -144,7 +144,7 @@
       },
       {
         "role": "heading",
-        "name": "All caught up! 🎉",
+        "name": "Error loading overdue contacts",
         "level": 3
       },
       {
@@ -152,45 +152,7 @@
         "children": [
           {
             "role": "text",
-            "text": "You don't have any overdue contacts right now. You're doing a great job staying connected with your network!"
-          }
-        ]
-      },
-      {
-        "role": "link",
-        "name": "View All Contacts",
-        "children": [
-          {
-            "role": "/url",
-            "children": [
-              {
-                "role": "text",
-                "text": "/contacts"
-              }
-            ]
-          },
-          {
-            "role": "button",
-            "name": "View All Contacts"
-          }
-        ]
-      },
-      {
-        "role": "link",
-        "name": "Add New Contact",
-        "children": [
-          {
-            "role": "/url",
-            "children": [
-              {
-                "role": "text",
-                "text": "/contacts/new"
-              }
-            ]
-          },
-          {
-            "role": "button",
-            "name": "Add New Contact"
+            "text": "overdue fetch failed"
           }
         ]
       },
@@ -215,9 +177,50 @@
         "requestUrl": "/api/v1/contacts/overdue",
         "query": {},
         "status": 200,
+        "body": null
+      },
+      {
+        "method": "GET",
+        "requestUrl": "/api/v1/contacts/overdue",
+        "query": {},
+        "status": 500,
         "body": {
-          "data": [],
-          "success": true
+          "error": {
+            "message": "overdue fetch failed"
+          }
+        }
+      },
+      {
+        "method": "GET",
+        "requestUrl": "/api/v1/contacts/overdue",
+        "query": {},
+        "status": 500,
+        "body": {
+          "error": {
+            "message": "overdue fetch failed"
+          }
+        }
+      },
+      {
+        "method": "GET",
+        "requestUrl": "/api/v1/contacts/overdue",
+        "query": {},
+        "status": 500,
+        "body": {
+          "error": {
+            "message": "overdue fetch failed"
+          }
+        }
+      },
+      {
+        "method": "GET",
+        "requestUrl": "/api/v1/contacts/overdue",
+        "query": {},
+        "status": 500,
+        "body": {
+          "error": {
+            "message": "overdue fetch failed"
+          }
         }
       }
     ],
@@ -226,8 +229,11 @@
         "method": "GET",
         "requestUrl": "/api/v1/sync/status",
         "query": {},
-        "status": 404,
-        "body": null
+        "status": 200,
+        "body": {
+          "data": [],
+          "success": true
+        }
       }
     ],
     "GET /api/v1/system/time": [
@@ -240,7 +246,7 @@
           "data": {
             "acceleration_factor": 60,
             "base_time": "2026-07-09T15:07:20Z",
-            "current_time": "2026-07-10T16:29:16.8287564Z",
+            "current_time": "2026-09-09T02:34:11.00832128Z",
             "environment": "testing",
             "is_accelerated": true
           },

@@ -5,7 +5,10 @@
   "metadata": {
     "capture_generator_version": 1
   },
-  "captures": ["dashboard/001-app-root-redirected-to-the-dashboard-default-landing.json"],
+  "captures": [
+    "dashboard/001-mid-redirect-state-at-the-app-root-best-effort-may-already-s.json",
+    "dashboard/002-app-root-redirected-to-the-dashboard-default-landing.json"
+  ],
   "expected": [
     {
       "then_index": 0,

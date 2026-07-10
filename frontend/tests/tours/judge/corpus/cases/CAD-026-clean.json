@@ -6,8 +6,8 @@
     "capture_generator_version": 1
   },
   "captures": [
-    "dashboard/004-overdue-list-urgency-default-sort-cards-count-tiers.json",
-    "dashboard/011-caught-up-empty-state-add-view-list-affordances.json"
+    "dashboard/005-overdue-list-urgency-default-sort-cards-count-tiers.json",
+    "dashboard/012-caught-up-empty-state-add-view-list-affordances.json"
   ],
   "expected": [
     {

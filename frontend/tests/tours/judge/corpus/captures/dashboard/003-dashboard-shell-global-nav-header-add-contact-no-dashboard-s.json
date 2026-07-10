@@ -2,16 +2,16 @@
   "captureFormatVersion": 1,
   "captureGeneratorVersion": 1,
   "tour": "dashboard",
-  "seq": 9,
-  "behaviors": ["DSH-004"],
-  "note": "overdue loading state (route held): placeholder shown, not empty/caught-up",
+  "seq": 3,
+  "behaviors": ["DSH-002", "DSH-003", "DSH-007"],
+  "note": "dashboard shell: global nav, header Add Contact, no dashboard search",
   "url": "/dashboard",
   "pair": {
-    "id": "dsh004",
-    "role": "loading"
+    "id": "dashboard",
+    "role": "dashboard"
   },
   "serverTime": {
-    "currentTime": "2026-07-10T16:14:16.91218802Z",
+    "currentTime": "2026-09-09T01:54:12.25990268Z",
     "isAccelerated": true,
     "accelerationFactor": 60,
     "baseTime": "2026-07-09T15:07:20Z",
@@ -105,7 +105,7 @@
           },
           {
             "role": "button",
-            "name": "Jul 10, 04:13:23 PM 60x"
+            "name": "Sep 9, 01:53:35 AM 60x"
           }
         ]
       },
@@ -119,7 +119,7 @@
         "children": [
           {
             "role": "text",
-            "text": "0 contacts need your attention"
+            "text": "148 contacts need your attention"
           }
         ]
       },
@@ -143,50 +143,117 @@
         ]
       },
       {
+        "role": "text",
+        "text": "Sort by:"
+      },
+      {
         "role": "button",
-        "name": "Open Tanstack query devtools",
+        "name": "Most Urgent"
+      },
+      {
+        "role": "button",
+        "name": "Name"
+      },
+      {
+        "role": "button",
+        "name": "Last Contacted"
+      },
+      {
+        "role": "heading",
+        "name": "synth-prodshaped-Jovi Placeholdt",
+        "level": 3
+      },
+      {
+        "role": "text",
+        "text": "(monthly cadence)"
+      },
+      {
+        "role": "strong",
         "children": [
           {
-            "role": "img"
+            "role": "text",
+            "text": "90 days overdue"
           }
         ]
       },
       {
-        "role": "alert"
+        "role": "text",
+        "text": "- Last contacted 3 months ago"
+      },
+      {
+        "role": "link",
+        "name": "<email:60>",
+        "children": [
+          {
+            "role": "/url",
+            "children": [
+              {
+                "role": "text",
+                "text": "mailto:<email:60>"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "role": "text",
+        "text": "Email"
+      },
+      {
+        "role": "link",
+        "name": "View details",
+        "children": [
+          {
+            "role": "/url",
+            "children": [
+              {
+                "role": "text",
+                "text": "/contacts/<id:1>"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "role": "paragraph",
+        "children": [
+          {
+            "role": "text",
+            "text": "💡 Reconnect with something specific and personal"
+          }
+        ]
+      },
+      {
+        "role": "button",
+        "name": "Mark as Contacted"
+      },
+      {
+        "role": "heading",
+        "name": "synth-prodshaped-Zeta Mockford",
+        "level": 3
+      },
+      {
+        "role": "text",
+        "text": "(monthly cadence)"
+      },
+      {
+        "role": "strong",
+        "children": [
+          {
+            "role": "text",
+            "text": "90 days overdue"
+          }
+        ]
+      },
+      {
+        "__ariaTruncated__": 1322
       }
     ]
   },
-  "apiResponses": {
-    "GET /api/v1/sync/status": [
-      {
-        "method": "GET",
-        "requestUrl": "/api/v1/sync/status",
-        "query": {},
-        "status": 404,
-        "body": null
-      }
-    ],
-    "GET /api/v1/system/time": [
-      {
-        "method": "GET",
-        "requestUrl": "/api/v1/system/time",
-        "query": {},
-        "status": 200,
-        "body": {
-          "data": {
-            "acceleration_factor": 60,
-            "base_time": "2026-07-09T15:07:20Z",
-            "current_time": "2026-07-10T16:13:12.53695538Z",
-            "environment": "testing",
-            "is_accelerated": true
-          },
-          "success": true
-        }
-      }
-    ]
-  },
+  "apiResponses": {},
   "fields": {
-    "overdueLoadingSkeletons": 3
+    "activeNavClass": "inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium border-blue-500 text-gray-900",
+    "navPosition": "sticky"
   },
   "dialogs": []
 }

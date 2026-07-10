@@ -11,7 +11,7 @@
     "role": "activity-outreach"
   },
   "serverTime": {
-    "currentTime": "2026-07-10T14:05:42.64644512Z",
+    "currentTime": "2026-09-08T23:37:24.17254448Z",
     "isAccelerated": true,
     "accelerationFactor": 60,
     "baseTime": "2026-07-09T15:07:20Z",
@@ -105,7 +105,7 @@
           },
           {
             "role": "button",
-            "name": "Jul 10, 02:04:30 PM 60x"
+            "name": "Sep 8, 11:36:55 PM 60x"
           }
         ]
       },
@@ -230,7 +230,7 @@
         "children": [
           {
             "role": "text",
-            "text": "7/10/2026"
+            "text": "9/8/2026"
           }
         ]
       },
@@ -334,10 +334,10 @@
             "full_name": "synth-prodshaped-Dax Synthington",
             "has_pending_followup": false,
             "id": "<id:1>",
-            "last_contacted": "2026-07-10T12:07:04Z",
-            "last_interaction_at": "2026-07-10T12:07:04Z",
-            "last_outreach_at": "2026-07-10T12:07:04Z",
-            "last_response_at": "2026-07-10T12:07:04Z",
+            "last_contacted": "2026-09-08T19:33:32Z",
+            "last_interaction_at": "2026-09-08T19:33:32Z",
+            "last_outreach_at": "2026-09-08T19:33:32Z",
+            "last_response_at": "2026-09-08T19:33:32Z",
             "methods": [
               {
                 "id": "<id:2>",
@@ -365,25 +365,28 @@
         "body": {
           "data": {
             "created_at": "<ts>",
-            "full_name": "synth-prodshaped-Cyon Fixtura",
+            "full_name": "synth-prodshaped-Glyph Placeholdt",
             "has_pending_followup": false,
             "id": "<id:57>",
-            "last_contacted": "2026-07-10T11:07:04.304Z",
-            "last_interaction_at": "2026-07-10T11:07:04.304Z",
-            "last_response_at": "2026-07-10T11:07:04.304Z",
             "methods": [
               {
                 "id": "<id:58>",
                 "is_primary": true,
                 "type": "email",
-                "value": "<email:32>"
+                "value": "<email:54>"
+              },
+              {
+                "id": "<id:59>",
+                "is_primary": false,
+                "type": "email",
+                "value": "<email:55>"
               }
             ],
             "primary_method": {
               "id": "<id:58>",
               "is_primary": true,
               "type": "email",
-              "value": "<email:32>"
+              "value": "<email:54>"
             },
             "updated_at": "<ts>"
           },
@@ -392,34 +395,31 @@
       },
       {
         "method": "GET",
-        "requestUrl": "/api/v1/contacts/<id:59>",
+        "requestUrl": "/api/v1/contacts/<id:60>",
         "query": {},
         "status": 200,
         "body": {
           "data": {
             "created_at": "<ts>",
-            "full_name": "synth-prodshaped-Glyph Placeholdt",
+            "full_name": "synth-prodshaped-Cyon Fixtura",
             "has_pending_followup": false,
-            "id": "<id:59>",
+            "id": "<id:60>",
+            "last_contacted": "2026-09-08T19:33:32.694784Z",
+            "last_interaction_at": "2026-09-08T19:33:32.694784Z",
+            "last_response_at": "2026-09-08T19:33:32.694784Z",
             "methods": [
               {
-                "id": "<id:60>",
+                "id": "<id:61>",
                 "is_primary": true,
                 "type": "email",
-                "value": "<email:53>"
-              },
-              {
-                "id": "<id:61>",
-                "is_primary": false,
-                "type": "email",
-                "value": "<email:54>"
+                "value": "<email:32>"
               }
             ],
             "primary_method": {
-              "id": "<id:60>",
+              "id": "<id:61>",
               "is_primary": true,
               "type": "email",
-              "value": "<email:53>"
+              "value": "<email:32>"
             },
             "updated_at": "<ts>"
           },
@@ -439,33 +439,33 @@
           "data": [
             {
               "attendee_count": 2,
-              "end_time": "2026-07-10T12:07:04Z",
+              "end_time": "2026-09-08T19:33:32Z",
               "id": "<id:53>",
-              "start_time": "2026-07-10T11:07:04Z",
+              "start_time": "2026-09-08T18:33:32Z",
               "status": "confirmed",
               "title": "synthetic meeting 5"
             },
             {
               "attendee_count": 2,
-              "end_time": "2026-06-19T12:07:04Z",
+              "end_time": "2026-08-18T19:33:32Z",
               "id": "<id:54>",
-              "start_time": "2026-06-19T11:07:04Z",
+              "start_time": "2026-08-18T18:33:32Z",
               "status": "confirmed",
               "title": "synthetic meeting 6"
             },
             {
               "attendee_count": 2,
-              "end_time": "2026-05-29T12:07:04Z",
+              "end_time": "2026-07-28T19:33:32Z",
               "id": "<id:55>",
-              "start_time": "2026-05-29T11:07:04Z",
+              "start_time": "2026-07-28T18:33:32Z",
               "status": "confirmed",
               "title": "synthetic meeting 7"
             },
             {
               "attendee_count": 2,
-              "end_time": "2026-05-08T12:07:04Z",
+              "end_time": "2026-07-07T19:33:32Z",
               "id": "<id:56>",
-              "start_time": "2026-05-08T11:07:04Z",
+              "start_time": "2026-07-07T18:33:32Z",
               "status": "confirmed",
               "title": "synthetic meeting 8"
             }
@@ -520,8 +520,11 @@
         "method": "GET",
         "requestUrl": "/api/v1/sync/status",
         "query": {},
-        "status": 404,
-        "body": null
+        "status": 200,
+        "body": {
+          "data": [],
+          "success": true
+        }
       }
     ],
     "GET /api/v1/system/time": [
@@ -534,7 +537,7 @@
           "data": {
             "acceleration_factor": 60,
             "base_time": "2026-07-09T15:07:20Z",
-            "current_time": "2026-07-10T14:03:54.81351404Z",
+            "current_time": "2026-09-08T23:35:19.02409286Z",
             "environment": "testing",
             "is_accelerated": true
           },
