@@ -86,7 +86,21 @@ describe('runIntentPass', () => {
       [intent]
     )
     expect(g.verdict).toBe('unsure')
-    expect(g.reason).toMatch(/citation lacks the required CAPTURE\[n\] index/)
+    expect(g.reason).toMatch(/citation needs an in-range CAPTURE\[n\] index/)
+  })
+
+  it('downgrades a fail cited with a bare capture marker (no node/path)', async () => {
+    const [g] = await runIntentPass([cap(['CAD-026'])], fakeJudge('fail', 'CAPTURE[0]:'), [intent])
+    expect(g.verdict).toBe('unsure')
+  })
+
+  it('downgrades a fail whose capture index is out of range', async () => {
+    const [g] = await runIntentPass(
+      [cap(['CAD-026'])],
+      fakeJudge('fail', 'CAPTURE[99]: heading "x"'),
+      [intent]
+    )
+    expect(g.verdict).toBe('unsure')
   })
 
   it('degrades a missing verdict to unsure', async () => {

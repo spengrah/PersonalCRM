@@ -31,6 +31,19 @@ export interface IntentGrade {
 export const DEFAULT_INTENT_MODEL = 'gpt-5.5'
 export const DEFAULT_INTENT_EFFORT = 'medium'
 
+// A fail citation is grounded iff it names at least one IN-RANGE CAPTURE[n]
+// index AND carries a non-empty node label / JSON path beyond the marker(s).
+// Pure; exported for tests.
+export function isGroundedIntentCitation(citation: string, boundCount: number): boolean {
+  const indices = [...citation.matchAll(/CAPTURE\[(\d+)\]/g)].map(m => Number(m[1]))
+  if (indices.length === 0 || !indices.some(i => i < boundCount)) return false
+  const residue = citation
+    .replace(/CAPTURE\[\d+\]/g, ' ')
+    .replace(/[:;,\s—–-]+/g, ' ')
+    .trim()
+  return residue !== ''
+}
+
 export function makeIntentJudge(kind: string = process.env.QA_JUDGE ?? 'codex-exec'): Judge {
   if (kind === 'codex-exec') {
     const model = process.env.QA_INTENT_MODEL ?? DEFAULT_INTENT_MODEL
@@ -85,12 +98,16 @@ export async function runIntentPass(
       reason: v.critique,
     })
     // Intent grounding is stricter than the generic rule: the prompt requires
-    // a fail to name the capture index it bound to, so a citation without a
-    // CAPTURE[n] reference cannot anchor a regression/progress signal.
-    if (grounded.verdict === 'fail' && !/CAPTURE\[\d+\]/.test(grounded.citation ?? '')) {
+    // a fail to name the capture index it bound to PLUS the node/path within
+    // it — a bare marker, an out-of-range index, or a missing marker cannot
+    // anchor a regression/progress signal.
+    if (
+      grounded.verdict === 'fail' &&
+      !isGroundedIntentCitation(grounded.citation ?? '', bound.length)
+    ) {
       grounded = {
         verdict: 'unsure',
-        reason: `${grounded.reason ?? 'fail'} — downgraded to unsure: citation lacks the required CAPTURE[n] index`,
+        reason: `${grounded.reason ?? 'fail'} — downgraded to unsure: citation needs an in-range CAPTURE[n] index plus the node/path it binds to`,
       }
     }
     grades.push({ ...base, ...grounded })
