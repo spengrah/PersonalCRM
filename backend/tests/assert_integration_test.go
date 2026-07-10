@@ -983,6 +983,107 @@ func TestAssert_ValidTime(t *testing.T) {
 		assert.Equal(t, rowA.ID, survivor.ID, "survivor is the first matched stint, widened")
 	})
 
+	// Case 27: a bridging reaffirmation that merges a LATER stint bounded by a
+	// pending future successor into an EARLIER (deterministic) survivor must
+	// inherit BOTH the bound (widening past it would overlap the successor's
+	// window once its date passes) AND the successor linkage (the rollover sweep
+	// only terminalizes rows with superseded_by set, and its assertion.superseded
+	// event drives the derived caches).
+	t.Run("27 bridging inherits a merged stint's pending-successor bound", func(t *testing.T) {
+		t.Parallel()
+		gen, _ := migrationGenerator(t)
+		subject := h.seedPerson(t, ctx, gen.Prefix(), "subj")
+		now := accelerated.GetCurrentTime().UTC().Truncate(time.Microsecond)
+
+		// An OLD past-bounded NYC stint (no successor) — the deterministic survivor.
+		old0 := time.Date(now.Year()-6, 1, 1, 0, 0, 0, 0, time.UTC)
+		old1 := time.Date(now.Year()-4, 1, 1, 0, 0, 0, 0, time.UTC)
+		oldReq := textFactReq(subject, "home_address", "NYC", gen.Prefix(), "old")
+		oldReq.ValidFrom, oldReq.ValidTo = &old0, &old1
+		oldRow, err := h.svc.Assert(ctx, oldReq)
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, oldRow.ID)
+
+		// Current NYC + a FUTURE LA successor → NYC bounded (superseded_by set,
+		// still accepted/knowledge-open, so the overlap probe sees it).
+		thisYear := time.Date(now.Year(), 1, 15, 0, 0, 0, 0, time.UTC)
+		nycReq := textFactReq(subject, "home_address", "NYC", gen.Prefix(), "nyc")
+		nycReq.ValidFrom = &thisYear
+		nyc, err := h.svc.Assert(ctx, nycReq)
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, nyc.ID)
+		future := now.Add(30 * 24 * time.Hour)
+		laReq := textFactReq(subject, "home_address", "LA", gen.Prefix(), "la")
+		laReq.ValidFrom = &future
+		la, err := h.svc.Assert(ctx, laReq)
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, la.ID)
+		boundedNYC, err := h.assertionRepo.GetAssertion(ctx, nyc.ID)
+		require.NoError(t, err)
+		require.NotNil(t, boundedNYC.ValidTo, "NYC bounded by the pending LA successor")
+		require.NotNil(t, boundedNYC.SupersededBy)
+
+		// An open-ended bridging NYC write overlapping BOTH stints: the earlier
+		// stint survives (deterministic order) and MUST inherit the LA bound.
+		bridge0 := time.Date(now.Year()-5, 6, 1, 0, 0, 0, 0, time.UTC)
+		bridge := textFactReq(subject, "home_address", "NYC", gen.Prefix(), "br")
+		bridge.ValidFrom = &bridge0
+		survivor, err := h.svc.Assert(ctx, bridge)
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, survivor.ID)
+		assert.Equal(t, oldRow.ID, survivor.ID, "earliest stint survives deterministically")
+
+		after, err := h.assertionRepo.GetAssertion(ctx, survivor.ID)
+		require.NoError(t, err)
+		require.NotNil(t, after.ValidTo, "merged stint's pending-successor bound inherited")
+		assert.True(t, after.ValidTo.Equal(*boundedNYC.ValidTo), "capped at the successor start")
+		require.NotNil(t, after.SupersededBy, "successor linkage inherited (rollover terminalizes the survivor)")
+		assert.Equal(t, la.ID, *after.SupersededBy, "survivor points at the pending LA successor")
+	})
+
+	// Case 28: an open-start (NULL valid_from) same-value stint coexists with a
+	// later DISJOINT stint via a future-bounded valid_to, and sorts EARLIEST
+	// (NULLS FIRST) — pins the spec's "an open start sorts earliest" clause
+	// (PostgreSQL's ASC default is NULLS LAST, which would flip this survivor).
+	t.Run("28 open-start stint is the deterministic survivor", func(t *testing.T) {
+		t.Parallel()
+		gen, _ := migrationGenerator(t)
+		subject := h.seedPerson(t, ctx, gen.Prefix(), "subj")
+		now := accelerated.GetCurrentTime().UTC().Truncate(time.Microsecond)
+
+		// Open-start NYC bounded in the FUTURE (valid_to > effective_from=now
+		// passes validation) — valid_from stays NULL, bucket "open".
+		openEnd := time.Date(now.Year()+2, 1, 1, 0, 0, 0, 0, time.UTC)
+		openReq := textFactReq(subject, "home_address", "NYC", gen.Prefix(), "open")
+		openReq.ValidTo = &openEnd
+		openRow, err := h.svc.Assert(ctx, openReq)
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, openRow.ID)
+		require.Nil(t, openRow.ValidFrom, "open start persists as NULL valid_from")
+
+		// A later DISJOINT dated NYC stint in a DIFFERENT year bucket (no
+		// overlap → coexists; distinct bucket → no proposition-key dedup).
+		d0 := time.Date(now.Year()+3, 1, 1, 0, 0, 0, 0, time.UTC)
+		d1 := time.Date(now.Year()+4, 1, 1, 0, 0, 0, 0, time.UTC)
+		datedReq := textFactReq(subject, "home_address", "NYC", gen.Prefix(), "dated")
+		datedReq.ValidFrom, datedReq.ValidTo = &d0, &d1
+		datedRow, err := h.svc.Assert(ctx, datedReq)
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, datedRow.ID)
+		require.NotEqual(t, openRow.ID, datedRow.ID, "disjoint stints coexist")
+
+		// A bridge overlapping both (its own year bucket ≠ the dated row's, so
+		// it cannot dedup against either): the open-start row must survive.
+		b0 := time.Date(now.Year()+1, 6, 1, 0, 0, 0, 0, time.UTC)
+		b1 := time.Date(now.Year()+3, 6, 1, 0, 0, 0, 0, time.UTC)
+		bridge := textFactReq(subject, "home_address", "NYC", gen.Prefix(), "br")
+		bridge.ValidFrom, bridge.ValidTo = &b0, &b1
+		survivor, err := h.svc.Assert(ctx, bridge)
+		require.NoError(t, err)
+		h.cleanupAssertionEvents(t, ctx, survivor.ID)
+		assert.Equal(t, openRow.ID, survivor.ID, "open start sorts earliest (NULLS FIRST)")
+	})
+
 	// Case 25: the rollover sweep does NOT abort on a bounded row whose
 	// knowledge_from was set in the future (KnowledgeFromOverride); knowledge_to is
 	// clamped via GREATEST so the assertion_knowledge_range CHECK holds.

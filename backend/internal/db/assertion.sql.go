@@ -88,6 +88,7 @@ WHERE status = 'accepted'
   AND predicate_key = $2
   AND tstzrange(valid_from, valid_to, '[)')
    && tstzrange($3::timestamptz, $4::timestamptz, '[)')
+ORDER BY valid_from ASC NULLS FIRST, id ASC
 FOR UPDATE
 `
 
@@ -106,6 +107,12 @@ type FindAcceptedForSlotParams struct {
 // currently-open accepted row. FOR UPDATE locks any found row as the second belt
 // behind the advisory lock. The ::timestamptz casts pin the probe-range param
 // types (sqlc cannot infer the type of a bare arg inside tstzrange()).
+// Deterministic order: widenReaffirmation takes rows[0] as the surviving
+// stint, so an unordered result flips the survivor between runs (earliest
+// stint wins; NULL valid_from = open start = earliest; id as the tie-break).
+// An open-start row coexists with a later DISJOINT same-value stint only via
+// a future-bounded valid_to; NULLS FIRST makes the open start — logically the
+// earliest — the survivor when a bridge merges them.
 func (q *Queries) FindAcceptedForSlot(ctx context.Context, arg FindAcceptedForSlotParams) ([]*Assertion, error) {
 	rows, err := q.db.Query(ctx, FindAcceptedForSlot,
 		arg.SubjectNodeID,
@@ -163,6 +170,7 @@ WHERE status = 'accepted'
       )
   AND tstzrange(valid_from, valid_to, '[)')
    && tstzrange($4::timestamptz, $5::timestamptz, '[)')
+ORDER BY valid_from ASC NULLS FIRST, id ASC
 FOR UPDATE
 `
 
@@ -745,6 +753,27 @@ func (q *Queries) RolloverDueBoundedSuccessors(ctx context.Context, now pgtype.T
 		return nil, err
 	}
 	return items, nil
+}
+
+const SetAssertionPendingSuccessor = `-- name: SetAssertionPendingSuccessor :exec
+UPDATE assertion
+SET superseded_by = $1
+WHERE id = $2
+`
+
+type SetAssertionPendingSuccessorParams struct {
+	SupersededBy pgtype.UUID `json:"superseded_by"`
+	ID           pgtype.UUID `json:"id"`
+}
+
+// Widen-merge linkage inheritance: when a same-value merge absorbs a stint
+// bounded by a pending future successor into a survivor that has none, the
+// survivor takes over the predecessor role (superseded_by while still
+// accepted) so the rollover sweep terminalizes it at the bound and emits the
+// assertion.superseded event the derived caches rely on.
+func (q *Queries) SetAssertionPendingSuccessor(ctx context.Context, arg SetAssertionPendingSuccessorParams) error {
+	_, err := q.db.Exec(ctx, SetAssertionPendingSuccessor, arg.SupersededBy, arg.ID)
+	return err
 }
 
 const TransitionStatus = `-- name: TransitionStatus :exec

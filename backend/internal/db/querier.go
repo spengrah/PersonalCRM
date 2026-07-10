@@ -542,6 +542,12 @@ type Querier interface {
 	// currently-open accepted row. FOR UPDATE locks any found row as the second belt
 	// behind the advisory lock. The ::timestamptz casts pin the probe-range param
 	// types (sqlc cannot infer the type of a bare arg inside tstzrange()).
+	// Deterministic order: widenReaffirmation takes rows[0] as the surviving
+	// stint, so an unordered result flips the survivor between runs (earliest
+	// stint wins; NULL valid_from = open start = earliest; id as the tie-break).
+	// An open-start row coexists with a later DISJOINT same-value stint only via
+	// a future-bounded valid_to; NULLS FIRST makes the open start — logically the
+	// earliest — the survivor when a bridge merges them.
 	FindAcceptedForSlot(ctx context.Context, arg FindAcceptedForSlotParams) ([]*Assertion, error)
 	// Single-cardinality conflict check for a SYMMETRIC predicate: the single-current
 	// invariant is PER-PARTICIPANT, so the slot is any accepted edge where EITHER new
@@ -1681,6 +1687,12 @@ type Querier interface {
 	// be called freely from parallel test packages without contending with
 	// the pairing-flow tests that hold the singleton slot.
 	SeedRevokedMacHost(ctx context.Context, arg SeedRevokedMacHostParams) (*MacHost, error)
+	// Widen-merge linkage inheritance: when a same-value merge absorbs a stint
+	// bounded by a pending future successor into a survivor that has none, the
+	// survivor takes over the predecessor role (superseded_by while still
+	// accepted) so the rollover sweep terminalizes it at the bound and emits the
+	// assertion.superseded event the derived caches rely on.
+	SetAssertionPendingSuccessor(ctx context.Context, arg SetAssertionPendingSuccessorParams) error
 	SetContactMethodPrimary(ctx context.Context, arg SetContactMethodPrimaryParams) error
 	// Persist external_task_id on a row without touching state. Used by the
 	// close-while-pending race path: the create worker enters on a row that
