@@ -11,7 +11,7 @@ function clone<T>(v: T): T {
   return JSON.parse(JSON.stringify(v)) as T
 }
 
-function selectIndex(captures: Capture[], m: Mutation): number {
+export function selectIndex(captures: Capture[], m: Mutation): number {
   if (m.captureIndex !== undefined) return m.captureIndex
   if (m.role !== undefined) {
     const i = captures.findIndex(c => c.pair?.role === m.role)

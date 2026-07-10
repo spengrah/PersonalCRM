@@ -4,6 +4,7 @@
 
 import * as path from 'path'
 import { describe, expect, it } from 'vitest'
+import { selectIndex } from '../doctor'
 import { INTENT_CATALOG } from '../intent-catalog'
 import { bindIntentCaptures } from '../intent-input'
 import { loadCorpus } from './load'
@@ -62,9 +63,11 @@ describe('committed intent-cases', () => {
       const captures = corpus.capturesFor(ic)
       const { captures: bound } = bindIntentCaptures(intent, captures)
       expect(bound.length, `${ic.id} binds no captures`).toBeGreaterThan(0)
-      if (ic.mutation && 'captureIndex' in ic.mutation && ic.mutation.captureIndex !== undefined) {
-        const target = captures[ic.mutation.captureIndex]
-        expect(target, `${ic.id} mutation captureIndex out of range`).toBeDefined()
+      if (ic.mutation) {
+        // Resolve the target exactly the way the doctor will (captureIndex,
+        // pair role, or default index 0) so EVERY mutation shape is guarded.
+        const target = captures[selectIndex(captures, ic.mutation)]
+        expect(target, `${ic.id} mutation target out of range`).toBeDefined()
         expect(
           bound.some(c => c.tour === target.tour && c.seq === target.seq),
           `${ic.id} mutated capture is not in the bound set — the doctored fail never reaches the judge`

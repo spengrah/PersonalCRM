@@ -17,6 +17,12 @@ export interface IntentSpec {
   status: IntentStatus
   /** Behavior IDs whose `serves:` lists name this intent (inverted edges). */
   servedBy: string[]
+  /**
+   * The goal is inherently visual (scannability, hierarchy, salience): an
+   * aria-only verdict under-observes it, so the report carries an evidence
+   * caveat unless screenshots were attached. Harness-side judgment, not SSOT.
+   */
+  visual?: boolean
 }
 
 export const INTENT_CATALOG: Record<string, IntentSpec> = {
@@ -27,6 +33,7 @@ export const INTENT_CATALOG: Record<string, IntentSpec> = {
       "a user opening the dashboard can decide who to contact next and how to reach them without opening any contact's page — the overdue surface is scannable rather than a wall of undifferentiated entries, and more urgent relationships stand out from less urgent ones",
     status: 'current',
     servedBy: ['CAD-026', 'CAD-027', 'CAD-028'],
+    visual: true,
   },
   'DSH-011': {
     id: 'DSH-011',
@@ -67,6 +74,7 @@ export const INTENT_CATALOG: Record<string, IntentSpec> = {
       'the birthdays page answers whose birthday needs attention now and soon — imminent birthdays stand apart from distant ones, celebrated ones recede, and the user never has to compute dates themselves',
     status: 'current',
     servedBy: ['CON-045'],
+    visual: true,
   },
   'CAD-036': {
     id: 'CAD-036',

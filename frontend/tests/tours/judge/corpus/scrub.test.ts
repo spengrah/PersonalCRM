@@ -42,4 +42,12 @@ describe('scrub email/phone → placeholders', () => {
     const s = createScrubber()
     expect(scrubValue({ n: 5, b: true, x: null }, s)).toEqual({ n: 5, b: true, x: null })
   })
+
+  it('scrubCapture drops the live-run-only screenshot path', () => {
+    const scrubbed = scrubCapture({
+      tour: 'dashboard',
+      screenshot: 'screenshots/dashboard/001.png',
+    })
+    expect(scrubbed).toEqual({ tour: 'dashboard' })
+  })
 })

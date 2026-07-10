@@ -176,11 +176,18 @@ let schemaSeq = 0
 // Build the argv for `codex exec` (schema written to a temp file). Passes
 // --model when set (so the model is actually selected, not just labeled in the
 // trace) and pins reasoning effort via `-c` when set — the judge must NOT
-// inherit the operator's codex config effort (e.g. a global xhigh).
-export function codexArgs(schemaPath: string, model?: string, effort?: string): string[] {
+// inherit the operator's codex config effort (e.g. a global xhigh). Images
+// (intent-pass screenshots) attach via `-i` per file.
+export function codexArgs(
+  schemaPath: string,
+  model?: string,
+  effort?: string,
+  images?: string[]
+): string[] {
   const args = ['exec', '--json', '--output-schema', schemaPath, '--sandbox', 'read-only']
   if (model) args.push('--model', model)
   if (effort) args.push('-c', `model_reasoning_effort=${effort}`)
+  for (const img of images ?? []) args.push('-i', img)
   args.push('-')
   return args
 }
@@ -216,7 +223,7 @@ export function makeCodexExecJudge(opts: CodexExecOptions = {}): Judge {
     let error: string | undefined
     try {
       for (let attempt = 0; attempt < 2; attempt++) {
-        const stdout = await run(codexArgs(schemaPath, model, effort), prompt)
+        const stdout = await run(codexArgs(schemaPath, model, effort, input.images), prompt)
         result = verdictsFromCodexOutput(stdout)
         if (!result.rejectedForTool) break // pure-criticism run — accept
       }

@@ -46,4 +46,10 @@ describe('renderReport intents section', () => {
     const md = renderReport({ grades: [], intents: [grade({ droppedCount: 2 })] })
     expect(md).toContain('2 over the cap DROPPED')
   })
+
+  it('carries the aria-only evidence caveat for visual intents without screenshots', () => {
+    const md = renderReport({ grades: [], intents: [grade({ ariaOnly: true })] })
+    expect(md).toContain('EVIDENCE CAVEAT: visual intent judged aria-only')
+    expect(renderReport({ grades: [], intents: [grade({})] })).not.toContain('EVIDENCE CAVEAT')
+  })
 })

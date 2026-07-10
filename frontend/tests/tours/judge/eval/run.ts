@@ -129,7 +129,9 @@ async function main(): Promise<void> {
   // eyeballing, NEVER part of the merge gate (ground truth is the deferred
   // human-labeling path).
   // --limit caps live judge cost for intent cases exactly as it does for the
-  // main corpus (each intent case is a potential LLM call).
+  // main corpus (each intent case is a potential LLM call). Note: the cap is
+  // per-list — `--limit N` permits up to N main-case iterations PLUS N intent
+  // cases (~2N call ceiling), not N total.
   let intentCases = corpus.intentCases
   if (limit !== undefined) intentCases = intentCases.slice(0, limit)
   if (judge && intentCases.length > 0) {

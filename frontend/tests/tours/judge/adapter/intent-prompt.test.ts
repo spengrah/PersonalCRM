@@ -47,7 +47,13 @@ describe('buildPrompt (intent variant)', () => {
 
   it('carries the capture-index grounding rule and the visual-styling caution', () => {
     expect(prompt).toContain('cite the capture index')
-    expect(prompt).toMatch(/do not fail a goal for purely visual qualities/)
+    expect(prompt).toMatch(/do not fail a goal for purely visual\s+qualities/)
+  })
+
+  it('swaps the aria-only caution for the images note when screenshots attach', () => {
+    const withImages = buildPrompt({ ...base, images: ['/tmp/a.png', '/tmp/b.png'] })
+    expect(withImages).toMatch(/Screenshots of the captured states are attached/)
+    expect(withImages).not.toMatch(/do not fail a goal for purely visual\s+qualities/)
   })
 
   it('lists the single [0] item', () => {

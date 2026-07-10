@@ -53,7 +53,26 @@ export function captureSection(c: Capture): CaptureSection {
   }
 }
 
-export function buildIntentJudgeInput(intent: IntentSpec, bound: Capture[]): JudgeInput {
+/**
+ * Resolve a bound capture to an attachable screenshot file (absolute path),
+ * or undefined. Impure concerns (run-dir layout, fs existence) live in the
+ * caller-supplied resolver so this module stays pure.
+ */
+export type ScreenshotResolver = (c: Capture) => string | undefined
+
+export function buildIntentJudgeInput(
+  intent: IntentSpec,
+  bound: Capture[],
+  resolveScreenshot?: ScreenshotResolver
+): JudgeInput {
+  // ALL-OR-NOTHING: the prompt promises images in CAPTURE[n] order, so a gap
+  // (one capture's best-effort screenshot missing) would silently shift every
+  // later image onto the wrong capture — a miscited visual verdict. Any gap
+  // drops ALL images: the run degrades to aria-only framing + the visual
+  // caveat instead of corrupting the mapping.
+  const resolved = resolveScreenshot ? bound.map(resolveScreenshot) : []
+  const images =
+    resolved.length > 0 && resolved.every((p): p is string => p !== undefined) ? resolved : []
   return {
     behaviorId: intent.id,
     behaviorTitle: intent.title,
@@ -64,5 +83,6 @@ export function buildIntentJudgeInput(intent: IntentSpec, bound: Capture[]): Jud
     evidence: {},
     intent: { statement: intent.statement, status: intent.status },
     captureSections: bound.map(captureSection),
+    ...(images.length > 0 ? { images } : {}),
   }
 }

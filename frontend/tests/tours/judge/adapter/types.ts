@@ -43,6 +43,12 @@ export interface JudgeInput {
    */
   intent?: { statement: string; status: 'current' | 'proposed' }
   captureSections?: CaptureSection[]
+  /**
+   * Absolute paths of capture-point screenshots attached as model images
+   * (adapters that cannot attach images ignore these; the prompt's visual
+   * framing switches on their presence).
+   */
+  images?: string[]
 }
 
 // Categorical per-item verdict. `citation` is the exact aria node label / JSON

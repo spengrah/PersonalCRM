@@ -55,7 +55,14 @@ export function scrubValue(value: unknown, scrubber: Scrubber): unknown {
   return value
 }
 
-// Scrub a parsed capture record (returns a new object).
+// Scrub a parsed capture record (returns a new object). Also drops the
+// live-run-only `screenshot` path: it references a gitignored file that never
+// enters the corpus, so committing it would be a dangling pointer (the
+// committed corpus stays aria-only by design).
 export function scrubCapture<T>(capture: T, scrubber: Scrubber = createScrubber()): T {
-  return scrubValue(capture, scrubber) as T
+  const scrubbed = scrubValue(capture, scrubber) as T
+  if (scrubbed !== null && typeof scrubbed === 'object' && 'screenshot' in scrubbed) {
+    delete (scrubbed as Record<string, unknown>).screenshot
+  }
+  return scrubbed
 }
