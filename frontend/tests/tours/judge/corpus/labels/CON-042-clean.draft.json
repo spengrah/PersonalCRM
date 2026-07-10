@@ -1,0 +1,14 @@
+{
+  "case_id": "CON-042-clean",
+  "behavior_id": "CON-042",
+  "drafted_by": "codex-exec:gpt-5.5",
+  "note": "DRAFT labels from a stronger model — NOT ground truth. The maintainer corrects these into *.labeled.json before they gate anything (see judge/DEFERRED.md).",
+  "items": [
+    {
+      "then_index": 0,
+      "draft_verdict": "pass",
+      "draft_critique": "The confirmation dialog says, \"Are you sure you want to delete this contact? This action cannot be undone.\"",
+      "status": "draft"
+    }
+  ]
+}

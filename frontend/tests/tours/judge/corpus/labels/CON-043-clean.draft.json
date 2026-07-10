@@ -1,0 +1,14 @@
+{
+  "case_id": "CON-043-clean",
+  "behavior_id": "CON-043",
+  "drafted_by": "codex-exec:gpt-5.5",
+  "note": "DRAFT labels from a stronger model — NOT ground truth. The maintainer corrects these into *.labeled.json before they gate anything (see judge/DEFERRED.md).",
+  "items": [
+    {
+      "then_index": 5,
+      "draft_verdict": "pass",
+      "draft_critique": "The evidence indicates the merge outcome was reported via a success banner and then removed in a later capture after the timeout.",
+      "status": "draft"
+    }
+  ]
+}

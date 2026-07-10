@@ -1,0 +1,14 @@
+{
+  "case_id": "DSH-004-doctored",
+  "behavior_id": "DSH-004",
+  "drafted_by": "codex-exec:gpt-5.5",
+  "note": "DRAFT labels from a stronger model — NOT ground truth. The maintainer corrects these into *.labeled.json before they gate anything (see judge/DEFERRED.md).",
+  "items": [
+    {
+      "then_index": 2,
+      "draft_verdict": "pass",
+      "draft_critique": "The displayed failure reason matches the 500 response error message exactly.",
+      "status": "draft"
+    }
+  ]
+}

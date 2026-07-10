@@ -1,0 +1,14 @@
+{
+  "case_id": "CON-042-doctored-nowarn",
+  "behavior_id": "CON-042",
+  "drafted_by": "codex-exec:gpt-5.5",
+  "note": "DRAFT labels from a stronger model — NOT ground truth. The maintainer corrects these into *.labeled.json before they gate anything (see judge/DEFERRED.md).",
+  "items": [
+    {
+      "then_index": 0,
+      "draft_verdict": "fail",
+      "draft_critique": "A confirmation dialog appears, but its message is empty, so the evidence does not show any warning that the action cannot be undone.",
+      "status": "draft"
+    }
+  ]
+}
