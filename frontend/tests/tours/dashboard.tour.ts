@@ -3,9 +3,9 @@
 // (CAD-026/027/028). DSH-006/009 are status:proposed → SKIPPED.
 //
 // Imports ONLY `test` from the fixtures — never `expect` — so the tour stays
-// assertion-free. Aria-invisible visual state (redirect spinner, loading
-// skeletons, active-nav mark, nav stickiness, urgency tier + card order) is
-// recorded via targeted `fields` reads (D2a). Route interception makes the
+// assertion-free. Aria-invisible visual state (loading skeletons, active-nav
+// mark, nav stickiness, urgency tier + card order) is recorded via targeted
+// `fields` reads (D2a). Route interception makes the
 // loading / error / caught-up overdue states deterministic (no seed luck).
 
 import { test } from './support/tour-fixtures'
@@ -67,6 +67,15 @@ test('dashboard tour — DSH + dashboard-hosted CAD behaviors', async ({ page, t
 
   // --- DSH-001: the dashboard is the default landing surface ---
   await page.goto('/')
+  // Best-effort mid-redirect capture: the judge grades "does not present as
+  // broken/blank WHILE it resolves", so it needs the in-flight state (and its
+  // screenshot), not only the settled dashboard. The client redirect may
+  // already have fired — the capture records whatever state was caught.
+  await tour.capture(page, {
+    behaviors: ['DSH-001'],
+    note: 'mid-redirect state at the app root (best-effort; may already show the destination)',
+    pair: { id: 'redirect', role: 'inflight' },
+  })
   await page.waitForURL(u => new URL(u).pathname === '/dashboard')
   await page.getByRole('heading', { name: 'Action Required' }).waitFor({ state: 'visible' })
   await tour.capture(page, {

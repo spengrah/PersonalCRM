@@ -130,7 +130,7 @@ export const SPEC_CATALOG: Record<string, BehaviorSpec> = {
     when: 'the dashboard renders',
     then: [
       'while loading, placeholder content is shown rather than an empty or caught-up state',
-      'on request failure, an error state is shown rather than an empty or caught-up state',
+      'on request failure, an error state with a failure reason is shown rather than an empty or caught-up state',
       'the shown failure reason faithfully reflects the actual failure',
     ],
   },
