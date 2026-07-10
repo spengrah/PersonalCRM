@@ -5,7 +5,7 @@
   "metadata": {
     "capture_generator_version": 1
   },
-  "captures": ["dashboard/001-app-root-redirected-to-the-dashboard-default-landing.json"],
+  "captures": ["dashboard/002-app-root-redirected-to-the-dashboard-default-landing.json"],
   "doctor": {
     "base_case": "DSH-001-clean",
     "mutation": {

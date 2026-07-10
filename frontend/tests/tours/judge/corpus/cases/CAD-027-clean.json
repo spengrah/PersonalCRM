@@ -6,9 +6,9 @@
     "capture_generator_version": 1
   },
   "captures": [
-    "dashboard/004-overdue-list-urgency-default-sort-cards-count-tiers.json",
-    "dashboard/005-overdue-list-name-sort-alphabetical.json",
-    "dashboard/006-overdue-list-last-contacted-sort-oldest-first.json"
+    "dashboard/005-overdue-list-urgency-default-sort-cards-count-tiers.json",
+    "dashboard/006-overdue-list-name-sort-alphabetical.json",
+    "dashboard/007-overdue-list-last-contacted-sort-oldest-first.json"
   ],
   "expected": [
     {

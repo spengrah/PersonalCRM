@@ -6,8 +6,8 @@
     "capture_generator_version": 1
   },
   "captures": [
-    "dashboard/002-dashboard-shell-global-nav-header-add-contact-no-dashboard-s.json",
-    "dashboard/003-contact-list-search-input-contact-text-search.json"
+    "dashboard/003-dashboard-shell-global-nav-header-add-contact-no-dashboard-s.json",
+    "dashboard/004-contact-list-search-input-contact-text-search.json"
   ],
   "doctor": {
     "base_case": "DSH-007-clean",

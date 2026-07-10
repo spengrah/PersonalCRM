@@ -11,7 +11,7 @@
     "role": "boundary-last"
   },
   "serverTime": {
-    "currentTime": "2026-07-10T15:03:21.55182104Z",
+    "currentTime": "2026-09-09T00:54:19.82138486Z",
     "isAccelerated": true,
     "accelerationFactor": 60,
     "baseTime": "2026-07-09T15:07:20Z",
@@ -105,7 +105,7 @@
           },
           {
             "role": "button",
-            "name": "Jul 10, 03:03:11 PM 60x"
+            "name": "Sep 9, 12:53:46 AM 60x"
           }
         ]
       },
@@ -231,7 +231,7 @@
         "children": [
           {
             "role": "text",
-            "text": "7/10/2026"
+            "text": "9/8/2026"
           }
         ]
       },
@@ -335,9 +335,9 @@
             "full_name": "synth-prodshaped-Zeta Placeholdt",
             "has_pending_followup": false,
             "id": "<id:140>",
-            "last_contacted": "2026-07-10T12:07:04Z",
-            "last_interaction_at": "2026-07-10T12:07:04Z",
-            "last_response_at": "2026-07-10T12:07:04Z",
+            "last_contacted": "2026-09-08T19:33:32Z",
+            "last_interaction_at": "2026-09-08T19:33:32Z",
+            "last_response_at": "2026-09-08T19:33:32Z",
             "methods": [
               {
                 "id": "<id:141>",
@@ -368,9 +368,9 @@
             "full_name": "synth-prodshaped-Vex Placeholdt",
             "has_pending_followup": false,
             "id": "<id:142>",
-            "last_contacted": "2026-07-10T11:07:04.304Z",
-            "last_interaction_at": "2026-07-10T11:07:04.304Z",
-            "last_response_at": "2026-07-10T11:07:04.304Z",
+            "last_contacted": "2026-09-08T18:33:32.694Z",
+            "last_interaction_at": "2026-09-08T18:33:32.694Z",
+            "last_response_at": "2026-09-08T18:33:32.694Z",
             "methods": [
               {
                 "id": "<id:143>",
@@ -451,8 +451,11 @@
         "method": "GET",
         "requestUrl": "/api/v1/sync/status",
         "query": {},
-        "status": 404,
-        "body": null
+        "status": 200,
+        "body": {
+          "data": [],
+          "success": true
+        }
       }
     ],
     "GET /api/v1/system/time": [
@@ -465,7 +468,7 @@
           "data": {
             "acceleration_factor": 60,
             "base_time": "2026-07-09T15:07:20Z",
-            "current_time": "2026-07-10T15:01:48.85127378Z",
+            "current_time": "2026-09-09T00:52:24.14479406Z",
             "environment": "testing",
             "is_accelerated": true
           },

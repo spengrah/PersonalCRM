@@ -6,8 +6,8 @@
     "capture_generator_version": 1
   },
   "captures": [
-    "dashboard/002-dashboard-shell-global-nav-header-add-contact-no-dashboard-s.json",
-    "dashboard/011-caught-up-empty-state-add-view-list-affordances.json"
+    "dashboard/003-dashboard-shell-global-nav-header-add-contact-no-dashboard-s.json",
+    "dashboard/012-caught-up-empty-state-add-view-list-affordances.json"
   ],
   "expected": [
     {

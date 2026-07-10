@@ -2,16 +2,16 @@
   "captureFormatVersion": 1,
   "captureGeneratorVersion": 1,
   "tour": "dashboard",
-  "seq": 2,
-  "behaviors": ["DSH-002", "DSH-003", "DSH-007"],
-  "note": "dashboard shell: global nav, header Add Contact, no dashboard search",
+  "seq": 8,
+  "behaviors": ["CAD-028", "DSH-005"],
+  "note": "before mark-as-contacted (dashboard overdue list)",
   "url": "/dashboard",
   "pair": {
-    "id": "dashboard",
-    "role": "dashboard"
+    "id": "mark",
+    "role": "mark-before"
   },
   "serverTime": {
-    "currentTime": "2026-07-10T15:49:42.08915438Z",
+    "currentTime": "2026-09-09T02:17:36.09666062Z",
     "isAccelerated": true,
     "accelerationFactor": 60,
     "baseTime": "2026-07-09T15:07:20Z",
@@ -105,7 +105,7 @@
           },
           {
             "role": "button",
-            "name": "Jul 10, 03:49:08 PM 60x"
+            "name": "Sep 9, 02:16:29 AM 60x"
           }
         ]
       },
@@ -160,7 +160,7 @@
       },
       {
         "role": "heading",
-        "name": "synth-prodshaped-Onyx Placeholdt",
+        "name": "synth-prodshaped-Jovi Placeholdt",
         "level": 3
       },
       {
@@ -182,14 +182,14 @@
       },
       {
         "role": "link",
-        "name": "<email:61>",
+        "name": "<email:60>",
         "children": [
           {
             "role": "/url",
             "children": [
               {
                 "role": "text",
-                "text": "mailto:<email:61>"
+                "text": "mailto:<email:60>"
               }
             ]
           }
@@ -229,7 +229,7 @@
       },
       {
         "role": "heading",
-        "name": "synth-prodshaped-Brux Sampleby",
+        "name": "synth-prodshaped-Zeta Mockford",
         "level": 3
       },
       {
@@ -251,9 +251,5 @@
     ]
   },
   "apiResponses": {},
-  "fields": {
-    "activeNavClass": "inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium border-blue-500 text-gray-900",
-    "navPosition": "sticky"
-  },
   "dialogs": []
 }

@@ -2,16 +2,16 @@
   "captureFormatVersion": 1,
   "captureGeneratorVersion": 1,
   "tour": "dashboard",
-  "seq": 7,
-  "behaviors": ["CAD-028", "DSH-005"],
-  "note": "before mark-as-contacted (dashboard overdue list)",
+  "seq": 12,
+  "behaviors": ["DSH-003", "CAD-026"],
+  "note": "caught-up empty state: add + view-list affordances",
   "url": "/dashboard",
   "pair": {
-    "id": "mark",
-    "role": "mark-before"
+    "id": "caughtup",
+    "role": "caught-up"
   },
   "serverTime": {
-    "currentTime": "2026-07-10T16:07:08.7194603Z",
+    "currentTime": "2026-09-09T02:46:06.61132148Z",
     "isAccelerated": true,
     "accelerationFactor": 60,
     "baseTime": "2026-07-09T15:07:20Z",
@@ -105,7 +105,7 @@
           },
           {
             "role": "button",
-            "name": "Jul 10, 04:06:32 PM 60x"
+            "name": "Sep 9, 02:45:05 AM 60x"
           }
         ]
       },
@@ -119,7 +119,7 @@
         "children": [
           {
             "role": "text",
-            "text": "148 contacts need your attention"
+            "text": "You're all caught up! No contacts need attention right now."
           }
         ]
       },
@@ -143,113 +143,114 @@
         ]
       },
       {
-        "role": "text",
-        "text": "Sort by:"
-      },
-      {
-        "role": "button",
-        "name": "Most Urgent"
-      },
-      {
-        "role": "button",
-        "name": "Name"
-      },
-      {
-        "role": "button",
-        "name": "Last Contacted"
-      },
-      {
         "role": "heading",
-        "name": "synth-prodshaped-Onyx Placeholdt",
+        "name": "All caught up! 🎉",
         "level": 3
-      },
-      {
-        "role": "text",
-        "text": "(monthly cadence)"
-      },
-      {
-        "role": "strong",
-        "children": [
-          {
-            "role": "text",
-            "text": "90 days overdue"
-          }
-        ]
-      },
-      {
-        "role": "text",
-        "text": "- Last contacted 3 months ago"
-      },
-      {
-        "role": "link",
-        "name": "<email:61>",
-        "children": [
-          {
-            "role": "/url",
-            "children": [
-              {
-                "role": "text",
-                "text": "mailto:<email:61>"
-              }
-            ]
-          }
-        ]
-      },
-      {
-        "role": "text",
-        "text": "Email"
-      },
-      {
-        "role": "link",
-        "name": "View details",
-        "children": [
-          {
-            "role": "/url",
-            "children": [
-              {
-                "role": "text",
-                "text": "/contacts/<id:1>"
-              }
-            ]
-          }
-        ]
       },
       {
         "role": "paragraph",
         "children": [
           {
             "role": "text",
-            "text": "💡 Reconnect with something specific and personal"
+            "text": "You don't have any overdue contacts right now. You're doing a great job staying connected with your network!"
+          }
+        ]
+      },
+      {
+        "role": "link",
+        "name": "View All Contacts",
+        "children": [
+          {
+            "role": "/url",
+            "children": [
+              {
+                "role": "text",
+                "text": "/contacts"
+              }
+            ]
+          },
+          {
+            "role": "button",
+            "name": "View All Contacts"
+          }
+        ]
+      },
+      {
+        "role": "link",
+        "name": "Add New Contact",
+        "children": [
+          {
+            "role": "/url",
+            "children": [
+              {
+                "role": "text",
+                "text": "/contacts/new"
+              }
+            ]
+          },
+          {
+            "role": "button",
+            "name": "Add New Contact"
           }
         ]
       },
       {
         "role": "button",
-        "name": "Mark as Contacted"
-      },
-      {
-        "role": "heading",
-        "name": "synth-prodshaped-Brux Sampleby",
-        "level": 3
-      },
-      {
-        "role": "text",
-        "text": "(monthly cadence)"
-      },
-      {
-        "role": "strong",
+        "name": "Open Tanstack query devtools",
         "children": [
           {
-            "role": "text",
-            "text": "90 days overdue"
+            "role": "img"
           }
         ]
       },
       {
-        "__ariaTruncated__": 1322
+        "role": "alert"
       }
     ]
   },
-  "apiResponses": {},
+  "apiResponses": {
+    "GET /api/v1/contacts/overdue": [
+      {
+        "method": "GET",
+        "requestUrl": "/api/v1/contacts/overdue",
+        "query": {},
+        "status": 200,
+        "body": {
+          "data": [],
+          "success": true
+        }
+      }
+    ],
+    "GET /api/v1/sync/status": [
+      {
+        "method": "GET",
+        "requestUrl": "/api/v1/sync/status",
+        "query": {},
+        "status": 200,
+        "body": {
+          "data": [],
+          "success": true
+        }
+      }
+    ],
+    "GET /api/v1/system/time": [
+      {
+        "method": "GET",
+        "requestUrl": "/api/v1/system/time",
+        "query": {},
+        "status": 200,
+        "body": {
+          "data": {
+            "acceleration_factor": 60,
+            "base_time": "2026-07-09T15:07:20Z",
+            "current_time": "2026-09-09T02:44:59.61554852Z",
+            "environment": "testing",
+            "is_accelerated": true
+          },
+          "success": true
+        }
+      }
+    ]
+  },
   "dialogs": []
 }

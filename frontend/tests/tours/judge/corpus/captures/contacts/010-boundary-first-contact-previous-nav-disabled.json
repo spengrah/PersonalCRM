@@ -11,7 +11,7 @@
     "role": "boundary-first"
   },
   "serverTime": {
-    "currentTime": "2026-07-10T14:58:43.83202376Z",
+    "currentTime": "2026-09-09T00:47:17.6497931Z",
     "isAccelerated": true,
     "accelerationFactor": 60,
     "baseTime": "2026-07-09T15:07:20Z",
@@ -105,7 +105,7 @@
           },
           {
             "role": "button",
-            "name": "Jul 10, 02:58:30 PM 60x"
+            "name": "Sep 9, 12:47:00 AM 60x"
           }
         ]
       },
@@ -249,7 +249,7 @@
         "children": [
           {
             "role": "text",
-            "text": "7/10/2026"
+            "text": "9/8/2026"
           }
         ]
       },
@@ -341,13 +341,13 @@
         "body": {
           "data": {
             "cadence": "weekly",
-            "contact_by": "2026-07-09T00:00:00Z",
+            "contact_by": "2026-09-07T00:00:00Z",
             "created_at": "<ts>",
             "full_name": "synth-prodshaped-Brux Fakeman",
             "has_pending_followup": false,
             "how_met": "synth-prodshaped-met-online-community",
             "id": "<id:1>",
-            "last_contacted": "2026-07-09T07:38:50.546824Z",
+            "last_contacted": "2026-09-07T15:05:18.936849Z",
             "methods": [
               {
                 "id": "<id:21>",
@@ -375,13 +375,13 @@
         "body": {
           "data": {
             "cadence": "weekly",
-            "contact_by": "2026-07-09T00:00:00Z",
+            "contact_by": "2026-09-07T00:00:00Z",
             "created_at": "<ts>",
             "full_name": "synth-prodshaped-Brux Fixtura",
             "has_pending_followup": false,
             "how_met": "synth-prodshaped-met-at-a-conference",
             "id": "<id:2>",
-            "last_contacted": "2026-07-09T16:04:04.646687Z",
+            "last_contacted": "2026-09-07T23:30:33.036713Z",
             "location": "synth-prodshaped-place-lakeside",
             "methods": [
               {
@@ -463,8 +463,11 @@
         "method": "GET",
         "requestUrl": "/api/v1/sync/status",
         "query": {},
-        "status": 404,
-        "body": null
+        "status": 200,
+        "body": {
+          "data": [],
+          "success": true
+        }
       }
     ],
     "GET /api/v1/system/time": [
@@ -477,7 +480,7 @@
           "data": {
             "acceleration_factor": 60,
             "base_time": "2026-07-09T15:07:20Z",
-            "current_time": "2026-07-10T14:57:18.18019118Z",
+            "current_time": "2026-09-09T00:45:35.41502318Z",
             "environment": "testing",
             "is_accelerated": true
           },

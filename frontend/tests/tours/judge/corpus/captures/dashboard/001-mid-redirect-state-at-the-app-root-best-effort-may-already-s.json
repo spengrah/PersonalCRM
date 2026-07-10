@@ -1,0 +1,30 @@
+{
+  "captureFormatVersion": 1,
+  "captureGeneratorVersion": 1,
+  "tour": "dashboard",
+  "seq": 1,
+  "behaviors": ["DSH-001"],
+  "note": "mid-redirect state at the app root (best-effort; may already show the destination)",
+  "url": "/",
+  "pair": {
+    "id": "redirect",
+    "role": "inflight"
+  },
+  "serverTime": {
+    "currentTime": "2026-09-09T01:44:36.51282104Z",
+    "isAccelerated": true,
+    "accelerationFactor": 60,
+    "baseTime": "2026-07-09T15:07:20Z",
+    "environment": "testing"
+  },
+  "aria": {
+    "role": "root",
+    "children": [
+      {
+        "role": "alert"
+      }
+    ]
+  },
+  "apiResponses": {},
+  "dialogs": []
+}

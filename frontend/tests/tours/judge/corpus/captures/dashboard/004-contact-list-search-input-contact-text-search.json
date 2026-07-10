@@ -2,7 +2,7 @@
   "captureFormatVersion": 1,
   "captureGeneratorVersion": 1,
   "tour": "dashboard",
-  "seq": 3,
+  "seq": 4,
   "behaviors": ["DSH-007"],
   "note": "contact list search input (contact text search)",
   "url": "/contacts",
@@ -11,7 +11,7 @@
     "role": "contacts-search"
   },
   "serverTime": {
-    "currentTime": "2026-07-10T15:53:00.67908278Z",
+    "currentTime": "2026-09-09T01:58:23.23467992Z",
     "isAccelerated": true,
     "accelerationFactor": 60,
     "baseTime": "2026-07-09T15:07:20Z",
@@ -102,6 +102,10 @@
                 ]
               }
             ]
+          },
+          {
+            "role": "button",
+            "name": "Sep 9, 01:57:23 AM 60x"
           }
         ]
       },
@@ -191,12 +195,12 @@
           "data": [
             {
               "cadence": "weekly",
-              "contact_by": "2026-07-09T00:00:00Z",
+              "contact_by": "2026-09-07T00:00:00Z",
               "created_at": "<ts>",
               "full_name": "synth-prodshaped-Brux Dummond (merged)",
               "has_pending_followup": false,
               "id": "<id:100>",
-              "last_contacted": "2026-07-09T05:21:43.220559Z",
+              "last_contacted": "2026-09-07T12:48:11.610585Z",
               "methods": [
                 {
                   "id": "<id:101>",
@@ -221,16 +225,16 @@
             },
             {
               "cadence": "weekly",
-              "contact_by": "2026-07-10T00:00:00Z",
+              "contact_by": "2026-09-09T00:00:00Z",
               "created_at": "<ts>",
               "full_name": "synth-prodshaped-Brux Fakeman",
               "has_pending_followup": false,
               "how_met": "synth-prodshaped-met-online-community",
               "id": "<id:103>",
-              "last_contacted": "2026-07-10T15:15:21.569786Z",
-              "last_interaction_at": "2026-07-10T15:15:21.569786Z",
-              "last_outreach_at": "2026-07-10T15:15:21.569786Z",
-              "last_response_at": "2026-07-10T15:15:21.569786Z",
+              "last_contacted": "2026-09-09T01:07:58.815805Z",
+              "last_interaction_at": "2026-09-09T01:07:58.815805Z",
+              "last_outreach_at": "2026-09-09T01:07:58.815805Z",
+              "last_response_at": "2026-09-09T01:07:58.815805Z",
               "methods": [
                 {
                   "id": "<id:104>",
@@ -249,12 +253,12 @@
             },
             {
               "cadence": "weekly",
-              "contact_by": "2026-07-09T00:00:00Z",
+              "contact_by": "2026-09-07T00:00:00Z",
               "created_at": "<ts>",
               "full_name": "synth-prodshaped-Brux Placeholdt",
               "has_pending_followup": false,
               "id": "<id:105>",
-              "last_contacted": "2026-07-09T14:39:14.831492Z",
+              "last_contacted": "2026-09-07T22:05:43.221518Z",
               "methods": [
                 {
                   "id": "<id:106>",
@@ -273,12 +277,12 @@
             },
             {
               "cadence": "weekly",
-              "contact_by": "2026-07-09T00:00:00Z",
+              "contact_by": "2026-09-08T00:00:00Z",
               "created_at": "<ts>",
               "full_name": "synth-prodshaped-Cyon Sampleby",
               "has_pending_followup": false,
               "id": "<id:107>",
-              "last_contacted": "2026-07-09T17:12:03.531428Z",
+              "last_contacted": "2026-09-08T00:38:31.921454Z",
               "location": "synth-prodshaped-place-riverton",
               "methods": [
                 {
@@ -298,13 +302,13 @@
             },
             {
               "cadence": "weekly",
-              "contact_by": "2026-07-09T00:00:00Z",
+              "contact_by": "2026-09-08T00:00:00Z",
               "created_at": "<ts>",
               "full_name": "synth-prodshaped-Cyon Synthington",
               "has_pending_followup": false,
               "how_met": "synth-prodshaped-met-through-a-mutual-friend",
               "id": "<id:109>",
-              "last_contacted": "2026-07-09T16:51:12.629975Z",
+              "last_contacted": "2026-09-08T00:17:41.020001Z",
               "methods": [
                 {
                   "id": "<id:110>",
@@ -323,12 +327,12 @@
             },
             {
               "cadence": "weekly",
-              "contact_by": "2026-07-10T00:00:00Z",
+              "contact_by": "2026-09-08T00:00:00Z",
               "created_at": "<ts>",
               "full_name": "synth-prodshaped-Cyon Testwell",
               "has_pending_followup": false,
               "id": "<id:111>",
-              "last_contacted": "2026-07-10T02:21:44.20176Z",
+              "last_contacted": "2026-09-08T09:48:12.591786Z",
               "methods": [
                 {
                   "id": "<id:112>",
@@ -347,12 +351,12 @@
             },
             {
               "cadence": "weekly",
-              "contact_by": "2026-07-09T00:00:00Z",
+              "contact_by": "2026-09-07T00:00:00Z",
               "created_at": "<ts>",
               "full_name": "synth-prodshaped-Cyon Testwell",
               "has_pending_followup": false,
               "id": "<id:113>",
-              "last_contacted": "2026-07-09T14:18:14.36908Z",
+              "last_contacted": "2026-09-07T21:44:42.759105Z",
               "methods": [
                 {
                   "id": "<id:114>",
@@ -371,12 +375,12 @@
             },
             {
               "cadence": "weekly",
-              "contact_by": "2026-07-10T00:00:00Z",
+              "contact_by": "2026-09-08T00:00:00Z",
               "created_at": "<ts>",
               "full_name": "synth-prodshaped-Dax Fakeman",
               "has_pending_followup": false,
               "id": "<id:115>",
-              "last_contacted": "2026-07-10T12:13:51.81225Z",
+              "last_contacted": "2026-09-08T19:40:20.202276Z",
               "methods": [
                 {
                   "id": "<id:116>",
@@ -395,13 +399,12 @@
             },
             {
               "cadence": "weekly",
-              "contact_by": "2026-07-08T00:00:00Z",
+              "contact_by": "2026-09-07T00:00:00Z",
               "created_at": "<ts>",
               "full_name": "synth-prodshaped-Dax Mockford",
               "has_pending_followup": false,
               "id": "<id:117>",
-              "last_contacted": "2026-07-08T21:56:20.35743Z",
-              "location": "synth-prodshaped-place-hillcrest",
+              "last_contacted": "2026-09-07T15:46:40.096208Z",
               "methods": [
                 {
                   "id": "<id:118>",
@@ -420,12 +423,13 @@
             },
             {
               "cadence": "weekly",
-              "contact_by": "2026-07-09T00:00:00Z",
+              "contact_by": "2026-09-07T00:00:00Z",
               "created_at": "<ts>",
               "full_name": "synth-prodshaped-Dax Mockford",
               "has_pending_followup": false,
               "id": "<id:119>",
-              "last_contacted": "2026-07-09T08:20:11.706182Z",
+              "last_contacted": "2026-09-07T05:22:48.747455Z",
+              "location": "synth-prodshaped-place-hillcrest",
               "methods": [
                 {
                   "id": "<id:120>",
@@ -444,12 +448,12 @@
             },
             {
               "cadence": "weekly",
-              "contact_by": "2026-07-08T00:00:00Z",
+              "contact_by": "2026-09-07T00:00:00Z",
               "created_at": "<ts>",
               "full_name": "synth-prodshaped-Dax Placeholdt",
               "has_pending_followup": false,
               "id": "<id:121>",
-              "last_contacted": "2026-07-08T21:00:59.288783Z",
+              "last_contacted": "2026-09-07T04:27:27.678808Z",
               "methods": [
                 {
                   "id": "<id:122>",
@@ -469,12 +473,12 @@
             {
               "birthday": "1979-11-03T00:00:00Z",
               "cadence": "weekly",
-              "contact_by": "2026-07-09T00:00:00Z",
+              "contact_by": "2026-09-08T00:00:00Z",
               "created_at": "<ts>",
               "full_name": "synth-prodshaped-Dax Synthington",
               "has_pending_followup": false,
               "id": "<id:123>",
-              "last_contacted": "2026-07-09T17:35:52.820053Z",
+              "last_contacted": "2026-09-08T01:02:21.210078Z",
               "methods": [
                 {
                   "id": "<id:124>",
@@ -493,12 +497,12 @@
             },
             {
               "cadence": "weekly",
-              "contact_by": "2026-07-08T00:00:00Z",
+              "contact_by": "2026-09-07T00:00:00Z",
               "created_at": "<ts>",
               "full_name": "synth-prodshaped-Dax Testwell",
               "has_pending_followup": false,
               "id": "<id:125>",
-              "last_contacted": "2026-07-08T18:35:19.321611Z",
+              "last_contacted": "2026-09-07T02:01:47.711637Z",
               "location": "synth-prodshaped-place-meadowbrook",
               "methods": [
                 {
@@ -518,12 +522,12 @@
             },
             {
               "cadence": "weekly",
-              "contact_by": "2026-07-09T00:00:00Z",
+              "contact_by": "2026-09-07T00:00:00Z",
               "created_at": "<ts>",
               "full_name": "synth-prodshaped-Dax Testwell",
               "has_pending_followup": false,
               "id": "<id:127>",
-              "last_contacted": "2026-07-09T12:49:41.598778Z",
+              "last_contacted": "2026-09-07T20:16:09.988803Z",
               "methods": [
                 {
                   "id": "<id:128>",
@@ -543,13 +547,13 @@
             {
               "birthday": "1994-02-14T00:00:00Z",
               "cadence": "weekly",
-              "contact_by": "2026-07-08T00:00:00Z",
+              "contact_by": "2026-09-06T00:00:00Z",
               "created_at": "<ts>",
               "full_name": "synth-prodshaped-Glyph Fakeman",
               "has_pending_followup": false,
               "how_met": "synth-prodshaped-met-at-a-conference",
               "id": "<id:129>",
-              "last_contacted": "2026-07-08T14:14:39.662256Z",
+              "last_contacted": "2026-09-06T21:41:08.052282Z",
               "methods": [
                 {
                   "id": "<id:130>",
@@ -568,12 +572,12 @@
             },
             {
               "cadence": "weekly",
-              "contact_by": "2026-07-09T00:00:00Z",
+              "contact_by": "2026-09-07T00:00:00Z",
               "created_at": "<ts>",
               "full_name": "synth-prodshaped-Glyph Sampleby",
               "has_pending_followup": false,
               "id": "<id:131>",
-              "last_contacted": "2026-07-09T14:02:56.585982Z",
+              "last_contacted": "2026-09-07T21:29:24.976008Z",
               "methods": [
                 {
                   "id": "<id:132>",
@@ -593,12 +597,12 @@
             {
               "birthday": "1994-08-12T00:00:00Z",
               "cadence": "weekly",
-              "contact_by": "2026-07-08T00:00:00Z",
+              "contact_by": "2026-09-07T00:00:00Z",
               "created_at": "<ts>",
               "full_name": "synth-prodshaped-Jovi Fakeman",
               "has_pending_followup": false,
               "id": "<id:133>",
-              "last_contacted": "2026-07-08T16:55:59.741874Z",
+              "last_contacted": "2026-09-07T00:22:28.1319Z",
               "methods": [
                 {
                   "id": "<id:134>",
@@ -618,12 +622,12 @@
             {
               "birthday": "1994-08-08T00:00:00Z",
               "cadence": "weekly",
-              "contact_by": "2026-07-09T00:00:00Z",
+              "contact_by": "2026-09-07T00:00:00Z",
               "created_at": "<ts>",
               "full_name": "synth-prodshaped-Jovi Sampleby",
               "has_pending_followup": false,
               "id": "<id:135>",
-              "last_contacted": "2026-07-09T16:23:43.538744Z",
+              "last_contacted": "2026-09-07T23:50:11.928769Z",
               "methods": [
                 {
                   "id": "<id:136>",
@@ -642,13 +646,13 @@
             },
             {
               "cadence": "weekly",
-              "contact_by": "2026-07-09T00:00:00Z",
+              "contact_by": "2026-09-08T00:00:00Z",
               "created_at": "<ts>",
               "full_name": "synth-prodshaped-Jovi Stubbings",
               "has_pending_followup": false,
               "how_met": "synth-prodshaped-met-at-a-conference",
               "id": "<id:137>",
-              "last_contacted": "2026-07-09T21:27:45.936833Z",
+              "last_contacted": "2026-09-08T04:54:14.326858Z",
               "methods": [
                 {
                   "id": "<id:138>",
@@ -667,12 +671,12 @@
             },
             {
               "cadence": "weekly",
-              "contact_by": "2026-07-09T00:00:00Z",
+              "contact_by": "2026-09-07T00:00:00Z",
               "created_at": "<ts>",
               "full_name": "synth-prodshaped-Kestrel Fixtura",
               "has_pending_followup": false,
               "id": "<id:139>",
-              "last_contacted": "2026-07-09T06:15:23.438173Z",
+              "last_contacted": "2026-09-07T13:41:51.828199Z",
               "methods": [
                 {
                   "id": "<id:140>",
@@ -707,8 +711,11 @@
         "method": "GET",
         "requestUrl": "/api/v1/sync/status",
         "query": {},
-        "status": 404,
-        "body": null
+        "status": 200,
+        "body": {
+          "data": [],
+          "success": true
+        }
       }
     ],
     "GET /api/v1/system/time": [
@@ -721,7 +728,7 @@
           "data": {
             "acceleration_factor": 60,
             "base_time": "2026-07-09T15:07:20Z",
-            "current_time": "2026-07-10T15:52:24.74853014Z",
+            "current_time": "2026-09-09T01:57:18.07617722Z",
             "environment": "testing",
             "is_accelerated": true
           },

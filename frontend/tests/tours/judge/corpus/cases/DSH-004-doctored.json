@@ -6,8 +6,8 @@
     "capture_generator_version": 1
   },
   "captures": [
-    "dashboard/009-overdue-loading-state-route-held-placeholder-shown-not-empty.json",
-    "dashboard/010-overdue-error-state-500-error-carries-the-reason-not-caught-.json"
+    "dashboard/010-overdue-loading-state-route-held-placeholder-shown-not-empty.json",
+    "dashboard/011-overdue-error-state-500-error-carries-the-reason-not-caught-.json"
   ],
   "doctor": {
     "base_case": "DSH-004-clean",
