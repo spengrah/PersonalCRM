@@ -1,0 +1,14 @@
+{
+  "case_id": "DSH-004-doctored-stale-reason",
+  "behavior_id": "DSH-004",
+  "drafted_by": "codex-exec:gpt-5.5",
+  "note": "Human-confirmed ground truth (maintainer label session, 2026-07-12): confirmed in place from the codex draft per judge/DEFERRED.md — the maintainer agreed with the draft verdict, no correction needed. Labeled via the Langfuse annotation queue (#635 spike) and exported back to git, which remains the SSOT. This file, not the case expected/hypothesis fields, is the ground truth for judge evaluation.",
+  "items": [
+    {
+      "then_index": 2,
+      "draft_verdict": "fail",
+      "draft_critique": "The widget shows the failure reason as \"overdue fetch failed\", but the actual recorded failing response reason is \"database connection lost\", so the displayed reason does not faithfully reflect the actual failure.",
+      "status": "human-confirmed"
+    }
+  ]
+}
