@@ -115,8 +115,10 @@ EOF
 }
 
 # run_ssh : run the script in ssh mode (default, no --local). Caller may prefix env.
+# STAGING_HOST is explicit: the script has no committed default (the real alias is
+# deliberately absent from tracked artifacts), so ssh mode requires it to be set.
 run_ssh() {
-    PATH="$SANDBOX/bin:$PATH" \
+    PATH="$SANDBOX/bin:$PATH" STAGING_HOST="${STAGING_HOST:-staging.test.invalid}" \
         bash "$SCRIPT" >/dev/null 2>"$SANDBOX/stderr"
     RC=$?
 }
@@ -256,6 +258,30 @@ test_idempotent_second_run() {
     cleanup_sandbox
 }
 
+test_ssh_mode_requires_staging_host() {
+    echo "test: ssh mode refuses when STAGING_HOST is unset (no committed host default)"
+    make_sandbox
+    setup_ssh_stubs
+    # Deliberately NOT going through run_ssh (which supplies a test host): the host
+    # alias is kept out of tracked artifacts, so an unset STAGING_HOST must fail loudly
+    # rather than silently target some baked-in default. Run a copy from a fake repo
+    # root that has NO .env, so the real checkout's .env fallback cannot satisfy it —
+    # otherwise this test would silently stop failing once a dev configures STAGING_HOST.
+    local fake="$SANDBOX/fakerepo"
+    mkdir -p "$fake/scripts/admin"
+    cp "$SCRIPT" "$fake/scripts/admin/setup-staging-reseed-host.sh"
+    for s in staging-reset.sh staging-reseed.sh staging-deployed-sha.sh; do
+        echo '#!/bin/bash' > "$fake/scripts/$s"
+    done
+    PATH="$SANDBOX/bin:$PATH" STAGING_HOST="" \
+        bash "$fake/scripts/admin/setup-staging-reseed-host.sh" >/dev/null 2>"$SANDBOX/stderr"
+    RC=$?
+    if [ "$RC" -ne 0 ]; then ok; else fail "unset STAGING_HOST must exit non-zero, got 0"; fi
+    if grep -q 'STAGING_HOST is not set' "$SANDBOX/stderr"; then ok; else fail "must name STAGING_HOST in the error: $(cat "$SANDBOX/stderr")"; fi
+    if grep -qF 'ssh ' "$CALL_LOG" 2>/dev/null; then fail "must not contact any host when STAGING_HOST is unset"; else ok; fi
+    cleanup_sandbox
+}
+
 test_ssh_mode_bootstraps_remote() {
     echo "test: ssh mode (default) ships the bundle and runs the installer --local on the host"
     make_sandbox
@@ -373,6 +399,7 @@ main() {
     test_fail_missing_deploy_staging
     test_fail_missing_source_script
     test_idempotent_second_run
+    test_ssh_mode_requires_staging_host
     test_ssh_mode_bootstraps_remote
     test_ssh_mode_runner_user_override
     test_ssh_mode_quotes_hostile_runner_user

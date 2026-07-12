@@ -165,10 +165,10 @@ run_local() {
     RC=$?
 }
 
-# run_ssh : run staging-reset.sh in ssh mode (STAGING_HOST=stovepipes).
+# run_ssh : run staging-reset.sh in ssh mode (STAGING_HOST=staging.test.invalid).
 run_ssh() {
     PATH="$SANDBOX/bin:$PATH" \
-        STAGING_HOST=stovepipes \
+        STAGING_HOST=staging.test.invalid \
         STAGING_ENV_FILE=/srv/personalcrm/.env \
         STAGING_BACKEND_UNIT=/var/lib/staging/.config/containers/systemd/personalcrm-backend.container \
         bash "$SCRIPT" >/dev/null 2>"$SANDBOX/stderr"
@@ -189,7 +189,7 @@ run_local_oauth() {
 # guard reaches the count instead of REFUSING on a missing DATABASE_URL first.
 run_ssh_oauth() {
     PATH="$SANDBOX/bin:$PATH" \
-        STAGING_HOST=stovepipes \
+        STAGING_HOST=staging.test.invalid \
         STAGING_ENV_FILE=/srv/personalcrm/.env \
         STAGING_BACKEND_UNIT=/var/lib/staging/.config/containers/systemd/personalcrm-backend.container \
         bash "$SCRIPT" --require-oauth-empty >/dev/null 2>"$SANDBOX/stderr"
@@ -354,7 +354,7 @@ test_ssh_targets_host() {
     make_sandbox
     STUB_CRM_ENV=staging STUB_IMAGE_REF="$SHA_REF" run_ssh
     if [ "$RC" -eq 0 ]; then ok; else fail "ssh happy path should exit 0, got $RC ($(cat "$SANDBOX/stderr"))"; fi
-    if grep -E '^ssh ' "$CALL_LOG" | grep -q 'stovepipes'; then ok; else fail "ssh mode must target STAGING_HOST"; fi
+    if grep -E '^ssh ' "$CALL_LOG" | grep -q 'staging.test.invalid'; then ok; else fail "ssh mode must target STAGING_HOST"; fi
     if grep -E '^ssh ' "$CALL_LOG" | grep -F -- '--reset-and-seed' | grep -q "$SHA_REF"; then ok
     else fail "ssh reset must run the pinned ref on the host"; fi
     if grep -E '^ssh ' "$CALL_LOG" | grep -q 'sudo -n -u staging'; then ok; else fail "ssh remote ops must use sudo -n -u staging"; fi

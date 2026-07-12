@@ -22,9 +22,10 @@
 # Usage: ./scripts/staging-reset.sh [--local] [--require-oauth-empty]
 #   --local                Run on the VPS as root (no ssh): the tenant podman/
 #                          systemctl helpers run via `sudo -u <tenant>` locally.
-#                          Default (ssh) mode targets STAGING_HOST (default
-#                          stovepipes) so `make staging-reset` and the QA harness
-#                          (#380) can drive it from the Mac.
+#                          Default (ssh) mode targets STAGING_HOST (required —
+#                          set it in your env or the gitignored root .env) so
+#                          `make staging-reset` and the QA harness (#380) can
+#                          drive it from the Mac.
 #   --require-oauth-empty  Auto-path guard (deploy-staging.yml). BEFORE stopping
 #                          anything, count live oauth_credential rows; skip the
 #                          reseed cleanly (exit 0, service untouched, stable
@@ -59,7 +60,10 @@ done
 # personalcrm-backend.service unit name.
 CRM_USER="${CRM_USER:-staging}"
 CRM_HOME="${CRM_HOME:-/var/lib/staging}"
-STAGING_HOST="${STAGING_HOST:-stovepipes}"
+# The host alias is deliberately NOT committed (privacy rule: no hostnames in
+# tracked artifacts). Resolve it from the environment, else the gitignored root
+# .env. Only ssh mode needs it; --local runs on the box and never reads it.
+STAGING_HOST="${STAGING_HOST:-}"
 ENV_FILE="${STAGING_ENV_FILE:-/srv/personalcrm/.env}"
 BACKEND_UNIT="${STAGING_BACKEND_UNIT:-$CRM_HOME/.config/containers/systemd/personalcrm-backend.container}"
 PROFILE="${STAGING_RESET_PROFILE:-prod-shaped}"
@@ -83,6 +87,16 @@ if [ "$LOCAL" = true ]; then
     read_database_url(){ sudo -u "$CRM_USER" sed -n 's/^DATABASE_URL=//p' "$ENV_FILE" 2>/dev/null | head -1; }
     env_file_exists(){ sudo -u "$CRM_USER" test -e "$ENV_FILE"; }
 else
+    if [ -z "$STAGING_HOST" ]; then
+        repo_root="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel 2>/dev/null || true)"
+        if [ -n "$repo_root" ] && [ -r "$repo_root/.env" ]; then
+            STAGING_HOST="$(sed -n 's/^STAGING_HOST=//p' "$repo_root/.env" | head -1)"
+        fi
+    fi
+    if [ -z "$STAGING_HOST" ]; then
+        echo "staging-reset: STAGING_HOST is not set. Export it, or add STAGING_HOST=<host> to the gitignored root .env (the alias is deliberately not committed)." >&2
+        exit 1
+    fi
     if ! ssh -q -o ConnectTimeout=5 "$STAGING_HOST" exit; then
         echo "staging-reset: cannot reach STAGING_HOST '$STAGING_HOST'" >&2
         exit 1

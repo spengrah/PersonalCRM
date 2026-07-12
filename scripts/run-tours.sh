@@ -56,11 +56,23 @@ fi
 
 # --- Resolve the deployed image digest (read-only; best-effort) ---
 # Mirror staging-reset.sh's read_image_ref defaults without importing it.
-STAGING_HOST="${STAGING_HOST:-stovepipes}"
+# The host alias is deliberately NOT committed (privacy rule: no hostnames in
+# tracked artifacts) — resolve from the env, else the gitignored root .env.
+STAGING_HOST="${STAGING_HOST:-}"
+if [ -z "$STAGING_HOST" ] && [ -r "$REPO_ROOT/.env" ]; then
+    STAGING_HOST="$(sed -n 's/^STAGING_HOST=//p' "$REPO_ROOT/.env" | head -1)"
+fi
 CRM_USER="${CRM_USER:-staging}"
 CRM_HOME="${CRM_HOME:-/var/lib/staging}"
 BACKEND_UNIT="${STAGING_BACKEND_UNIT:-$CRM_HOME/.config/containers/systemd/personalcrm-backend.container}"
-IMAGE_DIGEST="$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$STAGING_HOST" "sudo -n -u $CRM_USER sed -n 's/^Image=//p' '$BACKEND_UNIT' 2>/dev/null | head -1" 2>/dev/null || true)"
+# No STAGING_HOST is the NORMAL case in the sandbox: `ssh $STAGING_HOST` does not route
+# from there (that is why the reseed above goes over TOURS_RESEED_SSH), so skip the read
+# rather than firing a doomed ssh. The digest is best-effort either way.
+if [ -n "$STAGING_HOST" ]; then
+    IMAGE_DIGEST="$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$STAGING_HOST" "sudo -n -u $CRM_USER sed -n 's/^Image=//p' '$BACKEND_UNIT' 2>/dev/null | head -1" 2>/dev/null || true)"
+else
+    IMAGE_DIGEST=""
+fi
 if [ -z "$IMAGE_DIGEST" ]; then
     echo "run-tours: WARNING — could not read deployed image digest from $BACKEND_UNIT (manifest records 'unknown')" >&2
     IMAGE_DIGEST="unknown"

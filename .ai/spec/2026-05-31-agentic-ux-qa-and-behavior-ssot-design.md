@@ -129,7 +129,7 @@ Configured via named profiles in `config.toml` (or per-invocation `--model`/effo
 
 **Cadence:** nightly full sweep (~3am) + optional per-PR diff-scoped run. A 3am sweep almost never overlaps interactive coding or a dev-sandbox session, so quota contention is minimal in practice.
 
-**Host:** prove the loop on the Pi (`raspberet`) under interactive Claude ($0), then graduate the autonomous `codex exec` loop to a **Hetzner CAX21** (4 vCPU / 8 GB ARM, ~€6.49/mo). The box doubles as general agent infra (dev-sandbox, experiments); since QA runs nightly and dev-sandbox runs daytime, they're temporally staggered and a small box suffices. Resize to **CAX31** (8 vCPU / 16 GB, ~€15.99/mo) on demand (Hetzner bills hourly with a monthly cap) if dev-sandbox sessions run hot. ARM matches the existing stack so images/scripts port cleanly from the Pi. Keep workloads in **separate containers** for hygiene — a hung 3am QA run shouldn't greet the morning's sandbox session with junk. The harness is **host-agnostic** ("a box with the repo, a seeded app, and Codex auth"), so the Pi-vs-VPS choice never leaks into its design.
+**Host:** prove the loop on the Pi under interactive Claude ($0), then graduate the autonomous `codex exec` loop to a **Hetzner CAX21** (4 vCPU / 8 GB ARM, ~€6.49/mo). The box doubles as general agent infra (dev-sandbox, experiments); since QA runs nightly and dev-sandbox runs daytime, they're temporally staggered and a small box suffices. Resize to **CAX31** (8 vCPU / 16 GB, ~€15.99/mo) on demand (Hetzner bills hourly with a monthly cap) if dev-sandbox sessions run hot. ARM matches the existing stack so images/scripts port cleanly from the Pi. Keep workloads in **separate containers** for hygiene — a hung 3am QA run shouldn't greet the morning's sandbox session with junk. The harness is **host-agnostic** ("a box with the repo, a seeded app, and Codex auth"), so the Pi-vs-VPS choice never leaks into its design.
 
 ## Sequencing
 
@@ -176,5 +176,5 @@ Piece 4 is now designed: `.ai/spec/2026-07-08-piece4-track-b-agentic-qa-harness-
 - QA harness = assertion-free Playwright tours (0 model quota) capturing a11y snapshots + network → model judge → **GitHub issues** (not fix-PRs).
 - Brain: interactive Claude while proving it ($0); autonomous loop on `codex exec` under the ChatGPT subscription — gpt-5.4-mini@low judges, gpt-5.5@medium authors issues; agentic-explore deferred.
 - Cadence: nightly full sweep + optional per-PR diff-scoped run.
-- Host: prove on Pi `raspberet` → graduate to Hetzner CAX21 (resize to CAX31 on demand); shared agent infra; separate containers; host-agnostic design.
+- Host: prove on the Pi → graduate to Hetzner CAX21 (resize to CAX31 on demand); shared agent infra; separate containers; host-agnostic design.
 - Deliverable of this brainstorm: this umbrella doc only. Detailed sub-specs deferred to their own brainstorms.
