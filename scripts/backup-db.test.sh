@@ -139,7 +139,7 @@ cleanup_sandbox() { [ -n "${SANDBOX:-}" ] && rm -rf "$SANDBOX"; }
 # and leaves stderr in $SANDBOX/stderr. Tenant overrides come from the caller's
 # env (CRM_USER / CRM_HOME), so a bare call exercises the DEFAULT (prod) path.
 run_backup() {
-    OUT="$(PATH="$SANDBOX/bin:$PATH" PI_HOST=stovepipes bash "$SCRIPT" "$@" 2>"$SANDBOX/stderr")"
+    OUT="$(PATH="$SANDBOX/bin:$PATH" PI_HOST=pi.test.invalid bash "$SCRIPT" "$@" 2>"$SANDBOX/stderr")"
     RC=$?
 }
 

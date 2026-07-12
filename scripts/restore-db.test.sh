@@ -122,7 +122,7 @@ cleanup_sandbox() { [ -n "${SANDBOX:-}" ] && rm -rf "$SANDBOX"; }
 # run_restore <args...> : run restore-db.sh in the sandbox. Sets RC; stdout →
 # $SANDBOX/stdout, stderr → $SANDBOX/stderr. Assertions read the call log + stderr.
 run_restore() {
-    PATH="$SANDBOX/bin:$PATH" PI_HOST=stovepipes bash "$SCRIPT" "$@" \
+    PATH="$SANDBOX/bin:$PATH" PI_HOST=pi.test.invalid bash "$SCRIPT" "$@" \
         >"$SANDBOX/stdout" 2>"$SANDBOX/stderr"
     RC=$?
 }

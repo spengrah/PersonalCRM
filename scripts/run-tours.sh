@@ -56,7 +56,12 @@ fi
 
 # --- Resolve the deployed image digest (read-only; best-effort) ---
 # Mirror staging-reset.sh's read_image_ref defaults without importing it.
-STAGING_HOST="${STAGING_HOST:-stovepipes}"
+# The host alias is deliberately NOT committed (privacy rule: no hostnames in
+# tracked artifacts) — resolve from the env, else the gitignored root .env.
+STAGING_HOST="${STAGING_HOST:-}"
+if [ -z "$STAGING_HOST" ] && [ -r "$REPO_ROOT/.env" ]; then
+    STAGING_HOST="$(sed -n 's/^STAGING_HOST=//p' "$REPO_ROOT/.env" | head -1)"
+fi
 CRM_USER="${CRM_USER:-staging}"
 CRM_HOME="${CRM_HOME:-/var/lib/staging}"
 BACKEND_UNIT="${STAGING_BACKEND_UNIT:-$CRM_HOME/.config/containers/systemd/personalcrm-backend.container}"

@@ -17,7 +17,7 @@ Any one of these:
 The `obs` tenant already exists (uid 1998, `/var/lib/obs`, linger on, `user-1998.slice` MemoryMax=6G / CPUQuota=300%). Phoenix needs nothing from it but the podman socket. The `crm-rootless`-style prefix is required — rootless podman cannot chdir into the ssh user's home.
 
 ```bash
-ssh stovepipes
+ssh <vps-host>
 cd /tmp && sudo -n -u obs HOME=/var/lib/obs XDG_RUNTIME_DIR=/run/user/1998 \
   podman run -d --name phoenix --restart=always \
     -p 127.0.0.1:6006:6006 \
@@ -31,7 +31,7 @@ That is the entire deployment. SQLite lives in the `phoenix_data` volume; there 
 **Reach it** the same way Langfuse was reached — loopback-only on the VPS, forwarded over SSH:
 
 ```bash
-ssh -N -L 6006:127.0.0.1:6006 stovepipes
+ssh -N -L 6006:127.0.0.1:6006 <vps-host>
 # then http://localhost:6006
 ```
 

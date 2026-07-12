@@ -65,7 +65,7 @@ the rows with `host_id` set to the currently-paired host.
 
 ## setup-staging-reseed-host.sh
 
-Provisions the **staging** host (`stovepipes`) for the develop→staging
+Provisions the **staging** host (`STAGING_HOST`) for the develop→staging
 auto-reseed: installs the three reseed scripts to `/usr/local/sbin`
 (`root:root`, `0755`) and grants the staging GitHub Actions runner the
 **two** NOPASSWD sudoers lines it invokes from `deploy-staging.yml`:
@@ -90,7 +90,7 @@ reseed.
 
 **Two modes (mirrors `staging-reset.sh`):** there is no repo checkout on
 the staging host, so the **default** mode runs from a dev Mac and
-provisions `STAGING_HOST` (default `stovepipes`) over ssh — it ships the
+provisions `STAGING_HOST` over ssh — it ships the
 installer + the three source scripts to a temp dir on the host and
 re-invokes itself there with `--local` (the temp dir is removed
 afterward). `ssh -t` allocates a TTY so `sudo` can prompt for a password.

@@ -59,7 +59,7 @@ timestamp: "2026-04-27T13:51:58.917977"
 type: gotcha
 summary: .ai/log/learnings/*.yaml files are tracked in git despite .ai/log/* gitignore rule
 detail: |
-  The `.gitignore` has `.ai/log/*` to exclude plan docs, but lines 493-495 explicitly override with `!.ai/log/learnings/` and `!.ai/log/learnings/*`. This means learnings YAML files are committed to the repo. Agents might assume all of `.ai/log/` is gitignored and write PII into learnings, but those files are actually tracked. The PII privacy rule applies to learnings too. During this session, `raspberet` hostname was found in two learnings files and had to be scrubbed. Plan docs in `.ai/log/plan/` remain gitignored (safe for PII).
+  The `.gitignore` has `.ai/log/*` to exclude plan docs, but lines 493-495 explicitly override with `!.ai/log/learnings/` and `!.ai/log/learnings/*`. This means learnings YAML files are committed to the repo. Agents might assume all of `.ai/log/` is gitignored and write PII into learnings, but those files are actually tracked. The PII privacy rule applies to learnings too. During this session, the prod hostname was found in two learnings files and had to be scrubbed. Plan docs in `.ai/log/plan/` remain gitignored (safe for PII).
 actionable: true
 
 ---

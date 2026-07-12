@@ -22,7 +22,7 @@
 # missing, so a partial standup is caught before the first seed-touching deploy.
 #
 # TWO MODES (mirrors staging-reset.sh):
-#   default (ssh)  Run from a dev Mac against STAGING_HOST (default stovepipes).
+#   default (ssh)  Run from a dev Mac against STAGING_HOST (required — env or gitignored root .env).
 #                  There is no repo checkout on the host, so this ships the
 #                  installer + the three source scripts to a temp dir on the host
 #                  and re-invokes itself there with --local. Uses `ssh -t` so sudo
@@ -61,8 +61,13 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # flag (how ssh mode threads it through sudo, which resets env) > RUNNER_USER env >
 # default. Overridable in case the staging runner account name differs from prod.
 RUNNER_USER="${RUNNER_USER_FLAG:-${RUNNER_USER:-gha-runner}}"
-# Staging host targeted in ssh mode. Mirrors staging-reset.sh's default.
-STAGING_HOST="${STAGING_HOST:-stovepipes}"
+# Staging host targeted in ssh mode.
+# The host alias is deliberately NOT committed (privacy rule: no hostnames in
+# tracked artifacts) — resolve from the env, else the gitignored root .env.
+STAGING_HOST="${STAGING_HOST:-}"
+if [ -z "$STAGING_HOST" ] && [ -r "$REPO_ROOT/.env" ]; then
+    STAGING_HOST="$(sed -n 's/^STAGING_HOST=//p' "$REPO_ROOT/.env" | head -1)"
+fi
 # Install destination + sudoers dir. Real defaults; overridable so the test can
 # redirect without root. The sudoers LINES always reference the canonical
 # /usr/local/sbin path (that is what the runner sudo-invokes at runtime).
@@ -94,6 +99,8 @@ if [ "$LOCAL" != true ]; then
         [ -r "$REPO_ROOT/scripts/$name" ] || die "source script not found or unreadable: $REPO_ROOT/scripts/$name"
     done
 
+    [ -n "$STAGING_HOST" ] \
+        || die "STAGING_HOST is not set — export it, or add STAGING_HOST=<host> to the gitignored root .env (the alias is deliberately not committed)"
     if ! ssh -q -o ConnectTimeout=5 "$STAGING_HOST" exit; then
         die "cannot reach STAGING_HOST '$STAGING_HOST' over ssh (set STAGING_HOST=... to override)"
     fi

@@ -27,7 +27,7 @@ Net: the Pi stays the sole home of durable real content; the VPS holds outputs +
 
 ## What was built (live)
 
-- **Tenant:** isolated `obs` tenant on `stovepipes` — uid 1998, `/var/lib/obs`, linger, subuid `500000:65536`, `user-1998.slice` MemoryMax=6G/CPUQuota=300%. Mirrors `setup-vps.sh`'s tenant pattern; staging/sandbox/nftables untouched. **Not yet in `personal-ops` IaC.**
+- **Tenant:** isolated `obs` tenant on the VPS (`<vps-host>`) — uid 1998, `/var/lib/obs`, linger, subuid `500000:65536`, `user-1998.slice` MemoryMax=6G/CPUQuota=300%. Mirrors `setup-vps.sh`'s tenant pattern; staging/sandbox/nftables untouched. **Not yet in `personal-ops` IaC.**
 - **Langfuse v3** (v3.212.0): upstream compose translated to sequenced rootless `podman run` on a user network (`up.sh`). Loopback-only; reached over an SSH forward. Headless `LANGFUSE_INIT_*` bootstrap (org/project/user/keys). `TELEMETRY_ENABLED=false`.
 - **Phoenix** (`arizephoenix/phoenix`, 515 MB) alongside, for the comparison. **Auth-off by default** — would need Tailscale Serve/Caddy or `PHOENIX_ENABLE_AUTH`.
 - **Backups tested** (`backup.sh`): postgres `pg_dump` (276 K) + minio volume export + clickhouse volume export (12 M). ClickHouse *native* `BACKUP` needs a `backups.allowed_path` config — volume export used instead.
