@@ -17,6 +17,7 @@ import (
 	"personal-crm/backend/internal/synthetic/factory"
 	"personal-crm/backend/tests/testsupport"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
 
@@ -208,6 +209,73 @@ func maxDistinctStateAssignment(flags []repository.CadenceActivityFlags) int {
 	return matched
 }
 
+// f4MessageSources is the exact message-source allowlist the two-sided
+// direction gate (F4, d-positive) asserts non-inbound coverage for. F4 measured 0
+// outbound/mutual interactions for EACH of these four sources. It DELIBERATELY
+// excludes gcal — the awaiting-reply GCal event is already mutual, so including it
+// would let the per-source assertion pass without any message-source direction
+// coverage — plus todoist / manual / anarlog_sessions / phone_calls.
+var f4MessageSources = []string{
+	repository.InteractionSourceEmail,
+	repository.InteractionSourceTelegram,
+	repository.InteractionSourceGChat,
+	repository.InteractionSourceMessages,
+}
+
+// assertMessageDirectionCoverage runs the F4 two-sided message-direction gate over
+// one namespace: no last_outreach_at without a backing outbound/mutual interaction
+// (gate d), each of the four message sources carries ≥1 outbound/mutual interaction
+// (gate d-positive, was 0/0/0/0), the seeded cohort counts match (3 outbound-only + 1
+// mutual), the telegram-mutual contact's two seeded messages collapsed into exactly
+// one promoted mutual row (gate d-mutual-verify), and that promoted mutual set all
+// four cadence timestamps non-null and equal. Called by both coverage tests.
+func assertMessageDirectionCoverage(t *testing.T, ctx context.Context, support *repository.SyntheticSupportRepository, h *synthetic.Harness, res synthetic.ProfileResult) {
+	t.Helper()
+	prefix := h.Generator().Prefix()
+
+	// Gate (d): zero last_outreach_at values not backed by a live outbound/mutual
+	// interaction at the same occurred_at.
+	incoherentOut, err := support.IncoherentOutreachCountByNamePrefix(ctx, prefix)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), incoherentOut, "no contact may carry a moved last_outreach_at without a backing outbound/mutual interaction")
+
+	// Gate (d-positive): EACH message source has ≥1 outbound/mutual interaction (the
+	// F4 fix is per-source; every one measured 0 before this).
+	for _, source := range f4MessageSources {
+		n, err := support.NonInboundMessageInteractionCountBySourceByNamePrefix(ctx, prefix, source)
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, n, int64(1), "message source %q must carry ≥1 outbound/mutual interaction (F4)", source)
+	}
+
+	// The block seeds a fixed cohort: 3 outbound-only (gmail/gchat/imessage) + 1
+	// telegram mutual, in both profiles.
+	require.Equal(t, 3, res.OutboundOnlyContacts, "three outbound-only message contacts seeded")
+	require.Equal(t, 1, res.MutualMessageContacts, "one reply-bridged telegram mutual contact seeded")
+
+	// Gate (d-mutual-verify): the telegram-mutual contact's two seeded messages must
+	// have COLLAPSED into a single promoted mutual row — proving
+	// PromoteInteractionToMutualTx ran, not that an outbound and an inbound coexist.
+	mutualID := h.MutualMessageContactID()
+	require.NotEqual(t, uuid.Nil, mutualID, "the two-sided block must have recorded the mutual contact id")
+	dirCounts, err := support.InteractionDirectionCountsForContact(ctx, mutualID, repository.InteractionSourceTelegram)
+	require.NoError(t, err)
+	require.Equal(t, map[string]int64{repository.InteractionDirectionMutual: 1}, dirCounts,
+		"telegram-mutual contact must have exactly one live mutual interaction and no residual outbound/inbound rows")
+
+	// Gate (d-mutual-verify, timestamps): the promoted mutual set all four cadence
+	// columns together (mutual writes last_contacted / last_interaction_at /
+	// last_outreach_at / last_response_at to the same replyAt).
+	ts, err := support.ContactCadenceTimestampsForContact(ctx, mutualID)
+	require.NoError(t, err)
+	require.NotNil(t, ts.LastContacted, "mutual contact last_contacted must be set")
+	require.NotNil(t, ts.LastInteractionAt, "mutual contact last_interaction_at must be set")
+	require.NotNil(t, ts.LastOutreachAt, "mutual contact last_outreach_at must be set")
+	require.NotNil(t, ts.LastResponseAt, "mutual contact last_response_at must be set")
+	require.True(t, ts.LastContacted.Equal(*ts.LastInteractionAt), "mutual last_contacted == last_interaction_at")
+	require.True(t, ts.LastContacted.Equal(*ts.LastOutreachAt), "mutual last_contacted == last_outreach_at")
+	require.True(t, ts.LastContacted.Equal(*ts.LastResponseAt), "mutual last_contacted == last_response_at")
+}
+
 func TestSyntheticProfile_DevCoversCatalog(t *testing.T) {
 	testsupport.RequireLongTests(t)
 	database, ctx := newSyntheticDB(t)
@@ -288,6 +356,8 @@ func TestSyntheticProfile_DevCoversCatalog(t *testing.T) {
 	// Post-seed coherence gate (F1/F3 + tour capacity), scoped to the namespace.
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 	assertSeedCoherence(t, ctx, support, h.Generator().Prefix())
+	// Two-sided message-direction coverage (F4).
+	assertMessageDirectionCoverage(t, ctx, support, h, res)
 }
 
 // TestSyntheticProfile_ProdShapedCoverageCheck is the load-bearing coverage
@@ -409,6 +479,8 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 
 	// Post-seed coherence gate (F1/F3 + tour capacity), scoped to the namespace.
 	assertSeedCoherence(t, ctx, support, h.Generator().Prefix())
+	// Two-sided message-direction coverage (F4).
+	assertMessageDirectionCoverage(t, ctx, support, h, res)
 
 	// Bio facts (how_met, location, real-year birthdays) ride on the contact-create
 	// authority flip; the catalog carries ≥1 of each. A location additionally mints

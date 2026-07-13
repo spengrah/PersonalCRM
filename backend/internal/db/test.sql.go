@@ -2241,6 +2241,34 @@ func (q *Queries) TestCountIncoherentManagedFollowUpsByNamePrefix(ctx context.Co
 	return count, err
 }
 
+const TestCountIncoherentOutreachByNamePrefix = `-- name: TestCountIncoherentOutreachByNamePrefix :one
+SELECT COUNT(*)
+FROM contact c
+WHERE c.full_name LIKE $1 || '%'
+  AND c.deleted_at IS NULL
+  AND c.last_outreach_at IS NOT NULL
+  AND NOT EXISTS (
+        SELECT 1 FROM interaction i
+        WHERE i.contact_id = c.id
+          AND i.deleted_at IS NULL
+          AND i.direction IN ('outbound', 'mutual')
+          AND i.occurred_at = c.last_outreach_at
+      )
+`
+
+// Coherence gate (F4, d): count the namespace's contacts whose last_outreach_at is
+// set but NOT backed by a live outbound/mutual interaction at that exact
+// occurred_at. Asserted == 0. last_outreach_at is sole-written by the cadence
+// updater from an outbound/mutual interaction (CAD-006), so a moved value with no
+// backing outbound/mutual row is a production-impossible seed shape. Caller passes
+// a BARE prefix.
+func (q *Queries) TestCountIncoherentOutreachByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error) {
+	row := q.db.QueryRow(ctx, TestCountIncoherentOutreachByNamePrefix, namePrefix)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const TestCountInteractionBackedLastContactedByNamePrefix = `-- name: TestCountInteractionBackedLastContactedByNamePrefix :one
 SELECT COUNT(*)
 FROM contact c
@@ -2264,6 +2292,36 @@ WHERE c.full_name LIKE $1 || '%'
 // in lockstep where an interaction drove the write. Caller passes a BARE prefix.
 func (q *Queries) TestCountInteractionBackedLastContactedByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error) {
 	row := q.db.QueryRow(ctx, TestCountInteractionBackedLastContactedByNamePrefix, namePrefix)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const TestCountNonInboundMessageInteractionsBySourceByNamePrefix = `-- name: TestCountNonInboundMessageInteractionsBySourceByNamePrefix :one
+SELECT COUNT(*)
+FROM interaction i
+JOIN contact c ON i.contact_id = c.id
+WHERE c.full_name LIKE $1 || '%'
+  AND c.deleted_at IS NULL
+  AND i.deleted_at IS NULL
+  AND i.source = $2
+  AND i.direction IN ('outbound', 'mutual')
+`
+
+type TestCountNonInboundMessageInteractionsBySourceByNamePrefixParams struct {
+	NamePrefix pgtype.Text `json:"name_prefix"`
+	Source     string      `json:"source"`
+}
+
+// Coherence gate (F4, d-positive): count the LIVE outbound-or-mutual interactions of
+// ONE message source on the namespace's contacts. F4 measured 0 for EACH of the four
+// message sources (email/telegram/gchat/messages), so the test calls this once per
+// source and asserts >= 1 for every one. The allowlist is hardcoded in the test and
+// deliberately EXCLUDES gcal (the awaiting-reply GCal event is already mutual, so
+// including it would let the assertion pass without exercising any message-source
+// direction). Caller passes a BARE prefix + the source.
+func (q *Queries) TestCountNonInboundMessageInteractionsBySourceByNamePrefix(ctx context.Context, arg TestCountNonInboundMessageInteractionsBySourceByNamePrefixParams) (int64, error) {
+	row := q.db.QueryRow(ctx, TestCountNonInboundMessageInteractionsBySourceByNamePrefix, arg.NamePrefix, arg.Source)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -2313,6 +2371,36 @@ func (q *Queries) TestDeleteTagsByIds(ctx context.Context, tagIds []pgtype.UUID)
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const TestGetContactCadenceTimestampsForContact = `-- name: TestGetContactCadenceTimestampsForContact :one
+SELECT last_contacted, last_interaction_at, last_outreach_at, last_response_at
+FROM contact
+WHERE id = $1
+`
+
+type TestGetContactCadenceTimestampsForContactRow struct {
+	LastContacted     pgtype.Timestamptz `json:"last_contacted"`
+	LastInteractionAt pgtype.Timestamptz `json:"last_interaction_at"`
+	LastOutreachAt    pgtype.Timestamptz `json:"last_outreach_at"`
+	LastResponseAt    pgtype.Timestamptz `json:"last_response_at"`
+}
+
+// Coherence gate (F4, d-mutual-verify timestamps): return one contact's four cadence
+// timestamp columns so the test can assert the promoted mutual set them all together
+// (mutual writes last_contacted / last_interaction_at / last_outreach_at /
+// last_response_at to the same replyAt). Covers last_response_at, which the
+// direction-count query alone does not prove.
+func (q *Queries) TestGetContactCadenceTimestampsForContact(ctx context.Context, contactID pgtype.UUID) (*TestGetContactCadenceTimestampsForContactRow, error) {
+	row := q.db.QueryRow(ctx, TestGetContactCadenceTimestampsForContact, contactID)
+	var i TestGetContactCadenceTimestampsForContactRow
+	err := row.Scan(
+		&i.LastContacted,
+		&i.LastInteractionAt,
+		&i.LastOutreachAt,
+		&i.LastResponseAt,
+	)
+	return &i, err
 }
 
 const TestGetLiveFollowUpByNamePrefix = `-- name: TestGetLiveFollowUpByNamePrefix :one
@@ -2734,6 +2822,51 @@ func (q *Queries) TestListIndexDefsForComms(ctx context.Context) ([]*TestListInd
 	for rows.Next() {
 		var i TestListIndexDefsForCommsRow
 		if err := rows.Scan(&i.Indexname, &i.Indexdef); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const TestListInteractionDirectionCountsForContact = `-- name: TestListInteractionDirectionCountsForContact :many
+SELECT i.direction, COUNT(*) AS n
+FROM interaction i
+WHERE i.contact_id = $1
+  AND i.source = $2
+  AND i.deleted_at IS NULL
+GROUP BY i.direction
+`
+
+type TestListInteractionDirectionCountsForContactParams struct {
+	ContactID pgtype.UUID `json:"contact_id"`
+	Source    string      `json:"source"`
+}
+
+type TestListInteractionDirectionCountsForContactRow struct {
+	Direction string `json:"direction"`
+	N         int64  `json:"n"`
+}
+
+// Coherence gate (F4, d-mutual-verify): for one contact + source, return (direction,
+// count) over live interactions, so the test can assert the telegram-mutual contact's
+// two seeded messages COLLAPSED into a single promoted mutual row — proving
+// PromoteInteractionToMutualTx ran, not that an outbound and an inbound merely coexist
+// as two rows. A mis-set bridge window (2 rows, or an un-promoted outbound) fails
+// loudly.
+func (q *Queries) TestListInteractionDirectionCountsForContact(ctx context.Context, arg TestListInteractionDirectionCountsForContactParams) ([]*TestListInteractionDirectionCountsForContactRow, error) {
+	rows, err := q.db.Query(ctx, TestListInteractionDirectionCountsForContact, arg.ContactID, arg.Source)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*TestListInteractionDirectionCountsForContactRow{}
+	for rows.Next() {
+		var i TestListInteractionDirectionCountsForContactRow
+		if err := rows.Scan(&i.Direction, &i.N); err != nil {
 			return nil, err
 		}
 		items = append(items, &i)

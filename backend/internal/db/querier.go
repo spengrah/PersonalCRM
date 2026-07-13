@@ -2181,12 +2181,27 @@ type Querier interface {
 	// NULL/absent to '' so the LIKE fails and the row is flagged. Caller passes a BARE
 	// prefix.
 	TestCountIncoherentManagedFollowUpsByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error)
+	// Coherence gate (F4, d): count the namespace's contacts whose last_outreach_at is
+	// set but NOT backed by a live outbound/mutual interaction at that exact
+	// occurred_at. Asserted == 0. last_outreach_at is sole-written by the cadence
+	// updater from an outbound/mutual interaction (CAD-006), so a moved value with no
+	// backing outbound/mutual row is a production-impossible seed shape. Caller passes
+	// a BARE prefix.
+	TestCountIncoherentOutreachByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error)
 	// Coherence gate (positive): count the namespace's contacts whose last_contacted
 	// IS backed by a live inbound/mutual interaction at the same occurred_at AND whose
 	// last_interaction_at is in lockstep. Asserted >= 1, proving the zero-violation gate
 	// is not vacuous — the interaction-moved cohort exists and sets last_interaction_at
 	// in lockstep where an interaction drove the write. Caller passes a BARE prefix.
 	TestCountInteractionBackedLastContactedByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error)
+	// Coherence gate (F4, d-positive): count the LIVE outbound-or-mutual interactions of
+	// ONE message source on the namespace's contacts. F4 measured 0 for EACH of the four
+	// message sources (email/telegram/gchat/messages), so the test calls this once per
+	// source and asserts >= 1 for every one. The allowlist is hardcoded in the test and
+	// deliberately EXCLUDES gcal (the awaiting-reply GCal event is already mutual, so
+	// including it would let the assertion pass without exercising any message-source
+	// direction). Caller passes a BARE prefix + the source.
+	TestCountNonInboundMessageInteractionsBySourceByNamePrefix(ctx context.Context, arg TestCountNonInboundMessageInteractionsBySourceByNamePrefixParams) (int64, error)
 	// Test-only: counts venue-type nodes that no live interaction references via
 	// venue_id. Used by the venue backfill test to assert the no-orphan-node guard.
 	TestCountOrphanVenueNodes(ctx context.Context) (int64, error)
@@ -2215,6 +2230,12 @@ type Querier interface {
 	// test to prove the attended FOR SHARE conflicts with a concurrent FOR UPDATE
 	// without a sleep/timeout. Production code must NOT call this.
 	TestGetCalendarEventByIDForUpdateNoWait(ctx context.Context, id pgtype.UUID) (*CalendarEvent, error)
+	// Coherence gate (F4, d-mutual-verify timestamps): return one contact's four cadence
+	// timestamp columns so the test can assert the promoted mutual set them all together
+	// (mutual writes last_contacted / last_interaction_at / last_outreach_at /
+	// last_response_at to the same replyAt). Covers last_response_at, which the
+	// direction-count query alone does not prove.
+	TestGetContactCadenceTimestampsForContact(ctx context.Context, contactID pgtype.UUID) (*TestGetContactCadenceTimestampsForContactRow, error)
 	// Coherence gate (F3, Go-side): return the namespace's live managed follow-up loop
 	// task's contact_id, external_task_id, and metadata so the test can decode the
 	// marker and confirm it points at the row's own contact. Caller passes a BARE
@@ -2357,6 +2378,13 @@ type Querier interface {
 	// exact key columns + partial predicate of the eligible/stale-claim indexes
 	// (migration 073). Read-only catalog access, mirroring TestListPublicTables.
 	TestListIndexDefsForComms(ctx context.Context) ([]*TestListIndexDefsForCommsRow, error)
+	// Coherence gate (F4, d-mutual-verify): for one contact + source, return (direction,
+	// count) over live interactions, so the test can assert the telegram-mutual contact's
+	// two seeded messages COLLAPSED into a single promoted mutual row — proving
+	// PromoteInteractionToMutualTx ran, not that an outbound and an inbound merely coexist
+	// as two rows. A mis-set bridge window (2 rows, or an un-promoted outbound) fails
+	// loudly.
+	TestListInteractionDirectionCountsForContact(ctx context.Context, arg TestListInteractionDirectionCountsForContactParams) ([]*TestListInteractionDirectionCountsForContactRow, error)
 	// Profile coverage test only: for the namespace's contacts (by full_name prefix)
 	// that have interactions, return the per-contact interaction count and the span
 	// (in seconds) between the earliest and latest interaction, so the test can

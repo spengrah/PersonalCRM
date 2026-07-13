@@ -170,6 +170,14 @@ type Harness struct {
 	// harness tracks the production default rather than hard-coding a copy.
 	groupMaxMembers int
 
+	// mutualMessageContactID is the contact the two-sided message-direction block
+	// (profiles.go) seeded as a reply-bridged telegram MUTUAL. A profile sets it via
+	// SetMutualMessageContactID after seeding; the coverage check reads it via
+	// MutualMessageContactID to assert the promote-to-mutual collapse. It is NOT a
+	// ProfileResult field: contact ids come from uuid_generate_v4() (non-deterministic),
+	// so it must stay off the counts-only, determinism-compared result struct.
+	mutualMessageContactID uuid.UUID
+
 	created   *created
 	createdMu sync.Mutex
 
@@ -634,6 +642,26 @@ func (h *Harness) MergedWinnerNodeIDs() []uuid.UUID {
 	h.createdMu.Lock()
 	defer h.createdMu.Unlock()
 	return append([]uuid.UUID(nil), h.created.mergedWinnerNodeIDs...)
+}
+
+// SetMutualMessageContactID records the contact the two-sided message block seeded
+// as a reply-bridged telegram mutual, so the coverage check can resolve it via
+// MutualMessageContactID. Called by the seeding block (package synthetic) after it
+// seeds the mutual pair — hence exported. Guarded by the ledger mutex for parity
+// with the other tracked ids.
+func (h *Harness) SetMutualMessageContactID(id uuid.UUID) {
+	h.createdMu.Lock()
+	defer h.createdMu.Unlock()
+	h.mutualMessageContactID = id
+}
+
+// MutualMessageContactID returns the contact the two-sided message block seeded as
+// a reply-bridged telegram mutual (uuid.Nil if the block did not run — e.g. a
+// profile with it disabled). Read by the coverage check to assert the promote.
+func (h *Harness) MutualMessageContactID() uuid.UUID {
+	h.createdMu.Lock()
+	defer h.createdMu.Unlock()
+	return h.mutualMessageContactID
 }
 
 // gateBClear reports whether Gate B has reached zero for this replay's contacts.

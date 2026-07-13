@@ -120,6 +120,16 @@ type ProfileResult struct {
 	UnmatchedGmailCorrespondence int
 	UnmatchedAnarlogHumans       int
 	TelegramDiscovery            int
+	// OutboundOnlyContacts / MutualMessageContacts count the two-sided
+	// message-direction cohort (F4): the OUTBOUND-only contacts (one each for gmail /
+	// gchat / imessage — "I messaged them, no reply yet" → last_outreach_at set,
+	// last_contacted NULL) and the single reply-bridged telegram MUTUAL contact (an
+	// outbound + a newer inbound within the bridge window promote in place to one
+	// mutual interaction). Kept OUT of the SettledInteractions equation on purpose:
+	// the mutual pair is two replay calls collapsing to one promoted row, so folding
+	// it into a call-vs-row count would muddy that invariant. Counts-only / no PII.
+	OutboundOnlyContacts  int
+	MutualMessageContacts int
 }
 
 // ProfileParams returns the default SeedParams for a named profile (error on an
@@ -855,6 +865,94 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		res.SeededTasks++
 		res.SeededPendingFollowUps = 1
 	}
+
+	// --- Two-sided message-direction cohort (F4) --------------------------------
+	//
+	// Seeded LAST, after every other generator-driven block: it draws gen.Contact
+	// (name PRNG) + source replays, and appending keeps the deterministic id/handle
+	// sequence the earlier source replays depend on unshifted (the message factories
+	// draw ZERO PRNG — only deterministic counters — but gen.Contact does, so this
+	// must still land at the very end).
+	//
+	// Every message-sourced interaction the loops above produce is INBOUND, so the
+	// judge never sees the user reply and reads every conversation as one-sided (a
+	// false "broken compose/send" signal). This block gives the four message sources
+	// their non-inbound coverage: three OUTBOUND-only contacts (gmail / gchat /
+	// imessage) modelling "I messaged them, no reply yet", and one reply-bridged
+	// telegram MUTUAL contact that exercises the promote-to-mutual primitive.
+
+	// Three OUTBOUND-only contacts — one each for gmail / gchat / imessage. Each
+	// carries a single outbound interaction: last_outreach_at set (CAD-006),
+	// last_contacted / last_interaction_at NULL (an outbound touches neither), so
+	// these pass the PR1 lockstep gate unchanged (NULL last_contacted → exempt).
+	obGmailSpec := gen.Contact(factory.WithEmail())
+	obGmailContact, err := h.SeedContact(ctx, obGmailSpec)
+	if err != nil {
+		return res, fmt.Errorf("profile %s: seed outbound gmail contact: %w", params.Profile, err)
+	}
+	res.Contacts++
+	if _, err := h.ReplayGmail(ctx, obGmailContact.ID, gen.GmailMessage(obGmailSpec, factory.MatchSeeded, factory.WithOutbound(), factory.WithMessageAge(messageOutboundAge))); err != nil {
+		return res, fmt.Errorf("profile %s: replay outbound gmail: %w", params.Profile, err)
+	}
+	res.OutboundOnlyContacts++
+
+	obGChatSpec := gen.Contact(factory.WithEmail())
+	obGChatContact, err := h.SeedContact(ctx, obGChatSpec)
+	if err != nil {
+		return res, fmt.Errorf("profile %s: seed outbound gchat contact: %w", params.Profile, err)
+	}
+	res.Contacts++
+	if _, err := h.ReplayGChat(ctx, obGChatContact.ID, gen.GChatMessage(obGChatSpec, factory.MatchSeeded, factory.WithOutbound(), factory.WithMessageAge(messageOutboundAge))); err != nil {
+		return res, fmt.Errorf("profile %s: replay outbound gchat: %w", params.Profile, err)
+	}
+	res.OutboundOnlyContacts++
+
+	obIMsgSpec := gen.Contact(factory.WithPhone())
+	obIMsgContact, err := h.SeedContact(ctx, obIMsgSpec)
+	if err != nil {
+		return res, fmt.Errorf("profile %s: seed outbound imessage contact: %w", params.Profile, err)
+	}
+	res.Contacts++
+	obIMsg, err := gen.IMessage(obIMsgSpec, factory.MatchSeeded, h.MacHostID(), factory.WithOutbound(), factory.WithMessageAge(messageOutboundAge))
+	if err != nil {
+		return res, fmt.Errorf("profile %s: build outbound imessage: %w", params.Profile, err)
+	}
+	if _, err := h.ReplayIMessage(ctx, obIMsgContact.ID, obIMsg); err != nil {
+		return res, fmt.Errorf("profile %s: replay outbound imessage: %w", params.Profile, err)
+	}
+	res.OutboundOnlyContacts++
+
+	// One MUTUAL (reply-bridged) telegram contact. Telegram runs its aggregation
+	// engine INLINE in ReplayTelegram (worker-free), so the promote is reliable.
+	// Build one OUTBOUND spec, then CLONE it for the inbound reply — keeping the SAME
+	// PeerUserID + TelegramChatID (the bridge requires prev.chatID == b.chatID; a
+	// second gen.TelegramMessage call would allocate a fresh peer/chat and never
+	// bridge), bumping the message id, flipping Out to false, and dating it strictly
+	// NEWER than the outbound but within the 48h bridge window. The inbound reply's
+	// aggregation finds the outbound interaction and PromoteInteractionToMutualTx
+	// flips it in place: one mutual row, last_contacted == last_interaction_at ==
+	// last_outreach_at == last_response_at.
+	mutualSpec := gen.Contact(factory.WithTelegram())
+	mutualContact, err := h.SeedContact(ctx, mutualSpec)
+	if err != nil {
+		return res, fmt.Errorf("profile %s: seed mutual telegram contact: %w", params.Profile, err)
+	}
+	res.Contacts++
+	tgOutbound := gen.TelegramMessage(mutualSpec, factory.MatchSeeded, factory.WithOutbound(), factory.WithMessageAge(messageMutualOutboundAge))
+	if _, err := h.ReplayTelegram(ctx, mutualContact.ID, tgOutbound); err != nil {
+		return res, fmt.Errorf("profile %s: replay mutual telegram outbound: %w", params.Profile, err)
+	}
+	tgReply := tgOutbound // clone: same peer + chat, so the bridge can fire
+	tgReply.TelegramMessageID = tgOutbound.TelegramMessageID + 1
+	tgReply.Out = false
+	// Newer than the outbound by exactly (outboundAge − replyAge) = 6h (< 48h).
+	tgReply.SentAt = tgOutbound.SentAt.Add(messageMutualOutboundAge - messageMutualReplyAge)
+	if _, err := h.ReplayTelegram(ctx, mutualContact.ID, tgReply); err != nil {
+		return res, fmt.Errorf("profile %s: replay mutual telegram reply: %w", params.Profile, err)
+	}
+	h.SetMutualMessageContactID(mutualContact.ID)
+	res.MutualMessageContacts++
+
 	return res, nil
 }
 
@@ -1103,6 +1201,24 @@ const interactionSpreadInterval = 21 * 24 * time.Hour
 func interactionSpreadAge(j int) time.Duration {
 	return time.Duration(j) * interactionSpreadInterval
 }
+
+// Message-age anchors for the two-sided direction block (F4). All are backward
+// offsets from the generator anchor (applied via the factories' WithMessageAge),
+// so they stay anchor-relative/deterministic (no time.Now()). The mutual reply is
+// strictly NEWER than the mutual outbound (smaller age) and their gap is well
+// under the aggregation reply-bridge window (replyBridgeHours=48h), so the inbound
+// reply promotes the outbound interaction in place to mutual.
+const (
+	// messageOutboundAge dates the OUTBOUND-only contacts' single message a few
+	// days back — recent enough to be plainly current, not so recent it collides
+	// with the ~2h/1h source default windows.
+	messageOutboundAge = 3 * 24 * time.Hour
+	// messageMutualOutboundAge dates the mutual pair's OUTBOUND half.
+	messageMutualOutboundAge = 5 * 24 * time.Hour
+	// messageMutualReplyAge dates the mutual pair's INBOUND reply: 6h newer than the
+	// outbound (age 6h smaller), well within the 48h bridge window.
+	messageMutualReplyAge = messageMutualOutboundAge - 6*time.Hour
+)
 
 // SeedAllowed is the single chokepoint guard the seed/reset entrypoints route
 // through. It returns an error iff CRM_ENV is a production alias (production /
