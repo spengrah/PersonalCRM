@@ -277,6 +277,14 @@ func (r *SyntheticSupportRepository) CountContactTasksByStateAndNamePrefix(ctx c
 	})
 }
 
+// CountLiveFollowUpsByNamePrefix counts LIVE follow-up loops — the "awaiting reply"
+// state behind has_pending_followup — on ns-prefixed contacts. Mirrors
+// FindPendingFollowUp's predicate, so the coverage test asserts the state the API
+// actually surfaces. Caller passes a BARE prefix.
+func (r *SyntheticSupportRepository) CountLiveFollowUpsByNamePrefix(ctx context.Context, namePrefix string) (int64, error) {
+	return r.queries.SyntheticCountLiveFollowUpsByNamePrefix(ctx, pgtype.Text{String: namePrefix, Valid: true})
+}
+
 // DeleteContactMethodsByContactIds removes contact_method rows by contact
 // (cleanup step 11).
 func (r *SyntheticSupportRepository) DeleteContactMethodsByContactIds(ctx context.Context, contactIDs []uuid.UUID) (int64, error) {

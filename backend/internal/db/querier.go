@@ -1866,6 +1866,15 @@ type Querier interface {
 	// assertions as LIVE on its still-live node (≥1) — so the count proves re-pointing,
 	// not just presence of a terminal/closed row.
 	SyntheticCountLiveAssertionsForSubjects(ctx context.Context, nodeIds []pgtype.UUID) (int64, error)
+	// Profile coverage test only: count LIVE follow-up loops (the "awaiting reply" state
+	// behind has_pending_followup) on ns-prefixed contacts. Mirrors FindPendingFollowUp's
+	// predicate exactly — lifecycle 'followup_loop' AND state IN ('managed',
+	// 'pending_remote_create') — so the coverage check asserts the same state the API
+	// surfaces, not a lookalike. Guards a real regression: with zero such rows the state is
+	// absent from the seeded world, the tours cannot capture it, and the agentic judge reads
+	// that absence as a missing feature. contact_task has no deleted_at; the contact
+	// soft-delete filter scopes to live catalog contacts. Caller passes a BARE prefix.
+	SyntheticCountLiveFollowUpsByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error)
 	// Merge/soft-delete coverage test support: count the live (deleted_at IS NULL) nodes
 	// among the given ids, scoped to THIS run's tracked node ids. Used to assert a merge
 	// winner node stays live (== id count) while soft-deleted + merge-loser nodes are

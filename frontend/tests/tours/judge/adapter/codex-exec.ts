@@ -247,6 +247,12 @@ export function makeCodexExecJudge(opts: CodexExecOptions = {}): Judge {
           outputTokens: result?.parse.outputTokens,
           toolRejected: result?.rejectedForTool,
           error,
+          // Content IS logged here: the QA judge grades a provably-synthetic
+          // corpus, and a span without it cannot be adjudicated by a human later.
+          // See SpanParams — this is a call-site decision, not an env default.
+          prompt,
+          response: result ? JSON.stringify(result.verdicts, null, 2) : undefined,
+          screenshots: input.images,
         })
       )
     }

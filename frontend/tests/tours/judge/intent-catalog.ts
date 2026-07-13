@@ -92,6 +92,28 @@ export const INTENT_CATALOG: Record<string, IntentSpec> = {
     status: 'current',
     servedBy: ['CAD-033'],
   },
+  // The core value loop, judged as ONE journey. Evidence comes from
+  // relationship-loop.tour.ts, whose captures are tagged CAD-038 directly.
+  //
+  // servedBy is DELIBERATELY EMPTY, and that is the whole design. A journey binds
+  // by DIRECT TAG, never by serves edges: `bindIntentCaptures` unions {id} with
+  // servedBy, and the behaviors this journey walks (DSH-001/DSH-005/CAD-026/
+  // CAD-028/CAD-029) are ALSO tagged all over the per-surface tours. Adding those
+  // edges would pull their captures in, and since binding sorts alphabetically by
+  // tour name and truncates at INTENT_CAPTURE_CAP, 'cadence-followup' and
+  // 'dashboard' would fill the cap and silently evict 'relationship-loop' — the
+  // judge would grade the journey on everything except the journey. It would also
+  // mix tours, whose uuid placeholders are per-test, so the same contact would
+  // appear under two identities. Keep it empty.
+  'CAD-038': {
+    id: 'CAD-038',
+    title: 'The relationship loop closes — notice, act, and the app remembers',
+    statement:
+      'a user who opens the app to find out who they are losing touch with can go from that signal to having acted, in one continuous pass — the contact they are sent to answers where the relationship stands, the action they take is acknowledged where they take it, and the surface that sent them reflects it when they come back; at no point do they lose their place, have to re-derive context the app already showed them, or have to guess whether the action landed',
+    status: 'current',
+    servedBy: [],
+    visual: true,
+  },
 }
 
 export function intentSpec(id: string): IntentSpec | undefined {

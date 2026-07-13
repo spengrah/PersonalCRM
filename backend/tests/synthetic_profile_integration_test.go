@@ -405,6 +405,21 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 		require.GreaterOrEqual(t, count, int64(1), "≥1 contact_task in state %q", state)
 	}
 
+	// The "awaiting reply" state (has_pending_followup). REGRESSION GUARD, not a nicety:
+	// a seeded world cannot reach this state through the production path (FollowUpManager
+	// is off-mode in the harness; CAD-012 suppresses follow-ups for backdated automated
+	// outbounds), so before it was seeded explicitly the state was ABSENT from every
+	// seeded world. The tours therefore could not capture it, and the agentic judge —
+	// shown only contact pages with no "Awaiting reply" marker — concluded the feature did
+	// not exist and emitted a confident, well-cited, FALSE CAD-036 regression on every
+	// run. Absence of evidence read as absence of the feature. If this assertion ever goes
+	// back to zero, that false verdict returns.
+	require.Equal(t, 1, res.SeededPendingFollowUps, "profile seeds exactly one live follow-up")
+	liveFollowUps, err := support.CountLiveFollowUpsByNamePrefix(ctx, prefix)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, liveFollowUps, int64(1),
+		"≥1 LIVE followup_loop task — the has_pending_followup state the contact page renders")
+
 	// Interaction volume: each dedicated source contact carries MessagesPerContact
 	// settled interactions, so SettledInteractions == (settled contacts) ×
 	// MessagesPerContact, strictly more than one per contact.
