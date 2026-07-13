@@ -862,6 +862,25 @@ func (r *SyntheticSupportRepository) IncoherentOutreachCountByNamePrefix(ctx con
 	return r.queries.TestCountIncoherentOutreachByNamePrefix(ctx, pgtype.Text{String: namePrefix, Valid: true})
 }
 
+// PureOutboundContactCountByNamePrefix returns the number of the namespace's live
+// contacts in the pure-outbound shape (last_outreach_at set, last_contacted NULL) —
+// the "messaged them, no reply yet" cohort. Coverage gate (D3): asserted >= 1 so the
+// zero-violation IncoherentOutreachCountByNamePrefix gate is not vacuously satisfied by
+// a world with no last_outreach_at at all. Test only.
+func (r *SyntheticSupportRepository) PureOutboundContactCountByNamePrefix(ctx context.Context, namePrefix string) (int64, error) {
+	return r.queries.TestCountPureOutboundContactsByNamePrefix(ctx, pgtype.Text{String: namePrefix, Valid: true})
+}
+
+// ContactsWithNotepadCountByNamePrefix returns the number of the namespace's live
+// contacts that carry a NON-EMPTY notepad note — the category the contact-detail page
+// renders. Coverage gate (F6): asserted == res.ContactsWithNotes so the seeded notes
+// actually landed on the notepad surface the UI reads (empty-body notepads, e.g. the
+// ones MergeContacts spuriously writes on merge winners (issue #648), carry no rendered
+// content and are excluded). Test only.
+func (r *SyntheticSupportRepository) ContactsWithNotepadCountByNamePrefix(ctx context.Context, namePrefix string) (int64, error) {
+	return r.queries.TestCountContactsWithNotepadByNamePrefix(ctx, pgtype.Text{String: namePrefix, Valid: true})
+}
+
 // NonInboundMessageInteractionCountBySourceByNamePrefix returns the number of live
 // outbound/mutual interactions of one message source on the namespace's contacts.
 // Coherence gate (F4, d-positive); the test asserts >= 1 for each of the four message

@@ -2173,6 +2173,33 @@ func (q *Queries) TestCountAllRows(ctx context.Context, tableName string) (int64
 	return column_1, err
 }
 
+const TestCountContactsWithNotepadByNamePrefix = `-- name: TestCountContactsWithNotepadByNamePrefix :one
+SELECT COUNT(DISTINCT c.id)
+FROM contact c
+JOIN note n ON n.contact_id = c.id AND n.category = 'notepad'
+WHERE c.full_name LIKE $1 || '%'
+  AND c.deleted_at IS NULL
+  AND n.body <> ''
+`
+
+// Coverage gate (F6): count the namespace's LIVE contacts that carry a NON-EMPTY
+// NOTEPAD note — the category the contact-detail endpoint renders via GetContactNotepad.
+// The category='notepad' filter is load-bearing: SeedNote writes via CreateNotepad, and
+// without the filter the gate could pass on some other note category while the contact
+// detail page still renders empty. The non-empty-body filter matters too (issue #648):
+// MergeContacts writes a spurious empty-body notepad note onto every merge winner (an
+// always-true nil-check on GetContactNoteByCategory's ErrNoRows return), which carries no
+// rendered content and so is not "a contact with notes" for coverage purposes — counting
+// it would make this gate disagree with res.ContactsWithNotes by the merge count. `note`
+// has NO deleted_at column (it is hard-deleted at teardown), so there is no soft-delete
+// predicate on the join. Caller passes a BARE prefix.
+func (q *Queries) TestCountContactsWithNotepadByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error) {
+	row := q.db.QueryRow(ctx, TestCountContactsWithNotepadByNamePrefix, namePrefix)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const TestCountIncoherentLastContactedByNamePrefix = `-- name: TestCountIncoherentLastContactedByNamePrefix :one
 SELECT COUNT(*)
 FROM contact c
@@ -2322,6 +2349,28 @@ type TestCountNonInboundMessageInteractionsBySourceByNamePrefixParams struct {
 // direction). Caller passes a BARE prefix + the source.
 func (q *Queries) TestCountNonInboundMessageInteractionsBySourceByNamePrefix(ctx context.Context, arg TestCountNonInboundMessageInteractionsBySourceByNamePrefixParams) (int64, error) {
 	row := q.db.QueryRow(ctx, TestCountNonInboundMessageInteractionsBySourceByNamePrefix, arg.NamePrefix, arg.Source)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const TestCountPureOutboundContactsByNamePrefix = `-- name: TestCountPureOutboundContactsByNamePrefix :one
+SELECT COUNT(*)
+FROM contact c
+WHERE c.full_name LIKE $1 || '%'
+  AND c.deleted_at IS NULL
+  AND c.last_outreach_at IS NOT NULL
+  AND c.last_contacted IS NULL
+`
+
+// Coverage gate (D3, F4 not-vacuous): count the namespace's LIVE contacts in the
+// PURE-OUTBOUND shape — last_outreach_at set while last_contacted is NULL. This is the
+// "I messaged them, no reply yet" cohort (an outbound moves only last_outreach_at,
+// CAD-006). Asserted >= 1 so the zero-violation TestCountIncoherentOutreachByNamePrefix
+// gate is not vacuously satisfied by a world with no last_outreach_at at all. Caller
+// passes a BARE prefix.
+func (q *Queries) TestCountPureOutboundContactsByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error) {
+	row := q.db.QueryRow(ctx, TestCountPureOutboundContactsByNamePrefix, namePrefix)
 	var count int64
 	err := row.Scan(&count)
 	return count, err

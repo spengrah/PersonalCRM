@@ -2164,6 +2164,18 @@ type Querier interface {
 	// list by the test before it reaches here; format() with %I quotes the
 	// identifier so it can never be an injection vector.
 	TestCountAllRows(ctx context.Context, tableName string) (int64, error)
+	// Coverage gate (F6): count the namespace's LIVE contacts that carry a NON-EMPTY
+	// NOTEPAD note — the category the contact-detail endpoint renders via GetContactNotepad.
+	// The category='notepad' filter is load-bearing: SeedNote writes via CreateNotepad, and
+	// without the filter the gate could pass on some other note category while the contact
+	// detail page still renders empty. The non-empty-body filter matters too (issue #648):
+	// MergeContacts writes a spurious empty-body notepad note onto every merge winner (an
+	// always-true nil-check on GetContactNoteByCategory's ErrNoRows return), which carries no
+	// rendered content and so is not "a contact with notes" for coverage purposes — counting
+	// it would make this gate disagree with res.ContactsWithNotes by the merge count. `note`
+	// has NO deleted_at column (it is hard-deleted at teardown), so there is no soft-delete
+	// predicate on the join. Caller passes a BARE prefix.
+	TestCountContactsWithNotepadByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error)
 	// Coherence gate: count the namespace's contacts whose non-creation last_contacted
 	// is NOT backed by a live inbound/mutual interaction at the same occurred_at, or
 	// whose last_interaction_at is not in lockstep with last_contacted. Asserted == 0.
@@ -2205,6 +2217,13 @@ type Querier interface {
 	// Test-only: counts venue-type nodes that no live interaction references via
 	// venue_id. Used by the venue backfill test to assert the no-orphan-node guard.
 	TestCountOrphanVenueNodes(ctx context.Context) (int64, error)
+	// Coverage gate (D3, F4 not-vacuous): count the namespace's LIVE contacts in the
+	// PURE-OUTBOUND shape — last_outreach_at set while last_contacted is NULL. This is the
+	// "I messaged them, no reply yet" cohort (an outbound moves only last_outreach_at,
+	// CAD-006). Asserted >= 1 so the zero-violation TestCountIncoherentOutreachByNamePrefix
+	// gate is not vacuously satisfied by a world with no last_outreach_at at all. Caller
+	// passes a BARE prefix.
+	TestCountPureOutboundContactsByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error)
 	// Tag-migration test only: count the LIVE accepted `tagged_as` assertions whose
 	// subject is a given node, so a test asserts exactly one per migrated contact_tag
 	// and that an idempotent re-run creates no duplicates.
