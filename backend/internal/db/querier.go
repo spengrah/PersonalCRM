@@ -2236,6 +2236,18 @@ type Querier interface {
 	// gate is not vacuously satisfied by a world with no last_outreach_at at all. Caller
 	// passes a BARE prefix.
 	TestCountPureOutboundContactsByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error)
+	// Coherence gate (F8): count the namespace's LIVE contacts that hold a
+	// current-accepted cutover assertion (lives_in / birthday / how_met) whose matching
+	// derived cache column is NULL — a production-impossible state (KnowledgeCacheUpdater
+	// is the sole writer and always populates the column when an accepted assertion
+	// exists). Asserted == 0. "current-accepted" mirrors GetCurrentAccepted: accepted,
+	// knowledge-open, valid-time window contains @now, subject node live, and (for the
+	// lives_in edge) the place object node live. A proposed/pending assertion or one on a
+	// soft-deleted contact is correctly excluded. Single-cardinality predicates mean at
+	// most one current-accepted row per (subject, predicate), so COUNT(*) over this WHERE
+	// is row-equivalent to GetCurrentAccepted's ORDER BY created_at LIMIT 1 per slot.
+	// Caller passes a BARE prefix; '%' appended.
+	TestCountStrandedKnowledgeCacheByNamePrefix(ctx context.Context, arg TestCountStrandedKnowledgeCacheByNamePrefixParams) (int64, error)
 	// Tag-migration test only: count the LIVE accepted `tagged_as` assertions whose
 	// subject is a given node, so a test asserts exactly one per migrated contact_tag
 	// and that an idempotent re-run creates no duplicates.
@@ -2261,6 +2273,11 @@ type Querier interface {
 	// test to prove the attended FOR SHARE conflicts with a concurrent FOR UPDATE
 	// without a sleep/timeout. Production code must NOT call this.
 	TestGetCalendarEventByIDForUpdateNoWait(ctx context.Context, id pgtype.UUID) (*CalendarEvent, error)
+	// F8 target-row proof: return the three derived knowledge-cache columns for one
+	// contact id so the coverage test can assert the ReplayAssertion date-fact birthday's
+	// own contact has a populated birthday cache (proving F8's exact stranded row is now
+	// coherent, not just that SOME cutover cache is populated).
+	TestGetContactCacheColumnsByID(ctx context.Context, id pgtype.UUID) (*TestGetContactCacheColumnsByIDRow, error)
 	// Coherence gate (F4, d-mutual-verify timestamps): return one contact's four cadence
 	// timestamp columns so the test can assert the promoted mutual set them all together
 	// (mutual writes last_contacted / last_interaction_at / last_outreach_at /

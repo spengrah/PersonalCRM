@@ -71,6 +71,15 @@ func pgTimestamptzToTimePtr(t pgtype.Timestamptz) *time.Time {
 	return &u
 }
 
+// pgTextToStringPtr converts a pgtype.Text to *string; invalid/NULL → nil.
+func pgTextToStringPtr(t pgtype.Text) *string {
+	if !t.Valid {
+		return nil
+	}
+	s := t.String
+	return &s
+}
+
 // pgDateToTimePtr converts a pgtype.Date to *time.Time; invalid/NULL → nil.
 // Returned time is normalized to UTC with day precision preserved.
 func pgDateToTimePtr(d pgtype.Date) *time.Time {
