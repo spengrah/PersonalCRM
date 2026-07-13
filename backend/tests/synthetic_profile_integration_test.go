@@ -2,6 +2,7 @@ package tests
 
 import (
 	"context"
+	"encoding/json"
 	"regexp"
 	"strconv"
 	"strings"
@@ -9,6 +10,8 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
+	"personal-crm/backend/internal/cadence"
+	"personal-crm/backend/internal/contacttask"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/synthetic"
 	"personal-crm/backend/internal/synthetic/factory"
@@ -81,6 +84,130 @@ func TestSyntheticProfile_MinimalScopedMatchesSeedAll(t *testing.T) {
 // TestSyntheticProfile_DevCoversCatalog asserts the dev profile produces the
 // producible edge-case + pending coverage. Counts are scoped to the harness's
 // namespace.
+// assertSeedCoherence runs the post-seed coherence gate over one namespace: no
+// production-impossible last_contacted (gate a), a non-vacuous interaction-moved
+// cohort (gate a-positive), prod-shaped managed follow-ups (gate c) whose marker
+// decodes and points at the seeded contact (gate c-Go), a cause-driven overdue
+// cohort computed via the production cadence helper (env-robust), and the CAD-029
+// tour capacity (four distinct assignable contacts). Called by both coverage tests.
+func assertSeedCoherence(t *testing.T, ctx context.Context, support *repository.SyntheticSupportRepository, prefix string) {
+	t.Helper()
+	now := accelerated.GetCurrentTime()
+
+	// Gate (a): zero production-impossible last_contacted (a non-creation, non-null
+	// last_contacted must be backed by a live inbound/mutual interaction at the same
+	// occurred_at, with last_interaction_at in lockstep).
+	incoherent, err := support.IncoherentLastContactedCountByNamePrefix(ctx, prefix)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), incoherent, "no contact may carry a moved last_contacted without a backing interaction + lockstep last_interaction_at")
+
+	// Gate (a-positive): the interaction-moved cohort exists (proves gate a is not
+	// vacuous) and sets last_interaction_at in lockstep.
+	backed, err := support.InteractionBackedLastContactedCountByNamePrefix(ctx, prefix)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, backed, int64(1), "≥1 contact whose last_contacted is backed by an inbound/mutual interaction with lockstep last_interaction_at")
+
+	// Gate (c): managed follow-ups carry the production Todoist shape.
+	incoherentFU, err := support.IncoherentManagedFollowUpCountByNamePrefix(ctx, prefix)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), incoherentFU, "every managed follow-up loop must carry an alphanumeric external id + prod metadata + content/marker shape")
+
+	// Gate (c-Go): the follow-up's marker decodes and references its own contact.
+	fu, err := support.GetLiveFollowUpByNamePrefix(ctx, prefix)
+	require.NoError(t, err)
+	var meta map[string]any
+	require.NoError(t, json.Unmarshal(fu.Metadata, &meta))
+	markerJSON, _ := meta["marker_json"].(string)
+	marker, ok := contacttask.DecodeMarker(markerJSON)
+	require.True(t, ok, "follow-up marker_json must decode")
+	require.Equal(t, fu.ContactID.String(), marker.ContactID, "marker must reference the follow-up's own contact")
+	require.Equal(t, contacttask.KindReachOut, marker.Kind)
+	require.Equal(t, contacttask.LifecycleFollowUpLoop, marker.Lifecycle)
+	instanceID, _ := meta["integration_instance_id"].(string)
+	require.NotEmpty(t, marker.Instance, "marker instance must be non-empty")
+	require.Equal(t, instanceID, marker.Instance, "marker instance must agree with integration_instance_id metadata")
+	content, _ := meta["content"].(string)
+	require.Contains(t, content, "/contacts/"+fu.ContactID.String(), "follow-up content must link the contact")
+
+	// Cause-driven overdue cohort + the D1 verification, computed from the bucket
+	// rows via the production cadence helper (env-robust: it does not matter whether
+	// the harness runs with time acceleration on).
+	buckets, err := support.ListContactBucketsByNamePrefix(ctx, prefix)
+	require.NoError(t, err)
+	overdueFloor := now.Add(-14 * 24 * time.Hour)
+	var overdueByHelper, backdatedOverdue int
+	for _, b := range buckets {
+		if b.Cadence == nil || *b.Cadence == "" || b.CreatedAt == nil {
+			continue
+		}
+		cadenceType, perr := cadence.ParseCadence(*b.Cadence)
+		if perr != nil {
+			continue
+		}
+		if cadence.IsOverdueWithConfig(cadenceType, b.LastContacted, *b.CreatedAt, now) {
+			overdueByHelper++
+		}
+		// D1: a backdated (created-long-ago) contact is overdue with an honest empty
+		// timeline — created_at far in the past, last_contacted == created_at (the
+		// creation stamp), and a computed contact_by already elapsed.
+		if b.LastContacted != nil && b.LastContacted.Equal(*b.CreatedAt) &&
+			b.CreatedAt.Before(overdueFloor) &&
+			b.ContactBy != nil && b.ContactBy.Before(now) {
+			backdatedOverdue++
+		}
+	}
+	require.GreaterOrEqual(t, overdueByHelper, 1, "≥1 overdue contact via the production cadence helper")
+	require.GreaterOrEqual(t, backdatedOverdue, 1, "≥1 backdated overdue contact (far-past created_at == last_contacted, contact_by elapsed)")
+
+	// Tour capacity (CAD-029): the world must contain FOUR DISTINCT contacts
+	// assignable to the outreach / response / pending / none states — the precondition
+	// for cadence-followup.tour.ts. Proven via a maximum bipartite matching that must
+	// saturate all four states.
+	flags, err := support.ListCadenceActivityFlagsByNamePrefix(ctx, prefix)
+	require.NoError(t, err)
+	require.Equal(t, 4, maxDistinctStateAssignment(flags), "four CAD-029 states must be assignable to four distinct contacts")
+}
+
+// maxDistinctStateAssignment returns the size of a maximum matching between the
+// four CAD-029 states (outreach, response, pending, none) and the given contacts,
+// where a state may be assigned to any contact carrying that flag and each contact
+// covers at most one state. Standard augmenting-path (Kuhn's) search — trivial at
+// this scale.
+func maxDistinctStateAssignment(flags []repository.CadenceActivityFlags) int {
+	// state index → the flag each state requires on a contact.
+	stateHas := []func(repository.CadenceActivityFlags) bool{
+		func(f repository.CadenceActivityFlags) bool { return f.HasOutreach },
+		func(f repository.CadenceActivityFlags) bool { return f.HasResponse },
+		func(f repository.CadenceActivityFlags) bool { return f.HasPending },
+		func(f repository.CadenceActivityFlags) bool { return f.HasNone },
+	}
+	contactToState := make([]int, len(flags))
+	for i := range contactToState {
+		contactToState[i] = -1
+	}
+	var augment func(state int, seen []bool) bool
+	augment = func(state int, seen []bool) bool {
+		for ci, f := range flags {
+			if !stateHas[state](f) || seen[ci] {
+				continue
+			}
+			seen[ci] = true
+			if contactToState[ci] == -1 || augment(contactToState[ci], seen) {
+				contactToState[ci] = state
+				return true
+			}
+		}
+		return false
+	}
+	matched := 0
+	for s := 0; s < len(stateHas); s++ {
+		if augment(s, make([]bool, len(flags))) {
+			matched++
+		}
+	}
+	return matched
+}
+
 func TestSyntheticProfile_DevCoversCatalog(t *testing.T) {
 	testsupport.RequireLongTests(t)
 	database, ctx := newSyntheticDB(t)
@@ -157,6 +284,10 @@ func TestSyntheticProfile_DevCoversCatalog(t *testing.T) {
 	remaining, err := h.ContactsRemaining(ctx)
 	require.NoError(t, err)
 	require.Greater(t, remaining, int64(0), "dev profile seeds catalog contacts")
+
+	// Post-seed coherence gate (F1/F3 + tour capacity), scoped to the namespace.
+	support := repository.NewSyntheticSupportRepository(database.Queries)
+	assertSeedCoherence(t, ctx, support, h.Generator().Prefix())
 }
 
 // TestSyntheticProfile_ProdShapedCoverageCheck is the load-bearing coverage
@@ -251,11 +382,11 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	buckets, err := support.ListContactBucketsByNamePrefix(ctx, h.Generator().Prefix())
 	require.NoError(t, err)
 
-	// "Overdue" must mean a last_contacted WELL in the past (WithOverdue seeds
-	// ~90 days ago), NOT merely before now — a recent contact (WithRecent seeds
-	// <48h ago) is also before now. Using a 14-day-ago floor distinguishes the
-	// overdue bucket from the recent bucket, so a clobber-to-recent regression
-	// (the bug this guards) would FAIL here.
+	// "Overdue" must mean a last_contacted WELL in the past (the backdated cohort
+	// is created ~90 days ago, stamping last_contacted == created_at), NOT merely
+	// before now — a recently-created contact (<48h ago) is also before now. Using a
+	// 14-day-ago floor distinguishes the overdue bucket from the recent bucket, so a
+	// clobber-to-recent regression (the bug this guards) would FAIL here.
 	var overdue, neverContacted, noMethod int
 	now := accelerated.GetCurrentTime()
 	overdueFloor := now.Add(-14 * 24 * time.Hour)
@@ -275,6 +406,9 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	require.GreaterOrEqual(t, overdue, 1, "≥1 cadence-bearing contact with a far-past last_contacted (overdue bucket survived a settling replay)")
 	require.GreaterOrEqual(t, neverContacted, 1, "≥1 cadence-bearing never-contacted contact (NULL last_contacted survived)")
 	require.GreaterOrEqual(t, noMethod, 1, "≥1 no-method contact (the no-method bucket exists)")
+
+	// Post-seed coherence gate (F1/F3 + tour capacity), scoped to the namespace.
+	assertSeedCoherence(t, ctx, support, h.Generator().Prefix())
 
 	// Bio facts (how_met, location, real-year birthdays) ride on the contact-create
 	// authority flip; the catalog carries ≥1 of each. A location additionally mints

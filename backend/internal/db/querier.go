@@ -2164,6 +2164,29 @@ type Querier interface {
 	// list by the test before it reaches here; format() with %I quotes the
 	// identifier so it can never be an injection vector.
 	TestCountAllRows(ctx context.Context, tableName string) (int64, error)
+	// Coherence gate: count the namespace's contacts whose non-creation last_contacted
+	// is NOT backed by a live inbound/mutual interaction at the same occurred_at, or
+	// whose last_interaction_at is not in lockstep with last_contacted. Asserted == 0.
+	// last_contacted <> created_at exempts the creation stamp (the backdated cohort
+	// sets both columns from ONE *time.Time, so they are byte-equal; there is no seed
+	// path left that writes last_contacted disconnected from created_at). A moved
+	// last_contacted must (i) equal last_interaction_at (the cadence updater writes
+	// both to occurred_at under one guard) and (ii) be backed by a live inbound/mutual
+	// interaction at the same occurred_at (CAD-010). Caller passes a BARE prefix.
+	TestCountIncoherentLastContactedByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error)
+	// Coherence gate (F3): count the namespace's managed follow-up loop tasks that do
+	// NOT carry the production Todoist shape. Asserted == 0. COALESCE(...,'') is
+	// load-bearing: a JSON-null or absent key makes metadata->>k return SQL NULL, and
+	// `NULL NOT LIKE x` is NULL (not TRUE) — it would silently pass. COALESCE collapses
+	// NULL/absent to '' so the LIKE fails and the row is flagged. Caller passes a BARE
+	// prefix.
+	TestCountIncoherentManagedFollowUpsByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error)
+	// Coherence gate (positive): count the namespace's contacts whose last_contacted
+	// IS backed by a live inbound/mutual interaction at the same occurred_at AND whose
+	// last_interaction_at is in lockstep. Asserted >= 1, proving the zero-violation gate
+	// is not vacuous — the interaction-moved cohort exists and sets last_interaction_at
+	// in lockstep where an interaction drove the write. Caller passes a BARE prefix.
+	TestCountInteractionBackedLastContactedByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error)
 	// Test-only: counts venue-type nodes that no live interaction references via
 	// venue_id. Used by the venue backfill test to assert the no-orphan-node guard.
 	TestCountOrphanVenueNodes(ctx context.Context) (int64, error)
@@ -2192,6 +2215,11 @@ type Querier interface {
 	// test to prove the attended FOR SHARE conflicts with a concurrent FOR UPDATE
 	// without a sleep/timeout. Production code must NOT call this.
 	TestGetCalendarEventByIDForUpdateNoWait(ctx context.Context, id pgtype.UUID) (*CalendarEvent, error)
+	// Coherence gate (F3, Go-side): return the namespace's live managed follow-up loop
+	// task's contact_id, external_task_id, and metadata so the test can decode the
+	// marker and confirm it points at the row's own contact. Caller passes a BARE
+	// prefix; expects exactly one live follow-up in the namespace.
+	TestGetLiveFollowUpByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (*TestGetLiveFollowUpByNamePrefixRow, error)
 	// TEST ONLY. Hard-deletes a calendar_event row by primary key. Used
 	// by integration tests that exercise the "target row vanished between
 	// snapshot and resolve-link" path. Production code must NOT call this.
@@ -2310,6 +2338,13 @@ type Querier interface {
 	// Reset test only: a marker row in telegram_session (the Telegram auth session
 	// the reset wipes). session_data_encrypted + encryption_nonce are NOT NULL bytea.
 	TestInsertTelegramSessionMarker(ctx context.Context) error
+	// Tour capacity gate: for each live contact in the namespace, return the four
+	// CAD-029 activity flags (outreach / response / pending-followup / none) so the Go
+	// test can compute a maximum bipartite matching and prove the world has FOUR
+	// DISTINCT assignable contacts (the precondition for cadence-followup.tour.ts).
+	// has_pending mirrors FindPendingFollowUp's live followup_loop predicate. Caller
+	// passes a BARE prefix.
+	TestListCadenceActivityFlagsByNamePrefix(ctx context.Context, namePrefix pgtype.Text) ([]*TestListCadenceActivityFlagsByNamePrefixRow, error)
 	// Profile coverage test only: list the namespace's contacts (by full_name
 	// prefix) with the bucket-defining columns + a method count, so the test can
 	// assert the catalog produced ≥1 overdue (cadence + last_contacted in the past),

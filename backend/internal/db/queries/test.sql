@@ -1047,6 +1047,8 @@ SELECT
     c.id,
     c.cadence,
     c.last_contacted,
+    c.created_at,
+    c.contact_by,
     (SELECT COUNT(*) FROM contact_method cm WHERE cm.contact_id = c.id) AS method_count
 FROM contact c
 WHERE c.full_name LIKE @name_prefix || '%'
@@ -1170,3 +1172,120 @@ VALUES (@kind, 'default', @state::river_job_state, '{}'::jsonb, '{}'::jsonb, 1, 
 -- query leaves NULL) since Tier-0's wait/run arithmetic needs it populated.
 INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts, scheduled_at, attempted_at, finalized_at)
 VALUES (@kind, 'default', @state::river_job_state, '{}'::jsonb, '{}'::jsonb, 1, 1, @scheduled_at, @attempted_at, @finalized_at);
+
+-- name: TestCountIncoherentLastContactedByNamePrefix :one
+-- Coherence gate: count the namespace's contacts whose non-creation last_contacted
+-- is NOT backed by a live inbound/mutual interaction at the same occurred_at, or
+-- whose last_interaction_at is not in lockstep with last_contacted. Asserted == 0.
+-- last_contacted <> created_at exempts the creation stamp (the backdated cohort
+-- sets both columns from ONE *time.Time, so they are byte-equal; there is no seed
+-- path left that writes last_contacted disconnected from created_at). A moved
+-- last_contacted must (i) equal last_interaction_at (the cadence updater writes
+-- both to occurred_at under one guard) and (ii) be backed by a live inbound/mutual
+-- interaction at the same occurred_at (CAD-010). Caller passes a BARE prefix.
+SELECT COUNT(*)
+FROM contact c
+WHERE c.full_name LIKE @name_prefix || '%'
+  AND c.deleted_at IS NULL
+  AND c.last_contacted IS NOT NULL
+  AND c.last_contacted <> c.created_at
+  AND (
+        c.last_interaction_at IS DISTINCT FROM c.last_contacted
+     OR NOT EXISTS (
+          SELECT 1 FROM interaction i
+          WHERE i.contact_id = c.id
+            AND i.deleted_at IS NULL
+            AND i.direction IN ('inbound','mutual')
+            AND i.occurred_at = c.last_contacted
+        )
+  );
+
+-- name: TestCountInteractionBackedLastContactedByNamePrefix :one
+-- Coherence gate (positive): count the namespace's contacts whose last_contacted
+-- IS backed by a live inbound/mutual interaction at the same occurred_at AND whose
+-- last_interaction_at is in lockstep. Asserted >= 1, proving the zero-violation gate
+-- is not vacuous — the interaction-moved cohort exists and sets last_interaction_at
+-- in lockstep where an interaction drove the write. Caller passes a BARE prefix.
+SELECT COUNT(*)
+FROM contact c
+WHERE c.full_name LIKE @name_prefix || '%'
+  AND c.deleted_at IS NULL
+  AND c.last_interaction_at IS NOT NULL
+  AND c.last_interaction_at = c.last_contacted
+  AND EXISTS (
+        SELECT 1 FROM interaction i
+        WHERE i.contact_id = c.id
+          AND i.deleted_at IS NULL
+          AND i.direction IN ('inbound','mutual')
+          AND i.occurred_at = c.last_contacted
+      );
+
+-- name: TestCountIncoherentManagedFollowUpsByNamePrefix :one
+-- Coherence gate (F3): count the namespace's managed follow-up loop tasks that do
+-- NOT carry the production Todoist shape. Asserted == 0. COALESCE(...,'') is
+-- load-bearing: a JSON-null or absent key makes metadata->>k return SQL NULL, and
+-- `NULL NOT LIKE x` is NULL (not TRUE) — it would silently pass. COALESCE collapses
+-- NULL/absent to '' so the LIKE fails and the row is flagged. Caller passes a BARE
+-- prefix.
+SELECT COUNT(*)
+FROM contact_task ct
+JOIN contact c ON ct.contact_id = c.id
+WHERE c.full_name LIKE @name_prefix || '%'
+  AND c.deleted_at IS NULL
+  AND ct.lifecycle = 'followup_loop'
+  AND ct.state = 'managed'
+  AND (
+        ct.external_task_id IS NULL OR ct.external_task_id = ''
+     OR ct.external_task_id !~ '^[A-Za-z0-9]+$'
+     OR COALESCE(ct.metadata->>'due_date','') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+     OR COALESCE(ct.metadata->>'project_id','')              = ''
+     OR COALESCE(ct.metadata->>'label_name','')              = ''
+     OR COALESCE(ct.metadata->>'integration_instance_id','') = ''
+     OR COALESCE(ct.metadata->>'content','')     NOT LIKE 'Follow up:%(awaiting reply)'
+     OR COALESCE(ct.metadata->>'marker_json','')  NOT LIKE '%followup_loop%'
+  );
+
+-- name: TestGetLiveFollowUpByNamePrefix :one
+-- Coherence gate (F3, Go-side): return the namespace's live managed follow-up loop
+-- task's contact_id, external_task_id, and metadata so the test can decode the
+-- marker and confirm it points at the row's own contact. Caller passes a BARE
+-- prefix; expects exactly one live follow-up in the namespace.
+SELECT ct.contact_id, ct.external_task_id, ct.metadata
+FROM contact_task ct
+JOIN contact c ON ct.contact_id = c.id
+WHERE c.full_name LIKE @name_prefix || '%'
+  AND c.deleted_at IS NULL
+  AND ct.lifecycle = 'followup_loop'
+  AND ct.state = 'managed'
+LIMIT 1;
+
+-- name: TestListCadenceActivityFlagsByNamePrefix :many
+-- Tour capacity gate: for each live contact in the namespace, return the four
+-- CAD-029 activity flags (outreach / response / pending-followup / none) so the Go
+-- test can compute a maximum bipartite matching and prove the world has FOUR
+-- DISTINCT assignable contacts (the precondition for cadence-followup.tour.ts).
+-- has_pending mirrors FindPendingFollowUp's live followup_loop predicate. Caller
+-- passes a BARE prefix.
+SELECT
+    c.id,
+    (c.last_outreach_at IS NOT NULL)::boolean AS has_outreach,
+    (c.last_response_at IS NOT NULL)::boolean AS has_response,
+    EXISTS (
+        SELECT 1 FROM contact_task ct
+        WHERE ct.contact_id = c.id
+          AND ct.lifecycle = 'followup_loop'
+          AND ct.state = 'managed'
+    )::boolean AS has_pending,
+    (
+        c.last_outreach_at IS NULL
+        AND c.last_response_at IS NULL
+        AND NOT EXISTS (
+            SELECT 1 FROM contact_task ct
+            WHERE ct.contact_id = c.id
+              AND ct.lifecycle = 'followup_loop'
+              AND ct.state = 'managed'
+        )
+    )::boolean AS has_none
+FROM contact c
+WHERE c.full_name LIKE @name_prefix || '%'
+  AND c.deleted_at IS NULL;
