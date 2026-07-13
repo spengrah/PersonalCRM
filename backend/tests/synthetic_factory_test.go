@@ -5,10 +5,14 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/matching"
 	"personal-crm/backend/internal/synthetic"
 	"personal-crm/backend/internal/synthetic/factory"
+	"personal-crm/backend/internal/synthetic/replay"
 
+	"github.com/google/uuid"
+	"github.com/gotd/td/tg"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	gmailapi "google.golang.org/api/gmail/v1"
@@ -179,6 +183,84 @@ func TestSyntheticFactory_MatchIntentAddressesDistinctIdentifiers(t *testing.T) 
 	unknownFrom := gmailHeaderValue(unknown.Message, "From")
 	assert.Equal(t, target.Email, seededFrom, "seeded message should come from the target's email")
 	assert.NotEqual(t, target.Email, unknownFrom, "unknown message must not address the seeded contact")
+}
+
+// TestSyntheticFactory_WithOutboundFlipsDirectionMarker asserts WithOutbound()
+// produces each source's OUTBOUND payload marker (the field the real provider reads
+// for direction), leaving the default inbound marker otherwise. This is a
+// payload-marker assertion only — the factories provably never touch the PRNG (only
+// deterministic counters), so there is no stream to preserve; counter-order is
+// guarded by the determinism fingerprint + the LAST-append placement. The adapter
+// wiring (Out → outbound interaction) is covered behaviorally by the mutual-promote
+// gate in the profile coverage tests.
+func TestSyntheticFactory_WithOutboundFlipsDirectionMarker(t *testing.T) {
+	t.Parallel()
+	g := factory.NewGeneratorAt(factory.DefaultSeed, "outbound", fixedAnchor)
+	emailTarget := g.Contact(factory.WithEmail())
+	phoneTarget := g.Contact(factory.WithPhone())
+	tgTarget := g.Contact(factory.WithTelegram())
+	hostID := uuid.New()
+
+	// Gmail: inbound is From=contact + INBOX; outbound swaps to From=account (≠
+	// contact), To=contact, and a SENT label.
+	gmIn := g.GmailMessage(emailTarget, factory.MatchSeeded)
+	assert.Equal(t, emailTarget.Email, gmailHeaderValue(gmIn.Message, "From"), "inbound gmail is from the contact")
+	assert.Equal(t, []string{"INBOX"}, gmIn.Message.LabelIds, "inbound gmail carries the INBOX label")
+	gmOut := g.GmailMessage(emailTarget, factory.MatchSeeded, factory.WithOutbound())
+	assert.NotEqual(t, emailTarget.Email, gmailHeaderValue(gmOut.Message, "From"), "outbound gmail is from the account, not the contact")
+	assert.Equal(t, emailTarget.Email, gmailHeaderValue(gmOut.Message, "To"), "outbound gmail is addressed to the contact")
+	assert.Equal(t, []string{"SENT"}, gmOut.Message.LabelIds, "outbound gmail carries the SENT label (provider derives outbound)")
+
+	// GChat: inbound sender resolves to the contact's email; outbound sets the sender
+	// to the me-user (resolves to the account, ≠ contact) while the contact stays a
+	// resolvable co-member for the outbound fan-out.
+	gcIn := g.GChatMessage(emailTarget, factory.MatchSeeded)
+	assert.Equal(t, emailTarget.Email, gcIn.EmailByUser[gcIn.Message.Sender.Name], "inbound gchat sender is the contact")
+	gcOut := g.GChatMessage(emailTarget, factory.MatchSeeded, factory.WithOutbound())
+	assert.NotEqual(t, emailTarget.Email, gcOut.EmailByUser[gcOut.Message.Sender.Name], "outbound gchat sender is the account, not the contact")
+	assert.Contains(t, gcOut.EmailByUser, gcOut.Message.Sender.Name, "outbound gchat sender must be resolvable")
+	assert.Contains(t, mapStringValues(gcOut.EmailByUser), emailTarget.Email, "the contact stays a resolvable co-member for the outbound fan-out")
+
+	// Telegram: the Out marker the adapter maps to tg.Message.Out, plus the FromID
+	// the adapter sets via SetFromID (so GetFromID round-trips) — the peer for
+	// inbound, self for outbound.
+	tgIn := g.TelegramMessage(tgTarget, factory.MatchSeeded)
+	assert.False(t, tgIn.Out, "inbound telegram is incoming")
+	_, inUpdate := replay.BuildPrivateUpdate(tgIn)
+	inMsg := inUpdate.Message.(*tg.Message)
+	assert.False(t, inMsg.Out)
+	inFrom, inOK := inMsg.GetFromID()
+	require.True(t, inOK, "inbound telegram FromID must round-trip via GetFromID (SetFromID sets the flag bit)")
+	assert.Equal(t, &tg.PeerUser{UserID: tgIn.PeerUserID}, inFrom, "inbound telegram is from the peer")
+
+	tgOut := g.TelegramMessage(tgTarget, factory.MatchSeeded, factory.WithOutbound())
+	assert.True(t, tgOut.Out, "outbound telegram sets Out")
+	_, outUpdate := replay.BuildPrivateUpdate(tgOut)
+	outMsg := outUpdate.Message.(*tg.Message)
+	assert.True(t, outMsg.Out)
+	outFrom, outOK := outMsg.GetFromID()
+	require.True(t, outOK, "outbound telegram FromID must round-trip via GetFromID (SetFromID sets the flag bit)")
+	outPeer, isUser := outFrom.(*tg.PeerUser)
+	require.True(t, isUser, "outbound telegram FromID must be a user peer")
+	assert.NotEqual(t, tgOut.PeerUserID, outPeer.UserID, "outbound telegram FromID is self, not the peer")
+
+	// iMessage: the envelope kind (received vs sent) the inline handler reads.
+	imIn, err := g.IMessage(phoneTarget, factory.MatchSeeded, hostID)
+	require.NoError(t, err)
+	assert.Equal(t, events.KindRawMessageReceived, imIn.Envelope.Kind, "inbound imessage is raw_message.received")
+	imOut, err := g.IMessage(phoneTarget, factory.MatchSeeded, hostID, factory.WithOutbound())
+	require.NoError(t, err)
+	assert.Equal(t, events.KindRawMessageSent, imOut.Envelope.Kind, "outbound imessage is raw_message.sent")
+}
+
+// mapStringValues returns the values of a string→string map (test helper — the
+// stdlib maps.Values returns an iterator, not a slice, in this Go version).
+func mapStringValues(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for _, v := range m {
+		out = append(out, v)
+	}
+	return out
 }
 
 // gmailHeaderValue returns the value of the named header on a gmail message.

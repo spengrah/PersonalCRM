@@ -55,18 +55,7 @@ func (h *Harness) ReplayTelegram(ctx context.Context, contactID uuid.UUID, spec 
 	// Track this peer for cleanup (by-peer telegram_message delete).
 	h.track(func(c *created) { c.addTelegramPeer(spec.PeerUserID) })
 
-	username := spec.PeerUsername
-	user := &tg.User{ID: spec.PeerUserID, Username: username, FirstName: "Synth"}
-	entities := tg.Entities{Users: map[int64]*tg.User{spec.PeerUserID: user}}
-	msg := &tg.Message{
-		ID:      int(spec.TelegramMessageID),
-		Message: spec.Text,
-		Out:     false, // inbound
-		Date:    int(spec.SentAt.Unix()),
-		PeerID:  &tg.PeerUser{UserID: spec.PeerUserID},
-		FromID:  &tg.PeerUser{UserID: spec.PeerUserID},
-	}
-	update := &tg.UpdateNewMessage{Message: msg}
+	entities, update := BuildPrivateUpdate(spec)
 
 	if err := handler.HandleNewMessage(ctx, entities, update); err != nil {
 		return TelegramResult{}, fmt.Errorf("telegram handle message: %w", err)
@@ -91,4 +80,31 @@ func (h *Harness) ReplayTelegram(ctx context.Context, contactID uuid.UUID, spec 
 		return TelegramResult{}, err
 	}
 	return TelegramResult{ContactID: contactID, PeerUserID: spec.PeerUserID, Matched: true}, nil
+}
+
+// BuildPrivateUpdate constructs the *tg.UpdateNewMessage + tg.Entities the private
+// path reads: a *tg.PeerUser message whose PeerID is the peer (from which
+// ParseMessage derives PeerUserID regardless of direction) and whose FromID is the
+// sender — the peer for inbound, self (telegramSelfUserID) for outbound, so
+// IsOutgoing=msg.Out reads the direction while peer matching still resolves the
+// contact via PeerID. Exposed so the factory outbound-marker test can assert the
+// message shape without a DB harness. FromID is set via SetFromID (NOT a bare
+// struct-field assignment): SetFromID sets the flag bit GetFromID checks (see
+// buildGroupUpdate), so a reader using the getter actually sees it.
+func BuildPrivateUpdate(spec factory.TelegramMessageSpec) (tg.Entities, *tg.UpdateNewMessage) {
+	user := &tg.User{ID: spec.PeerUserID, Username: spec.PeerUsername, FirstName: "Synth"}
+	entities := tg.Entities{Users: map[int64]*tg.User{spec.PeerUserID: user}}
+	fromID := &tg.PeerUser{UserID: spec.PeerUserID}
+	if spec.Out {
+		fromID = &tg.PeerUser{UserID: telegramSelfUserID}
+	}
+	msg := &tg.Message{
+		ID:      int(spec.TelegramMessageID),
+		Message: spec.Text,
+		Out:     spec.Out,
+		Date:    int(spec.SentAt.Unix()),
+		PeerID:  &tg.PeerUser{UserID: spec.PeerUserID},
+	}
+	msg.SetFromID(fromID)
+	return entities, &tg.UpdateNewMessage{Message: msg}
 }

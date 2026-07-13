@@ -30,6 +30,12 @@ type messageConfig struct {
 	// offset (e.g. Gmail's −2h). Zero leaves the default (the most-recent message);
 	// growing it across a replay loop spreads older interactions back over time.
 	age time.Duration
+	// outbound flips the message's direction marker so the real provider derives an
+	// OUTBOUND (I-sent-it) interaction instead of the default inbound. Each factory
+	// applies it to whichever field the provider reads for direction (Gmail From/
+	// LabelIds, GChat Sender, Telegram Out, iMessage kind). Direction is computed
+	// provider-side, so this is purely a payload-shape change — no PRNG draw.
+	outbound bool
 }
 
 // WithMessageAge shifts a source message's timestamp further back by age, added
@@ -44,6 +50,18 @@ func WithMessageAge(age time.Duration) MessageOption {
 			age = 0
 		}
 		c.age = age
+	}
+}
+
+// WithOutbound marks a source message as OUTBOUND (sent by the account) rather
+// than the default inbound. The provider derives direction from the payload, so
+// each factory flips the field the provider reads: Gmail swaps From/To + the
+// INBOX→SENT label, GChat sets the sender to the me-user, Telegram sets the Out
+// flag, iMessage marshals the raw_message.sent kind. Counter-neutral (draws the
+// identical deterministic counters as inbound; no PRNG).
+func WithOutbound() MessageOption {
+	return func(c *messageConfig) {
+		c.outbound = true
 	}
 }
 
@@ -68,21 +86,31 @@ type GmailMessageSpec struct {
 	Intent     MatchIntent
 }
 
-// GmailMessage builds an inbound email from the target contact (MatchSeeded) or
-// from an unknown correspondent (MatchUnknown → match-only: no contact, no
-// interaction). SentAt is anchored before now − safety lag so the Gmail cursor
-// window includes it.
+// GmailMessage builds an email between the account and the target contact
+// (MatchSeeded) or an unknown correspondent (MatchUnknown → match-only: no
+// contact, no interaction). Inbound by default (From=contact); WithOutbound()
+// flips it to a sent message (From=account, SENT label). SentAt is anchored
+// before now − safety lag so the Gmail cursor window includes it.
 func (g *Generator) GmailMessage(target ContactSpec, intent MatchIntent, opts ...MessageOption) GmailMessageSpec {
 	mo := applyMessageOptions(opts)
 	account := g.accountEmail()
-	from := target.Email
+	peer := target.Email
 	if intent == MatchUnknown {
-		from = g.unknownEmail()
+		peer = g.unknownEmail()
 	}
-	if from == "" {
+	if peer == "" {
 		// Target has no email (e.g. phone-only contact) — fall back to an
 		// addressable synthetic email so the message is well-formed.
-		from = g.unknownEmail()
+		peer = g.unknownEmail()
+	}
+	// The provider derives direction from whether From ∈ meSet: inbound is
+	// From=peer/To=account with an INBOX label; outbound swaps them and carries a
+	// SENT label instead.
+	from, to := peer, account
+	label := "INBOX"
+	if mo.outbound {
+		from, to = account, peer
+		label = "SENT"
 	}
 	externalID := fmt.Sprintf("<%sgmail-%d@synthetic.example>", g.Prefix(), g.bumpSourceSeq())
 	// 2h before now − safety lag (anchor-relative) so it is inside the scanned,
@@ -95,12 +123,12 @@ func (g *Generator) GmailMessage(target ContactSpec, intent MatchIntent, opts ..
 		ThreadId:     g.Prefix() + "thr-" + fmt.Sprint(g.sourceIDSeq),
 		InternalDate: sentAt.UnixMilli(),
 		Snippet:      "synthetic snippet",
-		LabelIds:     []string{"INBOX"},
+		LabelIds:     []string{label},
 		Payload: &gmailapi.MessagePart{
 			MimeType: "text/plain",
 			Headers: []*gmailapi.MessagePartHeader{
 				{Name: "From", Value: from},
-				{Name: "To", Value: account},
+				{Name: "To", Value: to},
 				{Name: "Subject", Value: "synthetic subject"},
 				{Name: "Message-ID", Value: externalID},
 			},
@@ -132,9 +160,12 @@ type GChatMessageSpec struct {
 	Intent      MatchIntent
 }
 
-// GChatMessage builds an inbound chat message from the target contact
-// (MatchSeeded) or an unknown sender (MatchUnknown → match-only: no row, no
-// interaction, no contact). Anchor-relative create time.
+// GChatMessage builds a chat message in a space the account and the target
+// contact both belong to (MatchSeeded) or with an unknown sender (MatchUnknown →
+// match-only: no row, no interaction, no contact). Inbound by default (the
+// contact is the sender); WithOutbound() sets the sender to the me-user, so the
+// provider derives OUTBOUND and fans the message out to the contact co-member.
+// Anchor-relative create time.
 func (g *Generator) GChatMessage(target ContactSpec, intent MatchIntent, opts ...MessageOption) GChatMessageSpec {
 	mo := applyMessageOptions(opts)
 	account := g.accountEmail()
@@ -152,6 +183,14 @@ func (g *Generator) GChatMessage(target ContactSpec, intent MatchIntent, opts ..
 		senderEmail = g.unknownEmail()
 	}
 
+	// The message sender is the contact (inbound) by default; outbound makes the
+	// account the sender while the contact stays a JOINED co-member, so the
+	// provider's outbound fan-out matches the contact (see gchat classifyMessage).
+	messageSender := senderUser
+	if mo.outbound {
+		messageSender = meUser
+	}
+
 	return GChatMessageSpec{
 		AccountID: account,
 		SpaceName: spaceName,
@@ -162,7 +201,7 @@ func (g *Generator) GChatMessage(target ContactSpec, intent MatchIntent, opts ..
 		},
 		Message: &chat.Message{
 			Name:       msgName,
-			Sender:     &chat.User{Name: senderUser, Type: "HUMAN"},
+			Sender:     &chat.User{Name: messageSender, Type: "HUMAN"},
 			Text:       "synthetic chat message",
 			CreateTime: createTime.UTC().Format(time.RFC3339Nano),
 		},
@@ -235,15 +274,21 @@ type TelegramMessageSpec struct {
 	Text              string
 	SentAt            time.Time
 	Intent            MatchIntent
+	// Out marks the message as OUTGOING (sent by the account). The replay adapter
+	// maps it to tg.Message.Out, from which the provider derives the outbound
+	// direction; for outbound it also sets FromID to self while PeerID stays the
+	// peer, so peer matching still resolves the contact.
+	Out bool
 	// MatchHandle is the telegram handle to register as the seeded contact's
 	// method (MatchSeeded). Empty for MatchUnknown.
 	MatchHandle string
 }
 
-// TelegramMessage builds a private inbound message from the target contact
-// (MatchSeeded → matched interaction; requires the target has a telegram method)
-// or an unknown peer (MatchUnknown → telegram_message.matched_contact_id IS NULL
-// + discovery candidate). PeerUserID/TelegramMessageID come from this namespace's
+// TelegramMessage builds a private message with the target contact (MatchSeeded →
+// matched interaction; requires the target has a telegram method) or an unknown
+// peer (MatchUnknown → telegram_message.matched_contact_id IS NULL + discovery
+// candidate). Inbound by default; WithOutbound() sets Out so the adapter drives an
+// outgoing message. PeerUserID/TelegramMessageID come from this namespace's
 // reserved numeric sub-blocks.
 func (g *Generator) TelegramMessage(target ContactSpec, intent MatchIntent, opts ...MessageOption) TelegramMessageSpec {
 	mo := applyMessageOptions(opts)
@@ -270,6 +315,7 @@ func (g *Generator) TelegramMessage(target ContactSpec, intent MatchIntent, opts
 		Text:              "synthetic telegram message",
 		SentAt:            sentAt,
 		Intent:            intent,
+		Out:               mo.outbound,
 		MatchHandle:       handle,
 	}
 }
@@ -356,11 +402,13 @@ type IMessageSpec struct {
 	Intent   MatchIntent
 }
 
-// IMessage builds a raw_message.received envelope from the target contact's
-// phone (MatchSeeded → matched interaction) or an unknown handle (MatchUnknown →
-// messages_message.matched_contact_id IS NULL). hostID is the revoked synthetic
-// mac host the harness seeded (the payload's HostID field; the host-only kind
-// allowlist requires a non-nil host).
+// IMessage builds a raw_message envelope for the target contact's phone
+// (MatchSeeded → matched interaction) or an unknown handle (MatchUnknown →
+// messages_message.matched_contact_id IS NULL). Received by default; WithOutbound()
+// marshals the raw_message.sent kind + payload so the inline ingest handler sets
+// IsOutgoing and the derived interaction is outbound. hostID is the revoked
+// synthetic mac host the harness seeded (the payload's HostID field; the host-only
+// kind allowlist requires a non-nil host).
 func (g *Generator) IMessage(target ContactSpec, intent MatchIntent, hostID uuid.UUID, opts ...MessageOption) (IMessageSpec, error) {
 	mo := applyMessageOptions(opts)
 	seq := g.bumpSourceSeq()
@@ -384,7 +432,19 @@ func (g *Generator) IMessage(target ContactSpec, intent MatchIntent, hostID uuid
 		IsGroup:     false,
 		SentAt:      sentAt,
 	}
-	raw, err := events.Marshal(events.KindRawMessageReceived, payload)
+	// events.Marshal enforces the exact payload type per kind, so an outbound
+	// message MUST switch to the RawMessageSentPayload alias, not just flip the
+	// kind. Both kinds share the same field shape (the alias is a defined type over
+	// RawMessageReceivedPayload).
+	kind := events.KindRawMessageReceived
+	var raw []byte
+	var err error
+	if mo.outbound {
+		kind = events.KindRawMessageSent
+		raw, err = events.Marshal(kind, events.RawMessageSentPayload(payload))
+	} else {
+		raw, err = events.Marshal(kind, payload)
+	}
 	if err != nil {
 		return IMessageSpec{}, fmt.Errorf("marshal raw_message payload: %w", err)
 	}
@@ -392,7 +452,7 @@ func (g *Generator) IMessage(target ContactSpec, intent MatchIntent, hostID uuid
 		Envelope: &events.Envelope{
 			Source:     "messages",
 			SourceID:   guid,
-			Kind:       events.KindRawMessageReceived,
+			Kind:       kind,
 			Payload:    raw,
 			ObservedAt: sentAt,
 		},

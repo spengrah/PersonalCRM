@@ -855,6 +855,71 @@ func (r *SyntheticSupportRepository) ListCadenceActivityFlagsByNamePrefix(ctx co
 	return out, nil
 }
 
+// IncoherentOutreachCountByNamePrefix returns the number of the namespace's contacts
+// whose last_outreach_at is set but not backed by a live outbound/mutual interaction
+// at the same occurred_at. Coherence gate (F4, d); asserted == 0. Test only.
+func (r *SyntheticSupportRepository) IncoherentOutreachCountByNamePrefix(ctx context.Context, namePrefix string) (int64, error) {
+	return r.queries.TestCountIncoherentOutreachByNamePrefix(ctx, pgtype.Text{String: namePrefix, Valid: true})
+}
+
+// NonInboundMessageInteractionCountBySourceByNamePrefix returns the number of live
+// outbound/mutual interactions of one message source on the namespace's contacts.
+// Coherence gate (F4, d-positive); the test asserts >= 1 for each of the four message
+// sources (email/telegram/gchat/messages). Test only.
+func (r *SyntheticSupportRepository) NonInboundMessageInteractionCountBySourceByNamePrefix(ctx context.Context, namePrefix, source string) (int64, error) {
+	return r.queries.TestCountNonInboundMessageInteractionsBySourceByNamePrefix(ctx, db.TestCountNonInboundMessageInteractionsBySourceByNamePrefixParams{
+		NamePrefix: pgtype.Text{String: namePrefix, Valid: true},
+		Source:     source,
+	})
+}
+
+// InteractionDirectionCountsForContact returns the per-direction live-interaction
+// counts for one contact + source as a direction→count map, so the coverage check
+// can assert the telegram-mutual contact's messages collapsed into exactly one mutual
+// row (proving the promote fired, not mere coexistence). Coherence gate (F4,
+// d-mutual-verify). Test only.
+func (r *SyntheticSupportRepository) InteractionDirectionCountsForContact(ctx context.Context, contactID uuid.UUID, source string) (map[string]int64, error) {
+	rows, err := r.queries.TestListInteractionDirectionCountsForContact(ctx, db.TestListInteractionDirectionCountsForContactParams{
+		ContactID: uuidToPgUUID(contactID),
+		Source:    source,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]int64, len(rows))
+	for _, row := range rows {
+		out[row.Direction] = row.N
+	}
+	return out, nil
+}
+
+// ContactCadenceTimestamps is the four-column cadence-timestamp projection of a
+// contact used by the F4 mutual-verify gate to assert the promoted mutual set them
+// all together.
+type ContactCadenceTimestamps struct {
+	LastContacted     *time.Time
+	LastInteractionAt *time.Time
+	LastOutreachAt    *time.Time
+	LastResponseAt    *time.Time
+}
+
+// ContactCadenceTimestampsForContact returns one contact's four cadence timestamp
+// columns so the coverage check can assert the reply-bridged mutual set
+// last_contacted / last_interaction_at / last_outreach_at / last_response_at all
+// non-null and equal. Coherence gate (F4, d-mutual-verify). Test only.
+func (r *SyntheticSupportRepository) ContactCadenceTimestampsForContact(ctx context.Context, contactID uuid.UUID) (*ContactCadenceTimestamps, error) {
+	row, err := r.queries.TestGetContactCadenceTimestampsForContact(ctx, uuidToPgUUID(contactID))
+	if err != nil {
+		return nil, err
+	}
+	return &ContactCadenceTimestamps{
+		LastContacted:     pgTimestamptzToTimePtr(row.LastContacted),
+		LastInteractionAt: pgTimestamptzToTimePtr(row.LastInteractionAt),
+		LastOutreachAt:    pgTimestamptzToTimePtr(row.LastOutreachAt),
+		LastResponseAt:    pgTimestamptzToTimePtr(row.LastResponseAt),
+	}, nil
+}
+
 // InteractionSpread is the per-contact interaction-history projection of a seeded
 // contact (profile coverage test only): how many interactions it carries and the
 // span between its earliest and latest one.

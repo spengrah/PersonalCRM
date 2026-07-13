@@ -1289,3 +1289,64 @@ SELECT
 FROM contact c
 WHERE c.full_name LIKE @name_prefix || '%'
   AND c.deleted_at IS NULL;
+
+-- name: TestCountIncoherentOutreachByNamePrefix :one
+-- Coherence gate (F4, d): count the namespace's contacts whose last_outreach_at is
+-- set but NOT backed by a live outbound/mutual interaction at that exact
+-- occurred_at. Asserted == 0. last_outreach_at is sole-written by the cadence
+-- updater from an outbound/mutual interaction (CAD-006), so a moved value with no
+-- backing outbound/mutual row is a production-impossible seed shape. Caller passes
+-- a BARE prefix.
+SELECT COUNT(*)
+FROM contact c
+WHERE c.full_name LIKE @name_prefix || '%'
+  AND c.deleted_at IS NULL
+  AND c.last_outreach_at IS NOT NULL
+  AND NOT EXISTS (
+        SELECT 1 FROM interaction i
+        WHERE i.contact_id = c.id
+          AND i.deleted_at IS NULL
+          AND i.direction IN ('outbound', 'mutual')
+          AND i.occurred_at = c.last_outreach_at
+      );
+
+-- name: TestCountNonInboundMessageInteractionsBySourceByNamePrefix :one
+-- Coherence gate (F4, d-positive): count the LIVE outbound-or-mutual interactions of
+-- ONE message source on the namespace's contacts. F4 measured 0 for EACH of the four
+-- message sources (email/telegram/gchat/messages), so the test calls this once per
+-- source and asserts >= 1 for every one. The allowlist is hardcoded in the test and
+-- deliberately EXCLUDES gcal (the awaiting-reply GCal event is already mutual, so
+-- including it would let the assertion pass without exercising any message-source
+-- direction). Caller passes a BARE prefix + the source.
+SELECT COUNT(*)
+FROM interaction i
+JOIN contact c ON i.contact_id = c.id
+WHERE c.full_name LIKE @name_prefix || '%'
+  AND c.deleted_at IS NULL
+  AND i.deleted_at IS NULL
+  AND i.source = @source
+  AND i.direction IN ('outbound', 'mutual');
+
+-- name: TestListInteractionDirectionCountsForContact :many
+-- Coherence gate (F4, d-mutual-verify): for one contact + source, return (direction,
+-- count) over live interactions, so the test can assert the telegram-mutual contact's
+-- two seeded messages COLLAPSED into a single promoted mutual row — proving
+-- PromoteInteractionToMutualTx ran, not that an outbound and an inbound merely coexist
+-- as two rows. A mis-set bridge window (2 rows, or an un-promoted outbound) fails
+-- loudly.
+SELECT i.direction, COUNT(*) AS n
+FROM interaction i
+WHERE i.contact_id = @contact_id
+  AND i.source = @source
+  AND i.deleted_at IS NULL
+GROUP BY i.direction;
+
+-- name: TestGetContactCadenceTimestampsForContact :one
+-- Coherence gate (F4, d-mutual-verify timestamps): return one contact's four cadence
+-- timestamp columns so the test can assert the promoted mutual set them all together
+-- (mutual writes last_contacted / last_interaction_at / last_outreach_at /
+-- last_response_at to the same replyAt). Covers last_response_at, which the
+-- direction-count query alone does not prove.
+SELECT last_contacted, last_interaction_at, last_outreach_at, last_response_at
+FROM contact
+WHERE id = @contact_id;
