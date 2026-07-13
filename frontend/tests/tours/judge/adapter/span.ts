@@ -26,6 +26,22 @@ export interface SpanParams {
   finishReasons?: string[]
   toolRejected?: boolean
   error?: string
+  // --- Content (prompt / response / screenshots) ---
+  //
+  // Deliberately OPT-IN AT THE CALL SITE, never from an env default. Whether a
+  // span may carry content is a property of the DATA, and only the caller knows
+  // its provenance: the QA judge grades a provably-synthetic corpus, so it passes
+  // content in full. A future extraction judge (#379) grades REAL message content
+  // and must pass none of these — its traces carry outputs, tokens, and id
+  // references only. Defaulting content on (or gating it on an env var someone
+  // forgets to set) would put real content on a rented VPS.
+  //
+  // A metrics-only span is also an UNLABELABLE span: a reviewer opening the
+  // annotation queue has nothing to read. That is why the QA path logs content —
+  // you cannot label what you didn't log.
+  prompt?: string
+  response?: string
+  screenshots?: string[] // absolute paths; the exporter uploads them as media
 }
 
 // 16 random hex bytes (trace id) / 8 (span id).
@@ -54,6 +70,13 @@ export function buildGenAiSpan(p: SpanParams): GenAiSpan {
   if (p.inputTokens !== undefined) attributes['gen_ai.usage.input_tokens'] = p.inputTokens
   if (p.outputTokens !== undefined) attributes['gen_ai.usage.output_tokens'] = p.outputTokens
   if (p.finishReasons !== undefined) attributes['gen_ai.response.finish_reasons'] = p.finishReasons
+  // Content, when the caller supplied it (see SpanParams). gen_ai.prompt /
+  // gen_ai.completion are the conventional content attributes every OTLP backend
+  // recognizes; screenshots stay a harness-namespaced path list because OTLP has
+  // no media channel — the exporter resolves them against its backend's object store.
+  if (p.prompt !== undefined) attributes['gen_ai.prompt'] = p.prompt
+  if (p.response !== undefined) attributes['gen_ai.completion'] = p.response
+  if (p.screenshots?.length) attributes['qa.screenshots'] = p.screenshots
 
   return {
     name: `chat ${model}`,

@@ -36,6 +36,10 @@ test('cadence-followup tour — contact-detail cadence surfaces', async ({ page,
   }
   const outreachContact = pick(c => !!c.last_outreach_at, 'last_outreach_at (CAD-029[0])')
   const responseContact = pick(c => !!c.last_response_at, 'last_response_at (CAD-029[1])')
+  // Fails loudly rather than skipping: a world with no live follow-up is a SEED bug (the
+  // prod-shaped profile seeds one), and silently touring without this state is what
+  // produced the false CAD-036 regression in the first place.
+  const pendingContact = pick(c => !!c.has_pending_followup, 'has_pending_followup (CAD-029[2])')
   const noneContact = pick(
     c => !c.last_outreach_at && !c.last_response_at && !c.has_pending_followup,
     'no recent-activity signals (CAD-029[3])'
@@ -63,6 +67,22 @@ test('cadence-followup tour — contact-detail cadence surfaces', async ({ page,
     behaviors: ['CAD-029'],
     note: 'recent activity: last-response state',
     pair: { id: 'activity', role: 'activity-response' },
+  })
+
+  // --- CAD-029[2]: pending-reply ("Awaiting reply") state ---
+  // The state the judge could never see. It is unreachable from a historical replay
+  // (FollowUpManager is off-mode in the seed harness, and CAD-012 suppresses follow-ups
+  // for backdated automated outbounds), so the prod-shaped profile now seeds one live
+  // follow-up explicitly. Without this capture the judge sees only contact pages with no
+  // "Awaiting reply" marker and concludes the FEATURE DOES NOT EXIST — a confident,
+  // well-cited, false CAD-036 regression. Absence of evidence is not evidence of absence,
+  // and the judge cannot tell the difference; only the capture can.
+  await gotoDetail(pendingContact.id)
+  await page.getByText('Awaiting reply').waitFor({ state: 'visible' })
+  await tour.capture(page, {
+    behaviors: ['CAD-029'],
+    note: 'recent activity: pending-reply state (awaiting reply on an outbound)',
+    pair: { id: 'activity', role: 'activity-pending' },
   })
 
   // --- CAD-029[3]: no-recent-activity state ---

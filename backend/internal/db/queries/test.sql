@@ -321,6 +321,23 @@ WHERE c.full_name LIKE @name_prefix || '%'
   AND ct.state = @state
   AND c.deleted_at IS NULL;
 
+-- name: SyntheticCountLiveFollowUpsByNamePrefix :one
+-- Profile coverage test only: count LIVE follow-up loops (the "awaiting reply" state
+-- behind has_pending_followup) on ns-prefixed contacts. Mirrors FindPendingFollowUp's
+-- predicate exactly — lifecycle 'followup_loop' AND state IN ('managed',
+-- 'pending_remote_create') — so the coverage check asserts the same state the API
+-- surfaces, not a lookalike. Guards a real regression: with zero such rows the state is
+-- absent from the seeded world, the tours cannot capture it, and the agentic judge reads
+-- that absence as a missing feature. contact_task has no deleted_at; the contact
+-- soft-delete filter scopes to live catalog contacts. Caller passes a BARE prefix.
+SELECT COUNT(*)
+FROM contact_task ct
+JOIN contact c ON ct.contact_id = c.id
+WHERE c.full_name LIKE @name_prefix || '%'
+  AND ct.lifecycle = 'followup_loop'
+  AND ct.state IN ('managed', 'pending_remote_create')
+  AND c.deleted_at IS NULL;
+
 -- name: SyntheticDeleteContactMethodsByContactIds :execrows
 -- Cleanup step 11: contact_method by contact.
 DELETE FROM contact_method WHERE contact_id = ANY(@contact_ids::uuid[]);

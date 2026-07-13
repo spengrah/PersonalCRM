@@ -290,6 +290,9 @@ qa-eval: ## Run the agentic UX QA hybrid grader over the seed corpus (verifiers-
 qa-report: ## Render the advisory report over a tours run dir (RUNDIR relative to frontend/, or absolute). JUDGE=1 adds the live judge over residue items (codex quota); OUT=<file> writes to a file instead of stdout.
 	@cd frontend && bun run tests/tours/judge/report/render.ts "$(RUNDIR)" $(if $(OUT),"$(OUT)",) $(if $(filter 1,$(JUDGE)),--judge,)
 
+qa-export: ## Ship a judge run's GenAI spans (TRACE=<trace.jsonl>, written when the judge runs with QA_JUDGE_TRACE set) to Langfuse, screenshots included. No-op without LANGFUSE_HOST/PUBLIC_KEY/SECRET_KEY.
+	@cd frontend && bun run tests/tours/judge/export/run.ts "$(TRACE)"
+
 # Native PostgreSQL (for containerized development without Docker-in-Docker)
 # Symlink the main checkout's gitignored env files (.env, frontend/.env.local,
 # ...) into the current worktree. Normally automatic via the post-checkout git

@@ -436,3 +436,11 @@ behaviors:
     status: current
     statement: managing a linked task from the CRM never silently mutates or destroys the user's task in the remote app — remote state changes only where the user expects them to happen
     provenance: ['.ai/spec/2026-07-10-ssot-intent-layer-and-judged-ux-goals-design.md']
+
+  - id: CAD-038
+    title: The relationship loop closes — notice, act, and the app remembers
+    type: intent
+    status: current
+    statement: a user who opens the app to find out who they are losing touch with can go from that signal to having acted, in one continuous pass — the contact they are sent to answers where the relationship stands, the action they take is acknowledged where they take it, and the surface that sent them reflects it when they come back; at no point do they lose their place, have to re-derive context the app already showed them, or have to guess whether the action landed
+    notes: The app's core value loop, judged end to end as one journey rather than as three independent surfaces. Evidence comes from relationship-loop.tour.ts, which walks dashboard → contact detail → log-interaction → back in a SINGLE tour (entity identity is only coherent within one tour, so a journey split across tours would show the judge the same contact under two pseudonyms). This intent carries NO serving behaviors on purpose — a journey binds its evidence by direct capture tag, because serves edges would also pull in the per-surface tours' captures and evict the journey's own under the capture cap. Frontend-surface scope only; the integration/sync half of the loop is deliberately out of scope.
+    provenance: ['.ai/spec/2026-07-12-qa-architecture-restructuring.md']

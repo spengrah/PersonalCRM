@@ -3,13 +3,22 @@ package replay
 import (
 	"context"
 	"fmt"
+	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
+	"personal-crm/backend/internal/contacttask"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/todoist"
 
 	"github.com/google/uuid"
 )
+
+// followUpSeedWindow puts the seeded follow-up's deadline in the near future, so
+// the row reads as a live, not-yet-breached loop (the production deadline is a
+// cadence-scaled window from the outbound — CAD-011). Read off the accelerated
+// clock, never the wall clock.
+const followUpSeedWindow = 3 * 24 * time.Hour
 
 // TodoistResult is the settled outcome of a Todoist replay.
 type TodoistResult struct {
@@ -184,4 +193,45 @@ func (h *Harness) TransitionTodoistCadenceTaskState(ctx context.Context, contact
 		return uuid.Nil, fmt.Errorf("transition contact_task %s to %s: %w", task.ID, state, err)
 	}
 	return updated.ID, nil
+}
+
+// SeedPendingFollowUp gives a contact a LIVE follow-up loop — the "awaiting reply"
+// state (`has_pending_followup`, CAD-029/CAD-036).
+//
+// Why this is seeded directly instead of driven through the production path: a
+// follow-up is normally opened by the FollowUpManager consumer on an outbound
+// interaction (CAD-011), but the seed harness wires that consumer in
+// FollowUpModeOff (harness_setup.go) — and even with it on, CAD-012 suppresses
+// follow-ups for backdated automated outbounds, which is every interaction a
+// historical replay produces. So no seeded world could ever contain this state.
+//
+// That was not a cosmetic gap. With zero such contacts in the world, the tours
+// could not capture the state, and the judge — shown only contact pages with no
+// "Awaiting reply" marker — concluded the FEATURE DID NOT EXIST and reported a
+// confident, well-cited, false regression on CAD-036, every run. Absence of
+// evidence is indistinguishable from absence of the feature, and no judge-side
+// rigor can fix that; only the evidence can.
+//
+// The row mirrors the production shape FollowUpManager writes (provider/kind/
+// lifecycle/due_date metadata), settling on `managed` — the steady state after a
+// remote create, and the same state the empty fake-Todoist sync leaves cadence
+// tasks in. Draws NO generator PRNG (it only reads a seeded contact id), so it is
+// safe to run alongside the other non-generator replays without shifting the
+// deterministic id sequence earlier source replays depend on.
+func (h *Harness) SeedPendingFollowUp(ctx context.Context, contactID uuid.UUID) (uuid.UUID, error) {
+	taskRepo := repository.NewContactTaskRepository(h.database.Queries)
+	deadline := accelerated.GetCurrentTime().Add(followUpSeedWindow)
+	task, err := taskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+		ContactID: contactID,
+		Provider:  todoist.SourceName,
+		Kind:      contacttask.KindReachOut,
+		Lifecycle: contacttask.LifecycleFollowUpLoop,
+		State:     string(repository.ContactTaskStateManaged),
+		Metadata:  map[string]any{"due_date": deadline.Format(todoist.DateFormat)},
+	})
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("seed pending follow-up for contact %s: %w", contactID, err)
+	}
+	h.track(func(c *created) { c.addContactTask(task.ID) })
+	return task.ID, nil
 }

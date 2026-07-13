@@ -68,6 +68,12 @@ type ProfileResult struct {
 	// completed/dismissed/unmanaged surface states. The state-transitions do not
 	// change the row count, so this is the total cadence-task population.
 	SeededTasks int
+	// SeededPendingFollowUps counts the LIVE followup_loop rows seeded — the "awaiting
+	// reply" state (has_pending_followup). A seeded world cannot reach this state through
+	// the production path (see the seeding site), so it is written directly; without it the
+	// state is absent from the world entirely, and the agentic judge reads that absence as
+	// a missing feature.
+	SeededPendingFollowUps int
 	// SeededBoolFacts / SeededRelationships / SeededDateFacts count the graph rows
 	// the value-type + edge plumbing seeded: bool facts (job_seeking etc.) on
 	// catalog person nodes, person→person edge assertions among catalog person
@@ -711,6 +717,27 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 			}
 		}
 		res.SeededTasks = len(cadenceBearingCatalogIDs)
+
+		// The "awaiting reply" state (has_pending_followup). NOT reachable through the
+		// production path from a seed: the harness runs FollowUpManager in off-mode, and
+		// CAD-012 suppresses follow-ups for backdated automated outbounds anyway — which is
+		// every interaction a historical replay produces. So no seeded world ever contained
+		// a live follow-up; the tours could not capture the state; and the agentic judge,
+		// shown only contact pages with no "Awaiting reply" marker, concluded the FEATURE
+		// DID NOT EXIST and reported a false CAD-036 regression — every run.
+		//
+		// Seeded on the LAST cadence-bearing contact so it cannot collide with the
+		// state-transition slots above (which take the first len(nonManagedTaskStates)).
+		// Draws no generator PRNG, so it does not shift the deterministic id sequence the
+		// earlier source replays depend on.
+		if followUpIdx := len(cadenceBearingCatalogIDs) - 1; followUpIdx >= len(nonManagedTaskStates) {
+			if _, err := h.SeedPendingFollowUp(ctx, cadenceBearingCatalogIDs[followUpIdx]); err != nil {
+				return res, fmt.Errorf("profile %s: seed pending follow-up: %w", params.Profile, err)
+			}
+			// A NEW row, unlike the state transitions above (which only flip existing ones).
+			res.SeededTasks++
+			res.SeededPendingFollowUps = 1
+		}
 	}
 
 	// Merge + soft-delete scenarios. Seeded LAST: each draws gen.Contact (name PRNG)

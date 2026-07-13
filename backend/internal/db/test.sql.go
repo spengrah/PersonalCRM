@@ -1082,6 +1082,31 @@ func (q *Queries) SyntheticCountLiveAssertionsForSubjects(ctx context.Context, n
 	return count, err
 }
 
+const SyntheticCountLiveFollowUpsByNamePrefix = `-- name: SyntheticCountLiveFollowUpsByNamePrefix :one
+SELECT COUNT(*)
+FROM contact_task ct
+JOIN contact c ON ct.contact_id = c.id
+WHERE c.full_name LIKE $1 || '%'
+  AND ct.lifecycle = 'followup_loop'
+  AND ct.state IN ('managed', 'pending_remote_create')
+  AND c.deleted_at IS NULL
+`
+
+// Profile coverage test only: count LIVE follow-up loops (the "awaiting reply" state
+// behind has_pending_followup) on ns-prefixed contacts. Mirrors FindPendingFollowUp's
+// predicate exactly — lifecycle 'followup_loop' AND state IN ('managed',
+// 'pending_remote_create') — so the coverage check asserts the same state the API
+// surfaces, not a lookalike. Guards a real regression: with zero such rows the state is
+// absent from the seeded world, the tours cannot capture it, and the agentic judge reads
+// that absence as a missing feature. contact_task has no deleted_at; the contact
+// soft-delete filter scopes to live catalog contacts. Caller passes a BARE prefix.
+func (q *Queries) SyntheticCountLiveFollowUpsByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountLiveFollowUpsByNamePrefix, namePrefix)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const SyntheticCountLiveNodesByIds = `-- name: SyntheticCountLiveNodesByIds :one
 SELECT COUNT(*) FROM node WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL
 `
