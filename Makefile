@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev dev-seed staging-reset tours build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast qa-eval qa-report prod staging testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry spec-lint api-types api-types-check
+.PHONY: help setup dev dev-seed staging-reset tours build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast qa-eval qa-report prod staging accelerated testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry spec-lint api-types api-types-check
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -114,7 +114,7 @@ help:
 	@echo ""
 	@echo "Environment Management:"
 	@echo "  testing     - Switch to testing environment (ultra-fast cadences)"
-	@echo "  staging     - Switch to staging environment (fast cadences)" 
+	@echo "  staging     - Switch to staging environment (production cadence durations)" 
 	@echo "  prod        - Switch to production environment (real cadences)"
 	@echo ""
 	@echo "Development:"
@@ -160,7 +160,7 @@ help:
 	@echo ""
 	@echo "Cadence Testing:"
 	@echo "  test-cadence-ultra - Test all cadences in minutes (testing env)"
-	@echo "  test-cadence-fast  - Test all cadences in hours (staging env)"
+	@echo "  test-cadence-fast  - Test all cadences in hours (accelerated env)"
 	@echo ""
 	@echo "Deployment:"
 	@echo "  setup-pi         - One-time Pi setup (create user, directories)"
@@ -681,9 +681,21 @@ testing:
 	@echo "Use 'make test-cadence-ultra' to validate all cadences quickly"
 
 staging:
-	@echo "Switching to STAGING environment (fast cadences)..."
+	@echo "Switching to STAGING environment (production cadence durations)..."
 	@cp .env.example.staging .env
 	@echo "✅ Staging environment active:"
+	@echo "   - Weekly cadence: 7 days"
+	@echo "   - Monthly cadence: 30 days"
+	@echo "   - Quarterly cadence: 90 days"
+	@echo "   - Reminder scheduler: every 5 minutes"
+	@echo "   - External sync scheduler: every hour"
+	@echo ""
+	@echo "Use 'make accelerated' + 'make test-cadence-fast' for hour-scale cadences"
+
+accelerated:
+	@echo "Switching to ACCELERATED environment (fast cadences)..."
+	@cp .env.example.accelerated .env
+	@echo "✅ Accelerated environment active:"
 	@echo "   - Weekly cadence: 10 minutes (1 week = 10 min)"
 	@echo "   - Monthly cadence: 1 hour (1 month = 1 hour)"
 	@echo "   - Quarterly cadence: 3 hours (1 quarter = 3 hours)"
@@ -731,12 +743,12 @@ test-cadence-fast:
 	@echo "🏎️  Starting FAST cadence testing..."
 	@echo "This will test all reminder cadences in hours!"
 	@echo ""
-	@make staging
+	@make accelerated
 	@make docker-up
 	@bash scripts/sync-postgres-auth.sh
 	@make logs
 	@echo "Starting backend with fast cadences..."
-	@set -a && source ./.env && set +a && export DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:$${POSTGRES_PORT:-5432}/$${POSTGRES_DB}?sslmode=disable" && cd backend && nohup go run ./cmd/crm-api > ../logs/backend-staging.log 2>&1 & echo $$! > ../logs/backend-staging.pid && cd ../.. && bash -c "disown %1" 2>/dev/null || true
+	@set -a && source ./.env && set +a && export DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:$${POSTGRES_PORT:-5432}/$${POSTGRES_DB}?sslmode=disable" && cd backend && nohup go run ./cmd/crm-api > ../logs/backend-accelerated.log 2>&1 & echo $$! > ../logs/backend-accelerated.pid && cd ../.. && bash -c "disown %1" 2>/dev/null || true
 	@echo ""
 	@echo "⏱️  CADENCE TIMING (fast):"
 	@echo "   - Weekly: 10 minutes (1 week = 10 min)"
@@ -745,7 +757,7 @@ test-cadence-fast:
 	@echo "   - Reminder scheduler: every 5 minutes"
 	@echo "   - External sync scheduler: every hour"
 	@echo ""
-	@echo "📋 Logs: logs/backend-staging.log"
+	@echo "📋 Logs: logs/backend-accelerated.log"
 	@echo "💡 Perfect for validating 3+ months of cadence behavior in 3 hours!"
 	@echo "💡 Process will continue running after you close this terminal"
 
