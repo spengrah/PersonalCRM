@@ -90,7 +90,7 @@ func (u *KnowledgeCacheUpdater) HandleEvent(ctx context.Context, tx pgx.Tx, env 
 	if err := events.Unmarshal(env, &payload); err != nil {
 		return fmt.Errorf("decode assertion event: %w", err)
 	}
-	if !isCacheCutoverPredicate(payload.PredicateKey) {
+	if !IsCacheCutoverPredicate(payload.PredicateKey) {
 		return nil
 	}
 	return u.RefreshTx(ctx, tx, payload.SubjectNodeID, payload.PredicateKey)
@@ -153,9 +153,11 @@ func (u *KnowledgeCacheUpdater) resolveLivesInLabel(ctx context.Context, tx pgx.
 	return &label, nil
 }
 
-// isCacheCutoverPredicate reports whether a predicate key drives one of the
-// derived contact cache columns.
-func isCacheCutoverPredicate(predicateKey string) bool {
+// IsCacheCutoverPredicate reports whether a predicate key drives one of the
+// derived contact cache columns. Exported so cache-writing callers outside this
+// package (e.g. the synthetic replay harness) gate a RefreshTx on the SAME
+// single source of truth, rather than duplicating the predicate set.
+func IsCacheCutoverPredicate(predicateKey string) bool {
 	switch predicateKey {
 	case repository.PredicateLivesIn, repository.PredicateBirthday, repository.PredicateHowMet:
 		return true
