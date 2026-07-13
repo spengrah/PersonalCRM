@@ -239,6 +239,15 @@ func assertMessageDirectionCoverage(t *testing.T, ctx context.Context, support *
 	require.NoError(t, err)
 	require.Equal(t, int64(0), incoherentOut, "no contact may carry a moved last_outreach_at without a backing outbound/mutual interaction")
 
+	// Gate (d, not-vacuous): the zero-violation check above is only meaningful if the
+	// world actually contains last_outreach_at values. Assert the PURE-OUTBOUND cohort
+	// exists (last_outreach_at set, last_contacted NULL) — the three outbound-only
+	// contacts (gmail/gchat/imessage). Without this a world with no last_outreach_at at
+	// all would satisfy the == 0 gate vacuously.
+	pureOutbound, err := support.PureOutboundContactCountByNamePrefix(ctx, prefix)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, pureOutbound, int64(1), "≥1 pure-outbound contact (last_outreach_at set, last_contacted NULL) — the outbound gate is not vacuous")
+
 	// Gate (d-positive): EACH message source has ≥1 outbound/mutual interaction (the
 	// F4 fix is per-source; every one measured 0 before this).
 	for _, source := range f4MessageSources {
@@ -358,6 +367,24 @@ func TestSyntheticProfile_DevCoversCatalog(t *testing.T) {
 	assertSeedCoherence(t, ctx, support, h.Generator().Prefix())
 	// Two-sided message-direction coverage (F4).
 	assertMessageDirectionCoverage(t, ctx, support, h, res)
+	// Notes coverage (F6).
+	assertNotesCoverage(t, ctx, support, h, res, params.Counts.SeededContacts)
+}
+
+// assertNotesCoverage runs the F6 notes gate: the profile seeds a note on a
+// deterministic fraction (every third catalog contact by index, ⌈n/3⌉ total), so the
+// result count must equal ⌈seededContacts/3⌉ AND the notepad notes must actually be
+// present in the DB for that many contacts (namespace-scoped). Tying the expectation to
+// the catalog size — not a floor — catches a constant-count regression (e.g. "always
+// seed 2") that would leave a prod-shaped catalog near-empty. Called by both coverage
+// tests.
+func assertNotesCoverage(t *testing.T, ctx context.Context, support *repository.SyntheticSupportRepository, h *synthetic.Harness, res synthetic.ProfileResult, seededContacts int) {
+	t.Helper()
+	expectedNotes := (seededContacts + 2) / 3 // ⌈seededContacts/3⌉ (the i%3==0 subset)
+	require.Equal(t, expectedNotes, res.ContactsWithNotes, "notes seeded on ⌈catalog/3⌉ contacts")
+	notepadContacts, err := support.ContactsWithNotepadCountByNamePrefix(ctx, h.Generator().Prefix())
+	require.NoError(t, err)
+	require.Equal(t, int64(res.ContactsWithNotes), notepadContacts, "non-empty notepad notes present in the DB for exactly the seeded contacts")
 }
 
 // TestSyntheticProfile_ProdShapedCoverageCheck is the load-bearing coverage
@@ -481,6 +508,8 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	assertSeedCoherence(t, ctx, support, h.Generator().Prefix())
 	// Two-sided message-direction coverage (F4).
 	assertMessageDirectionCoverage(t, ctx, support, h, res)
+	// Notes coverage (F6).
+	assertNotesCoverage(t, ctx, support, h, res, params.Counts.SeededContacts)
 
 	// Bio facts (how_met, location, real-year birthdays) ride on the contact-create
 	// authority flip; the catalog carries ≥1 of each. A location additionally mints

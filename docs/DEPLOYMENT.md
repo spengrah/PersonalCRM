@@ -141,7 +141,7 @@ ssh <pi-hostname> 'sudo journalctl -u personalcrm-frontend -f'
 - `.env` - Your local development config (gitignored)
 - `.env.example` - Template for new developers
 - `.env.example.testing` - Deterministic values for tests
-- `.env.example.staging` - Fast cadences for staging
+- `.env.example.staging` - Staging config (production cadence semantics)
 - `.env.example.production` - Template for production
 
 ## Pi Prerequisites

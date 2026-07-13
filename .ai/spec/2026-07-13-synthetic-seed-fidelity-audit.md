@@ -64,8 +64,9 @@ Contact soft-delete does NOT cascade in production (`service/contact.go:552-577`
 2. **PR: follow-up row shape** (F3) — small; full prod metadata + synthetic alphanumeric external id in `SeedPendingFollowUp`.
 3. **Decision: staging cadence scale** (F2) — environment design question, decide before or alongside PR 1 (the overdue cohort's shape depends on which durations staging runs).
 4. **PR: outbound/mutual message variants** (F4) — factory + adapter work per source.
-5. **PR: sync-state persistence + notes coverage** (F5, F6) — both small seeding additions.
-6. **Backlog:** F7 (pair with any future cadence-due UI or API-level judging), F8 (pair with SP1 UI), F9 (expand per-tour).
+5. **PR: notes coverage** (F6) — small seeding addition (seed notes on a realistic fraction of catalog contacts).
+6. **Deferred to its own issue: sync-state persistence** (F5) — NOT a small seeding addition after review. The fake-fetcher seed has no safe cause to produce `external_sync_state`: its only visible value is the Settings "connected" badge, which is gated behind `oauth_credential` accounts, and seeding fake OAuth is actively harmful (Todoist Settings decrypts the token + calls the Todoist API on page load; the live staging scheduler enqueues enabled sync-state rows once due, fails on the fake credentials, and flips them to `status='error'`; Google badges also require exact per-source scopes). Seeding `external_sync_state` *without* OAuth is scheduler-benign but delivers no visible value (badges need OAuth; the global staleness banner produces no breaches at 0 rows either way) and creates an orphan sync-state with no backing connected account — the exact incoherence class this audit fights. So **empty `external_sync_state` is the expected, benign state**; delivering "connected + synced" needs real OAuth-account state and a design decision, deferred to its own GH issue (same pattern as F9 → #642).
+7. **Backlog:** F7 (pair with any future cadence-due UI or API-level judging), F8 (pair with SP1 UI), F9 (expand per-tour).
 
 ## Appendix: measurement summary (staging, 2026-07-13, 167 live contacts)
 
