@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
@@ -141,12 +142,16 @@ func TestSyntheticReplay_SeededSenderSettled(t *testing.T) {
 // (provider.Sync → processItem → handleRecurringDetection), not a raw state write.
 // It seeds two cadence-bearing contacts, reconciles both to `managed` via
 // ReplayTodoist, then runs ReplayTodoistRecurringEdit on ONLY the first. The first
-// task must end `unmanaged`; the second — seeded in the same namespace but outside
-// the recurring edit — must stay `managed`, proving the recurring edit transitioned
-// only the item it matched by external id and the namespace-scoped trailing
-// reconcile left the bystander untouched. It also confirms ReplayTodoist's reconcile
-// finalized the temp id into a Todoist-v1 alphanumeric external id (cleared
-// pending_temp_id) — the id the recurring edit must match on.
+// task must end `unmanaged`; the same-namespace second must stay `managed`, proving
+// (a) the recurring edit transitioned only the item it matched by external id, and
+// (b) the trailing reconcile was non-destructive to an untouched managed sibling. It
+// does NOT prove namespace-scoped confinement — the same-namespace bystander is
+// inside the allow-set, so even an unscoped reconcile would leave its already-managed
+// task managed. That confinement property is guarded separately below by a
+// cross-namespace bystander an unscoped reconcile WOULD visibly mutate. It also
+// confirms ReplayTodoist's reconcile finalized the temp id into a Todoist-v1
+// alphanumeric external id (cleared pending_temp_id) — the id the recurring edit
+// must match on.
 func TestReplayTodoistRecurringEdit_UnmanagesViaRealPath(t *testing.T) {
 	testsupport.RequireLongTests(t)
 	database, ctx := newSyntheticDB(t)
@@ -160,6 +165,19 @@ func TestReplayTodoistRecurringEdit_UnmanagesViaRealPath(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = h.ReplayTodoist(ctx, []uuid.UUID{target.ID, bystander.ID})
+	require.NoError(t, err)
+
+	// Cross-namespace confinement guard: seed a reconcile-ELIGIBLE cadence contact in a
+	// SECOND namespace (normal factory + SeedContact populates contact_by), with NO
+	// ReplayTodoist so it has no cadence_due task yet. The recurring edit's trailing Sync
+	// reconciles DB-wide; if the namespace-scoped contact-lister were dropped, that
+	// reconcile would enumerate this contact via ListContactsWithContactBy, find it due
+	// with no task, and CREATE a managed task. Asserting NO task is created is the only
+	// test that catches a regression dropping the scope — a mutation an unscoped run
+	// would perform (unlike the same-namespace bystander, whose already-managed task
+	// stays managed either way).
+	hOther := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+	crossNS, err := hOther.SeedContact(ctx, hOther.Generator().Contact(factory.WithEmail(), factory.WithCadence("weekly")))
 	require.NoError(t, err)
 
 	// Both cadence tasks start managed; the target's temp id is finalized to a
@@ -183,6 +201,86 @@ func TestReplayTodoistRecurringEdit_UnmanagesViaRealPath(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, repository.ContactTaskStateManaged, bystanderTask.State,
 		"bystander cadence task untouched by the scoped recurring-edit reconcile")
+
+	// Confinement: the cross-namespace contact must have NO cadence_due task — the
+	// DB-wide reconcile did not reach it (namespace scoping held). A dropped scope
+	// would have created one.
+	_, err = taskRepo.GetContactTaskByContactCadenceDue(ctx, crossNS.ID, todoist.SourceName)
+	require.ErrorIs(t, err, db.ErrNotFound,
+		"cross-namespace reconcile-eligible contact must get NO task — the scoped reconcile never enumerated it")
+}
+
+// TestReplayAssertion_RefreshesKnowledgeCache proves ReplayAssertion drives the
+// REAL recompute-from-current-accepted cache path (KnowledgeCacheUpdater.RefreshTx
+// in the assert tx), not a nil-only fill or a raw column write. Three cases:
+//   - fresh: a cutover birthday assertion on a no-birthday contact populates the
+//     derived birthday cache to the asserted value;
+//   - supersession: re-asserting a DIFFERENT current birthday recomputes the cache
+//     to the new value (an only-fills-NULL bug would leave it at the first value —
+//     this is the exact F8 defect class, a cache that must track the current-accepted
+//     assertion, not a one-time write);
+//   - control: a non-cutover text fact returns no error and writes NO cache column,
+//     guarding that a non-cutover predicate never reaches RefreshTx (which errors).
+//
+// Serial (no t.Parallel) to match every sibling in this file — the harness runs a
+// live River client, so DB-wide river_job contention argues against parallelism.
+func TestReplayAssertion_RefreshesKnowledgeCache(t *testing.T) {
+	testsupport.RequireLongTests(t)
+	database, ctx := newSyntheticDB(t)
+
+	h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+	gen := h.Generator()
+	anchor := gen.Anchor()
+
+	// Fresh: a no-birthday contact receives a cutover birthday assertion; its derived
+	// birthday cache must populate to the asserted date A.
+	contact, err := h.SeedContact(ctx, gen.Contact(factory.WithEmail()))
+	require.NoError(t, err)
+	require.Nil(t, contact.Birthday, "seeded contact starts with no birthday")
+
+	dateA := time.Date(anchor.Year()-30, time.March, 3, 0, 0, 0, 0, time.UTC)
+	_, err = h.ReplayAssertion(ctx, contact.ID, gen.DateFact("birthday", dateA))
+	require.NoError(t, err)
+
+	got, err := h.ContactRepo().GetContact(ctx, contact.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.Birthday, "cutover birthday assertion populates the derived birthday cache")
+	requireSameDate(t, dateA, *got.Birthday, "fresh birthday cache equals the asserted date A")
+
+	// Supersession: re-assert a DIFFERENT current birthday (date B); birthday is
+	// single-cardinality, so the second assertion supersedes the first and RefreshTx
+	// recomputes the cache from the new current-accepted row. An only-fills-NULL bug
+	// would leave it at date A.
+	dateB := time.Date(anchor.Year()-25, time.September, 9, 0, 0, 0, 0, time.UTC)
+	_, err = h.ReplayAssertion(ctx, contact.ID, gen.DateFact("birthday", dateB))
+	require.NoError(t, err)
+
+	got, err = h.ContactRepo().GetContact(ctx, contact.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.Birthday, "birthday cache stays populated after supersession")
+	requireSameDate(t, dateB, *got.Birthday, "supersession recomputes the birthday cache to date B, not a one-time fill")
+
+	// Control: a non-cutover text fact must NOT reach RefreshTx (which would error) and
+	// must leave every derived cache column NULL.
+	control, err := h.SeedContact(ctx, gen.Contact(factory.WithEmail()))
+	require.NoError(t, err)
+	_, err = h.ReplayAssertion(ctx, control.ID, gen.FactAssertion("job_title"))
+	require.NoError(t, err, "a non-cutover assertion must succeed without touching the cache")
+
+	controlGot, err := h.ContactRepo().GetContact(ctx, control.ID)
+	require.NoError(t, err)
+	require.Nil(t, controlGot.Birthday, "non-cutover assertion leaves birthday cache NULL")
+	require.Nil(t, controlGot.Location, "non-cutover assertion leaves location cache NULL")
+	require.Nil(t, controlGot.HowMet, "non-cutover assertion leaves how_met cache NULL")
+}
+
+// requireSameDate asserts two times fall on the same calendar day (birthday is a
+// DATE column, so only Y/M/D are meaningful).
+func requireSameDate(t *testing.T, want, got time.Time, msg string) {
+	t.Helper()
+	wy, wm, wd := want.Date()
+	gy, gm, gd := got.UTC().Date()
+	require.Equal(t, [3]int{wy, int(wm), wd}, [3]int{gy, int(gm), gd}, msg)
 }
 
 func TestSyntheticReplay_UnknownSenderPending(t *testing.T) {
