@@ -25,6 +25,7 @@ type ContactSpec struct {
 	FullName      string
 	Methods       []MethodSpec
 	Cadence       *string
+	CreatedAt     *time.Time
 	LastContacted *time.Time
 	Birthday      *time.Time
 	Location      *string
@@ -41,18 +42,18 @@ type ContactSpec struct {
 type ContactOption func(*contactConfig)
 
 type contactConfig struct {
-	withEmail    bool
-	withPhone    bool
-	withTelegram bool
-	noMethods    bool
-	cadence      *string
-	overdue      bool
-	recent       bool
-	birthday     *time.Time
-	howMet       *string
-	location     *string
-	unicodeName  bool
-	descender    bool
+	withEmail            bool
+	withPhone            bool
+	withTelegram         bool
+	noMethods            bool
+	cadence              *string
+	createdAge           *time.Duration
+	recentCreationWindow *time.Duration
+	birthday             *time.Time
+	howMet               *string
+	location             *string
+	unicodeName          bool
+	descender            bool
 }
 
 // WithEmail adds an email contact_method (default ON if no method option is
@@ -76,12 +77,27 @@ func WithCadence(cadence string) ContactOption {
 	return func(c *contactConfig) { c.cadence = &cadence }
 }
 
-// WithOverdue gives the contact a last_contacted far enough in the past that,
-// combined with a cadence, it reads as overdue. Anchor-relative.
-func WithOverdue() ContactOption { return func(c *contactConfig) { c.overdue = true } }
+// WithCreatedAge backdates the contact to `age` before the anchor, mirroring the
+// create handler: created_at and last_contacted are both stamped to that one past
+// instant. Combined with a cadence, a far-enough age reads as overdue — with an
+// empty timeline that is honest (added long ago, no interactions logged). Draws no
+// PRNG (fixed age).
+func WithCreatedAge(age time.Duration) ContactOption {
+	return func(c *contactConfig) {
+		d := age
+		c.createdAge = &d
+	}
+}
 
-// WithRecent gives the contact a recent last_contacted (anchor-relative).
-func WithRecent() ContactOption { return func(c *contactConfig) { c.recent = true } }
+// WithRecentCreation backdates the contact to a deterministic instant within the
+// last `window`, again stamping created_at and last_contacted from that one value.
+// Draws one recentOffset from the PRNG (the recent-window jitter).
+func WithRecentCreation(window time.Duration) ContactOption {
+	return func(c *contactConfig) {
+		w := window
+		c.recentCreationWindow = &w
+	}
+}
 
 // WithBirthday1900Sentinel sets the prod 1900-MM-DD month/day-only sentinel —
 // a representative edge case the catalog can build on.
@@ -187,13 +203,16 @@ func (g *Generator) Contact(opts ...ContactOption) ContactSpec {
 		spec.Methods = append(spec.Methods, MethodSpec{Type: "telegram", Value: handle, IsPrimary: len(spec.Methods) == 0})
 	}
 
+	// Backdated cohorts stamp created_at and last_contacted from ONE past instant,
+	// mirroring the create handler (at creation, last_contacted == created_at).
 	switch {
-	case cfg.overdue:
-		// ~90 days ago — overdue for any sub-quarterly cadence.
-		t := g.at(-90 * 24 * time.Hour)
+	case cfg.createdAge != nil:
+		t := g.at(-*cfg.createdAge)
+		spec.CreatedAt = &t
 		spec.LastContacted = &t
-	case cfg.recent:
-		t := g.at(g.recentOffset(48 * time.Hour))
+	case cfg.recentCreationWindow != nil:
+		t := g.at(g.recentOffset(*cfg.recentCreationWindow))
+		spec.CreatedAt = &t
 		spec.LastContacted = &t
 	}
 

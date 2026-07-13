@@ -727,11 +727,14 @@ func (r *SyntheticSupportRepository) InsertResetMarkers(ctx context.Context) err
 }
 
 // ContactBucket is the bucket-defining projection of a seeded contact (profile
-// coverage test only): cadence, last_contacted, and method count.
+// coverage test only): cadence, last_contacted, created_at, contact_by, and
+// method count.
 type ContactBucket struct {
 	ID            uuid.UUID
 	Cadence       *string
 	LastContacted *time.Time
+	CreatedAt     *time.Time
+	ContactBy     *time.Time
 	MethodCount   int64
 }
 
@@ -759,7 +762,95 @@ func (r *SyntheticSupportRepository) ListContactBucketsByNamePrefix(ctx context.
 			t := row.LastContacted.Time
 			b.LastContacted = &t
 		}
+		if row.CreatedAt.Valid {
+			t := row.CreatedAt.Time
+			b.CreatedAt = &t
+		}
+		if row.ContactBy.Valid {
+			t := row.ContactBy.Time
+			b.ContactBy = &t
+		}
 		out = append(out, b)
+	}
+	return out, nil
+}
+
+// IncoherentLastContactedCountByNamePrefix returns the number of the namespace's
+// contacts whose non-creation last_contacted is not backed by a live
+// inbound/mutual interaction at the same occurred_at (or whose last_interaction_at
+// is not in lockstep). Coherence gate (a); asserted == 0. Test only.
+func (r *SyntheticSupportRepository) IncoherentLastContactedCountByNamePrefix(ctx context.Context, namePrefix string) (int64, error) {
+	return r.queries.TestCountIncoherentLastContactedByNamePrefix(ctx, pgtype.Text{String: namePrefix, Valid: true})
+}
+
+// InteractionBackedLastContactedCountByNamePrefix returns the number of the
+// namespace's contacts whose last_contacted IS backed by a live inbound/mutual
+// interaction at the same occurred_at with last_interaction_at in lockstep.
+// Coherence gate (a-positive); asserted >= 1. Test only.
+func (r *SyntheticSupportRepository) InteractionBackedLastContactedCountByNamePrefix(ctx context.Context, namePrefix string) (int64, error) {
+	return r.queries.TestCountInteractionBackedLastContactedByNamePrefix(ctx, pgtype.Text{String: namePrefix, Valid: true})
+}
+
+// IncoherentManagedFollowUpCountByNamePrefix returns the number of the namespace's
+// managed follow-up loop tasks that do not carry the production Todoist shape
+// (alphanumeric external id + prod metadata + content/marker shape). Coherence
+// gate (c); asserted == 0. Test only.
+func (r *SyntheticSupportRepository) IncoherentManagedFollowUpCountByNamePrefix(ctx context.Context, namePrefix string) (int64, error) {
+	return r.queries.TestCountIncoherentManagedFollowUpsByNamePrefix(ctx, pgtype.Text{String: namePrefix, Valid: true})
+}
+
+// LiveFollowUp is the Go-side projection of the namespace's live managed follow-up
+// loop task: its contact_id, external_task_id, and raw metadata JSON, so the
+// coverage test can decode the marker and confirm the link. Coherence gate (c-Go).
+type LiveFollowUp struct {
+	ContactID      uuid.UUID
+	ExternalTaskID string
+	Metadata       []byte
+}
+
+// GetLiveFollowUpByNamePrefix returns the namespace's single live managed follow-up
+// loop task's contact_id, external_task_id, and metadata JSON. Test only.
+func (r *SyntheticSupportRepository) GetLiveFollowUpByNamePrefix(ctx context.Context, namePrefix string) (*LiveFollowUp, error) {
+	row, err := r.queries.TestGetLiveFollowUpByNamePrefix(ctx, pgtype.Text{String: namePrefix, Valid: true})
+	if err != nil {
+		return nil, err
+	}
+	return &LiveFollowUp{
+		ContactID:      uuid.UUID(row.ContactID.Bytes),
+		ExternalTaskID: row.ExternalTaskID,
+		Metadata:       row.Metadata,
+	}, nil
+}
+
+// CadenceActivityFlags is the per-contact CAD-029 activity projection (outreach /
+// response / pending-followup / none) used by the tour-capacity gate to prove four
+// distinct assignable contacts exist.
+type CadenceActivityFlags struct {
+	ContactID   uuid.UUID
+	HasOutreach bool
+	HasResponse bool
+	HasPending  bool
+	HasNone     bool
+}
+
+// ListCadenceActivityFlagsByNamePrefix returns the per-contact activity flags for
+// the namespace's live contacts so the coverage test can compute a maximum
+// bipartite matching and assert the world contains four distinct assignable
+// contacts for cadence-followup.tour.ts. Test only.
+func (r *SyntheticSupportRepository) ListCadenceActivityFlagsByNamePrefix(ctx context.Context, namePrefix string) ([]CadenceActivityFlags, error) {
+	rows, err := r.queries.TestListCadenceActivityFlagsByNamePrefix(ctx, pgtype.Text{String: namePrefix, Valid: true})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CadenceActivityFlags, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, CadenceActivityFlags{
+			ContactID:   uuid.UUID(row.ID.Bytes),
+			HasOutreach: row.HasOutreach,
+			HasResponse: row.HasResponse,
+			HasPending:  row.HasPending,
+			HasNone:     row.HasNone,
+		})
 	}
 	return out, nil
 }
