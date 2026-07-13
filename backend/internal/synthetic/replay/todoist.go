@@ -229,9 +229,13 @@ func (h *Harness) ReplayTodoist(ctx context.Context, contactIDs []uuid.UUID) (To
 // id into the alphanumeric external id this method matches on (matching on the temp
 // UUID would miss). Namespace scoping: provider.Sync ALWAYS reconciles after
 // processing items (DB-wide), so the provider is built with the same
-// namespace-scoped contact-lister ReplayTodoist uses — the trailing reconcile can
-// only see this harness's contacts, never re-strand a temp id or touch another
-// namespace. The just-unmanaged row survives that reconcile:
+// namespace-scoped contact-lister ReplayTodoist uses (the shared
+// namespaceScopedContactRepo wrapper) — by construction the trailing reconcile
+// enumerates only this harness's contacts, never re-stranding a temp id or touching
+// another namespace. That confinement is regression-guarded by the cross-namespace
+// bystander in TestReplayTodoistRecurringEdit_UnmanagesViaRealPath (an other-namespace
+// reconcile-eligible contact an unscoped reconcile would create a task on).
+// The just-unmanaged row survives that reconcile:
 // GetContactTaskByContactCadenceDue is state-agnostic and reconcile skips a
 // non-managed row, and the partial unique index blocks a duplicate regardless. The
 // task id is already in the cleanup ledger (ReplayTodoist tracked it). Draws no

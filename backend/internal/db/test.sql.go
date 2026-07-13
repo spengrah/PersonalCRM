@@ -2411,6 +2411,49 @@ func (q *Queries) TestCountPureOutboundContactsByNamePrefix(ctx context.Context,
 	return count, err
 }
 
+const TestCountStrandedKnowledgeCacheByNamePrefix = `-- name: TestCountStrandedKnowledgeCacheByNamePrefix :one
+SELECT COUNT(*)
+FROM assertion a
+JOIN node sn ON sn.id = a.subject_node_id AND sn.deleted_at IS NULL
+JOIN contact c ON c.id = a.subject_node_id AND c.deleted_at IS NULL
+LEFT JOIN node ob ON ob.id = a.object_node_id
+WHERE c.full_name LIKE $1 || '%'
+  AND a.predicate_key IN ('lives_in', 'birthday', 'how_met')
+  AND a.status = 'accepted'
+  AND a.knowledge_to IS NULL
+  AND (a.object_node_id IS NULL OR ob.deleted_at IS NULL)
+  AND (a.valid_from IS NULL OR a.valid_from <= $2)
+  AND (a.valid_to IS NULL OR a.valid_to > $2)
+  AND (
+        (a.predicate_key = 'lives_in' AND c.location IS NULL)
+     OR (a.predicate_key = 'birthday' AND c.birthday IS NULL)
+     OR (a.predicate_key = 'how_met'  AND c.how_met IS NULL)
+  )
+`
+
+type TestCountStrandedKnowledgeCacheByNamePrefixParams struct {
+	NamePrefix pgtype.Text        `json:"name_prefix"`
+	Now        pgtype.Timestamptz `json:"now"`
+}
+
+// Coherence gate (F8): count the namespace's LIVE contacts that hold a
+// current-accepted cutover assertion (lives_in / birthday / how_met) whose matching
+// derived cache column is NULL — a production-impossible state (KnowledgeCacheUpdater
+// is the sole writer and always populates the column when an accepted assertion
+// exists). Asserted == 0. "current-accepted" mirrors GetCurrentAccepted: accepted,
+// knowledge-open, valid-time window contains @now, subject node live, and (for the
+// lives_in edge) the place object node live. A proposed/pending assertion or one on a
+// soft-deleted contact is correctly excluded. Single-cardinality predicates mean at
+// most one current-accepted row per (subject, predicate), so COUNT(*) over this WHERE
+// is row-equivalent to GetCurrentAccepted's ORDER BY created_at LIMIT 1 per slot.
+// Caller passes a BARE prefix; '%' appended.
+func (q *Queries) TestCountStrandedKnowledgeCacheByNamePrefix(ctx context.Context, arg TestCountStrandedKnowledgeCacheByNamePrefixParams) (int64, error) {
+	row := q.db.QueryRow(ctx, TestCountStrandedKnowledgeCacheByNamePrefix, arg.NamePrefix, arg.Now)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const TestCountTaggedAsAssertionsForSubject = `-- name: TestCountTaggedAsAssertionsForSubject :one
 SELECT COUNT(*) FROM assertion
 WHERE subject_node_id = $1
@@ -2455,6 +2498,27 @@ func (q *Queries) TestDeleteTagsByIds(ctx context.Context, tagIds []pgtype.UUID)
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const TestGetContactCacheColumnsByID = `-- name: TestGetContactCacheColumnsByID :one
+SELECT location, birthday, how_met FROM contact WHERE id = $1 AND deleted_at IS NULL
+`
+
+type TestGetContactCacheColumnsByIDRow struct {
+	Location pgtype.Text `json:"location"`
+	Birthday pgtype.Date `json:"birthday"`
+	HowMet   pgtype.Text `json:"how_met"`
+}
+
+// F8 target-row proof: return the three derived knowledge-cache columns for one
+// contact id so the coverage test can assert the ReplayAssertion date-fact birthday's
+// own contact has a populated birthday cache (proving F8's exact stranded row is now
+// coherent, not just that SOME cutover cache is populated).
+func (q *Queries) TestGetContactCacheColumnsByID(ctx context.Context, id pgtype.UUID) (*TestGetContactCacheColumnsByIDRow, error) {
+	row := q.db.QueryRow(ctx, TestGetContactCacheColumnsByID, id)
+	var i TestGetContactCacheColumnsByIDRow
+	err := row.Scan(&i.Location, &i.Birthday, &i.HowMet)
+	return &i, err
 }
 
 const TestGetContactCadenceTimestampsForContact = `-- name: TestGetContactCadenceTimestampsForContact :one

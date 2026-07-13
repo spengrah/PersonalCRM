@@ -89,9 +89,14 @@ func TestSyntheticProfile_MinimalScopedMatchesSeedAll(t *testing.T) {
 // production-impossible last_contacted (gate a), a non-vacuous interaction-moved
 // cohort (gate a-positive), prod-shaped managed follow-ups (gate c) whose marker
 // decodes and points at the seeded contact (gate c-Go), a cause-driven overdue
-// cohort computed via the production cadence helper (env-robust), and the CAD-029
-// tour capacity (four distinct assignable contacts). Called by both coverage tests.
-func assertSeedCoherence(t *testing.T, ctx context.Context, support *repository.SyntheticSupportRepository, prefix string) {
+// cohort computed via the production cadence helper (env-robust), the CAD-029
+// tour capacity (four distinct assignable contacts), and no stranded
+// knowledge-cache columns (gate f: every current-accepted cutover assertion has a
+// populated cache column, and — when dateFactID is set — the specific target row,
+// the ReplayAssertion date-fact birthday's own contact, has a populated birthday
+// cache). Called by both coverage tests. dateFactID is h.DateFactContactID() (the
+// contact the date-fact block seeded; uuid.Nil when that block did not run).
+func assertSeedCoherence(t *testing.T, ctx context.Context, support *repository.SyntheticSupportRepository, prefix string, dateFactID uuid.UUID) {
 	t.Helper()
 	now := accelerated.GetCurrentTime()
 
@@ -167,6 +172,27 @@ func assertSeedCoherence(t *testing.T, ctx context.Context, support *repository.
 	flags, err := support.ListCadenceActivityFlagsByNamePrefix(ctx, prefix)
 	require.NoError(t, err)
 	require.Equal(t, 4, maxDistinctStateAssignment(flags), "four CAD-029 states must be assignable to four distinct contacts")
+
+	// Gate (f): zero stranded knowledge-cache columns (every current-accepted cutover
+	// assertion on a live contact has its derived cache column populated — the
+	// production-impossible state where an accepted assertion exists but its cache
+	// column is NULL is absent).
+	stranded, err := support.StrandedKnowledgeCacheCountByNamePrefix(ctx, prefix, now)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), stranded, "no live contact may hold a current-accepted cutover assertion (lives_in/birthday/how_met) whose derived cache column is NULL")
+
+	// Gate (f-positive): the specific target row is coherent. A generic ">=1 populated
+	// cutover cache" would pass on the contact-create authority-flip bio facts alone, so
+	// target the ReplayAssertion date-fact birthday's OWN contact and assert its birthday
+	// cache is populated — proving the refresh reaches the exact row that would otherwise
+	// be stranded, not just that some cutover cache is populated. (lives_in/how_met
+	// non-vacuity rides the existing ContactsWithLocation/ContactsWithHowMet coverage
+	// assertions feeding gate f.)
+	if dateFactID != uuid.Nil {
+		cache, err := support.GetContactCacheColumns(ctx, dateFactID)
+		require.NoError(t, err)
+		require.NotNil(t, cache.Birthday, "the ReplayAssertion date-fact birthday's contact must have a populated birthday cache (target row)")
+	}
 }
 
 // maxDistinctStateAssignment returns the size of a maximum matching between the
@@ -380,7 +406,7 @@ func TestSyntheticProfile_DevCoversCatalog(t *testing.T) {
 
 	// Post-seed coherence gate (F1/F3 + tour capacity), scoped to the namespace.
 	support := repository.NewSyntheticSupportRepository(database.Queries)
-	assertSeedCoherence(t, ctx, support, h.Generator().Prefix())
+	assertSeedCoherence(t, ctx, support, h.Generator().Prefix(), h.DateFactContactID())
 	// Two-sided message-direction coverage (F4).
 	assertMessageDirectionCoverage(t, ctx, support, h, res)
 	// Notes coverage (F6).
@@ -522,7 +548,7 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	require.GreaterOrEqual(t, noMethod, 1, "≥1 no-method contact (the no-method bucket exists)")
 
 	// Post-seed coherence gate (F1/F3 + tour capacity), scoped to the namespace.
-	assertSeedCoherence(t, ctx, support, h.Generator().Prefix())
+	assertSeedCoherence(t, ctx, support, h.Generator().Prefix(), h.DateFactContactID())
 	// Two-sided message-direction coverage (F4).
 	assertMessageDirectionCoverage(t, ctx, support, h, res)
 	// Notes coverage (F6).

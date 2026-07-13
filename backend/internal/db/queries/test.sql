@@ -1271,6 +1271,43 @@ WHERE c.full_name LIKE @name_prefix || '%'
   AND ct.lifecycle = 'cadence_due'
   AND ct.state = @state;
 
+-- name: TestCountStrandedKnowledgeCacheByNamePrefix :one
+-- Coherence gate (F8): count the namespace's LIVE contacts that hold a
+-- current-accepted cutover assertion (lives_in / birthday / how_met) whose matching
+-- derived cache column is NULL — a production-impossible state (KnowledgeCacheUpdater
+-- is the sole writer and always populates the column when an accepted assertion
+-- exists). Asserted == 0. "current-accepted" mirrors GetCurrentAccepted: accepted,
+-- knowledge-open, valid-time window contains @now, subject node live, and (for the
+-- lives_in edge) the place object node live. A proposed/pending assertion or one on a
+-- soft-deleted contact is correctly excluded. Single-cardinality predicates mean at
+-- most one current-accepted row per (subject, predicate), so COUNT(*) over this WHERE
+-- is row-equivalent to GetCurrentAccepted's ORDER BY created_at LIMIT 1 per slot.
+-- Caller passes a BARE prefix; '%' appended.
+SELECT COUNT(*)
+FROM assertion a
+JOIN node sn ON sn.id = a.subject_node_id AND sn.deleted_at IS NULL
+JOIN contact c ON c.id = a.subject_node_id AND c.deleted_at IS NULL
+LEFT JOIN node ob ON ob.id = a.object_node_id
+WHERE c.full_name LIKE @name_prefix || '%'
+  AND a.predicate_key IN ('lives_in', 'birthday', 'how_met')
+  AND a.status = 'accepted'
+  AND a.knowledge_to IS NULL
+  AND (a.object_node_id IS NULL OR ob.deleted_at IS NULL)
+  AND (a.valid_from IS NULL OR a.valid_from <= @now)
+  AND (a.valid_to IS NULL OR a.valid_to > @now)
+  AND (
+        (a.predicate_key = 'lives_in' AND c.location IS NULL)
+     OR (a.predicate_key = 'birthday' AND c.birthday IS NULL)
+     OR (a.predicate_key = 'how_met'  AND c.how_met IS NULL)
+  );
+
+-- name: TestGetContactCacheColumnsByID :one
+-- F8 target-row proof: return the three derived knowledge-cache columns for one
+-- contact id so the coverage test can assert the ReplayAssertion date-fact birthday's
+-- own contact has a populated birthday cache (proving F8's exact stranded row is now
+-- coherent, not just that SOME cutover cache is populated).
+SELECT location, birthday, how_met FROM contact WHERE id = @id AND deleted_at IS NULL;
+
 -- name: TestGetLiveFollowUpByNamePrefix :one
 -- Coherence gate (F3, Go-side): return the namespace's live managed follow-up loop
 -- task's contact_id, external_task_id, and metadata so the test can decode the
