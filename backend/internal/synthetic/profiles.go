@@ -168,7 +168,8 @@ func ProfileParams(name Profile) (SeedParams, error) {
 				SeededRelationships: 2,
 				// Enable cadence-task seeding (>0 gate). The dev catalog is all
 				// cadence-bearing, so reconcile creates a managed task on each and
-				// three are transitioned for surface coverage.
+				// one is driven to `unmanaged` via the real recurring-edit path
+				// (completed/dismissed are unreachable for cadence_due).
 				SeededTasks: 1,
 				// Small entity pool (1 org + 1 topic + 1 tag) + a few person→entity
 				// edges so the dev graph surfaces show works_at/interested_in/tagged_as.
@@ -215,8 +216,9 @@ func ProfileParams(name Profile) (SeedParams, error) {
 				SeededRelationships: 12,
 				// Enable cadence-task seeding (>0 gate). The prod-shaped catalog is
 				// all cadence-bearing, so reconcile creates a managed cadence task on
-				// each (catalog-wide, like prod) and three are transitioned to the
-				// completed/dismissed/unmanaged surface states.
+				// each (catalog-wide, like prod) and one is driven to `unmanaged` via
+				// the real recurring-edit path (completed/dismissed are unreachable
+				// for cadence_due).
 				SeededTasks: 1,
 				// Small org/topic/tag pool (3 each) + ~1/5 of the catalog carrying a
 				// person→entity edge (works_at/interested_in/tagged_as), drawn from the

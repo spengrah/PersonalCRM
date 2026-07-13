@@ -436,8 +436,9 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	params.Counts.SeededBoolFacts = 3
 	params.Counts.SeededRelationships = 3
 	// Enable cadence-task seeding (>0 gate). The 9-contact catalog is all
-	// cadence-bearing, so reconcile creates 9 `managed` tasks and three are
-	// transitioned to completed/dismissed/unmanaged — every surface state present.
+	// cadence-bearing, so reconcile creates 9 `managed` tasks and one is driven to
+	// `unmanaged` via the real recurring-edit path — the two states cadence_due can
+	// hold in prod (completed/dismissed are unreachable for this lifecycle).
 	params.Counts.SeededTasks = 1
 	// Entity pool of 3 (1 org + 1 topic + 1 tag) + one full person→entity edge cycle
 	// (works_at/interested_in/tagged_as) so every entity subtype + edge type is
