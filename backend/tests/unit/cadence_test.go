@@ -332,9 +332,9 @@ func TestGetCadenceConfig(t *testing.T) {
 			checkWeekly: 2 * time.Minute,
 		},
 		{
-			name:        "Staging environment",
+			name:        "Staging environment shares production durations",
 			envValue:    "staging",
-			checkWeekly: 10 * time.Minute,
+			checkWeekly: 7 * 24 * time.Hour,
 		},
 		{
 			name:        "Accelerated environment",
@@ -447,13 +447,31 @@ func TestIsOverdueWithConfig(t *testing.T) {
 			expected:    true,
 		},
 		{
-			name:        "Staging - monthly not overdue (1 hour cadence)",
+			name:        "Accelerated - monthly not overdue (1 hour cadence)",
+			env:         "accelerated",
+			cadence:     cadence.CadenceMonthly,
+			lastContact: timePtr(time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)),
+			created:     time.Date(2023, 12, 1, 12, 0, 0, 0, time.UTC),
+			checkTime:   time.Date(2024, 1, 1, 12, 30, 0, 0, time.UTC), // 30 minutes later
+			expected:    false,
+		},
+		{
+			name:        "Staging - monthly not overdue 30 minutes later (production durations)",
 			env:         "staging",
 			cadence:     cadence.CadenceMonthly,
 			lastContact: timePtr(time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)),
 			created:     time.Date(2023, 12, 1, 12, 0, 0, 0, time.UTC),
 			checkTime:   time.Date(2024, 1, 1, 12, 30, 0, 0, time.UTC), // 30 minutes later
 			expected:    false,
+		},
+		{
+			name:        "Staging - monthly overdue 31 days later (production durations)",
+			env:         "staging",
+			cadence:     cadence.CadenceMonthly,
+			lastContact: timePtr(time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)),
+			created:     time.Date(2023, 12, 1, 12, 0, 0, 0, time.UTC),
+			checkTime:   time.Date(2024, 2, 1, 12, 0, 0, 0, time.UTC), // 31 days later
+			expected:    true,
 		},
 	}
 
@@ -495,6 +513,15 @@ func TestGetOverdueDaysWithConfig(t *testing.T) {
 			created:      time.Date(2023, 12, 1, 12, 0, 0, 0, time.UTC),
 			checkTime:    time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC), // Due Jan 17, now Jan 15
 			expectedDays: 0,
+		},
+		{
+			name:         "Staging - 7 real days overdue (no scaled days)",
+			env:          "staging",
+			cadence:      cadence.CadenceWeekly,
+			lastContact:  timePtr(time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)),
+			created:      time.Date(2023, 12, 1, 12, 0, 0, 0, time.UTC),
+			checkTime:    time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC), // Due Jan 8, now Jan 15
+			expectedDays: 7,
 		},
 	}
 

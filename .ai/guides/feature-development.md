@@ -511,7 +511,8 @@ See [`.ai/patterns/frontend.md`](../patterns/frontend.md) for full form, mutatio
 .env                      # Active environment (gitignored)
 .env.example              # Template with all variables
 .env.example.production   # Real-world timing
-.env.example.staging      # Fast cadences (hours)
+.env.example.staging      # Production cadence durations (staging QA world)
+.env.example.accelerated  # Fast cadences (hours) — make test-cadence-fast
 .env.example.testing      # Ultra-fast (minutes)
 ```
 
