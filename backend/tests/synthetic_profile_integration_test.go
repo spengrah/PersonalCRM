@@ -92,7 +92,7 @@ func TestSyntheticProfile_MinimalScopedMatchesSeedAll(t *testing.T) {
 // cohort computed via the production cadence helper (env-robust), the CAD-029
 // tour capacity (four distinct assignable contacts), and no stranded
 // knowledge-cache columns (gate f: every current-accepted cutover assertion has a
-// populated cache column, and — when dateFactID is set — F8's specific target row,
+// populated cache column, and — when dateFactID is set — the specific target row,
 // the ReplayAssertion date-fact birthday's own contact, has a populated birthday
 // cache). Called by both coverage tests. dateFactID is h.DateFactContactID() (the
 // contact the date-fact block seeded; uuid.Nil when that block did not run).
@@ -174,22 +174,24 @@ func assertSeedCoherence(t *testing.T, ctx context.Context, support *repository.
 	require.Equal(t, 4, maxDistinctStateAssignment(flags), "four CAD-029 states must be assignable to four distinct contacts")
 
 	// Gate (f): zero stranded knowledge-cache columns (every current-accepted cutover
-	// assertion on a live contact has its derived cache column populated — the F8
-	// production-impossible state is absent).
+	// assertion on a live contact has its derived cache column populated — the
+	// production-impossible state where an accepted assertion exists but its cache
+	// column is NULL is absent).
 	stranded, err := support.StrandedKnowledgeCacheCountByNamePrefix(ctx, prefix, now)
 	require.NoError(t, err)
 	require.Equal(t, int64(0), stranded, "no live contact may hold a current-accepted cutover assertion (lives_in/birthday/how_met) whose derived cache column is NULL")
 
-	// Gate (f-positive): F8's specific target row is coherent. A generic ">=1 populated
+	// Gate (f-positive): the specific target row is coherent. A generic ">=1 populated
 	// cutover cache" would pass on the contact-create authority-flip bio facts alone, so
 	// target the ReplayAssertion date-fact birthday's OWN contact and assert its birthday
-	// cache is populated — proving the fix reaches F8's exact stranded row, not just that
-	// some cutover cache is populated. (lives_in/how_met non-vacuity rides the existing
-	// ContactsWithLocation/ContactsWithHowMet coverage assertions feeding gate f.)
+	// cache is populated — proving the refresh reaches the exact row that would otherwise
+	// be stranded, not just that some cutover cache is populated. (lives_in/how_met
+	// non-vacuity rides the existing ContactsWithLocation/ContactsWithHowMet coverage
+	// assertions feeding gate f.)
 	if dateFactID != uuid.Nil {
 		cache, err := support.GetContactCacheColumns(ctx, dateFactID)
 		require.NoError(t, err)
-		require.NotNil(t, cache.Birthday, "the ReplayAssertion date-fact birthday's contact must have a populated birthday cache (F8 target row)")
+		require.NotNil(t, cache.Birthday, "the ReplayAssertion date-fact birthday's contact must have a populated birthday cache (target row)")
 	}
 }
 

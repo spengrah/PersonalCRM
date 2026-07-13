@@ -24,8 +24,12 @@ type AssertionResult struct {
 // assertService builds an AssertService over the harness's pool + bus + graph
 // repos. The graph repos are cheap thin wrappers, so building per-call (mirroring
 // the per-source provider construction in the other adapters) keeps the harness
-// struct lean. The bus routes the assertion kinds to no consumer, so no River job
-// is enqueued and the never-started client is fine.
+// struct lean. AssertTx's tx-bound publish enqueues a knowledge_cache_updater river
+// job for accepted/superseded assertions; the harness drains that kind with a no-op
+// worker (knowledgeCacheNoopWorker), so the async job finalizes without writing —
+// the inline RefreshTx in ReplayAssertion is the real cache writer, exactly as the
+// production ContactService path direct-invokes RefreshTx and lets the async job
+// no-op.
 func (h *Harness) assertService() *service.AssertService {
 	return service.NewAssertService(
 		h.database.Pool,
@@ -60,11 +64,12 @@ func (h *Harness) knowledgeCacheUpdater() *consumer.KnowledgeCacheUpdater {
 // (ContactService.knowledge / EnrichmentService.assertInferredKnowledge): AssertTx
 // then, for a cutover predicate, an inline KnowledgeCacheUpdater.RefreshTx in the
 // SAME tx, so a seeded lives_in / birthday / how_met assertion leaves its derived
-// contact cache column current rather than the production-impossible stale/NULL
-// state F8 flagged. A single ReplayAssertion writes one predicate, so it refreshes
-// only that predicate's column (narrower than knowledgeWriter.refreshAll, which
-// covers a multi-field contact edit). Non-cutover predicates skip the refresh —
-// RefreshTx errors on them by design (finding 3), and their columns are not derived.
+// contact cache column current rather than the production-impossible state where a
+// current-accepted assertion exists but its cache column is stale/NULL. A single
+// ReplayAssertion writes one predicate, so it refreshes only that predicate's column
+// (narrower than knowledgeWriter.refreshAll, which covers a multi-field contact
+// edit). Non-cutover predicates skip the refresh — RefreshTx errors on them by
+// design, and their columns are not derived.
 //
 // Cleanup: the assertion rows ride on the subject node and are removed by the
 // harness teardown's assertion step (which deletes assertions on every seeded

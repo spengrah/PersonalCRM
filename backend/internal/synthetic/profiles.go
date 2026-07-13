@@ -584,8 +584,8 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		if _, err := h.ReplayAssertion(ctx, catalogContactsWithoutBirthday[0], gen.DateFact("birthday", bday)); err != nil {
 			return res, fmt.Errorf("profile %s: replay date fact: %w", params.Profile, err)
 		}
-		// Record F8's target row so the coverage gate can assert this contact's derived
-		// birthday cache is populated. Pure struct assignment — draws no generator PRNG.
+		// Record this contact so the coverage gate can assert its derived birthday cache
+		// is populated (the target row). Pure struct assignment — draws no generator PRNG.
 		h.SetDateFactContactID(catalogContactsWithoutBirthday[0])
 		res.SeededDateFacts++
 	}

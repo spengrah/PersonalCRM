@@ -181,8 +181,9 @@ type Harness struct {
 	// dateFactContactID is the contact the profile seeded the toolkit-authored
 	// date-fact birthday on (via ReplayAssertion). A profile sets it via
 	// SetDateFactContactID after the seed; the coverage check reads it via
-	// DateFactContactID to assert F8's exact stranded row — that contact's derived
-	// birthday cache — is now populated. Like mutualMessageContactID it is NOT a
+	// DateFactContactID to assert that contact's derived birthday cache — the row
+	// that would otherwise be left stranded — is now populated. Like
+	// mutualMessageContactID it is NOT a
 	// ProfileResult field: the contact id is non-deterministic (uuid_generate_v4),
 	// so it stays off the counts-only, determinism-compared result struct.
 	dateFactContactID uuid.UUID
@@ -686,7 +687,8 @@ func (h *Harness) SetDateFactContactID(id uuid.UUID) {
 
 // DateFactContactID returns the contact the profile seeded the toolkit date-fact
 // birthday on (uuid.Nil if the block did not run). Read by the coverage check to
-// assert that contact's derived birthday cache is populated (F8's target row).
+// assert that contact's derived birthday cache is populated (the target row that
+// exercises the cutover-predicate refresh).
 func (h *Harness) DateFactContactID() uuid.UUID {
 	h.createdMu.Lock()
 	defer h.createdMu.Unlock()

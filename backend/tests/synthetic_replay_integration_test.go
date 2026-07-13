@@ -217,8 +217,7 @@ func TestReplayTodoistRecurringEdit_UnmanagesViaRealPath(t *testing.T) {
 //     derived birthday cache to the asserted value;
 //   - supersession: re-asserting a DIFFERENT current birthday recomputes the cache
 //     to the new value (an only-fills-NULL bug would leave it at the first value —
-//     this is the exact F8 defect class, a cache that must track the current-accepted
-//     assertion, not a one-time write);
+//     the cache must track the current-accepted assertion, not a one-time write);
 //   - control: a non-cutover text fact returns no error and writes NO cache column,
 //     guarding that a non-cutover predicate never reaches RefreshTx (which errors).
 //

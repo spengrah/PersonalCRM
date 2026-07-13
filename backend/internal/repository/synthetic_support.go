@@ -294,9 +294,10 @@ func (r *SyntheticSupportRepository) CountCadenceDueByStateByNamePrefix(ctx cont
 
 // StrandedKnowledgeCacheCountByNamePrefix counts the namespace's live contacts
 // holding a current-accepted cutover assertion (lives_in / birthday / how_met)
-// whose derived cache column is NULL — the F8 production-impossible state. Asserted
-// == 0. now scopes the assertion valid-time window (anchor-relative — no time.Now()).
-// Caller passes a BARE prefix.
+// whose derived cache column is NULL — the production-impossible state (the cache
+// updater is the sole writer and always populates the column when an accepted
+// assertion exists). Asserted == 0. now scopes the assertion valid-time window
+// (anchor-relative — no time.Now()). Caller passes a BARE prefix.
 func (r *SyntheticSupportRepository) StrandedKnowledgeCacheCountByNamePrefix(ctx context.Context, namePrefix string, now time.Time) (int64, error) {
 	return r.queries.TestCountStrandedKnowledgeCacheByNamePrefix(ctx, db.TestCountStrandedKnowledgeCacheByNamePrefixParams{
 		NamePrefix: pgtype.Text{String: namePrefix, Valid: true},
@@ -313,7 +314,7 @@ type ContactCacheColumns struct {
 }
 
 // GetContactCacheColumns returns a contact's three derived knowledge-cache columns
-// so the coverage gate can assert F8's target row (the ReplayAssertion date-fact
+// so the coverage gate can assert the target row (the ReplayAssertion date-fact
 // birthday's own contact) has a populated birthday cache.
 func (r *SyntheticSupportRepository) GetContactCacheColumns(ctx context.Context, id uuid.UUID) (*ContactCacheColumns, error) {
 	row, err := r.queries.TestGetContactCacheColumnsByID(ctx, uuidToPgUUID(id))
