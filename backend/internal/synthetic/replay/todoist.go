@@ -3,6 +3,7 @@ package replay
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
@@ -19,6 +20,17 @@ import (
 // cadence-scaled window from the outbound — CAD-011). Read off the accelerated
 // clock, never the wall clock.
 const followUpSeedWindow = 3 * 24 * time.Hour
+
+// Synthetic follow-up shape constants mirror what FollowUpManager.applyCreate
+// writes in production (content link, marker instance, project/label metadata).
+// syntheticIntegrationInstanceID is shared by the marker's Instance and the
+// integration_instance_id metadata key so they agree, exactly as prod does.
+const (
+	syntheticFrontendBase          = "https://synthetic.local"
+	syntheticIntegrationInstanceID = "synthetic-todoist-instance"
+	syntheticFollowUpProjectID     = "synthetic-followup-project"
+	syntheticFollowUpLabelName     = "synthetic-followup-label"
+)
 
 // TodoistResult is the settled outcome of a Todoist replay.
 type TodoistResult struct {
@@ -228,20 +240,49 @@ func (h *Harness) TransitionTodoistCadenceTaskState(ctx context.Context, contact
 // worker (and is its sole writer — CAD-005, CI-guarded), so it is still nil at seed
 // time. The caller establishes the chain by construction (see the awaiting-reply
 // scenario in profiles.go), and the profile coverage check proves it post-Quiesce.
-func (h *Harness) SeedPendingFollowUp(ctx context.Context, contactID uuid.UUID) (uuid.UUID, error) {
+func (h *Harness) SeedPendingFollowUp(ctx context.Context, contactID uuid.UUID, fullName string) (uuid.UUID, error) {
 	taskRepo := repository.NewContactTaskRepository(h.database.Queries)
 	deadline := accelerated.GetCurrentTime().Add(followUpSeedWindow)
-	task, err := taskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
-		ContactID: contactID,
-		Provider:  todoist.SourceName,
+
+	content := fmt.Sprintf("Follow up: [%s](%s/contacts/%s) (awaiting reply)", fullName, syntheticFrontendBase, contactID)
+	markerJSON, err := contacttask.EncodeMarker(contacttask.CRMMarker{
+		ContactID: contactID.String(),
 		Kind:      contacttask.KindReachOut,
 		Lifecycle: contacttask.LifecycleFollowUpLoop,
-		State:     string(repository.ContactTaskStateManaged),
-		Metadata:  map[string]any{"due_date": deadline.Format(todoist.DateFormat)},
+		Instance:  syntheticIntegrationInstanceID,
+	})
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("encode follow-up marker for contact %s: %w", contactID, err)
+	}
+
+	task, err := taskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+		ContactID:      contactID,
+		Provider:       todoist.SourceName,
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleFollowUpLoop,
+		ExternalTaskID: externalTaskIDForContact(contactID),
+		State:          string(repository.ContactTaskStateManaged),
+		Metadata: map[string]any{
+			"due_date":                deadline.Format(todoist.DateFormat),
+			"content":                 content,
+			"marker_json":             string(markerJSON),
+			"project_id":              syntheticFollowUpProjectID,
+			"label_name":              syntheticFollowUpLabelName,
+			"integration_instance_id": syntheticIntegrationInstanceID,
+		},
 	})
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("seed pending follow-up for contact %s: %w", contactID, err)
 	}
 	h.track(func(c *created) { c.addContactTask(task.ID) })
 	return task.ID, nil
+}
+
+// externalTaskIDForContact derives a stable, alphanumeric external id from the
+// contact's UUID via base62 (digits 0-9a-zA-Z). This matches the Todoist-v1 id
+// shape (alphanumeric strings, not UUIDs) and is unique per contact, so it never
+// collides on the global partial-unique follow-up index.
+func externalTaskIDForContact(contactID uuid.UUID) string {
+	id := contactID
+	return new(big.Int).SetBytes(id[:]).Text(62)
 }

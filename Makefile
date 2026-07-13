@@ -447,7 +447,7 @@ test: test-unit test-integration test-frontend
 
 test-unit:
 	@echo "Running backend unit tests..."
-	@cd backend && go test ./tests/... ./internal/matching/... ./internal/events/... ./internal/service/... ./internal/contacttask/... ./internal/spec/... ./cmd/spec-lint/... $(GOTEST_VERBOSE) -short
+	@cd backend && go test ./tests/... ./internal/matching/... ./internal/events/... ./internal/service/... ./internal/contacttask/... ./internal/synthetic/factory/... ./internal/spec/... ./cmd/spec-lint/... $(GOTEST_VERBOSE) -short
 
 # Provisions the per-worktree Postgres instance BEFORE the integration recipes
 # expand $(TEST_DATABASE_URL) (gh #433). As a prerequisite it runs to

@@ -849,7 +849,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 			return res, fmt.Errorf("profile %s: replay gcal for awaiting-reply contact: %w", params.Profile, err)
 		}
 		res.SettledInteractions++
-		if _, err := h.SeedPendingFollowUp(ctx, fuContact.ID); err != nil {
+		if _, err := h.SeedPendingFollowUp(ctx, fuContact.ID, fuContact.FullName); err != nil {
 			return res, fmt.Errorf("profile %s: seed pending follow-up: %w", params.Profile, err)
 		}
 		res.SeededTasks++
@@ -972,6 +972,15 @@ var catalogSignalKeys = []string{
 // relationship_signal rows so they are identifiable as toolkit-authored.
 const syntheticSignalMethodVersion = "synthetic-seed"
 
+// catalogOverdueAge backdates the overdue catalog cohort ~90 days before the
+// anchor (created_at == last_contacted), far enough that a sub-quarterly cadence
+// reads as overdue. catalogRecentWindow bounds the recently-created cohort within
+// the last ~48h. Both are anchor-relative.
+const (
+	catalogOverdueAge   = 90 * 24 * time.Hour
+	catalogRecentWindow = 48 * time.Hour
+)
+
 // catalogLocationStems is the small fixed pool the lives_in location rotates over
 // so locations repeat across contacts (prod-like) while staying deterministic. The
 // values are flat (no comma/hierarchy) so EnsurePlaceTx mints a flat place node
@@ -1004,19 +1013,20 @@ func catalogOptionsFor(i, n int, anchor time.Time, prefix string) []factory.Cont
 
 	// The no-method bucket: a cadence-bearing contact with NO contact_method.
 	if i == 3 && n > 3 {
-		opts = append(opts, factory.WithNoMethods(), factory.WithCadence("monthly"), factory.WithOverdue())
+		opts = append(opts, factory.WithNoMethods(), factory.WithCadence("monthly"), factory.WithCreatedAge(catalogOverdueAge))
 		return opts
 	}
 
 	opts = append(opts, factory.WithEmail())
 
-	// Cadence + recency spread: every third contact overdue, every third recent,
-	// the rest never-contacted (no LastContacted).
+	// Cadence + recency spread: every third contact created long ago (overdue with
+	// an honest empty timeline), every third created recently, the rest
+	// never-contacted (no last_contacted).
 	switch i % 3 {
 	case 0:
-		opts = append(opts, factory.WithCadence("monthly"), factory.WithOverdue())
+		opts = append(opts, factory.WithCadence("monthly"), factory.WithCreatedAge(catalogOverdueAge))
 	case 1:
-		opts = append(opts, factory.WithCadence("weekly"), factory.WithRecent())
+		opts = append(opts, factory.WithCadence("weekly"), factory.WithRecentCreation(catalogRecentWindow))
 	default:
 		// never-contacted: a cadence but no last_contacted.
 		opts = append(opts, factory.WithCadence("quarterly"))

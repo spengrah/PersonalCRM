@@ -158,6 +158,10 @@ type CreateContactRequest struct {
 	Cadence       *string    `json:"cadence,omitempty"`
 	LastContacted *time.Time `json:"last_contacted,omitempty"`
 	ProfilePhoto  *string    `json:"profile_photo,omitempty"`
+	// CreatedAt overrides the creation timestamp. Set only by the synthetic
+	// seed to backdate a contact into the simulated past; production paths
+	// leave it nil so creation stamps the current accelerated time.
+	CreatedAt *time.Time `json:"-"`
 }
 
 // UpdateContactRequest represents the request to update a contact
@@ -309,6 +313,9 @@ func (r *ContactRepository) ListContacts(ctx context.Context, params ListContact
 func (r *ContactRepository) CreateContact(ctx context.Context, req CreateContactRequest) (*Contact, error) {
 	// Use accelerated time for created_at to ensure consistency with time acceleration
 	createdAt := accelerated.GetCurrentTime()
+	if req.CreatedAt != nil {
+		createdAt = *req.CreatedAt
+	}
 
 	// Calculate contact_by if cadence is set
 	var contactBy pgtype.Date

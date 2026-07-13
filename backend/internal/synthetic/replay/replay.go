@@ -243,6 +243,7 @@ func (h *Harness) SeedContact(ctx context.Context, spec factory.ContactSpec) (*r
 	contact, _, err := h.contactService.CreateContact(ctx, repository.CreateContactRequest{
 		FullName:      spec.FullName,
 		Cadence:       spec.Cadence,
+		CreatedAt:     spec.CreatedAt,
 		LastContacted: spec.LastContacted,
 		Birthday:      spec.Birthday,
 		Location:      spec.Location,
