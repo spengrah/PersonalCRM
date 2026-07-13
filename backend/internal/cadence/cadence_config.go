@@ -31,8 +31,12 @@ func GetCadenceConfig() CadenceConfig {
 			Biannual:  1 * time.Hour,    // Test biannual every hour
 			Annual:    2 * time.Hour,    // Test annual every 2 hours
 		}
-	case "staging", "accelerated":
-		// Fast staging: validate months in hours
+	case "accelerated":
+		// Compressed-time preview environments: validate months in hours.
+		// CRM_ENV=staging deliberately does NOT take this branch: the
+		// persistent staging environment hosts a prod-shaped QA world whose
+		// rendered dates must agree with production duration semantics, so
+		// staging falls through to the production cadences below.
 		return CadenceConfig{
 			Weekly:    10 * time.Minute, // 10 minutes = 1 week (test week in 10min)
 			Biweekly:  20 * time.Minute, // 20 minutes = 2 weeks
@@ -41,8 +45,9 @@ func GetCadenceConfig() CadenceConfig {
 			Biannual:  6 * time.Hour,    // 6 hours = 6 months
 			Annual:    12 * time.Hour,   // 12 hours = 1 year
 		}
-	case "production", "prod", "":
-		// Production: real-world cadences
+	case "staging", "production", "prod", "":
+		// Production semantics: real-world cadences. Staging shares them —
+		// its QA world is prod-shaped by construction, not by compressed time.
 		return CadenceConfig{
 			Weekly:    7 * 24 * time.Hour,   // 1 week
 			Biweekly:  14 * 24 * time.Hour,  // 2 weeks
@@ -141,20 +146,22 @@ func GetOverdueDaysWithConfig(cadenceType CadenceType, lastContacted *time.Time,
 		return int(overdueTime / (24 * time.Hour))
 	}
 
-	// When acceleration is OFF but in testing/staging env, use scaled days
-	// This allows testing "X days overdue" scenarios in minutes without acceleration
+	// When acceleration is OFF but in a compressed-cadence env, use scaled days
+	// This allows testing "X days overdue" scenarios in minutes without acceleration.
+	// CRM_ENV=staging is NOT scaled: it runs production cadences (see
+	// GetCadenceConfig), so its overdue days are real days.
 	env := os.Getenv("CRM_ENV")
 	switch env {
 	case "test", "testing":
 		// In test mode, 1 "day" = 2 minutes (weekly cadence / 7)
 		scaledDay := 2 * time.Minute / 7
 		return int(overdueTime / scaledDay)
-	case "staging", "accelerated":
-		// In staging mode, 1 "day" = 10 minutes / 7
+	case "accelerated":
+		// In accelerated mode, 1 "day" = 10 minutes / 7
 		scaledDay := 10 * time.Minute / 7
 		return int(overdueTime / scaledDay)
 	default:
-		// Production: normal days
+		// Production and staging: normal days
 		return int(overdueTime / (24 * time.Hour))
 	}
 }
