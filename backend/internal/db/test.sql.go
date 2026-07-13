@@ -917,33 +917,6 @@ func (q *Queries) SyntheticCountContactTagsByContactNamePrefix(ctx context.Conte
 	return count, err
 }
 
-const SyntheticCountContactTasksByStateAndNamePrefix = `-- name: SyntheticCountContactTasksByStateAndNamePrefix :one
-SELECT COUNT(*)
-FROM contact_task ct
-JOIN contact c ON ct.contact_id = c.id
-WHERE c.full_name LIKE $1 || '%'
-  AND ct.state = $2
-  AND c.deleted_at IS NULL
-`
-
-type SyntheticCountContactTasksByStateAndNamePrefixParams struct {
-	NamePrefix pgtype.Text `json:"name_prefix"`
-	State      string      `json:"state"`
-}
-
-// Profile coverage test only: count contact_task rows in a given state whose
-// contact's full_name is ns-prefixed, so the prod-shaped coverage check can assert
-// each surface state (managed/unmanaged/completed/dismissed) has ≥1 representative
-// scoped to its own namespace on the shared test DB. contact_task has no
-// deleted_at; the contact soft-delete filter scopes to live catalog contacts.
-// Caller passes a BARE prefix; '%' appended.
-func (q *Queries) SyntheticCountContactTasksByStateAndNamePrefix(ctx context.Context, arg SyntheticCountContactTasksByStateAndNamePrefixParams) (int64, error) {
-	row := q.db.QueryRow(ctx, SyntheticCountContactTasksByStateAndNamePrefix, arg.NamePrefix, arg.State)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const SyntheticCountContactsByFullName = `-- name: SyntheticCountContactsByFullName :one
 SELECT COUNT(*) FROM contact WHERE full_name = $1 AND deleted_at IS NULL
 `
@@ -2173,6 +2146,35 @@ func (q *Queries) TestCountAllRows(ctx context.Context, tableName string) (int64
 	return column_1, err
 }
 
+const TestCountCadenceDueByStateAndNamePrefix = `-- name: TestCountCadenceDueByStateAndNamePrefix :one
+SELECT COUNT(*)
+FROM contact_task ct
+JOIN contact c ON ct.contact_id = c.id
+WHERE c.full_name LIKE $1 || '%'
+  AND c.deleted_at IS NULL
+  AND ct.lifecycle = 'cadence_due'
+  AND ct.state = $2
+`
+
+type TestCountCadenceDueByStateAndNamePrefixParams struct {
+	NamePrefix pgtype.Text `json:"name_prefix"`
+	State      string      `json:"state"`
+}
+
+// Coherence gate (F7, positive): count the namespace's cadence_due contact_tasks in
+// a given state, so the coverage check can assert BOTH prod-reachable persistent
+// states are present — `managed` (>= 1, the reconcile default) and `unmanaged`
+// (>= 1, reached only via the real recurring edit). Scoped to the namespace so the
+// shared test DB's other rows do not count. contact_task has no deleted_at; the
+// contact soft-delete filter scopes to live catalog contacts. Caller passes a BARE
+// prefix; '%' appended.
+func (q *Queries) TestCountCadenceDueByStateAndNamePrefix(ctx context.Context, arg TestCountCadenceDueByStateAndNamePrefixParams) (int64, error) {
+	row := q.db.QueryRow(ctx, TestCountCadenceDueByStateAndNamePrefix, arg.NamePrefix, arg.State)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const TestCountContactsWithNotepadByNamePrefix = `-- name: TestCountContactsWithNotepadByNamePrefix :one
 SELECT COUNT(DISTINCT c.id)
 FROM contact c
@@ -2195,6 +2197,39 @@ WHERE c.full_name LIKE $1 || '%'
 // predicate on the join. Caller passes a BARE prefix.
 func (q *Queries) TestCountContactsWithNotepadByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error) {
 	row := q.db.QueryRow(ctx, TestCountContactsWithNotepadByNamePrefix, namePrefix)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const TestCountIncoherentCadenceDueByNamePrefix = `-- name: TestCountIncoherentCadenceDueByNamePrefix :one
+SELECT COUNT(*)
+FROM contact_task ct
+JOIN contact c ON ct.contact_id = c.id
+WHERE c.full_name LIKE $1 || '%'
+  AND c.deleted_at IS NULL
+  AND ct.lifecycle = 'cadence_due'
+  AND (
+        ct.state IN ('completed', 'dismissed')
+     OR ct.external_task_id IS NULL
+     OR ct.external_task_id !~ '^[A-Za-z0-9]+$'
+     OR (ct.metadata ? 'pending_temp_id')
+  )
+`
+
+// Coherence gate (F7): count the namespace's cadence_due contact_tasks in a
+// prod-impossible shape. Asserted == 0. Two incoherence classes:
+//   - state: `dismissed` is unreachable for cadence_due (a skip routes to a managed
+//     replacement, never to dismissed), and a persistent `completed` row is deleted
+//     by the next reconcile — so neither state can persist on this lifecycle.
+//   - external id: must be a FINALIZED Todoist-v1 alphanumeric id. The strict
+//     '^[A-Za-z0-9]+$' rejects empty, a raw UUID (hyphens), and any punctuation; a
+//     lingering pending_temp_id metadata key means the temp→real finalize never ran.
+//
+// contact_task has no deleted_at; the contact soft-delete filter scopes to live
+// catalog contacts. Caller passes a BARE prefix; '%' appended.
+func (q *Queries) TestCountIncoherentCadenceDueByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error) {
+	row := q.db.QueryRow(ctx, TestCountIncoherentCadenceDueByNamePrefix, namePrefix)
 	var count int64
 	err := row.Scan(&count)
 	return count, err

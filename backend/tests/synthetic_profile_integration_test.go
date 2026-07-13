@@ -319,8 +319,24 @@ func TestSyntheticProfile_DevCoversCatalog(t *testing.T) {
 	require.GreaterOrEqual(t, res.ContactsWithHowMet, 1, "dev profile seeds how_met bio facts")
 	// Cadence tasks: the dev catalog is cadence-bearing, so ReplayTodoist seeds a
 	// managed task per contact (res.SeededTasks is the actual rows, a catalog-wide
-	// count, not the >0 gate value in Counts.SeededTasks).
+	// count, not the >0 gate value in Counts.SeededTasks), and one is driven to
+	// `unmanaged` via the real recurring edit. Same F7 coherence gate as the
+	// prod-shaped profile: both prod-reachable states present, zero prod-impossible
+	// (completed/dismissed or non-finalized external id) cadence_due rows.
 	require.GreaterOrEqual(t, res.SeededTasks, 1, "dev profile seeds cadence tasks")
+	{
+		cadenceSupport := repository.NewSyntheticSupportRepository(database.Queries)
+		devPrefix := h.Generator().Prefix()
+		managedCadence, err := cadenceSupport.CountCadenceDueByStateByNamePrefix(ctx, string(repository.ContactTaskStateManaged), devPrefix)
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, managedCadence, int64(1), "≥1 managed cadence_due task (reconcile default)")
+		unmanagedCadence, err := cadenceSupport.CountCadenceDueByStateByNamePrefix(ctx, string(repository.ContactTaskStateUnmanaged), devPrefix)
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, unmanagedCadence, int64(1), "≥1 unmanaged cadence_due task (real recurring-edit path)")
+		incoherentCadence, err := cadenceSupport.IncoherentCadenceDueCountByNamePrefix(ctx, devPrefix)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), incoherentCadence, "no cadence_due task may be completed/dismissed or carry a non-finalized external id")
+	}
 	// Value-type + edge graph rows: the dev catalog (18) far exceeds the small
 	// dev knob counts, so the seeded counts are exact (no catalog-size bounding),
 	// and the bool-fact gate produces exactly one toolkit date fact.
@@ -420,8 +436,9 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	params.Counts.SeededBoolFacts = 3
 	params.Counts.SeededRelationships = 3
 	// Enable cadence-task seeding (>0 gate). The 9-contact catalog is all
-	// cadence-bearing, so reconcile creates 9 `managed` tasks and three are
-	// transitioned to completed/dismissed/unmanaged — every surface state present.
+	// cadence-bearing, so reconcile creates 9 `managed` tasks and one is driven to
+	// `unmanaged` via the real recurring-edit path — the two states cadence_due can
+	// hold in prod (completed/dismissed are unreachable for this lifecycle).
 	params.Counts.SeededTasks = 1
 	// Entity pool of 3 (1 org + 1 topic + 1 tag) + one full person→entity edge cycle
 	// (works_at/interested_in/tagged_as) so every entity subtype + edge type is
@@ -624,23 +641,25 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, signalsLanded, int64(1), "≥1 relationship_signal row present for the seeded nodes")
 
-	// Cadence tasks: ReplayTodoist seeds a `managed` cadence task on each
-	// cadence-bearing catalog contact, and the profile transitions a deterministic
-	// three to completed/dismissed/unmanaged. Assert ≥1 row in EACH state the seed
-	// produces (namespace-scoped), so every cadence-task surface the staging UI
-	// renders has content. pending_remote_create is out of scope (a transient
-	// create-in-flight state the seed does not produce).
+	// Cadence tasks: ReplayTodoist seeds a `managed` cadence_due task on each
+	// cadence-bearing catalog contact, and ReplayTodoistRecurringEdit drives one to
+	// `unmanaged` through the real recurring-edit path. cadence_due has exactly two
+	// prod-reachable persistent states — `managed` and `unmanaged` — so assert BOTH
+	// are present (namespace-scoped) and that NO cadence_due row is in a prod-
+	// impossible shape (gate e): `completed`/`dismissed` states (a completed row is
+	// deleted by the next reconcile; a skip routes to a managed replacement, never to
+	// dismissed) or a non-finalized external id (a raw UUID / lingering
+	// pending_temp_id instead of a Todoist-v1 alphanumeric).
 	require.GreaterOrEqual(t, res.SeededTasks, 1, "cadence tasks seeded")
-	for _, state := range []repository.ContactTaskState{
-		repository.ContactTaskStateManaged,
-		repository.ContactTaskStateUnmanaged,
-		repository.ContactTaskStateCompleted,
-		repository.ContactTaskStateDismissed,
-	} {
-		count, err := support.CountContactTasksByStateAndNamePrefix(ctx, string(state), prefix)
-		require.NoError(t, err)
-		require.GreaterOrEqual(t, count, int64(1), "≥1 contact_task in state %q", state)
-	}
+	managedCadence, err := support.CountCadenceDueByStateByNamePrefix(ctx, string(repository.ContactTaskStateManaged), prefix)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, managedCadence, int64(1), "≥1 managed cadence_due task (reconcile default)")
+	unmanagedCadence, err := support.CountCadenceDueByStateByNamePrefix(ctx, string(repository.ContactTaskStateUnmanaged), prefix)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, unmanagedCadence, int64(1), "≥1 unmanaged cadence_due task (real recurring-edit path)")
+	incoherentCadence, err := support.IncoherentCadenceDueCountByNamePrefix(ctx, prefix)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), incoherentCadence, "no cadence_due task may be completed/dismissed or carry a non-finalized external id")
 
 	// The "awaiting reply" state (has_pending_followup). REGRESSION GUARD, not a nicety:
 	// a seeded world cannot reach this state through the production path (FollowUpManager

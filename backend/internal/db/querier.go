@@ -1821,13 +1821,6 @@ type Querier interface {
 	// a positive guard so a future reader does not "fix" a perceived gap by re-seeding
 	// the legacy table. Caller passes a BARE prefix; '%' is appended here.
 	SyntheticCountContactTagsByContactNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error)
-	// Profile coverage test only: count contact_task rows in a given state whose
-	// contact's full_name is ns-prefixed, so the prod-shaped coverage check can assert
-	// each surface state (managed/unmanaged/completed/dismissed) has ≥1 representative
-	// scoped to its own namespace on the shared test DB. contact_task has no
-	// deleted_at; the contact soft-delete filter scopes to live catalog contacts.
-	// Caller passes a BARE prefix; '%' appended.
-	SyntheticCountContactTasksByStateAndNamePrefix(ctx context.Context, arg SyntheticCountContactTasksByStateAndNamePrefixParams) (int64, error)
 	// Contact→node dual-write test support: count contacts with an exact full_name
 	// (namespace-prefixed names are unique per test), so a rollback test asserts a
 	// failed-tx contact did not survive without paging the whole contact list.
@@ -2164,6 +2157,14 @@ type Querier interface {
 	// list by the test before it reaches here; format() with %I quotes the
 	// identifier so it can never be an injection vector.
 	TestCountAllRows(ctx context.Context, tableName string) (int64, error)
+	// Coherence gate (F7, positive): count the namespace's cadence_due contact_tasks in
+	// a given state, so the coverage check can assert BOTH prod-reachable persistent
+	// states are present — `managed` (>= 1, the reconcile default) and `unmanaged`
+	// (>= 1, reached only via the real recurring edit). Scoped to the namespace so the
+	// shared test DB's other rows do not count. contact_task has no deleted_at; the
+	// contact soft-delete filter scopes to live catalog contacts. Caller passes a BARE
+	// prefix; '%' appended.
+	TestCountCadenceDueByStateAndNamePrefix(ctx context.Context, arg TestCountCadenceDueByStateAndNamePrefixParams) (int64, error)
 	// Coverage gate (F6): count the namespace's LIVE contacts that carry a NON-EMPTY
 	// NOTEPAD note — the category the contact-detail endpoint renders via GetContactNotepad.
 	// The category='notepad' filter is load-bearing: SeedNote writes via CreateNotepad, and
@@ -2176,6 +2177,17 @@ type Querier interface {
 	// has NO deleted_at column (it is hard-deleted at teardown), so there is no soft-delete
 	// predicate on the join. Caller passes a BARE prefix.
 	TestCountContactsWithNotepadByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error)
+	// Coherence gate (F7): count the namespace's cadence_due contact_tasks in a
+	// prod-impossible shape. Asserted == 0. Two incoherence classes:
+	//   - state: `dismissed` is unreachable for cadence_due (a skip routes to a managed
+	//     replacement, never to dismissed), and a persistent `completed` row is deleted
+	//     by the next reconcile — so neither state can persist on this lifecycle.
+	//   - external id: must be a FINALIZED Todoist-v1 alphanumeric id. The strict
+	//     '^[A-Za-z0-9]+$' rejects empty, a raw UUID (hyphens), and any punctuation; a
+	//     lingering pending_temp_id metadata key means the temp→real finalize never ran.
+	// contact_task has no deleted_at; the contact soft-delete filter scopes to live
+	// catalog contacts. Caller passes a BARE prefix; '%' appended.
+	TestCountIncoherentCadenceDueByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error)
 	// Coherence gate: count the namespace's contacts whose non-creation last_contacted
 	// is NOT backed by a live inbound/mutual interaction at the same occurred_at, or
 	// whose last_interaction_at is not in lockstep with last_contacted. Asserted == 0.

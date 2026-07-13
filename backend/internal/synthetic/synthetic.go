@@ -103,8 +103,9 @@ type Counts struct {
 	// SeededTasks is a >0 GATE (not a hard cap) for Todoist cadence-task seeding:
 	// when non-zero the profile runs ReplayTodoist, whose reconcile creates one
 	// `managed` cadence task per cadence-bearing catalog contact (catalog-wide, like
-	// prod), then transitions a deterministic three to completed/dismissed/unmanaged
-	// for surface coverage. ProfileResult.SeededTasks reports the actual rows. 0
+	// prod), then drives ONE to `unmanaged` via the real recurring-edit path — the
+	// two states cadence_due can hold in prod (completed/dismissed are unreachable
+	// for this lifecycle). ProfileResult.SeededTasks reports the actual rows. 0
 	// disables (minimal-scoped stays task-free / byte-stable).
 	SeededTasks int
 	// SeededEntities is the size of the org/topic/tag entity pool the profile

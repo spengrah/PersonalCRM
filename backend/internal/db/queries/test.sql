@@ -307,20 +307,6 @@ SELECT id FROM contact_task WHERE provider = @provider;
 -- created (the before/after diff from SyntheticListContactTaskIdsByProvider).
 DELETE FROM contact_task WHERE id = ANY(@task_ids::uuid[]);
 
--- name: SyntheticCountContactTasksByStateAndNamePrefix :one
--- Profile coverage test only: count contact_task rows in a given state whose
--- contact's full_name is ns-prefixed, so the prod-shaped coverage check can assert
--- each surface state (managed/unmanaged/completed/dismissed) has ≥1 representative
--- scoped to its own namespace on the shared test DB. contact_task has no
--- deleted_at; the contact soft-delete filter scopes to live catalog contacts.
--- Caller passes a BARE prefix; '%' appended.
-SELECT COUNT(*)
-FROM contact_task ct
-JOIN contact c ON ct.contact_id = c.id
-WHERE c.full_name LIKE @name_prefix || '%'
-  AND ct.state = @state
-  AND c.deleted_at IS NULL;
-
 -- name: SyntheticCountLiveFollowUpsByNamePrefix :one
 -- Profile coverage test only: count LIVE follow-up loops (the "awaiting reply" state
 -- behind has_pending_followup) on ns-prefixed contacts. Mirrors FindPendingFollowUp's
@@ -1244,6 +1230,46 @@ WHERE c.full_name LIKE @name_prefix || '%'
      OR COALESCE(ct.metadata->>'content','')     NOT LIKE 'Follow up:%(awaiting reply)'
      OR COALESCE(ct.metadata->>'marker_json','')  NOT LIKE '%followup_loop%'
   );
+
+-- name: TestCountIncoherentCadenceDueByNamePrefix :one
+-- Coherence gate (F7): count the namespace's cadence_due contact_tasks in a
+-- prod-impossible shape. Asserted == 0. Two incoherence classes:
+--   - state: `dismissed` is unreachable for cadence_due (a skip routes to a managed
+--     replacement, never to dismissed), and a persistent `completed` row is deleted
+--     by the next reconcile — so neither state can persist on this lifecycle.
+--   - external id: must be a FINALIZED Todoist-v1 alphanumeric id. The strict
+--     '^[A-Za-z0-9]+$' rejects empty, a raw UUID (hyphens), and any punctuation; a
+--     lingering pending_temp_id metadata key means the temp→real finalize never ran.
+-- contact_task has no deleted_at; the contact soft-delete filter scopes to live
+-- catalog contacts. Caller passes a BARE prefix; '%' appended.
+SELECT COUNT(*)
+FROM contact_task ct
+JOIN contact c ON ct.contact_id = c.id
+WHERE c.full_name LIKE @name_prefix || '%'
+  AND c.deleted_at IS NULL
+  AND ct.lifecycle = 'cadence_due'
+  AND (
+        ct.state IN ('completed', 'dismissed')
+     OR ct.external_task_id IS NULL
+     OR ct.external_task_id !~ '^[A-Za-z0-9]+$'
+     OR (ct.metadata ? 'pending_temp_id')
+  );
+
+-- name: TestCountCadenceDueByStateAndNamePrefix :one
+-- Coherence gate (F7, positive): count the namespace's cadence_due contact_tasks in
+-- a given state, so the coverage check can assert BOTH prod-reachable persistent
+-- states are present — `managed` (>= 1, the reconcile default) and `unmanaged`
+-- (>= 1, reached only via the real recurring edit). Scoped to the namespace so the
+-- shared test DB's other rows do not count. contact_task has no deleted_at; the
+-- contact soft-delete filter scopes to live catalog contacts. Caller passes a BARE
+-- prefix; '%' appended.
+SELECT COUNT(*)
+FROM contact_task ct
+JOIN contact c ON ct.contact_id = c.id
+WHERE c.full_name LIKE @name_prefix || '%'
+  AND c.deleted_at IS NULL
+  AND ct.lifecycle = 'cadence_due'
+  AND ct.state = @state;
 
 -- name: TestGetLiveFollowUpByNamePrefix :one
 -- Coherence gate (F3, Go-side): return the namespace's live managed follow-up loop
