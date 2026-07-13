@@ -134,11 +134,13 @@ func TestSyntheticProfile_DevCoversCatalog(t *testing.T) {
 	// index; the dev catalog is large enough to carry ≥1.
 	require.GreaterOrEqual(t, res.ContactsWithLocation, 1, "dev profile seeds location bio facts")
 	// MessagesPerContact spreads MULTIPLE settled interactions per dedicated source
-	// contact: SettledInteractions == (settled contacts) × MessagesPerContact, and
-	// strictly more than one interaction per contact.
+	// contact: SettledInteractions == (settled contacts) × MessagesPerContact — PLUS the
+	// single GCal event the awaiting-reply scenario replays (one per seeded follow-up).
+	// That event is the OUTBOUND half of the scenario's causal chain: mutual direction
+	// (CAD-006) gives the contact the last_outreach_at a follow-up requires (CAD-011).
 	settledContacts := res.GmailSettled + res.TelegramSettled + res.GCalSettled + res.GChatSettled + res.IMessageSettled
-	require.Equal(t, settledContacts*params.Counts.MessagesPerContact, res.SettledInteractions,
-		"dev profile spreads MessagesPerContact interactions per settled contact")
+	require.Equal(t, settledContacts*params.Counts.MessagesPerContact+res.SeededPendingFollowUps, res.SettledInteractions,
+		"dev profile spreads MessagesPerContact interactions per settled contact, plus the awaiting-reply scenario's GCal event")
 	require.Greater(t, res.SettledInteractions, settledContacts, "dev profile seeds >1 interaction per settled contact")
 	// Merge + soft-delete scenarios are standalone contacts seeded at full count
 	// (independent of catalog size), so the dev result equals the dev knobs.
@@ -417,15 +419,25 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	require.Equal(t, 1, res.SeededPendingFollowUps, "profile seeds exactly one live follow-up")
 	liveFollowUps, err := support.CountLiveFollowUpsByNamePrefix(ctx, prefix)
 	require.NoError(t, err)
+	// The query requires last_outreach_at IS NOT NULL — a follow-up is opened BY an outbound
+	// (CAD-011), so one on a contact with no outbound is a state production cannot reach.
+	// The first version of this seed produced exactly that incoherent world, and the judge
+	// (correctly) failed the contact page for showing "Awaiting reply" with nothing to be
+	// awaiting a reply to. Asserting COHERENCE, not just presence, is the point.
 	require.GreaterOrEqual(t, liveFollowUps, int64(1),
-		"≥1 LIVE followup_loop task — the has_pending_followup state the contact page renders")
+		"≥1 COHERENT live followup_loop task (on a contact with an outbound) — the has_pending_followup state the contact page renders")
 
 	// Interaction volume: each dedicated source contact carries MessagesPerContact
 	// settled interactions, so SettledInteractions == (settled contacts) ×
-	// MessagesPerContact, strictly more than one per contact.
+	// MessagesPerContact — PLUS the single GCal event the awaiting-reply scenario
+	// replays (one per seeded follow-up), which is a real settled interaction and is
+	// counted as one. It is the OUTBOUND half of that scenario's causal chain: mutual
+	// direction (CAD-006) is what gives the contact the last_outreach_at a follow-up
+	// requires (CAD-011), so it is not bookkeeping — it is the reason the state is
+	// coherent at all.
 	settledContacts := res.GmailSettled + res.TelegramSettled + res.GCalSettled + res.GChatSettled + res.IMessageSettled
-	require.Equal(t, settledContacts*params.Counts.MessagesPerContact, res.SettledInteractions,
-		"MessagesPerContact interactions per settled contact")
+	require.Equal(t, settledContacts*params.Counts.MessagesPerContact+res.SeededPendingFollowUps, res.SettledInteractions,
+		"MessagesPerContact interactions per settled contact, plus the awaiting-reply scenario's GCal event")
 	require.Greater(t, res.SettledInteractions, settledContacts, ">1 interaction per settled contact")
 
 	// Interaction temporal spread (DB-level): ≥1 settled contact must carry ≥2
