@@ -46,19 +46,43 @@ func (syntheticTodoistOAuth) GetAccessToken(_ context.Context, _ string) (string
 }
 func (syntheticTodoistOAuth) HasAnyAccount(_ context.Context) bool { return true }
 
-// fakeTodoistClient is a Client returning an empty incremental Sync (no inbound
-// items). The Todoist provider has no inbound interaction graph; "settled" =
-// the provider's own DB writes (task reconciliation for the seeded contacts)
-// complete inside Sync. MatchIntent is n/a for Todoist.
-type fakeTodoistClient struct{}
+// fakeTodoistClient is the Client the Todoist replay drives instead of the real
+// Sync API. It has no inbound interaction graph; "settled" = the provider's own DB
+// writes (task reconciliation for the seeded contacts) complete inside Sync.
+// MatchIntent is n/a for Todoist. Two behaviors, both always on:
+//
+//   - It ALWAYS finalizes item_add commands. For each command carrying a TempID
+//     (only item_add sets one), Sync returns TempIDMap[TempID] = a prod-shaped
+//     alphanumeric id, so the provider's inline processTempIDMappings swaps the
+//     temp UUID for a finalized Todoist-v1 id WITHIN the same Sync call — leaving
+//     every reconcile-created cadence_due row with an alphanumeric external_task_id
+//     and a cleared pending_temp_id, exactly as production's temp→real handoff does.
+//   - It returns the configured `items` as the incremental Sync response. Empty for
+//     the plain reconcile-only replay (ReplayTodoist); the recurring-edit replay
+//     (ReplayTodoistRecurringEdit) configures one recurring item so processItem
+//     drives the real handleRecurringDetection path.
+type fakeTodoistClient struct {
+	items []todoist.SyncItem
+}
 
 func (fakeTodoistClient) QuickAdd(_ context.Context, _ string, _ string) (*todoist.QuickAddTask, error) {
 	return &todoist.QuickAddTask{}, nil
 }
 
-func (fakeTodoistClient) Sync(_ context.Context, _ string, _ []string, _ []todoist.SyncCommand) (*todoist.SyncResponse, error) {
-	// Empty incremental response: no items, fresh sync token.
-	return &todoist.SyncResponse{SyncToken: "synthetic-sync-token", FullSync: true}, nil
+func (c fakeTodoistClient) Sync(_ context.Context, _ string, _ []string, commands []todoist.SyncCommand) (*todoist.SyncResponse, error) {
+	resp := &todoist.SyncResponse{SyncToken: "synthetic-sync-token", FullSync: true, Items: c.items}
+	for _, cmd := range commands {
+		// Only item_add carries a TempID; finalize each so the reconcile's inline
+		// processTempIDMappings resolves temp→real within this same tick.
+		if cmd.TempID == "" {
+			continue
+		}
+		if resp.TempIDMap == nil {
+			resp.TempIDMap = make(map[string]string)
+		}
+		resp.TempIDMap[cmd.TempID] = finalizeTempID(cmd.TempID)
+	}
+	return resp, nil
 }
 
 // namespaceScopedContactRepo wraps the real contact repository for the Todoist
@@ -93,36 +117,28 @@ func (r *namespaceScopedContactRepo) ListContactsWithContactBy(ctx context.Conte
 	return scoped, nil
 }
 
-// ReplayTodoist drives the REAL CadenceSyncProvider with a fake Client (no
-// OAuth/HTTP). It exercises cadence task reconciliation; there is no inbound
-// sender or pending equivalent, so MatchIntent is ignored. "Settled" = Sync's
-// own DB writes complete + any enqueued jobs drain.
-//
-// Namespace scoping: the provider's reconcile lists ALL cadence-bearing contacts
-// DB-wide (ListContactsWithContactBy) and may create/update/close contact_task
-// rows on any of them. To keep the replay non-destructive on the shared test DB
-// (where the real internal/todoist cadence tests run concurrently), the adapter
-// injects a namespace-scoped contact-lister wrapper so the reconcile only ever
-// sees THIS harness's seeded contacts — it can never touch another namespace's
-// (or a real) contact. The before/after contact_task id-delta is still tracked
-// into the cleanup ledger as belt-and-suspenders. contactIDs is the caller's
-// seeded set, returned for assertion convenience.
-func (h *Harness) ReplayTodoist(ctx context.Context, contactIDs []uuid.UUID) (TodoistResult, error) {
+// newScopedTodoistProvider builds the REAL CadenceSyncProvider wired to the fake
+// Client, with the namespace-scoped contact-lister BOTH Todoist replays share so
+// the scoping cannot drift between them. The provider's reconcile lists ALL
+// cadence-bearing contacts DB-wide (ListContactsWithContactBy) and may
+// create/update/close contact_task rows on any of them; the wrapper filters that
+// enumeration to this harness's seeded contacts (the ledger ∪ extra) so a replay
+// in one namespace can never touch another namespace's (or a real) contact on the
+// shared test DB. clientItems is the inbound incremental Sync response — nil for
+// the reconcile-only replay, one recurring item for the recurring-edit replay.
+func (h *Harness) newScopedTodoistProvider(clientItems []todoist.SyncItem, extra []uuid.UUID) *todoist.CadenceSyncProvider {
 	syncRepo := repository.NewSyncRepositoryWithPool(h.database.Queries, h.database.Pool)
 
-	// Build the namespace-scoped allow-set: every contact this harness seeded
-	// (the ledger) plus the caller's explicit set, so the reconcile is confined
-	// to the namespace regardless of which contacts carry cadence + contact_by.
 	allowed := make(map[uuid.UUID]struct{})
 	for _, id := range h.snapshotContactIDs() {
 		allowed[id] = struct{}{}
 	}
-	for _, id := range contactIDs {
+	for _, id := range extra {
 		allowed[id] = struct{}{}
 	}
 	scopedContacts := &namespaceScopedContactRepo{real: h.contactRepo, allowed: allowed}
 
-	provider := todoist.NewCadenceSyncProvider(
+	return todoist.NewCadenceSyncProvider(
 		syntheticTodoistOAuth{},
 		repository.NewContactTaskRepository(h.database.Queries),
 		scopedContacts,
@@ -131,13 +147,28 @@ func (h *Harness) ReplayTodoist(ctx context.Context, contactIDs []uuid.UUID) (To
 		h.bus,
 		h.cadenceUpdater,
 		h.database.Pool,
-		func(string) todoist.Client { return fakeTodoistClient{} },
-		// Temp-ID finalize deps: the fake client returns an empty sync (no
-		// temp_id_mapping), so the state-aware finalize never runs here.
-		// remoteCloseEnabled=false mirrors the harness's follow-up mode (off).
+		func(string) todoist.Client { return fakeTodoistClient{items: clientItems} },
+		// Temp-ID finalize deps: the fake client always finalizes item_add
+		// commands via its TempIDMap, and reconcile-created cadence rows are
+		// `managed`, so finalizeTempIDMappingTx takes the managed branch (no
+		// riverInserter / remoteClose). remoteCloseEnabled=false mirrors the
+		// harness's follow-up mode (off).
 		nil,
 		false,
 	)
+}
+
+// ReplayTodoist drives the REAL CadenceSyncProvider with a fake Client (no
+// OAuth/HTTP). It exercises cadence task reconciliation; there is no inbound
+// sender or pending equivalent, so MatchIntent is ignored. "Settled" = Sync's
+// own DB writes complete + any enqueued jobs drain. The provider is built with the
+// namespace-scoped contact-lister (see newScopedTodoistProvider) so the reconcile
+// only touches this harness's contacts on the shared test DB. The before/after
+// contact_task id-delta is still tracked into the cleanup ledger as belt-and-
+// suspenders. contactIDs is the caller's seeded set, returned for assertion
+// convenience.
+func (h *Harness) ReplayTodoist(ctx context.Context, contactIDs []uuid.UUID) (TodoistResult, error) {
+	provider := h.newScopedTodoistProvider(nil, contactIDs)
 
 	// Snapshot todoist contact_task ids before the (globally-scoped) reconcile.
 	before, err := h.support.ListContactTaskIdsByProvider(ctx, todoist.SourceName)
@@ -185,26 +216,60 @@ func (h *Harness) ReplayTodoist(ctx context.Context, contactIDs []uuid.UUID) (To
 	return TodoistResult{ContactIDs: contactIDs}, nil
 }
 
-// TransitionTodoistCadenceTaskState fetches the seeded contact's managed Todoist
-// cadence-due task (created by ReplayTodoist's reconcile) and transitions it to
-// the target state via the production UpdateContactTaskState path, returning the
-// task id. The prod-shaped profile uses it to cover the non-managed contact_task
-// surface states (completed/dismissed/unmanaged) that the empty fake-Todoist sync
-// never produces — reconcile alone creates only `managed` rows. The task id is
-// already in the cleanup ledger (ReplayTodoist tracked it), so no extra tracking
-// is needed. Errors (rather than no-ops) if the contact has no cadence-due Todoist
-// task, so a mis-wired seed fails loudly.
-func (h *Harness) TransitionTodoistCadenceTaskState(ctx context.Context, contactID uuid.UUID, state repository.ContactTaskState) (uuid.UUID, error) {
+// ReplayTodoistRecurringEdit drives the contact's managed cadence_due task to the
+// `unmanaged` surface state through the REAL production path — the only way prod
+// reaches it. It feeds the CadenceSyncProvider one inbound Todoist item: the task's
+// own (finalized, alphanumeric) external id, now marked recurring. processItem
+// matches it by external id and routes through handleRecurringDetection, exactly as
+// production does when a user edits the Todoist task to repeat. This replaces the
+// former raw UpdateContactTaskState write, which forged a state the lifecycle would
+// never otherwise hold.
+//
+// Ordering contract: call AFTER ReplayTodoist, whose reconcile finalizes the temp
+// id into the alphanumeric external id this method matches on (matching on the temp
+// UUID would miss). Namespace scoping: provider.Sync ALWAYS reconciles after
+// processing items (DB-wide), so the provider is built with the same
+// namespace-scoped contact-lister ReplayTodoist uses — the trailing reconcile can
+// only see this harness's contacts, never re-strand a temp id or touch another
+// namespace. The just-unmanaged row survives that reconcile:
+// GetContactTaskByContactCadenceDue is state-agnostic and reconcile skips a
+// non-managed row, and the partial unique index blocks a duplicate regardless. The
+// task id is already in the cleanup ledger (ReplayTodoist tracked it). Draws no
+// generator PRNG (reads a seeded contact + its task), so it is safe after the
+// deterministic id sequence the earlier replays depend on.
+func (h *Harness) ReplayTodoistRecurringEdit(ctx context.Context, contactID uuid.UUID) error {
 	taskRepo := repository.NewContactTaskRepository(h.database.Queries)
 	task, err := taskRepo.GetContactTaskByContactCadenceDue(ctx, contactID, todoist.SourceName)
 	if err != nil {
-		return uuid.Nil, fmt.Errorf("get cadence-due task for contact %s: %w", contactID, err)
+		return fmt.Errorf("get cadence-due task for contact %s: %w", contactID, err)
 	}
-	updated, err := taskRepo.UpdateContactTaskState(ctx, task.ID, state)
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("transition contact_task %s to %s: %w", task.ID, state, err)
+
+	// One inbound item: the task's finalized external id, edited to recur.
+	recurringItem := todoist.SyncItem{
+		ID:  task.ExternalTaskID,
+		Due: &todoist.SyncDue{IsRecurring: true},
 	}
-	return updated.ID, nil
+	provider := h.newScopedTodoistProvider([]todoist.SyncItem{recurringItem}, []uuid.UUID{contactID})
+
+	accountID := h.gen.Prefix() + "todoist"
+	state := &repository.SyncState{
+		Source:    repository.InteractionSourceTodoist,
+		AccountID: &accountID,
+		Metadata: map[string]any{
+			todoist.MetadataKeyProjectID: h.gen.Prefix() + "project",
+			todoist.MetadataKeyLabelID:   h.gen.Prefix() + "label",
+		},
+	}
+	if _, err := provider.Sync(ctx, state, nil); err != nil {
+		return fmt.Errorf("todoist recurring-edit sync for contact %s: %w", contactID, err)
+	}
+
+	// Settle Gate B over the seeded contacts (no domain predicate — the recurring
+	// detection's state write is synchronous within Sync).
+	if err := h.Settle(ctx, nil, ""); err != nil {
+		return err
+	}
+	return nil
 }
 
 // SeedPendingFollowUp gives a contact a LIVE follow-up loop — the "awaiting reply"
@@ -283,6 +348,27 @@ func (h *Harness) SeedPendingFollowUp(ctx context.Context, contactID uuid.UUID, 
 // shape (alphanumeric strings, not UUIDs) and is unique per contact, so it never
 // collides on the global partial-unique follow-up index.
 func externalTaskIDForContact(contactID uuid.UUID) string {
-	id := contactID
+	return base62UUID(contactID)
+}
+
+// base62UUID renders a UUID's 16 bytes as base62 (0-9a-zA-Z) — the Todoist-v1 id
+// shape (alphanumeric, not a hyphenated UUID). Bijective on the bytes, so the
+// result is globally unique and satisfies the strict '^[A-Za-z0-9]+$' finalized-id
+// coherence gate.
+func base62UUID(id uuid.UUID) string {
 	return new(big.Int).SetBytes(id[:]).Text(62)
+}
+
+// finalizeTempID maps an item_add command's temp id to the prod-shaped
+// alphanumeric id the fake Sync returns for it (mirroring the temp→real handoff
+// the real Todoist Sync API performs). The provider mints temp ids via
+// uuid.New().String(), so the normal path parses + base62-encodes the UUID to
+// match PR1's follow-up-id convention; a non-UUID temp id (never emitted by the
+// provider) falls back to base62 of the raw bytes so the result stays alphanumeric
+// and unique regardless.
+func finalizeTempID(tempID string) string {
+	if u, err := uuid.Parse(tempID); err == nil {
+		return base62UUID(u)
+	}
+	return new(big.Int).SetBytes([]byte(tempID)).Text(62)
 }

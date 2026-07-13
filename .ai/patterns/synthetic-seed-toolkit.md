@@ -4,6 +4,10 @@ The synthetic-seed toolkit produces **prod-shaped, PII-free, deterministic** syn
 
 The defining capability is that it doesn't just write terminal domain rows — it injects synthetic sync-source inputs (e.g. fake Gmail, GChat, GCal, Telegram, iMessage, Mac-Contacts, or Todoist payloads) and drives them through provider normalization → matching → dedup → event bus → River consumers → downstream graph, so the full sync flow is exercised without live credentials.
 
+## Why the seed drives services and provider replay, not the HTTP API
+
+A natural question is whether seeding should go through the public HTTP API instead, so data propagates via "the application's actual logic." That principle — seed the cause, not the endpoint — is exactly what the toolkit enforces, but deliberately one layer below the handlers. First, most prod data has no API surface: interactions, external contacts, sync state, and enrichment assertions originate from sync pipelines in production, so for that data the app's actual logic *is* the provider replay path, and routing it through invented API endpoints would fake the sync result rather than reproduce its cause. Second, a prod-shaped world requires things the API correctly forbids — contacts created months ago, interactions backdated across cadence windows, deterministic PRNG, per-test namespacing; in prod those shapes come from time passing, which can't be replayed through a public API, so the seed injects timestamps at the service/repo layer while still driving the real causal chain from there down. Third, the layer skipped (handler → service) is the thinnest one — DTO validation and auth — and it is validated where it matters: the E2E suite and QA tours exercise the real API against the seeded world. The corollary trade-off: a bug living only in a handler won't corrupt the seeded world and won't be caught by seeding; it surfaces in E2E/tours instead. Bugs in service-layer logic, by contrast, do surface here because seeding runs the real services — the post-seed coherence gates then assert the world contains only prod-reachable states.
+
 ## Layers
 
 | Layer | Package | What it is |

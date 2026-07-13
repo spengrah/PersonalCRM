@@ -8,8 +8,10 @@ import (
 
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/synthetic"
 	"personal-crm/backend/internal/synthetic/factory"
+	"personal-crm/backend/internal/todoist"
 	"personal-crm/backend/tests/testsupport"
 
 	"github.com/google/uuid"
@@ -132,6 +134,55 @@ func TestSyntheticReplay_SeededSenderSettled(t *testing.T) {
 		_, err = h.ReplayTodoist(ctx, []uuid.UUID{contact.ID})
 		require.NoError(t, err)
 	})
+}
+
+// TestReplayTodoistRecurringEdit_UnmanagesViaRealPath proves the seed reaches the
+// cadence_due `unmanaged` state through the PRODUCTION recurring-edit path
+// (provider.Sync → processItem → handleRecurringDetection), not a raw state write.
+// It seeds two cadence-bearing contacts, reconciles both to `managed` via
+// ReplayTodoist, then runs ReplayTodoistRecurringEdit on ONLY the first. The first
+// task must end `unmanaged`; the second — seeded in the same namespace but outside
+// the recurring edit — must stay `managed`, proving the recurring edit transitioned
+// only the item it matched by external id and the namespace-scoped trailing
+// reconcile left the bystander untouched. It also confirms ReplayTodoist's reconcile
+// finalized the temp id into a Todoist-v1 alphanumeric external id (cleared
+// pending_temp_id) — the id the recurring edit must match on.
+func TestReplayTodoistRecurringEdit_UnmanagesViaRealPath(t *testing.T) {
+	testsupport.RequireLongTests(t)
+	database, ctx := newSyntheticDB(t)
+
+	h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+	gen := h.Generator()
+
+	target, err := h.SeedContact(ctx, gen.Contact(factory.WithEmail(), factory.WithCadence("weekly")))
+	require.NoError(t, err)
+	bystander, err := h.SeedContact(ctx, gen.Contact(factory.WithEmail(), factory.WithCadence("weekly")))
+	require.NoError(t, err)
+
+	_, err = h.ReplayTodoist(ctx, []uuid.UUID{target.ID, bystander.ID})
+	require.NoError(t, err)
+
+	// Both cadence tasks start managed; the target's temp id is finalized to a
+	// Todoist-v1 alphanumeric external id (the id the recurring edit matches on).
+	taskRepo := repository.NewContactTaskRepository(database.Queries)
+	targetTask, err := taskRepo.GetContactTaskByContactCadenceDue(ctx, target.ID, todoist.SourceName)
+	require.NoError(t, err)
+	require.Equal(t, repository.ContactTaskStateManaged, targetTask.State, "target starts managed")
+	require.Regexp(t, "^[A-Za-z0-9]+$", targetTask.ExternalTaskID, "reconcile finalized the temp id to a Todoist-v1 alphanumeric id")
+	require.NotContains(t, targetTask.Metadata, todoist.MetadataKeyPendingTempID, "finalize cleared pending_temp_id")
+
+	// Edit the target's Todoist task to recur — drives the REAL path to unmanaged.
+	require.NoError(t, h.ReplayTodoistRecurringEdit(ctx, target.ID))
+
+	targetTask, err = taskRepo.GetContactTaskByContactCadenceDue(ctx, target.ID, todoist.SourceName)
+	require.NoError(t, err)
+	require.Equal(t, repository.ContactTaskStateUnmanaged, targetTask.State,
+		"recurring edit unmanaged the target via handleRecurringDetection")
+
+	bystanderTask, err := taskRepo.GetContactTaskByContactCadenceDue(ctx, bystander.ID, todoist.SourceName)
+	require.NoError(t, err)
+	require.Equal(t, repository.ContactTaskStateManaged, bystanderTask.State,
+		"bystander cadence task untouched by the scoped recurring-edit reconcile")
 }
 
 func TestSyntheticReplay_UnknownSenderPending(t *testing.T) {

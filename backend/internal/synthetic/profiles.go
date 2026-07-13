@@ -68,11 +68,12 @@ type ProfileResult struct {
 	// pages are not near-empty — a judge touring an empty page reads it as a broken
 	// feature. Counts-only / no PII.
 	ContactsWithNotes int
-	// SeededTasks counts the contact_task rows the profile seeded — one `managed`
-	// cadence task per cadence-bearing catalog contact (via ReplayTodoist's
-	// reconcile), a deterministic three of which are then transitioned to the
-	// completed/dismissed/unmanaged surface states. The state-transitions do not
-	// change the row count, so this is the total cadence-task population.
+	// SeededTasks counts the contact_task rows the profile seeded: one `managed`
+	// cadence_due task per cadence-bearing catalog contact (via ReplayTodoist's
+	// reconcile, one of which is then driven to `unmanaged` via the recurring-edit
+	// path — a state change, not a row change) PLUS the one seeded follow-up loop
+	// (SeedPendingFollowUp increments it). It is therefore NOT a pure cadence_due row
+	// count; a future exact-count gate must account for the follow-up too.
 	SeededTasks int
 	// SeededPendingFollowUps counts the LIVE followup_loop rows seeded — the "awaiting
 	// reply" state (has_pending_followup). A seeded world cannot reach this state through
@@ -714,28 +715,27 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	// drives the REAL CadenceSyncProvider reconcile, which reads
 	// ListContactsWithContactBy (contact_by auto-computed from cadence by
 	// CreateContact) and creates one `managed` cadence-due task per cadence-bearing
-	// contact — the live cadence-task state. It draws NO generator PRNG (it only
-	// READS the seeded contacts), so it runs after the gen.X() assertion spread above
-	// without shifting the deterministic id sequence the earlier replays depend on.
+	// contact, finalizing each task's temp id into a prod-shaped alphanumeric external
+	// id within the same Sync. It draws NO generator PRNG (it only READS the seeded
+	// contacts), so it runs after the gen.X() assertion spread above without shifting
+	// the deterministic id sequence the earlier replays depend on.
 	//
-	// The empty fake-Todoist sync produces only `managed` rows, so the remaining
-	// surface states are seeded by transitioning a deterministic three of the
-	// just-created tasks via the production UpdateContactTaskState path:
-	// completed / dismissed / unmanaged. pending_remote_create (a transient
-	// create-in-flight state) is out of scope.
+	// cadence_due has exactly two prod-reachable persistent states: `managed` (the
+	// reconcile default) and `unmanaged` (reached ONLY when the Todoist task is edited
+	// to recur). So one task is driven to `unmanaged` through the REAL recurring-edit
+	// path (ReplayTodoistRecurringEdit → handleRecurringDetection), after the reconcile
+	// finalized its external id. `completed`/`dismissed` are prod-impossible for this
+	// lifecycle (a completed cadence row is deleted by the next reconcile; a skip routes
+	// to a managed replacement, never to dismissed), so they are not seeded here.
 	if params.Counts.SeededTasks > 0 && len(cadenceBearingCatalogIDs) > 0 {
 		if _, err := h.ReplayTodoist(ctx, cadenceBearingCatalogIDs); err != nil {
 			return res, fmt.Errorf("profile %s: replay todoist: %w", params.Profile, err)
 		}
-		// Each transition flips one managed task's state; the row count is unchanged,
-		// so res.SeededTasks (the cadence-bearing population) still reflects every row.
-		for idx, state := range nonManagedTaskStates {
-			if idx >= len(cadenceBearingCatalogIDs) {
-				break
-			}
-			if _, err := h.TransitionTodoistCadenceTaskState(ctx, cadenceBearingCatalogIDs[idx], state); err != nil {
-				return res, fmt.Errorf("profile %s: transition cadence task %d: %w", params.Profile, idx, err)
-			}
+		// Drive ONE task to `unmanaged` via the real recurring edit; the row count is
+		// unchanged, so res.SeededTasks (the cadence-bearing population) still reflects
+		// every row. The len>0 guard above makes index 0 safe.
+		if err := h.ReplayTodoistRecurringEdit(ctx, cadenceBearingCatalogIDs[0]); err != nil {
+			return res, fmt.Errorf("profile %s: unmanage cadence task via recurring edit: %w", params.Profile, err)
 		}
 		res.SeededTasks = len(cadenceBearingCatalogIDs)
 
@@ -999,17 +999,6 @@ const (
 // follow-up loop only opens for a contact that HAS a cadence (CAD-011/CAD-012), so the
 // scenario cannot express the state without one.
 const followUpScenarioCadence = "monthly"
-
-// nonManagedTaskStates is the deterministic spread of non-`managed` contact_task
-// surface states the profile transitions cadence tasks into (one each), so staging
-// shows every state the cadence-task UI renders. `managed` is the reconcile
-// default (the remaining, un-transitioned tasks); pending_remote_create is a
-// transient create-in-flight state and is out of scope.
-var nonManagedTaskStates = []repository.ContactTaskState{
-	repository.ContactTaskStateCompleted,
-	repository.ContactTaskStateDismissed,
-	repository.ContactTaskStateUnmanaged,
-}
 
 // catalogTextFactPredicates is the predicate cycle the Phase-4 assertion spread
 // walks. health_condition (always-confirm → proposed) leads so any non-zero

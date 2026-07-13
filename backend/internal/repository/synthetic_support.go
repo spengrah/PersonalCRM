@@ -265,24 +265,31 @@ func (r *SyntheticSupportRepository) DeleteContactTasksByIds(ctx context.Context
 	return r.queries.SyntheticDeleteContactTasksByIds(ctx, pgUUIDs(taskIDs))
 }
 
-// CountContactTasksByStateAndNamePrefix counts contact_task rows in a given state
-// whose contact's full_name is ns-prefixed, so the prod-shaped coverage test can
-// assert each surface state (managed/unmanaged/completed/dismissed) has ≥1
-// representative scoped to its own namespace on the shared test DB. Caller passes
-// a BARE prefix.
-func (r *SyntheticSupportRepository) CountContactTasksByStateAndNamePrefix(ctx context.Context, state, namePrefix string) (int64, error) {
-	return r.queries.SyntheticCountContactTasksByStateAndNamePrefix(ctx, db.SyntheticCountContactTasksByStateAndNamePrefixParams{
-		NamePrefix: pgtype.Text{String: namePrefix, Valid: true},
-		State:      state,
-	})
-}
-
 // CountLiveFollowUpsByNamePrefix counts LIVE follow-up loops — the "awaiting reply"
 // state behind has_pending_followup — on ns-prefixed contacts. Mirrors
 // FindPendingFollowUp's predicate, so the coverage test asserts the state the API
 // actually surfaces. Caller passes a BARE prefix.
 func (r *SyntheticSupportRepository) CountLiveFollowUpsByNamePrefix(ctx context.Context, namePrefix string) (int64, error) {
 	return r.queries.SyntheticCountLiveFollowUpsByNamePrefix(ctx, pgtype.Text{String: namePrefix, Valid: true})
+}
+
+// IncoherentCadenceDueCountByNamePrefix returns the number of the namespace's
+// cadence_due contact_tasks in a prod-impossible shape (F7): a completed/dismissed
+// state, or a non-finalized external id (empty, a raw UUID, punctuation, or a
+// lingering pending_temp_id key). Asserted == 0. Caller passes a BARE prefix.
+func (r *SyntheticSupportRepository) IncoherentCadenceDueCountByNamePrefix(ctx context.Context, namePrefix string) (int64, error) {
+	return r.queries.TestCountIncoherentCadenceDueByNamePrefix(ctx, pgtype.Text{String: namePrefix, Valid: true})
+}
+
+// CountCadenceDueByStateByNamePrefix counts the namespace's cadence_due
+// contact_tasks in a given state, so the coverage check can assert both
+// prod-reachable persistent states are present (managed / unmanaged). Caller
+// passes a BARE prefix.
+func (r *SyntheticSupportRepository) CountCadenceDueByStateByNamePrefix(ctx context.Context, state, namePrefix string) (int64, error) {
+	return r.queries.TestCountCadenceDueByStateAndNamePrefix(ctx, db.TestCountCadenceDueByStateAndNamePrefixParams{
+		NamePrefix: pgtype.Text{String: namePrefix, Valid: true},
+		State:      state,
+	})
 }
 
 // DeleteContactMethodsByContactIds removes contact_method rows by contact
