@@ -875,8 +875,8 @@ func (r *SyntheticSupportRepository) PureOutboundContactCountByNamePrefix(ctx co
 // contacts that carry a NON-EMPTY notepad note — the category the contact-detail page
 // renders. Coverage gate (F6): asserted == res.ContactsWithNotes so the seeded notes
 // actually landed on the notepad surface the UI reads (empty-body notepads, e.g. the
-// ones MergeContacts spuriously writes on merge winners, carry no rendered content and
-// are excluded). Test only.
+// ones MergeContacts spuriously writes on merge winners (issue #648), carry no rendered
+// content and are excluded). Test only.
 func (r *SyntheticSupportRepository) ContactsWithNotepadCountByNamePrefix(ctx context.Context, namePrefix string) (int64, error) {
 	return r.queries.TestCountContactsWithNotepadByNamePrefix(ctx, pgtype.Text{String: namePrefix, Valid: true})
 }

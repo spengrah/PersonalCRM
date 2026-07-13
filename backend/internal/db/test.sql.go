@@ -2186,12 +2186,12 @@ WHERE c.full_name LIKE $1 || '%'
 // NOTEPAD note — the category the contact-detail endpoint renders via GetContactNotepad.
 // The category='notepad' filter is load-bearing: SeedNote writes via CreateNotepad, and
 // without the filter the gate could pass on some other note category while the contact
-// detail page still renders empty. The body <> ” filter matters too: MergeContacts
-// writes a spurious EMPTY-body notepad note onto every merge winner (an always-true
-// nil-check on GetContactNoteByCategory's ErrNoRows return), which carries no rendered
-// content and so is not "a contact with notes" for coverage purposes — counting it would
-// make this gate disagree with res.ContactsWithNotes by the merge count. `note` has NO
-// deleted_at column (it is hard-deleted at teardown), so there is no soft-delete
+// detail page still renders empty. The non-empty-body filter matters too (issue #648):
+// MergeContacts writes a spurious empty-body notepad note onto every merge winner (an
+// always-true nil-check on GetContactNoteByCategory's ErrNoRows return), which carries no
+// rendered content and so is not "a contact with notes" for coverage purposes — counting
+// it would make this gate disagree with res.ContactsWithNotes by the merge count. `note`
+// has NO deleted_at column (it is hard-deleted at teardown), so there is no soft-delete
 // predicate on the join. Caller passes a BARE prefix.
 func (q *Queries) TestCountContactsWithNotepadByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error) {
 	row := q.db.QueryRow(ctx, TestCountContactsWithNotepadByNamePrefix, namePrefix)
