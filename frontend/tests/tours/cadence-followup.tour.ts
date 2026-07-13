@@ -36,10 +36,25 @@ test('cadence-followup tour — contact-detail cadence surfaces', async ({ page,
   }
   const outreachContact = pick(c => !!c.last_outreach_at, 'last_outreach_at (CAD-029[0])')
   const responseContact = pick(c => !!c.last_response_at, 'last_response_at (CAD-029[1])')
-  // Fails loudly rather than skipping: a world with no live follow-up is a SEED bug (the
-  // prod-shaped profile seeds one), and silently touring without this state is what
-  // produced the false CAD-036 regression in the first place.
-  const pendingContact = pick(c => !!c.has_pending_followup, 'has_pending_followup (CAD-029[2])')
+  // has_pending_followup is ONLY computed by the DETAIL handler. The list (and overdue)
+  // payloads carry the field as a non-pointer bool with no omitempty, so they ship
+  // `has_pending_followup: false` for every contact unconditionally — present, always
+  // false, and therefore meaningless. Selecting on it from the list silently matches
+  // nothing (and `noneContact`'s !has_pending_followup clause below is vacuously true for
+  // the same reason). Probe the detail endpoint, which actually answers.
+  const pendingContact = await (async () => {
+    for (const c of contacts) {
+      const r = await tour.apiCtx.get(`/api/v1/contacts/${c.id}`)
+      if (((await r.json())?.data ?? {}).has_pending_followup) return c
+    }
+    // Loud, never skipped: a world with no live follow-up is a SEED bug (the prod-shaped
+    // profile seeds one), and touring without this state is exactly what produced the
+    // false CAD-036 regression — the judge read the missing state as a missing feature.
+    throw new Error(
+      'cadence-followup tour: no seeded contact with has_pending_followup (CAD-029[2])'
+    )
+  })()
+  reserved.add(pendingContact.id)
   const noneContact = pick(
     c => !c.last_outreach_at && !c.last_response_at && !c.has_pending_followup,
     'no recent-activity signals (CAD-029[3])'

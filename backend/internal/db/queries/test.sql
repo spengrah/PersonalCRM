@@ -330,12 +330,20 @@ WHERE c.full_name LIKE @name_prefix || '%'
 -- absent from the seeded world, the tours cannot capture it, and the agentic judge reads
 -- that absence as a missing feature. contact_task has no deleted_at; the contact
 -- soft-delete filter scopes to live catalog contacts. Caller passes a BARE prefix.
+--
+-- last_outreach_at IS NOT NULL is part of the CONTRACT, not a filter of convenience: a
+-- follow-up is opened BY an outbound (CAD-011), so one hanging on a contact with no
+-- outbound renders as "Awaiting reply" with nothing to await a reply to — a state
+-- production cannot reach. The first version of this seed produced exactly that, and the
+-- agentic judge (correctly) failed the contact page for it. Counting only COHERENT
+-- follow-ups is what makes this assertion mean what it says.
 SELECT COUNT(*)
 FROM contact_task ct
 JOIN contact c ON ct.contact_id = c.id
 WHERE c.full_name LIKE @name_prefix || '%'
   AND ct.lifecycle = 'followup_loop'
   AND ct.state IN ('managed', 'pending_remote_create')
+  AND c.last_outreach_at IS NOT NULL
   AND c.deleted_at IS NULL;
 
 -- name: SyntheticDeleteContactMethodsByContactIds :execrows

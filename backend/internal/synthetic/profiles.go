@@ -726,18 +726,6 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		// shown only contact pages with no "Awaiting reply" marker, concluded the FEATURE
 		// DID NOT EXIST and reported a false CAD-036 regression — every run.
 		//
-		// Seeded on the LAST cadence-bearing contact so it cannot collide with the
-		// state-transition slots above (which take the first len(nonManagedTaskStates)).
-		// Draws no generator PRNG, so it does not shift the deterministic id sequence the
-		// earlier source replays depend on.
-		if followUpIdx := len(cadenceBearingCatalogIDs) - 1; followUpIdx >= len(nonManagedTaskStates) {
-			if _, err := h.SeedPendingFollowUp(ctx, cadenceBearingCatalogIDs[followUpIdx]); err != nil {
-				return res, fmt.Errorf("profile %s: seed pending follow-up: %w", params.Profile, err)
-			}
-			// A NEW row, unlike the state transitions above (which only flip existing ones).
-			res.SeededTasks++
-			res.SeededPendingFollowUps = 1
-		}
 	}
 
 	// Merge + soft-delete scenarios. Seeded LAST: each draws gen.Contact (name PRNG)
@@ -829,6 +817,44 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		res.TelegramDiscovery++
 	}
 
+	// --- The "awaiting reply" scenario (has_pending_followup) -----------------------
+	//
+	// Seeded LAST, after every other generator-driven block: it draws gen.Contact +
+	// gen.GCalEvent, and appending keeps the deterministic id/handle sequence the earlier
+	// source replays depend on unshifted.
+	//
+	// COHERENT BY CONSTRUCTION, and that is the whole point. A follow-up loop is opened BY
+	// an outbound (CAD-011) — it is the app waiting on a reply to something you actually
+	// sent. The first version of this seed hung a follow-up on an arbitrary cadence-bearing
+	// contact with no outbound, which renders as "⚠ Awaiting reply" with nothing to be
+	// awaiting a reply TO — a state production cannot reach. The agentic judge caught it and
+	// (correctly) failed the contact page for it.
+	//
+	// So the scenario builds the whole causal chain: a contact WITH a cadence (CAD-011
+	// requires one), a GCal event — whose interaction is recorded as MUTUAL, and mutual
+	// bumps last_outreach_at (CAD-006) — and then the live follow-up. We do not write the
+	// cadence timestamps ourselves: they are sole-writer property of the cadence engine
+	// (CAD-005, CI-guarded), applied asynchronously by its River worker. That is also why
+	// the seed cannot ASSERT on last_outreach_at here (the job has not run yet); the
+	// coverage check asserts it post-Quiesce, which is the honest place to prove the chain
+	// actually landed.
+	if params.Counts.SeededTasks > 0 {
+		fuSpec := gen.Contact(factory.WithEmail(), factory.WithCadence(followUpScenarioCadence))
+		fuContact, err := h.SeedContact(ctx, fuSpec)
+		if err != nil {
+			return res, fmt.Errorf("profile %s: seed awaiting-reply contact: %w", params.Profile, err)
+		}
+		res.Contacts++
+		if _, err := h.ReplayGCal(ctx, fuContact.ID, gen.GCalEvent(fuSpec, factory.MatchSeeded, factory.WithMessageAge(interactionSpreadAge(0)))); err != nil {
+			return res, fmt.Errorf("profile %s: replay gcal for awaiting-reply contact: %w", params.Profile, err)
+		}
+		res.SettledInteractions++
+		if _, err := h.SeedPendingFollowUp(ctx, fuContact.ID); err != nil {
+			return res, fmt.Errorf("profile %s: seed pending follow-up: %w", params.Profile, err)
+		}
+		res.SeededTasks++
+		res.SeededPendingFollowUps = 1
+	}
 	return res, nil
 }
 
@@ -859,6 +885,11 @@ const (
 	mergeWinnerFactPredicate = "traveling"
 	mergeLoserFactPredicate  = "on_sabbatical"
 )
+
+// followUpScenarioCadence is the cadence on the "awaiting reply" scenario contact. A
+// follow-up loop only opens for a contact that HAS a cadence (CAD-011/CAD-012), so the
+// scenario cannot express the state without one.
+const followUpScenarioCadence = "monthly"
 
 // nonManagedTaskStates is the deterministic spread of non-`managed` contact_task
 // surface states the profile transitions cadence tasks into (one each), so staging

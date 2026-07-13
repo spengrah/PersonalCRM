@@ -218,6 +218,16 @@ func (h *Harness) TransitionTodoistCadenceTaskState(ctx context.Context, contact
 // tasks in. Draws NO generator PRNG (it only reads a seeded contact id), so it is
 // safe to run alongside the other non-generator replays without shifting the
 // deterministic id sequence earlier source replays depend on.
+//
+// CALLER'S CONTRACT: `contactID` must be a contact with a cadence AND an outbound —
+// a follow-up is opened BY an outbound (CAD-011), so one on a contact with neither
+// renders as "Awaiting reply" with nothing to be awaiting a reply TO, a state
+// production cannot reach. (The judge failed the contact page for exactly that when
+// this seed first hung a follow-up on an arbitrary contact.) This is NOT asserted
+// here: the cadence engine writes last_outreach_at asynchronously from its River
+// worker (and is its sole writer — CAD-005, CI-guarded), so it is still nil at seed
+// time. The caller establishes the chain by construction (see the awaiting-reply
+// scenario in profiles.go), and the profile coverage check proves it post-Quiesce.
 func (h *Harness) SeedPendingFollowUp(ctx context.Context, contactID uuid.UUID) (uuid.UUID, error) {
 	taskRepo := repository.NewContactTaskRepository(h.database.Queries)
 	deadline := accelerated.GetCurrentTime().Add(followUpSeedWindow)
