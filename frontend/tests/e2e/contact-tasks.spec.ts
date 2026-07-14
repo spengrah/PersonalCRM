@@ -1,6 +1,10 @@
 import { test, expect } from '@playwright/test'
 import { createTestAPI, TestAPI } from './helpers/test-api'
 
+// The tasks section (TasksSection) renders unconditionally on the contact
+// detail page — it does NOT depend on Todoist being configured. The header
+// button's accessible name is "Add" (exact); only the modal's submit button
+// is labeled "Add Task".
 test.describe('Contact Tasks @area:contacts @area:tasks', () => {
   let testApi: TestAPI
 
@@ -13,24 +17,23 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
   })
 
   test.describe('Tasks Section', () => {
-    test('shows tasks section on contact detail page when Todoist configured', async ({ page }) => {
-      // Create a test contact
+    test('shows tasks section on contact detail page', async ({ page }) => {
       const { ids } = await testApi.seedContacts([{ full_name: 'Task Test Contact' }])
 
-      // Navigate to contact detail page
       await page.goto(`/contacts/${ids[0]}`)
       await page.waitForLoadState('domcontentloaded')
-
-      // Tasks section may or may not be visible depending on Todoist configuration
-      // This is a smoke test - just verify the page loads without errors
       await expect(page.getByRole('heading', { name: 'Task Test Contact' })).toBeVisible({
         timeout: 15000,
       })
+
+      // Tasks section renders unconditionally with its header and Add button
+      await expect(page.getByRole('heading', { name: 'Tasks' })).toBeVisible()
+      await expect(page.getByRole('button', { name: 'Add', exact: true })).toBeVisible()
     })
   })
 
   test.describe('Add Task Modal', () => {
-    test('can interact with add task modal when available', async ({ page }) => {
+    test('opens add task modal and closes it with Escape', async ({ page }) => {
       const { ids } = await testApi.seedContacts([{ full_name: 'Modal Test Contact' }])
 
       await page.goto(`/contacts/${ids[0]}`)
@@ -39,29 +42,20 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
         timeout: 15000,
       })
 
-      // Look for the "Add Task" button (only visible when Todoist configured)
-      const addTaskButton = page.locator('button:has-text("Add Task")')
+      await page.getByRole('button', { name: 'Add', exact: true }).click()
 
-      // If button exists, test the modal interaction
-      const buttonCount = await addTaskButton.count()
-      if (buttonCount > 0) {
-        await addTaskButton.click()
+      // Modal should appear with its heading and task text input
+      // (seeded contact names carry a worker-namespace prefix, so match loosely)
+      const modalHeading = page.getByRole('heading', { name: /Add Task for .*Modal Test Contact/ })
+      await expect(modalHeading).toBeVisible()
+      await expect(page.getByPlaceholder(/Follow up/)).toBeVisible()
 
-        // Modal should appear
-        const modal = page.locator('.fixed.inset-0')
-        await expect(modal).toBeVisible()
-
-        // Input field should be present
-        const input = page.locator('input[placeholder*="Follow up"]')
-        await expect(input).toBeVisible()
-
-        // Close modal with Escape
-        await page.keyboard.press('Escape')
-        await expect(modal).not.toBeVisible()
-      }
+      // Close modal with Escape
+      await page.keyboard.press('Escape')
+      await expect(modalHeading).not.toBeVisible()
     })
 
-    test('shows validation error for empty task text when available', async ({ page }) => {
+    test('disables submit while task text is empty', async ({ page }) => {
       const { ids } = await testApi.seedContacts([{ full_name: 'Validation Test Contact' }])
 
       await page.goto(`/contacts/${ids[0]}`)
@@ -70,19 +64,17 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
         timeout: 15000,
       })
 
-      const addTaskButton = page.locator('button:has-text("Add Task")')
-      const buttonCount = await addTaskButton.count()
+      await page.getByRole('button', { name: 'Add', exact: true }).click()
 
-      if (buttonCount > 0) {
-        await addTaskButton.click()
+      // Submit is disabled until task text is entered
+      const submitButton = page.getByRole('button', { name: 'Add Task' })
+      await expect(submitButton).toBeVisible()
+      await expect(submitButton).toBeDisabled()
 
-        // Try to submit without text (disabled button should prevent submission)
-        const submitButton = page.locator('button[type="submit"]:has-text("Add Task")')
-        const isDisabled = await submitButton.isDisabled()
-        expect(isDisabled).toBe(true)
+      await page.getByPlaceholder(/Follow up/).fill('Say hello')
+      await expect(submitButton).toBeEnabled()
 
-        await page.keyboard.press('Escape')
-      }
+      await page.keyboard.press('Escape')
     })
   })
 })
