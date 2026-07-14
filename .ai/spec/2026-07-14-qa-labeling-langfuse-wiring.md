@@ -1,78 +1,63 @@
-# QA labeling & Langfuse wiring — design sketch
+# QA agent end-state: Langfuse-native labeling, corpus retirement, experiments
 
-Status: DRAFT (high-level; capture-so-we-don't-forget). Owner: maintainer. Date: 2026-07-14.
+Status: SETTLED DESIGN (discussion of 2026-07-14; supersedes the same-day first draft of this doc — superseded decisions are kept below, marked, because the reasoning that moved them is part of the design). Owner: maintainer.
 
-## Decision context
+## Framing decisions (the load-bearing ones)
 
-The seed-fidelity arc is complete: staging (and the corpus world) are causally seeded, the judge's prod-impossible false positives are gone, and the first post-arc label session is underway. The maintainer's direction (2026-07-14): **Langfuse is the source of truth for judge-related items** — draft labels are authored into it, human review happens in its annotation UI, and the git label files become synced snapshots rather than the primary artifact. This effectively settles Langfuse-vs-Phoenix for the QA lane (extraction/#379 remains a separate decision). Verifier-lane items never go to Langfuse — they are deterministic and migrate to E2E per the standing direction.
+1. **This is an advisory QA agent, not a production agent.** Occasional false positives are acceptable — a human reads the report, and even in a future autonomous issue-filing mode, an issue is not a fix: implementers exercise discretion to "not fix". Calibration infrastructure sized for a zero-FP production gate (trap families, held-out splits, prompt tuning against traps, fail-precision bars) is overengineering for this system and is dropped.
+2. **The verifier lane leaves the QA agent entirely.** Deterministic checks are CI's job: verifier rows migrate to E2E per-domain, in the same commit as their row deletion (standing direction; re-affirmed). The QA agent is judge-only.
+3. **Langfuse is the source of truth for judge-related items** — evidence archives, ground truth, experiment baselines. Git keeps code and specs, not evidence.
+4. **North star reframed.** The old north star (fail-precision over a frozen labeled held-out set) existed to let the judge earn issue-filing rights. The new north star for an advisory agent: **of the report's fails, how many did the human act on** — accumulated continuously and for free by triaging live fails in a Langfuse annotation queue, not through dedicated label sessions over frozen fixtures.
 
-## What exists today (post this session)
+## End state
 
-- **Live judge loop (staging):** `make tours` (reseed + 4 tours) → `make qa-report JUDGE=1` with `QA_JUDGE_TRACE=<file>` → `make qa-export TRACE=<file>` ships one GenAI trace per LLM judge call (intents + judge-residue behavior items) with screenshots to Langfuse. Proven end-to-end 2026-07-14: 12 traces, 66 screenshots.
-- **Corpus factory (local only):** committed corpus fixtures are cut from a LOCAL `prod-shaped` sweep — `CRM_ENV=testing`, `TIME_ACCELERATION=60` **and** `TIME_BASE=$(unix seconds)` (both required; missing TIME_BASE silently disables acceleration server-side and renders "Invalid Date" in the UI), seed run with the backend STOPPED (a live backend's River worker races the wipe and strands assertion-derived caches, e.g. birthdays). Regenerated this session from run `local-20260714T151954Z`; PII audit + `qa-eval` green. Curation was a one-off script (scratchpad) — see follow-ups.
-- **Draft labels:** `label.ts` (drafter `codex-exec:gpt-5.5`) produced 7 drafts over the new corpus (5 judge-residue behavior items + 2 intent cases).
-- **Langfuse label session (manual push, one-off script):** annotation queue `qa-label-session-20260714` on the obs-tenant Langfuse — one trace + queue item per drafted item; trace input = then-clause/intent goal + capture summaries + screenshots (from the sweep run dir); trace output = draft verdict/critique; the human-set categorical `verdict` score (+ comment) is what "human-confirmed" means. Draft verdicts are deliberately NOT pre-filled as scores.
-- **Reach:** Langfuse is loopback-only on stovepipes; from the Mac `ssh -N -L 3000:localhost:3000 -L 9090:localhost:9090 stovepipes` (the :9090 MinIO forward is REQUIRED — media presigned URLs point at localhost:9090 and its absence fails every span/screenshot with a generic "Unable to connect").
+- **Git holds:** tours, judge machinery + mocked unit tests, the SSOT behavior/intent specs, and a small trap-mutation config (a few lines: mutation op + target behavior). No capture fixtures, no case files, no label files.
+- **E2E/CI holds:** every deterministic behavior check (the migrated verifier lane).
+- **Each judge round:** tours produce fresh live captures (gitignored run dir) → judge grades them → report + traces ship to Langfuse (with evidence embedded per the label-trace contract below) → **detection self-test**: N trap mutations applied on-the-fly to the round's own fresh captures, judged, must-fail — "the trap is the mutation, not the fixture," so detection checks ride every round over always-current evidence with zero fixture rot (the frozen-trap `itemIndex` silent no-op found 2026-07-14 is the failure mode this eliminates).
+- **Ground truth accumulates as a byproduct:** the maintainer triages live fails in an annotation queue (real / noise, with a why); every triage becomes a scored trace. Unsure adjudications carry a reason that converts to a backlog item (e.g. "blocked on #642") rather than polluting any gate.
+- **False-positive traps: deleted** (DSH-011-doctored retires). False-negative (detection) traps survive as transformations only.
 
-## Target wiring (the loop we want)
+## Experiments in the end state
 
-```
-                     (per run, exists)
-staging tours ──► judge ──► qa-export ──────────────► Langfuse traces (judge calls, advisory)
+Prototyped 2026-07-14 by the luna experiment (dataset `qa-intent-eval-20260714`, 4 runs; results in the session summary — headline: hold `DEFAULT_INTENT_MODEL=gpt-5.5`; both models 0/2 vs human labels, tied 8/11 self-consistency, 3/11 units flip within-model between repeats, luna ~5× cheaper on identical token volume; the instability finding outweighs the model question).
 
-                     (per corpus regen + label session)
-local sweep ──► curate ──► corpus fixtures ──► label.ts drafts
-                                                  │  --langfuse sink (NEW: replaces the one-off push script)
-                                                  ▼
-                                     Langfuse annotation queue  ◄── maintainer reviews here (SoT)
-                                                  │
-                                       label-sync (NEW: pull human-confirmed
-                                       verdict scores + comments)
-                                                  ▼
-                                     corpus/labels/*.labeled.json (synced snapshot, committed)
-                                                  │
-                                                  ▼
-                              make qa-eval (stays OFFLINE + deterministic; merge gate unchanged)
-                              → unlocks: held-out fail-precision bar, luna experiment, PR4 issue-mode
-```
-
-Hybrid ground-truth model (decided): Langfuse is where labels are authored and live; git carries pinned snapshots so the eval never takes a network dependency and results stay reproducible per commit.
-
-## Changes to make (high level)
-
-1. **`label.ts --langfuse` sink** — productionize the one-off push: after writing `*.draft.json`, create/reuse the `verdict` score config + a per-session annotation queue, one trace + queue item per drafted item (input: clause/goal + capture summaries + screenshots; output: draft verdict/critique; metadata: sourceRun, corpus file). Env-gated (`LANGFUSE_*`), no-op without it — same opt-in-by-construction pattern as qa-export.
-2. **`label-sync` (new small script)** — pull completed queue items' `verdict` scores + comments, write/refresh `*.labeled.json` (`status: human-confirmed`, verdict from score, critique from comment; drop stale labeled files whose case no longer exists). Idempotent; run after a session, commit the diff.
-3. **Corpus regen script** — encode this session's hand-run flow as one command (`make qa-corpus-regen`?): checks ports, seeds with backend stopped, starts backend with the full accelerated env contract, sweeps, curates (the scratchpad curate.ts logic: filename-preserving copy, screenshot strip, the two documented body drops, scrub, stale-file removal), refreshes PROVENANCE sourceRun, runs pii-audit + qa-eval. Kills the "re-learn the env contract by failing twice" tax.
-4. **Obs-tenant hardening (prerequisite for SoT):** backup.sh on a systemd timer (labels become primary data the moment a session completes in Langfuse); graduate the obs tenant into personal-ops `setup-vps.sh` TENANTS; durable reach (Tailscale Serve or Caddy loopback) to retire the SSH forwards, including a same-origin answer for the MinIO media URLs (the :9090 coupling breaks any reach story that only fronts :3000).
-5. **Doctored-mutation liveness guard** — regen can silently invalidate a doctored case (found live 2026-07-14: the corpus regen shrank a capture's response list and `DSH-004-doctored-stale-reason`'s `itemIndex: 4` went out of range; `set_json_field` no-ops silently and the verifier-only gate cannot catch a judge-layer no-op, so the drafter graded clean evidence). Add a mechanical check to `qa-eval`: applying a doctored case's mutation MUST change the evidence (deep-inequality vs the base fixtures), else fail loudly. Related labeling-UI caveat now stamped on doctored traces: screenshots always show the undoctored world (mutations touch only aria/API JSON, which is all the drafter grades).
-6. **Luna experiment (unblocked by the label session):** per `judge/DEFERRED.md` — pin/upgrade codex CLI, run the eval with `QA_INTENT_MODEL=gpt-5.6-luna` vs the `gpt-5.5` baseline over the labeled held-out set, compare intent fail-precision + verdict agreement + `--repeat` self-consistency; flip `DEFAULT_INTENT_MODEL` only if non-inferior on fail-precision. Also a deliberate stress-test of Langfuse as the labeling/comparison surface.
-
-## Judge-as-tenant on stovepipes (maintainer's question — sketch only)
-
-What it might look like: a fourth tenant (`qa`, own uid/slice like staging/sandbox/obs) owning the scheduled loop `reseed staging → tours → judge → qa-export`, so runs stop depending on the Mac. The plumbing mostly exists: the sandbox observe path (Caddy :80 via 10.100.0.1, `qa-staging` forced-command reseed) is the network model; Langfuse is host-local. Open problems, in rough order of hardness:
-
-- **Codex auth on a headless VPS:** the judge + drafter ride the ChatGPT-subscription quota with interactive login + self-rotating refresh tokens. The transport (CLI vs the deferred `codex-sdk`) is orthogonal — the SDK uses the same auth store, so subscription auth works through either; the blocker is purely the auth lifecycle. Syncing `auth.json` from the Mac is a trap: two consumers of one rotating refresh token produce the known "refresh token already used" burn. The clean shape is a **dedicated account/auth slot for the tenant** — one interactive `codex login` at provision time (device-code or forwarded browser), after which rotation continues tenant-side and stays valid as long as only the tenant uses it. Fallbacks: API-key auth (metered), or Mac-only model stages with tours+export on the tenant.
-- **Browser runtime:** Playwright + chromium on ARM Debian for the tours — sized/cached per tenant; straightforward but not free (the vps-dev-sandbox contents work overlaps here).
-- **Secrets:** TOURS_API_KEY + LANGFUSE keys need tenant-local provisioning (the /var/lib/sandbox/secrets/crm pattern already exists for the observe path).
-- **Trigger:** systemd timer for a nightly advisory run + a manual trigger for post-deploy runs; report lands as an artifact (and later, PR4 issue-mode).
-
-Recommendation: don't block the labeling loop on this; sequence it after items 1–4, and only if the codex-auth question has an acceptable answer. Revisit alongside the vps-dev-sandbox contents work (shared container/tooling patterns).
+- **Mint:** snapshot a live run's evidence into a Langfuse dataset on demand (items carry intent + full evidence bundle + screenshots as media — proven by the label-session trace contract). Pinned per experiment, not permanently: mint fresh when freshness matters; old datasets persist for reproducing old conclusions.
+- **Ground truth is inherited, not sessioned:** items matching already-triaged traces carry those verdicts as expected output (grows with every report read); trap-transformation items carry constructed must-fail ground truth for free; unlabeled items still serve agreement/stability metrics.
+- **Arms** run the real judge path through the raw dataset-run harness (SDK pattern at high fidelity; adopt the `@langfuse/client` experiment runner when productized): one dataset run per configuration — model swap, `luna-3vote` (task fn = 3 calls + majority), prompt variant pinned by git SHA in run metadata. Resumable legs; item scores + run-level scores.
+- **Human cost = triaging disagreements only:** items where arms disagree are queued into an annotation queue; adjudications immediately join the ground-truth pool.
+- **Decision rule (relaxed):** agreement with baseline + maintainer's call on the disagreement queue + stability across repeats + cost/latency. No precision bar over a tiny frozen set.
+- Queued experiment candidates, deliberately AFTER #642 (comparing judges over a monoculture world partly measures known noise): luna 3-vote majority (~$0.85/run vs $1.42 single-shot 5.5 — possibly cheaper AND more stable), gpt-5.6-terra arm (probe the model id on the pinned codex CLI first).
 
 ## Sequencing
 
-1. (now) Maintainer completes `qa-label-session-20260714` in Langfuse.
-2. `label-sync` (hand-run acceptable for the first pass) → commit corpus regen + drafts + labeled files as one PR.
-3. Luna experiment over the fresh ground truth.
-4. `label.ts --langfuse` sink + corpus regen script (turn this session's one-offs into repo tooling).
-5. Obs-tenant hardening (backup timer first — cheap and now-relevant).
-6. Judge-as-tenant design decision (separate doc if pursued).
+1. **#642 seed-distribution realism arc** (next code work): varied overdue ages / cadence mix / last-contact spread via the synthetic generators. Kills the judge's loudest recurring noise (DSH-010's monoculture fail every round), makes urgency-tier UI actually exercisable, and un-blocks DSH-010-clean's question. Retire DSH-010-clean from the corpus pending this (its human `unsure` = "blocked on #642").
+2. **Verifier→E2E migration arcs, per domain** (same-commit row-deletion rule). The frozen corpus stays load-bearing for the merge gate until this completes.
+3. **Hardening prerequisites — land BEFORE labels become Langfuse-only:** backup.sh on a systemd timer; obs tenant graduated into personal-ops IaC (`setup-vps.sh` TENANTS); durable reach (Tailscale Serve / Caddy) including a same-origin answer for the MinIO media URLs (the :9090 coupling breaks any reach story that only fronts :3000).
+4. **Corpus retirement stroke:** trap-as-transformation self-test in the judge round; email/phone scrub moves from curation-time into the Langfuse export path (same seam #379's input-minimization needs); delete corpus captures/cases/labels; labels become Langfuse-only.
+5. **Judge-as-tenant** (optional, separate decision): a `qa` tenant on stovepipes owning the scheduled reseed→tours→judge→export loop. Auth answer: dedicated codex account/slot, one interactive login at provision, rotation continues tenant-side (never sync `auth.json` from the Mac — two consumers of one rotating refresh token = the known "refresh token already used" burn). Transport (CLI vs codex-sdk) is orthogonal: the SDK uses the same auth store, so subscription auth works through either. Remaining costs are provisioning mechanics (Playwright/chromium on ARM, tenant secrets, timer). Revisit alongside the vps-dev-sandbox contents work.
 
-## Session learnings worth keeping (operational)
+## Superseded decisions (kept for the record)
+
+- **Hybrid ground truth (Langfuse authors, git snapshot via label-sync)** — decided earlier on 2026-07-14, superseded the same day: the git snapshot existed for the offline eval's label-gated metrics, which are exactly what moves to Langfuse-native accumulation. `label-sync` dies un-productized (the one-off ran once, for the 2026-07-14 session).
+- **`label.ts --langfuse` drafter sink as a permanent integration** — the drafter concept dissolves with the corpus: in the end state the judge's own live verdict IS the draft, confirmed or rejected in the triage queue. The drafter machinery stays only until corpus retirement (step 4).
+- **Fail-precision over a frozen held-out set as the north star** — replaced by triage-derived usefulness (framing decision 4). The 2026-07-14 experiment demonstrated why: N=2 labeled units (one of them human-`unsure`) cannot gate anything, and `unsure` labels measure evidence quality, not judge quality (all three verdict categories appeared on DSH-010-clean across humans and models). Where ground truth IS used (experiments), `unsure` adjudications are excluded from match denominators.
+- **False-positive trap program / prompt calibration (the old "experiment #0")** — dropped per framing decision 1. The observed over-fail on cosmetic doctoring (3 of 4 runtime legs bit DSH-011-doctored) is acknowledged, and the cheaper levers if report noise ever becomes an attention problem are majority-vote arms and verdict-confidence presentation in the report — not trap-tuned prompts.
+
+## What we consciously give up
+
+- Byte-stable evidence in git history (7k-line capture JSONs were ceremony, not value). Longitudinal comparisons now depend on Langfuse dataset persistence — hence the hardening prerequisites in step 3.
+- Offline-ness of judge-lane tooling (the deterministic merge gate lives in CI/E2E, which needs no evidence fixtures; everything judge-side may assume Langfuse reachable).
+
+## Label-trace contract (carried forward — applies to live-fail triage traces and experiment items)
+
+The trace/item input must carry the full scenario (`behavior_title`/`given`/`when`/`then_text`/`all_then` or the intent goal), the mutation when doctored, a `screenshot_caveat` on doctored evidence (screenshots always show the undoctored world), and `graded_evidence` — the mutation-applied captures in the prompt's own CAPTURE[n] structure, each entry carrying its `capture_file` name and its own `screenshot` media token (the media gallery does NOT preserve order; a flat screenshots array is unattributable) — so verdicts are verifiable without leaving Langfuse.
+
+## Operational learnings (2026-07-14 sessions — keep)
 
 - Seed with the backend STOPPED — assertion-driven caches (birthday etc.) silently vanish under the River race, and the seed still exits 0.
 - `TIME_ACCELERATION` without `TIME_BASE` is a silent no-op server-side but reports `is_accelerated: true` with empty `base_time`, which the frontend renders as "Invalid Date" — set both, base as Unix seconds.
-- The corpus is local-only by design: accelerated-frame clauses (e.g. CON-045[4]) are only provable in the testing frame, and the PII guarantee is structural in a `--reset-and-seed` world; staging serves the live judge, not the corpus.
-- Langfuse media = MinIO presigned URLs on :9090; any reach/tunnel story must cover it or every media op fails with an unhelpful connection error.
-- The local dev port 3000 collides with the habitual Langfuse forward — the regen script should use a non-3000 frontend port.
-- Langfuse ingestion dedups by EVENT id (not trace id): re-submitting a trace-create with a previously-used event id is silently dropped — updates appear to succeed but change nothing. Any writer that upserts traces (the `label.ts --langfuse` sink) must generate unique event ids per submission.
-- Label-trace contract (learned from the first review session): the trace input must carry the full scenario (`behavior_title`/`given`/`when`/`then_text`/`all_then` or the intent goal), the `doctored` mutation, a `screenshot_caveat` on doctored cases (screenshots always show the undoctored world), and `graded_evidence` — the mutation-applied captures in the prompt's own CAPTURE[n] structure, each entry carrying its `capture_file` name and its own `screenshot` media token (the media gallery does NOT preserve order, so a flat screenshots array is unattributable) — so critiques are verifiable without leaving Langfuse. Ingestion is processed async by a worker: verification reads need a settle delay.
+- Langfuse ingestion dedups by EVENT id (not trace id): re-submitting a trace-create with a previously-used event id is silently dropped. Any upserting writer must generate unique event ids per submission. Ingestion is processed async by a worker: verification reads need a settle delay.
+- Langfuse media = MinIO presigned URLs on :9090; any reach/tunnel story must cover it or every media op fails with an unhelpful generic connection error.
+- Run-level scores (scores with `datasetRunId`) are accepted by the v3.212 API — verify UI rendering; if absent, attach aggregates as run metadata until upgrade.
+- The local dev port 3000 collides with the habitual Langfuse forward — any local tours stack should use a non-3000 frontend port.
+- Doctored-mutation liveness: applying a mutation MUST change the evidence, else fail loudly (out-of-range `itemIndex` no-ops silently). Made structural by trap-as-transformation over live evidence, but any residual mutation application should keep the deep-inequality guard.
