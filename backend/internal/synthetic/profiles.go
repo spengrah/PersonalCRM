@@ -232,9 +232,9 @@ func ProfileParams(name Profile) (SeedParams, error) {
 				// The coverage + determinism tests override this down for CI.
 				SeededSignals: 20,
 				// Four settled interactions per dedicated source contact, spread back over
-				// ~9 weeks, so staging shows a prod-like multi-interaction history per
-				// source instead of a single recent message. The coverage + determinism
-				// tests override this down for CI runtime.
+				// a non-uniform, contact-varied span (months-scale), so staging shows a
+				// prod-like multi-interaction history per source instead of a single recent
+				// message. The coverage + determinism tests override this down for CI runtime.
 				MessagesPerContact: 4,
 				// A handful of soft-deleted contacts + merged pairs so staging shows the
 				// tombstoned-contact and merge re-point surfaces. The coverage + determinism
@@ -403,7 +403,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		}
 		res.Contacts++
 		for j := 0; j < messagesPer; j++ {
-			if _, err := h.ReplayGmail(ctx, gmContact.ID, gen.GmailMessage(gmSpec, factory.MatchSeeded, factory.WithMessageAge(interactionSpreadAge(j)))); err != nil {
+			if _, err := h.ReplayGmail(ctx, gmContact.ID, gen.GmailMessage(gmSpec, factory.MatchSeeded, factory.WithMessageAge(interactionSpreadAge(i, j)))); err != nil {
 				return res, fmt.Errorf("profile %s: replay gmail %d msg %d: %w", params.Profile, i, j, err)
 			}
 			res.SettledInteractions++
@@ -418,7 +418,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		}
 		res.Contacts++
 		for j := 0; j < messagesPer; j++ {
-			if _, err := h.ReplayTelegram(ctx, tgContact.ID, gen.TelegramMessage(tgSpec, factory.MatchSeeded, factory.WithMessageAge(interactionSpreadAge(j)))); err != nil {
+			if _, err := h.ReplayTelegram(ctx, tgContact.ID, gen.TelegramMessage(tgSpec, factory.MatchSeeded, factory.WithMessageAge(interactionSpreadAge(i, j)))); err != nil {
 				return res, fmt.Errorf("profile %s: replay telegram %d msg %d: %w", params.Profile, i, j, err)
 			}
 			res.SettledInteractions++
@@ -433,7 +433,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		}
 		res.Contacts++
 		for j := 0; j < messagesPer; j++ {
-			if _, err := h.ReplayGCal(ctx, gcContact.ID, gen.GCalEvent(gcSpec, factory.MatchSeeded, factory.WithMessageAge(interactionSpreadAge(j)))); err != nil {
+			if _, err := h.ReplayGCal(ctx, gcContact.ID, gen.GCalEvent(gcSpec, factory.MatchSeeded, factory.WithMessageAge(interactionSpreadAge(i, j)))); err != nil {
 				return res, fmt.Errorf("profile %s: replay gcal %d msg %d: %w", params.Profile, i, j, err)
 			}
 			res.SettledInteractions++
@@ -448,7 +448,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		}
 		res.Contacts++
 		for j := 0; j < messagesPer; j++ {
-			if _, err := h.ReplayGChat(ctx, gchatContact.ID, gen.GChatMessage(gchatSpec, factory.MatchSeeded, factory.WithMessageAge(interactionSpreadAge(j)))); err != nil {
+			if _, err := h.ReplayGChat(ctx, gchatContact.ID, gen.GChatMessage(gchatSpec, factory.MatchSeeded, factory.WithMessageAge(interactionSpreadAge(i, j)))); err != nil {
 				return res, fmt.Errorf("profile %s: replay gchat %d msg %d: %w", params.Profile, i, j, err)
 			}
 			res.SettledInteractions++
@@ -463,7 +463,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		}
 		res.Contacts++
 		for j := 0; j < messagesPer; j++ {
-			imageSpec, err := gen.IMessage(imSpec, factory.MatchSeeded, h.MacHostID(), factory.WithMessageAge(interactionSpreadAge(j)))
+			imageSpec, err := gen.IMessage(imSpec, factory.MatchSeeded, h.MacHostID(), factory.WithMessageAge(interactionSpreadAge(i, j)))
 			if err != nil {
 				return res, fmt.Errorf("profile %s: build imessage spec %d msg %d: %w", params.Profile, i, j, err)
 			}
@@ -871,7 +871,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 			return res, fmt.Errorf("profile %s: seed awaiting-reply contact: %w", params.Profile, err)
 		}
 		res.Contacts++
-		if _, err := h.ReplayGCal(ctx, fuContact.ID, gen.GCalEvent(fuSpec, factory.MatchSeeded, factory.WithMessageAge(interactionSpreadAge(0)))); err != nil {
+		if _, err := h.ReplayGCal(ctx, fuContact.ID, gen.GCalEvent(fuSpec, factory.MatchSeeded, factory.WithMessageAge(interactionSpreadAge(0, 0)))); err != nil {
 			return res, fmt.Errorf("profile %s: replay gcal for awaiting-reply contact: %w", params.Profile, err)
 		}
 		res.SettledInteractions++
@@ -1075,14 +1075,43 @@ var catalogSignalKeys = []string{
 // relationship_signal rows so they are identifiable as toolkit-authored.
 const syntheticSignalMethodVersion = "synthetic-seed"
 
-// catalogOverdueAge backdates the overdue catalog cohort ~90 days before the
-// anchor (created_at == last_contacted), far enough that a sub-quarterly cadence
-// reads as overdue. catalogRecentWindow bounds the recently-created cohort within
-// the last ~48h. Both are anchor-relative.
-const (
-	catalogOverdueAge   = 90 * 24 * time.Hour
-	catalogRecentWindow = 48 * time.Hour
+// catalogOverdueLadder is the fixed (cadence, created-age) table the overdue
+// catalog slots rotate over, so the overdue cohort spans a RANGE of days-overdue
+// magnitudes (single-digit / tens / hundreds) and multiple cadences instead of a
+// single monthly / ~60-day monoculture that the dashboard urgency tiers cannot
+// separate. created_at == last_contacted is stamped from one past instant
+// (WithCreatedAge), so days-overdue is (created-age − cadence period). Every pair
+// is genuinely overdue under PRODUCTION cadence durations (weekly 7d / monthly 30d
+// / quarterly 90d — age comfortably exceeds the period), and several keep a
+// >14d-backdated shape so the coherence D1 gate (overdueFloor = now − 14d) holds.
+// Anchor-relative via WithCreatedAge (no time.Now()); indexed by a pure function of
+// the slot, so it draws no PRNG.
+var catalogOverdueLadder = []struct {
+	cadence    string
+	createdAge time.Duration
+}{
+	{"weekly", 12 * 24 * time.Hour},     // ~5 days overdue (weekly period 7d)
+	{"monthly", 40 * 24 * time.Hour},    // ~10 days overdue (monthly period 30d)
+	{"monthly", 96 * 24 * time.Hour},    // ~66 days overdue
+	{"quarterly", 130 * 24 * time.Hour}, // ~40 days overdue (quarterly period 90d)
+	{"weekly", 200 * 24 * time.Hour},    // ~193 days overdue (long-neglected)
+}
+
+// catalogRecentCadences / catalogNeverContactedCadences are the small fixed cadence
+// pools the recent + never-contacted catalog cohorts rotate over (contact-list
+// cadence-mix realism). The first element matches the pre-ladder cadence for each
+// cohort (weekly / quarterly), so the lowest-index representatives are unchanged.
+// All values are migration-005 CHECK cadences. Neither cohort's bucket semantics
+// change: recent stays recent (WithRecentCreation), never-contacted keeps a NULL
+// last_contacted.
+var (
+	catalogRecentCadences         = []string{"weekly", "biweekly"}
+	catalogNeverContactedCadences = []string{"quarterly", "biannual", "annual"}
 )
+
+// catalogRecentWindow bounds the recently-created cohort within the last ~48h
+// (anchor-relative).
+const catalogRecentWindow = 48 * time.Hour
 
 // catalogLocationStems is the small fixed pool the lives_in location rotates over
 // so locations repeat across contacts (prod-like) while staying deterministic. The
@@ -1114,9 +1143,13 @@ var catalogLocationStems = []string{
 func catalogOptionsFor(i, n int, anchor time.Time, prefix string) []factory.ContactOption {
 	var opts []factory.ContactOption
 
-	// The no-method bucket: a cadence-bearing contact with NO contact_method.
+	// The no-method bucket: a cadence-bearing contact with NO contact_method. It
+	// draws its (cadence, created-age) from the same overdue ladder as the general
+	// overdue slots, by the same rotation, so it stays a genuinely overdue,
+	// >14d-backdated contact — just one carrying no method.
 	if i == 3 && n > 3 {
-		opts = append(opts, factory.WithNoMethods(), factory.WithCadence("monthly"), factory.WithCreatedAge(catalogOverdueAge))
+		pair := catalogOverdueLadder[(i/3)%len(catalogOverdueLadder)]
+		opts = append(opts, factory.WithNoMethods(), factory.WithCadence(pair.cadence), factory.WithCreatedAge(pair.createdAge))
 		return opts
 	}
 
@@ -1127,12 +1160,18 @@ func catalogOptionsFor(i, n int, anchor time.Time, prefix string) []factory.Cont
 	// never-contacted (no last_contacted).
 	switch i % 3 {
 	case 0:
-		opts = append(opts, factory.WithCadence("monthly"), factory.WithCreatedAge(catalogOverdueAge))
+		// Overdue: rotate the (cadence, created-age) ladder by overdue-slot index so
+		// the overdue cohort spans distinct days-overdue magnitudes AND cadences,
+		// exercising the dashboard's urgency tiers instead of one uniform card shape.
+		pair := catalogOverdueLadder[(i/3)%len(catalogOverdueLadder)]
+		opts = append(opts, factory.WithCadence(pair.cadence), factory.WithCreatedAge(pair.createdAge))
 	case 1:
-		opts = append(opts, factory.WithCadence("weekly"), factory.WithRecentCreation(catalogRecentWindow))
+		// Recent: rotate the cadence over a small pool for contact-list realism; the
+		// contact stays recent via WithRecentCreation.
+		opts = append(opts, factory.WithCadence(catalogRecentCadences[(i/3)%len(catalogRecentCadences)]), factory.WithRecentCreation(catalogRecentWindow))
 	default:
-		// never-contacted: a cadence but no last_contacted.
-		opts = append(opts, factory.WithCadence("quarterly"))
+		// never-contacted: a cadence (rotated over a small pool) but no last_contacted.
+		opts = append(opts, factory.WithCadence(catalogNeverContactedCadences[(i/3)%len(catalogNeverContactedCadences)]))
 	}
 
 	// One representative of each rendering / data edge case (only when the
@@ -1192,19 +1231,39 @@ func perSourceSettledCount(p Profile) int {
 	return 1
 }
 
-// interactionSpreadInterval is the deterministic gap between successive settled
-// interactions on one contact. It is wider than a day so the messaging-aggregate
-// sources (gchat / messages / telegram), which collapse same-day messages into a
-// single interaction, still yield one interaction per replayed message; ~3 weeks
-// gives a months-scale history at the profile message counts.
-const interactionSpreadInterval = 21 * 24 * time.Hour
+// interactionGapPool is the fixed pool of first-gap sizes the settled-interaction
+// spread rotates over BY CONTACT, so different per-source settled contacts carry
+// different spans even at MessagesPerContact=2 (a single gap). Every value is wider
+// than a day so the messaging-aggregate sources (gchat / messages / telegram),
+// which collapse same-day messages into a single interaction, still yield one
+// interaction per replayed message.
+var interactionGapPool = []time.Duration{
+	9 * 24 * time.Hour,
+	16 * 24 * time.Hour,
+	23 * 24 * time.Hour,
+	34 * 24 * time.Hour,
+}
 
-// interactionSpreadAge is the backward age of the j-th settled message on a
-// contact: 0 for the newest (so it drives last_contacted), then one
-// interactionSpreadInterval older per step. Deterministic (a pure function of j),
-// anchor-relative via the source factories' WithMessageAge (no time.Now()).
-func interactionSpreadAge(j int) time.Duration {
-	return time.Duration(j) * interactionSpreadInterval
+// interactionSpreadStep widens each successive gap on one contact so the spacing is
+// non-uniform WITHIN a contact too (visible at MessagesPerContact>=3), not merely
+// across contacts.
+const interactionSpreadStep = 7 * 24 * time.Hour
+
+// interactionSpreadAge is the backward age of the j-th settled message on the
+// contactIdx-th per-source settled contact: 0 for the newest (j=0, so it drives
+// last_contacted), then the contact's base gap plus a widening step per additional
+// message. It is contact-indexed so the settled history is a non-uniform
+// distribution of spans rather than one uniform interval. Pure function of
+// (contactIdx, j) — no PRNG — anchor-relative via the source factories'
+// WithMessageAge (no time.Now()). Strictly increasing in j with every gap >= 7d, so
+// same-day collapse never merges two of a contact's messages.
+func interactionSpreadAge(contactIdx, j int) time.Duration {
+	base := interactionGapPool[contactIdx%len(interactionGapPool)]
+	var age time.Duration
+	for step := 0; step < j; step++ {
+		age += base + time.Duration(step)*interactionSpreadStep
+	}
+	return age
 }
 
 // Message-age anchors for the two-sided direction block (F4). All are backward
