@@ -477,7 +477,7 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	params.Counts.SeededSignals = 3
 	// Two settled interactions per dedicated source contact (the CI-safe minimum
 	// that still exercises the temporal spread): the second message is one
-	// interactionSpreadInterval (~3 weeks) older, so the per-contact span clears the
+	// contact-indexed spread gap (>= 9 days) older, so the per-contact span clears the
 	// multi-day floor asserted below. Kept small to bound the settle budget.
 	params.Counts.MessagesPerContact = 2
 	// One soft-deleted contact + one merged pair (the CI-safe minimum): enough to
@@ -546,6 +546,32 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	require.GreaterOrEqual(t, overdue, 1, "≥1 cadence-bearing contact with a far-past last_contacted (overdue bucket survived a settling replay)")
 	require.GreaterOrEqual(t, neverContacted, 1, "≥1 cadence-bearing never-contacted contact (NULL last_contacted survived)")
 	require.GreaterOrEqual(t, noMethod, 1, "≥1 no-method contact (the no-method bucket exists)")
+
+	// Overdue-cohort DIVERSITY (DSH-010): the overdue surface must show a RANGE of
+	// days-overdue and cadences, not a single monthly / ~60-day monoculture the
+	// dashboard urgency tiers cannot separate. Select the backdated cohort
+	// STRUCTURALLY — cadence set, last_contacted == created_at (the backdated creation
+	// stamp), created_at older than a fixed floor (now − 7d, which deterministically
+	// excludes the <48h recent cohort in EVERY env) — so this does NOT depend on the
+	// env-reading cadence helper, which collapses days-overdue under compressed test
+	// durations. Assert ≥3 distinct created-ages AND ≥2 distinct cadences; this is the
+	// assertion that would have caught the pre-change monoculture (all overdue slots
+	// were monthly + 90d), and it is env-independent by construction.
+	diversityFloor := now.Add(-7 * 24 * time.Hour)
+	distinctCreatedAges := map[int64]bool{}
+	distinctOverdueCadences := map[string]bool{}
+	for _, b := range buckets {
+		if b.Cadence == nil || *b.Cadence == "" || b.CreatedAt == nil || b.LastContacted == nil {
+			continue
+		}
+		if !b.LastContacted.Equal(*b.CreatedAt) || !b.CreatedAt.Before(diversityFloor) {
+			continue
+		}
+		distinctCreatedAges[b.CreatedAt.UnixNano()] = true
+		distinctOverdueCadences[*b.Cadence] = true
+	}
+	require.GreaterOrEqual(t, len(distinctCreatedAges), 3, "overdue cohort spans ≥3 distinct created-ages (days-overdue diversity, not a monoculture)")
+	require.GreaterOrEqual(t, len(distinctOverdueCadences), 2, "overdue cohort spans ≥2 distinct cadences")
 
 	// Post-seed coherence gate (F1/F3 + tour capacity), scoped to the namespace.
 	assertSeedCoherence(t, ctx, support, h.Generator().Prefix(), h.DateFactContactID())
@@ -735,6 +761,20 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 		}
 	}
 	require.True(t, spread, "≥1 settled contact has ≥2 interactions spanning ≥7 days (temporal spread, not one window)")
+
+	// Spacing NON-UNIFORMITY (F9): the settled history must not be one uniform gap
+	// repeated across every contact (the pre-change shape was a fixed 21-day
+	// interval). The spread ladder is contact-indexed, so even at
+	// MessagesPerContact=2 (a single gap) different settled contacts carry different
+	// spans. Assert ≥2 distinct span values across settled contacts with ≥2
+	// interactions — the assertion that would have caught the uniform-spacing shape.
+	distinctSpans := map[time.Duration]bool{}
+	for _, s := range spreads {
+		if s.InteractionCount >= 2 {
+			distinctSpans[s.Span] = true
+		}
+	}
+	require.GreaterOrEqual(t, len(distinctSpans), 2, "≥2 distinct interaction spans across settled contacts (non-uniform spacing, not a single fixed gap)")
 
 	// Merge + soft-delete scenarios (item 12). These are standalone contacts seeded
 	// at full count (independent of the catalog), so the result equals the override.
