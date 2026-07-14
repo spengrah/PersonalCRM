@@ -8,6 +8,7 @@
   "captures": [
     "cadence-followup/001-recent-activity-last-outreach-state.json",
     "cadence-followup/002-recent-activity-last-response-state.json",
+    "cadence-followup/003-recent-activity-pending-reply-state-awaiting-reply-on-an-out.json",
     "cadence-followup/004-recent-activity-explicit-no-recent-activity-state.json"
   ],
   "expected": [
