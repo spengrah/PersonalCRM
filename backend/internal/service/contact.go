@@ -1223,8 +1223,10 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		return nil, fmt.Errorf("delete duplicate contact methods: %w", err)
 	}
 
-	// 1b. Demote source's primary methods when target already has primaries for those types
-	// This prevents violation of the unique partial index on (contact_id, type) WHERE is_primary = true
+	// 1b. Demote the source's primary methods when the target already has a
+	// primary, regardless of method type — idx_contact_method_primary is a
+	// unique partial index on (contact_id) WHERE is_primary = true, so an
+	// undemoted source primary of any type would collide on transfer.
 	if err := txQueries.DemoteSourcePrimaryMethods(ctx, db.DemoteSourcePrimaryMethodsParams{
 		SourceContactID: sourceUUID,
 		TargetContactID: targetUUID,
