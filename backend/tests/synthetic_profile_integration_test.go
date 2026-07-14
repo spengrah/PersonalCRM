@@ -477,7 +477,7 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	params.Counts.SeededSignals = 3
 	// Two settled interactions per dedicated source contact (the CI-safe minimum
 	// that still exercises the temporal spread): the second message is one
-	// interactionSpreadInterval (~3 weeks) older, so the per-contact span clears the
+	// contact-indexed spread gap (>= 9 days) older, so the per-contact span clears the
 	// multi-day floor asserted below. Kept small to bound the settle budget.
 	params.Counts.MessagesPerContact = 2
 	// One soft-deleted contact + one merged pair (the CI-safe minimum): enough to
