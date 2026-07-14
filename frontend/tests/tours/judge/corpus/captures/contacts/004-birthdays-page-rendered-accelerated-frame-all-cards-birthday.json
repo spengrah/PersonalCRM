@@ -8,10 +8,10 @@
   "url": "/birthdays",
   "pair": null,
   "serverTime": {
-    "currentTime": "2026-09-09T00:14:46.9479497Z",
+    "currentTime": "2026-07-14T10:38:42.95668-05:00",
     "isAccelerated": true,
     "accelerationFactor": 60,
-    "baseTime": "2026-07-09T15:07:20Z",
+    "baseTime": "2026-07-14T10:19:40-05:00",
     "environment": "testing"
   },
   "aria": {
@@ -102,7 +102,7 @@
           },
           {
             "role": "button",
-            "name": "Sep 9, 12:14:24 AM 60x"
+            "name": "Jul 14, 10:38:33 AM 60x"
           }
         ]
       },
@@ -116,7 +116,7 @@
         "children": [
           {
             "role": "text",
-            "text": "Wednesday, September 9, 2026"
+            "text": "Tuesday, July 14, 2026"
           }
         ]
       },
@@ -125,7 +125,7 @@
         "children": [
           {
             "role": "text",
-            "text": "12:14 AM"
+            "text": "10:38 AM"
           }
         ]
       },
@@ -143,7 +143,7 @@
         "children": [
           {
             "role": "text",
-            "text": "31"
+            "text": "32"
           }
         ]
       },
@@ -158,8 +158,200 @@
       },
       {
         "role": "heading",
-        "name": "Today's Birthdays (1)",
+        "name": "Upcoming Birthdays (14)",
         "level": 2
+      },
+      {
+        "role": "heading",
+        "name": "synth-prodshaped-Kestrel Placeholdt",
+        "level": 3
+      },
+      {
+        "role": "paragraph",
+        "children": [
+          {
+            "role": "text",
+            "text": "Wednesday, July 15"
+          }
+        ]
+      },
+      {
+        "role": "paragraph",
+        "children": [
+          {
+            "role": "text",
+            "text": "Turning 37"
+          }
+        ]
+      },
+      {
+        "role": "paragraph",
+        "children": [
+          {
+            "role": "text",
+            "text": "1 day"
+          }
+        ]
+      },
+      {
+        "role": "heading",
+        "name": "synth-prodshaped-Mox Dummond",
+        "level": 3
+      },
+      {
+        "role": "paragraph",
+        "children": [
+          {
+            "role": "text",
+            "text": "Sunday, July 19"
+          }
+        ]
+      },
+      {
+        "role": "paragraph",
+        "children": [
+          {
+            "role": "text",
+            "text": "Turning 37"
+          }
+        ]
+      },
+      {
+        "role": "paragraph",
+        "children": [
+          {
+            "role": "text",
+            "text": "5 days"
+          }
+        ]
+      },
+      {
+        "role": "heading",
+        "name": "synth-prodshaped-Jovi Sampleby",
+        "level": 3
+      },
+      {
+        "role": "paragraph",
+        "children": [
+          {
+            "role": "text",
+            "text": "Saturday, August 8"
+          }
+        ]
+      },
+      {
+        "role": "paragraph",
+        "children": [
+          {
+            "role": "text",
+            "text": "Turning 32"
+          }
+        ]
+      },
+      {
+        "role": "paragraph",
+        "children": [
+          {
+            "role": "text",
+            "text": "25 days"
+          }
+        ]
+      },
+      {
+        "role": "heading",
+        "name": "synth-prodshaped-Jovi Fakeman",
+        "level": 3
+      },
+      {
+        "role": "paragraph",
+        "children": [
+          {
+            "role": "text",
+            "text": "Wednesday, August 12"
+          }
+        ]
+      },
+      {
+        "role": "paragraph",
+        "children": [
+          {
+            "role": "text",
+            "text": "Turning 32"
+          }
+        ]
+      },
+      {
+        "role": "paragraph",
+        "children": [
+          {
+            "role": "text",
+            "text": "29 days"
+          }
+        ]
+      },
+      {
+        "role": "heading",
+        "name": "synth-prodshaped-Wren Probeworth",
+        "level": 3
+      },
+      {
+        "role": "paragraph",
+        "children": [
+          {
+            "role": "text",
+            "text": "Sunday, August 16"
+          }
+        ]
+      },
+      {
+        "role": "paragraph",
+        "children": [
+          {
+            "role": "text",
+            "text": "Turning 32"
+          }
+        ]
+      },
+      {
+        "role": "paragraph",
+        "children": [
+          {
+            "role": "text",
+            "text": "33 days"
+          }
+        ]
+      },
+      {
+        "role": "heading",
+        "name": "synth-prodshaped-Nyx Dummond",
+        "level": 3
+      },
+      {
+        "role": "paragraph",
+        "children": [
+          {
+            "role": "text",
+            "text": "Saturday, September 5"
+          }
+        ]
+      },
+      {
+        "role": "paragraph",
+        "children": [
+          {
+            "role": "text",
+            "text": "Turning 27"
+          }
+        ]
+      },
+      {
+        "role": "paragraph",
+        "children": [
+          {
+            "role": "text",
+            "text": "53 days"
+          }
+        ]
       },
       {
         "role": "heading",
@@ -189,14 +381,9 @@
         "children": [
           {
             "role": "text",
-            "text": "🎉 Today!"
+            "text": "57 days"
           }
         ]
-      },
-      {
-        "role": "heading",
-        "name": "Upcoming Birthdays (7)",
-        "level": 2
       },
       {
         "role": "heading",
@@ -226,7 +413,7 @@
         "children": [
           {
             "role": "text",
-            "text": "23 days"
+            "text": "80 days"
           }
         ]
       },
@@ -258,7 +445,7 @@
         "children": [
           {
             "role": "text",
-            "text": "27 days"
+            "text": "84 days"
           }
         ]
       },
@@ -290,7 +477,7 @@
         "children": [
           {
             "role": "text",
-            "text": "55 days"
+            "text": "113 days"
           }
         ]
       },
@@ -322,7 +509,7 @@
         "children": [
           {
             "role": "text",
-            "text": "75 days"
+            "text": "133 days"
           }
         ]
       },
@@ -354,7 +541,7 @@
         "children": [
           {
             "role": "text",
-            "text": "79 days"
+            "text": "137 days"
           }
         ]
       },
@@ -386,7 +573,7 @@
         "children": [
           {
             "role": "text",
-            "text": "102 days"
+            "text": "160 days"
           }
         ]
       },
@@ -418,13 +605,13 @@
         "children": [
           {
             "role": "text",
-            "text": "106 days"
+            "text": "164 days"
           }
         ]
       },
       {
         "role": "heading",
-        "name": "Already Celebrated This Year (23)",
+        "name": "Already Celebrated This Year (18)",
         "level": 2
       },
       {
@@ -455,7 +642,7 @@
         "children": [
           {
             "role": "text",
-            "text": "239 days ago"
+            "text": "181 days ago"
           }
         ]
       },
@@ -487,7 +674,7 @@
         "children": [
           {
             "role": "text",
-            "text": "235 days ago"
+            "text": "177 days ago"
           }
         ]
       },
@@ -519,7 +706,7 @@
         "children": [
           {
             "role": "text",
-            "text": "231 days ago"
+            "text": "173 days ago"
           }
         ]
       },
@@ -551,7 +738,7 @@
         "children": [
           {
             "role": "text",
-            "text": "211 days ago"
+            "text": "153 days ago"
           }
         ]
       },
@@ -583,7 +770,7 @@
         "children": [
           {
             "role": "text",
-            "text": "207 days ago"
+            "text": "149 days ago"
           }
         ]
       },
@@ -615,7 +802,7 @@
         "children": [
           {
             "role": "text",
-            "text": "190 days ago"
+            "text": "132 days ago"
           }
         ]
       },
@@ -647,7 +834,7 @@
         "children": [
           {
             "role": "text",
-            "text": "186 days ago"
+            "text": "128 days ago"
           }
         ]
       },
@@ -679,7 +866,7 @@
         "children": [
           {
             "role": "text",
-            "text": "182 days ago"
+            "text": "124 days ago"
           }
         ]
       },
@@ -702,7 +889,7 @@
         "children": [
           {
             "role": "text",
-            "text": "179 days ago"
+            "text": "121 days ago"
           }
         ]
       },
@@ -734,7 +921,7 @@
         "children": [
           {
             "role": "text",
-            "text": "158 days ago"
+            "text": "101 days ago"
           }
         ]
       },
@@ -766,7 +953,39 @@
         "children": [
           {
             "role": "text",
-            "text": "154 days ago"
+            "text": "97 days ago"
+          }
+        ]
+      },
+      {
+        "role": "heading",
+        "name": "synth-prodshaped-Nyx Ünïcödé-Testwell",
+        "level": 3
+      },
+      {
+        "role": "paragraph",
+        "children": [
+          {
+            "role": "text",
+            "text": "Monday, April 12"
+          }
+        ]
+      },
+      {
+        "role": "paragraph",
+        "children": [
+          {
+            "role": "text",
+            "text": "Turned 40"
+          }
+        ]
+      },
+      {
+        "role": "paragraph",
+        "children": [
+          {
+            "role": "text",
+            "text": "93 days ago"
           }
         ]
       },
@@ -798,7 +1017,7 @@
         "children": [
           {
             "role": "text",
-            "text": "134 days ago"
+            "text": "77 days ago"
           }
         ]
       },
@@ -830,7 +1049,7 @@
         "children": [
           {
             "role": "text",
-            "text": "131 days ago"
+            "text": "74 days ago"
           }
         ]
       },
@@ -862,7 +1081,7 @@
         "children": [
           {
             "role": "text",
-            "text": "107 days ago"
+            "text": "50 days ago"
           }
         ]
       },
@@ -894,7 +1113,7 @@
         "children": [
           {
             "role": "text",
-            "text": "83 days ago"
+            "text": "26 days ago"
           }
         ]
       },
@@ -926,7 +1145,7 @@
         "children": [
           {
             "role": "text",
-            "text": "79 days ago"
+            "text": "22 days ago"
           }
         ]
       },
@@ -958,199 +1177,7 @@
         "children": [
           {
             "role": "text",
-            "text": "75 days ago"
-          }
-        ]
-      },
-      {
-        "role": "heading",
-        "name": "synth-prodshaped-Kestrel Placeholdt",
-        "level": 3
-      },
-      {
-        "role": "paragraph",
-        "children": [
-          {
-            "role": "text",
-            "text": "Thursday, July 15"
-          }
-        ]
-      },
-      {
-        "role": "paragraph",
-        "children": [
-          {
-            "role": "text",
-            "text": "Turned 37"
-          }
-        ]
-      },
-      {
-        "role": "paragraph",
-        "children": [
-          {
-            "role": "text",
-            "text": "56 days ago"
-          }
-        ]
-      },
-      {
-        "role": "heading",
-        "name": "synth-prodshaped-Mox Dummond",
-        "level": 3
-      },
-      {
-        "role": "paragraph",
-        "children": [
-          {
-            "role": "text",
-            "text": "Monday, July 19"
-          }
-        ]
-      },
-      {
-        "role": "paragraph",
-        "children": [
-          {
-            "role": "text",
-            "text": "Turned 37"
-          }
-        ]
-      },
-      {
-        "role": "paragraph",
-        "children": [
-          {
-            "role": "text",
-            "text": "52 days ago"
-          }
-        ]
-      },
-      {
-        "role": "heading",
-        "name": "synth-prodshaped-Jovi Sampleby",
-        "level": 3
-      },
-      {
-        "role": "paragraph",
-        "children": [
-          {
-            "role": "text",
-            "text": "Sunday, August 8"
-          }
-        ]
-      },
-      {
-        "role": "paragraph",
-        "children": [
-          {
-            "role": "text",
-            "text": "Turned 32"
-          }
-        ]
-      },
-      {
-        "role": "paragraph",
-        "children": [
-          {
-            "role": "text",
-            "text": "32 days ago"
-          }
-        ]
-      },
-      {
-        "role": "heading",
-        "name": "synth-prodshaped-Jovi Fakeman",
-        "level": 3
-      },
-      {
-        "role": "paragraph",
-        "children": [
-          {
-            "role": "text",
-            "text": "Thursday, August 12"
-          }
-        ]
-      },
-      {
-        "role": "paragraph",
-        "children": [
-          {
-            "role": "text",
-            "text": "Turned 32"
-          }
-        ]
-      },
-      {
-        "role": "paragraph",
-        "children": [
-          {
-            "role": "text",
-            "text": "28 days ago"
-          }
-        ]
-      },
-      {
-        "role": "heading",
-        "name": "synth-prodshaped-Wren Probeworth",
-        "level": 3
-      },
-      {
-        "role": "paragraph",
-        "children": [
-          {
-            "role": "text",
-            "text": "Monday, August 16"
-          }
-        ]
-      },
-      {
-        "role": "paragraph",
-        "children": [
-          {
-            "role": "text",
-            "text": "Turned 32"
-          }
-        ]
-      },
-      {
-        "role": "paragraph",
-        "children": [
-          {
-            "role": "text",
-            "text": "24 days ago"
-          }
-        ]
-      },
-      {
-        "role": "heading",
-        "name": "synth-prodshaped-Nyx Dummond",
-        "level": 3
-      },
-      {
-        "role": "paragraph",
-        "children": [
-          {
-            "role": "text",
-            "text": "Sunday, September 5"
-          }
-        ]
-      },
-      {
-        "role": "paragraph",
-        "children": [
-          {
-            "role": "text",
-            "text": "Turned 27"
-          }
-        ]
-      },
-      {
-        "role": "paragraph",
-        "children": [
-          {
-            "role": "text",
-            "text": "4 days ago"
+            "text": "18 days ago"
           }
         ]
       },
@@ -1190,8 +1217,8 @@
         "body": {
           "data": {
             "acceleration_factor": 60,
-            "base_time": "2026-07-09T15:07:20Z",
-            "current_time": "2026-09-09T00:12:05.1673634Z",
+            "base_time": "2026-07-14T10:19:40-05:00",
+            "current_time": "2026-07-14T10:38:32.85322-05:00",
             "environment": "testing",
             "is_accelerated": true
           },
@@ -1279,6 +1306,10 @@
         "full_name": "synth-prodshaped-Nyx Sampleby"
       },
       {
+        "birthday": "1986-04-12T00:00:00Z",
+        "full_name": "synth-prodshaped-Nyx Ünïcödé-Testwell"
+      },
+      {
         "birthday": "1984-06-18T00:00:00Z",
         "full_name": "synth-prodshaped-Onyx Fixtura"
       },
@@ -1315,11 +1346,11 @@
         "full_name": "synth-prodshaped-Wren Testwell"
       },
       {
-        "birthday": "1989-01-17T00:00:00Z",
+        "birthday": "1984-06-26T00:00:00Z",
         "full_name": "synth-prodshaped-Zeta Fakeman"
       },
       {
-        "birthday": "1984-06-26T00:00:00Z",
+        "birthday": "1989-01-17T00:00:00Z",
         "full_name": "synth-prodshaped-Zeta Fakeman"
       },
       {

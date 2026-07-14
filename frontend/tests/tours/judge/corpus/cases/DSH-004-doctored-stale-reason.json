@@ -17,7 +17,7 @@
       "endpoint": "GET /api/v1/contacts/overdue",
       "path": ["error", "message"],
       "value": "database connection lost",
-      "itemIndex": 4
+      "itemIndex": 3
     }
   },
   "expected": [

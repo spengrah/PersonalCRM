@@ -11,10 +11,10 @@
     "role": "before"
   },
   "serverTime": {
-    "currentTime": "2026-09-09T01:32:29.54823272Z",
+    "currentTime": "2026-07-14T10:49:00.5356-05:00",
     "isAccelerated": true,
     "accelerationFactor": 60,
-    "baseTime": "2026-07-09T15:07:20Z",
+    "baseTime": "2026-07-14T10:19:40-05:00",
     "environment": "testing"
   },
   "aria": {
@@ -105,7 +105,7 @@
           },
           {
             "role": "button",
-            "name": "Sep 9, 01:31:54 AM 60x"
+            "name": "Jul 14, 10:48:55 AM 60x"
           }
         ]
       },
@@ -115,7 +115,7 @@
       },
       {
         "role": "text",
-        "text": "3 of 167"
+        "text": "3 of 172"
       },
       {
         "role": "button",
@@ -179,14 +179,14 @@
         "children": [
           {
             "role": "link",
-            "name": "<email:2>",
+            "name": "<email:6>",
             "children": [
               {
                 "role": "/url",
                 "children": [
                   {
                     "role": "text",
-                    "text": "mailto:<email:2>"
+                    "text": "mailto:<email:6>"
                   }
                 ]
               }
@@ -322,10 +322,10 @@
               "<id:69>",
               "<id:70>",
               {
-                "__truncated__": 117
+                "__truncated__": 122
               }
             ],
-            "total": 167
+            "total": 172
           },
           "success": true
         }
@@ -340,29 +340,29 @@
         "body": {
           "data": {
             "cadence": "weekly",
-            "contact_by": "2026-09-09T00:00:00Z",
+            "contact_by": "2026-07-14T00:00:00Z",
             "created_at": "<ts>",
             "full_name": "synth-prodshaped-Brux Fakeman",
             "has_pending_followup": false,
             "how_met": "synth-prodshaped-met-online-community",
             "id": "<id:1>",
-            "last_contacted": "2026-09-09T01:07:58.815805Z",
-            "last_interaction_at": "2026-09-09T01:07:58.815805Z",
-            "last_outreach_at": "2026-09-09T01:07:58.815805Z",
-            "last_response_at": "2026-09-09T01:07:58.815805Z",
+            "last_contacted": "2026-07-14T15:41:49.39594Z",
+            "last_interaction_at": "2026-07-14T15:41:49.39594Z",
+            "last_outreach_at": "2026-07-14T15:41:49.39594Z",
+            "last_response_at": "2026-07-14T15:41:49.39594Z",
             "methods": [
               {
                 "id": "<id:21>",
                 "is_primary": true,
                 "type": "email",
-                "value": "<email:1>"
+                "value": "<email:3>"
               }
             ],
             "primary_method": {
               "id": "<id:21>",
               "is_primary": true,
               "type": "email",
-              "value": "<email:1>"
+              "value": "<email:3>"
             },
             "updated_at": "<ts>"
           },
@@ -377,27 +377,27 @@
         "body": {
           "data": {
             "cadence": "weekly",
-            "contact_by": "2026-09-07T00:00:00Z",
+            "contact_by": "2026-07-13T00:00:00Z",
             "created_at": "<ts>",
             "full_name": "synth-prodshaped-Brux Fixtura",
             "has_pending_followup": false,
             "how_met": "synth-prodshaped-met-at-a-conference",
             "id": "<id:2>",
-            "last_contacted": "2026-09-07T23:30:33.036713Z",
+            "last_contacted": "2026-07-13T18:15:28.84132Z",
             "location": "synth-prodshaped-place-lakeside",
             "methods": [
               {
                 "id": "<id:22>",
                 "is_primary": true,
                 "type": "email",
-                "value": "<email:2>"
+                "value": "<email:6>"
               }
             ],
             "primary_method": {
               "id": "<id:22>",
               "is_primary": true,
               "type": "email",
-              "value": "<email:2>"
+              "value": "<email:6>"
             },
             "updated_at": "<ts>"
           },
@@ -412,25 +412,25 @@
         "body": {
           "data": {
             "cadence": "weekly",
-            "contact_by": "2026-09-07T00:00:00Z",
+            "contact_by": "2026-07-13T00:00:00Z",
             "created_at": "<ts>",
             "full_name": "synth-prodshaped-Brux Placeholdt",
             "has_pending_followup": false,
             "id": "<id:3>",
-            "last_contacted": "2026-09-07T22:05:43.221518Z",
+            "last_contacted": "2026-07-13T16:50:39.026124Z",
             "methods": [
               {
                 "id": "<id:23>",
                 "is_primary": true,
                 "type": "email",
-                "value": "<email:3>"
+                "value": "<email:9>"
               }
             ],
             "primary_method": {
               "id": "<id:23>",
               "is_primary": true,
               "type": "email",
-              "value": "<email:3>"
+              "value": "<email:9>"
             },
             "updated_at": "<ts>"
           },
@@ -514,8 +514,8 @@
         "body": {
           "data": {
             "acceleration_factor": 60,
-            "base_time": "2026-07-09T15:07:20Z",
-            "current_time": "2026-09-09T01:30:29.22777056Z",
+            "base_time": "2026-07-14T10:19:40-05:00",
+            "current_time": "2026-07-14T10:48:55.20982-05:00",
             "environment": "testing",
             "is_accelerated": true
           },

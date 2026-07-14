@@ -174,6 +174,7 @@ const UI_PHRASES = [
   'add task',
   'contact information',
   'birthday tracker',
+  'notes combined',
 ]
 
 // A TitleCase name bigram, optionally carrying the synthetic prefix. Tokens are

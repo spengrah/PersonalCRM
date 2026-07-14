@@ -11,10 +11,10 @@
     "role": "boundary-last"
   },
   "serverTime": {
-    "currentTime": "2026-09-09T00:54:19.82138486Z",
+    "currentTime": "2026-07-14T10:40:49.9441-05:00",
     "isAccelerated": true,
     "accelerationFactor": 60,
-    "baseTime": "2026-07-09T15:07:20Z",
+    "baseTime": "2026-07-14T10:19:40-05:00",
     "environment": "testing"
   },
   "aria": {
@@ -105,7 +105,7 @@
           },
           {
             "role": "button",
-            "name": "Sep 9, 12:53:46 AM 60x"
+            "name": "Jul 14, 10:40:44 AM 60x"
           }
         ]
       },
@@ -115,7 +115,7 @@
       },
       {
         "role": "text",
-        "text": "168 of 168"
+        "text": "173 of 173"
       },
       {
         "role": "button",
@@ -213,7 +213,7 @@
         "children": [
           {
             "role": "text",
-            "text": "↙ Last response: in the future"
+            "text": "↙ Last response: today"
           }
         ]
       },
@@ -231,7 +231,7 @@
         "children": [
           {
             "role": "text",
-            "text": "9/8/2026"
+            "text": "7/14/2026"
           }
         ]
       },
@@ -314,10 +314,10 @@
               "<id:69>",
               "<id:70>",
               {
-                "__truncated__": 118
+                "__truncated__": 123
               }
             ],
-            "total": 168
+            "total": 173
           },
           "success": true
         }
@@ -335,9 +335,9 @@
             "full_name": "synth-prodshaped-Zeta Placeholdt",
             "has_pending_followup": false,
             "id": "<id:140>",
-            "last_contacted": "2026-09-08T19:33:32Z",
-            "last_interaction_at": "2026-09-08T19:33:32Z",
-            "last_response_at": "2026-09-08T19:33:32Z",
+            "last_contacted": "2026-07-14T14:18:28Z",
+            "last_interaction_at": "2026-07-14T14:18:28Z",
+            "last_response_at": "2026-07-14T14:18:28Z",
             "methods": [
               {
                 "id": "<id:141>",
@@ -368,22 +368,22 @@
             "full_name": "synth-prodshaped-Vex Placeholdt",
             "has_pending_followup": false,
             "id": "<id:142>",
-            "last_contacted": "2026-09-08T18:33:32.694Z",
-            "last_interaction_at": "2026-09-08T18:33:32.694Z",
-            "last_response_at": "2026-09-08T18:33:32.694Z",
+            "last_contacted": "2026-07-14T13:18:28.499Z",
+            "last_interaction_at": "2026-07-14T13:18:28.499Z",
+            "last_response_at": "2026-07-14T13:18:28.499Z",
             "methods": [
               {
                 "id": "<id:143>",
                 "is_primary": true,
                 "type": "email",
-                "value": "<email:57>"
+                "value": "<email:55>"
               }
             ],
             "primary_method": {
               "id": "<id:143>",
               "is_primary": true,
               "type": "email",
-              "value": "<email:57>"
+              "value": "<email:55>"
             },
             "updated_at": "<ts>"
           },
@@ -467,8 +467,8 @@
         "body": {
           "data": {
             "acceleration_factor": 60,
-            "base_time": "2026-07-09T15:07:20Z",
-            "current_time": "2026-09-09T00:52:24.14479406Z",
+            "base_time": "2026-07-14T10:19:40-05:00",
+            "current_time": "2026-07-14T10:40:43.29406-05:00",
             "environment": "testing",
             "is_accelerated": true
           },

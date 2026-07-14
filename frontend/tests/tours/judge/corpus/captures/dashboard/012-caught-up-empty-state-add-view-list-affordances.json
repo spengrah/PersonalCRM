@@ -11,10 +11,10 @@
     "role": "caught-up"
   },
   "serverTime": {
-    "currentTime": "2026-09-09T02:46:06.61132148Z",
+    "currentTime": "2026-07-14T11:00:44.9215-05:00",
     "isAccelerated": true,
     "accelerationFactor": 60,
-    "baseTime": "2026-07-09T15:07:20Z",
+    "baseTime": "2026-07-14T10:19:40-05:00",
     "environment": "testing"
   },
   "aria": {
@@ -105,7 +105,7 @@
           },
           {
             "role": "button",
-            "name": "Sep 9, 02:45:05 AM 60x"
+            "name": "Jul 14, 11:00:40 AM 60x"
           }
         ]
       },
@@ -242,8 +242,8 @@
         "body": {
           "data": {
             "acceleration_factor": 60,
-            "base_time": "2026-07-09T15:07:20Z",
-            "current_time": "2026-09-09T02:44:59.61554852Z",
+            "base_time": "2026-07-14T10:19:40-05:00",
+            "current_time": "2026-07-14T11:00:40.54126-05:00",
             "environment": "testing",
             "is_accelerated": true
           },

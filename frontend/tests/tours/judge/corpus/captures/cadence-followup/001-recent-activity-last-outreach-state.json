@@ -11,10 +11,10 @@
     "role": "activity-outreach"
   },
   "serverTime": {
-    "currentTime": "2026-09-08T23:37:24.17254448Z",
+    "currentTime": "2026-07-14T10:35:50.67472-05:00",
     "isAccelerated": true,
     "accelerationFactor": 60,
-    "baseTime": "2026-07-09T15:07:20Z",
+    "baseTime": "2026-07-14T10:19:40-05:00",
     "environment": "testing"
   },
   "aria": {
@@ -105,7 +105,7 @@
           },
           {
             "role": "button",
-            "name": "Sep 8, 11:36:55 PM 60x"
+            "name": "Jul 14, 10:35:43 AM 60x"
           }
         ]
       },
@@ -115,7 +115,7 @@
       },
       {
         "role": "text",
-        "text": "153 of 168"
+        "text": "74 of 173"
       },
       {
         "role": "button",
@@ -123,7 +123,7 @@
       },
       {
         "role": "heading",
-        "name": "synth-prodshaped-Dax Synthington",
+        "name": "synth-prodshaped-Kestrel Stubbings",
         "level": 2
       },
       {
@@ -161,7 +161,7 @@
         "children": [
           {
             "role": "text",
-            "text": "synth-prodshaped-Dax Synthington"
+            "text": "synth-prodshaped-Kestrel Stubbings"
           }
         ]
       },
@@ -179,14 +179,14 @@
         "children": [
           {
             "role": "link",
-            "name": "<email:43>",
+            "name": "<email:91>",
             "children": [
               {
                 "role": "/url",
                 "children": [
                   {
                     "role": "text",
-                    "text": "mailto:<email:43>"
+                    "text": "mailto:<email:91>"
                   }
                 ]
               }
@@ -195,6 +195,24 @@
           {
             "role": "text",
             "text": "Email Primary"
+          }
+        ]
+      },
+      {
+        "role": "term",
+        "children": [
+          {
+            "role": "text",
+            "text": "Contact cadence"
+          }
+        ]
+      },
+      {
+        "role": "definition",
+        "children": [
+          {
+            "role": "text",
+            "text": "monthly"
           }
         ]
       },
@@ -212,7 +230,7 @@
         "children": [
           {
             "role": "text",
-            "text": "↗ Last outreach: in the future ↙ Last response: in the future"
+            "text": "↗ Last outreach: today ↙ Last response: today ⚠ Awaiting reply"
           }
         ]
       },
@@ -230,21 +248,12 @@
         "children": [
           {
             "role": "text",
-            "text": "9/8/2026"
+            "text": "7/14/2026"
           }
         ]
       },
       {
-        "role": "heading",
-        "name": "Tasks",
-        "level": 3
-      },
-      {
-        "role": "button",
-        "name": "Add"
-      },
-      {
-        "__ariaTruncated__": 9
+        "__ariaTruncated__": 11
       }
     ]
   },
@@ -262,6 +271,7 @@
         "body": {
           "data": {
             "ids": [
+              "<id:2>",
               "<id:3>",
               "<id:4>",
               "<id:5>",
@@ -311,12 +321,11 @@
               "<id:49>",
               "<id:50>",
               "<id:51>",
-              "<id:52>",
               {
-                "__truncated__": 118
+                "__truncated__": 123
               }
             ],
-            "total": 168
+            "total": 173
           },
           "success": true
         }
@@ -330,27 +339,29 @@
         "status": 200,
         "body": {
           "data": {
+            "cadence": "monthly",
+            "contact_by": "2026-07-14T00:00:00Z",
             "created_at": "<ts>",
-            "full_name": "synth-prodshaped-Dax Synthington",
-            "has_pending_followup": false,
+            "full_name": "synth-prodshaped-Kestrel Stubbings",
+            "has_pending_followup": true,
             "id": "<id:1>",
-            "last_contacted": "2026-09-08T19:33:32Z",
-            "last_interaction_at": "2026-09-08T19:33:32Z",
-            "last_outreach_at": "2026-09-08T19:33:32Z",
-            "last_response_at": "2026-09-08T19:33:32Z",
+            "last_contacted": "2026-07-14T14:18:28Z",
+            "last_interaction_at": "2026-07-14T14:18:28Z",
+            "last_outreach_at": "2026-07-14T14:18:28Z",
+            "last_response_at": "2026-07-14T14:18:28Z",
             "methods": [
               {
-                "id": "<id:2>",
+                "id": "<id:52>",
                 "is_primary": true,
                 "type": "email",
-                "value": "<email:43>"
+                "value": "<email:91>"
               }
             ],
             "primary_method": {
-              "id": "<id:2>",
+              "id": "<id:52>",
               "is_primary": true,
               "type": "email",
-              "value": "<email:43>"
+              "value": "<email:91>"
             },
             "updated_at": "<ts>"
           },
@@ -359,34 +370,32 @@
       },
       {
         "method": "GET",
-        "requestUrl": "/api/v1/contacts/<id:57>",
+        "requestUrl": "/api/v1/contacts/<id:54>",
         "query": {},
         "status": 200,
         "body": {
           "data": {
+            "birthday": "1989-07-15T00:00:00Z",
+            "cadence": "monthly",
+            "contact_by": "2026-04-15T00:00:00Z",
             "created_at": "<ts>",
-            "full_name": "synth-prodshaped-Glyph Placeholdt",
+            "full_name": "synth-prodshaped-Kestrel Placeholdt",
             "has_pending_followup": false,
-            "id": "<id:57>",
+            "id": "<id:54>",
+            "last_contacted": "2026-04-15T15:18:28.499391Z",
             "methods": [
               {
-                "id": "<id:58>",
+                "id": "<id:55>",
                 "is_primary": true,
                 "type": "email",
-                "value": "<email:54>"
-              },
-              {
-                "id": "<id:59>",
-                "is_primary": false,
-                "type": "email",
-                "value": "<email:55>"
+                "value": "<email:60>"
               }
             ],
             "primary_method": {
-              "id": "<id:58>",
+              "id": "<id:55>",
               "is_primary": true,
               "type": "email",
-              "value": "<email:54>"
+              "value": "<email:60>"
             },
             "updated_at": "<ts>"
           },
@@ -395,31 +404,32 @@
       },
       {
         "method": "GET",
-        "requestUrl": "/api/v1/contacts/<id:60>",
+        "requestUrl": "/api/v1/contacts/<id:56>",
         "query": {},
         "status": 200,
         "body": {
           "data": {
+            "cadence": "monthly",
+            "contact_by": "2026-04-15T00:00:00Z",
             "created_at": "<ts>",
-            "full_name": "synth-prodshaped-Cyon Fixtura",
+            "full_name": "synth-prodshaped-Kestrel Synthington",
             "has_pending_followup": false,
-            "id": "<id:60>",
-            "last_contacted": "2026-09-08T19:33:32.694784Z",
-            "last_interaction_at": "2026-09-08T19:33:32.694784Z",
-            "last_response_at": "2026-09-08T19:33:32.694784Z",
+            "how_met": "synth-prodshaped-met-at-a-conference",
+            "id": "<id:56>",
+            "last_contacted": "2026-04-15T15:18:28.499391Z",
             "methods": [
               {
-                "id": "<id:61>",
+                "id": "<id:57>",
                 "is_primary": true,
                 "type": "email",
-                "value": "<email:32>"
+                "value": "<email:87>"
               }
             ],
             "primary_method": {
-              "id": "<id:61>",
+              "id": "<id:57>",
               "is_primary": true,
               "type": "email",
-              "value": "<email:32>"
+              "value": "<email:87>"
             },
             "updated_at": "<ts>"
           },
@@ -439,35 +449,11 @@
           "data": [
             {
               "attendee_count": 2,
-              "end_time": "2026-09-08T19:33:32Z",
+              "end_time": "2026-07-14T09:18:28-05:00",
               "id": "<id:53>",
-              "start_time": "2026-09-08T18:33:32Z",
+              "start_time": "2026-07-14T08:18:28-05:00",
               "status": "confirmed",
-              "title": "synthetic meeting 5"
-            },
-            {
-              "attendee_count": 2,
-              "end_time": "2026-08-18T19:33:32Z",
-              "id": "<id:54>",
-              "start_time": "2026-08-18T18:33:32Z",
-              "status": "confirmed",
-              "title": "synthetic meeting 6"
-            },
-            {
-              "attendee_count": 2,
-              "end_time": "2026-07-28T19:33:32Z",
-              "id": "<id:55>",
-              "start_time": "2026-07-28T18:33:32Z",
-              "status": "confirmed",
-              "title": "synthetic meeting 7"
-            },
-            {
-              "attendee_count": 2,
-              "end_time": "2026-07-07T19:33:32Z",
-              "id": "<id:56>",
-              "start_time": "2026-07-07T18:33:32Z",
-              "status": "confirmed",
-              "title": "synthetic meeting 8"
+              "title": "synthetic meeting 244"
             }
           ],
           "success": true
@@ -536,8 +522,8 @@
         "body": {
           "data": {
             "acceleration_factor": 60,
-            "base_time": "2026-07-09T15:07:20Z",
-            "current_time": "2026-09-08T23:35:19.02409286Z",
+            "base_time": "2026-07-14T10:19:40-05:00",
+            "current_time": "2026-07-14T10:35:42.16954-05:00",
             "environment": "testing",
             "is_accelerated": true
           },

@@ -2,19 +2,19 @@
   "captureFormatVersion": 1,
   "captureGeneratorVersion": 1,
   "tour": "cadence-followup",
-  "seq": 5,
+  "seq": 6,
   "behaviors": ["CAD-031"],
   "note": "add-task modal, empty text: kind picker + submit disabled",
-  "url": "/contacts/<id:3>",
+  "url": "/contacts/<id:2>",
   "pair": {
     "id": "addtask",
     "role": "add-task-empty"
   },
   "serverTime": {
-    "currentTime": "2026-09-08T23:50:20.23975982Z",
+    "currentTime": "2026-07-14T10:36:57.51448-05:00",
     "isAccelerated": true,
     "accelerationFactor": 60,
-    "baseTime": "2026-07-09T15:07:20Z",
+    "baseTime": "2026-07-14T10:19:40-05:00",
     "environment": "testing"
   },
   "aria": {
