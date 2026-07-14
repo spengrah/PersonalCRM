@@ -304,14 +304,14 @@ behaviors:
     title: Merge transfers source methods, skipping duplicates
     type: business-logic
     status: current
-    given: a merge of a source contact into a target, where source and target do not hold primaries of different method types
+    given: a merge of a source contact into a target
     when: contact methods are merged
     then:
       - source methods whose type and normalized value already exist on the target are dropped
-      - source primary flags are demoted where the target already has a primary of the same type
+      - source primary flags are demoted whenever the target already has a primary, regardless of method type
       - remaining source methods are repointed to the target
     provenance: [DeleteDuplicateContactMethods, DemoteSourcePrimaryMethods, TransferContactMethods]
-    notes: Demotion is per-type while the one-primary rule is per-contact — a cross-type dual-primary pair currently fails the merge; CON-049 proposes the fix.
+    notes: Primary-collision semantics are pinned in CON-049.
 
   - id: CON-028
     title: Merge combines notepad notes and transfers the rest
@@ -573,7 +573,7 @@ behaviors:
   - id: CON-049
     title: Merge resolves primary-method collisions without failing
     type: business-logic
-    status: proposed
+    status: current
     given: a source and target that each have a primary contact method of different types
     when: they are merged
     then:
@@ -581,7 +581,7 @@ behaviors:
       - the target's existing primary is preserved
       - the source's primary flags are demoted regardless of method type
     provenance: [DemoteSourcePrimaryMethods, idx_contact_method_primary]
-    notes: 'Proposed: demotion is currently per-type while the unique index is one-primary-per-contact, so a cross-type dual-primary merge fails with a constraint violation today (see CON-027).'
+    notes: The unique index is one-primary-per-contact, so demotion keys on the target having any primary, not a same-type one (see CON-027).
 
   # --- Intents (judged experience goals — Track B agentic judge only) ---
 
