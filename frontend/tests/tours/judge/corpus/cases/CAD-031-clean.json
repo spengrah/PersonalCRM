@@ -6,8 +6,8 @@
     "capture_generator_version": 1
   },
   "captures": [
-    "cadence-followup/005-add-task-modal-empty-text-kind-picker-submit-disabled.json",
-    "cadence-followup/006-add-task-modal-text-entered-submit-enabled-create-needs-a-pr.json"
+    "cadence-followup/006-add-task-modal-empty-text-kind-picker-submit-disabled.json",
+    "cadence-followup/007-add-task-modal-text-entered-submit-enabled-create-needs-a-pr.json"
   ],
   "expected": [
     {

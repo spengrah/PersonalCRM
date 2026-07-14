@@ -2,19 +2,21 @@
   "captureFormatVersion": 1,
   "captureGeneratorVersion": 1,
   "tour": "cadence-followup",
-  "seq": 6,
-  "behaviors": ["CAD-031"],
+  "seq": 7,
+  "behaviors": [
+    "CAD-031"
+  ],
   "note": "add-task modal, text entered: submit enabled (create needs a provider → skip-list)",
-  "url": "/contacts/<id:3>",
+  "url": "/contacts/<id:2>",
   "pair": {
     "id": "addtask",
     "role": "add-task-filled"
   },
   "serverTime": {
-    "currentTime": "2026-09-08T23:50:48.93925148Z",
+    "currentTime": "2026-07-14T10:37:02.9386-05:00",
     "isAccelerated": true,
     "accelerationFactor": 60,
-    "baseTime": "2026-07-09T15:07:20Z",
+    "baseTime": "2026-07-14T10:19:40-05:00",
     "environment": "testing"
   },
   "aria": {

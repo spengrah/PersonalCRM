@@ -11,10 +11,10 @@
     "role": "preview-loaded"
   },
   "serverTime": {
-    "currentTime": "2026-09-09T01:17:13.65023384Z",
+    "currentTime": "2026-07-14T10:42:41.84296-05:00",
     "isAccelerated": true,
     "accelerationFactor": 60,
-    "baseTime": "2026-07-09T15:07:20Z",
+    "baseTime": "2026-07-14T10:19:40-05:00",
     "environment": "testing"
   },
   "aria": {
@@ -61,7 +61,7 @@
       },
       {
         "role": "text",
-        "text": "Keeping Merge from Archiving synth-prodshaped-Brux Dummond (<email:21>)"
+        "text": "Keeping Merge from Archiving synth-prodshaped-Brux Dummond (<email:1>)"
       },
       {
         "role": "button"
@@ -90,7 +90,7 @@
       },
       {
         "role": "text",
-        "text": "Contact methods 1 unique added Notes None Interactions None Calendar events None"
+        "text": "Contact methods 1 unique added Notes Combined Interactions None Calendar events None"
       },
       {
         "role": "button",
@@ -117,52 +117,52 @@
             "duplicate_methods": 0,
             "interactions_to_transfer": 0,
             "methods_to_transfer": 1,
-            "notes_to_transfer": 0,
+            "notes_to_transfer": 1,
             "source_contact": {
               "cadence": "monthly",
-              "contact_by": "2026-06-10T00:00:00Z",
+              "contact_by": "2026-04-15T00:00:00Z",
               "created_at": "<ts>",
               "full_name": "synth-prodshaped-Brux Dummond",
               "has_pending_followup": false,
               "id": "<id:71>",
-              "last_contacted": "2026-06-10T20:33:32.694784Z",
+              "last_contacted": "2026-04-15T15:18:28.499391Z",
               "methods": [
                 {
                   "id": "<id:72>",
                   "is_primary": true,
                   "type": "email",
-                  "value": "<email:21>"
+                  "value": "<email:1>"
                 }
               ],
               "primary_method": {
                 "id": "<id:72>",
                 "is_primary": true,
                 "type": "email",
-                "value": "<email:21>"
+                "value": "<email:1>"
               },
               "updated_at": "<ts>"
             },
             "target_contact": {
               "cadence": "weekly",
-              "contact_by": "2026-09-07T00:00:00Z",
+              "contact_by": "2026-07-13T00:00:00Z",
               "created_at": "<ts>",
               "full_name": "synth-prodshaped-Brux Testwell",
               "has_pending_followup": false,
               "id": "<id:4>",
-              "last_contacted": "2026-09-07T12:48:11.610585Z",
+              "last_contacted": "2026-07-13T07:33:07.415191Z",
               "methods": [
                 {
                   "id": "<id:24>",
                   "is_primary": true,
                   "type": "email",
-                  "value": "<email:4>"
+                  "value": "<email:13>"
                 }
               ],
               "primary_method": {
                 "id": "<id:24>",
                 "is_primary": true,
                 "type": "email",
-                "value": "<email:4>"
+                "value": "<email:13>"
               },
               "updated_at": "<ts>"
             }

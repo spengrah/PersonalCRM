@@ -2,7 +2,7 @@
   "case_id": "CON-042-doctored-nowarn",
   "behavior_id": "CON-042",
   "drafted_by": "codex-exec:gpt-5.5",
-  "note": "Human-confirmed ground truth (maintainer label session, 2026-07-10): corrected in place from the codex draft per judge/DEFERRED.md. This file, not the case expected/hypothesis fields, is the ground truth for judge evaluation.",
+  "note": "Human-confirmed ground truth (maintainer label session, 2026-07-14, via the Langfuse annotation queue qa-label-session-20260714 — Langfuse is the authoring SoT; this file is the synced git snapshot used by the offline eval). Corrected from the codex draft per judge/DEFERRED.md. This file, not the case expected/hypothesis fields, is the ground truth for judge evaluation.",
   "items": [
     {
       "then_index": 0,

@@ -11,10 +11,10 @@
     "role": "name-quickfilled"
   },
   "serverTime": {
-    "currentTime": "2026-09-09T01:18:24.53309132Z",
+    "currentTime": "2026-07-14T10:42:57.43936-05:00",
     "isAccelerated": true,
     "accelerationFactor": 60,
-    "baseTime": "2026-07-09T15:07:20Z",
+    "baseTime": "2026-07-14T10:19:40-05:00",
     "environment": "testing"
   },
   "aria": {
@@ -48,7 +48,7 @@
       },
       {
         "role": "text",
-        "text": "Keeping Merge from Archiving synth-prodshaped-Brux Dummond (<email:21>)"
+        "text": "Keeping Merge from Archiving synth-prodshaped-Brux Dummond (<email:1>)"
       },
       {
         "role": "button"
@@ -77,7 +77,7 @@
       },
       {
         "role": "text",
-        "text": "Contact methods 1 unique added Notes None Interactions None Calendar events None"
+        "text": "Contact methods 1 unique added Notes Combined Interactions None Calendar events None"
       },
       {
         "role": "button",

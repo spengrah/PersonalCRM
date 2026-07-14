@@ -11,10 +11,10 @@
     "role": "error"
   },
   "serverTime": {
-    "currentTime": "2026-09-09T02:42:11.23390784Z",
+    "currentTime": "2026-07-14T11:00:30.53332-05:00",
     "isAccelerated": true,
     "accelerationFactor": 60,
-    "baseTime": "2026-07-09T15:07:20Z",
+    "baseTime": "2026-07-14T10:19:40-05:00",
     "environment": "testing"
   },
   "aria": {
@@ -105,7 +105,7 @@
           },
           {
             "role": "button",
-            "name": "Sep 9, 02:41:17 AM 60x"
+            "name": "Jul 14, 11:00:08 AM 60x"
           }
         ]
       },
@@ -176,13 +176,6 @@
         "method": "GET",
         "requestUrl": "/api/v1/contacts/overdue",
         "query": {},
-        "status": 200,
-        "body": null
-      },
-      {
-        "method": "GET",
-        "requestUrl": "/api/v1/contacts/overdue",
-        "query": {},
         "status": 500,
         "body": {
           "error": {
@@ -245,8 +238,8 @@
         "body": {
           "data": {
             "acceleration_factor": 60,
-            "base_time": "2026-07-09T15:07:20Z",
-            "current_time": "2026-09-09T02:34:11.00832128Z",
+            "base_time": "2026-07-14T10:19:40-05:00",
+            "current_time": "2026-07-14T10:53:08.15632-05:00",
             "environment": "testing",
             "is_accelerated": true
           },

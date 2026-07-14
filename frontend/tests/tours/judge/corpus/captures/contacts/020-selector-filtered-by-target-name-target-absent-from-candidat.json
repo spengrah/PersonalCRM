@@ -11,10 +11,10 @@
     "role": "selector-open"
   },
   "serverTime": {
-    "currentTime": "2026-09-09T01:15:49.06261796Z",
+    "currentTime": "2026-07-14T10:42:25.5952-05:00",
     "isAccelerated": true,
     "accelerationFactor": 60,
-    "baseTime": "2026-07-09T15:07:20Z",
+    "baseTime": "2026-07-14T10:19:40-05:00",
     "environment": "testing"
   },
   "aria": {
@@ -75,6 +75,1259 @@
       }
     ]
   },
-  "apiResponses": {},
+  "apiResponses": {
+    "GET /api/v1/contacts": [
+      {
+        "method": "GET",
+        "requestUrl": "/api/v1/contacts?page=1&limit=500",
+        "query": {
+          "limit": "500",
+          "page": "1"
+        },
+        "status": 200,
+        "body": {
+          "data": [
+            {
+              "cadence": "monthly",
+              "contact_by": "2026-04-15T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Brux Dummond",
+              "has_pending_followup": false,
+              "id": "<id:71>",
+              "last_contacted": "2026-04-15T15:18:28.499391Z",
+              "methods": [
+                {
+                  "id": "<id:72>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:1>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:72>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:1>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "quarterly",
+              "contact_by": "2026-07-14T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Brux Fakeman",
+              "has_pending_followup": false,
+              "how_met": "synth-prodshaped-met-through-a-mutual-friend",
+              "id": "<id:73>",
+              "location": "synth-prodshaped-place-lakeside",
+              "methods": [
+                {
+                  "id": "<id:74>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:2>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:74>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:2>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "weekly",
+              "contact_by": "2026-07-14T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Brux Fakeman",
+              "has_pending_followup": false,
+              "how_met": "synth-prodshaped-met-online-community",
+              "id": "<id:1>",
+              "last_contacted": "2026-07-14T15:41:49.39594Z",
+              "last_interaction_at": "2026-07-14T15:41:49.39594Z",
+              "last_outreach_at": "2026-07-14T15:41:49.39594Z",
+              "last_response_at": "2026-07-14T15:41:49.39594Z",
+              "methods": [
+                {
+                  "id": "<id:21>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:3>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:21>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:3>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "monthly",
+              "contact_by": "2026-04-15T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Brux Fixtura",
+              "has_pending_followup": false,
+              "id": "<id:75>",
+              "last_contacted": "2026-04-15T15:18:28.499391Z",
+              "methods": [
+                {
+                  "id": "<id:76>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:4>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:76>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:4>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "quarterly",
+              "contact_by": "2026-07-14T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Brux Fixtura",
+              "has_pending_followup": false,
+              "id": "<id:77>",
+              "methods": [
+                {
+                  "id": "<id:78>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:5>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:78>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:5>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "weekly",
+              "contact_by": "2026-07-13T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Brux Fixtura",
+              "has_pending_followup": false,
+              "how_met": "synth-prodshaped-met-at-a-conference",
+              "id": "<id:2>",
+              "last_contacted": "2026-07-13T18:15:28.84132Z",
+              "location": "synth-prodshaped-place-lakeside",
+              "methods": [
+                {
+                  "id": "<id:22>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:6>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:22>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:6>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "monthly",
+              "contact_by": "2026-04-15T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Brux Placeholdt",
+              "has_pending_followup": false,
+              "id": "<id:79>",
+              "last_contacted": "2026-04-15T15:18:28.499391Z",
+              "location": "synth-prodshaped-place-riverton",
+              "methods": [
+                {
+                  "id": "<id:80>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:7>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:80>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:7>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "monthly",
+              "contact_by": "2026-04-15T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Brux Placeholdt",
+              "has_pending_followup": false,
+              "id": "<id:81>",
+              "last_contacted": "2026-04-15T15:18:28.499391Z",
+              "methods": [
+                {
+                  "id": "<id:82>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:8>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:82>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:8>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "weekly",
+              "contact_by": "2026-07-13T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Brux Placeholdt",
+              "has_pending_followup": false,
+              "id": "<id:3>",
+              "last_contacted": "2026-07-13T16:50:39.026124Z",
+              "methods": [
+                {
+                  "id": "<id:23>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:9>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:23>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:9>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "monthly",
+              "contact_by": "2026-04-15T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Brux Sampleby",
+              "has_pending_followup": false,
+              "id": "<id:83>",
+              "last_contacted": "2026-04-15T15:18:28.499391Z",
+              "methods": [
+                {
+                  "id": "<id:84>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:10>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:84>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:10>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "monthly",
+              "contact_by": "2026-04-15T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Brux Sampleby",
+              "has_pending_followup": false,
+              "id": "<id:85>",
+              "last_contacted": "2026-04-15T15:18:28.499391Z",
+              "location": "synth-prodshaped-place-meadowbrook",
+              "methods": [
+                {
+                  "id": "<id:86>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:11>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:86>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:11>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "birthday": "1974-10-02T00:00:00Z",
+              "cadence": "monthly",
+              "contact_by": "2026-04-15T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Brux Stubbings",
+              "has_pending_followup": false,
+              "how_met": "synth-prodshaped-met-at-work",
+              "id": "<id:87>",
+              "last_contacted": "2026-04-15T15:18:28.499391Z",
+              "methods": [
+                {
+                  "id": "<id:88>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:12>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:88>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:12>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "weekly",
+              "contact_by": "2026-07-13T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Brux Testwell",
+              "has_pending_followup": false,
+              "id": "<id:4>",
+              "last_contacted": "2026-07-13T07:33:07.415191Z",
+              "methods": [
+                {
+                  "id": "<id:24>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:13>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:24>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:13>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "monthly",
+              "contact_by": "2026-04-15T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Cyon Fakeman",
+              "has_pending_followup": false,
+              "id": "<id:89>",
+              "last_contacted": "2026-04-15T15:18:28.499391Z",
+              "methods": [
+                {
+                  "id": "<id:90>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:14>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:90>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:14>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Cyon Fixtura",
+              "has_pending_followup": false,
+              "id": "<id:91>",
+              "last_contacted": "2026-07-14T14:18:28.499391Z",
+              "last_interaction_at": "2026-07-14T14:18:28.499391Z",
+              "last_response_at": "2026-07-14T14:18:28.499391Z",
+              "methods": [
+                {
+                  "id": "<id:92>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:15>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:92>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:15>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "monthly",
+              "contact_by": "2026-04-15T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Cyon Fixtura",
+              "has_pending_followup": false,
+              "how_met": "synth-prodshaped-met-at-work",
+              "id": "<id:93>",
+              "last_contacted": "2026-04-15T15:18:28.499391Z",
+              "methods": [
+                {
+                  "id": "<id:94>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:16>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:94>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:16>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Cyon Fixtura",
+              "has_pending_followup": false,
+              "id": "<id:95>",
+              "last_contacted": "2026-07-14T13:18:28.499Z",
+              "last_interaction_at": "2026-07-14T13:18:28.499Z",
+              "last_response_at": "2026-07-14T13:18:28.499Z",
+              "methods": [
+                {
+                  "id": "<id:96>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:17>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:96>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:17>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "quarterly",
+              "contact_by": "2026-07-14T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Cyon Placeholdt",
+              "has_pending_followup": false,
+              "id": "<id:97>",
+              "location": "synth-prodshaped-place-hillcrest",
+              "methods": [
+                {
+                  "id": "<id:98>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:18>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:98>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:18>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "quarterly",
+              "contact_by": "2026-07-14T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Cyon Probeworth",
+              "has_pending_followup": false,
+              "how_met": "synth-prodshaped-met-at-a-conference",
+              "id": "<id:99>",
+              "methods": [
+                {
+                  "id": "<id:100>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:19>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:100>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:19>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "weekly",
+              "contact_by": "2026-07-13T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Cyon Sampleby",
+              "has_pending_followup": false,
+              "id": "<id:5>",
+              "last_contacted": "2026-07-13T19:23:27.72606Z",
+              "location": "synth-prodshaped-place-riverton",
+              "methods": [
+                {
+                  "id": "<id:25>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:20>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:25>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:20>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "weekly",
+              "contact_by": "2026-07-13T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Cyon Synthington",
+              "has_pending_followup": false,
+              "how_met": "synth-prodshaped-met-through-a-mutual-friend",
+              "id": "<id:6>",
+              "last_contacted": "2026-07-13T19:02:36.824607Z",
+              "methods": [
+                {
+                  "id": "<id:26>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:21>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:26>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:21>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "monthly",
+              "contact_by": "2026-04-15T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Cyon Synthington",
+              "has_pending_followup": false,
+              "id": "<id:101>",
+              "last_contacted": "2026-04-15T15:18:28.499391Z",
+              "location": "synth-prodshaped-place-hillcrest",
+              "methods": [
+                {
+                  "id": "<id:102>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:22>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:102>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:22>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "weekly",
+              "contact_by": "2026-07-13T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Cyon Testwell",
+              "has_pending_followup": false,
+              "id": "<id:7>",
+              "last_contacted": "2026-07-14T04:33:08.396392Z",
+              "methods": [
+                {
+                  "id": "<id:27>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:23>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:27>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:23>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "weekly",
+              "contact_by": "2026-07-13T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Cyon Testwell",
+              "has_pending_followup": false,
+              "id": "<id:8>",
+              "last_contacted": "2026-07-13T16:29:38.563712Z",
+              "methods": [
+                {
+                  "id": "<id:28>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:24>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:28>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:24>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "quarterly",
+              "contact_by": "2026-07-14T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Cyon Testwell",
+              "has_pending_followup": false,
+              "id": "<id:103>",
+              "methods": [
+                {
+                  "id": "<id:104>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:25>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:104>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:25>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "monthly",
+              "contact_by": "2026-04-15T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Dax Fakeman",
+              "has_pending_followup": false,
+              "id": "<id:105>",
+              "last_contacted": "2026-04-15T15:18:28.499391Z",
+              "methods": [
+                {
+                  "id": "<id:106>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:26>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:106>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:26>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "weekly",
+              "contact_by": "2026-07-14T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Dax Fakeman",
+              "has_pending_followup": false,
+              "id": "<id:9>",
+              "last_contacted": "2026-07-14T14:25:16.006883Z",
+              "methods": [
+                {
+                  "id": "<id:29>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:27>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:29>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:27>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "quarterly",
+              "contact_by": "2026-07-14T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Dax Fixtura",
+              "has_pending_followup": false,
+              "id": "<id:107>",
+              "methods": [
+                {
+                  "id": "<id:108>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:28>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:108>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:28>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "monthly",
+              "contact_by": "2026-04-15T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Dax Fixtura",
+              "has_pending_followup": false,
+              "id": "<id:109>",
+              "last_contacted": "2026-04-15T15:18:28.499391Z",
+              "location": "synth-prodshaped-place-riverton",
+              "methods": [
+                {
+                  "id": "<id:110>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:29>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:110>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:29>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "weekly",
+              "contact_by": "2026-07-13T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Dax Mockford",
+              "has_pending_followup": false,
+              "id": "<id:10>",
+              "last_contacted": "2026-07-13T10:31:35.900814Z",
+              "methods": [
+                {
+                  "id": "<id:30>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:30>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:30>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:30>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "birthday": "1989-01-13T00:00:00Z",
+              "cadence": "monthly",
+              "contact_by": "2026-04-15T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Dax Mockford",
+              "has_pending_followup": false,
+              "id": "<id:111>",
+              "last_contacted": "2026-04-15T15:18:28.499391Z",
+              "methods": [
+                {
+                  "id": "<id:112>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:31>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:112>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:31>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "weekly",
+              "contact_by": "2026-07-12T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Dax Mockford",
+              "has_pending_followup": false,
+              "id": "<id:11>",
+              "last_contacted": "2026-07-13T00:07:44.552062Z",
+              "location": "synth-prodshaped-place-hillcrest",
+              "methods": [
+                {
+                  "id": "<id:31>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:32>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:31>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:32>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "weekly",
+              "contact_by": "2026-07-12T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Dax Placeholdt",
+              "has_pending_followup": false,
+              "id": "<id:12>",
+              "last_contacted": "2026-07-12T23:12:23.483415Z",
+              "methods": [
+                {
+                  "id": "<id:32>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:33>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:32>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:33>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "quarterly",
+              "contact_by": "2026-07-14T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Dax Probeworth",
+              "has_pending_followup": false,
+              "id": "<id:113>",
+              "methods": [
+                {
+                  "id": "<id:114>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:34>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:114>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:34>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Dax Synthington",
+              "has_pending_followup": false,
+              "id": "<id:115>",
+              "last_contacted": "2026-07-14T14:18:28Z",
+              "last_interaction_at": "2026-07-14T14:18:28Z",
+              "last_outreach_at": "2026-07-14T14:18:28Z",
+              "last_response_at": "2026-07-14T14:18:28Z",
+              "methods": [
+                {
+                  "id": "<id:116>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:35>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:116>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:35>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "birthday": "1979-11-03T00:00:00Z",
+              "cadence": "weekly",
+              "contact_by": "2026-07-13T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Dax Synthington",
+              "has_pending_followup": false,
+              "id": "<id:13>",
+              "last_contacted": "2026-07-13T19:47:17.014685Z",
+              "methods": [
+                {
+                  "id": "<id:33>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:36>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:33>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:36>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "weekly",
+              "contact_by": "2026-07-12T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Dax Testwell",
+              "has_pending_followup": false,
+              "id": "<id:14>",
+              "last_contacted": "2026-07-12T20:46:43.516243Z",
+              "location": "synth-prodshaped-place-meadowbrook",
+              "methods": [
+                {
+                  "id": "<id:34>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:37>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:34>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:37>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "weekly",
+              "contact_by": "2026-07-13T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Dax Testwell",
+              "has_pending_followup": false,
+              "id": "<id:15>",
+              "last_contacted": "2026-07-13T15:01:05.79341Z",
+              "methods": [
+                {
+                  "id": "<id:35>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:38>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:35>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:38>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Fenn Fakeman",
+              "has_pending_followup": false,
+              "id": "<id:117>",
+              "last_contacted": "2026-07-09T20:18:28Z",
+              "last_interaction_at": "2026-07-09T20:18:28Z",
+              "last_outreach_at": "2026-07-09T20:18:28Z",
+              "last_response_at": "2026-07-09T20:18:28Z",
+              "methods": [
+                {
+                  "id": "<id:118>",
+                  "is_primary": true,
+                  "type": "telegram",
+                  "value": "synth_prodshaped_217"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:118>",
+                "is_primary": true,
+                "type": "telegram",
+                "value": "synth_prodshaped_217"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "monthly",
+              "contact_by": "2026-04-15T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Fenn Fakeman",
+              "has_pending_followup": false,
+              "id": "<id:119>",
+              "last_contacted": "2026-04-15T15:18:28.499391Z",
+              "methods": [
+                {
+                  "id": "<id:120>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:39>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:120>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:39>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "quarterly",
+              "contact_by": "2026-07-14T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Fenn Fixtura",
+              "has_pending_followup": false,
+              "how_met": "synth-prodshaped-met-at-a-conference",
+              "id": "<id:121>",
+              "methods": [
+                {
+                  "id": "<id:122>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:40>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:122>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:40>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "birthday": "1974-04-08T00:00:00Z",
+              "cadence": "monthly",
+              "contact_by": "2026-04-15T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Fenn Probeworth",
+              "has_pending_followup": false,
+              "id": "<id:123>",
+              "last_contacted": "2026-04-15T15:18:28.499391Z",
+              "methods": [
+                {
+                  "id": "<id:124>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:41>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:124>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:41>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "monthly",
+              "contact_by": "2026-04-15T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Glyph Dummond",
+              "has_pending_followup": false,
+              "how_met": "synth-prodshaped-met-at-work",
+              "id": "<id:125>",
+              "last_contacted": "2026-04-15T15:18:28.499391Z",
+              "location": "synth-prodshaped-place-lakeside",
+              "methods": [
+                {
+                  "id": "<id:126>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:42>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:126>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:42>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "quarterly",
+              "contact_by": "2026-07-14T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Glyph Dummond",
+              "has_pending_followup": false,
+              "id": "<id:127>",
+              "methods": [
+                {
+                  "id": "<id:128>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:43>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:128>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:43>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "monthly",
+              "contact_by": "2026-04-15T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Glyph Fakeman",
+              "has_pending_followup": false,
+              "id": "<id:129>",
+              "last_contacted": "2026-04-15T15:18:28.499391Z",
+              "methods": [
+                {
+                  "id": "<id:130>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:44>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:130>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:44>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "quarterly",
+              "contact_by": "2026-07-14T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Glyph Fakeman",
+              "has_pending_followup": false,
+              "id": "<id:131>",
+              "location": "synth-prodshaped-place-hillcrest",
+              "methods": [
+                {
+                  "id": "<id:132>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:45>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:132>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:45>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "birthday": "1994-02-14T00:00:00Z",
+              "cadence": "weekly",
+              "contact_by": "2026-07-12T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Glyph Fakeman",
+              "has_pending_followup": false,
+              "how_met": "synth-prodshaped-met-at-a-conference",
+              "id": "<id:16>",
+              "last_contacted": "2026-07-12T16:26:03.856888Z",
+              "methods": [
+                {
+                  "id": "<id:36>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:46>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:36>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:46>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "birthday": "1974-04-28T00:00:00Z",
+              "cadence": "monthly",
+              "contact_by": "2026-04-15T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Glyph Fixtura",
+              "has_pending_followup": false,
+              "id": "<id:133>",
+              "last_contacted": "2026-04-15T15:18:28.499391Z",
+              "methods": [
+                {
+                  "id": "<id:134>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:47>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:134>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:47>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "cadence": "quarterly",
+              "contact_by": "2026-07-14T00:00:00Z",
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Glyph Mockford",
+              "has_pending_followup": false,
+              "id": "<id:135>",
+              "methods": [
+                {
+                  "id": "<id:136>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:48>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:136>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:48>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "created_at": "<ts>",
+              "full_name": "synth-prodshaped-Glyph Placeholdt",
+              "has_pending_followup": false,
+              "id": "<id:137>",
+              "methods": [
+                {
+                  "id": "<id:138>",
+                  "is_primary": true,
+                  "type": "email",
+                  "value": "<email:49>"
+                },
+                {
+                  "id": "<id:139>",
+                  "is_primary": false,
+                  "type": "email",
+                  "value": "<email:50>"
+                }
+              ],
+              "primary_method": {
+                "id": "<id:138>",
+                "is_primary": true,
+                "type": "email",
+                "value": "<email:49>"
+              },
+              "updated_at": "<ts>"
+            },
+            {
+              "__truncated__": 123
+            }
+          ],
+          "meta": {
+            "pagination": {
+              "limit": 500,
+              "page": 1,
+              "pages": 1,
+              "total": 173
+            }
+          },
+          "success": true
+        }
+      }
+    ]
+  },
   "dialogs": []
 }
