@@ -164,6 +164,7 @@ func TestContactMerge_Integration(t *testing.T) {
 			Cadence:  stringPtr("monthly"),
 		})
 		require.NoError(t, err)
+		defer func() { _ = contactRepo.HardDeleteContact(ctx, target.ID) }()
 
 		// Create source contact
 		source, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
@@ -199,11 +200,11 @@ func TestContactMerge_Integration(t *testing.T) {
 		assert.Equal(t, "Merge Target Full "+ns, merged.FullName) // target name preserved
 		assert.Equal(t, "Boston", *merged.Location)               // source location selected
 
-		// Verify notepad was transferred
+		// Verify notepad was transferred verbatim (no separator artifacts)
 		mergedNotepad, err := noteRepo.GetContactNotepad(ctx, merged.ID)
 		require.NoError(t, err)
 		require.NotNil(t, mergedNotepad)
-		assert.Contains(t, mergedNotepad.Body, "Important notes")
+		assert.Equal(t, "Important notes", mergedNotepad.Body)
 
 		// Verify methods transferred
 		methods, err := contactMethodRepo.ListContactMethodsByContact(ctx, merged.ID)
@@ -215,8 +216,6 @@ func TestContactMerge_Integration(t *testing.T) {
 		_, err = contactRepo.GetContact(ctx, source.ID)
 		assert.Error(t, err)
 
-		// Cleanup
-		_ = contactRepo.HardDeleteContact(ctx, target.ID)
 	})
 
 	t.Run("MergeContacts_NameOverride", func(t *testing.T) {
@@ -225,6 +224,7 @@ func TestContactMerge_Integration(t *testing.T) {
 			FullName: "Target Name " + ns,
 		})
 		require.NoError(t, err)
+		defer func() { _ = contactRepo.HardDeleteContact(ctx, target.ID) }()
 
 		// Create source contact
 		source, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
@@ -242,8 +242,6 @@ func TestContactMerge_Integration(t *testing.T) {
 
 		assert.Equal(t, "Custom Merged Name", merged.FullName)
 
-		// Cleanup
-		_ = contactRepo.HardDeleteContact(ctx, target.ID)
 	})
 
 	t.Run("MergeContacts_DeduplicatesMethods", func(t *testing.T) {
@@ -252,6 +250,7 @@ func TestContactMerge_Integration(t *testing.T) {
 			FullName: "Dedup Target " + ns,
 		})
 		require.NoError(t, err)
+		defer func() { _ = contactRepo.HardDeleteContact(ctx, target.ID) }()
 
 		// Create source contact
 		source, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
@@ -289,8 +288,6 @@ func TestContactMerge_Integration(t *testing.T) {
 		assert.Equal(t, "phone", methods[0].Type)
 		assert.True(t, methods[0].IsPrimary) // Target's primary status preserved
 
-		// Cleanup
-		_ = contactRepo.HardDeleteContact(ctx, target.ID)
 	})
 
 	t.Run("MergeContacts_CombinesNotes", func(t *testing.T) {
@@ -299,6 +296,7 @@ func TestContactMerge_Integration(t *testing.T) {
 			FullName: "Notes Target " + ns,
 		})
 		require.NoError(t, err)
+		defer func() { _ = contactRepo.HardDeleteContact(ctx, target.ID) }()
 
 		// Create notepad for target
 		_, err = noteRepo.CreateNotepad(ctx, target.ID, "Target notes here")
@@ -321,15 +319,128 @@ func TestContactMerge_Integration(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		// Verify notes are combined
+		// Verify notes are combined: target first, then separator, then source
 		mergedNotepad, err := noteRepo.GetContactNotepad(ctx, merged.ID)
 		require.NoError(t, err)
 		require.NotNil(t, mergedNotepad)
-		assert.Contains(t, mergedNotepad.Body, "Target notes here")
-		assert.Contains(t, mergedNotepad.Body, "Source notes here")
+		assert.Equal(t, "Target notes here\n\n---\n\n"+"Source notes here", mergedNotepad.Body)
 
-		// Cleanup
-		_ = contactRepo.HardDeleteContact(ctx, target.ID)
+	})
+
+	t.Run("MergeContacts_NoNotepads_CreatesNone", func(t *testing.T) {
+		target, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
+			FullName: "No Notepad Target " + ns,
+		})
+		require.NoError(t, err)
+		defer func() { _ = contactRepo.HardDeleteContact(ctx, target.ID) }()
+
+		source, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
+			FullName: "No Notepad Source " + ns,
+		})
+		require.NoError(t, err)
+
+		merged, err := contactService.MergeContacts(ctx, service.MergeContactsRequest{
+			TargetContactID: target.ID,
+			SourceContactID: source.ID,
+		})
+		require.NoError(t, err)
+
+		// Neither contact had a notepad, so the merge must not mint one
+		mergedNotepad, err := noteRepo.GetContactNotepad(ctx, merged.ID)
+		require.NoError(t, err)
+		assert.Nil(t, mergedNotepad)
+	})
+
+	t.Run("MergeContacts_TargetOnlyNotepad_PreservedVerbatim", func(t *testing.T) {
+		target, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
+			FullName: "Target Notepad Only Target " + ns,
+		})
+		require.NoError(t, err)
+		defer func() { _ = contactRepo.HardDeleteContact(ctx, target.ID) }()
+
+		_, err = noteRepo.CreateNotepad(ctx, target.ID, "Target only notes")
+		require.NoError(t, err)
+
+		source, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
+			FullName: "Target Notepad Only Source " + ns,
+		})
+		require.NoError(t, err)
+
+		merged, err := contactService.MergeContacts(ctx, service.MergeContactsRequest{
+			TargetContactID: target.ID,
+			SourceContactID: source.ID,
+		})
+		require.NoError(t, err)
+
+		// Source had no notepad: target's notepad must survive unchanged,
+		// with no separator or empty content appended
+		mergedNotepad, err := noteRepo.GetContactNotepad(ctx, merged.ID)
+		require.NoError(t, err)
+		require.NotNil(t, mergedNotepad)
+		assert.Equal(t, "Target only notes", mergedNotepad.Body)
+	})
+
+	t.Run("MergeContacts_EmptyBodySourceNotepad", func(t *testing.T) {
+		// The pre-fix merge bug minted empty-body notepad rows onto merge
+		// winners; when such a contact is later merged as a SOURCE, its empty
+		// notepad must contribute nothing — no note minted on a bare target,
+		// no separator appended to a target with content, and no unique-index
+		// collision from TransferNotes repointing the leftover row.
+		t.Run("BareTarget", func(t *testing.T) {
+			target, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
+				FullName: "EmptyNotepad Bare Target " + ns,
+			})
+			require.NoError(t, err)
+			defer func() { _ = contactRepo.HardDeleteContact(ctx, target.ID) }()
+
+			source, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
+				FullName: "EmptyNotepad Bare Source " + ns,
+			})
+			require.NoError(t, err)
+
+			_, err = noteRepo.CreateNotepad(ctx, source.ID, "")
+			require.NoError(t, err)
+
+			merged, err := contactService.MergeContacts(ctx, service.MergeContactsRequest{
+				TargetContactID: target.ID,
+				SourceContactID: source.ID,
+			})
+			require.NoError(t, err)
+
+			mergedNotepad, err := noteRepo.GetContactNotepad(ctx, merged.ID)
+			require.NoError(t, err)
+			assert.Nil(t, mergedNotepad)
+		})
+
+		t.Run("TargetWithContent", func(t *testing.T) {
+			target, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
+				FullName: "EmptyNotepad Content Target " + ns,
+			})
+			require.NoError(t, err)
+			defer func() { _ = contactRepo.HardDeleteContact(ctx, target.ID) }()
+
+			_, err = noteRepo.CreateNotepad(ctx, target.ID, "Keep me")
+			require.NoError(t, err)
+
+			source, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
+				FullName: "EmptyNotepad Content Source " + ns,
+			})
+			require.NoError(t, err)
+
+			_, err = noteRepo.CreateNotepad(ctx, source.ID, "")
+			require.NoError(t, err)
+
+			merged, err := contactService.MergeContacts(ctx, service.MergeContactsRequest{
+				TargetContactID: target.ID,
+				SourceContactID: source.ID,
+			})
+			require.NoError(t, err)
+
+			mergedNotepad, err := noteRepo.GetContactNotepad(ctx, merged.ID)
+			require.NoError(t, err)
+			require.NotNil(t, mergedNotepad)
+			assert.Equal(t, "Keep me", mergedNotepad.Body)
+		})
 	})
 
 	t.Run("MergeContacts_InvalidTargetID", func(t *testing.T) {
@@ -407,8 +518,6 @@ func TestContactMerge_Integration(t *testing.T) {
 
 		assert.Equal(t, "quarterly", *merged.Cadence)
 
-		// Cleanup
-		_ = contactRepo.HardDeleteContact(ctx, target.ID)
 	})
 
 	t.Run("MergeContacts_FieldSelectionsPreserveTarget", func(t *testing.T) {
@@ -442,8 +551,6 @@ func TestContactMerge_Integration(t *testing.T) {
 		assert.Equal(t, "monthly", *merged.Cadence)
 		assert.Equal(t, "New York", *merged.Location)
 
-		// Cleanup
-		_ = contactRepo.HardDeleteContact(ctx, target.ID)
 	})
 
 	t.Run("MergeContacts_ReturnsFreshStructAfterBulkApply", func(t *testing.T) {

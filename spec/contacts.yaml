@@ -314,15 +314,18 @@ behaviors:
     notes: Demotion is per-type while the one-primary rule is per-contact — a cross-type dual-primary pair currently fails the merge; CON-049 proposes the fix.
 
   - id: CON-028
-    title: Merge combines notepad notes and transfers the rest
+    title: Merge combines notepad content and transfers the rest
     type: business-logic
     status: current
-    given: source and target contacts that both have notepad notes
-    when: they are merged
+    given: a merge of a source contact into a target
+    when: notes are merged
     then:
-      - the notepad bodies are combined into the target with a visible separator
+      - when both contacts have notepad content, the bodies are combined into the target with a visible separator, target first
+      - when only the source has notepad content, it transfers to the target verbatim
+      - when the source has no notepad content (no row, or an empty-body row), the target's notepad state is unchanged — a lone target notepad survives verbatim and no note is minted
       - non-notepad notes are transferred to the target
     provenance: [ContactService.MergeContacts notepad step, TransferNotes]
+    notes: An empty-body source notepad row still gets consumed (deleted) by the merge so TransferNotes cannot repoint it into the one-notepad-per-contact unique index.
 
   - id: CON-029
     title: Merge transfers the full interaction history

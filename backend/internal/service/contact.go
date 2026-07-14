@@ -1246,21 +1246,19 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		ContactID: sourceUUID,
 		Category:  notepadCategory,
 	})
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return nil, fmt.Errorf("get source notepad: %w", err)
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("get source notepad: %w", err)
+		}
+		// sqlc :one returns a non-nil pointer even on ErrNoRows; nil it so the
+		// no-notepad case doesn't flow through the combine path below.
+		sourceNotepad = nil
 	}
 
 	if sourceNotepad != nil {
-		// Source has a notepad - need to handle it
-		targetNotepad, err := txQueries.GetContactNoteByCategory(ctx, db.GetContactNoteByCategoryParams{
-			ContactID: targetUUID,
-			Category:  notepadCategory,
-		})
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("get target notepad: %w", err)
-		}
-
-		// Delete source notepad first (so TransferNotes won't create duplicate)
+		// Delete the source notepad first regardless of content — otherwise
+		// TransferNotes repoints it onto the target and collides with the
+		// one-notepad-per-contact unique index when the target has one too.
 		if err := txQueries.DeleteContactNoteByCategory(ctx, db.DeleteContactNoteByCategoryParams{
 			ContactID: sourceUUID,
 			Category:  notepadCategory,
@@ -1268,23 +1266,38 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 			return nil, fmt.Errorf("delete source notepad: %w", err)
 		}
 
-		// Determine combined content
-		var combinedBody string
-		if targetNotepad != nil && targetNotepad.Body != "" {
-			// Both have notepads - combine with separator
-			combinedBody = targetNotepad.Body + "\n\n---\n\n" + sourceNotepad.Body
-		} else {
-			// Only source has notepad
-			combinedBody = sourceNotepad.Body
-		}
+		// An empty-body source notepad (e.g. minted by the pre-fix merge bug)
+		// contributes nothing: leave the target's notepad state untouched.
+		if sourceNotepad.Body != "" {
+			targetNotepad, err := txQueries.GetContactNoteByCategory(ctx, db.GetContactNoteByCategoryParams{
+				ContactID: targetUUID,
+				Category:  notepadCategory,
+			})
+			if err != nil {
+				if !errors.Is(err, pgx.ErrNoRows) {
+					return nil, fmt.Errorf("get target notepad: %w", err)
+				}
+				targetNotepad = nil
+			}
 
-		// Upsert combined content to target
-		if _, err := txQueries.UpsertContactNoteByCategory(ctx, db.UpsertContactNoteByCategoryParams{
-			ContactID: targetUUID,
-			Body:      combinedBody,
-			Category:  notepadCategory,
-		}); err != nil {
-			return nil, fmt.Errorf("upsert merged notepad: %w", err)
+			// Determine combined content
+			var combinedBody string
+			if targetNotepad != nil && targetNotepad.Body != "" {
+				// Both have notepads - combine with separator
+				combinedBody = targetNotepad.Body + "\n\n---\n\n" + sourceNotepad.Body
+			} else {
+				// Only source has notepad content
+				combinedBody = sourceNotepad.Body
+			}
+
+			// Upsert combined content to target
+			if _, err := txQueries.UpsertContactNoteByCategory(ctx, db.UpsertContactNoteByCategoryParams{
+				ContactID: targetUUID,
+				Body:      combinedBody,
+				Category:  notepadCategory,
+			}); err != nil {
+				return nil, fmt.Errorf("upsert merged notepad: %w", err)
+			}
 		}
 	}
 
