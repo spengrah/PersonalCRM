@@ -1246,8 +1246,13 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		ContactID: sourceUUID,
 		Category:  notepadCategory,
 	})
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return nil, fmt.Errorf("get source notepad: %w", err)
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("get source notepad: %w", err)
+		}
+		// sqlc :one returns a non-nil pointer even on ErrNoRows; nil it so the
+		// no-notepad case doesn't flow through the combine path below.
+		sourceNotepad = nil
 	}
 
 	if sourceNotepad != nil {
@@ -1256,8 +1261,11 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 			ContactID: targetUUID,
 			Category:  notepadCategory,
 		})
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("get target notepad: %w", err)
+		if err != nil {
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return nil, fmt.Errorf("get target notepad: %w", err)
+			}
+			targetNotepad = nil
 		}
 
 		// Delete source notepad first (so TransferNotes won't create duplicate)
