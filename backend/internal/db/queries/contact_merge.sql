@@ -132,15 +132,18 @@ WHERE cm_source.contact_id = sqlc.arg(source_contact_id)
   );
 
 -- name: DemoteSourcePrimaryMethods :exec
--- Demote source's primary contact methods when target already has a primary for that type
--- This prevents violation of the unique partial index on (contact_id, type) WHERE is_primary = true
+-- Demote source's primary contact methods when the target already has a primary.
+-- The one-primary rule is per contact — idx_contact_method_primary is a unique
+-- partial index on (contact_id) WHERE is_primary = TRUE — so the source's primary
+-- must be demoted regardless of method type before TransferContactMethods, or a
+-- cross-type dual-primary pair violates the index and fails the merge.
 UPDATE contact_method cm_source
 SET is_primary = false,
     updated_at = NOW()
 WHERE cm_source.contact_id = sqlc.arg(source_contact_id)
   AND cm_source.is_primary = true
-  AND cm_source.type IN (
-    SELECT cm_target.type FROM contact_method cm_target
+  AND EXISTS (
+    SELECT 1 FROM contact_method cm_target
     WHERE cm_target.contact_id = sqlc.arg(target_contact_id)
       AND cm_target.is_primary = true
   );

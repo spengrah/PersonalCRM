@@ -513,8 +513,11 @@ type Querier interface {
 	DeleteTelegramMessagesByPeerUserID(ctx context.Context, peerUserID pgtype.Int8) (int64, error)
 	DeleteTelegramSession(ctx context.Context) error
 	DeleteTelegramUpdateState(ctx context.Context, userID int64) error
-	// Demote source's primary contact methods when target already has a primary for that type
-	// This prevents violation of the unique partial index on (contact_id, type) WHERE is_primary = true
+	// Demote source's primary contact methods when the target already has a primary.
+	// The one-primary rule is per contact — idx_contact_method_primary is a unique
+	// partial index on (contact_id) WHERE is_primary = TRUE — so the source's primary
+	// must be demoted regardless of method type before TransferContactMethods, or a
+	// cross-type dual-primary pair violates the index and fails the merge.
 	DemoteSourcePrimaryMethods(ctx context.Context, arg DemoteSourcePrimaryMethodsParams) error
 	ExistsCalendarEvent(ctx context.Context, id pgtype.UUID) (bool, error)
 	// Write-time existence validation: confirm a content source row exists before

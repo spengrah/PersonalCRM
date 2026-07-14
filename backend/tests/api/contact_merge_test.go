@@ -290,6 +290,58 @@ func TestContactMerge_Integration(t *testing.T) {
 
 	})
 
+	t.Run("MergeContacts_CrossTypeDualPrimaries", func(t *testing.T) {
+		// CON-049: source and target each hold a primary of a DIFFERENT method
+		// type. The one-primary rule is per contact (idx_contact_method_primary
+		// on (contact_id) WHERE is_primary), so the source's primary must be
+		// demoted regardless of type or the transfer violates the index.
+		target, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
+			FullName: "CrossType Target " + ns,
+		})
+		require.NoError(t, err)
+		defer func() { _ = contactRepo.HardDeleteContact(ctx, target.ID) }()
+
+		source, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
+			FullName: "CrossType Source " + ns,
+		})
+		require.NoError(t, err)
+
+		// Target: primary email. Source: primary phone (different type).
+		_, err = contactMethodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
+			ContactID: target.ID,
+			Type:      "email",
+			Value:     "crosstype-target@example.com",
+			IsPrimary: true,
+		})
+		require.NoError(t, err)
+
+		_, err = contactMethodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
+			ContactID: source.ID,
+			Type:      "phone",
+			Value:     "+1-555-0177",
+			IsPrimary: true,
+		})
+		require.NoError(t, err)
+
+		// The merge must succeed, not fail on the unique partial index
+		merged, err := contactService.MergeContacts(ctx, service.MergeContactsRequest{
+			TargetContactID: target.ID,
+			SourceContactID: source.ID,
+		})
+		require.NoError(t, err)
+
+		// Target's existing primary is preserved; the source's arrives demoted
+		methods, err := contactMethodRepo.ListContactMethodsByContact(ctx, merged.ID)
+		require.NoError(t, err)
+		require.Len(t, methods, 2)
+		byType := map[string]bool{}
+		for _, m := range methods {
+			byType[m.Type] = m.IsPrimary
+		}
+		assert.True(t, byType["email"], "target's primary email preserved")
+		assert.False(t, byType["phone"], "source's phone transferred demoted")
+	})
+
 	t.Run("MergeContacts_CombinesNotes", func(t *testing.T) {
 		// Create target contact
 		target, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
