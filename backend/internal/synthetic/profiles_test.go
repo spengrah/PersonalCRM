@@ -152,6 +152,7 @@ func TestCatalogOverdueLadderWellFormed(t *testing.T) {
 	require.NotEmpty(t, catalogOverdueLadder)
 
 	belowD1Floor := 0
+	tensTier := 0 // pairs whose days-overdue lands in [10d, 100d)
 	overdueMagnitudes := map[time.Duration]bool{}
 	var minOverdue, maxOverdue time.Duration
 	for i, pair := range catalogOverdueLadder {
@@ -177,6 +178,9 @@ func TestCatalogOverdueLadderWellFormed(t *testing.T) {
 		if pair.createdAge <= d1Floor {
 			belowD1Floor++
 		}
+		if overdue >= 10*24*time.Hour && overdue < 100*24*time.Hour {
+			tensTier++
+		}
 	}
 
 	// D1 floor robustly satisfiable: at most one ladder pair sits below now-14d, so any
@@ -185,9 +189,12 @@ func TestCatalogOverdueLadderWellFormed(t *testing.T) {
 	// permitted under the floor).
 	require.LessOrEqual(t, belowD1Floor, 1, "at most one ladder pair may sit below the 14d D1 floor (else the D1 gate can be starved)")
 
-	// Distinct days-overdue magnitudes spanning the urgency tiers (DSH-010).
+	// Distinct days-overdue magnitudes spanning ALL THREE urgency tiers (DSH-010): a
+	// single-digit low tier, a tens middle tier, and a hundreds high tier must each be
+	// present (>=3 distinct alone would permit a ladder that skips the middle tier).
 	require.GreaterOrEqual(t, len(overdueMagnitudes), 3, "ladder must span >=3 distinct days-overdue magnitudes")
 	require.Less(t, minOverdue, 10*24*time.Hour, "ladder must include a single-digit-days-overdue (low-urgency) tier")
+	require.GreaterOrEqual(t, tensTier, 1, "ladder must include a tens-of-days-overdue (medium-urgency) tier in [10d, 100d)")
 	require.GreaterOrEqual(t, maxOverdue, 100*24*time.Hour, "ladder must include a hundreds-of-days-overdue (high-urgency) tier")
 }
 
