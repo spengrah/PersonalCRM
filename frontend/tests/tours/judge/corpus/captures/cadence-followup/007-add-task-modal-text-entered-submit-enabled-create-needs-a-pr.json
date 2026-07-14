@@ -3,9 +3,7 @@
   "captureGeneratorVersion": 1,
   "tour": "cadence-followup",
   "seq": 7,
-  "behaviors": [
-    "CAD-031"
-  ],
+  "behaviors": ["CAD-031"],
   "note": "add-task modal, text entered: submit enabled (create needs a provider → skip-list)",
   "url": "/contacts/<id:2>",
   "pair": {

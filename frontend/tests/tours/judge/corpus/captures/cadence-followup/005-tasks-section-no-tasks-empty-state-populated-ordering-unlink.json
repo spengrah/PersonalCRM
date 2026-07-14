@@ -3,10 +3,7 @@
   "captureGeneratorVersion": 1,
   "tour": "cadence-followup",
   "seq": 5,
-  "behaviors": [
-    "CAD-030",
-    "CAD-033"
-  ],
+  "behaviors": ["CAD-030", "CAD-033"],
   "note": "tasks section: no-tasks empty state (populated ordering / unlink need a provider)",
   "url": "/contacts/<id:2>",
   "pair": {
