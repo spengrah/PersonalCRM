@@ -2,7 +2,6 @@
 
 import type { Verifier } from '../types'
 import { dsh003 } from './dsh003'
-import { dsh004 } from './dsh004'
 import { dsh005 } from './dsh005'
 import { dsh007 } from './dsh007'
 import { cad026 } from './cad026'
@@ -15,7 +14,6 @@ import { cad033 } from './cad033'
 
 export const VERIFIERS: Record<string, Verifier> = {
   'DSH-003': dsh003,
-  'DSH-004': dsh004,
   'DSH-005': dsh005,
   'DSH-007': dsh007,
   'CAD-026': cad026,
@@ -27,4 +25,4 @@ export const VERIFIERS: Record<string, Verifier> = {
   'CAD-033': cad033,
 }
 
-export { dsh003, dsh004, dsh005, dsh007, cad026, cad027, cad028, cad029, cad030, cad031, cad033 }
+export { dsh003, dsh005, dsh007, cad026, cad027, cad028, cad029, cad030, cad031, cad033 }

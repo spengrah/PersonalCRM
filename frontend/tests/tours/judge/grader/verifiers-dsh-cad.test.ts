@@ -4,7 +4,6 @@ import { applyMutation } from '../doctor'
 import type { CaptureSet } from './types'
 import type { AriaNode, Capture } from '../../support/types'
 import { dsh003 } from './verifiers/dsh003'
-import { dsh004 } from './verifiers/dsh004'
 import { dsh005 } from './verifiers/dsh005'
 import { dsh007 } from './verifiers/dsh007'
 import { cad026 } from './verifiers/cad026'
@@ -58,70 +57,6 @@ describe('dsh003', () => {
   })
   it('missing caught-up → [1] unsure', () => {
     expect(dsh003(set('DSH-003', [dashboard]))[1].verdict).toBe('unsure')
-  })
-})
-
-// --- DSH-004 ---
-describe('dsh004', () => {
-  const loading = (skeletons = 3, extra: AriaNode[] = []): Capture =>
-    cap({
-      behaviors: ['DSH-004'],
-      pair: pair('l', 'loading'),
-      aria: root(extra),
-      fields: { overdueLoadingSkeletons: skeletons },
-    })
-  const errorCap = cap({
-    behaviors: ['DSH-004'],
-    pair: pair('e', 'error'),
-    aria: root([{ role: 'heading', name: 'Error loading overdue contacts', level: 3 }]),
-  })
-
-  it('clean: [0] pass (skeletons, no caught-up/cards), [1] pass (error state)', () => {
-    const v = dsh004(set('DSH-004', [loading(), errorCap]))
-    expect(v[0].verdict).toBe('pass')
-    expect(v[1].verdict).toBe('pass')
-  })
-  it('error heading absent without wrong-state signals → [1] unbound (binding vehicle → judge)', () => {
-    const v = dsh004(
-      doctored('DSH-004', [loading(), errorCap], {
-        op: 'remove_aria_subtree',
-        role: 'error',
-        node_role: 'heading',
-        node_name: 'Error loading overdue contacts',
-      })
-    )
-    expect(v[1].verdict).toBe('unbound')
-  })
-  it('error heading PRESENT but stale cards remain → [1] fail (cards are a wrong-state signal)', () => {
-    const staleCards = cap({
-      behaviors: ['DSH-004'],
-      pair: pair('e', 'error'),
-      aria: root([
-        { role: 'heading', name: 'Error loading overdue contacts', level: 3 },
-        { role: 'button', name: 'Mark as Contacted' },
-      ]),
-    })
-    const v = dsh004(set('DSH-004', [loading(), staleCards]))
-    expect(v[1].verdict).toBe('fail')
-  })
-  it('failure surface shows caught-up instead of an error → [1] fail (wrong state, deterministic)', () => {
-    const wrongState = cap({
-      behaviors: ['DSH-004'],
-      pair: pair('e', 'error'),
-      aria: root([{ role: 'text', text: 'All caught up' }]),
-    })
-    const v = dsh004(set('DSH-004', [loading(), wrongState]))
-    expect(v[1].verdict).toBe('fail')
-  })
-  it('skeleton count 0 → [0] abstains (racy read, never false-pass)', () => {
-    expect(dsh004(set('DSH-004', [loading(0)]))[0].verdict).toBe('unsure')
-  })
-  it('loading shows a card → [0] fail', () => {
-    const v = dsh004(set('DSH-004', [loading(3, [{ role: 'button', name: 'Mark as Contacted' }])]))
-    expect(v[0].verdict).toBe('fail')
-  })
-  it('missing → unsure', () => {
-    expect(dsh004(set('DSH-004', []))[0].verdict).toBe('unsure')
   })
 })
 

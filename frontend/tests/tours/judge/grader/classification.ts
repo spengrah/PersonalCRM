@@ -78,18 +78,10 @@ export const CLASSIFICATION: Classification[] = [
   },
 
   // --- DSH-004: loading + error states distinct from content ---
-  {
-    behaviorId: 'DSH-004',
-    thenIndex: 0,
-    grader: 'verifier',
-    note: 'loading → placeholder (route-held: fields.overdueLoadingSkeletons>0 AND no caught-up/cards)',
-  },
-  {
-    behaviorId: 'DSH-004',
-    thenIndex: 1,
-    grader: 'verifier',
-    note: 'failure → an error state carrying a reason, not empty/caught-up (route-500 capture; heading is a BINDING VEHICLE: absent without wrong-state signals → unbound → judge; caught-up/cards on failure fail deterministically; faithfulness is [2])',
-  },
+  // [0] (loading → placeholder) and [1] (failure → error state with a reason)
+  // migrated to E2E: error-boundary.spec.ts (see `// spec: DSH-004`). [2]
+  // stays — the judge owns reason-faithfulness. thenIndex is spec-faithful and
+  // never re-indexed, so the surviving judge row keeps its gapped index 2.
   {
     behaviorId: 'DSH-004',
     thenIndex: 2,
