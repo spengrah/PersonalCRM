@@ -13,10 +13,6 @@ import { apiItem, cap, pair } from './fixtures'
 const EXPECTED_ROWS = [
   'CON-042[0]:judge',
   'DSH-004[2]:judge',
-  'DSH-005[0]:verifier',
-  'DSH-005[1]:verifier',
-  'DSH-005[2]:verifier',
-  'DSH-005[3]:verifier',
   'DSH-007[0]:verifier',
   'DSH-007[1]:verifier',
   'CAD-026[0]:verifier',

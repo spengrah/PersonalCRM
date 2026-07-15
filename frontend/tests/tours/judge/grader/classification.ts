@@ -79,37 +79,15 @@ export const CLASSIFICATION: Classification[] = [
     note: 'the shown failure reason faithfully reflects the actual failure (judge-primary; was a judgeFallback residue on the old combined item)',
   },
 
-  // --- DSH-005: overdue widget reflects out-of-flow membership changes ---
-  {
-    behaviorId: 'DSH-005',
-    thenIndex: 0,
-    grader: 'verifier',
-    caveat:
-      'Graded from the on-dashboard CAD-028 mark-contacted (interaction:created → overdue refetch, no full reload — a valid freshness instance), but the trigger is on-dashboard: the spec’s "action elsewhere" breadth is not separately toured.',
-    note: 'overdue refreshes without a reload (from the CAD-028 mark-contacted refetch)',
-  },
-  {
-    behaviorId: 'DSH-005',
-    thenIndex: 1,
-    grader: 'verifier',
-    caveat:
-      'Only interaction:created (mark-contacted) is dashboard-reachable; the merge and meeting-note-resolve triggers are other-surface flows → abstain.',
-    note: 'covers interaction/merge/meeting-note (only interaction:created toured)',
-  },
-  {
-    behaviorId: 'DSH-005',
-    thenIndex: 2,
-    grader: 'verifier',
-    caveat: 'A cosmetic-edit flow is not toured from the dashboard → abstain.',
-    note: 'cosmetic edits do not disturb the list (not toured → abstain)',
-  },
-  {
-    behaviorId: 'DSH-005',
-    thenIndex: 3,
-    grader: 'verifier',
-    caveat: 'The refocus/5-min-staleTime timing is not deterministically tourable → abstain.',
-    note: 'refocus refetches only once stale (5-min) (not tourable → abstain)',
-  },
+  // DSH-005 (overdue widget reflects out-of-flow membership changes):
+  // [0] (refreshes without a reload — the deterministically tourable
+  // on-dashboard interaction:created trigger) migrated to E2E:
+  // dashboard.spec.ts (see `// spec: DSH-005`). [1] (merge / meeting-note
+  // trigger breadth), [2] (cosmetic-edit no-op), and [3] (refocus/staleTime
+  // timing) were verifier-ABSTAINED (never deterministically provable from a
+  // tour) and are deleted WITHOUT an E2E replacement — item-level coverage
+  // intentionally dropped; the behavior remains speakable holistically under
+  // its DSH-012 intent.
 
   // --- DSH-007: search is the contact list's; no global search ---
   {

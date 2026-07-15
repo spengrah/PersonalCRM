@@ -3,7 +3,6 @@ import { apiItem, cap, pair, root } from './fixtures'
 import { applyMutation } from '../doctor'
 import type { CaptureSet } from './types'
 import type { AriaNode, Capture } from '../../support/types'
-import { dsh005 } from './verifiers/dsh005'
 import { dsh007 } from './verifiers/dsh007'
 import { cad026 } from './verifiers/cad026'
 import { cad027 } from './verifiers/cad027'
@@ -20,37 +19,6 @@ function set(behaviorId: string, captures: Capture[]): CaptureSet {
 function doctored(behaviorId: string, captures: Capture[], m: Mutation): CaptureSet {
   return { behaviorId, captures: applyMutation(captures, m) }
 }
-
-// --- DSH-005 ---
-describe('dsh005', () => {
-  const after = cap({
-    behaviors: ['DSH-005'],
-    pair: pair('m', 'mark-after'),
-    url: '/dashboard',
-    apiResponses: { 'GET /api/v1/contacts/overdue': [apiItem({ body: { data: [] } })] },
-  })
-
-  it('clean: [0] pass (refetch on /dashboard), [1..3] abstain', () => {
-    const v = dsh005(set('DSH-005', [after]))
-    expect(v[0].verdict).toBe('pass')
-    expect(v[1].verdict).toBe('unsure')
-    expect(v[2].verdict).toBe('unsure')
-    expect(v[3].verdict).toBe('unsure')
-  })
-  it('doctored: overdue refetch deleted → [0] fail', () => {
-    const v = dsh005(
-      doctored('DSH-005', [after], {
-        op: 'delete_endpoint',
-        role: 'mark-after',
-        endpoint: 'GET /api/v1/contacts/overdue',
-      })
-    )
-    expect(v[0].verdict).toBe('fail')
-  })
-  it('missing → unsure', () => {
-    expect(dsh005(set('DSH-005', []))[0].verdict).toBe('unsure')
-  })
-})
 
 // --- DSH-007 ---
 describe('dsh007', () => {

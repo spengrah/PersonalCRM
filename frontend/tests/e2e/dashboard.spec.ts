@@ -124,11 +124,17 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
   test('marking contact as contacted updates dashboard immediately without navigation', async ({
     page,
   }) => {
-    // Deliberately un-cited: this test proves only part of CAD-028 (the
-    // mutual interaction and the no-reload overdue-list exit). Its other
-    // then-items — the accelerated-clock timestamp, the count update, and
-    // dashboard/list/detail consistency — are not asserted here, and a
-    // partial proof must not mark the behavior covered.
+    // spec: DSH-005[0]
+    // Cited for DSH-005[0] only: the on-dashboard interaction:created trigger
+    // refreshing the overdue list without a manual reload. DSH-005's broader
+    // trigger coverage (merge / meeting-note-resolve), the cosmetic-edit no-op,
+    // and the refocus/staleTime timing were verifier-abstained and are not
+    // asserted here. Deliberately NOT cited for CAD-028: this test proves only
+    // part of that behavior (the mutual interaction and the no-reload
+    // overdue-list exit). Its other then-items — the accelerated-clock
+    // timestamp, the count update, and dashboard/list/detail consistency — are
+    // not asserted here, and a partial proof must not mark the behavior
+    // covered.
     const contactName = `${testApi.prefix}-Dashboard Test Contact`
 
     // Navigate to dashboard
@@ -137,6 +143,13 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
 
     // Verify our seeded contact is visible
     await expect(page.getByRole('heading', { name: contactName })).toBeVisible()
+
+    // No-reload sentinel: a window marker survives only if no full navigation
+    // or reload happens between the mutation and the refreshed list. Its
+    // survival (asserted below) proves "without a manual page reload".
+    await page.evaluate(() => {
+      ;(window as Window & { __dsh005NoReload?: boolean }).__dsh005NoReload = true
+    })
 
     // Find the "Mark as Contacted" button for our contact
     const contactCard = page.locator('div.rounded-lg').filter({ hasText: contactName })
@@ -192,5 +205,14 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
     await expect(page.getByRole('heading', { name: contactName })).not.toBeVisible({
       timeout: 5000,
     })
+
+    // The no-reload sentinel survived (a reload/navigation would wipe it) and
+    // we are still on the dashboard — the refresh happened in place.
+    expect(
+      await page.evaluate(
+        () => (window as Window & { __dsh005NoReload?: boolean }).__dsh005NoReload
+      )
+    ).toBe(true)
+    await expect(page).toHaveURL(/\/dashboard(\?|$)/)
   })
 })
