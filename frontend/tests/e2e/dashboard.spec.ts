@@ -100,6 +100,100 @@ test.describe('Dashboard @area:dashboard', () => {
   })
 })
 
+test.describe('Dashboard - Overdue Cards @area:dashboard @area:overdue', () => {
+  let testApi: TestAPI
+
+  // One contact per urgency tier (dashboard/page.tsx getUrgencyIndicator
+  // boundaries: <=2 yellow, <=7 orange, >7 red).
+  const tierSeeds = [
+    { key: 'Tier Low Contact', days_overdue: 1, dot: 'bg-yellow-500' },
+    { key: 'Tier Mid Contact', days_overdue: 5, dot: 'bg-orange-500' },
+    { key: 'Tier High Contact', days_overdue: 20, dot: 'bg-red-500' },
+  ]
+
+  test.beforeEach(async ({ request }, testInfo) => {
+    testApi = createTestAPI(request, testInfo)
+    await testApi.seedOverdueContacts(
+      tierSeeds.map(seed => ({
+        full_name: seed.key,
+        cadence: 'weekly' as const,
+        days_overdue: seed.days_overdue,
+        email: `${seed.key.toLowerCase().replace(/ /g, '-')}@example.com`,
+      }))
+    )
+  })
+
+  test.afterEach(async () => {
+    await testApi.cleanup()
+  })
+
+  test('shows overdue contacts as cards with the count in the header', async ({ page }) => {
+    // spec: CAD-026[0]
+    await page.goto('/dashboard')
+    await page.waitForLoadState('domcontentloaded')
+
+    // Every seeded card renders (prefix-scoped names — parallel-safe).
+    for (const seed of tierSeeds) {
+      await expect(
+        page.getByRole('heading', { name: `${testApi.prefix}-${seed.key}` })
+      ).toBeVisible()
+    }
+
+    // The header carries the overdue count. The count is GLOBAL (other
+    // workers seed overdue contacts too), so assert a loose lower bound
+    // against our own rendered cards, never an exact number.
+    const headerText = await page.getByText(/\d+ contacts? need your attention/).textContent()
+    const headerCount = Number(/(\d+)/.exec(headerText ?? '')?.[1])
+    expect(headerCount).toBeGreaterThanOrEqual(tierSeeds.length)
+  })
+
+  test('each card shows urgency tier, cadence, recency, a reachable method, and the suggested action', async ({
+    page,
+  }) => {
+    // spec: CAD-026[1]
+    await page.goto('/dashboard')
+    await page.waitForLoadState('domcontentloaded')
+
+    // All three urgency tiers are exercised. The tier dot is CSS-only (no
+    // accessible text), so the color class is the observable signal — the
+    // same one the retired verifier graded.
+    for (const seed of tierSeeds) {
+      const name = `${testApi.prefix}-${seed.key}`
+      await expect(page.getByRole('heading', { name })).toBeVisible()
+      const card = page.locator('div.rounded-lg').filter({ hasText: name })
+      await expect(card.locator(`div.rounded-full.${seed.dot}`)).toBeVisible()
+    }
+
+    // The remaining card sub-elements (cadence, recency, a reachable method,
+    // the suggested action) are text — assert them on the mid-tier card.
+    const midName = `${testApi.prefix}-Tier Mid Contact`
+    const midCard = page.locator('div.rounded-lg').filter({ hasText: midName })
+    await expect(midCard.getByText('(weekly cadence)')).toBeVisible()
+    await expect(midCard.getByText(/\d+ days overdue.*Last contacted/)).toBeVisible()
+    await expect(midCard.getByText('tier-mid-contact@example.com')).toBeVisible()
+    await expect(midCard.getByText('Email', { exact: true })).toBeVisible()
+    const suggestion = await midCard.getByText(/💡/).textContent()
+    expect(suggestion?.replace('💡', '').trim().length).toBeGreaterThan(0)
+  })
+})
+
+test.describe('Dashboard - All Caught Up (mocked) @area:dashboard', () => {
+  test('shows the all-caught-up state when nothing is overdue', async ({ page }) => {
+    // spec: CAD-026[2]
+    // The empty-overdue state is GLOBAL — parallel workers seed overdue
+    // contacts, so it is not deterministically reachable by seeding. Mock the
+    // overdue response with the full apiClient envelope (a bare array would
+    // fall through to a real call). Route installed BEFORE goto.
+    await page.route('**/api/v1/contacts/overdue', route =>
+      route.fulfill({ json: { success: true, data: [] } })
+    )
+    await page.goto('/dashboard')
+
+    await expect(page.getByRole('heading', { name: 'All caught up! 🎉' })).toBeVisible()
+    await expect(page.getByText("You're all caught up")).toBeVisible()
+  })
+})
+
 test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () => {
   let testApi: TestAPI
   let overdueContactId: string

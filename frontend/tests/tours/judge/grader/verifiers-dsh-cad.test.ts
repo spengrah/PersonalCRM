@@ -2,8 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { apiItem, cap, pair, root } from './fixtures'
 import { applyMutation } from '../doctor'
 import type { CaptureSet } from './types'
-import type { AriaNode, Capture } from '../../support/types'
-import { cad026 } from './verifiers/cad026'
+import type { Capture } from '../../support/types'
 import { cad027 } from './verifiers/cad027'
 import { cad028 } from './verifiers/cad028'
 import { cad029 } from './verifiers/cad029'
@@ -18,90 +17,6 @@ function set(behaviorId: string, captures: Capture[]): CaptureSet {
 function doctored(behaviorId: string, captures: Capture[], m: Mutation): CaptureSet {
   return { behaviorId, captures: applyMutation(captures, m) }
 }
-
-// --- CAD-026 ---
-describe('cad026', () => {
-  // A single overdue card carrying all five sub-elements (count + heading +
-  // cadence + recency + method + suggested action); omit any via the `drop` set.
-  const overdueAria = (over: { count?: string; drop?: Set<string> } = {}): AriaNode => {
-    const drop = over.drop ?? new Set<string>()
-    return root([
-      { role: 'heading', name: 'Action Required', level: 2 },
-      { role: 'text', text: over.count ?? '148 contacts need your attention' },
-      { role: 'heading', name: 'synth-a', level: 3 },
-      ...(drop.has('cadence') ? [] : [{ role: 'text' as const, text: '(weekly cadence)' }]),
-      ...(drop.has('recency')
-        ? []
-        : [
-            { role: 'text' as const, text: '1 days overdue' },
-            { role: 'text' as const, text: '- Last contacted 2 days ago' },
-          ]),
-      ...(drop.has('method') ? [] : [{ role: 'text' as const, text: 'Email' }]),
-      ...(drop.has('action') ? [] : [{ role: 'text' as const, text: '💡 A quick check-in' }]),
-      { role: 'button', name: 'Mark as Contacted' },
-    ])
-  }
-  const overdue = (over: { count?: string; drop?: Set<string>; tier?: string } = {}): Capture =>
-    cap({
-      behaviors: ['CAD-026'],
-      pair: pair('u', 'sort-urgency'),
-      aria: overdueAria(over),
-      fields: {
-        overdueCards: [
-          {
-            name: 'synth-a',
-            daysOverdue: 1,
-            tierClass: over.tier ?? 'border-yellow-200 bg-yellow-50',
-            lastContacted: '2026-07-11T00:00:00Z',
-          },
-        ],
-      },
-    })
-  const caughtUp = cap({
-    behaviors: ['CAD-026'],
-    pair: pair('c', 'caught-up'),
-    aria: root([{ role: 'heading', name: 'All caught up! 🎉', level: 3 }]),
-  })
-
-  it('clean: [0]/[1]/[2] pass', () => {
-    const v = cad026(set('CAD-026', [overdue(), caughtUp]))
-    expect(v[0].verdict).toBe('pass')
-    expect(v[1].verdict).toBe('pass')
-    expect(v[2].verdict).toBe('pass')
-  })
-  it('doctored: wrong tierClass → [1] fail', () => {
-    expect(cad026(set('CAD-026', [overdue({ tier: 'border-red-200 bg-red-50' })]))[1].verdict).toBe(
-      'fail'
-    )
-  })
-  it('[1] fails when a card sub-element is dropped (cadence / method / action)', () => {
-    for (const el of ['cadence', 'recency', 'method', 'action']) {
-      const v = cad026(set('CAD-026', [overdue({ drop: new Set([el]) })]))
-      expect(v[1].verdict, `dropping ${el}`).toBe('fail')
-    }
-  })
-  it('doctored: remove_aria_subtree drops the only method label → [1] fail', () => {
-    const v = cad026(
-      doctored('CAD-026', [overdue()], {
-        op: 'remove_aria_subtree',
-        role: 'sort-urgency',
-        node_role: 'text',
-        node_name: 'Email',
-      })
-    )
-    expect(v[1].verdict).toBe('fail')
-  })
-  it('[0] fails when the header count is below the visible-card count', () => {
-    expect(
-      cad026(set('CAD-026', [overdue({ count: '0 contacts need your attention' })]))[0].verdict
-    ).toBe('fail')
-  })
-  it('missing → unsure', () => {
-    const v = cad026(set('CAD-026', []))
-    expect(v[0].verdict).toBe('unsure')
-    expect(v[2].verdict).toBe('unsure')
-  })
-})
 
 // --- CAD-027 ---
 describe('cad027', () => {

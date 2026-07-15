@@ -93,27 +93,8 @@ export const CLASSIFICATION: Classification[] = [
   // DSH-007 (search is the contact list's; no global search) migrated to E2E:
   // contacts.spec.ts ([0]) + dashboard.spec.ts ([1]) (see `// spec: DSH-007`).
 
-  // --- CAD-026: dashboard action-required overdue list ---
-  {
-    behaviorId: 'CAD-026',
-    thenIndex: 0,
-    grader: 'verifier',
-    note: 'overdue cards + count in the Action Required header (in the serverTime frame)',
-  },
-  {
-    behaviorId: 'CAD-026',
-    thenIndex: 1,
-    grader: 'verifier',
-    caveat:
-      'The urgency tier is graded per-card from fields.overdueCards[].tierClass; the other four sub-elements (cadence, recency, a reachable method, the suggested action) are graded at CARD-TEMPLATE level (>= 1 present across the captured cards), not per-card, because ariaCap truncates deep card nodes.',
-    note: 'each card shows tier (fields) + cadence/recency/methods/suggested-action (card aria)',
-  },
-  {
-    behaviorId: 'CAD-026',
-    thenIndex: 2,
-    grader: 'verifier',
-    note: 'nothing overdue → all-caught-up state (route-empty capture)',
-  },
+  // CAD-026 (dashboard action-required overdue list) migrated to E2E:
+  // dashboard.spec.ts (see `// spec: CAD-026`).
 
   // --- CAD-027: urgency / name / recency orderings ---
   {
