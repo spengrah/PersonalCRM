@@ -1,14 +1,10 @@
-// Bridge: a Judge adapter → a per-behavior runner the grader/eval/report consume.
-// Shared by the eval's --judge advisory layer AND the live-capture report, so
-// both wire the judge identically. TWO-PHASE: the deterministic verifiers run
-// first so any `unbound` items (binding-vehicle anchor missing) join the
-// judge-tagged residue for the single judge call; gradeBehavior then routes
-// each unbound item to the judge verdict. The judge is only invoked when the
-// behavior actually has residue items.
+// Bridge: a Judge adapter → a per-behavior runner the grader/report consume.
+// Shared by the advisory report's --judge layer, so both wire the judge
+// identically. The judge grades the behavior's judge-tagged residue items and
+// is only invoked when the behavior actually has residue items.
 
 import { selectJudge } from './adapter'
 import type { Judge } from './adapter'
-import { runVerifiers } from './grader/grade'
 import { buildJudgeInput, judgeItemsFor } from './judge-input'
 import type { Capture } from '../support/types'
 import type { ItemVerdicts } from './grader/types'
@@ -21,8 +17,7 @@ export type JudgeRunner = (behaviorId: string, captures: Capture[]) => Promise<I
 // Wrap a concrete Judge. Pure w.r.t. selection — testable with a fake judge.
 export function runnerFromJudge(judge: Judge, resolveScreenshot?: ScreenshotResolver): JudgeRunner {
   return async (behaviorId: string, captures: Capture[]): Promise<ItemVerdicts> => {
-    const verifierVerdicts = runVerifiers({ behaviorId, captures })
-    const items = judgeItemsFor(behaviorId, verifierVerdicts)
+    const items = judgeItemsFor(behaviorId)
     const input = buildJudgeInput(behaviorId, captures, items, resolveScreenshot)
     if (!input || input.items.length === 0) return {}
     const verdicts = await judge(input)

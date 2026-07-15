@@ -4,7 +4,6 @@
 import type {
   AriaNode,
   ApiResponseItem,
-  ApiResponses,
   Capture,
   CapturePair,
   ServerTimeFrame,
@@ -57,8 +56,4 @@ export function cap(over: Partial<Capture> & { behaviors: string[] }): Capture {
 
 export function pair(id: string, role: string): CapturePair {
   return { id, role }
-}
-
-export function responses(entries: Record<string, ApiResponseItem[]>): ApiResponses {
-  return entries
 }

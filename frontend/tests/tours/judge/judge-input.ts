@@ -1,12 +1,10 @@
-// Bridge captures → a JudgeInput for the residue items. Used by the eval's
-// --judge advisory layer and the labeling CLI (both feed the judge/labeler the
+// Bridge captures → a JudgeInput for the residue items. Used by the advisory
+// report's --judge layer and the labeling CLI (both feed the judge/labeler the
 // same evidence bundle). Pure — no model, no fs.
 
 import type { Capture } from '../support/types'
 import type { EvidenceBlocks, JudgeInput, JudgeItem } from './adapter/types'
 import { classificationFor } from './grader/classification'
-import { runVerifiers } from './grader/grade'
-import type { VerifierItemVerdicts } from './grader/types'
 import { captureSection, type ScreenshotResolver } from './intent-input'
 import { behaviorSpec } from './spec-catalog'
 
@@ -30,28 +28,19 @@ export function buildEvidence(captures: Capture[]): EvidenceBlocks {
   }
 }
 
-// The residue items a judge grades for a behavior: judge-tagged items plus any
-// verifier items that emitted `unbound` (the anchor was not found in present
-// evidence — the judge reasons over the same aria without the copy pin).
-export function judgeItemsFor(
-  behaviorId: string,
-  verifierVerdicts?: VerifierItemVerdicts
-): JudgeItem[] {
+// The residue items a judge grades for a behavior: the judge-tagged items.
+export function judgeItemsFor(behaviorId: string): JudgeItem[] {
   const spec = behaviorSpec(behaviorId)
   if (!spec) return []
   return classificationFor(behaviorId)
-    .filter(c => c.grader === 'judge' || verifierVerdicts?.[c.thenIndex]?.verdict === 'unbound')
+    .filter(c => c.grader === 'judge')
     .map(c => ({ itemIndex: c.thenIndex, thenText: spec.then[c.thenIndex] ?? '' }))
 }
 
 export function buildJudgeInput(
   behaviorId: string,
   captures: Capture[],
-  // Default: discover the FULL residue — judge-tagged plus dynamically
-  // unbound items — by running the (pure, cheap) verifiers over the given
-  // captures, so direct callers (labeling CLI, self-consistency) stay in
-  // lockstep with the two-phase runner.
-  items: JudgeItem[] = judgeItemsFor(behaviorId, runVerifiers({ behaviorId, captures })),
+  items: JudgeItem[] = judgeItemsFor(behaviorId),
   resolveScreenshot?: ScreenshotResolver
 ): JudgeInput | undefined {
   const spec = behaviorSpec(behaviorId)

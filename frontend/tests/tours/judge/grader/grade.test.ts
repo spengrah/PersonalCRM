@@ -33,7 +33,7 @@ describe('classification map', () => {
     }
   })
 
-  it('the judge owns the semantic residue: CON-042[0], DSH-004[2] (unbound routing is dynamic)', () => {
+  it('the judge owns the semantic residue: CON-042[0], DSH-004[2]', () => {
     const judgeItems = CLASSIFICATION.filter(c => c.grader === 'judge')
     expect(judgeItems.map(c => `${c.behaviorId}[${c.thenIndex}]`)).toEqual([
       'CON-042[0]',
