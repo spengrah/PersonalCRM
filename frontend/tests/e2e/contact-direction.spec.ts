@@ -115,8 +115,11 @@ test.describe('Contact Direction Signals @area:contacts', () => {
       timeout: 15000,
     })
 
-    // The awaiting-reply indicator renders while the follow-up pends.
-    await expect(page.getByText('Awaiting reply')).toBeVisible()
+    // The awaiting-reply indicator renders while the follow-up pends. Target
+    // the indicator by its title attribute — the seeded contact name contains
+    // "Awaiting Reply", so a substring getByText would also match the name
+    // heading/definition (strict-mode violation).
+    await expect(page.getByTitle('Awaiting reply')).toBeVisible()
     await expect(page.getByText(/Last outreach: \S+/)).toBeVisible()
   })
 
@@ -137,7 +140,7 @@ test.describe('Contact Direction Signals @area:contacts', () => {
     await expect(page.getByText('No recent activity')).toBeVisible()
     await expect(page.getByText('Last outreach:')).not.toBeVisible()
     await expect(page.getByText('Last response:')).not.toBeVisible()
-    await expect(page.getByText('Awaiting reply')).not.toBeVisible()
+    await expect(page.getByTitle('Awaiting reply')).not.toBeVisible()
   })
 
   test('interaction API response includes direction field', async ({ request }) => {

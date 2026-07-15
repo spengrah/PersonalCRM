@@ -122,7 +122,7 @@ export const CLASSIFICATION: Classification[] = [
 // judge items (2 rows). The classification is now an index-faithful SUBSET of
 // the spec, guarded by grade.test.ts's EXPECTED_ROWS rather than a total-count
 // check. The constant below is no longer asserted anywhere and is retained
-// only until PR4 removes the residual verifier machinery.
+// only until the residual verifier machinery is removed.
 export const CLASSIFICATION_ITEM_COUNT = 2
 
 export function classificationFor(behaviorId: string): Classification[] {

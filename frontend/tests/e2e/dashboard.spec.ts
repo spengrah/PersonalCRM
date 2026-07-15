@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test'
+import { createTestAPI, TestAPI } from './helpers/test-api'
 import { expectAddContactHeader } from './helpers/dashboard'
 import type { OverdueContactResponse } from '../../src/types/generated/contact'
 
@@ -206,12 +207,14 @@ test.describe('Dashboard - All Caught Up (mocked) @area:dashboard', () => {
 
 test.describe('Dashboard - Card Anatomy (mocked) @area:dashboard', () => {
   // getUrgencyIndicator boundaries: <=2 yellow, <=7 orange, >7 red. The
-  // fixture pins the BOUNDARY values (2 and 7) plus the first red value (8)
-  // — shifting either threshold flips a dot class and fails. Mocked rather
-  // than seeded: in testing mode a scaled "day" is ~17s of wall time, so a
-  // seeded boundary value drifts across tiers before the page settles.
+  // fixture pins BOTH SIDES of each boundary — 2|3 (yellow→orange) and 7|8
+  // (orange→red) — so shifting either threshold in either direction flips a
+  // dot class and fails. Mocked rather than seeded: in testing mode a scaled
+  // "day" is ~17s of wall time, so a seeded boundary value drifts across
+  // tiers before the page settles.
   const tierCases = [
     { name: 'Yellow Boundary Card', days: 2, dot: 'bg-yellow-500' },
+    { name: 'Orange Lower Card', days: 3, dot: 'bg-orange-500' },
     { name: 'Orange Boundary Card', days: 7, dot: 'bg-orange-500' },
     { name: 'Red Tier Card', days: 8, dot: 'bg-red-500' },
   ]
@@ -246,8 +249,10 @@ test.describe('Dashboard - Card Anatomy (mocked) @area:dashboard', () => {
       const card = page.locator('div.rounded-lg').filter({ hasText: c.name })
       await expect(card.locator(`div.rounded-full.${c.dot}`)).toBeVisible()
       await expect(card.getByText('(weekly cadence)')).toBeVisible()
+      // Recency requires a VALUE after "Last contacted", not just the label
+      // (formatLastContacted regressing to '' would fail the \S+ match).
       await expect(
-        card.getByText(new RegExp(`${c.days} days overdue.*Last contacted`))
+        card.getByText(new RegExp(`${c.days} days overdue - Last contacted \\S+`))
       ).toBeVisible()
       await expect(
         card.getByText(`${c.name.toLowerCase().replace(/ /g, '-')}@example.com`)

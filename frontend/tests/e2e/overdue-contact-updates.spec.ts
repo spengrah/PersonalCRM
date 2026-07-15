@@ -230,8 +230,10 @@ test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => 
 
     // 2. Contacts List: today's date appears in the target row's SPECIFIC
     // "Last response" column (the 5th column — a mutual interaction sets
-    // last_response_at), not just anywhere in the row.
-    await page.goto('/contacts')
+    // last_response_at), not just anywhere in the row. Filter the list by
+    // the test prefix so another worker's contacts cannot push the target
+    // off the 20-row first page.
+    await page.goto(`/contacts?search=${encodeURIComponent(testApi.prefix)}`)
     await expect(page.getByRole('heading', { name: 'Contacts', level: 2 })).toBeVisible()
     const contactRow = page.locator('tr').filter({ hasText: contactName })
     const todayShort = getTodayUTCShort()

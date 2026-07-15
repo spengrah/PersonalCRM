@@ -10,10 +10,7 @@ import { apiItem, cap, pair } from './fixtures'
 // different valid catalog slot) shows up as a diff here. `thenIndex` stays
 // faithful to the spec position and is never re-indexed, so a partially
 // migrated behavior may keep a non-zero / gapped index (e.g. DSH-004[2]).
-const EXPECTED_ROWS = [
-  'CON-042[0]:judge',
-  'DSH-004[2]:judge',
-]
+const EXPECTED_ROWS = ['CON-042[0]:judge', 'DSH-004[2]:judge']
 
 describe('classification map', () => {
   it('matches the explicit index-faithful expected row set (INV-1)', () => {
