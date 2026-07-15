@@ -3,7 +3,7 @@
 // API, SERVER_TIME, DIALOGS. The judge grades each residual then-item
 // separately → pass|fail|unsure + a required citation. Output is
 // schema-constrained; categorical only (no scores/Likert). Zero-shot (the
-// shot-insertion seam is `fewShotBlock`, empty in PR2).
+// shot-insertion seam is `fewShotBlock`, currently empty).
 
 import type { AriaChild, AriaNode } from '../../support/types'
 import type { EvidenceBlocks, JudgeInput, PerItemVerdict } from './types'
@@ -126,7 +126,7 @@ function renderEvidence(ev: EvidenceBlocks): string {
   return blocks.join('\n\n')
 }
 
-// The shot-insertion seam (deferred — PR2 ships a zero-shot prompt; few-shot
+// The shot-insertion seam (deferred — the prompt is zero-shot today; few-shot
 // examples come from promoted human critiques the labeling CLI produces).
 export function fewShotBlock(): string {
   return ''

@@ -18,8 +18,7 @@ export function loadCaseFile(file: string): Case {
 export interface LoadedCorpus {
   cases: Case[]
   byId: Map<string, Case>
-  // Intent-pass hypothesis cases (corpus/intent-cases/) — --judge only, never
-  // the merge gate.
+  // Intent-pass hypothesis cases (corpus/intent-cases/) — advisory --judge only.
   intentCases: IntentCase[]
   capturesRoot: string
   capturesFor(c: Case | IntentCase): Capture[]

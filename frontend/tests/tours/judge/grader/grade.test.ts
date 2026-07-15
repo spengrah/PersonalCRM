@@ -60,7 +60,7 @@ describe('grounding rule', () => {
 })
 
 describe('gradeBehavior', () => {
-  it('judge item is pending (unsure) in verifiers-only mode', () => {
+  it('judge item is pending (unsure) when no judge verdict is supplied', () => {
     const g = gradeBehavior({
       behaviorId: 'CON-042',
       captures: [

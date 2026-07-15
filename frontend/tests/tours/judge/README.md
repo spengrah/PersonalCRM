@@ -2,12 +2,9 @@
 
 The consumer half of the tours harness. It reads the §1 capture records the tours (`contacts.tour.ts`, `dashboard.tour.ts`, `cadence-followup.tour.ts`) produce (`../support/types` `Capture`) and grades each behavior's spec `then`-items. **Advisory only** — it files no issues and gates no CI beyond its own offline tests.
 
-## The hybrid grader (verifiers before judges)
+## The grader (judge residue only)
 
-Each behavior's `then`-items are classified in `grader/classification.ts`, keyed by `(behavior_id, then_index)` (60 items across the 20 current first-cut `ux` behaviors — 7 contacts, 6 dashboard, 7 cadence-followup):
-
-- **verifier** — a pure function over structured evidence (`url` / `apiResponses` / `aria` / `serverTime` / `dialogs` / `fields`), with a THREE-OUTCOME contract plus abstention: `pass`, `fail`, `unsure` (evidence absent/ambiguous — a missing capture never manufactures a false fail), and `unbound` (a BINDING-VEHICLE copy anchor missing from present evidence — plausibly renamed, so the item routes dynamically to the judge with the same evidence). PRESENCE-CONTRACT items — where the element's existence IS the asserted fact — deliberately keep fail-on-missing so the deterministic gate retains its true positives. A **required** mutation absent from a _present_ bracket (e.g. no interaction POST after mark-as-contacted) IS a `fail`. Aria-invisible visual state (loading skeletons, urgency tier, active-nav mark, nav stickiness) binds to targeted `fields` reads the tour records.
-- **judge** — the LLM (`adapter/`) owns the semantic residue — **CON-042[0]** ("warns cannot be undone") and **DSH-004[2]** (error-reason faithfulness) — plus every verifier item that emitted `unbound` at run time (the dynamic replacement for the old static judgeFallback flag). (A former third residue item, DSH-001[1] on the redirect's interim presentation, was retired by the maintainer at the first label session — the interim is imperceptibly brief; interim quality stays judgeable holistically under the DSH-011 intent.) Item-judge prompts now render per-capture `CAPTURE[n]` sections (in-flight vs settled states stay distinguishable) and attach screenshots all-or-nothing on the codex-exec adapter, mirroring the intent pass.
+Each behavior's `then`-items are classified in `grader/classification.ts`, keyed by `(behavior_id, then_index)`. The deterministic **verifier** lane — one pure function per then-item over structured evidence — migrated to cited Playwright E2E specs (`frontend/tests/e2e/*.spec.ts`, see the `// spec:` citations); what remains here is only the **judge** residue: the LLM (`adapter/`) owns the two semantic then-items no deterministic check can prove — **CON-042[0]** ("warns cannot be undone") and **DSH-004[2]** (error-reason faithfulness). (A former third residue item, DSH-001[1] on the redirect's interim presentation, was retired by the maintainer at the first label session — the interim is imperceptibly brief; interim quality stays judgeable holistically under the DSH-011 intent.) Item-judge prompts render per-capture `CAPTURE[n]` sections (in-flight vs settled states stay distinguishable) and attach screenshots all-or-nothing on the codex-exec adapter, mirroring the intent pass.
 
 Aggregation: any item `fail` → behavior `fail`; all `pass` → `pass`; else `unsure`. The **grounding rule** downgrades an uncited `fail` to `unsure` (`grader/grade.ts`).
 
@@ -17,15 +14,16 @@ Sibling of the item-judge residue: one judge call per `type: intent` behavior in
 
 **Screenshots (live-only).** Tours record a best-effort viewport screenshot per capture point into the gitignored run dir (`TOURS_SCREENSHOTS=0` disables); the report CLI attaches them as model images (`codex exec -i`) — all-or-nothing per intent (any bound capture missing its screenshot drops ALL images to keep the CAPTURE[n] mapping honest) and codex-exec only — which flips the intent prompt from the aria-only visual caution to visual-grounding-allowed. Intents flagged `visual: true` in the catalog carry an explicit EVIDENCE CAVEAT in the report when judged aria-only. **The committed corpus stays aria-only** — the PII audit can grep JSON, not pixels.
 
-## Running the eval
+## Rendering the advisory report
+
+The deterministic **verifier merge gate has retired** with the verifier lane — that coverage now lives in the cited Playwright E2E specs (`frontend/tests/e2e/*.spec.ts`, `// spec:` citations). What remains is the advisory report over a tours run dir:
 
 ```bash
-make qa-eval                       # verifiers-only (OFFLINE, deterministic) — the MERGE GATE
-QA_JUDGE=codex-exec bun run tests/tours/judge/eval/run.ts --judge --limit 2   # + live judge (advisory, needs quota)
-bun run tests/tours/judge/eval/run.ts --judge --repeat 5                       # judge self-consistency
+make qa-report RUNDIR=<run dir>              # advisory report (offline; judge items render as "pending labels")
+make qa-report RUNDIR=<run dir> JUDGE=1      # + the live judge over residue items (advisory, needs codex quota)
 ```
 
-`make qa-eval` loads the corpus, applies each doctored case's single-point mutation, runs the grader, and exits non-zero **only** on a verifier regression (a self-labeled doctored `fail` not caught, or collateral on a clean case). It prints the confusion matrix + per-verdict precision/recall + abstention rate over the deterministic classifier. The judge-layer + fail-precision metrics print `N/A — pending human labels` (see `DEFERRED.md`).
+`make qa-report` groups a run's captures by behavior, grades the judge residue, and renders the markdown roll-up + coverage + skip-list. It files no issues; the judge-layer + fail-precision metrics print `N/A — pending human labels` (see `DEFERRED.md`).
 
 ## The corpus
 
@@ -44,11 +42,11 @@ crm-admin --reset-and-seed --profile prod-shaped --yes    # synthetic prod-shape
 TOURS_SEED_PROFILE=prod-shaped TOURS_SKIP_RESET=1 make tours   # runs ALL *.tour.ts against localhost
 ```
 
-Captures land in `frontend/tests/tours/.runs/<runId>/captures/{contacts,dashboard,cadence-followup}/` (gitignored). Curate the relevant ones into `corpus/captures/<tour>/`, refresh the affected `corpus/cases/*.json` + `PROVENANCE.json`, then run the PII audit + `make qa-eval`. Regeneration is intentionally NOT byte-stable (accelerated timestamps + first-seen id ordinals leak through); the grader keys on semantics, so regenerate rarely and review the diff by eye. Curation step: drop the birthdays capture's incidental `GET /contacts?limit=1000` body — con045 reads the compact `fields.birthdayContacts` projection, not that body, so the full contact list is dead weight (and its truncated `data` vs `meta.pagination.total` would be self-inconsistent). Same treatment applies to the delete-flow after-accept capture's unread `GET /api/v1/contacts` list body (con042 reads only the probe GET, the DELETE, and the url; an unread list body would otherwise inflate every CON-042 judge/labeler prompt, which serializes full capture evidence). The aria tree is NOT trimmed — it is the honest rendered page state.
+Captures land in `frontend/tests/tours/.runs/<runId>/captures/{contacts,dashboard,cadence-followup}/` (gitignored). Curate the relevant ones into `corpus/captures/<tour>/`, refresh the affected `corpus/cases/*.json` + `PROVENANCE.json`, then run the PII audit (`bun run tests/tours/judge/corpus/pii-audit.ts corpus`). Regeneration is intentionally NOT byte-stable (accelerated timestamps + first-seen id ordinals leak through); the grader keys on semantics, so regenerate rarely and review the diff by eye. Curation step: drop the birthdays capture's incidental `GET /contacts?limit=1000` body — con045 reads the compact `fields.birthdayContacts` projection, not that body, so the full contact list is dead weight (and its truncated `data` vs `meta.pagination.total` would be self-inconsistent). Same treatment applies to the delete-flow after-accept capture's unread `GET /api/v1/contacts` list body (con042 reads only the probe GET, the DELETE, and the url; an unread list body would otherwise inflate every CON-042 judge/labeler prompt, which serializes full capture evidence). The aria tree is NOT trimmed — it is the honest rendered page state.
 
 ## Adding a doctored case
 
-Pick a **verifier**-tagged item, add a single-point mutation to a new `corpus/cases/*.json` (`op: inject_query | delete_endpoint | set_aria_disabled | reorder_ids | blank_dialog | remove_aria_subtree | set_field | set_json_field`), and set its `then_index` expected verdict to `fail` (others unchanged). `remove_aria_subtree` drops an aria-rendered node (by role + name/text), `set_field` overwrites an aria-invisible `fields` value (skeleton count, tier class, nav position), and `set_json_field` overwrites a body JSON path. Merge-gating doctored cases mutate a verifier item; a `judge`-item mutation (e.g. `blank_dialog`) is exercised only under `--judge`. Run `make qa-eval` to confirm it's caught with zero collateral.
+With the verifier lane retired, doctored cases feed the advisory `--judge` path only. Pick a **judge**-residue item (the residue is CON-042[0] / DSH-004[2]), add a single-point mutation to a new `corpus/cases/*.json` (`op: inject_query | delete_endpoint | set_aria_disabled | reorder_ids | blank_dialog | remove_aria_subtree | set_field | set_json_field`), and set its `then_index` expected verdict to `fail` (others unchanged). `remove_aria_subtree` drops an aria-rendered node (by role + name/text), `set_field` overwrites an aria-invisible `fields` value (skeleton count, tier class, nav position), and `set_json_field` overwrites a body JSON path. A judge-item mutation (e.g. `blank_dialog`) is exercised under `make qa-report RUNDIR=<run dir> JUDGE=1`.
 
 ## Correcting draft labels (deferred, cheap)
 
@@ -56,4 +54,4 @@ Edit `corpus/labels/*.draft.json` in place → `*.labeled.json`, flipping `statu
 
 ## The mechanical-vs-deferred split
 
-**Mergeable now (zero human labels):** verifiers + machinery unit tests, the eval on doctored self-labeled cases, the doctoring tool, the labeling CLI's machinery (mocked drafter), the advisory report, the PII audit. **Deferred (labels/quota):** fail-precision over a held-out set, the error-analysis taxonomy, the real stronger-model draft-fill, the codex-SDK impl, the promptfoo spike. All deferred items are flagged in `DEFERRED.md` — never GitHub issues.
+**Mergeable now (zero human labels):** the grader + machinery unit tests, the doctoring tool, the labeling CLI's machinery (mocked drafter), the advisory report, the PII audit. **Deferred (labels/quota):** fail-precision over a held-out set, the error-analysis taxonomy, the real stronger-model draft-fill, the codex-SDK impl, the promptfoo spike. All deferred items are flagged in `DEFERRED.md` — never GitHub issues.

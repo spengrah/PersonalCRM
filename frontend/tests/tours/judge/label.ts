@@ -4,10 +4,10 @@
 // *.draft.json the maintainer later CORRECTS in place into *.labeled.json
 // (re-running nothing).
 //
-// MERGE GATE = the non-model MACHINERY (scaffolding + artifact structure),
-// unit-tested with a MOCKED stronger-model drafter (offline, no quota). The REAL
-// model-drafted *.draft.json is a MANUAL authoring artifact committed like the
-// corpus captures — never a CI gate (see judge/DEFERRED.md).
+// What CI exercises = the non-model MACHINERY (scaffolding + artifact
+// structure), unit-tested with a MOCKED stronger-model drafter (offline, no
+// quota). The REAL model-drafted *.draft.json is a MANUAL authoring artifact
+// committed like the corpus captures — never a CI gate (see judge/DEFERRED.md).
 
 import type { Capture } from '../support/types'
 import { makeCodexExecJudge } from './adapter/codex-exec'
@@ -78,7 +78,7 @@ export async function draftForCase(
 }
 
 // One intent-case draft: DEFERRED.md's "the drafter covers intents too".
-// Mirrors the eval's --judge intent loop (runIntentPass over the case's
+// Mirrors the report's --judge intent loop (runIntentPass over the case's
 // possibly-mutated captures), so the drafter grades exactly what the runtime
 // judge would — including the grounding downgrade of an uncited fail.
 export interface IntentDraftArtifact {

@@ -1,7 +1,7 @@
 // Corpus case schema + validator (design D6). A case is a git-diffable JSON file:
 // captures (fixture refs) + expected per-then-item verdicts + a clean|doctored
 // source. A doctored case references a base clean case + a single-point mutation
-// the doctoring tool applies deterministically at eval time.
+// the doctoring tool applies deterministically when a doctored case is resolved.
 //
 // Pure zod over an already-parsed object — the vitest tests build objects
 // directly (no parse needed), so this module has no runtime file dependency.

@@ -1,5 +1,5 @@
 // Judge selection by the QA_JUDGE env (default codex-exec). The codex-SDK impl
-// is DEFERRED (design D2 / judge/DEFERRED.md): PR2 ships no `@openai/codex-sdk`
+// is DEFERRED (design D2 / judge/DEFERRED.md): there is no `@openai/codex-sdk`
 // import (an unresolvable import would fail tsc), so selecting it throws with a
 // pointer to the follow-up.
 

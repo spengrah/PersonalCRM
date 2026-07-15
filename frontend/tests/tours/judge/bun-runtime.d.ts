@@ -1,5 +1,5 @@
 // Minimal ambient declaration for the bun/node runtime bits the judge CLIs use
-// (doctor.ts / label.ts / eval/run.ts run as entry scripts). Kept tiny so no
+// (doctor.ts / label.ts / report/render.ts run as entry scripts). Kept tiny so no
 // @types/bun devDep is needed (design: no frontend/package.json change). The
 // corpus loader parses committed JSON with the portable JSON.parse — NO Bun.YAML.
 

@@ -1,10 +1,10 @@
 // The `codex exec --json --output-schema <schema> --sandbox read-only`
-// implementation of the Judge interface (design D2 — the PR2 default; the
+// implementation of the Judge interface (design D2 — the current default; the
 // codex-SDK impl is a deferred follow-up behind the identical interface).
 //
 // The PARSE + tool-rejection logic is pure + unit-tested with canned event
 // streams; the spawn is a thin wrapper (a live call, exercised by a manual
-// smoke — never the merge gate).
+// smoke, not by the automated tests).
 
 import { spawn } from 'child_process'
 import * as fs from 'fs'
