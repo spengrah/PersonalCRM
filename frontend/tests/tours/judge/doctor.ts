@@ -135,9 +135,10 @@ export function applyMutation(baseCaptures: Capture[], mutation: Mutation): Capt
 
 // Resolve the captures a case grades: for a doctored case, apply its
 // single-point mutation to the base fixtures; a clean case returns them as-is.
-// The SINGLE place the doctor mutation is applied — the report's --judge path
-// and the labeling CLI both go through here, so a doctored case never
-// drafts/grades the clean evidence.
+// The SINGLE place the doctor mutation is applied — the labeling CLI (label.ts)
+// goes through here, so a doctored case never drafts over the clean evidence.
+// (The advisory report reads live tours run dirs, not the corpus, so it never
+// resolves a doctored case.)
 export function resolveCaseCaptures(
   c: { source: 'clean' | 'doctored'; doctor?: { mutation: Mutation } },
   baseCaptures: Capture[]

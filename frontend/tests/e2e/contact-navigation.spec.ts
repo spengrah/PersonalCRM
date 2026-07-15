@@ -148,11 +148,23 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     await expect(prevButton).toHaveAttribute('disabled', '')
     await expect(nextButton).toHaveAttribute('disabled', '')
 
-    // Try pressing arrow key - should not navigate
+    // Try pressing arrow key - should not navigate. Register the observation
+    // window BEFORE the keypress (waitForURL only sees navigations that begin
+    // after it is called); resolve to a boolean so a real regression is
+    // asserted here, not raced.
     const currentUrl = page.url()
+    const navProbe = page
+      .waitForURL(u => u.pathname.startsWith('/contacts/') && !u.pathname.includes(ids[0]), {
+        timeout: 1000,
+      })
+      .then(
+        () => true,
+        () => false
+      )
     await page.keyboard.press('ArrowRight')
-    // URL should remain the same
-    await expect(page).toHaveURL(currentUrl, { timeout: 500 })
+    expect(await navProbe).toBe(false)
+    // Final confirmation: still on the original contact's URL.
+    await expect(page).toHaveURL(currentUrl)
   })
 
   test('should not navigate when typing in input fields', async ({ page }) => {
@@ -184,12 +196,22 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     // Store current URL
     const currentUrl = page.url()
 
-    // Type arrow keys in the input - they should move cursor, not navigate
+    // Type arrow keys in the input - they should move cursor, not navigate.
+    // Register the unexpected-navigation probe BEFORE the keypresses; resolve to
+    // a boolean so a real regression is asserted, not raced.
+    const navProbe = page
+      .waitForURL(u => u.pathname.startsWith('/contacts/') && !u.pathname.includes(ids[0]), {
+        timeout: 1000,
+      })
+      .then(
+        () => true,
+        () => false
+      )
     await nameInput.press('ArrowRight')
     await nameInput.press('ArrowLeft')
-
-    // Should still be on same page
-    await expect(page).toHaveURL(currentUrl, { timeout: 300 })
+    expect(await navProbe).toBe(false)
+    // Should still be on same page.
+    await expect(page).toHaveURL(currentUrl)
   })
 
   test('should preserve URL context (sort, search) during navigation', async ({ page }) => {

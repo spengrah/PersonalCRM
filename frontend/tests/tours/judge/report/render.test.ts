@@ -65,6 +65,31 @@ describe('renderReport', () => {
     expect(md).toMatch(/judge\/DEFERRED\.md/)
   })
 
+  it('renders a completed judge verdict as (judge), not pending labels', () => {
+    const judged: BehaviorGrade[] = [
+      {
+        behaviorId: 'CON-042',
+        behaviorVerdict: 'fail',
+        items: [
+          {
+            thenIndex: 0,
+            grader: 'judge',
+            source: 'judge',
+            verdict: 'fail',
+            citation: 'DIALOGS[0].message',
+            reason: 'no irreversibility warning',
+          },
+        ],
+      },
+    ]
+    const out = renderReport({ grades: judged })
+    // A completed judge verdict renders the source label "(judge)" — distinct
+    // from the "(judge (pending labels))" a source:'pending' item renders.
+    expect(out).toMatch(/\[0\] ❌ \*\*fail\*\* \(judge\)/)
+    expect(out).toContain('cite: DIALOGS[0].message')
+    expect(out).not.toMatch(/\(judge \(pending labels\)\)/)
+  })
+
   it('grades then renders a migrated-tagged + both-residue capture set without throwing (INV-3)', () => {
     // A tour still tags captures for a fully-migrated behavior (CON-038 has no
     // classification row → grades to zero items) alongside the two residue

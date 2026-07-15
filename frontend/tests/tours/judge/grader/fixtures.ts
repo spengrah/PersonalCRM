@@ -1,4 +1,4 @@
-// Minimal hand-built Capture fixtures for the verifier unit tests. NOT a test
+// Minimal hand-built Capture fixtures for the grader unit tests. NOT a test
 // file (no `.test.ts`) — a shared builder so the tests read declaratively.
 
 import type {

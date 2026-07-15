@@ -98,6 +98,19 @@ describe('gradeBehavior', () => {
     // fail without a citation is downgraded to unsure by the grounding rule
     expect(judgeItem?.verdict).toBe('unsure')
   })
+
+  it('passes a cited supplied judge verdict through as source=judge (completed)', () => {
+    const g = gradeBehavior(
+      { behaviorId: 'CON-042', captures: [] },
+      { judge: { 0: { verdict: 'fail', citation: 'DIALOGS[0].message', reason: 'no warning' } } }
+    )
+    const judgeItem = g.items.find(i => i.thenIndex === 0)
+    // A cited fail is NOT downgraded — it lands as a completed judge verdict.
+    expect(judgeItem?.source).toBe('judge')
+    expect(judgeItem?.verdict).toBe('fail')
+    expect(judgeItem?.citation).toBe('DIALOGS[0].message')
+    expect(g.behaviorVerdict).toBe('fail')
+  })
 })
 
 describe('groupByBehavior', () => {
