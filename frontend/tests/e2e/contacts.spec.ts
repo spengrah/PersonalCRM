@@ -225,6 +225,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
   })
 
   test('should navigate to edit mode via context menu Edit action', async ({ page }) => {
+    // spec: CON-041[0], CON-041[1]
     const { ids } = await testApi.seedContacts([{ full_name: 'Context Edit Test' }])
 
     const contactId = ids[0]
@@ -250,9 +251,14 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await expect(page.getByRole('heading', { name: 'Edit Contact' })).toBeVisible({
       timeout: 15000,
     })
+
+    // The action param is consumed once, then stripped from the URL (mount-only
+    // router.replace) so a refresh does not re-trigger it.
+    await expect(page).not.toHaveURL(/action=/)
   })
 
   test('should navigate to merge modal via context menu Merge action', async ({ page }) => {
+    // spec: CON-041[0], CON-041[1]
     const { ids } = await testApi.seedContacts([{ full_name: 'Context Merge Test' }])
 
     const contactId = ids[0]
@@ -278,6 +284,10 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await expect(page.getByRole('heading', { name: 'Merge Contacts' })).toBeVisible({
       timeout: 15000,
     })
+
+    // The action param is consumed once, then stripped from the URL (mount-only
+    // router.replace) so a refresh does not re-trigger it.
+    await expect(page).not.toHaveURL(/action=/)
   })
 
   test('should log a mutual interaction via the Log Interaction modal default', async ({
@@ -417,6 +427,150 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     const afterContact = (await afterResp.json()).data
     expect(afterContact.last_response_at).toBeTruthy()
     expect(afterContact.last_outreach_at ?? null).toBe(lastOutreachBefore)
+  })
+
+  test('defaults the contact list to cadence order, most-frequent-first', async ({ page }) => {
+    // spec: CON-038[0]
+    // Names are chosen so ALPHABETICAL order (either direction) differs from the
+    // cadence-desc order — otherwise a backend that ignored sort=cadence and fell
+    // back to name order would pass this test. Cadence-desc = Yankee(weekly) →
+    // Alpha(monthly) → Mike(annual); name-asc = Alpha, Mike, Yankee; name-desc =
+    // Yankee, Mike, Alpha. All three orders are distinct.
+    await testApi.seedContacts([
+      { full_name: 'Cadence Sort Mike', cadence: 'annual' },
+      { full_name: 'Cadence Sort Yankee', cadence: 'weekly' },
+      { full_name: 'Cadence Sort Alpha', cadence: 'monthly' },
+    ])
+
+    // A BARE load resolves the default context: the request the app issues
+    // carries the cadence-desc default, with no user having chosen a sort.
+    const listRequest = page.waitForResponse(
+      resp =>
+        resp.request().method() === 'GET' &&
+        /\/api\/v1\/contacts(\?|$)/.test(resp.url()) &&
+        !new URL(resp.url()).searchParams.has('ids_only')
+    )
+    await page.goto('/contacts')
+    await page.waitForLoadState('domcontentloaded')
+    const params = new URL((await listRequest).url()).searchParams
+    expect(['cadence', null]).toContain(params.get('sort'))
+    expect(['desc', null]).toContain(params.get('order'))
+
+    // Filter to THIS test's rows (search keeps the default sort) so parallel
+    // workers' contacts cannot satisfy or break the ordering, then assert the
+    // three seeded rows render most-frequent-first (weekly → monthly → annual)
+    // in DOM order.
+    await page.getByPlaceholder('Search contacts...').fill(testApi.prefix)
+    await page.getByPlaceholder('Search contacts...').press('Enter')
+    await expect(
+      page.locator('tbody tr', {
+        has: page.getByText(`${testApi.prefix}-Cadence Sort Alpha`),
+      })
+    ).toBeVisible({ timeout: 15000 })
+
+    const rowText = await page.locator('tbody tr').allTextContents()
+    const weeklyIdx = rowText.findIndex(t => t.includes(`${testApi.prefix}-Cadence Sort Yankee`))
+    const monthlyIdx = rowText.findIndex(t => t.includes(`${testApi.prefix}-Cadence Sort Alpha`))
+    const annualIdx = rowText.findIndex(t => t.includes(`${testApi.prefix}-Cadence Sort Mike`))
+    expect(weeklyIdx).toBeGreaterThanOrEqual(0)
+    expect(monthlyIdx).toBeGreaterThan(weeklyIdx)
+    expect(annualIdx).toBeGreaterThan(monthlyIdx)
+  })
+
+  test('deletes a contact only after confirmation, then returns to the list', async ({
+    page,
+    request,
+  }) => {
+    // spec: CON-042[1], CON-042[2]
+    const { ids } = await testApi.seedContacts([{ full_name: 'Delete Confirm Test' }])
+    const contactId = ids[0]
+    const fullName = `${testApi.prefix}-Delete Confirm Test`
+
+    await page.goto(`/contacts/${contactId}`)
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+
+    // Deletion is guarded by a native window.confirm (see the detail page).
+    // Dismiss path: no DELETE fires and the contact stays live.
+    let deleteFired = false
+    const watchDelete = (req: import('@playwright/test').Request) => {
+      if (req.method() === 'DELETE' && req.url().includes(`/contacts/${contactId}`)) {
+        deleteFired = true
+      }
+    }
+    page.on('request', watchDelete)
+    page.once('dialog', dialog => dialog.dismiss())
+    await page.getByRole('button', { name: 'Delete' }).click()
+    // Asserting ABSENCE: there is no positive signal to await on dismiss, so give
+    // any (erroneous) DELETE a bounded settle window to appear, then confirm none
+    // fired and the contact is still live.
+    await page.waitForTimeout(1000)
+    expect(deleteFired).toBe(false)
+    page.off('request', watchDelete)
+    const liveResp = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
+      headers: API_HEADERS,
+    })
+    expect(liveResp.status()).toBe(200)
+
+    // Accept path: the DELETE fires (204), the contact 404s, and we land on the list.
+    const deleteResponse = page.waitForResponse(
+      resp => resp.request().method() === 'DELETE' && resp.url().includes(`/contacts/${contactId}`)
+    )
+    page.once('dialog', dialog => dialog.accept())
+    await page.getByRole('button', { name: 'Delete' }).click()
+    const delResp = await deleteResponse
+    expect(delResp.status()).toBe(204)
+
+    // Redirected to the contact list on success (CON-042[2]).
+    await expect(page).toHaveURL(/\/contacts(\?|$)/)
+
+    // The contact is now gone (CON-042[1]).
+    const afterResp = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
+      headers: API_HEADERS,
+    })
+    expect(afterResp.status()).toBe(404)
+  })
+
+  test('logs a mutual interaction from the list-row Mark as Contacted quick action', async ({
+    page,
+  }) => {
+    // spec: CON-044[0]
+    // The LIST-row context-menu quick action (distinct from the detail-page Log
+    // Interaction modal): it posts a mutual, server-timestamped interaction.
+    const { ids } = await testApi.seedContacts([
+      { full_name: 'List Mark Contacted', cadence: 'weekly' },
+    ])
+    const contactId = ids[0]
+    const fullName = `${testApi.prefix}-List Mark Contacted`
+
+    await page.goto('/contacts')
+    await page.waitForLoadState('domcontentloaded')
+
+    const row = page.locator('tr', { has: page.getByText(fullName) })
+    await expect(row).toBeVisible({ timeout: 15000 })
+    const actionButton = row
+      .locator('button')
+      .filter({ has: page.locator('svg') })
+      .last()
+    await actionButton.click()
+
+    const responsePromise = page.waitForResponse(
+      resp =>
+        resp.url().includes(`/api/v1/contacts/${contactId}/interactions`) &&
+        resp.request().method() === 'POST'
+    )
+    await page.getByRole('menuitem', { name: 'Mark as Contacted' }).click()
+    const response = await responsePromise
+    expect(response.status()).toBe(201)
+
+    // The client does not send occurred_at — the server assigns it from its
+    // (accelerated) clock.
+    const requestBody = response.request().postDataJSON() ?? {}
+    expect(requestBody.occurred_at).toBeUndefined()
+
+    const body = await response.json()
+    expect(body.data.direction).toBe('mutual')
+    expect(body.data.occurred_at).toBeTruthy()
   })
 })
 

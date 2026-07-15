@@ -1,13 +1,6 @@
 // The verifier registry: behavior id → pure verifier over that behavior's captures.
 
 import type { Verifier } from '../types'
-import { con038 } from './con038'
-import { con040 } from './con040'
-import { con041 } from './con041'
-import { con042 } from './con042'
-import { con043 } from './con043'
-import { con044 } from './con044'
-import { con045 } from './con045'
 import { dsh001 } from './dsh001'
 import { dsh002 } from './dsh002'
 import { dsh003 } from './dsh003'
@@ -23,13 +16,6 @@ import { cad031 } from './cad031'
 import { cad033 } from './cad033'
 
 export const VERIFIERS: Record<string, Verifier> = {
-  'CON-038': con038,
-  'CON-040': con040,
-  'CON-041': con041,
-  'CON-042': con042,
-  'CON-043': con043,
-  'CON-044': con044,
-  'CON-045': con045,
   'DSH-001': dsh001,
   'DSH-002': dsh002,
   'DSH-003': dsh003,
@@ -46,13 +32,6 @@ export const VERIFIERS: Record<string, Verifier> = {
 }
 
 export {
-  con038,
-  con040,
-  con041,
-  con042,
-  con043,
-  con044,
-  con045,
   dsh001,
   dsh002,
   dsh003,

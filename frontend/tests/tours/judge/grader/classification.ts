@@ -1,6 +1,9 @@
-// The load-bearing hybrid-grader decision (design D3): one row per spec
-// then-item, keyed by (behavior_id, then_index) EXACTLY as spec/contacts.yaml
-// lists them (23 items total across the 7 current contacts `ux` behaviors).
+// The hybrid-grader classification (design D3): rows keyed by
+// (behavior_id, then_index) EXACTLY as the spec YAMLs list them. Originally one
+// row per then-item; the CON contacts behaviors have since migrated to E2E, so
+// this is now an index-faithful SUBSET — the remaining rows are the DSH/CAD
+// verifier items plus the CON-042[0] + DSH-004[2] judge items. The subset is
+// guarded by grade.test.ts's EXPECTED_ROWS (INV-1), not a total-count check.
 // "Verifiers before judges" — the judge residue is deliberately tiny.
 //
 // A `verifier` item is graded by pure code over structured evidence. A `judge`
@@ -24,147 +27,35 @@ export interface Classification {
 }
 
 export const CLASSIFICATION: Classification[] = [
-  // --- CON-038: list + detail share one default ordering ---
-  {
-    behaviorId: 'CON-038',
-    thenIndex: 0,
-    grader: 'verifier',
-    note: 'list defaults to cadence order, most frequent first (bare-/contacts capture proves the implicit default)',
-  },
-  {
-    behaviorId: 'CON-038',
-    thenIndex: 1,
-    grader: 'verifier',
-    note: 'detail prev/next uses the same default ordering (ids_only order == list order)',
-  },
+  // CON-038 (list + detail share one default ordering) migrated to E2E:
+  // contacts.spec.ts + contact-navigation.spec.ts (see `// spec: CON-038`).
 
-  // --- CON-040: keyboard navigation drives the detail page ---
-  {
-    behaviorId: 'CON-040',
-    thenIndex: 0,
-    grader: 'verifier',
-    note: 'left/right move prev/next, disabled at BOTH boundaries (first + last captured)',
-  },
-  {
-    behaviorId: 'CON-040',
-    thenIndex: 1,
-    grader: 'verifier',
-    note: 'arrows inert while editing or focus in an input',
-  },
-  { behaviorId: 'CON-040', thenIndex: 2, grader: 'verifier', note: 'Enter opens edit mode' },
-  {
-    behaviorId: 'CON-040',
-    thenIndex: 3,
-    grader: 'verifier',
-    note: 'Escape discards edit, or returns to the list (context preserved)',
-  },
+  // CON-040 (keyboard navigation drives the detail page) migrated to E2E:
+  // contact-navigation.spec.ts (see `// spec: CON-040`).
 
-  // --- CON-041: action parameters trigger once and are consumed ---
-  {
-    behaviorId: 'CON-041',
-    thenIndex: 0,
-    grader: 'verifier',
-    note: 'the action runs once (edit opens / merge modal opens)',
-  },
-  { behaviorId: 'CON-041', thenIndex: 1, grader: 'verifier', note: 'parameter stripped from URL' },
+  // CON-041 (action parameters trigger once and are consumed) migrated to E2E:
+  // contacts.spec.ts (see `// spec: CON-041`).
 
   // --- CON-042: deleting a contact requires explicit confirmation ---
+  // [1] (only on confirmation is the contact deleted) and [2] (on success
+  // returned to the list) migrated to E2E: contacts.spec.ts (see
+  // `// spec: CON-042`). [0] stays — the judge owns the "cannot be undone"
+  // warning (the one clearly judge-only item).
   {
     behaviorId: 'CON-042',
     thenIndex: 0,
     grader: 'judge',
     note: 'confirmation prompt warns the action cannot be undone (the one clearly judge-only item)',
   },
-  {
-    behaviorId: 'CON-042',
-    thenIndex: 1,
-    grader: 'verifier',
-    note: 'only on confirmation is the contact deleted',
-  },
-  {
-    behaviorId: 'CON-042',
-    thenIndex: 2,
-    grader: 'verifier',
-    note: 'on success returned to the contact list',
-  },
 
-  // --- CON-043: the merge flow keeps the current contact, archives the source ---
-  {
-    behaviorId: 'CON-043',
-    thenIndex: 0,
-    grader: 'verifier',
-    note: 'current marked kept (Keeping badge); pick source from a selector that excludes the target',
-  },
-  {
-    behaviorId: 'CON-043',
-    thenIndex: 1,
-    grader: 'verifier',
-    note: 'selecting a source loads a preview',
-  },
-  {
-    behaviorId: 'CON-043',
-    thenIndex: 2,
-    grader: 'verifier',
-    note: 'conflicting fields toggle, defaulting to keep target',
-  },
-  {
-    behaviorId: 'CON-043',
-    thenIndex: 3,
-    grader: 'verifier',
-    note: 'merged name editable, with source quick-fill',
-  },
-  {
-    behaviorId: 'CON-043',
-    thenIndex: 4,
-    grader: 'verifier',
-    note: 'cannot submit before source / while preview loading / while merge in flight',
-  },
-  {
-    behaviorId: 'CON-043',
-    thenIndex: 5,
-    grader: 'verifier',
-    note: 'outcome reported and auto-dismissed (banner is a copy anchor — unbindable → unbound → judge)',
-  },
+  // CON-043 (merge flow keeps the current contact, archives the source)
+  // migrated to E2E: contact-merge.spec.ts (see `// spec: CON-043`).
 
-  // --- CON-044: mark-as-contacted logs a mutual interaction ---
-  {
-    behaviorId: 'CON-044',
-    thenIndex: 0,
-    grader: 'verifier',
-    note: 'a mutual-direction interaction is logged, server-timestamped',
-  },
+  // CON-044 (mark-as-contacted logs a mutual interaction) migrated to E2E:
+  // contacts.spec.ts (see `// spec: CON-044`).
 
-  // --- CON-045: the birthdays page groups contacts by proximity ---
-  {
-    behaviorId: 'CON-045',
-    thenIndex: 0,
-    grader: 'verifier',
-    note: 'grouped into today / upcoming / already-celebrated',
-  },
-  {
-    behaviorId: 'CON-045',
-    thenIndex: 1,
-    grader: 'verifier',
-    note: 'gift-planning section appears only near year end',
-  },
-  {
-    behaviorId: 'CON-045',
-    thenIndex: 2,
-    grader: 'verifier',
-    note: 'upcoming sort soonest-first; celebrated sink to end',
-  },
-  {
-    behaviorId: 'CON-045',
-    thenIndex: 3,
-    grader: 'verifier',
-    note: 'placeholder-year birthdays display without an age',
-  },
-  {
-    behaviorId: 'CON-045',
-    thenIndex: 4,
-    grader: 'verifier',
-    note: 'the page follows accelerated time',
-  },
+  // CON-045 (the birthdays page groups contacts by proximity) migrated to E2E:
+  // birthdays.spec.ts (see `// spec: CON-045`).
 
   // --- DSH-001: the dashboard is the default landing surface ---
   {
@@ -437,12 +328,14 @@ export const CLASSIFICATION: Classification[] = [
   },
 ]
 
-// The count MUST match the SSOT then-item totals: spec/contacts.yaml (CON-038×2,
-// CON-040×4, CON-041×2, CON-042×3, CON-043×6, CON-044×1, CON-045×5 = 23) +
-// spec/dashboard.yaml (DSH-001×1, DSH-002×3, DSH-003×2, DSH-004×3, DSH-005×4,
-// DSH-007×2 = 15) + spec/cadence-followup.yaml (CAD-026×3, CAD-027×3, CAD-028×3,
-// CAD-029×4, CAD-030×4, CAD-031×3, CAD-033×2 = 22) = 60 — guarded by a unit test.
-export const CLASSIFICATION_ITEM_COUNT = 60
+// The 22 CON verifier then-items have migrated to E2E (contacts /
+// contact-navigation / contact-merge / birthdays .spec.ts); what remains is the
+// residual DSH/CAD verifier rows plus the CON-042[0] + DSH-004[2] judge items
+// (38 rows). The classification is now an index-faithful SUBSET of the spec,
+// guarded by grade.test.ts's EXPECTED_ROWS rather than a total-count check. The
+// constant below is no longer asserted anywhere and is retained only until PR4
+// removes the residual verifier machinery.
+export const CLASSIFICATION_ITEM_COUNT = 38
 
 export function classificationFor(behaviorId: string): Classification[] {
   return CLASSIFICATION.filter(c => c.behaviorId === behaviorId).sort(

@@ -65,16 +65,16 @@ describe('draftForCase (mocked stronger-model drafter — offline)', () => {
     ])
   })
 
-  it('does not call the drafter for a behavior with no residue items (CON-044)', async () => {
+  it('does not call the drafter for a behavior with no residue items (CAD-028)', async () => {
     let called = false
     const drafter: Judge = async () => {
       called = true
       return []
     }
     const artifact = await draftForCase(
-      'CON-044-clean',
-      'CON-044',
-      [cap({ behaviors: ['CON-044'] })],
+      'CAD-028-clean',
+      'CAD-028',
+      [cap({ behaviors: ['CAD-028'] })],
       drafter,
       'm'
     )
@@ -105,10 +105,11 @@ describe('draftForCase (mocked stronger-model drafter — offline)', () => {
     expect(sawDialogMessage).toBe('') // the drafter saw the DOCTORED (blanked) dialog
   })
 
-  it('drafts dynamically-unbound residue (no statically judge-tagged items needed)', async () => {
-    // CON-041 has no judge-tagged items; a present capture whose surface
-    // heading is renamed makes [0] emit `unbound`, which the labeling flow
-    // must draft (the old static-fallback flow would have skipped it).
+  it('drafts dynamically-unbound residue alongside the static judge item', async () => {
+    // DSH-004[1] (the overdue error surface) emits `unbound` when the failure
+    // bracket lacks the error heading; the labeling flow must draft it
+    // ALONGSIDE DSH-004's static judge item [2] (the old static-fallback flow
+    // would have skipped the dynamically unbound one).
     const drafter: Judge = async input =>
       input.items.map(i => ({
         itemIndex: i.itemIndex,
@@ -118,14 +119,16 @@ describe('draftForCase (mocked stronger-model drafter — offline)', () => {
       }))
     const captures = [
       cap({
-        behaviors: ['CON-041'],
-        note: 'action=edit consumed',
-        url: '/contacts/x',
-        aria: { role: 'root', children: [{ role: 'heading', name: 'Update Contact' }] },
+        behaviors: ['DSH-004'],
+        pair: { id: 'd', role: 'error' },
+        note: 'overdue request failed',
+        aria: { role: 'root', children: [{ role: 'text', text: 'Something went wrong' }] },
       }),
     ]
-    const artifact = await draftForCase('CON-041-renamed', 'CON-041', captures, drafter, 'strong')
-    expect(artifact.items.map(i => i.then_index)).toContain(0)
+    const artifact = await draftForCase('DSH-004-renamed', 'DSH-004', captures, drafter, 'strong')
+    const idxs = artifact.items.map(i => i.then_index)
+    expect(idxs).toContain(1)
+    expect(idxs).toContain(2)
   })
 })
 

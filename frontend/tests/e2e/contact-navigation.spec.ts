@@ -1,6 +1,13 @@
 import { test, expect } from '@playwright/test'
 import { createTestAPI, TestAPI } from './helpers/test-api'
 
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
+const API_HEADERS = {
+  'X-API-Key': API_KEY,
+  'Content-Type': 'application/json',
+}
+
 test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
   let testApi: TestAPI
 
@@ -107,6 +114,7 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
   })
 
   test('should disable keyboard navigation in edit mode', async ({ page }) => {
+    // spec: CON-040[1]
     // Create 2 contacts
     const { ids } = await testApi.seedContacts([
       { full_name: 'Edit Mode Test A' },
@@ -123,13 +131,18 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: fullNameA })).toBeVisible({ timeout: 15000 })
 
+    // Establish that nav is READY before edit mode — otherwise the disabled
+    // assertion below could pass merely because the id list is still loading.
+    await expect(page.getByText(/\d+ of \d+/)).toBeVisible({ timeout: 10000 })
+    const nextButton = page.getByRole('button', { name: 'Next contact' })
+    await expect(nextButton).toBeEnabled()
+
     // Enter edit mode
     await page.getByRole('button', { name: 'Edit' }).first().click()
     await page.waitForLoadState('domcontentloaded')
 
-    // Navigation buttons should be visually disabled (grayed out)
+    // Now the navigation buttons are disabled BECAUSE of edit mode.
     const prevButton = page.getByRole('button', { name: 'Previous contact' })
-    const nextButton = page.getByRole('button', { name: 'Next contact' })
 
     // Buttons should have disabled styling (opacity or disabled attribute)
     await expect(prevButton).toHaveAttribute('disabled', '')
@@ -143,6 +156,7 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
   })
 
   test('should not navigate when typing in input fields', async ({ page }) => {
+    // spec: CON-040[1]
     // Create 2 contacts
     const { ids } = await testApi.seedContacts([
       { full_name: 'Input Field Test A' },
@@ -242,6 +256,7 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
   })
 
   test('should handle Escape key to return to list', async ({ page }) => {
+    // spec: CON-040[3]
     // Create a contact
     const { ids } = await testApi.seedContacts([{ full_name: 'Escape Test' }])
 
@@ -266,6 +281,7 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
   })
 
   test('should restore search and sort state after Escape back to list', async ({ page }) => {
+    // spec: CON-040[3]
     // Two contacts so search + sort visibly shape the list
     await testApi.seedContacts([
       { full_name: 'Restore State Alpha' },
@@ -300,5 +316,232 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     await expect(page).toHaveURL(/sort=name/)
     await expect(page).toHaveURL(/order=asc/)
     await expect(page.getByPlaceholder('Search contacts...')).toHaveValue(testApi.prefix)
+  })
+
+  test('detail prev/next follows the same default (cadence) ordering as the list', async ({
+    page,
+  }) => {
+    // spec: CON-038[1]
+    // Navigate by CLICKING the seeded row in the default (cadence) list — the
+    // detail must CARRY that ordering context, so prev/next walks the same
+    // cadence order rather than an ordering hand-fed through the URL. Names are
+    // scrambled so alphabetical order (either direction) differs from cadence
+    // order: cadence-desc = Yankee(weekly) → Alpha(monthly) → Mike(annual).
+    const { ids } = await testApi.seedContacts([
+      { full_name: 'Default Nav Mike', cadence: 'annual' },
+      { full_name: 'Default Nav Yankee', cadence: 'weekly' },
+      { full_name: 'Default Nav Alpha', cadence: 'monthly' },
+    ])
+    const annualId = ids[0]
+    const weeklyId = ids[1]
+    const monthlyId = ids[2]
+    const weeklyName = `${testApi.prefix}-Default Nav Yankee`
+    const monthlyName = `${testApi.prefix}-Default Nav Alpha`
+    const annualName = `${testApi.prefix}-Default Nav Mike`
+
+    // Filter the default list to just these three, then open the most-frequent
+    // (weekly) contact by clicking its row. Capture the detail's ids_only nav
+    // request to prove the traversal order itself is cadence, not name.
+    await page.goto('/contacts')
+    await page.waitForLoadState('domcontentloaded')
+    await page.getByPlaceholder('Search contacts...').fill(testApi.prefix)
+    await page.getByPlaceholder('Search contacts...').press('Enter')
+    await expect(page.getByText(weeklyName)).toBeVisible({ timeout: 15000 })
+
+    const navIdsRequest = page.waitForResponse(
+      resp =>
+        resp.request().method() === 'GET' &&
+        new URL(resp.url()).searchParams.get('ids_only') === 'true'
+    )
+    await page.getByText(weeklyName).click()
+    await page.waitForURL(new RegExp(`/contacts/${weeklyId}`))
+    await expect(page.getByRole('heading', { name: weeklyName })).toBeVisible({ timeout: 15000 })
+
+    // The list's ordering context traveled into the detail URL AND the nav
+    // request (cadence-desc) — the traversal order is cadence, not name.
+    await expect(page).toHaveURL(/sort=cadence/)
+    await expect(page).toHaveURL(/order=desc/)
+    const navParams = new URL((await navIdsRequest).url()).searchParams
+    expect(navParams.get('sort')).toBe('cadence')
+    expect(navParams.get('order')).toBe('desc')
+    // Keyboard nav is disabled until the navigation id list loads.
+    await expect(page.getByText(/\d+ of \d+/)).toBeVisible({ timeout: 10000 })
+
+    // Weekly is first in cadence-desc order → Previous disabled at this boundary.
+    await expect(page.getByRole('button', { name: 'Previous contact' })).toBeDisabled()
+
+    // Next walks weekly → monthly → annual (most- to least-frequent). Wait for
+    // each incoming contact to finish loading before the next press — keyboard
+    // nav is disabled while the contact is still fetching.
+    await page.keyboard.press('ArrowRight')
+    await page.waitForURL(new RegExp(`/contacts/${monthlyId}`))
+    await expect(page.getByRole('heading', { name: monthlyName })).toBeVisible({ timeout: 10000 })
+    await page.keyboard.press('ArrowRight')
+    await page.waitForURL(new RegExp(`/contacts/${annualId}`))
+    await expect(page.getByRole('heading', { name: annualName })).toBeVisible({ timeout: 10000 })
+
+    // Annual is last → Next disabled at the far boundary.
+    await expect(page.getByRole('button', { name: 'Next contact' })).toBeDisabled()
+  })
+
+  test('arrow keys move to the previous/next contact and disable at both boundaries', async ({
+    page,
+  }) => {
+    // spec: CON-040[0]
+    // Seed a known name-asc order and isolate the set via search, so a pass
+    // proves real movement to the adjacent contact (the @smoke test only checks
+    // the URL still contains /contacts/).
+    const { ids } = await testApi.seedContacts([
+      { full_name: 'Kbd Move Alpha' },
+      { full_name: 'Kbd Move Bravo' },
+      { full_name: 'Kbd Move Charlie' },
+    ])
+    const alphaId = ids[0]
+    const bravoId = ids[1]
+    const charlieId = ids[2]
+    const alphaName = `${testApi.prefix}-Kbd Move Alpha`
+    const bravoName = `${testApi.prefix}-Kbd Move Bravo`
+    const charlieName = `${testApi.prefix}-Kbd Move Charlie`
+
+    // Open the middle contact under an explicit name-asc order.
+    await page.goto(
+      `/contacts/${bravoId}?sort=name&order=asc&search=${encodeURIComponent(testApi.prefix)}`
+    )
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: bravoName })).toBeVisible({ timeout: 15000 })
+    // Keyboard nav is disabled until the navigation id list loads.
+    await expect(page.getByText(/\d+ of \d+/)).toBeVisible({ timeout: 10000 })
+
+    // Right → next (Charlie); Left → previous (Alpha). Wait for each incoming
+    // contact to finish loading before the next press (keyboard nav is disabled
+    // while it fetches).
+    await page.keyboard.press('ArrowRight')
+    await page.waitForURL(u => u.pathname === `/contacts/${charlieId}`)
+    await expect(page.getByRole('heading', { name: charlieName })).toBeVisible({ timeout: 10000 })
+    await page.keyboard.press('ArrowLeft')
+    await page.waitForURL(u => u.pathname === `/contacts/${bravoId}`)
+    await expect(page.getByRole('heading', { name: bravoName })).toBeVisible({ timeout: 10000 })
+    await page.keyboard.press('ArrowLeft')
+    await page.waitForURL(u => u.pathname === `/contacts/${alphaId}`)
+    await expect(page.getByRole('heading', { name: alphaName })).toBeVisible({ timeout: 10000 })
+
+    // Alpha is first → Previous disabled at the near boundary.
+    await expect(page.getByRole('button', { name: 'Previous contact' })).toBeDisabled()
+
+    // Walk to the last contact → Next disabled at the far boundary.
+    await page.keyboard.press('ArrowRight')
+    await page.waitForURL(u => u.pathname === `/contacts/${bravoId}`)
+    await expect(page.getByRole('heading', { name: bravoName })).toBeVisible({ timeout: 10000 })
+    await page.keyboard.press('ArrowRight')
+    await page.waitForURL(u => u.pathname === `/contacts/${charlieId}`)
+    await expect(page.getByRole('heading', { name: charlieName })).toBeVisible({ timeout: 10000 })
+    await expect(page.getByRole('button', { name: 'Next contact' })).toBeDisabled()
+  })
+
+  test('Enter opens edit mode when focus is outside an input', async ({ page }) => {
+    // spec: CON-040[2]
+    const { ids } = await testApi.seedContacts([{ full_name: 'Enter Edit Test' }])
+    const fullName = `${testApi.prefix}-Enter Edit Test`
+
+    await page.goto(`/contacts/${ids[0]}`)
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+
+    // Click the (non-interactive) name heading so focus is not on the Edit
+    // button or any input, then press Enter.
+    await page.getByRole('heading', { name: fullName }).click()
+    await page.keyboard.press('Enter')
+
+    await expect(page.getByRole('heading', { name: 'Edit Contact' })).toBeVisible({
+      timeout: 10000,
+    })
+  })
+
+  test('Escape discards an unsaved edit without persisting the change', async ({
+    page,
+    request,
+  }) => {
+    // spec: CON-040[3]
+    const { ids } = await testApi.seedContacts([{ full_name: 'Discard Edit Test' }])
+    const contactId = ids[0]
+    const fullName = `${testApi.prefix}-Discard Edit Test`
+    const changedName = `${testApi.prefix}-Discard Edit CHANGED`
+
+    await page.goto(`/contacts/${contactId}`)
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+
+    // Watch for any contact-update request — discarding must not persist.
+    let updateFired = false
+    const watchUpdate = (req: import('@playwright/test').Request) => {
+      const m = req.method()
+      if ((m === 'PUT' || m === 'PATCH') && req.url().includes(`/api/v1/contacts/${contactId}`)) {
+        updateFired = true
+      }
+    }
+    page.on('request', watchUpdate)
+
+    // Enter edit mode and modify the name.
+    await page.getByRole('button', { name: 'Edit' }).first().click()
+    await expect(page.getByRole('heading', { name: 'Edit Contact' })).toBeVisible({
+      timeout: 10000,
+    })
+    const nameInput = page.getByLabel('Full Name')
+    await nameInput.fill(changedName)
+
+    // Blur the input (Escape is ignored while an input is focused), then Escape.
+    await page.getByRole('heading', { name: 'Edit Contact' }).click()
+    await page.keyboard.press('Escape')
+
+    // Edit mode exits back to the read view AND the modified value did not persist.
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 10000 })
+    await expect(page.getByRole('heading', { name: 'Edit Contact' })).not.toBeVisible()
+    await expect(page.getByRole('heading', { name: changedName })).not.toBeVisible()
+
+    // No update request fired, and the stored name is still the original.
+    page.off('request', watchUpdate)
+    expect(updateFired).toBe(false)
+    const stored = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
+      headers: API_HEADERS,
+    })
+    expect(stored.ok()).toBeTruthy()
+    expect((await stored.json()).data.full_name).toBe(fullName)
+  })
+
+  test('arrows are inert while focus is in an input outside edit mode', async ({ page }) => {
+    // spec: CON-040[1]
+    // The Log Interaction modal keeps keyboard nav ENABLED (it is not edit
+    // mode), so focusing its input exercises the hook's input-target guard
+    // specifically — unlike edit mode, which disables the whole hook and would
+    // mask a regression in that guard.
+    const { ids } = await testApi.seedContacts([
+      { full_name: 'Modal Input Nav A' },
+      { full_name: 'Modal Input Nav B' },
+    ])
+    const firstName = `${testApi.prefix}-Modal Input Nav A`
+
+    // Open the first of two contacts with nav context so Next is a real move.
+    await page.goto(
+      `/contacts/${ids[0]}?sort=name&order=asc&search=${encodeURIComponent(testApi.prefix)}`
+    )
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: firstName })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByText(/\d+ of \d+/)).toBeVisible({ timeout: 10000 })
+    // Next is enabled — arrows WOULD move if the input guard were removed.
+    await expect(page.getByRole('button', { name: 'Next contact' })).toBeEnabled()
+
+    const url = page.url()
+
+    // Open the Log Interaction modal (keyboard nav stays enabled — not edit mode).
+    await page.getByRole('button', { name: 'Log Interaction' }).click()
+    await expect(page.getByRole('dialog')).toBeVisible()
+
+    // Focus the modal's date input and press the arrow keys — they move the
+    // cursor within the input, not the contact.
+    const dateInput = page.getByTestId('log-interaction-date-input')
+    await dateInput.focus()
+    await dateInput.press('ArrowRight')
+    await dateInput.press('ArrowLeft')
+    await expect(page).toHaveURL(url, { timeout: 500 })
   })
 })

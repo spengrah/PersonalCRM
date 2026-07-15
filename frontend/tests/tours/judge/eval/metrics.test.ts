@@ -8,7 +8,7 @@ import {
   total,
 } from './metrics'
 import { runEval } from './core'
-import { cap, apiItem, pair, root } from '../grader/fixtures'
+import { cap, apiItem, pair } from '../grader/fixtures'
 import type { Case } from '../corpus/schema'
 import type { Capture } from '../../support/types'
 
@@ -54,36 +54,23 @@ describe('selfConsistency', () => {
 
 // --- End-to-end eval on in-memory doctored self-labeled cases ---
 
-// A CON-041 clean bracket (edit + merge captures) and its doctored twin.
-function con041Captures(): Capture[] {
+// A CAD-028 clean mark-contacted bracket (mutual POST on /dashboard) and its
+// doctored twin. CAD-028 is a plain verifier (no judge/unbound rows), so it
+// exercises the eval pipeline over deterministic verifier items only.
+function cad028Captures(): Capture[] {
   return [
     cap({
-      behaviors: ['CON-041'],
-      note: 'action=edit consumed once and stripped from URL',
-      url: '/contacts/<id:1>?sort=cadence&order=desc',
-      aria: root([{ role: 'heading', name: 'Edit Contact', level: 2 }]),
-    }),
-    cap({
-      behaviors: ['CON-041'],
-      note: 'action=merge consumed once and stripped from URL',
-      url: '/contacts/<id:1>?sort=cadence&order=desc',
-      aria: root([{ role: 'heading', name: 'Merge Contacts', level: 2 }]),
-    }),
-  ]
-}
-
-function con044Captures(): Capture[] {
-  return [
-    cap({
-      behaviors: ['CON-044'],
-      pair: pair('mc', 'after'),
+      behaviors: ['CAD-028'],
+      pair: pair('mc', 'mark-after'),
+      url: '/dashboard',
       apiResponses: {
         'POST /api/v1/contacts/:id/interactions': [
           apiItem({
             method: 'POST',
+            requestUrl: '/api/v1/contacts/<id:1>/interactions',
             status: 201,
             requestBody: { direction: 'mutual' },
-            body: { data: { direction: 'mutual', occurred_at: '2026-07-12T16:14:34Z' } },
+            body: { data: { direction: 'mutual', occurred_at: '2026-07-12T15:00:00Z' } },
           }),
         ],
       },
@@ -92,44 +79,25 @@ function con044Captures(): Capture[] {
 }
 
 const capturesByCase: Record<string, () => Capture[]> = {
-  'CON-041-clean': con041Captures,
-  'CON-041-doctored': con041Captures,
-  'CON-044-clean': con044Captures,
-  'CON-044-doctored': con044Captures,
+  'CAD-028-clean': cad028Captures,
+  'CAD-028-doctored': cad028Captures,
 }
 
 const cases: Case[] = [
   {
-    id: 'CON-041-clean',
-    behavior_id: 'CON-041',
+    id: 'CAD-028-clean',
+    behavior_id: 'CAD-028',
     captures: ['x'],
     source: 'clean',
-    expected: [
-      { then_index: 0, grader: 'verifier', verdict: 'pass' },
-      { then_index: 1, grader: 'verifier', verdict: 'pass' },
-    ],
+    expected: [{ then_index: 0, grader: 'verifier', verdict: 'pass' }],
   },
   {
-    id: 'CON-041-doctored',
-    behavior_id: 'CON-041',
+    id: 'CAD-028-doctored',
+    behavior_id: 'CAD-028',
     captures: ['x'],
     source: 'doctored',
     doctor: {
-      base_case: 'CON-041-clean',
-      mutation: { op: 'inject_query', param: 'action', value: 'edit' },
-    },
-    expected: [
-      { then_index: 0, grader: 'verifier', verdict: 'pass' },
-      { then_index: 1, grader: 'verifier', verdict: 'fail' }, // self-labeled by the mutation
-    ],
-  },
-  {
-    id: 'CON-044-doctored',
-    behavior_id: 'CON-044',
-    captures: ['x'],
-    source: 'doctored',
-    doctor: {
-      base_case: 'CON-044-clean',
+      base_case: 'CAD-028-clean',
       mutation: { op: 'delete_endpoint', endpoint: 'POST /api/v1/contacts/:id/interactions' },
     },
     expected: [{ then_index: 0, grader: 'verifier', verdict: 'fail' }],
@@ -140,26 +108,21 @@ describe('runEval end-to-end on doctored self-labeled cases (verifiers-only)', (
   it('catches every doctored fail with zero collateral (no regressions)', async () => {
     const result = await runEval(cases, c => capturesByCase[c.id]())
     expect(result.regressions).toEqual([])
-    // The doctored CON-041[1] and CON-044[0] predicted fail (caught).
-    const doctored041 = result.cases.find(c => c.caseId === 'CON-041-doctored')
-    expect(doctored041?.items.find(i => i.thenIndex === 1)?.predicted).toBe('fail')
-    const doctored044 = result.cases.find(c => c.caseId === 'CON-044-doctored')
-    expect(doctored044?.items[0].predicted).toBe('fail')
+    // The doctored CAD-028[0] predicted fail (the deleted interaction POST is caught).
+    const doctored = result.cases.find(c => c.caseId === 'CAD-028-doctored')
+    expect(doctored?.items.find(i => i.thenIndex === 0)?.predicted).toBe('fail')
   })
 
   it('reports a regression when a doctored case is mislabeled (self-check)', async () => {
     const broken: Case[] = [
       {
         ...cases[0],
-        id: 'CON-041-broken',
-        // Claim item 1 should FAIL on a CLEAN capture — the grader says pass → regression.
-        expected: [
-          { then_index: 0, grader: 'verifier', verdict: 'pass' },
-          { then_index: 1, grader: 'verifier', verdict: 'fail' },
-        ],
+        id: 'CAD-028-broken',
+        // Claim item 0 should FAIL on a CLEAN capture — the grader says pass → regression.
+        expected: [{ then_index: 0, grader: 'verifier', verdict: 'fail' }],
       },
     ]
-    const result = await runEval(broken, () => con041Captures())
+    const result = await runEval(broken, () => cad028Captures())
     expect(result.regressions.length).toBe(1)
   })
 })

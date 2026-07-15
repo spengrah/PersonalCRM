@@ -1,39 +1,75 @@
 import { describe, it, expect } from 'vitest'
-import { CLASSIFICATION, CLASSIFICATION_ITEM_COUNT, classificationFor } from './classification'
-import { aggregate, applyGrounding, gradeBehavior, groupByBehavior } from './grade'
+import { CLASSIFICATION } from './classification'
+import { SPEC_CATALOG } from '../spec-catalog'
+import { aggregate, applyGrounding, gradeBehavior, groupByBehavior, runVerifiers } from './grade'
+import { judgeItemsFor } from '../judge-input'
 import { apiItem, cap, pair } from './fixtures'
 
+// The index-faithful subset guard (INV-1): CLASSIFICATION is pinned to an
+// EXPLICIT expected set of `${behaviorId}[${thenIndex}]:${grader}` rows. A
+// migrated verifier row leaving (or a survivor silently re-indexed to a
+// different valid catalog slot) shows up as a diff here. `thenIndex` stays
+// faithful to the spec position and is never re-indexed, so a partially
+// migrated behavior may keep a non-zero / gapped index (e.g. DSH-004[2]).
+const EXPECTED_ROWS = [
+  'CON-042[0]:judge',
+  'DSH-001[0]:verifier',
+  'DSH-002[0]:verifier',
+  'DSH-002[1]:verifier',
+  'DSH-002[2]:verifier',
+  'DSH-003[0]:verifier',
+  'DSH-003[1]:verifier',
+  'DSH-004[0]:verifier',
+  'DSH-004[1]:verifier',
+  'DSH-004[2]:judge',
+  'DSH-005[0]:verifier',
+  'DSH-005[1]:verifier',
+  'DSH-005[2]:verifier',
+  'DSH-005[3]:verifier',
+  'DSH-007[0]:verifier',
+  'DSH-007[1]:verifier',
+  'CAD-026[0]:verifier',
+  'CAD-026[1]:verifier',
+  'CAD-026[2]:verifier',
+  'CAD-027[0]:verifier',
+  'CAD-027[1]:verifier',
+  'CAD-027[2]:verifier',
+  'CAD-028[0]:verifier',
+  'CAD-028[1]:verifier',
+  'CAD-028[2]:verifier',
+  'CAD-029[0]:verifier',
+  'CAD-029[1]:verifier',
+  'CAD-029[2]:verifier',
+  'CAD-029[3]:verifier',
+  'CAD-030[0]:verifier',
+  'CAD-030[1]:verifier',
+  'CAD-030[2]:verifier',
+  'CAD-030[3]:verifier',
+  'CAD-031[0]:verifier',
+  'CAD-031[1]:verifier',
+  'CAD-031[2]:verifier',
+  'CAD-033[0]:verifier',
+  'CAD-033[1]:verifier',
+]
+
 describe('classification map', () => {
-  it('has exactly one row per spec then-item (60 total, index-faithful)', () => {
-    expect(CLASSIFICATION).toHaveLength(CLASSIFICATION_ITEM_COUNT)
-    const counts: Record<string, number> = {}
-    for (const c of CLASSIFICATION) counts[c.behaviorId] = (counts[c.behaviorId] ?? 0) + 1
-    expect(counts).toEqual({
-      'CON-038': 2,
-      'CON-040': 4,
-      'CON-041': 2,
-      'CON-042': 3,
-      'CON-043': 6,
-      'CON-044': 1,
-      'CON-045': 5,
-      'DSH-001': 1,
-      'DSH-002': 3,
-      'DSH-003': 2,
-      'DSH-004': 3,
-      'DSH-005': 4,
-      'DSH-007': 2,
-      'CAD-026': 3,
-      'CAD-027': 3,
-      'CAD-028': 3,
-      'CAD-029': 4,
-      'CAD-030': 4,
-      'CAD-031': 3,
-      'CAD-033': 2,
-    })
-    // then indices are 0..n-1 with no gaps/dupes
-    for (const b of Object.keys(counts)) {
-      const idxs = classificationFor(b).map(c => c.thenIndex)
-      expect(idxs).toEqual([...Array(counts[b]).keys()])
+  it('matches the explicit index-faithful expected row set (INV-1)', () => {
+    const actual = CLASSIFICATION.map(c => `${c.behaviorId}[${c.thenIndex}]:${c.grader}`).sort()
+    expect(actual).toEqual([...EXPECTED_ROWS].sort())
+  })
+
+  it('has unique (behaviorId, thenIndex) keys', () => {
+    const keys = CLASSIFICATION.map(c => `${c.behaviorId}[${c.thenIndex}]`)
+    expect(new Set(keys).size).toBe(keys.length)
+  })
+
+  it('indexes every row within its catalog then-item ceiling (SSOT proxy)', () => {
+    for (const c of CLASSIFICATION) {
+      const spec = SPEC_CATALOG[c.behaviorId]
+      expect(spec, `${c.behaviorId} catalog entry`).toBeDefined()
+      expect(c.thenIndex, `${c.behaviorId}[${c.thenIndex}] within then.length`).toBeLessThan(
+        spec.then.length
+      )
     }
   })
 
@@ -47,32 +83,52 @@ describe('classification map', () => {
 })
 
 describe('unbound routing', () => {
-  // CON-041[0] emits `unbound` when the surface heading anchor is missing from
-  // a present capture (copy anchor — possibly renamed).
+  // DSH-004[1] (the overdue error surface) emits `unbound` when the failure
+  // bracket lacks the 'Error loading overdue contacts' heading and shows no
+  // caught-up/cards — the error copy may be renamed. It routes to the judge
+  // dynamically, alongside DSH-004's static judge item [2].
   const unboundSet = () => ({
-    behaviorId: 'CON-041',
+    behaviorId: 'DSH-004',
     captures: [
       cap({
-        behaviors: ['CON-041'],
-        note: 'action=edit consumed',
-        url: '/contacts/x',
-        aria: { role: 'root' as const, children: [{ role: 'heading', name: 'Something Else' }] },
+        behaviors: ['DSH-004'],
+        pair: pair('d', 'error'),
+        note: 'overdue request failed',
+        aria: { role: 'root' as const, children: [{ role: 'text', text: 'Something went wrong' }] },
       }),
     ],
   })
 
-  it('routes an unbound verifier item to the judge verdict when available', () => {
+  it('routes the dynamic unbound item [1] to the judge alongside the static judge item [2]', () => {
     const grade = gradeBehavior(unboundSet(), {
-      judge: { 0: { verdict: 'fail', citation: 'CAPTURE[0]: heading "Something Else"' } },
+      judge: {
+        1: { verdict: 'fail', citation: 'CAPTURE[0]: error surface' },
+        2: { verdict: 'pass', citation: 'the shown reason matches the failure' },
+      },
     })
-    const item = grade.items.find(i => i.thenIndex === 0)
-    expect(item?.source).toBe('judge')
-    expect(item?.verdict).toBe('fail')
+    const dynamic = grade.items.find(i => i.thenIndex === 1)
+    expect(dynamic?.grader).toBe('verifier')
+    expect(dynamic?.source).toBe('judge')
+    expect(dynamic?.verdict).toBe('fail')
+    // DSH-004's static judge item [2] is graded by the same judge call.
+    const staticJudge = grade.items.find(i => i.thenIndex === 2)
+    expect(staticJudge?.grader).toBe('judge')
+    expect(staticJudge?.source).toBe('judge')
+    expect(staticJudge?.verdict).toBe('pass')
+  })
+
+  it('selects both the dynamic unbound [1] and the static judge [2] as judge residue', () => {
+    // Mirrors the runner/label two-phase recipe: the residue sent to the judge
+    // includes the dynamically-unbound [1] AND the statically judge-tagged [2].
+    const set = unboundSet()
+    const residue = judgeItemsFor('DSH-004', runVerifiers(set)).map(i => i.itemIndex)
+    expect(residue).toContain(1)
+    expect(residue).toContain(2)
   })
 
   it('grades an unrouted unbound item as pending unsure (verifiers-only mode)', () => {
     const grade = gradeBehavior(unboundSet())
-    const item = grade.items.find(i => i.thenIndex === 0)
+    const item = grade.items.find(i => i.thenIndex === 1)
     expect(item?.source).toBe('pending')
     expect(item?.verdict).toBe('unsure')
     expect(item?.reason).toMatch(/judge routing pending/)
@@ -127,8 +183,8 @@ describe('gradeBehavior', () => {
     expect(judgeItem?.grader).toBe('judge')
     expect(judgeItem?.source).toBe('pending')
     expect(judgeItem?.verdict).toBe('unsure')
-    // The behavior aggregates to unsure (a judge item is pending) even though
-    // the verifier items pass.
+    // CON-042 now has only the judge item [0] (its verifier items migrated to
+    // E2E), so with the judge pending the behavior aggregates to unsure.
     expect(g.behaviorVerdict).toBe('unsure')
   })
 
