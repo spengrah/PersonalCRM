@@ -225,6 +225,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
   })
 
   test('should navigate to edit mode via context menu Edit action', async ({ page }) => {
+    // spec: CON-041[0], CON-041[1]
     const { ids } = await testApi.seedContacts([{ full_name: 'Context Edit Test' }])
 
     const contactId = ids[0]
@@ -250,9 +251,14 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await expect(page.getByRole('heading', { name: 'Edit Contact' })).toBeVisible({
       timeout: 15000,
     })
+
+    // The action param is consumed once, then stripped from the URL (mount-only
+    // router.replace) so a refresh does not re-trigger it.
+    await expect(page).not.toHaveURL(/action=/)
   })
 
   test('should navigate to merge modal via context menu Merge action', async ({ page }) => {
+    // spec: CON-041[0], CON-041[1]
     const { ids } = await testApi.seedContacts([{ full_name: 'Context Merge Test' }])
 
     const contactId = ids[0]
@@ -278,6 +284,10 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await expect(page.getByRole('heading', { name: 'Merge Contacts' })).toBeVisible({
       timeout: 15000,
     })
+
+    // The action param is consumed once, then stripped from the URL (mount-only
+    // router.replace) so a refresh does not re-trigger it.
+    await expect(page).not.toHaveURL(/action=/)
   })
 
   test('should log a mutual interaction via the Log Interaction modal default', async ({

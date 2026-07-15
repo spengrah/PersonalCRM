@@ -30,14 +30,8 @@ export const CLASSIFICATION: Classification[] = [
   // CON-040 (keyboard navigation drives the detail page) migrated to E2E:
   // contact-navigation.spec.ts (see `// spec: CON-040`).
 
-  // --- CON-041: action parameters trigger once and are consumed ---
-  {
-    behaviorId: 'CON-041',
-    thenIndex: 0,
-    grader: 'verifier',
-    note: 'the action runs once (edit opens / merge modal opens)',
-  },
-  { behaviorId: 'CON-041', thenIndex: 1, grader: 'verifier', note: 'parameter stripped from URL' },
+  // CON-041 (action parameters trigger once and are consumed) migrated to E2E:
+  // contacts.spec.ts (see `// spec: CON-041`).
 
   // --- CON-042: deleting a contact requires explicit confirmation ---
   {

@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { apiItem, cap, frame, pair, root } from './fixtures'
 import type { CaptureSet } from './types'
-import { con041 } from './verifiers/con041'
 import { con042 } from './verifiers/con042'
 import { con043 } from './verifiers/con043'
 import { con044 } from './verifiers/con044'
@@ -11,50 +10,6 @@ import type { Capture } from '../../support/types'
 function set(behaviorId: string, captures: Capture[]): CaptureSet {
   return { behaviorId, captures }
 }
-
-// --- CON-041 ---
-describe('con041', () => {
-  const build = (editUrl = '/contacts/<id:1>?sort=cadence&order=desc'): Capture[] => [
-    cap({
-      behaviors: ['CON-041'],
-      note: 'action=edit consumed once and stripped from URL',
-      url: editUrl,
-      aria: root([{ role: 'heading', name: 'Edit Contact', level: 2 }]),
-    }),
-    cap({
-      behaviors: ['CON-041'],
-      note: 'action=merge consumed once and stripped from URL',
-      url: '/contacts/<id:1>?sort=cadence&order=desc',
-      aria: root([{ role: 'heading', name: 'Merge Contacts', level: 2 }]),
-    }),
-  ]
-
-  it('clean: [0] and [1] pass', () => {
-    const v = con041(set('CON-041', build()))
-    expect(v[0].verdict).toBe('pass')
-    expect(v[1].verdict).toBe('pass')
-  })
-
-  it('doctored: re-injected action=edit → [1] fail', () => {
-    const v = con041(set('CON-041', build('/contacts/<id:1>?sort=cadence&order=desc&action=edit')))
-    expect(v[1].verdict).toBe('fail')
-  })
-
-  it('renamed surface heading → [0] unbound (routed to the judge, never fail)', () => {
-    const caps = build()
-    const renamed = [
-      { ...caps[0], aria: root([{ role: 'heading', name: 'Update Contact', level: 2 }]) },
-      caps[1],
-    ]
-    expect(con041(set('CON-041', renamed))[0].verdict).toBe('unbound')
-  })
-
-  it('missing evidence → unsure', () => {
-    const v = con041(set('CON-041', []))
-    expect(v[0].verdict).toBe('unsure')
-    expect(v[1].verdict).toBe('unsure')
-  })
-})
 
 // --- CON-042 ---
 describe('con042', () => {
