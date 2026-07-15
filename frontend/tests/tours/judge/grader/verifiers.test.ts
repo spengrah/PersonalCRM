@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { apiItem, cap, frame, pair, root } from './fixtures'
 import type { CaptureSet } from './types'
-import { con038 } from './verifiers/con038'
 import { con040 } from './verifiers/con040'
 import { con041 } from './verifiers/con041'
 import { con042 } from './verifiers/con042'
@@ -13,114 +12,6 @@ import type { Capture } from '../../support/types'
 function set(behaviorId: string, captures: Capture[]): CaptureSet {
   return { behaviorId, captures }
 }
-
-// --- CON-038 ---
-describe('con038', () => {
-  const listCap = cap({
-    behaviors: ['CON-038'],
-    pair: pair('d', 'list'),
-    apiResponses: {
-      'GET /api/v1/contacts': [
-        apiItem({
-          query: { sort: 'cadence', order: 'desc' },
-          body: {
-            data: [
-              { id: '<id:1>', cadence: 'weekly' },
-              { id: '<id:2>', cadence: 'monthly' },
-              { id: '<id:3>', cadence: 'annual' },
-            ],
-          },
-        }),
-      ],
-    },
-  })
-  const detailCap = (ids: string[]) =>
-    cap({
-      behaviors: ['CON-038'],
-      pair: pair('d', 'detail'),
-      apiResponses: {
-        'GET /api/v1/contacts': [
-          apiItem({
-            query: { ids_only: 'true', sort: 'cadence', order: 'desc' },
-            body: { data: { ids, total: ids.length } },
-          }),
-        ],
-      },
-    })
-
-  it('clean: [0] abstains with the caveat, [1] passes (ids_only == list order)', () => {
-    const v = con038(set('CON-038', [listCap, detailCap(['<id:1>', '<id:2>', '<id:3>', '<id:4>'])]))
-    expect(v[0].verdict).toBe('unsure')
-    expect(v[0].reason).toMatch(/holds/)
-    expect(v[1].verdict).toBe('pass')
-  })
-
-  it('doctored: shuffled detail ids_only order → [1] fail', () => {
-    const v = con038(set('CON-038', [listCap, detailCap(['<id:2>', '<id:1>', '<id:3>'])]))
-    expect(v[1].verdict).toBe('fail')
-  })
-
-  // Follow-up 3: the bare-/contacts capture proves the implicit no-sort default.
-  const bareCap = (cadences: string[]) =>
-    cap({
-      behaviors: ['CON-038'],
-      pair: pair('d', 'list-bare'),
-      apiResponses: {
-        'GET /api/v1/contacts': [
-          apiItem({
-            query: {},
-            body: { data: cadences.map((c, i) => ({ id: `<id:${i + 1}>`, cadence: c })) },
-          }),
-        ],
-      },
-    })
-
-  it('bare-/contacts capture, ordered → [0] pass', () => {
-    const v = con038(
-      set('CON-038', [listCap, bareCap(['weekly', 'monthly', 'annual']), detailCap(['<id:1>'])])
-    )
-    expect(v[0].verdict).toBe('pass')
-  })
-
-  it('bare-/contacts capture, VIOLATED order → [0] fail', () => {
-    // monthly (rank 2) before weekly (rank 0) violates most-frequent-first.
-    const v = con038(set('CON-038', [bareCap(['monthly', 'weekly'])]))
-    expect(v[0].verdict).toBe('fail')
-  })
-
-  it('no bare capture, explicit-sort ordered → [0] abstains with the caveat', () => {
-    const v = con038(set('CON-038', [listCap]))
-    expect(v[0].verdict).toBe('unsure')
-    expect(v[0].reason).toMatch(/holds/)
-  })
-
-  it('no bare capture, explicit-sort VIOLATED → [0] fail (a captured violation is real)', () => {
-    const badList = cap({
-      behaviors: ['CON-038'],
-      pair: pair('d', 'list'),
-      apiResponses: {
-        'GET /api/v1/contacts': [
-          apiItem({
-            query: { sort: 'cadence', order: 'desc' },
-            body: {
-              data: [
-                { id: '<id:1>', cadence: 'monthly' },
-                { id: '<id:2>', cadence: 'weekly' },
-              ],
-            },
-          }),
-        ],
-      },
-    })
-    expect(con038(set('CON-038', [badList]))[0].verdict).toBe('fail')
-  })
-
-  it('missing evidence → unsure (never a false fail)', () => {
-    const v = con038(set('CON-038', []))
-    expect(v[0].verdict).toBe('unsure')
-    expect(v[1].verdict).toBe('unsure')
-  })
-})
 
 // --- CON-040 ---
 describe('con040', () => {

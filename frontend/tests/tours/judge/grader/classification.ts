@@ -24,19 +24,8 @@ export interface Classification {
 }
 
 export const CLASSIFICATION: Classification[] = [
-  // --- CON-038: list + detail share one default ordering ---
-  {
-    behaviorId: 'CON-038',
-    thenIndex: 0,
-    grader: 'verifier',
-    note: 'list defaults to cadence order, most frequent first (bare-/contacts capture proves the implicit default)',
-  },
-  {
-    behaviorId: 'CON-038',
-    thenIndex: 1,
-    grader: 'verifier',
-    note: 'detail prev/next uses the same default ordering (ids_only order == list order)',
-  },
+  // CON-038 (list + detail share one default ordering) migrated to E2E:
+  // contacts.spec.ts + contact-navigation.spec.ts (see `// spec: CON-038`).
 
   // --- CON-040: keyboard navigation drives the detail page ---
   {

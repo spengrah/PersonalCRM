@@ -418,6 +418,44 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     expect(afterContact.last_response_at).toBeTruthy()
     expect(afterContact.last_outreach_at ?? null).toBe(lastOutreachBefore)
   })
+
+  test('defaults the contact list to cadence order, most-frequent-first', async ({ page }) => {
+    // spec: CON-038[0]
+    // Seeded in a deliberately NON-frequency order so a pass proves the default
+    // sort (cadence desc), not insertion order. Distinct from the explicit
+    // "sort by frequency" header-click test — this loads with no sort param.
+    await testApi.seedContacts([
+      { full_name: 'Cadence Default Annual', cadence: 'annual' },
+      { full_name: 'Cadence Default Weekly', cadence: 'weekly' },
+      { full_name: 'Cadence Default Monthly', cadence: 'monthly' },
+    ])
+
+    await page.goto('/contacts')
+    await page.waitForLoadState('domcontentloaded')
+    // Scope to this test's rows; no sort param is applied → the implicit default.
+    await page.getByPlaceholder('Search contacts...').fill(testApi.prefix)
+    await page.getByPlaceholder('Search contacts...').press('Enter')
+
+    const weeklyRow = page.locator('tr', {
+      has: page.getByText(`${testApi.prefix}-Cadence Default Weekly`),
+    })
+    const monthlyRow = page.locator('tr', {
+      has: page.getByText(`${testApi.prefix}-Cadence Default Monthly`),
+    })
+    const annualRow = page.locator('tr', {
+      has: page.getByText(`${testApi.prefix}-Cadence Default Annual`),
+    })
+    await expect(weeklyRow).toBeVisible({ timeout: 15000 })
+    await expect(monthlyRow).toBeVisible()
+    await expect(annualRow).toBeVisible()
+
+    // Most-frequent-first: weekly above monthly above annual by vertical position.
+    const weeklyY = (await weeklyRow.boundingBox())!.y
+    const monthlyY = (await monthlyRow.boundingBox())!.y
+    const annualY = (await annualRow.boundingBox())!.y
+    expect(weeklyY).toBeLessThan(monthlyY)
+    expect(monthlyY).toBeLessThan(annualY)
+  })
 })
 
 test.describe('Contacts - Cadence Filter @area:contacts', () => {

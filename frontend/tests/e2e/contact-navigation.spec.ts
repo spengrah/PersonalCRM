@@ -301,4 +301,44 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     await expect(page).toHaveURL(/order=asc/)
     await expect(page.getByPlaceholder('Search contacts...')).toHaveValue(testApi.prefix)
   })
+
+  test('detail prev/next follows the same default (cadence) ordering as the list', async ({
+    page,
+  }) => {
+    // spec: CON-038[1]
+    // No sort param anywhere → the default cadence-desc order. Seeded scrambled
+    // so the order weekly→monthly→annual proves the shared default, not
+    // insertion. The existing nav tests all pin an explicit sort=name; this one
+    // exercises the implicit default the list and detail share.
+    const { ids } = await testApi.seedContacts([
+      { full_name: 'Default Nav Annual', cadence: 'annual' },
+      { full_name: 'Default Nav Weekly', cadence: 'weekly' },
+      { full_name: 'Default Nav Monthly', cadence: 'monthly' },
+    ])
+    const annualId = ids[0]
+    const weeklyId = ids[1]
+    const monthlyId = ids[2]
+
+    // Open the most-frequent (weekly) contact with only the search context — no
+    // sort param, so the detail nav uses the default cadence ordering.
+    await page.goto(`/contacts/${weeklyId}?search=${encodeURIComponent(testApi.prefix)}`)
+    await page.waitForLoadState('domcontentloaded')
+    await expect(
+      page.getByRole('heading', { name: `${testApi.prefix}-Default Nav Weekly` })
+    ).toBeVisible({
+      timeout: 15000,
+    })
+
+    // Weekly is first in cadence-desc order → Previous disabled at this boundary.
+    await expect(page.getByRole('button', { name: 'Previous contact' })).toBeDisabled()
+
+    // Next walks weekly → monthly → annual (most- to least-frequent).
+    await page.keyboard.press('ArrowRight')
+    await page.waitForURL(new RegExp(`/contacts/${monthlyId}`))
+    await page.keyboard.press('ArrowRight')
+    await page.waitForURL(new RegExp(`/contacts/${annualId}`))
+
+    // Annual is last → Next disabled at the far boundary.
+    await expect(page.getByRole('button', { name: 'Next contact' })).toBeDisabled()
+  })
 })
