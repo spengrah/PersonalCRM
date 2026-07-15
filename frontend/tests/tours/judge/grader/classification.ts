@@ -51,37 +51,8 @@ export const CLASSIFICATION: Classification[] = [
   // CON-044 (mark-as-contacted logs a mutual interaction) migrated to E2E:
   // contacts.spec.ts (see `// spec: CON-044`).
 
-  // --- CON-045: the birthdays page groups contacts by proximity ---
-  {
-    behaviorId: 'CON-045',
-    thenIndex: 0,
-    grader: 'verifier',
-    note: 'grouped into today / upcoming / already-celebrated',
-  },
-  {
-    behaviorId: 'CON-045',
-    thenIndex: 1,
-    grader: 'verifier',
-    note: 'gift-planning section appears only near year end',
-  },
-  {
-    behaviorId: 'CON-045',
-    thenIndex: 2,
-    grader: 'verifier',
-    note: 'upcoming sort soonest-first; celebrated sink to end',
-  },
-  {
-    behaviorId: 'CON-045',
-    thenIndex: 3,
-    grader: 'verifier',
-    note: 'placeholder-year birthdays display without an age',
-  },
-  {
-    behaviorId: 'CON-045',
-    thenIndex: 4,
-    grader: 'verifier',
-    note: 'the page follows accelerated time',
-  },
+  // CON-045 (the birthdays page groups contacts by proximity) migrated to E2E:
+  // birthdays.spec.ts (see `// spec: CON-045`).
 
   // --- DSH-001: the dashboard is the default landing surface ---
   {

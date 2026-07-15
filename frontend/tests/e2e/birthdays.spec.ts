@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import type { APIRequestContext } from '@playwright/test'
+import type { APIRequestContext, Page } from '@playwright/test'
 import { createTestAPI, TestAPI } from './helpers/test-api'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
@@ -7,6 +7,34 @@ const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
 const API_HEADERS = {
   'X-API-Key': API_KEY,
   'Content-Type': 'application/json',
+}
+
+// Freeze the client-side accelerated-time frame to a fixed instant by mocking
+// GET /system/time BEFORE the page loads. `acceleration_factor: 0` pins
+// currentTime at base_time (a non-zero factor collapses to the wall clock), and
+// the body is the full apiClient envelope (apiClient unwraps `data`, so a bare
+// inner object would leave the frame undefined). Per-page + pre-navigation, so
+// it is parallel-safe and does not touch the process-wide acceleration state.
+// NOTE: page.route does NOT intercept the test's own request.get('/system/time'),
+// so birthdays seeded for these tests use fixed dates chosen against the mocked
+// frame, not the real frame.
+async function mockFrozenSystemTime(page: Page, isoInstant: string): Promise<void> {
+  await page.route('**/api/v1/system/time', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        success: true,
+        data: {
+          current_time: isoInstant,
+          base_time: isoInstant,
+          is_accelerated: true,
+          acceleration_factor: 0,
+          environment: 'testing',
+        },
+      }),
+    })
+  })
 }
 
 async function getCurrentBirthdayDate(request: APIRequestContext): Promise<string> {
@@ -57,6 +85,7 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
     page,
     request,
   }) => {
+    // spec: CON-045[3], CON-045[4]
     const birthday = await getCurrentBirthdayDate(request)
     const birthdayDate = new Date(`${birthday}T12:00:00`)
     const expectedListDate = `${birthdayDate.getMonth() + 1}/${birthdayDate.getDate()}`
@@ -98,10 +127,152 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
     })
     await expect(todaySection).toBeVisible({ timeout: 15000 })
 
+    // The page header date follows the accelerated server frame, not the wall
+    // clock (CON-045[4]): its month + year match GET /system/time.
+    const sysResp = await request.get(`${API_BASE_URL}/api/v1/system/time`, {
+      headers: API_HEADERS,
+    })
+    const sys = (await sysResp.json()).data as { current_time: string; is_accelerated: boolean }
+    const frameDate = sys.is_accelerated ? new Date(sys.current_time) : new Date()
+    const frameMonth = frameDate.toLocaleDateString('en-US', { month: 'long' })
+    const frameYear = frameDate.getFullYear()
+    await expect(
+      page.getByText(new RegExp(`${frameMonth} \\d+, ${frameYear}`)).first()
+    ).toBeVisible()
+
     const card = todaySection.getByTestId('birthday-card').filter({ hasText: fullName })
     await expect(card).toBeVisible()
     await expect(card).toContainText(expectedBirthdayPageDate)
     await expect(card).toContainText('Today!')
     await expect(card).not.toContainText(/Turning|Turned/)
+  })
+
+  test('groups birthdays into today, upcoming, and already-celebrated', async ({
+    page,
+    request,
+  }) => {
+    // spec: CON-045[0]
+    // Freeze the frame mid-year so the three groups are deterministic and
+    // parallel-safe (the same per-page frame-mock idiom used for CON-045[1]).
+    await mockFrozenSystemTime(page, '2026-06-15T12:00:00Z')
+    const todayName = `${testApi.prefix}-Group Today`
+    const upcomingName = `${testApi.prefix}-Group Upcoming`
+    const celebratedName = `${testApi.prefix}-Group Celebrated`
+    await createContactWithBirthday(request, testApi, {
+      fullName: 'Group Today',
+      birthday: '1990-06-15',
+    })
+    await createContactWithBirthday(request, testApi, {
+      fullName: 'Group Upcoming',
+      birthday: '1990-06-20',
+    })
+    await createContactWithBirthday(request, testApi, {
+      fullName: 'Group Celebrated',
+      birthday: '1990-03-10',
+    })
+
+    await page.goto('/birthdays')
+    await page.waitForLoadState('domcontentloaded')
+
+    const todaySection = page.locator('section', {
+      has: page.getByRole('heading', { name: /Today's Birthdays/ }),
+    })
+    const upcomingSection = page.locator('section', {
+      has: page.getByRole('heading', { name: /Upcoming Birthdays/ }),
+    })
+    const celebratedSection = page.locator('section', {
+      has: page.getByRole('heading', { name: /Already Celebrated This Year/ }),
+    })
+
+    await expect(todaySection).toBeVisible({ timeout: 15000 })
+    await expect(upcomingSection).toBeVisible()
+    await expect(celebratedSection).toBeVisible()
+
+    // Each seeded contact lands in the correct group.
+    await expect(todaySection.getByText(todayName)).toBeVisible()
+    await expect(upcomingSection.getByText(upcomingName)).toBeVisible()
+    await expect(celebratedSection.getByText(celebratedName)).toBeVisible()
+  })
+
+  test('sorts upcoming birthdays soonest-first and sinks celebrated to the end', async ({
+    page,
+    request,
+  }) => {
+    // spec: CON-045[2]
+    await mockFrozenSystemTime(page, '2026-06-15T12:00:00Z')
+    const soonName = `${testApi.prefix}-Sort Soon` // 3 days out
+    const laterName = `${testApi.prefix}-Sort Later` // 10 days out
+    await createContactWithBirthday(request, testApi, {
+      fullName: 'Sort Soon',
+      birthday: '1990-06-18',
+    })
+    await createContactWithBirthday(request, testApi, {
+      fullName: 'Sort Later',
+      birthday: '1990-06-25',
+    })
+    await createContactWithBirthday(request, testApi, {
+      fullName: 'Sort Celebrated',
+      birthday: '1990-03-10',
+    })
+
+    await page.goto('/birthdays')
+    await page.waitForLoadState('domcontentloaded')
+
+    const upcomingSection = page.locator('section', {
+      has: page.getByRole('heading', { name: /Upcoming Birthdays/ }),
+    })
+    const celebratedSection = page.locator('section', {
+      has: page.getByRole('heading', { name: /Already Celebrated This Year/ }),
+    })
+    await expect(upcomingSection).toBeVisible({ timeout: 15000 })
+    await expect(celebratedSection).toBeVisible()
+
+    // Within upcoming, the sooner birthday (3 days) is above the later (10 days).
+    const soon = upcomingSection.getByText(soonName)
+    const later = upcomingSection.getByText(laterName)
+    await expect(soon).toBeVisible()
+    await expect(later).toBeVisible()
+    const soonY = (await soon.boundingBox())!.y
+    const laterY = (await later.boundingBox())!.y
+    expect(soonY).toBeLessThan(laterY)
+
+    // The already-celebrated section sinks below the upcoming section.
+    const upcomingY = (await upcomingSection.boundingBox())!.y
+    const celebratedY = (await celebratedSection.boundingBox())!.y
+    expect(celebratedY).toBeGreaterThan(upcomingY)
+  })
+
+  test('shows the gift-planning section near year end', async ({ page, request }) => {
+    // spec: CON-045[1]
+    // December frame → the page surfaces early-next-year (Jan-Mar) birthdays.
+    await mockFrozenSystemTime(page, '2026-12-15T12:00:00Z')
+    await createContactWithBirthday(request, testApi, {
+      fullName: 'Gift Feb',
+      birthday: '1990-02-14',
+    })
+
+    await page.goto('/birthdays')
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: /Gift Planning/ })).toBeVisible({
+      timeout: 15000,
+    })
+  })
+
+  test('hides the gift-planning section away from year end', async ({ page, request }) => {
+    // spec: CON-045[1]
+    // June frame → no gift-planning section, even with a Jan-Mar birthday.
+    await mockFrozenSystemTime(page, '2026-06-15T12:00:00Z')
+    const febName = `${testApi.prefix}-Gift Feb`
+    await createContactWithBirthday(request, testApi, {
+      fullName: 'Gift Feb',
+      birthday: '1990-02-14',
+    })
+
+    await page.goto('/birthdays')
+    await page.waitForLoadState('domcontentloaded')
+    // Wait for the sections to render (the Feb contact shows as celebrated),
+    // then assert the gift-planning section is absent.
+    await expect(page.getByText(febName)).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: /Gift Planning/ })).toHaveCount(0)
   })
 })
