@@ -3,6 +3,7 @@ import { createTestAPI, TestAPI } from './helpers/test-api'
 
 test.describe('Dashboard @area:dashboard', () => {
   test('should display dashboard with navigation @smoke', async ({ page }) => {
+    // spec: DSH-001[0]
     await page.goto('/')
 
     // Should redirect to dashboard (client-side redirect via useEffect)

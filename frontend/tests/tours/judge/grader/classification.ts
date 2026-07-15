@@ -57,13 +57,8 @@ export const CLASSIFICATION: Classification[] = [
   // CON-045 (the birthdays page groups contacts by proximity) migrated to E2E:
   // birthdays.spec.ts (see `// spec: CON-045`).
 
-  // --- DSH-001: the dashboard is the default landing surface ---
-  {
-    behaviorId: 'DSH-001',
-    thenIndex: 0,
-    grader: 'verifier',
-    note: 'taken to the dashboard as default (landing capture url pathname /dashboard)',
-  },
+  // DSH-001 (the dashboard is the default landing surface) migrated to E2E:
+  // dashboard.spec.ts (see `// spec: DSH-001`).
 
   // --- DSH-002: persistent global navigation ---
   {

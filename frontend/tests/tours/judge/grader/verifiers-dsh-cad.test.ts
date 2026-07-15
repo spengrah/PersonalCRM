@@ -3,7 +3,6 @@ import { apiItem, cap, pair, root } from './fixtures'
 import { applyMutation } from '../doctor'
 import type { CaptureSet } from './types'
 import type { AriaNode, Capture } from '../../support/types'
-import { dsh001 } from './verifiers/dsh001'
 import { dsh002 } from './verifiers/dsh002'
 import { dsh003 } from './verifiers/dsh003'
 import { dsh004 } from './verifiers/dsh004'
@@ -24,39 +23,6 @@ function set(behaviorId: string, captures: Capture[]): CaptureSet {
 function doctored(behaviorId: string, captures: Capture[], m: Mutation): CaptureSet {
   return { behaviorId, captures: applyMutation(captures, m) }
 }
-
-// --- DSH-001 ---
-describe('dsh001', () => {
-  const landing = (over: Partial<{ heading: boolean }> = {}): Capture =>
-    cap({
-      behaviors: ['DSH-001'],
-      pair: pair('l', 'landing'),
-      url: '/dashboard',
-      aria: root(
-        over.heading === false ? [] : [{ role: 'heading', name: 'Action Required', level: 2 }]
-      ),
-    })
-
-  it('clean: [0] pass; [1] is judge-owned (no verifier verdict)', () => {
-    const v = dsh001(set('DSH-001', [landing()]))
-    expect(v[0].verdict).toBe('pass')
-    expect(v[1]).toBeUndefined()
-  })
-  it('doctored: Action Required heading removed → [0] fail', () => {
-    const v = dsh001(
-      doctored('DSH-001', [landing()], {
-        op: 'remove_aria_subtree',
-        node_role: 'heading',
-        node_name: 'Action Required',
-      })
-    )
-    expect(v[0].verdict).toBe('fail')
-  })
-  it('missing → unsure', () => {
-    const v = dsh001(set('DSH-001', []))
-    expect(v[0].verdict).toBe('unsure')
-  })
-})
 
 // --- DSH-002 ---
 describe('dsh002', () => {
