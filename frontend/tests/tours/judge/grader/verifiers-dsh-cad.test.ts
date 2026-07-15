@@ -3,7 +3,6 @@ import { apiItem, cap, pair, root } from './fixtures'
 import { applyMutation } from '../doctor'
 import type { CaptureSet } from './types'
 import type { Capture } from '../../support/types'
-import { cad029 } from './verifiers/cad029'
 import { cad030 } from './verifiers/cad030'
 import { cad031 } from './verifiers/cad031'
 import { cad033 } from './verifiers/cad033'
@@ -15,53 +14,6 @@ function set(behaviorId: string, captures: Capture[]): CaptureSet {
 function doctored(behaviorId: string, captures: Capture[], m: Mutation): CaptureSet {
   return { behaviorId, captures: applyMutation(captures, m) }
 }
-
-// --- CAD-029 ---
-describe('cad029', () => {
-  const detail = (role: string, data: Record<string, unknown>, ariaText: string): Capture =>
-    cap({
-      behaviors: ['CAD-029'],
-      pair: pair('a', role),
-      apiResponses: { 'GET /api/v1/contacts/:id': [apiItem({ body: { data } })] },
-      aria: root([{ role: 'text', text: ariaText }]),
-    })
-  const outreach = detail(
-    'activity-outreach',
-    { last_outreach_at: '2026-07-12T12:00:00Z' },
-    'Last outreach: 2 days ago'
-  )
-  const response = detail(
-    'activity-response',
-    { last_response_at: '2026-07-12T12:00:00Z' },
-    'Last response: 1 day ago'
-  )
-  const none = detail('activity-none', { has_pending_followup: false }, 'No recent activity')
-
-  it('clean: [0] pass, [1] pass, [2] abstain, [3] pass', () => {
-    const v = cad029(set('CAD-029', [outreach, response, none]))
-    expect(v[0].verdict).toBe('pass')
-    expect(v[1].verdict).toBe('pass')
-    expect(v[2].verdict).toBe('unsure')
-    expect(v[3].verdict).toBe('pass')
-  })
-  it('doctored: last_outreach_at cleared but line still shown → [0] fail', () => {
-    const v = cad029(
-      doctored('CAD-029', [outreach, response, none], {
-        op: 'set_json_field',
-        role: 'activity-outreach',
-        endpoint: 'GET /api/v1/contacts/:id',
-        path: ['data', 'last_outreach_at'],
-        value: null,
-      })
-    )
-    expect(v[0].verdict).toBe('fail')
-  })
-  it('missing → unsure', () => {
-    const v = cad029(set('CAD-029', []))
-    expect(v[0].verdict).toBe('unsure')
-    expect(v[3].verdict).toBe('unsure')
-  })
-})
 
 // --- CAD-030 ---
 describe('cad030', () => {

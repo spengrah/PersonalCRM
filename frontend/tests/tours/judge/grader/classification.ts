@@ -103,33 +103,8 @@ export const CLASSIFICATION: Classification[] = [
   // dashboard.spec.ts + overdue-contact-updates.spec.ts (see
   // `// spec: CAD-028`).
 
-  // --- CAD-029: recent-activity summary ---
-  {
-    behaviorId: 'CAD-029',
-    thenIndex: 0,
-    grader: 'verifier',
-    note: 'last outreach shown when it exists (Last outreach: present iff last_outreach_at in the body)',
-  },
-  {
-    behaviorId: 'CAD-029',
-    thenIndex: 1,
-    grader: 'verifier',
-    note: 'last response shown when it exists (Last response: present iff last_response_at)',
-  },
-  {
-    behaviorId: 'CAD-029',
-    thenIndex: 2,
-    grader: 'verifier',
-    caveat:
-      'The awaiting-reply indicator needs has_pending_followup, which is provider-driven and absent from a provider-less sweep → abstain (skip-list).',
-    note: 'awaiting-reply indicator while a follow-up pends (provider-driven → abstain)',
-  },
-  {
-    behaviorId: 'CAD-029',
-    thenIndex: 3,
-    grader: 'verifier',
-    note: 'none → explicit no-recent-activity state (No recent activity iff none of the three signals)',
-  },
+  // CAD-029 (recent-activity summary) migrated to E2E:
+  // contact-direction.spec.ts (see `// spec: CAD-029`).
 
   // --- CAD-030: tasks section (live first, history on demand) ---
   {

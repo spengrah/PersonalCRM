@@ -20,6 +20,7 @@ test.describe('Contact Direction Signals @area:contacts', () => {
   })
 
   test('shows direction signal timestamps after mutual interaction', async ({ page, request }) => {
+    // spec: CAD-029[0], CAD-029[1]
     const { ids } = await testApi.seedContacts([
       { full_name: 'Direction Signal Test', cadence: 'monthly' },
     ])
@@ -49,6 +50,7 @@ test.describe('Contact Direction Signals @area:contacts', () => {
     page,
     request,
   }) => {
+    // spec: CAD-029[0], CAD-029[1]
     // Create a fresh contact with no prior interactions
     const { ids } = await testApi.seedContacts([
       { full_name: 'Outbound Only Test', cadence: 'monthly' },
@@ -71,6 +73,68 @@ test.describe('Contact Direction Signals @area:contacts', () => {
 
     // Should show outreach timestamp
     await expect(page.getByText('Last outreach:')).toBeVisible({ timeout: 5000 })
+
+    // Shown-IFF-exists: with no inbound/mutual interaction there is no
+    // response timestamp, so the response line must be ABSENT.
+    await expect(page.getByText('Last response:')).not.toBeVisible()
+  })
+
+  test('shows awaiting-reply indicator while a follow-up pends', async ({ page, request }) => {
+    // spec: CAD-029[2]
+    const { ids } = await testApi.seedContacts([
+      { full_name: 'Awaiting Reply Test', cadence: 'monthly' },
+    ])
+    const contactId = ids[0]
+
+    // A real outbound interaction populates last_outreach_at so the
+    // recent-activity block renders from real data.
+    const pastDate = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+    await request.post(`${API_BASE_URL}/api/v1/contacts/${contactId}/interactions`, {
+      headers: API_HEADERS,
+      data: { occurred_at: pastDate, direction: 'outbound' },
+    })
+
+    // has_pending_followup is provider-driven (the follow-up loop needs a
+    // Todoist provider), so it is unreachable by real seeding here.
+    // FETCH-AND-PATCH: fetch the real detail response and flip ONLY
+    // has_pending_followup — the rest of the detail stays real. Route
+    // installed BEFORE goto.
+    await page.route(`**/api/v1/contacts/${contactId}`, async route => {
+      const response = await route.fetch()
+      const json = await response.json()
+      json.data.has_pending_followup = true
+      await route.fulfill({ response, json })
+    })
+
+    await page.goto(`/contacts/${contactId}`)
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: 'Awaiting Reply Test' })).toBeVisible({
+      timeout: 15000,
+    })
+
+    // The awaiting-reply indicator renders while the follow-up pends.
+    await expect(page.getByText('Awaiting reply')).toBeVisible()
+    await expect(page.getByText('Last outreach:')).toBeVisible()
+  })
+
+  test('shows explicit no-recent-activity state with no direction signals', async ({ page }) => {
+    // spec: CAD-029[3]
+    // A freshly seeded contact has no interactions and no pending follow-up,
+    // which guarantees the no-recent-activity branch (no vacuous fallback).
+    const { ids } = await testApi.seedContacts([
+      { full_name: 'No Activity Test', cadence: 'monthly' },
+    ])
+
+    await page.goto(`/contacts/${ids[0]}`)
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: 'No Activity Test' })).toBeVisible({
+      timeout: 15000,
+    })
+
+    await expect(page.getByText('No recent activity')).toBeVisible()
+    await expect(page.getByText('Last outreach:')).not.toBeVisible()
+    await expect(page.getByText('Last response:')).not.toBeVisible()
+    await expect(page.getByText('Awaiting reply')).not.toBeVisible()
   })
 
   test('interaction API response includes direction field', async ({ request }) => {
