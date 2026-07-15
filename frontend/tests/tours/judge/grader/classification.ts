@@ -27,26 +27,8 @@ export const CLASSIFICATION: Classification[] = [
   // CON-038 (list + detail share one default ordering) migrated to E2E:
   // contacts.spec.ts + contact-navigation.spec.ts (see `// spec: CON-038`).
 
-  // --- CON-040: keyboard navigation drives the detail page ---
-  {
-    behaviorId: 'CON-040',
-    thenIndex: 0,
-    grader: 'verifier',
-    note: 'left/right move prev/next, disabled at BOTH boundaries (first + last captured)',
-  },
-  {
-    behaviorId: 'CON-040',
-    thenIndex: 1,
-    grader: 'verifier',
-    note: 'arrows inert while editing or focus in an input',
-  },
-  { behaviorId: 'CON-040', thenIndex: 2, grader: 'verifier', note: 'Enter opens edit mode' },
-  {
-    behaviorId: 'CON-040',
-    thenIndex: 3,
-    grader: 'verifier',
-    note: 'Escape discards edit, or returns to the list (context preserved)',
-  },
+  // CON-040 (keyboard navigation drives the detail page) migrated to E2E:
+  // contact-navigation.spec.ts (see `// spec: CON-040`).
 
   // --- CON-041: action parameters trigger once and are consumed ---
   {

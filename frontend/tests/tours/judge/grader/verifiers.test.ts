@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { apiItem, cap, frame, pair, root } from './fixtures'
 import type { CaptureSet } from './types'
-import { con040 } from './verifiers/con040'
 import { con041 } from './verifiers/con041'
 import { con042 } from './verifiers/con042'
 import { con043 } from './verifiers/con043'
@@ -12,114 +11,6 @@ import type { Capture } from '../../support/types'
 function set(behaviorId: string, captures: Capture[]): CaptureSet {
   return { behaviorId, captures }
 }
-
-// --- CON-040 ---
-describe('con040', () => {
-  const build = (over: { prevDisabled?: boolean; editInertUrl?: string } = {}): Capture[] => [
-    cap({ behaviors: ['CON-040'], pair: pair('k', 'view-before'), url: '/contacts/<id:2>' }),
-    cap({ behaviors: ['CON-040'], pair: pair('k', 'arrow-right-next'), url: '/contacts/<id:3>' }),
-    cap({ behaviors: ['CON-040'], pair: pair('k', 'arrow-left-prev'), url: '/contacts/<id:2>' }),
-    cap({
-      behaviors: ['CON-040'],
-      pair: pair('k', 'boundary-first'),
-      url: '/contacts/<id:1>',
-      aria: root([
-        {
-          role: 'button',
-          name: 'Previous contact',
-          ...(over.prevDisabled === false ? {} : { disabled: true }),
-        },
-        { role: 'button', name: 'Next contact' },
-      ]),
-    }),
-    cap({ behaviors: ['CON-040'], pair: pair('k', 'input-focus-inert'), url: '/contacts/<id:1>' }),
-    cap({
-      behaviors: ['CON-040'],
-      pair: pair('k', 'enter-edit'),
-      url: '/contacts/<id:2>',
-      aria: root([{ role: 'heading', name: 'Edit Contact', level: 2 }]),
-    }),
-    cap({
-      behaviors: ['CON-040'],
-      pair: pair('k', 'arrow-edit-inert'),
-      url: over.editInertUrl ?? '/contacts/<id:2>',
-    }),
-    cap({
-      behaviors: ['CON-040'],
-      pair: pair('k', 'escape-discard'),
-      aria: root([{ role: 'button', name: 'Edit' }]),
-    }),
-    cap({
-      behaviors: ['CON-040'],
-      pair: pair('k', 'escape-to-list'),
-      url: '/contacts?sort=cadence&order=desc',
-    }),
-  ]
-
-  it('renamed Edit Contact heading after Enter → [2] unbound (routed to the judge)', () => {
-    const caps = build()
-    const idx = caps.findIndex(c => c.pair?.role === 'enter-edit')
-    caps[idx] = {
-      ...caps[idx],
-      aria: root([{ role: 'heading', name: 'Update Contact', level: 2 }]),
-    }
-    expect(con040(set('CON-040', caps))[2].verdict).toBe('unbound')
-  })
-
-  it('clean: [0] abstains (last-boundary caveat), [1]/[2]/[3] pass', () => {
-    const v = con040(set('CON-040', build()))
-    expect(v[0].verdict).toBe('unsure')
-    expect(v[0].reason).toMatch(/last boundary/)
-    expect(v[1].verdict).toBe('pass')
-    expect(v[2].verdict).toBe('pass')
-    expect(v[3].verdict).toBe('pass')
-  })
-
-  it('doctored: Previous NOT disabled at the first boundary → [0] fail', () => {
-    const v = con040(set('CON-040', build({ prevDisabled: false })))
-    expect(v[0].verdict).toBe('fail')
-  })
-
-  // Follow-up 3: the last-boundary capture (Next disabled at the last contact).
-  const boundaryLast = (nextDisabled = true): Capture =>
-    cap({
-      behaviors: ['CON-040'],
-      pair: pair('k', 'boundary-last'),
-      url: '/contacts/<id:9>',
-      aria: root([
-        { role: 'button', name: 'Previous contact' },
-        { role: 'button', name: 'Next contact', ...(nextDisabled ? { disabled: true } : {}) },
-      ]),
-    })
-
-  it('both boundaries captured (Previous + Next disabled) → [0] pass', () => {
-    const v = con040(set('CON-040', [...build(), boundaryLast(true)]))
-    expect(v[0].verdict).toBe('pass')
-  })
-
-  it('doctored: Next NOT disabled at the last boundary → [0] fail', () => {
-    const v = con040(set('CON-040', [...build(), boundaryLast(false)]))
-    expect(v[0].verdict).toBe('fail')
-  })
-
-  it('doctored: edit-mode arrow changed the url → [1] fail', () => {
-    const v = con040(set('CON-040', build({ editInertUrl: '/contacts/<id:99>' })))
-    expect(v[1].verdict).toBe('fail')
-  })
-
-  it('[1] abstains (unsure) when one inert bracket is missing — never a lone-half pass', () => {
-    // Drop the input-focus-inert capture: the edit-mode half passes, but the
-    // item must abstain, not pass on a single half.
-    const caps = build().filter(c => c.pair?.role !== 'input-focus-inert')
-    const v = con040(set('CON-040', caps))
-    expect(v[1].verdict).toBe('unsure')
-  })
-
-  it('missing evidence → unsure', () => {
-    const v = con040(set('CON-040', []))
-    for (const i of [0, 1, 2, 3]) expect(v[i].verdict).toBe('unsure')
-  })
-})
 
 // --- CON-041 ---
 describe('con041', () => {

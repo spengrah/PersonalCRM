@@ -107,6 +107,7 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
   })
 
   test('should disable keyboard navigation in edit mode', async ({ page }) => {
+    // spec: CON-040[1]
     // Create 2 contacts
     const { ids } = await testApi.seedContacts([
       { full_name: 'Edit Mode Test A' },
@@ -143,6 +144,7 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
   })
 
   test('should not navigate when typing in input fields', async ({ page }) => {
+    // spec: CON-040[1]
     // Create 2 contacts
     const { ids } = await testApi.seedContacts([
       { full_name: 'Input Field Test A' },
@@ -242,6 +244,7 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
   })
 
   test('should handle Escape key to return to list', async ({ page }) => {
+    // spec: CON-040[3]
     // Create a contact
     const { ids } = await testApi.seedContacts([{ full_name: 'Escape Test' }])
 
@@ -266,6 +269,7 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
   })
 
   test('should restore search and sort state after Escape back to list', async ({ page }) => {
+    // spec: CON-040[3]
     // Two contacts so search + sort visibly shape the list
     await testApi.seedContacts([
       { full_name: 'Restore State Alpha' },
@@ -340,5 +344,96 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
 
     // Annual is last → Next disabled at the far boundary.
     await expect(page.getByRole('button', { name: 'Next contact' })).toBeDisabled()
+  })
+
+  test('arrow keys move to the previous/next contact and disable at both boundaries', async ({
+    page,
+  }) => {
+    // spec: CON-040[0]
+    // Seed a known name-asc order and isolate the set via search, so a pass
+    // proves real movement to the adjacent contact (the @smoke test only checks
+    // the URL still contains /contacts/).
+    const { ids } = await testApi.seedContacts([
+      { full_name: 'Kbd Move Alpha' },
+      { full_name: 'Kbd Move Bravo' },
+      { full_name: 'Kbd Move Charlie' },
+    ])
+    const alphaId = ids[0]
+    const bravoId = ids[1]
+    const charlieId = ids[2]
+
+    // Open the middle contact under an explicit name-asc order.
+    await page.goto(
+      `/contacts/${bravoId}?sort=name&order=asc&search=${encodeURIComponent(testApi.prefix)}`
+    )
+    await page.waitForLoadState('domcontentloaded')
+    await expect(
+      page.getByRole('heading', { name: `${testApi.prefix}-Kbd Move Bravo` })
+    ).toBeVisible({ timeout: 15000 })
+
+    // Right → next contact (Charlie); Left → previous contact (Alpha).
+    await page.keyboard.press('ArrowRight')
+    await page.waitForURL(u => u.pathname === `/contacts/${charlieId}`)
+    await page.keyboard.press('ArrowLeft')
+    await page.waitForURL(u => u.pathname === `/contacts/${bravoId}`)
+    await page.keyboard.press('ArrowLeft')
+    await page.waitForURL(u => u.pathname === `/contacts/${alphaId}`)
+
+    // Alpha is first → Previous disabled at the near boundary.
+    await expect(page.getByRole('button', { name: 'Previous contact' })).toBeDisabled()
+
+    // Walk to the last contact → Next disabled at the far boundary.
+    await page.keyboard.press('ArrowRight')
+    await page.waitForURL(u => u.pathname === `/contacts/${bravoId}`)
+    await page.keyboard.press('ArrowRight')
+    await page.waitForURL(u => u.pathname === `/contacts/${charlieId}`)
+    await expect(page.getByRole('button', { name: 'Next contact' })).toBeDisabled()
+  })
+
+  test('Enter opens edit mode when focus is outside an input', async ({ page }) => {
+    // spec: CON-040[2]
+    const { ids } = await testApi.seedContacts([{ full_name: 'Enter Edit Test' }])
+    const fullName = `${testApi.prefix}-Enter Edit Test`
+
+    await page.goto(`/contacts/${ids[0]}`)
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+
+    // Click the (non-interactive) name heading so focus is not on the Edit
+    // button or any input, then press Enter.
+    await page.getByRole('heading', { name: fullName }).click()
+    await page.keyboard.press('Enter')
+
+    await expect(page.getByRole('heading', { name: 'Edit Contact' })).toBeVisible({
+      timeout: 10000,
+    })
+  })
+
+  test('Escape discards an unsaved edit without persisting the change', async ({ page }) => {
+    // spec: CON-040[3]
+    const { ids } = await testApi.seedContacts([{ full_name: 'Discard Edit Test' }])
+    const fullName = `${testApi.prefix}-Discard Edit Test`
+    const changedName = `${testApi.prefix}-Discard Edit CHANGED`
+
+    await page.goto(`/contacts/${ids[0]}`)
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+
+    // Enter edit mode and modify the name.
+    await page.getByRole('button', { name: 'Edit' }).first().click()
+    await expect(page.getByRole('heading', { name: 'Edit Contact' })).toBeVisible({
+      timeout: 10000,
+    })
+    const nameInput = page.getByLabel('Full Name')
+    await nameInput.fill(changedName)
+
+    // Blur the input (Escape is ignored while an input is focused), then Escape.
+    await page.getByRole('heading', { name: 'Edit Contact' }).click()
+    await page.keyboard.press('Escape')
+
+    // Edit mode exits back to the read view AND the modified value did not persist.
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 10000 })
+    await expect(page.getByRole('heading', { name: 'Edit Contact' })).not.toBeVisible()
+    await expect(page.getByRole('heading', { name: changedName })).not.toBeVisible()
   })
 })

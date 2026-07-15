@@ -11,10 +11,6 @@ import { apiItem, cap, pair } from './fixtures'
 // faithful to the spec position and is never re-indexed, so a partially
 // migrated behavior may keep a non-zero / gapped index (e.g. DSH-004[2]).
 const EXPECTED_ROWS = [
-  'CON-040[0]:verifier',
-  'CON-040[1]:verifier',
-  'CON-040[2]:verifier',
-  'CON-040[3]:verifier',
   'CON-041[0]:verifier',
   'CON-041[1]:verifier',
   'CON-042[0]:judge',
