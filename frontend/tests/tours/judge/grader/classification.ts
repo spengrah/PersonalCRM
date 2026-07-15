@@ -112,23 +112,8 @@ export const CLASSIFICATION: Classification[] = [
   // CAD-031 (add manual tasks of three kinds) migrated to E2E:
   // contact-tasks.spec.ts (see `// spec: CAD-031`).
 
-  // --- CAD-033: unlink is the only in-CRM mutation of a linked task ---
-  {
-    behaviorId: 'CAD-033',
-    thenIndex: 0,
-    grader: 'verifier',
-    caveat:
-      'The unlink row needs a provider-seeded linked task to expose it → abstain (skip-list).',
-    note: 'CRM offers unlink (confirm), keeps task in remote (provider-seeded → abstain)',
-  },
-  {
-    behaviorId: 'CAD-033',
-    thenIndex: 1,
-    grader: 'verifier',
-    caveat:
-      'A negative/absence claim over provider state (no in-CRM complete/dismiss affordance); not tourable without provider-seeded tasks → abstain (skip-list).',
-    note: 'complete/dismiss happen in the remote app, not CRM (provider → abstain)',
-  },
+  // CAD-033 (unlink is the only in-CRM mutation of a linked task) migrated
+  // to E2E: contact-tasks.spec.ts (see `// spec: CAD-033`).
 ]
 
 // The 22 CON and 14 DSH verifier then-items have migrated to E2E (contacts /

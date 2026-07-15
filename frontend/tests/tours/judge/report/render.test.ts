@@ -69,13 +69,12 @@ describe('renderReport', () => {
     expect(md).toMatch(/judge \(pending labels\)/)
   })
 
-  it('lists the capture-coverage caveats (the provider / multi-surface abstains)', () => {
-    expect(md).toMatch(/Capture-coverage caveats/)
-    // The lifted CON-038[0]/CON-040[0] caveats are gone (now toured).
-    expect(md).not.toMatch(/CON-038\[0\]/)
-    expect(md).not.toMatch(/CON-040\[0\]/)
-    // A representative surviving caveat is present.
-    expect(md).toMatch(/DSH-005\[1\]|CAD-030\[0\]/)
+  it('omits the capture-coverage caveats section once every caveat row has migrated', () => {
+    // All CON/DSH/CAD verifier rows (incl. their `caveat` records) have moved
+    // to Playwright E2E, so CLASSIFICATION carries no caveat rows and the
+    // report honestly renders no caveat section. (DSH-005[1]/CAD-030[0] still
+    // appear in the static skip-list section — a separate SSOT, untouched here.)
+    expect(md).not.toMatch(/Capture-coverage caveats/)
   })
 
   it('renders the first-cut coverage section + skip-list (D5)', () => {

@@ -367,4 +367,130 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
       await expect(tasksSection(page).getByText('Say hello to Task Create')).toBeVisible()
     })
   })
+
+  test.describe('Linked Task Row (mocked)', () => {
+    const UNLINK_TITLE = 'Remove from CRM (keeps in Todoist)'
+
+    test('offers unlink with confirmation and fires only the CRM-link DELETE', async ({ page }) => {
+      // spec: CAD-033[0]
+      const { ids } = await testApi.seedContacts([{ full_name: 'Unlink Accept Contact' }])
+      const contactId = ids[0]
+      const linked = makeTask(contactId, { id: 'task-linked-1', content: 'Mock linked task' })
+      let unlinked = false
+      await mockTaskLists(page, contactId, () => ({
+        followup: [],
+        manual: unlinked ? [] : [linked],
+        completed: [],
+      }))
+      // The DELETE route is OAuth-gated like the POST (the real endpoint
+      // 404s in this env and would falsely read as an outcome), so mock the
+      // CRM-link-only DELETE → 204 and ASSERT that status below.
+      await page.route(`**/api/v1/contacts/${contactId}/tasks/*`, async route => {
+        if (route.request().method() === 'DELETE') {
+          unlinked = true
+          await route.fulfill({ status: 204 })
+          return
+        }
+        await route.fallback()
+      })
+
+      await page.goto(`/contacts/${contactId}`)
+      await page.waitForLoadState('domcontentloaded')
+      const row = tasksSection(page).locator('div.group').filter({ hasText: 'Mock linked task' })
+      await expect(row).toBeVisible({ timeout: 15000 })
+
+      // Native confirm: register the dialog handler AND the DELETE response
+      // listener BEFORE the click (an unhandled native dialog auto-dismisses
+      // → false negative). The confirmation copy is read INSIDE the handler
+      // (it cannot be read after accept) and asserted after the DELETE — the
+      // accept gates the DELETE, so the handler necessarily ran first.
+      let confirmMessage = ''
+      page.once('dialog', dialog => {
+        confirmMessage = dialog.message()
+        void dialog.accept()
+      })
+      const deleteResponsePromise = page.waitForResponse(
+        response =>
+          response.request().method() === 'DELETE' &&
+          response.url().includes(`/api/v1/contacts/${contactId}/tasks/`)
+      )
+      await row.hover()
+      await row.locator(`button[title="${UNLINK_TITLE}"]`).click()
+
+      const deleteResponse = await deleteResponsePromise
+      expect(deleteResponse.status()).toBe(204)
+      expect(deleteResponse.request().url()).toContain(`/tasks/${linked.id}`)
+      // The confirmation states the task stays alive in the remote app.
+      expect(confirmMessage).toContain('remain in Todoist')
+
+      // Only the CRM link was mutated: the refetched manual list no longer
+      // includes the task, so its row leaves the section.
+      await expect(row).not.toBeVisible()
+    })
+
+    test('dismissing the unlink confirmation leaves the task linked', async ({ page }) => {
+      // spec: CAD-033[0]
+      const { ids } = await testApi.seedContacts([{ full_name: 'Unlink Dismiss Contact' }])
+      const contactId = ids[0]
+      const linked = makeTask(contactId, { id: 'task-linked-2', content: 'Mock linked task' })
+      await mockTaskLists(page, contactId, () => ({
+        followup: [],
+        manual: [linked],
+        completed: [],
+      }))
+
+      await page.goto(`/contacts/${contactId}`)
+      await page.waitForLoadState('domcontentloaded')
+      const row = tasksSection(page).locator('div.group').filter({ hasText: 'Mock linked task' })
+      await expect(row).toBeVisible({ timeout: 15000 })
+
+      // Dismiss the confirm; collect any DELETE over a bounded settle
+      // window (a negative outcome needs an observation window, not a
+      // first-success poll).
+      page.once('dialog', dialog => void dialog.dismiss())
+      const deleteRequests: string[] = []
+      page.on('request', request => {
+        if (
+          request.method() === 'DELETE' &&
+          request.url().includes(`/api/v1/contacts/${contactId}/tasks/`)
+        ) {
+          deleteRequests.push(request.url())
+        }
+      })
+      await row.hover()
+      await row.locator(`button[title="${UNLINK_TITLE}"]`).click()
+
+      await page.waitForTimeout(1500)
+      expect(deleteRequests).toEqual([])
+      await expect(row).toBeVisible()
+    })
+
+    test('exposes no in-CRM complete or dismiss control on a linked task', async ({ page }) => {
+      // spec: CAD-033[1]
+      // The CRM-side half of the clause: a linked task row offers ONLY
+      // unlink (plus "Open in Todoist") — completing and dismissing happen
+      // in the remote task app. The remote-survival half ("keeps the task
+      // alive in Todoist") is a backend guarantee covered by backend
+      // integration tests; the retired verifier abstained on it, so no
+      // proven coverage is lost.
+      const { ids } = await testApi.seedContacts([{ full_name: 'No Complete Contact' }])
+      const contactId = ids[0]
+      const linked = makeTask(contactId, { id: 'task-linked-3', content: 'Mock linked task' })
+      await mockTaskLists(page, contactId, () => ({
+        followup: [],
+        manual: [linked],
+        completed: [],
+      }))
+
+      await page.goto(`/contacts/${contactId}`)
+      await page.waitForLoadState('domcontentloaded')
+      const row = tasksSection(page).locator('div.group').filter({ hasText: 'Mock linked task' })
+      await expect(row).toBeVisible({ timeout: 15000 })
+
+      await expect(row.locator(`button[title="${UNLINK_TITLE}"]`)).toHaveCount(1)
+      await expect(row.locator('a[title="Open in Todoist"]')).toHaveCount(1)
+      await expect(row.getByRole('button', { name: /complete|dismiss|done/i })).toHaveCount(0)
+      await expect(row.getByRole('checkbox')).toHaveCount(0)
+    })
+  })
 })
