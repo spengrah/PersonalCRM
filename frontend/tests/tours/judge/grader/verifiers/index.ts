@@ -1,7 +1,6 @@
 // The verifier registry: behavior id → pure verifier over that behavior's captures.
 
 import type { Verifier } from '../types'
-import { dsh002 } from './dsh002'
 import { dsh003 } from './dsh003'
 import { dsh004 } from './dsh004'
 import { dsh005 } from './dsh005'
@@ -15,7 +14,6 @@ import { cad031 } from './cad031'
 import { cad033 } from './cad033'
 
 export const VERIFIERS: Record<string, Verifier> = {
-  'DSH-002': dsh002,
   'DSH-003': dsh003,
   'DSH-004': dsh004,
   'DSH-005': dsh005,
@@ -29,17 +27,4 @@ export const VERIFIERS: Record<string, Verifier> = {
   'CAD-033': cad033,
 }
 
-export {
-  dsh002,
-  dsh003,
-  dsh004,
-  dsh005,
-  dsh007,
-  cad026,
-  cad027,
-  cad028,
-  cad029,
-  cad030,
-  cad031,
-  cad033,
-}
+export { dsh003, dsh004, dsh005, dsh007, cad026, cad027, cad028, cad029, cad030, cad031, cad033 }

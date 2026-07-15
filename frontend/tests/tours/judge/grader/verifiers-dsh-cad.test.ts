@@ -3,7 +3,6 @@ import { apiItem, cap, pair, root } from './fixtures'
 import { applyMutation } from '../doctor'
 import type { CaptureSet } from './types'
 import type { AriaNode, Capture } from '../../support/types'
-import { dsh002 } from './verifiers/dsh002'
 import { dsh003 } from './verifiers/dsh003'
 import { dsh004 } from './verifiers/dsh004'
 import { dsh005 } from './verifiers/dsh005'
@@ -23,55 +22,6 @@ function set(behaviorId: string, captures: Capture[]): CaptureSet {
 function doctored(behaviorId: string, captures: Capture[], m: Mutation): CaptureSet {
   return { behaviorId, captures: applyMutation(captures, m) }
 }
-
-// --- DSH-002 ---
-describe('dsh002', () => {
-  const navCap = (over: Partial<{ pos: string; active: string }> = {}): Capture =>
-    cap({
-      behaviors: ['DSH-002'],
-      pair: pair('d', 'dashboard'),
-      aria: root([
-        { role: 'link', name: 'Dashboard' },
-        { role: 'link', name: 'Contacts' },
-        { role: 'link', name: 'Birthdays' },
-        { role: 'link', name: 'Imports' },
-        { role: 'link', name: 'Settings' },
-      ]),
-      fields: {
-        activeNavClass: over.active ?? 'inline-flex border-blue-500 text-gray-900',
-        navPosition: over.pos ?? 'sticky',
-      },
-    })
-
-  it('clean: [0]/[1]/[2] pass', () => {
-    const v = dsh002(set('DSH-002', [navCap()]))
-    expect(v[0].verdict).toBe('pass')
-    expect(v[1].verdict).toBe('pass')
-    expect(v[2].verdict).toBe('pass')
-  })
-  it('doctored: a nav link removed → [0] fail', () => {
-    const v = dsh002(
-      doctored('DSH-002', [navCap()], {
-        op: 'remove_aria_subtree',
-        node_role: 'link',
-        node_name: 'Contacts',
-      })
-    )
-    expect(v[0].verdict).toBe('fail')
-  })
-  it('doctored: navPosition static → [2] fail', () => {
-    const v = dsh002(
-      doctored('DSH-002', [navCap()], { op: 'set_field', field: 'navPosition', value: 'static' })
-    )
-    expect(v[2].verdict).toBe('fail')
-  })
-  it('missing fields → [1]/[2] unsure', () => {
-    const bare = cap({ behaviors: ['DSH-002'], pair: pair('d', 'dashboard'), aria: root([]) })
-    const v = dsh002(set('DSH-002', [bare]))
-    expect(v[1].verdict).toBe('unsure')
-    expect(v[2].verdict).toBe('unsure')
-  })
-})
 
 // --- DSH-003 ---
 describe('dsh003', () => {

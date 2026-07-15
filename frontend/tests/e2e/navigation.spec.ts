@@ -57,7 +57,46 @@ test.describe('Navigation @area:navigation', () => {
     })
   })
 
+  test('persistent nav links all five sections and marks the current one active', async ({
+    page,
+  }) => {
+    // spec: DSH-002[0], DSH-002[1]
+    // On EVERY primary surface, all five section links must be present with
+    // their correct hrefs (DSH-002[0]), and the link matching the current
+    // section must carry the active mark — border-blue-500, an aria-invisible
+    // visual-state fact asserted as a class (mirroring the sticky-classes test
+    // below) — while a non-current link does not (DSH-002[1]). Asserting the
+    // active token per route proves the mark follows the pathname rather than
+    // a hard-coded default.
+    const SECTIONS = [
+      { name: 'Dashboard', href: '/dashboard' },
+      { name: 'Contacts', href: '/contacts' },
+      { name: 'Birthdays', href: '/birthdays' },
+      { name: 'Imports', href: '/imports' },
+      { name: 'Settings', href: '/settings' },
+    ]
+
+    for (const current of SECTIONS) {
+      await page.goto(current.href)
+      await page.waitForLoadState('domcontentloaded')
+
+      const nav = page.getByRole('navigation')
+      for (const section of SECTIONS) {
+        const link = nav.getByRole('link', { name: section.name, exact: true })
+        await expect(link).toBeVisible()
+        await expect(link).toHaveAttribute('href', section.href)
+      }
+
+      const activeLink = nav.getByRole('link', { name: current.name, exact: true })
+      await expect(activeLink).toHaveClass(/border-blue-500/)
+      const other = current.href === SECTIONS[0].href ? SECTIONS[1] : SECTIONS[0]
+      const inactiveLink = nav.getByRole('link', { name: other.name, exact: true })
+      await expect(inactiveLink).not.toHaveClass(/border-blue-500/)
+    }
+  })
+
   test('navigation remains visible when scrolling', async ({ page }) => {
+    // spec: DSH-002[2]
     // Navigate to contacts page (has enough content to scroll)
     await page.goto('/contacts')
     await page.waitForLoadState('domcontentloaded')
@@ -88,6 +127,7 @@ test.describe('Navigation @area:navigation', () => {
   })
 
   test('navigation has correct sticky classes', async ({ page }) => {
+    // spec: DSH-002[2]
     await page.goto('/dashboard')
     await page.waitForLoadState('domcontentloaded')
 

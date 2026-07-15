@@ -60,25 +60,8 @@ export const CLASSIFICATION: Classification[] = [
   // DSH-001 (the dashboard is the default landing surface) migrated to E2E:
   // dashboard.spec.ts (see `// spec: DSH-001`).
 
-  // --- DSH-002: persistent global navigation ---
-  {
-    behaviorId: 'DSH-002',
-    thenIndex: 0,
-    grader: 'verifier',
-    note: 'nav links to dashboard/contacts/birthdays/imports/settings present at wide viewports',
-  },
-  {
-    behaviorId: 'DSH-002',
-    thenIndex: 1,
-    grader: 'verifier',
-    note: 'active link visually marked (fields.activeNavClass — aria-invisible active class)',
-  },
-  {
-    behaviorId: 'DSH-002',
-    thenIndex: 2,
-    grader: 'verifier',
-    note: 'nav stays visible while scrolling (fields.navPosition === sticky, computed style)',
-  },
+  // DSH-002 (persistent global navigation) migrated to E2E:
+  // navigation.spec.ts (see `// spec: DSH-002`).
 
   // --- DSH-003: always a path to add or browse contacts ---
   {
