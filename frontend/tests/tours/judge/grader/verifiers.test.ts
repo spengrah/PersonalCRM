@@ -1,46 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { apiItem, cap, frame, pair, root } from './fixtures'
+import { apiItem, cap, frame, root } from './fixtures'
 import type { CaptureSet } from './types'
-import { con044 } from './verifiers/con044'
 import { con045, expectedProximitySections } from './verifiers/con045'
 import type { Capture } from '../../support/types'
 
 function set(behaviorId: string, captures: Capture[]): CaptureSet {
   return { behaviorId, captures }
 }
-
-// --- CON-044 ---
-describe('con044', () => {
-  const afterCap = (withPost: boolean): Capture =>
-    cap({
-      behaviors: ['CON-044'],
-      pair: pair('mc', 'after'),
-      apiResponses: withPost
-        ? {
-            'POST /api/v1/contacts/:id/interactions': [
-              apiItem({
-                method: 'POST',
-                status: 201,
-                requestBody: { direction: 'mutual' },
-                body: { data: { direction: 'mutual', occurred_at: '2026-07-12T16:14:34Z' } },
-              }),
-            ],
-          }
-        : {},
-    })
-
-  it('clean: [0] pass (mutual, server-timestamped)', () => {
-    expect(con044(set('CON-044', [afterCap(true)]))[0].verdict).toBe('pass')
-  })
-
-  it('doctored: POST interaction deleted from the present after bracket → [0] fail', () => {
-    expect(con044(set('CON-044', [afterCap(false)]))[0].verdict).toBe('fail')
-  })
-
-  it('missing after bracket entirely → unsure', () => {
-    expect(con044(set('CON-044', []))[0].verdict).toBe('unsure')
-  })
-})
 
 // --- CON-045 ---
 describe('con045', () => {

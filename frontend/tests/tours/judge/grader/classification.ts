@@ -48,13 +48,8 @@ export const CLASSIFICATION: Classification[] = [
   // CON-043 (merge flow keeps the current contact, archives the source)
   // migrated to E2E: contact-merge.spec.ts (see `// spec: CON-043`).
 
-  // --- CON-044: mark-as-contacted logs a mutual interaction ---
-  {
-    behaviorId: 'CON-044',
-    thenIndex: 0,
-    grader: 'verifier',
-    note: 'a mutual-direction interaction is logged, server-timestamped',
-  },
+  // CON-044 (mark-as-contacted logs a mutual interaction) migrated to E2E:
+  // contacts.spec.ts (see `// spec: CON-044`).
 
   // --- CON-045: the birthdays page groups contacts by proximity ---
   {

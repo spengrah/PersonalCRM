@@ -520,6 +520,42 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     })
     expect(afterResp.status()).toBe(404)
   })
+
+  test('logs a mutual interaction from the list-row Mark as Contacted quick action', async ({
+    page,
+  }) => {
+    // spec: CON-044[0]
+    // The LIST-row context-menu quick action (distinct from the detail-page Log
+    // Interaction modal): it posts a mutual, server-timestamped interaction.
+    const { ids } = await testApi.seedContacts([
+      { full_name: 'List Mark Contacted', cadence: 'weekly' },
+    ])
+    const contactId = ids[0]
+    const fullName = `${testApi.prefix}-List Mark Contacted`
+
+    await page.goto('/contacts')
+    await page.waitForLoadState('domcontentloaded')
+
+    const row = page.locator('tr', { has: page.getByText(fullName) })
+    await expect(row).toBeVisible({ timeout: 15000 })
+    const actionButton = row
+      .locator('button')
+      .filter({ has: page.locator('svg') })
+      .last()
+    await actionButton.click()
+
+    const responsePromise = page.waitForResponse(
+      resp =>
+        resp.url().includes(`/api/v1/contacts/${contactId}/interactions`) &&
+        resp.request().method() === 'POST'
+    )
+    await page.getByRole('menuitem', { name: 'Mark as Contacted' }).click()
+    const response = await responsePromise
+    expect(response.status()).toBe(201)
+    const body = await response.json()
+    expect(body.data.direction).toBe('mutual')
+    expect(body.data.occurred_at).toBeTruthy()
+  })
 })
 
 test.describe('Contacts - Cadence Filter @area:contacts', () => {
