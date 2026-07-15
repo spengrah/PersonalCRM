@@ -466,6 +466,60 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     expect(weeklyY).toBeLessThan(monthlyY)
     expect(monthlyY).toBeLessThan(annualY)
   })
+
+  test('deletes a contact only after confirmation, then returns to the list', async ({
+    page,
+    request,
+  }) => {
+    // spec: CON-042[1], CON-042[2]
+    const { ids } = await testApi.seedContacts([{ full_name: 'Delete Confirm Test' }])
+    const contactId = ids[0]
+    const fullName = `${testApi.prefix}-Delete Confirm Test`
+
+    await page.goto(`/contacts/${contactId}`)
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+
+    // Deletion is guarded by a native window.confirm (see the detail page).
+    // Dismiss path: no DELETE fires and the contact stays live.
+    let deleteFired = false
+    const watchDelete = (req: import('@playwright/test').Request) => {
+      if (req.method() === 'DELETE' && req.url().includes(`/contacts/${contactId}`)) {
+        deleteFired = true
+      }
+    }
+    page.on('request', watchDelete)
+    page.once('dialog', dialog => dialog.dismiss())
+    await page.getByRole('button', { name: 'Delete' }).click()
+    await expect
+      .poll(async () => {
+        const resp = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
+          headers: API_HEADERS,
+        })
+        return resp.status()
+      })
+      .toBe(200)
+    expect(deleteFired).toBe(false)
+    page.off('request', watchDelete)
+
+    // Accept path: the DELETE fires (204), the contact 404s, and we land on the list.
+    const deleteResponse = page.waitForResponse(
+      resp => resp.request().method() === 'DELETE' && resp.url().includes(`/contacts/${contactId}`)
+    )
+    page.once('dialog', dialog => dialog.accept())
+    await page.getByRole('button', { name: 'Delete' }).click()
+    const delResp = await deleteResponse
+    expect(delResp.status()).toBe(204)
+
+    // Redirected to the contact list on success (CON-042[2]).
+    await expect(page).toHaveURL(/\/contacts(\?|$)/)
+
+    // The contact is now gone (CON-042[1]).
+    const afterResp = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
+      headers: API_HEADERS,
+    })
+    expect(afterResp.status()).toBe(404)
+  })
 })
 
 test.describe('Contacts - Cadence Filter @area:contacts', () => {

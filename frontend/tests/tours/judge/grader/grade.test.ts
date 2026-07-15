@@ -12,8 +12,6 @@ import { apiItem, cap, pair } from './fixtures'
 // migrated behavior may keep a non-zero / gapped index (e.g. DSH-004[2]).
 const EXPECTED_ROWS = [
   'CON-042[0]:judge',
-  'CON-042[1]:verifier',
-  'CON-042[2]:verifier',
   'CON-043[0]:verifier',
   'CON-043[1]:verifier',
   'CON-043[2]:verifier',

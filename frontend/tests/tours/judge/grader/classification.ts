@@ -34,23 +34,15 @@ export const CLASSIFICATION: Classification[] = [
   // contacts.spec.ts (see `// spec: CON-041`).
 
   // --- CON-042: deleting a contact requires explicit confirmation ---
+  // [1] (only on confirmation is the contact deleted) and [2] (on success
+  // returned to the list) migrated to E2E: contacts.spec.ts (see
+  // `// spec: CON-042`). [0] stays — the judge owns the "cannot be undone"
+  // warning (the one clearly judge-only item).
   {
     behaviorId: 'CON-042',
     thenIndex: 0,
     grader: 'judge',
     note: 'confirmation prompt warns the action cannot be undone (the one clearly judge-only item)',
-  },
-  {
-    behaviorId: 'CON-042',
-    thenIndex: 1,
-    grader: 'verifier',
-    note: 'only on confirmation is the contact deleted',
-  },
-  {
-    behaviorId: 'CON-042',
-    thenIndex: 2,
-    grader: 'verifier',
-    note: 'on success returned to the contact list',
   },
 
   // --- CON-043: the merge flow keeps the current contact, archives the source ---

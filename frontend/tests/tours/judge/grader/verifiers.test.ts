@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { apiItem, cap, frame, pair, root } from './fixtures'
 import type { CaptureSet } from './types'
-import { con042 } from './verifiers/con042'
 import { con043 } from './verifiers/con043'
 import { con044 } from './verifiers/con044'
 import { con045, expectedProximitySections } from './verifiers/con045'
@@ -10,59 +9,6 @@ import type { Capture } from '../../support/types'
 function set(behaviorId: string, captures: Capture[]): CaptureSet {
   return { behaviorId, captures }
 }
-
-// --- CON-042 ---
-describe('con042', () => {
-  const build = (acceptProbeStatus = 404): Capture[] => [
-    cap({
-      behaviors: ['CON-042'],
-      pair: pair('del', 'after-dismiss'),
-      url: '/contacts/<id:2>?sort=cadence&order=desc',
-      apiResponses: {
-        'GET /api/v1/contacts/:id': [apiItem({ method: 'GET', status: 200, probe: true })],
-      },
-    }),
-    cap({
-      behaviors: ['CON-042'],
-      pair: pair('del', 'after-accept'),
-      url: '/contacts',
-      apiResponses: {
-        'DELETE /api/v1/contacts/:id': [apiItem({ method: 'DELETE', status: 204 })],
-        'GET /api/v1/contacts/:id': [
-          apiItem({ method: 'GET', status: acceptProbeStatus, probe: true }),
-        ],
-      },
-    }),
-  ]
-
-  it('clean: [1] pass (dismiss live, accept deleted), [2] pass (back to list)', () => {
-    const v = con042(set('CON-042', build()))
-    expect(v[1].verdict).toBe('pass')
-    expect(v[2].verdict).toBe('pass')
-  })
-
-  it('doctored: confirmed delete probe still 200 → [1] fail', () => {
-    const v = con042(set('CON-042', build(200)))
-    expect(v[1].verdict).toBe('fail')
-  })
-
-  it('[1] fails when the after-accept bracket is PRESENT but its DELETE/404 evidence is absent', () => {
-    // A present bracket missing its required mutation is a fail, not unsure.
-    const emptyAccept = cap({
-      behaviors: ['CON-042'],
-      pair: pair('del', 'after-accept'),
-      url: '/contacts',
-    })
-    const v = con042(set('CON-042', [emptyAccept]))
-    expect(v[1].verdict).toBe('fail')
-  })
-
-  it('missing evidence (no brackets) → unsure', () => {
-    const v = con042(set('CON-042', []))
-    expect(v[1].verdict).toBe('unsure')
-    expect(v[2].verdict).toBe('unsure')
-  })
-})
 
 // --- CON-044 ---
 describe('con044', () => {
