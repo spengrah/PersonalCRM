@@ -310,10 +310,10 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     page,
   }) => {
     // spec: CON-038[1]
-    // No sort param anywhere → the default cadence-desc order. Seeded scrambled
-    // so the order weekly→monthly→annual proves the shared default, not
-    // insertion. The existing nav tests all pin an explicit sort=name; this one
-    // exercises the implicit default the list and detail share.
+    // Navigate by CLICKING the seeded row in the default (cadence) list — the
+    // detail must CARRY that ordering context, so prev/next walks the same
+    // cadence order rather than an ordering hand-fed through the URL. Search only
+    // filters; it does not change the sort.
     const { ids } = await testApi.seedContacts([
       { full_name: 'Default Nav Annual', cadence: 'annual' },
       { full_name: 'Default Nav Weekly', cadence: 'weekly' },
@@ -326,11 +326,20 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     const monthlyName = `${testApi.prefix}-Default Nav Monthly`
     const annualName = `${testApi.prefix}-Default Nav Annual`
 
-    // Open the most-frequent (weekly) contact with only the search context — no
-    // sort param, so the detail nav uses the default cadence ordering.
-    await page.goto(`/contacts/${weeklyId}?search=${encodeURIComponent(testApi.prefix)}`)
+    // Filter the default list to just these three, then open the most-frequent
+    // (weekly) contact by clicking its row.
+    await page.goto('/contacts')
     await page.waitForLoadState('domcontentloaded')
+    await page.getByPlaceholder('Search contacts...').fill(testApi.prefix)
+    await page.getByPlaceholder('Search contacts...').press('Enter')
+    await expect(page.getByText(weeklyName)).toBeVisible({ timeout: 15000 })
+    await page.getByText(weeklyName).click()
+    await page.waitForURL(new RegExp(`/contacts/${weeklyId}`))
     await expect(page.getByRole('heading', { name: weeklyName })).toBeVisible({ timeout: 15000 })
+
+    // The list's ordering context traveled into the detail URL (cadence-desc).
+    await expect(page).toHaveURL(/sort=cadence/)
+    await expect(page).toHaveURL(/order=desc/)
     // Keyboard nav is disabled until the navigation id list loads.
     await expect(page.getByText(/\d+ of \d+/)).toBeVisible({ timeout: 10000 })
 
@@ -450,5 +459,42 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 10000 })
     await expect(page.getByRole('heading', { name: 'Edit Contact' })).not.toBeVisible()
     await expect(page.getByRole('heading', { name: changedName })).not.toBeVisible()
+  })
+
+  test('arrows are inert while focus is in an input outside edit mode', async ({ page }) => {
+    // spec: CON-040[1]
+    // The Log Interaction modal keeps keyboard nav ENABLED (it is not edit
+    // mode), so focusing its input exercises the hook's input-target guard
+    // specifically — unlike edit mode, which disables the whole hook and would
+    // mask a regression in that guard.
+    const { ids } = await testApi.seedContacts([
+      { full_name: 'Modal Input Nav A' },
+      { full_name: 'Modal Input Nav B' },
+    ])
+    const firstName = `${testApi.prefix}-Modal Input Nav A`
+
+    // Open the first of two contacts with nav context so Next is a real move.
+    await page.goto(
+      `/contacts/${ids[0]}?sort=name&order=asc&search=${encodeURIComponent(testApi.prefix)}`
+    )
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: firstName })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByText(/\d+ of \d+/)).toBeVisible({ timeout: 10000 })
+    // Next is enabled — arrows WOULD move if the input guard were removed.
+    await expect(page.getByRole('button', { name: 'Next contact' })).toBeEnabled()
+
+    const url = page.url()
+
+    // Open the Log Interaction modal (keyboard nav stays enabled — not edit mode).
+    await page.getByRole('button', { name: 'Log Interaction' }).click()
+    await expect(page.getByRole('dialog')).toBeVisible()
+
+    // Focus the modal's date input and press the arrow keys — they move the
+    // cursor within the input, not the contact.
+    const dateInput = page.getByTestId('log-interaction-date-input')
+    await dateInput.focus()
+    await dateInput.press('ArrowRight')
+    await dateInput.press('ArrowLeft')
+    await expect(page).toHaveURL(url, { timeout: 500 })
   })
 })

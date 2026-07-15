@@ -255,12 +255,30 @@ test.describe('Contact Merge @area:contact-merge', () => {
     await expect(nyButton).toHaveClass(/bg-blue-600/)
     await expect(page.getByRole('button', { name: targetBirthdayText })).toHaveClass(/bg-blue-600/)
 
-    // Toggling the location to the source value flips only that field.
+    // Each field toggles to its SOURCE value independently — location, cadence,
+    // and birthday.
     const sfButton = page.getByRole('button', { name: 'San Francisco' })
     await expect(sfButton).toBeVisible()
     await sfButton.click()
     await expect(sfButton).toHaveClass(/bg-blue-600/)
     await expect(nyButton).not.toHaveClass(/bg-blue-600/)
+
+    const weeklyButton = page.getByRole('button', { name: 'Weekly' })
+    await weeklyButton.click()
+    await expect(weeklyButton).toHaveClass(/bg-blue-600/)
+    await expect(page.getByRole('button', { name: 'Monthly' })).not.toHaveClass(/bg-blue-600/)
+
+    const sourceBirthdayText = new Date('1985-07-20').toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    })
+    const sourceBirthdayButton = page.getByRole('button', { name: sourceBirthdayText })
+    await sourceBirthdayButton.click()
+    await expect(sourceBirthdayButton).toHaveClass(/bg-blue-600/)
+    await expect(page.getByRole('button', { name: targetBirthdayText })).not.toHaveClass(
+      /bg-blue-600/
+    )
   })
 
   test('should edit merged contact name', async ({ page }) => {

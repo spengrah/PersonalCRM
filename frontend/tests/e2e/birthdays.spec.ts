@@ -37,6 +37,14 @@ async function mockFrozenSystemTime(page: Page, isoInstant: string): Promise<voi
   })
 }
 
+// Read an element's top Y, asserting it actually has a layout box first (a
+// detached/hidden locator returns null, which would otherwise throw on `.y`).
+async function topY(locator: import('@playwright/test').Locator): Promise<number> {
+  const box = await locator.boundingBox()
+  expect(box, 'element should have a bounding box').not.toBeNull()
+  return box!.y
+}
+
 async function getCurrentBirthdayDate(request: APIRequestContext): Promise<string> {
   const response = await request.get(`${API_BASE_URL}/api/v1/system/time`, {
     headers: API_HEADERS,
@@ -220,16 +228,12 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
     const later = upcomingSection.getByText(laterName)
     await expect(soon).toBeVisible()
     await expect(later).toBeVisible()
-    const soonY = (await soon.boundingBox())!.y
-    const laterY = (await later.boundingBox())!.y
-    expect(soonY).toBeLessThan(laterY)
+    expect(await topY(soon)).toBeLessThan(await topY(later))
 
     // The seeded celebrated contact sits in the celebrated section, which itself
     // sinks below the upcoming section.
     await expect(celebratedSection.getByText(celebratedName)).toBeVisible()
-    const upcomingY = (await upcomingSection.boundingBox())!.y
-    const celebratedY = (await celebratedSection.boundingBox())!.y
-    expect(celebratedY).toBeGreaterThan(upcomingY)
+    expect(await topY(celebratedSection)).toBeGreaterThan(await topY(upcomingSection))
   })
 
   test('the birthdays page date header follows the server accelerated frame', async ({ page }) => {

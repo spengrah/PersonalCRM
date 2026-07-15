@@ -325,12 +325,14 @@ export const CLASSIFICATION: Classification[] = [
   },
 ]
 
-// The count MUST match the SSOT then-item totals: spec/contacts.yaml (CON-038×2,
-// CON-040×4, CON-041×2, CON-042×3, CON-043×6, CON-044×1, CON-045×5 = 23) +
-// spec/dashboard.yaml (DSH-001×1, DSH-002×3, DSH-003×2, DSH-004×3, DSH-005×4,
-// DSH-007×2 = 15) + spec/cadence-followup.yaml (CAD-026×3, CAD-027×3, CAD-028×3,
-// CAD-029×4, CAD-030×4, CAD-031×3, CAD-033×2 = 22) = 60 — guarded by a unit test.
-export const CLASSIFICATION_ITEM_COUNT = 60
+// The 22 CON verifier then-items have migrated to E2E (contacts /
+// contact-navigation / contact-merge / birthdays .spec.ts); what remains is the
+// residual DSH/CAD verifier rows plus the CON-042[0] + DSH-004[2] judge items
+// (38 rows). The classification is now an index-faithful SUBSET of the spec,
+// guarded by grade.test.ts's EXPECTED_ROWS rather than a total-count check. The
+// constant below is no longer asserted anywhere and is retained only until PR4
+// removes the residual verifier machinery.
+export const CLASSIFICATION_ITEM_COUNT = 38
 
 export function classificationFor(behaviorId: string): Classification[] {
   return CLASSIFICATION.filter(c => c.behaviorId === behaviorId).sort(

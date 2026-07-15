@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { CLASSIFICATION } from './classification'
 import { SPEC_CATALOG } from '../spec-catalog'
-import { aggregate, applyGrounding, gradeBehavior, groupByBehavior } from './grade'
+import { aggregate, applyGrounding, gradeBehavior, groupByBehavior, runVerifiers } from './grade'
+import { judgeItemsFor } from '../judge-input'
 import { apiItem, cap, pair } from './fixtures'
 
 // The index-faithful subset guard (INV-1): CLASSIFICATION is pinned to an
@@ -98,13 +99,31 @@ describe('unbound routing', () => {
     ],
   })
 
-  it('routes an unbound verifier item to the judge verdict when available', () => {
+  it('routes the dynamic unbound item [1] to the judge alongside the static judge item [2]', () => {
     const grade = gradeBehavior(unboundSet(), {
-      judge: { 1: { verdict: 'fail', citation: 'CAPTURE[0]: error surface' } },
+      judge: {
+        1: { verdict: 'fail', citation: 'CAPTURE[0]: error surface' },
+        2: { verdict: 'pass', citation: 'the shown reason matches the failure' },
+      },
     })
-    const item = grade.items.find(i => i.thenIndex === 1)
-    expect(item?.source).toBe('judge')
-    expect(item?.verdict).toBe('fail')
+    const dynamic = grade.items.find(i => i.thenIndex === 1)
+    expect(dynamic?.grader).toBe('verifier')
+    expect(dynamic?.source).toBe('judge')
+    expect(dynamic?.verdict).toBe('fail')
+    // DSH-004's static judge item [2] is graded by the same judge call.
+    const staticJudge = grade.items.find(i => i.thenIndex === 2)
+    expect(staticJudge?.grader).toBe('judge')
+    expect(staticJudge?.source).toBe('judge')
+    expect(staticJudge?.verdict).toBe('pass')
+  })
+
+  it('selects both the dynamic unbound [1] and the static judge [2] as judge residue', () => {
+    // Mirrors the runner/label two-phase recipe: the residue sent to the judge
+    // includes the dynamically-unbound [1] AND the statically judge-tagged [2].
+    const set = unboundSet()
+    const residue = judgeItemsFor('DSH-004', runVerifiers(set)).map(i => i.itemIndex)
+    expect(residue).toContain(1)
+    expect(residue).toContain(2)
   })
 
   it('grades an unrouted unbound item as pending unsure (verifiers-only mode)', () => {
