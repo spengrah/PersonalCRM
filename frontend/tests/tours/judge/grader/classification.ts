@@ -106,35 +106,8 @@ export const CLASSIFICATION: Classification[] = [
   // CAD-029 (recent-activity summary) migrated to E2E:
   // contact-direction.spec.ts (see `// spec: CAD-029`).
 
-  // --- CAD-030: tasks section (live first, history on demand) ---
-  {
-    behaviorId: 'CAD-030',
-    thenIndex: 0,
-    grader: 'verifier',
-    caveat:
-      'Needs provider-seeded follow-up + manual tasks a provider-less sweep cannot reach → abstain (skip-list).',
-    note: 'follow-up first (pending indicator), then manual (provider-seeded → abstain)',
-  },
-  {
-    behaviorId: 'CAD-030',
-    thenIndex: 1,
-    grader: 'verifier',
-    caveat: 'Needs seeded task rows → abstain (skip-list).',
-    note: 'each task badge from kind+lifecycle (seeded tasks → abstain)',
-  },
-  {
-    behaviorId: 'CAD-030',
-    thenIndex: 2,
-    grader: 'verifier',
-    caveat: 'Needs seeded completed tasks → abstain (skip-list).',
-    note: 'completed collapsed behind a toggle with count (seeded completed → abstain)',
-  },
-  {
-    behaviorId: 'CAD-030',
-    thenIndex: 3,
-    grader: 'verifier',
-    note: 'no tasks → empty state invites adding (Tasks section No tasks yet — the reachable state)',
-  },
+  // CAD-030 (tasks section: live first, history on demand) migrated to E2E:
+  // contact-tasks.spec.ts (see `// spec: CAD-030`).
 
   // --- CAD-031: add manual tasks of three kinds ---
   {

@@ -3,7 +3,6 @@ import { apiItem, cap, pair, root } from './fixtures'
 import { applyMutation } from '../doctor'
 import type { CaptureSet } from './types'
 import type { Capture } from '../../support/types'
-import { cad030 } from './verifiers/cad030'
 import { cad031 } from './verifiers/cad031'
 import { cad033 } from './verifiers/cad033'
 import type { Mutation } from '../corpus/schema'
@@ -14,39 +13,6 @@ function set(behaviorId: string, captures: Capture[]): CaptureSet {
 function doctored(behaviorId: string, captures: Capture[], m: Mutation): CaptureSet {
   return { behaviorId, captures: applyMutation(captures, m) }
 }
-
-// --- CAD-030 ---
-describe('cad030', () => {
-  const tasksEmpty = cap({
-    behaviors: ['CAD-030'],
-    pair: pair('t', 'tasks-empty'),
-    aria: root([
-      { role: 'heading', name: 'Tasks', level: 3 },
-      { role: 'text', text: 'No tasks yet' },
-    ]),
-  })
-
-  it('clean: [3] pass, [0]/[1]/[2] abstain', () => {
-    const v = cad030(set('CAD-030', [tasksEmpty]))
-    expect(v[0].verdict).toBe('unsure')
-    expect(v[1].verdict).toBe('unsure')
-    expect(v[2].verdict).toBe('unsure')
-    expect(v[3].verdict).toBe('pass')
-  })
-  it('doctored: empty-state text removed → [3] fail', () => {
-    const v = cad030(
-      doctored('CAD-030', [tasksEmpty], {
-        op: 'remove_aria_subtree',
-        node_role: 'text',
-        node_name: 'No tasks yet',
-      })
-    )
-    expect(v[3].verdict).toBe('fail')
-  })
-  it('missing → [3] unsure', () => {
-    expect(cad030(set('CAD-030', []))[3].verdict).toBe('unsure')
-  })
-})
 
 // --- CAD-031 ---
 describe('cad031', () => {
