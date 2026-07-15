@@ -243,6 +243,7 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
 
   test.describe('Add Task Modal', () => {
     test('opens add task modal and closes it with Escape', async ({ page }) => {
+      // spec: CAD-031[0]
       const { ids } = await testApi.seedContacts([{ full_name: 'Modal Test Contact' }])
 
       await page.goto(`/contacts/${ids[0]}`)
@@ -259,12 +260,30 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
       await expect(modalHeading).toBeVisible()
       await expect(page.getByPlaceholder(/Follow up/)).toBeVisible()
 
+      // The kind is CHOSEN from reach-out / send / reminder: the segmented
+      // control exposes exactly those three, defaults to Reach out, and
+      // clicking another kind moves the aria-pressed selection.
+      const kindGroup = page.getByRole('group', { name: 'Task type' })
+      const reachOut = kindGroup.getByRole('button', { name: 'Reach out', exact: true })
+      const send = kindGroup.getByRole('button', { name: 'Send', exact: true })
+      const reminder = kindGroup.getByRole('button', { name: 'Reminder', exact: true })
+      await expect(reachOut).toBeVisible()
+      await expect(send).toBeVisible()
+      await expect(reminder).toBeVisible()
+      await expect(kindGroup.getByRole('button')).toHaveCount(3)
+      await expect(reachOut).toHaveAttribute('aria-pressed', 'true')
+      await expect(send).toHaveAttribute('aria-pressed', 'false')
+      await send.click()
+      await expect(send).toHaveAttribute('aria-pressed', 'true')
+      await expect(reachOut).toHaveAttribute('aria-pressed', 'false')
+
       // Close modal with Escape
       await page.keyboard.press('Escape')
       await expect(modalHeading).not.toBeVisible()
     })
 
     test('disables submit while task text is empty', async ({ page }) => {
+      // spec: CAD-031[1]
       const { ids } = await testApi.seedContacts([{ full_name: 'Validation Test Contact' }])
 
       await page.goto(`/contacts/${ids[0]}`)
@@ -275,15 +294,77 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
 
       await page.getByRole('button', { name: 'Add', exact: true }).click()
 
-      // Submit is disabled until task text is entered
+      // Submit is disabled until task text is entered (task text required)
       const submitButton = page.getByRole('button', { name: 'Add Task' })
       await expect(submitButton).toBeVisible()
       await expect(submitButton).toBeDisabled()
+
+      // Notes are OPTIONAL: a separate collapsed "Add notes" affordance
+      // exists rather than a required field.
+      await expect(page.getByRole('button', { name: /Add notes/i })).toBeVisible()
 
       await page.getByPlaceholder(/Follow up/).fill('Say hello')
       await expect(submitButton).toBeEnabled()
 
       await page.keyboard.press('Escape')
+    })
+
+    test('created task appears in the live tasks list', async ({ page }) => {
+      // spec: CAD-031[2]
+      // Real creation needs a Todoist provider AND the POST route is
+      // OAuth-gated (the real endpoint 404s in this env, so an unmocked
+      // waitForResponse would observe that 404). Mock the write loop:
+      // POST → 201 created-task envelope, and the invalidation-driven
+      // manual-list refetch then includes the created task.
+      const { ids } = await testApi.seedContacts([{ full_name: 'Task Create Contact' }])
+      const contactId = ids[0]
+      const created = makeTask(contactId, {
+        id: 'task-created-1',
+        content: 'Say hello to Task Create',
+      })
+      let taskCreated = false
+      await mockTaskLists(
+        page,
+        contactId,
+        () => ({ followup: [], manual: taskCreated ? [created] : [], completed: [] }),
+        async route => {
+          if (route.request().method() === 'POST') {
+            taskCreated = true
+            await route.fulfill({ status: 201, json: { success: true, data: created } })
+            return
+          }
+          await route.fallback()
+        }
+      )
+
+      await page.goto(`/contacts/${contactId}`)
+      await page.waitForLoadState('domcontentloaded')
+      await expect(page.getByRole('heading', { name: 'Task Create Contact' })).toBeVisible({
+        timeout: 15000,
+      })
+
+      await page.getByRole('button', { name: 'Add', exact: true }).click()
+      await page.getByPlaceholder(/Follow up/).fill('Say hello to Task Create')
+
+      const postResponsePromise = page.waitForResponse(
+        response =>
+          response.request().method() === 'POST' &&
+          response.url().includes(`/api/v1/contacts/${contactId}/tasks`)
+      )
+      await page.getByRole('button', { name: 'Add Task' }).click()
+
+      const postResponse = await postResponsePromise
+      expect(postResponse.status()).toBe(201)
+      expect(postResponse.request().postDataJSON()).toMatchObject({
+        kind: 'reach_out',
+        text: 'Say hello to Task Create',
+      })
+
+      // The modal closes and the created task renders in the live tasks
+      // list (the task:created invalidation refetches the manual query,
+      // which now includes it).
+      await expect(page.getByRole('heading', { name: /Add Task for/ })).not.toBeVisible()
+      await expect(tasksSection(page).getByText('Say hello to Task Create')).toBeVisible()
     })
   })
 })

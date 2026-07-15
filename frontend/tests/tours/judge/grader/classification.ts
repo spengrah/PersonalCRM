@@ -109,27 +109,8 @@ export const CLASSIFICATION: Classification[] = [
   // CAD-030 (tasks section: live first, history on demand) migrated to E2E:
   // contact-tasks.spec.ts (see `// spec: CAD-030`).
 
-  // --- CAD-031: add manual tasks of three kinds ---
-  {
-    behaviorId: 'CAD-031',
-    thenIndex: 0,
-    grader: 'verifier',
-    note: 'kind chosen from reach-out/send/reminder (Add-task modal role=group Task type, 3 aria-pressed buttons)',
-  },
-  {
-    behaviorId: 'CAD-031',
-    thenIndex: 1,
-    grader: 'verifier',
-    note: 'task text required (submit Add Task disabled until text non-empty)',
-  },
-  {
-    behaviorId: 'CAD-031',
-    thenIndex: 2,
-    grader: 'verifier',
-    caveat:
-      'The create needs a Todoist provider (the submit errors without one) → abstain (skip-list).',
-    note: 'created task appears in live tasks (provider → abstain)',
-  },
+  // CAD-031 (add manual tasks of three kinds) migrated to E2E:
+  // contact-tasks.spec.ts (see `// spec: CAD-031`).
 
   // --- CAD-033: unlink is the only in-CRM mutation of a linked task ---
   {
