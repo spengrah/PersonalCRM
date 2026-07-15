@@ -7,7 +7,7 @@ import { classificationFor, type GraderKind } from './classification'
 import type { CaptureSet, ItemVerdict, ItemVerdicts, Verdict } from './types'
 import type { Capture } from '../../support/types'
 
-export type VerdictSource = 'verifier' | 'judge' | 'pending'
+export type VerdictSource = 'judge' | 'pending'
 
 export interface GradedItem {
   thenIndex: number

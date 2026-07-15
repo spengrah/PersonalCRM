@@ -7,17 +7,13 @@
 // EXPECTED_ROWS (INV-1), not a total-count check.
 //
 // A `judge` item is graded by the LLM judge over structured evidence.
-// `caveat` records a capture-coverage limitation surfaced in the advisory
-// report (NOT a silent proven-pass).
 
-export type GraderKind = 'verifier' | 'judge'
+export type GraderKind = 'judge'
 
 export interface Classification {
   behaviorId: string
   thenIndex: number
   grader: GraderKind
-  /** Capture-coverage limitation flagged in the advisory report. */
-  caveat?: string
   note: string
 }
 
