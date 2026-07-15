@@ -45,43 +45,8 @@ export const CLASSIFICATION: Classification[] = [
     note: 'confirmation prompt warns the action cannot be undone (the one clearly judge-only item)',
   },
 
-  // --- CON-043: the merge flow keeps the current contact, archives the source ---
-  {
-    behaviorId: 'CON-043',
-    thenIndex: 0,
-    grader: 'verifier',
-    note: 'current marked kept (Keeping badge); pick source from a selector that excludes the target',
-  },
-  {
-    behaviorId: 'CON-043',
-    thenIndex: 1,
-    grader: 'verifier',
-    note: 'selecting a source loads a preview',
-  },
-  {
-    behaviorId: 'CON-043',
-    thenIndex: 2,
-    grader: 'verifier',
-    note: 'conflicting fields toggle, defaulting to keep target',
-  },
-  {
-    behaviorId: 'CON-043',
-    thenIndex: 3,
-    grader: 'verifier',
-    note: 'merged name editable, with source quick-fill',
-  },
-  {
-    behaviorId: 'CON-043',
-    thenIndex: 4,
-    grader: 'verifier',
-    note: 'cannot submit before source / while preview loading / while merge in flight',
-  },
-  {
-    behaviorId: 'CON-043',
-    thenIndex: 5,
-    grader: 'verifier',
-    note: 'outcome reported and auto-dismissed (banner is a copy anchor — unbindable → unbound → judge)',
-  },
+  // CON-043 (merge flow keeps the current contact, archives the source)
+  // migrated to E2E: contact-merge.spec.ts (see `// spec: CON-043`).
 
   // --- CON-044: mark-as-contacted logs a mutual interaction ---
   {
