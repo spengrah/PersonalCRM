@@ -99,10 +99,12 @@ test.describe('Error Boundary @area:error-boundary', () => {
     const errorHeading = page.getByRole('heading', { name: 'Error loading overdue contacts' })
     await expect(errorHeading).toBeVisible({ timeout: 20000 })
 
-    // A non-empty failure reason is rendered beneath the heading. Whether the
-    // reason FAITHFULLY reflects the actual failure is judge-owned
-    // (DSH-004[2]) — only its presence is asserted here.
+    // A non-empty failure reason is VISIBLY rendered beneath the heading
+    // (toHaveText alone would pass for a hidden node). Whether the reason
+    // FAITHFULLY reflects the actual failure is judge-owned (DSH-004[2]) —
+    // only its visible presence is asserted here.
     const reason = errorHeading.locator('xpath=following-sibling::p')
+    await expect(reason).toBeVisible()
     await expect(reason).toHaveText(/\S/)
 
     // The error state is distinct: no caught-up text, no overdue cards.
