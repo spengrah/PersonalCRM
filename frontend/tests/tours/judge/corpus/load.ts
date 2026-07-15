@@ -18,7 +18,8 @@ export function loadCaseFile(file: string): Case {
 export interface LoadedCorpus {
   cases: Case[]
   byId: Map<string, Case>
-  // Intent-pass hypothesis cases (corpus/intent-cases/) — advisory --judge only.
+  // Intent-pass hypothesis cases (corpus/intent-cases/) — drafted by the labeler
+  // (label.ts); the corpus eval that once scored them under --judge is retired.
   intentCases: IntentCase[]
   capturesRoot: string
   capturesFor(c: Case | IntentCase): Capture[]

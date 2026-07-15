@@ -117,9 +117,10 @@ export function parseCase(obj: unknown): Case {
   return c
 }
 
-// An intent-pass case. Its expectation is a self-labeled HYPOTHESIS — intent
-// verdicts are judge-only, so these run under --judge only and NEVER gate the
-// merge (ground truth comes from the deferred human-labeling path).
+// An intent-pass case. Its expectation is a self-labeled HYPOTHESIS that no
+// longer runs anywhere: the corpus eval that once scored it under --judge is
+// retired, and label.ts drafts the case but never reads expected_hypothesis. It
+// is retained for the deferred human-labeling path (the ground-truth step).
 export const IntentCaseSchema = z.object({
   id: z.string().min(1),
   intent_id: z.string().min(1),
