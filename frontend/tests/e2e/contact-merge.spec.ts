@@ -1,5 +1,35 @@
 import { test, expect } from '@playwright/test'
+import type { APIRequestContext } from '@playwright/test'
 import { createTestAPI, TestAPI } from './helpers/test-api'
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
+const API_HEADERS = {
+  'X-API-Key': API_KEY,
+  'Content-Type': 'application/json',
+}
+
+// Create a contact directly (the seed endpoint does not take a birthday), so a
+// merge test can build target/source pairs that conflict on cadence, location,
+// AND birthday. Name is prefixed for cleanup.
+async function seedMergeContact(
+  request: APIRequestContext,
+  testApi: TestAPI,
+  input: { fullName: string; cadence: string; location: string; birthday: string }
+): Promise<string> {
+  const response = await request.post(`${API_BASE_URL}/api/v1/contacts`, {
+    headers: API_HEADERS,
+    data: {
+      full_name: `${testApi.prefix}-${input.fullName}`,
+      cadence: input.cadence,
+      location: input.location,
+      birthday: input.birthday,
+    },
+  })
+  expect(response.ok()).toBeTruthy()
+  const body = await response.json()
+  return (body.data as { id: string }).id
+}
 
 test.describe('Contact Merge @area:contact-merge', () => {
   let testApi: TestAPI
@@ -103,8 +133,10 @@ test.describe('Contact Merge @area:contact-merge', () => {
     await expect(sourceOption).toBeVisible({ timeout: 5000 })
 
     // The selector excludes the merge target — it appears only as the kept
-    // heading, never as a selectable candidate (CON-043[0]).
-    const targetOption = page.locator('[class*="cursor-pointer"]').filter({ hasText: targetName })
+    // heading, never as a selectable dropdown candidate (CON-043[0]). Scope to
+    // the dropdown option rows (`select-none`) so the kept-name heading (which
+    // is also cursor-pointer) does not count.
+    const targetOption = page.locator('[class*="select-none"]').filter({ hasText: targetName })
     await expect(targetOption).toHaveCount(0)
 
     // Select the source contact
@@ -169,21 +201,25 @@ test.describe('Contact Merge @area:contact-merge', () => {
     }
   })
 
-  test('should toggle field selection between source and target', async ({ page }) => {
+  test('should toggle field selection between source and target', async ({ page, request }) => {
     // spec: CON-043[2]
-    // Create contacts with conflicting values
-    const { ids } = await testApi.seedContacts([
-      {
-        full_name: 'Toggle Target',
-        location: 'New York',
-      },
-      {
-        full_name: 'Toggle Source',
-        location: 'San Francisco',
-      },
-    ])
+    // Conflicts span all three fields the spec names (cadence, location,
+    // birthday), so the default-keeps-target proof covers the full clause, not
+    // just location. Seeded via direct POST because the seed endpoint has no
+    // birthday field.
+    const targetId = await seedMergeContact(request, testApi, {
+      fullName: 'Toggle Target',
+      cadence: 'monthly',
+      location: 'New York',
+      birthday: '1990-03-15',
+    })
+    await seedMergeContact(request, testApi, {
+      fullName: 'Toggle Source',
+      cadence: 'weekly',
+      location: 'San Francisco',
+      birthday: '1985-07-20',
+    })
 
-    const targetId = ids[0]
     const targetName = `${testApi.prefix}-Toggle Target`
     const sourceName = `${testApi.prefix}-Toggle Source`
 
@@ -205,19 +241,25 @@ test.describe('Contact Merge @area:contact-merge', () => {
     // Wait for conflicts section
     await expect(page.getByText('Resolve Conflicts')).toBeVisible({ timeout: 5000 })
 
-    // Default (before any toggle) keeps the TARGET value selected.
+    // Default (before any toggle) keeps the TARGET value selected for EVERY
+    // conflicting field — cadence, location, and birthday. The birthday label is
+    // computed the same way the modal formats it, so the assertion is stable
+    // across the runner's timezone.
+    const targetBirthdayText = new Date('1990-03-15').toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    })
+    await expect(page.getByRole('button', { name: 'Monthly' })).toHaveClass(/bg-blue-600/)
     const nyButton = page.getByRole('button', { name: 'New York' })
-    await expect(nyButton).toBeVisible()
     await expect(nyButton).toHaveClass(/bg-blue-600/)
+    await expect(page.getByRole('button', { name: targetBirthdayText })).toHaveClass(/bg-blue-600/)
 
-    // Find the San Francisco button and click it to select source location
+    // Toggling the location to the source value flips only that field.
     const sfButton = page.getByRole('button', { name: 'San Francisco' })
     await expect(sfButton).toBeVisible()
     await sfButton.click()
-
-    // Verify San Francisco button is now selected (has blue background)
     await expect(sfButton).toHaveClass(/bg-blue-600/)
-    // ...and the target value is no longer the selected one.
     await expect(nyButton).not.toHaveClass(/bg-blue-600/)
   })
 
@@ -477,6 +519,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
   })
 
   test('should disable merge button when no source selected', async ({ page }) => {
+    // spec: CON-043[4]
     // Create a contact
     const { ids } = await testApi.seedContacts([
       {
@@ -638,8 +681,9 @@ test.describe('Contact Merge @area:contact-merge', () => {
 
     await mergeButton.click()
 
-    // While the merge is in flight, the submit is disabled (no double-submit).
-    await expect(mergeButton).toBeDisabled()
+    // While the merge is in flight, the submit relabels to "Merging..." and is
+    // disabled (no double-submit) — the delayed route keeps this window open.
+    await expect(page.getByRole('button', { name: /Merging/i })).toBeDisabled({ timeout: 5000 })
 
     // The merge then completes.
     await expect(page.getByText(/merged successfully/i)).toBeVisible({ timeout: 10000 })

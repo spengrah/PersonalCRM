@@ -85,7 +85,7 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
     page,
     request,
   }) => {
-    // spec: CON-045[3], CON-045[4]
+    // spec: CON-045[3]
     const birthday = await getCurrentBirthdayDate(request)
     const birthdayDate = new Date(`${birthday}T12:00:00`)
     const expectedListDate = `${birthdayDate.getMonth() + 1}/${birthdayDate.getDate()}`
@@ -126,19 +126,6 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
       has: page.getByRole('heading', { name: /Today's Birthdays/ }),
     })
     await expect(todaySection).toBeVisible({ timeout: 15000 })
-
-    // The page header date follows the accelerated server frame, not the wall
-    // clock (CON-045[4]): its month + year match GET /system/time.
-    const sysResp = await request.get(`${API_BASE_URL}/api/v1/system/time`, {
-      headers: API_HEADERS,
-    })
-    const sys = (await sysResp.json()).data as { current_time: string; is_accelerated: boolean }
-    const frameDate = sys.is_accelerated ? new Date(sys.current_time) : new Date()
-    const frameMonth = frameDate.toLocaleDateString('en-US', { month: 'long' })
-    const frameYear = frameDate.getFullYear()
-    await expect(
-      page.getByText(new RegExp(`${frameMonth} \\d+, ${frameYear}`)).first()
-    ).toBeVisible()
 
     const card = todaySection.getByTestId('birthday-card').filter({ hasText: fullName })
     await expect(card).toBeVisible()
@@ -202,6 +189,7 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
     await mockFrozenSystemTime(page, '2026-06-15T12:00:00Z')
     const soonName = `${testApi.prefix}-Sort Soon` // 3 days out
     const laterName = `${testApi.prefix}-Sort Later` // 10 days out
+    const celebratedName = `${testApi.prefix}-Sort Celebrated`
     await createContactWithBirthday(request, testApi, {
       fullName: 'Sort Soon',
       birthday: '1990-06-18',
@@ -236,16 +224,34 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
     const laterY = (await later.boundingBox())!.y
     expect(soonY).toBeLessThan(laterY)
 
-    // The already-celebrated section sinks below the upcoming section.
+    // The seeded celebrated contact sits in the celebrated section, which itself
+    // sinks below the upcoming section.
+    await expect(celebratedSection.getByText(celebratedName)).toBeVisible()
     const upcomingY = (await upcomingSection.boundingBox())!.y
     const celebratedY = (await celebratedSection.boundingBox())!.y
     expect(celebratedY).toBeGreaterThan(upcomingY)
+  })
+
+  test('the birthdays page date header follows the server accelerated frame', async ({ page }) => {
+    // spec: CON-045[4]
+    // Freeze the frame to a fixed, non-wall-clock date and assert the page
+    // header renders THAT date — proving it follows the server frame rather than
+    // the wall clock (a real-frame assertion would pass trivially when the
+    // backend reports is_accelerated=false and the frame equals the wall clock).
+    await mockFrozenSystemTime(page, '2026-09-03T12:00:00Z')
+    await page.goto('/birthdays')
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: 'Birthday Tracker' })).toBeVisible({
+      timeout: 15000,
+    })
+    await expect(page.getByText(/September 3, 2026/)).toBeVisible()
   })
 
   test('shows the gift-planning section near year end', async ({ page, request }) => {
     // spec: CON-045[1]
     // December frame → the page surfaces early-next-year (Jan-Mar) birthdays.
     await mockFrozenSystemTime(page, '2026-12-15T12:00:00Z')
+    const febName = `${testApi.prefix}-Gift Feb`
     await createContactWithBirthday(request, testApi, {
       fullName: 'Gift Feb',
       birthday: '1990-02-14',
@@ -253,9 +259,13 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
 
     await page.goto('/birthdays')
     await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: /Gift Planning/ })).toBeVisible({
-      timeout: 15000,
+    // Scope to the seeded contact INSIDE the gift-planning section — another
+    // worker's Jan-Mar birthday could otherwise satisfy the bare heading.
+    const giftSection = page.locator('section', {
+      has: page.getByRole('heading', { name: /Gift Planning/ }),
     })
+    await expect(giftSection).toBeVisible({ timeout: 15000 })
+    await expect(giftSection.getByText(febName)).toBeVisible()
   })
 
   test('hides the gift-planning section away from year end', async ({ page, request }) => {

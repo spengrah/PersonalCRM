@@ -322,25 +322,30 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     const annualId = ids[0]
     const weeklyId = ids[1]
     const monthlyId = ids[2]
+    const weeklyName = `${testApi.prefix}-Default Nav Weekly`
+    const monthlyName = `${testApi.prefix}-Default Nav Monthly`
+    const annualName = `${testApi.prefix}-Default Nav Annual`
 
     // Open the most-frequent (weekly) contact with only the search context — no
     // sort param, so the detail nav uses the default cadence ordering.
     await page.goto(`/contacts/${weeklyId}?search=${encodeURIComponent(testApi.prefix)}`)
     await page.waitForLoadState('domcontentloaded')
-    await expect(
-      page.getByRole('heading', { name: `${testApi.prefix}-Default Nav Weekly` })
-    ).toBeVisible({
-      timeout: 15000,
-    })
+    await expect(page.getByRole('heading', { name: weeklyName })).toBeVisible({ timeout: 15000 })
+    // Keyboard nav is disabled until the navigation id list loads.
+    await expect(page.getByText(/\d+ of \d+/)).toBeVisible({ timeout: 10000 })
 
     // Weekly is first in cadence-desc order → Previous disabled at this boundary.
     await expect(page.getByRole('button', { name: 'Previous contact' })).toBeDisabled()
 
-    // Next walks weekly → monthly → annual (most- to least-frequent).
+    // Next walks weekly → monthly → annual (most- to least-frequent). Wait for
+    // each incoming contact to finish loading before the next press — keyboard
+    // nav is disabled while the contact is still fetching.
     await page.keyboard.press('ArrowRight')
     await page.waitForURL(new RegExp(`/contacts/${monthlyId}`))
+    await expect(page.getByRole('heading', { name: monthlyName })).toBeVisible({ timeout: 10000 })
     await page.keyboard.press('ArrowRight')
     await page.waitForURL(new RegExp(`/contacts/${annualId}`))
+    await expect(page.getByRole('heading', { name: annualName })).toBeVisible({ timeout: 10000 })
 
     // Annual is last → Next disabled at the far boundary.
     await expect(page.getByRole('button', { name: 'Next contact' })).toBeDisabled()
@@ -361,23 +366,31 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     const alphaId = ids[0]
     const bravoId = ids[1]
     const charlieId = ids[2]
+    const alphaName = `${testApi.prefix}-Kbd Move Alpha`
+    const bravoName = `${testApi.prefix}-Kbd Move Bravo`
+    const charlieName = `${testApi.prefix}-Kbd Move Charlie`
 
     // Open the middle contact under an explicit name-asc order.
     await page.goto(
       `/contacts/${bravoId}?sort=name&order=asc&search=${encodeURIComponent(testApi.prefix)}`
     )
     await page.waitForLoadState('domcontentloaded')
-    await expect(
-      page.getByRole('heading', { name: `${testApi.prefix}-Kbd Move Bravo` })
-    ).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: bravoName })).toBeVisible({ timeout: 15000 })
+    // Keyboard nav is disabled until the navigation id list loads.
+    await expect(page.getByText(/\d+ of \d+/)).toBeVisible({ timeout: 10000 })
 
-    // Right → next contact (Charlie); Left → previous contact (Alpha).
+    // Right → next (Charlie); Left → previous (Alpha). Wait for each incoming
+    // contact to finish loading before the next press (keyboard nav is disabled
+    // while it fetches).
     await page.keyboard.press('ArrowRight')
     await page.waitForURL(u => u.pathname === `/contacts/${charlieId}`)
+    await expect(page.getByRole('heading', { name: charlieName })).toBeVisible({ timeout: 10000 })
     await page.keyboard.press('ArrowLeft')
     await page.waitForURL(u => u.pathname === `/contacts/${bravoId}`)
+    await expect(page.getByRole('heading', { name: bravoName })).toBeVisible({ timeout: 10000 })
     await page.keyboard.press('ArrowLeft')
     await page.waitForURL(u => u.pathname === `/contacts/${alphaId}`)
+    await expect(page.getByRole('heading', { name: alphaName })).toBeVisible({ timeout: 10000 })
 
     // Alpha is first → Previous disabled at the near boundary.
     await expect(page.getByRole('button', { name: 'Previous contact' })).toBeDisabled()
@@ -385,8 +398,10 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     // Walk to the last contact → Next disabled at the far boundary.
     await page.keyboard.press('ArrowRight')
     await page.waitForURL(u => u.pathname === `/contacts/${bravoId}`)
+    await expect(page.getByRole('heading', { name: bravoName })).toBeVisible({ timeout: 10000 })
     await page.keyboard.press('ArrowRight')
     await page.waitForURL(u => u.pathname === `/contacts/${charlieId}`)
+    await expect(page.getByRole('heading', { name: charlieName })).toBeVisible({ timeout: 10000 })
     await expect(page.getByRole('button', { name: 'Next contact' })).toBeDisabled()
   })
 
