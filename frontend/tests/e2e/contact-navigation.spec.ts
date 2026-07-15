@@ -540,8 +540,20 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     // cursor within the input, not the contact.
     const dateInput = page.getByTestId('log-interaction-date-input')
     await dateInput.focus()
+    // A broken input-target guard would move to the Next contact (ids[1], "Modal
+    // Input Nav B" under sort=name asc). Register the observation window BEFORE
+    // the keypresses — waitForURL only sees navigations that begin after it is
+    // called, so starting it afterward could miss the very nav it must catch.
+    // Resolve to a boolean rather than throwing so a real regression is asserted
+    // here, not killed before the assertion.
+    const navProbe = page.waitForURL(`**/contacts/${ids[1]}**`, { timeout: 1000 }).then(
+      () => true,
+      () => false
+    )
     await dateInput.press('ArrowRight')
     await dateInput.press('ArrowLeft')
-    await expect(page).toHaveURL(url, { timeout: 500 })
+    expect(await navProbe).toBe(false)
+    // Final confirmation: still on the original contact's URL.
+    await expect(page).toHaveURL(url)
   })
 })
