@@ -174,7 +174,22 @@ test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => 
     page,
     request,
   }) => {
+    // spec: CAD-028[2]
     const contactName = `${testApi.prefix}-Overdue Test Contact`
+
+    // A SENTINEL that stays overdue: its rendered card is the data-derived
+    // settle signal on the dashboard ("Action Required" renders even while
+    // loading, so the heading alone cannot prove the list rendered FROM
+    // DATA).
+    const { ids: sentinelIds } = await testApi.seedOverdueContacts([
+      {
+        full_name: 'Consistency Sentinel',
+        cadence: 'weekly',
+        days_overdue: 4,
+      },
+    ])
+    const sentinelId = sentinelIds[0]
+    const sentinelName = `${testApi.prefix}-Consistency Sentinel`
 
     // Log a mutual interaction via the API (replaces the deleted PATCH
     // /last-contacted endpoint). All "Mark as Contacted" surfaces
@@ -188,21 +203,49 @@ test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => 
     )
     expect(interactionResponse.ok()).toBeTruthy()
 
-    // 1. Contact Detail: header still rendered; cadence math applied.
-    await page.goto(`/contacts/${contactId}`)
-    await expect(page.getByRole('heading', { name: contactName })).toBeVisible()
+    // 1. Dashboard: the marked contact is GONE from the overdue list while
+    // the sentinel still renders. Content-predicate waitForResponse (reads
+    // the body) registered BEFORE goto, then the sentinel card proves the
+    // list rendered from that data — not a loading frame — before the
+    // absence assertion.
+    const overdueSettled = page.waitForResponse(async response => {
+      if (
+        response.request().method() !== 'GET' ||
+        !response.url().includes('/api/v1/contacts/overdue') ||
+        !response.ok()
+      ) {
+        return false
+      }
+      const body = await response.json().catch(() => null)
+      const entries: Array<{ id: string }> = body?.data ?? []
+      return (
+        !entries.some(entry => entry.id === contactId) &&
+        entries.some(entry => entry.id === sentinelId)
+      )
+    })
+    await page.goto('/dashboard')
+    await overdueSettled
+    await expect(page.getByRole('heading', { name: sentinelName })).toBeVisible()
+    await expect(page.getByRole('heading', { name: contactName })).not.toBeVisible()
 
-    // 2. Contacts List: today's date appears in the Last response /
-    // Next Contact columns (mutual + weekly cadence => contact_by
-    // advances to today). Use first() since the date can appear in
-    // multiple cells.
-    await page.goto('/contacts')
+    // 2. Contacts List: today's date appears in the target row's SPECIFIC
+    // "Last response" column (the 5th column — a mutual interaction sets
+    // last_response_at), not just anywhere in the row. Filter the list by
+    // the test prefix so another worker's contacts cannot push the target
+    // off the 20-row first page.
+    await page.goto(`/contacts?search=${encodeURIComponent(testApi.prefix)}`)
     await expect(page.getByRole('heading', { name: 'Contacts', level: 2 })).toBeVisible()
     const contactRow = page.locator('tr').filter({ hasText: contactName })
     const todayShort = getTodayUTCShort()
-    await expect(contactRow.getByText(todayShort).first()).toBeVisible()
+    await expect(contactRow.locator('td').nth(4)).toHaveText(todayShort)
 
-    // 3. API: should confirm not overdue.
+    // 3. Contact Detail: the recent-activity block reflects the new mutual
+    // interaction (a response timestamp now exists).
+    await page.goto(`/contacts/${contactId}`)
+    await expect(page.getByRole('heading', { name: contactName })).toBeVisible()
+    await expect(page.getByText('Last response:')).toBeVisible()
+
+    // 4. API: backend-state cross-check — no longer overdue.
     const stillOverdue = await isContactOverdue(request, contactId)
     expect(stillOverdue).toBe(false)
   })

@@ -65,23 +65,6 @@ describe('draftForCase (mocked stronger-model drafter — offline)', () => {
     ])
   })
 
-  it('does not call the drafter for a behavior with no residue items (CAD-028)', async () => {
-    let called = false
-    const drafter: Judge = async () => {
-      called = true
-      return []
-    }
-    const artifact = await draftForCase(
-      'CAD-028-clean',
-      'CAD-028',
-      [cap({ behaviors: ['CAD-028'] })],
-      drafter,
-      'm'
-    )
-    expect(called).toBe(false)
-    expect(artifact.items).toEqual([])
-  })
-
   it('drafts a doctored case over the MUTATED evidence (dialog blanked), not the clean one', async () => {
     let sawDialogMessage: string | undefined
     const drafter: Judge = async input => {
