@@ -586,23 +586,45 @@ test.describe('Contacts - Cadence Filter @area:contacts', () => {
   })
 
   test('should filter contacts by cadence status', async ({ page }) => {
-    // Seed contacts with and without cadence
+    // spec: DSH-007[0]
+    // Contact text search is provided through the contact list's search
+    // input: the tightened search step below proves typing a term drives a
+    // `search=` list request that FILTERS the results (the matching fixtures
+    // render, a seeded non-matching one does not) — not merely that an input
+    // exists.
+    // Seed contacts with and without cadence, plus a NON-MATCHING contact the
+    // search must filter out.
     await testApi.seedContacts([
       { full_name: 'FilterCadence WithWeekly', cadence: 'weekly' },
       { full_name: 'FilterCadence WithMonthly', cadence: 'monthly' },
       { full_name: 'FilterCadence NoCadence' },
+      { full_name: 'Unrelated Zebra' },
     ])
 
     await page.goto('/contacts')
     await page.waitForLoadState('domcontentloaded')
 
-    // Search to isolate our test data
+    // Search to isolate our test data. The response listener is registered
+    // BEFORE .fill() (a param-carrying request can fire before a listener
+    // added after the fill) and requires the request to carry the EXACT
+    // search term.
+    const searchTerm = `${testApi.prefix}-FilterCadence`
+    const searchResponse = page.waitForResponse(
+      resp =>
+        resp.request().method() === 'GET' &&
+        resp.url().includes('/api/v1/contacts') &&
+        new URL(resp.url()).searchParams.get('search') === searchTerm &&
+        !new URL(resp.url()).searchParams.has('ids_only')
+    )
     const searchInput = page.getByPlaceholder('Search contacts...')
-    await searchInput.fill(`${testApi.prefix}-FilterCadence`)
+    await searchInput.fill(searchTerm)
     await searchInput.press('Enter')
+    await searchResponse
     await expect(page.getByText(`${testApi.prefix}-FilterCadence WithWeekly`)).toBeVisible({
       timeout: 10000,
     })
+    // The search FILTERS: our seeded non-matching contact is absent.
+    await expect(page.getByText(`${testApi.prefix}-Unrelated Zebra`)).not.toBeVisible()
 
     // Verify all 3 contacts visible with "All contacts" (default)
     const filterSelect = page.getByLabel('Filter by cadence')

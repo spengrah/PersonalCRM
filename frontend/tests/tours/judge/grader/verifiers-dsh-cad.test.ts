@@ -3,7 +3,6 @@ import { apiItem, cap, pair, root } from './fixtures'
 import { applyMutation } from '../doctor'
 import type { CaptureSet } from './types'
 import type { AriaNode, Capture } from '../../support/types'
-import { dsh007 } from './verifiers/dsh007'
 import { cad026 } from './verifiers/cad026'
 import { cad027 } from './verifiers/cad027'
 import { cad028 } from './verifiers/cad028'
@@ -19,41 +18,6 @@ function set(behaviorId: string, captures: Capture[]): CaptureSet {
 function doctored(behaviorId: string, captures: Capture[], m: Mutation): CaptureSet {
   return { behaviorId, captures: applyMutation(captures, m) }
 }
-
-// --- DSH-007 ---
-describe('dsh007', () => {
-  const dashboard = cap({ behaviors: ['DSH-007'], pair: pair('d', 'dashboard'), aria: root([]) })
-  const contactsSearch = cap({
-    behaviors: ['DSH-007'],
-    pair: pair('c', 'contacts-search'),
-    aria: root([{ role: 'textbox', name: 'Search contacts...' }]),
-  })
-
-  it('clean: [0] pass (contacts search), [1] pass (no dashboard search)', () => {
-    const v = dsh007(set('DSH-007', [dashboard, contactsSearch]))
-    expect(v[0].verdict).toBe('pass')
-    expect(v[1].verdict).toBe('pass')
-  })
-  it('doctored: contacts search input removed → [0] fail', () => {
-    const v = dsh007(
-      doctored('DSH-007', [dashboard, contactsSearch], {
-        op: 'remove_aria_subtree',
-        role: 'contacts-search',
-        node_role: 'textbox',
-        node_name: 'Search contacts...',
-      })
-    )
-    expect(v[0].verdict).toBe('fail')
-  })
-  it('a search surface on the dashboard → [1] fail', () => {
-    const withSearch = cap({
-      behaviors: ['DSH-007'],
-      pair: pair('d', 'dashboard'),
-      aria: root([{ role: 'searchbox', name: 'Search everything' }]),
-    })
-    expect(dsh007(set('DSH-007', [withSearch, contactsSearch]))[1].verdict).toBe('fail')
-  })
-})
 
 // --- CAD-026 ---
 describe('cad026', () => {

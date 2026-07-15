@@ -83,6 +83,21 @@ test.describe('Dashboard @area:dashboard', () => {
     // The header add-contact CTA is present in the CAUGHT-UP state too.
     await expectAddContactHeader(page)
   })
+
+  test('dashboard exposes no dashboard-level or global search surface', async ({ page }) => {
+    // spec: DSH-007[1]
+    // NEGATIVE existence proof at a settled state: establish the dashboard
+    // has fully rendered first, THEN assert that no plausible search-surface
+    // shape is present (a not-yet-rendered page would pass these vacuously).
+    // Search lives on the contact list (DSH-007[0], contacts.spec.ts).
+    await page.goto('/dashboard')
+    await expect(page.getByRole('heading', { name: 'Action Required', level: 2 })).toBeVisible()
+
+    await expect(page.getByRole('searchbox')).toHaveCount(0)
+    await expect(page.getByRole('textbox', { name: /search/i })).toHaveCount(0)
+    await expect(page.getByPlaceholder(/search/i)).toHaveCount(0)
+    await expect(page.getByRole('button', { name: /search|command|⌘K/i })).toHaveCount(0)
+  })
 })
 
 test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () => {
