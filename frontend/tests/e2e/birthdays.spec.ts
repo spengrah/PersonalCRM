@@ -37,14 +37,6 @@ async function mockFrozenSystemTime(page: Page, isoInstant: string): Promise<voi
   })
 }
 
-// Read an element's top Y, asserting it actually has a layout box first (a
-// detached/hidden locator returns null, which would otherwise throw on `.y`).
-async function topY(locator: import('@playwright/test').Locator): Promise<number> {
-  const box = await locator.boundingBox()
-  expect(box, 'element should have a bounding box').not.toBeNull()
-  return box!.y
-}
-
 async function getCurrentBirthdayDate(request: APIRequestContext): Promise<string> {
   const response = await request.get(`${API_BASE_URL}/api/v1/system/time`, {
     headers: API_HEADERS,
@@ -223,17 +215,24 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
     await expect(upcomingSection).toBeVisible({ timeout: 15000 })
     await expect(celebratedSection).toBeVisible()
 
-    // Within upcoming, the sooner birthday (3 days) is above the later (10 days).
-    const soon = upcomingSection.getByText(soonName)
-    const later = upcomingSection.getByText(laterName)
-    await expect(soon).toBeVisible()
-    await expect(later).toBeVisible()
-    expect(await topY(soon)).toBeLessThan(await topY(later))
+    // Within upcoming, the sooner birthday (3 days) precedes the later (10 days)
+    // in DOM order — prefix-scoped card names, not viewport coordinates.
+    await expect(upcomingSection.getByText(soonName)).toBeVisible()
+    await expect(upcomingSection.getByText(laterName)).toBeVisible()
+    const upcomingCards = await upcomingSection.getByTestId('birthday-card').allTextContents()
+    const soonIdx = upcomingCards.findIndex(t => t.includes(soonName))
+    const laterIdx = upcomingCards.findIndex(t => t.includes(laterName))
+    expect(soonIdx).toBeGreaterThanOrEqual(0)
+    expect(laterIdx).toBeGreaterThan(soonIdx)
 
-    // The seeded celebrated contact sits in the celebrated section, which itself
-    // sinks below the upcoming section.
+    // The seeded celebrated contact sits in the celebrated section, which renders
+    // AFTER the upcoming section (section headings compared in DOM order).
     await expect(celebratedSection.getByText(celebratedName)).toBeVisible()
-    expect(await topY(celebratedSection)).toBeGreaterThan(await topY(upcomingSection))
+    const headings = await page.getByRole('heading', { level: 2 }).allTextContents()
+    const upcomingHeadingIdx = headings.findIndex(h => /Upcoming Birthdays/.test(h))
+    const celebratedHeadingIdx = headings.findIndex(h => /Already Celebrated This Year/.test(h))
+    expect(upcomingHeadingIdx).toBeGreaterThanOrEqual(0)
+    expect(celebratedHeadingIdx).toBeGreaterThan(upcomingHeadingIdx)
   })
 
   test('the birthdays page date header follows the server accelerated frame', async ({ page }) => {

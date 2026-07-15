@@ -147,7 +147,6 @@ test.describe('Contact Merge @area:contact-merge', () => {
   })
 
   test('should show field conflicts when contacts have different values', async ({ page }) => {
-    // spec: CON-043[2]
     // Create contacts with conflicting field values
     const { ids } = await testApi.seedContacts([
       {

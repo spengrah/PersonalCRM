@@ -124,13 +124,18 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: fullNameA })).toBeVisible({ timeout: 15000 })
 
+    // Establish that nav is READY before edit mode — otherwise the disabled
+    // assertion below could pass merely because the id list is still loading.
+    await expect(page.getByText(/\d+ of \d+/)).toBeVisible({ timeout: 10000 })
+    const nextButton = page.getByRole('button', { name: 'Next contact' })
+    await expect(nextButton).toBeEnabled()
+
     // Enter edit mode
     await page.getByRole('button', { name: 'Edit' }).first().click()
     await page.waitForLoadState('domcontentloaded')
 
-    // Navigation buttons should be visually disabled (grayed out)
+    // Now the navigation buttons are disabled BECAUSE of edit mode.
     const prevButton = page.getByRole('button', { name: 'Previous contact' })
-    const nextButton = page.getByRole('button', { name: 'Next contact' })
 
     // Buttons should have disabled styling (opacity or disabled attribute)
     await expect(prevButton).toHaveAttribute('disabled', '')

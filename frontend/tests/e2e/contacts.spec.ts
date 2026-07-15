@@ -431,16 +431,14 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
 
   test('defaults the contact list to cadence order, most-frequent-first', async ({ page }) => {
     // spec: CON-038[0]
-    // Load the list with NO params. The app resolves the default context and the
-    // request it issues (plus the order the rows come back in) reflect the
-    // cadence-desc default — no user chose it. Distinct from the explicit "sort
-    // by frequency" header-click test.
     await testApi.seedContacts([
       { full_name: 'Cadence Default Annual', cadence: 'annual' },
       { full_name: 'Cadence Default Weekly', cadence: 'weekly' },
       { full_name: 'Cadence Default Monthly', cadence: 'monthly' },
     ])
 
+    // A BARE load resolves the default context: the request the app issues
+    // carries the cadence-desc default, with no user having chosen a sort.
     const listRequest = page.waitForResponse(
       resp =>
         resp.request().method() === 'GET' &&
@@ -449,28 +447,31 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     )
     await page.goto('/contacts')
     await page.waitForLoadState('domcontentloaded')
-    const response = await listRequest
-
-    // A bare load carries no user-chosen sort — only the cadence default.
-    const params = new URL(response.url()).searchParams
+    const params = new URL((await listRequest).url()).searchParams
     expect(['cadence', null]).toContain(params.get('sort'))
     expect(['desc', null]).toContain(params.get('order'))
 
-    // The returned contacts are ordered most-frequent-first (weekly → annual).
-    const body = await response.json()
-    const rank: Record<string, number> = {
-      weekly: 0,
-      biweekly: 1,
-      monthly: 2,
-      quarterly: 3,
-      biannual: 4,
-      annual: 5,
-    }
-    const ranks = (body.data as Array<{ cadence?: string | null }>)
-      .map(c => (c.cadence ? rank[c.cadence] : undefined))
-      .filter((r): r is number => r !== undefined)
-    expect(ranks.length).toBeGreaterThan(0)
-    expect(ranks).toEqual([...ranks].sort((a, b) => a - b))
+    // Filter to THIS test's rows (search keeps the default sort) so parallel
+    // workers' contacts cannot satisfy or break the ordering, then assert the
+    // three seeded rows render most-frequent-first (weekly → monthly → annual)
+    // in DOM order.
+    await page.getByPlaceholder('Search contacts...').fill(testApi.prefix)
+    await page.getByPlaceholder('Search contacts...').press('Enter')
+    await expect(
+      page.locator('tbody tr', {
+        has: page.getByText(`${testApi.prefix}-Cadence Default Annual`),
+      })
+    ).toBeVisible({ timeout: 15000 })
+
+    const rowText = await page.locator('tbody tr').allTextContents()
+    const weeklyIdx = rowText.findIndex(t => t.includes(`${testApi.prefix}-Cadence Default Weekly`))
+    const monthlyIdx = rowText.findIndex(t =>
+      t.includes(`${testApi.prefix}-Cadence Default Monthly`)
+    )
+    const annualIdx = rowText.findIndex(t => t.includes(`${testApi.prefix}-Cadence Default Annual`))
+    expect(weeklyIdx).toBeGreaterThanOrEqual(0)
+    expect(monthlyIdx).toBeGreaterThan(weeklyIdx)
+    expect(annualIdx).toBeGreaterThan(monthlyIdx)
   })
 
   test('deletes a contact only after confirmation, then returns to the list', async ({

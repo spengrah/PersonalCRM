@@ -1,6 +1,9 @@
-// The load-bearing hybrid-grader decision (design D3): one row per spec
-// then-item, keyed by (behavior_id, then_index) EXACTLY as spec/contacts.yaml
-// lists them (23 items total across the 7 current contacts `ux` behaviors).
+// The hybrid-grader classification (design D3): rows keyed by
+// (behavior_id, then_index) EXACTLY as the spec YAMLs list them. Originally one
+// row per then-item; the CON contacts behaviors have since migrated to E2E, so
+// this is now an index-faithful SUBSET — the remaining rows are the DSH/CAD
+// verifier items plus the CON-042[0] + DSH-004[2] judge items. The subset is
+// guarded by grade.test.ts's EXPECTED_ROWS (INV-1), not a total-count check.
 // "Verifiers before judges" — the judge residue is deliberately tiny.
 //
 // A `verifier` item is graded by pure code over structured evidence. A `judge`
