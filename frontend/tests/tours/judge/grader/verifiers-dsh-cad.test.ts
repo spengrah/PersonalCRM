@@ -3,7 +3,6 @@ import { apiItem, cap, pair, root } from './fixtures'
 import { applyMutation } from '../doctor'
 import type { CaptureSet } from './types'
 import type { AriaNode, Capture } from '../../support/types'
-import { dsh003 } from './verifiers/dsh003'
 import { dsh005 } from './verifiers/dsh005'
 import { dsh007 } from './verifiers/dsh007'
 import { cad026 } from './verifiers/cad026'
@@ -21,44 +20,6 @@ function set(behaviorId: string, captures: Capture[]): CaptureSet {
 function doctored(behaviorId: string, captures: Capture[], m: Mutation): CaptureSet {
   return { behaviorId, captures: applyMutation(captures, m) }
 }
-
-// --- DSH-003 ---
-describe('dsh003', () => {
-  const dashboard = cap({
-    behaviors: ['DSH-003'],
-    pair: pair('d', 'dashboard'),
-    aria: root([{ role: 'link', name: 'Add Contact' }]),
-  })
-  const caughtUp = cap({
-    behaviors: ['DSH-003'],
-    pair: pair('c', 'caught-up'),
-    aria: root([
-      { role: 'text', text: 'All caught up! 🎉' },
-      { role: 'link', name: 'View All Contacts' },
-      { role: 'link', name: 'Add New Contact' },
-    ]),
-  })
-
-  it('clean: [0]/[1] pass', () => {
-    const v = dsh003(set('DSH-003', [dashboard, caughtUp]))
-    expect(v[0].verdict).toBe('pass')
-    expect(v[1].verdict).toBe('pass')
-  })
-  it('doctored: Add Contact removed → [0] fail', () => {
-    const v = dsh003(
-      doctored('DSH-003', [dashboard, caughtUp], {
-        op: 'remove_aria_subtree',
-        role: 'dashboard',
-        node_role: 'link',
-        node_name: 'Add Contact',
-      })
-    )
-    expect(v[0].verdict).toBe('fail')
-  })
-  it('missing caught-up → [1] unsure', () => {
-    expect(dsh003(set('DSH-003', [dashboard]))[1].verdict).toBe('unsure')
-  })
-})
 
 // --- DSH-005 ---
 describe('dsh005', () => {

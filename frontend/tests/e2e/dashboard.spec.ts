@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { createTestAPI, TestAPI } from './helpers/test-api'
+import { expectAddContactHeader } from './helpers/dashboard'
 
 test.describe('Dashboard @area:dashboard', () => {
   test('should display dashboard with navigation @smoke', async ({ page }) => {
@@ -53,6 +54,35 @@ test.describe('Dashboard @area:dashboard', () => {
 
     expect(hasOverdue || hasCaughtUp).toBeTruthy()
   })
+
+  test('caught-up state offers add-contact and view-list paths', async ({ page }) => {
+    // spec: DSH-003[0], DSH-003[1]
+    // Route-mock an EMPTY overdue list (full apiClient envelope) before first
+    // load so the caught-up state renders deterministically regardless of what
+    // parallel workers have seeded (per-page interception, no DB mutation).
+    await page.route('**/api/v1/contacts/overdue*', route =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ success: true, data: [] }),
+      })
+    )
+
+    await page.goto('/dashboard')
+    await expect(page.getByRole('heading', { name: /All caught up/ })).toBeVisible()
+
+    // Both affordances, with their destinations — visibility alone would not
+    // prove the offered paths lead to the add/browse surfaces.
+    const viewAll = page.getByRole('link', { name: 'View All Contacts' })
+    await expect(viewAll).toBeVisible()
+    await expect(viewAll).toHaveAttribute('href', '/contacts')
+    const addNew = page.getByRole('link', { name: 'Add New Contact' })
+    await expect(addNew).toBeVisible()
+    await expect(addNew).toHaveAttribute('href', '/contacts/new')
+
+    // The header add-contact CTA is present in the CAUGHT-UP state too.
+    await expectAddContactHeader(page)
+  })
 })
 
 test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () => {
@@ -76,6 +106,19 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
 
   test.afterEach(async () => {
     await testApi.cleanup()
+  })
+
+  test('header add-contact action is available on a populated dashboard', async ({ page }) => {
+    // spec: DSH-003[0]
+    // Establish the POPULATED state first — the seeded overdue card must have
+    // rendered (a loading or error mask would otherwise vacuously pass a
+    // state-independent affordance check) — then assert the header CTA.
+    const contactName = `${testApi.prefix}-Dashboard Test Contact`
+    await page.goto('/dashboard')
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: contactName })).toBeVisible()
+
+    await expectAddContactHeader(page)
   })
 
   test('marking contact as contacted updates dashboard immediately without navigation', async ({

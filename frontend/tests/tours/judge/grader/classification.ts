@@ -63,19 +63,9 @@ export const CLASSIFICATION: Classification[] = [
   // DSH-002 (persistent global navigation) migrated to E2E:
   // navigation.spec.ts (see `// spec: DSH-002`).
 
-  // --- DSH-003: always a path to add or browse contacts ---
-  {
-    behaviorId: 'DSH-003',
-    thenIndex: 0,
-    grader: 'verifier',
-    note: 'add-contact action always in the header (aria link/button Add Contact)',
-  },
-  {
-    behaviorId: 'DSH-003',
-    thenIndex: 1,
-    grader: 'verifier',
-    note: 'caught-up state offers add + view-list (route-empty capture: View All Contacts + Add New Contact)',
-  },
+  // DSH-003 (always a path to add or browse contacts) migrated to E2E:
+  // dashboard.spec.ts + error-boundary.spec.ts — the header CTA is asserted in
+  // all four widget states (see `// spec: DSH-003`).
 
   // --- DSH-004: loading + error states distinct from content ---
   // [0] (loading → placeholder) and [1] (failure → error state with a reason)
