@@ -104,32 +104,6 @@ describe('draftForCase (mocked stronger-model drafter — offline)', () => {
     await draftForCase('CON-042-doctored-nowarn', 'CON-042', captures, drafter, 'strong')
     expect(sawDialogMessage).toBe('') // the drafter saw the DOCTORED (blanked) dialog
   })
-
-  it('drafts dynamically-unbound residue alongside the static judge item', async () => {
-    // DSH-004[1] (the overdue error surface) emits `unbound` when the failure
-    // bracket lacks the error heading; the labeling flow must draft it
-    // ALONGSIDE DSH-004's static judge item [2] (the old static-fallback flow
-    // would have skipped the dynamically unbound one).
-    const drafter: Judge = async input =>
-      input.items.map(i => ({
-        itemIndex: i.itemIndex,
-        verdict: 'unsure' as const,
-        citation: '',
-        critique: 'renamed?',
-      }))
-    const captures = [
-      cap({
-        behaviors: ['DSH-004'],
-        pair: { id: 'd', role: 'error' },
-        note: 'overdue request failed',
-        aria: { role: 'root', children: [{ role: 'text', text: 'Something went wrong' }] },
-      }),
-    ]
-    const artifact = await draftForCase('DSH-004-renamed', 'DSH-004', captures, drafter, 'strong')
-    const idxs = artifact.items.map(i => i.then_index)
-    expect(idxs).toContain(1)
-    expect(idxs).toContain(2)
-  })
 })
 
 describe('resolveLabelerDrafter (stronger-than-judge defaults)', () => {

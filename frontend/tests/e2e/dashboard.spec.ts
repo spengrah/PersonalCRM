@@ -1,8 +1,10 @@
 import { test, expect } from '@playwright/test'
 import { createTestAPI, TestAPI } from './helpers/test-api'
+import { expectAddContactHeader } from './helpers/dashboard'
 
 test.describe('Dashboard @area:dashboard', () => {
   test('should display dashboard with navigation @smoke', async ({ page }) => {
+    // spec: DSH-001[0]
     await page.goto('/')
 
     // Should redirect to dashboard (client-side redirect via useEffect)
@@ -52,6 +54,50 @@ test.describe('Dashboard @area:dashboard', () => {
 
     expect(hasOverdue || hasCaughtUp).toBeTruthy()
   })
+
+  test('caught-up state offers add-contact and view-list paths', async ({ page }) => {
+    // spec: DSH-003[0], DSH-003[1]
+    // Route-mock an EMPTY overdue list (full apiClient envelope) before first
+    // load so the caught-up state renders deterministically regardless of what
+    // parallel workers have seeded (per-page interception, no DB mutation).
+    await page.route('**/api/v1/contacts/overdue*', route =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ success: true, data: [] }),
+      })
+    )
+
+    await page.goto('/dashboard')
+    await expect(page.getByRole('heading', { name: /All caught up/ })).toBeVisible()
+
+    // Both affordances, with their destinations — visibility alone would not
+    // prove the offered paths lead to the add/browse surfaces.
+    const viewAll = page.getByRole('link', { name: 'View All Contacts' })
+    await expect(viewAll).toBeVisible()
+    await expect(viewAll).toHaveAttribute('href', '/contacts')
+    const addNew = page.getByRole('link', { name: 'Add New Contact' })
+    await expect(addNew).toBeVisible()
+    await expect(addNew).toHaveAttribute('href', '/contacts/new')
+
+    // The header add-contact CTA is present in the CAUGHT-UP state too.
+    await expectAddContactHeader(page)
+  })
+
+  test('dashboard exposes no dashboard-level or global search surface', async ({ page }) => {
+    // spec: DSH-007[1]
+    // NEGATIVE existence proof at a settled state: establish the dashboard
+    // has fully rendered first, THEN assert that no plausible search-surface
+    // shape is present (a not-yet-rendered page would pass these vacuously).
+    // Search lives on the contact list (DSH-007[0], contacts.spec.ts).
+    await page.goto('/dashboard')
+    await expect(page.getByRole('heading', { name: 'Action Required', level: 2 })).toBeVisible()
+
+    await expect(page.getByRole('searchbox')).toHaveCount(0)
+    await expect(page.getByRole('textbox', { name: /search/i })).toHaveCount(0)
+    await expect(page.getByPlaceholder(/search/i)).toHaveCount(0)
+    await expect(page.getByRole('button', { name: /search|command|⌘K/i })).toHaveCount(0)
+  })
 })
 
 test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () => {
@@ -77,14 +123,33 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
     await testApi.cleanup()
   })
 
+  test('header add-contact action is available on a populated dashboard', async ({ page }) => {
+    // spec: DSH-003[0]
+    // Establish the POPULATED state first — the seeded overdue card must have
+    // rendered (a loading or error mask would otherwise vacuously pass a
+    // state-independent affordance check) — then assert the header CTA.
+    const contactName = `${testApi.prefix}-Dashboard Test Contact`
+    await page.goto('/dashboard')
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: contactName })).toBeVisible()
+
+    await expectAddContactHeader(page)
+  })
+
   test('marking contact as contacted updates dashboard immediately without navigation', async ({
     page,
   }) => {
-    // Deliberately un-cited: this test proves only part of CAD-028 (the
-    // mutual interaction and the no-reload overdue-list exit). Its other
-    // then-items — the accelerated-clock timestamp, the count update, and
-    // dashboard/list/detail consistency — are not asserted here, and a
-    // partial proof must not mark the behavior covered.
+    // spec: DSH-005[0]
+    // Cited for DSH-005[0] only: the on-dashboard interaction:created trigger
+    // refreshing the overdue list without a manual reload. DSH-005's broader
+    // trigger coverage (merge / meeting-note-resolve), the cosmetic-edit no-op,
+    // and the refocus/staleTime timing were verifier-abstained and are not
+    // asserted here. Deliberately NOT cited for CAD-028: this test proves only
+    // part of that behavior (the mutual interaction and the no-reload
+    // overdue-list exit). Its other then-items — the accelerated-clock
+    // timestamp, the count update, and dashboard/list/detail consistency — are
+    // not asserted here, and a partial proof must not mark the behavior
+    // covered.
     const contactName = `${testApi.prefix}-Dashboard Test Contact`
 
     // Navigate to dashboard
@@ -93,6 +158,13 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
 
     // Verify our seeded contact is visible
     await expect(page.getByRole('heading', { name: contactName })).toBeVisible()
+
+    // No-reload sentinel: a window marker survives only if no full navigation
+    // or reload happens between the mutation and the refreshed list. Its
+    // survival (asserted below) proves "without a manual page reload".
+    await page.evaluate(() => {
+      ;(window as Window & { __dsh005NoReload?: boolean }).__dsh005NoReload = true
+    })
 
     // Find the "Mark as Contacted" button for our contact
     const contactCard = page.locator('div.rounded-lg').filter({ hasText: contactName })
@@ -148,5 +220,14 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
     await expect(page.getByRole('heading', { name: contactName })).not.toBeVisible({
       timeout: 5000,
     })
+
+    // The no-reload sentinel survived (a reload/navigation would wipe it) and
+    // we are still on the dashboard — the refresh happened in place.
+    expect(
+      await page.evaluate(
+        () => (window as Window & { __dsh005NoReload?: boolean }).__dsh005NoReload
+      )
+    ).toBe(true)
+    await expect(page).toHaveURL(/\/dashboard(\?|$)/)
   })
 })

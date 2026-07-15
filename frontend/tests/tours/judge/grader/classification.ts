@@ -1,8 +1,9 @@
 // The hybrid-grader classification (design D3): rows keyed by
 // (behavior_id, then_index) EXACTLY as the spec YAMLs list them. Originally one
-// row per then-item; the CON contacts behaviors have since migrated to E2E, so
-// this is now an index-faithful SUBSET — the remaining rows are the DSH/CAD
-// verifier items plus the CON-042[0] + DSH-004[2] judge items. The subset is
+// row per then-item; the CON contacts and DSH dashboard behaviors have since
+// migrated to E2E, so this is now an index-faithful SUBSET — the remaining
+// rows are the CAD verifier items plus the CON-042[0] + DSH-004[2] judge
+// items. The subset is
 // guarded by grade.test.ts's EXPECTED_ROWS (INV-1), not a total-count check.
 // "Verifiers before judges" — the judge residue is deliberately tiny.
 //
@@ -57,61 +58,21 @@ export const CLASSIFICATION: Classification[] = [
   // CON-045 (the birthdays page groups contacts by proximity) migrated to E2E:
   // birthdays.spec.ts (see `// spec: CON-045`).
 
-  // --- DSH-001: the dashboard is the default landing surface ---
-  {
-    behaviorId: 'DSH-001',
-    thenIndex: 0,
-    grader: 'verifier',
-    note: 'taken to the dashboard as default (landing capture url pathname /dashboard)',
-  },
+  // DSH-001 (the dashboard is the default landing surface) migrated to E2E:
+  // dashboard.spec.ts (see `// spec: DSH-001`).
 
-  // --- DSH-002: persistent global navigation ---
-  {
-    behaviorId: 'DSH-002',
-    thenIndex: 0,
-    grader: 'verifier',
-    note: 'nav links to dashboard/contacts/birthdays/imports/settings present at wide viewports',
-  },
-  {
-    behaviorId: 'DSH-002',
-    thenIndex: 1,
-    grader: 'verifier',
-    note: 'active link visually marked (fields.activeNavClass — aria-invisible active class)',
-  },
-  {
-    behaviorId: 'DSH-002',
-    thenIndex: 2,
-    grader: 'verifier',
-    note: 'nav stays visible while scrolling (fields.navPosition === sticky, computed style)',
-  },
+  // DSH-002 (persistent global navigation) migrated to E2E:
+  // navigation.spec.ts (see `// spec: DSH-002`).
 
-  // --- DSH-003: always a path to add or browse contacts ---
-  {
-    behaviorId: 'DSH-003',
-    thenIndex: 0,
-    grader: 'verifier',
-    note: 'add-contact action always in the header (aria link/button Add Contact)',
-  },
-  {
-    behaviorId: 'DSH-003',
-    thenIndex: 1,
-    grader: 'verifier',
-    note: 'caught-up state offers add + view-list (route-empty capture: View All Contacts + Add New Contact)',
-  },
+  // DSH-003 (always a path to add or browse contacts) migrated to E2E:
+  // dashboard.spec.ts + error-boundary.spec.ts — the header CTA is asserted in
+  // all four widget states (see `// spec: DSH-003`).
 
   // --- DSH-004: loading + error states distinct from content ---
-  {
-    behaviorId: 'DSH-004',
-    thenIndex: 0,
-    grader: 'verifier',
-    note: 'loading → placeholder (route-held: fields.overdueLoadingSkeletons>0 AND no caught-up/cards)',
-  },
-  {
-    behaviorId: 'DSH-004',
-    thenIndex: 1,
-    grader: 'verifier',
-    note: 'failure → an error state carrying a reason, not empty/caught-up (route-500 capture; heading is a BINDING VEHICLE: absent without wrong-state signals → unbound → judge; caught-up/cards on failure fail deterministically; faithfulness is [2])',
-  },
+  // [0] (loading → placeholder) and [1] (failure → error state with a reason)
+  // migrated to E2E: error-boundary.spec.ts (see `// spec: DSH-004`). [2]
+  // stays — the judge owns reason-faithfulness. thenIndex is spec-faithful and
+  // never re-indexed, so the surviving judge row keeps its gapped index 2.
   {
     behaviorId: 'DSH-004',
     thenIndex: 2,
@@ -119,51 +80,18 @@ export const CLASSIFICATION: Classification[] = [
     note: 'the shown failure reason faithfully reflects the actual failure (judge-primary; was a judgeFallback residue on the old combined item)',
   },
 
-  // --- DSH-005: overdue widget reflects out-of-flow membership changes ---
-  {
-    behaviorId: 'DSH-005',
-    thenIndex: 0,
-    grader: 'verifier',
-    caveat:
-      'Graded from the on-dashboard CAD-028 mark-contacted (interaction:created → overdue refetch, no full reload — a valid freshness instance), but the trigger is on-dashboard: the spec’s "action elsewhere" breadth is not separately toured.',
-    note: 'overdue refreshes without a reload (from the CAD-028 mark-contacted refetch)',
-  },
-  {
-    behaviorId: 'DSH-005',
-    thenIndex: 1,
-    grader: 'verifier',
-    caveat:
-      'Only interaction:created (mark-contacted) is dashboard-reachable; the merge and meeting-note-resolve triggers are other-surface flows → abstain.',
-    note: 'covers interaction/merge/meeting-note (only interaction:created toured)',
-  },
-  {
-    behaviorId: 'DSH-005',
-    thenIndex: 2,
-    grader: 'verifier',
-    caveat: 'A cosmetic-edit flow is not toured from the dashboard → abstain.',
-    note: 'cosmetic edits do not disturb the list (not toured → abstain)',
-  },
-  {
-    behaviorId: 'DSH-005',
-    thenIndex: 3,
-    grader: 'verifier',
-    caveat: 'The refocus/5-min-staleTime timing is not deterministically tourable → abstain.',
-    note: 'refocus refetches only once stale (5-min) (not tourable → abstain)',
-  },
+  // DSH-005 (overdue widget reflects out-of-flow membership changes):
+  // [0] (refreshes without a reload — the deterministically tourable
+  // on-dashboard interaction:created trigger) migrated to E2E:
+  // dashboard.spec.ts (see `// spec: DSH-005`). [1] (merge / meeting-note
+  // trigger breadth), [2] (cosmetic-edit no-op), and [3] (refocus/staleTime
+  // timing) were verifier-ABSTAINED (never deterministically provable from a
+  // tour) and are deleted WITHOUT an E2E replacement — item-level coverage
+  // intentionally dropped; the behavior remains speakable holistically under
+  // its DSH-012 intent.
 
-  // --- DSH-007: search is the contact list's; no global search ---
-  {
-    behaviorId: 'DSH-007',
-    thenIndex: 0,
-    grader: 'verifier',
-    note: 'contact text search via the contact-list search input (/contacts capture aria)',
-  },
-  {
-    behaviorId: 'DSH-007',
-    thenIndex: 1,
-    grader: 'verifier',
-    note: 'no dashboard/global search surface (/dashboard aria has no searchbox/command palette)',
-  },
+  // DSH-007 (search is the contact list's; no global search) migrated to E2E:
+  // contacts.spec.ts ([0]) + dashboard.spec.ts ([1]) (see `// spec: DSH-007`).
 
   // --- CAD-026: dashboard action-required overdue list ---
   {
@@ -328,14 +256,15 @@ export const CLASSIFICATION: Classification[] = [
   },
 ]
 
-// The 22 CON verifier then-items have migrated to E2E (contacts /
-// contact-navigation / contact-merge / birthdays .spec.ts); what remains is the
-// residual DSH/CAD verifier rows plus the CON-042[0] + DSH-004[2] judge items
-// (38 rows). The classification is now an index-faithful SUBSET of the spec,
-// guarded by grade.test.ts's EXPECTED_ROWS rather than a total-count check. The
-// constant below is no longer asserted anywhere and is retained only until PR4
-// removes the residual verifier machinery.
-export const CLASSIFICATION_ITEM_COUNT = 38
+// The 22 CON and 14 DSH verifier then-items have migrated to E2E (contacts /
+// contact-navigation / contact-merge / birthdays / dashboard / navigation /
+// error-boundary .spec.ts); what remains is the residual CAD verifier rows
+// plus the CON-042[0] + DSH-004[2] judge items (24 rows). The classification
+// is now an index-faithful SUBSET of the spec, guarded by grade.test.ts's
+// EXPECTED_ROWS rather than a total-count check. The constant below is no
+// longer asserted anywhere and is retained only until PR4 removes the
+// residual verifier machinery.
+export const CLASSIFICATION_ITEM_COUNT = 24
 
 export function classificationFor(behaviorId: string): Classification[] {
   return CLASSIFICATION.filter(c => c.behaviorId === behaviorId).sort(

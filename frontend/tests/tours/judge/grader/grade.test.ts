@@ -1,8 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { CLASSIFICATION } from './classification'
 import { SPEC_CATALOG } from '../spec-catalog'
-import { aggregate, applyGrounding, gradeBehavior, groupByBehavior, runVerifiers } from './grade'
-import { judgeItemsFor } from '../judge-input'
+import { aggregate, applyGrounding, gradeBehavior, groupByBehavior } from './grade'
 import { apiItem, cap, pair } from './fixtures'
 
 // The index-faithful subset guard (INV-1): CLASSIFICATION is pinned to an
@@ -13,21 +12,7 @@ import { apiItem, cap, pair } from './fixtures'
 // migrated behavior may keep a non-zero / gapped index (e.g. DSH-004[2]).
 const EXPECTED_ROWS = [
   'CON-042[0]:judge',
-  'DSH-001[0]:verifier',
-  'DSH-002[0]:verifier',
-  'DSH-002[1]:verifier',
-  'DSH-002[2]:verifier',
-  'DSH-003[0]:verifier',
-  'DSH-003[1]:verifier',
-  'DSH-004[0]:verifier',
-  'DSH-004[1]:verifier',
   'DSH-004[2]:judge',
-  'DSH-005[0]:verifier',
-  'DSH-005[1]:verifier',
-  'DSH-005[2]:verifier',
-  'DSH-005[3]:verifier',
-  'DSH-007[0]:verifier',
-  'DSH-007[1]:verifier',
   'CAD-026[0]:verifier',
   'CAD-026[1]:verifier',
   'CAD-026[2]:verifier',
@@ -79,65 +64,6 @@ describe('classification map', () => {
       'CON-042[0]',
       'DSH-004[2]',
     ])
-  })
-})
-
-describe('unbound routing', () => {
-  // DSH-004[1] (the overdue error surface) emits `unbound` when the failure
-  // bracket lacks the 'Error loading overdue contacts' heading and shows no
-  // caught-up/cards — the error copy may be renamed. It routes to the judge
-  // dynamically, alongside DSH-004's static judge item [2].
-  const unboundSet = () => ({
-    behaviorId: 'DSH-004',
-    captures: [
-      cap({
-        behaviors: ['DSH-004'],
-        pair: pair('d', 'error'),
-        note: 'overdue request failed',
-        aria: { role: 'root' as const, children: [{ role: 'text', text: 'Something went wrong' }] },
-      }),
-    ],
-  })
-
-  it('routes the dynamic unbound item [1] to the judge alongside the static judge item [2]', () => {
-    const grade = gradeBehavior(unboundSet(), {
-      judge: {
-        1: { verdict: 'fail', citation: 'CAPTURE[0]: error surface' },
-        2: { verdict: 'pass', citation: 'the shown reason matches the failure' },
-      },
-    })
-    const dynamic = grade.items.find(i => i.thenIndex === 1)
-    expect(dynamic?.grader).toBe('verifier')
-    expect(dynamic?.source).toBe('judge')
-    expect(dynamic?.verdict).toBe('fail')
-    // DSH-004's static judge item [2] is graded by the same judge call.
-    const staticJudge = grade.items.find(i => i.thenIndex === 2)
-    expect(staticJudge?.grader).toBe('judge')
-    expect(staticJudge?.source).toBe('judge')
-    expect(staticJudge?.verdict).toBe('pass')
-  })
-
-  it('selects both the dynamic unbound [1] and the static judge [2] as judge residue', () => {
-    // Mirrors the runner/label two-phase recipe: the residue sent to the judge
-    // includes the dynamically-unbound [1] AND the statically judge-tagged [2].
-    const set = unboundSet()
-    const residue = judgeItemsFor('DSH-004', runVerifiers(set)).map(i => i.itemIndex)
-    expect(residue).toContain(1)
-    expect(residue).toContain(2)
-  })
-
-  it('grades an unrouted unbound item as pending unsure (verifiers-only mode)', () => {
-    const grade = gradeBehavior(unboundSet())
-    const item = grade.items.find(i => i.thenIndex === 1)
-    expect(item?.source).toBe('pending')
-    expect(item?.verdict).toBe('unsure')
-    expect(item?.reason).toMatch(/judge routing pending/)
-  })
-
-  it('an unbound verdict never leaks into a graded item', () => {
-    for (const g of [gradeBehavior(unboundSet())]) {
-      for (const i of g.items) expect(['pass', 'fail', 'unsure']).toContain(i.verdict)
-    }
   })
 })
 

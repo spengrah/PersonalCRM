@@ -17,35 +17,6 @@ const cap = (behavior: string): Capture =>
   }) as unknown as Capture
 
 describe('runnerFromJudge', () => {
-  it('two-phase: an unbound verifier item joins the judge call dynamically', async () => {
-    // DSH-004[1] (the overdue error surface) emits `unbound` when the failure
-    // bracket lacks the 'Error loading overdue contacts' heading (with no
-    // caught-up/cards), so it joins DSH-004's static judge item [2] in the
-    // single judge call.
-    const asked: number[] = []
-    const judge: Judge = vi.fn(async (input: Parameters<Judge>[0]) => {
-      asked.push(...input.items.map(i => i.itemIndex))
-      return input.items.map(i => ({
-        itemIndex: i.itemIndex,
-        verdict: 'unsure' as const,
-        citation: '',
-        critique: '',
-      }))
-    })
-    const run = runnerFromJudge(judge)
-    const c = {
-      ...cap('DSH-004'),
-      pair: { id: 'd', role: 'error' },
-      note: 'overdue request failed',
-      aria: { role: 'root', children: [{ role: 'text', text: 'Something went wrong' }] },
-    } as unknown as Capture
-    const out = await run('DSH-004', [c])
-    expect(judge).toHaveBeenCalledOnce()
-    expect(asked).toContain(1) // the dynamically unbound error item
-    expect(asked).toContain(2) // the static judge residue item
-    expect(out[1]).toBeDefined()
-  })
-
   it('maps the judge per-item verdicts into ItemVerdicts keyed by then-index', async () => {
     // CON-042[0] ("a confirmation prompt warns…") is a judge-tagged residue item.
     const judge: Judge = vi.fn(async () => [

@@ -586,23 +586,66 @@ test.describe('Contacts - Cadence Filter @area:contacts', () => {
   })
 
   test('should filter contacts by cadence status', async ({ page }) => {
-    // Seed contacts with and without cadence
+    // spec: DSH-007[0]
+    // Contact text search is provided through the contact list's search
+    // input: the tightened search step below proves typing a term drives a
+    // `search=` list request that FILTERS the results (the matching fixtures
+    // render, a seeded non-matching one does not) — not merely that an input
+    // exists.
+    // Seed contacts with and without cadence, plus a NON-MATCHING contact the
+    // search must filter out.
     await testApi.seedContacts([
       { full_name: 'FilterCadence WithWeekly', cadence: 'weekly' },
       { full_name: 'FilterCadence WithMonthly', cadence: 'monthly' },
       { full_name: 'FilterCadence NoCadence' },
+      { full_name: 'Unrelated Zebra' },
     ])
 
     await page.goto('/contacts')
     await page.waitForLoadState('domcontentloaded')
 
-    // Search to isolate our test data
+    // Two-phase search. Phase 1 searches the bare worker prefix (matches ALL
+    // four seeded fixtures) and establishes the non-matching contact IS
+    // reachable via search on this page — without this, its later absence
+    // could vacuously pass (e.g. an ignored filter leaving it on page 2 of
+    // the shared DB). Phase 2 narrows to the FilterCadence term and asserts
+    // the non-matching row disappears: only an applied text filter can
+    // remove a row that phase 1 proved present. Each response listener is
+    // registered BEFORE .fill() (a param-carrying request can fire before a
+    // listener added after the fill) and requires the EXACT search term.
     const searchInput = page.getByPlaceholder('Search contacts...')
-    await searchInput.fill(`${testApi.prefix}-FilterCadence`)
+    const prefixResponse = page.waitForResponse(
+      resp =>
+        resp.request().method() === 'GET' &&
+        resp.url().includes('/api/v1/contacts') &&
+        new URL(resp.url()).searchParams.get('search') === testApi.prefix &&
+        !new URL(resp.url()).searchParams.has('ids_only')
+    )
+    await searchInput.fill(testApi.prefix)
     await searchInput.press('Enter')
+    await prefixResponse
     await expect(page.getByText(`${testApi.prefix}-FilterCadence WithWeekly`)).toBeVisible({
       timeout: 10000,
     })
+    await expect(page.getByText(`${testApi.prefix}-Unrelated Zebra`)).toBeVisible()
+
+    const searchTerm = `${testApi.prefix}-FilterCadence`
+    const searchResponse = page.waitForResponse(
+      resp =>
+        resp.request().method() === 'GET' &&
+        resp.url().includes('/api/v1/contacts') &&
+        new URL(resp.url()).searchParams.get('search') === searchTerm &&
+        !new URL(resp.url()).searchParams.has('ids_only')
+    )
+    await searchInput.fill(searchTerm)
+    await searchInput.press('Enter')
+    await searchResponse
+    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithWeekly`)).toBeVisible({
+      timeout: 10000,
+    })
+    // The search FILTERS: the non-matching contact phase 1 proved present is
+    // now absent.
+    await expect(page.getByText(`${testApi.prefix}-Unrelated Zebra`)).not.toBeVisible()
 
     // Verify all 3 contacts visible with "All contacts" (default)
     const filterSelect = page.getByLabel('Filter by cadence')
