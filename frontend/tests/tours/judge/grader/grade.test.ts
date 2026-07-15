@@ -104,32 +104,34 @@ describe('classification map', () => {
 })
 
 describe('unbound routing', () => {
-  // CON-041[0] emits `unbound` when the surface heading anchor is missing from
-  // a present capture (copy anchor — possibly renamed).
+  // DSH-004[1] (the overdue error surface) emits `unbound` when the failure
+  // bracket lacks the 'Error loading overdue contacts' heading and shows no
+  // caught-up/cards — the error copy may be renamed. It routes to the judge
+  // dynamically, alongside DSH-004's static judge item [2].
   const unboundSet = () => ({
-    behaviorId: 'CON-041',
+    behaviorId: 'DSH-004',
     captures: [
       cap({
-        behaviors: ['CON-041'],
-        note: 'action=edit consumed',
-        url: '/contacts/x',
-        aria: { role: 'root' as const, children: [{ role: 'heading', name: 'Something Else' }] },
+        behaviors: ['DSH-004'],
+        pair: pair('d', 'error'),
+        note: 'overdue request failed',
+        aria: { role: 'root' as const, children: [{ role: 'text', text: 'Something went wrong' }] },
       }),
     ],
   })
 
   it('routes an unbound verifier item to the judge verdict when available', () => {
     const grade = gradeBehavior(unboundSet(), {
-      judge: { 0: { verdict: 'fail', citation: 'CAPTURE[0]: heading "Something Else"' } },
+      judge: { 1: { verdict: 'fail', citation: 'CAPTURE[0]: error surface' } },
     })
-    const item = grade.items.find(i => i.thenIndex === 0)
+    const item = grade.items.find(i => i.thenIndex === 1)
     expect(item?.source).toBe('judge')
     expect(item?.verdict).toBe('fail')
   })
 
   it('grades an unrouted unbound item as pending unsure (verifiers-only mode)', () => {
     const grade = gradeBehavior(unboundSet())
-    const item = grade.items.find(i => i.thenIndex === 0)
+    const item = grade.items.find(i => i.thenIndex === 1)
     expect(item?.source).toBe('pending')
     expect(item?.verdict).toBe('unsure')
     expect(item?.reason).toMatch(/judge routing pending/)
