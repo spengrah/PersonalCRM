@@ -41,9 +41,12 @@ test.describe('Contact Direction Signals @area:contacts', () => {
       timeout: 15000,
     })
 
-    // Direction signals section should appear with outreach and response timestamps
-    await expect(page.getByText('Last outreach:')).toBeVisible({ timeout: 5000 })
-    await expect(page.getByText('Last response:')).toBeVisible()
+    // Direction signals section should appear with outreach and response
+    // TIMES, not just the labels — the value after the colon must be
+    // non-empty (formatRelativeTime renders e.g. "3 days ago"; a blank
+    // value would render "Last outreach: " and fail the \S+ match).
+    await expect(page.getByText(/Last outreach: \S+/)).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText(/Last response: \S+/)).toBeVisible()
   })
 
   test('shows outreach but not response after outbound-only interaction', async ({
@@ -71,8 +74,8 @@ test.describe('Contact Direction Signals @area:contacts', () => {
       timeout: 15000,
     })
 
-    // Should show outreach timestamp
-    await expect(page.getByText('Last outreach:')).toBeVisible({ timeout: 5000 })
+    // Should show the outreach TIME (non-empty value after the label)
+    await expect(page.getByText(/Last outreach: \S+/)).toBeVisible({ timeout: 5000 })
 
     // Shown-IFF-exists: with no inbound/mutual interaction there is no
     // response timestamp, so the response line must be ABSENT.
@@ -114,7 +117,7 @@ test.describe('Contact Direction Signals @area:contacts', () => {
 
     // The awaiting-reply indicator renders while the follow-up pends.
     await expect(page.getByText('Awaiting reply')).toBeVisible()
-    await expect(page.getByText('Last outreach:')).toBeVisible()
+    await expect(page.getByText(/Last outreach: \S+/)).toBeVisible()
   })
 
   test('shows explicit no-recent-activity state with no direction signals', async ({ page }) => {

@@ -101,6 +101,7 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
 
   test.describe('Tasks Section', () => {
     test('shows tasks section on contact detail page', async ({ page }) => {
+      // spec: CAD-030[3]
       const { ids } = await testApi.seedContacts([{ full_name: 'Task Test Contact' }])
 
       await page.goto(`/contacts/${ids[0]}`)
@@ -113,7 +114,6 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
       await expect(page.getByRole('heading', { name: 'Tasks' })).toBeVisible()
       await expect(page.getByRole('button', { name: 'Add', exact: true })).toBeVisible()
 
-      // spec: CAD-030[3]
       // A freshly seeded contact has no tasks, so the empty state is
       // guaranteed: it invites adding a task.
       await expect(page.getByText('No tasks yet')).toBeVisible()
@@ -271,11 +271,25 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
       await expect(send).toBeVisible()
       await expect(reminder).toBeVisible()
       await expect(kindGroup.getByRole('button')).toHaveCount(3)
+
+      // Every kind is SELECTABLE, not merely rendered: the default is
+      // Reach out, and clicking each other kind (then back) moves the
+      // single aria-pressed selection.
       await expect(reachOut).toHaveAttribute('aria-pressed', 'true')
       await expect(send).toHaveAttribute('aria-pressed', 'false')
+      await expect(reminder).toHaveAttribute('aria-pressed', 'false')
       await send.click()
       await expect(send).toHaveAttribute('aria-pressed', 'true')
       await expect(reachOut).toHaveAttribute('aria-pressed', 'false')
+      await expect(reminder).toHaveAttribute('aria-pressed', 'false')
+      await reminder.click()
+      await expect(reminder).toHaveAttribute('aria-pressed', 'true')
+      await expect(send).toHaveAttribute('aria-pressed', 'false')
+      await expect(reachOut).toHaveAttribute('aria-pressed', 'false')
+      await reachOut.click()
+      await expect(reachOut).toHaveAttribute('aria-pressed', 'true')
+      await expect(reminder).toHaveAttribute('aria-pressed', 'false')
+      await expect(send).toHaveAttribute('aria-pressed', 'false')
 
       // Close modal with Escape
       await page.keyboard.press('Escape')

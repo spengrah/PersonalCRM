@@ -139,12 +139,30 @@ test.describe('Dashboard - Overdue Cards @area:dashboard @area:overdue', () => {
       ).toBeVisible()
     }
 
-    // The header carries the overdue count. The count is GLOBAL (other
-    // workers seed overdue contacts too), so assert a loose lower bound
-    // against our own rendered cards, never an exact number.
-    const headerText = await page.getByText(/\d+ contacts? need your attention/).textContent()
-    const headerCount = Number(/(\d+)/.exec(headerText ?? '')?.[1])
-    expect(headerCount).toBeGreaterThanOrEqual(tierSeeds.length)
+    // The header count is DERIVED from the same list the cards render from,
+    // so it must EQUAL the number of rendered cards (a hard-coded or stale
+    // header fails), and it must cover at least our seeded cards. The
+    // absolute count is GLOBAL (other workers seed overdue contacts too),
+    // so no exact-number assertion beyond the header==cards invariant —
+    // both sides are read in ONE DOM pass so a concurrent re-render cannot
+    // straddle the reads.
+    await expect
+      .poll(() =>
+        page.evaluate(minimum => {
+          const header = Array.from(document.querySelectorAll('p')).find(p =>
+            /\d+ contacts? need your attention/.test(p.textContent ?? '')
+          )
+          if (!header) return 'no numeric header'
+          const headerCount = Number(/(\d+)/.exec(header.textContent ?? '')?.[1])
+          const cardCount = Array.from(document.querySelectorAll('button')).filter(b =>
+            (b.textContent ?? '').includes('Mark as Contacted')
+          ).length
+          if (headerCount !== cardCount) return `${headerCount} !== ${cardCount}`
+          if (headerCount < minimum) return `${headerCount} < seeded ${minimum}`
+          return 'header equals cards'
+        }, tierSeeds.length)
+      )
+      .toBe('header equals cards')
   })
 
   test('each card shows urgency tier, cadence, recency, a reachable method, and the suggested action', async ({
@@ -154,26 +172,24 @@ test.describe('Dashboard - Overdue Cards @area:dashboard @area:overdue', () => {
     await page.goto('/dashboard')
     await page.waitForLoadState('domcontentloaded')
 
-    // All three urgency tiers are exercised. The tier dot is CSS-only (no
-    // accessible text), so the color class is the observable signal — the
-    // same one the retired verifier graded.
+    // The clause is per-card ("each card shows ..."): assert ALL FIVE
+    // sub-elements on EVERY seeded card, across all three urgency tiers.
+    // The tier dot is CSS-only (no accessible text), so the color class is
+    // the observable signal — the same one the retired verifier graded.
     for (const seed of tierSeeds) {
       const name = `${testApi.prefix}-${seed.key}`
       await expect(page.getByRole('heading', { name })).toBeVisible()
       const card = page.locator('div.rounded-lg').filter({ hasText: name })
       await expect(card.locator(`div.rounded-full.${seed.dot}`)).toBeVisible()
+      await expect(card.getByText('(weekly cadence)')).toBeVisible()
+      await expect(card.getByText(/\d+ days overdue.*Last contacted/)).toBeVisible()
+      await expect(
+        card.getByText(`${seed.key.toLowerCase().replace(/ /g, '-')}@example.com`)
+      ).toBeVisible()
+      await expect(card.getByText('Email', { exact: true })).toBeVisible()
+      const suggestion = await card.getByText(/💡/).textContent()
+      expect(suggestion?.replace('💡', '').trim().length).toBeGreaterThan(0)
     }
-
-    // The remaining card sub-elements (cadence, recency, a reachable method,
-    // the suggested action) are text — assert them on the mid-tier card.
-    const midName = `${testApi.prefix}-Tier Mid Contact`
-    const midCard = page.locator('div.rounded-lg').filter({ hasText: midName })
-    await expect(midCard.getByText('(weekly cadence)')).toBeVisible()
-    await expect(midCard.getByText(/\d+ days overdue.*Last contacted/)).toBeVisible()
-    await expect(midCard.getByText('tier-mid-contact@example.com')).toBeVisible()
-    await expect(midCard.getByText('Email', { exact: true })).toBeVisible()
-    const suggestion = await midCard.getByText(/💡/).textContent()
-    expect(suggestion?.replace('💡', '').trim().length).toBeGreaterThan(0)
   })
 })
 
@@ -408,6 +424,14 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
       return !entries.some(entry => entry.id === overdueContactId)
     })
 
+    // Page-lifetime sentinel for the "without a page reload" clause: a
+    // window property survives client-side updates but is wiped by any
+    // reload/navigation, so re-reading it after the update proves the same
+    // document handled the whole flow.
+    await page.evaluate(() => {
+      ;(window as unknown as { __noReloadSentinel?: boolean }).__noReloadSentinel = true
+    })
+
     // Click "Mark as Contacted", bracketed by wall-clock reads so the
     // server-assigned timestamp can be bounded. The E2E env runs WITHOUT
     // TIME_ACCELERATION, so the server's accelerated clock IS the wall
@@ -482,5 +506,13 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
         })
       )
       .toBe('header equals cards')
+
+    // No page reload happened: the pre-click window sentinel survived the
+    // whole update (any reload or navigation would have wiped it).
+    expect(
+      await page.evaluate(
+        () => (window as unknown as { __noReloadSentinel?: boolean }).__noReloadSentinel
+      )
+    ).toBe(true)
   })
 })
