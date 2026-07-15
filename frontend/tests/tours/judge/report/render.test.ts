@@ -1,29 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import { renderReport } from './render'
-import type { BehaviorGrade } from '../grader/grade'
+import { gradeBehavior, groupByBehavior, type BehaviorGrade } from '../grader/grade'
+import { cap } from '../grader/fixtures'
 
+// Exactly ONE residue behavior in `grades` so both coverage branches are
+// exercised: `renderCoverage` marks a behavior toured IFF it appears in grades,
+// so CON-042 (present) renders ✅ toured and DSH-004 (catalog-only) renders
+// ⬜ untoured.
 const grades: BehaviorGrade[] = [
-  {
-    behaviorId: 'CON-041',
-    behaviorVerdict: 'fail',
-    items: [
-      {
-        thenIndex: 0,
-        grader: 'verifier',
-        source: 'verifier',
-        verdict: 'pass',
-        citation: 'aria heading',
-      },
-      {
-        thenIndex: 1,
-        grader: 'verifier',
-        source: 'verifier',
-        verdict: 'fail',
-        citation: 'url',
-        reason: 'action= not stripped',
-      },
-    ],
-  },
   {
     behaviorId: 'CON-042',
     behaviorVerdict: 'unsure',
@@ -33,21 +17,7 @@ const grades: BehaviorGrade[] = [
         grader: 'judge',
         source: 'pending',
         verdict: 'unsure',
-        reason: 'judge-only item',
-      },
-      {
-        thenIndex: 1,
-        grader: 'verifier',
-        source: 'verifier',
-        verdict: 'pass',
-        citation: 'probe 404',
-      },
-      {
-        thenIndex: 2,
-        grader: 'verifier',
-        source: 'verifier',
-        verdict: 'pass',
-        citation: 'url /contacts',
+        reason: 'judge-only item — no judge verdict supplied',
       },
     ],
   },
@@ -63,17 +33,16 @@ describe('renderReport', () => {
   })
 
   it('rolls up per-behavior verdicts and per-item detail', () => {
-    expect(md).toContain('| CON-041 |')
-    expect(md).toContain('action= not stripped')
+    expect(md).toContain('| CON-042 |')
     expect(md).toContain('[0]')
     expect(md).toMatch(/judge \(pending labels\)/)
   })
 
   it('omits the capture-coverage caveats section once every caveat row has migrated', () => {
-    // All CON/DSH/CAD verifier rows (incl. their `caveat` records) have moved
-    // to Playwright E2E, so CLASSIFICATION carries no caveat rows and the
-    // report honestly renders no caveat section. (DSH-005[1]/CAD-030[0] still
-    // appear in the static skip-list section — a separate SSOT, untouched here.)
+    // The verifier lane (incl. its `caveat` records) migrated to Playwright E2E,
+    // and the `caveat` field is gone from the classification, so the report
+    // honestly renders no caveat section. (DSH-005[1]/CAD-030[0] still appear in
+    // the static skip-list section — a separate SSOT, untouched here.)
     expect(md).not.toMatch(/Capture-coverage caveats/)
   })
 
@@ -81,10 +50,10 @@ describe('renderReport', () => {
     expect(md).toContain('## Coverage — first-cut scope')
     expect(md).toContain('### contacts')
     expect(md).toContain('### dashboard')
-    expect(md).toContain('### cadence-followup')
-    // Behaviors in the run's grades are toured; the rest are untoured.
-    expect(md).toMatch(/✅ toured — \*\*CON-041\*\*/)
-    expect(md).toMatch(/⬜ untoured — \*\*DSH-001\*\*/)
+    // A behavior in the run's grades is toured; a catalog behavior absent from
+    // grades is untoured.
+    expect(md).toMatch(/✅ toured — \*\*CON-042\*\*/)
+    expect(md).toMatch(/⬜ untoured — \*\*DSH-004\*\*/)
     // The skip-list carries the proposed + provider-dependent entries with reasons.
     expect(md).toContain('### Skip-list')
     expect(md).toMatch(/DSH-006/)
@@ -94,5 +63,46 @@ describe('renderReport', () => {
   it('stubs the label-gated metrics as N/A', () => {
     expect(md).toMatch(/fail-precision.*N\/A/)
     expect(md).toMatch(/judge\/DEFERRED\.md/)
+  })
+
+  it('renders a completed judge verdict as (judge), not pending labels', () => {
+    const judged: BehaviorGrade[] = [
+      {
+        behaviorId: 'CON-042',
+        behaviorVerdict: 'fail',
+        items: [
+          {
+            thenIndex: 0,
+            grader: 'judge',
+            source: 'judge',
+            verdict: 'fail',
+            citation: 'DIALOGS[0].message',
+            reason: 'no irreversibility warning',
+          },
+        ],
+      },
+    ]
+    const out = renderReport({ grades: judged })
+    // A completed judge verdict renders the source label "(judge)" — distinct
+    // from the "(judge (pending labels))" a source:'pending' item renders.
+    expect(out).toMatch(/\[0\] ❌ \*\*fail\*\* \(judge\)/)
+    expect(out).toContain('cite: DIALOGS[0].message')
+    expect(out).not.toMatch(/\(judge \(pending labels\)\)/)
+  })
+
+  it('grades then renders a migrated-tagged + both-residue capture set without throwing (INV-3)', () => {
+    // A tour still tags captures for a fully-migrated behavior (CON-038 has no
+    // classification row → grades to zero items) alongside the two residue
+    // behaviors. The full groupByBehavior → gradeBehavior → renderReport path
+    // must tolerate the empty grade and render cleanly.
+    const captures = [
+      cap({ behaviors: ['CON-038'] }),
+      cap({ behaviors: ['CON-042'] }),
+      cap({ behaviors: ['DSH-004'] }),
+    ]
+    const graded = groupByBehavior(captures).map(set => gradeBehavior(set))
+    const out = renderReport({ grades: graded })
+    expect(out).toContain('# Agentic UX QA')
+    expect(out.length).toBeGreaterThan(0)
   })
 })

@@ -31,7 +31,8 @@ export const PROPOSED_SKIPS: SkipEntry[] = [
 ]
 
 // Individual clauses of toured behaviors that a provider-less local sweep or a
-// single-tour flow cannot reach; the verifier abstains (unsure) on these.
+// single-tour flow cannot reach; they are documented here as untoured rather
+// than silently dropped.
 export const CLAUSE_SKIPS: SkipEntry[] = [
   {
     id: 'DSH-005[1]',

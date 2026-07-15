@@ -1,11 +1,10 @@
 // The advisory run report (markdown). A per-behavior/-item verdict roll-up over
-// a run's captures — every fail human-reviewable. This arc is ADVISORY: the
-// report FILES NO ISSUES (issue-mode is the deferred PR4). Label-gated metrics
-// (held-out fail-precision, error-analysis taxonomy) print N/A.
+// a run's captures — every fail human-reviewable. The report is ADVISORY and
+// files NO issues. Label-gated metrics (held-out fail-precision, error-analysis
+// taxonomy) print N/A.
 //
 // Pure `renderReport` (testable) + a bun CLI that loads a .runs run dir.
 
-import { CLASSIFICATION } from '../grader/classification'
 import { SPEC_CATALOG } from '../spec-catalog'
 import { SKIP_LIST } from './skip-list'
 import type { BehaviorGrade } from '../grader/grade'
@@ -81,7 +80,7 @@ export function renderReport(input: ReportInput): string {
 
   lines.push('# Agentic UX QA — advisory run report')
   lines.push('')
-  lines.push('> ADVISORY ONLY — this report files NO issues (issue-mode is the deferred PR4).')
+  lines.push('> ADVISORY ONLY — this report files NO issues.')
   lines.push(
     '> Every `fail` below is human-reviewable; `unsure` is abstention (never issue-eligible).'
   )
@@ -111,12 +110,7 @@ export function renderReport(input: ReportInput): string {
     lines.push(`### ${g.behaviorId} — ${ICON[g.behaviorVerdict]} ${g.behaviorVerdict}`)
     lines.push('')
     for (const item of g.items) {
-      const src =
-        item.source === 'verifier'
-          ? 'verifier'
-          : item.source === 'judge'
-            ? 'judge'
-            : 'judge (pending labels)'
+      const src = item.source === 'judge' ? 'judge' : 'judge (pending labels)'
       const cite = item.citation ? ` — cite: ${item.citation}` : ''
       const reason = item.reason ? ` — ${item.reason}` : ''
       lines.push(
@@ -169,17 +163,6 @@ export function renderReport(input: ReportInput): string {
   // (toured vs untoured) + the explicit skip-list. Advisory; files no issues; NOT
   // a repo-wide scanner (the other SSOT domains are Piece 3's scope).
   lines.push(...renderCoverage(grades))
-
-  // Capture-coverage caveats (honest limitations, NOT graded passes).
-  const caveats = CLASSIFICATION.filter(c => c.caveat)
-  if (caveats.length > 0) {
-    lines.push('## Capture-coverage caveats (untoured / partial — tour follow-ups)')
-    lines.push('')
-    for (const c of caveats) {
-      lines.push(`- **${c.behaviorId}[${c.thenIndex}]**: ${c.caveat}`)
-    }
-    lines.push('')
-  }
 
   // Deferred / label-gated metrics.
   lines.push('## Deferred metrics (label-gated)')
@@ -246,10 +229,8 @@ async function main(): Promise<void> {
         canAttachImages ? resolveScreenshot : undefined
       )
     : undefined
-  // Grade SERIALLY (matching eval/core.ts's `for … await` loop). The judge calls
-  // must NOT fan out: concurrent codex spawns storm a quota-limited account, and
-  // parallel invocation is what the eval path deliberately avoids. Serial keeps
-  // the report identical to the eval and one codex subprocess at a time.
+  // Grade SERIALLY. The judge calls must NOT fan out: concurrent codex spawns
+  // storm a quota-limited account, so keep one codex subprocess at a time.
   const grades = []
   for (const set of groupByBehavior(captures)) {
     const judge = runner ? await runner(set.behaviorId, set.captures) : undefined

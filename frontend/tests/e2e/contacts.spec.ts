@@ -209,10 +209,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     const rows = page.locator('tbody tr')
     await expect(rows.first()).toBeVisible({ timeout: 15000 })
     const lastRow = rows.last()
-    const actionButton = lastRow
-      .locator('button')
-      .filter({ has: page.locator('svg') })
-      .last()
+    const actionButton = lastRow.getByRole('button', { name: 'Contact actions' })
     await actionButton.click()
 
     // Verify the dropdown menu is visible and not clipped
@@ -237,10 +234,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     // Find the row and open context menu
     const contactRow = page.locator('tr', { has: page.getByText(fullName) })
     await expect(contactRow).toBeVisible({ timeout: 15000 })
-    const actionButton = contactRow
-      .locator('button')
-      .filter({ has: page.locator('svg') })
-      .last()
+    const actionButton = contactRow.getByRole('button', { name: 'Contact actions' })
     await actionButton.click()
 
     // Click Edit in context menu
@@ -270,10 +264,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     // Find the row and open context menu
     const contactRow = page.locator('tr', { has: page.getByText(fullName) })
     await expect(contactRow).toBeVisible({ timeout: 15000 })
-    const actionButton = contactRow
-      .locator('button')
-      .filter({ has: page.locator('svg') })
-      .last()
+    const actionButton = contactRow.getByRole('button', { name: 'Contact actions' })
     await actionButton.click()
 
     // Click Merge in context menu
@@ -548,10 +539,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
 
     const row = page.locator('tr', { has: page.getByText(fullName) })
     await expect(row).toBeVisible({ timeout: 15000 })
-    const actionButton = row
-      .locator('button')
-      .filter({ has: page.locator('svg') })
-      .last()
+    const actionButton = row.getByRole('button', { name: 'Contact actions' })
     await actionButton.click()
 
     const responsePromise = page.waitForResponse(

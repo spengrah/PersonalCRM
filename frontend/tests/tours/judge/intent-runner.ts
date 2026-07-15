@@ -1,7 +1,7 @@
 // The intent pass: one judge call per intent over the union of its bound
 // captures (see intent-input.ts). Sibling of the item-judge residue path —
-// never part of the offline merge gate; verdicts are advisory and label-gated
-// like the rest of the judge layer.
+// advisory and label-gated like the rest of the judge layer, never a blocking
+// check.
 
 import { selectJudge } from './adapter'
 import { makeCodexExecJudge } from './adapter/codex-exec'

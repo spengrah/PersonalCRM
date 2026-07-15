@@ -4,19 +4,19 @@
 // *.draft.json the maintainer later CORRECTS in place into *.labeled.json
 // (re-running nothing).
 //
-// MERGE GATE = the non-model MACHINERY (scaffolding + artifact structure),
-// unit-tested with a MOCKED stronger-model drafter (offline, no quota). The REAL
-// model-drafted *.draft.json is a MANUAL authoring artifact committed like the
-// corpus captures — never a CI gate (see judge/DEFERRED.md).
+// What CI exercises = the non-model MACHINERY (scaffolding + artifact
+// structure), unit-tested with a MOCKED stronger-model drafter (offline, no
+// quota). The REAL model-drafted *.draft.json is a MANUAL authoring artifact
+// committed like the corpus captures — never a CI gate (see judge/DEFERRED.md).
 
 import type { Capture } from '../support/types'
 import { makeCodexExecJudge } from './adapter/codex-exec'
 import type { Judge, PerItemVerdict } from './adapter/types'
+import type { Mutation } from './corpus/schema'
+import { resolveCaseCaptures } from './doctor'
 import type { IntentSpec } from './intent-catalog'
 import { DEFAULT_INTENT_EFFORT, DEFAULT_INTENT_MODEL, runIntentPass } from './intent-runner'
 import { buildJudgeInput, judgeItemsFor } from './judge-input'
-import { runVerifiers } from './grader/grade'
-import type { VerifierItemVerdicts } from './grader/types'
 
 export interface DraftItem {
   then_index: number
@@ -38,17 +38,14 @@ const DRAFT_NOTE =
   'these into *.labeled.json before they gate anything (see judge/DEFERRED.md).'
 
 // Pure: assemble a draft artifact from a stronger model's verdicts. Only the
-// behavior's residue (judge-tagged plus dynamically unbound) items are
-// drafted; the caller supplies the verifier verdicts that determine the
-// unbound set (mirroring the two-phase runner).
+// behavior's judge-tagged residue items are drafted.
 export function buildDraftArtifact(
   caseId: string,
   behaviorId: string,
   draftedBy: string,
-  verdicts: PerItemVerdict[],
-  verifierVerdicts?: VerifierItemVerdicts
+  verdicts: PerItemVerdict[]
 ): DraftArtifact {
-  const wanted = new Set(judgeItemsFor(behaviorId, verifierVerdicts).map(i => i.itemIndex))
+  const wanted = new Set(judgeItemsFor(behaviorId).map(i => i.itemIndex))
   const items: DraftItem[] = verdicts
     .filter(v => wanted.has(v.itemIndex))
     .sort((a, b) => a.itemIndex - b.itemIndex)
@@ -77,14 +74,33 @@ export async function draftForCase(
   drafter: Judge,
   draftedBy: string
 ): Promise<DraftArtifact> {
-  const verifierVerdicts = runVerifiers({ behaviorId, captures })
   const input = buildJudgeInput(behaviorId, captures)
   const verdicts = input && input.items.length > 0 ? await drafter(input) : []
-  return buildDraftArtifact(caseId, behaviorId, draftedBy, verdicts, verifierVerdicts)
+  return buildDraftArtifact(caseId, behaviorId, draftedBy, verdicts)
+}
+
+// Draft one corpus case through the SAME resolve→draft wiring the CLI loop uses:
+// resolve the case's (possibly-doctored) captures, then draft over that
+// evidence. Returns undefined for a behavior with no judge residue (nothing to
+// draft). Exported so a test drives the real entry, not a hand-resolved shortcut.
+export async function draftCorpusCase(
+  c: {
+    id: string
+    behavior_id: string
+    source: 'clean' | 'doctored'
+    doctor?: { mutation: Mutation }
+  },
+  baseCaptures: Capture[],
+  drafter: Judge,
+  draftedBy: string
+): Promise<DraftArtifact | undefined> {
+  if (judgeItemsFor(c.behavior_id).length === 0) return undefined
+  const captures = resolveCaseCaptures(c, baseCaptures)
+  return draftForCase(c.id, c.behavior_id, captures, drafter, draftedBy)
 }
 
 // One intent-case draft: DEFERRED.md's "the drafter covers intents too".
-// Mirrors the eval's --judge intent loop (runIntentPass over the case's
+// Mirrors the report's --judge intent loop (runIntentPass over the case's
 // possibly-mutated captures), so the drafter grades exactly what the runtime
 // judge would — including the grounding downgrade of an uncited fail.
 export interface IntentDraftArtifact {
@@ -151,7 +167,7 @@ async function main(): Promise<void> {
   const path = await import('path')
   const { loadCorpus } = await import('./corpus/load')
   const { selectJudge } = await import('./adapter')
-  const { applyMutation, resolveCaseCaptures } = await import('./doctor')
+  const { applyMutation } = await import('./doctor')
   const { intentSpec } = await import('./intent-catalog')
 
   const corpusRoot = process.argv[2] ?? path.join(import.meta.dirname ?? __dirname, 'corpus')
@@ -168,14 +184,10 @@ async function main(): Promise<void> {
   const { cases, intentCases, capturesFor } = loadCorpus(corpusRoot)
   fs.mkdirSync(outDir, { recursive: true })
   for (const c of cases) {
-    // Draft over the SAME captures the eval grades — for a doctored case that
-    // means the mutated evidence, so the draft describes the doctored world.
-    // The residue check runs the verifiers over those captures so dynamically
-    // unbound items are drafted too (not just statically judge-tagged ones).
-    const captures = resolveCaseCaptures(c, capturesFor(c))
-    const vv = runVerifiers({ behaviorId: c.behavior_id, captures })
-    if (judgeItemsFor(c.behavior_id, vv).length === 0) continue
-    const artifact = await draftForCase(c.id, c.behavior_id, captures, drafter, draftedBy)
+    // draftCorpusCase resolves the case's captures (mutated, for a doctored
+    // case) and drafts over that evidence; undefined = no judge residue to draft.
+    const artifact = await draftCorpusCase(c, capturesFor(c), drafter, draftedBy)
+    if (!artifact) continue
     const outPath = path.join(outDir, `${c.id}.draft.json`)
     fs.writeFileSync(outPath, `${JSON.stringify(artifact, null, 2)}\n`, 'utf8')
     console.log(`labeled (draft): ${outPath}`)

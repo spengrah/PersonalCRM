@@ -1,8 +1,8 @@
 // The deterministic doctoring tool (design D6): a single-point mutation of a
 // clean capture manufactures a known fail on exactly one then-item, so doctored
-// cases are self-labeled BY CONSTRUCTION and the eval runs end-to-end with zero
-// human input. Pure `applyMutation` (a library the eval imports) + a thin
-// `bun run` CLI. Byte-stable across runs (JSON clone + deterministic ops).
+// cases are self-labeled BY CONSTRUCTION. Pure `applyMutation` (a library the
+// labeler imports) + a thin `bun run` CLI. Byte-stable across runs (JSON clone +
+// deterministic ops).
 
 import type { AriaChild, AriaNode, Capture } from '../support/types'
 import type { Mutation } from './corpus/schema'
@@ -120,12 +120,11 @@ export function applyMutation(baseCaptures: Capture[], mutation: Mutation): Capt
       break
     }
     case 'set_json_field': {
-      // Out-of-range itemIndex is a silent no-op here. A no-oped mutation
-      // surfaces as a qa-eval regression only when the expected fail is a
-      // VERIFIER item; a judge-layer expectation (the pattern's primary use,
-      // e.g. the stale-reason case) sits pending in the verifier-only gate and
-      // is only checked by the live-judge / labeled evaluation — so verify the
-      // index against the committed capture when authoring the case.
+      // Out-of-range itemIndex is a silent no-op here. A no-oped mutation goes
+      // unnoticed until the live-judge / labeled evaluation reads the doctored
+      // evidence (the pattern's primary use is a judge-layer expectation, e.g.
+      // the stale-reason case) — so verify the index against the committed
+      // capture when authoring the case.
       const item = (cap.apiResponses[mutation.endpoint] ?? [])[mutation.itemIndex ?? 0]
       if (item) setJsonPath(item.body, mutation.path, mutation.value)
       break
@@ -136,9 +135,10 @@ export function applyMutation(baseCaptures: Capture[], mutation: Mutation): Capt
 
 // Resolve the captures a case grades: for a doctored case, apply its
 // single-point mutation to the base fixtures; a clean case returns them as-is.
-// The SINGLE place the doctor mutation is applied — the eval AND the labeling
-// CLI both go through here, so a doctored case never drafts/grades the clean
-// evidence.
+// The SINGLE place the doctor mutation is applied — the labeling CLI (label.ts)
+// goes through here, so a doctored case never drafts over the clean evidence.
+// (The advisory report reads live tours run dirs, not the corpus, so it never
+// resolves a doctored case.)
 export function resolveCaseCaptures(
   c: { source: 'clean' | 'doctored'; doctor?: { mutation: Mutation } },
   baseCaptures: Capture[]

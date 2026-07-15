@@ -1,14 +1,13 @@
-// The hybrid grader: run the deterministic verifiers, merge the LLM judge's
-// residue verdicts, apply the grounding rule, and aggregate to a behavior
-// verdict. "Verifiers before judges" — the judge only supplies judge-tagged
-// items and verifier items that emitted `unbound` (dynamic routing).
+// The grader: map the LLM judge's residue verdicts onto the behavior's
+// classification rows, apply the grounding rule, and aggregate to a behavior
+// verdict. The deterministic verifier lane has migrated to Playwright E2E, so
+// only the judge-tagged residue (CON-042[0], DSH-004[2]) is graded here.
 
 import { classificationFor, type GraderKind } from './classification'
-import type { CaptureSet, ItemVerdict, ItemVerdicts, Verdict, VerifierItemVerdicts } from './types'
-import { VERIFIERS } from './verifiers'
+import type { CaptureSet, ItemVerdict, ItemVerdicts, Verdict } from './types'
 import type { Capture } from '../../support/types'
 
-export type VerdictSource = 'verifier' | 'judge' | 'pending'
+export type VerdictSource = 'judge' | 'pending'
 
 export interface GradedItem {
   thenIndex: number
@@ -26,8 +25,8 @@ export interface BehaviorGrade {
 }
 
 export interface GradeOptions {
-  // Judge verdicts for the behavior's judge-tagged / residue items, keyed by
-  // then index. Absent in verifiers-only mode.
+  // Judge verdicts for the behavior's judge-tagged residue items, keyed by
+  // then index. Absent until the judge runs.
   judge?: ItemVerdicts
 }
 
@@ -36,8 +35,7 @@ function hasCitation(v: ItemVerdict): boolean {
 }
 
 // Grounding rule (D4): a `fail` with no resolvable citation is downgraded to
-// `unsure` — applied to the MODEL's verdicts after parsing (verifier verdicts
-// carry citations by construction, but we apply it uniformly for safety).
+// `unsure` — applied to the judge's verdicts after parsing.
 export function applyGrounding(v: ItemVerdict): ItemVerdict {
   if (v.verdict === 'fail' && !hasCitation(v)) {
     return {
@@ -48,56 +46,24 @@ export function applyGrounding(v: ItemVerdict): ItemVerdict {
   return v
 }
 
-// Run the deterministic verifiers alone (the two-phase judge runner uses this
-// to learn which items unbound before asking the judge).
-export function runVerifiers(set: CaptureSet): VerifierItemVerdicts {
-  const verifier = VERIFIERS[set.behaviorId]
-  return verifier ? verifier(set) : {}
-}
-
 export function gradeBehavior(set: CaptureSet, opts: GradeOptions = {}): BehaviorGrade {
   const classification = classificationFor(set.behaviorId)
-  const verifierVerdicts = runVerifiers(set)
   const judge = opts.judge ?? {}
 
   const items: GradedItem[] = classification.map(c => {
     const idx = c.thenIndex
-    if (c.grader === 'judge') {
-      const jv = judge[idx]
-      if (jv) {
-        const grounded = applyGrounding(jv)
-        return { thenIndex: idx, grader: 'judge', source: 'judge', ...grounded }
-      }
-      return {
-        thenIndex: idx,
-        grader: 'judge',
-        source: 'pending',
-        verdict: 'unsure',
-        reason: 'judge-only item — no judge verdict (verifiers-only mode)',
-      }
+    const jv = judge[idx]
+    if (jv) {
+      const grounded = applyGrounding(jv)
+      return { thenIndex: idx, grader: c.grader, source: 'judge', ...grounded }
     }
-
-    // verifier item
-    const vv = verifierVerdicts[idx] ?? {
-      verdict: 'unsure' as Verdict,
-      reason: 'no verifier verdict emitted',
+    return {
+      thenIndex: idx,
+      grader: c.grader,
+      source: 'pending',
+      verdict: 'unsure',
+      reason: 'judge-only item — no judge verdict supplied',
     }
-    if (vv.verdict === 'unbound') {
-      // The binding-vehicle anchor was not found in present evidence: route to
-      // the judge (which reasons over the same aria without the copy pin).
-      if (judge[idx]) {
-        const grounded = applyGrounding(judge[idx])
-        return { thenIndex: idx, grader: 'verifier', source: 'judge', ...grounded }
-      }
-      return {
-        thenIndex: idx,
-        grader: 'verifier',
-        source: 'pending',
-        verdict: 'unsure',
-        reason: `${vv.reason ?? 'anchor unbound'} — judge routing pending (verifiers-only mode)`,
-      }
-    }
-    return { thenIndex: idx, grader: 'verifier', source: 'verifier', ...(vv as ItemVerdict) }
   })
 
   return {

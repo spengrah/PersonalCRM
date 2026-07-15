@@ -76,8 +76,8 @@ export function auditNames(names: string[], source: string): Violation[] {
 // The UI word vocabulary — words that legitimately appear in the contacts
 // surface's aria labels. A TitleCase bigram is exempt (treated as a UI label,
 // NOT a contact name) ONLY when BOTH words are in this set; a bigram with even
-// one out-of-vocabulary token is flagged. (PR3 extends this set when it tours
-// new surfaces; a new UI label trips a loud failure.)
+// one out-of-vocabulary token is flagged. (This set grows as new surfaces are
+// toured; a new UI label trips a loud failure.)
 const UI_VOCAB = new Set(
   [
     'all',
@@ -162,7 +162,7 @@ const UI_VOCAB = new Set(
 // Exact multi-word UI label phrases (lowercased). A TitleCase bigram is exempt
 // when it is a substring of one of these — preferred over unioning each label's
 // constituent words into UI_VOCAB, which would erode the heuristic (a real name
-// whose two tokens both coincide with unrelated label words would slip). PR3's
+// whose two tokens both coincide with unrelated label words would slip). The
 // dashboard + cadence-followup surfaces add their multi-word labels here.
 const UI_PHRASES = [
   'action required',

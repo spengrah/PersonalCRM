@@ -33,7 +33,7 @@ describe('classification map', () => {
     }
   })
 
-  it('the judge owns the semantic residue: CON-042[0], DSH-004[2] (unbound routing is dynamic)', () => {
+  it('the judge owns the semantic residue: CON-042[0], DSH-004[2]', () => {
     const judgeItems = CLASSIFICATION.filter(c => c.grader === 'judge')
     expect(judgeItems.map(c => `${c.behaviorId}[${c.thenIndex}]`)).toEqual([
       'CON-042[0]',
@@ -60,7 +60,7 @@ describe('grounding rule', () => {
 })
 
 describe('gradeBehavior', () => {
-  it('judge item is pending (unsure) in verifiers-only mode', () => {
+  it('judge item is pending (unsure) when no judge verdict is supplied', () => {
     const g = gradeBehavior({
       behaviorId: 'CON-042',
       captures: [
@@ -97,6 +97,19 @@ describe('gradeBehavior', () => {
     const judgeItem = g.items.find(i => i.thenIndex === 0)
     // fail without a citation is downgraded to unsure by the grounding rule
     expect(judgeItem?.verdict).toBe('unsure')
+  })
+
+  it('passes a cited supplied judge verdict through as source=judge (completed)', () => {
+    const g = gradeBehavior(
+      { behaviorId: 'CON-042', captures: [] },
+      { judge: { 0: { verdict: 'fail', citation: 'DIALOGS[0].message', reason: 'no warning' } } }
+    )
+    const judgeItem = g.items.find(i => i.thenIndex === 0)
+    // A cited fail is NOT downgraded — it lands as a completed judge verdict.
+    expect(judgeItem?.source).toBe('judge')
+    expect(judgeItem?.verdict).toBe('fail')
+    expect(judgeItem?.citation).toBe('DIALOGS[0].message')
+    expect(g.behaviorVerdict).toBe('fail')
   })
 })
 
