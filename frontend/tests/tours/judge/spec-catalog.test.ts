@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { SPEC_CATALOG } from './spec-catalog'
-import { CLASSIFICATION_ITEM_COUNT, classificationFor } from './grader/classification'
+import { classificationFor } from './grader/classification'
 
 // The current-ux first-cut ID set (D5 completeness guard): spec-catalog.ts is a
 // hand-transcribed copy of the YAML SSOT, so a behavior dropped from the catalog
@@ -33,14 +33,17 @@ describe('spec catalog', () => {
     expect(Object.keys(SPEC_CATALOG).sort()).toEqual(FIRST_CUT_CURRENT_UX_IDS)
   })
 
-  it('each behavior has as many then-items as the classification map', () => {
+  it('every classification row indexes within its catalog then-items (subset)', () => {
+    // Post-migration the classification is an index-faithful SUBSET of the
+    // catalog then-items (verifier rows leave as they migrate to E2E; the
+    // catalog is not pruned until PR4), so this is a ceiling check, not a
+    // count-equality.
     for (const [id, spec] of Object.entries(SPEC_CATALOG)) {
-      expect(spec.then.length, `${id} then-count`).toBe(classificationFor(id).length)
+      for (const c of classificationFor(id)) {
+        expect(c.thenIndex, `${id}[${c.thenIndex}] within then.length`).toBeLessThan(
+          spec.then.length
+        )
+      }
     }
-  })
-
-  it('the catalog then-item total equals CLASSIFICATION_ITEM_COUNT', () => {
-    const total = Object.values(SPEC_CATALOG).reduce((n, s) => n + s.then.length, 0)
-    expect(total).toBe(CLASSIFICATION_ITEM_COUNT)
   })
 })

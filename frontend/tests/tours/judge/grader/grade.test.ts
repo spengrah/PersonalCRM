@@ -1,39 +1,96 @@
 import { describe, it, expect } from 'vitest'
-import { CLASSIFICATION, CLASSIFICATION_ITEM_COUNT, classificationFor } from './classification'
+import { CLASSIFICATION } from './classification'
+import { SPEC_CATALOG } from '../spec-catalog'
 import { aggregate, applyGrounding, gradeBehavior, groupByBehavior } from './grade'
 import { apiItem, cap, pair } from './fixtures'
 
+// The index-faithful subset guard (INV-1): CLASSIFICATION is pinned to an
+// EXPLICIT expected set of `${behaviorId}[${thenIndex}]:${grader}` rows. A
+// migrated verifier row leaving (or a survivor silently re-indexed to a
+// different valid catalog slot) shows up as a diff here. `thenIndex` stays
+// faithful to the spec position and is never re-indexed, so a partially
+// migrated behavior may keep a non-zero / gapped index (e.g. DSH-004[2]).
+const EXPECTED_ROWS = [
+  'CON-038[0]:verifier',
+  'CON-038[1]:verifier',
+  'CON-040[0]:verifier',
+  'CON-040[1]:verifier',
+  'CON-040[2]:verifier',
+  'CON-040[3]:verifier',
+  'CON-041[0]:verifier',
+  'CON-041[1]:verifier',
+  'CON-042[0]:judge',
+  'CON-042[1]:verifier',
+  'CON-042[2]:verifier',
+  'CON-043[0]:verifier',
+  'CON-043[1]:verifier',
+  'CON-043[2]:verifier',
+  'CON-043[3]:verifier',
+  'CON-043[4]:verifier',
+  'CON-043[5]:verifier',
+  'CON-044[0]:verifier',
+  'CON-045[0]:verifier',
+  'CON-045[1]:verifier',
+  'CON-045[2]:verifier',
+  'CON-045[3]:verifier',
+  'CON-045[4]:verifier',
+  'DSH-001[0]:verifier',
+  'DSH-002[0]:verifier',
+  'DSH-002[1]:verifier',
+  'DSH-002[2]:verifier',
+  'DSH-003[0]:verifier',
+  'DSH-003[1]:verifier',
+  'DSH-004[0]:verifier',
+  'DSH-004[1]:verifier',
+  'DSH-004[2]:judge',
+  'DSH-005[0]:verifier',
+  'DSH-005[1]:verifier',
+  'DSH-005[2]:verifier',
+  'DSH-005[3]:verifier',
+  'DSH-007[0]:verifier',
+  'DSH-007[1]:verifier',
+  'CAD-026[0]:verifier',
+  'CAD-026[1]:verifier',
+  'CAD-026[2]:verifier',
+  'CAD-027[0]:verifier',
+  'CAD-027[1]:verifier',
+  'CAD-027[2]:verifier',
+  'CAD-028[0]:verifier',
+  'CAD-028[1]:verifier',
+  'CAD-028[2]:verifier',
+  'CAD-029[0]:verifier',
+  'CAD-029[1]:verifier',
+  'CAD-029[2]:verifier',
+  'CAD-029[3]:verifier',
+  'CAD-030[0]:verifier',
+  'CAD-030[1]:verifier',
+  'CAD-030[2]:verifier',
+  'CAD-030[3]:verifier',
+  'CAD-031[0]:verifier',
+  'CAD-031[1]:verifier',
+  'CAD-031[2]:verifier',
+  'CAD-033[0]:verifier',
+  'CAD-033[1]:verifier',
+]
+
 describe('classification map', () => {
-  it('has exactly one row per spec then-item (60 total, index-faithful)', () => {
-    expect(CLASSIFICATION).toHaveLength(CLASSIFICATION_ITEM_COUNT)
-    const counts: Record<string, number> = {}
-    for (const c of CLASSIFICATION) counts[c.behaviorId] = (counts[c.behaviorId] ?? 0) + 1
-    expect(counts).toEqual({
-      'CON-038': 2,
-      'CON-040': 4,
-      'CON-041': 2,
-      'CON-042': 3,
-      'CON-043': 6,
-      'CON-044': 1,
-      'CON-045': 5,
-      'DSH-001': 1,
-      'DSH-002': 3,
-      'DSH-003': 2,
-      'DSH-004': 3,
-      'DSH-005': 4,
-      'DSH-007': 2,
-      'CAD-026': 3,
-      'CAD-027': 3,
-      'CAD-028': 3,
-      'CAD-029': 4,
-      'CAD-030': 4,
-      'CAD-031': 3,
-      'CAD-033': 2,
-    })
-    // then indices are 0..n-1 with no gaps/dupes
-    for (const b of Object.keys(counts)) {
-      const idxs = classificationFor(b).map(c => c.thenIndex)
-      expect(idxs).toEqual([...Array(counts[b]).keys()])
+  it('matches the explicit index-faithful expected row set (INV-1)', () => {
+    const actual = CLASSIFICATION.map(c => `${c.behaviorId}[${c.thenIndex}]:${c.grader}`).sort()
+    expect(actual).toEqual([...EXPECTED_ROWS].sort())
+  })
+
+  it('has unique (behaviorId, thenIndex) keys', () => {
+    const keys = CLASSIFICATION.map(c => `${c.behaviorId}[${c.thenIndex}]`)
+    expect(new Set(keys).size).toBe(keys.length)
+  })
+
+  it('indexes every row within its catalog then-item ceiling (SSOT proxy)', () => {
+    for (const c of CLASSIFICATION) {
+      const spec = SPEC_CATALOG[c.behaviorId]
+      expect(spec, `${c.behaviorId} catalog entry`).toBeDefined()
+      expect(c.thenIndex, `${c.behaviorId}[${c.thenIndex}] within then.length`).toBeLessThan(
+        spec.then.length
+      )
     }
   })
 
