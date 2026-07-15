@@ -1,11 +1,10 @@
 // The hybrid-grader classification (design D3): rows keyed by
 // (behavior_id, then_index) EXACTLY as the spec YAMLs list them. Originally one
-// row per then-item; the CON contacts and DSH dashboard behaviors have since
-// migrated to E2E, so this is now an index-faithful SUBSET — the remaining
-// rows are the CAD verifier items plus the CON-042[0] + DSH-004[2] judge
-// items. The subset is
-// guarded by grade.test.ts's EXPECTED_ROWS (INV-1), not a total-count check.
-// "Verifiers before judges" — the judge residue is deliberately tiny.
+// row per then-item; the CON contacts, DSH dashboard, and CAD cadence-followup
+// behaviors have all migrated to E2E, so this is now an index-faithful SUBSET —
+// the only remaining rows are the CON-042[0] + DSH-004[2] judge items. The
+// subset is guarded by grade.test.ts's EXPECTED_ROWS (INV-1), not a total-count
+// check. "Verifiers before judges" — the judge residue is deliberately tiny.
 //
 // A `verifier` item is graded by pure code over structured evidence. A `judge`
 // item is graded by the LLM judge (semantic residue). A verifier that cannot
@@ -116,15 +115,15 @@ export const CLASSIFICATION: Classification[] = [
   // to E2E: contact-tasks.spec.ts (see `// spec: CAD-033`).
 ]
 
-// The 22 CON and 14 DSH verifier then-items have migrated to E2E (contacts /
-// contact-navigation / contact-merge / birthdays / dashboard / navigation /
-// error-boundary .spec.ts); what remains is the residual CAD verifier rows
-// plus the CON-042[0] + DSH-004[2] judge items (24 rows). The classification
-// is now an index-faithful SUBSET of the spec, guarded by grade.test.ts's
-// EXPECTED_ROWS rather than a total-count check. The constant below is no
-// longer asserted anywhere and is retained only until PR4 removes the
-// residual verifier machinery.
-export const CLASSIFICATION_ITEM_COUNT = 24
+// All 22 CON, 14 DSH, and 22 CAD verifier then-items have migrated to E2E
+// (contacts / contact-navigation / contact-merge / birthdays / dashboard /
+// navigation / error-boundary / overdue-contact-updates / contact-direction /
+// contact-tasks .spec.ts); what remains is only the CON-042[0] + DSH-004[2]
+// judge items (2 rows). The classification is now an index-faithful SUBSET of
+// the spec, guarded by grade.test.ts's EXPECTED_ROWS rather than a total-count
+// check. The constant below is no longer asserted anywhere and is retained
+// only until PR4 removes the residual verifier machinery.
+export const CLASSIFICATION_ITEM_COUNT = 2
 
 export function classificationFor(behaviorId: string): Classification[] {
   return CLASSIFICATION.filter(c => c.behaviorId === behaviorId).sort(

@@ -104,6 +104,12 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
       // spec: CAD-030[3]
       const { ids } = await testApi.seedContacts([{ full_name: 'Task Test Contact' }])
 
+      // Mock SUCCESSFUL empty lists for all three task queries: without the
+      // mock the OAuth-gated routes 404 and the section would render the
+      // empty state from the error default — a pass on API failure, not a
+      // proof of the no-tasks state.
+      await mockTaskLists(page, ids[0], () => ({ followup: [], manual: [], completed: [] }))
+
       await page.goto(`/contacts/${ids[0]}`)
       await page.waitForLoadState('domcontentloaded')
       await expect(page.getByRole('heading', { name: 'Task Test Contact' })).toBeVisible({

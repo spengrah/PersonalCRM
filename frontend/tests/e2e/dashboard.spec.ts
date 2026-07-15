@@ -1,6 +1,35 @@
 import { test, expect } from '@playwright/test'
-import { createTestAPI, TestAPI } from './helpers/test-api'
 import { expectAddContactHeader } from './helpers/dashboard'
+import type { OverdueContactResponse } from '../../src/types/generated/contact'
+
+// Full-envelope overdue-entry builder for route-mocked dashboard tests,
+// typed against the real wire DTO so fixture drift fails tsc. The real
+// response OMITS empty optional fields (json omitempty) rather than sending
+// null, so last_contacted / methods are only included when supplied.
+function overdueEntry(over: {
+  name: string
+  days: number
+  lastContacted?: string
+  email?: string
+}): OverdueContactResponse {
+  const slug = over.name.toLowerCase().replace(/ /g, '-')
+  return {
+    id: `mock-${slug}`,
+    full_name: over.name,
+    methods: over.email
+      ? [{ id: `mock-method-${slug}`, type: 'email', value: over.email, is_primary: true }]
+      : [],
+    cadence: 'weekly',
+    ...(over.lastContacted ? { last_contacted: over.lastContacted } : {}),
+    contact_by: '2026-07-01T00:00:00Z',
+    has_pending_followup: false,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+    days_overdue: over.days,
+    next_due_date: '2026-07-01T00:00:00Z',
+    suggested_action: 'A quick check-in to reconnect',
+  }
+}
 
 test.describe('Dashboard @area:dashboard', () => {
   test('should display dashboard with navigation @smoke', async ({ page }) => {
@@ -103,22 +132,16 @@ test.describe('Dashboard @area:dashboard', () => {
 test.describe('Dashboard - Overdue Cards @area:dashboard @area:overdue', () => {
   let testApi: TestAPI
 
-  // One contact per urgency tier (dashboard/page.tsx getUrgencyIndicator
-  // boundaries: <=2 yellow, <=7 orange, >7 red).
-  const tierSeeds = [
-    { key: 'Tier Low Contact', days_overdue: 1, dot: 'bg-yellow-500' },
-    { key: 'Tier Mid Contact', days_overdue: 5, dot: 'bg-orange-500' },
-    { key: 'Tier High Contact', days_overdue: 20, dot: 'bg-red-500' },
-  ]
+  const cardSeeds = ['Overdue Card One', 'Overdue Card Two', 'Overdue Card Three']
 
   test.beforeEach(async ({ request }, testInfo) => {
     testApi = createTestAPI(request, testInfo)
     await testApi.seedOverdueContacts(
-      tierSeeds.map(seed => ({
-        full_name: seed.key,
+      cardSeeds.map((name, i) => ({
+        full_name: name,
         cadence: 'weekly' as const,
-        days_overdue: seed.days_overdue,
-        email: `${seed.key.toLowerCase().replace(/ /g, '-')}@example.com`,
+        days_overdue: 3 + i,
+        email: `${name.toLowerCase().replace(/ /g, '-')}@example.com`,
       }))
     )
   })
@@ -133,10 +156,8 @@ test.describe('Dashboard - Overdue Cards @area:dashboard @area:overdue', () => {
     await page.waitForLoadState('domcontentloaded')
 
     // Every seeded card renders (prefix-scoped names — parallel-safe).
-    for (const seed of tierSeeds) {
-      await expect(
-        page.getByRole('heading', { name: `${testApi.prefix}-${seed.key}` })
-      ).toBeVisible()
+    for (const name of cardSeeds) {
+      await expect(page.getByRole('heading', { name: `${testApi.prefix}-${name}` })).toBeVisible()
     }
 
     // The header count is DERIVED from the same list the cards render from,
@@ -160,36 +181,9 @@ test.describe('Dashboard - Overdue Cards @area:dashboard @area:overdue', () => {
           if (headerCount !== cardCount) return `${headerCount} !== ${cardCount}`
           if (headerCount < minimum) return `${headerCount} < seeded ${minimum}`
           return 'header equals cards'
-        }, tierSeeds.length)
+        }, cardSeeds.length)
       )
       .toBe('header equals cards')
-  })
-
-  test('each card shows urgency tier, cadence, recency, a reachable method, and the suggested action', async ({
-    page,
-  }) => {
-    // spec: CAD-026[1]
-    await page.goto('/dashboard')
-    await page.waitForLoadState('domcontentloaded')
-
-    // The clause is per-card ("each card shows ..."): assert ALL FIVE
-    // sub-elements on EVERY seeded card, across all three urgency tiers.
-    // The tier dot is CSS-only (no accessible text), so the color class is
-    // the observable signal — the same one the retired verifier graded.
-    for (const seed of tierSeeds) {
-      const name = `${testApi.prefix}-${seed.key}`
-      await expect(page.getByRole('heading', { name })).toBeVisible()
-      const card = page.locator('div.rounded-lg').filter({ hasText: name })
-      await expect(card.locator(`div.rounded-full.${seed.dot}`)).toBeVisible()
-      await expect(card.getByText('(weekly cadence)')).toBeVisible()
-      await expect(card.getByText(/\d+ days overdue.*Last contacted/)).toBeVisible()
-      await expect(
-        card.getByText(`${seed.key.toLowerCase().replace(/ /g, '-')}@example.com`)
-      ).toBeVisible()
-      await expect(card.getByText('Email', { exact: true })).toBeVisible()
-      const suggestion = await card.getByText(/💡/).textContent()
-      expect(suggestion?.replace('💡', '').trim().length).toBeGreaterThan(0)
-    }
   })
 })
 
@@ -210,31 +204,73 @@ test.describe('Dashboard - All Caught Up (mocked) @area:dashboard', () => {
   })
 })
 
+test.describe('Dashboard - Card Anatomy (mocked) @area:dashboard', () => {
+  // getUrgencyIndicator boundaries: <=2 yellow, <=7 orange, >7 red. The
+  // fixture pins the BOUNDARY values (2 and 7) plus the first red value (8)
+  // — shifting either threshold flips a dot class and fails. Mocked rather
+  // than seeded: in testing mode a scaled "day" is ~17s of wall time, so a
+  // seeded boundary value drifts across tiers before the page settles.
+  const tierCases = [
+    { name: 'Yellow Boundary Card', days: 2, dot: 'bg-yellow-500' },
+    { name: 'Orange Boundary Card', days: 7, dot: 'bg-orange-500' },
+    { name: 'Red Tier Card', days: 8, dot: 'bg-red-500' },
+  ]
+
+  test('each card shows urgency tier, cadence, recency, a reachable method, and the suggested action', async ({
+    page,
+  }) => {
+    // spec: CAD-026[1]
+    await page.route('**/api/v1/contacts/overdue', route =>
+      route.fulfill({
+        json: {
+          success: true,
+          data: tierCases.map(c =>
+            overdueEntry({
+              name: c.name,
+              days: c.days,
+              lastContacted: '2026-07-01T12:00:00Z',
+              email: `${c.name.toLowerCase().replace(/ /g, '-')}@example.com`,
+            })
+          ),
+        },
+      })
+    )
+    await page.goto('/dashboard')
+
+    // The clause is per-card ("each card shows ..."): assert ALL FIVE
+    // sub-elements on EVERY card, across all three urgency tiers. The tier
+    // dot is CSS-only (no accessible text), so the color class is the
+    // observable signal — the same one the retired verifier graded.
+    for (const c of tierCases) {
+      await expect(page.getByRole('heading', { name: c.name })).toBeVisible()
+      const card = page.locator('div.rounded-lg').filter({ hasText: c.name })
+      await expect(card.locator(`div.rounded-full.${c.dot}`)).toBeVisible()
+      await expect(card.getByText('(weekly cadence)')).toBeVisible()
+      await expect(
+        card.getByText(new RegExp(`${c.days} days overdue.*Last contacted`))
+      ).toBeVisible()
+      await expect(
+        card.getByText(`${c.name.toLowerCase().replace(/ /g, '-')}@example.com`)
+      ).toBeVisible()
+      await expect(card.getByText('Email', { exact: true })).toBeVisible()
+      const suggestion = await card.getByText(/💡/).textContent()
+      expect(suggestion?.replace('💡', '').trim().length).toBeGreaterThan(0)
+    }
+  })
+})
+
 test.describe('Dashboard - Sort Orderings (mocked) @area:dashboard', () => {
   // The sort is CLIENT-SIDE over the fetched overdue list (dashboard/page.tsx
   // sortBy state — no sort= request is issued), so the observable outcome is
   // the rendered card DOM order. One full-envelope route mock feeds all three
   // orderings; the fixture is built so urgency, name, and last-contacted
   // orders are pairwise DISTINCT (a no-op or wrong sort fails), and one
-  // never-contacted record proves the null-sink branch.
+  // never-contacted record (last_contacted OMITTED, like the real omitempty
+  // response) proves the null-sink branch.
   const fixtureSuffix = 'Sortfix'
-  const overdueEntry = (over: { name: string; days: number; lastContacted: string | null }) => ({
-    id: `mock-${over.name.toLowerCase().replace(/ /g, '-')}`,
-    full_name: over.name,
-    methods: [],
-    cadence: 'weekly',
-    last_contacted: over.lastContacted,
-    contact_by: '2026-07-01T00:00:00Z',
-    has_pending_followup: false,
-    created_at: '2026-01-01T00:00:00Z',
-    updated_at: '2026-01-01T00:00:00Z',
-    days_overdue: over.days,
-    next_due_date: '2026-07-01T00:00:00Z',
-    suggested_action: 'A quick check-in to reconnect',
-  })
   // urgency (days desc):      Zulu(30), Mike(12), Alpha(3), Bravo(1)
   // name (alphabetical):      Alpha, Bravo, Mike, Zulu
-  // last-contacted (oldest→): Alpha(01-10), Bravo(03-01), Zulu(05-01), Mike(null last)
+  // last-contacted (oldest→): Alpha(01-10), Bravo(03-01), Zulu(05-01), Mike(never) last
   const fixture = [
     overdueEntry({
       name: `Alpha ${fixtureSuffix}`,
@@ -246,7 +282,7 @@ test.describe('Dashboard - Sort Orderings (mocked) @area:dashboard', () => {
       days: 30,
       lastContacted: '2026-05-01T12:00:00Z',
     }),
-    overdueEntry({ name: `Mike ${fixtureSuffix}`, days: 12, lastContacted: null }),
+    overdueEntry({ name: `Mike ${fixtureSuffix}`, days: 12 }),
     overdueEntry({
       name: `Bravo ${fixtureSuffix}`,
       days: 1,
