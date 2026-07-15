@@ -96,25 +96,8 @@ export const CLASSIFICATION: Classification[] = [
   // CAD-026 (dashboard action-required overdue list) migrated to E2E:
   // dashboard.spec.ts (see `// spec: CAD-026`).
 
-  // --- CAD-027: urgency / name / recency orderings ---
-  {
-    behaviorId: 'CAD-027',
-    thenIndex: 0,
-    grader: 'verifier',
-    note: 'urgency (default) orders most-overdue first (Most Urgent capture card order)',
-  },
-  {
-    behaviorId: 'CAD-027',
-    thenIndex: 1,
-    grader: 'verifier',
-    note: 'name orders alphabetically (Name capture card order)',
-  },
-  {
-    behaviorId: 'CAD-027',
-    thenIndex: 2,
-    grader: 'verifier',
-    note: 'last-contacted oldest-first, never-contacted last (Last Contacted capture card order)',
-  },
+  // CAD-027 (urgency / name / recency orderings) migrated to E2E:
+  // dashboard.spec.ts (see `// spec: CAD-027`).
 
   // --- CAD-028: mark-contacted from the dashboard ---
   {

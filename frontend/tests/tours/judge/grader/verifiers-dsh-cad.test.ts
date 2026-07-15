@@ -3,7 +3,6 @@ import { apiItem, cap, pair, root } from './fixtures'
 import { applyMutation } from '../doctor'
 import type { CaptureSet } from './types'
 import type { Capture } from '../../support/types'
-import { cad027 } from './verifiers/cad027'
 import { cad028 } from './verifiers/cad028'
 import { cad029 } from './verifiers/cad029'
 import { cad030 } from './verifiers/cad030'
@@ -17,55 +16,6 @@ function set(behaviorId: string, captures: Capture[]): CaptureSet {
 function doctored(behaviorId: string, captures: Capture[], m: Mutation): CaptureSet {
   return { behaviorId, captures: applyMutation(captures, m) }
 }
-
-// --- CAD-027 ---
-describe('cad027', () => {
-  const sortCap = (
-    role: string,
-    cards: Array<{ name: string; daysOverdue: number; lastContacted: string | null }>
-  ): Capture =>
-    cap({
-      behaviors: ['CAD-027'],
-      pair: pair('s', role),
-      fields: { overdueCards: cards.map(c => ({ ...c, tierClass: 'x' })) },
-    })
-  const urgency = sortCap('sort-urgency', [
-    { name: 'b', daysOverdue: 12, lastContacted: '2026-07-01T00:00:00Z' },
-    { name: 'a', daysOverdue: 1, lastContacted: '2026-07-10T00:00:00Z' },
-  ])
-  const name = sortCap('sort-name', [
-    { name: 'a', daysOverdue: 1, lastContacted: '2026-07-10T00:00:00Z' },
-    { name: 'b', daysOverdue: 12, lastContacted: '2026-07-01T00:00:00Z' },
-  ])
-  const lastContacted = sortCap('sort-last-contacted', [
-    { name: 'b', daysOverdue: 12, lastContacted: '2026-07-01T00:00:00Z' },
-    { name: 'a', daysOverdue: 1, lastContacted: '2026-07-10T00:00:00Z' },
-  ])
-
-  it('clean: [0]/[1]/[2] pass', () => {
-    const v = cad027(set('CAD-027', [urgency, name, lastContacted]))
-    expect(v[0].verdict).toBe('pass')
-    expect(v[1].verdict).toBe('pass')
-    expect(v[2].verdict).toBe('pass')
-  })
-  it('doctored: urgency order reversed → [0] fail', () => {
-    const v = cad027(
-      doctored('CAD-027', [urgency, name, lastContacted], {
-        op: 'set_field',
-        role: 'sort-urgency',
-        field: 'overdueCards',
-        value: [
-          { name: 'a', daysOverdue: 1, tierClass: 'x', lastContacted: null },
-          { name: 'b', daysOverdue: 12, tierClass: 'x', lastContacted: null },
-        ],
-      })
-    )
-    expect(v[0].verdict).toBe('fail')
-  })
-  it('missing → unsure', () => {
-    expect(cad027(set('CAD-027', []))[0].verdict).toBe('unsure')
-  })
-})
 
 // --- CAD-028 ---
 describe('cad028', () => {

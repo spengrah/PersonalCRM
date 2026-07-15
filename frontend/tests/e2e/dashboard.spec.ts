@@ -194,6 +194,109 @@ test.describe('Dashboard - All Caught Up (mocked) @area:dashboard', () => {
   })
 })
 
+test.describe('Dashboard - Sort Orderings (mocked) @area:dashboard', () => {
+  // The sort is CLIENT-SIDE over the fetched overdue list (dashboard/page.tsx
+  // sortBy state — no sort= request is issued), so the observable outcome is
+  // the rendered card DOM order. One full-envelope route mock feeds all three
+  // orderings; the fixture is built so urgency, name, and last-contacted
+  // orders are pairwise DISTINCT (a no-op or wrong sort fails), and one
+  // never-contacted record proves the null-sink branch.
+  const fixtureSuffix = 'Sortfix'
+  const overdueEntry = (over: { name: string; days: number; lastContacted: string | null }) => ({
+    id: `mock-${over.name.toLowerCase().replace(/ /g, '-')}`,
+    full_name: over.name,
+    methods: [],
+    cadence: 'weekly',
+    last_contacted: over.lastContacted,
+    contact_by: '2026-07-01T00:00:00Z',
+    has_pending_followup: false,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+    days_overdue: over.days,
+    next_due_date: '2026-07-01T00:00:00Z',
+    suggested_action: 'A quick check-in to reconnect',
+  })
+  // urgency (days desc):      Zulu(30), Mike(12), Alpha(3), Bravo(1)
+  // name (alphabetical):      Alpha, Bravo, Mike, Zulu
+  // last-contacted (oldest→): Alpha(01-10), Bravo(03-01), Zulu(05-01), Mike(null last)
+  const fixture = [
+    overdueEntry({
+      name: `Alpha ${fixtureSuffix}`,
+      days: 3,
+      lastContacted: '2026-01-10T12:00:00Z',
+    }),
+    overdueEntry({
+      name: `Zulu ${fixtureSuffix}`,
+      days: 30,
+      lastContacted: '2026-05-01T12:00:00Z',
+    }),
+    overdueEntry({ name: `Mike ${fixtureSuffix}`, days: 12, lastContacted: null }),
+    overdueEntry({
+      name: `Bravo ${fixtureSuffix}`,
+      days: 1,
+      lastContacted: '2026-03-01T12:00:00Z',
+    }),
+  ]
+
+  const gotoMockedDashboard = async (page: import('@playwright/test').Page) => {
+    await page.route('**/api/v1/contacts/overdue', route =>
+      route.fulfill({ json: { success: true, data: fixture } })
+    )
+    await page.goto('/dashboard')
+    await expect(page.getByRole('heading', { name: `Zulu ${fixtureSuffix}` })).toBeVisible()
+  }
+
+  // The rendered card order, read as DOM order of the card name headings
+  // (only the mocked cards render — the mock replaced the whole list).
+  const cardOrder = async (page: import('@playwright/test').Page) => {
+    const headings = await page.locator('h3').allTextContents()
+    return headings.filter(h => h.endsWith(fixtureSuffix))
+  }
+
+  test('urgency (default) orders most-overdue first', async ({ page }) => {
+    // spec: CAD-027[0]
+    await gotoMockedDashboard(page)
+    expect(await cardOrder(page)).toEqual([
+      `Zulu ${fixtureSuffix}`,
+      `Mike ${fixtureSuffix}`,
+      `Alpha ${fixtureSuffix}`,
+      `Bravo ${fixtureSuffix}`,
+    ])
+  })
+
+  test('name orders alphabetically', async ({ page }) => {
+    // spec: CAD-027[1]
+    await gotoMockedDashboard(page)
+    await page.getByRole('button', { name: 'Name', exact: true }).click()
+    await expect
+      .poll(() => cardOrder(page))
+      .toEqual([
+        `Alpha ${fixtureSuffix}`,
+        `Bravo ${fixtureSuffix}`,
+        `Mike ${fixtureSuffix}`,
+        `Zulu ${fixtureSuffix}`,
+      ])
+  })
+
+  test('last-contacted orders oldest first with never-contacted last', async ({ page }) => {
+    // spec: CAD-027[2]
+    await gotoMockedDashboard(page)
+    await page.getByRole('button', { name: 'Last Contacted', exact: true }).click()
+    // Mike (last_contacted: null) renders "Never contacted" and must sink to
+    // the END regardless of its days_overdue — the null-sink branch.
+    await expect
+      .poll(() => cardOrder(page))
+      .toEqual([
+        `Alpha ${fixtureSuffix}`,
+        `Bravo ${fixtureSuffix}`,
+        `Zulu ${fixtureSuffix}`,
+        `Mike ${fixtureSuffix}`,
+      ])
+    const mikeCard = page.locator('div.rounded-lg').filter({ hasText: `Mike ${fixtureSuffix}` })
+    await expect(mikeCard.getByText('Never contacted')).toBeVisible()
+  })
+})
+
 test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () => {
   let testApi: TestAPI
   let overdueContactId: string
