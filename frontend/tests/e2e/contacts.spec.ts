@@ -501,16 +501,16 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     page.on('request', watchDelete)
     page.once('dialog', dialog => dialog.dismiss())
     await page.getByRole('button', { name: 'Delete' }).click()
-    await expect
-      .poll(async () => {
-        const resp = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
-          headers: API_HEADERS,
-        })
-        return resp.status()
-      })
-      .toBe(200)
+    // Asserting ABSENCE: there is no positive signal to await on dismiss, so give
+    // any (erroneous) DELETE a bounded settle window to appear, then confirm none
+    // fired and the contact is still live.
+    await page.waitForTimeout(1000)
     expect(deleteFired).toBe(false)
     page.off('request', watchDelete)
+    const liveResp = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
+      headers: API_HEADERS,
+    })
+    expect(liveResp.status()).toBe(200)
 
     // Accept path: the DELETE fires (204), the contact 404s, and we land on the list.
     const deleteResponse = page.waitForResponse(
@@ -562,6 +562,12 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await page.getByRole('menuitem', { name: 'Mark as Contacted' }).click()
     const response = await responsePromise
     expect(response.status()).toBe(201)
+
+    // The client does not send occurred_at — the server assigns it from its
+    // (accelerated) clock.
+    const requestBody = response.request().postDataJSON() ?? {}
+    expect(requestBody.occurred_at).toBeUndefined()
+
     const body = await response.json()
     expect(body.data.direction).toBe('mutual')
     expect(body.data.occurred_at).toBeTruthy()

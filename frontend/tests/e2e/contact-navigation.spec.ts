@@ -1,6 +1,13 @@
 import { test, expect } from '@playwright/test'
 import { createTestAPI, TestAPI } from './helpers/test-api'
 
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
+const API_HEADERS = {
+  'X-API-Key': API_KEY,
+  'Content-Type': 'application/json',
+}
+
 test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
   let testApi: TestAPI
 
@@ -450,15 +457,29 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     })
   })
 
-  test('Escape discards an unsaved edit without persisting the change', async ({ page }) => {
+  test('Escape discards an unsaved edit without persisting the change', async ({
+    page,
+    request,
+  }) => {
     // spec: CON-040[3]
     const { ids } = await testApi.seedContacts([{ full_name: 'Discard Edit Test' }])
+    const contactId = ids[0]
     const fullName = `${testApi.prefix}-Discard Edit Test`
     const changedName = `${testApi.prefix}-Discard Edit CHANGED`
 
-    await page.goto(`/contacts/${ids[0]}`)
+    await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+
+    // Watch for any contact-update request — discarding must not persist.
+    let updateFired = false
+    const watchUpdate = (req: import('@playwright/test').Request) => {
+      const m = req.method()
+      if ((m === 'PUT' || m === 'PATCH') && req.url().includes(`/api/v1/contacts/${contactId}`)) {
+        updateFired = true
+      }
+    }
+    page.on('request', watchUpdate)
 
     // Enter edit mode and modify the name.
     await page.getByRole('button', { name: 'Edit' }).first().click()
@@ -476,6 +497,15 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 10000 })
     await expect(page.getByRole('heading', { name: 'Edit Contact' })).not.toBeVisible()
     await expect(page.getByRole('heading', { name: changedName })).not.toBeVisible()
+
+    // No update request fired, and the stored name is still the original.
+    page.off('request', watchUpdate)
+    expect(updateFired).toBe(false)
+    const stored = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
+      headers: API_HEADERS,
+    })
+    expect(stored.ok()).toBeTruthy()
+    expect((await stored.json()).data.full_name).toBe(fullName)
   })
 
   test('arrows are inert while focus is in an input outside edit mode', async ({ page }) => {
