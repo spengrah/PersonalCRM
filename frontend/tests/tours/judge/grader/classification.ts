@@ -99,27 +99,9 @@ export const CLASSIFICATION: Classification[] = [
   // CAD-027 (urgency / name / recency orderings) migrated to E2E:
   // dashboard.spec.ts (see `// spec: CAD-027`).
 
-  // --- CAD-028: mark-contacted from the dashboard ---
-  {
-    behaviorId: 'CAD-028',
-    thenIndex: 0,
-    grader: 'verifier',
-    note: 'mutual interaction logged, server-accelerated clock (after capture POST direction:mutual)',
-  },
-  {
-    behaviorId: 'CAD-028',
-    thenIndex: 1,
-    grader: 'verifier',
-    note: 'leaves overdue without reload; count updates (before/after overdue refetch, no nav; abstain if timing lags)',
-  },
-  {
-    behaviorId: 'CAD-028',
-    thenIndex: 2,
-    grader: 'verifier',
-    caveat:
-      'Multi-surface (dashboard/list/detail) consistency is not toured in one flow → abstain.',
-    note: 'consistent across dashboard/list/detail (not toured → abstain)',
-  },
+  // CAD-028 (mark-contacted from the dashboard) migrated to E2E:
+  // dashboard.spec.ts + overdue-contact-updates.spec.ts (see
+  // `// spec: CAD-028`).
 
   // --- CAD-029: recent-activity summary ---
   {

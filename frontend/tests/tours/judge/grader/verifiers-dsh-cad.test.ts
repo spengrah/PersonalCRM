@@ -3,7 +3,6 @@ import { apiItem, cap, pair, root } from './fixtures'
 import { applyMutation } from '../doctor'
 import type { CaptureSet } from './types'
 import type { Capture } from '../../support/types'
-import { cad028 } from './verifiers/cad028'
 import { cad029 } from './verifiers/cad029'
 import { cad030 } from './verifiers/cad030'
 import { cad031 } from './verifiers/cad031'
@@ -16,67 +15,6 @@ function set(behaviorId: string, captures: Capture[]): CaptureSet {
 function doctored(behaviorId: string, captures: Capture[], m: Mutation): CaptureSet {
   return { behaviorId, captures: applyMutation(captures, m) }
 }
-
-// --- CAD-028 ---
-describe('cad028', () => {
-  // The default frame() currentTime is 2026-07-12T15:48:12Z; an accelerated stamp
-  // sits just before it. (over.occurredAt lets a test place it outside the frame.)
-  const after = (over: { overdueIds?: string[]; occurredAt?: string } = {}): Capture =>
-    cap({
-      behaviors: ['CAD-028'],
-      pair: pair('m', 'mark-after'),
-      url: '/dashboard',
-      apiResponses: {
-        'POST /api/v1/contacts/:id/interactions': [
-          apiItem({
-            method: 'POST',
-            requestUrl: '/api/v1/contacts/<id:5>/interactions',
-            status: 201,
-            requestBody: { direction: 'mutual' },
-            body: {
-              data: {
-                direction: 'mutual',
-                occurred_at: over.occurredAt ?? '2026-07-12T15:47:00Z',
-              },
-            },
-          }),
-        ],
-        'GET /api/v1/contacts/overdue': [
-          apiItem({ body: { data: (over.overdueIds ?? ['<id:9>']).map(id => ({ id })) } }),
-        ],
-      },
-    })
-
-  it('clean: [0] pass (mutual, in accelerated frame), [1] pass (marked left the list)', () => {
-    const v = cad028(set('CAD-028', [after()]))
-    expect(v[0].verdict).toBe('pass')
-    expect(v[1].verdict).toBe('pass')
-  })
-  it('[0] fails on a wall-clock stamp outside the accelerated frame', () => {
-    // A day behind the accelerated currentTime — fails the recency bound.
-    expect(cad028(set('CAD-028', [after({ occurredAt: '2026-07-11T15:47:00Z' })]))[0].verdict).toBe(
-      'fail'
-    )
-  })
-  it('doctored: POST interaction deleted → [0] fail', () => {
-    const v = cad028(
-      doctored('CAD-028', [after()], {
-        op: 'delete_endpoint',
-        role: 'mark-after',
-        endpoint: 'POST /api/v1/contacts/:id/interactions',
-      })
-    )
-    expect(v[0].verdict).toBe('fail')
-  })
-  it('[1] abstains when the marked contact is still overdue (timing)', () => {
-    expect(cad028(set('CAD-028', [after({ overdueIds: ['<id:5>', '<id:9>'] })]))[1].verdict).toBe(
-      'unsure'
-    )
-  })
-  it('missing → unsure', () => {
-    expect(cad028(set('CAD-028', []))[0].verdict).toBe('unsure')
-  })
-})
 
 // --- CAD-029 ---
 describe('cad029', () => {
