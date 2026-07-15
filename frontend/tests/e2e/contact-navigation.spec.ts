@@ -317,34 +317,46 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     // spec: CON-038[1]
     // Navigate by CLICKING the seeded row in the default (cadence) list — the
     // detail must CARRY that ordering context, so prev/next walks the same
-    // cadence order rather than an ordering hand-fed through the URL. Search only
-    // filters; it does not change the sort.
+    // cadence order rather than an ordering hand-fed through the URL. Names are
+    // scrambled so alphabetical order (either direction) differs from cadence
+    // order: cadence-desc = Yankee(weekly) → Alpha(monthly) → Mike(annual).
     const { ids } = await testApi.seedContacts([
-      { full_name: 'Default Nav Annual', cadence: 'annual' },
-      { full_name: 'Default Nav Weekly', cadence: 'weekly' },
-      { full_name: 'Default Nav Monthly', cadence: 'monthly' },
+      { full_name: 'Default Nav Mike', cadence: 'annual' },
+      { full_name: 'Default Nav Yankee', cadence: 'weekly' },
+      { full_name: 'Default Nav Alpha', cadence: 'monthly' },
     ])
     const annualId = ids[0]
     const weeklyId = ids[1]
     const monthlyId = ids[2]
-    const weeklyName = `${testApi.prefix}-Default Nav Weekly`
-    const monthlyName = `${testApi.prefix}-Default Nav Monthly`
-    const annualName = `${testApi.prefix}-Default Nav Annual`
+    const weeklyName = `${testApi.prefix}-Default Nav Yankee`
+    const monthlyName = `${testApi.prefix}-Default Nav Alpha`
+    const annualName = `${testApi.prefix}-Default Nav Mike`
 
     // Filter the default list to just these three, then open the most-frequent
-    // (weekly) contact by clicking its row.
+    // (weekly) contact by clicking its row. Capture the detail's ids_only nav
+    // request to prove the traversal order itself is cadence, not name.
     await page.goto('/contacts')
     await page.waitForLoadState('domcontentloaded')
     await page.getByPlaceholder('Search contacts...').fill(testApi.prefix)
     await page.getByPlaceholder('Search contacts...').press('Enter')
     await expect(page.getByText(weeklyName)).toBeVisible({ timeout: 15000 })
+
+    const navIdsRequest = page.waitForResponse(
+      resp =>
+        resp.request().method() === 'GET' &&
+        new URL(resp.url()).searchParams.get('ids_only') === 'true'
+    )
     await page.getByText(weeklyName).click()
     await page.waitForURL(new RegExp(`/contacts/${weeklyId}`))
     await expect(page.getByRole('heading', { name: weeklyName })).toBeVisible({ timeout: 15000 })
 
-    // The list's ordering context traveled into the detail URL (cadence-desc).
+    // The list's ordering context traveled into the detail URL AND the nav
+    // request (cadence-desc) — the traversal order is cadence, not name.
     await expect(page).toHaveURL(/sort=cadence/)
     await expect(page).toHaveURL(/order=desc/)
+    const navParams = new URL((await navIdsRequest).url()).searchParams
+    expect(navParams.get('sort')).toBe('cadence')
+    expect(navParams.get('order')).toBe('desc')
     // Keyboard nav is disabled until the navigation id list loads.
     await expect(page.getByText(/\d+ of \d+/)).toBeVisible({ timeout: 10000 })
 

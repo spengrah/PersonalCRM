@@ -431,10 +431,15 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
 
   test('defaults the contact list to cadence order, most-frequent-first', async ({ page }) => {
     // spec: CON-038[0]
+    // Names are chosen so ALPHABETICAL order (either direction) differs from the
+    // cadence-desc order — otherwise a backend that ignored sort=cadence and fell
+    // back to name order would pass this test. Cadence-desc = Yankee(weekly) →
+    // Alpha(monthly) → Mike(annual); name-asc = Alpha, Mike, Yankee; name-desc =
+    // Yankee, Mike, Alpha. All three orders are distinct.
     await testApi.seedContacts([
-      { full_name: 'Cadence Default Annual', cadence: 'annual' },
-      { full_name: 'Cadence Default Weekly', cadence: 'weekly' },
-      { full_name: 'Cadence Default Monthly', cadence: 'monthly' },
+      { full_name: 'Cadence Sort Mike', cadence: 'annual' },
+      { full_name: 'Cadence Sort Yankee', cadence: 'weekly' },
+      { full_name: 'Cadence Sort Alpha', cadence: 'monthly' },
     ])
 
     // A BARE load resolves the default context: the request the app issues
@@ -459,16 +464,14 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await page.getByPlaceholder('Search contacts...').press('Enter')
     await expect(
       page.locator('tbody tr', {
-        has: page.getByText(`${testApi.prefix}-Cadence Default Annual`),
+        has: page.getByText(`${testApi.prefix}-Cadence Sort Alpha`),
       })
     ).toBeVisible({ timeout: 15000 })
 
     const rowText = await page.locator('tbody tr').allTextContents()
-    const weeklyIdx = rowText.findIndex(t => t.includes(`${testApi.prefix}-Cadence Default Weekly`))
-    const monthlyIdx = rowText.findIndex(t =>
-      t.includes(`${testApi.prefix}-Cadence Default Monthly`)
-    )
-    const annualIdx = rowText.findIndex(t => t.includes(`${testApi.prefix}-Cadence Default Annual`))
+    const weeklyIdx = rowText.findIndex(t => t.includes(`${testApi.prefix}-Cadence Sort Yankee`))
+    const monthlyIdx = rowText.findIndex(t => t.includes(`${testApi.prefix}-Cadence Sort Alpha`))
+    const annualIdx = rowText.findIndex(t => t.includes(`${testApi.prefix}-Cadence Sort Mike`))
     expect(weeklyIdx).toBeGreaterThanOrEqual(0)
     expect(monthlyIdx).toBeGreaterThan(weeklyIdx)
     expect(annualIdx).toBeGreaterThan(monthlyIdx)

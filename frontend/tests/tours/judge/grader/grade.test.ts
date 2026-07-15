@@ -183,8 +183,8 @@ describe('gradeBehavior', () => {
     expect(judgeItem?.grader).toBe('judge')
     expect(judgeItem?.source).toBe('pending')
     expect(judgeItem?.verdict).toBe('unsure')
-    // The behavior aggregates to unsure (a judge item is pending) even though
-    // the verifier items pass.
+    // CON-042 now has only the judge item [0] (its verifier items migrated to
+    // E2E), so with the judge pending the behavior aggregates to unsure.
     expect(g.behaviorVerdict).toBe('unsure')
   })
 
