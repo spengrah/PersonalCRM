@@ -12,6 +12,8 @@
 import type { Capture } from '../support/types'
 import { makeCodexExecJudge } from './adapter/codex-exec'
 import type { Judge, PerItemVerdict } from './adapter/types'
+import type { Mutation } from './corpus/schema'
+import { resolveCaseCaptures } from './doctor'
 import type { IntentSpec } from './intent-catalog'
 import { DEFAULT_INTENT_EFFORT, DEFAULT_INTENT_MODEL, runIntentPass } from './intent-runner'
 import { buildJudgeInput, judgeItemsFor } from './judge-input'
@@ -75,6 +77,26 @@ export async function draftForCase(
   const input = buildJudgeInput(behaviorId, captures)
   const verdicts = input && input.items.length > 0 ? await drafter(input) : []
   return buildDraftArtifact(caseId, behaviorId, draftedBy, verdicts)
+}
+
+// Draft one corpus case through the SAME resolve→draft wiring the CLI loop uses:
+// resolve the case's (possibly-doctored) captures, then draft over that
+// evidence. Returns undefined for a behavior with no judge residue (nothing to
+// draft). Exported so a test drives the real entry, not a hand-resolved shortcut.
+export async function draftCorpusCase(
+  c: {
+    id: string
+    behavior_id: string
+    source: 'clean' | 'doctored'
+    doctor?: { mutation: Mutation }
+  },
+  baseCaptures: Capture[],
+  drafter: Judge,
+  draftedBy: string
+): Promise<DraftArtifact | undefined> {
+  if (judgeItemsFor(c.behavior_id).length === 0) return undefined
+  const captures = resolveCaseCaptures(c, baseCaptures)
+  return draftForCase(c.id, c.behavior_id, captures, drafter, draftedBy)
 }
 
 // One intent-case draft: DEFERRED.md's "the drafter covers intents too".
@@ -145,7 +167,7 @@ async function main(): Promise<void> {
   const path = await import('path')
   const { loadCorpus } = await import('./corpus/load')
   const { selectJudge } = await import('./adapter')
-  const { applyMutation, resolveCaseCaptures } = await import('./doctor')
+  const { applyMutation } = await import('./doctor')
   const { intentSpec } = await import('./intent-catalog')
 
   const corpusRoot = process.argv[2] ?? path.join(import.meta.dirname ?? __dirname, 'corpus')
@@ -162,12 +184,10 @@ async function main(): Promise<void> {
   const { cases, intentCases, capturesFor } = loadCorpus(corpusRoot)
   fs.mkdirSync(outDir, { recursive: true })
   for (const c of cases) {
-    // Draft over the case's resolved captures — for a doctored case that means
-    // the mutated evidence, so the draft describes the doctored world. Skip a
-    // behavior with no judge-tagged residue items (nothing to draft).
-    const captures = resolveCaseCaptures(c, capturesFor(c))
-    if (judgeItemsFor(c.behavior_id).length === 0) continue
-    const artifact = await draftForCase(c.id, c.behavior_id, captures, drafter, draftedBy)
+    // draftCorpusCase resolves the case's captures (mutated, for a doctored
+    // case) and drafts over that evidence; undefined = no judge residue to draft.
+    const artifact = await draftCorpusCase(c, capturesFor(c), drafter, draftedBy)
+    if (!artifact) continue
     const outPath = path.join(outDir, `${c.id}.draft.json`)
     fs.writeFileSync(outPath, `${JSON.stringify(artifact, null, 2)}\n`, 'utf8')
     console.log(`labeled (draft): ${outPath}`)

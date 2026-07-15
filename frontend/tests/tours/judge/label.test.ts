@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import {
   buildDraftArtifact,
+  draftCorpusCase,
   draftForCase,
   draftForIntentCase,
   resolveLabelerDrafter,
 } from './label'
-import { resolveCaseCaptures } from './doctor'
 import { cap } from './grader/fixtures'
 import { DEFAULT_INTENT_EFFORT, DEFAULT_INTENT_MODEL } from './intent-runner'
 import type { IntentSpec } from './intent-catalog'
@@ -65,7 +65,7 @@ describe('draftForCase (mocked stronger-model drafter — offline)', () => {
     ])
   })
 
-  it('drafts a doctored case over the MUTATED evidence (dialog blanked), not the clean one', async () => {
+  it('drafts a doctored case over the MUTATED evidence via the real resolve→draft entry', async () => {
     let sawDialogMessage: string | undefined
     const drafter: Judge = async input => {
       sawDialogMessage = input.evidence.dialogs?.[0]?.message
@@ -79,13 +79,21 @@ describe('draftForCase (mocked stronger-model drafter — offline)', () => {
     const base = [
       cap({ behaviors: ['CON-042'], dialogs: [{ type: 'confirm', message: 'cannot be undone' }] }),
     ]
-    // The labeling CLI resolves captures the SAME way (applies the mutation).
-    const captures = resolveCaseCaptures(
-      { source: 'doctored', doctor: { mutation: { op: 'blank_dialog' } } },
-      base
+    // Drive draftCorpusCase — the SAME entry the CLI loop uses (resolveCaseCaptures
+    // → draftForCase) — so a broken wiring between resolution and drafting fails.
+    const artifact = await draftCorpusCase(
+      {
+        id: 'CON-042-doctored-nowarn',
+        behavior_id: 'CON-042',
+        source: 'doctored',
+        doctor: { mutation: { op: 'blank_dialog' } },
+      },
+      base,
+      drafter,
+      'strong'
     )
-    await draftForCase('CON-042-doctored-nowarn', 'CON-042', captures, drafter, 'strong')
     expect(sawDialogMessage).toBe('') // the drafter saw the DOCTORED (blanked) dialog
+    expect(artifact?.items).toHaveLength(1) // CON-042 residue = item 0
   })
 })
 

@@ -10,9 +10,9 @@ import { behaviorSpec } from './spec-catalog'
 
 // Aggregate a behavior's captures into one evidence bundle: all dialogs, a
 // merged aria root (so every visible text node is present), merged api, the
-// first frame's url + serverTime. Retained for callers that need the flat
-// bundle (self-consistency repeats); judge prompts now prefer the per-capture
-// sections below, which keep in-flight vs settled states distinguishable.
+// first frame's url + serverTime. Retained as the flat bundle some callers
+// need; judge prompts now prefer the per-capture sections below, which keep
+// in-flight vs settled states distinguishable.
 export function buildEvidence(captures: Capture[]): EvidenceBlocks {
   const aria = {
     role: 'root' as const,
