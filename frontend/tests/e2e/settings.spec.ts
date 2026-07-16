@@ -57,7 +57,6 @@ const todoistRegion = (page: Page) => page.getByRole('region', { name: 'Todoist'
 
 const GMAIL_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly'
 const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.readonly'
-const CONTACTS_SCOPE = 'https://www.googleapis.com/auth/contacts.readonly'
 const CHAT_SCOPES = [
   'https://www.googleapis.com/auth/chat.spaces.readonly',
   'https://www.googleapis.com/auth/chat.messages.readonly',
