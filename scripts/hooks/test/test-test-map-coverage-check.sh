@@ -107,7 +107,7 @@ run_test_map_coverage "$tmp/missing-pattern.json" >/dev/null 2>&1; rc=$?
 assert_eq "wrapper: map with patternless rule -> non-zero verdict (blocks push)" "1" "$rc"
 
 # Wrapper offenders path (rc=1 — the case the guard EXISTS to catch): drive the
-# real wrapper against a VALID map that is the live map MINUS the gchat self-entry,
+# real wrapper against a VALID map that is the live map MINUS the rematch self-entry,
 # so the live git-ls-files spec list contains one spec the map no longer covers.
 # This exercises the wrapper's offenders branch end-to-end (not just the module),
 # proving an unmapped live spec actually blocks the push — a regression making the
@@ -115,11 +115,11 @@ assert_eq "wrapper: map with patternless rule -> non-zero verdict (blocks push)"
 node -e "
 const fs=require('fs');
 const m=JSON.parse(fs.readFileSync('frontend/tests/e2e/test-map.json','utf8'));
-const dropped=m.filter(r=>r.pattern!=='^frontend/tests/e2e/gchat-contact-signal\\\\.spec\\\\.ts\$');
+const dropped=m.filter(r=>r.pattern!=='^frontend/tests/e2e/rematch-on-add-email\\\\.spec\\\\.ts\$');
 if (dropped.length !== m.length-1) { console.error('fixture setup error: expected to drop exactly 1 entry'); process.exit(3); }
-fs.writeFileSync('$tmp/map-missing-gchat.json', JSON.stringify(dropped));
+fs.writeFileSync('$tmp/map-missing-rematch.json', JSON.stringify(dropped));
 "
-run_test_map_coverage "$tmp/map-missing-gchat.json" >/dev/null 2>&1; rc=$?
+run_test_map_coverage "$tmp/map-missing-rematch.json" >/dev/null 2>&1; rc=$?
 assert_eq "wrapper: valid map missing a live spec entry -> rc=1 (offenders block push)" "1" "$rc"
 
 # Live-repo regression guard: after the Step-1 backfill the real guard exits 0.
