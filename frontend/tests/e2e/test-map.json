@@ -84,6 +84,18 @@
     "tags": ["@area:settings"]
   },
   {
+    "pattern": "^frontend/tests/e2e/settings-calendar\\.spec\\.ts$",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^frontend/tests/e2e/notepad\\.spec\\.ts$",
+    "tags": ["@area:contacts"]
+  },
+  {
+    "pattern": "^frontend/tests/e2e/contact-knowledge\\.spec\\.ts$",
+    "tags": ["@area:contacts"]
+  },
+  {
     "pattern": "^frontend/tests/e2e/settings-mac\\.spec\\.ts$",
     "tags": ["@area:settings"]
   },
