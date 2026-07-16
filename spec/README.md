@@ -141,7 +141,7 @@ test.describe('Rematch on add email', () => {
 
 - **covered** — a then-item of a `surface: ui`, `status: current` behavior cited by an E2E test (bare cite covers all items; indexed cite covers item `n`; a `ui` invariant's statement is one implicit item, coverable only bare).
 - **waived** — a then-item with a `waivers` entry; reported loudly with the reason. A waived item that gains a citing test is flagged as a stale waiver (warning).
-- **orphan** — a then-item of a `ui`/`current` behavior with neither citation nor waiver. Warn-only by default; hard-fails once the domain's spec file declares `e2e_settled: true`.
+- **orphan** — a then-item of a `ui`/`current` behavior with neither citation nor waiver. Warn-only while a domain's spec file lacks `e2e_settled: true`; every domain declares it since the E2E surface settlement, so orphans hard-fail — a new `ui` behavior (or then-item) must land with its citing test or an explicit waiver in the same PR.
 - **invalid citations** — always a failure, regardless of settlement: a malformed marker, an unknown ID (dead reference), an out-of-range then-index, an indexed cite of a statement behavior, or a cite of an `intent` (judge-only), `proposed` (a citation asserts truth), or `retired` behavior.
 
 `api`- and `none`-surface behaviors are exempt from E2E coverage by construction; an E2E citation of a non-`ui` behavior draws a warning (it usually means the surface tag is wrong). The Go API tests' citations are validated for deadness but do not count toward ui coverage.

@@ -1,6 +1,7 @@
 domain: ingest
 prefix: ING
 maturity: reviewed
+e2e_settled: true
 behaviors:
   # --- HTTP ingest surface ---
 

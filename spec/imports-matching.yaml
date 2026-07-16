@@ -1,6 +1,7 @@
 domain: imports-matching
 prefix: IMP
 maturity: reviewed
+e2e_settled: true
 behaviors:
   # --- Matching engine ---
 

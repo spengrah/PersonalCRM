@@ -1,6 +1,7 @@
 domain: telegram
 prefix: TGM
 maturity: reviewed
+e2e_settled: true
 behaviors:
   # --- Enablement & config gating ---
 

@@ -1,6 +1,7 @@
 domain: contacts
 prefix: CON
 maturity: reviewed
+e2e_settled: true
 behaviors:
   # --- CRUD ---
 
