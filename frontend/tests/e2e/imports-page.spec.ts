@@ -50,35 +50,54 @@ test.describe('Imports Page @area:imports', () => {
     // dependency — so mock the account list (sanctioned route-mock technique)
     // and absorb the trigger POST itself; the deterministic claim is that the
     // page offers both triggers and each fires the right per-source request.
-    await page.route('**/api/v1/auth/google/accounts', route =>
-      route.fulfill({
+    // The app calls the API cross-origin (frontend :3000 → API :8080) with an
+    // X-API-Key header, so fulfilled responses must answer the CORS preflight
+    // and carry Access-Control-Allow-Origin, else the browser drops them.
+    const corsHeaders = {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type,X-API-Key',
+    }
+    const corsFulfill = (route: import('@playwright/test').Route, body: unknown) => {
+      if (route.request().method() === 'OPTIONS') {
+        return route.fulfill({ status: 204, headers: corsHeaders })
+      }
+      return route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({
-          success: true,
-          data: [
-            {
-              id: 'e2e-mock-google-account',
-              account_id: 'e2e-mock-google-account',
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            },
-          ],
-        }),
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+    }
+    await page.route('**/api/v1/auth/google/accounts', route =>
+      corsFulfill(route, {
+        success: true,
+        data: [
+          {
+            id: 'e2e-mock-google-account',
+            account_id: 'e2e-mock-google-account',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          },
+        ],
       })
     )
     const syncRequests: string[] = []
     await page.route('**/api/v1/sync/*/trigger', route => {
-      syncRequests.push(route.request().url())
-      return route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ success: true, data: null }),
-      })
+      if (route.request().method() !== 'OPTIONS') {
+        syncRequests.push(route.request().url())
+      }
+      return corsFulfill(route, { success: true, data: null })
     })
 
+    // The triggers act only once the account list has loaded — wait for it
+    // before clicking, else the click lands on the no-accounts branch.
+    const accountsLoaded = page.waitForResponse(
+      res => res.url().includes('/api/v1/auth/google/accounts') && res.request().method() === 'GET'
+    )
     await page.goto('/imports')
     await page.waitForLoadState('domcontentloaded')
+    await accountsLoaded
 
     // Both per-source triggers are offered. (.first(): an empty candidate
     // list renders a second contacts-sync affordance in the empty state.)
