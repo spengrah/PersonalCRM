@@ -1,6 +1,10 @@
 import { test, expect } from './fixtures'
 import { createTestAPI, TestAPI } from './helpers/test-api'
-import { navigateModalToCandidate } from './helpers/imports-helpers'
+import {
+  navigateModalToCandidate,
+  resolverDialog,
+  selectContactIfNeeded,
+} from './helpers/imports-helpers'
 
 // Unified People-tab suggestions surface: the method-suggestion group
 // (above the confidence-ranked candidates) + the link-only candidate case.
@@ -164,12 +168,8 @@ test.describe('Imports suggestions surface @area:imports', () => {
     // Ensure a contact is selected. The trigram suggested-match usually
     // pre-selects the same-named CRM contact (ContactSelector then shows the
     // name, not the search input); if it did not, select explicitly.
-    const dialog = page.getByRole('dialog', { name: 'Resolve import candidate' })
-    const search = dialog.getByPlaceholder('Search for a contact...')
-    if (await search.isVisible().catch(() => false)) {
-      await search.fill('Deselect Target')
-      await page.getByText(cardName, { exact: true }).last().click()
-    }
+    const dialog = resolverDialog(page)
+    await selectContactIfNeeded(page, dialog, 'Deselect Target', cardName)
     // The Link button is enabled only once a contact is selected.
     await expect(page.getByRole('button', { name: /Link Contact/i })).toBeEnabled()
 

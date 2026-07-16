@@ -1,6 +1,63 @@
 import { test, expect } from './fixtures'
+import { createTestAPI, TestAPI } from './helpers/test-api'
+import { findCandidateByName } from './helpers/imports-helpers'
 
 test.describe('Imports Page @area:imports', () => {
+  let testApi: TestAPI
+
+  test.beforeEach(async ({ request }, testInfo) => {
+    testApi = createTestAPI(request, testInfo)
+  })
+
+  test.afterEach(async () => {
+    await testApi.cleanup()
+  })
+
+  // spec: IMP-026[0]
+  test('renders candidates confidence-ranked on the People tab', async ({ page }) => {
+    // Two CRM contacts; the high external matches one on name AND email
+    // (high confidence), the med external matches the other on name only
+    // (lower confidence). Both render as suggested candidates and the
+    // higher-confidence one must appear first among this worker's rows.
+    const highEmail = `order-ui-high-${testApi.prefix}@example.invalid`
+    await testApi.seedContacts([
+      { full_name: 'Order Ui High', methods: [{ type: 'email', value: highEmail }] },
+      { full_name: 'Order Ui Med' },
+    ])
+    await testApi.seedExternalContacts([
+      // Seeded low-confidence first so a seed-order artifact cannot pass.
+      {
+        display_name: 'Order Ui Med',
+        source: 'gcal_attendee',
+        emails: [`order-ui-med-${testApi.prefix}@example.invalid`],
+      },
+      {
+        display_name: 'Order Ui High',
+        source: 'gcal_attendee',
+        emails: [highEmail],
+      },
+    ])
+    const highName = `${testApi.prefix}-Order Ui High`
+    const medName = `${testApi.prefix}-Order Ui Med`
+
+    await page.goto('/imports')
+    await page.waitForLoadState('domcontentloaded')
+
+    // Scope the list to the Calendar source to keep the page small, then
+    // find both of our rows.
+    await page.getByRole('button', { name: 'Calendar', exact: true }).click()
+    await findCandidateByName(page, highName)
+    await expect(page.getByRole('heading', { name: medName })).toBeVisible({ timeout: 10000 })
+
+    // Relative render order among OUR rows: higher confidence first.
+    const headings = await page.getByRole('heading', { level: 3 }).allTextContents()
+    const highIdx = headings.findIndex(t => t.includes(highName))
+    const medIdx = headings.findIndex(t => t.includes(medName))
+    expect(highIdx).toBeGreaterThanOrEqual(0)
+    expect(medIdx).toBeGreaterThanOrEqual(0)
+    expect(highIdx).toBeLessThan(medIdx)
+  })
+
   // spec: IMP-026[0]
   test('source filters expose selection state and scope the candidate request', async ({
     page,

@@ -48,6 +48,11 @@ func listCandidateIDs(t *testing.T, router http.Handler, query string) ([]string
 // candidates order by name with empty names last; unresolved telegram
 // peers are hidden by default behind a surfaced count and an opt-in flag;
 // weak title-derived discovery rows never appear in this list.
+//
+// The shared test DB accumulates rows across runs, so every read here is
+// source-scoped: the ordering rows live under a per-run unique source (the
+// list endpoint filters by exact source, so that list contains exactly this
+// test's rows), and the telegram/anarlog checks query their own sources.
 // spec: IMP-010
 func TestImportAPI_CandidateListConfidenceOrder(t *testing.T) {
 	if testing.Short() {
@@ -59,17 +64,24 @@ func TestImportAPI_CandidateListConfidenceOrder(t *testing.T) {
 
 	t.Parallel()
 	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
-	defer cleanup()
+	// Register the pool close FIRST so it runs LAST — t.Cleanup is LIFO, and
+	// the fixture deletes registered below need the pool still open.
+	t.Cleanup(cleanup)
 
 	ctx := context.Background()
 	suffix := uuid.New().String()[:8]
+	orderSource := "test-order-" + suffix
 
 	seedExternal := func(t *testing.T, req repository.UpsertExternalContactRequest) *repository.ExternalContact {
 		t.Helper()
 		req.SourceID = uuid.New().String()
 		external, err := externalRepo.Upsert(ctx, req)
 		require.NoError(t, err)
-		t.Cleanup(func() { _ = externalRepo.Delete(ctx, external.ID) })
+		t.Cleanup(func() {
+			if err := externalRepo.Delete(ctx, external.ID); err != nil {
+				t.Errorf("cleanup: delete external contact %s: %v", external.ID, err)
+			}
+		})
 		return external
 	}
 	strPtr := func(s string) *string { return &s }
@@ -80,7 +92,11 @@ func TestImportAPI_CandidateListConfidenceOrder(t *testing.T) {
 	highEmail := fmt.Sprintf("order-high-%s@example.com", suffix)
 	highContact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: highName})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = contactRepo.HardDeleteContact(ctx, highContact.ID) })
+	t.Cleanup(func() {
+		if err := contactRepo.HardDeleteContact(ctx, highContact.ID); err != nil {
+			t.Errorf("cleanup: delete contact %s: %v", highContact.ID, err)
+		}
+	})
 	_, err = contactMethodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
 		ContactID: highContact.ID,
 		Type:      "email",
@@ -91,38 +107,69 @@ func TestImportAPI_CandidateListConfidenceOrder(t *testing.T) {
 	medName := fmt.Sprintf("Ordertest Medium %s", suffix)
 	medContact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: medName})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = contactRepo.HardDeleteContact(ctx, medContact.ID) })
+	t.Cleanup(func() {
+		if err := contactRepo.HardDeleteContact(ctx, medContact.ID); err != nil {
+			t.Errorf("cleanup: delete contact %s: %v", medContact.ID, err)
+		}
+	})
 
-	// Unmatched externals: high confidence (name+email), medium confidence
-	// (name only), two unsuggested rows whose relative name order is fixed,
-	// and one unsuggested row with no name at all.
+	// Unmatched externals under the test-owned source: high confidence
+	// (name+email), medium confidence (name only), two unsuggested rows
+	// whose relative name order is fixed, and one row with no name at all.
 	externalHigh := seedExternal(t, repository.UpsertExternalContactRequest{
-		Source:      "test",
+		Source:      orderSource,
 		DisplayName: strPtr(highName),
 		Emails:      []repository.EmailEntry{{Value: highEmail, Type: "home"}},
 	})
 	externalMed := seedExternal(t, repository.UpsertExternalContactRequest{
-		Source:      "test",
+		Source:      orderSource,
 		DisplayName: strPtr(medName),
 		Emails:      []repository.EmailEntry{{Value: fmt.Sprintf("order-med-other-%s@example.com", suffix), Type: "home"}},
 	})
 	externalNameA := seedExternal(t, repository.UpsertExternalContactRequest{
-		Source:      "test",
+		Source:      orderSource,
 		DisplayName: strPtr(fmt.Sprintf("Aaaqwx %s Unsuggested", suffix)),
 	})
 	externalNameZ := seedExternal(t, repository.UpsertExternalContactRequest{
-		Source:      "test",
+		Source:      orderSource,
 		DisplayName: strPtr(fmt.Sprintf("Zzzqwx %s Unsuggested", suffix)),
 	})
 	externalNoName := seedExternal(t, repository.UpsertExternalContactRequest{
-		Source: "test",
+		Source: orderSource,
 	})
 
-	// An unresolved telegram peer (no names, no username, no methods) and a
-	// weak title-derived discovery row.
+	// The source-scoped list contains exactly the five seeded rows, in the
+	// documented order: confidence descending among suggested candidates,
+	// suggested before unsuggested, unsuggested by name, empty names last.
+	ids, _ := listCandidateIDs(t, router, "source="+orderSource+"&limit=100")
+	assert.Equal(t, []string{
+		externalHigh.ID.String(),
+		externalMed.ID.String(),
+		externalNameA.ID.String(),
+		externalNameZ.ID.String(),
+		externalNoName.ID.String(),
+	}, ids, "source-scoped candidate list should be confidence-ranked, then name-ordered with empty names last")
+
+	// An unresolved telegram peer (no names, no username, no methods) is
+	// hidden by default, with a count surfaced. The telegram-scoped read
+	// keeps this independent of the global queue.
 	externalUnresolvedTG := seedExternal(t, repository.UpsertExternalContactRequest{
 		Source: "telegram",
 	})
+	tgIDs, tgMeta := listCandidateIDs(t, router, "source=telegram&limit=10000")
+	assert.NotContains(t, tgIDs, externalUnresolvedTG.ID.String(),
+		"unresolved telegram peer should be hidden by default")
+	require.NotNil(t, tgMeta)
+	assert.GreaterOrEqual(t, tgMeta.HiddenUnresolvedTelegramCount, int64(1))
+
+	// The opt-in flag surfaces the hidden peer.
+	tgIDsShown, _ := listCandidateIDs(t, router, "source=telegram&limit=10000&include_unresolved_telegram=true")
+	assert.Contains(t, tgIDsShown, externalUnresolvedTG.ID.String(),
+		"include_unresolved_telegram=true should surface the unresolved peer")
+
+	// Weak title-derived discovery rows never appear in this list (they
+	// surface only through the grouped names section) — even when the
+	// caller asks for the anarlog_title source directly.
 	externalTitleToken := seedExternal(t, repository.UpsertExternalContactRequest{
 		Source:      "anarlog_title",
 		DisplayName: strPtr(fmt.Sprintf("Titletoken %s", suffix)),
@@ -132,45 +179,7 @@ func TestImportAPI_CandidateListConfidenceOrder(t *testing.T) {
 			"session_uuid":     uuid.New().String(),
 		},
 	})
-
-	ids, meta := listCandidateIDs(t, router, "limit=10000")
-
-	highIdx := indexOf(ids, externalHigh.ID.String())
-	medIdx := indexOf(ids, externalMed.ID.String())
-	nameAIdx := indexOf(ids, externalNameA.ID.String())
-	nameZIdx := indexOf(ids, externalNameZ.ID.String())
-	noNameIdx := indexOf(ids, externalNoName.ID.String())
-
-	require.NotEqual(t, -1, highIdx, "high-confidence candidate should be listed")
-	require.NotEqual(t, -1, medIdx, "medium-confidence candidate should be listed")
-	require.NotEqual(t, -1, nameAIdx, "unsuggested candidate A should be listed")
-	require.NotEqual(t, -1, nameZIdx, "unsuggested candidate Z should be listed")
-	require.NotEqual(t, -1, noNameIdx, "empty-name candidate should be listed")
-
-	// Confidence descending among suggested candidates.
-	assert.Less(t, highIdx, medIdx, "name+email match should rank above name-only match")
-	// Suggested candidates precede unsuggested ones.
-	assert.Less(t, medIdx, nameAIdx, "suggested candidates should precede unsuggested ones")
-	// Unsuggested candidates order by name...
-	assert.Less(t, nameAIdx, nameZIdx, "unsuggested candidates should order by name")
-	// ...with empty names last.
-	assert.Less(t, nameZIdx, noNameIdx, "empty-name candidates should sort after named ones")
-
-	// Unresolved telegram peers are hidden by default, with a count surfaced.
-	assert.Equal(t, -1, indexOf(ids, externalUnresolvedTG.ID.String()),
-		"unresolved telegram peer should be hidden by default")
-	require.NotNil(t, meta)
-	assert.GreaterOrEqual(t, meta.HiddenUnresolvedTelegramCount, int64(1))
-
-	// The opt-in flag surfaces the hidden peer.
-	idsWithTG, _ := listCandidateIDs(t, router, "limit=10000&include_unresolved_telegram=true")
-	assert.NotEqual(t, -1, indexOf(idsWithTG, externalUnresolvedTG.ID.String()),
-		"include_unresolved_telegram=true should surface the unresolved peer")
-
-	// Weak title-derived discovery rows never appear in this list (they
-	// surface only through the grouped names section).
-	assert.Equal(t, -1, indexOf(ids, externalTitleToken.ID.String()),
+	titleIDs, _ := listCandidateIDs(t, router, "source=anarlog_title&limit=10000")
+	assert.NotContains(t, titleIDs, externalTitleToken.ID.String(),
 		"anarlog_title rows should never appear in the candidate list")
-	assert.Equal(t, -1, indexOf(idsWithTG, externalTitleToken.ID.String()),
-		"anarlog_title rows should stay excluded even with the telegram opt-in")
 }

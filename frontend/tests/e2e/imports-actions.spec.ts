@@ -1,7 +1,10 @@
 import { test, expect } from './fixtures'
-import type { Page } from '@playwright/test'
 import { createTestAPI, TestAPI } from './helpers/test-api'
-import { navigateModalToCandidate, findCandidateByName } from './helpers/imports-helpers'
+import {
+  navigateModalToCandidate,
+  findCandidateByName,
+  candidateCardByName,
+} from './helpers/imports-helpers'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
@@ -9,10 +12,6 @@ const API_HEADERS = {
   'X-API-Key': API_KEY,
   'Content-Type': 'application/json',
 }
-
-// Candidate card scoped by its heading (never by presentation classes).
-const candidateCardByName = (page: Page, displayName: string) =>
-  page.locator('div.border', { has: page.getByRole('heading', { name: displayName }) }).first()
 
 test.describe('Imports Actions @area:imports', () => {
   test.describe('With Seeded Data', () => {
@@ -107,7 +106,7 @@ test.describe('Imports Actions @area:imports', () => {
 
     // spec: IMP-012[0], IMP-012[1], IMP-012[2], IMP-012[3]
     // spec: IMP-007[1], IMP-031[0], IMP-031[2]
-    test('should import candidate and show success notification', async ({ page, request }) => {
+    test('should import candidate and persist the created contact', async ({ page, request }) => {
       await page.goto('/imports')
       await page.waitForLoadState('networkidle')
 
@@ -203,7 +202,7 @@ test.describe('Imports Actions @area:imports', () => {
     })
 
     // spec: IMP-007[3], IMP-031[0]
-    test('should ignore candidate and show notification', async ({ page, request }) => {
+    test('should ignore candidate stickily', async ({ page, request }) => {
       await page.goto('/imports')
       await page.waitForLoadState('networkidle')
 

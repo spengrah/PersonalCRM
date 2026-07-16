@@ -96,7 +96,7 @@ behaviors:
     notes: imported-vs-matched is the discriminator that drives auto-propagate vs suggest in reconciliation (IMP-017) — imported means a human curated the method set.
     waivers:
       - then: 2
-        reason: the matched (uncurated bare-link) state is unreachable from the UI — the modal always sends a curation signal when it offers methods; the bare-link branch exists only at the API layer and is owned by the Go integration test TestLinkContact_Bare_LandsMatched
+        reason: the matched (uncurated bare-link) state needs a link with NO curation signal — a zero-method candidate against a cadence-less contact with the name untouched — a degenerate path the modal offers no stable affordance for; the discriminator is owned by the Go integration test TestLinkContact_Bare_LandsMatched
 
   - id: IMP-008
     title: Tombstoned external contacts revive with their linkage intact
@@ -181,7 +181,7 @@ behaviors:
     notes: Method-value conflicts neither block nor prompt today — a same-type different-value method is simply offered as an addition (IMP-027) — and the server does not reject links over conflicts; conflict resolutions still count as a curation signal at the API level.
     waivers:
       - then: 1
-        reason: a bare link with no curation exists only at the API layer (the modal always curates when it offers methods); owned by the Go integration test TestLinkContact_Bare_LandsMatched
+        reason: a bare link (no method curation, no cadence, no name change) is a degenerate UI path — the modal curates whenever the candidate offers methods or the contact carries a cadence to pre-fill; owned by the Go integration test TestLinkContact_Bare_LandsMatched
 
   - id: IMP-014
     title: Link-only sources can never create contacts
@@ -470,6 +470,20 @@ behaviors:
       - the one-time session param is stripped from the URL so a refresh does not re-trigger the highlight
     provenance: [imports/page.tsx sessionParam effect, InteractionsTab highlightedSession]
     notes: The scroll-into-view and highlight styling are judge-owned presentation; the deterministic contract is card-present plus param-strip.
+
+  - id: IMP-039
+    title: The resolution modal dismisses without resolving
+    type: ux
+    status: current
+    surface: ui
+    given: a candidate open in the resolution modal
+    when: the user dismisses it without resolving
+    then:
+      - pressing Escape closes the modal
+      - clicking the backdrop closes the modal
+      - the Cancel action closes the modal
+      - dismissal resolves nothing — the candidate stays unmatched in its queue, and an uncommitted name edit is discarded
+    provenance: [suggestion-modal.tsx onClose paths, Escape keydown handler, handleCancelNameEdit]
 
   # --- Proposed ---
 

@@ -1,7 +1,10 @@
 import { test, expect } from './fixtures'
-import type { Page } from '@playwright/test'
 import { createTestAPI, TestAPI } from './helpers/test-api'
-import { navigateModalToCandidate, findCandidateByName } from './helpers/imports-helpers'
+import {
+  navigateModalToCandidate,
+  findCandidateByName,
+  candidateCardByName,
+} from './helpers/imports-helpers'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
@@ -9,10 +12,6 @@ const API_HEADERS = {
   'X-API-Key': API_KEY,
   'Content-Type': 'application/json',
 }
-
-// Candidate card scoped by its heading (never by presentation classes).
-const candidateCardByName = (page: Page, displayName: string) =>
-  page.locator('div.border', { has: page.getByRole('heading', { name: displayName }) }).first()
 
 test.describe('Imports Features @area:imports', () => {
   test.describe('Pagination', () => {

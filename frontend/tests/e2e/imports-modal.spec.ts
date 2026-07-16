@@ -1,7 +1,12 @@
 import { test, expect } from './fixtures'
-import type { Page } from '@playwright/test'
 import { createTestAPI, TestAPI } from './helpers/test-api'
-import { navigateModalToCandidate, findCandidateByName } from './helpers/imports-helpers'
+import {
+  navigateModalToCandidate,
+  findCandidateByName,
+  candidateCardByName,
+  resolverDialog,
+  selectContactIfNeeded,
+} from './helpers/imports-helpers'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
@@ -9,14 +14,6 @@ const API_HEADERS = {
   'X-API-Key': API_KEY,
   'Content-Type': 'application/json',
 }
-
-// Candidate card scoped by its heading (never by presentation classes).
-const candidateCardByName = (page: Page, displayName: string) =>
-  page.locator('div.border', { has: page.getByRole('heading', { name: displayName }) }).first()
-
-// The candidate-resolution modal body.
-const resolverDialog = (page: Page) =>
-  page.getByRole('dialog', { name: 'Resolve import candidate' })
 
 test.describe('Imports Modal @area:imports', () => {
   test.describe('Queue Navigation', () => {
@@ -557,7 +554,9 @@ test.describe('Imports Modal @area:imports', () => {
 
       const modal = resolverDialog(page)
 
-      // Track import POSTs for this candidate — none may fire.
+      // Count import POSTs for this candidate: the blocked attempt must not
+      // add one, so after the subsequent successful import exactly ONE has
+      // fired (no sleep needed — the success anchors the negative proof).
       let importPosts = 0
       page.on('request', req => {
         if (req.method() === 'POST' && req.url().includes(`/imports/${externalId}/import`)) {
@@ -565,48 +564,64 @@ test.describe('Imports Modal @area:imports', () => {
         }
       })
 
-      // Clear the name, then attempt to import.
+      // Clear the name, then attempt to import — blocked, modal stays open.
       await modal.getByRole('heading', { level: 3 }).first().click()
       const nameInput = modal.getByRole('textbox').first()
       await expect(nameInput).toBeVisible({ timeout: 5000 })
       await nameInput.fill('')
       await page.getByRole('button', { name: 'Import as New Contact', exact: true }).click()
-
-      // Resolution is blocked: the modal stays open and no request fired.
       await expect(modal).toBeVisible()
-      await page.waitForTimeout(500)
-      expect(importPosts).toBe(0)
+
+      // Restore a valid name and import — this one goes through, proving the
+      // earlier click was processed and rejected (else the count would be 2).
+      await nameInput.fill(`${testApi.prefix}-Renamed After Block`)
+      await nameInput.press('Enter')
+      const importResponsePromise = page.waitForResponse(
+        res =>
+          res.request().method() === 'POST' && res.url().includes(`/imports/${externalId}/import`)
+      )
+      await page.getByRole('button', { name: 'Import as New Contact', exact: true }).click()
+      const importResponse = await importResponsePromise
+      expect(importResponse.status()).toBe(201)
+      expect(importPosts).toBe(1)
     })
 
     // spec: IMP-027[2]
     test('an unresolved telegram peer requires a name edit before import', async ({ page }) => {
       // An unresolved peer: telegram source with no name fields, no
       // username, and no methods. Hidden by default behind the opt-in
-      // "Show unresolved" toggle.
-      const { ids } = await testApi.seedExternalContacts([{ source: 'telegram' }])
+      // "Show unresolved" toggle. Every unresolved peer displays as
+      // "Unknown", so a unique organization marker (which does NOT affect
+      // the unresolved classification) binds the CARD to this worker's row.
+      const orgMarker = `${testApi.prefix}-tg-org`
+      const { ids } = await testApi.seedExternalContacts([
+        { source: 'telegram', organization: orgMarker },
+      ])
       const externalId = ids[0]
 
       await page.goto('/imports')
       await page.waitForLoadState('domcontentloaded')
       await page.getByRole('button', { name: 'Telegram', exact: true }).click()
 
-      // Opt in to unresolved peers, then open ours (display falls back to
-      // "Unknown" for a peer with no name and no handle).
+      // Opt in to unresolved peers, then open OUR card (bound by the org
+      // marker, not the shared "Unknown" display name).
       const unresolvedToggle = page.getByRole('switch')
       await expect(unresolvedToggle).toBeVisible({ timeout: 10000 })
       await unresolvedToggle.click()
-      const displayName = 'Unknown'
-      await expect(page.getByRole('heading', { name: displayName }).first()).toBeVisible({
-        timeout: 10000,
-      })
-      await candidateCardByName(page, displayName)
-        .getByRole('button', { name: /Import/i })
-        .click()
+      const ourCard = page.locator('div.border', { hasText: orgMarker }).last()
+      await expect(ourCard).toBeVisible({ timeout: 10000 })
+      await ourCard.getByRole('button', { name: /Import/i }).click()
       await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
-      await navigateModalToCandidate(page, displayName)
+      // The modal displays unresolved peers as "Unknown" — indistinguishable
+      // across workers — so the import POST below is pinned to OUR external
+      // id: if the modal landed on a foreign peer, the wait fails loudly.
+      await navigateModalToCandidate(page, 'Unknown')
 
       const modal = resolverDialog(page)
 
+      // Count import POSTs for this candidate: the blocked attempt must not
+      // add one, so after the subsequent successful import exactly ONE has
+      // fired (no sleep needed — the success anchors the negative proof).
       let importPosts = 0
       page.on('request', req => {
         if (req.method() === 'POST' && req.url().includes(`/imports/${externalId}/import`)) {
@@ -614,11 +629,9 @@ test.describe('Imports Modal @area:imports', () => {
         }
       })
 
-      // Importing without a name edit is blocked.
+      // Importing without a name edit is blocked: the modal stays open.
       await page.getByRole('button', { name: 'Import as New Contact', exact: true }).click()
       await expect(modal).toBeVisible()
-      await page.waitForTimeout(500)
-      expect(importPosts).toBe(0)
 
       // Editing the name unblocks the import.
       const editedName = `${testApi.prefix}-Named Telegram Peer`
@@ -635,6 +648,7 @@ test.describe('Imports Modal @area:imports', () => {
       await page.getByRole('button', { name: 'Import as New Contact', exact: true }).click()
       const importResponse = await importResponsePromise
       expect(importResponse.status()).toBe(201)
+      expect(importPosts).toBe(1)
     })
 
     // spec: IMP-027[3]
@@ -671,11 +685,7 @@ test.describe('Imports Modal @area:imports', () => {
       // Ensure the same-named CRM contact is selected (trigram usually
       // pre-selects it; select explicitly if not).
       const dialog = resolverDialog(page)
-      const search = dialog.getByPlaceholder('Search for a contact...')
-      if (await search.isVisible().catch(() => false)) {
-        await search.fill('Method Buckets Target')
-        await page.getByText(cardName, { exact: true }).last().click()
-      }
+      await selectContactIfNeeded(page, dialog, 'Method Buckets Target', cardName)
       await expect(page.getByRole('button', { name: /Link Contact/i })).toBeEnabled()
 
       const methodRow = (value: string) => dialog.locator('div.border', { hasText: value }).last()
@@ -727,26 +737,6 @@ test.describe('Imports Modal @area:imports', () => {
       const nameOne = `${testApi.prefix}-Advance Test One`
       const nameTwo = `${testApi.prefix}-Advance Test Two`
 
-      // Track the modal's own queue fetches: the close-on-resolve decision is
-      // made against the frontend's latest candidate array (the whole queue,
-      // parallel workers included), so the assertion branches on exactly what
-      // the frontend saw.
-      let lastQueueCount = -1
-      page.on('response', async res => {
-        if (
-          res.request().method() === 'GET' &&
-          res.url().includes('/api/v1/imports/candidates') &&
-          res.url().includes('limit=1000')
-        ) {
-          try {
-            const body = await res.json()
-            lastQueueCount = (body?.data ?? []).length
-          } catch {
-            // ignore parse failures (aborted responses)
-          }
-        }
-      })
-
       await page.goto('/imports')
       await page.waitForLoadState('networkidle')
       await findCandidateByName(page, nameOne)
@@ -782,22 +772,114 @@ test.describe('Imports Modal @area:imports', () => {
 
       // Resolve the second candidate.
       await navigateModalToCandidate(page, nameTwo)
-      const countAtAction = lastQueueCount
       const importTwo = page.waitForResponse(
         res => res.request().method() === 'POST' && res.url().includes(`/imports/${idTwo}/import`)
       )
       await page.getByRole('button', { name: 'Import as New Contact', exact: true }).click()
       expect((await importTwo).status()).toBe(201)
 
-      if (countAtAction <= 1) {
-        // The queue the frontend saw was exhausted: the modal closes.
-        await expect(dialog).not.toBeVisible({ timeout: 10000 })
-      } else {
-        // Other workers' candidates remained: the modal stays open and
-        // advances off the resolved candidate.
+      // With OUR queue exhausted the modal must reach a terminal state:
+      // closed (nothing left anywhere) or advanced onto another worker's
+      // candidate (shared queue non-empty). Which arm applies depends on the
+      // shared queue at action time, so poll for either — never for the
+      // resolved candidate lingering. The close-only-when-exhausted precision
+      // is deterministically covered by the first resolve above (a queued
+      // candidate of OURS proved the modal did not close early).
+      await expect
+        .poll(
+          async () => {
+            const open = await dialog.isVisible().catch(() => false)
+            if (!open) return 'closed'
+            // Short-timeout read: if the dialog closes between the visibility
+            // check and this read, the locator must fail fast (not auto-wait
+            // past the poll budget) so the next iteration sees it closed.
+            const text = (await heading.textContent({ timeout: 500 }).catch(() => '')) ?? ''
+            return text.includes(nameTwo) ? 'pending' : 'advanced'
+          },
+          { timeout: 15000 }
+        )
+        .not.toBe('pending')
+    })
+  })
+
+  test.describe('Dismissal', () => {
+    let testApi: TestAPI
+
+    test.beforeEach(async ({ request }, testInfo) => {
+      testApi = createTestAPI(request, testInfo)
+    })
+
+    test.afterEach(async () => {
+      await testApi.cleanup()
+    })
+
+    // spec: IMP-039[0], IMP-039[1], IMP-039[2], IMP-039[3]
+    test('Escape, backdrop, and Cancel dismiss without resolving', async ({ page, request }) => {
+      const { ids } = await testApi.seedExternalContacts([
+        {
+          display_name: 'Dismiss Modal Test',
+          emails: ['dismiss-modal@example.com'],
+        },
+      ])
+      const externalId = ids[0]
+      const displayName = `${testApi.prefix}-Dismiss Modal Test`
+
+      await page.goto('/imports')
+      await page.waitForLoadState('networkidle')
+      await findCandidateByName(page, displayName)
+
+      const dialog = resolverDialog(page)
+      const openModal = async () => {
+        await candidateCardByName(page, displayName)
+          .getByRole('button', { name: /Import/i })
+          .click()
         await expect(dialog).toBeVisible()
-        await expect(heading).not.toHaveText(nameTwo, { timeout: 10000 })
+        await navigateModalToCandidate(page, displayName)
       }
+
+      await openModal()
+
+      // An uncommitted name edit is discarded by Escape: the ORIGINAL name
+      // persists and the modal stays open (input Escape cancels the edit,
+      // not the dialog).
+      await dialog.getByRole('heading', { level: 3 }).first().click()
+      const nameInput = dialog.getByRole('textbox').first()
+      await expect(nameInput).toBeVisible({ timeout: 5000 })
+      await nameInput.fill('Should Not Save')
+      await nameInput.press('Escape')
+      await expect(
+        dialog.getByRole('heading', { level: 3 }).filter({ hasText: displayName })
+      ).toBeVisible()
+      await expect(dialog).toBeVisible()
+
+      // Escape (outside an input) closes the modal.
+      await page.keyboard.press('Escape')
+      await expect(dialog).not.toBeVisible()
+
+      // Reopen: the discarded edit did not stick to the candidate.
+      await openModal()
+      await expect(
+        dialog.getByRole('heading', { level: 3 }).filter({ hasText: displayName })
+      ).toBeVisible()
+
+      // Clicking the backdrop (the overlay outside the panel) closes it.
+      await dialog.locator('xpath=..').click({ position: { x: 10, y: 10 } })
+      await expect(dialog).not.toBeVisible()
+
+      // The Cancel action closes it.
+      await openModal()
+      await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+      await expect(dialog).not.toBeVisible()
+
+      // Nothing was resolved: the candidate is still unmatched and still in
+      // its queue.
+      await expect(candidateCardByName(page, displayName)).toBeVisible()
+      const candidateRes = await request.get(`${API_BASE_URL}/api/v1/imports/${externalId}`, {
+        headers: API_HEADERS,
+      })
+      expect(candidateRes.ok()).toBe(true)
+      const candidateBody = await candidateRes.json()
+      expect(candidateBody?.data?.match_status).toBe('unmatched')
     })
   })
 })

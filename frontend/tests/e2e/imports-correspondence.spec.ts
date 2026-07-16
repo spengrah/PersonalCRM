@@ -1,6 +1,10 @@
 import { test, expect } from './fixtures'
 import { createTestAPI, TestAPI } from './helpers/test-api'
-import { navigateModalToCandidate } from './helpers/imports-helpers'
+import {
+  navigateModalToCandidate,
+  resolverDialog,
+  selectContactIfNeeded,
+} from './helpers/imports-helpers'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
@@ -78,12 +82,8 @@ test.describe('Imports gmail_correspondence evidence @area:imports', () => {
     await navigateModalToCandidate(page, cardName)
 
     // Ensure a contact is selected (the trigram match usually pre-selects it).
-    const dialog = page.getByRole('dialog', { name: 'Resolve import candidate' })
-    const search = dialog.getByPlaceholder('Search for a contact...')
-    if (await search.isVisible().catch(() => false)) {
-      await search.fill('Correspondence Person')
-      await page.getByText(cardName, { exact: true }).last().click()
-    }
+    const dialog = resolverDialog(page)
+    await selectContactIfNeeded(page, dialog, 'Correspondence Person', cardName)
     await expect(page.getByRole('button', { name: /Link Contact/i })).toBeEnabled()
 
     // Link succeeds (200 response).
