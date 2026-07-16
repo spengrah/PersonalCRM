@@ -25,9 +25,11 @@ make qa-report RUNDIR=<run dir> JUDGE=1      # + the live judge over residue ite
 
 `make qa-report` groups a run's captures by behavior, grades the judge residue, and renders the markdown roll-up + coverage + skip-list. It files no issues; the judge-layer + fail-precision metrics print `N/A — pending human labels` (see `DEFERRED.md`).
 
+**Live exports are scrubbed at the boundary.** When a run ships spans to Langfuse (`make qa-export`, opt-in on `LANGFUSE_*`), the export path scrubs every free-form / env-sourced string (prompt, response, `metadata.error`, `metadata.model`) through `judge/scrub.ts` before the HTTP call — the single live→Langfuse PII chokepoint. Adding a new free-form trace field without routing it through the scrubber is a leak.
+
 ## The corpus
 
-- `corpus/captures/{contacts,dashboard,cadence-followup}/*.json` — base capture fixtures, curated from a **local `prod-shaped` sweep**, UUID-mapped + host-redacted by the normalizer, then scrubbed (`corpus/scrub.ts`: email/phone → `<email:N>`/`<phone:N>`). Provably synthetic: every contact name carries the `synth-prodshaped-` factory prefix.
+- `corpus/captures/{contacts,dashboard,cadence-followup}/*.json` — base capture fixtures, curated from a **local `prod-shaped` sweep**, UUID-mapped + host-redacted by the normalizer, then scrubbed at curation (`corpus/scrub.ts`'s `scrubCapture`: email/phone → `<email:N>`/`<phone:N>`, sharing the scrubber that now lives in `judge/scrub.ts`). Provably synthetic: every contact name carries the `synth-prodshaped-` factory prefix. (Live-run captures are instead scrubbed in the export path, above.)
 - `corpus/cases/*.json` — clean cases + doctored cases (single-point mutations from `doctor.ts`) that the labeler drafts over; the deterministic eval they once fed has retired with the verifier lane.
 - `corpus/labels/*.draft.json` — draft judge labels (the real stronger-model fill is manual — see `DEFERRED.md`).
 - `corpus/pii-audit.ts` — the mechanical P0 gate over ALL committed artifacts: bans raw UUIDs / real-host URLs / emails / phones / secrets and asserts the `synth-prodshaped-` name prefix. Runs as a vitest (`corpus/pii-audit.test.ts`) over the committed tree AND as a CLI: `bun run tests/tours/judge/corpus/pii-audit.ts corpus`.

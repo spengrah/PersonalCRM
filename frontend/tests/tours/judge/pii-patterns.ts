@@ -1,7 +1,7 @@
-// Shared PII pattern definitions — the SINGLE source used by BOTH the corpus
-// scrub (scrub.ts, which replaces matches) and the PII audit (pii-audit.ts,
-// which bans them). Keeping one source guarantees the audit bans exactly what
-// the scrub removes.
+// Shared PII pattern definitions — the SINGLE source used by BOTH the Langfuse
+// export scrub (scrub.ts, which replaces matches on the way out to Langfuse) and
+// the (soon-retiring) corpus PII audit (corpus/pii-audit.ts, which bans them).
+// Keeping one source guarantees the audit bans exactly what the scrub removes.
 
 // Email addresses.
 export const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g
