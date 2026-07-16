@@ -1,5 +1,7 @@
-import { test, expect, type Page, type Route } from '@playwright/test'
+import { test, expect, type Page } from '@playwright/test'
 import { createTestAPI, TestAPI } from './helpers/test-api'
+import { fulfillJson } from './helpers/fulfill-json'
+import type { CalendarEvent } from '../../src/types/calendar'
 
 // API configuration for E2E tests
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
@@ -9,24 +11,24 @@ const API_HEADERS = {
   'Content-Type': 'application/json',
 }
 
-// The app calls the API cross-origin (frontend :3000 → API :8080) with an
-// X-API-Key header, so route-mocked responses must answer the CORS preflight
-// and carry Access-Control-Allow-Origin.
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type,X-API-Key',
-}
-
-function corsFulfill(route: Route, body: unknown, status = 200) {
-  if (route.request().method() === 'OPTIONS') {
-    return route.fulfill({ status: 204, headers: corsHeaders })
-  }
-  return route.fulfill({
-    status,
-    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
+// Freeze the client-side accelerated-time frame to a fixed instant by mocking
+// GET /system/time BEFORE the page loads. `acceleration_factor: 0` pins
+// currentTime at base_time, and the body is the full apiClient envelope.
+// Per-page + pre-navigation, so it is parallel-safe and does not touch the
+// process-wide acceleration state.
+async function mockFrozenSystemTime(page: Page, isoInstant: string): Promise<void> {
+  await page.route('**/api/v1/system/time', route =>
+    fulfillJson(route, {
+      success: true,
+      data: {
+        current_time: isoInstant,
+        base_time: isoInstant,
+        is_accelerated: true,
+        acceleration_factor: 0,
+        environment: 'testing',
+      },
+    })
+  )
 }
 
 // Scope every seeded-title lookup to the Meetings region so parallel workers'
@@ -111,8 +113,8 @@ test.describe('Meetings Component @area:meetings', () => {
     await expect(region.getByText(`${testApi.prefix}-Past Meeting 1`)).not.toBeVisible()
     await expect(region.getByText(`${testApi.prefix}-Past Meeting 2`)).not.toBeVisible()
 
-    // Click All filter to see all events
-    // spec: CAL-025[0]
+    // Click All filter to see all events (no CAL-025 then-item states the
+    // combined view; this block just exercises the third filter's activation)
     await region.getByRole('button', { name: /All \(4\)/i }).click()
     await expect(region.getByRole('button', { name: /All \(4\)/i })).toHaveAttribute(
       'aria-pressed',
@@ -149,9 +151,9 @@ test.describe('Meetings Component @area:meetings', () => {
     await expect(region.getByText(`${testApi.prefix}-Upcoming Event`)).toBeVisible()
     await expect(region.getByText(`${testApi.prefix}-Past Event`)).not.toBeVisible()
 
-    // Click Past filter: the event whose end time precedes the app's
-    // accelerated now is the one classified into the Past bucket
-    // spec: CAL-025[0], CAL-025[2]
+    // Click Past filter: only the past-seeded event shows (the end-time
+    // classification boundary itself is proven by the in-progress test below)
+    // spec: CAL-025[0]
     await region.getByRole('button', { name: /Past \(1\)/i }).click()
     await expect(region.getByRole('button', { name: /Past \(1\)/i })).toHaveAttribute(
       'aria-pressed',
@@ -180,13 +182,68 @@ test.describe('Meetings Component @area:meetings', () => {
 
     await region.getByRole('button', { name: /Past \(3\)/i }).click()
 
-    // Cards render in seeded-data order: days_ago 1, then 5, then 10
+    // Cards render most-recent-first (days_ago 1, then 5, then 10) — a
+    // different order than they were seeded in (10, 1, 5), so this proves
+    // the sort rather than echoing insertion order
     // spec: CAL-025[3]
     const cards = meetingCards(page)
     await expect(cards).toHaveCount(3)
     await expect(cards.nth(0)).toContainText(`${testApi.prefix}-Past Recent`)
     await expect(cards.nth(1)).toContainText(`${testApi.prefix}-Past Middle`)
     await expect(cards.nth(2)).toContainText(`${testApi.prefix}-Past Oldest`)
+  })
+
+  test('should classify a meeting as past only once its end time has passed', async ({ page }) => {
+    // Freeze the app's accelerated clock and mock two events around it: one
+    // IN PROGRESS (started before now, ends after now) and one fully ended.
+    // Only the ended one may classify as past — an in-progress meeting has a
+    // past START time, so this distinguishes end-time classification from
+    // start-time classification against the app's (frozen) accelerated now.
+    const frozenNow = new Date('2026-06-01T12:00:00.000Z')
+    const hour = 60 * 60 * 1000
+    const inProgress: CalendarEvent = {
+      id: 'e2e-in-progress-event',
+      title: 'In Progress Meeting',
+      start_time: new Date(frozenNow.getTime() - 1 * hour).toISOString(),
+      end_time: new Date(frozenNow.getTime() + 1 * hour).toISOString(),
+      status: 'confirmed',
+      attendee_count: 0,
+    }
+    const ended: CalendarEvent = {
+      id: 'e2e-ended-event',
+      title: 'Ended Meeting',
+      start_time: new Date(frozenNow.getTime() - 3 * hour).toISOString(),
+      end_time: new Date(frozenNow.getTime() - 2 * hour).toISOString(),
+      status: 'confirmed',
+      attendee_count: 0,
+    }
+
+    await mockFrozenSystemTime(page, frozenNow.toISOString())
+    await page.route(`**/api/v1/contacts/${contactId}/events**`, route =>
+      fulfillJson(route, { success: true, data: [inProgress, ended] })
+    )
+
+    await page.goto(`/contacts/${contactId}`)
+    await page.waitForLoadState('domcontentloaded')
+    const region = meetingsRegion(page)
+
+    // The live counts split 1/1: the in-progress meeting stays upcoming, the
+    // ended one is past — end time vs the frozen accelerated now decides
+    // spec: CAL-025[2]
+    await expect(region.getByRole('button', { name: /Upcoming \(1\)/i })).toBeVisible()
+    await expect(region.getByRole('button', { name: /Past \(1\)/i })).toBeVisible()
+
+    // Default (Upcoming) view carries the in-progress meeting, unmarked
+    await expect(region.getByText('In Progress Meeting')).toBeVisible()
+    await expect(region.getByText('Ended Meeting')).not.toBeVisible()
+    await expect(
+      meetingCard(page, 'In Progress Meeting').getByText('Past', { exact: true })
+    ).not.toBeVisible()
+
+    // Past view carries only the ended meeting
+    await region.getByRole('button', { name: /Past \(1\)/i }).click()
+    await expect(region.getByText('Ended Meeting')).toBeVisible()
+    await expect(region.getByText('In Progress Meeting')).not.toBeVisible()
   })
 
   test('should summarize time, place, and size on the meeting card', async ({ page, request }) => {
@@ -256,20 +313,16 @@ test.describe('Meetings Component @area:meetings', () => {
     const start = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
     const end = new Date(start.getTime() + 60 * 60 * 1000)
 
+    const untitledEvent: CalendarEvent = {
+      id: 'e2e-untitled-event',
+      title: '',
+      start_time: start.toISOString(),
+      end_time: end.toISOString(),
+      status: 'confirmed',
+      attendee_count: 0,
+    }
     await page.route(`**/api/v1/contacts/${contactId}/events**`, route =>
-      corsFulfill(route, {
-        success: true,
-        data: [
-          {
-            id: 'e2e-untitled-event',
-            title: '',
-            start_time: start.toISOString(),
-            end_time: end.toISOString(),
-            status: 'confirmed',
-            attendee_count: 0,
-          },
-        ],
-      })
+      fulfillJson(route, { success: true, data: [untitledEvent] })
     )
 
     await page.goto(`/contacts/${contactId}`)
@@ -338,7 +391,7 @@ test.describe('Meetings Component @area:meetings', () => {
       { title: 'Hidden Meeting', is_past: false, days_ahead: 3 },
     ])
     await page.route(`**/api/v1/contacts/${contactId}/events**`, route =>
-      corsFulfill(
+      fulfillJson(
         route,
         { success: false, error: { code: 'NOT_FOUND', message: 'not found' } },
         404

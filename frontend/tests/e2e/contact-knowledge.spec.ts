@@ -27,6 +27,11 @@ async function createContact(
 }
 
 test.describe('Contact knowledge rows @area:contacts', () => {
+  // The birthday row renders via formatBirthday → toLocaleDateString with the
+  // browser's default locale — pin it so the expectation computed below (with
+  // an explicit 'en-US') matches the browser's rendering.
+  test.use({ locale: 'en-US' })
+
   let testApi: TestAPI
 
   test.beforeEach(async ({ request }, testInfo) => {
@@ -38,6 +43,11 @@ test.describe('Contact knowledge rows @area:contacts', () => {
   })
 
   test('shows a location row only when the location is known', async ({ page, request }) => {
+    // Often the suite's first page load: next dev's on-demand compilation of
+    // the contact-detail route can eat most of the default 30s test budget
+    // before the app even renders — triple it.
+    test.slow()
+
     const location = `${testApi.prefix}-Lisbon`
     const locatedId = await createContact(request, {
       full_name: `${testApi.prefix}-Located Contact`,
@@ -69,9 +79,11 @@ test.describe('Contact knowledge rows @area:contacts', () => {
 
   test('shows a birthday row only when the birthday is known', async ({ page, request }) => {
     const birthday = '1990-04-12'
-    // The same human-readable rendering the detail page computes for a
-    // real-year birthday (month short, day numeric, year numeric).
-    const expectedBirthday = new Date(`${birthday}T12:00:00`).toLocaleDateString('en-US', {
+    // Mirror the component's rendering exactly: parseDateOnly builds a LOCAL
+    // date from the Y-M-D parts (no timezone conversion), and formatBirthday
+    // formats it with year/month/day options in the (pinned en-US) locale.
+    const [year, month, day] = birthday.split('-').map(Number)
+    const expectedBirthday = new Date(year, month - 1, day).toLocaleDateString('en-US', {
       year: 'numeric',
       month: 'short',
       day: 'numeric',

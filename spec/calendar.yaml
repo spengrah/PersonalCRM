@@ -346,8 +346,9 @@ behaviors:
       - it shows the title (a fallback label when untitled), the date, and the start-to-end time range
       - it shows a location when the meeting has one
       - it shows an attendee count only when the meeting has more than one attendee
-      - a past meeting is visually de-emphasized and carries a past marker
+      - a past meeting carries a past marker
     provenance: [components/contacts/meetings.tsx MeetingCard]
+    notes: The visual de-emphasis of past cards (reduced opacity) is presentation quality owned by the agentic judge, deliberately not pinned as a then-item.
 
   - id: CAL-027
     title: A meeting with a source link opens it externally

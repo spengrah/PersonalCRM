@@ -87,27 +87,48 @@ test.describe('Contact notepad @area:contacts', () => {
     await page.getByLabel('Full Name').fill(renamed)
     await page.getByLabel('Notes').fill(noteBody)
 
-    // Submitting fires TWO separate PUTs — the contact update and the notepad
-    // save — and both complete before edit mode closes
-    // spec: NTS-008[0]
-    const [contactResponse, notesResponse] = await Promise.all([
-      page.waitForResponse(
-        r => r.url().endsWith(`/api/v1/contacts/${contactId}`) && r.request().method() === 'PUT'
-      ),
-      page.waitForResponse(
-        r =>
-          r.url().endsWith(`/api/v1/contacts/${contactId}/notes`) && r.request().method() === 'PUT'
-      ),
-      page.getByRole('button', { name: 'Update Contact' }).click(),
-    ])
-    expect(contactResponse.ok()).toBe(true)
-    expect(notesResponse.ok()).toBe(true)
+    // Hold the notepad PUT open at the network layer so the ordering claim is
+    // observable: if edit mode closed after only the contact PUT (a
+    // fire-and-forget notepad save), the still-open assertion below would
+    // catch it. Non-PUT traffic on the notes path passes through untouched.
+    let releaseNotesPut = () => {}
+    const notesGate = new Promise<void>(resolve => {
+      releaseNotesPut = resolve
+    })
+    await page.route(`**/api/v1/contacts/${contactId}/notes`, async route => {
+      if (route.request().method() !== 'PUT') return route.continue()
+      await notesGate
+      return route.continue()
+    })
 
-    // Edit mode closed and both new values render
-    // spec: NTS-008[2]
+    // Submitting fires TWO separate PUTs — the contact update and the notepad
+    // save — and edit mode closes only once BOTH have completed
+    const contactPut = page.waitForResponse(
+      r => r.url().endsWith(`/api/v1/contacts/${contactId}`) && r.request().method() === 'PUT'
+    )
+    const notesPut = page.waitForResponse(
+      r => r.url().endsWith(`/api/v1/contacts/${contactId}/notes`) && r.request().method() === 'PUT'
+    )
+    await page.getByRole('button', { name: 'Update Contact' }).click()
+
+    // The contact update has landed while the notepad save is still held
+    // open — the edit form must still be on screen
+    // spec: NTS-008[0]
+    const contactResponse = await contactPut
+    expect(contactResponse.ok()).toBe(true)
+    await expect(page.getByRole('button', { name: 'Update Contact' })).toBeVisible()
+
+    // Release the notepad save; only now may edit mode close
+    releaseNotesPut()
+    const notesResponse = await notesPut
+    expect(notesResponse.ok()).toBe(true)
+    // spec: NTS-008[0]
     await expect(page.getByRole('button', { name: 'Edit' }).first()).toBeVisible({
       timeout: 15000,
     })
+
+    // Both new values render after the save
+    // spec: NTS-008[2]
     await expect(page.getByRole('heading', { name: renamed })).toBeVisible()
     await expect(notesRow(page)).toContainText(noteBody)
   })
