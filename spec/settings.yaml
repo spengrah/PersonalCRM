@@ -8,6 +8,7 @@ behaviors:
     title: Provider redirect callbacks are the only OAuth routes reachable without the API key
     type: invariant
     status: current
+    surface: api
     statement: the provider redirect callback routes are registered outside the global-API-key middleware (external providers cannot carry the key), while every OAuth auth-URL and account-management route is registered inside the API-key-protected group and requires the key.
     provenance: [RegisterOAuthCallbackRoutes, RegisterOAuthRoutes, cmd/crm-api/routes.go v1.Use APIKeyMiddleware]
     notes: The callback routes only redirect to the settings surface with an outcome (SET-004); they never expose account data, so no-auth exposure is bounded to the CSRF-gated exchange.
@@ -16,6 +17,7 @@ behaviors:
     title: Requesting a provider auth URL mints a single-use CSRF state
     type: business-logic
     status: current
+    surface: api
     given: a configured OAuth provider
     when: the frontend requests that provider's authorization URL
     then:
@@ -29,6 +31,7 @@ behaviors:
     title: The OAuth callback validates CSRF state before exchanging the code
     type: business-logic
     status: current
+    surface: api
     given: a provider redirect back to the callback route
     when: the callback is processed
     then:
@@ -42,6 +45,7 @@ behaviors:
     title: OAuth callbacks always redirect to the settings surface with an injection-safe outcome
     type: api
     status: current
+    surface: api
     given: a completed or failed OAuth callback
     when: the callback responds
     then:
@@ -56,6 +60,7 @@ behaviors:
     title: A provider's OAuth routes exist only when that provider is configured
     type: invariant
     status: current
+    surface: api
     statement: a provider's callback, auth-URL, and account-management routes are registered only when external sync is enabled and that provider's client credentials are configured; a provider that is disabled or unconfigured exposes none of its routes and its callback URL returns not-found (404).
     provenance: [RegisterOAuthCallbackRoutes GoogleEnabled/HasTodoistOAuth gates, cmd/crm-api/main.go oauthHandler construction]
     notes: Google and Todoist gate independently, so a Todoist-only deployment serves Todoist OAuth routes while Google's 404.
@@ -66,6 +71,7 @@ behaviors:
     title: The global API key is accepted from either header form and rejected with a typed 401
     type: api
     status: current
+    surface: api
     given: a request to an API-key-protected route
     when: the API key is checked
     then:
@@ -79,6 +85,7 @@ behaviors:
     title: API key comparison is constant-time
     type: invariant
     status: proposed
+    surface: none
     statement: the submitted API key is compared against the configured key in constant time, so comparison latency does not leak how many leading bytes matched.
     provenance: [auth.APIKeyMiddleware]
     notes: 'Proposed: today the comparison is a plain inequality, which is not timing-safe. Low priority under the single-user, local-first, Tailscale-only threat model; recorded as defence-in-depth intent for the reviewer to weigh.'
@@ -89,6 +96,7 @@ behaviors:
     title: Account listing, status, and revoke share a validation-and-not-found contract
     type: api
     status: current
+    surface: api
     given: a request to one of a provider's connected-account management routes (list, status read, or revoke)
     when: the request is handled
     then:
@@ -102,6 +110,7 @@ behaviors:
     title: OAuth tokens are encrypted at rest and never leave the backend
     type: invariant
     status: current
+    surface: api
     statement: OAuth access and refresh tokens are stored encrypted (each token under its own nonce) and the encrypted token bytes and nonces are never serialized into any API response — account listing and status responses expose only non-sensitive account metadata.
     provenance: [google/oauth.go storeToken AES-256-GCM, repository/oauth.go json:"-" token fields, GoogleAccountResponse/TodoistAccountResponse]
 
@@ -109,6 +118,7 @@ behaviors:
     title: Revoking an account removes it locally even when remote revocation fails
     type: business-logic
     status: current
+    surface: none
     given: a connected provider account
     when: the account is revoked
     then:
@@ -122,6 +132,7 @@ behaviors:
     title: One credential per provider account, preserving a refresh token across re-exchange
     type: data
     status: current
+    surface: none
     given: an existing stored credential for a provider account
     when: the same provider account completes OAuth again
     then:
@@ -133,6 +144,7 @@ behaviors:
     title: Revoke cleanup deletes only the account's own sync states
     type: data
     status: current
+    surface: none
     given: a revoke that cascades into sync-state cleanup
     when: sync states are deleted for the account
     then:
@@ -146,6 +158,7 @@ behaviors:
     title: A successful Google connect enables the account's downstream sync without a reboot
     type: business-logic
     status: current
+    surface: none
     given: a Google account completing OAuth
     when: the callback finishes exchanging the code
     then:
@@ -159,6 +172,7 @@ behaviors:
     title: Toggling a sync state's enablement requires an explicit flag and sets a matching status
     type: api
     status: current
+    surface: api
     given: an existing sync state
     when: its enablement is toggled
     then:
@@ -173,6 +187,7 @@ behaviors:
     title: Reading Todoist settings requires a connected account
     type: api
     status: current
+    surface: api
     given: a request for the current Todoist integration settings
     when: the settings are read
     then:
@@ -185,6 +200,7 @@ behaviors:
     title: Updating Todoist settings merges metadata and lazily provisions the sync state
     type: api
     status: current
+    surface: api
     given: a Todoist settings update for the connected account
     when: the update is applied
     then:
@@ -198,6 +214,7 @@ behaviors:
     title: Changing the Todoist label invalidates the cached label name
     type: business-logic
     status: current
+    surface: none
     given: stored Todoist settings carrying a cached label name
     when: the label id is changed
     then:
@@ -208,6 +225,7 @@ behaviors:
     title: Todoist project and label pickers list live provider entries excluding deleted ones
     type: api
     status: current
+    surface: api
     given: a connected Todoist account
     when: the available projects or labels are requested
     then:
@@ -222,6 +240,7 @@ behaviors:
     title: The settings page presents provider connection sections
     type: ux
     status: current
+    surface: ui
     given: the settings page
     when: it renders
     then:
@@ -234,6 +253,7 @@ behaviors:
     title: Connecting a provider hands off to the provider's consent screen
     type: ux
     status: current
+    surface: ui
     given: a provider section with a connect affordance
     when: the user starts connecting
     then:
@@ -244,6 +264,7 @@ behaviors:
     title: Returning from a connect shows the outcome and clears the one-time parameters
     type: ux
     status: current
+    surface: ui
     given: a redirect back to the settings surface carrying a connect outcome
     when: the settings page mounts
     then:
@@ -256,6 +277,7 @@ behaviors:
     title: Disconnecting an account requires explicit confirmation
     type: ux
     status: current
+    surface: ui
     given: a connected provider account
     when: the user asks to disconnect it
     then:
@@ -268,6 +290,7 @@ behaviors:
     title: An unconfigured or errored provider section collapses to a not-connected state with setup guidance
     type: ux
     status: current
+    surface: ui
     given: a provider whose credentials are not configured or whose account list failed to load
     when: its section renders
     then:
@@ -280,6 +303,7 @@ behaviors:
     title: Per-scope sync affordances follow the account's granted scopes
     type: ux
     status: current
+    surface: ui
     given: a connected Google account with a stored scope set
     when: its section renders
     then:
@@ -292,6 +316,7 @@ behaviors:
     title: An account whose sync failed on authentication surfaces a reconnect prompt
     type: ux
     status: current
+    surface: ui
     given: a connected account whose sync state is in an auth-related error
     when: its section renders
     then:
@@ -304,6 +329,7 @@ behaviors:
     title: The Todoist configuration surface guides selecting a project and label
     type: ux
     status: current
+    surface: ui
     given: a connected Todoist account
     when: the Todoist configuration is shown
     then:
@@ -316,6 +342,7 @@ behaviors:
     title: The Telegram section renders on settings with a not-configured state when the feature is off
     type: ux
     status: current
+    surface: ui
     given: the settings page
     when: the Telegram section renders
     then:
@@ -330,6 +357,7 @@ behaviors:
     title: The settings page presents a data backup and restore surface
     type: ux
     status: current
+    surface: ui
     given: the settings page
     when: the data backup and restore section renders
     then:
@@ -343,6 +371,7 @@ behaviors:
     title: Importing a backup restores its records
     type: api
     status: proposed
+    surface: api
     given: a previously exported backup file
     when: the backup is submitted to the import endpoint
     then:
@@ -356,6 +385,7 @@ behaviors:
     title: Exporting data returns a contacts-only JSON backup attachment
     type: api
     status: current
+    surface: api
     given: a request to the data export endpoint
     when: the export is requested
     then:
@@ -372,6 +402,7 @@ behaviors:
     title: Google authorization requests offline access and forces re-consent
     type: business-logic
     status: current
+    surface: none
     given: a Google authorization URL being built
     when: the consent URL is constructed
     then:
@@ -384,6 +415,7 @@ behaviors:
     title: Google access tokens refresh on demand and persist exactly once
     type: business-logic
     status: current
+    surface: none
     given: a connected Google account whose access token is expired or near expiry
     when: a client for that account is requested
     then:
@@ -397,6 +429,7 @@ behaviors:
     title: A data export contains the full backup the surface promises
     type: api
     status: proposed
+    surface: api
     given: a request to the data export endpoint
     when: the export is requested
     then:
@@ -411,6 +444,7 @@ behaviors:
     title: Manually triggering a sync validates an account-scoped source before accepting it
     type: api
     status: current
+    surface: api
     given: a manual sync-trigger request for a source
     when: the trigger is handled
     then:

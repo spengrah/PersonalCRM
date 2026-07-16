@@ -8,6 +8,7 @@ behaviors:
     title: Creating a contact initializes cadence tracking from creation time
     type: business-logic
     status: current
+    surface: none
     given: a create request with a full name and optionally a cadence
     when: the contact is created
     then:
@@ -21,6 +22,7 @@ behaviors:
     title: Contact create validates fields and returns the created contact
     type: api
     status: current
+    surface: api
     given: a POST to the contacts collection
     when: the request is validated
     then:
@@ -37,6 +39,7 @@ behaviors:
     title: Creating a contact dual-writes its person node
     type: data
     status: current
+    surface: none
     given: a contact create in progress
     when: the contact row is written
     then:
@@ -49,6 +52,7 @@ behaviors:
     title: Contact writes never set location, birthday, or how-met directly
     type: invariant
     status: current
+    surface: none
     statement: contact create, update, and merge never write the location, birthday, or how_met columns directly — those fields are routed through the knowledge domain, and the contact returned from a write already reflects the routed values.
     provenance: [knowledgeWriter.assertCreate, contact.sql, .ai/guides/architecture.md]
     notes: Enforced by code wiring (services hard-error if the knowledge writer is unset), not by a DB constraint. How the knowledge domain derives and refreshes these cache columns is knowledge-domain scope.
@@ -57,6 +61,7 @@ behaviors:
     title: Fetching a contact reports liveness and follow-up state
     type: api
     status: current
+    surface: api
     given: a GET for a single contact by id
     when: the contact is fetched
     then:
@@ -70,6 +75,7 @@ behaviors:
     title: Contact update is full-replace for managed profile fields
     type: business-logic
     status: current
+    surface: none
     given: an existing contact with cadence, location, and birthday set
     when: an update request omits or blanks some of those fields
     then:
@@ -84,6 +90,7 @@ behaviors:
     title: contact_by is server-derived on update
     type: business-logic
     status: current
+    surface: none
     given: an update request carrying a cadence
     when: the contact is updated
     then:
@@ -95,6 +102,7 @@ behaviors:
     title: Method replacement is gated on the methods field being present
     type: business-logic
     status: current
+    surface: none
     given: an existing contact with contact methods
     when: an update request is applied
     then:
@@ -106,6 +114,7 @@ behaviors:
     title: Renaming a contact syncs its person-node label
     type: data
     status: current
+    surface: none
     given: an existing contact and its person node
     when: the contact full name changes (update or merge)
     then:
@@ -116,6 +125,7 @@ behaviors:
     title: Deleting a contact is a minimal two-row soft delete
     type: data
     status: current
+    surface: none
     given: a live contact with methods, interactions, notes, and tasks
     when: the contact is deleted
     then:
@@ -132,6 +142,7 @@ behaviors:
     title: Contact method types are a closed set
     type: data
     status: current
+    surface: none
     given: a contact method write
     when: the method type is checked
     then:
@@ -143,6 +154,7 @@ behaviors:
     title: Method values are normalized per family and deduplicated on the normalized form
     type: data
     status: current
+    surface: none
     given: a contact method value being saved
     when: the value is normalized
     then:
@@ -156,6 +168,7 @@ behaviors:
     title: At most one primary contact method per contact
     type: invariant
     status: current
+    surface: none
     statement: a contact can have at most one primary contact method across all types, enforced by request validation (rejecting multiple primaries) and a partial unique index over rows flagged primary.
     provenance: [validateContactMethods, idx_contact_method_primary]
 
@@ -163,6 +176,7 @@ behaviors:
     title: Contact methods display in a stable priority order
     type: business-logic
     status: current
+    surface: none
     given: a contact with several methods
     when: methods are listed
     then:
@@ -175,6 +189,7 @@ behaviors:
     title: Method payload validation catches format and duplicate errors
     type: api
     status: current
+    surface: api
     given: a create or update request carrying contact methods
     when: methods are validated
     then:
@@ -191,6 +206,7 @@ behaviors:
     title: Contact list is paginated with a bounded page size
     type: api
     status: current
+    surface: api
     given: a GET on the contacts collection
     when: pagination parameters are applied
     then:
@@ -203,6 +219,7 @@ behaviors:
     title: List sorting and filtering accept a fixed vocabulary
     type: api
     status: current
+    surface: api
     given: a GET on the contacts collection with sort or filter parameters
     when: parameters are validated
     then:
@@ -218,6 +235,7 @@ behaviors:
     title: Date-typed sorts keep missing values at the end
     type: business-logic
     status: current
+    surface: none
     given: contacts with and without a value in a date-typed sort field (birthday, last_contacted, last_response_at, contact_by)
     when: the list is sorted by that field
     then:
@@ -229,6 +247,7 @@ behaviors:
     title: Cadence sort orders by contact frequency
     type: business-logic
     status: current
+    surface: none
     given: contacts with mixed cadences
     when: the list is sorted by cadence
     then:
@@ -241,6 +260,7 @@ behaviors:
     title: Cadence filter treats null and empty string as "no cadence"
     type: business-logic
     status: current
+    surface: none
     given: contacts whose cadence is null, empty string, or a valid value
     when: cadence_filter is applied
     then:
@@ -252,6 +272,7 @@ behaviors:
     title: Follow-up filter keys on live follow-up tasks
     type: business-logic
     status: current
+    surface: none
     given: contacts with and without follow-up tasks
     when: followup_filter is applied
     then:
@@ -263,6 +284,7 @@ behaviors:
     title: Search matches names and method values, ranked by relevance
     type: business-logic
     status: current
+    surface: none
     given: a search term
     when: the contact list is searched
     then:
@@ -275,6 +297,7 @@ behaviors:
     title: Soft-deleted contacts are invisible to all reads
     type: invariant
     status: current
+    surface: none
     statement: soft-deleted contacts are excluded from every list, search, count, navigation-ID, and single-contact read; only their id-preserving rows remain in the database.
     provenance: [contact.sql deleted_at IS NULL filters, .ai/rules/core.md Soft Deletes]
 
@@ -282,6 +305,7 @@ behaviors:
     title: Navigation IDs apply the same query semantics as the list
     type: business-logic
     status: current
+    surface: none
     given: a sort/filter/search context
     when: the ordered ID list is requested (ids_only)
     then:
@@ -294,6 +318,7 @@ behaviors:
     title: Every list ordering is deterministic under ties
     type: invariant
     status: proposed
+    surface: none
     statement: every contact list ordering (all sorts, relevance-ranked search, and the no-sort default) includes a final unique tie-breaker so that equal-valued rows never swap between requests, paginated pages never drop or duplicate rows, and prev/next navigation order is stable.
     provenance: [.ai/rules/core.md deterministic ordering gotcha, contact.sql]
     notes: 'Proposed: today only the cadence sort has a tie-breaker (full name) and the default unsorted list has no ORDER BY at all; ties can reorder across requests.'
@@ -304,6 +329,7 @@ behaviors:
     title: Merge transfers source methods, skipping duplicates
     type: business-logic
     status: current
+    surface: none
     given: a merge of a source contact into a target
     when: contact methods are merged
     then:
@@ -317,6 +343,7 @@ behaviors:
     title: Merge combines notepad content and transfers the rest
     type: business-logic
     status: current
+    surface: none
     given: a merge of a source contact into a target
     when: notes are merged
     then:
@@ -331,6 +358,7 @@ behaviors:
     title: Merge transfers the full interaction history
     type: business-logic
     status: current
+    surface: none
     given: a source contact with interactions, including soft-deleted ones
     when: it is merged into a target
     then:
@@ -341,6 +369,7 @@ behaviors:
     title: Merge repoints attribution and defends against racing ingest
     type: business-logic
     status: current
+    surface: none
     given: a source contact referenced by calendar events, external identities, external contacts, and ingested messages
     when: it is merged into a target
     then:
@@ -354,6 +383,7 @@ behaviors:
     title: Merge closes automated tasks and repoints manual ones
     type: business-logic
     status: current
+    surface: none
     given: a source contact with live contact tasks
     when: it is merged into a target
     then:
@@ -366,6 +396,7 @@ behaviors:
     title: Merge applies per-field user selections with the target as default
     type: business-logic
     status: current
+    surface: none
     given: a merge where source and target differ on cadence, location, or birthday
     when: the merged profile is assembled
     then:
@@ -378,6 +409,7 @@ behaviors:
     title: Merge tombstones the loser node and repoints its assertions first
     type: data
     status: current
+    surface: none
     given: a merge in progress
     when: the graph merge step runs
     then:
@@ -390,6 +422,7 @@ behaviors:
     title: Merged cadence timestamps take the most recent of the pair
     type: business-logic
     status: current
+    surface: none
     given: source and target contacts with differing cadence timestamps
     when: they are merged
     then:
@@ -402,6 +435,7 @@ behaviors:
     title: Merge archives the source contact
     type: business-logic
     status: current
+    surface: none
     given: a completed merge
     when: the transaction finishes
     then:
@@ -413,6 +447,7 @@ behaviors:
     title: Self-merge is rejected as a client error
     type: api
     status: proposed
+    surface: api
     given: a merge request whose source and target are the same contact
     when: the request is handled
     then:
@@ -424,6 +459,7 @@ behaviors:
     title: Merge preview reports what a merge would transfer
     type: api
     status: current
+    surface: api
     given: a GET of the merge preview for a source/target pair
     when: the preview is computed
     then:
@@ -438,6 +474,7 @@ behaviors:
     title: List and detail navigation share one default ordering
     type: ux
     status: current
+    surface: ui
     given: no explicit sort has been chosen
     when: the contact list renders and a contact is opened from it
     then:
@@ -450,6 +487,7 @@ behaviors:
     title: Prev/next order equals list order under the same context
     type: invariant
     status: proposed
+    surface: ui
     statement: the detail page's prev/next navigation traverses contacts in exactly the order of the list the user came from — the sort, order, search, and filter context is carried in the navigation URLs and drives the same ordered ID query that backs the list.
     provenance: [buildContactUrl, buildNavigationUrl, useContactIDs]
     notes: 'Proposed: the context is carried and the same query semantics run today, but exact order agreement is not guaranteed under ties until orderings are deterministic (CON-026).'
@@ -458,6 +496,7 @@ behaviors:
     title: Keyboard navigation drives the contact detail page
     type: ux
     status: current
+    surface: ui
     given: a contact detail page opened from a list
     when: keyboard input is used outside form fields
     then:
@@ -472,6 +511,7 @@ behaviors:
     title: Action parameters trigger once and are consumed
     type: ux
     status: current
+    surface: ui
     given: a detail URL carrying a one-time action parameter (edit or merge)
     when: the page mounts
     then:
@@ -484,6 +524,7 @@ behaviors:
     title: Deleting a contact requires explicit confirmation
     type: ux
     status: current
+    surface: ui
     given: a contact detail page
     when: the user asks to delete the contact
     then:
@@ -497,6 +538,7 @@ behaviors:
     title: The merge flow keeps the current contact and archives the chosen source
     type: ux
     status: current
+    surface: ui
     given: a merge started from a contact (detail button or list action)
     when: the merge modal is used
     then:
@@ -513,6 +555,7 @@ behaviors:
     title: Mark-as-contacted logs a mutual interaction from the list
     type: ux
     status: current
+    surface: ui
     given: a contact row in the list
     when: the user marks it as contacted via the row actions
     then:
@@ -523,6 +566,7 @@ behaviors:
     title: The birthdays page groups contacts by proximity
     type: ux
     status: current
+    surface: ui
     given: contacts with birthdays, some with a placeholder year
     when: the birthdays page renders
     then:
@@ -539,6 +583,7 @@ behaviors:
     title: Failed quick actions surface an error to the user
     type: ux
     status: proposed
+    surface: ui
     given: a quick action (mark-as-contacted or delete) whose request fails
     when: the failure occurs
     then:
@@ -550,6 +595,7 @@ behaviors:
     title: Contact update validates fields and returns the updated contact
     type: api
     status: current
+    surface: api
     given: a PUT for an existing contact
     when: the request is handled
     then:
@@ -563,6 +609,7 @@ behaviors:
     title: Contact delete returns no content and admits no hard delete
     type: api
     status: current
+    surface: api
     given: a DELETE for a contact
     when: the request is handled
     then:
@@ -577,6 +624,7 @@ behaviors:
     title: Merge resolves primary-method collisions without failing
     type: business-logic
     status: current
+    surface: none
     given: a source and target that each have a primary contact method of different types
     when: they are merged
     then:

@@ -8,6 +8,7 @@ behaviors:
     title: Todoist is a single-account, account-required cadence-task sync provider
     type: business-logic
     status: current
+    surface: none
     given: the Todoist sync provider
     when: its configuration is resolved
     then:
@@ -21,6 +22,7 @@ behaviors:
     title: Sync will not run until a projection target is configured
     type: business-logic
     status: current
+    surface: none
     given: a sync attempt for a connected account
     when: the provider validates its preconditions
     then:
@@ -32,6 +34,7 @@ behaviors:
     title: Outbound Todoist writes are structurally refused outside production
     type: invariant
     status: current
+    surface: none
     statement: a Todoist client built for a non-production CRM environment refuses every outbound write (any command-carrying sync and every quick-add) before issuing HTTP, while read-only syncs are always allowed so a non-prod instance can still fetch remote state for comparison; production write paths must build the client with the runtime CRM environment so the guard applies.
     provenance: [ErrNonProdWriteRefused, SyncClient.Sync, SyncClient.QuickAdd, config.IsProductionCRMEnv, NewClientFactory]
     notes: Defense-in-depth against a restored prod DB or partial env copy mutating the operator's real Todoist account. A verbatim full prod-env clone carrying a production CRM_ENV is intentionally not defended by this guard.
@@ -40,6 +43,7 @@ behaviors:
     title: Sync uses full-then-incremental fetch with bounded command batches
     type: business-logic
     status: current
+    surface: none
     given: a sync tick
     when: the provider exchanges state with Todoist
     then:
@@ -53,6 +57,7 @@ behaviors:
     title: A fatal item error replays the batch and never orphans remote cleanup
     type: business-logic
     status: current
+    surface: none
     given: a batch of synced items where one item fails fatally mid-processing
     when: the sync tick finishes
     then:
@@ -65,6 +70,7 @@ behaviors:
     title: A task not in the managed state is inert to incremental processing
     type: invariant
     status: current
+    surface: none
     statement: incremental item processing only acts on tasks whose local row is in the managed state; completed, dismissed, and unmanaged rows short-circuit so a replayed or stale item redelivery cannot re-fire completion, skip, or dismissal handling.
     provenance: [CadenceSyncProvider.processItem]
 
@@ -72,6 +78,7 @@ behaviors:
     title: Project, label, and timezone renames are self-healed from each sync
     type: data
     status: current
+    surface: none
     given: a configured Todoist project and label whose names change, or an updated account timezone
     when: a sync response is processed
     then:
@@ -83,6 +90,7 @@ behaviors:
     title: Todoist API errors are classified to drive retry and backoff
     type: business-logic
     status: current
+    surface: none
     given: a Todoist API error response
     when: the error is classified
     then:
@@ -98,6 +106,7 @@ behaviors:
     title: Completing a Todoist task publishes a completion event atomically
     type: business-logic
     status: current
+    surface: none
     given: a managed reach-out, send, or legacy task marked complete in Todoist
     when: the completion is processed
     then:
@@ -112,6 +121,7 @@ behaviors:
     title: Removing a task's managed markers is routed to a skip by lifecycle
     type: business-logic
     status: current
+    surface: none
     given: a managed task that is deleted, has its CRM label removed, or has its deadline removed in Todoist
     when: the change is detected
     then:
@@ -125,6 +135,7 @@ behaviors:
     title: A cadence skip dedups replays and enqueues its replacement post-commit
     type: business-logic
     status: current
+    surface: none
     given: a cadence-due task being skipped
     when: the skip is applied
     then:
@@ -138,6 +149,7 @@ behaviors:
     title: A recurring Todoist task is relinquished rather than managed
     type: business-logic
     status: current
+    surface: none
     given: a managed task the user has made recurring in Todoist
     when: the recurrence is detected
     then:
@@ -149,6 +161,7 @@ behaviors:
     title: A task whose contact is gone is deleted remotely and locally
     type: data
     status: current
+    surface: none
     given: a managed task whose contact has been soft-deleted (or otherwise reads as not-live)
     when: the task's item is processed on the next sync
     then:
@@ -161,6 +174,7 @@ behaviors:
     title: A remote deadline edit on a cadence task wins over the last pushed date
     type: business-logic
     status: current
+    surface: none
     given: a cadence-due task whose deadline differs from the contact's next-contact date
     when: the deadline change is processed
     then:
@@ -177,6 +191,7 @@ behaviors:
     title: Reconciliation projects one cadence-due task per cadence-bearing contact
     type: business-logic
     status: current
+    surface: none
     given: a contact with a cadence and a next-contact date but no live cadence-due task
     when: reconciliation runs on a sync tick
     then:
@@ -189,6 +204,7 @@ behaviors:
     title: Outreach detected outside Todoist closes the cadence task via a watermark
     type: business-logic
     status: current
+    surface: none
     given: a managed cadence-due task whose contact was reached out to since the last sync
     when: reconciliation evaluates the task
     then:
@@ -202,6 +218,7 @@ behaviors:
     title: Drift is corrected by replacing the remote task, never by writing the date
     type: business-logic
     status: current
+    surface: none
     given: a managed cadence-due task whose remote deadline no longer matches the contact's next-contact date
     when: reconciliation detects the drift
     then:
@@ -214,6 +231,7 @@ behaviors:
     title: Skip-drift recovery re-emits a lost create and defers when ambiguous
     type: business-logic
     status: current
+    surface: none
     given: a task whose recorded pending temp id differs from its external id (the create command never landed remotely)
     when: reconciliation processes it
     then:
@@ -225,6 +243,7 @@ behaviors:
     title: Legacy tasks backfill their watermarks and detection requires them
     type: data
     status: current
+    surface: none
     given: a legacy task missing its synced-state watermark metadata
     when: it is reconciled
     then:
@@ -236,6 +255,7 @@ behaviors:
     title: Task metadata is mutated key-wise, never wholesale replaced
     type: invariant
     status: current
+    surface: none
     statement: every write to a task's metadata (marker link, pending temp id, and the synced-deadline / synced-last-contacted / synced-last-outreach watermarks) preserves the sibling keys rather than replacing the whole object, so no path drops a marker or watermark it did not intend to touch.
     provenance: [setPendingCreateState, setSyncedLastContacted, setSyncedLastOutreachAt, UpdateContactTaskMetadataTx]
 
@@ -245,6 +265,7 @@ behaviors:
     title: Temp-to-real id finalize is forward-only and never resurrects a dead row
     type: data
     status: current
+    surface: none
     given: a create command whose Todoist-assigned real id has arrived while the local row may have advanced state
     when: the temp-to-real id mapping is finalized
     then:
@@ -258,6 +279,7 @@ behaviors:
     title: Marker-based temp-id recovery is cadence-only and defers skip-drift on failure
     type: business-logic
     status: current
+    surface: none
     given: an incoming item with no external-id match but a decodable CRM marker
     when: recovery attempts to reattach it to a pending local task
     then:
@@ -269,6 +291,7 @@ behaviors:
     title: Finalizing an already-completed row enqueues a durable remote close
     type: business-logic
     status: current
+    surface: none
     given: a temp-id finalize landing on a row that has already completed
     when: the real id is recorded
     then:
@@ -282,6 +305,7 @@ behaviors:
     title: The CRM marker is the sole-constructor task-to-contact link
     type: invariant
     status: current
+    surface: none
     statement: the JSON marker embedded in a managed Todoist task description — the canonical sorted-key object linking the task to a contact id, kind, lifecycle, and instance — is produced only through the single sanctioned encoder, enforced by a construction guard that forbids any other code path from building it.
     provenance: [contacttask.EncodeMarker, crm_marker_construction_static_test.go]
 
@@ -289,6 +313,7 @@ behaviors:
     title: Marker decoding tolerates markdown prefixes and normalizes legacy kinds
     type: business-logic
     status: current
+    surface: none
     given: a Todoist task description that may carry a plain or markdown-prefixed CRM marker, possibly in a pre-split legacy shape
     when: the marker is decoded
     then:
@@ -301,6 +326,7 @@ behaviors:
     title: A projected task carries a contact deep link in its title and a marker in its description
     type: business-logic
     status: current
+    surface: none
     given: a task being created in Todoist for a contact
     when: the create command is built
     then:
@@ -312,6 +338,7 @@ behaviors:
     title: A manual task is projected via quick-add then a marker attach, cleaning up on failure
     type: business-logic
     status: current
+    surface: none
     given: a user creating a manual task on a contact
     when: the task is projected to Todoist
     then:
@@ -339,6 +366,7 @@ behaviors:
     title: The follow-up create projection is crash-safe and idempotent
     type: data
     status: current
+    surface: none
     given: a follow-up create op, possibly retried or racing a concurrent worker
     when: the remote task is created
     then:
@@ -352,6 +380,7 @@ behaviors:
     title: Remote close is only ever propagated for a task with a real external id
     type: invariant
     status: current
+    surface: none
     statement: across every path that closes a Todoist task (reply-driven close, temp-id finalize, cadence outreach, and merge cleanup), a remote close command is issued only when the task holds a real external id; a task still carrying its pending temp id is closed by whichever create path owns it, never by a second close against a non-existent remote task.
     provenance: [isPendingTempID, closeOnOutreach, finalizeTempIDMappingTx, ContactService.MergeContacts task close]
     notes: The reply-driven close single-owner rule is CAD-015; the merge-time close is CON-031. This pins the shared real-id gate.
@@ -362,6 +391,7 @@ behaviors:
     title: A Todoist task sync can be triggered on demand from settings
     type: ux
     status: current
+    surface: ui
     given: a connected Todoist account
     when: the user triggers a manual task sync
     then:
@@ -374,6 +404,7 @@ behaviors:
     title: Projected tasks display cleaned content with a deep link into Todoist
     type: ux
     status: current
+    surface: ui
     given: a contact with tasks projected into Todoist
     when: the contact's tasks are shown
     then:
@@ -387,6 +418,7 @@ behaviors:
     title: The follow-up refresh projection converges the remote deadline to the current local row
     type: business-logic
     status: current
+    surface: none
     given: a follow-up whose local deadline changed after its create was projected
     when: the refresh op runs
     then:
@@ -400,6 +432,7 @@ behaviors:
     title: The follow-up loop is projected to Todoist by a single durable op executor, paused when follow-up writes are off
     type: business-logic
     status: current
+    surface: none
     given: a follow-up loop transition owned by the cadence domain (create, refresh, or close)
     when: the transition is projected to Todoist
     then:

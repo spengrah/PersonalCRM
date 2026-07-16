@@ -8,6 +8,7 @@ behaviors:
     title: A contact without a cadence is outside the engine
     type: business-logic
     status: current
+    surface: none
     given: a contact with an empty or absent cadence
     when: cadence-driven behavior is evaluated
     then:
@@ -21,6 +22,7 @@ behaviors:
     title: The next-contact date derives from the last contact plus the cadence interval
     type: business-logic
     status: current
+    surface: none
     given: a contact with a cadence
     when: contact_by is computed
     then:
@@ -33,6 +35,7 @@ behaviors:
     title: Cadence intervals scale with the environment for accelerated testing
     type: business-logic
     status: current
+    surface: none
     given: the app running in a testing or accelerated environment
     when: cadence intervals are resolved
     then:
@@ -45,6 +48,7 @@ behaviors:
     title: A contact is overdue only strictly past its next-contact date
     type: business-logic
     status: current
+    surface: none
     given: a contact with a cadence and a next-contact date
     when: overdue status is evaluated
     then:
@@ -56,6 +60,7 @@ behaviors:
     title: The cadence engine is the sole writer of cadence timestamps
     type: invariant
     status: current
+    surface: none
     statement: outside contact creation (which seeds last_contacted and contact_by, CON-001), last_contacted, last_interaction_at, last_outreach_at, last_response_at, and contact_by are written only by the cadence engine's apply paths (interaction consumer, merge bulk-apply, cadence override, and delete rollback); contact_by is kept in sync on every write path that changes the cadence or the base timestamps.
     provenance: [CadenceUpdater, .ai/guides/architecture.md sole-writer map, scripts/ci sole-writer guard]
 
@@ -65,6 +70,7 @@ behaviors:
     title: Interaction direction determines which timestamps move
     type: business-logic
     status: current
+    surface: none
     given: a contact with a recorded interaction
     when: the interaction's direction is applied
     then:
@@ -78,6 +84,7 @@ behaviors:
     title: Automated sources move timestamps forward only; manual entries always win
     type: business-logic
     status: current
+    surface: none
     given: an incoming timestamp update for a cadence column
     when: the update source is considered
     then:
@@ -89,6 +96,7 @@ behaviors:
     title: Rescheduling gates on cadence and recency
     type: business-logic
     status: current
+    surface: none
     given: an inbound or mutual interaction
     when: contact_by rescheduling is considered
     then:
@@ -101,6 +109,7 @@ behaviors:
     title: Cadence overrides never touch interaction history
     type: business-logic
     status: current
+    surface: none
     given: a user-driven cadence change (set, change, or clear)
     when: the override is applied
     then:
@@ -113,6 +122,7 @@ behaviors:
     title: Deleting an interaction rolls back only the timestamps it sourced
     type: data
     status: current
+    surface: none
     given: a contact whose cadence timestamps were driven by an interaction that is being deleted
     when: the deletion is processed
     then:
@@ -128,6 +138,7 @@ behaviors:
     title: An outbound interaction opens a follow-up with a cadence-scaled deadline
     type: business-logic
     status: current
+    surface: none
     given: a contact with a cadence and no live follow-up, and an outbound that passes the creation guards (CAD-012)
     when: the outbound interaction is recorded
     then:
@@ -139,6 +150,7 @@ behaviors:
     title: Follow-up creation is guarded so only genuinely awaited replies open loops
     type: business-logic
     status: current
+    surface: none
     given: an outbound interaction that would open a follow-up
     when: the creation guards run
     then:
@@ -154,6 +166,7 @@ behaviors:
     title: At most one live follow-up per contact and provider
     type: invariant
     status: current
+    surface: none
     statement: a contact can have at most one live follow-up task per provider (states managed or pending_remote_create), enforced by a partial unique index; terminal-state follow-ups (completed, dismissed) accumulate freely.
     provenance: [idx_contact_task_followup_unique_live, migrations 041/046]
 
@@ -161,6 +174,7 @@ behaviors:
     title: Follow-up creation is crash-safe and idempotent
     type: data
     status: current
+    surface: none
     given: a follow-up being created against a remote task provider
     when: the two-step create runs
     then:
@@ -174,6 +188,7 @@ behaviors:
     title: A reply closes the live follow-up
     type: business-logic
     status: current
+    surface: none
     given: a contact with a live follow-up
     when: an inbound or mutual interaction is recorded
     then:
@@ -185,6 +200,7 @@ behaviors:
     title: Dismissing a follow-up stops the loop silently
     type: business-logic
     status: current
+    surface: none
     given: a live follow-up task
     when: the user dismisses it in the remote task app
     then:
@@ -197,6 +213,7 @@ behaviors:
     title: Task kind determines what completing a task records
     type: business-logic
     status: current
+    surface: none
     given: a live task linked to a contact
     when: the task is completed
     then:
@@ -212,6 +229,7 @@ behaviors:
     title: A cadence-bearing contact is represented by one live cadence-due task
     type: business-logic
     status: current
+    surface: none
     given: a contact with a cadence and a next-contact date
     when: task reconciliation runs
     then:
@@ -225,6 +243,7 @@ behaviors:
     title: Skipping a cadence task advances the schedule without recording contact
     type: business-logic
     status: current
+    surface: none
     given: a live cadence-due task
     when: the user skips it in the remote task app
     then:
@@ -237,6 +256,7 @@ behaviors:
     title: Outreach closes the open cadence task
     type: business-logic
     status: current
+    surface: none
     given: a contact with a live cadence-due task
     when: an outreach interaction is detected from any source
     then:
@@ -248,6 +268,7 @@ behaviors:
     title: Manual task dismissal is terminal, with a legacy carve-out
     type: business-logic
     status: current
+    surface: none
     given: a live manual task
     when: the user dismisses it in the remote task app
     then:
@@ -259,6 +280,7 @@ behaviors:
     title: Task kind and lifecycle are orthogonal axes with constrained combinations
     type: invariant
     status: current
+    surface: none
     statement: task kinds are reach_out, send, and reminder (plus legacy meet and action); lifecycles are manual, cadence_due, and followup_loop; only reach_out may take all three lifecycles (every other kind is manual-only, enforced by a composite CHECK); kind determines the interaction recorded on completion, while lifecycle determines origin, scheduling, and dismissal routing — with one legacy exception, action tasks, which are routed by kind (CAD-021).
     provenance: [contact_task_kind_lifecycle_check migration 046, internal/contacttask/kinds.go, task-direction-taxonomy.md]
 
@@ -268,6 +290,7 @@ behaviors:
     title: The overdue endpoint reports who needs attention and how urgently
     type: api
     status: current
+    surface: ui
     given: contacts past their next-contact date
     when: the overdue list is requested
     then:
@@ -280,6 +303,7 @@ behaviors:
     title: Suggested actions escalate with how overdue a contact is
     type: business-logic
     status: current
+    surface: none
     given: an overdue contact
     when: the suggested action is computed
     then:
@@ -295,6 +319,7 @@ behaviors:
     title: The dashboard is an action-required list of overdue contacts
     type: ux
     status: current
+    surface: ui
     given: contacts past their next-contact date
     when: the dashboard renders
     then:
@@ -308,6 +333,7 @@ behaviors:
     title: The overdue list offers urgency, name, and recency orderings
     type: ux
     status: current
+    surface: ui
     given: an overdue list with several contacts
     when: the user switches the sort
     then:
@@ -321,6 +347,7 @@ behaviors:
     title: Marking contacted from the dashboard clears the contact immediately
     type: ux
     status: current
+    surface: ui
     given: an overdue contact card
     when: the user marks the contact as contacted
     then:
@@ -335,6 +362,7 @@ behaviors:
     title: Recent activity summarizes the direction timestamps and pending reply
     type: ux
     status: current
+    surface: ui
     given: a contact detail page
     when: the recent-activity summary renders
     then:
@@ -349,6 +377,7 @@ behaviors:
     title: The tasks section shows live work first and history on demand
     type: ux
     status: current
+    surface: ui
     given: a contact with follow-up, manual, and completed tasks
     when: the tasks section renders
     then:
@@ -364,6 +393,7 @@ behaviors:
     title: Users can add manual tasks of three kinds
     type: ux
     status: current
+    surface: ui
     given: the add-task flow on a contact
     when: the user creates a task
     then:
@@ -377,6 +407,7 @@ behaviors:
     title: Contact task endpoints validate their vocabulary
     type: api
     status: current
+    surface: api
     given: the contact task endpoints
     when: requests are handled
     then:
@@ -389,6 +420,7 @@ behaviors:
     title: Unlinking is the only in-CRM mutation of a linked task
     type: ux
     status: current
+    surface: ui
     given: a task linked to a contact
     when: the user manages it from the CRM
     then:
@@ -401,6 +433,7 @@ behaviors:
     title: Cadence interval arithmetic is uniform across recompute paths
     type: business-logic
     status: proposed
+    surface: none
     given: any path that recomputes a next-contact date
     when: the cadence interval is applied
     then:
@@ -412,6 +445,7 @@ behaviors:
     title: A remote deadline edit on a cadence task reschedules the contact
     type: business-logic
     status: current
+    surface: none
     given: a live cadence-due task whose deadline the user edits in the remote task app
     when: the edit is detected
     then:
