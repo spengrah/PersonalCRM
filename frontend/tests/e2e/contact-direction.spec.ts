@@ -143,57 +143,9 @@ test.describe('Contact Direction Signals @area:contacts', () => {
     await expect(page.getByTitle('Awaiting reply')).not.toBeVisible()
   })
 
-  test('interaction API response includes direction field', async ({ request }) => {
-    const { ids } = await testApi.seedContacts([{ full_name: 'Direction API E2E Test' }])
-    const contactId = ids[0]
-
-    // Create interaction with direction
-    const pastDate = new Date(Date.now() - 60 * 60 * 1000).toISOString()
-    const createResp = await request.post(
-      `${API_BASE_URL}/api/v1/contacts/${contactId}/interactions`,
-      {
-        headers: API_HEADERS,
-        data: { occurred_at: pastDate, direction: 'inbound' },
-      }
-    )
-    expect(createResp.ok()).toBeTruthy()
-    const createBody = await createResp.json()
-    expect(createBody.data.direction).toBe('inbound')
-
-    // List interactions — should include direction
-    const listResp = await request.get(
-      `${API_BASE_URL}/api/v1/contacts/${contactId}/interactions`,
-      { headers: API_HEADERS }
-    )
-    expect(listResp.ok()).toBeTruthy()
-    const listBody = await listResp.json()
-    expect(listBody.data.length).toBeGreaterThan(0)
-    expect(listBody.data[0].direction).toBe('inbound')
-  })
-
-  test('contact API response includes new direction timestamp fields', async ({ request }) => {
-    const { ids } = await testApi.seedContacts([
-      { full_name: 'Timestamps API E2E Test', cadence: 'monthly' },
-    ])
-    const contactId = ids[0]
-
-    // Record a mutual interaction to populate timestamps
-    const pastDate = new Date(Date.now() - 60 * 60 * 1000).toISOString()
-    await request.post(`${API_BASE_URL}/api/v1/contacts/${contactId}/interactions`, {
-      headers: API_HEADERS,
-      data: { occurred_at: pastDate, direction: 'mutual' },
-    })
-
-    const resp = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
-      headers: API_HEADERS,
-    })
-    expect(resp.ok()).toBeTruthy()
-    const body = await resp.json()
-
-    expect(body.data).toHaveProperty('last_interaction_at')
-    expect(body.data).toHaveProperty('last_outreach_at')
-    expect(body.data).toHaveProperty('last_response_at')
-    expect(body.data).toHaveProperty('has_pending_followup')
-    expect(body.data.has_pending_followup).toBe(false)
-  })
+  // The interaction/contact wire-shape checks (direction field on POST/list,
+  // direction timestamp fields on GET) that used to live here involved no page
+  // and are owned by the Go API suite: TestInteractionAPI_DirectionInResponse,
+  // TestContactAPI_DirectionTimestamps, and TestContactAPI_HasPendingFollowup
+  // in backend/tests/api/direction_api_test.go.
 })

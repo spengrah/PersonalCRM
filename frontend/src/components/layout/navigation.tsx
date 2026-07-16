@@ -45,6 +45,7 @@ export function Navigation() {
                   <Link
                     key={item.name}
                     href={item.href}
+                    aria-current={isActive ? 'page' : undefined}
                     className={clsx(
                       'inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium',
                       isActive

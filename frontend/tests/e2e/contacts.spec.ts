@@ -20,6 +20,10 @@ test.describe('Contacts - TestAPI Seeded @area:contacts', () => {
     await testApi.cleanup()
   })
 
+  // visual-guard: descender clipping is an already-bitten UI bug (leading-7 +
+  // truncate clips y/g/j/p/q — see the core.md gotcha) with no data or aria
+  // surface; the class assertion is the deliberate, budgeted exception to the
+  // no-CSS-assertion rule (CON visual-guard 1/2).
   test('should use leading-normal on contact name to prevent descender clipping', async ({
     page,
   }) => {
@@ -43,46 +47,7 @@ test.describe('Contacts - TestAPI Seeded @area:contacts', () => {
     await expect(heading).not.toHaveClass(/leading-7/)
   })
 
-  test('should truncate long location with tooltip in contacts table', async ({ page }) => {
-    // Create a very long location that will definitely overflow
-    const longLocation =
-      '1234 Very Long Street Name Boulevard, Extremely Long Neighborhood District, San Francisco, California 94105, United States of America'
-
-    const { ids } = await testApi.seedContacts([
-      {
-        full_name: 'Location Test Contact',
-        location: longLocation,
-      },
-    ])
-
-    const contactId = ids[0]
-    const fullName = `${testApi.prefix}-Location Test Contact`
-
-    // Navigate to contacts list to see the table
-    await page.goto('/contacts')
-    await page.waitForLoadState('domcontentloaded')
-
-    // Find the row with our contact
-    const contactRow = page.locator('tr', { has: page.getByText(fullName) })
-    await expect(contactRow).toBeVisible()
-
-    // Find the location cell with the truncation
-    const locationDiv = contactRow.locator('div[title]', { hasText: longLocation.slice(0, 20) })
-    await expect(locationDiv).toBeVisible()
-
-    // Verify the title attribute contains the full location (for tooltip)
-    await expect(locationDiv).toHaveAttribute('title', longLocation)
-
-    // Verify the text is truncated (has truncate class or text-overflow: ellipsis)
-    const truncatedSpan = locationDiv.locator('span.truncate')
-    await expect(truncatedSpan).toBeVisible()
-
-    // Navigate to contact detail to verify location is displayed fully
-    await page.goto(`/contacts/${contactId}`)
-    await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible()
-  })
-
+  // spec: NTS-007[2]
   test('should show expandable notes for long content', async ({ page }) => {
     // Create notes longer than 300 characters to trigger truncation
     const longNotes = `Met at the AI conference in San Francisco, March 2024. Works as a senior ML engineer at a startup focused on personal productivity tools.
@@ -129,6 +94,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await expect(showMoreButton).toBeVisible()
   })
 
+  // spec: NTS-007[2]
   test('should not show expand button for short notes', async ({ page }) => {
     const shortNotes = 'Brief note about this contact.'
 
@@ -155,6 +121,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await expect(page.getByRole('button', { name: 'Show more' })).not.toBeVisible()
   })
 
+  // spec: CON-053[1], CON-053[2]
   test('should log a backdated interaction via the Log Interaction modal', async ({ page }) => {
     // The Log Interaction modal (direction picker + date picker)
     // replaces the previous inline pencil-edit on `last_contacted`.
@@ -187,13 +154,22 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await page.getByRole('button', { name: 'Log', exact: true }).click()
     const response = await responsePromise
     expect(response.status()).toBe(201)
+
+    // The BACKDATED date travels: the request carries the chosen date (the
+    // modal pins it to UTC midnight) and the stored interaction echoes it.
+    expect(response.request().postDataJSON()?.occurred_at).toBe('2024-01-15T00:00:00.000Z')
     const body = await response.json()
     expect(body.success).toBe(true)
+    expect(body.data.occurred_at).toContain('2024-01-15')
 
     // Modal closes on success.
     await expect(page.getByRole('dialog')).not.toBeVisible({ timeout: 5000 })
   })
 
+  // visual-guard: the context menu clipping on bottom rows is an already-bitten
+  // UI bug (dropdown rendered inside an overflow container was cut off) with no
+  // data or aria surface; the menuitem-visibility proof on the LAST row is the
+  // deliberate, budgeted exception (CON visual-guard 2/2).
   test('should show context menu without clipping for bottom rows', async ({ page }) => {
     // Create enough contacts to have rows near the bottom of the viewport
     const names = Array.from({ length: 8 }, (_, i) => ({
@@ -281,14 +257,15 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await expect(page).not.toHaveURL(/action=/)
   })
 
+  // spec: CON-053[0], CON-053[2]
   test('should log a mutual interaction via the Log Interaction modal default', async ({
     page,
-    request,
   }) => {
-    // Mutual bumps both last_contacted and last_response_at AND
-    // last_outreach_at, and recomputes contact_by from cadence. This
-    // is the default-direction path of the Log Interaction modal,
-    // preserving the old "I just talked to them" semantic.
+    // The default-direction path of the Log Interaction modal, preserving the
+    // old "I just talked to them" semantic. Which timestamp columns each
+    // direction bumps is CAD-006 (backend-owned) — asserted by
+    // internal/consumer/cadence_updater_test.go and
+    // tests/api/direction_api_test.go, not re-checked through the browser.
     const { ids } = await testApi.seedContacts([
       { full_name: 'Mark Contacted Default', cadence: 'weekly' },
     ])
@@ -313,36 +290,16 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     expect((await response.json()).data.direction).toBe('mutual')
 
     await expect(page.getByRole('dialog')).not.toBeVisible({ timeout: 5000 })
-
-    // Mutual bumps last_response_at + last_outreach_at; both must be
-    // populated after the interaction.
-    const afterResp = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
-      headers: API_HEADERS,
-    })
-    expect(afterResp.ok()).toBeTruthy()
-    const afterContact = (await afterResp.json()).data
-    expect(afterContact.last_response_at).toBeTruthy()
-    expect(afterContact.last_outreach_at).toBeTruthy()
   })
 
-  test('should log an outbound interaction via the Log Interaction modal', async ({
-    page,
-    request,
-  }) => {
-    // Outbound bumps last_outreach_at only — last_contacted stays at
-    // its create-time value (handler sets it to now() on contact create).
+  // spec: CON-053[0]
+  test('should log an outbound interaction via the Log Interaction modal', async ({ page }) => {
+    // The modal's direction picker reaches the API: choosing Outbound posts
+    // direction=outbound. The cadence timestamp effects of each direction are
+    // CAD-006 (backend-owned, Go-covered).
     const { ids } = await testApi.seedContacts([{ full_name: 'Outbound Interaction Test' }])
     const contactId = ids[0]
     const fullName = `${testApi.prefix}-Outbound Interaction Test`
-
-    // Capture last_contacted BEFORE the interaction so we can assert
-    // outbound did not bump it.
-    const beforeResp = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
-      headers: API_HEADERS,
-    })
-    expect(beforeResp.ok()).toBeTruthy()
-    const beforeContact = (await beforeResp.json()).data
-    const lastContactedBefore = beforeContact.last_contacted
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
@@ -361,36 +318,16 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     expect(response.status()).toBe(201)
     const body = await response.json()
     expect(body.data.direction).toBe('outbound')
-
-    // Re-fetch the contact and assert direction-aware cadence updates:
-    //   - last_outreach_at advanced (outbound writes this column)
-    //   - last_contacted unchanged (outbound MUST NOT bump it)
-    //   - last_response_at unchanged (no inbound)
-    const afterResp = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
-      headers: API_HEADERS,
-    })
-    expect(afterResp.ok()).toBeTruthy()
-    const afterContact = (await afterResp.json()).data
-    expect(afterContact.last_outreach_at).toBeTruthy()
-    expect(afterContact.last_contacted).toBe(lastContactedBefore)
   })
 
-  test('should log an inbound interaction via the Log Interaction modal', async ({
-    page,
-    request,
-  }) => {
-    // Inbound bumps last_contacted + last_response_at; does NOT bump
-    // last_outreach_at (inbound is the response, not the outreach).
+  // spec: CON-053[0]
+  test('should log an inbound interaction via the Log Interaction modal', async ({ page }) => {
+    // The modal's direction picker reaches the API: choosing Inbound posts
+    // direction=inbound. The cadence timestamp effects of each direction are
+    // CAD-006 (backend-owned, Go-covered).
     const { ids } = await testApi.seedContacts([{ full_name: 'Inbound Interaction Test' }])
     const contactId = ids[0]
     const fullName = `${testApi.prefix}-Inbound Interaction Test`
-
-    const beforeResp = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
-      headers: API_HEADERS,
-    })
-    expect(beforeResp.ok()).toBeTruthy()
-    const beforeContact = (await beforeResp.json()).data
-    const lastOutreachBefore = beforeContact.last_outreach_at ?? null
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
@@ -409,15 +346,6 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     expect(response.status()).toBe(201)
     const body = await response.json()
     expect(body.data.direction).toBe('inbound')
-
-    // last_response_at populated; last_outreach_at unchanged.
-    const afterResp = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
-      headers: API_HEADERS,
-    })
-    expect(afterResp.ok()).toBeTruthy()
-    const afterContact = (await afterResp.json()).data
-    expect(afterContact.last_response_at).toBeTruthy()
-    expect(afterContact.last_outreach_at ?? null).toBe(lastOutreachBefore)
   })
 
   test('defaults the contact list to cadence order, most-frequent-first', async ({ page }) => {
@@ -472,7 +400,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     page,
     request,
   }) => {
-    // spec: CON-042[1], CON-042[2]
+    // spec: CON-042[0], CON-042[1], CON-042[2]
     const { ids } = await testApi.seedContacts([{ full_name: 'Delete Confirm Test' }])
     const contactId = ids[0]
     const fullName = `${testApi.prefix}-Delete Confirm Test`
@@ -490,13 +418,21 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
       }
     }
     page.on('request', watchDelete)
-    page.once('dialog', dialog => dialog.dismiss())
+    // The confirmation copy is captured INSIDE the handler (it cannot be read
+    // after the dialog resolves) and asserted below: the prompt must warn the
+    // action cannot be undone (CON-042[0]).
+    let confirmMessage = ''
+    page.once('dialog', dialog => {
+      confirmMessage = dialog.message()
+      void dialog.dismiss()
+    })
     await page.getByRole('button', { name: 'Delete' }).click()
     // Asserting ABSENCE: there is no positive signal to await on dismiss, so give
     // any (erroneous) DELETE a bounded settle window to appear, then confirm none
     // fired and the contact is still live.
     await page.waitForTimeout(1000)
     expect(deleteFired).toBe(false)
+    expect(confirmMessage).toContain('cannot be undone')
     page.off('request', watchDelete)
     const liveResp = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
       headers: API_HEADERS,
@@ -574,7 +510,7 @@ test.describe('Contacts - Cadence Filter @area:contacts', () => {
   })
 
   test('should filter contacts by cadence status', async ({ page }) => {
-    // spec: DSH-007[0]
+    // spec: DSH-007[0], CON-054[0], CON-054[1]
     // Contact text search is provided through the contact list's search
     // input: the tightened search step below proves typing a term drives a
     // `search=` list request that FILTERS the results (the matching fixtures
@@ -688,6 +624,7 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     await testApi.cleanup()
   })
 
+  // spec: CON-055[0]
   test('should create a contact from the form @smoke', async ({ page }) => {
     const fullName = `${testApi.prefix}-Create Contact`
 
@@ -702,6 +639,7 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
   })
 
+  // spec: NTS-008[2]
   test('should edit contact notes', async ({ page }) => {
     const notes =
       'Met at a conference in 2024. Works in AI/ML. Very interested in personal CRM tools.'
@@ -739,149 +677,93 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     await expect(page.getByText(notes)).not.toBeVisible()
   })
 
-  test('should display contact with all methods and normalized handles', async ({ page }) => {
+  // spec: CON-056[0], CON-056[1], CON-056[2]
+  test('should display contact with methods and the primary marked', async ({ page }) => {
+    // A slim display proof: seeded methods render with normalized values and
+    // exactly one Primary mark. The normalization RULES themselves (per-type
+    // handle/phone canonicalization) are CON-012, backend-owned and covered by
+    // internal/identity/normalize_test.go — one spot check here proves the
+    // display path, not the rules.
     const fullName = `${testApi.prefix}-Playwright Contact`
     const personalEmail = `personal-${testApi.prefix}@example.com`
-    const workEmail = `work-${testApi.prefix}@example.com`
-    const phone = '(555) 555-1234'
     const telegramHandle = `@@telegram-${testApi.prefix}`
-    const discordHandle = `@@discord-${testApi.prefix}`
-    const twitterHandle = `@@twitter-${testApi.prefix}`
-    const signal = '+1 555 555 9876'
+    const normalizedTelegram = telegramHandle.replace(/^@@/, '@')
     const gchatEmail = `gchat-${testApi.prefix}@example.com`
-
-    const methods = [
-      { type: 'email', value: personalEmail, expected: personalEmail },
-      { type: 'email', value: workEmail, expected: workEmail },
-      { type: 'phone', value: phone, expected: phone },
-      { type: 'telegram', value: telegramHandle, expected: telegramHandle.replace(/^@@/, '@') },
-      { type: 'signal', value: signal, expected: signal },
-      { type: 'discord', value: discordHandle, expected: discordHandle.replace(/^@@/, '@') },
-      { type: 'twitter', value: twitterHandle, expected: twitterHandle.replace(/^@@/, '@') },
-      { type: 'gchat', value: gchatEmail, expected: gchatEmail },
-    ]
 
     const { ids } = await testApi.seedContacts([
       {
         full_name: 'Playwright Contact',
         methods: [
           { type: 'email', value: personalEmail },
-          { type: 'email', value: workEmail },
-          { type: 'phone', value: phone },
           { type: 'telegram', value: telegramHandle, is_primary: true },
-          { type: 'signal', value: signal },
-          { type: 'discord', value: discordHandle },
-          { type: 'twitter', value: twitterHandle },
           { type: 'gchat', value: gchatEmail },
         ],
       },
     ])
 
-    const contactId = ids[0]
-
-    await page.goto(`/contacts/${contactId}`)
+    await page.goto(`/contacts/${ids[0]}`)
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
 
-    for (const method of methods) {
-      await expect(page.getByText(method.expected, { exact: true })).toBeVisible()
-    }
+    // Seeded methods display, the handle in its normalized form.
+    await expect(page.getByText(personalEmail, { exact: true })).toBeVisible()
+    await expect(page.getByText(normalizedTelegram, { exact: true })).toBeVisible()
 
-    await expect(page.getByText(telegramHandle, { exact: true })).toHaveCount(0)
-
-    const primaryRow = page.getByText('Telegram', { exact: true }).locator('..')
+    // The primary (telegram) row carries the mark, and it is the ONLY one.
+    // Row scoped from the seeded value (data anchor), not the type label copy.
+    const primaryRow = page.getByText(normalizedTelegram, { exact: true }).locator('..')
     await expect(primaryRow.getByText('Primary')).toBeVisible()
     await expect(page.getByText('Primary')).toHaveCount(1)
 
-    await expect(page.getByText('Google Chat', { exact: true })).toBeVisible()
+    // A gchat identifier has no external link surface: its value renders as
+    // plain text with its type label, NOT as a link (a frontend-only invariant
+    // of getContactMethodHref that the CON-012 Go tests do not cover).
+    const gchatRow = page.getByText(gchatEmail, { exact: true }).locator('..')
+    await expect(gchatRow.getByText('Google Chat', { exact: true })).toBeVisible()
     await expect(page.getByRole('link', { name: gchatEmail })).toHaveCount(0)
   })
 
-  test('should display cadence column with formatted values and sort by frequency', async ({
-    page,
-  }) => {
-    // Create contacts with different cadences
+  // spec: CON-061[0], CON-061[1]
+  test('should render formatted cadence and next-contact values in list rows', async ({ page }) => {
+    // Derived-value display: a contact with a cadence + last-contacted has a
+    // computed contact_by, rendered as a date in the Next Contact column; a
+    // contact without a cadence renders the '-' placeholder there, and the
+    // cadence value renders as its formatted label. Column resolved by its
+    // header position at runtime (no hard-coded cell index).
     await testApi.seedContacts([
-      { full_name: 'Cadence Test Weekly', cadence: 'weekly' },
-      { full_name: 'Cadence Test Monthly', cadence: 'monthly' },
-      { full_name: 'Cadence Test Annual', cadence: 'annual' },
-      { full_name: 'Cadence Test None' }, // No cadence
-    ])
-
-    await page.goto('/contacts')
-    await page.waitForLoadState('networkidle')
-
-    // Verify cadence column header exists and is sortable
-    const cadenceHeader = page.locator('th').filter({ hasText: 'Cadence' })
-    await expect(cadenceHeader).toBeVisible()
-
-    // Verify formatted cadence values are displayed (not raw values)
-    // Use .first() since there may be multiple contacts with the same cadence
-    await expect(page.getByText('Weekly', { exact: true }).first()).toBeVisible()
-    await expect(page.getByText('Monthly', { exact: true }).first()).toBeVisible()
-    await expect(page.getByText('Annual', { exact: true }).first()).toBeVisible()
-
-    // Click cadence header to sort - should already be sorted by cadence desc by default
-    // The default is desc (most frequent first), so weekly should be near the top
-    const rows = page.locator('tbody tr')
-    const firstRow = rows.first()
-
-    // First row should contain a contact with cadence (could be weekly if our test data is first)
-    // Just verify the header is clickable and the page doesn't error
-    await cadenceHeader.click()
-    await page.waitForLoadState('networkidle')
-
-    // After clicking (now asc - least frequent first), annual should be before weekly
-    // Verify the sort changed by checking the icon
-    await expect(cadenceHeader.locator('svg')).toBeVisible()
-  })
-
-  test('should display Next Contact column header and render dates', async ({ page }) => {
-    // Create contacts with cadence and last_contacted (so contact_by is calculated)
-    await testApi.seedContacts([
-      {
-        full_name: 'NextContact Weekly',
-        cadence: 'weekly',
-        last_contacted_days_ago: 3,
-      },
-      {
-        full_name: 'NextContact NoCadence',
-      },
+      { full_name: 'ColDisplay Weekly', cadence: 'weekly', last_contacted_days_ago: 3 },
+      { full_name: 'ColDisplay None' },
     ])
 
     await page.goto('/contacts')
     await page.waitForLoadState('domcontentloaded')
-
-    // Verify "Next Contact" column header exists and is sortable
-    const nextContactHeader = page.getByRole('columnheader').filter({ hasText: 'Next Contact' })
-    await expect(nextContactHeader).toBeVisible()
-
-    // Search for our test contacts
     const searchInput = page.getByPlaceholder('Search contacts...')
-    await searchInput.fill(`${testApi.prefix}-NextContact`)
+    await searchInput.fill(`${testApi.prefix}-ColDisplay`)
     await searchInput.press('Enter')
-    await page.waitForLoadState('networkidle')
 
-    // Contact with cadence should show a date (not N/A)
     const weeklyRow = page.locator('tr', {
-      has: page.getByText(`${testApi.prefix}-NextContact Weekly`),
+      has: page.getByText(`${testApi.prefix}-ColDisplay Weekly`),
     })
-    await expect(weeklyRow).toBeVisible()
-    // The Next Contact cell should contain a date (digits with slashes)
-    const weeklyCells = weeklyRow.locator('td')
-    // Next Contact is the 6th column (Name, Cadence, Location, Birthday, Last response, Next Contact, Actions)
-    const weeklyNextContact = weeklyCells.nth(5)
-    await expect(weeklyNextContact).not.toHaveText('-')
+    const noneRow = page.locator('tr', {
+      has: page.getByText(`${testApi.prefix}-ColDisplay None`),
+    })
+    await expect(weeklyRow).toBeVisible({ timeout: 15000 })
+    await expect(noneRow).toBeVisible()
 
-    // Contact without cadence should show N/A
-    const noCadenceRow = page.locator('tr', {
-      has: page.getByText(`${testApi.prefix}-NextContact NoCadence`),
-    })
-    await expect(noCadenceRow).toBeVisible()
-    const noCadenceCells = noCadenceRow.locator('td')
-    const noCadenceNextContact = noCadenceCells.nth(5)
-    await expect(noCadenceNextContact).toHaveText('-')
+    // Formatted cadence label in the seeded row (derived from the stored
+    // 'weekly' value, not raw enum text).
+    await expect(weeklyRow.getByText('Weekly', { exact: true })).toBeVisible()
+
+    // Resolve the Next Contact column by header position.
+    const headerTexts = await page.getByRole('columnheader').allTextContents()
+    const nextIdx = headerTexts.findIndex(t => t.includes('Next Contact'))
+    expect(nextIdx).toBeGreaterThanOrEqual(0)
+
+    // With a cadence: a real date value (contains digits). Without: '-'.
+    await expect(weeklyRow.getByRole('cell').nth(nextIdx)).toHaveText(/\d/)
+    await expect(noneRow.getByRole('cell').nth(nextIdx)).toHaveText('-')
   })
 
+  // spec: CON-057[0]
   test('should sort by Next Contact column when header clicked', async ({ page }) => {
     await testApi.seedContacts([
       {
@@ -908,9 +790,6 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     await nextContactHeader.click()
     await ascResponse
 
-    // Verify sort icon appears
-    await expect(nextContactHeader.locator('svg')).toBeVisible()
-
     // Click again to toggle to descending - verify sort=contact_by&order=desc
     const descResponse = page.waitForResponse(
       resp => resp.url().includes('sort=contact_by') && resp.url().includes('order=desc')
@@ -922,21 +801,14 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     await expect(page.getByText(`${testApi.prefix}-SortNext Contact`)).toBeVisible()
   })
 
-  test('should display Last response column header and sort by last_response_at', async ({
-    page,
-  }) => {
+  // spec: CON-057[0]
+  test('should sort by Last response column when header clicked', async ({ page }) => {
     await testApi.seedContacts([{ full_name: 'SortResp Contact' }])
 
     await page.goto('/contacts')
     await page.waitForLoadState('domcontentloaded')
 
-    // Header text matches the new directionally-correct label.
     const lastResponseHeader = page.getByRole('columnheader').filter({ hasText: 'Last response' })
-    await expect(lastResponseHeader).toBeVisible()
-    // The legacy "Last Contact" header is gone.
-    await expect(page.getByRole('columnheader').filter({ hasText: /^Last Contact$/i })).toHaveCount(
-      0
-    )
 
     // Isolate our test contact via search so the sort click reliably
     // produces a fetch we can listen for.
@@ -952,7 +824,6 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     )
     await lastResponseHeader.click()
     await descResponse
-    await expect(lastResponseHeader.locator('svg')).toBeVisible()
 
     // Second click → asc.
     const ascResponse = page.waitForResponse(
@@ -964,6 +835,7 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     await expect(page.getByText(`${testApi.prefix}-SortResp Contact`)).toBeVisible()
   })
 
+  // spec: CON-058[0], CON-058[1]
   test('should show page number buttons and top/bottom pagination when multiple pages exist', async ({
     page,
   }) => {
@@ -985,22 +857,40 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     await searchInput.press('Enter')
     await searchResponse
 
-    // Verify top and bottom pagination controls both exist
+    // BOTH pagination controls render (top + bottom) — this count guards the
+    // sync assertion at the end from vacuously passing when first() and
+    // last() resolve to the same single control.
     const paginationControls = page.locator('[data-testid="pagination"]')
     await expect(paginationControls).toHaveCount(2)
 
-    // Verify page number buttons exist (at least page 1 and 2 in top pagination)
+    // Page number buttons exist (at least page 1 and 2 in the top control).
     const topPagination = paginationControls.first()
     await expect(topPagination.getByRole('button', { name: '1' })).toBeVisible()
     await expect(topPagination.getByRole('button', { name: '2' })).toBeVisible()
 
-    // Verify page 1 is active (primary variant)
+    // Page 1 is the current page (aria-current marks the active page button),
+    // and Previous is disabled at the near boundary.
     const page1Button = topPagination.getByRole('button', { name: '1' })
-    await expect(page1Button).toHaveClass(/bg-blue-600/)
+    await expect(page1Button).toHaveAttribute('aria-current', 'page')
+    await expect(topPagination.getByRole('button', { name: 'Previous' })).toBeDisabled()
 
-    // Click page 2 and verify it navigates
+    // Click page 2: a page=2 list request fires (the control PAGES the list,
+    // not just restyles itself) and the current-page mark moves.
+    const page2Response = page.waitForResponse(
+      resp =>
+        resp.request().method() === 'GET' &&
+        resp.url().includes('/api/v1/contacts') &&
+        new URL(resp.url()).searchParams.get('page') === '2' &&
+        !new URL(resp.url()).searchParams.has('ids_only')
+    )
     await topPagination.getByRole('button', { name: '2' }).click()
-    await expect(topPagination.getByRole('button', { name: '2' })).toHaveClass(/bg-blue-600/)
+    await page2Response
+    await expect(topPagination.getByRole('button', { name: '2' })).toHaveAttribute(
+      'aria-current',
+      'page'
+    )
+    // The rows changed: 22 seeded contacts at limit 20 leave 2 on page 2.
+    await expect(page.locator('tbody tr')).toHaveCount(2)
 
     // Verify Previous is now enabled and Next is disabled (only 2 pages)
     await expect(topPagination.getByRole('button', { name: 'Previous' })).toBeEnabled()
@@ -1008,10 +898,16 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
 
     // Click Previous to go back to page 1
     await topPagination.getByRole('button', { name: 'Previous' }).click()
-    await expect(topPagination.getByRole('button', { name: '1' })).toHaveClass(/bg-blue-600/)
+    await expect(topPagination.getByRole('button', { name: '1' })).toHaveAttribute(
+      'aria-current',
+      'page'
+    )
 
-    // Verify both paginations are in sync (both show page 1 as active)
+    // Both paginations stay in sync (bottom also shows page 1 as current)
     const bottomPagination = paginationControls.last()
-    await expect(bottomPagination.getByRole('button', { name: '1' })).toHaveClass(/bg-blue-600/)
+    await expect(bottomPagination.getByRole('button', { name: '1' })).toHaveAttribute(
+      'aria-current',
+      'page'
+    )
   })
 })

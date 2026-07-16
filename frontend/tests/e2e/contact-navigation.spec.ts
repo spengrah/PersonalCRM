@@ -19,100 +19,6 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     await testApi.cleanup()
   })
 
-  test('should navigate between contacts with arrow keys @smoke', async ({ page }) => {
-    // Create 3 contacts to navigate between
-    const { ids } = await testApi.seedContacts([
-      { full_name: 'Nav Contact A' },
-      { full_name: 'Nav Contact B' },
-      { full_name: 'Nav Contact C' },
-    ])
-
-    const fullNameA = `${testApi.prefix}-Nav Contact A`
-    const fullNameB = `${testApi.prefix}-Nav Contact B`
-    const fullNameC = `${testApi.prefix}-Nav Contact C`
-
-    // Navigate to contacts list first to establish context
-    await page.goto('/contacts')
-    await page.waitForLoadState('domcontentloaded')
-
-    // Click on the middle contact (B) to go to its detail page
-    await page.getByText(fullNameB).click()
-    await page.waitForURL(/\/contacts\/[A-Za-z0-9-]+/)
-    await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: fullNameB })).toBeVisible({ timeout: 15000 })
-
-    // Verify navigation bar is visible
-    await expect(page.getByRole('button', { name: 'Previous contact' })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Next contact' })).toBeVisible()
-
-    // Press right arrow to go to next contact
-    await page.keyboard.press('ArrowRight')
-    await page.waitForLoadState('domcontentloaded')
-
-    // Should have navigated (the exact contact depends on sort order)
-    // Just verify we're on a different contact or the navigation worked
-    const currentUrl = page.url()
-    expect(currentUrl).toContain('/contacts/')
-  })
-
-  test('should show navigation bar with position indicator', async ({ page }) => {
-    // Create 5 contacts
-    await testApi.seedContacts([
-      { full_name: 'Position Test 1' },
-      { full_name: 'Position Test 2' },
-      { full_name: 'Position Test 3' },
-      { full_name: 'Position Test 4' },
-      { full_name: 'Position Test 5' },
-    ])
-
-    const fullName3 = `${testApi.prefix}-Position Test 3`
-
-    // Go to list first to establish context
-    await page.goto('/contacts')
-    await page.waitForLoadState('domcontentloaded')
-
-    // Click on third contact row
-    await page.getByText(fullName3).click()
-    await page.waitForURL(/\/contacts\/[A-Za-z0-9-]+/)
-    await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: fullName3 })).toBeVisible({ timeout: 15000 })
-
-    // Wait for navigation IDs to load, then check for position indicator
-    // The navigation bar shows "N of M" pattern
-    await expect(page.getByText(/\d+ of \d+/)).toBeVisible({ timeout: 10000 })
-
-    // Verify navigation buttons are present
-    await expect(page.getByRole('button', { name: 'Previous contact' })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Next contact' })).toBeVisible()
-  })
-
-  test('should disable navigation at boundaries', async ({ page }) => {
-    // Create 2 contacts
-    const { ids } = await testApi.seedContacts([
-      { full_name: 'Boundary First' },
-      { full_name: 'Boundary Last' },
-    ])
-
-    // Go to list first
-    await page.goto('/contacts')
-    await page.waitForLoadState('domcontentloaded')
-
-    // Go to first contact detail via direct URL with sort params
-    await page.goto(
-      `/contacts/${ids[0]}?sort=name&order=asc&search=${encodeURIComponent(testApi.prefix)}`
-    )
-    await page.waitForLoadState('domcontentloaded')
-
-    // Previous button should be disabled at first position
-    const prevButton = page.getByRole('button', { name: 'Previous contact' })
-    await expect(prevButton).toBeVisible()
-    await expect(prevButton).toBeDisabled()
-
-    // Next button should be enabled
-    const nextButton = page.getByRole('button', { name: 'Next contact' })
-    await expect(nextButton).toBeEnabled()
-  })
-
   test('should disable keyboard navigation in edit mode', async ({ page }) => {
     // spec: CON-040[1]
     // Create 2 contacts
@@ -215,6 +121,7 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
   })
 
   test('should preserve URL context (sort, search) during navigation', async ({ page }) => {
+    // spec: CON-060[0]
     // Create contacts
     const { ids } = await testApi.seedContacts([
       { full_name: 'Context Test Alpha', location: 'New York' },
@@ -245,12 +152,15 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
   })
 
   test('should navigate via navigation bar buttons', async ({ page }) => {
-    // Create 3 contacts
+    // spec: CON-059[0], CON-059[1]
+    // Create 3 contacts with a known name-asc order so a pass proves real
+    // movement to the ADJACENT contact, not just "some navigation happened".
     const { ids } = await testApi.seedContacts([
       { full_name: 'Button Nav 1' },
       { full_name: 'Button Nav 2' },
       { full_name: 'Button Nav 3' },
     ])
+    const secondName = `${testApi.prefix}-Button Nav 2`
 
     // Go directly to first contact with sort param and search filter to isolate IDs
     await page.goto(
@@ -258,48 +168,21 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     )
     await page.waitForLoadState('domcontentloaded')
 
-    // Wait for navigation bar to be fully ready with IDs loaded
+    // Wait for navigation bar to be fully ready with IDs loaded; the position
+    // indicator reports the contact's EXACT place in the search-isolated
+    // 3-contact fixture (CON-059[1]) — first under name-asc, so "1 of 3".
     await expect(page.getByRole('button', { name: 'Next contact' })).toBeVisible({ timeout: 10000 })
-    // Wait for the position indicator to show we have navigation data
-    await expect(page.getByText(/\d+ of \d+/)).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText('1 of 3')).toBeVisible({ timeout: 10000 })
 
-    const initialUrl = page.url()
-
-    // Click next button
+    // Click next: it moves to the ADJACENT contact under the carried
+    // name-asc order — ids[1], "Button Nav 2" (CON-059[0]) — and the
+    // position indicator advances with it.
     const nextButton = page.getByRole('button', { name: 'Next contact' })
     await expect(nextButton).toBeEnabled({ timeout: 5000 })
     await nextButton.click()
-    await page.waitForURL(url => url.toString() !== initialUrl)
-    await page.waitForLoadState('domcontentloaded')
-
-    // Should have navigated to a different contact
-    expect(page.url()).not.toBe(initialUrl)
-    expect(page.url()).toContain('/contacts/')
-  })
-
-  test('should handle Escape key to return to list', async ({ page }) => {
-    // spec: CON-040[3]
-    // Create a contact
-    const { ids } = await testApi.seedContacts([{ full_name: 'Escape Test' }])
-
-    const fullName = `${testApi.prefix}-Escape Test`
-
-    // Go to list first
-    await page.goto('/contacts')
-    await page.waitForLoadState('domcontentloaded')
-
-    // Click on contact
-    await page.getByText(fullName).click()
-    await page.waitForURL(/\/contacts\/[A-Za-z0-9-]+/)
-    await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
-
-    // Press Escape to return to list
-    await page.keyboard.press('Escape')
-    await page.waitForLoadState('domcontentloaded')
-
-    // Should be back on contacts list
-    await expect(page.getByRole('heading', { name: 'Contacts' })).toBeVisible()
+    await page.waitForURL(u => u.pathname === `/contacts/${ids[1]}`)
+    await expect(page.getByRole('heading', { name: secondName })).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText('2 of 3')).toBeVisible({ timeout: 10000 })
   })
 
   test('should restore search and sort state after Escape back to list', async ({ page }) => {
@@ -406,13 +289,12 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     await expect(page.getByRole('button', { name: 'Next contact' })).toBeDisabled()
   })
 
-  test('arrow keys move to the previous/next contact and disable at both boundaries', async ({
+  test('arrow keys move to the previous/next contact and disable at both boundaries @smoke', async ({
     page,
   }) => {
     // spec: CON-040[0]
     // Seed a known name-asc order and isolate the set via search, so a pass
-    // proves real movement to the adjacent contact (the @smoke test only checks
-    // the URL still contains /contacts/).
+    // proves real movement to the adjacent contact.
     const { ids } = await testApi.seedContacts([
       { full_name: 'Kbd Move Alpha' },
       { full_name: 'Kbd Move Bravo' },

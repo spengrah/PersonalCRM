@@ -110,9 +110,8 @@ test('cadence-followup tour — contact-detail cadence surfaces', async ({ page,
   })
 
   // --- CAD-030[3] + CAD-033 (skip-listed): the tasks section empty state ---
-  const tasksSection = page
-    .locator('div.bg-white.shadow')
-    .filter({ has: page.getByRole('heading', { name: 'Tasks', level: 3 }) })
+  // The TasksSection card is a labeled region (<section aria-label="Tasks">).
+  const tasksSection = page.getByRole('region', { name: 'Tasks', exact: true })
   await page.getByText('No tasks yet').waitFor({ state: 'visible' })
   await tour.capture(page, {
     behaviors: ['CAD-030', 'CAD-033'],

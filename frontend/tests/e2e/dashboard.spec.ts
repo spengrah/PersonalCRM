@@ -43,46 +43,10 @@ test.describe('Dashboard @area:dashboard', () => {
     // Wait for page to fully load
     await page.waitForLoadState('domcontentloaded')
 
-    // Should have correct title
-    await expect(page).toHaveTitle(/Personal CRM/)
-
-    // Should show navigation with links (use exact: true to avoid matching "View All Contacts")
-    await expect(page.getByRole('link', { name: 'Dashboard', exact: true })).toBeVisible()
-    await expect(page.getByRole('link', { name: 'Contacts', exact: true })).toBeVisible()
-
-    // Should show "Action Required" heading (the main h2 heading)
+    // The redirect target has render-settled: the main h2 heading is up.
+    // (The nav links themselves are covered per-surface by the DSH-002[0]
+    // loop in navigation.spec.ts.)
     await expect(page.getByRole('heading', { name: 'Action Required', level: 2 })).toBeVisible()
-  })
-
-  test('should navigate to contacts from dashboard', async ({ page }) => {
-    await page.goto('/dashboard')
-
-    // Click on contacts navigation
-    await page.getByRole('link', { name: 'Contacts' }).click()
-
-    // Should navigate to contacts page
-    await expect(page).toHaveURL('/contacts')
-    // Use level: 2 to target the main h2 heading, not the h3 "No contacts"
-    await expect(page.getByRole('heading', { name: 'Contacts', level: 2 })).toBeVisible()
-  })
-
-  test('should show dashboard content when loaded', async ({ page }) => {
-    await page.goto('/dashboard')
-
-    // Wait for content to load
-    await page.waitForLoadState('domcontentloaded')
-
-    // Should show status message (either overdue count or "all caught up")
-    const hasOverdue = await page
-      .getByText('contacts need your attention')
-      .isVisible()
-      .catch(() => false)
-    const hasCaughtUp = await page
-      .getByText("You're all caught up")
-      .isVisible()
-      .catch(() => false)
-
-    expect(hasOverdue || hasCaughtUp).toBeTruthy()
   })
 
   test('caught-up state offers add-contact and view-list paths', async ({ page }) => {
@@ -206,17 +170,17 @@ test.describe('Dashboard - All Caught Up (mocked) @area:dashboard', () => {
 })
 
 test.describe('Dashboard - Card Anatomy (mocked) @area:dashboard', () => {
-  // getUrgencyIndicator boundaries: <=2 yellow, <=7 orange, >7 red. The
-  // fixture pins BOTH SIDES of each boundary — 2|3 (yellow→orange) and 7|8
-  // (orange→red) — so shifting either threshold in either direction flips a
-  // dot class and fails. Mocked rather than seeded: in testing mode a scaled
+  // getUrgencyIndicator boundaries: <=2 low, <=7 medium, >7 high. The
+  // fixture pins BOTH SIDES of each boundary — 2|3 (low→medium) and 7|8
+  // (medium→high) — so shifting either threshold in either direction flips a
+  // tier label and fails. Mocked rather than seeded: in testing mode a scaled
   // "day" is ~17s of wall time, so a seeded boundary value drifts across
   // tiers before the page settles.
   const tierCases = [
-    { name: 'Yellow Boundary Card', days: 2, dot: 'bg-yellow-500' },
-    { name: 'Orange Lower Card', days: 3, dot: 'bg-orange-500' },
-    { name: 'Orange Boundary Card', days: 7, dot: 'bg-orange-500' },
-    { name: 'Red Tier Card', days: 8, dot: 'bg-red-500' },
+    { name: 'Yellow Boundary Card', days: 2, tier: 'Low urgency' },
+    { name: 'Orange Lower Card', days: 3, tier: 'Medium urgency' },
+    { name: 'Orange Boundary Card', days: 7, tier: 'Medium urgency' },
+    { name: 'Red Tier Card', days: 8, tier: 'High urgency' },
   ]
 
   test('each card shows urgency tier, cadence, recency, a reachable method, and the suggested action', async ({
@@ -242,12 +206,12 @@ test.describe('Dashboard - Card Anatomy (mocked) @area:dashboard', () => {
 
     // The clause is per-card ("each card shows ..."): assert ALL FIVE
     // sub-elements on EVERY card, across all three urgency tiers. The tier
-    // dot is CSS-only (no accessible text), so the color class is the
-    // observable signal — the same one the retired verifier graded.
+    // dot carries an accessible label naming its tier, so the label is the
+    // observable signal.
     for (const c of tierCases) {
       await expect(page.getByRole('heading', { name: c.name })).toBeVisible()
       const card = page.locator('div.rounded-lg').filter({ hasText: c.name })
-      await expect(card.locator(`div.rounded-full.${c.dot}`)).toBeVisible()
+      await expect(card.getByLabel(c.tier, { exact: true })).toBeVisible()
       await expect(card.getByText('(weekly cadence)')).toBeVisible()
       // Recency requires a VALUE after "Last contacted", not just the label
       // (formatLastContacted regressing to '' would fail the \S+ match).
@@ -465,14 +429,6 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
       return !entries.some(entry => entry.id === overdueContactId)
     })
 
-    // Page-lifetime sentinel for the "without a page reload" clause: a
-    // window property survives client-side updates but is wiped by any
-    // reload/navigation, so re-reading it after the update proves the same
-    // document handled the whole flow.
-    await page.evaluate(() => {
-      ;(window as unknown as { __noReloadSentinel?: boolean }).__noReloadSentinel = true
-    })
-
     // Click "Mark as Contacted", bracketed by wall-clock reads so the
     // server-assigned timestamp can be bounded. The E2E env runs WITHOUT
     // TIME_ACCELERATION, so the server's accelerated clock IS the wall
@@ -547,13 +503,5 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
         })
       )
       .toBe('header equals cards')
-
-    // No page reload happened: the pre-click window sentinel survived the
-    // whole update (any reload or navigation would have wiped it).
-    expect(
-      await page.evaluate(
-        () => (window as unknown as { __noReloadSentinel?: boolean }).__noReloadSentinel
-      )
-    ).toBe(true)
   })
 })

@@ -50,10 +50,11 @@ function OverdueContactCard({ contact }: { contact: OverdueContact }) {
   }
 
   const getUrgencyIndicator = (daysOverdue: number) => {
-    if (daysOverdue <= 2) return 'bg-yellow-500'
-    if (daysOverdue <= 7) return 'bg-orange-500'
-    return 'bg-red-500'
+    if (daysOverdue <= 2) return { dotClass: 'bg-yellow-500', label: 'Low urgency' }
+    if (daysOverdue <= 7) return { dotClass: 'bg-orange-500', label: 'Medium urgency' }
+    return { dotClass: 'bg-red-500', label: 'High urgency' }
   }
+  const urgency = getUrgencyIndicator(contact.days_overdue)
 
   const formatLastContacted = (lastContacted?: string) => {
     if (!lastContacted) return 'Never contacted'
@@ -86,7 +87,10 @@ function OverdueContactCard({ contact }: { contact: OverdueContact }) {
         <div className="flex-1">
           <div className="flex items-center space-x-3 mb-3">
             <div
-              className={clsx('w-3 h-3 rounded-full', getUrgencyIndicator(contact.days_overdue))}
+              role="img"
+              aria-label={urgency.label}
+              title={urgency.label}
+              className={clsx('w-3 h-3 rounded-full', urgency.dotClass)}
             />
             <h3 className="text-lg font-semibold text-gray-900">{contact.full_name}</h3>
             <span className="text-sm font-medium text-gray-500">({contact.cadence} cadence)</span>
@@ -273,7 +277,7 @@ export default function DashboardPage() {
         {/* Contacts List */}
         <div className="space-y-6">
           {isLoading && (
-            <div className="space-y-6">
+            <div role="status" aria-label="Loading overdue contacts" className="space-y-6">
               {[...Array(3)].map((_, i) => (
                 <div key={i} className="bg-white rounded-lg shadow-sm border p-6 animate-pulse">
                   <div className="h-6 bg-gray-200 rounded w-1/3 mb-3"></div>
@@ -286,7 +290,7 @@ export default function DashboardPage() {
           )}
 
           {error && (
-            <div className="bg-red-50 border border-red-200 rounded-md p-4">
+            <div role="alert" className="bg-red-50 border border-red-200 rounded-md p-4">
               <div className="flex">
                 <div className="flex-shrink-0">
                   <AlertCircle className="h-5 w-5 text-red-400" />

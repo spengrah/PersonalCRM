@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import type { APIRequestContext } from '@playwright/test'
+import type { APIRequestContext, Page } from '@playwright/test'
 import { createTestAPI, TestAPI } from './helpers/test-api'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
@@ -31,6 +31,22 @@ async function seedMergeContact(
   return (body.data as { id: string }).id
 }
 
+// The merge modal is a labeled dialog (role="dialog", accessible name
+// "Merge Contacts") — the canonical scope for every in-modal assertion.
+function mergeModal(page: Page) {
+  return page.getByRole('dialog', { name: 'Merge Contacts' })
+}
+
+// Open the source selector, search by the worker prefix, and pick the named
+// source from the selector's listbox options.
+async function selectMergeSource(page: Page, prefix: string, sourceName: string) {
+  await page.getByText('Search for a contact to merge...').click()
+  await page.getByPlaceholder('Search for a contact to merge...').fill(prefix)
+  const sourceOption = page.getByRole('option', { name: sourceName })
+  await expect(sourceOption).toBeVisible({ timeout: 5000 })
+  await sourceOption.click()
+}
+
 test.describe('Contact Merge @area:contact-merge', () => {
   let testApi: TestAPI
 
@@ -40,33 +56,6 @@ test.describe('Contact Merge @area:contact-merge', () => {
 
   test.afterEach(async () => {
     await testApi.cleanup()
-  })
-
-  test('should open merge modal from action menu', async ({ page }) => {
-    // Create a contact to be the merge target
-    const { ids } = await testApi.seedContacts([
-      {
-        full_name: 'Merge Target Contact',
-        location: 'New York',
-        cadence: 'monthly',
-      },
-    ])
-
-    const contactId = ids[0]
-    const fullName = `${testApi.prefix}-Merge Target Contact`
-
-    // Navigate to contact detail page
-    await page.goto(`/contacts/${contactId}`)
-    await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
-
-    // Click the Merge button in the action menu
-    await page.getByRole('button', { name: /Merge/i }).click()
-
-    // Verify merge modal opens
-    await expect(page.getByRole('heading', { name: 'Merge Contacts' })).toBeVisible()
-    await expect(page.getByText('Keeping')).toBeVisible()
-    await expect(page.getByText('Archiving')).toBeVisible()
   })
 
   test('should display target contact as "Keeping"', async ({ page }) => {
@@ -87,10 +76,10 @@ test.describe('Contact Merge @area:contact-merge', () => {
 
     // Open merge modal
     await page.getByRole('button', { name: /Merge/i }).click()
-    await expect(page.getByRole('heading', { name: 'Merge Contacts' })).toBeVisible()
+    const modal = mergeModal(page)
+    await expect(modal).toBeVisible()
 
     // Verify target contact is shown with "Keeping" badge
-    const modal = page.locator('.fixed.inset-0')
     await expect(modal.getByText(fullName).first()).toBeVisible()
     await expect(modal.getByText('Keeping')).toBeVisible()
   })
@@ -119,85 +108,23 @@ test.describe('Contact Merge @area:contact-merge', () => {
 
     // Open merge modal
     await page.getByRole('button', { name: /Merge/i }).click()
-    await expect(page.getByRole('heading', { name: 'Merge Contacts' })).toBeVisible()
+    await expect(mergeModal(page)).toBeVisible()
 
-    // Click on the contact selector
+    // Search for the source contact and wait for its option to appear
     await page.getByText('Search for a contact to merge...').click()
-
-    // Search for the source contact
-    const searchInput = page.locator('input[placeholder="Search for a contact to merge..."]')
-    await searchInput.fill(testApi.prefix)
-
-    // Wait for the source contact to appear in dropdown
-    const sourceOption = page.locator('[class*="cursor-pointer"]').filter({ hasText: sourceName })
+    await page.getByPlaceholder('Search for a contact to merge...').fill(testApi.prefix)
+    const sourceOption = page.getByRole('option', { name: sourceName })
     await expect(sourceOption).toBeVisible({ timeout: 5000 })
 
     // The selector excludes the merge target — it appears only as the kept
-    // heading, never as a selectable dropdown candidate (CON-043[0]). Scope to
-    // the dropdown option rows (`select-none`) so the kept-name heading (which
-    // is also cursor-pointer) does not count.
-    const targetOption = page.locator('[class*="select-none"]').filter({ hasText: targetName })
-    await expect(targetOption).toHaveCount(0)
+    // heading, never as a selectable option (CON-043[0]).
+    await expect(page.getByRole('option', { name: targetName })).toHaveCount(0)
 
     // Select the source contact
     await sourceOption.click()
 
     // Verify "Will Be Merged" section appears (a source loads a preview).
     await expect(page.getByText('Will Be Merged')).toBeVisible({ timeout: 5000 })
-  })
-
-  test('should show field conflicts when contacts have different values', async ({ page }) => {
-    // Create contacts with conflicting field values
-    const { ids } = await testApi.seedContacts([
-      {
-        full_name: 'Conflict Target',
-        location: 'New York',
-        cadence: 'monthly',
-      },
-      {
-        full_name: 'Conflict Source',
-        location: 'Los Angeles',
-        cadence: 'weekly',
-      },
-    ])
-
-    const targetId = ids[0]
-    const targetName = `${testApi.prefix}-Conflict Target`
-    const sourceName = `${testApi.prefix}-Conflict Source`
-
-    await page.goto(`/contacts/${targetId}`)
-    await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: targetName })).toBeVisible({ timeout: 15000 })
-
-    // Open merge modal
-    await page.getByRole('button', { name: /Merge/i }).click()
-
-    // Select source contact
-    await page.getByText('Search for a contact to merge...').click()
-    const searchInput = page.locator('input[placeholder="Search for a contact to merge..."]')
-    await searchInput.fill(testApi.prefix)
-    const sourceOption = page.locator('[class*="cursor-pointer"]').filter({ hasText: sourceName })
-    await expect(sourceOption).toBeVisible({ timeout: 5000 })
-    await sourceOption.click()
-
-    // Wait for preview to load first
-    await expect(page.getByText('Will Be Merged')).toBeVisible({ timeout: 10000 })
-
-    // Check if conflict resolution section appears
-    // Note: Conflicts only show when BOTH contacts have the field set AND values differ
-    const hasConflicts = await page
-      .getByText('Resolve Conflicts')
-      .isVisible()
-      .catch(() => false)
-
-    if (hasConflicts) {
-      // Verify location options are visible as toggle buttons within the conflict section
-      await expect(page.getByRole('button', { name: 'New York' })).toBeVisible()
-      await expect(page.getByRole('button', { name: 'Los Angeles' })).toBeVisible()
-    } else {
-      // If no conflicts section, at least verify the preview is showing
-      await expect(page.getByText('Contact methods')).toBeVisible()
-    }
   })
 
   test('should toggle field selection between source and target', async ({ page, request }) => {
@@ -230,18 +157,14 @@ test.describe('Contact Merge @area:contact-merge', () => {
     await page.getByRole('button', { name: /Merge/i }).click()
 
     // Select source contact
-    await page.getByText('Search for a contact to merge...').click()
-    const searchInput = page.locator('input[placeholder="Search for a contact to merge..."]')
-    await searchInput.fill(testApi.prefix)
-    const sourceOption = page.locator('[class*="cursor-pointer"]').filter({ hasText: sourceName })
-    await expect(sourceOption).toBeVisible({ timeout: 5000 })
-    await sourceOption.click()
+    await selectMergeSource(page, testApi.prefix, sourceName)
 
     // Wait for conflicts section
     await expect(page.getByText('Resolve Conflicts')).toBeVisible({ timeout: 5000 })
 
     // Default (before any toggle) keeps the TARGET value selected for EVERY
-    // conflicting field — cadence, location, and birthday. The birthday label is
+    // conflicting field — cadence, location, and birthday. Selection state is
+    // exposed as aria-pressed on the toggle buttons. The birthday label is
     // computed the same way the modal formats it, so the assertion is stable
     // across the runner's timezone.
     const targetBirthdayText = new Date('1990-03-15').toLocaleDateString('en-US', {
@@ -249,23 +172,32 @@ test.describe('Contact Merge @area:contact-merge', () => {
       day: 'numeric',
       year: 'numeric',
     })
-    await expect(page.getByRole('button', { name: 'Monthly' })).toHaveClass(/bg-blue-600/)
+    await expect(page.getByRole('button', { name: 'Monthly' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
     const nyButton = page.getByRole('button', { name: 'New York' })
-    await expect(nyButton).toHaveClass(/bg-blue-600/)
-    await expect(page.getByRole('button', { name: targetBirthdayText })).toHaveClass(/bg-blue-600/)
+    await expect(nyButton).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.getByRole('button', { name: targetBirthdayText })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
 
     // Each field toggles to its SOURCE value independently — location, cadence,
     // and birthday.
     const sfButton = page.getByRole('button', { name: 'San Francisco' })
     await expect(sfButton).toBeVisible()
     await sfButton.click()
-    await expect(sfButton).toHaveClass(/bg-blue-600/)
-    await expect(nyButton).not.toHaveClass(/bg-blue-600/)
+    await expect(sfButton).toHaveAttribute('aria-pressed', 'true')
+    await expect(nyButton).toHaveAttribute('aria-pressed', 'false')
 
     const weeklyButton = page.getByRole('button', { name: 'Weekly' })
     await weeklyButton.click()
-    await expect(weeklyButton).toHaveClass(/bg-blue-600/)
-    await expect(page.getByRole('button', { name: 'Monthly' })).not.toHaveClass(/bg-blue-600/)
+    await expect(weeklyButton).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.getByRole('button', { name: 'Monthly' })).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    )
 
     const sourceBirthdayText = new Date('1985-07-20').toLocaleDateString('en-US', {
       month: 'short',
@@ -274,9 +206,10 @@ test.describe('Contact Merge @area:contact-merge', () => {
     })
     const sourceBirthdayButton = page.getByRole('button', { name: sourceBirthdayText })
     await sourceBirthdayButton.click()
-    await expect(sourceBirthdayButton).toHaveClass(/bg-blue-600/)
-    await expect(page.getByRole('button', { name: targetBirthdayText })).not.toHaveClass(
-      /bg-blue-600/
+    await expect(sourceBirthdayButton).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.getByRole('button', { name: targetBirthdayText })).toHaveAttribute(
+      'aria-pressed',
+      'false'
     )
   })
 
@@ -302,13 +235,13 @@ test.describe('Contact Merge @area:contact-merge', () => {
 
     // Open merge modal
     await page.getByRole('button', { name: /Merge/i }).click()
+    const modal = mergeModal(page)
 
     // Click on the name to enter edit mode
-    const modal = page.locator('.fixed.inset-0')
-    await modal.locator('h3').first().click()
+    await modal.getByRole('heading', { level: 3 }).first().click()
 
     // Verify input appears with current name
-    const nameInput = modal.locator('input[type="text"]').first()
+    const nameInput = modal.getByRole('textbox', { name: 'Merged contact name' })
     await expect(nameInput).toBeVisible({ timeout: 5000 })
 
     // Edit the name
@@ -316,11 +249,15 @@ test.describe('Contact Merge @area:contact-merge', () => {
     await nameInput.press('Enter')
 
     // Verify name is updated in the modal header
-    await expect(modal.locator('h3').filter({ hasText: 'Custom Merged Name' })).toBeVisible()
+    await expect(
+      modal.getByRole('heading', { level: 3 }).filter({ hasText: 'Custom Merged Name' })
+    ).toBeVisible()
   })
 
   test('should cancel name edit with Escape', async ({ page }) => {
-    // Create a contact
+    // spec: CON-043[3]
+    // The editable-name contract's discard path: Escape must not adopt the
+    // typed name (no accidental rename baked into the merge).
     const { ids } = await testApi.seedContacts([
       {
         full_name: 'Escape Edit Test',
@@ -336,13 +273,13 @@ test.describe('Contact Merge @area:contact-merge', () => {
 
     // Open merge modal
     await page.getByRole('button', { name: /Merge/i }).click()
+    const modal = mergeModal(page)
 
     // Click on the name to enter edit mode
-    const modal = page.locator('.fixed.inset-0')
-    await modal.locator('h3').first().click()
+    await modal.getByRole('heading', { level: 3 }).first().click()
 
     // Type a new name
-    const nameInput = modal.locator('input[type="text"]').first()
+    const nameInput = modal.getByRole('textbox', { name: 'Merged contact name' })
     await expect(nameInput).toBeVisible({ timeout: 5000 })
     await nameInput.fill('Should Not Save')
 
@@ -350,60 +287,58 @@ test.describe('Contact Merge @area:contact-merge', () => {
     await nameInput.press('Escape')
 
     // Verify original name is restored
-    await expect(modal.locator('h3').filter({ hasText: fullName })).toBeVisible()
-    await expect(modal.locator('h3').filter({ hasText: 'Should Not Save' })).not.toBeVisible()
+    await expect(
+      modal.getByRole('heading', { level: 3 }).filter({ hasText: fullName })
+    ).toBeVisible()
+    await expect(
+      modal.getByRole('heading', { level: 3 }).filter({ hasText: 'Should Not Save' })
+    ).not.toBeVisible()
   })
 
-  test('should close modal when pressing Escape', async ({ page }) => {
-    // Create a contact
+  test('should dismiss the modal without merging via backdrop click', async ({ page }) => {
+    // spec: CON-043[6]
+    // Backdrop click dismisses the modal IN PLACE: no merge fires, the modal
+    // closes, and the user stays on the detail page. The Escape path is NOT
+    // asserted here: the detail page's window-level Escape handler is not
+    // gated on an open modal, so Escape today closes the modal AND navigates
+    // back to the list in the same press — a double-action to fix before an
+    // Escape-dismisses-in-place assertion can hold.
     const { ids } = await testApi.seedContacts([
       {
-        full_name: 'Escape Close Test',
+        full_name: 'Dismiss Modal Test',
       },
     ])
 
     const contactId = ids[0]
-    const fullName = `${testApi.prefix}-Escape Close Test`
+    const fullName = `${testApi.prefix}-Dismiss Modal Test`
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+    const detailUrl = page.url()
 
-    // Open merge modal
+    // No merge may fire during the dismissal.
+    let mergeFired = false
+    const watchMerge = (req: import('@playwright/test').Request) => {
+      if (req.method() === 'POST' && req.url().endsWith('/merge')) {
+        mergeFired = true
+      }
+    }
+    page.on('request', watchMerge)
+
+    // Backdrop click dismisses: click the overlay ELEMENT itself (the
+    // dialog panel's parent), at a corner outside the centered panel.
     await page.getByRole('button', { name: /Merge/i }).click()
-    await expect(page.getByRole('heading', { name: 'Merge Contacts' })).toBeVisible()
+    await expect(mergeModal(page)).toBeVisible()
+    const overlay = mergeModal(page).locator('..')
+    await overlay.click({ position: { x: 10, y: 10 } })
+    await expect(mergeModal(page)).not.toBeVisible()
 
-    // Press Escape
-    await page.keyboard.press('Escape')
-
-    // Verify modal is closed
-    await expect(page.getByRole('heading', { name: 'Merge Contacts' })).not.toBeVisible()
-  })
-
-  test('should close modal when clicking backdrop', async ({ page }) => {
-    // Create a contact
-    const { ids } = await testApi.seedContacts([
-      {
-        full_name: 'Backdrop Close Test',
-      },
-    ])
-
-    const contactId = ids[0]
-    const fullName = `${testApi.prefix}-Backdrop Close Test`
-
-    await page.goto(`/contacts/${contactId}`)
-    await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
-
-    // Open merge modal
-    await page.getByRole('button', { name: /Merge/i }).click()
-    await expect(page.getByRole('heading', { name: 'Merge Contacts' })).toBeVisible()
-
-    // Click on backdrop
-    await page.locator('.fixed.inset-0').click({ position: { x: 10, y: 10 } })
-
-    // Verify modal is closed
-    await expect(page.getByRole('heading', { name: 'Merge Contacts' })).not.toBeVisible()
+    // Dismissal, not navigation and not a merge: still on the detail page.
+    await expect(page).toHaveURL(detailUrl)
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible()
+    page.off('request', watchMerge)
+    expect(mergeFired).toBe(false)
   })
 
   test('should successfully merge contacts', async ({ page }) => {
@@ -437,12 +372,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
     await page.getByRole('button', { name: /Merge/i }).click()
 
     // Select source contact
-    await page.getByText('Search for a contact to merge...').click()
-    const searchInput = page.locator('input[placeholder="Search for a contact to merge..."]')
-    await searchInput.fill(testApi.prefix)
-    const sourceOption = page.locator('[class*="cursor-pointer"]').filter({ hasText: sourceName })
-    await expect(sourceOption).toBeVisible({ timeout: 5000 })
-    await sourceOption.click()
+    await selectMergeSource(page, testApi.prefix, sourceName)
 
     // Wait for preview to load
     await expect(page.getByText('Will Be Merged')).toBeVisible({ timeout: 10000 })
@@ -451,7 +381,6 @@ test.describe('Contact Merge @area:contact-merge', () => {
     const mergeButton = page.getByRole('button', { name: /Merge Contacts/i })
     await expect(mergeButton).toBeEnabled({ timeout: 5000 })
 
-    // Intercept the API call to debug any issues
     const mergeResponse = page.waitForResponse(
       response =>
         response.request().method() === 'POST' &&
@@ -463,31 +392,24 @@ test.describe('Contact Merge @area:contact-merge', () => {
     // Click Merge Contacts button
     await mergeButton.click()
 
-    // Wait for the API response
+    // The merge succeeds
     const response = await mergeResponse
-    const responseStatus = response.status()
+    expect(response.status()).toBe(200)
 
-    // Check if merge was successful (should be 200)
-    if (responseStatus === 200) {
-      // Wait for success notification
-      await expect(page.getByText(/merged successfully/i)).toBeVisible({ timeout: 10000 })
+    // Wait for success notification
+    await expect(page.getByText(/merged successfully/i)).toBeVisible({ timeout: 10000 })
 
-      // Verify we're back on the contact page (modal closed)
-      await expect(page.getByRole('heading', { name: 'Merge Contacts' })).not.toBeVisible()
+    // Verify we're back on the contact page (modal closed)
+    await expect(mergeModal(page)).not.toBeVisible()
 
-      // Verify source contact's phone was added
-      await expect(page.getByText('+1-555-0100')).toBeVisible({ timeout: 5000 })
+    // Verify source contact's phone was added
+    await expect(page.getByText('+1-555-0100')).toBeVisible({ timeout: 5000 })
 
-      // Verify source contact's notes were transferred
-      await expect(page.getByText('Source notes to transfer')).toBeVisible()
+    // Verify source contact's notes were transferred
+    await expect(page.getByText('Source notes to transfer')).toBeVisible()
 
-      // The outcome banner is reported, then auto-dismisses after its timeout.
-      await expect(page.getByText(/merged successfully/i)).not.toBeVisible({ timeout: 10000 })
-    } else {
-      // Log the error for debugging
-      const body = await response.text()
-      throw new Error(`Merge API returned ${responseStatus}: ${body}`)
-    }
+    // The outcome banner is reported, then auto-dismisses after its timeout.
+    await expect(page.getByText(/merged successfully/i)).not.toBeVisible({ timeout: 10000 })
   })
 
   test('should show quick-fill name option when source has different name', async ({ page }) => {
@@ -514,25 +436,22 @@ test.describe('Contact Merge @area:contact-merge', () => {
     await page.getByRole('button', { name: /Merge/i }).click()
 
     // Select source contact
-    await page.getByText('Search for a contact to merge...').click()
-    const searchInput = page.locator('input[placeholder="Search for a contact to merge..."]')
-    await searchInput.fill(testApi.prefix)
-    const sourceOption = page.locator('[class*="cursor-pointer"]').filter({ hasText: sourceName })
-    await expect(sourceOption).toBeVisible({ timeout: 5000 })
-    await sourceOption.click()
+    await selectMergeSource(page, testApi.prefix, sourceName)
 
     // Wait for preview
     await expect(page.getByText('Will Be Merged')).toBeVisible({ timeout: 5000 })
 
-    // Verify "use this" link appears for source name
-    await expect(page.getByText('use this')).toBeVisible()
+    // Verify the "use this" quick-fill button appears for the source name
+    const useThis = page.getByRole('button', { name: 'use this' })
+    await expect(useThis).toBeVisible()
 
     // Click "use this" to quick-fill the source name
-    await page.getByText('use this').click()
+    await useThis.click()
 
     // Verify name was updated
-    const modal = page.locator('.fixed.inset-0')
-    await expect(modal.locator('h3').filter({ hasText: sourceName })).toBeVisible()
+    await expect(
+      mergeModal(page).getByRole('heading', { level: 3 }).filter({ hasText: sourceName })
+    ).toBeVisible()
   })
 
   test('should disable merge button when no source selected', async ({ page }) => {
@@ -553,73 +472,11 @@ test.describe('Contact Merge @area:contact-merge', () => {
 
     // Open merge modal
     await page.getByRole('button', { name: /Merge/i }).click()
-    await expect(page.getByRole('heading', { name: 'Merge Contacts' })).toBeVisible()
+    await expect(mergeModal(page)).toBeVisible()
 
     // Verify merge button is disabled
     const mergeButton = page.getByRole('button', { name: /Merge Contacts/i })
     await expect(mergeButton).toBeDisabled()
-  })
-
-  test('should show loading state during merge', async ({ page }) => {
-    // Create contacts
-    const { ids } = await testApi.seedContacts([
-      {
-        full_name: 'Loading Target',
-      },
-      {
-        full_name: 'Loading Source',
-      },
-    ])
-
-    const targetId = ids[0]
-    const targetName = `${testApi.prefix}-Loading Target`
-    const sourceName = `${testApi.prefix}-Loading Source`
-
-    await page.goto(`/contacts/${targetId}`)
-    await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: targetName })).toBeVisible({ timeout: 15000 })
-
-    // Open merge modal
-    await page.getByRole('button', { name: /Merge/i }).click()
-
-    // Select source contact
-    await page.getByText('Search for a contact to merge...').click()
-    const searchInput = page.locator('input[placeholder="Search for a contact to merge..."]')
-    await searchInput.fill(testApi.prefix)
-    const sourceOption = page.locator('[class*="cursor-pointer"]').filter({ hasText: sourceName })
-    await expect(sourceOption).toBeVisible({ timeout: 5000 })
-    await sourceOption.click()
-
-    // Wait for preview
-    await expect(page.getByText('Will Be Merged')).toBeVisible({ timeout: 10000 })
-
-    // Wait for merge button to be enabled
-    const mergeButton = page.getByRole('button', { name: /Merge Contacts/i })
-    await expect(mergeButton).toBeEnabled({ timeout: 5000 })
-
-    // Intercept the API call
-    const mergeResponse = page.waitForResponse(
-      response =>
-        response.request().method() === 'POST' &&
-        response.url().includes('/api/v1/contacts/') &&
-        response.url().endsWith('/merge'),
-      { timeout: 15000 }
-    )
-
-    // Click merge button
-    await mergeButton.click()
-
-    // Wait for API response
-    const response = await mergeResponse
-
-    if (response.status() === 200) {
-      // Wait for success notification
-      await expect(page.getByText(/merged successfully/i)).toBeVisible({ timeout: 10000 })
-    } else {
-      // Log error for debugging
-      const body = await response.text()
-      throw new Error(`Merge API returned ${response.status()}: ${body}`)
-    }
   })
 
   test('keeps the merge submit disabled while the preview is loading', async ({ page }) => {
@@ -645,12 +502,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
     })
 
     // Select the source.
-    await page.getByText('Search for a contact to merge...').click()
-    const searchInput = page.locator('input[placeholder="Search for a contact to merge..."]')
-    await searchInput.fill(testApi.prefix)
-    const sourceOption = page.locator('[class*="cursor-pointer"]').filter({ hasText: sourceName })
-    await expect(sourceOption).toBeVisible({ timeout: 5000 })
-    await sourceOption.click()
+    await selectMergeSource(page, testApi.prefix, sourceName)
 
     // While the preview loads, the submit cannot be pressed.
     const mergeButton = page.getByRole('button', { name: /Merge Contacts/i })
@@ -679,12 +531,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
     await page.getByRole('button', { name: /Merge/i }).click()
 
     // Select the source and wait for the preview to settle.
-    await page.getByText('Search for a contact to merge...').click()
-    const searchInput = page.locator('input[placeholder="Search for a contact to merge..."]')
-    await searchInput.fill(testApi.prefix)
-    const sourceOption = page.locator('[class*="cursor-pointer"]').filter({ hasText: sourceName })
-    await expect(sourceOption).toBeVisible({ timeout: 5000 })
-    await sourceOption.click()
+    await selectMergeSource(page, testApi.prefix, sourceName)
     await expect(page.getByText('Will Be Merged')).toBeVisible({ timeout: 10000 })
 
     const mergeButton = page.getByRole('button', { name: /Merge Contacts/i })
