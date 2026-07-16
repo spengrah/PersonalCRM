@@ -1,7 +1,7 @@
-// Shared PII pattern definitions — the SINGLE source used by BOTH the Langfuse
-// export scrub (scrub.ts, which replaces matches on the way out to Langfuse) and
-// the (soon-retiring) corpus PII audit (corpus/pii-audit.ts, which bans them).
-// Keeping one source guarantees the audit bans exactly what the scrub removes.
+// Shared PII pattern definitions for the Langfuse export scrub (scrub.ts, which
+// replaces matches on the way out to Langfuse). Email + phone are the free-form
+// identifiers a live-run trace can carry; everything else in a shipped body is
+// identifier/enum-valued by construction (see the INV-2 note at the scrub seam).
 
 // Email addresses.
 export const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g
@@ -15,23 +15,3 @@ export const PHONE_RES: RegExp[] = [
   /\(\d{3}\)[\s.\-]?\d{3}[\s.\-]?\d{4}/g, // (479) 555-0100
   /\b\d{3}[.\-\s]\d{3}[.\-\s]\d{4}\b/g, // 479-555-0100 (3-3-4, not 4-2-2 dates)
 ]
-
-// A raw contact/entity UUID (must have been mapped to <id:N> before commit).
-export const RAW_UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
-
-// An absolute URL with a REAL host — i.e. https?:// NOT followed by the safe
-// placeholders the normalizer/manifest emit (<host> / <staging>).
-export const REAL_HOST_URL_RE = /https?:\/\/(?!<host>|<staging>)[^\s"'<>)\]}]+/gi
-
-// Obvious secret/token literals (defense-in-depth; the normalizer already
-// sentinels secret-bearing KEYS to <redacted>, this catches stray VALUES).
-export const SECRET_RES: RegExp[] = [
-  /\bBearer\s+[A-Za-z0-9._\-]{8,}/g,
-  /\beyJ[A-Za-z0-9._\-]{10,}/g, // JWT
-  /\bsk-[A-Za-z0-9]{16,}/g, // OpenAI-style secret key
-]
-
-// The mechanical synthetic-provenance prefix every prod-shaped contact name
-// carries (factory.Prefix() = synth-<namespace>-). A real target's un-prefixed
-// names fail the audit regardless of any manifest label.
-export const SYNTH_NAME_PREFIX = 'synth-prodshaped-'

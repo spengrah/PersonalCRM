@@ -1,8 +1,8 @@
-// The deterministic doctoring tool (design D6): a single-point mutation of a
-// clean capture manufactures a known fail on exactly one then-item, so doctored
-// cases are self-labeled BY CONSTRUCTION. Pure `applyMutation` (a library the
-// labeler imports) + a thin `bun run` CLI. Byte-stable across runs (JSON clone +
-// deterministic ops).
+// The deterministic doctoring library: a single-point mutation of a clean
+// capture manufactures a known fail on exactly one then-item. Pure
+// `applyMutation` — the mutation primitive the live trap self-test
+// (`trap-selftest.ts`) applies to a round's own fresh captures — plus a thin
+// `bun run` CLI. Byte-stable across runs (JSON clone + deterministic ops).
 
 import type { ApiResponseItem, AriaChild, AriaNode, Capture } from '../support/types'
 import type { Mutation } from './mutation'
@@ -146,20 +146,6 @@ export function applyMutation(baseCaptures: Capture[], mutation: Mutation): Capt
     }
   }
   return captures
-}
-
-// Resolve the captures a case grades: for a doctored case, apply its
-// single-point mutation to the base fixtures; a clean case returns them as-is.
-// The SINGLE place the doctor mutation is applied — the labeling CLI (label.ts)
-// goes through here, so a doctored case never drafts over the clean evidence.
-// (The advisory report reads live tours run dirs, not the corpus, so it never
-// resolves a doctored case.)
-export function resolveCaseCaptures(
-  c: { source: 'clean' | 'doctored'; doctor?: { mutation: Mutation } },
-  baseCaptures: Capture[]
-): Capture[] {
-  if (c.source === 'doctored' && c.doctor) return applyMutation(baseCaptures, c.doctor.mutation)
-  return baseCaptures
 }
 
 // CLI: bun run tests/tours/judge/doctor.ts <baseCaptureFile> <mutationJson> [outFile]

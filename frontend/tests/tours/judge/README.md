@@ -1,6 +1,6 @@
-# Agentic UX QA — judge, grader, report + corpus
+# Agentic UX QA — judge, grader, report
 
-The consumer half of the tours harness. It reads the §1 capture records the tours (`contacts.tour.ts`, `dashboard.tour.ts`, `cadence-followup.tour.ts`) produce (`../support/types` `Capture`) and grades each behavior's spec `then`-items. **Advisory only** — it files no issues and gates no CI beyond its own offline tests.
+The consumer half of the tours harness. It reads the §1 capture records the tours (`contacts.tour.ts`, `dashboard.tour.ts`, `cadence-followup.tour.ts`) produce (`../support/types` `Capture`) and grades each behavior's spec `then`-items. **Advisory only** — it files no issues and gates no CI beyond its own offline tests. There is no committed corpus: the harness grades live tours run dirs, the live detection self-test replaces the frozen doctored fixtures, and labels live in Langfuse (the judge's own verdict is the draft, confirmed or rejected in the annotation queue — see `DEFERRED.md`).
 
 ## The grader (judge residue only)
 
@@ -10,9 +10,9 @@ Aggregation: any item `fail` → behavior `fail`; all `pass` → `pass`; else `u
 
 ## The intent pass (judged experience goals)
 
-Sibling of the item-judge residue: one judge call per `type: intent` behavior in the SSOT (`intent-catalog.ts`, a transcription kept YAML-synced by `intent-catalog.test.ts`). Evidence binds via the inverted `serves:` edges — captures tagged with the intent's ID or any serving behavior, deduped, capped at 8 with the dropped count surfaced (`intent-input.ts`). The prompt renders an INTENT block + per-capture `CAPTURE[n]` sections; a `fail` must cite the capture index + node/path, and the preamble forbids failing goals for aria-invisible visual qualities (abstain instead — screenshots are the PR3 follow-up). Verdicts land in the report's **Intents** section: a `current` intent failing is a regression signal, a `proposed` intent passing is a progress signal. The pass runs only under the report CLI's `--judge` (`make qa-report … JUDGE=1`), defaults to a stronger model than the cheap item judge **on the codex-exec adapter only** (`QA_INTENT_MODEL`/`QA_INTENT_EFFORT`, default gpt-5.5/medium; other adapters keep their own model config unless `QA_INTENT_MODEL` is explicitly set), and never blocks — it is advisory. `corpus/intent-cases/*.json` carry self-labeled hypothesis verdicts (see `DEFERRED.md` — labels pending).
+Sibling of the item-judge residue: one judge call per `type: intent` behavior in the SSOT (`intent-catalog.ts`, a transcription kept YAML-synced by `intent-catalog.test.ts`). Evidence binds via the inverted `serves:` edges — captures tagged with the intent's ID or any serving behavior, deduped, capped at 8 with the dropped count surfaced (`intent-input.ts`). The prompt renders an INTENT block + per-capture `CAPTURE[n]` sections; a `fail` must cite the capture index + node/path, and the preamble forbids failing goals for aria-invisible visual qualities (abstain instead — screenshots are the PR3 follow-up). Verdicts land in the report's **Intents** section: a `current` intent failing is a regression signal, a `proposed` intent passing is a progress signal. The pass runs only under the report CLI's `--judge` (`make qa-report … JUDGE=1`), defaults to a stronger model than the cheap item judge **on the codex-exec adapter only** (`QA_INTENT_MODEL`/`QA_INTENT_EFFORT`, default gpt-5.5/medium; other adapters keep their own model config unless `QA_INTENT_MODEL` is explicitly set), and never blocks — it is advisory. Verdicts are the label draft — confirmed or rejected in the Langfuse annotation queue (see `DEFERRED.md`).
 
-**Screenshots (live-only).** Tours record a best-effort viewport screenshot per capture point into the gitignored run dir (`TOURS_SCREENSHOTS=0` disables); the report CLI attaches them as model images (`codex exec -i`) — all-or-nothing per intent (any bound capture missing its screenshot drops ALL images to keep the CAPTURE[n] mapping honest) and codex-exec only — which flips the intent prompt from the aria-only visual caution to visual-grounding-allowed. Intents flagged `visual: true` in the catalog carry an explicit EVIDENCE CAVEAT in the report when judged aria-only. **The committed corpus stays aria-only** — the PII audit can grep JSON, not pixels.
+**Screenshots (live-only).** Tours record a best-effort viewport screenshot per capture point into the gitignored run dir (`TOURS_SCREENSHOTS=0` disables); the report CLI attaches them as model images (`codex exec -i`) — all-or-nothing per intent (any bound capture missing its screenshot drops ALL images to keep the CAPTURE[n] mapping honest) and codex-exec only — which flips the intent prompt from the aria-only visual caution to visual-grounding-allowed. Intents flagged `visual: true` in the catalog carry an explicit EVIDENCE CAVEAT in the report when judged aria-only. Screenshots are never committed and never scrubbed (synthetic data by construction; the export audit greps JSON, not pixels).
 
 ## Rendering the advisory report
 
@@ -23,7 +23,7 @@ make qa-report RUNDIR=<run dir>              # advisory report (offline; judge i
 make qa-report RUNDIR=<run dir> JUDGE=1      # + the live judge over residue items (advisory, needs codex quota)
 ```
 
-`make qa-report` groups a run's captures by behavior, grades the judge residue, and renders the markdown roll-up + coverage + skip-list. It files no issues; the judge-layer + fail-precision metrics print `N/A — pending human labels` (see `DEFERRED.md`).
+`make qa-report` groups a run's captures by behavior, grades the judge residue, and renders the markdown roll-up + coverage + skip-list. It files no issues; the judge-layer + fail-precision metrics print `N/A — pending human labels` (labels now live in the Langfuse annotation queue — see `DEFERRED.md`).
 
 **Live exports are scrubbed at the boundary.** When a run ships spans to Langfuse (`make qa-export`, opt-in on `LANGFUSE_*`), the export path scrubs every free-form / env-sourced string (prompt, response, `metadata.error`, `metadata.model`, and every label-trace field below) through `judge/scrub.ts` before the HTTP call — the single live→Langfuse PII chokepoint. The whole `input`/`output` of each trace body is deep-walked, so any new free-form field placed inside them is covered; a new field placed elsewhere without routing through the scrubber is a leak.
 
@@ -48,16 +48,9 @@ A **liveness guard** compares the judge-RENDERED PROMPT before vs after the muta
 
 **On a miss, ship the doctored trace as an INDEPENDENT step** — `make qa-report … JUDGE=1 ; make qa-export TRACE=/tmp/t.jsonl` (a `;` sequence, NEVER `&&`): the non-zero exit would short-circuit an `&&` chain and skip the export of the very doctored trace a reviewer needs to diagnose the miss. The doctored spans carry `mutation` + the derived `screenshot_caveat` (the label-trace contract above), so Langfuse shows the doctoring is JSON-only and the pixels show the undoctored world.
 
-## The corpus
+## Running the tours (local, provably-synthetic sweep)
 
-- `corpus/captures/{contacts,dashboard,cadence-followup}/*.json` — base capture fixtures, curated from a **local `prod-shaped` sweep**, UUID-mapped + host-redacted by the normalizer, then scrubbed at curation (`corpus/scrub.ts`'s `scrubCapture`: email/phone → `<email:N>`/`<phone:N>`, sharing the scrubber that now lives in `judge/scrub.ts`). Provably synthetic: every contact name carries the `synth-prodshaped-` factory prefix. (Live-run captures are instead scrubbed in the export path, above.)
-- `corpus/cases/*.json` — clean cases + doctored cases (single-point mutations from `doctor.ts`) that the labeler drafts over; the deterministic eval they once fed has retired with the verifier lane.
-- `corpus/labels/*.draft.json` — draft judge labels (the real stronger-model fill is manual — see `DEFERRED.md`).
-- `corpus/pii-audit.ts` — the mechanical P0 gate over ALL committed artifacts: bans raw UUIDs / real-host URLs / emails / phones / secrets and asserts the `synth-prodshaped-` name prefix. Runs as a vitest (`corpus/pii-audit.test.ts`) over the committed tree AND as a CLI: `bun run tests/tours/judge/corpus/pii-audit.ts corpus`.
-
-## Regenerating the captures (local, provably-synthetic sweep)
-
-The committed captures come from a LOCAL `prod-shaped` sweep (staging is not required). Seed a clean world, run the app in the accelerated `testing` frame, and run the tours:
+There is no committed corpus — `make qa-report` grades a live run dir, and the detection self-test doctors the round's own captures. Seed a clean world, run the app in the accelerated `testing` frame, and run the tours:
 
 ```bash
 crm-admin --reset-and-seed --profile prod-shaped --yes    # synthetic prod-shaped seed (synth-prodshaped- names)
@@ -65,18 +58,12 @@ crm-admin --reset-and-seed --profile prod-shaped --yes    # synthetic prod-shape
 TOURS_SEED_PROFILE=prod-shaped TOURS_SKIP_RESET=1 make tours   # runs ALL *.tour.ts against localhost
 ```
 
-Captures land in `frontend/tests/tours/.runs/<runId>/captures/{contacts,dashboard,cadence-followup}/` (gitignored). Curate the relevant ones into `corpus/captures/<tour>/`, refresh the affected `corpus/cases/*.json` + `PROVENANCE.json`, then run the PII audit (`bun run tests/tours/judge/corpus/pii-audit.ts corpus`). Regeneration is intentionally NOT byte-stable (accelerated timestamps + first-seen id ordinals leak through); the grader keys on semantics, so regenerate rarely and review the diff by eye. Curation step: drop the birthdays capture's incidental `GET /contacts?limit=1000` body — con045 reads the compact `fields.birthdayContacts` projection, not that body, so the full contact list is dead weight (and its truncated `data` vs `meta.pagination.total` would be self-inconsistent). Same treatment applies to the delete-flow after-accept capture's unread `GET /api/v1/contacts` list body (con042 reads only the probe GET, the DELETE, and the url; an unread list body would otherwise inflate every CON-042 judge/labeler prompt, which serializes full capture evidence). The aria tree is NOT trimmed — it is the honest rendered page state.
+Captures land in `frontend/tests/tours/.runs/<runId>/captures/{contacts,dashboard,cadence-followup}/` (gitignored). Provenance is synthetic by construction: the prod-shaped seed gives every contact a `synth-prodshaped-` factory prefix, and the normalizer UUID-maps + host-redacts every capture. Point `make qa-report RUNDIR=<run dir>` at the run to grade it; live→Langfuse PII is handled by the export scrubber (`judge/scrub.ts`), the single chokepoint (above), not by a committed-tree audit.
 
-## Adding a doctored case
+## Labeling (Langfuse-native)
 
-> **Superseded for detection.** The live **Detection self-test** above is now the detection safety net (the `Mutation` machinery relocated to `judge/mutation.ts`; the committed traps live in `judge/trap-config.ts`). The corpus doctored-case recipe below survives only to shape the **labeler's** draft evidence and is removed with the rest of the corpus tree in the corpus-retirement terminal step. To add detection coverage, edit `judge/trap-config.ts`, not a corpus case.
-
-With the verifier lane (and its offline merge gate) retired, doctored cases now only shape the **labeler's** draft evidence — there is no longer an automated pass/fail over them, and the advisory report (`make qa-report`) grades live tours run dirs, not the corpus. Pick a **judge**-residue item (the residue is CON-042[0] / DSH-004[2]), add a single-point mutation to a new `corpus/cases/*.json` (`op: inject_query | delete_endpoint | set_aria_disabled | reorder_ids | blank_dialog | remove_aria_subtree | set_field | set_json_field`), and set its `then_index` expected verdict to `fail` (others unchanged). `remove_aria_subtree` drops an aria-rendered node (by role + name/text), `set_field` overwrites an aria-invisible `fields` value (skeleton count, tier class, nav position), and `set_json_field` overwrites a body JSON path. The labeler (`bun run tests/tours/judge/label.ts`) then drafts over the mutated evidence (via `resolveCaseCaptures`), so the draft describes the doctored world.
-
-## Correcting draft labels (deferred, cheap)
-
-Edit `corpus/labels/*.draft.json` in place → `*.labeled.json`, flipping `status: draft` → `human-confirmed` and correcting the verdict/critique. Re-run nothing. See `DEFERRED.md`.
+There is no drafter CLI and no `*.labeled.json` round-trip. The judge's own live verdict on each graded item IS the draft — shipped to Langfuse via the label-trace contract (above), self-sufficient for adjudication in the annotation queue, where the maintainer confirms or rejects it. Git holds no labels. See `DEFERRED.md` for the deferred fail-precision bar over that labeled set.
 
 ## The mechanical-vs-deferred split
 
-**Mergeable now (zero human labels):** the grader + machinery unit tests, the doctoring tool, the labeling CLI's machinery (mocked drafter), the advisory report, the PII audit. **Deferred (labels/quota):** fail-precision over a held-out set, the error-analysis taxonomy, the real stronger-model draft-fill, the codex-SDK impl, the promptfoo spike. All deferred items are flagged in `DEFERRED.md` — never GitHub issues.
+**Mergeable now (zero human labels):** the grader + machinery unit tests, the doctoring library (`doctor.ts`) + live trap self-test (`trap-selftest.ts`), the advisory report, the export scrub + label-trace contract. **Deferred (labels/quota):** fail-precision over a held-out labeled set, the error-analysis taxonomy, the codex-SDK impl, the promptfoo spike. All deferred items are flagged in `DEFERRED.md` — never GitHub issues.

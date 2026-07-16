@@ -1,7 +1,7 @@
 // Shared capture-format contract for the tours harness.
 //
 // This is the single load-bearing interface: the tours produce these records
-// and the downstream grader + corpus consume them. It is versioned via
+// and the downstream grader + judge consume them. It is versioned via
 // captureFormatVersion / captureGeneratorVersion — bump both on any schema
 // change. The only Playwright reference is the type-only `Locator` import below
 // (erased at compile time — the pure normalizer and its vitest unit tests never
@@ -107,9 +107,9 @@ export interface Capture {
   /**
    * Run-dir-relative path of the capture-point screenshot (e.g.
    * screenshots/dashboard/004-....png). Live-run evidence for the intent
-   * judge's visual goals — NEVER committed to the corpus (the PII audit can
-   * grep JSON, not pixels). Absent when screenshots are disabled or the
-   * best-effort capture failed.
+   * judge's visual goals — lives only in the gitignored run dir, never git (the
+   * export scrub greps JSON, not pixels). Absent when screenshots are disabled
+   * or the best-effort capture failed.
    */
   screenshot?: string
 }

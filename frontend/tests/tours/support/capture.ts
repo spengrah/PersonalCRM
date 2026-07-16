@@ -131,8 +131,8 @@ export class TourApi {
 
   // Best-effort viewport screenshot per capture point (TOURS_SCREENSHOTS=0
   // disables). Live-run evidence for the intent judge's visual goals; lives in
-  // the gitignored run dir, never the committed corpus. A screenshot failure
-  // must never fail the sweep — the capture simply omits the field.
+  // the gitignored run dir, never git. A screenshot failure must never fail the
+  // sweep — the capture simply omits the field.
   private async takeScreenshot(page: Page, seq: number, note: string): Promise<string | undefined> {
     if (process.env.TOURS_SCREENSHOTS === '0') return undefined
     const rel = path.join(

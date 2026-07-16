@@ -1,8 +1,8 @@
 // The single-point mutation schema — the surviving detection primitive (INV-1).
 // A `Mutation` targets ONE capture (by pair role, else by index) and changes
-// exactly one datum, manufacturing a known fail on one then-item. Relocated out
-// of `corpus/` (which is deleted in the corpus-retirement stroke) so the live
-// trap self-test + committed trap config depend on a corpus-independent home.
+// exactly one datum, manufacturing a known fail on one then-item. Lives at the
+// `judge/` top level (not under a deletable fixture tree) so the live trap
+// self-test + committed trap config depend on a corpus-independent home.
 //
 // Pure zod over an already-parsed object — no runtime file dependency. The
 // mutation is APPLIED by `applyMutation` in doctor.ts.
