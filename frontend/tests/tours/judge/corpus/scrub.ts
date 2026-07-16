@@ -1,59 +1,11 @@
-// Corpus-only scrub (design D6a P1): the live-run normalizer host-scrubs URLs +
-// UUID-maps ids, but does NOT redact emails/phones — and the synthetic factory
-// emits real-FORMAT fabricated emails/phones into methods[].value. This scrub
-// maps every email-shaped and phone-shaped string to a stable placeholder
-// (<email:N>/<phone:N>, first-seen like the UUID mapper), applied to every
-// capture AT CURATION on top of the normalizer, so committed fixtures carry no
-// email/phone patterns. Evidence-preserving: no toured behavior's verifier
-// reads a method value (CON-043 uses names, CON-044 the interaction, CON-045
-// birthdays).
-//
-// Pure — no Playwright, no fs. Deep-walks a parsed capture object.
+// Corpus-only curation wrapper (design D6a P1). The scrubber itself now lives in
+// the export path (`judge/scrub.ts`, arc INV-2) — this file keeps ONLY the
+// curation-specific `scrubCapture`, which additionally drops the live-run-only
+// `screenshot` path so committed fixtures stay aria-only. Used at CURATION on
+// top of the normalizer, so committed fixtures carry no email/phone patterns.
+// (Retires with the corpus in a later arc PR.)
 
-import { EMAIL_RE, PHONE_RES } from './patterns'
-
-export interface Scrubber {
-  scrub(value: string): string
-}
-
-// A first-seen map so the same email/phone → the same placeholder across every
-// capture in a curation session (structure-preserving, PII-safe).
-export function createScrubber(): Scrubber {
-  const emails = new Map<string, string>()
-  const phones = new Map<string, string>()
-  const placeholder = (map: Map<string, string>, kind: string, key: string): string => {
-    let p = map.get(key)
-    if (!p) {
-      p = `<${kind}:${map.size + 1}>`
-      map.set(key, p)
-    }
-    return p
-  }
-  return {
-    scrub(value: string): string {
-      let out = value.replace(EMAIL_RE, m => placeholder(emails, 'email', m.toLowerCase()))
-      for (const re of PHONE_RES) {
-        out = out.replace(re, m => placeholder(phones, 'phone', m.replace(/\s+/g, '')))
-      }
-      return out
-    },
-  }
-}
-
-// Deep-walk a JSON value, scrubbing every string. Arrays/objects rebuilt so the
-// input is not mutated.
-export function scrubValue(value: unknown, scrubber: Scrubber): unknown {
-  if (typeof value === 'string') return scrubber.scrub(value)
-  if (Array.isArray(value)) return value.map(v => scrubValue(v, scrubber))
-  if (value !== null && typeof value === 'object') {
-    const out: Record<string, unknown> = {}
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[k] = scrubValue(v, scrubber)
-    }
-    return out
-  }
-  return value
-}
+import { createScrubber, scrubValue, type Scrubber } from '../scrub'
 
 // Scrub a parsed capture record (returns a new object). Also drops the
 // live-run-only `screenshot` path: it references a gitignored file that never

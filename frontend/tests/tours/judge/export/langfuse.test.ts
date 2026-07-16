@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { buildGenAiSpan } from '../adapter/span'
-import { buildTraceBody, configFromEnv, parseSpanFile, traceIdFor } from './langfuse'
+import { createScrubber } from '../scrub'
+import { buildTraceBody, configFromEnv, exportSpans, parseSpanFile, traceIdFor } from './langfuse'
 
 const baseParams = {
   impl: 'codex-exec',
@@ -70,6 +71,98 @@ describe('buildTraceBody', () => {
     const body = buildTraceBody(span)
     expect(body.metadata.status).toBe('ERROR')
     expect(body.metadata.error).toBe('codex timed out')
+  })
+})
+
+describe('buildTraceBody PII scrub seam (INV-2)', () => {
+  // Distinct sentinel email+phone per free-form / env-sourced branch of the
+  // shipped body: prompt, completion, status.message→metadata.error, and
+  // gen_ai.request.model→metadata.model. None may survive raw.
+  const span = buildGenAiSpan({
+    ...baseParams,
+    model: 'gpt brex@synthetic.example (479) 555-0104',
+    prompt: 'saw brix@synthetic.example and +1-479-555-0100 in aria',
+    response: 'reply to brax@synthetic.example at (479) 555-0101',
+    error: 'threw for brox@synthetic.example calling +1-479-555-0102',
+  })
+
+  it('scrubs every free-form/env-sourced string; no raw sentinel survives', () => {
+    const scrubber = createScrubber()
+    const body = buildTraceBody(span, [], s => scrubber.scrub(s))
+    const shipped = JSON.stringify(body)
+    // No raw email/phone anywhere in the shipped body.
+    expect(shipped).not.toMatch(/@synthetic\.example/)
+    expect(shipped).not.toMatch(/479-555-01\d\d/)
+    expect(shipped).not.toMatch(/\(479\) 555-01\d\d/)
+    // Placeholders present in each branch.
+    expect((body.input as { prompt: string }).prompt).toContain('<email:')
+    expect((body.input as { prompt: string }).prompt).toContain('<phone:')
+    expect(body.output as string).toContain('<email:')
+    expect(body.output as string).toContain('<phone:')
+    expect(String(body.metadata.error)).toContain('<email:')
+    expect(String(body.metadata.error)).toContain('<phone:')
+    expect(String(body.metadata.model)).toContain('<email:')
+    expect(String(body.metadata.model)).toContain('<phone:')
+  })
+
+  it('defaults to identity scrub, so existing callers are unaffected', () => {
+    const body = buildTraceBody(span, [])
+    expect((body.input as { prompt: string }).prompt).toContain('brix@synthetic.example')
+    expect(body.output).toBe('reply to brax@synthetic.example at (479) 555-0101')
+    expect(body.metadata.error).toBe('threw for brox@synthetic.example calling +1-479-555-0102')
+    expect(body.metadata.model).toBe('gpt brex@synthetic.example (479) 555-0104')
+  })
+
+  it('preserves a non-string model attribute via the fallback (scrub only touches strings)', () => {
+    const scrubber = createScrubber()
+    // A non-string model attribute: str() yields undefined, so buildTraceBody
+    // falls back to the raw attribute value rather than scrubbing/crashing.
+    const numericModel = { ...span, attributes: { ...span.attributes, 'gen_ai.request.model': 42 } }
+    expect(buildTraceBody(numericModel, [], s => scrubber.scrub(s)).metadata.model).toBe(42)
+    // Missing entirely → undefined, no throw.
+    const noModel = { ...span, attributes: { ...span.attributes } }
+    delete noModel.attributes['gen_ai.request.model']
+    expect(buildTraceBody(noModel, [], s => scrubber.scrub(s)).metadata.model).toBeUndefined()
+  })
+})
+
+describe('exportSpans shared scrubber', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('uses ONE scrubber across the run so a shared email maps to the same placeholder', async () => {
+    const bodies: Array<Record<string, unknown>> = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: { body?: string }) => {
+        if (init?.body) {
+          const parsed = JSON.parse(init.body) as {
+            batch?: Array<{ body?: Record<string, unknown> }>
+          }
+          for (const evt of parsed.batch ?? []) if (evt.body) bodies.push(evt.body)
+        }
+        return { ok: true, status: 200, text: async () => '{}' } as Response
+      })
+    )
+
+    const shared = 'dup@synthetic.example'
+    const spans = [
+      buildGenAiSpan({ ...baseParams, behaviorId: 'CON-001', prompt: `first ${shared}` }),
+      buildGenAiSpan({ ...baseParams, behaviorId: 'CON-002', prompt: `second ${shared}` }),
+    ]
+    const result = await exportSpans({ host: 'http://lf', publicKey: 'p', secretKey: 's' }, spans)
+    expect(result.traces).toBe(2)
+
+    const prompts = bodies
+      .map(b => (b.input as { prompt?: string } | undefined)?.prompt)
+      .filter((p): p is string => typeof p === 'string')
+    expect(prompts).toHaveLength(2)
+    // No raw email shipped, and the SAME placeholder in both (shared scrubber).
+    for (const p of prompts) {
+      expect(p).not.toContain('@synthetic.example')
+      expect(p).toContain('<email:1>')
+    }
   })
 })
 

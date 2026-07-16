@@ -15,6 +15,7 @@
 import * as crypto from 'crypto'
 import * as fs from 'fs'
 import type { GenAiSpan } from '../adapter/span'
+import { createScrubber } from '../scrub'
 
 export interface LangfuseConfig {
   host: string
@@ -55,11 +56,34 @@ const num = (v: unknown): number | undefined => (typeof v === 'number' ? v : und
 // PURE: build the trace body for one span. `mediaTokens` are the Langfuse media
 // references for this span's screenshots (already uploaded), spliced into the input
 // so the reviewer sees exactly what the judge saw.
-export function buildTraceBody(span: GenAiSpan, mediaTokens: string[] = []): TraceBody {
+//
+// PII scrub seam (arc INV-2): `scrub` is applied to every FREE-FORM or
+// ENV-SOURCED string this body ships to Langfuse — the prompt, the completion,
+// `metadata.error` (span.status.message, which is CAUGHT-EXCEPTION text that can
+// embed model output/evidence, so NOT PII-safe), AND `metadata.model`
+// (gen_ai.request.model is an env-configurable string, NOT constrained by
+// construction). The caller (`exportSpans`) injects the run's scrubber; the
+// default identity keeps this pure + leaves existing callers unaffected.
+// Every OTHER string here is identifier/enum-valued BY CONSTRUCTION and is
+// documented as such rather than scrubbed: the trace `name`/`behavior_id` = a
+// spec id (`judge <behavior_id>`), `impl`/`status` = closed enums in our code.
+// POLICY: any NEW free-form string field added to this body MUST route through
+// `scrub` — that is what INV-2 means operationally.
+export function buildTraceBody(
+  span: GenAiSpan,
+  mediaTokens: string[] = [],
+  scrub: (s: string) => string = s => s
+): TraceBody {
   const a = span.attributes
   const behaviorId = String(a['qa.behavior_id'] ?? 'unknown')
-  const prompt = str(a['gen_ai.prompt'])
-  const completion = str(a['gen_ai.completion'])
+  const rawPrompt = str(a['gen_ai.prompt'])
+  const rawCompletion = str(a['gen_ai.completion'])
+  const rawModel = str(a['gen_ai.request.model'])
+  const rawError = span.status.message
+  const prompt = rawPrompt !== undefined ? scrub(rawPrompt) : undefined
+  const completion = rawCompletion !== undefined ? scrub(rawCompletion) : undefined
+  const model = rawModel !== undefined ? scrub(rawModel) : a['gen_ai.request.model']
+  const error = rawError !== undefined ? scrub(rawError) : undefined
   const screenshots = Array.isArray(a['qa.screenshots']) ? (a['qa.screenshots'] as string[]) : []
 
   const input: Record<string, unknown> = {}
@@ -74,12 +98,12 @@ export function buildTraceBody(span: GenAiSpan, mediaTokens: string[] = []): Tra
     metadata: {
       behavior_id: behaviorId,
       impl: a['qa.judge.impl'],
-      model: a['gen_ai.request.model'],
+      model,
       input_tokens: num(a['gen_ai.usage.input_tokens']),
       output_tokens: num(a['gen_ai.usage.output_tokens']),
       tool_rejected: a['qa.tool_rejected'],
       status: span.status.code,
-      error: span.status.message,
+      error,
       duration_ms: Math.round((span.end_time_unix_nano - span.start_time_unix_nano) / 1e6),
       // Honesty: say how many screenshots the judge HAD vs how many made it here.
       // A silent gap between the two would misrepresent the evidence.
@@ -178,6 +202,11 @@ export async function exportSpans(
 ): Promise<ExportResult> {
   const result: ExportResult = { traces: 0, screenshots: 0, failed: 0 }
 
+  // One scrubber for the whole export so the same email/phone maps to the same
+  // placeholder across every span in this run (arc INV-2).
+  const scrubber = createScrubber()
+  const scrub = (s: string): string => scrubber.scrub(s)
+
   for (const span of spans) {
     const traceId = traceIdFor(span)
     try {
@@ -209,7 +238,7 @@ export async function exportSpans(
             id: `evt-${traceId}`,
             type: 'trace-create',
             timestamp: new Date().toISOString(),
-            body: buildTraceBody(span, tokens),
+            body: buildTraceBody(span, tokens, scrub),
           },
         ],
       })

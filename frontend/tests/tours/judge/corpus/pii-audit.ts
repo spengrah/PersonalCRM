@@ -20,7 +20,7 @@ import {
   REAL_HOST_URL_RE,
   SECRET_RES,
   SYNTH_NAME_PREFIX,
-} from './patterns'
+} from '../pii-patterns'
 
 export interface Violation {
   kind: string
