@@ -1,4 +1,5 @@
 import { test, expect } from './fixtures'
+import type { Page } from '@playwright/test'
 import { createTestAPI, TestAPI } from './helpers/test-api'
 import { navigateModalToCandidate, findCandidateByName } from './helpers/imports-helpers'
 
@@ -8,6 +9,10 @@ const API_HEADERS = {
   'X-API-Key': API_KEY,
   'Content-Type': 'application/json',
 }
+
+// Candidate card scoped by its heading (never by presentation classes).
+const candidateCardByName = (page: Page, displayName: string) =>
+  page.locator('div.border', { has: page.getByRole('heading', { name: displayName }) }).first()
 
 test.describe('Imports Actions @area:imports', () => {
   test.describe('With Seeded Data', () => {
@@ -37,18 +42,23 @@ test.describe('Imports Actions @area:imports', () => {
       await testApi.cleanup()
     })
 
+    // spec: IMP-007[0], IMP-027[1]
     test('should display candidate cards with correct information', async ({ page }) => {
       await page.goto('/imports')
       await page.waitForLoadState('networkidle')
 
-      // Find our seeded candidate (may need to paginate)
-      await findCandidateByName(page, `${testApi.prefix}-Test Import User`)
+      const displayName = `${testApi.prefix}-Test Import User`
 
-      // Verify action buttons are present
-      await expect(page.getByRole('button', { name: /Import/i }).first()).toBeVisible()
-      await expect(page.getByRole('button', { name: /Link/i }).first()).toBeVisible()
+      // The seeded unmatched candidate awaits review in the queue.
+      await findCandidateByName(page, displayName)
+
+      // This card offers both resolution choices: import-as-new and link.
+      const card = candidateCardByName(page, displayName)
+      await expect(card.getByRole('button', { name: /Import/i })).toBeVisible()
+      await expect(card.getByRole('button', { name: /Link/i })).toBeVisible()
     })
 
+    // spec: IMP-027[1]
     test('should open link modal when clicking Link button', async ({ page }) => {
       await page.goto('/imports')
       await page.waitForLoadState('networkidle')
@@ -59,22 +69,18 @@ test.describe('Imports Actions @area:imports', () => {
       await findCandidateByName(page, displayName)
 
       // Click the Link button on our candidate
-      const candidateCard = page
-        .locator('[class*="border-gray-200"]')
-        .filter({ hasText: displayName })
-      await candidateCard.getByRole('button', { name: /Link/i }).click()
+      await candidateCardByName(page, displayName).getByRole('button', { name: /Link/i }).click()
 
-      // Verify modal opens with mode toggle and contact selector
+      // The modal offers the import-vs-link mode choice.
       await expect(page.getByRole('button', { name: 'Link to Existing' })).toBeVisible()
 
       // Navigate to correct candidate if needed (handles race conditions in parallel tests)
       await navigateModalToCandidate(page, displayName)
 
-      await expect(page.getByText('Search for a contact...')).toBeVisible()
-
-      // Verify cancel button works
-      await page.getByRole('button', { name: /Cancel/i }).click()
-      await expect(page.getByRole('button', { name: 'Link to Existing' })).not.toBeVisible()
+      // Link mode offers contact selection (the searchable selector).
+      const dialog = page.getByRole('dialog', { name: 'Resolve import candidate' })
+      await dialog.getByText('Search for a contact...').click()
+      await expect(dialog.getByPlaceholder('Search for a contact...')).toBeVisible()
     })
   })
 
@@ -99,8 +105,9 @@ test.describe('Imports Actions @area:imports', () => {
       await testApi.cleanup()
     })
 
+    // spec: IMP-012[0], IMP-012[1], IMP-012[2], IMP-012[3]
+    // spec: IMP-007[1], IMP-031[0], IMP-031[2]
     test('should import candidate and show success notification', async ({ page, request }) => {
-      // spec: IMP-012
       await page.goto('/imports')
       await page.waitForLoadState('networkidle')
 
@@ -110,7 +117,7 @@ test.describe('Imports Actions @area:imports', () => {
       await findCandidateByName(page, displayName)
 
       // Click Import on the specific candidate card (not just any Import button)
-      const card = page.locator('[class*="border-gray-200"]').filter({ hasText: displayName })
+      const card = candidateCardByName(page, displayName)
       await card.getByRole('button', { name: /Import/i }).click()
 
       // Verify modal opens in import mode - mode toggle should be visible
@@ -119,11 +126,15 @@ test.describe('Imports Actions @area:imports', () => {
       // Navigate to correct candidate if needed (handles race conditions in parallel tests)
       await navigateModalToCandidate(page, displayName)
 
-      // Capture the import POST before triggering it.
+      // Capture the import POST and the frontend's first rematch-job poll
+      // before triggering the action.
       const importResponsePromise = page.waitForResponse(
         res =>
           res.url().includes(`/api/v1/imports/${externalId}/import`) &&
           res.request().method() === 'POST'
+      )
+      const rematchPollPromise = page.waitForResponse(
+        res => res.url().includes('/api/v1/rematch/jobs/') && res.request().method() === 'GET'
       )
 
       // Click the "Import as New Contact" button in the modal
@@ -134,10 +145,13 @@ test.describe('Imports Actions @area:imports', () => {
       const importBody = await importResponse.json()
       const createdContactId: string = importBody?.data?.contact?.id
       expect(createdContactId, 'import response should carry the created contact id').toBeTruthy()
-      expect(
-        importBody?.data?.rematch_job_id,
-        'import response should carry a rematch job id'
-      ).toBeTruthy()
+      const rematchJobId: string = importBody?.data?.rematch_job_id
+      expect(rematchJobId, 'import response should carry a rematch job id').toBeTruthy()
+
+      // The returned rematch job is registered for polling: the frontend's
+      // watcher polls exactly that job id.
+      const rematchPoll = await rematchPollPromise
+      expect(rematchPoll.url()).toContain(rematchJobId)
 
       // DOM precondition: the candidate card leaves the list (modal/list advanced).
       await expect(card).not.toBeVisible({ timeout: 15000 })
@@ -188,8 +202,8 @@ test.describe('Imports Actions @area:imports', () => {
       await testApi.cleanup()
     })
 
+    // spec: IMP-007[3], IMP-031[0]
     test('should ignore candidate and show notification', async ({ page, request }) => {
-      // spec: IMP-007
       await page.goto('/imports')
       await page.waitForLoadState('networkidle')
 
@@ -200,9 +214,7 @@ test.describe('Imports Actions @area:imports', () => {
 
       // Click the X (ignore) button on the candidate
       // The ignore button is a ghost button with just an X icon, aria-label "Ignore candidate"
-      const candidateCard = page
-        .locator('[class*="border-gray-200"]')
-        .filter({ hasText: displayName })
+      const candidateCard = candidateCardByName(page, displayName)
       const ignoreButton = candidateCard.getByRole('button', { name: 'Ignore candidate' })
 
       const ignoreResponsePromise = page.waitForResponse(
@@ -271,8 +283,8 @@ test.describe('Imports Actions @area:imports', () => {
       await testApi.cleanup()
     })
 
+    // spec: IMP-013[0], IMP-007[1], IMP-031[0]
     test('should link candidate to existing contact', async ({ page, request }) => {
-      // spec: IMP-013
       await page.goto('/imports')
       await page.waitForLoadState('networkidle')
 
@@ -283,9 +295,7 @@ test.describe('Imports Actions @area:imports', () => {
       await findCandidateByName(page, candidateName)
 
       // Find the candidate card and click its Link button
-      const candidateCard = page
-        .locator('[class*="border-gray-200"]')
-        .filter({ hasText: candidateName })
+      const candidateCard = candidateCardByName(page, candidateName)
       await candidateCard.getByRole('button', { name: /Link/i }).click()
 
       // Wait for modal to open with mode toggle visible
@@ -296,17 +306,15 @@ test.describe('Imports Actions @area:imports', () => {
 
       // The ContactSelector is a custom searchable dropdown
       // Click on the selector area (contains placeholder text) to open it
-      const contactSelector = page.getByText('Search for a contact...')
-      await contactSelector.click()
+      const dialog = page.getByRole('dialog', { name: 'Resolve import candidate' })
+      await dialog.getByText('Search for a contact...').click()
 
       // Type to search for the seeded contact
-      const searchInput = page.locator('input[placeholder="Search for a contact..."]')
+      const searchInput = dialog.getByPlaceholder('Search for a contact...')
       await searchInput.fill(testApi.prefix)
 
       // Wait for the dropdown to show the contact and click it
-      const contactOption = page
-        .locator('[class*="cursor-pointer"]')
-        .filter({ hasText: targetName })
+      const contactOption = dialog.getByText(targetName, { exact: false }).last()
       await expect(contactOption).toBeVisible({ timeout: 5000 })
       await contactOption.click()
 

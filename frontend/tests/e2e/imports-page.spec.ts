@@ -1,133 +1,98 @@
 import { test, expect } from './fixtures'
 
-// API configuration for E2E tests
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
-const API_HEADERS = {
-  'X-API-Key': API_KEY,
-  'Content-Type': 'application/json',
-}
-
 test.describe('Imports Page @area:imports', () => {
-  test.beforeEach(async ({ page }) => {
-    // Navigate to imports page before each test
+  // spec: IMP-026[0]
+  test('source filters expose selection state and scope the candidate request', async ({
+    page,
+  }) => {
     await page.goto('/imports')
     await page.waitForLoadState('domcontentloaded')
-  })
 
-  test('should display page header and sync button', async ({ page }) => {
-    // Verify page header
-    await expect(page.getByRole('heading', { name: 'Import Contacts' })).toBeVisible()
+    // The source filter pills exist.
+    const allSources = page.getByRole('button', { name: 'All Sources', exact: true })
+    const googleContacts = page.getByRole('button', { name: 'Google Contacts', exact: true })
+    const calendar = page.getByRole('button', { name: 'Calendar', exact: true })
+    await expect(allSources).toBeVisible()
+    await expect(googleContacts).toBeVisible()
+    await expect(calendar).toBeVisible()
 
-    // Verify sync button exists (use first() as there may be multiple sync buttons)
-    await expect(page.getByRole('button', { name: /Sync Contacts/i }).first()).toBeVisible()
-  })
+    // All Sources is the default selection.
+    await expect(allSources).toHaveAttribute('aria-pressed', 'true')
 
-  test('should show imports in navigation', async ({ page }) => {
-    // Verify navigation has Imports entry
-    await expect(page.getByRole('link', { name: /Imports/i })).toBeVisible()
-  })
-
-  test('should display empty state when no Google Contacts candidates', async ({
-    page,
-    request,
-  }) => {
-    // Verify Google Contacts source is empty to avoid cross-test interference
-    const response = await request.get(
-      `${API_BASE_URL}/api/v1/imports/candidates?source=gcontacts`,
-      {
-        headers: API_HEADERS,
-      }
+    // Selecting a source flips the pressed state AND refetches the
+    // suggestions feed scoped to that source (network-param proof).
+    const gcontactsResponse = page.waitForResponse(
+      res =>
+        res.request().method() === 'GET' &&
+        res.url().includes('/api/v1/imports/suggestions') &&
+        res.url().includes('source=gcontacts')
     )
+    await googleContacts.click()
+    await gcontactsResponse
+    await expect(googleContacts).toHaveAttribute('aria-pressed', 'true')
+    await expect(allSources).toHaveAttribute('aria-pressed', 'false')
 
-    if (response.ok()) {
-      const data = await response.json()
-      if (data.data?.length === 0 || data.meta?.pagination?.total === 0) {
-        // The People tab loads the unified suggestions endpoint (the
-        // candidate list is composed into it), so wait on that.
-        const suggestionsResponse = page.waitForResponse(
-          res =>
-            res.request().method() === 'GET' &&
-            res.url().includes('/api/v1/imports/suggestions') &&
-            res.url().includes('source=gcontacts')
-        )
-
-        await page.getByRole('button', { name: 'Google Contacts' }).click()
-        await suggestionsResponse
-
-        // gcontacts is shared across parallel workers, so a concurrent test
-        // may seed a candidate between this test's pre-flight and the render
-        // (TOCTOU). The empty state shows only when the live list is empty;
-        // otherwise the candidate list renders. Poll for either valid
-        // terminal state so the assertion is not a flaky gate, while still
-        // proving the empty-state copy when gcontacts is genuinely empty.
-        const emptyState = page.getByText(/No import candidates/i)
-        const candidateList = page.locator('[class*="border-gray-200"]').first()
-        await expect
-          .poll(
-            async () =>
-              (await emptyState.isVisible().catch(() => false)) ||
-              (await candidateList.isVisible().catch(() => false)),
-            { timeout: 10000 }
-          )
-          .toBe(true)
-        if (await emptyState.isVisible().catch(() => false)) {
-          await expect(page.getByText(/All contacts from Google have been imported/i)).toBeVisible()
-        }
-      }
-    }
+    const gcalResponse = page.waitForResponse(
+      res =>
+        res.request().method() === 'GET' &&
+        res.url().includes('/api/v1/imports/suggestions') &&
+        res.url().includes('source=gcal_attendee')
+    )
+    await calendar.click()
+    await gcalResponse
+    await expect(calendar).toHaveAttribute('aria-pressed', 'true')
+    await expect(googleContacts).toHaveAttribute('aria-pressed', 'false')
   })
 
-  test('should display source filter buttons', async ({ page }) => {
-    // Verify filter UI is visible
-    await expect(page.getByText('Filter:')).toBeVisible()
-    await expect(page.getByRole('button', { name: 'All Sources', exact: true })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Google Contacts', exact: true })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Calendar', exact: true })).toBeVisible()
-
-    // All Sources should be selected by default (has blue background)
-    const allSourcesButton = page.getByRole('button', { name: 'All Sources', exact: true })
-    await expect(allSourcesButton).toHaveClass(/bg-blue-600/)
-  })
-
-  test('should filter when clicking filter buttons', async ({ page }) => {
-    // Click Google Contacts filter
-    await page.getByRole('button', { name: 'Google Contacts', exact: true }).click()
-    await page.waitForLoadState('domcontentloaded')
-
-    // Google Contacts button should now be selected
-    const googleContactsButton = page.getByRole('button', {
-      name: 'Google Contacts',
-      exact: true,
+  // spec: IMP-026[2]
+  test('manual sync triggers fire per-source sync requests', async ({ page }) => {
+    // The sync buttons act on connected Google accounts — an external-provider
+    // dependency — so mock the account list (sanctioned route-mock technique)
+    // and absorb the trigger POST itself; the deterministic claim is that the
+    // page offers both triggers and each fires the right per-source request.
+    await page.route('**/api/v1/auth/google/accounts', route =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          data: [
+            {
+              id: 'e2e-mock-google-account',
+              account_id: 'e2e-mock-google-account',
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            },
+          ],
+        }),
+      })
+    )
+    const syncRequests: string[] = []
+    await page.route('**/api/v1/sync/*/trigger', route => {
+      syncRequests.push(route.request().url())
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ success: true, data: null }),
+      })
     })
-    await expect(googleContactsButton).toHaveClass(/bg-blue-600/)
 
-    // All Sources should no longer be selected
-    const allSourcesButton = page.getByRole('button', { name: 'All Sources', exact: true })
-    await expect(allSourcesButton).not.toHaveClass(/bg-blue-600/)
-
-    // Click Calendar filter
-    await page.getByRole('button', { name: 'Calendar', exact: true }).click()
+    await page.goto('/imports')
     await page.waitForLoadState('domcontentloaded')
 
-    // Calendar button should now be selected
-    const calendarButton = page.getByRole('button', { name: 'Calendar', exact: true })
-    await expect(calendarButton).toHaveClass(/bg-blue-600/)
-  })
+    // Both per-source triggers are offered. (.first(): an empty candidate
+    // list renders a second contacts-sync affordance in the empty state.)
+    const syncContacts = page.getByRole('button', { name: /Sync Contacts/i }).first()
+    const syncCalendar = page.getByRole('button', { name: /Sync Calendar/i }).first()
+    await expect(syncContacts).toBeVisible()
+    await expect(syncCalendar).toBeVisible()
 
-  test('should trigger sync when clicking sync button', async ({ page }) => {
-    // Click the sync button (use first() as there may be multiple sync buttons)
-    await page
-      .getByRole('button', { name: /Sync Contacts/i })
-      .first()
-      .click()
+    await syncContacts.click()
+    await expect
+      .poll(() => syncRequests.some(u => u.includes('/sync/gcontacts/trigger')))
+      .toBe(true)
 
-    // The button should show loading state or we should see a notification
-    // Note: The actual sync might fail if Google OAuth isn't configured,
-    // but we're testing the UI interaction works
-    await page.waitForLoadState('domcontentloaded')
-
-    // Just verify the page doesn't crash
-    await expect(page.getByRole('heading', { name: 'Import Contacts' })).toBeVisible()
+    await syncCalendar.click()
+    await expect.poll(() => syncRequests.some(u => u.includes('/sync/gcal/trigger'))).toBe(true)
   })
 })

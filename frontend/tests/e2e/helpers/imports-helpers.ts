@@ -13,7 +13,7 @@ export async function navigateModalToCandidate(
   displayName: string,
   maxNavigations = 30
 ): Promise<void> {
-  const modal = page.locator('.fixed.inset-0')
+  const modal = page.getByRole('dialog', { name: 'Resolve import candidate' })
   const prevButton = page.getByRole('button', { name: 'Previous candidate' })
   const nextButton = page.getByRole('button', { name: 'Next candidate' })
 
