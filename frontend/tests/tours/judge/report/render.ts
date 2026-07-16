@@ -210,7 +210,16 @@ async function main(): Promise<void> {
     }
   }
   walk(capturesRoot)
-  const captures = files.map(f => JSON.parse(fs.readFileSync(f, 'utf8')))
+  // Stamp each capture with its REAL source filename (LOADER-ONLY, off the
+  // persisted `Capture` format) so the label-trace export can attribute graded
+  // evidence to its file (spec line 53). `captureSection` copies it onto
+  // `CaptureSection.captureFile` before the info is lost.
+  type LoadedCapture = import('../../support/run-dir').LoadedCapture
+  const captures = files.map(f => {
+    const c = JSON.parse(fs.readFileSync(f, 'utf8')) as LoadedCapture
+    c.__sourceFile = path.basename(f)
+    return c
+  })
 
   // The advisory judge layer over residue items (opt-in; the report is advisory
   // either way). Without --judge, judge-tagged items render as "pending labels";

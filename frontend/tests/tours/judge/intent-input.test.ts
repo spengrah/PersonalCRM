@@ -5,7 +5,8 @@
 import { describe, expect, it } from 'vitest'
 import type { Capture } from '../support/types'
 import type { IntentSpec } from './intent-catalog'
-import { bindIntentCaptures, buildIntentJudgeInput } from './intent-input'
+import type { LoadedCapture } from '../support/run-dir'
+import { bindIntentCaptures, buildIntentJudgeInput, captureSection } from './intent-input'
 
 function cap(tour: string, seq: number, behaviors: string[]): Capture {
   return {
@@ -70,6 +71,20 @@ describe('bindIntentCaptures', () => {
     const { captures, dropped } = bindIntentCaptures(intent, [cap('dashboard', 1, ['DSH-002'])])
     expect(captures).toHaveLength(0)
     expect(dropped).toBe(0)
+  })
+})
+
+describe('captureSection — the filename hop (spec line 53)', () => {
+  // The load-bearing hop: captures become CaptureSection[] before the adapter
+  // sees them, so the REAL source filename must survive the projection. It rides
+  // on LoadedCapture.__sourceFile (stamped by the report walk) → captureFile.
+  it('projects LoadedCapture.__sourceFile onto captureFile', () => {
+    const c: LoadedCapture = { ...cap('dashboard', 3, ['CAD-026']), __sourceFile: '003-cards.json' }
+    expect(captureSection(c).captureFile).toBe('003-cards.json')
+  })
+
+  it('falls back to a VISIBLE unknown:<tour>/<seq> when no __sourceFile is set', () => {
+    expect(captureSection(cap('dashboard', 7, ['CAD-026'])).captureFile).toBe('unknown:dashboard/7')
   })
 })
 

@@ -15,7 +15,10 @@
 import * as crypto from 'crypto'
 import * as fs from 'fs'
 import type { GenAiSpan } from '../adapter/span'
-import { createScrubber } from '../scrub'
+import type { PerItemVerdict } from '../adapter/types'
+import type { GradedEvidenceEntry, Scenario } from '../label-trace'
+import { SCREENSHOT_CAVEAT } from '../label-trace'
+import { createScrubber, scrubValue, type Scrubber } from '../scrub'
 
 export interface LangfuseConfig {
   host: string
@@ -44,72 +47,180 @@ export function configFromEnv(
 }
 
 // A stable trace id per (behavior, span) so a re-export overwrites rather than
-// duplicates. Langfuse trace ids are free-form strings.
+// duplicates. Langfuse trace ids are free-form strings. This is the BASE id; the
+// per-item traces suffix it with `-item<itemIndex>` (see `itemTraceId`).
 export function traceIdFor(span: GenAiSpan): string {
   const behavior = String(span.attributes['qa.behavior_id'] ?? 'unknown')
   return `judge-${behavior}-${span.span_id}`
 }
 
+// The trace granularity is PER GRADED ITEM (spec line 41): one span fans out to
+// one trace per item, each carrying that item's singular `then_text` + verdict.
+// The item's own index keeps the id unique within the span (indices are unique
+// per judge call), so a re-export still overwrites the right per-item trace.
+function itemTraceId(span: GenAiSpan, itemIndex: number): string {
+  return `${traceIdFor(span)}-item${itemIndex}`
+}
+
 const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
 const num = (v: unknown): number | undefined => (typeof v === 'number' ? v : undefined)
 
-// PURE: build the trace body for one span. `mediaTokens` are the Langfuse media
-// references for this span's screenshots (already uploaded), spliced into the input
-// so the reviewer sees exactly what the judge saw.
+// One graded item to fan a trace out over: `undefined` = the metrics-only /
+// #379 shape (no scenario → a single content-light trace, no scenario_item).
+type ItemDescriptor = { itemIndex: number; thenText: string } | undefined
+
+// Resolve the fan-out: one descriptor per graded item (behavior), one for the
+// single statement item (intent), or a single `undefined` (no scenario → the
+// content-light metrics trace, preserving the pre-contract shape).
+function itemDescriptors(scenario: Scenario | undefined): ItemDescriptor[] {
+  if (!scenario) return [undefined]
+  if (scenario.kind === 'intent') return [{ itemIndex: 0, thenText: scenario.statement }]
+  return scenario.items.map(i => ({ itemIndex: i.itemIndex, thenText: i.thenText }))
+}
+
+// PURE: build the label-trace bodies for one span — ONE per graded item (spec
+// line 41), returned as token-free SKELETONS (no media tokens, and NO local
+// screenshot paths: paths never ship — D9). `exportSpans` runs the per-item
+// media lifecycle and calls `attachTokens` before shipping.
 //
-// PII scrub seam (arc INV-2): `scrub` is applied to every FREE-FORM or
-// ENV-SOURCED string this body ships to Langfuse — the prompt, the completion,
-// `metadata.error` (span.status.message, which is CAUGHT-EXCEPTION text that can
-// embed model output/evidence, so NOT PII-safe), AND `metadata.model`
-// (gen_ai.request.model is an env-configurable string, NOT constrained by
-// construction). The caller (`exportSpans`) injects the run's scrubber; the
-// default identity keeps this pure + leaves existing callers unaffected.
-// Every OTHER string here is identifier/enum-valued BY CONSTRUCTION and is
-// documented as such rather than scrubbed: the trace `name`/`behavior_id` = a
-// spec id (`judge <behavior_id>`), `impl`/`status` = closed enums in our code.
-// POLICY: any NEW free-form string field added to this body MUST route through
-// `scrub` — that is what INV-2 means operationally.
+// PII scrub seam (arc INV-2): `scrub` is applied to EVERY free-form or
+// env-sourced string this body ships — the whole `input`/`output` is deep-walked
+// (`scrubValue`), so the prompt, every scenario string, every graded-evidence
+// note + evidence block, the mutation's values, and the per-item verdict
+// (citation/critique) all route through it; `metadata.error`
+// (span.status.message — caught-exception text that can embed model output) and
+// the env-configurable `metadata.model` are scrubbed too. Every OTHER string is
+// identifier/enum-valued BY CONSTRUCTION (trace `name`/`behavior_id` = a spec id;
+// `impl`/`status` = closed enums; `capture_file` = a filename). POLICY: any NEW
+// free-form string added to a body MUST sit inside `input`/`output` (so the deep
+// scrub covers it) or be routed through `scrub` explicitly.
 export function buildTraceBody(
   span: GenAiSpan,
-  mediaTokens: string[] = [],
   scrub: (s: string) => string = s => s
-): TraceBody {
+): TraceBody[] {
   const a = span.attributes
   const behaviorId = String(a['qa.behavior_id'] ?? 'unknown')
+  const scrubber: Scrubber = { scrub }
+  const deep = (v: unknown): unknown => scrubValue(v, scrubber)
+
   const rawPrompt = str(a['gen_ai.prompt'])
   const rawCompletion = str(a['gen_ai.completion'])
   const rawModel = str(a['gen_ai.request.model'])
   const rawError = span.status.message
-  const prompt = rawPrompt !== undefined ? scrub(rawPrompt) : undefined
-  const completion = rawCompletion !== undefined ? scrub(rawCompletion) : undefined
   const model = rawModel !== undefined ? scrub(rawModel) : a['gen_ai.request.model']
   const error = rawError !== undefined ? scrub(rawError) : undefined
-  const screenshots = Array.isArray(a['qa.screenshots']) ? (a['qa.screenshots'] as string[]) : []
 
-  const input: Record<string, unknown> = {}
-  if (prompt !== undefined) input.prompt = prompt
-  if (mediaTokens.length) input.screenshots = mediaTokens
+  const scenario = (a['qa.scenario'] as Scenario | undefined) ?? undefined
+  const mutation = a['qa.mutation'] // undefined ⇒ real capture (no caveat)
+  const spanGraded = Array.isArray(a['qa.graded_evidence'])
+    ? (a['qa.graded_evidence'] as GradedEvidenceEntry[])
+    : []
+  const itemVerdicts = Array.isArray(a['qa.item_verdicts'])
+    ? (a['qa.item_verdicts'] as PerItemVerdict[])
+    : []
 
+  // The screenshots the reviewer would attach, index-aligned to graded_evidence.
+  // `screenshots_expected` counts the entries that HAVE a path (per trace);
+  // `exportSpans` registers exactly these against each item-trace's id.
+  const expected = spanGraded.filter(e => typeof e.screenshot === 'string').length
+
+  // The graded-evidence skeleton: real capture_file + note + evidence, but NO
+  // screenshot (paths never ship; attachTokens splices the media token by index).
+  const gradedSkeleton = spanGraded.map(e => ({
+    capture_file: e.captureFile,
+    note: e.note,
+    evidence: e.evidence,
+  }))
+
+  const commonMetadata = {
+    behavior_id: behaviorId,
+    impl: a['qa.judge.impl'],
+    model,
+    input_tokens: num(a['gen_ai.usage.input_tokens']),
+    output_tokens: num(a['gen_ai.usage.output_tokens']),
+    tool_rejected: a['qa.tool_rejected'],
+    status: span.status.code,
+    error,
+    duration_ms: Math.round((span.end_time_unix_nano - span.start_time_unix_nano) / 1e6),
+    // Honesty: how many screenshots the trace EXPECTS vs how many attached
+    // (attachTokens fills the latter). A silent gap misrepresents the evidence.
+    screenshots_expected: expected,
+    screenshots_attached: 0,
+  }
+
+  return itemDescriptors(scenario).map(descriptor => {
+    // The scenario_item a reviewer grades against — the behavior's GWT + THIS
+    // item's singular then_text + the full then-list, OR the intent goal/status.
+    let scenarioItem: Record<string, unknown> | undefined
+    if (scenario?.kind === 'behavior' && descriptor) {
+      scenarioItem = {
+        behavior_id: scenario.behaviorId,
+        behavior_title: scenario.behaviorTitle,
+        given: scenario.given,
+        when: scenario.when,
+        then_text: descriptor.thenText,
+        all_then: scenario.allThen,
+      }
+    } else if (scenario?.kind === 'intent') {
+      scenarioItem = {
+        intent_id: scenario.intentId,
+        title: scenario.title,
+        statement: scenario.statement,
+        status: scenario.status,
+      }
+    }
+
+    const rawInput: Record<string, unknown> = {}
+    if (scenarioItem) rawInput.scenario_item = scenarioItem
+    // The caveat is DERIVED from `mutation` (D6): present together or not at all.
+    // A doctored trace shows the undoctored pixels, so the reviewer needs both.
+    if (mutation !== undefined) {
+      rawInput.mutation = mutation
+      rawInput.screenshot_caveat = SCREENSHOT_CAVEAT
+    }
+    if (gradedSkeleton.length) rawInput.graded_evidence = gradedSkeleton
+    if (rawPrompt !== undefined) rawInput.prompt = rawPrompt
+
+    // THIS item's verdict is the trace's output (no completion re-parse). The
+    // no-scenario shape falls back to the raw completion.
+    const rawOutput = descriptor
+      ? itemVerdicts.find(v => v.itemIndex === descriptor.itemIndex)
+      : rawCompletion
+
+    return {
+      id: descriptor ? itemTraceId(span, descriptor.itemIndex) : traceIdFor(span),
+      name: `judge ${behaviorId}`,
+      // Deep-scrub the entire input/output so EVERY nested string is covered
+      // (INV-2) — idempotent on the already-scrubbed model/error scalars above.
+      input: Object.keys(rawInput).length ? (deep(rawInput) as Record<string, unknown>) : undefined,
+      output: rawOutput !== undefined ? deep(rawOutput) : undefined,
+      metadata: { ...commonMetadata },
+    }
+  })
+}
+
+// PURE: splice the uploaded media tokens onto a skeleton body by INDEX —
+// `graded_evidence[n].screenshot = tokens[n]` — and set the honest
+// `screenshots_attached` count. Index-based (NOT keyed by capture_file, which has
+// no uniqueness invariant: two CAPTUREs can share a basename) so a token never
+// lands on the wrong capture (INV-4). Returns a NEW body; never mutates.
+export function attachTokens(body: TraceBody, tokens: (string | undefined)[]): TraceBody {
+  const input = body.input as Record<string, unknown> | undefined
+  const graded = input?.graded_evidence
+  if (!Array.isArray(graded)) return body
+  let attached = 0
+  const nextGraded = graded.map((entry, n) => {
+    const tok = tokens[n]
+    if (typeof tok === 'string') {
+      attached++
+      return { ...(entry as Record<string, unknown>), screenshot: tok }
+    }
+    return entry
+  })
   return {
-    id: traceIdFor(span),
-    name: `judge ${behaviorId}`,
-    input: Object.keys(input).length ? input : undefined,
-    output: completion,
-    metadata: {
-      behavior_id: behaviorId,
-      impl: a['qa.judge.impl'],
-      model,
-      input_tokens: num(a['gen_ai.usage.input_tokens']),
-      output_tokens: num(a['gen_ai.usage.output_tokens']),
-      tool_rejected: a['qa.tool_rejected'],
-      status: span.status.code,
-      error,
-      duration_ms: Math.round((span.end_time_unix_nano - span.start_time_unix_nano) / 1e6),
-      // Honesty: say how many screenshots the judge HAD vs how many made it here.
-      // A silent gap between the two would misrepresent the evidence.
-      screenshots_expected: screenshots.length,
-      screenshots_attached: mediaTokens.length,
-    },
+    ...body,
+    input: { ...input, graded_evidence: nextGraded },
+    metadata: { ...body.metadata, screenshots_attached: attached },
   }
 }
 
@@ -207,50 +318,78 @@ export async function exportSpans(
   const scrubber = createScrubber()
   const scrub = (s: string): string => scrubber.scrub(s)
 
+  // Langfuse ingestion dedups by EVENT id, so a re-export must carry FRESH event
+  // ids (else it is silently dropped) while trace ids stay STABLE (so it
+  // OVERWRITES). One nonce per submission gives both (INV-6).
+  const nonce = crypto.randomUUID()
+
   for (const span of spans) {
-    const traceId = traceIdFor(span)
-    try {
-      // The trace must exist before media can be registered against it.
-      await api(cfg, 'POST', '/api/public/ingestion', {
-        batch: [
-          {
-            id: `evt-${traceId}-init`,
-            type: 'trace-create',
-            timestamp: new Date().toISOString(),
-            body: { id: traceId, name: `judge ${span.attributes['qa.behavior_id']}` },
-          },
-        ],
-      })
+    const behaviorId = String(span.attributes['qa.behavior_id'] ?? 'unknown')
+    // The per-index screenshot paths, from the span's graded_evidence — the
+    // reviewer sees each token attributed to its OWN capture, so registration is
+    // per index (undefined at indices with no screenshot).
+    const spanGraded = Array.isArray(span.attributes['qa.graded_evidence'])
+      ? (span.attributes['qa.graded_evidence'] as GradedEvidenceEntry[])
+      : []
+    const screenshotPaths = spanGraded.map(e => e.screenshot)
+    const expected = screenshotPaths.filter((p): p is string => typeof p === 'string').length
 
-      const files = Array.isArray(span.attributes['qa.screenshots'])
-        ? (span.attributes['qa.screenshots'] as string[])
-        : []
-      const tokens: string[] = []
-      for (const f of files) {
-        const tok = await uploadMedia(cfg, traceId, f)
-        if (tok) tokens.push(tok)
+    // ONE trace per graded item (spec line 41). Each item-trace runs its OWN
+    // media lifecycle against its OWN trace id: `uploadMedia` REGISTERS against a
+    // specific traceId, so a registration for item-trace 0 does not exist for
+    // item-trace 1. Bytes dedup server-side by sha — the first trace PUTs, later
+    // ones HIT and get the same token value cheaply.
+    for (const body of buildTraceBody(span, scrub)) {
+      try {
+        // (1) The trace must exist before media can be registered against it.
+        await api(cfg, 'POST', '/api/public/ingestion', {
+          batch: [
+            {
+              id: `evt-${body.id}-init-${nonce}`,
+              type: 'trace-create',
+              timestamp: new Date().toISOString(),
+              body: { id: body.id, name: body.name },
+            },
+          ],
+        })
+
+        // (2) Register/upload each expected screenshot against THIS trace's id,
+        // by index. All-or-nothing PER TRACE (INV-4): if ANY expected token is
+        // missing, this trace ships ZERO tokens (honest expected=N/attached=0)
+        // rather than mis-attributing a partial set; sibling traces are
+        // independent.
+        const tokens: (string | undefined)[] = []
+        let missing = false
+        for (const p of screenshotPaths) {
+          if (typeof p !== 'string') {
+            tokens.push(undefined)
+            continue
+          }
+          const tok = await uploadMedia(cfg, body.id, p)
+          if (!tok) missing = true
+          tokens.push(tok)
+        }
+        const finalTokens = missing ? [] : tokens
+        const attached = finalTokens.filter((t): t is string => typeof t === 'string').length
+        result.screenshots += attached
+
+        // (3) The final body event carries the tokens attached by index.
+        await api(cfg, 'POST', '/api/public/ingestion', {
+          batch: [
+            {
+              id: `evt-${body.id}-${nonce}`,
+              type: 'trace-create',
+              timestamp: new Date().toISOString(),
+              body: attachTokens(body, finalTokens),
+            },
+          ],
+        })
+        result.traces++
+        log(`  ${behaviorId} → ${body.id} (media ${attached}/${expected})`)
+      } catch (err) {
+        result.failed++
+        log(`  FAILED ${behaviorId}: ${err instanceof Error ? err.message : String(err)}`)
       }
-      result.screenshots += tokens.length
-
-      await api(cfg, 'POST', '/api/public/ingestion', {
-        batch: [
-          {
-            id: `evt-${traceId}`,
-            type: 'trace-create',
-            timestamp: new Date().toISOString(),
-            body: buildTraceBody(span, tokens, scrub),
-          },
-        ],
-      })
-      result.traces++
-      log(
-        `  ${span.attributes['qa.behavior_id']} → ${traceId} (media ${tokens.length}/${files.length})`
-      )
-    } catch (err) {
-      result.failed++
-      log(
-        `  FAILED ${span.attributes['qa.behavior_id']}: ${err instanceof Error ? err.message : String(err)}`
-      )
     }
   }
   return result

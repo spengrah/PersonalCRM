@@ -1,3 +1,6 @@
+import * as fs from 'fs'
+import * as os from 'os'
+import * as path from 'path'
 import { describe, it, expect } from 'vitest'
 import {
   codexArgs,
@@ -8,7 +11,9 @@ import {
   verdictsFromCodexOutput,
 } from './codex-exec'
 import { applyGrounding } from '../grader/grade'
-import type { JudgeInput } from './types'
+import { parseSpanFile } from '../export/langfuse'
+import type { GradedEvidenceEntry } from '../label-trace'
+import type { JudgeInput, PerItemVerdict } from './types'
 
 // A canned codex `--json` event stream: a couple of lifecycle events then the
 // final schema-constrained agent message.
@@ -283,5 +288,105 @@ describe('makeCodexExecJudge (injected run — no live call)', () => {
     // The adapter returns the raw fail; the grader's grounding rule downgrades it.
     expect(v.verdict).toBe('fail')
     expect(applyGrounding(v).verdict).toBe('unsure')
+  })
+})
+
+// The codex side of the both-adapters test: the appended span must carry the
+// label-trace content (scenario + graded evidence + prompt + completion) AND its
+// qa.item_verdicts must EQUAL the NORMALIZED array the adapter RETURNS — proving
+// the span is built AFTER normalization, not from the pre-normalization parse.
+describe('makeCodexExecJudge — span carries label-trace content + normalized verdicts', () => {
+  // Two graded items so an omitted-item fill is observable; two sections + two
+  // images so codex attaches per-capture screenshots.
+  const contentInput: JudgeInput = {
+    behaviorId: 'CON-042',
+    behaviorTitle: 'delete confirmation',
+    given: 'a contact exists',
+    when: 'the user deletes it',
+    then: ['warns cannot be undone', 'closes', 'removes the row'],
+    items: [
+      { itemIndex: 0, thenText: 'warns cannot be undone' },
+      { itemIndex: 2, thenText: 'removes the row' },
+    ],
+    evidence: {},
+    captureSections: [
+      { captureFile: '001.json', note: 'dialog', evidence: { url: 'http://x/1' } },
+      { captureFile: '002.json', note: 'gone', evidence: { url: 'http://x/2' } },
+    ],
+    images: ['/runs/001.png', '/runs/002.png'],
+  }
+
+  async function spanFor(
+    run: (args: string[], prompt: string) => Promise<string>
+  ): Promise<{ span: ReturnType<typeof parseSpanFile>[number]; verdicts: PerItemVerdict[] }> {
+    const tracePath = path.join(
+      os.tmpdir(),
+      `qa-span-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.jsonl`
+    )
+    try {
+      const verdicts = await makeCodexExecJudge({ run, tracePath })(contentInput)
+      const [span] = parseSpanFile(fs.readFileSync(tracePath, 'utf8'))
+      return { span, verdicts }
+    } finally {
+      fs.rmSync(tracePath, { force: true })
+    }
+  }
+
+  it('carries scenario + graded_evidence + prompt + completion, with per-capture screenshots', async () => {
+    const { span } = await spanFor(async () =>
+      stream({
+        verdicts: [
+          { item_index: 0, verdict: 'fail', citation: 'dialog', critique: 'k' },
+          { item_index: 2, verdict: 'pass', citation: 'row', critique: 'k' },
+        ],
+      })
+    )
+    expect((span.attributes['qa.scenario'] as { kind: string }).kind).toBe('behavior')
+    const graded = span.attributes['qa.graded_evidence'] as GradedEvidenceEntry[]
+    expect(graded.map(g => g.captureFile)).toEqual(['001.json', '002.json'])
+    // codex-exec CAN attach images → each entry carries its own screenshot path.
+    expect(graded.map(g => g.screenshot)).toEqual(['/runs/001.png', '/runs/002.png'])
+    expect(span.attributes['qa.screenshots']).toEqual(['/runs/001.png', '/runs/002.png'])
+    expect(typeof span.attributes['gen_ai.prompt']).toBe('string')
+    expect(typeof span.attributes['gen_ai.completion']).toBe('string')
+  })
+
+  // qa.item_verdicts EQUALS the returned array across all four normalization paths.
+  it('(a) success: item_verdicts equals the returned verdicts', async () => {
+    const { span, verdicts } = await spanFor(async () =>
+      stream({
+        verdicts: [
+          { item_index: 0, verdict: 'fail', citation: 'dialog', critique: 'k' },
+          { item_index: 2, verdict: 'pass', citation: 'row', critique: 'k' },
+        ],
+      })
+    )
+    expect(span.attributes['qa.item_verdicts']).toEqual(verdicts)
+    expect(verdicts.map(v => v.verdict)).toEqual(['fail', 'pass'])
+  })
+
+  it('(b) omitted item: span carries the FILLED (unsure) verdict, matching the return', async () => {
+    const { span, verdicts } = await spanFor(async () =>
+      stream({ verdicts: [{ item_index: 0, verdict: 'fail', citation: 'dialog', critique: 'k' }] })
+    )
+    expect(span.attributes['qa.item_verdicts']).toEqual(verdicts)
+    // item 2 was omitted by the model → filled unsure, NOT the pre-norm parse.
+    expect(verdicts.find(v => v.itemIndex === 2)?.verdict).toBe('unsure')
+  })
+
+  it('(c) tool-rejection: span carries allUnsure, matching the return', async () => {
+    const { span, verdicts } = await spanFor(async () =>
+      stream({ verdicts: [] }, { withTool: true })
+    )
+    expect(span.attributes['qa.item_verdicts']).toEqual(verdicts)
+    expect(verdicts.every(v => v.verdict === 'unsure')).toBe(true)
+  })
+
+  it('(d) thrown run: span carries allUnsure, matching the return', async () => {
+    const { span, verdicts } = await spanFor(async () => {
+      throw new Error('boom')
+    })
+    expect(span.attributes['qa.item_verdicts']).toEqual(verdicts)
+    expect(verdicts.every(v => v.verdict === 'unsure')).toBe(true)
   })
 })

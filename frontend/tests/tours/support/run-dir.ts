@@ -6,6 +6,15 @@
 
 import * as fs from 'fs'
 import * as path from 'path'
+import type { Capture } from './types'
+
+// A capture as loaded from disk, carrying its source filename. `__sourceFile`
+// is a LOADER-ONLY field (basename of the capture's .json path) — it is kept
+// OFF the persisted, versioned `Capture` format (producers never emit it) and
+// exists only so the label-trace export can attribute each graded evidence
+// entry to its real source file (spec line 53). See the report walk
+// (report/render.ts), which stamps it.
+export type LoadedCapture = Capture & { __sourceFile?: string }
 
 // support/ → tests/tours/. `typeof __dirname` is safe even when undeclared.
 const supportDir =
