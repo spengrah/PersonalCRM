@@ -10,6 +10,7 @@ It is deliberately distinct from `.ai/spec/`, which holds design documents. This
 domain: contacts
 prefix: CON
 maturity: reviewed   # draft | reviewed | ratified
+e2e_settled: false   # optional; true flips the coverage scanner from warn to block for this domain
 behaviors: [...]
 ```
 
@@ -26,6 +27,7 @@ Maturity semantics (per-file, so the paradigm switches on domain-by-domain):
   title: Soft-deleting a contact cascades to its dependents
   type: business-logic    # business-logic | api | ux | invariant | data
   status: current         # current | proposed | retired
+  surface: none           # ui | api | none — which deterministic-test layer owns proving it
   given: a contact with methods and notes
   when: the contact is deleted
   then:
@@ -46,13 +48,15 @@ Field rules:
   - `ux` — what the user can see/do at a surface, expressed DOM-free (no selectors, no copy). Track B's judge. `ux` behaviors are also produced *forward* by design sessions (including AI design work): a design mints its intended surface behavior as `status: proposed`, the implementation PR flips it to `current` under the maintenance rule, and a design that reverses an existing surface follows retire-and-mint.
   - `invariant` — always-true cross-cutting property (e.g. soft-delete filtering, deterministic ordering).
   - `data` — persistence/derived-data correctness (cascades, dedup, derived cache columns).
-  - `intent` — a judged experience goal: the durable purpose its serving `ux` behaviors exist for (e.g. "the dashboard tells the user who to reach out to, at a glance"), expressed as a single `statement`. Consumed ONLY by the Track B agentic judge — an intent is by construction not provable by a deterministic test, so **deterministic tests never cite intent IDs** (Piece 3's scanner will enforce this; until then it is a rule). Intents are the top of the design-session grain ladder: a design mints its goal as a `proposed` intent first, granular `ux` behaviors follow as planning progresses, and the implementation flips both `current`. The judge grades a `current` intent as regression detection and a `proposed` intent as progress detection.
+  - `intent` — a judged experience goal: the durable purpose its serving `ux` behaviors exist for (e.g. "the dashboard tells the user who to reach out to, at a glance"), expressed as a single `statement`. Consumed ONLY by the Track B agentic judge — an intent is by construction not provable by a deterministic test, so **deterministic tests never cite intent IDs** (the coverage scanner rejects such citations as invalid). Intents are the top of the design-session grain ladder: a design mints its goal as a `proposed` intent first, granular `ux` behaviors follow as planning progresses, and the implementation flips both `current`. The judge grades a `current` intent as regression detection and a `proposed` intent as progress detection.
+- **`surface`** — which deterministic-test layer owns proving the behavior; drives the Piece 3 coverage scanner. `ui` = a browser-driven E2E test must cite it (every then-item covered or waived); `api` = the HTTP contract is owned by the Go API/handler tests; `none` = backend-internal, owned by unit/integration tests. Required on every non-intent, non-retired behavior; forbidden on intents (judge-only). Classification rule: a browser-facing `type: ux` behavior is always `ui`; a `ux` behavior of a non-browser surface (mac-daemon notifications, CLI flows) is `none` — no browser test can ever reach it; other types are `ui` only if a then-clause asserts something a user can see in the browser.
 - **`status`** — carries the is/ought split. `current` = faithfully describes today's behavior. `proposed` = desired behavior that does not (fully) hold today. If curation reveals today's behavior is a bug, the intended behavior is written as `proposed` (optionally with a filed bug) — **a bug is never enshrined as `current` intent**. `retired` = tombstone; the row stays intact so the ID is never reused, with a pointer in `notes` if superseded.
 - **`given`** — precondition; string or list of strings. Optional: omit when there is no meaningful precondition rather than writing filler.
 - **`when`** — the trigger; strictly a single string. A behavior needing two `when`s is two behaviors.
-- **`then`** — observable outcome(s); string or list of strings. Each list item is an independently checkable fact (a deterministic test maps items to assertions; the judge verifies item-by-item), and schema evolution becomes one-line diffs. Items get no IDs or keys — coverage and citation stay at behavior granularity. If a list item feels like it deserves its own ID, it is a separate behavior.
+- **`then`** — observable outcome(s); string or list of strings. Each list item is an independently checkable fact (a deterministic test maps items to assertions; the judge verifies item-by-item), and schema evolution becomes one-line diffs. Items get no IDs or keys — tests address them positionally (`ID[n]`, 0-based file position; see the citation rules below), which is why a then-list edit must update citing indexes in the same PR. If a list item feels like it deserves its own ID, it is a separate behavior.
 - **`statement`** — for `invariant`- and `intent`-type behaviors only, a single string that replaces `given`/`when`/`then` entirely (forcing "all queries filter soft-deleted rows" — or an experience goal — into GWT produces noise). Mutually exclusive with GWT; other types must use GWT.
 - **`serves`** — optional, `ux` and `intent` behaviors only: a list of intent IDs this behavior contributes evidence toward. Cross-domain references are legal and expected (a cadence-domain behavior may serve a dashboard-domain intent — the linter resolves corpus-wide); an intent may serve a broader intent, giving the multi-grain refinement ladder. Every target must exist and be `type: intent`. The judge inverts these edges to bind captured evidence to each intent, so an unserved intent is judgeable only by captures tagged with its ID directly.
+- **`waivers`** — ui-surface behaviors only: a list of `{then: <0-based index>, reason: <text>}` entries recording the deliberate decision (the relaxation rubric's DROP verdict) that a then-item is neither deterministically E2E-provable nor worth a judge intent. The coverage scanner reports waived items loudly (with the reason) instead of counting them as orphans, and flags a stale waiver when a waived item gains a citing test.
 - **`provenance`** — set-once list of source references (code symbols, test files, design docs) recording what the behavior was derived from. A historical record: non-load-bearing, allowed to rot, nothing parses it for enforcement.
 - **`notes`** — optional free text.
 
@@ -97,18 +101,18 @@ A behavior that moves domains gets a new ID; the old one is retired with a point
 
 Deterministic tests cite the behavior IDs they cover with a source-comment marker. The pointer points **into** the SSOT (a test names the behavior it proves); the SSOT never points back at tests — there is no `coverage` field. Piece 3's traceability scanner reads these markers and diffs them against the corpus; Piece 2 ships only the format and its first hand-applied uses, no tooling.
 
-**Marker.** A citation is a line comment of the exact form `// spec: <ID>[, <ID> ...]` — literally `//`, one space, `spec:`, then one or more behavior IDs separated by commas. To cite many IDs, either comma-separate them on one line or stack multiple `// spec:` lines. The same marker string is used on every test surface (Go `testing`, Playwright, Vitest, and any future MCP tests): a line comment is byte-identical across surfaces, inert (it cannot break compilation or a test run), and couples test code to no framework annotation API.
+**Marker.** A citation is a line comment of the exact form `// spec: <ref>[, <ref> ...]` — literally `//`, one space, `spec:`, then one or more references separated by commas, where each reference is a behavior ID (`IMP-021`) or a then-item reference (`IMP-021[2]`, 0-based index into the behavior's `then` list). The marker must be the only content on its line — in a scanned test file, a `// spec:` that trails other content (e.g. after an assertion) is reported as an invalid citation rather than silently ignored, so a mis-placed marker can never rot unseen. To cite many references, either comma-separate them on one line or stack multiple `// spec:` lines. The same marker string is used on every test surface (Go `testing`, Playwright, Vitest, and any future MCP tests): a line comment is byte-identical across surfaces, inert (it cannot break compilation or a test run), and couples test code to no framework annotation API.
 
 **Placement.** Put the citation next to the assertions that prove the behavior. Two canonical placements:
 
 - **Function level** — the marker sits on the line(s) immediately preceding the test declaration (`func TestXxx`, `test(...)`, `test.describe(...)`), separated from it only by blank or other comment lines. It binds to the whole test.
 - **Subtest level** — the marker is the first statement line(s) inside a `t.Run("name", func(t *testing.T) { ... })` body (or inside a `test(...)` body). It binds to that subtest. Prefer this when only some subtests prove the cited behavior — a function-level marker binds to every subtest, including generic ones that prove no behavior.
 
-**Granularity and cardinality.** Citations are behavior-granular only — cite `IMP-021`, never a `then`-item index (the SSOT has no sub-IDs, and coverage is defined at behavior granularity). Cardinality is free N:M: one test may cite several behaviors, and one behavior may be cited by many tests. No uniqueness constraint.
+**Granularity and cardinality.** E2E tests cite per then-item (`CON-045[3]`) — the granularity the verifier→E2E migration established — so the coverage scanner can tell which facets of a behavior a test actually proves. A bare behavior-granular citation (`IMP-021`) is also legal and claims the whole behavior (every then-item); it is the norm for the Go API tests and for statement behaviors, which have no then list to index. Then-item indexes are 0-based file positions, not sub-IDs: reordering or inserting `then` items shifts them, so a PR that edits a cited behavior's `then` list must update the citing tests' indexes in the same PR (the scanner catches truncation via out-of-range indexes, but cannot detect a reorder). Cardinality is free N:M: one test may cite several references, and one then-item may be cited by many tests. No uniqueness constraint. (An earlier rule said citations are behavior-granular only; the per-then-item convention supersedes it.)
 
 **Cite-on-write.** Every new or deliberately-relaxed test carries citations. The existing suite is **not** retrofitted — untouched tests stay un-cited and read as orphans in Piece 3's report, which drives a later backfill. Going forward, cite-on-write is the soft norm for new and changed tests.
 
-**A citation asserts truth.** `// spec: X` means *this test verifies behavior X holds today*. Cite only `status: current` behaviors your test actually asserts green — never cite a `proposed` behavior as if a passing test proved it (a bug is never enshrined as `current`; see the maintenance rule). Never cite an `intent` behavior: intents are judge-only by construction (a deterministic test cannot prove an experience goal), and Piece 3's scanner will reject such citations. Not every assertion maps to a behavior: a generic framework-level contract (an unknown-id 404, a malformed-input 400) that no behavior owns simply carries no marker.
+**A citation asserts truth.** `// spec: X` means *this test verifies behavior X holds today*. Cite only `status: current` behaviors your test actually asserts green — never cite a `proposed` behavior as if a passing test proved it (a bug is never enshrined as `current`; see the maintenance rule). Never cite an `intent` behavior: intents are judge-only by construction (a deterministic test cannot prove an experience goal), and the coverage scanner rejects such citations. Not every assertion maps to a behavior: a generic framework-level contract (an unknown-id 404, a malformed-input 400) that no behavior owns simply carries no marker.
 
 **Worked examples.**
 
@@ -123,23 +127,30 @@ func TestRematchAPI_PollableRescan(t *testing.T) {
 ```
 
 ```ts
-// Playwright — function-level above the describe, plus a subtest-level cite inside.
+// Playwright — function-level above the describe, plus a then-item-level cite inside.
 // spec: IMP-021
 test.describe('Rematch on add email', () => {
   test('adding a matching email links a past event', async ({ page, request }) => {
-    // spec: CAL-019
+    // spec: CAL-019, IMP-021[2]
     ...
   })
 })
 ```
 
-**Scanner-readiness / validity.** The authoritative valid-ID set is `spec.ParseDir("spec/")` → the parsed behaviors' `.ID` values (the `backend/internal/spec` package, unchanged by Piece 2). A citation is *dead* iff its ID is not in that set; a behavior is an *orphan* iff no citation names it. Piece 2 does not build the scanner, validator, or CI gate that computes these (that is Piece 3); its proof is a one-off grep that resolves each cited ID against the corpus.
+**The coverage scanner (Piece 3).** `make spec-coverage` (backend/cmd/spec-coverage) cross-references citations in the deterministic test surfaces (backend `*_test.go`, `frontend/tests/e2e/*.spec.ts`) against the corpus and reports, per domain:
+
+- **covered** — a then-item of a `surface: ui`, `status: current` behavior cited by an E2E test (bare cite covers all items; indexed cite covers item `n`; a `ui` invariant's statement is one implicit item, coverable only bare).
+- **waived** — a then-item with a `waivers` entry; reported loudly with the reason. A waived item that gains a citing test is flagged as a stale waiver (warning).
+- **orphan** — a then-item of a `ui`/`current` behavior with neither citation nor waiver. Warn-only by default; hard-fails once the domain's spec file declares `e2e_settled: true`.
+- **invalid citations** — always a failure, regardless of settlement: a malformed marker, an unknown ID (dead reference), an out-of-range then-index, an indexed cite of a statement behavior, or a cite of an `intent` (judge-only), `proposed` (a citation asserts truth), or `retired` behavior.
+
+`api`- and `none`-surface behaviors are exempt from E2E coverage by construction; an E2E citation of a non-`ui` behavior draws a warning (it usually means the surface tag is wrong). The Go API tests' citations are validated for deadness but do not count toward ui coverage.
 
 ## Linting
 
-`make spec-lint` validates the corpus (wired into the pre-push LINT lane and CI's `spec` path group). Checks: YAML parses; required fields present (`domain`, `prefix`, `maturity`, `behaviors`; per-behavior `id`, `title`, `type`, `status`); enums valid (`type`, `status`, `maturity`); `id` matches `<PREFIX>-NNN` against the file's declared `prefix`; prefixes unique across files; IDs unique within a file and globally; `when` is a singular string; GWT xor `statement` per the type rules; `given`/`then`/`serves` list items are non-empty strings; `serves` appears only on `ux`/`intent` behaviors and every target resolves corpus-wide to an existing `intent` behavior (self-references rejected).
+`make spec-lint` validates the corpus (wired into the pre-push LINT lane and CI's `spec` path group). Checks: YAML parses; required fields present (`domain`, `prefix`, `maturity`, `behaviors`; per-behavior `id`, `title`, `type`, `status`, and `surface` on non-intent non-retired behaviors); enums valid (`type`, `status`, `maturity`, `surface`); `id` matches `<PREFIX>-NNN` against the file's declared `prefix`; prefixes unique across files; IDs unique within a file and globally; `when` is a singular string; GWT xor `statement` per the type rules; `given`/`then`/`serves` list items are non-empty strings; `serves` appears only on `ux`/`intent` behaviors and every target resolves corpus-wide to an existing `intent` behavior (self-references rejected); `surface` forbidden on intents; `e2e_settled` a boolean; `waivers` only on ui-surface behaviors, with in-range unique then-indexes and non-empty reasons.
 
-The linter is minimal by design — parse + validate only. Coverage/orphan/dead-ID checks and behavior-changed-without-test-change detection are Piece 3.
+The linter is minimal by design — parse + validate only. Coverage/orphan/dead-ID checks live in the Piece 3 scanner (`make spec-coverage`, above); behavior-changed-without-test-change detection remains future work.
 
 ## Maintenance rule
 

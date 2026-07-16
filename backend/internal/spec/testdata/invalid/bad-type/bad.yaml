@@ -6,6 +6,7 @@ behaviors:
     title: an unknown type
     type: frobnicate
     status: current
+    surface: none
     when: x
     then:
       - y

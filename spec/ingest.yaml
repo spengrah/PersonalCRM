@@ -8,6 +8,7 @@ behaviors:
     title: The ingest endpoint is feature-gated and auth-dispatched by request header
     type: api
     status: current
+    surface: api
     given: the daemon ingest events endpoint
     when: a batch is posted to the ingest endpoint
     then:
@@ -20,6 +21,7 @@ behaviors:
     title: Request-level limits reject the whole ingest request
     type: api
     status: current
+    surface: api
     given: a POST to the ingest endpoint
     when: the request envelope is checked before per-event processing
     then:
@@ -33,6 +35,7 @@ behaviors:
     title: A bad event is rejected individually without failing the batch
     type: api
     status: current
+    surface: api
     given: a batch of events that pass request-level checks
     when: the batch is processed
     then:
@@ -46,6 +49,7 @@ behaviors:
     title: Per-event validation checks fields, bounds, kind, and payload shape
     type: api
     status: current
+    surface: api
     given: a single event in the batch
     when: the event is validated
     then:
@@ -59,6 +63,7 @@ behaviors:
     title: The daemon payload version envelope gates on a known version
     type: api
     status: current
+    surface: api
     given: a daemon-emitted event (message, external-contact, meeting-note, or call)
     when: the payload version is checked
     then:
@@ -71,6 +76,7 @@ behaviors:
     title: A host revoked mid-batch stops the daemon
     type: api
     status: current
+    surface: api
     given: a daemon batch whose host is revoked between authentication and commit
     when: the batch reaches its in-transaction host-liveness check
     then:
@@ -84,6 +90,7 @@ behaviors:
     title: Event kinds are partitioned across the two auth paths
     type: business-logic
     status: current
+    surface: api
     given: an authenticated ingest request
     when: each event's kind is checked against the auth path it arrived on
     then:
@@ -99,6 +106,7 @@ behaviors:
     title: Domain failures reject one event while infrastructure failures roll back the batch
     type: business-logic
     status: current
+    surface: none
     given: a batch persisted in a single transaction
     when: an event fails
     then:
@@ -111,6 +119,7 @@ behaviors:
     title: Each event's writes are isolated in a savepoint
     type: invariant
     status: current
+    surface: none
     statement: every event in a batch is processed inside its own nested savepoint, so a domain rejection rolls back only that event's writes (event-log row, identity row, staging row) while already-committed events in the same batch are unaffected.
     provenance: [IngestService.IngestBatch]
 
@@ -118,6 +127,7 @@ behaviors:
     title: Ingest side effects are ordered around the transaction boundary
     type: invariant
     status: current
+    surface: none
     statement: within batch processing, payload invariants are verified before any savepoint opens, the durable event row is published before its domain mutation, aggregator jobs are enqueued in the outer transaction, and external HTTP side effects (follow-up task sync) run only after the transaction commits.
     provenance: [IngestService.IngestBatch, batchPostCommit]
     notes: Publish-before-mutate keeps events from being stranded on a mutation failure, and external-HTTP-after-commit keeps network I/O from stalling the connection inside the transaction.
@@ -126,6 +136,7 @@ behaviors:
     title: A duplicate re-submit is a counted no-op
     type: business-logic
     status: current
+    surface: none
     given: an event whose (source, source_id) already exists in the event log
     when: it is re-submitted in a batch
     then:
@@ -138,6 +149,7 @@ behaviors:
     title: Host liveness is re-checked inside the batch transaction
     type: business-logic
     status: current
+    surface: none
     given: a daemon batch on the host-auth path
     when: the batch transaction opens
     then:
@@ -152,6 +164,7 @@ behaviors:
     title: Event publication is idempotent by source identity
     type: data
     status: current
+    surface: none
     given: an event carrying a non-empty source_id
     when: it is published within a transaction
     then:
@@ -163,6 +176,7 @@ behaviors:
     title: Consumer routing runs before the event row is inserted
     type: invariant
     status: current
+    surface: none
     statement: consumer-job routing is resolved before the event row is inserted, so a routing or payload-decode failure rolls the transaction back without leaving a durable event row that has no consumer attached.
     provenance: [Bus.PublishTx, consumerJobsForKind]
 
@@ -170,6 +184,7 @@ behaviors:
     title: Malformed envelopes are refused at publish
     type: business-logic
     status: current
+    surface: none
     given: an event envelope handed to the bus
     when: it is published
     then:
@@ -181,6 +196,7 @@ behaviors:
     title: Each event kind routes to a fixed set of consumers
     type: business-logic
     status: current
+    surface: none
     given: a published event
     when: its consumer jobs are enqueued
     then:
@@ -195,6 +211,7 @@ behaviors:
     title: The event log is an append-only durable record
     type: invariant
     status: current
+    surface: none
     statement: published events are written to an append-only log that is never updated or deleted in place, giving every ingested signal a durable audit row independent of whether its downstream consumers succeed.
     provenance: [InsertEvent, migrations/036_event_table.up.sql]
 
@@ -204,6 +221,7 @@ behaviors:
     title: Interaction dedup is source-aware
     type: data
     status: current
+    surface: none
     given: an interaction being recorded
     when: the recorder checks for an existing row
     then:
@@ -216,6 +234,7 @@ behaviors:
     title: The time-window dedup key includes direction
     type: data
     status: current
+    surface: none
     given: two manual interactions for the same contact within the dedup window
     when: they carry opposite directions
     then:
@@ -227,6 +246,7 @@ behaviors:
     title: A replayed interaction fires no downstream side effects
     type: invariant
     status: current
+    surface: none
     statement: source_ref interaction uniqueness is enforced by a partial unique index, and a dedup/replay hit short-circuits before the recorded-event emit, so redelivery of the same source event never re-fires cadence, follow-up, or aggregation side effects.
     provenance: [idx_interaction_source_ref, ContactService.RecordInteractionTx, RecordInteractionResult.IsReplay]
 
@@ -236,6 +256,7 @@ behaviors:
     title: Multi-entity events attribute one interaction per entity via per-entity source_ref
     type: data
     status: current
+    surface: none
     given: a single ingested event that concerns several contacts (e.g. a meeting with several participants)
     when: interactions are written for that event
     then:
@@ -249,6 +270,7 @@ behaviors:
     title: One recorder is the sole writer of ingested interactions
     type: invariant
     status: current
+    surface: none
     statement: interaction rows for the recorder's input kinds (messages, calendar-attended, task completion/outreach, manual) are written only through the shared record-interaction path, so dedup and cadence application stay centralized and no ingest path inserts interaction rows directly.
     provenance: [InteractionRecorder, ContactService.RecordInteractionTx]
 
@@ -256,6 +278,7 @@ behaviors:
     title: Recorded interactions apply cadence and follow-up in the same transaction
     type: invariant
     status: current
+    surface: none
     statement: when an ingested interaction is recorded it publishes a recorded-interaction event and applies cadence and follow-up inline in the same transaction (claimed exactly-once against redelivery), while the external follow-up task sync is deferred to a post-commit step.
     provenance: [InteractionRecorder.HandleEvent, ContactService.RecordInteractionTx, event_consumer_claim]
     notes: The cadence math and follow-up task lifecycle are cadence-followup scope (see CAD-005, CAD-011); ING owns the ordering and the sole-writer routing.
@@ -266,6 +289,7 @@ behaviors:
     title: The ingest source registry is the single descriptor table for daemon families
     type: invariant
     status: current
+    surface: none
     statement: the four daemon-push families (message, external-contact, meeting-note, call) are defined in one descriptor table that owns each family's kinds, allowed sources, verifier, and interaction pairing; every kind belongs to at most one family, and a family writes interactions if and only if it declares an interaction source.
     provenance: [daemonFamilies, kindToFamily, buildKindToFamilyIndex]
     notes: Cross-package agreement (event kinds, allowed push sources, the interaction.source SQL CHECK, provider stubs) is enforced against this table by tests, not by runtime wiring.
@@ -274,6 +298,7 @@ behaviors:
     title: Batch routing carries no hard-coded per-kind branching
     type: invariant
     status: current
+    surface: none
     statement: batch dispatch routes every event through the registry index rather than per-kind constants or family predicates, enforced by a lint guard over the batch function, so a new family is added by extending the descriptor table instead of editing the batch control flow.
     provenance: [scripts/check-ingest-registry.sh, ingest_registry_guard_static_test.go]
 
@@ -283,6 +308,7 @@ behaviors:
     title: Staged messages aggregate into interactions with reply-bridging and coalescing
     type: business-logic
     status: current
+    surface: none
     given: unprocessed staged messages for a contact and chat
     when: incremental aggregation runs
     then:
@@ -296,6 +322,7 @@ behaviors:
     title: Reply bridging never crosses contacts
     type: business-logic
     status: current
+    surface: none
     given: a reply whose referenced message resolves to an existing interaction
     when: the bridge is considered
     then:
@@ -307,6 +334,7 @@ behaviors:
     title: Aggregation is enqueued per batch and backstopped by a periodic sweeper
     type: business-logic
     status: current
+    surface: none
     given: staged messages awaiting aggregation
     when: they need to become interactions
     then:
@@ -320,6 +348,7 @@ behaviors:
     title: Raw messages stage with first-push-wins cross-host dedup
     type: data
     status: current
+    surface: none
     given: a raw message event from a host
     when: it is staged
     then:
@@ -331,6 +360,7 @@ behaviors:
     title: Call outcome decides whether an interaction is recorded
     type: business-logic
     status: current
+    surface: none
     given: an ingested call
     when: the interaction-creation decision is applied
     then:
@@ -343,6 +373,7 @@ behaviors:
     title: Peer-resolution outcomes differ across the message and call pipelines
     type: business-logic
     status: current
+    surface: none
     given: an ingested message or call
     when: its peer handle is resolved to a contact
     then:
@@ -355,6 +386,7 @@ behaviors:
     title: A re-recorded meeting note dedups via content and resolution hashes
     type: business-logic
     status: current
+    surface: none
     given: a meeting note that already exists for its session
     when: it is re-recorded
     then:
@@ -368,6 +400,7 @@ behaviors:
     title: Deleting a meeting note cascades soft-delete to its session interactions
     type: data
     status: current
+    surface: none
     given: a meeting-note deletion for a known session
     when: the deletion is applied
     then:
@@ -381,6 +414,7 @@ behaviors:
     title: Session interaction re-sync diffs through the sole-writer path
     type: business-logic
     status: current
+    surface: none
     given: a re-recorded meeting note whose resolved participant set changed
     when: its session interactions are reconciled
     then:
@@ -394,6 +428,7 @@ behaviors:
     title: Sessions needing review are surfaced in the ingest response
     type: api
     status: current
+    surface: api
     given: a batch containing meeting-note recordings
     when: a recording lands in a conflict or orphan state
     then:
@@ -406,6 +441,7 @@ behaviors:
     title: Daemon-asserted payload facts are re-verified server-side
     type: invariant
     status: current
+    surface: api
     statement: for every daemon family the server re-checks the daemon's claims before trusting them — the payload host id must equal the authenticated host, the envelope source must be in the family's allow-list, and the source_id must match the payload's own dedup key (verbatim for message and call, or as an <entity>@<content-hash> composite whose entity prefix must match the payload and whose hash suffix must equal a server-recomputed content hash, for external-contact and meeting-note); normalized phone peers are likewise recomputed and must match — so a buggy or compromised daemon is rejected rather than allowed to corrupt state.
     provenance: [verifyRawMessageInvariants, verifyCallInvariants, verifyExternalContactInvariants, verifyMeetingNoteInvariants, ComputeContentHash]
     notes: External-contact match-state and revive lifecycle is IMP (IMP-007, IMP-008); this behavior covers only the ingest-side integrity re-checks.
@@ -414,6 +450,7 @@ behaviors:
     title: Call direction forces the answered and voicemail fields during staging
     type: business-logic
     status: current
+    surface: none
     given: a call being staged
     when: direction-specific fields are normalized
     then:
@@ -426,6 +463,7 @@ behaviors:
     title: Phone calls deduplicate on the Apple call id across hosts
     type: data
     status: current
+    surface: none
     given: the same call pushed more than once, including from two hosts
     when: it is upserted into the phone-call staging table
     then:

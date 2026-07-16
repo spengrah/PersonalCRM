@@ -1,0 +1,13 @@
+domain: beta
+prefix: BET
+maturity: reviewed
+e2e_settled: True
+behaviors:
+  - id: BET-001
+    title: an orphan in a settled domain blocks
+    type: ux
+    status: current
+    surface: ui
+    when: x
+    then:
+      - y

@@ -1,0 +1,55 @@
+domain: contacts
+prefix: CON
+maturity: reviewed
+behaviors:
+  - id: CON-001
+    title: waivers not a sequence
+    type: ux
+    status: current
+    surface: ui
+    when: x
+    then:
+      - y
+    waivers: nope
+  - id: CON-002
+    title: waiver item not a mapping
+    type: ux
+    status: current
+    surface: ui
+    when: x
+    then:
+      - y
+    waivers:
+      - just a string
+  - id: CON-003
+    title: waiver then not an integer
+    type: ux
+    status: current
+    surface: ui
+    when: x
+    then:
+      - y
+    waivers:
+      - then: first
+        reason: r
+  - id: CON-004
+    title: waiver without a reason
+    type: ux
+    status: current
+    surface: ui
+    when: x
+    then:
+      - y
+    waivers:
+      - then: 0
+  - id: CON-005
+    title: waiver reason not a string
+    type: ux
+    status: current
+    surface: ui
+    when: x
+    then:
+      - y
+    waivers:
+      - then: 0
+        reason: 7

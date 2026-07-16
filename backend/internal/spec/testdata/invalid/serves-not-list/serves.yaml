@@ -6,6 +6,7 @@ behaviors:
     title: a ux behavior with a mapping serves
     type: ux
     status: current
+    surface: none
     when: the surface renders
     then:
       - something shows

@@ -8,6 +8,7 @@ behaviors:
     title: Pairing tokens are short-lived single-use secrets stored only as a hash
     type: business-logic
     status: current
+    surface: none
     given: an operator mints a pairing token
     when: the token is created
     then:
@@ -20,6 +21,7 @@ behaviors:
     title: Pairing atomically consumes the token and provisions the host
     type: business-logic
     status: current
+    surface: none
     given: a valid unconsumed unexpired pairing token
     when: a host pairs with it
     then:
@@ -32,6 +34,7 @@ behaviors:
     title: Pair endpoint contract
     type: api
     status: current
+    surface: api
     given: a request to the pairing endpoint
     when: it is handled
     then:
@@ -46,6 +49,7 @@ behaviors:
     title: At most one live host exists at any time
     type: invariant
     status: current
+    surface: none
     statement: at most one non-revoked mac_host row exists at a time, enforced by a partial unique index over live rows; revoked host rows may coexist freely, and a pairing attempt while a host is already live is rejected rather than creating a second host.
     provenance: [idx_mac_host_singleton, migrations/047_mac_host.up.sql, ErrHostAlreadyPaired]
     notes: Multi-host is deferred (cross-host content-hash source_id collisions are unresolved).
@@ -54,6 +58,7 @@ behaviors:
     title: Pairing is rate-limited per source address ahead of any lookup
     type: business-logic
     status: current
+    surface: none
     given: repeated pairing attempts from one source address
     when: the per-address limit is exceeded
     then:
@@ -66,6 +71,7 @@ behaviors:
     title: Expired unconsumed pairing tokens are reaped
     type: data
     status: current
+    surface: none
     given: pairing tokens that expired without being consumed
     when: the periodic janitor runs
     then:
@@ -79,6 +85,7 @@ behaviors:
     title: Daemon authentication flow and error taxonomy
     type: api
     status: current
+    surface: api
     given: a request to a daemon-authenticated endpoint
     when: authentication runs
     then:
@@ -94,6 +101,7 @@ behaviors:
     title: Per-host failed-auth limiting precedes the key comparison and refunds on success
     type: business-logic
     status: current
+    surface: none
     given: repeated failed authentication attempts for one host id
     when: the per-host limiter is consulted
     then:
@@ -109,6 +117,7 @@ behaviors:
     title: API-key rotation is compare-and-swap guarded and identity-preserving
     type: business-logic
     status: current
+    surface: none
     given: a rotate request authenticated with the current key plus a pairing token
     when: rotation runs
     then:
@@ -122,6 +131,7 @@ behaviors:
     title: Rotate-key endpoint contract
     type: api
     status: current
+    surface: api
     given: a rotate-key request
     when: it is handled
     then:
@@ -138,6 +148,7 @@ behaviors:
     title: Heartbeat records liveness and echoes restore-detection state
     type: api
     status: current
+    surface: api
     given: an authenticated daemon heartbeat
     when: it is handled
     then:
@@ -151,6 +162,7 @@ behaviors:
     title: Heartbeat enforces a minimum daemon protocol version
     type: api
     status: current
+    surface: api
     given: a heartbeat whose protocol version is below the server minimum
     when: it is handled
     then:
@@ -163,6 +175,7 @@ behaviors:
     title: Push sources are a fixed allowlist
     type: invariant
     status: current
+    surface: api
     statement: the cursor get/commit and known-ids endpoints accept only a fixed allowlist of push sources (messages, icloud_contacts, anarlog_humans, anarlog_sessions, phone_calls), validated at the handler before any database access; the cursor get/commit service methods additionally re-check the allowlist as defence-in-depth for a non-HTTP caller, while known-ids relies on the handler check (an unguarded unknown source there merely returns an empty set). An unknown source is a validation error, which prevents a daemon from creating a push-strategy sync row keyed on a poll-strategy source name.
     provenance: [mac.AllowedPushSources, IsAllowedPushSource, MacHostService.CommitCursor/GetCursor]
 
@@ -172,6 +185,7 @@ behaviors:
     title: Cursor commit is an epoch-and-base compare-and-swap
     type: business-logic
     status: current
+    surface: none
     given: a cursor commit carrying a claimed epoch and a base cursor
     when: the commit runs
     then:
@@ -186,6 +200,7 @@ behaviors:
     title: Reading a cursor returns committed state or an empty baseline
     type: api
     status: current
+    surface: api
     given: a daemon reading its cursor for a source
     when: the read is handled
     then:
@@ -200,6 +215,7 @@ behaviors:
     title: Revoking a host cascades its cursor rows atomically
     type: data
     status: current
+    surface: none
     given: a live host with push-strategy cursor rows
     when: the host is revoked
     then:
@@ -212,6 +228,7 @@ behaviors:
     title: Revoked hosts are invisible to all authentication and ingest reads
     type: invariant
     status: current
+    surface: none
     statement: every authentication and ingest-liveness read filters out revoked hosts, so a revoked host cannot authenticate, heartbeat, rotate, commit a cursor, or ingest; only the admin detail view returns revoked host rows.
     provenance: [GetActiveMacHostByID, GetActiveMacHostByIDForUpdate, RevokeMacHost/UpdateMacHostHeartbeat/RotateMacHostAPIKey WHERE clauses]
 
@@ -219,6 +236,7 @@ behaviors:
     title: Admin host surfaces list, inspect, count, mint, and revoke
     type: api
     status: current
+    surface: ui
     given: admin requests (global api key) against the hosts collection
     when: they are handled
     then:
@@ -234,6 +252,7 @@ behaviors:
     title: Known-IDs drives daemon tombstone reconciliation
     type: business-logic
     status: current
+    surface: none
     given: a daemon requests its known ids for a source
     when: the set is computed
     then:
@@ -247,6 +266,7 @@ behaviors:
     title: Known-identifiers exposes the user's canonical contact identifiers
     type: business-logic
     status: current
+    surface: none
     given: a daemon polls for the user's known identifiers
     when: the set is computed
     then:
@@ -265,6 +285,7 @@ behaviors:
     title: External-contact host ownership is claimed once and preserved
     type: data
     status: current
+    surface: none
     given: a daemon upsert of an external contact
     when: ownership is written
     then:
@@ -277,6 +298,7 @@ behaviors:
     title: External-contact deletes validate the daemon content hash against stored state
     type: invariant
     status: current
+    surface: none
     statement: an external-contact delete carries a source-id hash suffix that the backend validates against the row's stored last content hash before tombstoning, rejecting a stale delete, with defined bypasses for the unknown-hash sentinel and already-tombstoned rows; the daemon and backend compute this hash identically (strip the top-level host id, canonicalize, then hash).
     provenance: [service/ingest.go EXTERNAL_CONTACT_DELETE_HASH_MISMATCH, external_contact_hash.go, CRMMacCore/ContentHasher.swift]
     notes: The upsert-side content-hash parity — rejecting an upsert whose source-id hash suffix disagrees with the server recompute — is the ingest server-side re-verification invariant ING-036; this row pins the delete-side validation, which ING-036 does not cover.
@@ -285,6 +307,7 @@ behaviors:
     title: External-contact deletes are host-scoped and idempotent
     type: business-logic
     status: current
+    surface: none
     given: a daemon delete for an external contact
     when: the delete is processed
     then:
@@ -302,6 +325,7 @@ behaviors:
     title: Address-book reconcile triggers method re-propagation for linked contacts
     type: business-logic
     status: current
+    surface: none
     given: an address-book external contact already linked to a CRM contact that later gains a method upstream
     when: reconcile runs for that row
     then:
@@ -313,6 +337,7 @@ behaviors:
     title: Reconcile skips dead targets and survives per-row failures
     type: business-logic
     status: current
+    surface: none
     given: an address-book row still pointing at a contact
     when: reconcile evaluates the target
     then:
@@ -326,6 +351,7 @@ behaviors:
     title: A silent host raises a heartbeat-staleness breach
     type: business-logic
     status: current
+    surface: none
     given: an active host whose last heartbeat is older than the heartbeat threshold
     when: the staleness watchdog runs
     then:
@@ -338,6 +364,7 @@ behaviors:
     title: A stale enabled source raises a push-staleness breach
     type: business-logic
     status: current
+    surface: none
     given: a host reporting per-source health with enabled sources
     when: the watchdog evaluates push freshness
     then:
@@ -350,6 +377,7 @@ behaviors:
     title: Breaches are reconciled to the current candidate set
     type: business-logic
     status: current
+    surface: none
     given: the set of current breach candidates
     when: the watchdog reconciles
     then:
@@ -365,6 +393,7 @@ behaviors:
     title: The daemon persists its api key device-locally and config-independently
     type: invariant
     status: current
+    surface: none
     statement: the daemon stores its api key on-device only and never iCloud-synced, keyed by a constant account name rather than the host id so the key survives a corrupted config, and the file-store fallback writes atomically with restrictive permissions.
     provenance: [ProductionKeychainStore.swift, FileAPIKeyStore.swift]
     notes: File-store fallback details are asserted from the surface inventory, not read line-by-line.
@@ -373,6 +402,7 @@ behaviors:
     title: Daemon exit codes surface operator-actionable states
     type: business-logic
     status: current
+    surface: none
     given: the launchd-managed daemon terminates
     when: it exits
     then:
@@ -383,6 +413,7 @@ behaviors:
     title: Source plugins run on independent schedules
     type: business-logic
     status: current
+    surface: none
     given: the running daemon
     when: its source plugins are scheduled
     then:
@@ -394,6 +425,7 @@ behaviors:
     title: Sessions needing attention raise self-healing macOS notifications
     type: ux
     status: current
+    surface: none
     given: the daemon learns a meeting session needs attention as an orphan or a conflict
     when: it surfaces a notification
     then:
@@ -408,6 +440,7 @@ behaviors:
     title: Notification delivery recovers from denial and collapses duplicates
     type: business-logic
     status: current
+    surface: none
     given: a notification whose delivery is denied or fails
     when: the daemon next reconciles
     then:
@@ -419,6 +452,7 @@ behaviors:
     title: Status and doctor are read-only operator diagnostics
     type: ux
     status: current
+    surface: none
     given: an operator runs the daemon's status or doctor command
     when: it executes
     then:
@@ -431,6 +465,7 @@ behaviors:
     title: Operator ops commands refuse to run against a live daemon
     type: ux
     status: current
+    surface: none
     given: an operator runs an ops command such as configure, backfill, scan, or cursor-reset
     when: the daemon is running
     then:
@@ -443,6 +478,7 @@ behaviors:
     title: Install pairs, registers, and provisions the daemon
     type: ux
     status: current
+    surface: none
     given: an operator installs the daemon with pairing
     when: install runs
     then:

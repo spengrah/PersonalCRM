@@ -1,0 +1,10 @@
+domain: dashboard
+prefix: DSH
+maturity: reviewed
+behaviors:
+  - id: DSH-001
+    title: an intent carrying a surface tag
+    type: intent
+    status: current
+    surface: ui
+    statement: the dashboard tells the user who to reach out to

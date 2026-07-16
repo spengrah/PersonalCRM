@@ -8,6 +8,7 @@ behaviors:
     title: All assertion-store writes go through one validated write path
     type: invariant
     status: current
+    surface: none
     statement: every producer of knowledge (user profile edits, contact merges, enrichment inference, operator backfills) writes to the assertion store through the single validated assert path — which owns proposition identity, cardinality and supersession, the bi-temporal clocks, provenance dedup, and event emission in one transaction — and a validation failure rejects the write (rolling back the transaction) rather than silently dropping the assertion.
     provenance: [AssertService, ErrAssertValidation, knowledgeWriter, ContactKnowledgeMigrationService, TagMigrationService]
     notes: There is no raw-INSERT side door; even the tag/column data migrations route through this path so dedup and events apply uniformly.
@@ -16,6 +17,7 @@ behaviors:
     title: Assertion writes are validated against the catalog and the live graph
     type: business-logic
     status: current
+    surface: none
     given: an assert request naming a subject, predicate, and payload
     when: the write is validated
     then:
@@ -32,6 +34,7 @@ behaviors:
     title: Provenance locators are validated per source kind
     type: business-logic
     status: current
+    surface: none
     given: an assert request carrying provenance locators
     when: the locators are validated
     then:
@@ -46,6 +49,7 @@ behaviors:
     title: Landing status follows the predicate's review policy
     type: business-logic
     status: current
+    surface: none
     given: a valid assert request for a predicate with a default review policy
     when: the new assertion lands
     then:
@@ -58,6 +62,7 @@ behaviors:
     title: Relationship edges are stored in one canonical form
     type: data
     status: current
+    surface: none
     given: an edge assertion whose predicate is symmetric or has an inverse
     when: the edge is written
     then:
@@ -69,6 +74,7 @@ behaviors:
     title: Re-asserting an existing proposition corroborates instead of duplicating
     type: data
     status: current
+    surface: none
     given: a live assertion whose proposition identity (canonical subject, predicate, normalized value, valid-time bucket) matches an incoming write
     when: the write is applied
     then:
@@ -84,6 +90,7 @@ behaviors:
     title: At most one live assertion exists per proposition
     type: invariant
     status: current
+    surface: none
     statement: the database enforces at most one live (proposed or accepted, knowledge-open) assertion per proposition key via a partial unique index, and a concurrent identical write that loses the race is recovered inside the transaction (savepoint rollback, re-read, corroborate the winner) rather than failing the caller.
     provenance: [idx_assertion_live_proposition, insertAssertionWithRecover, isLivePropositionViolation]
 
@@ -91,6 +98,7 @@ behaviors:
     title: A different value written to a single-cardinality slot supersedes the current one
     type: business-logic
     status: current
+    surface: none
     given: a single-cardinality slot (e.g. a person's current location) holding an accepted value
     when: a different value is asserted as accepted with an overlapping validity window
     then:
@@ -104,6 +112,7 @@ behaviors:
     title: Reaffirming the same value widens the existing stint instead of superseding it
     type: business-logic
     status: current
+    surface: none
     given: an accepted assertion and an incoming accepted write carrying the same value for the same slot with an overlapping window
     when: the write is applied
     then:
@@ -118,6 +127,7 @@ behaviors:
     title: Past-bounded history coexists with the current value
     type: business-logic
     status: current
+    surface: none
     given: a slot with a current accepted value
     when: a different value is asserted with a validity window that ended in the past
     then:
@@ -130,6 +140,7 @@ behaviors:
     title: A future-dated successor bounds the current value until its date arrives
     type: business-logic
     status: current
+    surface: none
     given: a slot with a current accepted value
     when: a different value is asserted with a validity start in the future
     then:
@@ -141,6 +152,7 @@ behaviors:
     title: A scheduled rollover terminalizes bounded values whose date has passed
     type: business-logic
     status: current
+    surface: none
     given: accepted assertions bounded by a pending successor whose validity end has been reached
     when: the periodic rollover sweep runs
     then:
@@ -154,6 +166,7 @@ behaviors:
     title: Clearing a slot closes the current value with no successor
     type: business-logic
     status: current
+    surface: none
     given: a single-cardinality slot
     when: a closure is requested for the slot
     then:
@@ -166,6 +179,7 @@ behaviors:
     title: Accepting a proposed assertion applies full slot conflict resolution
     type: business-logic
     status: current
+    surface: none
     given: a proposed assertion under review
     when: it is accepted
     then:
@@ -180,6 +194,7 @@ behaviors:
     title: Reject and retract are status-guarded terminal transitions
     type: business-logic
     status: current
+    surface: none
     given: an assertion under review or correction
     when: a reject or retract transition is applied
     then:
@@ -193,6 +208,7 @@ behaviors:
     title: The assertion row enforces its shape and clocks at the schema level
     type: data
     status: current
+    surface: none
     given: any attempt to persist an assertion row
     when: the row is written
     then:
@@ -209,6 +225,7 @@ behaviors:
     title: Every assertion state change emits a durable event inside the write transaction
     type: invariant
     status: current
+    surface: none
     statement: assertion lifecycle changes (proposed, accepted, superseded, rejected) and provenance additions publish events on the transactional event bus within the same transaction as the state change, keyed idempotently (one-shot per lifecycle transition, per-locator for provenance, per merge-destination for merge moves) so retries never double-publish; the event bus is mandatory wiring — the write path does not operate without it.
     provenance: [emitAssertionEvent, emitProvenanceAddedEvent, emitMergeMoveEvent, busPublisher]
 
@@ -216,6 +233,7 @@ behaviors:
     title: Only accepted and superseded events drive downstream recomputation
     type: business-logic
     status: current
+    surface: none
     given: a published assertion event
     when: consumer jobs are routed
     then:
@@ -229,6 +247,7 @@ behaviors:
     title: Node tombstones gate all live graph reads
     type: invariant
     status: current
+    surface: none
     statement: a node's single tombstone (deleted-at, set by contact deletion or merge) removes it from every live graph read — an assertion is only current/live when its subject node is live and, for an edge, its object node is live — and entity and venue subtype rows carry no tombstone of their own, inheriting liveness from their parent node; assertion rows themselves are retained as history.
     provenance: [GetCurrentAccepted, ListLiveEdgesForNode, node.deleted_at, entity.sql]
     notes: This is why a deleted or merged-away contact's knowledge never resurfaces (see KNW-026); node soft-deletion itself is contact-domain scope (CON-010, CON-033).
@@ -237,6 +256,7 @@ behaviors:
     title: Place entities deduplicate on their normalized name
     type: data
     status: current
+    surface: none
     given: a location label to resolve to a place node
     when: the place is ensured
     then:
@@ -252,6 +272,7 @@ behaviors:
     title: Merging nodes re-canonicalizes repointed assertions and resolves winner-side collisions
     type: business-logic
     status: current
+    surface: none
     given: a loser node being merged into a winner (the loser already tombstoned with a merge alias)
     when: the assertion merge runs
     then:
@@ -267,6 +288,7 @@ behaviors:
     title: Edges between the merging pair collapse and close
     type: business-logic
     status: current
+    surface: none
     given: an edge connecting the loser and winner of a node merge
     when: the merge rewrite would turn it into a self-referencing edge
     then:
@@ -278,6 +300,7 @@ behaviors:
     title: A repointed current value competes in the winner's slot
     type: business-logic
     status: current
+    surface: none
     given: an accepted single-cardinality assertion repointed onto the winner during a node merge
     when: it lands in the winner's slot
     then:
@@ -293,6 +316,7 @@ behaviors:
     title: Contact knowledge columns are derived from current-accepted assertions
     type: data
     status: current
+    surface: none
     given: a contact's location, birthday, and how-met cache columns
     when: a cache refresh recomputes a column
     then:
@@ -307,6 +331,7 @@ behaviors:
     title: Cache refresh is inline for the writer and event-driven for everyone else
     type: business-logic
     status: current
+    surface: none
     given: an assertion write that affects a contact knowledge column
     when: the cache is refreshed
     then:
@@ -319,6 +344,7 @@ behaviors:
     title: Cache maintenance is bookkeeping, not a profile edit
     type: data
     status: current
+    surface: none
     given: a contact whose knowledge cache column is being refreshed
     when: the column update is applied
     then:
@@ -333,6 +359,7 @@ behaviors:
     title: Contact profile knowledge fields are written as assertions
     type: business-logic
     status: current
+    surface: none
     given: a contact create, update, or merge carrying location, birthday, or how-met values
     when: the profile write is applied
     then:
@@ -347,6 +374,7 @@ behaviors:
     title: Blank knowledge values mean no value, and clears close slots
     type: business-logic
     status: current
+    surface: none
     given: a contact write whose location or how-met value is blank or whitespace-only, or whose location/birthday was cleared
     when: the knowledge fields are reconciled
     then:
@@ -361,6 +389,7 @@ behaviors:
     title: Enrichment infers knowledge only into empty fields, as agent-provenance assertions
     type: business-logic
     status: current
+    surface: none
     given: a contact being enriched from a linked external contact
     when: the enrichment computes inferred fields
     then:
@@ -374,6 +403,7 @@ behaviors:
     title: Losing an inferred knowledge value is an error, not a warning
     type: business-logic
     status: current
+    surface: none
     given: an enrichment that inferred a location or birthday
     when: the transaction persisting the inferred assertions fails, or the knowledge writer is not wired
     then:
@@ -387,6 +417,7 @@ behaviors:
     title: The knowledge-column backfill is an idempotent mirror into the graph
     type: business-logic
     status: current
+    surface: none
     given: legacy contact rows with location, birthday, or how-met column values
     when: the operator runs the knowledge-column migration command
     then:
@@ -401,6 +432,7 @@ behaviors:
     title: The tag migration mirrors legacy tags into the graph, failing loudly on ambiguity
     type: business-logic
     status: current
+    surface: none
     given: legacy tags and contact-tag links
     when: the operator runs the tag migration command
     then:
@@ -419,6 +451,7 @@ behaviors:
     title: Knowledge reaches the user only through the contact's derived fields
     type: invariant
     status: current
+    surface: api
     statement: no HTTP endpoint exposes assertions, graph nodes, edges, predicates, or provenance — the assertion store is invisible to clients, and the only client-visible projection of the knowledge graph is the contact payload's derived location, birthday, and how-met fields.
     provenance: [cmd/crm-api/main.go SP1 no-handler comment, contact_dto.go]
     notes: Deliberate phasing — the write API exists for later phases to consume over HTTP. how-met is carried on the wire contract but currently has no rendering or editing surface anywhere in the UI (which is why its absence on update is a no-op — KNW-028).
@@ -427,6 +460,7 @@ behaviors:
     title: Contact detail shows knowledge fields only when known
     type: ux
     status: current
+    surface: ui
     given: a contact detail page
     when: the profile section renders
     then:
@@ -438,6 +472,7 @@ behaviors:
     title: Year-less birthdays display without a year or age
     type: ux
     status: current
+    surface: ui
     given: a contact whose birthday was stored with the placeholder year that marks a year-less (imported) birthday
     when: the birthday is displayed on any surface
     then:

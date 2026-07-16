@@ -8,6 +8,7 @@ behaviors:
     title: Telegram integration is gated on the feature flag and credentials
     type: invariant
     status: current
+    surface: none
     statement: Telegram runs only when the sync feature flag is enabled and non-zero MTProto API credentials are configured; when disabled, no Telegram HTTP routes are registered, no MTProto connection is attempted, the post-import hook is not wired, and the Telegram aggregation reenqueuer is a no-op.
     provenance: [config.Features.EnableTelegramSync, cmd/crm-api/main.go gate, RegisterTelegramRoutes, NoopAggregatorReenqueuer]
     notes: The settings surface that exposes enablement/connection to the user is settings-domain scope; this pins only the backend gating.
@@ -16,6 +17,7 @@ behaviors:
     title: Enabling Telegram sync requires credentials at startup
     type: business-logic
     status: current
+    surface: none
     given: the Telegram sync feature flag is enabled
     when: configuration is validated at startup
     then:
@@ -27,6 +29,7 @@ behaviors:
     title: MTProto session data is encrypted at rest
     type: data
     status: current
+    surface: none
     given: a Telegram MTProto session persisted during or after key exchange
     when: the session bytes are stored and later loaded
     then:
@@ -38,6 +41,7 @@ behaviors:
     title: MTProto update state is persisted so reconnects resume without gaps
     type: data
     status: current
+    surface: none
     given: an active MTProto connection whose update manager tracks gap-recovery state
     when: the update manager persists and reloads MTProto state
     then:
@@ -52,6 +56,7 @@ behaviors:
     title: An in-flight Telegram auth flow expires after a fixed TTL and tears down
     type: business-logic
     status: current
+    surface: none
     given: an in-flight auth session (at most one exists at a time)
     when: its fixed 5-minute TTL expires
     then:
@@ -64,6 +69,7 @@ behaviors:
     title: Starting auth sends a login code
     type: business-logic
     status: current
+    surface: ui
     given: no connected session and no auth flow in progress
     when: auth is started for a phone number
     then:
@@ -76,6 +82,7 @@ behaviors:
     title: Verification progresses code then optional password to connected
     type: business-logic
     status: current
+    surface: ui
     given: an auth flow awaiting a verification step
     when: a verification value is submitted
     then:
@@ -89,6 +96,7 @@ behaviors:
     title: Auth rejections are retryable while infrastructure errors abort
     type: business-logic
     status: current
+    surface: none
     given: a verification submission that Telegram rejects
     when: the error is classified
     then:
@@ -100,6 +108,7 @@ behaviors:
     title: Telegram auth endpoints map outcomes to status codes
     type: api
     status: current
+    surface: api
     given: requests to the Telegram auth endpoints
     when: they are handled
     then:
@@ -116,6 +125,7 @@ behaviors:
     title: Disconnect tears down in order and requires the session row to clear
     type: business-logic
     status: current
+    surface: none
     given: a connected or authenticating Telegram integration
     when: the user disconnects
     then:
@@ -130,6 +140,7 @@ behaviors:
     title: The connection starts only when authenticated
     type: business-logic
     status: current
+    surface: none
     given: a stored Telegram session
     when: the manager starts
     then:
@@ -141,6 +152,7 @@ behaviors:
     title: Reported status resolves from the live connection then the database
     type: business-logic
     status: current
+    surface: ui
     given: a request for Telegram status
     when: the status is resolved
     then:
@@ -153,6 +165,7 @@ behaviors:
     title: A dropped connection reconnects with bounded backoff
     type: business-logic
     status: current
+    surface: none
     given: a running Telegram connection
     when: the live connection drops
     then:
@@ -166,6 +179,7 @@ behaviors:
     title: Effective tracking derives from status and chat size
     type: business-logic
     status: current
+    surface: none
     given: a group chat with a tracking status and a known-or-unknown member count
     when: effective tracking is computed
     then:
@@ -178,6 +192,7 @@ behaviors:
     title: A first-seen group chat is auto-configured before the tracking gate
     type: business-logic
     status: current
+    surface: none
     given: a message from a group chat with no config row yet
     when: it is ingested
     then:
@@ -189,6 +204,7 @@ behaviors:
     title: Switching a chat to tracked backfills its history retroactively
     type: business-logic
     status: current
+    surface: none
     given: a chat whose status changes to tracked from a non-tracked status
     when: the change is applied
     then:
@@ -199,6 +215,7 @@ behaviors:
     title: Participant changes refresh a group chat's member count
     type: business-logic
     status: current
+    surface: none
     given: an existing group chat config
     when: a chat-participant update is handled
     then:
@@ -211,6 +228,7 @@ behaviors:
     title: The chats endpoints list groups and validate status updates
     type: api
     status: current
+    surface: api
     given: requests to the Telegram chats endpoints
     when: they are handled
     then:
@@ -225,6 +243,7 @@ behaviors:
     title: Only person-to-person messages are ingested
     type: business-logic
     status: current
+    surface: none
     given: an incoming Telegram update
     when: it is parsed
     then:
@@ -237,6 +256,7 @@ behaviors:
     title: Post-store matching and aggregation are best-effort
     type: business-logic
     status: current
+    surface: none
     given: a stored live message
     when: post-store processing runs
     then:
@@ -248,6 +268,7 @@ behaviors:
     title: Sparse peer entities are backfilled without overriding authoritative data
     type: business-logic
     status: current
+    surface: none
     given: an ingested message
     when: its peer entity fields are resolved
     then:
@@ -259,6 +280,7 @@ behaviors:
     title: Edits re-store the message text
     type: data
     status: current
+    surface: none
     given: an edit update for a tracked chat
     when: it is handled
     then:
@@ -269,6 +291,7 @@ behaviors:
     title: Deletes soft-delete by message id and do not revive
     type: data
     status: current
+    surface: none
     given: a delete update
     when: it is handled
     then:
@@ -282,6 +305,7 @@ behaviors:
     title: Re-ingest deduplicates and preserves known peer data
     type: data
     status: current
+    surface: none
     given: a message re-ingested for a chat and message id already stored
     when: it is upserted
     then:
@@ -294,6 +318,7 @@ behaviors:
     title: Soft-deleted Telegram messages are invisible to production reads
     type: invariant
     status: current
+    surface: none
     statement: every production read of telegram_message excludes soft-deleted rows; only explicitly test-only queries bypass the deleted-at filter.
     provenance: [telegram_message.sql deleted_at filters, idx_telegram_message_not_deleted]
 
@@ -301,6 +326,7 @@ behaviors:
     title: Automated matching never re-points an already-matched message
     type: data
     status: current
+    surface: none
     given: stored messages for a peer
     when: the peer is matched to a contact by the automated path
     then:
@@ -313,6 +339,7 @@ behaviors:
     title: Telegram tables enforce closed vocabularies and identity keys
     type: invariant
     status: current
+    surface: none
     statement: chat type, message type, chat status, and session auth-state are each constrained to closed sets; the session is a singleton row; a chat config is unique per Telegram chat id; and a message is unique per chat-and-message-id pair.
     provenance: [migration 032_telegram.up.sql CHECK and UNIQUE constraints]
 
@@ -320,6 +347,7 @@ behaviors:
     title: Re-discovering a chat preserves the user's tracking choice
     type: data
     status: current
+    surface: none
     given: an existing chat config
     when: discovery re-upserts it
     then:
@@ -333,6 +361,7 @@ behaviors:
     title: Telegram interactions carry a stable source reference and labels
     type: data
     status: current
+    surface: none
     given: Telegram messages aggregated into an interaction
     when: the interaction is written
     then:
@@ -345,6 +374,7 @@ behaviors:
     title: Live messages aggregate incrementally while batches create only
     type: business-logic
     status: current
+    surface: none
     given: a trigger to aggregate a contact's Telegram messages
     when: aggregation runs
     then:
@@ -359,6 +389,7 @@ behaviors:
     title: Peer matching tries username then phone and syncs on match
     type: business-logic
     status: current
+    surface: none
     given: a peer carrying a username and/or phone
     when: it is matched to a contact
     then:
@@ -372,6 +403,7 @@ behaviors:
     title: A Telegram peer over the discovery minimum is normalized into a discovery candidate
     type: business-logic
     status: current
+    surface: none
     given: messages from a peer matched to no contact
     when: the peer's message count reaches the configured discovery minimum
     then:
@@ -384,6 +416,7 @@ behaviors:
     title: Linking a peer to a contact backfills its message history
     type: business-logic
     status: current
+    surface: none
     given: a Telegram peer linked to a contact through import, link, or rematch
     when: the link is recorded
     then:
@@ -396,6 +429,7 @@ behaviors:
     title: Rematch links stranded Telegram peers by handle or phone
     type: business-logic
     status: current
+    surface: none
     given: new Telegram-username or phone methods on a contact
     when: a rematch job runs for that contact
     then:
@@ -408,6 +442,7 @@ behaviors:
     title: Matching an ignored peer must not resurrect it
     type: business-logic
     status: proposed
+    surface: none
     given: a Telegram discovery candidate the user has ignored
     when: a later message matches that peer's identity to a contact
     then:
@@ -421,6 +456,7 @@ behaviors:
     title: Backfill discovers dialogs and fetches history to a horizon
     type: business-logic
     status: current
+    surface: none
     given: a fresh or reconnecting authenticated connection needing history
     when: backfill runs
     then:
@@ -434,6 +470,7 @@ behaviors:
     title: Backfill completion reconciles matches, interactions, and candidates
     type: business-logic
     status: current
+    surface: none
     given: a completed backfill pass
     when: the batch reconcile phase runs
     then:

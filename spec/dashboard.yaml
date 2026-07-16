@@ -6,6 +6,7 @@ behaviors:
     title: The dashboard is the application's default landing surface
     type: ux
     status: current
+    surface: ui
     given: the application root is opened
     when: the entry route resolves
     then:
@@ -18,6 +19,7 @@ behaviors:
     title: Every primary surface is reachable from a persistent global navigation
     type: ux
     status: current
+    surface: ui
     given: any primary application surface, including the dashboard
     when: the global navigation renders
     then:
@@ -31,6 +33,7 @@ behaviors:
     title: The dashboard always offers a path to add or browse contacts
     type: ux
     status: current
+    surface: ui
     given: the dashboard is open
     when: the surface renders in any state
     then:
@@ -44,6 +47,7 @@ behaviors:
     title: The overdue widget distinguishes loading and error states from its content
     type: ux
     status: current
+    surface: ui
     given: the overdue widget is loading or its request has failed
     when: the dashboard renders
     then:
@@ -58,6 +62,7 @@ behaviors:
     title: The overdue widget reflects overdue-membership changes made in other flows
     type: ux
     status: current
+    surface: ui
     given: an open dashboard whose overdue list has been fetched
     when: an action elsewhere changes who is overdue
     then:
@@ -65,6 +70,13 @@ behaviors:
       - this covers logging an interaction, merging contacts, and resolving a meeting note that touches a contact's cadence
       - purely cosmetic contact edits that do not change overdue membership do not disturb the list
       - returning focus to the window re-checks freshness, but refetches only once the list has gone stale (a 5-minute staleTime); refocusing sooner does not refetch
+    waivers:
+      - then: 1
+        reason: the per-flow freshness matrix is not deterministically provable in one browser test (documented at the DSH verifier→E2E migration); holistic freshness is judged under DSH-012
+      - then: 2
+        reason: proving a negative (no refetch on a cosmetic edit) means asserting the absence of a background request — inherently racy in a browser test; judge-owned under DSH-012
+      - then: 3
+        reason: the 5-minute staleTime gate depends on wall-clock query staleness the E2E harness cannot control deterministically; judge-owned under DSH-012
     serves: [DSH-012]
     provenance: [query-invalidation.ts overdue invalidation rules, use-contacts.ts useOverdueContacts]
     notes: The mark-as-contacted-from-dashboard path specifically is CAD-028; this pins the freshness contract for the flows that DO invalidate the overdue key today — interaction:created, contact:merged, and meeting-note:resolved. The import-link resolution and cadence-changing contact-edit flows do NOT refresh overdue today; that intended-but-broken freshness is DSH-009 (proposed), so it is deliberately excluded from this current claim. refetchOnWindowFocus is on but gated by the query's 5-minute staleTime (useOverdueContacts), so refocus refetches only when the list is already stale; there is no polling interval.
@@ -73,6 +85,7 @@ behaviors:
     title: A failed dashboard mark-as-contacted surfaces an error to the user
     type: ux
     status: proposed
+    surface: ui
     given: a dashboard mark-as-contacted action that fails
     when: the failure occurs
     then:
@@ -84,6 +97,7 @@ behaviors:
     title: Search is the contact list's search; the dashboard exposes no separate global search
     type: ux
     status: current
+    surface: ui
     given: a user wanting to find a contact by text
     when: they look for a search affordance
     then:
@@ -96,6 +110,7 @@ behaviors:
     title: The dashboard owns no persisted state of its own
     type: invariant
     status: current
+    surface: none
     statement: the dashboard materializes no data or scheduled job of its own — every widget is a live read over existing contact and cadence data, and its only write is the mark-as-contacted interaction (CAD-028); there is no dashboard-specific table, cron, or cached aggregate.
     provenance: [dashboard/page.tsx, ContactService.ListOverdueContacts, no dashboard scheduler job]
     notes: Consequence — dashboard correctness follows entirely from the contacts and cadence domains; there is nothing to backfill or reconcile on the dashboard side.
@@ -104,6 +119,7 @@ behaviors:
     title: Import-link and cadence-changing contact edits should refresh the overdue widget
     type: ux
     status: proposed
+    surface: ui
     given: an open dashboard whose overdue list has been fetched
     when: a flow whose invalidation rule omits the overdue key changes who is overdue
     then:

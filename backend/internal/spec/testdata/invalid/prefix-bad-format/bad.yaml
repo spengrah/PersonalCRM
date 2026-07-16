@@ -1,0 +1,12 @@
+domain: gchat
+prefix: Gc
+maturity: reviewed
+behaviors:
+  - id: Gc-001
+    title: a prefix outside the citation grammar
+    type: ux
+    status: current
+    surface: ui
+    when: x
+    then:
+      - y

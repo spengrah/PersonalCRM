@@ -8,6 +8,7 @@ behaviors:
     title: Calendar syncs as an account-scoped fetch-all provider
     type: business-logic
     status: current
+    surface: none
     given: the Google Calendar sync provider
     when: its configuration is read by the scheduler
     then:
@@ -21,6 +22,7 @@ behaviors:
     title: A calendar sync is scoped to one Google account
     type: business-logic
     status: current
+    surface: none
     given: a sync invocation for the calendar provider
     when: the sync runs
     then:
@@ -33,6 +35,7 @@ behaviors:
     title: The stored cursor selects a full or incremental sync
     type: business-logic
     status: current
+    surface: none
     given: a sync invocation carrying the account's stored sync cursor
     when: the sync path is chosen
     then:
@@ -45,6 +48,7 @@ behaviors:
     title: Initial sync spans one year past to thirty days ahead
     type: business-logic
     status: current
+    surface: none
     given: an initial (full) calendar sync
     when: the event window is computed
     then:
@@ -57,6 +61,7 @@ behaviors:
     title: An expired sync token falls back to a full resync
     type: business-logic
     status: current
+    surface: none
     given: an incremental sync whose stored sync token is no longer valid
     when: the calendar API reports the token expired (410 / full sync required)
     then:
@@ -68,6 +73,7 @@ behaviors:
     title: One malformed event never aborts the whole sync
     type: business-logic
     status: current
+    surface: none
     given: a sync page containing an event that fails to process
     when: that event is handled
     then:
@@ -81,6 +87,7 @@ behaviors:
     title: The CRM stores an event only while the user has accepted it
     type: business-logic
     status: current
+    surface: none
     given: a calendar event observed during sync
     when: the keep decision is evaluated
     then:
@@ -95,6 +102,7 @@ behaviors:
     title: A previously-stored event that turns non-accepted is removed and its interactions cleaned up
     type: business-logic
     status: current
+    surface: none
     given: an event the CRM had stored that is now observed non-accepted (declined, tentative, needs-action, cancelled, or user-removed)
     when: the remove branch runs
     then:
@@ -109,6 +117,7 @@ behaviors:
     title: The attendee list is assembled with the organizer always included
     type: business-logic
     status: current
+    surface: none
     given: a stored calendar event
     when: its attendee list is built
     then:
@@ -121,6 +130,7 @@ behaviors:
     title: System and resource addresses are excluded from attendee matching
     type: business-logic
     status: current
+    surface: none
     given: an event's assembled attendee list
     when: attendees are considered for contact matching
     then:
@@ -134,6 +144,7 @@ behaviors:
     title: Unmatched attendees become per-person import candidates with meeting context
     type: business-logic
     status: current
+    surface: none
     given: an attendee who matched no existing contact
     when: the attendee is recorded for later import
     then:
@@ -149,6 +160,7 @@ behaviors:
     title: Past accepted meetings project a mutual interaction per matched contact
     type: business-logic
     status: current
+    surface: none
     given: a stored, confirmed event with matched contacts whose end time is in the past
     when: past-event projection runs after each sync
     then:
@@ -162,6 +174,7 @@ behaviors:
     title: One meeting with N attendees yields N independent interactions
     type: data
     status: current
+    surface: none
     given: a single calendar event with several matched contacts
     when: attendance is projected and interactions are recorded
     then:
@@ -175,6 +188,7 @@ behaviors:
     title: A calendar event is uniquely one row per event, calendar, and account
     type: data
     status: current
+    surface: none
     given: repeated syncs observing the same Google event
     when: the event is written
     then:
@@ -186,6 +200,7 @@ behaviors:
     title: Re-matching an event reopens it for projection without re-projecting unchanged ones
     type: data
     status: current
+    surface: none
     given: an event being re-synced whose matched-contact set may have changed
     when: the event is upserted
     then:
@@ -199,6 +214,7 @@ behaviors:
     title: Declining a past meeting retracts the interaction it created
     type: business-logic
     status: current
+    surface: none
     given: a matched contact with an interaction derived from a now-declined event
     when: the decline is handled
     then:
@@ -211,6 +227,7 @@ behaviors:
     title: Calendar state changes publish their downstream event before they mutate
     type: invariant
     status: current
+    surface: none
     statement: every calendar removal or re-link publishes its downstream event before it mutates the backing state, so a publish failure never strands a false or orphaned interaction and the next sync or rematch re-runs cleanly. The decline remove branch is atomic — it publishes each contact's decline and deletes the event row in a single transaction, so a publish failure rolls back the delete. Rematch is not transactional — it publishes attendance in its own already-committed transaction, then appends the contact as a separate write, so a publish failure skips the append and leaves the matched set unchanged; the next rematch re-selects the pair, the publish dedups as a no-op, and only the append retries.
     provenance: [removeDeclinedEvent, CalendarRematchHandler.Rematch, publishCalendarDeclinedTx, publishCalendarAttended, events.Bus.Publish]
 
@@ -218,6 +235,7 @@ behaviors:
     title: A decline racing an attendance projection never leaves a false interaction
     type: data
     status: current
+    surface: none
     given: a past-attendance projection and a decline of the same event racing
     when: the attendance interaction is about to be inserted
     then:
@@ -232,6 +250,7 @@ behaviors:
     title: Adding a matching email retroactively links a contact to past meetings
     type: business-logic
     status: current
+    surface: ui
     given: a contact who gains an email address that appears on stored events not yet linked to them
     when: a calendar rematch runs for that email
     then:
@@ -247,6 +266,7 @@ behaviors:
     title: Calendar events are hard-deleted and cancelled ones are invisible
     type: invariant
     status: current
+    surface: api
     statement: the calendar event table has no soft-delete column — removal is a hard delete — and every contact-facing read filters out cancelled events, so cancelled or removed meetings never appear in any contact's event list, count, or upcoming view.
     provenance: [DeleteCalendarEventByGcalID, calendar_event.sql status filters, migrations/016_calendar_event.up.sql]
 
@@ -254,6 +274,7 @@ behaviors:
     title: Every contact-facing event read has a deterministic order
     type: invariant
     status: current
+    surface: api
     statement: all contact-facing calendar reads impose an explicit order — meeting history is returned most-recent-first and upcoming lists soonest-first — so results never depend on arbitrary database ordering.
     provenance: [ListEventsForContact, ListUpcomingEventsForContact, calendar_event.sql ORDER BY clauses]
 
@@ -263,6 +284,7 @@ behaviors:
     title: Calendar events are exposed only through read endpoints
     type: api
     status: current
+    surface: api
     given: the calendar HTTP surface
     when: a client requests events
     then:
@@ -277,6 +299,7 @@ behaviors:
     title: Event responses expose an attendee count, never attendee addresses
     type: api
     status: current
+    surface: api
     given: a calendar event serialized for an API response
     when: the response body is built
     then:
@@ -290,6 +313,7 @@ behaviors:
     title: The Meetings section appears only when a contact has events
     type: ux
     status: current
+    surface: ui
     given: a contact detail page
     when: the page renders
     then:
@@ -301,6 +325,7 @@ behaviors:
     title: Meetings can be filtered into all, upcoming, and past with live counts
     type: ux
     status: current
+    surface: ui
     given: a contact with a mix of upcoming and past meetings
     when: the Meetings section is used
     then:
@@ -314,6 +339,7 @@ behaviors:
     title: A meeting card summarizes its time, place, and size
     type: ux
     status: current
+    surface: ui
     given: a meeting in the Meetings section
     when: its card renders
     then:
@@ -327,6 +353,7 @@ behaviors:
     title: A meeting with a source link opens it externally
     type: ux
     status: current
+    surface: ui
     given: a meeting card
     when: the meeting carries a source link
     then:
@@ -338,6 +365,7 @@ behaviors:
     title: A long meeting list reveals progressively
     type: ux
     status: current
+    surface: ui
     given: a filtered meeting list longer than the initial page
     when: the user asks for more
     then:
@@ -350,6 +378,7 @@ behaviors:
     title: Each calendar-enabled account offers a manual sync with visible state
     type: ux
     status: current
+    surface: ui
     given: a connected Google account granted calendar access
     when: the settings account section renders
     then:
@@ -362,6 +391,7 @@ behaviors:
     title: A stalled calendar sync surfaces in the settings banner
     type: ux
     status: current
+    surface: ui
     given: the calendar sync has stalled past its watchdog threshold
     when: the settings page renders
     then:

@@ -6,6 +6,7 @@ behaviors:
     title: The overdue list offers sort orderings
     type: ux
     status: current
+    surface: none
     when: the user switches the sort
     then:
       - urgency orders most-overdue first

@@ -6,6 +6,7 @@ behaviors:
     title: invariant that also uses GWT keys
     type: invariant
     status: current
+    surface: none
     statement: some property always holds
     when: ""
     given: []

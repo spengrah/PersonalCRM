@@ -6,6 +6,7 @@ behaviors:
     title: in file b
     type: business-logic
     status: current
+    surface: none
     when: x
     then:
       - y

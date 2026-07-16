@@ -6,6 +6,7 @@ behaviors:
     title: invariant with a structurally broken when
     type: invariant
     status: current
+    surface: none
     statement: some property always holds
     when:
       - first
@@ -14,6 +15,7 @@ behaviors:
     title: gwt type with a structurally broken statement
     type: business-logic
     status: current
+    surface: none
     when: a trigger
     then:
       - an outcome

@@ -6,6 +6,7 @@ behaviors:
     title: when is an int
     type: business-logic
     status: current
+    surface: none
     when: 42
     then:
       - ok
@@ -13,11 +14,13 @@ behaviors:
     title: statement is an int
     type: invariant
     status: current
+    surface: none
     statement: 42
   - id: CON-003
     title: then has a bool item
     type: business-logic
     status: current
+    surface: none
     when: a trigger
     then:
       - true

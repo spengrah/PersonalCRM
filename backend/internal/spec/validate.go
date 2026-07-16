@@ -43,6 +43,7 @@ const (
 	orderRequiredFile     = 10 // required file fields present + non-empty
 	orderMaturityEnum     = 11 // maturity enum membership
 	orderPrefixUnique     = 12 // prefixes unique across files
+	orderPrefixFormat     = 13 // prefix charset matches the citation grammar
 	orderRequiredBehavior = 20 // required behavior fields present + non-empty
 	orderTypeEnum         = 21 // type enum membership
 	orderStatusEnum       = 22 // status enum membership
@@ -53,12 +54,15 @@ const (
 	orderListItems        = 27 // given/then/serves list items non-empty
 	orderServesType       = 28 // serves only on ux/intent behaviors
 	orderServesResolve    = 29 // serves targets resolve to intent behaviors
+	orderSurface          = 30 // surface enum + required for non-intent non-retired + forbidden on intent
+	orderWaivers          = 31 // waivers only on ui-surface; index in range; no dups; reason non-empty
 )
 
 var (
 	validMaturity = map[string]bool{"draft": true, "reviewed": true, "ratified": true}
 	validType     = map[string]bool{"business-logic": true, "api": true, "ux": true, "invariant": true, "data": true, "intent": true}
 	validStatus   = map[string]bool{"current": true, "proposed": true, "retired": true}
+	validSurface  = map[string]bool{"ui": true, "api": true, "none": true}
 	// statementTypes use statement instead of GWT (mutually exclusive).
 	statementTypes = map[string]bool{"invariant": true, "intent": true}
 	// servesTypes may carry a serves list of intent-behavior targets.
@@ -71,6 +75,10 @@ var (
 func idRegex(prefix string) *regexp.Regexp {
 	return regexp.MustCompile(`^` + regexp.QuoteMeta(prefix) + `-(\d{3}|[1-9]\d{3,})$`)
 }
+
+// prefixRegex is the charset the citation grammar (coverage.go citationRef)
+// can parse back out of a // spec: marker — keep the two in lockstep.
+var prefixRegex = regexp.MustCompile(`^[A-Z][A-Z0-9]*$`)
 
 // Lint parses and validates the spec corpus in dir, returning the parsed files,
 // every violation (parse/structural + semantic + cross-file) in deterministic
@@ -217,6 +225,13 @@ func checkFile(pf *parsedFile, c *collector) {
 		c.add(pf, orderMaturityEnum, -1, 0, "",
 			fmt.Sprintf("invalid maturity %q (want draft|reviewed|ratified)", pf.file.Maturity))
 	}
+	// Prefix charset must match the citation grammar (the coverage scanner
+	// parses references as [A-Z][A-Z0-9]*-N); a prefix outside it would mint
+	// behaviors that can never be validly cited.
+	if prefixUsable(pf) && !prefixRegex.MatchString(pf.file.Prefix) {
+		c.add(pf, orderPrefixFormat, -1, 0, "",
+			fmt.Sprintf("prefix %q must be uppercase alphanumeric starting with a letter", pf.file.Prefix))
+	}
 }
 
 func checkRequiredFileField(pf *parsedFile, c *collector, key, val string) {
@@ -263,6 +278,104 @@ func checkBehavior(pf *parsedFile, pb *parsedBehavior, idRe *regexp.Regexp, c *c
 		pb.keys["type"] && !pb.broken["type"] && validType[pb.b.Type] && !servesTypes[pb.b.Type] {
 		c.add(pf, orderServesType, pb.idx, pb.line, pb.ref,
 			fmt.Sprintf("serves is only for ux and intent behaviors (type %q)", pb.b.Type))
+	}
+
+	checkSurface(pf, pb, c)
+	checkWaivers(pf, pb, c)
+}
+
+// checkSurface enforces the surface field: valid enum value when present;
+// required for non-intent, non-retired behaviors; forbidden on intents (they
+// are judge-only, so deterministic coverage classification does not apply).
+// Requiredness/forbiddenness are decidable only when type (and, for the
+// retired exemption, status) parsed clean with a valid enum value — an
+// absent/invalid type or status is already reported by its own checks.
+func checkSurface(pf *parsedFile, pb *parsedBehavior, c *collector) {
+	surfacePresent := pb.keys["surface"] && !pb.broken["surface"] && pb.b.Surface != ""
+	if surfacePresent && !validSurface[pb.b.Surface] {
+		c.add(pf, orderSurface, pb.idx, pb.line, pb.ref,
+			fmt.Sprintf("invalid surface %q (want ui|api|none)", pb.b.Surface))
+		return
+	}
+	if !pb.keys["type"] || pb.broken["type"] || !validType[pb.b.Type] {
+		return
+	}
+	if pb.b.Type == "intent" {
+		if pb.keys["surface"] && !pb.broken["surface"] {
+			c.add(pf, orderSurface, pb.idx, pb.line, pb.ref,
+				"surface is not for intent behaviors (intents are judge-only)")
+		}
+		return
+	}
+	if pb.broken["surface"] {
+		return // structural violation already reported
+	}
+	// The retired exemption makes requiredness decidable only when status is
+	// present with a valid enum value — an absent/invalid status is already
+	// reported by its own checks.
+	if !pb.keys["status"] || pb.broken["status"] || !validStatus[pb.b.Status] {
+		return
+	}
+	if pb.b.Status != "retired" && !surfacePresent {
+		c.add(pf, orderSurface, pb.idx, pb.line, pb.ref, `missing required field "surface" (want ui|api|none)`)
+	}
+}
+
+// checkWaivers enforces waiver semantics: waivers may appear only on
+// ui-surface behaviors (never on intents), every waived then index must be in
+// range, indexes must be unique, and every reason must be non-empty. Placement
+// is decidable only when the fields it depends on (type, surface) parsed
+// clean; index range needs a clean then list.
+func checkWaivers(pf *parsedFile, pb *parsedBehavior, c *collector) {
+	if !pb.keys["waivers"] || pb.broken["waivers"] || len(pb.b.Waivers) == 0 {
+		return
+	}
+	waiverLine := func(i int) int {
+		if i < len(pb.waiverLines) {
+			return pb.waiverLines[i]
+		}
+		return pb.line
+	}
+
+	// Placement: intents never carry waivers; other types only with surface: ui.
+	// An illegal placement is the root cause — the per-item checks below would
+	// only add noise about a list that shouldn't exist, so report and stop.
+	typeClean := pb.keys["type"] && !pb.broken["type"] && validType[pb.b.Type]
+	if typeClean && pb.b.Type == "intent" {
+		c.add(pf, orderWaivers, pb.idx, pb.line, pb.ref,
+			"waivers are not for intent behaviors (intents are judge-only)")
+		return
+	}
+	if pb.keys["surface"] && !pb.broken["surface"] && validSurface[pb.b.Surface] && pb.b.Surface != "ui" {
+		c.add(pf, orderWaivers, pb.idx, pb.line, pb.ref,
+			fmt.Sprintf("waivers are only for ui-surface behaviors (surface %q)", pb.b.Surface))
+		return
+	}
+
+	// A statement behavior (ui invariant) has exactly one waivable coverage
+	// item, addressed as index 0.
+	statement := typeClean && statementTypes[pb.b.Type]
+
+	seen := map[int]bool{}
+	for i, w := range pb.b.Waivers {
+		if w.Reason == "" {
+			c.add(pf, orderWaivers, pb.idx, waiverLine(i), pb.ref, "waiver reason must be non-empty")
+		}
+		if seen[w.Then] {
+			c.add(pf, orderWaivers, pb.idx, waiverLine(i), pb.ref,
+				fmt.Sprintf("duplicate waiver for then item %d", w.Then))
+		}
+		seen[w.Then] = true
+		switch {
+		case statement:
+			if w.Then != 0 {
+				c.add(pf, orderWaivers, pb.idx, waiverLine(i), pb.ref,
+					fmt.Sprintf("waiver then index %d out of range (a statement behavior has one implicit item, index 0)", w.Then))
+			}
+		case !pb.broken["then"] && (w.Then < 0 || w.Then >= len(pb.b.Then)):
+			c.add(pf, orderWaivers, pb.idx, waiverLine(i), pb.ref,
+				fmt.Sprintf("waiver then index %d out of range (behavior has %d then items)", w.Then, len(pb.b.Then)))
+		}
 	}
 }
 

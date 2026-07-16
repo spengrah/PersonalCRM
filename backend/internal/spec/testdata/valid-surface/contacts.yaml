@@ -1,0 +1,38 @@
+domain: contacts
+prefix: CON
+maturity: reviewed
+e2e_settled: true
+behaviors:
+  - id: CON-001
+    title: a ui-surface behavior with a waived then item
+    type: ux
+    status: current
+    surface: ui
+    when: an action elsewhere changes who is overdue
+    then:
+      - the list refreshes without a manual reload
+      - refocusing the window re-checks freshness
+    waivers:
+      - then: 1
+        reason: focus-driven freshness is not deterministically provable
+  - id: CON-002
+    title: a retired behavior needs no surface
+    type: business-logic
+    status: retired
+    when: x
+    then:
+      - y
+    notes: superseded by CON-001
+  - id: CON-003
+    title: an api-surface behavior
+    type: api
+    status: current
+    surface: api
+    when: x
+    then:
+      - y
+  - id: CON-004
+    title: an intent takes no surface
+    type: intent
+    status: current
+    statement: the surface communicates who needs attention

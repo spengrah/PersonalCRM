@@ -8,6 +8,7 @@ behaviors:
     title: Identifiers are normalized before any matching
     type: business-logic
     status: current
+    surface: none
     given: an external identifier entering the matching engine
     when: it is compared against CRM data
     then:
@@ -21,6 +22,7 @@ behaviors:
     title: Candidate match scores blend name similarity and method overlap
     type: business-logic
     status: current
+    surface: none
     given: an external candidate and a CRM contact
     when: a match score is computed
     then:
@@ -33,6 +35,7 @@ behaviors:
     title: A suggestion surfaces only above the confidence gate, deterministically
     type: business-logic
     status: current
+    surface: none
     given: scored match candidates for an external contact
     when: the suggested match is selected
     then:
@@ -44,6 +47,7 @@ behaviors:
     title: Username-derived matches must be decisive
     type: business-logic
     status: current
+    surface: none
     given: a match whose best evidence is a messaging username
     when: the suggestion is finalized
     then:
@@ -57,6 +61,7 @@ behaviors:
     title: The import queue only ever suggests
     type: invariant
     status: current
+    surface: none
     statement: import-queue matching produces suggestions, never links — resolving a candidate from within the queue requires an explicit user action (import, link, or ignore); candidates can additionally be auto-matched from outside the queue (source sync and rematch housekeeping) when an identifier match is found.
     provenance: [ImportMatchService, ImportSuggestedMatch]
 
@@ -66,6 +71,7 @@ behaviors:
     title: External contacts deduplicate per source and address
     type: data
     status: current
+    surface: none
     given: an incoming external contact record
     when: it is upserted
     then:
@@ -78,6 +84,7 @@ behaviors:
     title: Match status is a four-state lifecycle with sticky ignore
     type: data
     status: current
+    surface: ui
     given: an external contact row
     when: its match status changes
     then:
@@ -92,6 +99,7 @@ behaviors:
     title: Tombstoned external contacts revive with their linkage intact
     type: data
     status: current
+    surface: none
     given: an external contact deleted at its source
     when: it is tombstoned and later reappears
     then:
@@ -105,6 +113,7 @@ behaviors:
     title: Suggestion state survives source resyncs
     type: data
     status: current
+    surface: none
     given: an external contact carrying pending or dismissed method suggestions
     when: its source resyncs and the producer upsert replaces the row's content
     then:
@@ -117,6 +126,7 @@ behaviors:
     title: The candidate list is globally confidence-ranked
     type: api
     status: current
+    surface: api
     given: unmatched external contacts
     when: the candidate list is requested
     then:
@@ -130,6 +140,7 @@ behaviors:
     title: Import-as-new is guarded
     type: api
     status: current
+    surface: api
     given: an import request for a candidate
     when: the request is validated
     then:
@@ -143,6 +154,7 @@ behaviors:
     title: Importing a candidate creates a full CRM contact
     type: business-logic
     status: current
+    surface: ui
     given: a valid import of an unmatched candidate
     when: the import runs
     then:
@@ -156,6 +168,7 @@ behaviors:
     title: Curation on link decides imported versus matched
     type: business-logic
     status: current
+    surface: ui
     given: a link of a candidate to an existing contact
     when: the link is recorded
     then:
@@ -168,6 +181,7 @@ behaviors:
     title: Link-only sources can never create contacts
     type: invariant
     status: current
+    surface: api
     statement: candidates from link-only sources (currently gmail correspondence) can only be linked to an existing contact or ignored — never imported as a new contact; the policy is enforced server-side and the allowed actions are declared by the server per candidate.
     provenance: [linkOnlySources, AllowedActionsForSource, 2026-06-02-contact-method-enrichment-suggestions-design.md]
 
@@ -177,6 +191,7 @@ behaviors:
     title: Enrichment fills gaps on existing contacts, never creates them
     type: business-logic
     status: current
+    surface: none
     given: a contact linked to an external record
     when: enrichment runs
     then:
@@ -190,6 +205,7 @@ behaviors:
     title: User method curation is respected forever
     type: business-logic
     status: current
+    surface: none
     given: a link where the user selected a subset of the external record's methods
     when: later reconciliation sees methods missing from the contact
     then:
@@ -201,6 +217,7 @@ behaviors:
     title: Reconciliation auto-propagates for auto-matches and suggests for curated links
     type: business-logic
     status: current
+    surface: none
     given: a linked address-book external contact with methods missing from its CRM contact
     when: reconciliation runs
     then:
@@ -214,6 +231,7 @@ behaviors:
     title: Suggestion resolve and dismiss are idempotent set operations
     type: business-logic
     status: current
+    surface: api
     given: pending method suggestions on a linked external contact
     when: the user resolves or dismisses them
     then:
@@ -229,6 +247,7 @@ behaviors:
     title: Adding contact methods triggers a historical rematch
     type: business-logic
     status: current
+    surface: api
     given: new methods appearing on a CRM contact (create, method-replacing update, enrichment, or suggestion resolve)
     when: the write commits
     then:
@@ -241,6 +260,7 @@ behaviors:
     title: Rematch fans out per method type and backfills history
     type: business-logic
     status: current
+    surface: none
     given: a rematch job for a contact's new methods
     when: the job runs
     then:
@@ -253,6 +273,7 @@ behaviors:
     title: Rematch jobs are pollable from the moment they are announced
     type: api
     status: current
+    surface: api
     given: a rematch job id returned by a write
     when: the caller polls the job endpoint
     then:
@@ -267,6 +288,7 @@ behaviors:
     title: The suggestions feed unifies method suggestions and candidates
     type: api
     status: current
+    surface: api
     given: pending method suggestions and unmatched candidates
     when: the suggestions feed is requested
     then:
@@ -279,6 +301,7 @@ behaviors:
     title: Repeated messages from an unknown peer become a discovery candidate
     type: business-logic
     status: current
+    surface: none
     given: messages from a sender matched to no contact
     when: the per-peer threshold is crossed
     then:
@@ -291,6 +314,7 @@ behaviors:
     title: Weak title-derived name tokens resolve as a group
     type: business-logic
     status: current
+    surface: none
     given: name tokens extracted from session titles (low-confidence discovery)
     when: the user resolves a token
     then:
@@ -305,6 +329,7 @@ behaviors:
     title: Unmatched meeting sessions surface as conflicts or orphans
     type: business-logic
     status: current
+    surface: none
     given: an ingested meeting session needing linkage review
     when: it enters the needs-attention queue
     then:
@@ -320,6 +345,7 @@ behaviors:
     title: The imports page is one review hub with two tabs
     type: ux
     status: current
+    surface: ui
     given: pending imports and interaction reviews
     when: the imports page renders
     then:
@@ -333,6 +359,7 @@ behaviors:
     title: Candidates resolve in a single-view modal
     type: ux
     status: current
+    surface: ui
     given: a candidate opened for resolution
     when: the modal renders
     then:
@@ -348,6 +375,7 @@ behaviors:
     title: The modal pages the whole queue
     type: ux
     status: current
+    surface: ui
     given: several candidates in the queue
     when: the modal is open
     then:
@@ -360,6 +388,7 @@ behaviors:
     title: Suggestion confidence surfaces on the link affordance
     type: ux
     status: current
+    surface: ui
     given: a candidate with a suggested match
     when: its card renders
     then:
@@ -372,6 +401,7 @@ behaviors:
     title: Method suggestions resolve against a fixed contact
     type: ux
     status: current
+    surface: ui
     given: a pending method suggestion opened for review
     when: the resolver renders
     then:
@@ -384,6 +414,7 @@ behaviors:
     title: Resolving review items updates every dependent surface without reload
     type: ux
     status: current
+    surface: ui
     given: a resolution action on any review surface (import, link, ignore, suggestion, conflict, orphan, name token)
     when: the action succeeds
     then:
@@ -398,6 +429,7 @@ behaviors:
     title: Import marks the candidate processed atomically with contact creation
     type: business-logic
     status: proposed
+    surface: none
     given: an import whose contact creation succeeds
     when: the candidate row is marked imported
     then:
@@ -409,6 +441,7 @@ behaviors:
     title: Phone overlap scoring uses the canonical phone form
     type: business-logic
     status: proposed
+    surface: none
     given: phone methods compared for match-overlap scoring
     when: the overlap is computed
     then:
@@ -420,6 +453,7 @@ behaviors:
     title: Every method-adding path triggers rematch
     type: business-logic
     status: proposed
+    surface: none
     given: any code path that adds methods to a contact from an external source
     when: the methods are added
     then:
@@ -431,6 +465,7 @@ behaviors:
     title: Duplicate-marked external contacts never surface as candidates
     type: data
     status: current
+    surface: none
     given: the same person synced from multiple accounts of a source
     when: a row is marked as a duplicate of a canonical row
     then:

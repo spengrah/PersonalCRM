@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev dev-seed staging-reset tours build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast qa-report prod staging accelerated testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry spec-lint api-types api-types-check
+.PHONY: help setup dev dev-seed staging-reset tours build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast qa-report prod staging accelerated testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry spec-lint spec-coverage api-types api-types-check
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -132,6 +132,7 @@ help:
 	@echo "  api-types-check - Fail if generated API types drifted (non-mutating)"
 	@echo "  lint        - Run all linters (backend + frontend)"
 	@echo "  spec-lint   - Lint the behavior spec corpus (spec/*.yaml)"
+	@echo "  spec-coverage - Report per-then-item E2E coverage of ui-surface behaviors"
 	@echo "  clean       - Clean build artifacts"
 	@echo ""
 	@echo "Testing:"
@@ -444,7 +445,7 @@ test: test-unit test-integration test-frontend
 
 test-unit:
 	@echo "Running backend unit tests..."
-	@cd backend && go test ./tests/... ./internal/matching/... ./internal/events/... ./internal/service/... ./internal/contacttask/... ./internal/synthetic/factory/... ./internal/spec/... ./cmd/spec-lint/... $(GOTEST_VERBOSE) -short
+	@cd backend && go test ./tests/... ./internal/matching/... ./internal/events/... ./internal/service/... ./internal/contacttask/... ./internal/synthetic/factory/... ./internal/spec/... ./cmd/spec-lint/... ./cmd/spec-coverage/... $(GOTEST_VERBOSE) -short
 
 # Provisions the per-worktree Postgres instance BEFORE the integration recipes
 # expand $(TEST_DATABASE_URL) (gh #433). As a prerequisite it runs to
@@ -575,6 +576,13 @@ lint-fix:
 # double-run it in that lane.
 spec-lint:
 	@cd backend && go run ./cmd/spec-lint $(REPO_ROOT)/spec
+
+# Behavior-SSOT traceability scanner: cross-references // spec: citations in
+# test files against spec/*.yaml and reports per-then-item E2E coverage for
+# ui-surface behaviors. Warn-only for unsettled domains; invalid citations and
+# orphans in e2e_settled domains exit non-zero.
+spec-coverage:
+	@cd backend && go run ./cmd/spec-coverage $(REPO_ROOT)
 
 # Grep guard for #342's descriptor table: fails if the IngestBatch body
 # names any event kind (constant or dotted literal) or per-family

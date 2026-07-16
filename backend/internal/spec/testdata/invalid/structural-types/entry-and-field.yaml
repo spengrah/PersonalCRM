@@ -8,6 +8,7 @@ behaviors:
       - a list where a scalar is required
     type: business-logic
     status: current
+    surface: none
     when: x
     then:
       - y

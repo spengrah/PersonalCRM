@@ -6,6 +6,7 @@ behaviors:
     title: Soft-deleting a contact cascades to its dependents
     type: business-logic
     status: current
+    surface: none
     given: a contact with methods and notes
     when: the contact is deleted
     then:
@@ -17,11 +18,13 @@ behaviors:
     title: All contact reads filter soft-deleted rows
     type: invariant
     status: current
+    surface: none
     statement: every contact query filters deleted_at IS NULL
   - id: CON-003
     title: Creating a contact persists a valid payload
     type: data
     status: proposed
+    surface: none
     given:
       - a valid payload
       - no duplicate exists
@@ -40,6 +43,7 @@ behaviors:
     title: The contacts list can be opened with no precondition
     type: ux
     status: current
+    surface: none
     when: the contacts list is opened
     then:
       - contacts are shown
