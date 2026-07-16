@@ -24,12 +24,16 @@ function con042Captures(): Capture[] {
 }
 
 // A DSH-004 group in REAL tour order: the `loading` capture (no overdue endpoint)
-// FIRST, then the `error` capture with the retried 500 bracket the set_json_field
-// trap corrupts (final item = index 3), targeted by pair role 'error'. The order
+// FIRST, then the `error` capture, targeted by pair role 'error'. The order
 // matters: an index-0-default mutation would land on the loading capture and
 // no-op, so the trap MUST select the error capture by role.
+//
+// The error capture's overdue group leads with a warm 200 hit, THEN the retried
+// 500 bracket (retry-1..retry-4). This is the length-varying shape that broke a
+// fixed itemIndex:3 — with the leading 200 the group has FIVE entries, so index
+// 3 lands on the PENULTIMATE 500 (retry-3), not the final one react-query
+// surfaces. The trap's 'last-error' selection corrects to retry-4.
 function dsh004Captures(): Capture[] {
-  const five = { error: { message: 'overdue fetch failed' } }
   return [
     cap({
       behaviors: ['DSH-004'],
@@ -39,18 +43,20 @@ function dsh004Captures(): Capture[] {
     cap({
       behaviors: ['DSH-004'],
       pair: pair('dsh004', 'error'),
-      // The aria shows the ORIGINAL reason — JSON-only doctoring never touches it,
-      // so after the mutation the shown reason contradicts the doctored API reason.
+      // The aria shows the ORIGINAL surfaced reason — JSON-only doctoring never
+      // touches it, so after the mutation the shown reason contradicts the
+      // doctored API reason.
       aria: root([
         { role: 'heading', name: 'Error loading overdue contacts', level: 2 },
         { role: 'text', text: 'overdue fetch failed' },
       ]),
       apiResponses: {
         'GET /api/v1/contacts/overdue': [
-          apiItem({ status: 500, body: five }),
-          apiItem({ status: 500, body: five }),
-          apiItem({ status: 500, body: five }),
-          apiItem({ status: 500, body: five }),
+          apiItem({ status: 200, body: { data: { overdue: [] } } }),
+          apiItem({ status: 500, body: { error: { message: 'retry-1 failed' } } }),
+          apiItem({ status: 500, body: { error: { message: 'retry-2 failed' } } }),
+          apiItem({ status: 500, body: { error: { message: 'retry-3 failed' } } }),
+          apiItem({ status: 500, body: { error: { message: 'retry-4 failed' } } }),
         ],
       },
     }),
@@ -86,7 +92,7 @@ describe('runTrapSelfTest — the live detection self-test', () => {
     expect(selftestExitCode([r])).toBe(0)
   })
 
-  it('CAUGHT: the DSH-004 trap doctors ONLY the error capture final-500 reason (role + itemIndex targeting)', async () => {
+  it('CAUGHT: the DSH-004 trap corrupts the FINAL error response (last-error targeting, robust to a leading 200)', async () => {
     const { judge, calls } = mockJudge([v('fail', 'API overdue error.message', 2)])
     const [r] = await runTrapSelfTest(dsh004Captures(), [DSH004_TRAP], judge)
     // `caught` (not a no-op `error`) proves role:'error' selected the ERROR
@@ -96,15 +102,18 @@ describe('runTrapSelfTest — the live detection self-test', () => {
     expect(r.status).toBe('caught')
     expect(r.targetItem).toBe(2)
 
-    // The raw judge received a RENDERED PROMPT carrying the doctored reason
-    // EXACTLY ONCE (only the final 500 was mutated — the other three retries +
-    // the aria still show the original), proving itemIndex:3 landed on the right
-    // response and the doctoring is projected into the judge-visible evidence.
     const prompt = buildPrompt(calls[0])
-    const replacement =
+    const doctored =
       DSH004_TRAP.mutation.op === 'set_json_field' ? String(DSH004_TRAP.mutation.value) : '<n/a>'
-    expect(prompt.split(replacement).length - 1).toBe(1)
-    // The aria-shown original reason survives (JSON-only doctoring) — the
+    // The doctored reason lands EXACTLY ONCE — on the response the UI renders.
+    expect(prompt.split(doctored).length - 1).toBe(1)
+    // Targeting proof: the FINAL 500's original reason (retry-4) is overwritten
+    // and GONE, while the PENULTIMATE 500 (retry-3, which a fixed itemIndex:3
+    // would have hit given the leading 200) SURVIVES. A mis-targeted trap fails
+    // these two assertions.
+    expect(prompt).not.toContain('retry-4 failed')
+    expect(prompt).toContain('retry-3 failed')
+    // The aria-shown surfaced reason survives (JSON-only doctoring) — the
     // manufactured contradiction the judge must fail on.
     expect(prompt).toContain('overdue fetch failed')
   })

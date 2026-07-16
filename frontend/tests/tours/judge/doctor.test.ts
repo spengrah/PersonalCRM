@@ -169,6 +169,38 @@ describe('applyMutation — single-point, deterministic, non-mutating', () => {
     )
   })
 
+  it('set_json_field itemMatch:last-error targets the final 500, skipping a leading 200 + earlier retries', () => {
+    const reason = (m: string) => ({ error: { message: m } })
+    const base = [
+      cap({
+        behaviors: ['DSH-004'],
+        apiResponses: {
+          'GET /api/v1/contacts/overdue': [
+            apiItem({ status: 200, body: { data: { overdue: [] } } }),
+            apiItem({ status: 500, body: reason('retry-1') }),
+            apiItem({ status: 500, body: reason('retry-2') }),
+            apiItem({ status: 500, body: reason('retry-3') }),
+            apiItem({ status: 500, body: reason('retry-4') }),
+          ],
+        },
+      }),
+    ]
+    const out = applyMutation(base, {
+      op: 'set_json_field',
+      endpoint: 'GET /api/v1/contacts/overdue',
+      path: ['error', 'message'],
+      value: 'database connection refused',
+      itemMatch: 'last-error',
+    })
+    const items = out[0].apiResponses['GET /api/v1/contacts/overdue']
+    const msg = (i: number) => (items[i].body as { error: { message: string } }).error.message
+    // Only the FINAL 500 (index 4) is rewritten — the penultimate retry a fixed
+    // itemIndex:3 would have hit is left intact.
+    expect(msg(4)).toBe('database connection refused')
+    expect(msg(3)).toBe('retry-3')
+    expect(items[0].body).toEqual({ data: { overdue: [] } }) // leading 200 untouched
+  })
+
   it('is byte-stable across two runs', () => {
     const base = [cap({ behaviors: ['CON-041'], url: '/contacts/<id:1>' })]
     const m: Mutation = { op: 'inject_query', param: 'action', value: 'edit' }

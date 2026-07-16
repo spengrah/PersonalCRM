@@ -55,10 +55,15 @@ export const TRAPS: TrapSpec[] = [
       endpoint: 'GET /api/v1/contacts/overdue',
       path: ['error', 'message'],
       value: 'database connection refused',
-      // The FINAL 500 of the retried failure bracket (react-query surfaces the
-      // last error). Corrupting its reason while the aria still shows the old
-      // one manufactures a stale-reason faithfulness fail on DSH-004[2].
-      itemIndex: 3,
+      // The FINAL 500 of the retried failure bracket — the response react-query
+      // actually surfaces. Selected DYNAMICALLY (last item with status >= 500)
+      // rather than a fixed index: a real capture may prepend a warm 200 hit
+      // before the retries, so a hardcoded index would land on a penultimate 500
+      // the UI never renders (the judge would then correctly PASS the unchanged
+      // final response → a false missed-trap). Corrupting the surfaced reason
+      // while the aria still shows the old one manufactures a stale-reason
+      // faithfulness fail on DSH-004[2].
+      itemMatch: 'last-error',
     },
     note:
       'Rewrites the final overdue-fetch 500 reason so it no longer matches the reason shown in ' +

@@ -63,9 +63,15 @@ export const MutationSchema = z.discriminatedUnion('op', [
     path: z.array(z.string()).min(1),
     value: z.unknown(),
     // Which item in the endpoint group to mutate (default 0). Needed when the
-    // meaningful body is not the first entry (e.g. mutating the FINAL 500 of a
-    // retried failure bracket to manufacture a stale-reason faithfulness fail).
+    // meaningful body is not the first entry.
     itemIndex: z.number().int().nonnegative().optional(),
+    // Select the target item DYNAMICALLY instead of by fixed index (takes
+    // precedence over itemIndex). 'last-error' picks the LAST item in the
+    // endpoint group whose status >= 500 — the final failed response react-query
+    // surfaces. Use this over itemIndex for a retried failure bracket: the group
+    // length varies at capture time (a warm 200 hit may precede the retries), so
+    // a fixed index can land on a penultimate retry the UI never renders.
+    itemMatch: z.enum(['last-error']).optional(),
   }),
 ])
 
