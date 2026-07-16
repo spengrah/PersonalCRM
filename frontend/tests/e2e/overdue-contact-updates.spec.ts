@@ -167,8 +167,12 @@ test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => 
     const table = page.getByRole('table')
     const contactRow = table.getByRole('row').filter({ hasText: contactName })
     await expect(contactRow).toBeVisible()
+    // innerText is RENDERED text — the header row is CSS-uppercased, so the
+    // match must be case-insensitive.
     const headerTexts = await table.getByRole('columnheader').allInnerTexts()
-    const lastResponseColumn = headerTexts.findIndex(text => text.includes('Last response'))
+    const lastResponseColumn = headerTexts.findIndex(text =>
+      text.toLowerCase().includes('last response')
+    )
     expect(lastResponseColumn).toBeGreaterThanOrEqual(0)
     // getTodayUTCShort matches the table's UTC-date rendering (formatDateOnly
     // extracts the UTC date portion), so the assertion is timezone-stable.
