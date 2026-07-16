@@ -28,7 +28,10 @@ test.describe('Rematch on add email @area:contacts', () => {
     page,
     request,
   }) => {
-    // spec: CAL-019
+    // CAL-019[1] (past-projects/future-links split) and CAL-019[2] (processed
+    // flag not reset) are waived in spec/calendar.yaml: both are backend
+    // projection plumbing owned by rematch_integration_test.go.
+    // spec: CAL-019[0]
     const attendeeEmail = `rematch-${Date.now()}@example.com`
 
     // Seed a contact with no email so the rematch handler has something to link to.
@@ -59,10 +62,10 @@ test.describe('Rematch on add email @area:contacts', () => {
     })
 
     // Add an email method. The form starts with one empty method row (type
-    // "Select", value ""); pick email + fill the attendee address.
-    const firstRow = page.locator('.group').first()
-    await firstRow.getByRole('combobox').selectOption('email')
-    await firstRow.locator('input[type="email"]').fill(attendeeEmail)
+    // "Select", value ""); pick email + fill the attendee address via the
+    // rows' accessible names.
+    await page.getByRole('combobox', { name: 'Contact method type' }).first().selectOption('email')
+    await page.getByRole('textbox', { name: 'Contact method value' }).first().fill(attendeeEmail)
 
     // The edit form also saves notes via PUT /contacts/:id/notes in parallel,
     // so match the exact contact update route before reading rematch_job_id.

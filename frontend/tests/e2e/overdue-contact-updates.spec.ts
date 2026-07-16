@@ -3,16 +3,13 @@ import { createTestAPI, TestAPI } from './helpers/test-api'
 import { getTodayUTCShort } from './helpers/date-utils'
 
 /**
- * Comprehensive E2E tests for overdue contact updates.
+ * E2E coverage for overdue-contact state changes.
  *
- * Test Matrix:
- * - Actions: Mark as Contacted (Dashboard, Contact Detail, Contacts List), Complete Reminder
- * - Views: Dashboard (list & count), Contact Detail (last_contacted), Contacts List (column)
- *
- * Each action should:
- * 1. Update last_contacted timestamp with full precision (not just date)
- * 2. Remove contact from overdue list immediately
- * 3. Reflect changes in all UI views after navigation
+ * The dashboard-card "Mark as Contacted" halves (server-timestamped mutual
+ * interaction + immediate removal, CAD-028[0]/[1]) are cited and proven in
+ * dashboard.spec.ts; this file owns the detail-page Log Interaction modal
+ * variant (CON-053), the cross-view consistency leg (CAD-028[2]), and the
+ * overdue endpoint's reporting contract (CAD-023).
  *
  * Note: In testing mode (CRM_ENV=testing), weekly cadence = 2 minutes.
  * Contacts become overdue 2 minutes after last_contacted.
@@ -33,15 +30,6 @@ async function isContactOverdue(request: APIRequestContext, contactId: string): 
   })
   const data = await response.json()
   return data.data.some((c: { id: string }) => c.id === contactId)
-}
-
-// Helper to get contact's last_contacted via API
-async function getLastContacted(request: APIRequestContext, contactId: string): Promise<string> {
-  const response = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
-    headers: API_HEADERS,
-  })
-  const data = await response.json()
-  return data.data.last_contacted
 }
 
 test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => {
@@ -68,83 +56,16 @@ test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => 
     await testApi.cleanup()
   })
 
-  test('should remove contact from dashboard when marked as contacted', async ({
-    page,
-    request,
-  }) => {
-    const contactName = `${testApi.prefix}-Overdue Test Contact`
-    const beforeMark = new Date()
-
-    // Go to dashboard
-    await page.goto('/dashboard')
-    await expect(page.getByRole('heading', { name: 'Action Required', level: 2 })).toBeVisible()
-
-    // Verify contact appears in overdue list
-    await expect(page.getByRole('heading', { name: contactName })).toBeVisible()
-
-    // Click "Mark as Contacted" for our contact
-    const contactCard = page.locator('div.rounded-lg').filter({ hasText: contactName })
-    await contactCard.getByRole('button', { name: /Mark as Contacted/i }).click()
-
-    const afterMark = new Date()
-
-    // Contact should disappear from dashboard
-    await expect(page.getByRole('heading', { name: contactName })).not.toBeVisible({
-      timeout: 5000,
-    })
-
-    // Verify via API that contact is no longer overdue
-    const stillOverdue = await isContactOverdue(request, contactId)
-    expect(stillOverdue).toBe(false)
-
-    // Verify last_contacted has full timestamp precision
-    const lastContacted = await getLastContacted(request, contactId)
-    const lastContactedDate = new Date(lastContacted)
-
-    // Should be between before and after the click
-    expect(lastContactedDate.getTime()).toBeGreaterThanOrEqual(beforeMark.getTime() - 1000)
-    expect(lastContactedDate.getTime()).toBeLessThanOrEqual(afterMark.getTime() + 1000)
-
-    // Should NOT be midnight (the old bug)
-    expect(lastContacted).not.toMatch(/T00:00:00(\.0+)?Z$/)
-  })
-
-  test('should reflect in Contact Detail page after navigation', async ({ page, request }) => {
-    const contactName = `${testApi.prefix}-Overdue Test Contact`
-
-    await page.goto('/dashboard')
-    await expect(page.getByRole('heading', { name: 'Action Required', level: 2 })).toBeVisible()
-
-    // Mark as contacted from dashboard. The dashboard quick-action
-    // posts to POST /interactions {direction:"mutual"}.
-    const contactCard = page.locator('div.rounded-lg').filter({ hasText: contactName })
-    const responsePromise = page.waitForResponse(
-      resp =>
-        resp.url().includes(`/api/v1/contacts/${contactId}/interactions`) &&
-        resp.request().method() === 'POST'
-    )
-    await contactCard.getByRole('button', { name: /Mark as Contacted/i }).click()
-    await responsePromise
-
-    // Contact should drop off the dashboard once cadence math advances.
-    await expect(page.getByRole('heading', { name: contactName })).not.toBeVisible({
-      timeout: 5000,
-    })
-
-    // Verify via API the contact is no longer overdue.
-    const stillOverdue = await isContactOverdue(request, contactId)
-    expect(stillOverdue).toBe(false)
-  })
-
   test('should update last_contacted and remove from dashboard when marked from Contact Detail', async ({
     page,
     request,
   }) => {
+    // spec: CON-053[0], CON-053[2]
     const contactName = `${testApi.prefix}-Overdue Test Contact`
 
-    // Verify contact is initially overdue on dashboard
+    // Seeded-data precondition: the contact renders as overdue on the
+    // dashboard before the action.
     await page.goto('/dashboard')
-    await expect(page.getByRole('heading', { name: 'Action Required', level: 2 })).toBeVisible()
     await expect(page.getByRole('heading', { name: contactName })).toBeVisible()
 
     // Go to contact detail and log a mutual interaction via the modal.
@@ -161,8 +82,15 @@ test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => 
     )
     await page.getByRole('button', { name: /Log Interaction/i }).click()
     await expect(page.getByRole('dialog')).toBeVisible()
+    // Submit without touching the direction picker: the modal's default
+    // direction (mutual) is what must land in the POST body.
     await page.getByRole('button', { name: 'Log', exact: true }).click()
-    await responsePromise
+    const interactionResponse = await responsePromise
+    expect(interactionResponse.ok()).toBeTruthy()
+    expect(interactionResponse.request().postDataJSON()).toMatchObject({ direction: 'mutual' })
+
+    // The modal closes on success.
+    await expect(page.getByRole('dialog')).not.toBeVisible()
 
     // Verify via API the contact is no longer overdue (mutual + cadence
     // recompute clears last_contacted to today, contact_by advances).
@@ -174,7 +102,7 @@ test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => 
     page,
     request,
   }) => {
-    // spec: CAD-028[2]
+    // spec: CAD-028[2], CAD-029[1]
     const contactName = `${testApi.prefix}-Overdue Test Contact`
 
     // A SENTINEL that stays overdue: its rendered card is the data-derived
@@ -229,18 +157,27 @@ test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => 
     await expect(page.getByRole('heading', { name: contactName })).not.toBeVisible()
 
     // 2. Contacts List: today's date appears in the target row's SPECIFIC
-    // "Last response" column (the 5th column — a mutual interaction sets
-    // last_response_at), not just anywhere in the row. Filter the list by
-    // the test prefix so another worker's contacts cannot push the target
-    // off the 20-row first page.
+    // "Last response" column (a mutual interaction sets last_response_at),
+    // not just anywhere in the row. The column index is derived from the
+    // table header rather than hardcoded, so a column reorder cannot
+    // silently point this at the wrong cell. Filter the list by the test
+    // prefix so another worker's contacts cannot push the target off the
+    // 20-row first page.
     await page.goto(`/contacts?search=${encodeURIComponent(testApi.prefix)}`)
-    await expect(page.getByRole('heading', { name: 'Contacts', level: 2 })).toBeVisible()
-    const contactRow = page.locator('tr').filter({ hasText: contactName })
+    const table = page.getByRole('table')
+    const contactRow = table.getByRole('row').filter({ hasText: contactName })
+    await expect(contactRow).toBeVisible()
+    const headerTexts = await table.getByRole('columnheader').allInnerTexts()
+    const lastResponseColumn = headerTexts.findIndex(text => text.includes('Last response'))
+    expect(lastResponseColumn).toBeGreaterThanOrEqual(0)
+    // getTodayUTCShort matches the table's UTC-date rendering (formatDateOnly
+    // extracts the UTC date portion), so the assertion is timezone-stable.
     const todayShort = getTodayUTCShort()
-    await expect(contactRow.locator('td').nth(4)).toHaveText(todayShort)
+    await expect(contactRow.getByRole('cell').nth(lastResponseColumn)).toHaveText(todayShort)
 
     // 3. Contact Detail: the recent-activity block reflects the new mutual
-    // interaction (a response timestamp now exists).
+    // interaction — the "Last response" row is rendered only when a
+    // response timestamp exists (CAD-029[1]).
     await page.goto(`/contacts/${contactId}`)
     await expect(page.getByRole('heading', { name: contactName })).toBeVisible()
     await expect(page.getByText('Last response:')).toBeVisible()
@@ -248,41 +185,6 @@ test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => 
     // 4. API: backend-state cross-check — no longer overdue.
     const stillOverdue = await isContactOverdue(request, contactId)
     expect(stillOverdue).toBe(false)
-  })
-
-  test('last_contacted should have full timestamp precision, not just date', async ({
-    page,
-    request,
-  }) => {
-    const contactName = `${testApi.prefix}-Overdue Test Contact`
-
-    await page.goto('/dashboard')
-    await expect(page.getByRole('heading', { name: 'Action Required', level: 2 })).toBeVisible()
-
-    const beforeMark = new Date()
-
-    const contactCard = page.locator('div.rounded-lg').filter({ hasText: contactName })
-    await contactCard.getByRole('button', { name: /Mark as Contacted/i }).click()
-    await expect(page.getByRole('heading', { name: contactName })).not.toBeVisible({
-      timeout: 5000,
-    })
-
-    const afterMark = new Date()
-
-    // Get the updated last_contacted via API
-    const lastContacted = await getLastContacted(request, contactId)
-    const lastContactedDate = new Date(lastContacted)
-
-    // Verify timestamp is within expected range
-    expect(lastContactedDate.getTime()).toBeGreaterThanOrEqual(beforeMark.getTime() - 1000)
-    expect(lastContactedDate.getTime()).toBeLessThanOrEqual(afterMark.getTime() + 1000)
-
-    // The old bug would set time to midnight - verify this is NOT the case
-    // A timestamp at exactly midnight would match this pattern
-    expect(lastContacted).not.toMatch(/T00:00:00(\.0+)?Z$/)
-
-    // Verify the timestamp includes sub-second precision (our fix stores full timestamp)
-    expect(lastContacted).toMatch(/T\d{2}:\d{2}:\d{2}\.\d+Z$/)
   })
 })
 
@@ -328,7 +230,9 @@ test.describe('Overdue Contact Updates - Multiple Contacts @area:overdue', () =>
       page.getByRole('heading', { name: `${testApi.prefix}-Second Overdue` })
     ).toBeVisible()
 
-    // spec: CAD-023
+    // CAD-023[2] (the 1000-entry bound + most-overdue-retained truncation)
+    // is waived in spec/cadence-followup.yaml: not E2E-seedable.
+    // spec: CAD-023[0], CAD-023[1]
     const overdueRes = await request.get(`${API_BASE_URL}/api/v1/contacts/overdue`, {
       headers: API_HEADERS,
     })

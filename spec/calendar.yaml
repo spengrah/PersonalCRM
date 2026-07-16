@@ -257,6 +257,11 @@ behaviors:
       - the contact is appended to each matching event's matched set
       - past confirmed events additionally project the contact's attendance, while future events are only linked
       - the append does not reset the event's processed flag, so already-projected attendees are not re-emitted
+    waivers:
+      - then: 1
+        reason: the past-projects/future-links split is backend projection plumbing with no browser-added coverage; proven deterministically by TestRematch_CalendarPastEvent_RecordsInteraction and TestRematch_CalendarFutureEvent_NoInteraction in rematch_integration_test.go
+      - then: 2
+        reason: not re-emitting already-projected attendees is a negative with no UI surface; proven by TestRematch_CalendarIdempotent (rematch_integration_test.go) and rematch_event_dedup_test.go
     provenance: [CalendarRematchHandler.Rematch, AppendMatchedContact, FindEventsByAttendeeEmailUnmatchedForContact]
     notes: The rematch trigger and job dispatch are imports-matching scope — cross-reference IMP-019 and IMP-020.
 
