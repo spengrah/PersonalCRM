@@ -78,6 +78,7 @@ export function MethodSelector({
         type="button"
         onClick={onToggle}
         disabled={disabled}
+        aria-pressed={selected}
         className={clsx(
           'flex-shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center transition-colors',
           selected
@@ -136,6 +137,8 @@ export function MethodSelector({
           type="button"
           onClick={onPrimaryToggle}
           disabled={disabled}
+          aria-pressed={isPrimary}
+          aria-label="Set as primary"
           className={clsx(
             'p-1.5 transition-colors flex-shrink-0',
             isPrimary ? 'text-yellow-500' : 'text-gray-300 hover:text-yellow-500',

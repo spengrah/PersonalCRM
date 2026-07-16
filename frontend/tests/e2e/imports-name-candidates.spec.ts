@@ -42,13 +42,18 @@ test.describe('Imports name candidates (anarlog_title) @area:imports', () => {
     await testApi.cleanup()
   })
 
+  // spec: IMP-026[3]
   test('renders the name-candidate section with the grouped token and evidence count', async ({
     page,
   }) => {
     await page.goto('/imports')
     await page.waitForLoadState('domcontentloaded')
 
-    await expect(page.getByText('Names found in session titles')).toBeVisible({ timeout: 10000 })
+    // The section appears when title-derived tokens exist; the heading is
+    // the region's accessible locator.
+    await expect(page.getByRole('heading', { name: 'Names found in session titles' })).toBeVisible({
+      timeout: 10000,
+    })
     await expect(page.getByText(display, { exact: true }).first()).toBeVisible()
     // Evidence count reflects the two seeded (token, session) rows.
     await expect(page.getByText(/Seen in 2 session titles/).first()).toBeVisible()
@@ -81,6 +86,7 @@ test.describe('Imports name candidates (anarlog_title) @area:imports', () => {
       }
     })
 
+  // spec: IMP-031[0]
   test('imports the whole token group as a new contact', async ({ page }) => {
     await page.goto('/imports')
     await page.waitForLoadState('domcontentloaded')
@@ -106,6 +112,7 @@ test.describe('Imports name candidates (anarlog_title) @area:imports', () => {
     await expect(page.getByText(display, { exact: true })).toHaveCount(0, { timeout: 10000 })
   })
 
+  // spec: IMP-031[0]
   test('links the token group to an existing contact', async ({ page }) => {
     const seeded = await testApi.seedContacts([{ full_name: 'Link Target Person' }])
     const targetName = `${testApi.prefix}-Link Target Person`
@@ -135,6 +142,7 @@ test.describe('Imports name candidates (anarlog_title) @area:imports', () => {
     await expect(page.getByText(display, { exact: true })).toHaveCount(0, { timeout: 10000 })
   })
 
+  // spec: IMP-031[0]
   test('ignores the token group via "Not a person"', async ({ page }) => {
     await page.goto('/imports')
     await page.waitForLoadState('domcontentloaded')

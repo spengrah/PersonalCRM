@@ -165,7 +165,12 @@ export function MethodSuggestionResolver({
         if (e.target === e.currentTarget) onClose()
       }}
     >
-      <div className="relative top-10 mx-auto p-0 border w-full max-w-xl shadow-lg rounded-lg bg-white overflow-hidden">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Review method suggestions"
+        className="relative top-10 mx-auto p-0 border w-full max-w-xl shadow-lg rounded-lg bg-white overflow-hidden"
+      >
         {/* Header — fixed contact, no selector */}
         <div className="px-6 py-4 border-b">
           <div className="flex items-center justify-between gap-2">

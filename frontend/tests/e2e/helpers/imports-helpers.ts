@@ -1,4 +1,36 @@
-import { Page, expect } from '@playwright/test'
+import { Page, Locator, expect } from '@playwright/test'
+
+/** Candidate card scoped by its heading (never by presentation classes). */
+export function candidateCardByName(page: Page, displayName: string): Locator {
+  return page
+    .locator('div.border', { has: page.getByRole('heading', { name: displayName }) })
+    .first()
+}
+
+/** The candidate-resolution modal body. */
+export function resolverDialog(page: Page): Locator {
+  return page.getByRole('dialog', { name: 'Resolve import candidate' })
+}
+
+/**
+ * Select a contact in the resolution modal's ContactSelector when nothing is
+ * pre-selected. When CLOSED with no selection, the selector renders the
+ * placeholder as a SPAN (not an input) — so detect that text, click to open,
+ * then type into the opened input and pick the option.
+ */
+export async function selectContactIfNeeded(
+  page: Page,
+  dialog: Locator,
+  searchTerm: string,
+  optionName: string
+): Promise<void> {
+  const closedPlaceholder = dialog.getByText('Search for a contact...')
+  if (await closedPlaceholder.isVisible().catch(() => false)) {
+    await closedPlaceholder.click()
+    await dialog.getByPlaceholder('Search for a contact...').fill(searchTerm)
+    await page.getByText(optionName, { exact: true }).last().click()
+  }
+}
 
 /**
  * Helper to navigate the modal to show a specific candidate by name.
@@ -13,7 +45,7 @@ export async function navigateModalToCandidate(
   displayName: string,
   maxNavigations = 30
 ): Promise<void> {
-  const modal = page.locator('.fixed.inset-0')
+  const modal = page.getByRole('dialog', { name: 'Resolve import candidate' })
   const prevButton = page.getByRole('button', { name: 'Previous candidate' })
   const nextButton = page.getByRole('button', { name: 'Next candidate' })
 

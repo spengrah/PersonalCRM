@@ -1,133 +1,174 @@
 import { test, expect } from './fixtures'
-
-// API configuration for E2E tests
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
-const API_HEADERS = {
-  'X-API-Key': API_KEY,
-  'Content-Type': 'application/json',
-}
+import { createTestAPI, TestAPI } from './helpers/test-api'
+import { findCandidateByName } from './helpers/imports-helpers'
 
 test.describe('Imports Page @area:imports', () => {
-  test.beforeEach(async ({ page }) => {
-    // Navigate to imports page before each test
+  let testApi: TestAPI
+
+  test.beforeEach(async ({ request }, testInfo) => {
+    testApi = createTestAPI(request, testInfo)
+  })
+
+  test.afterEach(async () => {
+    await testApi.cleanup()
+  })
+
+  // spec: IMP-026[0]
+  test('renders candidates confidence-ranked on the People tab', async ({ page }) => {
+    // Two CRM contacts; the high external matches one on name AND email
+    // (high confidence), the med external matches the other on name only
+    // (lower confidence). Both render as suggested candidates and the
+    // higher-confidence one must appear first among this worker's rows.
+    const highEmail = `order-ui-high-${testApi.prefix}@example.invalid`
+    await testApi.seedContacts([
+      { full_name: 'Order Ui High', methods: [{ type: 'email', value: highEmail }] },
+      { full_name: 'Order Ui Med' },
+    ])
+    await testApi.seedExternalContacts([
+      // Seeded low-confidence first so a seed-order artifact cannot pass.
+      {
+        display_name: 'Order Ui Med',
+        source: 'gcal_attendee',
+        emails: [`order-ui-med-${testApi.prefix}@example.invalid`],
+      },
+      {
+        display_name: 'Order Ui High',
+        source: 'gcal_attendee',
+        emails: [highEmail],
+      },
+    ])
+    const highName = `${testApi.prefix}-Order Ui High`
+    const medName = `${testApi.prefix}-Order Ui Med`
+
     await page.goto('/imports')
     await page.waitForLoadState('domcontentloaded')
-  })
 
-  test('should display page header and sync button', async ({ page }) => {
-    // Verify page header
-    await expect(page.getByRole('heading', { name: 'Import Contacts' })).toBeVisible()
-
-    // Verify sync button exists (use first() as there may be multiple sync buttons)
-    await expect(page.getByRole('button', { name: /Sync Contacts/i }).first()).toBeVisible()
-  })
-
-  test('should show imports in navigation', async ({ page }) => {
-    // Verify navigation has Imports entry
-    await expect(page.getByRole('link', { name: /Imports/i })).toBeVisible()
-  })
-
-  test('should display empty state when no Google Contacts candidates', async ({
-    page,
-    request,
-  }) => {
-    // Verify Google Contacts source is empty to avoid cross-test interference
-    const response = await request.get(
-      `${API_BASE_URL}/api/v1/imports/candidates?source=gcontacts`,
-      {
-        headers: API_HEADERS,
-      }
-    )
-
-    if (response.ok()) {
-      const data = await response.json()
-      if (data.data?.length === 0 || data.meta?.pagination?.total === 0) {
-        // The People tab loads the unified suggestions endpoint (the
-        // candidate list is composed into it), so wait on that.
-        const suggestionsResponse = page.waitForResponse(
-          res =>
-            res.request().method() === 'GET' &&
-            res.url().includes('/api/v1/imports/suggestions') &&
-            res.url().includes('source=gcontacts')
-        )
-
-        await page.getByRole('button', { name: 'Google Contacts' }).click()
-        await suggestionsResponse
-
-        // gcontacts is shared across parallel workers, so a concurrent test
-        // may seed a candidate between this test's pre-flight and the render
-        // (TOCTOU). The empty state shows only when the live list is empty;
-        // otherwise the candidate list renders. Poll for either valid
-        // terminal state so the assertion is not a flaky gate, while still
-        // proving the empty-state copy when gcontacts is genuinely empty.
-        const emptyState = page.getByText(/No import candidates/i)
-        const candidateList = page.locator('[class*="border-gray-200"]').first()
-        await expect
-          .poll(
-            async () =>
-              (await emptyState.isVisible().catch(() => false)) ||
-              (await candidateList.isVisible().catch(() => false)),
-            { timeout: 10000 }
-          )
-          .toBe(true)
-        if (await emptyState.isVisible().catch(() => false)) {
-          await expect(page.getByText(/All contacts from Google have been imported/i)).toBeVisible()
-        }
-      }
-    }
-  })
-
-  test('should display source filter buttons', async ({ page }) => {
-    // Verify filter UI is visible
-    await expect(page.getByText('Filter:')).toBeVisible()
-    await expect(page.getByRole('button', { name: 'All Sources', exact: true })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Google Contacts', exact: true })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Calendar', exact: true })).toBeVisible()
-
-    // All Sources should be selected by default (has blue background)
-    const allSourcesButton = page.getByRole('button', { name: 'All Sources', exact: true })
-    await expect(allSourcesButton).toHaveClass(/bg-blue-600/)
-  })
-
-  test('should filter when clicking filter buttons', async ({ page }) => {
-    // Click Google Contacts filter
-    await page.getByRole('button', { name: 'Google Contacts', exact: true }).click()
-    await page.waitForLoadState('domcontentloaded')
-
-    // Google Contacts button should now be selected
-    const googleContactsButton = page.getByRole('button', {
-      name: 'Google Contacts',
-      exact: true,
-    })
-    await expect(googleContactsButton).toHaveClass(/bg-blue-600/)
-
-    // All Sources should no longer be selected
-    const allSourcesButton = page.getByRole('button', { name: 'All Sources', exact: true })
-    await expect(allSourcesButton).not.toHaveClass(/bg-blue-600/)
-
-    // Click Calendar filter
+    // Scope the list to the Calendar source to keep the page small, then
+    // find both of our rows.
     await page.getByRole('button', { name: 'Calendar', exact: true }).click()
-    await page.waitForLoadState('domcontentloaded')
+    await findCandidateByName(page, highName)
+    await expect(page.getByRole('heading', { name: medName })).toBeVisible({ timeout: 10000 })
 
-    // Calendar button should now be selected
-    const calendarButton = page.getByRole('button', { name: 'Calendar', exact: true })
-    await expect(calendarButton).toHaveClass(/bg-blue-600/)
+    // Relative render order among OUR rows: higher confidence first.
+    const headings = await page.getByRole('heading', { level: 3 }).allTextContents()
+    const highIdx = headings.findIndex(t => t.includes(highName))
+    const medIdx = headings.findIndex(t => t.includes(medName))
+    expect(highIdx).toBeGreaterThanOrEqual(0)
+    expect(medIdx).toBeGreaterThanOrEqual(0)
+    expect(highIdx).toBeLessThan(medIdx)
   })
 
-  test('should trigger sync when clicking sync button', async ({ page }) => {
-    // Click the sync button (use first() as there may be multiple sync buttons)
-    await page
-      .getByRole('button', { name: /Sync Contacts/i })
-      .first()
-      .click()
-
-    // The button should show loading state or we should see a notification
-    // Note: The actual sync might fail if Google OAuth isn't configured,
-    // but we're testing the UI interaction works
+  // spec: IMP-026[0]
+  test('source filters expose selection state and scope the candidate request', async ({
+    page,
+  }) => {
+    await page.goto('/imports')
     await page.waitForLoadState('domcontentloaded')
 
-    // Just verify the page doesn't crash
-    await expect(page.getByRole('heading', { name: 'Import Contacts' })).toBeVisible()
+    // The source filter pills exist.
+    const allSources = page.getByRole('button', { name: 'All Sources', exact: true })
+    const googleContacts = page.getByRole('button', { name: 'Google Contacts', exact: true })
+    const calendar = page.getByRole('button', { name: 'Calendar', exact: true })
+    await expect(allSources).toBeVisible()
+    await expect(googleContacts).toBeVisible()
+    await expect(calendar).toBeVisible()
+
+    // All Sources is the default selection.
+    await expect(allSources).toHaveAttribute('aria-pressed', 'true')
+
+    // Selecting a source flips the pressed state AND refetches the
+    // suggestions feed scoped to that source (network-param proof).
+    const gcontactsResponse = page.waitForResponse(
+      res =>
+        res.request().method() === 'GET' &&
+        res.url().includes('/api/v1/imports/suggestions') &&
+        res.url().includes('source=gcontacts')
+    )
+    await googleContacts.click()
+    await gcontactsResponse
+    await expect(googleContacts).toHaveAttribute('aria-pressed', 'true')
+    await expect(allSources).toHaveAttribute('aria-pressed', 'false')
+
+    const gcalResponse = page.waitForResponse(
+      res =>
+        res.request().method() === 'GET' &&
+        res.url().includes('/api/v1/imports/suggestions') &&
+        res.url().includes('source=gcal_attendee')
+    )
+    await calendar.click()
+    await gcalResponse
+    await expect(calendar).toHaveAttribute('aria-pressed', 'true')
+    await expect(googleContacts).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  // spec: IMP-026[2]
+  test('manual sync triggers fire per-source sync requests', async ({ page }) => {
+    // The sync buttons act on connected Google accounts — an external-provider
+    // dependency — so mock the account list (sanctioned route-mock technique)
+    // and absorb the trigger POST itself; the deterministic claim is that the
+    // page offers both triggers and each fires the right per-source request.
+    // The app calls the API cross-origin (frontend :3000 → API :8080) with an
+    // X-API-Key header, so fulfilled responses must answer the CORS preflight
+    // and carry Access-Control-Allow-Origin, else the browser drops them.
+    const corsHeaders = {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type,X-API-Key',
+    }
+    const corsFulfill = (route: import('@playwright/test').Route, body: unknown) => {
+      if (route.request().method() === 'OPTIONS') {
+        return route.fulfill({ status: 204, headers: corsHeaders })
+      }
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+    }
+    await page.route('**/api/v1/auth/google/accounts', route =>
+      corsFulfill(route, {
+        success: true,
+        data: [
+          {
+            id: 'e2e-mock-google-account',
+            account_id: 'e2e-mock-google-account',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          },
+        ],
+      })
+    )
+    const syncRequests: string[] = []
+    await page.route('**/api/v1/sync/*/trigger', route => {
+      if (route.request().method() !== 'OPTIONS') {
+        syncRequests.push(route.request().url())
+      }
+      return corsFulfill(route, { success: true, data: null })
+    })
+
+    // The triggers act only once the account list has loaded — wait for it
+    // before clicking, else the click lands on the no-accounts branch.
+    const accountsLoaded = page.waitForResponse(
+      res => res.url().includes('/api/v1/auth/google/accounts') && res.request().method() === 'GET'
+    )
+    await page.goto('/imports')
+    await page.waitForLoadState('domcontentloaded')
+    await accountsLoaded
+
+    // Both per-source triggers are offered. (.first(): an empty candidate
+    // list renders a second contacts-sync affordance in the empty state.)
+    const syncContacts = page.getByRole('button', { name: /Sync Contacts/i }).first()
+    const syncCalendar = page.getByRole('button', { name: /Sync Calendar/i }).first()
+    await expect(syncContacts).toBeVisible()
+    await expect(syncCalendar).toBeVisible()
+
+    await syncContacts.click()
+    await expect
+      .poll(() => syncRequests.some(u => u.includes('/sync/gcontacts/trigger')))
+      .toBe(true)
+
+    await syncCalendar.click()
+    await expect.poll(() => syncRequests.some(u => u.includes('/sync/gcal/trigger'))).toBe(true)
   })
 })

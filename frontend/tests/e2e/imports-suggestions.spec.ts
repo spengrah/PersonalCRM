@@ -1,6 +1,10 @@
 import { test, expect } from './fixtures'
 import { createTestAPI, TestAPI } from './helpers/test-api'
-import { navigateModalToCandidate } from './helpers/imports-helpers'
+import {
+  navigateModalToCandidate,
+  resolverDialog,
+  selectContactIfNeeded,
+} from './helpers/imports-helpers'
 
 // Unified People-tab suggestions surface: the method-suggestion group
 // (above the confidence-ranked candidates) + the link-only candidate case.
@@ -16,6 +20,7 @@ test.describe('Imports suggestions surface @area:imports', () => {
     await testApi.cleanup()
   })
 
+  // spec: IMP-026[0], IMP-030[0], IMP-030[2], IMP-031[0], IMP-031[1]
   test('method-suggestion card appears at the top; Review confirms and clears it', async ({
     page,
   }) => {
@@ -37,17 +42,37 @@ test.describe('Imports suggestions surface @area:imports', () => {
     // Review opens the enrich-locked body: fixed contact header, NO
     // ContactSelector, NO Import.
     await card.getByRole('button', { name: 'Review' }).click()
-    await expect(page.getByText(`Adding to ${testApi.prefix}-Suggest Target`)).toBeVisible()
-    await expect(page.getByRole('button', { name: /Import as New/i })).toHaveCount(0)
-    await expect(page.getByPlaceholder(/Search for a contact/i)).toHaveCount(0)
+    const dialog = page.getByRole('dialog', { name: 'Review method suggestions' })
+    await expect(dialog.getByText(`Adding to ${testApi.prefix}-Suggest Target`)).toBeVisible()
+    await expect(dialog.getByRole('button', { name: /Import as New/i })).toHaveCount(0)
+    await expect(dialog.getByPlaceholder(/Search for a contact/i)).toHaveCount(0)
 
-    // Confirm adds the method; the card disappears from the list.
-    await page.getByRole('button', { name: 'Confirm' }).click()
+    // Confirming requires at least one selected method: deselect the sole
+    // method and Confirm disables; re-select and it enables again.
+    const confirmButton = dialog.getByRole('button', { name: 'Confirm' })
+    await dialog.getByRole('button', { name: 'Deselect method' }).click()
+    await expect(confirmButton).toBeDisabled()
+    await dialog.getByRole('button', { name: 'Select method' }).click()
+    await expect(confirmButton).toBeEnabled()
+
+    // Confirm adds the method; the queue surface refreshes through query
+    // invalidation (a fresh suggestions GET fires without a reload) and the
+    // card disappears from the list.
+    const resolvePost = page.waitForResponse(
+      res => res.request().method() === 'POST' && res.url().includes('/methods/resolve')
+    )
+    const invalidationRefetch = page.waitForResponse(
+      res => res.request().method() === 'GET' && res.url().includes('/api/v1/imports/suggestions')
+    )
+    await confirmButton.click()
+    expect((await resolvePost).ok()).toBe(true)
+    await invalidationRefetch
     await expect(page.getByText(cardText)).toHaveCount(0, {
       timeout: 10000,
     })
   })
 
+  // spec: IMP-030[2], IMP-031[0]
   test('Dismiss removes the card and it does not return after reload', async ({ page }) => {
     const email = `dismiss-${testApi.prefix}@example.invalid`
     await testApi.seedMethodSuggestions({
@@ -71,6 +96,7 @@ test.describe('Imports suggestions surface @area:imports', () => {
     await expect(page.getByText(cardText)).toHaveCount(0, { timeout: 10000 })
   })
 
+  // spec: IMP-029[2], IMP-027[1]
   test('link-only source hides Import on the card and in the modal', async ({ page }) => {
     // Seed a gmail_correspondence unmatched candidate (link-only source).
     await testApi.seedExternalContacts([
@@ -108,11 +134,12 @@ test.describe('Imports suggestions surface @area:imports', () => {
     await expect(page.getByRole('button', { name: /Link to Existing/i })).toHaveCount(0)
   })
 
-  test('§4 residual: deselect-all link removes the candidate', async ({ page }) => {
+  // spec: IMP-013[0], IMP-027[3], IMP-031[0]
+  test('deselect-all link removes the candidate', async ({ page }) => {
     // Seed a CRM contact + a same-named candidate so the modal opens with the
     // contact auto-selected (suggested match). Use icloud_contacts (not
-    // gcontacts) so this candidate does not pollute the gcontacts-scoped
-    // empty-state test under parallel runs.
+    // gcontacts) so this candidate does not pollute gcontacts-scoped tests
+    // under parallel runs.
     await testApi.seedContacts([{ full_name: 'Deselect Target' }])
     await testApi.seedExternalContacts([
       {
@@ -141,26 +168,25 @@ test.describe('Imports suggestions surface @area:imports', () => {
     // Ensure a contact is selected. The trigram suggested-match usually
     // pre-selects the same-named CRM contact (ContactSelector then shows the
     // name, not the search input); if it did not, select explicitly.
-    const search = page.locator('input[placeholder="Search for a contact..."]')
-    if (await search.isVisible().catch(() => false)) {
-      await search.fill('Deselect Target')
-      await page.getByText(cardName, { exact: true }).last().click()
-    }
+    const dialog = resolverDialog(page)
+    await selectContactIfNeeded(page, dialog, 'Deselect Target', cardName)
     // The Link button is enabled only once a contact is selected.
     await expect(page.getByRole('button', { name: /Link Contact/i })).toBeEnabled()
 
-    // Deselect every method (the modal rendered the method-selection UI).
-    let remaining = await page.getByRole('button', { name: 'Deselect method' }).count()
+    // Methods are individually selectable: deselect every method.
+    let remaining = await dialog.getByRole('button', { name: 'Deselect method' }).count()
+    expect(remaining).toBeGreaterThan(0)
     while (remaining > 0) {
       // Re-query each iteration since toggling relabels the button.
-      await page.getByRole('button', { name: 'Deselect method' }).first().click()
-      remaining = await page.getByRole('button', { name: 'Deselect method' }).count()
+      await dialog.getByRole('button', { name: 'Deselect method' }).first().click()
+      remaining = await dialog.getByRole('button', { name: 'Deselect method' }).count()
     }
+    await expect(dialog.locator('button[aria-label="Deselect method"]')).toHaveCount(0)
 
-    // Link with no methods selected. The §4 frontend behavior: methods_curated
-    // is sent true (the modal offered method curation) with an empty
-    // selected_methods — proving the deselect-all path. Capture the request
-    // and assert the link succeeds (200).
+    // Link with no methods selected. The frontend sends methods_curated true
+    // (the modal offered method curation) with an empty selected_methods —
+    // the curation signal that classifies the link as imported. Capture the
+    // request and assert the link succeeds (200).
     const linkRequest = page.waitForRequest(
       req => req.url().includes('/methods/') === false && /\/imports\/.+\/link$/.test(req.url())
     )

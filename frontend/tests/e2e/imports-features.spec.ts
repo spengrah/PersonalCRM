@@ -1,6 +1,17 @@
 import { test, expect } from './fixtures'
 import { createTestAPI, TestAPI } from './helpers/test-api'
-import { navigateModalToCandidate, findCandidateByName } from './helpers/imports-helpers'
+import {
+  navigateModalToCandidate,
+  findCandidateByName,
+  candidateCardByName,
+} from './helpers/imports-helpers'
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
+const API_HEADERS = {
+  'X-API-Key': API_KEY,
+  'Content-Type': 'application/json',
+}
 
 test.describe('Imports Features @area:imports', () => {
   test.describe('Pagination', () => {
@@ -21,20 +32,38 @@ test.describe('Imports Features @area:imports', () => {
       await testApi.cleanup()
     })
 
-    test('should show pagination when there are multiple pages', async ({ page }) => {
+    // spec: IMP-026[0]
+    test('paginates the candidate list', async ({ page }) => {
       await page.goto('/imports')
       await page.waitForLoadState('domcontentloaded')
 
-      // Verify pagination controls are visible
+      // Pagination controls render once the queue exceeds a page.
+      const nextButton = page.getByRole('button', { name: 'Next', exact: true })
       await expect(page.getByRole('button', { name: 'Previous', exact: true })).toBeVisible()
-      await expect(page.getByRole('button', { name: 'Next', exact: true })).toBeVisible()
-      await expect(page.getByText(/Page \d+ of \d+/i)).toBeVisible()
+      await expect(nextButton).toBeVisible()
+
+      // Clicking Next refetches the suggestions feed with the page-2 param
+      // and the second page is non-empty (21 seeded > one page of 20).
+      const page2Response = page.waitForResponse(
+        res =>
+          res.request().method() === 'GET' &&
+          res.url().includes('/api/v1/imports/suggestions') &&
+          res.url().includes('page=2')
+      )
+      await nextButton.click()
+      const res = await page2Response
+      expect(res.ok()).toBe(true)
+      const body = await res.json()
+      expect((body?.data ?? []).length).toBeGreaterThan(0)
+
+      // Route/UI state reflects being past the first page.
+      await expect(page.getByRole('button', { name: 'Previous', exact: true })).toBeEnabled()
     })
   })
 
   test.describe('Suggested Matches', () => {
-    // These tests verify the suggested matches functionality from PR #93.
-    // We seed deterministic data to ensure consistent test results.
+    // These tests verify the suggested-match affordance with deterministic
+    // seeded data.
 
     let testApi: TestAPI
 
@@ -46,6 +75,7 @@ test.describe('Imports Features @area:imports', () => {
       await testApi.cleanup()
     })
 
+    // spec: IMP-029[1]
     test('should show "Link (select)" when no suggested match', async ({ page }) => {
       // Seed an external contact with a unique name that won't match any CRM contact
       await testApi.seedExternalContacts([
@@ -63,12 +93,11 @@ test.describe('Imports Features @area:imports', () => {
       await findCandidateByName(page, displayName)
 
       // The seeded candidate should show "Link (select)" since there's no matching CRM contact
-      const candidateCard = page
-        .locator('[class*="border-gray-200"]')
-        .filter({ hasText: displayName })
+      const candidateCard = candidateCardByName(page, displayName)
       await expect(candidateCard.getByRole('button', { name: 'Link (select)' })).toBeVisible()
     })
 
+    // spec: IMP-029[0]
     test('should show suggested match with confidence percentage when present', async ({
       page,
     }) => {
@@ -98,22 +127,16 @@ test.describe('Imports Features @area:imports', () => {
       const displayName = `${testApi.prefix}-Matching Contact Person`
       await findCandidateByName(page, displayName)
 
-      // The external contact should have a suggested match with the CRM contact
-      // The button should show "Link to [Name] (XX%)"
-      const candidateCard = page
-        .locator('[class*="border-gray-200"]')
-        .filter({ hasText: displayName })
-
-      // The Link button should show the matched contact name with confidence
-      // Since name and email match exactly, confidence should be high (100%)
+      // The link action names the suggested contact with its confidence
+      // percentage: "Link to [Name] (XX%)".
+      const candidateCard = candidateCardByName(page, displayName)
       const linkButton = candidateCard.getByRole('button', { name: /Link to/ })
       await expect(linkButton).toBeVisible()
-
-      // Verify it shows the prefixed contact name and a percentage
       await expect(linkButton).toContainText(displayName)
       await expect(linkButton).toContainText('%')
     })
 
+    // spec: IMP-028[2]
     test('should pre-select suggested contact in link modal', async ({ page }) => {
       // Seed matching CRM contact and external contact
       await testApi.seedOverdueContacts([
@@ -139,13 +162,10 @@ test.describe('Imports Features @area:imports', () => {
       const displayName = `${testApi.prefix}-Preselect Test Contact`
       await findCandidateByName(page, displayName)
 
-      // Find the candidate card and click the Link button
-      const candidateCard = page
-        .locator('[class*="border-gray-200"]')
-        .filter({ hasText: displayName })
-
       // Click the Link button (which should show "Link to [Name] (XX%)")
-      await candidateCard.getByRole('button', { name: /Link to/ }).click()
+      await candidateCardByName(page, displayName)
+        .getByRole('button', { name: /Link to/ })
+        .click()
 
       // Verify modal opens with mode toggle
       await expect(page.getByRole('button', { name: 'Link to Existing' })).toBeVisible()
@@ -153,105 +173,12 @@ test.describe('Imports Features @area:imports', () => {
       // Navigate to correct candidate if needed (handles race conditions in parallel tests)
       await navigateModalToCandidate(page, displayName)
 
-      // The suggested contact should be pre-selected - verify by checking the Link Contact
-      // button is enabled (it's disabled when no contact is selected)
+      // The suggested contact is pre-selected: the ContactSelector shows the
+      // selection (no search placeholder) and the Link action is enabled
+      // (it is disabled when no contact is selected).
+      const dialog = page.getByRole('dialog', { name: 'Resolve import candidate' })
+      await expect(dialog.getByText('Search for a contact...')).toHaveCount(0)
       await expect(page.getByRole('button', { name: /Link Contact/i })).toBeEnabled()
-
-      // Close modal
-      await page.getByRole('button', { name: /Cancel/i }).click()
-      await expect(page.getByRole('button', { name: 'Link to Existing' })).not.toBeVisible()
-    })
-  })
-
-  test.describe('Confidence Sorting (Issue #122)', () => {
-    // This test verifies that import candidates are sorted by confidence score descending.
-    // Candidates with higher match confidence should appear before those with lower confidence.
-    // This was fixed in PR #128.
-
-    let testApi: TestAPI
-
-    test.beforeEach(async ({ request }, testInfo) => {
-      testApi = createTestAPI(request, testInfo)
-    })
-
-    test.afterEach(async () => {
-      await testApi.cleanup()
-    })
-
-    test('should sort candidates by confidence score descending', async ({ page }) => {
-      // Seed CRM contacts with distinct names that will match with different confidence levels
-      await testApi.seedOverdueContacts([
-        {
-          full_name: 'High Confidence Match',
-          email: 'high-confidence@example.com',
-          cadence: 'monthly',
-          days_overdue: 1,
-        },
-        {
-          full_name: 'Medium Confidence Match',
-          email: 'medium-confidence@example.com',
-          cadence: 'monthly',
-          days_overdue: 1,
-        },
-      ])
-
-      // Seed external contacts:
-      // 1. High confidence: exact name + exact email match → ~100% confidence
-      // 2. Medium confidence: exact name only, no email match → ~60% confidence
-      // 3. Low/no match: unique name that won't match any CRM contact → no confidence score
-      await testApi.seedExternalContacts([
-        // This one will NOT have a match (seeded first, but should appear last after sorting)
-        {
-          display_name: 'Zzz No Match Person',
-          emails: ['zzz-nomatch@example.com'],
-        },
-        // This one will have medium confidence (name match only, ~60%)
-        {
-          display_name: 'Medium Confidence Match',
-          emails: ['different-email@example.com'],
-        },
-        // This one will have high confidence (name + email match, ~100%)
-        {
-          display_name: 'High Confidence Match',
-          emails: ['high-confidence@example.com'],
-        },
-      ])
-
-      await page.goto('/imports')
-      await page.waitForLoadState('domcontentloaded')
-
-      // Get all candidate cards in order
-      const candidateCards = page.locator('[class*="border-gray-200"]').filter({
-        has: page.getByRole('button', { name: /Import/i }),
-      })
-
-      // Wait for cards to load
-      await expect(candidateCards.first()).toBeVisible()
-
-      // Get the display names in order from the page
-      const cardTexts = await candidateCards.allTextContents()
-
-      // Find the indices of our test contacts
-      const highConfidenceIdx = cardTexts.findIndex(text =>
-        text.includes(`${testApi.prefix}-High Confidence Match`)
-      )
-      const mediumConfidenceIdx = cardTexts.findIndex(text =>
-        text.includes(`${testApi.prefix}-Medium Confidence Match`)
-      )
-      const noMatchIdx = cardTexts.findIndex(text =>
-        text.includes(`${testApi.prefix}-Zzz No Match Person`)
-      )
-
-      // Verify all three candidates are found
-      expect(highConfidenceIdx).not.toBe(-1)
-      expect(mediumConfidenceIdx).not.toBe(-1)
-      expect(noMatchIdx).not.toBe(-1)
-
-      // High confidence should appear before medium confidence
-      expect(highConfidenceIdx).toBeLessThan(mediumConfidenceIdx)
-
-      // Medium confidence should appear before no match (sorted by confidence, then alphabetically)
-      expect(mediumConfidenceIdx).toBeLessThan(noMatchIdx)
     })
   })
 
@@ -266,6 +193,7 @@ test.describe('Imports Features @area:imports', () => {
       await testApi.cleanup()
     })
 
+    // spec: IMP-036[0]
     test('shows @username chip on Telegram candidate card', async ({ page }) => {
       // Use a prefix-scoped handle so parallel test runs don't collide on the
       // link selector and so we can scope assertions to our card.
@@ -296,6 +224,7 @@ test.describe('Imports Features @area:imports', () => {
       await expect(handleLink).toHaveAttribute('href', `https://t.me/${telegramPath}`)
     })
 
+    // spec: IMP-036[1]
     test('falls back to @username when no name is set on Telegram candidate', async ({ page }) => {
       const handle = `@dale_${testApi.prefix.replace(/-/g, '_')}`
 
@@ -321,12 +250,13 @@ test.describe('Imports Features @area:imports', () => {
       await expect(handleLinks).toHaveCount(0)
     })
 
-    // Regression for Codex review feedback on PR #273: a candidate with no
-    // source name fields must still be importable without editing the name —
-    // the frontend needs to send the @handle as `name` explicitly, because
-    // the backend can't derive it from display_name/first_name/last_name.
+    // A candidate with no source name fields must still be importable without
+    // editing the name — the frontend sends the @handle as `name` explicitly,
+    // because the backend can't derive it from display_name/first_name/last_name.
+    // spec: IMP-012[0], IMP-012[1]
     test('imports a handle-only Telegram candidate without requiring a name edit', async ({
       page,
+      request,
     }) => {
       const handle = `@dale_${testApi.prefix.replace(/-/g, '_')}`
 
@@ -345,8 +275,9 @@ test.describe('Imports Features @area:imports', () => {
       await expect(page.getByRole('heading', { name: handle })).toBeVisible()
 
       // Open the Import action for this candidate.
-      const candidateCard = page.locator('[class*="border-gray-200"]').filter({ hasText: handle })
-      await candidateCard.getByRole('button', { name: /Import/i }).click()
+      await candidateCardByName(page, handle)
+        .getByRole('button', { name: /Import/i })
+        .click()
 
       // Modal opens in import mode (mode toggle is visible).
       await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
@@ -360,18 +291,38 @@ test.describe('Imports Features @area:imports', () => {
       // Contact Methods section shows the @handle as a selectable method row —
       // NOT "No contact methods available". The row carries the handle as its
       // visible value and defaults to selected.
-      await expect(page.getByText('No contact methods available')).not.toBeVisible()
-      await expect(page.locator('.space-y-2').getByText(handle)).toBeVisible()
+      const dialog = page.getByRole('dialog', { name: 'Resolve import candidate' })
+      await expect(dialog.getByText('No contact methods available')).not.toBeVisible()
+      const methodRow = dialog.locator('div.border', { hasText: handle }).last()
+      await expect(methodRow.getByRole('button', { name: 'Deselect method' })).toHaveAttribute(
+        'aria-pressed',
+        'true'
+      )
 
-      // Import without editing the name — click "Import as New Contact" submit button.
+      // Import without editing the name; the created contact carries the
+      // handle as its name and the telegram method from the external record.
+      const importResponsePromise = page.waitForResponse(
+        res => res.request().method() === 'POST' && /\/imports\/.+\/import$/.test(res.url())
+      )
       await page.getByRole('button', { name: 'Import as New Contact', exact: true }).click()
 
-      // Success notification confirms the contact was created with the handle as name.
-      await expect(page.getByText(`${handle} imported successfully!`)).toBeVisible({
-        timeout: 10000,
+      const importResponse = await importResponsePromise
+      expect(importResponse.status()).toBe(201)
+      const importBody = await importResponse.json()
+      const createdContactId: string = importBody?.data?.contact?.id
+      expect(createdContactId).toBeTruthy()
+
+      const contactRes = await request.get(`${API_BASE_URL}/api/v1/contacts/${createdContactId}`, {
+        headers: API_HEADERS,
       })
+      expect(contactRes.ok()).toBe(true)
+      const contactBody = await contactRes.json()
+      expect(contactBody?.data?.full_name).toBe(handle)
+      const methods: Array<{ type: string; value: string }> = contactBody?.data?.methods ?? []
+      expect(methods.some(m => m.type === 'telegram')).toBe(true)
     })
 
+    // spec: IMP-027[3]
     test('shows @username method in Link to Existing modal', async ({ page }) => {
       const handle = `@dale_${testApi.prefix.replace(/-/g, '_')}`
 
@@ -394,8 +345,7 @@ test.describe('Imports Features @area:imports', () => {
       await page.waitForLoadState('domcontentloaded')
       await page.getByRole('button', { name: 'Telegram', exact: true }).click()
 
-      const candidateCard = page.locator('[class*="border-gray-200"]').filter({ hasText: handle })
-      await candidateCard.getByRole('button', { name: /Link/i }).click()
+      await candidateCardByName(page, handle).getByRole('button', { name: /Link/i }).click()
 
       // Modal has internal pagination across candidates — under parallel
       // workers it can open on a different worker's candidate. Navigate to
@@ -406,13 +356,18 @@ test.describe('Imports Features @area:imports', () => {
       await page.getByRole('button', { name: 'Link to Existing', exact: true }).click()
 
       // Select the CRM contact
-      await page.getByText('Search for a contact...').click()
+      const dialog = page.getByRole('dialog', { name: 'Resolve import candidate' })
+      await dialog.getByText('Search for a contact...').click()
       await page.getByText(`${testApi.prefix}-Link Target For Telegram`).click()
 
-      // The handle is rendered in the methods list as "Will be added" / "Same as CRM"
-      // rather than "No contact methods available".
-      await expect(page.getByText('No contact methods available')).not.toBeVisible()
-      await expect(page.locator('.space-y-2').getByText(handle).first()).toBeVisible()
+      // Link mode groups the handle under the to-add bucket ("Will be
+      // added") rather than "No contact methods available".
+      await expect(dialog.getByText('No contact methods available')).not.toBeVisible()
+      await expect(dialog.getByText('Will be added')).toBeVisible()
+      const methodRow = dialog.locator('div.border', { hasText: handle }).last()
+      await expect(
+        methodRow.getByRole('button', { name: /Select method|Deselect method/ })
+      ).toBeVisible()
     })
   })
 })

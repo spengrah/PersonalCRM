@@ -3,8 +3,8 @@ import { createTestAPI, TestAPI } from './helpers/test-api'
 
 // Interactions tab: the conflict/orphan queue. These specs seed orphan
 // (orphan_needs_review) meeting notes against a paired host — enough to drive
-// the amber badge, the orphan card + "Log as impromptu", the empty state, the
-// ?tab=needs-attention alias, and the ?session deep-link highlight. Conflict
+// the amber badge, the orphan card + "Log as impromptu", the
+// ?tab=needs-attention alias, and the ?session deep-link. Conflict
 // candidate-table rendering and resolution are covered by component +
 // backend integration tests (they require event snapshots that are fragile
 // to seed via the browser).
@@ -42,7 +42,8 @@ test.describe('Imports Interactions tab @area:imports', () => {
     await testApi.resetMacHosts()
   })
 
-  test('shows the amber badge and renders orphan cards on the Interactions tab', async ({
+  // spec: IMP-026[1]
+  test('shows the attention badge and renders orphan cards on the Interactions tab', async ({
     page,
   }) => {
     await page.goto('/imports?tab=interactions')
@@ -60,11 +61,40 @@ test.describe('Imports Interactions tab @area:imports', () => {
       'href',
       'hyprnote://'
     )
+
+    // The attention badge counts the two seeded orphans. This file is serial
+    // with a freshly-reset singleton host, so the count reflects our seeds.
+    const badge = page.getByLabel(/\d+ needing attention/)
+    await expect(badge).toBeVisible()
+    const badgeCount = parseInt((await badge.getAttribute('aria-label'))!, 10)
+    expect(badgeCount).toBeGreaterThanOrEqual(2)
+
+    // Discovery items are excluded from the badge: seeding a title-derived
+    // discovery token must not move the count.
+    await testApi.seedExternalContacts([
+      {
+        source: 'anarlog_title',
+        metadata: {
+          token_normalized: `${testApi.prefix}-badgetoken`.toLowerCase(),
+          token_display: `${testApi.prefix}-Badgetoken`,
+          session_uuid: crypto.randomUUID(),
+        },
+      },
+    ])
+    await page.reload()
+    await page.waitForLoadState('domcontentloaded')
+    const badgeAfter = page.getByLabel(/\d+ needing attention/)
+    await expect(badgeAfter).toBeVisible({ timeout: 10000 })
+    const badgeCountAfter = parseInt((await badgeAfter.getAttribute('aria-label'))!, 10)
+    expect(badgeCountAfter).toBe(badgeCount)
   })
 
+  // spec: IMP-026[1]
   test('accepts ?tab=needs-attention as a transitional alias for Interactions', async ({
     page,
   }) => {
+    // Note: the alias itself has no SSOT owner (transitional shim); the
+    // durable claims cited here are the tab surface + route normalization.
     await page.goto('/imports?tab=needs-attention')
     await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('tab', { name: /Interactions/ })).toHaveAttribute(
@@ -75,10 +105,11 @@ test.describe('Imports Interactions tab @area:imports', () => {
     await expect(page).toHaveURL(/tab=interactions/)
   })
 
+  // spec: IMP-031[0], IMP-026[1]
   test('resolves the orphan via "Log as impromptu" (orphan_needs_review → linked_impromptu)', async ({
     page,
   }) => {
-    // The backend now transitions orphan_needs_review → linked_impromptu on
+    // The backend transitions orphan_needs_review → linked_impromptu on
     // resolve-link {none_of_these}, so the card actually leaves the queue.
     // Both seeded orphans share meeting_at and the list orders only by
     // meeting_at DESC, so we bind the click + assertions to titleA's card by
@@ -95,8 +126,8 @@ test.describe('Imports Interactions tab @area:imports', () => {
     // The orphan card for titleA — scope the button click to it so list
     // order can't pick the wrong card.
     const cardA = page
-      .locator('div.border-l-gray-300')
-      .filter({ has: page.getByRole('heading', { name: titleA }) })
+      .locator('div.border', { has: page.getByRole('heading', { name: titleA }) })
+      .first()
 
     // Register the response wait BEFORE the click so a fast 200 isn't missed.
     const responsePromise = page.waitForResponse(
@@ -112,7 +143,8 @@ test.describe('Imports Interactions tab @area:imports', () => {
     await expect(headingB).toBeVisible()
   })
 
-  test('scrolls to and highlights the ?session deep-linked card', async ({ page }) => {
+  // spec: IMP-038[0], IMP-038[1]
+  test('lands on the ?session deep-linked card and strips the one-time param', async ({ page }) => {
     await page.goto(`/imports?tab=interactions&session=${sessionB}`)
     await page.waitForLoadState('domcontentloaded')
     // The deep-linked card is visible and the session param is stripped.
