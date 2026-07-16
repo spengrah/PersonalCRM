@@ -65,7 +65,12 @@ test.describe('Rematch on add email @area:contacts', () => {
     // "Select", value ""); pick email + fill the attendee address via the
     // rows' accessible names.
     await page.getByRole('combobox', { name: 'Contact method type' }).first().selectOption('email')
-    await page.getByRole('textbox', { name: 'Contact method value' }).first().fill(attendeeEmail)
+    // The chosen method type drives the value input's type attribute (email
+    // keyboard + native validation) — pin the dynamic inputType wiring, which
+    // the accessible-name locator alone would not observe.
+    const valueInput = page.getByRole('textbox', { name: 'Contact method value' }).first()
+    await expect(valueInput).toHaveAttribute('type', 'email')
+    await valueInput.fill(attendeeEmail)
 
     // The edit form also saves notes via PUT /contacts/:id/notes in parallel,
     // so match the exact contact update route before reading rematch_job_id.

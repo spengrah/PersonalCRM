@@ -47,7 +47,7 @@ async function readOverdueCards(
     const out: Array<{ id: string; name: string; daysOverdue: number | null; tierClass: string }> =
       []
     document.querySelectorAll('h3.text-lg.font-semibold').forEach(h3 => {
-      const card = h3.closest('div.rounded-lg')
+      const card = h3.closest('[role="listitem"]')
       const name = (h3.textContent || '').trim()
       const m = (card?.textContent || '').match(/(\d+)\s+days?\s+overdue/)
       const href = card?.querySelector('a[href*="/contacts/"]')?.getAttribute('href') || ''
