@@ -50,7 +50,7 @@ export function TasksSection({
   const hasNoTasks = activeTasks.length === 0 && completedTasks.length === 0
 
   return (
-    <div className="bg-white shadow overflow-hidden sm:rounded-lg">
+    <section aria-label="Tasks" className="bg-white shadow overflow-hidden sm:rounded-lg">
       <div className="px-4 py-5 sm:px-6 border-b border-gray-200 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <ListTodo className="w-5 h-5 text-gray-400" />
@@ -113,7 +113,7 @@ export function TasksSection({
           onClose={() => setShowAddModal(false)}
         />
       )}
-    </div>
+    </section>
   )
 }
 
@@ -163,7 +163,11 @@ function TaskRow({ task, contactId, completed }: TaskRowProps) {
       {completed ? (
         <CheckCircle2 className="w-5 h-5 text-gray-400 flex-shrink-0" />
       ) : task.lifecycle === 'followup_loop' ? (
-        <Clock className="w-5 h-5 text-amber-400 flex-shrink-0" />
+        <Clock
+          role="img"
+          aria-label="Awaiting reply"
+          className="w-5 h-5 text-amber-400 flex-shrink-0"
+        />
       ) : (
         <Circle className="w-5 h-5 text-gray-300 flex-shrink-0" />
       )}

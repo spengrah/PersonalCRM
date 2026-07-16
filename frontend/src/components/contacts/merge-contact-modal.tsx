@@ -170,7 +170,12 @@ export function MergeContactModal({
         if (e.target === e.currentTarget) onClose()
       }}
     >
-      <div className="relative top-10 mx-auto p-0 border w-full max-w-xl shadow-lg rounded-lg bg-white mb-10">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Merge Contacts"
+        className="relative top-10 mx-auto p-0 border w-full max-w-xl shadow-lg rounded-lg bg-white mb-10"
+      >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 bg-gray-50 border-b rounded-t-lg">
           <div className="flex items-center gap-2">
@@ -200,6 +205,7 @@ export function MergeContactModal({
                     <input
                       ref={nameInputRef}
                       type="text"
+                      aria-label="Merged contact name"
                       value={editedName}
                       onChange={e => setEditedName(e.target.value)}
                       onKeyDown={handleNameKeyDown}
@@ -415,6 +421,7 @@ function FieldToggle({
         <button
           type="button"
           onClick={selected !== 'target' ? onToggle : undefined}
+          aria-pressed={selected === 'target'}
           className={clsx(
             'px-3 py-1.5 text-xs font-medium transition-colors truncate max-w-[140px]',
             selected === 'target'
@@ -428,6 +435,7 @@ function FieldToggle({
         <button
           type="button"
           onClick={selected !== 'source' ? onToggle : undefined}
+          aria-pressed={selected === 'source'}
           className={clsx(
             'px-3 py-1.5 text-xs font-medium transition-colors border-l border-gray-200 truncate max-w-[140px]',
             selected === 'source'
