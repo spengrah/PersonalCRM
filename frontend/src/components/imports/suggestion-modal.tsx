@@ -617,7 +617,12 @@ function ContactCandidateResolver({
         if (e.target === e.currentTarget) onClose()
       }}
     >
-      <div className="relative top-10 mx-auto p-0 border w-full max-w-xl shadow-lg rounded-lg bg-white overflow-hidden">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Resolve import candidate"
+        className="relative top-10 mx-auto p-0 border w-full max-w-xl shadow-lg rounded-lg bg-white overflow-hidden"
+      >
         {/* Navigation header */}
         <div className="flex items-center justify-between px-4 py-3 bg-gray-50 border-b">
           <button

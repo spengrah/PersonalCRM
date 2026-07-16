@@ -788,6 +788,7 @@ function ImportsPageInner() {
                 <button
                   key={filter.value}
                   onClick={() => handleSourceFilter(filter.value)}
+                  aria-pressed={(params.source || '') === filter.value}
                   className={`px-3 py-1.5 text-sm rounded-full transition-colors ${
                     (params.source || '') === filter.value
                       ? 'bg-blue-600 text-white'
