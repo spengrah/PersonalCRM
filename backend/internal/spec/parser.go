@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -241,7 +242,9 @@ func (pf *parsedFile) fileScalar(fields map[string]*yaml.Node, key string) strin
 
 // fileBool extracts an optional file-level boolean field, recording presence
 // and emitting a file-field-tier structural violation for anything that is not
-// a !!bool scalar.
+// a !!bool scalar. The value is decoded case-insensitively because yaml.v3
+// preserves the source spelling (True/TRUE are legal !!bool spellings whose
+// Node.Value is not normalized).
 func (pf *parsedFile) fileBool(fields map[string]*yaml.Node, key string) bool {
 	node, ok := fields[key]
 	if !ok {
@@ -253,7 +256,7 @@ func (pf *parsedFile) fileBool(fields map[string]*yaml.Node, key string) bool {
 		pf.emit(orderStructural, -1, node.Line, "", fmt.Sprintf("%s must be a boolean", key))
 		return false
 	}
-	return node.Value == "true"
+	return strings.EqualFold(node.Value, "true")
 }
 
 // walkBehavior walks one behaviors[i] node into a parsedBehavior, degrading

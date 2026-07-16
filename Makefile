@@ -577,8 +577,8 @@ lint-fix:
 spec-lint:
 	@cd backend && go run ./cmd/spec-lint $(REPO_ROOT)/spec
 
-# Piece 3 traceability scanner: cross-references // spec: citations in test
-# files against the behavior SSOT and reports per-then-item E2E coverage for
+# Behavior-SSOT traceability scanner: cross-references // spec: citations in
+# test files against spec/*.yaml and reports per-then-item E2E coverage for
 # ui-surface behaviors. Warn-only for unsettled domains; invalid citations and
 # orphans in e2e_settled domains exit non-zero.
 spec-coverage:

@@ -1,4 +1,4 @@
-// spec-coverage is the Piece 3 traceability scanner: it cross-references
+// spec-coverage is the behavior-SSOT traceability scanner: it cross-references
 // // spec: citations in the deterministic test surfaces (backend *_test.go,
 // frontend/tests/e2e *.spec.ts) against the behavior SSOT (spec/*.yaml) and
 // reports per-then-item E2E coverage for ui-surface behaviors. Operator/CI
@@ -48,9 +48,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	backendDir := filepath.Join(root, "backend")
 	e2eDir := filepath.Join(root, "frontend", "tests", "e2e")
 
-	// Coverage semantics depend on a schema-valid corpus (surface tags, waiver
-	// indexes), so a corpus that does not lint clean is an operational error
-	// here — spec-lint owns reporting the violations themselves.
+	// Coverage semantics depend on a schema-valid corpus (surface tags,
+	// waiver indexes), so a corpus that does not lint clean is an operational
+	// error here — spec-lint owns reporting the violations.
 	files, lintViol, err := spec.Lint(specDir)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "spec-coverage: %v\n", err)
@@ -67,8 +67,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	cov := spec.ComputeCoverage(files, cites)
-	cov.Problems = append(citeProbs, cov.Problems...)
+	cov := spec.ComputeCoverage(files, cites, citeProbs)
 
 	if err := report(stdout, cov); err != nil {
 		return 2

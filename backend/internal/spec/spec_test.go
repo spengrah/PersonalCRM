@@ -167,7 +167,9 @@ func TestLintViolationClasses(t *testing.T) {
 			"waiver must have a reason",
 			"waiver reason must be a string",
 		}},
+		{"waivers-bad-statement-index", 1, []string{"waiver then index 1 out of range (a statement behavior has one implicit item, index 0)"}},
 		{"e2e-settled-not-bool", 1, []string{"e2e_settled must be a boolean"}},
+		{"prefix-bad-format", 1, []string{`prefix "Gc" must be uppercase alphanumeric starting with a letter`}},
 	}
 
 	for _, tc := range cases {

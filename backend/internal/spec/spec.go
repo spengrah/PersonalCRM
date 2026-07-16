@@ -1,8 +1,8 @@
 // Package spec parses and validates the behavior SSOT corpus that lives at the
 // repository's top-level spec/ directory (one spec/<domain>.yaml file per
-// domain). It is the shared foundation for the spec-lint CLI and, later,
-// Piece 3's traceability scanner — so the typed schema structs and the
-// parse/validate logic live here, not in the CLI.
+// domain). It is the shared foundation for the spec-lint CLI and the
+// spec-coverage traceability scanner — so the typed schema structs and the
+// parse/validate logic live here, not in the CLIs.
 //
 // The exported File and Behavior structs are the plain OUTPUT of the parser
 // (no yaml struct tags or custom unmarshalers): the parser walks the decoded

@@ -13,4 +13,4 @@ test('api-surface cite from e2e', () => {})
 // spec: ALP-002[5]
 test('out of range', () => {})
 
-// prose mention should be ignored: (see `// spec: ALP-003`)
+// a marker trailing other content must be flagged, not silently dropped: // spec: ALP-003

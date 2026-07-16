@@ -1,10 +1,9 @@
-domain: beta
-prefix: BET
+domain: gchat
+prefix: Gc
 maturity: reviewed
-e2e_settled: True
 behaviors:
-  - id: BET-001
-    title: an orphan in a settled domain blocks
+  - id: Gc-001
+    title: a prefix outside the citation grammar
     type: ux
     status: current
     surface: ui

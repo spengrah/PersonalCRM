@@ -20,9 +20,7 @@ func loadCoverage(t *testing.T, root string) *Coverage {
 	if err != nil {
 		t.Fatalf("CollectCitations returned error: %v", err)
 	}
-	cov := ComputeCoverage(files, cites)
-	cov.Problems = append(probs, cov.Problems...)
-	return cov
+	return ComputeCoverage(files, cites, probs)
 }
 
 func findItem(items []ItemCoverage, ref string) *ItemCoverage {
@@ -40,13 +38,17 @@ func TestCollectCitations(t *testing.T) {
 		t.Fatalf("CollectCitations returned error: %v", err)
 	}
 
-	// The malformed lowercase ref is a problem, not a citation.
-	if len(probs) != 1 || !strings.Contains(probs[0].Msg, `malformed spec citation "alp-001"`) {
-		t.Fatalf("want 1 malformed-citation problem, got %#v", probs)
+	// The malformed lowercase ref and the trailing marker are problems, not
+	// citations.
+	all := joinViolations(probs)
+	if len(probs) != 2 ||
+		!strings.Contains(all, `malformed spec citation "alp-001"`) ||
+		!strings.Contains(all, "spec citation marker must be the only content on its line") {
+		t.Fatalf("want malformed + trailing-marker problems, got %#v", probs)
 	}
 
 	// 6 clean Go refs + 6 clean E2E refs; the helper.ts citation and the
-	// prose mention of a marker must NOT be collected.
+	// trailing marker must NOT be collected as citations.
 	var goCites, e2eCites int
 	for _, c := range cites {
 		if c.E2E {
@@ -58,7 +60,7 @@ func TestCollectCitations(t *testing.T) {
 			goCites++
 		}
 		if c.ID == "ALP-003" {
-			t.Errorf("citation collected from helper.ts or prose mention: %+v", c)
+			t.Errorf("citation collected from helper.ts or a trailing marker: %+v", c)
 		}
 	}
 	if goCites != 6 || e2eCites != 6 {
@@ -90,14 +92,14 @@ func TestComputeCoverageVerdicts(t *testing.T) {
 	if d.Domain != "alpha" || d.Settled {
 		t.Fatalf("unexpected domain header: %+v", d)
 	}
-	if d.UI != 6 || d.API != 1 || d.None != 0 || d.Intents != 1 || d.Retired != 1 {
-		t.Errorf("surface counts ui/api/none/intents/retired = %d/%d/%d/%d/%d, want 6/1/0/1/1",
+	if d.UI != 7 || d.API != 1 || d.None != 0 || d.Intents != 1 || d.Retired != 1 {
+		t.Errorf("surface counts ui/api/none/intents/retired = %d/%d/%d/%d/%d, want 7/1/0/1/1",
 			d.UI, d.API, d.None, d.Intents, d.Retired)
 	}
 
 	covered, waived, orphans := d.Counts()
-	if covered != 4 || waived != 1 || orphans != 1 {
-		t.Fatalf("counts covered/waived/orphans = %d/%d/%d, want 4/1/1\nitems: %#v", covered, waived, orphans, d.Items)
+	if covered != 4 || waived != 2 || orphans != 1 {
+		t.Fatalf("counts covered/waived/orphans = %d/%d/%d, want 4/2/1\nitems: %#v", covered, waived, orphans, d.Items)
 	}
 
 	cases := []struct{ ref, state string }{
@@ -107,6 +109,7 @@ func TestComputeCoverageVerdicts(t *testing.T) {
 		{"ALP-003[0]", ItemOrphan},  // uncited
 		{"ALP-004", ItemCovered},    // statement behavior, single implicit item
 		{"ALP-009[0]", ItemCovered}, // cited wins over the (stale) waiver
+		{"ALP-010", ItemWaived},     // statement behavior waived via index 0
 	}
 	for _, tc := range cases {
 		it := findItem(d.Items, tc.ref)
@@ -132,6 +135,7 @@ func TestComputeCoverageProblemsAndWarnings(t *testing.T) {
 
 	wantProblems := []string{
 		`malformed spec citation "alp-001"`,
+		"spec citation marker must be the only content on its line",
 		"citation DEAD-001 names an unknown behavior ID",
 		"citation ALP-006 names an intent behavior",
 		"citation ALP-007 names a retired behavior",
@@ -151,7 +155,7 @@ func TestComputeCoverageProblemsAndWarnings(t *testing.T) {
 
 	wantWarnings := []string{
 		"E2E citation ALP-005 names a api-surface behavior",
-		"stale waiver: ALP-009[0] is waived but cited",
+		"alpha.yaml: ALP-009[0]: stale waiver: the item is waived but cited",
 	}
 	if len(cov.Warnings) != len(wantWarnings) {
 		t.Fatalf("want %d warnings, got %d:\n%s", len(wantWarnings), len(cov.Warnings), joinViolations(cov.Warnings))
@@ -165,6 +169,9 @@ func TestComputeCoverageProblemsAndWarnings(t *testing.T) {
 }
 
 func TestComputeCoverageSettledDomain(t *testing.T) {
+	// The fixture spells the flag `e2e_settled: True` — a legal !!bool
+	// spelling yaml.v3 does not normalize — pinning that enforcement cannot
+	// be silently disabled by capitalization.
 	cov := loadCoverage(t, "testdata/coverage-blocked")
 	if len(cov.Domains) != 1 || !cov.Domains[0].Settled {
 		t.Fatalf("beta should parse as settled: %#v", cov.Domains)

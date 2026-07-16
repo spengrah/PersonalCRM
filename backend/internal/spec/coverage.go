@@ -11,11 +11,20 @@ import (
 	"strings"
 )
 
-// This file is the Piece 3 traceability scanner: it extracts // spec: citation
+// This file is the traceability scanner: it extracts // spec: citation
 // markers from the deterministic test surfaces (Go tests and Playwright E2E
 // specs), validates them against the parsed corpus, and derives per-then-item
 // coverage for ui-surface behaviors. The CLI wrapper lives in
 // cmd/spec-coverage.
+
+// refString renders an (ID, then-index) reference as written in a marker:
+// the bare ID for then < 0, else ID[n].
+func refString(id string, then int) string {
+	if then < 0 {
+		return id
+	}
+	return fmt.Sprintf("%s[%d]", id, then)
+}
 
 // Citation is one parsed reference from a // spec: marker line in a test file.
 type Citation struct {
@@ -27,12 +36,7 @@ type Citation struct {
 }
 
 // Ref renders the citation reference as written (ID or ID[n]).
-func (c Citation) Ref() string {
-	if c.Then < 0 {
-		return c.ID
-	}
-	return fmt.Sprintf("%s[%d]", c.ID, c.Then)
-}
+func (c Citation) Ref() string { return refString(c.ID, c.Then) }
 
 // Item coverage states.
 const (
@@ -53,12 +57,7 @@ type ItemCoverage struct {
 }
 
 // Ref renders the item as ID[n] (or the bare ID for a statement behavior).
-func (ic ItemCoverage) Ref() string {
-	if ic.Then < 0 {
-		return ic.ID
-	}
-	return fmt.Sprintf("%s[%d]", ic.ID, ic.Then)
-}
+func (ic ItemCoverage) Ref() string { return refString(ic.ID, ic.Then) }
 
 // DomainCoverage is one domain's slice of the coverage report.
 type DomainCoverage struct {
@@ -156,6 +155,14 @@ func scanFile(path string, e2e bool) ([]Citation, []Violation, error) {
 	for i, line := range strings.Split(string(data), "\n") {
 		m := citationLine.FindStringSubmatch(line)
 		if m == nil {
+			// A marker that is not the only content on its line (e.g.
+			// trailing an assertion) would otherwise be silently invisible —
+			// neither counted as coverage nor validated for deadness. Fail
+			// loudly instead so the author moves it to its own line.
+			if strings.Contains(line, "// spec:") {
+				probs = append(probs, Violation{Path: path, Line: i + 1,
+					Msg: "spec citation marker must be the only content on its line"})
+			}
 			continue
 		}
 		for _, raw := range strings.Split(m[1], ",") {
@@ -189,10 +196,10 @@ func scanFile(path string, e2e bool) ([]Citation, []Violation, error) {
 // derives per-then-item coverage for ui-surface, status-current behaviors.
 // Invalid citations (unknown ID, out-of-range index, cites of intent /
 // proposed / retired behaviors) land in Problems and never count toward
-// coverage. citeProblems from CollectCitations should be appended by the
-// caller — they are the same failure class.
-func ComputeCoverage(files []*File, cites []Citation) *Coverage {
-	cov := &Coverage{}
+// coverage. citeProblems are CollectCitations' marker-level findings — the
+// same failure class, folded into Problems here so no caller can drop them.
+func ComputeCoverage(files []*File, cites []Citation, citeProblems []Violation) *Coverage {
+	cov := &Coverage{Problems: append([]Violation(nil), citeProblems...)}
 
 	type behaviorRef struct {
 		b *Behavior
@@ -258,9 +265,16 @@ func ComputeCoverage(files []*File, cites []Citation) *Coverage {
 		}
 	}
 
-	// Per-domain coverage over ui-surface current behaviors.
+	// Per-domain coverage over ui-surface current behaviors. Path is the
+	// tie-breaker: domain uniqueness is not linted, and an unstable sort on
+	// equal keys would make the report order input-dependent.
 	sorted := append([]*File(nil), files...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Domain < sorted[j].Domain })
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].Domain != sorted[j].Domain {
+			return sorted[i].Domain < sorted[j].Domain
+		}
+		return sorted[i].Path < sorted[j].Path
+	})
 	for _, f := range sorted {
 		dc := DomainCoverage{Domain: f.Domain, Prefix: f.Prefix, Settled: f.E2ESettled}
 		for i := range f.Behaviors {
@@ -290,13 +304,13 @@ func ComputeCoverage(files []*File, cites []Citation) *Coverage {
 			}
 			if b.Statement != "" {
 				// A statement behavior has one implicit item, coverable only
-				// by a bare citation.
-				dc.Items = append(dc.Items, itemState(b.ID, -1, b.Statement, e2eBare[b.ID], "", cov))
+				// by a bare citation and waivable as index 0.
+				dc.Items = append(dc.Items, itemState(f.Path, b.ID, -1, b.Statement, e2eBare[b.ID], waived[0], cov))
 				continue
 			}
 			for n, text := range b.Then {
 				covered := e2eBare[b.ID] || e2eItem[b.ID][n]
-				dc.Items = append(dc.Items, itemState(b.ID, n, text, covered, waived[n], cov))
+				dc.Items = append(dc.Items, itemState(f.Path, b.ID, n, text, covered, waived[n], cov))
 			}
 		}
 		cov.Domains = append(cov.Domains, dc)
@@ -306,13 +320,13 @@ func ComputeCoverage(files []*File, cites []Citation) *Coverage {
 
 // itemState resolves one item's verdict, recording a stale-waiver warning when
 // an item is both cited and waived (the waiver has been overtaken by a test).
-func itemState(id string, then int, text string, covered bool, waiverReason string, cov *Coverage) ItemCoverage {
+func itemState(path, id string, then int, text string, covered bool, waiverReason string, cov *Coverage) ItemCoverage {
 	ic := ItemCoverage{ID: id, Then: then, Text: text}
 	switch {
 	case covered && waiverReason != "":
 		ic.State = ItemCovered
-		cov.Warnings = append(cov.Warnings, Violation{Ref: id,
-			Msg: fmt.Sprintf("stale waiver: %s is waived but cited by an E2E test — drop the waiver", ic.Ref())})
+		cov.Warnings = append(cov.Warnings, Violation{Path: path, Ref: ic.Ref(),
+			Msg: "stale waiver: the item is waived but cited by an E2E test — drop the waiver"})
 	case covered:
 		ic.State = ItemCovered
 	case waiverReason != "":

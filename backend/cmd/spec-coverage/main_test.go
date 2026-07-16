@@ -39,7 +39,7 @@ func TestRunInvalidCitations(t *testing.T) {
 		"WARNING:",
 		"ORPHAN ALP-003[0]",
 		"waived ALP-001[1]",
-		"1 orphaned ui then-items, 7 invalid citations",
+		"1 orphaned ui then-items, 8 invalid citations",
 	} {
 		if !strings.Contains(stdout, sub) {
 			t.Errorf("stdout missing %q; got:\n%s", sub, stdout)

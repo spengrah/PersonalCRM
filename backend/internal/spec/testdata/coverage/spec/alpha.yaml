@@ -75,3 +75,12 @@ behaviors:
     waivers:
       - then: 0
         reason: was thought unprovable
+  - id: ALP-010
+    title: a waived ui invariant has one implicit waivable item
+    type: invariant
+    status: current
+    surface: ui
+    statement: no surface ever renders a soft-deleted row
+    waivers:
+      - then: 0
+        reason: a universally-quantified absence is not provable by one browser test
