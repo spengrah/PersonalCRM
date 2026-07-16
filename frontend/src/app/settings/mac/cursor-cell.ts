@@ -51,6 +51,30 @@ function formatPhoneCallsCursor(raw: string): string {
   return match ? match[1] : raw
 }
 
+/**
+ * cursorCellState classifies the Cursor cell for state-based test
+ * assertions (exposed on the td as `data-state`): 'count' when a
+ * backfill-complete source renders its live contact count, 'pending'
+ * when a backfill-progress source has no count to show yet (backfill
+ * incomplete, or counts not loaded), and 'cursor' for every other
+ * source (raw cursor or dash rendering).
+ */
+export type CursorCellState = 'count' | 'pending' | 'cursor'
+
+export function cursorCellState(
+  source: string,
+  entry: SourceHealthEntry,
+  counts: Record<string, number> | undefined
+): CursorCellState {
+  if (BACKFILL_PROGRESS_SOURCES.has(source)) {
+    if (entry.backfill_complete === true && typeof counts?.[source] === 'number') {
+      return 'count'
+    }
+    return 'pending'
+  }
+  return 'cursor'
+}
+
 export function renderCursorCell(
   source: string,
   entry: SourceHealthEntry,

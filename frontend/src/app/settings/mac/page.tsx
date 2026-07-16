@@ -13,7 +13,7 @@ import {
   useMacHosts,
 } from '@/hooks/use-mac-hosts'
 import type { MacHost } from '@/lib/mac-hosts-api'
-import { renderCursorCell, type SourceHealthEntry } from './cursor-cell'
+import { cursorCellState, renderCursorCell, type SourceHealthEntry } from './cursor-cell'
 import { RotateKeyModal } from './rotate-key-modal'
 
 const HEARTBEAT_FRESH_MS = 5 * 60 * 1000
@@ -465,7 +465,11 @@ function SourceHealthTable({ health, hostId }: SourceHealthTableProps) {
                 <td className="px-2 py-1 text-gray-700">
                   {entry.last_pushed_at ? new Date(entry.last_pushed_at).toLocaleString() : '—'}
                 </td>
-                <td className="px-2 py-1 font-mono text-gray-700 truncate max-w-xs">
+                <td
+                  className="px-2 py-1 font-mono text-gray-700 truncate max-w-xs"
+                  data-testid="cursor-cell"
+                  data-state={cursorCellState(source, entry, counts)}
+                >
                   {renderCursorCell(source, entry, counts)}
                 </td>
                 <td className="px-2 py-1 text-red-700">

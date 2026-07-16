@@ -177,7 +177,7 @@ export function TodoistAccountsSection() {
   const isConfigured = settings?.project_id && settings?.label_id
 
   return (
-    <section className="bg-white rounded-lg shadow-sm border p-6">
+    <section aria-label="Todoist" className="bg-white rounded-lg shadow-sm border p-6">
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center space-x-3">
@@ -296,6 +296,7 @@ export function TodoistAccountsSection() {
                       loading={revokeMutation.isPending}
                       variant="ghost"
                       size="sm"
+                      aria-label={`Disconnect ${account.account_name || account.account_id}`}
                       className="text-red-600 hover:text-red-700 hover:bg-red-50"
                     >
                       <Trash2 className="w-4 h-4" />
@@ -337,6 +338,7 @@ export function TodoistAccountsSection() {
                       <select
                         value={selectedProjectId}
                         onChange={e => handleProjectChange(e.target.value)}
+                        aria-label="Project"
                         disabled={projectsLoading || updateSettingsMutation.isPending}
                         className="w-full px-3 py-2 text-sm border border-gray-200 rounded-md bg-white appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
                       >
@@ -358,6 +360,7 @@ export function TodoistAccountsSection() {
                       <select
                         value={selectedLabelId}
                         onChange={e => handleLabelChange(e.target.value)}
+                        aria-label="Label"
                         disabled={labelsLoading || updateSettingsMutation.isPending}
                         className="w-full px-3 py-2 text-sm border border-gray-200 rounded-md bg-white appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
                       >
