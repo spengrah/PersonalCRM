@@ -233,10 +233,18 @@ describe('buildTraceBody — exhaustive PII scrub (INV-2)', () => {
     serverEnv: 'sev-s20@synthetic.example',
     citation: 'cit-s21@synthetic.example',
     critique: 'crt-s22@synthetic.example',
-    mutValue: 'mvl-s23@synthetic.example',
-    mutNode: 'mnd-s24@synthetic.example',
-    mutPath: 'mpt-s25@synthetic.example',
-    mutParam: 'mpr-s26@synthetic.example +1-479-555-0126',
+    // Every string-bearing MutationSchema position (corpus/schema.ts), by its
+    // REAL property name — target.role, param, value, endpoint, node_role,
+    // node_name, field, and each path[] element.
+    mutRole: 'mrl-s23@synthetic.example',
+    mutParam: 'mpm-s24@synthetic.example',
+    mutValue: 'mvl-s25@synthetic.example +1-479-555-0125',
+    mutEndpoint: 'men-s26@synthetic.example',
+    mutNodeRole: 'mnr-s27@synthetic.example',
+    mutNodeName: 'mnn-s28@synthetic.example',
+    mutField: 'mfd-s29@synthetic.example',
+    mutPath0: 'mp0-s30@synthetic.example',
+    mutPath1: 'mp1-s31@synthetic.example',
   }
   const SENTINELS = Object.values(S)
 
@@ -293,12 +301,20 @@ describe('buildTraceBody — exhaustive PII scrub (INV-2)', () => {
       },
     ],
     itemVerdicts: [{ itemIndex: 0, verdict: 'fail', citation: S.citation, critique: S.critique }],
+    // A SUPERSET carrying every REAL string-bearing MutationSchema property name
+    // (the exporter deep-scrubs `mutation` regardless of op, so this proves each
+    // real position is covered; `op` is a closed enum, not scrubbed). `path` is
+    // an array — two elements prove array members are walked too.
     mutation: {
       op: 'set_json_field',
+      role: S.mutRole,
+      param: S.mutParam,
       value: S.mutValue,
-      node_name: S.mutNode,
-      target: { path: S.mutPath },
-      params: { new_value: S.mutParam },
+      endpoint: S.mutEndpoint,
+      node_role: S.mutNodeRole,
+      node_name: S.mutNodeName,
+      field: S.mutField,
+      path: [S.mutPath0, S.mutPath1],
     },
   })
 
