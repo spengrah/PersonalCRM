@@ -285,7 +285,7 @@ staging-reset: ## HARD reset + reseed STAGING — manual force / escape hatch (f
 tours: ## Reset staging + run the agentic UX QA tours. Config from env only: TOURS_BASE_URL, TOURS_API_KEY, TOURS_API_URL. Captures land in frontend/tests/tours/.runs/ (gitignored). TOURS_SKIP_RESET=1 skips the reset.
 	@scripts/run-tours.sh
 
-qa-report: ## Render the advisory report over a tours run dir (RUNDIR relative to frontend/, or absolute). JUDGE=1 adds the live judge over residue items (codex quota); OUT=<file> writes to a file instead of stdout. (The deterministic verifier merge gate retired with the verifier lane — its coverage lives in the cited Playwright E2E specs.)
+qa-report: ## Render the advisory report over a tours run dir (RUNDIR relative to frontend/, or absolute). JUDGE=1 adds the live judge over residue items (codex quota) AND the trap detection self-test — a missed/non-executable trap sets a non-zero EXIT (a hard signal, distinct from the advisory verdicts, which never gate). OUT=<file> writes to a file instead of stdout. To ship the doctored trap trace when a trap MISSES, run `make qa-export` as an INDEPENDENT step (`;` — never `&&`, which would skip the export on the very miss it must diagnose). Set QA_JUDGE_TRACE=<file> to capture the spans. (The deterministic verifier merge gate retired with the verifier lane — its coverage lives in the cited Playwright E2E specs.)
 	@cd frontend && bun run tests/tours/judge/report/render.ts "$(RUNDIR)" $(if $(OUT),"$(OUT)",) $(if $(filter 1,$(JUDGE)),--judge,)
 
 qa-export: ## Ship a judge run's GenAI spans (TRACE=<trace.jsonl>, written when the judge runs with QA_JUDGE_TRACE set) to Langfuse, screenshots included. No-op without LANGFUSE_HOST/PUBLIC_KEY/SECRET_KEY.

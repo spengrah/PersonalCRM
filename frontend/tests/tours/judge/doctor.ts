@@ -4,8 +4,8 @@
 // labeler imports) + a thin `bun run` CLI. Byte-stable across runs (JSON clone +
 // deterministic ops).
 
-import type { AriaChild, AriaNode, Capture } from '../support/types'
-import type { Mutation } from './corpus/schema'
+import type { ApiResponseItem, AriaChild, AriaNode, Capture } from '../support/types'
+import type { Mutation } from './mutation'
 
 function clone<T>(v: T): T {
   return JSON.parse(JSON.stringify(v)) as T
@@ -52,6 +52,17 @@ function removeAriaNode(node: AriaNode, role: string, nameOrText: string): boole
     if (isAriaNode(c) && removeAriaNode(c, role, nameOrText)) return true
   }
   return false
+}
+
+// Index of the last item in a group whose status is a server error (>= 500) —
+// the final failed response react-query surfaces after its retry bracket. -1
+// when the group holds no error (the caller no-ops, and the live self-test's
+// rendered-prompt liveness guard reports that no-op loudly).
+function lastErrorIndex(items: ApiResponseItem[]): number {
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (items[i].status >= 500) return i
+  }
+  return -1
 }
 
 // Set body[path[0]][path[1]]... = value on an already-parsed JSON body.
@@ -120,12 +131,16 @@ export function applyMutation(baseCaptures: Capture[], mutation: Mutation): Capt
       break
     }
     case 'set_json_field': {
-      // Out-of-range itemIndex is a silent no-op here. A no-oped mutation goes
-      // unnoticed until the live-judge / labeled evaluation reads the doctored
-      // evidence (the pattern's primary use is a judge-layer expectation, e.g.
-      // the stale-reason case) — so verify the index against the committed
-      // capture when authoring the case.
-      const item = (cap.apiResponses[mutation.endpoint] ?? [])[mutation.itemIndex ?? 0]
+      // Target selection: itemMatch (dynamic) wins over itemIndex (fixed).
+      // 'last-error' finds the final >= 500 in the group — robust to a variable
+      // retry count or a leading success a fixed index would mistarget. A
+      // no-match / out-of-range index is a silent no-op HERE; the live self-test
+      // catches it via the rendered-prompt liveness guard (a mutation invisible
+      // to the judge fails loudly), so verify targeting against real captures.
+      const group = cap.apiResponses[mutation.endpoint] ?? []
+      const idx =
+        mutation.itemMatch === 'last-error' ? lastErrorIndex(group) : (mutation.itemIndex ?? 0)
+      const item = group[idx]
       if (item) setJsonPath(item.body, mutation.path, mutation.value)
       break
     }
@@ -157,7 +172,7 @@ async function main(): Promise<void> {
     process.exit(2)
   }
   const base = JSON.parse(fs.readFileSync(baseFile, 'utf8')) as Capture
-  const { parseMutation } = await import('./corpus/schema')
+  const { parseMutation } = await import('./mutation')
   const mutation = parseMutation(JSON.parse(mutationJson))
   const [doctored] = applyMutation([base], mutation)
   const out = `${JSON.stringify(doctored, null, 2)}\n`

@@ -4,6 +4,8 @@ This advisory arc (Piece 4 · Track B) files **no** GitHub issues (arc §4.4). T
 
 > **Status update (verifier→E2E migration complete).** The deterministic verifier lane and its offline merge gate have **retired** — that coverage moved to cited Playwright E2E specs (`frontend/tests/e2e/*.spec.ts`, `// spec:` citations). What survives here is the advisory judge over the residue (`CON-042[0]` + `DSH-004[2]`) plus the intent pass, rendered by `make qa-report`. The frozen corpus is now **dormant** pending the subsequent Langfuse-as-QA-SSOT migration, which owns the held-out fail-precision bar + issue-mode flip the items below still describe as "later" — those are that migration's work, not this arc's.
 
+> **Detection coverage — no longer frozen.** The frozen doctored-corpus approach to detection (a committed doctored case the eval scored) is **superseded** by the live trap-as-transformation self-test (`judge/trap-selftest.ts` + `judge/trap-config.ts`, on every `JUDGE=1` round): the trap is the mutation applied to the round's OWN fresh captures, not a stored fixture, so there is zero fixture rot and the silent-no-op a frozen trap could hide (a mutation the judge never projected) now fails loudly via the rendered-prompt liveness guard. The corpus doctored cases below remain only as labeler draft inputs until the corpus-retirement terminal step deletes the tree.
+
 ## Label-gated (need the maintainer's corrected ground-truth labels)
 
 The user is unavailable, so PR2 is engineered to be mergeable with **zero** human labels. These metrics wait for labels and for a later issue-mode step (the Langfuse-SSOT migration) to gate on them:

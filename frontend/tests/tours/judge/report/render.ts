@@ -7,9 +7,16 @@
 
 import { SPEC_CATALOG } from '../spec-catalog'
 import { SKIP_LIST } from './skip-list'
-import type { BehaviorGrade } from '../grader/grade'
-import type { Verdict } from '../grader/types'
-import type { IntentGrade } from '../intent-runner'
+import { gradeBehavior, groupByBehavior, type BehaviorGrade } from '../grader/grade'
+import type { ItemVerdicts, Verdict } from '../grader/types'
+import { runIntentPass, type IntentGrade } from '../intent-runner'
+import { allIntents } from '../intent-catalog'
+import { INTENT_CAPTURE_CAP, type ScreenshotResolver } from '../intent-input'
+import { runTrapSelfTest, selftestExitCode, type TrapResult } from '../trap-selftest'
+import type { TrapSpec } from '../trap-config'
+import type { JudgeRunner } from '../judge-runner'
+import type { Judge } from '../adapter'
+import type { Capture } from '../../support/types'
 
 export interface ReportMeta {
   runId?: string
@@ -22,9 +29,23 @@ export interface ReportInput {
   grades: BehaviorGrade[]
   // Intent-pass grades (present only on --judge runs; the pass costs quota).
   intents?: IntentGrade[]
+  // Trap self-test results (present only on --judge runs). Undefined renders NO
+  // self-test section — a bare (non-judge) report, never a passing self-test.
+  trapResults?: TrapResult[]
+  // Judge-lane exceptions (residue/intent) caught during the round — a harness
+  // failure, surfaced visibly and forcing a non-zero exit. Undefined = none.
+  laneErrors?: string[]
 }
 
 const ICON: Record<Verdict, string> = { pass: '✅', fail: '❌', unsure: '⚠️' }
+
+// The self-test lane's own status icons — deliberately distinct from the
+// advisory verdict icons so the two lanes never read as one.
+const TRAP_ICON: Record<TrapResult['status'], string> = {
+  caught: '✅',
+  missed: '❌',
+  error: '🔴',
+}
 
 function countByVerdict(grade: BehaviorGrade): Record<Verdict, number> {
   const c: Record<Verdict, number> = { pass: 0, fail: 0, unsure: 0 }
@@ -159,6 +180,39 @@ export function renderReport(input: ReportInput): string {
     }
   }
 
+  // Judge-lane errors — a residue/intent judge threw during the round. The
+  // report is still written (so the failure is diagnosable) and the exit is
+  // non-zero. This is a HARNESS failure, not an advisory app verdict.
+  if (input.laneErrors && input.laneErrors.length > 0) {
+    lines.push('## Judge-lane errors (harness failure — forces non-zero exit)')
+    lines.push('')
+    for (const e of input.laneErrors) lines.push(`- 🔴 ${e}`)
+    lines.push('')
+  }
+
+  // Detection self-test (traps) — tests the JUDGE (the detector), not the app.
+  // Each trap doctors this round's own captures and MUST be caught (a grounded
+  // fail); a missed / non-executable / errored trap drives a non-zero exit — a
+  // HARD signal, distinct from the advisory verdicts above (which never gate).
+  // Rendered only on judged rounds; a bare report omits it entirely.
+  if (input.trapResults) {
+    lines.push('## Detection self-test (traps)')
+    lines.push('')
+    lines.push(
+      '> Tests the JUDGE (the detector), NOT the app. Each trap applies a committed mutation to ' +
+        "this round's own captures and MUST be caught (a grounded `fail`). A missed / " +
+        'non-executable / errored trap sets a non-zero exit — a hard signal separate from the ' +
+        'advisory verdicts above.'
+    )
+    lines.push('')
+    for (const t of input.trapResults) {
+      lines.push(
+        `- ${TRAP_ICON[t.status]} **${t.status}** — \`${t.id}\` (${t.targetBehavior}[${t.targetItem}]) — ${t.reason}`
+      )
+    }
+    lines.push('')
+  }
+
   // Coverage — first-cut scope (D5): the 3 scoped domains' current-ux behaviors
   // (toured vs untoured) + the explicit skip-list. Advisory; files no issues; NOT
   // a repo-wide scanner (the other SSOT domains are Piece 3's scope).
@@ -181,24 +235,134 @@ export function renderReport(input: ReportInput): string {
   return lines.join('\n')
 }
 
+// The judge dependencies a JUDGED round needs — an all-or-nothing bundle. Its
+// presence IS the `--judge` opt-in: `undefined` = today's bare report (pending
+// labels, no intent pass, no traps, zero judge calls, exit 0). Every dep is
+// INJECTED, so `runJudgeRound` never consults env config or spawns an adapter —
+// tests pass mocks; production builds them from `selectJudge` under `--judge`.
+export interface JudgesBundle {
+  // Residue grading: one call per behavior with judge-tagged residue items.
+  residueRunner: JudgeRunner
+  // The intent pass judge (its own stronger-model default).
+  intentJudge: Judge
+  // The RAW judge the trap self-test calls directly (so `__trap` reaches the
+  // adapter — the runner would rebuild its input and drop it).
+  trapJudge: Judge
+  // The committed traps to apply this round.
+  traps: TrapSpec[]
+  resolveScreenshot?: ScreenshotResolver
+}
+
+export interface JudgeRoundResult {
+  markdown: string
+  trapResults: TrapResult[]
+  exitCode: 0 | 1
+}
+
+// Orchestrate one report round over already-loaded captures. Exported + purely
+// dependency-injected so the hard-exit path is unit-testable without a CLI spawn.
+// With `judges`: residue grading + intent pass + trap self-test, exit driven by
+// the traps. Without it: the bare advisory report, exit 0.
+//
+// CONTRACT (INV-5): the report is ALWAYS produced — a judge-lane exception
+// (residue, intent, OR trap) NEVER rejects this function. Every lane is guarded;
+// an exception becomes a visible "judge-lane error" note AND forces exitCode 1
+// (a harness that could not run a lane cannot certify the round). The trap lane
+// self-guards each trap into an `error` TrapResult; residue/intent throws are
+// caught here. This keeps the report writable so a reviewer can diagnose the
+// failure, while the non-zero exit still surfaces it.
+export async function runJudgeRound(
+  captures: Capture[],
+  opts: { meta?: ReportMeta; judges?: JudgesBundle } = {}
+): Promise<JudgeRoundResult> {
+  const { meta, judges } = opts
+  const laneErrors: string[] = []
+  const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
+
+  // Grade SERIALLY. The judge calls must NOT fan out: concurrent codex spawns
+  // storm a quota-limited account, so keep one codex subprocess at a time. A
+  // residue-judge throw for one behavior degrades THAT behavior to pending (a
+  // visible lane error) without aborting the round.
+  const grades: BehaviorGrade[] = []
+  for (const set of groupByBehavior(captures)) {
+    let judge: ItemVerdicts | undefined
+    if (judges) {
+      try {
+        judge = await judges.residueRunner(set.behaviorId, set.captures)
+      } catch (e) {
+        laneErrors.push(`residue judge for ${set.behaviorId}: ${errMsg(e)}`)
+      }
+    }
+    grades.push(gradeBehavior(set, judge ? { judge } : {}))
+  }
+
+  // The intent pass + trap self-test ride the JUDGED round only. Screenshots
+  // recorded by the tours attach as model images when the file exists (live
+  // evidence only). The trap pass calls the RAW judge with its own doctored
+  // input so the `__trap` marker traverses to the adapter's span.
+  let intents: IntentGrade[] | undefined
+  let trapResults: TrapResult[] = []
+  if (judges) {
+    try {
+      intents = await runIntentPass(
+        captures,
+        judges.intentJudge,
+        allIntents(),
+        INTENT_CAPTURE_CAP,
+        judges.resolveScreenshot
+      )
+    } catch (e) {
+      // An intent-pass throw does not abort the round — the trap self-test still
+      // runs and the report is still written.
+      laneErrors.push(`intent pass: ${errMsg(e)}`)
+    }
+    trapResults = await runTrapSelfTest(
+      captures,
+      judges.traps,
+      judges.trapJudge,
+      judges.resolveScreenshot
+    )
+  }
+
+  const markdown = renderReport({
+    meta,
+    grades,
+    intents,
+    // Only a judged round renders the self-test section; a bare round passes
+    // undefined so the section is omitted entirely.
+    trapResults: judges ? trapResults : undefined,
+    laneErrors: laneErrors.length > 0 ? laneErrors : undefined,
+  })
+  // A missed/errored trap OR any judge-lane exception forces exit 1 — the round
+  // could not be certified. (Advisory app verdicts, per D7, never gate; this is
+  // a HARNESS-failure signal, not an app verdict.)
+  const exitCode: 0 | 1 = selftestExitCode(trapResults) === 1 || laneErrors.length > 0 ? 1 : 0
+  return { markdown, trapResults, exitCode }
+}
+
 // CLI (bun): bun run tests/tours/judge/report/render.ts <runDir> [outFile]
-async function main(): Promise<void> {
+// Exported so its exit behavior is unit-testable. It NEVER calls process.exit()
+// — every path sets the DEFERRED `process.exitCode` and returns, so the process
+// finishes naturally (flushing the report + the QA_JUDGE_TRACE JSONL) before the
+// status is read.
+export async function main(): Promise<void> {
   const fs = await import('fs')
   const path = await import('path')
-  const { groupByBehavior, gradeBehavior } = await import('../grader/grade')
   const argv = process.argv.slice(2)
   if (argv.includes('-h') || argv.includes('--help')) {
     console.log('usage: render.ts <runDir> [outFile] [--judge]')
     console.log(
       '  --judge  run the LLM judge over residue items (advisory; needs codex quota / QA_JUDGE)'
     )
-    process.exit(0)
+    process.exitCode = 0
+    return
   }
   const useJudge = argv.includes('--judge')
   const [runDir, outFile] = argv.filter(a => !a.startsWith('--'))
   if (!runDir) {
     console.error('usage: render.ts <runDir> [outFile] [--judge]')
-    process.exit(2)
+    process.exitCode = 2
+    return
   }
   const capturesRoot = path.join(runDir, 'captures')
   const files: string[] = []
@@ -232,37 +396,6 @@ async function main(): Promise<void> {
     const abs = path.resolve(runDir, c.screenshot)
     return fs.existsSync(abs) ? abs : undefined
   }
-  const runner = useJudge
-    ? (await import('../judge-runner')).makeJudgeRunner(
-        undefined,
-        canAttachImages ? resolveScreenshot : undefined
-      )
-    : undefined
-  // Grade SERIALLY. The judge calls must NOT fan out: concurrent codex spawns
-  // storm a quota-limited account, so keep one codex subprocess at a time.
-  const grades = []
-  for (const set of groupByBehavior(captures)) {
-    const judge = runner ? await runner(set.behaviorId, set.captures) : undefined
-    grades.push(gradeBehavior(set, judge ? { judge } : {}))
-  }
-
-  // The intent pass (judge-only; serial like the residue path). Uses its own
-  // stronger-model default (QA_INTENT_MODEL / QA_INTENT_EFFORT). Screenshots
-  // recorded by the tours attach as model images when the file exists in the
-  // run dir (live evidence only — the committed corpus stays aria-only).
-  let intents
-  if (useJudge) {
-    const { makeIntentJudge, runIntentPass } = await import('../intent-runner')
-    const { INTENT_CAPTURE_CAP } = await import('../intent-input')
-    const { allIntents } = await import('../intent-catalog')
-    intents = await runIntentPass(
-      captures,
-      makeIntentJudge(),
-      allIntents(),
-      INTENT_CAPTURE_CAP,
-      canAttachImages ? resolveScreenshot : undefined
-    )
-  }
   let runId: string | undefined
   let gitSha: string | undefined
   const manifestPath = path.join(runDir, 'manifest.json')
@@ -274,9 +407,41 @@ async function main(): Promise<void> {
     runId = m.runId
     gitSha = m.gitSha
   }
-  const md = renderReport({ meta: { runId, gitSha }, grades, intents })
-  if (outFile) fs.writeFileSync(outFile, md, 'utf8')
-  else process.stdout.write(md)
+
+  // Build the judge deps ONLY under --judge (the opt-in boundary). ONE raw judge
+  // powers both the residue runner AND the trap self-test — the trap pass needs
+  // the RAW judge so its `__trap` marker traverses to the adapter (the runner
+  // would rebuild its input and drop it); residue reuses it via runnerFromJudge.
+  // The intent pass uses its own stronger-model default. Without --judge,
+  // `judges` stays undefined → the bare report, zero judge calls, exit 0.
+  let judges: JudgesBundle | undefined
+  if (useJudge) {
+    const { selectJudge } = await import('../adapter')
+    const { runnerFromJudge } = await import('../judge-runner')
+    const { makeIntentJudge } = await import('../intent-runner')
+    const { TRAPS } = await import('../trap-config')
+    const raw = selectJudge()
+    const rs = canAttachImages ? resolveScreenshot : undefined
+    judges = {
+      residueRunner: runnerFromJudge(raw, rs),
+      trapJudge: raw,
+      intentJudge: makeIntentJudge(),
+      traps: TRAPS,
+      resolveScreenshot: rs,
+    }
+  }
+
+  const { markdown, exitCode } = await runJudgeRound(captures, {
+    meta: { runId, gitSha },
+    judges,
+  })
+  if (outFile) fs.writeFileSync(outFile, markdown, 'utf8')
+  else process.stdout.write(markdown)
+  // Deferred (NEVER process.exit()): the process finishes naturally so the
+  // report + the QA_JUDGE_TRACE JSONL fully flush BEFORE the hard status is
+  // read. A missed / non-executable / errored trap sets 1; the operator exports
+  // the doctored trace as an INDEPENDENT step (see the Makefile runbook).
+  process.exitCode = exitCode
 }
 
 if (typeof import.meta !== 'undefined' && (import.meta as ImportMeta).main) {
