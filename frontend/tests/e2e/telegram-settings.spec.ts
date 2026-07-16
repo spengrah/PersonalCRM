@@ -123,7 +123,7 @@ test.describe('Telegram Settings @area:settings', () => {
     await expect(page.getByLabel('Verification Code')).toBeVisible()
   })
 
-  // spec: TGM-038[2], TGM-038[4]
+  // spec: TGM-038[2]
   test('auth flow: code → connected transition', async ({ page }) => {
     await mockStatus(page, { status: 'disconnected', connected: false })
 
@@ -172,8 +172,12 @@ test.describe('Telegram Settings @area:settings', () => {
     await page.getByLabel('Verification Code').fill('12345')
     await page.getByRole('button', { name: 'Verify' }).click()
 
-    // Connected state reflects the username from the verify response.
+    // A valid code connects: the success indication carries the verify
+    // response's username, and the view switches to the connected state
+    // (its disconnect affordance appears). The connected VIEW's username
+    // display is TGM-038[4], proven by the pre-connected-status test.
     await expect(page.getByText(/Connected.*@testuser/)).toBeVisible({ timeout: 5000 })
+    await expect(page.getByRole('button', { name: /Disconnect/i })).toBeVisible()
   })
 
   // spec: TGM-038[2], TGM-038[3]
@@ -242,11 +246,13 @@ test.describe('Telegram Settings @area:settings', () => {
     await page.getByLabel('2FA Password').fill('mypassword')
     await page.getByRole('button', { name: 'Verify' }).click()
 
-    // Should show connected
+    // A valid password connects: success indication plus the view's
+    // disconnect affordance.
     await expect(page.getByText(/Connected.*@testuser2fa/)).toBeVisible({ timeout: 5000 })
+    await expect(page.getByRole('button', { name: /Disconnect/i })).toBeVisible()
   })
 
-  // spec: TGM-039[0], TGM-039[2]
+  // spec: TGM-038[4], TGM-039[0], TGM-039[2]
   test('shows connected state with username', async ({ page }) => {
     // Mock status as connected
     await mockStatus(page, {
@@ -300,16 +306,6 @@ test.describe('Telegram Settings @area:settings', () => {
                   phone_number: '+15550001111',
                 },
           }),
-        })
-      }
-      if (req.method() === 'OPTIONS') {
-        return route.fulfill({
-          status: 204,
-          headers: {
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'GET,POST,DELETE,OPTIONS',
-            'Access-Control-Allow-Headers': 'Content-Type,X-API-Key',
-          },
         })
       }
       return route.fallback()

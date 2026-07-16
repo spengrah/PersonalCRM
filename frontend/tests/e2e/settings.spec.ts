@@ -1,26 +1,16 @@
 import { test, expect, type Page, type Route } from '@playwright/test'
 
 // The provider sections talk to the app's own account/status endpoints, and
-// the sandbox/CI deployment has no GOOGLE_*/TODOIST_* credentials — so every
-// provider-state test here route-mocks those endpoints (the sanctioned
+// the sandbox/CI deployment has no GOOGLE_*/TODOIST_* credentials — so the
+// provider-state tests here route-mock those endpoints (the sanctioned
 // technique) to force each state deterministically, independent of env.
-//
-// The app calls the API cross-origin (frontend :3000 → API :8080) with an
-// X-API-Key header, so fulfilled responses answer the CORS preflight and
-// carry Access-Control-Allow-Origin.
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE,OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type,X-API-Key',
-}
+// One live-backend smoke test stays unmocked so a real endpoint-shape
+// regression cannot hide behind the mocks.
 
-function corsFulfill(route: Route, body: unknown, status = 200) {
-  if (route.request().method() === 'OPTIONS') {
-    return route.fulfill({ status: 204, headers: corsHeaders })
-  }
+function fulfillJson(route: Route, body: unknown, status = 200) {
   return route.fulfill({
     status,
-    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    contentType: 'application/json',
     body: JSON.stringify(body),
   })
 }
@@ -33,22 +23,22 @@ const notFoundBody = { success: false, error: { code: 'NOT_FOUND', message: 'not
 async function mockGoogleAccounts(page: Page, accounts: unknown[] | null) {
   await page.route('**/api/v1/auth/google/accounts', route =>
     accounts === null
-      ? corsFulfill(route, notFoundBody, 404)
-      : corsFulfill(route, { success: true, data: accounts })
+      ? fulfillJson(route, notFoundBody, 404)
+      : fulfillJson(route, { success: true, data: accounts })
   )
 }
 
 async function mockTodoistAccounts(page: Page, accounts: unknown[] | null) {
   await page.route('**/api/v1/auth/todoist/accounts', route =>
     accounts === null
-      ? corsFulfill(route, notFoundBody, 404)
-      : corsFulfill(route, { success: true, data: accounts })
+      ? fulfillJson(route, notFoundBody, 404)
+      : fulfillJson(route, { success: true, data: accounts })
   )
 }
 
 async function mockSyncStates(page: Page, states: unknown[]) {
   await page.route('**/api/v1/sync/status', route =>
-    corsFulfill(route, { success: true, data: states })
+    fulfillJson(route, { success: true, data: states })
   )
 }
 
@@ -63,9 +53,12 @@ const CHAT_SCOPES = [
   'https://www.googleapis.com/auth/chat.memberships.readonly',
 ]
 
+// The credential row id and the provider account id are DIFFERENT values on
+// the wire (revoke takes the credential id, not the account id) — keep them
+// distinct in fixtures so an id/account_id mix-up is detectable.
 function googleAccount(accountId: string, overrides: Record<string, unknown> = {}) {
   return {
-    id: accountId,
+    id: `cred-${accountId}`,
     account_id: accountId,
     created_at: '2026-01-05T12:00:00Z',
     updated_at: '2026-01-05T12:00:00Z',
@@ -75,6 +68,42 @@ function googleAccount(accountId: string, overrides: Record<string, unknown> = {
 }
 
 test.describe('Settings Page @area:settings', () => {
+  // formatDate renders via toLocaleDateString — pin the browser locale and
+  // timezone so date assertions don't depend on the host machine.
+  test.use({ locale: 'en-US', timezoneId: 'UTC' })
+
+  // Live-backend smoke: deliberately NO route mocks. Whatever the
+  // deployment's provider configuration, the real accounts/status endpoints
+  // must leave every provider section settled — an account state or a
+  // not-connected state, never a hung loader or an error stack. Guards the
+  // real endpoint shapes that the mocked tests in this file replace.
+  test('provider sections settle against the live backend', async ({ page }) => {
+    await page.goto('/settings')
+    await page.waitForLoadState('domcontentloaded')
+
+    const google = googleRegion(page)
+    await expect(
+      google
+        .getByRole('button', { name: /Connect Google Account/i })
+        .or(google.getByRole('button', { name: 'Add Account' }))
+    ).toBeVisible({ timeout: 15_000 })
+
+    const todoist = todoistRegion(page)
+    await expect(
+      todoist
+        .getByRole('button', { name: /Connect Todoist Account/i })
+        .or(todoist.getByRole('button', { name: 'Connect Account' }))
+    ).toBeVisible({ timeout: 15_000 })
+
+    const telegram = page.getByRole('region', { name: 'Telegram' })
+    await expect(
+      telegram
+        .getByRole('button', { name: /Connect Telegram/i })
+        .or(telegram.getByText('Configuration Required'))
+        .or(telegram.getByRole('button', { name: /Disconnect/i }))
+    ).toBeVisible({ timeout: 15_000 })
+  })
+
   // spec: SET-019[0], SET-023[0], SET-023[1]
   test('unconfigured providers collapse to a not-connected state with setup guidance', async ({
     page,
@@ -120,7 +149,8 @@ test.describe('Settings Page @area:settings', () => {
 
     const google = googleRegion(page)
     // The account identity and its connected date (mocked created_at
-    // 2026-01-05, rendered by formatDate) appear on the card.
+    // 2026-01-05, rendered by formatDate under the pinned en-US/UTC
+    // context) appear on the card.
     await expect(google.getByText('e2e-google-user')).toBeVisible({ timeout: 10_000 })
     await expect(google.getByText(/Connected Jan 5, 2026/)).toBeVisible()
 
@@ -135,7 +165,7 @@ test.describe('Settings Page @area:settings', () => {
     // Stub the provider consent screen with a same-origin URL so the
     // whole-page navigation is observable without a live provider.
     await page.route('**/api/v1/auth/google', route =>
-      corsFulfill(route, {
+      fulfillJson(route, {
         success: true,
         data: { url: '/settings?consent-stub=1', state: 'e2e-state' },
       })
@@ -161,11 +191,14 @@ test.describe('Settings Page @area:settings', () => {
   test('a success outcome shows a notification, refreshes accounts, and strips params', async ({
     page,
   }) => {
-    let accountListGets = 0
-    await page.route('**/api/v1/auth/google/accounts', route => {
-      if (route.request().method() === 'GET') accountListGets++
-      return corsFulfill(route, { success: true, data: [googleAccount('e2e-google-user')] })
-    })
+    // The refresh facet is proven by the freshly-connected account being
+    // visible after the success landing. It cannot be pinned to a SECOND
+    // accounts GET: the success handler's refetch() dedupes into the
+    // in-flight mount fetch (React Query collapses them into one request —
+    // verified empirically with a flip-on-second-read mock, which never saw
+    // a second read), and the ?auth=success landing is always a full-page
+    // redirect, so the mount fetch is the refresh on every reachable path.
+    await mockGoogleAccounts(page, [googleAccount('e2e-google-user')])
     await mockSyncStates(page, [])
 
     await page.goto('/settings?auth=success&provider=google')
@@ -175,13 +208,10 @@ test.describe('Settings Page @area:settings', () => {
     await expect(googleRegion(page).getByText(/connected successfully/i)).toBeVisible({
       timeout: 10_000,
     })
-    // …the account list is fetched on the outcome landing and reflects the
-    // connected account. (The success handler's explicit refetch coalesces
-    // with the in-flight initial fetch — React Query dedupe — so asserting
-    // a second GET would over-specify; the observable claim is a fresh
-    // fetch plus the account rendered.)
-    await expect.poll(() => accountListGets, { timeout: 10_000 }).toBeGreaterThanOrEqual(1)
-    await expect(googleRegion(page).getByText('e2e-google-user')).toBeVisible()
+    // …the landing surfaces the newly-connected account…
+    await expect(googleRegion(page).getByText('e2e-google-user')).toBeVisible({
+      timeout: 10_000,
+    })
     // …and the one-time params are stripped so refresh does not re-trigger.
     await expect(page).toHaveURL('/settings', { timeout: 10_000 })
   })
@@ -207,8 +237,8 @@ test.describe('Settings Page @area:settings', () => {
     await mockSyncStates(page, [])
     let revokeCalled = false
     await page.route('**/api/v1/auth/google/accounts/*/revoke', route => {
-      if (route.request().method() !== 'OPTIONS') revokeCalled = true
-      return corsFulfill(route, { success: true, data: { message: 'revoked' } })
+      if (route.request().method() === 'POST') revokeCalled = true
+      return fulfillJson(route, { success: true, data: { message: 'revoked' } })
     })
 
     const dialogMessages: string[] = []
@@ -241,16 +271,16 @@ test.describe('Settings Page @area:settings', () => {
   }) => {
     let accounts: unknown[] = [googleAccount('e2e-google-user')]
     await page.route('**/api/v1/auth/google/accounts', route =>
-      corsFulfill(route, { success: true, data: accounts })
+      fulfillJson(route, { success: true, data: accounts })
     )
     await mockSyncStates(page, [])
     const revokePosts: string[] = []
     await page.route('**/api/v1/auth/google/accounts/*/revoke', route => {
-      if (route.request().method() !== 'OPTIONS') {
+      if (route.request().method() === 'POST') {
         revokePosts.push(route.request().url())
         accounts = []
       }
-      return corsFulfill(route, { success: true, data: { message: 'revoked' } })
+      return fulfillJson(route, { success: true, data: { message: 'revoked' } })
     })
 
     page.on('dialog', dialog => dialog.accept())
@@ -263,9 +293,10 @@ test.describe('Settings Page @area:settings', () => {
     await expect(disconnect).toBeVisible({ timeout: 10_000 })
     await disconnect.click()
 
-    // The revoke request fires for that account…
+    // The revoke request targets the CREDENTIAL id, not the provider
+    // account id…
     await expect
-      .poll(() => revokePosts.some(u => u.includes('/accounts/e2e-google-user/revoke')))
+      .poll(() => revokePosts.some(u => u.includes('/accounts/cred-e2e-google-user/revoke')))
       .toBe(true)
     // …the outcome is reported, and the list reflects the removal.
     await expect(google.getByText(/Disconnected e2e-google-user/)).toBeVisible({
@@ -383,10 +414,10 @@ test.describe('Settings Page @area:settings', () => {
         settingsPatches.push(body)
         settings = { ...settings, ...body }
       }
-      return corsFulfill(route, { success: true, data: settings })
+      return fulfillJson(route, { success: true, data: settings })
     })
     await page.route('**/api/v1/todoist/projects', route =>
-      corsFulfill(route, {
+      fulfillJson(route, {
         success: true,
         data: [
           { id: 'proj-1', name: 'CRM Tasks' },
@@ -395,7 +426,7 @@ test.describe('Settings Page @area:settings', () => {
       })
     )
     await page.route('**/api/v1/todoist/labels', route =>
-      corsFulfill(route, {
+      fulfillJson(route, {
         success: true,
         data: [
           { id: 'label-1', name: 'crm-people' },
@@ -442,30 +473,28 @@ test.describe('Settings Page @area:settings', () => {
     ])
     await mockSyncStates(page, [])
     await page.route('**/api/v1/todoist/settings', route =>
-      corsFulfill(route, { success: true, data: {} })
+      fulfillJson(route, { success: true, data: {} })
     )
     await page.route('**/api/v1/todoist/projects', route =>
-      corsFulfill(route, { success: true, data: [] })
+      fulfillJson(route, { success: true, data: [] })
     )
     await page.route('**/api/v1/todoist/labels', route =>
-      corsFulfill(route, { success: true, data: [] })
+      fulfillJson(route, { success: true, data: [] })
     )
 
     let failMode = false
     const triggerBodies: Record<string, unknown>[] = []
     await page.route('**/api/v1/sync/todoist/trigger', route => {
-      if (route.request().method() === 'OPTIONS') {
-        return route.fulfill({ status: 204, headers: corsHeaders })
-      }
+      if (route.request().method() !== 'POST') return route.fallback()
       triggerBodies.push(route.request().postDataJSON() as Record<string, unknown>)
       if (failMode) {
-        return corsFulfill(
+        return fulfillJson(
           route,
           { success: false, error: { code: 'INTERNAL', message: 'boom' } },
           500
         )
       }
-      return corsFulfill(route, { success: true, data: null })
+      return fulfillJson(route, { success: true, data: null })
     })
 
     await page.goto('/settings')
@@ -510,8 +539,10 @@ test.describe('Settings Page @area:settings', () => {
     const download = await downloadPromise
     expect(download.suggestedFilename()).toMatch(/\.json$/)
 
-    // Import: the affordance accepts a backup file…
+    // Import: the affordance accepts a backup file and is visible to the
+    // user (setInputFiles alone would also work on a hidden input)…
     const fileInput = page.locator('input[type="file"]')
+    await expect(fileInput).toBeVisible()
     await expect(fileInput).toHaveAttribute('accept', '.json')
     await fileInput.setInputFiles({
       name: 'e2e-backup.json',
@@ -529,5 +560,17 @@ test.describe('Settings Page @area:settings', () => {
 
     // The surface communicates that import does not yet modify stored data.
     await expect(page.getByText(/without making changes/i)).toBeVisible()
+  })
+
+  // spec: SET-035[0], SET-035[1]
+  test('the system information section reports a version', async ({ page }) => {
+    await page.goto('/settings')
+    await page.waitForLoadState('domcontentloaded')
+
+    const sysinfo = page.getByRole('region', { name: 'System Information' })
+    await expect(sysinfo).toBeVisible({ timeout: 10_000 })
+    // A version value is shown; the exact string is build-stamped, so only
+    // non-emptiness is pinned (no dev-fallback copy matching).
+    await expect(sysinfo.getByTestId('app-version')).not.toBeEmpty()
   })
 })
