@@ -33,7 +33,12 @@ test('contacts tour — 7 current ux behaviors', async ({ page, tour }) => {
   test.setTimeout(480_000)
 
   // --- Reserve distinct contacts up front, by API query, not list position ---
-  const listResp = await tour.apiCtx.get('/api/v1/contacts?limit=100&sort=cadence&order=desc')
+  // limit MUST cover the merge selector's candidate universe (useContacts({ limit: 500 })
+  // in merge-contact-modal.tsx). uniqueName below is only sound when computed over the
+  // SAME set the selector shows: a smaller window lets a duplicate full_name that lives
+  // outside it pass the guard, then surface twice in the selector — breaking CON-043's
+  // exact-text option click with a strict-mode violation.
+  const listResp = await tour.apiCtx.get('/api/v1/contacts?limit=500&sort=cadence&order=desc')
   const contacts = ((await listResp.json())?.data ?? []) as TourContact[]
   if (contacts.length < 4) {
     throw new Error(`tour: prod-shaped seed too small (${contacts.length} contacts) for the tour`)
