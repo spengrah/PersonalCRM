@@ -65,7 +65,7 @@ export const INTENT_CATALOG: Record<string, IntentSpec> = {
     statement:
       'moving between the contact list and contact detail feels like traversing one consistent, ordered list — sort, search, and filter context carries across navigation in both directions, with keyboard and mouse as equals',
     status: 'current',
-    servedBy: ['CON-038', 'CON-040', 'CON-041'],
+    servedBy: ['CON-038', 'CON-040', 'CON-041', 'CON-057', 'CON-059', 'CON-060'],
   },
   'CON-052': {
     id: 'CON-052',
