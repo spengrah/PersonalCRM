@@ -522,4 +522,282 @@ test.describe('Imports Modal @area:imports', () => {
       expect(contactBody?.data?.cadence).toBe('monthly')
     })
   })
+
+  test.describe('Resolution Guards', () => {
+    let testApi: TestAPI
+
+    test.beforeEach(async ({ request }, testInfo) => {
+      testApi = createTestAPI(request, testInfo)
+    })
+
+    test.afterEach(async () => {
+      await testApi.cleanup()
+    })
+
+    // spec: IMP-027[2]
+    test('an empty name blocks resolution', async ({ page }) => {
+      const { ids } = await testApi.seedExternalContacts([
+        {
+          display_name: 'Empty Name Guard',
+          emails: ['empty-name-guard@example.com'],
+        },
+      ])
+      const externalId = ids[0]
+      const displayName = `${testApi.prefix}-Empty Name Guard`
+
+      await page.goto('/imports')
+      await page.waitForLoadState('networkidle')
+      await findCandidateByName(page, displayName)
+
+      await candidateCardByName(page, displayName)
+        .getByRole('button', { name: /Import/i })
+        .click()
+      await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
+      await navigateModalToCandidate(page, displayName)
+
+      const modal = resolverDialog(page)
+
+      // Track import POSTs for this candidate — none may fire.
+      let importPosts = 0
+      page.on('request', req => {
+        if (req.method() === 'POST' && req.url().includes(`/imports/${externalId}/import`)) {
+          importPosts++
+        }
+      })
+
+      // Clear the name, then attempt to import.
+      await modal.getByRole('heading', { level: 3 }).first().click()
+      const nameInput = modal.getByRole('textbox').first()
+      await expect(nameInput).toBeVisible({ timeout: 5000 })
+      await nameInput.fill('')
+      await page.getByRole('button', { name: 'Import as New Contact', exact: true }).click()
+
+      // Resolution is blocked: the modal stays open and no request fired.
+      await expect(modal).toBeVisible()
+      await page.waitForTimeout(500)
+      expect(importPosts).toBe(0)
+    })
+
+    // spec: IMP-027[2]
+    test('an unresolved telegram peer requires a name edit before import', async ({ page }) => {
+      // An unresolved peer: telegram source with no name fields, no
+      // username, and no methods. Hidden by default behind the opt-in
+      // "Show unresolved" toggle.
+      const { ids } = await testApi.seedExternalContacts([{ source: 'telegram' }])
+      const externalId = ids[0]
+
+      await page.goto('/imports')
+      await page.waitForLoadState('domcontentloaded')
+      await page.getByRole('button', { name: 'Telegram', exact: true }).click()
+
+      // Opt in to unresolved peers, then open ours (display falls back to
+      // "Unknown" for a peer with no name and no handle).
+      const unresolvedToggle = page.getByRole('switch')
+      await expect(unresolvedToggle).toBeVisible({ timeout: 10000 })
+      await unresolvedToggle.click()
+      const displayName = 'Unknown'
+      await expect(page.getByRole('heading', { name: displayName }).first()).toBeVisible({
+        timeout: 10000,
+      })
+      await candidateCardByName(page, displayName)
+        .getByRole('button', { name: /Import/i })
+        .click()
+      await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
+      await navigateModalToCandidate(page, displayName)
+
+      const modal = resolverDialog(page)
+
+      let importPosts = 0
+      page.on('request', req => {
+        if (req.method() === 'POST' && req.url().includes(`/imports/${externalId}/import`)) {
+          importPosts++
+        }
+      })
+
+      // Importing without a name edit is blocked.
+      await page.getByRole('button', { name: 'Import as New Contact', exact: true }).click()
+      await expect(modal).toBeVisible()
+      await page.waitForTimeout(500)
+      expect(importPosts).toBe(0)
+
+      // Editing the name unblocks the import.
+      const editedName = `${testApi.prefix}-Named Telegram Peer`
+      await modal.getByRole('heading', { level: 3 }).first().click()
+      const nameInput = modal.getByRole('textbox').first()
+      await expect(nameInput).toBeVisible({ timeout: 5000 })
+      await nameInput.fill(editedName)
+      await nameInput.press('Enter')
+
+      const importResponsePromise = page.waitForResponse(
+        res =>
+          res.request().method() === 'POST' && res.url().includes(`/imports/${externalId}/import`)
+      )
+      await page.getByRole('button', { name: 'Import as New Contact', exact: true }).click()
+      const importResponse = await importResponsePromise
+      expect(importResponse.status()).toBe(201)
+    })
+
+    // spec: IMP-027[3]
+    test('link mode disables already-present methods and offers additions', async ({ page }) => {
+      // The CRM contact already carries email X; the candidate carries the
+      // identical X, a same-type different-value email Z, and a phone Y.
+      const emailX = `x-${testApi.prefix}@example.invalid`
+      const emailZ = `z-${testApi.prefix}@example.invalid`
+      const phoneY = '+15550001234'
+      await testApi.seedContacts([
+        {
+          full_name: 'Method Buckets Target',
+          methods: [{ type: 'email', value: emailX }],
+        },
+      ])
+      await testApi.seedExternalContacts([
+        {
+          display_name: 'Method Buckets Target',
+          source: 'icloud_contacts',
+          emails: [emailX, emailZ],
+          phones: [phoneY],
+        },
+      ])
+
+      await page.goto('/imports')
+      await page.waitForLoadState('domcontentloaded')
+
+      const cardName = `${testApi.prefix}-Method Buckets Target`
+      await findCandidateByName(page, cardName)
+      await candidateCardByName(page, cardName).getByRole('button', { name: /Link/i }).click()
+      await expect(page.getByRole('button', { name: 'Link to Existing' })).toBeVisible()
+      await navigateModalToCandidate(page, cardName)
+
+      // Ensure the same-named CRM contact is selected (trigram usually
+      // pre-selects it; select explicitly if not).
+      const dialog = resolverDialog(page)
+      const search = dialog.getByPlaceholder('Search for a contact...')
+      if (await search.isVisible().catch(() => false)) {
+        await search.fill('Method Buckets Target')
+        await page.getByText(cardName, { exact: true }).last().click()
+      }
+      await expect(page.getByRole('button', { name: /Link Contact/i })).toBeEnabled()
+
+      const methodRow = (value: string) => dialog.locator('div.border', { hasText: value }).last()
+
+      // The identical email X cannot be re-selected: its toggle is disabled.
+      const rowX = methodRow(emailX)
+      await expect(rowX).toBeVisible({ timeout: 10000 })
+      await expect(
+        rowX.getByRole('button', { name: /Select method|Deselect method/ })
+      ).toBeDisabled()
+
+      // The additions are offered under the to-add grouping with live toggles:
+      // the phone Y and the same-type different-value email Z (alongside the
+      // CRM value, which stays visible as X's row).
+      await expect(dialog.getByText('Will be added')).toBeVisible()
+      await expect(methodRow(phoneY).getByRole('button', { name: 'Deselect method' })).toBeEnabled()
+      await expect(methodRow(emailZ).getByRole('button', { name: 'Deselect method' })).toBeEnabled()
+    })
+  })
+
+  test.describe('Resolve Advance', () => {
+    let testApi: TestAPI
+
+    test.beforeEach(async ({ request }, testInfo) => {
+      testApi = createTestAPI(request, testInfo)
+    })
+
+    test.afterEach(async () => {
+      await testApi.cleanup()
+    })
+
+    // spec: IMP-028[1]
+    test('advances to the next candidate after resolving, closing only when the queue is exhausted', async ({
+      page,
+    }) => {
+      const { ids } = await testApi.seedExternalContacts([
+        {
+          display_name: 'Advance Test One',
+          source: 'icloud_contacts',
+          emails: [`advance-one-${testApi.prefix}@example.invalid`],
+        },
+        {
+          display_name: 'Advance Test Two',
+          source: 'icloud_contacts',
+          emails: [`advance-two-${testApi.prefix}@example.invalid`],
+        },
+      ])
+      const [idOne, idTwo] = ids
+      const nameOne = `${testApi.prefix}-Advance Test One`
+      const nameTwo = `${testApi.prefix}-Advance Test Two`
+
+      // Track the modal's own queue fetches: the close-on-resolve decision is
+      // made against the frontend's latest candidate array (the whole queue,
+      // parallel workers included), so the assertion branches on exactly what
+      // the frontend saw.
+      let lastQueueCount = -1
+      page.on('response', async res => {
+        if (
+          res.request().method() === 'GET' &&
+          res.url().includes('/api/v1/imports/candidates') &&
+          res.url().includes('limit=1000')
+        ) {
+          try {
+            const body = await res.json()
+            lastQueueCount = (body?.data ?? []).length
+          } catch {
+            // ignore parse failures (aborted responses)
+          }
+        }
+      })
+
+      await page.goto('/imports')
+      await page.waitForLoadState('networkidle')
+      await findCandidateByName(page, nameOne)
+
+      await candidateCardByName(page, nameOne)
+        .getByRole('button', { name: /Import/i })
+        .click()
+      await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
+      await navigateModalToCandidate(page, nameOne)
+
+      const dialog = resolverDialog(page)
+      const heading = dialog.getByRole('heading', { level: 3 }).first()
+
+      // Resolve the first candidate; the invalidation-triggered queue refetch
+      // follows the successful import.
+      const importOne = page.waitForResponse(
+        res => res.request().method() === 'POST' && res.url().includes(`/imports/${idOne}/import`)
+      )
+      const refetchAfterOne = page.waitForResponse(
+        res =>
+          res.request().method() === 'GET' &&
+          res.url().includes('/api/v1/imports/candidates') &&
+          res.url().includes('limit=1000')
+      )
+      await page.getByRole('button', { name: 'Import as New Contact', exact: true }).click()
+      expect((await importOne).status()).toBe(201)
+      await refetchAfterOne
+
+      // Our second candidate is still queued, so the modal must NOT close —
+      // it advances off the resolved candidate.
+      await expect(dialog).toBeVisible()
+      await expect(heading).not.toHaveText(nameOne, { timeout: 10000 })
+
+      // Resolve the second candidate.
+      await navigateModalToCandidate(page, nameTwo)
+      const countAtAction = lastQueueCount
+      const importTwo = page.waitForResponse(
+        res => res.request().method() === 'POST' && res.url().includes(`/imports/${idTwo}/import`)
+      )
+      await page.getByRole('button', { name: 'Import as New Contact', exact: true }).click()
+      expect((await importTwo).status()).toBe(201)
+
+      if (countAtAction <= 1) {
+        // The queue the frontend saw was exhausted: the modal closes.
+        await expect(dialog).not.toBeVisible({ timeout: 10000 })
+      } else {
+        // Other workers' candidates remained: the modal stays open and
+        // advances off the resolved candidate.
+        await expect(dialog).toBeVisible()
+        await expect(heading).not.toHaveText(nameTwo, { timeout: 10000 })
+      }
+    })
+  })
 })

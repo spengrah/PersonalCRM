@@ -188,7 +188,10 @@ func TestLinkContact_CuratedWithCadence_LandsImported(t *testing.T) {
 	assert.Equal(t, repository.MatchStatusImported, after.MatchStatus)
 }
 
-// Bare link (no curation signal) → match_status='matched'.
+// Bare link (no curation signal) → match_status='matched'. This is the
+// sole owner of the bare-link branch: the modal always curates, so the
+// state is unreachable from the browser (waived in spec/imports-matching).
+// spec: IMP-007[2], IMP-013[1]
 func TestLinkContact_Bare_LandsMatched(t *testing.T) {
 	t.Parallel()
 	env := setupLinkCuratedEnv(t)
