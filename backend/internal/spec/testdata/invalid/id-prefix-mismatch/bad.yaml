@@ -6,6 +6,7 @@ behaviors:
     title: id does not carry the declared prefix
     type: business-logic
     status: current
+    surface: none
     when: x
     then:
       - y

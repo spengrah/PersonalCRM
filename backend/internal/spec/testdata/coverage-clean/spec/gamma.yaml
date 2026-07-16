@@ -1,0 +1,12 @@
+domain: gamma
+prefix: GAM
+maturity: reviewed
+behaviors:
+  - id: GAM-001
+    title: a fully covered behavior
+    type: ux
+    status: current
+    surface: ui
+    when: x
+    then:
+      - y

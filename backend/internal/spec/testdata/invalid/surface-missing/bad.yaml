@@ -1,0 +1,11 @@
+domain: contacts
+prefix: CON
+maturity: reviewed
+behaviors:
+  - id: CON-001
+    title: a current behavior without a surface classification
+    type: business-logic
+    status: current
+    when: x
+    then:
+      - y

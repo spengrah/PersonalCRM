@@ -1,0 +1,18 @@
+domain: contacts
+prefix: CON
+maturity: reviewed
+behaviors:
+  - id: CON-001
+    title: two waivers for the same then item
+    type: ux
+    status: current
+    surface: ui
+    when: x
+    then:
+      - y
+      - z
+    waivers:
+      - then: 1
+        reason: first reason
+      - then: 1
+        reason: second reason

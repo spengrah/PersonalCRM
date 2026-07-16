@@ -149,6 +149,25 @@ func TestLintViolationClasses(t *testing.T) {
 		// behavior) proves the type-based presence checks did not re-report
 		// the same broken fields.
 		{"broken-field-no-cascade", 2, []string{"when must be a single string", "statement must be a string"}},
+		{"surface-bad-value", 1, []string{`invalid surface "browser" (want ui|api|none)`}},
+		{"surface-missing", 1, []string{`missing required field "surface"`}},
+		{"surface-on-intent", 1, []string{"surface is not for intent behaviors"}},
+		{"waivers-on-non-ui", 1, []string{`waivers are only for ui-surface behaviors (surface "api")`}},
+		{"waivers-on-intent", 1, []string{"waivers are not for intent behaviors"}},
+		{"waivers-bad-index", 2, []string{
+			"waiver then index 1 out of range (behavior has 1 then items)",
+			"waiver then index -1 out of range",
+		}},
+		{"waivers-dup-index", 1, []string{"duplicate waiver for then item 1"}},
+		{"waivers-empty-reason", 1, []string{"waiver reason must be non-empty"}},
+		{"waivers-bad-shape", 5, []string{
+			"waivers must be a list of {then, reason} mappings",
+			"waivers items must be {then, reason} mappings",
+			"waiver then must be an integer then-item index",
+			"waiver must have a reason",
+			"waiver reason must be a string",
+		}},
+		{"e2e-settled-not-bool", 1, []string{"e2e_settled must be a boolean"}},
 	}
 
 	for _, tc := range cases {
@@ -211,6 +230,44 @@ func TestLintServesAndIntent(t *testing.T) {
 		t.Fatal("CAD-002 missing")
 	} else if b.Type != "intent" || len(b.Serves) != 1 {
 		t.Errorf("CAD-002 should be an intent serving another intent: type=%q serves=%#v", b.Type, b.Serves)
+	}
+}
+
+// TestLintSurfaceAndWaivers pins the surface/waivers/e2e_settled additions on
+// a valid corpus: a ui-surface behavior carries typed waivers, a retired
+// behavior needs no surface, an intent takes no surface, and the file-level
+// e2e_settled flag parses as a boolean.
+func TestLintSurfaceAndWaivers(t *testing.T) {
+	files, viol, err := Lint("testdata/valid-surface")
+	if err != nil {
+		t.Fatalf("Lint returned error: %v", err)
+	}
+	if len(viol) != 0 {
+		t.Fatalf("valid-surface corpus should be clean, got %d violations:\n%s", len(viol), joinViolations(viol))
+	}
+	if len(files) != 1 || !files[0].E2ESettled {
+		t.Fatalf("e2e_settled: true should parse onto the file, got %+v", files)
+	}
+
+	if b := findBehavior(files, "CON-001"); b == nil {
+		t.Fatal("CON-001 missing")
+	} else {
+		if b.Surface != "ui" {
+			t.Errorf("CON-001 surface = %q, want ui", b.Surface)
+		}
+		if len(b.Waivers) != 1 || b.Waivers[0].Then != 1 || b.Waivers[0].Reason == "" {
+			t.Errorf("CON-001 waivers not parsed: %#v", b.Waivers)
+		}
+	}
+	if b := findBehavior(files, "CON-002"); b == nil {
+		t.Fatal("CON-002 missing")
+	} else if b.Surface != "" {
+		t.Errorf("CON-002 retired behavior should carry no surface, got %q", b.Surface)
+	}
+	if b := findBehavior(files, "CON-004"); b == nil {
+		t.Fatal("CON-004 missing")
+	} else if b.Surface != "" || b.Waivers != nil {
+		t.Errorf("CON-004 intent should carry no surface/waivers: %#v", b)
 	}
 }
 

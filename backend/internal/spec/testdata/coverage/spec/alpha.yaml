@@ -1,0 +1,77 @@
+domain: alpha
+prefix: ALP
+maturity: reviewed
+behaviors:
+  - id: ALP-001
+    title: item-level citations and a waiver
+    type: ux
+    status: current
+    surface: ui
+    when: the list changes
+    then:
+      - the list refreshes
+      - refocusing re-checks freshness
+    waivers:
+      - then: 1
+        reason: focus-driven freshness is not deterministically provable
+  - id: ALP-002
+    title: a bare E2E citation covers every then item
+    type: ux
+    status: current
+    surface: ui
+    when: a row is opened
+    then:
+      - the detail route is reached
+  - id: ALP-003
+    title: an uncited ui behavior is an orphan
+    type: ux
+    status: current
+    surface: ui
+    when: a filter is applied
+    then:
+      - the request carries the filter param
+  - id: ALP-004
+    title: a ui invariant has one implicit item
+    type: invariant
+    status: current
+    surface: ui
+    statement: every list surface renders soft-deleted rows nowhere
+  - id: ALP-005
+    title: an api behavior tracks no ui coverage
+    type: api
+    status: current
+    surface: api
+    when: the endpoint is called
+    then:
+      - a 404 names the missing resource
+  - id: ALP-006
+    title: an intent is judge-only
+    type: intent
+    status: current
+    statement: the surface communicates who needs attention
+  - id: ALP-007
+    title: a retired behavior
+    type: ux
+    status: retired
+    when: x
+    then:
+      - y
+  - id: ALP-008
+    title: a proposed behavior is excluded from coverage
+    type: ux
+    status: proposed
+    surface: ui
+    when: x
+    then:
+      - y
+  - id: ALP-009
+    title: a waived item that is also cited is a stale waiver
+    type: ux
+    status: current
+    surface: ui
+    when: x
+    then:
+      - y
+    waivers:
+      - then: 0
+        reason: was thought unprovable

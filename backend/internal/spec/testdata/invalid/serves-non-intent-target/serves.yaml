@@ -6,6 +6,7 @@ behaviors:
     title: a plain ux behavior
     type: ux
     status: current
+    surface: none
     when: the surface renders
     then:
       - something shows
@@ -13,6 +14,7 @@ behaviors:
     title: a ux behavior serving a non-intent
     type: ux
     status: current
+    surface: none
     when: the surface renders
     then:
       - something else shows

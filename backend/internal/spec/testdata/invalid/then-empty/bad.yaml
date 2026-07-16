@@ -6,5 +6,6 @@ behaviors:
     title: empty then list
     type: business-logic
     status: current
+    surface: none
     when: x
     then: []

@@ -1,0 +1,15 @@
+domain: contacts
+prefix: CON
+maturity: reviewed
+behaviors:
+  - id: CON-001
+    title: a waiver on an api-surface behavior
+    type: api
+    status: current
+    surface: api
+    when: x
+    then:
+      - y
+    waivers:
+      - then: 0
+        reason: not provable

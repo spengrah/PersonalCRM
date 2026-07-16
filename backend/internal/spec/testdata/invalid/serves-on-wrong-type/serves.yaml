@@ -11,6 +11,7 @@ behaviors:
     title: an api behavior carrying serves
     type: api
     status: current
+    surface: none
     when: a request is handled
     then:
       - a response is returned

@@ -6,6 +6,7 @@ behaviors:
     title: a ux behavior serving a ghost
     type: ux
     status: current
+    surface: none
     when: the surface renders
     then:
       - something shows

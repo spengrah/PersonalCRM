@@ -12,6 +12,7 @@ behaviors:
     title: Overdue contacts appear as cards
     type: ux
     status: current
+    surface: none
     when: the dashboard renders
     then:
       - overdue contacts appear as cards

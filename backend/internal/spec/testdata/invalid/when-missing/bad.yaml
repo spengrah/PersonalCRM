@@ -6,5 +6,6 @@ behaviors:
     title: no when key
     type: business-logic
     status: current
+    surface: none
     then:
       - y

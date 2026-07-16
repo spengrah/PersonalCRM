@@ -1,0 +1,12 @@
+domain: dashboard
+prefix: DSH
+maturity: reviewed
+behaviors:
+  - id: DSH-001
+    title: an intent carrying waivers
+    type: intent
+    status: current
+    statement: the dashboard tells the user who to reach out to
+    waivers:
+      - then: 0
+        reason: not provable

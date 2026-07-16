@@ -6,6 +6,7 @@ behaviors:
     title: when is a list
     type: business-logic
     status: current
+    surface: none
     when:
       - first
       - second

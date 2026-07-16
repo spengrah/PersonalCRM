@@ -6,8 +6,10 @@ behaviors:
     title: invariant with no statement key
     type: invariant
     status: current
+    surface: none
   - id: CON-002
     title: invariant with empty statement
     type: invariant
     status: current
+    surface: none
     statement: ""

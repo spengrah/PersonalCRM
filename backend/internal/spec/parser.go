@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 
 	"gopkg.in/yaml.v3"
 )
@@ -55,13 +56,14 @@ type parsedFile struct {
 // parsedBehavior carries one behavior's typed value plus per-behavior presence
 // and breakage tracking.
 type parsedBehavior struct {
-	b      *Behavior
-	idx    int
-	ref    string          // behavior ID when present, else "behaviors[i]"
-	line   int             // behavior mapping line
-	keys   map[string]bool // present keys
-	broken map[string]bool // fields with a structural/typing violation (suppress their semantic checks)
-	skip   bool            // entry-tier break: skip all semantic checks + no ID registration
+	b           *Behavior
+	idx         int
+	ref         string          // behavior ID when present, else "behaviors[i]"
+	line        int             // behavior mapping line
+	keys        map[string]bool // present keys
+	broken      map[string]bool // fields with a structural/typing violation (suppress their semantic checks)
+	skip        bool            // entry-tier break: skip all semantic checks + no ID registration
+	waiverLines []int           // source line of each parsed waiver entry, parallel to b.Waivers
 }
 
 func (pf *parsedFile) emit(order, bIdx, line int, ref, msg string) {
@@ -202,6 +204,10 @@ func parseFileNode(path string, data []byte) *parsedFile {
 	file.Prefix = pf.fileScalar(fields, "prefix")
 	file.Maturity = pf.fileScalar(fields, "maturity")
 
+	// e2e_settled: optional boolean. Any non-!!bool node is a
+	// file-field-tier structural violation.
+	file.E2ESettled = pf.fileBool(fields, "e2e_settled")
+
 	file.Behaviors = make([]Behavior, 0, len(pf.behaviors))
 	for _, pb := range pf.behaviors {
 		// A structurally unusable entry (non-mapping / duplicate key) never
@@ -231,6 +237,23 @@ func (pf *parsedFile) fileScalar(fields map[string]*yaml.Node, key string) strin
 		return ""
 	}
 	return node.Value
+}
+
+// fileBool extracts an optional file-level boolean field, recording presence
+// and emitting a file-field-tier structural violation for anything that is not
+// a !!bool scalar.
+func (pf *parsedFile) fileBool(fields map[string]*yaml.Node, key string) bool {
+	node, ok := fields[key]
+	if !ok {
+		return false
+	}
+	pf.fileKeys[key] = true
+	if node.Kind != yaml.ScalarNode || node.Tag != tagBool {
+		pf.fileBroken[key] = true
+		pf.emit(orderStructural, -1, node.Line, "", fmt.Sprintf("%s must be a boolean", key))
+		return false
+	}
+	return node.Value == "true"
 }
 
 // walkBehavior walks one behaviors[i] node into a parsedBehavior, degrading
@@ -267,6 +290,7 @@ func (pf *parsedFile) walkBehavior(idx int, node *yaml.Node) *parsedBehavior {
 	pb.b.Title = pf.behaviorScalar(pb, fields, "title")
 	pb.b.Type = pf.behaviorScalar(pb, fields, "type")
 	pb.b.Status = pf.behaviorScalar(pb, fields, "status")
+	pb.b.Surface = pf.behaviorScalar(pb, fields, "surface")
 	pb.b.Notes = pf.behaviorScalar(pb, fields, "notes")
 
 	if pb.keys["id"] && !pb.broken["id"] && pb.b.ID != "" {
@@ -282,6 +306,9 @@ func (pf *parsedFile) walkBehavior(idx int, node *yaml.Node) *parsedBehavior {
 	pb.b.Given = pf.behaviorStrList(pb, fields, "given")
 	pb.b.Then = pf.behaviorStrList(pb, fields, "then")
 	pb.b.Serves = pf.behaviorStrList(pb, fields, "serves")
+
+	// waivers: a sequence of {then: <int>, reason: <string>} mappings.
+	pb.b.Waivers = pf.behaviorWaivers(pb, fields)
 
 	// provenance: best-effort scalar list, no checks (non-load-bearing).
 	pb.b.Provenance = provenance(fields)
@@ -391,6 +418,78 @@ func (pf *parsedFile) behaviorStrList(pb *parsedBehavior, fields map[string]*yam
 			fmt.Sprintf("%s must be a string or a list of strings", key))
 		return nil
 	}
+}
+
+// behaviorWaivers extracts the waivers field: a sequence of mappings, each with
+// an integer `then` and a string `reason`. Any shape deviation (non-sequence,
+// non-mapping item, missing/mistyped sub-field, duplicate key in an item) is a
+// behavior-field-tier structural violation that marks the whole field broken —
+// the semantic pass (index range, duplicates, reason non-empty, ui-surface
+// placement) never sees a partially-parsed waiver list.
+func (pf *parsedFile) behaviorWaivers(pb *parsedBehavior, fields map[string]*yaml.Node) []Waiver {
+	node, ok := fields["waivers"]
+	if !ok {
+		return nil
+	}
+	pb.keys["waivers"] = true
+
+	if node.Kind == yaml.ScalarNode && node.Tag == tagNull {
+		return nil // present but null — absent-equivalent value
+	}
+	if node.Kind != yaml.SequenceNode {
+		pb.broken["waivers"] = true
+		pf.emit(orderStructural, pb.idx, node.Line, pb.ref,
+			"waivers must be a list of {then, reason} mappings")
+		return nil
+	}
+
+	out := make([]Waiver, 0, len(node.Content))
+	lines := make([]int, 0, len(node.Content))
+	for _, item := range node.Content {
+		if item.Kind != yaml.MappingNode {
+			pb.broken["waivers"] = true
+			pf.emit(orderStructural, pb.idx, item.Line, pb.ref,
+				"waivers items must be {then, reason} mappings")
+			return nil
+		}
+		wf, dup := mappingFields(item)
+		if len(dup) > 0 {
+			pb.broken["waivers"] = true
+			pf.emit(orderStructural, pb.idx, item.Line, pb.ref,
+				fmt.Sprintf("duplicate key %q in waiver mapping", dup[0]))
+			return nil
+		}
+		thenNode, thenOK := wf["then"]
+		if !thenOK || thenNode.Kind != yaml.ScalarNode || thenNode.Tag != tagInt {
+			pb.broken["waivers"] = true
+			pf.emit(orderStructural, pb.idx, item.Line, pb.ref,
+				"waiver then must be an integer then-item index")
+			return nil
+		}
+		idx, err := strconv.Atoi(thenNode.Value)
+		if err != nil {
+			pb.broken["waivers"] = true
+			pf.emit(orderStructural, pb.idx, thenNode.Line, pb.ref,
+				"waiver then must be an integer then-item index")
+			return nil
+		}
+		reasonNode, reasonOK := wf["reason"]
+		if !reasonOK {
+			pb.broken["waivers"] = true
+			pf.emit(orderStructural, pb.idx, item.Line, pb.ref, "waiver must have a reason")
+			return nil
+		}
+		reason, strOK := strScalar(reasonNode)
+		if !strOK {
+			pb.broken["waivers"] = true
+			pf.emit(orderStructural, pb.idx, reasonNode.Line, pb.ref, "waiver reason must be a string")
+			return nil
+		}
+		out = append(out, Waiver{Then: idx, Reason: reason})
+		lines = append(lines, item.Line)
+	}
+	pb.waiverLines = lines
+	return out
 }
 
 // provenance best-effort collects a scalar list; it carries no schema checks
