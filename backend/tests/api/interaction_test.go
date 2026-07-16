@@ -180,6 +180,24 @@ func TestInteraction_CreateAndList(t *testing.T) {
 		data := response.Data.([]interface{})
 		assert.GreaterOrEqual(t, len(data), 2) // At least 2 from the creates above
 
+		// LIST rows carry the same wire shape as the create echo —
+		// description, direction, and source. Today both paths share
+		// interactionToResponse, so this pins the contract against the
+		// mapping ever forking.
+		var coffeeRow map[string]interface{}
+		for _, item := range data {
+			row := item.(map[string]interface{})
+			assert.NotEmpty(t, row["source"], "list row should carry source")
+			assert.Contains(t, []interface{}{"outbound", "inbound", "mutual"}, row["direction"],
+				"list row should carry a valid direction")
+			if row["description"] == "Had coffee together" {
+				coffeeRow = row
+			}
+		}
+		require.NotNil(t, coffeeRow, "created interaction should appear in the list with its description")
+		assert.Equal(t, "manual", coffeeRow["source"])
+		assert.Equal(t, "mutual", coffeeRow["direction"]) // create passed no direction; manual default is mutual
+
 		// Check pagination meta
 		assert.NotNil(t, response.Meta)
 		assert.NotNil(t, response.Meta.Pagination)

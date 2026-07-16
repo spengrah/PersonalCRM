@@ -261,7 +261,7 @@ behaviors:
       - then: 1
         reason: the past-projects/future-links split is backend projection plumbing with no browser-added coverage; proven deterministically by TestRematch_CalendarPastEvent_RecordsInteraction and TestRematch_CalendarFutureEvent_NoInteraction in rematch_integration_test.go
       - then: 2
-        reason: not re-emitting already-projected attendees is a negative with no UI surface; proven by TestRematch_CalendarIdempotent (rematch_integration_test.go) and rematch_event_dedup_test.go
+        reason: not re-emitting already-projected attendees is a negative with no browser surface; the append path's flag preservation is proven by TestRematch_AppendPreservesProcessedFlag and the upsert path's flag semantics by TestCalendarEventUpsertResetsLastContactedUpdated (Go integration tests)
     provenance: [CalendarRematchHandler.Rematch, AppendMatchedContact, FindEventsByAttendeeEmailUnmatchedForContact]
     notes: The rematch trigger and job dispatch are imports-matching scope — cross-reference IMP-019 and IMP-020.
 
