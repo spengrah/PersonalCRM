@@ -25,7 +25,18 @@ make qa-report RUNDIR=<run dir> JUDGE=1      # + the live judge over residue ite
 
 `make qa-report` groups a run's captures by behavior, grades the judge residue, and renders the markdown roll-up + coverage + skip-list. It files no issues; the judge-layer + fail-precision metrics print `N/A — pending human labels` (see `DEFERRED.md`).
 
-**Live exports are scrubbed at the boundary.** When a run ships spans to Langfuse (`make qa-export`, opt-in on `LANGFUSE_*`), the export path scrubs every free-form / env-sourced string (prompt, response, `metadata.error`, `metadata.model`) through `judge/scrub.ts` before the HTTP call — the single live→Langfuse PII chokepoint. Adding a new free-form trace field without routing it through the scrubber is a leak.
+**Live exports are scrubbed at the boundary.** When a run ships spans to Langfuse (`make qa-export`, opt-in on `LANGFUSE_*`), the export path scrubs every free-form / env-sourced string (prompt, response, `metadata.error`, `metadata.model`, and every label-trace field below) through `judge/scrub.ts` before the HTTP call — the single live→Langfuse PII chokepoint. The whole `input`/`output` of each trace body is deep-walked, so any new free-form field placed inside them is covered; a new field placed elsewhere without routing through the scrubber is a leak.
+
+### Label-trace contract (Langfuse export)
+
+A shipped trace is self-sufficient for adjudication (spec lines 51–53): a reviewer opening the annotation queue sees the full scenario and evidence without leaving Langfuse. The export **fans one judge span out to ONE trace per graded item** (`judge-<behavior>-<span_id>-item<index>`), each carrying:
+
+- **`input.scenario_item`** — the behavior's `behavior_id`/`behavior_title`/`given`/`when` + THIS item's singular `then_text` + `all_then` (the full then-list for context); or, for an intent trace, the `intent_id`/`title`/`statement`/`status` in place of GWT.
+- **`input.graded_evidence`** — the graded captures in the prompt's own `CAPTURE[n]` order, each entry carrying its REAL `capture_file` (threaded from the loader via `CaptureSection.captureFile`) and its OWN `screenshot` media token (attributed by index — the flat media gallery is orderless, so a per-index token is the only faithful attribution). All-or-nothing: when the run degraded to aria-only, every entry's `screenshot` is absent — honest, not a bug.
+- **`input.mutation` + `input.screenshot_caveat`** — present ONLY when the evidence was doctored (the trap self-test path, PR3). The caveat is DERIVED from the mutation's presence, never carried independently, so a doctored trace has both and a real trace has neither.
+- **`output`** — THAT item's verdict; **`input.prompt`** is kept for fidelity; operational fields (tokens, model, status, `screenshots_expected`/`screenshots_attached`) live in `metadata`.
+
+Both QA adapters (`codex-exec`, `http`) emit this content — `http` is text-only, so its `graded_evidence` carries no screenshots. Ingestion event ids carry a per-submission nonce (trace ids stay stable) so a re-export overwrites rather than being silently dropped.
 
 ## The corpus
 

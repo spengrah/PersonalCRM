@@ -5,6 +5,7 @@
 // silently truncated. Pure — no model, no fs.
 
 import type { Capture } from '../support/types'
+import type { LoadedCapture } from '../support/run-dir'
 import type { CaptureSection, JudgeInput } from './adapter/types'
 import type { IntentSpec } from './intent-catalog'
 
@@ -42,6 +43,11 @@ export function bindIntentCaptures(
 // behavior path's merged-aria bundle would blur which state showed what).
 export function captureSection(c: Capture): CaptureSection {
   return {
+    // The REAL source filename when the loader stamped it (the report walk sets
+    // `LoadedCapture.__sourceFile`); otherwise a VISIBLE fallback so a missing
+    // filename is never passed off as one. This is the sole place the source
+    // identity is projected onto the adapter-visible `CaptureSection` (D3).
+    captureFile: (c as LoadedCapture).__sourceFile ?? `unknown:${c.tour}/${c.seq}`,
     note: `${c.tour}#${c.seq} — ${c.note}`,
     evidence: {
       url: c.url,

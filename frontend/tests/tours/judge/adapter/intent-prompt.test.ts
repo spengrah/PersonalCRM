@@ -17,10 +17,12 @@ const base: JudgeInput = {
   intent: { statement: 'the statement', status: 'current' },
   captureSections: [
     {
+      captureFile: '001-cards.json',
       note: 'dashboard#1 — cards',
       evidence: { url: 'http://x/1', aria: { role: 'root', children: [] } },
     },
     {
+      captureFile: '002-empty.json',
       note: 'dashboard#2 — empty',
       evidence: { url: 'http://x/2', aria: { role: 'root', children: [] } },
     },
@@ -87,8 +89,8 @@ describe('buildPrompt (intent variant)', () => {
       items: [{ itemIndex: 0, thenText: 'a' }],
       evidence: { url: 'http://merged' },
       captureSections: [
-        { note: 'first', evidence: { url: 'http://y/1' } },
-        { note: 'second', evidence: { url: 'http://y/2' } },
+        { captureFile: 'a.json', note: 'first', evidence: { url: 'http://y/1' } },
+        { captureFile: 'b.json', note: 'second', evidence: { url: 'http://y/2' } },
       ],
     }
     const p = buildPrompt(behaviorInput)

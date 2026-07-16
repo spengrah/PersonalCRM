@@ -4,6 +4,8 @@
 
 import * as fs from 'fs'
 import * as path from 'path'
+import type { GradedEvidenceEntry, Scenario } from '../label-trace'
+import type { PerItemVerdict } from './types'
 
 export interface GenAiSpan {
   name: string // "chat <model>" per the GenAI span-name convention
@@ -42,6 +44,19 @@ export interface SpanParams {
   prompt?: string
   response?: string
   screenshots?: string[] // absolute paths; the exporter uploads them as media
+  // --- Label-trace contract (spec lines 51–53; same call-site opt-in) ---
+  //
+  // These are the STRUCTURED evidence a Langfuse reviewer adjudicates against
+  // (built from JudgeInput at the adapter, never re-parsed from the prompt).
+  // They are CONTENT and follow the same opt-in discipline as prompt/response
+  // above — a future #379 real-content judge passes none. The JSONL span stays
+  // backend-neutral: the exporter (`export/langfuse.ts`) fans `scenario.items`
+  // out to one trace per graded item and DERIVES `screenshot_caveat` from
+  // `mutation`; nothing Langfuse-specific lives here.
+  scenario?: Scenario // GWT + graded items (behavior) OR goal/status (intent)
+  gradedEvidence?: GradedEvidenceEntry[] // per-capture, real capture_file + own screenshot
+  itemVerdicts?: PerItemVerdict[] // per-item verdicts (the exporter's per-item `output`)
+  mutation?: unknown // the doctoring on the trap self-test path; undefined = real capture
 }
 
 // 16 random hex bytes (trace id) / 8 (span id).
@@ -77,6 +92,14 @@ export function buildGenAiSpan(p: SpanParams): GenAiSpan {
   if (p.prompt !== undefined) attributes['gen_ai.prompt'] = p.prompt
   if (p.response !== undefined) attributes['gen_ai.completion'] = p.response
   if (p.screenshots?.length) attributes['qa.screenshots'] = p.screenshots
+  // Label-trace contract carriers (harness-namespaced). `qa.mutation` is set
+  // ONLY when the caller doctored the evidence — its presence is what the
+  // exporter keys the screenshot_caveat off, so an undefined mutation must NOT
+  // materialize the attribute.
+  if (p.scenario !== undefined) attributes['qa.scenario'] = p.scenario
+  if (p.gradedEvidence !== undefined) attributes['qa.graded_evidence'] = p.gradedEvidence
+  if (p.itemVerdicts !== undefined) attributes['qa.item_verdicts'] = p.itemVerdicts
+  if (p.mutation !== undefined) attributes['qa.mutation'] = p.mutation
 
   return {
     name: `chat ${model}`,

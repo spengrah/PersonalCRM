@@ -3,6 +3,7 @@
 // output schema and POSTs to a chat/completions endpoint. Config is env-only and
 // it throws if unconfigured — it is never the merge-gate default (design D2).
 
+import { buildGradedEvidence, buildScenario } from '../label-trace'
 import { buildPrompt, OUTPUT_SCHEMA, parseVerdicts } from './prompt'
 import { appendSpan, buildGenAiSpan } from './span'
 import type { Judge, JudgeInput, PerItemVerdict } from './types'
@@ -70,6 +71,28 @@ export function makeHttpJudge(opts: HttpJudgeOptions = {}): Judge {
       error = err instanceof Error ? err.message : String(err)
     }
     const end = Date.now()
+
+    // Normalize the verdicts ONCE, BEFORE the span append (error/no-content →
+    // allUnsure, else parse + omitted-item fill) — so the span's
+    // `response`/`item_verdicts` are the SAME array returned, not a
+    // pre-normalization parse. One source of truth for span + return value.
+    let verdicts: PerItemVerdict[]
+    if (error || content === undefined) {
+      verdicts = allUnsure(input, `judge error: ${error ?? 'no content'}`)
+    } else {
+      const parsed = parseVerdicts(content)
+      const byIndex = new Map(parsed.map(v => [v.itemIndex, v]))
+      verdicts = input.items.map(
+        i =>
+          byIndex.get(i.itemIndex) ?? {
+            itemIndex: i.itemIndex,
+            verdict: 'unsure',
+            citation: '',
+            critique: 'no verdict returned',
+          }
+      )
+    }
+
     if (tracePath) {
       appendSpan(
         tracePath,
@@ -82,21 +105,21 @@ export function makeHttpJudge(opts: HttpJudgeOptions = {}): Judge {
           inputTokens: usage?.prompt_tokens,
           outputTokens: usage?.completion_tokens,
           error,
+          // This adapter now emits content too (was metrics-only). It is
+          // text-only — it cannot attach image files — so it passes NO
+          // `screenshots` and its `gradedEvidence` entries carry no screenshot
+          // (buildGradedEvidence over an empty `images`), the correct
+          // adapter-specific semantics.
+          prompt,
+          response: JSON.stringify(verdicts),
+          scenario: buildScenario(input),
+          gradedEvidence: buildGradedEvidence(input, []),
+          itemVerdicts: verdicts,
+          mutation: input.__trap?.mutation,
         })
       )
     }
-    if (error || content === undefined)
-      return allUnsure(input, `judge error: ${error ?? 'no content'}`)
-    const verdicts = parseVerdicts(content)
-    const byIndex = new Map(verdicts.map(v => [v.itemIndex, v]))
-    return input.items.map(
-      i =>
-        byIndex.get(i.itemIndex) ?? {
-          itemIndex: i.itemIndex,
-          verdict: 'unsure',
-          citation: '',
-          critique: 'no verdict returned',
-        }
-    )
+
+    return verdicts
   }
 }

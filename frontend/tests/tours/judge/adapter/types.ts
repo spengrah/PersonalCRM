@@ -23,6 +23,14 @@ export interface EvidenceBlocks {
 // One capture rendered as its own labeled CAPTURE[n] section in an intent
 // prompt (multi-capture evidence stays sectioned, never merged).
 export interface CaptureSection {
+  // The REAL source capture filename (spec line 53), projected here from the
+  // loader's `LoadedCapture.__sourceFile` by `captureSection`. This is the
+  // load-bearing hop: captures become `CaptureSection[]` before the adapter
+  // sees them, so a bare `Capture.__sourceFile` would be dropped — the identity
+  // MUST ride on the section. Required so every construction carries one; a
+  // section built off a capture with no `__sourceFile` gets a VISIBLE
+  // `unknown:<tour>/<seq>` fallback, never a value passed off as a filename.
+  captureFile: string
   note: string
   evidence: EvidenceBlocks
 }
@@ -49,6 +57,17 @@ export interface JudgeInput {
    * framing switches on their presence).
    */
   images?: string[]
+  /**
+   * HARNESS-INTERNAL, NEVER emitted in a prompt: the doctoring applied to this
+   * input's evidence on the trap self-test path. The adapters forward it onto
+   * the span (`qa.mutation`) so the exporter can render the `mutation` +
+   * DERIVE the `screenshot_caveat` (a doctored trace shows the undoctored
+   * pixels). PR3's trap self-test is the SOLE producer; normal
+   * `buildJudgeInput`/`buildIntentJudgeInput` never set it. Typed loosely here
+   * (`unknown`) to keep the adapter contract corpus/schema-independent; PR3
+   * tightens `mutation` to the relocated `Mutation` type.
+   */
+  __trap?: { mutation: unknown }
 }
 
 // Categorical per-item verdict. `citation` is the exact aria node label / JSON

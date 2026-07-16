@@ -10,6 +10,7 @@ import { spawn } from 'child_process'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
+import { buildGradedEvidence, buildScenario } from '../label-trace'
 import { buildPrompt, OUTPUT_SCHEMA, parseVerdicts } from './prompt'
 import { appendSpan, buildGenAiSpan } from './span'
 import type { Judge, JudgeInput, PerItemVerdict } from './types'
@@ -234,6 +235,29 @@ export function makeCodexExecJudge(opts: CodexExecOptions = {}): Judge {
     }
 
     const end = Date.now()
+
+    // Normalize the verdicts ONCE, BEFORE the span append — so the span's
+    // `response`/`item_verdicts` are the SAME array the judge returns, not the
+    // pre-normalization parse (error → allUnsure, tool-rejected → allUnsure,
+    // else omitted-item fill). One source of truth for span + return value.
+    let verdicts: PerItemVerdict[]
+    if (error) {
+      verdicts = allUnsure(input, `judge error: ${error}`)
+    } else if (!result || result.rejectedForTool) {
+      verdicts = allUnsure(input, 'discarded: judge run used a tool')
+    } else {
+      const byIndex = new Map(result.verdicts.map(v => [v.itemIndex, v]))
+      verdicts = input.items.map(
+        i =>
+          byIndex.get(i.itemIndex) ?? {
+            itemIndex: i.itemIndex,
+            verdict: 'unsure',
+            citation: '',
+            critique: 'no verdict returned',
+          }
+      )
+    }
+
     if (tracePath) {
       appendSpan(
         tracePath,
@@ -251,25 +275,17 @@ export function makeCodexExecJudge(opts: CodexExecOptions = {}): Judge {
           // corpus, and a span without it cannot be adjudicated by a human later.
           // See SpanParams — this is a call-site decision, not an env default.
           prompt,
-          response: result ? JSON.stringify(result.verdicts, null, 2) : undefined,
+          response: JSON.stringify(verdicts),
           screenshots: input.images,
+          // The label-trace contract carriers (spec lines 51–53).
+          scenario: buildScenario(input),
+          gradedEvidence: buildGradedEvidence(input, input.images ?? []),
+          itemVerdicts: verdicts,
+          mutation: input.__trap?.mutation,
         })
       )
     }
 
-    if (error) return allUnsure(input, `judge error: ${error}`)
-    if (!result || result.rejectedForTool)
-      return allUnsure(input, 'discarded: judge run used a tool')
-    // Fill any item the model omitted with unsure.
-    const byIndex = new Map(result.verdicts.map(v => [v.itemIndex, v]))
-    return input.items.map(
-      i =>
-        byIndex.get(i.itemIndex) ?? {
-          itemIndex: i.itemIndex,
-          verdict: 'unsure',
-          citation: '',
-          critique: 'no verdict returned',
-        }
-    )
+    return verdicts
   }
 }
