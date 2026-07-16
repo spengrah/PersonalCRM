@@ -49,7 +49,7 @@ function MeetingCard({ event, isPast }: { event: CalendarEvent; isPast: boolean 
   const title = event.title || 'Untitled Meeting'
 
   return (
-    <div className={`px-4 py-4 sm:px-6 ${isPast ? 'opacity-60' : ''}`}>
+    <div role="listitem" className={`px-4 py-4 sm:px-6 ${isPast ? 'opacity-60' : ''}`}>
       <div className="flex items-start justify-between">
         <div className="flex-1 min-w-0">
           <h4 className="text-sm font-medium text-gray-900 truncate flex items-center gap-2">
@@ -143,7 +143,7 @@ export function Meetings({ contactId }: MeetingsProps) {
 
   if (isLoading) {
     return (
-      <div className="bg-white shadow overflow-hidden sm:rounded-lg">
+      <section aria-label="Meetings" className="bg-white shadow overflow-hidden sm:rounded-lg">
         <div className="px-4 py-5 sm:px-6 border-b border-gray-200">
           <h3 className="text-lg leading-6 font-medium text-gray-900 flex items-center">
             <Calendar className="w-5 h-5 mr-2 text-gray-400" />
@@ -156,7 +156,7 @@ export function Meetings({ contactId }: MeetingsProps) {
             <div className="h-4 bg-gray-200 rounded w-1/2"></div>
           </div>
         </div>
-      </div>
+      </section>
     )
   }
 
@@ -175,7 +175,7 @@ export function Meetings({ contactId }: MeetingsProps) {
   ]
 
   return (
-    <div className="bg-white shadow overflow-hidden sm:rounded-lg">
+    <section aria-label="Meetings" className="bg-white shadow overflow-hidden sm:rounded-lg">
       <div className="px-4 py-5 sm:px-6 border-b border-gray-200">
         <div className="flex items-center justify-between">
           <div>
@@ -191,6 +191,7 @@ export function Meetings({ contactId }: MeetingsProps) {
             {filterButtons.map(({ key, label, count }) => (
               <button
                 key={key}
+                aria-pressed={filter === key}
                 onClick={() => {
                   setFilter(key)
                   setDisplayLimit(10)
@@ -207,7 +208,7 @@ export function Meetings({ contactId }: MeetingsProps) {
           </div>
         </div>
       </div>
-      <div className="divide-y divide-gray-200">
+      <div role="list" className="divide-y divide-gray-200">
         {displayedEvents.map(event => (
           <MeetingCard key={event.id} event={event} isPast={isPastEvent(event, currentTime)} />
         ))}
@@ -225,6 +226,6 @@ export function Meetings({ contactId }: MeetingsProps) {
           </Button>
         </div>
       )}
-    </div>
+    </section>
   )
 }
