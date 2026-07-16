@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { createTestAPI, TestAPI } from './helpers/test-api'
-import { expectAddContactHeader } from './helpers/dashboard'
+import { expectAddContactHeader, waitForOverdueListSettled } from './helpers/dashboard'
 import type { OverdueContactResponse } from '../../src/types/generated/contact'
 
 // Full-envelope overdue-entry builder for route-mocked dashboard tests,
@@ -210,7 +210,7 @@ test.describe('Dashboard - Card Anatomy (mocked) @area:dashboard', () => {
     // observable signal.
     for (const c of tierCases) {
       await expect(page.getByRole('heading', { name: c.name })).toBeVisible()
-      const card = page.locator('div.rounded-lg').filter({ hasText: c.name })
+      const card = page.getByRole('listitem').filter({ hasText: c.name })
       await expect(card.getByLabel(c.tier, { exact: true })).toBeVisible()
       await expect(card.getByText('(weekly cadence)')).toBeVisible()
       // Recency requires a VALUE after "Last contacted", not just the label
@@ -313,7 +313,7 @@ test.describe('Dashboard - Sort Orderings (mocked) @area:dashboard', () => {
         `Zulu ${fixtureSuffix}`,
         `Mike ${fixtureSuffix}`,
       ])
-    const mikeCard = page.locator('div.rounded-lg').filter({ hasText: `Mike ${fixtureSuffix}` })
+    const mikeCard = page.getByRole('listitem').filter({ hasText: `Mike ${fixtureSuffix}` })
     await expect(mikeCard.getByText('Never contacted')).toBeVisible()
   })
 })
@@ -396,7 +396,7 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
     })
 
     // Find the "Mark as Contacted" button for our contact
-    const contactCard = page.locator('div.rounded-lg').filter({ hasText: contactName })
+    const contactCard = page.getByRole('listitem').filter({ hasText: contactName })
     const markContactedButton = contactCard.getByRole('button', { name: /Mark as Contacted/i })
     await expect(markContactedButton).toBeVisible()
 
@@ -416,17 +416,8 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
     // overdue list after the mutation. Content-based predicate (reads the
     // response body) so there is no ordering race against a pre-mutation
     // fetch that still contains our id.
-    const overdueRefetchPromise = page.waitForResponse(async response => {
-      if (
-        response.request().method() !== 'GET' ||
-        !response.url().includes('/api/v1/contacts/overdue') ||
-        !response.ok()
-      ) {
-        return false
-      }
-      const body = await response.json().catch(() => null)
-      const entries: Array<{ id: string }> = body?.data ?? []
-      return !entries.some(entry => entry.id === overdueContactId)
+    const overdueRefetchPromise = waitForOverdueListSettled(page, {
+      absentIds: [overdueContactId],
     })
 
     // Click "Mark as Contacted", bracketed by wall-clock reads so the

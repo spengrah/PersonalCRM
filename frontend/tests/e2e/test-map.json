@@ -497,10 +497,6 @@
     "tags": ["@area:contacts"]
   },
   {
-    "pattern": "^frontend/tests/e2e/gchat-contact-signal\\.spec\\.ts$",
-    "tags": ["@area:contacts"]
-  },
-  {
     "pattern": "^frontend/tests/e2e/rematch-on-add-email\\.spec\\.ts$",
     "tags": ["@area:contacts", "@area:meetings"]
   },

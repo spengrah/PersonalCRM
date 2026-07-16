@@ -317,6 +317,42 @@ func TestRematch_CalendarIdempotent(t *testing.T) {
 	assert.Equal(t, 1, count, "exactly one interaction per (contact, source, source_ref)")
 }
 
+// The rematch append must not reset an event's last_contacted_updated flag:
+// the rematch handler records interactions for past events directly, so
+// flipping the flag back would make the calendar scheduler re-emit
+// already-projected attendees (CAL-019's processed-flag facet — waived on
+// the E2E side, owned here).
+func TestRematch_AppendPreservesProcessedFlag(t *testing.T) {
+	t.Parallel()
+	env := setupRematchEnv(t)
+
+	contact := env.newContact(t)
+
+	accountID := "rematch-flag-" + uuid.NewString()
+	email := "flag-" + uuid.NewString()[:8] + "@example.com"
+	t.Cleanup(func() { _ = env.calendarRepo.DeleteEventsByAccount(env.ctx, accountID) })
+
+	pastEnd := accelerated.GetCurrentTime().Add(-time.Hour)
+	event := seedCalendarEventWithAttendee(t, env, accountID, email, pastEnd, "confirmed")
+
+	// Simulate the scheduler having already projected this event's attendees.
+	require.NoError(t, env.calendarRepo.MarkLastContactedUpdated(env.ctx, event.ID))
+
+	jobID := env.rematchSvc.StartRematchForContact(contact.ID, []service.Method{
+		{Type: "email", Value: email},
+	})
+	require.NotEqual(t, uuid.Nil, jobID)
+	job := waitForRematchJob(t, env.rematchSvc, jobID)
+	assert.Equal(t, service.JobStatusCompleted, job.Status)
+	assert.Equal(t, 1, job.Matched)
+
+	updatedEvent, err := env.calendarRepo.GetByID(env.ctx, event.ID)
+	require.NoError(t, err)
+	require.Contains(t, updatedEvent.MatchedContactIDs, contact.ID)
+	assert.True(t, updatedEvent.LastContactedUpdated,
+		"AppendMatchedContact must preserve last_contacted_updated so already-projected attendees are not re-emitted")
+}
+
 func TestRematch_CalendarMarksGcalAttendeeExternalContactMatched(t *testing.T) {
 	t.Parallel()
 	env := setupRematchEnv(t)

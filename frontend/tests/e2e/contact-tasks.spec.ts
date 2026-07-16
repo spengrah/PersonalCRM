@@ -214,6 +214,47 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
       }
     })
 
+    test('strips CRM link markers and falls back to a placeholder for empty content', async ({
+      page,
+    }) => {
+      // spec: TDS-035[0]
+      const { ids } = await testApi.seedContacts([{ full_name: 'Task Content Contact' }])
+      const contactId = ids[0]
+      // The three cleanTaskContent shapes a projected task can carry: a
+      // leading "[Name](url): task" marker (manual/action tasks), an inline
+      // "[Name](url)" link (reach-out tasks), and empty content.
+      await mockTaskLists(page, contactId, () => ({
+        followup: [],
+        manual: [
+          makeTask(contactId, {
+            id: 'task-marker-prefix',
+            content: '[Marker Contact](https://example.com/contacts/1): Review intro notes',
+          }),
+          makeTask(contactId, {
+            id: 'task-marker-inline',
+            content: 'Reach out to [Marker Contact](https://example.com/contacts/1)',
+          }),
+          makeTask(contactId, { id: 'task-marker-empty', content: '' }),
+        ],
+        completed: [],
+      }))
+
+      await page.goto(`/contacts/${contactId}`)
+      await page.waitForLoadState('domcontentloaded')
+
+      // exact: true pins the rendered text to the CLEANED form — an uncleaned
+      // row would render the full marker string and fail the exact match.
+      const section = tasksSection(page)
+      await expect(section.getByText('Review intro notes', { exact: true })).toBeVisible({
+        timeout: 15000,
+      })
+      await expect(section.getByText('Reach out to Marker Contact', { exact: true })).toBeVisible()
+      // Empty content falls back to the placeholder.
+      await expect(section.getByText('Untitled task', { exact: true })).toBeVisible()
+      // No raw marker leaks into the section.
+      await expect(section.getByText('](https://', { exact: false })).toHaveCount(0)
+    })
+
     test('collapses completed tasks behind a toggle with a count', async ({ page }) => {
       // spec: CAD-030[2]
       const { ids } = await testApi.seedContacts([{ full_name: 'Task History Contact' }])
@@ -483,7 +524,7 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
     })
 
     test('exposes no in-CRM complete or dismiss control on a linked task', async ({ page }) => {
-      // spec: CAD-033[1]
+      // spec: CAD-033[1], TDS-035[1]
       // The CRM-side half of the clause: a linked task row offers ONLY
       // unlink (plus "Open in Todoist") — completing and dismissing happen
       // in the remote task app. The remote-survival half ("keeps the task
@@ -505,7 +546,14 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
       await expect(row).toBeVisible({ timeout: 15000 })
 
       await expect(row.locator(`button[title="${UNLINK_TITLE}"]`)).toHaveCount(1)
-      await expect(row.locator('a[title="Open in Todoist"]')).toHaveCount(1)
+      // The Todoist deep link targets THIS task in the Todoist app (the
+      // todoist:// scheme opens the task by its external id).
+      const todoistLink = row.getByRole('link', { name: 'Open in Todoist' })
+      await expect(todoistLink).toHaveCount(1)
+      await expect(todoistLink).toHaveAttribute(
+        'href',
+        `todoist://task?id=${linked.external_task_id}`
+      )
       await expect(row.getByRole('button', { name: /complete|dismiss|done/i })).toHaveCount(0)
       await expect(row.getByRole('checkbox')).toHaveCount(0)
     })

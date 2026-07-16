@@ -166,6 +166,7 @@ export function ContactForm({
                     <div className="relative">
                       <Select
                         id={`methods.${index}.type`}
+                        aria-label="Contact method type"
                         {...register(`methods.${index}.type`)}
                         className={clsx(
                           'font-medium',
@@ -186,6 +187,7 @@ export function ContactForm({
                     {/* Value input */}
                     <input
                       id={`methods.${index}.value`}
+                      aria-label="Contact method value"
                       {...register(`methods.${index}.value`)}
                       type={option?.inputType ?? 'text'}
                       placeholder={option?.placeholder ?? 'Enter value'}

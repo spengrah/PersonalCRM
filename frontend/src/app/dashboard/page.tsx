@@ -78,6 +78,7 @@ function OverdueContactCard({ contact }: { contact: OverdueContact }) {
 
   return (
     <div
+      role="listitem"
       className={clsx(
         'bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow',
         getUrgencyColor(contact.days_overdue)
@@ -310,11 +311,11 @@ export default function DashboardPage() {
           {!isLoading && !error && overdueContacts?.length === 0 && <EmptyState />}
 
           {!isLoading && !error && sortedContacts.length > 0 && (
-            <>
+            <div role="list" aria-label="Overdue contacts" className="space-y-6">
               {sortedContacts.map(contact => (
                 <OverdueContactCard key={contact.id} contact={contact} />
               ))}
-            </>
+            </div>
           )}
         </div>
       </div>

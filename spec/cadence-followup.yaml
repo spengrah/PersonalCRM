@@ -297,6 +297,9 @@ behaviors:
       - each entry carries the contact plus days overdue, the next due date, and a suggested action
       - entries are ordered most-overdue first
       - the list is bounded (1000), and truncation retains the most overdue contacts
+    waivers:
+      - then: 2
+        reason: the 1000-entry bound and most-overdue-retained truncation cannot be deterministically seeded in an E2E run; the bound is applied in ContactService.ListOverdueContacts and ordering-under-limit is proven by TestContactBy_ListOverdueContacts
     provenance: [ContactHandler.ListOverdueContacts, ContactService.ListOverdueContacts]
 
   - id: CAD-024
