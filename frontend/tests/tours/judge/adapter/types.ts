@@ -4,6 +4,7 @@
 // is a config swap with ZERO grader change (design D2).
 
 import type { AriaNode, ApiResponses, DialogRecord, ServerTimeFrame } from '../../support/types'
+import type { Mutation } from '../mutation'
 
 // One residual then-item the judge must grade.
 export interface JudgeItem {
@@ -63,11 +64,11 @@ export interface JudgeInput {
    * the span (`qa.mutation`) so the exporter can render the `mutation` +
    * DERIVE the `screenshot_caveat` (a doctored trace shows the undoctored
    * pixels). PR3's trap self-test is the SOLE producer; normal
-   * `buildJudgeInput`/`buildIntentJudgeInput` never set it. Typed loosely here
-   * (`unknown`) to keep the adapter contract corpus/schema-independent; PR3
-   * tightens `mutation` to the relocated `Mutation` type.
+   * `buildJudgeInput`/`buildIntentJudgeInput` never set it. Typed as the
+   * relocated `Mutation` (`judge/mutation.ts`) — corpus-independent, so it
+   * survives the corpus deletion the trap self-test replaces.
    */
-  __trap?: { mutation: unknown }
+  __trap?: { mutation: Mutation }
 }
 
 // Categorical per-item verdict. `citation` is the exact aria node label / JSON

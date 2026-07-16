@@ -5,7 +5,7 @@
 // deterministic ops).
 
 import type { AriaChild, AriaNode, Capture } from '../support/types'
-import type { Mutation } from './corpus/schema'
+import type { Mutation } from './mutation'
 
 function clone<T>(v: T): T {
   return JSON.parse(JSON.stringify(v)) as T
@@ -157,7 +157,7 @@ async function main(): Promise<void> {
     process.exit(2)
   }
   const base = JSON.parse(fs.readFileSync(baseFile, 'utf8')) as Capture
-  const { parseMutation } = await import('./corpus/schema')
+  const { parseMutation } = await import('./mutation')
   const mutation = parseMutation(JSON.parse(mutationJson))
   const [doctored] = applyMutation([base], mutation)
   const out = `${JSON.stringify(doctored, null, 2)}\n`

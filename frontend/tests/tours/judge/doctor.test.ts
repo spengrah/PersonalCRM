@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { applyMutation, resolveCaseCaptures } from './doctor'
 import { apiItem, cap, pair, root } from './grader/fixtures'
-import type { Mutation } from './corpus/schema'
+import type { Mutation } from './mutation'
 
 describe('applyMutation — single-point, deterministic, non-mutating', () => {
   it('inject_query re-injects an action= param', () => {

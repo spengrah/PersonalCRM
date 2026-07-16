@@ -233,7 +233,7 @@ describe('buildTraceBody — exhaustive PII scrub (INV-2)', () => {
     serverEnv: 'sev-s20@synthetic.example',
     citation: 'cit-s21@synthetic.example',
     critique: 'crt-s22@synthetic.example',
-    // Every string-bearing MutationSchema position (corpus/schema.ts), by its
+    // Every string-bearing MutationSchema position (judge/mutation.ts), by its
     // REAL property name — target.role, param, value, endpoint, node_role,
     // node_name, field, and each path[] element.
     mutRole: 'mrl-s23@synthetic.example',

@@ -12,7 +12,7 @@
 import type { Capture } from '../support/types'
 import { makeCodexExecJudge } from './adapter/codex-exec'
 import type { Judge, PerItemVerdict } from './adapter/types'
-import type { Mutation } from './corpus/schema'
+import type { Mutation } from './mutation'
 import { resolveCaseCaptures } from './doctor'
 import type { IntentSpec } from './intent-catalog'
 import { DEFAULT_INTENT_EFFORT, DEFAULT_INTENT_MODEL, runIntentPass } from './intent-runner'
