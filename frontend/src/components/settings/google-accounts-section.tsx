@@ -236,7 +236,7 @@ export function GoogleAccountsSection() {
   const hasAccounts = !isLoading && !error && accounts && accounts.length > 0
 
   return (
-    <section className="bg-white rounded-lg shadow-sm border p-6">
+    <section aria-label="Google Accounts" className="bg-white rounded-lg shadow-sm border p-6">
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center space-x-3">
@@ -348,6 +348,7 @@ export function GoogleAccountsSection() {
                     loading={revokeMutation.isPending}
                     variant="ghost"
                     size="sm"
+                    aria-label={`Disconnect ${account.account_id}`}
                     className="text-red-600 hover:text-red-700 hover:bg-red-50"
                   >
                     <Trash2 className="w-4 h-4" />

@@ -150,7 +150,7 @@ export function TelegramSection() {
   }
 
   return (
-    <section className="bg-white rounded-lg shadow-sm border p-6">
+    <section aria-label="Telegram" className="bg-white rounded-lg shadow-sm border p-6">
       {/* Header */}
       <div className="flex items-center space-x-3 mb-2">
         <Send className="w-6 h-6 text-blue-500" />
@@ -481,6 +481,7 @@ function TelegramChatList() {
           </div>
           <select
             value={chat.status}
+            aria-label={`Tracking for ${chat.chat_title || 'Untitled'}`}
             onChange={e =>
               updateStatus.mutate({
                 chatId: chat.telegram_chat_id,

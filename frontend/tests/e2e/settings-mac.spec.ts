@@ -45,26 +45,34 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
   // interfere with each other.
   test.describe.configure({ mode: 'serial' })
 
-  test('renders empty-state when no Mac hosts are paired', async ({ page, request }) => {
-    await deleteAllMacHosts(request)
+  test('renders empty-state when no Mac hosts are paired', async ({ page }) => {
+    // The zero-host rendering branch, driven by mocking the list endpoint:
+    // the shared mac_host singleton table is seeded/reset by parallel
+    // workers (imports-interactions.spec.ts), so asserting real-API global
+    // emptiness is racy and would mean deleting hosts other tests own. The
+    // real-API list facet (MAC-018[0]) is covered by the seeded-host and
+    // uninstall tests below; this test is uncited (the mock replaces the
+    // endpoint the behavior describes).
+    await page.route('**/api/v1/host', route =>
+      route.request().method() === 'GET'
+        ? route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({ success: true, data: [] }),
+          })
+        : route.fallback()
+    )
+
     await page.goto('/settings/mac', { waitUntil: 'domcontentloaded' })
 
-    await expect(page.getByRole('heading', { name: 'Mac Daemon' })).toBeVisible({
-      timeout: 10_000,
-    })
-    // Pair-new-Mac CTA + back link are always rendered.
-    await expect(page.getByRole('button', { name: 'Pair new Mac' })).toBeVisible()
-    await expect(page.getByRole('link', { name: /Back to Settings/i })).toBeVisible()
-
-    // Empty-state messaging.
-    await expect(page.getByText('No Mac hosts paired')).toBeVisible()
+    await expect(page.getByText('No Mac hosts paired')).toBeVisible({ timeout: 10_000 })
+    await expect(page.getByTestId('mac-host-row')).toHaveCount(0)
   })
 
-  test('opens pairing modal with a token when Pair new Mac is clicked', async ({
-    page,
-    request,
-  }) => {
-    await deleteAllMacHosts(request)
+  // spec: MAC-018[3]
+  test('opens pairing modal with a token when Pair new Mac is clicked', async ({ page }) => {
+    // No host seeding or reset needed: the pairing modal works regardless
+    // of how many hosts are listed (parallel workers may own one).
     // Wait for the initial GET /host response BEFORE clicking — this
     // proves React Query has mounted on the page and hydration is
     // complete, otherwise the click handler can fire against an
@@ -75,10 +83,6 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
     )
     await page.goto('/settings/mac', { waitUntil: 'domcontentloaded' })
     await initialListPromise
-
-    // Wait for the empty-state to confirm the list query resolved + render
-    // pass completed.
-    await expect(page.getByText('No Mac hosts paired')).toBeVisible({ timeout: 10_000 })
 
     const pairButton = page.getByRole('button', { name: 'Pair new Mac' })
     await expect(pairButton).toBeVisible()
@@ -105,6 +109,7 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
     await expect(dialog).not.toBeVisible()
   })
 
+  // spec: MAC-018[0]
   test('renders paired host with permissions and source-health badges', async ({
     page,
     request,
@@ -161,6 +166,7 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
     await deleteAllMacHosts(request)
   })
 
+  // spec: MAC-046[0]
   test('renders icloud_contacts contact count when backfill_complete (#327)', async ({
     page,
     request,
@@ -216,14 +222,18 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
     const sourceHealth = row.getByTestId('source-health')
     await expect(sourceHealth).toBeVisible()
 
-    // The Cursor cell renders the contact count + checkmark instead of
-    // the misleading change-token / dash.
-    await expect(sourceHealth.getByText('3 contacts ✓')).toBeVisible()
+    // The Cursor cell substitutes the live contact count (3 seeded rows)
+    // for the misleading change-token / dash. The checkmark glyph is
+    // presentation — assert the count and the cell's state instead.
+    const cursorCell = sourceHealth.getByTestId('cursor-cell')
+    await expect(cursorCell).toHaveText(/3 contacts/)
+    await expect(cursorCell).toHaveAttribute('data-state', 'count')
 
     // Cleanup.
     await deleteAllMacHosts(request)
   })
 
+  // spec: MAC-046[1]
   test('renders dash for icloud_contacts when backfill_complete is false (#327)', async ({
     page,
     request,
@@ -240,6 +250,9 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
         icloud_contacts: {
           last_pushed_at: '2026-05-01T00:00:00Z',
           backfill_complete: false,
+          // A pushed change-token is the NORMAL mid-backfill state — the
+          // cell must show the placeholder, never this opaque token.
+          pushed_cursor: 'e2e-change-token-xyz',
         },
       },
     })
@@ -255,15 +268,16 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
     const sourceHealth = row.getByTestId('source-health')
     await expect(sourceHealth).toBeVisible({ timeout: 10_000 })
 
-    // While backfill is in progress, the cell stays as a dash; no
-    // numeric substitution happens.
-    const rows = sourceHealth.locator('tbody tr')
-    const icloudRow = rows.first()
-    await expect(icloudRow.locator('td').nth(2)).toHaveText('—')
+    // While backfill is in progress, the cell stays in its no-count state:
+    // no numeric substitution, and the raw change-token is never shown.
+    await expect(sourceHealth.getByTestId('cursor-cell')).toHaveAttribute('data-state', 'pending')
+    await expect(sourceHealth.getByText(/\d+ contacts/)).toHaveCount(0)
+    await expect(sourceHealth.getByText('e2e-change-token-xyz')).toHaveCount(0)
 
     await deleteAllMacHosts(request)
   })
 
+  // spec: MAC-018[3]
   test('opens rotate-key modal with templated CLI command when Rotate Key is clicked', async ({
     page,
     request,
@@ -323,6 +337,7 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
     await deleteAllMacHosts(request)
   })
 
+  // spec: MAC-018[3], MAC-018[0]
   test('uninstall flow removes a paired host', async ({ page, request }) => {
     await deleteAllMacHosts(request)
     await seedMacHost(request, { hostname: 'e2e-uninstall-me', protocol_version: 1 })
@@ -348,7 +363,11 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
     const deleteResp = await deleteResponsePromise
     expect(deleteResp.status()).toBe(200)
 
-    // Row disappears, empty-state returns.
-    await expect(page.getByText('No Mac hosts paired')).toBeVisible({ timeout: 10_000 })
+    // The removal is reflected in the live list: this test's host row is
+    // gone (scoped to the seeded hostname — a parallel worker may own an
+    // unrelated host at this moment).
+    await expect(
+      page.getByTestId('mac-host-row').filter({ hasText: 'e2e-uninstall-me' })
+    ).toHaveCount(0, { timeout: 10_000 })
   })
 })

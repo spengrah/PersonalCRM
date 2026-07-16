@@ -31,6 +31,7 @@ export function SyncBadge({ label, syncState, onSync, loading }: SyncBadgeProps)
       <button
         onClick={onSync}
         disabled={loading || isSyncing}
+        aria-label={`Sync ${label}`}
         className="px-2 py-1 text-blue-600 hover:bg-blue-50 border-l border-gray-200 disabled:opacity-50"
       >
         <RefreshCw className={`w-3 h-3 ${loading || isSyncing ? 'animate-spin' : ''}`} />

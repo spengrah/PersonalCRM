@@ -98,6 +98,7 @@ func TestMacHost_GetSourceCounts_HappyPath(t *testing.T) {
 // TestMacHost_GetSourceCounts_UnknownHost_404 covers the host-existence
 // pre-check: an unknown host id returns 404 (not 200 with empty
 // counts).
+// spec: MAC-018[2]
 func TestMacHost_GetSourceCounts_UnknownHost_404(t *testing.T) {
 
 	env := setupMacHostEnv(t)
@@ -110,6 +111,7 @@ func TestMacHost_GetSourceCounts_UnknownHost_404(t *testing.T) {
 // TestMacHost_GetSourceCounts_NoRowsReturnsEmpty asserts that a host
 // with no external_contact rows returns 200 with counts={} rather than
 // 404 or 500.
+// spec: MAC-018[2]
 func TestMacHost_GetSourceCounts_NoRowsReturnsEmpty(t *testing.T) {
 
 	env := setupMacHostEnv(t)

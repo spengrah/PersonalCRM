@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { renderCursorCell } from '../cursor-cell'
+import { cursorCellState, renderCursorCell } from '../cursor-cell'
 
 describe('renderCursorCell', () => {
   it('renders contact count for icloud_contacts when backfill_complete and counts loaded', () => {
@@ -22,13 +22,20 @@ describe('renderCursorCell', () => {
     expect(out).toBe('—')
   })
 
-  it('renders existing cursor for icloud_contacts when backfill_complete is false', () => {
+  it('never renders the change-token for icloud_contacts while backfill is incomplete', () => {
+    // Mid-backfill with a pushed cursor is the normal state the #327
+    // complaint was about: the change-token must not be displayed.
     const out = renderCursorCell(
       'icloud_contacts',
       { backfill_complete: false, pushed_cursor: 'changeToken123' },
       { icloud_contacts: 99 }
     )
-    expect(out).toBe('changeToken123')
+    expect(out).toBe('—')
+  })
+
+  it('renders the dash for icloud_contacts when backfill_complete is absent', () => {
+    const out = renderCursorCell('icloud_contacts', { pushed_cursor: 'changeToken123' }, undefined)
+    expect(out).toBe('—')
   })
 
   it('renders existing cursor for messages regardless of backfill_complete', () => {
@@ -85,5 +92,34 @@ describe('renderCursorCell', () => {
   it('falls back to raw cursor when phone_calls cursor cannot be parsed', () => {
     const out = renderCursorCell('phone_calls', { pushed_cursor: 'malformed-cursor' }, undefined)
     expect(out).toBe('malformed-cursor')
+  })
+})
+
+describe('cursorCellState', () => {
+  // State and rendering must agree: 'count' iff the count is rendered,
+  // 'pending' iff the backfill-source placeholder is rendered, 'cursor'
+  // for the ordinary cursor/dash rendering.
+  it('is count exactly when the count renders', () => {
+    const entry = { backfill_complete: true }
+    const counts = { icloud_contacts: 3 }
+    expect(cursorCellState('icloud_contacts', entry, counts)).toBe('count')
+    expect(renderCursorCell('icloud_contacts', entry, counts)).toBe('3 contacts ✓')
+  })
+
+  it('is pending with the dash rendered while backfill is incomplete, even with a cursor', () => {
+    const entry = { backfill_complete: false, pushed_cursor: 'changeToken123' }
+    expect(cursorCellState('icloud_contacts', entry, undefined)).toBe('pending')
+    expect(renderCursorCell('icloud_contacts', entry, undefined)).toBe('—')
+  })
+
+  it('is pending with the dash rendered when backfill is complete but counts are missing', () => {
+    const entry = { backfill_complete: true }
+    expect(cursorCellState('icloud_contacts', entry, {})).toBe('pending')
+    expect(renderCursorCell('icloud_contacts', entry, {})).toBe('—')
+  })
+
+  it('is cursor for non-backfill sources', () => {
+    expect(cursorCellState('messages', { pushed_cursor: '123' }, undefined)).toBe('cursor')
+    expect(cursorCellState('messages', {}, undefined)).toBe('cursor')
   })
 })
