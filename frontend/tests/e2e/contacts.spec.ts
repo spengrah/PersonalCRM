@@ -808,9 +808,11 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     await expect(topPagination.getByRole('button', { name: '1' })).toBeVisible()
     await expect(topPagination.getByRole('button', { name: '2' })).toBeVisible()
 
-    // Page 1 is the current page (aria-current marks the active page button).
+    // Page 1 is the current page (aria-current marks the active page button),
+    // and Previous is disabled at the near boundary.
     const page1Button = topPagination.getByRole('button', { name: '1' })
     await expect(page1Button).toHaveAttribute('aria-current', 'page')
+    await expect(topPagination.getByRole('button', { name: 'Previous' })).toBeDisabled()
 
     // Click page 2 and verify the current-page mark moves
     await topPagination.getByRole('button', { name: '2' }).click()
