@@ -210,7 +210,7 @@ test.describe('Dashboard - Card Anatomy (mocked) @area:dashboard', () => {
     // observable signal.
     for (const c of tierCases) {
       await expect(page.getByRole('heading', { name: c.name })).toBeVisible()
-      const card = page.locator('div.rounded-lg').filter({ hasText: c.name })
+      const card = page.getByRole('listitem').filter({ hasText: c.name })
       await expect(card.getByLabel(c.tier, { exact: true })).toBeVisible()
       await expect(card.getByText('(weekly cadence)')).toBeVisible()
       // Recency requires a VALUE after "Last contacted", not just the label
@@ -313,7 +313,7 @@ test.describe('Dashboard - Sort Orderings (mocked) @area:dashboard', () => {
         `Zulu ${fixtureSuffix}`,
         `Mike ${fixtureSuffix}`,
       ])
-    const mikeCard = page.locator('div.rounded-lg').filter({ hasText: `Mike ${fixtureSuffix}` })
+    const mikeCard = page.getByRole('listitem').filter({ hasText: `Mike ${fixtureSuffix}` })
     await expect(mikeCard.getByText('Never contacted')).toBeVisible()
   })
 })
@@ -396,7 +396,7 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
     })
 
     // Find the "Mark as Contacted" button for our contact
-    const contactCard = page.locator('div.rounded-lg').filter({ hasText: contactName })
+    const contactCard = page.getByRole('listitem').filter({ hasText: contactName })
     const markContactedButton = contactCard.getByRole('button', { name: /Mark as Contacted/i })
     await expect(markContactedButton).toBeVisible()
 
