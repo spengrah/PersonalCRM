@@ -1,8 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
-import { renderReport, runJudgeRound, type JudgesBundle } from './render'
+import { main, renderReport, runJudgeRound, type JudgesBundle } from './render'
 import { gradeBehavior, groupByBehavior, type BehaviorGrade } from '../grader/grade'
 import { apiItem, cap, pair } from '../grader/fixtures'
 import { TRAPS } from '../trap-config'
+import { allIntents } from '../intent-catalog'
 import type { Judge, PerItemVerdict } from '../adapter/types'
 import type { ItemVerdicts } from '../grader/types'
 import type { TrapResult } from '../trap-selftest'
@@ -245,5 +246,62 @@ describe('runJudgeRound — orchestration + hard-exit path (dependency-injected)
     // Residue items render "pending labels"; no self-test section is emitted.
     expect(markdown).toMatch(/pending labels/)
     expect(markdown).not.toContain('Detection self-test')
+  })
+
+  it('a RESIDUE judge exception → report STILL written, lane-error section, exitCode 1', async () => {
+    const throwingResidue: JudgesBundle = {
+      ...bundle(trapJudgeReturning('fail')),
+      residueRunner: async () => {
+        throw new Error('residue adapter blew up')
+      },
+    }
+    const { markdown, exitCode } = await runJudgeRound(roundCaptures(), { judges: throwingResidue })
+    // The exception is caught, NOT propagated — the report is written and the
+    // failure is both visible AND reflected in the exit status.
+    expect(exitCode).toBe(1)
+    expect(markdown).toContain('# Agentic UX QA')
+    expect(markdown).toContain('## Judge-lane errors')
+    expect(markdown).toMatch(/residue judge for .*: residue adapter blew up/)
+  })
+
+  it('an INTENT-pass exception → report STILL written, lane-error section, exitCode 1', async () => {
+    // Tag a capture with an intent id so the intent pass actually calls the
+    // (throwing) intent judge.
+    const captures = [cap({ behaviors: [allIntents()[0].id] }), ...roundCaptures()]
+    const throwingIntent: JudgesBundle = {
+      ...bundle(trapJudgeReturning('fail')),
+      intentJudge: async () => {
+        throw new Error('intent adapter blew up')
+      },
+    }
+    const { markdown, exitCode } = await runJudgeRound(captures, { judges: throwingIntent })
+    expect(exitCode).toBe(1)
+    expect(markdown).toContain('# Agentic UX QA')
+    expect(markdown).toMatch(/intent pass: intent adapter blew up/)
+  })
+})
+
+describe('main() CLI exit behavior (deferred process.exitCode, never process.exit)', () => {
+  // main() sets the global process.exitCode; save + restore it (and argv) so a
+  // guarded exit code can't leak into vitest's own process status.
+  async function runMainWith(args: string[]): Promise<number | undefined> {
+    const savedArgv = process.argv
+    const savedEc = process.exitCode
+    process.argv = ['node', 'render.ts', ...args]
+    try {
+      await main()
+      return process.exitCode as number | undefined
+    } finally {
+      process.argv = savedArgv
+      process.exitCode = savedEc
+    }
+  }
+
+  it('--help sets exitCode 0 and returns (no process.exit)', async () => {
+    expect(await runMainWith(['--help'])).toBe(0)
+  })
+
+  it('a missing run dir sets exitCode 2 and returns (no process.exit)', async () => {
+    expect(await runMainWith([])).toBe(2)
   })
 })
