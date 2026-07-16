@@ -94,6 +94,9 @@ behaviors:
       - ignored is terminal and sticky; the row never resurfaces in the queue
     provenance: [external_contact match_status CHECK, LinkContact curated signal, Ignore]
     notes: imported-vs-matched is the discriminator that drives auto-propagate vs suggest in reconciliation (IMP-017) — imported means a human curated the method set.
+    waivers:
+      - then: 2
+        reason: the matched (uncurated bare-link) state is unreachable from the UI — the modal always sends a curation signal when it offers methods; the bare-link branch exists only at the API layer and is owned by the Go integration test TestLinkContact_Bare_LandsMatched
 
   - id: IMP-008
     title: Tombstoned external contacts revive with their linkage intact
@@ -176,6 +179,9 @@ behaviors:
       - a bare link with no curation marks the row matched
     provenance: [LinkContact curated signal, EnrichContactFromExternalWithSelections]
     notes: Method-value conflicts neither block nor prompt today — a same-type different-value method is simply offered as an addition (IMP-027) — and the server does not reject links over conflicts; conflict resolutions still count as a curation signal at the API level.
+    waivers:
+      - then: 1
+        reason: a bare link with no curation exists only at the API layer (the modal always curates when it offers methods); owned by the Go integration test TestLinkContact_Bare_LandsMatched
 
   - id: IMP-014
     title: Link-only sources can never create contacts
@@ -370,6 +376,9 @@ behaviors:
       - a cadence can be chosen; link mode pre-fills it from the existing contact
     provenance: [suggestion-modal.tsx, method-selector.tsx, detectMethodConflicts]
     notes: A conflict-resolution affordance (keep-CRM vs use-external toggle) exists in the code but is currently unreachable — the detector never emits a conflict state.
+    waivers:
+      - then: 0
+        reason: single-view/no-wizard is a structural-absence property with no deterministic observable; the citing tests for the other then-items all drive one dialog with no step transitions, and visual composition is judge-owned
 
   - id: IMP-028
     title: The modal pages the whole queue
@@ -409,6 +418,9 @@ behaviors:
       - methods already on the contact are shown disabled
       - confirming requires at least one selected method; dismissing dismisses all pending ones stickily
     provenance: [method-suggestion-resolver.tsx]
+    waivers:
+      - then: 1
+        reason: the suggestions feed prunes already-on-contact entries server-side (buildMethodSuggestionItems drift defense), so the disabled already-present row is unreachable and unseedable in E2E; the render-time state is covered by the method-suggestion-resolver component test
 
   - id: IMP-031
     title: Resolving review items updates every dependent surface without reload
@@ -422,6 +434,42 @@ behaviors:
       - dependent surfaces refresh through query invalidation scoped to the action (queue surfaces always; contact surfaces as affected by the action)
       - a returned rematch job is registered for polling
     provenance: [query-invalidation.ts import events, use-imports.ts]
+
+  - id: IMP-036
+    title: Telegram candidates surface their @username
+    type: ux
+    status: current
+    surface: ui
+    given: a telegram candidate carrying a username
+    when: its card renders
+    then:
+      - the @username appears as a chip deep-linking to the t.me profile
+      - when the candidate has no name fields the @username becomes the display name and the chip is suppressed
+    provenance: [imports/page.tsx CandidateCard telegram chip, getCandidateDisplayName]
+
+  - id: IMP-037
+    title: Gmail-correspondence candidates carry co-occurrence evidence
+    type: ux
+    status: current
+    surface: ui
+    given: a gmail-correspondence candidate with correspondence metadata
+    when: its card renders
+    then:
+      - an evidence badge names the co-occurring contact and shows the message count
+    provenance: [imports/page.tsx CandidateCard correspondenceLabel, gmail_correspondence metadata]
+
+  - id: IMP-038
+    title: A session deep link lands on its Interactions card
+    type: ux
+    status: current
+    surface: ui
+    given: a deep link into the imports page carrying a session id
+    when: the Interactions tab loads with the session param
+    then:
+      - the session's card is present on the Interactions tab
+      - the one-time session param is stripped from the URL so a refresh does not re-trigger the highlight
+    provenance: [imports/page.tsx sessionParam effect, InteractionsTab highlightedSession]
+    notes: The scroll-into-view and highlight styling are judge-owned presentation; the deterministic contract is card-present plus param-strip.
 
   # --- Proposed ---
 
