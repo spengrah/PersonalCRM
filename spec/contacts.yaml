@@ -682,7 +682,8 @@ behaviors:
     then:
       - the contact's methods are displayed with normalized values
       - the primary method is marked, and only one method carries the mark
-    provenance: ["contacts/[id]/page.tsx methods block", getPrimaryAndSecondaryMethods]
+      - a method type without an external link surface (such as Google Chat) renders its value as plain text with its type label, not as a link
+    provenance: ["contacts/[id]/page.tsx methods block", getPrimaryAndSecondaryMethods, getContactMethodHref]
     notes: Identifier normalization rules themselves are CON-012, backend-owned.
 
   - id: CON-057
@@ -735,6 +736,19 @@ behaviors:
     serves: [CON-051]
     provenance: [buildContactDetailUrl, contact detail listContext]
     notes: The current-status half of CON-039, which stays proposed for the tie-determinism claim.
+
+  - id: CON-061
+    title: The list renders derived cadence and next-contact values
+    type: ux
+    status: current
+    surface: ui
+    given: the contact list
+    when: rows render
+    then:
+      - a contact's cadence renders as its formatted label
+      - a contact with a computed next-contact date renders that date, and one without renders a placeholder
+    provenance: [contacts page table cells, formatCadence, contact_by]
+    notes: The contact_by computation itself is backend-owned (CON-001); this row pins only the list's rendering of the derived values.
 
   # --- Intents (judged experience goals — Track B agentic judge only) ---
 

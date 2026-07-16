@@ -41,6 +41,21 @@ test.describe('Navigation @area:navigation', () => {
     }
   })
 
+  test('clicking a nav link navigates to that section', async ({ page }) => {
+    // spec: DSH-002[0]
+    // The href loop above proves the links point at the right routes; this
+    // proves the click-through actually lands on the destination surface.
+    await page.goto('/dashboard')
+    await page.waitForLoadState('domcontentloaded')
+
+    await page.getByRole('navigation').getByRole('link', { name: 'Contacts', exact: true }).click()
+
+    await expect(page).toHaveURL(/\/contacts(\?|$)/)
+    await expect(page.getByRole('heading', { name: 'Contacts', level: 2 })).toBeVisible({
+      timeout: 15000,
+    })
+  })
+
   test('navigation remains visible when scrolling', async ({ page }) => {
     // spec: DSH-002[2]
     // Navigate to contacts page (has enough content to scroll)

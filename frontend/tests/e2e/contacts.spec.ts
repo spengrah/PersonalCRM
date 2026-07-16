@@ -154,8 +154,13 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await page.getByRole('button', { name: 'Log', exact: true }).click()
     const response = await responsePromise
     expect(response.status()).toBe(201)
+
+    // The BACKDATED date travels: the request carries the chosen date (the
+    // modal pins it to UTC midnight) and the stored interaction echoes it.
+    expect(response.request().postDataJSON()?.occurred_at).toBe('2024-01-15T00:00:00.000Z')
     const body = await response.json()
     expect(body.success).toBe(true)
+    expect(body.data.occurred_at).toContain('2024-01-15')
 
     // Modal closes on success.
     await expect(page.getByRole('dialog')).not.toBeVisible({ timeout: 5000 })
@@ -672,7 +677,7 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     await expect(page.getByText(notes)).not.toBeVisible()
   })
 
-  // spec: CON-056[0], CON-056[1]
+  // spec: CON-056[0], CON-056[1], CON-056[2]
   test('should display contact with methods and the primary marked', async ({ page }) => {
     // A slim display proof: seeded methods render with normalized values and
     // exactly one Primary mark. The normalization RULES themselves (per-type
@@ -683,6 +688,7 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     const personalEmail = `personal-${testApi.prefix}@example.com`
     const telegramHandle = `@@telegram-${testApi.prefix}`
     const normalizedTelegram = telegramHandle.replace(/^@@/, '@')
+    const gchatEmail = `gchat-${testApi.prefix}@example.com`
 
     const { ids } = await testApi.seedContacts([
       {
@@ -690,6 +696,7 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
         methods: [
           { type: 'email', value: personalEmail },
           { type: 'telegram', value: telegramHandle, is_primary: true },
+          { type: 'gchat', value: gchatEmail },
         ],
       },
     ])
@@ -706,6 +713,54 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     const primaryRow = page.getByText(normalizedTelegram, { exact: true }).locator('..')
     await expect(primaryRow.getByText('Primary')).toBeVisible()
     await expect(page.getByText('Primary')).toHaveCount(1)
+
+    // A gchat identifier has no external link surface: its value renders as
+    // plain text with its type label, NOT as a link (a frontend-only invariant
+    // of getContactMethodHref that the CON-012 Go tests do not cover).
+    const gchatRow = page.getByText(gchatEmail, { exact: true }).locator('..')
+    await expect(gchatRow.getByText('Google Chat', { exact: true })).toBeVisible()
+    await expect(page.getByRole('link', { name: gchatEmail })).toHaveCount(0)
+  })
+
+  // spec: CON-061[0], CON-061[1]
+  test('should render formatted cadence and next-contact values in list rows', async ({ page }) => {
+    // Derived-value display: a contact with a cadence + last-contacted has a
+    // computed contact_by, rendered as a date in the Next Contact column; a
+    // contact without a cadence renders the '-' placeholder there, and the
+    // cadence value renders as its formatted label. Column resolved by its
+    // header position at runtime (no hard-coded cell index).
+    await testApi.seedContacts([
+      { full_name: 'ColDisplay Weekly', cadence: 'weekly', last_contacted_days_ago: 3 },
+      { full_name: 'ColDisplay None' },
+    ])
+
+    await page.goto('/contacts')
+    await page.waitForLoadState('domcontentloaded')
+    const searchInput = page.getByPlaceholder('Search contacts...')
+    await searchInput.fill(`${testApi.prefix}-ColDisplay`)
+    await searchInput.press('Enter')
+
+    const weeklyRow = page.locator('tr', {
+      has: page.getByText(`${testApi.prefix}-ColDisplay Weekly`),
+    })
+    const noneRow = page.locator('tr', {
+      has: page.getByText(`${testApi.prefix}-ColDisplay None`),
+    })
+    await expect(weeklyRow).toBeVisible({ timeout: 15000 })
+    await expect(noneRow).toBeVisible()
+
+    // Formatted cadence label in the seeded row (derived from the stored
+    // 'weekly' value, not raw enum text).
+    await expect(weeklyRow.getByText('Weekly', { exact: true })).toBeVisible()
+
+    // Resolve the Next Contact column by header position.
+    const headerTexts = await page.getByRole('columnheader').allTextContents()
+    const nextIdx = headerTexts.findIndex(t => t.includes('Next Contact'))
+    expect(nextIdx).toBeGreaterThanOrEqual(0)
+
+    // With a cadence: a real date value (contains digits). Without: '-'.
+    await expect(weeklyRow.getByRole('cell').nth(nextIdx)).toHaveText(/\d/)
+    await expect(noneRow.getByRole('cell').nth(nextIdx)).toHaveText('-')
   })
 
   // spec: CON-057[0]
@@ -802,8 +857,13 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     await searchInput.press('Enter')
     await searchResponse
 
-    // Page number buttons exist (at least page 1 and 2 in the top control).
+    // BOTH pagination controls render (top + bottom) — this count guards the
+    // sync assertion at the end from vacuously passing when first() and
+    // last() resolve to the same single control.
     const paginationControls = page.locator('[data-testid="pagination"]')
+    await expect(paginationControls).toHaveCount(2)
+
+    // Page number buttons exist (at least page 1 and 2 in the top control).
     const topPagination = paginationControls.first()
     await expect(topPagination.getByRole('button', { name: '1' })).toBeVisible()
     await expect(topPagination.getByRole('button', { name: '2' })).toBeVisible()
@@ -814,12 +874,23 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     await expect(page1Button).toHaveAttribute('aria-current', 'page')
     await expect(topPagination.getByRole('button', { name: 'Previous' })).toBeDisabled()
 
-    // Click page 2 and verify the current-page mark moves
+    // Click page 2: a page=2 list request fires (the control PAGES the list,
+    // not just restyles itself) and the current-page mark moves.
+    const page2Response = page.waitForResponse(
+      resp =>
+        resp.request().method() === 'GET' &&
+        resp.url().includes('/api/v1/contacts') &&
+        new URL(resp.url()).searchParams.get('page') === '2' &&
+        !new URL(resp.url()).searchParams.has('ids_only')
+    )
     await topPagination.getByRole('button', { name: '2' }).click()
+    await page2Response
     await expect(topPagination.getByRole('button', { name: '2' })).toHaveAttribute(
       'aria-current',
       'page'
     )
+    // The rows changed: 22 seeded contacts at limit 20 leave 2 on page 2.
+    await expect(page.locator('tbody tr')).toHaveCount(2)
 
     // Verify Previous is now enabled and Next is disabled (only 2 pages)
     await expect(topPagination.getByRole('button', { name: 'Previous' })).toBeEnabled()

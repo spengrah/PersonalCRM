@@ -1,5 +1,13 @@
 import { test, expect } from '@playwright/test'
 import { expectAddContactHeader } from './helpers/dashboard'
+import type { APIResponse } from '../../src/types/generated/api-envelope'
+
+// The mock envelopes below are typed against the tygo-GENERATED wire type
+// (backend api/response.go → APIResponse), so a backend envelope change
+// regenerates the type and fails tsc here — the mocks cannot silently drift
+// from the real error envelope. The envelope's runtime shape on real error
+// responses is owned by the Go API tests (e.g. contact_validation_test.go
+// asserts success=false + error.code on actual HTTP responses).
 
 test.describe('Error Boundary @area:error-boundary', () => {
   test('overdue loading shows placeholder skeletons, not an empty or caught-up state', async ({
@@ -20,7 +28,7 @@ test.describe('Error Boundary @area:error-boundary', () => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ success: true, data: [] }),
+        body: JSON.stringify({ success: true, data: [] } satisfies APIResponse),
       })
     })
 
@@ -59,7 +67,7 @@ test.describe('Error Boundary @area:error-boundary', () => {
         body: JSON.stringify({
           success: false,
           error: { code: 'INTERNAL_ERROR', message: 'Simulated overdue failure' },
-        }),
+        } satisfies APIResponse),
       })
     )
 
