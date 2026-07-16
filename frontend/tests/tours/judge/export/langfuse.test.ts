@@ -203,56 +203,102 @@ describe('buildTraceBody — derived screenshot_caveat (D6; the ONLY two states)
 })
 
 describe('buildTraceBody — exhaustive PII scrub (INV-2)', () => {
-  // A DISTINCT email+phone sentinel in every free-form / env-sourced branch that
-  // ships for a behavior span. A per-branch miss leaves a raw sentinel behind.
+  afterEach(() => vi.restoreAllMocks())
+
+  // A DISTINCT email (+ phone on several) sentinel in EVERY free-form /
+  // env-sourced branch that can ship — scalar attributes AND every nested
+  // evidence branch (url, aria name/text/nested-child, api requestUrl/query/body,
+  // dialogs, serverTime strings) AND every mutation string position. A per-branch
+  // miss leaves its own raw sentinel behind, pinpointing the leak.
+  const S = {
+    model: 'mdl-s01@synthetic.example (479) 555-0101',
+    prompt: 'prm-s02@synthetic.example +1-479-555-0102',
+    error: 'err-s03@synthetic.example (479) 555-0103',
+    title: 'ttl-s04@synthetic.example',
+    given: 'gvn-s05@synthetic.example',
+    when: 'whn-s06@synthetic.example',
+    then: 'thn-s07@synthetic.example +1-479-555-0107',
+    allThen: 'all-s08@synthetic.example',
+    note: 'not-s09@synthetic.example',
+    ariaName: 'arn-s10@synthetic.example',
+    ariaText: 'art-s11@synthetic.example',
+    ariaChildName: 'acn-s12@synthetic.example',
+    url: 'https://host/path/url-s13@synthetic.example',
+    apiRequestUrl: '/api/v1/x?u=aru-s14@synthetic.example',
+    apiQuery: 'aqy-s15@synthetic.example',
+    apiBody: 'aby-s16@synthetic.example +1-479-555-0116',
+    dialog: 'dlg-s17@synthetic.example +1-479-555-0117',
+    serverCurrent: 'sct-s18@synthetic.example',
+    serverBase: 'sbt-s19@synthetic.example',
+    serverEnv: 'sev-s20@synthetic.example',
+    citation: 'cit-s21@synthetic.example',
+    critique: 'crt-s22@synthetic.example',
+    mutValue: 'mvl-s23@synthetic.example',
+    mutNode: 'mnd-s24@synthetic.example',
+    mutPath: 'mpt-s25@synthetic.example',
+    mutParam: 'mpr-s26@synthetic.example +1-479-555-0126',
+  }
+  const SENTINELS = Object.values(S)
+
   const doctoredSpan = buildGenAiSpan({
     ...baseParams,
-    model: 'gpt m0@synthetic.example (479) 555-0100',
-    prompt: 'prompt p1@synthetic.example +1-479-555-0101',
-    error: 'threw e2@synthetic.example (479) 555-0102',
+    model: S.model,
+    prompt: S.prompt,
+    error: S.error,
     scenario: {
       kind: 'behavior',
       behaviorId: 'CON-042',
-      behaviorTitle: 'title t3@synthetic.example +1-479-555-0103',
-      given: 'given g4@synthetic.example',
-      when: 'when w5@synthetic.example',
-      items: [{ itemIndex: 0, thenText: 'then th6@synthetic.example (479) 555-0106' }],
-      allThen: ['allthen at7@synthetic.example'],
+      behaviorTitle: S.title,
+      given: S.given,
+      when: S.when,
+      items: [{ itemIndex: 0, thenText: S.then }],
+      allThen: [S.allThen],
     },
     gradedEvidence: [
       {
         captureFile: '001.json',
-        note: 'note nt8@synthetic.example',
+        note: S.note,
         evidence: {
-          aria: { role: 'button', name: 'aria ar9@synthetic.example' },
+          url: S.url,
+          aria: {
+            role: 'button',
+            name: S.ariaName,
+            children: [
+              { role: 'text', text: S.ariaText },
+              { role: 'group', name: S.ariaChildName, children: [] },
+            ],
+          },
           api: {
             '/api/v1/contacts': [
               {
                 method: 'GET',
-                requestUrl: '/api/v1/contacts',
-                query: {},
+                requestUrl: S.apiRequestUrl,
+                query: { search: S.apiQuery },
                 status: 200,
-                body: { note: 'api ap10@synthetic.example +1-479-555-0110' },
+                body: { note: S.apiBody },
               },
             ],
           },
+          serverTime: {
+            currentTime: S.serverCurrent,
+            isAccelerated: true,
+            accelerationFactor: 1,
+            baseTime: S.serverBase,
+            environment: S.serverEnv,
+          },
+          dialogs: [{ type: 'confirm', message: S.dialog }],
         },
         // A local screenshot PATH — must NEVER ship (paths are stripped, D9).
         screenshot: '/runs/secret/leak-should-not-ship.png',
       },
     ],
-    itemVerdicts: [
-      {
-        itemIndex: 0,
-        verdict: 'fail',
-        citation: 'cite ct11@synthetic.example',
-        critique: 'crit cr12@synthetic.example',
-      },
-    ],
+    itemVerdicts: [{ itemIndex: 0, verdict: 'fail', citation: S.citation, critique: S.critique }],
     mutation: {
       op: 'set_json_field',
-      value: 'mut mv13@synthetic.example',
-      node_name: 'nn14@synthetic.example',
+      value: S.mutValue,
+      node_name: S.mutNode,
+      target: { path: S.mutPath },
+      params: { new_value: S.mutParam },
     },
   })
 
@@ -286,14 +332,23 @@ describe('buildTraceBody — exhaustive PII scrub (INV-2)', () => {
     expect(shipped).not.toMatch(/\(479\) 555-01\d\d/)
   }
 
-  it('scrubs EVERY new/existing free-form branch of a doctored behavior span; no raw sentinel, no local path', () => {
-    const scrubber = createScrubber()
-    const bodies = buildTraceBody(doctoredSpan, s => scrubber.scrub(s))
-    const shipped = JSON.stringify(bodies)
+  it('no sentinel from ANY free-form branch survives the FINAL mocked ingestion body; no local path ships', async () => {
+    // Assert on what actually goes over the wire (exportSpans → mocked fetch),
+    // not just buildTraceBody, so the whole scrub seam is exercised end to end.
+    const mock = mockLangfuse()
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const res = await exportSpans(cfg, [doctoredSpan])
+    expect(res.traces).toBe(1)
+    const shipped = JSON.stringify(mock.bodies)
+    // EVERY per-branch sentinel is gone (a leak names its own branch via S).
+    for (const raw of SENTINELS) {
+      expect(shipped, `sentinel leaked: ${raw}`).not.toContain(raw)
+    }
     noRaw(shipped)
     expect(shipped).toContain('<email:')
     expect(shipped).toContain('<phone:')
-    // Paths never ship, even though the span carried one.
+    // Paths never ship, even though the span carried one (the fake path also fails
+    // fs.existsSync → zero tokens, but the point is the skeleton strips it).
     expect(shipped).not.toContain('leak-should-not-ship.png')
   })
 
@@ -373,7 +428,7 @@ interface ShippedBody {
   input?: Record<string, unknown>
   metadata: Record<string, unknown>
 }
-function mockLangfuse(opts: { failFirstPut?: boolean } = {}): {
+function mockLangfuse(opts: { failFirstPut?: boolean; failFirstRegister?: boolean } = {}): {
   fetchImpl: typeof fetch
   calls: MockCall[]
   bodies: ShippedBody[]
@@ -383,6 +438,7 @@ function mockLangfuse(opts: { failFirstPut?: boolean } = {}): {
   const shaToId = new Map<string, string>()
   let seq = 0
   let putCount = 0
+  let registerCount = 0
   const okText = (obj: unknown): Response =>
     ({ ok: true, status: 200, text: async () => JSON.stringify(obj) }) as Response
   const fetchImpl = (async (url: string | URL, init?: { method?: string; body?: unknown }) => {
@@ -402,6 +458,12 @@ function mockLangfuse(opts: { failFirstPut?: boolean } = {}): {
     if (u.endsWith('/api/public/media') && method === 'POST') {
       const body = json()
       calls.push({ kind: 'media', traceId: String(body.traceId) })
+      registerCount++
+      // A non-2xx registration → `api()` throws inside uploadMedia (the path the
+      // P1 fix must catch so the trace still ships with zero tokens).
+      if (opts.failFirstRegister === true && registerCount === 1) {
+        return { ok: false, status: 500, text: async () => 'boom' } as Response
+      }
       const sha = String(body.sha256Hash)
       let id = shaToId.get(sha)
       const firstTime = !id
@@ -508,6 +570,34 @@ describe('exportSpans — per-item media lifecycle + attribution', () => {
     expect(ge0.every(e => e.screenshot === undefined)).toBe(true)
     // Sibling trace is INDEPENDENT and ships all three (sha-dedup HITs).
     expect(t1.metadata.screenshots_attached).toBe(3)
+  })
+
+  it('a THROWN media registration (non-2xx POST /media) still ships the trace with ZERO tokens (INV-4)', async () => {
+    // The P1 regression: a registration THROW must not escape to the outer catch
+    // and DROP the trace — the trace must ship with expected=N / attached=0.
+    const f1 = tmpPng('r1.png', 'r1-bytes')
+    const f2 = tmpPng('r2.png', 'r2-bytes')
+    const span = buildGenAiSpan({
+      ...baseParams,
+      prompt: 'p',
+      scenario: { ...behaviorScenario, items: [{ itemIndex: 0, thenText: 't' }] }, // 1 trace
+      gradedEvidence: [
+        { captureFile: 'a.json', note: 'n', evidence: {}, screenshot: f1 },
+        { captureFile: 'b.json', note: 'n', evidence: {}, screenshot: f2 },
+      ],
+      itemVerdicts: [{ itemIndex: 0, verdict: 'pass', citation: 'c', critique: 'k' }],
+    })
+    const mock = mockLangfuse({ failFirstRegister: true })
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const res = await exportSpans(cfg, [span])
+    // Trace SHIPPED (not dropped): traces=1, failed=0.
+    expect(res.traces).toBe(1)
+    expect(res.failed).toBe(0)
+    expect(mock.bodies).toHaveLength(1)
+    expect(mock.bodies[0].metadata.screenshots_expected).toBe(2)
+    expect(mock.bodies[0].metadata.screenshots_attached).toBe(0)
+    const ge = mock.bodies[0].input!.graded_evidence as Array<{ screenshot?: string }>
+    expect(ge.every(e => e.screenshot === undefined)).toBe(true)
   })
 
   it('happy path attributes all screenshots by index on every item-trace', async () => {

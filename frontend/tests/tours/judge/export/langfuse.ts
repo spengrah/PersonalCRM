@@ -357,7 +357,11 @@ export async function exportSpans(
         // by index. All-or-nothing PER TRACE (INV-4): if ANY expected token is
         // missing, this trace ships ZERO tokens (honest expected=N/attached=0)
         // rather than mis-attributing a partial set; sibling traces are
-        // independent.
+        // independent. A registration/upload THROW (e.g. a non-2xx POST /media)
+        // must NOT escape and drop the trace — it is caught per screenshot and
+        // collapses THIS trace to zero tokens, so the final body below still
+        // ships with an honest attached=0. Only an init/final-body failure (the
+        // outer catch) can drop a trace.
         const tokens: (string | undefined)[] = []
         let missing = false
         for (const p of screenshotPaths) {
@@ -365,9 +369,17 @@ export async function exportSpans(
             tokens.push(undefined)
             continue
           }
-          const tok = await uploadMedia(cfg, body.id, p)
-          if (!tok) missing = true
-          tokens.push(tok)
+          try {
+            const tok = await uploadMedia(cfg, body.id, p)
+            if (!tok) missing = true
+            tokens.push(tok)
+          } catch (err) {
+            missing = true
+            tokens.push(undefined)
+            log(
+              `  media register failed for ${body.id}: ${err instanceof Error ? err.message : String(err)}`
+            )
+          }
         }
         const finalTokens = missing ? [] : tokens
         const attached = finalTokens.filter((t): t is string => typeof t === 'string').length
