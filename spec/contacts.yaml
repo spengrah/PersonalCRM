@@ -548,6 +548,7 @@ behaviors:
       - the merged name is editable, with a quick-fill to adopt the source's name
       - the merge cannot be submitted before a source is selected, while the preview is loading, or while a merge is in flight
       - the outcome is reported and auto-dismissed
+      - the modal can be dismissed without performing a merge
     serves: [CON-050]
     provenance: [merge-contact-modal.tsx, use-merge.ts, contact-merge.spec.ts]
 
@@ -633,6 +634,107 @@ behaviors:
       - the source's primary flags are demoted regardless of method type
     provenance: [DemoteSourcePrimaryMethods, idx_contact_method_primary]
     notes: The unique index is one-primary-per-contact, so demotion keys on the target having any primary, not a same-type one (see CON-027).
+
+  - id: CON-053
+    title: The Log Interaction modal records a directed, optionally backdated interaction
+    type: ux
+    status: current
+    surface: ui
+    given: a contact detail page
+    when: the user logs an interaction through the Log Interaction modal
+    then:
+      - a direction is chosen from outbound, inbound, and mutual, defaulting to mutual
+      - an optional backdated date can be set for the interaction
+      - the interaction is posted with the chosen direction and the modal closes on success
+    provenance: [log-interaction-modal.tsx, contacts.spec.ts Log Interaction tests]
+    notes: Direction-aware cadence timestamp math (which columns each direction bumps) is CAD-006, backend-owned.
+
+  - id: CON-054
+    title: The cadence filter narrows the contact list server-side
+    type: ux
+    status: current
+    surface: ui
+    given: the contact list
+    when: a cadence filter option is selected
+    then:
+      - has-cadence and no-cadence selections drive a cadence_filter list query and only matching rows remain
+      - clearing the filter restores the unfiltered list
+    provenance: [contacts page cadence filter select, ListContacts cadence_filter]
+
+  - id: CON-055
+    title: A contact is created from the new-contact form
+    type: ux
+    status: current
+    surface: ui
+    given: the new-contact form
+    when: it is submitted with a full name
+    then:
+      - the contact is created and the user lands on its detail page
+    provenance: [contacts/new page, useCreateContact]
+
+  - id: CON-056
+    title: The detail page lists contact methods with the primary marked
+    type: ux
+    status: current
+    surface: ui
+    given: a contact with several methods across types
+    when: the detail page renders
+    then:
+      - the contact's methods are displayed with normalized values
+      - the primary method is marked, and only one method carries the mark
+    provenance: ["contacts/[id]/page.tsx methods block", getPrimaryAndSecondaryMethods]
+    notes: Identifier normalization rules themselves are CON-012, backend-owned.
+
+  - id: CON-057
+    title: Column headers drive server-side sorting
+    type: ux
+    status: current
+    surface: ui
+    given: the contact list
+    when: a sortable column header is clicked
+    then:
+      - the list refetches with that column's sort field, toggling the direction on repeated clicks
+    serves: [CON-051]
+    provenance: [contacts page handleSort, ListContacts ORDER BY ladder]
+
+  - id: CON-058
+    title: Pagination controls page the contact list
+    type: ux
+    status: current
+    surface: ui
+    given: a contact list spanning multiple pages
+    when: the pagination controls are used
+    then:
+      - page-number buttons move between pages, with the current page marked
+      - the previous/next controls disable at the list boundaries
+    provenance: [pagination.tsx, contacts page]
+
+  - id: CON-059
+    title: The navigation bar's on-screen buttons traverse the list order
+    type: ux
+    status: current
+    surface: ui
+    given: a contact detail page opened with list context
+    when: the navigation bar's prev/next buttons are clicked
+    then:
+      - the buttons move to the adjacent contact in the carried list order
+      - a position indicator reports the contact's place in the list
+    serves: [CON-051]
+    provenance: [ContactNavigationBar, useContactIDs]
+    notes: The keyboard half of detail traversal is CON-040; this row covers the on-screen buttons so CON-040's then-list (and its citing tests' indexes) stays untouched.
+
+  - id: CON-060
+    title: List context is carried across detail navigation
+    type: ux
+    status: current
+    surface: ui
+    given: a contact detail page opened with sort, order, and search context
+    when: the user moves to an adjacent contact
+    then:
+      - the sort, order, and search context is carried in the destination URL
+    serves: [CON-051]
+    provenance: [buildContactDetailUrl, contact detail listContext]
+    notes: The current-status half of CON-039, which stays proposed for the tie-determinism claim.
 
   # --- Intents (judged experience goals — Track B agentic judge only) ---
 
