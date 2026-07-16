@@ -331,6 +331,12 @@ type opUpdateVerb struct {
 
 // deadlineUpdateVerb pushes the row's current `due_date` metadata as a
 // Todoist deadline. Fingerprint is the deadline string itself.
+//
+// The item_update also clears the task's Todoist due date (`due: null`):
+// the CRM only ever writes deadlines on follow-ups, so any due date is
+// user-set (Todoist's quick-reschedule/postpone edits the due field, not
+// the deadline). Left in place, a postponed task would keep surfacing as
+// due-today even though the reply window just restarted.
 func deadlineUpdateVerb() opUpdateVerb {
 	return opUpdateVerb{
 		op: consumerjobs.TaskOpUpdateDeadline,
@@ -339,7 +345,10 @@ func deadlineUpdateVerb() opUpdateVerb {
 			if !ok || due == "" {
 				return "", nil, false
 			}
-			return due, map[string]any{"deadline": map[string]string{"date": due}}, true
+			return due, map[string]any{
+				"deadline": map[string]string{"date": due},
+				"due":      nil,
+			}, true
 		},
 		fingerprint: func(value string) string { return value },
 	}

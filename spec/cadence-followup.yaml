@@ -159,9 +159,9 @@ behaviors:
       - a contact without a cadence gets no follow-up
       - an automated outbound older than the follow-up window is skipped as backdated; manual outbounds are exempt
       - an outbound that already has a later response is skipped as out of order
-      - an existing live follow-up is refreshed (deadline updated) instead of duplicated
+      - an existing live follow-up is refreshed instead of duplicated — the remote deadline is updated and any user-set remote due date is cleared, so a previously postponed task stops surfacing once the reply window restarts
       - if the remote task provider is unconfigured, the interaction still records and the follow-up is skipped with a warning
-    provenance: [FollowUpManager creation guards, HasResponseAfterTx, FindPendingFollowUpTx]
+    provenance: [FollowUpManager creation guards, HasResponseAfterTx, FindPendingFollowUpTx, deadlineUpdateVerb]
 
   - id: CAD-013
     title: At most one live follow-up per contact and provider

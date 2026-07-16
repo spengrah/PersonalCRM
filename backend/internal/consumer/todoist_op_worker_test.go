@@ -328,6 +328,30 @@ func TestOpWorker_UpdateDeadline_ManagedPushesCurrentValue(t *testing.T) {
 		"command UUID must carry the pushed-value fingerprint")
 }
 
+func TestOpWorker_UpdateDeadline_ClearsUserSetDueDate(t *testing.T) {
+	// The CRM only ever writes Todoist deadlines on follow-ups, but a user
+	// postponing the task in Todoist sets a due date. The deadline refresh
+	// must clear that due date in the same item_update, otherwise the task
+	// keeps surfacing as due-today after the follow-up window restarts.
+	taskID := uuid.New()
+	repo := newFakeOpTaskRepo(&repository.ContactTask{
+		ID:             taskID,
+		State:          repository.ContactTaskStateManaged,
+		ExternalTaskID: "remote-42",
+		Metadata:       map[string]any{"due_date": "2026-08-06"},
+	})
+	client := &fakeOpClient{}
+	w := newOpWorker(repo, client, &recordingInserter{})
+
+	err := w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpUpdateDeadline))
+	require.NoError(t, err)
+	require.Len(t, client.commands, 1)
+	cmd := client.commands[0]
+	due, present := cmd.Args["due"]
+	require.True(t, present, "item_update must carry due to clear a user-set due date")
+	require.Nil(t, due, "due must be null so Todoist removes the due date")
+}
+
 func TestOpWorker_UpdateDeadline_ManagedEmptyExternalID_Errors(t *testing.T) {
 	taskID := uuid.New()
 	repo := newFakeOpTaskRepo(&repository.ContactTask{
