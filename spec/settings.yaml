@@ -1,6 +1,7 @@
 domain: settings
 prefix: SET
 maturity: reviewed
+e2e_settled: true
 behaviors:
   # --- OAuth flow & auth boundary ---
 

@@ -1,6 +1,7 @@
 domain: notes-meetings
 prefix: NTS
 maturity: reviewed
+e2e_settled: true
 behaviors:
   # --- Contact notepad note (per-contact freeform scratchpad) ---
 

@@ -1,6 +1,7 @@
 domain: knowledge
 prefix: KNW
 maturity: reviewed
+e2e_settled: true
 behaviors:
   # --- Assertion write path ---
 

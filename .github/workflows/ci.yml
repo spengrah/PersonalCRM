@@ -139,7 +139,7 @@ jobs:
     name: Spec Lint
     runs-on: ubuntu-latest
     needs: changes
-    if: ${{ needs.changes.outputs.spec == 'true' || needs.changes.outputs.backend == 'true' }}
+    if: ${{ needs.changes.outputs.spec == 'true' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -150,6 +150,12 @@ jobs:
           cache: false
       - name: Run spec linter
         run: make spec-lint
+      # Coverage scanner: citations live in backend tests AND frontend/tests/e2e,
+      # so the frontend gate above matters — an E2E-only change can orphan or
+      # dead-reference a behavior. Every domain declares e2e_settled: true, so
+      # orphans block; invalid citations always block.
+      - name: Run spec coverage scanner
+        run: make spec-coverage
 
   # Guards drift between the Go wire structs and the committed generated
   # frontend types (backend/tygo.yaml → frontend/src/types/generated/).

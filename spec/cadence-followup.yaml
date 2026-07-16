@@ -1,6 +1,7 @@
 domain: cadence-followup
 prefix: CAD
 maturity: reviewed
+e2e_settled: true
 behaviors:
   # --- Cadence computation ---
 
