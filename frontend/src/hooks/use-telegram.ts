@@ -60,6 +60,15 @@ export function useDisconnectTelegram() {
   return useMutation({
     mutationFn: () => telegramApi.disconnect(),
     onSuccess: () => {
+      // Snap the cached status to disconnected before invalidating: the
+      // settings section re-derives its step from the cached status, and
+      // leaving the stale connected payload in place flips the view back
+      // to connected before the refetch lands — after which nothing moves
+      // it to disconnected again.
+      queryClient.setQueryData(telegramKeys.status(), {
+        status: 'disconnected',
+        connected: false,
+      })
       queryClient.invalidateQueries({ queryKey: telegramKeys.status() })
     },
   })

@@ -176,8 +176,13 @@ test.describe('Settings Page @area:settings', () => {
     await expect(googleRegion(page).getByText(/connected successfully/i)).toBeVisible({
       timeout: 10_000,
     })
-    // …the account list is refetched (initial load + the success refetch)…
-    await expect.poll(() => accountListGets, { timeout: 10_000 }).toBeGreaterThanOrEqual(2)
+    // …the account list is fetched on the outcome landing and reflects the
+    // connected account. (The success handler's explicit refetch coalesces
+    // with the in-flight initial fetch — React Query dedupe — so asserting
+    // a second GET would over-specify; the observable claim is a fresh
+    // fetch plus the account rendered.)
+    await expect.poll(() => accountListGets, { timeout: 10_000 }).toBeGreaterThanOrEqual(1)
+    await expect(googleRegion(page).getByText('e2e-google-user')).toBeVisible()
     // …and the one-time params are stripped so refresh does not re-trigger.
     await expect(page).toHaveURL('/settings', { timeout: 10_000 })
   })
