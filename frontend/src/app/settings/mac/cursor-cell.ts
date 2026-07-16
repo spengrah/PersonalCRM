@@ -15,13 +15,14 @@ export interface SourceHealthEntry {
  * renderCursorCell decides what to display in the Cursor column for
  * a single source row (issue #327).
  *
- * The interim fix is narrow: when a source is in
- * `BACKFILL_PROGRESS_SOURCES` and its `backfill_complete` flag is
- * true, swap the dash for `<N> contacts ✓` where `N` is the live
- * external_contact row count for that host+source. Everything else
- * falls through to the previous `pushed_cursor ?? observed_cursor ??
- * '—'` rendering — so messages keeps its rowid, phone_calls renders
- * its own cursor, etc.
+ * Sources in `BACKFILL_PROGRESS_SOURCES` never display their raw
+ * cursor: it is an opaque change-token that misleads the operator
+ * (the original #327 complaint). Once `backfill_complete` is true and
+ * the live count has loaded, the cell shows `<N> contacts ✓`; in every
+ * other state (backfill in progress, or counts not loaded yet) it
+ * shows the neutral dash. All other sources keep the
+ * `pushed_cursor ?? observed_cursor ?? '—'` rendering — messages keeps
+ * its rowid, phone_calls renders its own cursor, etc.
  *
  * Future sources that ship a 'caught up' indicator should add their
  * key to `BACKFILL_PROGRESS_SOURCES` rather than adding more
@@ -56,7 +57,8 @@ function formatPhoneCallsCursor(raw: string): string {
  * assertions (exposed on the td as `data-state`): 'count' when a
  * backfill-complete source renders its live contact count, 'pending'
  * when a backfill-progress source has no count to show yet (backfill
- * incomplete, or counts not loaded), and 'cursor' for every other
+ * incomplete, or counts not loaded — renderCursorCell shows the
+ * neutral dash for exactly these), and 'cursor' for every other
  * source (raw cursor or dash rendering).
  */
 export type CursorCellState = 'count' | 'pending' | 'cursor'
@@ -80,15 +82,18 @@ export function renderCursorCell(
   entry: SourceHealthEntry,
   counts: Record<string, number> | undefined
 ): string {
-  if (BACKFILL_PROGRESS_SOURCES.has(source) && entry.backfill_complete === true) {
-    const n = counts?.[source]
-    if (typeof n === 'number') {
-      return `${n} contacts ✓`
+  if (BACKFILL_PROGRESS_SOURCES.has(source)) {
+    if (entry.backfill_complete === true) {
+      const n = counts?.[source]
+      if (typeof n === 'number') {
+        return `${n} contacts ✓`
+      }
     }
-    // counts not yet loaded / missing — graceful fallback to dash so
-    // the row still renders. We deliberately don't fall through to
-    // the pushed_cursor branch because an iCloud row's cursor is a
-    // change-token, not a number (the whole point of #327).
+    // Backfill in progress, or counts not yet loaded — neutral dash.
+    // We deliberately never fall through to the cursor branch for
+    // these sources: an iCloud row's cursor is a change-token, not a
+    // number, and displaying it misled the operator (the whole point
+    // of #327).
     return '—'
   }
   const cursor = cursorToString(entry.pushed_cursor) ?? cursorToString(entry.observed_cursor)

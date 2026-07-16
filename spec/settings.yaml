@@ -452,3 +452,18 @@ behaviors:
       - a trigger with a well-formed body for a source the account guard does not reject is acknowledged with a 202 whose body carries only an acknowledgement (a message and the source) and no sync result
     provenance: [SyncHandler.TriggerSync, service.AccountIDMissing, service.ErrAccountRequired]
     notes: The trigger is fire-and-forget — acceptance dispatches the sync in a detached goroutine off the request path, so whether/when the sync actually runs is owned by the sync service and worker paths, not this HTTP contract. This behavior pins only the guard (400) and the acknowledgement status+body shape (202). The 400 guard mirrors the service-layer ErrAccountRequired backstop.
+
+  # --- System information ---
+
+  - id: SET-035
+    title: The settings page reports system information
+    type: ux
+    status: current
+    surface: ui
+    given: the settings page
+    when: the system information section renders
+    then:
+      - a system information section is present on the settings surface
+      - a non-empty application version is shown
+    provenance: [settings/page.tsx System Information section]
+    notes: The version string is build-stamped (NEXT_PUBLIC_BUILD_VERSION, with a dev fallback when unstamped); the backend build stamp is covered separately by TestHealthEndpoint_StampedBuildInfo. Pinning the exact fallback copy is deliberately avoided.

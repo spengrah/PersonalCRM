@@ -310,7 +310,10 @@ export default function SettingsPage() {
           </section>
 
           {/* System Information */}
-          <section className="bg-white rounded-lg shadow-sm border p-6">
+          <section
+            aria-label="System Information"
+            className="bg-white rounded-lg shadow-sm border p-6"
+          >
             <div className="flex items-center space-x-3 mb-4">
               <Shield className="w-6 h-6 text-purple-600" />
               <h2 className="text-xl font-semibold text-gray-900">System Information</h2>
@@ -319,7 +322,7 @@ export default function SettingsPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
               <div>
                 <p className="text-gray-600">Version</p>
-                <p className="font-medium text-gray-900">
+                <p className="font-medium text-gray-900" data-testid="app-version">
                   {(() => {
                     const version = process.env.NEXT_PUBLIC_BUILD_VERSION
                     const hash = process.env.NEXT_PUBLIC_COMMIT_HASH

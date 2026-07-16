@@ -502,6 +502,6 @@ behaviors:
     when: the source-health view renders that source's cursor state
     then:
       - once the source reports backfill complete, the live contact count for the host and source is shown in place of the raw change-token cursor
-      - while backfill is still in progress, a neutral placeholder is shown and no count is substituted
+      - while backfill is still in progress, a neutral placeholder is shown — the raw change-token cursor is never displayed and no count is substituted
     provenance: [settings/mac/cursor-cell.ts renderCursorCell/cursorCellState, useMacHostSourceCounts, MacHostHandler.GetSourceCounts]
-    notes: 'The regression guard for issue #327: an iCloud change-token cursor is meaningless to the operator, so the cell swaps to a live count only when the count is trustworthy (backfill complete). The counts endpoint contract is MAC-018.'
+    notes: 'The regression guard for issue #327: an iCloud change-token cursor is meaningless to the operator, so the cell shows a live count only when the count is trustworthy (backfill complete) and otherwise the neutral placeholder — never the raw change-token. The counts endpoint contract is MAC-018.'
