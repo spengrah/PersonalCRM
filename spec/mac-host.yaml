@@ -245,6 +245,11 @@ behaviors:
       - per-source live counts distinguish a missing host (404) from a host with no rows (an empty count map)
       - an admin can mint a fresh pairing token and revoke a host
     provenance: [MacHostHandler.ListHosts/GetHostAdmin/GetSourceCounts/CreatePairingToken/DeleteHost, RegisterMacHostAdminRoutes]
+    waivers:
+      - then: 1
+        reason: the host detail read (including revoked hosts and the unknown-id 404) is HTTP contract with no browser surface — the settings/mac page consumes only the list endpoint; owned by the Go API test mac_host_get_admin_test.go
+      - then: 2
+        reason: the 404-vs-empty-count-map distinction is response-shape contract invisible in the browser (the UI renders only the happy-path counts); owned by the Go API tests in mac_host_source_counts_test.go (UnknownHost_404, NoRowsReturnsEmpty)
 
   # --- Daemon read endpoints ---
 
@@ -487,3 +492,16 @@ behaviors:
       - re-pair rotates the key in place, and a failure to persist the rotated key prints the plaintext key so the operator can recover
     provenance: [InstallCommand.swift]
     notes: CLI specifics asserted from the surface inventory, not read line-by-line.
+
+  - id: MAC-046
+    title: Source health reports a live contact count once a contacts backfill completes
+    type: ux
+    status: current
+    surface: ui
+    given: a paired host whose source health includes a contacts source
+    when: the source-health view renders that source's cursor state
+    then:
+      - once the source reports backfill complete, the live contact count for the host and source is shown in place of the raw change-token cursor
+      - while backfill is still in progress, a neutral placeholder is shown and no count is substituted
+    provenance: [settings/mac/cursor-cell.ts renderCursorCell/cursorCellState, useMacHostSourceCounts, MacHostHandler.GetSourceCounts]
+    notes: 'The regression guard for issue #327: an iCloud change-token cursor is meaningless to the operator, so the cell swaps to a live count only when the count is trustworthy (backfill complete). The counts endpoint contract is MAC-018.'

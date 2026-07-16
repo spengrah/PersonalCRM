@@ -69,7 +69,7 @@ behaviors:
     title: Starting auth sends a login code
     type: business-logic
     status: current
-    surface: ui
+    surface: none
     given: no connected session and no auth flow in progress
     when: auth is started for a phone number
     then:
@@ -77,12 +77,13 @@ behaviors:
       - a login code is requested and the flow advances to awaiting-code
       - the delivery channel (app, sms, or call; any other sent-code type maps to unknown) and a token with a 5-minute expiry are returned
     provenance: [AuthSessionManager.StartAuth, mapSentCodeType, ErrAlreadyConnected, ErrAuthInProgress]
+    notes: 'Surface is none, not ui: this is AuthSessionManager logic, and E2E necessarily route-mocks the telegram auth endpoints (MTProto cannot run in E2E), so a browser citation would be circular. Owned by Go tests over the manager with a stubbed MTProto client (backfill item — none exist yet). The browser half of the connect flow is TGM-038.'
 
   - id: TGM-005
     title: Verification progresses code then optional password to connected
     type: business-logic
     status: current
-    surface: ui
+    surface: none
     given: an auth flow awaiting a verification step
     when: a verification value is submitted
     then:
@@ -91,6 +92,7 @@ behaviors:
       - a valid password connects the account
       - on connect the session is persisted with the resolved user id and username and marked connected
     provenance: [AuthSessionManager.VerifyCode, AuthSessionManager.VerifyPassword, UpdateUserInfo, UpdateAuthState]
+    notes: 'Surface is none, not ui: session persistence and step gating are AuthSessionManager logic that E2E route-mocks wholesale, so a browser citation would be circular. Owned by Go tests over the manager with a stubbed MTProto client (backfill item — none exist yet). The browser half of the verification flow is TGM-038.'
 
   - id: TGM-006
     title: Auth rejections are retryable while infrastructure errors abort
@@ -152,7 +154,7 @@ behaviors:
     title: Reported status resolves from the live connection then the database
     type: business-logic
     status: current
-    surface: ui
+    surface: none
     given: a request for Telegram status
     when: the status is resolved
     then:
@@ -160,6 +162,7 @@ behaviors:
       - an explicit disconnect reports not-connected without falling back to stale database state
       - otherwise the stored session's connected flag, username, and phone are reported
     provenance: [TelegramManager.Status, enrichStatusFromSyncState]
+    notes: 'Surface is none, not ui: the in-memory-vs-database resolution order is TelegramManager.Status logic that E2E route-mocks replace entirely, so a browser citation would be circular. Owned by Go tests over the manager (backfill item — none exist yet). What the settings surface shows for a connected/disconnected status is TGM-039.'
 
   - id: TGM-033
     title: A dropped connection reconnects with bounded backoff
@@ -478,3 +481,62 @@ behaviors:
       - all unprocessed messages are aggregated into interactions
       - discovery candidates are refreshed for peers over the threshold
     provenance: [TelegramManager.maybeStartBackfill, PeerMatcher.MatchAllUnmatched, AggregationEngine.AggregateAll, PeerMatcher.UpdateDiscoveryCandidates]
+
+  # --- Settings surface (UI) ---
+
+  - id: TGM-038
+    title: The connect flow walks phone, code, and optional password to connected
+    type: ux
+    status: current
+    surface: ui
+    given: the Telegram settings section in a disconnected state
+    when: the user connects an account
+    then:
+      - starting a connect reveals a phone-number entry with submit and cancel affordances
+      - a started flow advances to code entry, reflecting the delivery channel the code was sent through
+      - a valid code either connects the account or, for a two-factor account, advances to a password entry step
+      - a valid password connects the account
+      - the connected state shows the account username
+    provenance: [telegram-section.tsx phone_input/awaiting_code/awaiting_password/connected steps, use-telegram.ts]
+    notes: The browser half of the auth flow; the backend session/step logic it drives is TGM-004/TGM-005 (surface none). E2E proves this against route-mocked auth endpoints — the mock is the external boundary (MTProto cannot run in E2E), the surface branches are real.
+
+  - id: TGM-039
+    title: The connected section reports identity and sync progress
+    type: ux
+    status: current
+    surface: ui
+    given: a connected Telegram account
+    when: the Telegram settings section renders
+    then:
+      - the account username and phone number are shown
+      - while a backfill is in progress, its completed and total counts are shown
+      - a disconnect affordance is offered, and confirming it returns the section to the disconnected state
+    provenance: [telegram-section.tsx connected step, handleDisconnect, backfill progress block]
+    notes: The status values rendered here are resolved by the backend per TGM-010 (surface none).
+
+  - id: TGM-040
+    title: A rejected verification is surfaced and retryable
+    type: ux
+    status: current
+    surface: ui
+    given: an in-progress connect flow awaiting a verification code
+    when: the backend rejects the submitted code
+    then:
+      - the failure reason is shown to the user
+      - the flow stays on the code entry step so the user can retry
+    provenance: [telegram-section.tsx handleVerifyCode error path]
+    notes: Which rejections are retryable versus aborting is backend scope (TGM-006).
+
+  - id: TGM-041
+    title: Group chats are listed with a per-chat tracking control
+    type: ux
+    status: current
+    surface: ui
+    given: a connected Telegram account
+    when: the group-chat list renders
+    then:
+      - discovered group chats are listed with their member counts
+      - before any chats are discovered an empty state is shown
+      - changing a chat's tracking choice persists it and the list reflects the persisted choice
+    provenance: [telegram-section.tsx TelegramChatList, use-telegram.ts useUpdateTelegramChatStatus]
+    notes: How the tracking choice feeds effective tracking is TGM-011 (surface none); the tracked/untracked dot is judge-owned presentation.
