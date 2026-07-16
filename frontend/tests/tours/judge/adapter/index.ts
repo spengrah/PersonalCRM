@@ -10,7 +10,7 @@ import type { Judge } from './types'
 export type JudgeKind = 'codex-exec' | 'http' | 'codex-sdk'
 
 // `model` overrides the adapter's default model env, so a caller (e.g. the
-// labeling CLI passing QA_LABELER_MODEL) selects a specific/stronger model
+// intent pass passing QA_INTENT_MODEL) selects a specific/stronger model
 // rather than falling back to the judge's model env.
 export function selectJudge(
   kind: string = process.env.QA_JUDGE ?? 'codex-exec',

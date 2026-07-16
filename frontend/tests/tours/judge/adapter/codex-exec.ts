@@ -163,7 +163,7 @@ function defaultRun(
 // judge never silently inherits the operator's codex config (a global
 // gpt-5.5 / xhigh default is both costly AND miscalibrating here — over-reasoning
 // invents false fails). Overridable via QA_JUDGE_MODEL / QA_JUDGE_EFFORT or opts
-// (e.g. the labeler passes a stronger model). gpt-5.4-mini is the cheapest tier
+// (e.g. the intent pass passes a stronger model). gpt-5.4-mini is the cheapest tier
 // the pinned Codex CLI supports on a ChatGPT account; gpt-5.6-luna is cheaper/
 // newer but needs a Codex CLI upgrade (revalidate exact models at build time).
 export const DEFAULT_JUDGE_MODEL = 'gpt-5.4-mini'

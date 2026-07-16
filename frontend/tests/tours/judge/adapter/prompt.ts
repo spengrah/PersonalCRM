@@ -127,7 +127,8 @@ function renderEvidence(ev: EvidenceBlocks): string {
 }
 
 // The shot-insertion seam (deferred — the prompt is zero-shot today; few-shot
-// examples come from promoted human critiques the labeling CLI produces).
+// examples would come from human critiques confirmed in the Langfuse annotation
+// queue).
 export function fewShotBlock(): string {
   return ''
 }

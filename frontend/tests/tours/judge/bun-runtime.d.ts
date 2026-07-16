@@ -1,7 +1,6 @@
 // Minimal ambient declaration for the bun/node runtime bits the judge CLIs use
-// (doctor.ts / label.ts / report/render.ts run as entry scripts). Kept tiny so no
-// @types/bun devDep is needed (design: no frontend/package.json change). The
-// corpus loader parses committed JSON with the portable JSON.parse — NO Bun.YAML.
+// (doctor.ts / report/render.ts run as entry scripts). Kept tiny so no
+// @types/bun devDep is needed (design: no frontend/package.json change).
 
 interface ImportMeta {
   // Bun sets `import.meta.main` true when the module is the entry script.

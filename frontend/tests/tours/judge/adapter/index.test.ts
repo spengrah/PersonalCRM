@@ -33,9 +33,9 @@ describe('selectJudge', () => {
       }
     }) as unknown as typeof fetch
 
-    const judge = selectJudge('http', 'stronger-labeler-model')
+    const judge = selectJudge('http', 'stronger-intent-model')
     await judge(input)
-    expect(sentModel).toBe('stronger-labeler-model')
+    expect(sentModel).toBe('stronger-intent-model')
   })
 
   it('codex-sdk is deferred (throws pointing at DEFERRED.md)', () => {

@@ -1,6 +1,6 @@
 // Bridge captures → a JudgeInput for the residue items. Used by the advisory
-// report's --judge layer and the labeling CLI (both feed the judge/labeler the
-// same evidence bundle). Pure — no model, no fs.
+// report's --judge layer (both the live item judge and the trap self-test feed
+// the judge the same evidence bundle). Pure — no model, no fs.
 
 import type { Capture } from '../support/types'
 import type { EvidenceBlocks, JudgeInput, JudgeItem } from './adapter/types'

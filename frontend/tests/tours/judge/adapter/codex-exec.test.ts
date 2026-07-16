@@ -185,12 +185,12 @@ describe('makeCodexExecJudge (injected run — no live call)', () => {
     expect(seenArgs[seenArgs.indexOf('--model') + 1]).toBe('gpt-5-codex-high')
   })
 
-  // Follow-up 5: the judge path also reads QA_JUDGE_MODEL as the default model
-  // when no explicit model is passed. (The labeler path — QA_LABELER_MODEL →
-  // selectJudge(profile, model) → makeCodexExecJudge({ model }) — is covered by
-  // composition: adapter/index.test.ts proves selectJudge threads its model arg
-  // into the adapter, and the explicit-model test above proves the adapter
-  // threads it into the codex argv.)
+  // The judge path also reads QA_JUDGE_MODEL as the default model when no
+  // explicit model is passed. (An explicit stronger model — e.g. the intent
+  // pass's QA_INTENT_MODEL → selectJudge(kind, model) → makeCodexExecJudge({
+  // model }) — is covered by composition: adapter/index.test.ts proves
+  // selectJudge threads its model arg into the adapter, and the explicit-model
+  // test above proves the adapter threads it into the codex argv.)
   it('falls back to QA_JUDGE_MODEL for the codex --model when no model is passed', async () => {
     const prev = process.env.QA_JUDGE_MODEL
     process.env.QA_JUDGE_MODEL = 'gpt-5-codex-env'
