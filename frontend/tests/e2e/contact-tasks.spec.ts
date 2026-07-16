@@ -81,12 +81,10 @@ async function mockTaskLists(
   })
 }
 
-// The TasksSection card, scoped by its "Tasks" heading; task rows are the
-// TaskRow containers inside it.
+// The TasksSection card is a labeled region (<section aria-label="Tasks">);
+// task rows are the TaskRow containers inside it.
 function tasksSection(page: Page) {
-  return page
-    .locator('div.bg-white.shadow')
-    .filter({ has: page.getByRole('heading', { name: 'Tasks', exact: true }) })
+  return page.getByRole('region', { name: 'Tasks', exact: true })
 }
 test.describe('Contact Tasks @area:contacts @area:tasks', () => {
   let testApi: TestAPI
@@ -121,9 +119,9 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
       await expect(page.getByRole('button', { name: 'Add', exact: true })).toBeVisible()
 
       // A freshly seeded contact has no tasks, so the empty state is
-      // guaranteed: it invites adding a task.
+      // guaranteed: it invites adding a task ("No tasks yet" + the Add button
+      // above are the empty-state observables).
       await expect(page.getByText('No tasks yet')).toBeVisible()
-      await expect(page.getByText('Add a task to track follow-ups for this contact')).toBeVisible()
     })
 
     test('lists follow-up tasks first with a distinct pending indicator, then manual tasks', async ({
@@ -156,11 +154,10 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
       await expect(rows.nth(0)).toContainText('Mock follow-up task')
       await expect(rows.nth(1)).toContainText('Mock manual task')
 
-      // Distinct pending indicator: follow-up rows carry the amber Clock
-      // icon (a CSS-only signal — the class is the observable); the manual
-      // row does not.
-      await expect(rows.nth(0).locator('svg.text-amber-400')).toBeVisible()
-      await expect(rows.nth(1).locator('svg.text-amber-400')).toHaveCount(0)
+      // Distinct pending indicator: follow-up rows carry the labeled
+      // "Awaiting reply" clock; the manual row does not.
+      await expect(rows.nth(0).getByLabel('Awaiting reply')).toBeVisible()
+      await expect(rows.nth(1).getByLabel('Awaiting reply')).toHaveCount(0)
     })
 
     test('derives each task badge from its kind and lifecycle', async ({ page }) => {

@@ -86,6 +86,10 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
     request,
   }) => {
     // spec: CON-045[3]
+    // spec: KNW-035[0], KNW-035[1]
+    // The list-row and detail-page assertions below prove the year-less
+    // rendering (month/day only, placeholder year never shown) and the
+    // birthdays-card assertions prove the age suppression.
     const birthday = await getCurrentBirthdayDate(request)
     const birthdayDate = new Date(`${birthday}T12:00:00`)
     const expectedListDate = `${birthdayDate.getMonth() + 1}/${birthdayDate.getDate()}`

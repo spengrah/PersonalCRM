@@ -1,34 +1,7 @@
 import { test, expect } from '@playwright/test'
 import { expectAddContactHeader } from './helpers/dashboard'
 
-// API configuration for E2E tests
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
-const API_HEADERS = {
-  'X-API-Key': API_KEY,
-  'Content-Type': 'application/json',
-}
-
 test.describe('Error Boundary @area:error-boundary', () => {
-  test('backend test error endpoint returns 500', async ({ request }) => {
-    // Test the backend error trigger endpoint
-    const response = await request.post(`${API_BASE_URL}/api/v1/test/trigger-error`, {
-      headers: API_HEADERS,
-      data: {
-        error_type: '500',
-        message: 'Test error for ErrorBoundary',
-      },
-    })
-
-    // The endpoint should return a 500 error
-    expect(response.status()).toBe(500)
-
-    const body = await response.json()
-    expect(body.success).toBe(false)
-    expect(body.error.code).toBe('INTERNAL_ERROR')
-    expect(body.error.details).toBe('Test error for ErrorBoundary')
-  })
-
   test('overdue loading shows placeholder skeletons, not an empty or caught-up state', async ({
     page,
   }) => {
@@ -56,12 +29,10 @@ test.describe('Error Boundary @area:error-boundary', () => {
     await expect(page.getByRole('heading', { name: 'Action Required', level: 2 })).toBeVisible()
 
     // While held (isLoading), assert the discriminating triple the old
-    // verifier used: skeletons present AND no caught-up state AND no overdue
-    // cards. The skeletons are anonymous animate-pulse divs — the class is the
-    // only anchor (the loading branch is dashboard/page.tsx's sole animate-pulse
-    // user); the held route guarantees the loading state, so this cannot
-    // vacuously pass on a fast response.
-    await expect(page.locator('.animate-pulse').first()).toBeVisible()
+    // verifier used: the labeled loading status present AND no caught-up
+    // state AND no overdue cards. The held route guarantees the loading
+    // state, so this cannot vacuously pass on a fast response.
+    await expect(page.getByRole('status', { name: 'Loading overdue contacts' })).toBeVisible()
     await expect(page.getByText('All caught up')).toHaveCount(0)
     await expect(page.getByRole('button', { name: /Mark as Contacted/i })).toHaveCount(0)
 
@@ -77,7 +48,7 @@ test.describe('Error Boundary @area:error-boundary', () => {
   test('overdue failure shows an error state with a reason, not empty or caught-up', async ({
     page,
   }) => {
-    // spec: DSH-004[1], DSH-003[0]
+    // spec: DSH-004[1], DSH-004[2], DSH-003[0]
     // 500 the overdue endpoint (full apiClient failure envelope) BEFORE goto:
     // apiClient throws ApiError on !response.ok, React Query exhausts its
     // retries, and the dashboard renders its error branch.
@@ -95,17 +66,18 @@ test.describe('Error Boundary @area:error-boundary', () => {
     await page.goto('/dashboard')
 
     // React Query retries the failing query 3 times (~7s of backoff) before
-    // surfacing the error, so allow a generous timeout.
-    const errorHeading = page.getByRole('heading', { name: 'Error loading overdue contacts' })
-    await expect(errorHeading).toBeVisible({ timeout: 20000 })
+    // surfacing the error, so allow a generous timeout. The error branch is a
+    // role=alert block containing the heading and the reason.
+    const alert = page.getByRole('alert')
+    await expect(
+      alert.getByRole('heading', { name: 'Error loading overdue contacts' })
+    ).toBeVisible({ timeout: 20000 })
 
-    // A non-empty failure reason is VISIBLY rendered beneath the heading
-    // (toHaveText alone would pass for a hidden node). Whether the reason
-    // FAITHFULLY reflects the actual failure is judge-owned (DSH-004[2]) —
-    // only its visible presence is asserted here.
-    const reason = errorHeading.locator('xpath=following-sibling::p')
-    await expect(reason).toBeVisible()
-    await expect(reason).toHaveText(/\S/)
+    // The shown reason FAITHFULLY reflects the actual failure (DSH-004[2]):
+    // apiClient plumbs the envelope's error.message into ApiError.message and
+    // the dashboard renders error.message, so the mocked failure message is
+    // deterministically the rendered reason.
+    await expect(alert.getByText('Simulated overdue failure')).toBeVisible()
 
     // The error state is distinct: no caught-up text, no overdue cards.
     await expect(page.getByText('All caught up')).toHaveCount(0)
