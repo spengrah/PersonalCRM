@@ -1,76 +1,72 @@
-import * as fs from 'fs'
-import * as os from 'os'
-import * as path from 'path'
-
-// Cross-file, cross-worker mutex for shared DB-level singletons (e.g. the
-// mac_host table) that multiple spec files reset/reseed. Playwright workers
-// are separate OS processes, so an in-memory lock can't coordinate them --
-// this uses an atomic `mkdir` as the lock primitive: mkdir either creates
-// the directory or fails with EEXIST, so exactly one caller wins per name.
-
-// A lock older than this is assumed to be abandoned by a crashed/killed
-// worker rather than genuinely held, and is broken so the suite doesn't
-// wedge forever on a stale lock.
-const STALE_LOCK_MS = 5 * 60 * 1000
-const POLL_INTERVAL_MS = 250
-
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms))
-}
-
-// Locks are rooted under the E2E lane's database name so isolated lanes
-// (their own DB, e.g. a scoped local run) never contend with each other or
-// with a concurrently running default-lane suite.
-function lockRoot(): string {
-  const lane = process.env.E2E_DATABASE_NAME || 'personal_crm_test'
-  return path.join(os.tmpdir(), 'pcrm-e2e-locks', lane)
-}
+import fs from 'fs'
+import os from 'os'
+import path from 'path'
+import lockfile from 'proper-lockfile'
 
 /**
- * Acquires a named OS-level mutex, blocking (via a polling spin loop) until
- * it is free. Returns a release function -- call it, even on test failure,
- * to free the lock for the next waiter.
+ * Cross-file, cross-worker mutex for shared DB-level singletons (e.g. the
+ * mac_host table) that multiple spec files reset/reseed. Playwright workers
+ * are separate OS processes, so an in-memory lock can't coordinate them.
+ *
+ * Built on proper-lockfile rather than a hand-rolled protocol: it acquires
+ * atomically (mkdir), heartbeats the lock's mtime while the holder process
+ * is alive — so a slow-but-alive holder is never stolen — and allows
+ * takeover only after the heartbeat has stopped (`stale`), which is what a
+ * crashed worker looks like. Holders also release via the library's
+ * process-exit hook, so no reaper logic lives here.
+ *
+ * Hold the lock once per FILE (beforeAll acquire, afterAll release), not
+ * per test: per-test cycling lets the releasing worker instantly re-acquire
+ * for its next serial test, starving waiters that only poll between holds.
+ *
+ * Locks are keyed per E2E lane (E2E_DATABASE_NAME) so isolated lanes on one
+ * machine never contend with each other or with a default-lane run.
  */
-export async function acquireGlobalLock(name: string): Promise<() => void> {
-  const root = lockRoot()
-  fs.mkdirSync(root, { recursive: true })
-  const lockDir = path.join(root, `${name}.lock`)
+export async function acquireGlobalLock(
+  name: string,
+  { deadlineMs = 300_000, staleMs = 15_000 }: { deadlineMs?: number; staleMs?: number } = {}
+): Promise<() => Promise<void>> {
+  const laneDir = path.join(
+    os.tmpdir(),
+    'pcrm-e2e-locks',
+    process.env.E2E_DATABASE_NAME || 'personal_crm_test'
+  )
+  fs.mkdirSync(laneDir, { recursive: true })
+  const target = path.join(laneDir, name)
 
-  for (;;) {
-    try {
-      fs.mkdirSync(lockDir)
-      break
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') {
-        throw err
-      }
-
-      try {
-        const stat = fs.statSync(lockDir)
-        if (Date.now() - stat.mtimeMs > STALE_LOCK_MS) {
-          // Break the stale lock and retry immediately -- whoever held it
-          // is gone, so there's no live release to wait for.
-          fs.rmdirSync(lockDir)
-          continue
-        }
-      } catch {
-        // The lock dir vanished between our failed mkdir and this stat --
-        // the holder just released it. Retry the mkdir immediately.
-        continue
-      }
-
-      await sleep(POLL_INTERVAL_MS)
+  const retryEveryMs = 1_000
+  try {
+    const release = await lockfile.lock(target, {
+      // The lock target is a name under the lane dir, not an existing file.
+      realpath: false,
+      // A holder whose process died stops heartbeating (mtime updates at
+      // stale/2) and can be taken over after this long.
+      stale: staleMs,
+      retries: {
+        retries: Math.ceil(deadlineMs / retryEveryMs),
+        factor: 1,
+        minTimeout: retryEveryMs,
+        maxTimeout: retryEveryMs,
+      },
+      // Our hold was broken underneath us (heartbeat stalled long enough
+      // for a takeover). Continuing would mean two holders mutating the
+      // singleton — crash the worker loudly instead.
+      onCompromised: err => {
+        throw new Error(`global lock '${name}' compromised while held: ${err.message}`)
+      },
+    })
+    // Idempotent release: afterAll and the library's exit hook can both
+    // fire; the second call must be a no-op, not an ERELEASED throw.
+    let released = false
+    return async () => {
+      if (released) return
+      released = true
+      await release()
     }
-  }
-
-  let released = false
-  return () => {
-    if (released) return
-    released = true
-    try {
-      fs.rmdirSync(lockDir)
-    } catch {
-      // Best-effort: already gone (e.g. cleared by a stale-lock break) is fine.
-    }
+  } catch (err) {
+    throw new Error(
+      `could not acquire global lock '${name}' within ${deadlineMs}ms ` +
+        `(is the contending spec file stuck?): ${err instanceof Error ? err.message : String(err)}`
+    )
   }
 }

@@ -4,7 +4,7 @@ Every worker in the Playwright suite runs against the same Postgres DB, backend,
 
 ## The prefix contract
 
-`createTestAPI(request, testInfo)` mints a per-worker prefix (`getTestPrefix` → `w{workerIndex}-{timestamp}`) once at construction, exposed as `testApi.prefix`. Every seed helper (`seedContacts`, `seedExternalContacts`, `seedMacHost`, …) sends this prefix to the backend, which prepends it to the entity's name/display value server-side — so a contact named `Foo` in a test renders as `${testApi.prefix}-Foo`. Always build assertion strings from `testApi.prefix`, never hardcode the seeded name. `test.afterEach` calls `testApi.cleanup()`, which deletes only rows matching this test's prefix — never a wildcard.
+`createTestAPI(request, testInfo)` mints a per-worker prefix (`getTestPrefix` → `w{workerIndex}-{timestamp}`) once at construction, exposed as `testApi.prefix`. The name-bearing seed helpers (`seedContacts`, `seedExternalContacts`, `seedOverdueContacts`, …) send this prefix to the backend, which prepends it to the entity's name/display value server-side — so a contact named `Foo` in a test renders as `${testApi.prefix}-Foo`. `seedMacHost` is the exception: it only *defaults* the hostname to `${prefix}-host` client-side — a caller-supplied hostname passes through unprefixed, so prefix it yourself if cleanup or scoped assertions depend on it. Always build assertion strings from `testApi.prefix`, never hardcode the seeded name. `test.afterEach` calls `testApi.cleanup()`, which deletes only rows matching this test's prefix — never a wildcard.
 
 ## The four scoping rules
 
@@ -15,8 +15,10 @@ Every worker in the Playwright suite runs against the same Postgres DB, backend,
 
 When a surface genuinely can't be scoped or mocked — a DB-level singleton like `mac_host`, which only allows one non-revoked row at a time — reach for the global-lock fixture below instead of a workaround.
 
-## Global-lock fixture
+## Global lock
 
-`frontend/tests/e2e/helpers/global-lock.ts` exports `acquireGlobalLock(name): Promise<() => void>`, an OS-level mutex (atomic `mkdir` spin loop, 5-minute stale-lock break, keyed by `E2E_DATABASE_NAME` so isolated lanes don't contend). Use it for unscopable global singletons that multiple spec files mutate: register a `test.beforeEach` that acquires the lock *before* any other `beforeEach` that touches the singleton, and a `test.afterEach` that releases it *after* the existing cleanup `afterEach` — hook execution order matches registration order for hooks at the same describe level (verify empirically with a scratch run if unsure, don't assume). The release must be called unconditionally (`releaseLock?.()`), since Playwright still runs every registered `afterEach` even when an earlier hook throws.
+`frontend/tests/e2e/helpers/global-lock.ts` exports `acquireGlobalLock(name, { deadlineMs })`, an OS-level cross-process mutex keyed by `E2E_DATABASE_NAME` so isolated lanes don't contend. It wraps `proper-lockfile`: atomic acquisition, an mtime heartbeat while the holder process lives (a slow-but-alive holder is never stolen from), takeover only after the heartbeat stops (crashed holder, bounded by the stale window), release on process exit via the library's exit hook, and a loud `onCompromised` crash if our own hold is ever broken. A waiter that outlives its deadline throws loudly.
+
+Use it for unscopable global singletons that multiple spec files mutate, held for the WHOLE file: acquire in a top-level `test.beforeAll` (with `test.setTimeout` raised inside the hook — the contending file may hold the lock for its entire serial run) and release in `test.afterAll` (its own timeout slot). Do not cycle the lock per test: the releasing worker instantly re-acquires for its next serial test, starving the other file's waiter.
 
 Reach for this only when scoping/mocking doesn't apply — it serializes across every worker holding the same lock name, which is a throughput cost. `settings-mac.spec.ts` and `imports-interactions.spec.ts` both hold the `mac-host` lock for this reason.

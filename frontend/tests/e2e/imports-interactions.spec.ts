@@ -2,6 +2,27 @@ import { test, expect } from './fixtures'
 import { createTestAPI, TestAPI } from './helpers/test-api'
 import { acquireGlobalLock } from './helpers/global-lock'
 
+// Cross-file mutex: settings-mac.spec.ts also resets/reseeds the mac_host
+// singleton, and nothing else stops the two files landing in different
+// workers and nuking each other's host mid-test. The lock is held for the
+// WHOLE file (beforeAll → afterAll): per-test cycling lets this worker
+// instantly re-acquire between its serial tests, starving the other file's
+// waiter. afterAll has its own timeout slot, and if the worker dies without
+// running it the library's exit hook (or, after a hard kill, heartbeat
+// staleness) frees the lock.
+let releaseMacHostLock: (() => Promise<void>) | null = null
+
+test.beforeAll(async () => {
+  // The contending file may hold the lock for its entire serial run.
+  test.setTimeout(360_000)
+  releaseMacHostLock = await acquireGlobalLock('mac-host')
+})
+
+test.afterAll(async () => {
+  await releaseMacHostLock?.()
+  releaseMacHostLock = null
+})
+
 // Interactions tab: the conflict/orphan queue. These specs seed orphan
 // (orphan_needs_review) meeting notes against a paired host — enough to drive
 // the amber badge, the orphan card + "Log as impromptu", the
@@ -13,6 +34,8 @@ test.describe('Imports Interactions tab @area:imports', () => {
   // The mac_host table is a singleton, so these host-seeding tests must run
   // serially within the file and reset existing hosts before seeding.
   test.describe.configure({ mode: 'serial' })
+  // Headroom for slow singleton cleanup on a loaded machine.
+  test.setTimeout(60_000)
 
   let testApi: TestAPI
   let hostId: string
@@ -20,16 +43,6 @@ test.describe('Imports Interactions tab @area:imports', () => {
   let sessionB: string
   let titleA: string
   let titleB: string
-  let releaseHostLock: (() => void) | null = null
-
-  // Cross-file mutex: settings-mac.spec.ts also resets/reseeds the mac_host
-  // singleton, and nothing else stops the two files landing in different
-  // workers and nuking each other's host mid-test. Registered before the
-  // reset/seed beforeEach below so the lock is held for the full
-  // beforeEach -> test -> afterEach span.
-  test.beforeEach(async () => {
-    releaseHostLock = await acquireGlobalLock('mac-host')
-  })
 
   test.beforeEach(async ({ request }, testInfo) => {
     testApi = createTestAPI(request, testInfo)
@@ -48,16 +61,11 @@ test.describe('Imports Interactions tab @area:imports', () => {
 
   test.afterEach(async () => {
     // Delete this test's seeded notes (by host) before the next test resets
-    // the host, then clear the host so the singleton index is free.
+    // the host, then clear the host so the singleton index is free. The
+    // macHostLock fixture teardown (which releases the cross-file mutex)
+    // runs after this hook.
     await testApi.cleanup()
     await testApi.resetMacHosts()
-  })
-
-  // Registered after the cleanup afterEach above so the lock is released
-  // only once the singleton is back in a clean state for the next waiter.
-  test.afterEach(async () => {
-    releaseHostLock?.()
-    releaseHostLock = null
   })
 
   // spec: IMP-026[1]
