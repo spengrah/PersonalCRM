@@ -41,27 +41,51 @@ const cand = (id: string, name: string): ImportCandidate => ({
 const A = cand('cand-a', 'Candidate A')
 const B = cand('cand-b', 'Candidate B')
 const C = cand('cand-c', 'Candidate C')
+const X = cand('cand-x', 'Candidate X')
+const Y = cand('cand-y', 'Candidate Y')
 
-function mockCandidatesQuery(
-  list: ImportCandidate[],
-  opts: { isFetching?: boolean; isStale?: boolean } = {}
-) {
-  vi.mocked(useImportCandidates).mockReturnValue({
+let refetchMock: ReturnType<typeof vi.fn>
+let importAsync: ReturnType<typeof vi.fn>
+
+/**
+ * Mock the modal's 1000-limit query. `age: 'preOpen'` models a cached
+ * response that predates the modal opening (dataUpdatedAt in the past);
+ * the default `'postOpen'` models a fetch that completed after mount.
+ */
+function mockCandidatesQuery(list: ImportCandidate[], age: 'preOpen' | 'postOpen' = 'postOpen') {
+  mockCandidatesQueryRaw({
     data: { candidates: list },
-    isSuccess: true,
-    isFetching: opts.isFetching ?? false,
-    isStale: opts.isStale ?? false,
+    dataUpdatedAt: age === 'preOpen' ? 1 : Date.now() + 60_000,
+  })
+}
+
+/** Full control over the query result shape (error states, absent data, exact timestamps). */
+function mockCandidatesQueryRaw(result: {
+  data?: { candidates: ImportCandidate[] }
+  isError?: boolean
+  dataUpdatedAt: number
+}) {
+  vi.mocked(useImportCandidates).mockReturnValue({
+    data: result.data,
+    isError: result.isError ?? false,
+    dataUpdatedAt: result.dataUpdatedAt,
+    refetch: refetchMock,
   } as any)
 }
 
 beforeEach(() => {
   vi.clearAllMocks()
+  refetchMock = vi.fn()
+  importAsync = vi.fn().mockResolvedValue({})
   vi.mocked(useContacts).mockReturnValue({ data: { contacts: [] } } as any)
   vi.mocked(useContact).mockReturnValue({ data: undefined } as any)
-  const mutation = { mutateAsync: vi.fn().mockResolvedValue({}), isPending: false } as any
-  vi.mocked(useImportAsContact).mockReturnValue(mutation)
-  vi.mocked(useLinkCandidate).mockReturnValue(mutation)
-  vi.mocked(useIgnoreCandidate).mockReturnValue(mutation)
+  const inertMutation = { mutateAsync: vi.fn().mockResolvedValue({}), isPending: false } as any
+  vi.mocked(useImportAsContact).mockReturnValue({
+    mutateAsync: importAsync,
+    isPending: false,
+  } as any)
+  vi.mocked(useLinkCandidate).mockReturnValue(inertMutation)
+  vi.mocked(useIgnoreCandidate).mockReturnValue(inertMutation)
 })
 
 function renderModal(candidates: ImportCandidate[], initialCandidateId: string) {
@@ -70,6 +94,7 @@ function renderModal(candidates: ImportCandidate[], initialCandidateId: string) 
   const view = render(<SuggestionModal item={item} {...props} />)
   return {
     ...view,
+    props,
     rerenderModal: () => view.rerender(<SuggestionModal item={item} {...props} />),
   }
 }
@@ -100,7 +125,7 @@ describe('ContactCandidateResolver candidate tracking', () => {
     expect(screen.getByText('1 of 3')).toBeInTheDocument()
   })
 
-  it('advances in place when the tracked candidate leaves the list', () => {
+  it('advances in place when a post-open fetch drops the tracked candidate', () => {
     mockCandidatesQuery([A, B, C])
     const { rerenderModal } = renderModal([A, B, C], B.id)
     expect(heading()).toHaveTextContent('Candidate B')
@@ -126,18 +151,23 @@ describe('ContactCandidateResolver candidate tracking', () => {
     expect(screen.getByText('2 of 2')).toBeInTheDocument()
   })
 
-  it('does not latch onto a stale cached list that predates the clicked candidate', () => {
-    // The modal mounts against a cached 1000-limit list that predates the
-    // clicked candidate X (a refetch is in flight). X must stay displayed —
-    // adopting from the stale list would latch the modal onto the wrong
-    // candidate with no self-correction once the fresh list lands.
-    const X = cand('cand-x', 'Candidate X')
-    mockCandidatesQuery([A, B], { isFetching: true, isStale: true })
-    const { rerenderModal } = renderModal([X], X.id)
+  it('runs on the page list when a pre-open cache lacks the clicked candidate, and refetches', () => {
+    // The cached 1000-limit list predates the click and does not contain X.
+    // The whole modal (display AND counter/nav) must run on the page's
+    // list — never adopt from the pre-open cache — and force a refetch.
+    mockCandidatesQuery([A, B], 'preOpen')
+    renderModal([X, Y], X.id)
 
     expect(heading()).toHaveTextContent('Candidate X')
+    expect(screen.getByText('1 of 2')).toBeInTheDocument()
+    expect(refetchMock).toHaveBeenCalled()
+  })
 
-    // The fresh list arrives, containing X.
+  it('hands over to the post-open list once it arrives with the clicked candidate', () => {
+    mockCandidatesQuery([A, B], 'preOpen')
+    const { rerenderModal } = renderModal([X, Y], X.id)
+    expect(heading()).toHaveTextContent('Candidate X')
+
     mockCandidatesQuery([A, B, X])
     rerenderModal()
 
@@ -145,18 +175,49 @@ describe('ContactCandidateResolver candidate tracking', () => {
     expect(screen.getByText('3 of 3')).toBeInTheDocument()
   })
 
-  it('advances to the candidate the fresh list places at its position when the tracked one is truly gone', () => {
-    // Same stale-cache mount, but the fresh settled list confirms the
-    // tracked candidate is gone (resolved elsewhere): now advance in place.
-    const X = cand('cand-x', 'Candidate X')
-    mockCandidatesQuery([A, B], { isFetching: true, isStale: true })
-    const { rerenderModal } = renderModal([X], X.id)
+  it('advances in place when the post-open list confirms the clicked candidate is gone', () => {
+    mockCandidatesQuery([A, B], 'preOpen')
+    const { rerenderModal } = renderModal([X, Y], X.id)
     expect(heading()).toHaveTextContent('Candidate X')
 
     mockCandidatesQuery([A, B])
     rerenderModal()
 
     expect(heading()).toHaveTextContent('Candidate A')
+    expect(screen.getByText('1 of 2')).toBeInTheDocument()
+  })
+
+  it('targets the clicked candidate’s real neighbor when Next is pressed during the fallback window', async () => {
+    const user = userEvent.setup()
+    // Pre-open cache lacks X: the modal runs on the page list [X, Y], so
+    // Next must go to Y — not to a candidate from the stale cache.
+    mockCandidatesQuery([A, B], 'preOpen')
+    renderModal([X, Y], X.id)
+    expect(heading()).toHaveTextContent('Candidate X')
+
+    await user.click(screen.getByRole('button', { name: 'Next candidate' }))
+
+    expect(
+      await screen.findByRole('heading', { level: 3, name: /Candidate Y/ }, { timeout: 5000 })
+    ).toBeInTheDocument()
+    expect(screen.getByText('2 of 2')).toBeInTheDocument()
+  })
+
+  it('advances after a resolve even when no fresh list ever arrives', async () => {
+    const user = userEvent.setup()
+    // The confirming refetch fails/never lands: the query keeps returning
+    // the same PRE-OPEN list including X. The modal resolved X itself, so
+    // it must still advance off it.
+    mockCandidatesQuery([X, Y, A], 'preOpen')
+    renderModal([X, Y, A], X.id)
+    expect(heading()).toHaveTextContent('Candidate X')
+
+    await user.click(screen.getByRole('button', { name: 'Import as New Contact' }))
+
+    expect(importAsync).toHaveBeenCalledWith(expect.objectContaining({ id: X.id }))
+    expect(
+      await screen.findByRole('heading', { level: 3, name: /Candidate Y/ }, { timeout: 5000 })
+    ).toBeInTheDocument()
     expect(screen.getByText('1 of 2')).toBeInTheDocument()
   })
 
@@ -195,5 +256,109 @@ describe('ContactCandidateResolver candidate tracking', () => {
     expect(
       await screen.findByRole('heading', { level: 3, name: /Candidate B/ }, { timeout: 5000 })
     ).toBeInTheDocument()
+  })
+
+  it('closes when an authoritative fetch returns an empty queue', () => {
+    // A post-open fetch is the truth: an empty queue means there is nothing
+    // left to act on, even though the page snapshot still has candidates.
+    mockCandidatesQuery([])
+    const { props } = renderModal([X, Y], X.id)
+
+    expect(props.onClose).toHaveBeenCalled()
+  })
+
+  it('keeps running on retained data after a background refetch error', () => {
+    // React Query keeps the previous data when a background refetch errors.
+    // That retained pre-open list still contains the tracked candidate, so
+    // the modal must keep using it — not discard it and fall elsewhere.
+    mockCandidatesQueryRaw({
+      data: { candidates: [A, B, X] },
+      isError: true,
+      dataUpdatedAt: 1,
+    })
+    const { props } = renderModal([X], X.id)
+
+    expect(heading()).toHaveTextContent('Candidate X')
+    expect(screen.getByText('3 of 3')).toBeInTheDocument()
+    expect(props.onClose).not.toHaveBeenCalled()
+  })
+
+  it('waits without adopting when neither list contains the clicked candidate', () => {
+    // Pre-open cache [A, B] predates X; the page list is empty (e.g. its
+    // last render dropped X). Displaying or adopting A here is exactly the
+    // wrong-candidate bug — the modal must render nothing and wait for the
+    // forced refetch.
+    mockCandidatesQuery([A, B], 'preOpen')
+    const { props, rerenderModal } = renderModal([], X.id)
+
+    expect(screen.queryByRole('heading', { level: 3 })).not.toBeInTheDocument()
+    expect(props.onClose).not.toHaveBeenCalled()
+    expect(refetchMock).toHaveBeenCalledTimes(1)
+
+    // The post-open list arrives with X: the modal shows the clicked
+    // candidate, never having displayed a wrong one.
+    mockCandidatesQuery([A, X])
+    rerenderModal()
+    expect(heading()).toHaveTextContent('Candidate X')
+  })
+
+  it('closes instead of hanging when the transitional wait ends in a fetch error', () => {
+    mockCandidatesQueryRaw({
+      data: { candidates: [A, B] },
+      isError: true,
+      dataUpdatedAt: 1,
+    })
+    const { props } = renderModal([], X.id)
+
+    expect(screen.queryByRole('heading', { level: 3 })).not.toBeInTheDocument()
+    expect(props.onClose).toHaveBeenCalled()
+  })
+
+  it('treats a fetch stamped at the mount instant as pre-open', () => {
+    // Authority requires strictly-after-mount: a timestamp equal to the
+    // mount instant cannot have observed the click.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      mockCandidatesQueryRaw({
+        data: { candidates: [A, B] },
+        dataUpdatedAt: Date.now(),
+      })
+      const { props } = renderModal([X, Y], X.id)
+
+      // Pre-open semantics: run on the page list, never adopt from the cache.
+      expect(heading()).toHaveTextContent('Candidate X')
+      expect(screen.getByText('1 of 2')).toBeInTheDocument()
+      expect(refetchMock).toHaveBeenCalledTimes(1)
+      expect(props.onClose).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('forces exactly one refetch when the cache lacks the clicked candidate', () => {
+    mockCandidatesQuery([A, B], 'preOpen')
+    const { rerenderModal } = renderModal([X, Y], X.id)
+    rerenderModal()
+    rerenderModal()
+
+    expect(refetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('advances onto the fetched view when the resolve exhausts the page list', async () => {
+    const user = userEvent.setup()
+    // Page list is just [X]; the pre-open cache still knows [A, B]. After
+    // resolving X (with the confirming refetch never landing), the modal
+    // must advance onto A — not close while candidates remain.
+    mockCandidatesQuery([A, B], 'preOpen')
+    const { props } = renderModal([X], X.id)
+    expect(heading()).toHaveTextContent('Candidate X')
+
+    await user.click(screen.getByRole('button', { name: 'Import as New Contact' }))
+
+    expect(importAsync).toHaveBeenCalledWith(expect.objectContaining({ id: X.id }))
+    expect(
+      await screen.findByRole('heading', { level: 3, name: /Candidate A/ }, { timeout: 5000 })
+    ).toBeInTheDocument()
+    expect(props.onClose).not.toHaveBeenCalled()
   })
 })

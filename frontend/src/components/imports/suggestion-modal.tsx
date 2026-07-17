@@ -97,6 +97,44 @@ export function SuggestionModal({ item, onClose, onSuccess, onError }: Suggestio
   )
 }
 
+/**
+ * Select the ONE list the modal runs on. Both inputs are filtered of
+ * locally-resolved candidates first, then:
+ * - a list containing the tracked id wins (fetched preferred over the page
+ *   snapshot);
+ * - an authoritative fetched list (post-open) is the truth even without the
+ *   tracked id — possibly empty, which closes the modal;
+ * - if the tracked id was resolved by this modal, advance on the best
+ *   remaining view;
+ * - otherwise the state is transitional (pre-open cache predating the
+ *   clicked candidate): return null so the caller waits instead of
+ *   displaying or adopting a wrong candidate.
+ */
+function selectEffectiveList({
+  fetched,
+  initial,
+  trackedId,
+  resolvedIds,
+  authoritative,
+}: {
+  fetched: ImportCandidate[] | null
+  initial: ImportCandidate[]
+  trackedId: string
+  resolvedIds: ReadonlySet<string>
+  authoritative: boolean
+}): ImportCandidate[] | null {
+  const live = (list: ImportCandidate[]) => list.filter(c => !resolvedIds.has(c.id))
+  const fetchedLive = fetched ? live(fetched) : null
+  const initialLive = live(initial)
+  if (fetchedLive?.some(c => c.id === trackedId)) return fetchedLive
+  if (!authoritative && initialLive.some(c => c.id === trackedId)) return initialLive
+  if (authoritative) return fetchedLive
+  if (resolvedIds.has(trackedId)) {
+    return fetchedLive && fetchedLive.length > 0 ? fetchedLive : initialLive
+  }
+  return null
+}
+
 interface ContactCandidateResolverProps {
   /** List of candidates to process */
   candidates: ImportCandidate[]
@@ -136,13 +174,16 @@ function ContactCandidateResolver({
   // candidates list is a live query that can refetch/reorder underneath the
   // open modal, and an index would silently start pointing at a different
   // candidate. lastIndexRef remembers where the tracked candidate sits (or
-  // where a pager navigation intended to land) so that when the id leaves
-  // the list the modal can advance in place. seenInListRef guards adoption:
-  // until the tracked id has been observed in the fetched list once, a list
-  // that lacks it may simply be a stale cache that predates the candidate.
+  // where a pager navigation intended to land) so that when the id is
+  // removed the modal can advance in place.
   const [currentId, setCurrentId] = useState(initialCandidateId)
   const lastIndexRef = useRef(0)
-  const seenInListRef = useRef(false)
+  // Ids this modal instance resolved itself (import/link/ignore succeeded):
+  // known-gone even if the confirming refetch never lands.
+  const [locallyResolvedIds, setLocallyResolvedIds] = useState<ReadonlySet<string>>(() => new Set())
+  // Only a list fetched AFTER the modal opened may declare the tracked
+  // candidate gone: the mount-time cache predates the click by definition.
+  const mountTimeRef = useRef(Date.now())
   const [mode, setMode] = useState<ModalMode>(initialMode)
   const [selectedContactId, setSelectedContactId] = useState<string | undefined>()
   const [methodSelections, setMethodSelections] = useState<Map<string, MethodSelection>>(new Map())
@@ -164,38 +205,77 @@ function ContactCandidateResolver({
   // Note: We need to pass page: 1 explicitly to ensure consistent query params
   const {
     data: allCandidatesData,
-    isSuccess,
-    isFetching,
-    isStale,
+    isError,
+    dataUpdatedAt,
+    refetch,
   } = useImportCandidates({
     page: 1,
     limit: 1000,
     include_unresolved_telegram: includeUnresolvedTelegram,
   })
-  // Use fetched data once query succeeds, otherwise fall back to initialCandidates
-  const candidates =
-    isSuccess && allCandidatesData?.candidates?.length
-      ? allCandidatesData.candidates
-      : initialCandidates
+  // Query data is usable whenever it EXISTS: React Query retains data across
+  // background refetch errors (status flips but data stays), and an empty
+  // fetched list is a real observation — not the same as no data at all.
+  const fetchedCandidates = allCandidatesData?.candidates ?? null
 
-  // Derive the index from the tracked id. When the tracked candidate is
-  // missing from the list, the list is trusted only if the id has been seen
-  // in it before or the query is settled and fresh — then the candidate is
-  // genuinely gone and the modal advances in place (last tracked position,
-  // clamped to the end). Otherwise the list is a stale cache that predates
-  // the tracked candidate: keep showing it from the page's list until the
-  // in-flight refetch settles.
+  // A list fetched after the modal opened is authoritative: it reflects
+  // post-click server state, so its view of the queue (including absences)
+  // is the truth. A pre-open cache — even a time-fresh one — belongs to a
+  // DIFFERENT query than the page list the user clicked in and may simply
+  // predate the clicked candidate, so its absences prove nothing.
+  const listAuthoritative = fetchedCandidates !== null && dataUpdatedAt > mountTimeRef.current
+
+  // The tracked candidate is known-gone only when this modal resolved it
+  // itself, or when an authoritative fetch no longer contains it.
+  const knownGone =
+    locallyResolvedIds.has(currentId) ||
+    (listAuthoritative && !fetchedCandidates.some(c => c.id === currentId))
+
+  // ONE effective list drives everything derived from it — the displayed
+  // candidate, the "X of Y" counter, the pager targets, and the
+  // advance/clamp/close logic — so display and navigation can never
+  // disagree about which list they are in. Returns null for the
+  // transitional state: the tracked id is in neither list but not known
+  // gone (a pre-open cache that predates the clicked candidate together
+  // with a page list that no longer has it) — the modal must then wait for
+  // the forced refetch rather than display or adopt a different candidate.
+  const candidates = useMemo(
+    () =>
+      selectEffectiveList({
+        fetched: fetchedCandidates,
+        initial: initialCandidates,
+        trackedId: currentId,
+        resolvedIds: locallyResolvedIds,
+        authoritative: listAuthoritative,
+      }) ?? [],
+    [fetchedCandidates, initialCandidates, currentId, locallyResolvedIds, listAuthoritative]
+  )
+
+  // Guarantee an authoritative list arrives: if the mount-time cache lacks
+  // the clicked candidate or predates the open, force one refetch. If it
+  // errors, the modal stays fully functional on the effective list —
+  // actions key off the candidate id, so they are correct without it.
+  useEffect(() => {
+    const cached = allCandidatesData?.candidates
+    if (dataUpdatedAt > mountTimeRef.current && cached?.some(c => c.id === initialCandidateId)) {
+      return
+    }
+    refetch()
+    // Mount-only: the mount-time cache is by definition pre-open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Derive the index from the tracked id. When the tracked candidate has
+  // left the effective list (resolved here, or confirmed gone by a
+  // post-open fetch), fall back to its last tracked position, clamped to
+  // the end — the modal advances in place.
   const trackedIndex = candidates.findIndex(c => c.id === currentId)
-  const listTrusted = seenInListRef.current || (!isFetching && !isStale)
   const currentIndex =
     trackedIndex >= 0
       ? trackedIndex
       : Math.max(0, Math.min(lastIndexRef.current, candidates.length - 1))
 
-  const candidate =
-    trackedIndex >= 0 || listTrusted
-      ? candidates[currentIndex]
-      : (initialCandidates.find(c => c.id === currentId) ?? candidates[currentIndex])
+  const candidate = candidates[currentIndex]
   const displayName = candidate ? getCandidateDisplayName(candidate) : ''
   const unresolvedTelegram = candidate ? isUnresolvedTelegramCandidate(candidate) : false
   const sourceInfo = candidate ? getSourceDisplay(candidate.source) : null
@@ -227,14 +307,37 @@ function ContactCandidateResolver({
 
   // Helper to handle successful actions - avoids code duplication
   const handleActionSuccess = useCallback(
-    (message: string) => {
+    (message: string, resolvedId: string) => {
+      // Exclude the resolved candidate locally: it is known-gone even if the
+      // invalidation-triggered refetch fails, so the advance/close logic
+      // fires without depending on it.
+      const next = new Set(locallyResolvedIds)
+      next.add(resolvedId)
+      setLocallyResolvedIds(next)
       onSuccess(message)
-      // Close modal if this was the last candidate
-      if (candidates.length <= 1) {
+      // Close only when nothing remains AFTER this resolution, judged by the
+      // same selection the render uses — the pre-resolution effective list
+      // may be a page snapshot whose only entry was the resolved candidate
+      // while the fetched view still has others to advance onto.
+      const remaining = selectEffectiveList({
+        fetched: fetchedCandidates,
+        initial: initialCandidates,
+        trackedId: resolvedId,
+        resolvedIds: next,
+        authoritative: listAuthoritative,
+      })
+      if (!remaining || remaining.length === 0) {
         onClose()
       }
     },
-    [candidates.length, onSuccess, onClose]
+    [
+      locallyResolvedIds,
+      fetchedCandidates,
+      initialCandidates,
+      listAuthoritative,
+      onSuccess,
+      onClose,
+    ]
   )
 
   // Helper to handle action errors - avoids code duplication
@@ -245,19 +348,28 @@ function ContactCandidateResolver({
     [onError]
   )
 
-  // Keep the tracked id in sync with the list: remember where the tracked
-  // candidate sits, and once a trusted list lacks it (resolved) adopt the
-  // candidate now at its position — the modal advances in place. An
-  // untrusted (stale cached) list never triggers adoption, so a refetch
-  // racing the modal open cannot latch the modal onto a wrong candidate.
+  // Keep the tracked id in sync with the effective list: remember where the
+  // tracked candidate sits, and when it is KNOWN gone (resolved here, or
+  // absent from an authoritative fetch) adopt the candidate now at that
+  // position so the modal advances in place. Without that knowledge the
+  // modal waits — adopting from a pre-open cache is how a wrong candidate
+  // gets latched.
   useEffect(() => {
     if (trackedIndex >= 0) {
       lastIndexRef.current = trackedIndex
-      seenInListRef.current = true
-    } else if (listTrusted && candidate) {
+    } else if (knownGone && candidate) {
       setCurrentId(candidate.id)
     }
-  }, [trackedIndex, listTrusted, candidate])
+  }, [trackedIndex, candidate, knownGone])
+
+  // Close when there is nothing left to act on: the queue is confirmed
+  // empty (authoritative fetch / this modal resolved the last candidate),
+  // or the transitional wait for a post-open list ended in a fetch error.
+  useEffect(() => {
+    if (candidates.length === 0 && (knownGone || listAuthoritative || isError)) {
+      onClose()
+    }
+  }, [candidates.length, knownGone, listAuthoritative, isError, onClose])
 
   // Initialize method selections when candidate changes
   useEffect(() => {
@@ -523,7 +635,7 @@ function ContactCandidateResolver({
               }
             : undefined,
       })
-      handleActionSuccess(`${editedName.trim()} imported successfully!`)
+      handleActionSuccess(`${editedName.trim()} imported successfully!`, candidate.id)
     } catch (error) {
       handleActionError(error, 'Failed to import contact')
     }
@@ -570,7 +682,7 @@ function ContactCandidateResolver({
           name: nameToSend,
         },
       })
-      handleActionSuccess('Contact linked successfully!')
+      handleActionSuccess('Contact linked successfully!', candidate.id)
     } catch (error) {
       handleActionError(error, 'Failed to link contact')
     }
@@ -581,7 +693,7 @@ function ContactCandidateResolver({
     if (!candidate) return
     try {
       await ignoreMutation.mutateAsync(candidate.id)
-      handleActionSuccess(`${displayName} ignored`)
+      handleActionSuccess(`${displayName} ignored`, candidate.id)
     } catch (error) {
       handleActionError(error, 'Failed to ignore contact')
     }
