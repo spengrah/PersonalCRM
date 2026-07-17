@@ -317,6 +317,15 @@ export async function apiGetAllPages(
   let cursor: string | undefined
   const seenCursors = new Set<string>()
 
+  // Require a schema-mandated integer meta field. A missing / non-integer field means
+  // the read is malformed and must fail closed, NOT terminate as if complete.
+  const reqInt = (v: unknown, name: string, min: number): number => {
+    if (!Number.isInteger(v) || (v as number) < min) {
+      throw new PaginationError(`${basePath}: invalid meta.${name} (${String(v)})`)
+    }
+    return v as number
+  }
+
   // eslint-disable-next-line no-constant-condition
   while (true) {
     const params = new URLSearchParams(baseParams)
@@ -362,20 +371,18 @@ export async function apiGetAllPages(
       if ('cursor' in m) {
         throw new PaginationError(`${basePath}: page-mode response carries cursor metadata`)
       }
-      const page = m.page
-      const totalPages = m.totalPages
-      if (!Number.isInteger(page) || (page as number) < 1) {
-        throw new PaginationError(`${basePath}: invalid meta.page ${String(page)}`)
-      }
-      if (!Number.isInteger(totalPages) || (totalPages as number) < 0) {
-        throw new PaginationError(`${basePath}: invalid meta.totalPages ${String(totalPages)}`)
-      }
+      // utilsMetaResponse requires ALL of page/limit/totalItems/totalPages as
+      // integers — a response missing any of them is malformed, not terminal.
+      const page = reqInt(m.page, 'page', 1)
+      reqInt(m.limit, 'limit', 1)
+      reqInt(m.totalItems, 'totalItems', 0)
+      const totalPages = reqInt(m.totalPages, 'totalPages', 0)
       if (page !== requestedPage) {
         throw new PaginationError(
           `${basePath}: requested page ${requestedPage} but got ${String(page)}`
         )
       }
-      if ((page as number) >= (totalPages as number)) break
+      if (page >= totalPages) break
       // We are about to request another page; if this one added no new ids the
       // list isn't making progress — refuse rather than loop until totalPages.
       if (added === 0) {
@@ -391,6 +398,9 @@ export async function apiGetAllPages(
       if ('page' in m || 'totalPages' in m || 'totalItems' in m) {
         throw new PaginationError(`${basePath}: cursor-mode response carries page metadata`)
       }
+      // GetScoresV3Meta requires an integer `limit`; validate it before trusting an
+      // absent cursor as terminal, so an empty/malformed `{}` meta fails closed.
+      reqInt(m.limit, 'limit', 1)
       // Terminal state = the cursor PROPERTY is ABSENT (the API omits it when there
       // are no more results, INCLUDING a one-page result). A PRESENT cursor — even
       // `null` — that is not a non-empty string is malformed, never terminal.

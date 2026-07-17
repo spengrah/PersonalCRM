@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { apiGetAllPages, PaginationError, type LangfuseConfig } from './langfuse'
+import { api, ApiError, apiGetAllPages, PaginationError, type LangfuseConfig } from './langfuse'
 import { main } from './setup'
 import {
   SCORE_CONFIGS,
@@ -294,6 +294,32 @@ describe('setup.main — provisioning', () => {
       expect(code).toBe(1)
       expect(mock.calls.filter(c => c.method === 'POST')).toHaveLength(0)
     }
+  })
+
+  it('drift — extra category (superset) → non-zero, zero POSTs', async () => {
+    // The 3 correct verdict categories PLUS an extra one — must NOT reconcile clean.
+    const extra = goodConfig(VERDICT_SCORE_NAME)
+    extra.categories = [...extra.categories, { label: 'maybe', value: 2 }]
+    const mock = tenantMock({ configPages: [[extra]] })
+    vi.stubGlobal('fetch', mock.impl)
+    const code = await main(creds, silent.log, silent.err)
+    expect(code).toBe(1)
+    expect(mock.calls.filter(c => c.method === 'POST')).toHaveLength(0)
+  })
+
+  it('drift — queue scoreConfigIds contains an EXTRA id (superset) → non-zero, zero POSTs', async () => {
+    // ground_truth + disposition PLUS verdict — a superset must be rejected, not accepted.
+    const configs = SCORE_CONFIGS.map(s => goodConfig(s.name))
+    const queue: QueueObj = {
+      id: 'q1',
+      name: TRIAGE_QUEUE_NAME,
+      scoreConfigIds: ['ground_truth-id', 'disposition-id', 'verdict-id'],
+    }
+    const mock = tenantMock({ configPages: [configs], queuePages: [[queue]] })
+    vi.stubGlobal('fetch', mock.impl)
+    const code = await main(creds, silent.log, silent.err)
+    expect(code).toBe(1)
+    expect(mock.calls.filter(c => c.method === 'POST')).toHaveLength(0)
   })
 
   it('drift — mismatched dataType → non-zero, zero POSTs', async () => {
@@ -640,16 +666,34 @@ describe('apiGetAllPages — query preservation + dedup + malformed', () => {
     }
   })
 
-  it('throws on invalid meta.page / meta.totalPages', async () => {
+  it('throws on any missing / non-integer page-meta field (page/limit/totalItems/totalPages)', async () => {
     const bad = [
       { data: [{ id: 'a' }], meta: { page: 0, limit: 100, totalItems: 1, totalPages: 1 } },
       { data: [{ id: 'a' }], meta: { page: 1, limit: 100, totalItems: 1, totalPages: -1 } },
       { data: [{ id: 'a' }], meta: { page: '1', limit: 100, totalItems: 1, totalPages: 1 } },
+      // limit missing / non-integer (schema-mandated by utilsMetaResponse).
+      { data: [{ id: 'a' }], meta: { page: 1, totalItems: 1, totalPages: 1 } },
+      { data: [{ id: 'a' }], meta: { page: 1, limit: 'x', totalItems: 1, totalPages: 1 } },
+      // totalItems missing / non-integer.
+      { data: [{ id: 'a' }], meta: { page: 1, limit: 100, totalPages: 1 } },
+      { data: [{ id: 'a' }], meta: { page: 1, limit: 100, totalItems: 1.5, totalPages: 1 } },
     ]
     for (const json of bad) {
       const mock = scripted([{ json }])
       vi.stubGlobal('fetch', mock.impl)
       await expect(apiGetAllPages(cfg, '/api/public/score-configs', 'page')).rejects.toBeInstanceOf(
+        PaginationError
+      )
+    }
+  })
+
+  it('cursor mode: an empty / limit-less / non-integer-limit meta is NOT terminal (fails closed)', async () => {
+    // scores-v3 GetScoresV3Meta requires an integer `limit`; without a valid one an
+    // absent cursor must NOT be treated as a clean terminal.
+    for (const meta of [{}, { limit: 'x' }, { limit: 1.5 }]) {
+      const mock = scripted([{ json: { data: [{ id: 's1' }], meta } }])
+      vi.stubGlobal('fetch', mock.impl)
+      await expect(apiGetAllPages(cfg, '/api/public/v3/scores', 'cursor')).rejects.toBeInstanceOf(
         PaginationError
       )
     }
@@ -663,6 +707,22 @@ describe('apiGetAllPages — query preservation + dedup + malformed', () => {
         PaginationError
       )
     }
+  })
+})
+
+describe('api — typed ApiError', () => {
+  it('throws ApiError carrying the HTTP status + decoded body (consumed by downstream callers)', async () => {
+    const mock = scripted([{ status: 404, json: 'not found detail' }])
+    vi.stubGlobal('fetch', mock.impl)
+    let caught: unknown
+    try {
+      await api(cfg, 'GET', '/api/public/score-configs')
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(ApiError)
+    expect((caught as ApiError).status).toBe(404)
+    expect((caught as ApiError).body).toContain('not found detail')
   })
 })
 
