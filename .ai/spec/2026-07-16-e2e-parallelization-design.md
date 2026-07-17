@@ -37,7 +37,7 @@ Change the imports page/`suggestion-modal.tsx` contract from `initialIndex: numb
 
 Effects on tests: `navigateModalToCandidate` (helpers/imports-helpers.ts:43–98) and its 24 call sites collapse to "click own card (prefixed name) → modal deterministically shows own candidate". `findCandidateByName`'s pagination scan stays (finding your card across a paginated global list is legitimate and already parallel-safe). The modal's "X of Y" counter stays global — tests keep never asserting absolute Y. The `.or()` close-vs-advance two-arm (imports-modal.spec.ts:782) stays for the few queue-exhaustion asserts, since the queue is inherently global; the assertions are already written to tolerate both arms.
 
-Spec-SSOT obligations (same PR, scanner-enforced): the affected `spec/imports.yaml` behaviors covering modal open/navigation get extended in place; citing indexes updated; `make spec-lint && make spec-coverage` green. This is a UI product change — the PR is flagged for human review per the "never merge UI PRs autonomously" rule, with the rest of the arc stacked on it.
+Spec-SSOT obligations (same PR, scanner-enforced): the affected `spec/imports-matching.yaml` behaviors covering modal open/navigation get extended in place; citing indexes updated; `make spec-lint && make spec-coverage` green. This is a UI product change — the PR is flagged for human review per the "never merge UI PRs autonomously" rule, with the rest of the arc stacked on it.
 
 ### 2. Global singletons → explicit cross-file mutual exclusion
 
@@ -66,7 +66,7 @@ Codify in `.ai/patterns/e2e-parallelism.md` (new, ~40 lines): the prefix contrac
 
 Three stacked PRs, in dependency order:
 
-1. **fix(imports): key resolver modal by candidate id** + retire `navigateModalToCandidate` (24 call sites) + spec/imports.yaml extend-in-place + citations. *UI change → human review before merge; PRs 2–3 stack on its branch.*
+1. **fix(imports): key resolver modal by candidate id** + retire `navigateModalToCandidate` (24 call sites) + spec/imports-matching.yaml extend-in-place + citations. *UI change → human review before merge; PRs 2–3 stack on its branch.*
 2. **test(e2e): cross-file global lock + scoped-read sweep** — global-lock fixture for mac_host files, unscoped-read fixes, drop stale contacts serial pin, delete `cleanupAll`, pattern doc + core.md gotcha updates.
 3. **feat(e2e): unpin diff lane + arm64 worker heuristic** — Makefile + playwright.config.ts + soak results in the PR description.
 

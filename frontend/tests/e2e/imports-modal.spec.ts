@@ -10,6 +10,42 @@ import {
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
+
+/**
+ * Walk the ALREADY-OPEN modal to a candidate using its own Prev/Next pager.
+ * Opening from a card is keyed by id and never needs this — it exists solely
+ * for in-session flows where the modal advanced in place onto whatever the
+ * global queue put at that position (possibly another worker's candidate)
+ * and the test must reach its own next candidate without closing the modal.
+ * Bounded scan: back to the start, then forward, asserting the target at the
+ * end so a miss fails loudly.
+ */
+async function walkModalToCandidate(
+  page: import('@playwright/test').Page,
+  displayName: string,
+  maxSteps = 30
+): Promise<void> {
+  const dialog = resolverDialog(page)
+  const heading = dialog.getByRole('heading', { level: 3 })
+  const target = dialog.getByRole('heading', { level: 3, name: displayName })
+  const prev = dialog.getByRole('button', { name: 'Previous candidate' })
+  const next = dialog.getByRole('button', { name: 'Next candidate' })
+  for (const button of [prev, next]) {
+    for (let i = 0; i < maxSteps; i++) {
+      if (await target.isVisible().catch(() => false)) return
+      if (!(await button.isEnabled().catch(() => false))) break
+      const before = await heading.textContent()
+      await button.click()
+      if (before) {
+        // Wait out the pager transition (heading settles on the neighbor).
+        await expect(heading)
+          .not.toHaveText(before, { timeout: 2000 })
+          .catch(() => {})
+      }
+    }
+  }
+  await expect(target).toBeVisible({ timeout: 2000 })
+}
 const API_HEADERS = {
   'X-API-Key': API_KEY,
   'Content-Type': 'application/json',
@@ -768,15 +804,13 @@ test.describe('Imports Modal @area:imports', () => {
       await expect(dialog).toBeVisible()
       await expect(heading).not.toHaveText(nameOne, { timeout: 10000 })
 
-      // Resolve the second candidate: the in-place advance may have landed on
-      // another worker's candidate, so reopen ours directly from its card.
-      await page.keyboard.press('Escape')
-      await expect(dialog).not.toBeVisible()
-      await findCandidateByName(page, nameTwo)
-      await candidateCardByName(page, nameTwo)
-        .getByRole('button', { name: /Import/i })
-        .click()
-      await expectModalCandidate(page, nameTwo)
+      // Resolve the second candidate WITHOUT leaving the modal: the in-place
+      // advance may have landed on another worker's candidate, so walk the
+      // modal's own pager to ours. Staying in-session proves an
+      // advanced-in-place modal is still actionable end-to-end (per-candidate
+      // state re-initialized, action wired to the newly displayed candidate)
+      // — the import POST below is pinned to OUR second external id.
+      await walkModalToCandidate(page, nameTwo)
       const importTwo = page.waitForResponse(
         res => res.request().method() === 'POST' && res.url().includes(`/imports/${idTwo}/import`)
       )

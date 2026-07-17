@@ -42,10 +42,15 @@ const A = cand('cand-a', 'Candidate A')
 const B = cand('cand-b', 'Candidate B')
 const C = cand('cand-c', 'Candidate C')
 
-function mockCandidatesQuery(list: ImportCandidate[]) {
+function mockCandidatesQuery(
+  list: ImportCandidate[],
+  opts: { isFetching?: boolean; isStale?: boolean } = {}
+) {
   vi.mocked(useImportCandidates).mockReturnValue({
     data: { candidates: list },
     isSuccess: true,
+    isFetching: opts.isFetching ?? false,
+    isStale: opts.isStale ?? false,
   } as any)
 }
 
@@ -118,6 +123,59 @@ describe('ContactCandidateResolver candidate tracking', () => {
     rerenderModal()
 
     expect(heading()).toHaveTextContent('Candidate B')
+    expect(screen.getByText('2 of 2')).toBeInTheDocument()
+  })
+
+  it('does not latch onto a stale cached list that predates the clicked candidate', () => {
+    // The modal mounts against a cached 1000-limit list that predates the
+    // clicked candidate X (a refetch is in flight). X must stay displayed —
+    // adopting from the stale list would latch the modal onto the wrong
+    // candidate with no self-correction once the fresh list lands.
+    const X = cand('cand-x', 'Candidate X')
+    mockCandidatesQuery([A, B], { isFetching: true, isStale: true })
+    const { rerenderModal } = renderModal([X], X.id)
+
+    expect(heading()).toHaveTextContent('Candidate X')
+
+    // The fresh list arrives, containing X.
+    mockCandidatesQuery([A, B, X])
+    rerenderModal()
+
+    expect(heading()).toHaveTextContent('Candidate X')
+    expect(screen.getByText('3 of 3')).toBeInTheDocument()
+  })
+
+  it('advances to the candidate the fresh list places at its position when the tracked one is truly gone', () => {
+    // Same stale-cache mount, but the fresh settled list confirms the
+    // tracked candidate is gone (resolved elsewhere): now advance in place.
+    const X = cand('cand-x', 'Candidate X')
+    mockCandidatesQuery([A, B], { isFetching: true, isStale: true })
+    const { rerenderModal } = renderModal([X], X.id)
+    expect(heading()).toHaveTextContent('Candidate X')
+
+    mockCandidatesQuery([A, B])
+    rerenderModal()
+
+    expect(heading()).toHaveTextContent('Candidate A')
+    expect(screen.getByText('1 of 2')).toBeInTheDocument()
+  })
+
+  it('lands Next on the adjacent remaining candidate when the neighbor vanishes mid-transition', async () => {
+    const user = userEvent.setup()
+    mockCandidatesQuery([A, B, C])
+    const { rerenderModal } = renderModal([A, B, C], A.id)
+    expect(heading()).toHaveTextContent('Candidate A')
+
+    // Click Next (targets B), then B is resolved elsewhere before the 150ms
+    // transition commits. Next must land on the candidate now adjacent (C),
+    // not visibly no-op back onto A.
+    await user.click(screen.getByRole('button', { name: 'Next candidate' }))
+    mockCandidatesQuery([A, C])
+    rerenderModal()
+
+    expect(
+      await screen.findByRole('heading', { level: 3, name: /Candidate C/ })
+    ).toBeInTheDocument()
     expect(screen.getByText('2 of 2')).toBeInTheDocument()
   })
 

@@ -135,9 +135,14 @@ function ContactCandidateResolver({
   // The modal tracks the current candidate by id, not by list position: the
   // candidates list is a live query that can refetch/reorder underneath the
   // open modal, and an index would silently start pointing at a different
-  // candidate. The last-seen index is kept only for the removal case below.
+  // candidate. lastIndexRef remembers where the tracked candidate sits (or
+  // where a pager navigation intended to land) so that when the id leaves
+  // the list the modal can advance in place. seenInListRef guards adoption:
+  // until the tracked id has been observed in the fetched list once, a list
+  // that lacks it may simply be a stale cache that predates the candidate.
   const [currentId, setCurrentId] = useState(initialCandidateId)
   const lastIndexRef = useRef(0)
+  const seenInListRef = useRef(false)
   const [mode, setMode] = useState<ModalMode>(initialMode)
   const [selectedContactId, setSelectedContactId] = useState<string | undefined>()
   const [methodSelections, setMethodSelections] = useState<Map<string, MethodSelection>>(new Map())
@@ -157,7 +162,12 @@ function ContactCandidateResolver({
 
   // Fetch all candidates for the modal (not limited by page pagination)
   // Note: We need to pass page: 1 explicitly to ensure consistent query params
-  const { data: allCandidatesData, isSuccess } = useImportCandidates({
+  const {
+    data: allCandidatesData,
+    isSuccess,
+    isFetching,
+    isStale,
+  } = useImportCandidates({
     page: 1,
     limit: 1000,
     include_unresolved_telegram: includeUnresolvedTelegram,
@@ -168,16 +178,24 @@ function ContactCandidateResolver({
       ? allCandidatesData.candidates
       : initialCandidates
 
-  // Derive the index from the tracked id. When the tracked candidate has
-  // left the list (imported/linked/ignored), fall back to its last-seen
-  // position, clamped to the end — the modal advances in place.
+  // Derive the index from the tracked id. When the tracked candidate is
+  // missing from the list, the list is trusted only if the id has been seen
+  // in it before or the query is settled and fresh — then the candidate is
+  // genuinely gone and the modal advances in place (last tracked position,
+  // clamped to the end). Otherwise the list is a stale cache that predates
+  // the tracked candidate: keep showing it from the page's list until the
+  // in-flight refetch settles.
   const trackedIndex = candidates.findIndex(c => c.id === currentId)
+  const listTrusted = seenInListRef.current || (!isFetching && !isStale)
   const currentIndex =
     trackedIndex >= 0
       ? trackedIndex
       : Math.max(0, Math.min(lastIndexRef.current, candidates.length - 1))
 
-  const candidate = candidates[currentIndex]
+  const candidate =
+    trackedIndex >= 0 || listTrusted
+      ? candidates[currentIndex]
+      : (initialCandidates.find(c => c.id === currentId) ?? candidates[currentIndex])
   const displayName = candidate ? getCandidateDisplayName(candidate) : ''
   const unresolvedTelegram = candidate ? isUnresolvedTelegramCandidate(candidate) : false
   const sourceInfo = candidate ? getSourceDisplay(candidate.source) : null
@@ -228,15 +246,18 @@ function ContactCandidateResolver({
   )
 
   // Keep the tracked id in sync with the list: remember where the tracked
-  // candidate sits, and when it disappears (after import/link/ignore) adopt
-  // the candidate now at that position so the modal advances in place.
+  // candidate sits, and once a trusted list lacks it (resolved) adopt the
+  // candidate now at its position — the modal advances in place. An
+  // untrusted (stale cached) list never triggers adoption, so a refetch
+  // racing the modal open cannot latch the modal onto a wrong candidate.
   useEffect(() => {
     if (trackedIndex >= 0) {
       lastIndexRef.current = trackedIndex
-    } else if (candidate && candidate.id !== currentId) {
+      seenInListRef.current = true
+    } else if (listTrusted && candidate) {
       setCurrentId(candidate.id)
     }
-  }, [trackedIndex, candidate, currentId])
+  }, [trackedIndex, listTrusted, candidate])
 
   // Initialize method selections when candidate changes
   useEffect(() => {
@@ -570,20 +591,27 @@ function ContactCandidateResolver({
   const canGoBack = currentIndex > 0
   const canGoForward = currentIndex < candidates.length - 1
 
-  const navigateTo = useCallback((id: string) => {
+  // Committing the intent index alongside the id keeps Prev/Next meaningful
+  // even when the targeted neighbor vanishes mid-transition: the missing-id
+  // fallback then lands on the candidate now occupying the intended slot
+  // (the adjacent remaining one) instead of re-latching the current one.
+  const navigateTo = useCallback((id: string, index: number) => {
     setIsTransitioning(true)
     setTimeout(() => {
+      lastIndexRef.current = index
       setCurrentId(id)
       setIsTransitioning(false)
     }, 150)
   }, [])
 
   const goBack = useCallback(() => {
-    if (canGoBack && !isLoading && !isTransitioning) navigateTo(candidates[currentIndex - 1].id)
+    if (canGoBack && !isLoading && !isTransitioning)
+      navigateTo(candidates[currentIndex - 1].id, currentIndex - 1)
   }, [canGoBack, isLoading, isTransitioning, candidates, currentIndex, navigateTo])
 
   const goForward = useCallback(() => {
-    if (canGoForward && !isLoading && !isTransitioning) navigateTo(candidates[currentIndex + 1].id)
+    if (canGoForward && !isLoading && !isTransitioning)
+      navigateTo(candidates[currentIndex + 1].id, currentIndex + 1)
   }, [canGoForward, isLoading, isTransitioning, candidates, currentIndex, navigateTo])
 
   // Keyboard navigation
