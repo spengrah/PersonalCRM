@@ -79,6 +79,11 @@ func (s *TestLockService) Acquire(ctx context.Context, name string, ttl, wait ti
 			return "", ctx.Err()
 		case <-time.After(50 * time.Millisecond):
 		}
+		// Re-check the deadline after waking: a lock freed during the sleep
+		// must not be granted once the wait budget is already spent.
+		if !s.now().Before(deadline) {
+			return "", fmt.Errorf("acquire %q: %w", name, ErrLockWaitTimeout)
+		}
 	}
 }
 

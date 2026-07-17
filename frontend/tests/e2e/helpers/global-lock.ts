@@ -41,19 +41,18 @@ export async function acquireGlobalLock(
   const body = (await resp.json()) as { data: { lease_id: string } }
   const lease = body.data.lease_id
 
-  // Heartbeat: a live holder keeps its lease fresh. One missed beat is
-  // harmless (TTL is 3x the cadence), so a transient renew failure only
-  // logs and retries. But once the lease is confirmed lapsed (404) or
-  // unrenewed past the TTL, another worker may already hold the lock —
-  // the holder must STOP NOW, not at afterAll: the thrown error surfaces
-  // as an unhandled rejection, which Playwright fails the worker on.
+  // Heartbeat + watchdog are deliberately SEPARATE timers. The heartbeat
+  // only fires renews and records outcomes — it never throws, so nothing
+  // in its promise chain can swallow an escalation. The watchdog is the
+  // sole escalation path: it fires on its own cadence and, the moment the
+  // lease is confirmed lapsed (renew 404) or simply hasn't been renewed
+  // for a full TTL (repeated 5xx, a hung fetch, whatever the cause),
+  // throws from a bare timer callback — an uncaught exception, which
+  // Playwright fails the worker on. Escalation is thus independent of any
+  // single renew's fate. One missed beat is harmless: the TTL is 3x the
+  // cadence.
   let lastRenewOk = Date.now()
-  const lost = (why: string) => {
-    clearInterval(renewTimer)
-    throw new Error(
-      `global lock '${name}' lost while held (${why}) — mutual exclusion can no longer be assumed`
-    )
-  }
+  let lapsed = false
   const renewTimer = setInterval(() => {
     void fetch(`${API_URL}/api/v1/test/lock/${lease}/renew`, {
       method: 'POST',
@@ -62,7 +61,7 @@ export async function acquireGlobalLock(
     })
       .then(res => {
         if (res.status === 404) {
-          lost('lease lapsed')
+          lapsed = true
         } else if (!res.ok) {
           console.error(`global lock '${name}': renew failed (${res.status}); retrying next beat`)
         } else {
@@ -70,20 +69,30 @@ export async function acquireGlobalLock(
         }
       })
       .catch((err: unknown) => {
-        if (Date.now() - lastRenewOk > LEASE_TTL_MS) {
-          lost(`no successful renew for ${Date.now() - lastRenewOk}ms`)
-        }
         console.error(`global lock '${name}': renew unreachable (${err}); retrying next beat`)
       })
   }, RENEW_EVERY_MS)
-  // Do not keep the worker process alive just for the heartbeat.
+  const watchdogTimer = setInterval(() => {
+    const staleFor = Date.now() - lastRenewOk
+    if (lapsed || staleFor > LEASE_TTL_MS) {
+      clearInterval(renewTimer)
+      clearInterval(watchdogTimer)
+      throw new Error(
+        `global lock '${name}' lost while held (${lapsed ? 'lease lapsed' : `no renew for ${staleFor}ms`}) ` +
+          `— mutual exclusion can no longer be assumed`
+      )
+    }
+  }, RENEW_EVERY_MS)
+  // Do not keep the worker process alive just for the timers.
   renewTimer.unref?.()
+  watchdogTimer.unref?.()
 
   let released = false
   return async () => {
     if (released) return
     released = true
     clearInterval(renewTimer)
+    clearInterval(watchdogTimer)
     // Best-effort: a failed release just leaves the lease to lapse.
     await fetch(`${API_URL}/api/v1/test/lock/${lease}`, {
       method: 'DELETE',
