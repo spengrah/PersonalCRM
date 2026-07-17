@@ -1,7 +1,7 @@
 import { test, expect } from './fixtures'
 import { createTestAPI, TestAPI } from './helpers/test-api'
 import {
-  navigateModalToCandidate,
+  expectModalCandidate,
   findCandidateByName,
   candidateCardByName,
 } from './helpers/imports-helpers'
@@ -170,8 +170,7 @@ test.describe('Imports Features @area:imports', () => {
       // Verify modal opens with mode toggle
       await expect(page.getByRole('button', { name: 'Link to Existing' })).toBeVisible()
 
-      // Navigate to correct candidate if needed (handles race conditions in parallel tests)
-      await navigateModalToCandidate(page, displayName)
+      await expectModalCandidate(page, displayName)
 
       // The suggested contact is pre-selected: the ContactSelector shows the
       // selection (no search placeholder) and the Link action is enabled
@@ -282,11 +281,7 @@ test.describe('Imports Features @area:imports', () => {
       // Modal opens in import mode (mode toggle is visible).
       await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
 
-      // Modal has internal pagination across candidates — under parallel
-      // workers it can open on a different worker's candidate. Navigate to
-      // ours by display name (which falls back to the handle for
-      // username-only candidates).
-      await navigateModalToCandidate(page, handle)
+      await expectModalCandidate(page, handle)
 
       // Contact Methods section shows the @handle as a selectable method row —
       // NOT "No contact methods available". The row carries the handle as its
@@ -347,10 +342,7 @@ test.describe('Imports Features @area:imports', () => {
 
       await candidateCardByName(page, handle).getByRole('button', { name: /Link/i }).click()
 
-      // Modal has internal pagination across candidates — under parallel
-      // workers it can open on a different worker's candidate. Navigate to
-      // ours by display name (handle is the display-name fallback).
-      await navigateModalToCandidate(page, handle)
+      await expectModalCandidate(page, handle)
 
       // Switch to Link mode
       await page.getByRole('button', { name: 'Link to Existing', exact: true }).click()

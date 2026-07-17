@@ -58,7 +58,7 @@ export type SuggestionModalItem =
   | {
       kind: 'contact'
       candidates: ImportCandidate[]
-      initialIndex: number
+      initialCandidateId: string
       initialMode?: 'import' | 'link'
       includeUnresolvedTelegram?: boolean
     }
@@ -87,7 +87,7 @@ export function SuggestionModal({ item, onClose, onSuccess, onError }: Suggestio
   return (
     <ContactCandidateResolver
       candidates={item.candidates}
-      initialIndex={item.initialIndex}
+      initialCandidateId={item.initialCandidateId}
       initialMode={item.initialMode}
       includeUnresolvedTelegram={item.includeUnresolvedTelegram}
       onClose={onClose}
@@ -100,8 +100,8 @@ export function SuggestionModal({ item, onClose, onSuccess, onError }: Suggestio
 interface ContactCandidateResolverProps {
   /** List of candidates to process */
   candidates: ImportCandidate[]
-  /** Initial index in the candidates array */
-  initialIndex: number
+  /** Id of the candidate the modal opens on */
+  initialCandidateId: string
   /** Initial mode - 'import' or 'link' */
   initialMode?: 'import' | 'link'
   /** Whether unresolved Telegram rows are visible in modal navigation */
@@ -125,14 +125,19 @@ interface MethodSelection {
 
 function ContactCandidateResolver({
   candidates: initialCandidates,
-  initialIndex,
+  initialCandidateId,
   initialMode = 'import',
   includeUnresolvedTelegram = false,
   onClose,
   onSuccess,
   onError,
 }: ContactCandidateResolverProps) {
-  const [currentIndex, setCurrentIndex] = useState(initialIndex)
+  // The modal tracks the current candidate by id, not by list position: the
+  // candidates list is a live query that can refetch/reorder underneath the
+  // open modal, and an index would silently start pointing at a different
+  // candidate. The last-seen index is kept only for the removal case below.
+  const [currentId, setCurrentId] = useState(initialCandidateId)
+  const lastIndexRef = useRef(0)
   const [mode, setMode] = useState<ModalMode>(initialMode)
   const [selectedContactId, setSelectedContactId] = useState<string | undefined>()
   const [methodSelections, setMethodSelections] = useState<Map<string, MethodSelection>>(new Map())
@@ -162,6 +167,15 @@ function ContactCandidateResolver({
     isSuccess && allCandidatesData?.candidates?.length
       ? allCandidatesData.candidates
       : initialCandidates
+
+  // Derive the index from the tracked id. When the tracked candidate has
+  // left the list (imported/linked/ignored), fall back to its last-seen
+  // position, clamped to the end — the modal advances in place.
+  const trackedIndex = candidates.findIndex(c => c.id === currentId)
+  const currentIndex =
+    trackedIndex >= 0
+      ? trackedIndex
+      : Math.max(0, Math.min(lastIndexRef.current, candidates.length - 1))
 
   const candidate = candidates[currentIndex]
   const displayName = candidate ? getCandidateDisplayName(candidate) : ''
@@ -213,12 +227,16 @@ function ContactCandidateResolver({
     [onError]
   )
 
-  // Clamp currentIndex when candidates array shrinks (after import/link/ignore)
+  // Keep the tracked id in sync with the list: remember where the tracked
+  // candidate sits, and when it disappears (after import/link/ignore) adopt
+  // the candidate now at that position so the modal advances in place.
   useEffect(() => {
-    if (currentIndex >= candidates.length) {
-      setCurrentIndex(Math.max(0, candidates.length - 1))
+    if (trackedIndex >= 0) {
+      lastIndexRef.current = trackedIndex
+    } else if (candidate && candidate.id !== currentId) {
+      setCurrentId(candidate.id)
     }
-  }, [candidates.length, currentIndex])
+  }, [trackedIndex, candidate, currentId])
 
   // Initialize method selections when candidate changes
   useEffect(() => {
@@ -273,7 +291,7 @@ function ContactCandidateResolver({
     } else {
       setSelectedContactId(undefined)
     }
-  }, [currentIndex, candidate])
+  }, [currentId, candidate])
 
   // Detect conflicts when in link mode and CRM contact is selected
   const methodComparisons = useMemo<MethodComparison[]>(() => {
@@ -318,7 +336,7 @@ function ContactCandidateResolver({
       setEditedName(displayName)
     }
     setIsEditingName(false)
-  }, [mode, selectedContact, displayName, currentIndex])
+  }, [mode, selectedContact, displayName, currentId])
 
   // Initialize primary method from CRM contact in link mode (GH-159)
   useEffect(() => {
@@ -333,7 +351,7 @@ function ContactCandidateResolver({
       // Reset primary in import mode
       setPrimaryMethodValue(null)
     }
-  }, [mode, selectedContact, currentIndex])
+  }, [mode, selectedContact, currentId])
 
   // Focus name input when entering edit mode
   useEffect(() => {
@@ -552,21 +570,21 @@ function ContactCandidateResolver({
   const canGoBack = currentIndex > 0
   const canGoForward = currentIndex < candidates.length - 1
 
-  const navigateTo = useCallback((newIndex: number) => {
+  const navigateTo = useCallback((id: string) => {
     setIsTransitioning(true)
     setTimeout(() => {
-      setCurrentIndex(newIndex)
+      setCurrentId(id)
       setIsTransitioning(false)
     }, 150)
   }, [])
 
   const goBack = useCallback(() => {
-    if (canGoBack && !isLoading && !isTransitioning) navigateTo(currentIndex - 1)
-  }, [canGoBack, isLoading, isTransitioning, currentIndex, navigateTo])
+    if (canGoBack && !isLoading && !isTransitioning) navigateTo(candidates[currentIndex - 1].id)
+  }, [canGoBack, isLoading, isTransitioning, candidates, currentIndex, navigateTo])
 
   const goForward = useCallback(() => {
-    if (canGoForward && !isLoading && !isTransitioning) navigateTo(currentIndex + 1)
-  }, [canGoForward, isLoading, isTransitioning, currentIndex, navigateTo])
+    if (canGoForward && !isLoading && !isTransitioning) navigateTo(candidates[currentIndex + 1].id)
+  }, [canGoForward, isLoading, isTransitioning, candidates, currentIndex, navigateTo])
 
   // Keyboard navigation
   useEffect(() => {

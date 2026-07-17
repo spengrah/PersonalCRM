@@ -33,68 +33,16 @@ export async function selectContactIfNeeded(
 }
 
 /**
- * Helper to navigate the modal to show a specific candidate by name.
- * This handles the race condition where parallel tests can cause the modal
- * to open showing a different candidate than the one clicked.
- *
- * Strategy: Go to start first (all prev), then scan forward (all next).
- * This ensures we check every candidate exactly once.
+ * Assert the resolver modal is showing the expected candidate. The modal is
+ * keyed by the clicked card's candidate id, so it deterministically opens on
+ * that candidate even when a list refetch reorders the queue — this expect
+ * fails loudly if that regresses, instead of letting a test act on the
+ * wrong candidate.
  */
-export async function navigateModalToCandidate(
-  page: Page,
-  displayName: string,
-  maxNavigations = 30
-): Promise<void> {
-  const modal = page.getByRole('dialog', { name: 'Resolve import candidate' })
-  const prevButton = page.getByRole('button', { name: 'Previous candidate' })
-  const nextButton = page.getByRole('button', { name: 'Next candidate' })
-
-  // Helper to check if candidate is visible
-  const isTargetVisible = async () => {
-    const modalHeading = modal.getByRole('heading', { level: 3, name: displayName })
-    return modalHeading.isVisible({ timeout: 300 }).catch(() => false)
-  }
-
-  // Check if already showing correct candidate
-  if (await isTargetVisible()) return
-
-  // Helper to wait for heading to change after navigation
-  const waitForHeadingChange = async (previousHeading: string | null) => {
-    if (previousHeading) {
-      // Wait for the heading text to change (indicates navigation completed)
-      await expect(modal.getByRole('heading', { level: 3 }))
-        .not.toHaveText(previousHeading, { timeout: 2000 })
-        .catch(() => {}) // Ignore timeout if heading doesn't change
-    }
-  }
-
-  // Phase 1: Go to start (click prev until disabled)
-  for (let i = 0; i < maxNavigations; i++) {
-    const prevVisible = await prevButton.isVisible({ timeout: 300 }).catch(() => false)
-    if (!prevVisible) break
-    const prevDisabled = await prevButton.isDisabled()
-    if (prevDisabled) break
-    const headingBefore = await modal.getByRole('heading', { level: 3 }).textContent()
-    await prevButton.click()
-    await waitForHeadingChange(headingBefore)
-    if (await isTargetVisible()) return
-  }
-
-  // Phase 2: Scan forward (click next until found or disabled)
-  for (let i = 0; i < maxNavigations; i++) {
-    const nextVisible = await nextButton.isVisible({ timeout: 300 }).catch(() => false)
-    if (!nextVisible) break
-    const nextDisabled = await nextButton.isDisabled()
-    if (nextDisabled) break
-    const headingBefore = await modal.getByRole('heading', { level: 3 }).textContent()
-    await nextButton.click()
-    await waitForHeadingChange(headingBefore)
-    if (await isTargetVisible()) return
-  }
-
-  // Final check - verify we found the candidate
-  const modalHeading = modal.getByRole('heading', { level: 3, name: displayName })
-  await expect(modalHeading).toBeVisible({ timeout: 2000 })
+export async function expectModalCandidate(page: Page, displayName: string): Promise<void> {
+  await expect(
+    resolverDialog(page).getByRole('heading', { level: 3, name: displayName })
+  ).toBeVisible({ timeout: 5000 })
 }
 
 /**

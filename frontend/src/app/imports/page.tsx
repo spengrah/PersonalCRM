@@ -476,13 +476,14 @@ function ImportsPageInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionParam, activeTab, attentionLoading, items])
 
-  // Open the contact-candidate body at the given index (within the candidate
-  // group, not the unified item list).
-  const openCandidateModal = (index: number, mode: 'import' | 'link' = 'import') => {
+  // Open the contact-candidate body on the clicked candidate. The modal is
+  // keyed by candidate id (not list index) so a refetch/reorder between the
+  // click and the render cannot swap in a different candidate.
+  const openCandidateModal = (candidateId: string, mode: 'import' | 'link' = 'import') => {
     setModalItem({
       kind: 'contact',
       candidates: candidateItems,
-      initialIndex: index,
+      initialCandidateId: candidateId,
       initialMode: mode,
       includeUnresolvedTelegram: Boolean(params.include_unresolved_telegram),
     })
@@ -906,12 +907,12 @@ function ImportsPageInner() {
                       }
                     />
                   ))}
-                  {candidateItems.map((candidate, index) => (
+                  {candidateItems.map(candidate => (
                     <CandidateCard
                       key={candidate.id}
                       candidate={candidate}
-                      onImport={() => openCandidateModal(index, 'import')}
-                      onLink={() => openCandidateModal(index, 'link')}
+                      onImport={() => openCandidateModal(candidate.id, 'import')}
+                      onLink={() => openCandidateModal(candidate.id, 'link')}
                       onIgnore={() => handleIgnore(candidate)}
                       importLoading={false}
                       ignoreLoading={actionInProgress === candidate.id && ignoreMutation.isPending}

@@ -1,7 +1,7 @@
 import { test, expect } from './fixtures'
 import { createTestAPI, TestAPI } from './helpers/test-api'
 import {
-  navigateModalToCandidate,
+  expectModalCandidate,
   resolverDialog,
   selectContactIfNeeded,
 } from './helpers/imports-helpers'
@@ -125,9 +125,7 @@ test.describe('Imports suggestions surface @area:imports', () => {
     // Open the modal via the Link button (no suggested match → "Link (select)").
     await card.getByRole('button', { name: /Link/i }).click()
 
-    // The modal refetches ALL candidates and navigates by index, so steer it
-    // to THIS worker's link-only candidate before asserting on its controls.
-    await navigateModalToCandidate(page, cardName)
+    await expectModalCandidate(page, cardName)
 
     // The modal is locked to link mode — the Import-mode toggle is absent.
     await expect(page.getByRole('button', { name: /Import as New/i })).toHaveCount(0)
@@ -161,9 +159,7 @@ test.describe('Imports suggestions surface @area:imports', () => {
     await candidateCard().getByRole('button', { name: /Link/i }).click()
     await expect(page.getByRole('button', { name: /Link to Existing/i })).toBeVisible()
 
-    // The modal refetches ALL candidates (parallel workers included) and
-    // navigates by index, so steer it to THIS worker's candidate first.
-    await navigateModalToCandidate(page, cardName)
+    await expectModalCandidate(page, cardName)
 
     // Ensure a contact is selected. The trigram suggested-match usually
     // pre-selects the same-named CRM contact (ContactSelector then shows the

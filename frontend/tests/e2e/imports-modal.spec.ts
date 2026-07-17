@@ -1,7 +1,7 @@
 import { test, expect } from './fixtures'
 import { createTestAPI, TestAPI } from './helpers/test-api'
 import {
-  navigateModalToCandidate,
+  expectModalCandidate,
   findCandidateByName,
   candidateCardByName,
   resolverDialog,
@@ -71,9 +71,9 @@ test.describe('Imports Modal @area:imports', () => {
         .click()
       await modalFetch
 
-      // Wait for modal and navigate to correct candidate
+      // Wait for the modal, open on our candidate
       await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
-      await navigateModalToCandidate(page, displayName)
+      await expectModalCandidate(page, displayName)
 
       const modal = resolverDialog(page)
       const heading = modal.getByRole('heading', { level: 3 }).first()
@@ -163,7 +163,7 @@ test.describe('Imports Modal @area:imports', () => {
 
       // Wait for modal to open in link mode
       await expect(page.getByRole('button', { name: 'Link to Existing' })).toBeVisible()
-      await navigateModalToCandidate(page, candidateName)
+      await expectModalCandidate(page, candidateName)
 
       // Select a contact to link to
       const dialog = resolverDialog(page)
@@ -211,7 +211,7 @@ test.describe('Imports Modal @area:imports', () => {
 
       // Wait for modal
       await expect(page.getByRole('button', { name: 'Link to Existing' })).toBeVisible()
-      await navigateModalToCandidate(page, displayName)
+      await expectModalCandidate(page, displayName)
 
       // Select the target contact
       const dialog = resolverDialog(page)
@@ -305,8 +305,7 @@ test.describe('Imports Modal @area:imports', () => {
       // Wait for modal
       await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
 
-      // Navigate to correct candidate if needed (handles race conditions in parallel tests)
-      await navigateModalToCandidate(page, displayName)
+      await expectModalCandidate(page, displayName)
 
       // Click on the name heading within the modal to enter edit mode
       const modal = resolverDialog(page)
@@ -345,8 +344,7 @@ test.describe('Imports Modal @area:imports', () => {
       // Wait for modal
       await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
 
-      // Navigate to correct candidate if needed (handles race conditions in parallel tests)
-      await navigateModalToCandidate(page, displayName)
+      await expectModalCandidate(page, displayName)
 
       // Click on the name to enter edit mode
       const modal = resolverDialog(page)
@@ -424,8 +422,7 @@ test.describe('Imports Modal @area:imports', () => {
       // Wait for modal
       await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
 
-      // Navigate to correct candidate if needed (handles race conditions in parallel tests)
-      await navigateModalToCandidate(page, displayName)
+      await expectModalCandidate(page, displayName)
 
       const modal = resolverDialog(page)
       const stars = modal.getByRole('button', { name: 'Set as primary' })
@@ -480,9 +477,9 @@ test.describe('Imports Modal @area:imports', () => {
       const candidateCard = candidateCardByName(page, displayName)
       await candidateCard.getByRole('button', { name: /Import/i }).click()
 
-      // Wait for modal and navigate to correct candidate
+      // Wait for the modal, open on our candidate
       await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
-      await navigateModalToCandidate(page, displayName)
+      await expectModalCandidate(page, displayName)
 
       // Import mode defaults to no cadence, then select monthly.
       const cadenceSelect = page.locator('#contact-cadence')
@@ -550,7 +547,7 @@ test.describe('Imports Modal @area:imports', () => {
         .getByRole('button', { name: /Import/i })
         .click()
       await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
-      await navigateModalToCandidate(page, displayName)
+      await expectModalCandidate(page, displayName)
 
       const modal = resolverDialog(page)
 
@@ -612,10 +609,11 @@ test.describe('Imports Modal @area:imports', () => {
       await expect(ourCard).toBeVisible({ timeout: 10000 })
       await ourCard.getByRole('button', { name: /Import/i }).click()
       await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
-      // The modal displays unresolved peers as "Unknown" — indistinguishable
-      // across workers — so the import POST below is pinned to OUR external
-      // id: if the modal landed on a foreign peer, the wait fails loudly.
-      await navigateModalToCandidate(page, 'Unknown')
+      // The modal opens on the clicked card's peer (keyed by id); every
+      // unresolved peer displays as "Unknown", so the import POST below is
+      // additionally pinned to OUR external id and fails loudly on a mixup.
+      // spec: IMP-028[3]
+      await expectModalCandidate(page, 'Unknown')
 
       const modal = resolverDialog(page)
 
@@ -680,7 +678,7 @@ test.describe('Imports Modal @area:imports', () => {
       await findCandidateByName(page, cardName)
       await candidateCardByName(page, cardName).getByRole('button', { name: /Link/i }).click()
       await expect(page.getByRole('button', { name: 'Link to Existing' })).toBeVisible()
-      await navigateModalToCandidate(page, cardName)
+      await expectModalCandidate(page, cardName)
 
       // Ensure the same-named CRM contact is selected (trigram usually
       // pre-selects it; select explicitly if not).
@@ -745,7 +743,7 @@ test.describe('Imports Modal @area:imports', () => {
         .getByRole('button', { name: /Import/i })
         .click()
       await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
-      await navigateModalToCandidate(page, nameOne)
+      await expectModalCandidate(page, nameOne)
 
       const dialog = resolverDialog(page)
       const heading = dialog.getByRole('heading', { level: 3 }).first()
@@ -770,8 +768,15 @@ test.describe('Imports Modal @area:imports', () => {
       await expect(dialog).toBeVisible()
       await expect(heading).not.toHaveText(nameOne, { timeout: 10000 })
 
-      // Resolve the second candidate.
-      await navigateModalToCandidate(page, nameTwo)
+      // Resolve the second candidate: the in-place advance may have landed on
+      // another worker's candidate, so reopen ours directly from its card.
+      await page.keyboard.press('Escape')
+      await expect(dialog).not.toBeVisible()
+      await findCandidateByName(page, nameTwo)
+      await candidateCardByName(page, nameTwo)
+        .getByRole('button', { name: /Import/i })
+        .click()
+      await expectModalCandidate(page, nameTwo)
       const importTwo = page.waitForResponse(
         res => res.request().method() === 'POST' && res.url().includes(`/imports/${idTwo}/import`)
       )
@@ -834,7 +839,7 @@ test.describe('Imports Modal @area:imports', () => {
           .getByRole('button', { name: /Import/i })
           .click()
         await expect(dialog).toBeVisible()
-        await navigateModalToCandidate(page, displayName)
+        await expectModalCandidate(page, displayName)
       }
 
       await openModal()

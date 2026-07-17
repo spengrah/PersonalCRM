@@ -1,7 +1,7 @@
 import { test, expect } from './fixtures'
 import { createTestAPI, TestAPI } from './helpers/test-api'
 import {
-  navigateModalToCandidate,
+  expectModalCandidate,
   findCandidateByName,
   candidateCardByName,
 } from './helpers/imports-helpers'
@@ -73,8 +73,7 @@ test.describe('Imports Actions @area:imports', () => {
       // The modal offers the import-vs-link mode choice.
       await expect(page.getByRole('button', { name: 'Link to Existing' })).toBeVisible()
 
-      // Navigate to correct candidate if needed (handles race conditions in parallel tests)
-      await navigateModalToCandidate(page, displayName)
+      await expectModalCandidate(page, displayName)
 
       // Link mode offers contact selection (the searchable selector).
       const dialog = page.getByRole('dialog', { name: 'Resolve import candidate' })
@@ -122,8 +121,11 @@ test.describe('Imports Actions @area:imports', () => {
       // Verify modal opens in import mode - mode toggle should be visible
       await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
 
-      // Navigate to correct candidate if needed (handles race conditions in parallel tests)
-      await navigateModalToCandidate(page, displayName)
+      // The modal opens on the clicked card's candidate (keyed by id); the
+      // import POST below is pinned to OUR external id, proving the clicked
+      // candidate is the one that gets resolved.
+      // spec: IMP-028[3]
+      await expectModalCandidate(page, displayName)
 
       // Capture the import POST and the frontend's first rematch-job poll
       // before triggering the action.
@@ -300,8 +302,7 @@ test.describe('Imports Actions @area:imports', () => {
       // Wait for modal to open with mode toggle visible
       await expect(page.getByRole('button', { name: 'Link to Existing' })).toBeVisible()
 
-      // Navigate to correct candidate if needed (handles race conditions in parallel tests)
-      await navigateModalToCandidate(page, candidateName)
+      await expectModalCandidate(page, candidateName)
 
       // The ContactSelector is a custom searchable dropdown
       // Click on the selector area (contains placeholder text) to open it
