@@ -169,7 +169,7 @@ Tag tests based on what user-facing functionality they verify, not implementatio
 
 ## E2E Test Parallelism
 
-E2E tests support parallel execution via Playwright workers.
+E2E tests support parallel execution via Playwright workers. See [`.ai/patterns/e2e-parallelism.md`](../patterns/e2e-parallelism.md) for the prefix contract, the scoping rules, and the global-lock fixture for unscopable singletons.
 
 ### Test Isolation with TestAPI
 
@@ -242,13 +242,13 @@ await findCandidateByName(page, displayName)  // waits + paginates
 
 **Modal opens on the clicked candidate**: The resolver modal is keyed by candidate id, so clicking your own card deterministically opens your own candidate even under parallel workers. After opening, assert it with the `expectModalCandidate()` helper so a regression fails loudly instead of acting on the wrong candidate.
 
-**Target specific elements**: Never use `.first()` on candidate cards—target your prefixed contact name:
+**Target specific elements**: Never scope a candidate card by a substring `hasText` filter—it can also match a foreign worker's card whose heading merely contains your name. Use the `candidateCardByName()` helper (`helpers/imports-helpers.ts`), which matches the card's heading with `exact: true`:
 ```typescript
-// ❌ WRONG - may click another worker's data
-page.getByRole('button', { name: /Import/i }).first().click()
+// ❌ WRONG - substring match can span another worker's card
+const card = page.locator('div.border').filter({ hasText: displayName })
 
-// ✅ CORRECT - targets your prefixed data
-const card = page.locator('[class*="border-gray-200"]').filter({ hasText: displayName })
+// ✅ CORRECT - exact heading match, scoped to your prefixed data
+const card = candidateCardByName(page, displayName)
 await card.getByRole('button', { name: /Import/i }).click()
 ```
 

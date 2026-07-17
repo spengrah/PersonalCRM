@@ -24,13 +24,16 @@ import (
 // repository → DB; no queries are called from the handler).
 type TestHandler struct {
 	seedSvc   *service.TestSeedService
+	lockSvc   *service.TestLockService
 	validator *validator.Validate
 }
 
-// NewTestHandler creates a new test handler over the test-seed service.
-func NewTestHandler(seedSvc *service.TestSeedService) *TestHandler {
+// NewTestHandler creates a new test handler over the test-seed service and
+// the named-mutex arbiter.
+func NewTestHandler(seedSvc *service.TestSeedService, lockSvc *service.TestLockService) *TestHandler {
 	return &TestHandler{
 		seedSvc:   seedSvc,
+		lockSvc:   lockSvc,
 		validator: sharedValidator,
 	}
 }

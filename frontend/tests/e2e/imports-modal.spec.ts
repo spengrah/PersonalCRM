@@ -217,7 +217,7 @@ test.describe('Imports Modal @area:imports', () => {
     })
 
     // spec: IMP-027[4]
-    test('should update cadence when linking contact', async ({ page }) => {
+    test('should update cadence when linking contact', async ({ page, request }) => {
       await testApi.seedExternalContacts([
         {
           display_name: 'Link Cadence Update Test',
@@ -225,7 +225,7 @@ test.describe('Imports Modal @area:imports', () => {
         },
       ])
 
-      await testApi.seedOverdueContacts([
+      const { ids: targetIds } = await testApi.seedOverdueContacts([
         {
           full_name: 'Link Cadence Target',
           email: 'link-target@example.com',
@@ -233,6 +233,7 @@ test.describe('Imports Modal @area:imports', () => {
           days_overdue: 1,
         },
       ])
+      const targetContactId = targetIds[0]
 
       await page.goto('/imports')
       await page.waitForLoadState('networkidle')
@@ -282,25 +283,16 @@ test.describe('Imports Modal @area:imports', () => {
       const linkResponse = await linkResponsePromise
       expect(linkResponse.ok()).toBe(true)
 
-      // Navigate to the contact and verify cadence was updated on the
-      // dependent surface.
-      await page.goto('/contacts')
-      await page.waitForLoadState('domcontentloaded')
-
-      const contactSearchInput = page.getByPlaceholder('Search contacts...')
-      await contactSearchInput.fill(`${testApi.prefix}-Link Cadence Target`)
-      await page.waitForLoadState('domcontentloaded')
-
-      // Wait for search results and click on the contact
-      const contactLink = page.getByText(`${testApi.prefix}-Link Cadence Target`)
-      await expect(contactLink).toBeVisible({ timeout: 10000 })
-      await contactLink.click()
-      await page.waitForLoadState('domcontentloaded')
-
-      // Verify cadence is now weekly - look for it in the contact detail section
-      const cadenceValue = page.getByTestId('contact-cadence')
-      await expect(cadenceValue).toBeVisible({ timeout: 10000 })
-      await expect(cadenceValue).toContainText('weekly', { timeout: 5000 })
+      // Verify the cadence actually changed on the linked contact. The
+      // network-param assert above proves what the UI SENT; this proves the
+      // stored effect, via the same API the contact surfaces render from —
+      // a UI walk to the detail page here re-tests navigation, not linking.
+      const contactRes = await request.get(`${API_BASE_URL}/api/v1/contacts/${targetContactId}`, {
+        headers: { 'X-API-Key': API_KEY },
+      })
+      expect(contactRes.ok()).toBe(true)
+      const contactBody = await contactRes.json()
+      expect(contactBody?.data?.cadence).toBe('weekly')
     })
   })
 

@@ -1,4 +1,26 @@
 import { test, expect, type APIRequestContext } from '@playwright/test'
+import { acquireGlobalLock } from './helpers/global-lock'
+
+// Cross-file mutex: imports-interactions.spec.ts also resets/reseeds the
+// mac_host singleton, and nothing else stops the two files landing in
+// different workers and nuking each other's host mid-test. The lock is
+// held for the WHOLE file (beforeAll → afterAll): per-test cycling lets
+// this worker instantly re-acquire between its serial tests, starving the
+// other file's waiter. afterAll has its own timeout slot, and if the
+// worker dies without running it the renew heartbeat stops and the lease
+// lapses at the arbiter, freeing the lock.
+let releaseMacHostLock: (() => Promise<void>) | null = null
+
+test.beforeAll(async () => {
+  // The contending file may hold the lock for its entire serial run.
+  test.setTimeout(360_000)
+  releaseMacHostLock = await acquireGlobalLock('mac-host')
+})
+
+test.afterAll(async () => {
+  await releaseMacHostLock?.()
+  releaseMacHostLock = null
+})
 
 // API_KEY is injected by the make target via NEXT_PUBLIC_API_KEY.
 // We re-use it here for the test-only seed endpoints under
@@ -44,6 +66,8 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
   // seed/delete and the empty-state / paired-state tests would
   // interfere with each other.
   test.describe.configure({ mode: 'serial' })
+  // Headroom for slow singleton cleanup on a loaded machine.
+  test.setTimeout(60_000)
 
   test('renders empty-state when no Mac hosts are paired', async ({ page }) => {
     // The zero-host rendering branch, driven by mocking the list endpoint:

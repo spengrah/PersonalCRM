@@ -1,5 +1,27 @@
 import { test, expect } from './fixtures'
 import { createTestAPI, TestAPI } from './helpers/test-api'
+import { acquireGlobalLock } from './helpers/global-lock'
+
+// Cross-file mutex: settings-mac.spec.ts also resets/reseeds the mac_host
+// singleton, and nothing else stops the two files landing in different
+// workers and nuking each other's host mid-test. The lock is held for the
+// WHOLE file (beforeAll → afterAll): per-test cycling lets this worker
+// instantly re-acquire between its serial tests, starving the other file's
+// waiter. afterAll has its own timeout slot, and if the worker dies without
+// running it the renew heartbeat stops and the lease lapses at the
+// arbiter, freeing the lock.
+let releaseMacHostLock: (() => Promise<void>) | null = null
+
+test.beforeAll(async () => {
+  // The contending file may hold the lock for its entire serial run.
+  test.setTimeout(360_000)
+  releaseMacHostLock = await acquireGlobalLock('mac-host')
+})
+
+test.afterAll(async () => {
+  await releaseMacHostLock?.()
+  releaseMacHostLock = null
+})
 
 // Interactions tab: the conflict/orphan queue. These specs seed orphan
 // (orphan_needs_review) meeting notes against a paired host — enough to drive
@@ -12,6 +34,8 @@ test.describe('Imports Interactions tab @area:imports', () => {
   // The mac_host table is a singleton, so these host-seeding tests must run
   // serially within the file and reset existing hosts before seeding.
   test.describe.configure({ mode: 'serial' })
+  // Headroom for slow singleton cleanup on a loaded machine.
+  test.setTimeout(60_000)
 
   let testApi: TestAPI
   let hostId: string
@@ -37,7 +61,8 @@ test.describe('Imports Interactions tab @area:imports', () => {
 
   test.afterEach(async () => {
     // Delete this test's seeded notes (by host) before the next test resets
-    // the host, then clear the host so the singleton index is free.
+    // the host, then clear the host so the singleton index is free. The
+    // cross-file mutex stays held until afterAll.
     await testApi.cleanup()
     await testApi.resetMacHosts()
   })
@@ -101,8 +126,9 @@ test.describe('Imports Interactions tab @area:imports', () => {
       'aria-selected',
       'true'
     )
-    // The URL is normalized to the canonical param.
-    await expect(page).toHaveURL(/tab=interactions/)
+    // The URL is normalized to the canonical param. The normalize effect
+    // fires after hydration, which can lag under real parallel worker load.
+    await expect(page).toHaveURL(/tab=interactions/, { timeout: 15000 })
   })
 
   // spec: IMP-031[0], IMP-026[1]

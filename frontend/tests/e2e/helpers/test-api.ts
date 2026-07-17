@@ -439,29 +439,6 @@ export class TestAPI {
   }
 
   /**
-   * Cleans up ALL test data (all prefixes matching w{digit}-{timestamp} pattern).
-   * Use this in beforeAll to ensure a completely clean slate before running tests.
-   * WARNING: Only safe to call when running tests serially within a file.
-   */
-  async cleanupAll(): Promise<CleanupResponse> {
-    // Use a wildcard prefix pattern that matches all test prefixes
-    const response = await this.request.post(`${API_BASE_URL}/api/v1/test/cleanup`, {
-      headers: API_HEADERS,
-      data: {
-        prefix: 'w',
-      } satisfies CleanupRequest,
-    })
-
-    if (!response.ok()) {
-      const body = await response.text()
-      throw new Error(`Failed to cleanup all test data: ${response.status()} ${body}`)
-    }
-
-    const data = await response.json()
-    return data.data as CleanupResponse
-  }
-
-  /**
    * Triggers a server error for testing error boundary handling.
    */
   async triggerError(errorType: '500' | 'panic' = '500', message?: string): Promise<void> {

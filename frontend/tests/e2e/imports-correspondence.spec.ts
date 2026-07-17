@@ -1,6 +1,7 @@
 import { test, expect } from './fixtures'
 import { createTestAPI, TestAPI } from './helpers/test-api'
 import {
+  candidateCardByName,
   expectModalCandidate,
   resolverDialog,
   selectContactIfNeeded,
@@ -61,9 +62,7 @@ test.describe('Imports gmail_correspondence evidence @area:imports', () => {
     const cardName = `${testApi.prefix}-Correspondence Person`
     await expect(page.getByText(cardName).first()).toBeVisible({ timeout: 10000 })
 
-    const card = page
-      .locator('div.border', { has: page.getByRole('heading', { name: cardName }) })
-      .first()
+    const card = candidateCardByName(page, cardName)
 
     // The evidence badge: the seeded co-occurring contact name + the seeded
     // message count (both metadata-driven data, not static copy).
@@ -102,8 +101,6 @@ test.describe('Imports gmail_correspondence evidence @area:imports', () => {
 
     // The candidate leaves the People list once linked.
     await page.keyboard.press('Escape')
-    await expect(
-      page.locator('div.border', { has: page.getByRole('heading', { name: cardName }) })
-    ).toHaveCount(0, { timeout: 10000 })
+    await expect(candidateCardByName(page, cardName)).toHaveCount(0, { timeout: 10000 })
   })
 })

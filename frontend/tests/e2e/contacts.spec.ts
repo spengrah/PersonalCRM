@@ -181,9 +181,22 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await page.goto('/contacts')
     await page.waitForLoadState('domcontentloaded')
 
-    // Find the last visible row's action button
+    // Scope to this test's own rows via search — the unscoped table can
+    // otherwise hold other workers' rows too, and first()/last() would
+    // resolve against the wrong contact.
+    const searchInput = page.getByPlaceholder('Search contacts...')
+    await searchInput.fill(`${testApi.prefix}-Context Menu Test`)
+    await searchInput.press('Enter')
+
+    // Wait for the FILTERED set before touching first()/last(): the
+    // unfiltered render satisfies a bare visibility check immediately, so
+    // last() could still grab a foreign row that vanishes when the search
+    // response lands. All 8 seeded rows visible == the filter is applied.
     const rows = page.locator('tbody tr')
-    await expect(rows.first()).toBeVisible({ timeout: 15000 })
+    await expect(
+      page.locator('tr', { has: page.getByText(`${testApi.prefix}-Context Menu Test 7`) })
+    ).toBeVisible({ timeout: 15000 })
+    await expect(rows).toHaveCount(8)
     const lastRow = rows.last()
     const actionButton = lastRow.getByRole('button', { name: 'Contact actions' })
     await actionButton.click()
@@ -611,9 +624,6 @@ test.describe('Contacts - Cadence Filter @area:contacts', () => {
 })
 
 test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', () => {
-  // UI tests need serial mode since they create contacts via UI without TestAPI isolation
-  test.describe.configure({ mode: 'serial' })
-
   let testApi: TestAPI
 
   test.beforeEach(async ({ request }, testInfo) => {
@@ -765,6 +775,9 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
 
   // spec: CON-057[0]
   test('should sort by Next Contact column when header clicked', async ({ page }) => {
+    // Two sequential click -> response round trips under real parallel
+    // worker load can exceed the default 30s budget; give this test room.
+    test.setTimeout(60000)
     await testApi.seedContacts([
       {
         full_name: 'SortNext Contact',
@@ -789,6 +802,10 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     )
     await nextContactHeader.click()
     await ascResponse
+    // The response landing and the header re-rendering are different
+    // moments: clicking again mid-re-render dispatches into a replaced DOM
+    // node and is silently lost. Wait for the applied state first.
+    await expect(nextContactHeader).toHaveAttribute('aria-sort', 'ascending')
 
     // Click again to toggle to descending - verify sort=contact_by&order=desc
     const descResponse = page.waitForResponse(
@@ -796,6 +813,7 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     )
     await nextContactHeader.click()
     await descResponse
+    await expect(nextContactHeader).toHaveAttribute('aria-sort', 'descending')
 
     // Contact should still be visible after sort toggling
     await expect(page.getByText(`${testApi.prefix}-SortNext Contact`)).toBeVisible()
@@ -803,6 +821,9 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
 
   // spec: CON-057[0]
   test('should sort by Last response column when header clicked', async ({ page }) => {
+    // Two sequential click -> response round trips under real parallel
+    // worker load can exceed the default 30s budget; give this test room.
+    test.setTimeout(60000)
     await testApi.seedContacts([{ full_name: 'SortResp Contact' }])
 
     await page.goto('/contacts')
@@ -824,6 +845,9 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     )
     await lastResponseHeader.click()
     await descResponse
+    // Settle on the applied state before toggling again — a click during
+    // the post-response re-render lands on a replaced node and is lost.
+    await expect(lastResponseHeader).toHaveAttribute('aria-sort', 'descending')
 
     // Second click → asc.
     const ascResponse = page.waitForResponse(
@@ -831,6 +855,7 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     )
     await lastResponseHeader.click()
     await ascResponse
+    await expect(lastResponseHeader).toHaveAttribute('aria-sort', 'ascending')
 
     await expect(page.getByText(`${testApi.prefix}-SortResp Contact`)).toBeVisible()
   })

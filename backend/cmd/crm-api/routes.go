@@ -1,6 +1,7 @@
 package main
 
 import (
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/auth"
 	"personal-crm/backend/internal/config"
@@ -233,7 +234,8 @@ func registerRoutes(deps routeDeps) {
 			}
 
 			testSeedService := service.NewTestSeedService(database, testExternalRepo, deps.ContactService, testCalendarRepo, deps.MacHostRepo, deps.MeetingNoteRepoForIngest)
-			testHandler := handlers.NewTestHandler(testSeedService)
+			testLockService := service.NewTestLockService(accelerated.GetCurrentTime)
+			testHandler := handlers.NewTestHandler(testSeedService, testLockService)
 			handlers.RegisterTestRoutes(v1, testHandler)
 			logger.Info().Msg("test API endpoints enabled (CRM_ENV=testing)")
 		}
