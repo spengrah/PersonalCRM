@@ -238,6 +238,21 @@ test.describe('Imports Actions @area:imports', () => {
       expect(candidateRes.ok()).toBe(true)
       const candidateBody = await candidateRes.json()
       expect(candidateBody?.data?.match_status).toBe('ignored')
+
+      // Sticky proof: the row never resurfaces in the candidate QUEUE. This
+      // is a distinct claim from the match_status write above — the queue
+      // read has its own filter, and the DOM check earlier is page-local
+      // (a re-sorted global pool could hide a still-listed ignored card on
+      // another page). The large-limit API scan is page-independent and
+      // parallel-safe: it only asserts our own id is absent.
+      const candidatesRes = await request.get(
+        `${API_BASE_URL}/api/v1/imports/candidates?limit=10000`,
+        { headers: API_HEADERS }
+      )
+      expect(candidatesRes.ok()).toBe(true)
+      const candidatesBody = await candidatesRes.json()
+      const candidates: Array<{ id: string }> = candidatesBody?.data ?? []
+      expect(candidates.some(c => c.id === externalId)).toBe(false)
     })
   })
 

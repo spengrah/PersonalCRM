@@ -69,24 +69,43 @@ export async function findCandidateByName(
   maxPages = 5
 ): Promise<void> {
   const contactHeading = page.getByRole('heading', { name: displayName, exact: true })
+  // isVisible() never waits (its timeout option is deprecated and ignored),
+  // so probes must go through waitFor to actually give the DOM time to
+  // render before we conclude "not here" and paginate past the target.
+  const seen = (locator: Locator, timeout: number) =>
+    locator
+      .waitFor({ state: 'visible', timeout })
+      .then(() => true)
+      .catch(() => false)
 
+  let attempt = 0
   await expect(async () => {
-    // Reset to page 1 in case a previous attempt's clicks left us
-    // mid-pagination.
-    const firstPageButton = page.getByRole('button', { name: '1', exact: true })
-    if (await firstPageButton.isVisible({ timeout: 500 }).catch(() => false)) {
-      await firstPageButton.click()
-      await page.waitForLoadState('networkidle')
+    attempt++
+    if (attempt > 1) {
+      // A previous attempt's clicks may have left the UI mid-pagination.
+      const firstPageButton = page.getByRole('button', { name: '1', exact: true }).first()
+      if (await seen(firstPageButton, 500)) {
+        await firstPageButton.click()
+        await page.waitForLoadState('networkidle')
+      } else {
+        // Pagination is absent: either the pool now fits one page (fine) or
+        // a mid-walk shrink stranded the client on an empty page-N with no
+        // rewind control (the page keeps its page param; the Pagination
+        // component unmounts at pages <= 1). Reload to reset the client's
+        // page state to 1 before re-checking.
+        await page.reload()
+        await page.waitForLoadState('domcontentloaded')
+      }
     }
 
     for (let i = 0; i < maxPages; i++) {
-      if (await contactHeading.isVisible({ timeout: 1000 }).catch(() => false)) {
+      if (await seen(contactHeading, 1000)) {
         return
       }
 
       // Try to go to next page (use exact match to avoid matching "Next candidate" in modal)
       const nextButton = page.getByRole('button', { name: 'Next', exact: true })
-      if (await nextButton.isVisible({ timeout: 500 }).catch(() => false)) {
+      if (await seen(nextButton, 500)) {
         const isDisabled = await nextButton.isDisabled()
         if (!isDisabled) {
           await nextButton.click()

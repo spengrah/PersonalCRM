@@ -1,6 +1,7 @@
 import { test, expect } from './fixtures'
 import { createTestAPI, TestAPI } from './helpers/test-api'
 import {
+  candidateCardByName,
   expectModalCandidate,
   resolverDialog,
   selectContactIfNeeded,
@@ -113,11 +114,8 @@ test.describe('Imports suggestions surface @area:imports', () => {
     const cardName = `${testApi.prefix}-LinkOnly Person`
     await expect(page.getByText(cardName).first()).toBeVisible({ timeout: 10000 })
 
-    // Scope to the candidate card via its heading, then walk up to the card
-    // container (the bordered wrapper holding the action buttons).
-    const card = page
-      .locator('div.border', { has: page.getByRole('heading', { name: cardName }) })
-      .first()
+    // Scope to the candidate card via its exact heading (shared helper).
+    const card = candidateCardByName(page, cardName)
 
     // The card has no Import button (link-only source) — only Link + ignore.
     await expect(card.getByRole('button', { name: 'Import' })).toHaveCount(0)
@@ -152,8 +150,8 @@ test.describe('Imports suggestions surface @area:imports', () => {
 
     const cardName = `${testApi.prefix}-Deselect Target`
     const candidateCard = (): import('@playwright/test').Locator =>
-      page.locator('div.border', { has: page.getByRole('heading', { name: cardName }) })
-    await expect(candidateCard()).toHaveCount(1, { timeout: 10000 })
+      candidateCardByName(page, cardName)
+    await expect(candidateCard()).toBeVisible({ timeout: 10000 })
 
     // Open the modal via Link.
     await candidateCard().getByRole('button', { name: /Link/i }).click()
@@ -203,8 +201,6 @@ test.describe('Imports suggestions surface @area:imports', () => {
     // scope to the list card via its heading). The toHaveCount assertion
     // retries on the live UI, so no networkidle wait is needed.
     await page.keyboard.press('Escape')
-    await expect(
-      page.locator('div.border', { has: page.getByRole('heading', { name: cardName }) })
-    ).toHaveCount(0, { timeout: 10000 })
+    await expect(candidateCardByName(page, cardName)).toHaveCount(0, { timeout: 10000 })
   })
 })

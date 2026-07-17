@@ -188,9 +188,15 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await searchInput.fill(`${testApi.prefix}-Context Menu Test`)
     await searchInput.press('Enter')
 
-    // Find the last visible row's action button
+    // Wait for the FILTERED set before touching first()/last(): the
+    // unfiltered render satisfies a bare visibility check immediately, so
+    // last() could still grab a foreign row that vanishes when the search
+    // response lands. All 8 seeded rows visible == the filter is applied.
     const rows = page.locator('tbody tr')
-    await expect(rows.first()).toBeVisible({ timeout: 15000 })
+    await expect(
+      page.locator('tr', { has: page.getByText(`${testApi.prefix}-Context Menu Test 7`) })
+    ).toBeVisible({ timeout: 15000 })
+    await expect(rows).toHaveCount(8)
     const lastRow = rows.last()
     const actionButton = lastRow.getByRole('button', { name: 'Contact actions' })
     await actionButton.click()
