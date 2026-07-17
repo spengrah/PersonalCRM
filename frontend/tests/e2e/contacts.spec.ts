@@ -802,6 +802,10 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     )
     await nextContactHeader.click()
     await ascResponse
+    // The response landing and the header re-rendering are different
+    // moments: clicking again mid-re-render dispatches into a replaced DOM
+    // node and is silently lost. Wait for the applied state first.
+    await expect(nextContactHeader).toHaveAttribute('aria-sort', 'ascending')
 
     // Click again to toggle to descending - verify sort=contact_by&order=desc
     const descResponse = page.waitForResponse(
@@ -809,6 +813,7 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     )
     await nextContactHeader.click()
     await descResponse
+    await expect(nextContactHeader).toHaveAttribute('aria-sort', 'descending')
 
     // Contact should still be visible after sort toggling
     await expect(page.getByText(`${testApi.prefix}-SortNext Contact`)).toBeVisible()
@@ -840,6 +845,9 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     )
     await lastResponseHeader.click()
     await descResponse
+    // Settle on the applied state before toggling again — a click during
+    // the post-response re-render lands on a replaced node and is lost.
+    await expect(lastResponseHeader).toHaveAttribute('aria-sort', 'descending')
 
     // Second click → asc.
     const ascResponse = page.waitForResponse(
@@ -847,6 +855,7 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     )
     await lastResponseHeader.click()
     await ascResponse
+    await expect(lastResponseHeader).toHaveAttribute('aria-sort', 'ascending')
 
     await expect(page.getByText(`${testApi.prefix}-SortResp Contact`)).toBeVisible()
   })

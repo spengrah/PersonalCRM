@@ -70,6 +70,11 @@ function ContactsTable({
     )
   }
 
+  const getAriaSort = (field: SortField): 'ascending' | 'descending' | 'none' => {
+    if (listContext.sort !== field) return 'none'
+    return listContext.order === 'asc' ? 'ascending' : 'descending'
+  }
+
   // Links into detail pages carry the full list context so navigation
   // order matches list order and back-to-list restores this view.
   const buildContactUrl = (contactId: string, action?: 'edit' | 'merge') =>
@@ -155,6 +160,7 @@ function ContactsTable({
           <tr>
             <th
               className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+              aria-sort={getAriaSort('name')}
               onClick={() => onSort('name')}
             >
               <div className="flex items-center">
@@ -164,6 +170,7 @@ function ContactsTable({
             </th>
             <th
               className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+              aria-sort={getAriaSort('cadence')}
               onClick={() => onSort('cadence')}
             >
               <div className="flex items-center">
@@ -173,6 +180,7 @@ function ContactsTable({
             </th>
             <th
               className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+              aria-sort={getAriaSort('location')}
               onClick={() => onSort('location')}
             >
               <div className="flex items-center">
@@ -182,6 +190,7 @@ function ContactsTable({
             </th>
             <th
               className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+              aria-sort={getAriaSort('birthday')}
               onClick={() => onSort('birthday')}
             >
               <div className="flex items-center">
@@ -191,6 +200,7 @@ function ContactsTable({
             </th>
             <th
               className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+              aria-sort={getAriaSort('last_response_at')}
               onClick={() => onSort('last_response_at')}
             >
               <div className="flex items-center">
@@ -200,6 +210,7 @@ function ContactsTable({
             </th>
             <th
               className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+              aria-sort={getAriaSort('contact_by')}
               onClick={() => onSort('contact_by')}
             >
               <div className="flex items-center">

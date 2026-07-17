@@ -86,7 +86,6 @@ export async function findCandidateByName(
       const firstPageButton = page.getByRole('button', { name: '1', exact: true }).first()
       if (await seen(firstPageButton, 500)) {
         await firstPageButton.click()
-        await page.waitForLoadState('networkidle')
       } else {
         // Pagination is absent: either the pool now fits one page (fine) or
         // a mid-walk shrink stranded the client on an empty page-N with no
@@ -99,7 +98,12 @@ export async function findCandidateByName(
     }
 
     for (let i = 0; i < maxPages; i++) {
-      if (await seen(contactHeading, 1000)) {
+      // The probe doubles as the post-click settle: after a pagination
+      // click the fetch+render completes well within this window. Never
+      // wait on networkidle here — under parallel-worker load the network
+      // rarely goes silent and the wait can eat the whole toPass budget
+      // while the target is already visible.
+      if (await seen(contactHeading, 1500)) {
         return
       }
 
@@ -109,7 +113,6 @@ export async function findCandidateByName(
         const isDisabled = await nextButton.isDisabled()
         if (!isDisabled) {
           await nextButton.click()
-          await page.waitForLoadState('networkidle')
           continue
         }
       }
@@ -119,5 +122,9 @@ export async function findCandidateByName(
     }
 
     await expect(contactHeading).toBeVisible({ timeout: 1000 })
-  }).toPass({ timeout: 20000 })
+    // Generous budget: when the shared pool hovers at the pagination
+    // boundary, concurrent workers' seeding/cleanup can strand the client
+    // on an emptied page several times in a row, and each recovery cycle
+    // (reload + re-walk) costs a few seconds on the dev server.
+  }).toPass({ timeout: 45000 })
 }
