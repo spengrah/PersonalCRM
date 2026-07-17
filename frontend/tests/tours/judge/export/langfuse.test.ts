@@ -13,8 +13,10 @@ import {
   configFromEnv,
   exportSpans,
   parseSpanFile,
+  stableSample,
   traceIdFor,
 } from './langfuse'
+import { TRIAGE_QUEUE_NAME, VERDICT_SCORE_NAME } from './triage-config'
 
 const baseParams: SpanParams = {
   impl: 'codex-exec',
@@ -443,42 +445,149 @@ interface ShippedBody {
   id: string
   input?: Record<string, unknown>
   metadata: Record<string, unknown>
+  tags?: string[]
+  sessionId?: string
 }
-function mockLangfuse(opts: { failFirstPut?: boolean; failFirstRegister?: boolean } = {}): {
+interface ScoreEvent {
+  id: string
+  type: string
+  timestamp: string
+  body: {
+    id: string
+    name: string
+    value: string
+    dataType: string
+    traceId: string
+    configId?: string
+  }
+}
+interface QueueItem {
+  id: string
+  objectId: string
+  objectType: string
+  status?: string
+}
+interface ItemPost {
+  queueId: string
+  objectId: string
+  objectType: string
+}
+interface ScoreConfigObj {
+  id: string
+  name: string
+  isArchived: boolean
+  dataType?: string
+  categories?: Array<{ label: string; value: number }>
+}
+interface QueueObj {
+  id: string
+  name: string
+  scoreConfigIds?: string[]
+}
+
+const activeVerdictConfig: ScoreConfigObj = {
+  id: 'cfg-verdict',
+  name: VERDICT_SCORE_NAME,
+  isArchived: false,
+  dataType: 'CATEGORICAL',
+}
+const triageQueue: QueueObj = { id: 'q-triage', name: TRIAGE_QUEUE_NAME, scoreConfigIds: [] }
+
+interface MockOpts {
+  failFirstPut?: boolean
+  failFirstRegister?: boolean
+  // Triage substrate (defaults model a correctly-provisioned tenant).
+  scoreConfigs?: ScoreConfigObj[]
+  configError?: boolean
+  queues?: QueueObj[]
+  queueError?: boolean
+  existingItems?: QueueItem[]
+  itemsError?: boolean
+  // Force a structurally-malformed list envelope → apiGetAllPages throws PaginationError.
+  queueMalformed?: boolean
+  itemsMalformed?: boolean
+  failEnqueue?: (objectId: string, n: number) => boolean
+  scoreError?: boolean
+  // Force multi-page list responses to exercise the paginator.
+  configsPerPage?: number
+  queuesPerPage?: number
+  itemsPerPage?: number
+}
+
+function mockLangfuse(opts: MockOpts = {}): {
   fetchImpl: typeof fetch
   calls: MockCall[]
   bodies: ShippedBody[]
+  scores: ScoreEvent[]
+  itemPosts: ItemPost[]
+  // Global chronological log of the ingestion events, so a test can prove the verdict
+  // score for a trace is POSTed AFTER that trace's final body.
+  order: Array<{ kind: 'body' | 'score'; traceId: string }>
+  // How many times the score-config list was fetched — proves lazy (one) resolution
+  // and zero fetches on a verdictless round.
+  counts: { configResolve: number }
 } {
   const calls: MockCall[] = []
   const bodies: ShippedBody[] = []
+  const scores: ScoreEvent[] = []
+  const itemPosts: ItemPost[] = []
+  const order: Array<{ kind: 'body' | 'score'; traceId: string }> = []
+  const counts = { configResolve: 0 }
   const shaToId = new Map<string, string>()
   let seq = 0
   let putCount = 0
   let registerCount = 0
+  let enqueueCount = 0
   const okText = (obj: unknown): Response =>
     ({ ok: true, status: 200, text: async () => JSON.stringify(obj) }) as Response
+  const err = (status: number, msg: string): Response =>
+    ({ ok: false, status, text: async () => msg }) as Response
+  // A valid v3 page-protocol envelope over `all`, sliced to the requested page.
+  const page = (all: unknown[], q: URLSearchParams, per: number): Response => {
+    const requested = Number(q.get('page') ?? '1')
+    const limit = per
+    const totalPages = Math.max(1, Math.ceil(all.length / limit))
+    const start = (requested - 1) * limit
+    return okText({
+      data: all.slice(start, start + limit),
+      meta: { page: requested, limit, totalItems: all.length, totalPages },
+    })
+  }
   const fetchImpl = (async (url: string | URL, init?: { method?: string; body?: unknown }) => {
     const u = String(url)
     const method = init?.method ?? 'GET'
-    // Only the JSON APIs (ingestion / media register / PATCH) carry a JSON body;
-    // the presigned PUT carries binary — never JSON.parse it.
+    const parsed = new URL(u)
+    const pathname = parsed.pathname
+    const q = parsed.searchParams
+    // Only the JSON APIs carry a JSON body; the presigned PUT carries binary.
     const json = (): Record<string, unknown> =>
       JSON.parse(String(init?.body)) as Record<string, unknown>
-    if (u.endsWith('/api/public/ingestion')) {
-      const evt = (json().batch as Array<{ id: string; body: ShippedBody }>)[0]
+
+    if (pathname === '/api/public/ingestion') {
+      const evt = (json().batch as Array<Record<string, unknown>>)[0]
+      if (evt.type === 'score-create') {
+        const score = evt as unknown as ScoreEvent
+        scores.push(score)
+        order.push({ kind: 'score', traceId: score.body.traceId })
+        return opts.scoreError === true ? err(500, 'score boom') : okText({})
+      }
+      const body = evt.body as ShippedBody
       const isInit = String(evt.id).includes('-init-')
-      calls.push({ kind: isInit ? 'init' : 'body', traceId: evt.body.id, id: evt.id })
-      if (!isInit) bodies.push(evt.body)
+      calls.push({ kind: isInit ? 'init' : 'body', traceId: body.id, id: String(evt.id) })
+      if (!isInit) {
+        bodies.push(body)
+        order.push({ kind: 'body', traceId: body.id })
+      }
       return okText({})
     }
-    if (u.endsWith('/api/public/media') && method === 'POST') {
+    if (pathname === '/api/public/media' && method === 'POST') {
       const body = json()
       calls.push({ kind: 'media', traceId: String(body.traceId) })
       registerCount++
       // A non-2xx registration → `api()` throws inside uploadMedia (the path the
       // P1 fix must catch so the trace still ships with zero tokens).
       if (opts.failFirstRegister === true && registerCount === 1) {
-        return { ok: false, status: 500, text: async () => 'boom' } as Response
+        return err(500, 'boom')
       }
       const sha = String(body.sha256Hash)
       let id = shaToId.get(sha)
@@ -495,10 +604,45 @@ function mockLangfuse(opts: { failFirstPut?: boolean; failFirstRegister?: boolea
       const fail = opts.failFirstPut === true && putCount === 1
       return { ok: !fail, status: fail ? 500 : 200, text: async () => '' } as Response
     }
+    // --- triage substrate: score-configs / queues / queue-items ---
+    if (pathname === '/api/public/score-configs' && method === 'GET') {
+      // Count only the FIRST page request per resolve so a paged config list still
+      // reads as one lazy resolution.
+      if (Number(q.get('page') ?? '1') === 1) counts.configResolve++
+      if (opts.configError === true) return err(500, 'score-config boom')
+      return page(opts.scoreConfigs ?? [activeVerdictConfig], q, opts.configsPerPage ?? 100)
+    }
+    if (pathname === '/api/public/annotation-queues' && method === 'GET') {
+      if (opts.queueError === true) return err(500, 'queue boom')
+      // A missing `data` array is a malformed envelope → PaginationError.
+      if (opts.queueMalformed === true)
+        return okText({ meta: { page: 1, limit: 100, totalPages: 1 } })
+      return page(opts.queues ?? [triageQueue], q, opts.queuesPerPage ?? 100)
+    }
+    const itemsMatch = /^\/api\/public\/annotation-queues\/([^/]+)\/items$/.exec(pathname)
+    if (itemsMatch) {
+      if (method === 'GET') {
+        if (opts.itemsError === true) return err(500, 'items boom')
+        if (opts.itemsMalformed === true)
+          return okText({ meta: { page: 1, limit: 100, totalPages: 1 } })
+        return page(opts.existingItems ?? [], q, opts.itemsPerPage ?? 100)
+      }
+      const b = json()
+      enqueueCount++
+      itemPosts.push({
+        queueId: itemsMatch[1],
+        objectId: String(b.objectId),
+        objectType: String(b.objectType),
+      })
+      if (opts.failEnqueue?.(String(b.objectId), enqueueCount) === true) {
+        return err(500, 'enqueue boom')
+      }
+      return okText({ id: `item-${enqueueCount}`, ...b, status: 'PENDING' })
+    }
     // PATCH finalize /api/public/media/{id}
     return okText({})
   }) as unknown as typeof fetch
-  return { fetchImpl, calls, bodies }
+  return { fetchImpl, calls, bodies, scores, itemPosts, order, counts }
 }
 
 const cfg = { host: 'http://lf', publicKey: 'p', secretKey: 's' }
@@ -701,5 +845,479 @@ describe('parseSpanFile', () => {
     const good = JSON.stringify(buildGenAiSpan(baseParams))
     const spans = parseSpanFile(`${good}\n{ not json\n\n${good}\n`)
     expect(spans).toHaveLength(2)
+  })
+})
+
+// --- trace tags + session, verdict-as-score, triage enqueue, salt ---
+
+// A single-item behavior span with a chosen verdict (and optional mutation), so the
+// triage tests can shape a round precisely. No screenshots → no media lifecycle.
+function itemSpan(verdict: 'pass' | 'fail' | 'unsure', over: Partial<SpanParams> = {}): GenAiSpan {
+  const scenario: Scenario = {
+    kind: 'behavior',
+    behaviorId: 'CON-042',
+    behaviorTitle: 'delete confirmation',
+    given: 'a contact exists',
+    when: 'the user deletes it',
+    items: [{ itemIndex: 0, thenText: 't' }],
+    allThen: ['t'],
+  }
+  return buildGenAiSpan({
+    ...baseParams,
+    prompt: 'p',
+    scenario,
+    gradedEvidence: [{ captureFile: 'a.json', note: 'n', evidence: {} }],
+    itemVerdicts: [{ itemIndex: 0, verdict, citation: 'c', critique: 'k' }],
+    ...over,
+  })
+}
+const item0Id = (span: GenAiSpan): string => `${traceIdFor(span)}-item0`
+
+describe('exportSpans — trace tags + session (contract #3, component-wise)', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('valid runId+gitSha → final body carries sessionId + runId/gitSha/behavior tags', async () => {
+    const mock = mockLangfuse()
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    await exportSpans(cfg, [itemSpan('pass')], () => {}, {
+      runId: '20260717T151639Z',
+      gitSha: 'abc1234',
+    })
+    const b = mock.bodies[0]
+    expect(b.sessionId).toBe('20260717T151639Z')
+    expect(b.tags).toEqual(
+      expect.arrayContaining(['behavior:CON-042', 'runId:20260717T151639Z', 'gitSha:abc1234'])
+    )
+  })
+
+  it('only gitSha present → gitSha+behavior tags, NO session/runId tag (components independent)', async () => {
+    const mock = mockLangfuse()
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    await exportSpans(cfg, [itemSpan('pass')], () => {}, { gitSha: 'deadbeef' })
+    const b = mock.bodies[0]
+    expect(b.sessionId).toBeUndefined()
+    expect(b.tags).toContain('gitSha:deadbeef')
+    expect(b.tags).toContain('behavior:CON-042')
+    expect(b.tags?.some(t => t.startsWith('runId:'))).toBe(false)
+  })
+
+  it('only runId present → session + runId + behavior, NO gitSha tag', async () => {
+    const mock = mockLangfuse()
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    await exportSpans(cfg, [itemSpan('pass')], () => {}, { runId: '20260717T151639Z' })
+    const b = mock.bodies[0]
+    expect(b.sessionId).toBe('20260717T151639Z')
+    expect(b.tags).toContain('runId:20260717T151639Z')
+    expect(b.tags?.some(t => t.startsWith('gitSha:'))).toBe(false)
+  })
+
+  it('NO provenance → behavior tag is ALWAYS present, no session (never blocks shipping)', async () => {
+    const mock = mockLangfuse()
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const res = await exportSpans(cfg, [itemSpan('pass')])
+    expect(res.traces).toBe(1)
+    expect(mock.bodies[0].tags).toEqual(['behavior:CON-042'])
+    expect(mock.bodies[0].sessionId).toBeUndefined()
+  })
+})
+
+describe('exportSpans — verdict-as-score (contract #4, separate non-fatal request)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.useRealTimers()
+  })
+
+  it('a fail item emits a SEPARATE score-create AFTER the trace body: envelope ts=span-start ISO, stable body id, bound configId, no body ts, no comment', async () => {
+    const span = itemSpan('fail', { startMs: 1_000 })
+    const mock = mockLangfuse()
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    await exportSpans(cfg, [span])
+    expect(mock.scores).toHaveLength(1)
+    const s = mock.scores[0]
+    const tid = item0Id(span)
+    expect(s.type).toBe('score-create')
+    expect(s.id.startsWith(`evt-${tid}-score-`)).toBe(true)
+    expect(s.timestamp).toBe(new Date(span.start_time_unix_nano / 1e6).toISOString())
+    expect(s.body).toMatchObject({
+      id: `score-${tid}-verdict`,
+      name: VERDICT_SCORE_NAME,
+      value: 'fail',
+      dataType: 'CATEGORICAL',
+      traceId: tid,
+      configId: 'cfg-verdict',
+    })
+    // Timestamp lives on the ENVELOPE, not the body; the score carries NO free-text
+    // comment (INV-D).
+    expect((s.body as Record<string, unknown>).timestamp).toBeUndefined()
+    expect((s.body as Record<string, unknown>).comment).toBeUndefined()
+    // Chronological proof: the score for this trace is POSTed strictly AFTER its body
+    // (the separate, post-ship request contract #4 mandates — never co-batched).
+    expect(mock.order).toEqual([
+      { kind: 'body', traceId: tid },
+      { kind: 'score', traceId: tid },
+    ])
+  })
+
+  it('pass → value pass, unsure → value unsure', async () => {
+    const mock = mockLangfuse()
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    await exportSpans(cfg, [itemSpan('pass'), itemSpan('unsure')])
+    expect(mock.scores.map(s => s.body.value).sort()).toEqual(['pass', 'unsure'])
+  })
+
+  it('configId resolves LAZILY + ONCE: two verdicts → one score-config fetch; a verdictless round → zero', async () => {
+    const withVerdicts = mockLangfuse()
+    vi.stubGlobal('fetch', withVerdicts.fetchImpl)
+    await exportSpans(cfg, [itemSpan('fail'), itemSpan('pass')])
+    expect(withVerdicts.counts.configResolve).toBe(1) // resolved once, cached
+    vi.restoreAllMocks()
+
+    const noVerdict = mockLangfuse()
+    vi.stubGlobal('fetch', noVerdict.fetchImpl)
+    await exportSpans(cfg, [buildGenAiSpan({ ...baseParams, prompt: 'p' })])
+    expect(noVerdict.counts.configResolve).toBe(0) // never touched without a verdict
+  })
+
+  it('binds the verdict config even when it is on page TWO of the score-config list', async () => {
+    const decoy: ScoreConfigObj = { id: 'cfg-other', name: 'ground_truth', isArchived: false }
+    const mock = mockLangfuse({ scoreConfigs: [decoy, activeVerdictConfig], configsPerPage: 1 })
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    await exportSpans(cfg, [itemSpan('fail')])
+    expect(mock.scores[0].body.configId).toBe('cfg-verdict')
+  })
+
+  it('a metrics-only (no-verdict, non-mutation) trace emits NO score AND ZERO queue POSTs (INV-F)', async () => {
+    const mock = mockLangfuse()
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    // No scenario → the content-light shape → output is a completion/undefined, not a verdict.
+    const res = await exportSpans(cfg, [buildGenAiSpan({ ...baseParams, prompt: 'p' })])
+    expect(res.traces).toBe(1)
+    expect(mock.scores).toHaveLength(0)
+    expect(mock.itemPosts).toHaveLength(0)
+  })
+
+  it('a malformed span start_time_unix_nano does NOT abort shipping: trace ships + enqueue still runs (INV-A)', async () => {
+    // new Date(NaN).toISOString() throws RangeError — computed inside the score try, so
+    // it degrades to a skipped score, never a dropped trace or a lost enqueue.
+    const span = itemSpan('fail')
+    span.start_time_unix_nano = Number.NaN
+    const mock = mockLangfuse()
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const res = await exportSpans(cfg, [span], () => {})
+    expect(res.traces).toBe(1)
+    expect(res.failed).toBe(0)
+    expect(mock.scores).toHaveLength(0) // score skipped (timestamp threw)
+    expect(mock.itemPosts).toHaveLength(1) // fail still enqueued
+    expect(res.enqueue.enqueued).toBe(1)
+  })
+
+  it('the envelope timestamp is span-derived + STABLE across a UTC-date-crossing re-export', async () => {
+    const span = itemSpan('fail', { startMs: 5_000 })
+    const mock = mockLangfuse()
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-01T23:59:30Z'))
+    await exportSpans(cfg, [span])
+    vi.setSystemTime(new Date('2026-01-02T00:00:30Z'))
+    await exportSpans(cfg, [span])
+    const expectedTs = new Date(span.start_time_unix_nano / 1e6).toISOString()
+    expect(mock.scores).toHaveLength(2)
+    expect(mock.scores[0].timestamp).toBe(expectedTs)
+    expect(mock.scores[1].timestamp).toBe(expectedTs) // same despite crossing UTC midnight
+    expect(mock.scores[0].body.id).toBe(mock.scores[1].body.id) // stable body id → overwrite
+    expect(mock.scores[0].id).not.toBe(mock.scores[1].id) // fresh event id → not dropped
+  })
+
+  it('a rejecting score-create does NOT fail the trace ship', async () => {
+    const mock = mockLangfuse({ scoreError: true })
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const res = await exportSpans(cfg, [itemSpan('fail')], () => {})
+    expect(res.traces).toBe(1)
+    expect(res.failed).toBe(0)
+  })
+})
+
+describe('exportSpans — resolver failures are non-fatal', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('(a) score-config resolve 5xx → traces ship, score emitted UNBOUND', async () => {
+    const mock = mockLangfuse({ configError: true })
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const res = await exportSpans(cfg, [itemSpan('fail')], () => {})
+    expect(res.traces).toBe(1)
+    expect(res.failed).toBe(0)
+    expect(mock.scores).toHaveLength(1)
+    expect(mock.scores[0].body.configId).toBeUndefined()
+  })
+
+  it('(b) queue-list 5xx AFTER traces shipped → trace result intact, enqueue skipped, no throw', async () => {
+    const mock = mockLangfuse({ queueError: true })
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const res = await exportSpans(cfg, [itemSpan('fail')], () => {})
+    expect(res.traces).toBe(1)
+    expect(res.failed).toBe(0)
+    expect(res.enqueue.attempted).toBe(0)
+    expect(mock.itemPosts).toHaveLength(0)
+  })
+
+  it('(c) existing-items-list 5xx → trace result intact, enqueue skipped', async () => {
+    const mock = mockLangfuse({ itemsError: true })
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const res = await exportSpans(cfg, [itemSpan('fail')], () => {})
+    expect(res.traces).toBe(1)
+    expect(res.failed).toBe(0)
+    expect(res.enqueue.attempted).toBe(0)
+  })
+
+  it('(d) multiple active verdict configs → score UNBOUND; multiple queues → enqueue skipped', async () => {
+    const twoConfigs = mockLangfuse({
+      scoreConfigs: [activeVerdictConfig, { ...activeVerdictConfig, id: 'cfg-2' }],
+    })
+    vi.stubGlobal('fetch', twoConfigs.fetchImpl)
+    await exportSpans(cfg, [itemSpan('fail')], () => {})
+    expect(twoConfigs.scores[0].body.configId).toBeUndefined()
+    vi.restoreAllMocks()
+
+    const twoQueues = mockLangfuse({ queues: [triageQueue, { ...triageQueue, id: 'q-2' }] })
+    vi.stubGlobal('fetch', twoQueues.fetchImpl)
+    const res = await exportSpans(cfg, [itemSpan('fail')], () => {})
+    expect(res.failed).toBe(0)
+    expect(res.enqueue.attempted).toBe(0)
+  })
+
+  it('(e) ZERO / archived-only verdict config → score UNBOUND, still ships', async () => {
+    const none = mockLangfuse({ scoreConfigs: [] })
+    vi.stubGlobal('fetch', none.fetchImpl)
+    const res = await exportSpans(cfg, [itemSpan('fail')], () => {})
+    expect(res.traces).toBe(1)
+    expect(none.scores[0].body.configId).toBeUndefined()
+    vi.restoreAllMocks()
+
+    // An archived same-named config is NOT active → also unbound (isArchived !== false).
+    const archived = mockLangfuse({
+      scoreConfigs: [{ ...activeVerdictConfig, isArchived: true }],
+    })
+    vi.stubGlobal('fetch', archived.fetchImpl)
+    await exportSpans(cfg, [itemSpan('fail')], () => {})
+    expect(archived.scores[0].body.configId).toBeUndefined()
+  })
+})
+
+describe('exportSpans — enqueue predicate (INV-B/F, explicit closed union)', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('round of {2 fail, 1 unsure, 1 mutation-PASS trap, 5 pass}, salt=3 → 2+1+1+3 = 7, all TRACE', async () => {
+    const spans = [
+      itemSpan('fail', { behaviorId: 'F-1' }),
+      itemSpan('fail', { behaviorId: 'F-2' }),
+      itemSpan('unsure', { behaviorId: 'U-1' }),
+      itemSpan('pass', { behaviorId: 'T-1', mutation: { op: 'blank_dialog' } }),
+      ...Array.from({ length: 5 }, (_, i) => itemSpan('pass', { behaviorId: `P-${i}` })),
+    ]
+    const mock = mockLangfuse()
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const res = await exportSpans(cfg, spans, () => {}, {
+      saltPasses: 3,
+      runId: '20260717T151639Z',
+    })
+    expect(res.enqueue.enqueued).toBe(7)
+    expect(res.enqueue.attempted).toBe(7)
+    expect(mock.itemPosts).toHaveLength(7)
+    expect(mock.itemPosts.every(p => p.objectType === 'TRACE')).toBe(true)
+  })
+
+  it('a single mutation trace judged PASS is ALWAYS enqueued as a trap (INV-B)', async () => {
+    const mock = mockLangfuse()
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const res = await exportSpans(cfg, [itemSpan('pass', { mutation: { op: 'x' } })], () => {}, {
+      saltPasses: 0, // no salt — proves the enqueue is the TRAP, not a salted pass
+    })
+    expect(res.enqueue.enqueued).toBe(1)
+    expect(mock.itemPosts[0].objectType).toBe('TRACE')
+  })
+
+  it('a mutation trace with NO verdict (verdict === undefined) STILL enqueues as a trap (INV-B)', async () => {
+    // A doctored span with no scenario → no per-item verdict. Enqueue must fire on the
+    // mutation flag ALONE — never on a `verdict !== 'pass'` negation, which would also
+    // (wrongly) admit a verdictless NON-mutation trace.
+    const mock = mockLangfuse()
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const trap = buildGenAiSpan({ ...baseParams, prompt: 'p', mutation: { op: 'blank' } })
+    const res = await exportSpans(cfg, [trap], () => {}, { saltPasses: 0 })
+    expect(mock.scores).toHaveLength(0) // no verdict → no score
+    expect(res.enqueue.enqueued).toBe(1) // but still enqueued (mutation)
+    expect(mock.itemPosts[0].objectType).toBe('TRACE')
+  })
+})
+
+describe('exportSpans — enqueue idempotency + (objectType,objectId) key', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('re-export whose items are already queued → ZERO duplicate POSTs; skipped-existing counts', async () => {
+    const span = itemSpan('fail')
+    const tid = item0Id(span)
+    const mock = mockLangfuse({
+      existingItems: [{ id: 'e1', objectId: tid, objectType: 'TRACE', status: 'PENDING' }],
+    })
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const res = await exportSpans(cfg, [span], () => {})
+    expect(mock.itemPosts).toHaveLength(0)
+    expect(res.enqueue.skippedExisting).toBe(1)
+    expect(res.enqueue.attempted).toBe(0)
+  })
+
+  it('an existing OBSERVATION item with the SAME id does NOT suppress the TRACE enqueue', async () => {
+    const span = itemSpan('fail')
+    const tid = item0Id(span)
+    const mock = mockLangfuse({
+      existingItems: [{ id: 'e1', objectId: tid, objectType: 'OBSERVATION' }],
+    })
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const res = await exportSpans(cfg, [span], () => {})
+    expect(mock.itemPosts).toHaveLength(1)
+    expect(res.enqueue.enqueued).toBe(1)
+    expect(res.enqueue.skippedExisting).toBe(0)
+  })
+
+  it('a per-item POST failure does NOT abort the rest; attempted/enqueued/failed reported', async () => {
+    const spans = [
+      itemSpan('fail', { behaviorId: 'F-1' }),
+      itemSpan('fail', { behaviorId: 'F-2' }),
+      itemSpan('fail', { behaviorId: 'F-3' }),
+    ]
+    const mock = mockLangfuse({ failEnqueue: (_id, n) => n === 1 })
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const res = await exportSpans(cfg, spans, () => {})
+    expect(mock.itemPosts).toHaveLength(3) // all attempted, none short-circuited
+    expect(res.enqueue.attempted).toBe(3)
+    expect(res.enqueue.failed).toBe(1)
+    expect(res.enqueue.enqueued).toBe(2)
+    expect(res.failed).toBe(0) // an enqueue POST failure never touches trace-ship health
+  })
+})
+
+describe('exportSpans — queue pagination + PaginationError best-effort (INV-A)', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('resolves qa-triage on page 2 of the queue list AND walks all item pages to dedup', async () => {
+    const span = itemSpan('fail')
+    const tid = item0Id(span)
+    const mock = mockLangfuse({
+      queues: [{ id: 'q-other', name: 'other-queue' }, triageQueue],
+      queuesPerPage: 1, // qa-triage is on page 2
+      existingItems: [
+        { id: 'e1', objectId: 'zzz', objectType: 'TRACE' },
+        { id: 'e2', objectId: tid, objectType: 'TRACE' }, // on page 2 of items
+      ],
+      itemsPerPage: 1,
+    })
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const res = await exportSpans(cfg, [span], () => {})
+    expect(mock.itemPosts).toHaveLength(0) // tid found via the full item walk → skipped
+    expect(res.enqueue.skippedExisting).toBe(1)
+  })
+
+  it('a PaginationError resolving the queue → caught, enqueue skipped, results unchanged', async () => {
+    const mock = mockLangfuse({ queueMalformed: true })
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const res = await exportSpans(cfg, [itemSpan('fail')], () => {})
+    expect(res.traces).toBe(1)
+    expect(res.failed).toBe(0)
+    expect(res.enqueue.attempted).toBe(0)
+  })
+
+  it('a PaginationError reading existing items → caught, enqueue skipped', async () => {
+    const mock = mockLangfuse({ itemsMalformed: true })
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const res = await exportSpans(cfg, [itemSpan('fail')], () => {})
+    expect(res.traces).toBe(1)
+    expect(res.failed).toBe(0)
+    expect(res.enqueue.attempted).toBe(0)
+  })
+
+  it('no qa-triage queue found → logged once, export returns, not failed (INV-A)', async () => {
+    const logs: string[] = []
+    const mock = mockLangfuse({ queues: [] })
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const res = await exportSpans(cfg, [itemSpan('fail')], m => logs.push(m))
+    expect(res.traces).toBe(1)
+    expect(res.failed).toBe(0)
+    expect(res.enqueue.attempted).toBe(0)
+    expect(logs.some(l => l.includes('enqueue') && l.includes('skipped'))).toBe(true)
+  })
+})
+
+describe('stableSample (pure, deterministic salt sampler)', () => {
+  it('matches the GOLDEN SHA-256 selection (pins the exact algorithm, not just order-independence)', () => {
+    // digest = SHA-256(runId + "\0" + id); sort by (digest, id); take first n.
+    // Golden computed independently for these fixed inputs — a naive first-N or a
+    // different hash/separator would not reproduce this exact set.
+    const ids = ['t-a', 't-b', 't-c', 't-d', 't-e', 't-f']
+    expect(stableSample(ids, 3, '20260717T151639Z')).toEqual(['t-d', 't-e', 't-c'])
+  })
+
+  it('is order-independent: a permuted input selects the SAME ids (not a naive first-N)', () => {
+    const ids = ['t-a', 't-b', 't-c', 't-d', 't-e', 't-f']
+    const runId = '20260717T151639Z'
+    const first = stableSample(ids, 3, runId)
+    const permuted = stableSample([...ids].reverse(), 3, runId)
+    expect(permuted).toEqual(first)
+    expect(first).toEqual(['t-d', 't-e', 't-c']) // same golden set regardless of input order
+  })
+
+  it('is stable across re-runs (same round → same passes)', () => {
+    const ids = ['x1', 'x2', 'x3', 'x4']
+    expect(stableSample(ids, 2, 'r')).toEqual(stableSample(ids, 2, 'r'))
+  })
+
+  it('oversized n → all ids (min(n, available)); n<=0 or empty → []', () => {
+    expect([...stableSample(['a', 'b'], 5, 'r')].sort()).toEqual(['a', 'b'])
+    expect(stableSample(['a'], 0, 'r')).toEqual([])
+    expect(stableSample([], 3, 'r')).toEqual([])
+  })
+
+  it('runId feeds the hash: a different round yields a different full ordering', () => {
+    const ids = Array.from({ length: 20 }, (_, i) => `id-${i}`)
+    // Full-order (n = all) under two runIds — an identical ordering is ~1/20! (never).
+    expect(stableSample(ids, ids.length, 'round-1')).not.toEqual(
+      stableSample(ids, ids.length, 'round-2')
+    )
+  })
+})
+
+describe('exportSpans — salt integration (default + stability + clamp)', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  const passRound = (): GenAiSpan[] =>
+    Array.from({ length: 5 }, (_, i) => itemSpan('pass', { behaviorId: `P-${i}` }))
+
+  it('undefined saltPasses defaults to 3', async () => {
+    const mock = mockLangfuse()
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const res = await exportSpans(cfg, passRound())
+    expect(res.enqueue.enqueued).toBe(3)
+  })
+
+  it('re-export of the same round selects the SAME salted passes', async () => {
+    const spans = passRound()
+    const run = async (): Promise<string[]> => {
+      const mock = mockLangfuse()
+      vi.stubGlobal('fetch', mock.fetchImpl)
+      await exportSpans(cfg, spans, () => {}, { saltPasses: 2, runId: '20260717T151639Z' })
+      vi.restoreAllMocks()
+      return mock.itemPosts.map(p => p.objectId).sort()
+    }
+    const a = await run()
+    const b = await run()
+    expect(a).toEqual(b)
+    expect(a).toHaveLength(2)
+  })
+
+  it('saltPasses larger than the pass pool enqueues all passes (clamped)', async () => {
+    const spans = Array.from({ length: 2 }, (_, i) => itemSpan('pass', { behaviorId: `P-${i}` }))
+    const mock = mockLangfuse()
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const res = await exportSpans(cfg, spans, () => {}, { saltPasses: 10 })
+    expect(res.enqueue.enqueued).toBe(2)
   })
 })
