@@ -646,6 +646,16 @@ describe('apiGetAllPages — query preservation + dedup + malformed', () => {
     expect(out.map(o => o.id)).toEqual(['a', 'b', 'c'])
   })
 
+  it('throws on a non-object envelope (2xx JSON null / scalar / array)', async () => {
+    for (const json of [null, 7, [{ id: 'a' }]]) {
+      const mock = scripted([{ json }])
+      vi.stubGlobal('fetch', mock.impl)
+      await expect(apiGetAllPages(cfg, '/api/public/score-configs', 'page')).rejects.toBeInstanceOf(
+        PaginationError
+      )
+    }
+  })
+
   it('throws on missing data array', async () => {
     const mock = scripted([
       { json: { meta: { page: 1, limit: 100, totalItems: 0, totalPages: 1 } } },

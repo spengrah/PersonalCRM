@@ -295,8 +295,9 @@ export async function api(
 //              until `page >= totalPages`.
 //   'cursor' — scores v3. Sends/follows `cursor`; meta is `{limit, cursor?}`. The
 //              cursor PROPERTY is ABSENT on the terminal page, INCLUDING a one-page
-//              result — do NOT mistake a valid empty meta for malformed. A present
-//              cursor (even null) that isn't a non-empty string is malformed.
+//              result — do NOT mistake a valid meta with no cursor property for
+//              malformed. A present cursor (even null) that isn't a non-empty string
+//              is malformed.
 //
 // It MERGES its pagination params into whatever query the caller already put on
 // `path` (callers filter by tag/name), never clobbering them. It throws
@@ -336,13 +337,20 @@ export async function apiGetAllPages(
       params.set('cursor', cursor)
     }
     const query = params.toString()
-    const res = await api(cfg, 'GET', query ? `${basePath}?${query}` : basePath)
+    const res: unknown = await api(cfg, 'GET', query ? `${basePath}?${query}` : basePath)
 
-    const data = res.data
+    // A 2xx `null`/scalar/array body is a malformed envelope — raise PaginationError
+    // rather than letting `.data` throw an untyped TypeError.
+    if (res === null || typeof res !== 'object' || Array.isArray(res)) {
+      throw new PaginationError(`${basePath}: response envelope is not a JSON object`)
+    }
+    const envelope = res as Record<string, unknown>
+
+    const data = envelope.data
     if (!Array.isArray(data)) {
       throw new PaginationError(`${basePath}: response missing 'data' array`)
     }
-    const meta = res.meta
+    const meta = envelope.meta
     if (meta === null || typeof meta !== 'object' || Array.isArray(meta)) {
       throw new PaginationError(`${basePath}: missing or malformed 'meta' object`)
     }
