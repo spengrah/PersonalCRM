@@ -19,6 +19,7 @@ import type { PerItemVerdict } from '../adapter/types'
 import type { GradedEvidenceEntry, Scenario } from '../label-trace'
 import { SCREENSHOT_CAVEAT } from '../label-trace'
 import { createScrubber, scrubValue, type Scrubber } from '../scrub'
+import { TRIAGE_QUEUE_NAME, VERDICT_SCORE_NAME } from './triage-config'
 
 export interface LangfuseConfig {
   host: string
@@ -327,7 +328,6 @@ export async function apiGetAllPages(
     return v as number
   }
 
-  // eslint-disable-next-line no-constant-condition
   while (true) {
     const params = new URLSearchParams(baseParams)
     params.set('limit', String(LIMIT))
@@ -479,14 +479,80 @@ export interface ExportResult {
   traces: number
   screenshots: number
   failed: number
+  // Best-effort triage enqueue (INV-A): never affects trace shipping / process exit.
+  // `attempted` = POSTs issued (eligible minus already-present); `enqueued` +
+  // `failed` partition it; `skippedExisting` = eligible items already in the queue.
+  enqueue: {
+    attempted: number
+    enqueued: number
+    skippedExisting: number
+    failed: number
+  }
+}
+
+type Verdict = 'pass' | 'fail' | 'unsure'
+
+const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
+
+// The per-item-trace verdict IS that trace's `output` (a PerItemVerdict). The enum
+// value is identifier-valued and survives the deep PII scrub untouched, so reading it
+// back off the built body needs no re-derivation from the span. Non-graded shapes
+// (metrics-only / no-scenario completion) have a string/undefined output → no verdict.
+function bodyVerdict(body: TraceBody): Verdict | undefined {
+  const out = body.output
+  if (out !== null && typeof out === 'object' && !Array.isArray(out)) {
+    const v = (out as { verdict?: unknown }).verdict
+    if (v === 'pass' || v === 'fail' || v === 'unsure') return v
+  }
+  return undefined
+}
+
+// A STABLE per-round sample of PASS trace ids for the triage salt. Deterministic by
+// construction (no RNG): hash each id under the round's `runId` with a NUL separator,
+// sort by (digest, traceId), take the first n. Re-exporting the same round selects the
+// SAME passes, so it never inflates the queue or biases the recall rate. `runId` is
+// '' when provenance is absent — still deterministic, just keyed on the id alone.
+// Order-independent: a permuted input yields the same selection.
+export function stableSample(passIds: string[], n: number, runId: string): string[] {
+  if (n <= 0 || passIds.length === 0) return []
+  const keyed = passIds.map(id => ({
+    id,
+    digest: crypto.createHash('sha256').update(`${runId}\0${id}`).digest('hex'),
+  }))
+  keyed.sort((a, b) =>
+    a.digest < b.digest ? -1 : a.digest > b.digest ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+  )
+  return keyed.slice(0, Math.min(n, keyed.length)).map(k => k.id)
+}
+
+// One item-trace's triage inputs, collected during the ship loop and consumed by the
+// enqueue pass after every trace has shipped (INV-B: a trap-miss trace still enqueues).
+interface EnqueueItem {
+  traceId: string
+  verdict?: Verdict
+  isMutation: boolean
+}
+
+// Validated provenance + salt config, applied at export time (contract #3). All
+// values are pre-validated by the caller (run.ts); `exportSpans` never re-parses.
+export interface ExportOptions {
+  runId?: string
+  gitSha?: string
+  saltPasses?: number
 }
 
 export async function exportSpans(
   cfg: LangfuseConfig,
   spans: GenAiSpan[],
-  log: (msg: string) => void = () => {}
+  log: (msg: string) => void = () => {},
+  opts: ExportOptions = {}
 ): Promise<ExportResult> {
-  const result: ExportResult = { traces: 0, screenshots: 0, failed: 0 }
+  const result: ExportResult = {
+    traces: 0,
+    screenshots: 0,
+    failed: 0,
+    enqueue: { attempted: 0, enqueued: 0, skippedExisting: 0, failed: 0 },
+  }
 
   // One scrubber for the whole export so the same email/phone maps to the same
   // placeholder across every span in this run (arc INV-2).
@@ -498,7 +564,40 @@ export async function exportSpans(
   // OVERWRITES). One nonce per submission gives both (INV-6).
   const nonce = crypto.randomUUID()
 
+  // The verdict score binds to its config by id. Resolve LAZILY, ONCE, and GUARDED:
+  // a resolve failure (or a zero/multiple-match) degrades scores to UNBOUND and must
+  // NEVER abort trace shipping. Cached across the run.
+  let configResolved = false
+  let verdictConfigId: string | undefined
+  const resolveVerdictConfigId = async (): Promise<string | undefined> => {
+    if (configResolved) return verdictConfigId
+    configResolved = true
+    try {
+      const configs = await apiGetAllPages(cfg, '/api/public/score-configs', 'page')
+      const active = configs.filter(
+        c => c.name === VERDICT_SCORE_NAME && (c as { isArchived?: unknown }).isArchived === false
+      )
+      if (active.length === 1 && typeof active[0].id === 'string') {
+        verdictConfigId = active[0].id as string
+      } else {
+        log(
+          `  verdict score-config: expected exactly 1 active '${VERDICT_SCORE_NAME}', ` +
+            `found ${active.length} — scores emitted UNBOUND`
+        )
+      }
+    } catch (err) {
+      log(`  verdict score-config resolve failed (${errMsg(err)}) — scores emitted UNBOUND`)
+    }
+    return verdictConfigId
+  }
+
+  // Per-item-trace triage inputs, drained by the enqueue pass after the ship loop.
+  const enqueueItems: EnqueueItem[] = []
+
   for (const span of spans) {
+    // Mutation is a SPAN-level property (`qa.mutation`): every item-trace fanned out
+    // of a doctored span is a trap trace (INV-B — always an enqueue candidate).
+    const isMutation = span.attributes['qa.mutation'] !== undefined
     const behaviorId = String(span.attributes['qa.behavior_id'] ?? 'unknown')
     // The per-index screenshot paths, from the span's graded_evidence — the
     // reviewer sees each token attributed to its OWN capture, so registration is
@@ -560,24 +659,178 @@ export async function exportSpans(
         const attached = finalTokens.filter((t): t is string => typeof t === 'string').length
         result.screenshots += attached
 
-        // (3) The final body event carries the tokens attached by index.
+        // (3) The final body event carries the tokens attached by index, plus the
+        // trace tags + session. The `behavior:` tag is ALWAYS emitted (the downstream
+        // backfill CLI's lookup key — it comes from the span, not env); `runId:`/
+        // `gitSha:` tags + `sessionId` ride only the valid components (contract #3).
+        // All values are identifier/enum by construction (INV-D).
+        const finalBody = attachTokens(body, finalTokens)
+        const tags = [`behavior:${behaviorId}`]
+        if (opts.runId) tags.push(`runId:${opts.runId}`)
+        if (opts.gitSha) tags.push(`gitSha:${opts.gitSha}`)
+        const wireBody: Record<string, unknown> = { ...finalBody, tags }
+        if (opts.runId) wireBody.sessionId = opts.runId
         await api(cfg, 'POST', '/api/public/ingestion', {
           batch: [
             {
               id: `evt-${body.id}-${nonce}`,
               type: 'trace-create',
               timestamp: new Date().toISOString(),
-              body: attachTokens(body, finalTokens),
+              body: wireBody,
             },
           ],
         })
         result.traces++
         log(`  ${behaviorId} → ${body.id} (media ${attached}/${expected})`)
+
+        // (4) Verdict-as-score: a SEPARATE, non-fatal ingestion request AFTER the
+        // trace shipped (contract #4). NOT co-batched — a rejecting score must not
+        // couple/fail the trace ship (INV-A). Metrics-only shapes have no verdict → no
+        // score. The ENTIRE score step is inside its own try/catch (including the
+        // span-start timestamp conversion) so NOTHING here — not a malformed
+        // start_time_unix_nano, not a resolve/ingest failure — can abort the already-
+        // shipped trace or the enqueue collection below.
+        const verdict = bodyVerdict(finalBody)
+        if (verdict) {
+          try {
+            // Span-derived ENVELOPE timestamp so a re-export on a later UTC date does
+            // not duplicate the score. A malformed/out-of-range start_time_unix_nano
+            // makes toISOString() throw RangeError — caught here, degrading to a
+            // skipped score, never a dropped trace.
+            const spanStartIso = new Date(span.start_time_unix_nano / 1e6).toISOString()
+            const configId = await resolveVerdictConfigId()
+            const scoreBody: Record<string, unknown> = {
+              id: `score-${body.id}-verdict`,
+              name: VERDICT_SCORE_NAME,
+              value: verdict,
+              dataType: 'CATEGORICAL',
+              traceId: body.id,
+            }
+            if (configId) scoreBody.configId = configId
+            await api(cfg, 'POST', '/api/public/ingestion', {
+              batch: [
+                {
+                  id: `evt-${body.id}-score-${nonce}`,
+                  type: 'score-create',
+                  timestamp: spanStartIso,
+                  body: scoreBody,
+                },
+              ],
+            })
+          } catch (err) {
+            log(`  score-create failed for ${body.id}: ${errMsg(err)}`)
+          }
+        }
+
+        // Collect for the post-loop enqueue pass (runs even on a trap miss — INV-B).
+        enqueueItems.push({ traceId: body.id, verdict, isMutation })
       } catch (err) {
         result.failed++
         log(`  FAILED ${behaviorId}: ${err instanceof Error ? err.message : String(err)}`)
       }
     }
   }
+
+  // After every trace has shipped, route fails/traps/salt into the triage queue.
+  // Wholly best-effort: a resolve/list failure or a per-item POST failure logs and
+  // continues, never touching `result.traces`/`failed` or the process exit (INV-A).
+  await runEnqueue(cfg, enqueueItems, result, opts, log)
+
   return result
+}
+
+// The triage enqueue pass (contract #4, INV-A/B/F). Idempotent + single-writer:
+// resolve the standing queue, read its existing items ONCE, and POST only the
+// eligible items not already present, each in its own try/catch. Eligibility is an
+// EXPLICIT closed union — never a `verdict !== 'pass'` negation, which would admit a
+// verdictless (metrics-only) trace via `undefined !== 'pass'`.
+async function runEnqueue(
+  cfg: LangfuseConfig,
+  items: EnqueueItem[],
+  result: ExportResult,
+  opts: ExportOptions,
+  log: (msg: string) => void
+): Promise<void> {
+  try {
+    const queues = await apiGetAllPages(cfg, '/api/public/annotation-queues', 'page')
+    const matches = queues.filter(q => q.name === TRIAGE_QUEUE_NAME)
+    if (matches.length !== 1 || typeof matches[0].id !== 'string') {
+      log(
+        `  enqueue: expected exactly 1 '${TRIAGE_QUEUE_NAME}' queue, ` +
+          `found ${matches.length} — enqueue skipped`
+      )
+      return
+    }
+    const queueId = matches[0].id as string
+
+    // Existing items → already-present set keyed by (objectType, objectId): the API
+    // identity includes objectType, so a same-id OBSERVATION item must NOT suppress a
+    // TRACE enqueue. Annotation-queue POST has no server dedup — this is the only guard
+    // against re-export duplication (safe: export is single-writer per round).
+    const existing = await apiGetAllPages(
+      cfg,
+      `/api/public/annotation-queues/${queueId}/items`,
+      'page'
+    )
+    const present = new Set<string>()
+    const key = (objectType: string, objectId: string): string => `${objectType}\0${objectId}`
+    for (const it of existing) {
+      const objectType = (it as { objectType?: unknown }).objectType
+      const objectId = (it as { objectId?: unknown }).objectId
+      if (typeof objectType === 'string' && typeof objectId === 'string') {
+        present.add(key(objectType, objectId))
+      }
+    }
+
+    // Salt pool = non-mutation PASS trace ids; a STABLE per-round sample of them.
+    const passIds = items.filter(i => !i.isMutation && i.verdict === 'pass').map(i => i.traceId)
+    const n = opts.saltPasses ?? 3
+    const salted = new Set(stableSample(passIds, n, opts.runId ?? ''))
+
+    let failUnsure = 0
+    let traps = 0
+    let salt = 0
+    const eligible = items.filter(i => {
+      if (i.isMutation) {
+        traps++
+        return true
+      }
+      if (i.verdict === 'fail' || i.verdict === 'unsure') {
+        failUnsure++
+        return true
+      }
+      if (i.verdict === 'pass' && salted.has(i.traceId)) {
+        salt++
+        return true
+      }
+      return false
+    })
+
+    for (const item of eligible) {
+      const k = key('TRACE', item.traceId)
+      if (present.has(k)) {
+        result.enqueue.skippedExisting++
+        continue
+      }
+      result.enqueue.attempted++
+      try {
+        await api(cfg, 'POST', `/api/public/annotation-queues/${queueId}/items`, {
+          objectId: item.traceId,
+          objectType: 'TRACE',
+        })
+        result.enqueue.enqueued++
+        present.add(k) // guard against a duplicate id within this same batch
+      } catch (err) {
+        result.enqueue.failed++
+        log(`  enqueue failed for ${item.traceId}: ${errMsg(err)}`)
+      }
+    }
+    log(
+      `  enqueued ${result.enqueue.enqueued}/${result.enqueue.attempted} ` +
+        `(${failUnsure} fail/unsure, ${traps} trap, ${salt} salt; ` +
+        `${result.enqueue.skippedExisting} skipped-existing; ${result.enqueue.failed} failed)`
+    )
+  } catch (err) {
+    log(`  enqueue skipped: ${errMsg(err)}`)
+  }
 }
