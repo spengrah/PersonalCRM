@@ -181,6 +181,13 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await page.goto('/contacts')
     await page.waitForLoadState('domcontentloaded')
 
+    // Scope to this test's own rows via search — the unscoped table can
+    // otherwise hold other workers' rows too, and first()/last() would
+    // resolve against the wrong contact.
+    const searchInput = page.getByPlaceholder('Search contacts...')
+    await searchInput.fill(`${testApi.prefix}-Context Menu Test`)
+    await searchInput.press('Enter')
+
     // Find the last visible row's action button
     const rows = page.locator('tbody tr')
     await expect(rows.first()).toBeVisible({ timeout: 15000 })
@@ -611,9 +618,6 @@ test.describe('Contacts - Cadence Filter @area:contacts', () => {
 })
 
 test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', () => {
-  // UI tests need serial mode since they create contacts via UI without TestAPI isolation
-  test.describe.configure({ mode: 'serial' })
-
   let testApi: TestAPI
 
   test.beforeEach(async ({ request }, testInfo) => {
@@ -765,6 +769,9 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
 
   // spec: CON-057[0]
   test('should sort by Next Contact column when header clicked', async ({ page }) => {
+    // Two sequential click -> response round trips under real parallel
+    // worker load can exceed the default 30s budget; give this test room.
+    test.setTimeout(60000)
     await testApi.seedContacts([
       {
         full_name: 'SortNext Contact',
@@ -803,6 +810,9 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
 
   // spec: CON-057[0]
   test('should sort by Last response column when header clicked', async ({ page }) => {
+    // Two sequential click -> response round trips under real parallel
+    // worker load can exceed the default 30s budget; give this test room.
+    test.setTimeout(60000)
     await testApi.seedContacts([{ full_name: 'SortResp Contact' }])
 
     await page.goto('/contacts')

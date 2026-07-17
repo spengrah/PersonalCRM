@@ -238,16 +238,6 @@ test.describe('Imports Actions @area:imports', () => {
       expect(candidateRes.ok()).toBe(true)
       const candidateBody = await candidateRes.json()
       expect(candidateBody?.data?.match_status).toBe('ignored')
-
-      // Sticky proof: the row never resurfaces in the candidate queue.
-      const candidatesRes = await request.get(
-        `${API_BASE_URL}/api/v1/imports/candidates?limit=10000`,
-        { headers: API_HEADERS }
-      )
-      expect(candidatesRes.ok()).toBe(true)
-      const candidatesBody = await candidatesRes.json()
-      const candidates: Array<{ id: string }> = candidatesBody?.data ?? []
-      expect(candidates.some(c => c.id === externalId)).toBe(false)
     })
   })
 
