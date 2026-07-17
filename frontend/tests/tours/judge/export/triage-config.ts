@@ -1,18 +1,19 @@
 // Single source of truth for the QA triage substrate names + score-config specs.
 //
-// WHY THIS EXISTS (arc contract #2): the setup script, the exporter (PR2), and the
-// backfill CLI (PR3) all reference the SAME triage queue + score names. A name typo
-// split across those call sites would silently bind/emit the wrong score or create a
-// second queue / drop items. Everything downstream imports these constants — nobody
-// spells `'verdict'` / `'qa-triage'` inline.
+// WHY THIS EXISTS: the setup script, the exporter, and the backfill CLI all
+// reference the SAME triage queue + score names. A name typo split across those call
+// sites would silently bind/emit the wrong score or create a second queue / drop
+// items. Everything downstream imports these constants — nobody spells
+// `'verdict'` / `'qa-triage'` inline.
 
 // The standing annotation queue the judge's fails/traps land in for human triage.
 export const TRIAGE_QUEUE_NAME = 'qa-triage'
 
-// The judge's PROGRAMMATIC verdict score. PR2 emits it on the trace by `configId`;
-// PR3 reads it back. It is deliberately NOT a queue-editable dimension (see
-// TRIAGE_QUEUE_SCORE_CONFIGS) — a second, human-authored `verdict` would overwrite
-// the judge's and destroy the judge-vs-human delta the calibration loop measures.
+// The judge's PROGRAMMATIC verdict score. The exporter emits it on the trace by
+// `configId`; the backfill CLI reads it back. It is deliberately NOT a queue-editable
+// dimension (see TRIAGE_QUEUE_SCORE_CONFIGS) — a second, human-authored `verdict`
+// would overwrite the judge's and destroy the judge-vs-human delta the calibration
+// loop measures.
 export const VERDICT_SCORE_NAME = 'verdict'
 
 export interface ScoreCategory {

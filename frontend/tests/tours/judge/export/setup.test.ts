@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { apiGetAllPages, PaginationError, type LangfuseConfig } from './langfuse'
 import { main } from './setup'
-import { SCORE_CONFIGS, TRIAGE_QUEUE_NAME, VERDICT_SCORE_NAME } from './triage-config'
+import {
+  SCORE_CONFIGS,
+  TRIAGE_QUEUE_NAME,
+  TRIAGE_QUEUE_SCORE_CONFIGS,
+  VERDICT_SCORE_NAME,
+} from './triage-config'
 
 const cfg: LangfuseConfig = { host: 'http://lf', publicKey: 'p', secretKey: 's' }
 const creds = {
@@ -138,6 +143,49 @@ const silent = { log: () => {}, err: () => {} }
 
 afterEach(() => vi.restoreAllMocks())
 
+describe('triage-config — literal contract', () => {
+  // These assert LITERAL values so a change to the names/labels/encodings in
+  // triage-config.ts is caught here rather than silently tracked by tests that
+  // derive their expectations from SCORE_CONFIGS.
+  it('pins the queue + verdict names', () => {
+    expect(TRIAGE_QUEUE_NAME).toBe('qa-triage')
+    expect(VERDICT_SCORE_NAME).toBe('verdict')
+    expect(TRIAGE_QUEUE_SCORE_CONFIGS).toEqual(['ground_truth', 'disposition'])
+  })
+
+  it('pins the exact score-config matrix (names, dataType, categories + numeric encodings)', () => {
+    expect(SCORE_CONFIGS).toEqual([
+      {
+        name: 'verdict',
+        dataType: 'CATEGORICAL',
+        categories: [
+          { label: 'pass', value: 1 },
+          { label: 'unsure', value: 0 },
+          { label: 'fail', value: -1 },
+        ],
+      },
+      {
+        name: 'ground_truth',
+        dataType: 'CATEGORICAL',
+        categories: [
+          { label: 'should_pass', value: 1 },
+          { label: 'unsure', value: 0 },
+          { label: 'should_fail', value: -1 },
+        ],
+      },
+      {
+        name: 'disposition',
+        dataType: 'CATEGORICAL',
+        categories: [
+          { label: 'acted', value: 1 },
+          { label: 'deferred', value: 0 },
+          { label: 'dismissed', value: -1 },
+        ],
+      },
+    ])
+  })
+})
+
 describe('setup.main — provisioning', () => {
   it('fresh tenant: creates all 3 configs + the queue with ground_truth+disposition dims ONLY', async () => {
     const mock = tenantMock({})
@@ -145,19 +193,47 @@ describe('setup.main — provisioning', () => {
     const code = await main(creds, silent.log, silent.err)
     expect(code).toBe(0)
 
+    // Assert the EXACT POST bodies against LITERAL expected values (not values
+    // derived from SCORE_CONFIGS). This locks the wire contract: a changed name /
+    // encoding OR any added field (INV-D: no new free-text on the wire) fails here.
     const configPosts = postsTo(mock.calls, '/api/public/score-configs')
-    expect(configPosts.map(c => c.body!.name)).toEqual(SCORE_CONFIGS.map(s => s.name))
-    for (const [i, spec] of SCORE_CONFIGS.entries()) {
-      expect(configPosts[i].body!.dataType).toBe('CATEGORICAL')
-      expect(configPosts[i].body!.categories).toEqual(spec.categories)
-    }
+    expect(configPosts.map(c => c.body)).toEqual([
+      {
+        name: 'verdict',
+        dataType: 'CATEGORICAL',
+        categories: [
+          { label: 'pass', value: 1 },
+          { label: 'unsure', value: 0 },
+          { label: 'fail', value: -1 },
+        ],
+      },
+      {
+        name: 'ground_truth',
+        dataType: 'CATEGORICAL',
+        categories: [
+          { label: 'should_pass', value: 1 },
+          { label: 'unsure', value: 0 },
+          { label: 'should_fail', value: -1 },
+        ],
+      },
+      {
+        name: 'disposition',
+        dataType: 'CATEGORICAL',
+        categories: [
+          { label: 'acted', value: 1 },
+          { label: 'deferred', value: 0 },
+          { label: 'dismissed', value: -1 },
+        ],
+      },
+    ])
 
-    const queuePosts = postsTo(mock.calls, '/api/public/annotation-queues')
-    expect(queuePosts).toHaveLength(1)
-    expect(queuePosts[0].body!.name).toBe(TRIAGE_QUEUE_NAME)
     // Creation order is verdict, ground_truth, disposition → new-sc-0/1/2. The queue
-    // references the two HUMAN ids only (new-sc-1, new-sc-2), NOT verdict's new-sc-0.
-    expect(queuePosts[0].body!.scoreConfigIds).toEqual(['new-sc-1', 'new-sc-2'])
+    // body is EXACT: references the two HUMAN ids only (new-sc-1, new-sc-2), NOT
+    // verdict's new-sc-0, and carries no other field.
+    const queuePosts = postsTo(mock.calls, '/api/public/annotation-queues')
+    expect(queuePosts.map(c => c.body)).toEqual([
+      { name: 'qa-triage', scoreConfigIds: ['new-sc-1', 'new-sc-2'] },
+    ])
   })
 
   it('fully-provisioned + matching → ZERO POSTs (idempotency)', async () => {
@@ -218,6 +294,39 @@ describe('setup.main — provisioning', () => {
       expect(code).toBe(1)
       expect(mock.calls.filter(c => c.method === 'POST')).toHaveLength(0)
     }
+  })
+
+  it('drift — mismatched dataType → non-zero, zero POSTs', async () => {
+    const wrongType = goodConfig(VERDICT_SCORE_NAME)
+    ;(wrongType as unknown as { dataType: string }).dataType = 'NUMERIC'
+    const mock = tenantMock({ configPages: [[wrongType]] })
+    vi.stubGlobal('fetch', mock.impl)
+    const code = await main(creds, silent.log, silent.err)
+    expect(code).toBe(1)
+    expect(mock.calls.filter(c => c.method === 'POST')).toHaveLength(0)
+  })
+
+  it('drift — duplicate qa-triage queue (two distinct ids) → non-zero, zero POSTs', async () => {
+    const configs = SCORE_CONFIGS.map(s => goodConfig(s.name))
+    const q1: QueueObj = {
+      id: 'q-a',
+      name: TRIAGE_QUEUE_NAME,
+      scoreConfigIds: ['ground_truth-id', 'disposition-id'],
+    }
+    const q2: QueueObj = { ...q1, id: 'q-b' }
+    const mock = tenantMock({ configPages: [configs], queuePages: [[q1, q2]] })
+    vi.stubGlobal('fetch', mock.impl)
+    const code = await main(creds, silent.log, silent.err)
+    expect(code).toBe(1)
+    expect(mock.calls.filter(c => c.method === 'POST')).toHaveLength(0)
+  })
+
+  it('GET-side ApiError (score-config read returns 500) → non-zero, zero POSTs (fail-closed)', async () => {
+    const mock = scripted([{ status: 500, json: 'boom' }])
+    vi.stubGlobal('fetch', mock.impl)
+    const code = await main(creds, silent.log, silent.err)
+    expect(code).toBe(1)
+    expect(mock.calls.filter(c => c.method === 'POST')).toHaveLength(0)
   })
 
   it('drift — duplicate category label masking a missing one → non-zero, zero POSTs', async () => {
@@ -351,6 +460,30 @@ describe('apiGetAllPages — page protocol', () => {
     expect(await apiGetAllPages(cfg, '/api/public/annotation-queues', 'page')).toEqual([])
   })
 
+  it('ACCEPTS a fully-duplicate TERMINAL page (guard only fires on continuation)', async () => {
+    // page 2 of 2 repeats page 1 entirely — it is terminal, so no-progress does NOT fire.
+    const mock = scripted([
+      pageResp([{ id: 'a' }, { id: 'b' }], 1, 2),
+      pageResp([{ id: 'a' }, { id: 'b' }], 2, 2),
+    ])
+    vi.stubGlobal('fetch', mock.impl)
+    const out = await apiGetAllPages(cfg, '/api/public/score-configs', 'page')
+    expect(out.map(o => o.id)).toEqual(['a', 'b'])
+  })
+
+  it('preserves caller filters on every page request (MERGES page+limit)', async () => {
+    const mock = scripted([pageResp([{ id: 'a' }], 1, 2), pageResp([{ id: 'b' }], 2, 2)])
+    vi.stubGlobal('fetch', mock.impl)
+    await apiGetAllPages(cfg, '/api/public/score-configs?foo=bar&x=1', 'page')
+    for (const c of mock.calls) {
+      expect(c.url).toContain('foo=bar')
+      expect(c.url).toContain('x=1')
+      expect(c.url).toContain('limit=100')
+    }
+    expect(mock.calls[0].url).toContain('page=1')
+    expect(mock.calls[1].url).toContain('page=2')
+  })
+
   it('throws when a non-terminal page adds no new ids (no-progress guard)', async () => {
     // page 1 of 3 = [a]; page 2 of 3 repeats [a] → no new id but more pages remain.
     const mock = scripted([pageResp([{ id: 'a' }], 1, 3), pageResp([{ id: 'a' }], 2, 3)])
@@ -423,6 +556,15 @@ describe('apiGetAllPages — cursor protocol (scores v3)', () => {
     )
   })
 
+  it('ACCEPTS a fully-duplicate TERMINAL cursor page (guard only fires on continuation)', async () => {
+    // page 2 repeats page 1's id but is terminal (no cursor) → no-progress does NOT fire.
+    const mock = scripted([cursorResp([{ id: 's1' }], 'CUR2'), cursorResp([{ id: 's1' }])])
+    vi.stubGlobal('fetch', mock.impl)
+    expect((await apiGetAllPages(cfg, '/api/public/v3/scores', 'cursor')).map(o => o.id)).toEqual([
+      's1',
+    ])
+  })
+
   it('throws on a present non-string / empty cursor', async () => {
     for (const bad of [123, '']) {
       const mock = scripted([{ json: { data: [{ id: 's1' }], meta: { limit: 100, cursor: bad } } }])
@@ -435,6 +577,16 @@ describe('apiGetAllPages — cursor protocol (scores v3)', () => {
 
   it('rejects page metadata under cursor mode (protocol mix)', async () => {
     const mock = scripted([pageResp([{ id: 's1' }], 1, 1)])
+    vi.stubGlobal('fetch', mock.impl)
+    await expect(apiGetAllPages(cfg, '/api/public/v3/scores', 'cursor')).rejects.toBeInstanceOf(
+      PaginationError
+    )
+  })
+
+  it('rejects a page-only totalItems under cursor mode (no silent truncation)', async () => {
+    // {limit, totalItems} has no cursor property → would otherwise look terminal, but
+    // totalItems is page-protocol metadata and must be rejected as a protocol mix.
+    const mock = scripted([{ json: { data: [{ id: 's1' }], meta: { limit: 100, totalItems: 1 } } }])
     vi.stubGlobal('fetch', mock.impl)
     await expect(apiGetAllPages(cfg, '/api/public/v3/scores', 'cursor')).rejects.toBeInstanceOf(
       PaginationError
@@ -515,14 +667,25 @@ describe('apiGetAllPages — query preservation + dedup + malformed', () => {
 })
 
 describe('setup.ts — import without side effects', () => {
-  it('importing the module runs no arg-validation / network / process.exit', async () => {
+  it('importing the module runs no network / logging / exit — discriminates the import.meta.main guard', async () => {
+    // If the guard were removed, `void main()` would run on import: with creds absent
+    // main() SYNCHRONOUSLY logs a config error (console.error) before any await; with
+    // creds present it SYNCHRONOUSLY calls fetch before its first await. Asserting
+    // none of those fire (nor process.exit / a changed exitCode) makes this test
+    // actually fail if the guard is dropped — regardless of ambient LANGFUSE_* env.
     vi.resetModules()
-    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
+    const exitCodeBefore = process.exitCode
     const fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
     const mod = await import('./setup')
     expect(typeof mod.main).toBe('function')
     expect(fetchSpy).not.toHaveBeenCalled()
+    expect(logSpy).not.toHaveBeenCalled()
+    expect(errSpy).not.toHaveBeenCalled()
     expect(exitSpy).not.toHaveBeenCalled()
+    expect(process.exitCode).toBe(exitCodeBefore)
   })
 })

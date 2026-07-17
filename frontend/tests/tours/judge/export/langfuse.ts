@@ -244,9 +244,9 @@ function authHeader(cfg: LangfuseConfig): string {
 }
 
 // A typed transport error carrying the HTTP status + decoded body, so best-effort
-// callers (PR2's export) can branch on `.status` and fail-closed callers (setup,
-// PR3) can surface a precise message. Extends Error, so existing `catch (err)`
-// paths that only read `.message` are unaffected.
+// callers can branch on `.status` and fail-closed callers can surface a precise
+// message. Extends Error, so existing `catch (err)` paths that only read `.message`
+// are unaffected.
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -262,7 +262,7 @@ export class ApiError extends Error {
 // Thrown by `apiGetAllPages` on ANY structural problem while walking a paginated
 // list — a stale/replayed page, a stalled cursor, missing/malformed metadata, or an
 // item with no id. It is NEVER swallowed into a partial result: silent partial data
-// would let setup create resources it failed to see, or PR3 misreport coverage.
+// would let setup create resources it failed to see, or a caller misreport coverage.
 export class PaginationError extends Error {
   constructor(message: string) {
     super(message)
@@ -299,7 +299,7 @@ export async function api(
 //              cursor (even null) that isn't a non-empty string is malformed.
 //
 // It MERGES its pagination params into whatever query the caller already put on
-// `path` (PR3 filters by tag/name), never clobbering them. It throws
+// `path` (callers filter by tag/name), never clobbering them. It throws
 // `PaginationError` (never returns partial data) on any structural violation, so a
 // short read can't masquerade as "resource absent".
 export async function apiGetAllPages(
@@ -386,7 +386,9 @@ export async function apiGetAllPages(
       requestedPage += 1
     } else {
       // Reject page metadata — a utilsMetaResponse under 'cursor' is a protocol mix.
-      if ('page' in m || 'totalPages' in m) {
+      // (`limit` is shared by both metas, so it is NOT a discriminator; page/
+      // totalPages/totalItems are page-only.)
+      if ('page' in m || 'totalPages' in m || 'totalItems' in m) {
         throw new PaginationError(`${basePath}: cursor-mode response carries page metadata`)
       }
       // Terminal state = the cursor PROPERTY is ABSENT (the API omits it when there
