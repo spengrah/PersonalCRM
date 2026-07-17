@@ -243,7 +243,34 @@ function authHeader(cfg: LangfuseConfig): string {
   return 'Basic ' + Buffer.from(`${cfg.publicKey}:${cfg.secretKey}`).toString('base64')
 }
 
-async function api(
+// A typed transport error carrying the HTTP status + decoded body, so best-effort
+// callers (PR2's export) can branch on `.status` and fail-closed callers (setup,
+// PR3) can surface a precise message. Extends Error, so existing `catch (err)`
+// paths that only read `.message` are unaffected.
+export class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    readonly body: string,
+    readonly method: string,
+    readonly path: string
+  ) {
+    super(`${method} ${path} -> ${status} ${body.slice(0, 200)}`)
+    this.name = 'ApiError'
+  }
+}
+
+// Thrown by `apiGetAllPages` on ANY structural problem while walking a paginated
+// list — a stale/replayed page, a stalled cursor, missing/malformed metadata, or an
+// item with no id. It is NEVER swallowed into a partial result: silent partial data
+// would let setup create resources it failed to see, or PR3 misreport coverage.
+export class PaginationError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'PaginationError'
+  }
+}
+
+export async function api(
   cfg: LangfuseConfig,
   method: string,
   path: string,
@@ -255,8 +282,118 @@ async function api(
     body: body ? JSON.stringify(body) : undefined,
   })
   const text = await res.text()
-  if (!res.ok) throw new Error(`${method} ${path} -> ${res.status} ${text.slice(0, 200)}`)
+  if (!res.ok) throw new ApiError(res.status, text, method, path)
   return text ? (JSON.parse(text) as Record<string, unknown>) : {}
+}
+
+// Walk a paginated Langfuse list endpoint to completion and return the accumulated
+// items, deduped by resource `id`. The REQUIRED `protocol` selects one of v3's two
+// incompatible list styles — there is no reliable way to infer it from a response:
+//
+//   'page'   — annotation-queues, queue items, score-configs, traces. Sends
+//              page+limit; meta is `{page, limit, totalItems, totalPages}`. Advances
+//              until `page >= totalPages`.
+//   'cursor' — scores v3. Sends/follows `cursor`; meta is `{limit, cursor?}`. The
+//              cursor PROPERTY is absent (or null) on the terminal page, INCLUDING a
+//              one-page result — do NOT mistake a valid empty meta for malformed.
+//
+// It MERGES its pagination params into whatever query the caller already put on
+// `path` (PR3 filters by tag/name), never clobbering them. It throws
+// `PaginationError` (never returns partial data) on any structural violation, so a
+// short read can't masquerade as "resource absent".
+export async function apiGetAllPages(
+  cfg: LangfuseConfig,
+  path: string,
+  protocol: 'page' | 'cursor'
+): Promise<Record<string, unknown>[]> {
+  const LIMIT = 100
+  const qIdx = path.indexOf('?')
+  const basePath = qIdx === -1 ? path : path.slice(0, qIdx)
+  const baseParams = qIdx === -1 ? '' : path.slice(qIdx + 1)
+
+  const byId = new Map<string, Record<string, unknown>>()
+  let requestedPage = 1
+  let cursor: string | undefined
+  const seenCursors = new Set<string>()
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const params = new URLSearchParams(baseParams)
+    params.set('limit', String(LIMIT))
+    if (protocol === 'page') {
+      params.set('page', String(requestedPage))
+    } else if (cursor !== undefined) {
+      params.set('cursor', cursor)
+    }
+    const query = params.toString()
+    const res = await api(cfg, 'GET', query ? `${basePath}?${query}` : basePath)
+
+    const data = res.data
+    if (!Array.isArray(data)) {
+      throw new PaginationError(`${basePath}: response missing 'data' array`)
+    }
+    const meta = res.meta
+    if (meta === null || typeof meta !== 'object' || Array.isArray(meta)) {
+      throw new PaginationError(`${basePath}: missing or malformed 'meta' object`)
+    }
+    const m = meta as Record<string, unknown>
+
+    // Accumulate BEFORE deciding termination, deduped by id — an overlapping page
+    // (one repeated id + one new id still makes forward progress) must not leak a
+    // phantom duplicate into a caller's uniqueness check.
+    for (const item of data) {
+      if (item === null || typeof item !== 'object' || Array.isArray(item)) {
+        throw new PaginationError(`${basePath}: non-object item in 'data'`)
+      }
+      const id = (item as Record<string, unknown>).id
+      if (typeof id !== 'string' || id.length === 0) {
+        throw new PaginationError(`${basePath}: item lacking a valid string 'id'`)
+      }
+      if (!byId.has(id)) byId.set(id, item as Record<string, unknown>)
+    }
+
+    if (protocol === 'page') {
+      // A cursor property here means we got a scores-v3-shaped body under 'page'.
+      if ('cursor' in m) {
+        throw new PaginationError(`${basePath}: page-mode response carries cursor metadata`)
+      }
+      const page = m.page
+      const totalPages = m.totalPages
+      if (!Number.isInteger(page) || (page as number) < 1) {
+        throw new PaginationError(`${basePath}: invalid meta.page ${String(page)}`)
+      }
+      if (!Number.isInteger(totalPages) || (totalPages as number) < 0) {
+        throw new PaginationError(`${basePath}: invalid meta.totalPages ${String(totalPages)}`)
+      }
+      if (page !== requestedPage) {
+        throw new PaginationError(
+          `${basePath}: requested page ${requestedPage} but got ${String(page)}`
+        )
+      }
+      if ((page as number) >= (totalPages as number)) break
+      requestedPage += 1
+    } else {
+      // Reject page metadata — a utilsMetaResponse under 'cursor' is a protocol mix.
+      if ('page' in m || 'totalPages' in m) {
+        throw new PaginationError(`${basePath}: cursor-mode response carries page metadata`)
+      }
+      // Absent OR null cursor = no more results (the API marks cursor nullable and
+      // "Absent when there are no more results"). A present, non-null value must be
+      // a non-empty string token.
+      const next = m.cursor
+      if (next === undefined || next === null) break
+      if (typeof next !== 'string' || next.length === 0) {
+        throw new PaginationError(`${basePath}: invalid meta.cursor`)
+      }
+      if (seenCursors.has(next)) {
+        throw new PaginationError(`${basePath}: cursor did not advance (repeated ${next})`)
+      }
+      seenCursors.add(next)
+      cursor = next
+    }
+  }
+
+  return [...byId.values()]
 }
 
 // Upload one screenshot and return its media token, or undefined if the file is

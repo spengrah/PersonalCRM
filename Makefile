@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev dev-seed staging-reset tours build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast qa-report prod staging accelerated testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry spec-lint spec-coverage api-types api-types-check
+.PHONY: help setup dev dev-seed staging-reset tours build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast qa-report qa-export qa-langfuse-setup prod staging accelerated testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry spec-lint spec-coverage api-types api-types-check
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -290,6 +290,9 @@ qa-report: ## Render the advisory report over a tours run dir (RUNDIR relative t
 
 qa-export: ## Ship a judge run's GenAI spans (TRACE=<trace.jsonl>, written when the judge runs with QA_JUDGE_TRACE set) to Langfuse, screenshots included. No-op without LANGFUSE_HOST/PUBLIC_KEY/SECRET_KEY.
 	@cd frontend && bun run tests/tours/judge/export/run.ts "$(TRACE)"
+
+qa-langfuse-setup: ## Idempotently provision the standing QA triage queue (ground_truth+disposition dims) + verdict/ground_truth/disposition score configs in Langfuse (obs). Re-runnable; reconciles desired state. Requires LANGFUSE_HOST/PUBLIC_KEY/SECRET_KEY (errors non-zero without them).
+	@cd frontend && bun run tests/tours/judge/export/setup.ts
 
 # Native PostgreSQL (for containerized development without Docker-in-Docker)
 # Symlink the main checkout's gitignored env files (.env, frontend/.env.local,
