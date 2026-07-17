@@ -535,6 +535,7 @@ test-deploy-scripts:
 	@bash scripts/deploy-staging.test.sh
 	@bash scripts/staging-reset.test.sh
 	@bash scripts/ci/staging-reseed-decision.test.sh
+	@bash scripts/ci/qa-round-cadence-gate.test.sh
 	@bash scripts/staging-deployed-sha.test.sh
 	@bash scripts/staging-reseed.test.sh
 	@bash scripts/admin/setup-staging-reseed-host.sh.test.sh
