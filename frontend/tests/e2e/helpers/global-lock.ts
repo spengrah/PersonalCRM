@@ -22,6 +22,7 @@ const HEADERS = { 'X-API-Key': API_KEY, 'Content-Type': 'application/json' }
 
 const LEASE_TTL_MS = 30_000
 const RENEW_EVERY_MS = 10_000
+const WATCHDOG_EVERY_MS = 1_000
 
 export async function acquireGlobalLock(
   name: string,
@@ -52,7 +53,25 @@ export async function acquireGlobalLock(
   // single renew's fate. One missed beat is harmless: the TTL is 3x the
   // cadence.
   let lastRenewOk = Date.now()
-  let lapsed = false
+  let escalated = false
+  let escalateTimer: ReturnType<typeof setTimeout> | undefined
+  // The SINGLE escalation path, deliberately NOT inside the heartbeat's
+  // promise chain (a throw there is caught by the trailing .catch()).
+  // setTimeout(0) fires immediately as a bare timer callback — an uncaught
+  // exception Playwright fails the worker on — so a confirmed lapse stops
+  // the holder at once rather than at the next watchdog tick.
+  const escalate = (why: string) => {
+    if (escalated) return
+    escalated = true
+    clearInterval(renewTimer)
+    clearInterval(watchdogTimer)
+    escalateTimer = setTimeout(() => {
+      throw new Error(
+        `global lock '${name}' lost while held (${why}) — mutual exclusion can no longer be assumed`
+      )
+    }, 0)
+    escalateTimer.unref?.()
+  }
   const renewTimer = setInterval(() => {
     void fetch(`${API_URL}/api/v1/test/lock/${lease}/renew`, {
       method: 'POST',
@@ -61,7 +80,7 @@ export async function acquireGlobalLock(
     })
       .then(res => {
         if (res.status === 404) {
-          lapsed = true
+          escalate('lease lapsed')
         } else if (!res.ok) {
           console.error(`global lock '${name}': renew failed (${res.status}); retrying next beat`)
         } else {
@@ -72,17 +91,15 @@ export async function acquireGlobalLock(
         console.error(`global lock '${name}': renew unreachable (${err}); retrying next beat`)
       })
   }, RENEW_EVERY_MS)
+  // Independent of any single renew's fate: covers repeated 5xx and hung
+  // fetches by escalating once no renew has landed for a full TTL. Polled
+  // at 1s so detection is within ~1s of the TTL, not the renew cadence.
   const watchdogTimer = setInterval(() => {
     const staleFor = Date.now() - lastRenewOk
-    if (lapsed || staleFor > LEASE_TTL_MS) {
-      clearInterval(renewTimer)
-      clearInterval(watchdogTimer)
-      throw new Error(
-        `global lock '${name}' lost while held (${lapsed ? 'lease lapsed' : `no renew for ${staleFor}ms`}) ` +
-          `— mutual exclusion can no longer be assumed`
-      )
+    if (staleFor > LEASE_TTL_MS) {
+      escalate(`no renew for ${staleFor}ms`)
     }
-  }, RENEW_EVERY_MS)
+  }, WATCHDOG_EVERY_MS)
   // Do not keep the worker process alive just for the timers.
   renewTimer.unref?.()
   watchdogTimer.unref?.()
@@ -93,6 +110,7 @@ export async function acquireGlobalLock(
     released = true
     clearInterval(renewTimer)
     clearInterval(watchdogTimer)
+    if (escalateTimer) clearTimeout(escalateTimer)
     // Best-effort: a failed release just leaves the lease to lapse.
     await fetch(`${API_URL}/api/v1/test/lock/${lease}`, {
       method: 'DELETE',

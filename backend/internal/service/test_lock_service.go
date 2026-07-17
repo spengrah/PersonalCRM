@@ -74,10 +74,17 @@ func (s *TestLockService) Acquire(ctx context.Context, name string, ttl, wait ti
 		if !s.now().Before(deadline) {
 			return "", fmt.Errorf("acquire %q: %w", name, ErrLockWaitTimeout)
 		}
+		// Never sleep past the wait budget: cap the poll interval at the
+		// time remaining so a timeout is reported within one tick of the
+		// deadline rather than up to a full interval late.
+		poll := 50 * time.Millisecond
+		if remaining := deadline.Sub(s.now()); remaining < poll {
+			poll = remaining
+		}
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
-		case <-time.After(50 * time.Millisecond):
+		case <-time.After(poll):
 		}
 		// Re-check the deadline after waking: a lock freed during the sleep
 		// must not be granted once the wait budget is already spent.
