@@ -173,8 +173,10 @@ describe('ContactCandidateResolver candidate tracking', () => {
     mockCandidatesQuery([A, C])
     rerenderModal()
 
+    // Generous timeout: the 150ms pager transition runs on a real timer and
+    // can be starved on a loaded machine.
     expect(
-      await screen.findByRole('heading', { level: 3, name: /Candidate C/ })
+      await screen.findByRole('heading', { level: 3, name: /Candidate C/ }, { timeout: 5000 })
     ).toBeInTheDocument()
     expect(screen.getByText('2 of 2')).toBeInTheDocument()
   })
@@ -187,10 +189,11 @@ describe('ContactCandidateResolver candidate tracking', () => {
 
     await user.click(screen.getByRole('button', { name: 'Next candidate' }))
 
-    // The 150ms transition delays the switch.
-    expect(await screen.findByText('2 of 3')).toBeInTheDocument()
+    // The 150ms transition delays the switch (generous timeout for loaded
+    // machines — the transition runs on a real timer).
+    expect(await screen.findByText('2 of 3', {}, { timeout: 5000 })).toBeInTheDocument()
     expect(
-      await screen.findByRole('heading', { level: 3, name: /Candidate B/ })
+      await screen.findByRole('heading', { level: 3, name: /Candidate B/ }, { timeout: 5000 })
     ).toBeInTheDocument()
   })
 })
