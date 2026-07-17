@@ -136,6 +136,11 @@ function setListData(
     data: { candidates, ...m },
     isLoading: false,
     error: null,
+    // The resolver modal reads these for its post-open authority logic and
+    // forces one refetch on mount when the cache predates the open.
+    isError: false,
+    dataUpdatedAt: Date.now() + 60_000,
+    refetch: vi.fn().mockResolvedValue(undefined),
   } as any)
 }
 
