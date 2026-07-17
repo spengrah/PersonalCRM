@@ -41,20 +41,30 @@ export async function acquireGlobalLock(
   const body = (await resp.json()) as { data: { lease_id: string } }
   const lease = body.data.lease_id
 
-  // Heartbeat: a live holder keeps its lease fresh; losing the lease
-  // mid-hold (arbiter restart, TTL lapse under a stalled event loop) means
-  // mutual exclusion may be broken — crash the worker loudly.
+  // Heartbeat: a live holder keeps its lease fresh. One missed beat is
+  // harmless (TTL is 3x the cadence), so transient renew failures are
+  // logged and retried on the next tick. A 404 means the lease genuinely
+  // lapsed and may have been taken over — mutual exclusion can no longer
+  // be assumed, so record it and fail loudly at release time (throwing
+  // from inside the interval would only surface as an unhandled rejection).
+  let leaseLost: string | null = null
   const renewTimer = setInterval(() => {
     void fetch(`${API_URL}/api/v1/test/lock/${lease}/renew`, {
       method: 'POST',
       headers: HEADERS,
       body: JSON.stringify({ ttl_ms: LEASE_TTL_MS }),
-    }).then(res => {
-      if (!res.ok) {
-        clearInterval(renewTimer)
-        throw new Error(`global lock '${name}' lease lost while held (renew ${res.status})`)
-      }
     })
+      .then(res => {
+        if (res.status === 404) {
+          leaseLost = `global lock '${name}' lease lapsed while held — mutual exclusion was not maintained`
+          clearInterval(renewTimer)
+        } else if (!res.ok) {
+          console.error(`global lock '${name}': renew failed (${res.status}); retrying next beat`)
+        }
+      })
+      .catch((err: unknown) => {
+        console.error(`global lock '${name}': renew unreachable (${err}); retrying next beat`)
+      })
   }, RENEW_EVERY_MS)
   // Do not keep the worker process alive just for the heartbeat.
   renewTimer.unref?.()
@@ -64,6 +74,9 @@ export async function acquireGlobalLock(
     if (released) return
     released = true
     clearInterval(renewTimer)
+    if (leaseLost) {
+      throw new Error(leaseLost)
+    }
     // Best-effort: a failed release just leaves the lease to lapse.
     await fetch(`${API_URL}/api/v1/test/lock/${lease}`, {
       method: 'DELETE',

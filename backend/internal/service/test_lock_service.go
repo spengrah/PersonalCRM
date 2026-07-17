@@ -40,6 +40,10 @@ type testLease struct {
 
 // NewTestLockService creates the arbiter. The clock is injected so tests
 // control expiry; production wiring passes accelerated.GetCurrentTime.
+// Lease TTLs assume an unaccelerated clock — the E2E lanes run with no
+// TIME_ACCELERATION, and the accelerated cadence harnesses never exercise
+// these endpoints. Under acceleration a domain-time TTL would lapse in
+// wall-milliseconds and the client heartbeat could not keep a lease alive.
 func NewTestLockService(now func() time.Time) *TestLockService {
 	return &TestLockService{
 		now:    now,
