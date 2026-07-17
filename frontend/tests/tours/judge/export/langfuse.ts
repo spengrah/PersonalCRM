@@ -243,7 +243,34 @@ function authHeader(cfg: LangfuseConfig): string {
   return 'Basic ' + Buffer.from(`${cfg.publicKey}:${cfg.secretKey}`).toString('base64')
 }
 
-async function api(
+// A typed transport error carrying the HTTP status + decoded body, so best-effort
+// callers can branch on `.status` and fail-closed callers can surface a precise
+// message. Extends Error, so existing `catch (err)` paths that only read `.message`
+// are unaffected.
+export class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    readonly body: string,
+    readonly method: string,
+    readonly path: string
+  ) {
+    super(`${method} ${path} -> ${status} ${body.slice(0, 200)}`)
+    this.name = 'ApiError'
+  }
+}
+
+// Thrown by `apiGetAllPages` on ANY structural problem while walking a paginated
+// list — a stale/replayed page, a stalled cursor, missing/malformed metadata, or an
+// item with no id. It is NEVER swallowed into a partial result: silent partial data
+// would let setup create resources it failed to see, or a caller misreport coverage.
+export class PaginationError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'PaginationError'
+  }
+}
+
+export async function api(
   cfg: LangfuseConfig,
   method: string,
   path: string,
@@ -255,8 +282,156 @@ async function api(
     body: body ? JSON.stringify(body) : undefined,
   })
   const text = await res.text()
-  if (!res.ok) throw new Error(`${method} ${path} -> ${res.status} ${text.slice(0, 200)}`)
+  if (!res.ok) throw new ApiError(res.status, text, method, path)
   return text ? (JSON.parse(text) as Record<string, unknown>) : {}
+}
+
+// Walk a paginated Langfuse list endpoint to completion and return the accumulated
+// items, deduped by resource `id`. The REQUIRED `protocol` selects one of v3's two
+// incompatible list styles — there is no reliable way to infer it from a response:
+//
+//   'page'   — annotation-queues, queue items, score-configs, traces. Sends
+//              page+limit; meta is `{page, limit, totalItems, totalPages}`. Advances
+//              until `page >= totalPages`.
+//   'cursor' — scores v3. Sends/follows `cursor`; meta is `{limit, cursor?}`. The
+//              cursor PROPERTY is ABSENT on the terminal page, INCLUDING a one-page
+//              result — do NOT mistake a valid meta with no cursor property for
+//              malformed. A present cursor (even null) that isn't a non-empty string
+//              is malformed.
+//
+// It MERGES its pagination params into whatever query the caller already put on
+// `path` (callers filter by tag/name), never clobbering them. It throws
+// `PaginationError` (never returns partial data) on any structural violation, so a
+// short read can't masquerade as "resource absent".
+export async function apiGetAllPages(
+  cfg: LangfuseConfig,
+  path: string,
+  protocol: 'page' | 'cursor'
+): Promise<Record<string, unknown>[]> {
+  const LIMIT = 100
+  const qIdx = path.indexOf('?')
+  const basePath = qIdx === -1 ? path : path.slice(0, qIdx)
+  const baseParams = qIdx === -1 ? '' : path.slice(qIdx + 1)
+
+  const byId = new Map<string, Record<string, unknown>>()
+  let requestedPage = 1
+  let cursor: string | undefined
+  const seenCursors = new Set<string>()
+
+  // Require a schema-mandated integer meta field. A missing / non-integer field means
+  // the read is malformed and must fail closed, NOT terminate as if complete.
+  const reqInt = (v: unknown, name: string, min: number): number => {
+    if (!Number.isInteger(v) || (v as number) < min) {
+      throw new PaginationError(`${basePath}: invalid meta.${name} (${String(v)})`)
+    }
+    return v as number
+  }
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const params = new URLSearchParams(baseParams)
+    params.set('limit', String(LIMIT))
+    if (protocol === 'page') {
+      params.set('page', String(requestedPage))
+    } else if (cursor !== undefined) {
+      params.set('cursor', cursor)
+    }
+    const query = params.toString()
+    const res: unknown = await api(cfg, 'GET', query ? `${basePath}?${query}` : basePath)
+
+    // A 2xx `null`/scalar/array body is a malformed envelope — raise PaginationError
+    // rather than letting `.data` throw an untyped TypeError.
+    if (res === null || typeof res !== 'object' || Array.isArray(res)) {
+      throw new PaginationError(`${basePath}: response envelope is not a JSON object`)
+    }
+    const envelope = res as Record<string, unknown>
+
+    const data = envelope.data
+    if (!Array.isArray(data)) {
+      throw new PaginationError(`${basePath}: response missing 'data' array`)
+    }
+    const meta = envelope.meta
+    if (meta === null || typeof meta !== 'object' || Array.isArray(meta)) {
+      throw new PaginationError(`${basePath}: missing or malformed 'meta' object`)
+    }
+    const m = meta as Record<string, unknown>
+
+    // Accumulate BEFORE deciding termination, deduped by id — an overlapping page
+    // (one repeated id + one new id still makes forward progress) must not leak a
+    // phantom duplicate into a caller's uniqueness check. `added` counts the NEW
+    // ids this page contributed, so a non-terminal page that adds nothing (a
+    // stalled server / fabricated-cursor loop) can be caught below.
+    const sizeBefore = byId.size
+    for (const item of data) {
+      if (item === null || typeof item !== 'object' || Array.isArray(item)) {
+        throw new PaginationError(`${basePath}: non-object item in 'data'`)
+      }
+      const id = (item as Record<string, unknown>).id
+      if (typeof id !== 'string' || id.length === 0) {
+        throw new PaginationError(`${basePath}: item lacking a valid string 'id'`)
+      }
+      if (!byId.has(id)) byId.set(id, item as Record<string, unknown>)
+    }
+    const added = byId.size - sizeBefore
+
+    if (protocol === 'page') {
+      // A cursor property here means we got a scores-v3-shaped body under 'page'.
+      if ('cursor' in m) {
+        throw new PaginationError(`${basePath}: page-mode response carries cursor metadata`)
+      }
+      // utilsMetaResponse requires ALL of page/limit/totalItems/totalPages as
+      // integers — a response missing any of them is malformed, not terminal.
+      const page = reqInt(m.page, 'page', 1)
+      reqInt(m.limit, 'limit', 1)
+      reqInt(m.totalItems, 'totalItems', 0)
+      const totalPages = reqInt(m.totalPages, 'totalPages', 0)
+      if (page !== requestedPage) {
+        throw new PaginationError(
+          `${basePath}: requested page ${requestedPage} but got ${String(page)}`
+        )
+      }
+      if (page >= totalPages) break
+      // We are about to request another page; if this one added no new ids the
+      // list isn't making progress — refuse rather than loop until totalPages.
+      if (added === 0) {
+        throw new PaginationError(
+          `${basePath}: page ${String(page)} added no new items but more pages remain`
+        )
+      }
+      requestedPage += 1
+    } else {
+      // Reject page metadata — a utilsMetaResponse under 'cursor' is a protocol mix.
+      // (`limit` is shared by both metas, so it is NOT a discriminator; page/
+      // totalPages/totalItems are page-only.)
+      if ('page' in m || 'totalPages' in m || 'totalItems' in m) {
+        throw new PaginationError(`${basePath}: cursor-mode response carries page metadata`)
+      }
+      // GetScoresV3Meta requires an integer `limit`; validate it before trusting an
+      // absent cursor as terminal, so an empty/malformed `{}` meta fails closed.
+      reqInt(m.limit, 'limit', 1)
+      // Terminal state = the cursor PROPERTY is ABSENT (the API omits it when there
+      // are no more results, INCLUDING a one-page result). A PRESENT cursor — even
+      // `null` — that is not a non-empty string is malformed, never terminal.
+      if (!('cursor' in m)) break
+      const next = m.cursor
+      if (typeof next !== 'string' || next.length === 0) {
+        throw new PaginationError(
+          `${basePath}: invalid meta.cursor (must be a non-empty string when present)`
+        )
+      }
+      if (seenCursors.has(next)) {
+        throw new PaginationError(`${basePath}: cursor did not advance (repeated ${next})`)
+      }
+      // A fresh cursor that yields no new ids is a fabricated-continuation loop.
+      if (added === 0) {
+        throw new PaginationError(`${basePath}: continuation cursor but page added no new items`)
+      }
+      seenCursors.add(next)
+      cursor = next
+    }
+  }
+
+  return [...byId.values()]
 }
 
 // Upload one screenshot and return its media token, or undefined if the file is
