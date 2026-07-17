@@ -255,12 +255,16 @@ function ContactCandidateResolver({
   // the clicked candidate or predates the open, force one refetch. If it
   // errors, the modal stays fully functional on the effective list —
   // actions key off the candidate id, so they are correct without it.
+  // postMountSettled distinguishes a POST-open fetch outcome from an error
+  // state retained from before the open: only the former may drive a close.
+  const [postMountSettled, setPostMountSettled] = useState(false)
   useEffect(() => {
     const cached = allCandidatesData?.candidates
     if (dataUpdatedAt > mountTimeRef.current && cached?.some(c => c.id === initialCandidateId)) {
+      setPostMountSettled(true)
       return
     }
-    refetch()
+    refetch().finally(() => setPostMountSettled(true))
     // Mount-only: the mount-time cache is by definition pre-open.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -309,35 +313,17 @@ function ContactCandidateResolver({
   const handleActionSuccess = useCallback(
     (message: string, resolvedId: string) => {
       // Exclude the resolved candidate locally: it is known-gone even if the
-      // invalidation-triggered refetch fails, so the advance/close logic
-      // fires without depending on it.
-      const next = new Set(locallyResolvedIds)
-      next.add(resolvedId)
-      setLocallyResolvedIds(next)
-      onSuccess(message)
-      // Close only when nothing remains AFTER this resolution, judged by the
-      // same selection the render uses — the pre-resolution effective list
-      // may be a page snapshot whose only entry was the resolved candidate
-      // while the fetched view still has others to advance onto.
-      const remaining = selectEffectiveList({
-        fetched: fetchedCandidates,
-        initial: initialCandidates,
-        trackedId: resolvedId,
-        resolvedIds: next,
-        authoritative: listAuthoritative,
+      // invalidation-triggered refetch fails. Advancing or closing is the
+      // close effect's job — deciding here would act on a list captured
+      // when the action started, not on anything fetched since.
+      setLocallyResolvedIds(prev => {
+        const next = new Set(prev)
+        next.add(resolvedId)
+        return next
       })
-      if (!remaining || remaining.length === 0) {
-        onClose()
-      }
+      onSuccess(message)
     },
-    [
-      locallyResolvedIds,
-      fetchedCandidates,
-      initialCandidates,
-      listAuthoritative,
-      onSuccess,
-      onClose,
-    ]
+    [onSuccess]
   )
 
   // Helper to handle action errors - avoids code duplication
@@ -362,14 +348,21 @@ function ContactCandidateResolver({
     }
   }, [trackedIndex, candidate, knownGone])
 
-  // Close when there is nothing left to act on: the queue is confirmed
-  // empty (authoritative fetch / this modal resolved the last candidate),
-  // or the transitional wait for a post-open list ended in a fetch error.
+  // The SOLE close decision: nothing left to act on because the queue is
+  // confirmed empty (authoritative fetch / this modal resolved the last
+  // candidate), or the transitional wait ended in a POST-open fetch error.
+  // A retained pre-open error must not close — the forced refetch is still
+  // the thing being waited on. Living here (not in the action handler)
+  // means the decision always sees the freshest list: a refetch landing
+  // during a mutation is picked up by this render, never a stale closure.
   useEffect(() => {
-    if (candidates.length === 0 && (knownGone || listAuthoritative || isError)) {
+    if (
+      candidates.length === 0 &&
+      (knownGone || listAuthoritative || (isError && postMountSettled))
+    ) {
       onClose()
     }
-  }, [candidates.length, knownGone, listAuthoritative, isError, onClose])
+  }, [candidates.length, knownGone, listAuthoritative, isError, postMountSettled, onClose])
 
   // Initialize method selections when candidate changes
   useEffect(() => {

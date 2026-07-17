@@ -75,7 +75,8 @@ function mockCandidatesQueryRaw(result: {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  refetchMock = vi.fn()
+  // The mount effect chains .finally() on the refetch promise.
+  refetchMock = vi.fn().mockResolvedValue(undefined)
   importAsync = vi.fn().mockResolvedValue({})
   vi.mocked(useContacts).mockReturnValue({ data: { contacts: [] } } as any)
   vi.mocked(useContact).mockReturnValue({ data: undefined } as any)
@@ -302,16 +303,65 @@ describe('ContactCandidateResolver candidate tracking', () => {
     expect(heading()).toHaveTextContent('Candidate X')
   })
 
-  it('closes instead of hanging when the transitional wait ends in a fetch error', () => {
+  it('waits out a retained pre-open error while the forced refetch is in flight', async () => {
+    // React Query can retain BOTH stale data and an error state from before
+    // the open. That error must not close the modal — the mount-forced
+    // refetch is still the thing being waited on, and it can land with the
+    // clicked candidate.
+    let settleRefetch!: () => void
+    refetchMock.mockReturnValue(new Promise<void>(resolve => (settleRefetch = resolve)))
+    mockCandidatesQueryRaw({
+      data: { candidates: [A, B] },
+      isError: true,
+      dataUpdatedAt: 1,
+    })
+    const { props, rerenderModal } = renderModal([], X.id)
+
+    expect(screen.queryByRole('heading', { level: 3 })).not.toBeInTheDocument()
+    expect(props.onClose).not.toHaveBeenCalled()
+
+    // The refetch succeeds with the clicked candidate: seamless display.
+    mockCandidatesQuery([A, X])
+    settleRefetch()
+    rerenderModal()
+    expect(heading()).toHaveTextContent('Candidate X')
+    expect(props.onClose).not.toHaveBeenCalled()
+  })
+
+  it('closes instead of hanging when the POST-open refetch settles in error', async () => {
     mockCandidatesQueryRaw({
       data: { candidates: [A, B] },
       isError: true,
       dataUpdatedAt: 1,
     })
     const { props } = renderModal([], X.id)
-
     expect(screen.queryByRole('heading', { level: 3 })).not.toBeInTheDocument()
-    expect(props.onClose).toHaveBeenCalled()
+
+    // The forced refetch (mocked as already-resolved) settles, the query is
+    // still errored, and no list contains the clicked candidate: close.
+    await vi.waitFor(() => expect(props.onClose).toHaveBeenCalled())
+  })
+
+  it('does not close from a queue snapshot captured before the action settled', async () => {
+    const user = userEvent.setup()
+    // Authoritative queue is just [X] when Import is clicked, but a refetch
+    // lands [X, Y] while the mutation is pending. The close decision must
+    // see the fresh list and advance onto Y, not close from the stale one.
+    let settleImport!: (v: unknown) => void
+    importAsync.mockReturnValue(new Promise(resolve => (settleImport = resolve)))
+    mockCandidatesQuery([X])
+    const { props, rerenderModal } = renderModal([X], X.id)
+    expect(heading()).toHaveTextContent('Candidate X')
+
+    await user.click(screen.getByRole('button', { name: 'Import as New Contact' }))
+    mockCandidatesQuery([X, Y])
+    rerenderModal()
+    settleImport({})
+
+    expect(
+      await screen.findByRole('heading', { level: 3, name: /Candidate Y/ }, { timeout: 5000 })
+    ).toBeInTheDocument()
+    expect(props.onClose).not.toHaveBeenCalled()
   })
 
   it('treats a fetch stamped at the mount instant as pre-open', () => {
