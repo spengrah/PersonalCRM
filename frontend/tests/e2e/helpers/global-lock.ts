@@ -54,7 +54,14 @@ export async function acquireGlobalLock(
   // cadence.
   let lastRenewOk = Date.now()
   let escalated = false
+  let released = false
   let escalateTimer: ReturnType<typeof setTimeout> | undefined
+  // Aborted by release() so any renew still in flight rejects (AbortError)
+  // instead of resolving with the 404 that DELETE would produce. The only
+  // 404 a renew callback can then observe is a GENUINE pre-release lapse —
+  // removing the benign/genuine ambiguity, so escalate needs no release
+  // guard and a real loss during the test is never suppressed.
+  const renewAbort = new AbortController()
   // The SINGLE escalation path, deliberately NOT inside the heartbeat's
   // promise chain (a throw there is caught by the trailing .catch()).
   // setTimeout(0) fires immediately as a bare timer callback — an uncaught
@@ -77,6 +84,7 @@ export async function acquireGlobalLock(
       method: 'POST',
       headers: HEADERS,
       body: JSON.stringify({ ttl_ms: LEASE_TTL_MS }),
+      signal: renewAbort.signal,
     })
       .then(res => {
         if (res.status === 404) {
@@ -88,6 +96,7 @@ export async function acquireGlobalLock(
         }
       })
       .catch((err: unknown) => {
+        if (renewAbort.signal.aborted) return
         console.error(`global lock '${name}': renew unreachable (${err}); retrying next beat`)
       })
   }, RENEW_EVERY_MS)
@@ -104,13 +113,18 @@ export async function acquireGlobalLock(
   renewTimer.unref?.()
   watchdogTimer.unref?.()
 
-  let released = false
   return async () => {
     if (released) return
     released = true
     clearInterval(renewTimer)
     clearInterval(watchdogTimer)
-    if (escalateTimer) clearTimeout(escalateTimer)
+    // Abort in-flight renews BEFORE deleting: an aborted renew rejects
+    // rather than resolving with the 404 the DELETE creates, so no benign
+    // post-release 404 can schedule a spurious throw. A genuine 404 that
+    // already resolved before this abort still escalates (its callback sees
+    // 404, not AbortError) — a real lease loss during the test is preserved.
+    // escalateTimer is intentionally left to fire for that reason.
+    renewAbort.abort()
     // Best-effort: a failed release just leaves the lease to lapse.
     await fetch(`${API_URL}/api/v1/test/lock/${lease}`, {
       method: 'DELETE',
