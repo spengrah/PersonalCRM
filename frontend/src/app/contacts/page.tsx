@@ -70,8 +70,10 @@ function ContactsTable({
     )
   }
 
-  const getAriaSort = (field: SortField): 'ascending' | 'descending' | 'none' => {
-    if (listContext.sort !== field) return 'none'
+  // WAI-ARIA: aria-sort is set on at most one header at a time — inactive
+  // sortable columns omit the attribute entirely rather than carry 'none'.
+  const getAriaSort = (field: SortField): 'ascending' | 'descending' | undefined => {
+    if (listContext.sort !== field) return undefined
     return listContext.order === 'asc' ? 'ascending' : 'descending'
   }
 

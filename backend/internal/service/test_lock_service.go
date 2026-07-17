@@ -59,7 +59,16 @@ func NewTestLockService(now func() time.Time) *TestLockService {
 func (s *TestLockService) Acquire(ctx context.Context, name string, ttl, wait time.Duration) (string, error) {
 	deadline := s.now().Add(wait)
 	for {
+		// Refuse before trying: a disconnected client must not mint an
+		// orphan lease off a poll that raced its cancellation.
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		if lease, ok := s.tryAcquire(name, ttl); ok {
+			if err := ctx.Err(); err != nil {
+				s.Release(lease)
+				return "", err
+			}
 			return lease, nil
 		}
 		if !s.now().Before(deadline) {
@@ -98,6 +107,13 @@ func (s *TestLockService) Renew(lease string, ttl time.Duration) error {
 	}
 	cur := s.held[name]
 	if cur == nil || cur.id != lease || !cur.expiresAt.After(s.now()) {
+		// A detected lapse is the last time anyone references this lease —
+		// drop the entries so abandoned leases don't accumulate for the
+		// backend's lifetime.
+		delete(s.leases, lease)
+		if cur != nil && cur.id == lease {
+			delete(s.held, name)
+		}
 		return fmt.Errorf("renew: unknown or expired lease")
 	}
 	cur.expiresAt = s.now().Add(ttl)

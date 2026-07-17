@@ -7,8 +7,8 @@ import { acquireGlobalLock } from './helpers/global-lock'
 // held for the WHOLE file (beforeAll → afterAll): per-test cycling lets
 // this worker instantly re-acquire between its serial tests, starving the
 // other file's waiter. afterAll has its own timeout slot, and if the
-// worker dies without running it the library's exit hook (or, after a hard
-// kill, heartbeat staleness) frees the lock.
+// worker dies without running it the renew heartbeat stops and the lease
+// lapses at the arbiter, freeing the lock.
 let releaseMacHostLock: (() => Promise<void>) | null = null
 
 test.beforeAll(async () => {

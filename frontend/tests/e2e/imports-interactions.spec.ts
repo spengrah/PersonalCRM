@@ -8,8 +8,8 @@ import { acquireGlobalLock } from './helpers/global-lock'
 // WHOLE file (beforeAll → afterAll): per-test cycling lets this worker
 // instantly re-acquire between its serial tests, starving the other file's
 // waiter. afterAll has its own timeout slot, and if the worker dies without
-// running it the library's exit hook (or, after a hard kill, heartbeat
-// staleness) frees the lock.
+// running it the renew heartbeat stops and the lease lapses at the
+// arbiter, freeing the lock.
 let releaseMacHostLock: (() => Promise<void>) | null = null
 
 test.beforeAll(async () => {
@@ -62,8 +62,7 @@ test.describe('Imports Interactions tab @area:imports', () => {
   test.afterEach(async () => {
     // Delete this test's seeded notes (by host) before the next test resets
     // the host, then clear the host so the singleton index is free. The
-    // macHostLock fixture teardown (which releases the cross-file mutex)
-    // runs after this hook.
+    // cross-file mutex stays held until afterAll.
     await testApi.cleanup()
     await testApi.resetMacHosts()
   })

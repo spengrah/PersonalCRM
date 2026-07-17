@@ -42,12 +42,18 @@ export async function acquireGlobalLock(
   const lease = body.data.lease_id
 
   // Heartbeat: a live holder keeps its lease fresh. One missed beat is
-  // harmless (TTL is 3x the cadence), so transient renew failures are
-  // logged and retried on the next tick. A 404 means the lease genuinely
-  // lapsed and may have been taken over — mutual exclusion can no longer
-  // be assumed, so record it and fail loudly at release time (throwing
-  // from inside the interval would only surface as an unhandled rejection).
-  let leaseLost: string | null = null
+  // harmless (TTL is 3x the cadence), so a transient renew failure only
+  // logs and retries. But once the lease is confirmed lapsed (404) or
+  // unrenewed past the TTL, another worker may already hold the lock —
+  // the holder must STOP NOW, not at afterAll: the thrown error surfaces
+  // as an unhandled rejection, which Playwright fails the worker on.
+  let lastRenewOk = Date.now()
+  const lost = (why: string) => {
+    clearInterval(renewTimer)
+    throw new Error(
+      `global lock '${name}' lost while held (${why}) — mutual exclusion can no longer be assumed`
+    )
+  }
   const renewTimer = setInterval(() => {
     void fetch(`${API_URL}/api/v1/test/lock/${lease}/renew`, {
       method: 'POST',
@@ -56,13 +62,17 @@ export async function acquireGlobalLock(
     })
       .then(res => {
         if (res.status === 404) {
-          leaseLost = `global lock '${name}' lease lapsed while held — mutual exclusion was not maintained`
-          clearInterval(renewTimer)
+          lost('lease lapsed')
         } else if (!res.ok) {
           console.error(`global lock '${name}': renew failed (${res.status}); retrying next beat`)
+        } else {
+          lastRenewOk = Date.now()
         }
       })
       .catch((err: unknown) => {
+        if (Date.now() - lastRenewOk > LEASE_TTL_MS) {
+          lost(`no successful renew for ${Date.now() - lastRenewOk}ms`)
+        }
         console.error(`global lock '${name}': renew unreachable (${err}); retrying next beat`)
       })
   }, RENEW_EVERY_MS)
@@ -74,9 +84,6 @@ export async function acquireGlobalLock(
     if (released) return
     released = true
     clearInterval(renewTimer)
-    if (leaseLost) {
-      throw new Error(leaseLost)
-    }
     // Best-effort: a failed release just leaves the lease to lapse.
     await fetch(`${API_URL}/api/v1/test/lock/${lease}`, {
       method: 'DELETE',
