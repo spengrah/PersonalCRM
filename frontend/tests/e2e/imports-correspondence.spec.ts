@@ -1,7 +1,7 @@
 import { test, expect } from './fixtures'
 import { createTestAPI, TestAPI } from './helpers/test-api'
 import {
-  navigateModalToCandidate,
+  expectModalCandidate,
   resolverDialog,
   selectContactIfNeeded,
 } from './helpers/imports-helpers'
@@ -75,11 +75,10 @@ test.describe('Imports gmail_correspondence evidence @area:imports', () => {
 
     // Open the modal via Link. This is a link-only source, so the modal is
     // locked to link mode (no Import/Link toggle buttons) — wait for the
-    // always-present Link Contact submit button instead, then steer the modal
-    // to THIS worker's candidate.
+    // always-present Link Contact submit button instead.
     await card.getByRole('button', { name: /Link/i }).click()
     await expect(page.getByRole('button', { name: /Link Contact/i })).toBeVisible()
-    await navigateModalToCandidate(page, cardName)
+    await expectModalCandidate(page, cardName)
 
     // Ensure a contact is selected (the trigram match usually pre-selects it).
     const dialog = resolverDialog(page)

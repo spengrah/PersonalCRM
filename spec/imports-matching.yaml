@@ -392,7 +392,8 @@ behaviors:
       - a position pager and arrow keys (inert while typing) move between candidates independent of list pagination (bounded at 1000 candidates)
       - after resolving a candidate the modal advances to the next one, closing only when the queue is exhausted
       - the suggested match, when present, is pre-selected in link mode
-    provenance: [ContactCandidateResolver pager, navigateModalToCandidate]
+      - opening a candidate from its card opens that candidate — the modal tracks it by id, not list position, so while it remains in the queue a background list refetch or reorder cannot swap in a different candidate (once it is resolved and gone, the modal advances in place as above)
+    provenance: [ContactCandidateResolver pager, currentId tracking]
 
   - id: IMP-029
     title: Suggestion confidence surfaces on the link affordance

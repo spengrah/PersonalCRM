@@ -240,7 +240,7 @@ await findCandidateByName(page, displayName)  // waits + paginates
 
 **Pagination handling**: Other workers' data can push your contact to page 2. Use `findCandidateByName()` helper to paginate until found.
 
-**Modal navigation**: When opening a modal, parallel tests may cause it to show another candidate. Use `navigateModalToCandidate()` helper which uses element-based waits (not fixed timeouts) to navigate to your candidate.
+**Modal opens on the clicked candidate**: The resolver modal is keyed by candidate id, so clicking your own card deterministically opens your own candidate even under parallel workers. After opening, assert it with the `expectModalCandidate()` helper so a regression fails loudly instead of acting on the wrong candidate.
 
 **Target specific elements**: Never use `.first()` on candidate cards—target your prefixed contact name:
 ```typescript
