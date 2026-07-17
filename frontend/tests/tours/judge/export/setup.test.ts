@@ -208,6 +208,33 @@ describe('setup.main — provisioning', () => {
     expect(mock.calls.filter(c => c.method === 'POST')).toHaveLength(0)
   })
 
+  it('drift — missing / non-boolean isArchived (strict === false) → non-zero, zero POSTs', async () => {
+    for (const bogus of [undefined, null, 0, 'false']) {
+      const cfgObj = goodConfig(VERDICT_SCORE_NAME)
+      ;(cfgObj as unknown as { isArchived: unknown }).isArchived = bogus
+      const mock = tenantMock({ configPages: [[cfgObj]] })
+      vi.stubGlobal('fetch', mock.impl)
+      const code = await main(creds, silent.log, silent.err)
+      expect(code).toBe(1)
+      expect(mock.calls.filter(c => c.method === 'POST')).toHaveLength(0)
+    }
+  })
+
+  it('drift — duplicate category label masking a missing one → non-zero, zero POSTs', async () => {
+    // [pass, pass, unsure] is length-3 like verdict's [pass, unsure, fail] but drops fail.
+    const dup = goodConfig(VERDICT_SCORE_NAME)
+    dup.categories = [
+      { label: 'pass', value: 1 },
+      { label: 'pass', value: 1 },
+      { label: 'unsure', value: 0 },
+    ]
+    const mock = tenantMock({ configPages: [[dup]] })
+    vi.stubGlobal('fetch', mock.impl)
+    const code = await main(creds, silent.log, silent.err)
+    expect(code).toBe(1)
+    expect(mock.calls.filter(c => c.method === 'POST')).toHaveLength(0)
+  })
+
   it('drift — wrong queue scoreConfigIds (queue compared on scoreConfigIds only) → non-zero, zero POSTs', async () => {
     const configs = SCORE_CONFIGS.map(s => goodConfig(s.name))
     const queue: QueueObj = {
@@ -324,6 +351,15 @@ describe('apiGetAllPages — page protocol', () => {
     expect(await apiGetAllPages(cfg, '/api/public/annotation-queues', 'page')).toEqual([])
   })
 
+  it('throws when a non-terminal page adds no new ids (no-progress guard)', async () => {
+    // page 1 of 3 = [a]; page 2 of 3 repeats [a] → no new id but more pages remain.
+    const mock = scripted([pageResp([{ id: 'a' }], 1, 3), pageResp([{ id: 'a' }], 2, 3)])
+    vi.stubGlobal('fetch', mock.impl)
+    await expect(apiGetAllPages(cfg, '/api/public/score-configs', 'page')).rejects.toBeInstanceOf(
+      PaginationError
+    )
+  })
+
   it('throws on a mismatched returned page (stale/replayed page)', async () => {
     const mock = scripted([pageResp([{ id: 'a' }], 1, 3), pageResp([{ id: 'b' }], 1, 3)])
     vi.stubGlobal('fetch', mock.impl)
@@ -362,14 +398,25 @@ describe('apiGetAllPages — cursor protocol (scores v3)', () => {
     ])
   })
 
-  it('treats a null cursor as terminal (API marks cursor nullable)', async () => {
+  it('throws on a PRESENT null cursor (terminal is the property being ABSENT)', async () => {
     const mock = scripted([cursorResp([{ id: 's1' }], null)])
     vi.stubGlobal('fetch', mock.impl)
-    expect(await apiGetAllPages(cfg, '/api/public/v3/scores', 'cursor')).toHaveLength(1)
+    await expect(apiGetAllPages(cfg, '/api/public/v3/scores', 'cursor')).rejects.toBeInstanceOf(
+      PaginationError
+    )
   })
 
   it('throws on a repeated cursor (no progress)', async () => {
     const mock = scripted([cursorResp([{ id: 's1' }], 'SAME'), cursorResp([{ id: 's2' }], 'SAME')])
+    vi.stubGlobal('fetch', mock.impl)
+    await expect(apiGetAllPages(cfg, '/api/public/v3/scores', 'cursor')).rejects.toBeInstanceOf(
+      PaginationError
+    )
+  })
+
+  it('throws on a FRESH cursor that adds no new ids (fabricated-continuation loop)', async () => {
+    // Distinct cursors each page, but page 2 repeats page 1's only id → no progress.
+    const mock = scripted([cursorResp([{ id: 's1' }], 'CUR2'), cursorResp([{ id: 's1' }], 'CUR3')])
     vi.stubGlobal('fetch', mock.impl)
     await expect(apiGetAllPages(cfg, '/api/public/v3/scores', 'cursor')).rejects.toBeInstanceOf(
       PaginationError

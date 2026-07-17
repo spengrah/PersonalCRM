@@ -294,8 +294,9 @@ export async function api(
 //              page+limit; meta is `{page, limit, totalItems, totalPages}`. Advances
 //              until `page >= totalPages`.
 //   'cursor' — scores v3. Sends/follows `cursor`; meta is `{limit, cursor?}`. The
-//              cursor PROPERTY is absent (or null) on the terminal page, INCLUDING a
-//              one-page result — do NOT mistake a valid empty meta for malformed.
+//              cursor PROPERTY is ABSENT on the terminal page, INCLUDING a one-page
+//              result — do NOT mistake a valid empty meta for malformed. A present
+//              cursor (even null) that isn't a non-empty string is malformed.
 //
 // It MERGES its pagination params into whatever query the caller already put on
 // `path` (PR3 filters by tag/name), never clobbering them. It throws
@@ -340,7 +341,10 @@ export async function apiGetAllPages(
 
     // Accumulate BEFORE deciding termination, deduped by id — an overlapping page
     // (one repeated id + one new id still makes forward progress) must not leak a
-    // phantom duplicate into a caller's uniqueness check.
+    // phantom duplicate into a caller's uniqueness check. `added` counts the NEW
+    // ids this page contributed, so a non-terminal page that adds nothing (a
+    // stalled server / fabricated-cursor loop) can be caught below.
+    const sizeBefore = byId.size
     for (const item of data) {
       if (item === null || typeof item !== 'object' || Array.isArray(item)) {
         throw new PaginationError(`${basePath}: non-object item in 'data'`)
@@ -351,6 +355,7 @@ export async function apiGetAllPages(
       }
       if (!byId.has(id)) byId.set(id, item as Record<string, unknown>)
     }
+    const added = byId.size - sizeBefore
 
     if (protocol === 'page') {
       // A cursor property here means we got a scores-v3-shaped body under 'page'.
@@ -371,22 +376,35 @@ export async function apiGetAllPages(
         )
       }
       if ((page as number) >= (totalPages as number)) break
+      // We are about to request another page; if this one added no new ids the
+      // list isn't making progress — refuse rather than loop until totalPages.
+      if (added === 0) {
+        throw new PaginationError(
+          `${basePath}: page ${String(page)} added no new items but more pages remain`
+        )
+      }
       requestedPage += 1
     } else {
       // Reject page metadata — a utilsMetaResponse under 'cursor' is a protocol mix.
       if ('page' in m || 'totalPages' in m) {
         throw new PaginationError(`${basePath}: cursor-mode response carries page metadata`)
       }
-      // Absent OR null cursor = no more results (the API marks cursor nullable and
-      // "Absent when there are no more results"). A present, non-null value must be
-      // a non-empty string token.
+      // Terminal state = the cursor PROPERTY is ABSENT (the API omits it when there
+      // are no more results, INCLUDING a one-page result). A PRESENT cursor — even
+      // `null` — that is not a non-empty string is malformed, never terminal.
+      if (!('cursor' in m)) break
       const next = m.cursor
-      if (next === undefined || next === null) break
       if (typeof next !== 'string' || next.length === 0) {
-        throw new PaginationError(`${basePath}: invalid meta.cursor`)
+        throw new PaginationError(
+          `${basePath}: invalid meta.cursor (must be a non-empty string when present)`
+        )
       }
       if (seenCursors.has(next)) {
         throw new PaginationError(`${basePath}: cursor did not advance (repeated ${next})`)
+      }
+      // A fresh cursor that yields no new ids is a fabricated-continuation loop.
+      if (added === 0) {
+        throw new PaginationError(`${basePath}: continuation cursor but page added no new items`)
       }
       seenCursors.add(next)
       cursor = next

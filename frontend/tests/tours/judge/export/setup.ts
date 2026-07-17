@@ -58,9 +58,13 @@ function groupByName<T extends { name: string }>(objs: T[]): Map<string, T[]> {
 }
 
 // A config matches its spec iff dataType + the exact category set agree AND it is
-// NOT archived (isArchived lives on the score-config, per the v3 response).
+// EXACTLY not-archived. `isArchived` is a REQUIRED boolean on the v3 score-config, so
+// anything other than a literal `false` (missing, null, truthy, non-boolean) is a
+// drifted/malformed config we must NOT silently accept as healthy.
 function scoreConfigDrift(spec: ScoreConfigSpec, actual: ScoreConfig): string | undefined {
-  if (actual.isArchived) return `score-config '${spec.name}' is archived (isArchived=true)`
+  if (actual.isArchived !== false) {
+    return `score-config '${spec.name}' is archived or missing isArchived (isArchived !== false)`
+  }
   if (actual.dataType !== spec.dataType) {
     return `score-config '${spec.name}' dataType ${actual.dataType} != ${spec.dataType}`
   }
@@ -70,17 +74,23 @@ function scoreConfigDrift(spec: ScoreConfigSpec, actual: ScoreConfig): string | 
   return undefined
 }
 
-// Set equality keyed by label→value (order-independent, exact count).
+// EXACT set equality keyed by label→value (order-independent). A duplicate label in
+// `actual` is rejected: without that check an actual `[pass, pass, unsure]` would
+// pass length + membership against desired `[pass, unsure, fail]` while silently
+// dropping `fail`.
 function categoriesMatch(
   desired: ScoreCategory[],
   actual: ScoreCategory[] | null | undefined
 ): boolean {
   if (!Array.isArray(actual) || actual.length !== desired.length) return false
-  const want = new Map(desired.map(c => [c.label, c.value]))
+  const actualByLabel = new Map<string, number>()
   for (const c of actual) {
-    if (!want.has(c.label) || want.get(c.label) !== c.value) return false
+    if (actualByLabel.has(c.label)) return false // duplicate label
+    actualByLabel.set(c.label, c.value)
   }
-  return true
+  // Equal length + no dups + every desired label present with the right value ⇒ a
+  // bijection, i.e. exact set equality.
+  return desired.every(d => actualByLabel.get(d.label) === d.value)
 }
 
 export async function main(
