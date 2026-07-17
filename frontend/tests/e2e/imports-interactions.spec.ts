@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures'
 import { createTestAPI, TestAPI } from './helpers/test-api'
+import { acquireGlobalLock } from './helpers/global-lock'
 
 // Interactions tab: the conflict/orphan queue. These specs seed orphan
 // (orphan_needs_review) meeting notes against a paired host — enough to drive
@@ -19,6 +20,16 @@ test.describe('Imports Interactions tab @area:imports', () => {
   let sessionB: string
   let titleA: string
   let titleB: string
+  let releaseHostLock: (() => void) | null = null
+
+  // Cross-file mutex: settings-mac.spec.ts also resets/reseeds the mac_host
+  // singleton, and nothing else stops the two files landing in different
+  // workers and nuking each other's host mid-test. Registered before the
+  // reset/seed beforeEach below so the lock is held for the full
+  // beforeEach -> test -> afterEach span.
+  test.beforeEach(async () => {
+    releaseHostLock = await acquireGlobalLock('mac-host')
+  })
 
   test.beforeEach(async ({ request }, testInfo) => {
     testApi = createTestAPI(request, testInfo)
@@ -40,6 +51,13 @@ test.describe('Imports Interactions tab @area:imports', () => {
     // the host, then clear the host so the singleton index is free.
     await testApi.cleanup()
     await testApi.resetMacHosts()
+  })
+
+  // Registered after the cleanup afterEach above so the lock is released
+  // only once the singleton is back in a clean state for the next waiter.
+  test.afterEach(async () => {
+    releaseHostLock?.()
+    releaseHostLock = null
   })
 
   // spec: IMP-026[1]
@@ -101,8 +119,9 @@ test.describe('Imports Interactions tab @area:imports', () => {
       'aria-selected',
       'true'
     )
-    // The URL is normalized to the canonical param.
-    await expect(page).toHaveURL(/tab=interactions/)
+    // The URL is normalized to the canonical param. The normalize effect
+    // fires after hydration, which can lag under real parallel worker load.
+    await expect(page).toHaveURL(/tab=interactions/, { timeout: 15000 })
   })
 
   // spec: IMP-031[0], IMP-026[1]

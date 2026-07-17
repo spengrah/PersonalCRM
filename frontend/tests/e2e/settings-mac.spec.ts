@@ -1,4 +1,5 @@
 import { test, expect, type APIRequestContext } from '@playwright/test'
+import { acquireGlobalLock } from './helpers/global-lock'
 
 // API_KEY is injected by the make target via NEXT_PUBLIC_API_KEY.
 // We re-use it here for the test-only seed endpoints under
@@ -44,6 +45,22 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
   // seed/delete and the empty-state / paired-state tests would
   // interfere with each other.
   test.describe.configure({ mode: 'serial' })
+
+  // Cross-file mutex: imports-interactions.spec.ts also resets/reseeds the
+  // mac_host singleton, and nothing else stops the two files landing in
+  // different workers and nuking each other's host mid-test. Held for the
+  // full beforeEach -> test -> afterEach span (each test below deletes and
+  // reseeds hosts inline, so the lock must cover the whole test body).
+  let releaseHostLock: (() => void) | null = null
+
+  test.beforeEach(async () => {
+    releaseHostLock = await acquireGlobalLock('mac-host')
+  })
+
+  test.afterEach(async () => {
+    releaseHostLock?.()
+    releaseHostLock = null
+  })
 
   test('renders empty-state when no Mac hosts are paired', async ({ page }) => {
     // The zero-host rendering branch, driven by mocking the list endpoint:
