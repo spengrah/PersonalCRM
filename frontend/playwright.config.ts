@@ -1,6 +1,30 @@
 import { defineConfig, devices } from '@playwright/test'
 import os from 'os'
 import { readFileSync } from 'fs'
+import path from 'path'
+import { execSync } from 'child_process'
+
+// Store browsers on the workspace volume, not the default ~/.cache/ms-playwright
+// home-layer cache — a container rebuild wipes that even when the workspace
+// persists, causing every test to fail at browserType.launch until reinstalled.
+// Anchored on the git common dir (main repo root) so all worktrees SHARE one
+// cache, matching the Makefile/CI. The Makefile, CI, and setup-dev.sh export the
+// SAME value for `playwright install`; this fallback covers a bare `playwright
+// test` invocation. Falls back to the frontend parent if git is unavailable.
+if (!process.env.PLAYWRIGHT_BROWSERS_PATH) {
+  let root = path.resolve(__dirname, '..')
+  try {
+    const commonDir = execSync('git rev-parse --path-format=absolute --git-common-dir', {
+      cwd: __dirname,
+    })
+      .toString()
+      .trim()
+    if (commonDir) root = path.dirname(commonDir)
+  } catch {
+    // not a git checkout — use the frontend parent
+  }
+  process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(root, '.playwright-browsers')
+}
 
 // Effective CPU budget = the cgroup CFS quota when present, else the visible
 // core count. A container can be capped far below os.cpus(): our dev sandbox

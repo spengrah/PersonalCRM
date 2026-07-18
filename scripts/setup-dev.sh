@@ -290,6 +290,12 @@ echo_step "Installing Playwright browsers..."
 
 if [ -d "frontend" ] && command -v bun &> /dev/null; then
     cd frontend
+    # Install browsers onto the workspace volume, matching the Makefile / CI /
+    # playwright.config.ts location, so they survive container rebuilds that wipe
+    # the default ~/.cache/ms-playwright home-layer cache. Anchored on the git
+    # common dir (main repo root) so all worktrees share one cache; falls back to
+    # PROJECT_ROOT if git resolution fails.
+    export PLAYWRIGHT_BROWSERS_PATH="$(cd "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)")" 2>/dev/null && pwd || echo "$PROJECT_ROOT")/.playwright-browsers"
     if bunx playwright --version &> /dev/null; then
         # Check if browsers are installed by trying to run a simple check
         if bunx playwright install --dry-run 2>&1 | grep -q "already installed"; then

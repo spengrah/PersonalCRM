@@ -191,6 +191,9 @@ tests/junit.xml
 test-results/
 playwright-report/
 playwright/.cache/
+# Browsers are stored on the workspace volume (see PLAYWRIGHT_BROWSERS_PATH in
+# Makefile / playwright.config.ts) so they survive container rebuilds.
+.playwright-browsers/
 
 # Tours harness live-run output (captures + manifest + traces) — never committed
 frontend/tests/tours/.runs/
