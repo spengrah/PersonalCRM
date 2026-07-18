@@ -604,11 +604,13 @@ jobs:
         uses: actions/cache@v4
         id: playwright-cache
         with:
-          path: ~/.cache/ms-playwright
+          path: ${{ github.workspace }}/.playwright-browsers
           key: playwright-${{ runner.os }}-${{ hashFiles('frontend/bun.lock') }}
 
       - name: Install Playwright browsers
         working-directory: frontend
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
         run: bunx playwright install chromium --with-deps
 
       - name: Wait for PostgreSQL
@@ -663,6 +665,7 @@ jobs:
         env:
           CI: true
           PLAYWRIGHT_WORKERS: 4
+          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
           DATABASE_URL: postgres://crm_user:crm_password@localhost:5432/personal_crm?sslmode=disable
           SESSION_SECRET: test-session-secret-for-ci
           API_KEY: test-api-key-for-ci

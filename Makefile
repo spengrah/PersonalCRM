@@ -5,6 +5,18 @@
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
 
+# Playwright browsers on the workspace volume, NOT the default
+# ~/.cache/ms-playwright home-layer cache — a container rebuild wipes that even
+# when the workspace persists, breaking every E2E test at browserType.launch.
+# Anchored on the git COMMON dir (the main repo's .git, identical for every
+# linked worktree) so all worktrees + the main checkout SHARE one browser cache
+# (Playwright namespaces by version, so this is safe across version bumps).
+# Falls back to the worktree toplevel if git resolution fails. Exported so every
+# e2e recipe and `playwright install` resolve the same path.
+MAIN_REPO_ROOT := $(shell cd "$$(dirname "$$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)")" 2>/dev/null && pwd || git rev-parse --show-toplevel 2>/dev/null)
+PLAYWRIGHT_BROWSERS_PATH := $(MAIN_REPO_ROOT)/.playwright-browsers
+export PLAYWRIGHT_BROWSERS_PATH
+
 # Go build cache (workspace-local by default; override via env).
 GOCACHE ?= $(REPO_ROOT)/.gocache
 export GOCACHE
