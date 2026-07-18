@@ -72,6 +72,17 @@ run() {
     RC=$?
 }
 
+# run_err <ENV=val...> : like run() but captures the script's STDERR into ERR_OUT
+# (the launch banner reports the resolved runId there).
+run_err() {
+    : > "$CALL_LOG"
+    ERR_OUT="$(env PATH="$SANDBOX/bin:$PATH" \
+        TOURS_BASE_URL="http://staging.test" TOURS_API_KEY="k" \
+        "$@" \
+        bash "$SANDBOX/run-tours.sh" 2>&1 >/dev/null)"
+    RC=$?
+}
+
 echo "run-tours.sh reset-path selection tests"
 make_sandbox
 trap cleanup_sandbox EXIT
@@ -109,6 +120,35 @@ run TOURS_SKIP_RESET=1 TOURS_RESEED_SSH="qa-staging@10.100.0.1" TOURS_RESEED_KEY
 grep -qE 'ssh .*reseed' "$CALL_LOG" && fail "precedence: skip must win over reseed ssh" || ok
 grep -q 'staging-reset.sh' "$CALL_LOG" && fail "precedence: staging-reset must NOT run" || ok
 grep -q 'bunx .*playwright' "$CALL_LOG" && ok || fail "precedence: playwright should launch"
+
+# 5. A pre-set TOURS_RUN_ID is HONORED (not clobbered) — the nightly-round
+#    orchestrator relies on this to know the run dir deterministically.
+run_err TOURS_SKIP_RESET=1 TOURS_RUN_ID="20260101T000000Z"
+grep -q 'runId=20260101T000000Z' <<<"$ERR_OUT" && ok \
+    || fail "override: pre-set TOURS_RUN_ID must pass through (got: $ERR_OUT)"
+
+# 5b. With TOURS_RUN_ID explicitly empty, the default timestamp-shaped runId is minted
+#     (explicit empty, so an ambient value can't mask the defaulting path).
+run_err TOURS_SKIP_RESET=1 TOURS_RUN_ID=
+grep -qE 'runId=[0-9]{8}T[0-9]{6}Z' <<<"$ERR_OUT" && ok \
+    || fail "default: a timestamp runId must be minted (got: $ERR_OUT)"
+
+# 5c. A TOURS_RUN_ID that is NOT the run-id timestamp form is REJECTED before launch —
+#     it becomes a path segment (RUNS_ROOT/<id>), so `../` must never escape .runs.
+for bad in "../evil" "20260101T000000Z/../x" "not-a-runid" "20260101T000000Z
+../evil"; do
+    run_err TOURS_SKIP_RESET=1 TOURS_RUN_ID="$bad"
+    [ "$RC" -ne 0 ] && ok || fail "traversal: TOURS_RUN_ID='$bad' must be rejected (exit!=0)"
+    grep -q 'bunx .*playwright' "$CALL_LOG" && fail "traversal: playwright must NOT launch for '$bad'" || ok
+done
+
+# 5d. An invalid TOURS_RUN_ID is rejected BEFORE any destructive reset — WITHOUT
+#     TOURS_SKIP_RESET, so the default staging-reset path is active. A bad id must exit
+#     before that reset runs (never reseed against a bad id, then error).
+run TOURS_RUN_ID="../evil"
+[ "$RC" -ne 0 ] && ok || fail "pre-reset-validate: invalid id must exit non-zero"
+grep -q 'staging-reset.sh' "$CALL_LOG" && fail "pre-reset-validate: reset must NOT run before rejecting a bad id" || ok
+grep -q 'bunx .*playwright' "$CALL_LOG" && fail "pre-reset-validate: playwright must NOT launch" || ok
 
 echo "  PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
