@@ -28,7 +28,7 @@ The user reported the email as missing *before* the edit at 20:13:31, at which p
 These are assumptions the design rests on. If one stops holding, the reasoning must be revisited.
 
 1. **There will be multiple writing clients.** Today the web form is the only one — verified: mac-daemon touches only `/ingest/events` and `/host/*`, scripts only issue unauthenticated GET health probes, and crm-admin operates at the service layer. But a future MCP server is expected to write contacts. The design must therefore be safe for a client that has never read this document.
-2. **There will not be concurrent writes from multiple sources.** Single-user CRM, one human, no simultaneous editors. This premise is what retires optimistic concurrency (see Rejected alternatives).
+2. **There will not be concurrent writes from multiple sources.** Single-user CRM, one human, no simultaneous editors. This premise is what retires optimistic concurrency (see Rejected alternatives). The consequence, stated plainly: a genuinely concurrent add-and-remove from two clients is not defended against. Under this design that failure mode is benign — concurrent operations compose rather than clobber — which is why the premise is affordable here and was not under the rejected ETag approach, where the same premise would have left a silent lost update.
 3. **`PUT /contacts/:id` will eventually be atomized** into per-property endpoints for MCP-client flexibility. That work is out of scope here, but among fixes that work, this design prefers the one that moves toward it.
 
 ## Defect 1: contact detail not invalidated after link
@@ -64,20 +64,25 @@ Premise 1 sharpens this. A future MCP server told "add a phone number for this c
 
 Methods move to a sub-resource with explicit operations, so that removal requires *naming* what to remove. A client cannot delete what it never saw.
 
-The codebase already uses this pattern for every other child collection on a contact — notes, interactions, tasks, identities. `contact_task_routes.go` is a near-exact template:
+The codebase already uses this pattern for every other child collection on a contact — notes, interactions, tasks, identities. Contact methods are the last child collection still managed by wholesale replacement through the parent PUT, and the only one that has lost data. This design brings them into line with the existing convention rather than introducing a new one.
 
-```
-GET    /contacts/:id/tasks
-POST   /contacts/:id/tasks
-DELETE /contacts/:id/tasks/:taskId
-```
+### Shape: one transactional operations endpoint
 
-Contact methods are the last child collection still managed by wholesale replacement through the parent PUT, and the only one that has lost data. This design brings them into line with the existing convention rather than introducing a new one.
+`POST /contacts/:id/methods`, taking a list of operations (add / remove / set-primary), applied in a single transaction.
+
+**It must be `POST` with operations, never `PUT` with a desired set.** A `PUT /contacts/:id/methods` accepting the full method list is wholesale replace wearing a sub-resource costume: absence would again imply deletion, reintroducing this exact bug at a new URL. The structural property being bought is that *absence expresses nothing*, so nothing can be inferred from it. A naive client's "add a phone number" is a one-element list that cannot affect any other method.
+
+Two database constraints drive this shape, both verified:
+
+- `idx_contact_method_primary ON contact_method(contact_id) WHERE is_primary = TRUE` — at most one primary per contact, DB-enforced. Promoting a new primary before demoting the old one is a **constraint violation, not a logical wrinkle**. With granular routes the client must demote-then-promote across two round trips, and a failure between them leaves the contact with no primary. Inside one transaction the server orders operations correctly by construction and the client never needs to know the constraint exists. That invariant should not live in the frontend.
+- `idx_contact_method_unique_value ON contact_method(contact_id, type, value_normalized)` — a duplicate add is a unique violation rather than a second row, which makes every operation naturally idempotent. Combined with the contact PUT being idempotent, this means **retrying a whole save is safe**, so partial-failure recovery can be "report what failed and offer retry" rather than bespoke rollback.
+
+Granular routes (`DELETE /contacts/:id/methods/:methodId`) remain available later if a client wants them; this design declines to build them now for a client that does not yet exist. The task-routes template's granular shape fits tasks because tasks are created one at a time, whereas methods are edited in bulk behind a Save button.
 
 Two consequences follow, and the plan must decide both explicitly:
 
-- **`methods` on `PUT /contacts/:id`.** Once methods have their own endpoints, the PUT's methods branch has no remaining caller. Retiring it removes the destructive primitive outright rather than guarding it, and retires `CON-008`. Whether that retirement lands in this work or immediately after is a planning decision; leaving a destructive branch reachable is not.
-- **The multi-request save.** The edit form currently saves contact and notepad together via `Promise.all` (`frontend/src/app/contacts/[id]/page.tsx:198`), and the "contact saved, note failed" direction is already unhandled. Per-method operations make partial failure more likely, not less. This needs deliberate state handling and a named test, not discovery in review.
+- **`methods` on `PUT /contacts/:id`.** Once methods have their own endpoint, the PUT's methods branch has no remaining caller. Retiring it removes the destructive primitive outright rather than guarding it, and retires `CON-008`. Whether that retirement lands in this work or immediately after is a planning decision; leaving a destructive branch reachable is not.
+- **The multi-request save.** The edit form saves contact and notepad together via `Promise.all` (`frontend/src/app/contacts/[id]/page.tsx:198`), and the "contact saved, note failed" direction is already unhandled. The operations endpoint keeps the save at two requests rather than one-per-method, so this stays a single pre-existing seam instead of multiplying. It should be fixed here on its own terms: sequence rather than `Promise.all`, and report precisely what landed. Cross-resource atomicity via a compound endpoint is explicitly rejected — notes are a genuinely separate resource, and re-centralizing runs against premise 3.
 
 ## Rejected alternatives
 
