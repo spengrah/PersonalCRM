@@ -1,0 +1,189 @@
+===== dev 4 0 @area:contacts =====
+phase db_reset_seconds=1.4
+phase backend_start_seconds=2.1
+phase build_seconds=0 (next dev, no build)
+phase frontend_start_seconds=11.5 (http 200)
+phase exec_wall_seconds=143.6  container_cpu_seconds=283.5  throttled_seconds=771.3  nr_throttled=1383  cpu_quota=2.00
+MODE=dev WORKERS=4  BUILD=0s BACKEND=2.1s FE=11.5s DB=1.4s EXEC=143.6s
+tests=42 passed=42 flaky=0 failed=0 skipped=0
+sum_test_seconds=530.0  exec_wall_seconds=143.6
+effective_concurrency(sum/wall)=3.69   (workers_used=4)
+worker_busy_seconds: max=134.2 min=128.9  (imbalance=5.3s)
+container_cpu_seconds=284  cpu_quota=2.0  CPU_UTIL_vs_quota=99%
+  -> CPU-BOUND (saturating the quota) at this worker count
+top areas by total test-seconds:
+    266.8s  contacts.spec.ts
+    114.3s  contact-tasks.spec.ts
+     62.6s  contact-direction.spec.ts
+     47.7s  notepad.spec.ts
+     28.0s  contact-knowledge.spec.ts
+     10.6s  rematch-on-add-email.spec.ts
+longest individual tests:
+     22.8s  [expected] notepad.spec.ts :: shows the notepad only with content, preserving line breaks and clamping overflow
+     21.1s  [expected] contacts.spec.ts :: should create a contact from the form @smoke
+     17.0s  [expected] contacts.spec.ts :: should navigate to merge modal via context menu Merge action
+     16.6s  [expected] contacts.spec.ts :: should navigate to edit mode via context menu Edit action
+     16.4s  [expected] contact-direction.spec.ts :: shows explicit no-recent-activity state with no direction signals
+     16.0s  [expected] contacts.spec.ts :: should sort by Last response column when header clicked
+     15.7s  [expected] contact-direction.spec.ts :: shows direction signal timestamps after mutual interaction
+     15.6s  [expected] contact-direction.spec.ts :: shows awaiting-reply indicator while a follow-up pends
+     14.9s  [expected] contact-direction.spec.ts :: shows outreach but not response after outbound-only interaction
+     14.7s  [expected] contact-knowledge.spec.ts :: shows a birthday row only when the birthday is known
+     14.7s  [expected] contacts.spec.ts :: should filter contacts by cadence status
+     14.7s  [expected] contacts.spec.ts :: should sort by Next Contact column when header clicked
+BENCH_DONE tag=dev-w4-grep
+===== standalone 4 1 @area:contacts =====
+phase db_reset_seconds=1.3
+phase backend_start_seconds=2.1
+phase build_seconds=77.1
+phase frontend_start_seconds=1.1 (http 200)
+phase exec_wall_seconds=195.7  container_cpu_seconds=208.2  throttled_seconds=177.2  nr_throttled=675  cpu_quota=2.00
+MODE=standalone WORKERS=4  BUILD=77.1s BACKEND=2.1s FE=1.1s DB=1.3s EXEC=195.7s
+tests=42 passed=0 flaky=0 failed=42 skipped=0
+sum_test_seconds=658.1  exec_wall_seconds=195.7
+effective_concurrency(sum/wall)=3.36   (workers_used=42)
+worker_busy_seconds: max=31.1 min=5.0  (imbalance=26.1s)
+container_cpu_seconds=208  cpu_quota=2.0  CPU_UTIL_vs_quota=53%
+  -> NOT cpu-bound (IO/DB/sleep/server-wait) at this worker count
+top areas by total test-seconds:
+    300.3s  contacts.spec.ts
+    183.7s  contact-tasks.spec.ts
+     60.7s  contact-direction.spec.ts
+     49.9s  notepad.spec.ts
+     47.5s  contact-knowledge.spec.ts
+     16.0s  rematch-on-add-email.spec.ts
+longest individual tests:
+     31.1s  [unexpected] contact-knowledge.spec.ts :: shows a location row only when the location is known
+     19.2s  [unexpected] contact-direction.spec.ts :: shows outreach but not response after outbound-only interaction
+     18.7s  [unexpected] contact-direction.spec.ts :: shows explicit no-recent-activity state with no direction signals
+     17.7s  [unexpected] contact-direction.spec.ts :: shows direction signal timestamps after mutual interaction
+     17.4s  [unexpected] contact-tasks.spec.ts :: offers unlink with confirmation and fires only the CRM-link DELETE
+     17.2s  [unexpected] contact-tasks.spec.ts :: created task appears in the live tasks list
+     17.2s  [unexpected] contacts.spec.ts :: should not show expand button for short notes
+     17.2s  [unexpected] contact-tasks.spec.ts :: dismissing the unlink confirmation leaves the task linked
+     17.2s  [unexpected] notepad.spec.ts :: clearing the notepad removes the note
+     17.1s  [unexpected] contact-tasks.spec.ts :: strips CRM link markers and falls back to a placeholder for empty content
+     17.0s  [unexpected] contact-tasks.spec.ts :: collapses completed tasks behind a toggle with a count
+     16.9s  [unexpected] contact-tasks.spec.ts :: opens add task modal and closes it with Escape
+BENCH_DONE tag=standalone-w4-grep
+===== dev 4 0 =====
+phase db_reset_seconds=1.4
+phase backend_start_seconds=2.1
+phase build_seconds=0 (next dev, no build)
+phase frontend_start_seconds=11.7 (http 200)
+phase exec_wall_seconds=562.8  container_cpu_seconds=1121.0  throttled_seconds=3079.7  nr_throttled=5566  cpu_quota=2.00
+MODE=dev WORKERS=4  BUILD=0s BACKEND=2.1s FE=11.7s DB=1.4s EXEC=562.8s
+tests=180 passed=173 flaky=0 failed=4 skipped=3
+sum_test_seconds=2147.9  exec_wall_seconds=562.8
+effective_concurrency(sum/wall)=3.82   (workers_used=9)
+worker_busy_seconds: max=546.3 min=0.0  (imbalance=546.3s)
+container_cpu_seconds=1121  cpu_quota=2.0  CPU_UTIL_vs_quota=100%
+  -> CPU-BOUND (saturating the quota) at this worker count
+top areas by total test-seconds:
+    249.6s  contacts.spec.ts
+    216.7s  imports-modal.spec.ts
+    152.6s  contact-merge.spec.ts
+    149.9s  contact-navigation.spec.ts
+    144.4s  settings.spec.ts
+    129.8s  telegram-settings.spec.ts
+    116.7s  contact-tasks.spec.ts
+     97.5s  dashboard.spec.ts
+     94.7s  meetings.spec.ts
+     94.6s  imports-actions.spec.ts
+     90.4s  imports-features.spec.ts
+     80.3s  birthdays.spec.ts
+longest individual tests:
+     37.7s  [unexpected] navigation.spec.ts :: persistent nav links all five sections and marks the current one active
+     31.3s  [unexpected] birthdays.spec.ts :: shows placeholder-year birthdays without age and keeps today at the top
+     27.9s  [expected] imports-modal.spec.ts :: should enter edit mode when clicking name
+     25.2s  [expected] overdue-contact-updates.spec.ts :: all views should show consistent state after marking as contacted
+     24.4s  [expected] notepad.spec.ts :: shows the notepad only with content, preserving line breaks and clamping overflow
+     24.2s  [expected] imports-actions.spec.ts :: should link candidate to existing contact
+     24.0s  [expected] contact-navigation.spec.ts :: arrow keys move to the previous/next contact and disable at both boundaries @smoke
+     22.9s  [expected] imports-modal.spec.ts :: Escape, backdrop, and Cancel dismiss without resolving
+     22.9s  [expected] imports-actions.spec.ts :: should ignore candidate stickily
+     22.0s  [expected] imports-modal.spec.ts :: advances to the next candidate after resolving, closing only when the queue is exhausted
+     21.6s  [expected] contacts.spec.ts :: should create a contact from the form @smoke
+     21.6s  [expected] imports-actions.spec.ts :: should open link modal when clicking Link button
+BENCH_DONE tag=dev-w4
+===== dev 2 0 =====
+phase db_reset_seconds=1.3
+phase backend_start_seconds=2.1
+phase build_seconds=0 (next dev, no build)
+phase frontend_start_seconds=11.5 (http 200)
+phase exec_wall_seconds=440.3  container_cpu_seconds=865.5  throttled_seconds=1253.7  nr_throttled=4139  cpu_quota=2.00
+MODE=dev WORKERS=2  BUILD=0s BACKEND=2.1s FE=11.5s DB=1.3s EXEC=440.3s
+tests=180 passed=176 flaky=0 failed=1 skipped=3
+sum_test_seconds=853.5  exec_wall_seconds=440.3
+effective_concurrency(sum/wall)=1.94   (workers_used=4)
+worker_busy_seconds: max=429.3 min=0.0  (imbalance=429.3s)
+container_cpu_seconds=866  cpu_quota=2.0  CPU_UTIL_vs_quota=98%
+  -> CPU-BOUND (saturating the quota) at this worker count
+top areas by total test-seconds:
+    101.2s  contacts.spec.ts
+     65.3s  contact-merge.spec.ts
+     62.0s  imports-modal.spec.ts
+     61.4s  settings.spec.ts
+     60.7s  contact-navigation.spec.ts
+     50.1s  telegram-settings.spec.ts
+     49.2s  contact-tasks.spec.ts
+     45.8s  birthdays.spec.ts
+     44.6s  meetings.spec.ts
+     36.9s  dashboard.spec.ts
+     32.8s  imports-features.spec.ts
+     23.7s  notepad.spec.ts
+longest individual tests:
+     22.1s  [expected] birthdays.spec.ts :: shows placeholder-year birthdays without age and keeps today at the top
+     15.9s  [expected] navigation.spec.ts :: persistent nav links all five sections and marks the current one active
+     11.9s  [unexpected] imports-interactions.spec.ts :: shows the attention badge and renders orphan cards on the Interactions tab
+     11.2s  [expected] notepad.spec.ts :: shows the notepad only with content, preserving line breaks and clamping overflow
+     10.6s  [expected] contact-merge.spec.ts :: should successfully merge contacts
+     10.3s  [expected] error-boundary.spec.ts :: overdue failure shows an error state with a reason, not empty or caught-up
+      8.9s  [expected] settings.spec.ts :: a manual Todoist task sync can be triggered with its outcome indicated
+      8.9s  [expected] overdue-contact-updates.spec.ts :: all views should show consistent state after marking as contacted
+      8.7s  [expected] overdue-contact-updates.spec.ts :: clears the contact from the overdue list when logged from Contact Detail
+      8.7s  [expected] contact-navigation.spec.ts :: arrow keys move to the previous/next contact and disable at both boundaries @smoke
+      8.0s  [expected] contact-navigation.spec.ts :: should restore search and sort state after Escape back to list
+      7.9s  [expected] birthdays.spec.ts :: groups birthdays into today, upcoming, and already-celebrated
+BENCH_DONE tag=dev-w2
+===== dev 1 0 =====
+phase db_reset_seconds=1.3
+phase backend_start_seconds=2.1
+phase build_seconds=0 (next dev, no build)
+phase frontend_start_seconds=11.3 (http 200)
+phase exec_wall_seconds=486.2  container_cpu_seconds=802.5  throttled_seconds=489.0  nr_throttled=2590  cpu_quota=2.00
+MODE=dev WORKERS=1  BUILD=0s BACKEND=2.1s FE=11.3s DB=1.3s EXEC=486.2s
+tests=180 passed=176 flaky=0 failed=1 skipped=3
+sum_test_seconds=474.8  exec_wall_seconds=486.2
+effective_concurrency(sum/wall)=0.98   (workers_used=3)
+worker_busy_seconds: max=264.9 min=0.0  (imbalance=264.9s)
+container_cpu_seconds=802  cpu_quota=2.0  CPU_UTIL_vs_quota=83%
+  -> CPU-BOUND (saturating the quota) at this worker count
+top areas by total test-seconds:
+     52.0s  contacts.spec.ts
+     42.1s  contact-merge.spec.ts
+     38.6s  settings.spec.ts
+     36.6s  imports-modal.spec.ts
+     30.9s  contact-navigation.spec.ts
+     29.7s  telegram-settings.spec.ts
+     28.6s  contact-tasks.spec.ts
+     23.8s  meetings.spec.ts
+     21.2s  birthdays.spec.ts
+     18.2s  dashboard.spec.ts
+     17.1s  imports-features.spec.ts
+     14.1s  imports-actions.spec.ts
+longest individual tests:
+     12.7s  [expected] birthdays.spec.ts :: shows placeholder-year birthdays without age and keeps today at the top
+     11.1s  [unexpected] imports-interactions.spec.ts :: shows the attention badge and renders orphan cards on the Interactions tab
+      8.9s  [expected] error-boundary.spec.ts :: overdue failure shows an error state with a reason, not empty or caught-up
+      7.8s  [expected] contact-merge.spec.ts :: should successfully merge contacts
+      7.5s  [expected] navigation.spec.ts :: persistent nav links all five sections and marks the current one active
+      6.3s  [expected] settings.spec.ts :: a manual Todoist task sync can be triggered with its outcome indicated
+      5.8s  [expected] contact-merge.spec.ts :: keeps the merge submit disabled while the merge is in flight
+      5.5s  [expected] contact-merge.spec.ts :: keeps the merge submit disabled while the preview is loading
+      5.4s  [expected] notepad.spec.ts :: shows the notepad only with content, preserving line breaks and clamping overflow
+      5.3s  [expected] imports-modal.spec.ts :: should navigate with arrow keys and the position pager
+      4.6s  [expected] overdue-contact-updates.spec.ts :: all views should show consistent state after marking as contacted
+      4.0s  [expected] contact-knowledge.spec.ts :: shows a birthday row only when the birthday is known
+BENCH_DONE tag=dev-w1
+MATRIX2_COMPLETE
