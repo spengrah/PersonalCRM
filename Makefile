@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev dev-seed staging-reset tours build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast qa-report qa-export qa-langfuse-setup prod staging accelerated testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry spec-lint spec-coverage api-types api-types-check
+.PHONY: help setup dev dev-seed staging-reset tours build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast qa-report qa-export qa-langfuse-setup qa-fn-backfill prod staging accelerated testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry spec-lint spec-coverage api-types api-types-check
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -294,6 +294,10 @@ qa-export: ## Ship a judge run's GenAI spans (TRACE=<trace.jsonl>, written when 
 qa-langfuse-setup: ## Idempotently provision the standing QA triage queue (ground_truth+disposition dims) + verdict/ground_truth/disposition score configs in Langfuse (obs). Re-runnable; reconciles desired state. Requires LANGFUSE_HOST/PUBLIC_KEY/SECRET_KEY (errors non-zero without them).
 	@cd frontend && bun run tests/tours/judge/export/setup.ts
 
+qa-fn-backfill: ## False-negative recall helper. BEHAVIOR=<id> lists covering-PASS candidate traces (deep-links + cite/critique); add ROUND=<runId|gitSha> to narrow. BEHAVIOR=<id> TRACE=<traceId> enqueues that proven candidate into the qa-triage queue for should_fail scoring. Fail-closed (non-zero on any error); reports, never mutates, an already-triaged item. Requires LANGFUSE_HOST/PUBLIC_KEY/SECRET_KEY; LANGFUSE_PROJECT_ID resolves deep-links (else the key's sole project).
+	@if [ -n "$(TRACE)" ] && [ -n "$(ROUND)" ]; then echo "qa-fn-backfill: TRACE (enqueue) and ROUND (list narrow) are mutually exclusive — pass only one." >&2; exit 2; fi
+	@cd frontend && bun run tests/tours/judge/export/backfill.ts "$(BEHAVIOR)" $(if $(TRACE),"$(TRACE)",$(if $(ROUND),--round "$(ROUND)",))
+
 # Native PostgreSQL (for containerized development without Docker-in-Docker)
 # Symlink the main checkout's gitignored env files (.env, frontend/.env.local,
 # ...) into the current worktree. Normally automatic via the post-checkout git
@@ -536,6 +540,7 @@ test-deploy-scripts:
 	@bash scripts/staging-reset.test.sh
 	@bash scripts/ci/staging-reseed-decision.test.sh
 	@bash scripts/ci/qa-round-cadence-gate.test.sh
+	@bash scripts/ci/qa-fn-backfill-guard.test.sh
 	@bash scripts/staging-deployed-sha.test.sh
 	@bash scripts/staging-reseed.test.sh
 	@bash scripts/admin/setup-staging-reseed-host.sh.test.sh
