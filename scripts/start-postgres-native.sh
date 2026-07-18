@@ -79,6 +79,13 @@ else
     sudo -u postgres psql -c "ALTER USER $POSTGRES_USER WITH PASSWORD '$ESCAPED_PASSWORD';"
 fi
 
+# SUPERUSER is required for the test harness to CREATE EXTENSION vector (an
+# untrusted extension) in personal_crm_test and its per-worktree templates.
+# Applied unconditionally so it also restores a role that regressed to
+# non-super after a container rebuild (the DB is provisioned at runtime, not
+# baked into the image). Dev/native only — prod uses infra/setup-pi.sh.
+sudo -u postgres psql -c "ALTER USER $POSTGRES_USER WITH SUPERUSER;"
+
 # Check if database exists
 DB_EXISTS=$(sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='$POSTGRES_DB';")
 
