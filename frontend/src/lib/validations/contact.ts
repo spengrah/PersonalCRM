@@ -8,6 +8,13 @@ import {
 import type { ContactMethodType } from '@/types/contact'
 
 const contactMethodSchema = z.object({
+  // The server's id for this row, carried through the form so an edit can name
+  // the row it is changing. Deliberately `method_id` and never `id`:
+  // `useFieldArray` is called without a custom `keyName` and react-hook-form
+  // OVERWRITES `fields[].id` with its own generated key, so a server id
+  // threaded as `id` is silently replaced — and only becomes visible once it is
+  // submitted, naming a method that does not exist. Never rendered.
+  method_id: z.string().optional(),
   type: z.string().optional().or(z.literal('')),
   value: z.string().optional().or(z.literal('')),
   is_primary: z.boolean().optional().default(false),
@@ -143,26 +150,52 @@ export type ContactFormInput = z.input<typeof contactSchema>
 // Validated form values (schema output)
 export type ContactFormData = z.output<typeof contactSchema>
 
+// Emits one entry per form row that survives normalization, remembering which
+// row each came from. The mapping is the single source of truth for "which form
+// row produced this submitted method" — the form needs it to write a confirmed
+// server id back into the right row, and recomputing it with a second copy of
+// the filter rule is how the two would drift apart.
+function emitMethodRows(methods: ContactFormData['methods']) {
+  const emitted: Array<{
+    method_id?: string
+    type: ContactMethodType
+    value: string
+    is_primary: boolean
+  }> = []
+  const sourceRowIndexes: number[] = []
+
+  ;(methods ?? []).forEach((method, sourceRowIndex) => {
+    const type = method.type?.trim() as ContactMethodType | ''
+    if (!type) {
+      return
+    }
+    const normalizedValue = normalizeContactMethodValue(type, method.value ?? '')
+    if (normalizedValue === '') {
+      return
+    }
+    emitted.push({
+      ...(method.method_id ? { method_id: method.method_id } : {}),
+      type,
+      value: normalizedValue,
+      is_primary: Boolean(method.is_primary),
+    })
+    sourceRowIndexes.push(sourceRowIndex)
+  })
+
+  return { methods: emitted, sourceRowIndexes }
+}
+
+/**
+ * The form-row index behind each submitted method, parallel to
+ * `transformContactFormData(data).methods`.
+ */
+export function submittedMethodSourceRows(data: ContactFormData): number[] {
+  return emitMethodRows(data.methods).sourceRowIndexes
+}
+
 // Transform form data to API format (convert empty strings to undefined)
 export function transformContactFormData(data: ContactFormData) {
-  const normalizedMethods = (data.methods ?? [])
-    .map(method => {
-      const type = method.type?.trim() as ContactMethodType | ''
-      const rawValue = method.value ?? ''
-      if (!type) {
-        return null
-      }
-      const normalizedValue = normalizeContactMethodValue(type, rawValue)
-      if (normalizedValue === '') {
-        return null
-      }
-      return {
-        type,
-        value: normalizedValue,
-        is_primary: Boolean(method.is_primary),
-      }
-    })
-    .filter((method): method is NonNullable<typeof method> => method !== null)
+  const normalizedMethods = emitMethodRows(data.methods).methods
 
   return {
     full_name: data.full_name,

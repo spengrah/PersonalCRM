@@ -48,7 +48,7 @@ type discoveryGroupRepo interface {
 type discoveryContactWriter interface {
 	GetContact(ctx context.Context, id uuid.UUID) (*repository.Contact, error)
 	CreateContact(ctx context.Context, req repository.CreateContactRequest, methods []ContactMethodInput) (*repository.Contact, uuid.UUID, error)
-	UpdateContact(ctx context.Context, id uuid.UUID, req repository.UpdateContactRequest, methods []ContactMethodInput, replaceMethods bool) (*repository.Contact, uuid.UUID, error)
+	UpdateContact(ctx context.Context, id uuid.UUID, req repository.UpdateContactRequest) (*repository.Contact, error)
 	// DeleteContact backs orphan cleanup: when the import mark touches zero
 	// siblings (a concurrent resolve already claimed the group), the contact
 	// just created is soft-deleted so the race never strands a duplicate.
@@ -263,7 +263,7 @@ func (s *AnarlogDiscoveryService) resolveLink(ctx context.Context, req ResolveTo
 		if req.Cadence != nil {
 			updateReq.Cadence = req.Cadence
 		}
-		if _, _, uErr := s.contacts.UpdateContact(ctx, contactID, updateReq, nil, false); uErr != nil {
+		if _, uErr := s.contacts.UpdateContact(ctx, contactID, updateReq); uErr != nil {
 			return nil, fmt.Errorf("update link target contact: %w", uErr)
 		}
 	}

@@ -130,8 +130,8 @@ func (f *fakeDiscoveryContacts) GetContact(ctx context.Context, id uuid.UUID) (*
 func (f *fakeDiscoveryContacts) CreateContact(ctx context.Context, req repository.CreateContactRequest, methods []service.ContactMethodInput) (*repository.Contact, uuid.UUID, error) {
 	return &repository.Contact{ID: uuid.New(), FullName: req.FullName}, uuid.Nil, nil
 }
-func (f *fakeDiscoveryContacts) UpdateContact(ctx context.Context, id uuid.UUID, req repository.UpdateContactRequest, methods []service.ContactMethodInput, replaceMethods bool) (*repository.Contact, uuid.UUID, error) {
-	return &repository.Contact{ID: id, FullName: req.FullName}, uuid.Nil, nil
+func (f *fakeDiscoveryContacts) UpdateContact(ctx context.Context, id uuid.UUID, req repository.UpdateContactRequest) (*repository.Contact, error) {
+	return &repository.Contact{ID: id, FullName: req.FullName}, nil
 }
 func (f *fakeDiscoveryContacts) DeleteContact(ctx context.Context, id uuid.UUID) error {
 	return nil

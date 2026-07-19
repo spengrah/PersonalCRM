@@ -539,11 +539,14 @@ func TestMethodOps_DuplicateFinalStateRejected(t *testing.T) {
 	// Updating B onto A's value would leave two rows with one key.
 	w, _ := f.post(updateOp(b.ID, "email", a.Value))
 	require.Equal(t, http.StatusBadRequest, w.Code)
+	// Naming the value is itself discriminating: the backstop deliberately
+	// returns its sentinel ONLY, because PostgreSQL's Detail for this violation
+	// embeds the contact id and the raw value and would put a real address into
+	// an HTTP response body. So only the fold can produce this.
 	assert.Contains(t, w.Body.String(), a.Value, "the rejection did not name the colliding value")
-	// The fold and the database backstop BOTH name the value — PostgreSQL's
-	// error detail embeds it too — so the value alone cannot tell them apart.
-	// The fold's phrasing is about the intended END STATE, which is the thing
-	// only a pre-SQL check can talk about.
+	// Kept alongside the value assertion because it pins a stronger property
+	// still: the fold's phrasing is about the intended END STATE, which is the
+	// thing only a pre-SQL check can talk about at all.
 	assert.Contains(t, w.Body.String(), "would contain a duplicate",
 		"the rejection came from the database index, not the fold: the request mutated and rolled back rather than being refused deterministically")
 	assert.Equal(t, b.Value, f.storedByID(b.ID).Value, "a rejected payload mutated a row")

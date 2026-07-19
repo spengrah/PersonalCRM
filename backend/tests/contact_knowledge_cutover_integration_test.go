@@ -225,10 +225,10 @@ func TestContactKnowledgeCutover_UpdateSupersedesAndClears(t *testing.T) {
 	require.NoError(t, err)
 	h.track(contact.ID)
 
-	updated, _, err := h.contactSvc.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
+	updated, err := h.contactSvc.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
 		FullName: contact.FullName,
 		Location: &la,
-	}, nil, false)
+	})
 	require.NoError(t, err)
 	require.NotNil(t, updated.Location)
 	assert.Equal(t, la, *updated.Location, "cache location follows the supersession")
@@ -242,10 +242,10 @@ func TestContactKnowledgeCutover_UpdateSupersedesAndClears(t *testing.T) {
 	assert.Equal(t, la, place.CanonicalLabel)
 
 	// Clear the location (closure): cache blanks to NULL.
-	cleared, _, err := h.contactSvc.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
+	cleared, err := h.contactSvc.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
 		FullName: contact.FullName,
 		Location: nil,
-	}, nil, false)
+	})
 	require.NoError(t, err)
 	assert.Nil(t, cleared.Location, "clearing the field blanks the cache to NULL")
 
@@ -594,10 +594,10 @@ func TestContactKnowledgeCutover_EmptyFieldNormalization(t *testing.T) {
 	// CLEAR (closure), cache blanks to NULL.
 	realLoc := "Phoenix " + ns
 	h.trackPlace(realLoc)
-	_, _, err = h.contactSvc.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
+	_, err = h.contactSvc.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
 		FullName: contact.FullName,
 		Location: &realLoc,
-	}, nil, false)
+	})
 	require.NoError(t, err)
 	withLoc, err := h.contactRepo.GetContact(ctx, contact.ID)
 	require.NoError(t, err)
@@ -605,10 +605,10 @@ func TestContactKnowledgeCutover_EmptyFieldNormalization(t *testing.T) {
 	assert.Equal(t, realLoc, *withLoc.Location)
 
 	empty := ""
-	cleared, _, err := h.contactSvc.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
+	cleared, err := h.contactSvc.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
 		FullName: contact.FullName,
 		Location: &empty,
-	}, nil, false)
+	})
 	require.NoError(t, err, "empty-string location must not error")
 	assert.Nil(t, cleared.Location, "empty-string update clears the location cache")
 	_, err = h.assertionRepo.GetCurrentAccepted(ctx, contact.ID, repository.PredicateLivesIn, now)
@@ -641,11 +641,11 @@ func TestContactKnowledgeCutover_HowMetPreservedWhenFormOmitsIt(t *testing.T) {
 	// set. how_met must be UNTOUCHED: no closure, the SAME assertion stays current,
 	// and the cache column still holds the value. (The form has no how_met input,
 	// so a nil how_met is "not managed by this edit," not a user clear.)
-	updated, _, err := h.contactSvc.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
+	updated, err := h.contactSvc.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
 		FullName: "HowMet Keep Renamed " + ns,
 		Location: &loc, // an unrelated field changes
 		HowMet:   nil,  // the form omits how_met
-	}, nil, false)
+	})
 	require.NoError(t, err)
 	require.NotNil(t, updated.HowMet, "how_met cache must survive an edit that omits it")
 	assert.Equal(t, how, *updated.HowMet)
@@ -658,10 +658,10 @@ func TestContactKnowledgeCutover_HowMetPreservedWhenFormOmitsIt(t *testing.T) {
 
 	// Sanity: an EXPLICIT how_met value still asserts (changes the slot).
 	newHow := "actually met at work " + ns
-	_, _, err = h.contactSvc.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
+	_, err = h.contactSvc.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
 		FullName: updated.FullName,
 		HowMet:   &newHow,
-	}, nil, false)
+	})
 	require.NoError(t, err)
 	current, err := h.assertionRepo.GetCurrentAccepted(ctx, contact.ID, repository.PredicateHowMet, now)
 	require.NoError(t, err)

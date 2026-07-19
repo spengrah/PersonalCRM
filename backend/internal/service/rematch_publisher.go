@@ -10,8 +10,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// rematchMethodsToRefs converts service.Method (from diffNewMethods) to
-// the event-layer ref type.
+// rematchMethodsToRefs converts service.Method (from the contact-method
+// semantic diff) to the event-layer ref type.
 func rematchMethodsToRefs(methods []Method) []events.ContactMethodRef {
 	out := make([]events.ContactMethodRef, len(methods))
 	for i, m := range methods {

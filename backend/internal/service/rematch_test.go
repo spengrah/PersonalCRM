@@ -484,36 +484,6 @@ func TestPruneTerminalJobs_EvictsOldTerminalButKeepsFresh(t *testing.T) {
 	}
 }
 
-func TestDiffNewMethods_NormalizedKey(t *testing.T) {
-	before := []repository.ContactMethod{
-		{Type: "email", ValueNormalized: "alice@example.com"},
-	}
-	after := []repository.ContactMethod{
-		{Type: "email", ValueNormalized: "alice@example.com"}, // unchanged
-		{Type: "email", ValueNormalized: "bob@example.com"},   // new
-		{Type: "phone", ValueNormalized: "+15551212"},         // new
-	}
-	diff := diffNewMethods(before, after)
-	if len(diff) != 2 {
-		t.Fatalf("expected 2 new methods, got %d: %+v", len(diff), diff)
-	}
-	wantValues := map[string]bool{"bob@example.com": true, "+15551212": true}
-	for _, m := range diff {
-		if !wantValues[m.Value] {
-			t.Fatalf("unexpected method %+v", m)
-		}
-	}
-}
-
-func TestDiffNewMethods_EmptyInputs(t *testing.T) {
-	if got := diffNewMethods(nil, nil); len(got) != 0 {
-		t.Fatalf("expected empty diff, got %+v", got)
-	}
-	if got := diffNewMethods(nil, []repository.ContactMethod{{Type: "email", ValueNormalized: "a@b"}}); len(got) != 1 {
-		t.Fatalf("expected 1 new, got %d", len(got))
-	}
-}
-
 func TestToRematchMethods(t *testing.T) {
 	in := []repository.ContactMethod{
 		{Type: "email", ValueNormalized: "x@y.z"},

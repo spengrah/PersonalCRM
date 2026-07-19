@@ -119,14 +119,14 @@ func (s *stubDiscoveryContacts) CreateContact(ctx context.Context, req repositor
 	s.createdContact = c
 	return c, uuid.Nil, nil
 }
-func (s *stubDiscoveryContacts) UpdateContact(ctx context.Context, id uuid.UUID, req repository.UpdateContactRequest, methods []ContactMethodInput, replaceMethods bool) (*repository.Contact, uuid.UUID, error) {
+func (s *stubDiscoveryContacts) UpdateContact(ctx context.Context, id uuid.UUID, req repository.UpdateContactRequest) (*repository.Contact, error) {
 	s.updateCalled = true
 	r := req
 	s.updateReq = &r
 	if s.updateErr != nil {
-		return nil, uuid.Nil, s.updateErr
+		return nil, s.updateErr
 	}
-	return &repository.Contact{ID: id, FullName: req.FullName, Cadence: req.Cadence}, uuid.Nil, nil
+	return &repository.Contact{ID: id, FullName: req.FullName, Cadence: req.Cadence}, nil
 }
 func (s *stubDiscoveryContacts) DeleteContact(ctx context.Context, id uuid.UUID) error {
 	s.deleteCalled = true

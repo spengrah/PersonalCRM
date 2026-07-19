@@ -649,6 +649,32 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
   })
 
+  // spec: CON-055[0]
+  //
+  // ContactForm and transformContactFormData are SHARED with the edit path, and
+  // the edit path stopped sending `methods` on the contact PUT. Creation still
+  // must: there is nothing yet to lose, so CreateContactRequest keeps its
+  // methods field. This test passes against the pre-change tree by design — it
+  // guards a behavior that must not break, and its discrimination gate is
+  // mutating the shared transform to drop methods, not reverting the feature.
+  test('creates a contact with a contact method', async ({ page }) => {
+    const fullName = `${testApi.prefix}-Create With Method`
+    const email = `create-method-${Date.now()}@example.com`
+
+    await page.goto('/contacts/new')
+    await page.getByLabel('Full Name').fill(fullName)
+    await page.getByRole('combobox', { name: 'Contact method type' }).first().selectOption('email')
+    await page.getByRole('textbox', { name: 'Contact method value' }).first().fill(email)
+
+    await Promise.all([
+      page.waitForURL(/\/contacts\/[A-Za-z0-9-]+$/),
+      page.getByRole('button', { name: 'Create Contact' }).click(),
+    ])
+
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByText(email)).toBeVisible({ timeout: 15000 })
+  })
+
   // spec: NTS-008[2]
   test('should edit contact notes', async ({ page }) => {
     const notes =

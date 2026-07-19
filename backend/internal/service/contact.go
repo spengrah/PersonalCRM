@@ -380,22 +380,29 @@ func (s *ContactService) CreateContact(ctx context.Context, req repository.Creat
 	return contact, jobID, nil
 }
 
-func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req repository.UpdateContactRequest, methods []ContactMethodInput, replaceMethods bool) (contact *repository.Contact, jobID uuid.UUID, err error) {
+// UpdateContact updates a contact's scalar profile fields.
+//
+// It does NOT touch contact methods. The method-replacing branch this function
+// used to carry made absence mean "delete", so a client saving from a stale
+// read destroyed every method it had never seen. Methods are mutated through
+// ContactMethodService.ApplyOperations, which takes operations and therefore
+// cannot express a removal the caller did not name.
+func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req repository.UpdateContactRequest) (contact *repository.Contact, err error) {
 	if s.cadence == nil {
 		// Sole-writer invariant: contact_by recomputation on cadence
 		// edits must route through CadenceUpdater. Refusing to operate
 		// without it prevents a silent rollback to the direct-path
 		// behavior.
-		return nil, uuid.Nil, errors.New("update contact: cadence updater not wired (pass cadence to NewContactService)")
+		return nil, errors.New("update contact: cadence updater not wired (pass cadence to NewContactService)")
 	}
 	if s.knowledge == nil {
 		// Authority-flip invariant: location/birthday/how_met flow from the
 		// assertion store, not the contact SQL.
-		return nil, uuid.Nil, errors.New("update contact: knowledge writer not wired (pass assertSvc+knowledgeCache to NewContactService)")
+		return nil, errors.New("update contact: knowledge writer not wired (pass assertSvc+knowledgeCache to NewContactService)")
 	}
 	tx, err := s.database.Pool.Begin(ctx)
 	if err != nil {
-		return nil, uuid.Nil, err
+		return nil, err
 	}
 	defer func() {
 		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
@@ -412,7 +419,7 @@ func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req re
 
 	existingContact, err := contactRepo.GetContact(ctx, id)
 	if err != nil {
-		return nil, uuid.Nil, err
+		return nil, err
 	}
 
 	// Contact_by recomputation is a user-cadence-preference edit and
@@ -443,7 +450,7 @@ func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req re
 	req.ContactBy = nil
 
 	if _, err = contactRepo.UpdateContact(ctx, id, req); err != nil {
-		return nil, uuid.Nil, err
+		return nil, err
 	}
 
 	// Keep the person node's display label synced with the contact's name.
@@ -452,7 +459,7 @@ func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req re
 	// would let a stale-read non-rename update leave node and contact divergent
 	// under concurrency. A redundant no-op UPDATE on a non-rename edit is cheap.
 	if err = nodeRepo.UpdateNodeCanonicalLabelTx(ctx, tx, id, req.FullName); err != nil {
-		return nil, uuid.Nil, fmt.Errorf("sync person node label: %w", err)
+		return nil, fmt.Errorf("sync person node label: %w", err)
 	}
 
 	// Authority flip: reconcile location/birthday/how_met against the contact's
@@ -468,11 +475,11 @@ func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req re
 			ProducerKind:   repository.ProducerKindUser,
 			SourceIDPrefix: "edit",
 		}); err != nil {
-		return nil, uuid.Nil, fmt.Errorf("apply contact knowledge: %w", err)
+		return nil, fmt.Errorf("apply contact knowledge: %w", err)
 	}
 
 	if err := s.cadence.ApplyContactByOverride(ctx, tx, id, newContactBy); err != nil {
-		return nil, uuid.Nil, fmt.Errorf("apply cadence contact_by override: %w", err)
+		return nil, fmt.Errorf("apply cadence contact_by override: %w", err)
 	}
 	// ApplyContactByOverride is a second UPDATE on the contact row, so
 	// the profile-only UpdateContact's RETURNING values (notably
@@ -482,67 +489,25 @@ func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req re
 	// caller receives matches the committed row bit-for-bit.
 	contact, err = contactRepo.GetContact(ctx, id)
 	if err != nil {
-		return nil, uuid.Nil, fmt.Errorf("refetch contact after cadence override: %w", err)
+		return nil, fmt.Errorf("refetch contact after cadence override: %w", err)
 	}
 
-	var (
-		updatedMethods []repository.ContactMethod
-		existingBefore []repository.ContactMethod
-	)
-	if replaceMethods {
-		existingBefore, err = contactMethodRepo.ListContactMethodsByContact(ctx, id)
-		if err != nil {
-			return nil, uuid.Nil, err
-		}
-		if err := contactMethodRepo.DeleteContactMethodsByContact(ctx, id); err != nil {
-			return nil, uuid.Nil, err
-		}
-
-		updatedMethods, err = createContactMethods(ctx, contactMethodRepo, id, methods)
-		if err != nil {
-			return nil, uuid.Nil, err
-		}
-	} else {
-		updatedMethods, err = contactMethodRepo.ListContactMethodsByContact(ctx, id)
-		if err != nil {
-			return nil, uuid.Nil, err
-		}
-		sortContactMethods(updatedMethods)
+	// Methods are read back only so the returned contact carries them. Nothing
+	// here writes a method, so there is no diff to publish and no rematch job to
+	// mint: a rematch is triggered by newly-present method values, which now
+	// arrive exclusively through ContactMethodService.ApplyOperations.
+	updatedMethods, err := contactMethodRepo.ListContactMethodsByContact(ctx, id)
+	if err != nil {
+		return nil, err
 	}
-
-	// Compute method diff + publish inside the tx so event row + river
-	// job + method rows commit/roll back together (spec §4). Only the
-	// replaceMethods branch can add new methods — !replaceMethods leaves
-	// methods as-is.
-	//
-	// Filter to eligible methods first (see CreateContact for rationale):
-	// unhandled types skip publishing and return uuid.Nil.
-	var eligibleAddedMethods []Method
-	if replaceMethods && s.rematchRegistry != nil {
-		newlyAdded := diffNewMethods(existingBefore, updatedMethods)
-		eligibleAddedMethods = s.rematchRegistry.EligibleMethods(newlyAdded)
-	}
-	if replaceMethods && len(eligibleAddedMethods) > 0 && s.bus != nil {
-		jobID = uuid.New()
-		refs := rematchMethodsToRefs(eligibleAddedMethods)
-		env, marshalErr := buildContactMethodsAddedEnvelope("manual", id, refs, jobID)
-		if marshalErr != nil {
-			return nil, uuid.Nil, marshalErr
-		}
-		if err := s.bus.PublishTx(ctx, tx, env); err != nil {
-			return nil, uuid.Nil, fmt.Errorf("publish contact_methods.added: %w", err)
-		}
-	}
+	sortContactMethods(updatedMethods)
 
 	if err = tx.Commit(ctx); err != nil {
-		return nil, uuid.Nil, err
+		return nil, err
 	}
 
 	assignMethods(contact, updatedMethods)
-	if jobID != uuid.Nil && s.rematchRegistry != nil {
-		s.rematchRegistry.RegisterPending(jobID, id, eligibleAddedMethods)
-	}
-	return contact, jobID, nil
+	return contact, nil
 }
 
 // DeleteContact soft-deletes a contact and propagates the tombstone to its

@@ -789,7 +789,11 @@ func TestRematch_TelegramRematchPlusPostImportHook_NoDuplicateInteraction(t *tes
 	waitForTelegramMessagesProcessed(t, env.ctx, env.database.Pool, peerUserID, contact.ID, 3, defaultInteractionWaitTimeout)
 }
 
-func TestRematch_ContactServiceUpdateContact_FiresForNewMethodOnly(t *testing.T) {
+// Rematch is dispatched for method values that are newly PRESENT, not for
+// every method named in the request. The trigger moved from the contact PUT to
+// the operations endpoint when the PUT's method-replacing branch was retired;
+// the diff behavior it asserts is unchanged.
+func TestRematch_ApplyMethodOperations_FiresForNewMethodOnly(t *testing.T) {
 	t.Parallel()
 	env := setupRematchEnv(t)
 
@@ -807,20 +811,22 @@ func TestRematch_ContactServiceUpdateContact_FiresForNewMethodOnly(t *testing.T)
 
 	pastEnd := accelerated.GetCurrentTime().Add(-time.Hour)
 	// Event whose attendee matches the PRE-EXISTING email. Rematch should
-	// NOT link this on the update — diffNewMethods filters it out.
+	// NOT link this — the semantic diff filters an already-present value out.
 	_ = seedCalendarEventWithAttendee(t, env, accountID, existingEmail, pastEnd, "confirmed")
 	// Event whose attendee matches the NEWLY-ADDED email. Should be linked.
 	newEmail := "added@example.com"
 	newEvent := seedCalendarEventWithAttendee(t, env, accountID, newEmail, pastEnd, "confirmed")
 
-	_, jobID, err := env.contactSvc.UpdateContact(env.ctx, contact.ID, repository.UpdateContactRequest{
-		FullName: contact.FullName,
-	}, []service.ContactMethodInput{
-		{Type: "email", Value: existingEmail, IsPrimary: true},
-		{Type: "email", Value: newEmail, IsPrimary: false},
-	}, true)
+	methodSvc := service.NewContactMethodService(env.database, env.bus, env.rematchSvc)
+	result, err := methodSvc.ApplyOperations(env.ctx, contact.ID, []service.ContactMethodOperation{
+		// Already present: resolves to the existing row, so it is absent from
+		// the semantic diff and must not contribute a rematch.
+		{Op: service.MethodOpAdd, Type: "email", Value: existingEmail},
+		{Op: service.MethodOpAdd, Type: "email", Value: newEmail},
+	})
 	require.NoError(t, err)
-	require.NotEqual(t, uuid.Nil, jobID, "UpdateContact should dispatch rematch for newly-added email")
+	jobID := result.RematchJobID
+	require.NotEqual(t, uuid.Nil, jobID, "ApplyOperations should dispatch rematch for the newly-added email")
 
 	job := waitForRematchJob(t, env.rematchSvc, jobID)
 	assert.Equal(t, service.JobStatusCompleted, job.Status)

@@ -90,9 +90,9 @@ func TestContactNodeDualWrite_Integration(t *testing.T) {
 
 		// Rename via the profile-update path: the node label must follow.
 		renamed := gen.Prefix() + "renamed-person"
-		_, _, err = svc.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
+		_, err = svc.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
 			FullName: renamed,
-		}, nil, false)
+		})
 		require.NoError(t, err)
 
 		node, err := support.GetNodeForContact(ctx, contact.ID)
@@ -126,10 +126,10 @@ func TestContactNodeDualWrite_Integration(t *testing.T) {
 		// fails if the in-tx sync regresses, unlike a same-name no-op.
 		renamed := gen.Prefix() + "renamed-with-cadence"
 		monthly := "monthly"
-		_, _, err = svc.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
+		_, err = svc.UpdateContact(ctx, contact.ID, repository.UpdateContactRequest{
 			FullName: renamed,
 			Cadence:  &monthly,
-		}, nil, false)
+		})
 		require.NoError(t, err)
 
 		node, err := support.GetNodeForContact(ctx, contact.ID)

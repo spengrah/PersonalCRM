@@ -381,45 +381,56 @@ func (h *ContactHandler) UpdateContact(c *gin.Context) {
 		return
 	}
 
+	// Both binds must be ShouldBindBodyWithJSON: a plain ShouldBindJSON consumes
+	// the body, and Gin caches it only when the ShouldBindBodyWith* call performs
+	// the read itself — so a later probe would see nothing.
 	var req UpdateContactRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := c.ShouldBindBodyWithJSON(&req); err != nil {
 		api.SendValidationError(c, "Invalid request body", err.Error())
 		return
 	}
 
-	methodsProvided := req.Methods != nil
-	normalizedMethods, err := normalizeContactMethodRequests(req.Methods)
-	if err != nil {
-		api.SendValidationError(c, "Validation failed", err.Error())
+	// Contact methods are no longer part of this request. Dropping the field
+	// silently would let a stale browser or a naive client send a method
+	// addition, receive 200, and believe it landed — a silent-success failure,
+	// the same class this work eliminates, merely inverted from silent
+	// destruction. So the key is detected and rejected.
+	var legacy legacyContactMethodsProbe
+	if err := c.ShouldBindBodyWithJSON(&legacy); err == nil && legacy.Methods != nil {
+		api.SendValidationError(c,
+			"Validation failed",
+			"contact methods are no longer accepted on this endpoint; use POST /contacts/{id}/methods",
+		)
 		return
 	}
-	req.Methods = normalizedMethods
 
 	if err := h.validator.Struct(req); err != nil {
 		api.SendValidationError(c, "Validation failed", err.Error())
 		return
 	}
 
-	if err := validateContactMethods(h.validator, req.Methods); err != nil {
-		api.SendValidationError(c, "Validation failed", err.Error())
-		return
-	}
-
-	contact, rematchJobID, err := h.contactService.UpdateContact(
+	contact, err := h.contactService.UpdateContact(
 		c.Request.Context(),
 		id,
 		updateRequestToRepo(req),
-		buildContactMethodInputs(req.Methods),
-		methodsProvided,
 	)
 	if err != nil {
 		api.RespondError(c, err, "Contact")
 		return
 	}
 
-	response := contactToResponse(contact)
-	response.RematchJobID = nilStringPtrFromUUID(rematchJobID)
-	api.SendSuccess(c, http.StatusOK, response, nil)
+	// RematchJobID is populated by the create path only. A rematch is triggered
+	// by newly-present method values, and this request can no longer carry any.
+	api.SendSuccess(c, http.StatusOK, contactToResponse(contact), nil)
+}
+
+// legacyContactMethodsProbe detects a `methods` key on the update payload.
+//
+// json.RawMessage is deliberately NOT a pointer: a *json.RawMessage cannot tell
+// `"methods": null` from an absent key, and a client sending an explicit null
+// has still addressed the retired field.
+type legacyContactMethodsProbe struct {
+	Methods json.RawMessage `json:"methods"`
 }
 
 // DeleteContact deletes a contact

@@ -102,7 +102,7 @@ behaviors:
   - id: CON-008
     title: Method replacement is gated on the methods field being present
     type: business-logic
-    status: current
+    status: retired
     surface: none
     given: an existing contact with contact methods
     when: an update request is applied
@@ -110,6 +110,14 @@ behaviors:
       - if the methods field is omitted, existing methods are untouched
       - if the methods field is provided (including as an empty list), the method set is fully replaced
     provenance: [ContactHandler.UpdateContact, ContactService.replaceMethods]
+    notes: >
+      Retired rather than amended, because the behavior REVERSES: a methods
+      field on the update request is now rejected outright (CON-064) instead of
+      replacing the method set. Amending in place would leave any citation
+      pointing at inverted meaning. Wholesale replacement made absence read as
+      "delete", so a client saving from a stale read destroyed every method it
+      had never seen; methods are now mutated only through explicit operations
+      (CON-062), where absence expresses nothing.
 
   - id: CON-009
     title: Renaming a contact syncs its person-node label
@@ -191,11 +199,12 @@ behaviors:
     type: api
     status: current
     surface: api
-    given: a create request, a legacy update request carrying contact methods, or a method operations request
+    given: a create request or a method operations request
     when: methods are validated
     then:
-      - blank-valued entries are dropped rather than rejected on the create and legacy update paths
+      - blank-valued entries are dropped rather than rejected on the create path
       - an add or update operation naming a blank value is rejected rather than dropped
+      - an add or update operation whose value is empty once normalized is rejected rather than stored
       - email-family values must be valid email addresses
       - phone-family values are limited to 50 characters
       - two entries with the same type and normalized value are rejected as duplicates
@@ -762,6 +771,54 @@ behaviors:
       - a contact with a computed next-contact date renders that date, and one without renders a placeholder
     provenance: [contacts page table cells, formatCadence, contact_by]
     notes: The contact_by computation itself is backend-owned (CON-001); this row pins only the list's rendering of the derived values.
+
+  - id: CON-063
+    title: Saving a contact edit never removes methods the form did not show
+    type: ux
+    status: current
+    surface: ui
+    given: a contact edit form opened on a contact that has contact methods
+    when: the user edits and saves
+    then:
+      - a method added by another writer since the form opened is still present after the save, including when the user edited a different method in the same save
+      - a method the user explicitly deleted in the form is removed
+      - if part of the save fails, the user is told which parts were saved rather than being shown a generic failure
+      - retrying after a partial failure does not undo what already saved
+      - a method added in a save whose later step failed can still be removed by a follow-up save
+      - a method added in a save whose later step failed can still be edited by a follow-up save, keeping the same method
+      - reverting a method's value after a partially failed save restores the original value on the server
+    provenance: [deriveMethodOperations, ContactMethodService.ApplyOperations]
+    notes: >
+      The form derives operations against a client-known acknowledged state,
+      initialized at edit-start, so a method it never showed cannot appear in
+      any operation. That state must not be re-derived from server data
+      mid-save: a successful scalar PUT refreshes the detail cache, and a
+      re-derived picture would name the newly-visible method on a retry. It
+      does advance, but only by applying this client's own confirmed
+      operations using the ids the server reports per operation — without
+      which a row added in a partially failed save could not be edited or
+      removed afterwards, and a value reverted after a partial failure would
+      silently keep the intermediate value.
+
+  - id: CON-064
+    title: A methods field on the contact update request is rejected
+    type: api
+    status: current
+    surface: api
+    given: an update request for an existing contact
+    when: the request body carries a methods key
+    then:
+      - the request is rejected, naming the operations endpoint that does accept methods
+      - an explicit null and an empty list are rejected the same as a populated list
+      - none of the request's other fields are applied
+    provenance: [ContactHandler.UpdateContact, legacyContactMethodsProbe]
+    notes: >
+      Rejected rather than ignored. Dropping the now-unknown key would let a
+      stale browser or a naive client send a method addition, receive 200, and
+      believe it landed — a silent-success failure, the same class this work
+      eliminates, merely inverted from silent destruction. The empty list is the
+      destructive intent specifically: under the retired CON-008 it meant
+      "remove them all".
 
   - id: CON-062
     title: Contact methods are mutated by explicit operations

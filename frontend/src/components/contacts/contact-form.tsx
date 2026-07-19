@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect } from 'react'
+import { useEffect, useRef, type MutableRefObject } from 'react'
 import { useForm, useFieldArray } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Button } from '@/components/ui/button'
@@ -10,11 +10,13 @@ import { Textarea } from '@/components/ui/textarea'
 import { FORM_CONTROL_BASE } from '@/lib/form-classes'
 import {
   contactSchema,
+  submittedMethodSourceRows,
   transformContactFormData,
   type ContactFormData,
   type ContactFormInput,
   type ContactSubmitData,
 } from '@/lib/validations/contact'
+import type { MethodReconciliation } from '@/lib/contact-method-operations'
 import {
   CONTACT_METHOD_OPTIONS,
   formatContactMethodValue,
@@ -23,12 +25,23 @@ import {
 import type { Contact } from '@/types/contact'
 import { clsx } from 'clsx'
 
+/**
+ * Writes confirmed server results back into the live form rows. Programmatic —
+ * it must never count as a user edit, which would invalidate the save session
+ * it just completed and could loop.
+ */
+export type MethodsReconciler = (reconciliations: MethodReconciliation[]) => void
+
 interface ContactFormProps {
   contact?: Contact
   initialNotes?: string
   onSubmit: (data: ContactSubmitData) => void | Promise<void>
   loading?: boolean
   submitText?: string
+  /** Populated by the form with a reconciler the page calls after a successful methods step. */
+  reconcilerRef?: MutableRefObject<MethodsReconciler | null>
+  /** Fired on a user edit, so the page can invalidate an in-progress save session. */
+  onFormEdit?: () => void
 }
 
 const cadenceOptions = [
@@ -47,14 +60,17 @@ export function ContactForm({
   onSubmit,
   loading,
   submitText = 'Save Contact',
+  reconcilerRef,
+  onFormEdit,
 }: ContactFormProps) {
   const defaultMethods = contact?.methods?.length
     ? sortContactMethods(contact.methods).map(method => ({
+        method_id: method.id,
         type: method.type,
         value: formatContactMethodValue(method.type, method.value),
         is_primary: method.is_primary,
       }))
-    : [{ type: '', value: '', is_primary: false }]
+    : [{ method_id: undefined, type: '', value: '', is_primary: false }]
 
   const {
     register,
@@ -63,6 +79,7 @@ export function ContactForm({
     reset,
     control,
     setValue,
+    getValues,
     watch,
   } = useForm<ContactFormInput, unknown, ContactFormData>({
     resolver: zodResolver(contactSchema),
@@ -90,11 +107,151 @@ export function ContactForm({
     name: 'methods',
   })
 
+  // Programmatic writes must not read as user edits. An explicit flag is the
+  // only reliable discriminator: react-hook-form reports setValue with the same
+  // `change` event type as a real input event (verified against 7.62), so the
+  // subscription metadata cannot tell the two apart.
+  const programmaticWriteRef = useRef(false)
+  const withoutReportingEdit = (write: () => void) => {
+    programmaticWriteRef.current = true
+    try {
+      write()
+    } finally {
+      programmaticWriteRef.current = false
+    }
+  }
+
   // Sync notes field when initialNotes changes (e.g., when async query resolves)
   // This prevents stale empty notes from being saved if edit mode is opened before query resolves
   useEffect(() => {
-    setValue('notes', initialNotes, { shouldDirty: false })
+    programmaticWriteRef.current = true
+    try {
+      setValue('notes', initialNotes, { shouldDirty: false })
+    } finally {
+      programmaticWriteRef.current = false
+    }
   }, [initialNotes, setValue])
+
+  const onFormEditRef = useRef(onFormEdit)
+  useEffect(() => {
+    onFormEditRef.current = onFormEdit
+  })
+
+  // Report user edits so the page can invalidate an in-progress save session.
+  // Array-shape edits — adding, removing, or re-designating a row — also report
+  // explicitly at their call sites, since a field-array mutation is not
+  // guaranteed to surface here. A duplicate report is harmless: invalidation is
+  // idempotent.
+  useEffect(() => {
+    const subscription = watch(() => {
+      if (programmaticWriteRef.current) return
+      onFormEditRef.current?.()
+    })
+    return () => subscription.unsubscribe()
+  }, [watch])
+
+  // The form-row key behind each method of the most recent submission, so a
+  // result can be written back into the row that produced it. Keys rather than
+  // indexes: react-hook-form's generated key survives rows being added or
+  // removed while the request is in flight.
+  const submittedRowKeysRef = useRef<Array<string | null>>([])
+
+  useEffect(() => {
+    if (!reconcilerRef) return
+    reconcilerRef.current = (reconciliations: MethodReconciliation[]) =>
+      withoutReportingEdit(() => reconcileRows(reconciliations))
+
+    function reconcileRows(reconciliations: MethodReconciliation[]) {
+      const rowKeys = submittedRowKeysRef.current
+
+      // What each result assigned, keyed by the form row that produced it.
+      const assignedIdByRowKey = new Map<string, string>()
+      const snapshotById = new Map<string, MethodReconciliation>()
+      for (const entry of reconciliations) {
+        const rowKey = rowKeys[entry.submittedIndex]
+        if (!rowKey) continue
+        assignedIdByRowKey.set(rowKey, entry.method_id)
+        snapshotById.set(entry.method_id, entry)
+      }
+
+      // Ownership is seeded from EVERY live row's id, not only from the rows a
+      // result addressed. In the real collision sequence the pre-existing row
+      // is unchanged, so it emits no operation and receives no result — but it
+      // already owns the id the new row just resolved to. Considering only
+      // reconciled rows leaves both rows carrying that id, and then deleting
+      // either one emits no `remove` (the other alias still submits the id),
+      // so the save reports success while the deletion silently does not
+      // persist. That is the original defect's own signature.
+      //
+      // Read through getValues rather than `fields`: useFieldArray refreshes
+      // `fields` only on array operations, so an id written by an earlier
+      // reconciliation's setValue would not be visible there.
+      const currentMethods = getValues('methods') ?? []
+      const rowsById = new Map<string, number[]>()
+      fields.forEach((field, index) => {
+        const methodID = assignedIdByRowKey.get(field.id) ?? currentMethods[index]?.method_id
+        if (!methodID) return
+        const rows = rowsById.get(methodID) ?? []
+        rows.push(index)
+        rowsById.set(methodID, rows)
+      })
+
+      const options = { shouldDirty: false, shouldTouch: false } as const
+      const duplicateIndexes: number[] = []
+      let promotedIndex: number | null = null
+
+      for (const [methodID, indexes] of rowsById) {
+        // Deterministic survivor: the EARLIEST form row carrying this id,
+        // whichever row a result happened to address. Ordering by form position
+        // rather than by payload position is what makes the outcome
+        // independent of the order operations were submitted in.
+        const [survivor, ...duplicates] = indexes
+        duplicateIndexes.push(...duplicates)
+
+        // A row whose id no result addressed is left alone — there is nothing
+        // authoritative to write into it.
+        const snapshot = snapshotById.get(methodID)
+        if (!snapshot) continue
+
+        setValue(`methods.${survivor}.method_id`, methodID, options)
+        setValue(`methods.${survivor}.type`, snapshot.type, options)
+        setValue(
+          `methods.${survivor}.value`,
+          formatContactMethodValue(snapshot.type, snapshot.value),
+          options
+        )
+        setValue(`methods.${survivor}.is_primary`, snapshot.is_primary, options)
+        if (snapshot.is_primary) promotedIndex = survivor
+      }
+
+      // A snapshot reporting is_primary demotes every other live row.
+      //
+      // The promotion can come from the SERVER rather than from the user's
+      // designation: an add can resolve to a row another writer made primary
+      // after edit-start, so the row this reconciliation just starred is one
+      // the form never showed as primary, while the row the form DOES show
+      // starred was never addressed. Leaving both set contradicts the server,
+      // and — because the form rejects more than one primary — it also blocks
+      // the next save outright, including an unedited retry after the methods
+      // step already landed.
+      // Enumerated over the getValues snapshot rather than `fields` for the
+      // same reason the ownership map is: `fields` refreshes only on array
+      // operations, so a flag an earlier reconciliation wrote through setValue
+      // is not visible there. The write is unconditional rather than guarded on
+      // the current flag, so a stale read cannot leave a row starred.
+      if (promotedIndex !== null) {
+        currentMethods.forEach((_method, index) => {
+          if (index === promotedIndex || duplicateIndexes.includes(index)) return
+          setValue(`methods.${index}.is_primary`, false, options)
+        })
+      }
+
+      // Descending, so each index is still valid when its turn comes.
+      for (const index of duplicateIndexes.sort((a, b) => b - a)) {
+        remove(index)
+      }
+    }
+  })
 
   const watchedMethods = watch('methods')
 
@@ -108,15 +265,25 @@ export function ContactForm({
         shouldValidate: true,
       })
     })
+    onFormEditRef.current?.()
   }
 
   const handleAddMethod = () => {
-    append({ type: '', value: '', is_primary: false })
+    append({ method_id: undefined, type: '', value: '', is_primary: false })
+    onFormEditRef.current?.()
+  }
+
+  const handleRemoveMethod = (index: number) => {
+    remove(index)
+    onFormEditRef.current?.()
   }
 
   const handleFormSubmit = async (data: ContactFormData) => {
     try {
       const transformedData = transformContactFormData(data)
+      submittedRowKeysRef.current = submittedMethodSourceRows(data).map(
+        rowIndex => fields[rowIndex]?.id ?? null
+      )
       await onSubmit(transformedData)
       if (!contact) {
         // Reset form after creating new contact
@@ -213,7 +380,7 @@ export function ContactForm({
                     {/* Remove button - X icon, visible on hover */}
                     <button
                       type="button"
-                      onClick={() => remove(index)}
+                      onClick={() => handleRemoveMethod(index)}
                       disabled={isLoading || fields.length === 1}
                       className="p-1.5 text-gray-300 opacity-0 group-hover:opacity-100 hover:text-red-500 transition-all disabled:opacity-0"
                       title="Remove"

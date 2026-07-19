@@ -395,24 +395,6 @@ func (s *RematchService) GetJob(id uuid.UUID) (JobProgress, error) {
 	return v.(*job).snapshot(), nil
 }
 
-// diffNewMethods returns methods present in `after` whose (type,
-// value_normalized) pair is not in `before`. Order-insensitive.
-func diffNewMethods(before, after []repository.ContactMethod) []Method {
-	existing := make(map[string]struct{}, len(before))
-	for _, m := range before {
-		existing[m.Type+"|"+m.ValueNormalized] = struct{}{}
-	}
-	out := make([]Method, 0, len(after))
-	for _, m := range after {
-		key := m.Type + "|" + m.ValueNormalized
-		if _, ok := existing[key]; ok {
-			continue
-		}
-		out = append(out, Method{Type: m.Type, Value: m.ValueNormalized})
-	}
-	return out
-}
-
 // toRematchMethods converts a slice of ContactMethod to rematch Methods using
 // the normalized value.
 func toRematchMethods(methods []repository.ContactMethod) []Method {

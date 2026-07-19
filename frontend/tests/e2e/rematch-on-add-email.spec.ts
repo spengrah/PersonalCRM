@@ -72,21 +72,23 @@ test.describe('Rematch on add email @area:contacts', () => {
     await expect(valueInput).toHaveAttribute('type', 'email')
     await valueInput.fill(attendeeEmail)
 
-    // The edit form also saves notes via PUT /contacts/:id/notes in parallel,
-    // so match the exact contact update route before reading rematch_job_id.
-    const contactUpdatePath = `/api/v1/contacts/${contactId}`
-    const updateResponsePromise = page.waitForResponse(res => {
+    // The rematch job is minted by the operations endpoint, not the contact
+    // PUT: a rematch fires on newly-present method VALUES, and the scalar PUT
+    // no longer carries methods at all.
+    const methodsPath = `/api/v1/contacts/${contactId}/methods`
+    const methodsResponsePromise = page.waitForResponse(res => {
       const { pathname } = new URL(res.url())
-      return (
-        pathname === contactUpdatePath && res.request().method() === 'PUT' && res.status() === 200
-      )
+      return pathname === methodsPath && res.request().method() === 'POST' && res.status() === 200
     })
     await page.getByRole('button', { name: 'Update Contact' }).click()
-    const updateResponse = await updateResponsePromise
-    expect(updateResponse.ok()).toBe(true)
-    const updateBody = await updateResponse.json()
-    const rematchJobId: string | undefined = updateBody?.data?.rematch_job_id
-    expect(rematchJobId, 'PUT /contacts response should carry rematch_job_id').toBeTruthy()
+    const methodsResponse = await methodsResponsePromise
+    expect(methodsResponse.ok()).toBe(true)
+    const methodsBody = await methodsResponse.json()
+    const rematchJobId: string | undefined = methodsBody?.data?.rematch_job_id
+    expect(
+      rematchJobId,
+      'POST /contacts/:id/methods response should carry rematch_job_id'
+    ).toBeTruthy()
 
     // The frontend polls the job silently; poll the backend directly here so
     // the test observes the pollable job endpoint (IMP-021) and fails fast.
