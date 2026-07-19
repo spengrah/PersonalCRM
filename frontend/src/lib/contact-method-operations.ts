@@ -1,3 +1,34 @@
+/**
+ * Contact-method operation derivation, and the two client structures it runs
+ * between.
+ *
+ * THE INVARIANT THAT MATTERS HERE. The client keeps two pictures of the same
+ * confirmed truth — the acknowledged state (this module) and the live
+ * react-hook-form rows (`contact-form.tsx`). Three consecutive review rounds
+ * each found the same defect: a path that updated one without the other. So the
+ * places server data can enter them are enumerated, and the list is short:
+ *
+ *   1. EDIT-START — `contact.methods` seeds `initializeAcknowledgedMethods` and
+ *      the form's `defaultValues` at the same moment from the same source.
+ *      Both, together, by construction.
+ *   2. RESULT SNAPSHOTS — `advanceAcknowledgedMethods` applies every
+ *      snapshot-bearing result; `reconciliationsFromResults` forwards the same
+ *      ones to the live rows. They agree only because every non-`remove`
+ *      operation reports the submitted row it addresses. A `remove` reports -1
+ *      and carries no snapshot, so both structures drop that row.
+ *
+ * Everything else server-originated — `setQueryData` on the detail cache after
+ * either mutation, `usePrefetchContact`, `RematchJobWatcher`'s invalidation,
+ * any ordinary refetch — reaches NEITHER structure, deliberately. Those feed
+ * display only. That is what makes the acknowledged state safe to hold across a
+ * cache refresh, and it is the whole defense against the original incident.
+ *
+ * The checkable form of rule 2 is: `submittedIndexes[i] < 0` if and only if
+ * `operations[i].op === 'remove'`. It is pinned by "the submitted-index
+ * contract" test, which is the class-level guard — any operation type added
+ * later that forgets to thread its row index fails it, without anyone having to
+ * rediscover this reasoning.
+ */
 import { normalizeContactMethodValue } from '@/lib/contact-methods'
 import type { ContactMethod, ContactMethodType } from '@/types/contact'
 import type {

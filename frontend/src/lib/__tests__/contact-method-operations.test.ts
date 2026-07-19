@@ -289,10 +289,28 @@ describe('advanceAcknowledgedMethods', () => {
     ]
     const results = [result(0, 'updated', A, snapshot), result(1, 'matched_existing', A, snapshot)]
 
-    it('collapses two adds resolving to one method_id into a single row', () => {
+    it('collapses an update and an add resolving to one method_id', () => {
+      // Named for the fixture it actually uses. The two-adds case is below.
       const next = advanceAcknowledgedMethods([ack(A, 'phone', 'old')], operations, results)
       expect(next).toHaveLength(1)
       expect(next[0].method_id).toBe(A)
+    })
+
+    it('collapses two coalesced adds resolving to one method_id', () => {
+      // The case the endpoint produces when two submitted values normalize
+      // alike under the trigger: both adds resolve to one row. An
+      // implementation handling only update+add would miss this entirely.
+      const addOps: ContactMethodOperation[] = [
+        { op: 'add', type: 'phone', value: '5555550100' },
+        { op: 'add', type: 'phone', value: '+5555550100' },
+      ]
+      const addResults = [
+        result(0, 'created', A, snapshot),
+        result(1, 'matched_existing', A, snapshot),
+      ]
+      const next = advanceAcknowledgedMethods([], addOps, addResults)
+      expect(next).toHaveLength(1)
+      expect(next[0]).toEqual(ack(A, 'phone', '5555550100', true))
     })
 
     it('takes the surviving row’s value and primary flag from the resolved snapshot', () => {
@@ -330,13 +348,37 @@ describe('advanceAcknowledgedMethods', () => {
       expect(forward).toEqual(reversed)
     })
 
-    it('never lets a method_id appear twice, for any payload order', () => {
+    it('never lets a method_id appear twice, for either payload order', () => {
+      // Genuinely permutes the OPERATIONS and reindexes the results to match,
+      // rather than reversing the results against a fixed payload. An
+      // implementation that collapses update-then-add but not add-then-update
+      // passes the weaker version.
       const acknowledged = [ack(A, 'phone', 'old')]
-      const permutations = [results, [...results].reverse()]
-      for (const ordered of permutations) {
-        const next = advanceAcknowledgedMethods(acknowledged, operations, ordered)
+
+      const updateThenAdd: ContactMethodOperation[] = [
+        { op: 'update', method_id: A, type: 'phone', value: '5555550100' },
+        { op: 'add', type: 'phone', value: '+5555550100' },
+      ]
+      const addThenUpdate: ContactMethodOperation[] = [
+        { op: 'add', type: 'phone', value: '+5555550100' },
+        { op: 'update', method_id: A, type: 'phone', value: '5555550100' },
+      ]
+      const payloads: Array<[ContactMethodOperation[], ContactMethodOperationResult[]]> = [
+        [
+          updateThenAdd,
+          [result(0, 'updated', A, snapshot), result(1, 'matched_existing', A, snapshot)],
+        ],
+        [
+          addThenUpdate,
+          [result(0, 'matched_existing', A, snapshot), result(1, 'updated', A, snapshot)],
+        ],
+      ]
+
+      for (const [ops, res] of payloads) {
+        const next = advanceAcknowledgedMethods(acknowledged, ops, res)
         const ids = next.map(m => m.method_id)
         expect(new Set(ids).size).toBe(ids.length)
+        expect(next).toHaveLength(1)
       }
     })
 
@@ -390,13 +432,16 @@ describe('advanceAcknowledgedMethods', () => {
 })
 
 describe('reconciliationsFromResults', () => {
-  it('resolves snapshot-bearing results back to their submitted rows', () => {
+  it('resolves every snapshot-bearing result back to its submitted row', () => {
+    // A primary designation's origin is the row it addresses, NOT -1. This test
+    // previously encoded the opposite and so positively endorsed the defect it
+    // was meant to guard: deleting primary-result reconciliation left it green.
     const operations: ContactMethodOperation[] = [
       { op: 'remove', method_id: C },
       { op: 'add', type: 'phone', value: '5555550100' },
       { op: 'set_primary', method_id: A },
     ]
-    const submittedIndexes = [-1, 1, -1]
+    const submittedIndexes = [-1, 1, 0]
     const results = [
       result(0, 'removed', C),
       result(1, 'created', B, { id: B, type: 'phone', value: '5555550100', is_primary: false }),
@@ -405,7 +450,108 @@ describe('reconciliationsFromResults', () => {
 
     expect(reconciliationsFromResults(operations, results, submittedIndexes)).toEqual([
       { submittedIndex: 1, method_id: B, type: 'phone', value: '5555550100', is_primary: false },
+      // The primary designation's snapshot reaches the live row too. Dropping
+      // it is what let the form and the acknowledged state hold different
+      // values for one row.
+      { submittedIndex: 0, method_id: A, type: 'email', value: 'a@example.test', is_primary: true },
     ])
+  })
+
+  it('carries a clear_primary snapshot to its row as well', () => {
+    const operations: ContactMethodOperation[] = [{ op: 'clear_primary', method_id: A }]
+    const results = [
+      result(0, 'updated', A, { id: A, type: 'email', value: 'a@example.test', is_primary: false }),
+    ]
+    expect(reconciliationsFromResults(operations, results, [0])).toEqual([
+      {
+        submittedIndex: 0,
+        method_id: A,
+        type: 'email',
+        value: 'a@example.test',
+        is_primary: false,
+      },
+    ])
+  })
+
+  it('drops only removals, whose row is absent from the submitted set', () => {
+    const operations: ContactMethodOperation[] = [{ op: 'remove', method_id: C }]
+    expect(reconciliationsFromResults(operations, [result(0, 'removed', C)], [-1])).toEqual([])
+  })
+})
+
+// The class-level invariant behind three consecutive review findings. Each was
+// the same defect: a path that updates ONE of the two structures that must
+// agree. Server data reaches them at exactly two points — edit-start (both
+// seeded together from contact.methods) and result snapshots — and a snapshot
+// reaches the live rows only when its operation reports a submitted index. So
+// the whole class reduces to one checkable rule.
+describe('the submitted-index contract', () => {
+  it('reports -1 only for remove, across every derivation shape', () => {
+    const scenarios: Array<{
+      name: string
+      acknowledged: AcknowledgedMethod[]
+      submitted: SubmittedMethod[]
+    }> = [
+      { name: 'pure add', acknowledged: [], submitted: [row('email', 'n@example.test')] },
+      {
+        name: 'pure update',
+        acknowledged: [ack(A, 'email', 'old@example.test')],
+        submitted: [row('email', 'new@example.test', { method_id: A })],
+      },
+      { name: 'pure remove', acknowledged: [ack(A, 'email', 'a@example.test')], submitted: [] },
+      {
+        name: 'set_primary onto an existing row',
+        acknowledged: [ack(A, 'email', 'a@example.test', true), ack(B, 'phone', '5555550100')],
+        submitted: [
+          row('email', 'a@example.test', { method_id: A }),
+          row('phone', '5555550100', { method_id: B, is_primary: true }),
+        ],
+      },
+      {
+        name: 'clear_primary on the sole primary',
+        acknowledged: [ack(A, 'email', 'a@example.test', true)],
+        submitted: [row('email', 'a@example.test', { method_id: A })],
+      },
+      {
+        name: 'primary designation on a brand-new row',
+        acknowledged: [ack(A, 'email', 'a@example.test', true)],
+        submitted: [
+          row('email', 'a@example.test', { method_id: A }),
+          row('phone', '5555550100', { is_primary: true }),
+        ],
+      },
+      {
+        name: 'remove alongside an add and an update',
+        acknowledged: [ack(A, 'email', 'a@example.test'), ack(B, 'phone', '5555550100')],
+        submitted: [
+          row('email', 'edited@example.test', { method_id: A }),
+          row('telegram', 'handle'),
+        ],
+      },
+      {
+        name: 'submitted row carrying an id the acknowledged state does not know',
+        acknowledged: [],
+        submitted: [row('email', 'x@example.test', { method_id: C })],
+      },
+    ]
+
+    for (const { name, acknowledged, submitted } of scenarios) {
+      const { operations, submittedIndexes } = deriveMethodOperationsWithOrigins(
+        acknowledged,
+        submitted
+      )
+      expect(operations.length, `${name}: produced no operations to check`).toBeGreaterThan(0)
+      operations.forEach((operation, index) => {
+        if (operation.op === 'remove') {
+          expect(submittedIndexes[index], `${name}: remove must be -1`).toBe(-1)
+        } else {
+          expect(
+            submittedIndexes[index],
+            `${name}: ${operation.op} must name the live row it addresses, or its snapshot never reaches the form`
+          ).toBeGreaterThanOrEqual(0)
+        }
+      })
+    }
   })
 })
 
