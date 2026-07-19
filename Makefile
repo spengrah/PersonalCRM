@@ -552,6 +552,7 @@ test-deploy-scripts:
 	@bash scripts/staging-reset.test.sh
 	@bash scripts/ci/staging-reseed-decision.test.sh
 	@bash scripts/ci/qa-round-cadence-gate.test.sh
+	@bash scripts/ci/qa-nightly-round.test.sh
 	@bash scripts/ci/qa-fn-backfill-guard.test.sh
 	@bash scripts/staging-deployed-sha.test.sh
 	@bash scripts/staging-reseed.test.sh
