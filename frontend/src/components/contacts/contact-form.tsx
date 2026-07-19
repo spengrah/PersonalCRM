@@ -198,6 +198,7 @@ export function ContactForm({
 
       const options = { shouldDirty: false, shouldTouch: false } as const
       const duplicateIndexes: number[] = []
+      let promotedIndex: number | null = null
 
       for (const [methodID, indexes] of rowsById) {
         // Deterministic survivor: the EARLIEST form row carrying this id,
@@ -220,6 +221,24 @@ export function ContactForm({
           options
         )
         setValue(`methods.${survivor}.is_primary`, snapshot.is_primary, options)
+        if (snapshot.is_primary) promotedIndex = survivor
+      }
+
+      // A snapshot reporting is_primary demotes every other live row.
+      //
+      // The promotion can come from the SERVER rather than from the user's
+      // designation: an add can resolve to a row another writer made primary
+      // after edit-start, so the row this reconciliation just starred is one
+      // the form never showed as primary, while the row the form DOES show
+      // starred was never addressed. Leaving both set contradicts the server,
+      // and — because the form rejects more than one primary — it also blocks
+      // the next save outright, including an unedited retry after the methods
+      // step already landed.
+      if (promotedIndex !== null) {
+        fields.forEach((_field, index) => {
+          if (index === promotedIndex || duplicateIndexes.includes(index)) return
+          setValue(`methods.${index}.is_primary`, false, options)
+        })
       }
 
       // Descending, so each index is still valid when its turn comes.

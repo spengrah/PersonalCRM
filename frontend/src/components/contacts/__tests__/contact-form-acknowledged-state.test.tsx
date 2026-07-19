@@ -189,6 +189,71 @@ describe('ContactForm method identity', () => {
     expect(methodValueInputs()[1]).toHaveValue('e@example.test')
   })
 
+  it('demotes the visible primary when a result reports a different row primary', async () => {
+    // The promotion here comes from the SERVER, not the user. The form still
+    // shows A starred from edit-start; meanwhile another writer promoted an
+    // unseen row B, and the user's new row resolves to B. The result snapshot
+    // reports B primary.
+    //
+    // Writing that onto B without demoting A leaves the form with two starred
+    // rows: it contradicts the server, and the form's own one-primary rule
+    // then rejects the next submit — so an unedited retry after the methods
+    // step already landed cannot be saved at all.
+    const onSubmit = vi.fn()
+    const reconcilerRef = createRef<MethodsReconciler | null>() as any
+    const user = userEvent.setup()
+
+    render(
+      <ContactForm
+        contact={contactWith([
+          { id: METHOD_A, type: 'email', value: 'a@example.test', is_primary: true },
+        ])}
+        onSubmit={onSubmit}
+        reconcilerRef={reconcilerRef}
+      />
+    )
+
+    expect(screen.getAllByRole('button', { name: 'Primary contact method' })).toHaveLength(1)
+
+    await user.click(screen.getByRole('button', { name: 'Add method' }))
+    await user.selectOptions(
+      screen.getAllByRole('combobox', { name: 'Contact method type' })[1],
+      'phone'
+    )
+    await user.type(methodValueInputs()[1], '5555550100')
+    await user.click(screen.getByRole('button', { name: 'Save Contact' }))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled())
+
+    act(() =>
+      reconcilerRef.current?.([
+        {
+          submittedIndex: 1,
+          method_id: METHOD_B,
+          type: 'phone',
+          value: '5555550100',
+          is_primary: true,
+        },
+      ])
+    )
+
+    // Exactly one primary, and it is the row the server says is primary.
+    await waitFor(() =>
+      expect(screen.getAllByRole('button', { name: 'Primary contact method' })).toHaveLength(1)
+    )
+    const submittedAfter = await (async () => {
+      onSubmit.mockClear()
+      await user.click(screen.getByRole('button', { name: 'Save Contact' }))
+      await waitFor(() => expect(onSubmit).toHaveBeenCalled())
+      return onSubmit.mock.calls[0][0].methods
+    })()
+
+    // The submit was accepted at all — two primaries would fail validation and
+    // onSubmit would never fire.
+    const primaries = submittedAfter.filter((m: { is_primary: boolean }) => m.is_primary)
+    expect(primaries).toHaveLength(1)
+    expect(primaries[0].method_id).toBe(METHOD_B)
+  })
+
   it('writes back a confirmed id without counting as a user edit', async () => {
     // A programmatic reconciliation is not a form change. Treating it as one
     // would invalidate the save session it just completed, and could loop.
