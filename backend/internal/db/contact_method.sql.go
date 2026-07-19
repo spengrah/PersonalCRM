@@ -53,6 +53,24 @@ func (q *Queries) CreateContactMethod(ctx context.Context, arg CreateContactMeth
 	return &i, err
 }
 
+const DeleteContactMethodByContact = `-- name: DeleteContactMethodByContact :exec
+DELETE FROM contact_method
+WHERE id = $1
+  AND contact_id = $2
+`
+
+type DeleteContactMethodByContactParams struct {
+	ID        pgtype.UUID `json:"id"`
+	ContactID pgtype.UUID `json:"contact_id"`
+}
+
+// Contact-scoped single-row delete. Used both for removals and for the first
+// phase of the delete-and-reinsert applied to key-changing rows.
+func (q *Queries) DeleteContactMethodByContact(ctx context.Context, arg DeleteContactMethodByContactParams) error {
+	_, err := q.db.Exec(ctx, DeleteContactMethodByContact, arg.ID, arg.ContactID)
+	return err
+}
+
 const DeleteContactMethodsByContact = `-- name: DeleteContactMethodsByContact :exec
 DELETE FROM contact_method
 WHERE contact_id = $1
@@ -60,6 +78,28 @@ WHERE contact_id = $1
 
 func (q *Queries) DeleteContactMethodsByContact(ctx context.Context, contactID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, DeleteContactMethodsByContact, contactID)
+	return err
+}
+
+const DemoteContactMethodPrimaryByContact = `-- name: DemoteContactMethodPrimaryByContact :exec
+UPDATE contact_method
+SET is_primary = FALSE
+WHERE id = $1
+  AND contact_id = $2
+`
+
+type DemoteContactMethodPrimaryByContactParams struct {
+	ID        pgtype.UUID `json:"id"`
+	ContactID pgtype.UUID `json:"contact_id"`
+}
+
+// Clears is_primary on ONE named row of ONE contact.
+//
+// Scoped by BOTH contact_id and id, deliberately. A contact-only demote would
+// clear whichever row happened to be primary, which is the global-demotion
+// behavior that lets a stale client drop a primary it never saw.
+func (q *Queries) DemoteContactMethodPrimaryByContact(ctx context.Context, arg DemoteContactMethodPrimaryByContactParams) error {
+	_, err := q.db.Exec(ctx, DemoteContactMethodPrimaryByContact, arg.ID, arg.ContactID)
 	return err
 }
 
@@ -117,6 +157,69 @@ func (q *Queries) FindMethodsByNormalizedValue(ctx context.Context, arg FindMeth
 		return nil, err
 	}
 	return items, nil
+}
+
+const InsertContactMethodWithIdentity = `-- name: InsertContactMethodWithIdentity :one
+INSERT INTO contact_method (
+    id,
+    contact_id,
+    type,
+    value,
+    value_normalized,
+    is_primary,
+    created_at
+) VALUES (
+    $1, $2, $3, $4, '', $5, $6
+) RETURNING id, contact_id, type, value, is_primary, created_at, updated_at, value_normalized
+`
+
+type InsertContactMethodWithIdentityParams struct {
+	ID        pgtype.UUID        `json:"id"`
+	ContactID pgtype.UUID        `json:"contact_id"`
+	Type      string             `json:"type"`
+	Value     string             `json:"value"`
+	IsPrimary pgtype.Bool        `json:"is_primary"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+// Inserts a contact method with an EXPLICIT id and created_at so the apply
+// stage can delete a row whose (type, value_normalized) key changed and put it
+// back with its identity intact. Genuinely new rows pass generated values for
+// the same two columns, so one query serves both cases.
+//
+// is_primary is always supplied as FALSE by the apply stage: promotion is the
+// last step, which is what keeps idx_contact_method_primary from being
+// violated mid-apply.
+//
+// Deliberately NO "ON CONFLICT DO NOTHING": the in-memory fold has already
+// proven the row is absent, so a conflict here means the fold is wrong and
+// must fail loudly rather than be swallowed.
+//
+// value_normalized is written by the set_contact_method_value_normalized
+// trigger (migration 022), which overwrites whatever is passed. The
+// placeholder below is never the stored value — do not read the returned
+// value_normalized as confirmation of what Go computed.
+func (q *Queries) InsertContactMethodWithIdentity(ctx context.Context, arg InsertContactMethodWithIdentityParams) (*ContactMethod, error) {
+	row := q.db.QueryRow(ctx, InsertContactMethodWithIdentity,
+		arg.ID,
+		arg.ContactID,
+		arg.Type,
+		arg.Value,
+		arg.IsPrimary,
+		arg.CreatedAt,
+	)
+	var i ContactMethod
+	err := row.Scan(
+		&i.ID,
+		&i.ContactID,
+		&i.Type,
+		&i.Value,
+		&i.IsPrimary,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ValueNormalized,
+	)
+	return &i, err
 }
 
 const ListCanonicalIdentifiersByType = `-- name: ListCanonicalIdentifiersByType :many
@@ -295,6 +398,66 @@ func (q *Queries) ListGChatIdentitiesForSync(ctx context.Context) ([]*ListGChatI
 	return items, nil
 }
 
+const LookupContactMethodOwner = `-- name: LookupContactMethodOwner :one
+SELECT contact_id FROM contact_method
+WHERE id = $1
+`
+
+// Returns the owning contact_id for a method id, regardless of which contact
+// owns it. This is what separates "this id belongs to another contact" (404 --
+// a method id is not a capability) from "this id does not exist at all"
+// (a removal succeeds as a no-op, so a retried removal is idempotent). Those
+// two cases are indistinguishable from one contact's pre-state alone.
+func (q *Queries) LookupContactMethodOwner(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, LookupContactMethodOwner, id)
+	var contact_id pgtype.UUID
+	err := row.Scan(&contact_id)
+	return contact_id, err
+}
+
+const NormalizeContactMethodValueViaTrigger = `-- name: NormalizeContactMethodValueViaTrigger :one
+SELECT normalize_contact_method_value($1::TEXT, $2::TEXT) AS normalized
+`
+
+type NormalizeContactMethodValueViaTriggerParams struct {
+	MethodType string `json:"method_type"`
+	RawValue   string `json:"raw_value"`
+}
+
+// TEST-ONLY. Calls the live normalize_contact_method_value function so the
+// C6 parity test can compare the Go mirror against the actual SQL that the
+// unique index is enforced over. Raw SQL is banned in Go including tests
+// (.ai/rules/core.md), so this query is the permitted access path.
+//
+// Not used by production code. Do not make it one: production reads the
+// trigger's output from the stored column.
+func (q *Queries) NormalizeContactMethodValueViaTrigger(ctx context.Context, arg NormalizeContactMethodValueViaTriggerParams) (string, error) {
+	row := q.db.QueryRow(ctx, NormalizeContactMethodValueViaTrigger, arg.MethodType, arg.RawValue)
+	var normalized string
+	err := row.Scan(&normalized)
+	return normalized, err
+}
+
+const PromoteContactMethodPrimaryByContact = `-- name: PromoteContactMethodPrimaryByContact :exec
+UPDATE contact_method
+SET is_primary = TRUE
+WHERE id = $1
+  AND contact_id = $2
+`
+
+type PromoteContactMethodPrimaryByContactParams struct {
+	ID        pgtype.UUID `json:"id"`
+	ContactID pgtype.UUID `json:"contact_id"`
+}
+
+// Sets is_primary on one named row of one contact. Added rather than reusing
+// SetContactMethodPrimary, which matches by method id alone and is used by
+// enrichment — changing it would move enrichment behavior.
+func (q *Queries) PromoteContactMethodPrimaryByContact(ctx context.Context, arg PromoteContactMethodPrimaryByContactParams) error {
+	_, err := q.db.Exec(ctx, PromoteContactMethodPrimaryByContact, arg.ID, arg.ContactID)
+	return err
+}
+
 const SetContactMethodPrimary = `-- name: SetContactMethodPrimary :exec
 UPDATE contact_method cm
 SET is_primary = $2,
@@ -315,6 +478,52 @@ type SetContactMethodPrimaryParams struct {
 func (q *Queries) SetContactMethodPrimary(ctx context.Context, arg SetContactMethodPrimaryParams) error {
 	_, err := q.db.Exec(ctx, SetContactMethodPrimary, arg.ID, arg.IsPrimary)
 	return err
+}
+
+const UpdateContactMethodByContact = `-- name: UpdateContactMethodByContact :one
+UPDATE contact_method
+SET type = $1,
+    value = $2
+WHERE id = $3
+  AND contact_id = $4
+RETURNING id, contact_id, type, value, is_primary, created_at, updated_at, value_normalized
+`
+
+type UpdateContactMethodByContactParams struct {
+	Type      string      `json:"type"`
+	Value     string      `json:"value"`
+	ID        pgtype.UUID `json:"id"`
+	ContactID pgtype.UUID `json:"contact_id"`
+}
+
+// In-place value/type update for a row whose (type, value_normalized) key is
+// UNCHANGED — the apply stage's step 4. A key change goes through
+// delete-and-reinsert instead; this query exists for the case where the user
+// edited the stored spelling ("Case@Example.test" -> "case@example.test", or a
+// phone respelling) without moving the normalized key, which steps 1-3 would
+// otherwise silently discard.
+//
+// Scoped by contact_id as well as id so a method id from another contact can
+// never be acted on.
+func (q *Queries) UpdateContactMethodByContact(ctx context.Context, arg UpdateContactMethodByContactParams) (*ContactMethod, error) {
+	row := q.db.QueryRow(ctx, UpdateContactMethodByContact,
+		arg.Type,
+		arg.Value,
+		arg.ID,
+		arg.ContactID,
+	)
+	var i ContactMethod
+	err := row.Scan(
+		&i.ID,
+		&i.ContactID,
+		&i.Type,
+		&i.Value,
+		&i.IsPrimary,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ValueNormalized,
+	)
+	return &i, err
 }
 
 const UpdateContactMethodValue = `-- name: UpdateContactMethodValue :one

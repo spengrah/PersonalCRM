@@ -410,6 +410,9 @@ type Querier interface {
 	DeleteCalendarEventByGcalID(ctx context.Context, arg DeleteCalendarEventByGcalIDParams) error
 	DeleteCalendarEventsByGcalEventIdPrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	DeleteCalendarEventsByTitlePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
+	// Contact-scoped single-row delete. Used both for removals and for the first
+	// phase of the delete-and-reinsert applied to key-changing rows.
+	DeleteContactMethodByContact(ctx context.Context, arg DeleteContactMethodByContactParams) error
 	DeleteContactMethodsByContact(ctx context.Context, contactID pgtype.UUID) error
 	// Delete a note for a contact by category
 	DeleteContactNoteByCategory(ctx context.Context, arg DeleteContactNoteByCategoryParams) error
@@ -513,6 +516,12 @@ type Querier interface {
 	DeleteTelegramMessagesByPeerUserID(ctx context.Context, peerUserID pgtype.Int8) (int64, error)
 	DeleteTelegramSession(ctx context.Context) error
 	DeleteTelegramUpdateState(ctx context.Context, userID int64) error
+	// Clears is_primary on ONE named row of ONE contact.
+	//
+	// Scoped by BOTH contact_id and id, deliberately. A contact-only demote would
+	// clear whichever row happened to be primary, which is the global-demotion
+	// behavior that lets a stale client drop a primary it never saw.
+	DemoteContactMethodPrimaryByContact(ctx context.Context, arg DemoteContactMethodPrimaryByContactParams) error
 	// Demote source's primary contact methods when the target already has a primary.
 	// The one-primary rule is per contact — idx_contact_method_primary is a unique
 	// partial index on (contact_id) WHERE is_primary = TRUE — so the source's primary
@@ -1002,6 +1011,24 @@ type Querier interface {
 	// full bi-temporal envelope. knowledge_from is the learned-at clock; valid_from
 	// is set only from content evidence (NULL = open-ended), never defaulted to now.
 	InsertAssertion(ctx context.Context, arg InsertAssertionParams) (*Assertion, error)
+	// Inserts a contact method with an EXPLICIT id and created_at so the apply
+	// stage can delete a row whose (type, value_normalized) key changed and put it
+	// back with its identity intact. Genuinely new rows pass generated values for
+	// the same two columns, so one query serves both cases.
+	//
+	// is_primary is always supplied as FALSE by the apply stage: promotion is the
+	// last step, which is what keeps idx_contact_method_primary from being
+	// violated mid-apply.
+	//
+	// Deliberately NO "ON CONFLICT DO NOTHING": the in-memory fold has already
+	// proven the row is absent, so a conflict here means the fold is wrong and
+	// must fail loudly rather than be swallowed.
+	//
+	// value_normalized is written by the set_contact_method_value_normalized
+	// trigger (migration 022), which overwrites whatever is passed. The
+	// placeholder below is never the stored value — do not read the returned
+	// value_normalized as confirmation of what Go computed.
+	InsertContactMethodWithIdentity(ctx context.Context, arg InsertContactMethodWithIdentityParams) (*ContactMethod, error)
 	// Event queries (spec §3.1, §3.3). Raw append-only event log.
 	// Insert an event; conflicts on (source, source_id) (when source_id is not
 	// NULL) return zero rows so the caller can treat as idempotent no-op. When
@@ -1419,6 +1446,12 @@ type Querier interface {
 	// committed interaction would be missed. Returns db.ErrNotFound (pgx.ErrNoRows)
 	// when the contact was soft-deleted.
 	LockContactForDateRecompute(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error)
+	// Returns the owning contact_id for a method id, regardless of which contact
+	// owns it. This is what separates "this id belongs to another contact" (404 --
+	// a method id is not a capability) from "this id does not exist at all"
+	// (a removal succeeds as a no-op, so a retried removal is idempotent). Those
+	// two cases are indistinguishable from one contact's pre-state alone.
+	LookupContactMethodOwner(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error)
 	// Single-statement batch mark for the action=ignore ("Not a person")
 	// resolve path: every live unmatched sibling for the token flips to
 	// 'ignored'. No crm_contact_id is set. Same predicate as the other two
@@ -1533,6 +1566,14 @@ type Querier interface {
 	//     rows were already linked to res.Interaction.ID on the original
 	//     attempt; processed_at IS NOT NULL now filters them out.
 	MarkTelegramMessagesProcessedForSession(ctx context.Context, arg MarkTelegramMessagesProcessedForSessionParams) (int64, error)
+	// TEST-ONLY. Calls the live normalize_contact_method_value function so the
+	// C6 parity test can compare the Go mirror against the actual SQL that the
+	// unique index is enforced over. Raw SQL is banned in Go including tests
+	// (.ai/rules/core.md), so this query is the permitted access path.
+	//
+	// Not used by production code. Do not make it one: production reads the
+	// trigger's output from the stored column.
+	NormalizeContactMethodValueViaTrigger(ctx context.Context, arg NormalizeContactMethodValueViaTriggerParams) (string, error)
 	// The earliest scheduled_at among jobs that are due now but not yet picked up
 	// by a worker — the stall signal for a starved/dead worker pool. scheduled_at
 	// is the next-eligibility time: for 'available' it equals creation time, for
@@ -1552,6 +1593,10 @@ type Querier interface {
 	// aggregate's generated type. The repository maps NULL to a nil *time.Time
 	// ("no due jobs").
 	OldestDueRiverJobScheduledAt(ctx context.Context, now pgtype.Timestamptz) (pgtype.Timestamptz, error)
+	// Sets is_primary on one named row of one contact. Added rather than reusing
+	// SetContactMethodPrimary, which matches by method id alone and is used by
+	// enrichment — changing it would move enrichment behavior.
+	PromoteContactMethodPrimaryByContact(ctx context.Context, arg PromoteContactMethodPrimaryByContactParams) error
 	RemoveContactTag(ctx context.Context, arg RemoveContactTagParams) error
 	// Replace source contact ID with target contact ID in calendar event matched_contact_ids array
 	// Uses array_replace for efficient in-place replacement
@@ -2549,6 +2594,16 @@ type Querier interface {
 	// current value). updated_at is intentionally NOT bumped — a cache refresh
 	// is bookkeeping, not a user profile edit.
 	UpdateContactLocationCache(ctx context.Context, arg UpdateContactLocationCacheParams) error
+	// In-place value/type update for a row whose (type, value_normalized) key is
+	// UNCHANGED — the apply stage's step 4. A key change goes through
+	// delete-and-reinsert instead; this query exists for the case where the user
+	// edited the stored spelling ("Case@Example.test" -> "case@example.test", or a
+	// phone respelling) without moving the normalized key, which steps 1-3 would
+	// otherwise silently discard.
+	//
+	// Scoped by contact_id as well as id so a method id from another contact can
+	// never be acted on.
+	UpdateContactMethodByContact(ctx context.Context, arg UpdateContactMethodByContactParams) (*ContactMethod, error)
 	UpdateContactMethodValue(ctx context.Context, arg UpdateContactMethodValueParams) (*ContactMethod, error)
 	// Updates all direction fields + last_contacted + contact_by (for mutual interactions).
 	// Uses forward-only semantics for automated sources; manual always updates.
