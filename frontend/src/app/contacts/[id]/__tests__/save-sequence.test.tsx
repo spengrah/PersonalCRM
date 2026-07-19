@@ -461,6 +461,55 @@ describe('the acknowledged state is never re-derived from server data', () => {
     ])
   })
 
+  it('applies a primary-only result snapshot to the live row, not just the acknowledged state', async () => {
+    // set_primary and clear_primary results carry a FULL snapshot, and it is
+    // the only place the client learns that row's server-side state. If the
+    // acknowledged state applies it while the form does not, the two structures
+    // drift: the form keeps showing the stale value, and the next derivation
+    // emits an update nobody asked for — overwriting a value the form never
+    // displayed, on a row the user never edited.
+    //
+    // Here another writer changed A's value after edit-start. The user only
+    // toggles primary, so the sole operation is set_primary(A), and its
+    // snapshot reports the server's new value.
+    saveNote.mockRejectedValueOnce(new Error('notes failed'))
+    const serverValue = 'moved@example.test'
+    applyMethods.mockResolvedValueOnce({
+      methods: [{ ...methodA, value: serverValue, is_primary: true }],
+      results: [
+        {
+          index: 0,
+          outcome: 'updated',
+          method_id: METHOD_A,
+          method: { ...methodA, value: serverValue, is_primary: true },
+        },
+      ],
+    })
+
+    const user = userEvent.setup()
+    renderPage()
+    await openEditMode(user)
+
+    await user.click(screen.getByRole('button', { name: 'Set as primary' }))
+    await save(user)
+    await screen.findByTestId('save-report')
+
+    expect(operationsOfCall(0)).toEqual([{ op: 'set_primary', method_id: METHOD_A }])
+    // The live row learned the server's value.
+    await waitFor(() => expect(methodValueInputs()[0]).toHaveValue(serverValue))
+
+    // A form edit invalidates the session, forcing a fresh derivation.
+    applyMethods.mockResolvedValue({ methods: [methodA], results: [] })
+    saveNote.mockResolvedValue({})
+    await user.type(screen.getByLabelText(/Full Name/), '!')
+    await save(user)
+
+    await waitFor(() => expect(saveNote).toHaveBeenCalledTimes(2))
+    // No spurious update rewriting the server's value back to the stale one.
+    const second = applyMethods.mock.calls[1]
+    expect(second ? second[0].operations : []).toEqual([])
+  })
+
   it('restores the original value when a change is reverted after a partial failure', async () => {
     saveNote.mockRejectedValueOnce(new Error('notes failed'))
     applyMethods.mockResolvedValueOnce({

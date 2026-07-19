@@ -16,6 +16,7 @@ import type {
 const A = 'aaaaaaaa-0000-4000-8000-000000000001'
 const B = 'bbbbbbbb-0000-4000-8000-000000000002'
 const C = 'cccccccc-0000-4000-8000-000000000003'
+const D = 'dddddddd-0000-4000-8000-000000000004'
 
 function ack(
   method_id: string,
@@ -300,12 +301,33 @@ describe('advanceAcknowledgedMethods', () => {
       expect(next[0]).toEqual(ack(A, 'phone', '5555550100', true))
     })
 
-    it('keeps the earlier position and is independent of submission order', () => {
-      const acknowledged = [ack(C, 'email', 'c@example.test'), ack(A, 'phone', 'old')]
+    it('upserts in place rather than moving the row to the end', () => {
+      // The collapsing row must NOT be last, or position is unobservable:
+      // with [C, A] an implementation that removes and re-appends also yields
+      // [C, A], and the assertion cannot distinguish it from upsert-in-place.
+      const acknowledged = [
+        ack(C, 'email', 'c@example.test'),
+        ack(A, 'phone', 'old'),
+        ack(D, 'telegram', 'handle'),
+      ]
+      const next = advanceAcknowledgedMethods(acknowledged, operations, results)
+      expect(next.map(m => m.method_id)).toEqual([C, A, D])
+    })
+
+    it('is insensitive to result order, which the identical-snapshot contract makes safe', () => {
+      // Narrowed deliberately. This permutes the RESULTS array only, and both
+      // results for one id carry the same snapshot by the backend contract
+      // (they are read from a single post-apply state), so last-wins,
+      // first-wins, and index-ordered implementations are all equivalent here.
+      // Claiming "independent of submission order" would overstate it — that
+      // property is carried by the position test above plus the server's own
+      // order-independence, not by this assertion.
+      expect(results[0].method).toEqual(results[1].method)
+
+      const acknowledged = [ack(A, 'phone', 'old')]
       const forward = advanceAcknowledgedMethods(acknowledged, operations, results)
       const reversed = advanceAcknowledgedMethods(acknowledged, operations, [...results].reverse())
       expect(forward).toEqual(reversed)
-      expect(forward.map(m => m.method_id)).toEqual([C, A])
     })
 
     it('never lets a method_id appear twice, for any payload order', () => {

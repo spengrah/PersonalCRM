@@ -41,9 +41,13 @@ export interface SubmittedMethod {
 export interface DerivedMethodOperations {
   operations: ContactMethodOperation[]
   /**
-   * `submittedIndexes[i]` is the index into `submitted` whose row produced
-   * `operations[i]`, or -1 for an operation that names an acknowledged row
-   * rather than a submitted one (removals and primary designations).
+   * `submittedIndexes[i]` is the index into `submitted` whose live row the
+   * operation addresses, or -1 when no live row corresponds — which is only
+   * `remove`, whose row is by definition absent from the submitted set.
+   *
+   * Primary designations DO carry their row's index: their results include a
+   * full snapshot, and that snapshot has to reach the live row or the form and
+   * the acknowledged state drift apart.
    *
    * This is what lets a successful result be written back into the live form
    * row that produced it, without re-deriving server identity from the
@@ -147,17 +151,28 @@ export function deriveMethodOperationsWithOrigins(
   })
 
   const acknowledgedPrimary = acknowledged.find(method => method.is_primary)
-  const submittedPrimary = submitted.find(row => row.is_primary)
+  const submittedPrimaryIndex = submitted.findIndex(row => row.is_primary)
+  const submittedPrimary = submittedPrimaryIndex >= 0 ? submitted[submittedPrimaryIndex] : undefined
 
+  // A primary designation is reported with the live row it addresses, NOT -1.
+  // Its result carries a full snapshot (the row survives), and that snapshot is
+  // the only place the client learns the row's server-side state. Dropping it
+  // from reconciliation while the acknowledged state applies it splits the two
+  // structures apart: the form keeps showing a stale value while the
+  // acknowledged state holds the server's, and the next derivation then emits
+  // an update nobody asked for, overwriting a value the form never displayed.
   if (submittedPrimary) {
     const id = knownId(submittedPrimary)
     if (id && acknowledgedPrimary?.method_id !== id) {
-      push({ op: 'set_primary', method_id: id }, -1)
+      push({ op: 'set_primary', method_id: id }, submittedPrimaryIndex)
     }
   } else if (acknowledgedPrimary && !removedIds.has(acknowledgedPrimary.method_id)) {
     // Suppressed when the same row is being removed: removal already leaves no
     // primary, so the clear is redundant AND rejected as self-conflicting.
-    push({ op: 'clear_primary', method_id: acknowledgedPrimary.method_id }, -1)
+    // The row is still submitted (it was not removed), so its live index is
+    // known and the snapshot can reach it.
+    const clearedIndex = submitted.findIndex(row => knownId(row) === acknowledgedPrimary.method_id)
+    push({ op: 'clear_primary', method_id: acknowledgedPrimary.method_id }, clearedIndex)
   }
 
   return { operations, submittedIndexes }
