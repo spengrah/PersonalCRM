@@ -7,6 +7,11 @@ import type {
   OverdueContact,
 } from '@/types/contact'
 import type { CadenceFilter, FollowupFilter, SortField, SortOrder } from './contact-list-params'
+import type {
+  ContactMethodOperation,
+  ContactMethodOperationsRequest,
+  ContactMethodOperationsResponse,
+} from '@/types/generated/contact'
 
 export interface ContactsListResponse {
   contacts: Contact[]
@@ -66,6 +71,23 @@ export const contactsApi = {
   // Update contact
   updateContact: async (id: string, data: UpdateContactRequest): Promise<Contact> => {
     return apiClient.put<Contact>(`/api/v1/contacts/${id}`, data)
+  },
+
+  // Apply contact-method operations.
+  //
+  // Returns the whole response, `results` included: the caller needs the
+  // per-operation results to advance its acknowledged state and to learn the
+  // ids the server assigned. Dropping them here would force the client to
+  // re-derive server identity from the method list, which cannot be done
+  // correctly — the client's normalizer and the database trigger are different
+  // functions.
+  applyMethodOperations: async (
+    id: string,
+    operations: ContactMethodOperation[]
+  ): Promise<ContactMethodOperationsResponse> => {
+    return apiClient.post<ContactMethodOperationsResponse>(`/api/v1/contacts/${id}/methods`, {
+      operations,
+    } satisfies ContactMethodOperationsRequest)
   },
 
   // Delete contact (soft delete)

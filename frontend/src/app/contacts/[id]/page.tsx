@@ -3,13 +3,14 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { Navigation } from '@/components/layout/navigation'
-import { ContactForm } from '@/components/contacts/contact-form'
+import { ContactForm, type MethodsReconciler } from '@/components/contacts/contact-form'
 import { Button } from '@/components/ui/button'
 import {
   useContact,
   useContactIDs,
   usePrefetchContact,
   useUpdateContact,
+  useApplyMethodOperations,
   useDeleteContact,
 } from '@/hooks/use-contacts'
 import { useContactNote, useSaveContactNote } from '@/hooks/use-contact-note'
@@ -36,6 +37,15 @@ import {
   sortContactMethods,
 } from '@/lib/contact-methods'
 import type { ContactSubmitData } from '@/lib/validations/contact'
+import type { UpdateContactRequest } from '@/types/contact'
+import {
+  advanceAcknowledgedMethods,
+  deriveMethodOperationsWithOrigins,
+  initializeAcknowledgedMethods,
+  reconciliationsFromResults,
+  type AcknowledgedMethod,
+} from '@/lib/contact-method-operations'
+import type { ContactMethodOperation } from '@/types/generated/contact'
 import {
   buildContactDetailUrl,
   buildContactListUrl,
@@ -44,6 +54,53 @@ import {
 import { MergeContactModal } from '@/components/contacts/merge-contact-modal'
 import { TasksSection } from '@/components/contacts/tasks-section'
 import { LogInteractionModal } from '@/components/contacts/log-interaction-modal'
+
+type SaveStep = 'contact' | 'methods' | 'notes'
+
+const SAVE_STEP_LABELS: Record<SaveStep, string> = {
+  contact: 'contact details',
+  methods: 'contact methods',
+  notes: 'the note',
+}
+
+/**
+ * One attempt chain over an immutable submitted payload.
+ *
+ * A retry resumes from the first step that has not yet succeeded, so a step
+ * that landed stays landed and the report can never say "nothing was saved"
+ * when something was. Resume applies only to an UNEDITED retry: any form edit
+ * discards the session, and the next save is a fresh chain from step one with a
+ * fresh payload — otherwise resuming would silently drop the new edit.
+ *
+ * The acknowledged method state is deliberately NOT part of this. Rebuilding it
+ * on session invalidation is the original defect: a successful scalar PUT
+ * refreshes the detail cache, so a rebuilt picture would include a method the
+ * form never showed, and the next payload would name it for removal.
+ */
+interface SaveSession {
+  payload: ContactSubmitData
+  operations: ContactMethodOperation[]
+  submittedIndexes: number[]
+  completed: SaveStep[]
+}
+
+interface SaveReport {
+  saved: SaveStep[]
+  failed: SaveStep
+}
+
+function describeSaveReport({ saved, failed }: SaveReport): string {
+  const failedLabel = SAVE_STEP_LABELS[failed]
+  if (saved.length === 0) {
+    return `Nothing was saved — ${failedLabel} could not be saved. Try again.`
+  }
+  const savedLabels = saved.map(step => SAVE_STEP_LABELS[step])
+  const savedText =
+    savedLabels.length === 1
+      ? savedLabels[0]
+      : `${savedLabels.slice(0, -1).join(', ')} and ${savedLabels[savedLabels.length - 1]}`
+  return `Saved ${savedText}, but ${failedLabel} could not be saved. Try again to save the rest.`
+}
 
 export default function ContactDetailPage() {
   const params = useParams()
@@ -82,7 +139,41 @@ export default function ContactDetailPage() {
   const { data: contactNote } = useContactNote(contactId)
   const { data: navigationData, isLoading: isLoadingIDs } = useContactIDs(listContext)
   const updateContactMutation = useUpdateContact()
+  const applyMethodOperationsMutation = useApplyMethodOperations()
   const saveContactNoteMutation = useSaveContactNote()
+
+  // The client's picture of the server's methods, and the only left-hand side
+  // any operation is derived against.
+  const acknowledgedMethodsRef = useRef<AcknowledgedMethod[] | null>(null)
+  const saveSessionRef = useRef<SaveSession | null>(null)
+  const methodsReconcilerRef = useRef<MethodsReconciler | null>(null)
+  const [saveReport, setSaveReport] = useState<SaveReport | null>(null)
+
+  useEffect(() => {
+    if (!isEditing) {
+      acknowledgedMethodsRef.current = null
+      saveSessionRef.current = null
+      setSaveReport(null)
+      return
+    }
+    if (!contact) return
+    // Captured ONCE, at edit-start, and never re-read from server data
+    // afterwards — not on session invalidation, not on retry, not when the
+    // detail cache refreshes underneath the open form. This guard is what makes
+    // that true; deleting it re-derives the picture from whatever the cache
+    // holds now, which is how a method the form never showed gets named for
+    // removal.
+    if (acknowledgedMethodsRef.current) return
+    acknowledgedMethodsRef.current = initializeAcknowledgedMethods(contact.methods)
+  }, [isEditing, contact])
+
+  // A user edit invalidates the payload and the step progress. It does NOT
+  // touch the acknowledged state, which carries forward including whatever this
+  // client's confirmed operations have already taught it.
+  const handleFormEdit = useCallback(() => {
+    saveSessionRef.current = null
+    setSaveReport(null)
+  }, [])
 
   // Fetch tasks at page level to start loading in parallel with contact.
   // Post-046, the lifecycle filter is the natural axis: lifecycle=manual
@@ -195,17 +286,87 @@ export default function ContactDetailPage() {
   }, [contactNote?.body, notesExpanded])
   const deleteContactMutation = useDeleteContact()
 
+  // Three sequential requests, never Promise.all: on failure at step n, stop
+  // and do not attempt n+1. Every step tolerates replay — operations fold to a
+  // no-op, the notes PUT is a full-document replace, and the scalar PUT
+  // converges — so resuming an unedited retry is safe. That is safe replay with
+  // defined side effects, not strict idempotency: a replayed scalar PUT still
+  // advances timestamps and re-runs cadence work.
   const handleUpdateContact = async (data: ContactSubmitData) => {
+    const acknowledged = acknowledgedMethodsRef.current ?? []
+
+    let session = saveSessionRef.current
+    if (!session) {
+      const derived = deriveMethodOperationsWithOrigins(acknowledged, data.methods)
+      session = {
+        payload: data,
+        operations: derived.operations,
+        submittedIndexes: derived.submittedIndexes,
+        completed: [],
+      }
+      saveSessionRef.current = session
+    }
+
+    // Built field by field rather than by spreading the payload, so the absence
+    // of `methods` is visible at the call site: PUT /contacts/:id no longer
+    // accepts them, and sending a desired set is the defect this arc removes.
+    const notes = session.payload.notes
+    const contactData: UpdateContactRequest = {
+      full_name: session.payload.full_name,
+      location: session.payload.location,
+      birthday: session.payload.birthday,
+      cadence: session.payload.cadence,
+    }
+
+    let step: SaveStep = 'contact'
     try {
-      // Extract notes from form data and save separately
-      const { notes, ...contactData } = data
-      await Promise.all([
-        updateContactMutation.mutateAsync({ id: contactId, data: contactData }),
-        saveContactNoteMutation.mutateAsync({ contactId, body: notes || '' }),
-      ])
+      if (!session.completed.includes('contact')) {
+        await updateContactMutation.mutateAsync({ id: contactId, data: contactData })
+        session.completed = [...session.completed, 'contact']
+      }
+
+      step = 'methods'
+      if (!session.completed.includes('methods')) {
+        // An empty derivation skips the request entirely.
+        if (session.operations.length > 0) {
+          const response = await applyMethodOperationsMutation.mutateAsync({
+            id: contactId,
+            operations: session.operations,
+          })
+          // Advance by applying THIS CLIENT'S OWN confirmed operations. The
+          // response's `methods` array is never read here: taking it wholesale
+          // would let rows no operation addressed enter the picture, which is
+          // the original incident with extra steps.
+          acknowledgedMethodsRef.current = advanceAcknowledgedMethods(
+            acknowledged,
+            session.operations,
+            response.results
+          )
+          // The live form rows need the same ids, or a row created here would
+          // still be id-less and the next save would derive remove + add,
+          // silently changing the row's identity.
+          methodsReconcilerRef.current?.(
+            reconciliationsFromResults(
+              session.operations,
+              response.results,
+              session.submittedIndexes
+            )
+          )
+        }
+        session.completed = [...session.completed, 'methods']
+      }
+
+      step = 'notes'
+      if (!session.completed.includes('notes')) {
+        await saveContactNoteMutation.mutateAsync({ contactId, body: notes || '' })
+        session.completed = [...session.completed, 'notes']
+      }
+
+      saveSessionRef.current = null
+      setSaveReport(null)
       setIsEditing(false)
     } catch {
-      // Error handled by TanStack Query error state
+      setSaveReport({ saved: session.completed, failed: step })
     }
   }
 
@@ -304,11 +465,32 @@ export default function ContactDetailPage() {
                 contact={contact}
                 initialNotes={contactNote?.body || ''}
                 onSubmit={handleUpdateContact}
-                loading={updateContactMutation.isPending || saveContactNoteMutation.isPending}
+                loading={
+                  updateContactMutation.isPending ||
+                  applyMethodOperationsMutation.isPending ||
+                  saveContactNoteMutation.isPending
+                }
                 submitText="Update Contact"
+                reconcilerRef={methodsReconcilerRef}
+                onFormEdit={handleFormEdit}
               />
             </div>
           </div>
+
+          {/* A partial save is a different situation from a total failure, and
+              the user's next action differs — so say which parts landed rather
+              than reporting a generic failure. */}
+          {saveReport && (
+            <div
+              className="mt-4 bg-amber-50 border border-amber-200 rounded-md p-4"
+              data-testid="save-report"
+            >
+              <h3 className="text-sm font-medium text-amber-800">
+                {saveReport.saved.length > 0 ? 'Partially saved' : 'Not saved'}
+              </h3>
+              <p className="mt-1 text-sm text-amber-700">{describeSaveReport(saveReport)}</p>
+            </div>
+          )}
 
           {updateContactMutation.error && (
             <div className="mt-4 bg-red-50 border border-red-200 rounded-md p-4">

@@ -2,7 +2,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { contactsApi, type ContactIDsParams } from '@/lib/contacts-api'
 import { contactKeys, invalidateFor } from '@/lib/query-invalidation'
 import { useRegisterRematchJob } from '@/components/providers/rematch-jobs-provider'
-import type { CreateContactRequest, UpdateContactRequest, ContactListParams } from '@/types/contact'
+import type {
+  Contact,
+  CreateContactRequest,
+  UpdateContactRequest,
+  ContactListParams,
+} from '@/types/contact'
+import type { ContactMethodOperation } from '@/types/generated/contact'
 
 // Re-export contactKeys for backward compatibility
 export { contactKeys }
@@ -76,10 +82,13 @@ export function useCreateContact() {
   })
 }
 
-// Update contact mutation
+// Update contact mutation.
+//
+// No rematch registration here: a rematch is triggered by newly-present method
+// values, and this request no longer carries methods at all. That job is minted
+// by the operations endpoint, so useApplyMethodOperations registers it.
 export function useUpdateContact() {
   const queryClient = useQueryClient()
-  const registerJob = useRegisterRematchJob()
 
   return useMutation({
     mutationFn: ({ id, data }: { id: string; data: UpdateContactRequest }) =>
@@ -87,8 +96,31 @@ export function useUpdateContact() {
     onSuccess: updatedContact => {
       queryClient.setQueryData(contactKeys.detail(updatedContact.id), updatedContact)
       invalidateFor('contact:updated')
-      if (updatedContact.rematch_job_id) {
-        registerJob({ jobId: updatedContact.rematch_job_id, contactId: updatedContact.id })
+    },
+  })
+}
+
+// Apply contact-method operations.
+//
+// Owns rematch registration for the edit path. The detail cache is refreshed
+// from the response so the detail view shows the saved methods; that cache
+// feeds DISPLAY only and must never feed operation derivation — the caller's
+// acknowledged state is a separate, explicitly held value for exactly that
+// reason.
+export function useApplyMethodOperations() {
+  const queryClient = useQueryClient()
+  const registerJob = useRegisterRematchJob()
+
+  return useMutation({
+    mutationFn: ({ id, operations }: { id: string; operations: ContactMethodOperation[] }) =>
+      contactsApi.applyMethodOperations(id, operations),
+    onSuccess: (response, { id }) => {
+      queryClient.setQueryData<Contact>(contactKeys.detail(id), previous =>
+        previous ? { ...previous, methods: response.methods } : previous
+      )
+      invalidateFor('contact:updated')
+      if (response.rematch_job_id) {
+        registerJob({ jobId: response.rematch_job_id, contactId: id })
       }
     },
   })
