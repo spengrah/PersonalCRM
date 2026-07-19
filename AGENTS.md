@@ -67,6 +67,10 @@ Find all instances of a layer:
 - Prefer integration tests over heavy mocking
 - Use `accelerated.GetCurrentTime()` not `time.Now()`
 
+## Where Knowledge Goes
+
+Repo rules get anything another agent or environment needs. Private memory gets what is specific to one machine or account. If a fresh agent in a clean checkout would need it, commit it.
+
 ## Privacy
 
 - **Never include PII in code, comments, commit messages, PR descriptions, GitHub issues, plan docs, or any other repo artifact.** PII = real contact full names, email addresses, phone numbers, contact UUIDs, account IDs, prod hostnames, anything that could identify a real person or system. Use placeholders ("contact A", "the affected contact", "two contacts on date X", `<prod-host>`), redact UUIDs, and keep specifics in private notes outside the repo. The repo is the user's own CRM and the data inside it is real — leaking PII into git history is irreversible.
