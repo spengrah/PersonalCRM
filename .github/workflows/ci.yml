@@ -157,14 +157,18 @@ jobs:
       - name: Run spec coverage scanner
         run: make spec-coverage
 
-  # Guards drift between the Go wire structs and the committed generated
-  # frontend types (backend/tygo.yaml → frontend/src/types/generated/).
-  # Gated on backend OR frontend: a backend DTO change regenerates differently,
-  # and a frontend hand-edit of a generated file diverges from the source.
-  # Deliberately minimal (no caches): tygo's dependency closure is small, so
-  # the cold path is seconds.
-  api-types-drift:
-    name: API Types Drift
+  # Guards drift between Go source and the two committed generated artifacts:
+  #   - frontend types  (backend/tygo.yaml → frontend/src/types/generated/)
+  #   - the Swagger spec (Go annotations   → backend/docs/)
+  # Both share one job on purpose: each check takes ~2s, so a second job would
+  # spend ~45s of runner setup to save nothing. Gated on backend OR frontend —
+  # a backend DTO change regenerates differently, and a frontend hand-edit of a
+  # generated file diverges from the source. The docs check does not need the
+  # frontend trigger, but running it there costs ~2s and keeps one gate.
+  # Deliberately minimal (no caches): both generators' dependency closures are
+  # small, so the cold path is seconds.
+  generated-artifacts-drift:
+    name: Generated Artifacts Drift
     runs-on: ubuntu-latest
     needs: changes
     if: ${{ needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' }}
@@ -178,6 +182,11 @@ jobs:
           cache: false
       - name: Check generated API types are in sync
         run: make api-types-check
+      # Fails on stale output AND on outright generation failure — the latter is
+      # how the spec silently rotted for three months (a type swag could not
+      # resolve aborted the run, and nothing was watching the exit code).
+      - name: Check generated API docs are in sync
+        run: make api-docs-check
 
   backend-tests:
     name: Backend Tests
