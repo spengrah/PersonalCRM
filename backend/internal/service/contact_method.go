@@ -362,6 +362,16 @@ func requireTypeAndValue(i int, op ContactMethodOperation) error {
 	if !isKnownContactMethodType(op.Type) {
 		return opErrf(i, "%s has unknown type %q", op.Op, op.Type)
 	}
+	// A value that is non-empty but normalizes to empty — "@@@" for a handle,
+	// whitespace, a phone with no digits — is just as unsatisfiable as a blank
+	// one. Accepting it stores a row with an empty value_normalized, which the
+	// unique index caps at one per contact+type and which identity and sync
+	// queries then filter out: a row that exists, cannot be matched on, and
+	// blocks the slot. Checked through the C6 mirror so the emptiness test is
+	// the trigger's, not a second opinion.
+	if repository.NormalizeContactMethodValueForUniqueness(op.Type, op.Value) == "" {
+		return opErrf(i, "%s value %q is empty once normalized", op.Op, op.Value)
+	}
 	// Value FORMAT rules (email shape, phone length) are enforced at the
 	// handler, which owns the same validator the create path uses. What is
 	// enforced here is the domain rule the create path deliberately does NOT

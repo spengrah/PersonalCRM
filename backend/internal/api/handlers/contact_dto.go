@@ -28,7 +28,12 @@ type ContactResponse struct {
 	ProfilePhoto       *string                 `json:"profile_photo,omitempty" example:"https://example.com/photo.jpg"`
 	CreatedAt          time.Time               `json:"created_at" example:"2024-01-01T00:00:00Z"`
 	UpdatedAt          time.Time               `json:"updated_at" example:"2024-01-15T10:30:00Z"`
-	RematchJobID       *string                 `json:"rematch_job_id,omitempty"`
+	// RematchJobID is populated by the CREATE path only. A rematch is triggered
+	// by newly-present method values, and update no longer carries methods, so
+	// it has no job to report. This type is shared by create, get, update, list,
+	// merge, and overdue; the field is omitempty, so a path that leaves it unset
+	// simply omits the key rather than publishing an always-null contract.
+	RematchJobID *string `json:"rematch_job_id,omitempty"`
 }
 
 // ContactMethodResponse represents a contact method in responses
@@ -61,15 +66,20 @@ type CreateContactRequest struct {
 }
 
 // UpdateContactRequest represents the request to update a contact
+//
+// Contact methods are NOT part of this request. A full methods array made
+// absence mean "delete", so a client saving from a stale read destroyed every
+// method it had never seen. Methods are mutated through
+// POST /contacts/{id}/methods, which takes operations. A `methods` key on this
+// payload is rejected rather than ignored — see UpdateContact.
 // @Description Update contact request
 type UpdateContactRequest struct {
-	FullName     string                 `json:"full_name" validate:"required,min=1,max=255" example:"John Doe"`
-	Methods      []ContactMethodRequest `json:"methods,omitempty" validate:"omitempty,dive"`
-	Location     *string                `json:"location,omitempty" validate:"omitempty,max=255" example:"San Francisco, CA"`
-	Birthday     *DateOnly              `json:"birthday,omitempty" example:"1990-01-15" tstype:"string"`
-	HowMet       *string                `json:"how_met,omitempty" validate:"omitempty,max=500" example:"Met at tech conference"`
-	Cadence      *string                `json:"cadence,omitempty" validate:"omitempty,oneof=weekly biweekly monthly quarterly biannual annual" example:"monthly"`
-	ProfilePhoto *string                `json:"profile_photo,omitempty" validate:"omitempty,url,max=500" example:"https://example.com/photo.jpg"`
+	FullName     string    `json:"full_name" validate:"required,min=1,max=255" example:"John Doe"`
+	Location     *string   `json:"location,omitempty" validate:"omitempty,max=255" example:"San Francisco, CA"`
+	Birthday     *DateOnly `json:"birthday,omitempty" example:"1990-01-15" tstype:"string"`
+	HowMet       *string   `json:"how_met,omitempty" validate:"omitempty,max=500" example:"Met at tech conference"`
+	Cadence      *string   `json:"cadence,omitempty" validate:"omitempty,oneof=weekly biweekly monthly quarterly biannual annual" example:"monthly"`
+	ProfilePhoto *string   `json:"profile_photo,omitempty" validate:"omitempty,url,max=500" example:"https://example.com/photo.jpg"`
 }
 
 // ContactIDsResponse represents the response for ID-only queries

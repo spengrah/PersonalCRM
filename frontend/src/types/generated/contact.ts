@@ -37,6 +37,13 @@ export interface ContactResponse {
   profile_photo?: string;
   created_at: string;
   updated_at: string;
+  /**
+   * RematchJobID is populated by the CREATE path only. A rematch is triggered
+   * by newly-present method values, and update no longer carries methods, so
+   * it has no job to report. This type is shared by create, get, update, list,
+   * merge, and overdue; the field is omitempty, so a path that leaves it unset
+   * simply omits the key rather than publishing an always-null contract.
+   */
   rematch_job_id?: string;
 }
 /**
@@ -72,11 +79,15 @@ export interface CreateContactRequest {
 }
 /**
  * UpdateContactRequest represents the request to update a contact
+ * Contact methods are NOT part of this request. A full methods array made
+ * absence mean "delete", so a client saving from a stale read destroyed every
+ * method it had never seen. Methods are mutated through
+ * POST /contacts/{id}/methods, which takes operations. A `methods` key on this
+ * payload is rejected rather than ignored — see UpdateContact.
  * @Description Update contact request
  */
 export interface UpdateContactRequest {
   full_name: string;
-  methods?: ContactMethodRequest[];
   location?: string;
   birthday?: string;
   how_met?: string;

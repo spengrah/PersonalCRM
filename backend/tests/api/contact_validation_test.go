@@ -376,33 +376,128 @@ func TestContactAPI_UpdateValidation(t *testing.T) {
 		assert.Equal(t, "VALIDATION_ERROR", response.Error.Code)
 	})
 
-	t.Run("UpdateContact_InvalidEmail", func(t *testing.T) {
-		updateReq := handlers.UpdateContactRequest{
-			FullName: "Updated Name",
-			Methods: []handlers.ContactMethodRequest{
-				{
-					Type:  "email",
-					Value: "invalid-email",
-				},
-			},
+	// A `methods` key on the update payload is REJECTED, never ignored.
+	//
+	// Ignoring it is the failure this asserts against: a stale browser or a
+	// naive client sends a method addition, Gin drops the unknown key, the
+	// client receives 200 and believes the method landed. That is a
+	// silent-success failure — the same class the operations endpoint exists to
+	// eliminate, merely inverted from silent destruction.
+	t.Run("UpdateContact_RejectsLegacyMethodsField", func(t *testing.T) {
+		originalName := "Update Test User " + ns
+
+		cases := []struct {
+			name    string
+			methods any
+		}{
+			{"populated", []map[string]any{{"type": "email", "value": "legacy+" + ns + "@example.com"}}},
+			// An empty array is what a client sends to mean "remove them all" —
+			// exactly the destructive intent this endpoint must not accept.
+			{"empty array", []map[string]any{}},
+			// Load-bearing: this is the case a *json.RawMessage probe cannot
+			// distinguish from an absent key, so it is what pins the non-pointer
+			// requirement.
+			{"null", nil},
 		}
 
-		jsonBody, _ := json.Marshal(updateReq)
-		req, _ := http.NewRequest("PUT", "/api/v1/contacts/"+contactID, bytes.NewBuffer(jsonBody))
-		req.Header.Set("Content-Type", "application/json")
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				body, err := json.Marshal(map[string]any{
+					"full_name": "Should Not Be Applied",
+					"methods":   tc.methods,
+				})
+				require.NoError(t, err)
 
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
+				req, _ := http.NewRequest("PUT", "/api/v1/contacts/"+contactID, bytes.NewBuffer(body))
+				req.Header.Set("Content-Type", "application/json")
+				w := httptest.NewRecorder()
+				router.ServeHTTP(w, req)
 
-		assert.Equal(t, http.StatusBadRequest, w.Code)
+				require.Equal(t, http.StatusBadRequest, w.Code)
 
-		var response api.APIResponse
-		err := json.Unmarshal(w.Body.Bytes(), &response)
-		require.NoError(t, err)
+				var response api.APIResponse
+				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+				assert.False(t, response.Success)
+				assert.Equal(t, "VALIDATION_ERROR", response.Error.Code)
+				assert.Contains(t, response.Error.Details, "POST /contacts/{id}/methods",
+					"the rejection must name the endpoint that does accept methods")
 
-		assert.False(t, response.Success)
-		assert.Equal(t, "VALIDATION_ERROR", response.Error.Code)
+				// Nothing was mutated: a rejected request must not have applied
+				// the scalar fields it also carried.
+				getReq, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID, nil)
+				getW := httptest.NewRecorder()
+				router.ServeHTTP(getW, getReq)
+				require.Equal(t, http.StatusOK, getW.Code)
+
+				var getResponse api.APIResponse
+				require.NoError(t, json.Unmarshal(getW.Body.Bytes(), &getResponse))
+				current := getResponse.Data.(map[string]interface{})
+				assert.Equal(t, originalName, current["full_name"])
+				methods, _ := current["methods"].([]interface{})
+				assert.Len(t, methods, 1, "the contact's methods must be untouched")
+			})
+		}
 	})
+}
+
+// The create path still accepts methods, and must: creation is not a
+// lost-update path, because there is nothing yet to lose. Only the UPDATE
+// request lost its methods field (CON-064), and a DTO change that took the
+// create field with it would silently stop persisting methods on every new
+// contact while every request still returned 201.
+func TestCreateContact_StillAcceptsMethods(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	if os.Getenv("DATABASE_URL") == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	t.Parallel()
+	router, cleanup := setupContactValidationTestRouter()
+	defer cleanup()
+
+	ns := uuid.New().String()[:8]
+	email := "create-methods+" + ns + "@example.com"
+	createReq := handlers.CreateContactRequest{
+		FullName: "Create Methods User " + ns,
+		Methods: []handlers.ContactMethodRequest{
+			{Type: "email", Value: email, IsPrimary: true},
+		},
+	}
+	body, err := json.Marshal(createReq)
+	require.NoError(t, err)
+
+	req, _ := http.NewRequest("POST", "/api/v1/contacts", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var createResponse api.APIResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &createResponse))
+	created := createResponse.Data.(map[string]interface{})
+	contactID := created["id"].(string)
+	defer func() {
+		deleteReq, _ := http.NewRequest("DELETE", "/api/v1/contacts/"+contactID, nil)
+		router.ServeHTTP(httptest.NewRecorder(), deleteReq)
+	}()
+
+	// Asserted on the persisted contact, not the create response: a 201 alone
+	// would still be returned by a build that accepted the field and dropped it.
+	getReq, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID, nil)
+	getW := httptest.NewRecorder()
+	router.ServeHTTP(getW, getReq)
+	require.Equal(t, http.StatusOK, getW.Code)
+
+	var getResponse api.APIResponse
+	require.NoError(t, json.Unmarshal(getW.Body.Bytes(), &getResponse))
+	methods, _ := getResponse.Data.(map[string]interface{})["methods"].([]interface{})
+	require.Len(t, methods, 1)
+	stored := methods[0].(map[string]interface{})
+	assert.Equal(t, "email", stored["type"])
+	assert.Equal(t, email, stored["value"])
+	assert.Equal(t, true, stored["is_primary"])
 }
 
 func TestContactAPI_QueryValidation(t *testing.T) {
