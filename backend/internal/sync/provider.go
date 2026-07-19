@@ -16,7 +16,11 @@ type SourceConfig struct {
 	Strategy             repository.SyncStrategy `json:"strategy"`               // contact_driven, fetch_all, fetch_filtered
 	SupportsMultiAccount bool                    `json:"supports_multi_account"` // true for Google/Telegram, false for iMessage
 	SupportsDiscovery    bool                    `json:"supports_discovery"`     // true if can discover new contacts
-	DefaultInterval      time.Duration           `json:"default_interval"`       // e.g., 15 * time.Minute
+	// swaggertype is required: swag cannot resolve time.Duration and fails the
+	// whole generation, which silently left the spec stale (see the handler
+	// annotation that exposes this struct). It marshals as an integer
+	// nanosecond count, so that is what the spec must declare.
+	DefaultInterval time.Duration `json:"default_interval" swaggertype:"integer"` // e.g., 15 * time.Minute
 	// RequiresAccount declares that this provider's Sync requires a non-nil,
 	// non-empty account ID (e.g. its OAuth token is keyed by account). When
 	// true, TriggerSync rejects a nil/empty account instead of bootstrapping a
