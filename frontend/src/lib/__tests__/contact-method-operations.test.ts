@@ -508,9 +508,31 @@ describe('the submitted-index contract', () => {
         ],
       },
       {
+        // Addressed row is neither first nor last, so a constant index fails.
+        name: 'set_primary on a middle row',
+        acknowledged: [
+          ack(A, 'email', 'a@example.test', true),
+          ack(B, 'phone', '5555550100'),
+          ack(C, 'telegram', 'handle'),
+        ],
+        submitted: [
+          row('email', 'a@example.test', { method_id: A }),
+          row('phone', '5555550100', { method_id: B, is_primary: true }),
+          row('telegram', 'handle', { method_id: C }),
+        ],
+      },
+      {
         name: 'clear_primary on the sole primary',
         acknowledged: [ack(A, 'email', 'a@example.test', true)],
         submitted: [row('email', 'a@example.test', { method_id: A })],
+      },
+      {
+        name: 'clear_primary where the cleared row is not first',
+        acknowledged: [ack(B, 'phone', '5555550100'), ack(A, 'email', 'a@example.test', true)],
+        submitted: [
+          row('phone', '5555550100', { method_id: B }),
+          row('email', 'a@example.test', { method_id: A }),
+        ],
       },
       {
         name: 'primary designation on a brand-new row',
@@ -542,13 +564,31 @@ describe('the submitted-index contract', () => {
       )
       expect(operations.length, `${name}: produced no operations to check`).toBeGreaterThan(0)
       operations.forEach((operation, index) => {
+        const origin = submittedIndexes[index]
         if (operation.op === 'remove') {
-          expect(submittedIndexes[index], `${name}: remove must be -1`).toBe(-1)
+          expect(origin, `${name}: remove must be -1`).toBe(-1)
+          return
+        }
+
+        // Non-negative is necessary but NOT sufficient: it says an index
+        // exists, not that it points at the right row. Mapping every non-remove
+        // to 0 — or to 999 — would satisfy a range check while reconciling one
+        // row's snapshot into a DIFFERENT row, which is the divergence this
+        // contract exists to prevent. So assert OWNERSHIP, not just presence.
+        expect(origin, `${name}: ${operation.op} must name a live row`).toBeGreaterThanOrEqual(0)
+        expect(origin, `${name}: ${operation.op} index out of range`).toBeLessThan(submitted.length)
+
+        const addressed = submitted[origin]
+        if (operation.op === 'add') {
+          expect(
+            { type: addressed.type, value: addressed.value },
+            `${name}: add must point at the submitted row carrying its own type and value`
+          ).toEqual({ type: operation.type, value: operation.value })
         } else {
           expect(
-            submittedIndexes[index],
-            `${name}: ${operation.op} must name the live row it addresses, or its snapshot never reaches the form`
-          ).toBeGreaterThanOrEqual(0)
+            addressed.method_id,
+            `${name}: ${operation.op} must point at the row carrying method_id ${operation.method_id}`
+          ).toBe(operation.method_id)
         }
       })
     }

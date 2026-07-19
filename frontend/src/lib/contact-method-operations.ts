@@ -23,11 +23,23 @@
  * display only. That is what makes the acknowledged state safe to hold across a
  * cache refresh, and it is the whole defense against the original incident.
  *
- * The checkable form of rule 2 is: `submittedIndexes[i] < 0` if and only if
- * `operations[i].op === 'remove'`. It is pinned by "the submitted-index
- * contract" test, which is the class-level guard — any operation type added
- * later that forgets to thread its row index fails it, without anyone having to
- * rediscover this reasoning.
+ * The checkable form of rule 2 has two halves, and the first alone is NOT
+ * sufficient — stating it as if it were is how this doc originally overstated
+ * the guarantee:
+ *
+ *   a. `submittedIndexes[i] < 0` if and only if `operations[i].op === 'remove'`.
+ *   b. every other index identifies the row the operation actually addresses —
+ *      an `add` points at the submitted row carrying its own type and value; an
+ *      `update`, `set_primary`, or `clear_primary` points at the row carrying
+ *      its `method_id`.
+ *
+ * (a) alone would be satisfied by mapping every non-removal to index 0, which
+ * reconciles one row's snapshot into a different row — the same
+ * acknowledged-vs-live divergence, reached by a new route. Both halves are
+ * pinned by "the submitted-index contract" test, which is the class-level
+ * guard: any operation type added later that forgets to thread its row index,
+ * or threads the wrong one, fails without anyone having to rediscover this
+ * reasoning.
  */
 import { normalizeContactMethodValue } from '@/lib/contact-methods'
 import type { ContactMethod, ContactMethodType } from '@/types/contact'
