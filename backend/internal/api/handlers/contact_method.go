@@ -7,7 +7,6 @@ import (
 	"net/http"
 
 	"personal-crm/backend/internal/api"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
@@ -74,16 +73,18 @@ func (h *ContactMethodHandler) ApplyOperations(c *gin.Context) {
 
 	result, err := h.service.ApplyOperations(c.Request.Context(), contactID, ops)
 	if err != nil {
+		// Service-owned errors ONLY. Branching on repository.ErrMethodValueConflict
+		// or db.ErrNotFound here would reach across the service boundary for a
+		// persistence classification, which is a layer skip. The service folds
+		// both into the errors below, so the database backstop still surfaces as
+		// the same deterministic 400 the fold would have produced and a client
+		// cannot tell which layer rejected it.
 		switch {
-		case errors.Is(err, service.ErrInvalidOperations),
-			errors.Is(err, repository.ErrMethodValueConflict):
-			// The conflict case is the database backstop surfacing as the same
-			// deterministic 400 the fold would have produced, so a client
-			// cannot tell which layer rejected it.
+		case errors.Is(err, service.ErrInvalidOperations):
 			api.SendValidationError(c, "Invalid operations", err.Error())
 		case errors.Is(err, service.ErrMethodNotOwned):
 			api.SendNotFound(c, "Contact method")
-		case errors.Is(err, db.ErrNotFound):
+		case errors.Is(err, service.ErrContactNotFound):
 			api.SendNotFound(c, "Contact")
 		default:
 			api.RespondInternal(c, err)

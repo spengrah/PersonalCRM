@@ -50,6 +50,35 @@ var ErrInvalidOperations = errors.New("invalid contact method operations")
 // a destructive operation.
 var ErrMethodNotOwned = errors.New("contact method belongs to another contact")
 
+// ErrContactNotFound reports that the contact the request addresses does not
+// exist. A 404.
+//
+// Service-owned on purpose. The handler must not branch on db.ErrNotFound: that
+// is a persistence-layer classification, and reaching across the service
+// boundary for it is a layer skip. The same reasoning applies to
+// repository.ErrMethodValueConflict, which classifyApplyError folds into
+// ErrInvalidOperations below.
+var ErrContactNotFound = errors.New("contact not found")
+
+// classifyApplyError translates repository-owned errors into service-owned ones
+// so nothing above this layer needs to know repository or database error
+// values.
+//
+// The value conflict becomes ErrInvalidOperations because that is exactly what
+// it is: a payload whose resulting method set would contain a duplicate. The
+// caller therefore cannot tell whether the fold rejected the request or the
+// database's unique index did — which is the intended contract, since a correct
+// C6 mirror makes the two agree by construction.
+func classifyApplyError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, repository.ErrMethodValueConflict) {
+		return fmt.Errorf("%w: %v", ErrInvalidOperations, err)
+	}
+	return err
+}
+
 // ContactMethodOperation is one requested mutation.
 //
 // IsPrimary is a pointer so the validator can distinguish "absent" from
@@ -176,6 +205,11 @@ func (s *ContactMethodService) ApplyOperations(
 	methodRepo := repository.NewContactMethodRepository(txQueries)
 
 	if _, err := contactRepo.GetContact(ctx, contactID); err != nil {
+		// Translated here, not at the handler: db.ErrNotFound is a persistence
+		// classification and must not cross the service boundary.
+		if errors.Is(err, db.ErrNotFound) {
+			return nil, ErrContactNotFound
+		}
 		return nil, err
 	}
 
@@ -233,7 +267,7 @@ func (s *ContactMethodService) ApplyOperations(
 	}
 
 	if err := applyFinalState(ctx, methodRepo, contactID, preState, finalState); err != nil {
-		return nil, err
+		return nil, classifyApplyError(err)
 	}
 
 	// Read the committed-to-be rows back so every result snapshot carries the

@@ -520,6 +520,16 @@ func TestMethodOps_NamedRemovalSucceeds(t *testing.T) {
 
 // --- CON-062[5][6]: final-state validation ---------------------------------
 
+// TestMethodOps_DuplicateFinalStateRejected asserts the rejection comes from
+// the FOLD, by requiring the response to name the colliding value.
+//
+// Asserting only the 400 is vacuous here, and measurably so: with the fold's
+// duplicate check deleted, the request still returns 400, because the database's
+// unique index fires and the repository classifies it back into the same status.
+// The status code cannot distinguish "rejected deterministically before any
+// statement ran" from "discovered by whichever row PostgreSQL reached first",
+// and pre-SQL determinism is the entire property the fold exists to provide.
+// The fold's message names the colliding pair; the database backstop's does not.
 func TestMethodOps_DuplicateFinalStateRejected(t *testing.T) {
 	t.Parallel()
 	f := newMethodOpsFx(t)
@@ -528,7 +538,14 @@ func TestMethodOps_DuplicateFinalStateRejected(t *testing.T) {
 
 	// Updating B onto A's value would leave two rows with one key.
 	w, _ := f.post(updateOp(b.ID, "email", a.Value))
-	assert.Equal(t, http.StatusBadRequest, w.Code)
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), a.Value, "the rejection did not name the colliding value")
+	// The fold and the database backstop BOTH name the value — PostgreSQL's
+	// error detail embeds it too — so the value alone cannot tell them apart.
+	// The fold's phrasing is about the intended END STATE, which is the thing
+	// only a pre-SQL check can talk about.
+	assert.Contains(t, w.Body.String(), "would contain a duplicate",
+		"the rejection came from the database index, not the fold: the request mutated and rolled back rather than being refused deterministically")
 	assert.Equal(t, b.Value, f.storedByID(b.ID).Value, "a rejected payload mutated a row")
 }
 
@@ -656,11 +673,28 @@ func TestMethodOps_ConflictingOperationsRejected(t *testing.T) {
 				addPrimaryOp("phone", "+15550114567"),
 			}
 		}},
+		// Forward AND reverse for every add-carried designation conflict. The
+		// property under test is that payload order does not change the outcome,
+		// so a single direction cannot prove it: an implementation that checked
+		// only operations appearing before the add would pass one and fail the
+		// other, which is exactly the last-one-wins bug these catch.
 		{"add designating primary alongside set_primary", func(_, b repository.ContactMethod) []map[string]any {
 			return []map[string]any{addPrimaryOp("email", uniqueEmail()), idOp("set_primary", b.ID)}
 		}},
+		{"set_primary alongside add designating primary (reversed)", func(_, b repository.ContactMethod) []map[string]any {
+			return []map[string]any{idOp("set_primary", b.ID), addPrimaryOp("email", uniqueEmail())}
+		}},
 		{"add designating primary alongside clear_primary", func(a, _ repository.ContactMethod) []map[string]any {
 			return []map[string]any{addPrimaryOp("email", uniqueEmail()), idOp("clear_primary", a.ID)}
+		}},
+		{"clear_primary alongside add designating primary (reversed)", func(a, _ repository.ContactMethod) []map[string]any {
+			return []map[string]any{idOp("clear_primary", a.ID), addPrimaryOp("email", uniqueEmail())}
+		}},
+		{"two adds each designating primary (reversed)", func(_, _ repository.ContactMethod) []map[string]any {
+			return []map[string]any{
+				addPrimaryOp("phone", "+15550114567"),
+				addPrimaryOp("email", uniqueEmail()),
+			}
 		}},
 	}
 
@@ -852,6 +886,17 @@ func TestMethodOps_ResultsCarryResolvedRowSnapshot(t *testing.T) {
 // discriminated shape. A uniform "snapshot on every result" contract is
 // unsatisfiable for either case here: a removed row has no post-apply state,
 // and an absent-id removal has no row at all.
+//
+// WHAT THIS DOES NOT PIN, stated so nobody reads it as coverage it lacks: it
+// does not pin the service's hasSnapshot guard. Deleting that guard leaves this
+// test green, verified by mutation. The reason is structural — hasSnapshot is
+// false only for removals, and a removal's addressed id is by definition absent
+// from post-state, so the snapshot lookup fails on its own and the guard never
+// changes an outcome. The guard is therefore defense-in-depth that makes the
+// contract explicit rather than emergent, and no test can currently discriminate
+// it. It is kept deliberately: an emergent-consequence argument is what left
+// this contract undefined for several review rounds, and it would silently stop
+// holding if a future change ever let a removed id resolve to a surviving row.
 func TestMethodOps_RemoveResultsCarryAddressedIDWithoutSnapshot(t *testing.T) {
 	t.Parallel()
 	f := newMethodOpsFx(t)
@@ -1067,11 +1112,17 @@ func TestMethodOps_ConflictErrorTranslatesTo400(t *testing.T) {
 		err  error
 		want int
 	}{
-		{"value conflict", fmt.Errorf("wrapped: %w", repository.ErrMethodValueConflict), http.StatusBadRequest},
 		{"invalid operations", fmt.Errorf("wrapped: %w", service.ErrInvalidOperations), http.StatusBadRequest},
+		// What the service returns after folding a repository value conflict.
+		{"conflict translated by the service", fmt.Errorf("%w: duplicate value", service.ErrInvalidOperations), http.StatusBadRequest},
 		{"foreign method id", fmt.Errorf("wrapped: %w", service.ErrMethodNotOwned), http.StatusNotFound},
-		{"unknown contact", fmt.Errorf("wrapped: %w", db.ErrNotFound), http.StatusNotFound},
+		{"unknown contact", fmt.Errorf("wrapped: %w", service.ErrContactNotFound), http.StatusNotFound},
 		{"unexpected failure", errors.New("boom"), http.StatusInternalServerError},
+		// The boundary itself: persistence classifications are the service's to
+		// translate. If the handler ever learns them again, these stop being 500
+		// and this test says so.
+		{"raw repository error is not classified here", repository.ErrMethodValueConflict, http.StatusInternalServerError},
+		{"raw db error is not classified here", db.ErrNotFound, http.StatusInternalServerError},
 	}
 
 	for _, tc := range cases {
