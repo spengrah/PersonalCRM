@@ -26,6 +26,10 @@ jobs:
           filters: ./path-filters.yml
       - name: Check path-filters parity
         run: bash scripts/ci/path-filters-parity-guard.sh
+      # The local promote pre-flight and this repo's prod deploy gate must agree
+      # on "green"; they cannot share code (deploy-prod.yml runs with no checkout).
+      - name: Check promote gate parity
+        run: bash scripts/ci/promote-gate-parity-guard.sh
 
   backend-quality:
     name: Backend Quality
