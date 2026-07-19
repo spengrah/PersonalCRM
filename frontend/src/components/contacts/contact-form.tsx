@@ -234,8 +234,13 @@ export function ContactForm({
       // and — because the form rejects more than one primary — it also blocks
       // the next save outright, including an unedited retry after the methods
       // step already landed.
+      // Enumerated over the getValues snapshot rather than `fields` for the
+      // same reason the ownership map is: `fields` refreshes only on array
+      // operations, so a flag an earlier reconciliation wrote through setValue
+      // is not visible there. The write is unconditional rather than guarded on
+      // the current flag, so a stale read cannot leave a row starred.
       if (promotedIndex !== null) {
-        fields.forEach((_field, index) => {
+        currentMethods.forEach((_method, index) => {
           if (index === promotedIndex || duplicateIndexes.includes(index)) return
           setValue(`methods.${index}.is_primary`, false, options)
         })
