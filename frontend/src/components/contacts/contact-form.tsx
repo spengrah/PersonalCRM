@@ -79,6 +79,7 @@ export function ContactForm({
     reset,
     control,
     setValue,
+    getValues,
     watch,
   } = useForm<ContactFormInput, unknown, ContactFormData>({
     resolver: zodResolver(contactSchema),
@@ -162,44 +163,67 @@ export function ContactForm({
 
     function reconcileRows(reconciliations: MethodReconciliation[]) {
       const rowKeys = submittedRowKeysRef.current
-      const claimedBy = new Map<string, string>()
-      const duplicateRowKeys: string[] = []
 
+      // What each result assigned, keyed by the form row that produced it.
+      const assignedIdByRowKey = new Map<string, string>()
+      const snapshotById = new Map<string, MethodReconciliation>()
       for (const entry of reconciliations) {
         const rowKey = rowKeys[entry.submittedIndex]
         if (!rowKey) continue
+        assignedIdByRowKey.set(rowKey, entry.method_id)
+        snapshotById.set(entry.method_id, entry)
+      }
 
-        // Two live rows resolving to one method_id are one domain row shown
-        // twice. Stamping both would derive two operations against one id on
-        // the next save, which the endpoint rejects as a conflict — leaving a
-        // duplicate the user cannot delete. Keep the earlier row (results
-        // arrive in submitted order, which is form order) and drop the later.
-        const owner = claimedBy.get(entry.method_id)
-        if (owner && owner !== rowKey) {
-          duplicateRowKeys.push(rowKey)
-          continue
-        }
-        claimedBy.set(entry.method_id, rowKey)
+      // Ownership is seeded from EVERY live row's id, not only from the rows a
+      // result addressed. In the real collision sequence the pre-existing row
+      // is unchanged, so it emits no operation and receives no result — but it
+      // already owns the id the new row just resolved to. Considering only
+      // reconciled rows leaves both rows carrying that id, and then deleting
+      // either one emits no `remove` (the other alias still submits the id),
+      // so the save reports success while the deletion silently does not
+      // persist. That is the original defect's own signature.
+      //
+      // Read through getValues rather than `fields`: useFieldArray refreshes
+      // `fields` only on array operations, so an id written by an earlier
+      // reconciliation's setValue would not be visible there.
+      const currentMethods = getValues('methods') ?? []
+      const rowsById = new Map<string, number[]>()
+      fields.forEach((field, index) => {
+        const methodID = assignedIdByRowKey.get(field.id) ?? currentMethods[index]?.method_id
+        if (!methodID) return
+        const rows = rowsById.get(methodID) ?? []
+        rows.push(index)
+        rowsById.set(methodID, rows)
+      })
 
-        const index = fields.findIndex(field => field.id === rowKey)
-        if (index < 0) continue
-        const options = { shouldDirty: false, shouldTouch: false } as const
-        setValue(`methods.${index}.method_id`, entry.method_id, options)
-        setValue(`methods.${index}.type`, entry.type, options)
+      const options = { shouldDirty: false, shouldTouch: false } as const
+      const duplicateIndexes: number[] = []
+
+      for (const [methodID, indexes] of rowsById) {
+        // Deterministic survivor: the EARLIEST form row carrying this id,
+        // whichever row a result happened to address. Ordering by form position
+        // rather than by payload position is what makes the outcome
+        // independent of the order operations were submitted in.
+        const [survivor, ...duplicates] = indexes
+        duplicateIndexes.push(...duplicates)
+
+        // A row whose id no result addressed is left alone — there is nothing
+        // authoritative to write into it.
+        const snapshot = snapshotById.get(methodID)
+        if (!snapshot) continue
+
+        setValue(`methods.${survivor}.method_id`, methodID, options)
+        setValue(`methods.${survivor}.type`, snapshot.type, options)
         setValue(
-          `methods.${index}.value`,
-          formatContactMethodValue(entry.type, entry.value),
+          `methods.${survivor}.value`,
+          formatContactMethodValue(snapshot.type, snapshot.value),
           options
         )
-        setValue(`methods.${index}.is_primary`, entry.is_primary, options)
+        setValue(`methods.${survivor}.is_primary`, snapshot.is_primary, options)
       }
 
       // Descending, so each index is still valid when its turn comes.
-      const duplicateIndexes = duplicateRowKeys
-        .map(rowKey => fields.findIndex(field => field.id === rowKey))
-        .filter(index => index >= 0)
-        .sort((a, b) => b - a)
-      for (const index of duplicateIndexes) {
+      for (const index of duplicateIndexes.sort((a, b) => b - a)) {
         remove(index)
       }
     }

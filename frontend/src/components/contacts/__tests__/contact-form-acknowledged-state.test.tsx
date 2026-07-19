@@ -4,11 +4,15 @@ import { act, createRef } from 'react'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ContactForm, type MethodsReconciler } from '@/components/contacts/contact-form'
-import type { MethodReconciliation } from '@/lib/contact-method-operations'
+import {
+  deriveMethodOperations,
+  initializeAcknowledgedMethods,
+} from '@/lib/contact-method-operations'
 import type { Contact } from '@/types/contact'
 
 const METHOD_A = 'aaaaaaaa-0000-4000-8000-000000000001'
 const METHOD_B = 'bbbbbbbb-0000-4000-8000-000000000002'
+const METHOD_E = 'eeeeeeee-0000-4000-8000-000000000005'
 
 function contactWith(methods: Contact['methods']): Contact {
   return {
@@ -54,13 +58,21 @@ describe('ContactForm method identity', () => {
     ])
   })
 
-  it('collapses two live rows that reconcile to one method_id', async () => {
-    // A stored value and a submitted respelling can normalize alike under the
-    // database trigger but not under the client's normalizer, so both rows are
-    // valid client-side and both resolve to one server row. Stamping the id
-    // onto both leaves the form showing one domain row twice; the next save
-    // then derives two operations against one id, which the endpoint rejects as
-    // a conflict the user can neither understand nor act on.
+  it("collapses a new row that resolves to an existing row's method_id", async () => {
+    // The REAL collision sequence, and the fixture matters more than the
+    // assertions here. A stored '5555550100' and a submitted '+5555550100'
+    // normalize alike under the database trigger but not under the client's
+    // normalizer, so frontend validation accepts both and the endpoint resolves
+    // the add to the existing row.
+    //
+    // Critically, the existing row is UNCHANGED, so it emits no operation and
+    // therefore receives no result and no reconciliation. Only the add is
+    // reconciled. An earlier version of this test hand-supplied a
+    // reconciliation for the unchanged row too — an input the endpoint cannot
+    // produce — and so could not see that ownership was never seeded from the
+    // live rows. Both rows kept the id, and deleting either one then emitted no
+    // removal at all: the save reported success while the deletion silently did
+    // not persist.
     const onSubmit = vi.fn()
     const reconcilerRef = createRef<MethodsReconciler | null>() as any
     const user = userEvent.setup()
@@ -68,6 +80,7 @@ describe('ContactForm method identity', () => {
     render(
       <ContactForm
         contact={contactWith([
+          { id: METHOD_E, type: 'email', value: 'e@example.test', is_primary: false },
           { id: METHOD_A, type: 'phone', value: '5555550100', is_primary: false },
         ])}
         onSubmit={onSubmit}
@@ -75,49 +88,105 @@ describe('ContactForm method identity', () => {
       />
     )
 
+    // Rows sort email-then-phone, so the stored phone row is index 1.
+    expect(methodValueInputs()).toHaveLength(2)
     await user.click(screen.getByRole('button', { name: 'Add method' }))
     await user.selectOptions(
-      screen.getAllByRole('combobox', { name: 'Contact method type' })[1],
+      screen.getAllByRole('combobox', { name: 'Contact method type' })[2],
       'phone'
     )
-    await user.type(methodValueInputs()[1], '+5555550100')
+    await user.type(methodValueInputs()[2], '+5555550100')
     await user.click(screen.getByRole('button', { name: 'Save Contact' }))
     await waitFor(() => expect(onSubmit).toHaveBeenCalled())
 
-    expect(methodValueInputs()).toHaveLength(2)
+    // Only the add produced an operation, so only the add gets a result.
+    act(() =>
+      reconcilerRef.current?.([
+        {
+          submittedIndex: 2,
+          method_id: METHOD_A,
+          type: 'phone',
+          value: '5555550100',
+          is_primary: false,
+        },
+      ])
+    )
 
-    // Both submitted rows resolved to METHOD_A, whose stored value is the one
-    // that was already there.
-    const reconciliations: MethodReconciliation[] = [
-      {
-        submittedIndex: 0,
-        method_id: METHOD_A,
-        type: 'phone',
-        value: '5555550100',
-        is_primary: true,
-      },
-      {
-        submittedIndex: 1,
-        method_id: METHOD_A,
-        type: 'phone',
-        value: '5555550100',
-        is_primary: true,
-      },
-    ]
-    act(() => reconcilerRef.current?.(reconciliations))
+    await waitFor(() => expect(methodValueInputs()).toHaveLength(2))
+    // The survivor is the EARLIER row carrying that id — the pre-existing one,
+    // not the row the result addressed — carrying the resolved snapshot.
+    expect(methodValueInputs()[1]).toHaveValue('5555550100')
 
-    await waitFor(() => expect(methodValueInputs()).toHaveLength(1))
-    // The survivor is the earlier row, carrying the RESOLVED snapshot rather
-    // than either submitted value.
-    expect(methodValueInputs()[0]).toHaveValue('5555550100')
-
-    // And exactly one operation targets that id on the next save.
+    // And the collapse is what makes deletion expressible again: removing the
+    // one remaining phone row leaves no submitted method carrying METHOD_A, so
+    // the derivation can emit remove(METHOD_A).
     onSubmit.mockClear()
+    await user.click(screen.getAllByRole('button', { name: 'Remove' })[1])
     await user.click(screen.getByRole('button', { name: 'Save Contact' }))
     await waitFor(() => expect(onSubmit).toHaveBeenCalled())
+
     const methods = onSubmit.mock.calls[0][0].methods
-    expect(methods).toHaveLength(1)
-    expect(methods[0]).toMatchObject({ method_id: METHOD_A, is_primary: true })
+    expect(methods.map((m: { method_id?: string }) => m.method_id)).not.toContain(METHOD_A)
+    expect(
+      deriveMethodOperations(
+        initializeAcknowledgedMethods([
+          { id: METHOD_E, type: 'email', value: 'e@example.test', is_primary: false },
+          { id: METHOD_A, type: 'phone', value: '5555550100', is_primary: false },
+        ]),
+        methods
+      )
+    ).toEqual([{ op: 'remove', method_id: METHOD_A }])
+  })
+
+  it('keeps the collapsed row at the earlier form position', async () => {
+    // The survivor rule is "earliest form row", and it needs a configuration
+    // where first-vs-last is observable: the colliding pair must not be the
+    // last rows in the list. A PRIMARY phone sorts ahead of the email, so the
+    // pre-existing alias sits at index 0 and the new one at index 2. Keeping
+    // the last row instead would drop index 0 and leave the list reordered.
+    const onSubmit = vi.fn()
+    const reconcilerRef = createRef<MethodsReconciler | null>() as any
+    const user = userEvent.setup()
+
+    render(
+      <ContactForm
+        contact={contactWith([
+          { id: METHOD_A, type: 'phone', value: '5555550100', is_primary: true },
+          { id: METHOD_E, type: 'email', value: 'e@example.test', is_primary: false },
+        ])}
+        onSubmit={onSubmit}
+        reconcilerRef={reconcilerRef}
+      />
+    )
+
+    expect(methodValueInputs()[0]).toHaveValue('5555550100')
+    expect(methodValueInputs()[1]).toHaveValue('e@example.test')
+
+    await user.click(screen.getByRole('button', { name: 'Add method' }))
+    await user.selectOptions(
+      screen.getAllByRole('combobox', { name: 'Contact method type' })[2],
+      'phone'
+    )
+    await user.type(methodValueInputs()[2], '+5555550100')
+    await user.click(screen.getByRole('button', { name: 'Save Contact' }))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled())
+
+    act(() =>
+      reconcilerRef.current?.([
+        {
+          submittedIndex: 2,
+          method_id: METHOD_A,
+          type: 'phone',
+          value: '5555550100',
+          is_primary: true,
+        },
+      ])
+    )
+
+    await waitFor(() => expect(methodValueInputs()).toHaveLength(2))
+    // Order preserved: the survivor is the row that was already at index 0.
+    expect(methodValueInputs()[0]).toHaveValue('5555550100')
+    expect(methodValueInputs()[1]).toHaveValue('e@example.test')
   })
 
   it('writes back a confirmed id without counting as a user edit', async () => {
