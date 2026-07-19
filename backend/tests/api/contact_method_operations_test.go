@@ -298,23 +298,34 @@ func TestMethodOps_InvalidOperationAppliesNothing(t *testing.T) {
 	assert.Equal(t, existing.Value, f.storedByID(existing.ID).Value)
 }
 
+// TestMethodOps_AddWithIsPrimaryPromotesAfterInsert asserts WHICH row ends up
+// primary, not merely that one does. Counting primaries alone is vacuous here:
+// the seeded row is already primary, so an implementation that dropped
+// promotion entirely would leave exactly one primary and pass.
 func TestMethodOps_AddWithIsPrimaryPromotesAfterInsert(t *testing.T) {
 	t.Parallel()
 	f := newMethodOpsFx(t)
-	f.seed("email", uniqueEmail(), true)
+	seeded := f.seed("email", uniqueEmail(), true)
 
 	// Inserts are always non-primary and promotion is always last, so this can
 	// never violate the one-primary index mid-apply.
 	w, body := f.post(addPrimaryOp("phone", "+15550105678"))
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 
-	primaries := 0
+	primaries := []string{}
 	for _, m := range body.Methods {
 		if m.IsPrimary {
-			primaries++
+			primaries = append(primaries, m.ID)
 		}
 	}
-	assert.Equal(t, 1, primaries, "expected exactly one primary")
+	require.Len(t, primaries, 1, "expected exactly one primary")
+	assert.NotEqual(t, seeded.ID.String(), primaries[0],
+		"the added row was never promoted; the seeded primary just stayed put")
+
+	added := f.storedByID(uuid.MustParse(primaries[0]))
+	require.NotNil(t, added)
+	assert.Equal(t, "phone", added.Type, "the promoted row is not the added row")
+	assert.False(t, f.storedByID(seeded.ID).IsPrimary, "the seeded primary was not demoted")
 }
 
 // --- CON-062[2]: order independence ----------------------------------------
@@ -341,7 +352,7 @@ func TestMethodOps_OutcomeIndependentOfPayloadOrder(t *testing.T) {
 		KeptID    bool
 	}
 
-	runPermutation := func(t *testing.T, order []int) []semanticRow {
+	runPermutation := func(t *testing.T, order []int) ([]semanticRow, string) {
 		f := newMethodOpsFx(t)
 		reused := uniqueEmail()
 		a := f.seed("email", reused, true)
@@ -369,25 +380,34 @@ func TestMethodOps_OutcomeIndependentOfPayloadOrder(t *testing.T) {
 				KeptID:    m.ID == a.ID,
 			})
 		}
-		return out
+		return out, reused
 	}
 
 	// The update's new value is freshly generated per permutation, so compare
 	// the shape that does not depend on it: the reused key must be present and
 	// primary, and the updated row must have kept A's identity.
-	assertShape := func(t *testing.T, rows []semanticRow) {
+	//
+	// Asserting WHICH row is primary is load-bearing. Counting primaries alone
+	// is satisfied by the pre-state primary staying put, so an implementation
+	// that never moved the designation at all would pass every permutation.
+	assertShape := func(t *testing.T, rows []semanticRow, reusedValue string) {
 		require.Len(t, rows, 2)
-		primaries, kept := 0, 0
+		kept := 0
+		primaries := []semanticRow{}
 		for _, r := range rows {
 			if r.IsPrimary {
-				primaries++
+				primaries = append(primaries, r)
 			}
 			if r.KeptID {
 				kept++
 			}
 		}
-		assert.Equal(t, 1, primaries, "expected exactly one primary")
 		assert.Equal(t, 1, kept, "the updated row did not preserve its identity")
+		require.Len(t, primaries, 1, "expected exactly one primary")
+		assert.Equal(t, reusedValue, primaries[0].Value,
+			"the primary is not the row the add created; the designation never moved")
+		assert.False(t, primaries[0].KeptID,
+			"the primary is still the pre-state row A rather than the added row")
 	}
 
 	permutations := [][]int{
@@ -397,7 +417,8 @@ func TestMethodOps_OutcomeIndependentOfPayloadOrder(t *testing.T) {
 	for _, order := range permutations {
 		t.Run(fmt.Sprint(order), func(t *testing.T) {
 			t.Parallel()
-			assertShape(t, runPermutation(t, order))
+			rows, reused := runPermutation(t, order)
+			assertShape(t, rows, reused)
 		})
 	}
 }
@@ -523,18 +544,40 @@ func TestMethodOps_TwoPrimaryDesignationsRejected(t *testing.T) {
 
 // --- CON-062[7]: a method id is not a capability ---------------------------
 
+// TestMethodOps_ForeignMethodIDRejected table-drives EVERY id-bearing verb.
+// The ownership check is currently shared, so one verb would cover the code as
+// written — but the guarantee is per-verb, and a future verb-specific path that
+// bypassed the precheck would otherwise regress silently. It is asserted where
+// it protects a destructive operation, not merely where it is convenient.
 func TestMethodOps_ForeignMethodIDRejected(t *testing.T) {
 	t.Parallel()
-	victim := newMethodOpsFx(t)
-	foreign := victim.seed("email", uniqueEmail(), false)
 
-	attacker := newMethodOpsFx(t)
-	w, _ := attacker.post(idOp("remove", foreign.ID))
+	for _, verb := range []string{"remove", "update", "set_primary", "clear_primary"} {
+		t.Run(verb, func(t *testing.T) {
+			t.Parallel()
+			victim := newMethodOpsFx(t)
+			foreign := victim.seed("email", uniqueEmail(), true)
+			before := *victim.storedByID(foreign.ID)
 
-	assert.Equal(t, http.StatusNotFound, w.Code,
-		"an operation naming another contact's method was not rejected")
-	assert.NotNil(t, victim.storedByID(foreign.ID),
-		"another contact's method was destroyed through a foreign id")
+			op := idOp(verb, foreign.ID)
+			if verb == "update" {
+				op = updateOp(foreign.ID, "email", uniqueEmail())
+			}
+
+			attacker := newMethodOpsFx(t)
+			w, _ := attacker.post(op)
+
+			assert.Equal(t, http.StatusNotFound, w.Code,
+				"an operation naming another contact's method was not rejected")
+
+			after := victim.storedByID(foreign.ID)
+			require.NotNil(t, after, "another contact's method was destroyed through a foreign id")
+			assert.Equal(t, before.Value, after.Value, "another contact's method was altered")
+			assert.Equal(t, before.IsPrimary, after.IsPrimary, "another contact's primary flag was changed")
+			assert.Equal(t, before.UpdatedAt, after.UpdatedAt, "another contact's method row was rewritten")
+			assert.Empty(t, attacker.stored(), "the operation leaked a row onto the caller's contact")
+		})
+	}
 }
 
 // TestMethodOps_RemoveNonexistentSucceedsButForeignRejected walks the ownership
@@ -601,6 +644,23 @@ func TestMethodOps_ConflictingOperationsRejected(t *testing.T) {
 		{"two adds differing only in stored casing", func(_, _ repository.ContactMethod) []map[string]any {
 			value := uniqueEmail()
 			return []map[string]any{addOp("email", value), addOp("email", strings.ToUpper(value))}
+		}},
+		// A primary designation on a NEW row necessarily travels on the add,
+		// because a row that does not exist yet has no id for set_primary to
+		// name. Two such adds are therefore two designations, and counting
+		// only the explicit verbs let them through with the last one in
+		// payload order winning — an order-dependent outcome.
+		{"two adds each designating primary", func(_, _ repository.ContactMethod) []map[string]any {
+			return []map[string]any{
+				addPrimaryOp("email", uniqueEmail()),
+				addPrimaryOp("phone", "+15550114567"),
+			}
+		}},
+		{"add designating primary alongside set_primary", func(_, b repository.ContactMethod) []map[string]any {
+			return []map[string]any{addPrimaryOp("email", uniqueEmail()), idOp("set_primary", b.ID)}
+		}},
+		{"add designating primary alongside clear_primary", func(a, _ repository.ContactMethod) []map[string]any {
+			return []map[string]any{addPrimaryOp("email", uniqueEmail()), idOp("clear_primary", a.ID)}
 		}},
 	}
 

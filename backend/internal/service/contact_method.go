@@ -463,6 +463,37 @@ func validateOperationInteractions(ops []ContactMethodOperation) error {
 		seenAdds[key] = i
 	}
 
+	// An add carrying is_primary IS a primary designation. A row that does not
+	// exist yet has no id for set_primary to name, so a new row's designation
+	// necessarily travels on its add — which means counting only the explicit
+	// verbs above misses it.
+	//
+	// Left uncounted, two such adds both reached the fold, where the last one in
+	// payload order won. That is an outcome depending on payload order, which
+	// CON-062 forbids outright, and it also produced a misleading result: the
+	// losing add reported success with a non-primary snapshot despite having
+	// asserted primary intent.
+	//
+	// Adds resolving to the same key are already proven identical above, so they
+	// coalesce to a single designation rather than conflicting with themselves.
+	primaryAddKeys := map[string]bool{}
+	for i, op := range ops {
+		if op.Op != MethodOpAdd || !primaryIntent(op) {
+			continue
+		}
+		key := op.Type + "|" + repository.NormalizeContactMethodValueForUniqueness(op.Type, op.Value)
+		if primaryAddKeys[key] {
+			continue
+		}
+		if primaryOpIndex >= 0 {
+			return opErrf(i, "add designates a primary alongside %s at operation %d", primaryOpVerb, primaryOpIndex)
+		}
+		primaryAddKeys[key] = true
+		if len(primaryAddKeys) > 1 {
+			return opErrf(i, "only one primary designation is allowed per request")
+		}
+	}
+
 	return nil
 }
 
