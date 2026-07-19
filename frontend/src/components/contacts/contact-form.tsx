@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect } from 'react'
+import { useEffect, useRef, type MutableRefObject } from 'react'
 import { useForm, useFieldArray } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Button } from '@/components/ui/button'
@@ -10,11 +10,13 @@ import { Textarea } from '@/components/ui/textarea'
 import { FORM_CONTROL_BASE } from '@/lib/form-classes'
 import {
   contactSchema,
+  submittedMethodSourceRows,
   transformContactFormData,
   type ContactFormData,
   type ContactFormInput,
   type ContactSubmitData,
 } from '@/lib/validations/contact'
+import type { MethodReconciliation } from '@/lib/contact-method-operations'
 import {
   CONTACT_METHOD_OPTIONS,
   formatContactMethodValue,
@@ -23,12 +25,23 @@ import {
 import type { Contact } from '@/types/contact'
 import { clsx } from 'clsx'
 
+/**
+ * Writes confirmed server results back into the live form rows. Programmatic —
+ * it must never count as a user edit, which would invalidate the save session
+ * it just completed and could loop.
+ */
+export type MethodsReconciler = (reconciliations: MethodReconciliation[]) => void
+
 interface ContactFormProps {
   contact?: Contact
   initialNotes?: string
   onSubmit: (data: ContactSubmitData) => void | Promise<void>
   loading?: boolean
   submitText?: string
+  /** Populated by the form with a reconciler the page calls after a successful methods step. */
+  reconcilerRef?: MutableRefObject<MethodsReconciler | null>
+  /** Fired on a user edit, so the page can invalidate an in-progress save session. */
+  onFormEdit?: () => void
 }
 
 const cadenceOptions = [
@@ -47,14 +60,17 @@ export function ContactForm({
   onSubmit,
   loading,
   submitText = 'Save Contact',
+  reconcilerRef,
+  onFormEdit,
 }: ContactFormProps) {
   const defaultMethods = contact?.methods?.length
     ? sortContactMethods(contact.methods).map(method => ({
+        method_id: method.id,
         type: method.type,
         value: formatContactMethodValue(method.type, method.value),
         is_primary: method.is_primary,
       }))
-    : [{ type: '', value: '', is_primary: false }]
+    : [{ method_id: undefined, type: '', value: '', is_primary: false }]
 
   const {
     register,
@@ -90,11 +106,104 @@ export function ContactForm({
     name: 'methods',
   })
 
+  // Programmatic writes must not read as user edits. An explicit flag is the
+  // only reliable discriminator: react-hook-form reports setValue with the same
+  // `change` event type as a real input event (verified against 7.62), so the
+  // subscription metadata cannot tell the two apart.
+  const programmaticWriteRef = useRef(false)
+  const withoutReportingEdit = (write: () => void) => {
+    programmaticWriteRef.current = true
+    try {
+      write()
+    } finally {
+      programmaticWriteRef.current = false
+    }
+  }
+
   // Sync notes field when initialNotes changes (e.g., when async query resolves)
   // This prevents stale empty notes from being saved if edit mode is opened before query resolves
   useEffect(() => {
-    setValue('notes', initialNotes, { shouldDirty: false })
+    programmaticWriteRef.current = true
+    try {
+      setValue('notes', initialNotes, { shouldDirty: false })
+    } finally {
+      programmaticWriteRef.current = false
+    }
   }, [initialNotes, setValue])
+
+  const onFormEditRef = useRef(onFormEdit)
+  useEffect(() => {
+    onFormEditRef.current = onFormEdit
+  })
+
+  // Report user edits so the page can invalidate an in-progress save session.
+  // Array-shape edits — adding, removing, or re-designating a row — also report
+  // explicitly at their call sites, since a field-array mutation is not
+  // guaranteed to surface here. A duplicate report is harmless: invalidation is
+  // idempotent.
+  useEffect(() => {
+    const subscription = watch(() => {
+      if (programmaticWriteRef.current) return
+      onFormEditRef.current?.()
+    })
+    return () => subscription.unsubscribe()
+  }, [watch])
+
+  // The form-row key behind each method of the most recent submission, so a
+  // result can be written back into the row that produced it. Keys rather than
+  // indexes: react-hook-form's generated key survives rows being added or
+  // removed while the request is in flight.
+  const submittedRowKeysRef = useRef<Array<string | null>>([])
+
+  useEffect(() => {
+    if (!reconcilerRef) return
+    reconcilerRef.current = (reconciliations: MethodReconciliation[]) =>
+      withoutReportingEdit(() => reconcileRows(reconciliations))
+
+    function reconcileRows(reconciliations: MethodReconciliation[]) {
+      const rowKeys = submittedRowKeysRef.current
+      const claimedBy = new Map<string, string>()
+      const duplicateRowKeys: string[] = []
+
+      for (const entry of reconciliations) {
+        const rowKey = rowKeys[entry.submittedIndex]
+        if (!rowKey) continue
+
+        // Two live rows resolving to one method_id are one domain row shown
+        // twice. Stamping both would derive two operations against one id on
+        // the next save, which the endpoint rejects as a conflict — leaving a
+        // duplicate the user cannot delete. Keep the earlier row (results
+        // arrive in submitted order, which is form order) and drop the later.
+        const owner = claimedBy.get(entry.method_id)
+        if (owner && owner !== rowKey) {
+          duplicateRowKeys.push(rowKey)
+          continue
+        }
+        claimedBy.set(entry.method_id, rowKey)
+
+        const index = fields.findIndex(field => field.id === rowKey)
+        if (index < 0) continue
+        const options = { shouldDirty: false, shouldTouch: false } as const
+        setValue(`methods.${index}.method_id`, entry.method_id, options)
+        setValue(`methods.${index}.type`, entry.type, options)
+        setValue(
+          `methods.${index}.value`,
+          formatContactMethodValue(entry.type, entry.value),
+          options
+        )
+        setValue(`methods.${index}.is_primary`, entry.is_primary, options)
+      }
+
+      // Descending, so each index is still valid when its turn comes.
+      const duplicateIndexes = duplicateRowKeys
+        .map(rowKey => fields.findIndex(field => field.id === rowKey))
+        .filter(index => index >= 0)
+        .sort((a, b) => b - a)
+      for (const index of duplicateIndexes) {
+        remove(index)
+      }
+    }
+  })
 
   const watchedMethods = watch('methods')
 
@@ -108,15 +217,25 @@ export function ContactForm({
         shouldValidate: true,
       })
     })
+    onFormEditRef.current?.()
   }
 
   const handleAddMethod = () => {
-    append({ type: '', value: '', is_primary: false })
+    append({ method_id: undefined, type: '', value: '', is_primary: false })
+    onFormEditRef.current?.()
+  }
+
+  const handleRemoveMethod = (index: number) => {
+    remove(index)
+    onFormEditRef.current?.()
   }
 
   const handleFormSubmit = async (data: ContactFormData) => {
     try {
       const transformedData = transformContactFormData(data)
+      submittedRowKeysRef.current = submittedMethodSourceRows(data).map(
+        rowIndex => fields[rowIndex]?.id ?? null
+      )
       await onSubmit(transformedData)
       if (!contact) {
         // Reset form after creating new contact
@@ -213,7 +332,7 @@ export function ContactForm({
                     {/* Remove button - X icon, visible on hover */}
                     <button
                       type="button"
-                      onClick={() => remove(index)}
+                      onClick={() => handleRemoveMethod(index)}
                       disabled={isLoading || fields.length === 1}
                       className="p-1.5 text-gray-300 opacity-0 group-hover:opacity-100 hover:text-red-500 transition-all disabled:opacity-0"
                       title="Remove"

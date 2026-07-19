@@ -1,0 +1,252 @@
+import { normalizeContactMethodValue } from '@/lib/contact-methods'
+import type { ContactMethod, ContactMethodType } from '@/types/contact'
+import type {
+  ContactMethodOperation,
+  ContactMethodOperationResult,
+} from '@/types/generated/contact'
+
+/**
+ * A method this client asserted and had confirmed on the server.
+ *
+ * The acknowledged state is the left-hand side of every derivation. It is
+ * initialized once at edit-start and thereafter advances ONLY by applying this
+ * client's own confirmed operations — never by absorbing a server response.
+ * Both rules are load-bearing in opposite directions: re-reading server data
+ * lets a method the form never showed enter a diff (and be destroyed), while
+ * freezing it for the whole edit session silently discards a value the user
+ * reverts after a partially successful save.
+ *
+ * `value` is held in the SUBMISSION representation (see
+ * `normalizeContactMethodValue`) so the diff can be a plain equality against
+ * what the form submits. It is deliberately NOT the comparison/uniqueness
+ * representation: that answers "would these collide?", and the diff asks "did
+ * the user change this?". Answering the second question with the first makes
+ * case-only and respelling edits vanish.
+ */
+export interface AcknowledgedMethod {
+  method_id: string
+  type: ContactMethodType
+  value: string
+  is_primary: boolean
+}
+
+/** A method row as the form submits it. A row with no `method_id` is new. */
+export interface SubmittedMethod {
+  method_id?: string
+  type: ContactMethodType
+  value: string
+  is_primary: boolean
+}
+
+export interface DerivedMethodOperations {
+  operations: ContactMethodOperation[]
+  /**
+   * `submittedIndexes[i]` is the index into `submitted` whose row produced
+   * `operations[i]`, or -1 for an operation that names an acknowledged row
+   * rather than a submitted one (removals and primary designations).
+   *
+   * This is what lets a successful result be written back into the live form
+   * row that produced it, without re-deriving server identity from the
+   * response.
+   */
+  submittedIndexes: number[]
+}
+
+/** A confirmed result, resolved back to the submitted row that produced it. */
+export interface MethodReconciliation {
+  submittedIndex: number
+  method_id: string
+  type: ContactMethodType
+  value: string
+  is_primary: boolean
+}
+
+/**
+ * Builds the acknowledged state at edit-start from the contact's methods.
+ *
+ * Values are normalized into the submission representation here, which is what
+ * makes a stored `@foo` (displayed `@foo`, submitted `foo`) produce no
+ * operation on an untouched round trip.
+ */
+export function initializeAcknowledgedMethods(
+  methods: ContactMethod[] | undefined
+): AcknowledgedMethod[] {
+  return (methods ?? [])
+    .filter((method): method is ContactMethod & { id: string } => Boolean(method.id))
+    .map(method => ({
+      method_id: method.id,
+      type: method.type,
+      value: normalizeContactMethodValue(method.type, method.value),
+      is_primary: Boolean(method.is_primary),
+    }))
+}
+
+/**
+ * Derives the operations that carry the acknowledged state to what the form is
+ * asking for.
+ *
+ * A method absent from the acknowledged state is never named by any operation,
+ * which is the structural reason a save cannot remove a method the form did not
+ * show.
+ */
+export function deriveMethodOperations(
+  acknowledged: AcknowledgedMethod[],
+  submitted: SubmittedMethod[]
+): ContactMethodOperation[] {
+  return deriveMethodOperationsWithOrigins(acknowledged, submitted).operations
+}
+
+export function deriveMethodOperationsWithOrigins(
+  acknowledged: AcknowledgedMethod[],
+  submitted: SubmittedMethod[]
+): DerivedMethodOperations {
+  const acknowledgedById = new Map(acknowledged.map(method => [method.method_id, method]))
+
+  // An id the acknowledged state does not know is not a row this client can
+  // safely name: naming it would assert an identity we never confirmed. Treat
+  // the row as new instead — the server resolves it to whichever row satisfies
+  // the value, and tells us which one.
+  const knownId = (row: SubmittedMethod) =>
+    row.method_id && acknowledgedById.has(row.method_id) ? row.method_id : undefined
+
+  const submittedIds = new Set<string>()
+  for (const row of submitted) {
+    const id = knownId(row)
+    if (id) submittedIds.add(id)
+  }
+
+  const operations: ContactMethodOperation[] = []
+  const submittedIndexes: number[] = []
+  const push = (operation: ContactMethodOperation, submittedIndex: number) => {
+    operations.push(operation)
+    submittedIndexes.push(submittedIndex)
+  }
+
+  const removedIds = new Set<string>()
+  for (const method of acknowledged) {
+    if (submittedIds.has(method.method_id)) continue
+    removedIds.add(method.method_id)
+    push({ op: 'remove', method_id: method.method_id }, -1)
+  }
+
+  submitted.forEach((row, index) => {
+    const id = knownId(row)
+    if (!id) {
+      const add: ContactMethodOperation = { op: 'add', type: row.type, value: row.value }
+      // A row that does not exist yet has no id for set_primary to name, so a
+      // new row's designation necessarily travels on its own add.
+      if (row.is_primary) add.is_primary = true
+      push(add, index)
+      return
+    }
+    const acknowledgedRow = acknowledgedById.get(id)
+    if (!acknowledgedRow) return
+    if (acknowledgedRow.type !== row.type || acknowledgedRow.value !== row.value) {
+      push({ op: 'update', method_id: id, type: row.type, value: row.value }, index)
+    }
+  })
+
+  const acknowledgedPrimary = acknowledged.find(method => method.is_primary)
+  const submittedPrimary = submitted.find(row => row.is_primary)
+
+  if (submittedPrimary) {
+    const id = knownId(submittedPrimary)
+    if (id && acknowledgedPrimary?.method_id !== id) {
+      push({ op: 'set_primary', method_id: id }, -1)
+    }
+  } else if (acknowledgedPrimary && !removedIds.has(acknowledgedPrimary.method_id)) {
+    // Suppressed when the same row is being removed: removal already leaves no
+    // primary, so the clear is redundant AND rejected as self-conflicting.
+    push({ op: 'clear_primary', method_id: acknowledgedPrimary.method_id }, -1)
+  }
+
+  return { operations, submittedIndexes }
+}
+
+/**
+ * Advances the acknowledged state by applying this client's own confirmed
+ * operations.
+ *
+ * The response's `methods` array is deliberately never read here. The test is
+ * "did MY operation address this row?", not "did the server send it?" — taking
+ * the list wholesale is how state the client never saw enters its picture,
+ * which is the original defect. A per-result snapshot cannot do that: a result
+ * only ever arrives for an operation this client submitted.
+ *
+ * Upserting by `method_id` is what satisfies the same-id collapse property: two
+ * rows whose results resolve to one id become one row, at the earlier position,
+ * carrying the resolved snapshot rather than either submitted value.
+ */
+export function advanceAcknowledgedMethods(
+  acknowledged: AcknowledgedMethod[],
+  operations: ContactMethodOperation[],
+  results: ContactMethodOperationResult[]
+): AcknowledgedMethod[] {
+  let next = acknowledged.map(method => ({ ...method }))
+  let promotedId: string | null = null
+
+  for (const result of results) {
+    const operation = operations[result.index]
+    if (!operation) continue
+
+    if (operation.op === 'remove') {
+      next = next.filter(method => method.method_id !== result.method_id)
+      continue
+    }
+
+    // No snapshot means the operation left no surviving row to learn about.
+    if (!result.method) continue
+
+    const snapshot: AcknowledgedMethod = {
+      method_id: result.method.id,
+      type: result.method.type,
+      value: normalizeContactMethodValue(result.method.type, result.method.value),
+      is_primary: result.method.is_primary,
+    }
+    if (snapshot.is_primary) promotedId = snapshot.method_id
+
+    const at = next.findIndex(method => method.method_id === snapshot.method_id)
+    if (at >= 0) next[at] = snapshot
+    else next.push(snapshot)
+  }
+
+  // A promotion demotes every other row. Rows no operation addressed keep their
+  // edit-start flag otherwise, and would leave the state with two primaries —
+  // which makes the next derivation's primary comparison ambiguous.
+  if (promotedId) {
+    next = next.map(method => ({ ...method, is_primary: method.method_id === promotedId }))
+  }
+
+  return next
+}
+
+/**
+ * Resolves confirmed results back to the submitted rows that produced them, so
+ * the live form rows can learn the ids and stored values the server assigned.
+ *
+ * Without this the acknowledged state and the form disagree: a row added in a
+ * save whose later step failed would still be id-less in the form, and the next
+ * save would derive `remove` + `add` — changing the row's identity, which is
+ * the forensic evidence this whole workstream exists to protect.
+ */
+export function reconciliationsFromResults(
+  operations: ContactMethodOperation[],
+  results: ContactMethodOperationResult[],
+  submittedIndexes: number[]
+): MethodReconciliation[] {
+  const out: MethodReconciliation[] = []
+  for (const result of results) {
+    const operation = operations[result.index]
+    if (!operation || operation.op === 'remove' || !result.method) continue
+    const submittedIndex = submittedIndexes[result.index] ?? -1
+    if (submittedIndex < 0) continue
+    out.push({
+      submittedIndex,
+      method_id: result.method.id,
+      type: result.method.type,
+      value: result.method.value,
+      is_primary: result.method.is_primary,
+    })
+  }
+  return out
+}
