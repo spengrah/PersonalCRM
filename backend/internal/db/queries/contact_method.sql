@@ -116,3 +116,96 @@ WHERE cm.type IN ('gchat', 'email')
   AND cm.value_normalized <> ''
   AND c.deleted_at IS NULL
 ORDER BY cm.value_normalized ASC, cm.contact_id ASC, cm.type ASC;
+
+-- name: InsertContactMethodWithIdentity :one
+-- Inserts a contact method with an EXPLICIT id and created_at so the apply
+-- stage can delete a row whose (type, value_normalized) key changed and put it
+-- back with its identity intact. Genuinely new rows pass generated values for
+-- the same two columns, so one query serves both cases.
+--
+-- is_primary is always supplied as FALSE by the apply stage: promotion is the
+-- last step, which is what keeps idx_contact_method_primary from being
+-- violated mid-apply.
+--
+-- Deliberately NO "ON CONFLICT DO NOTHING": the in-memory fold has already
+-- proven the row is absent, so a conflict here means the fold is wrong and
+-- must fail loudly rather than be swallowed.
+--
+-- value_normalized is written by the set_contact_method_value_normalized
+-- trigger (migration 022), which overwrites whatever is passed. The
+-- placeholder below is never the stored value — do not read the returned
+-- value_normalized as confirmation of what Go computed.
+INSERT INTO contact_method (
+    id,
+    contact_id,
+    type,
+    value,
+    value_normalized,
+    is_primary,
+    created_at
+) VALUES (
+    sqlc.arg(id), sqlc.arg(contact_id), sqlc.arg(type), sqlc.arg(value), '', sqlc.arg(is_primary), sqlc.arg(created_at)
+) RETURNING *;
+
+-- name: UpdateContactMethodByContact :one
+-- In-place value/type update for a row whose (type, value_normalized) key is
+-- UNCHANGED — the apply stage's step 4. A key change goes through
+-- delete-and-reinsert instead; this query exists for the case where the user
+-- edited the stored spelling ("Case@Example.test" -> "case@example.test", or a
+-- phone respelling) without moving the normalized key, which steps 1-3 would
+-- otherwise silently discard.
+--
+-- Scoped by contact_id as well as id so a method id from another contact can
+-- never be acted on.
+UPDATE contact_method
+SET type = sqlc.arg(type),
+    value = sqlc.arg(value)
+WHERE id = sqlc.arg(id)
+  AND contact_id = sqlc.arg(contact_id)
+RETURNING *;
+
+-- name: DeleteContactMethodByContact :exec
+-- Contact-scoped single-row delete. Used both for removals and for the first
+-- phase of the delete-and-reinsert applied to key-changing rows.
+DELETE FROM contact_method
+WHERE id = sqlc.arg(id)
+  AND contact_id = sqlc.arg(contact_id);
+
+-- name: DemoteContactMethodPrimaryByContact :exec
+-- Clears is_primary on ONE named row of ONE contact.
+--
+-- Scoped by BOTH contact_id and id, deliberately. A contact-only demote would
+-- clear whichever row happened to be primary, which is the global-demotion
+-- behavior that lets a stale client drop a primary it never saw.
+UPDATE contact_method
+SET is_primary = FALSE
+WHERE id = sqlc.arg(id)
+  AND contact_id = sqlc.arg(contact_id);
+
+-- name: PromoteContactMethodPrimaryByContact :exec
+-- Sets is_primary on one named row of one contact. Added rather than reusing
+-- SetContactMethodPrimary, which matches by method id alone and is used by
+-- enrichment — changing it would move enrichment behavior.
+UPDATE contact_method
+SET is_primary = TRUE
+WHERE id = sqlc.arg(id)
+  AND contact_id = sqlc.arg(contact_id);
+
+-- name: LookupContactMethodOwner :one
+-- Returns the owning contact_id for a method id, regardless of which contact
+-- owns it. This is what separates "this id belongs to another contact" (404 --
+-- a method id is not a capability) from "this id does not exist at all"
+-- (a removal succeeds as a no-op, so a retried removal is idempotent). Those
+-- two cases are indistinguishable from one contact's pre-state alone.
+SELECT contact_id FROM contact_method
+WHERE id = sqlc.arg(id);
+
+-- name: NormalizeContactMethodValueViaTrigger :one
+-- TEST-ONLY. Calls the live normalize_contact_method_value function so the
+-- C6 parity test can compare the Go mirror against the actual SQL that the
+-- unique index is enforced over. Raw SQL is banned in Go including tests
+-- (.ai/rules/core.md), so this query is the permitted access path.
+--
+-- Not used by production code. Do not make it one: production reads the
+-- trigger's output from the stored column.
+SELECT normalize_contact_method_value(sqlc.arg(method_type)::TEXT, sqlc.arg(raw_value)::TEXT) AS normalized;

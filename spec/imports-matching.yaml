@@ -255,7 +255,7 @@ behaviors:
     type: business-logic
     status: current
     surface: api
-    given: new methods appearing on a CRM contact (create, method-replacing update, enrichment, or suggestion resolve)
+    given: new methods appearing on a CRM contact (create, method-replacing update, a method operations request, enrichment, or suggestion resolve)
     when: the write commits
     then:
       - a rematch event is published for the methods that have a registered handler

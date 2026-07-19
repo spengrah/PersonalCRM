@@ -131,3 +131,58 @@ export interface MergePreviewResponse {
   interactions_to_transfer: number /* int64 */;
   calendar_events_to_update: number /* int64 */;
 }
+/**
+ * ContactMethodOperation is one requested contact-method mutation.
+ * The endpoint takes OPERATIONS, never a desired set. A desired set makes
+ * absence mean "delete", so a client working from a stale read destroys every
+ * method it never saw — the defect this endpoint exists to make unexpressible.
+ * @Description A single contact-method operation
+ */
+export interface ContactMethodOperation {
+  op: string;
+  method_id?: string;
+  type?: ContactMethodType;
+  value?: string;
+  /**
+   * IsPrimary is a pointer so the handler can tell "absent" from "present and
+   * false". The field is forbidden on update, which is a presence test — a
+   * plain bool would silently accept an explicit false.
+   */
+  is_primary?: boolean;
+}
+/**
+ * ContactMethodOperationsRequest is the operations payload.
+ * @Description Contact-method operations request
+ * An empty or absent operations list is a successful no-op, so the slice is
+ * deliberately NOT `required` — that tag fails a zero-length slice and would
+ * turn "nothing to do" into a 400.
+ */
+export interface ContactMethodOperationsRequest {
+  operations: ContactMethodOperation[];
+}
+/**
+ * ContactMethodOperationResult reports what happened to one SUBMITTED
+ * operation, at that operation's own request index.
+ * Method is present only where the operation leaves a surviving row. A removal
+ * carries no snapshot: a removed row has no post-apply state, and an idempotent
+ * removal of an already-absent id has no row at all. MethodID is always the id
+ * the operation addressed.
+ * @Description Result of a single contact-method operation
+ */
+export interface ContactMethodOperationResult {
+  index: number /* int */;
+  outcome: string;
+  method_id: string;
+  method?: ContactMethodResponse;
+}
+/**
+ * ContactMethodOperationsResponse carries the contact's full method list after
+ * applying, a rematch job id when one was enqueued, and one result per
+ * submitted operation.
+ * @Description Contact-method operations response
+ */
+export interface ContactMethodOperationsResponse {
+  methods: ContactMethodResponse[];
+  rematch_job_id?: string;
+  results: ContactMethodOperationResult[];
+}

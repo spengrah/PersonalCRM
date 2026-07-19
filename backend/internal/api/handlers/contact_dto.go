@@ -112,3 +112,54 @@ type MergePreviewResponse struct {
 	InteractionsToTransfer int64           `json:"interactions_to_transfer" example:"12"`
 	CalendarEventsToUpdate int64           `json:"calendar_events_to_update" example:"3"`
 }
+
+// ContactMethodOperation is one requested contact-method mutation.
+//
+// The endpoint takes OPERATIONS, never a desired set. A desired set makes
+// absence mean "delete", so a client working from a stale read destroys every
+// method it never saw — the defect this endpoint exists to make unexpressible.
+// @Description A single contact-method operation
+type ContactMethodOperation struct {
+	Op       string `json:"op" validate:"required,oneof=add update remove set_primary clear_primary" example:"add"`
+	MethodID string `json:"method_id,omitempty" validate:"omitempty,uuid" example:"550e8400-e29b-41d4-a716-446655440000"`
+	Type     string `json:"type,omitempty" validate:"omitempty,oneof=email phone telegram discord twitter signal gchat whatsapp" example:"email" tstype:"ContactMethodType"`
+	Value    string `json:"value,omitempty" validate:"omitempty,max=255" example:"john.doe@example.com"`
+	// IsPrimary is a pointer so the handler can tell "absent" from "present and
+	// false". The field is forbidden on update, which is a presence test — a
+	// plain bool would silently accept an explicit false.
+	IsPrimary *bool `json:"is_primary,omitempty" example:"true"`
+}
+
+// ContactMethodOperationsRequest is the operations payload.
+// @Description Contact-method operations request
+// An empty or absent operations list is a successful no-op, so the slice is
+// deliberately NOT `required` — that tag fails a zero-length slice and would
+// turn "nothing to do" into a 400.
+type ContactMethodOperationsRequest struct {
+	Operations []ContactMethodOperation `json:"operations" validate:"dive"`
+}
+
+// ContactMethodOperationResult reports what happened to one SUBMITTED
+// operation, at that operation's own request index.
+//
+// Method is present only where the operation leaves a surviving row. A removal
+// carries no snapshot: a removed row has no post-apply state, and an idempotent
+// removal of an already-absent id has no row at all. MethodID is always the id
+// the operation addressed.
+// @Description Result of a single contact-method operation
+type ContactMethodOperationResult struct {
+	Index    int                    `json:"index" example:"0"`
+	Outcome  string                 `json:"outcome" example:"created"`
+	MethodID string                 `json:"method_id" example:"550e8400-e29b-41d4-a716-446655440000"`
+	Method   *ContactMethodResponse `json:"method,omitempty"`
+}
+
+// ContactMethodOperationsResponse carries the contact's full method list after
+// applying, a rematch job id when one was enqueued, and one result per
+// submitted operation.
+// @Description Contact-method operations response
+type ContactMethodOperationsResponse struct {
+	Methods      []ContactMethodResponse        `json:"methods"`
+	RematchJobID string                         `json:"rematch_job_id,omitempty" example:"550e8400-e29b-41d4-a716-446655440000"`
+	Results      []ContactMethodOperationResult `json:"results"`
+}
