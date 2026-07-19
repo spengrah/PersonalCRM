@@ -62,7 +62,7 @@ export function useLinkCandidate() {
     mutationFn: ({ id, request }: { id: string; request: LinkContactRequest }) =>
       importsApi.linkCandidate(id, request),
     onSuccess: (response, vars) => {
-      invalidateFor('import:linked')
+      invalidateFor('import:linked', vars.request.crm_contact_id)
       if (response.rematch_job_id) {
         registerJob({
           jobId: response.rematch_job_id,

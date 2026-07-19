@@ -100,7 +100,32 @@ describe('query-invalidation', () => {
         })
       })
 
-      it('invalidates import, suggestions, and contact lists on import:linked', () => {
+      // Turns red if the (contactId) => contactKeys.detail(contactId) entry is
+      // dropped from the import:linked rule: a linked contact's cached detail
+      // view would keep serving its pre-link method list.
+      it('invalidates the linked contact detail key on import:linked', () => {
+        invalidateFor('import:linked', 'crm-456')
+
+        expect(mockInvalidateQueries).toHaveBeenCalledTimes(4)
+        expect(mockInvalidateQueries).toHaveBeenCalledWith({
+          queryKey: importKeys.lists(),
+        })
+        expect(mockInvalidateQueries).toHaveBeenCalledWith({
+          queryKey: importKeys.suggestionsLists(),
+        })
+        // Cross-domain: linking enriches an existing contact
+        expect(mockInvalidateQueries).toHaveBeenCalledWith({
+          queryKey: contactKeys.lists(),
+        })
+        expect(mockInvalidateQueries).toHaveBeenCalledWith({
+          queryKey: contactKeys.detail('crm-456'),
+        })
+      })
+
+      // The factory-skip contract: invalidateFor drops factory entries when no
+      // contactId is supplied, so the static keys must still fire for callers
+      // that have no contact in hand.
+      it('invalidates only the static keys on import:linked without a contact id', () => {
         invalidateFor('import:linked')
 
         expect(mockInvalidateQueries).toHaveBeenCalledTimes(3)
@@ -110,7 +135,6 @@ describe('query-invalidation', () => {
         expect(mockInvalidateQueries).toHaveBeenCalledWith({
           queryKey: importKeys.suggestionsLists(),
         })
-        // Cross-domain: linking enriches an existing contact
         expect(mockInvalidateQueries).toHaveBeenCalledWith({
           queryKey: contactKeys.lists(),
         })

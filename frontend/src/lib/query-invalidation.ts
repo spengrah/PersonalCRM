@@ -87,8 +87,16 @@ const invalidationRules: Record<DomainEvent, InvalidationKey[]> = {
   // The suggestions surface composes the same candidate list, so it must
   // refresh too.
   'import:imported': [importKeys.lists(), importKeys.suggestionsLists(), contactKeys.lists()],
-  // Linking enriches an existing contact
-  'import:linked': [importKeys.lists(), importKeys.suggestionsLists(), contactKeys.lists()],
+  // Linking enriches an existing contact — a link can add methods to it — so
+  // the contact's detail key is invalidated via the factory pattern alongside
+  // the lists. Without it, a detail view already in cache keeps serving the
+  // pre-link method list for the whole staleTime window.
+  'import:linked': [
+    importKeys.lists(),
+    importKeys.suggestionsLists(),
+    contactKeys.lists(),
+    (contactId: string) => contactKeys.detail(contactId),
+  ],
   // Ignoring only affects the imports + suggestions lists
   'import:ignored': [importKeys.lists(), importKeys.suggestionsLists()],
   // Sync trigger updates sync states; completion may add new candidates
