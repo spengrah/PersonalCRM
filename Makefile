@@ -544,23 +544,21 @@ test-api:
 # cross-platform python3 plistlib parse (the __INSTALL_PREFIX__ placeholder lives
 # inside <string> values, so it parses fine); plutil is macOS-only and not used here.
 test-deploy-scripts:
-	@echo "Running deploy-script shell tests..."
-	@bash scripts/deploy-artifact.test.sh
-	@bash scripts/backup-db.test.sh
-	@bash scripts/restore-db.test.sh
-	@bash scripts/deploy-staging.test.sh
-	@bash scripts/staging-reset.test.sh
-	@bash scripts/ci/staging-reseed-decision.test.sh
-	@bash scripts/ci/qa-round-cadence-gate.test.sh
-	@bash scripts/ci/qa-nightly-round.test.sh
-	@bash scripts/ci/qa-fn-backfill-guard.test.sh
-	@bash scripts/staging-deployed-sha.test.sh
-	@bash scripts/staging-reseed.test.sh
-	@bash scripts/admin/setup-staging-reseed-host.sh.test.sh
-	@bash scripts/run-tours.test.sh
-	@bash scripts/reconcile-mac-daemon.test.sh
-	@bash scripts/setup-mac-deploy.test.sh
-	@bash scripts/trigger-mac-deploy.test.sh
+	@echo "Running deploy-script shell tests (parallel)..."
+	@tests="scripts/deploy-artifact.test.sh scripts/backup-db.test.sh scripts/restore-db.test.sh scripts/deploy-staging.test.sh scripts/staging-reset.test.sh scripts/ci/staging-reseed-decision.test.sh scripts/ci/qa-round-cadence-gate.test.sh scripts/ci/qa-nightly-round.test.sh scripts/ci/qa-fn-backfill-guard.test.sh scripts/staging-deployed-sha.test.sh scripts/staging-reseed.test.sh scripts/admin/setup-staging-reseed-host.sh.test.sh scripts/run-tours.test.sh scripts/reconcile-mac-daemon.test.sh scripts/setup-mac-deploy.test.sh scripts/trigger-mac-deploy.test.sh"; \
+	tmp="$$(mktemp -d)"; \
+	for t in $$tests; do \
+	  ( bash "$$t" >"$$tmp/$$(echo "$$t" | tr / _).out" 2>&1; echo "$$?" >"$$tmp/$$(echo "$$t" | tr / _).rc" ) & \
+	done; \
+	wait; \
+	fail=0; \
+	for t in $$tests; do \
+	  b="$$tmp/$$(echo "$$t" | tr / _)"; rc="$$(cat "$$b.rc" 2>/dev/null || echo 1)"; \
+	  if [ "$$rc" = 0 ]; then echo "  OK   $$t"; else echo "  FAIL $$t (exit $$rc):"; sed "s/^/      /" "$$b.out"; fail=1; fi; \
+	done; \
+	rm -rf "$$tmp"; \
+	[ "$$fail" = 0 ] || { echo "deploy-script shell tests FAILED"; exit 1; }; \
+	echo "All deploy-script shell tests passed."
 	@echo "Validating the committed timer template (plistlib parse)..."
 	@python3 -c "import plistlib,sys; plistlib.loads(open(sys.argv[1],'rb').read()); print('  timer template OK')" \
 		infra/mac-deploy/xyz.spengrah.crm-mac-deploy.plist.template
