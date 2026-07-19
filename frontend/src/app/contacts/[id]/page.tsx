@@ -153,7 +153,12 @@ export default function ContactDetailPage() {
     if (!isEditing) {
       acknowledgedMethodsRef.current = null
       saveSessionRef.current = null
-      setSaveReport(null)
+      // Functional form so an already-null report is a true bail-out. A plain
+      // setSaveReport(null) can still cost a render pass before React compares,
+      // and this effect runs on mount and on every contact change on the
+      // read-only detail view — where a stray render perturbs the notes
+      // overflow measurement (a ResizeObserver reading scrollHeight).
+      setSaveReport(current => (current === null ? current : null))
       return
     }
     if (!contact) return
