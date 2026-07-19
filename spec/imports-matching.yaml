@@ -487,6 +487,26 @@ behaviors:
       - dismissal resolves nothing — the candidate stays unmatched in its queue, and an uncommitted name edit is discarded
     provenance: [suggestion-modal.tsx onClose paths, Escape keydown handler, handleCancelNameEdit]
 
+  - id: IMP-040
+    title: A linked candidate's new methods appear on the contact without a manual refresh
+    type: ux
+    status: current
+    surface: ui
+    given: a contact whose detail view has already been viewed in this session
+    when: an import candidate is linked to that contact, adding a method
+    then:
+      - returning to the contact's detail view shows the newly added method, with no manual refresh or hard reload
+    provenance: ['invalidationRules import:linked', 'useLinkCandidate onSuccess']
+    notes: >
+      The detail view is cached for five minutes in production, so the linked
+      enrichment is only visible if the link invalidates the contact's detail
+      entry. The citing E2E must run under the production cache — it imports
+      @playwright/test rather than the custom fixture, which sets staleTime to
+      0 — must suppress rematch-watcher registration so the assertion cannot
+      be satisfied by RematchJobWatcher's own invalidation, and must
+      navigate client-side rather than via a hard reload, which would discard
+      the cache the behavior is about.
+
   # --- Proposed ---
 
   - id: IMP-032

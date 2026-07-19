@@ -385,7 +385,11 @@ describe('use-imports hooks', () => {
       expect(mockedImportsApi.linkCandidate).toHaveBeenCalledWith('ext-123', {
         crm_contact_id: 'crm-456',
       })
-      expect(mockedInvalidateFor).toHaveBeenCalledWith('import:linked')
+      // The linked contact id must reach invalidateFor: the import:linked rule
+      // carries contactKeys.detail via a factory entry, and invalidateFor skips
+      // factory entries when the id is undefined. Turns red if the call site
+      // drops the second argument.
+      expect(mockedInvalidateFor).toHaveBeenCalledWith('import:linked', 'crm-456')
     })
 
     it('links candidate with method selection and conflict resolutions', async () => {
@@ -406,7 +410,7 @@ describe('use-imports hooks', () => {
       await result.current.mutateAsync({ id: 'ext-123', request })
 
       expect(mockedImportsApi.linkCandidate).toHaveBeenCalledWith('ext-123', request)
-      expect(mockedInvalidateFor).toHaveBeenCalledWith('import:linked')
+      expect(mockedInvalidateFor).toHaveBeenCalledWith('import:linked', 'crm-456')
     })
   })
 

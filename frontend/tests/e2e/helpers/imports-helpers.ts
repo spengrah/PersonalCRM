@@ -128,3 +128,69 @@ export async function findCandidateByName(
     // (reload + re-walk) costs a few seconds on the dev server.
   }).toPass({ timeout: 45000 })
 }
+
+/**
+ * Same walk as findCandidateByName, minus the `page.reload()` recovery.
+ *
+ * A reload is a full navigation, which tears down the react-query cache. Any
+ * spec whose subject IS the cache (does a mutation invalidate an already-cached
+ * query?) goes vacuous the moment a reload happens — the remounted page
+ * refetches from scratch and passes with or without the invalidation under
+ * test. findCandidateByName's reload fires only on a retry attempt, so such a
+ * spec passes locally and silently loses its meaning under parallel-worker
+ * load.
+ *
+ * This variant rewinds by clicking the page-1 control when one exists, and
+ * otherwise re-probes in place. If the candidate is genuinely unreachable the
+ * toPass budget expires and the test fails loudly, which is the correct
+ * outcome: a noisy failure beats a quiet vacuity.
+ *
+ * Deliberately a separate export. findCandidateByName keeps its reload — its
+ * other callers rely on it for parallel-safety and do not care about the cache.
+ */
+export async function findCandidateByNameNoReload(
+  page: Page,
+  displayName: string,
+  maxPages = 5
+): Promise<void> {
+  const contactHeading = page.getByRole('heading', { name: displayName, exact: true })
+  const seen = (locator: Locator, timeout: number) =>
+    locator
+      .waitFor({ state: 'visible', timeout })
+      .then(() => true)
+      .catch(() => false)
+
+  let attempt = 0
+  await expect(async () => {
+    attempt++
+    if (attempt > 1) {
+      // Rewind to page 1 if the control is present. When it is not, the pool
+      // fits one page (nothing to rewind) or a mid-walk shrink stranded the
+      // client with no rewind affordance — re-probe in place rather than
+      // reload, and let the budget expire if the candidate never appears.
+      const firstPageButton = page.getByRole('button', { name: '1', exact: true }).first()
+      if (await seen(firstPageButton, 500)) {
+        await firstPageButton.click()
+      }
+    }
+
+    for (let i = 0; i < maxPages; i++) {
+      if (await seen(contactHeading, 1500)) {
+        return
+      }
+
+      // Exact match so "Next candidate" inside the resolver modal never matches.
+      const nextButton = page.getByRole('button', { name: 'Next', exact: true })
+      if (await seen(nextButton, 500)) {
+        if (!(await nextButton.isDisabled())) {
+          await nextButton.click()
+          continue
+        }
+      }
+
+      break
+    }
+
+    await expect(contactHeading).toBeVisible({ timeout: 1000 })
+  }).toPass({ timeout: 45000 })
+}
