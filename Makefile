@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev dev-seed staging-reset tours build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast qa-report qa-export qa-langfuse-setup qa-fn-backfill prod staging accelerated testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry spec-lint spec-coverage api-types api-types-check
+.PHONY: help setup dev dev-seed staging-reset tours build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast qa-report qa-export qa-langfuse-setup qa-fn-backfill prod staging accelerated testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry spec-lint spec-coverage api-types api-types-check api-docs api-docs-check
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -142,6 +142,8 @@ help:
 	@echo "  sqlc        - Regenerate sqlc code from SQL queries"
 	@echo "  api-types   - Regenerate frontend API types from Go wire structs"
 	@echo "  api-types-check - Fail if generated API types drifted (non-mutating)"
+	@echo "  api-docs    - Regenerate the Swagger spec from Go annotations"
+	@echo "  api-docs-check - Fail if the generated Swagger spec drifted (non-mutating)"
 	@echo "  lint        - Run all linters (backend + frontend)"
 	@echo "  spec-lint   - Lint the behavior spec corpus (spec/*.yaml)"
 	@echo "  spec-coverage - Report per-then-item E2E coverage of ui-surface behaviors"
@@ -658,9 +660,30 @@ sqlc:
 	@echo "✅ sqlc code generated"
 
 # API specific commands
+# swag runs via `go tool` (pinned in backend/go.mod alongside tygo) rather than
+# a ~/go/bin binary: CI has no such install, and an unpinned local binary can
+# generate a different spec than the one the drift check expects.
 api-docs:
 	@echo "Generating API documentation..."
-	@cd backend && ~/go/bin/swag init -g cmd/crm-api/main.go --output ./docs
+	@cd backend && go tool swag init -g cmd/crm-api/main.go --output ./docs
+	@echo "✅ API docs generated"
+
+# Non-mutating drift check: generates into a temp dir and diffs against the
+# committed backend/docs, so it never touches the tree readers are using.
+# Also catches outright generation FAILURE, which is how the spec silently went
+# stale for three months — a type swag could not resolve aborted the whole run
+# and nothing was watching.
+# The temp output dir must be named `docs`: swag derives the generated package
+# clause from the directory basename, so any other name diffs on `package X`.
+api-docs-check:
+	@tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT && \
+	mkdir -p "$$tmp/out" && \
+	(cd backend && go tool swag init -g cmd/crm-api/main.go --output "$$tmp/out/docs" >/dev/null) && \
+	if ! diff -ru backend/docs "$$tmp/out/docs"; then \
+		echo "❌ Generated API docs are stale — run 'make api-docs' and commit"; \
+		exit 1; \
+	fi && \
+	echo "✅ Generated API docs are in sync"
 
 # Generate frontend TypeScript API types from the Go wire structs
 # (backend/tygo.yaml). CI + pre-push guard drift via api-types-check.
