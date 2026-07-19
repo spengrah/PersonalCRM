@@ -191,15 +191,27 @@ behaviors:
     type: api
     status: current
     surface: api
-    given: a create or update request carrying contact methods
+    given: a create request, a legacy update request carrying contact methods, or a method operations request
     when: methods are validated
     then:
-      - blank-valued entries are dropped rather than rejected
+      - blank-valued entries are dropped rather than rejected on the create and legacy update paths
+      - an add or update operation naming a blank value is rejected rather than dropped
       - email-family values must be valid email addresses
       - phone-family values are limited to 50 characters
       - two entries with the same type and normalized value are rejected as duplicates
       - more than one entry marked primary is rejected
-    provenance: [normalizeContactMethodRequests, validateContactMethods]
+    provenance: [normalizeContactMethodRequests, validateContactMethods, validateOperationShapes, buildContactMethodOperations]
+    notes: >
+      Format and duplicate rules are shared by all three paths; only blank
+      handling deliberately differs. Create and legacy update drop a blank
+      entry, because a blank row in a full-list payload carries no intent. An
+      explicit add or update naming a blank value is an unsatisfiable intent and
+      is rejected — dropping it would report success for a change that never
+      happened, which is the silent-success failure the operations endpoint
+      exists to eliminate.
+
+      The legacy update clause goes away when that path is retired; the create
+      and operations clauses stay.
 
   # --- List, sort, filter, search ---
 
@@ -750,6 +762,43 @@ behaviors:
       - a contact with a computed next-contact date renders that date, and one without renders a placeholder
     provenance: [contacts page table cells, formatCadence, contact_by]
     notes: The contact_by computation itself is backend-owned (CON-001); this row pins only the list's rendering of the derived values.
+
+  - id: CON-062
+    title: Contact methods are mutated by explicit operations
+    type: api
+    status: current
+    surface: api
+    given: a contact with existing methods
+    when: a method operations request is applied
+    then:
+      - a method that no operation names is neither removed nor altered, except that promoting a primary demotes the previous primary
+      - the whole request applies in one transaction, or none of it applies
+      - the outcome does not depend on the order operations appear in the request
+      - adding a method that already exists succeeds without duplicating it
+      - removing a method that is already absent succeeds
+      - a request whose resulting method set would contain a duplicate type and value is rejected
+      - a request designating more than one primary is rejected
+      - an operation naming a method id owned by a different contact is rejected
+      - a named primary can be cleared, leaving the contact with no primary
+      - a request whose operations conflict with each other is rejected rather than resolved by their order
+      - updating a method's value takes effect even when the change does not alter how the value is normalized
+      - updating the primary method's value leaves it still the primary
+      - the response reports one result for every operation the request submitted, in the same order
+      - each result identifies the method its operation addressed, and reports the resulting method's stored state when the operation leaves one
+    provenance: [ContactMethodService.ApplyOperations, ContactMethodHandler.ApplyOperations]
+    notes: >
+      The first then-item is the acceptance bar for the lost-update defect: a
+      client that has never seen a method cannot destroy it, because absence
+      expresses nothing in an operations payload. The primary-demotion carve-out
+      is a real side effect on an unnamed row and is stated rather than hidden —
+      at most one primary is a database constraint, so promoting one necessarily
+      demotes another.
+
+      The last two then-items are the results contract a client's
+      acknowledged-state advance depends on. They are stated as behavior because
+      a client that cannot learn which method its own addition resolved to will
+      later fail to edit or remove that method — the response shape is
+      load-bearing, not incidental.
 
   # --- Intents (judged experience goals — Track B agentic judge only) ---
 

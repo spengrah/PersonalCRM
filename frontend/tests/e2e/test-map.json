@@ -317,6 +317,14 @@
     "tags": ["@area:contacts", "@area:contact-navigation", "@area:contact-merge", "@area:overdue"]
   },
   {
+    "pattern": "^backend/internal/api/handlers/contact_method\\.go$",
+    "tags": ["@area:contacts"]
+  },
+  {
+    "pattern": "^backend/internal/service/contact_method\\.go$",
+    "tags": ["@area:contacts"]
+  },
+  {
     "pattern": "^backend/internal/api/handlers/import\\.go$",
     "tags": ["@area:imports"]
   },

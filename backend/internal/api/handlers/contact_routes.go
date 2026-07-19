@@ -7,9 +7,10 @@ import "github.com/gin-gonic/gin"
 // merge preview/apply pair all live under /contacts and are served by
 // three distinct handlers, so the deps struct carries all three.
 type ContactRouteDeps struct {
-	Contact     *ContactHandler
-	Interaction *InteractionHandler
-	Note        *NoteHandler
+	Contact       *ContactHandler
+	Interaction   *InteractionHandler
+	Note          *NoteHandler
+	ContactMethod *ContactMethodHandler
 }
 
 // RegisterContactRoutes wires the unconditional contact + interaction
@@ -25,6 +26,7 @@ type ContactRouteDeps struct {
 //   - GET    /api/v1/contacts/:id/interactions
 //   - POST   /api/v1/contacts/:id/interactions
 //   - GET    /api/v1/contacts/:id/notes
+//   - POST   /api/v1/contacts/:id/methods
 //   - PUT    /api/v1/contacts/:id/notes
 //   - GET    /api/v1/contacts/:id/merge/preview
 //   - POST   /api/v1/contacts/:id/merge
@@ -43,6 +45,10 @@ func RegisterContactRoutes(v1 *gin.RouterGroup, deps ContactRouteDeps) {
 		contacts.DELETE("/:id", deps.Contact.DeleteContact)
 		contacts.GET("/:id/interactions", deps.Interaction.ListContactInteractions)
 		contacts.POST("/:id/interactions", deps.Interaction.CreateInteraction)
+		// POST with OPERATIONS, deliberately never PUT with a desired set: a
+		// PUT taking the full list is wholesale replace wearing a sub-resource
+		// costume, where absence would again imply deletion.
+		contacts.POST("/:id/methods", deps.ContactMethod.ApplyOperations)
 		contacts.GET("/:id/notes", deps.Note.GetContactNotepad)
 		contacts.PUT("/:id/notes", deps.Note.SaveContactNotepad)
 		// Merge routes
