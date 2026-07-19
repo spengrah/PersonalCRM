@@ -3,7 +3,6 @@ package repository
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -233,7 +232,18 @@ func classifyContactMethodWriteError(err error) error {
 	if errors.As(err, &pgErr) &&
 		pgErr.Code == pgerrcode.UniqueViolation &&
 		pgErr.ConstraintName == "idx_contact_method_unique_value" {
-		return fmt.Errorf("%w: %s", ErrMethodValueConflict, pgErr.Detail)
+		// The sentinel ONLY. PostgreSQL's Detail for this violation reads
+		// "Key (contact_id, type, value_normalized)=(<uuid>, email, <value>)
+		// already exists.", so returning it puts a real contact's email address
+		// or phone number — plus the contact id and the column layout — into an
+		// error that reaches the HTTP response body. Nothing downstream needs
+		// it: the sentinel carries the meaning, the service maps it to an
+		// invalid-payload error, and the handler maps that to a 400.
+		//
+		// The underlying pgconn error is not wrapped either: it carries the same
+		// Detail string, so wrapping would reintroduce the leak through
+		// errors.Unwrap and any handler that prints the chain.
+		return ErrMethodValueConflict
 	}
 	return err
 }

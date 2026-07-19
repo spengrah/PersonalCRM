@@ -12,6 +12,7 @@ import (
 	"personal-crm/backend/internal/service"
 
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -388,6 +389,21 @@ func TestContactMethodRepo_ClassifiesValueConflict(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorIs(t, err, repository.ErrMethodValueConflict,
 		"a unique violation on idx_contact_method_unique_value must classify as ErrMethodValueConflict")
+
+	// The error must carry NO detail from PostgreSQL. Its Detail for this
+	// violation reads "Key (contact_id, type, value_normalized)=(<uuid>, email,
+	// <value>) already exists.", and this error travels to the HTTP response
+	// body — so including it would put a real contact's method value, the
+	// contact id, and the column layout in front of the client.
+	//
+	// Asserted at the repository because that is where the string is built and
+	// where this path is reachable. Above here a correct C6 mirror rejects the
+	// collision during the fold, so no HTTP-level test can drive it.
+	msg := err.Error()
+	assert.NotContains(t, msg, "handle"+ns, "the method value leaked into the error")
+	assert.NotContains(t, msg, f.contactID.String(), "the contact id leaked into the error")
+	assert.NotContains(t, msg, "value_normalized", "the column layout leaked into the error")
+	assert.NotContains(t, msg, "already exists", "PostgreSQL's detail string leaked into the error")
 }
 
 // TestContactMethodRepo_UnrelatedConstraintNotSwallowed is the pair that makes
