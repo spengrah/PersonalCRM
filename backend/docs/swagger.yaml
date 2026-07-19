@@ -1,5 +1,21 @@
 basePath: /api/v1
 definitions:
+  LinkIdentityRequest:
+    description: Request body for manually linking an identity to a contact
+    properties:
+      contact_id:
+        example: 123e4567-e89b-12d3-a456-426614174000
+        type: string
+    required:
+    - contact_id
+    type: object
+  TriggerSyncRequest:
+    description: Request body for triggering a sync operation
+    properties:
+      account_id:
+        example: user@gmail.com
+        type: string
+    type: object
   api.APIError:
     properties:
       code:
@@ -21,14 +37,225 @@ definitions:
     type: object
   api.Meta:
     properties:
+      hidden_unresolved_telegram_count:
+        type: integer
+      pagination:
+        $ref: '#/definitions/api.PaginationMeta'
+    type: object
+  api.PaginationMeta:
+    properties:
       limit:
         type: integer
       page:
         type: integer
+      pages:
+        type: integer
       total:
         type: integer
-      total_pages:
+    type: object
+  handlers.CalendarEventResponse:
+    properties:
+      attendee_count:
         type: integer
+      description:
+        type: string
+      end_time:
+        type: string
+      html_link:
+        type: string
+      id:
+        type: string
+      location:
+        type: string
+      start_time:
+        type: string
+      status:
+        type: string
+      title:
+        type: string
+    type: object
+  handlers.CandidateSuggestionResponse:
+    properties:
+      account_id:
+        type: string
+      allowed_actions:
+        items:
+          type: string
+        type: array
+      display_name:
+        type: string
+      emails:
+        items:
+          type: string
+        type: array
+      first_name:
+        type: string
+      id:
+        type: string
+      job_title:
+        type: string
+      last_name:
+        type: string
+      metadata:
+        additionalProperties: {}
+        type: object
+      organization:
+        type: string
+      phones:
+        items:
+          type: string
+        type: array
+      photo_url:
+        type: string
+      source:
+        type: string
+      suggested_match:
+        $ref: '#/definitions/handlers.SuggestedMatch'
+    type: object
+  handlers.CleanupRequest:
+    properties:
+      host_id:
+        description: |-
+          HostID, when set, also hard-deletes every meeting_note owned by that
+          mac_host (seeded session UUIDs are random, so there is no prefix to
+          match on — cleanup is by host instead).
+        type: string
+      prefix:
+        maxLength: 50
+        minLength: 1
+        type: string
+    required:
+    - prefix
+    type: object
+  handlers.CleanupResponse:
+    properties:
+      deleted_calendar_events:
+        type: integer
+      deleted_contacts:
+        type: integer
+      deleted_external_contacts:
+        type: integer
+    type: object
+  handlers.ContactMethodOperation:
+    description: A single contact-method operation
+    properties:
+      is_primary:
+        description: |-
+          IsPrimary is a pointer so the handler can tell "absent" from "present and
+          false". The field is forbidden on update, which is a presence test — a
+          plain bool would silently accept an explicit false.
+        example: true
+        type: boolean
+      method_id:
+        example: 550e8400-e29b-41d4-a716-446655440000
+        type: string
+      op:
+        enum:
+        - add
+        - update
+        - remove
+        - set_primary
+        - clear_primary
+        example: add
+        type: string
+      type:
+        enum:
+        - email
+        - phone
+        - telegram
+        - discord
+        - twitter
+        - signal
+        - gchat
+        - whatsapp
+        example: email
+        type: string
+      value:
+        example: john.doe@example.com
+        maxLength: 255
+        type: string
+    required:
+    - op
+    type: object
+  handlers.ContactMethodOperationResult:
+    description: Result of a single contact-method operation
+    properties:
+      index:
+        example: 0
+        type: integer
+      method:
+        $ref: '#/definitions/handlers.ContactMethodResponse'
+      method_id:
+        example: 550e8400-e29b-41d4-a716-446655440000
+        type: string
+      outcome:
+        example: created
+        type: string
+    type: object
+  handlers.ContactMethodOperationsRequest:
+    description: Contact-method operations request
+    properties:
+      operations:
+        items:
+          $ref: '#/definitions/handlers.ContactMethodOperation'
+        type: array
+    type: object
+  handlers.ContactMethodOperationsResponse:
+    description: Contact-method operations response
+    properties:
+      methods:
+        items:
+          $ref: '#/definitions/handlers.ContactMethodResponse'
+        type: array
+      rematch_job_id:
+        example: 550e8400-e29b-41d4-a716-446655440000
+        type: string
+      results:
+        items:
+          $ref: '#/definitions/handlers.ContactMethodOperationResult'
+        type: array
+    type: object
+  handlers.ContactMethodRequest:
+    properties:
+      is_primary:
+        example: true
+        type: boolean
+      type:
+        description: 'Note: legacy email_personal/email_work are no longer accepted;
+          clients should send "email".'
+        enum:
+        - email
+        - phone
+        - telegram
+        - discord
+        - twitter
+        - signal
+        - gchat
+        - whatsapp
+        example: email
+        type: string
+      value:
+        example: john.doe@example.com
+        maxLength: 255
+        type: string
+    required:
+    - type
+    - value
+    type: object
+  handlers.ContactMethodResponse:
+    properties:
+      id:
+        example: 550e8400-e29b-41d4-a716-446655440000
+        type: string
+      is_primary:
+        example: true
+        type: boolean
+      type:
+        example: email
+        type: string
+      value:
+        example: john.doe@example.com
+        type: string
     type: object
   handlers.ContactResponse:
     description: Contact information
@@ -45,15 +272,17 @@ definitions:
         - annual
         example: monthly
         type: string
+      contact_by:
+        example: "2024-02-15T00:00:00Z"
+        type: string
       created_at:
         example: "2024-01-01T00:00:00Z"
-        type: string
-      email:
-        example: john.doe@example.com
         type: string
       full_name:
         example: John Doe
         type: string
+      has_pending_followup:
+        type: boolean
       how_met:
         example: Met at tech conference
         type: string
@@ -63,21 +292,374 @@ definitions:
       last_contacted:
         example: "2024-01-15T10:30:00Z"
         type: string
+      last_interaction_at:
+        type: string
+      last_outreach_at:
+        type: string
+      last_response_at:
+        type: string
       location:
         example: San Francisco, CA
         type: string
-      phone:
-        example: +1-555-0123
-        type: string
+      methods:
+        items:
+          $ref: '#/definitions/handlers.ContactMethodResponse'
+        type: array
+      primary_method:
+        $ref: '#/definitions/handlers.ContactMethodResponse'
       profile_photo:
         example: https://example.com/photo.jpg
+        type: string
+      rematch_job_id:
+        description: |-
+          RematchJobID is populated by the CREATE path only. A rematch is triggered
+          by newly-present method values, and update no longer carries methods, so
+          it has no job to report. This type is shared by create, get, update, list,
+          merge, and overdue; the field is omitempty, so a path that leaves it unset
+          simply omits the key rather than publishing an always-null contract.
         type: string
       updated_at:
         example: "2024-01-15T10:30:00Z"
         type: string
     type: object
+  handlers.ContactTaskResponse:
+    properties:
+      contact_id:
+        type: string
+      content:
+        type: string
+      created_at:
+        type: string
+      due_date:
+        type: string
+      external_task_id:
+        type: string
+      id:
+        type: string
+      kind:
+        type: string
+      lifecycle:
+        type: string
+      project_id:
+        type: string
+      state:
+        type: string
+    type: object
   handlers.CreateContactRequest:
-    description: Create contact request
+    type: object
+  handlers.CreateInteractionRequest:
+    properties:
+      description:
+        type: string
+      direction:
+        type: string
+      occurred_at:
+        type: string
+    type: object
+  handlers.CreateManualTaskRequest:
+    properties:
+      kind:
+        enum:
+        - reach_out
+        - send
+        - reminder
+        type: string
+      notes:
+        maxLength: 5000
+        type: string
+      text:
+        maxLength: 1000
+        minLength: 1
+        type: string
+    required:
+    - kind
+    - text
+    type: object
+  handlers.DateOnly:
+    properties:
+      time.Time:
+        type: string
+    type: object
+  handlers.DismissMethodSuggestionsRequest:
+    properties:
+      methods:
+        items:
+          $ref: '#/definitions/handlers.MethodSuggestionSelectionInput'
+        type: array
+    type: object
+  handlers.DismissMethodSuggestionsResponse:
+    properties:
+      dismissed_count:
+        type: integer
+      external_contact_id:
+        type: string
+    type: object
+  handlers.GetGoogleAuthURLResponse:
+    properties:
+      state:
+        type: string
+      url:
+        type: string
+    type: object
+  handlers.GetTodoistAuthURLResponse:
+    properties:
+      state:
+        type: string
+      url:
+        type: string
+    type: object
+  handlers.GoogleAccountResponse:
+    properties:
+      account_id:
+        type: string
+      account_name:
+        type: string
+      created_at:
+        type: string
+      expires_at:
+        type: string
+      id:
+        type: string
+      scopes:
+        items:
+          type: string
+        type: array
+      updated_at:
+        type: string
+    type: object
+  handlers.ImportCandidateResponse:
+    properties:
+      account_id:
+        type: string
+      display_name:
+        type: string
+      emails:
+        items:
+          type: string
+        type: array
+      first_name:
+        type: string
+      id:
+        type: string
+      job_title:
+        type: string
+      last_name:
+        type: string
+      metadata:
+        additionalProperties: {}
+        type: object
+      organization:
+        type: string
+      phones:
+        items:
+          type: string
+        type: array
+      photo_url:
+        type: string
+      source:
+        type: string
+      suggested_match:
+        $ref: '#/definitions/handlers.SuggestedMatch'
+    type: object
+  handlers.ImportContactResponse:
+    properties:
+      contact:
+        $ref: '#/definitions/handlers.ContactResponse'
+      rematch_job_id:
+        type: string
+    type: object
+  handlers.ImportRequest:
+    properties:
+      cadence:
+        enum:
+        - weekly
+        - biweekly
+        - monthly
+        - quarterly
+        - biannual
+        - annual
+        type: string
+      name:
+        type: string
+      selected_methods:
+        items:
+          $ref: '#/definitions/handlers.SelectedMethodInput'
+        type: array
+    type: object
+  handlers.InteractionResponse:
+    properties:
+      contact_id:
+        type: string
+      created_at:
+        type: string
+      description:
+        type: string
+      direction:
+        type: string
+      id:
+        type: string
+      occurred_at:
+        type: string
+      source:
+        type: string
+      source_ref:
+        type: string
+    type: object
+  handlers.LinkContactResponse:
+    properties:
+      external_contact:
+        $ref: '#/definitions/repository.ExternalContact'
+      rematch_job_id:
+        type: string
+    type: object
+  handlers.LinkRequest:
+    properties:
+      cadence:
+        enum:
+        - weekly
+        - biweekly
+        - monthly
+        - quarterly
+        - biannual
+        - annual
+        type: string
+      conflict_resolutions:
+        additionalProperties:
+          type: string
+        description: value -> "use_crm" | "use_external"
+        type: object
+      crm_contact_id:
+        type: string
+      methods_curated:
+        description: |-
+          MethodsCurated is true when the candidate offered methods to select
+          (the modal rendered the method-selection UI) and the user made a
+          selection decision — even if SelectedMethods ends up empty (user
+          deselected all). It distinguishes an explicit empty selection from a
+          bare auto-match, since a nil slice and an explicit [] are
+          indistinguishable in Go after JSON unmarshal. The frontend sets it
+          ONLY when the candidate actually had methods to curate (a
+          zero-method candidate offered no curation choice → false → stays
+          matched).
+        type: boolean
+      name:
+        type: string
+      selected_methods:
+        items:
+          $ref: '#/definitions/handlers.SelectedMethodInput'
+        type: array
+    required:
+    - crm_contact_id
+    type: object
+  handlers.MergeContactsRequest:
+    description: Merge contacts request
+    properties:
+      field_selections:
+        $ref: '#/definitions/handlers.MergeFieldSelectionsRequest'
+      new_name:
+        example: John Smith
+        maxLength: 255
+        minLength: 1
+        type: string
+      source_contact_id:
+        example: 550e8400-e29b-41d4-a716-446655440001
+        type: string
+    required:
+    - source_contact_id
+    type: object
+  handlers.MergeFieldSelectionsRequest:
+    properties:
+      birthday:
+        enum:
+        - source
+        - target
+        example: target
+        type: string
+      cadence:
+        enum:
+        - source
+        - target
+        example: target
+        type: string
+      location:
+        enum:
+        - source
+        - target
+        example: source
+        type: string
+    type: object
+  handlers.MergePreviewResponse:
+    description: Merge preview response
+    properties:
+      calendar_events_to_update:
+        example: 3
+        type: integer
+      duplicate_methods:
+        example: 1
+        type: integer
+      interactions_to_transfer:
+        example: 12
+        type: integer
+      methods_to_transfer:
+        example: 3
+        type: integer
+      notes_to_transfer:
+        example: 5
+        type: integer
+      source_contact:
+        $ref: '#/definitions/handlers.ContactResponse'
+      target_contact:
+        $ref: '#/definitions/handlers.ContactResponse'
+    type: object
+  handlers.MethodSuggestionMethodDTO:
+    properties:
+      type:
+        type: string
+      value:
+        type: string
+    type: object
+  handlers.MethodSuggestionResponse:
+    properties:
+      contact_id:
+        type: string
+      contact_name:
+        type: string
+      external_contact_id:
+        type: string
+      methods:
+        items:
+          $ref: '#/definitions/handlers.MethodSuggestionMethodDTO'
+        type: array
+      source:
+        type: string
+    type: object
+  handlers.MethodSuggestionSelectionInput:
+    properties:
+      type:
+        type: string
+      value:
+        type: string
+    required:
+    - type
+    - value
+    type: object
+  handlers.NoteResponse:
+    properties:
+      body:
+        type: string
+      category:
+        type: string
+      contact_id:
+        type: string
+      created_at:
+        type: string
+      id:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  handlers.OverdueContactResponse:
+    description: Overdue contact information with action metadata
     properties:
       birthday:
         example: "1990-01-15T00:00:00Z"
@@ -91,76 +673,910 @@ definitions:
         - annual
         example: monthly
         type: string
-      email:
-        example: john.doe@example.com
-        maxLength: 255
+      contact_by:
+        example: "2024-02-15T00:00:00Z"
         type: string
+      created_at:
+        example: "2024-01-01T00:00:00Z"
+        type: string
+      days_overdue:
+        example: 5
+        type: integer
       full_name:
         example: John Doe
-        maxLength: 255
-        minLength: 1
         type: string
+      has_pending_followup:
+        type: boolean
       how_met:
         example: Met at tech conference
-        maxLength: 500
+        type: string
+      id:
+        example: 550e8400-e29b-41d4-a716-446655440000
+        type: string
+      last_contacted:
+        example: "2024-01-15T10:30:00Z"
+        type: string
+      last_interaction_at:
+        type: string
+      last_outreach_at:
+        type: string
+      last_response_at:
         type: string
       location:
         example: San Francisco, CA
-        maxLength: 255
         type: string
-      phone:
-        example: +1-555-0123
-        maxLength: 50
+      methods:
+        items:
+          $ref: '#/definitions/handlers.ContactMethodResponse'
+        type: array
+      next_due_date:
+        example: "2024-01-15T00:00:00Z"
         type: string
+      primary_method:
+        $ref: '#/definitions/handlers.ContactMethodResponse'
       profile_photo:
         example: https://example.com/photo.jpg
-        maxLength: 500
+        type: string
+      rematch_job_id:
+        description: |-
+          RematchJobID is populated by the CREATE path only. A rematch is triggered
+          by newly-present method values, and update no longer carries methods, so
+          it has no job to report. This type is shared by create, get, update, list,
+          merge, and overdue; the field is omitempty, so a path that leaves it unset
+          simply omits the key rather than publishing an always-null contract.
+        type: string
+      suggested_action:
+        example: Send a quick check-in message
+        type: string
+      updated_at:
+        example: "2024-01-15T10:30:00Z"
+        type: string
+    type: object
+  handlers.RematchJobMethod:
+    properties:
+      type:
+        type: string
+      value:
+        type: string
+    type: object
+  handlers.RematchJobResponse:
+    properties:
+      completed_at:
+        type: string
+      contact_id:
+        type: string
+      error:
+        type: string
+      id:
+        type: string
+      matched:
+        type: integer
+      methods:
+        items:
+          $ref: '#/definitions/handlers.RematchJobMethod'
+        type: array
+      started_at:
+        type: string
+      status:
+        type: string
+    type: object
+  handlers.RescanResponse:
+    properties:
+      rematch_job_id:
+        type: string
+    type: object
+  handlers.ResolveMethodSuggestionsRequest:
+    properties:
+      methods:
+        items:
+          $ref: '#/definitions/handlers.MethodSuggestionSelectionInput'
+        type: array
+    type: object
+  handlers.ResolveMethodSuggestionsResponse:
+    properties:
+      contact_id:
+        type: string
+      external_contact_id:
+        type: string
+      rematch_job_id:
+        type: string
+      resolved_count:
+        type: integer
+    type: object
+  handlers.SaveNoteRequest:
+    properties:
+      body:
+        maxLength: 50000
+        type: string
+    type: object
+  handlers.SeedCalendarEventInput:
+    properties:
+      attendee_emails:
+        items:
+          type: string
+        type: array
+      days_ago:
+        description: 'If is_past, how many days ago (default: 7)'
+        type: integer
+      days_ahead:
+        description: 'If not is_past, how many days ahead (default: 7)'
+        type: integer
+      html_link:
+        type: string
+      is_past:
+        description: If true, event is set in the past
+        type: boolean
+      location:
+        type: string
+      title:
+        maxLength: 255
+        minLength: 1
+        type: string
+      unmatched:
+        description: |-
+          Unmatched, when true, seeds the event with attendee emails but does NOT
+          add contact_id to matched_contact_ids. Used for rematch E2E tests.
+        type: boolean
+    required:
+    - title
+    type: object
+  handlers.SeedCalendarEventsRequest:
+    properties:
+      contact_id:
+        description: Primary contact to link events to
+        type: string
+      events:
+        items:
+          $ref: '#/definitions/handlers.SeedCalendarEventInput'
+        maxItems: 50
+        minItems: 1
+        type: array
+      prefix:
+        maxLength: 50
+        minLength: 1
+        type: string
+    required:
+    - contact_id
+    - events
+    - prefix
+    type: object
+  handlers.SeedCalendarEventsResponse:
+    properties:
+      created:
+        type: integer
+      ids:
+        items:
+          type: string
+        type: array
+    type: object
+  handlers.SeedContactInput:
+    properties:
+      cadence:
+        enum:
+        - weekly
+        - biweekly
+        - monthly
+        - quarterly
+        - biannual
+        - annual
+        type: string
+      full_name:
+        maxLength: 255
+        minLength: 1
+        type: string
+      last_contacted_days_ago:
+        maximum: 3650
+        minimum: 0
+        type: integer
+      location:
+        maxLength: 255
+        type: string
+      methods:
+        items:
+          $ref: '#/definitions/handlers.SeedContactMethodInput'
+        maxItems: 20
+        type: array
+      notes:
+        maxLength: 2000
         type: string
     required:
     - full_name
     type: object
-  handlers.UpdateContactRequest:
-    description: Update contact request
+  handlers.SeedContactMethodInput:
     properties:
-      birthday:
-        example: "1990-01-15T00:00:00Z"
+      is_primary:
+        type: boolean
+      type:
+        enum:
+        - email
+        - phone
+        - telegram
+        - discord
+        - twitter
+        - signal
+        - gchat
+        - whatsapp
         type: string
+      value:
+        maxLength: 255
+        type: string
+    required:
+    - type
+    - value
+    type: object
+  handlers.SeedContactsRequest:
+    properties:
+      contacts:
+        items:
+          $ref: '#/definitions/handlers.SeedContactInput'
+        maxItems: 100
+        minItems: 1
+        type: array
+      prefix:
+        maxLength: 50
+        minLength: 1
+        type: string
+    required:
+    - contacts
+    - prefix
+    type: object
+  handlers.SeedContactsResponse:
+    properties:
+      created:
+        type: integer
+      ids:
+        items:
+          type: string
+        type: array
+    type: object
+  handlers.SeedExternalContactInput:
+    properties:
+      display_name:
+        maxLength: 255
+        type: string
+      emails:
+        items:
+          type: string
+        type: array
+      first_name:
+        maxLength: 255
+        type: string
+      job_title:
+        type: string
+      last_name:
+        maxLength: 255
+        type: string
+      metadata:
+        additionalProperties: {}
+        type: object
+      organization:
+        type: string
+      phones:
+        items:
+          type: string
+        type: array
+      source:
+        enum:
+        - test
+        - telegram
+        - gcontacts
+        - gcal_attendee
+        - icloud_contacts
+        - anarlog_humans
+        - anarlog_title
+        - gmail_correspondence
+        type: string
+    type: object
+  handlers.SeedExternalContactsRequest:
+    properties:
+      contacts:
+        items:
+          $ref: '#/definitions/handlers.SeedExternalContactInput'
+        maxItems: 100
+        minItems: 1
+        type: array
+      host_id:
+        description: |-
+          HostID associates the seeded rows with a specific mac_host. Used
+          by host-scoped tests (e.g., the GET /host/:id/source-counts
+          endpoint). Optional — when unset, rows are seeded with NULL
+          host_id.
+        type: string
+      prefix:
+        maxLength: 50
+        minLength: 1
+        type: string
+    required:
+    - contacts
+    - prefix
+    type: object
+  handlers.SeedExternalContactsResponse:
+    properties:
+      created:
+        type: integer
+      ids:
+        items:
+          type: string
+        type: array
+    type: object
+  handlers.SeedMeetingNoteInput:
+    properties:
+      anarlog_session_id:
+        type: string
+      summary:
+        maxLength: 2000
+        type: string
+      title:
+        maxLength: 500
+        type: string
+    required:
+    - anarlog_session_id
+    type: object
+  handlers.SeedMeetingNotesRequest:
+    properties:
+      host_id:
+        type: string
+      notes:
+        items:
+          $ref: '#/definitions/handlers.SeedMeetingNoteInput'
+        maxItems: 50
+        minItems: 1
+        type: array
+    required:
+    - host_id
+    - notes
+    type: object
+  handlers.SeedMeetingNotesResponse:
+    properties:
+      created:
+        type: integer
+      ids:
+        items:
+          type: string
+        type: array
+    type: object
+  handlers.SeedMethodSuggestionMethodInput:
+    properties:
+      type:
+        enum:
+        - email
+        - phone
+        - telegram
+        - discord
+        - twitter
+        - signal
+        - gchat
+        - whatsapp
+        type: string
+      value:
+        maxLength: 255
+        type: string
+    required:
+    - type
+    - value
+    type: object
+  handlers.SeedMethodSuggestionsRequest:
+    properties:
+      contact_name:
+        description: |-
+          ContactName is the linked contact's name (prefix is prepended for
+          cleanup). The seeded contact carries no methods, so the pending
+          suggestions are not pre-applied.
+        maxLength: 255
+        minLength: 1
+        type: string
+      dismissed:
+        items:
+          $ref: '#/definitions/handlers.SeedMethodSuggestionMethodInput'
+        maxItems: 20
+        type: array
+      pending:
+        items:
+          $ref: '#/definitions/handlers.SeedMethodSuggestionMethodInput'
+        maxItems: 20
+        minItems: 1
+        type: array
+      prefix:
+        maxLength: 50
+        minLength: 1
+        type: string
+      source:
+        description: |-
+          Source must be an address-book source (the suggestion surface is
+          v1-scoped to these).
+        enum:
+        - gcontacts
+        - icloud_contacts
+        type: string
+    required:
+    - contact_name
+    - pending
+    - prefix
+    type: object
+  handlers.SeedMethodSuggestionsResponse:
+    properties:
+      contact_id:
+        type: string
+      external_contact_id:
+        type: string
+    type: object
+  handlers.SeedOverdueContactInput:
+    properties:
       cadence:
         enum:
         - weekly
+        - biweekly
         - monthly
         - quarterly
         - biannual
         - annual
-        example: monthly
         type: string
+      days_overdue:
+        maximum: 365
+        minimum: 1
+        type: integer
       email:
-        example: john.doe@example.com
-        maxLength: 255
         type: string
       full_name:
-        example: John Doe
         maxLength: 255
         minLength: 1
         type: string
-      how_met:
-        example: Met at tech conference
-        maxLength: 500
-        type: string
-      location:
-        example: San Francisco, CA
-        maxLength: 255
-        type: string
-      phone:
-        example: +1-555-0123
+    required:
+    - cadence
+    - days_overdue
+    - full_name
+    type: object
+  handlers.SeedOverdueContactsRequest:
+    properties:
+      contacts:
+        items:
+          $ref: '#/definitions/handlers.SeedOverdueContactInput'
+        maxItems: 100
+        minItems: 1
+        type: array
+      prefix:
         maxLength: 50
-        type: string
-      profile_photo:
-        example: https://example.com/photo.jpg
-        maxLength: 500
+        minLength: 1
         type: string
     required:
-    - full_name
+    - contacts
+    - prefix
+    type: object
+  handlers.SeedOverdueContactsResponse:
+    properties:
+      created:
+        type: integer
+      ids:
+        items:
+          type: string
+        type: array
+    type: object
+  handlers.SelectedMethodInput:
+    properties:
+      is_primary:
+        type: boolean
+      original_value:
+        type: string
+      type:
+        enum:
+        - email
+        - phone
+        - telegram
+        - signal
+        - discord
+        - twitter
+        - gchat
+        - whatsapp
+        type: string
+    required:
+    - original_value
+    - type
+    type: object
+  handlers.SuggestedMatch:
+    properties:
+      confidence:
+        type: number
+      contact_id:
+        type: string
+      contact_name:
+        type: string
+    type: object
+  handlers.SuggestionItemResponse:
+    properties:
+      candidate:
+        $ref: '#/definitions/handlers.CandidateSuggestionResponse'
+      kind:
+        description: '"contact" | "method"'
+        type: string
+      suggestion:
+        $ref: '#/definitions/handlers.MethodSuggestionResponse'
+    type: object
+  handlers.TodoistAccountResponse:
+    properties:
+      account_id:
+        type: string
+      account_name:
+        type: string
+      created_at:
+        type: string
+      expires_at:
+        type: string
+      id:
+        type: string
+      scopes:
+        items:
+          type: string
+        type: array
+      updated_at:
+        type: string
+    type: object
+  handlers.TodoistLabelResponse:
+    properties:
+      id:
+        type: string
+      name:
+        type: string
+    type: object
+  handlers.TodoistProjectResponse:
+    properties:
+      id:
+        type: string
+      name:
+        type: string
+    type: object
+  handlers.TodoistSettingsResponse:
+    properties:
+      integration_instance_id:
+        type: string
+      label_id:
+        type: string
+      label_name:
+        type: string
+      project_id:
+        type: string
+      user_timezone:
+        type: string
+    type: object
+  handlers.TodoistSettingsUpdateRequest:
+    properties:
+      label_id:
+        type: string
+      project_id:
+        type: string
+    type: object
+  handlers.TriggerErrorRequest:
+    properties:
+      error_type:
+        enum:
+        - "500"
+        - panic
+        type: string
+      message:
+        type: string
+    required:
+    - error_type
+    type: object
+  handlers.UpdateContactRequest:
+    type: object
+  identity.IdentifierType:
+    enum:
+    - email
+    - phone
+    - telegram
+    - imessage_email
+    - imessage_phone
+    - whatsapp
+    - gchat
+    - anarlog_human_id
+    type: string
+    x-enum-varnames:
+    - IdentifierTypeEmail
+    - IdentifierTypePhone
+    - IdentifierTypeTelegram
+    - IdentifierTypeIMessageEmail
+    - IdentifierTypeIMessagePhone
+    - IdentifierTypeWhatsApp
+    - IdentifierTypeGChat
+    - IdentifierTypeAnarlogHuman
+  repository.AddressEntry:
+    properties:
+      formatted:
+        type: string
+      type:
+        type: string
+    type: object
+  repository.EmailEntry:
+    properties:
+      primary:
+        type: boolean
+      type:
+        type: string
+      value:
+        type: string
+    type: object
+  repository.ExternalContact:
+    properties:
+      account_id:
+        type: string
+      addresses:
+        items:
+          $ref: '#/definitions/repository.AddressEntry'
+        type: array
+      birthday:
+        type: string
+      created_at:
+        type: string
+      crm_contact_id:
+        type: string
+      deleted_at:
+        description: |-
+          DeletedAt is set when a soft-delete tombstones the row. Production
+          read queries filter `deleted_at IS NULL` so a tombstoned row only
+          surfaces through GetBySource (intentionally tombstone-aware for the
+          mac-daemon revive path).
+        type: string
+      display_name:
+        type: string
+      duplicate_of_id:
+        type: string
+      emails:
+        items:
+          $ref: '#/definitions/repository.EmailEntry'
+        type: array
+      etag:
+        type: string
+      first_name:
+        type: string
+      host_id:
+        description: |-
+          HostID is the paired Mac host that claimed this row (mac-daemon
+          sources only). Written on INSERT and on UPDATE via
+          COALESCE(existing, EXCLUDED) — a NULL row (legacy or never-claimed)
+          is claimed by the next non-NULL emit; non-NULL ownership is
+          preserved thereafter across all subsequent upserts.
+        type: string
+      id:
+        type: string
+      job_title:
+        type: string
+      last_content_hash:
+        description: |-
+          LastContentHash is the lowercase-hex SHA-256 of the JCS-
+          canonicalized payload (minus host_id) that produced this row's
+          current content. Written on every UPSERT for mac-daemon sources;
+          preserved on soft-delete so a future delete-event can validate
+          against the prior hash. Powers GET /sync/:source/known-ids.
+        type: string
+      last_name:
+        type: string
+      match_status:
+        $ref: '#/definitions/repository.MatchStatus'
+      metadata:
+        additionalProperties: {}
+        type: object
+      organization:
+        type: string
+      phones:
+        items:
+          $ref: '#/definitions/repository.PhoneEntry'
+        type: array
+      photo_url:
+        type: string
+      source:
+        type: string
+      source_id:
+        type: string
+      synced_at:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  repository.ExternalIdentity:
+    properties:
+      contact_id:
+        type: string
+      created_at:
+        type: string
+      display_name:
+        type: string
+      id:
+        type: string
+      identifier:
+        type: string
+      identifier_type:
+        $ref: '#/definitions/identity.IdentifierType'
+      last_seen_at:
+        type: string
+      match_confidence:
+        type: number
+      match_type:
+        $ref: '#/definitions/repository.MatchType'
+      message_count:
+        type: integer
+      raw_identifier:
+        type: string
+      source:
+        type: string
+      source_id:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  repository.MatchStatus:
+    enum:
+    - matched
+    - unmatched
+    - ignored
+    - imported
+    type: string
+    x-enum-varnames:
+    - MatchStatusMatched
+    - MatchStatusUnmatched
+    - MatchStatusIgnored
+    - MatchStatusImported
+  repository.MatchType:
+    enum:
+    - exact
+    - fuzzy
+    - manual
+    - unmatched
+    type: string
+    x-enum-varnames:
+    - MatchTypeExact
+    - MatchTypeFuzzy
+    - MatchTypeManual
+    - MatchTypeUnmatched
+  repository.PhoneEntry:
+    properties:
+      primary:
+        type: boolean
+      type:
+        type: string
+      value:
+        type: string
+    type: object
+  repository.StalenessBreach:
+    properties:
+      account_id:
+        type: string
+      breach_type:
+        type: string
+      details:
+        type: string
+      detected_at:
+        type: string
+      id:
+        type: string
+      last_observed_at:
+        type: string
+      resolved_at:
+        type: string
+      source:
+        type: string
+      stale_since:
+        type: string
+      threshold_seconds:
+        type: integer
+    type: object
+  repository.SyncLog:
+    properties:
+      account_id:
+        type: string
+      completed_at:
+        type: string
+      created_at:
+        type: string
+      error_message:
+        type: string
+      id:
+        type: string
+      items_created:
+        type: integer
+      items_matched:
+        type: integer
+      items_processed:
+        type: integer
+      metadata:
+        additionalProperties: {}
+        type: object
+      source:
+        type: string
+      started_at:
+        type: string
+      status:
+        type: string
+      sync_state_id:
+        type: string
+    type: object
+  repository.SyncState:
+    properties:
+      account_id:
+        type: string
+      created_at:
+        type: string
+      enabled:
+        type: boolean
+      error_count:
+        type: integer
+      error_message:
+        type: string
+      id:
+        type: string
+      last_successful_sync_at:
+        type: string
+      last_sync_at:
+        type: string
+      metadata:
+        additionalProperties: {}
+        type: object
+      next_sync_at:
+        type: string
+      source:
+        type: string
+      status:
+        $ref: '#/definitions/repository.SyncStatus'
+      strategy:
+        $ref: '#/definitions/repository.SyncStrategy'
+      sync_cursor:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  repository.SyncStatus:
+    enum:
+    - idle
+    - error
+    - disabled
+    type: string
+    x-enum-varnames:
+    - SyncStatusIdle
+    - SyncStatusError
+    - SyncStatusDisabled
+  repository.SyncStrategy:
+    enum:
+    - contact_driven
+    - fetch_all
+    - fetch_filtered
+    - push
+    type: string
+    x-enum-varnames:
+    - SyncStrategyContactDriven
+    - SyncStrategyFetchAll
+    - SyncStrategyFetchFiltered
+    - SyncStrategyPush
+  sync.SourceConfig:
+    properties:
+      default_interval:
+        description: |-
+          swaggertype is required: swag cannot resolve time.Duration and fails the
+          whole generation, which silently left the spec stale (see the handler
+          annotation that exposes this struct). It marshals as an integer
+          nanosecond count, so that is what the spec must declare.
+        type: integer
+      display_name:
+        description: e.g., "Gmail", "iMessage", "Telegram"
+        type: string
+      name:
+        description: e.g., "gmail", "imessage", "telegram"
+        type: string
+      requires_account:
+        description: |-
+          RequiresAccount declares that this provider's Sync requires a non-nil,
+          non-empty account ID (e.g. its OAuth token is keyed by account). When
+          true, TriggerSync rejects a nil/empty account instead of bootstrapping a
+          sync_state row that would error on every dispatch. Defaults to false
+          (the correct value for push providers whose Sync is account-agnostic).
+        type: boolean
+      strategy:
+        allOf:
+        - $ref: '#/definitions/repository.SyncStrategy'
+        description: contact_driven, fetch_all, fetch_filtered
+      supports_discovery:
+        description: true if can discover new contacts
+        type: boolean
+      supports_multi_account:
+        description: true for Google/Telegram, false for iMessage
+        type: boolean
     type: object
 host: localhost:8080
 info:
@@ -176,9 +1592,374 @@ info:
   title: Personal CRM API
   version: "1.0"
 paths:
+  /auth/google:
+    get:
+      description: Get the URL to redirect user to for Google authorization
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.GetGoogleAuthURLResponse'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Get Google OAuth authorization URL
+      tags:
+      - auth
+  /auth/google/accounts:
+    get:
+      description: Get list of all connected Google accounts
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/handlers.GoogleAccountResponse'
+                  type: array
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: List connected Google accounts
+      tags:
+      - auth
+  /auth/google/accounts/{id}/revoke:
+    post:
+      description: Disconnect a Google account and revoke OAuth tokens
+      parameters:
+      - description: Account UUID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  additionalProperties:
+                    type: string
+                  type: object
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Revoke Google account
+      tags:
+      - auth
+  /auth/google/accounts/{id}/status:
+    get:
+      description: Get the status of a specific connected Google account
+      parameters:
+      - description: Account UUID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.GoogleAccountResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Get Google account status
+      tags:
+      - auth
+  /auth/google/callback:
+    get:
+      description: Handle the OAuth callback from Google (redirects to frontend)
+      parameters:
+      - description: Authorization code
+        in: query
+        name: code
+        type: string
+      - description: State for CSRF protection
+        in: query
+        name: state
+        type: string
+      - description: Error from Google
+        in: query
+        name: error
+        type: string
+      responses:
+        "302":
+          description: Redirect to frontend
+      summary: Google OAuth callback
+      tags:
+      - auth
+  /auth/todoist:
+    get:
+      description: Get the URL to redirect user to for Todoist authorization
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.GetTodoistAuthURLResponse'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Get Todoist OAuth authorization URL
+      tags:
+      - auth
+  /auth/todoist/accounts:
+    get:
+      description: Get list of all connected Todoist accounts
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/handlers.TodoistAccountResponse'
+                  type: array
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: List connected Todoist accounts
+      tags:
+      - auth
+  /auth/todoist/accounts/{id}/revoke:
+    post:
+      description: Disconnect a Todoist account and revoke OAuth tokens
+      parameters:
+      - description: Account UUID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  additionalProperties:
+                    type: string
+                  type: object
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Revoke Todoist account
+      tags:
+      - auth
+  /auth/todoist/accounts/{id}/status:
+    get:
+      description: Get the status of a specific connected Todoist account
+      parameters:
+      - description: Account UUID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.TodoistAccountResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Get Todoist account status
+      tags:
+      - auth
+  /auth/todoist/callback:
+    get:
+      description: Handle the OAuth callback from Todoist (redirects to frontend)
+      parameters:
+      - description: Authorization code
+        in: query
+        name: code
+        type: string
+      - description: State for CSRF protection
+        in: query
+        name: state
+        type: string
+      - description: Error from Todoist
+        in: query
+        name: error
+        type: string
+      responses:
+        "302":
+          description: Redirect to frontend
+      summary: Todoist OAuth callback
+      tags:
+      - auth
   /contacts:
     get:
-      description: Get a paginated list of contacts with optional search
+      description: Get a paginated list of contacts with optional search and sorting.
+        Use ids_only=true to get just IDs for navigation.
       parameters:
       - default: 1
         description: Page number
@@ -193,11 +1974,37 @@ paths:
         minimum: 1
         name: limit
         type: integer
-      - description: Search term (name or email)
+      - description: Search term (name or contact methods)
         in: query
         maxLength: 255
         name: search
         type: string
+      - default: '""'
+        description: Sort by field
+        enum:
+        - name
+        - location
+        - birthday
+        - last_contacted
+        - last_response_at
+        - contact_by
+        - cadence
+        in: query
+        name: sort
+        type: string
+      - default: '"asc"'
+        description: Sort order
+        enum:
+        - asc
+        - desc
+        in: query
+        name: order
+        type: string
+      - default: false
+        description: Return only contact IDs (for navigation)
+        in: query
+        name: ids_only
+        type: boolean
       produces:
       - application/json
       responses:
@@ -260,15 +2067,6 @@ paths:
               type: object
         "400":
           description: Invalid request
-          schema:
-            allOf:
-            - $ref: '#/definitions/api.APIResponse'
-            - properties:
-                error:
-                  $ref: '#/definitions/api.APIError'
-              type: object
-        "409":
-          description: Contact already exists
           schema:
             allOf:
             - $ref: '#/definitions/api.APIResponse'
@@ -431,8 +2229,272 @@ paths:
                 error:
                   $ref: '#/definitions/api.APIError'
               type: object
-        "409":
-          description: Email already exists
+        "500":
+          description: Internal server error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Update a contact
+      tags:
+      - contacts
+  /contacts/{id}/events:
+    get:
+      description: Get calendar events involving a specific contact
+      parameters:
+      - description: Contact ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - default: 20
+        description: Items per page
+        in: query
+        name: limit
+        type: integer
+      - default: 0
+        description: Offset
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/handlers.CalendarEventResponse'
+                  type: array
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: List calendar events for a contact
+      tags:
+      - calendar
+  /contacts/{id}/events/upcoming:
+    get:
+      description: Get upcoming calendar events involving a specific contact
+      parameters:
+      - description: Contact ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - default: 10
+        description: Max items
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/handlers.CalendarEventResponse'
+                  type: array
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: List upcoming calendar events for a contact
+      tags:
+      - calendar
+  /contacts/{id}/identities:
+    get:
+      description: Get all external identities linked to a contact
+      parameters:
+      - description: Contact ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/repository.ExternalIdentity'
+                  type: array
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: List identities for contact
+      tags:
+      - identities
+  /contacts/{id}/interactions:
+    get:
+      parameters:
+      - description: Contact ID
+        format: uuid
+        in: path
+        name: id
+        required: true
+        type: string
+      - default: 1
+        description: Page number
+        in: query
+        name: page
+        type: integer
+      - default: 20
+        description: Items per page
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/handlers.InteractionResponse'
+                  type: array
+              type: object
+      summary: List contact interactions
+      tags:
+      - interactions
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Contact ID
+        format: uuid
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Interaction details
+        in: body
+        name: request
+        schema:
+          $ref: '#/definitions/handlers.CreateInteractionRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.InteractionResponse'
+              type: object
+      summary: Create interaction
+      tags:
+      - interactions
+  /contacts/{id}/merge:
+    post:
+      consumes:
+      - application/json
+      description: Merge one contact into another. The source contact will be archived.
+      parameters:
+      - description: Target Contact ID (contact to keep)
+        format: uuid
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Merge request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.MergeContactsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Contacts merged successfully
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.ContactResponse'
+              type: object
+        "400":
+          description: Invalid request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "404":
+          description: Contact not found
           schema:
             allOf:
             - $ref: '#/definitions/api.APIResponse'
@@ -449,9 +2511,2003 @@ paths:
                 error:
                   $ref: '#/definitions/api.APIError'
               type: object
-      summary: Update a contact
+      summary: Merge contacts
       tags:
       - contacts
+  /contacts/{id}/merge/preview:
+    get:
+      description: Get a preview of what will be merged when combining two contacts
+      parameters:
+      - description: Target Contact ID (contact to keep)
+        format: uuid
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Source Contact ID (contact to merge from)
+        format: uuid
+        in: query
+        name: source_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Merge preview retrieved successfully
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.MergePreviewResponse'
+              type: object
+        "400":
+          description: Invalid contact ID
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "404":
+          description: Contact not found
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal server error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Preview contact merge
+      tags:
+      - contacts
+  /contacts/{id}/methods:
+    post:
+      consumes:
+      - application/json
+      description: 'Apply a batch of add/update/remove/set_primary/clear_primary operations
+        to a contact''s methods in one transaction. Absence expresses nothing: a method
+        no operation names is never removed or altered.'
+      parameters:
+      - description: Contact ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Operations to apply
+        in: body
+        name: operations
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.ContactMethodOperationsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.ContactMethodOperationsResponse'
+              type: object
+        "400":
+          description: Malformed, conflicting, or unsatisfiable operations
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "404":
+          description: Contact not found, or an operation names a method owned by
+            another contact
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal server error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Apply contact-method operations
+      tags:
+      - contacts
+  /contacts/{id}/notes:
+    get:
+      description: Get the notepad note for a contact
+      parameters:
+      - description: Contact ID
+        format: uuid
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Note retrieved successfully
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.NoteResponse'
+              type: object
+        "204":
+          description: No note exists for this contact
+        "400":
+          description: Invalid contact ID
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "404":
+          description: Contact not found
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal server error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Get contact notepad
+      tags:
+      - notes
+    put:
+      consumes:
+      - application/json
+      description: Create or update the notepad note for a contact. If body is empty
+        or whitespace-only, deletes the note.
+      parameters:
+      - description: Contact ID
+        format: uuid
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Note content
+        in: body
+        name: note
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.SaveNoteRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Note saved successfully
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.NoteResponse'
+              type: object
+        "204":
+          description: Note deleted (empty body)
+        "400":
+          description: Invalid request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "404":
+          description: Contact not found
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal server error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Save contact notepad
+      tags:
+      - notes
+  /contacts/{id}/tasks:
+    get:
+      description: List all tasks for a contact with optional state, kind, and lifecycle
+        filters.
+      parameters:
+      - description: Contact ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Filter by state (managed, completed, unmanaged, dismissed, pending_remote_create)
+        in: query
+        name: state
+        type: string
+      - description: Filter by kind (reach_out, send, reminder, meet, action)
+        in: query
+        name: kind
+        type: string
+      - description: Filter by lifecycle (manual, cadence_due, followup_loop)
+        in: query
+        name: lifecycle
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/handlers.ContactTaskResponse'
+                  type: array
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: List contact tasks
+      tags:
+      - contact-tasks
+    post:
+      consumes:
+      - application/json
+      description: Create a new one-off task for a contact using Todoist Quick Add.
+        Kind must be one of reach_out / send / reminder.
+      parameters:
+      - description: Contact ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Task creation request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.CreateManualTaskRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.ContactTaskResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Create manual task
+      tags:
+      - contact-tasks
+  /contacts/{id}/tasks/{taskId}:
+    delete:
+      description: Remove CRM tracking for a task (does not delete from Todoist)
+      parameters:
+      - description: Contact ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Task ID
+        in: path
+        name: taskId
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Delete task link
+      tags:
+      - contact-tasks
+  /contacts/overdue:
+    get:
+      description: Get contacts that are overdue based on their cadence settings
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Overdue contacts retrieved successfully
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/handlers.OverdueContactResponse'
+                  type: array
+              type: object
+        "500":
+          description: Internal server error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: List overdue contacts
+      tags:
+      - contacts
+  /events/upcoming:
+    get:
+      description: Get upcoming calendar events that have matched CRM contacts
+      parameters:
+      - default: 20
+        description: Items per page
+        in: query
+        name: limit
+        type: integer
+      - default: 0
+        description: Offset
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/handlers.CalendarEventResponse'
+                  type: array
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: List upcoming calendar events with CRM contacts
+      tags:
+      - calendar
+  /identities/{id}:
+    delete:
+      description: Delete an external identity
+      parameters:
+      - description: Identity ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Delete identity
+      tags:
+      - identities
+    get:
+      description: Get an external identity by ID
+      parameters:
+      - description: Identity ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/repository.ExternalIdentity'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Get identity
+      tags:
+      - identities
+  /identities/{id}/link:
+    post:
+      consumes:
+      - application/json
+      description: Manually link an external identity to a CRM contact
+      parameters:
+      - description: Identity ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Link request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/LinkIdentityRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/repository.ExternalIdentity'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Link identity to contact
+      tags:
+      - identities
+  /identities/{id}/unlink:
+    post:
+      description: Unlink an external identity from its CRM contact
+      parameters:
+      - description: Identity ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/repository.ExternalIdentity'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Unlink identity from contact
+      tags:
+      - identities
+  /identities/unmatched:
+    get:
+      description: Get external identities that couldn't be matched to CRM contacts
+      parameters:
+      - default: 1
+        description: Page number
+        in: query
+        name: page
+        type: integer
+      - default: 50
+        description: Items per page
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/repository.ExternalIdentity'
+                  type: array
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: List unmatched identities
+      tags:
+      - identities
+  /imports/{id}:
+    get:
+      description: Get details of a specific import candidate
+      parameters:
+      - description: External contact ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/repository.ExternalContact'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Get import candidate
+      tags:
+      - imports
+  /imports/{id}/ignore:
+    post:
+      description: Mark an external contact as ignored (won't appear in candidates)
+      parameters:
+      - description: External contact ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  type: string
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Ignore contact
+      tags:
+      - imports
+  /imports/{id}/import:
+    post:
+      consumes:
+      - application/json
+      description: Create a new CRM contact from an external contact
+      parameters:
+      - description: External contact ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Optional method selection
+        in: body
+        name: body
+        schema:
+          $ref: '#/definitions/handlers.ImportRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.ImportContactResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Import contact
+      tags:
+      - imports
+  /imports/{id}/link:
+    post:
+      consumes:
+      - application/json
+      description: Link an external contact to an existing CRM contact and enrich
+        it
+      parameters:
+      - description: External contact ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Link request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.LinkRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.LinkContactResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Link to existing contact
+      tags:
+      - imports
+  /imports/candidates:
+    get:
+      description: Get unmatched external contacts that can be imported as CRM contacts
+      parameters:
+      - description: Source filter (e.g., gcontacts)
+        in: query
+        name: source
+        type: string
+      - default: 1
+        description: Page number
+        in: query
+        name: page
+        type: integer
+      - default: 20
+        description: Items per page
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/handlers.ImportCandidateResponse'
+                  type: array
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: List import candidates
+      tags:
+      - imports
+  /imports/suggestions:
+    get:
+      description: Method-suggestion group + confidence-ranked import candidates as
+        a SuggestionItem union
+      parameters:
+      - description: Source filter
+        in: query
+        name: source
+        type: string
+      - default: 1
+        description: Page number
+        in: query
+        name: page
+        type: integer
+      - default: 20
+        description: Items per page
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/handlers.SuggestionItemResponse'
+                  type: array
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: List suggestions
+      tags:
+      - imports
+  /imports/suggestions/{id}/methods/dismiss:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: External contact ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Selected methods (empty = all)
+        in: body
+        name: body
+        schema:
+          $ref: '#/definitions/handlers.DismissMethodSuggestionsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.DismissMethodSuggestionsResponse'
+              type: object
+      summary: Dismiss method suggestions
+      tags:
+      - imports
+  /imports/suggestions/{id}/methods/resolve:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: External contact ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Selected methods (empty = all)
+        in: body
+        name: body
+        schema:
+          $ref: '#/definitions/handlers.ResolveMethodSuggestionsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.ResolveMethodSuggestionsResponse'
+              type: object
+      summary: Resolve method suggestions
+      tags:
+      - imports
+  /interactions/{id}:
+    delete:
+      parameters:
+      - description: Interaction ID
+        format: uuid
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: Interaction deleted
+      summary: Delete interaction
+      tags:
+      - interactions
+  /rematch/contacts/{id}/rescan:
+    post:
+      description: Re-runs rematch handlers for every method currently on the contact.
+      parameters:
+      - description: Contact ID
+        format: uuid
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.RescanResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Trigger rematch for a contact
+      tags:
+      - rematch
+  /rematch/jobs/{jobID}:
+    get:
+      description: Returns the progress of a rematch job by ID.
+      parameters:
+      - description: Rematch job ID
+        format: uuid
+        in: path
+        name: jobID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.RematchJobResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Get rematch job
+      tags:
+      - rematch
+  /sync/{id}/enable:
+    patch:
+      description: Enable or disable sync for an external data source
+      parameters:
+      - description: Sync state ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Enable or disable
+        in: query
+        name: enabled
+        required: true
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/repository.SyncState'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Enable/disable sync
+      tags:
+      - sync
+  /sync/{id}/logs:
+    get:
+      description: Get sync operation logs for an external data source
+      parameters:
+      - description: Sync state ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - default: 1
+        description: Page number
+        in: query
+        name: page
+        type: integer
+      - default: 20
+        description: Items per page
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/repository.SyncLog'
+                  type: array
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Get sync logs
+      tags:
+      - sync
+  /sync/{source}/status:
+    get:
+      description: Get the sync state for a specific external data source
+      parameters:
+      - description: Source name (e.g., gmail, imessage)
+        in: path
+        name: source
+        required: true
+        type: string
+      - description: Account ID (for multi-account sources)
+        in: query
+        name: account_id
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/repository.SyncState'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Get sync state for a source
+      tags:
+      - sync
+  /sync/{source}/trigger:
+    post:
+      consumes:
+      - application/json
+      description: Manually trigger a sync operation for an external data source
+      parameters:
+      - description: Source name (e.g., gmail, imessage)
+        in: path
+        name: source
+        required: true
+        type: string
+      - description: Sync trigger options
+        in: body
+        name: request
+        schema:
+          $ref: '#/definitions/TriggerSyncRequest'
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  additionalProperties:
+                    type: string
+                  type: object
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Trigger sync for a source
+      tags:
+      - sync
+  /sync/logs:
+    get:
+      description: Get the most recent sync operation logs across all sources
+      parameters:
+      - default: 20
+        description: Number of logs to return
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/repository.SyncLog'
+                  type: array
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Get recent sync logs
+      tags:
+      - sync
+  /sync/providers:
+    get:
+      description: Get list of registered sync providers and their configurations
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/sync.SourceConfig'
+                  type: array
+              type: object
+      summary: List available sync providers
+      tags:
+      - sync
+  /sync/staleness:
+    get:
+      description: Get the sync sources currently breaching their freshness thresholds
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/repository.StalenessBreach'
+                  type: array
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: List active sync-staleness breaches
+      tags:
+      - sync
+  /sync/status:
+    get:
+      description: Get the current sync status for all external data sources
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/repository.SyncState'
+                  type: array
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Get sync status
+      tags:
+      - sync
+  /test/cleanup:
+    post:
+      consumes:
+      - application/json
+      description: Delete test data (contacts and external contacts) by prefix
+      parameters:
+      - description: Cleanup request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.CleanupRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.CleanupResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Cleanup test data
+      tags:
+      - test
+  /test/seed/calendar-events:
+    post:
+      consumes:
+      - application/json
+      description: Create calendar events linked to a contact for e2e testing
+      parameters:
+      - description: Seed request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.SeedCalendarEventsRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.SeedCalendarEventsResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Seed calendar events for testing
+      tags:
+      - test
+  /test/seed/contacts:
+    post:
+      consumes:
+      - application/json
+      description: Create contacts with optional methods, location, notes, and cadence
+        for e2e testing
+      parameters:
+      - description: Seed request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.SeedContactsRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.SeedContactsResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Seed contacts for testing
+      tags:
+      - test
+  /test/seed/external-contacts:
+    post:
+      consumes:
+      - application/json
+      description: Create import candidates in the external_contact table for e2e
+        testing
+      parameters:
+      - description: Seed request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.SeedExternalContactsRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.SeedExternalContactsResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Seed external contacts for testing
+      tags:
+      - test
+  /test/seed/meeting-notes:
+    post:
+      consumes:
+      - application/json
+      description: Create orphan_needs_review meeting_note rows for e2e testing
+      parameters:
+      - description: Seed request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.SeedMeetingNotesRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.SeedMeetingNotesResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Seed orphan meeting notes for testing
+      tags:
+      - test
+  /test/seed/method-suggestions:
+    post:
+      consumes:
+      - application/json
+      description: Create a linked imported address-book row with pending_method_suggestions
+        for e2e
+      parameters:
+      - description: Seed request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.SeedMethodSuggestionsRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.SeedMethodSuggestionsResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Seed method suggestions for testing
+      tags:
+      - test
+  /test/seed/overdue-contacts:
+    post:
+      consumes:
+      - application/json
+      description: Create contacts with backdated last_contacted for e2e testing
+      parameters:
+      - description: Seed request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.SeedOverdueContactsRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.SeedOverdueContactsResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Seed overdue contacts for testing
+      tags:
+      - test
+  /test/trigger-error:
+    post:
+      consumes:
+      - application/json
+      description: Trigger a server error for error boundary testing
+      parameters:
+      - description: Error request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.TriggerErrorRequest'
+      produces:
+      - application/json
+      responses:
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Trigger error for testing
+      tags:
+      - test
+  /todoist/labels:
+    get:
+      description: Get all labels from the connected Todoist account
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/handlers.TodoistLabelResponse'
+                  type: array
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: List Todoist labels
+      tags:
+      - todoist
+  /todoist/projects:
+    get:
+      description: Get all projects from the connected Todoist account
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/handlers.TodoistProjectResponse'
+                  type: array
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: List Todoist projects
+      tags:
+      - todoist
+  /todoist/settings:
+    get:
+      description: Get the current Todoist integration settings (project, label)
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.TodoistSettingsResponse'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Get Todoist settings
+      tags:
+      - todoist
+    patch:
+      consumes:
+      - application/json
+      description: Update the Todoist integration settings (project, label)
+      parameters:
+      - description: Settings update request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.TodoistSettingsUpdateRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.TodoistSettingsResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Update Todoist settings
+      tags:
+      - todoist
 schemes:
 - http
 - https
