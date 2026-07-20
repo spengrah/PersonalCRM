@@ -421,7 +421,11 @@ function ContactCandidateResolver({
 
   // Detect conflicts when in link mode and CRM contact is selected
   const methodComparisons = useMemo<MethodComparison[]>(() => {
-    if (mode !== 'link' || !selectedContact) {
+    // Guard `candidate`: resolving the last queue item empties the effective
+    // list, so `candidate` is momentarily undefined while `mode`/`selectedContact`
+    // still hold. This memo runs before the `if (!candidate) return null` guard
+    // below, so without the check detectMethodConflicts dereferences undefined.
+    if (mode !== 'link' || !selectedContact || !candidate) {
       return []
     }
     // If selectedContact exists but has no methods, pass an empty array

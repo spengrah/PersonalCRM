@@ -89,8 +89,12 @@ beforeEach(() => {
   vi.mocked(useIgnoreCandidate).mockReturnValue(inertMutation)
 })
 
-function renderModal(candidates: ImportCandidate[], initialCandidateId: string) {
-  const item = { kind: 'contact' as const, candidates, initialCandidateId }
+function renderModal(
+  candidates: ImportCandidate[],
+  initialCandidateId: string,
+  opts?: { initialMode?: 'import' | 'link' }
+) {
+  const item = { kind: 'contact' as const, candidates, initialCandidateId, ...opts }
   const props = { onClose: vi.fn(), onSuccess: vi.fn(), onError: vi.fn() }
   const view = render(<SuggestionModal item={item} {...props} />)
   return {
@@ -264,6 +268,27 @@ describe('ContactCandidateResolver candidate tracking', () => {
     // left to act on, even though the page snapshot still has candidates.
     mockCandidatesQuery([])
     const { props } = renderModal([X, Y], X.id)
+
+    expect(props.onClose).toHaveBeenCalled()
+  })
+
+  it('unwinds without crashing when the last candidate is resolved in link mode', () => {
+    // Resolving the FINAL candidate empties the queue, so `candidate` becomes
+    // undefined. In link mode with a CRM contact selected, methodComparisons
+    // dereferenced the missing candidate (candidate.emails) BEFORE the modal's
+    // `if (!candidate) return null` guard could run, dropping the app into the
+    // React error boundary. The modal must unwind cleanly instead.
+    vi.mocked(useContact).mockReturnValue({
+      data: { id: 'contact-1', full_name: 'Real Person', methods: [], cadence: '' },
+    } as any)
+
+    mockCandidatesQuery([X])
+    const { props, rerenderModal } = renderModal([X], X.id, { initialMode: 'link' })
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+
+    // The last candidate is resolved: an authoritative fetch returns empty.
+    mockCandidatesQuery([])
+    rerenderModal()
 
     expect(props.onClose).toHaveBeenCalled()
   })
