@@ -5,6 +5,7 @@
 
 import { selectJudge } from './adapter'
 import { makeCodexExecJudge } from './adapter/codex-exec'
+import { makeCodexSdkJudge } from './adapter/codex-sdk'
 import type { Judge } from './adapter'
 import { applyGrounding } from './grader/grade'
 import type { Verdict } from './grader/types'
@@ -54,10 +55,14 @@ export function isGroundedIntentCitation(citation: string, boundCount: number): 
 }
 
 export function makeIntentJudge(kind: string = process.env.QA_JUDGE ?? 'codex-exec'): Judge {
-  if (kind === 'codex-exec') {
+  // Both codex adapters drive the same engine and take the same {model, effort}
+  // options, so the stronger intent model + effort apply to each.
+  if (kind === 'codex-exec' || kind === 'codex-sdk') {
     const model = process.env.QA_INTENT_MODEL ?? DEFAULT_INTENT_MODEL
     const effort = process.env.QA_INTENT_EFFORT ?? DEFAULT_INTENT_EFFORT
-    return makeCodexExecJudge({ model, effort })
+    return kind === 'codex-exec'
+      ? makeCodexExecJudge({ model, effort })
+      : makeCodexSdkJudge({ model, effort })
   }
   // Non-codex adapters own their model config (e.g. QA_JUDGE_HTTP_MODEL) and
   // an explicit opts.model would override it — so the codex-oriented

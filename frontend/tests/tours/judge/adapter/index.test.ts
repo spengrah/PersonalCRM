@@ -38,8 +38,11 @@ describe('selectJudge', () => {
     expect(sentModel).toBe('stronger-intent-model')
   })
 
-  it('codex-sdk is deferred (throws pointing at DEFERRED.md)', () => {
-    expect(() => selectJudge('codex-sdk')).toThrow(/DEFERRED\.md/)
+  it('selects the codex-sdk adapter (a Judge, constructed without loading the SDK runtime)', () => {
+    // Constructing the adapter must not spawn/import the SDK — that only happens
+    // on a live run. Selecting it returns a callable Judge.
+    expect(typeof selectJudge('codex-sdk')).toBe('function')
+    expect(typeof selectJudge('codex-sdk', 'gpt-5.5')).toBe('function')
   })
 
   it('rejects an unknown profile', () => {

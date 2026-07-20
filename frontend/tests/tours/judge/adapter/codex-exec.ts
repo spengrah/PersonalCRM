@@ -1,6 +1,6 @@
 // The `codex exec --json --output-schema <schema> --sandbox read-only`
 // implementation of the Judge interface (design D2 — the current default; the
-// codex-SDK impl is a deferred follow-up behind the identical interface).
+// codex-sdk adapter is a like-for-like transport swap behind the identical interface).
 //
 // The PARSE + tool-rejection logic is pure + unit-tested with canned event
 // streams; the spawn is a thin wrapper (a live call, exercised by a manual
@@ -52,7 +52,7 @@ function typeStringsOf(event: Record<string, unknown>): string[] {
   return out
 }
 
-function eventUsedTool(event: Record<string, unknown>): boolean {
+export function eventUsedTool(event: Record<string, unknown>): boolean {
   const types = typeStringsOf(event)
   return types.some(t => TOOL_EVENT_MARKERS.some(m => t.includes(m)))
 }
@@ -193,7 +193,7 @@ export function codexArgs(
   return args
 }
 
-function allUnsure(input: JudgeInput, critique: string): PerItemVerdict[] {
+export function allUnsure(input: JudgeInput, critique: string): PerItemVerdict[] {
   return input.items.map(i => ({
     itemIndex: i.itemIndex,
     verdict: 'unsure' as const,

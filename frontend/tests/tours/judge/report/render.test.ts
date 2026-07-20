@@ -68,7 +68,7 @@ describe('renderReport', () => {
 
   it('stubs the label-gated metrics as N/A', () => {
     expect(md).toMatch(/fail-precision.*N\/A/)
-    expect(md).toMatch(/judge\/DEFERRED\.md/)
+    expect(md).toMatch(/2026-07-19-codex-sdk-judge-transport\.md/)
   })
 
   it('renders a completed judge verdict as (judge), not pending labels', () => {

@@ -222,13 +222,13 @@ export function renderReport(input: ReportInput): string {
   lines.push('## Deferred metrics (label-gated)')
   lines.push('')
   lines.push(
-    '- fail-precision over a labeled held-out set: **N/A — pending human labels** (see judge/DEFERRED.md)'
+    '- fail-precision over a labeled held-out set: **N/A — pending human labels** (see .ai/spec/2026-07-19-codex-sdk-judge-transport.md)'
   )
   lines.push(
-    '- error-analysis-first failure taxonomy over real captures: **N/A — pending human labels** (see judge/DEFERRED.md)'
+    '- error-analysis-first failure taxonomy over real captures: **N/A — pending human labels** (see .ai/spec/2026-07-19-codex-sdk-judge-transport.md)'
   )
   lines.push(
-    '- judge-layer precision/recall vs human ground truth: **N/A — pending human labels** (see judge/DEFERRED.md)'
+    '- judge-layer precision/recall vs human ground truth: **N/A — pending human labels** (see .ai/spec/2026-07-19-codex-sdk-judge-transport.md)'
   )
   lines.push('')
 
