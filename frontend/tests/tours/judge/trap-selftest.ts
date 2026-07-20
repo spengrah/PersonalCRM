@@ -16,9 +16,17 @@ import { buildPrompt } from './adapter/prompt'
 import { applyMutation } from './doctor'
 import { applyGrounding, groupByBehavior } from './grader/grade'
 import type { CaptureSet, ItemVerdict } from './grader/types'
-import type { ScreenshotResolver } from './intent-input'
 import { buildJudgeInput, judgeItemsFor } from './judge-input'
 import type { TrapSpec } from './trap-config'
+
+// The self-test NEVER attaches screenshots. The trap mutations (`doctor.ts`)
+// only doctor STRUCTURED evidence (dialogs / API JSON / aria); a screenshot is
+// pixels and cannot be doctored. Attaching the undoctored screenshot would hand
+// the judge the real world alongside the doctored JSON — an escape hatch that
+// lets it read the truth off the pixels and PASS, silently defeating any
+// JSON/aria trap (observed: the DSH-004 stale-reason trap missed only when
+// screenshots were on). Judging the doctored structured evidence alone keeps the
+// detector test sound and deterministic.
 
 // caught: the judge grounded-failed the doctored evidence (detection worked).
 // missed: the judge did not grounded-fail it (detection gap). error: the trap
@@ -37,12 +45,7 @@ function toItemVerdict(pv: PerItemVerdict): ItemVerdict {
   return { verdict: pv.verdict, citation: pv.citation, reason: pv.critique }
 }
 
-async function runOneTrap(
-  sets: CaptureSet[],
-  trap: TrapSpec,
-  judge: Judge,
-  resolveScreenshot?: ScreenshotResolver
-): Promise<TrapResult> {
+async function runOneTrap(sets: CaptureSet[], trap: TrapSpec, judge: Judge): Promise<TrapResult> {
   const base = { id: trap.id, targetBehavior: trap.targetBehavior, targetItem: trap.targetItem }
   try {
     // Absent target behavior → error (a configured trap that cannot execute is
@@ -66,9 +69,11 @@ async function runOneTrap(
       }
     }
 
-    const baseInput = buildJudgeInput(trap.targetBehavior, set.captures, [item], resolveScreenshot)
+    // No resolveScreenshot: the self-test judges doctored structured evidence
+    // only (see the file header) — undoctorable pixels would defeat the trap.
+    const baseInput = buildJudgeInput(trap.targetBehavior, set.captures, [item])
     const mutated = applyMutation(set.captures, trap.mutation)
-    const mutatedInput = buildJudgeInput(trap.targetBehavior, mutated, [item], resolveScreenshot)
+    const mutatedInput = buildJudgeInput(trap.targetBehavior, mutated, [item])
     if (!baseInput || !mutatedInput) {
       return { ...base, status: 'error', reason: `no spec for behavior ${trap.targetBehavior}` }
     }
@@ -133,13 +138,12 @@ async function runOneTrap(
 export async function runTrapSelfTest(
   captures: Capture[],
   traps: TrapSpec[],
-  judge: Judge,
-  resolveScreenshot?: ScreenshotResolver
+  judge: Judge
 ): Promise<TrapResult[]> {
   const sets = groupByBehavior(captures)
   const results: TrapResult[] = []
   for (const trap of traps) {
-    results.push(await runOneTrap(sets, trap, judge, resolveScreenshot))
+    results.push(await runOneTrap(sets, trap, judge))
   }
   return results
 }

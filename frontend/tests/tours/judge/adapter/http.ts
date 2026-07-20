@@ -35,7 +35,7 @@ export function makeHttpJudge(opts: HttpJudgeOptions = {}): Judge {
   return async (input: JudgeInput): Promise<PerItemVerdict[]> => {
     if (!url) {
       throw new Error(
-        'QA_JUDGE_HTTP_URL is not set — the HTTP judge is an interface stub (see judge/DEFERRED.md)'
+        'QA_JUDGE_HTTP_URL is not set — the HTTP judge is an interface stub (see .ai/spec/2026-07-19-codex-sdk-judge-transport.md)'
       )
     }
     // This adapter posts text only — it cannot attach image files, so the

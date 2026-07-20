@@ -6,7 +6,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { JudgeInput } from './adapter'
 import { codexArgs } from './adapter/codex-exec'
-import { makeIntentJudge } from './intent-runner'
+import { DEFAULT_INTENT_EFFORT, DEFAULT_INTENT_MODEL, makeIntentJudge } from './intent-runner'
+
+// Spy on the codex-sdk factory so the codex-sdk dispatch is observable without a
+// live SDK call. Hoisted so the vi.mock factory can reference it; only the
+// codex-sdk module is replaced (the http/codexArgs tests below use the real code).
+const { sdkSpy } = vi.hoisted(() => ({ sdkSpy: vi.fn(() => async () => []) }))
+vi.mock('./adapter/codex-sdk', () => ({ makeCodexSdkJudge: sdkSpy }))
 
 const INPUT: JudgeInput = {
   behaviorId: 'DSH-010',
@@ -88,5 +94,25 @@ describe('makeIntentJudge adapter dispatch', () => {
     const prompt = fetchStub.posted().messages?.[0]?.content ?? ''
     expect(prompt).toMatch(/do not fail a goal for purely visual\s+qualities/)
     expect(prompt).not.toMatch(/Screenshots of the captured states are attached/)
+  })
+
+  // Unlike the http stub, codex-sdk IS a codex adapter driving the same engine, so
+  // the stronger intent model + effort DO apply to it (parity with codex-exec).
+  it('codex-sdk gets the stronger intent model + effort by default', () => {
+    delete process.env.QA_INTENT_MODEL
+    delete process.env.QA_INTENT_EFFORT
+    sdkSpy.mockClear()
+    makeIntentJudge('codex-sdk')
+    expect(sdkSpy).toHaveBeenCalledWith({
+      model: DEFAULT_INTENT_MODEL,
+      effort: DEFAULT_INTENT_EFFORT,
+    })
+  })
+
+  it('an explicit QA_INTENT_MODEL overrides the codex-sdk intent model', () => {
+    vi.stubEnv('QA_INTENT_MODEL', 'gpt-5.6-terra')
+    sdkSpy.mockClear()
+    makeIntentJudge('codex-sdk')
+    expect(sdkSpy).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-5.6-terra' }))
   })
 })

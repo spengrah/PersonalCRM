@@ -1,9 +1,10 @@
-// Judge selection by the QA_JUDGE env (default codex-exec). The codex-SDK impl
-// is DEFERRED (design D2 / judge/DEFERRED.md): there is no `@openai/codex-sdk`
-// import (an unresolvable import would fail tsc), so selecting it throws with a
-// pointer to the follow-up.
+// Judge selection by the QA_JUDGE env (default codex-exec). All three adapters
+// sit behind the identical `Judge` interface — codex-exec (default, spawns the
+// `codex` CLI), codex-sdk (the `@openai/codex-sdk` transport swap), and the http
+// stub — so the concrete brain is a config swap with ZERO grader change (D2).
 
 import { makeCodexExecJudge } from './codex-exec'
+import { makeCodexSdkJudge } from './codex-sdk'
 import { makeHttpJudge } from './http'
 import type { Judge } from './types'
 
@@ -22,12 +23,9 @@ export function selectJudge(
     case 'http':
       return makeHttpJudge(model ? { model } : {})
     case 'codex-sdk':
-      throw new Error(
-        'QA_JUDGE=codex-sdk is a deferred follow-up (add @openai/codex-sdk + the impl behind the ' +
-          'identical Judge interface) — see judge/DEFERRED.md. Use codex-exec (default) or http.'
-      )
+      return makeCodexSdkJudge(model ? { model } : {})
     default:
-      throw new Error(`unknown QA_JUDGE='${kind}' (expected codex-exec | http)`)
+      throw new Error(`unknown QA_JUDGE='${kind}' (expected codex-exec | codex-sdk | http)`)
   }
 }
 
