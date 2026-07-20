@@ -79,14 +79,12 @@ test.describe('Import link invalidates contact detail @area:imports', () => {
     ])
     const contactId = contactIds[0]
 
-    // A second candidate keeps the review queue non-empty after the link. On a
-    // clean E2E database the seeded candidate would otherwise be the last one,
-    // and the resolver modal crashes its host page while unwinding an emptied
-    // queue — a pre-existing defect unrelated to cache invalidation, which
-    // would take the nav with it and strand the rest of this test.
+    // A single candidate: linking it empties the review queue, so this run
+    // exercises the resolver modal's empty-queue unwind. That path used to
+    // dereference the now-absent candidate and crash the host page; the
+    // error-boundary assertion below now guards it.
     const { ids: externalIds } = await testApi.seedExternalContacts([
       { display_name: 'Invalidation Candidate', emails: [candidateEmail] },
-      { display_name: 'Invalidation Bystander', emails: [`${prefix}-bystander@example.test`] },
     ])
     const externalId = externalIds[0]
 
