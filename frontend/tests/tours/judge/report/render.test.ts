@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { main, renderReport, runJudgeRound, type JudgesBundle } from './render'
+import { canAttachImagesFor, main, renderReport, runJudgeRound, type JudgesBundle } from './render'
 import { gradeBehavior, groupByBehavior, type BehaviorGrade } from '../grader/grade'
 import { apiItem, cap, pair } from '../grader/fixtures'
 import { TRAPS } from '../trap-config'
@@ -8,6 +8,14 @@ import type { Judge, PerItemVerdict } from '../adapter/types'
 import type { ItemVerdicts } from '../grader/types'
 import type { TrapResult } from '../trap-selftest'
 import type { Capture } from '../../support/types'
+
+describe('canAttachImagesFor', () => {
+  it('the codex adapters attach screenshots; the http stub does not', () => {
+    expect(canAttachImagesFor('codex-exec')).toBe(true)
+    expect(canAttachImagesFor('codex-sdk')).toBe(true)
+    expect(canAttachImagesFor('http')).toBe(false)
+  })
+})
 
 // Exactly ONE residue behavior in `grades` so both coverage branches are
 // exercised: `renderCoverage` marks a behavior toured IFF it appears in grades,

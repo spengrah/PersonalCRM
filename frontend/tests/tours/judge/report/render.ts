@@ -240,6 +240,14 @@ export function renderReport(input: ReportInput): string {
 // labels, no intent pass, no traps, zero judge calls, exit 0). Every dep is
 // INJECTED, so `runJudgeRound` never consults env config or spawns an adapter —
 // tests pass mocks; production builds them from `selectJudge` under `--judge`.
+// Which judge adapters can attach screenshots as model images: the codex
+// adapters can (codex-exec via `-i`, codex-sdk via local_image entries); the
+// text-only http stub cannot. Pure; the CLI gate and its regression test both
+// key off this so enabling a new adapter can't silently drop visual grounding.
+export function canAttachImagesFor(kind: string): boolean {
+  return kind === 'codex-exec' || kind === 'codex-sdk'
+}
+
 export interface JudgesBundle {
   // Residue grading: one call per behavior with judge-tagged residue items.
   residueRunner: JudgeRunner
@@ -296,10 +304,11 @@ export async function runJudgeRound(
     grades.push(gradeBehavior(set, judge ? { judge } : {}))
   }
 
-  // The intent pass + trap self-test ride the JUDGED round only. Screenshots
-  // recorded by the tours attach as model images when the file exists (live
-  // evidence only). The trap pass calls the RAW judge with its own doctored
-  // input so the `__trap` marker traverses to the adapter's span.
+  // The intent pass + trap self-test ride the JUDGED round only. The intent pass
+  // attaches tour screenshots as model images (when the file exists); the trap
+  // pass does NOT (undoctorable pixels would defeat the doctoring — see below).
+  // The trap pass calls the RAW judge with its own doctored input so the `__trap`
+  // marker traverses to the adapter's span.
   let intents: IntentGrade[] | undefined
   let trapResults: TrapResult[] = []
   if (judges) {
@@ -316,12 +325,11 @@ export async function runJudgeRound(
       // runs and the report is still written.
       laneErrors.push(`intent pass: ${errMsg(e)}`)
     }
-    trapResults = await runTrapSelfTest(
-      captures,
-      judges.traps,
-      judges.trapJudge,
-      judges.resolveScreenshot
-    )
+    // No resolveScreenshot: the trap self-test judges doctored STRUCTURED
+    // evidence only — screenshots are undoctorable, so attaching them lets the
+    // judge read the truth off the pixels and bypass the doctoring (see
+    // trap-selftest.ts). The residue + intent passes above DO get screenshots.
+    trapResults = await runTrapSelfTest(captures, judges.traps, judges.trapJudge)
   }
 
   const markdown = renderReport({
@@ -388,9 +396,9 @@ export async function main(): Promise<void> {
   // The advisory judge layer over residue items (opt-in; the report is advisory
   // either way). Without --judge, judge-tagged items render as "pending labels";
   // with it, the judge's grounded verdict + critique lands in the per-item detail.
-  // Capability gate shared by the item-judge and intent passes: only the
-  // codex-exec adapter can attach image files.
-  const canAttachImages = (process.env.QA_JUDGE ?? 'codex-exec') === 'codex-exec'
+  // Capability gate shared by the item-judge and intent passes (see
+  // canAttachImagesFor).
+  const canAttachImages = canAttachImagesFor(process.env.QA_JUDGE ?? 'codex-exec')
   const resolveScreenshot = (c: { screenshot?: string }): string | undefined => {
     if (!c.screenshot) return undefined
     const abs = path.resolve(runDir, c.screenshot)

@@ -92,6 +92,17 @@ describe('runTrapSelfTest — the live detection self-test', () => {
     expect(selftestExitCode([r])).toBe(0)
   })
 
+  it('NEVER attaches screenshots to the trap judge input (undoctorable pixels would defeat the trap)', async () => {
+    const { judge, calls } = mockJudge([v('fail', 'API overdue error.message', 2)])
+    // Even screenshot-bearing captures must yield NO images in the trap input:
+    // the trap doctors STRUCTURED evidence only, so an undoctored screenshot
+    // would hand the judge the real reason and let it pass (defeating the trap).
+    const withShots = dsh004Captures().map(c => ({ ...c, screenshot: 'screenshots/x.png' }))
+    await runTrapSelfTest(withShots, [DSH004_TRAP], judge)
+    expect(calls.length).toBeGreaterThan(0)
+    for (const input of calls) expect(input.images).toBeUndefined()
+  })
+
   it('CAUGHT: the DSH-004 trap corrupts the FINAL error response (last-error targeting, robust to a leading 200)', async () => {
     const { judge, calls } = mockJudge([v('fail', 'API overdue error.message', 2)])
     const [r] = await runTrapSelfTest(dsh004Captures(), [DSH004_TRAP], judge)
