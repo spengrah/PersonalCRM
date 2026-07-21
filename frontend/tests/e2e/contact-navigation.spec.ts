@@ -1,5 +1,5 @@
-import { test, expect } from '@playwright/test'
-import { createTestAPI, TestAPI } from './helpers/test-api'
+import { test, expect, type Page } from '@playwright/test'
+import { createTestAPI, TestAPI, type SeedContactInput } from './helpers/test-api'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
@@ -43,6 +43,10 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     const nextButton = page.getByRole('button', { name: 'Next contact' })
     await expect(nextButton).toBeEnabled()
 
+    // "Back to list" is enabled on the read view (disabled only in edit mode).
+    const backButton = page.getByRole('button', { name: 'Back to list' })
+    await expect(backButton).toBeEnabled()
+
     // Enter edit mode
     await page.getByRole('button', { name: 'Edit' }).first().click()
     await page.waitForLoadState('domcontentloaded')
@@ -53,6 +57,8 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     // Buttons should have disabled styling (opacity or disabled attribute)
     await expect(prevButton).toHaveAttribute('disabled', '')
     await expect(nextButton).toHaveAttribute('disabled', '')
+    // Back is disabled in edit mode too (you can't leave mid-edit).
+    await expect(backButton).toHaveAttribute('disabled', '')
 
     // Try pressing arrow key - should not navigate. Register the observation
     // window BEFORE the keypress (waitForURL only sees navigations that begin
@@ -459,5 +465,230 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     expect(await navProbe).toBe(false)
     // Final confirmation: still on the original contact's URL.
     await expect(page).toHaveURL(url)
+  })
+})
+
+// A paginated-list request (the useContacts fetch), distinguished from the
+// navigation id list (useContactIDs) by the absent ids_only param.
+function isListRequest(url: string): boolean {
+  const u = new URL(url)
+  return u.pathname === '/api/v1/contacts' && u.searchParams.get('ids_only') === null
+}
+
+test.describe('Contact Back-to-list navigation @area:contact-navigation', () => {
+  let testApi: TestAPI
+
+  test.beforeEach(async ({ request }, testInfo) => {
+    testApi = createTestAPI(request, testInfo)
+  })
+
+  test.afterEach(async () => {
+    await testApi.cleanup()
+  })
+
+  // 21 prefix-isolated contacts, each with a cadence and no followup, named
+  // Back Nav 01..21 in insertion order so name-asc order == ids[0..20]. Under
+  // has_cadence + no_followup the filtered set is all 21, and ids[20] ("Back
+  // Nav 21") is the first (only) row of page 2 (CONTACTS_PAGE_SIZE=20).
+  async function seedBackNavFixture(): Promise<string[]> {
+    const contacts: SeedContactInput[] = Array.from({ length: 21 }, (_, i) => ({
+      full_name: `Back Nav ${String(i + 1).padStart(2, '0')}`,
+      cadence: 'monthly',
+    }))
+    const { ids } = await testApi.seedContacts(contacts)
+    return ids
+  }
+
+  // Walk the REAL journey — filtered/sorted list → page 2 → open the first
+  // page-2 contact (global index 20) → reload the DETAIL page — leaving the
+  // page on the reloaded detail view ready to return. The reload tears down the
+  // QueryClient so the list's staleTime:2min cache can't serve the return from
+  // cache and hang a return waitForResponse. Also asserts the list→detail URL
+  // is page-free.
+  async function journeyToBackNav21Detail(page: Page, ids: string[]): Promise<void> {
+    const prefix = testApi.prefix
+    await page.goto(`/contacts?search=${encodeURIComponent(prefix)}&followup_filter=no_followup`)
+    await page.waitForLoadState('domcontentloaded')
+
+    // Real sort interaction, then settle on the applied state before the next
+    // interaction (a click mid re-render lands on a replaced node and is lost).
+    const nameHeader = page.getByRole('columnheader').filter({ hasText: /^Name/ })
+    await nameHeader.click()
+    await expect(nameHeader).toHaveAttribute('aria-sort', 'ascending')
+    await expect(page).toHaveURL(/sort=name/)
+    await expect(page).toHaveURL(/order=asc/)
+
+    // Real filter interaction.
+    await page.getByLabel('Filter by cadence').selectOption('has_cadence')
+    await expect(page).toHaveURL(/cadence_filter=has_cadence/)
+
+    // Page to page 2 via the Pagination control; the list writes ?page=2.
+    const pager = page.locator('[data-testid="pagination"]').first()
+    await expect(pager).toBeVisible({ timeout: 10000 })
+    await pager.getByRole('button', { name: '2' }).click()
+    await expect(page).toHaveURL(/page=2/)
+
+    // Open the first page-2 contact (global index 20 → "Back Nav 21").
+    const backNav21 = `${prefix}-Back Nav 21`
+    await page.getByText(backNav21).click()
+    await page.waitForURL(u => u.pathname === `/contacts/${ids[20]}`)
+
+    // The list→detail URL carries the full context but NEVER a page.
+    const detail = new URL(page.url())
+    expect(detail.searchParams.get('sort')).toBe('name')
+    expect(detail.searchParams.get('order')).toBe('asc')
+    expect(detail.searchParams.get('search')).toBe(prefix)
+    expect(detail.searchParams.get('cadence_filter')).toBe('has_cadence')
+    expect(detail.searchParams.get('followup_filter')).toBe('no_followup')
+    expect(detail.searchParams.get('page')).toBeNull()
+
+    // Reload the detail page (clears the QueryClient), then wait for nav to be
+    // ready so Back computes the real page, not the page-1 fallback.
+    await page.reload()
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: backNav21 })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByText('21 of 21')).toBeVisible({ timeout: 10000 })
+  }
+
+  // Assert a captured list request and the browser URL both carry the complete
+  // preserved set: sort/order/search/BOTH filters + the given page.
+  async function expectFullContextRestored(
+    page: Page,
+    reqUrl: string,
+    expectedPage: string
+  ): Promise<void> {
+    const prefix = testApi.prefix
+    const params = new URL(reqUrl).searchParams
+    expect(params.get('sort')).toBe('name')
+    expect(params.get('order')).toBe('asc')
+    expect(params.get('search')).toBe(prefix)
+    expect(params.get('cadence_filter')).toBe('has_cadence')
+    expect(params.get('followup_filter')).toBe('no_followup')
+    expect(params.get('page')).toBe(expectedPage)
+
+    await page.waitForURL(
+      u =>
+        u.pathname === '/contacts' &&
+        u.searchParams.get('sort') === 'name' &&
+        u.searchParams.get('order') === 'asc' &&
+        u.searchParams.get('search') === prefix &&
+        u.searchParams.get('cadence_filter') === 'has_cadence' &&
+        u.searchParams.get('followup_filter') === 'no_followup' &&
+        u.searchParams.get('page') === expectedPage
+    )
+  }
+
+  test('the Back to list control restores full context AND page via the real journey', async ({
+    page,
+  }) => {
+    // spec: CON-065[0], CON-065[1]
+    const ids = await seedBackNavFixture()
+    await journeyToBackNav21Detail(page, ids)
+
+    const listReq = page.waitForResponse(
+      r => r.request().method() === 'GET' && isListRequest(r.url())
+    )
+    await page.getByRole('button', { name: 'Back to list' }).click()
+    await expectFullContextRestored(page, (await listReq).url(), '2')
+  })
+
+  test('Escape restores full context AND page identically to the button', async ({ page }) => {
+    // spec: CON-040[3], CON-065[1]
+    const ids = await seedBackNavFixture()
+    await journeyToBackNav21Detail(page, ids)
+
+    const listReq = page.waitForResponse(
+      r => r.request().method() === 'GET' && isListRequest(r.url())
+    )
+    await page.keyboard.press('Escape')
+    await expectFullContextRestored(page, (await listReq).url(), '2')
+  })
+
+  test('changing sort/search/filter from a later page resets to page 1', async ({ page }) => {
+    // spec: CON-066[0]
+    await seedBackNavFixture()
+    const prefix = testApi.prefix
+    const backNav21 = `${prefix}-Back Nav 21`
+    const page2Url =
+      `/contacts?search=${encodeURIComponent(prefix)}` +
+      `&sort=name&order=asc&cadence_filter=has_cadence&followup_filter=no_followup&page=2`
+
+    // (a) sort-FIELD change: name → cadence.
+    await page.goto(page2Url)
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByText(backNav21)).toBeVisible({ timeout: 15000 })
+    let reset = page.waitForResponse(r => {
+      if (!isListRequest(r.url())) return false
+      const p = new URL(r.url()).searchParams
+      return p.get('page') === '1' && p.get('sort') === 'cadence'
+    })
+    await page
+      .getByRole('columnheader')
+      .filter({ hasText: /^Cadence/ })
+      .click()
+    await reset
+    await expect(page).not.toHaveURL(/[?&]page=/)
+
+    // (b) search change: append a character.
+    await page.goto(page2Url)
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByText(backNav21)).toBeVisible({ timeout: 15000 })
+    const newTerm = `${prefix}x`
+    reset = page.waitForResponse(r => {
+      if (!isListRequest(r.url())) return false
+      const p = new URL(r.url()).searchParams
+      return p.get('page') === '1' && p.get('search') === newTerm
+    })
+    await page.getByPlaceholder('Search contacts...').fill(newTerm)
+    await reset
+    await expect(page).not.toHaveURL(/[?&]page=/)
+
+    // (c) cadence-filter change: has_cadence → no_cadence.
+    await page.goto(page2Url)
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByText(backNav21)).toBeVisible({ timeout: 15000 })
+    reset = page.waitForResponse(r => {
+      if (!isListRequest(r.url())) return false
+      const p = new URL(r.url()).searchParams
+      return p.get('page') === '1' && p.get('cadence_filter') === 'no_cadence'
+    })
+    await page.getByLabel('Filter by cadence').selectOption('no_cadence')
+    await reset
+    await expect(page).not.toHaveURL(/[?&]page=/)
+  })
+
+  test('using pagination reflects the page into the URL and survives a reload', async ({
+    page,
+  }) => {
+    // spec: CON-058[2]
+    await seedBackNavFixture()
+    const prefix = testApi.prefix
+    await page.goto(
+      `/contacts?search=${encodeURIComponent(prefix)}` +
+        `&sort=name&order=asc&cadence_filter=has_cadence&followup_filter=no_followup`
+    )
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByText(`${prefix}-Back Nav 01`)).toBeVisible({ timeout: 15000 })
+
+    // USE the Pagination control → the URL gains ?page=2. Await the click's
+    // OWN page-2 fetch to settle first, so the reload waiter below cannot
+    // resolve from this still-in-flight response instead of the reload's.
+    const pager = page.locator('[data-testid="pagination"]').first()
+    await expect(pager).toBeVisible({ timeout: 10000 })
+    const clickReq = page.waitForResponse(
+      r => isListRequest(r.url()) && new URL(r.url()).searchParams.get('page') === '2'
+    )
+    await pager.getByRole('button', { name: '2' }).click()
+    await expect(page).toHaveURL(/page=2/)
+    await clickReq
+
+    // Refresh-stability: arm a DISTINCT waiter AFTER the click fetch settled,
+    // then reload. The reloaded list fetches page 2 from the URL (cold, so this
+    // also covers deep-linking), not page 1.
+    const reloadReq = page.waitForResponse(
+      r => isListRequest(r.url()) && new URL(r.url()).searchParams.get('page') === '2'
+    )
+    await page.reload()
+    expect(new URL((await reloadReq).url()).searchParams.get('page')).toBe('2')
   })
 })

@@ -1,13 +1,16 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  CONTACTS_PAGE_SIZE,
   DEFAULT_SORT_FIELD,
   DEFAULT_SORT_ORDER,
   buildContactDetailUrl,
   buildContactListUrl,
   defaultOrderFor,
   listContextSearchParams,
+  pageFromIndex,
   parseListContext,
+  parseListPage,
   type ContactListContext,
 } from '../contact-list-params'
 
@@ -90,6 +93,64 @@ describe('contact-list-params', () => {
       expect(buildContactListUrl({ sort: 'name', order: 'asc' })).toBe(
         '/contacts?sort=name&order=asc'
       )
+    })
+  })
+
+  describe('buildContactListUrl page arg', () => {
+    const ctx: ContactListContext = { sort: 'name', order: 'asc', search: 'q' }
+
+    it('appends &page=N after the context params when page > 1', () => {
+      expect(buildContactListUrl(ctx, 2)).toBe('/contacts?sort=name&order=asc&search=q&page=2')
+    })
+
+    it('omits page for page 1 (the canonical bare URL)', () => {
+      expect(buildContactListUrl(ctx, 1)).toBe('/contacts?sort=name&order=asc&search=q')
+    })
+
+    it('omits page for undefined / 0 / negative / non-integer values', () => {
+      const bare = '/contacts?sort=name&order=asc&search=q'
+      expect(buildContactListUrl(ctx)).toBe(bare)
+      expect(buildContactListUrl(ctx, 0)).toBe(bare)
+      expect(buildContactListUrl(ctx, -3)).toBe(bare)
+      expect(buildContactListUrl(ctx, 1.5)).toBe(bare)
+      expect(buildContactListUrl(ctx, NaN)).toBe(bare)
+    })
+
+    it('does not leak page back into the parsed context', () => {
+      const parsed = parseListContext(new URL(buildContactListUrl(ctx, 3), 'http://x').searchParams)
+      expect(parsed).toEqual(ctx)
+      expect('page' in parsed).toBe(false)
+    })
+  })
+
+  describe('parseListPage', () => {
+    it('reads a valid 1-based page from the URL', () => {
+      expect(parseListPage(new URLSearchParams('page=3'))).toBe(3)
+    })
+
+    it('falls back to page 1 for missing / malformed / zero / negative / fractional', () => {
+      expect(parseListPage(new URLSearchParams(''))).toBe(1)
+      expect(parseListPage(new URLSearchParams('page=abc'))).toBe(1)
+      expect(parseListPage(new URLSearchParams('page=0'))).toBe(1)
+      expect(parseListPage(new URLSearchParams('page=-1'))).toBe(1)
+      expect(parseListPage(new URLSearchParams('page=1.5'))).toBe(1)
+    })
+  })
+
+  describe('pageFromIndex', () => {
+    it('maps a global index to its 1-based page, and < 0 to undefined', () => {
+      expect(pageFromIndex(-1)).toBeUndefined()
+      expect(pageFromIndex(0)).toBe(1)
+      expect(pageFromIndex(19)).toBe(1)
+      expect(pageFromIndex(20)).toBe(2)
+      expect(pageFromIndex(39)).toBe(2)
+      expect(pageFromIndex(40)).toBe(3)
+    })
+  })
+
+  describe('CONTACTS_PAGE_SIZE', () => {
+    it('is 20 — the list limit and the pageFromIndex divisor must not drift', () => {
+      expect(CONTACTS_PAGE_SIZE).toBe(20)
     })
   })
 

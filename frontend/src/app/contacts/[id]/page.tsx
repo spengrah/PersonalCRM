@@ -49,6 +49,7 @@ import type { ContactMethodOperation } from '@/types/generated/contact'
 import {
   buildContactDetailUrl,
   buildContactListUrl,
+  pageFromIndex,
   parseListContext,
 } from '@/lib/contact-list-params'
 import { MergeContactModal } from '@/components/contacts/merge-contact-modal'
@@ -205,10 +206,9 @@ export default function ContactDetailPage() {
   const activeTasks = [...followUpTasks, ...activeManualTasks]
   const completedTasks = completedManualTasks
 
-  // Build URL preserving list context params
+  // Build a detail URL for an adjacent contact, preserving list context params.
   const buildNavigationUrl = useCallback(
-    (newId?: string) =>
-      newId ? buildContactDetailUrl(listContext, newId) : buildContactListUrl(listContext),
+    (newId: string) => buildContactDetailUrl(listContext, newId),
     [listContext]
   )
 
@@ -221,6 +221,16 @@ export default function ContactDetailPage() {
       onNavigate: id => router.push(buildNavigationUrl(id)),
       enabled: !isEditing && !isLoading && !isLoadingIDs,
     }
+  )
+
+  // Return to the list at the user's place: the same context prev/next carries,
+  // plus the page holding the contact currently in view (computed from its
+  // global index). Shared by the "Back to list" button and the Escape key so
+  // mouse and keyboard restore identically. Falls back to page 1 when the id
+  // list has not resolved yet (currentIndex < 0 → pageFromIndex undefined).
+  const buildBackToListUrl = useCallback(
+    () => buildContactListUrl(listContext, pageFromIndex(currentIndex)),
+    [listContext, currentIndex]
   )
 
   // Prefetch adjacent contacts for smooth navigation
@@ -262,15 +272,15 @@ export default function ContactDetailPage() {
           // Discard changes and exit edit mode
           setIsEditing(false)
         } else {
-          // Return to contacts list (preserving context)
-          router.push(buildNavigationUrl())
+          // Return to contacts list (preserving context + page)
+          router.push(buildBackToListUrl())
         }
       }
     }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isEditing, router, buildNavigationUrl])
+  }, [isEditing, router, buildBackToListUrl])
 
   // Detect if notes content overflows the 4-line clamp. ResizeObserver
   // re-measures whenever the container's box changes — the initial
@@ -437,6 +447,7 @@ export default function ContactDetailPage() {
 
         {/* Navigation Bar (disabled in edit mode) */}
         <ContactNavigationBar
+          onBack={() => router.push(buildBackToListUrl())}
           onPrevious={goBack}
           onNext={goForward}
           canGoBack={canGoBack}
@@ -524,6 +535,7 @@ export default function ContactDetailPage() {
 
       {/* Navigation Bar */}
       <ContactNavigationBar
+        onBack={() => router.push(buildBackToListUrl())}
         onPrevious={goBack}
         onNext={goForward}
         canGoBack={canGoBack}
