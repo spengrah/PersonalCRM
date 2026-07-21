@@ -187,6 +187,28 @@ export class TourApi {
     return page.waitForResponse(matches, { timeout })
   }
 
+  // Arm a listener for the NEXT matching response NOW, returning the pending
+  // promise WITHOUT awaiting — call before the navigation that triggers a
+  // fire-once fetch, then await the handle where readiness is needed.
+  //
+  // Unlike waitForApi (which peeks the shared buffer, then waits for a *new*
+  // response), this is immune to the buffer being drained by an intervening
+  // capture(): a fire-once fetch that lands during a landing capture would be
+  // spliced out before a later waitForApi peeks, leaving it waiting for a second
+  // fetch the page never issues (deterministic on slower tenants — gh #707).
+  // Arming before navigation catches the response whenever it fires.
+  expectApi(
+    page: Page,
+    method: string,
+    pathPattern: PathPattern,
+    opts: { timeout?: number } = {}
+  ): Promise<Response> {
+    const timeout = opts.timeout ?? 15000
+    const matches = (r: Response): boolean =>
+      r.request().method() === method && this.matchPath(r.url(), pathPattern)
+    return page.waitForResponse(matches, { timeout })
+  }
+
   // Deterministically hold a route until release() (for capturing a
   // loading/in-flight disabled state without timing luck).
   // The handler continues each intercepted route exactly once after the gate
