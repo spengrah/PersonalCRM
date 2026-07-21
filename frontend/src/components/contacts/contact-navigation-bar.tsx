@@ -1,9 +1,11 @@
 'use client'
 
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { ArrowLeft, ChevronLeft, ChevronRight } from 'lucide-react'
 import { clsx } from 'clsx'
 
 interface ContactNavigationBarProps {
+  /** Return to the contact list at the user's place */
+  onBack: () => void
   /** Navigate to previous contact */
   onPrevious: () => void
   /** Navigate to next contact */
@@ -25,7 +27,11 @@ interface ContactNavigationBarProps {
 /**
  * Compact navigation bar for contact details page
  *
- * Shows: [←] [N of M] [→]
+ * Shows: [Back to list] ... [‹ N of M ›]
+ *
+ * The bar background is full-bleed; its contents are constrained to the same
+ * max-w-4xl column as the detail body so "Back to list" aligns with the
+ * contact name (left) and the pager aligns with the action buttons (right).
  *
  * Visual states:
  * - Enabled: text-gray-500, hover:text-gray-700
@@ -33,6 +39,7 @@ interface ContactNavigationBarProps {
  * - Disabled (edit mode): text-gray-300, cursor-not-allowed
  */
 export function ContactNavigationBar({
+  onBack,
   onPrevious,
   onNext,
   canGoBack,
@@ -44,6 +51,10 @@ export function ContactNavigationBar({
 }: ContactNavigationBarProps) {
   const isPrevDisabled = !canGoBack || isEditMode || isLoading
   const isNextDisabled = !canGoForward || isEditMode || isLoading
+  // Back stays available whenever the user isn't mid-edit — it's the return
+  // escape hatch and works regardless of the id list's load state (it falls
+  // back to page 1 gracefully if clicked before the index resolves).
+  const isBackDisabled = isEditMode
 
   // Determine button styles based on state
   const getButtonStyles = (isDisabled: boolean) => {
@@ -57,50 +68,68 @@ export function ContactNavigationBar({
   }
 
   return (
-    <div className="flex items-center justify-between py-1.5 px-4 bg-gray-100 border-b border-gray-200">
-      <button
-        onClick={onPrevious}
-        disabled={isPrevDisabled}
-        title={
-          isEditMode
-            ? 'Save or discard changes to navigate'
-            : canGoBack
-              ? 'Previous contact (←)'
-              : 'At first contact'
-        }
-        aria-label="Previous contact"
-        className={clsx('p-1 rounded transition-colors', getButtonStyles(isPrevDisabled))}
-      >
-        <ChevronLeft className="w-4 h-4" />
-      </button>
+    <div className="py-1.5 bg-gray-100 border-b border-gray-200">
+      <div className="max-w-4xl mx-auto sm:px-6 lg:px-8 flex items-center justify-between">
+        <button
+          onClick={onBack}
+          disabled={isBackDisabled}
+          title={isEditMode ? 'Save or discard changes to navigate' : 'Back to list'}
+          className={clsx(
+            'inline-flex items-center gap-1.5 leading-none p-1 rounded transition-colors text-sm',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500',
+            getButtonStyles(isBackDisabled)
+          )}
+        >
+          <ArrowLeft className="w-4 h-4 block" aria-hidden="true" />
+          <span className="block">Back to list</span>
+        </button>
 
-      <span className="text-xs text-gray-600">
-        {totalCount > 0 ? (
-          <>
-            <span className="font-medium">{currentIndex + 1}</span>
-            {' of '}
-            <span className="font-medium">{totalCount}</span>
-          </>
-        ) : (
-          <span className="text-gray-400">No contacts</span>
-        )}
-      </span>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onPrevious}
+            disabled={isPrevDisabled}
+            title={
+              isEditMode
+                ? 'Save or discard changes to navigate'
+                : canGoBack
+                  ? 'Previous contact (←)'
+                  : 'At first contact'
+            }
+            aria-label="Previous contact"
+            className={clsx('p-1 rounded transition-colors', getButtonStyles(isPrevDisabled))}
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </button>
 
-      <button
-        onClick={onNext}
-        disabled={isNextDisabled}
-        title={
-          isEditMode
-            ? 'Save or discard changes to navigate'
-            : canGoForward
-              ? 'Next contact (→)'
-              : 'At last contact'
-        }
-        aria-label="Next contact"
-        className={clsx('p-1 rounded transition-colors', getButtonStyles(isNextDisabled))}
-      >
-        <ChevronRight className="w-4 h-4" />
-      </button>
+          <span className="text-xs text-gray-600">
+            {totalCount > 0 ? (
+              <>
+                <span className="font-medium">{currentIndex + 1}</span>
+                {' of '}
+                <span className="font-medium">{totalCount}</span>
+              </>
+            ) : (
+              <span className="text-gray-400">No contacts</span>
+            )}
+          </span>
+
+          <button
+            onClick={onNext}
+            disabled={isNextDisabled}
+            title={
+              isEditMode
+                ? 'Save or discard changes to navigate'
+                : canGoForward
+                  ? 'Next contact (→)'
+                  : 'At last contact'
+            }
+            aria-label="Next contact"
+            className={clsx('p-1 rounded transition-colors', getButtonStyles(isNextDisabled))}
+          >
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

@@ -64,6 +64,10 @@ Captures land in `frontend/tests/tours/.runs/<runId>/captures/{contacts,dashboar
 
 There is no drafter CLI and no `*.labeled.json` round-trip. The judge's own live verdict on each graded item IS the draft — shipped to Langfuse via the label-trace contract (above), self-sufficient for adjudication in the annotation queue, where the maintainer confirms or rejects it. Git holds no labels. See `.ai/spec/2026-07-19-codex-sdk-judge-transport.md` for the deferred fail-precision bar over that labeled set.
 
+## Issue triage — the `ux-qa-agent` label convention
+
+Issues filed from a UXQA judge finding carry the **`ux-qa-agent`** source label plus a type label (`bug` or `enhancement`). The source label is **orthogonal** to type — it marks provenance (this came from a judge trace), not severity — mirroring the existing `improvement-audit` precedent. Filter judge-derived work with `label:ux-qa-agent`. (Convention established alongside #712.)
+
 ## The mechanical-vs-deferred split
 
 **Mergeable now (zero human labels):** the grader + machinery unit tests, the doctoring library (`doctor.ts`) + live trap self-test (`trap-selftest.ts`), the advisory report, the export scrub + label-trace contract. **Backlog:** fail-precision over the labeled set, the error-analysis taxonomy, the scrubber name-bigram pass, the promptfoo spike. (The codex-sdk transport — `QA_JUDGE=codex-sdk`, `adapter/codex-sdk.ts` — is now built: a like-for-like transport swap of codex-exec behind the identical `Judge` interface.) All follow-ups are tracked in `.ai/spec/2026-07-19-codex-sdk-judge-transport.md` — never GitHub issues.

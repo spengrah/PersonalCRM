@@ -28,8 +28,10 @@ import type { Contact } from '@/types/contact'
 import {
   buildContactDetailUrl,
   buildContactListUrl,
+  CONTACTS_PAGE_SIZE,
   defaultOrderFor,
   parseListContext,
+  parseListPage,
   type ContactListContext,
   type SortField,
 } from '@/lib/contact-list-params'
@@ -421,14 +423,16 @@ function ContactsPageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
 
-  // The URL is the source of truth for the list view: sort, order, and
-  // filters are derived from it every render, and event handlers write the
-  // next view straight back to it (replace, not push — view tweaks
-  // shouldn't grow history). Back-to-list, refresh, bookmarks, and
-  // same-route navigation all restore the view for free. Pagination is
-  // deliberately kept out of the URL.
+  // The URL is the source of truth for the list view: sort, order, filters,
+  // and the current page are derived from it every render, and event handlers
+  // write the next view straight back to it (replace, not push — view tweaks
+  // shouldn't grow history). Back-to-list, refresh, bookmarks, and same-route
+  // navigation all restore the view for free. Page rides the URL directly (not
+  // through ContactListContext, which stays page-free so detail and prev/next
+  // URLs never carry a page) so a deep-linked or refreshed list restores its
+  // page, and "Back to list" can land on the page holding the open contact.
   const urlContext = parseListContext(searchParams)
-  const [page, setPage] = useState(1)
+  const page = parseListPage(searchParams)
 
   // The search input keeps local state so keystrokes render instantly
   // (router.replace is async), overlaying the URL's search value.
@@ -444,7 +448,7 @@ function ContactsPageContent() {
   }
 
   const applyContext = (next: ContactListContext) => {
-    setPage(1)
+    // No page arg → the page param is dropped → the list resets to page 1.
     router.replace(buildContactListUrl(next), { scroll: false })
   }
 
@@ -459,7 +463,7 @@ function ContactsPageContent() {
 
   const { data, isLoading, error } = useContacts({
     page,
-    limit: 20,
+    limit: CONTACTS_PAGE_SIZE,
     sort: listContext.sort,
     order: listContext.order,
     cadence_filter: listContext.cadence_filter,
@@ -476,7 +480,6 @@ function ContactsPageContent() {
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault()
-    setPage(1)
   }
 
   const handleSort = (field: SortField) => {
@@ -565,7 +568,9 @@ function ContactsPageContent() {
               page={data.page}
               pages={data.pages}
               total={data.total}
-              onPageChange={p => setPage(p)}
+              onPageChange={p =>
+                router.replace(buildContactListUrl(listContext, p), { scroll: false })
+              }
               noun="contacts"
             />
           </div>
@@ -611,7 +616,9 @@ function ContactsPageContent() {
               page={data.page}
               pages={data.pages}
               total={data.total}
-              onPageChange={p => setPage(p)}
+              onPageChange={p =>
+                router.replace(buildContactListUrl(listContext, p), { scroll: false })
+              }
               noun="contacts"
             />
           </div>

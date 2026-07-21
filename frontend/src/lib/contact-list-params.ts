@@ -31,6 +31,10 @@ export const SORT_FIELDS: readonly SortField[] = [
 export const DEFAULT_SORT_FIELD: SortField = 'cadence'
 export const DEFAULT_SORT_ORDER: SortOrder = 'desc'
 
+// The list's page size; also the divisor pageFromIndex uses to compute which
+// list page holds the contact in view. One constant so the two can never drift.
+export const CONTACTS_PAGE_SIZE = 20
+
 // Order applied when a column is first selected: most-frequent/most-recent
 // first for cadence and last_response_at, ascending for everything else.
 export function defaultOrderFor(field: SortField): SortOrder {
@@ -96,9 +100,31 @@ export function listContextSearchParams(context: ContactListContext): URLSearchP
 }
 
 // buildContactListUrl builds the list page URL carrying the full context
-// (the detail page's "back to list" target).
-export function buildContactListUrl(context: ContactListContext): string {
-  return `/contacts?${listContextSearchParams(context).toString()}`
+// (the detail page's "back to list" target). The optional page is appended as
+// &page=N only when it is a finite integer > 1 — page 1 is the canonical bare
+// URL, so existing links and the sort/filter reset path stay byte-identical.
+export function buildContactListUrl(context: ContactListContext, page?: number): string {
+  const params = listContextSearchParams(context)
+  if (page !== undefined && Number.isInteger(page) && page > 1) {
+    params.set('page', String(page))
+  }
+  return `/contacts?${params.toString()}`
+}
+
+// parseListPage reads the 1-based list page from URL search params, falling
+// back to page 1 for a missing, malformed, zero, negative, or non-integer
+// value. Page rides the URL directly and is NOT part of ContactListContext.
+export function parseListPage(searchParams: { get(name: string): string | null }): number {
+  const raw = Number(searchParams.get('page'))
+  return Number.isInteger(raw) && raw > 0 ? raw : 1
+}
+
+// pageFromIndex maps a global 0-based list index to the 1-based list page that
+// holds it. undefined when the id list has not resolved (index < 0) → the
+// caller omits page → the list opens on page 1.
+export function pageFromIndex(currentIndex: number): number | undefined {
+  if (currentIndex < 0) return undefined
+  return Math.floor(currentIndex / CONTACTS_PAGE_SIZE) + 1
 }
 
 // buildContactDetailUrl builds a detail page URL carrying the full context

@@ -730,6 +730,7 @@ behaviors:
     then:
       - page-number buttons move between pages, with the current page marked
       - the previous/next controls disable at the list boundaries
+      - the current page is reflected in the list URL, so a deep-linked or refreshed list restores that same page
     provenance: [pagination.tsx, contacts page]
 
   - id: CON-059
@@ -856,6 +857,30 @@ behaviors:
       a client that cannot learn which method its own addition resolved to will
       later fail to edit or remove that method — the response shape is
       load-bearing, not incidental.
+
+  - id: CON-065
+    title: A visible control returns to the list at the user's place
+    type: ux
+    status: current
+    surface: ui
+    given: a contact detail page opened from a filtered, sorted, or searched list
+    when: the user returns to the list via the visible back control or the keyboard
+    then:
+      - a visible return-to-list control returns to the contact list with the sort, order, search, and filter context preserved
+      - returning lands on the list page that contains the contact that was open, rather than page 1
+    serves: [CON-051]
+    provenance: [ContactNavigationBar back control, buildBackToListUrl, 'contacts page ?page URL sync', contact-navigation.spec.ts, '.ai/spec/2026-07-21-contact-list-back-navigation-design.md']
+
+  - id: CON-066
+    title: Changing list context resets pagination to the first page
+    type: ux
+    status: current
+    surface: ui
+    given: the contact list showing a page other than the first
+    when: the sort, order, search, or a filter is changed
+    then:
+      - the list returns to the first page rather than carrying the prior page position into the new view
+    provenance: [contacts page applyContext/handleSearchInput, buildContactListUrl page arg]
 
   # --- Intents (judged experience goals — Track B agentic judge only) ---
 
