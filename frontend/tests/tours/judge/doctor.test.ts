@@ -201,6 +201,38 @@ describe('applyMutation — single-point, deterministic, non-mutating', () => {
     expect(items[0].body).toEqual({ data: { overdue: [] } }) // leading 200 untouched
   })
 
+  it('set_json_field itemMatch:all-errors rewrites every 500, leaving a leading 200 untouched', () => {
+    const reason = (m: string) => ({ error: { message: m } })
+    const base = [
+      cap({
+        behaviors: ['DSH-004'],
+        apiResponses: {
+          'GET /api/v1/contacts/overdue': [
+            apiItem({ status: 200, body: { data: { overdue: [] } } }),
+            apiItem({ status: 500, body: reason('retry-1') }),
+            apiItem({ status: 500, body: reason('retry-2') }),
+            apiItem({ status: 500, body: reason('retry-3') }),
+          ],
+        },
+      }),
+    ]
+    const out = applyMutation(base, {
+      op: 'set_json_field',
+      endpoint: 'GET /api/v1/contacts/overdue',
+      path: ['error', 'message'],
+      value: 'database connection refused',
+      itemMatch: 'all-errors',
+    })
+    const items = out[0].apiResponses['GET /api/v1/contacts/overdue']
+    const msg = (i: number) => (items[i].body as { error: { message: string } }).error.message
+    // Every 500 carries the doctored reason — no undoctored retry keeps the
+    // aria-shown reason faithful (gh #708).
+    expect(msg(1)).toBe('database connection refused')
+    expect(msg(2)).toBe('database connection refused')
+    expect(msg(3)).toBe('database connection refused')
+    expect(items[0].body).toEqual({ data: { overdue: [] } }) // leading 200 untouched
+  })
+
   it('is byte-stable across two runs', () => {
     const base = [cap({ behaviors: ['CON-041'], url: '/contacts/<id:1>' })]
     const m: Mutation = { op: 'inject_query', param: 'action', value: 'edit' }

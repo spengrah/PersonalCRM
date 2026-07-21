@@ -55,18 +55,19 @@ export const TRAPS: TrapSpec[] = [
       endpoint: 'GET /api/v1/contacts/overdue',
       path: ['error', 'message'],
       value: 'database connection refused',
-      // The FINAL 500 of the retried failure bracket — the response react-query
-      // actually surfaces. Selected DYNAMICALLY (last item with status >= 500)
-      // rather than a fixed index: a real capture may prepend a warm 200 hit
-      // before the retries, so a hardcoded index would land on a penultimate 500
-      // the UI never renders (the judge would then correctly PASS the unchanged
-      // final response → a false missed-trap). Corrupting the surfaced reason
-      // while the aria still shows the old one manufactures a stale-reason
-      // faithfulness fail on DSH-004[2].
-      itemMatch: 'last-error',
+      // EVERY 500 of the retried failure bracket — not just the final one.
+      // Doctoring only the last 500 left the earlier retries' reason still
+      // matching the aria error state, so a single judge call could rationalize
+      // the shown reason as faithful to one of the undoctored 500s and returned
+      // `unsure` — a deterministic missed trap (gh #708). Rewriting all of them
+      // makes the contradiction unambiguous: no response carries the reason the
+      // aria still shows, so DSH-004[2]'s faithfulness fails cleanly. Dynamic
+      // (status >= 500) rather than a fixed index because a real capture may
+      // prepend a warm 200 hit before the retries.
+      itemMatch: 'all-errors',
     },
     note:
-      'Rewrites the final overdue-fetch 500 reason so it no longer matches the reason shown in ' +
-      'the aria error state. The judge must fail DSH-004[2] — the shown reason is not faithful.',
+      'Rewrites every overdue-fetch 500 reason so none matches the reason shown in the aria ' +
+      'error state. The judge must fail DSH-004[2] — the shown reason is not faithful.',
   },
 ]
