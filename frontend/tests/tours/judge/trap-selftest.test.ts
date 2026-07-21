@@ -29,10 +29,10 @@ function con042Captures(): Capture[] {
 // no-op, so the trap MUST select the error capture by role.
 //
 // The error capture's overdue group leads with a warm 200 hit, THEN the retried
-// 500 bracket (retry-1..retry-4). This is the length-varying shape that broke a
-// fixed itemIndex:3 — with the leading 200 the group has FIVE entries, so index
-// 3 lands on the PENULTIMATE 500 (retry-3), not the final one react-query
-// surfaces. The trap's 'last-error' selection corrects to retry-4.
+// 500 bracket (retry-1..retry-4). This is the length-varying shape a fixed
+// itemIndex would mistarget; the trap's 'all-errors' selection rewrites EVERY
+// 500 (retry-1..retry-4) and leaves the leading 200 untouched, so no undoctored
+// retry keeps the aria-shown reason faithful (gh #708).
 function dsh004Captures(): Capture[] {
   return [
     cap({
@@ -103,7 +103,7 @@ describe('runTrapSelfTest — the live detection self-test', () => {
     for (const input of calls) expect(input.images).toBeUndefined()
   })
 
-  it('CAUGHT: the DSH-004 trap corrupts the FINAL error response (last-error targeting, robust to a leading 200)', async () => {
+  it('CAUGHT: the DSH-004 trap corrupts EVERY error response (all-errors targeting, no faithful retry survives)', async () => {
     const { judge, calls } = mockJudge([v('fail', 'API overdue error.message', 2)])
     const [r] = await runTrapSelfTest(dsh004Captures(), [DSH004_TRAP], judge)
     // `caught` (not a no-op `error`) proves role:'error' selected the ERROR
@@ -116,16 +116,19 @@ describe('runTrapSelfTest — the live detection self-test', () => {
     const prompt = buildPrompt(calls[0])
     const doctored =
       DSH004_TRAP.mutation.op === 'set_json_field' ? String(DSH004_TRAP.mutation.value) : '<n/a>'
-    // The doctored reason lands EXACTLY ONCE — on the response the UI renders.
-    expect(prompt.split(doctored).length - 1).toBe(1)
-    // Targeting proof: the FINAL 500's original reason (retry-4) is overwritten
-    // and GONE, while the PENULTIMATE 500 (retry-3, which a fixed itemIndex:3
-    // would have hit given the leading 200) SURVIVES. A mis-targeted trap fails
-    // these two assertions.
+    // The doctored reason lands on ALL FOUR 500s (retry-1..retry-4) — every
+    // response the judge could ground on now carries it, so none matches the
+    // aria-shown reason (the DSH-004 ambiguity that let a single judge call
+    // rationalize the shown reason as faithful — gh #708).
+    expect(prompt.split(doctored).length - 1).toBe(4)
+    // Targeting proof: every original 500 reason is overwritten and GONE. A
+    // mis-targeted trap (e.g. landing on the loading capture) fails these.
+    expect(prompt).not.toContain('retry-1 failed')
+    expect(prompt).not.toContain('retry-3 failed')
     expect(prompt).not.toContain('retry-4 failed')
-    expect(prompt).toContain('retry-3 failed')
     // The aria-shown surfaced reason survives (JSON-only doctoring) — the
-    // manufactured contradiction the judge must fail on.
+    // manufactured contradiction the judge must fail on, now matched by NONE of
+    // the API responses.
     expect(prompt).toContain('overdue fetch failed')
   })
 

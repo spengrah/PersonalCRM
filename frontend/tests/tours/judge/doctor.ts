@@ -131,17 +131,26 @@ export function applyMutation(baseCaptures: Capture[], mutation: Mutation): Capt
       break
     }
     case 'set_json_field': {
-      // Target selection: itemMatch (dynamic) wins over itemIndex (fixed).
-      // 'last-error' finds the final >= 500 in the group — robust to a variable
-      // retry count or a leading success a fixed index would mistarget. A
-      // no-match / out-of-range index is a silent no-op HERE; the live self-test
-      // catches it via the rendered-prompt liveness guard (a mutation invisible
-      // to the judge fails loudly), so verify targeting against real captures.
+      // Target selection: itemMatch (dynamic) wins over itemIndex (fixed). Both
+      // dynamic modes are robust to a variable retry count or a leading success a
+      // fixed index would mistarget. A no-match / out-of-range index is a silent
+      // no-op HERE; the live self-test catches it via the rendered-prompt
+      // liveness guard (a mutation invisible to the judge fails loudly), so
+      // verify targeting against real captures.
       const group = cap.apiResponses[mutation.endpoint] ?? []
-      const idx =
-        mutation.itemMatch === 'last-error' ? lastErrorIndex(group) : (mutation.itemIndex ?? 0)
-      const item = group[idx]
-      if (item) setJsonPath(item.body, mutation.path, mutation.value)
+      if (mutation.itemMatch === 'all-errors') {
+        // Rewrite EVERY >= 500 so no undoctored retry keeps the aria-shown
+        // reason faithful — one semantic single-point change (the surfaced
+        // reason), like blank_dialog blanks the warning wherever it appears.
+        for (const item of group) {
+          if (item.status >= 500) setJsonPath(item.body, mutation.path, mutation.value)
+        }
+      } else {
+        const idx =
+          mutation.itemMatch === 'last-error' ? lastErrorIndex(group) : (mutation.itemIndex ?? 0)
+        const item = group[idx]
+        if (item) setJsonPath(item.body, mutation.path, mutation.value)
+      }
       break
     }
   }

@@ -65,13 +65,19 @@ export const MutationSchema = z.discriminatedUnion('op', [
     // Which item in the endpoint group to mutate (default 0). Needed when the
     // meaningful body is not the first entry.
     itemIndex: z.number().int().nonnegative().optional(),
-    // Select the target item DYNAMICALLY instead of by fixed index (takes
-    // precedence over itemIndex). 'last-error' picks the LAST item in the
-    // endpoint group whose status >= 500 — the final failed response react-query
-    // surfaces. Use this over itemIndex for a retried failure bracket: the group
-    // length varies at capture time (a warm 200 hit may precede the retries), so
-    // a fixed index can land on a penultimate retry the UI never renders.
-    itemMatch: z.enum(['last-error']).optional(),
+    // Select the target item(s) DYNAMICALLY instead of by fixed index (takes
+    // precedence over itemIndex). Use this over itemIndex for a retried failure
+    // bracket: the group length varies at capture time (a warm 200 hit may
+    // precede the retries), so a fixed index can land on a penultimate retry the
+    // UI never renders.
+    //   'last-error' — the LAST item whose status >= 500 (the final failed
+    //     response react-query surfaces).
+    //   'all-errors' — EVERY item whose status >= 500. For a stale-reason trap:
+    //     rewriting only the final 500 leaves the earlier retries' reason still
+    //     matching the aria error state, so a single judge call can rationalize
+    //     the shown reason as faithful to one of them (the DSH-004 miss).
+    //     Corrupting all of them makes the contradiction unambiguous.
+    itemMatch: z.enum(['last-error', 'all-errors']).optional(),
   }),
 ])
 

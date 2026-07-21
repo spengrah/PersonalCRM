@@ -70,6 +70,12 @@ test('relationship-loop tour — dashboard signal → contact → act → reflec
   test.setTimeout(480_000)
 
   // --- 1. Land: the app opens on the dashboard (DSH-001) ---
+  // Arm the overdue-fetch listener BEFORE navigating: the dashboard issues its
+  // overdue GET once, during landing, and the step-1 landing capture() below
+  // drains the response buffer before step 2's readiness gate — so a post-hoc
+  // waitForApi(OVERDUE_PATH) would wait for a second GET the page never issues
+  // (deterministic on slower ARM tenants, gh #707). Awaited at step 2.
+  const overdueLoaded = tour.expectApi(page, 'GET', OVERDUE_PATH, { timeout: 30_000 })
   await page.goto('/')
   await page.waitForURL(u => new URL(u).pathname === '/dashboard')
   await page.getByRole('heading', { name: 'Action Required' }).waitFor({ state: 'visible' })
@@ -90,7 +96,7 @@ test('relationship-loop tour — dashboard signal → contact → act → reflec
   }
 
   // --- 2. Read the needs-attention signal (CAD-026) ---
-  await tour.waitForApi(page, 'GET', OVERDUE_PATH)
+  await overdueLoaded // the landing overdue GET (armed pre-nav; race-safe, gh #707)
   await page
     .getByRole('button', { name: 'Mark as Contacted' })
     .first()
