@@ -63,9 +63,10 @@ func (m *mockTodoistClient) Sync(ctx context.Context, syncToken string, resource
 	return &todoist.SyncResponse{SyncToken: "new-sync-token"}, nil
 }
 
-// setupServiceTest creates the service with necessary database setup
-// Returns the service, contact, and cleanup function
-func setupServiceTest(t *testing.T) (*service.ContactTaskService, *repository.Contact, func()) {
+// setupServiceTest creates the service with necessary database setup.
+// Returns the service, contact, the contact and contact-task repositories
+// (for direct-DB seeding and re-fetch assertions), and a cleanup function.
+func setupServiceTest(t *testing.T) (*service.ContactTaskService, *repository.Contact, *repository.ContactRepository, *repository.ContactTaskRepository, func()) {
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL not set, skipping integration test")
@@ -133,7 +134,7 @@ func setupServiceTest(t *testing.T) (*service.ContactTaskService, *repository.Co
 		database.Close()
 	}
 
-	return svc, contact, cleanup
+	return svc, contact, contactRepo, contactTaskRepo, cleanup
 }
 
 func TestContactTaskService_CreateManualTask_Integration(t *testing.T) {
@@ -142,7 +143,7 @@ func TestContactTaskService_CreateManualTask_Integration(t *testing.T) {
 	}
 
 	t.Parallel()
-	svc, contact, cleanup := setupServiceTest(t)
+	svc, contact, _, _, cleanup := setupServiceTest(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -430,7 +431,7 @@ func TestContactTaskService_CRMMarkerFormat(t *testing.T) {
 	}
 
 	t.Parallel()
-	svc, contact, cleanup := setupServiceTest(t)
+	svc, contact, _, _, cleanup := setupServiceTest(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -473,6 +474,78 @@ func TestContactTaskService_CRMMarkerFormat(t *testing.T) {
 		assert.Equal(t, "manual", marker["lifecycle"])
 		assert.Equal(t, "instance-789", marker["instance"])
 	})
+}
+
+// TestDeleteTaskLink_IssuesNoOutboundTodoistCall proves the unlink path is a
+// pure local delete: the contact_task row IS the link (there is no separate
+// "underlying task" table), so a pure local unlink leaves the remote task
+// untouched precisely because no outbound call fires. The spy recording zero
+// calls is a regression guard — it fails loudly if anyone later adds an
+// outbound call to the unlink path.
+func TestDeleteTaskLink_IssuesNoOutboundTodoistCall(t *testing.T) {
+	// spec: CAD-039[0], CAD-039[1]
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	t.Parallel()
+	svc, contact, contactRepo, taskRepo, cleanup := setupServiceTest(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// A spy in place of a real Todoist client: DeleteTaskLink must never reach
+	// it, so any recorded call is a regression.
+	spy := &mockTodoistClient{}
+	svc.SetTodoistClientFactory(func(string) todoist.Client { return spy })
+
+	// Seed two managed, linked tasks on the same contact directly via the repo
+	// (no Todoist): a target to unlink and a sibling that must survive. Distinct
+	// namespaced external ids avoid unique_external_task_id collisions across
+	// parallel runs; reach_out + manual satisfies contact_task_kind_lifecycle_check.
+	suffix := uuid.New().String()[:8]
+	target, err := taskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+		ContactID:      contact.ID,
+		Provider:       todoist.SourceName,
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleManual,
+		ExternalTaskID: "ext-" + suffix + "-t",
+		State:          string(repository.ContactTaskStateManaged),
+		Metadata:       map[string]any{"content": "Target task"},
+	})
+	require.NoError(t, err)
+	sibling, err := taskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+		ContactID:      contact.ID,
+		Provider:       todoist.SourceName,
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleManual,
+		ExternalTaskID: "ext-" + suffix + "-s",
+		State:          string(repository.ContactTaskStateManaged),
+		Metadata:       map[string]any{"content": "Sibling task"},
+	})
+	require.NoError(t, err)
+
+	// Act: unlink the target.
+	require.NoError(t, svc.DeleteTaskLink(ctx, contact.ID, target.ID))
+
+	// The target link row is gone from PostgreSQL (real persistence).
+	_, err = taskRepo.GetContactTask(ctx, target.ID)
+	require.ErrorIs(t, err, db.ErrNotFound)
+
+	// The delete hit only the selected row: the sibling task on the same
+	// contact survives.
+	_, err = taskRepo.GetContactTask(ctx, sibling.ID)
+	require.NoError(t, err)
+
+	// The contact itself is intact (fresh DB read, not the stale pre-delete
+	// struct).
+	_, err = contactRepo.GetContact(ctx, contact.ID)
+	require.NoError(t, err)
+
+	// Zero outbound: the unlink issued no call to the remote provider, so the
+	// remote task is untouched.
+	require.Empty(t, spy.quickAddCalls)
+	require.Empty(t, spy.syncCalls)
 }
 
 func strPtr(s string) *string {
