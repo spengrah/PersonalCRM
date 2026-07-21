@@ -428,9 +428,8 @@ behaviors:
     given: a task linked to a contact
     when: the user manages it from the CRM
     then:
-      - the CRM offers unlink (with confirmation), which keeps the task alive in the remote app
-      - completing and dismissing happen in the remote task app, not the CRM
-    serves: [CAD-037]
+      - the CRM offers unlink behind a confirmation prompt; confirming removes the task from the CRM
+      - the linked task row offers no in-CRM complete or dismiss control — those happen in the remote task app
     provenance: [tasks-section.tsx TaskRow, useDeleteTaskLink]
 
   - id: CAD-034
@@ -459,6 +458,19 @@ behaviors:
     provenance: [todoist provider deadline-edit handling, CadenceUpdater.ApplyContactByOverride, MetadataKeySyncedDeadline]
     notes: The last-pushed watermark mechanics live in the todoist domain; this pins the cadence-side outcome.
 
+  - id: CAD-039
+    title: Unlinking a task issues no outbound call to the remote provider
+    type: business-logic
+    status: current
+    surface: none
+    given: a task linked to a contact
+    when: the user unlinks it from the CRM
+    then:
+      - the CRM deletes only its own tracking row for the task
+      - no outbound call is made to the remote task provider — the remote task is untouched
+    provenance: [service/contact_task.go DeleteTaskLink]
+    notes: The safe-remote-state guarantee formerly expressed as the judged intent CAD-037; moved to deterministic coverage (a backend integration test asserts zero outbound calls) per the QA-program rule that deterministic guarantees belong in tests, not the judge.
+
   # --- Intents (judged experience goals — Track B agentic judge only) ---
 
   - id: CAD-036
@@ -471,9 +483,10 @@ behaviors:
   - id: CAD-037
     title: CRM task actions are safe for remote task state
     type: intent
-    status: current
+    status: retired
     statement: managing a linked task from the CRM never silently mutates or destroys the user's task in the remote app — remote state changes only where the user expects them to happen
     provenance: ['.ai/spec/2026-07-10-ssot-intent-layer-and-judged-ux-goals-design.md']
+    notes: Superseded by CAD-039 (the backend invariant that unlinking issues no outbound call) and the CAD-033 UI affordance; retired from the judged intent set because the guarantee is deterministic and belongs in tests, not the agentic judge.
 
   - id: CAD-038
     title: The relationship loop closes — notice, act, and the app remembers

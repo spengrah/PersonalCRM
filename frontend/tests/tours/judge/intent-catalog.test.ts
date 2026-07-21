@@ -2,6 +2,10 @@
 // YAML and asserts the transcription matches — intent ids/titles/statements/
 // status verbatim, and servedBy equal to the corpus-wide inversion of the
 // `serves:` edges. Catalog drift fails HERE (offline), never in a live run.
+//
+// The catalog transcribes the NON-RETIRED intent set: a retired intent is an
+// SSOT tombstone (its row stays for the ID to never be reused) but is absent
+// from the judged catalog, so it must never re-enroll.
 
 import * as fs from 'fs'
 import * as path from 'path'
@@ -38,7 +42,7 @@ function loadBehaviors(): YamlBehavior[] {
 
 describe('intent-catalog ↔ spec YAML sync', () => {
   const behaviors = loadBehaviors()
-  const yamlIntents = behaviors.filter(b => b.type === 'intent')
+  const yamlIntents = behaviors.filter(b => b.type === 'intent' && b.status !== 'retired')
 
   it('transcribes exactly the intent set of the whole corpus', () => {
     expect(Object.keys(INTENT_CATALOG).sort()).toEqual(yamlIntents.map(b => b.id).sort())
