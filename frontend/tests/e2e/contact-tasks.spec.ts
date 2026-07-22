@@ -426,6 +426,13 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
     })
   })
 
+  // These are the UI-affordance tests for unlink (CAD-033): the row offers
+  // unlink behind a confirmation, confirming removes the row, dismissing keeps
+  // it, and no in-CRM complete/dismiss control exists. Real persistence — the
+  // link row actually deleted from PostgreSQL and zero outbound calls to the
+  // remote provider (CAD-039) — is owned by the backend integration test
+  // TestDeleteTaskLink_IssuesNoOutboundTodoistCall; the /tasks routes are
+  // OAuth-gated, so a provider-less E2E env mocks the read + DELETE here.
   test.describe('Linked Task Row (mocked)', () => {
     const UNLINK_TITLE = 'Remove from CRM (keeps in Todoist)'
 
@@ -525,12 +532,11 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
 
     test('exposes no in-CRM complete or dismiss control on a linked task', async ({ page }) => {
       // spec: CAD-033[1], TDS-035[1]
-      // The CRM-side half of the clause: a linked task row offers ONLY
-      // unlink (plus "Open in Todoist") — completing and dismissing happen
-      // in the remote task app. The remote-survival half ("keeps the task
-      // alive in Todoist") is a backend guarantee covered by backend
-      // integration tests; the retired verifier abstained on it, so no
-      // proven coverage is lost.
+      // The CRM-side affordance: a linked task row offers ONLY unlink (plus
+      // "Open in Todoist") — completing and dismissing happen in the remote
+      // task app. The remote-survival guarantee (unlinking does not touch the
+      // remote task) is CAD-039, proven deterministically by the backend
+      // integration test TestDeleteTaskLink_IssuesNoOutboundTodoistCall.
       const { ids } = await testApi.seedContacts([{ full_name: 'No Complete Contact' }])
       const contactId = ids[0]
       const linked = makeTask(contactId, { id: 'task-linked-3', content: 'Mock linked task' })

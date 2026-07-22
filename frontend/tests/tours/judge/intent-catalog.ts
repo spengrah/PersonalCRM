@@ -84,14 +84,6 @@ export const INTENT_CATALOG: Record<string, IntentSpec> = {
     status: 'current',
     servedBy: ['CAD-029', 'CAD-030', 'CAD-031'],
   },
-  'CAD-037': {
-    id: 'CAD-037',
-    title: 'CRM task actions are safe for remote task state',
-    statement:
-      "managing a linked task from the CRM never silently mutates or destroys the user's task in the remote app — remote state changes only where the user expects them to happen",
-    status: 'current',
-    servedBy: ['CAD-033'],
-  },
   // The core value loop, judged as ONE journey. Evidence comes from
   // relationship-loop.tour.ts, whose captures are tagged CAD-038 directly.
   //
