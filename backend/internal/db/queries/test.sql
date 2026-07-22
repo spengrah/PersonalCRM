@@ -1308,6 +1308,15 @@ WHERE c.full_name LIKE @name_prefix || '%'
 -- coherent, not just that SOME cutover cache is populated).
 SELECT location, birthday, how_met FROM contact WHERE id = @id AND deleted_at IS NULL;
 
+-- name: TestListContactBirthdayFixturesByIds :many
+-- CON-052 birthday-fixture proof: (id, full_name, birthday) for the reserved
+-- clock-anchored birthday fixture contacts, so the coverage/determinism tests can
+-- classify each subject-scoped (id-list bounded) and fingerprint by stable identity
+-- (GetContactCacheColumns is per-id and lacks full_name). Test only.
+SELECT id, full_name, birthday
+FROM contact
+WHERE id = ANY(@ids::uuid[]) AND deleted_at IS NULL;
+
 -- name: TestGetLiveFollowUpByNamePrefix :one
 -- Coherence gate (F3, Go-side): return the namespace's live managed follow-up loop
 -- task's contact_id, external_task_id, and metadata so the test can decode the

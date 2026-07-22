@@ -97,8 +97,11 @@ type ProfileResult struct {
 	// SeededBoolFacts / SeededRelationships / SeededDateFacts count the graph rows
 	// the value-type + edge plumbing seeded: bool facts (job_seeking etc.) on
 	// catalog person nodes, person→person edge assertions among catalog person
-	// nodes, and the single toolkit-authored date fact (a birthday asserted
-	// directly through the assert path). Counts-only / no PII.
+	// nodes, and the clock-anchored birthday date-facts asserted directly through
+	// the assert path (a small, ordered, degrading set — today / +1 / distant plus
+	// best-effort extras — so imminent birthdays visibly stand apart on a real-clock
+	// staging run). SeededDateFacts is the total actually seeded =
+	// min(birthdayless catalog slots, plan size for the anchor). Counts-only / no PII.
 	SeededBoolFacts     int
 	SeededRelationships int
 	SeededDateFacts     int
@@ -586,14 +589,17 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		res.SeededBoolFacts++
 	}
 
-	// One toolkit-authored date fact (a `birthday`) asserted DIRECTLY through the
-	// assert path (distinct from the contact-create authority-flip birthday path),
-	// to exercise the new ValueDate plumbing end-to-end. Seeded on a catalog
-	// contact that carries no contact-path birthday so it occupies a fresh
-	// single-cardinality slot. Gated with the bool facts (both demonstrate the new
-	// value-type routing). Anchor-relative so no time.Now().
-	if boolFacts > 0 && len(catalogContactsWithoutBirthday) > 0 {
-		bday := time.Date(gen.Anchor().Year()-40, time.April, 12, 0, 0, 0, 0, time.UTC)
+	// The FIRST clock-anchored birthday date-fact (the "today" fixture) asserted
+	// DIRECTLY through the assert path (distinct from the contact-create
+	// authority-flip birthday path). Kept AT this position — the additional fixtures
+	// are appended at the very end of runCatalogProfile — so this single
+	// sourceIDSeq draw stays where it always was and shifts no downstream source id.
+	// Seeded on a catalog contact that carries no contact-path birthday so it
+	// occupies a fresh single-cardinality slot. Anchor-relative (UTC) so no
+	// time.Now() and the fixture tracks the reseed clock.
+	if len(catalogContactsWithoutBirthday) > 0 {
+		plan := BirthdayFixturePlan(gen.Anchor())
+		bday := BirthdayFixtureDate(gen.Anchor(), plan[0].OffsetDays)
 		if _, err := h.ReplayAssertion(ctx, catalogContactsWithoutBirthday[0], gen.DateFact("birthday", bday)); err != nil {
 			return res, fmt.Errorf("profile %s: replay date fact: %w", params.Profile, err)
 		}
@@ -993,6 +999,30 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	}
 	h.SetMutualMessageContactID(mutualContact.ID)
 	res.MutualMessageContacts++
+
+	// --- Additional clock-anchored birthday fixtures (seeded LAST) --------------
+	//
+	// The "today" fixture was seeded above at its historical position. The rest of
+	// the ordered plan (+1 imminent, distant, and the best-effort extras) is
+	// appended HERE, after every other generator/sourceID consumer: gen.DateFact
+	// draws the shared sourceIDSeq, so placing these draws last shifts no downstream
+	// source id. Together with the today fixture they give CON-052 a small set where
+	// imminent birthdays visibly stand apart from those that recede.
+	//
+	// Allocation degrades with the birthdayless catalog slots (a birthday is an
+	// assertion, so even the no-method slot qualifies): plan[i] lands on
+	// catalogContactsWithoutBirthday[i], reserving the full ordered set (today first)
+	// so the coverage/determinism tests can classify each subject-scoped.
+	plan := BirthdayFixturePlan(gen.Anchor())
+	seededCount := min(len(catalogContactsWithoutBirthday), len(plan))
+	for i := 1; i < seededCount; i++ {
+		bday := BirthdayFixtureDate(gen.Anchor(), plan[i].OffsetDays)
+		if _, err := h.ReplayAssertion(ctx, catalogContactsWithoutBirthday[i], gen.DateFact("birthday", bday)); err != nil {
+			return res, fmt.Errorf("profile %s: replay birthday fixture %d: %w", params.Profile, i, err)
+		}
+		res.SeededDateFacts++
+	}
+	h.SetBirthdayFixtureIDs(catalogContactsWithoutBirthday[:seededCount])
 
 	return res, nil
 }

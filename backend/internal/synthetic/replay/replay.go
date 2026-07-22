@@ -200,6 +200,16 @@ type Harness struct {
 	catalogContactIDs []uuid.UUID
 	manualCohortIDs   []uuid.UUID
 
+	// birthdayFixtureIDs is the ORDERED reserved set of catalog contacts the profile
+	// seeded a clock-anchored birthday date-fact on (position i ⇄
+	// BirthdayFixturePlan[i]: [0]=today, [1]=+1, [2]=distant, …). The coverage +
+	// determinism tests read it via BirthdayFixtureIDs to assert the fixtures
+	// subject-scoped and to fingerprint them by stable identity. Like the ids above
+	// it is NOT a ProfileResult field: contact ids come from uuid_generate_v4()
+	// (non-deterministic), so it stays off the counts-only, determinism-compared
+	// result struct.
+	birthdayFixtureIDs []uuid.UUID
+
 	created   *created
 	createdMu sync.Mutex
 
@@ -744,6 +754,28 @@ func (h *Harness) ManualCohortIDs() []uuid.UUID {
 	h.createdMu.Lock()
 	defer h.createdMu.Unlock()
 	return append([]uuid.UUID(nil), h.manualCohortIDs...)
+}
+
+// SetBirthdayFixtureIDs records the ORDERED reserved catalog contacts the profile
+// seeded clock-anchored birthday date-facts on (position i ⇄
+// BirthdayFixturePlan[i]). Called by the seeding block after the birthday fixtures
+// are seeded — hence exported. Guarded by the ledger mutex for parity with the
+// other tracked ids.
+func (h *Harness) SetBirthdayFixtureIDs(ids []uuid.UUID) {
+	h.createdMu.Lock()
+	defer h.createdMu.Unlock()
+	h.birthdayFixtureIDs = append([]uuid.UUID(nil), ids...)
+}
+
+// BirthdayFixtureIDs returns the ORDERED reserved catalog contacts the profile
+// seeded clock-anchored birthday date-facts on (nil if the block did not run).
+// Read by the coverage + determinism checks to scope the fixture assertions and
+// fingerprint to just those subjects (the catalog seeds its own birthdays in the
+// same namespace).
+func (h *Harness) BirthdayFixtureIDs() []uuid.UUID {
+	h.createdMu.Lock()
+	defer h.createdMu.Unlock()
+	return append([]uuid.UUID(nil), h.birthdayFixtureIDs...)
 }
 
 // gateBClear reports whether Gate B has reached zero for this replay's contacts.
