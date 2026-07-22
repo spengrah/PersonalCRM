@@ -15,6 +15,7 @@ import {
   buildTraceBody,
   configFromEnv,
   exportSpans,
+  ingestionRejection,
   parseSpanFile,
   stableSample,
   traceIdFor,
@@ -531,6 +532,8 @@ interface MockOpts {
   scoreError?: boolean
   // Reject the generation-create POST (the non-fatal observation step).
   generationError?: boolean
+  // HTTP-success MULTI-STATUS envelope that rejects the event inside `errors`.
+  generationMultiStatus?: boolean
   // Never settle the generation-create POST — proves the request is time-bounded.
   generationNeverSettles?: boolean
   // Fail the final body event for the trace ids this predicate selects (carrier-gate tests).
@@ -607,6 +610,14 @@ function mockLangfuse(opts: MockOpts = {}): {
           // how a real fetch behaves, so the test proves the bound, not the mock.
           return new Promise<Response>((_resolve, reject) => {
             init?.signal?.addEventListener('abort', () => reject(new Error('aborted')))
+          })
+        }
+        if (opts.generationMultiStatus === true) {
+          // The real endpoint's shape: HTTP 200 (or 207) whose body reports the event
+          // as rejected. `api()` resolves — only the envelope says otherwise.
+          return okText({
+            successes: [],
+            errors: [{ id: gen.id, status: 400, message: 'invalid usageDetails' }],
           })
         }
         return opts.generationError === true ? err(500, 'generation boom') : okText({})
@@ -1482,6 +1493,31 @@ describe('buildGenerationBody (PURE)', () => {
   })
 })
 
+describe('ingestionRejection (PURE)', () => {
+  it('accepts when there are no errors, and when the envelope has no errors array', () => {
+    expect(ingestionRejection({ successes: [{ id: 'e1' }], errors: [] }, 'e1')).toBeUndefined()
+    // An unrecognized envelope is treated as acceptance: inventing a failure from a
+    // shape we do not understand is as dishonest as ignoring a real one.
+    expect(ingestionRejection({}, 'e1')).toBeUndefined()
+  })
+
+  it("reports OUR event when the envelope rejects it, and ignores another event's error", () => {
+    const mine = ingestionRejection(
+      { errors: [{ id: 'e1', status: 400, message: 'invalid usageDetails' }] },
+      'e1'
+    )
+    expect(mine).toContain('invalid usageDetails')
+    expect(mine).toContain('400')
+    expect(
+      ingestionRejection({ errors: [{ id: 'other', status: 400, message: 'nope' }] }, 'e1')
+    ).toBeUndefined()
+  })
+
+  it('treats an unidentified error entry as OUR rejection (the batch carries one event)', () => {
+    expect(ingestionRejection({ errors: [{ message: 'boom' }] }, 'e1')).toContain('boom')
+  })
+})
+
 describe('usageTraceId — the carrier trace', () => {
   it('is the LOWEST itemIndex, which is neither first in the array nor necessarily 0', () => {
     const span = usageSpan({
@@ -1580,6 +1616,24 @@ describe('exportSpans — the generation observation (separate, non-fatal, after
     expect(mock.generations[0].body.traceId).toBe(`${traceIdFor(span)}-item0`)
     expect(res.observations).toBe(1)
     expect(res.failed).toBe(1)
+  })
+
+  it('does NOT count an observation the MULTI-STATUS envelope rejected (HTTP 200, errors[])', async () => {
+    // The silently-wrong-but-green failure: /api/public/ingestion can accept the
+    // REQUEST while rejecting the EVENT. Counting the POST rather than the event
+    // would report a shipped observation that was never stored.
+    const mock = mockLangfuse({ generationMultiStatus: true })
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const logs: string[] = []
+    const res = await exportSpans(cfg, [itemSpan('fail', usageParams)], m => logs.push(m))
+    expect(mock.generations).toHaveLength(1) // it WAS posted
+    expect(res.observations).toBe(0) // but never accepted
+    expect(res.traces).toBe(1)
+    expect(res.failed).toBe(0)
+    expect(res.enqueue.enqueued).toBe(1)
+    expect(
+      logs.some(l => l.includes('generation-create rejected') && l.includes('invalid usageDetails'))
+    ).toBe(true)
   })
 
   it('a REJECTED observation is non-fatal: traces/failed untouched, enqueue still runs', async () => {

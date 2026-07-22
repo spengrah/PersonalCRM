@@ -632,6 +632,32 @@ type Verdict = 'pass' | 'fail' | 'unsure'
 
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
+// PURE: the rejection reason for `eventId` in an ingestion response, or `undefined`
+// when the event was accepted. `/api/public/ingestion` is MULTI-STATUS — a 2xx body
+// carries `successes` and `errors` arrays, so an HTTP success does NOT mean the
+// event was stored. An unparseable/absent `errors` array is treated as acceptance:
+// this is a best-effort counter, and inventing a failure from an unrecognized
+// envelope would be as dishonest as ignoring a real one.
+export function ingestionRejection(
+  res: Record<string, unknown>,
+  eventId: string
+): string | undefined {
+  const errors = res.errors
+  if (!Array.isArray(errors) || errors.length === 0) return undefined
+  for (const e of errors) {
+    if (e === null || typeof e !== 'object') continue
+    const row = e as Record<string, unknown>
+    // Match our event when the envelope identifies one; an errors entry with no
+    // recognizable id in a single-event batch is still OUR event.
+    const id = typeof row.id === 'string' ? row.id : undefined
+    if (id !== undefined && id !== eventId) continue
+    const status = row.status !== undefined ? `status ${String(row.status)}` : undefined
+    const message = typeof row.message === 'string' ? row.message : undefined
+    return [status, message].filter(Boolean).join(': ') || JSON.stringify(row).slice(0, 200)
+  }
+  return undefined
+}
+
 // The per-item-trace verdict IS that trace's `output` (a PerItemVerdict). The enum
 // value is identifier-valued and survives the deep PII scrub untouched, so reading it
 // back off the built body needs no re-derivation from the span. Non-graded shapes
@@ -906,14 +932,15 @@ export async function exportSpans(
       try {
         const genBody = buildGenerationBody(span, scrub)
         if (genBody) {
-          await api(
+          const eventId = `evt-${traceIdFor(span)}-gen-${nonce}`
+          const res = await api(
             cfg,
             'POST',
             '/api/public/ingestion',
             {
               batch: [
                 {
-                  id: `evt-${traceIdFor(span)}-gen-${nonce}`,
+                  id: eventId,
                   type: 'generation-create',
                   timestamp: genBody.startTime,
                   body: genBody,
@@ -922,7 +949,17 @@ export async function exportSpans(
             },
             opts.observationTimeoutMs ?? OBSERVATION_TIMEOUT_MS
           )
-          result.observations++
+          // The ingestion endpoint is MULTI-STATUS: an HTTP success can still carry
+          // per-event rejections in `errors`. Counting the POST rather than the EVENT
+          // would report a shipped observation that was never accepted — a silently
+          // wrong but green count, which is the exact failure this export exists to
+          // eliminate.
+          const rejection = ingestionRejection(res, eventId)
+          if (rejection !== undefined) {
+            log(`  generation-create rejected for ${traceIdFor(span)}: ${rejection}`)
+          } else {
+            result.observations++
+          }
         }
       } catch (err) {
         log(`  generation-create failed for ${traceIdFor(span)}: ${errMsg(err)}`)

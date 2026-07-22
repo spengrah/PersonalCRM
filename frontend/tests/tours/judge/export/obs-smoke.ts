@@ -61,11 +61,17 @@ const COST_TOLERANCE = 1e-6
 // fails loudly rather than hanging.
 const INGEST_TIMEOUT_MS = 120_000
 const INGEST_POLL_MS = 2_000
+// Per-READ bound. Well under the overall ingestion bound, so a stalled single read
+// costs one poll interval rather than the whole budget.
+const TRACE_READ_TIMEOUT_MS = 30_000
 
 // A fixed instant well in the past, so a startTime taken from the export clock is
 // unmistakable rather than plausible.
 const START_MS = Date.UTC(2026, 0, 15, 9, 0, 0)
 const END_MS = START_MS + 3_200
+// The re-export ships the same observation id with this different (still fixed, still
+// past) end instant — the marker that makes "the upsert was processed" observable.
+const RE_EXPORT_END_MS = START_MS + 7_400
 
 const scenario: Scenario = {
   kind: 'behavior',
@@ -119,6 +125,26 @@ const num = (v: unknown): number | undefined => (typeof v === 'number' ? v : und
 const observationsOf = (trace: Trace | undefined): Array<Record<string, unknown>> =>
   Array.isArray(trace?.observations) ? (trace.observations as Array<Record<string, unknown>>) : []
 
+// Resolves to STALLED if `p` has not settled within `ms`. The probe itself must be
+// raced against the deadline: a read that never returns (rather than erroring) would
+// otherwise park on `await` forever and the advertised bound would never be reached.
+const STALLED = Symbol('stalled')
+function withDeadline<T>(p: Promise<T>, ms: number): Promise<T | typeof STALLED> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => resolve(STALLED), ms)
+    p.then(
+      v => {
+        clearTimeout(timer)
+        resolve(v)
+      },
+      e => {
+        clearTimeout(timer)
+        reject(e instanceof Error ? e : new Error(String(e)))
+      }
+    )
+  })
+}
+
 // Poll `probe` until it returns a value, under a finite bound. Polls for PRESENCE
 // only — never for a value — so a genuine mismatch fails immediately at the
 // assertions instead of spinning out the whole timeout under the wrong diagnosis.
@@ -135,7 +161,10 @@ export async function waitForPresence<T>(
   let attempts = 0
   for (;;) {
     attempts++
-    const got = await probe()
+    const remaining = Math.max(1, timeoutMs - (now() - started))
+    const raced = await withDeadline(probe(), remaining)
+    if (raced === STALLED) throw new IngestionTimeoutError(`${what} (read stalled)`, timeoutMs)
+    const got = raced
     if (got !== undefined) {
       if (attempts > 1) deps.log(`  ${what}: visible after ${attempts} attempt(s)`)
       return got
@@ -154,13 +183,17 @@ export async function runSmoke(deps: SmokeDeps): Promise<number> {
   const runTraceId = deps.ids?.traceId ?? crypto.randomBytes(16).toString('hex')
   const runSpanId = deps.ids?.spanId ?? crypto.randomBytes(8).toString('hex')
 
-  const makeSpan = (): GenAiSpan => ({
+  // `endMs` is the re-export's observable MARKER: the second export ships the same
+  // observation id with a DIFFERENT endTime, so "the upsert was processed" becomes a
+  // state a probe can actually wait for. Without it the first export's observation
+  // already satisfies every presence check and the upsert assertion cannot fail.
+  const makeSpan = (endMs: number): GenAiSpan => ({
     ...buildGenAiSpan({
       impl: 'obs-smoke',
       behaviorId: BEHAVIOR_ID,
       model: MODEL,
       startMs: START_MS,
-      endMs: END_MS,
+      endMs,
       inputTokens: INPUT_TOKENS,
       cachedInputTokens: CACHED_INPUT_TOKENS,
       cacheWriteInputTokens: CACHE_WRITE_INPUT_TOKENS,
@@ -178,7 +211,7 @@ export async function runSmoke(deps: SmokeDeps): Promise<number> {
     span_id: runSpanId,
   })
 
-  const span = makeSpan()
+  const span = makeSpan(END_MS)
   const carrierId = usageTraceId(span)
   const siblingId = carrierId.replace(/-item0$/, '-item2')
   const spanStartIso = new Date(span.start_time_unix_nano / 1e6).toISOString()
@@ -189,6 +222,19 @@ export async function runSmoke(deps: SmokeDeps): Promise<number> {
   log('')
 
   const first = await deps.shipSpans([span])
+
+  // The exporter's own count first: a generation rejected at POST time (or never
+  // built) means no observation is COMING, so polling for one would burn the whole
+  // bound and then blame the ingestion worker for an export-side rejection.
+  if (first.observations !== 1) {
+    log('')
+    log(
+      `FAIL — the exporter shipped ${first.observations} observation(s), expected 1. ` +
+        'The generation was rejected or skipped BEFORE ingestion; this is not a worker ' +
+        'race. Re-run with the export log visible to see the rejection.'
+    )
+    return 1
+  }
 
   const carrier = await waitForPresence(
     `the observation on ${carrierId}`,
@@ -257,16 +303,21 @@ export async function runSmoke(deps: SmokeDeps): Promise<number> {
     detail: `item0=${String(carrierMeta.usage_attributed)} item2=${String(siblingMeta.usage_attributed)}`,
   })
 
-  // Re-export: the id must be stable (an upsert), never a duplicate. The upsert is
-  // processed asynchronously too — but a presence probe cannot tell "upserted" from
-  // "not yet processed", which is exactly why the duplicate/id check below is an
-  // ASSERTION over the polled state rather than a poll condition.
-  const second = await deps.shipSpans([makeSpan()])
+  // Re-export: the id must be stable (an upsert), never a duplicate. Waiting for
+  // "an observation exists" would be satisfied by the FIRST export's row, so the
+  // check could not fail — wait for the MARKER (the changed endTime) to prove the
+  // second write was actually processed, and only then assert count + id.
+  const secondEndIso = new Date(RE_EXPORT_END_MS).toISOString()
+  const second = await deps.shipSpans([makeSpan(RE_EXPORT_END_MS)])
   const after = await waitForPresence(
-    `the re-exported observation on ${carrierId}`,
+    `the re-export to be processed on ${carrierId} (endTime ${secondEndIso})`,
     async () => {
       const t = await deps.getTrace(carrierId)
-      return observationsOf(t).length > 0 ? t : undefined
+      const rows = observationsOf(t)
+      const marked = rows.some(
+        o => typeof o.endTime === 'string' && o.endTime.startsWith(secondEndIso.slice(0, 19))
+      )
+      return marked ? t : undefined
     },
     deps
   )
@@ -310,7 +361,9 @@ async function main(): Promise<number> {
       // transport error is a real failure and propagates.
       getTrace: async id => {
         try {
-          return await api(cfg, 'GET', `/api/public/traces/${id}`)
+          // Bounded: an unbounded read would reintroduce, one layer up, exactly the
+          // hang the poller's deadline exists to prevent.
+          return await api(cfg, 'GET', `/api/public/traces/${id}`, undefined, TRACE_READ_TIMEOUT_MS)
         } catch (err) {
           if (err instanceof ApiError && err.status === 404) return undefined
           throw err
