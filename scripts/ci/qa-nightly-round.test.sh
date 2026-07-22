@@ -504,16 +504,23 @@ test_export_summary_with_skipped_observations() {
     # The two observation counts must not be confused with each other.
     assert_kv observations 3 obs-skipped
     assert_kv observations_skipped 83 obs-skipped
+    assert_kv observations_failed 0 obs-skipped
     cleanup_fixture
 }
 
-test_skipped_observations_are_noted_not_gated() {
-    echo "test: skipped observations emit a NOTE and stay out of the advance predicate"
+test_missing_observations_are_noted_not_gated() {
+    echo "test: failed + skipped observations are BOTH counted in the note, and stay out of the predicate"
     make_fixture
-    run_orch STUB_EXPORT_OUT="qa-export: 5 trace(s), 12 screenshot(s), 3 observation(s), 83 observation(s) skipped; enqueued 3/3"
+    run_orch STUB_EXPORT_OUT="qa-export: 5 trace(s), 12 screenshot(s), 3 observation(s), 3 observation(s) failed, 9 observation(s) skipped; enqueued 3/3"
     assert_rc0 obs-note
     # Visible...
-    case "$(ghv notes)" in *"83 observation(s) skipped"*) ok;; *) fail "obs-note: notes should report the skipped observations, got '$(ghv notes)'";; esac
+    assert_kv observations 3 obs-note
+    assert_kv observations_failed 3 obs-note
+    assert_kv observations_skipped 9 obs-note
+    # The note must report the TOTAL loss (3 failed + 9 skipped), not just the skips:
+    # a note that undercounts by the breaker threshold understates the degradation it
+    # exists to surface.
+    case "$(ghv notes)" in *"12 observation(s) MISSING"*) ok;; *) fail "obs-note: notes should report 12 missing, got '$(ghv notes)'";; esac
     # ...but deliberately NOT part of the clean-round predicate (that semantics change
     # is its own decision, not a side effect of adding visibility).
     assert_kv round clean obs-note
@@ -887,7 +894,7 @@ main() {
     test_export_summary_with_observations
     test_export_summary_without_observations
     test_export_summary_with_skipped_observations
-    test_skipped_observations_are_noted_not_gated
+    test_missing_observations_are_noted_not_gated
     test_no_notes_on_a_clean_round
     test_runid_collision_aborts
     test_rundir_create_error

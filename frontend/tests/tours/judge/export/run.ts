@@ -204,6 +204,7 @@ export async function main(
       // Only when non-zero, so the common shape stays short — but never omitted when
       // it happened: "3 observation(s)" alone would imply a completeness a breaker
       // trip did not have.
+      (result.observationsFailed ? `, ${result.observationsFailed} observation(s) failed` : '') +
       (result.observationsSkipped ? `, ${result.observationsSkipped} observation(s) skipped` : '') +
       (result.failed ? `, ${result.failed} FAILED` : '') +
       `; enqueued ${result.enqueue.enqueued}/${result.enqueue.attempted}` +

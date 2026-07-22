@@ -322,7 +322,7 @@ printf '%s\n' "$export_out"
 
 # Parse the RESULT counts from qa-export's ONE canonical summary line. run.ts prints
 # EXACTLY (langfuse.ts ExportResult):
-#   "qa-export: N trace(s), M screenshot(s)[, O observation(s)][, K observation(s) skipped][, F FAILED]; enqueued E/A[, S already queued][, X enqueue-failed]"
+#   "qa-export: N trace(s), M screenshot(s)[, O observation(s)][, J observation(s) failed][, K observation(s) skipped][, F FAILED]; enqueued E/A[, S already queued][, X enqueue-failed]"
 # The observation field is matched OPTIONALLY so the orchestrator is not order-coupled to
 # a cosmetic change in run.ts and still parses an older exporter's line.
 # We do NOT scan the merged stdout+stderr for field fragments: the exporter also logs a
@@ -332,7 +332,7 @@ printf '%s\n' "$export_out"
 # WHOLE line against an anchored regex and require EXACTLY ONE such line; a
 # missing/duplicate/malformed summary is treated as no-data (parsed as zeros -> no advance,
 # plus an explicit duplicate reason). Fields are then read from that single clean line only.
-SUMMARY_RE='^qa-export: [0-9]{1,9} trace\(s\), [0-9]{1,9} screenshot\(s\)(, [0-9]{1,9} observation\(s\))?(, [0-9]{1,9} observation\(s\) skipped)?(, [0-9]{1,9} FAILED)?; enqueued [0-9]{1,9}/[0-9]{1,9}(, [0-9]{1,9} already queued)?(, [0-9]{1,9} enqueue-failed)?$'
+SUMMARY_RE='^qa-export: [0-9]{1,9} trace\(s\), [0-9]{1,9} screenshot\(s\)(, [0-9]{1,9} observation\(s\))?(, [0-9]{1,9} observation\(s\) failed)?(, [0-9]{1,9} observation\(s\) skipped)?(, [0-9]{1,9} FAILED)?; enqueued [0-9]{1,9}/[0-9]{1,9}(, [0-9]{1,9} already queued)?(, [0-9]{1,9} enqueue-failed)?$'
 summary_count="$(printf '%s\n' "$export_out" | grep -cE "$SUMMARY_RE")"
 summary_line="$(printf '%s\n' "$export_out" | grep -E "$SUMMARY_RE" | tail -1)"
 
@@ -347,6 +347,7 @@ if [ "$summary_count" -eq 1 ]; then
   screenshots="$(field_num '[0-9]+ screenshot\(s\)' 0)"
   observations="$(field_num '[0-9]+ observation\(s\)' 0)"
   # Anchored on the trailing word, so the leading observations count cannot match it.
+  observations_failed="$(field_num '[0-9]+ observation\(s\) failed' 0)"
   observations_skipped="$(field_num '[0-9]+ observation\(s\) skipped' 0)"
   ship_failed="$(field_num '[0-9]+ FAILED' 0)"
   enq_skipped="$(field_num '[0-9]+ already queued' 0)"
@@ -357,7 +358,7 @@ if [ "$summary_count" -eq 1 ]; then
 else
   # No summary (missing creds / no spans) OR more than one (malformed/duplicate) -> no
   # trustworthy counts. Zero everything so the predicate degrades to advance=false.
-  traces=0; screenshots=0; observations=0; observations_skipped=0; ship_failed=0; enq_skipped=0; enq_failed=0; enq_ok=0; enq_attempted=0
+  traces=0; screenshots=0; observations=0; observations_failed=0; observations_skipped=0; ship_failed=0; enq_skipped=0; enq_failed=0; enq_ok=0; enq_attempted=0
 fi
 
 # 3d. Post-tours provenance assert: re-read the deployed sha and prove the round both
@@ -476,7 +477,8 @@ $post_ok || reasons+=("$post_reason")
 # missing is worth seeing in the round's own output, but whether that should also
 # block advancement is a semantics change that belongs in its own change.
 notes=()
-[ "$observations_skipped" -eq 0 ] || notes+=("$observations_skipped observation(s) skipped by the export's timeout breaker — cost data for those spans is MISSING (visibility only; does not gate advancement)")
+observations_missing=$((observations_failed + observations_skipped))
+[ "$observations_missing" -eq 0 ] || notes+=("$observations_missing observation(s) MISSING ($observations_failed failed, $observations_skipped skipped by the export's timeout breaker) — cost data for those spans is absent (visibility only; does not gate advancement)")
 if [ "${#notes[@]}" -eq 0 ]; then
   emit notes ""
 else
@@ -505,6 +507,7 @@ emit export_exit "$export_rc"
 emit export_summary_lines "$summary_count"
 emit traces "$traces"
 emit observations "$observations"
+emit observations_failed "$observations_failed"
 emit observations_skipped "$observations_skipped"
 emit ship_failed "$ship_failed"
 emit enqueue_attempted "$enq_attempted"

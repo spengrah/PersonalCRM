@@ -1780,7 +1780,11 @@ describe('exportSpans — the generation observation (separate, non-fatal, after
     // Three consecutive stalls open the breaker; the remaining nine are never posted.
     expect(mock.generations).toHaveLength(3)
     expect(res.observations).toBe(0)
+    expect(res.observationsFailed).toBe(3) // the three stalls that OPENED the breaker
     expect(res.observationsSkipped).toBe(9)
+    // Complete accounting: every eligible span lands in exactly one bucket. Without
+    // the failed count this reports 9 missing when 12 are.
+    expect(res.observations + res.observationsFailed + res.observationsSkipped).toBe(12)
     expect(logs.some(l => l.includes('observations DISABLED'))).toBe(true)
     // Traces, scores and the enqueue pass are untouched by the breaker.
     expect(res.traces).toBe(12)
@@ -1806,8 +1810,11 @@ describe('exportSpans — the generation observation (separate, non-fatal, after
       observationTimeoutMs: 5,
     })
     expect(res.observations).toBe(0)
-    // ONLY the one usage-bearing span after the breaker opened is a real skip.
+    expect(res.observationsFailed).toBe(3)
+    // ONLY the one usage-bearing span after the breaker opened is a real skip; the
+    // four usage-LESS spans are in no bucket because they were never eligible.
     expect(res.observationsSkipped).toBe(1)
+    expect(res.observations + res.observationsFailed + res.observationsSkipped).toBe(4)
     expect(res.traces).toBe(8)
   })
 
@@ -1821,7 +1828,9 @@ describe('exportSpans — the generation observation (separate, non-fatal, after
     const res = await exportSpans(cfg, spans)
     expect(mock.generations).toHaveLength(6) // every span still attempted
     expect(res.observations).toBe(0)
+    expect(res.observationsFailed).toBe(6) // attempted and lost, every one accounted
     expect(res.observationsSkipped).toBe(0) // nothing was SKIPPED — all were tried
+    expect(res.observations + res.observationsFailed + res.observationsSkipped).toBe(6)
   })
 
   it('resets the streak on a success, so isolated stalls never open the breaker', async () => {

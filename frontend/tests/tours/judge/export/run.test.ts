@@ -72,6 +72,7 @@ const okResult = {
   screenshots: 0,
   failed: 0,
   observations: 1,
+  observationsFailed: 0,
   observationsSkipped: 0,
   enqueue: { attempted: 0, enqueued: 0, skippedExisting: 0, failed: 0 },
 }
@@ -237,6 +238,7 @@ describe('main — provenance plumbing (component-wise, never fail-closed)', () 
       screenshots: 0,
       failed: 0,
       observations: 0,
+      observationsFailed: 0,
       observationsSkipped: 0,
       enqueue: { attempted: 1, enqueued: 1, skippedExisting: 0, failed: 0 },
     })) as unknown as typeof ExportSpansFn
@@ -259,6 +261,7 @@ describe('main — provenance plumbing (component-wise, never fail-closed)', () 
       screenshots: 0,
       failed: 0,
       observations: 3,
+      observationsFailed: 3,
       observationsSkipped: 83,
       enqueue: { attempted: 1, enqueued: 1, skippedExisting: 0, failed: 0 },
     })) as unknown as typeof ExportSpansFn
@@ -271,7 +274,9 @@ describe('main — provenance plumbing (component-wise, never fail-closed)', () 
     })
     expect(code).toBe(0) // still non-fatal
     const summary = logs.find(l => l.startsWith('qa-export: 86 trace(s)'))
-    expect(summary).toContain('3 observation(s), 83 observation(s) skipped')
+    expect(summary).toContain(
+      '3 observation(s), 3 observation(s) failed, 83 observation(s) skipped'
+    )
   })
 
   it('omits the skipped field entirely when nothing was skipped (the common shape)', async () => {
@@ -284,6 +289,7 @@ describe('main — provenance plumbing (component-wise, never fail-closed)', () 
     })
     const summary = logs.find(l => l.startsWith('qa-export: 1 trace(s)'))
     expect(summary).not.toContain('skipped')
+    expect(summary).not.toContain('observation(s) failed')
   })
 
   it('a partial enqueue loss (enqueue.failed > 0, trace failed === 0) STILL exits 0 (INV-A)', async () => {
@@ -292,6 +298,7 @@ describe('main — provenance plumbing (component-wise, never fail-closed)', () 
       screenshots: 0,
       failed: 0,
       observations: 3,
+      observationsFailed: 0,
       observationsSkipped: 0,
       enqueue: { attempted: 2, enqueued: 1, skippedExisting: 0, failed: 1 },
     })) as unknown as typeof ExportSpansFn

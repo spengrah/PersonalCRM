@@ -397,6 +397,7 @@ export async function runSmoke(deps: SmokeDeps): Promise<number> {
   // check could not fail — wait for the MARKER (the changed endTime) to prove the
   // second write was actually processed, and only then assert count + id.
   const secondEndIso = new Date(RE_EXPORT_END_MS).toISOString()
+  let timedOutOnReExport = false
   const second = await deps.shipSpans([makeSpan(RE_EXPORT_END_MS)])
   const secondProblem = exportProblem(second, 're-export')
   if (secondProblem !== undefined) {
@@ -406,24 +407,34 @@ export async function runSmoke(deps: SmokeDeps): Promise<number> {
     reportExportProblem(secondProblem, second)
     results.push({ label: 're-export', ok: false, detail: secondProblem })
   } else {
-    const after = await waitForPresence(
-      `the re-export to be processed on ${carrierId} (endTime ${secondEndIso})`,
-      async () => {
-        const t = await deps.getTrace(carrierId)
-        const rows = observationsOf(t)
-        const marked = rows.some(
-          o => typeof o.endTime === 'string' && o.endTime.startsWith(secondEndIso.slice(0, 19))
-        )
-        return marked ? t : undefined
-      },
-      deps
-    )
-    const afterObs = observationsOf(after)
-    results.push({
-      label: 're-export',
-      ok: afterObs.length === 1 && afterObs[0]?.id === obs.id,
-      detail: `${afterObs.length} observation(s), id ${String(afterObs[0]?.id)} (was ${String(obs.id)})`,
-    })
+    try {
+      const after = await waitForPresence(
+        `the re-export to be processed on ${carrierId} (endTime ${secondEndIso})`,
+        async () => {
+          const t = await deps.getTrace(carrierId)
+          const rows = observationsOf(t)
+          const marked = rows.some(
+            o => typeof o.endTime === 'string' && o.endTime.startsWith(secondEndIso.slice(0, 19))
+          )
+          return marked ? t : undefined
+        },
+        deps
+      )
+      const afterObs = observationsOf(after)
+      results.push({
+        label: 're-export',
+        ok: afterObs.length === 1 && afterObs[0]?.id === obs.id,
+        detail: `${afterObs.length} observation(s), id ${String(afterObs[0]?.id)} (was ${String(obs.id)})`,
+      })
+    } catch (err) {
+      // A timeout HERE must not discard the assertions already computed above — the
+      // re-export is the LAST check, and letting it throw would throw away the cost
+      // oracle and the bucket echoes on a run the operator cannot cheaply repeat.
+      // Everything earlier is still valid evidence about the first export.
+      if (!(err instanceof IngestionTimeoutError)) throw err
+      timedOutOnReExport = true
+      results.push({ label: 're-export', ok: false, detail: err.message })
+    }
   }
 
   for (const r of results) {
@@ -440,7 +451,9 @@ export async function runSmoke(deps: SmokeDeps): Promise<number> {
   // itself was clean — a stalled ingestion raises IngestionTimeoutError instead.
   log(
     `FAIL — ${failed.length} assertion(s) failed: ${failed.map(f => f.label).join(', ')}` +
-      (secondProblem === undefined ? ' (ingestion landed; the values are wrong)' : '')
+      (secondProblem === undefined && !timedOutOnReExport
+        ? ' (ingestion landed; the values are wrong)'
+        : '')
   )
   return 1
 }

@@ -256,11 +256,18 @@ describe('runSmoke — asynchronous ingestion', () => {
     expect(logs.some(l => l.includes('waiting for the re-export to be processed'))).toBe(true)
   })
 
-  it('FAILS when the re-export never processes (the upsert check can actually fail)', async () => {
+  it('FAILS when the re-export never processes, KEEPING the assertions already computed', async () => {
     // The first export's observation is already present, so a presence-only probe
-    // would return instantly and "prove" an upsert that never happened.
-    const { deps } = makeFake({ reExportIsNoOp: true, timeoutMs: 20_000 })
-    await expect(runSmoke(deps)).rejects.toBeInstanceOf(IngestionTimeoutError)
+    // would return instantly and "prove" an upsert that never happened. And since
+    // the re-export is the LAST check, throwing here would discard the cost oracle
+    // and the bucket echoes on a run that cannot cheaply be repeated.
+    const { deps, logs } = makeFake({ reExportIsNoOp: true, timeoutMs: 20_000 })
+    expect(await runSmoke(deps)).toBe(1)
+    expect(logs.some(l => l.includes('re-export') && l.includes('[FAIL]'))).toBe(true)
+    expect(logs.some(l => l.includes('expected') && l.includes('[OK]'))).toBe(true)
+    expect(logs.some(l => l.includes('usageDetails') && l.includes('[OK]'))).toBe(true)
+    // Not misreported as a value mismatch — the values were fine.
+    expect(logs.some(l => l.includes('the values are wrong'))).toBe(false)
   })
 
   it('waits for the SIBLING final body instead of asserting against the init-only row', async () => {

@@ -627,9 +627,16 @@ export interface ExportResult {
   // without surfacing it, a round where every generation was rejected would print
   // a clean summary.
   observations: number
-  // Spans whose observation was NOT attempted because the breaker was open. A round
-  // that shipped 3 and skipped 83 must never be reportable as simply "3": the count
-  // must not imply a completeness it did not have.
+  // Spans whose observation was ATTEMPTED and did not land (a rejection, a stall) —
+  // including the stalls that open the breaker.
+  observationsFailed: number
+  // Spans whose observation was NOT attempted because the breaker was already open.
+  //
+  // `observations + observationsFailed + observationsSkipped` accounts for EVERY
+  // eligible span (carrier shipped, usage present). Keeping failed and skipped
+  // separate rather than folding them together preserves the distinction the round
+  // note needs — attempted-and-lost vs never-attempted — while making the TOTAL loss
+  // correct, which a skipped-only count understated by exactly the breaker threshold.
   observationsSkipped: number
   // Best-effort triage enqueue (INV-A): never affects trace shipping / process exit.
   // `attempted` = POSTs issued (eligible minus already-present); `enqueued` +
@@ -761,6 +768,7 @@ export async function exportSpans(
     screenshots: 0,
     failed: 0,
     observations: 0,
+    observationsFailed: 0,
     observationsSkipped: 0,
     enqueue: { attempted: 0, enqueued: 0, skippedExisting: 0, failed: 0 },
   }
@@ -993,24 +1001,23 @@ export async function exportSpans(
         result.observationsSkipped++
       } else {
         try {
-          {
-            // A per-event rejection throws, so the count reflects ACCEPTED
-            // observations — counting the POST would report a shipped observation
-            // that was never stored.
-            await postIngestionEvent(
-              cfg,
-              {
-                id: `evt-${traceIdFor(span)}-gen-${nonce}`,
-                type: 'generation-create',
-                timestamp: genBody.startTime,
-                body: genBody,
-              },
-              observationTimeoutMs
-            )
-            result.observations++
-            timeoutStreak = 0
-          }
+          // A per-event rejection throws, so the count reflects ACCEPTED
+          // observations — counting the POST would report a shipped observation
+          // that was never stored.
+          await postIngestionEvent(
+            cfg,
+            {
+              id: `evt-${traceIdFor(span)}-gen-${nonce}`,
+              type: 'generation-create',
+              timestamp: genBody.startTime,
+              body: genBody,
+            },
+            observationTimeoutMs
+          )
+          result.observations++
+          timeoutStreak = 0
         } catch (err) {
+          result.observationsFailed++
           log(`  generation-create failed for ${traceIdFor(span)}: ${errMsg(err)}`)
           // ONLY a non-settling request trips the breaker. A rejected payload (a 400)
           // is fast and per-span meaningful — it costs nothing to keep trying and its
