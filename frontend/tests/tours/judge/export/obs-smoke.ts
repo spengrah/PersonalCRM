@@ -5,9 +5,9 @@
 //
 // Unit tests can only prove we SEND the documented payload. This proves the
 // deployed server ACCEPTS and PRICES it: it ships one synthetic span through the
-// real `exportSpans` path, reads the carrier trace back, and asserts the buckets
-// echoed exactly, a non-zero cost matching a hand-computed figure, a span-derived
-// startTime, and a stable observation id across a re-export.
+// real `exportSpans` path, reads the generation observation back, and asserts the
+// buckets echoed exactly, a non-zero cost matching a hand-computed figure, a
+// span-derived startTime, and a stable observation id across a re-export.
 //
 // The span ids are minted ONCE PER INVOCATION rather than left random or pinned
 // globally. Stable WITHIN the run so the second export demonstrates the upsert;
@@ -21,6 +21,23 @@
 // only then asserts VALUES — once. Polling on the values instead would burn the
 // whole timeout on a genuine mismatch and report the wrong diagnosis: "never
 // landed" and "landed wrong" are different bugs, and this script names which.
+//
+// TWO READ ENDPOINTS, DELIBERATELY. `/api/public/observations?traceId=…` is the
+// AUTHORITATIVE view of the generation row: it returns `usageDetails`, `costDetails`
+// and `calculatedTotalCost` directly, so the cost oracle is asserted against the
+// observation's OWN price rather than a trace-level aggregate. The trace detail
+// endpoint `/api/public/traces/{id}` is measured to omit observations for some rows
+// while the observations endpoint returns them, so it is used ONLY for what it does
+// report faithfully: the trace body's own `metadata` (`usage_attributed`). The two
+// views are cross-checked and a disagreement is named as its OWN outcome — a run
+// that trusted one view silently is how a healthy instance read as a hang.
+//
+// FAILURE TAXONOMY (kept distinguishable, never folded together):
+//   never shipped  — the exporter rejected/skipped the generation at POST time.
+//   never landed   — shipped, but the row never became visible within the bound.
+//   landed wrong   — visible, but a bucket / cost / id assertion mismatched.
+//   read stalled   — a single read never came back; the overall bound fired.
+//   views disagree — the two endpoints describe the same trace differently.
 //
 // Requires WRITE access to the Langfuse instance. Exits non-zero on any failed
 // assertion.
@@ -81,20 +98,39 @@ const TRACE_READ_TIMEOUT_MS = 30_000
 // (a mutation/fail/unsure trace still enqueues there).
 export const SMOKE_EXPORT_OPTIONS: ExportOptions = { saltPasses: 0 }
 
-// A fixed instant well in the past, so a startTime taken from the export clock is
-// unmistakable rather than plausible.
-const START_MS = Date.UTC(2026, 0, 15, 9, 0, 0)
-const END_MS = START_MS + 3_200
-// The re-export ships the same observation id with a different (still fixed, still
-// past) end instant — the marker that makes "the upsert was processed" observable.
-// The comparison truncates to WHOLE SECONDS to tolerate server-side millisecond
-// formatting, so the gap MUST exceed one second or the marker silently stops
-// discriminating and the upsert check becomes unfalsifiable again. Derived from that
-// granularity rather than hand-picked, and asserted by MARKER_GAP_MS's own test.
+// The span instant is NEAR-PRESENT, derived from the injected clock rather than a
+// literal date: a real judge span is timestamped ~now, and an instant months in the
+// past is not the shape production ships — a time-windowed read can serve the row on
+// one endpoint and omit it on another, which is exactly the divergence that made a
+// healthy instance look like a wedged one. Lagged by a FIXED offset so the startTime
+// assertion still discriminates: an observation stamped with the export clock is
+// minutes away from the span's own start and fails, while both sit in the same
+// present-day window. Determinism is preserved because the clock is a seam
+// (`deps.now`) — tests pin it, live runs pass real time.
+export const SPAN_START_LAG_MS = 5 * 60_000
+export const SPAN_DURATION_MS = 3_200
+// The re-export ships the same observation id with a DIFFERENT end instant — the
+// marker that makes "the upsert was processed" observable. The comparison truncates
+// to WHOLE SECONDS to tolerate server-side millisecond formatting, so the gap MUST
+// exceed one second or the marker silently stops discriminating and the upsert check
+// becomes unfalsifiable again. Derived from that granularity rather than hand-picked,
+// and asserted by MARKER_GAP_MS's own test.
 export const MARKER_TRUNCATION_MS = 1_000
 export const MARKER_GAP_MS = MARKER_TRUNCATION_MS * 4
-export const RE_EXPORT_END_MS = END_MS + MARKER_GAP_MS
-export const FIRST_END_MS = END_MS
+
+export interface SpanTimes {
+  startMs: number
+  endMs: number
+  reExportEndMs: number
+}
+
+// Every instant the smoke ships, from ONE clock reading. Exported so the marker-gap
+// guard test asserts the relationship itself rather than a snapshot of it.
+export function spanTimes(nowMs: number): SpanTimes {
+  const startMs = nowMs - SPAN_START_LAG_MS
+  const endMs = startMs + SPAN_DURATION_MS
+  return { startMs, endMs, reExportEndMs: endMs + MARKER_GAP_MS }
+}
 
 const scenario: Scenario = {
   kind: 'behavior',
@@ -144,7 +180,14 @@ const EXPECT_TRACES_PER_EXPORT = 2
 export interface SmokeDeps {
   // Read a trace back. `undefined` = not visible YET (a 404 while the worker is
   // still draining the queue), which is a poll-again signal, not a failure.
+  // Reports the trace BODY faithfully (metadata); its `observations` array is NOT
+  // relied upon — see `getObservations`.
   getTrace: (traceId: string) => Promise<Trace | undefined>
+  // Read the observation rows for a trace from the observations endpoint — the
+  // authoritative view, carrying usageDetails / costDetails / calculatedTotalCost.
+  // `undefined` = the read could not be served yet (poll again); an EMPTY array is a
+  // real answer ("no rows for this trace"), distinct from "not visible yet".
+  getObservations: (traceId: string) => Promise<Array<Record<string, unknown>> | undefined>
   // Ships the spans and returns the WHOLE outcome — counts AND the exporter's own
   // log lines. Every discarded field is a failure the smoke can print PASS through:
   // a shipped observation says nothing about whether its sibling trace landed, and
@@ -175,11 +218,55 @@ export function readErrorDisposition(err: unknown): 'retry' | 'fatal' {
   return 'fatal'
 }
 
+// How a failed COLLECTION read is treated — deliberately NOT the same rule. A list
+// query for a trace with no rows answers 200 with an empty `data`, so a 404 here
+// cannot mean "the row has not appeared": it means the ROUTE is not there (an older
+// instance, a proxy that does not forward it). Retrying that spends the entire bound
+// and then blames the ingestion worker for an API incompatibility — the wrong
+// diagnosis, loudly stated. An abort is still "this read did not come back in time".
+export function listReadErrorDisposition(err: unknown): 'retry' | 'fatal' {
+  if (isAbortError(err)) return 'retry'
+  return 'fatal'
+}
+
 const hasKey = (v: unknown, key: string): boolean =>
   v !== null && typeof v === 'object' && key in (v as Record<string, unknown>)
 
 const observationsOf = (trace: Trace | undefined): Array<Record<string, unknown>> =>
   Array.isArray(trace?.observations) ? (trace.observations as Array<Record<string, unknown>>) : []
+
+// The observation's OWN cost, as the observations endpoint reports it: the per-bucket
+// sum it priced (`costDetails.total`), falling back to the flattened
+// `calculatedTotalCost`. Asserting this rather than the trace-level aggregate is what
+// proves per-bucket pricing — the aggregate can only say the trace cost SOMETHING.
+export function observationCost(obs: Record<string, unknown>): number | undefined {
+  const details = obs.costDetails
+  const total =
+    details !== null && typeof details === 'object'
+      ? num((details as Record<string, unknown>).total)
+      : undefined
+  return total ?? num(obs.calculatedTotalCost)
+}
+
+// The observations endpoint returns a paged envelope `{ data: [...], meta: {...} }`.
+// An envelope this does not recognise is raised, never coerced to "no rows": a
+// silently-empty read is indistinguishable from a genuine absence and would be waited
+// out under the "never landed" diagnosis, blaming the ingestion worker for a shape
+// change in the API.
+export function parseObservationList(
+  body: unknown,
+  traceId: string
+): Array<Record<string, unknown>> {
+  const data =
+    body !== null && typeof body === 'object' ? (body as Record<string, unknown>).data : undefined
+  if (!Array.isArray(data)) {
+    throw new Error(
+      `observations read for ${traceId}: unrecognised envelope (no \`data\` array) — ` +
+        'the observations endpoint changed shape; this is neither a payload nor a worker fault'
+    )
+  }
+  return data.filter((o): o is Record<string, unknown> => o !== null && typeof o === 'object')
+}
 
 // Resolves to STALLED if `p` has not settled within `ms`. The probe itself must be
 // raced against the deadline: a read that never returns (rather than erroring) would
@@ -238,6 +325,9 @@ export async function runSmoke(deps: SmokeDeps): Promise<number> {
   // One id pair for this invocation: stable across both exports below, unique across runs.
   const runTraceId = deps.ids?.traceId ?? crypto.randomBytes(16).toString('hex')
   const runSpanId = deps.ids?.spanId ?? crypto.randomBytes(8).toString('hex')
+  // ONE clock reading for every instant this run ships, so the two exports agree on
+  // the span's start and differ only in the marker.
+  const times = spanTimes((deps.now ?? Date.now)())
 
   // `endMs` is the re-export's observable MARKER: the second export ships the same
   // observation id with a DIFFERENT endTime, so "the upsert was processed" becomes a
@@ -248,7 +338,7 @@ export async function runSmoke(deps: SmokeDeps): Promise<number> {
       impl: 'obs-smoke',
       behaviorId: BEHAVIOR_ID,
       model: MODEL,
-      startMs: START_MS,
+      startMs: times.startMs,
       endMs,
       inputTokens: INPUT_TOKENS,
       cachedInputTokens: CACHED_INPUT_TOKENS,
@@ -267,7 +357,7 @@ export async function runSmoke(deps: SmokeDeps): Promise<number> {
     span_id: runSpanId,
   })
 
-  const span = makeSpan(END_MS)
+  const span = makeSpan(times.endMs)
   const carrierId = usageTraceId(span)
   const siblingId = carrierId.replace(/-item0$/, '-item2')
   const spanStartIso = new Date(span.start_time_unix_nano / 1e6).toISOString()
@@ -316,32 +406,48 @@ export async function runSmoke(deps: SmokeDeps): Promise<number> {
     return 1
   }
 
+  // The observation is waited for on the AUTHORITATIVE endpoint. Waiting for it on
+  // the trace detail endpoint is what hung the first live run: the row was present,
+  // priced, and aggregated into the trace list, yet the detail endpoint reported
+  // `observations: []` indefinitely, so a presence probe there can never settle.
+  const obsRows = await waitForPresence(
+    `the observation on ${carrierId}`,
+    async () => {
+      const rows = await deps.getObservations(carrierId)
+      return rows !== undefined && rows.length > 0 ? rows : undefined
+    },
+    deps
+  )
+
   // Presence must include the FINAL body's marks, not merely the row: `exportSpans`
   // sends a minimal init trace-create first, so a trace can be readable before its
   // metadata exists. Asserting `usage_attributed` off that intermediate state is a
   // FALSE MISMATCH during ordinary worker lag — the mirror of a false pass, and it
   // burns the operator's one live run just as effectively.
   const carrier = await waitForPresence(
-    `the observation + final body on ${carrierId}`,
+    `the final body on ${carrierId}`,
     async () => {
       const t = await deps.getTrace(carrierId)
-      const settled = observationsOf(t).length > 0 && hasKey(t?.metadata, 'usage_attributed')
-      return settled ? t : undefined
+      return hasKey(t?.metadata, 'usage_attributed') ? t : undefined
     },
     deps
   )
 
-  const obs = observationsOf(carrier)[0]
+  const obs = obsRows[0]
   const usage = (obs.usageDetails ?? {}) as Record<string, unknown>
   const meta = (obs.metadata ?? {}) as Record<string, unknown>
-  const totalCost = num(carrier.totalCost) ?? 0
+  // Kept distinct from a reported zero: "the row carries no price at all" and "the
+  // row is priced at nothing" are different defects, and collapsing them costs the
+  // operator the one line that says which.
+  const reportedCost = observationCost(obs)
+  const obsCost = reportedCost ?? 0
   const startTime = typeof obs.startTime === 'string' ? obs.startTime : ''
 
   const results: Assertion[] = [
     {
       label: 'observations',
-      ok: observationsOf(carrier).length === 1 && first.observations === 1,
-      detail: `${observationsOf(carrier).length} on the trace, exporter counted ${first.observations}`,
+      ok: obsRows.length === 1 && first.observations === 1,
+      detail: `${obsRows.length} for the trace, exporter counted ${first.observations}`,
     },
     {
       label: 'usageDetails',
@@ -358,12 +464,19 @@ export async function runSmoke(deps: SmokeDeps): Promise<number> {
         num(meta.cache_write_input_tokens) === CACHE_WRITE_INPUT_TOKENS,
       detail: `reasoning_output_tokens=${String(meta.reasoning_output_tokens)} cache_write_input_tokens=${String(meta.cache_write_input_tokens)}`,
     },
-    { label: 'totalCost', ok: totalCost > 0, detail: `${totalCost.toFixed(6)} (> 0)` },
+    {
+      label: 'observationCost',
+      ok: reportedCost !== undefined && reportedCost > 0,
+      detail:
+        reportedCost === undefined
+          ? 'NOT REPORTED — the row carries neither costDetails.total nor calculatedTotalCost'
+          : `${obsCost.toFixed(6)} (> 0)`,
+    },
     {
       label: 'expected',
-      ok: Math.abs(totalCost - EXPECTED_COST) < COST_TOLERANCE,
+      ok: Math.abs(obsCost - EXPECTED_COST) < COST_TOLERANCE,
       detail:
-        `${EXPECTED_COST.toFixed(6)} vs observed ${totalCost.toFixed(6)} ` +
+        `${EXPECTED_COST.toFixed(6)} vs observed ${obsCost.toFixed(6)} ` +
         `(|delta| < ${COST_TOLERANCE})\n` +
         `                         ${EXPECT_INPUT}*0.75/M + ${CACHED_INPUT_TOKENS}*0.075/M + ${OUTPUT_TOKENS}*4.50/M`,
     },
@@ -373,6 +486,38 @@ export async function runSmoke(deps: SmokeDeps): Promise<number> {
       detail: `${startTime} (span start ${spanStartIso}, not export time)`,
     },
   ]
+
+  // CROSS-VIEW RECONCILIATION. Both endpoints describe the same trace, so their
+  // disagreement is information — and it is NOT one of the four failure classes
+  // above, which is why it is reported under its own name instead of being folded
+  // into "landed wrong". Two shapes, treated differently and deliberately:
+  //
+  //   the detail view is SILENT (no observations, zero aggregate) while the
+  //   authoritative view has the row — the measured behavior of the live instance.
+  //   Reported as an anomaly, not a failure: the observation demonstrably exists and
+  //   is priced, so failing here would fail a healthy instance.
+  //
+  //   the detail view is POPULATED and DISAGREES — a real contradiction about a row
+  //   both endpoints can see, and an assertion the smoke must fail on.
+  const anomalies: string[] = []
+  const traceViewRows = observationsOf(carrier).length
+  const traceViewCost = num(carrier.totalCost) ?? 0
+  if (traceViewRows === 0 && traceViewCost === 0) {
+    anomalies.push(
+      `the trace detail endpoint reports no observations and zero cost for ${carrierId}, ` +
+        `while the observations endpoint returns ${obsRows.length} row(s) costing ` +
+        `${obsCost.toFixed(6)} — the observations endpoint is authoritative and the ` +
+        'assertions below are taken from it'
+    )
+  } else {
+    results.push({
+      label: 'viewsAgree',
+      ok: traceViewRows === obsRows.length && Math.abs(traceViewCost - obsCost) < COST_TOLERANCE,
+      detail:
+        `trace detail: ${traceViewRows} observation(s) costing ${traceViewCost.toFixed(6)}; ` +
+        `observations endpoint: ${obsRows.length} costing ${obsCost.toFixed(6)}`,
+    })
+  }
 
   // The sibling trace must say, in metadata, that it carries none of the usage. Same
   // export, but a SEPARATE row with its own ingestion visibility.
@@ -396,9 +541,9 @@ export async function runSmoke(deps: SmokeDeps): Promise<number> {
   // "an observation exists" would be satisfied by the FIRST export's row, so the
   // check could not fail — wait for the MARKER (the changed endTime) to prove the
   // second write was actually processed, and only then assert count + id.
-  const secondEndIso = new Date(RE_EXPORT_END_MS).toISOString()
+  const secondEndIso = new Date(times.reExportEndMs).toISOString()
   let timedOutOnReExport = false
-  const second = await deps.shipSpans([makeSpan(RE_EXPORT_END_MS)])
+  const second = await deps.shipSpans([makeSpan(times.reExportEndMs)])
   const secondProblem = exportProblem(second, 're-export')
   if (secondProblem !== undefined) {
     // Record it as a failed assertion instead of returning: seven assertions —
@@ -408,19 +553,20 @@ export async function runSmoke(deps: SmokeDeps): Promise<number> {
     results.push({ label: 're-export', ok: false, detail: secondProblem })
   } else {
     try {
-      const after = await waitForPresence(
+      // Read on the authoritative endpoint, for the same reason the first presence
+      // wait is: the detail endpoint may never show the row, so a marker probe there
+      // could not settle even on a perfectly processed upsert.
+      const afterObs = await waitForPresence(
         `the re-export to be processed on ${carrierId} (endTime ${secondEndIso})`,
         async () => {
-          const t = await deps.getTrace(carrierId)
-          const rows = observationsOf(t)
+          const rows = (await deps.getObservations(carrierId)) ?? []
           const marked = rows.some(
             o => typeof o.endTime === 'string' && o.endTime.startsWith(secondEndIso.slice(0, 19))
           )
-          return marked ? t : undefined
+          return marked ? rows : undefined
         },
         deps
       )
-      const afterObs = observationsOf(after)
       results.push({
         label: 're-export',
         ok: afterObs.length === 1 && afterObs[0]?.id === obs.id,
@@ -440,10 +586,14 @@ export async function runSmoke(deps: SmokeDeps): Promise<number> {
   for (const r of results) {
     log(`  ${r.label.padEnd(22)} ${r.ok ? '[OK]' : '[FAIL]'} ${r.detail}`)
   }
+  // Named separately from both OK and FAIL: an anomaly is neither an assertion the
+  // smoke can stand behind nor one it can honestly fail, and burying it in either
+  // column is how the disagreement stayed invisible for a whole live run.
+  for (const a of anomalies) log(`  ${'viewsDisagree'.padEnd(22)} [ANOMALY] ${a}`)
   const failed = results.filter(r => !r.ok)
   log('')
   if (failed.length === 0) {
-    log('PASS')
+    log(anomalies.length === 0 ? 'PASS' : `PASS (with ${anomalies.length} view disagreement(s))`)
     return 0
   }
   // Everything that could be computed HAS been printed above; this line names which
@@ -480,6 +630,25 @@ async function main(): Promise<number> {
           return await api(cfg, 'GET', `/api/public/traces/${id}`, undefined, TRACE_READ_TIMEOUT_MS)
         } catch (err) {
           if (readErrorDisposition(err) === 'retry') return undefined
+          throw err
+        }
+      },
+      getObservations: async id => {
+        try {
+          // Bounded exactly as the trace read is, but classified by the COLLECTION
+          // rule: an empty result is a 200 here, so a 404 is a missing route rather
+          // than a missing row. `limit` is well above the one row the smoke ships,
+          // so a paged walk would only add a failure mode without adding coverage.
+          const body = await api(
+            cfg,
+            'GET',
+            `/api/public/observations?traceId=${encodeURIComponent(id)}&limit=50`,
+            undefined,
+            TRACE_READ_TIMEOUT_MS
+          )
+          return parseObservationList(body, id)
+        } catch (err) {
+          if (listReadErrorDisposition(err) === 'retry') return undefined
           throw err
         }
       },
