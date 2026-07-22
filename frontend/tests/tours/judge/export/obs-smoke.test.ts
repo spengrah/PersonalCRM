@@ -3,8 +3,8 @@
 // gate (this sandbox has read-only access to the instance); what is proved here is
 // what a live run cannot prove on demand — that an ingestion delay is waited out
 // rather than reported as a failure, that a genuine mismatch fails FAST instead of
-// burning the bound under the wrong diagnosis, that the upsert check can actually
-// fail, and that a stalled read cannot hang the command.
+// burning the bound under the wrong diagnosis, that the re-export's non-duplication
+// check can actually fail, and that a stalled read cannot hang the command.
 //
 // The double models BOTH endpoints SEPARATELY, including the case where they
 // DISAGREE — trace detail reporting `observations: []` while the observations
@@ -18,11 +18,13 @@ import {
   IngestionTimeoutError,
   MARKER_GAP_MS,
   MARKER_TRUNCATION_MS,
+  RE_EXPORT_SETTLE_MS,
   SPAN_START_LAG_MS,
   SMOKE_EXPORT_OPTIONS,
+  reExportDwellMs,
   listReadErrorDisposition,
   observationCost,
-  parseObservationList,
+  parseObservationPage,
   readErrorDisposition,
   runSmoke,
   spanTimes,
@@ -55,8 +57,44 @@ interface FakeOpts {
   hideSiblingReads?: number
   // Observations-endpoint reads that return no rows before the observation lands.
   hideObsReads?: number
-  // Reads AFTER the re-export before its marker becomes visible.
-  hideUpsertReads?: number
+  // What the SECOND export does to the existing row:
+  //   'createOnly' — accepted and ignored; the row keeps the FIRST export's endTime.
+  //                  THE MEASURED LIVE BEHAVIOR, and the default.
+  //   'duplicates' — a SECOND row appears. The defect that would double-count cost.
+  //   'updates'    — the row's endTime becomes the re-export's (upsert semantics).
+  //   'reissues'   — still ONE row, but under a DIFFERENT id: the first export's
+  //                  observation was replaced rather than left alone, so any score or
+  //                  link pointing at the original id now dangles.
+  reExport?: 'createOnly' | 'duplicates' | 'updates' | 'reissues'
+  // Post-re-export reads before the duplicate shows up, so a dwell is required to see
+  // it and a single immediate sample would miss it.
+  duplicateAfterReads?: number
+  // ...and the read after which it goes away again. A duplicate that existed at any
+  // point double-counted the cost while it existed, so it must not be excused by
+  // having been compacted away before the last sample.
+  duplicateVanishesAfterReads?: number
+  // A violation the row shows only BRIEFLY after the re-export, reverting afterwards:
+  // a reissue under another id, or a different price. Reading only the final sample
+  // would call both clean.
+  transientReExport?: 'reissues' | 'reprices'
+  transientUntilReads?: number
+  // Bound on the re-export dwell window.
+  settleMs?: number
+  // The endpoint's `totalItems` never moves after the re-export — what a stalled
+  // ingestion worker looks like, since a create-only re-export leaves no other trace.
+  totalItemsFrozen?: boolean
+  // The endpoint reports no `meta.totalItems` at all.
+  omitTotalItems?: boolean
+  // Per-read deadline used wherever a read is raced.
+  readTimeoutMs?: number
+  // The re-export call YIELDS to the event loop while in flight, as a real HTTP call
+  // does. Lets a test observe whether anything samples during that window.
+  yieldDuringShip?: boolean
+  // How long that yield lasts, in REAL milliseconds.
+  shipYieldMs?: number
+  // Wall-clock the EXPORT call itself consumes. `exportSpans` keeps working after
+  // posting the generation, so the row can land while the call is still returning.
+  shipDurationMs?: number
   // What the TRACE DETAIL endpoint says about this trace, independently of what the
   // observations endpoint says:
   //   'agrees'      — same row, same cost.
@@ -72,8 +110,6 @@ interface FakeOpts {
   // Report NO price at all — distinct from a price of zero.
   omitAllCost?: boolean
   usage?: Record<string, number>
-  // The re-export silently does nothing — the upsert never lands.
-  reExportIsNoOp?: boolean
   // Reads where the sibling row exists but its final body (metadata) has not landed.
   siblingInitOnlyReads?: number
   // Lines the exporter reports back with its count.
@@ -93,39 +129,70 @@ interface FakeOpts {
 // `observations` array the live instance was measured to leave EMPTY for a row it
 // nonetheless prices). `shipSpans` records the endTime the observation WOULD carry
 // (read off the span, exactly as the real body does) and the reads serve it back
-// after a configurable delay, so the upsert marker is meaningful: the stub can only
-// show the second endTime if the second export actually happened.
+// after a configurable delay.
+//
+// The re-export models the MEASURED platform semantics by default: the second
+// `generation-create` is accepted and then does NOT modify the row. `reExport` opts
+// into the two alternatives — a genuine duplicate (the defect the assertion exists to
+// catch) and a real update (a platform change the smoke must announce).
 function makeFake(opts: FakeOpts = {}): {
   deps: SmokeDeps
   logs: string[]
-  counts: { reads: number; sleeps: number; ships: number }
+  counts: { reads: number; sleeps: number; ships: number; readsDuringSecondShip: number }
 } {
   const logs: string[] = []
-  const counts = { reads: 0, sleeps: 0, ships: 0 }
+  const counts = { reads: 0, sleeps: 0, ships: 0, readsDuringSecondShip: 0 }
+  let inSecondShip = false
   let clock = FAKE_NOW_MS
-  let obsEndIso: string | undefined
-  let preUpsertEndIso: string | undefined
+  // The endTime the FIRST export's row carries — never overwritten, because the
+  // platform does not overwrite it.
+  let firstEndIso: string | undefined
+  let reExportEndIso: string | undefined
   let carrierReads = 0
   let siblingReads = 0
   let obsReads = 0
   let obsReadsAfterSecondShip = 0
   const shipCounts = opts.observationsPerShip ?? [1, 1]
+  const reExport = opts.reExport ?? 'createOnly'
 
   // What the observations endpoint would return RIGHT NOW.
   const currentRows = (): Array<Record<string, unknown>> => {
     if (obsReads <= (opts.hideObsReads ?? 0)) return []
-    if (counts.ships >= 2) {
-      obsReadsAfterSecondShip++
-      if (obsReadsAfterSecondShip <= (opts.hideUpsertReads ?? 0)) {
-        // Visible, but still carrying the PRE-upsert state.
-        return [observationRow(preUpsertEndIso, opts)]
-      }
+    const first = observationRow(firstEndIso, opts)
+    if (counts.ships < 2) return [first]
+    obsReadsAfterSecondShip++
+    if (
+      opts.transientReExport !== undefined &&
+      obsReadsAfterSecondShip <= (opts.transientUntilReads ?? 2)
+    ) {
+      const row = observationRow(firstEndIso, opts)
+      return [
+        opts.transientReExport === 'reissues'
+          ? { ...row, id: `${OBS_ID}-transient` }
+          : { ...row, costDetails: { total: 0.0195 }, calculatedTotalCost: 0.0195 },
+      ]
     }
-    return [observationRow(obsEndIso, opts)]
+    if (reExport === 'updates') return [observationRow(reExportEndIso, opts)]
+    if (reExport === 'reissues') {
+      return [{ ...observationRow(reExportEndIso, opts), id: `${OBS_ID}-reissued` }]
+    }
+    const duplicateVisible =
+      obsReadsAfterSecondShip > (opts.duplicateAfterReads ?? 0) &&
+      obsReadsAfterSecondShip <= (opts.duplicateVanishesAfterReads ?? Number.MAX_SAFE_INTEGER)
+    if (reExport === 'duplicates' && duplicateVisible) {
+      // A second ROW, distinguishable by the re-export's endTime — which is what the
+      // differing instant is for now that it no longer marks an update.
+      return [first, { ...observationRow(reExportEndIso, opts), id: `${OBS_ID}-dup` }]
+    }
+    return [first]
   }
 
   const deps: SmokeDeps = {
     ids: { traceId: 'f'.repeat(32), spanId: SPAN_ID },
+    // Left UNSET by default so the dwell window is the one runSmoke computes from the
+    // observed ingestion latency; tests that need a single sample pin it explicitly.
+    ...(opts.settleMs === undefined ? {} : { settleMs: opts.settleMs }),
+    ...(opts.readTimeoutMs === undefined ? {} : { readTimeoutMs: opts.readTimeoutMs }),
     log: m => logs.push(m),
     timeoutMs: opts.timeoutMs ?? 120_000,
     intervalMs: opts.realTimers === true ? 20 : 2_000,
@@ -142,9 +209,15 @@ function makeFake(opts: FakeOpts = {}): {
         }),
     getObservations: async id => {
       counts.reads++
-      if (id !== CARRIER) return []
+      if (inSecondShip) counts.readsDuringSecondShip++
+      if (id !== CARRIER) return { rows: [] }
       obsReads++
-      return currentRows()
+      const rows = currentRows()
+      if (opts.omitTotalItems === true) return { rows }
+      // One per ACCEPTED ingestion event, which is what the live endpoint was measured
+      // to report — deliberately NOT the number of surviving rows.
+      const events = opts.totalItemsFrozen === true ? 1 : counts.ships
+      return { rows, totalItems: events }
     },
     getTrace: async id => {
       counts.reads++
@@ -161,16 +234,23 @@ function makeFake(opts: FakeOpts = {}): {
       }
       carrierReads++
       if (carrierReads <= (opts.hideCarrierReads ?? 0)) return undefined
-      return carrierTrace(obsEndIso, opts)
+      return carrierTrace(firstEndIso, opts)
     },
     shipSpans: async spans => {
       counts.ships++
       const n = shipCounts[counts.ships - 1] ?? 1
-      if (counts.ships === 2 && opts.reExportIsNoOp === true) {
-        return { observations: n, traces: 2, failed: 0, log: opts.shipLog ?? [] }
+      // The endTime the shipped body WOULD carry, read off the span exactly as the
+      // real body does — so the fake can only show the re-export's instant if the
+      // re-export actually happened.
+      clock += opts.shipDurationMs ?? 0
+      if (counts.ships === 2 && opts.yieldDuringShip === true) {
+        inSecondShip = true
+        await new Promise(r => setTimeout(r, opts.shipYieldMs ?? 5))
+        inSecondShip = false
       }
-      preUpsertEndIso = obsEndIso
-      obsEndIso = new Date(spans[0].end_time_unix_nano / 1e6).toISOString()
+      const shippedEndIso = new Date(spans[0].end_time_unix_nano / 1e6).toISOString()
+      if (counts.ships === 1) firstEndIso = shippedEndIso
+      else reExportEndIso = shippedEndIso
       return {
         observations: n,
         traces: opts.tracesPerShip?.[counts.ships - 1] ?? 2,
@@ -281,7 +361,7 @@ describe('runSmoke — asynchronous ingestion', () => {
   it('FAILS FAST on a wrong cost — the value is asserted once, never polled for', async () => {
     // The observation's OWN price is wrong; the trace aggregate is left agreeing with
     // it, so what fails is the pinned oracle rather than a cross-view mismatch.
-    const { deps, logs, counts } = makeFake({ obsCost: 0.0195 })
+    const { deps, logs, counts } = makeFake({ obsCost: 0.0195, settleMs: 0 })
     expect(await runSmoke(deps)).toBe(1)
     // Visible immediately → zero waiting. A value-polling implementation would have
     // slept out the entire 120s bound before reporting the same mismatch.
@@ -293,6 +373,7 @@ describe('runSmoke — asynchronous ingestion', () => {
   it('FAILS FAST on a wrong usage bucket too', async () => {
     const { deps, logs, counts } = makeFake({
       usage: { input: 20_000, input_cached_tokens: 16_000, output: 1_000 },
+      settleMs: 0,
     })
     expect(await runSmoke(deps)).toBe(1)
     expect(counts.sleeps).toBe(0)
@@ -317,27 +398,6 @@ describe('runSmoke — asynchronous ingestion', () => {
     expect(logs.some(l => l.includes('not a worker race'))).toBe(true)
   })
 
-  it('waits for the RE-EXPORT to be processed before asserting the upsert', async () => {
-    const { deps, logs } = makeFake({ hideUpsertReads: 2 })
-    expect(await runSmoke(deps)).toBe(0)
-    // It waited on the marker specifically, not merely on "an observation exists".
-    expect(logs.some(l => l.includes('waiting for the re-export to be processed'))).toBe(true)
-  })
-
-  it('FAILS when the re-export never processes, KEEPING the assertions already computed', async () => {
-    // The first export's observation is already present, so a presence-only probe
-    // would return instantly and "prove" an upsert that never happened. And since
-    // the re-export is the LAST check, throwing here would discard the cost oracle
-    // and the bucket echoes on a run that cannot cheaply be repeated.
-    const { deps, logs } = makeFake({ reExportIsNoOp: true, timeoutMs: 20_000 })
-    expect(await runSmoke(deps)).toBe(1)
-    expect(logs.some(l => l.includes('re-export') && l.includes('[FAIL]'))).toBe(true)
-    expect(logs.some(l => l.includes('expected') && l.includes('[OK]'))).toBe(true)
-    expect(logs.some(l => l.includes('usageDetails') && l.includes('[OK]'))).toBe(true)
-    // Not misreported as a value mismatch — the values were fine.
-    expect(logs.some(l => l.includes('the values are wrong'))).toBe(false)
-  })
-
   it('waits for the SIBLING final body instead of asserting against the init-only row', async () => {
     // exportSpans sends a minimal init trace-create first, so the sibling is readable
     // before `usage_attributed` exists. Reading it then yields `undefined !== false`
@@ -349,7 +409,7 @@ describe('runSmoke — asynchronous ingestion', () => {
   })
 
   it('short-circuits on a RE-EXPORT that shipped no observation, without polling', async () => {
-    const { deps, logs, counts } = makeFake({ observationsPerShip: [1, 0] })
+    const { deps, logs, counts } = makeFake({ observationsPerShip: [1, 0], settleMs: 0 })
     expect(await runSmoke(deps)).toBe(1)
     expect(logs.some(l => l.includes('re-export shipped 0 observation(s)'))).toBe(true)
     expect(counts.sleeps).toBe(0) // never waited on a marker that cannot appear
@@ -384,6 +444,342 @@ describe('runSmoke — asynchronous ingestion', () => {
   })
 })
 
+describe('runSmoke — the re-export must not DUPLICATE (it does not update)', () => {
+  it('PASSES on create-only semantics: one row, same id, same cost, endTime unchanged', async () => {
+    // The measured live behavior. The second generation-create is accepted and then
+    // does nothing. Asserting an UPDATE here would fail a healthy instance forever —
+    // which is what a live run did before this was measured.
+    const { deps, logs } = makeFake({ reExport: 'createOnly' })
+    expect(await runSmoke(deps)).toBe(0)
+    expect(logs.some(l => l.includes('re-export') && l.includes('[OK]'))).toBe(true)
+    expect(logs.some(l => l.includes(`id ${OBS_ID} (was ${OBS_ID})`))).toBe(true)
+    // No update happened, so nothing is announced about one.
+    expect(logs.some(l => l.includes('reExportUpdated'))).toBe(false)
+  })
+
+  it('FAILS when the re-export DUPLICATES the observation', async () => {
+    // The defect the assertion exists to catch: two rows means the trace's cost is
+    // counted twice, which is the entire reason the check is here.
+    const { deps, logs } = makeFake({ reExport: 'duplicates' })
+    expect(await runSmoke(deps)).toBe(1)
+    expect(logs.some(l => l.includes('re-export') && l.includes('[FAIL]'))).toBe(true)
+    expect(logs.some(l => l.includes('2 observation(s) across'))).toBe(true)
+    // ...and everything already computed is still printed, including the cost oracle.
+    expect(logs.some(l => l.includes('expected') && l.includes('[OK]'))).toBe(true)
+    expect(logs.some(l => l.includes('usageDetails') && l.includes('[OK]'))).toBe(true)
+  })
+
+  it('CATCHES a duplicate that appears LATE — a single sample would have missed it', async () => {
+    // Non-duplication is a NEGATIVE: there is no state change to wait on, so one read
+    // taken straight after the ship proves nothing except that the worker was slow.
+    const { deps, logs, counts } = makeFake({ reExport: 'duplicates', duplicateAfterReads: 2 })
+    expect(await runSmoke(deps)).toBe(1)
+    expect(counts.sleeps).toBeGreaterThan(0) // it really dwelled
+    expect(logs.some(l => l.includes('watching') && l.includes('for a duplicate'))).toBe(true)
+    expect(logs.some(l => l.includes('re-export') && l.includes('[FAIL]'))).toBe(true)
+  })
+
+  it('FAILS when the re-export REISSUES the row under a different id', async () => {
+    // One row is not enough on its own. The id is the handle everything else uses to
+    // reach this observation, so a silent reissue is a defect even though the count
+    // and the price are both perfectly correct.
+    const { deps, logs } = makeFake({ reExport: 'reissues' })
+    expect(await runSmoke(deps)).toBe(1)
+    expect(logs.some(l => l.includes('re-export') && l.includes('[FAIL]'))).toBe(true)
+    expect(logs.some(l => l.includes(`${OBS_ID}-reissued (was ${OBS_ID})`))).toBe(true)
+  })
+
+  it('FAILS on a duplicate that appeared and then VANISHED before the last sample', async () => {
+    // This is what makes every sample of the dwell load-bearing rather than
+    // decoration: an assertion that reads only the final read would call this clean.
+    const { deps, logs } = makeFake({
+      reExport: 'duplicates',
+      duplicateAfterReads: 1,
+      duplicateVanishesAfterReads: 2,
+    })
+    expect(await runSmoke(deps)).toBe(1)
+    expect(logs.some(l => l.includes('re-export') && l.includes('[FAIL]'))).toBe(true)
+    expect(logs.some(l => l.includes('2 observation(s) across'))).toBe(true)
+  })
+
+  it('SCALES the dwell to the ingestion latency this instance just demonstrated', async () => {
+    // A fixed window is a false pass waiting to happen: under queue load the second
+    // event can be processed long after it closes, and the dwell would report clean
+    // over a duplicate that had not landed yet. The first export's own latency is the
+    // honest calibration — same queue, same work.
+    const slow = makeFake({ hideObsReads: 20, reExport: 'duplicates', duplicateAfterReads: 12 })
+    expect(await runSmoke(slow.deps)).toBe(1)
+    expect(slow.logs.some(l => l.includes('re-export') && l.includes('[FAIL]'))).toBe(true)
+    // The same duplicate, arriving at the same read index, is out of reach of the
+    // floor-sized window a fast instance would have used.
+    const fast = makeFake({
+      reExport: 'duplicates',
+      duplicateAfterReads: 12,
+      settleMs: RE_EXPORT_SETTLE_MS,
+    })
+    expect(await runSmoke(fast.deps)).toBe(0)
+  })
+
+  it('measures ingestion latency from BEFORE the export call, not after it returns', async () => {
+    // `exportSpans` keeps working after posting the generation, so the row can land
+    // while the call is still returning. Timing from afterwards reads near-zero
+    // latency on a slow instance and sizes the dwell off the floor — and a duplicate
+    // arriving on that same slow queue lands after the window has closed.
+    const { deps, logs } = makeFake({
+      shipDurationMs: 30_000,
+      reExport: 'duplicates',
+      duplicateAfterReads: 20,
+    })
+    expect(await runSmoke(deps)).toBe(1)
+    expect(logs.some(l => l.includes('re-export') && l.includes('[FAIL]'))).toBe(true)
+    // The floor-sized window would have stopped ~11 samples in and missed it.
+    const { deps: floored } = makeFake({
+      shipDurationMs: 30_000,
+      reExport: 'duplicates',
+      duplicateAfterReads: 20,
+      settleMs: RE_EXPORT_SETTLE_MS,
+    })
+    expect(await runSmoke(floored)).toBe(0)
+  })
+
+  it('starts sampling BEFORE the re-export call returns', async () => {
+    // exportSpans posts the generation and then keeps working, so ingestion can expose
+    // a duplicate while that call is still in flight. A dwell that only began
+    // afterwards has a blind spot exactly where the write it watches for happens.
+    const { deps, counts } = makeFake({ yieldDuringShip: true })
+    expect(await runSmoke(deps)).toBe(0)
+    // Reads landed while the re-export call was still in flight — which is only
+    // possible if the dwell was already running when it was issued.
+    expect(counts.readsDuringSecondShip).toBeGreaterThan(0)
+  })
+
+  it('gives each dwell read the normal per-read bound, not the leftover window', async () => {
+    // A healthy-but-slow read near the boundary is not a stalled ingestion. Bounding
+    // it by whatever is left of the dwell turns ordinary latency into a false failure.
+    // Virtual clock for the window, REAL time for the read: the read takes 60ms of
+    // wall clock while the window has 30 "ms" left, which is precisely the case a
+    // window-shaped read bound misreports as a stalled ingestion.
+    const { deps } = makeFake({ settleMs: 30, readTimeoutMs: 2_000 })
+    const inner = deps.getObservations
+    deps.getObservations = async id => {
+      await new Promise(r => setTimeout(r, 60))
+      return inner(id)
+    }
+    expect(await runSmoke(deps)).toBe(0)
+  })
+
+  it('FAILS on a duplicate visible ONLY while the export call was in flight', async () => {
+    // The in-flight phase is evidence, not decoration: a duplicate that existed only
+    // during the export still double-counted the cost while it existed, and the
+    // post-export window alone would never see it.
+    const { deps, logs } = makeFake({
+      yieldDuringShip: true,
+      reExport: 'duplicates',
+      duplicateAfterReads: 1,
+      duplicateVanishesAfterReads: 3,
+    })
+    expect(await runSmoke(deps)).toBe(1)
+    expect(logs.some(l => l.includes('re-export') && l.includes('[FAIL]'))).toBe(true)
+    expect(logs.some(l => l.includes('2 observation(s) across'))).toBe(true)
+  })
+
+  it('names an ANOMALY when nothing proves the second event was ever processed', async () => {
+    // The export proves the POST was accepted, nothing more. A stalled worker looks
+    // exactly like a correct create-only re-export — every sample sees the original
+    // row — so non-duplication would "pass" without the write having been handled.
+    const { deps, logs } = makeFake({ totalItemsFrozen: true })
+    expect(await runSmoke(deps)).toBe(0)
+    expect(logs.some(l => l.includes('reExportUnconfirmed') && l.includes('[ANOMALY]'))).toBe(true)
+    expect(logs.some(l => l.includes('totalItems did not move'))).toBe(true)
+  })
+
+  it('stays silent about processing when the count DID move', async () => {
+    const { deps, logs } = makeFake()
+    expect(await runSmoke(deps)).toBe(0)
+    expect(logs.some(l => l.includes('reExportUnconfirmed'))).toBe(false)
+    expect(logs).toContain('PASS')
+  })
+
+  it('does not invent an anomaly when the endpoint reports no count at all', async () => {
+    // Absence of the signal is not evidence of a stalled worker.
+    const { deps, logs } = makeFake({ omitTotalItems: true })
+    expect(await runSmoke(deps)).toBe(0)
+    expect(logs.some(l => l.includes('reExportUnconfirmed'))).toBe(false)
+  })
+
+  it('watches for the WHOLE export, even one that outlives the settle window', async () => {
+    // The in-flight phase is bounded by the export, not by `settleMs`. Otherwise a
+    // long export goes unwatched for its remainder, and the post-export window cannot
+    // see what came and went in that gap.
+    const { deps, logs } = makeFake({
+      yieldDuringShip: true,
+      settleMs: 4_000, // far shorter than the in-flight sampling that follows
+      reExport: 'duplicates',
+      duplicateAfterReads: 6,
+      duplicateVanishesAfterReads: 8,
+    })
+    expect(await runSmoke(deps)).toBe(1)
+    expect(logs.some(l => l.includes('re-export') && l.includes('[FAIL]'))).toBe(true)
+  })
+
+  it('JOINS the in-flight watcher when the export throws, leaving nothing running', async () => {
+    // Otherwise the exception skips the join and the watcher keeps issuing reads —
+    // and holding a timer — after the run has already failed, delaying exit.
+    // REAL timers: the failure being excluded is a watcher that is still asleep when
+    // the export throws and wakes up afterwards, which a virtual clock (whose sleeps
+    // resolve instantly) cannot express.
+    const { deps, counts } = makeFake({ realTimers: true, yieldDuringShip: true })
+    const shipInner = deps.shipSpans
+    deps.shipSpans = async spans => {
+      const res = await shipInner(spans)
+      if (counts.ships === 2) throw new Error('export blew up')
+      return res
+    }
+    await expect(runSmoke(deps)).rejects.toThrow('export blew up')
+    const readsAtFailure = counts.reads
+    await new Promise(r => setTimeout(r, 30))
+    expect(counts.reads).toBe(readsAtFailure) // nothing kept polling
+  })
+
+  it('FAILS on a TRANSIENT reissue that reverted before the final sample', async () => {
+    // Same reasoning as the transient duplicate: the invariant was broken while it was
+    // broken. A check that read only the last sample would call this clean.
+    const { deps, logs } = makeFake({ transientReExport: 'reissues' })
+    expect(await runSmoke(deps)).toBe(1)
+    expect(logs.some(l => l.includes('re-export') && l.includes('[FAIL]'))).toBe(true)
+    expect(logs.some(l => l.includes('worst sample') && l.includes('-transient'))).toBe(true)
+  })
+
+  it('FAILS on a TRANSIENT repricing that reverted before the final sample', async () => {
+    const { deps, logs } = makeFake({ transientReExport: 'reprices' })
+    expect(await runSmoke(deps)).toBe(1)
+    expect(logs.some(l => l.includes('worst sample') && l.includes('cost 0.019500'))).toBe(true)
+  })
+
+  it('FAILS when the window ENDS BLIND — served at first, unserved at the boundary', async () => {
+    // One stalled read can consume the rest of the window, so a dwell that ends blind
+    // never observed its own tail — the exact stretch a late duplicate lands in.
+    const { deps, logs, counts } = makeFake()
+    const inner = deps.getObservations
+    let postReads = 0
+    deps.getObservations = async id => {
+      if (counts.ships < 2) return inner(id)
+      postReads++
+      return postReads === 1 ? inner(id) : undefined
+    }
+    expect(await runSmoke(deps)).toBe(1)
+    expect(logs.some(l => l.includes('the last read was not served'))).toBe(true)
+    expect(logs.some(l => l.includes('the values are wrong'))).toBe(false)
+  })
+
+  it('reports an ALL-UNSERVED post-export window as a read failure, not a value mismatch', async () => {
+    // Returning the empty default would surface as "0 observation(s)" under the
+    // "ingestion landed; the values are wrong" diagnosis — blaming the payload for
+    // what is a read failure. One stalled read is enough: the per-read allowance
+    // deliberately exceeds the default window.
+    const { deps, logs, counts } = makeFake()
+    const inner = deps.getObservations
+    deps.getObservations = async id => (counts.ships >= 2 ? undefined : inner(id))
+    expect(await runSmoke(deps)).toBe(1)
+    expect(logs.some(l => l.includes('re-export') && l.includes('no read was served'))).toBe(true)
+    expect(logs.some(l => l.includes('the values are wrong'))).toBe(false)
+    expect(logs.some(l => l.includes('0 observation(s)'))).toBe(false)
+  })
+
+  it('keeps a FULL window AFTER the export returns, not one shared across it', async () => {
+    // The generation is posted late in the export, so a slow export can consume the
+    // whole settle time before the write under test is even sent. A single window
+    // spanning both is over before there is anything to observe.
+    const { deps, logs } = makeFake({
+      settleMs: 5_000,
+      shipDurationMs: 5_000, // the export alone exhausts a shared window
+      reExport: 'duplicates',
+      duplicateAfterReads: 3,
+    })
+    expect(await runSmoke(deps)).toBe(1)
+    expect(logs.some(l => l.includes('re-export') && l.includes('[FAIL]'))).toBe(true)
+  })
+
+  it('never leaves the in-flight watcher as an unhandled rejection when the export throws', async () => {
+    // The watcher is started before the export is awaited. If its read fails while the
+    // export is still in flight — and the export then throws, so the later handler is
+    // never reached — an unattached rejection fails the process outright, with no
+    // diagnosis, instead of the export's own error being reported.
+    const unhandled: unknown[] = []
+    const onUnhandled = (err: unknown): void => {
+      unhandled.push(err)
+    }
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      const { deps } = makeFake({ yieldDuringShip: true })
+      let reads = 0
+      const inner = deps.getObservations
+      deps.getObservations = async id => {
+        reads++
+        if (reads > 3) throw new Error('read blew up mid-export')
+        return inner(id)
+      }
+      const shipInner = deps.shipSpans
+      deps.shipSpans = async spans => {
+        const res = await shipInner(spans)
+        if (res.observations === 1 && reads > 0) throw new Error('export blew up')
+        return res
+      }
+      await expect(runSmoke(deps)).rejects.toThrow(/blew up/)
+      // Let any stray rejection surface before asserting there was none.
+      await new Promise(r => setTimeout(r, 20))
+      expect(unhandled).toEqual([])
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+  })
+
+  it('samples AT the window boundary, not one interval short of it', async () => {
+    // 5s window, 2s interval: samples at 0/2/4 leave the final second unobserved. A
+    // duplicate landing there is exactly what the check exists to catch.
+    const { deps, logs } = makeFake({
+      settleMs: 5_000,
+      reExport: 'duplicates',
+      // Visible ONLY on the boundary sample: post-ship reads land at 2s, 4s and 5s, so
+      // a dwell that stopped as soon as a whole interval no longer fit sees 1 and 2.
+      duplicateAfterReads: 2,
+    })
+    expect(await runSmoke(deps)).toBe(1)
+    expect(logs.some(l => l.includes('re-export') && l.includes('[FAIL]'))).toBe(true)
+  })
+
+  it('reports an ANOMALY — not a pass, not a failure — if the platform starts UPDATING', async () => {
+    // Better than assumed, but still a change to a property the backfill notes depend
+    // on. It must be said out loud rather than passing silently.
+    const { deps, logs } = makeFake({ reExport: 'updates' })
+    expect(await runSmoke(deps)).toBe(0)
+    expect(logs.some(l => l.includes('reExportUpdated') && l.includes('[ANOMALY]'))).toBe(true)
+    expect(logs.some(l => l.includes('re-export') && l.includes('[OK]'))).toBe(true)
+  })
+
+  it('FAILS when the surviving row is REPRICED by the re-export', async () => {
+    // One row and a stable id are not enough on their own: a re-export that changed
+    // the price would still satisfy both while corrupting the spend figure.
+    const { deps, logs } = makeFake({ reExport: 'createOnly' })
+    const inner = deps.getObservations
+    let ships = 0
+    deps.shipSpans = (
+      (orig: SmokeDeps['shipSpans']) => async (spans: Parameters<SmokeDeps['shipSpans']>[0]) => {
+        ships++
+        return orig(spans)
+      }
+    )(deps.shipSpans)
+    deps.getObservations = async id => {
+      const page = (await inner(id)) ?? { rows: [] }
+      if (ships < 2) return page
+      return { ...page, rows: page.rows.map(r => ({ ...r, costDetails: { total: 0.0195 } })) }
+    }
+    expect(await runSmoke(deps)).toBe(1)
+    expect(logs.some(l => l.includes('re-export') && l.includes('[FAIL]'))).toBe(true)
+    expect(logs.some(l => l.includes('cost 0.019500 (was 0.008700)'))).toBe(true)
+  })
+})
+
 describe('runSmoke — the two endpoints disagree (the measured live behavior)', () => {
   it('PASSES on the LIVE shape: trace detail empty, observations endpoint priced', async () => {
     // Exactly what the deployed instance returns: `/traces/{id}` reports
@@ -391,7 +787,7 @@ describe('runSmoke — the two endpoints disagree (the measured live behavior)',
     // `/observations?traceId=…` returns the priced GENERATION row. A smoke that read
     // presence or cost off the trace detail endpoint polls until its bound fires and
     // blames the ingestion worker for a healthy instance.
-    const { deps, logs, counts } = makeFake({ detailView: 'silent' })
+    const { deps, logs, counts } = makeFake({ detailView: 'silent', settleMs: 0 })
     expect(await runSmoke(deps)).toBe(0)
     expect(counts.sleeps).toBe(0) // never waited on something it could not see
     expect(logs.some(l => l.includes('expected') && l.includes('[OK]'))).toBe(true)
@@ -399,7 +795,7 @@ describe('runSmoke — the two endpoints disagree (the measured live behavior)',
     // ...and the divergence is NAMED rather than silently trusted away.
     expect(logs.some(l => l.includes('[ANOMALY]') && l.includes('viewsDisagree'))).toBe(true)
     expect(logs.some(l => l.includes('observations endpoint is authoritative'))).toBe(true)
-    expect(logs.some(l => l.startsWith('PASS (with 1 view disagreement'))).toBe(true)
+    expect(logs.some(l => l === 'PASS (with 1 anomaly/anomalies: viewsDisagree)')).toBe(true)
   })
 
   it('FAILS when the detail view is POPULATED and contradicts the observation', async () => {
@@ -442,9 +838,11 @@ describe("the smoke's own configuration", () => {
     expect(SMOKE_EXPORT_OPTIONS.saltPasses).toBe(0)
   })
 
-  it('keeps the re-export marker above the endTime comparison granularity', () => {
-    // The marker comparison truncates to whole seconds; a gap below that granularity
-    // makes the upsert check unfalsifiable again, silently. Asserted against the
+  it('keeps the two exports tellable apart at the endTime comparison granularity', () => {
+    // The re-export ships a DIFFERENT end instant so its row is distinguishable from
+    // the first export's — that is what makes a duplicate unmistakable and what lets
+    // an actual update announce itself. The comparison truncates to whole seconds, so
+    // a gap below that granularity silently collapses both. Asserted against the
     // clock-derived instants, at several clock readings, so the relationship is what
     // is guarded rather than one snapshot of it.
     expect(MARKER_GAP_MS).toBeGreaterThan(MARKER_TRUNCATION_MS)
@@ -480,6 +878,22 @@ describe("the smoke's own configuration", () => {
   })
 })
 
+describe('reExportDwellMs — the dwell window is measured, not assumed', () => {
+  it('never drops below the floor, however fast the instance was', () => {
+    expect(reExportDwellMs(0, 120_000)).toBe(RE_EXPORT_SETTLE_MS)
+    expect(reExportDwellMs(100, 120_000)).toBe(RE_EXPORT_SETTLE_MS)
+    expect(reExportDwellMs(-5, 120_000)).toBe(RE_EXPORT_SETTLE_MS)
+  })
+
+  it('scales past the floor when the first export was slow to land', () => {
+    expect(reExportDwellMs(30_000, 120_000)).toBe(90_000)
+  })
+
+  it('stays finite: capped by the ingestion bound', () => {
+    expect(reExportDwellMs(600_000, 120_000)).toBe(120_000)
+  })
+})
+
 describe('observationCost — the price comes from the observation itself', () => {
   it('prefers costDetails.total', () => {
     expect(observationCost({ costDetails: { total: 0.0087 }, calculatedTotalCost: 0.9 })).toBe(
@@ -502,18 +916,28 @@ describe('observationCost — the price comes from the observation itself', () =
   })
 })
 
-describe('parseObservationList — the envelope is never coerced to "no rows"', () => {
+describe('parseObservationPage — the envelope is never coerced to "no rows"', () => {
   it('returns the data array', () => {
-    expect(parseObservationList({ data: [{ id: 'a' }], meta: {} }, 'T')).toEqual([{ id: 'a' }])
-    expect(parseObservationList({ data: [], meta: {} }, 'T')).toEqual([])
+    expect(parseObservationPage({ data: [{ id: 'a' }], meta: {} }, 'T').rows).toEqual([{ id: 'a' }])
+    expect(parseObservationPage({ data: [], meta: {} }, 'T').rows).toEqual([])
+  })
+
+  it('carries meta.totalItems through, and tolerates its absence', () => {
+    // Never a row count — it is the only evidence available that an event was
+    // PROCESSED, and the assertions read rows.
+    expect(
+      parseObservationPage({ data: [{ id: 'a' }], meta: { totalItems: 2 } }, 'T').totalItems
+    ).toBe(2)
+    expect(parseObservationPage({ data: [], meta: {} }, 'T').totalItems).toBeUndefined()
+    expect(parseObservationPage({ data: [] }, 'T').totalItems).toBeUndefined()
   })
 
   it('RAISES on an envelope it does not recognise, instead of reporting emptiness', () => {
     // An empty read is waited out as "never landed" and blames the ingestion worker;
     // a raise names the real fault (the API changed shape).
-    expect(() => parseObservationList({ observations: [] }, 'T')).toThrow(/unrecognised envelope/)
-    expect(() => parseObservationList([], 'T')).toThrow(/unrecognised envelope/)
-    expect(() => parseObservationList(null, 'T')).toThrow(/unrecognised envelope/)
+    expect(() => parseObservationPage({ observations: [] }, 'T')).toThrow(/unrecognised envelope/)
+    expect(() => parseObservationPage([], 'T')).toThrow(/unrecognised envelope/)
+    expect(() => parseObservationPage(null, 'T')).toThrow(/unrecognised envelope/)
   })
 })
 
