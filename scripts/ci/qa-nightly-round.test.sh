@@ -476,6 +476,7 @@ test_export_summary_with_observations() {
     assert_kv export_summary_lines 1 obs-summary
     assert_kv traces 5 obs-summary
     assert_kv observations 4 obs-summary
+    assert_kv observations_skipped 0 obs-summary
     assert_kv enqueue_ok 3 obs-summary
     cleanup_fixture
 }
@@ -490,6 +491,19 @@ test_export_summary_without_observations() {
     assert_kv traces 5 no-obs-summary
     assert_kv observations 0 no-obs-summary
     assert_kv ship_failed 2 no-obs-summary
+    cleanup_fixture
+}
+
+test_export_summary_with_skipped_observations() {
+    echo "test: the summary line carrying a skipped-observation field parses (both counts distinct)"
+    make_fixture
+    run_orch STUB_EXPORT_OUT="qa-export: 5 trace(s), 12 screenshot(s), 3 observation(s), 83 observation(s) skipped; enqueued 3/3"
+    assert_rc0 obs-skipped
+    assert_kv export_summary_lines 1 obs-skipped
+    assert_kv traces 5 obs-skipped
+    # The two observation counts must not be confused with each other.
+    assert_kv observations 3 obs-skipped
+    assert_kv observations_skipped 83 obs-skipped
     cleanup_fixture
 }
 
@@ -848,6 +862,7 @@ main() {
     test_export_duplicate_summary
     test_export_summary_with_observations
     test_export_summary_without_observations
+    test_export_summary_with_skipped_observations
     test_runid_collision_aborts
     test_rundir_create_error
     test_deploy_gen_unset_records_false

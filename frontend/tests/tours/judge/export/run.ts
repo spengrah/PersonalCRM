@@ -201,6 +201,10 @@ export async function main(
     // land with the matching regex change or the nightly silently zeroes every count.
     `qa-export: ${result.traces} trace(s), ${result.screenshots} screenshot(s), ` +
       `${result.observations} observation(s)` +
+      // Only when non-zero, so the common shape stays short — but never omitted when
+      // it happened: "3 observation(s)" alone would imply a completeness a breaker
+      // trip did not have.
+      (result.observationsSkipped ? `, ${result.observationsSkipped} observation(s) skipped` : '') +
       (result.failed ? `, ${result.failed} FAILED` : '') +
       `; enqueued ${result.enqueue.enqueued}/${result.enqueue.attempted}` +
       (result.enqueue.skippedExisting ? `, ${result.enqueue.skippedExisting} already queued` : '') +

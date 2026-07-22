@@ -540,6 +540,8 @@ interface MockOpts {
   rejectScore?: boolean
   // Never settle the generation-create POST — proves the request is time-bounded.
   generationNeverSettles?: boolean
+  // Same, but selective: stalls only the calls this predicate accepts.
+  generationNeverSettlesWhen?: () => boolean
   // Fail the final body event for the trace ids this predicate selects (carrier-gate tests).
   failBodyFor?: (traceId: string) => boolean
   // HTTP-success MULTI-STATUS rejection of the final body event, per trace id.
@@ -611,11 +613,17 @@ function mockLangfuse(opts: MockOpts = {}): {
         const gen = { ...(evt as unknown as GenerationEvent), batchLength: batch.length }
         generations.push(gen)
         order.push({ kind: 'generation', traceId: gen.body.traceId })
-        if (opts.generationNeverSettles === true) {
+        if (opts.generationNeverSettles === true || opts.generationNeverSettlesWhen?.() === true) {
           // Never settles on its own; rejects only if the caller ABORTS it — exactly
           // how a real fetch behaves, so the test proves the bound, not the mock.
           return new Promise<Response>((_resolve, reject) => {
-            init?.signal?.addEventListener('abort', () => reject(new Error('aborted')))
+            init?.signal?.addEventListener('abort', () => {
+              // A real aborted fetch rejects with an AbortError-NAMED error; the
+              // breaker classifies by name, so the fake must be faithful here.
+              const e = new Error('The operation was aborted')
+              e.name = 'AbortError'
+              reject(e)
+            })
           })
         }
         if (opts.generationMultiStatus === true) {
@@ -1756,6 +1764,54 @@ describe('exportSpans — the generation observation (separate, non-fatal, after
     expect(res.observations).toBe(0)
     expect(res.traces).toBe(1)
     expect(res.enqueue.enqueued).toBe(1)
+  })
+
+  it('OPENS a breaker after consecutive timeouts: later spans are skipped, not re-timed-out', async () => {
+    // The per-request timeout bounds ONE call; paying it once per span is a ~43-minute
+    // stall on a full round. Asserted on ATTEMPTS, not wall clock, so it is fast and
+    // deterministic.
+    const spans = Array.from({ length: 12 }, (_, i) =>
+      itemSpan('fail', { ...usageParams, behaviorId: `B-${i}` })
+    )
+    const mock = mockLangfuse({ generationNeverSettles: true })
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const logs: string[] = []
+    const res = await exportSpans(cfg, spans, m => logs.push(m), { observationTimeoutMs: 5 })
+    // Three consecutive stalls open the breaker; the remaining nine are never posted.
+    expect(mock.generations).toHaveLength(3)
+    expect(res.observations).toBe(0)
+    expect(res.observationsSkipped).toBe(9)
+    expect(logs.some(l => l.includes('observations DISABLED'))).toBe(true)
+    // Traces, scores and the enqueue pass are untouched by the breaker.
+    expect(res.traces).toBe(12)
+    expect(res.failed).toBe(0)
+    expect(mock.scores).toHaveLength(12)
+    expect(res.enqueue.enqueued).toBeGreaterThan(0)
+  })
+
+  it('does NOT trip the breaker on rejected payloads — those stay attempted and honest', async () => {
+    // A 400 is fast and per-span meaningful; only the never-settling class must stop.
+    const spans = Array.from({ length: 6 }, (_, i) =>
+      itemSpan('fail', { ...usageParams, behaviorId: `R-${i}` })
+    )
+    const mock = mockLangfuse({ generationError: true })
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const res = await exportSpans(cfg, spans)
+    expect(mock.generations).toHaveLength(6) // every span still attempted
+    expect(res.observations).toBe(0)
+    expect(res.observationsSkipped).toBe(0) // nothing was SKIPPED — all were tried
+  })
+
+  it('resets the streak on a success, so isolated stalls never open the breaker', async () => {
+    let n = 0
+    const mock = mockLangfuse({ generationNeverSettlesWhen: () => ++n % 2 === 1 })
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const spans = Array.from({ length: 8 }, (_, i) =>
+      itemSpan('fail', { ...usageParams, behaviorId: `A-${i}` })
+    )
+    const res = await exportSpans(cfg, spans, () => {}, { observationTimeoutMs: 5 })
+    expect(res.observationsSkipped).toBe(0)
+    expect(res.observations).toBe(4)
   })
 
   it('counts observations across spans, and one rejection lowers the count by exactly one', async () => {

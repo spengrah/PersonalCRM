@@ -608,6 +608,16 @@ export async function uploadMedia(
 // stall that blocks every step after it.
 const OBSERVATION_TIMEOUT_MS = 30_000
 
+// Consecutive non-settling observation requests before the breaker opens. Small:
+// three stalls in a row is already a class-wide failure, not a coincidence, and each
+// one costs a full timeout.
+const OBSERVATION_TIMEOUT_STREAK_LIMIT = 3
+
+// A request aborted by its own timeout surfaces as an AbortError / DOMException, NOT
+// as an ApiError — classifying by name is the only reliable test across runtimes.
+export const isAbortError = (err: unknown): boolean =>
+  err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')
+
 export interface ExportResult {
   traces: number
   screenshots: number
@@ -617,6 +627,10 @@ export interface ExportResult {
   // without surfacing it, a round where every generation was rejected would print
   // a clean summary.
   observations: number
+  // Spans whose observation was NOT attempted because the breaker was open. A round
+  // that shipped 3 and skipped 83 must never be reportable as simply "3": the count
+  // must not imply a completeness it did not have.
+  observationsSkipped: number
   // Best-effort triage enqueue (INV-A): never affects trace shipping / process exit.
   // `attempted` = POSTs issued (eligible minus already-present); `enqueued` +
   // `failed` partition it; `skippedExisting` = eligible items already in the queue.
@@ -747,6 +761,7 @@ export async function exportSpans(
     screenshots: 0,
     failed: 0,
     observations: 0,
+    observationsSkipped: 0,
     enqueue: { attempted: 0, enqueued: 0, skippedExisting: 0, failed: 0 },
   }
 
@@ -786,6 +801,15 @@ export async function exportSpans(
     }
     return verdictConfigId
   }
+
+  // Observation circuit breaker. The per-request timeout bounds ONE call; without a
+  // breaker the same stall is paid once PER SPAN, so a round of ~86 usage-bearing
+  // spans would add ~43 minutes of wall clock before the enqueue pass even starts.
+  // Non-fatal has to mean the round is not materially harmed, not merely that the
+  // process survives.
+  const observationTimeoutMs = opts.observationTimeoutMs ?? OBSERVATION_TIMEOUT_MS
+  let timeoutStreak = 0
+  let observationsBroken = false
 
   // Per-item-trace triage inputs, drained by the enqueue pass after the ship loop.
   const enqueueItems: EnqueueItem[] = []
@@ -948,26 +972,50 @@ export async function exportSpans(
     // sits in its own try/catch: it degrades to a skipped observation, never a
     // dropped trace and never a suppressed enqueue pass.
     if (carrierShipped) {
-      try {
-        const genBody = buildGenerationBody(span, scrub)
-        if (genBody) {
-          // A per-event rejection throws, so the count reflects ACCEPTED
-          // observations — counting the POST would report a shipped observation
-          // that was never stored.
-          await postIngestionEvent(
-            cfg,
-            {
-              id: `evt-${traceIdFor(span)}-gen-${nonce}`,
-              type: 'generation-create',
-              timestamp: genBody.startTime,
-              body: genBody,
-            },
-            opts.observationTimeoutMs ?? OBSERVATION_TIMEOUT_MS
-          )
-          result.observations++
+      if (observationsBroken) {
+        // The breaker is open: attempting would cost another full timeout for a
+        // request class that has already proven it is not settling.
+        result.observationsSkipped++
+      } else {
+        try {
+          const genBody = buildGenerationBody(span, scrub)
+          if (genBody) {
+            // A per-event rejection throws, so the count reflects ACCEPTED
+            // observations — counting the POST would report a shipped observation
+            // that was never stored.
+            await postIngestionEvent(
+              cfg,
+              {
+                id: `evt-${traceIdFor(span)}-gen-${nonce}`,
+                type: 'generation-create',
+                timestamp: genBody.startTime,
+                body: genBody,
+              },
+              observationTimeoutMs
+            )
+            result.observations++
+            timeoutStreak = 0
+          }
+        } catch (err) {
+          log(`  generation-create failed for ${traceIdFor(span)}: ${errMsg(err)}`)
+          // ONLY a non-settling request trips the breaker. A rejected payload (a 400)
+          // is fast and per-span meaningful — it costs nothing to keep trying and its
+          // reason may differ per span, so it resets the streak rather than counting
+          // toward it.
+          if (isAbortError(err)) {
+            timeoutStreak++
+            if (timeoutStreak >= OBSERVATION_TIMEOUT_STREAK_LIMIT) {
+              observationsBroken = true
+              log(
+                `  observations DISABLED for the rest of this export after ` +
+                  `${timeoutStreak} consecutive timeouts — remaining spans are counted as skipped ` +
+                  `so the round is not stalled by a request class that is not settling`
+              )
+            }
+          } else {
+            timeoutStreak = 0
+          }
         }
-      } catch (err) {
-        log(`  generation-create failed for ${traceIdFor(span)}: ${errMsg(err)}`)
       }
     }
   }

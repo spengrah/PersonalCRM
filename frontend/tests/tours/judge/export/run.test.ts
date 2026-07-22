@@ -72,6 +72,7 @@ const okResult = {
   screenshots: 0,
   failed: 0,
   observations: 1,
+  observationsSkipped: 0,
   enqueue: { attempted: 0, enqueued: 0, skippedExisting: 0, failed: 0 },
 }
 const oneSpanJsonl = JSON.stringify(
@@ -236,6 +237,7 @@ describe('main — provenance plumbing (component-wise, never fail-closed)', () 
       screenshots: 0,
       failed: 0,
       observations: 0,
+      observationsSkipped: 0,
       enqueue: { attempted: 1, enqueued: 1, skippedExisting: 0, failed: 0 },
     })) as unknown as typeof ExportSpansFn
     const logs: string[] = []
@@ -249,12 +251,48 @@ describe('main — provenance plumbing (component-wise, never fail-closed)', () 
     expect(logs.some(l => l.includes('0 observation(s)'))).toBe(true)
   })
 
+  it('reports SKIPPED observations in the summary — a partial count never reads as complete', async () => {
+    // A round that shipped 3 and skipped 83 must not be reportable as "3": the
+    // breaker's effect has to be visible to the nightly, not just in the log.
+    const fn = (async () => ({
+      traces: 86,
+      screenshots: 0,
+      failed: 0,
+      observations: 3,
+      observationsSkipped: 83,
+      enqueue: { attempted: 1, enqueued: 1, skippedExisting: 0, failed: 0 },
+    })) as unknown as typeof ExportSpansFn
+    const logs: string[] = []
+    const code = await main(['/t.jsonl'], LF_ENV, {
+      fs: traceFs(),
+      exportSpans: fn,
+      log: m => logs.push(m),
+      errlog: () => {},
+    })
+    expect(code).toBe(0) // still non-fatal
+    const summary = logs.find(l => l.startsWith('qa-export: 86 trace(s)'))
+    expect(summary).toContain('3 observation(s), 83 observation(s) skipped')
+  })
+
+  it('omits the skipped field entirely when nothing was skipped (the common shape)', async () => {
+    const logs: string[] = []
+    await main(['/t.jsonl'], LF_ENV, {
+      fs: traceFs(),
+      exportSpans: makeExport().fn,
+      log: m => logs.push(m),
+      errlog: () => {},
+    })
+    const summary = logs.find(l => l.startsWith('qa-export: 1 trace(s)'))
+    expect(summary).not.toContain('skipped')
+  })
+
   it('a partial enqueue loss (enqueue.failed > 0, trace failed === 0) STILL exits 0 (INV-A)', async () => {
     const fn = (async () => ({
       traces: 3,
       screenshots: 0,
       failed: 0,
       observations: 3,
+      observationsSkipped: 0,
       enqueue: { attempted: 2, enqueued: 1, skippedExisting: 0, failed: 1 },
     })) as unknown as typeof ExportSpansFn
     const logs: string[] = []

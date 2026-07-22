@@ -34,6 +34,7 @@ import type { Scenario } from '../label-trace'
 import {
   ApiError,
   api,
+  isAbortError,
   configFromEnv,
   exportSpans,
   parseSpanFile,
@@ -150,12 +151,6 @@ const num = (v: unknown): number | undefined => (typeof v === 'number' ? v : und
 // Is `key` PRESENT on the object (regardless of value)? Presence of a key the final
 // body supplies is the honest "this row has settled" signal; comparing its VALUE here
 // would turn a poll into a value-wait, which is exactly what must not happen.
-// An aborted request (the per-read timeout firing) surfaces as an AbortError /
-// DOMException, NOT as an ApiError — classifying it by name is the only reliable
-// test across runtimes.
-const isAbort = (err: unknown): boolean =>
-  err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')
-
 // How a failed trace READ is treated. `retry` means "indistinguishable from not yet
 // visible", so the poller waits and the OVERALL bound produces the one
 // human-readable diagnosis: a 404 (the row has not appeared) and an abort (this read
@@ -163,7 +158,7 @@ const isAbort = (err: unknown): boolean =>
 // failure and must surface rather than be waited out.
 export function readErrorDisposition(err: unknown): 'retry' | 'fatal' {
   if (err instanceof ApiError && err.status === 404) return 'retry'
-  if (isAbort(err)) return 'retry'
+  if (isAbortError(err)) return 'retry'
   return 'fatal'
 }
 
