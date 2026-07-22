@@ -27,7 +27,46 @@ import type { Input, ModelReasoningEffort, ThreadOptions } from '@openai/codex-s
 export interface JudgeTurn {
   items: ReadonlyArray<{ type?: string }>
   finalResponse: string
-  usage: { input_tokens?: number; output_tokens?: number } | null
+  // The SDK's published `Usage` type declares FOUR fields while the runtime emits
+  // FIVE (`cache_write_input_tokens` is undeclared as of codex-sdk 0.144.6).
+  // Declared WIDER than the .d.ts on purpose — read usage defensively rather than
+  // trusting the published type to be exhaustive.
+  usage: {
+    input_tokens?: number
+    cached_input_tokens?: number
+    cache_write_input_tokens?: number
+    output_tokens?: number
+    reasoning_output_tokens?: number
+  } | null
+}
+
+// The usage counts one turn reports. Every field is optional and stays
+// `undefined` when the turn did not report it — 0 is a different, stronger claim
+// ("the model used none") than "the transport told us nothing".
+export interface TurnUsage {
+  inputTokens?: number
+  cachedInputTokens?: number
+  cacheWriteInputTokens?: number
+  outputTokens?: number
+  reasoningOutputTokens?: number
+}
+
+const USAGE_KEYS = [
+  'inputTokens',
+  'cachedInputTokens',
+  'cacheWriteInputTokens',
+  'outputTokens',
+  'reasoningOutputTokens',
+] as const
+
+// Sum `from` into `into`, skipping fields the source never reported so absence
+// survives accumulation (an absent field must not materialize as 0).
+export function addUsage(into: TurnUsage, from: TurnUsage): void {
+  for (const k of USAGE_KEYS) {
+    const v = from[k]
+    if (v === undefined) continue
+    into[k] = (into[k] ?? 0) + v
+  }
 }
 
 // From a completed turn → verdicts (or a tool-rejection signal). Pure — the
@@ -36,15 +75,20 @@ export interface JudgeTurn {
 export function verdictsFromTurn(turn: JudgeTurn): {
   verdicts: PerItemVerdict[]
   rejectedForTool: boolean
-  inputTokens: number | undefined
-  outputTokens: number | undefined
+  usage: TurnUsage
 } {
-  const inputTokens = turn.usage?.input_tokens
-  const outputTokens = turn.usage?.output_tokens
+  const u = turn.usage
+  const usage: TurnUsage = {
+    inputTokens: u?.input_tokens,
+    cachedInputTokens: u?.cached_input_tokens,
+    cacheWriteInputTokens: u?.cache_write_input_tokens,
+    outputTokens: u?.output_tokens,
+    reasoningOutputTokens: u?.reasoning_output_tokens,
+  }
   const usedTool = turn.items.some(it => eventUsedTool({ type: it.type }))
-  if (usedTool) return { verdicts: [], rejectedForTool: true, inputTokens, outputTokens }
+  if (usedTool) return { verdicts: [], rejectedForTool: true, usage }
   const verdicts = turn.finalResponse ? parseVerdicts(turn.finalResponse) : []
-  return { verdicts, rejectedForTool: false, inputTokens, outputTokens }
+  return { verdicts, rejectedForTool: false, usage }
 }
 
 // Build the SDK turn input: a bare prompt string when there are no images, or a
@@ -117,10 +161,17 @@ export function makeCodexSdkJudge(opts: CodexSdkOptions = {}): Judge {
     const start = Date.now()
     let result: ReturnType<typeof verdictsFromTurn> | undefined
     let error: string | undefined
+    // Usage is summed across ATTEMPTS while verdicts come from the accepted
+    // attempt only: a discarded tool-using attempt's tokens were really spent, and
+    // dropping them biases any cross-model cost comparison by the rate at which a
+    // model trips the tool guard. Accumulated INSIDE the try, right after each
+    // parse, so a throw on a later attempt still retains the earlier counts.
+    const usage: TurnUsage = {}
     try {
       for (let attempt = 0; attempt < 2; attempt++) {
         const turn = await run(sdkInput(prompt, input.images), threadOptions, OUTPUT_SCHEMA)
         result = verdictsFromTurn(turn)
+        addUsage(usage, result.usage)
         if (!result.rejectedForTool) break // pure-criticism run — accept
       }
     } catch (err) {
@@ -161,8 +212,11 @@ export function makeCodexSdkJudge(opts: CodexSdkOptions = {}): Judge {
           model,
           startMs: start,
           endMs: end,
-          inputTokens: result?.inputTokens,
-          outputTokens: result?.outputTokens,
+          inputTokens: usage.inputTokens,
+          cachedInputTokens: usage.cachedInputTokens,
+          cacheWriteInputTokens: usage.cacheWriteInputTokens,
+          outputTokens: usage.outputTokens,
+          reasoningOutputTokens: usage.reasoningOutputTokens,
           toolRejected: result?.rejectedForTool,
           error,
           // Content IS logged here (provably-synthetic corpus) — a span without

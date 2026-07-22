@@ -34,7 +34,8 @@
 #                            tour failure left a behavior uncaptured). Writes QA_JUDGE_TRACE.
 #                            It does NOT export.
 #   `make qa-export`         ships the spans and PRINTS the RESULT counts (traces /
-#                            screenshots / FAILED / enqueue attempted-ok-skipped-failed);
+#                            screenshots / observations / FAILED / enqueue
+#                            attempted-ok-skipped-failed);
 #                            exits 1 iff a trace failed to ship. Run as an INDEPENDENT
 #                            step (`;`, never `&&`) so a trap-miss trace STILL ships its
 #                            diagnostic — the round's clean/incomplete grade is computed
@@ -321,7 +322,9 @@ printf '%s\n' "$export_out"
 
 # Parse the RESULT counts from qa-export's ONE canonical summary line. run.ts prints
 # EXACTLY (langfuse.ts ExportResult):
-#   "qa-export: N trace(s), M screenshot(s)[, F FAILED]; enqueued E/A[, S already queued][, X enqueue-failed]"
+#   "qa-export: N trace(s), M screenshot(s)[, O observation(s)][, F FAILED]; enqueued E/A[, S already queued][, X enqueue-failed]"
+# The observation field is matched OPTIONALLY so the orchestrator is not order-coupled to
+# a cosmetic change in run.ts and still parses an older exporter's line.
 # We do NOT scan the merged stdout+stderr for field fragments: the exporter also logs a
 # pre-summary "enqueued E/A" line and can embed up to ~200 chars of an external HTTP error
 # body (which could itself contain a string like "enqueued 1/1") — a fragment scan could
@@ -329,7 +332,7 @@ printf '%s\n' "$export_out"
 # WHOLE line against an anchored regex and require EXACTLY ONE such line; a
 # missing/duplicate/malformed summary is treated as no-data (parsed as zeros -> no advance,
 # plus an explicit duplicate reason). Fields are then read from that single clean line only.
-SUMMARY_RE='^qa-export: [0-9]{1,9} trace\(s\), [0-9]{1,9} screenshot\(s\)(, [0-9]{1,9} FAILED)?; enqueued [0-9]{1,9}/[0-9]{1,9}(, [0-9]{1,9} already queued)?(, [0-9]{1,9} enqueue-failed)?$'
+SUMMARY_RE='^qa-export: [0-9]{1,9} trace\(s\), [0-9]{1,9} screenshot\(s\)(, [0-9]{1,9} observation\(s\))?(, [0-9]{1,9} FAILED)?; enqueued [0-9]{1,9}/[0-9]{1,9}(, [0-9]{1,9} already queued)?(, [0-9]{1,9} enqueue-failed)?$'
 summary_count="$(printf '%s\n' "$export_out" | grep -cE "$SUMMARY_RE")"
 summary_line="$(printf '%s\n' "$export_out" | grep -E "$SUMMARY_RE" | tail -1)"
 
@@ -342,6 +345,7 @@ field_num() {
 if [ "$summary_count" -eq 1 ]; then
   traces="$(field_num '[0-9]+ trace\(s\)' 0)"
   screenshots="$(field_num '[0-9]+ screenshot\(s\)' 0)"
+  observations="$(field_num '[0-9]+ observation\(s\)' 0)"
   ship_failed="$(field_num '[0-9]+ FAILED' 0)"
   enq_skipped="$(field_num '[0-9]+ already queued' 0)"
   enq_failed="$(field_num '[0-9]+ enqueue-failed' 0)"
@@ -351,7 +355,7 @@ if [ "$summary_count" -eq 1 ]; then
 else
   # No summary (missing creds / no spans) OR more than one (malformed/duplicate) -> no
   # trustworthy counts. Zero everything so the predicate degrades to advance=false.
-  traces=0; screenshots=0; ship_failed=0; enq_skipped=0; enq_failed=0; enq_ok=0; enq_attempted=0
+  traces=0; screenshots=0; observations=0; ship_failed=0; enq_skipped=0; enq_failed=0; enq_ok=0; enq_attempted=0
 fi
 
 # 3d. Post-tours provenance assert: re-read the deployed sha and prove the round both
@@ -483,6 +487,7 @@ emit report_exit "$report_rc"
 emit export_exit "$export_rc"
 emit export_summary_lines "$summary_count"
 emit traces "$traces"
+emit observations "$observations"
 emit ship_failed "$ship_failed"
 emit enqueue_attempted "$enq_attempted"
 emit enqueue_ok "$enq_ok"

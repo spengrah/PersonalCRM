@@ -462,6 +462,37 @@ qa-export: 6 trace(s), 12 screenshot(s); enqueued 3/3"
     cleanup_fixture
 }
 
+# The summary line is parsed with a FULLY ANCHORED regex requiring exactly one match:
+# a field added to run.ts's line without the matching regex change makes EVERY count
+# parse as zero, so the round silently stops advancing while every unit test stays
+# green. These two cases pin both shapes the parser must accept.
+test_export_summary_with_observations() {
+    echo "test: the summary line carrying an observation(s) field parses (counts + advance intact)"
+    make_fixture
+    run_orch STUB_EXPORT_OUT="qa-export: 5 trace(s), 12 screenshot(s), 4 observation(s); enqueued 3/3"
+    assert_rc0 obs-summary
+    assert_kv round clean obs-summary
+    assert_kv advance true obs-summary
+    assert_kv export_summary_lines 1 obs-summary
+    assert_kv traces 5 obs-summary
+    assert_kv observations 4 obs-summary
+    assert_kv enqueue_ok 3 obs-summary
+    cleanup_fixture
+}
+
+test_export_summary_without_observations() {
+    echo "test: a summary line WITHOUT the observation(s) field still parses (field is optional)"
+    make_fixture
+    run_orch STUB_EXPORT_OUT="qa-export: 5 trace(s), 12 screenshot(s), 2 FAILED; enqueued 3/3" \
+        STUB_EXPORT_RC=1
+    assert_rc0 no-obs-summary
+    assert_kv export_summary_lines 1 no-obs-summary
+    assert_kv traces 5 no-obs-summary
+    assert_kv observations 0 no-obs-summary
+    assert_kv ship_failed 2 no-obs-summary
+    cleanup_fixture
+}
+
 test_runid_collision_aborts() {
     echo "test: run-id collision (run dir already exists) -> round=aborted, exit!=0, tours never run"
     make_fixture
@@ -815,6 +846,8 @@ main() {
     test_deployed_cmd_multiline
     test_export_summary_fragment_ignored
     test_export_duplicate_summary
+    test_export_summary_with_observations
+    test_export_summary_without_observations
     test_runid_collision_aborts
     test_rundir_create_error
     test_deploy_gen_unset_records_false

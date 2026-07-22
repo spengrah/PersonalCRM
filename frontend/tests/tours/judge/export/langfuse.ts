@@ -79,6 +79,20 @@ function itemDescriptors(scenario: Scenario | undefined): ItemDescriptor[] {
   return scenario.items.map(i => ({ itemIndex: i.itemIndex, thenText: i.thenText }))
 }
 
+// The item-trace that carries the span's usage: the one with the LOWEST
+// itemIndex — not necessarily index 0, and not necessarily first in the array.
+// A span's token counts belong to ONE judge call, so attributing them to every
+// item-trace it fans out to would multiply the reported spend by the item count.
+// For the no-scenario metrics-only shape this is the BASE trace id.
+export function usageTraceId(span: GenAiSpan): string {
+  const scenario = (span.attributes['qa.scenario'] as Scenario | undefined) ?? undefined
+  const indices = itemDescriptors(scenario)
+    .filter((d): d is Exclude<ItemDescriptor, undefined> => d !== undefined)
+    .map(d => d.itemIndex)
+  if (indices.length === 0) return traceIdFor(span)
+  return itemTraceId(span, Math.min(...indices))
+}
+
 // PURE: build the label-trace bodies for one span — ONE per graded item (spec
 // line 41), returned as token-free SKELETONS (no media tokens, and NO local
 // screenshot paths: paths never ship — D9). `exportSpans` runs the per-item
@@ -138,7 +152,10 @@ export function buildTraceBody(
     impl: a['qa.judge.impl'],
     model,
     input_tokens: num(a['gen_ai.usage.input_tokens']),
+    cached_input_tokens: num(a['gen_ai.usage.cached_input_tokens']),
     output_tokens: num(a['gen_ai.usage.output_tokens']),
+    reasoning_output_tokens: num(a['gen_ai.usage.reasoning_output_tokens']),
+    cache_write_input_tokens: num(a['qa.usage.cache_write_input_tokens']),
     tool_rejected: a['qa.tool_rejected'],
     status: span.status.code,
     error,
@@ -149,7 +166,16 @@ export function buildTraceBody(
     screenshots_attached: 0,
   }
 
-  return itemDescriptors(scenario).map(descriptor => {
+  // The span's usage rides ONE of its item-traces (the lowest itemIndex); the
+  // siblings say so explicitly rather than leaving a reader to wonder why they
+  // read $0. Computed over the descriptors, which are neither sorted nor
+  // guaranteed to include index 0.
+  const descriptors = itemDescriptors(scenario)
+  const carrierIndex = Math.min(
+    ...descriptors.filter(d => d !== undefined).map(d => (d as { itemIndex: number }).itemIndex)
+  )
+
+  return descriptors.map(descriptor => {
     // The scenario_item a reviewer grades against — the behavior's GWT + THIS
     // item's singular then_text + the full then-list, OR the intent goal/status.
     let scenarioItem: Record<string, unknown> | undefined
@@ -195,7 +221,10 @@ export function buildTraceBody(
       // (INV-2) — idempotent on the already-scrubbed model/error scalars above.
       input: Object.keys(rawInput).length ? (deep(rawInput) as Record<string, unknown>) : undefined,
       output: rawOutput !== undefined ? deep(rawOutput) : undefined,
-      metadata: { ...commonMetadata },
+      metadata: {
+        ...commonMetadata,
+        usage_attributed: descriptor === undefined || descriptor.itemIndex === carrierIndex,
+      },
     }
   })
 }
@@ -222,6 +251,78 @@ export function attachTokens(body: TraceBody, tokens: (string | undefined)[]): T
     ...body,
     input: { ...input, graded_evidence: nextGraded },
     metadata: { ...body.metadata, screenshots_attached: attached },
+  }
+}
+
+// The wire body of the usage-carrying generation observation. Langfuse computes
+// cost ONLY on generation/embedding observations — trace `metadata` is opaque
+// display-only key/value — so this body is the entire cost path.
+export interface GenerationBody {
+  id: string
+  traceId: string
+  name: string
+  model?: string
+  startTime: string
+  endTime: string
+  usageDetails: { input: number; input_cached_tokens: number; output: number }
+  metadata: Record<string, unknown>
+}
+
+// PURE: the generation body for one span, or `undefined` when the span carries no
+// usable usage (an error run — an observation with no usage is noise). Reads
+// everything off the span itself so it is directly testable without an export.
+//
+// `toISOString()` throws RangeError on a malformed nano value; that is left to
+// throw here and contained at the call site, matching the score step.
+export function buildGenerationBody(
+  span: GenAiSpan,
+  scrub: (s: string) => string = s => s
+): GenerationBody | undefined {
+  const a = span.attributes
+  const inputTokens = num(a['gen_ai.usage.input_tokens'])
+  if (inputTokens === undefined) return undefined
+  const cached = num(a['gen_ai.usage.cached_input_tokens'])
+  const output = num(a['gen_ai.usage.output_tokens'])
+  const reasoning = num(a['gen_ai.usage.reasoning_output_tokens'])
+  const cacheWrite = num(a['qa.usage.cache_write_input_tokens'])
+  const behaviorId = String(a['qa.behavior_id'] ?? 'unknown')
+  const rawModel = str(a['gen_ai.request.model'])
+  // The SAME scrubbed value the trace metadata ships, so trace and observation
+  // can never disagree about which model produced the call.
+  const model = rawModel !== undefined ? scrub(rawModel) : undefined
+
+  return {
+    id: `obs-${traceIdFor(span)}-gen`,
+    traceId: usageTraceId(span),
+    name: `judge ${behaviorId}`,
+    ...(model !== undefined ? { model } : {}),
+    // Span-derived, never the export clock: with no startTime the server falls
+    // back to the ingestion envelope, which would stamp a re-export's whole
+    // history on the day it was re-exported.
+    startTime: new Date(span.start_time_unix_nano / 1e6).toISOString(),
+    endTime: new Date(span.end_time_unix_nano / 1e6).toISOString(),
+    // EXACTLY these three keys, ALWAYS — never a conditional spread. Langfuse
+    // matches bucket names against the model's price keys by exact string
+    // equality (a misnamed or missing bucket prices at zero rather than
+    // erroring), so a key set that varies with the input makes the priced shape
+    // depend on whether the transport happened to report a cached count.
+    // `input_cached_tokens: 0` is both true and priced at zero.
+    usageDetails: {
+      // Cached input is INCLUSIVE of the input count, and Langfuse requires
+      // mutually exclusive buckets to derive a correct total — subtract, and
+      // clamp so a provider that ever reports exclusive counts cannot ingest a
+      // negative bucket.
+      input: Math.max(0, inputTokens - (cached ?? 0)),
+      input_cached_tokens: cached ?? 0,
+      // Reasoning stays INSIDE output: the cheapest judge model has no reasoning
+      // price key, so a separate bucket would silently go unpriced.
+      output: output ?? 0,
+    },
+    // Visible for analysis, deliberately unpriced and never double-counted.
+    metadata: {
+      ...(reasoning !== undefined ? { reasoning_output_tokens: reasoning } : {}),
+      ...(cacheWrite !== undefined ? { cache_write_input_tokens: cacheWrite } : {}),
+    },
   }
 }
 
@@ -271,20 +372,35 @@ export class PaginationError extends Error {
   }
 }
 
+// `timeoutMs`, when given, bounds the request with an AbortController — a
+// never-settling response would otherwise stall the whole export (and, in the
+// nightly, the round) indefinitely, which is exactly what the best-effort steps'
+// try/catch isolation cannot protect against. Omitting it preserves the previous
+// unbounded behavior for existing call sites. An abort surfaces as a rejection,
+// which every call site already handles.
 export async function api(
   cfg: LangfuseConfig,
   method: string,
   path: string,
-  body?: unknown
+  body?: unknown,
+  timeoutMs?: number
 ): Promise<Record<string, unknown>> {
-  const res = await fetch(`${cfg.host}${path}`, {
-    method,
-    headers: { Authorization: authHeader(cfg), 'Content-Type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined,
-  })
-  const text = await res.text()
-  if (!res.ok) throw new ApiError(res.status, text, method, path)
-  return text ? (JSON.parse(text) as Record<string, unknown>) : {}
+  const controller = timeoutMs !== undefined ? new AbortController() : undefined
+  const timer =
+    controller !== undefined ? setTimeout(() => controller.abort(), timeoutMs) : undefined
+  try {
+    const res = await fetch(`${cfg.host}${path}`, {
+      method,
+      headers: { Authorization: authHeader(cfg), 'Content-Type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+      ...(controller !== undefined ? { signal: controller.signal } : {}),
+    })
+    const text = await res.text()
+    if (!res.ok) throw new ApiError(res.status, text, method, path)
+    return text ? (JSON.parse(text) as Record<string, unknown>) : {}
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
 }
 
 // Walk a paginated Langfuse list endpoint to completion and return the accumulated
@@ -304,10 +420,16 @@ export async function api(
 // `path` (callers filter by tag/name), never clobbering them. It throws
 // `PaginationError` (never returns partial data) on any structural violation, so a
 // short read can't masquerade as "resource absent".
+//
+// `timeoutMs` bounds EACH page request, not the whole walk — the honest semantic
+// for a paginated read, and the same per-request bound `api` applies everywhere
+// else. A timeout that stopped at `api`'s signature would leave every paginated
+// read able to hang forever on page 2.
 export async function apiGetAllPages(
   cfg: LangfuseConfig,
   path: string,
-  protocol: 'page' | 'cursor'
+  protocol: 'page' | 'cursor',
+  timeoutMs?: number
 ): Promise<Record<string, unknown>[]> {
   const LIMIT = 100
   const qIdx = path.indexOf('?')
@@ -337,7 +459,13 @@ export async function apiGetAllPages(
       params.set('cursor', cursor)
     }
     const query = params.toString()
-    const res: unknown = await api(cfg, 'GET', query ? `${basePath}?${query}` : basePath)
+    const res: unknown = await api(
+      cfg,
+      'GET',
+      query ? `${basePath}?${query}` : basePath,
+      undefined,
+      timeoutMs
+    )
 
     // A 2xx `null`/scalar/array body is a malformed envelope — raise PaginationError
     // rather than letting `.data` throw an untyped TypeError.
@@ -475,10 +603,20 @@ export async function uploadMedia(
   return `@@@langfuseMedia:type=image/png|id=${mediaId}|source=bytes@@@`
 }
 
+// The bound on the usage-observation POST. Generous — it is a single small
+// request — but finite: an unbounded best-effort step is not best-effort, it is a
+// stall that blocks every step after it.
+const OBSERVATION_TIMEOUT_MS = 30_000
+
 export interface ExportResult {
   traces: number
   screenshots: number
   failed: number
+  // Usage-carrying generation observations shipped. A rejected observation is
+  // non-fatal, so it is visible ONLY as a lower count here plus a log line —
+  // without surfacing it, a round where every generation was rejected would print
+  // a clean summary.
+  observations: number
   // Best-effort triage enqueue (INV-A): never affects trace shipping / process exit.
   // `attempted` = POSTs issued (eligible minus already-present); `enqueued` +
   // `failed` partition it; `skippedExisting` = eligible items already in the queue.
@@ -539,6 +677,9 @@ export interface ExportOptions {
   runId?: string
   gitSha?: string
   saltPasses?: number
+  // Test seam: the per-request bound on the usage-observation POST. Defaults to
+  // OBSERVATION_TIMEOUT_MS; a test proving the bound exists must not wait 30s for it.
+  observationTimeoutMs?: number
 }
 
 export async function exportSpans(
@@ -551,6 +692,7 @@ export async function exportSpans(
     traces: 0,
     screenshots: 0,
     failed: 0,
+    observations: 0,
     enqueue: { attempted: 0, enqueued: 0, skippedExisting: 0, failed: 0 },
   }
 
@@ -607,6 +749,21 @@ export async function exportSpans(
       : []
     const screenshotPaths = spanGraded.map(e => e.screenshot)
     const expected = screenshotPaths.filter((p): p is string => typeof p === 'string').length
+
+    // The pass + model tag dimensions are SPAN-level, so they are derived here —
+    // the per-body loop below has neither value in scope. `model` is the same
+    // scrubbed value the trace metadata ships, deliberately including the empty
+    // string: a misconfigured harness that sets the model to '' must show a bare
+    // `model:` tag rather than look like a run with no model dimension at all.
+    const scenario = (span.attributes['qa.scenario'] as Scenario | undefined) ?? undefined
+    const rawSpanModel = str(span.attributes['gen_ai.request.model'])
+    const spanModel = rawSpanModel !== undefined ? scrub(rawSpanModel) : undefined
+
+    // The item-trace that will carry this span's usage observation, and whether it
+    // actually shipped. A body failure is caught INSIDE the loop below, so without
+    // this the observation could reference a trace that never landed.
+    const carrierId = usageTraceId(span)
+    let carrierShipped = false
 
     // ONE trace per graded item (spec line 41). Each item-trace runs its OWN
     // media lifecycle against its OWN trace id: `uploadMedia` REGISTERS against a
@@ -668,6 +825,11 @@ export async function exportSpans(
         const tags = [`behavior:${behaviorId}`]
         if (opts.runId) tags.push(`runId:${opts.runId}`)
         if (opts.gitSha) tags.push(`gitSha:${opts.gitSha}`)
+        // `pass:` is the only place the ux/intent dimension exists — the two are
+        // otherwise indistinguishable by name or tag. Suppressed for a
+        // metrics-only span, which genuinely has no pass dimension.
+        if (scenario) tags.push(`pass:${scenario.kind === 'intent' ? 'intent' : 'ux'}`)
+        if (spanModel !== undefined) tags.push(`model:${spanModel}`)
         const wireBody: Record<string, unknown> = { ...finalBody, tags }
         if (opts.runId) wireBody.sessionId = opts.runId
         await api(cfg, 'POST', '/api/public/ingestion', {
@@ -681,6 +843,7 @@ export async function exportSpans(
           ],
         })
         result.traces++
+        if (body.id === carrierId) carrierShipped = true
         log(`  ${behaviorId} → ${body.id} (media ${attached}/${expected})`)
 
         // (4) Verdict-as-score: a SEPARATE, non-fatal ingestion request AFTER the
@@ -727,6 +890,42 @@ export async function exportSpans(
       } catch (err) {
         result.failed++
         log(`  FAILED ${behaviorId}: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+
+    // (5) Usage-as-generation: ONE observation per SPAN — Langfuse computes cost
+    // only on generation observations — carried by the span's lowest-itemIndex
+    // trace, and emitted ONLY IF that trace actually shipped (an observation
+    // whose trace never landed is dangling). A SEPARATE, non-fatal ingestion
+    // request, never co-batched, so a rejected observation can never couple to or
+    // drop an already-shipped trace. The ENTIRE step — including the span-derived
+    // timestamp conversion, which throws RangeError on a malformed nano value —
+    // sits in its own try/catch: it degrades to a skipped observation, never a
+    // dropped trace and never a suppressed enqueue pass.
+    if (carrierShipped) {
+      try {
+        const genBody = buildGenerationBody(span, scrub)
+        if (genBody) {
+          await api(
+            cfg,
+            'POST',
+            '/api/public/ingestion',
+            {
+              batch: [
+                {
+                  id: `evt-${traceIdFor(span)}-gen-${nonce}`,
+                  type: 'generation-create',
+                  timestamp: genBody.startTime,
+                  body: genBody,
+                },
+              ],
+            },
+            opts.observationTimeoutMs ?? OBSERVATION_TIMEOUT_MS
+          )
+          result.observations++
+        }
+      } catch (err) {
+        log(`  generation-create failed for ${traceIdFor(span)}: ${errMsg(err)}`)
       }
     }
   }

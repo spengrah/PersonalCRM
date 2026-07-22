@@ -41,15 +41,48 @@ const input: JudgeInput = {
 
 describe('verdictsFromTurn', () => {
   it('returns parsed verdicts + usage for a clean run', () => {
-    const { verdicts, rejectedForTool, inputTokens, outputTokens } = verdictsFromTurn(
+    const { verdicts, rejectedForTool, usage } = verdictsFromTurn(
       turn({ verdicts: [{ item_index: 0, verdict: 'fail', citation: 'dialog', critique: 'ok' }] })
     )
     expect(rejectedForTool).toBe(false)
     expect(verdicts).toEqual([
       { itemIndex: 0, verdict: 'fail', citation: 'dialog', critique: 'ok' },
     ])
-    expect(inputTokens).toBe(1200)
-    expect(outputTokens).toBe(40)
+    expect(usage.inputTokens).toBe(1200)
+    expect(usage.outputTokens).toBe(40)
+  })
+
+  it('reads all five runtime usage fields, including the one the SDK type omits', () => {
+    const { usage } = verdictsFromTurn({
+      items: [{ type: 'agent_message' }],
+      finalResponse: '{"verdicts":[]}',
+      usage: {
+        input_tokens: 18_584,
+        cached_input_tokens: 4_480,
+        cache_write_input_tokens: 100,
+        output_tokens: 25,
+        reasoning_output_tokens: 18,
+      },
+    })
+    expect(usage).toEqual({
+      inputTokens: 18_584,
+      cachedInputTokens: 4_480,
+      cacheWriteInputTokens: 100,
+      outputTokens: 25,
+      reasoningOutputTokens: 18,
+    })
+  })
+
+  it('leaves an unreported field undefined rather than 0 or NaN', () => {
+    const { usage } = verdictsFromTurn({
+      items: [{ type: 'agent_message' }],
+      finalResponse: '{"verdicts":[]}',
+      usage: { input_tokens: 10 },
+    })
+    expect(usage.inputTokens).toBe(10)
+    expect(usage.cachedInputTokens).toBeUndefined()
+    expect(usage.cacheWriteInputTokens).toBeUndefined()
+    expect(usage.reasoningOutputTokens).toBeUndefined()
   })
 
   it('REJECTS a turn that used a tool / executed a command (dropped — no verdicts)', () => {
@@ -70,13 +103,13 @@ describe('verdictsFromTurn', () => {
   })
 
   it('tolerates null usage', () => {
-    const { inputTokens, outputTokens } = verdictsFromTurn({
+    const { usage } = verdictsFromTurn({
       items: [{ type: 'agent_message' }],
       finalResponse: '{"verdicts":[]}',
       usage: null,
     })
-    expect(inputTokens).toBeUndefined()
-    expect(outputTokens).toBeUndefined()
+    expect(usage.inputTokens).toBeUndefined()
+    expect(usage.outputTokens).toBeUndefined()
   })
 })
 
@@ -366,5 +399,91 @@ describe('makeCodexSdkJudge — span carries label-trace content + normalized ve
     expect(span.attributes['qa.item_verdicts']).toEqual(verdicts)
     expect(span.status.code).toBe('ERROR')
     expect(verdicts.every(v => v.verdict === 'unsure')).toBe(true)
+  })
+
+  // Usage is summed across ATTEMPTS: a tool-rejected attempt's tokens were really
+  // spent, and dropping them biases any cross-model comparison by the rate at which
+  // a model trips the tool guard. Verdicts still come from the accepted attempt only.
+  const cleanVerdicts = [
+    { item_index: 0, verdict: 'pass', citation: 'row', critique: 'k' },
+    { item_index: 2, verdict: 'pass', citation: 'row', critique: 'k' },
+  ]
+  function attemptTurn(usage: JudgeTurn['usage'], opts: { withTool?: boolean } = {}): JudgeTurn {
+    const items: Array<{ type: string }> = [{ type: 'reasoning' }]
+    if (opts.withTool) items.push({ type: 'command_execution' })
+    items.push({ type: 'agent_message' })
+    return {
+      items,
+      finalResponse: JSON.stringify({ verdicts: opts.withTool ? [] : cleanVerdicts }),
+      usage,
+    }
+  }
+
+  it("sums usage across a tool-rejected retry, keeping the ACCEPTED attempt's verdicts", async () => {
+    const attempts: JudgeTurn[] = [
+      attemptTurn(
+        {
+          input_tokens: 18_584,
+          cached_input_tokens: 4_480,
+          output_tokens: 25,
+          reasoning_output_tokens: 18,
+        },
+        { withTool: true }
+      ),
+      attemptTurn({
+        input_tokens: 12_000,
+        cached_input_tokens: 3_000,
+        output_tokens: 40,
+        reasoning_output_tokens: 30,
+      }),
+    ]
+    let n = 0
+    const { span, verdicts } = await spanFor(async () => attempts[n++])
+    expect(n).toBe(2)
+    expect(span.attributes['gen_ai.usage.input_tokens']).toBe(30_584)
+    expect(span.attributes['gen_ai.usage.cached_input_tokens']).toBe(7_480)
+    expect(span.attributes['gen_ai.usage.output_tokens']).toBe(65)
+    expect(span.attributes['gen_ai.usage.reasoning_output_tokens']).toBe(48)
+    // Verdicts are the SECOND attempt's — the rejected attempt contributes tokens only.
+    expect(verdicts.every(v => v.verdict === 'pass')).toBe(true)
+    expect(span.attributes['qa.tool_rejected']).toBe(false)
+  })
+
+  it('accumulates cache-write across attempts, and keeps absence as ABSENT (not 0)', async () => {
+    const withWrite: JudgeTurn[] = [
+      attemptTurn({ input_tokens: 10, cache_write_input_tokens: 100 }, { withTool: true }),
+      attemptTurn({ input_tokens: 20, cache_write_input_tokens: 250 }),
+    ]
+    let i = 0
+    const { span } = await spanFor(async () => withWrite[i++])
+    expect(span.attributes['qa.usage.cache_write_input_tokens']).toBe(350)
+
+    const noWrite: JudgeTurn[] = [
+      attemptTurn({ input_tokens: 10 }, { withTool: true }),
+      attemptTurn({ input_tokens: 20 }),
+    ]
+    let j = 0
+    const { span: bare } = await spanFor(async () => noWrite[j++])
+    expect('qa.usage.cache_write_input_tokens' in bare.attributes).toBe(false)
+    expect(bare.attributes['gen_ai.usage.input_tokens']).toBe(30)
+  })
+
+  it("retains the FIRST attempt's usage when the retry THROWS", async () => {
+    let k = 0
+    const { span } = await spanFor(async () => {
+      k++
+      if (k === 1)
+        return attemptTurn(
+          { input_tokens: 18_584, cached_input_tokens: 4_480, output_tokens: 25 },
+          { withTool: true }
+        )
+      throw new Error('boom')
+    })
+    expect(k).toBe(2)
+    // Those tokens were really spent — a throw must not erase them.
+    expect(span.attributes['gen_ai.usage.input_tokens']).toBe(18_584)
+    expect(span.attributes['gen_ai.usage.cached_input_tokens']).toBe(4_480)
+    expect(span.attributes['gen_ai.usage.output_tokens']).toBe(25)
+    expect(span.status.code).toBe('ERROR')
   })
 })

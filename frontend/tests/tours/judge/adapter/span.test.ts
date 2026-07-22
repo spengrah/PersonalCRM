@@ -72,6 +72,33 @@ describe('buildGenAiSpan — label-trace attributes', () => {
     }
   })
 
+  it('renders the cached / reasoning / cache-write counts under their exact keys', () => {
+    const attrs = buildGenAiSpan({
+      ...base,
+      inputTokens: 20_000,
+      cachedInputTokens: 16_000,
+      cacheWriteInputTokens: 500,
+      outputTokens: 1_000,
+      reasoningOutputTokens: 800,
+    }).attributes
+    expect(attrs['gen_ai.usage.cached_input_tokens']).toBe(16_000)
+    expect(attrs['gen_ai.usage.reasoning_output_tokens']).toBe(800)
+    // Cache-write is harness-namespaced on purpose — no gen_ai.* convention exists.
+    expect(attrs['qa.usage.cache_write_input_tokens']).toBe(500)
+    expect('gen_ai.usage.cache_write_input_tokens' in attrs).toBe(false)
+  })
+
+  it('OMITS each new usage attribute when its param is undefined (absence is not 0)', () => {
+    const attrs = buildGenAiSpan({ ...base, inputTokens: 10, outputTokens: 2 }).attributes
+    for (const k of [
+      'gen_ai.usage.cached_input_tokens',
+      'gen_ai.usage.reasoning_output_tokens',
+      'qa.usage.cache_write_input_tokens',
+    ]) {
+      expect(k in attrs).toBe(false)
+    }
+  })
+
   it('still renders the existing gen_ai.* / qa.* attributes + content gating', () => {
     const span = buildGenAiSpan({
       ...base,

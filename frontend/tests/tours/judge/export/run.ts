@@ -196,7 +196,11 @@ export async function main(
   log(`qa-export: shipping ${spans.length} span(s) to ${cfg.host}`)
   const result = await doExport(cfg, spans, msg => log(msg), { runId, gitSha, saltPasses })
   log(
-    `qa-export: ${result.traces} trace(s), ${result.screenshots} screenshot(s)` +
+    // The ONE canonical summary line. scripts/ci/qa-nightly-round.sh parses it with a
+    // FULLY ANCHORED regex requiring exactly one match, so any field added here must
+    // land with the matching regex change or the nightly silently zeroes every count.
+    `qa-export: ${result.traces} trace(s), ${result.screenshots} screenshot(s), ` +
+      `${result.observations} observation(s)` +
       (result.failed ? `, ${result.failed} FAILED` : '') +
       `; enqueued ${result.enqueue.enqueued}/${result.enqueue.attempted}` +
       (result.enqueue.skippedExisting ? `, ${result.enqueue.skippedExisting} already queued` : '') +

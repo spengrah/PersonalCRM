@@ -71,6 +71,7 @@ const okResult = {
   traces: 1,
   screenshots: 0,
   failed: 0,
+  observations: 1,
   enqueue: { attempted: 0, enqueued: 0, skippedExisting: 0, failed: 0 },
 }
 const oneSpanJsonl = JSON.stringify(
@@ -211,11 +212,49 @@ describe('main — provenance plumbing (component-wise, never fail-closed)', () 
     expect(logs.some(l => l.includes('QA_GIT_SHA'))).toBe(false)
   })
 
+  it('the canonical summary line carries the observation count', async () => {
+    const logs: string[] = []
+    const code = await main(['/t.jsonl'], LF_ENV, {
+      fs: traceFs(),
+      exportSpans: makeExport().fn,
+      log: m => logs.push(m),
+      errlog: () => {},
+    })
+    expect(code).toBe(0)
+    const summary = logs.find(l => l.startsWith('qa-export: 1 trace(s)'))
+    expect(summary).toContain('1 observation(s)')
+    // The field sits between screenshots and the optional FAILED field — the exact
+    // shape the nightly orchestrator's anchored regex matches.
+    expect(summary).toMatch(/^qa-export: 1 trace\(s\), 0 screenshot\(s\), 1 observation\(s\); /)
+  })
+
+  it('a REJECTED observation (fewer observations than spans, failed === 0) still exits 0', async () => {
+    // A rejected observation is non-fatal: it must be visible as a lower count, and
+    // must NOT fail the export — the exit code is driven by trace-ship failures alone.
+    const fn = (async () => ({
+      traces: 2,
+      screenshots: 0,
+      failed: 0,
+      observations: 0,
+      enqueue: { attempted: 1, enqueued: 1, skippedExisting: 0, failed: 0 },
+    })) as unknown as typeof ExportSpansFn
+    const logs: string[] = []
+    const code = await main(['/t.jsonl'], LF_ENV, {
+      fs: traceFs(),
+      exportSpans: fn,
+      log: m => logs.push(m),
+      errlog: () => {},
+    })
+    expect(code).toBe(0)
+    expect(logs.some(l => l.includes('0 observation(s)'))).toBe(true)
+  })
+
   it('a partial enqueue loss (enqueue.failed > 0, trace failed === 0) STILL exits 0 (INV-A)', async () => {
     const fn = (async () => ({
       traces: 3,
       screenshots: 0,
       failed: 0,
+      observations: 3,
       enqueue: { attempted: 2, enqueued: 1, skippedExisting: 0, failed: 1 },
     })) as unknown as typeof ExportSpansFn
     const logs: string[] = []
