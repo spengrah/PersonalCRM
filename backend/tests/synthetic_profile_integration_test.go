@@ -112,10 +112,10 @@ func assertVisibleTaskSpread(t *testing.T, ctx context.Context, support *reposit
 	require.Len(t, counts, len(catalogIDs), "every catalog contact appears (LEFT JOIN produces the 0-visible rows)")
 	var zeroVisible, oneVisible, multiVisible int
 	for _, c := range counts {
-		switch {
-		case c.VisibleCount == 0:
+		switch c.VisibleCount {
+		case 0:
 			zeroVisible++
-		case c.VisibleCount == 1:
+		case 1:
 			oneVisible++
 		default:
 			multiVisible++
