@@ -342,6 +342,11 @@ type Querier interface {
 	CreateContact(ctx context.Context, arg CreateContactParams) (*Contact, error)
 	CreateContactMethod(ctx context.Context, arg CreateContactMethodParams) (*ContactMethod, error)
 	CreateContactTask(ctx context.Context, arg CreateContactTaskParams) (*ContactTask, error)
+	// Seed-only variant of CreateContactTask that sets created_at explicitly, so the
+	// synthetic seeder can vary a linked task's created_at (its "link age")
+	// anchor-relatively without a raw SQL insert. Production creators always let
+	// created_at default to NOW(); no request path calls this.
+	CreateContactTaskAtTime(ctx context.Context, arg CreateContactTaskAtTimeParams) (*ContactTask, error)
 	// Variant of CreateContactTask that accepts an explicit idempotency_key,
 	// used by the cutover FollowUpManager for crash-safe two-step create.
 	// A NULL key is permitted so the generic path can reuse the query shape;
@@ -2213,6 +2218,12 @@ type Querier interface {
 	// contact soft-delete filter scopes to live catalog contacts. Caller passes a BARE
 	// prefix; '%' appended.
 	TestCountCadenceDueByStateAndNamePrefix(ctx context.Context, arg TestCountCadenceDueByStateAndNamePrefixParams) (int64, error)
+	// Exact task accounting (visible-task spread): count EVERY contact_task row on the
+	// namespace's live contacts (all lifecycles + states), so the coverage/determinism
+	// test can assert the total equals ProfileResult.SeededTasks. contact_task has no
+	// deleted_at; the contact soft-delete filter scopes to live contacts. Caller passes
+	// a BARE prefix; '%' appended.
+	TestCountContactTasksByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error)
 	// Coverage gate (F6): count the namespace's LIVE contacts that carry a NON-EMPTY
 	// NOTEPAD note — the category the contact-detail endpoint renders via GetContactNotepad.
 	// The category='notepad' filter is load-bearing: SeedNote writes via CreateNotepad, and
@@ -2493,6 +2504,21 @@ type Querier interface {
 	// so the catalog guard can assert each is in the wiped list, is schema_migrations,
 	// or matches the river_% allowlist. Read-only catalog access.
 	TestListPublicTables(ctx context.Context) ([]string, error)
+	// Visible-task coverage + determinism fingerprint source: every contact_task row on
+	// the namespace's live contacts, joined to its contact for the stable-identity
+	// full_name. Feeds the kind/lifecycle/state coverage checks, the link-age bucket
+	// spread (from created_at), the non-empty content check, and the run-to-run task
+	// fingerprint (keyed by full_name + kind + lifecycle + state + created_at age bucket
+	// — external_task_id and raw UUIDs excluded). Caller passes a BARE prefix; '%'
+	// appended.
+	TestListTaskRowsByNamePrefix(ctx context.Context, namePrefix pgtype.Text) ([]*TestListTaskRowsByNamePrefixRow, error)
+	// Visible-task cohort accounting: for each given contact, the count of its
+	// PRODUCT-VISIBLE tasks — the ones the contact page lists (state='managed' AND
+	// lifecycle IN ('manual','followup_loop')); it never lists cadence_due. A LEFT JOIN
+	// (not a task-side GROUP BY) so a contact with zero visible tasks still appears with
+	// count 0 — the 0-visible majority cannot be produced from task rows alone. Scoped to
+	// the passed catalog id set. Test only.
+	TestListVisibleTaskCountsByContactIds(ctx context.Context, contactIds []pgtype.UUID) ([]*TestListVisibleTaskCountsByContactIdsRow, error)
 	// TEST ONLY. Probe a contact row with FOR UPDATE NOWAIT: fails immediately
 	// (lock_not_available) when another tx holds a conflicting lock on the row.
 	// Used by the recompute lock-ordering regression test to prove (without a

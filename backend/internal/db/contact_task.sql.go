@@ -234,6 +234,71 @@ func (q *Queries) CreateContactTask(ctx context.Context, arg CreateContactTaskPa
 	return &i, err
 }
 
+const CreateContactTaskAtTime = `-- name: CreateContactTaskAtTime :one
+INSERT INTO contact_task (
+    contact_id,
+    provider,
+    kind,
+    lifecycle,
+    external_task_id,
+    state,
+    metadata,
+    created_at
+) VALUES (
+    $1,
+    $2,
+    $3,
+    $4,
+    $5,
+    COALESCE($6, 'managed'),
+    COALESCE($7::jsonb, '{}'::jsonb),
+    $8
+) RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle
+`
+
+type CreateContactTaskAtTimeParams struct {
+	ContactID      pgtype.UUID        `json:"contact_id"`
+	Provider       string             `json:"provider"`
+	Kind           string             `json:"kind"`
+	Lifecycle      string             `json:"lifecycle"`
+	ExternalTaskID string             `json:"external_task_id"`
+	State          interface{}        `json:"state"`
+	Metadata       []byte             `json:"metadata"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+// Seed-only variant of CreateContactTask that sets created_at explicitly, so the
+// synthetic seeder can vary a linked task's created_at (its "link age")
+// anchor-relatively without a raw SQL insert. Production creators always let
+// created_at default to NOW(); no request path calls this.
+func (q *Queries) CreateContactTaskAtTime(ctx context.Context, arg CreateContactTaskAtTimeParams) (*ContactTask, error) {
+	row := q.db.QueryRow(ctx, CreateContactTaskAtTime,
+		arg.ContactID,
+		arg.Provider,
+		arg.Kind,
+		arg.Lifecycle,
+		arg.ExternalTaskID,
+		arg.State,
+		arg.Metadata,
+		arg.CreatedAt,
+	)
+	var i ContactTask
+	err := row.Scan(
+		&i.ID,
+		&i.ContactID,
+		&i.Provider,
+		&i.Kind,
+		&i.ExternalTaskID,
+		&i.State,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.IdempotencyKey,
+		&i.Lifecycle,
+	)
+	return &i, err
+}
+
 const CreateContactTaskWithIdempotencyKey = `-- name: CreateContactTaskWithIdempotencyKey :one
 INSERT INTO contact_task (
     contact_id,

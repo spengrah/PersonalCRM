@@ -88,6 +88,31 @@ INSERT INTO contact_task (
     COALESCE(@metadata::jsonb, '{}'::jsonb)
 ) RETURNING *;
 
+-- name: CreateContactTaskAtTime :one
+-- Seed-only variant of CreateContactTask that sets created_at explicitly, so the
+-- synthetic seeder can vary a linked task's created_at (its "link age")
+-- anchor-relatively without a raw SQL insert. Production creators always let
+-- created_at default to NOW(); no request path calls this.
+INSERT INTO contact_task (
+    contact_id,
+    provider,
+    kind,
+    lifecycle,
+    external_task_id,
+    state,
+    metadata,
+    created_at
+) VALUES (
+    @contact_id,
+    @provider,
+    @kind,
+    @lifecycle,
+    @external_task_id,
+    COALESCE(@state, 'managed'),
+    COALESCE(@metadata::jsonb, '{}'::jsonb),
+    @created_at
+) RETURNING *;
+
 -- name: CreateContactTaskWithIdempotencyKey :one
 -- Variant of CreateContactTask that accepts an explicit idempotency_key,
 -- used by the cutover FollowUpManager for crash-safe two-step create.
