@@ -362,6 +362,43 @@ func (r *ContactTaskRepository) CreateContactTask(ctx context.Context, req Creat
 	return &task, nil
 }
 
+// CreateContactTaskAtTime is a seed-only variant of CreateContactTask that sets
+// created_at explicitly (production always defaults it to NOW()). It lets the
+// synthetic seeder vary a linked task's created_at — its "link age" — relative to
+// the generator anchor. No request path calls this.
+func (r *ContactTaskRepository) CreateContactTaskAtTime(ctx context.Context, req CreateContactTaskRequest, createdAt time.Time) (*ContactTask, error) {
+	state := req.State
+	if state == "" {
+		state = string(ContactTaskStateManaged)
+	}
+
+	var metadataBytes []byte
+	if req.Metadata != nil {
+		var err error
+		metadataBytes, err = json.Marshal(req.Metadata)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	dbTask, err := r.queries.CreateContactTaskAtTime(ctx, db.CreateContactTaskAtTimeParams{
+		ContactID:      uuidToPgUUID(req.ContactID),
+		Provider:       req.Provider,
+		Kind:           req.Kind,
+		Lifecycle:      req.Lifecycle,
+		ExternalTaskID: req.ExternalTaskID,
+		State:          state,
+		Metadata:       metadataBytes,
+		CreatedAt:      timeToPgTimestamptz(&createdAt),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	task := convertDbContactTask(dbTask)
+	return &task, nil
+}
+
 // UpsertContactTask creates or updates a contact task
 func (r *ContactTaskRepository) UpsertContactTask(ctx context.Context, req CreateContactTaskRequest) (*ContactTask, error) {
 	state := req.State

@@ -342,6 +342,11 @@ type Querier interface {
 	CreateContact(ctx context.Context, arg CreateContactParams) (*Contact, error)
 	CreateContactMethod(ctx context.Context, arg CreateContactMethodParams) (*ContactMethod, error)
 	CreateContactTask(ctx context.Context, arg CreateContactTaskParams) (*ContactTask, error)
+	// Seed-only variant of CreateContactTask that sets created_at explicitly, so the
+	// synthetic seeder can vary a linked task's created_at (its "link age")
+	// anchor-relatively without a raw SQL insert. Production creators always let
+	// created_at default to NOW(); no request path calls this.
+	CreateContactTaskAtTime(ctx context.Context, arg CreateContactTaskAtTimeParams) (*ContactTask, error)
 	// Variant of CreateContactTask that accepts an explicit idempotency_key,
 	// used by the cutover FollowUpManager for crash-safe two-step create.
 	// A NULL key is permitted so the generic path can reuse the query shape;
