@@ -112,11 +112,22 @@ run "$MAIN" 3 0 ""
 if grep -q "not set; skipping" "$OUT"; then ok; else fail "no-token: expected skip message"; fi
 if grep -q "would delete\|deleting" "$OUT"; then fail "no-token: must delete nothing"; else ok; fi
 
-# ---- Test 5: invalid BUFFER -> fail-closed (guards the $((BUFFER+1)) arithmetic). ----
+# ---- Test 5: invalid BUFFER -> fail-closed (guards the $((10#$BUFFER + 1)) math). ----
+# 5a: non-numeric.
 run "$MAIN" "abc" 1 ""
-[ "$RC" -eq 0 ] || fail "bad-buffer: expected rc 0, got $RC"
-if grep -q "not a non-negative integer" "$OUT"; then ok; else fail "bad-buffer: expected validation message"; fi
-if grep -q "would delete" "$OUT"; then fail "bad-buffer: must delete nothing"; else ok; fi
+[ "$RC" -eq 0 ] || fail "bad-buffer(abc): expected rc 0, got $RC"
+if grep -q "not a non-negative integer" "$OUT"; then ok; else fail "bad-buffer(abc): expected validation message"; fi
+if grep -q "would delete" "$OUT"; then fail "bad-buffer(abc): must delete nothing"; else ok; fi
+# 5b: negative (the '-' is a non-digit -> rejected).
+run "$MAIN" "-5" 1 ""
+[ "$RC" -eq 0 ] || fail "bad-buffer(-5): expected rc 0, got $RC"
+if grep -q "not a non-negative integer" "$OUT"; then ok; else fail "bad-buffer(-5): expected validation message"; fi
+if grep -q "would delete" "$OUT"; then fail "bad-buffer(-5): must delete nothing"; else ok; fi
+# 5c: overflow-sized value (> 9 digits) -> rejected before it can wrap the arithmetic.
+run "$MAIN" "10000000000" 1 ""
+[ "$RC" -eq 0 ] || fail "bad-buffer(huge): expected rc 0, got $RC"
+if grep -q "too many digits" "$OUT"; then ok; else fail "bad-buffer(huge): expected digit-count message"; fi
+if grep -q "would delete" "$OUT"; then fail "bad-buffer(huge): must delete nothing"; else ok; fi
 
 # ---- Test 6: real run deletes exactly the right ids. ----
 DELLOG="$FIXTURE/deleted.log"
@@ -171,6 +182,40 @@ rc=$?
 [ "$rc" -eq 1 ] || fail "list-failure: expected rc 1, got $rc"
 if grep -q "could not list versions" "$FIXTURE/out.listfail"; then ok; else fail "list-failure: expected error message"; fi
 if [ -s "$DELLOG" ]; then fail "list-failure: must delete nothing, deleted: $(tr '\n' ' ' < "$DELLOG")"; else ok; fi
+
+# ---- Test 9b: multi-package where the SECOND package's listing fails -> the first
+#      package's deletions still stand, the run exits 1, and the shared $LISTFILE
+#      does not bleed the good package's entries into the failed one. ----
+: > "$DELLOG"
+( cd "$FIXTURE" \
+  && MAIN_REF="$MAIN" BUFFER=3 DRY_RUN=0 GH_TOKEN="fake" \
+     OWNER="testowner" PACKAGES="pkggood pkgbad" \
+     GHCR_LIST_VERSIONS_CMD="[ \"\$PKG\" = pkgbad ] && exit 3; cat '$MOCK'" \
+     GHCR_DELETE_VERSION_CMD="printf '%s\n' \"\$VERSION_ID\" >> '$DELLOG'" \
+     bash "$SCRIPT" ) >/dev/null 2>"$FIXTURE/out.mixfail"
+rc=$?
+[ "$rc" -eq 1 ] || fail "mixed-list-failure: expected rc 1, got $rc"
+if grep -q "could not list versions for pkgbad" "$FIXTURE/out.mixfail"; then ok; else fail "mixed-list-failure: expected pkgbad error"; fi
+mixdeleted="$(sort "$DELLOG" | tr '\n' ' ')"
+if [ "$mixdeleted" = "100 107 108 " ]; then ok; else fail "mixed-list-failure: expected only pkggood's '100 107 108', got '${mixdeleted}'"; fi
+
+# ---- Test 10: leading-zero BUFFER is treated as DECIMAL, not octal (10#$BUFFER).
+#              With MAIN=C12, "010" as decimal 10 -> floor C12~11 = C1 -> only C1
+#              deletable; the octal-8 bug would floor at C12~9 = C3 and also delete
+#              C2/C3, narrowing the rollback window (the dangerous direction). ----
+MAIN12=${C[12]}
+MOCK2="$FIXTURE/versions2.tsv"
+{
+  printf '200\t%s\n' "${C[1]}"
+  printf '201\t%s\n' "${C[2]}"
+  printf '202\t%s\n' "${C[3]}"
+} > "$MOCK2"
+run "$MAIN12" "010" 1 "" "cat '$MOCK2'"
+[ "$RC" -eq 0 ] || fail "octal-buffer: expected rc 0, got $RC"
+if grep -q "would delete pkg version 200 " "$OUT"; then ok; else fail "octal-buffer: 200 (C1) should be deleted at BUFFER=010 (=decimal 10)"; fi
+for id in 201 202; do
+  if grep -q "version ${id} " "$OUT"; then fail "octal-buffer: version ${id} must be kept (010 must be decimal 10, not octal 8)"; else ok; fi
+done
 
 rm -rf "$FIXTURE"
 

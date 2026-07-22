@@ -58,14 +58,23 @@ DRY_RUN="${DRY_RUN:-0}"
 
 log() { printf '%s\n' "$*" >&2; }
 
-# BUFFER feeds `$((BUFFER + 1))` arithmetic below; a non-numeric value there would
-# resolve to 1 (bash treats an unset name as 0) and collapse the rollback window to
-# the tip alone. Reject anything that is not a non-negative integer -> delete nothing.
+# BUFFER feeds `$((10#$BUFFER + 1))` arithmetic below; a non-numeric value there
+# would resolve to 1 (bash treats an unset name as 0) and collapse the rollback
+# window to the tip alone. Reject anything that is not a run of digits -> delete
+# nothing. The `10#` prefix at the use site forces base 10 so a leading-zero value
+# like "010" is decimal 10, not octal 8 (which would silently narrow the window).
 case "$BUFFER" in
   ''|*[!0-9]*)
     log "ghcr-retention: BUFFER='${BUFFER}' is not a non-negative integer; deleting nothing"
     exit 0 ;;
 esac
+# Bound the digit count so `10#$BUFFER` can never overflow bash's 64-bit signed
+# arithmetic (a 19+ digit value wraps to a small/negative result and would collapse
+# the rollback window). <=9 digits (max 999,999,999) dwarfs any real commit count.
+if [ "${#BUFFER}" -gt 9 ]; then
+  log "ghcr-retention: BUFFER='${BUFFER}' has too many digits (max 9); deleting nothing"
+  exit 0
+fi
 
 DELSET="$(mktemp)"
 LISTFILE="$(mktemp)"
@@ -84,7 +93,7 @@ main_tip="$(git rev-parse --verify "${MAIN_REF}^{commit}" 2>/dev/null)" \
 # is the first deletable commit (BUFFER+1 behind); rev-list from it covers it and
 # every older ancestor. If main has <= BUFFER commits of history behind its tip,
 # nothing is old enough -> keep everything.
-floor="$(git rev-parse --verify "${main_tip}~$((BUFFER + 1))^{commit}" 2>/dev/null)" || {
+floor="$(git rev-parse --verify "${main_tip}~$((10#$BUFFER + 1))^{commit}" 2>/dev/null)" || {
   log "ghcr-retention: main has <= ${BUFFER} commits behind its tip; nothing eligible, deleting nothing"
   exit 0
 }
