@@ -18,12 +18,14 @@ import {
   NotFoundUpstreamError,
   PatternError,
   UpstreamShapeError,
+  blockingOverrides,
   buildCreateBody,
   decideAction,
   diffPrices,
   effectiveWithin,
   fetchUpstream,
   guardDelta,
+  guardDeltasFor,
   main,
   orderedForDelete,
   parseInstanceRow,
@@ -122,6 +124,14 @@ function mockTransport(opts: MockOpts = {}) {
   const langfuseRequests: Array<{ path: string; method: string; headerKeys: string[] }> = []
   const deletes: string[] = []
   const creates: Record<string, unknown>[] = []
+  // The REAL create route is create-only and rejects on (project, modelName)
+  // uniqueness — the pattern is not part of the key. Modelled here so a write test
+  // that leaves a same-named project row behind fails the way the server would,
+  // instead of against a double that happily accepts duplicates.
+  const liveProjectRows = new Map<string, string>()
+  for (const m of opts.models ?? []) {
+    if (m.isLangfuseManaged === false) liveProjectRows.set(String(m.id), String(m.modelName))
+  }
   /** Every write, in order — 'delete <id>' / 'create <modelName>'. */
   const order: string[] = []
   let deleteCount = 0
@@ -185,6 +195,11 @@ function mockTransport(opts: MockOpts = {}) {
         order.push(`create-failed ${String(body.modelName)}`)
         return errRes(500, 'create boom')
       }
+      if ([...liveProjectRows.values()].includes(String(body.modelName))) {
+        order.push(`create-409 ${String(body.modelName)}`)
+        return errRes(400, `Model name '${String(body.modelName)}' already exists in project`)
+      }
+      liveProjectRows.set(`new-${creates.length + 1}`, String(body.modelName))
       creates.push(body)
       order.push(`create ${String(body.modelName)}`)
       return okText({ id: `new-${creates.length}` })
@@ -198,6 +213,7 @@ function mockTransport(opts: MockOpts = {}) {
         return errRes(500, 'delete boom')
       }
       deletes.push(id)
+      liveProjectRows.delete(id)
       order.push(`delete ${id}`)
       return okText({})
     }
@@ -867,6 +883,190 @@ describe('guardDelta', () => {
     expect(actionFor(r.out, JUDGE)).toBe('refused')
     expect(actionFor(r.out, INTENT)).toBe('create')
     expect(r.mock.creates).toHaveLength(1)
+  })
+})
+
+// ===========================================================================
+// The hand-back is a price change too
+// ===========================================================================
+
+describe('convergence guard', () => {
+  const entry = sampleEntry(JUDGE)
+  // Managed matches upstream (so the action is a hand-back) while the override in
+  // force prices this model 10x lower. Deleting it APPLIES that 10x move.
+  const handBackBy = (factor: number) => {
+    const tiers = clone(entry.pricingTiers) as Array<{ prices: Record<string, number> }>
+    tiers[0].prices.input = tiers[0].prices.input / factor
+    return [row(entry), row(entry, { id: 'ovr-1', isLangfuseManaged: false, pricingTiers: tiers })]
+  }
+
+  it('REFUSES a hand-back whose price movement is implausible, and writes nothing', async () => {
+    const r = await run(['--models', JUDGE, '--strict'], { models: handBackBy(10) })
+    expect(actionFor(r.out, JUDGE)).toBe('refused')
+    expect(lineFor(r.out, JUDGE)).toContain('implausible delta: input')
+    expect(lineFor(r.out, JUDGE)).toContain('(10.0x)')
+    expect(r.mock.deletes).toHaveLength(0)
+    expect(r.mock.creates).toHaveLength(0)
+    expect(r.code).not.toBe(0)
+  })
+
+  it('proceeds with the hand-back under --force', async () => {
+    const r = await run(['--models', JUDGE, '--strict', '--force'], { models: handBackBy(10) })
+    expect(actionFor(r.out, JUDGE)).toBe('delete')
+    expect(r.mock.deletes).toEqual(['ovr-1'])
+    expect(r.code).toBe(0)
+  })
+
+  it('still hands back when the movement is within the guard', async () => {
+    const r = await run(['--models', JUDGE, '--strict'], { models: handBackBy(2) })
+    expect(actionFor(r.out, JUDGE)).toBe('delete')
+    expect(r.mock.deletes).toEqual(['ovr-1'])
+  })
+
+  it('guardDeltasFor measures the change that TAKES EFFECT on every mutating action', () => {
+    const upstream = upstreamOf(JUDGE)
+    const matching = asInstance(row(entry))
+    const drifted = asInstance(stale(entry))
+    const kinds = {
+      delete: { kind: 'delete' as const, reason: '' },
+      create: { kind: 'create' as const, reason: '' },
+      replace: { kind: 'replace' as const, reason: '' },
+      none: { kind: 'none' as const, reason: '' },
+    }
+    // Hand-back: override -> managed, NOT managed -> upstream (which is empty by
+    // definition here, so a guard reading it could never fire).
+    const handBack = guardDeltasFor({
+      action: kinds.delete,
+      upstream,
+      effManaged: matching,
+      effOverride: drifted,
+    })
+    expect(handBack.length).toBeGreaterThan(0)
+    expect(diffPrices(matching, upstream)).toEqual([])
+    // Create/replace: the definition in force -> upstream.
+    expect(
+      guardDeltasFor({
+        action: kinds.replace,
+        upstream,
+        effManaged: matching,
+        effOverride: drifted,
+      }).length
+    ).toBeGreaterThan(0)
+    expect(
+      guardDeltasFor({
+        action: kinds.create,
+        upstream,
+        effManaged: drifted,
+        effOverride: undefined,
+      }).length
+    ).toBeGreaterThan(0)
+    // Nothing takes effect, nothing to guard.
+    expect(
+      guardDeltasFor({ action: kinds.none, upstream, effManaged: drifted, effOverride: drifted })
+    ).toEqual([])
+  })
+})
+
+// ===========================================================================
+// Uniqueness is on (project, modelName) — the pattern is not part of the key
+// ===========================================================================
+
+describe('name-blocking overrides', () => {
+  const entry = sampleEntry(JUDGE)
+  // Upstream widened this model's regex; our override still carries the OLD pattern,
+  // which no longer matches the target — but it keeps the same modelName, so it
+  // blocks every future create.
+  const stalePattern = (over: Record<string, unknown> = {}) =>
+    row(entry, {
+      id: 'ovr-old-pattern',
+      isLangfuseManaged: false,
+      matchPattern: '(?i)^(gpt-5\\.4-mini-legacy)$',
+      ...over,
+    })
+
+  it('finds them by NAME, so a changed upstream pattern is not a permanent deadlock', async () => {
+    const r = await run(['--models', JUDGE, '--strict'], {
+      models: [stale(entry), stalePattern()],
+    })
+    // The transport enforces the real uniqueness, so a pattern-only search would
+    // land a 400 here and the model could never converge.
+    expect(actionFor(r.out, JUDGE)).toBe('create')
+    expect(r.mock.order).toEqual(['delete ovr-old-pattern', `create ${String(entry.modelName)}`])
+    expect(r.out.some(l => l.includes('with a non-matching pattern'))).toBe(true)
+    expect(r.code).toBe(0)
+  })
+
+  it('removes them alongside the matching overrides on a replace, effective LAST', async () => {
+    const r = await run(['--models', JUDGE, '--strict'], {
+      models: [
+        stale(entry),
+        stale(entry, {
+          id: 'ovr-eff',
+          isLangfuseManaged: false,
+          startDate: '2026-01-01T00:00:00Z',
+        }),
+        stalePattern(),
+      ],
+    })
+    expect(actionFor(r.out, JUDGE)).toBe('replace')
+    expect(r.mock.order).toEqual([
+      'delete ovr-old-pattern',
+      'delete ovr-eff',
+      `create ${String(entry.modelName)}`,
+    ])
+  })
+
+  it('removes them on a hand-back too, so the model is fully handed back', async () => {
+    const r = await run(['--models', JUDGE, '--strict'], {
+      models: [row(entry), row(entry, { id: 'ovr-1', isLangfuseManaged: false }), stalePattern()],
+    })
+    expect(actionFor(r.out, JUDGE)).toBe('delete')
+    expect(r.mock.deletes.sort()).toEqual(['ovr-1', 'ovr-old-pattern'])
+  })
+
+  it('never counts a managed row or a pattern-matching row as blocking', () => {
+    const rows = [
+      asInstance(row(entry, { id: 'managed-same-name' })),
+      asInstance(row(entry, { id: 'matching-override', isLangfuseManaged: false })),
+      asInstance(stalePattern()),
+      asInstance(row(sampleEntry('text-bison'), { id: 'other-name', isLangfuseManaged: false })),
+    ]
+    expect(blockingOverrides(rows, JUDGE, String(entry.modelName)).map(r => r.id)).toEqual([
+      'ovr-old-pattern',
+    ])
+  })
+
+  it('--reset also clears a row whose pattern no longer matches its own name', async () => {
+    const r = await run(['--reset', JUDGE], { models: [stalePattern()] })
+    expect(r.mock.deletes).toEqual(['ovr-old-pattern'])
+    expect(r.code).toBe(0)
+  })
+})
+
+// ===========================================================================
+// Distinct target strings can select ONE upstream definition
+// ===========================================================================
+
+describe('target aliases', () => {
+  it('reconciles the shared definition ONCE and reports the alias', async () => {
+    // gpt-5.5's live pattern matches both the bare and the dated string.
+    const aliases = `${INTENT},gpt-5.5-2026-04-23`
+    const r = await run(['--models', aliases, '--strict'], { models: [] })
+    expect(r.mock.creates).toHaveLength(1)
+    // Both targets are still accounted for; the second says why it did nothing.
+    expect(actionFor(r.out, INTENT)).toBe('create')
+    expect(actionFor(r.out, 'gpt-5.5-2026-04-23')).toBe('none')
+    expect(lineFor(r.out, 'gpt-5.5-2026-04-23')).toContain('already reconciled as')
+    const summary = r.out.find(l => l.startsWith('summary:')) ?? ''
+    expect(summary).toContain('2 targets')
+    expect(summary).toContain('1 created')
+    expect(summary).toContain('0 failed')
+    expect(r.code).toBe(0)
+  })
+
+  it('does not dedupe targets that select DIFFERENT definitions', async () => {
+    const r = await run(['--models', `${JUDGE},${INTENT}`, '--strict'], { models: [] })
+    expect(r.mock.creates).toHaveLength(2)
   })
 })
 

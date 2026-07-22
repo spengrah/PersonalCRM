@@ -443,6 +443,30 @@ export function splitInstanceRows(
   }
 }
 
+/** Project-scoped rows that carry `modelName` but whose pattern does NOT match the
+ * target.
+ *
+ * Uniqueness on the create route is `(project, modelName)` — the PATTERN is not part
+ * of the key. So when upstream changes or widens a model's regex while keeping its
+ * name, an override written under the OLD pattern stops matching the target, drops
+ * out of a pattern-only search, and silently 400s every subsequent create. The model
+ * can then never converge without a human deleting the row by hand. Finding these by
+ * name is what keeps a routine upstream regex change from being a permanent deadlock.
+ *
+ * They are found for DELETION only: a row whose pattern does not match the target
+ * does not serve the target, so it must not influence which action is chosen or what
+ * the guard measures. */
+export function blockingOverrides(
+  rows: InstanceModel[],
+  target: string,
+  modelName: string
+): InstanceModel[] {
+  return rows.filter(
+    r =>
+      !r.isLangfuseManaged && r.modelName === modelName && !toJsRegex(r.matchPattern).test(target)
+  )
+}
+
 /** The row the server would resolve WITHIN one partition: newest startDate, NULLS
  * LAST — mirroring `ORDER BY start_date DESC NULLS LAST` inside the project_id
  * group. NO further tiebreak, because the server has none: its ordering ENDS
@@ -619,6 +643,39 @@ const refuse = (detail: string): GuardVerdict => ({
   ok: false,
   reason: `implausible delta: ${detail}`,
 })
+
+/** The price movement an action would actually cause — the input the guard must see.
+ *
+ * Every mutating action changes which definition prices this model, so every one is
+ * guarded. What differs is WHICH pair to compare:
+ *
+ *   create / replace — the definition in force today becomes upstream's.
+ *   delete (hand-back) — the override in force today is REMOVED, so pricing falls
+ *     back to the managed row. Comparing the managed row against upstream here would
+ *     be a guard that can never fire: this action is only reached BECAUSE those two
+ *     already match. The change that takes effect is override -> managed, and
+ *     deleting the row that was holding the old price applies the new one just as
+ *     surely as writing it would.
+ *   none — nothing takes effect, nothing to guard. */
+export function guardDeltasFor(input: {
+  action: Action
+  upstream: UpstreamModel
+  effManaged: InstanceModel | undefined
+  effOverride: InstanceModel | undefined
+}): PriceDelta[] {
+  const { action, upstream, effManaged, effOverride } = input
+  if (action.kind === 'none') return []
+  if (action.kind === 'delete') {
+    // Both are defined on this path by construction (a hand-back needs a managed row
+    // that matches and an override to remove); an unexpected shape guards nothing
+    // rather than inventing a comparison.
+    return effOverride !== undefined && effManaged !== undefined
+      ? diffPrices(effOverride, effManaged)
+      : []
+  }
+  const inForce = effOverride ?? effManaged
+  return inForce === undefined ? [] : diffPrices(inForce, upstream)
+}
 
 // ---------------------------------------------------------------------------
 // Decision
@@ -867,7 +924,20 @@ async function warnOnVersionSkew(
   }
 }
 
-/** Reconcile ONE target. Returns true when the target ended in a good state. */
+/** Reconcile ONE target against the instance snapshot taken at the start of the run.
+ *
+ * `reconciled` maps an upstream modelName to the target that already reconciled it.
+ * DIFFERENT target strings can select the SAME upstream definition (a bare alias and
+ * a dated one — `gpt-5.5`'s live pattern matches both `gpt-5.5` and
+ * `gpt-5.5-2026-04-23`), and `activeModels()` cannot see that: it dedupes identical
+ * strings, not distinct strings resolving to one model. Reconciling the second one
+ * against the same (now stale) snapshot would POST a duplicate modelName or DELETE an
+ * already-removed id and report a failure that is purely an artifact of the run.
+ *
+ * Deduping is chosen over re-reading the instance between targets: the second pass
+ * over one definition has nothing left to do by construction, so a re-read would cost
+ * a full paginated walk per target to discover exactly that. The alias is still
+ * reported on its own line, so every requested target is accounted for. */
 async function reconcileTarget(
   cfg: LangfuseConfig,
   target: string,
@@ -876,7 +946,8 @@ async function reconcileTarget(
   opts: Options,
   tally: Tally,
   log: (s: string) => void,
-  apiMs: number
+  apiMs: number,
+  reconciled: Map<string, string>
 ): Promise<void> {
   const line = (action: string, reason: string): void =>
     log(`model=${target} action=${action} reason=${reason}`)
@@ -896,6 +967,13 @@ async function reconcileTarget(
     return
   }
 
+  const alias = reconciled.get(upstream.modelName)
+  if (alias !== undefined) {
+    line('none', `already reconciled as '${alias}' (both select ${upstream.modelName})`)
+    return
+  }
+  reconciled.set(upstream.modelName, target)
+
   let managed: InstanceModel[]
   let overrides: InstanceModel[]
   let effManaged: InstanceModel | undefined
@@ -912,10 +990,22 @@ async function reconcileTarget(
     return
   }
 
+  // Project rows carrying the SAME modelName whose pattern no longer matches the
+  // target. They do not serve the target and so never influence the decision, but
+  // they DO block a create on the (project, modelName) uniqueness — leaving one in
+  // place deadlocks the model permanently, since every future create 400s.
+  const blocking = blockingOverrides(rows, target, upstream.modelName)
+
   // More than one project-scoped row for one target means something outside this
   // sync wrote one — say so before touching anything.
   if (overrides.length > 1) {
     log(`model=${target} note=${overrides.length} project-scoped override rows match this target`)
+  }
+  if (blocking.length > 0) {
+    log(
+      `model=${target} note=${blocking.length} project-scoped row(s) carry modelName ` +
+        `${upstream.modelName} with a non-matching pattern; removing them so a create is not rejected`
+    )
   }
 
   const action = decideAction({
@@ -930,17 +1020,13 @@ async function reconcileTarget(
     return
   }
 
-  if (action.kind === 'create' || action.kind === 'replace') {
-    // Baseline is the definition currently IN FORCE — the guard asks how far the
-    // price a round would pay is about to move, which is a different question from
-    // which row to reconcile.
-    const inForce = effOverride ?? effManaged
-    const verdict = guardDelta(inForce === undefined ? [] : diffPrices(inForce, upstream))
-    if (!verdict.ok && !opts.force) {
-      tally.refused++
-      line('refused', verdict.reason ?? 'implausible delta')
-      return
-    }
+  // EVERY mutating action is guarded, including the hand-back: deleting the row that
+  // was holding the old price APPLIES the new one just as surely as writing it.
+  const verdict = guardDelta(guardDeltasFor({ action, upstream, effManaged, effOverride }))
+  if (!verdict.ok && !opts.force) {
+    tally.refused++
+    line('refused', verdict.reason ?? 'implausible delta')
+    return
   }
 
   if (opts.dryRun) {
@@ -950,7 +1036,9 @@ async function reconcileTarget(
     return
   }
 
-  const ordered = orderedForDelete(overrides, effOverride)
+  // Blocking rows are non-effective for the target by construction, so ordering them
+  // ahead of the effective override preserves the effective-last contract.
+  const ordered = orderedForDelete([...overrides, ...blocking], effOverride)
   let deleted = 0
   for (const row of ordered) {
     try {
@@ -1017,7 +1105,16 @@ const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' 
  *
  * Reconciliation already hands a model back automatically once the managed row
  * catches up; this is the immediate operational version, and the cleanup after a
- * live write-path smoke. */
+ * live write-path smoke.
+ *
+ * DELIBERATELY NOT guarded by the implausible-delta check, unlike every action the
+ * reconciler takes. That guard exists so a large price movement cannot be applied
+ * UNATTENDED; this path is a human naming one model and asking for its override to
+ * go now. Requiring --force here would only teach the operator to pass it by habit.
+ *
+ * Rows are matched by pattern OR by exact modelName, so an override written under a
+ * pattern that upstream has since changed is still cleaned up — the same row a
+ * pattern-only search would strand. */
 async function runReset(
   cfg: LangfuseConfig,
   target: string,
@@ -1027,6 +1124,7 @@ async function runReset(
 ): Promise<number> {
   const rows = await listModels(cfg, apiMs)
   const { overrides } = splitInstanceRows(rows, target)
+  const byName = blockingOverrides(rows, target, target)
   let effective: InstanceModel | undefined
   try {
     effective = effectiveWithin(overrides)
@@ -1035,7 +1133,7 @@ async function runReset(
     // there is no "which one resolves" question left to answer.
     effective = undefined
   }
-  const ordered = orderedForDelete(overrides, effective)
+  const ordered = orderedForDelete([...overrides, ...byName], effective)
   let deleted = 0
   for (const row of ordered) {
     try {
@@ -1143,9 +1241,10 @@ export async function main(
     absent: 0,
     failed: 0,
   }
+  const reconciled = new Map<string, string>()
   for (const target of targets) {
     try {
-      await reconcileTarget(cfg, target, upstreamModels, rows, opts, tally, log, apiMs)
+      await reconcileTarget(cfg, target, upstreamModels, rows, opts, tally, log, apiMs, reconciled)
     } catch (err) {
       // One target's unexpected failure never takes the others down with it.
       tally.failed++
