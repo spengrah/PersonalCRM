@@ -711,6 +711,26 @@ test_price_sync_runs_first() {
     cleanup_fixture
 }
 
+test_price_sync_after_preflight() {
+    echo "test: a failed pre-tours sha pin / missing trace path aborts WITHOUT having mutated prices"
+    make_fixture
+    # The sync is the round's first EXTERNAL mutation, so it must not run until the
+    # round has proven it is running the checkout it thinks it is.
+    run_orch STUB_ASSERT_PRE_RC=1
+    assert_rc_nz price-preflight-sha
+    assert_kv round aborted price-preflight-sha
+    assert_not_ran qa-model-prices price-preflight-sha
+    cleanup_fixture
+
+    make_fixture
+    # An unwritable trace path aborts at the same preflight stage.
+    run_orch QA_JUDGE_TRACE=/nonexistent-dir/trace.jsonl
+    assert_rc_nz price-preflight-trace
+    assert_kv round aborted price-preflight-trace
+    assert_not_ran qa-model-prices price-preflight-trace
+    cleanup_fixture
+}
+
 test_price_sync_skipped_round() {
     echo "test: cadence gate says skip -> the price sync never runs"
     make_fixture
@@ -1027,6 +1047,7 @@ main() {
     test_gen_baseline_before_reseed
 
     test_price_sync_runs_first
+    test_price_sync_after_preflight
     test_price_sync_skipped_round
     test_price_sync_failure_is_not_ok
     test_price_sync_malformed_provenance

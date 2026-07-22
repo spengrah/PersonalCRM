@@ -924,20 +924,23 @@ async function warnOnVersionSkew(
   }
 }
 
-/** Reconcile ONE target against the instance snapshot taken at the start of the run.
+/** Reconcile ONE target against `rows`. Returns true when it MUTATED the instance,
+ * which is the caller's signal that `rows` is now stale.
  *
- * `reconciled` maps an upstream modelName to the target that already reconciled it.
  * DIFFERENT target strings can select the SAME upstream definition (a bare alias and
  * a dated one — `gpt-5.5`'s live pattern matches both `gpt-5.5` and
  * `gpt-5.5-2026-04-23`), and `activeModels()` cannot see that: it dedupes identical
- * strings, not distinct strings resolving to one model. Reconciling the second one
- * against the same (now stale) snapshot would POST a duplicate modelName or DELETE an
- * already-removed id and report a failure that is purely an artifact of the run.
+ * strings, not distinct strings resolving to one model. Reconciling a second alias
+ * against a snapshot that a first alias already invalidated would POST a duplicate
+ * modelName or DELETE an already-removed id, and report a failure that is purely an
+ * artifact of the run.
  *
- * Deduping is chosen over re-reading the instance between targets: the second pass
- * over one definition has nothing left to do by construction, so a re-read would cost
- * a full paginated walk per target to discover exactly that. The alias is still
- * reported on its own line, so every requested target is accounted for. */
+ * The caller solves that by RE-READING between targets, never by skipping one: every
+ * requested target is inspected against rows that are actually current. Skipping the
+ * inspection would mean a stale override matching only the SECOND alias — or one a
+ * human wrote under a different modelName — silently stays in force while the run
+ * reports clean. A redundant second pass then costs nothing anyway, because it
+ * observes the state the first pass produced and decides `none`. */
 async function reconcileTarget(
   cfg: LangfuseConfig,
   target: string,
@@ -946,9 +949,8 @@ async function reconcileTarget(
   opts: Options,
   tally: Tally,
   log: (s: string) => void,
-  apiMs: number,
-  reconciled: Map<string, string>
-): Promise<void> {
+  apiMs: number
+): Promise<boolean> {
   const line = (action: string, reason: string): void =>
     log(`model=${target} action=${action} reason=${reason}`)
 
@@ -960,19 +962,12 @@ async function reconcileTarget(
       // Renamed or removed upstream. The existing definition is left ALONE.
       tally.absent++
       line('absent', `${err.message}; existing definition left untouched`)
-      return
+      return false
     }
     tally.refused++
     line('refused', errMsg(err))
-    return
+    return false
   }
-
-  const alias = reconciled.get(upstream.modelName)
-  if (alias !== undefined) {
-    line('none', `already reconciled as '${alias}' (both select ${upstream.modelName})`)
-    return
-  }
-  reconciled.set(upstream.modelName, target)
 
   let managed: InstanceModel[]
   let overrides: InstanceModel[]
@@ -987,7 +982,7 @@ async function reconcileTarget(
   } catch (err) {
     tally.refused++
     line('refused', err instanceof AmbiguousTieError ? `ambiguous: ${err.message}` : errMsg(err))
-    return
+    return false
   }
 
   // Project rows carrying the SAME modelName whose pattern no longer matches the
@@ -1017,7 +1012,7 @@ async function reconcileTarget(
 
   if (action.kind === 'none') {
     line('none', action.reason)
-    return
+    return false
   }
 
   // EVERY mutating action is guarded, including the hand-back: deleting the row that
@@ -1026,14 +1021,14 @@ async function reconcileTarget(
   if (!verdict.ok && !opts.force) {
     tally.refused++
     line('refused', verdict.reason ?? 'implausible delta')
-    return
+    return false
   }
 
   if (opts.dryRun) {
     // Same action word as a real run so the two are directly comparable; the reason
     // carries the "nothing written" part.
     line(action.kind, `${action.reason} (dry-run, nothing written)`)
-    return
+    return false
   }
 
   // Blocking rows are non-effective for the target by construction, so ordering them
@@ -1055,14 +1050,15 @@ async function reconcileTarget(
         'failed',
         `deleted ${deleted} of ${ordered.length} override(s), delete failed: ${errMsg(err)}`
       )
-      return
+      // A partial delete still mutated the instance.
+      return deleted > 0
     }
   }
 
   if (action.kind === 'delete') {
     tally.deleted += deleted
     line('delete', `${action.reason} (deleted ${plural(deleted, 'override')})`)
-    return
+    return true
   }
 
   try {
@@ -1087,7 +1083,7 @@ async function reconcileTarget(
       // price, and exactly where it would have been without this sync.
       line('failed', `deleted ${plural(deleted, 'override')}, create failed: ${errMsg(err)}`)
     }
-    return
+    return deleted > 0
   }
 
   if (action.kind === 'replace') {
@@ -1097,6 +1093,7 @@ async function reconcileTarget(
     tally.created++
     line('create', action.reason)
   }
+  return true
 }
 
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`
@@ -1114,13 +1111,19 @@ const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' 
  *
  * Rows are matched by pattern OR by exact modelName, so an override written under a
  * pattern that upstream has since changed is still cleaned up — the same row a
- * pattern-only search would strand. */
+ * pattern-only search would strand.
+ *
+ * --dry-run PREVIEWS the deletes and writes nothing. Destructiveness is exactly why
+ * an operator reaches for dry-run first, so refusing the combination — or worse,
+ * ignoring the flag and deleting anyway — would defeat the one habit that makes this
+ * command safe to run against a live instance. */
 async function runReset(
   cfg: LangfuseConfig,
   target: string,
   log: (s: string) => void,
   errlog: (s: string) => void,
-  apiMs: number
+  apiMs: number,
+  dryRun: boolean
 ): Promise<number> {
   const rows = await listModels(cfg, apiMs)
   const { overrides } = splitInstanceRows(rows, target)
@@ -1134,6 +1137,15 @@ async function runReset(
     effective = undefined
   }
   const ordered = orderedForDelete([...overrides, ...byName], effective)
+  if (dryRun) {
+    for (const row of ordered) {
+      log(`reset ${target}: would delete ${row.id} (modelName=${row.modelName})`)
+    }
+    log(
+      `reset ${target}: would delete ${plural(ordered.length, 'project override')} (dry-run, nothing written)`
+    )
+    return EXIT.OK
+  }
   let deleted = 0
   for (const row of ordered) {
     try {
@@ -1180,14 +1192,17 @@ export async function main(
       'qa-model-prices: LANGFUSE_HOST/LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY are not all set — ' +
         'nothing synced'
     )
-    return failCode
+    // The nightly's fail-open covers a sync it can retry tomorrow. It must NOT cover
+    // an operational cleanup: a reset that exits 0 without deleting anything is how a
+    // throwaway override outlives the smoke that created it.
+    return opts.reset !== undefined ? EXIT.FAIL : failCode
   }
 
   await warnOnVersionSkew(cfg, errlog, healthMs)
 
   if (opts.reset !== undefined) {
     try {
-      return await runReset(cfg, opts.reset, log, errlog, apiMs)
+      return await runReset(cfg, opts.reset, log, errlog, apiMs, opts.dryRun)
     } catch (err) {
       errlog(`qa-model-prices: reset ${opts.reset} failed: ${errMsg(err)}`)
       // An operational cleanup that silently "succeeded" would be a footgun, so
@@ -1241,12 +1256,40 @@ export async function main(
     absent: 0,
     failed: 0,
   }
-  const reconciled = new Map<string, string>()
+  // A mutation invalidates the snapshot every later target is judged against. Re-read
+  // rather than skip: only a re-read can tell a target whose need was already met by a
+  // previous target's write from one whose own stale override is still in force.
+  // Nothing is re-read when nothing was written, which is the normal case.
+  let stale = false
   for (const target of targets) {
+    if (stale) {
+      try {
+        rows = await listModels(cfg, apiMs)
+        stale = false
+      } catch (err) {
+        // Acting on rows known to be out of date is how a run reports a clean
+        // reconciliation of state it can no longer see.
+        tally.failed++
+        log(`model=${target} action=failed reason=could not re-read the instance: ${errMsg(err)}`)
+        continue
+      }
+    }
     try {
-      await reconcileTarget(cfg, target, upstreamModels, rows, opts, tally, log, apiMs, reconciled)
+      const mutated = await reconcileTarget(
+        cfg,
+        target,
+        upstreamModels,
+        rows,
+        opts,
+        tally,
+        log,
+        apiMs
+      )
+      stale = stale || mutated
     } catch (err) {
-      // One target's unexpected failure never takes the others down with it.
+      // One target's unexpected failure never takes the others down with it. The
+      // snapshot is assumed STALE afterwards: a throw can land after a write.
+      stale = true
       tally.failed++
       log(`model=${target} action=failed reason=${errMsg(err)}`)
     }

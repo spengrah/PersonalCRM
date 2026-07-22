@@ -114,6 +114,8 @@ interface MockOpts {
   upstreamNeverSettles?: boolean
   /** 1-based page index whose response never settles (bounds-the-walk test). */
   pageNeverSettles?: number
+  /** 1-based index of a models LIST request (page 1) that fails — a re-read error. */
+  failListCall?: number
   failDelete?: (id: string, nth: number) => boolean
   failCreate?: boolean
   health?: Record<string, unknown> | 'error'
@@ -124,17 +126,22 @@ function mockTransport(opts: MockOpts = {}) {
   const langfuseRequests: Array<{ path: string; method: string; headerKeys: string[] }> = []
   const deletes: string[] = []
   const creates: Record<string, unknown>[] = []
+  // LIVE instance state, not a fixed reply: a DELETE removes the row and a POST adds
+  // one, so a second read within the same run sees what the first write did. A list
+  // endpoint frozen at the initial fixture would make any re-read logic look correct
+  // by construction. The array is copied so a run cannot mutate the caller's fixture.
+  const liveRows: Record<string, unknown>[] = [...(opts.models ?? [])]
+  let created = 0
   // The REAL create route is create-only and rejects on (project, modelName)
   // uniqueness — the pattern is not part of the key. Modelled here so a write test
   // that leaves a same-named project row behind fails the way the server would,
   // instead of against a double that happily accepts duplicates.
-  const liveProjectRows = new Map<string, string>()
-  for (const m of opts.models ?? []) {
-    if (m.isLangfuseManaged === false) liveProjectRows.set(String(m.id), String(m.modelName))
-  }
+  const liveProjectNames = (): string[] =>
+    liveRows.filter(r => r.isLangfuseManaged === false).map(r => String(r.modelName))
   /** Every write, in order — 'delete <id>' / 'create <modelName>'. */
   const order: string[] = []
   let deleteCount = 0
+  let listCalls = 0
 
   const okText = (obj: unknown): Response =>
     ({ ok: true, status: 200, text: async () => JSON.stringify(obj) }) as Response
@@ -179,7 +186,12 @@ function mockTransport(opts: MockOpts = {}) {
       return okText(opts.health ?? { status: 'OK', version: '3.212.0' })
     }
     if (pathname === '/api/public/models' && method === 'GET') {
-      const all = opts.models ?? []
+      const page0 = Number(parsed.searchParams.get('page') ?? '1')
+      if (page0 === 1) {
+        listCalls++
+        if (opts.failListCall === listCalls) return errRes(500, 'models list boom')
+      }
+      const all = liveRows
       const per = opts.perPage ?? 100
       const page = Number(parsed.searchParams.get('page') ?? '1')
       if (opts.pageNeverSettles === page) return stall(init?.signal)
@@ -195,11 +207,17 @@ function mockTransport(opts: MockOpts = {}) {
         order.push(`create-failed ${String(body.modelName)}`)
         return errRes(500, 'create boom')
       }
-      if ([...liveProjectRows.values()].includes(String(body.modelName))) {
+      if (liveProjectNames().includes(String(body.modelName))) {
         order.push(`create-409 ${String(body.modelName)}`)
         return errRes(400, `Model name '${String(body.modelName)}' already exists in project`)
       }
-      liveProjectRows.set(`new-${creates.length + 1}`, String(body.modelName))
+      created++
+      liveRows.push({
+        ...body,
+        id: `new-${created}`,
+        isLangfuseManaged: false,
+        startDate: null,
+      })
       creates.push(body)
       order.push(`create ${String(body.modelName)}`)
       return okText({ id: `new-${creates.length}` })
@@ -213,7 +231,8 @@ function mockTransport(opts: MockOpts = {}) {
         return errRes(500, 'delete boom')
       }
       deletes.push(id)
-      liveProjectRows.delete(id)
+      const at = liveRows.findIndex(r => String(r.id) === id)
+      if (at >= 0) liveRows.splice(at, 1)
       order.push(`delete ${id}`)
       return okText({})
     }
@@ -1048,15 +1067,16 @@ describe('name-blocking overrides', () => {
 // ===========================================================================
 
 describe('target aliases', () => {
-  it('reconciles the shared definition ONCE and reports the alias', async () => {
+  const DATED = 'gpt-5.5-2026-04-23'
+
+  it('writes ONCE for two aliases — the second sees the first write and has nothing to do', async () => {
     // gpt-5.5's live pattern matches both the bare and the dated string.
-    const aliases = `${INTENT},gpt-5.5-2026-04-23`
-    const r = await run(['--models', aliases, '--strict'], { models: [] })
+    const r = await run(['--models', `${INTENT},${DATED}`, '--strict'], { models: [] })
     expect(r.mock.creates).toHaveLength(1)
-    // Both targets are still accounted for; the second says why it did nothing.
     expect(actionFor(r.out, INTENT)).toBe('create')
-    expect(actionFor(r.out, 'gpt-5.5-2026-04-23')).toBe('none')
-    expect(lineFor(r.out, 'gpt-5.5-2026-04-23')).toContain('already reconciled as')
+    // Not skipped — inspected against re-read rows and found already correct.
+    expect(actionFor(r.out, DATED)).toBe('none')
+    expect(lineFor(r.out, DATED)).toContain('override already matches upstream')
     const summary = r.out.find(l => l.startsWith('summary:')) ?? ''
     expect(summary).toContain('2 targets')
     expect(summary).toContain('1 created')
@@ -1064,9 +1084,120 @@ describe('target aliases', () => {
     expect(r.code).toBe(0)
   })
 
-  it('does not dedupe targets that select DIFFERENT definitions', async () => {
+  it('reconciles a stale override that matches ONLY the second alias', async () => {
+    // The regression a skip-the-target dedup causes: the first alias sees a current
+    // managed row and no matching override, reports none, and the second alias never
+    // gets looked at — leaving its stale override in force while the run reads clean.
+    const entry = sampleEntry(DATED)
+    const tiers = clone(entry.pricingTiers) as Array<{ prices: Record<string, number> }>
+    tiers[0].prices.input *= 2
+    const r = await run(['--models', `${INTENT},${DATED}`, '--strict'], {
+      models: [
+        row(entry),
+        row(entry, {
+          id: 'ovr-dated-only',
+          isLangfuseManaged: false,
+          // Matches the dated alias only.
+          matchPattern: '(?i)^(gpt-5\\.5-2026-04-23)$',
+          pricingTiers: tiers,
+        }),
+      ],
+    })
+    expect(actionFor(r.out, INTENT)).toBe('none')
+    expect(actionFor(r.out, DATED)).toBe('delete')
+    expect(r.mock.deletes).toEqual(['ovr-dated-only'])
+    expect(r.code).toBe(0)
+  })
+
+  it('does not conflate targets that select DIFFERENT definitions', async () => {
     const r = await run(['--models', `${JUDGE},${INTENT}`, '--strict'], { models: [] })
     expect(r.mock.creates).toHaveLength(2)
+  })
+
+  it('refuses to judge a later target against rows it could not re-read', async () => {
+    const r = await run(['--models', `${INTENT},${JUDGE}`, '--strict'], {
+      models: [],
+      failListCall: 2,
+    })
+    expect(actionFor(r.out, INTENT)).toBe('create')
+    expect(actionFor(r.out, JUDGE)).toBe('failed')
+    expect(lineFor(r.out, JUDGE)).toContain('could not re-read the instance')
+    // Only the first target's write happened; the second never acted on stale rows.
+    expect(r.mock.creates).toHaveLength(1)
+    expect(r.code).not.toBe(0)
+  })
+
+  it('does not re-read when nothing was written (the normal case)', async () => {
+    const r = await run(['--models', `${JUDGE},${INTENT}`, '--strict'], {
+      models: [row(sampleEntry(JUDGE)), row(sampleEntry(DATED))],
+      failListCall: 2,
+    })
+    // A second list call would have failed; zero writes means none was needed.
+    expect(actionFor(r.out, JUDGE)).toBe('none')
+    expect(actionFor(r.out, INTENT)).toBe('none')
+    expect(r.code).toBe(0)
+  })
+})
+
+// ===========================================================================
+// --dry-run is TOTAL: every mutating path previews, none writes
+// ===========================================================================
+
+describe('dry-run', () => {
+  const entry = sampleEntry(JUDGE)
+  const handBack = [
+    row(entry),
+    row(entry, {
+      id: 'ovr-1',
+      isLangfuseManaged: false,
+      pricingTiers: (() => {
+        const t = clone(entry.pricingTiers) as Array<{ prices: Record<string, number> }>
+        t[0].prices.input *= 2
+        return t
+      })(),
+    }),
+  ]
+
+  const cases: Array<[string, string, Record<string, unknown>[]]> = [
+    ['create', 'create', [stale(entry)]],
+    ['replace', 'replace', [stale(entry), stale(entry, { id: 'ovr-1', isLangfuseManaged: false })]],
+    ['hand-back delete', 'delete', handBack],
+  ]
+  for (const [label, want, models] of cases) {
+    it(`previews the ${label} and issues zero writes`, async () => {
+      const r = await run(['--models', JUDGE, '--dry-run', '--strict'], { models })
+      expect(actionFor(r.out, JUDGE)).toBe(want)
+      expect(lineFor(r.out, JUDGE)).toContain('dry-run, nothing written')
+      expect(r.mock.creates).toHaveLength(0)
+      expect(r.mock.deletes).toHaveLength(0)
+    })
+  }
+
+  it('previews --reset instead of deleting — the flag pairing that exists BECAUSE reset is destructive', async () => {
+    const r = await run(['--reset', JUDGE, '--dry-run'], {
+      models: [
+        row(entry, { id: 'managed-1' }),
+        row(entry, { id: 'ovr-1', isLangfuseManaged: false }),
+        row(entry, { id: 'ovr-2', isLangfuseManaged: false }),
+      ],
+    })
+    expect(r.mock.deletes).toHaveLength(0)
+    // It still SHOWS what it would do — a preview that lists nothing is not a preview.
+    expect(r.out.some(l => l.includes('would delete ovr-1'))).toBe(true)
+    expect(r.out.some(l => l.includes('would delete ovr-2'))).toBe(true)
+    expect(
+      r.out.some(l => l.includes('would delete 2 project overrides (dry-run, nothing written)'))
+    ).toBe(true)
+    // A managed row is never in the preview either.
+    expect(r.out.some(l => l.includes('managed-1'))).toBe(false)
+    expect(r.code).toBe(0)
+  })
+
+  it('--reset with absent credentials reports FAILURE, never a silent clean-up', async () => {
+    const r = await run(['--reset', JUDGE], { models: [] }, { LANGFUSE_HOST: 'http://lf' })
+    expect(r.code).not.toBe(0)
+    expect(r.err.join('\n')).toContain('nothing synced')
+    expect(r.mock.deletes).toHaveLength(0)
   })
 })
 

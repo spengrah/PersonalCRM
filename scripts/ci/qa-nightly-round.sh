@@ -193,10 +193,32 @@ fi
 # 3. Run the round.
 # ---------------------------------------------------------------------------
 
-# 3-pre. Model-price sync (fail-open). Stale prices make cost APPROXIMATE; a skipped
-# round makes the night's QA ABSENT — so a failure here logs loudly, records a
-# manifest field, and CONTINUES. It runs before the export because Langfuse resolves
-# a model's price when the observation is INGESTED, not when it was produced.
+# The judge trace path is mandatory on a run — the judge writes it and qa-export ships
+# it. A run without it cannot produce a gradeable round, so this is a start-time abort.
+[ -n "${QA_JUDGE_TRACE:-}" ] || abort "QA_JUDGE_TRACE unset — the wrapper must supply a fresh per-round trace path"
+# The judge APPENDS spans to QA_JUDGE_TRACE and the exporter ships the WHOLE file, so a path
+# reused across rounds would mix stale spans into this round's export (and the exporter's
+# stale-round WARNING only fires when a provenance sidecar exists to disagree). Guarantee
+# freshness here by TRUNCATING the trace to empty at the start of the round — the wrapper
+# should also hand a fresh path, but this makes the round self-contained regardless.
+: > "$QA_JUDGE_TRACE" 2>/dev/null || abort "cannot initialize (truncate) trace file $QA_JUDGE_TRACE"
+
+# 3a. Pre-tours pin: prove the checkout the tours will run FROM is the deployed sha.
+if ! bash "$SHA_ASSERT" "$QA_HEAD_SHA"; then
+  abort "pre-tours deployed-sha assert failed — checkout not pinned to $QA_HEAD_SHA"
+fi
+
+# 3a-post. Model-price sync (fail-open). Stale prices make cost APPROXIMATE; a
+# skipped round makes the night's QA ABSENT — so a failure here logs loudly, records
+# a manifest field, and CONTINUES. It runs before tours and the export because
+# Langfuse resolves a model's price when the observation is INGESTED, not when it was
+# produced.
+#
+# It runs AFTER the preflight (trace path + the pre-tours deployed-sha pin) and never
+# before: this is the round's first EXTERNAL mutation, and creating or deleting model
+# definitions from a checkout that then turns out not to be the deployed sha — or for
+# a round that aborts a line later on a missing trace path — leaves pricing state
+# changed by a round that never ran.
 # We invoke with STRICT=1 precisely so the exit code is trustworthy: the fail-open
 # lives HERE, in not aborting, not in the child masking its own failures.
 # Same env discipline as every other make child: the injected QA_*_CMD vars can embed
@@ -215,21 +237,6 @@ else
 fi
 emit price_sync "$price_sync_status"
 emit price_sync_upstream_sha "${price_sync_sha:-}"
-
-# The judge trace path is mandatory on a run — the judge writes it and qa-export ships
-# it. A run without it cannot produce a gradeable round, so this is a start-time abort.
-[ -n "${QA_JUDGE_TRACE:-}" ] || abort "QA_JUDGE_TRACE unset — the wrapper must supply a fresh per-round trace path"
-# The judge APPENDS spans to QA_JUDGE_TRACE and the exporter ships the WHOLE file, so a path
-# reused across rounds would mix stale spans into this round's export (and the exporter's
-# stale-round WARNING only fires when a provenance sidecar exists to disagree). Guarantee
-# freshness here by TRUNCATING the trace to empty at the start of the round — the wrapper
-# should also hand a fresh path, but this makes the round self-contained regardless.
-: > "$QA_JUDGE_TRACE" 2>/dev/null || abort "cannot initialize (truncate) trace file $QA_JUDGE_TRACE"
-
-# 3a. Pre-tours pin: prove the checkout the tours will run FROM is the deployed sha.
-if ! bash "$SHA_ASSERT" "$QA_HEAD_SHA"; then
-  abort "pre-tours deployed-sha assert failed — checkout not pinned to $QA_HEAD_SHA"
-fi
 
 # 3b. Reserve the run dir + validate the run id BEFORE the destructive reseed, so an
 #     invalid id / collision / filesystem error aborts WITHOUT having reseeded staging.
