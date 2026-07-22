@@ -16,6 +16,7 @@ import {
   INTENT_CAPTURE_CAP,
   type ScreenshotResolver,
 } from './intent-input'
+import { DEFAULT_INTENT_EFFORT, DEFAULT_INTENT_MODEL } from './models'
 import type { Capture } from '../support/types'
 
 export interface IntentGrade {
@@ -31,13 +32,6 @@ export interface IntentGrade {
   /** The intent is visual (catalog flag) but was judged without screenshots. */
   ariaOnly?: boolean
 }
-
-// Intent judgment is the semantically hard task and the call count is small
-// (~one per intent per run), so it defaults to a stronger model + effort than
-// the cheap item-residue judge. Overridable via QA_INTENT_MODEL /
-// QA_INTENT_EFFORT; QA_JUDGE still selects the adapter kind.
-export const DEFAULT_INTENT_MODEL = 'gpt-5.5'
-export const DEFAULT_INTENT_EFFORT = 'medium'
 
 // A fail citation is grounded iff it names at least one IN-RANGE CAPTURE[n]
 // index AND carries a node label / JSON path beyond the marker(s) — the

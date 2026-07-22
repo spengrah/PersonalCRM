@@ -6,7 +6,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { JudgeInput } from './adapter'
 import { codexArgs } from './adapter/codex-exec'
-import { DEFAULT_INTENT_EFFORT, DEFAULT_INTENT_MODEL, makeIntentJudge } from './intent-runner'
+import { makeIntentJudge } from './intent-runner'
+import { DEFAULT_INTENT_EFFORT, DEFAULT_INTENT_MODEL } from './models'
 
 // Spy on the codex-sdk factory so the codex-sdk dispatch is observable without a
 // live SDK call. Hoisted so the vi.mock factory can reference it; only the
