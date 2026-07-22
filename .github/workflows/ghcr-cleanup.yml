@@ -8,9 +8,9 @@ name: GHCR retention
 # un-promoted develop SHA are kept regardless of age — so a long promote gap is
 # safe. See scripts/ci/ghcr-retention.sh for the full policy.
 #
-# GHCR packages here are USER-owned (spengrah/*), and the built-in GITHUB_TOKEN
-# cannot delete user-owned package versions, so this uses a PAT secret
-# (GHCR_CLEANUP_TOKEN, classic, scopes: read:packages + delete:packages).
+# GHCR packages here are USER-owned (spengrah/*). GITHUB_TOKEN can delete versions
+# of ORG-owned, repo-scoped packages, but not USER-owned ones, so this uses a PAT
+# secret (GHCR_CLEANUP_TOKEN, classic, scopes: read:packages + delete:packages).
 #
 # Manual runs default to a DRY RUN (log only); the weekly schedule deletes for real.
 

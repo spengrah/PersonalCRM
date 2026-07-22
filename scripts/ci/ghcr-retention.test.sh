@@ -5,7 +5,9 @@
 # MAIN_REF at a chosen commit, feeds a MOCKED package-version list through the
 # GHCR_LIST_VERSIONS_CMD injection hook, and asserts which versions the script
 # marks for deletion (DRY_RUN=1, so nothing hits the network). Also covers the
-# fail-closed paths (unresolvable main, too-short history, real-run-without-token).
+# fail-closed paths (unresolvable main with NO fallback, too-short history, invalid
+# BUFFER, real-run-without-token, list-command failure), the buffer boundary, the
+# tip/un-promoted safety property across BUFFER values, and multi-package handling.
 #
 # Portable: no network, no BSD-only flags. Sets a LOCAL git identity (CI may lack a
 # global one) and unsets the hook-inherited git env so the fixture is isolated.
@@ -34,8 +36,6 @@ declare -a C
   git config user.email "ci@example.com"
   git config user.name "CI"
   git config commit.gpgsign false
-  # Name the branch `develop` so neither `main` nor `master` exists — the
-  # unresolvable-main test relies on the script's `main` fallback also failing.
   git checkout -q -b develop 2>/dev/null || git branch -q -m develop
 ) || { echo "fixture init failed" >&2; exit 1; }
 
@@ -44,49 +44,61 @@ for i in $(seq 1 12); do
   C[i]="$( cd "$FIXTURE" && git rev-parse HEAD )"
 done
 
+# A local `main` at C12 (divergent from the C9 we treat as prod). Its presence is
+# what makes the no-fallback test meaningful: a stale/divergent local main must NOT
+# be used when the configured ref is unresolvable.
+( cd "$FIXTURE" && git branch main develop )
+
 # main tip = C9 (so C1..C9 are promoted ancestors; C10..C12 are ahead/un-promoted).
 MAIN=${C[9]}
 
-# Mock version list: "<id>\t<tags>". Tab-separated, one per line.
+# Mock version list: "<id>\t<tags>". With MAIN=C9, BUFFER=3 the delete floor is
+# C9~4 = C5, so deletable = {C1..C5} (strictly MORE than 3 commits behind the tip).
 MOCK="$FIXTURE/versions.tsv"
 {
-  printf '100\t%s\n'    "${C[3]}"            # deletable: promoted, >3 behind tip
-  printf '101\t%s\n'    "${C[6]}"            # deletable: exactly the floor (C9~3)
-  printf '102\t%s\n'    "${C[7]}"            # KEEP: within rollback buffer
-  printf '103\t%s\n'    "${C[9]}"            # KEEP: current prod image (main tip)
-  printf '104\t%s\n'    "${C[11]}"           # KEEP: un-promoted (ahead of main)
-  printf '105\t%s,latest\n' "${C[2]}"        # KEEP: carries :latest despite old sha
-  printf '106\t\n'                            # KEEP: untagged
-  printf '107\t%s\n'    "${C[1]}"            # deletable: oldest promoted
+  printf '100\t%s\n'         "${C[3]}"          # DELETE: promoted, 6 behind
+  printf '101\t%s\n'         "${C[6]}"          # KEEP: exactly BUFFER (3) behind — boundary
+  printf '102\t%s\n'         "${C[7]}"          # KEEP: within rollback buffer
+  printf '103\t%s\n'         "${C[9]}"          # KEEP: current prod image (main tip)
+  printf '104\t%s\n'         "${C[11]}"         # KEEP: un-promoted (ahead of main)
+  printf '105\t%s,latest\n'  "${C[2]}"          # KEEP: carries :latest despite old sha
+  printf '106\t\n'                               # KEEP: untagged
+  printf '107\t%s\n'         "${C[1]}"          # DELETE: oldest promoted
+  printf '108\t%s\n'         "${C[5]}"          # DELETE: exactly BUFFER+1 (4) behind — boundary
+  printf '109\t%s,%s\n'      "${C[4]}" "${C[11]}" # KEEP: one deletable sha + one un-promoted sha
 } > "$MOCK"
 
-run() {  # run <main_ref> <buffer> <dry_run> <token>  -> stderr captured to $OUT, rc in $RC
+run() {  # run <main_ref> <buffer> <dry_run> <token> [list_cmd]  -> stderr in $OUT, rc in $RC
   OUT="$FIXTURE/out.$$"
+  # $MOCK expands (outer double quotes); the inner single quotes are literal so the
+  # injected command is `cat '<path>'`. shellcheck SC2016 misreads the nesting.
+  # shellcheck disable=SC2016
+  local list_cmd="${5:-cat '$MOCK'}"
   ( cd "$FIXTURE" \
     && MAIN_REF="$1" BUFFER="$2" DRY_RUN="$3" GH_TOKEN="$4" \
        OWNER="testowner" PACKAGES="pkg" \
-       GHCR_LIST_VERSIONS_CMD="cat '$MOCK'" \
+       GHCR_LIST_VERSIONS_CMD="$list_cmd" \
        bash "$SCRIPT" ) >/dev/null 2>"$OUT"
   RC=$?
 }
 
-# ---- Test 1: the core delete decision (dry run). ----
+# ---- Test 1: the core delete decision (dry run) under the new floor semantics. ----
 run "$MAIN" 3 1 ""
 [ "$RC" -eq 0 ] || fail "core: expected rc 0, got $RC"
-for id in 100 101 107; do
+for id in 100 107 108; do
   if grep -q "would delete pkg version ${id} " "$OUT"; then ok; else fail "core: version ${id} should be deleted"; fi
 done
-for id in 102 103 104 105 106; do
+for id in 101 102 103 104 105 106 109; do
   if grep -q "version ${id} " "$OUT"; then fail "core: version ${id} must be kept"; else ok; fi
 done
-# exactly 3 deletions reported
 if grep -q "3 version(s) would be deleted" "$OUT"; then ok; else fail "core: expected 3 deletions, got: $(grep 'would be deleted' "$OUT")"; fi
 
-# ---- Test 2: unresolvable main -> fail-closed, delete nothing. ----
-run "refs/heads/nope" 3 1 ""
-[ "$RC" -eq 0 ] || fail "unresolvable-main: expected rc 0, got $RC"
-if grep -q "cannot resolve main tip" "$OUT"; then ok; else fail "unresolvable-main: expected resolve failure message"; fi
-if grep -q "would delete" "$OUT"; then fail "unresolvable-main: must delete nothing"; else ok; fi
+# ---- Test 2: unresolvable main + NO fallback -> delete nothing (stale local main
+#              at C12 must NOT be used). ----
+run "refs/remotes/origin/does-not-exist" 3 1 ""
+[ "$RC" -eq 0 ] || fail "no-fallback: expected rc 0, got $RC"
+if grep -q "cannot resolve main tip" "$OUT"; then ok; else fail "no-fallback: expected resolve failure message"; fi
+if grep -q "would delete" "$OUT"; then fail "no-fallback: must delete nothing (no local-main fallback)"; else ok; fi
 
 # ---- Test 3: history <= BUFFER behind tip -> nothing eligible. ----
 run "$MAIN" 50 1 ""
@@ -100,7 +112,13 @@ run "$MAIN" 3 0 ""
 if grep -q "not set; skipping" "$OUT"; then ok; else fail "no-token: expected skip message"; fi
 if grep -q "would delete\|deleting" "$OUT"; then fail "no-token: must delete nothing"; else ok; fi
 
-# ---- Test 5: real run actually invokes delete for the right ids only. ----
+# ---- Test 5: invalid BUFFER -> fail-closed (guards the $((BUFFER+1)) arithmetic). ----
+run "$MAIN" "abc" 1 ""
+[ "$RC" -eq 0 ] || fail "bad-buffer: expected rc 0, got $RC"
+if grep -q "not a non-negative integer" "$OUT"; then ok; else fail "bad-buffer: expected validation message"; fi
+if grep -q "would delete" "$OUT"; then fail "bad-buffer: must delete nothing"; else ok; fi
+
+# ---- Test 6: real run deletes exactly the right ids. ----
 DELLOG="$FIXTURE/deleted.log"
 : > "$DELLOG"
 ( cd "$FIXTURE" \
@@ -112,7 +130,47 @@ DELLOG="$FIXTURE/deleted.log"
 rc=$?
 [ "$rc" -eq 0 ] || fail "real-run: expected rc 0, got $rc"
 deleted="$(sort "$DELLOG" | tr '\n' ' ')"
-if [ "$deleted" = "100 101 107 " ]; then ok; else fail "real-run: expected deleted ids '100 101 107', got '${deleted}'"; fi
+if [ "$deleted" = "100 107 108 " ]; then ok; else fail "real-run: expected deleted ids '100 107 108', got '${deleted}'"; fi
+
+# ---- Test 7: SAFETY PROPERTY — across BUFFER values, the tip (103/C9) and an
+#              un-promoted sha (104/C11) are NEVER deleted. ----
+for b in 0 1 3 5; do
+  : > "$DELLOG"
+  ( cd "$FIXTURE" \
+    && MAIN_REF="$MAIN" BUFFER="$b" DRY_RUN=0 GH_TOKEN="fake" \
+       OWNER="testowner" PACKAGES="pkg" \
+       GHCR_LIST_VERSIONS_CMD="cat '$MOCK'" \
+       GHCR_DELETE_VERSION_CMD="printf '%s\n' \"\$VERSION_ID\" >> '$DELLOG'" \
+       bash "$SCRIPT" ) >/dev/null 2>"$FIXTURE/out.prop"
+  if grep -qx "103" "$DELLOG"; then fail "safety-property (BUFFER=$b): prod tip (103) was deleted"; else ok; fi
+  if grep -qx "104" "$DELLOG"; then fail "safety-property (BUFFER=$b): un-promoted (104) was deleted"; else ok; fi
+done
+
+# ---- Test 8: multi-package — same mock for two packages -> 6 deletions. ----
+: > "$DELLOG"
+( cd "$FIXTURE" \
+  && MAIN_REF="$MAIN" BUFFER=3 DRY_RUN=0 GH_TOKEN="fake" \
+     OWNER="testowner" PACKAGES="pkg1 pkg2" \
+     GHCR_LIST_VERSIONS_CMD="cat '$MOCK'" \
+     GHCR_DELETE_VERSION_CMD="printf '%s\n' \"\$VERSION_ID\" >> '$DELLOG'" \
+     bash "$SCRIPT" ) >/dev/null 2>"$FIXTURE/out.multi"
+rc=$?
+[ "$rc" -eq 0 ] || fail "multi-package: expected rc 0, got $rc"
+n="$(grep -c . "$DELLOG")"
+if [ "$n" -eq 6 ]; then ok; else fail "multi-package: expected 6 deletions (3 per package), got $n"; fi
+
+# ---- Test 9: list-command failure on a real run -> surface it (rc 1), delete nothing. ----
+: > "$DELLOG"
+( cd "$FIXTURE" \
+  && MAIN_REF="$MAIN" BUFFER=3 DRY_RUN=0 GH_TOKEN="fake" \
+     OWNER="testowner" PACKAGES="pkg" \
+     GHCR_LIST_VERSIONS_CMD="exit 3" \
+     GHCR_DELETE_VERSION_CMD="printf '%s\n' \"\$VERSION_ID\" >> '$DELLOG'" \
+     bash "$SCRIPT" ) >/dev/null 2>"$FIXTURE/out.listfail"
+rc=$?
+[ "$rc" -eq 1 ] || fail "list-failure: expected rc 1, got $rc"
+if grep -q "could not list versions" "$FIXTURE/out.listfail"; then ok; else fail "list-failure: expected error message"; fi
+if [ -s "$DELLOG" ]; then fail "list-failure: must delete nothing, deleted: $(tr '\n' ' ' < "$DELLOG")"; else ok; fi
 
 rm -rf "$FIXTURE"
 
