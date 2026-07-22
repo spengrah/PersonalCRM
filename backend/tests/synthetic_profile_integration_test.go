@@ -206,7 +206,10 @@ func birthdayFingerprint(rows []repository.BirthdayFixtureRow, anchor time.Time)
 		if r.Birthday == nil {
 			continue
 		}
-		ageDecade := (anchor.Year() - r.Birthday.Year()) / 10
+		// Use the UTC year to match BirthdayFixtureDate's UTC-pinned birth year, so the
+		// age decade agrees with the UTC-pinned browser's rendered age around the year
+		// boundary (anchor.Year() could differ from anchor.UTC().Year() there).
+		ageDecade := (anchor.UTC().Year() - r.Birthday.Year()) / 10
 		fp = append(fp, strings.Join([]string{
 			r.FullName,
 			synthetic.BirthdayBucket(*r.Birthday, anchor),
@@ -221,10 +224,11 @@ func birthdayFingerprint(rows []repository.BirthdayFixtureRow, anchor time.Time)
 // the SeededDateFacts total via the shared scale helper, the strict guarantee (≥1 of
 // the {today,+1} redundancy pair lands imminent, ≥1 fixture recedes past the ≤7-day
 // highlight window), per-fixture seed integrity (each reserved[i] stored the date the
-// plan computed for its offset), the exact section of the date-independent strict
-// fixtures, and a populated birthday cache on every reserved subject. Subject-scoped
-// to the reserved ids only — the catalog seeds its own birthdays in the same
-// namespace. anchor is the generator anchor; n is the catalog size.
+// plan computed for its offset), the date-INDEPENDENT classification (forward
+// fixtures are exactly their offset days out via daysUntil==offset; the celebrated
+// fixture is past this year), and a populated birthday cache on every reserved
+// subject. Subject-scoped to the reserved ids only — the catalog seeds its own
+// birthdays in the same namespace. anchor is the generator anchor; n is the catalog size.
 func assertBirthdayFixtures(t *testing.T, ctx context.Context, support *repository.SyntheticSupportRepository, h *synthetic.Harness, res synthetic.ProfileResult, anchor time.Time, n int) {
 	t.Helper()
 
@@ -270,24 +274,26 @@ func assertBirthdayFixtures(t *testing.T, ctx context.Context, support *reposito
 	}
 	require.GreaterOrEqual(t, receded, 1, "≥1 reserved fixture recedes past the ≤7-day highlight window")
 
-	// Per-fixture seed integrity + section: each reserved[i] stored the date the plan
-	// computed for its offset (reserved[i] ⇄ plan[i]), and the date-INDEPENDENT strict
-	// fixtures classify into their exact section. The distant/celebrated fixtures'
-	// section is date-dependent near year boundaries, so only their stored date is
-	// pinned here; the frontend parity test closes the offset→section loop.
-	strictBucket := map[string]string{
-		synthetic.BirthdayRoleToday:    "today",
-		synthetic.BirthdayRoleImminent: "week",
-		synthetic.BirthdayRoleThisWeek: "week",
-	}
+	// Per-fixture seed integrity + classification: each reserved[i] stored the date the
+	// plan computed for its offset (reserved[i] ⇄ plan[i]), and its next-occurrence
+	// distance is exactly that offset. daysUntil==offset is DATE-INDEPENDENT (a +5
+	// fixture is 5 days out whether or not its wrapped January occurrence lands the
+	// page's "celebrated" section near year-end), so it — not a fragile section bucket
+	// — is what we pin. The celebrated fixture (offset<0) is always past-this-year when
+	// present (its date-gating keeps it same-year). The section→offset mapping is
+	// verified against the real page by the frontend parity test.
 	for i, id := range reserved {
 		row := byID[id]
 		require.NotNil(t, row.Birthday, "reserved fixture %d birthday cache populated", i)
 		want := synthetic.BirthdayFixtureDate(anchor, plan[i].OffsetDays)
 		require.Equal(t, want.Month(), row.Birthday.Month(), "fixture %d (%s) stored month", i, plan[i].Role)
 		require.Equal(t, want.Day(), row.Birthday.Day(), "fixture %d (%s) stored day", i, plan[i].Role)
-		if bucket, ok := strictBucket[plan[i].Role]; ok {
-			require.Equal(t, bucket, synthetic.BirthdayBucket(*row.Birthday, anchor), "fixture %d (%s) classifies %q", i, plan[i].Role, bucket)
+		if plan[i].OffsetDays >= 0 {
+			require.Equal(t, plan[i].OffsetDays, synthetic.BirthdayDaysUntil(*row.Birthday, anchor),
+				"fixture %d (%s) is exactly %d days out", i, plan[i].Role, plan[i].OffsetDays)
+		} else {
+			require.True(t, synthetic.BirthdayIsPastThisYear(*row.Birthday, anchor),
+				"fixture %d (%s) is past this year (celebrated)", i, plan[i].Role)
 		}
 	}
 }
@@ -708,8 +714,8 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	// One full bool-fact cycle (job_seeking/on_sabbatical/traveling) + one full
 	// edge cycle (knows/introduced_by/sibling_of) so every new predicate — incl.
 	// the always-confirm sibling_of (→ proposed) and the auto-if-confident rest
-	// (→ accepted) — is exercised. The bool-fact gate also seeds one toolkit date
-	// fact.
+	// (→ accepted) — is exercised. (Birthday date-facts are seeded independently,
+	// gated only on birthdayless catalog slots.)
 	params.Counts.SeededBoolFacts = 3
 	params.Counts.SeededRelationships = 3
 	// Enable cadence-task seeding (>0 gate). The 9-contact catalog is all

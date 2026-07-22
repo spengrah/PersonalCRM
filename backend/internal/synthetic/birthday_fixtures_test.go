@@ -103,40 +103,37 @@ func TestBirthdayBucket_BoundaryOffsets(t *testing.T) {
 }
 
 func TestBirthdayFixtureDate_PlanRolesLandAsIntended(t *testing.T) {
-	// The seeding + coverage split verified year-round: the STRICT date-independent
-	// fixtures classify into an exact bucket regardless of anchor, while the
-	// best-effort distant/celebrated fixtures are only guaranteed to RECEDE out of
-	// the ≤7-day highlight window (daysUntil > 7). The distant fixtures are NOT
-	// pinned to the "distant" bucket: a +90/+150 birthday seeded when the anchor is
-	// in ~Oct-Dec wraps into next-year Jan-Mar, so its occurrence THIS calendar year
-	// is already past and the page files it under "Already Celebrated This Year"
-	// (isPastThisYear) even though it is genuinely ~90 days out. Either way it has
-	// receded from the highlight window, which is the CON-052 quality.
-	strictBucket := map[string]string{
-		BirthdayRoleToday:    "today",
-		BirthdayRoleImminent: "week",
-		BirthdayRoleThisWeek: "week",
-	}
+	// Every fixture's next-occurrence distance is DATE-INDEPENDENT: a fixture at
+	// offset o (0<=o<365) is always exactly o days out, regardless of where in the
+	// year the anchor sits. The PAGE SECTION is NOT date-independent — a +5 fixture
+	// seeded on Dec 27 wraps to Jan 1, whose occurrence THIS year is already past, so
+	// the page files it under "Already Celebrated This Year" though it is 5 days out.
+	// So we pin the robust daysUntil==offset for the forward fixtures (not a fragile
+	// section bucket), and past-this-year for the celebrated fixture (which its
+	// date-gating keeps same-year). The section→offset mapping is verified against the
+	// real page by the frontend parity test. Anchors deliberately include the
+	// year-end boundary (Dec 27–31, Jan 1) where the wrap bites.
 	for _, anchor := range []time.Time{
+		time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC),
 		time.Date(2026, time.January, 2, 12, 0, 0, 0, time.UTC),
 		time.Date(2026, time.March, 1, 12, 0, 0, 0, time.UTC),
 		time.Date(2024, time.February, 29, 12, 0, 0, 0, time.UTC),
 		time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC),
 		time.Date(2026, time.December, 20, 12, 0, 0, 0, time.UTC),
+		time.Date(2026, time.December, 27, 12, 0, 0, 0, time.UTC),
+		time.Date(2026, time.December, 31, 12, 0, 0, 0, time.UTC),
+		time.Date(2023, time.December, 1, 12, 0, 0, 0, time.UTC), // +90 lands Feb 29 2024
 	} {
 		for _, f := range BirthdayFixturePlan(anchor) {
 			bday := BirthdayFixtureDate(anchor, f.OffsetDays)
-			if want, ok := strictBucket[f.Role]; ok {
-				if got := BirthdayBucket(bday, anchor); got != want {
-					t.Errorf("%s role %q (offset %d): bucket = %q, want %q",
-						anchor.Format("2006-01-02"), f.Role, f.OffsetDays, got, want)
+			if f.OffsetDays >= 0 {
+				if got := BirthdayDaysUntil(bday, anchor); got != f.OffsetDays {
+					t.Errorf("%s role %q: daysUntil = %d, want %d (offset)",
+						anchor.Format("2006-01-02"), f.Role, got, f.OffsetDays)
 				}
-				continue
-			}
-			// best-effort distant/celebrated: must recede past the highlight window.
-			if got := BirthdayDaysUntil(bday, anchor); got <= 7 {
-				t.Errorf("%s role %q (offset %d): daysUntil = %d, want > 7 (receded)",
-					anchor.Format("2006-01-02"), f.Role, f.OffsetDays, got)
+			} else if !BirthdayIsPastThisYear(bday, anchor) {
+				t.Errorf("%s role %q (offset %d): want past-this-year (celebrated)",
+					anchor.Format("2006-01-02"), f.Role, f.OffsetDays)
 			}
 		}
 	}

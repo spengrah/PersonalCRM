@@ -179,7 +179,8 @@ func ProfileParams(name Profile) (SeedParams, error) {
 				SeededAssertions:  2,
 				// Bool facts + person→person edges (small, fast) so the dev graph
 				// surfaces have content. Both exercise the value-type/edge assert
-				// plumbing; the bool-fact gate also seeds one toolkit date fact.
+				// plumbing. (Birthday date-facts are seeded independently, gated only on
+				// birthdayless catalog slots — see runCatalogProfile.)
 				SeededBoolFacts:     2,
 				SeededRelationships: 2,
 				// Enable cadence-task seeding (>0 gate). The dev catalog is all
