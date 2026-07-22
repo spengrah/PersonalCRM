@@ -188,6 +188,18 @@ type Harness struct {
 	// so it stays off the counts-only, determinism-compared result struct.
 	dateFactContactID uuid.UUID
 
+	// catalogContactIDs / manualCohortIDs record the ids the visible-task spread
+	// (SeedVisibleTaskSpread) touched: every catalog contact (the universe the
+	// 0-visible majority is proven over via a LEFT JOIN) and the reserved subset
+	// that received manual tasks. A profile sets them via SetCatalogContactIDs /
+	// SetManualCohortIDs; the coverage check reads them via CatalogContactIDs /
+	// ManualCohortIDs to assert the 0/1/>1 visible-task cohorts subject-scoped.
+	// Like the ids above they are NOT ProfileResult fields: contact ids come from
+	// uuid_generate_v4() (non-deterministic), so they stay off the counts-only,
+	// determinism-compared result struct.
+	catalogContactIDs []uuid.UUID
+	manualCohortIDs   []uuid.UUID
+
 	created   *created
 	createdMu sync.Mutex
 
@@ -693,6 +705,45 @@ func (h *Harness) DateFactContactID() uuid.UUID {
 	h.createdMu.Lock()
 	defer h.createdMu.Unlock()
 	return h.dateFactContactID
+}
+
+// SetCatalogContactIDs records the full catalog contact id set the visible-task
+// spread ran over, so the coverage check can prove the 0-visible majority via a
+// LEFT JOIN of the catalog universe against its visible tasks (grouping task rows
+// alone can't produce the zero-task contacts). Called by the seeding block after
+// the catalog is populated — hence exported. Guarded by the ledger mutex for
+// parity with the other tracked ids.
+func (h *Harness) SetCatalogContactIDs(ids []uuid.UUID) {
+	h.createdMu.Lock()
+	defer h.createdMu.Unlock()
+	h.catalogContactIDs = append([]uuid.UUID(nil), ids...)
+}
+
+// CatalogContactIDs returns the catalog contact ids the visible-task spread ran
+// over (nil if the spread did not run). Read by the coverage check to scope the
+// 0/1/>1 visible-task cohort assertions to the catalog universe.
+func (h *Harness) CatalogContactIDs() []uuid.UUID {
+	h.createdMu.Lock()
+	defer h.createdMu.Unlock()
+	return append([]uuid.UUID(nil), h.catalogContactIDs...)
+}
+
+// SetManualCohortIDs records the reserved catalog contacts the visible-task
+// spread gave manual tasks (the 1-visible + >1-visible cohorts). Called by
+// SeedVisibleTaskSpread — hence exported. Guarded by the ledger mutex.
+func (h *Harness) SetManualCohortIDs(ids []uuid.UUID) {
+	h.createdMu.Lock()
+	defer h.createdMu.Unlock()
+	h.manualCohortIDs = append([]uuid.UUID(nil), ids...)
+}
+
+// ManualCohortIDs returns the reserved catalog contacts that received manual
+// tasks (nil if the spread did not run). Read by the coverage check to assert
+// the manual cohorts subject-scoped without putting UUIDs in ProfileResult.
+func (h *Harness) ManualCohortIDs() []uuid.UUID {
+	h.createdMu.Lock()
+	defer h.createdMu.Unlock()
+	return append([]uuid.UUID(nil), h.manualCohortIDs...)
 }
 
 // gateBClear reports whether Gate B has reached zero for this replay's contacts.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"strings"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
@@ -345,6 +346,147 @@ func (h *Harness) SeedPendingFollowUp(ctx context.Context, contactID uuid.UUID, 
 	}
 	h.track(func(c *created) { c.addContactTask(task.ID) })
 	return task.ID, nil
+}
+
+// Visible-task spread constants. The spread attaches user-style MANUAL tasks to a
+// fixed, creation-index-selected subset of the cadence-bearing catalog so the
+// product-visible task axis (manual/follow-up tasks — the contact page never lists
+// cadence_due) forms a 0/1/multiple distribution.
+const (
+	// visibleSpreadMinCatalog is the minimum cadence-bearing catalog size the
+	// spread requires: it addresses creation indices 1, 2, and 3, so index 3 must
+	// exist. Below this the spread is a documented no-op (protects a custom short
+	// profile that lowers SeededContacts).
+	visibleSpreadMinCatalog = 4
+	// base62UUIDWidth is the maximum number of base62 digits a 128-bit UUID needs
+	// (ceil(128 * ln2 / ln62) = 22). paddedBase62UUID left-pads to this fixed width
+	// so the (uuid, ordinal) external id is injective.
+	base62UUIDWidth = 22
+	// visibleTaskOrdinalWidth is the fixed base62 width of the per-contact task
+	// ordinal appended to the padded UUID.
+	visibleTaskOrdinalWidth = 2
+)
+
+// manualTaskSpec is one MANUAL task the visible-task spread seeds, addressed by
+// creation index into the cadence-bearing catalog slice.
+type manualTaskSpec struct {
+	contactIdx int    // index into the creation-ordered cadence-bearing catalog ids
+	ordinal    int    // this contact's Nth manual task (0-based) — external-id uniqueness
+	kind       string // rotates reach_out/send/reminder so all three kinds appear
+	ageDays    int    // created_at = anchor - ageDays days (varies the link age)
+}
+
+// visibleTaskSpread is the FIXED, creation-index-based manual-task allocation:
+// indices 1 and 2 each get one manual task (the 1-visible cohort); index 3 gets
+// two (the >1-visible cohort). Every other catalog contact gets none (the
+// 0-visible majority — it keeps its background cadence_due row, which the contact
+// page never lists). Selection is by creation index, never by a random contact
+// UUID, so it is byte-stable across reseeds. Kinds cover all three user-pickable
+// values; ageDays spans three link-age buckets (days / weeks / months).
+var visibleTaskSpread = []manualTaskSpec{
+	{contactIdx: 1, ordinal: 0, kind: contacttask.KindReachOut, ageDays: 2},
+	{contactIdx: 2, ordinal: 0, kind: contacttask.KindSend, ageDays: 21},
+	{contactIdx: 3, ordinal: 0, kind: contacttask.KindReminder, ageDays: 90},
+	{contactIdx: 3, ordinal: 1, kind: contacttask.KindReachOut, ageDays: 2},
+}
+
+// SpreadResult is the settled outcome of SeedVisibleTaskSpread.
+type SpreadResult struct {
+	// ManualTasks is the total managed manual contact_task rows created.
+	ManualTasks int
+	// ContactsWithManualTasks is the distinct catalog contacts that received ≥1
+	// manual task (the 1-visible + >1-visible cohorts).
+	ContactsWithManualTasks int
+	// ContactsWithMultipleManualTasks is the distinct catalog contacts that
+	// received >1 manual task (the >1-visible cohort).
+	ContactsWithMultipleManualTasks int
+}
+
+// SeedVisibleTaskSpread attaches user-style MANUAL tasks to a deterministic,
+// creation-index-selected subset of the cadence-bearing catalog contacts, so the
+// product-VISIBLE task axis (the manual/follow-up tasks the contact page lists —
+// it never lists cadence_due) forms a realistic 0/1/multiple distribution.
+//
+// cadenceBearingIDs must be the CREATION-ORDERED cadence-bearing catalog ids: the
+// spread selects cohorts by fixed index into that slice (see visibleTaskSpread),
+// never by a random contact UUID, so the assignment is byte-stable across reseeds.
+// It draws NO generator PRNG (only repository reads + writes), so it is safe to run
+// inside the existing task block without shifting the deterministic id sequence the
+// earlier source replays depend on. Below visibleSpreadMinCatalog contacts it is a
+// documented no-op (the fixed indices would be out of range).
+//
+// Manual tasks are state='managed' (a user-created linked task's steady state;
+// completion happens remotely) with lifecycle='manual' and a rotating kind. Each
+// carries a distinct link age (created_at = anchor - ageDays) via
+// CreateContactTaskAtTime. External ids are fixed-width, injective, alphanumeric
+// (paddedBase62UUID) so a contact's second task never collides on
+// unique_external_task_id. Records the reserved cohort ids on the Harness via
+// SetManualCohortIDs for subject-scoped assertions.
+func (h *Harness) SeedVisibleTaskSpread(ctx context.Context, cadenceBearingIDs []uuid.UUID) (SpreadResult, error) {
+	if len(cadenceBearingIDs) < visibleSpreadMinCatalog {
+		return SpreadResult{}, nil
+	}
+
+	taskRepo := repository.NewContactTaskRepository(h.database.Queries)
+	anchor := h.gen.Anchor()
+
+	perContact := make(map[uuid.UUID]int)
+	cohortOrder := make([]uuid.UUID, 0, len(visibleTaskSpread))
+	for _, spec := range visibleTaskSpread {
+		contactID := cadenceBearingIDs[spec.contactIdx]
+
+		contact, err := h.contactRepo.GetContact(ctx, contactID)
+		if err != nil {
+			return SpreadResult{}, fmt.Errorf("visible task spread: get contact %s: %w", contactID, err)
+		}
+		content := fmt.Sprintf("Task: [%s](%s/contacts/%s)", contact.FullName, syntheticFrontendBase, contactID)
+
+		createdAt := anchor.Add(-time.Duration(spec.ageDays) * 24 * time.Hour)
+		task, err := taskRepo.CreateContactTaskAtTime(ctx, repository.CreateContactTaskRequest{
+			ContactID:      contactID,
+			Provider:       todoist.SourceName,
+			Kind:           spec.kind,
+			Lifecycle:      contacttask.LifecycleManual,
+			ExternalTaskID: paddedBase62UUID(contactID, spec.ordinal),
+			State:          string(repository.ContactTaskStateManaged),
+			Metadata:       map[string]any{"content": content},
+		}, createdAt)
+		if err != nil {
+			return SpreadResult{}, fmt.Errorf("visible task spread: create manual task on contact %s: %w", contactID, err)
+		}
+		h.track(func(c *created) { c.addContactTask(task.ID) })
+
+		if perContact[contactID] == 0 {
+			cohortOrder = append(cohortOrder, contactID)
+		}
+		perContact[contactID]++
+	}
+
+	res := SpreadResult{ManualTasks: len(visibleTaskSpread)}
+	for _, count := range perContact {
+		res.ContactsWithManualTasks++
+		if count > 1 {
+			res.ContactsWithMultipleManualTasks++
+		}
+	}
+	h.SetManualCohortIDs(cohortOrder)
+	return res, nil
+}
+
+// paddedBase62UUID builds a fixed-width, injective, alphanumeric external task id
+// from a contact UUID and a per-contact ordinal. base62UUID's width VARIES with the
+// numeric value (a leading-zero byte shrinks it), so a bare concat of the id and an
+// ordinal would not be injective — a shorter id + a longer ordinal could collide
+// with a longer id + a shorter ordinal. Left-padding the UUID component to
+// base62UUIDWidth and the ordinal to visibleTaskOrdinalWidth makes the split
+// unambiguous, so (contactID, ordinal) → id is one-to-one. The result stays
+// alphanumeric (base62 digits + '0' padding), matching the Todoist-v1 id shape.
+func paddedBase62UUID(id uuid.UUID, ordinal int) string {
+	raw := base62UUID(id)
+	padded := strings.Repeat("0", base62UUIDWidth-len(raw)) + raw
+	ord := new(big.Int).SetInt64(int64(ordinal)).Text(62)
+	ordPadded := strings.Repeat("0", visibleTaskOrdinalWidth-len(ord)) + ord
+	return padded + ordPadded
 }
 
 // externalTaskIDForContact derives a stable, alphanumeric external id from the
