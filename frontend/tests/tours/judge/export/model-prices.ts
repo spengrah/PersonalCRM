@@ -152,6 +152,21 @@ export interface UpstreamTier {
   prices: Record<string, number>
 }
 
+/** An entry that failed PER-ENTRY validation. Kept (with its pattern, which is
+ * validated at the envelope tier) so a target that matches one can be refused
+ * precisely rather than reported as absent. */
+export interface RejectedEntry {
+  index: number
+  modelName: string
+  matchPattern: string
+  reason: string
+}
+
+export interface UpstreamParse {
+  models: UpstreamModel[]
+  rejected: RejectedEntry[]
+}
+
 export interface UpstreamModel {
   modelName: string
   matchPattern: string
@@ -234,7 +249,9 @@ function parseTier(raw: unknown, where: string): UpstreamTier {
   if (!Array.isArray(raw.conditions)) {
     throw new UpstreamShapeError(`${where}: tier conditions is not an array`)
   }
-  if (raw.name !== undefined && typeof raw.name !== 'string') {
+  // Null-is-absent, consistently with the tokenizer fields: an unnamed tier is keyed
+  // by priority instead.
+  if (raw.name !== undefined && raw.name !== null && typeof raw.name !== 'string') {
     throw new UpstreamShapeError(`${where}: tier name is present but not a string`)
   }
   if (!isPlainObject(raw.prices)) {
@@ -262,15 +279,33 @@ function parseTier(raw: unknown, where: string): UpstreamTier {
   }
 }
 
-/** Parse + validate the upstream payload. Throws on ANY unexpected structure and
- * never returns a partial list: a payload that is wrong anywhere is a payload we
- * cannot reason about anywhere.
+/** Parse + validate the upstream payload, in TWO TIERS.
+ *
+ * ENVELOPE tier — fatal for the whole run (throws): the body is not JSON, the root is
+ * not a non-empty array, an entry is not an object, or an entry's `matchPattern` is
+ * missing, empty, or does not compile. A corrupted or wrong response (a truncated
+ * body, an HTML error page) must never be treated as data.
+ *
+ * `matchPattern` is deliberately at the ENVELOPE tier while every other field is
+ * per-entry, because selection runs by matching that pattern against the target: an
+ * entry whose pattern we cannot compile is one we cannot classify as ours or not
+ * ours, and "we could not tell" is not "not ours". Skipping it could silently resolve
+ * what should have been an ambiguity refusal, or select a different definition than
+ * upstream intends. Every other malformed field can be judged per entry precisely
+ * because we can still tell whose entry it is.
+ *
+ * PER-ENTRY tier — the entry is REJECTED and skipped, not fatal. Upstream is a shared
+ * table of 160+ models that grows weekly; a whole-payload validator dies on the first
+ * unfamiliar field in a model this project will never sync, which is a guaranteed
+ * eventual nightly failure caused by someone else's release. A rejected entry is
+ * reported loudly by its index and name, and if a TARGET matches it the target is
+ * refused — a price we could not parse is never written.
  *
  * Tiers are normalized to their price-bearing fields. Upstream's server-owned tier
  * `id`s are deliberately NOT carried into a create body — they identify rows in
  * another deployment's table, not prices. Everything that decides a cost —
  * conditions, priority, isDefault, name, the price maps — is mirrored as-is. */
-export function parseUpstream(raw: string): UpstreamModel[] {
+export function parseUpstream(raw: string): UpstreamParse {
   let parsed: unknown
   try {
     parsed = JSON.parse(raw)
@@ -283,9 +318,37 @@ export function parseUpstream(raw: string): UpstreamModel[] {
   if (!Array.isArray(parsed)) throw new UpstreamShapeError('payload root is not an array')
   if (parsed.length === 0) throw new UpstreamShapeError('payload root is an empty array')
 
-  return parsed.map((rawModel, i) => {
+  const models: UpstreamModel[] = []
+  const rejected: RejectedEntry[] = []
+  parsed.forEach((rawModel, i) => {
     const where = `entry ${i}`
+    // --- envelope tier: fatal ---
     if (!isPlainObject(rawModel)) throw new UpstreamShapeError(`${where}: not an object`)
+    if (!nonEmptyString(rawModel.matchPattern)) {
+      throw new UpstreamShapeError(`${where}: matchPattern is not a non-empty string`)
+    }
+    // Compiled here rather than at selection time: an uncompilable pattern makes
+    // this entry unclassifiable, which is an envelope-tier problem.
+    toJsRegex(rawModel.matchPattern)
+    // --- per-entry tier: rejected and skipped ---
+    try {
+      models.push(parseEntry(rawModel, where))
+    } catch (err) {
+      rejected.push({
+        index: i,
+        modelName: nonEmptyString(rawModel.modelName) ? rawModel.modelName : '<unnamed>',
+        matchPattern: rawModel.matchPattern,
+        reason: err instanceof Error ? err.message : String(err),
+      })
+    }
+  })
+  return { models, rejected }
+}
+
+/** One entry's per-entry validation. Throws UpstreamShapeError, which the caller
+ * turns into a rejection rather than a fatal error. */
+function parseEntry(rawModel: Record<string, unknown>, where: string): UpstreamModel {
+  {
     if (!nonEmptyString(rawModel.modelName)) {
       throw new UpstreamShapeError(`${where}: modelName is not a non-empty string`)
     }
@@ -295,9 +358,15 @@ export function parseUpstream(raw: string): UpstreamModel[] {
     if (!Array.isArray(rawModel.pricingTiers) || rawModel.pricingTiers.length === 0) {
       throw new UpstreamShapeError(`${where}: pricingTiers is not a non-empty array`)
     }
-    if (rawModel.tokenizerId !== undefined && typeof rawModel.tokenizerId !== 'string') {
-      // Forwarded verbatim into the create body, so an unvalidated non-string would
-      // be written straight into a definition.
+    // An explicit JSON `null` means "no tokenizer" and is COMMON upstream — treating
+    // it as a type error would reject a third of the table. Null and absent are the
+    // same fact here; only a present non-null non-string is malformed, and that one
+    // matters because the value is forwarded verbatim into a create body.
+    if (
+      rawModel.tokenizerId !== undefined &&
+      rawModel.tokenizerId !== null &&
+      typeof rawModel.tokenizerId !== 'string'
+    ) {
       throw new UpstreamShapeError(`${where}: tokenizerId is present but not a string`)
     }
     const tiers = rawModel.pricingTiers.map((t, n) => parseTier(t, `${where} tier ${n}`))
@@ -322,11 +391,13 @@ export function parseUpstream(raw: string): UpstreamModel[] {
       matchPattern: rawModel.matchPattern,
       pricingTiers: tiers,
       ...(typeof rawModel.tokenizerId === 'string' ? { tokenizerId: rawModel.tokenizerId } : {}),
-      ...(rawModel.tokenizerConfig !== undefined
+      // Same null-is-absent rule: a null config is not a config, and forwarding an
+      // explicit null would put a key in the create body that upstream does not have.
+      ...(rawModel.tokenizerConfig !== undefined && rawModel.tokenizerConfig !== null
         ? { tokenizerConfig: rawModel.tokenizerConfig }
         : {}),
     }
-  })
+  }
 }
 
 /** Parse one instance row. Fails CLOSED on a malformed row (see InstanceShapeError). */
@@ -966,7 +1037,7 @@ async function warnOnVersionSkew(
 async function reconcileTarget(
   cfg: LangfuseConfig,
   target: string,
-  upstreamModels: UpstreamModel[],
+  parsed: UpstreamParse,
   rows: InstanceModel[],
   opts: Options,
   tally: Tally,
@@ -976,9 +1047,20 @@ async function reconcileTarget(
   const line = (action: string, reason: string): void =>
     log(`model=${target} action=${action} reason=${reason}`)
 
+  // A target that matches an entry we could not parse is REFUSED, never reported as
+  // absent and never written: "we could not read this model's price" and "upstream
+  // dropped this model" are different facts, and only one of them is safe to act on.
+  const unreadable = parsed.rejected.filter(r => toJsRegex(r.matchPattern).test(target))
+  if (unreadable.length > 0) {
+    tally.refused++
+    const r = unreadable[0]
+    line('refused', `upstream entry ${r.index} (${r.modelName}) failed validation: ${r.reason}`)
+    return false
+  }
+
   let upstream: UpstreamModel
   try {
-    upstream = selectUpstream(upstreamModels, target)
+    upstream = selectUpstream(parsed.models, target)
   } catch (err) {
     if (err instanceof NotFoundUpstreamError) {
       // Renamed or removed upstream. The existing definition is left ALONE.
@@ -1254,12 +1336,19 @@ export async function main(
     return failCode
   }
 
-  let upstreamModels: UpstreamModel[]
+  let upstream: UpstreamParse
   try {
-    upstreamModels = parseUpstream(text)
+    upstream = parseUpstream(text)
   } catch (err) {
     errlog(`qa-model-prices: upstream payload rejected: ${errMsg(err)}`)
     return failCode
+  }
+  // Loud per entry, with index and name: a growing shared table means these will
+  // happen, and a silent skip is how "we stopped syncing that model" goes unnoticed.
+  for (const r of upstream.rejected) {
+    errlog(
+      `qa-model-prices: WARNING upstream entry ${r.index} (${r.modelName}) skipped: ${r.reason}`
+    )
   }
 
   let rows: InstanceModel[]
@@ -1298,16 +1387,7 @@ export async function main(
       }
     }
     try {
-      const mutated = await reconcileTarget(
-        cfg,
-        target,
-        upstreamModels,
-        rows,
-        opts,
-        tally,
-        log,
-        apiMs
-      )
+      const mutated = await reconcileTarget(cfg, target, upstream, rows, opts, tally, log, apiMs)
       stale = stale || mutated
     } catch (err) {
       // One target's unexpected failure never takes the others down with it. The

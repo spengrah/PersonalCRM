@@ -100,7 +100,7 @@ function stale(entry: Record<string, unknown>, over: Record<string, unknown> = {
 const asInstance = (raw: Record<string, unknown>): InstanceModel => parseInstanceRow(raw, 'test')
 
 const upstreamOf = (name: string): UpstreamModel =>
-  parseUpstream(JSON.stringify([sampleEntry(name)]))[0]
+  parseUpstream(JSON.stringify([sampleEntry(name)])).models[0]
 
 // ---------------------------------------------------------------------------
 // Fake transport
@@ -603,7 +603,7 @@ describe('partial failure', () => {
 
 describe('selection', () => {
   it('selects by PATTERN, using the verbatim upstream (?i) pattern', () => {
-    const models = parseUpstream(UNIQUE_RAW)
+    const { models } = parseUpstream(UNIQUE_RAW)
     // The intent pass sends `gpt-5.5`; the entry serving it is named differently.
     expect(selectUpstream(models, INTENT).modelName).toBe('gpt-5.5-2026-04-23')
     expect(selectUpstream(models, JUDGE).modelName).toBe(JUDGE)
@@ -628,7 +628,7 @@ describe('selection', () => {
   })
 
   it('refuses an ambiguous match and writes nothing', async () => {
-    const models = parseUpstream(JSON.stringify(AMBIGUOUS_SET))
+    const { models } = parseUpstream(JSON.stringify(AMBIGUOUS_SET))
     expect(() => selectUpstream(models, INTENT)).toThrow(AmbiguousMatchError)
     const r = await run(['--models', INTENT, '--strict'], {
       upstreamText: JSON.stringify(AMBIGUOUS_SET),
@@ -640,7 +640,7 @@ describe('selection', () => {
   })
 
   it('reports absence loudly and leaves the existing definition alone', async () => {
-    const models = parseUpstream(UNIQUE_RAW)
+    const { models } = parseUpstream(UNIQUE_RAW)
     expect(() => selectUpstream(models, 'gpt-does-not-exist')).toThrow(NotFoundUpstreamError)
     const entry = sampleEntry(JUDGE)
     const r = await run(['--models', 'gpt-does-not-exist', '--strict'], {
@@ -681,22 +681,43 @@ describe('parseUpstream', () => {
     e.pricingTiers as Record<string, unknown>[]
 
   it('accepts the verbatim upstream excerpt, extra server-owned keys and all', () => {
-    const models = parseUpstream(UNIQUE_RAW)
+    const { models, rejected } = parseUpstream(UNIQUE_RAW)
     expect(models).toHaveLength(UNIQUE_SET.length)
+    expect(rejected).toEqual([])
     expect(models[0].pricingTiers[0]).not.toHaveProperty('id')
   })
 
-  const rejections: Array<[string, string]> = [
+  // ENVELOPE tier — fatal for the whole run.
+  const fatal: Array<[string, string]> = [
     ['non-array root', JSON.stringify({ models: [] })],
     ['null root', 'null'],
     ['empty array root', '[]'],
     ['entry not an object', JSON.stringify(['x'])],
-    ['modelName missing', withEntry(e => delete e.modelName)],
-    ['modelName non-string', withEntry(e => (e.modelName = 7))],
-    ['modelName empty', withEntry(e => (e.modelName = ''))],
     ['matchPattern missing', withEntry(e => delete e.matchPattern)],
     ['matchPattern non-string', withEntry(e => (e.matchPattern = 7))],
     ['matchPattern empty', withEntry(e => (e.matchPattern = ''))],
+    ['an HTML error page', '<!DOCTYPE html><html><body>404</body></html>'],
+    ['a truncated JSON body', UNIQUE_RAW.slice(0, 400)],
+  ]
+  for (const [label, payload] of fatal) {
+    it(`is FATAL on ${label}`, () => {
+      expect(() => parseUpstream(payload)).toThrow(UpstreamShapeError)
+    })
+  }
+
+  it('is FATAL on a matchPattern that does not compile — an entry we cannot classify', () => {
+    // Skipping it could silently resolve what should have been an ambiguity refusal.
+    expect(() => parseUpstream(withEntry(e => (e.matchPattern = '(?i)^(unclosed')))).toThrow(
+      PatternError
+    )
+    expect(() => parseUpstream(withEntry(e => (e.matchPattern = '(?m)^x$')))).toThrow(PatternError)
+  })
+
+  // PER-ENTRY tier — the entry is rejected and skipped, never fatal.
+  const rejections: Array<[string, string]> = [
+    ['modelName missing', withEntry(e => delete e.modelName)],
+    ['modelName non-string', withEntry(e => (e.modelName = 7))],
+    ['modelName empty', withEntry(e => (e.modelName = ''))],
     ['pricingTiers missing', withEntry(e => delete e.pricingTiers)],
     ['pricingTiers non-array', withEntry(e => (e.pricingTiers = {}))],
     ['pricingTiers empty', withEntry(e => (e.pricingTiers = []))],
@@ -737,19 +758,45 @@ describe('parseUpstream', () => {
       ),
     ],
     ['tokenizerId non-string', withEntry(e => (e.tokenizerId = 3))],
-    ['an HTML error page', '<!DOCTYPE html><html><body>404</body></html>'],
-    ['a truncated JSON body', UNIQUE_RAW.slice(0, 400)],
   ]
 
   for (const [label, payload] of rejections) {
-    it(`rejects ${label}`, () => {
-      expect(() => parseUpstream(payload)).toThrow(UpstreamShapeError)
+    it(`rejects the ENTRY on ${label}, without failing the payload`, () => {
+      const { models, rejected } = parseUpstream(payload)
+      expect(models).toHaveLength(0)
+      expect(rejected).toHaveLength(1)
+      expect(rejected[0].index).toBe(0)
+      expect(rejected[0].reason.length).toBeGreaterThan(0)
     })
   }
 
   it('an empty price map is rejected — otherwise it writes a definition pricing everything at zero', () => {
     const payload = withEntry(e => (tiers(e)[0].prices = {}))
-    expect(() => parseUpstream(payload)).toThrow(/prices is empty/)
+    expect(parseUpstream(payload).rejected[0].reason).toMatch(/prices is empty/)
+  })
+
+  it('accepts null tokenizerId / tokenizerConfig as ABSENT — a third of upstream carries them', () => {
+    // Verbatim entries from the live table: one with a null tokenizerId, one with a
+    // null tokenizerConfig. A validator that calls null a type error rejects them.
+    const nullTok = UNIQUE_SET.find(m => m.tokenizerId === null)
+    const nullCfg = UNIQUE_SET.find(m => m.tokenizerConfig === null && m.tokenizerId !== null)
+    expect(nullTok).toBeDefined()
+    expect(nullCfg).toBeDefined()
+    const { models, rejected } = parseUpstream(JSON.stringify([nullTok, nullCfg]))
+    expect(rejected).toEqual([])
+    expect(models).toHaveLength(2)
+    // Null is dropped, never forwarded as an explicit null into a create body.
+    expect(Object.keys(buildCreateBody(models[0]))).not.toContain('tokenizerId')
+    expect(Object.keys(buildCreateBody(models[0]))).not.toContain('tokenizerConfig')
+    expect(Object.keys(buildCreateBody(models[1]))).not.toContain('tokenizerConfig')
+    expect(buildCreateBody(models[1]).tokenizerId).toBe(nullCfg?.tokenizerId)
+  })
+
+  it('accepts a null tier name as absent, keying that tier by priority', () => {
+    const payload = withEntry(e => (tiers(e)[0].name = null))
+    const { models, rejected } = parseUpstream(payload)
+    expect(rejected).toEqual([])
+    expect(models[0].pricingTiers[0]).not.toHaveProperty('name')
   })
 
   it('a rejected payload writes NOTHING at all — not even for the targets that parsed', async () => {
@@ -762,6 +809,61 @@ describe('parseUpstream', () => {
     expect(r.mock.deletes).toHaveLength(0)
     expect(r.err.join('\n')).toContain('upstream payload rejected')
     expect(r.code).not.toBe(0)
+  })
+})
+
+describe('validation blast radius', () => {
+  const entry = sampleEntry(JUDGE)
+  // A malformed entry for a model this project will never sync — the real case that
+  // broke a live run: upstream grows weekly and someone else's release must not stop
+  // the nightly from syncing gpt-5.4-mini.
+  const withBadStranger = (): string => {
+    const set = clone(UNIQUE_SET)
+    const stranger = set.find(m => m.modelName === 'text-bison') as Record<string, unknown>
+    stranger.tokenizerId = 42
+    return JSON.stringify(set)
+  }
+
+  it('skips a malformed NON-target entry, reports it, and still syncs the targets', async () => {
+    const r = await run(['--models', JUDGE, '--strict'], {
+      upstreamText: withBadStranger(),
+      models: [stale(entry)],
+    })
+    expect(actionFor(r.out, JUDGE)).toBe('create')
+    expect(r.mock.creates).toHaveLength(1)
+    // Loud, by index and name — a silent skip is how "we stopped syncing that model"
+    // goes unnoticed.
+    expect(r.err.join('\n')).toContain('upstream entry')
+    expect(r.err.join('\n')).toContain('text-bison')
+    expect(r.code).toBe(0)
+  })
+
+  it('REFUSES a target whose own entry is malformed — never absent, never written', async () => {
+    const set = clone(UNIQUE_SET)
+    const mine = set.find(m => m.modelName === entry.modelName) as Record<string, unknown>
+    mine.tokenizerId = 42
+    const r = await run(['--models', JUDGE, '--strict'], {
+      upstreamText: JSON.stringify(set),
+      models: [stale(entry)],
+    })
+    expect(actionFor(r.out, JUDGE)).toBe('refused')
+    expect(lineFor(r.out, JUDGE)).toContain('failed validation')
+    // "We could not read this model's price" is not "upstream dropped this model".
+    expect(actionFor(r.out, JUDGE)).not.toBe('absent')
+    expect(r.mock.creates).toHaveLength(0)
+    expect(r.code).not.toBe(0)
+  })
+
+  it('a corrupted RESPONSE is still fatal for the whole run', async () => {
+    for (const body of ['<!DOCTYPE html><html>nope</html>', UNIQUE_RAW.slice(0, 300), '{}']) {
+      const r = await run(['--models', JUDGE, '--strict'], {
+        upstreamText: body,
+        models: [stale(entry)],
+      })
+      expect(r.err.join('\n')).toContain('upstream payload rejected')
+      expect(r.mock.creates).toHaveLength(0)
+      expect(r.code).not.toBe(0)
+    }
   })
 })
 
@@ -1617,6 +1719,39 @@ describe('CLI', () => {
 })
 
 describe('fixture integrity', () => {
+  // The shape matrix of the LIVE upstream table (164 entries, surveyed field by
+  // field). The fixture is a subset, and a subset that happens to be well-behaved is
+  // the same defect as a double that agrees with itself — a null tokenizerId reached
+  // production precisely because the sampled entries all had string ones. Every shape
+  // the live file contains must be represented by a REAL entry here.
+  const shapes: Array<[string, (m: Record<string, unknown>) => boolean]> = [
+    ['tokenizerId: string', m => typeof m.tokenizerId === 'string'],
+    ['tokenizerId: null', m => m.tokenizerId === null],
+    ['tokenizerId: absent', m => !('tokenizerId' in m)],
+    [
+      'tokenizerConfig: object',
+      m => typeof m.tokenizerConfig === 'object' && m.tokenizerConfig !== null,
+    ],
+    ['tokenizerConfig: null', m => m.tokenizerConfig === null],
+    ['tokenizerConfig: absent', m => !('tokenizerConfig' in m)],
+    ['single tier', m => (m.pricingTiers as unknown[]).length === 1],
+    ['two tiers', m => (m.pricingTiers as unknown[]).length === 2],
+    [
+      'a conditional tier carrying conditions',
+      m => (m.pricingTiers as Array<{ conditions: unknown[] }>).some(t => t.conditions.length > 0),
+    ],
+  ]
+  for (const [label, present] of shapes) {
+    it(`covers a real upstream entry with ${label}`, () => {
+      expect(UNIQUE_SET.some(present)).toBe(true)
+    })
+  }
+
+  it('parses every fixture entry with ZERO rejections', () => {
+    // The check that would have caught the live failure before it reached a run.
+    expect(parseUpstream(UNIQUE_RAW).rejected).toEqual([])
+  })
+
   it('the decoy really does double-match the intent target (the ambiguity is staged, not assumed)', () => {
     expect(toJsRegex(String(DECOY.matchPattern)).test(INTENT)).toBe(true)
     expect(toJsRegex(String(sampleEntry('gpt-5.5-2026-04-23').matchPattern)).test(INTENT)).toBe(

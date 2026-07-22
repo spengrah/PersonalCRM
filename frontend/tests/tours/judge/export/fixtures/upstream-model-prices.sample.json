@@ -180,5 +180,61 @@
         }
       }
     ]
+  },
+  {
+    "id": "029e6695-ff24-47f0-b37b-7285fb2e5785",
+    "modelName": "gemini-live-2.5-flash-native-audio",
+    "matchPattern": "(?i)^(google/)?(gemini-live-2.5-flash-native-audio)$",
+    "createdAt": "2026-03-16T00:00:00.000Z",
+    "updatedAt": "2026-03-19T00:00:00.000Z",
+    "tokenizerConfig": null,
+    "tokenizerId": null,
+    "pricingTiers": [
+      {
+        "id": "029e6695-ff24-47f0-b37b-7285fb2e5785_tier_default",
+        "name": "Standard",
+        "isDefault": true,
+        "priority": 0,
+        "conditions": [],
+        "prices": {
+          "input_text": 5e-7,
+          "input_audio": 3e-6,
+          "input_image": 3e-6,
+          "output_text": 2e-6,
+          "output_audio": 1.2e-5
+        }
+      }
+    ]
+  },
+  {
+    "id": "cmieupdva000004l541kwae70",
+    "modelName": "claude-opus-4-5-20251101",
+    "matchPattern": "(?i)^(anthropic/)?(claude-opus-4-5(-20251101)?|(eu\\.|us\\.|apac\\.|global\\.)?anthropic\\.claude-opus-4-5(-20251101)?-v1(:0)?|claude-opus-4-5(@20251101)?)$",
+    "createdAt": "2025-11-24T20:53:27.571Z",
+    "updatedAt": "2026-04-13T00:00:00.000Z",
+    "tokenizerConfig": null,
+    "tokenizerId": "claude",
+    "pricingTiers": [
+      {
+        "id": "cmieupdva000004l541kwae70_tier_default",
+        "name": "Standard",
+        "isDefault": true,
+        "priority": 0,
+        "conditions": [],
+        "prices": {
+          "input": 5e-6,
+          "input_tokens": 5e-6,
+          "output": 2.5e-5,
+          "output_tokens": 2.5e-5,
+          "cache_creation_input_tokens": 6.25e-6,
+          "input_cache_creation": 6.25e-6,
+          "input_cache_creation_5m": 6.25e-6,
+          "input_cache_creation_1h": 1e-5,
+          "cache_read_input_tokens": 5e-7,
+          "input_cached_tokens": 5e-7,
+          "input_cache_read": 5e-7
+        }
+      }
+    ]
   }
 ]
