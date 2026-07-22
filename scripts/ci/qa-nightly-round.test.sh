@@ -462,6 +462,82 @@ qa-export: 6 trace(s), 12 screenshot(s); enqueued 3/3"
     cleanup_fixture
 }
 
+# The summary line is parsed with a FULLY ANCHORED regex requiring exactly one match:
+# a field added to run.ts's line without the matching regex change makes EVERY count
+# parse as zero, so the round silently stops advancing while every unit test stays
+# green. These two cases pin both shapes the parser must accept.
+test_export_summary_with_observations() {
+    echo "test: the summary line carrying an observation(s) field parses (counts + advance intact)"
+    make_fixture
+    run_orch STUB_EXPORT_OUT="qa-export: 5 trace(s), 12 screenshot(s), 4 observation(s); enqueued 3/3"
+    assert_rc0 obs-summary
+    assert_kv round clean obs-summary
+    assert_kv advance true obs-summary
+    assert_kv export_summary_lines 1 obs-summary
+    assert_kv traces 5 obs-summary
+    assert_kv observations 4 obs-summary
+    assert_kv observations_skipped 0 obs-summary
+    assert_kv enqueue_ok 3 obs-summary
+    cleanup_fixture
+}
+
+test_export_summary_without_observations() {
+    echo "test: a summary line WITHOUT the observation(s) field still parses (field is optional)"
+    make_fixture
+    run_orch STUB_EXPORT_OUT="qa-export: 5 trace(s), 12 screenshot(s), 2 FAILED; enqueued 3/3" \
+        STUB_EXPORT_RC=1
+    assert_rc0 no-obs-summary
+    assert_kv export_summary_lines 1 no-obs-summary
+    assert_kv traces 5 no-obs-summary
+    assert_kv observations 0 no-obs-summary
+    assert_kv ship_failed 2 no-obs-summary
+    cleanup_fixture
+}
+
+test_export_summary_with_skipped_observations() {
+    echo "test: the summary line carrying a skipped-observation field parses (both counts distinct)"
+    make_fixture
+    run_orch STUB_EXPORT_OUT="qa-export: 5 trace(s), 12 screenshot(s), 3 observation(s), 83 observation(s) skipped; enqueued 3/3"
+    assert_rc0 obs-skipped
+    assert_kv export_summary_lines 1 obs-skipped
+    assert_kv traces 5 obs-skipped
+    # The two observation counts must not be confused with each other.
+    assert_kv observations 3 obs-skipped
+    assert_kv observations_skipped 83 obs-skipped
+    assert_kv observations_failed 0 obs-skipped
+    cleanup_fixture
+}
+
+test_missing_observations_are_noted_not_gated() {
+    echo "test: failed + skipped observations are BOTH counted in the note, and stay out of the predicate"
+    make_fixture
+    run_orch STUB_EXPORT_OUT="qa-export: 5 trace(s), 12 screenshot(s), 3 observation(s), 3 observation(s) failed, 9 observation(s) skipped; enqueued 3/3"
+    assert_rc0 obs-note
+    # Visible...
+    assert_kv observations 3 obs-note
+    assert_kv observations_failed 3 obs-note
+    assert_kv observations_skipped 9 obs-note
+    # The note must report the TOTAL loss (3 failed + 9 skipped), not just the skips:
+    # a note that undercounts by the breaker threshold understates the degradation it
+    # exists to surface.
+    case "$(ghv notes)" in *"12 observation(s) MISSING"*) ok;; *) fail "obs-note: notes should report 12 missing, got '$(ghv notes)'";; esac
+    # ...but deliberately NOT part of the clean-round predicate (that semantics change
+    # is its own decision, not a side effect of adding visibility).
+    assert_kv round clean obs-note
+    assert_kv advance true obs-note
+    cleanup_fixture
+}
+
+test_no_notes_on_a_clean_round() {
+    echo "test: a round with nothing degraded emits an EMPTY notes field"
+    make_fixture
+    run_orch
+    assert_rc0 no-note
+    assert_kv notes "" no-note
+    assert_kv round clean no-note
+    cleanup_fixture
+}
+
 test_runid_collision_aborts() {
     echo "test: run-id collision (run dir already exists) -> round=aborted, exit!=0, tours never run"
     make_fixture
@@ -815,6 +891,11 @@ main() {
     test_deployed_cmd_multiline
     test_export_summary_fragment_ignored
     test_export_duplicate_summary
+    test_export_summary_with_observations
+    test_export_summary_without_observations
+    test_export_summary_with_skipped_observations
+    test_missing_observations_are_noted_not_gated
+    test_no_notes_on_a_clean_round
     test_runid_collision_aborts
     test_rundir_create_error
     test_deploy_gen_unset_records_false

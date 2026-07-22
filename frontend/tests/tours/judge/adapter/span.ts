@@ -24,7 +24,18 @@ export interface SpanParams {
   startMs: number
   endMs: number
   inputTokens?: number
+  // Cached input is a SUBSET of inputTokens (the provider reports it inclusively),
+  // so any consumer that prices the two separately must subtract before use.
+  cachedInputTokens?: number
+  // Cache WRITES have no OTel GenAI semantic-convention attribute, so this one is
+  // harness-namespaced (`qa.usage.*`) while its two siblings are `gen_ai.usage.*`.
+  // The inconsistency is deliberate: inventing a `gen_ai.*` key would claim a
+  // convention that does not exist.
+  cacheWriteInputTokens?: number
   outputTokens?: number
+  // Reasoning output is a SUBSET of outputTokens. Carried for visibility; a
+  // consumer must not add it to the output count.
+  reasoningOutputTokens?: number
   finishReasons?: string[]
   toolRejected?: boolean
   error?: string
@@ -83,7 +94,13 @@ export function buildGenAiSpan(p: SpanParams): GenAiSpan {
     'qa.tool_rejected': p.toolRejected ?? false,
   }
   if (p.inputTokens !== undefined) attributes['gen_ai.usage.input_tokens'] = p.inputTokens
+  if (p.cachedInputTokens !== undefined)
+    attributes['gen_ai.usage.cached_input_tokens'] = p.cachedInputTokens
+  if (p.cacheWriteInputTokens !== undefined)
+    attributes['qa.usage.cache_write_input_tokens'] = p.cacheWriteInputTokens
   if (p.outputTokens !== undefined) attributes['gen_ai.usage.output_tokens'] = p.outputTokens
+  if (p.reasoningOutputTokens !== undefined)
+    attributes['gen_ai.usage.reasoning_output_tokens'] = p.reasoningOutputTokens
   if (p.finishReasons !== undefined) attributes['gen_ai.response.finish_reasons'] = p.finishReasons
   // Content, when the caller supplied it (see SpanParams). gen_ai.prompt /
   // gen_ai.completion are the conventional content attributes every OTLP backend

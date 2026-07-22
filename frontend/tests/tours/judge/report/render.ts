@@ -15,7 +15,7 @@ import { INTENT_CAPTURE_CAP, type ScreenshotResolver } from '../intent-input'
 import { runTrapSelfTest, selftestExitCode, type TrapResult } from '../trap-selftest'
 import type { TrapSpec } from '../trap-config'
 import type { JudgeRunner } from '../judge-runner'
-import type { Judge } from '../adapter'
+import { DEFAULT_JUDGE_KIND, type Judge } from '../adapter'
 import type { Capture } from '../../support/types'
 
 export interface ReportMeta {
@@ -398,7 +398,7 @@ export async function main(): Promise<void> {
   // with it, the judge's grounded verdict + critique lands in the per-item detail.
   // Capability gate shared by the item-judge and intent passes (see
   // canAttachImagesFor).
-  const canAttachImages = canAttachImagesFor(process.env.QA_JUDGE ?? 'codex-exec')
+  const canAttachImages = canAttachImagesFor(process.env.QA_JUDGE ?? DEFAULT_JUDGE_KIND)
   const resolveScreenshot = (c: { screenshot?: string }): string | undefined => {
     if (!c.screenshot) return undefined
     const abs = path.resolve(runDir, c.screenshot)

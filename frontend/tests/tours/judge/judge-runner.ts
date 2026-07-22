@@ -3,7 +3,7 @@
 // identically. The judge grades the behavior's judge-tagged residue items and
 // is only invoked when the behavior actually has residue items.
 
-import { selectJudge } from './adapter'
+import { DEFAULT_JUDGE_KIND, selectJudge } from './adapter'
 import type { Judge } from './adapter'
 import { buildJudgeInput, judgeItemsFor } from './judge-input'
 import type { Capture } from '../support/types'
@@ -28,9 +28,9 @@ export function runnerFromJudge(judge: Judge, resolveScreenshot?: ScreenshotReso
   }
 }
 
-// Select the judge by the QA_JUDGE env (default codex-exec) and wrap it.
+// Select the judge by the QA_JUDGE env (DEFAULT_JUDGE_KIND when unset) and wrap it.
 export function makeJudgeRunner(
-  profile: string = process.env.QA_JUDGE ?? 'codex-exec',
+  profile: string = process.env.QA_JUDGE ?? DEFAULT_JUDGE_KIND,
   resolveScreenshot?: ScreenshotResolver
 ): JudgeRunner {
   return runnerFromJudge(selectJudge(profile), resolveScreenshot)

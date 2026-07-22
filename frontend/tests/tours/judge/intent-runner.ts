@@ -3,7 +3,7 @@
 // advisory and label-gated like the rest of the judge layer, never a blocking
 // check.
 
-import { selectJudge } from './adapter'
+import { DEFAULT_JUDGE_KIND, selectJudge } from './adapter'
 import { makeCodexExecJudge } from './adapter/codex-exec'
 import { makeCodexSdkJudge } from './adapter/codex-sdk'
 import type { Judge } from './adapter'
@@ -48,7 +48,7 @@ export function isGroundedIntentCitation(citation: string, boundCount: number): 
   return /[\p{L}\p{N}]/u.test(residue)
 }
 
-export function makeIntentJudge(kind: string = process.env.QA_JUDGE ?? 'codex-exec'): Judge {
+export function makeIntentJudge(kind: string = process.env.QA_JUDGE ?? DEFAULT_JUDGE_KIND): Judge {
   // Both codex adapters drive the same engine and take the same {model, effort}
   // options, so the stronger intent model + effort apply to each.
   if (kind === 'codex-exec' || kind === 'codex-sdk') {
