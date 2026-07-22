@@ -266,19 +266,36 @@ fi
 # Do not reorder without re-satisfying all three.
 # We invoke with STRICT=1 precisely so the exit code is trustworthy: the fail-open
 # lives HERE, in not aborting, not in the child masking its own failures.
+# EVERY mode variable the recipe reads is passed EXPLICITLY as a command-line assignment
+# (after the target). make imports the ambient environment as make variables, so an
+# unattended round would otherwise inherit whatever the wrapper's environment carried and
+# silently do something else: DRY_RUN=1 writes nothing yet still reports a synced round,
+# RESET=<model> DELETES an override instead of reconciling, FORCE=1 bypasses the
+# implausible-delta guard, and MODELS=/UPSTREAM= sync the wrong models or payload.
+# Command-line assignments outrank BOTH the environment and the makefile's own defaults —
+# that precedence, not the child's environment, is what makes this invocation
+# self-contained, so `env -u` would not be sufficient here.
 # Same env discipline as every other make child: the injected QA_*_CMD vars can embed
 # secrets and the sync consumes none of them, nor the tours API key. It DOES need
 # LANGFUSE_* — those are its whole purpose — so those stay.
 price_sync_out="$( cd "$REPO_ROOT" && env -u QA_RESEED_CMD -u QA_DEPLOYED_SHA_CMD \
-  -u QA_DEPLOYED_GEN_CMD -u TOURS_API_KEY STRICT=1 "$MAKE" qa-model-prices 2>&1 )" \
+  -u QA_DEPLOYED_GEN_CMD -u TOURS_API_KEY "$MAKE" qa-model-prices \
+  DRY_RUN= RESET= FORCE= MODELS= UPSTREAM= STRICT=1 2>&1 )" \
   && price_sync_rc=0 || price_sync_rc=$?
 printf '%s\n' "$price_sync_out"
 price_sync_sha="$(printf '%s\n' "$price_sync_out" | grep -E '^upstream_sha256=[0-9a-f]{64}$' | head -1 | cut -d= -f2-)"
-if [ "$price_sync_rc" -eq 0 ]; then
-  price_sync_status=ok
-else
+if [ "$price_sync_rc" -ne 0 ]; then
   price_sync_status=failed
   emit price_sync_reason "qa-model-prices exited $price_sync_rc"
+elif [ -z "$price_sync_sha" ]; then
+  # Exit 0 but no parseable upstream_sha256: the payload that was reconciled against is
+  # UNKNOWN, so the round cannot claim a traceable reconciliation. Recording ok with an
+  # empty hash would assert provenance it does not have, so this is a sync failure —
+  # fail-open for the round like any other, but labelled honestly.
+  price_sync_status=failed
+  emit price_sync_reason "qa-model-prices exited 0 without a parseable upstream_sha256"
+else
+  price_sync_status=ok
 fi
 emit price_sync "$price_sync_status"
 emit price_sync_upstream_sha "${price_sync_sha:-}"

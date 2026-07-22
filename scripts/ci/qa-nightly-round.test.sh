@@ -704,8 +704,9 @@ test_price_sync_runs_first() {
     assert_before '^make qa-model-prices ' '^make tours ' price-order-tours
     assert_before '^make qa-model-prices ' '^make qa-export ' price-order-export
     # STRICT=1 makes the child's exit code trustworthy; the fail-open lives in the
-    # orchestrator not aborting. Dropping it reddens here.
-    assert_call '^make qa-model-prices .* strict=1$' price-strict
+    # orchestrator not aborting. It rides the ARGV as a command-line assignment (not the
+    # environment) alongside the cleared mode flags. Dropping any of them reddens here.
+    assert_call '^make qa-model-prices \| args:qa-model-prices DRY_RUN= RESET= FORCE= MODELS= UPSTREAM= STRICT=1 \|' price-strict
     assert_kv price_sync ok price-ok
     assert_kv price_sync_upstream_sha 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef price-sha
     cleanup_fixture
@@ -768,13 +769,46 @@ test_price_sync_failure_is_not_ok() {
     cleanup_fixture
 }
 
+test_price_sync_ignores_ambient_mode_flags() {
+    echo "test: ambient DRY_RUN/RESET/FORCE/MODELS/UPSTREAM do NOT reach the sync's effective config"
+    make_fixture
+    # make imports the ambient environment as make VARIABLES, so an unattended round would
+    # otherwise inherit the wrapper's environment and silently do something else (a dry-run
+    # that writes nothing, a RESET that deletes an override, a FORCE past the delta guard).
+    # The invocation must therefore be self-contained: every mode variable passed as a
+    # command-line assignment, which outranks both the environment and the makefile default.
+    run_orch DRY_RUN=1 RESET=some-model FORCE=1 MODELS=wrong-a,wrong-b UPSTREAM=/tmp/hostile.json
+    assert_rc0 price-ambient
+    assert_call '^make qa-model-prices \| args:qa-model-prices DRY_RUN= RESET= FORCE= MODELS= UPSTREAM= STRICT=1 \|' price-ambient
+    assert_kv price_sync ok price-ambient
+    cleanup_fixture
+}
+
 test_price_sync_malformed_provenance() {
-    echo "test: output with no valid upstream_sha256 line -> the emitted sha is EMPTY, not a fragment"
+    echo "test: exit 0 with no valid upstream_sha256 -> sha EMPTY and the sync is NOT ok"
     make_fixture
     run_orch STUB_PRICE_SYNC_OUT='upstream_sha256=not-a-sha
 qa-model-prices: upstream unavailable'
     assert_rc0 price-malformed
     assert_kv price_sync_upstream_sha "" price-malformed
+    # An unknown payload cannot be claimed as a traceable reconciliation.
+    assert_kv price_sync failed price-malformed
+    if [ -n "$(ghv price_sync_reason)" ]; then ok; else fail "price-malformed: price_sync_reason should be set"; fi
+    assert_kv round clean price-malformed-advance
+    assert_kv advance true price-malformed-advance
+    cleanup_fixture
+}
+
+test_price_sync_missing_provenance() {
+    echo "test: exit 0 printing NO hash at all -> price_sync=failed (fail-open, honestly labelled)"
+    make_fixture
+    run_orch STUB_PRICE_SYNC_OUT='summary: 1 targets, 0 created, 0 replaced, 0 deleted, 0 refused, 0 absent, 0 failed'
+    assert_rc0 price-nohash
+    assert_kv price_sync failed price-nohash
+    assert_kv price_sync_upstream_sha "" price-nohash
+    if [ -n "$(ghv price_sync_reason)" ]; then ok; else fail "price-nohash: price_sync_reason should be set"; fi
+    assert_kv round clean price-nohash-advance
+    assert_kv advance true price-nohash-advance
     cleanup_fixture
 }
 
@@ -1066,7 +1100,9 @@ main() {
     test_price_sync_after_reservation
     test_price_sync_skipped_round
     test_price_sync_failure_is_not_ok
+    test_price_sync_ignores_ambient_mode_flags
     test_price_sync_malformed_provenance
+    test_price_sync_missing_provenance
     test_price_sync_provenance_merged
     test_price_sync_merge_failure_non_fatal
 
