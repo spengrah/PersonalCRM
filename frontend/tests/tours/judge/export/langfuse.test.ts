@@ -15,7 +15,7 @@ import {
   buildTraceBody,
   configFromEnv,
   exportSpans,
-  ingestionRejection,
+  ingestionOutcome,
   parseSpanFile,
   stableSample,
   traceIdFor,
@@ -542,6 +542,10 @@ interface MockOpts {
   generationNeverSettles?: boolean
   // Same, but selective: stalls only the calls this predicate accepts.
   generationNeverSettlesWhen?: () => boolean
+  // HTTP 200 whose envelope neither errors NOR confirms the event.
+  generationUnconfirmed?: boolean
+  // Which ingestion success envelope the fake server speaks.
+  ingestionEnvelope?: 'documented' | 'bare'
   // Fail the final body event for the trace ids this predicate selects (carrier-gate tests).
   failBodyFor?: (traceId: string) => boolean
   // HTTP-success MULTI-STATUS rejection of the final body event, per trace id.
@@ -582,6 +586,15 @@ function mockLangfuse(opts: MockOpts = {}): {
     ({ ok: true, status: 200, text: async () => JSON.stringify(obj) }) as Response
   const err = (status: number, msg: string): Response =>
     ({ ok: false, status, text: async () => msg }) as Response
+  // TWO success envelopes, because the deployed shape is NOT verified from here.
+  // 'documented' is the OpenAPI shape (successes/errors naming each event) and
+  // exercises strict confirmation; 'bare' is a 2xx that confirms nothing, and
+  // exercises the degrade-and-warn tier. A double that only ever emits the shape we
+  // assume cannot falsify the assumption — it just agrees with itself.
+  const accepted = (eventId: string): Response =>
+    opts.ingestionEnvelope === 'bare'
+      ? okText({})
+      : okText({ successes: [{ id: eventId, status: 201 }], errors: [] })
   // A valid v3 page-protocol envelope over `all`, sliced to the requested page.
   const page = (all: unknown[], q: URLSearchParams, per: number): Response => {
     const requested = Number(q.get('page') ?? '1')
@@ -634,7 +647,8 @@ function mockLangfuse(opts: MockOpts = {}): {
             errors: [{ id: gen.id, status: 400, message: 'invalid usageDetails' }],
           })
         }
-        return opts.generationError === true ? err(500, 'generation boom') : okText({})
+        if (opts.generationUnconfirmed === true) return okText({ successes: [], errors: [] })
+        return opts.generationError === true ? err(500, 'generation boom') : accepted(gen.id)
       }
       if (evt.type === 'score-create') {
         const score = evt as unknown as ScoreEvent
@@ -646,7 +660,7 @@ function mockLangfuse(opts: MockOpts = {}): {
             errors: [{ id: score.id, status: 400, message: 'score refused' }],
           })
         }
-        return opts.scoreError === true ? err(500, 'score boom') : okText({})
+        return opts.scoreError === true ? err(500, 'score boom') : accepted(score.id)
       }
       const body = evt.body as ShippedBody
       const isInit = String(evt.id).includes('-init-')
@@ -669,7 +683,7 @@ function mockLangfuse(opts: MockOpts = {}): {
         bodies.push(body)
         order.push({ kind: 'body', traceId: body.id })
       }
-      return okText({})
+      return accepted(String(evt.id))
     }
     if (pathname === '/api/public/media' && method === 'POST') {
       const body = json()
@@ -1542,36 +1556,51 @@ describe('buildGenerationBody (PURE)', () => {
   })
 })
 
-describe('ingestionRejection (PURE)', () => {
-  it('accepts when there are no errors, and when the envelope has no errors array', () => {
-    expect(ingestionRejection({ successes: [{ id: 'e1' }], errors: [] }, 'e1')).toBeUndefined()
-    // An unrecognized envelope is treated as acceptance: inventing a failure from a
-    // shape we do not understand is as dishonest as ignoring a real one.
-    expect(ingestionRejection({}, 'e1')).toBeUndefined()
+describe('ingestionOutcome (PURE) — three tiers', () => {
+  it('ACCEPTS only when the documented envelope names the event as stored', () => {
+    expect(ingestionOutcome({ successes: [{ id: 'e1' }], errors: [] }, 'e1')).toEqual({
+      kind: 'accepted',
+    })
+    expect(
+      ingestionOutcome({ successes: [{ id: 'other' }, { id: 'e1' }], errors: [] }, 'e1')
+    ).toEqual({ kind: 'accepted' })
   })
 
-  it('reports OUR event when the envelope names it', () => {
-    const mine = ingestionRejection(
-      { errors: [{ id: 'e1', status: 400, message: 'invalid usageDetails' }] },
-      'e1'
-    )
-    expect(mine).toContain('invalid usageDetails')
-    expect(mine).toContain('400')
+  it('REJECTS when the envelope is well-formed but does not name the event', () => {
+    const out = ingestionOutcome({ successes: [], errors: [] }, 'e1')
+    expect(out.kind).toBe('rejected')
+    expect(out.kind === 'rejected' && out.reason).toContain('did not confirm')
+    const other = ingestionOutcome({ successes: [{ id: 'other' }], errors: [] }, 'e1')
+    expect(other.kind).toBe('rejected')
   })
 
-  it('treats an UNATTRIBUTABLE error entry as OUR rejection — never as acceptance', () => {
-    // Every batch this exporter posts carries exactly ONE event, so any errors entry
-    // is that event's. Skipping an entry whose id we do not recognize would fail OPEN
-    // in precisely the case where we understand the response least.
-    expect(ingestionRejection({ errors: [{ message: 'boom' }] }, 'e1')).toContain('boom')
-    const foreign = ingestionRejection(
-      { errors: [{ id: 'other', status: 400, message: 'nope' }] },
+  it('REJECTS on an errors entry, including one it cannot attribute', () => {
+    const mine = ingestionOutcome(
+      { successes: [], errors: [{ id: 'e1', status: 400, message: 'invalid usageDetails' }] },
       'e1'
     )
-    expect(foreign).toContain('nope')
-    expect(foreign).toContain('reported against other')
-    // Even an unreadable entry is a rejection, not a pass.
-    expect(ingestionRejection({ errors: ['garbage'] }, 'e1')).toContain('unreadable')
+    expect(mine.kind === 'rejected' && mine.reason).toContain('invalid usageDetails')
+    // Every batch carries exactly ONE event, so an unattributable entry is ours.
+    const foreign = ingestionOutcome(
+      { successes: [], errors: [{ id: 'other', status: 400, message: 'nope' }] },
+      'e1'
+    )
+    expect(foreign.kind === 'rejected' && foreign.reason).toContain('reported against other')
+    const junk = ingestionOutcome({ successes: [], errors: ['garbage'] }, 'e1')
+    expect(junk.kind === 'rejected' && junk.reason).toContain('unreadable')
+  })
+
+  it('degrades to ACCEPTED — loudly — on an UNRECOGNIZED envelope', () => {
+    // Strict confirmation matches the documented contract, but the deployed shape is
+    // unverified from here. If it lacks `successes`, strict-only would report EVERY
+    // event as failed and the first live run would fail for a reason unrelated to
+    // what it tests. Degrade, and say so.
+    for (const res of [{}, { errors: [] }, { successes: 'nope' }, { errors: 'boom' }]) {
+      const out = ingestionOutcome(res, 'e1')
+      expect(out.kind).toBe('unrecognized')
+      expect(out.kind === 'unrecognized' && out.note).toContain('unrecognized')
+      expect(out.kind === 'unrecognized' && out.note).toContain('verify against the live API')
+    }
   })
 })
 
@@ -1791,6 +1820,39 @@ describe('exportSpans — the generation observation (separate, non-fatal, after
     expect(res.failed).toBe(0)
     expect(mock.scores).toHaveLength(12)
     expect(res.enqueue.enqueued).toBeGreaterThan(0)
+  })
+
+  it('still ships and counts everything against a BARE envelope, warning ONCE', async () => {
+    // The survival case: if the deployed server does not carry `successes`, strict
+    // confirmation alone would report every event as failed — no traces, no
+    // observation, and a live run that fails for an unrelated reason.
+    const spans = [
+      itemSpan('fail', { ...usageParams, behaviorId: 'E-1' }),
+      itemSpan('fail', { ...usageParams, behaviorId: 'E-2' }),
+    ]
+    const mock = mockLangfuse({ ingestionEnvelope: 'bare' })
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const logs: string[] = []
+    const res = await exportSpans(cfg, spans, m => logs.push(m))
+    expect(res.traces).toBe(2)
+    expect(res.failed).toBe(0)
+    expect(res.observations).toBe(2)
+    expect(res.observationsFailed).toBe(0)
+    // Loud, and exactly ONCE across every event of the export.
+    const warnings = logs.filter(l => l.includes('envelope unrecognized'))
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('verify against the live API')
+  })
+
+  it('counts an UNCONFIRMED envelope as a failed observation, never as shipped', async () => {
+    const mock = mockLangfuse({ generationUnconfirmed: true })
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const logs: string[] = []
+    const res = await exportSpans(cfg, [itemSpan('fail', usageParams)], m => logs.push(m))
+    expect(res.observations).toBe(0)
+    expect(res.observationsFailed).toBe(1)
+    expect(res.traces).toBe(1)
+    expect(logs.some(l => l.includes('did not confirm'))).toBe(true)
   })
 
   it('does NOT count a usage-LESS span as skipped once the breaker is open', async () => {

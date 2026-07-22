@@ -627,8 +627,8 @@ export interface ExportResult {
   // without surfacing it, a round where every generation was rejected would print
   // a clean summary.
   observations: number
-  // Spans whose observation was ATTEMPTED and did not land (a rejection, a stall) —
-  // including the stalls that open the breaker.
+  // Spans whose observation was ATTEMPTED and did not land (a rejection, a stall, an
+  // unconfirmed envelope) — including the stalls that open the breaker.
   observationsFailed: number
   // Spans whose observation was NOT attempted because the breaker was already open.
   //
@@ -653,40 +653,81 @@ type Verdict = 'pass' | 'fail' | 'unsure'
 
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
-// PURE: the rejection reason in an ingestion response, or `undefined` when the event
-// was accepted. `/api/public/ingestion` is MULTI-STATUS — a 2xx body carries
-// `successes` and `errors` arrays, so an HTTP success does NOT mean the event was
-// stored, and a resolved `api()` call is not evidence of anything.
+// What an ingestion response says about ONE event.
 //
-// EVERY event this exporter posts rides a batch of exactly ONE, so ANY entry in
-// `errors` is our event's rejection — including an entry whose id we do not
-// recognize. Skipping an unattributable entry would fail OPEN: the one shape where
-// we are least sure what happened is the one where we would claim success. An
-// absent/empty `errors` array is acceptance; that is the documented success shape,
-// not an unknown.
-export function ingestionRejection(
-  res: Record<string, unknown>,
-  eventId: string
-): string | undefined {
+// THREE tiers, deliberately — a two-tier "confirmed or rejected" split is unsafe
+// here. `/api/public/ingestion` is MULTI-STATUS: the documented `IngestionResponse`
+// carries `successes` and `errors` arrays of `{id, status}`, so an HTTP 2xx is not
+// evidence that anything was written, and strict confirmation is the right reading
+// of the documented contract. But this API has already shown one doc-vs-deployed
+// divergence elsewhere in this work, and the write path cannot be exercised from
+// every environment — so if the live envelope turns out NOT to carry `successes`,
+// strict confirmation would report EVERY event as failed: no traces counted, no
+// observation shipped, and a first live run that fails for a reason unrelated to
+// what it was testing. Degrading to the old "no matching error = accepted" reading
+// and SAYING SO LOUDLY keeps the run diagnostic instead of turning it into noise.
+export type IngestionOutcome =
+  | { kind: 'accepted' }
+  | { kind: 'rejected'; reason: string }
+  // Well-formed enough to POST, not well-formed enough to confirm. Treated as
+  // accepted (the pre-strict behavior) and reported once so the real shape is learned.
+  | { kind: 'unrecognized'; note: string }
+
+export function ingestionOutcome(res: Record<string, unknown>, eventId: string): IngestionOutcome {
   const errors = res.errors
-  if (!Array.isArray(errors) || errors.length === 0) return undefined
-  // Prefer the entry naming our event; otherwise report the first, flagging that the
-  // envelope attributed it elsewhere (still a rejection — the batch had one event).
-  const rows = errors.filter(
-    (e): e is Record<string, unknown> => e !== null && typeof e === 'object'
+  if (Array.isArray(errors) && errors.length > 0) {
+    // Every event this exporter posts rides a batch of exactly ONE, so ANY entry in
+    // `errors` is our event's rejection — including one whose id we cannot attribute.
+    // Skipping an unattributable entry would fail OPEN in the case we understand least.
+    const rows = errors.filter(
+      (e): e is Record<string, unknown> => e !== null && typeof e === 'object'
+    )
+    if (rows.length === 0) {
+      return {
+        kind: 'rejected',
+        reason: `ingestion reported ${errors.length} unreadable error entry/entries`,
+      }
+    }
+    const mine = rows.find(r => r.id === eventId)
+    const row = mine ?? rows[0]
+    const status = row.status !== undefined ? `status ${String(row.status)}` : undefined
+    const message = typeof row.message === 'string' ? row.message : undefined
+    const attribution =
+      mine === undefined && typeof row.id === 'string' && row.id !== eventId
+        ? `(reported against ${row.id}, not ${eventId})`
+        : undefined
+    return {
+      kind: 'rejected',
+      reason:
+        [status, message, attribution].filter(Boolean).join(': ') ||
+        JSON.stringify(row).slice(0, 200),
+    }
+  }
+  if (errors !== undefined && !Array.isArray(errors)) {
+    return {
+      kind: 'unrecognized',
+      note: `ingestion response envelope unrecognized (non-array 'errors': ${typeof errors}) — treating as accepted; verify against the live API`,
+    }
+  }
+  const successes = res.successes
+  if (!Array.isArray(successes)) {
+    return {
+      kind: 'unrecognized',
+      note: 'ingestion response envelope unrecognized (no successes array) — treating as accepted; verify against the live API',
+    }
+  }
+  // The documented shape IS present, so its verdict is authoritative: an event it
+  // does not name was not stored.
+  const confirmed = successes.some(
+    s => s !== null && typeof s === 'object' && (s as Record<string, unknown>).id === eventId
   )
-  if (rows.length === 0) return `ingestion reported ${errors.length} unreadable error entry/entries`
-  const mine = rows.find(r => r.id === eventId)
-  const row = mine ?? rows[0]
-  const status = row.status !== undefined ? `status ${String(row.status)}` : undefined
-  const message = typeof row.message === 'string' ? row.message : undefined
-  const attribution =
-    mine === undefined && typeof row.id === 'string' && row.id !== eventId
-      ? `(reported against ${row.id}, not ${eventId})`
-      : undefined
-  return (
-    [status, message, attribution].filter(Boolean).join(': ') || JSON.stringify(row).slice(0, 200)
-  )
+  if (!confirmed) {
+    return {
+      kind: 'rejected',
+      reason: `ingestion response did not confirm ${eventId} (${successes.length} success entry/entries, none matching)`,
+    }
+  }
+  return { kind: 'accepted' }
 }
 
 // Post ONE ingestion event and treat a per-event rejection as a failure, not a
@@ -698,13 +739,15 @@ export function ingestionRejection(
 async function postIngestionEvent(
   cfg: LangfuseConfig,
   event: Record<string, unknown>,
-  timeoutMs?: number
+  timeoutMs?: number,
+  onUnrecognized?: (note: string) => void
 ): Promise<void> {
   const res = await api(cfg, 'POST', '/api/public/ingestion', { batch: [event] }, timeoutMs)
-  const rejection = ingestionRejection(res, String(event.id))
-  if (rejection !== undefined) {
-    throw new Error(`ingestion rejected ${String(event.id)}: ${rejection}`)
+  const outcome = ingestionOutcome(res, String(event.id))
+  if (outcome.kind === 'rejected') {
+    throw new Error(`ingestion rejected ${String(event.id)}: ${outcome.reason}`)
   }
+  if (outcome.kind === 'unrecognized') onUnrecognized?.(outcome.note)
 }
 
 // The per-item-trace verdict IS that trace's `output` (a PerItemVerdict). The enum
@@ -816,6 +859,16 @@ export async function exportSpans(
   // Non-fatal has to mean the round is not materially harmed, not merely that the
   // process survives.
   const observationTimeoutMs = opts.observationTimeoutMs ?? OBSERVATION_TIMEOUT_MS
+
+  // Reported ONCE per export, not per event: an unrecognized envelope is a property
+  // of the deployment, and one line teaches the operator the real shape while a line
+  // per event would bury it.
+  let envelopeNoted = false
+  const noteEnvelope = (note: string): void => {
+    if (envelopeNoted) return
+    envelopeNoted = true
+    log(`  ${note}`)
+  }
   let timeoutStreak = 0
   let observationsBroken = false
 
@@ -859,12 +912,17 @@ export async function exportSpans(
     for (const body of buildTraceBody(span, scrub)) {
       try {
         // (1) The trace must exist before media can be registered against it.
-        await postIngestionEvent(cfg, {
-          id: `evt-${body.id}-init-${nonce}`,
-          type: 'trace-create',
-          timestamp: new Date().toISOString(),
-          body: { id: body.id, name: body.name },
-        })
+        await postIngestionEvent(
+          cfg,
+          {
+            id: `evt-${body.id}-init-${nonce}`,
+            type: 'trace-create',
+            timestamp: new Date().toISOString(),
+            body: { id: body.id, name: body.name },
+          },
+          undefined,
+          noteEnvelope
+        )
 
         // (2) Register/upload each expected screenshot against THIS trace's id,
         // by index. All-or-nothing PER TRACE (INV-4): if ANY expected token is
@@ -917,12 +975,17 @@ export async function exportSpans(
         // A per-event rejection here throws, so `result.traces` and `carrierShipped`
         // are never set for a body that did not land — the generation below must
         // not be emitted against a trace whose full body was refused.
-        await postIngestionEvent(cfg, {
-          id: `evt-${body.id}-${nonce}`,
-          type: 'trace-create',
-          timestamp: new Date().toISOString(),
-          body: wireBody,
-        })
+        await postIngestionEvent(
+          cfg,
+          {
+            id: `evt-${body.id}-${nonce}`,
+            type: 'trace-create',
+            timestamp: new Date().toISOString(),
+            body: wireBody,
+          },
+          undefined,
+          noteEnvelope
+        )
         result.traces++
         if (body.id === carrierId) carrierShipped = true
         log(`  ${behaviorId} → ${body.id} (media ${attached}/${expected})`)
@@ -951,12 +1014,17 @@ export async function exportSpans(
               traceId: body.id,
             }
             if (configId) scoreBody.configId = configId
-            await postIngestionEvent(cfg, {
-              id: `evt-${body.id}-score-${nonce}`,
-              type: 'score-create',
-              timestamp: spanStartIso,
-              body: scoreBody,
-            })
+            await postIngestionEvent(
+              cfg,
+              {
+                id: `evt-${body.id}-score-${nonce}`,
+                type: 'score-create',
+                timestamp: spanStartIso,
+                body: scoreBody,
+              },
+              undefined,
+              noteEnvelope
+            )
           } catch (err) {
             log(`  score-create failed for ${body.id}: ${errMsg(err)}`)
           }
@@ -1012,7 +1080,8 @@ export async function exportSpans(
               timestamp: genBody.startTime,
               body: genBody,
             },
-            observationTimeoutMs
+            observationTimeoutMs,
+            noteEnvelope
           )
           result.observations++
           timeoutStreak = 0
