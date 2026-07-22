@@ -398,6 +398,38 @@ func (r *SyntheticSupportRepository) GetContactCacheColumns(ctx context.Context,
 	}, nil
 }
 
+// BirthdayFixtureRow is a contact projected with its stable-identity full_name and
+// derived birthday cache, for the clock-anchored birthday-fixture coverage +
+// determinism checks (subject-scoped to the reserved fixture ids).
+type BirthdayFixtureRow struct {
+	ContactID uuid.UUID
+	FullName  string
+	Birthday  *time.Time
+}
+
+// ListContactBirthdayFixturesByIds returns (id, full_name, birthday) for the given
+// contact ids (the reserved clock-anchored birthday fixtures), so the coverage +
+// determinism tests can classify each subject-scoped and fingerprint by stable
+// identity. Nil-safe on an empty id set.
+func (r *SyntheticSupportRepository) ListContactBirthdayFixturesByIds(ctx context.Context, ids []uuid.UUID) ([]BirthdayFixtureRow, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := r.queries.TestListContactBirthdayFixturesByIds(ctx, pgUUIDs(ids))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]BirthdayFixtureRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, BirthdayFixtureRow{
+			ContactID: uuid.UUID(row.ID.Bytes),
+			FullName:  row.FullName,
+			Birthday:  pgDateToTimePtr(row.Birthday),
+		})
+	}
+	return out, nil
+}
+
 // DeleteContactMethodsByContactIds removes contact_method rows by contact
 // (cleanup step 11).
 func (r *SyntheticSupportRepository) DeleteContactMethodsByContactIds(ctx context.Context, contactIDs []uuid.UUID) (int64, error) {

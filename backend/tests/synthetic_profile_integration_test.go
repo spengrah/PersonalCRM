@@ -194,6 +194,110 @@ func assertVisibleTaskSpread(t *testing.T, ctx context.Context, support *reposit
 	require.GreaterOrEqual(t, len(ageBuckets), 2, "≥2 distinct link-age buckets among manual tasks")
 }
 
+// birthdayFingerprint is the run-to-run determinism witness for the clock-anchored
+// birthday fixtures: the sorted (full_name, daysUntil-bucket, age-decade) tuples
+// over the reserved fixture subjects. Keyed by STABLE identity (full_name) +
+// classification, excluding raw UUIDs, so it is byte-stable iff the fixtures map
+// shape→named-contact by a stable creation index and DIFFERS if a random UUID keyed
+// the allocation or the year-math drifts. anchor is the (pinned) generator anchor.
+func birthdayFingerprint(rows []repository.BirthdayFixtureRow, anchor time.Time) []string {
+	fp := make([]string, 0, len(rows))
+	for _, r := range rows {
+		if r.Birthday == nil {
+			continue
+		}
+		// Use the UTC year to match BirthdayFixtureDate's UTC-pinned birth year, so the
+		// age decade agrees with the UTC-pinned browser's rendered age around the year
+		// boundary (anchor.Year() could differ from anchor.UTC().Year() there).
+		ageDecade := (anchor.UTC().Year() - r.Birthday.Year()) / 10
+		fp = append(fp, strings.Join([]string{
+			r.FullName,
+			synthetic.BirthdayBucket(*r.Birthday, anchor),
+			strconv.Itoa(ageDecade),
+		}, "|"))
+	}
+	sort.Strings(fp)
+	return fp
+}
+
+// assertBirthdayFixtures verifies the clock-anchored birthday fixtures (CON-052):
+// the SeededDateFacts total via the shared scale helper, the strict guarantee (≥1 of
+// the {today,+1} redundancy pair lands imminent, ≥1 fixture recedes past the ≤7-day
+// highlight window), per-fixture seed integrity (each reserved[i] stored the date the
+// plan computed for its offset), the date-INDEPENDENT classification (forward
+// fixtures are exactly their offset days out via daysUntil==offset; the celebrated
+// fixture is past this year), and a populated birthday cache on every reserved
+// subject. Subject-scoped to the reserved ids only — the catalog seeds its own
+// birthdays in the same namespace. anchor is the generator anchor; n is the catalog size.
+func assertBirthdayFixtures(t *testing.T, ctx context.Context, support *repository.SyntheticSupportRepository, h *synthetic.Harness, res synthetic.ProfileResult, anchor time.Time, n int) {
+	t.Helper()
+
+	reserved := h.BirthdayFixtureIDs()
+	plan := synthetic.BirthdayFixturePlan(anchor)
+	wantSeeded := min(synthetic.BirthdaylessCatalogCount(n), len(plan))
+	require.Equal(t, wantSeeded, res.SeededDateFacts, "SeededDateFacts == min(birthdayless catalog slots, plan size)")
+	require.Len(t, reserved, wantSeeded, "reserved fixture id count == SeededDateFacts")
+	require.GreaterOrEqual(t, len(reserved), 3, "at least the strict {today,+1,distant} triple is seeded")
+
+	rows, err := support.ListContactBirthdayFixturesByIds(ctx, reserved)
+	require.NoError(t, err)
+	byID := make(map[uuid.UUID]repository.BirthdayFixtureRow, len(rows))
+	for _, r := range rows {
+		byID[r.ContactID] = r
+	}
+	require.Len(t, byID, len(reserved), "every reserved fixture contact resolves")
+
+	// Strict imminent guarantee — over the {today,+1} redundancy PAIR ONLY: ≥1 lands
+	// in the ≤7-day highlight window, so a regression of BOTH pair fixtures fails even
+	// if the independent +5 this-week fixture still classifies imminent.
+	imminentInPair := 0
+	for _, id := range reserved[:min(2, len(reserved))] {
+		row := byID[id]
+		require.NotNil(t, row.Birthday, "reserved pair fixture has a populated birthday cache")
+		if synthetic.BirthdayDaysUntil(*row.Birthday, anchor) <= 7 {
+			imminentInPair++
+		}
+	}
+	require.GreaterOrEqual(t, imminentInPair, 1, "≥1 of the {today,+1} pair classifies imminent (≤7 days)")
+
+	// Strict recedes guarantee — ≥1 reserved fixture is OUTSIDE the highlight window
+	// (daysUntil > 7). Deliberately NOT `&& !past`: a +90/+150 fixture seeded when the
+	// anchor is in ~Oct-Dec wraps into next-year Jan-Mar, so its occurrence THIS
+	// calendar year is already past (the page files it under "Already Celebrated This
+	// Year") though its next occurrence is genuinely ~90 days out — it has still
+	// receded from the imminent window, which is the CON-052 quality.
+	receded := 0
+	for _, id := range reserved {
+		if row := byID[id]; row.Birthday != nil && synthetic.BirthdayDaysUntil(*row.Birthday, anchor) > 7 {
+			receded++
+		}
+	}
+	require.GreaterOrEqual(t, receded, 1, "≥1 reserved fixture recedes past the ≤7-day highlight window")
+
+	// Per-fixture seed integrity + classification: each reserved[i] stored the date the
+	// plan computed for its offset (reserved[i] ⇄ plan[i]), and its next-occurrence
+	// distance is exactly that offset. daysUntil==offset is DATE-INDEPENDENT (a +5
+	// fixture is 5 days out whether or not its wrapped January occurrence lands the
+	// page's "celebrated" section near year-end), so it — not a fragile section bucket
+	// — is what we pin. The celebrated fixture (offset<0) is always past-this-year when
+	// present (its date-gating keeps it same-year). The section→offset mapping is
+	// verified against the real page by the frontend parity test.
+	for i, id := range reserved {
+		row := byID[id]
+		require.NotNil(t, row.Birthday, "reserved fixture %d birthday cache populated", i)
+		want := synthetic.BirthdayFixtureDate(anchor, plan[i].OffsetDays)
+		require.Equal(t, want.Month(), row.Birthday.Month(), "fixture %d (%s) stored month", i, plan[i].Role)
+		require.Equal(t, want.Day(), row.Birthday.Day(), "fixture %d (%s) stored day", i, plan[i].Role)
+		if plan[i].OffsetDays >= 0 {
+			require.Equal(t, plan[i].OffsetDays, synthetic.BirthdayDaysUntil(*row.Birthday, anchor),
+				"fixture %d (%s) is exactly %d days out", i, plan[i].Role, plan[i].OffsetDays)
+		} else {
+			require.True(t, synthetic.BirthdayIsPastThisYear(*row.Birthday, anchor),
+				"fixture %d (%s) is past this year (celebrated)", i, plan[i].Role)
+		}
+	}
+}
+
 // These profile-orchestration integration tests are SLOW-gated
 // (testsupport.RequireLongTests) and routed to the nightly slow suite via the
 // TestSynthetic name prefix. Each sub-test uses a UNIQUE namespace so
@@ -515,11 +619,11 @@ func TestSyntheticProfile_DevCoversCatalog(t *testing.T) {
 		assertVisibleTaskSpread(t, ctx, cadenceSupport, h, res, devPrefix)
 	}
 	// Value-type + edge graph rows: the dev catalog (18) far exceeds the small
-	// dev knob counts, so the seeded counts are exact (no catalog-size bounding),
-	// and the bool-fact gate produces exactly one toolkit date fact.
+	// dev knob counts, so the seeded counts are exact (no catalog-size bounding).
+	// The clock-anchored birthday date-facts are asserted subject-scoped below via
+	// assertBirthdayFixtures.
 	require.Equal(t, params.Counts.SeededBoolFacts, res.SeededBoolFacts, "dev profile seeds bool facts")
 	require.Equal(t, params.Counts.SeededRelationships, res.SeededRelationships, "dev profile seeds person→person edges")
-	require.Equal(t, 1, res.SeededDateFacts, "dev profile seeds one toolkit date fact")
 	// Entity pool + person→entity edges: the dev catalog (18) far exceeds the small
 	// dev knob counts, so the seeded counts are exact (no catalog-size bounding).
 	require.Equal(t, params.Counts.SeededEntities, res.SeededEntities, "dev profile seeds the entity pool")
@@ -558,6 +662,8 @@ func TestSyntheticProfile_DevCoversCatalog(t *testing.T) {
 	// Post-seed coherence gate (F1/F3 + tour capacity), scoped to the namespace.
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 	assertSeedCoherence(t, ctx, support, h.Generator().Prefix(), h.DateFactContactID())
+	// Clock-anchored birthday fixtures (CON-052), subject-scoped to the reserved ids.
+	assertBirthdayFixtures(t, ctx, support, h, res, h.Generator().Anchor(), params.Counts.SeededContacts)
 	// Two-sided message-direction coverage (F4).
 	assertMessageDirectionCoverage(t, ctx, support, h, res)
 	// Notes coverage (F6).
@@ -608,8 +714,8 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	// One full bool-fact cycle (job_seeking/on_sabbatical/traveling) + one full
 	// edge cycle (knows/introduced_by/sibling_of) so every new predicate — incl.
 	// the always-confirm sibling_of (→ proposed) and the auto-if-confident rest
-	// (→ accepted) — is exercised. The bool-fact gate also seeds one toolkit date
-	// fact.
+	// (→ accepted) — is exercised. (Birthday date-facts are seeded independently,
+	// gated only on birthdayless catalog slots.)
 	params.Counts.SeededBoolFacts = 3
 	params.Counts.SeededRelationships = 3
 	// Enable cadence-task seeding (>0 gate). The 9-contact catalog is all
@@ -726,6 +832,8 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 
 	// Post-seed coherence gate (F1/F3 + tour capacity), scoped to the namespace.
 	assertSeedCoherence(t, ctx, support, h.Generator().Prefix(), h.DateFactContactID())
+	// Clock-anchored birthday fixtures (CON-052), subject-scoped to the reserved ids.
+	assertBirthdayFixtures(t, ctx, support, h, res, h.Generator().Anchor(), params.Counts.SeededContacts)
 	// Two-sided message-direction coverage (F4).
 	assertMessageDirectionCoverage(t, ctx, support, h, res)
 	// Notes coverage (F6).
@@ -1090,7 +1198,7 @@ func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
 	// teardown swept every entity node (pool + place) — a leaked entity node would
 	// FK-block or duplicate-violate the next run, and a surviving place node from a
 	// `within` edge would FK-block the sweep — and every import-candidate row.
-	run := func() (synthetic.ProfileResult, []repository.AssertionSummary, []repository.EntityNameSummary, []repository.ExternalContactSummary, []string) {
+	run := func() (synthetic.ProfileResult, []repository.AssertionSummary, []repository.EntityNameSummary, []repository.ExternalContactSummary, []string, []string) {
 		h, teardown, err := synthetic.NewHarnessWithDBForNamespaceAt(ctx, database, params.Namespace, params.Seed, anchor)
 		require.NoError(t, err)
 		res, err := synthetic.RunProfile(ctx, h, params)
@@ -1114,6 +1222,21 @@ func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
 		taskRows, err := support.ListTaskRowsByNamePrefix(ctx, prefix)
 		require.NoError(t, err)
 		taskFP := taskFingerprint(taskRows, anchor)
+		// Birthday-fixture fingerprint: keyed by stable identity (full_name) +
+		// daysUntil-bucket + age-decade over the reserved fixture subjects, so a
+		// random-UUID-keyed allocation or a year-math drift is caught. Computed off the
+		// pinned outer anchor before teardown drops the rows.
+		bdayRows, err := support.ListContactBirthdayFixturesByIds(ctx, h.BirthdayFixtureIDs())
+		require.NoError(t, err)
+		bdayFP := birthdayFingerprint(bdayRows, anchor)
+		// n=5 degrading allocation is exact + deterministic: the strict {today,+1,distant}
+		// triple on the birthdayless catalog creation indices {1,3,4} (index 3 is the
+		// no-method slot — a birthday is an assertion, not a contact_method).
+		require.Equal(t, 3, res.SeededDateFacts, "n=5 seeds exactly the {today,+1,distant} triple")
+		catalog := h.CatalogContactIDs()
+		require.GreaterOrEqual(t, len(catalog), 5, "n=5 catalog populated for the allocation check")
+		require.Equal(t, []uuid.UUID{catalog[1], catalog[3], catalog[4]}, h.BirthdayFixtureIDs(),
+			"birthday fixtures land on catalog creation indices 1,3,4 (today,+1,distant)")
 		require.NoError(t, teardown(context.Background()))
 		// Teardown correctness: the entity nodes (org/topic/tag pool + place nodes)
 		// are swept, so the namespace is clean for the next run.
@@ -1144,11 +1267,11 @@ func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
 		contactsRemaining, err := h.ContactsRemaining(ctx)
 		require.NoError(t, err)
 		require.Zero(t, contactsRemaining, "all seeded contacts (incl. merge/soft-delete) swept by teardown")
-		return res, fp, entFP, extFP, taskFP
+		return res, fp, entFP, extFP, taskFP, bdayFP
 	}
 
-	res1, fp1, ent1, ext1, task1 := run()
-	res2, fp2, ent2, ext2, task2 := run()
+	res1, fp1, ent1, ext1, task1, bday1 := run()
+	res2, fp2, ent2, ext2, task2, bday2 := run()
 
 	require.Equal(t, res1, res2, "prod-shaped ProfileResult must be deterministic across runs")
 	require.NotEmpty(t, fp1, "the seed must produce assertions to fingerprint")
@@ -1159,6 +1282,8 @@ func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
 	require.Equal(t, ext1, ext2, "import-candidate (source, source_id) fingerprint must be deterministic across runs")
 	require.NotEmpty(t, task1, "the seed must produce contact_task rows to fingerprint")
 	require.Equal(t, task1, task2, "visible-task (full_name, kind, lifecycle, state, age-bucket) fingerprint must be deterministic across runs")
+	require.NotEmpty(t, bday1, "the seed must produce birthday fixtures to fingerprint")
+	require.Equal(t, bday1, bday2, "birthday (full_name, daysUntil-bucket, age-decade) fingerprint must be deterministic across runs")
 
 	// Ordering guard for the "seed gen.X() LAST" rule. The run-to-run
 	// comparison above catches NON-deterministic drift but NOT a DETERMINISTIC

@@ -226,6 +226,7 @@ assert_reset_run_line() {
     if [ -z "$run" ]; then fail "no 'podman run ... --reset-and-seed' recorded"; return; fi
     local needle
     for needle in "--rm" "--network crm" "--env-file" "-e MIGRATIONS_PATH=/migrations" \
+                  "-e TZ=UTC" \
                   "--entrypoint /usr/local/bin/crm-admin" "$want_ref" \
                   "--reset-and-seed" "--profile prod-shaped" "--yes"; do
         if [[ "$run" == *"$needle"* ]]; then ok; else fail "reset run line missing '$needle': $run"; fi

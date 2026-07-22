@@ -261,13 +261,17 @@ staging_ctl stop personalcrm-backend.service
 # 6. Reset + reseed from the ephemeral container off the deployed image. The
 #    --env-file carries CRM_ENV=staging (-> SeedAllowed passes), DATABASE_URL
 #    (host crm-postgres), and TIME_BASE/TIME_ACCELERATION (so seeded cadence /
-#    overdue semantics track the app clock). The image ENTRYPOINT is crm-api, so
-#    --entrypoint is required to run crm-admin.
+#    overdue semantics track the app clock). TZ=UTC pins the container's local
+#    zone so the clock-anchored birthday fixtures compute their calendar day in
+#    UTC — the same zone the tour browser is pinned to — so imminent fixtures land
+#    in the birthdays page's highlight window regardless of the host zone. The
+#    image ENTRYPOINT is crm-api, so --entrypoint is required to run crm-admin.
 echo "staging-reset: reset + reseed ('$PROFILE') from $IMAGE_REF..." >&2
 staging_podman run --rm \
     --network "$PODMAN_NETWORK" \
     --env-file "$ENV_FILE" \
     -e "MIGRATIONS_PATH=$MIGRATIONS_PATH" \
+    -e "TZ=UTC" \
     --entrypoint "$CRM_ADMIN" \
     "$IMAGE_REF" \
     --reset-and-seed --profile "$PROFILE" --yes

@@ -2473,6 +2473,11 @@ type Querier interface {
 	// has_pending mirrors FindPendingFollowUp's live followup_loop predicate. Caller
 	// passes a BARE prefix.
 	TestListCadenceActivityFlagsByNamePrefix(ctx context.Context, namePrefix pgtype.Text) ([]*TestListCadenceActivityFlagsByNamePrefixRow, error)
+	// CON-052 birthday-fixture proof: (id, full_name, birthday) for the reserved
+	// clock-anchored birthday fixture contacts, so the coverage/determinism tests can
+	// classify each subject-scoped (id-list bounded) and fingerprint by stable identity
+	// (GetContactCacheColumns is per-id and lacks full_name). Test only.
+	TestListContactBirthdayFixturesByIds(ctx context.Context, ids []pgtype.UUID) ([]*TestListContactBirthdayFixturesByIdsRow, error)
 	// Profile coverage test only: list the namespace's contacts (by full_name
 	// prefix) with the bucket-defining columns + a method count, so the test can
 	// assert the catalog produced ≥1 overdue (cadence + last_contacted in the past),

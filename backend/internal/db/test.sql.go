@@ -2910,6 +2910,42 @@ func (q *Queries) TestListCadenceActivityFlagsByNamePrefix(ctx context.Context, 
 	return items, nil
 }
 
+const TestListContactBirthdayFixturesByIds = `-- name: TestListContactBirthdayFixturesByIds :many
+SELECT id, full_name, birthday
+FROM contact
+WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL
+`
+
+type TestListContactBirthdayFixturesByIdsRow struct {
+	ID       pgtype.UUID `json:"id"`
+	FullName string      `json:"full_name"`
+	Birthday pgtype.Date `json:"birthday"`
+}
+
+// CON-052 birthday-fixture proof: (id, full_name, birthday) for the reserved
+// clock-anchored birthday fixture contacts, so the coverage/determinism tests can
+// classify each subject-scoped (id-list bounded) and fingerprint by stable identity
+// (GetContactCacheColumns is per-id and lacks full_name). Test only.
+func (q *Queries) TestListContactBirthdayFixturesByIds(ctx context.Context, ids []pgtype.UUID) ([]*TestListContactBirthdayFixturesByIdsRow, error) {
+	rows, err := q.db.Query(ctx, TestListContactBirthdayFixturesByIds, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*TestListContactBirthdayFixturesByIdsRow{}
+	for rows.Next() {
+		var i TestListContactBirthdayFixturesByIdsRow
+		if err := rows.Scan(&i.ID, &i.FullName, &i.Birthday); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const TestListContactBucketsByNamePrefix = `-- name: TestListContactBucketsByNamePrefix :many
 SELECT
     c.id,
