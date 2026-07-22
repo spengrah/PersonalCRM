@@ -23,6 +23,13 @@ export interface IntentSpec {
    * caveat unless screenshots were attached. Harness-side judgment, not SSOT.
    */
   visual?: boolean
+  /**
+   * Override the default INTENT_CAPTURE_CAP for this intent. Raise it when the
+   * intent's evidence legitimately spans more capture families than the default
+   * holds, so the latest-sorting family is not silently evicted (bindIntentCaptures
+   * slices by `(tour, seq)`). Harness-side tuning, not SSOT.
+   */
+  captureCap?: number
 }
 
 export const INTENT_CATALOG: Record<string, IntentSpec> = {
@@ -66,6 +73,11 @@ export const INTENT_CATALOG: Record<string, IntentSpec> = {
       'moving between the contact list and contact detail feels like traversing one consistent, ordered list — sort, search, and filter context carries across navigation in both directions, with keyboard and mouse as equals',
     status: 'current',
     servedBy: ['CON-038', 'CON-040', 'CON-041', 'CON-057', 'CON-059', 'CON-060', 'CON-065'],
+    // Contacts-tour evidence, in seq order: CON-038×3, CON-065×2, CON-041×2,
+    // then CON-040×10. Cap 8 kept 038×3 + 041×2 + the first 040×3 before CON-065
+    // existed; inserting CON-065×2 needs cap 10 to keep that SAME retained set
+    // (038×3 + 065×2 + 041×2 + 040×3) rather than evicting the keyboard-nav tail.
+    captureCap: 10,
   },
   'CON-052': {
     id: 'CON-052',

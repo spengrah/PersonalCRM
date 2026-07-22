@@ -1,7 +1,11 @@
-// contacts.tour.ts — an assertion-free walk of the 7 CURRENT contacts `ux`
-// behaviors (CON-038, CON-040, CON-041, CON-042, CON-043, CON-044, CON-045).
-// CON-046 is status:proposed → SKIPPED. Read-only captures run first, then the
-// mutating ones on DISTINCT, API-selected contacts, destructive-last.
+// contacts.tour.ts — an assertion-free walk of the CURRENT contacts `ux`
+// behaviors that carry judged evidence: CON-038, CON-040, CON-041, CON-042,
+// CON-043, CON-044, CON-045, plus CON-065 (the visible "Back to list" control),
+// whose captures feed the CON-051 experience-intent judge. CON-046 is
+// status:proposed → SKIPPED; CON-066 (a list-context change resets pagination)
+// is proven deterministically by cited E2E specs, not judged here.
+// Read-only captures run first, then the mutating ones on DISTINCT,
+// API-selected contacts, destructive-last.
 //
 // Imports ONLY `test` from the fixtures — never `expect` — so the tour stays
 // assertion-free. Readiness is via waitForApi / locator.waitFor / waitForURL,
@@ -29,7 +33,7 @@ const CONTACTS_LIST_PATH = /\/api\/v1\/contacts$/
 // Frontend route path (matched by waitForURL against page URLs).
 const DETAIL_PAGE_PATH = /^\/contacts\/[0-9a-f-]{36}$/
 
-test('contacts tour — 7 current ux behaviors', async ({ page, tour }) => {
+test('contacts tour — current ux behaviors', async ({ page, tour }) => {
   test.setTimeout(480_000)
 
   // --- Reserve distinct contacts up front, by API query, not list position ---
@@ -40,7 +44,7 @@ test('contacts tour — 7 current ux behaviors', async ({ page, tour }) => {
   // exact-text option click with a strict-mode violation.
   const listResp = await tour.apiCtx.get('/api/v1/contacts?limit=500&sort=cadence&order=desc')
   const contacts = ((await listResp.json())?.data ?? []) as TourContact[]
-  if (contacts.length < 4) {
+  if (contacts.length < 5) {
     throw new Error(`tour: prod-shaped seed too small (${contacts.length} contacts) for the tour`)
   }
 
@@ -75,6 +79,15 @@ test('contacts tour — 7 current ux behaviors', async ({ page, tour }) => {
   }
   reserved.add(target.id)
   reserved.add(source.id)
+
+  // CON-065 walks a searched + cadence-filtered list, so it needs a distinct
+  // contact with a cadence (survives cadence_filter=has_cadence) and a unique
+  // name (the search resolves to its row unambiguously). Never mutated below.
+  const navContact = contacts.find(c => !reserved.has(c.id) && c.cadence && uniqueName(c))
+  if (!navContact) {
+    throw new Error('tour: CON-065 needs a distinct cadence-bearing, unique-named contact')
+  }
+  reserved.add(navContact.id)
 
   const deleteContact = contacts.find(c => !reserved.has(c.id))
   if (!deleteContact) throw new Error('tour: no distinct contact left for the delete step')
@@ -131,6 +144,58 @@ test('contacts tour — 7 current ux behaviors', async ({ page, tour }) => {
     behaviors: ['CON-038'],
     note: 'bare contact list (no explicit sort): implicit default cadence order',
     pair: { id: 'default-order-CON-038', role: 'list-bare' },
+  })
+
+  // --- CON-065: a visible "Back to list" control restores list context ---
+  // A NON-default search + cadence filter make the preserved context observable.
+  // The round trip is list → detail (open a row) → "Back to list" (by mouse):
+  // the return lands on the SAME searched + filtered list, at parity with the
+  // keyboard Escape route (CON-040). Placed early so both captures survive the
+  // CON-051 intent capture cap (see intent-catalog captureCap).
+  const navSearch = navContact.full_name
+  const filteredListUrl =
+    `/contacts?sort=cadence&order=desc&search=${encodeURIComponent(navSearch)}` +
+    '&cadence_filter=has_cadence'
+  await page.goto(filteredListUrl)
+  await tour.waitForApi(page, 'GET', CONTACTS_LIST_PATH)
+  await page.getByRole('heading', { name: 'Contacts', level: 2 }).waitFor({ state: 'visible' })
+  const navRow = page
+    .locator('tbody tr')
+    .filter({ has: page.locator(`a[href*="/contacts/${navContact.id}"]`) })
+  await navRow.first().getByRole('link').first().click()
+  await page.waitForURL(u => DETAIL_PAGE_PATH.test(new URL(u).pathname))
+  await tour.waitForApi(page, 'GET', CONTACT_ID_PATH)
+  await tour.waitForApi(page, 'GET', CONTACTS_LIST_PATH) // ids_only nav order
+  await page.getByRole('button', { name: 'Back to list' }).waitFor({ state: 'visible' })
+  // Gate the capture on the pager RESOLVING to "N of M", not just the button.
+  // waitForApi resolves on response headers, and the button + heading are static,
+  // so without this the ARIA snapshot can catch the pager mid-load as "No contacts"
+  // — contradictory evidence (see the post-nav capture-race gotcha in core.md).
+  await page
+    .getByText(/\d+ of \d+/)
+    .first()
+    .waitFor({ state: 'visible' })
+  await tour.capture(page, {
+    behaviors: ['CON-065'],
+    note: 'detail opened from a searched + cadence-filtered list: nav bar shows a visible "Back to list" control; the URL carries the non-default search + filter context',
+    pair: { id: 'back-to-list-CON-065', role: 'from-detail' },
+  })
+
+  await page.getByRole('button', { name: 'Back to list' }).click()
+  await page.waitForURL(u => {
+    const url = new URL(u)
+    return url.pathname === '/contacts' && url.searchParams.get('search') === navSearch
+  })
+  await tour.waitForApi(page, 'GET', CONTACTS_LIST_PATH)
+  await page.getByRole('heading', { name: 'Contacts', level: 2 }).waitFor({ state: 'visible' })
+  // Gate on the restored row rendering, not the static heading — this is the
+  // observable consequence that the filtered list re-committed after Back, so
+  // the capture never snapshots the list skeleton mid-load.
+  await navRow.first().waitFor({ state: 'visible' })
+  await tour.capture(page, {
+    behaviors: ['CON-065'],
+    note: 'clicking "Back to list" returns to the SAME searched + cadence-filtered list — search still populated, cadence filter still applied: context preserved by mouse, at parity with Escape',
+    pair: { id: 'back-to-list-CON-065', role: 'back-to-list' },
   })
 
   // --- CON-045: birthdays grouped by proximity under accelerated time ---
