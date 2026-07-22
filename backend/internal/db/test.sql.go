@@ -2175,6 +2175,26 @@ func (q *Queries) TestCountCadenceDueByStateAndNamePrefix(ctx context.Context, a
 	return count, err
 }
 
+const TestCountContactTasksByNamePrefix = `-- name: TestCountContactTasksByNamePrefix :one
+SELECT COUNT(*)
+FROM contact_task ct
+JOIN contact c ON ct.contact_id = c.id
+WHERE c.full_name LIKE $1 || '%'
+  AND c.deleted_at IS NULL
+`
+
+// Exact task accounting (visible-task spread): count EVERY contact_task row on the
+// namespace's live contacts (all lifecycles + states), so the coverage/determinism
+// test can assert the total equals ProfileResult.SeededTasks. contact_task has no
+// deleted_at; the contact soft-delete filter scopes to live contacts. Caller passes
+// a BARE prefix; '%' appended.
+func (q *Queries) TestCountContactTasksByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error) {
+	row := q.db.QueryRow(ctx, TestCountContactTasksByNamePrefix, namePrefix)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const TestCountContactsWithNotepadByNamePrefix = `-- name: TestCountContactsWithNotepadByNamePrefix :one
 SELECT COUNT(DISTINCT c.id)
 FROM contact c
@@ -3092,6 +3112,105 @@ func (q *Queries) TestListPublicTables(ctx context.Context) ([]string, error) {
 			return nil, err
 		}
 		items = append(items, table_name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const TestListTaskRowsByNamePrefix = `-- name: TestListTaskRowsByNamePrefix :many
+SELECT c.full_name,
+       ct.kind,
+       ct.lifecycle,
+       ct.state,
+       ct.created_at,
+       COALESCE(ct.metadata->>'content', '')::text AS content
+FROM contact_task ct
+JOIN contact c ON ct.contact_id = c.id
+WHERE c.full_name LIKE $1 || '%'
+  AND c.deleted_at IS NULL
+`
+
+type TestListTaskRowsByNamePrefixRow struct {
+	FullName  string             `json:"full_name"`
+	Kind      string             `json:"kind"`
+	Lifecycle string             `json:"lifecycle"`
+	State     string             `json:"state"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	Content   string             `json:"content"`
+}
+
+// Visible-task coverage + determinism fingerprint source: every contact_task row on
+// the namespace's live contacts, joined to its contact for the stable-identity
+// full_name. Feeds the kind/lifecycle/state coverage checks, the link-age bucket
+// spread (from created_at), the non-empty content check, and the run-to-run task
+// fingerprint (keyed by full_name + kind + lifecycle + state + created_at age bucket
+// — external_task_id and raw UUIDs excluded). Caller passes a BARE prefix; '%'
+// appended.
+func (q *Queries) TestListTaskRowsByNamePrefix(ctx context.Context, namePrefix pgtype.Text) ([]*TestListTaskRowsByNamePrefixRow, error) {
+	rows, err := q.db.Query(ctx, TestListTaskRowsByNamePrefix, namePrefix)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*TestListTaskRowsByNamePrefixRow{}
+	for rows.Next() {
+		var i TestListTaskRowsByNamePrefixRow
+		if err := rows.Scan(
+			&i.FullName,
+			&i.Kind,
+			&i.Lifecycle,
+			&i.State,
+			&i.CreatedAt,
+			&i.Content,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const TestListVisibleTaskCountsByContactIds = `-- name: TestListVisibleTaskCountsByContactIds :many
+SELECT c.id AS contact_id, COUNT(ct.id) AS visible_count
+FROM contact c
+LEFT JOIN contact_task ct
+  ON ct.contact_id = c.id
+  AND ct.state = 'managed'
+  AND ct.lifecycle IN ('manual', 'followup_loop')
+WHERE c.id = ANY($1::uuid[])
+  AND c.deleted_at IS NULL
+GROUP BY c.id
+`
+
+type TestListVisibleTaskCountsByContactIdsRow struct {
+	ContactID    pgtype.UUID `json:"contact_id"`
+	VisibleCount int64       `json:"visible_count"`
+}
+
+// Visible-task cohort accounting: for each given contact, the count of its
+// PRODUCT-VISIBLE tasks — the ones the contact page lists (state='managed' AND
+// lifecycle IN ('manual','followup_loop')); it never lists cadence_due. A LEFT JOIN
+// (not a task-side GROUP BY) so a contact with zero visible tasks still appears with
+// count 0 — the 0-visible majority cannot be produced from task rows alone. Scoped to
+// the passed catalog id set. Test only.
+func (q *Queries) TestListVisibleTaskCountsByContactIds(ctx context.Context, contactIds []pgtype.UUID) ([]*TestListVisibleTaskCountsByContactIdsRow, error) {
+	rows, err := q.db.Query(ctx, TestListVisibleTaskCountsByContactIds, contactIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*TestListVisibleTaskCountsByContactIdsRow{}
+	for rows.Next() {
+		var i TestListVisibleTaskCountsByContactIdsRow
+		if err := rows.Scan(&i.ContactID, &i.VisibleCount); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

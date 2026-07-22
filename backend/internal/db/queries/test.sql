@@ -1446,3 +1446,51 @@ WHERE c.full_name LIKE @name_prefix || '%'
   AND c.deleted_at IS NULL
   AND c.last_outreach_at IS NOT NULL
   AND c.last_contacted IS NULL;
+
+-- name: TestCountContactTasksByNamePrefix :one
+-- Exact task accounting (visible-task spread): count EVERY contact_task row on the
+-- namespace's live contacts (all lifecycles + states), so the coverage/determinism
+-- test can assert the total equals ProfileResult.SeededTasks. contact_task has no
+-- deleted_at; the contact soft-delete filter scopes to live contacts. Caller passes
+-- a BARE prefix; '%' appended.
+SELECT COUNT(*)
+FROM contact_task ct
+JOIN contact c ON ct.contact_id = c.id
+WHERE c.full_name LIKE @name_prefix || '%'
+  AND c.deleted_at IS NULL;
+
+-- name: TestListVisibleTaskCountsByContactIds :many
+-- Visible-task cohort accounting: for each given contact, the count of its
+-- PRODUCT-VISIBLE tasks — the ones the contact page lists (state='managed' AND
+-- lifecycle IN ('manual','followup_loop')); it never lists cadence_due. A LEFT JOIN
+-- (not a task-side GROUP BY) so a contact with zero visible tasks still appears with
+-- count 0 — the 0-visible majority cannot be produced from task rows alone. Scoped to
+-- the passed catalog id set. Test only.
+SELECT c.id AS contact_id, COUNT(ct.id) AS visible_count
+FROM contact c
+LEFT JOIN contact_task ct
+  ON ct.contact_id = c.id
+  AND ct.state = 'managed'
+  AND ct.lifecycle IN ('manual', 'followup_loop')
+WHERE c.id = ANY(@contact_ids::uuid[])
+  AND c.deleted_at IS NULL
+GROUP BY c.id;
+
+-- name: TestListTaskRowsByNamePrefix :many
+-- Visible-task coverage + determinism fingerprint source: every contact_task row on
+-- the namespace's live contacts, joined to its contact for the stable-identity
+-- full_name. Feeds the kind/lifecycle/state coverage checks, the link-age bucket
+-- spread (from created_at), the non-empty content check, and the run-to-run task
+-- fingerprint (keyed by full_name + kind + lifecycle + state + created_at age bucket
+-- — external_task_id and raw UUIDs excluded). Caller passes a BARE prefix; '%'
+-- appended.
+SELECT c.full_name,
+       ct.kind,
+       ct.lifecycle,
+       ct.state,
+       ct.created_at,
+       COALESCE(ct.metadata->>'content', '')::text AS content
+FROM contact_task ct
+JOIN contact c ON ct.contact_id = c.id
+WHERE c.full_name LIKE @name_prefix || '%'
+  AND c.deleted_at IS NULL;

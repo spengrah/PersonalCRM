@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -45,6 +46,132 @@ func trailingSeq(s string) (int, bool) {
 // fixedAccelBaseUnix is a deterministic TIME_BASE (a fixed Unix second) for the
 // high-acceleration settle-budget test, so the fixture makes no wall-clock call.
 const fixedAccelBaseUnix int64 = 1735689600 // 2025-01-01T00:00:00Z
+
+// taskAgeBucket coarsely buckets a contact_task's created_at relative to a fixed
+// reference (the generator anchor), so the visible-task assertions + fingerprint
+// key on link-age CLASS, not an exact timestamp — the cadence/follow-up rows are
+// created at ~NOW (a hair after the anchor, differing per run) yet must land in a
+// stable bucket. The manual spread's ages (2d / 21d / 90d) split across all three.
+func taskAgeBucket(ref, createdAt time.Time) string {
+	days := ref.Sub(createdAt).Hours() / 24
+	switch {
+	case days < 7:
+		return "recent"
+	case days < 60:
+		return "weeks"
+	default:
+		return "months"
+	}
+}
+
+// taskFingerprint is the run-to-run determinism witness for the visible-task
+// spread: the sorted (full_name, kind, lifecycle, state, age-bucket) tuples over
+// every seeded contact_task. Keyed by STABLE identity (full_name) + attributes,
+// excluding external_task_id + raw UUIDs, so it is byte-stable iff the spread maps
+// shape→named-contact by a stable creation index and DIFFERS if a random UUID keyed
+// the bucket assignment. ref is the (pinned) generator anchor.
+func taskFingerprint(rows []repository.TaskRow, ref time.Time) []string {
+	fp := make([]string, 0, len(rows))
+	for _, r := range rows {
+		fp = append(fp, strings.Join([]string{r.FullName, r.Kind, r.Lifecycle, r.State, taskAgeBucket(ref, r.CreatedAt)}, "|"))
+	}
+	sort.Strings(fp)
+	return fp
+}
+
+// assertVisibleTaskSpread verifies the product-visible task spread: the exact task
+// total, the manual-scoped ProfileResult counters, the 0/1/>1 visible-task cohorts
+// (subject-scoped to the catalog id set, with the follow-up contact accounted
+// separately), and the kind / lifecycle / link-age / content coverage over the
+// seeded task rows. Shared by the dev + prod-shaped coverage tests (the fixed
+// creation-index allocation is identical at any catalog size ≥ 4).
+func assertVisibleTaskSpread(t *testing.T, ctx context.Context, support *repository.SyntheticSupportRepository, h *synthetic.Harness, res synthetic.ProfileResult, prefix string) {
+	t.Helper()
+
+	// Exact task total: every seeded contact_task row on the namespace == SeededTasks
+	// (cadence + manual + follow-up), so the accounting is closed.
+	totalTasks, err := support.CountContactTasksByNamePrefix(ctx, prefix)
+	require.NoError(t, err)
+	require.Equal(t, int64(res.SeededTasks), totalTasks, "scoped contact_task count == res.SeededTasks (cadence + manual + follow-up)")
+
+	// Manual-scoped counters are EXACT for the fixed creation-index allocation
+	// (indices 1,2 → one manual each; index 3 → two), independent of catalog size.
+	require.Equal(t, 4, res.SeededManualTasks, "visible spread seeds 4 manual tasks")
+	require.Equal(t, 3, res.SeededContactsWithManualTasks, "3 catalog contacts get manual tasks")
+	require.Equal(t, 1, res.SeededContactsWithMultipleManualTasks, "1 catalog contact gets >1 manual task")
+	require.Len(t, h.ManualCohortIDs(), 3, "3 reserved manual-cohort contact ids recorded")
+
+	// Visible-task cohorts over the CATALOG universe. A LEFT JOIN so a 0-visible
+	// contact appears with count 0 — it still holds a background cadence_due row the
+	// contact page never lists, so 0-visible is asserted through the UI filters, NOT
+	// count(*)==0. The follow-up contact is NON-catalog and asserted separately below.
+	catalogIDs := h.CatalogContactIDs()
+	require.NotEmpty(t, catalogIDs, "catalog ids recorded for the spread")
+	counts, err := support.ListVisibleTaskCountsByContactIds(ctx, catalogIDs)
+	require.NoError(t, err)
+	require.Len(t, counts, len(catalogIDs), "every catalog contact appears (LEFT JOIN produces the 0-visible rows)")
+	var zeroVisible, oneVisible, multiVisible int
+	for _, c := range counts {
+		switch {
+		case c.VisibleCount == 0:
+			zeroVisible++
+		case c.VisibleCount == 1:
+			oneVisible++
+		default:
+			multiVisible++
+		}
+	}
+	require.Equal(t, 2, oneVisible, "exactly 2 catalog contacts have 1 visible task (indices 1,2)")
+	require.Equal(t, 1, multiVisible, "exactly 1 catalog contact has >1 visible task (index 3)")
+	require.Equal(t, len(catalogIDs)-3, zeroVisible, "the remaining catalog contacts are the 0-visible majority (background cadence_due only)")
+
+	// Row-level coverage over every seeded task (joined to its stable-identity
+	// full_name): the product-visible picture, kinds, lifecycles, link-age spread,
+	// and non-empty manual content.
+	taskRows, err := support.ListTaskRowsByNamePrefix(ctx, prefix)
+	require.NoError(t, err)
+	require.Len(t, taskRows, res.SeededTasks, "task row list covers every seeded task")
+
+	visibleByContact := map[string]int{}
+	visibleRows := 0
+	kinds := map[string]int{}
+	lifecycles := map[string]int{}
+	ageBuckets := map[string]struct{}{}
+	anchor := h.Generator().Anchor()
+	for _, r := range taskRows {
+		lifecycles[r.Lifecycle]++
+		if r.State == string(repository.ContactTaskStateManaged) &&
+			(r.Lifecycle == contacttask.LifecycleManual || r.Lifecycle == contacttask.LifecycleFollowUpLoop) {
+			visibleRows++
+			visibleByContact[r.FullName]++
+		}
+		if r.Lifecycle == contacttask.LifecycleManual {
+			kinds[r.Kind]++
+			require.NotEmpty(t, r.Content, "manual task carries non-empty content")
+			ageBuckets[taskAgeBucket(anchor, r.CreatedAt)] = struct{}{}
+		}
+	}
+
+	// Product-visible picture (the UI filters: managed + manual/followup_loop) ==
+	// the manual cohorts + the 1 follow-up contact — accounted, not double-counted.
+	require.Equal(t, res.SeededManualTasks+res.SeededPendingFollowUps, visibleRows,
+		"product-visible task rows == manual tasks + the follow-up")
+	require.Len(t, visibleByContact, res.SeededContactsWithManualTasks+res.SeededPendingFollowUps,
+		"product-visible contacts == manual-cohort catalog contacts + the 1 follow-up contact")
+
+	// Varied kind: all three user-pickable kinds present among manual tasks.
+	require.GreaterOrEqual(t, kinds[contacttask.KindReachOut], 1, "≥1 reach_out manual task")
+	require.GreaterOrEqual(t, kinds[contacttask.KindSend], 1, "≥1 send manual task")
+	require.GreaterOrEqual(t, kinds[contacttask.KindReminder], 1, "≥1 reminder manual task")
+
+	// Varied lifecycle across the seeded tasks.
+	require.GreaterOrEqual(t, lifecycles[contacttask.LifecycleCadenceDue], 1, "≥1 cadence_due task")
+	require.GreaterOrEqual(t, lifecycles[contacttask.LifecycleManual], 1, "≥1 manual task")
+	require.GreaterOrEqual(t, lifecycles[contacttask.LifecycleFollowUpLoop], 1, "≥1 followup_loop task")
+
+	// Varied link age: ≥2 distinct created_at buckets among manual tasks.
+	require.GreaterOrEqual(t, len(ageBuckets), 2, "≥2 distinct link-age buckets among manual tasks")
+}
 
 // These profile-orchestration integration tests are SLOW-gated
 // (testsupport.RequireLongTests) and routed to the nightly slow suite via the
@@ -362,6 +489,9 @@ func TestSyntheticProfile_DevCoversCatalog(t *testing.T) {
 		incoherentCadence, err := cadenceSupport.IncoherentCadenceDueCountByNamePrefix(ctx, devPrefix)
 		require.NoError(t, err)
 		require.Equal(t, int64(0), incoherentCadence, "no cadence_due task may be completed/dismissed or carry a non-finalized external id")
+		// Product-visible task spread (dev catalog is 18 ≥ 4, so the spread runs): the
+		// same fixed 0/1/multiple manual-task allocation + exact accounting.
+		assertVisibleTaskSpread(t, ctx, cadenceSupport, h, res, devPrefix)
 	}
 	// Value-type + edge graph rows: the dev catalog (18) far exceeds the small
 	// dev knob counts, so the seeded counts are exact (no catalog-size bounding),
@@ -733,6 +863,10 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	require.GreaterOrEqual(t, liveFollowUps, int64(1),
 		"≥1 COHERENT live followup_loop task (on a contact with an outbound) — the has_pending_followup state the contact page renders")
 
+	// Product-visible task spread: 0/1/multiple manual tasks across catalog cohorts,
+	// varied kind/lifecycle/link-age, exact accounting (cadence + manual + follow-up).
+	assertVisibleTaskSpread(t, ctx, support, h, res, prefix)
+
 	// Interaction volume: each dedicated source contact carries MessagesPerContact
 	// settled interactions, so SettledInteractions == (settled contacts) ×
 	// MessagesPerContact — PLUS the single GCal event the awaiting-reply scenario
@@ -935,7 +1069,7 @@ func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
 	// teardown swept every entity node (pool + place) — a leaked entity node would
 	// FK-block or duplicate-violate the next run, and a surviving place node from a
 	// `within` edge would FK-block the sweep — and every import-candidate row.
-	run := func() (synthetic.ProfileResult, []repository.AssertionSummary, []repository.EntityNameSummary, []repository.ExternalContactSummary) {
+	run := func() (synthetic.ProfileResult, []repository.AssertionSummary, []repository.EntityNameSummary, []repository.ExternalContactSummary, []string) {
 		h, teardown, err := synthetic.NewHarnessWithDBForNamespaceAt(ctx, database, params.Namespace, params.Seed, anchor)
 		require.NoError(t, err)
 		res, err := synthetic.RunProfile(ctx, h, params)
@@ -952,6 +1086,13 @@ func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
 		// peer band + the run-to-run ProfileResult count equality.
 		extFP, err := support.ListExternalContactSourceIDsByPrefix(ctx, prefix)
 		require.NoError(t, err)
+		// Visible-task fingerprint: keyed by stable identity (full_name) + attributes +
+		// link-age bucket over every seeded task, so a random-UUID-keyed cohort reshuffle
+		// (which the name stays stable through) is caught. Computed off the pinned outer
+		// anchor before teardown drops the rows.
+		taskRows, err := support.ListTaskRowsByNamePrefix(ctx, prefix)
+		require.NoError(t, err)
+		taskFP := taskFingerprint(taskRows, anchor)
 		require.NoError(t, teardown(context.Background()))
 		// Teardown correctness: the entity nodes (org/topic/tag pool + place nodes)
 		// are swept, so the namespace is clean for the next run.
@@ -982,11 +1123,11 @@ func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
 		contactsRemaining, err := h.ContactsRemaining(ctx)
 		require.NoError(t, err)
 		require.Zero(t, contactsRemaining, "all seeded contacts (incl. merge/soft-delete) swept by teardown")
-		return res, fp, entFP, extFP
+		return res, fp, entFP, extFP, taskFP
 	}
 
-	res1, fp1, ent1, ext1 := run()
-	res2, fp2, ent2, ext2 := run()
+	res1, fp1, ent1, ext1, task1 := run()
+	res2, fp2, ent2, ext2, task2 := run()
 
 	require.Equal(t, res1, res2, "prod-shaped ProfileResult must be deterministic across runs")
 	require.NotEmpty(t, fp1, "the seed must produce assertions to fingerprint")
@@ -995,6 +1136,8 @@ func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
 	require.Equal(t, ent1, ent2, "entity (subtype, normalized_name) fingerprint must be deterministic across runs")
 	require.NotEmpty(t, ext1, "the seed must produce import-candidate external_contact rows to fingerprint")
 	require.Equal(t, ext1, ext2, "import-candidate (source, source_id) fingerprint must be deterministic across runs")
+	require.NotEmpty(t, task1, "the seed must produce contact_task rows to fingerprint")
+	require.Equal(t, task1, task2, "visible-task (full_name, kind, lifecycle, state, age-bucket) fingerprint must be deterministic across runs")
 
 	// Ordering guard for the "seed gen.X() LAST" rule. The run-to-run
 	// comparison above catches NON-deterministic drift but NOT a DETERMINISTIC

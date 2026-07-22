@@ -292,6 +292,76 @@ func (r *SyntheticSupportRepository) CountCadenceDueByStateByNamePrefix(ctx cont
 	})
 }
 
+// CountContactTasksByNamePrefix counts EVERY contact_task row on the namespace's
+// live contacts (all lifecycles + states), so the coverage/determinism test can
+// assert the total equals ProfileResult.SeededTasks. Caller passes a BARE prefix.
+func (r *SyntheticSupportRepository) CountContactTasksByNamePrefix(ctx context.Context, namePrefix string) (int64, error) {
+	return r.queries.TestCountContactTasksByNamePrefix(ctx, pgtype.Text{String: namePrefix, Valid: true})
+}
+
+// VisibleTaskCount is a contact's product-visible task count (the tasks the contact
+// page lists: managed manual/follow-up), for the 0/1/>1 cohort assertions.
+type VisibleTaskCount struct {
+	ContactID    uuid.UUID
+	VisibleCount int64
+}
+
+// ListVisibleTaskCountsByContactIds returns, for each given contact, its count of
+// product-visible tasks (managed AND lifecycle IN manual/followup_loop). A LEFT JOIN
+// so zero-visible contacts appear with count 0 — the 0-visible majority the coverage
+// test proves over the catalog id set.
+func (r *SyntheticSupportRepository) ListVisibleTaskCountsByContactIds(ctx context.Context, contactIDs []uuid.UUID) ([]VisibleTaskCount, error) {
+	if len(contactIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := r.queries.TestListVisibleTaskCountsByContactIds(ctx, pgUUIDs(contactIDs))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]VisibleTaskCount, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, VisibleTaskCount{
+			ContactID:    uuid.UUID(row.ContactID.Bytes),
+			VisibleCount: row.VisibleCount,
+		})
+	}
+	return out, nil
+}
+
+// TaskRow is a contact_task row projected with its contact's stable-identity
+// full_name, for the visible-task coverage checks + the run-to-run task fingerprint.
+type TaskRow struct {
+	FullName  string
+	Kind      string
+	Lifecycle string
+	State     string
+	CreatedAt time.Time
+	Content   string
+}
+
+// ListTaskRowsByNamePrefix returns every contact_task row on the namespace's live
+// contacts, joined to its contact for the full_name. Feeds the kind/lifecycle/state
+// coverage, the link-age bucket spread, the non-empty content check, and the
+// name-keyed task fingerprint. Caller passes a BARE prefix.
+func (r *SyntheticSupportRepository) ListTaskRowsByNamePrefix(ctx context.Context, namePrefix string) ([]TaskRow, error) {
+	rows, err := r.queries.TestListTaskRowsByNamePrefix(ctx, pgtype.Text{String: namePrefix, Valid: true})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]TaskRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, TaskRow{
+			FullName:  row.FullName,
+			Kind:      row.Kind,
+			Lifecycle: row.Lifecycle,
+			State:     row.State,
+			CreatedAt: row.CreatedAt.Time,
+			Content:   row.Content,
+		})
+	}
+	return out, nil
+}
+
 // StrandedKnowledgeCacheCountByNamePrefix counts the namespace's live contacts
 // holding a current-accepted cutover assertion (lives_in / birthday / how_met)
 // whose derived cache column is NULL — the production-impossible state (the cache
