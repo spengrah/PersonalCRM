@@ -31,6 +31,13 @@ export default defineConfig({
     baseURL: process.env.TOURS_BASE_URL,
     trace: 'on',
     screenshot: 'only-on-failure',
+    // Pin the browser's calendar zone + locale to UTC so "today" resolves in the
+    // same zone the reseed computes the clock-anchored birthday fixtures in
+    // (staging-reset.sh pins the reseed container to TZ=UTC). Without this the
+    // judge host's local zone could shift the browser's day off the seed's, so an
+    // imminent fixture might not land in the birthdays page's highlight window.
+    timezoneId: 'UTC',
+    locale: 'en-US',
   },
   // NO webServer — tours target a remote, already-running staging app.
 })
