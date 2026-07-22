@@ -12,7 +12,8 @@
 // exercised by the automated tests), exactly like exec's spawn.
 
 import { buildGradedEvidence, buildScenario } from '../label-trace'
-import { allUnsure, DEFAULT_JUDGE_EFFORT, DEFAULT_JUDGE_MODEL, eventUsedTool } from './codex-exec'
+import { DEFAULT_JUDGE_EFFORT, DEFAULT_JUDGE_MODEL } from '../models'
+import { allUnsure, eventUsedTool } from './codex-exec'
 import { buildPrompt, OUTPUT_SCHEMA, parseVerdicts } from './prompt'
 import { appendSpan, buildGenAiSpan } from './span'
 import type { Judge, JudgeInput, PerItemVerdict } from './types'

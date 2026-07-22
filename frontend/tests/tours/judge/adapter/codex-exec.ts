@@ -11,6 +11,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { buildGradedEvidence, buildScenario } from '../label-trace'
+import { DEFAULT_JUDGE_EFFORT, DEFAULT_JUDGE_MODEL } from '../models'
 import { buildPrompt, OUTPUT_SCHEMA, parseVerdicts } from './prompt'
 import { appendSpan, buildGenAiSpan } from './span'
 import type { Judge, JudgeInput, PerItemVerdict } from './types'
@@ -157,17 +158,6 @@ function defaultRun(
       child.stdin.end()
     })
 }
-
-// The spec mandates a CHEAP judge ("cheap model judges, stronger model authors
-// issues"). Pin a mini-tier model + low reasoning effort as the DEFAULT so the
-// judge never silently inherits the operator's codex config (a global
-// gpt-5.5 / xhigh default is both costly AND miscalibrating here — over-reasoning
-// invents false fails). Overridable via QA_JUDGE_MODEL / QA_JUDGE_EFFORT or opts
-// (e.g. the intent pass passes a stronger model). gpt-5.4-mini is the cheapest tier
-// the pinned Codex CLI supports on a ChatGPT account; gpt-5.6-luna is cheaper/
-// newer but needs a Codex CLI upgrade (revalidate exact models at build time).
-export const DEFAULT_JUDGE_MODEL = 'gpt-5.4-mini'
-export const DEFAULT_JUDGE_EFFORT = 'low'
 
 // Monotonic per-process counter for the schema temp file, so judge calls in one
 // process can never collide on the same pid+millisecond path (callers may invoke

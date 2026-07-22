@@ -2,10 +2,9 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { describe, it, expect } from 'vitest'
+import { DEFAULT_JUDGE_EFFORT, DEFAULT_JUDGE_MODEL } from '../models'
 import {
   codexArgs,
-  DEFAULT_JUDGE_EFFORT,
-  DEFAULT_JUDGE_MODEL,
   makeCodexExecJudge,
   parseCodexEventStream,
   verdictsFromCodexOutput,
